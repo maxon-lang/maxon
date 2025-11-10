@@ -1,0 +1,41 @@
+#ifndef PARSER_H
+#define PARSER_H
+
+#include "lexer.h"
+#include "ast.h"
+#include <vector>
+#include <memory>
+
+class Parser {
+private:
+    std::vector<Token> tokens;
+    size_t position;
+    
+    Token& currentToken();
+    Token& peek(int offset = 1);
+    bool match(TokenType type);
+    bool check(TokenType type);
+    void advance();
+    Token expect(TokenType type, const std::string& message);
+    
+    std::unique_ptr<ExprAST> parseExpression();
+    std::unique_ptr<ExprAST> parseComparison();
+    std::unique_ptr<ExprAST> parseTerm();
+    std::unique_ptr<ExprAST> parseFactor();
+    std::unique_ptr<ExprAST> parsePrimary();
+    
+    std::unique_ptr<StmtAST> parseStatement();
+    std::unique_ptr<VarDeclStmtAST> parseVarDecl();
+    std::unique_ptr<AssignStmtAST> parseAssignment(const std::string& name);
+    std::unique_ptr<IfStmtAST> parseIf();
+    std::unique_ptr<WhileStmtAST> parseWhile();
+    std::unique_ptr<ReturnStmtAST> parseReturn();
+    
+    std::unique_ptr<FunctionAST> parseFunction();
+    
+public:
+    Parser(const std::vector<Token>& toks);
+    std::unique_ptr<ProgramAST> parse();
+};
+
+#endif // PARSER_H
