@@ -150,10 +150,9 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     expect(TokenType::IF, "Expected 'if'");
     auto condition = parseExpression();
     
-    // Skip optional comment string
-    if (check(TokenType::STRING)) {
-        advance();
-    }
+    // Require block identifier
+    Token blockIdToken = expect(TokenType::STRING, "Expected block identifier after 'if'");
+    std::string blockId = blockIdToken.value;
     
     std::vector<std::unique_ptr<StmtAST>> thenBody;
     std::vector<std::unique_ptr<StmtAST>> elseBody;
@@ -166,9 +165,12 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     
     // Parse optional else
     if (match(TokenType::ELSE)) {
-        // Skip optional comment string
-        if (check(TokenType::STRING)) {
-            advance();
+        // Require same block identifier after else
+        Token elseBlockIdToken = expect(TokenType::STRING, "Expected block identifier after 'else'");
+        if (elseBlockIdToken.value != blockId) {
+            throw std::runtime_error("Block identifier mismatch: 'else' expects '" + blockId + 
+                                   "' but got '" + elseBlockIdToken.value + "' at line " + 
+                                   std::to_string(elseBlockIdToken.line));
         }
         
         while (!check(TokenType::END) && !check(TokenType::END_OF_FILE)) {
@@ -178,9 +180,12 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     
     expect(TokenType::END, "Expected 'end'");
     
-    // Skip optional comment string after end
-    if (check(TokenType::STRING)) {
-        advance();
+    // Require matching block identifier after end
+    Token endBlockIdToken = expect(TokenType::STRING, "Expected block identifier after 'end'");
+    if (endBlockIdToken.value != blockId) {
+        throw std::runtime_error("Block identifier mismatch: 'end' expects '" + blockId + 
+                               "' but got '" + endBlockIdToken.value + "' at line " + 
+                               std::to_string(endBlockIdToken.line));
     }
     
     return std::make_unique<IfStmtAST>(std::move(condition), 
@@ -192,10 +197,9 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
     expect(TokenType::WHILE, "Expected 'while'");
     auto condition = parseExpression();
     
-    // Skip optional comment string
-    if (check(TokenType::STRING)) {
-        advance();
-    }
+    // Require block identifier
+    Token blockIdToken = expect(TokenType::STRING, "Expected block identifier after 'while'");
+    std::string blockId = blockIdToken.value;
     
     std::vector<std::unique_ptr<StmtAST>> body;
     
@@ -206,20 +210,18 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
     
     expect(TokenType::END, "Expected 'end'");
     
-    // Skip optional comment string after end
-    if (check(TokenType::STRING)) {
-        advance();
+    // Require matching block identifier after end
+    Token endBlockIdToken = expect(TokenType::STRING, "Expected block identifier after 'end'");
+    if (endBlockIdToken.value != blockId) {
+        throw std::runtime_error("Block identifier mismatch: 'end' expects '" + blockId + 
+                               "' but got '" + endBlockIdToken.value + "' at line " + 
+                               std::to_string(endBlockIdToken.line));
     }
     
     return std::make_unique<WhileStmtAST>(std::move(condition), std::move(body));
 }
 
 std::unique_ptr<StmtAST> Parser::parseStatement() {
-    // Skip string literals (comments)
-    while (check(TokenType::STRING)) {
-        advance();
-    }
-    
     if (check(TokenType::VAR)) {
         return parseVarDecl();
     }
@@ -274,9 +276,13 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
     
     expect(TokenType::END, "Expected 'end'");
     
-    // Skip function name after 'end'
-    if (check(TokenType::IDENTIFIER)) {
-        advance();
+    // Function has implicit block identifier which is the function name
+    // Require matching block identifier after end
+    Token endBlockIdToken = expect(TokenType::STRING, "Expected function name as block identifier after 'end'");
+    if (endBlockIdToken.value != name.value) {
+        throw std::runtime_error("Block identifier mismatch: 'end' expects '" + name.value + 
+                               "' but got '" + endBlockIdToken.value + "' at line " + 
+                               std::to_string(endBlockIdToken.line));
     }
     
     return std::make_unique<FunctionAST>(name.value, returnType, std::move(body));
@@ -286,11 +292,6 @@ std::unique_ptr<ProgramAST> Parser::parse() {
     std::vector<std::unique_ptr<FunctionAST>> functions;
     
     while (!check(TokenType::END_OF_FILE)) {
-        // Skip any stray string literals (comments)
-        while (check(TokenType::STRING)) {
-            advance();
-        }
-        
         if (check(TokenType::END_OF_FILE)) {
             break;
         }

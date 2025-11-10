@@ -51,8 +51,30 @@ void Lexer::skipWhitespace() {
 }
 
 void Lexer::skipComment() {
-    // Comments in Maxon are strings like 'comment text'
-    // They're just string literals that we'll ignore at the statement level
+    // Handle // single-line comments
+    if (currentChar() == '/' && peek(1) == '/') {
+        advance(); // skip first /
+        advance(); // skip second /
+        while (currentChar() != '\0' && currentChar() != '\n') {
+            advance();
+        }
+        return;
+    }
+    
+    // Handle /* multi-line comments */
+    if (currentChar() == '/' && peek(1) == '*') {
+        advance(); // skip /
+        advance(); // skip *
+        while (currentChar() != '\0') {
+            if (currentChar() == '*' && peek(1) == '/') {
+                advance(); // skip *
+                advance(); // skip /
+                break;
+            }
+            advance();
+        }
+        return;
+    }
 }
 
 Token Lexer::readNumber() {
@@ -112,6 +134,12 @@ std::vector<Token> Lexer::tokenize() {
     while (currentChar() != '\0') {
         skipWhitespace();
         
+        // Skip comments
+        if (currentChar() == '/' && (peek(1) == '/' || peek(1) == '*')) {
+            skipComment();
+            continue;
+        }
+        
         if (currentChar() == '\0') {
             break;
         }
@@ -120,7 +148,7 @@ std::vector<Token> Lexer::tokenize() {
         int startColumn = column;
         char c = currentChar();
         
-        // Single quote - string/comment
+        // Single quote - block identifier
         if (c == '\'') {
             tokens.push_back(readString());
         }

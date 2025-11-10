@@ -12,27 +12,20 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Enable parallel compilation and optimization flags
-if(MSVC)
-    add_compile_options(
-        /MP          # Multi-processor compilation
-        /wd4267      # Suppress C4267: conversion from size_t
-    )
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    add_compile_options(
-        -Wall
-        -Wno-unused-parameter
-        -Wno-sign-compare
-    )
-endif()
+# Enable parallel compilation and optimization flags for Clang
+add_compile_options(
+    -Wall
+    -Wno-unused-parameter
+    -Wno-sign-compare
+)
 
 # Use precompiled headers for faster compilation
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
     set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
 endif()
 
-# Look for pre-built LLVM in the llvm-project/build directory
-set(LLVM_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../llvm-project/build")
+# Look for pre-built LLVM in C:/Users/Eric/Dev/llvm-project/build directory
+set(LLVM_BUILD_DIR "C:/Users/Eric/Dev/llvm-project/build")
 if(EXISTS "${LLVM_BUILD_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
     message(STATUS "Using pre-built LLVM from llvm-build directory")
     set(LLVM_DIR "${LLVM_BUILD_DIR}/lib/cmake/llvm")
