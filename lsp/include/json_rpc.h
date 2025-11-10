@@ -7,6 +7,8 @@
 #include <map>
 #include <iostream>
 
+using json = nlohmann::json;
+
 class JsonRpcHandler {
 public:
     using RequestHandler = std::function<json(const json&)>;
