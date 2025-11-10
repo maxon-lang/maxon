@@ -276,3 +276,31 @@ void CodeGenerator::writeObjectFile(const std::string& filename) {
     
     std::cout << "Object file written to " << filename << std::endl;
 }
+
+void CodeGenerator::linkExecutable(const std::string& objectFile, const std::string& exeFile) {
+    // Use MSVC linker - need to use cmd.exe /c to properly handle quoted paths
+    std::string vsPath = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207";
+    std::string linkerPath = vsPath + "\\bin\\Hostx64\\x64\\link.exe";
+    std::string libPath = vsPath + "\\lib\\x64";
+    
+    // Also need Windows SDK libs
+    std::string sdkLibPath = "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\um\\x64";
+    std::string ucrtLibPath = "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\ucrt\\x64";
+    
+    std::string linkCmd = "cmd.exe /c \"\"" + linkerPath + "\" ";
+    linkCmd += "/NOLOGO /MACHINE:X64 /SUBSYSTEM:CONSOLE ";
+    linkCmd += "/LIBPATH:\"" + libPath + "\" ";
+    linkCmd += "/LIBPATH:\"" + sdkLibPath + "\" ";
+    linkCmd += "/LIBPATH:\"" + ucrtLibPath + "\" ";
+    linkCmd += "/OUT:\"" + exeFile + "\" \"" + objectFile + "\" ";
+    linkCmd += "/DEFAULTLIB:libcmt.lib /DEFAULTLIB:oldnames.lib\"";
+    
+    std::cout << "Linking executable..." << std::endl;
+    int result = system(linkCmd.c_str());
+    
+    if (result != 0) {
+        throw std::runtime_error("Linking failed");
+    }
+    
+    std::cout << "Executable written to " + exeFile << std::endl;
+}

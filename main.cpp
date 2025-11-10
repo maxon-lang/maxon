@@ -22,19 +22,23 @@ int main(int argc, char* argv[]) {
         std::cerr << "Usage: " << argv[0] << " <input.maxon> [options]" << std::endl;
         std::cerr << "Options:" << std::endl;
         std::cerr << "  --emit-llvm    Print LLVM IR to stdout" << std::endl;
-        std::cerr << "  -o <output>    Specify output object file (default: output.o)" << std::endl;
+        std::cerr << "  -o <output>    Specify output executable (default: output.exe)" << std::endl;
+        std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
         return 1;
     }
     
     std::string inputFile = argv[1];
-    std::string outputFile = "output.o";
+    std::string outputFile = "output.exe";
     bool emitLLVM = false;
+    bool compileOnly = false;
     
     // Parse command line arguments
     for (int i = 2; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--emit-llvm") {
             emitLLVM = true;
+        } else if (arg == "-c") {
+            compileOnly = true;
         } else if (arg == "-o" && i + 1 < argc) {
             outputFile = argv[++i];
         }
@@ -66,10 +70,30 @@ int main(int argc, char* argv[]) {
             codegen.printIR();
         }
         
-        // Write object file
-        codegen.writeObjectFile(outputFile);
-        std::cout << "\nCompilation successful!" << std::endl;
-        std::cout << "Output: " << outputFile << std::endl;
+        // Determine output files
+        std::string objectFile;
+        std::string exeFile;
+        
+        if (compileOnly) {
+            // Just compile to object file
+            objectFile = outputFile;
+            codegen.writeObjectFile(objectFile);
+            std::cout << "\nCompilation successful!" << std::endl;
+            std::cout << "Output: " << objectFile << std::endl;
+        } else {
+            // Compile and link to executable
+            objectFile = "temp.o";
+            exeFile = outputFile;
+            
+            codegen.writeObjectFile(objectFile);
+            codegen.linkExecutable(objectFile, exeFile);
+            
+            // Clean up temporary object file
+            std::remove(objectFile.c_str());
+            
+            std::cout << "\nCompilation and linking successful!" << std::endl;
+            std::cout << "Output: " << exeFile << std::endl;
+        }
         
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
