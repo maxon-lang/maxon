@@ -7,7 +7,7 @@ CC = "C:/Program Files/LLVM/bin/clang.exe"
 CXX = "C:/Program Files/LLVM/bin/clang++.exe"
 RC = "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe"
 
-.PHONY: all clean compiler lsp lsp-server lsp-extension help configure
+.PHONY: all clean compiler lsp lsp-server lsp-extension help configure test
 
 # Default target
 all: configure
@@ -20,6 +20,7 @@ help:
 	@powershell -Command "Write-Host '  compiler         - Build only the Maxon compiler' -ForegroundColor White"
 	@powershell -Command "Write-Host '  lsp-server       - Build only the C++ LSP server' -ForegroundColor White"
 	@powershell -Command "Write-Host '  lsp-extension    - Build only the VS Code extension' -ForegroundColor White"
+	@powershell -Command "Write-Host '  test             - Build and run LSP tests' -ForegroundColor White"
 	@powershell -Command "Write-Host '  clean            - Clean all build artifacts' -ForegroundColor White"
 	@powershell -Command "Write-Host '  help             - Show this help message' -ForegroundColor White"
 
@@ -44,6 +45,15 @@ lsp-server: configure
 lsp-extension:
 	@powershell -Command "Write-Host 'Building VS Code extension...' -ForegroundColor Yellow"
 	@cd lsp\vscode-extension && npm install && npm run compile
+
+# Build and run LSP tests
+test:
+	@echo Configuring and building LSP tests...
+	@if not exist "lsp\tests\build" mkdir "lsp\tests\build"
+	@cd lsp\tests\build && cmake .. -G "Ninja" -DCMAKE_BUILD_TYPE=Debug
+	@cd lsp\tests\build && cmake --build .
+	@echo Running LSP tests...
+	@cd lsp\tests\build && ctest --output-on-failure
 
 # Clean build artifacts
 clean:
