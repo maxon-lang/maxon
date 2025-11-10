@@ -18,6 +18,12 @@ if(MSVC)
         /MP          # Multi-processor compilation
         /wd4267      # Suppress C4267: conversion from size_t
     )
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(
+        -Wall
+        -Wno-unused-parameter
+        -Wno-sign-compare
+    )
 endif()
 
 # Use precompiled headers for faster compilation

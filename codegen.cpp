@@ -283,7 +283,7 @@ void CodeGenerator::linkExecutable(const std::string& objectFile, const std::str
     std::string linkerPath = vsPath + "\\bin\\Hostx64\\x64\\link.exe";
     std::string libPath = vsPath + "\\lib\\x64";
     
-    // Also need Windows SDK libs2
+    // Also need Windows SDK libs
     std::string sdkLibPath = "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\um\\x64";
     std::string ucrtLibPath = "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\ucrt\\x64";
     
