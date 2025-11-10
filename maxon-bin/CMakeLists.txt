@@ -31,8 +31,8 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
     set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
 endif()
 
-# Look for pre-built LLVM in the llvm-build directory
-set(LLVM_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/llvm-build")
+# Look for pre-built LLVM in the llvm-project/build directory
+set(LLVM_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../llvm-project/build")
 if(EXISTS "${LLVM_BUILD_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
     message(STATUS "Using pre-built LLVM from llvm-build directory")
     set(LLVM_DIR "${LLVM_BUILD_DIR}/lib/cmake/llvm")
