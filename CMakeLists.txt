@@ -1,8 +1,29 @@
 cmake_minimum_required(VERSION 3.13)
 project(MaxonCompiler)
 
+# Enable ccache if available for faster rebuilds
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    message(STATUS "Using ccache for faster rebuilds")
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Enable parallel compilation and optimization flags
+if(MSVC)
+    add_compile_options(
+        /MP          # Multi-processor compilation
+        /wd4267      # Suppress C4267: conversion from size_t
+    )
+endif()
+
+# Use precompiled headers for faster compilation
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
+    set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
+endif()
 
 # Look for pre-built LLVM in the llvm-build directory
 set(LLVM_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/llvm-build")
@@ -17,7 +38,8 @@ else()
 endif()
 
 # Add LLVM definitions and include directories
-include_directories(${LLVM_INCLUDE_DIRS})
+# Use SYSTEM to suppress warnings from LLVM headers
+include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 
@@ -31,6 +53,11 @@ set(SOURCES
 
 # Create executable
 add_executable(maxonc ${SOURCES})
+
+# Use precompiled headers for faster compilation
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
+    target_precompile_headers(maxonc PRIVATE pch.h)
+endif()
 
 # Link LLVM libraries
 llvm_map_components_to_libnames(llvm_libs 
