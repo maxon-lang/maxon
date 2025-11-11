@@ -200,12 +200,38 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     Token ifToken = expect(TokenType::IF, "Expected 'if'");
     auto condition = parseExpression();
     
-    // Require block identifier
-    Token blockIdToken = expect(TokenType::STRING, "Expected block identifier after 'if'");
-    std::string blockId = blockIdToken.value;
+    int conditionLine = ifToken.line;
+    
+    // Check if this is a single-line if statement (no block identifier)
+    // Single-line if: if <condition> <statement>
+    // Multi-line if: if <condition> 'blockId' ... end 'blockId'
+    bool isSingleLine = false;
+    if (!check(TokenType::STRING)) {
+        // No block identifier means single-line if
+        isSingleLine = true;
+    }
     
     std::vector<std::unique_ptr<StmtAST>> thenBody;
     std::vector<std::unique_ptr<StmtAST>> elseBody;
+    
+    if (isSingleLine) {
+        // Single-line if: parse one statement that must be on the same line
+        if (currentToken().line != conditionLine) {
+            throw std::runtime_error("Single-line if statement must have statement on same line at line " + 
+                                   std::to_string(conditionLine));
+        }
+        thenBody.push_back(parseStatement());
+        
+        // Single-line if doesn't support else
+        return std::make_unique<IfStmtAST>(std::move(condition), 
+                                           std::move(thenBody),
+                                           std::move(elseBody),
+                                           ifToken.line, ifToken.column);
+    }
+    
+    // Multi-line if with block identifier
+    Token blockIdToken = expect(TokenType::STRING, "Expected block identifier after 'if'");
+    std::string blockId = blockIdToken.value;
     
     // Parse then body
     while (!check(TokenType::ELSE) && !check(TokenType::END) && 

@@ -83,7 +83,33 @@ This is the **Maxon programming language** project, which includes:
 - **Language tests**: Fragment tests in `language-tests/` using C# NUnit
   - `fragments/`: Manual test fragments
   - `doc-fragments/`: Auto-generated from documentation (via `make docs`)
-  - Each `.test` file contains: Maxon code, separator (`---`), N/A, separator, expected output/exit code
+  - Each `.test` file contains: Maxon code, separator (`---`), LLVM IR or N/A, separator, expected output/exit code
+
+### Creating Test Fragments
+
+Test fragment format:
+```
+<Maxon source code>
+---
+<Expected LLVM IR or "N/A" for error tests>
+---
+ExitCode: <expected exit code>
+```
+
+**Important rules for test fragments:**
+1. **Always include the LLVM IR** unless the test is for a compilation error (parser/semantic error)
+2. Use `N/A` for the IR section **only** when the test code intentionally doesn't compile
+3. Generate IR by running: `.\build\bin\maxonc.exe <file.maxon> --emit-llvm -O`
+4. Regular fragment tests use optimization (`-O` flag), so include optimized IR
+5. Debug fragment tests use `--debug` flag and no optimization
+6. Use module name `test.maxon` in the expected IR (the test framework standardizes this)
+
+**Example workflow for adding a test:**
+1. Create the test file with Maxon code and temporary `N/A` for IR
+2. Run `.\build\bin\maxonc.exe temp.maxon --emit-llvm -O` to get optimized IR
+3. Replace `N/A` with the generated IR (changing module name to `test.maxon`)
+4. Add `ExitCode: <number>` line
+5. Run `make language-tests` to verify
 
 ## Common Tasks
 
@@ -101,17 +127,29 @@ This is the **Maxon programming language** project, which includes:
 3. Implement analysis logic in `Analyzer`
 4. Update capabilities in `initialize` response
 
+### Adding a new language feature
+1. Implement lexer/parser/codegen changes
+2. Build compiler: `make compiler`
+3. Create test fragment in `language-tests/fragments/` with proper LLVM IR
+4. Run tests: `make language-tests`
+5. Update documentation in `docs/Content/` if user-facing
+6. Regenerate docs: `make docs` (creates additional doc-fragment tests)
+
 ## Key Principles
 
-1. **Block identifiers are mandatory**: Every Maxon block must have matching start/end identifiers
-2. **Type safety**: Maxon is statically typed
-3. **LLVM backend**: All code generation targets LLVM IR
-4. **LSP-first IDE support**: Language features are provided via LSP, not hardcoded in extension
-5. **Cross-platform**: Code should work on Windows, Linux, and macOS
+1. **Block identifiers**: Multi-line blocks (functions, while, multi-line if) require matching start/end identifiers
+2. **Single-line if**: Single-statement if on one line doesn't require block identifiers: `if x = 11 break`
+3. **Type safety**: Maxon is statically typed
+4. **LLVM backend**: All code generation targets LLVM IR
+5. **LSP-first IDE support**: Language features are provided via LSP, not hardcoded in extension
+6. **Cross-platform**: Code should work on Windows, Linux, and macOS
 
 ## When suggesting code:
 
-- **For Maxon language code**: Always use block identifiers with `end 'identifier'` syntax
+- **For Maxon language code**: 
+  - Use block identifiers with `end 'identifier'` syntax for multi-line blocks
+  - Single-line if is allowed: `if <condition> <statement>` (no `end` needed when on one line)
+  - Multi-line if still requires block identifiers: `if <condition> 'id' ... end 'id'`
 - **For C++ compiler code**: Use modern C++, LLVM APIs, and smart pointers
 - **For LSP code**: Follow LSP specification and use proper JSON-RPC formatting
 - **For VS Code extension**: Use TypeScript with proper VS Code extension patterns
