@@ -290,6 +290,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
     } else if (dynamic_cast<CharacterExprAST*>(expr)) {
         return "char";
         
+    } else if (dynamic_cast<StringLiteralExprAST*>(expr)) {
+        return "ptr";  // String literals are pointers to character data
+        
     } else if (auto castExpr = dynamic_cast<CastExprAST*>(expr)) {
         // Analyze the expression being cast
         std::string sourceType = analyzeExpression(castExpr->expr.get());

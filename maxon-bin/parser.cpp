@@ -43,7 +43,9 @@ Token Parser::expect(TokenType type, const std::string& message) {
         switch (type) {
             case TokenType::IDENTIFIER: typeStr = "identifier"; break;
             case TokenType::NUMBER: typeStr = "number"; break;
-            case TokenType::STRING: typeStr = "block identifier (string)"; break;
+            case TokenType::STRING: typeStr = "string literal"; break;
+            case TokenType::BLOCK_ID: typeStr = "block identifier"; break;
+            case TokenType::CHARACTER: typeStr = "character literal"; break;
             case TokenType::LPAREN: typeStr = "'('"; break;
             case TokenType::RPAREN: typeStr = "')'"; break;
             case TokenType::LBRACKET: typeStr = "'['"; break;
@@ -107,6 +109,14 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         int column = currentToken().column;
         advance();
         return std::make_unique<CharacterExprAST>(value, line, column);
+    }
+    
+    if (check(TokenType::STRING)) {
+        std::string value = currentToken().value;
+        int line = currentToken().line;
+        int column = currentToken().column;
+        advance();
+        return std::make_unique<StringLiteralExprAST>(value, line, column);
     }
     
     // Address-of operator: &variable
@@ -392,7 +402,7 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     // Single-line if: if <condition> <statement>
     // Multi-line if: if <condition> 'blockId' ... end 'blockId'
     bool isSingleLine = false;
-    if (!check(TokenType::STRING)) {
+    if (!check(TokenType::BLOCK_ID)) {
         // No block identifier means single-line if
         isSingleLine = true;
     }
@@ -418,7 +428,7 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     }
     
     // Multi-line if with block identifier
-    Token blockIdToken = expect(TokenType::STRING, "Expected block identifier after 'if' condition (use 'id' where id is any string)");
+    Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'if' condition (use 'id' where id is any string)");
     std::string blockId = blockIdToken.value;
     
     // Parse then body
@@ -430,7 +440,7 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     // Parse optional else
     if (match(TokenType::ELSE)) {
         // Require same block identifier after else
-        Token elseBlockIdToken = expect(TokenType::STRING, "Expected block identifier after 'else' (must match the 'if' block identifier)");
+        Token elseBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else' (must match the 'if' block identifier)");
         if (elseBlockIdToken.value != blockId) {
             throw std::runtime_error("Block identifier mismatch in if-else statement" +
                                    std::string("\n  Expected: '") + blockId + "'" +
@@ -448,7 +458,7 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     expect(TokenType::END, "Expected 'end' to close if block");
     
     // Require matching block identifier after end
-    Token endBlockIdToken = expect(TokenType::STRING, "Expected block identifier after 'end' (must match the opening block identifier)");
+    Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
     if (endBlockIdToken.value != blockId) {
         throw std::runtime_error("Block identifier mismatch in if statement" +
                                std::string("\n  Expected: '") + blockId + "'" +
@@ -469,7 +479,7 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
     auto condition = parseExpression();
     
     // Require block identifier
-    Token blockIdToken = expect(TokenType::STRING, "Expected block identifier after 'while' condition (use 'id' where id is any string)");
+    Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'while' condition (use 'id' where id is any string)");
     std::string blockId = blockIdToken.value;
     
     std::vector<std::unique_ptr<StmtAST>> body;
@@ -482,7 +492,7 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
     expect(TokenType::END, "Expected 'end' to close while loop");
     
     // Require matching block identifier after end
-    Token endBlockIdToken = expect(TokenType::STRING, "Expected block identifier after 'end' (must match the opening block identifier)");
+    Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
     if (endBlockIdToken.value != blockId) {
         throw std::runtime_error("Block identifier mismatch in while loop" +
                                std::string("\n  Expected: '") + blockId + "'" +
@@ -674,7 +684,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
     
     // Function has implicit block identifier which is the function name
     // Require matching block identifier after end
-    Token endBlockIdToken = expect(TokenType::STRING, "Expected function name as block identifier after 'end'");
+    Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected function name as block identifier after 'end'");
     if (endBlockIdToken.value != name.value) {
         throw std::runtime_error("Block identifier mismatch in function definition" +
                                std::string("\n  Expected: '") + name.value + "'" +
@@ -692,7 +702,7 @@ std::unique_ptr<NamespaceAST> Parser::parseNamespace() {
     Token name = expect(TokenType::IDENTIFIER, "Expected namespace name");
     
     // Expect block identifier (namespace name in quotes)
-    Token blockId = expect(TokenType::STRING, "Expected namespace name as block identifier");
+    Token blockId = expect(TokenType::BLOCK_ID, "Expected namespace name as block identifier");
     if (blockId.value != name.value) {
         throw std::runtime_error("Block identifier mismatch in namespace definition" +
                                std::string("\n  Expected: '") + name.value + "'" +
@@ -716,7 +726,7 @@ std::unique_ptr<NamespaceAST> Parser::parseNamespace() {
     expect(TokenType::END, "Expected 'end' to close namespace");
     
     // Expect matching block identifier
-    Token endBlockId = expect(TokenType::STRING, "Expected namespace name as block identifier after 'end'");
+    Token endBlockId = expect(TokenType::BLOCK_ID, "Expected namespace name as block identifier after 'end'");
     if (endBlockId.value != name.value) {
         throw std::runtime_error("Block identifier mismatch after namespace" +
                                std::string("\n  Expected: '") + name.value + "'" +

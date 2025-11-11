@@ -319,6 +319,22 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         return llvm::ConstantInt::get(context, llvm::APInt(8, (uint8_t)charExpr->value, false));
     }
     
+    if (auto* strExpr = dynamic_cast<StringLiteralExprAST*>(expr)) {
+        // Create a global constant for the string
+        llvm::Constant* strConstant = llvm::ConstantDataArray::getString(context, strExpr->value, false);
+        llvm::GlobalVariable* strGlobal = new llvm::GlobalVariable(
+            *module,
+            strConstant->getType(),
+            true,  // isConstant
+            llvm::GlobalValue::PrivateLinkage,
+            strConstant,
+            ".str"
+        );
+        
+        // Return pointer to the string (cast to opaque pointer)
+        return builder.CreateBitCast(strGlobal, llvm::PointerType::get(context, 0));
+    }
+    
     if (auto* castExpr = dynamic_cast<CastExprAST*>(expr)) {
         llvm::Value* value = generateExpr(castExpr->expr.get());
         if (!value) {
@@ -531,8 +547,8 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             // Use explicit type annotation
             allocaType = getTypeFromString(context, varDecl->type);
         } else {
-            // Infer from initializer (currently defaults to i32)
-            allocaType = llvm::Type::getInt32Ty(context);
+            // Infer from initializer type
+            allocaType = initVal->getType();
         }
         
         llvm::AllocaInst* alloca = createEntryBlockAlloca(function, varDecl->name, allocaType);
@@ -596,8 +612,8 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             // Use explicit type annotation
             allocaType = getTypeFromString(context, letDecl->type);
         } else {
-            // Infer from initializer (currently defaults to i32)
-            allocaType = llvm::Type::getInt32Ty(context);
+            // Infer from initializer
+            allocaType = initVal->getType();
         }
         
         llvm::AllocaInst* alloca = createEntryBlockAlloca(function, letDecl->name, allocaType);

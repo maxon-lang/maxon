@@ -154,6 +154,56 @@ Token Lexer::readString() {
         return Token(TokenType::CHARACTER, str, startLine, startColumn);
     }
     
+    // Multi-character single-quoted string is a block identifier
+    return Token(TokenType::BLOCK_ID, str, startLine, startColumn);
+}
+
+Token Lexer::readStringLiteral() {
+    int startLine = line;
+    int startColumn = column;
+    std::string str;
+    
+    advance(); // Skip opening "
+    
+    while (currentChar() != '\0' && currentChar() != '"') {
+        if (currentChar() == '\\') {
+            // Handle escape sequences
+            advance();
+            if (currentChar() == '\0') {
+                throw std::runtime_error("Unterminated string literal at line " + 
+                                       std::to_string(startLine) + ", column " + 
+                                       std::to_string(startColumn) + 
+                                       ": reached end of file in escape sequence");
+            }
+            switch (currentChar()) {
+                case 'n':  str += '\n'; break;
+                case 't':  str += '\t'; break;
+                case 'r':  str += '\r'; break;
+                case '\\': str += '\\'; break;
+                case '"':  str += '"'; break;
+                case '0':  str += '\0'; break;
+                default:
+                    throw std::runtime_error("Unknown escape sequence '\\" + 
+                                           std::string(1, currentChar()) + "' at line " + 
+                                           std::to_string(line) + ", column " + 
+                                           std::to_string(column));
+            }
+            advance();
+        } else {
+            str += currentChar();
+            advance();
+        }
+    }
+    
+    if (currentChar() == '\0') {
+        throw std::runtime_error("Unterminated string literal at line " + 
+                               std::to_string(startLine) + ", column " + 
+                               std::to_string(startColumn) + 
+                               ": reached end of file without finding closing \"");
+    }
+    
+    advance(); // Skip closing "
+    
     return Token(TokenType::STRING, str, startLine, startColumn);
 }
 
@@ -289,7 +339,9 @@ std::vector<Token> Lexer::tokenize() {
             } else if (c == '[' || c == ']') {
                 suggestion = "\n  Note: Arrays are not yet supported in Maxon";
             } else if (c == '"') {
-                suggestion = "\n  Note: Maxon uses single quotes (') for block identifiers";
+                // Double quotes are for string literals - handle them
+                tokens.push_back(readStringLiteral());
+                continue;
             }
             
             throw std::runtime_error("Unexpected character " + charDesc + " at line " + 

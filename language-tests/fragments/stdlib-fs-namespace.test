@@ -1,0 +1,81 @@
+﻿extern function GetStdHandle(nStdHandle int) ptr
+extern function WriteFile(hFile ptr, lpBuffer ptr, nNumberOfBytesToWrite int, lpNumberOfBytesWritten ptr, lpOverlapped ptr) int
+
+namespace sys 'sys'
+    function STD_OUTPUT_HANDLE() int
+        return 0 - 11
+    end 'STD_OUTPUT_HANDLE'
+end 'sys'
+
+namespace fs 'fs'
+    function stdout() ptr
+        var handle int = sys.STD_OUTPUT_HANDLE()
+        var h ptr = GetStdHandle(handle)
+        return h
+    end 'stdout'
+    
+    function write(handle ptr, buffer ptr, length int) int
+        var bytesWritten int = 0
+        var pBytesWritten ptr = &bytesWritten
+        var overlapped ptr = 0 as ptr
+        
+        var result int = WriteFile(handle, buffer, length, pBytesWritten, overlapped)
+        
+        if result = 0 'check_result'
+            return 0
+        end 'check_result'
+        
+        return bytesWritten
+    end 'write'
+end 'fs'
+
+function main() int
+    var h ptr = fs.stdout()
+    var msg = "Output!\n"
+    fs.write(h, msg, 8)
+    return 0
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+@.str = private constant [8 x i8] c"Output!\0A"
+
+declare ptr @GetStdHandle(i32)
+
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+
+define i32 @main() {
+entry:
+  %0 = call ptr @"fs::stdout"()
+  %1 = call i32 @"fs::write"(ptr %0, ptr nonnull @.str, i32 8)
+  ret i32 0
+}
+
+define i32 @"sys::STD_OUTPUT_HANDLE"() {
+entry:
+  ret i32 -11
+}
+
+define ptr @"fs::stdout"() {
+entry:
+  %0 = call i32 @"sys::STD_OUTPUT_HANDLE"()
+  %1 = call ptr @GetStdHandle(i32 %0)
+  ret ptr %1
+}
+
+define i32 @"fs::write"(ptr %0, ptr %1, i32 %2) {
+entry:
+  %bytesWritten = alloca i32, align 4
+  store i32 0, ptr %bytesWritten, align 4
+  %3 = call i32 @WriteFile(ptr %0, ptr %1, i32 %2, ptr nonnull %bytesWritten, ptr null)
+  %cmptmp = icmp eq i32 %3, 0
+  %bytesWritten7 = load i32, ptr %bytesWritten, align 4
+  %common.ret.op = select i1 %cmptmp, i32 0, i32 %bytesWritten7
+  ret i32 %common.ret.op
+}
+---
+Output:
+Output!
+
+ExitCode: 0

@@ -1,0 +1,34 @@
+﻿extern function GetStdHandle(nStdHandle int) ptr
+extern function WriteFile(hFile ptr, lpBuffer ptr, nNumberOfBytesToWrite int, lpNumberOfBytesWritten ptr, lpOverlapped ptr) int
+
+function main() int
+    let stdoutHandle = 0 - 11
+    var stdout ptr = GetStdHandle(stdoutHandle)
+    var message = "Hello!"
+    var written int = 0
+    
+    WriteFile(stdout, message, 6, &written, 0 as ptr)
+    return 0
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+@.str = private constant [6 x i8] c"Hello!"
+
+declare ptr @GetStdHandle(i32)
+
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+
+define i32 @main() {
+entry:
+  %written = alloca i32, align 4
+  %0 = call ptr @GetStdHandle(i32 -11)
+  store i32 0, ptr %written, align 4
+  %1 = call i32 @WriteFile(ptr %0, ptr nonnull @.str, i32 6, ptr nonnull %written, ptr null)
+  ret i32 0
+}
+---
+Output:
+Hello!
+ExitCode: 0

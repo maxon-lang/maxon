@@ -28,8 +28,9 @@ enum class TokenType {
     // Identifiers and literals
     IDENTIFIER,
     NUMBER,
-    STRING,
-    CHARACTER,  // Single character literal 'A'
+    STRING,       // Double-quoted string literals
+    BLOCK_ID,     // Single-quoted block identifiers  
+    CHARACTER,    // Single character literal 'A'
     
     // Operators
     EQUALS,     // = (used for both assignment and equality comparison)
@@ -83,6 +84,7 @@ private:
     Token readNumber();
     Token readIdentifier();
     Token readString();
+    Token readStringLiteral();  // For double-quoted strings
     
 public:
     Lexer(const std::string& src);

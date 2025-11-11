@@ -56,6 +56,14 @@ public:
     CharacterExprAST(char val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
 };
 
+// String literal
+class StringLiteralExprAST : public ExprAST {
+public:
+    std::string value;
+    
+    StringLiteralExprAST(const std::string& val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
+};
+
 // Type cast expression (e.g., "value as ptr")
 class CastExprAST : public ExprAST {
 public:
