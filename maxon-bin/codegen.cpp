@@ -55,18 +55,32 @@ void CodeGenerator::initStandardLibrary() {
         return;
     }
     
-    // Declare printf from C standard library
-    // int printf(const char* format, ...)
-    llvm::FunctionType* printfType = llvm::FunctionType::get(
-        llvm::Type::getInt32Ty(context),
-        {llvm::PointerType::get(context, 0)},  // Use opaque pointer
-        true  // varargs
+    // Declare Windows API functions for direct I/O (no CRT dependency)
+    // ptr GetStdHandle(i32)
+    llvm::FunctionType* getStdHandleType = llvm::FunctionType::get(
+        llvm::PointerType::get(context, 0),
+        {llvm::Type::getInt32Ty(context)},
+        false
     );
-    llvm::Function::Create(printfType, llvm::Function::ExternalLinkage,
-                          "printf", module.get());
+    llvm::Function::Create(getStdHandleType, llvm::Function::ExternalLinkage,
+                          "GetStdHandle", module.get());
     
-    // Create a Maxon wrapper function: print(int) -> int
-    // This will call printf with "%d\n" format
+    // i32 WriteFile(ptr, ptr, i32, ptr, ptr)
+    llvm::FunctionType* writeFileType = llvm::FunctionType::get(
+        llvm::Type::getInt32Ty(context),
+        {
+            llvm::PointerType::get(context, 0),  // hFile
+            llvm::PointerType::get(context, 0),  // lpBuffer
+            llvm::Type::getInt32Ty(context),     // nNumberOfBytesToWrite
+            llvm::PointerType::get(context, 0),  // lpNumberOfBytesWritten
+            llvm::PointerType::get(context, 0)   // lpOverlapped
+        },
+        false
+    );
+    llvm::Function::Create(writeFileType, llvm::Function::ExternalLinkage,
+                          "WriteFile", module.get());
+    
+    // Create print(int) -> int function
     llvm::FunctionType* printFuncType = llvm::FunctionType::get(
         llvm::Type::getInt32Ty(context),
         {llvm::Type::getInt32Ty(context)},
@@ -81,37 +95,193 @@ void CodeGenerator::initStandardLibrary() {
     
     // Generate the body of the print function
     llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", printFunc);
-    
-    // Save current insert point
     llvm::BasicBlock* savedBlock = builder.GetInsertBlock();
-    
     builder.SetInsertPoint(entry);
     
-    // Get the printf function
-    llvm::Function* printfFunc = module->getFunction("printf");
+    llvm::Value* valueArg = printFunc->getArg(0);
     
-    // Create the format string "%d\n"
-    llvm::Constant* formatStr = llvm::ConstantDataArray::getString(context, "%d\n", true);
-    llvm::GlobalVariable* formatStrVar = new llvm::GlobalVariable(
+    // Allocate buffers on stack
+    llvm::Type* charType = llvm::Type::getInt8Ty(context);
+    llvm::Type* bufferType = llvm::ArrayType::get(charType, 12);
+    llvm::Type* tempType = llvm::ArrayType::get(charType, 12);
+    
+    llvm::Value* buffer = builder.CreateAlloca(bufferType, nullptr, "buffer");
+    llvm::Value* temp = builder.CreateAlloca(tempType, nullptr, "temp");
+    llvm::Value* bytesWritten = builder.CreateAlloca(llvm::Type::getInt32Ty(context), nullptr, "bytesWritten");
+    
+    // Initialize buffers to zero
+    builder.CreateMemSet(buffer, llvm::ConstantInt::get(charType, 0), 12, llvm::MaybeAlign(1));
+    builder.CreateMemSet(temp, llvm::ConstantInt::get(charType, 0), 12, llvm::MaybeAlign(1));
+    
+    // Check if value is zero
+    llvm::BasicBlock* zeroCase = llvm::BasicBlock::Create(context, "zero_case", printFunc);
+    llvm::BasicBlock* nonZeroCase = llvm::BasicBlock::Create(context, "non_zero", printFunc);
+    llvm::BasicBlock* formatDone = llvm::BasicBlock::Create(context, "format_done", printFunc);
+    
+    llvm::Value* isZero = builder.CreateICmpEQ(valueArg, llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)));
+    builder.CreateCondBr(isZero, zeroCase, nonZeroCase);
+    
+    // Zero case: buffer[0] = '0', length = 1
+    builder.SetInsertPoint(zeroCase);
+    llvm::Value* bufferZeroPtr = builder.CreateInBoundsGEP(bufferType, buffer,
+        {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), llvm::ConstantInt::get(context, llvm::APInt(32, 0))});
+    builder.CreateStore(llvm::ConstantInt::get(charType, '0'), bufferZeroPtr);
+    builder.CreateBr(formatDone);
+    
+    // Non-zero case: format the integer
+    builder.SetInsertPoint(nonZeroCase);
+    
+    // Handle negative numbers
+    llvm::BasicBlock* negativeCase = llvm::BasicBlock::Create(context, "negative", printFunc);
+    llvm::BasicBlock* positiveCase = llvm::BasicBlock::Create(context, "positive", printFunc);
+    llvm::BasicBlock* extractDigits = llvm::BasicBlock::Create(context, "extract_digits", printFunc);
+    
+    llvm::Value* isNegative = builder.CreateICmpSLT(valueArg, llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)));
+    builder.CreateCondBr(isNegative, negativeCase, positiveCase);
+    
+    // Negative case: add '-' and negate value
+    builder.SetInsertPoint(negativeCase);
+    llvm::Value* bufferNegPtr = builder.CreateInBoundsGEP(bufferType, buffer,
+        {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), llvm::ConstantInt::get(context, llvm::APInt(32, 0))});
+    builder.CreateStore(llvm::ConstantInt::get(charType, '-'), bufferNegPtr);
+    llvm::Value* absValue = builder.CreateNeg(valueArg);
+    llvm::Value* startOffsetNeg = llvm::ConstantInt::get(context, llvm::APInt(32, 1, true));
+    builder.CreateBr(extractDigits);
+    
+    // Positive case
+    builder.SetInsertPoint(positiveCase);
+    llvm::Value* startOffsetPos = llvm::ConstantInt::get(context, llvm::APInt(32, 0, true));
+    builder.CreateBr(extractDigits);
+    
+    // Extract digits
+    builder.SetInsertPoint(extractDigits);
+    llvm::PHINode* valuePhi = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "value_abs");
+    valuePhi->addIncoming(absValue, negativeCase);
+    valuePhi->addIncoming(valueArg, positiveCase);
+    llvm::PHINode* offsetPhi = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "start_offset");
+    offsetPhi->addIncoming(startOffsetNeg, negativeCase);
+    offsetPhi->addIncoming(startOffsetPos, positiveCase);
+    
+    // Digit extraction loop
+    llvm::BasicBlock* digitLoop = llvm::BasicBlock::Create(context, "digit_loop", printFunc);
+    llvm::BasicBlock* digitLoopBody = llvm::BasicBlock::Create(context, "digit_loop_body", printFunc);
+    llvm::BasicBlock* reverseLoop = llvm::BasicBlock::Create(context, "reverse_loop", printFunc);
+    llvm::BasicBlock* reverseBody = llvm::BasicBlock::Create(context, "reverse_body", printFunc);
+    
+    builder.CreateBr(digitLoop);
+    
+    // Digit loop header
+    builder.SetInsertPoint(digitLoop);
+    llvm::PHINode* remainingValue = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "remaining");
+    remainingValue->addIncoming(valuePhi, extractDigits);
+    llvm::PHINode* tempIdx = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "temp_idx");
+    tempIdx->addIncoming(llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)), extractDigits);
+    
+    llvm::Value* loopCond = builder.CreateICmpNE(remainingValue, llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)));
+    builder.CreateCondBr(loopCond, digitLoopBody, reverseLoop);
+    
+    // Digit loop body: extract digit, store in temp
+    builder.SetInsertPoint(digitLoopBody);
+    llvm::Value* digit = builder.CreateSRem(remainingValue, llvm::ConstantInt::get(context, llvm::APInt(32, 10, true)));
+    llvm::Value* digitChar = builder.CreateAdd(digit, llvm::ConstantInt::get(context, llvm::APInt(32, '0', true)));
+    llvm::Value* digitChar8 = builder.CreateTrunc(digitChar, charType);
+    
+    llvm::Value* tempPtr = builder.CreateInBoundsGEP(tempType, temp,
+        {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), tempIdx});
+    builder.CreateStore(digitChar8, tempPtr);
+    
+    llvm::Value* nextRemaining = builder.CreateSDiv(remainingValue, llvm::ConstantInt::get(context, llvm::APInt(32, 10, true)));
+    llvm::Value* nextTempIdx = builder.CreateAdd(tempIdx, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
+    
+    remainingValue->addIncoming(nextRemaining, digitLoopBody);
+    tempIdx->addIncoming(nextTempIdx, digitLoopBody);
+    builder.CreateBr(digitLoop);
+    
+    // Reverse loop: copy from temp to buffer in reverse order
+    builder.SetInsertPoint(reverseLoop);
+    llvm::PHINode* reverseIdx = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "reverse_idx");
+    reverseIdx->addIncoming(llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)), digitLoop);
+    
+    // Pass through offsetPhi and tempIdx via PHI nodes
+    llvm::PHINode* offsetInReverse = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "offset_in_reverse");
+    offsetInReverse->addIncoming(offsetPhi, digitLoop);
+    llvm::PHINode* digitCountInReverse = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "digit_count_in_reverse");
+    digitCountInReverse->addIncoming(tempIdx, digitLoop);
+    
+    llvm::Value* reverseCond = builder.CreateICmpSLT(reverseIdx, digitCountInReverse);
+    builder.CreateCondBr(reverseCond, reverseBody, formatDone);
+    
+    // Reverse body
+    builder.SetInsertPoint(reverseBody);
+    llvm::Value* srcIdx = builder.CreateSub(digitCountInReverse, reverseIdx);
+    srcIdx = builder.CreateSub(srcIdx, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
+    
+    llvm::Value* srcPtr = builder.CreateInBoundsGEP(tempType, temp,
+        {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), srcIdx});
+    llvm::Value* digitValue = builder.CreateLoad(charType, srcPtr);
+    
+    llvm::Value* dstIdx = builder.CreateAdd(offsetInReverse, reverseIdx);
+    llvm::Value* dstPtr = builder.CreateInBoundsGEP(bufferType, buffer,
+        {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), dstIdx});
+    builder.CreateStore(digitValue, dstPtr);
+    
+    llvm::Value* nextReverseIdx = builder.CreateAdd(reverseIdx, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
+    reverseIdx->addIncoming(nextReverseIdx, reverseBody);
+    offsetInReverse->addIncoming(offsetInReverse, reverseBody);
+    digitCountInReverse->addIncoming(digitCountInReverse, reverseBody);
+    builder.CreateBr(reverseLoop);
+    
+    // Format done - write to stdout
+    builder.SetInsertPoint(formatDone);
+    
+    // Create PHI nodes for values from different predecessors
+    llvm::PHINode* finalOffset = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "final_offset");
+    finalOffset->addIncoming(llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)), zeroCase);  // Zero case has offset 0
+    finalOffset->addIncoming(offsetInReverse, reverseLoop);
+    
+    llvm::PHINode* finalDigitCount = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "final_digit_count");
+    finalDigitCount->addIncoming(llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)), zeroCase);  // Zero case has 1 digit
+    finalDigitCount->addIncoming(digitCountInReverse, reverseLoop);
+    
+    // Compute final length = offset + digit_count (works for both zero and non-zero cases)
+    llvm::Value* finalLength = builder.CreateAdd(finalOffset, finalDigitCount);
+    
+    // Get stdout handle (-11)
+    llvm::Function* getStdHandle = module->getFunction("GetStdHandle");
+    llvm::Value* stdoutHandle = builder.CreateCall(getStdHandle,
+        {llvm::ConstantInt::get(context, llvm::APInt(32, -11, true))});
+    
+    // Get buffer pointer
+    llvm::Value* bufferPtr = builder.CreateBitCast(buffer, llvm::PointerType::get(context, 0));
+    
+    // Call WriteFile
+    llvm::Function* writeFile = module->getFunction("WriteFile");
+    builder.CreateCall(writeFile, {
+        stdoutHandle,
+        bufferPtr,
+        finalLength,
+        bytesWritten,
+        llvm::ConstantPointerNull::get(llvm::PointerType::get(context, 0))
+    });
+    
+    // Write newline
+    llvm::Constant* newlineStr = llvm::ConstantDataArray::getString(context, "\n", false);
+    llvm::GlobalVariable* newlineVar = new llvm::GlobalVariable(
         *module,
-        formatStr->getType(),
-        true,  // constant
+        newlineStr->getType(),
+        true,
         llvm::GlobalValue::PrivateLinkage,
-        formatStr,
-        ".str"
+        newlineStr,
+        ".str.newline"
     );
-    
-    // Get pointer to the format string (as opaque pointer)
-    llvm::Value* formatStrPtr = builder.CreateBitCast(
-        formatStrVar,
-        llvm::PointerType::get(context, 0)
-    );
-    
-    // Get the argument
-    llvm::Value* arg = printFunc->getArg(0);
-    
-    // Call printf(formatStr, arg)
-    builder.CreateCall(printfFunc, {formatStrPtr, arg});
+    llvm::Value* newlinePtr = builder.CreateBitCast(newlineVar, llvm::PointerType::get(context, 0));
+    builder.CreateCall(writeFile, {
+        stdoutHandle,
+        newlinePtr,
+        llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)),
+        bytesWritten,
+        llvm::ConstantPointerNull::get(llvm::PointerType::get(context, 0))
+    });
     
     // Return 0
     builder.CreateRet(llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)));

@@ -1,15 +1,15 @@
-function main() int
-	var x = 42
-	print(x)
-	print(10 + 5)
-	print(100)
-	return 0
+﻿function main() int
+var x = 42
+print(x)
+print(10 + 5)
+print(100)
+return 0
 end 'main'
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
-@.str = private constant [4 x i8] c"%d\0A\00"
+@.str.newline = private constant [1 x i8] c"\0A"
 
 define i32 @main() {
 entry:
@@ -19,17 +19,91 @@ entry:
   ret i32 0
 }
 
-declare i32 @printf(ptr, ...)
+declare ptr @GetStdHandle(i32)
+
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
 
 define i32 @print(i32 %0) {
 entry:
-  %1 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 %0)
+  %buffer = alloca [12 x i8], align 1
+  %temp = alloca [12 x i8], align 1
+  %bytesWritten = alloca i32, align 4
+  call void @llvm.memset.p0.i64(ptr noundef nonnull align 1 dereferenceable(12) %buffer, i8 0, i64 12, i1 false)
+  call void @llvm.memset.p0.i64(ptr noundef nonnull align 1 dereferenceable(12) %temp, i8 0, i64 12, i1 false)
+  %1 = icmp eq i32 %0, 0
+  br i1 %1, label %zero_case, label %non_zero
+
+zero_case:                                        ; preds = %entry
+  store i8 48, ptr %buffer, align 1
+  br label %format_done
+
+non_zero:                                         ; preds = %entry
+  %2 = icmp slt i32 %0, 0
+  br i1 %2, label %negative, label %extract_digits
+
+format_done:                                      ; preds = %reverse_loop, %zero_case
+  %final_offset = phi i32 [ 0, %zero_case ], [ %start_offset, %reverse_loop ]
+  %final_digit_count = phi i32 [ 1, %zero_case ], [ %temp_idx, %reverse_loop ]
+  %3 = add i32 %final_digit_count, %final_offset
+  %4 = call ptr @GetStdHandle(i32 -11)
+  %5 = call i32 @WriteFile(ptr %4, ptr nonnull %buffer, i32 %3, ptr nonnull %bytesWritten, ptr null)
+  %6 = call i32 @WriteFile(ptr %4, ptr nonnull @.str.newline, i32 1, ptr nonnull %bytesWritten, ptr null)
   ret i32 0
+
+negative:                                         ; preds = %non_zero
+  store i8 45, ptr %buffer, align 1
+  %7 = sub i32 0, %0
+  br label %extract_digits
+
+extract_digits:                                   ; preds = %non_zero, %negative
+  %value_abs = phi i32 [ %7, %negative ], [ %0, %non_zero ]
+  %start_offset = phi i32 [ 1, %negative ], [ 0, %non_zero ]
+  br label %digit_loop
+
+digit_loop:                                       ; preds = %digit_loop_body, %extract_digits
+  %remaining = phi i32 [ %value_abs, %extract_digits ], [ %13, %digit_loop_body ]
+  %temp_idx = phi i32 [ 0, %extract_digits ], [ %14, %digit_loop_body ]
+  %.not = icmp eq i32 %remaining, 0
+  br i1 %.not, label %reverse_loop, label %digit_loop_body
+
+digit_loop_body:                                  ; preds = %digit_loop
+  %8 = srem i32 %remaining, 10
+  %9 = trunc nsw i32 %8 to i8
+  %10 = add nsw i8 %9, 48
+  %11 = sext i32 %temp_idx to i64
+  %12 = getelementptr inbounds [12 x i8], ptr %temp, i64 0, i64 %11
+  store i8 %10, ptr %12, align 1
+  %13 = sdiv i32 %remaining, 10
+  %14 = add i32 %temp_idx, 1
+  br label %digit_loop
+
+reverse_loop:                                     ; preds = %reverse_body, %digit_loop
+  %reverse_idx = phi i32 [ 0, %digit_loop ], [ %24, %reverse_body ]
+  %15 = icmp slt i32 %reverse_idx, %temp_idx
+  br i1 %15, label %reverse_body, label %format_done
+
+reverse_body:                                     ; preds = %reverse_loop
+  %16 = xor i32 %reverse_idx, -1
+  %17 = add i32 %16, %temp_idx
+  %18 = sext i32 %17 to i64
+  %19 = getelementptr inbounds [12 x i8], ptr %temp, i64 0, i64 %18
+  %20 = load i8, ptr %19, align 1
+  %21 = add i32 %reverse_idx, %start_offset
+  %22 = sext i32 %21 to i64
+  %23 = getelementptr inbounds [12 x i8], ptr %buffer, i64 0, i64 %22
+  store i8 %20, ptr %23, align 1
+  %24 = add i32 %reverse_idx, 1
+  br label %reverse_loop
 }
+
+; Function Attrs: nocallback nofree nounwind willreturn memory(argmem: write)
+declare void @llvm.memset.p0.i64(ptr writeonly captures(none), i8, i64, i1 immarg) #0
+
+attributes #0 = { nocallback nofree nounwind willreturn memory(argmem: write) }
 ---
-ExitCode: 0
-Stdout: ```
+Output:
 42
 15
 100
-```
+
+ExitCode: 0
