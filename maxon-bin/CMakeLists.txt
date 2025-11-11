@@ -50,6 +50,7 @@ set(SOURCES
     parser.cpp
     codegen.cpp
     semantic_analyzer.cpp
+    error_formatter.cpp
 )
 
 # Create executable

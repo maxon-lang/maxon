@@ -77,7 +77,7 @@ private:
     // Scope management
     void enterScope();
     void exitScope();
-    void declareVariable(const std::string& name, const std::string& type, bool isImmutable);
+    void declareVariable(const std::string& name, const std::string& type, bool isImmutable, int line = 0, int column = 0);
     std::optional<VariableInfo> lookupVariable(const std::string& name);
     
     // Type checking

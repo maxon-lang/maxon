@@ -2,6 +2,7 @@
 #include "parser.h"
 #include "codegen.h"
 #include "semantic_analyzer.h"
+#include "error_formatter.h"
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -73,16 +74,19 @@ int main(int argc, char* argv[]) {
         std::vector<SemanticError> semanticErrors = analyzer.analyze(program.get());
         
         if (!semanticErrors.empty()) {
+            std::cerr << "\n=== Compilation Failed ===" << std::endl;
+            std::cerr << "Found " << semanticErrors.size() << " error" 
+                     << (semanticErrors.size() == 1 ? "" : "s") << ":\n" << std::endl;
+            
             for (const auto& error : semanticErrors) {
-                std::cerr << "Error:";
-                if (error.line > 0) {
-                    std::cerr << " line " << error.line;
-                    if (error.column > 0) {
-                        std::cerr << ", column " << error.column;
-                    }
-                    std::cerr << ":";
-                }
-                std::cerr << " " << error.message << std::endl;
+                std::string formattedError = ErrorFormatter::formatError(
+                    error.message,
+                    source,
+                    error.line,
+                    error.column,
+                    "Semantic Error"
+                );
+                std::cerr << formattedError << std::endl;
             }
             return 1;
         }
@@ -136,7 +140,9 @@ int main(int argc, char* argv[]) {
         }
         
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "\n=== Compilation Failed ===" << std::endl;
+        std::cerr << e.what() << std::endl;
+        std::cerr << "\nCompilation terminated due to errors." << std::endl;
         return 1;
     }
     

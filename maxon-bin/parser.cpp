@@ -39,9 +39,37 @@ void Parser::advance() {
 
 Token Parser::expect(TokenType type, const std::string& message) {
     if (!check(type)) {
-        throw std::runtime_error(message + " at line " + 
-                                std::to_string(currentToken().line) + ", column " +
-                                std::to_string(currentToken().column));
+        std::string typeStr;
+        switch (type) {
+            case TokenType::IDENTIFIER: typeStr = "identifier"; break;
+            case TokenType::NUMBER: typeStr = "number"; break;
+            case TokenType::STRING: typeStr = "block identifier (string)"; break;
+            case TokenType::LPAREN: typeStr = "'('"; break;
+            case TokenType::RPAREN: typeStr = "')'"; break;
+            case TokenType::EQUALS: typeStr = "'='"; break;
+            case TokenType::END: typeStr = "'end'"; break;
+            case TokenType::FUNCTION: typeStr = "'function'"; break;
+            case TokenType::VAR: typeStr = "'var'"; break;
+            case TokenType::LET: typeStr = "'let'"; break;
+            case TokenType::RETURN: typeStr = "'return'"; break;
+            case TokenType::IF: typeStr = "'if'"; break;
+            case TokenType::WHILE: typeStr = "'while'"; break;
+            case TokenType::COMMA: typeStr = "','"; break;
+            case TokenType::INT: typeStr = "type specifier"; break;
+            default: typeStr = "token";
+        }
+        
+        std::string foundStr;
+        if (currentToken().type == TokenType::END_OF_FILE) {
+            foundStr = "end of file";
+        } else {
+            foundStr = "'" + currentToken().value + "'";
+        }
+        
+        throw std::runtime_error(message + "\n  Expected: " + typeStr + 
+                               "\n  Found: " + foundStr +
+                               "\n  Location: line " + std::to_string(currentToken().line) + 
+                               ", column " + std::to_string(currentToken().column));
     }
     Token tok = currentToken();
     advance();
@@ -101,13 +129,21 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
     
     if (match(TokenType::LPAREN)) {
         auto expr = parseExpression();
-        expect(TokenType::RPAREN, "Expected ')'");
+        expect(TokenType::RPAREN, "Expected ')' to close parenthesized expression");
         return expr;
     }
     
-    throw std::runtime_error("Expected expression at line " + 
-                            std::to_string(currentToken().line) + ", column " +
-                            std::to_string(currentToken().column));
+    std::string foundStr;
+    if (currentToken().type == TokenType::END_OF_FILE) {
+        foundStr = "end of file";
+    } else {
+        foundStr = "'" + currentToken().value + "'";
+    }
+    
+    throw std::runtime_error("Expected expression\n  Found: " + foundStr +
+                            "\n  Location: line " + std::to_string(currentToken().line) + 
+                            ", column " + std::to_string(currentToken().column) +
+                            "\n  Note: An expression can be a number, variable, function call, or arithmetic/comparison operation");
 }
 
 std::unique_ptr<ExprAST> Parser::parseFactor() {
@@ -233,9 +269,10 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     if (isSingleLine) {
         // Single-line if: parse one statement that must be on the same line
         if (currentToken().line != conditionLine) {
-            throw std::runtime_error("Single-line if statement must have statement on same line at line " + 
-                                   std::to_string(conditionLine) + ", column " +
-                                   std::to_string(ifToken.column));
+            throw std::runtime_error("Single-line if statement must have statement on same line" + 
+                                   std::string("\n  Location: line ") + std::to_string(conditionLine) + 
+                                   ", column " + std::to_string(ifToken.column) +
+                                   "\n  Note: For multi-line if blocks, use: if <condition> 'id' ... end 'id'");
         }
         thenBody.push_back(parseStatement());
         
@@ -247,7 +284,7 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     }
     
     // Multi-line if with block identifier
-    Token blockIdToken = expect(TokenType::STRING, "Expected block identifier after 'if'");
+    Token blockIdToken = expect(TokenType::STRING, "Expected block identifier after 'if' condition (use 'id' where id is any string)");
     std::string blockId = blockIdToken.value;
     
     // Parse then body
@@ -259,12 +296,14 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     // Parse optional else
     if (match(TokenType::ELSE)) {
         // Require same block identifier after else
-        Token elseBlockIdToken = expect(TokenType::STRING, "Expected block identifier after 'else'");
+        Token elseBlockIdToken = expect(TokenType::STRING, "Expected block identifier after 'else' (must match the 'if' block identifier)");
         if (elseBlockIdToken.value != blockId) {
-            throw std::runtime_error("Block identifier mismatch: 'else' expects '" + blockId + 
-                                   "' but got '" + elseBlockIdToken.value + "' at line " + 
-                                   std::to_string(elseBlockIdToken.line) + ", column " +
-                                   std::to_string(elseBlockIdToken.column));
+            throw std::runtime_error("Block identifier mismatch in if-else statement" +
+                                   std::string("\n  Expected: '") + blockId + "'" +
+                                   "\n  Found: '" + elseBlockIdToken.value + "'" +
+                                   "\n  Location: line " + std::to_string(elseBlockIdToken.line) + 
+                                   ", column " + std::to_string(elseBlockIdToken.column) +
+                                   "\n  Note: The 'else' block identifier must match the 'if' block identifier");
         }
         
         while (!check(TokenType::END) && !check(TokenType::END_OF_FILE)) {
@@ -272,15 +311,17 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
         }
     }
     
-    expect(TokenType::END, "Expected 'end'");
+    expect(TokenType::END, "Expected 'end' to close if block");
     
     // Require matching block identifier after end
-    Token endBlockIdToken = expect(TokenType::STRING, "Expected block identifier after 'end'");
+    Token endBlockIdToken = expect(TokenType::STRING, "Expected block identifier after 'end' (must match the opening block identifier)");
     if (endBlockIdToken.value != blockId) {
-        throw std::runtime_error("Block identifier mismatch: 'end' expects '" + blockId + 
-                               "' but got '" + endBlockIdToken.value + "' at line " + 
-                               std::to_string(endBlockIdToken.line) + ", column " +
-                               std::to_string(endBlockIdToken.column));
+        throw std::runtime_error("Block identifier mismatch in if statement" +
+                               std::string("\n  Expected: '") + blockId + "'" +
+                               "\n  Found: '" + endBlockIdToken.value + "'" +
+                               "\n  Location: line " + std::to_string(endBlockIdToken.line) + 
+                               ", column " + std::to_string(endBlockIdToken.column) +
+                               "\n  Note: The 'end' block identifier must match the opening 'if' block identifier");
     }
     
     return std::make_unique<IfStmtAST>(std::move(condition), 
@@ -294,7 +335,7 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
     auto condition = parseExpression();
     
     // Require block identifier
-    Token blockIdToken = expect(TokenType::STRING, "Expected block identifier after 'while'");
+    Token blockIdToken = expect(TokenType::STRING, "Expected block identifier after 'while' condition (use 'id' where id is any string)");
     std::string blockId = blockIdToken.value;
     
     std::vector<std::unique_ptr<StmtAST>> body;
@@ -304,15 +345,17 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
         body.push_back(parseStatement());
     }
     
-    expect(TokenType::END, "Expected 'end'");
+    expect(TokenType::END, "Expected 'end' to close while loop");
     
     // Require matching block identifier after end
-    Token endBlockIdToken = expect(TokenType::STRING, "Expected block identifier after 'end'");
+    Token endBlockIdToken = expect(TokenType::STRING, "Expected block identifier after 'end' (must match the opening block identifier)");
     if (endBlockIdToken.value != blockId) {
-        throw std::runtime_error("Block identifier mismatch: 'end' expects '" + blockId + 
-                               "' but got '" + endBlockIdToken.value + "' at line " + 
-                               std::to_string(endBlockIdToken.line) + ", column " +
-                               std::to_string(endBlockIdToken.column));
+        throw std::runtime_error("Block identifier mismatch in while loop" +
+                               std::string("\n  Expected: '") + blockId + "'" +
+                               "\n  Found: '" + endBlockIdToken.value + "'" +
+                               "\n  Location: line " + std::to_string(endBlockIdToken.line) + 
+                               ", column " + std::to_string(endBlockIdToken.column) +
+                               "\n  Note: The 'end' block identifier must match the 'while' block identifier");
     }
     
     return std::make_unique<WhileStmtAST>(std::move(condition), std::move(body), whileToken.line, whileToken.column);
@@ -357,13 +400,23 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
             return parseAssignment(name);
         }
         
-        throw std::runtime_error("Unknown identifier '" + name + "' at line " +
-                                std::to_string(idLine) + ", column " + std::to_string(idColumn));
+        throw std::runtime_error("Unexpected identifier '" + name + "'" +
+                                std::string("\n  Location: line ") + std::to_string(idLine) + 
+                                ", column " + std::to_string(idColumn) +
+                                "\n  Note: Did you forget an assignment (=), function call (), or keyword?");
     }
     
-    throw std::runtime_error("Unexpected token at line " +
-                            std::to_string(currentToken().line) + ", column " +
-                            std::to_string(currentToken().column));
+    std::string foundStr;
+    if (currentToken().type == TokenType::END_OF_FILE) {
+        foundStr = "end of file";
+    } else {
+        foundStr = "'" + currentToken().value + "'";
+    }
+    
+    throw std::runtime_error("Unexpected token: " + foundStr +
+                            "\n  Location: line " + std::to_string(currentToken().line) + 
+                            ", column " + std::to_string(currentToken().column) +
+                            "\n  Note: Expected a statement (var, let, if, while, return, break, continue, or assignment)");
 }
 
 std::unique_ptr<FunctionAST> Parser::parseFunction() {
@@ -397,16 +450,18 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
         body.push_back(parseStatement());
     }
     
-    expect(TokenType::END, "Expected 'end'");
+    expect(TokenType::END, "Expected 'end' to close function body");
     
     // Function has implicit block identifier which is the function name
     // Require matching block identifier after end
     Token endBlockIdToken = expect(TokenType::STRING, "Expected function name as block identifier after 'end'");
     if (endBlockIdToken.value != name.value) {
-        throw std::runtime_error("Block identifier mismatch: 'end' expects '" + name.value + 
-                               "' but got '" + endBlockIdToken.value + "' at line " + 
-                               std::to_string(endBlockIdToken.line) + ", column " +
-                               std::to_string(endBlockIdToken.column));
+        throw std::runtime_error("Block identifier mismatch in function definition" +
+                               std::string("\n  Expected: '") + name.value + "'" +
+                               "\n  Found: '" + endBlockIdToken.value + "'" +
+                               "\n  Location: line " + std::to_string(endBlockIdToken.line) + 
+                               ", column " + std::to_string(endBlockIdToken.column) +
+                               "\n  Note: The 'end' block identifier must match the function name");
     }
     
     return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), funcToken.line, funcToken.column);

@@ -122,8 +122,21 @@ Token Lexer::readString() {
     advance(); // Skip opening '
     
     while (currentChar() != '\0' && currentChar() != '\'') {
+        if (currentChar() == '\n') {
+            throw std::runtime_error("Unterminated string literal at line " + 
+                                   std::to_string(startLine) + ", column " + 
+                                   std::to_string(startColumn) + 
+                                   ": string started with ' but missing closing '");
+        }
         str += currentChar();
         advance();
+    }
+    
+    if (currentChar() == '\0') {
+        throw std::runtime_error("Unterminated string literal at line " + 
+                               std::to_string(startLine) + ", column " + 
+                               std::to_string(startColumn) + 
+                               ": reached end of file without finding closing '");
     }
     
     if (currentChar() == '\'') {
@@ -192,7 +205,10 @@ std::vector<Token> Lexer::tokenize() {
                 tokens.push_back(Token(TokenType::NOT_EQUAL, "!=", startLine, startColumn));
                 advance();
             } else {
-                // Unknown character, just skip it
+                throw std::runtime_error("Unexpected character '!' at line " + 
+                                       std::to_string(startLine) + ", column " + 
+                                       std::to_string(startColumn) + 
+                                       ": did you mean '!=' (not equal)?");
             }
         }
         else if (c == '>') {
@@ -226,8 +242,28 @@ std::vector<Token> Lexer::tokenize() {
             advance();
         }
         else {
-            // Unknown character, skip it
-            advance();
+            // Unknown character - provide helpful error
+            std::string charDesc;
+            if (std::isprint(c)) {
+                charDesc = "'" + std::string(1, c) + "'";
+            } else {
+                charDesc = "(ASCII " + std::to_string((int)c) + ")";
+            }
+            
+            std::string suggestion;
+            if (c == '{' || c == '}') {
+                suggestion = "\n  Note: Maxon uses 'end' keyword for block termination, not braces";
+            } else if (c == ';') {
+                suggestion = "\n  Note: Maxon doesn't require semicolons at the end of statements";
+            } else if (c == '[' || c == ']') {
+                suggestion = "\n  Note: Arrays are not yet supported in Maxon";
+            } else if (c == '"') {
+                suggestion = "\n  Note: Maxon uses single quotes (') for block identifiers";
+            }
+            
+            throw std::runtime_error("Unexpected character " + charDesc + " at line " + 
+                                   std::to_string(startLine) + ", column " + 
+                                   std::to_string(startColumn) + suggestion);
         }
     }
     

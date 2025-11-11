@@ -13,7 +13,9 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
     // First pass: collect all function declarations
     for (const auto& func : program->functions) {
         if (functions.find(func->name) != functions.end()) {
-            addError("Function '" + func->name + "' is already defined", func->line, func->column);
+            addError("Function '" + func->name + "' is already defined" +
+                    std::string("\n  Note: Each function name must be unique in the program"),
+                    func->line, func->column);
         } else {
             functions.emplace(func->name, FunctionInfo(func->name, func->returnType, func->parameters));
         }
@@ -33,7 +35,7 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST* func) {
     
     // Declare parameters as variables
     for (const auto& param : func->parameters) {
-        declareVariable(param.name, param.type, false);
+        declareVariable(param.name, param.type, false, param.line, param.column);
     }
     
     // Analyze function body
@@ -44,7 +46,9 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST* func) {
     // Validate return statement (for non-void functions)
     if (func->returnType != "void") {
         if (!validateReturn(func)) {
-            addError("Function '" + func->name + "' must return a value of type '" + func->returnType + "'", func->line, func->column);
+            addError("Function '" + func->name + "' must return a value of type '" + func->returnType + "'" +
+                    std::string("\n  Note: All execution paths through the function must end with a return statement"),
+                    func->line, func->column);
         }
     }
     
@@ -56,42 +60,61 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
     if (auto varDecl = dynamic_cast<VarDeclStmtAST*>(stmt)) {
         // Check if variable already exists in current scope
         if (variables.find(varDecl->name) != variables.end()) {
-            addError("Variable '" + varDecl->name + "' is already declared", stmt->line, stmt->column);
+            auto existing = variables[varDecl->name];
+            addError("Variable '" + varDecl->name + "' is already declared" +
+                    std::string("\n  Previous declaration at line ") + std::to_string(existing.line) +
+                    ", column " + std::to_string(existing.column) +
+                    "\n  Note: Variable names must be unique within their scope",
+                    stmt->line, stmt->column);
         }
         
         // Analyze initializer
         std::string initType = analyzeExpression(varDecl->initializer.get());
         
         // Declare variable
-        declareVariable(varDecl->name, initType, false);
+        declareVariable(varDecl->name, initType, false, stmt->line, stmt->column);
         
     } else if (auto letDecl = dynamic_cast<LetDeclStmtAST*>(stmt)) {
         // Check if variable already exists in current scope
         if (variables.find(letDecl->name) != variables.end()) {
-            addError("Variable '" + letDecl->name + "' is already declared", stmt->line, stmt->column);
+            auto existing = variables[letDecl->name];
+            addError("Variable '" + letDecl->name + "' is already declared" +
+                    std::string("\n  Previous declaration at line ") + std::to_string(existing.line) +
+                    ", column " + std::to_string(existing.column) +
+                    "\n  Note: Variable names must be unique within their scope",
+                    stmt->line, stmt->column);
         }
         
         // Analyze initializer
         std::string initType = analyzeExpression(letDecl->initializer.get());
         
         // Declare immutable variable
-        declareVariable(letDecl->name, initType, true);
+        declareVariable(letDecl->name, initType, true, stmt->line, stmt->column);
         
     } else if (auto assign = dynamic_cast<AssignStmtAST*>(stmt)) {
         // Check if variable exists
         auto varInfo = lookupVariable(assign->name);
         if (!varInfo.has_value()) {
-            addError("Undefined variable: '" + assign->name + "'", stmt->line, stmt->column);
+            addError("Undefined variable: '" + assign->name + "'" +
+                    std::string("\n  Note: Variable must be declared with 'var' or 'let' before use"),
+                    stmt->line, stmt->column);
         } else {
             // Check if variable is immutable
             if (varInfo->isImmutable) {
-                addError("Cannot assign to read-only variable '" + assign->name + "'", stmt->line, stmt->column);
+                addError("Cannot assign to read-only variable '" + assign->name + "'" +
+                        std::string("\n  Variable declared with 'let' at line ") + std::to_string(varInfo->line) +
+                        ", column " + std::to_string(varInfo->column) +
+                        "\n  Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable variables",
+                        stmt->line, stmt->column);
             }
             
             // Check type compatibility
             std::string valueType = analyzeExpression(assign->value.get());
             if (!typesMatch(varInfo->type, valueType)) {
-                addError("Type mismatch: cannot assign '" + valueType + "' to variable of type '" + varInfo->type + "'", stmt->line, stmt->column);
+                addError("Type mismatch: cannot assign '" + valueType + "' to variable of type '" + varInfo->type + "'" +
+                        std::string("\n  Variable '") + assign->name + "' declared at line " + 
+                        std::to_string(varInfo->line) + ", column " + std::to_string(varInfo->column),
+                        stmt->line, stmt->column);
             }
         }
         
@@ -99,7 +122,10 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
         // Analyze condition
         std::string condType = analyzeExpression(ifStmt->condition.get());
         if (condType != "bool" && condType != "int") {
-            addError("If condition must be a boolean or integer expression", stmt->line, stmt->column);
+            addError("If condition must be a boolean or integer expression" +
+                    std::string("\n  Found type: ") + condType +
+                    "\n  Note: Conditions should evaluate to true/false or use comparison operators (=, !=, <, >, <=, >=)",
+                    stmt->line, stmt->column);
         }
         
         // Analyze then block
@@ -122,7 +148,10 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
         // Analyze condition
         std::string condType = analyzeExpression(whileStmt->condition.get());
         if (condType != "bool" && condType != "int") {
-            addError("While condition must be a boolean or integer expression", stmt->line, stmt->column);
+            addError("While condition must be a boolean or integer expression" +
+                    std::string("\n  Found type: ") + condType +
+                    "\n  Note: Conditions should evaluate to true/false or use comparison operators (=, !=, <, >, <=, >=)",
+                    stmt->line, stmt->column);
         }
         
         // Enter loop scope
@@ -141,13 +170,17 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
     } else if (dynamic_cast<BreakStmtAST*>(stmt)) {
         // Validate break is inside a loop
         if (loopDepth == 0) {
-            addError("'break' statement must be inside a loop", stmt->line, stmt->column);
+            addError("'break' statement must be inside a loop" +
+                    std::string("\n  Note: 'break' can only be used within 'while' loops"),
+                    stmt->line, stmt->column);
         }
         
     } else if (dynamic_cast<ContinueStmtAST*>(stmt)) {
         // Validate continue is inside a loop
         if (loopDepth == 0) {
-            addError("'continue' statement must be inside a loop", stmt->line, stmt->column);
+            addError("'continue' statement must be inside a loop" +
+                    std::string("\n  Note: 'continue' can only be used within 'while' loops"),
+                    stmt->line, stmt->column);
         }
         
     } else if (auto returnStmt = dynamic_cast<ReturnStmtAST*>(stmt)) {
@@ -155,12 +188,17 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
         if (returnStmt->value) {
             std::string returnType = analyzeExpression(returnStmt->value.get());
             if (!typesMatch(currentFunctionReturnType, returnType)) {
-                addError("Return type mismatch: expected '" + currentFunctionReturnType + 
-                         "' but got '" + returnType + "'", stmt->line, stmt->column);
+                addError("Return type mismatch" +
+                        std::string("\n  Expected: ") + currentFunctionReturnType +
+                        "\n  Found: " + returnType +
+                        "\n  Note: The return value type must match the function's declared return type",
+                        stmt->line, stmt->column);
             }
         } else {
             if (currentFunctionReturnType != "void") {
-                addError("Function must return a value of type '" + currentFunctionReturnType + "'", stmt->line, stmt->column);
+                addError("Function must return a value of type '" + currentFunctionReturnType + "'" +
+                        std::string("\n  Note: Use 'return <expression>' to return a value"),
+                        stmt->line, stmt->column);
             }
         }
     }
@@ -176,7 +214,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
     } else if (auto varExpr = dynamic_cast<VariableExprAST*>(expr)) {
         auto varInfo = lookupVariable(varExpr->name);
         if (!varInfo.has_value()) {
-            addError("Undefined variable: '" + varExpr->name + "'", expr->line, expr->column);
+            addError("Undefined variable: '" + varExpr->name + "'" +
+                    std::string("\n  Note: Variable must be declared with 'var' or 'let' before use"),
+                    expr->line, expr->column);
             return "error";
         }
         return varInfo->type;
@@ -188,7 +228,16 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         // Arithmetic operators: +, -, *, /
         if (binExpr->op == '+' || binExpr->op == '-' || binExpr->op == '*' || binExpr->op == '/') {
             if (leftType != "int" || rightType != "int") {
-                addError("Arithmetic operators require integer operands", expr->line, expr->column);
+                std::string opName;
+                if (binExpr->op == '+') opName = "addition (+)";
+                else if (binExpr->op == '-') opName = "subtraction (-)";
+                else if (binExpr->op == '*') opName = "multiplication (*)";
+                else opName = "division (/)";
+                
+                addError("Arithmetic operator " + opName + " requires integer operands" +
+                        std::string("\n  Left operand type: ") + leftType +
+                        "\n  Right operand type: " + rightType,
+                        expr->line, expr->column);
                 return "error";
             }
             return "int";
@@ -198,7 +247,10 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         if (binExpr->op == '<' || binExpr->op == '>' || binExpr->op == 'L' || 
             binExpr->op == 'G' || binExpr->op == 'E' || binExpr->op == 'N') {
             if (leftType != rightType) {
-                addError("Comparison operators require operands of the same type", expr->line, expr->column);
+                addError("Comparison operators require operands of the same type" +
+                        std::string("\n  Left operand type: ") + leftType +
+                        "\n  Right operand type: " + rightType,
+                        expr->line, expr->column);
                 return "error";
             }
             return "bool";
@@ -211,7 +263,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         // Check if function exists
         auto funcIt = functions.find(callExpr->callee);
         if (funcIt == functions.end()) {
-            addError("Undefined function: '" + callExpr->callee + "'", expr->line, expr->column);
+            addError("Undefined function: '" + callExpr->callee + "'" +
+                    std::string("\n  Note: Function must be defined before it can be called"),
+                    expr->line, expr->column);
             return "error";
         }
         
@@ -219,9 +273,12 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         
         // Check argument count
         if (callExpr->args.size() != funcInfo.parameters.size()) {
-            addError("Function '" + callExpr->callee + "' expects " + 
-                     std::to_string(funcInfo.parameters.size()) + " arguments but got " +
-                     std::to_string(callExpr->args.size()), expr->line, expr->column);
+            addError("Function '" + callExpr->callee + "' argument count mismatch" +
+                    std::string("\n  Expected: ") + std::to_string(funcInfo.parameters.size()) + " argument" +
+                    (funcInfo.parameters.size() == 1 ? "" : "s") +
+                    "\n  Found: " + std::to_string(callExpr->args.size()) + " argument" +
+                    (callExpr->args.size() == 1 ? "" : "s"),
+                    expr->line, expr->column);
             return funcInfo.returnType;
         }
         
@@ -229,9 +286,12 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         for (size_t i = 0; i < callExpr->args.size(); i++) {
             std::string argType = analyzeExpression(callExpr->args[i].get());
             if (!typesMatch(funcInfo.parameters[i].type, argType)) {
-                addError("Function '" + callExpr->callee + "' parameter " + std::to_string(i + 1) +
-                         " expects type '" + funcInfo.parameters[i].type + 
-                         "' but got '" + argType + "'", expr->line, expr->column);
+                addError("Function '" + callExpr->callee + "' argument type mismatch" +
+                        std::string("\n  Parameter ") + std::to_string(i + 1) + " ('" + 
+                        funcInfo.parameters[i].name + "')" +
+                        "\n  Expected type: " + funcInfo.parameters[i].type +
+                        "\n  Found type: " + argType,
+                        expr->line, expr->column);
             }
         }
         
@@ -278,8 +338,8 @@ void SemanticAnalyzer::exitScope() {
     }
 }
 
-void SemanticAnalyzer::declareVariable(const std::string& name, const std::string& type, bool isImmutable) {
-    variables[name] = VariableInfo(name, type, isImmutable);
+void SemanticAnalyzer::declareVariable(const std::string& name, const std::string& type, bool isImmutable, int line, int column) {
+    variables[name] = VariableInfo(name, type, isImmutable, line, column);
 }
 
 std::optional<VariableInfo> SemanticAnalyzer::lookupVariable(const std::string& name) {
