@@ -48,6 +48,42 @@ public:
     BooleanExprAST(bool val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
 };
 
+// Character literal
+class CharacterExprAST : public ExprAST {
+public:
+    char value;
+    
+    CharacterExprAST(char val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
+};
+
+// Type cast expression (e.g., "value as ptr")
+class CastExprAST : public ExprAST {
+public:
+    std::unique_ptr<ExprAST> expr;
+    std::string targetType;  // "int", "ptr", "char"
+    
+    CastExprAST(std::unique_ptr<ExprAST> e, const std::string& type, int l = 0, int c = 0)
+        : ExprAST(l, c), expr(std::move(e)), targetType(type) {}
+};
+
+// Address-of expression (e.g., "&variable")
+class AddressOfExprAST : public ExprAST {
+public:
+    std::string varName;
+    
+    AddressOfExprAST(const std::string& name, int l = 0, int c = 0)
+        : ExprAST(l, c), varName(name) {}
+};
+
+// Dereference expression (e.g., "*ptr")
+class DerefExprAST : public ExprAST {
+public:
+    std::unique_ptr<ExprAST> expr;
+    
+    DerefExprAST(std::unique_ptr<ExprAST> e, int l = 0, int c = 0)
+        : ExprAST(l, c), expr(std::move(e)) {}
+};
+
 // Binary operation
 class BinaryExprAST : public ExprAST {
 public:
@@ -185,6 +221,7 @@ public:
     std::vector<FunctionParameter> parameters;
     std::string returnType;
     std::vector<std::unique_ptr<StmtAST>> body;
+    bool isExtern;  // true if this is an extern function declaration
     int line;
     int column;
     
@@ -192,18 +229,35 @@ public:
                 std::vector<FunctionParameter> params,
                 const std::string& ret,
                 std::vector<std::unique_ptr<StmtAST>> b,
+                bool ext = false,
                 int l = 1, int c = 1)
         : name(n), parameters(std::move(params)), returnType(ret), body(std::move(b)),
-          line(l), column(c) {}
+          isExtern(ext), line(l), column(c) {}
 };
 
-// Program (collection of functions)
+// Namespace declaration
+class NamespaceAST : public ASTNode {
+public:
+    std::string name;
+    std::vector<std::unique_ptr<FunctionAST>> functions;
+    int line;
+    int column;
+    
+    NamespaceAST(const std::string& n, 
+                 std::vector<std::unique_ptr<FunctionAST>> funcs,
+                 int l = 1, int c = 1)
+        : name(n), functions(std::move(funcs)), line(l), column(c) {}
+};
+
+// Program (collection of functions and namespaces)
 class ProgramAST : public ASTNode {
 public:
     std::vector<std::unique_ptr<FunctionAST>> functions;
+    std::vector<std::unique_ptr<NamespaceAST>> namespaces;
     
-    ProgramAST(std::vector<std::unique_ptr<FunctionAST>> funcs)
-        : functions(std::move(funcs)) {}
+    ProgramAST(std::vector<std::unique_ptr<FunctionAST>> funcs,
+               std::vector<std::unique_ptr<NamespaceAST>> ns = {})
+        : functions(std::move(funcs)), namespaces(std::move(ns)) {}
 };
 
 #endif // AST_H

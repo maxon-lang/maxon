@@ -7,7 +7,7 @@ CC = "C:/Program Files/LLVM/bin/clang.exe"
 CXX = "C:/Program Files/LLVM/bin/clang++.exe"
 RC = "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe"
 
-.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test language-tests docs
+.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test language-tests docs test
 
 # Default target
 all: configure
@@ -28,6 +28,7 @@ help:
 	@echo "  lsp-test         - Build and run LSP C++ unit tests"
 	@echo "  language-tests   - Run Maxon language fragment tests"
 	@echo "  docs             - Generate HTML documentation and test fragments"
+	@echo "  test FILE=<file> - Compile and run a test program (e.g., make test FILE=test-cast)"
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  help             - Show this help message"
 
@@ -102,6 +103,22 @@ docs:
 	@powershell -Command "cd docs; dotnet run"
 	@echo Documentation generated in docs/Output/
 	@echo Test fragments created in language-tests/doc-fragments/
+
+# Compile and run a test program
+# Usage: make test FILE=test-cast
+# This will compile examples/<FILE>.maxon and run it
+test: compiler
+ifndef FILE
+	@echo Error: Please specify FILE parameter
+	@echo Usage: make test FILE=test-cast
+	@echo This will compile and run examples/test-cast.maxon
+	@exit 1
+endif
+	@echo Compiling examples/$(FILE).maxon...
+	@./build/bin/maxonc.exe examples/$(FILE).maxon -o examples/$(FILE).exe
+	@echo === Running examples/$(FILE).exe ===
+	@./examples/$(FILE).exe
+	@echo === Test complete ===
 
 # Clean build artifacts
 clean:

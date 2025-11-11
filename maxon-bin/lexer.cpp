@@ -5,6 +5,8 @@
 
 static const std::unordered_map<std::string, TokenType> keywords = {
     {"function", TokenType::FUNCTION},
+    {"extern", TokenType::EXTERN},
+    {"namespace", TokenType::NAMESPACE},
     {"var", TokenType::VAR},
     {"let", TokenType::LET},
     {"while", TokenType::WHILE},
@@ -15,6 +17,9 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"break", TokenType::BREAK},
     {"continue", TokenType::CONTINUE},
     {"int", TokenType::INT},
+    {"ptr", TokenType::PTR},
+    {"char", TokenType::CHAR},
+    {"as", TokenType::AS},
     {"true", TokenType::TRUE},
     {"false", TokenType::FALSE}
 };
@@ -143,6 +148,12 @@ Token Lexer::readString() {
         advance(); // Skip closing '
     }
     
+    // Check if this is a character literal (single character between quotes)
+    if (str.length() == 1) {
+        // Return as CHARACTER token
+        return Token(TokenType::CHARACTER, str, startLine, startColumn);
+    }
+    
     return Token(TokenType::STRING, str, startLine, startColumn);
 }
 
@@ -195,6 +206,14 @@ std::vector<Token> Lexer::tokenize() {
             tokens.push_back(Token(TokenType::DIVIDE, "/", startLine, startColumn));
             advance();
         }
+        else if (c == '%') {
+            tokens.push_back(Token(TokenType::MODULO, "%", startLine, startColumn));
+            advance();
+        }
+        else if (c == '&') {
+            tokens.push_back(Token(TokenType::AMPERSAND, "&", startLine, startColumn));
+            advance();
+        }
         else if (c == '=') {
             tokens.push_back(Token(TokenType::EQUALS, "=", startLine, startColumn));
             advance();
@@ -239,6 +258,10 @@ std::vector<Token> Lexer::tokenize() {
         }
         else if (c == ',') {
             tokens.push_back(Token(TokenType::COMMA, ",", startLine, startColumn));
+            advance();
+        }
+        else if (c == '.') {
+            tokens.push_back(Token(TokenType::DOT, ".", startLine, startColumn));
             advance();
         }
         else {

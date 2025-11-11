@@ -35,6 +35,7 @@ private:
     std::unique_ptr<ContinueStmtAST> parseContinue();
     
     std::unique_ptr<FunctionAST> parseFunction();
+    std::unique_ptr<NamespaceAST> parseNamespace();
     
 public:
     Parser(const std::vector<Token>& toks);

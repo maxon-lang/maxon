@@ -7,6 +7,8 @@
 enum class TokenType {
     // Keywords
     FUNCTION,
+    EXTERN,     // extern keyword for external declarations
+    NAMESPACE,  // namespace keyword
     VAR,
     LET,        // let keyword (immutable variables)
     WHILE,
@@ -17,6 +19,9 @@ enum class TokenType {
     BREAK,      // break keyword
     CONTINUE,   // continue keyword
     INT,
+    PTR,        // ptr type keyword
+    CHAR,       // char type keyword
+    AS,         // as keyword for type casting
     TRUE,       // true keyword
     FALSE,      // false keyword
     
@@ -24,6 +29,7 @@ enum class TokenType {
     IDENTIFIER,
     NUMBER,
     STRING,
+    CHARACTER,  // Single character literal 'A'
     
     // Operators
     EQUALS,     // = (used for both assignment and equality comparison)
@@ -31,6 +37,8 @@ enum class TokenType {
     MINUS,      // -
     MULTIPLY,   // *
     DIVIDE,     // /
+    MODULO,     // % (modulo/remainder)
+    AMPERSAND,  // & (address-of operator)
     NOT_EQUAL,  // != (not equal)
     GT,         // >
     LT,         // <
@@ -41,6 +49,7 @@ enum class TokenType {
     LPAREN,     // (
     RPAREN,     // )
     COMMA,      // ,
+    DOT,        // . (member access / namespace resolution)
     
     // Special
     END_OF_FILE,

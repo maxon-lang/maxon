@@ -25,6 +25,21 @@ bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
 }
 }
 
+// Helper function to convert Maxon type string to LLVM type
+static llvm::Type* getTypeFromString(llvm::LLVMContext& context, const std::string& typeStr) {
+    if (typeStr == "int") {
+        return llvm::Type::getInt32Ty(context);
+    } else if (typeStr == "ptr") {
+        return llvm::PointerType::get(context, 0);  // Opaque pointer
+    } else if (typeStr == "char") {
+        return llvm::Type::getInt8Ty(context);
+    } else if (typeStr == "void") {
+        return llvm::Type::getVoidTy(context);
+    } else {
+        throw std::runtime_error("Unknown type: " + typeStr);
+    }
+}
+
 CodeGenerator::CodeGenerator(const std::string& moduleName, bool debugInfo)
     : builder(context), module(std::make_unique<llvm::Module>(moduleName, context)),
       generateDebugInfo(debugInfo), sourceFileName(moduleName) {
@@ -108,10 +123,16 @@ void CodeGenerator::initStandardLibrary() {
 }
 
 llvm::AllocaInst* CodeGenerator::createEntryBlockAlloca(llvm::Function* function,
-                                                         const std::string& varName) {
+                                                         const std::string& varName,
+                                                         llvm::Type* type) {
+    // If no type specified, default to i32
+    if (!type) {
+        type = llvm::Type::getInt32Ty(context);
+    }
+    
     llvm::IRBuilder<> tmpBuilder(&function->getEntryBlock(),
                                   function->getEntryBlock().begin());
-    return tmpBuilder.CreateAlloca(llvm::Type::getInt32Ty(context), nullptr, varName);
+    return tmpBuilder.CreateAlloca(type, nullptr, varName);
 }
 
 llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
@@ -121,6 +142,87 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
     
     if (auto* boolExpr = dynamic_cast<BooleanExprAST*>(expr)) {
         return llvm::ConstantInt::get(context, llvm::APInt(1, boolExpr->value ? 1 : 0, false));
+    }
+    
+    if (auto* charExpr = dynamic_cast<CharacterExprAST*>(expr)) {
+        // Characters are represented as 8-bit integers
+        return llvm::ConstantInt::get(context, llvm::APInt(8, (uint8_t)charExpr->value, false));
+    }
+    
+    if (auto* castExpr = dynamic_cast<CastExprAST*>(expr)) {
+        llvm::Value* value = generateExpr(castExpr->expr.get());
+        if (!value) {
+            throw std::runtime_error("Failed to generate expression for cast");
+        }
+        
+        llvm::Type* targetType = nullptr;
+        if (castExpr->targetType == "int") {
+            targetType = llvm::Type::getInt32Ty(context);
+        } else if (castExpr->targetType == "ptr") {
+            targetType = llvm::PointerType::get(context, 0);  // Opaque pointer
+        } else if (castExpr->targetType == "char") {
+            targetType = llvm::Type::getInt8Ty(context);
+        } else {
+            throw std::runtime_error("Unknown cast target type: " + castExpr->targetType);
+        }
+        
+        llvm::Type* sourceType = value->getType();
+        
+        // Handle different cast scenarios
+        if (sourceType == targetType) {
+            // No-op cast
+            return value;
+        } else if (sourceType->isIntegerTy() && targetType->isIntegerTy()) {
+            // Integer to integer (e.g., i8 -> i32, i32 -> i8)
+            unsigned sourceBits = sourceType->getIntegerBitWidth();
+            unsigned targetBits = targetType->getIntegerBitWidth();
+            if (sourceBits < targetBits) {
+                // Zero-extend (unsigned extension)
+                return builder.CreateZExt(value, targetType, "zexttmp");
+            } else if (sourceBits > targetBits) {
+                // Truncate
+                return builder.CreateTrunc(value, targetType, "trunctmp");
+            }
+            return value;
+        } else if (sourceType->isIntegerTy() && targetType->isPointerTy()) {
+            // Integer to pointer
+            return builder.CreateIntToPtr(value, targetType, "int2ptrtmp");
+        } else if (sourceType->isPointerTy() && targetType->isIntegerTy()) {
+            // Pointer to integer
+            return builder.CreatePtrToInt(value, targetType, "ptr2inttmp");
+        } else if (sourceType->isPointerTy() && targetType->isPointerTy()) {
+            // Pointer to pointer (bitcast)
+            return builder.CreateBitCast(value, targetType, "ptrcasttmp");
+        } else {
+            throw std::runtime_error("Unsupported cast from " + 
+                                   std::string(sourceType->isIntegerTy() ? "integer" : 
+                                              sourceType->isPointerTy() ? "pointer" : "unknown") +
+                                   " to " +
+                                   std::string(targetType->isIntegerTy() ? "integer" :
+                                              targetType->isPointerTy() ? "pointer" : "unknown"));
+        }
+    }
+    
+    if (auto* addrExpr = dynamic_cast<AddressOfExprAST*>(expr)) {
+        // Get the alloca for the variable
+        llvm::AllocaInst* alloca = namedValues[addrExpr->varName];
+        if (!alloca) {
+            throw std::runtime_error("Unknown variable name: " + addrExpr->varName);
+        }
+        // The alloca itself is already a pointer, so just return it
+        return alloca;
+    }
+    
+    if (auto* derefExpr = dynamic_cast<DerefExprAST*>(expr)) {
+        // Generate the pointer expression
+        llvm::Value* ptr = generateExpr(derefExpr->expr.get());
+        if (!ptr) {
+            throw std::runtime_error("Failed to generate pointer expression for dereference");
+        }
+        
+        // Load the value from the pointer
+        // For now, assume we're loading an i32
+        return builder.CreateLoad(llvm::Type::getInt32Ty(context), ptr, "dereftmp");
     }
     
     if (auto* varExpr = dynamic_cast<VariableExprAST*>(expr)) {
@@ -148,6 +250,8 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
                 return builder.CreateMul(left, right, "multmp");
             case '/':
                 return builder.CreateSDiv(left, right, "divtmp");
+            case '%':
+                return builder.CreateSRem(left, right, "modtmp");
             case '>':
                 return builder.CreateICmpSGT(left, right, "cmptmp");
             case '<':
@@ -484,11 +588,19 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
     throw std::runtime_error("Unknown statement type");
 }
 
-void CodeGenerator::generateFunction(FunctionAST* func) {
+void CodeGenerator::generateFunction(FunctionAST* func, const std::string& namespaceName) {
+    // Determine the actual function name (with namespace if applicable)
+    std::string functionName = namespaceName.empty() ? func->name : namespaceName + "::" + func->name;
+    
     // Get the function that was already declared
-    llvm::Function* function = module->getFunction(func->name);
+    llvm::Function* function = module->getFunction(functionName);
     if (!function) {
-        throw std::runtime_error("Function declaration not found: " + func->name);
+        throw std::runtime_error("Function declaration not found: " + functionName);
+    }
+    
+    // If this is an extern function, don't generate a body
+    if (func->isExtern) {
+        return;
     }
     
     // Create debug info for function if enabled
@@ -520,7 +632,8 @@ void CodeGenerator::generateFunction(FunctionAST* func) {
     // Allocate stack space for parameters
     size_t idx = 0;
     for (auto& arg : function->args()) {
-        llvm::AllocaInst* alloca = createEntryBlockAlloca(function, func->parameters[idx].name);
+        llvm::Type* paramType = getTypeFromString(context, func->parameters[idx].type);
+        llvm::AllocaInst* alloca = createEntryBlockAlloca(function, func->parameters[idx].name, paramType);
         
         // Emit debug location for parameter
         if (generateDebugInfo) {
@@ -567,15 +680,15 @@ void CodeGenerator::generateFunction(FunctionAST* func) {
 }
 
 void CodeGenerator::generate(ProgramAST* program) {
-    // First pass: Create all function declarations
+    // First pass: Create all function declarations (including namespace functions)
     for (auto& func : program->functions) {
         // Get return type
-        llvm::Type* returnType = llvm::Type::getInt32Ty(context);
+        llvm::Type* returnType = getTypeFromString(context, func->returnType);
         
         // Create parameter types
         std::vector<llvm::Type*> paramTypes;
-        for (size_t i = 0; i < func->parameters.size(); i++) {
-            paramTypes.push_back(llvm::Type::getInt32Ty(context));
+        for (const auto& param : func->parameters) {
+            paramTypes.push_back(getTypeFromString(context, param.type));
         }
         
         // Create function type
@@ -586,9 +699,38 @@ void CodeGenerator::generate(ProgramAST* program) {
                              func->name, module.get());
     }
     
+    // Create namespace functions with qualified names
+    for (auto& ns : program->namespaces) {
+        for (auto& func : ns->functions) {
+            // Get return type
+            llvm::Type* returnType = getTypeFromString(context, func->returnType);
+            
+            // Create parameter types
+            std::vector<llvm::Type*> paramTypes;
+            for (const auto& param : func->parameters) {
+                paramTypes.push_back(getTypeFromString(context, param.type));
+            }
+            
+            // Create function type
+            llvm::FunctionType* funcType = llvm::FunctionType::get(returnType, paramTypes, false);
+            
+            // Create function with qualified name (namespace::function)
+            std::string qualifiedName = ns->name + "::" + func->name;
+            llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
+                                 qualifiedName, module.get());
+        }
+    }
+    
     // Second pass: Generate function bodies
     for (auto& func : program->functions) {
         generateFunction(func.get());
+    }
+    
+    // Generate namespace function bodies
+    for (auto& ns : program->namespaces) {
+        for (auto& func : ns->functions) {
+            generateFunction(func.get(), ns->name);
+        }
     }
     
     // Finalize debug info if enabled

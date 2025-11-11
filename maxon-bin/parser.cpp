@@ -99,11 +99,55 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         return std::make_unique<BooleanExprAST>(false, line, column);
     }
     
+    if (check(TokenType::CHARACTER)) {
+        char value = currentToken().value[0];  // Get first character
+        int line = currentToken().line;
+        int column = currentToken().column;
+        advance();
+        return std::make_unique<CharacterExprAST>(value, line, column);
+    }
+    
+    // Address-of operator: &variable
+    if (check(TokenType::AMPERSAND)) {
+        int line = currentToken().line;
+        int column = currentToken().column;
+        advance(); // consume '&'
+        
+        // Expect an identifier (variable name)
+        if (!check(TokenType::IDENTIFIER)) {
+            throw std::runtime_error("Expected variable name after '&' operator\n  Location: line " + 
+                                   std::to_string(currentToken().line) + ", column " + 
+                                   std::to_string(currentToken().column));
+        }
+        
+        std::string varName = currentToken().value;
+        advance();
+        return std::make_unique<AddressOfExprAST>(varName, line, column);
+    }
+    
+    // Dereference operator: *expr
+    if (check(TokenType::MULTIPLY)) {
+        int line = currentToken().line;
+        int column = currentToken().column;
+        advance(); // consume '*'
+        
+        // Parse the expression to dereference
+        auto expr = parsePrimary();
+        return std::make_unique<DerefExprAST>(std::move(expr), line, column);
+    }
+    
     if (check(TokenType::IDENTIFIER)) {
         std::string name = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;
         advance();
+        
+        // Check for namespace qualification (namespace.function)
+        if (check(TokenType::DOT)) {
+            advance(); // consume '.'
+            Token memberName = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
+            name = name + "::" + memberName.value;
+        }
         
         // Check for function call
         if (check(TokenType::LPAREN)) {
@@ -147,13 +191,41 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 }
 
 std::unique_ptr<ExprAST> Parser::parseFactor() {
-    return parsePrimary();
+    auto expr = parsePrimary();
+    
+    // Handle type cast: expr as type
+    if (check(TokenType::AS)) {
+        int line = currentToken().line;
+        int column = currentToken().column;
+        advance(); // consume 'as'
+        
+        // Expect a type keyword (int, ptr, char)
+        std::string targetType;
+        if (check(TokenType::INT)) {
+            targetType = "int";
+            advance();
+        } else if (check(TokenType::PTR)) {
+            targetType = "ptr";
+            advance();
+        } else if (check(TokenType::CHAR)) {
+            targetType = "char";
+            advance();
+        } else {
+            throw std::runtime_error("Expected type after 'as' keyword (int, ptr, or char)\n  Location: line " + 
+                                   std::to_string(currentToken().line) + ", column " + 
+                                   std::to_string(currentToken().column));
+        }
+        
+        expr = std::make_unique<CastExprAST>(std::move(expr), targetType, line, column);
+    }
+    
+    return expr;
 }
 
 std::unique_ptr<ExprAST> Parser::parseTerm() {
     auto left = parseFactor();
     
-    while (check(TokenType::MULTIPLY) || check(TokenType::DIVIDE)) {
+    while (check(TokenType::MULTIPLY) || check(TokenType::DIVIDE) || check(TokenType::MODULO)) {
         char op = currentToken().value[0];
         int line = currentToken().line;
         int column = currentToken().column;
@@ -396,6 +468,13 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
         int idColumn = currentToken().column;
         advance();
         
+        // Check for namespace qualification
+        if (check(TokenType::DOT)) {
+            advance(); // consume '.'
+            Token memberName = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
+            name = name + "::" + memberName.value;
+        }
+        
         if (check(TokenType::EQUALS)) {
             return parseAssignment(name);
         }
@@ -437,6 +516,13 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 }
 
 std::unique_ptr<FunctionAST> Parser::parseFunction() {
+    // Check for extern keyword
+    bool isExtern = false;
+    if (check(TokenType::EXTERN)) {
+        isExtern = true;
+        advance(); // consume 'extern'
+    }
+    
     Token funcToken = expect(TokenType::FUNCTION, "Expected 'function'");
     Token name = expect(TokenType::IDENTIFIER, "Expected function name");
     expect(TokenType::LPAREN, "Expected '('");
@@ -446,21 +532,44 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
     if (!check(TokenType::RPAREN)) {
         do {
             Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
-            Token paramType = expect(TokenType::INT, "Expected parameter type");
-            parameters.push_back(FunctionParameter(paramName.value, paramType.value, paramName.line, paramName.column));
+            
+            // Accept int, ptr, or char as parameter type
+            std::string paramType;
+            if (check(TokenType::INT)) {
+                paramType = "int";
+                advance();
+            } else if (check(TokenType::PTR)) {
+                paramType = "ptr";
+                advance();
+            } else if (check(TokenType::CHAR)) {
+                paramType = "char";
+                advance();
+            } else {
+                throw std::runtime_error("Expected parameter type (int, ptr, or char)\n  Location: line " + 
+                                       std::to_string(currentToken().line) + ", column " + 
+                                       std::to_string(currentToken().column));
+            }
+            
+            parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
         } while (match(TokenType::COMMA));
     }
     
     expect(TokenType::RPAREN, "Expected ')'");
     
-    // Parse return type
+    // Parse return type (optional - defaults to void)
     std::string returnType = "void";
-    if (check(TokenType::INT)) {
+    if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
         returnType = currentToken().value;
         advance();
     }
     
     std::vector<std::unique_ptr<StmtAST>> body;
+    
+    // External functions don't have bodies
+    if (isExtern) {
+        // No body for extern functions - they're just declarations
+        return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column);
+    }
     
     // Parse function body
     while (!check(TokenType::END) && !check(TokenType::END_OF_FILE)) {
@@ -481,19 +590,70 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                                "\n  Note: The 'end' block identifier must match the function name");
     }
     
-    return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), funcToken.line, funcToken.column);
+    return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column);
+}
+
+std::unique_ptr<NamespaceAST> Parser::parseNamespace() {
+    Token namespaceToken = expect(TokenType::NAMESPACE, "Expected 'namespace'");
+    Token name = expect(TokenType::IDENTIFIER, "Expected namespace name");
+    
+    // Expect block identifier (namespace name in quotes)
+    Token blockId = expect(TokenType::STRING, "Expected namespace name as block identifier");
+    if (blockId.value != name.value) {
+        throw std::runtime_error("Block identifier mismatch in namespace definition" +
+                               std::string("\n  Expected: '") + name.value + "'" +
+                               "\n  Found: '" + blockId.value + "'" +
+                               "\n  Location: line " + std::to_string(blockId.line) + 
+                               ", column " + std::to_string(blockId.column));
+    }
+    
+    // Parse functions within the namespace
+    std::vector<std::unique_ptr<FunctionAST>> functions;
+    while (!check(TokenType::END) && !check(TokenType::END_OF_FILE)) {
+        if (check(TokenType::EXTERN) || check(TokenType::FUNCTION)) {
+            functions.push_back(parseFunction());
+        } else {
+            throw std::runtime_error("Expected 'function' or 'extern function' in namespace body\n  Location: line " + 
+                                   std::to_string(currentToken().line) + ", column " + 
+                                   std::to_string(currentToken().column));
+        }
+    }
+    
+    expect(TokenType::END, "Expected 'end' to close namespace");
+    
+    // Expect matching block identifier
+    Token endBlockId = expect(TokenType::STRING, "Expected namespace name as block identifier after 'end'");
+    if (endBlockId.value != name.value) {
+        throw std::runtime_error("Block identifier mismatch after namespace" +
+                               std::string("\n  Expected: '") + name.value + "'" +
+                               "\n  Found: '" + endBlockId.value + "'" +
+                               "\n  Location: line " + std::to_string(endBlockId.line) + 
+                               ", column " + std::to_string(endBlockId.column));
+    }
+    
+    return std::make_unique<NamespaceAST>(name.value, std::move(functions), namespaceToken.line, namespaceToken.column);
 }
 
 std::unique_ptr<ProgramAST> Parser::parse() {
     std::vector<std::unique_ptr<FunctionAST>> functions;
+    std::vector<std::unique_ptr<NamespaceAST>> namespaces;
     
     while (!check(TokenType::END_OF_FILE)) {
         if (check(TokenType::END_OF_FILE)) {
             break;
         }
         
-        functions.push_back(parseFunction());
+        // Check for namespace, extern, or function keyword
+        if (check(TokenType::NAMESPACE)) {
+            namespaces.push_back(parseNamespace());
+        } else if (check(TokenType::EXTERN) || check(TokenType::FUNCTION)) {
+            functions.push_back(parseFunction());
+        } else {
+            throw std::runtime_error("Expected 'namespace', 'function', or 'extern function' at top level\n  Location: line " + 
+                                   std::to_string(currentToken().line) + ", column " + 
+                                   std::to_string(currentToken().column));
+        }
     }
     
-    return std::make_unique<ProgramAST>(std::move(functions));
+    return std::make_unique<ProgramAST>(std::move(functions), std::move(namespaces));
 }

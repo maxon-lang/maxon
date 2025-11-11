@@ -15,7 +15,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
     functions.emplace("print", FunctionInfo("print", "int", 
         {FunctionParameter("value", "int", 0, 0)}));
     
-    // First pass: collect all function declarations
+    // First pass: collect all function declarations (including namespace functions)
     for (const auto& func : program->functions) {
         if (functions.find(func->name) != functions.end()) {
             addError("Function '" + func->name + "' is already defined" +
@@ -26,15 +26,41 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
         }
     }
     
+    // Collect namespace functions with qualified names (namespace::function)
+    for (const auto& ns : program->namespaces) {
+        for (const auto& func : ns->functions) {
+            std::string qualifiedName = ns->name + "::" + func->name;
+            if (functions.find(qualifiedName) != functions.end()) {
+                addError("Function '" + qualifiedName + "' is already defined" +
+                        std::string("\n  Note: Each function name must be unique in the namespace"),
+                        func->line, func->column);
+            } else {
+                functions.emplace(qualifiedName, FunctionInfo(qualifiedName, func->returnType, func->parameters));
+            }
+        }
+    }
+    
     // Second pass: analyze each function
     for (const auto& func : program->functions) {
         analyzeFunction(func.get());
+    }
+    
+    // Analyze namespace functions
+    for (const auto& ns : program->namespaces) {
+        for (const auto& func : ns->functions) {
+            analyzeFunction(func.get());
+        }
     }
     
     return errors;
 }
 
 void SemanticAnalyzer::analyzeFunction(FunctionAST* func) {
+    // If this is an extern function, skip body analysis
+    if (func->isExtern) {
+        return;
+    }
+    
     // Enter function scope
     enterScope();
     
@@ -220,6 +246,45 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
     } else if (dynamic_cast<BooleanExprAST*>(expr)) {
         return "bool";
         
+    } else if (dynamic_cast<CharacterExprAST*>(expr)) {
+        return "char";
+        
+    } else if (auto castExpr = dynamic_cast<CastExprAST*>(expr)) {
+        // Analyze the expression being cast
+        std::string sourceType = analyzeExpression(castExpr->expr.get());
+        
+        // For now, allow any cast (we could add more strict checking later)
+        // Valid casts: int <-> ptr, int <-> char, char <-> int, ptr <-> int
+        return castExpr->targetType;
+        
+    } else if (auto addrExpr = dynamic_cast<AddressOfExprAST*>(expr)) {
+        // Check if variable exists
+        auto varInfo = lookupVariable(addrExpr->varName);
+        if (!varInfo.has_value()) {
+            addError("Undefined variable: '" + addrExpr->varName + "'" +
+                    std::string("\n  Note: Cannot take address of undefined variable"),
+                    expr->line, expr->column);
+            return "error";
+        }
+        // Address-of always returns a pointer type
+        return "ptr";
+        
+    } else if (auto derefExpr = dynamic_cast<DerefExprAST*>(expr)) {
+        // Analyze the expression being dereferenced
+        std::string ptrType = analyzeExpression(derefExpr->expr.get());
+        
+        // Should be a pointer type
+        if (ptrType != "ptr" && ptrType != "error") {
+            addError("Dereference operator (*) requires a pointer type" +
+                    std::string("\n  Found type: ") + ptrType,
+                    expr->line, expr->column);
+            return "error";
+        }
+        
+        // Dereferencing a pointer gives us an int (for now, we assume pointers point to ints)
+        // TODO: Add proper type tracking for what pointers point to
+        return "int";
+        
     } else if (auto varExpr = dynamic_cast<VariableExprAST*>(expr)) {
         auto varInfo = lookupVariable(varExpr->name);
         if (!varInfo.has_value()) {
@@ -234,14 +299,16 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         std::string leftType = analyzeExpression(binExpr->left.get());
         std::string rightType = analyzeExpression(binExpr->right.get());
         
-        // Arithmetic operators: +, -, *, /
-        if (binExpr->op == '+' || binExpr->op == '-' || binExpr->op == '*' || binExpr->op == '/') {
+        // Arithmetic operators: +, -, *, /, %
+        if (binExpr->op == '+' || binExpr->op == '-' || binExpr->op == '*' || 
+            binExpr->op == '/' || binExpr->op == '%') {
             if (leftType != "int" || rightType != "int") {
                 std::string opName;
                 if (binExpr->op == '+') opName = "addition (+)";
                 else if (binExpr->op == '-') opName = "subtraction (-)";
                 else if (binExpr->op == '*') opName = "multiplication (*)";
-                else opName = "division (/)";
+                else if (binExpr->op == '/') opName = "division (/)";
+                else opName = "modulo (%)";
                 
                 addError("Arithmetic operator " + opName + " requires integer operands" +
                         std::string("\n  Left operand type: ") + leftType +

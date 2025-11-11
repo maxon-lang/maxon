@@ -33,10 +33,11 @@ private:
     
     llvm::Value* generateExpr(ExprAST* expr);
     void generateStmt(StmtAST* stmt, llvm::Function* function);
-    void generateFunction(FunctionAST* func);
+    void generateFunction(FunctionAST* func, const std::string& namespaceName = "");
     
     llvm::AllocaInst* createEntryBlockAlloca(llvm::Function* function,
-                                              const std::string& varName);
+                                              const std::string& varName,
+                                              llvm::Type* type = nullptr);
     
     // Debug info helpers
     void initDebugInfo(const std::string& filename);
