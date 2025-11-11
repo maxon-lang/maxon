@@ -15,7 +15,16 @@ std::string readFile(const std::string& filename) {
     }
     
     std::stringstream buffer;
-    buffer << file.rdbuf();
+    std::string line;
+    
+    // Read line by line and stop at "---"
+    while (std::getline(file, line)) {
+        if (line == "---") {
+            break;
+        }
+        buffer << line << '\n';
+    }
+    
     return buffer.str();
 }
 

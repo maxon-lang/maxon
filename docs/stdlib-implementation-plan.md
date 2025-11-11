@@ -1,5 +1,48 @@
 # Maxon Standard Library Implementation Plan
 
+## Implementation Progress (as of 2025-11-11)
+
+### ✅ Completed Language Features
+1. **Extern keyword** - Declare external Windows API functions without implementation
+2. **Namespace keyword** - Organize functions into namespaces (e.g., `runtime`, `sys`, `fs`, `fmt`)
+3. **Namespace function calls** - Call functions using dot notation: `runtime.exit(0)`
+4. **Multiple parameter types** - Functions accept `int`, `ptr`, and `char` parameter types
+5. **Typed variable declarations** - `var name type = value` syntax for int/char types
+6. **Character literals** - Single character constants like `'A'`
+7. **Type casting** - Convert between int, ptr, char using `as` operator
+8. **Address-of operator** - Get pointer to variable with `&variable`
+9. **Pointer dereferencing** - Load value through pointer with `*ptr`
+10. **Modulo operator** - Integer remainder with `%`
+
+### 🐛 Bug Fixes
+- **Variable load types** (2025-11-11): Fixed codegen to load variables using their actual type (i8 for char, i32 for int) instead of always loading as i32. This enables proper typed variable support.
+
+### 🧪 Test Coverage
+- **38 fragment tests** passing in `language-tests/fragments/`
+- Tests cover: namespaces, extern, typed vars, parameter types, operators, casting, pointers
+- All tests validate both LLVM IR generation and execution (exit codes)
+
+### ✅ Stdlib Structure Created
+- **Directory structure**: `stdlib/`, `runtime/`, `sys/`, `fs/`, `fmt/`
+- **stdlib/sys/windows.maxon** - Windows API declarations (GetStdHandle, WriteFile, ExitProcess) ✓ Compiles
+- **stdlib/runtime/exit.maxon** - Exit function wrapper ✓ Compiles  
+- **stdlib/runtime/entry.asm** - Assembly entry point (~25 lines) ✓ Created
+
+### 🚧 Known Limitations
+- **Pointer variables**: Storing pointers in `var p ptr` has type issues (pointers work in expressions)
+- **Global variables**: Module-level var declarations not yet implemented
+- **Type aliases**: `type Handle = ptr` syntax not implemented
+- **Arrays**: Fixed-size array types and indexing not implemented
+- **Pointer arithmetic**: Offset calculations not implemented
+- **Unary minus**: Negative literals require `0 - N` workaround
+
+### 📝 Syntax Changes
+- **Namespace resolution**: Uses `.` (dot) instead of `::` - e.g., `math.add(10, 20)`
+- **Optional return types**: Functions without explicit return type default to `void`
+- **Type annotations**: Optional on variable declarations - `var x int = 42` or `var x = 42`
+
+---
+
 ## Goal
 Remove dependency on the C standard library (libcmt.lib, ucrt.lib) and implement a custom Maxon standard library **written in Maxon itself** with direct system calls for I/O operations.
 
@@ -29,20 +72,20 @@ The standard library should be written in Maxon wherever possible, with only the
 
 ## Implementation Strategy
 
-### Phase 1: Runtime Foundation (Priority: HIGH)
+### Phase 1: Runtime Foundation (Priority: HIGH) ✅ IN PROGRESS
 Create a minimal runtime in assembly that bootstraps Maxon code execution.
 
-#### 1.1 Entry Point (`_start`) - Assembly Only
+#### 1.1 Entry Point (`_start`) - Assembly Only ✅ CREATED
 - Replace CRT's entry point with custom `_start` function in assembly
 - Initialize stack alignment
 - Call Maxon's `main` function (user code)
-- Call Maxon's `runtime::exit()` with return value
+- Call Maxon's `runtime.exit()` with return value
 - **This is the ONLY assembly code needed**
 
-**Files to create**:
-- `stdlib/runtime/entry.asm` - x64 assembly entry point (~20 lines)
+**Files created**:
+- ✅ `stdlib/runtime/entry.asm` - x64 assembly entry point (25 lines)
 
-**Implementation details**:
+**Implementation**:
 ```asm
 ; stdlib/runtime/entry.asm
 ; Minimal entry point - calls user main and exits
@@ -70,75 +113,91 @@ _start:
     int3                      ; Breakpoint
 ```
 
-#### 1.2 Process Exit - Written in Maxon
+#### 1.2 Process Exit - Written in Maxon ✅ COMPLETED
 Implement exit in Maxon by declaring Windows API as external:
 
-**Files to create**:
-- `stdlib/runtime/exit.maxon` - Exit function written in Maxon
+**Files created**:
+- ✅ `stdlib/runtime/exit.maxon` - Exit function written in Maxon (compiles successfully)
 
 **Implementation**:
 ```maxon
 // stdlib/runtime/exit.maxon
-namespace runtime {
-    // Declare external Windows API
-    extern func ExitProcess(exitCode: int) -> void
-    
-    // Our exit function
-    func exit(code: int) -> void {
+// Windows API declaration (at module level)
+extern function ExitProcess(exitCode int)
+
+namespace runtime 'runtime'
+    function exit(code int) int
         ExitProcess(code)
-    }
-}
+        return 0
+    end 'exit'
+end 'runtime'
 ```
 
-**Note**: The compiler needs to support:
-- `extern` keyword for external function declarations
-- `namespace` keyword for organizing code
-- No return after calling noreturn function
+**Compiler features used**:
+- ✅ `extern` keyword for external function declarations
+- ✅ `namespace` keyword for organizing code
+- ✅ Namespace function calls work: `runtime.exit(0)`
 
-### Phase 2: I/O and Formatting (Priority: HIGH)
+### Phase 2: I/O and Formatting (Priority: HIGH) 🚧 PARTIALLY COMPLETED
 Implement stream access and formatting **entirely in Maxon** using two namespaces: `fs` (file system/streams) and `fmt` (formatting).
 
-#### 2.1 Windows API Declarations - Written in Maxon
-Declare external Windows functions that we'll call:
+#### 2.1 Windows API Declarations - Written in Maxon ✅ COMPLETED
 
-**File to create**:
-- `stdlib/sys/windows.maxon` - Windows API declarations
+**File created**:
+- ✅ `stdlib/sys/windows.maxon` - Windows API declarations (compiles successfully)
 
 **Implementation**:
 ```maxon
 // stdlib/sys/windows.maxon
-namespace sys::windows {
-    // Declare external Windows API functions
-    extern func GetStdHandle(nStdHandle: int) -> ptr
-    extern func WriteFile(
-        hFile: ptr,
-        lpBuffer: ptr,
-        nNumberOfBytesToWrite: int,
-        lpNumberOfBytesWritten: ptr,
-        lpOverlapped: ptr
-    ) -> int
+namespace sys 'sys'
+    // Windows API function declarations
+    extern function GetStdHandle(nStdHandle int) ptr
+    extern function WriteFile(hFile ptr, lpBuffer ptr, nNumberOfBytesToWrite int, 
+                              lpNumberOfBytesWritten ptr, lpOverlapped ptr) int
+    extern function ExitProcess(exitCode int)
     
-    // Constants
-    let STD_INPUT_HANDLE: int = -10
-    let STD_OUTPUT_HANDLE: int = -11
-    let STD_ERROR_HANDLE: int = -12
-}
+    // Standard handle constants (using 0 - N workaround for negative literals)
+    function STD_INPUT_HANDLE() int
+        return 0 - 10
+    end 'STD_INPUT_HANDLE'
+    
+    function STD_OUTPUT_HANDLE() int
+        return 0 - 11
+    end 'STD_OUTPUT_HANDLE'
+    
+    function STD_ERROR_HANDLE() int
+        return 0 - 12
+    end 'STD_ERROR_HANDLE'
+end 'sys'
 ```
 
-#### 2.2 `fs` Namespace - Written in Maxon
+**Compiler features used**:
+- ✅ Multiple parameter types (ptr, int)
+- ✅ External function declarations with ptr parameters
+- ✅ Namespace organization
+- ✅ Functions generate correct LLVM IR with qualified names (e.g., `sys::GetStdHandle`)
+
+#### 2.2 `fs` Namespace - Written in Maxon ⏳ BLOCKED
 **Purpose**: Provide access to standard streams and low-level I/O operations.
+
+**Status**: Blocked by missing language features:
+- ❌ Global variables (module-level `var` declarations)
+- ❌ Type aliases (`type Handle = ptr`)
+- ❌ Pointer comparison with literals
 
 **File to create**:
 - `stdlib/fs/streams.maxon` - Stream management (written in Maxon)
 
-**Implementation**:
+**Planned implementation**:
 ```maxon
-// stdlib/fs/streams.maxon
-namespace fs {
-    // Type alias for clarity
-    type Handle = ptr
+// stdlib/fs/streams.maxon (REQUIRES: global vars, type aliases)
+namespace fs 'fs'
+    // Type alias for clarity (NOT YET SUPPORTED)
+    // type Handle = ptr
     
-    // Cached handles (global variables)
+    // Cached handles (global variables - NOT YET SUPPORTED)
+    // var cached_stdout ptr = 0 as ptr
+    // var cached_stderr ptr = 0 as ptr
     var cached_stdout: Handle = 0 as Handle
     var cached_stderr: Handle = 0 as Handle
     

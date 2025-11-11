@@ -283,19 +283,35 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
     Token varToken = expect(TokenType::VAR, "Expected 'var'");
     Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
+    
+    // Optional type annotation
+    std::string type;
+    if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+        type = currentToken().value;
+        advance();
+    }
+    
     expect(TokenType::EQUALS, "Expected '='");
     auto initializer = parseExpression();
     
-    return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer), varToken.line, varToken.column);
+    return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer), type, varToken.line, varToken.column);
 }
 
 std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
     Token letToken = expect(TokenType::LET, "Expected 'let'");
     Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
+    
+    // Optional type annotation
+    std::string type;
+    if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+        type = currentToken().value;
+        advance();
+    }
+    
     expect(TokenType::EQUALS, "Expected '='");
     auto initializer = parseExpression();
     
-    return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer), letToken.line, letToken.column);
+    return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer), type, letToken.line, letToken.column);
 }
 
 std::unique_ptr<AssignStmtAST> Parser::parseAssignment(const std::string& name) {

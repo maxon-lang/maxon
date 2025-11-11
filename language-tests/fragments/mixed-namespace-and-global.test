@@ -1,0 +1,37 @@
+function add(a int, b int) int
+    return a + b
+end 'add'
+
+namespace utils 'utils'
+    function multiply(x int, y int) int
+        return x * y
+    end 'multiply'
+end 'utils'
+
+function main() int
+    return add(10, utils.multiply(5, 6))
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+define i32 @add(i32 %0, i32 %1) {
+entry:
+  %addtmp = add i32 %1, %0
+  ret i32 %addtmp
+}
+
+define i32 @main() {
+entry:
+  %0 = call i32 @"utils::multiply"(i32 5, i32 6)
+  %1 = call i32 @add(i32 10, i32 %0)
+  ret i32 %1
+}
+
+define i32 @"utils::multiply"(i32 %0, i32 %1) {
+entry:
+  %multmp = mul i32 %1, %0
+  ret i32 %multmp
+}
+---
+ExitCode: 40

@@ -87,6 +87,25 @@ This is the **Maxon programming language** project, which includes:
 
 ### Creating Test Fragments
 
+**Use the automated script:**
+```powershell
+.\create-test-fragment.ps1 -TestName "my-test" -SourceCode 'function main() int
+    return 42
+end ''main'''
+
+# Or from a file:
+.\create-test-fragment.ps1 -TestName "my-test" -SourceFile "examples/test.maxon"
+
+# For debug fragments (no optimization):
+.\create-test-fragment.ps1 -TestName "my-test" -SourceFile "test.maxon" -UseDebug
+```
+
+The script automatically:
+- Compiles the code with optimization (`-O`) or debug mode
+- Extracts and normalizes LLVM IR
+- Runs the executable and captures exit code
+- Creates properly formatted `.test` file
+
 Test fragment format:
 ```
 <Maxon source code>
@@ -96,19 +115,11 @@ Test fragment format:
 ExitCode: <expected exit code>
 ```
 
-**Important rules for test fragments:**
-1. **Always include the LLVM IR** unless the test is for a compilation error (parser/semantic error)
-2. Use `N/A` for the IR section **only** when the test code intentionally doesn't compile
-3. Generate IR by running: `.\build\bin\maxonc.exe <file.maxon> --emit-llvm -O`
-4. Regular fragment tests use optimization (`-O` flag), so include optimized IR
-5. Debug fragment tests use `--debug` flag and no optimization
-6. Use module name `test.maxon` in the expected IR (the test framework standardizes this)
-
-**Example workflow for adding a test:**
-1. Create the test file with Maxon code and temporary `N/A` for IR
-2. Run `.\build\bin\maxonc.exe temp.maxon --emit-llvm -O` to get optimized IR
-3. Replace `N/A` with the generated IR (changing module name to `test.maxon`)
-4. Add `ExitCode: <number>` line
+**Manual workflow (if needed):**
+1. Run: `.\build\bin\maxonc.exe temp.maxon --emit-llvm -O`
+2. Copy optimized IR, change module name to `test.maxon`
+3. Run executable to get exit code
+4. Create `.test` file in `language-tests/fragments/`
 5. Run `make language-tests` to verify
 
 ## Common Tasks
@@ -130,7 +141,7 @@ ExitCode: <expected exit code>
 ### Adding a new language feature
 1. Implement lexer/parser/codegen changes
 2. Build compiler: `make compiler`
-3. Create test fragment in `language-tests/fragments/` with proper LLVM IR
+3. Create test fragment using `.\create-test-fragment.ps1`
 4. Run tests: `make language-tests`
 5. Update documentation in `docs/Content/` if user-facing
 6. Regenerate docs: `make docs` (creates additional doc-fragment tests)

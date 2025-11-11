@@ -230,7 +230,9 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         if (!alloca) {
             throw std::runtime_error("Unknown variable name: " + varExpr->name);
         }
-        return builder.CreateLoad(llvm::Type::getInt32Ty(context), alloca, varExpr->name);
+        // Get the type from the alloca's allocated type
+        llvm::Type* varType = alloca->getAllocatedType();
+        return builder.CreateLoad(varType, alloca, varExpr->name);
     }
     
     if (auto* binExpr = dynamic_cast<BinaryExprAST*>(expr)) {
@@ -314,7 +316,17 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             throw std::runtime_error("Failed to generate variable initializer");
         }
         
-        llvm::AllocaInst* alloca = createEntryBlockAlloca(function, varDecl->name);
+        // Determine the type for the alloca
+        llvm::Type* allocaType;
+        if (!varDecl->type.empty()) {
+            // Use explicit type annotation
+            allocaType = getTypeFromString(context, varDecl->type);
+        } else {
+            // Infer from initializer (currently defaults to i32)
+            allocaType = llvm::Type::getInt32Ty(context);
+        }
+        
+        llvm::AllocaInst* alloca = createEntryBlockAlloca(function, varDecl->name, allocaType);
         builder.CreateStore(initVal, alloca);
         namedValues[varDecl->name] = alloca;
         
@@ -354,7 +366,17 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             throw std::runtime_error("Failed to generate let initializer");
         }
         
-        llvm::AllocaInst* alloca = createEntryBlockAlloca(function, letDecl->name);
+        // Determine the type for the alloca
+        llvm::Type* allocaType;
+        if (!letDecl->type.empty()) {
+            // Use explicit type annotation
+            allocaType = getTypeFromString(context, letDecl->type);
+        } else {
+            // Infer from initializer (currently defaults to i32)
+            allocaType = llvm::Type::getInt32Ty(context);
+        }
+        
+        llvm::AllocaInst* alloca = createEntryBlockAlloca(function, letDecl->name, allocaType);
         builder.CreateStore(initVal, alloca);
         namedValues[letDecl->name] = alloca;
         

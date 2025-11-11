@@ -1,0 +1,31 @@
+extern function ExitProcess(exitCode int)
+
+namespace runtime 'runtime'
+    function exit(code int) int
+        ExitProcess(code)
+        return 0
+    end 'exit'
+end 'runtime'
+
+function main() int
+    return runtime.exit(0)
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+declare void @ExitProcess(i32)
+
+define i32 @main() {
+entry:
+  %0 = call i32 @"runtime::exit"(i32 0)
+  ret i32 %0
+}
+
+define i32 @"runtime::exit"(i32 %0) {
+entry:
+  call void @ExitProcess(i32 %0)
+  ret i32 0
+}
+---
+ExitCode: 0

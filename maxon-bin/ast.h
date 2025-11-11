@@ -119,20 +119,22 @@ public:
 class VarDeclStmtAST : public StmtAST {
 public:
     std::string name;
+    std::string type;  // "int", "ptr", "char", or "" for inferred
     std::unique_ptr<ExprAST> initializer;
     
-    VarDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, int l = 0, int c = 0)
-        : StmtAST(l, c), name(n), initializer(std::move(init)) {}
+    VarDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, const std::string& t = "", int l = 0, int c = 0)
+        : StmtAST(l, c), name(n), type(t), initializer(std::move(init)) {}
 };
 
 // Let declaration (immutable variable)
 class LetDeclStmtAST : public StmtAST {
 public:
     std::string name;
+    std::string type;  // "int", "ptr", "char", or "" for inferred
     std::unique_ptr<ExprAST> initializer;
     
-    LetDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, int l = 0, int c = 0)
-        : StmtAST(l, c), name(n), initializer(std::move(init)) {}
+    LetDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, const std::string& t = "", int l = 0, int c = 0)
+        : StmtAST(l, c), name(n), type(t), initializer(std::move(init)) {}
 };
 
 // Assignment statement
