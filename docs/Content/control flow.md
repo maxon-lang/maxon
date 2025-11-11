@@ -1,0 +1,19 @@
+# Control Flow
+
+## Loops
+
+~~~
+function main() int
+	var x = 5
+	var i = 3
+	while true 'a loop'
+		x = x + 2
+		i = i - 1
+		if i = 0 break
+		
+	end 'a loop'
+	return x
+end 'main'
+
+ExitCode: 11
+~~~

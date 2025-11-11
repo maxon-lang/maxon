@@ -64,10 +64,28 @@ int main(int argc, char* argv[]) {
         codegen.generate(program.get());
         std::cout << "Code generation complete." << std::endl;
         
+        // Determine executable output filename
+        std::string exeOutputFile = outputFile;
+        
         // Output
         if (emitLLVM) {
-            std::cout << "\n=== LLVM IR ===" << std::endl;
-            codegen.printIR();
+            // Write LLVM IR to file if -o specified, otherwise print to stdout
+            if (outputFile != "output.exe") {
+                codegen.writeIRToFile(outputFile);
+                std::cout << "\nLLVM IR written to: " << outputFile << std::endl;
+                
+                // When emitting LLVM IR to a file, also generate executable with .exe extension
+                // Remove any existing extension and add .exe
+                size_t lastDot = outputFile.find_last_of('.');
+                if (lastDot != std::string::npos) {
+                    exeOutputFile = outputFile.substr(0, lastDot) + ".exe";
+                } else {
+                    exeOutputFile = outputFile + ".exe";
+                }
+            } else {
+                std::cout << "\n=== LLVM IR ===" << std::endl;
+                codegen.printIR();
+            }
         }
         
         if (compileOnly) {
@@ -77,9 +95,9 @@ int main(int argc, char* argv[]) {
             std::cout << "Output: " << outputFile << std::endl;
         } else {
             // Compile and link to executable using LLVM's linker
-            codegen.writeExecutable(outputFile);
+            codegen.writeExecutable(exeOutputFile);
             std::cout << "\nCompilation and linking successful!" << std::endl;
-            std::cout << "Output: " << outputFile << std::endl;
+            std::cout << "Executable: " << exeOutputFile << std::endl;
         }
         
     } catch (const std::exception& e) {

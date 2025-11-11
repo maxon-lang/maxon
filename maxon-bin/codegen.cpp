@@ -76,6 +76,31 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         }
     }
     
+    if (auto* callExpr = dynamic_cast<CallExprAST*>(expr)) {
+        // Look up the function in the module
+        llvm::Function* calleeF = module->getFunction(callExpr->callee);
+        if (!calleeF) {
+            throw std::runtime_error("Unknown function referenced: " + callExpr->callee);
+        }
+        
+        // Check argument count
+        if (calleeF->arg_size() != callExpr->args.size()) {
+            throw std::runtime_error("Incorrect number of arguments passed to function: " + callExpr->callee);
+        }
+        
+        // Generate code for arguments
+        std::vector<llvm::Value*> argsV;
+        for (auto& arg : callExpr->args) {
+            llvm::Value* argVal = generateExpr(arg.get());
+            if (!argVal) {
+                throw std::runtime_error("Failed to generate function argument");
+            }
+            argsV.push_back(argVal);
+        }
+        
+        return builder.CreateCall(calleeF, argsV);
+    }
+    
     throw std::runtime_error("Unknown expression type");
 }
 
@@ -202,13 +227,11 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
 }
 
 void CodeGenerator::generateFunction(FunctionAST* func) {
-    // Create function type
-    llvm::Type* returnType = llvm::Type::getInt32Ty(context);
-    llvm::FunctionType* funcType = llvm::FunctionType::get(returnType, false);
-    
-    // Create function
-    llvm::Function* function = llvm::Function::Create(
-        funcType, llvm::Function::ExternalLinkage, func->name, module.get());
+    // Get the function that was already declared
+    llvm::Function* function = module->getFunction(func->name);
+    if (!function) {
+        throw std::runtime_error("Function declaration not found: " + func->name);
+    }
     
     // Create entry block
     llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
@@ -229,6 +252,20 @@ void CodeGenerator::generateFunction(FunctionAST* func) {
 }
 
 void CodeGenerator::generate(ProgramAST* program) {
+    // First pass: Create all function declarations
+    for (auto& func : program->functions) {
+        // Get return type
+        llvm::Type* returnType = llvm::Type::getInt32Ty(context);
+        
+        // Create function type (no parameters for now)
+        llvm::FunctionType* funcType = llvm::FunctionType::get(returnType, false);
+        
+        // Create function
+        llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
+                             func->name, module.get());
+    }
+    
+    // Second pass: Generate function bodies
     for (auto& func : program->functions) {
         generateFunction(func.get());
     }
@@ -236,6 +273,18 @@ void CodeGenerator::generate(ProgramAST* program) {
 
 void CodeGenerator::printIR() {
     module->print(llvm::outs(), nullptr);
+}
+
+void CodeGenerator::writeIRToFile(const std::string& filename) {
+    std::error_code EC;
+    llvm::raw_fd_ostream dest(filename, EC);
+    
+    if (EC) {
+        throw std::runtime_error("Could not open file: " + EC.message());
+    }
+    
+    module->print(dest, nullptr);
+    dest.flush();
 }
 
 void CodeGenerator::writeObjectFile(const std::string& filename) {

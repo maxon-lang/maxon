@@ -35,6 +35,7 @@ enum class TokenType {
     // Delimiters
     LPAREN,     // (
     RPAREN,     // )
+    COMMA,      // ,
     
     // Special
     END_OF_FILE,

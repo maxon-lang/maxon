@@ -27,6 +27,7 @@ public:
     CodeGenerator(const std::string& moduleName);
     void generate(ProgramAST* program);
     void printIR();
+    void writeIRToFile(const std::string& filename);
     void writeObjectFile(const std::string& filename);
     void writeExecutable(const std::string& exeFile);
     llvm::Module* getModule() { return module.get(); }

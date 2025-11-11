@@ -47,6 +47,16 @@ public:
         : op(o), left(std::move(l)), right(std::move(r)) {}
 };
 
+// Function call
+class CallExprAST : public ExprAST {
+public:
+    std::string callee;
+    std::vector<std::unique_ptr<ExprAST>> args;
+    
+    CallExprAST(const std::string& c, std::vector<std::unique_ptr<ExprAST>> a)
+        : callee(c), args(std::move(a)) {}
+};
+
 // Statement nodes
 class StmtAST : public ASTNode {
 public:

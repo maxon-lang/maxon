@@ -57,6 +57,26 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
     if (check(TokenType::IDENTIFIER)) {
         std::string name = currentToken().value;
         advance();
+        
+        // Check for function call
+        if (check(TokenType::LPAREN)) {
+            advance(); // consume '('
+            std::vector<std::unique_ptr<ExprAST>> args;
+            
+            // Parse arguments
+            if (!check(TokenType::RPAREN)) {
+                args.push_back(parseExpression());
+                
+                while (match(TokenType::COMMA)) {
+                    args.push_back(parseExpression());
+                }
+            }
+            
+            expect(TokenType::RPAREN, "Expected ')' after function arguments");
+            return std::make_unique<CallExprAST>(name, std::move(args));
+        }
+        
+        // Just a variable reference
         return std::make_unique<VariableExprAST>(name);
     }
     
