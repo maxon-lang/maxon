@@ -109,7 +109,8 @@ public class FragmentTests {
 			var maxonc = new Process();
 			maxonc.StartInfo.FileName = maxoncPath;
 			var optimizeFlag = optimize ? " -O" : "";
-			maxonc.StartInfo.Arguments = $"test.maxon --emit-llvm -o test.ll{optimizeFlag}";
+			var debugFlag = debug ? " --debug" : "";
+			maxonc.StartInfo.Arguments = $"test.maxon --emit-llvm -o test.ll{optimizeFlag}{debugFlag}";
 			maxonc.StartInfo.WorkingDirectory = tempDir;
 			maxonc.StartInfo.RedirectStandardOutput = true;
 			maxonc.StartInfo.RedirectStandardError = true;

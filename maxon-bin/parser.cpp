@@ -157,47 +157,47 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 }
 
 std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
-    expect(TokenType::VAR, "Expected 'var'");
+    Token varToken = expect(TokenType::VAR, "Expected 'var'");
     Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
     expect(TokenType::ASSIGN, "Expected '='");
     auto initializer = parseExpression();
     
-    return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer));
+    return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer), varToken.line, varToken.column);
 }
 
 std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
-    expect(TokenType::LET, "Expected 'let'");
+    Token letToken = expect(TokenType::LET, "Expected 'let'");
     Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
     expect(TokenType::ASSIGN, "Expected '='");
     auto initializer = parseExpression();
     
-    return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer));
+    return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer), letToken.line, letToken.column);
 }
 
 std::unique_ptr<AssignStmtAST> Parser::parseAssignment(const std::string& name) {
-    expect(TokenType::ASSIGN, "Expected '='");
+    Token assignToken = expect(TokenType::ASSIGN, "Expected '='");
     auto value = parseExpression();
-    return std::make_unique<AssignStmtAST>(name, std::move(value));
+    return std::make_unique<AssignStmtAST>(name, std::move(value), assignToken.line, assignToken.column);
 }
 
 std::unique_ptr<ReturnStmtAST> Parser::parseReturn() {
-    expect(TokenType::RETURN, "Expected 'return'");
+    Token returnToken = expect(TokenType::RETURN, "Expected 'return'");
     auto value = parseExpression();
-    return std::make_unique<ReturnStmtAST>(std::move(value));
+    return std::make_unique<ReturnStmtAST>(std::move(value), returnToken.line, returnToken.column);
 }
 
 std::unique_ptr<BreakStmtAST> Parser::parseBreak() {
-    expect(TokenType::BREAK, "Expected 'break'");
-    return std::make_unique<BreakStmtAST>();
+    Token breakToken = expect(TokenType::BREAK, "Expected 'break'");
+    return std::make_unique<BreakStmtAST>(breakToken.line, breakToken.column);
 }
 
 std::unique_ptr<ContinueStmtAST> Parser::parseContinue() {
-    expect(TokenType::CONTINUE, "Expected 'continue'");
-    return std::make_unique<ContinueStmtAST>();
+    Token continueToken = expect(TokenType::CONTINUE, "Expected 'continue'");
+    return std::make_unique<ContinueStmtAST>(continueToken.line, continueToken.column);
 }
 
 std::unique_ptr<IfStmtAST> Parser::parseIf() {
-    expect(TokenType::IF, "Expected 'if'");
+    Token ifToken = expect(TokenType::IF, "Expected 'if'");
     auto condition = parseExpression();
     
     // Require block identifier
@@ -240,11 +240,12 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     
     return std::make_unique<IfStmtAST>(std::move(condition), 
                                        std::move(thenBody),
-                                       std::move(elseBody));
+                                       std::move(elseBody),
+                                       ifToken.line, ifToken.column);
 }
 
 std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
-    expect(TokenType::WHILE, "Expected 'while'");
+    Token whileToken = expect(TokenType::WHILE, "Expected 'while'");
     auto condition = parseExpression();
     
     // Require block identifier
@@ -268,7 +269,7 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
                                std::to_string(endBlockIdToken.line));
     }
     
-    return std::make_unique<WhileStmtAST>(std::move(condition), std::move(body));
+    return std::make_unique<WhileStmtAST>(std::move(condition), std::move(body), whileToken.line, whileToken.column);
 }
 
 std::unique_ptr<StmtAST> Parser::parseStatement() {
@@ -319,7 +320,7 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 }
 
 std::unique_ptr<FunctionAST> Parser::parseFunction() {
-    expect(TokenType::FUNCTION, "Expected 'function'");
+    Token funcToken = expect(TokenType::FUNCTION, "Expected 'function'");
     Token name = expect(TokenType::IDENTIFIER, "Expected function name");
     expect(TokenType::LPAREN, "Expected '('");
     
@@ -329,7 +330,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
         do {
             Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
             Token paramType = expect(TokenType::INT, "Expected parameter type");
-            parameters.push_back(FunctionParameter(paramName.value, paramType.value));
+            parameters.push_back(FunctionParameter(paramName.value, paramType.value, paramName.line, paramName.column));
         } while (match(TokenType::COMMA));
     }
     
@@ -360,7 +361,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                                std::to_string(endBlockIdToken.line));
     }
     
-    return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body));
+    return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), funcToken.line, funcToken.column);
 }
 
 std::unique_ptr<ProgramAST> Parser::parse() {

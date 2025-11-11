@@ -25,8 +25,13 @@ bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
 }
 }
 
-CodeGenerator::CodeGenerator(const std::string& moduleName)
-    : builder(context), module(std::make_unique<llvm::Module>(moduleName, context)) {}
+CodeGenerator::CodeGenerator(const std::string& moduleName, bool debugInfo)
+    : builder(context), module(std::make_unique<llvm::Module>(moduleName, context)),
+      generateDebugInfo(debugInfo), sourceFileName(moduleName) {
+    if (generateDebugInfo) {
+        initDebugInfo(moduleName);
+    }
+}
 
 llvm::AllocaInst* CodeGenerator::createEntryBlockAlloca(llvm::Function* function,
                                                          const std::string& varName) {
@@ -116,6 +121,11 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
 
 void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
     if (auto* varDecl = dynamic_cast<VarDeclStmtAST*>(stmt)) {
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(varDecl->line, varDecl->column);
+        }
+        
         llvm::Value* initVal = generateExpr(varDecl->initializer.get());
         if (!initVal) {
             throw std::runtime_error("Failed to generate variable initializer");
@@ -124,10 +134,38 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         llvm::AllocaInst* alloca = createEntryBlockAlloca(function, varDecl->name);
         builder.CreateStore(initVal, alloca);
         namedValues[varDecl->name] = alloca;
+        
+        // Create debug info for variable
+        if (generateDebugInfo && !debugScopeStack.empty()) {
+            llvm::DILocalVariable* debugVar = debugBuilder->createAutoVariable(
+                debugScopeStack.back(),      // Scope
+                varDecl->name,               // Name
+                debugFile,                   // File
+                varDecl->line,               // Line
+                debugBuilder->createBasicType("int", 32, llvm::dwarf::DW_ATE_signed), // Type
+                false,                       // Always preserve
+                llvm::DINode::FlagZero,      // Flags
+                32                           // Align in bits
+            );
+            
+            debugBuilder->insertDeclare(
+                alloca,
+                debugVar,
+                debugBuilder->createExpression(),
+                llvm::DILocation::get(context, varDecl->line, varDecl->column, debugScopeStack.back()),
+                builder.GetInsertBlock()
+            );
+        }
+        
         return;
     }
     
     if (auto* letDecl = dynamic_cast<LetDeclStmtAST*>(stmt)) {
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(letDecl->line, letDecl->column);
+        }
+        
         llvm::Value* initVal = generateExpr(letDecl->initializer.get());
         if (!initVal) {
             throw std::runtime_error("Failed to generate let initializer");
@@ -136,11 +174,39 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         llvm::AllocaInst* alloca = createEntryBlockAlloca(function, letDecl->name);
         builder.CreateStore(initVal, alloca);
         namedValues[letDecl->name] = alloca;
+        
+        // Create debug info for let variable
+        if (generateDebugInfo && !debugScopeStack.empty()) {
+            llvm::DILocalVariable* debugVar = debugBuilder->createAutoVariable(
+                debugScopeStack.back(),      // Scope
+                letDecl->name,               // Name
+                debugFile,                   // File
+                letDecl->line,               // Line
+                debugBuilder->createBasicType("int", 32, llvm::dwarf::DW_ATE_signed), // Type
+                false,                       // Always preserve
+                llvm::DINode::FlagZero,      // Flags
+                32                           // Align in bits
+            );
+            
+            debugBuilder->insertDeclare(
+                alloca,
+                debugVar,
+                debugBuilder->createExpression(),
+                llvm::DILocation::get(context, letDecl->line, letDecl->column, debugScopeStack.back()),
+                builder.GetInsertBlock()
+            );
+        }
+        
         // Note: immutability is enforced at semantic analysis level
         return;
     }
     
     if (auto* assign = dynamic_cast<AssignStmtAST*>(stmt)) {
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(assign->line, assign->column);
+        }
+        
         llvm::Value* val = generateExpr(assign->value.get());
         if (!val) {
             throw std::runtime_error("Failed to generate assignment value");
@@ -156,6 +222,11 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
     }
     
     if (auto* ifStmt = dynamic_cast<IfStmtAST*>(stmt)) {
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(ifStmt->line, ifStmt->column);
+        }
+        
         llvm::Value* condVal = generateExpr(ifStmt->condition.get());
         if (!condVal) {
             throw std::runtime_error("Failed to generate if condition");
@@ -218,6 +289,11 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
     }
     
     if (auto* whileStmt = dynamic_cast<WhileStmtAST*>(stmt)) {
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(whileStmt->line, whileStmt->column);
+        }
+        
         llvm::BasicBlock* condBB = llvm::BasicBlock::Create(context, "whilecond", function);
         llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(context, "loop");
         llvm::BasicBlock* afterBB = llvm::BasicBlock::Create(context, "afterloop");
@@ -270,6 +346,11 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
     }
     
     if (auto* breakStmt = dynamic_cast<BreakStmtAST*>(stmt)) {
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(breakStmt->line, breakStmt->column);
+        }
+        
         if (!currentLoopAfter) {
             throw std::runtime_error("Break statement outside of loop");
         }
@@ -281,6 +362,11 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
     }
     
     if (auto* continueStmt = dynamic_cast<ContinueStmtAST*>(stmt)) {
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(continueStmt->line, continueStmt->column);
+        }
+        
         if (!currentLoopCond) {
             throw std::runtime_error("Continue statement outside of loop");
         }
@@ -292,6 +378,11 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
     }
     
     if (auto* retStmt = dynamic_cast<ReturnStmtAST*>(stmt)) {
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(retStmt->line, retStmt->column);
+        }
+        
         llvm::Value* retVal = generateExpr(retStmt->value.get());
         if (!retVal) {
             throw std::runtime_error("Failed to generate return value");
@@ -310,6 +401,25 @@ void CodeGenerator::generateFunction(FunctionAST* func) {
         throw std::runtime_error("Function declaration not found: " + func->name);
     }
     
+    // Create debug info for function if enabled
+    llvm::DISubprogram* debugSubprogram = nullptr;
+    if (generateDebugInfo) {
+        llvm::DISubroutineType* debugFuncType = createFunctionDebugType(func);
+        debugSubprogram = debugBuilder->createFunction(
+            debugFile,                  // Scope
+            func->name,                 // Name
+            func->name,                 // Linkage name
+            debugFile,                  // File
+            func->line,                 // Line number
+            debugFuncType,              // Type
+            func->line,                 // Scope line
+            llvm::DINode::FlagPrototyped, // Flags
+            llvm::DISubprogram::SPFlagDefinition  // SP Flags
+        );
+        function->setSubprogram(debugSubprogram);
+        debugScopeStack.push_back(debugSubprogram);
+    }
+    
     // Create entry block
     llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
     builder.SetInsertPoint(entry);
@@ -321,6 +431,30 @@ void CodeGenerator::generateFunction(FunctionAST* func) {
     size_t idx = 0;
     for (auto& arg : function->args()) {
         llvm::AllocaInst* alloca = createEntryBlockAlloca(function, func->parameters[idx].name);
+        
+        // Emit debug location for parameter
+        if (generateDebugInfo) {
+            emitLocation(func->line, func->parameters[idx].column);
+            
+            // Create debug info for parameter
+            llvm::DILocalVariable* debugParam = debugBuilder->createParameterVariable(
+                debugSubprogram,             // Scope
+                func->parameters[idx].name,  // Name
+                idx + 1,                     // Arg number (1-indexed)
+                debugFile,                   // File
+                func->line,                  // Line
+                debugBuilder->createBasicType("int", 32, llvm::dwarf::DW_ATE_signed) // Type
+            );
+            
+            debugBuilder->insertDeclare(
+                alloca,
+                debugParam,
+                debugBuilder->createExpression(),
+                llvm::DILocation::get(context, func->line, func->parameters[idx].column, debugSubprogram),
+                builder.GetInsertBlock()
+            );
+        }
+        
         builder.CreateStore(&arg, alloca);
         namedValues[func->parameters[idx].name] = alloca;
         idx++;
@@ -329,6 +463,11 @@ void CodeGenerator::generateFunction(FunctionAST* func) {
     // Generate function body
     for (auto& stmt : func->body) {
         generateStmt(stmt.get(), function);
+    }
+    
+    // Pop debug scope
+    if (generateDebugInfo) {
+        debugScopeStack.pop_back();
     }
     
     // Verify function
@@ -361,6 +500,9 @@ void CodeGenerator::generate(ProgramAST* program) {
     for (auto& func : program->functions) {
         generateFunction(func.get());
     }
+    
+    // Finalize debug info if enabled
+    finalizeDebugInfo();
 }
 
 void CodeGenerator::optimize() {
@@ -546,4 +688,71 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
     }
     
     std::cout << "Executable written to " << exeFile << std::endl;
+}
+
+void CodeGenerator::initDebugInfo(const std::string& filename) {
+    // Create debug builder
+    debugBuilder = std::make_unique<llvm::DIBuilder>(*module);
+    
+    // Extract just the filename from the path
+    size_t lastSlash = filename.find_last_of("/\\");
+    std::string file = (lastSlash != std::string::npos) ? filename.substr(lastSlash + 1) : filename;
+    
+    // Get directory (or use relative path)
+    std::string directory = (lastSlash != std::string::npos) ? filename.substr(0, lastSlash) : ".";
+    
+    // Create debug file
+    debugFile = debugBuilder->createFile(file, directory);
+    
+    // Create compile unit
+    debugCompileUnit = debugBuilder->createCompileUnit(
+        llvm::dwarf::DW_LANG_C,  // Using C as the language
+        debugFile,
+        "Maxon Compiler",         // Producer
+        false,                    // isOptimized
+        "",                       // Flags
+        0                         // Runtime version
+    );
+    
+    // Add module flags for debug info
+    module->addModuleFlag(llvm::Module::Warning, "CodeView", 1);
+    module->addModuleFlag(llvm::Module::Warning, "Debug Info Version",
+                         llvm::DEBUG_METADATA_VERSION);
+}
+
+void CodeGenerator::finalizeDebugInfo() {
+    if (generateDebugInfo && debugBuilder) {
+        debugBuilder->finalize();
+    }
+}
+
+void CodeGenerator::emitLocation(int line, int column) {
+    if (!generateDebugInfo || debugScopeStack.empty()) {
+        return;
+    }
+    
+    llvm::DIScope* scope = debugScopeStack.back();
+    llvm::DILocation* loc = llvm::DILocation::get(
+        scope->getContext(), line, column, scope);
+    builder.SetCurrentDebugLocation(loc);
+}
+
+llvm::DISubroutineType* CodeGenerator::createFunctionDebugType(FunctionAST* func) {
+    if (!generateDebugInfo) {
+        return nullptr;
+    }
+    
+    // Create basic int type for now
+    llvm::DIType* intType = debugBuilder->createBasicType("int", 32, llvm::dwarf::DW_ATE_signed);
+    
+    // Build parameter types
+    llvm::SmallVector<llvm::Metadata*, 8> paramTypes;
+    paramTypes.push_back(intType);  // Return type
+    
+    for (const auto& param : func->parameters) {
+        paramTypes.push_back(intType);  // All params are int for now
+    }
+    
+    return debugBuilder->createSubroutineType(
+        debugBuilder->getOrCreateTypeArray(paramTypes));
 }

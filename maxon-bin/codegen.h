@@ -6,6 +6,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
+#include <llvm/IR/DIBuilder.h>
 #include <map>
 #include <string>
 
@@ -15,6 +16,16 @@ private:
     llvm::IRBuilder<> builder;
     std::unique_ptr<llvm::Module> module;
     std::map<std::string, llvm::AllocaInst*> namedValues;
+    
+    // Debug information
+    bool generateDebugInfo;
+    std::unique_ptr<llvm::DIBuilder> debugBuilder;
+    llvm::DICompileUnit* debugCompileUnit;
+    llvm::DIFile* debugFile;
+    std::string sourceFileName;
+    
+    // Current debug context
+    std::vector<llvm::DIScope*> debugScopeStack;
     
     // Loop context for break/continue
     llvm::BasicBlock* currentLoopCond = nullptr;
@@ -27,8 +38,14 @@ private:
     llvm::AllocaInst* createEntryBlockAlloca(llvm::Function* function,
                                               const std::string& varName);
     
+    // Debug info helpers
+    void initDebugInfo(const std::string& filename);
+    void finalizeDebugInfo();
+    void emitLocation(int line, int column);
+    llvm::DISubroutineType* createFunctionDebugType(FunctionAST* func);
+    
 public:
-    CodeGenerator(const std::string& moduleName);
+    CodeGenerator(const std::string& moduleName, bool debugInfo = false);
     void generate(ProgramAST* program);
     void optimize();
     void printIR();

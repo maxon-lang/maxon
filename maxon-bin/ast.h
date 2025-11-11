@@ -68,6 +68,10 @@ public:
 // Statement nodes
 class StmtAST : public ASTNode {
 public:
+    int line;
+    int column;
+    
+    StmtAST(int l = 0, int c = 0) : line(l), column(c) {}
     virtual ~StmtAST() = default;
 };
 
@@ -77,8 +81,8 @@ public:
     std::string name;
     std::unique_ptr<ExprAST> initializer;
     
-    VarDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init)
-        : name(n), initializer(std::move(init)) {}
+    VarDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, int l = 0, int c = 0)
+        : StmtAST(l, c), name(n), initializer(std::move(init)) {}
 };
 
 // Let declaration (immutable variable)
@@ -87,8 +91,8 @@ public:
     std::string name;
     std::unique_ptr<ExprAST> initializer;
     
-    LetDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init)
-        : name(n), initializer(std::move(init)) {}
+    LetDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, int l = 0, int c = 0)
+        : StmtAST(l, c), name(n), initializer(std::move(init)) {}
 };
 
 // Assignment statement
@@ -97,8 +101,8 @@ public:
     std::string name;
     std::unique_ptr<ExprAST> value;
     
-    AssignStmtAST(const std::string& n, std::unique_ptr<ExprAST> val)
-        : name(n), value(std::move(val)) {}
+    AssignStmtAST(const std::string& n, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
+        : StmtAST(l, c), name(n), value(std::move(val)) {}
 };
 
 // If statement
@@ -110,8 +114,9 @@ public:
     
     IfStmtAST(std::unique_ptr<ExprAST> cond,
               std::vector<std::unique_ptr<StmtAST>> thenB,
-              std::vector<std::unique_ptr<StmtAST>> elseB)
-        : condition(std::move(cond)), 
+              std::vector<std::unique_ptr<StmtAST>> elseB,
+              int l = 0, int c = 0)
+        : StmtAST(l, c), condition(std::move(cond)), 
           thenBody(std::move(thenB)),
           elseBody(std::move(elseB)) {}
 };
@@ -123,8 +128,9 @@ public:
     std::vector<std::unique_ptr<StmtAST>> body;
     
     WhileStmtAST(std::unique_ptr<ExprAST> cond,
-                 std::vector<std::unique_ptr<StmtAST>> b)
-        : condition(std::move(cond)), body(std::move(b)) {}
+                 std::vector<std::unique_ptr<StmtAST>> b,
+                 int l = 0, int c = 0)
+        : StmtAST(l, c), condition(std::move(cond)), body(std::move(b)) {}
 };
 
 // Return statement
@@ -132,29 +138,31 @@ class ReturnStmtAST : public StmtAST {
 public:
     std::unique_ptr<ExprAST> value;
     
-    ReturnStmtAST(std::unique_ptr<ExprAST> val)
-        : value(std::move(val)) {}
+    ReturnStmtAST(std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
+        : StmtAST(l, c), value(std::move(val)) {}
 };
 
 // Break statement
 class BreakStmtAST : public StmtAST {
 public:
-    BreakStmtAST() = default;
+    BreakStmtAST(int l = 0, int c = 0) : StmtAST(l, c) {}
 };
 
 // Continue statement
 class ContinueStmtAST : public StmtAST {
 public:
-    ContinueStmtAST() = default;
+    ContinueStmtAST(int l = 0, int c = 0) : StmtAST(l, c) {}
 };
 
 // Function parameter
 struct FunctionParameter {
     std::string name;
     std::string type;
+    int line;
+    int column;
     
-    FunctionParameter(const std::string& n, const std::string& t)
-        : name(n), type(t) {}
+    FunctionParameter(const std::string& n, const std::string& t, int l = 0, int c = 0)
+        : name(n), type(t), line(l), column(c) {}
 };
 
 // Function declaration
@@ -164,12 +172,16 @@ public:
     std::vector<FunctionParameter> parameters;
     std::string returnType;
     std::vector<std::unique_ptr<StmtAST>> body;
+    int line;
+    int column;
     
     FunctionAST(const std::string& n, 
                 std::vector<FunctionParameter> params,
                 const std::string& ret,
-                std::vector<std::unique_ptr<StmtAST>> b)
-        : name(n), parameters(std::move(params)), returnType(ret), body(std::move(b)) {}
+                std::vector<std::unique_ptr<StmtAST>> b,
+                int l = 1, int c = 1)
+        : name(n), parameters(std::move(params)), returnType(ret), body(std::move(b)),
+          line(l), column(c) {}
 };
 
 // Program (collection of functions)

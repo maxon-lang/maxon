@@ -26,6 +26,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "  -o <output>    Specify output executable (default: output.exe)" << std::endl;
         std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
         std::cerr << "  -O             Enable optimizations" << std::endl;
+        std::cerr << "  --debug, -g    Generate debug information" << std::endl;
         return 1;
     }
     
@@ -34,6 +35,7 @@ int main(int argc, char* argv[]) {
     bool emitLLVM = false;
     bool compileOnly = false;
     bool optimize = false;
+    bool debugInfo = false;
     
     // Parse command line arguments
     for (int i = 2; i < argc; i++) {
@@ -44,6 +46,8 @@ int main(int argc, char* argv[]) {
             compileOnly = true;
         } else if (arg == "-O") {
             optimize = true;
+        } else if (arg == "--debug" || arg == "-g") {
+            debugInfo = true;
         } else if (arg == "-o" && i + 1 < argc) {
             outputFile = argv[++i];
         }
@@ -85,7 +89,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Semantic analysis complete." << std::endl;
         
         // Code generation
-        CodeGenerator codegen(inputFile);
+        CodeGenerator codegen(inputFile, debugInfo);
         codegen.generate(program.get());
         std::cout << "Code generation complete." << std::endl;
         
