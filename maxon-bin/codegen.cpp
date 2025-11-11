@@ -654,6 +654,11 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
     lldArgs.push_back("/MACHINE:X64");
     lldArgs.push_back("/SUBSYSTEM:CONSOLE");
     
+    // Add debug info if enabled
+    if (generateDebugInfo) {
+        lldArgs.push_back("/DEBUG");
+    }
+    
     // Add library paths
     std::string vsPath = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207";
     std::string libPath = "/LIBPATH:" + vsPath + "\\lib\\x64";
