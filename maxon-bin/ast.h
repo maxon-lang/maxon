@@ -36,6 +36,14 @@ public:
     VariableExprAST(const std::string& n) : name(n) {}
 };
 
+// Boolean literal
+class BooleanExprAST : public ExprAST {
+public:
+    bool value;
+    
+    BooleanExprAST(bool val) : value(val) {}
+};
+
 // Binary operation
 class BinaryExprAST : public ExprAST {
 public:
@@ -70,6 +78,16 @@ public:
     std::unique_ptr<ExprAST> initializer;
     
     VarDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init)
+        : name(n), initializer(std::move(init)) {}
+};
+
+// Let declaration (immutable variable)
+class LetDeclStmtAST : public StmtAST {
+public:
+    std::string name;
+    std::unique_ptr<ExprAST> initializer;
+    
+    LetDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init)
         : name(n), initializer(std::move(init)) {}
 };
 
@@ -118,16 +136,40 @@ public:
         : value(std::move(val)) {}
 };
 
+// Break statement
+class BreakStmtAST : public StmtAST {
+public:
+    BreakStmtAST() = default;
+};
+
+// Continue statement
+class ContinueStmtAST : public StmtAST {
+public:
+    ContinueStmtAST() = default;
+};
+
+// Function parameter
+struct FunctionParameter {
+    std::string name;
+    std::string type;
+    
+    FunctionParameter(const std::string& n, const std::string& t)
+        : name(n), type(t) {}
+};
+
 // Function declaration
 class FunctionAST : public ASTNode {
 public:
     std::string name;
+    std::vector<FunctionParameter> parameters;
     std::string returnType;
     std::vector<std::unique_ptr<StmtAST>> body;
     
-    FunctionAST(const std::string& n, const std::string& ret,
+    FunctionAST(const std::string& n, 
+                std::vector<FunctionParameter> params,
+                const std::string& ret,
                 std::vector<std::unique_ptr<StmtAST>> b)
-        : name(n), returnType(ret), body(std::move(b)) {}
+        : name(n), parameters(std::move(params)), returnType(ret), body(std::move(b)) {}
 };
 
 // Program (collection of functions)

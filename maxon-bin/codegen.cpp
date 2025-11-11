@@ -36,6 +36,10 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         return llvm::ConstantInt::get(context, llvm::APInt(32, numExpr->value, true));
     }
     
+    if (auto* boolExpr = dynamic_cast<BooleanExprAST*>(expr)) {
+        return llvm::ConstantInt::get(context, llvm::APInt(1, boolExpr->value ? 1 : 0, false));
+    }
+    
     if (auto* varExpr = dynamic_cast<VariableExprAST*>(expr)) {
         llvm::AllocaInst* alloca = namedValues[varExpr->name];
         if (!alloca) {
@@ -69,8 +73,10 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
                 return builder.CreateICmpSGE(left, right, "cmptmp");
             case 'L': // <=
                 return builder.CreateICmpSLE(left, right, "cmptmp");
-            case '=': // equality
+            case 'E': // == (equality)
                 return builder.CreateICmpEQ(left, right, "cmptmp");
+            case 'N': // != (not equal)
+                return builder.CreateICmpNE(left, right, "cmptmp");
             default:
                 throw std::runtime_error("Unknown binary operator");
         }
@@ -117,6 +123,19 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         return;
     }
     
+    if (auto* letDecl = dynamic_cast<LetDeclStmtAST*>(stmt)) {
+        llvm::Value* initVal = generateExpr(letDecl->initializer.get());
+        if (!initVal) {
+            throw std::runtime_error("Failed to generate let initializer");
+        }
+        
+        llvm::AllocaInst* alloca = createEntryBlockAlloca(function, letDecl->name);
+        builder.CreateStore(initVal, alloca);
+        namedValues[letDecl->name] = alloca;
+        // Note: immutability is enforced at semantic analysis level
+        return;
+    }
+    
     if (auto* assign = dynamic_cast<AssignStmtAST*>(stmt)) {
         llvm::Value* val = generateExpr(assign->value.get());
         if (!val) {
@@ -145,13 +164,18 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         }
         
         llvm::BasicBlock* thenBB = llvm::BasicBlock::Create(context, "then", function);
-        llvm::BasicBlock* elseBB = llvm::BasicBlock::Create(context, "else");
-        llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(context, "ifcont");
+        llvm::BasicBlock* elseBB = nullptr;
+        llvm::BasicBlock* mergeBB = nullptr;
         
-        if (ifStmt->elseBody.empty()) {
-            builder.CreateCondBr(condVal, thenBB, mergeBB);
-        } else {
+        bool hasElse = !ifStmt->elseBody.empty();
+        
+        if (hasElse) {
+            elseBB = llvm::BasicBlock::Create(context, "else");
+            mergeBB = llvm::BasicBlock::Create(context, "ifcont");
             builder.CreateCondBr(condVal, thenBB, elseBB);
+        } else {
+            mergeBB = llvm::BasicBlock::Create(context, "ifcont");
+            builder.CreateCondBr(condVal, thenBB, mergeBB);
         }
         
         // Generate then block
@@ -159,21 +183,33 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         for (auto& s : ifStmt->thenBody) {
             generateStmt(s.get(), function);
         }
-        builder.CreateBr(mergeBB);
+        bool thenTerminated = builder.GetInsertBlock()->getTerminator() != nullptr;
+        if (!thenTerminated) {
+            builder.CreateBr(mergeBB);
+        }
         
         // Generate else block
-        if (!ifStmt->elseBody.empty()) {
+        bool elseTerminated = false;
+        if (hasElse) {
             function->insert(function->end(), elseBB);
             builder.SetInsertPoint(elseBB);
             for (auto& s : ifStmt->elseBody) {
                 generateStmt(s.get(), function);
             }
-            builder.CreateBr(mergeBB);
+            elseTerminated = builder.GetInsertBlock()->getTerminator() != nullptr;
+            if (!elseTerminated) {
+                builder.CreateBr(mergeBB);
+            }
         }
         
-        // Generate merge block
-        function->insert(function->end(), mergeBB);
-        builder.SetInsertPoint(mergeBB);
+        // Only add merge block if at least one branch needs it
+        bool needMerge = !thenTerminated || (hasElse && !elseTerminated) || !hasElse;
+        if (needMerge) {
+            function->insert(function->end(), mergeBB);
+            builder.SetInsertPoint(mergeBB);
+        }
+        // If both branches terminated, don't set insert point (function ends here)
+        
         return;
     }
     
@@ -181,6 +217,14 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         llvm::BasicBlock* condBB = llvm::BasicBlock::Create(context, "whilecond", function);
         llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(context, "loop");
         llvm::BasicBlock* afterBB = llvm::BasicBlock::Create(context, "afterloop");
+        
+        // Save previous loop context
+        llvm::BasicBlock* prevLoopCond = currentLoopCond;
+        llvm::BasicBlock* prevLoopAfter = currentLoopAfter;
+        
+        // Set current loop context
+        currentLoopCond = condBB;
+        currentLoopAfter = afterBB;
         
         // Jump to condition block
         builder.CreateBr(condBB);
@@ -206,11 +250,40 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         for (auto& s : whileStmt->body) {
             generateStmt(s.get(), function);
         }
-        builder.CreateBr(condBB);
+        // Only create branch if block doesn't already have a terminator (from break/continue)
+        if (!builder.GetInsertBlock()->getTerminator()) {
+            builder.CreateBr(condBB);
+        }
+        
+        // Restore previous loop context
+        currentLoopCond = prevLoopCond;
+        currentLoopAfter = prevLoopAfter;
         
         // Generate after block
         function->insert(function->end(), afterBB);
         builder.SetInsertPoint(afterBB);
+        return;
+    }
+    
+    if (auto* breakStmt = dynamic_cast<BreakStmtAST*>(stmt)) {
+        if (!currentLoopAfter) {
+            throw std::runtime_error("Break statement outside of loop");
+        }
+        builder.CreateBr(currentLoopAfter);
+        // Create a new basic block for any code after the break (dead code)
+        llvm::BasicBlock* deadBB = llvm::BasicBlock::Create(context, "afterbreak", builder.GetInsertBlock()->getParent());
+        builder.SetInsertPoint(deadBB);
+        return;
+    }
+    
+    if (auto* continueStmt = dynamic_cast<ContinueStmtAST*>(stmt)) {
+        if (!currentLoopCond) {
+            throw std::runtime_error("Continue statement outside of loop");
+        }
+        builder.CreateBr(currentLoopCond);
+        // Create a new basic block for any code after the continue (dead code)
+        llvm::BasicBlock* deadBB = llvm::BasicBlock::Create(context, "aftercontinue", builder.GetInsertBlock()->getParent());
+        builder.SetInsertPoint(deadBB);
         return;
     }
     
@@ -240,6 +313,15 @@ void CodeGenerator::generateFunction(FunctionAST* func) {
     // Clear named values for new function
     namedValues.clear();
     
+    // Allocate stack space for parameters
+    size_t idx = 0;
+    for (auto& arg : function->args()) {
+        llvm::AllocaInst* alloca = createEntryBlockAlloca(function, func->parameters[idx].name);
+        builder.CreateStore(&arg, alloca);
+        namedValues[func->parameters[idx].name] = alloca;
+        idx++;
+    }
+    
     // Generate function body
     for (auto& stmt : func->body) {
         generateStmt(stmt.get(), function);
@@ -257,8 +339,14 @@ void CodeGenerator::generate(ProgramAST* program) {
         // Get return type
         llvm::Type* returnType = llvm::Type::getInt32Ty(context);
         
-        // Create function type (no parameters for now)
-        llvm::FunctionType* funcType = llvm::FunctionType::get(returnType, false);
+        // Create parameter types
+        std::vector<llvm::Type*> paramTypes;
+        for (auto& param : func->parameters) {
+            paramTypes.push_back(llvm::Type::getInt32Ty(context));
+        }
+        
+        // Create function type
+        llvm::FunctionType* funcType = llvm::FunctionType::get(returnType, paramTypes, false);
         
         // Create function
         llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,

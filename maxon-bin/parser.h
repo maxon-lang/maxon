@@ -26,10 +26,13 @@ private:
     
     std::unique_ptr<StmtAST> parseStatement();
     std::unique_ptr<VarDeclStmtAST> parseVarDecl();
+    std::unique_ptr<LetDeclStmtAST> parseLetDecl();
     std::unique_ptr<AssignStmtAST> parseAssignment(const std::string& name);
     std::unique_ptr<IfStmtAST> parseIf();
     std::unique_ptr<WhileStmtAST> parseWhile();
     std::unique_ptr<ReturnStmtAST> parseReturn();
+    std::unique_ptr<BreakStmtAST> parseBreak();
+    std::unique_ptr<ContinueStmtAST> parseContinue();
     
     std::unique_ptr<FunctionAST> parseFunction();
     

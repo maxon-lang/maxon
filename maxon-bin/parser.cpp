@@ -54,6 +54,16 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         return std::make_unique<NumberExprAST>(value);
     }
     
+    if (check(TokenType::TRUE)) {
+        advance();
+        return std::make_unique<BooleanExprAST>(true);
+    }
+    
+    if (check(TokenType::FALSE)) {
+        advance();
+        return std::make_unique<BooleanExprAST>(false);
+    }
+    
     if (check(TokenType::IDENTIFIER)) {
         std::string name = currentToken().value;
         advance();
@@ -124,18 +134,19 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
     auto left = parseComparison();
     
     // Handle comparison operators
-    if (check(TokenType::GT) || check(TokenType::LT) || 
-        check(TokenType::GTE) || check(TokenType::LTE) ||
-        check(TokenType::ASSIGN)) {
+    if (check(TokenType::EQUAL_EQUAL) || check(TokenType::NOT_EQUAL) ||
+        check(TokenType::GT) || check(TokenType::LT) || 
+        check(TokenType::GTE) || check(TokenType::LTE)) {
         
         char op;
         TokenType type = currentToken().type;
         
-        if (type == TokenType::GT) op = '>';
+        if (type == TokenType::EQUAL_EQUAL) op = 'E'; // ==
+        else if (type == TokenType::NOT_EQUAL) op = 'N'; // !=
+        else if (type == TokenType::GT) op = '>';
         else if (type == TokenType::LT) op = '<';
         else if (type == TokenType::GTE) op = 'G'; // >=
         else if (type == TokenType::LTE) op = 'L'; // <=
-        else if (type == TokenType::ASSIGN) op = '='; // equality
         
         advance();
         auto right = parseComparison();
@@ -154,6 +165,15 @@ std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
     return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer));
 }
 
+std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
+    expect(TokenType::LET, "Expected 'let'");
+    Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
+    expect(TokenType::ASSIGN, "Expected '='");
+    auto initializer = parseExpression();
+    
+    return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer));
+}
+
 std::unique_ptr<AssignStmtAST> Parser::parseAssignment(const std::string& name) {
     expect(TokenType::ASSIGN, "Expected '='");
     auto value = parseExpression();
@@ -164,6 +184,16 @@ std::unique_ptr<ReturnStmtAST> Parser::parseReturn() {
     expect(TokenType::RETURN, "Expected 'return'");
     auto value = parseExpression();
     return std::make_unique<ReturnStmtAST>(std::move(value));
+}
+
+std::unique_ptr<BreakStmtAST> Parser::parseBreak() {
+    expect(TokenType::BREAK, "Expected 'break'");
+    return std::make_unique<BreakStmtAST>();
+}
+
+std::unique_ptr<ContinueStmtAST> Parser::parseContinue() {
+    expect(TokenType::CONTINUE, "Expected 'continue'");
+    return std::make_unique<ContinueStmtAST>();
 }
 
 std::unique_ptr<IfStmtAST> Parser::parseIf() {
@@ -246,6 +276,10 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
         return parseVarDecl();
     }
     
+    if (check(TokenType::LET)) {
+        return parseLetDecl();
+    }
+    
     if (check(TokenType::IF)) {
         return parseIf();
     }
@@ -256,6 +290,14 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
     
     if (check(TokenType::RETURN)) {
         return parseReturn();
+    }
+    
+    if (check(TokenType::BREAK)) {
+        return parseBreak();
+    }
+    
+    if (check(TokenType::CONTINUE)) {
+        return parseContinue();
     }
     
     if (check(TokenType::IDENTIFIER)) {
@@ -278,6 +320,17 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
     expect(TokenType::FUNCTION, "Expected 'function'");
     Token name = expect(TokenType::IDENTIFIER, "Expected function name");
     expect(TokenType::LPAREN, "Expected '('");
+    
+    // Parse function parameters
+    std::vector<FunctionParameter> parameters;
+    if (!check(TokenType::RPAREN)) {
+        do {
+            Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
+            Token paramType = expect(TokenType::INT, "Expected parameter type");
+            parameters.push_back(FunctionParameter(paramName.value, paramType.value));
+        } while (match(TokenType::COMMA));
+    }
+    
     expect(TokenType::RPAREN, "Expected ')'");
     
     // Parse return type
@@ -305,7 +358,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                                std::to_string(endBlockIdToken.line));
     }
     
-    return std::make_unique<FunctionAST>(name.value, returnType, std::move(body));
+    return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body));
 }
 
 std::unique_ptr<ProgramAST> Parser::parse() {

@@ -6,12 +6,17 @@
 static const std::unordered_map<std::string, TokenType> keywords = {
     {"function", TokenType::FUNCTION},
     {"var", TokenType::VAR},
+    {"let", TokenType::LET},
     {"while", TokenType::WHILE},
     {"if", TokenType::IF},
     {"else", TokenType::ELSE},
     {"end", TokenType::END},
     {"return", TokenType::RETURN},
-    {"int", TokenType::INT}
+    {"break", TokenType::BREAK},
+    {"continue", TokenType::CONTINUE},
+    {"int", TokenType::INT},
+    {"true", TokenType::TRUE},
+    {"false", TokenType::FALSE}
 };
 
 Lexer::Lexer(const std::string& src)
@@ -178,8 +183,22 @@ std::vector<Token> Lexer::tokenize() {
             advance();
         }
         else if (c == '=') {
-            tokens.push_back(Token(TokenType::ASSIGN, "=", startLine, startColumn));
             advance();
+            if (currentChar() == '=') {
+                tokens.push_back(Token(TokenType::EQUAL_EQUAL, "==", startLine, startColumn));
+                advance();
+            } else {
+                tokens.push_back(Token(TokenType::ASSIGN, "=", startLine, startColumn));
+            }
+        }
+        else if (c == '!') {
+            advance();
+            if (currentChar() == '=') {
+                tokens.push_back(Token(TokenType::NOT_EQUAL, "!=", startLine, startColumn));
+                advance();
+            } else {
+                // Unknown character, just skip it
+            }
         }
         else if (c == '>') {
             advance();

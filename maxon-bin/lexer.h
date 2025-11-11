@@ -8,12 +8,17 @@ enum class TokenType {
     // Keywords
     FUNCTION,
     VAR,
+    LET,        // let keyword (immutable variables)
     WHILE,
     IF,
     ELSE,
     END,
     RETURN,
+    BREAK,      // break keyword
+    CONTINUE,   // continue keyword
     INT,
+    TRUE,       // true keyword
+    FALSE,      // false keyword
     
     // Identifiers and literals
     IDENTIFIER,
@@ -26,7 +31,8 @@ enum class TokenType {
     MINUS,      // -
     MULTIPLY,   // *
     DIVIDE,     // /
-    EQUAL,      // = (used in conditions)
+    EQUAL_EQUAL,// == (equality comparison)
+    NOT_EQUAL,  // != (not equal)
     GT,         // >
     LT,         // <
     GTE,        // >=

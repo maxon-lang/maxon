@@ -16,6 +16,10 @@ private:
     std::unique_ptr<llvm::Module> module;
     std::map<std::string, llvm::AllocaInst*> namedValues;
     
+    // Loop context for break/continue
+    llvm::BasicBlock* currentLoopCond = nullptr;
+    llvm::BasicBlock* currentLoopAfter = nullptr;
+    
     llvm::Value* generateExpr(ExprAST* expr);
     void generateStmt(StmtAST* stmt, llvm::Function* function);
     void generateFunction(FunctionAST* func);
