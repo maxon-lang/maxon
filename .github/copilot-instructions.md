@@ -39,6 +39,20 @@ This is the **Maxon programming language** project, which includes:
   - `language-configuration.json`: Bracket matching, comments
 - **Build system**: npm with TypeScript compiler
 
+### `/docs/` - Documentation Generator
+- **Language**: C# (.NET)
+- **Purpose**: Generate HTML documentation and extract test fragments from Markdown files
+- **Key components**:
+  - `DocGen.cs`: Documentation generator that processes Markdown files
+  - `Content/`: Source Markdown files with code examples (e.g., `control flow.md`, `variables.md`)
+  - `Output/`: Generated HTML documentation files
+- **Functionality**:
+  - Converts Markdown to HTML using Markdig with Bootstrap styling
+  - Extracts code blocks marked with `~~~` into test fragments
+  - Generates test files in `language-tests/doc-fragments/` with expected exit codes
+  - Code blocks can include `ExitCode: <number>` to specify expected results
+- **Build system**: .NET SDK (dotnet run)
+
 ## Coding Guidelines
 
 ### C++ Code (Compiler & LSP)
@@ -66,6 +80,10 @@ This is the **Maxon programming language** project, which includes:
 - **Compiler tests**: Use sample `.maxon` files in `maxon-bin/`
 - **LSP tests**: Unit tests in `lsp/tests/` using a test framework
 - **Extension testing**: VS Code extension test framework in `vscode-extension/src/test/`
+- **Language tests**: Fragment tests in `language-tests/` using C# NUnit
+  - `fragments/`: Manual test fragments
+  - `doc-fragments/`: Auto-generated from documentation (via `make docs`)
+  - Each `.test` file contains: Maxon code, separator (`---`), N/A, separator, expected output/exit code
 
 ## Common Tasks
 
@@ -127,6 +145,7 @@ Use the top-level Makefile for all build and development tasks. Run commands fro
 ### Testing
 - `make lsp-test` - Build and run LSP C++ unit tests
 - `make language-tests` - Run Maxon language fragment tests (C# NUnit tests)
+- `make docs` - Generate HTML documentation and extract test fragments from Markdown
 
 ### Cleanup
 - `make clean` - Remove all build artifacts (compiler, LSP, extension)

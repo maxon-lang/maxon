@@ -7,7 +7,7 @@ CC = "C:/Program Files/LLVM/bin/clang.exe"
 CXX = "C:/Program Files/LLVM/bin/clang++.exe"
 RC = "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe"
 
-.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test language-tests
+.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test language-tests docs
 
 # Default target
 all: configure
@@ -27,11 +27,13 @@ help:
 	@echo "  extension-install - Install extension locally in VS Code"
 	@echo "  lsp-test         - Build and run LSP C++ unit tests"
 	@echo "  language-tests   - Run Maxon language fragment tests"
+	@echo "  docs             - Generate HTML documentation and test fragments"
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  help             - Show this help message"
 
 # Configure CMake
 configure:
+	@powershell -Command "if (-not (Test-Path '$(BUILD_DIR)')) { New-Item -ItemType Directory -Path '$(BUILD_DIR)' | Out-Null }"
 	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Release
 
 # Build the Maxon compiler
@@ -94,11 +96,18 @@ language-tests: compiler
 	@echo Running Maxon language fragment tests...
 	@powershell -Command "cd language-tests; dotnet test --verbosity normal"
 
+# Generate documentation (HTML output + test fragments)
+docs:
+	@echo Generating documentation...
+	@powershell -Command "cd docs; dotnet run"
+	@echo Documentation generated in docs/Output/
+	@echo Test fragments created in language-tests/doc-fragments/
+
 # Clean build artifacts
 clean:
 	@echo Cleaning build artifacts...
-	@if exist "$(BUILD_DIR)" rmdir /s /q "$(BUILD_DIR)"
-	@if exist "vscode-extension\out" rmdir /s /q "vscode-extension\out"
-	@if exist "vscode-extension\node_modules" rmdir /s /q "vscode-extension\node_modules"
-	@if exist "lsp\tests\build" rmdir /s /q "lsp\tests\build"
+	@powershell -Command "if (Test-Path '$(BUILD_DIR)') { Remove-Item -Recurse -Force '$(BUILD_DIR)' }"
+	@powershell -Command "if (Test-Path 'vscode-extension/out') { Remove-Item -Recurse -Force 'vscode-extension/out' }"
+	@powershell -Command "if (Test-Path 'vscode-extension/node_modules') { Remove-Item -Recurse -Force 'vscode-extension/node_modules' }"
+	@powershell -Command "if (Test-Path 'lsp/tests/build') { Remove-Item -Recurse -Force 'lsp/tests/build' }"
 	@echo Clean complete.

@@ -9,8 +9,9 @@ function main() int
 	while true 'a loop'
 		x = x + 2
 		i = i - 1
-		if i = 0 break
-		
+		if i == 0 'if'
+			break
+		end 'if'
 	end 'a loop'
 	return x
 end 'main'
