@@ -105,6 +105,40 @@ This is the **Maxon programming language** project, which includes:
 - **LSP**: Log to stderr (stdout is reserved for JSON-RPC)
 - **Extension**: Use VS Code's Debug Console and extension host debugging
 
+## Make Commands
+
+Use the top-level Makefile for all build and development tasks. Run commands from the project root using `make <target>`.
+
+### Building
+- `make all` - Configure and build both compiler and LSP server (default target)
+- `make configure` - Configure CMake build system
+- `make compiler` - Build only the Maxon compiler (`maxonc.exe`)
+- `make lsp-server` - Build only the C++ LSP server
+- `make lsp` - Build both LSP server and VS Code extension
+
+### VS Code Extension
+- `make extension` - Install npm dependencies and build the extension
+- `make extension-build` - Compile extension (assumes dependencies installed)
+- `make extension-watch` - Start watch mode for extension development
+- `make extension-test` - Run extension test suite
+- `make extension-package` - Package extension as .vsix file
+- `make extension-install` - Install extension locally in VS Code
+
+### Testing
+- `make lsp-test` - Build and run LSP C++ unit tests
+- `make language-tests` - Run Maxon language fragment tests (C# NUnit tests)
+
+### Cleanup
+- `make clean` - Remove all build artifacts (compiler, LSP, extension)
+- `make help` - Display all available make targets
+
+### Common Workflows
+- **First time setup**: `make all` then `make extension`
+- **Compiler development**: `make compiler` after changes
+- **LSP development**: `make lsp-server` then reload VS Code
+- **Extension development**: `make extension-watch` in background, then reload VS Code
+- **Full rebuild**: `make clean` then `make all`
+
 ## General Guidelines
 - **Do not create new documents**: Unless specifically instructed
-- **Create makefile commands**: Create top level makefile commands for tasks like building, testing, and running the compiler and LSP server
+- **Use make commands**: Always use the Makefile commands listed above for building and testing

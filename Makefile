@@ -7,7 +7,7 @@ CC = "C:/Program Files/LLVM/bin/clang.exe"
 CXX = "C:/Program Files/LLVM/bin/clang++.exe"
 RC = "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe"
 
-.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure test
+.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test language-tests
 
 # Default target
 all: configure
@@ -25,7 +25,8 @@ help:
 	@echo "  extension-test   - Run VS Code extension tests"
 	@echo "  extension-package - Package extension as .vsix"
 	@echo "  extension-install - Install extension locally in VS Code"
-	@echo "  test             - Build and run LSP tests"
+	@echo "  lsp-test         - Build and run LSP C++ unit tests"
+	@echo "  language-tests   - Run Maxon language fragment tests"
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  help             - Show this help message"
 
@@ -79,14 +80,19 @@ extension-install: extension-package
 	@powershell -Command "cd vscode-extension; npm run install-extension"
 	@echo Extension installed. Reload VS Code to activate.
 
-# Build and run LSP tests
-test:
+# Build and run LSP C++ unit tests
+lsp-test:
 	@echo Configuring and building LSP tests...
 	@if not exist "lsp\tests\build" mkdir "lsp\tests\build"
 	@cd lsp\tests\build && cmake .. -G "Ninja" -DCMAKE_BUILD_TYPE=Debug
 	@cd lsp\tests\build && cmake --build .
 	@echo Running LSP tests...
 	@cd lsp\tests\build && ctest --output-on-failure
+
+# Run Maxon language fragment tests
+language-tests: compiler
+	@echo Running Maxon language fragment tests...
+	@powershell -Command "cd language-tests; dotnet test --verbosity normal"
 
 # Clean build artifacts
 clean:

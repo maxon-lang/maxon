@@ -302,14 +302,16 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
     
     if (check(TokenType::IDENTIFIER)) {
         std::string name = currentToken().value;
+        int idLine = currentToken().line;
+        int idColumn = currentToken().column;
         advance();
         
         if (check(TokenType::ASSIGN)) {
             return parseAssignment(name);
         }
         
-        throw std::runtime_error("Expected assignment after identifier at line " +
-                                std::to_string(currentToken().line));
+        throw std::runtime_error("Unknown identifier '" + name + "' at line " +
+                                std::to_string(idLine) + " character " + std::to_string(idColumn));
     }
     
     throw std::runtime_error("Unexpected token at line " +
