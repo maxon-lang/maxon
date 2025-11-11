@@ -10,6 +10,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
     scopeStack.clear();
     loopDepth = 0;
     
+    // Register standard library functions
+    // print(int) -> int
+    functions.emplace("print", FunctionInfo("print", "int", 
+        {FunctionParameter("value", "int", 0, 0)}));
+    
     // First pass: collect all function declarations
     for (const auto& func : program->functions) {
         if (functions.find(func->name) != functions.end()) {
@@ -117,6 +122,10 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
                         stmt->line, stmt->column);
             }
         }
+        
+    } else if (auto exprStmt = dynamic_cast<ExprStmtAST*>(stmt)) {
+        // Analyze the expression (e.g., function call)
+        analyzeExpression(exprStmt->expression.get());
         
     } else if (auto ifStmt = dynamic_cast<IfStmtAST*>(stmt)) {
         // Analyze condition

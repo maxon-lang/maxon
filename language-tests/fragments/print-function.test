@@ -1,0 +1,35 @@
+function main() int
+	var x = 42
+	print(x)
+	print(10 + 5)
+	print(100)
+	return 0
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+@.str = private constant [4 x i8] c"%d\0A\00"
+
+define i32 @main() {
+entry:
+  %0 = call i32 @print(i32 42)
+  %1 = call i32 @print(i32 15)
+  %2 = call i32 @print(i32 100)
+  ret i32 0
+}
+
+declare i32 @printf(ptr, ...)
+
+define i32 @print(i32 %0) {
+entry:
+  %1 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 %0)
+  ret i32 0
+}
+---
+ExitCode: 0
+Stdout: ```
+42
+15
+100
+```

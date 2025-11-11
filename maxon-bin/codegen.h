@@ -44,6 +44,9 @@ private:
     void emitLocation(int line, int column);
     llvm::DISubroutineType* createFunctionDebugType(FunctionAST* func);
     
+    // Standard library
+    void initStandardLibrary();
+    
 public:
     CodeGenerator(const std::string& moduleName, bool debugInfo = false);
     void generate(ProgramAST* program);

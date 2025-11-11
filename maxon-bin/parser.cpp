@@ -400,6 +400,23 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
             return parseAssignment(name);
         }
         
+        if (check(TokenType::LPAREN)) {
+            // Parse function call as statement
+            advance(); // consume '('
+            
+            std::vector<std::unique_ptr<ExprAST>> args;
+            if (!check(TokenType::RPAREN)) {
+                do {
+                    args.push_back(parseExpression());
+                } while (match(TokenType::COMMA));
+            }
+            
+            expect(TokenType::RPAREN, "Expected ')' after function arguments");
+            
+            auto callExpr = std::make_unique<CallExprAST>(name, std::move(args), idLine, idColumn);
+            return std::make_unique<ExprStmtAST>(std::move(callExpr), idLine, idColumn);
+        }
+        
         throw std::runtime_error("Unexpected identifier '" + name + "'" +
                                 std::string("\n  Location: line ") + std::to_string(idLine) + 
                                 ", column " + std::to_string(idColumn) +

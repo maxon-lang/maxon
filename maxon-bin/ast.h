@@ -158,6 +158,15 @@ public:
     ContinueStmtAST(int l = 0, int c = 0) : StmtAST(l, c) {}
 };
 
+// Expression statement (e.g., function call)
+class ExprStmtAST : public StmtAST {
+public:
+    std::unique_ptr<ExprAST> expression;
+    
+    ExprStmtAST(std::unique_ptr<ExprAST> expr, int l = 0, int c = 0)
+        : StmtAST(l, c), expression(std::move(expr)) {}
+};
+
 // Function parameter
 struct FunctionParameter {
     std::string name;

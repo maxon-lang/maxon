@@ -71,6 +71,8 @@ public class FragmentTests {
 		var expectedParserErrors = new List<string>();
 		var expectedMaxoncStdout = "";
 		var expectedMaxoncStderr = "";
+		var expectedStdout = "";
+		var expectedStderr = "";
 		if (expectedIR == "") {
 			updateInsteadOfTest = true;
 		} else {
@@ -106,6 +108,82 @@ public class FragmentTests {
 					expectedMaxoncStdout = line[14..];
 				} else if (line.StartsWith("MaxoncStderr: ")) {
 					expectedMaxoncStderr = line[14..];
+				} else if (line.StartsWith("Stdout: ")) {
+					var content = line[8..].Trim();
+					if (content == "```") {
+						// Multi-line stdout with triple backtick delimiters
+						var stdoutLines = new List<string>();
+						
+						// Continue reading lines until we hit the closing delimiter
+						for (var j = i + 1; j < lines.Length; j++) {
+							var nextLine = lines[j].TrimEnd('\r');
+							if (nextLine == "```") {
+								i = j; // Advance to the closing delimiter
+								break;
+							}
+							stdoutLines.Add(nextLine);
+						}
+						
+						expectedStdout = string.Join("\n", stdoutLines).TrimEnd();
+					} else {
+						// Single-line or old-style multi-line format
+						var stdoutLines = new List<string> { content };
+						
+						// Continue reading lines until we hit another keyword or end of file
+						for (var j = i + 1; j < lines.Length; j++) {
+							var nextLine = lines[j].TrimEnd('\r');
+							if (nextLine.StartsWith("ExitCode: ") || 
+							    nextLine.StartsWith("ParserError: ") || 
+							    nextLine.StartsWith("MaxoncStdout: ") || 
+							    nextLine.StartsWith("MaxoncStderr: ") ||
+							    nextLine.StartsWith("Stdout: ") ||
+							    nextLine.StartsWith("Stderr: ")) {
+								break;
+							}
+							stdoutLines.Add(nextLine);
+							i = j; // Advance the outer loop counter
+						}
+						
+						expectedStdout = string.Join("\n", stdoutLines).TrimEnd();
+					}
+				} else if (line.StartsWith("Stderr: ")) {
+					var content = line[8..].Trim();
+					if (content == "```") {
+						// Multi-line stderr with triple backtick delimiters
+						var stderrLines = new List<string>();
+						
+						// Continue reading lines until we hit the closing delimiter
+						for (var j = i + 1; j < lines.Length; j++) {
+							var nextLine = lines[j].TrimEnd('\r');
+							if (nextLine == "```") {
+								i = j; // Advance to the closing delimiter
+								break;
+							}
+							stderrLines.Add(nextLine);
+						}
+						
+						expectedStderr = string.Join("\n", stderrLines).TrimEnd();
+					} else {
+						// Single-line or old-style multi-line format
+						var stderrLines = new List<string> { content };
+						
+						// Continue reading lines until we hit another keyword or end of file
+						for (var j = i + 1; j < lines.Length; j++) {
+							var nextLine = lines[j].TrimEnd('\r');
+							if (nextLine.StartsWith("ExitCode: ") || 
+							    nextLine.StartsWith("ParserError: ") || 
+							    nextLine.StartsWith("MaxoncStdout: ") || 
+							    nextLine.StartsWith("MaxoncStderr: ") ||
+							    nextLine.StartsWith("Stdout: ") ||
+							    nextLine.StartsWith("Stderr: ")) {
+								break;
+							}
+							stderrLines.Add(nextLine);
+							i = j; // Advance the outer loop counter
+						}
+						
+						expectedStderr = string.Join("\n", stderrLines).TrimEnd();
+					}
 				}
 			}
 		}
@@ -139,9 +217,11 @@ public class FragmentTests {
 			var maxoncStderr = maxonc.StandardError.ReadToEnd();
 			maxonc.WaitForExit();
 
-			var llSource = "N/A";
-			var processExitCode = -1;
-			var parserErrors = new List<string>();
+		var llSource = "N/A";
+		var processExitCode = -1;
+		var parserErrors = new List<string>();
+		var stdout = "";
+		var stderr = "";
 
 		// Check if compilation succeeded and .ll file was created
 		if (maxonc.ExitCode == 0 && File.Exists(llFilename)) {
@@ -163,9 +243,27 @@ public class FragmentTests {
 				process.StartInfo.UseShellExecute = false;
 				process.Start();
 				
+				// Read streams using background threads to avoid deadlock
+				string capturedStdout = "";
+				string capturedStderr = "";
+				var stdoutThread = new System.Threading.Thread(() => {
+					capturedStdout = process.StandardOutput.ReadToEnd();
+				});
+				var stderrThread = new System.Threading.Thread(() => {
+					capturedStderr = process.StandardError.ReadToEnd();
+				});
+				stdoutThread.Start();
+				stderrThread.Start();
+				
 				// Wait up to 100ms for the process to complete
 				if (process.WaitForExit(100)) {
 					processExitCode = process.ExitCode;
+					// Wait for stream reading to complete
+					stdoutThread.Join(100);
+					stderrThread.Join(100);
+					// Read captured output
+					stdout = capturedStdout.Replace("\r\n", "\n").TrimEnd();
+					stderr = capturedStderr.Replace("\r\n", "\n").TrimEnd();
 				} else {
 					// Process timed out
 					process.Kill();
@@ -186,7 +284,7 @@ public class FragmentTests {
 		}
 
 		if (updateInsteadOfTest) {
-			UpdateFragment(fragmentPath, source, llSource, processExitCode, parserErrors, maxoncStdout, maxoncStderr);
+			UpdateFragment(fragmentPath, source, llSource, processExitCode, parserErrors, maxoncStdout, maxoncStderr, stdout, stderr);
 			Assert.Fail("Updated fragment file, please inspect the changes and make sure they are correct.");
 		} else {
 			if (expectedExitCode != -1) {
@@ -203,6 +301,12 @@ public class FragmentTests {
 			if (expectedMaxoncStderr != "") {
 				Assert.That(maxoncStderr, Is.EqualTo(expectedMaxoncStderr));
 			}
+			if (expectedStdout != "") {
+				Assert.That(stdout, Is.EqualTo(expectedStdout), "Test executable stdout does not match expected");
+			}
+			if (expectedStderr != "") {
+				Assert.That(stderr, Is.EqualTo(expectedStderr), "Test executable stderr does not match expected");
+			}
 		}
 		} finally {
 			// Clean up temporary directory
@@ -216,7 +320,7 @@ public class FragmentTests {
 		}
 	}
 
-	private static void UpdateFragment(string fragmentPath, string source, string llSource, int expectedExitCode, List<string> parserErrors, string maxoncStdout, string maxoncStderr) {
+	private static void UpdateFragment(string fragmentPath, string source, string llSource, int expectedExitCode, List<string> parserErrors, string maxoncStdout, string maxoncStderr, string stdout, string stderr) {
 		File.WriteAllText(fragmentPath, source + "---\n" + llSource + "\n---");
 		if (expectedExitCode != -1) {
 			File.AppendAllText(fragmentPath, "\nExitCode: " + expectedExitCode);
@@ -229,6 +333,22 @@ public class FragmentTests {
 		}
 		if (maxoncStderr != "") {
 			File.AppendAllText(fragmentPath, "\nMaxoncStderr: " + maxoncStderr);
+		}
+		if (stdout != "") {
+			// Use triple backticks for multi-line stdout
+			if (stdout.Contains('\n')) {
+				File.AppendAllText(fragmentPath, "\nStdout: ```\n" + stdout + "\n```");
+			} else {
+				File.AppendAllText(fragmentPath, "\nStdout: " + stdout);
+			}
+		}
+		if (stderr != "") {
+			// Use triple backticks for multi-line stderr
+			if (stderr.Contains('\n')) {
+				File.AppendAllText(fragmentPath, "\nStderr: ```\n" + stderr + "\n```");
+			} else {
+				File.AppendAllText(fragmentPath, "\nStderr: " + stderr);
+			}
 		}
 	}
 }

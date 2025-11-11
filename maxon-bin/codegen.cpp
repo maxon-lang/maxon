@@ -31,6 +31,80 @@ CodeGenerator::CodeGenerator(const std::string& moduleName, bool debugInfo)
     if (generateDebugInfo) {
         initDebugInfo(moduleName);
     }
+    // Don't initialize standard library here - it will be done on demand
+}
+
+void CodeGenerator::initStandardLibrary() {
+    // Check if print function already exists (to avoid double-initialization)
+    if (module->getFunction("print")) {
+        return;
+    }
+    
+    // Declare printf from C standard library
+    // int printf(const char* format, ...)
+    llvm::FunctionType* printfType = llvm::FunctionType::get(
+        llvm::Type::getInt32Ty(context),
+        {llvm::PointerType::get(context, 0)},  // Use opaque pointer
+        true  // varargs
+    );
+    llvm::Function::Create(printfType, llvm::Function::ExternalLinkage,
+                          "printf", module.get());
+    
+    // Create a Maxon wrapper function: print(int) -> int
+    // This will call printf with "%d\n" format
+    llvm::FunctionType* printFuncType = llvm::FunctionType::get(
+        llvm::Type::getInt32Ty(context),
+        {llvm::Type::getInt32Ty(context)},
+        false
+    );
+    llvm::Function* printFunc = llvm::Function::Create(
+        printFuncType,
+        llvm::Function::ExternalLinkage,
+        "print",
+        module.get()
+    );
+    
+    // Generate the body of the print function
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", printFunc);
+    
+    // Save current insert point
+    llvm::BasicBlock* savedBlock = builder.GetInsertBlock();
+    
+    builder.SetInsertPoint(entry);
+    
+    // Get the printf function
+    llvm::Function* printfFunc = module->getFunction("printf");
+    
+    // Create the format string "%d\n"
+    llvm::Constant* formatStr = llvm::ConstantDataArray::getString(context, "%d\n", true);
+    llvm::GlobalVariable* formatStrVar = new llvm::GlobalVariable(
+        *module,
+        formatStr->getType(),
+        true,  // constant
+        llvm::GlobalValue::PrivateLinkage,
+        formatStr,
+        ".str"
+    );
+    
+    // Get pointer to the format string (as opaque pointer)
+    llvm::Value* formatStrPtr = builder.CreateBitCast(
+        formatStrVar,
+        llvm::PointerType::get(context, 0)
+    );
+    
+    // Get the argument
+    llvm::Value* arg = printFunc->getArg(0);
+    
+    // Call printf(formatStr, arg)
+    builder.CreateCall(printfFunc, {formatStrPtr, arg});
+    
+    // Return 0
+    builder.CreateRet(llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)));
+    
+    // Restore insert point
+    if (savedBlock) {
+        builder.SetInsertPoint(savedBlock);
+    }
 }
 
 llvm::AllocaInst* CodeGenerator::createEntryBlockAlloca(llvm::Function* function,
@@ -92,6 +166,11 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
     }
     
     if (auto* callExpr = dynamic_cast<CallExprAST*>(expr)) {
+        // Initialize standard library if calling a standard library function
+        if (callExpr->callee == "print") {
+            initStandardLibrary();
+        }
+        
         // Look up the function in the module
         llvm::Function* calleeF = module->getFunction(callExpr->callee);
         if (!calleeF) {
@@ -218,6 +297,17 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         }
         
         builder.CreateStore(val, alloca);
+        return;
+    }
+    
+    if (auto* exprStmt = dynamic_cast<ExprStmtAST*>(stmt)) {
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(exprStmt->line, exprStmt->column);
+        }
+        
+        // Generate the expression (likely a function call)
+        generateExpr(exprStmt->expression.get());
         return;
     }
     
