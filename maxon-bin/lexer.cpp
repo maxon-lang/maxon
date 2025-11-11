@@ -183,13 +183,8 @@ std::vector<Token> Lexer::tokenize() {
             advance();
         }
         else if (c == '=') {
+            tokens.push_back(Token(TokenType::EQUALS, "=", startLine, startColumn));
             advance();
-            if (currentChar() == '=') {
-                tokens.push_back(Token(TokenType::EQUAL_EQUAL, "==", startLine, startColumn));
-                advance();
-            } else {
-                tokens.push_back(Token(TokenType::ASSIGN, "=", startLine, startColumn));
-            }
         }
         else if (c == '!') {
             advance();

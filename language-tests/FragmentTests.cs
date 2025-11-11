@@ -104,8 +104,8 @@ public class FragmentTests {
 			// The compiler writes IR to this file
 			var llFilename = Path.Combine(tempDir, "test.ll");
 
-			// Call maxonc.exe to compile the source
-			var maxoncPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "maxon-bin", "build", "bin", "maxonc.exe"));
+		// Call maxonc.exe to compile the source
+		var maxoncPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "build", "bin", "maxonc.exe"));
 			var maxonc = new Process();
 			maxonc.StartInfo.FileName = maxoncPath;
 			var optimizeFlag = optimize ? " -O" : "";

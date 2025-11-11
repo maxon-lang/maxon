@@ -26,12 +26,11 @@ enum class TokenType {
     STRING,
     
     // Operators
-    ASSIGN,     // =
+    EQUALS,     // = (used for both assignment and equality comparison)
     PLUS,       // +
     MINUS,      // -
     MULTIPLY,   // *
     DIVIDE,     // /
-    EQUAL_EQUAL,// == (equality comparison)
     NOT_EQUAL,  // != (not equal)
     GT,         // >
     LT,         // <

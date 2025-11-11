@@ -134,14 +134,14 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
     auto left = parseComparison();
     
     // Handle comparison operators
-    if (check(TokenType::EQUAL_EQUAL) || check(TokenType::NOT_EQUAL) ||
+    if (check(TokenType::EQUALS) || check(TokenType::NOT_EQUAL) ||
         check(TokenType::GT) || check(TokenType::LT) || 
         check(TokenType::GTE) || check(TokenType::LTE)) {
         
         char op;
         TokenType type = currentToken().type;
         
-        if (type == TokenType::EQUAL_EQUAL) op = 'E'; // ==
+        if (type == TokenType::EQUALS) op = 'E'; // = (equality)
         else if (type == TokenType::NOT_EQUAL) op = 'N'; // !=
         else if (type == TokenType::GT) op = '>';
         else if (type == TokenType::LT) op = '<';
@@ -159,7 +159,7 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
     Token varToken = expect(TokenType::VAR, "Expected 'var'");
     Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
-    expect(TokenType::ASSIGN, "Expected '='");
+    expect(TokenType::EQUALS, "Expected '='");
     auto initializer = parseExpression();
     
     return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer), varToken.line, varToken.column);
@@ -168,14 +168,14 @@ std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
 std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
     Token letToken = expect(TokenType::LET, "Expected 'let'");
     Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
-    expect(TokenType::ASSIGN, "Expected '='");
+    expect(TokenType::EQUALS, "Expected '='");
     auto initializer = parseExpression();
     
     return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer), letToken.line, letToken.column);
 }
 
 std::unique_ptr<AssignStmtAST> Parser::parseAssignment(const std::string& name) {
-    Token assignToken = expect(TokenType::ASSIGN, "Expected '='");
+    Token assignToken = expect(TokenType::EQUALS, "Expected '='");
     auto value = parseExpression();
     return std::make_unique<AssignStmtAST>(name, std::move(value), assignToken.line, assignToken.column);
 }
@@ -307,7 +307,7 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
         int idColumn = currentToken().column;
         advance();
         
-        if (check(TokenType::ASSIGN)) {
+        if (check(TokenType::EQUALS)) {
             return parseAssignment(name);
         }
         
