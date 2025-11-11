@@ -70,29 +70,16 @@ int main(int argc, char* argv[]) {
             codegen.printIR();
         }
         
-        // Determine output files
-        std::string objectFile;
-        std::string exeFile;
-        
         if (compileOnly) {
             // Just compile to object file
-            objectFile = outputFile;
-            codegen.writeObjectFile(objectFile);
+            codegen.writeObjectFile(outputFile);
             std::cout << "\nCompilation successful!" << std::endl;
-            std::cout << "Output: " << objectFile << std::endl;
+            std::cout << "Output: " << outputFile << std::endl;
         } else {
-            // Compile and link to executable
-            objectFile = "temp.o";
-            exeFile = outputFile;
-            
-            codegen.writeObjectFile(objectFile);
-            codegen.linkExecutable(objectFile, exeFile);
-            
-            // Clean up temporary object file
-            std::remove(objectFile.c_str());
-            
+            // Compile and link to executable using LLVM's linker
+            codegen.writeExecutable(outputFile);
             std::cout << "\nCompilation and linking successful!" << std::endl;
-            std::cout << "Output: " << exeFile << std::endl;
+            std::cout << "Output: " << outputFile << std::endl;
         }
         
     } catch (const std::exception& e) {

@@ -28,7 +28,7 @@ public:
     void generate(ProgramAST* program);
     void printIR();
     void writeObjectFile(const std::string& filename);
-    void linkExecutable(const std::string& objectFile, const std::string& exeFile);
+    void writeExecutable(const std::string& exeFile);
     llvm::Module* getModule() { return module.get(); }
 };
 

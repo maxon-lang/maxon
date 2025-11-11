@@ -6,8 +6,20 @@
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Target/TargetOptions.h>
+#include <llvm/Linker/Linker.h>
+#include <llvm/Support/raw_ostream.h>
+#include <lld/Common/Driver.h>
+#include <lld/Common/CommonLinkerContext.h>
 #include <stdexcept>
 #include <iostream>
+
+// Forward declare COFF driver function
+namespace lld {
+namespace coff {
+bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
+          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
+}
+}
 
 CodeGenerator::CodeGenerator(const std::string& moduleName)
     : builder(context), module(std::make_unique<llvm::Module>(moduleName, context)) {}
@@ -277,30 +289,100 @@ void CodeGenerator::writeObjectFile(const std::string& filename) {
     std::cout << "Object file written to " << filename << std::endl;
 }
 
-void CodeGenerator::linkExecutable(const std::string& objectFile, const std::string& exeFile) {
-    // Use MSVC linker - need to use cmd.exe /c to properly handle quoted paths
-    std::string vsPath = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207";
-    std::string linkerPath = vsPath + "\\bin\\Hostx64\\x64\\link.exe";
-    std::string libPath = vsPath + "\\lib\\x64";
+void CodeGenerator::writeExecutable(const std::string& exeFile) {
+    // Initialize targets
+    llvm::InitializeAllTargetInfos();
+    llvm::InitializeAllTargets();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllAsmParsers();
+    llvm::InitializeAllAsmPrinters();
     
-    // Also need Windows SDK libs
-    std::string sdkLibPath = "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\um\\x64";
-    std::string ucrtLibPath = "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\ucrt\\x64";
+    // Get target triple for x86-64 Windows
+    llvm::Triple targetTriple("x86_64-pc-windows-msvc");
+    module->setTargetTriple(targetTriple);
     
-    std::string linkCmd = "cmd.exe /c \"\"" + linkerPath + "\" ";
-    linkCmd += "/NOLOGO /MACHINE:X64 /SUBSYSTEM:CONSOLE ";
-    linkCmd += "/LIBPATH:\"" + libPath + "\" ";
-    linkCmd += "/LIBPATH:\"" + sdkLibPath + "\" ";
-    linkCmd += "/LIBPATH:\"" + ucrtLibPath + "\" ";
-    linkCmd += "/OUT:\"" + exeFile + "\" \"" + objectFile + "\" ";
-    linkCmd += "/DEFAULTLIB:libcmt.lib /DEFAULTLIB:oldnames.lib\"";
+    // Get target
+    std::string error;
+    auto target = llvm::TargetRegistry::lookupTarget(targetTriple.str(), error);
     
-    std::cout << "Linking executable..." << std::endl;
-    int result = system(linkCmd.c_str());
-    
-    if (result != 0) {
-        throw std::runtime_error("Linking failed");
+    if (!target) {
+        throw std::runtime_error("Failed to lookup target: " + error);
     }
     
-    std::cout << "Executable written to " + exeFile << std::endl;
+    // Configure target machine
+    auto CPU = "generic";
+    auto features = "";
+    llvm::TargetOptions opt;
+    auto targetMachine = target->createTargetMachine(
+        targetTriple, CPU, features, opt, llvm::Reloc::PIC_);
+    
+    module->setDataLayout(targetMachine->createDataLayout());
+    
+    // First, write to a temporary object file
+    std::string tempObjFile = exeFile + ".tmp.obj";
+    std::error_code ec;
+    llvm::raw_fd_ostream dest(tempObjFile, ec, llvm::sys::fs::OF_None);
+    
+    if (ec) {
+        throw std::runtime_error("Could not create temporary object file: " + ec.message());
+    }
+    
+    // Emit object file
+    llvm::legacy::PassManager pass;
+    auto fileType = llvm::CodeGenFileType::ObjectFile;
+    
+    if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, fileType)) {
+        throw std::runtime_error("TargetMachine can't emit a file of this type");
+    }
+    
+    pass.run(*module);
+    dest.flush();
+    dest.close();
+    
+    std::cout << "Object file generated." << std::endl;
+    
+    // Use LLD as a library (in-process linking)
+    std::cout << "Linking with LLD library (in-process)..." << std::endl;
+    
+    // Prepare arguments for LLD driver
+    std::vector<const char*> lldArgs;
+    lldArgs.push_back("lld-link");  // Program name
+    lldArgs.push_back("/NOLOGO");
+    lldArgs.push_back("/MACHINE:X64");
+    lldArgs.push_back("/SUBSYSTEM:CONSOLE");
+    
+    // Add library paths
+    std::string vsPath = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207";
+    std::string libPath = "/LIBPATH:" + vsPath + "\\lib\\x64";
+    std::string sdkLibPath = "/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\um\\x64";
+    std::string ucrtLibPath = "/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\ucrt\\x64";
+    
+    lldArgs.push_back(libPath.c_str());
+    lldArgs.push_back(sdkLibPath.c_str());
+    lldArgs.push_back(ucrtLibPath.c_str());
+    
+    // Output file
+    std::string outArg = "/OUT:" + exeFile;
+    lldArgs.push_back(outArg.c_str());
+    
+    // Input object file
+    lldArgs.push_back(tempObjFile.c_str());
+    
+    // Default libraries
+    lldArgs.push_back("/DEFAULTLIB:libcmt.lib");
+    lldArgs.push_back("/DEFAULTLIB:oldnames.lib");
+    lldArgs.push_back("/DEFAULTLIB:kernel32.lib");
+    lldArgs.push_back("/DEFAULTLIB:user32.lib");
+    
+    // Call LLD driver directly (in-process)
+    bool success = lld::coff::link(lldArgs, llvm::outs(), llvm::errs(), false, false);
+    
+    // Clean up temporary object file
+    llvm::sys::fs::remove(tempObjFile);
+    
+    if (!success) {
+        throw std::runtime_error("LLD linking failed");
+    }
+    
+    std::cout << "Executable written to " << exeFile << std::endl;
 }

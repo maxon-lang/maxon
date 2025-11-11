@@ -12,12 +12,16 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Enable parallel compilation and optimization flags for Clang
-add_compile_options(
-    -Wall
-    -Wno-unused-parameter
-    -Wno-sign-compare
-)
+# Enable parallel compilation and optimization flags
+if(MSVC)
+    add_compile_options(/W4 /MP)
+else()
+    add_compile_options(
+        -Wall
+        -Wno-unused-parameter
+        -Wno-sign-compare
+    )
+endif()
 
 # Use precompiled headers for faster compilation
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
@@ -74,9 +78,27 @@ llvm_map_components_to_libnames(llvm_libs
     x86asmparser
     x86desc
     x86info
+    linker
+    lto
+    object
+    binaryformat
 )
 
-target_link_libraries(maxonc ${llvm_libs})
+# Link LLD libraries (required)
+set(LLD_DIR "${LLVM_BUILD_DIR}/lib/cmake/lld")
+if(NOT EXISTS "${LLD_DIR}/LLDConfig.cmake")
+    message(FATAL_ERROR "LLD not found. Please rebuild LLVM with LLD support.")
+endif()
+
+find_package(LLD REQUIRED CONFIG PATHS ${LLD_DIR} NO_DEFAULT_PATH)
+message(STATUS "Found LLD - using library interface")
+set(lld_libs lldCOFF lldCommon)
+
+# Add LLD include directory
+set(LLD_INCLUDE_DIR "C:/Users/Eric/Dev/llvm-project/lld/include")
+target_include_directories(maxonc SYSTEM PRIVATE ${LLD_INCLUDE_DIR})
+
+target_link_libraries(maxonc ${llvm_libs} ${lld_libs})
 
 # Set output directory
 set_target_properties(maxonc PROPERTIES
