@@ -46,6 +46,8 @@ Token Parser::expect(TokenType type, const std::string& message) {
             case TokenType::STRING: typeStr = "block identifier (string)"; break;
             case TokenType::LPAREN: typeStr = "'('"; break;
             case TokenType::RPAREN: typeStr = "')'"; break;
+            case TokenType::LBRACKET: typeStr = "'['"; break;
+            case TokenType::RBRACKET: typeStr = "']'"; break;
             case TokenType::EQUALS: typeStr = "'='"; break;
             case TokenType::END: typeStr = "'end'"; break;
             case TokenType::FUNCTION: typeStr = "'function'"; break;
@@ -167,6 +169,14 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
             return std::make_unique<CallExprAST>(name, std::move(args), line, column);
         }
         
+        // Check for array indexing
+        if (check(TokenType::LBRACKET)) {
+            advance(); // consume '['
+            auto index = parseExpression();
+            expect(TokenType::RBRACKET, "Expected ']' after array index");
+            return std::make_unique<ArrayIndexExprAST>(name, std::move(index), line, column);
+        }
+        
         // Just a variable reference
         return std::make_unique<VariableExprAST>(name, line, column);
     }
@@ -286,7 +296,25 @@ std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
     
     // Optional type annotation
     std::string type;
-    if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+    int arraySize = 0;
+    
+    // Check for array type: [size]type
+    if (check(TokenType::LBRACKET)) {
+        advance(); // consume '['
+        Token sizeToken = expect(TokenType::NUMBER, "Expected array size");
+        arraySize = std::stoi(sizeToken.value);
+        expect(TokenType::RBRACKET, "Expected ']' after array size");
+        
+        // Now expect the element type
+        if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+            type = currentToken().value;
+            advance();
+        } else {
+            throw std::runtime_error("Expected array element type (int, ptr, or char) at line " + 
+                                   std::to_string(currentToken().line));
+        }
+    } else if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+        // Regular type annotation
         type = currentToken().value;
         advance();
     }
@@ -294,7 +322,7 @@ std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
     expect(TokenType::EQUALS, "Expected '='");
     auto initializer = parseExpression();
     
-    return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer), type, varToken.line, varToken.column);
+    return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer), type, arraySize, varToken.line, varToken.column);
 }
 
 std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
@@ -303,7 +331,25 @@ std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
     
     // Optional type annotation
     std::string type;
-    if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+    int arraySize = 0;
+    
+    // Check for array type: [size]type
+    if (check(TokenType::LBRACKET)) {
+        advance(); // consume '['
+        Token sizeToken = expect(TokenType::NUMBER, "Expected array size");
+        arraySize = std::stoi(sizeToken.value);
+        expect(TokenType::RBRACKET, "Expected ']' after array size");
+        
+        // Now expect the element type
+        if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+            type = currentToken().value;
+            advance();
+        } else {
+            throw std::runtime_error("Expected array element type (int, ptr, or char) at line " + 
+                                   std::to_string(currentToken().line));
+        }
+    } else if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+        // Regular type annotation
         type = currentToken().value;
         advance();
     }
@@ -311,7 +357,7 @@ std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
     expect(TokenType::EQUALS, "Expected '='");
     auto initializer = parseExpression();
     
-    return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer), type, letToken.line, letToken.column);
+    return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer), type, arraySize, letToken.line, letToken.column);
 }
 
 std::unique_ptr<AssignStmtAST> Parser::parseAssignment(const std::string& name) {
@@ -478,6 +524,28 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
         return parseContinue();
     }
     
+    // Check for pointer dereference assignment: *ptr = value
+    if (check(TokenType::MULTIPLY)) {
+        int line = currentToken().line;
+        int column = currentToken().column;
+        advance(); // consume '*'
+        
+        // Parse just the pointer identifier/expression (not a full expression that includes =)
+        auto ptrExpr = parsePrimary();
+        
+        // Expect '='
+        if (!check(TokenType::EQUALS)) {
+            throw std::runtime_error("Expected '=' after pointer dereference in assignment at line " + 
+                                   std::to_string(line) + ", column " + std::to_string(column));
+        }
+        advance(); // consume '='
+        
+        // Parse the value to assign
+        auto value = parseExpression();
+        
+        return std::make_unique<DerefAssignStmtAST>(std::move(ptrExpr), std::move(value), line, column);
+    }
+    
     if (check(TokenType::IDENTIFIER)) {
         std::string name = currentToken().value;
         int idLine = currentToken().line;
@@ -489,6 +557,16 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
             advance(); // consume '.'
             Token memberName = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
             name = name + "::" + memberName.value;
+        }
+        
+        // Check for array indexing assignment: array[index] = value
+        if (check(TokenType::LBRACKET)) {
+            advance(); // consume '['
+            auto index = parseExpression();
+            expect(TokenType::RBRACKET, "Expected ']' after array index");
+            expect(TokenType::EQUALS, "Expected '=' in array assignment");
+            auto value = parseExpression();
+            return std::make_unique<ArrayAssignStmtAST>(name, std::move(index), std::move(value), idLine, idColumn);
         }
         
         if (check(TokenType::EQUALS)) {

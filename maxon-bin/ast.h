@@ -105,6 +105,16 @@ public:
         : ExprAST(l, col), callee(c), args(std::move(a)) {}
 };
 
+// Array index expression (e.g., "array[5]")
+class ArrayIndexExprAST : public ExprAST {
+public:
+    std::string arrayName;
+    std::unique_ptr<ExprAST> index;
+    
+    ArrayIndexExprAST(const std::string& name, std::unique_ptr<ExprAST> idx, int l = 0, int c = 0)
+        : ExprAST(l, c), arrayName(name), index(std::move(idx)) {}
+};
+
 // Statement nodes
 class StmtAST : public ASTNode {
 public:
@@ -120,10 +130,11 @@ class VarDeclStmtAST : public StmtAST {
 public:
     std::string name;
     std::string type;  // "int", "ptr", "char", or "" for inferred
+    int arraySize;     // 0 if not an array, > 0 for array size
     std::unique_ptr<ExprAST> initializer;
     
-    VarDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, const std::string& t = "", int l = 0, int c = 0)
-        : StmtAST(l, c), name(n), type(t), initializer(std::move(init)) {}
+    VarDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, const std::string& t = "", int arrSize = 0, int l = 0, int c = 0)
+        : StmtAST(l, c), name(n), type(t), arraySize(arrSize), initializer(std::move(init)) {}
 };
 
 // Let declaration (immutable variable)
@@ -131,10 +142,11 @@ class LetDeclStmtAST : public StmtAST {
 public:
     std::string name;
     std::string type;  // "int", "ptr", "char", or "" for inferred
+    int arraySize;     // 0 if not an array, > 0 for array size
     std::unique_ptr<ExprAST> initializer;
     
-    LetDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, const std::string& t = "", int l = 0, int c = 0)
-        : StmtAST(l, c), name(n), type(t), initializer(std::move(init)) {}
+    LetDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, const std::string& t = "", int arrSize = 0, int l = 0, int c = 0)
+        : StmtAST(l, c), name(n), type(t), arraySize(arrSize), initializer(std::move(init)) {}
 };
 
 // Assignment statement
@@ -145,6 +157,27 @@ public:
     
     AssignStmtAST(const std::string& n, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
         : StmtAST(l, c), name(n), value(std::move(val)) {}
+};
+
+// Array assignment statement (e.g., "array[5] = 42")
+class ArrayAssignStmtAST : public StmtAST {
+public:
+    std::string arrayName;
+    std::unique_ptr<ExprAST> index;
+    std::unique_ptr<ExprAST> value;
+    
+    ArrayAssignStmtAST(const std::string& name, std::unique_ptr<ExprAST> idx, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
+        : StmtAST(l, c), arrayName(name), index(std::move(idx)), value(std::move(val)) {}
+};
+
+// Pointer dereference assignment statement (e.g., "*ptr = 42")
+class DerefAssignStmtAST : public StmtAST {
+public:
+    std::unique_ptr<ExprAST> pointer;
+    std::unique_ptr<ExprAST> value;
+    
+    DerefAssignStmtAST(std::unique_ptr<ExprAST> ptr, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
+        : StmtAST(l, c), pointer(std::move(ptr)), value(std::move(val)) {}
 };
 
 // If statement

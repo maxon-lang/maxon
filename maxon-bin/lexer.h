@@ -48,6 +48,8 @@ enum class TokenType {
     // Delimiters
     LPAREN,     // (
     RPAREN,     // )
+    LBRACKET,   // [
+    RBRACKET,   // ]
     COMMA,      // ,
     DOT,        // . (member access / namespace resolution)
     

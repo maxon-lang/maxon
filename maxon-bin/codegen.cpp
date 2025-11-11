@@ -235,6 +235,35 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         return builder.CreateLoad(varType, alloca, varExpr->name);
     }
     
+    if (auto* arrayIndexExpr = dynamic_cast<ArrayIndexExprAST*>(expr)) {
+        llvm::AllocaInst* alloca = namedValues[arrayIndexExpr->arrayName];
+        if (!alloca) {
+            throw std::runtime_error("Unknown array name: " + arrayIndexExpr->arrayName);
+        }
+        
+        llvm::Value* indexVal = generateExpr(arrayIndexExpr->index.get());
+        if (!indexVal) {
+            throw std::runtime_error("Failed to generate array index");
+        }
+        
+        // Get element pointer: GEP array, 0, index
+        llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+        llvm::Value* elementPtr = builder.CreateInBoundsGEP(
+            alloca->getAllocatedType(),
+            alloca,
+            {zero, indexVal},
+            "arrayidx"
+        );
+        
+        // Load the element
+        llvm::ArrayType* arrayType = llvm::dyn_cast<llvm::ArrayType>(alloca->getAllocatedType());
+        if (!arrayType) {
+            throw std::runtime_error("Variable is not an array: " + arrayIndexExpr->arrayName);
+        }
+        llvm::Type* elementType = arrayType->getElementType();
+        return builder.CreateLoad(elementType, elementPtr, "arrayelem");
+    }
+    
     if (auto* binExpr = dynamic_cast<BinaryExprAST*>(expr)) {
         llvm::Value* left = generateExpr(binExpr->left.get());
         llvm::Value* right = generateExpr(binExpr->right.get());
@@ -318,7 +347,17 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         
         // Determine the type for the alloca
         llvm::Type* allocaType;
-        if (!varDecl->type.empty()) {
+        if (varDecl->arraySize > 0) {
+            // Array type: [size x elementType]
+            llvm::Type* elementType;
+            if (!varDecl->type.empty()) {
+                elementType = getTypeFromString(context, varDecl->type);
+            } else {
+                throw std::runtime_error("Array declaration requires explicit element type at line " + 
+                                       std::to_string(varDecl->line));
+            }
+            allocaType = llvm::ArrayType::get(elementType, varDecl->arraySize);
+        } else if (!varDecl->type.empty()) {
             // Use explicit type annotation
             allocaType = getTypeFromString(context, varDecl->type);
         } else {
@@ -327,7 +366,12 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         }
         
         llvm::AllocaInst* alloca = createEntryBlockAlloca(function, varDecl->name, allocaType);
-        builder.CreateStore(initVal, alloca);
+        
+        // Only store initializer if not an array (arrays are typically initialized element by element)
+        if (varDecl->arraySize == 0) {
+            builder.CreateStore(initVal, alloca);
+        }
+        
         namedValues[varDecl->name] = alloca;
         
         // Create debug info for variable
@@ -368,7 +412,17 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         
         // Determine the type for the alloca
         llvm::Type* allocaType;
-        if (!letDecl->type.empty()) {
+        if (letDecl->arraySize > 0) {
+            // Array type: [size x elementType]
+            llvm::Type* elementType;
+            if (!letDecl->type.empty()) {
+                elementType = getTypeFromString(context, letDecl->type);
+            } else {
+                throw std::runtime_error("Array declaration requires explicit element type at line " + 
+                                       std::to_string(letDecl->line));
+            }
+            allocaType = llvm::ArrayType::get(elementType, letDecl->arraySize);
+        } else if (!letDecl->type.empty()) {
             // Use explicit type annotation
             allocaType = getTypeFromString(context, letDecl->type);
         } else {
@@ -377,7 +431,11 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         }
         
         llvm::AllocaInst* alloca = createEntryBlockAlloca(function, letDecl->name, allocaType);
-        builder.CreateStore(initVal, alloca);
+        
+        // Only store initializer if not an array
+        if (letDecl->arraySize == 0) {
+            builder.CreateStore(initVal, alloca);
+        }
         namedValues[letDecl->name] = alloca;
         
         // Create debug info for let variable
@@ -423,6 +481,63 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         }
         
         builder.CreateStore(val, alloca);
+        return;
+    }
+    
+    if (auto* arrayAssign = dynamic_cast<ArrayAssignStmtAST*>(stmt)) {
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(arrayAssign->line, arrayAssign->column);
+        }
+        
+        llvm::Value* indexVal = generateExpr(arrayAssign->index.get());
+        if (!indexVal) {
+            throw std::runtime_error("Failed to generate array index");
+        }
+        
+        llvm::Value* val = generateExpr(arrayAssign->value.get());
+        if (!val) {
+            throw std::runtime_error("Failed to generate array assignment value");
+        }
+        
+        llvm::AllocaInst* alloca = namedValues[arrayAssign->arrayName];
+        if (!alloca) {
+            throw std::runtime_error("Unknown array name: " + arrayAssign->arrayName);
+        }
+        
+        // Get element pointer: GEP array, 0, index
+        llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+        llvm::Value* elementPtr = builder.CreateInBoundsGEP(
+            alloca->getAllocatedType(),
+            alloca,
+            {zero, indexVal},
+            "arrayidx"
+        );
+        
+        builder.CreateStore(val, elementPtr);
+        return;
+    }
+    
+    if (auto* derefAssign = dynamic_cast<DerefAssignStmtAST*>(stmt)) {
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(derefAssign->line, derefAssign->column);
+        }
+        
+        // Generate the pointer expression
+        llvm::Value* ptr = generateExpr(derefAssign->pointer.get());
+        if (!ptr) {
+            throw std::runtime_error("Failed to generate pointer for dereference assignment");
+        }
+        
+        // Generate the value to store
+        llvm::Value* val = generateExpr(derefAssign->value.get());
+        if (!val) {
+            throw std::runtime_error("Failed to generate value for dereference assignment");
+        }
+        
+        // Store the value through the pointer
+        builder.CreateStore(val, ptr);
         return;
     }
     

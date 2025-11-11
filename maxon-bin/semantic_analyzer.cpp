@@ -149,6 +149,47 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
             }
         }
         
+    } else if (auto arrayAssign = dynamic_cast<ArrayAssignStmtAST*>(stmt)) {
+        // Check if array variable exists
+        auto varInfo = lookupVariable(arrayAssign->arrayName);
+        if (!varInfo.has_value()) {
+            addError("Undefined variable: '" + arrayAssign->arrayName + "'" +
+                    std::string("\n  Note: Variable must be declared with 'var' or 'let' before use"),
+                    stmt->line, stmt->column);
+        } else {
+            // Check if variable is immutable
+            if (varInfo->isImmutable) {
+                addError("Cannot assign to read-only array '" + arrayAssign->arrayName + "'" +
+                        std::string("\n  Array declared with 'let' at line ") + std::to_string(varInfo->line) +
+                        ", column " + std::to_string(varInfo->column) +
+                        "\n  Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable arrays",
+                        stmt->line, stmt->column);
+            }
+            
+            // Analyze index expression (should be int)
+            std::string indexType = analyzeExpression(arrayAssign->index.get());
+            if (indexType != "int") {
+                addError("Array index must be an integer" +
+                        std::string("\n  Found type: ") + indexType,
+                        stmt->line, stmt->column);
+            }
+            
+            // Analyze value expression
+            analyzeExpression(arrayAssign->value.get());
+        }
+        
+    } else if (auto derefAssign = dynamic_cast<DerefAssignStmtAST*>(stmt)) {
+        // Analyze the pointer expression (should result in ptr type)
+        std::string ptrType = analyzeExpression(derefAssign->pointer.get());
+        if (ptrType != "ptr") {
+            addError("Cannot dereference non-pointer type: '" + ptrType + "'" +
+                    std::string("\n  Note: Only pointer (ptr) types can be dereferenced with *"),
+                    stmt->line, stmt->column);
+        }
+        
+        // Analyze value expression
+        analyzeExpression(derefAssign->value.get());
+        
     } else if (auto exprStmt = dynamic_cast<ExprStmtAST*>(stmt)) {
         // Analyze the expression (e.g., function call)
         analyzeExpression(exprStmt->expression.get());

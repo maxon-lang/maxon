@@ -256,6 +256,14 @@ std::vector<Token> Lexer::tokenize() {
             tokens.push_back(Token(TokenType::RPAREN, ")", startLine, startColumn));
             advance();
         }
+        else if (c == '[') {
+            tokens.push_back(Token(TokenType::LBRACKET, "[", startLine, startColumn));
+            advance();
+        }
+        else if (c == ']') {
+            tokens.push_back(Token(TokenType::RBRACKET, "]", startLine, startColumn));
+            advance();
+        }
         else if (c == ',') {
             tokens.push_back(Token(TokenType::COMMA, ",", startLine, startColumn));
             advance();
