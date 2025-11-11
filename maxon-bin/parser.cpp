@@ -40,7 +40,8 @@ void Parser::advance() {
 Token Parser::expect(TokenType type, const std::string& message) {
     if (!check(type)) {
         throw std::runtime_error(message + " at line " + 
-                                std::to_string(currentToken().line));
+                                std::to_string(currentToken().line) + ", column " +
+                                std::to_string(currentToken().column));
     }
     Token tok = currentToken();
     advance();
@@ -50,22 +51,30 @@ Token Parser::expect(TokenType type, const std::string& message) {
 std::unique_ptr<ExprAST> Parser::parsePrimary() {
     if (check(TokenType::NUMBER)) {
         int value = std::stoi(currentToken().value);
+        int line = currentToken().line;
+        int column = currentToken().column;
         advance();
-        return std::make_unique<NumberExprAST>(value);
+        return std::make_unique<NumberExprAST>(value, line, column);
     }
     
     if (check(TokenType::TRUE)) {
+        int line = currentToken().line;
+        int column = currentToken().column;
         advance();
-        return std::make_unique<BooleanExprAST>(true);
+        return std::make_unique<BooleanExprAST>(true, line, column);
     }
     
     if (check(TokenType::FALSE)) {
+        int line = currentToken().line;
+        int column = currentToken().column;
         advance();
-        return std::make_unique<BooleanExprAST>(false);
+        return std::make_unique<BooleanExprAST>(false, line, column);
     }
     
     if (check(TokenType::IDENTIFIER)) {
         std::string name = currentToken().value;
+        int line = currentToken().line;
+        int column = currentToken().column;
         advance();
         
         // Check for function call
@@ -83,11 +92,11 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
             }
             
             expect(TokenType::RPAREN, "Expected ')' after function arguments");
-            return std::make_unique<CallExprAST>(name, std::move(args));
+            return std::make_unique<CallExprAST>(name, std::move(args), line, column);
         }
         
         // Just a variable reference
-        return std::make_unique<VariableExprAST>(name);
+        return std::make_unique<VariableExprAST>(name, line, column);
     }
     
     if (match(TokenType::LPAREN)) {
@@ -97,7 +106,8 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
     }
     
     throw std::runtime_error("Expected expression at line " + 
-                            std::to_string(currentToken().line));
+                            std::to_string(currentToken().line) + ", column " +
+                            std::to_string(currentToken().column));
 }
 
 std::unique_ptr<ExprAST> Parser::parseFactor() {
@@ -109,9 +119,11 @@ std::unique_ptr<ExprAST> Parser::parseTerm() {
     
     while (check(TokenType::MULTIPLY) || check(TokenType::DIVIDE)) {
         char op = currentToken().value[0];
+        int line = currentToken().line;
+        int column = currentToken().column;
         advance();
         auto right = parseFactor();
-        left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right));
+        left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
     }
     
     return left;
@@ -122,9 +134,11 @@ std::unique_ptr<ExprAST> Parser::parseComparison() {
     
     while (check(TokenType::PLUS) || check(TokenType::MINUS)) {
         char op = currentToken().value[0];
+        int line = currentToken().line;
+        int column = currentToken().column;
         advance();
         auto right = parseTerm();
-        left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right));
+        left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
     }
     
     return left;
@@ -140,6 +154,8 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
         
         char op;
         TokenType type = currentToken().type;
+        int line = currentToken().line;
+        int column = currentToken().column;
         
         if (type == TokenType::EQUALS) op = 'E'; // = (equality)
         else if (type == TokenType::NOT_EQUAL) op = 'N'; // !=
@@ -150,7 +166,7 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
         
         advance();
         auto right = parseComparison();
-        left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right));
+        left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
     }
     
     return left;
@@ -218,7 +234,8 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
         // Single-line if: parse one statement that must be on the same line
         if (currentToken().line != conditionLine) {
             throw std::runtime_error("Single-line if statement must have statement on same line at line " + 
-                                   std::to_string(conditionLine));
+                                   std::to_string(conditionLine) + ", column " +
+                                   std::to_string(ifToken.column));
         }
         thenBody.push_back(parseStatement());
         
@@ -246,7 +263,8 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
         if (elseBlockIdToken.value != blockId) {
             throw std::runtime_error("Block identifier mismatch: 'else' expects '" + blockId + 
                                    "' but got '" + elseBlockIdToken.value + "' at line " + 
-                                   std::to_string(elseBlockIdToken.line));
+                                   std::to_string(elseBlockIdToken.line) + ", column " +
+                                   std::to_string(elseBlockIdToken.column));
         }
         
         while (!check(TokenType::END) && !check(TokenType::END_OF_FILE)) {
@@ -261,7 +279,8 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     if (endBlockIdToken.value != blockId) {
         throw std::runtime_error("Block identifier mismatch: 'end' expects '" + blockId + 
                                "' but got '" + endBlockIdToken.value + "' at line " + 
-                               std::to_string(endBlockIdToken.line));
+                               std::to_string(endBlockIdToken.line) + ", column " +
+                               std::to_string(endBlockIdToken.column));
     }
     
     return std::make_unique<IfStmtAST>(std::move(condition), 
@@ -292,7 +311,8 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
     if (endBlockIdToken.value != blockId) {
         throw std::runtime_error("Block identifier mismatch: 'end' expects '" + blockId + 
                                "' but got '" + endBlockIdToken.value + "' at line " + 
-                               std::to_string(endBlockIdToken.line));
+                               std::to_string(endBlockIdToken.line) + ", column " +
+                               std::to_string(endBlockIdToken.column));
     }
     
     return std::make_unique<WhileStmtAST>(std::move(condition), std::move(body), whileToken.line, whileToken.column);
@@ -338,11 +358,12 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
         }
         
         throw std::runtime_error("Unknown identifier '" + name + "' at line " +
-                                std::to_string(idLine) + " character " + std::to_string(idColumn));
+                                std::to_string(idLine) + ", column " + std::to_string(idColumn));
     }
     
     throw std::runtime_error("Unexpected token at line " +
-                            std::to_string(currentToken().line));
+                            std::to_string(currentToken().line) + ", column " +
+                            std::to_string(currentToken().column));
 }
 
 std::unique_ptr<FunctionAST> Parser::parseFunction() {
@@ -384,7 +405,8 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
     if (endBlockIdToken.value != name.value) {
         throw std::runtime_error("Block identifier mismatch: 'end' expects '" + name.value + 
                                "' but got '" + endBlockIdToken.value + "' at line " + 
-                               std::to_string(endBlockIdToken.line));
+                               std::to_string(endBlockIdToken.line) + ", column " +
+                               std::to_string(endBlockIdToken.column));
     }
     
     return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), funcToken.line, funcToken.column);

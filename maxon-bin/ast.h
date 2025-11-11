@@ -17,6 +17,10 @@ public:
 // Expression nodes
 class ExprAST : public ASTNode {
 public:
+    int line;
+    int column;
+    
+    ExprAST(int l = 0, int c = 0) : line(l), column(c) {}
     virtual ~ExprAST() = default;
 };
 
@@ -25,7 +29,7 @@ class NumberExprAST : public ExprAST {
 public:
     int value;
     
-    NumberExprAST(int val) : value(val) {}
+    NumberExprAST(int val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
 };
 
 // Variable reference
@@ -33,7 +37,7 @@ class VariableExprAST : public ExprAST {
 public:
     std::string name;
     
-    VariableExprAST(const std::string& n) : name(n) {}
+    VariableExprAST(const std::string& n, int l = 0, int c = 0) : ExprAST(l, c), name(n) {}
 };
 
 // Boolean literal
@@ -41,7 +45,7 @@ class BooleanExprAST : public ExprAST {
 public:
     bool value;
     
-    BooleanExprAST(bool val) : value(val) {}
+    BooleanExprAST(bool val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
 };
 
 // Binary operation
@@ -51,8 +55,8 @@ public:
     std::unique_ptr<ExprAST> left;
     std::unique_ptr<ExprAST> right;
     
-    BinaryExprAST(char o, std::unique_ptr<ExprAST> l, std::unique_ptr<ExprAST> r)
-        : op(o), left(std::move(l)), right(std::move(r)) {}
+    BinaryExprAST(char o, std::unique_ptr<ExprAST> l, std::unique_ptr<ExprAST> r, int line = 0, int col = 0)
+        : ExprAST(line, col), op(o), left(std::move(l)), right(std::move(r)) {}
 };
 
 // Function call
@@ -61,8 +65,8 @@ public:
     std::string callee;
     std::vector<std::unique_ptr<ExprAST>> args;
     
-    CallExprAST(const std::string& c, std::vector<std::unique_ptr<ExprAST>> a)
-        : callee(c), args(std::move(a)) {}
+    CallExprAST(const std::string& c, std::vector<std::unique_ptr<ExprAST>> a, int l = 0, int col = 0)
+        : ExprAST(l, col), callee(c), args(std::move(a)) {}
 };
 
 // Statement nodes

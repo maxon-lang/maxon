@@ -73,16 +73,16 @@ int main(int argc, char* argv[]) {
         std::vector<SemanticError> semanticErrors = analyzer.analyze(program.get());
         
         if (!semanticErrors.empty()) {
-            std::cerr << "\n=== Semantic Errors ===" << std::endl;
             for (const auto& error : semanticErrors) {
-                std::cerr << "Error";
+                std::cerr << "Error:";
                 if (error.line > 0) {
-                    std::cerr << " at line " << error.line;
+                    std::cerr << " line " << error.line;
                     if (error.column > 0) {
                         std::cerr << ", column " << error.column;
                     }
+                    std::cerr << ":";
                 }
-                std::cerr << ": " << error.message << std::endl;
+                std::cerr << " " << error.message << std::endl;
             }
             return 1;
         }
