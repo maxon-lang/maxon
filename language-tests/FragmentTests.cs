@@ -1,4 +1,4 @@
-namespace FragmentTests;
+namespace Test;
 
 using NUnit.Framework;
 using System.Diagnostics;
@@ -74,15 +74,34 @@ public class FragmentTests {
 		if (expectedIR == "") {
 			updateInsteadOfTest = true;
 		} else {
-			while (true) {
-				var line = fragmentFile.ReadLine();
-				if (line == null) {
-					break;
-				}
+			// Read the rest of the file after the IR section
+			var remainingContent = fragmentFile.ReadToEnd();
+			var lines = remainingContent.Split('\n');
+			
+			for (var i = 0; i < lines.Length; i++) {
+				var line = lines[i].TrimEnd('\r');
 				if (line.StartsWith("ExitCode: ")) {
 					expectedExitCode = int.Parse(line[10..]);
 				} else if (line.StartsWith("ParserError: ")) {
-					expectedParserErrors.Add(line[13..]);
+					// For ParserError, collect all remaining lines as a single multi-line error
+					var errorLines = new List<string> {
+						line[13..] // First line after "ParserError: "
+					};
+					
+					// Continue reading lines until we hit another keyword or end of file
+					for (var j = i + 1; j < lines.Length; j++) {
+						var nextLine = lines[j].TrimEnd('\r');
+						if (nextLine.StartsWith("ExitCode: ") || 
+						    nextLine.StartsWith("ParserError: ") || 
+						    nextLine.StartsWith("MaxoncStdout: ") || 
+						    nextLine.StartsWith("MaxoncStderr: ")) {
+							break;
+						}
+						errorLines.Add(nextLine);
+						i = j; // Advance the outer loop counter
+					}
+					
+					expectedParserErrors.Add(string.Join("\n", errorLines).TrimEnd());
 				} else if (line.StartsWith("MaxoncStdout: ")) {
 					expectedMaxoncStdout = line[14..];
 				} else if (line.StartsWith("MaxoncStderr: ")) {
@@ -157,16 +176,11 @@ public class FragmentTests {
 				parserErrors.Add("Executable not created by maxonc");
 			}
 		} else {
-			// Parse errors from maxonc stderr
+			// Capture the complete stderr output as the error message
 			if (!string.IsNullOrEmpty(maxoncStderr)) {
-				var errorLines = maxoncStderr.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-				foreach (var errorLine in errorLines) {
-					if (errorLine.Contains("Error:") || errorLine.Contains("error:")) {
-						parserErrors.Add(errorLine.Trim());
-					}
-				}
-			}
-			if (maxonc.ExitCode != 0 && parserErrors.Count == 0) {
+				// Normalize line endings to \n and trim
+				parserErrors.Add(maxoncStderr.Replace("\r\n", "\n").Trim());
+			} else if (maxonc.ExitCode != 0) {
 				parserErrors.Add($"maxonc failed with exit code {maxonc.ExitCode}");
 			}
 		}
