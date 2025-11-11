@@ -14,33 +14,16 @@ source_filename = "test.maxon"
 
 define i32 @main() {
 entry:
-  %x = alloca i32, align 4
-  store i32 5, ptr %x, align 4
   br label %whilecond
 
-whilecond:                                        ; preds = %ifcont, %entry
-  br i1 true, label %loop, label %afterloop
+whilecond:                                        ; preds = %whilecond, %entry
+  %x.0 = phi i32 [ 5, %entry ], [ %addtmp, %whilecond ]
+  %addtmp = add i32 %x.0, 2
+  %cmptmp = icmp eq i32 %addtmp, 11
+  br i1 %cmptmp, label %afterloop, label %whilecond
 
-loop:                                             ; preds = %whilecond
-  %x1 = load i32, ptr %x, align 4
-  %addtmp = add i32 %x1, 2
-  store i32 %addtmp, ptr %x, align 4
-  %x2 = load i32, ptr %x, align 4
-  %cmptmp = icmp eq i32 %x2, 11
-  br i1 %cmptmp, label %then, label %ifcont
-
-then:                                             ; preds = %loop
-  br label %afterloop
-
-afterbreak:                                       ; No predecessors!
-  br label %ifcont
-
-ifcont:                                           ; preds = %afterbreak, %loop
-  br label %whilecond
-
-afterloop:                                        ; preds = %then, %whilecond
-  %x3 = load i32, ptr %x, align 4
-  ret i32 %x3
+afterloop:                                        ; preds = %whilecond
+  ret i32 11
 }
 ---
 ExitCode: 11

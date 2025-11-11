@@ -1,6 +1,10 @@
 #include "codegen.h"
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Transforms/InstCombine/InstCombine.h>
+#include <llvm/Transforms/Scalar.h>
+#include <llvm/Transforms/Scalar/GVN.h>
+#include <llvm/Transforms/Utils.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/MC/TargetRegistry.h>
@@ -357,6 +361,26 @@ void CodeGenerator::generate(ProgramAST* program) {
     for (auto& func : program->functions) {
         generateFunction(func.get());
     }
+}
+
+void CodeGenerator::optimize() {
+    llvm::legacy::FunctionPassManager fpm(module.get());
+    
+    // Add optimization passes
+    fpm.add(llvm::createPromoteMemoryToRegisterPass()); // mem2reg - promote allocas to registers (must be first)
+    fpm.add(llvm::createInstructionCombiningPass()); // Combine redundant instructions
+    fpm.add(llvm::createReassociatePass());           // Reassociate expressions
+    fpm.add(llvm::createGVNPass());                   // Eliminate common subexpressions
+    fpm.add(llvm::createCFGSimplificationPass());     // Simplify control flow
+    
+    fpm.doInitialization();
+    
+    // Run passes on all functions
+    for (auto& func : module->functions()) {
+        fpm.run(func);
+    }
+    
+    fpm.doFinalization();
 }
 
 void CodeGenerator::printIR() {

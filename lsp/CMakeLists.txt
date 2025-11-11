@@ -22,6 +22,7 @@ endif()
 set(MAXON_SOURCES
     ../maxon-bin/lexer.cpp
     ../maxon-bin/parser.cpp
+    ../maxon-bin/semantic_analyzer.cpp
 )
 
 set(LSP_SOURCES

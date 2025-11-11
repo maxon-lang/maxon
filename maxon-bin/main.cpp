@@ -1,6 +1,7 @@
 #include "lexer.h"
 #include "parser.h"
 #include "codegen.h"
+#include "semantic_analyzer.h"
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -24,6 +25,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "  --emit-llvm    Print LLVM IR to stdout" << std::endl;
         std::cerr << "  -o <output>    Specify output executable (default: output.exe)" << std::endl;
         std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
+        std::cerr << "  -O             Enable optimizations" << std::endl;
         return 1;
     }
     
@@ -31,6 +33,7 @@ int main(int argc, char* argv[]) {
     std::string outputFile = "output.exe";
     bool emitLLVM = false;
     bool compileOnly = false;
+    bool optimize = false;
     
     // Parse command line arguments
     for (int i = 2; i < argc; i++) {
@@ -39,6 +42,8 @@ int main(int argc, char* argv[]) {
             emitLLVM = true;
         } else if (arg == "-c") {
             compileOnly = true;
+        } else if (arg == "-O") {
+            optimize = true;
         } else if (arg == "-o" && i + 1 < argc) {
             outputFile = argv[++i];
         }
@@ -59,10 +64,36 @@ int main(int argc, char* argv[]) {
         std::unique_ptr<ProgramAST> program = parser.parse();
         std::cout << "Parsing complete." << std::endl;
         
+        // Semantic analysis
+        SemanticAnalyzer analyzer;
+        std::vector<SemanticError> semanticErrors = analyzer.analyze(program.get());
+        
+        if (!semanticErrors.empty()) {
+            std::cerr << "\n=== Semantic Errors ===" << std::endl;
+            for (const auto& error : semanticErrors) {
+                std::cerr << "Error";
+                if (error.line > 0) {
+                    std::cerr << " at line " << error.line;
+                    if (error.column > 0) {
+                        std::cerr << ", column " << error.column;
+                    }
+                }
+                std::cerr << ": " << error.message << std::endl;
+            }
+            return 1;
+        }
+        std::cout << "Semantic analysis complete." << std::endl;
+        
         // Code generation
         CodeGenerator codegen(inputFile);
         codegen.generate(program.get());
         std::cout << "Code generation complete." << std::endl;
+        
+        // Run optimization passes if requested
+        if (optimize) {
+            codegen.optimize();
+            std::cout << "Optimization complete." << std::endl;
+        }
         
         // Determine executable output filename
         std::string exeOutputFile = outputFile;

@@ -52,6 +52,7 @@ set(SOURCES
     lexer.cpp
     parser.cpp
     codegen.cpp
+    semantic_analyzer.cpp
 )
 
 # Create executable

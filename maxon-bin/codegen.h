@@ -30,6 +30,7 @@ private:
 public:
     CodeGenerator(const std::string& moduleName);
     void generate(ProgramAST* program);
+    void optimize();
     void printIR();
     void writeIRToFile(const std::string& filename);
     void writeObjectFile(const std::string& filename);

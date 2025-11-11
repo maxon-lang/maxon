@@ -105,10 +105,11 @@ public class FragmentTests {
 			var llFilename = Path.Combine(tempDir, "test.ll");
 
 			// Call maxonc.exe to compile the source
-			var maxoncPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "maxon-bin", "build", "bin", "Release", "maxonc.exe"));
+			var maxoncPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "maxon-bin", "build", "bin", "maxonc.exe"));
 			var maxonc = new Process();
 			maxonc.StartInfo.FileName = maxoncPath;
-			maxonc.StartInfo.Arguments = $"test.maxon --emit-llvm -o test.ll";
+			var optimizeFlag = optimize ? " -O" : "";
+			maxonc.StartInfo.Arguments = $"test.maxon --emit-llvm -o test.ll{optimizeFlag}";
 			maxonc.StartInfo.WorkingDirectory = tempDir;
 			maxonc.StartInfo.RedirectStandardOutput = true;
 			maxonc.StartInfo.RedirectStandardError = true;

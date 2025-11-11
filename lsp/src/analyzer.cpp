@@ -1,11 +1,12 @@
 #include "analyzer.h"
+#include "semantic_analyzer.h"
 #include <algorithm>
 #include <sstream>
 
 Analyzer::Analyzer() {
     keywords = {
-        "function", "var", "while", "if", "else", "end", 
-        "return", "int", "string"
+        "function", "var", "let", "while", "if", "else", "end", 
+        "return", "break", "continue", "true", "false", "int", "string"
     };
 }
 
@@ -32,7 +33,24 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
         try {
             Parser parser(tokens);
             auto program = parser.parse();
-            // If parsing succeeds, no syntax errors
+            
+            // Run semantic analysis
+            SemanticAnalyzer semanticAnalyzer;
+            std::vector<SemanticError> semanticErrors = semanticAnalyzer.analyze(program.get());
+            
+            // Convert semantic errors to LSP diagnostics
+            for (const auto& error : semanticErrors) {
+                lsp::Diagnostic diag;
+                diag.range.start.line = error.line > 0 ? error.line - 1 : 0;
+                diag.range.start.character = error.column > 0 ? error.column - 1 : 0;
+                diag.range.end.line = error.line > 0 ? error.line - 1 : 0;
+                diag.range.end.character = error.column > 0 ? error.column : 1;
+                diag.message = error.message;
+                diag.severity = 1; // Error
+                diag.source = "maxon-lsp";
+                diagnostics.push_back(diag);
+            }
+            
         } catch (const std::exception& e) {
             lsp::Diagnostic diag;
             diag.range.start.line = 0;
