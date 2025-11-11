@@ -138,13 +138,13 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
         exitScope();
         loopDepth--;
         
-    } else if (auto breakStmt = dynamic_cast<BreakStmtAST*>(stmt)) {
+    } else if (dynamic_cast<BreakStmtAST*>(stmt)) {
         // Validate break is inside a loop
         if (loopDepth == 0) {
             addError("'break' statement must be inside a loop");
         }
         
-    } else if (auto continueStmt = dynamic_cast<ContinueStmtAST*>(stmt)) {
+    } else if (dynamic_cast<ContinueStmtAST*>(stmt)) {
         // Validate continue is inside a loop
         if (loopDepth == 0) {
             addError("'continue' statement must be inside a loop");
@@ -167,10 +167,10 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
 }
 
 std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
-    if (auto numExpr = dynamic_cast<NumberExprAST*>(expr)) {
+    if (dynamic_cast<NumberExprAST*>(expr)) {
         return "int";
         
-    } else if (auto boolExpr = dynamic_cast<BooleanExprAST*>(expr)) {
+    } else if (dynamic_cast<BooleanExprAST*>(expr)) {
         return "bool";
         
     } else if (auto varExpr = dynamic_cast<VariableExprAST*>(expr)) {

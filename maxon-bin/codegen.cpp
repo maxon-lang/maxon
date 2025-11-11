@@ -484,7 +484,7 @@ void CodeGenerator::generate(ProgramAST* program) {
         
         // Create parameter types
         std::vector<llvm::Type*> paramTypes;
-        for (auto& param : func->parameters) {
+        for (size_t i = 0; i < func->parameters.size(); i++) {
             paramTypes.push_back(llvm::Type::getInt32Ty(context));
         }
         
@@ -749,7 +749,7 @@ llvm::DISubroutineType* CodeGenerator::createFunctionDebugType(FunctionAST* func
     llvm::SmallVector<llvm::Metadata*, 8> paramTypes;
     paramTypes.push_back(intType);  // Return type
     
-    for (const auto& param : func->parameters) {
+    for (size_t i = 0; i < func->parameters.size(); i++) {
         paramTypes.push_back(intType);  // All params are int for now
     }
     

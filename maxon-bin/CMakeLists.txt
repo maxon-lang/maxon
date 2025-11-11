@@ -13,15 +13,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Enable parallel compilation and optimization flags
-if(MSVC)
-    add_compile_options(/W4 /MP)
-else()
-    add_compile_options(
-        -Wall
-        -Wno-unused-parameter
-        -Wno-sign-compare
-    )
-endif()
+add_compile_options(
+	-Wall
+	-Werror
+	-Wno-unused-parameter
+	-Wno-sign-compare
+)
 
 # Use precompiled headers for faster compilation
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
