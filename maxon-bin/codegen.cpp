@@ -851,10 +851,44 @@ void CodeGenerator::generate(ProgramAST* program) {
             // Create function type
             llvm::FunctionType* funcType = llvm::FunctionType::get(returnType, paramTypes, false);
             
-            // Create function with qualified name (namespace::function)
             std::string qualifiedName = ns->name + "::" + func->name;
-            llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
-                                 qualifiedName, module.get());
+            
+            if (func->isExtern) {
+                // For extern functions in namespaces:
+                // 1. Create the actual extern with simple name (for linker)
+                llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
+                                     func->name, module.get());
+                
+                // 2. Create a wrapper with qualified name that calls the extern
+                llvm::Function* wrapperFunc = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
+                                     qualifiedName, module.get());
+                
+                // 3. Generate wrapper body that just forwards to the extern
+                llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", wrapperFunc);
+                builder.SetInsertPoint(entry);
+                
+                // Get the extern function
+                llvm::Function* externFunc = module->getFunction(func->name);
+                
+                // Collect arguments
+                std::vector<llvm::Value*> args;
+                for (auto& arg : wrapperFunc->args()) {
+                    args.push_back(&arg);
+                }
+                
+                // Call extern and return result
+                if (returnType->isVoidTy()) {
+                    builder.CreateCall(externFunc, args);
+                    builder.CreateRetVoid();
+                } else {
+                    llvm::Value* result = builder.CreateCall(externFunc, args);
+                    builder.CreateRet(result);
+                }
+            } else {
+                // Regular namespace function
+                llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
+                                     qualifiedName, module.get());
+            }
         }
     }
     
