@@ -1,0 +1,82 @@
+// Spectral-norm benchmark from Computer Language Benchmarks Game
+// Calculate eigenvalue using the power method
+// for n = 5500 the result should be 1.274224153
+
+function evalA(i int, j int) int
+	var sum = i + j
+	var denom = ((sum * (sum + 1)) / 2) + i + 1
+	return 1000000 / denom
+end 'evalA'
+
+function multiplyAv(v []int, av []int, n int) int
+	var i = 0
+	while i < n 'outer_loop'
+		var sum = 0
+		var j = 0
+		while j < n 'inner_loop'
+			var a_ij = evalA(i, j)
+			var v_j = v[j]
+			sum = sum + ((a_ij * v_j) / 1000000)
+			j = j + 1
+		end 'inner_loop'
+		av[i] = sum
+		i = i + 1
+	end 'outer_loop'
+	return 0
+end 'multiplyAv'
+
+function multiplyAtv(v []int, atv []int, n int) int
+	var i = 0
+	while i < n 'outer_loop'
+		var sum = 0
+		var j = 0
+		while j < n 'inner_loop'
+			var a_ji = evalA(j, i)
+			var v_j = v[j]
+			sum = sum + ((a_ji * v_j) / 1000000)
+			j = j + 1
+		end 'inner_loop'
+		atv[i] = sum
+		i = i + 1
+	end 'outer_loop'
+	return 0
+end 'multiplyAtv'
+
+function multiplyAtAv(v []int, atav []int, n int) int
+	var tmp [100]int = 0
+	multiplyAv(v, tmp, n)
+	multiplyAtv(tmp, atav, n)
+	return 0
+end 'multiplyAtAv'
+
+function approximate(n int) int
+	var u [100]int = 1000000
+	var v [100]int = 0
+	
+	var iter = 0
+	while iter < 10 'iterations'
+		multiplyAtAv(u, v, n)
+		multiplyAtAv(v, u, n)
+		iter = iter + 1
+	end 'iterations'
+	
+	var vBv = 0
+	var vv = 0
+	var i = 0
+	while i < n 'compute_norm'
+		var ui = u[i]
+		var vi = v[i]
+		vBv = vBv + ((ui * vi) / 1000000)
+		vv = vv + ((vi * vi) / 1000000)
+		i = i + 1
+	end 'compute_norm'
+	
+	return vBv / vv
+end 'approximate'
+
+function main() int
+	var n = 100
+	var result = approximate(n)
+	print(result)
+	return 0
+end 'main'

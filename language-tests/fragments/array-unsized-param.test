@@ -1,0 +1,72 @@
+// Test unsized array parameters
+function sum(arr []int, n int) int
+    var total = 0
+    var i = 0
+    while i < n 'loop'
+        total = total + arr[i]
+        i = i + 1
+    end 'loop'
+    return total
+end 'sum'
+
+function main() int
+    var nums [5]int = 0
+    nums[0] = 10
+    nums[1] = 20
+    nums[2] = 30
+    nums[3] = 40
+    nums[4] = 50
+    return sum(nums, 5)
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+define i32 @sum(ptr %0, i32 %1) {
+entry:
+  br label %whilecond
+
+whilecond:                                        ; preds = %loop, %entry
+  %total.0 = phi i32 [ 0, %entry ], [ %addtmp, %loop ]
+  %i.0 = phi i32 [ 0, %entry ], [ %addtmp6, %loop ]
+  %cmptmp = icmp slt i32 %i.0, %1
+  br i1 %cmptmp, label %loop, label %afterloop
+
+loop:                                             ; preds = %whilecond
+  %2 = sext i32 %i.0 to i64
+  %arrayidx = getelementptr inbounds i32, ptr %0, i64 %2
+  %arrayelem = load i32, ptr %arrayidx, align 4
+  %addtmp = add i32 %arrayelem, %total.0
+  %addtmp6 = add i32 %i.0, 1
+  br label %whilecond
+
+afterloop:                                        ; preds = %whilecond
+  ret i32 %total.0
+}
+
+define i32 @main() {
+entry:
+  %nums = alloca [5 x i32], align 4
+  store i32 10, ptr %nums, align 4
+  %arrayidx1 = getelementptr inbounds nuw i8, ptr %nums, i64 4
+  store i32 20, ptr %arrayidx1, align 4
+  %arrayidx2 = getelementptr inbounds nuw i8, ptr %nums, i64 8
+  store i32 30, ptr %arrayidx2, align 4
+  %arrayidx3 = getelementptr inbounds nuw i8, ptr %nums, i64 12
+  store i32 40, ptr %arrayidx3, align 4
+  %arrayidx4 = getelementptr inbounds nuw i8, ptr %nums, i64 16
+  store i32 50, ptr %arrayidx4, align 4
+  %0 = call i32 @sum(ptr nonnull %nums, i32 5)
+  ret i32 %0
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
+---
+ExitCode: 150

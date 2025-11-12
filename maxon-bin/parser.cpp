@@ -642,11 +642,19 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
         do {
             Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
             
-            // Check for array type: [size]type
+            // Check for array type: []type or [size]type
             std::string paramType;
             if (check(TokenType::LBRACKET)) {
                 advance(); // consume '['
-                Token sizeToken = expect(TokenType::NUMBER, "Expected array size");
+                
+                // Check if size is provided or if it's an unsized array parameter
+                std::string sizeStr = "";
+                if (check(TokenType::NUMBER)) {
+                    Token sizeToken = currentToken();
+                    sizeStr = sizeToken.value;
+                    advance();
+                }
+                
                 expect(TokenType::RBRACKET, "Expected ']' after array size");
                 
                 // Get element type
@@ -666,8 +674,12 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                                            std::to_string(currentToken().column));
                 }
                 
-                // Encode as "[size]type" for now
-                paramType = "[" + sizeToken.value + "]" + elementType;
+                // Encode as "[]type" for unsized or "[size]type" for sized
+                if (sizeStr.empty()) {
+                    paramType = "[]" + elementType;
+                } else {
+                    paramType = "[" + sizeStr + "]" + elementType;
+                }
             } else {
                 // Regular scalar type
                 if (check(TokenType::INT)) {

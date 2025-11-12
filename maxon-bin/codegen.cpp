@@ -464,16 +464,20 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         // Check if this is an array or a pointer (array parameter)
         if (allocatedType->isPointerTy()) {
             // This is a pointer to an array (parameter case)
-            // First load the pointer, then use GEP with one index
+            // Need to determine the element type from the parameter
+            // For now, assume i32 (int) as the default element type
+            llvm::Type* elementType = llvm::Type::getInt32Ty(context);
+            
+            // First load the pointer, then use GEP with the index
             llvm::Value* arrayPtr = builder.CreateLoad(allocatedType, alloca, "arrayptr");
             llvm::Value* elementPtr = builder.CreateInBoundsGEP(
-                llvm::Type::getInt8Ty(context),  // Element type for opaque pointer
+                elementType,
                 arrayPtr,
                 indexVal,
                 "arrayidx"
             );
-            // Load the element - assume i8 (char) for now
-            return builder.CreateLoad(llvm::Type::getInt8Ty(context), elementPtr, "arrayelem");
+            // Load the element
+            return builder.CreateLoad(elementType, elementPtr, "arrayelem");
         } else if (allocatedType->isArrayTy()) {
             // This is a local array variable
             // Get element pointer: GEP array, 0, index
@@ -582,9 +586,16 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
                     // Check the alloca's allocated type
                     llvm::Type* allocatedType = alloca->getAllocatedType();
                     
-                    // If it's an array type, pass the address (don't load)
+                    // If it's an array type, pass pointer to first element
                     if (allocatedType->isArrayTy()) {
-                        argsV.push_back(alloca);
+                        llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+                        llvm::Value* arrayPtr = builder.CreateInBoundsGEP(
+                            allocatedType,
+                            alloca,
+                            {zero, zero},
+                            varExpr->name + ".ptr"
+                        );
+                        argsV.push_back(arrayPtr);
                         argIdx++;
                         continue;
                     }

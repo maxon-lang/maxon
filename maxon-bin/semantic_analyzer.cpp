@@ -679,6 +679,21 @@ bool SemanticAnalyzer::typesMatch(const std::string& type1, const std::string& t
         return true;
     }
     
+    // Check if both are array types and extract element types
+    if (type1[0] == '[' && type2[0] == '[') {
+        // Extract element types (everything after the last ']')
+        size_t bracket1 = type1.find(']');
+        size_t bracket2 = type2.find(']');
+        
+        if (bracket1 != std::string::npos && bracket2 != std::string::npos) {
+            std::string elem1 = type1.substr(bracket1 + 1);
+            std::string elem2 = type2.substr(bracket2 + 1);
+            
+            // Array types match if element types match, regardless of size
+            return elem1 == elem2;
+        }
+    }
+    
     return type1 == type2;
 }
 
