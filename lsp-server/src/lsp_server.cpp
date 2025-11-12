@@ -466,6 +466,90 @@ json LspServer::handleCodeAction(const json& params) {
                             }
                         }
                     }
+                } else if (code == "unnecessary-qualified-name") {
+                    // Extract the qualified name and unqualified name from the message
+                    std::string message = diag["message"].get<std::string>();
+                    size_t qualStart = message.find("'");
+                    size_t qualEnd = message.find("'", qualStart + 1);
+                    size_t unqualStart = message.find("'", qualEnd + 1);
+                    size_t unqualEnd = message.find("'", unqualStart + 1);
+                    
+                    if (qualStart != std::string::npos && qualEnd != std::string::npos &&
+                        unqualStart != std::string::npos && unqualEnd != std::string::npos) {
+                        std::string qualifiedName = message.substr(qualStart + 1, qualEnd - qualStart - 1);
+                        std::string unqualifiedName = message.substr(unqualStart + 1, unqualEnd - unqualStart - 1);
+                        
+                        // Get the document to find the qualified name usage
+                        auto doc = docManager->getDocument(uri);
+                        if (doc) {
+                            lsp::Range diagRange;
+                            diagRange.start.line = diag["range"]["start"]["line"].get<int>();
+                            diagRange.start.character = diag["range"]["start"]["character"].get<int>();
+                            diagRange.end.line = diag["range"]["end"]["line"].get<int>();
+                            diagRange.end.character = diag["range"]["end"]["character"].get<int>();
+                            
+                            // Find the qualified name in the document
+                            std::istringstream stream(doc->text);
+                            std::string line;
+                            int lineNum = 0;
+                            lsp::Range replaceRange;
+                            bool found = false;
+                            
+                            // Convert internal :: to source . for matching
+                            std::string sourceQualifiedName = qualifiedName;
+                            size_t pos = sourceQualifiedName.find("::");
+                            while (pos != std::string::npos) {
+                                sourceQualifiedName.replace(pos, 2, ".");
+                                pos = sourceQualifiedName.find("::", pos + 1);
+                            }
+                            
+                            while (std::getline(stream, line)) {
+                                if (lineNum == diagRange.start.line) {
+                                    // Find the qualified name in this line
+                                    size_t qualPos = line.find(sourceQualifiedName);
+                                    if (qualPos != std::string::npos) {
+                                        replaceRange.start.line = lineNum;
+                                        replaceRange.start.character = qualPos;
+                                        replaceRange.end.line = lineNum;
+                                        replaceRange.end.character = qualPos + sourceQualifiedName.length();
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                lineNum++;
+                            }
+                            
+                            if (found) {
+                                // Create a quick fix to replace qualified name with unqualified name
+                                json simplifyAction = {
+                                    {"title", "Use unqualified name '" + unqualifiedName + "'"},
+                                    {"kind", "quickfix"},
+                                    {"diagnostics", json::array({diag})},
+                                    {"edit", {
+                                        {"changes", {
+                                            {uri, json::array({
+                                                {
+                                                    {"range", {
+                                                        {"start", {
+                                                            {"line", replaceRange.start.line},
+                                                            {"character", replaceRange.start.character}
+                                                        }},
+                                                        {"end", {
+                                                            {"line", replaceRange.end.line},
+                                                            {"character", replaceRange.end.character}
+                                                        }}
+                                                    }},
+                                                    {"newText", unqualifiedName}
+                                                }
+                                            })}
+                                        }}
+                                    }}
+                                };
+                                
+                                actions.push_back(simplifyAction);
+                            }
+                        }
+                    }
                 }
             }
         }

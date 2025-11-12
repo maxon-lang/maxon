@@ -234,6 +234,31 @@ void test_variable_name_extraction() {
     std::cout << "✓ Variable name extraction validated" << std::endl;
 }
 
+void test_unnecessary_qualified_name_extraction() {
+    std::cout << "Testing unnecessary qualified name extraction from diagnostic message..." << std::endl;
+    
+    std::string message = "Unnecessary qualified name: 'math::add'\n  The unqualified name 'add' is unambiguous\n  Consider using 'add' instead";
+    
+    // Extract qualified name and unqualified name from message
+    size_t qualStart = message.find("'");
+    size_t qualEnd = message.find("'", qualStart + 1);
+    size_t unqualStart = message.find("'", qualEnd + 1);
+    size_t unqualEnd = message.find("'", unqualStart + 1);
+    
+    assert(qualStart != std::string::npos);
+    assert(qualEnd != std::string::npos);
+    assert(unqualStart != std::string::npos);
+    assert(unqualEnd != std::string::npos);
+    
+    std::string qualifiedName = message.substr(qualStart + 1, qualEnd - qualStart - 1);
+    std::string unqualifiedName = message.substr(unqualStart + 1, unqualEnd - unqualStart - 1);
+    
+    assert(qualifiedName == "math::add");
+    assert(unqualifiedName == "add");
+    
+    std::cout << "✓ Unnecessary qualified name extraction validated" << std::endl;
+}
+
 int main() {
     std::cout << "\n=== Running Code Action Tests ===\n" << std::endl;
     
@@ -246,6 +271,7 @@ int main() {
         test_diagnostic_code_field();
         test_code_action_capabilities();
         test_variable_name_extraction();
+        test_unnecessary_qualified_name_extraction();
         
         std::cout << "\n=== All Code Action Tests Passed ✓ ===\n" << std::endl;
         return 0;

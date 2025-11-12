@@ -463,6 +463,42 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         // Try to find the function - first exact match, then unqualified lookup
         auto funcIt = functions.find(callExpr->callee);
         
+        // Check if this is a qualified call (contains ::)
+        bool isQualifiedCall = callExpr->callee.find("::") != std::string::npos;
+        
+        // If the call is qualified, check if it's unnecessary
+        if (isQualifiedCall && funcIt != functions.end()) {
+            // Extract the unqualified name (everything after the last ::)
+            size_t lastColonPos = callExpr->callee.rfind("::");
+            std::string unqualifiedName = callExpr->callee.substr(lastColonPos + 2);
+            
+            // Check how many functions match the unqualified name
+            std::string searchSuffix = "::" + unqualifiedName;
+            std::vector<std::string> matches;
+            
+            // Check for exact match with unqualified name (global function)
+            if (functions.find(unqualifiedName) != functions.end()) {
+                matches.push_back(unqualifiedName);
+            }
+            
+            // Check for qualified matches
+            for (const auto& pair : functions) {
+                const std::string& funcName = pair.first;
+                if (funcName.size() > searchSuffix.size() &&
+                    funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
+                    matches.push_back(funcName);
+                }
+            }
+            
+            // If there's only one match, the qualified name is unnecessary
+            if (matches.size() == 1) {
+                addWarning("Unnecessary qualified name: '" + callExpr->callee + "'" +
+                          std::string("\n  The unqualified name '") + unqualifiedName + "' is unambiguous" +
+                          "\n  Consider using '" + unqualifiedName + "' instead",
+                          expr->line, expr->column, "unnecessary-qualified-name");
+            }
+        }
+        
         // If not found and the name is unqualified (no ::), try suffix matching
         if (funcIt == functions.end() && callExpr->callee.find("::") == std::string::npos) {
             std::string searchSuffix = "::" + callExpr->callee;
