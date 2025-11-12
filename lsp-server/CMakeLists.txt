@@ -54,7 +54,9 @@ set_target_properties(maxon-lsp-server PROPERTIES
 )
 
 # Copy to project root bin directory for easier access and stdlib resolution
+# Rename existing file if it's locked (running), then copy new one
 add_custom_command(TARGET maxon-lsp-server POST_BUILD
+    COMMAND powershell -NoProfile -Command "if (Test-Path '${CMAKE_SOURCE_DIR}/bin/$<TARGET_FILE_NAME:maxon-lsp-server>') { Move-Item -Force '${CMAKE_SOURCE_DIR}/bin/$<TARGET_FILE_NAME:maxon-lsp-server>' '${CMAKE_SOURCE_DIR}/bin/$<TARGET_FILE_NAME:maxon-lsp-server>.old' -ErrorAction SilentlyContinue }"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:maxon-lsp-server>
         ${CMAKE_SOURCE_DIR}/bin/$<TARGET_FILE_NAME:maxon-lsp-server>

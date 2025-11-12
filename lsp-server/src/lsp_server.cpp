@@ -354,6 +354,10 @@ void LspServer::handleDidChange(const json& params) {
 
 void LspServer::handleDidClose(const json& params) {
     std::string uri = params["textDocument"]["uri"].get<std::string>();
+    
+    // Clear diagnostics for the closed document
+    publishDiagnostics(uri, {});
+    
     docManager->closeDocument(uri);
 }
 

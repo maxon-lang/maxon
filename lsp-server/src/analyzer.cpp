@@ -29,7 +29,7 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
                 diag.range = tokenToRange(token);
                 diag.message = "Unknown token: " + token.value;
                 diag.severity = 1; // Error
-                diag.source = "maxon-lsp";
+                diag.source = "maxon";
                 diagnostics.push_back(diag);
             }
         }
@@ -41,6 +41,13 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
             
             // Run semantic analysis
             SemanticAnalyzer semanticAnalyzer;
+            
+            // Register stdlib functions with the semantic analyzer
+            for (const auto& pair : stdlibFunctions) {
+                const StdlibFunction& func = pair.second;
+                semanticAnalyzer.registerExternalFunction(func.name, func.returnType, func.parameters);
+            }
+            
             std::vector<SemanticError> semanticErrors = semanticAnalyzer.analyze(program.get());
             
             // Convert semantic errors to LSP diagnostics
@@ -52,7 +59,7 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
                 diag.range.end.character = error.column > 0 ? error.column : 1;
                 diag.message = error.message;
                 diag.severity = error.severity; // Use severity from semantic error (1 = Error, 2 = Warning)
-                diag.source = "maxon-lsp";
+                diag.source = "maxon";
                 diagnostics.push_back(diag);
             }
             
@@ -64,7 +71,7 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
             diag.range.end.character = 1;
             diag.message = std::string("Parse error: ") + e.what();
             diag.severity = 1; // Error
-            diag.source = "maxon-lsp";
+            diag.source = "maxon";
             diagnostics.push_back(diag);
         }
         
@@ -76,7 +83,7 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
         diag.range.end.character = 1;
         diag.message = std::string("Lexer error: ") + e.what();
         diag.severity = 1; // Error
-        diag.source = "maxon-lsp";
+        diag.source = "maxon";
         diagnostics.push_back(diag);
     }
     
@@ -411,6 +418,8 @@ void Analyzer::loadStdlibFile(const std::string& filePath, const std::string& na
                 stdlibFunc.qualifiedName = namespaceName + "::" + func->name;
                 stdlibFunc.namespacePath = namespaceName;
                 stdlibFunc.moduleName = moduleName;
+                stdlibFunc.returnType = func->returnType;
+                stdlibFunc.parameters = func->parameters;
                 
                 // Build signature
                 std::string sig = "function " + func->name + "(";

@@ -18,6 +18,8 @@ struct StdlibFunction {
     std::string documentation;  // Documentation from comments
     std::string namespacePath;  // Namespace path (e.g., "stdlib::fmt")
     std::string moduleName;     // Module name (e.g., "integer")
+    std::string returnType;     // Return type
+    std::vector<FunctionParameter> parameters; // Function parameters
 };
 
 // Structure to track namespace hierarchy for completions

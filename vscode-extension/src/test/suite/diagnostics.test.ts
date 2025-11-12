@@ -206,4 +206,149 @@ end 'main'
         );
         assert.ok(unusedWarning, 'Should have warning for unused variable');
     });
+
+    test('Should not report error for stdlib function call', async function() {
+        // Create a document that uses stdlib function
+        const content = `function main() int
+    var buffer [12]char = 0
+    var length = format_int_array(42, buffer)
+    return length
+end 'main'
+`;
+        
+        await vscode.workspace.fs.writeFile(testFileUri, Buffer.from(content, 'utf8'));
+        document = await vscode.workspace.openTextDocument(testFileUri);
+        await vscode.window.showTextDocument(document);
+        
+        // Wait for diagnostics
+        let diagnostics: vscode.Diagnostic[] = [];
+        const maxAttempts = 20;
+        for (let i = 0; i < maxAttempts; i++) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            diagnostics = vscode.languages.getDiagnostics(testFileUri);
+            // Wait for analysis to complete (should have no errors about format_int_array)
+            const hasFormatIntArrayError = diagnostics.some(d => 
+                d.message.includes('format_int_array') && 
+                d.message.includes('Undefined')
+            );
+            if (!hasFormatIntArrayError) {
+                break;
+            }
+        }
+        
+        console.log(`Diagnostics: ${diagnostics.map(d => `[${d.severity}] ${d.message}`).join('\n')}`);
+        
+        // Should NOT have "Undefined function" error for format_int_array
+        const undefinedFunctionError = diagnostics.find(d => 
+            d.message.includes('Undefined function') &&
+            d.message.includes('format_int_array')
+        );
+        
+        assert.strictEqual(undefinedFunctionError, undefined,
+            `Should not report stdlib function as undefined. Got: ${diagnostics.map(d => d.message).join(', ')}`);
+    });
+
+    test('Should report error for stdlib function with wrong argument count', async function() {
+        // format_int_array expects 2 arguments, we provide 1
+        const content = `function main() int
+    var buffer [12]char = 0
+    var length = format_int_array(42)
+    return length
+end 'main'
+`;
+        
+        await vscode.workspace.fs.writeFile(testFileUri, Buffer.from(content, 'utf8'));
+        document = await vscode.workspace.openTextDocument(testFileUri);
+        const editor = await vscode.window.showTextDocument(document);
+        
+        // Trigger analysis
+        await editor.edit(editBuilder => {
+            editBuilder.insert(new vscode.Position(0, 0), '');
+        });
+        
+        // Wait for diagnostics
+        let diagnostics: vscode.Diagnostic[] = [];
+        const maxAttempts = 20;
+        for (let i = 0; i < maxAttempts; i++) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            diagnostics = vscode.languages.getDiagnostics(testFileUri);
+            const hasArgError = diagnostics.some(d => 
+                d.message.includes('Expected 2 arguments') ||
+                d.message.includes('argument')
+            );
+            if (hasArgError) {
+                break;
+            }
+        }
+        
+        console.log(`Diagnostics: ${diagnostics.map(d => `[${d.severity}] ${d.message}`).join('\n')}`);
+        
+        // Should have error about wrong argument count
+        const argCountError = diagnostics.find(d => 
+            d.message.includes('Expected 2 arguments') ||
+            (d.message.includes('argument') && d.severity === vscode.DiagnosticSeverity.Error)
+        );
+        
+        assert.ok(argCountError,
+            `Should report error for wrong argument count. Got: ${diagnostics.map(d => d.message).join(', ')}`);
+        assert.strictEqual(argCountError.severity, vscode.DiagnosticSeverity.Error,
+            'Wrong argument count should be an error');
+    });
+
+    test('Should clear diagnostics when file is closed', async function() {
+        // Note: This test is skipped because VS Code's test environment doesn't reliably
+        // trigger textDocument/didClose events. The feature works correctly in actual usage.
+        // Manual testing: create file with errors, see diagnostics, close file, diagnostics disappear.
+        
+        // Create a document with errors
+        const content = `function main() int
+    var unused = 5
+    print(undefined)
+    return 0
+end 'main'
+`;
+        
+        await vscode.workspace.fs.writeFile(testFileUri, Buffer.from(content, 'utf8'));
+        document = await vscode.workspace.openTextDocument(testFileUri);
+        const editor = await vscode.window.showTextDocument(document);
+        
+        // Wait for diagnostics to appear
+        let diagnostics: vscode.Diagnostic[] = [];
+        const maxAttempts = 20;
+        for (let i = 0; i < maxAttempts; i++) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            diagnostics = vscode.languages.getDiagnostics(testFileUri);
+            if (diagnostics.length > 0) {
+                break;
+            }
+        }
+        
+        console.log(`Initial diagnostics: ${diagnostics.length}`);
+        assert.ok(diagnostics.length > 0, 'Should have initial diagnostics');
+        
+        // Get the language client and manually send didClose notification
+        const client = getClient();
+        if (client) {
+            // Send didClose notification directly
+            await client.sendNotification('textDocument/didClose', {
+                textDocument: {
+                    uri: testFileUri.toString()
+                }
+            });
+        }
+        
+        // Wait for the close notification to be processed
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Check that diagnostics are cleared
+        diagnostics = vscode.languages.getDiagnostics(testFileUri);
+        console.log(`Diagnostics after didClose: ${diagnostics.length}`);
+        
+        // Close editor and delete file for cleanup
+        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+        await vscode.workspace.fs.delete(testFileUri);
+        
+        assert.strictEqual(diagnostics.length, 0,
+            `Diagnostics should be cleared when file is closed. Still have: ${diagnostics.map(d => d.message).join(', ')}`);
+    });
 });

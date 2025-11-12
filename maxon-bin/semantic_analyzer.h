@@ -52,6 +52,10 @@ public:
     // Analyze entire program and return errors
     std::vector<SemanticError> analyze(ProgramAST* program);
     
+    // Register external/stdlib functions
+    void registerExternalFunction(const std::string& name, const std::string& returnType, 
+                                   const std::vector<FunctionParameter>& parameters);
+    
     // Get errors from last analysis
     const std::vector<SemanticError>& getErrors() const { return errors; }
     

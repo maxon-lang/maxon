@@ -560,6 +560,103 @@ end 'main'
     std::cout << "✓ Unused variable has correct warning severity" << std::endl;
 }
 
+void test_stdlib_function_no_error() {
+    std::cout << "Testing stdlib function call has no error..." << std::endl;
+    
+    Analyzer analyzer;
+    analyzer.initializeStdlib("../../../stdlib");
+    
+    auto doc = createTestDocument(R"(
+function main() int
+    var buffer [12]char = 0
+    var length = format_int_array(42, buffer)
+    return length
+end 'main'
+)");
+    
+    auto diagnostics = analyzer.analyze(doc);
+    
+    // Should NOT have "Undefined function" error for format_int_array
+    for (const auto& diag : diagnostics) {
+        if (diag.message.find("Undefined function") != std::string::npos &&
+            diag.message.find("format_int_array") != std::string::npos) {
+            std::cerr << "Unexpected error: " << diag.message << std::endl;
+            assert(false && "Should not error on stdlib function call");
+        }
+    }
+    
+    std::cout << "✓ Stdlib function call has no error" << std::endl;
+}
+
+void test_stdlib_function_wrong_args() {
+    std::cout << "Testing stdlib function call with wrong argument count..." << std::endl;
+    
+    Analyzer analyzer;
+    analyzer.initializeStdlib("../../../stdlib");
+    
+    auto doc = createTestDocument(R"(
+function main() int
+    var buffer [12]char = 0
+    var length = format_int_array(42)
+    return length
+end 'main'
+)");
+    
+    auto diagnostics = analyzer.analyze(doc);
+    
+    // Debug: print all diagnostics
+    std::cout << "  Found " << diagnostics.size() << " diagnostic(s):" << std::endl;
+    for (const auto& diag : diagnostics) {
+        std::cout << "    Severity " << diag.severity << ": " << diag.message << std::endl;
+    }
+    
+    // Should have error about argument count mismatch
+    bool hasArgCountError = false;
+    for (const auto& diag : diagnostics) {
+        if ((diag.message.find("argument count mismatch") != std::string::npos ||
+             diag.message.find("Expected 2 arguments") != std::string::npos) &&
+            diag.message.find("format_int_array") != std::string::npos) {
+            hasArgCountError = true;
+            assert(diag.severity == 1); // Error
+            break;
+        }
+    }
+    assert(hasArgCountError);
+    
+    std::cout << "✓ Stdlib function with wrong args detected" << std::endl;
+}
+
+void test_stdlib_not_initialized_shows_error() {
+    std::cout << "Testing stdlib function call without initialization..." << std::endl;
+    
+    Analyzer analyzer;
+    // Don't call initializeStdlib
+    
+    auto doc = createTestDocument(R"(
+function main() int
+    var buffer [12]char = 0
+    var length = format_int_array(42, buffer)
+    return length
+end 'main'
+)");
+    
+    auto diagnostics = analyzer.analyze(doc);
+    
+    // Should have "Undefined function" error
+    bool hasUndefinedError = false;
+    for (const auto& diag : diagnostics) {
+        if (diag.message.find("Undefined function") != std::string::npos &&
+            diag.message.find("format_int_array") != std::string::npos) {
+            hasUndefinedError = true;
+            assert(diag.severity == 1); // Error
+            break;
+        }
+    }
+    assert(hasUndefinedError);
+    
+    std::cout << "✓ Stdlib function shows error without initialization" << std::endl;
+}
+
 int main() {
     std::cout << "Running Analyzer Tests...\n" << std::endl;
     

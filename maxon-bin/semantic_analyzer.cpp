@@ -3,18 +3,25 @@
 
 SemanticAnalyzer::SemanticAnalyzer() : loopDepth(0) {}
 
+void SemanticAnalyzer::registerExternalFunction(const std::string& name, const std::string& returnType, 
+                                                 const std::vector<FunctionParameter>& parameters) {
+    functions.emplace(name, FunctionInfo(name, returnType, parameters));
+}
+
 std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
     errors.clear();
-    functions.clear();
+    // Note: Don't clear functions here - we want to keep registered external functions
     variables.clear();
     scopeStack.clear();
     loopDepth = 0;
     undefinedFunctions.clear();
     
-    // Register standard library functions
+    // Register standard library functions (built-in)
     // print(int) -> int
-    functions.emplace("print", FunctionInfo("print", "int", 
-        {FunctionParameter("value", "int", 0, 0)}));
+    if (functions.find("print") == functions.end()) {
+        functions.emplace("print", FunctionInfo("print", "int", 
+            {FunctionParameter("value", "int", 0, 0)}));
+    }
     
     // First pass: collect all function declarations (including namespace functions)
     for (const auto& func : program->functions) {
