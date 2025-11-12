@@ -255,6 +255,181 @@ void test_stdlib_nonexistent_directory() {
     std::cout << "✓ Handles nonexistent stdlib directory gracefully" << std::endl;
 }
 
+void test_qualified_name_stdlib_root() {
+    std::cout << "Testing qualified name completion: stdlib root..." << std::endl;
+    
+    Analyzer analyzer;
+    
+    // Create document with "std" - should suggest "stdlib"
+    auto doc = createTestDocument("std");
+    lsp::Position pos{0, 3}; // After "std"
+    auto completions = analyzer.getCompletions(doc, pos);
+    
+    // Should include "stdlib" in completions
+    bool hasStdlib = false;
+    for (const auto& item : completions) {
+        if (item.label == "stdlib") {
+            hasStdlib = true;
+            assert(item.kind == 9); // Module
+            break;
+        }
+    }
+    assert(hasStdlib);
+    
+    std::cout << "✓ Stdlib root completion works" << std::endl;
+}
+
+void test_qualified_name_after_stdlib_dot() {
+    std::cout << "Testing qualified name completion: after 'stdlib.'..." << std::endl;
+    
+    Analyzer analyzer;
+    analyzer.initializeStdlib("../../../stdlib");
+    
+    // Create document with "stdlib." - should suggest "fmt", "fs", "sys"
+    auto doc = createTestDocument("stdlib.");
+    lsp::Position pos{0, 7}; // After "stdlib."
+    auto completions = analyzer.getCompletions(doc, pos);
+    
+    // Should have fmt, fs, sys namespaces
+    bool hasFmt = false;
+    for (const auto& item : completions) {
+        if (item.label == "fmt") {
+            hasFmt = true;
+            assert(item.kind == 9); // Module
+            assert(item.detail.find("stdlib.fmt") != std::string::npos);
+            break;
+        }
+    }
+    assert(hasFmt);
+    
+    std::cout << "✓ Completions after 'stdlib.' work" << std::endl;
+}
+
+void test_qualified_name_after_stdlib_fmt_dot() {
+    std::cout << "Testing qualified name completion: after 'stdlib.fmt.'..." << std::endl;
+    
+    Analyzer analyzer;
+    analyzer.initializeStdlib("../../../stdlib");
+    
+    // Create document with "stdlib.fmt." - should suggest modules like "integer"
+    auto doc = createTestDocument("stdlib.fmt.");
+    lsp::Position pos{0, 11}; // After "stdlib.fmt."
+    auto completions = analyzer.getCompletions(doc, pos);
+    
+    // Should have "integer" module
+    bool hasInteger = false;
+    for (const auto& item : completions) {
+        if (item.label == "integer") {
+            hasInteger = true;
+            assert(item.kind == 9); // Module
+            assert(item.detail.find("stdlib.fmt") != std::string::npos);
+            break;
+        }
+    }
+    assert(hasInteger);
+    
+    std::cout << "✓ Completions after 'stdlib.fmt.' work" << std::endl;
+}
+
+void test_qualified_name_after_module_dot() {
+    std::cout << "Testing qualified name completion: after 'stdlib.fmt.integer.'..." << std::endl;
+    
+    Analyzer analyzer;
+    analyzer.initializeStdlib("../../../stdlib");
+    
+    // Create document with "stdlib.fmt.integer." - should suggest functions like "format_int_array"
+    auto doc = createTestDocument("stdlib.fmt.integer.");
+    lsp::Position pos{0, 19}; // After "stdlib.fmt.integer."
+    auto completions = analyzer.getCompletions(doc, pos);
+    
+    // Should have "format_int_array" function
+    bool hasFormatIntArray = false;
+    for (const auto& item : completions) {
+        if (item.label == "format_int_array") {
+            hasFormatIntArray = true;
+            assert(item.kind == 3); // Function
+            assert(!item.detail.empty());
+            assert(item.detail.find("value int") != std::string::npos);
+            break;
+        }
+    }
+    assert(hasFormatIntArray);
+    
+    std::cout << "✓ Completions after 'stdlib.fmt.integer.' work" << std::endl;
+}
+
+void test_qualified_name_multiline() {
+    std::cout << "Testing qualified name completion: multiline context..." << std::endl;
+    
+    Analyzer analyzer;
+    analyzer.initializeStdlib("../../../stdlib");
+    
+    // Create document with qualified name on second line
+    auto doc = createTestDocument("function main() int\n    stdlib.fmt.");
+    lsp::Position pos{1, 15}; // After "stdlib.fmt." on line 2
+    auto completions = analyzer.getCompletions(doc, pos);
+    
+    // Should have "integer" module
+    bool hasInteger = false;
+    for (const auto& item : completions) {
+        if (item.label == "integer") {
+            hasInteger = true;
+            break;
+        }
+    }
+    assert(hasInteger);
+    
+    std::cout << "✓ Qualified name completions work in multiline context" << std::endl;
+}
+
+void test_qualified_name_with_whitespace() {
+    std::cout << "Testing qualified name completion: with preceding whitespace..." << std::endl;
+    
+    Analyzer analyzer;
+    analyzer.initializeStdlib("../../../stdlib");
+    
+    // Create document with whitespace before qualified name
+    auto doc = createTestDocument("    stdlib.");
+    lsp::Position pos{0, 11}; // After "    stdlib."
+    auto completions = analyzer.getCompletions(doc, pos);
+    
+    // Should still have fmt
+    bool hasFmt = false;
+    for (const auto& item : completions) {
+        if (item.label == "fmt") {
+            hasFmt = true;
+            break;
+        }
+    }
+    assert(hasFmt);
+    
+    std::cout << "✓ Qualified name completions work with whitespace" << std::endl;
+}
+
+void test_qualified_name_incomplete_prefix() {
+    std::cout << "Testing qualified name completion: incomplete prefix..." << std::endl;
+    
+    Analyzer analyzer;
+    analyzer.initializeStdlib("../../../stdlib");
+    
+    // Create document with "stdlib.f" - cursor after "f"
+    auto doc = createTestDocument("stdlib.f");
+    lsp::Position pos{0, 8}; // After "stdlib.f"
+    auto completions = analyzer.getCompletions(doc, pos);
+    
+    // Should still provide namespace-level completions (fmt, fs)
+    bool hasFmt = false;
+    for (const auto& item : completions) {
+        if (item.label == "fmt") {
+            hasFmt = true;
+            break;
+        }
+    }
+    assert(hasFmt);
+    
+    std::cout << "✓ Qualified name completions work with incomplete prefix" << std::endl;
+}
+
 int main() {
     std::cout << "Running Analyzer Tests...\n" << std::endl;
     
@@ -269,11 +444,20 @@ int main() {
         test_analyze_syntax_error();
         test_empty_document();
         
-        // New stdlib tests
+        // Stdlib tests
         test_stdlib_initialization();
         test_stdlib_hover();
         test_stdlib_completion_details();
         test_stdlib_nonexistent_directory();
+        
+        // Qualified name completion tests
+        test_qualified_name_stdlib_root();
+        test_qualified_name_after_stdlib_dot();
+        test_qualified_name_after_stdlib_fmt_dot();
+        test_qualified_name_after_module_dot();
+        test_qualified_name_multiline();
+        test_qualified_name_with_whitespace();
+        test_qualified_name_incomplete_prefix();
         
         std::cout << "\n✓ All Analyzer tests passed!" << std::endl;
         return 0;

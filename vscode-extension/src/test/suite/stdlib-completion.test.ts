@@ -54,10 +54,6 @@ suite('Stdlib Completion Tests', () => {
         // Check document language ID
         console.log('Document language ID:', document.languageId);
         console.log('Document URI:', document.uri.toString());
-        
-        // Wait longer for LSP to process the document
-        console.log('Waiting for LSP to process document...');
-        await new Promise(resolve => setTimeout(resolve, 2000));
     });
 
     teardown(async () => {

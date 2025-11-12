@@ -170,7 +170,7 @@ json LspServer::handleInitialize(const json& params) {
             {"textDocumentSync", 1}, // Full sync
             {"completionProvider", {
                 {"resolveProvider", false},
-                {"triggerCharacters", json::array()}
+                {"triggerCharacters", json::array({".", ":"})}
             }},
             {"hoverProvider", true},
             {"definitionProvider", true},

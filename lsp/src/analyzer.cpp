@@ -86,6 +86,31 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
 std::vector<lsp::CompletionItem> Analyzer::getCompletions(std::shared_ptr<Document> doc, lsp::Position pos) {
     std::vector<lsp::CompletionItem> items;
     
+    // Get text before cursor to check for qualified name context
+    std::string textBeforeCursor = getTextBeforePosition(doc->text, pos);
+    
+    // Check if we're in a qualified name context (e.g., "stdlib.", "stdlib.fmt.", etc.)
+    // Look for pattern: word followed by dots
+    size_t lastDot = textBeforeCursor.find_last_of('.');
+    
+    if (lastDot != std::string::npos) {
+        // We're after a dot - provide qualified name completions
+        // Extract the prefix before the dot (e.g., "stdlib" from "stdlib.")
+        size_t start = lastDot;
+        while (start > 0 && (std::isalnum(textBeforeCursor[start - 1]) || 
+               textBeforeCursor[start - 1] == '_' || textBeforeCursor[start - 1] == '.')) {
+            start--;
+        }
+        std::string prefix = textBeforeCursor.substr(start, lastDot - start);
+        
+        return getQualifiedNameCompletions(prefix);
+    }
+    
+    // No dot context - provide regular completions
+    
+    // Add "stdlib" as a root namespace option
+    items.push_back({"stdlib", 9, "Standard library namespace", ""});
+    
     // Add keyword completions
     for (const auto& keyword : keywords) {
         lsp::CompletionItem item;
@@ -333,29 +358,81 @@ void Analyzer::loadStdlibFile(const std::string& filePath, const std::string& na
         Parser parser(tokens);
         auto program = parser.parse();
         
-        // Extract function information
-        for (const auto& func : program->functions) {
-            StdlibFunction stdlibFunc;
-            stdlibFunc.name = func->name;
-            stdlibFunc.qualifiedName = namespaceName + "::" + func->name;
-            
-            // Build signature
-            std::string sig = "function " + func->name + "(";
-            for (size_t i = 0; i < func->parameters.size(); i++) {
-                if (i > 0) sig += ", ";
-                sig += func->parameters[i].name + " " + func->parameters[i].type;
+        // Extract module name from file path (e.g., "integer" from "stdlib/fmt/integer.maxon")
+        fs::path path(filePath);
+        std::string moduleName = path.stem().string();
+        
+        // Parse namespace to extract parts (e.g., "stdlib::fmt" -> ["stdlib", "fmt"])
+        std::vector<std::string> nsParts;
+        std::string current;
+        for (char c : namespaceName) {
+            if (c == ':') {
+                if (!current.empty() && current != ":") {
+                    nsParts.push_back(current);
+                    current.clear();
+                }
+            } else {
+                current += c;
             }
-            sig += ") " + func->returnType;
-            stdlibFunc.signature = sig;
-            
-            // Extract documentation from comments before the function declaration
-            stdlibFunc.documentation = extractDocumentation(content, func->name, func->line);
-            if (stdlibFunc.documentation.empty()) {
-                stdlibFunc.documentation = "Standard library function from " + namespaceName;
+        }
+        if (!current.empty()) {
+            nsParts.push_back(current);
+        }
+        
+        // Build namespace hierarchy (stdlib -> fmt -> integer)
+        // We expect: nsParts = ["stdlib", "fmt"], moduleName = "integer"
+        if (!nsParts.empty() && nsParts[0] == "stdlib") {
+            // Initialize root if needed
+            if (namespaceRoot.name.empty()) {
+                namespaceRoot.name = "stdlib";
             }
             
-            // Store by unqualified name
-            stdlibFunctions[func->name] = stdlibFunc;
+            NamespaceNode* current = &namespaceRoot;
+            
+            // Navigate/create intermediate nodes (e.g., "fmt")
+            for (size_t i = 1; i < nsParts.size(); i++) {
+                const std::string& part = nsParts[i];
+                if (current->children.find(part) == current->children.end()) {
+                    current->children[part] = NamespaceNode{part, {}, {}};
+                }
+                current = &current->children[part];
+            }
+            
+            // Add module node (e.g., "integer")
+            if (current->children.find(moduleName) == current->children.end()) {
+                current->children[moduleName] = NamespaceNode{moduleName, {}, {}};
+            }
+            NamespaceNode* moduleNode = &current->children[moduleName];
+            
+            // Extract function information
+            for (const auto& func : program->functions) {
+                StdlibFunction stdlibFunc;
+                stdlibFunc.name = func->name;
+                stdlibFunc.qualifiedName = namespaceName + "::" + func->name;
+                stdlibFunc.namespacePath = namespaceName;
+                stdlibFunc.moduleName = moduleName;
+                
+                // Build signature
+                std::string sig = "function " + func->name + "(";
+                for (size_t i = 0; i < func->parameters.size(); i++) {
+                    if (i > 0) sig += ", ";
+                    sig += func->parameters[i].name + " " + func->parameters[i].type;
+                }
+                sig += ") " + func->returnType;
+                stdlibFunc.signature = sig;
+                
+                // Extract documentation from comments before the function declaration
+                stdlibFunc.documentation = extractDocumentation(content, func->name, func->line);
+                if (stdlibFunc.documentation.empty()) {
+                    stdlibFunc.documentation = "Standard library function from " + namespaceName;
+                }
+                
+                // Store by unqualified name
+                stdlibFunctions[func->name] = stdlibFunc;
+                
+                // Add function to module node
+                moduleNode->functions.push_back(func->name);
+            }
         }
         
     } catch (...) {
@@ -418,4 +495,103 @@ std::string Analyzer::extractDocumentation(const std::string& sourceText, const 
     }
     
     return documentation;
+}
+
+std::string Analyzer::getTextBeforePosition(const std::string& text, lsp::Position pos) {
+    std::istringstream stream(text);
+    std::string line;
+    int currentLine = 0;
+    
+    while (std::getline(stream, line) && currentLine < pos.line) {
+        currentLine++;
+    }
+    
+    if (currentLine != pos.line) {
+        return "";
+    }
+    
+    // Return text from start of line up to position
+    if (pos.character >= (int)line.length()) {
+        return line;
+    }
+    
+    return line.substr(0, pos.character);
+}
+
+std::vector<lsp::CompletionItem> Analyzer::getQualifiedNameCompletions(const std::string& prefix) {
+    std::vector<lsp::CompletionItem> items;
+    
+    // Split prefix by dots to navigate namespace hierarchy
+    std::vector<std::string> parts;
+    std::string current;
+    for (char c : prefix) {
+        if (c == '.') {
+            if (!current.empty()) {
+                parts.push_back(current);
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty()) {
+        parts.push_back(current);
+    }
+    
+    // Navigate the namespace hierarchy
+    if (parts.empty()) {
+        return items;
+    }
+    
+    // Start from root: "stdlib"
+    if (parts[0] == "stdlib") {
+        if (parts.size() == 1) {
+            // After "stdlib." - show top-level namespaces (fmt, fs, sys)
+            const NamespaceNode* node = &namespaceRoot;
+            for (const auto& child : node->children) {
+                lsp::CompletionItem item;
+                item.label = child.first;
+                item.kind = 9; // Module
+                item.detail = "stdlib." + child.first + " namespace";
+                items.push_back(item);
+            }
+        } else if (parts.size() == 2) {
+            // After "stdlib.fmt." - show modules (integer, etc.)
+            const NamespaceNode* node = &namespaceRoot;
+            auto it = node->children.find(parts[1]);
+            if (it != node->children.end()) {
+                for (const auto& child : it->second.children) {
+                    lsp::CompletionItem item;
+                    item.label = child.first;
+                    item.kind = 9; // Module
+                    item.detail = "Module in stdlib." + parts[1];
+                    items.push_back(item);
+                }
+            }
+        } else if (parts.size() == 3) {
+            // After "stdlib.fmt.integer." - show functions
+            const NamespaceNode* node = &namespaceRoot;
+            auto it1 = node->children.find(parts[1]);
+            if (it1 != node->children.end()) {
+                auto it2 = it1->second.children.find(parts[2]);
+                if (it2 != it1->second.children.end()) {
+                    for (const auto& funcName : it2->second.functions) {
+                        // Find the full function info
+                        auto funcIt = stdlibFunctions.find(funcName);
+                        if (funcIt != stdlibFunctions.end()) {
+                            const StdlibFunction& func = funcIt->second;
+                            lsp::CompletionItem item;
+                            item.label = func.name;
+                            item.kind = 3; // Function
+                            item.detail = func.signature;
+                            item.documentation = func.documentation;
+                            items.push_back(item);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return items;
 }

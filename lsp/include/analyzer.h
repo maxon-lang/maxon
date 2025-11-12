@@ -16,6 +16,15 @@ struct StdlibFunction {
     std::string qualifiedName;  // Fully qualified name (e.g., "stdlib::fmt::format_int_array")
     std::string signature;      // Function signature for display
     std::string documentation;  // Documentation from comments
+    std::string namespacePath;  // Namespace path (e.g., "stdlib::fmt")
+    std::string moduleName;     // Module name (e.g., "integer")
+};
+
+// Structure to track namespace hierarchy for completions
+struct NamespaceNode {
+    std::string name;
+    std::map<std::string, NamespaceNode> children;  // subnamespaces or modules
+    std::vector<std::string> functions;              // function names at this level
 };
 
 class Analyzer {
@@ -43,14 +52,17 @@ public:
 private:
     std::vector<std::string> keywords;
     std::map<std::string, StdlibFunction> stdlibFunctions; // Key: unqualified name
+    NamespaceNode namespaceRoot;  // Root of namespace hierarchy ("stdlib")
     
     // Helper functions
     std::string getWordAtPosition(const std::string& text, lsp::Position pos);
+    std::string getTextBeforePosition(const std::string& text, lsp::Position pos);
     bool isKeyword(const std::string& word) const;
     lsp::Range tokenToRange(const Token& token);
     void loadStdlibFile(const std::string& filePath, const std::string& namespaceName);
     std::vector<std::string> findStdlibFiles(const std::string& stdlibPath);
     std::string extractDocumentation(const std::string& sourceText, const std::string& functionName, int functionLine);
+    std::vector<lsp::CompletionItem> getQualifiedNameCompletions(const std::string& prefix);
 };
 
 #endif // ANALYZER_H
