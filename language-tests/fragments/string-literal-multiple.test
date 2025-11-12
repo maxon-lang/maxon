@@ -1,4 +1,4 @@
-﻿extern function GetStdHandle(nStdHandle int) ptr
+extern function GetStdHandle(nStdHandle int) ptr
 extern function WriteFile(hFile ptr, lpBuffer ptr, nNumberOfBytesToWrite int, lpNumberOfBytesWritten ptr, lpOverlapped ptr) int
 
 function main() int
@@ -33,9 +33,18 @@ entry:
   %2 = call i32 @WriteFile(ptr %0, ptr nonnull @.str.1, i32 7, ptr nonnull %written, ptr null)
   ret i32 0
 }
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
 ---
-Output:
+ExitCode: 0
+Stdout: ```
 First
 Second
-
-ExitCode: 0
+```

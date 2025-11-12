@@ -40,9 +40,9 @@ static llvm::Type* getTypeFromString(llvm::LLVMContext& context, const std::stri
     }
 }
 
-CodeGenerator::CodeGenerator(const std::string& moduleName, bool debugInfo)
+CodeGenerator::CodeGenerator(const std::string& moduleName, bool debugInfo, bool verbose)
     : builder(context), module(std::make_unique<llvm::Module>(moduleName, context)),
-      generateDebugInfo(debugInfo), sourceFileName(moduleName) {
+      generateDebugInfo(debugInfo), verbose(verbose), sourceFileName(moduleName) {
     if (generateDebugInfo) {
         initDebugInfo(moduleName);
     }
@@ -1222,7 +1222,9 @@ void CodeGenerator::writeObjectFile(const std::string& filename) {
     pass.run(*module);
     dest.flush();
     
-    std::cout << "Object file written to " << filename << std::endl;
+    if (verbose) {
+        std::cout << "Object file written to " << filename << std::endl;
+    }
 }
 
 void CodeGenerator::writeExecutable(const std::string& exeFile) {
@@ -1275,10 +1277,14 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
     dest.flush();
     dest.close();
     
-    std::cout << "Object file generated." << std::endl;
+    if (verbose) {
+        std::cout << "Object file generated." << std::endl;
+    }
     
     // Use LLD as a library (in-process linking)
-    std::cout << "Linking with LLD library (in-process)..." << std::endl;
+    if (verbose) {
+        std::cout << "Linking with LLD library (in-process)..." << std::endl;
+    }
     
     // Prepare arguments for LLD driver
     std::vector<const char*> lldArgs;
@@ -1326,7 +1332,9 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
         throw std::runtime_error("LLD linking failed");
     }
     
-    std::cout << "Executable written to " << exeFile << std::endl;
+    if (verbose) {
+        std::cout << "Executable written to " << exeFile << std::endl;
+    }
 }
 
 void CodeGenerator::initDebugInfo(const std::string& filename) {

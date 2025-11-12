@@ -24,6 +24,12 @@ public class FragmentTests {
 		return [.. Directory.EnumerateFiles(docFragmentsPath, "*.test").Select(f => Path.GetFileName(f))];
 	}
 
+	// Check for UPDATE_FRAGMENTS environment variable
+	private static bool ShouldUpdateFragments() {
+		var envVar = Environment.GetEnvironmentVariable("UPDATE_FRAGMENTS");
+		return envVar == "1" || envVar?.ToLower() == "true";
+	}
+
 	[Test, TestCaseSource(nameof(DocFragments))]
 	public void DocFragmentTest(string fragmentFilename) {
 		TestFragment(fragmentFilename, docFragmentsPath, false, true);
@@ -39,11 +45,45 @@ public class FragmentTests {
 		TestFragment(fragmentFilename, debugFragmentsPath, true, false);
 	}
 
+	// Helper method to read multiline content (supports both ``` delimited and keyword-delimited formats)
+	private static string ReadMultilineContent(string[] lines, ref int i, string initialContent) {
+		var content = initialContent.Trim();
+		
+		if (content == "```") {
+			// Triple backtick delimited format
+			var contentLines = new List<string>();
+			for (var j = i + 1; j < lines.Length; j++) {
+				var nextLine = lines[j].TrimEnd('\r');
+				if (nextLine == "```") {
+					i = j; // Advance to the closing delimiter
+					break;
+				}
+				contentLines.Add(nextLine);
+			}
+			return string.Join("\n", contentLines).TrimEnd();
+		} else {
+			// Keyword-delimited or single-line format
+			var contentLines = new List<string> { content };
+			for (var j = i + 1; j < lines.Length; j++) {
+				var nextLine = lines[j].TrimEnd('\r');
+				if (nextLine.StartsWith("ExitCode: ") || 
+				    nextLine.StartsWith("ParserError: ") || 
+				    nextLine.StartsWith("MaxoncStdout: ") || 
+				    nextLine.StartsWith("MaxoncStderr: ") ||
+				    nextLine.StartsWith("Stdout: ") ||
+				    nextLine.StartsWith("Stderr: ")) {
+					break;
+				}
+				contentLines.Add(nextLine);
+				i = j; // Advance the outer loop counter
+			}
+			return string.Join("\n", contentLines).TrimEnd();
+		}
+	}
+
 	private static void TestFragment(string fragmentFilename, string path, bool debug, bool optimize) {
-		// for convenience, set this to true to update all the fragments
-		// this will compile the code and update the expected IR and results in the fragment file
-		// after doing this carefully inspect the changes and make sure they are correct
-		var updateInsteadOfTest = false;
+		// Check command line for update flag, otherwise auto-update when IR is empty
+		var updateInsteadOfTest = ShouldUpdateFragments();
 
 		var fragmentPath = Path.Combine(path, fragmentFilename);
 		var fragmentFile = File.OpenText(fragmentPath);
@@ -73,9 +113,10 @@ public class FragmentTests {
 		var expectedMaxoncStderr = "";
 		var expectedStdout = "";
 		var expectedStderr = "";
-		if (expectedIR == "") {
+		if (expectedIR == "" && !updateInsteadOfTest) {
+			// If there's no IR yet and we're not manually updating, enable auto-update
 			updateInsteadOfTest = true;
-		} else {
+		} else if (!updateInsteadOfTest) {
 			// Read the rest of the file after the IR section
 			var remainingContent = fragmentFile.ReadToEnd();
 			var lines = remainingContent.Split('\n');
@@ -85,105 +126,15 @@ public class FragmentTests {
 				if (line.StartsWith("ExitCode: ")) {
 					expectedExitCode = int.Parse(line[10..]);
 				} else if (line.StartsWith("ParserError: ")) {
-					// For ParserError, collect all remaining lines as a single multi-line error
-					var errorLines = new List<string> {
-						line[13..] // First line after "ParserError: "
-					};
-					
-					// Continue reading lines until we hit another keyword or end of file
-					for (var j = i + 1; j < lines.Length; j++) {
-						var nextLine = lines[j].TrimEnd('\r');
-						if (nextLine.StartsWith("ExitCode: ") || 
-						    nextLine.StartsWith("ParserError: ") || 
-						    nextLine.StartsWith("MaxoncStdout: ") || 
-						    nextLine.StartsWith("MaxoncStderr: ")) {
-							break;
-						}
-						errorLines.Add(nextLine);
-						i = j; // Advance the outer loop counter
-					}
-					
-					expectedParserErrors.Add(string.Join("\n", errorLines).TrimEnd());
+					expectedParserErrors.Add(ReadMultilineContent(lines, ref i, line[13..]));
 				} else if (line.StartsWith("MaxoncStdout: ")) {
-					expectedMaxoncStdout = line[14..];
+					expectedMaxoncStdout = ReadMultilineContent(lines, ref i, line[14..]);
 				} else if (line.StartsWith("MaxoncStderr: ")) {
-					expectedMaxoncStderr = line[14..];
+					expectedMaxoncStderr = ReadMultilineContent(lines, ref i, line[14..]);
 				} else if (line.StartsWith("Stdout: ")) {
-					var content = line[8..].Trim();
-					if (content == "```") {
-						// Multi-line stdout with triple backtick delimiters
-						var stdoutLines = new List<string>();
-						
-						// Continue reading lines until we hit the closing delimiter
-						for (var j = i + 1; j < lines.Length; j++) {
-							var nextLine = lines[j].TrimEnd('\r');
-							if (nextLine == "```") {
-								i = j; // Advance to the closing delimiter
-								break;
-							}
-							stdoutLines.Add(nextLine);
-						}
-						
-						expectedStdout = string.Join("\n", stdoutLines).TrimEnd();
-					} else {
-						// Single-line or old-style multi-line format
-						var stdoutLines = new List<string> { content };
-						
-						// Continue reading lines until we hit another keyword or end of file
-						for (var j = i + 1; j < lines.Length; j++) {
-							var nextLine = lines[j].TrimEnd('\r');
-							if (nextLine.StartsWith("ExitCode: ") || 
-							    nextLine.StartsWith("ParserError: ") || 
-							    nextLine.StartsWith("MaxoncStdout: ") || 
-							    nextLine.StartsWith("MaxoncStderr: ") ||
-							    nextLine.StartsWith("Stdout: ") ||
-							    nextLine.StartsWith("Stderr: ")) {
-								break;
-							}
-							stdoutLines.Add(nextLine);
-							i = j; // Advance the outer loop counter
-						}
-						
-						expectedStdout = string.Join("\n", stdoutLines).TrimEnd();
-					}
+					expectedStdout = ReadMultilineContent(lines, ref i, line[8..]);
 				} else if (line.StartsWith("Stderr: ")) {
-					var content = line[8..].Trim();
-					if (content == "```") {
-						// Multi-line stderr with triple backtick delimiters
-						var stderrLines = new List<string>();
-						
-						// Continue reading lines until we hit the closing delimiter
-						for (var j = i + 1; j < lines.Length; j++) {
-							var nextLine = lines[j].TrimEnd('\r');
-							if (nextLine == "```") {
-								i = j; // Advance to the closing delimiter
-								break;
-							}
-							stderrLines.Add(nextLine);
-						}
-						
-						expectedStderr = string.Join("\n", stderrLines).TrimEnd();
-					} else {
-						// Single-line or old-style multi-line format
-						var stderrLines = new List<string> { content };
-						
-						// Continue reading lines until we hit another keyword or end of file
-						for (var j = i + 1; j < lines.Length; j++) {
-							var nextLine = lines[j].TrimEnd('\r');
-							if (nextLine.StartsWith("ExitCode: ") || 
-							    nextLine.StartsWith("ParserError: ") || 
-							    nextLine.StartsWith("MaxoncStdout: ") || 
-							    nextLine.StartsWith("MaxoncStderr: ") ||
-							    nextLine.StartsWith("Stdout: ") ||
-							    nextLine.StartsWith("Stderr: ")) {
-								break;
-							}
-							stderrLines.Add(nextLine);
-							i = j; // Advance the outer loop counter
-						}
-						
-						expectedStderr = string.Join("\n", stderrLines).TrimEnd();
-					}
+					expectedStderr = ReadMultilineContent(lines, ref i, line[8..]);
 				}
 			}
 		}
@@ -275,10 +226,11 @@ public class FragmentTests {
 			}
 		} else {
 			// Capture the complete stderr output as the error message
-			if (!string.IsNullOrEmpty(maxoncStderr)) {
+			// But only if MaxoncStderr is not explicitly specified in the test
+			if (!string.IsNullOrEmpty(maxoncStderr) && expectedMaxoncStderr == "") {
 				// Normalize line endings to \n and trim
 				parserErrors.Add(maxoncStderr.Replace("\r\n", "\n").Trim());
-			} else if (maxonc.ExitCode != 0) {
+			} else if (maxonc.ExitCode != 0 && expectedMaxoncStderr == "") {
 				parserErrors.Add($"maxonc failed with exit code {maxonc.ExitCode}");
 			}
 		}
@@ -290,16 +242,21 @@ public class FragmentTests {
 			if (expectedExitCode != -1) {
 				Assert.That(processExitCode, Is.EqualTo(expectedExitCode));
 			}
+			// Check parser errors count first
+			Assert.That(parserErrors, Has.Count.EqualTo(expectedParserErrors.Count));
+			// Then check individual error messages
 			for (var i = 0; i < expectedParserErrors.Count; i++) {
 				Assert.That(parserErrors[i], Is.EqualTo(expectedParserErrors[i]));
 			}
-			Assert.That(parserErrors, Has.Count.EqualTo(expectedParserErrors.Count));
 			// Only check stdout/stderr if they were explicitly specified in the test
 			if (expectedMaxoncStdout != "") {
 				Assert.That(maxoncStdout, Is.EqualTo(expectedMaxoncStdout));
 			}
 			if (expectedMaxoncStderr != "") {
-				Assert.That(maxoncStderr, Is.EqualTo(expectedMaxoncStderr));
+				// Normalize line endings for comparison
+				var normalizedMaxoncStderr = maxoncStderr.Replace("\r\n", "\n").TrimEnd();
+				var normalizedExpectedStderr = expectedMaxoncStderr.Replace("\r\n", "\n").TrimEnd();
+				Assert.That(normalizedMaxoncStderr, Is.EqualTo(normalizedExpectedStderr));
 			}
 			if (expectedStdout != "") {
 				Assert.That(stdout, Is.EqualTo(expectedStdout), "Test executable stdout does not match expected");
@@ -326,13 +283,29 @@ public class FragmentTests {
 			File.AppendAllText(fragmentPath, "\nExitCode: " + expectedExitCode);
 		}
 		foreach (var error in parserErrors) {
-			File.AppendAllText(fragmentPath, "\nParserError: " + error);
+			// Use triple backticks for multi-line ParserError
+			if (error.Contains('\n')) {
+				File.AppendAllText(fragmentPath, "\nParserError: ```\n" + error + "\n```");
+			} else {
+				File.AppendAllText(fragmentPath, "\nParserError: " + error);
+			}
 		}
 		if (maxoncStdout != "") {
-			File.AppendAllText(fragmentPath, "\nMaxoncStdout: " + maxoncStdout);
+			// Use triple backticks for multi-line MaxoncStdout
+			if (maxoncStdout.Contains('\n')) {
+				File.AppendAllText(fragmentPath, "\nMaxoncStdout: ```\n" + maxoncStdout + "\n```");
+			} else {
+				File.AppendAllText(fragmentPath, "\nMaxoncStdout: " + maxoncStdout);
+			}
 		}
 		if (maxoncStderr != "") {
-			File.AppendAllText(fragmentPath, "\nMaxoncStderr: " + maxoncStderr);
+			// Use triple backticks for multi-line MaxoncStderr
+			var trimmedStderr = maxoncStderr.Trim();
+			if (trimmedStderr.Contains('\n')) {
+				File.AppendAllText(fragmentPath, "\nMaxoncStderr: ```\n" + trimmedStderr + "\n```");
+			} else {
+				File.AppendAllText(fragmentPath, "\nMaxoncStderr: " + trimmedStderr);
+			}
 		}
 		if (stdout != "") {
 			// Use triple backticks for multi-line stdout

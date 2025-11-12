@@ -37,6 +37,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
         std::cerr << "  -O             Enable optimizations" << std::endl;
         std::cerr << "  --debug, -g    Generate debug information" << std::endl;
+        std::cerr << "  --verbose, -v  Show compilation progress messages" << std::endl;
         return 1;
     }
     
@@ -46,6 +47,7 @@ int main(int argc, char* argv[]) {
     bool compileOnly = false;
     bool optimize = false;
     bool debugInfo = false;
+    bool verbose = false;
     
     // Parse command line arguments
     for (int i = 2; i < argc; i++) {
@@ -58,6 +60,8 @@ int main(int argc, char* argv[]) {
             optimize = true;
         } else if (arg == "--debug" || arg == "-g") {
             debugInfo = true;
+        } else if (arg == "--verbose" || arg == "-v") {
+            verbose = true;
         } else if (arg == "-o" && i + 1 < argc) {
             outputFile = argv[++i];
         }
@@ -66,17 +70,23 @@ int main(int argc, char* argv[]) {
     try {
         // Read source file
         std::string source = readFile(inputFile);
-        std::cout << "Compiling " << inputFile << "..." << std::endl;
+        if (verbose) {
+            std::cout << "Compiling " << inputFile << "..." << std::endl;
+        }
         
         // Lexical analysis
         Lexer lexer(source);
         std::vector<Token> tokens = lexer.tokenize();
-        std::cout << "Lexical analysis complete. Generated " << tokens.size() << " tokens." << std::endl;
+        if (verbose) {
+            std::cout << "Lexical analysis complete. Generated " << tokens.size() << " tokens." << std::endl;
+        }
         
         // Parsing
         Parser parser(tokens);
         std::unique_ptr<ProgramAST> program = parser.parse();
-        std::cout << "Parsing complete." << std::endl;
+        if (verbose) {
+            std::cout << "Parsing complete." << std::endl;
+        }
         
         // Semantic analysis
         SemanticAnalyzer analyzer;
@@ -99,17 +109,23 @@ int main(int argc, char* argv[]) {
             }
             return 1;
         }
-        std::cout << "Semantic analysis complete." << std::endl;
+        if (verbose) {
+            std::cout << "Semantic analysis complete." << std::endl;
+        }
         
         // Code generation
-        CodeGenerator codegen(inputFile, debugInfo);
+        CodeGenerator codegen(inputFile, debugInfo, verbose);
         codegen.generate(program.get());
-        std::cout << "Code generation complete." << std::endl;
+        if (verbose) {
+            std::cout << "Code generation complete." << std::endl;
+        }
         
         // Run optimization passes if requested
         if (optimize) {
             codegen.optimize();
-            std::cout << "Optimization complete." << std::endl;
+            if (verbose) {
+                std::cout << "Optimization complete." << std::endl;
+            }
         }
         
         // Determine executable output filename
@@ -120,7 +136,9 @@ int main(int argc, char* argv[]) {
             // Write LLVM IR to file if -o specified, otherwise print to stdout
             if (outputFile != "output.exe") {
                 codegen.writeIRToFile(outputFile);
-                std::cout << "\nLLVM IR written to: " << outputFile << std::endl;
+                if (verbose) {
+                    std::cout << "\nLLVM IR written to: " << outputFile << std::endl;
+                }
                 
                 // When emitting LLVM IR to a file, also generate executable with .exe extension
                 // Remove any existing extension and add .exe
@@ -139,13 +157,17 @@ int main(int argc, char* argv[]) {
         if (compileOnly) {
             // Just compile to object file
             codegen.writeObjectFile(outputFile);
-            std::cout << "\nCompilation successful!" << std::endl;
-            std::cout << "Output: " << outputFile << std::endl;
+            if (verbose) {
+                std::cout << "\nCompilation successful!" << std::endl;
+                std::cout << "Output: " << outputFile << std::endl;
+            }
         } else {
             // Compile and link to executable using LLVM's linker
             codegen.writeExecutable(exeOutputFile);
-            std::cout << "\nCompilation and linking successful!" << std::endl;
-            std::cout << "Executable: " << exeOutputFile << std::endl;
+            if (verbose) {
+                std::cout << "\nCompilation and linking successful!" << std::endl;
+                std::cout << "Executable: " << exeOutputFile << std::endl;
+            }
         }
         
     } catch (const std::exception& e) {

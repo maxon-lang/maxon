@@ -9,6 +9,32 @@ function main() int
 	return x
 end 'main'
 ---
-N/A
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+define i32 @main() {
+entry:
+  br label %whilecond
+
+whilecond:                                        ; preds = %whilecond, %entry
+  %x.0 = phi i32 [ 5, %entry ], [ %addtmp, %whilecond ]
+  %i.0 = phi i32 [ 3, %entry ], [ %subtmp, %whilecond ]
+  %addtmp = add i32 %x.0, 2
+  %subtmp = add i32 %i.0, -1
+  %cmptmp = icmp eq i32 %subtmp, 0
+  br i1 %cmptmp, label %afterloop, label %whilecond
+
+afterloop:                                        ; preds = %whilecond
+  ret i32 %addtmp
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
 ---
 ExitCode: 11

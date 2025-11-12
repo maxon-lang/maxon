@@ -19,6 +19,7 @@ private:
     
     // Debug information
     bool generateDebugInfo;
+    bool verbose;
     std::unique_ptr<llvm::DIBuilder> debugBuilder;
     llvm::DICompileUnit* debugCompileUnit;
     llvm::DIFile* debugFile;
@@ -52,7 +53,7 @@ private:
     void createMinimalEntryPoint();
     
 public:
-    CodeGenerator(const std::string& moduleName, bool debugInfo = false);
+    CodeGenerator(const std::string& moduleName, bool debugInfo = false, bool verbose = false);
     void generate(ProgramAST* program);
     void optimize();
     void printIR();

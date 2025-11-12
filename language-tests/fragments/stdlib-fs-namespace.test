@@ -1,4 +1,4 @@
-﻿extern function GetStdHandle(nStdHandle int) ptr
+extern function GetStdHandle(nStdHandle int) ptr
 extern function WriteFile(hFile ptr, lpBuffer ptr, nNumberOfBytesToWrite int, lpNumberOfBytesWritten ptr, lpOverlapped ptr) int
 
 namespace sys 'sys'
@@ -74,8 +74,15 @@ entry:
   %common.ret.op = select i1 %cmptmp, i32 0, i32 %bytesWritten7
   ret i32 %common.ret.op
 }
----
-Output:
-Output!
 
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
+---
 ExitCode: 0
+Stdout: Output!
