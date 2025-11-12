@@ -7,11 +7,8 @@ import { State } from 'vscode-languageclient';
 
 suite('Qualified Name Completion Tests', () => {
     let document: vscode.TextDocument;
-    const testTimeout = 5000;
 
     suiteSetup(async function() {
-        this.timeout(testTimeout);
-        
         // Ensure extension is activated
         const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
         if (ext && !ext.isActive) {
@@ -24,19 +21,16 @@ suite('Qualified Name Completion Tests', () => {
         if (client) {
             let attempts = 0;
             while (client.state !== State.Running && attempts < 50) {
-                await new Promise(resolve => setTimeout(resolve, 200));
+                await new Promise(resolve => setTimeout(resolve, 100));
                 attempts++;
             }
             console.log(`LSP client state: ${State[client.state]} after ${attempts * 200}ms`);
-        } else {
-            console.log('WARNING: Could not get LSP client reference');
-            await new Promise(resolve => setTimeout(resolve, 10000));
+		} else {
+			throw new Error('LSP client not found');
         }
     });
 
     setup(async function() {
-        this.timeout(testTimeout);
-        
         // Create a temporary test file
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         assert.ok(workspaceFolder, 'Workspace folder should be available');
@@ -69,8 +63,6 @@ suite('Qualified Name Completion Tests', () => {
     });
 
     test('Should suggest "stdlib" when typing "std"', async function() {
-        this.timeout(testTimeout);
-        
         // Edit document to contain "std"
         const editor = vscode.window.activeTextEditor;
         assert.ok(editor, 'Editor should be active');
@@ -107,8 +99,6 @@ suite('Qualified Name Completion Tests', () => {
     });
 
     test('Should suggest "fmt", "fs", "sys" after "stdlib."', async function() {
-        this.timeout(testTimeout);
-        
         const editor = vscode.window.activeTextEditor;
         assert.ok(editor, 'Editor should be active');
         
@@ -145,8 +135,6 @@ suite('Qualified Name Completion Tests', () => {
     });
 
     test('Should suggest modules after "stdlib.fmt."', async function() {
-        this.timeout(testTimeout);
-        
         const editor = vscode.window.activeTextEditor;
         assert.ok(editor, 'Editor should be active');
         
@@ -182,8 +170,6 @@ suite('Qualified Name Completion Tests', () => {
     });
 
     test('Should suggest functions after "stdlib.fmt.integer."', async function() {
-        this.timeout(testTimeout);
-        
         const editor = vscode.window.activeTextEditor;
         assert.ok(editor, 'Editor should be active');
         
@@ -219,8 +205,6 @@ suite('Qualified Name Completion Tests', () => {
     });
 
     test('Should provide function details in qualified name completion', async function() {
-        this.timeout(testTimeout);
-        
         const editor = vscode.window.activeTextEditor;
         assert.ok(editor, 'Editor should be active');
         
@@ -274,8 +258,6 @@ suite('Qualified Name Completion Tests', () => {
     });
 
     test('Should handle multiline context for qualified names', async function() {
-        this.timeout(testTimeout);
-        
         const editor = vscode.window.activeTextEditor;
         assert.ok(editor, 'Editor should be active');
         

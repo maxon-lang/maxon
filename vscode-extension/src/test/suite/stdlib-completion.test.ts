@@ -7,11 +7,8 @@ import { State } from 'vscode-languageclient';
 
 suite('Stdlib Completion Tests', () => {
     let document: vscode.TextDocument;
-    const testTimeout = 5000;
 
     suiteSetup(async function() {
-        this.timeout(testTimeout);
-        
         // Ensure extension is activated
         const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
         if (ext && !ext.isActive) {
@@ -24,20 +21,16 @@ suite('Stdlib Completion Tests', () => {
         if (client) {
             let attempts = 0;
             while (client.state !== State.Running && attempts < 50) {
-                await new Promise(resolve => setTimeout(resolve, 200));
+                await new Promise(resolve => setTimeout(resolve, 100));
                 attempts++;
             }
-            console.log(`LSP client state: ${State[client.state]} after ${attempts * 200}ms`);
-        } else {
-            console.log('WARNING: Could not get LSP client reference');
-            // Fallback to time-based wait
-            await new Promise(resolve => setTimeout(resolve, 10000));
+            console.log(`LSP client state: ${State[client.state]} after ${attempts * 100}ms`);
+		} else {
+			throw new Error('LSP client not available');
         }
     });
 
     setup(async function() {
-        this.timeout(testTimeout);
-        
         // Create a temporary test file
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         assert.ok(workspaceFolder, 'Workspace folder should be available');
@@ -71,8 +64,6 @@ suite('Stdlib Completion Tests', () => {
     });
 
     test('Should provide stdlib function completions (if LSP server running)', async function() {
-        this.timeout(testTimeout);
-        
         const position = new vscode.Position(1, 4); // Inside function body
         
         // Request completions
@@ -98,8 +89,6 @@ suite('Stdlib Completion Tests', () => {
     });
 
     test('Stdlib function completion should have correct kind', async function() {
-        this.timeout(testTimeout);
-        
         const position = new vscode.Position(1, 4);
         const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
             'vscode.executeCompletionItemProvider',
@@ -120,8 +109,6 @@ suite('Stdlib Completion Tests', () => {
     });
 
     test('Stdlib function completion should have detail with signature', async function() {
-        this.timeout(testTimeout);
-        
         const position = new vscode.Position(1, 4);
         const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
             'vscode.executeCompletionItemProvider',
@@ -144,8 +131,6 @@ suite('Stdlib Completion Tests', () => {
     });
 
     test('Stdlib function completion should have documentation', async function() {
-        this.timeout(testTimeout);
-        
         const position = new vscode.Position(1, 4);
         const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
             'vscode.executeCompletionItemProvider',
@@ -162,16 +147,11 @@ suite('Stdlib Completion Tests', () => {
     });
 
     test('Should provide hover information for stdlib functions', async function() {
-        this.timeout(testTimeout);
-        
         // Add stdlib function call to document
         const edit = new vscode.WorkspaceEdit();
         edit.insert(document.uri, new vscode.Position(1, 4), 'format_int_array');
         await vscode.workspace.applyEdit(edit);
         await document.save();
-        
-        // Wait for LSP to process
-        await new Promise(resolve => setTimeout(resolve, 500));
         
         const position = new vscode.Position(1, 10); // Middle of "format_int_array"
         
@@ -198,8 +178,6 @@ suite('Stdlib Completion Tests', () => {
     });
 
     test('Should include keyword completions alongside stdlib', async function() {
-        this.timeout(testTimeout);
-        
         const position = new vscode.Position(1, 4);
         const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
             'vscode.executeCompletionItemProvider',
@@ -220,8 +198,6 @@ suite('Stdlib Completion Tests', () => {
     });
 
     test('Should provide completions in different positions', async function() {
-        this.timeout(testTimeout);
-        
         // Test at beginning of line
         const pos1 = new vscode.Position(1, 0);
         const completions1 = await vscode.commands.executeCommand<vscode.CompletionList>(
@@ -246,8 +222,6 @@ suite('Stdlib Completion Tests', () => {
 
 suite('Stdlib Error Handling Tests', () => {
     test('Should handle missing stdlib directory gracefully', async function() {
-        this.timeout(10000);
-        
         // Even if stdlib is not found, extension should work
         const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
         assert.ok(ext, 'Extension should load');

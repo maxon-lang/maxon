@@ -16,9 +16,6 @@ suite('Code Action Test Suite', () => {
         if (ext && !ext.isActive) {
             await ext.activate();
         }
-        
-        // Give the language server time to start
-        await new Promise(resolve => setTimeout(resolve, 2000));
     });
 
     teardown(async () => {
@@ -32,8 +29,6 @@ suite('Code Action Test Suite', () => {
     });
 
     test('Should provide code actions for unused variable warning', async function() {
-        this.timeout(10000); // Increase timeout for LSP communication
-        
         // Create a test document with an unused variable
         const testContent = [
             "function test() int",
@@ -58,8 +53,6 @@ suite('Code Action Test Suite', () => {
         testDocument = await vscode.workspace.openTextDocument(testUri);
         testEditor = await vscode.window.showTextDocument(testDocument);
         
-        // Wait for diagnostics to be published
-        await new Promise(resolve => setTimeout(resolve, 2000));
         
         // Get diagnostics for the document
         const diagnostics = vscode.languages.getDiagnostics(testUri);
@@ -93,8 +86,6 @@ suite('Code Action Test Suite', () => {
     });
 
     test('Code action should have correct structure', async function() {
-        this.timeout(10000);
-        
         const testContent = [
             "function test() int",
             "    var myUnused = 123",
@@ -115,8 +106,6 @@ suite('Code Action Test Suite', () => {
         
         testDocument = await vscode.workspace.openTextDocument(testUri);
         testEditor = await vscode.window.showTextDocument(testDocument);
-        
-        await new Promise(resolve => setTimeout(resolve, 2000));
         
         const diagnostics = vscode.languages.getDiagnostics(testUri);
         const unusedVarDiagnostic = diagnostics.find(d => 
@@ -152,8 +141,6 @@ suite('Code Action Test Suite', () => {
     });
 
     test('Should not provide code actions for errors', async function() {
-        this.timeout(10000);
-        
         // Create a document with a parse error
         const testContent = [
             "function test() int",
@@ -174,8 +161,6 @@ suite('Code Action Test Suite', () => {
         
         testDocument = await vscode.workspace.openTextDocument(testUri);
         testEditor = await vscode.window.showTextDocument(testDocument);
-        
-        await new Promise(resolve => setTimeout(resolve, 2000));
         
         const diagnostics = vscode.languages.getDiagnostics(testUri);
         const errorDiagnostic = diagnostics.find(d => 
@@ -200,8 +185,6 @@ suite('Code Action Test Suite', () => {
     });
 
     test('Code action should remove entire line', async function() {
-        this.timeout(10000);
-        
         const testContent = [
             "function test() int",
             "    var toRemove = 99",
@@ -223,8 +206,6 @@ suite('Code Action Test Suite', () => {
         
         testDocument = await vscode.workspace.openTextDocument(testUri);
         testEditor = await vscode.window.showTextDocument(testDocument);
-        
-        await new Promise(resolve => setTimeout(resolve, 2000));
         
         const diagnostics = vscode.languages.getDiagnostics(testUri);
         const unusedVarDiagnostic = diagnostics.find(d => 
@@ -257,8 +238,6 @@ suite('Code Action Test Suite', () => {
     });
 
     test('Diagnostic should include code field', async function() {
-        this.timeout(10000);
-        
         const testContent = [
             "function test() int",
             "    var unused = 1",
@@ -279,8 +258,6 @@ suite('Code Action Test Suite', () => {
         
         testDocument = await vscode.workspace.openTextDocument(testUri);
         testEditor = await vscode.window.showTextDocument(testDocument);
-        
-        await new Promise(resolve => setTimeout(resolve, 2000));
         
         const diagnostics = vscode.languages.getDiagnostics(testUri);
         const unusedVarDiagnostic = diagnostics.find(d => 
@@ -305,8 +282,6 @@ suite('Code Action Test Suite', () => {
     });
 
     test('Multiple unused variables should each have quick fixes', async function() {
-        this.timeout(10000);
-        
         const testContent = [
             "function test() int",
             "    var unused1 = 1",
@@ -329,8 +304,6 @@ suite('Code Action Test Suite', () => {
         
         testDocument = await vscode.workspace.openTextDocument(testUri);
         testEditor = await vscode.window.showTextDocument(testDocument);
-        
-        await new Promise(resolve => setTimeout(resolve, 2000));
         
         const diagnostics = vscode.languages.getDiagnostics(testUri);
         const unusedVarDiagnostics = diagnostics.filter(d => 
