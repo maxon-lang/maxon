@@ -54,11 +54,11 @@ set(SOURCES
 )
 
 # Create executable
-add_executable(maxonc ${SOURCES})
+add_executable(maxon ${SOURCES})
 
 # Use precompiled headers for faster compilation
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
-    target_precompile_headers(maxonc PRIVATE pch.h)
+    target_precompile_headers(maxon PRIVATE pch.h)
 endif()
 
 # Link LLVM libraries
@@ -95,22 +95,22 @@ set(lld_libs lldCOFF lldCommon)
 
 # Add LLD include directory
 set(LLD_INCLUDE_DIR "C:/Users/Eric/Dev/llvm-project/lld/include")
-target_include_directories(maxonc SYSTEM PRIVATE ${LLD_INCLUDE_DIR})
+target_include_directories(maxon SYSTEM PRIVATE ${LLD_INCLUDE_DIR})
 
-target_link_libraries(maxonc ${llvm_libs} ${lld_libs})
+target_link_libraries(maxon ${llvm_libs} ${lld_libs})
 
 # Set output directory
-set_target_properties(maxonc PROPERTIES
+set_target_properties(maxon PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
 # Copy to project root bin directory for easier access and stdlib resolution
-add_custom_command(TARGET maxonc POST_BUILD
+add_custom_command(TARGET maxon POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:maxonc>
-        ${CMAKE_SOURCE_DIR}/bin/$<TARGET_FILE_NAME:maxonc>
-    COMMENT "Copying maxonc to project root bin directory"
+        $<TARGET_FILE:maxon>
+        ${CMAKE_SOURCE_DIR}/bin/$<TARGET_FILE_NAME:maxon>
+    COMMENT "Copying maxon to project root bin directory"
 )
 
 # Installation
-install(TARGETS maxonc DESTINATION bin)
+install(TARGETS maxon DESTINATION bin)

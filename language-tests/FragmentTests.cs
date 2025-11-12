@@ -152,21 +152,21 @@ public class FragmentTests {
 			// The compiler writes IR to this file
 			var llFilename = Path.Combine(tempDir, "test.ll");
 
-		// Call maxonc.exe to compile the source
-		var maxoncPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "build", "bin", "maxonc.exe"));
-			var maxonc = new Process();
-			maxonc.StartInfo.FileName = maxoncPath;
+		// Call maxon.exe to compile the source
+		var maxonPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "build", "bin", "maxon.exe"));
+			var maxon = new Process();
+			maxon.StartInfo.FileName = maxonPath;
 			var optimizeFlag = optimize ? " -O" : "";
 			var debugFlag = debug ? " --debug" : "";
-			maxonc.StartInfo.Arguments = $"test.maxon --emit-llvm -o test.ll{optimizeFlag}{debugFlag}";
-			maxonc.StartInfo.WorkingDirectory = tempDir;
-			maxonc.StartInfo.RedirectStandardOutput = true;
-			maxonc.StartInfo.RedirectStandardError = true;
-			maxonc.StartInfo.UseShellExecute = false;
-			maxonc.Start();
-			var maxoncStdout = maxonc.StandardOutput.ReadToEnd();
-			var maxoncStderr = maxonc.StandardError.ReadToEnd();
-			maxonc.WaitForExit();
+			maxon.StartInfo.Arguments = $"compile test.maxon --emit-llvm -o test.ll{optimizeFlag}{debugFlag}";
+			maxon.StartInfo.WorkingDirectory = tempDir;
+			maxon.StartInfo.RedirectStandardOutput = true;
+			maxon.StartInfo.RedirectStandardError = true;
+			maxon.StartInfo.UseShellExecute = false;
+			maxon.Start();
+			var maxonStdout = maxon.StandardOutput.ReadToEnd();
+			var maxonStderr = maxon.StandardError.ReadToEnd();
+			maxon.WaitForExit();
 
 		var llSource = "N/A";
 		var processExitCode = -1;
@@ -175,13 +175,13 @@ public class FragmentTests {
 		var stderr = "";
 
 		// Check if compilation succeeded and .ll file was created
-		if (maxonc.ExitCode == 0 && File.Exists(llFilename)) {
+		if (maxon.ExitCode == 0 && File.Exists(llFilename)) {
 			llSource = File.ReadAllText(llFilename).Trim();
 			
 			// Check the IR if not updating
 			if (!updateInsteadOfTest && expectedIR != "N/A") {
 				Assert.That(llSource, Is.EqualTo(expectedIR), "Generated LLVM IR does not match expected IR");
-			}				// maxonc also generates an executable when --emit-llvm is used with -o
+			}				// maxon also generates an executable when --emit-llvm is used with -o
 				var exeFilename = Path.Combine(tempDir, "test.exe");
 			
 			// Run the executable if it was generated
@@ -222,21 +222,21 @@ public class FragmentTests {
 					parserErrors.Add("Test executable timed out (100ms)");
 				}
 			} else {
-				parserErrors.Add("Executable not created by maxonc");
+				parserErrors.Add("Executable not created by maxon");
 			}
 		} else {
 			// Capture the complete stderr output as the error message
 			// But only if MaxoncStderr is not explicitly specified in the test
-			if (!string.IsNullOrEmpty(maxoncStderr) && expectedMaxoncStderr == "") {
+			if (!string.IsNullOrEmpty(maxonStderr) && expectedMaxoncStderr == "") {
 				// Normalize line endings to \n and trim
-				parserErrors.Add(maxoncStderr.Replace("\r\n", "\n").Trim());
-			} else if (maxonc.ExitCode != 0 && expectedMaxoncStderr == "") {
-				parserErrors.Add($"maxonc failed with exit code {maxonc.ExitCode}");
+				parserErrors.Add(maxonStderr.Replace("\r\n", "\n").Trim());
+			} else if (maxon.ExitCode != 0 && expectedMaxoncStderr == "") {
+				parserErrors.Add($"maxon failed with exit code {maxon.ExitCode}");
 			}
 		}
 
 		if (updateInsteadOfTest) {
-			UpdateFragment(fragmentPath, source, llSource, processExitCode, parserErrors, maxoncStdout, maxoncStderr, stdout, stderr);
+			UpdateFragment(fragmentPath, source, llSource, processExitCode, parserErrors, maxonStdout, maxonStderr, stdout, stderr);
 			Assert.Fail("Updated fragment file, please inspect the changes and make sure they are correct.");
 		} else {
 			if (expectedExitCode != -1) {
@@ -250,13 +250,13 @@ public class FragmentTests {
 			}
 			// Only check stdout/stderr if they were explicitly specified in the test
 			if (expectedMaxoncStdout != "") {
-				Assert.That(maxoncStdout, Is.EqualTo(expectedMaxoncStdout));
+				Assert.That(maxonStdout, Is.EqualTo(expectedMaxoncStdout));
 			}
 			if (expectedMaxoncStderr != "") {
 				// Normalize line endings for comparison
-				var normalizedMaxoncStderr = maxoncStderr.Replace("\r\n", "\n").TrimEnd();
+				var normalizedMaxonStderr = maxonStderr.Replace("\r\n", "\n").TrimEnd();
 				var normalizedExpectedStderr = expectedMaxoncStderr.Replace("\r\n", "\n").TrimEnd();
-				Assert.That(normalizedMaxoncStderr, Is.EqualTo(normalizedExpectedStderr));
+				Assert.That(normalizedMaxonStderr, Is.EqualTo(normalizedExpectedStderr));
 			}
 			if (expectedStdout != "") {
 				Assert.That(stdout, Is.EqualTo(expectedStdout), "Test executable stdout does not match expected");

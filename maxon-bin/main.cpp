@@ -198,14 +198,36 @@ std::string readFile(const std::string& filename) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <input.maxon> [<input2.maxon> ...] [options]" << std::endl;
-        std::cerr << "Options:" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <command> [options]" << std::endl;
+        std::cerr << "\nCommands:" << std::endl;
+        std::cerr << "  compile <input.maxon> [<input2.maxon> ...] [options]" << std::endl;
+        std::cerr << "                 Compile Maxon source files" << std::endl;
+        std::cerr << "\nOptions for compile:" << std::endl;
         std::cerr << "  --emit-llvm    Print LLVM IR to stdout" << std::endl;
         std::cerr << "  -o <output>    Specify output executable (default: output.exe)" << std::endl;
         std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
         std::cerr << "  -O             Enable optimizations" << std::endl;
         std::cerr << "  --debug, -g    Generate debug information" << std::endl;
         std::cerr << "  --verbose, -v  Show compilation progress messages" << std::endl;
+        return 1;
+    }
+    
+    std::string command = argv[1];
+    
+    // Check if the command is "compile"
+    if (command != "compile") {
+        std::cerr << "Error: Unknown command '" << command << "'" << std::endl;
+        std::cerr << "Available commands: compile" << std::endl;
+        return 1;
+    }
+    
+    // Shift arguments to skip the command
+    argc--;
+    argv++;
+    
+    if (argc < 1) {
+        std::cerr << "Error: No input files specified" << std::endl;
+        std::cerr << "Usage: maxon compile <input.maxon> [<input2.maxon> ...] [options]" << std::endl;
         return 1;
     }
     

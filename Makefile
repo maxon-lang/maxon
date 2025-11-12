@@ -40,14 +40,14 @@ configure:
 
 # Build the Maxon compiler
 compiler: configure
-	cmake --build $(BUILD_DIR) --target maxonc
+	cmake --build $(BUILD_DIR) --target maxon
 
 # Build both LSP server and extension
 lsp: lsp-server extension
 
 # Build the C++ LSP server
 lsp-server: configure
-	@powershell -Command "if (-not (Test-Path 'lsp\include\json.hpp')) { Write-Host 'Downloading nlohmann/json library...'; Invoke-WebRequest -Uri 'https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp' -OutFile 'lsp/include/json.hpp' }"
+	@powershell -Command "if (-not (Test-Path 'lsp-server\include\json.hpp')) { Write-Host 'Downloading nlohmann/json library...'; Invoke-WebRequest -Uri 'https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp' -OutFile 'lsp-server/include/json.hpp' }"
 	cmake --build $(BUILD_DIR) --target maxon-lsp
 
 # Build the VS Code extension (install + compile)
@@ -87,11 +87,11 @@ extension-install: extension-package
 # Build and run LSP C++ unit tests
 lsp-test:
 	@echo Configuring and building LSP tests...
-	@powershell -Command "if (!(Test-Path 'lsp\tests\build')) { New-Item -ItemType Directory -Path 'lsp\tests\build' | Out-Null }"
-	@powershell -Command "cd lsp\tests\build; cmake .. -G 'Ninja' -DCMAKE_BUILD_TYPE=Debug"
-	@powershell -Command "cd lsp\tests\build; cmake --build ."
+	@powershell -Command "if (!(Test-Path 'lsp-server\tests\build')) { New-Item -ItemType Directory -Path 'lsp-server\tests\build' | Out-Null }"
+	@powershell -Command "cd lsp-server\tests\build; cmake .. -G 'Ninja' -DCMAKE_BUILD_TYPE=Debug"
+	@powershell -Command "cd lsp-server\tests\build; cmake --build ."
 	@echo Running LSP tests...
-	@powershell -Command "cd lsp\tests\build; ctest --output-on-failure"
+	@powershell -Command "cd lsp-server\tests\build; ctest --output-on-failure"
 
 # Run Maxon language fragment tests
 language-tests: compiler
@@ -122,7 +122,7 @@ ifndef FILE
 	@exit 1
 endif
 	@echo Compiling examples/$(FILE).maxon...
-	@./build/bin/maxonc.exe examples/$(FILE).maxon -o examples/$(FILE).exe
+	@./build/bin/maxon.exe compile examples/$(FILE).maxon -o examples/$(FILE).exe
 	@echo === Running examples/$(FILE).exe ===
 	-@./examples/$(FILE).exe; echo Exit code: $$?
 	@echo === Test complete ===
@@ -134,5 +134,5 @@ clean:
 	@powershell -Command "if (Test-Path 'bin') { Remove-Item -Recurse -Force 'bin' }"
 	@powershell -Command "if (Test-Path 'vscode-extension/out') { Remove-Item -Recurse -Force 'vscode-extension/out' }"
 	@powershell -Command "if (Test-Path 'vscode-extension/node_modules') { Remove-Item -Recurse -Force 'vscode-extension/node_modules' }"
-	@powershell -Command "if (Test-Path 'lsp/tests/build') { Remove-Item -Recurse -Force 'lsp/tests/build' }"
+	@powershell -Command "if (Test-Path 'lsp-server/tests/build') { Remove-Item -Recurse -Force 'lsp-server/tests/build' }"
 	@echo Clean complete.

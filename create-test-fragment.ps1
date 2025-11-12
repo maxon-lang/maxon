@@ -93,7 +93,7 @@ if (-not (Test-Path $OutputDir)) {
 # Paths
 $tempSourceFile = "temp_fragment.maxon"
 $tempExeFile = "temp_fragment.exe"
-$compilerPath = ".\build\bin\maxonc.exe"
+$compilerPath = ".\build\bin\maxon.exe"
 $outputFragmentPath = Join-Path $OutputDir "$TestName.test"
 
 # Check if compiler exists
@@ -111,7 +111,7 @@ try {
     [System.IO.File]::WriteAllText($tempSourceFile, $SourceCode, $utf8NoBom)
     
     # Compile with appropriate flags
-    $compilerArgs = @($tempSourceFile, "--emit-llvm")
+    $compilerArgs = @("compile", $tempSourceFile, "--emit-llvm")
     if ($UseDebug) {
         $compilerArgs += "--debug"
     } else {

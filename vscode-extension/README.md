@@ -92,7 +92,7 @@ at your option.
 ## Notes and Troubleshooting
 - If the language server fails to start, check that the binary is built and the path in `src/extension.ts` is correct. The extension currently expects the binary to live at `../build/maxon-lsp.exe` relative to the extension path — adjust or copy as needed.
 - When packaging for non-Windows platforms, make sure the server binary does not have `.exe` and the extension's `src/extension.ts` points at the correct filename.
-- For LSP server issues, consult the top-level `lsp/` folder README and the server build instructions.
+- For LSP server issues, consult the top-level `lsp-server/` folder README and the server build instructions.
 
 ---
 If you need help with building or testing the extension, open an issue on the repository with your platform, VS Code version, and steps to reproduce the problem.

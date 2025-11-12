@@ -1,6 +1,6 @@
 BUILD_DIR = build
 BIN_DIR = $(BUILD_DIR)/bin
-COMPILER = $(BIN_DIR)/maxonc.exe
+COMPILER = $(BIN_DIR)/maxon.exe
 
 .PHONY: all
 all: build

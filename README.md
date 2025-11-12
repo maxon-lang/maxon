@@ -4,7 +4,7 @@ Maxon is a statically-typed programming language with LLVM backend, designed for
 
 ## Project Components
 
-- **Compiler (`maxonc`)**: C++ compiler with LLVM backend
+- **Compiler (`maxon`)**: C++ compiler with LLVM backend
 - **Language Server (LSP)**: C++ implementation for IDE integration
 - **VS Code Extension**: Syntax highlighting and language features
 
@@ -28,7 +28,7 @@ See the Makefile or `.github/copilot-instructions.md` for more commands.
 make all
 
 # Compile a Maxon program
-.\build\bin\maxonc.exe examples/hello-world.maxon
+.\build\bin\maxon.exe compile examples/hello-world.maxon
 
 # Run tests
 make language-tests

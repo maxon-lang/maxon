@@ -16,9 +16,9 @@ if(BUILD_COMPILER)
 endif()
 
 # Build the LSP server
-if(BUILD_LSP AND EXISTS "${CMAKE_SOURCE_DIR}/lsp/CMakeLists.txt")
+if(BUILD_LSP AND EXISTS "${CMAKE_SOURCE_DIR}/lsp-server/CMakeLists.txt")
     message(STATUS "Configuring Maxon LSP server...")
-    add_subdirectory(lsp)
+    add_subdirectory(lsp-server)
 endif()
 
 # Custom targets for convenience
@@ -26,13 +26,13 @@ add_custom_target(lsp-extension
     COMMAND ${CMAKE_COMMAND} -E echo "Building VS Code extension..."
     COMMAND npm install
     COMMAND npm run compile
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/lsp/vscode-extension
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/lsp-server/vscode-extension
     COMMENT "Building Maxon VS Code extension"
 )
 
 # Install targets
-if(TARGET maxonc)
-    install(TARGETS maxonc DESTINATION bin)
+if(TARGET maxon)
+    install(TARGETS maxon DESTINATION bin)
 endif()
 if(TARGET maxon-lsp)
     install(TARGETS maxon-lsp DESTINATION bin)
