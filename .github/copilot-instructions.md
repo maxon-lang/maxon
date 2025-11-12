@@ -15,7 +15,7 @@
 - **`/vscode-extension/`** - VS Code Extension (TypeScript, npm)
   - `extension.ts`, `syntaxes/maxon.tmLanguage.json`, `language-configuration.json`
 
-- **`/docs/`** - Documentation Generator (C#/.NET)
+- **`/docs/`** - Documentation Generator
   - `DocGen.cs` converts Markdown to HTML and extracts test fragments
   - Code blocks with `ExitCode:` → `language-tests/doc-fragments/*.test`
 

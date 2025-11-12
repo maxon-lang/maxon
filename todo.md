@@ -19,6 +19,9 @@ memory safety (arenas)
 vscode extention 
 	- checks (unneeded fully qualitied name) 
 	- quick fixes
+		- unneeded type declaration
+		- unneeded casts
+		
 	- highlight block identifiers differently than strings
 
 
