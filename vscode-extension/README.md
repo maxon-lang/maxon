@@ -80,18 +80,6 @@ Or use the repository's make target for extension tests:
 make extension-test
 ```
 
-## Contributing
-We welcome contributions! Typical workflows:
-
-1. Fork the repo, work on a feature branch.
-2. Implement grammar or language configuration changes in `syntaxes/` and `language-configuration.json`.
-3. Add or update TypeScript code in `src/` as needed (e.g., adjust startup options for the LSP client).
-4. Update `package.json` when you add new activation rules or contributions.
-5. Add tests under `src/test` and update the extension tests accordingly.
-6. Submit a pull request with a clear description and, when applicable, test coverage.
-
-If the change requires a new LSP feature (diagnostics, hover, completions), implement or update the server in the `lsp/` directory, then rebuild the server for local testing.
-
 ## License
 
 Licensed under either of:

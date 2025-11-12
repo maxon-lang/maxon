@@ -1,0 +1,88 @@
+; ModuleID = 'examples\test-stdlib-unqualified.maxon'
+source_filename = "examples\\test-stdlib-unqualified.maxon"
+
+define i32 @"examples::main"() {
+entry:
+  %buffer = alloca [12 x i8], align 1
+  %0 = call i32 @"stdlib::fmt::format_int_array"(i32 42, ptr nonnull %buffer)
+  ret i32 %0
+}
+
+define i32 @"stdlib::fmt::format_int_array"(i32 %0, ptr %1) {
+entry:
+  %temp = alloca [12 x i8], align 1
+  %cmptmp = icmp eq i32 %0, 0
+  br i1 %cmptmp, label %then, label %ifcont
+
+common.ret:                                       ; preds = %whilecond30, %then
+  %common.ret.op = phi i32 [ 1, %then ], [ %subtmp29, %whilecond30 ]
+  ret i32 %common.ret.op
+
+then:                                             ; preds = %entry
+  store i8 48, ptr %1, align 1
+  br label %common.ret
+
+ifcont:                                           ; preds = %entry
+  %cmptmp4 = icmp slt i32 %0, 0
+  %subtmp = sub i32 0, %0
+  %spec.select = select i1 %cmptmp4, i32 %subtmp, i32 %0
+  br label %whilecond
+
+whilecond:                                        ; preds = %loop, %ifcont
+  %abs_value.1 = phi i32 [ %spec.select, %ifcont ], [ %divtmp, %loop ]
+  %pos.0 = phi i32 [ 11, %ifcont ], [ %subtmp16, %loop ]
+  %cmptmp9 = icmp sgt i32 %abs_value.1, 0
+  br i1 %cmptmp9, label %loop, label %afterloop
+
+loop:                                             ; preds = %whilecond
+  %modtmp = urem i32 %abs_value.1, 10
+  %2 = trunc nuw nsw i32 %modtmp to i8
+  %trunctmp = or disjoint i8 %2, 48
+  %3 = sext i32 %pos.0 to i64
+  %arrayidx14 = getelementptr inbounds [12 x i8], ptr %temp, i64 0, i64 %3
+  store i8 %trunctmp, ptr %arrayidx14, align 1
+  %subtmp16 = add i32 %pos.0, -1
+  %divtmp = udiv i32 %abs_value.1, 10
+  br label %whilecond
+
+afterloop:                                        ; preds = %whilecond
+  br i1 %cmptmp4, label %then20, label %ifcont25
+
+then20:                                           ; preds = %afterloop
+  %4 = sext i32 %pos.0 to i64
+  %arrayidx22 = getelementptr inbounds [12 x i8], ptr %temp, i64 0, i64 %4
+  store i8 45, ptr %arrayidx22, align 1
+  %subtmp24 = add i32 %pos.0, -1
+  br label %ifcont25
+
+ifcont25:                                         ; preds = %then20, %afterloop
+  %pos.1 = phi i32 [ %subtmp24, %then20 ], [ %pos.0, %afterloop ]
+  %addtmp27 = add i32 %pos.1, 1
+  %subtmp29 = sub i32 11, %pos.1
+  br label %whilecond30
+
+whilecond30:                                      ; preds = %loop34, %ifcont25
+  %i.0 = phi i32 [ 0, %ifcont25 ], [ %addtmp43, %loop34 ]
+  %cmptmp33 = icmp slt i32 %i.0, %subtmp29
+  br i1 %cmptmp33, label %loop34, label %common.ret
+
+loop34:                                           ; preds = %whilecond30
+  %addtmp38 = add i32 %addtmp27, %i.0
+  %5 = sext i32 %addtmp38 to i64
+  %arrayidx39 = getelementptr inbounds [12 x i8], ptr %temp, i64 0, i64 %5
+  %arrayelem = load i8, ptr %arrayidx39, align 1
+  %6 = sext i32 %i.0 to i64
+  %arrayidx41 = getelementptr inbounds i8, ptr %1, i64 %6
+  store i8 %arrayelem, ptr %arrayidx41, align 1
+  %addtmp43 = add i32 %i.0, 1
+  br label %whilecond30
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @"examples::main"()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}

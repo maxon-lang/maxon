@@ -2,7 +2,11 @@
 #include <stdexcept>
 
 Parser::Parser(const std::vector<Token>& toks)
-    : tokens(toks), position(0) {}
+    : tokens(toks), position(0), defaultNamespace("") {}
+
+void Parser::setDefaultNamespace(const std::string& ns) {
+    defaultNamespace = ns;
+}
 
 Token& Parser::currentToken() {
     if (position >= tokens.size()) {
@@ -154,8 +158,9 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         int column = currentToken().column;
         advance();
         
-        // Check for namespace qualification (namespace.function)
-        if (check(TokenType::DOT)) {
+        // Check for namespace qualification (namespace.namespace.function)
+        // Support multiple levels: stdlib.fmt.function
+        while (check(TokenType::DOT)) {
             advance(); // consume '.'
             Token memberName = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
             name = name + "::" + memberName.value;
@@ -637,21 +642,48 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
         do {
             Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
             
-            // Accept int, ptr, or char as parameter type
+            // Check for array type: [size]type
             std::string paramType;
-            if (check(TokenType::INT)) {
-                paramType = "int";
-                advance();
-            } else if (check(TokenType::PTR)) {
-                paramType = "ptr";
-                advance();
-            } else if (check(TokenType::CHAR)) {
-                paramType = "char";
-                advance();
+            if (check(TokenType::LBRACKET)) {
+                advance(); // consume '['
+                Token sizeToken = expect(TokenType::NUMBER, "Expected array size");
+                expect(TokenType::RBRACKET, "Expected ']' after array size");
+                
+                // Get element type
+                std::string elementType;
+                if (check(TokenType::INT)) {
+                    elementType = "int";
+                    advance();
+                } else if (check(TokenType::PTR)) {
+                    elementType = "ptr";
+                    advance();
+                } else if (check(TokenType::CHAR)) {
+                    elementType = "char";
+                    advance();
+                } else {
+                    throw std::runtime_error("Expected array element type (int, ptr, or char)\n  Location: line " + 
+                                           std::to_string(currentToken().line) + ", column " + 
+                                           std::to_string(currentToken().column));
+                }
+                
+                // Encode as "[size]type" for now
+                paramType = "[" + sizeToken.value + "]" + elementType;
             } else {
-                throw std::runtime_error("Expected parameter type (int, ptr, or char)\n  Location: line " + 
-                                       std::to_string(currentToken().line) + ", column " + 
-                                       std::to_string(currentToken().column));
+                // Regular scalar type
+                if (check(TokenType::INT)) {
+                    paramType = "int";
+                    advance();
+                } else if (check(TokenType::PTR)) {
+                    paramType = "ptr";
+                    advance();
+                } else if (check(TokenType::CHAR)) {
+                    paramType = "char";
+                    advance();
+                } else {
+                    throw std::runtime_error("Expected parameter type (int, ptr, char, or [size]type)\n  Location: line " + 
+                                           std::to_string(currentToken().line) + ", column " + 
+                                           std::to_string(currentToken().column));
+                }
             }
             
             parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
@@ -672,7 +704,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
     // External functions don't have bodies
     if (isExtern) {
         // No body for extern functions - they're just declarations
-        return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column);
+        return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace);
     }
     
     // Parse function body
@@ -694,7 +726,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                                "\n  Note: The 'end' block identifier must match the function name");
     }
     
-    return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column);
+    return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace);
 }
 
 std::unique_ptr<NamespaceAST> Parser::parseNamespace() {

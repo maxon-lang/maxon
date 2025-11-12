@@ -35,8 +35,35 @@ static llvm::Type* getTypeFromString(llvm::LLVMContext& context, const std::stri
         return llvm::Type::getInt8Ty(context);
     } else if (typeStr == "void") {
         return llvm::Type::getVoidTy(context);
+    } else if (typeStr[0] == '[') {
+        // Array type: [size]elementType
+        // Parse the size and element type
+        size_t closeBracket = typeStr.find(']');
+        if (closeBracket == std::string::npos) {
+            throw std::runtime_error("Invalid array type syntax: " + typeStr);
+        }
+        
+        std::string sizeStr = typeStr.substr(1, closeBracket - 1);
+        std::string elementTypeStr = typeStr.substr(closeBracket + 1);
+        
+        int arraySize = std::stoi(sizeStr);
+        llvm::Type* elementType = getTypeFromString(context, elementTypeStr);
+        
+        return llvm::ArrayType::get(elementType, arraySize);
     } else {
         throw std::runtime_error("Unknown type: " + typeStr);
+    }
+}
+
+// Convert a type to the form used for function parameters
+// Arrays are passed as pointers
+static llvm::Type* getParamTypeFromString(llvm::LLVMContext& context, const std::string& typeStr) {
+    if (typeStr[0] == '[') {
+        // Array parameter - pass as pointer (opaque pointer for arrays)
+        return llvm::PointerType::get(context, 0);
+    } else {
+        // Regular parameter type
+        return getTypeFromString(context, typeStr);
     }
 }
 
@@ -432,22 +459,39 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
             throw std::runtime_error("Failed to generate array index");
         }
         
-        // Get element pointer: GEP array, 0, index
-        llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-        llvm::Value* elementPtr = builder.CreateInBoundsGEP(
-            alloca->getAllocatedType(),
-            alloca,
-            {zero, indexVal},
-            "arrayidx"
-        );
+        llvm::Type* allocatedType = alloca->getAllocatedType();
         
-        // Load the element
-        llvm::ArrayType* arrayType = llvm::dyn_cast<llvm::ArrayType>(alloca->getAllocatedType());
-        if (!arrayType) {
+        // Check if this is an array or a pointer (array parameter)
+        if (allocatedType->isPointerTy()) {
+            // This is a pointer to an array (parameter case)
+            // First load the pointer, then use GEP with one index
+            llvm::Value* arrayPtr = builder.CreateLoad(allocatedType, alloca, "arrayptr");
+            llvm::Value* elementPtr = builder.CreateInBoundsGEP(
+                llvm::Type::getInt8Ty(context),  // Element type for opaque pointer
+                arrayPtr,
+                indexVal,
+                "arrayidx"
+            );
+            // Load the element - assume i8 (char) for now
+            return builder.CreateLoad(llvm::Type::getInt8Ty(context), elementPtr, "arrayelem");
+        } else if (allocatedType->isArrayTy()) {
+            // This is a local array variable
+            // Get element pointer: GEP array, 0, index
+            llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+            llvm::Value* elementPtr = builder.CreateInBoundsGEP(
+                allocatedType,
+                alloca,
+                {zero, indexVal},
+                "arrayidx"
+            );
+            
+            // Load the element
+            llvm::ArrayType* arrayType = llvm::cast<llvm::ArrayType>(allocatedType);
+            llvm::Type* elementType = arrayType->getElementType();
+            return builder.CreateLoad(elementType, elementPtr, "arrayelem");
+        } else {
             throw std::runtime_error("Variable is not an array: " + arrayIndexExpr->arrayName);
         }
-        llvm::Type* elementType = arrayType->getElementType();
-        return builder.CreateLoad(elementType, elementPtr, "arrayelem");
     }
     
     if (auto* binExpr = dynamic_cast<BinaryExprAST*>(expr)) {
@@ -494,8 +538,38 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         
         // Look up the function in the module
         llvm::Function* calleeF = module->getFunction(callExpr->callee);
+        
+        // If not found, try unqualified lookup: search for any function ending with ::callee
         if (!calleeF) {
-            throw std::runtime_error("Unknown function referenced: " + callExpr->callee);
+            std::string searchSuffix = "::" + callExpr->callee;
+            std::vector<llvm::Function*> matches;
+            
+            for (auto& func : module->functions()) {
+                std::string funcName = func.getName().str();
+                if (funcName.size() > searchSuffix.size() &&
+                    funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
+                    matches.push_back(&func);
+                }
+            }
+            
+            if (matches.empty()) {
+                throw std::runtime_error("Unknown function referenced: " + callExpr->callee);
+            } else if (matches.size() > 1) {
+                // Ambiguous - list all matches
+                std::string errorMsg = "Ambiguous function reference: '" + callExpr->callee + "' could refer to:\n";
+                for (auto* f : matches) {
+                    errorMsg += "  - " + f->getName().str() + "\n";
+                }
+                errorMsg += "Use a qualified name to disambiguate.";
+                throw std::runtime_error(errorMsg);
+            }
+            
+            // Exactly one match - use it
+            calleeF = matches[0];
+            if (verbose) {
+                std::cout << "  Resolved unqualified call '" << callExpr->callee 
+                         << "' to '" << calleeF->getName().str() << "'" << std::endl;
+            }
         }
         
         // Check argument count
@@ -505,12 +579,40 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         
         // Generate code for arguments
         std::vector<llvm::Value*> argsV;
+        size_t argIdx = 0;
         for (auto& arg : callExpr->args) {
+            // Check if this parameter expects a pointer (array parameter)
+            llvm::Type* paramType = calleeF->getFunctionType()->getParamType(argIdx);
+            
+            // If the parameter is a pointer and the argument is a variable,
+            // check if it's an array (pass address) or pointer variable (load value)
+            if (paramType->isPointerTy()) {
+                if (auto* varExpr = dynamic_cast<VariableExprAST*>(arg.get())) {
+                    llvm::AllocaInst* alloca = namedValues[varExpr->name];
+                    if (!alloca) {
+                        throw std::runtime_error("Unknown variable name: " + varExpr->name);
+                    }
+                    
+                    // Check the alloca's allocated type
+                    llvm::Type* allocatedType = alloca->getAllocatedType();
+                    
+                    // If it's an array type, pass the address (don't load)
+                    if (allocatedType->isArrayTy()) {
+                        argsV.push_back(alloca);
+                        argIdx++;
+                        continue;
+                    }
+                    // Otherwise fall through to normal handling (will load the value)
+                }
+            }
+            
+            // Normal argument - generate and potentially load the value
             llvm::Value* argVal = generateExpr(arg.get());
             if (!argVal) {
                 throw std::runtime_error("Failed to generate function argument");
             }
             argsV.push_back(argVal);
+            argIdx++;
         }
         
         return builder.CreateCall(calleeF, argsV);
@@ -691,16 +793,35 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             throw std::runtime_error("Unknown array name: " + arrayAssign->arrayName);
         }
         
-        // Get element pointer: GEP array, 0, index
-        llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-        llvm::Value* elementPtr = builder.CreateInBoundsGEP(
-            alloca->getAllocatedType(),
-            alloca,
-            {zero, indexVal},
-            "arrayidx"
-        );
+        llvm::Type* allocatedType = alloca->getAllocatedType();
         
-        builder.CreateStore(val, elementPtr);
+        // Check if this is an array or a pointer (array parameter)
+        if (allocatedType->isPointerTy()) {
+            // This is a pointer to an array (parameter case)
+            // First load the pointer, then use GEP with one index
+            llvm::Value* arrayPtr = builder.CreateLoad(allocatedType, alloca, "arrayptr");
+            llvm::Value* elementPtr = builder.CreateInBoundsGEP(
+                val->getType(),  // Use the type of the value being stored
+                arrayPtr,
+                indexVal,
+                "arrayidx"
+            );
+            builder.CreateStore(val, elementPtr);
+        } else if (allocatedType->isArrayTy()) {
+            // This is a local array variable
+            // Get element pointer: GEP array, 0, index
+            llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+            llvm::Value* elementPtr = builder.CreateInBoundsGEP(
+                allocatedType,
+                alloca,
+                {zero, indexVal},
+                "arrayidx"
+            );
+            builder.CreateStore(val, elementPtr);
+        } else {
+            throw std::runtime_error("Variable is not an array: " + arrayAssign->arrayName);
+        }
+        
         return;
     }
     
@@ -955,7 +1076,7 @@ void CodeGenerator::generateFunction(FunctionAST* func, const std::string& names
     // Allocate stack space for parameters
     size_t idx = 0;
     for (auto& arg : function->args()) {
-        llvm::Type* paramType = getTypeFromString(context, func->parameters[idx].type);
+        llvm::Type* paramType = getParamTypeFromString(context, func->parameters[idx].type);
         llvm::AllocaInst* alloca = createEntryBlockAlloca(function, func->parameters[idx].name, paramType);
         
         // Emit debug location for parameter
@@ -1016,8 +1137,21 @@ void CodeGenerator::createMinimalEntryPoint() {
         module.get()
     );
     
-    // Get the main function
+    // Get the main function - try simple name first, then look for any namespace::main
     llvm::Function* mainFunc = module->getFunction("main");
+    if (!mainFunc) {
+        // Look for main in any namespace (e.g., examples::main)
+        for (auto& func : module->functions()) {
+            std::string funcName = func.getName().str();
+            // Check if the function name ends with ::main
+            if (funcName == "main" || 
+                (funcName.size() > 6 && funcName.substr(funcName.size() - 6) == "::main")) {
+                mainFunc = &func;
+                break;
+            }
+        }
+    }
+    
     if (!mainFunc) {
         throw std::runtime_error("main function not found");
     }
@@ -1043,7 +1177,7 @@ void CodeGenerator::createMinimalEntryPoint() {
     tmpBuilder.CreateUnreachable();  // ExitProcess never returns
 }
 
-void CodeGenerator::generate(ProgramAST* program) {
+void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
     // First pass: Create all function declarations (including namespace functions)
     for (auto& func : program->functions) {
         // Get return type
@@ -1052,15 +1186,18 @@ void CodeGenerator::generate(ProgramAST* program) {
         // Create parameter types
         std::vector<llvm::Type*> paramTypes;
         for (const auto& param : func->parameters) {
-            paramTypes.push_back(getTypeFromString(context, param.type));
+            paramTypes.push_back(getParamTypeFromString(context, param.type));
         }
         
         // Create function type
         llvm::FunctionType* funcType = llvm::FunctionType::get(returnType, paramTypes, false);
         
+        // Determine the actual function name (with namespace if applicable)
+        std::string functionName = func->namespaceName.empty() ? func->name : func->namespaceName + "::" + func->name;
+        
         // Create function
         llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
-                             func->name, module.get());
+                             functionName, module.get());
     }
     
     // Create namespace functions with qualified names
@@ -1072,7 +1209,7 @@ void CodeGenerator::generate(ProgramAST* program) {
             // Create parameter types
             std::vector<llvm::Type*> paramTypes;
             for (const auto& param : func->parameters) {
-                paramTypes.push_back(getTypeFromString(context, param.type));
+                paramTypes.push_back(getParamTypeFromString(context, param.type));
             }
             
             // Create function type
@@ -1121,7 +1258,7 @@ void CodeGenerator::generate(ProgramAST* program) {
     
     // Second pass: Generate function bodies
     for (auto& func : program->functions) {
-        generateFunction(func.get());
+        generateFunction(func.get(), func->namespaceName);
     }
     
     // Generate namespace function bodies
@@ -1131,8 +1268,10 @@ void CodeGenerator::generate(ProgramAST* program) {
         }
     }
     
-    // Create minimal CRT entry point that calls main and ExitProcess
-    createMinimalEntryPoint();
+    // Create minimal CRT entry point only if needed (for executables)
+    if (needsEntryPoint) {
+        createMinimalEntryPoint();
+    }
     
     // Finalize debug info if enabled
     finalizeDebugInfo();

@@ -261,6 +261,7 @@ struct FunctionParameter {
 class FunctionAST : public ASTNode {
 public:
     std::string name;
+    std::string namespaceName;  // Namespace this function belongs to (may be empty for global)
     std::vector<FunctionParameter> parameters;
     std::string returnType;
     std::vector<std::unique_ptr<StmtAST>> body;
@@ -273,8 +274,9 @@ public:
                 const std::string& ret,
                 std::vector<std::unique_ptr<StmtAST>> b,
                 bool ext = false,
-                int l = 1, int c = 1)
-        : name(n), parameters(std::move(params)), returnType(ret), body(std::move(b)),
+                int l = 1, int c = 1,
+                const std::string& ns = "")
+        : name(n), namespaceName(ns), parameters(std::move(params)), returnType(ret), body(std::move(b)),
           isExtern(ext), line(l), column(c) {}
 };
 
@@ -297,6 +299,8 @@ class ProgramAST : public ASTNode {
 public:
     std::vector<std::unique_ptr<FunctionAST>> functions;
     std::vector<std::unique_ptr<NamespaceAST>> namespaces;
+    
+    ProgramAST() = default;
     
     ProgramAST(std::vector<std::unique_ptr<FunctionAST>> funcs,
                std::vector<std::unique_ptr<NamespaceAST>> ns = {})

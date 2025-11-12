@@ -10,6 +10,7 @@ class Parser {
 private:
     std::vector<Token> tokens;
     size_t position;
+    std::string defaultNamespace;  // Namespace derived from file path
     
     Token& currentToken();
     Token& peek(int offset = 1);
@@ -39,6 +40,7 @@ private:
     
 public:
     Parser(const std::vector<Token>& toks);
+    void setDefaultNamespace(const std::string& ns);
     std::unique_ptr<ProgramAST> parse();
 };
 

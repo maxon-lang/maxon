@@ -56,12 +56,16 @@ public:
     // Check if there are errors
     bool hasErrors() const { return !errors.empty(); }
     
+    // Get list of undefined functions from last analysis
+    const std::set<std::string>& getUndefinedFunctions() const { return undefinedFunctions; }
+    
 private:
     std::vector<SemanticError> errors;
     std::map<std::string, FunctionInfo> functions;
     std::map<std::string, VariableInfo> variables; // Current scope variables
     std::vector<std::map<std::string, VariableInfo>> scopeStack; // Stack of variable scopes
     int loopDepth; // Track nested loop depth
+    std::set<std::string> undefinedFunctions; // Track undefined function calls
     
     // Analysis methods
     void analyzeFunction(FunctionAST* func);

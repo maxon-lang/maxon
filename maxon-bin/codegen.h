@@ -54,7 +54,7 @@ private:
     
 public:
     CodeGenerator(const std::string& moduleName, bool debugInfo = false, bool verbose = false);
-    void generate(ProgramAST* program);
+    void generate(ProgramAST* program, bool needsEntryPoint = true);
     void optimize();
     void printIR();
     void writeIRToFile(const std::string& filename);

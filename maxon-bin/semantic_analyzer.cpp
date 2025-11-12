@@ -9,6 +9,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
     variables.clear();
     scopeStack.clear();
     loopDepth = 0;
+    undefinedFunctions.clear();
     
     // Register standard library functions
     // print(int) -> int
@@ -17,11 +18,19 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
     
     // First pass: collect all function declarations (including namespace functions)
     for (const auto& func : program->functions) {
-        if (functions.find(func->name) != functions.end()) {
-            addError("Function '" + func->name + "' is already defined" +
+        // Build the qualified name if the function has a namespace
+        std::string functionKey = func->namespaceName.empty() ? func->name : func->namespaceName + "::" + func->name;
+        
+        if (functions.find(functionKey) != functions.end()) {
+            addError("Function '" + functionKey + "' is already defined" +
                     std::string("\n  Note: Each function name must be unique in the program"),
                     func->line, func->column);
         } else {
+            functions.emplace(functionKey, FunctionInfo(functionKey, func->returnType, func->parameters));
+        }
+        
+        // Also register the simple name if in global namespace (for backward compatibility)
+        if (func->namespaceName.empty() && functions.find(func->name) == functions.end()) {
             functions.emplace(func->name, FunctionInfo(func->name, func->returnType, func->parameters));
         }
     }
@@ -102,8 +111,23 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
         // Analyze initializer
         std::string initType = analyzeExpression(varDecl->initializer.get());
         
+        // Determine the actual type - use declared type if provided, otherwise infer
+        std::string actualType;
+        if (!varDecl->type.empty()) {
+            // Use declared type
+            if (varDecl->arraySize > 0) {
+                // Array type: encode as [size]elementType
+                actualType = "[" + std::to_string(varDecl->arraySize) + "]" + varDecl->type;
+            } else {
+                actualType = varDecl->type;
+            }
+        } else {
+            // Type inference from initializer
+            actualType = initType;
+        }
+        
         // Declare variable
-        declareVariable(varDecl->name, initType, false, stmt->line, stmt->column);
+        declareVariable(varDecl->name, actualType, false, stmt->line, stmt->column);
         
     } else if (auto letDecl = dynamic_cast<LetDeclStmtAST*>(stmt)) {
         // Check if variable already exists in current scope
@@ -119,8 +143,23 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
         // Analyze initializer
         std::string initType = analyzeExpression(letDecl->initializer.get());
         
+        // Determine the actual type - use declared type if provided, otherwise infer
+        std::string actualType;
+        if (!letDecl->type.empty()) {
+            // Use declared type
+            if (letDecl->arraySize > 0) {
+                // Array type: encode as [size]elementType
+                actualType = "[" + std::to_string(letDecl->arraySize) + "]" + letDecl->type;
+            } else {
+                actualType = letDecl->type;
+            }
+        } else {
+            // Type inference from initializer
+            actualType = initType;
+        }
+        
         // Declare immutable variable
-        declareVariable(letDecl->name, initType, true, stmt->line, stmt->column);
+        declareVariable(letDecl->name, actualType, true, stmt->line, stmt->column);
         
     } else if (auto assign = dynamic_cast<AssignStmtAST*>(stmt)) {
         // Check if variable exists
@@ -383,6 +422,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         // Check if function exists
         auto funcIt = functions.find(callExpr->callee);
         if (funcIt == functions.end()) {
+            // Track this as an undefined function for potential auto-discovery
+            undefinedFunctions.insert(callExpr->callee);
+            
             addError("Undefined function: '" + callExpr->callee + "'" +
                     std::string("\n  Note: Function must be defined before it can be called"),
                     expr->line, expr->column);

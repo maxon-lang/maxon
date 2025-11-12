@@ -1,0 +1,57 @@
+function fill_array(arr [5]int, value int) int
+    var i int = 0
+    while i < 5 'fill'
+        arr[i] = value
+        i = i + 1
+    end 'fill'
+    return 0
+end 'fill_array'
+
+function main() int
+    var nums [5]int = 0
+    fill_array(nums, 42)
+    return nums[2]
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+define i32 @fill_array(ptr %0, i32 %1) {
+entry:
+  br label %whilecond
+
+whilecond:                                        ; preds = %loop, %entry
+  %i.0 = phi i32 [ 0, %entry ], [ %addtmp, %loop ]
+  %cmptmp = icmp slt i32 %i.0, 5
+  br i1 %cmptmp, label %loop, label %afterloop
+
+loop:                                             ; preds = %whilecond
+  %2 = sext i32 %i.0 to i64
+  %arrayidx = getelementptr inbounds i32, ptr %0, i64 %2
+  store i32 %1, ptr %arrayidx, align 4
+  %addtmp = add i32 %i.0, 1
+  br label %whilecond
+
+afterloop:                                        ; preds = %whilecond
+  ret i32 0
+}
+
+define i32 @main() {
+entry:
+  %nums = alloca [5 x i32], align 4
+  %0 = call i32 @fill_array(ptr nonnull %nums, i32 42)
+  %arrayidx = getelementptr inbounds nuw i8, ptr %nums, i64 8
+  %arrayelem = load i32, ptr %arrayidx, align 4
+  ret i32 %arrayelem
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
+---
+ExitCode: 42

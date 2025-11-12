@@ -166,6 +166,18 @@ try {
     if ($irEnd -eq -1) {
         $irEnd = $compileOutput.IndexOf("Linking with LLD", $irStart)
     }
+    if ($irEnd -eq -1) {
+        $irEnd = $compileOutput.IndexOf("Code generation complete.", $irStart)
+    }
+    if ($irEnd -eq -1) {
+        # Use end of string if no marker found
+        $irEnd = $compileOutput.Length
+    }
+    
+    if ($irEnd -le $irStart) {
+        Write-Error "Could not extract LLVM IR properly (invalid indices: start=$irStart, end=$irEnd)"
+        exit 1
+    }
     
     $llvmIR = $compileOutput.Substring($irStart, $irEnd - $irStart).Trim()
     
