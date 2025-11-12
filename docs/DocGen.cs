@@ -4,6 +4,7 @@ namespace Docs {
 	internal class Program {
 		static void Main(string[] args) {
 			var inputPath = "Content";
+			var i = (int)0 ;
 
 			if (Directory.Exists("Output") == false) {
 				Directory.CreateDirectory("Output");

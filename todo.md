@@ -3,6 +3,7 @@ https://benchmarksgame-team.pages.debian.net/benchmarksgame/index.html
 add "run" to maxon
 add "build" to maxon
 add "repl" to maxon
+add "test" to maxon
 add package manager to maxon
 
 self hosting
@@ -23,3 +24,15 @@ vscode extention
 
 
 pointers should only be used for FFI
+
+this crashes parser
+function main() -> int
+    var i = 5
+    var used = 10
+    print(used)
+    return 0
+end
+
+add tests for compiler will all kinds of malformed inputs
+
+this aint right var buffer [12]char = 0

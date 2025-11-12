@@ -430,6 +430,136 @@ void test_qualified_name_incomplete_prefix() {
     std::cout << "✓ Qualified name completions work with incomplete prefix" << std::endl;
 }
 
+void test_unused_variable_warning() {
+    std::cout << "Testing unused variable warning..." << std::endl;
+    
+    Analyzer analyzer;
+    auto doc = createTestDocument(R"(
+function main() int
+    var i = 5
+    return 0
+end 'main'
+)");
+    
+    auto diagnostics = analyzer.analyze(doc);
+    
+    // Debug: print all diagnostics
+    std::cout << "  Found " << diagnostics.size() << " diagnostic(s):" << std::endl;
+    for (const auto& diag : diagnostics) {
+        std::cout << "    Severity " << diag.severity << ": " << diag.message << std::endl;
+    }
+    
+    // Should have a warning for unused variable 'i'
+    bool hasUnusedWarning = false;
+    for (const auto& diag : diagnostics) {
+        if (diag.message.find("never used") != std::string::npos && 
+            diag.message.find("'i'") != std::string::npos) {
+            hasUnusedWarning = true;
+            // Verify it's a warning (severity 2), not an error
+            assert(diag.severity == 2);
+            break;
+        }
+    }
+    assert(hasUnusedWarning);
+    
+    std::cout << "✓ Unused variable warning detected" << std::endl;
+}
+
+void test_used_variable_no_warning() {
+    std::cout << "Testing used variable has no warning..." << std::endl;
+    
+    Analyzer analyzer;
+    auto doc = createTestDocument(R"(
+function main() int
+    var i = 5
+    print(i)
+    return 0
+end 'main'
+)");
+    
+    auto diagnostics = analyzer.analyze(doc);
+    
+    // Should NOT have a warning for 'i' since it's used
+    for (const auto& diag : diagnostics) {
+        if (diag.message.find("never used") != std::string::npos && 
+            diag.message.find("'i'") != std::string::npos) {
+            assert(false && "Should not warn about used variable");
+        }
+    }
+    
+    std::cout << "✓ Used variable has no warning" << std::endl;
+}
+
+void test_multiple_unused_variables() {
+    std::cout << "Testing multiple unused variables..." << std::endl;
+    
+    Analyzer analyzer;
+    auto doc = createTestDocument(R"(
+function main() int
+    var unused1 = 5
+    var unused2 = 10
+    var used = 15
+    print(used)
+    return 0
+end 'main'
+)");
+    
+    auto diagnostics = analyzer.analyze(doc);
+    
+    // Should have warnings for both unused1 and unused2
+    int unusedWarnings = 0;
+    for (const auto& diag : diagnostics) {
+        if (diag.message.find("never used") != std::string::npos) {
+            if (diag.message.find("'unused1'") != std::string::npos ||
+                diag.message.find("'unused2'") != std::string::npos) {
+                unusedWarnings++;
+                assert(diag.severity == 2); // Should be warning
+            }
+            // Make sure 'used' is not in the warnings
+            assert(diag.message.find("'used'") == std::string::npos);
+        }
+    }
+    assert(unusedWarnings == 2);
+    
+    std::cout << "✓ Multiple unused variables detected" << std::endl;
+}
+
+void test_unused_variable_severity() {
+    std::cout << "Testing unused variable has warning severity..." << std::endl;
+    
+    Analyzer analyzer;
+    auto doc = createTestDocument(R"(
+function main() int
+    var unused = 42
+    print(notdefined)
+    return 0
+end 'main'
+)");
+    
+    auto diagnostics = analyzer.analyze(doc);
+    
+    // Should have both warning (unused) and error (undefined variable)
+    bool hasWarning = false;
+    bool hasError = false;
+    
+    for (const auto& diag : diagnostics) {
+        if (diag.message.find("never used") != std::string::npos &&
+            diag.message.find("'unused'") != std::string::npos) {
+            assert(diag.severity == 2); // Warning
+            hasWarning = true;
+        }
+        if (diag.message.find("Undefined variable") != std::string::npos &&
+            diag.severity == 1) {
+            hasError = true;
+        }
+    }
+    
+    assert(hasWarning);
+    assert(hasError);
+    
+    std::cout << "✓ Unused variable has correct warning severity" << std::endl;
+}
+
 int main() {
     std::cout << "Running Analyzer Tests...\n" << std::endl;
     
@@ -458,6 +588,12 @@ int main() {
         test_qualified_name_multiline();
         test_qualified_name_with_whitespace();
         test_qualified_name_incomplete_prefix();
+        
+        // Unused variable warning tests
+        test_unused_variable_warning();
+        test_used_variable_no_warning();
+        test_multiple_unused_variables();
+        test_unused_variable_severity();
         
         std::cout << "\n✓ All Analyzer tests passed!" << std::endl;
         return 0;

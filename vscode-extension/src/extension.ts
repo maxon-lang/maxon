@@ -5,31 +5,72 @@ import {
     LanguageClientOptions,
     ServerOptions
 } from 'vscode-languageclient/node';
+import { log, initLogger, getOutputChannel } from './logger';
 
 let client: LanguageClient;
-let outputChannel: vscode.OutputChannel;
+let context: vscode.ExtensionContext;
+let serverExecutable: string;
+let clientOptions: LanguageClientOptions;
 
 export function getClient(): LanguageClient | undefined {
     return client;
 }
 
-export async function activate(context: vscode.ExtensionContext) {
-    // Create output channel for debugging
-    outputChannel = vscode.window.createOutputChannel('Maxon LSP Debug');
-    outputChannel.show(true);
-    outputChannel.appendLine('[Extension] === ACTIVATION STARTED ===');
+/**
+ * Restart the LSP client. Useful for testing when the client stops unexpectedly.
+ */
+export async function restartClient(): Promise<void> {
+    if (!context) {
+        throw new Error('Extension not activated yet');
+    }
     
-    // Path to the compiled LSP server executable
-    // Look in project_root/bin/ directory (created by CMake post-build step)
-    const serverExecutable = path.join(
-        context.extensionPath, 
-        '..', 
-        'bin',
-        'maxon-lsp-server.exe'  // or 'maxon-lsp-server' on Linux/Mac
+    // Stop existing client if running
+    if (client) {
+        try {
+            await client.stop();
+        } catch (error) {
+            log(`Error stopping client: ${error}`);
+        }
+    }
+    
+    // Create new client
+    const serverOptions: ServerOptions = {
+        command: serverExecutable,
+        args: []
+    };
+
+    client = new LanguageClient(
+        'maxonLanguageServer',
+        'Maxon Language Server',
+        serverOptions,
+        clientOptions
     );
 
-    outputChannel.appendLine(`[Extension] Server executable path: ${serverExecutable}`);
-    outputChannel.appendLine(`[Extension] Server exists: ${require('fs').existsSync(serverExecutable)}`);
+    // Re-attach event handlers
+    client.onDidChangeState((event) => {
+        log(`Client state changed: ${event.oldState} -> ${event.newState}`);
+    });
+
+    // Start the client
+    try {
+        await client.start();
+        log('LSP client restarted successfully');
+    } catch (error) {
+        log(`LSP client restart failed: ${error}`);
+        throw error;
+    }
+}
+
+export async function activate(ctx: vscode.ExtensionContext) {
+    context = ctx;
+    
+    // Create output channel for debugging
+    const outputChannel = vscode.window.createOutputChannel('Maxon Language Server');
+    initLogger(outputChannel);
+    
+    // Path to the compiled LSP server executable
+    // Since bin/ is in PATH, we can just use the executable name
+    serverExecutable = 'maxon-lsp-server.exe';
     
     // Server options - use simple command form for stdio communication
     const serverOptions: ServerOptions = {
@@ -37,7 +78,7 @@ export async function activate(context: vscode.ExtensionContext) {
         args: []
     };
 
-    const clientOptions: LanguageClientOptions = {
+    clientOptions = {
         documentSelector: [{ scheme: 'file', language: 'maxon' }],
         synchronize: {
             fileEvents: vscode.workspace.createFileSystemWatcher('**/.maxon')
@@ -54,32 +95,20 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Log state changes
     client.onDidChangeState((event) => {
-        outputChannel.appendLine(`[Extension] Client state changed: ${event.oldState} -> ${event.newState}`);
+        log(`Client state changed: ${event.oldState} -> ${event.newState}`);
     });
 
-    outputChannel.appendLine('[Extension] Starting LSP client...');
-    
     // Start the client and await completion
     try {
         await client.start();
-        outputChannel.appendLine('[Extension] LSP client started and initialized successfully');
+        log('LSP client started successfully');
     } catch (error) {
-        outputChannel.appendLine(`[Extension] LSP client start failed: ${error}`);
+        log(`LSP client start failed: ${error}`);
+        vscode.window.showErrorMessage(`Maxon Language Server failed to start: ${error}`);
     }
-    
-    // Log document events
-    vscode.workspace.onDidOpenTextDocument((doc) => {
-        outputChannel.appendLine(`[Extension] Document opened: ${doc.uri.toString()}, language: ${doc.languageId}`);
-    });
-    
-    vscode.workspace.onDidChangeTextDocument((event) => {
-        //outputChannel.appendLine(`[Extension] Document changed: ${event.document.uri.toString()}`);
-    });
     
     // Add client to subscriptions for cleanup
     context.subscriptions.push(client);
-    
-    outputChannel.appendLine('[Extension] === ACTIVATION COMPLETE ===');
 }
 
 export function deactivate(): Thenable<void> | undefined {

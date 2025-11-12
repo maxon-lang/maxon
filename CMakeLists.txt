@@ -5,9 +5,12 @@ project(Maxon VERSION 0.1.0 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Export compile commands for IntelliSense
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Option to build components
 option(BUILD_COMPILER "Build the Maxon compiler" ON)
-option(BUILD_LSP "Build the Maxon LSP server" ON)
+option(BUILD_LSP "Build the Maxon Language Server" ON)
 
 # Build the Maxon compiler
 if(BUILD_COMPILER)
@@ -17,7 +20,7 @@ endif()
 
 # Build the LSP server
 if(BUILD_LSP AND EXISTS "${CMAKE_SOURCE_DIR}/lsp-server/CMakeLists.txt")
-    message(STATUS "Configuring Maxon LSP server...")
+    message(STATUS "Configuring Maxon Language Server...")
     add_subdirectory(lsp-server)
 endif()
 

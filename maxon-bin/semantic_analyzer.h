@@ -14,9 +14,10 @@ struct SemanticError {
     std::string message;
     int line;
     int column;
+    int severity; // 1 = Error, 2 = Warning
     
-    SemanticError(const std::string& msg, int l = 0, int c = 0)
-        : message(msg), line(l), column(c) {}
+    SemanticError(const std::string& msg, int l = 0, int c = 0, int sev = 1)
+        : message(msg), line(l), column(c), severity(sev) {}
 };
 
 // Variable information
@@ -24,13 +25,14 @@ struct VariableInfo {
     std::string name;
     std::string type;
     bool isImmutable; // true for 'let' variables
+    bool isUsed;      // true if variable is read/referenced
     int line;
     int column;
     
-    VariableInfo() : isImmutable(false), line(0), column(0) {}
+    VariableInfo() : isImmutable(false), isUsed(false), line(0), column(0) {}
     
     VariableInfo(const std::string& n, const std::string& t, bool immutable, int l = 0, int c = 0)
-        : name(n), type(t), isImmutable(immutable), line(l), column(c) {}
+        : name(n), type(t), isImmutable(immutable), isUsed(false), line(l), column(c) {}
 };
 
 // Function information
@@ -90,7 +92,10 @@ private:
     
     // Helper methods
     void addError(const std::string& message, int line = 0, int column = 0);
+    void addWarning(const std::string& message, int line = 0, int column = 0);
     bool hasReturnInPath(const std::vector<std::unique_ptr<StmtAST>>& statements);
+    void markVariableAsUsed(const std::string& name);
+    void checkUnusedVariables();
 };
 
 #endif // SEMANTIC_ANALYZER_H

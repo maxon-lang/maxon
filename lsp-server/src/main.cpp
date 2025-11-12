@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
 #endif
 
     // Log to stderr since stdout is used for LSP communication
-    std::cerr << "Maxon LSP Server starting..." << std::endl;
+    std::cerr << "Maxon Language Server starting..." << std::endl;
     
     try {
         LspServer server;

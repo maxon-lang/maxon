@@ -92,6 +92,9 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST* func) {
         }
     }
     
+    // Check for unused variables before exiting scope
+    checkUnusedVariables();
+    
     // Exit function scope
     exitScope();
 }
@@ -357,6 +360,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
                     expr->line, expr->column);
             return "error";
         }
+        // Mark variable as used when taking its address
+        markVariableAsUsed(addrExpr->varName);
         // Address-of always returns a pointer type
         return "ptr";
         
@@ -384,6 +389,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
                     expr->line, expr->column);
             return "error";
         }
+        // Mark variable as used when it's referenced
+        markVariableAsUsed(varExpr->name);
         return varInfo->type;
         
     } else if (auto binExpr = dynamic_cast<BinaryExprAST*>(expr)) {
@@ -595,5 +602,38 @@ bool SemanticAnalyzer::typesMatch(const std::string& type1, const std::string& t
 }
 
 void SemanticAnalyzer::addError(const std::string& message, int line, int column) {
-    errors.emplace_back(message, line, column);
+    errors.emplace_back(message, line, column, 1); // Severity 1 = Error
+}
+
+void SemanticAnalyzer::addWarning(const std::string& message, int line, int column) {
+    errors.emplace_back(message, line, column, 2); // Severity 2 = Warning
+}
+
+void SemanticAnalyzer::markVariableAsUsed(const std::string& name) {
+    // Check current scope
+    auto it = variables.find(name);
+    if (it != variables.end()) {
+        it->second.isUsed = true;
+        return;
+    }
+    
+    // Check parent scopes
+    for (auto& scope : scopeStack) {
+        auto it = scope.find(name);
+        if (it != scope.end()) {
+            it->second.isUsed = true;
+            return;
+        }
+    }
+}
+
+void SemanticAnalyzer::checkUnusedVariables() {
+    // Check all variables in current scope
+    for (const auto& pair : variables) {
+        const VariableInfo& varInfo = pair.second;
+        if (!varInfo.isUsed) {
+            addWarning("The variable '" + varInfo.name + "' is assigned but its value is never used",
+                      varInfo.line, varInfo.column);
+        }
+    }
 }

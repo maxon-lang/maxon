@@ -51,7 +51,7 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
                 diag.range.end.line = error.line > 0 ? error.line - 1 : 0;
                 diag.range.end.character = error.column > 0 ? error.column : 1;
                 diag.message = error.message;
-                diag.severity = 1; // Error
+                diag.severity = error.severity; // Use severity from semantic error (1 = Error, 2 = Warning)
                 diag.source = "maxon-lsp";
                 diagnostics.push_back(diag);
             }

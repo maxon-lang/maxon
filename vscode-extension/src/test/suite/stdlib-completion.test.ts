@@ -7,7 +7,7 @@ import { State } from 'vscode-languageclient';
 
 suite('Stdlib Completion Tests', () => {
     let document: vscode.TextDocument;
-    const testTimeout = 30000; // 30 seconds for LSP to initialize
+    const testTimeout = 5000;
 
     suiteSetup(async function() {
         this.timeout(testTimeout);
