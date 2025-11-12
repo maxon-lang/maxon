@@ -419,8 +419,47 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         return "error";
         
     } else if (auto callExpr = dynamic_cast<CallExprAST*>(expr)) {
-        // Check if function exists
+        // Try to find the function - first exact match, then unqualified lookup
         auto funcIt = functions.find(callExpr->callee);
+        
+        // If not found and the name is unqualified (no ::), try suffix matching
+        if (funcIt == functions.end() && callExpr->callee.find("::") == std::string::npos) {
+            std::string searchSuffix = "::" + callExpr->callee;
+            std::vector<std::string> matches;
+            
+            for (const auto& pair : functions) {
+                const std::string& funcName = pair.first;
+                if (funcName.size() > searchSuffix.size() &&
+                    funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
+                    matches.push_back(funcName);
+                }
+            }
+            
+            if (matches.empty()) {
+                // Track this as an undefined function for potential auto-discovery
+                undefinedFunctions.insert(callExpr->callee);
+                
+                addError("Undefined function: '" + callExpr->callee + "'" +
+                        std::string("\n  Note: Function must be defined before it can be called"),
+                        expr->line, expr->column);
+                return "error";
+            } else if (matches.size() > 1) {
+                // Ambiguous call
+                std::string errorMsg = "Ambiguous function call: '" + callExpr->callee + "'" +
+                                     std::string("\n  Multiple definitions found:");
+                for (const auto& match : matches) {
+                    errorMsg += "\n    - " + match;
+                }
+                errorMsg += "\n  Use a qualified name to disambiguate (e.g., namespace.function)";
+                addError(errorMsg, expr->line, expr->column);
+                return "error";
+            }
+            
+            // Exactly one match - use it for validation (don't modify AST)
+            // Note: We found the function, so it's not undefined
+            funcIt = functions.find(matches[0]);
+        }
+        
         if (funcIt == functions.end()) {
             // Track this as an undefined function for potential auto-discovery
             undefinedFunctions.insert(callExpr->callee);

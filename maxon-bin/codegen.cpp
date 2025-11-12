@@ -537,39 +537,25 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         }
         
         // Look up the function in the module
+        // Try exact match first
         llvm::Function* calleeF = module->getFunction(callExpr->callee);
         
-        // If not found, try unqualified lookup: search for any function ending with ::callee
-        if (!calleeF) {
+        // If not found and unqualified, try suffix matching
+        if (!calleeF && callExpr->callee.find("::") == std::string::npos) {
             std::string searchSuffix = "::" + callExpr->callee;
-            std::vector<llvm::Function*> matches;
             
             for (auto& func : module->functions()) {
                 std::string funcName = func.getName().str();
                 if (funcName.size() > searchSuffix.size() &&
                     funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
-                    matches.push_back(&func);
+                    calleeF = &func;
+                    break; // Take first match (semantic analyzer already validated uniqueness)
                 }
             }
-            
-            if (matches.empty()) {
-                throw std::runtime_error("Unknown function referenced: " + callExpr->callee);
-            } else if (matches.size() > 1) {
-                // Ambiguous - list all matches
-                std::string errorMsg = "Ambiguous function reference: '" + callExpr->callee + "' could refer to:\n";
-                for (auto* f : matches) {
-                    errorMsg += "  - " + f->getName().str() + "\n";
-                }
-                errorMsg += "Use a qualified name to disambiguate.";
-                throw std::runtime_error(errorMsg);
-            }
-            
-            // Exactly one match - use it
-            calleeF = matches[0];
-            if (verbose) {
-                std::cout << "  Resolved unqualified call '" << callExpr->callee 
-                         << "' to '" << calleeF->getName().str() << "'" << std::endl;
-            }
+        }
+        
+        if (!calleeF) {
+            throw std::runtime_error("Unknown function referenced: " + callExpr->callee);
         }
         
         // Check argument count

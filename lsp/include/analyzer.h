@@ -8,10 +8,22 @@
 #include <vector>
 #include <memory>
 #include <set>
+#include <map>
+
+// Information about a stdlib function
+struct StdlibFunction {
+    std::string name;           // Unqualified name (e.g., "format_int_array")
+    std::string qualifiedName;  // Fully qualified name (e.g., "stdlib::fmt::format_int_array")
+    std::string signature;      // Function signature for display
+    std::string documentation;  // Documentation from comments
+};
 
 class Analyzer {
 public:
     Analyzer();
+    
+    // Initialize stdlib function cache
+    void initializeStdlib(const std::string& stdlibPath);
     
     // Analyze document and return diagnostics
     std::vector<lsp::Diagnostic> analyze(std::shared_ptr<Document> doc);
@@ -30,11 +42,15 @@ public:
     
 private:
     std::vector<std::string> keywords;
+    std::map<std::string, StdlibFunction> stdlibFunctions; // Key: unqualified name
     
     // Helper functions
     std::string getWordAtPosition(const std::string& text, lsp::Position pos);
     bool isKeyword(const std::string& word) const;
     lsp::Range tokenToRange(const Token& token);
+    void loadStdlibFile(const std::string& filePath, const std::string& namespaceName);
+    std::vector<std::string> findStdlibFiles(const std::string& stdlibPath);
+    std::string extractDocumentation(const std::string& sourceText, const std::string& functionName, int functionLine);
 };
 
 #endif // ANALYZER_H

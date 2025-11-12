@@ -1,6 +1,7 @@
 #include "json_rpc.h"
 #include <sstream>
 #include <cstring>
+#include <fstream>
 
 JsonRpcHandler::JsonRpcHandler() {}
 
@@ -79,7 +80,9 @@ void JsonRpcHandler::writeMessage(const json& message) {
     std::string content = message.dump();
     std::string header = "Content-Length: " + std::to_string(content.length()) + "\r\n\r\n";
     
-    std::cout << header << content << std::flush;
+    // Send to stdout
+    std::cout << header << content;
+    std::cout.flush();
 }
 
 std::string JsonRpcHandler::readMessage() {

@@ -2,6 +2,11 @@
 #include "semantic_analyzer.h"
 #include <algorithm>
 #include <sstream>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+
+namespace fs = std::filesystem;
 
 Analyzer::Analyzer() {
     keywords = {
@@ -94,6 +99,17 @@ std::vector<lsp::CompletionItem> Analyzer::getCompletions(std::shared_ptr<Docume
     items.push_back({"int", 14, "Integer type", ""});
     items.push_back({"string", 14, "String type", ""});
     
+    // Add stdlib function completions
+    for (const auto& pair : stdlibFunctions) {
+        const StdlibFunction& func = pair.second;
+        lsp::CompletionItem item;
+        item.label = func.name;
+        item.kind = 3; // Function
+        item.detail = func.signature;
+        item.documentation = func.documentation;
+        items.push_back(item);
+    }
+    
     // Try to extract identifiers from document for variable/function completions
     try {
         Lexer lexer(doc->text);
@@ -129,6 +145,15 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
     }
     
     lsp::Hover hover;
+    
+    // Check if it's a stdlib function
+    auto it = stdlibFunctions.find(word);
+    if (it != stdlibFunctions.end()) {
+        const StdlibFunction& func = it->second;
+        hover.contents = "**" + func.qualifiedName + "**\n\n```maxon\n" + 
+                        func.signature + "\n```\n\n" + func.documentation;
+        return hover;
+    }
     
     if (isKeyword(word)) {
         hover.contents = "**" + word + "** (keyword)\n\nMaxon language keyword";
@@ -252,4 +277,145 @@ lsp::Range Analyzer::tokenToRange(const Token& token) {
     range.end.line = token.line - 1;
     range.end.character = token.column - 1 + token.value.length();
     return range;
+}
+
+void Analyzer::initializeStdlib(const std::string& stdlibPath) {
+    auto files = findStdlibFiles(stdlibPath);
+    
+    for (const auto& filePath : files) {
+        // Extract namespace from path (e.g., stdlib/fmt/integer.maxon -> stdlib::fmt)
+        fs::path path(filePath);
+        fs::path relativePath = fs::relative(path, stdlibPath);
+        
+        std::string namespaceName = "stdlib";
+        if (relativePath.has_parent_path()) {
+            for (const auto& part : relativePath.parent_path()) {
+                namespaceName += "::" + part.string();
+            }
+        }
+        
+        loadStdlibFile(filePath, namespaceName);
+    }
+}
+
+std::vector<std::string> Analyzer::findStdlibFiles(const std::string& stdlibPath) {
+    std::vector<std::string> files;
+    
+    try {
+        for (const auto& entry : fs::recursive_directory_iterator(stdlibPath)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".maxon") {
+                files.push_back(entry.path().string());
+            }
+        }
+    } catch (...) {
+        // Ignore errors (e.g., directory doesn't exist)
+    }
+    
+    return files;
+}
+
+void Analyzer::loadStdlibFile(const std::string& filePath, const std::string& namespaceName) {
+    
+    try {
+        std::ifstream file(filePath);
+        if (!file.is_open()) {
+            return;
+        }
+        
+        std::string content((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+        file.close();
+        
+        // Parse the file to extract function signatures
+        Lexer lexer(content);
+        std::vector<Token> tokens = lexer.tokenize();
+        
+        Parser parser(tokens);
+        auto program = parser.parse();
+        
+        // Extract function information
+        for (const auto& func : program->functions) {
+            StdlibFunction stdlibFunc;
+            stdlibFunc.name = func->name;
+            stdlibFunc.qualifiedName = namespaceName + "::" + func->name;
+            
+            // Build signature
+            std::string sig = "function " + func->name + "(";
+            for (size_t i = 0; i < func->parameters.size(); i++) {
+                if (i > 0) sig += ", ";
+                sig += func->parameters[i].name + " " + func->parameters[i].type;
+            }
+            sig += ") " + func->returnType;
+            stdlibFunc.signature = sig;
+            
+            // Extract documentation from comments before the function declaration
+            stdlibFunc.documentation = extractDocumentation(content, func->name, func->line);
+            if (stdlibFunc.documentation.empty()) {
+                stdlibFunc.documentation = "Standard library function from " + namespaceName;
+            }
+            
+            // Store by unqualified name
+            stdlibFunctions[func->name] = stdlibFunc;
+        }
+        
+    } catch (...) {
+        // Ignore errors in parsing stdlib files
+    }
+}
+
+std::string Analyzer::extractDocumentation(const std::string& sourceText, const std::string& functionName, int functionLine) {
+    // Extract comments before the function declaration (lines leading up to functionLine)
+    // Split source into lines
+    std::vector<std::string> lines;
+    std::istringstream stream(sourceText);
+    std::string line;
+    while (std::getline(stream, line)) {
+        lines.push_back(line);
+    }
+    
+    if (functionLine <= 0 || functionLine > static_cast<int>(lines.size())) {
+        return "";
+    }
+    
+    // Collect comment lines immediately before the function (line numbers are 1-based)
+    std::vector<std::string> docLines;
+    for (int i = functionLine - 2; i >= 0; i--) { // functionLine - 1 is 0-based index, so functionLine - 2 is the line before
+        const std::string& currentLine = lines[i];
+        std::string trimmed = currentLine;
+        
+        // Trim leading whitespace
+        size_t start = trimmed.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) {
+            // Empty line - stop collecting
+            break;
+        }
+        trimmed = trimmed.substr(start);
+        
+        // Check if it's a documentation comment line (///)
+        if (trimmed.substr(0, 3) == "///") {
+            // Remove the /// prefix and any leading space
+            std::string comment = trimmed.substr(3);
+            if (!comment.empty() && comment[0] == ' ') {
+                comment = comment.substr(1);
+            }
+            docLines.insert(docLines.begin(), comment); // Insert at beginning to maintain order
+        } else if (trimmed.substr(0, 2) == "//") {
+            // Regular comment (not documentation) - stop collecting
+            break;
+        } else {
+            // Non-comment, non-empty line - stop collecting
+            break;
+        }
+    }
+    
+    // Join the documentation lines
+    std::string documentation;
+    for (const auto& docLine : docLines) {
+        if (!documentation.empty()) {
+            documentation += "\n";
+        }
+        documentation += docLine;
+    }
+    
+    return documentation;
 }

@@ -53,5 +53,13 @@ set_target_properties(maxon-lsp PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
+# Copy to project root bin directory for easier access and stdlib resolution
+add_custom_command(TARGET maxon-lsp POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:maxon-lsp>
+        ${CMAKE_SOURCE_DIR}/bin/$<TARGET_FILE_NAME:maxon-lsp>
+    COMMENT "Copying maxon-lsp to project root bin directory"
+)
+
 # Installation
 install(TARGETS maxon-lsp DESTINATION bin)

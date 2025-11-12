@@ -164,6 +164,97 @@ void test_empty_document() {
     std::cout << "✓ Empty document handled correctly" << std::endl;
 }
 
+void test_stdlib_initialization() {
+    std::cout << "Testing stdlib initialization..." << std::endl;
+    
+    Analyzer analyzer;
+    
+    // Initialize with stdlib directory (relative to test build directory)
+    analyzer.initializeStdlib("../../../stdlib");
+    
+    // Get completions - should include stdlib functions
+    auto doc = createTestDocument("function main() int\nend 'main'");
+    lsp::Position pos{0, 0};
+    auto completions = analyzer.getCompletions(doc, pos);
+    
+    // Check that format_int_array is in completions
+    bool hasFormatIntArray = false;
+    for (const auto& item : completions) {
+        if (item.label == "format_int_array") {
+            hasFormatIntArray = true;
+            assert(item.kind == 3); // Function
+            assert(!item.detail.empty());
+            break;
+        }
+    }
+    assert(hasFormatIntArray);
+    
+    std::cout << "✓ Stdlib initialization works" << std::endl;
+}
+
+void test_stdlib_hover() {
+    std::cout << "Testing stdlib function hover..." << std::endl;
+    
+    Analyzer analyzer;
+    analyzer.initializeStdlib("../../../stdlib");
+    
+    auto doc = createTestDocument("format_int_array");
+    lsp::Position pos{0, 5}; // Position in "format_int_array"
+    auto hover = analyzer.getHover(doc, pos);
+    
+    // Should return hover information for stdlib function
+    assert(hover.has_value());
+    assert(!hover->contents.empty());
+    assert(hover->contents.find("stdlib::fmt::format_int_array") != std::string::npos);
+    assert(hover->contents.find("function") != std::string::npos);
+    
+    std::cout << "✓ Stdlib function hover works" << std::endl;
+}
+
+void test_stdlib_completion_details() {
+    std::cout << "Testing stdlib function completion details..." << std::endl;
+    
+    Analyzer analyzer;
+    analyzer.initializeStdlib("../../../stdlib");
+    
+    auto doc = createTestDocument("");
+    lsp::Position pos{0, 0};
+    auto completions = analyzer.getCompletions(doc, pos);
+    
+    // Find format_int_array and check its details
+    for (const auto& item : completions) {
+        if (item.label == "format_int_array") {
+            // Should have signature in detail
+            assert(!item.detail.empty());
+            assert(item.detail.find("value int") != std::string::npos);
+            assert(item.detail.find("buffer") != std::string::npos);
+            assert(item.detail.find("[12]char") != std::string::npos);
+            assert(!item.documentation.empty());
+            std::cout << "✓ Stdlib function completion details correct" << std::endl;
+            return;
+        }
+    }
+    
+    assert(false && "format_int_array not found in completions");
+}
+
+void test_stdlib_nonexistent_directory() {
+    std::cout << "Testing stdlib with nonexistent directory..." << std::endl;
+    
+    Analyzer analyzer;
+    
+    // Should not crash with nonexistent directory
+    analyzer.initializeStdlib("/nonexistent/path");
+    
+    auto doc = createTestDocument("function main() end");
+    auto completions = analyzer.getCompletions(doc, {0, 0});
+    
+    // Should still have basic completions (keywords)
+    assert(!completions.empty());
+    
+    std::cout << "✓ Handles nonexistent stdlib directory gracefully" << std::endl;
+}
+
 int main() {
     std::cout << "Running Analyzer Tests...\n" << std::endl;
     
@@ -177,6 +268,12 @@ int main() {
         test_document_symbols();
         test_analyze_syntax_error();
         test_empty_document();
+        
+        // New stdlib tests
+        test_stdlib_initialization();
+        test_stdlib_hover();
+        test_stdlib_completion_details();
+        test_stdlib_nonexistent_directory();
         
         std::cout << "\n✓ All Analyzer tests passed!" << std::endl;
         return 0;

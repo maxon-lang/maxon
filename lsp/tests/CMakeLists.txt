@@ -23,6 +23,7 @@ set(LSP_LIB_SOURCES
 set(MAXON_SOURCES
     ../../maxon-bin/lexer.cpp
     ../../maxon-bin/parser.cpp
+    ../../maxon-bin/semantic_analyzer.cpp
 )
 
 # Create a library from LSP sources for testing

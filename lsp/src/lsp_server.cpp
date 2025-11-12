@@ -1,5 +1,56 @@
 #include "lsp_server.h"
 #include <iostream>
+#include <filesystem>
+#include <fstream>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <limits.h>
+#endif
+
+namespace fs = std::filesystem;
+
+// Helper function to URL decode a string
+static std::string urlDecode(const std::string& str) {
+    std::string result;
+    for (size_t i = 0; i < str.length(); ++i) {
+        if (str[i] == '%' && i + 2 < str.length()) {
+            // Convert %XX to character
+            std::string hex = str.substr(i + 1, 2);
+            char ch = static_cast<char>(std::stoi(hex, nullptr, 16));
+            result += ch;
+            i += 2;
+        } else if (str[i] == '+') {
+            result += ' ';
+        } else {
+            result += str[i];
+        }
+    }
+    return result;
+}
+
+// Helper function to get executable directory
+static std::string getExecutableDirectory() {
+#ifdef _WIN32
+    char path[MAX_PATH];
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+    std::string exePath(path);
+    size_t lastSlash = exePath.find_last_of("\\/");
+    return lastSlash != std::string::npos ? exePath.substr(0, lastSlash) : "";
+#else
+    char path[PATH_MAX];
+    ssize_t count = readlink("/proc/self/exe", path, PATH_MAX);
+    if (count != -1) {
+        path[count] = '\0';
+        std::string exePath(path);
+        size_t lastSlash = exePath.find_last_of('/');
+        return lastSlash != std::string::npos ? exePath.substr(0, lastSlash) : "";
+    }
+    return "";
+#endif
+}
 
 LspServer::LspServer() 
     : rpcHandler(std::make_unique<JsonRpcHandler>()),
@@ -75,6 +126,45 @@ json LspServer::handleInitialize(const json& params) {
         rootUri = params["rootUri"].get<std::string>();
     }
     
+    // Initialize stdlib function cache
+    // First, try to find stdlib relative to the executable location
+    // This works when maxon-lsp.exe is in project_root/bin/
+    std::string exeDir = getExecutableDirectory();
+    
+    bool stdlibInitialized = false;
+    
+    if (!exeDir.empty()) {
+        fs::path stdlibPath = fs::path(exeDir).parent_path() / "stdlib";
+        
+        if (fs::exists(stdlibPath) && fs::is_directory(stdlibPath)) {
+            analyzer->initializeStdlib(stdlibPath.string());
+            stdlibInitialized = true;
+        }
+    }
+    
+    // If stdlib not found relative to exe, try workspace root as fallback
+    if (!stdlibInitialized && !rootUri.empty()) {
+        // Convert file:// URI to path and look for stdlib directory
+        std::string path = rootUri;
+        if (path.substr(0, 7) == "file://") {
+            path = path.substr(7);
+        }
+        
+        // URL decode the path (e.g., %3A -> :)
+        path = urlDecode(path);
+        
+        // On Windows, remove leading slash from /C:/...
+        if (path.size() > 2 && path[0] == '/' && path[2] == ':') {
+            path = path.substr(1);
+        }
+        
+        fs::path stdlibPath = fs::path(path) / "stdlib";
+        
+        if (fs::exists(stdlibPath) && fs::is_directory(stdlibPath)) {
+            analyzer->initializeStdlib(stdlibPath.string());
+        }
+    }
+    
     json capabilities = {
         {"capabilities", {
             {"textDocumentSync", 1}, // Full sync
@@ -120,6 +210,12 @@ json LspServer::handleCompletion(const json& params) {
             {"kind", comp.kind},
             {"detail", comp.detail}
         };
+        
+        // Add documentation if present
+        if (!comp.documentation.empty()) {
+            item["documentation"] = comp.documentation;
+        }
+        
         items.push_back(item);
     }
     

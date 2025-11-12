@@ -104,5 +104,13 @@ set_target_properties(maxonc PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
+# Copy to project root bin directory for easier access and stdlib resolution
+add_custom_command(TARGET maxonc POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:maxonc>
+        ${CMAKE_SOURCE_DIR}/bin/$<TARGET_FILE_NAME:maxonc>
+    COMMENT "Copying maxonc to project root bin directory"
+)
+
 # Installation
 install(TARGETS maxonc DESTINATION bin)
