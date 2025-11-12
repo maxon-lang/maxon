@@ -111,6 +111,14 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
         // Analyze initializer
         std::string initType = analyzeExpression(varDecl->initializer.get());
         
+        // Safety restriction: explicit pointer type with 'var' is not allowed
+        // Only check explicit type declarations, not inferred types (e.g., string literals)
+        if (!varDecl->type.empty() && varDecl->type == "ptr") {
+            addError("Pointer variables must be declared with 'let', not 'var'" +
+                    std::string("\n  Note: For safety, pointers are immutable and must use 'let'"),
+                    stmt->line, stmt->column);
+        }
+        
         // Determine the actual type - use declared type if provided, otherwise infer
         std::string actualType;
         if (!varDecl->type.empty()) {
@@ -385,6 +393,22 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         // Arithmetic operators: +, -, *, /, %
         if (binExpr->op == '+' || binExpr->op == '-' || binExpr->op == '*' || 
             binExpr->op == '/' || binExpr->op == '%') {
+            // Safety restriction: no pointer arithmetic allowed
+            if (leftType == "ptr" || rightType == "ptr") {
+                std::string opName;
+                if (binExpr->op == '+') opName = "addition (+)";
+                else if (binExpr->op == '-') opName = "subtraction (-)";
+                else if (binExpr->op == '*') opName = "multiplication (*)";
+                else if (binExpr->op == '/') opName = "division (/)";
+                else opName = "modulo (%)";
+                
+                addError("Pointer arithmetic is not allowed" +
+                        std::string("\n  Operator: ") + opName +
+                        "\n  Note: For safety, pointers cannot be used in arithmetic operations",
+                        expr->line, expr->column);
+                return "error";
+            }
+            
             if (leftType != "int" || rightType != "int") {
                 std::string opName;
                 if (binExpr->op == '+') opName = "addition (+)";

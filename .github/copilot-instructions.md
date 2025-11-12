@@ -108,3 +108,7 @@ Use the top-level Makefile for all build and development tasks. Run from project
 ## General Guidelines
 - **Do not create new documents** unless specifically instructed
 - **Use make commands** for building and testing
+
+The 'bin' directory is in the path so you can just use "maxon.exe" without a path from anywhere.
+
+When testing sample code always use "maxon <file>" to compile and run in one step without leaving temporary files behind.

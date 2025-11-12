@@ -1,4 +1,4 @@
-ensure pointer arithmetic is not possible, assignable only from references
+renamed maxon-lsp.exe
 
 https://madnight.github.io/benchmarksgame/task-descriptions.html
 https://benchmarksgame-team.pages.debian.net/benchmarksgame/index.html
@@ -14,3 +14,12 @@ mcp server
 get running on linux (devcontainer)
 get running on macos
 
+memory safety (arenas)
+
+vscode extention 
+	- checks (unneeded fully qualitied name) 
+	- quick fixes
+	- highlight block identifiers differently than strings
+
+
+pointers should only be used for FFI
