@@ -646,12 +646,12 @@ bool SemanticAnalyzer::typesMatch(const std::string& type1, const std::string& t
     return type1 == type2;
 }
 
-void SemanticAnalyzer::addError(const std::string& message, int line, int column) {
-    errors.emplace_back(message, line, column, 1); // Severity 1 = Error
+void SemanticAnalyzer::addError(const std::string& message, int line, int column, const std::string& errCode) {
+    errors.emplace_back(message, line, column, 1, errCode); // Severity 1 = Error
 }
 
-void SemanticAnalyzer::addWarning(const std::string& message, int line, int column) {
-    errors.emplace_back(message, line, column, 2); // Severity 2 = Warning
+void SemanticAnalyzer::addWarning(const std::string& message, int line, int column, const std::string& errCode) {
+    errors.emplace_back(message, line, column, 2, errCode); // Severity 2 = Warning
 }
 
 void SemanticAnalyzer::markVariableAsUsed(const std::string& name) {
@@ -679,7 +679,7 @@ void SemanticAnalyzer::checkUnusedVariables() {
         // Skip parameters - it's okay if they're unused
         if (!varInfo.isUsed && !varInfo.isParameter) {
             addWarning("The variable '" + varInfo.name + "' is assigned but its value is never used",
-                      varInfo.line, varInfo.column);
+                      varInfo.line, varInfo.column, "unused-variable");
         }
     }
 }

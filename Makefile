@@ -88,7 +88,7 @@ extension-install: extension-package
 lsp-test:
 	@echo Configuring and building LSP tests...
 	@powershell -Command "if (!(Test-Path 'lsp-server\tests\build')) { New-Item -ItemType Directory -Path 'lsp-server\tests\build' | Out-Null }"
-	@powershell -Command "cd lsp-server\tests\build; cmake .. -G 'Ninja' -DCMAKE_BUILD_TYPE=Debug"
+	@powershell -Command "cd lsp-server\tests\build; cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER='$(CC)' -DCMAKE_CXX_COMPILER='$(CXX)' -DCMAKE_BUILD_TYPE=Debug"
 	@powershell -Command "cd lsp-server\tests\build; cmake --build ."
 	@echo Running LSP tests...
 	@powershell -Command "cd lsp-server\tests\build; ctest --output-on-failure"

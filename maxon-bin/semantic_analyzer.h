@@ -15,9 +15,10 @@ struct SemanticError {
     int line;
     int column;
     int severity; // 1 = Error, 2 = Warning
+    std::string code; // Error/warning code for identification
     
-    SemanticError(const std::string& msg, int l = 0, int c = 0, int sev = 1)
-        : message(msg), line(l), column(c), severity(sev) {}
+    SemanticError(const std::string& msg, int l = 0, int c = 0, int sev = 1, const std::string& errCode = "")
+        : message(msg), line(l), column(c), severity(sev), code(errCode) {}
 };
 
 // Variable information
@@ -96,8 +97,8 @@ private:
     bool typesMatch(const std::string& type1, const std::string& type2);
     
     // Helper methods
-    void addError(const std::string& message, int line = 0, int column = 0);
-    void addWarning(const std::string& message, int line = 0, int column = 0);
+    void addError(const std::string& message, int line = 0, int column = 0, const std::string& errCode = "");
+    void addWarning(const std::string& message, int line = 0, int column = 0, const std::string& errCode = "");
     bool hasReturnInPath(const std::vector<std::unique_ptr<StmtAST>>& statements);
     void markVariableAsUsed(const std::string& name);
     void checkUnusedVariables();

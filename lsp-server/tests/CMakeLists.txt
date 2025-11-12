@@ -52,6 +52,9 @@ target_link_libraries(test_analyzer lsp_lib)
 add_executable(test_lsp_server test_lsp_server.cpp)
 target_link_libraries(test_lsp_server lsp_lib)
 
+add_executable(test_code_actions test_code_actions.cpp)
+target_link_libraries(test_code_actions lsp_lib)
+
 # Enable testing
 enable_testing()
 
@@ -60,3 +63,4 @@ add_test(NAME DocumentManager COMMAND test_document_manager)
 add_test(NAME JsonRpc COMMAND test_json_rpc)
 add_test(NAME Analyzer COMMAND test_analyzer)
 add_test(NAME LSPServer COMMAND test_lsp_server)
+add_test(NAME CodeActions COMMAND test_code_actions)

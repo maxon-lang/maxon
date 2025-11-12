@@ -1,5 +1,6 @@
 #include "lsp_server.h"
 #include <iostream>
+#include <sstream>
 #include <filesystem>
 #include <fstream>
 
@@ -71,6 +72,8 @@ LspServer::LspServer()
         [this](const json& params) { return handleDefinition(params); });
     rpcHandler->registerRequestHandler("textDocument/documentSymbol", 
         [this](const json& params) { return handleDocumentSymbol(params); });
+    rpcHandler->registerRequestHandler("textDocument/codeAction", 
+        [this](const json& params) { return handleCodeAction(params); });
     
     // Register notification handlers
     rpcHandler->registerNotificationHandler("initialized", 
@@ -174,7 +177,10 @@ json LspServer::handleInitialize(const json& params) {
             }},
             {"hoverProvider", true},
             {"definitionProvider", true},
-            {"documentSymbolProvider", true}
+            {"documentSymbolProvider", true},
+            {"codeActionProvider", {
+                {"codeActionKinds", json::array({"quickfix"})}
+            }}
         }},
         {"serverInfo", {
             {"name", "maxon-lsp"},
@@ -372,6 +378,102 @@ void LspServer::handleDidSave(const json& params) {
     }
 }
 
+json LspServer::handleCodeAction(const json& params) {
+    std::string uri = params["textDocument"]["uri"].get<std::string>();
+    lsp::Range range;
+    range.start.line = params["range"]["start"]["line"].get<int>();
+    range.start.character = params["range"]["start"]["character"].get<int>();
+    range.end.line = params["range"]["end"]["line"].get<int>();
+    range.end.character = params["range"]["end"]["character"].get<int>();
+    
+    json actions = json::array();
+    
+    // Check if diagnostics are provided in the context
+    if (params.contains("context") && params["context"].contains("diagnostics")) {
+        auto diagnostics = params["context"]["diagnostics"];
+        
+        for (const auto& diag : diagnostics) {
+            // Only provide quick fixes for warnings
+            if (diag["severity"].get<int>() == 2 && diag.contains("code")) {
+                std::string code = diag["code"].get<std::string>();
+                
+                if (code == "unused-variable") {
+                    // Extract the variable name from the message
+                    std::string message = diag["message"].get<std::string>();
+                    size_t start = message.find("'");
+                    size_t end = message.find("'", start + 1);
+                    
+                    if (start != std::string::npos && end != std::string::npos) {
+                        std::string varName = message.substr(start + 1, end - start - 1);
+                        
+                        // Get the document to find the variable declaration
+                        auto doc = docManager->getDocument(uri);
+                        if (doc) {
+                            lsp::Range diagRange;
+                            diagRange.start.line = diag["range"]["start"]["line"].get<int>();
+                            diagRange.start.character = diag["range"]["start"]["character"].get<int>();
+                            diagRange.end.line = diag["range"]["end"]["line"].get<int>();
+                            diagRange.end.character = diag["range"]["end"]["character"].get<int>();
+                            
+                            // Find the line containing the variable declaration
+                            std::istringstream stream(doc->text);
+                            std::string line;
+                            int lineNum = 0;
+                            lsp::Range deleteRange;
+                            bool found = false;
+                            
+                            while (std::getline(stream, line)) {
+                                if (lineNum == diagRange.start.line) {
+                                    // This is the line with the variable declaration
+                                    deleteRange.start.line = lineNum;
+                                    deleteRange.start.character = 0;
+                                    deleteRange.end.line = lineNum + 1;
+                                    deleteRange.end.character = 0;
+                                    found = true;
+                                    break;
+                                }
+                                lineNum++;
+                            }
+                            
+                            if (found) {
+                                // Create a quick fix to remove the unused variable
+                                json removeAction = {
+                                    {"title", "Remove unused variable '" + varName + "'"},
+                                    {"kind", "quickfix"},
+                                    {"diagnostics", json::array({diag})},
+                                    {"edit", {
+                                        {"changes", {
+                                            {uri, json::array({
+                                                {
+                                                    {"range", {
+                                                        {"start", {
+                                                            {"line", deleteRange.start.line},
+                                                            {"character", deleteRange.start.character}
+                                                        }},
+                                                        {"end", {
+                                                            {"line", deleteRange.end.line},
+                                                            {"character", deleteRange.end.character}
+                                                        }}
+                                                    }},
+                                                    {"newText", ""}
+                                                }
+                                            })}
+                                        }}
+                                    }}
+                                };
+                                
+                                actions.push_back(removeAction);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return actions;
+}
+
 void LspServer::handleExit(const json& params) {
     std::exit(0);
 }
@@ -397,6 +499,10 @@ void LspServer::publishDiagnostics(const std::string& uri, const std::vector<lsp
         
         if (diag.source.has_value()) {
             item["source"] = diag.source.value();
+        }
+        
+        if (diag.code.has_value()) {
+            item["code"] = diag.code.value();
         }
         
         diags.push_back(item);

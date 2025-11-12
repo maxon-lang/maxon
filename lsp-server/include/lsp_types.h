@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <map>
 
 namespace lsp {
 
@@ -27,6 +28,7 @@ struct Diagnostic {
     std::string message;
     int severity; // 1=Error, 2=Warning, 3=Information, 4=Hint
     std::optional<std::string> source;
+    std::optional<std::string> code; // Diagnostic code for identifying specific warnings
 };
 
 struct TextDocumentIdentifier {
@@ -75,6 +77,29 @@ struct DocumentSymbol {
     Range range;
     Range selectionRange;
     std::vector<DocumentSymbol> children;
+};
+
+struct TextEdit {
+    Range range;
+    std::string newText;
+};
+
+struct WorkspaceEdit {
+    std::map<std::string, std::vector<TextEdit>> changes;
+};
+
+struct Command {
+    std::string title;
+    std::string command;
+    std::optional<std::vector<std::string>> arguments;
+};
+
+struct CodeAction {
+    std::string title;
+    std::optional<std::string> kind; // "quickfix", "refactor", etc.
+    std::optional<std::vector<Diagnostic>> diagnostics;
+    std::optional<WorkspaceEdit> edit;
+    std::optional<Command> command;
 };
 
 } // namespace lsp

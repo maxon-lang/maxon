@@ -4,6 +4,7 @@ add "run" to maxon
 add "build" to maxon
 add "repl" to maxon
 add "test" to maxon
+add "lint" to maxon
 add package manager to maxon
 
 self hosting

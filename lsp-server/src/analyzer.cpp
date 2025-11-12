@@ -60,6 +60,9 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
                 diag.message = error.message;
                 diag.severity = error.severity; // Use severity from semantic error (1 = Error, 2 = Warning)
                 diag.source = "maxon";
+                if (!error.code.empty()) {
+                    diag.code = error.code;
+                }
                 diagnostics.push_back(diag);
             }
             
