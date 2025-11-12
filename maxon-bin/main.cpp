@@ -9,6 +9,7 @@
 #include <string>
 #include <filesystem>
 #include <algorithm>
+#include <ctime>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -202,6 +203,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "\nCommands:" << std::endl;
         std::cerr << "  compile <input.maxon> [<input2.maxon> ...] [options]" << std::endl;
         std::cerr << "                 Compile Maxon source files" << std::endl;
+        std::cerr << "  <input.maxon>  Compile and run source file (no artifacts left on disk)" << std::endl;
         std::cerr << "\nOptions for compile:" << std::endl;
         std::cerr << "  --emit-llvm    Print LLVM IR to stdout" << std::endl;
         std::cerr << "  -o <output>    Specify output executable (default: output.exe)" << std::endl;
@@ -213,6 +215,66 @@ int main(int argc, char* argv[]) {
     }
     
     std::string command = argv[1];
+    
+    // Check if single argument is a .maxon file - compile and run without leaving artifacts
+    if (argc == 2 && command.length() >= 6 && command.substr(command.length() - 6) == ".maxon") {
+        try {
+            // Generate temporary executable name
+            std::filesystem::path tempDir = std::filesystem::temp_directory_path();
+            std::string tempExe = (tempDir / ("maxon_temp_" + std::to_string(std::time(nullptr)) + ".exe")).string();
+            
+            // Read and compile the source file
+            std::string source = readFile(command);
+            
+            // Lexical analysis
+            Lexer lexer(source);
+            std::vector<Token> tokens = lexer.tokenize();
+            
+            // Parsing
+            Parser parser(tokens);
+            std::string fileNamespace = deriveNamespace(command);
+            parser.setDefaultNamespace(fileNamespace);
+            std::unique_ptr<ProgramAST> program = parser.parse();
+            
+            // Semantic analysis
+            SemanticAnalyzer analyzer;
+            std::vector<SemanticError> semanticErrors = analyzer.analyze(program.get());
+            
+            if (!semanticErrors.empty()) {
+                std::cerr << "\n=== Compilation Failed ===" << std::endl;
+                for (const auto& error : semanticErrors) {
+                    std::string formattedError = ErrorFormatter::formatError(
+                        error.message, source, error.line, error.column, "Semantic Error"
+                    );
+                    std::cerr << formattedError << std::endl;
+                }
+                return 1;
+            }
+            
+            // Code generation
+            CodeGenerator codegen(command, false, false);
+            codegen.generate(program.get(), true);
+            codegen.optimize();
+            codegen.writeExecutable(tempExe);
+            
+            // Run the temporary executable
+            int exitCode;
+#ifdef _WIN32
+            exitCode = system(tempExe.c_str());
+#else
+            exitCode = system(tempExe.c_str());
+#endif
+            
+            // Clean up temporary file
+            std::filesystem::remove(tempExe);
+            
+            return exitCode;
+            
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+            return 1;
+        }
+    }
     
     // Check if the command is "compile"
     if (command != "compile") {

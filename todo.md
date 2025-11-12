@@ -1,6 +1,3 @@
-change maxonc to maxon
-change lsp to lsp-server
-
 ensure pointer arithmetic is not possible, assignable only from references
 
 https://madnight.github.io/benchmarksgame/task-descriptions.html
@@ -13,3 +10,7 @@ add package manager to maxon
 
 self hosting
 mcp server
+
+get running on linux (devcontainer)
+get running on macos
+
