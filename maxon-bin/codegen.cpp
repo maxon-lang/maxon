@@ -1002,6 +1002,47 @@ void CodeGenerator::generateFunction(FunctionAST* func, const std::string& names
     }
 }
 
+void CodeGenerator::createMinimalEntryPoint() {
+    // Declare ExitProcess from kernel32
+    llvm::FunctionType* exitProcessType = llvm::FunctionType::get(
+        llvm::Type::getVoidTy(context),
+        {llvm::Type::getInt32Ty(context)},
+        false
+    );
+    llvm::Function* exitProcessFunc = llvm::Function::Create(
+        exitProcessType,
+        llvm::Function::ExternalLinkage,
+        "ExitProcess",
+        module.get()
+    );
+    
+    // Get the main function
+    llvm::Function* mainFunc = module->getFunction("main");
+    if (!mainFunc) {
+        throw std::runtime_error("main function not found");
+    }
+    
+    // Create _start function as the real entry point
+    llvm::FunctionType* startType = llvm::FunctionType::get(
+        llvm::Type::getVoidTy(context),
+        false
+    );
+    llvm::Function* startFunc = llvm::Function::Create(
+        startType,
+        llvm::Function::ExternalLinkage,
+        "_start",
+        module.get()
+    );
+    
+    // Generate body: call main, then ExitProcess with main's return value
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", startFunc);
+    llvm::IRBuilder<> tmpBuilder(entry);
+    
+    llvm::Value* mainRetVal = tmpBuilder.CreateCall(mainFunc);
+    tmpBuilder.CreateCall(exitProcessFunc, {mainRetVal});
+    tmpBuilder.CreateUnreachable();  // ExitProcess never returns
+}
+
 void CodeGenerator::generate(ProgramAST* program) {
     // First pass: Create all function declarations (including namespace functions)
     for (auto& func : program->functions) {
@@ -1089,6 +1130,9 @@ void CodeGenerator::generate(ProgramAST* program) {
             generateFunction(func.get(), ns->name);
         }
     }
+    
+    // Create minimal CRT entry point that calls main and ExitProcess
+    createMinimalEntryPoint();
     
     // Finalize debug info if enabled
     finalizeDebugInfo();
@@ -1248,28 +1292,29 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
         lldArgs.push_back("/DEBUG");
     }
     
-    // Add library paths
-    std::string vsPath = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207";
-    std::string libPath = "/LIBPATH:" + vsPath + "\\lib\\x64";
+    // Add library path for Windows SDK (needed for kernel32.lib)
     std::string sdkLibPath = "/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\um\\x64";
-    std::string ucrtLibPath = "/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\ucrt\\x64";
-    
-    lldArgs.push_back(libPath.c_str());
     lldArgs.push_back(sdkLibPath.c_str());
-    lldArgs.push_back(ucrtLibPath.c_str());
-    
-    // Output file
+	lldArgs.push_back("/DEFAULTLIB:kernel32.lib");
+	lldArgs.push_back("/NODEFAULTLIB"); // Don't link default CRT libraries
+	lldArgs.push_back("/ENTRY:_start");	// Set entry point to _start (our minimal wrapper)
+	
+	// Size optimization flags (only when not generating debug info)
+	if (!generateDebugInfo) {
+		lldArgs.push_back("/OPT:REF");    // Remove unreferenced functions/data
+		lldArgs.push_back("/OPT:ICF");    // Identical COMDAT folding
+		lldArgs.push_back("/MERGE:.rdata=.text"); // Merge read-only data into code section
+	}
+
+	// Output file
     std::string outArg = "/OUT:" + exeFile;
     lldArgs.push_back(outArg.c_str());
     
     // Input object file
     lldArgs.push_back(tempObjFile.c_str());
     
-    // Default libraries
-    lldArgs.push_back("/DEFAULTLIB:libcmt.lib");
-    lldArgs.push_back("/DEFAULTLIB:oldnames.lib");
-    lldArgs.push_back("/DEFAULTLIB:kernel32.lib");
-    lldArgs.push_back("/DEFAULTLIB:user32.lib");
+    // Explicitly link kernel32.lib
+    lldArgs.push_back("kernel32.lib");
     
     // Call LLD driver directly (in-process)
     bool success = lld::coff::link(lldArgs, llvm::outs(), llvm::errs(), false, false);

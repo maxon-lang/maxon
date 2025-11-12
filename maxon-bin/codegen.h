@@ -48,6 +48,9 @@ private:
     // Standard library
     void initStandardLibrary();
     
+    // Minimal CRT entry point
+    void createMinimalEntryPoint();
+    
 public:
     CodeGenerator(const std::string& moduleName, bool debugInfo = false);
     void generate(ProgramAST* program);
