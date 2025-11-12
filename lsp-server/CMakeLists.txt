@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
 
-project(maxon-lsp VERSION 0.1.0 LANGUAGES CXX)
+project(maxon-lsp-server VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,10 +34,10 @@ set(LSP_SOURCES
 )
 
 # Create executable
-add_executable(maxon-lsp ${LSP_SOURCES} ${MAXON_SOURCES})
+add_executable(maxon-lsp-server ${LSP_SOURCES} ${MAXON_SOURCES})
 
 # Compiler flags for Clang
-target_compile_options(maxon-lsp PRIVATE
+target_compile_options(maxon-lsp-server PRIVATE
     -Wall
     -Wno-unused-parameter
     -Wno-sign-compare
@@ -45,21 +45,21 @@ target_compile_options(maxon-lsp PRIVATE
 
 # Link libraries
 if(nlohmann_json_FOUND)
-    target_link_libraries(maxon-lsp PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(maxon-lsp-server PRIVATE nlohmann_json::nlohmann_json)
 endif()
 
 # Set output directory
-set_target_properties(maxon-lsp PROPERTIES
+set_target_properties(maxon-lsp-server PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
 # Copy to project root bin directory for easier access and stdlib resolution
-add_custom_command(TARGET maxon-lsp POST_BUILD
+add_custom_command(TARGET maxon-lsp-server POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:maxon-lsp>
-        ${CMAKE_SOURCE_DIR}/bin/$<TARGET_FILE_NAME:maxon-lsp>
-    COMMENT "Copying maxon-lsp to project root bin directory"
+        $<TARGET_FILE:maxon-lsp-server>
+        ${CMAKE_SOURCE_DIR}/bin/$<TARGET_FILE_NAME:maxon-lsp-server>
+    COMMENT "Copying maxon-lsp-server to project root bin directory"
 )
 
 # Installation
-install(TARGETS maxon-lsp DESTINATION bin)
+install(TARGETS maxon-lsp-server DESTINATION bin)

@@ -1,6 +1,3 @@
-renamed maxon-lsp.exe
-
-https://madnight.github.io/benchmarksgame/task-descriptions.html
 https://benchmarksgame-team.pages.debian.net/benchmarksgame/index.html
 
 add "run" to maxon

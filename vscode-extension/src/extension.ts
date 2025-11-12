@@ -25,7 +25,7 @@ export async function activate(context: vscode.ExtensionContext) {
         context.extensionPath, 
         '..', 
         'bin',
-        'maxon-lsp.exe'  // or 'maxon-lsp' on Linux/Mac
+        'maxon-lsp-server.exe'  // or 'maxon-lsp-server' on Linux/Mac
     );
 
     outputChannel.appendLine(`[Extension] Server executable path: ${serverExecutable}`);

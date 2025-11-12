@@ -128,7 +128,7 @@ json LspServer::handleInitialize(const json& params) {
     
     // Initialize stdlib function cache
     // First, try to find stdlib relative to the executable location
-    // This works when maxon-lsp.exe is in project_root/bin/
+    // This works when maxon-lsp-server.exe is in project_root/bin/
     std::string exeDir = getExecutableDirectory();
     
     bool stdlibInitialized = false;

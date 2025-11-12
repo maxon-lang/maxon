@@ -34,6 +34,6 @@ add_custom_target(lsp-extension
 if(TARGET maxon)
     install(TARGETS maxon DESTINATION bin)
 endif()
-if(TARGET maxon-lsp)
-    install(TARGETS maxon-lsp DESTINATION bin)
+if(TARGET maxon-lsp-server)
+    install(TARGETS maxon-lsp-server DESTINATION bin)
 endif()

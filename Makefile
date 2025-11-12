@@ -48,7 +48,7 @@ lsp: lsp-server extension
 # Build the C++ LSP server
 lsp-server: configure
 	@powershell -Command "if (-not (Test-Path 'lsp-server\include\json.hpp')) { Write-Host 'Downloading nlohmann/json library...'; Invoke-WebRequest -Uri 'https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp' -OutFile 'lsp-server/include/json.hpp' }"
-	cmake --build $(BUILD_DIR) --target maxon-lsp
+	cmake --build $(BUILD_DIR) --target maxon-lsp-server
 
 # Build the VS Code extension (install + compile)
 extension:
