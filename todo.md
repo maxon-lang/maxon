@@ -19,6 +19,7 @@ vscode extention
 	- quick fixes
 		- unneeded type declaration
 		- unneeded casts
+		- unused parameters
 		
 	- highlight block identifiers differently than strings
 

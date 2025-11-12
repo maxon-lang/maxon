@@ -82,7 +82,7 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST* func) {
     
     // Declare parameters as variables
     for (const auto& param : func->parameters) {
-        declareVariable(param.name, param.type, false, param.line, param.column);
+        declareVariable(param.name, param.type, false, param.line, param.column, true);
     }
     
     // Analyze function body
@@ -214,6 +214,9 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
                     std::string("\n  Note: Variable must be declared with 'var' or 'let' before use"),
                     stmt->line, stmt->column);
         } else {
+            // Mark array as used when assigned to
+            markVariableAsUsed(arrayAssign->arrayName);
+            
             // Check if variable is immutable
             if (varInfo->isImmutable) {
                 addError("Cannot assign to read-only array '" + arrayAssign->arrayName + "'" +
@@ -535,6 +538,31 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         }
         
         return funcInfo.returnType;
+        
+    } else if (auto arrayExpr = dynamic_cast<ArrayIndexExprAST*>(expr)) {
+        // Check if array variable exists
+        auto varInfo = lookupVariable(arrayExpr->arrayName);
+        if (!varInfo.has_value()) {
+            addError("Undefined variable: '" + arrayExpr->arrayName + "'" +
+                    std::string("\n  Note: Array must be declared before use"),
+                    expr->line, expr->column);
+            return "error";
+        }
+        
+        // Mark array variable as used when accessed
+        markVariableAsUsed(arrayExpr->arrayName);
+        
+        // Analyze the index expression
+        std::string indexType = analyzeExpression(arrayExpr->index.get());
+        if (indexType != "int" && indexType != "error") {
+            addError("Array index must be an integer" +
+                    std::string("\n  Found type: ") + indexType,
+                    expr->line, expr->column);
+        }
+        
+        // For now, assume all array elements are ints
+        // TODO: Extract actual element type from array type (e.g., "[5]int" -> "int")
+        return "int";
     }
     
     return "error";
@@ -572,13 +600,23 @@ void SemanticAnalyzer::enterScope() {
 
 void SemanticAnalyzer::exitScope() {
     if (!scopeStack.empty()) {
+        // Before restoring parent scope, preserve usage information for parent scope variables
+        auto childVariables = variables;
         variables = scopeStack.back();
         scopeStack.pop_back();
+        
+        // Propagate "isUsed" flag from child scope to parent scope for shared variables
+        for (auto& parentVar : variables) {
+            auto childIt = childVariables.find(parentVar.first);
+            if (childIt != childVariables.end() && childIt->second.isUsed) {
+                parentVar.second.isUsed = true;
+            }
+        }
     }
 }
 
-void SemanticAnalyzer::declareVariable(const std::string& name, const std::string& type, bool isImmutable, int line, int column) {
-    variables[name] = VariableInfo(name, type, isImmutable, line, column);
+void SemanticAnalyzer::declareVariable(const std::string& name, const std::string& type, bool isImmutable, int line, int column, bool isParameter) {
+    variables[name] = VariableInfo(name, type, isImmutable, line, column, isParameter);
 }
 
 std::optional<VariableInfo> SemanticAnalyzer::lookupVariable(const std::string& name) {
@@ -638,7 +676,8 @@ void SemanticAnalyzer::checkUnusedVariables() {
     // Check all variables in current scope
     for (const auto& pair : variables) {
         const VariableInfo& varInfo = pair.second;
-        if (!varInfo.isUsed) {
+        // Skip parameters - it's okay if they're unused
+        if (!varInfo.isUsed && !varInfo.isParameter) {
             addWarning("The variable '" + varInfo.name + "' is assigned but its value is never used",
                       varInfo.line, varInfo.column);
         }

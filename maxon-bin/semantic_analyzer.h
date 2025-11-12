@@ -26,13 +26,14 @@ struct VariableInfo {
     std::string type;
     bool isImmutable; // true for 'let' variables
     bool isUsed;      // true if variable is read/referenced
+    bool isParameter; // true if this is a function parameter
     int line;
     int column;
     
-    VariableInfo() : isImmutable(false), isUsed(false), line(0), column(0) {}
+    VariableInfo() : isImmutable(false), isUsed(false), isParameter(false), line(0), column(0) {}
     
-    VariableInfo(const std::string& n, const std::string& t, bool immutable, int l = 0, int c = 0)
-        : name(n), type(t), isImmutable(immutable), isUsed(false), line(l), column(c) {}
+    VariableInfo(const std::string& n, const std::string& t, bool immutable, int l = 0, int c = 0, bool param = false)
+        : name(n), type(t), isImmutable(immutable), isUsed(false), isParameter(param), line(l), column(c) {}
 };
 
 // Function information
@@ -87,7 +88,7 @@ private:
     // Scope management
     void enterScope();
     void exitScope();
-    void declareVariable(const std::string& name, const std::string& type, bool isImmutable, int line = 0, int column = 0);
+    void declareVariable(const std::string& name, const std::string& type, bool isImmutable, int line = 0, int column = 0, bool isParameter = false);
     std::optional<VariableInfo> lookupVariable(const std::string& name);
     
     // Type checking
