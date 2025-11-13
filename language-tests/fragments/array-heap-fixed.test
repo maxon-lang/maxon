@@ -1,8 +1,10 @@
-// Test arrays as function parameters
 function main() int
-    var nums [5]int = 0
-    nums[2] = 42
-    return nums[2]
+    var arr [5]int = 0
+    arr[0] = 10
+    arr[1] = 20
+    arr[2] = 30
+    var sum = arr[0] + arr[1] + arr[2]
+    return sum
 end 'main'
 ---
 ; ModuleID = 'test.maxon'
@@ -12,19 +14,21 @@ source_filename = "test.maxon"
 
 define i32 @main() {
 entry:
-  %nums.malloc = call ptr @malloc(i64 20)
-  store i32 0, ptr %nums.malloc, align 4
-  %arrayidx1 = getelementptr i8, ptr %nums.malloc, i64 4
+  %arr.malloc = call ptr @malloc(i64 20)
+  store i32 0, ptr %arr.malloc, align 4
+  %arrayidx1 = getelementptr i8, ptr %arr.malloc, i64 4
   store i32 0, ptr %arrayidx1, align 4
-  %arrayidx2 = getelementptr i8, ptr %nums.malloc, i64 8
+  %arrayidx2 = getelementptr i8, ptr %arr.malloc, i64 8
   store i32 0, ptr %arrayidx2, align 4
-  %arrayidx3 = getelementptr i8, ptr %nums.malloc, i64 12
+  %arrayidx3 = getelementptr i8, ptr %arr.malloc, i64 12
   store i32 0, ptr %arrayidx3, align 4
-  %arrayidx4 = getelementptr i8, ptr %nums.malloc, i64 16
+  %arrayidx4 = getelementptr i8, ptr %arr.malloc, i64 16
   store i32 0, ptr %arrayidx4, align 4
-  store i32 42, ptr %arrayidx2, align 4
-  call void @free(ptr nonnull %nums.malloc)
-  ret i32 42
+  store i32 10, ptr %arr.malloc, align 4
+  store i32 20, ptr %arrayidx1, align 4
+  store i32 30, ptr %arrayidx2, align 4
+  call void @free(ptr nonnull %arr.malloc)
+  ret i32 60
 }
 
 declare ptr @GetProcessHeap()
@@ -56,4 +60,4 @@ entry:
   unreachable
 }
 ---
-ExitCode: 42
+ExitCode: 60

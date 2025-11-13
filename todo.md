@@ -1,4 +1,6 @@
 - if x is a float "x as int" should not work, use trunc() or round() or something
+- tests are going to need both optimized and unoptimized IR
+- remove sin and cos intrinsics
 
 https://benchmarksgame-team.pages.debian.net/benchmarksgame/index.html
 

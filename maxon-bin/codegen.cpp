@@ -88,6 +88,115 @@ CodeGenerator::CodeGenerator(const std::string& moduleName, bool debugInfo, bool
     );
     
     // Don't initialize standard library here - it will be done on demand
+    // Don't initialize heap management here - it will be done on demand when arrays are allocated
+}
+
+void CodeGenerator::initHeapManagement() {
+    // Check if malloc already exists
+    if (module->getFunction("malloc")) {
+        return;
+    }
+    
+    // Declare Windows Heap API functions
+    // ptr GetProcessHeap()
+    llvm::FunctionType* getProcessHeapType = llvm::FunctionType::get(
+        llvm::PointerType::get(context, 0),
+        {},
+        false
+    );
+    llvm::Function::Create(getProcessHeapType, llvm::Function::ExternalLinkage,
+                          "GetProcessHeap", module.get());
+    
+    // ptr HeapAlloc(ptr heap, i32 flags, i64 bytes)
+    llvm::FunctionType* heapAllocType = llvm::FunctionType::get(
+        llvm::PointerType::get(context, 0),
+        {
+            llvm::PointerType::get(context, 0),  // hHeap
+            llvm::Type::getInt32Ty(context),     // dwFlags
+            llvm::Type::getInt64Ty(context)      // dwBytes
+        },
+        false
+    );
+    llvm::Function::Create(heapAllocType, llvm::Function::ExternalLinkage,
+                          "HeapAlloc", module.get());
+    
+    // i32 HeapFree(ptr heap, i32 flags, ptr mem)
+    llvm::FunctionType* heapFreeType = llvm::FunctionType::get(
+        llvm::Type::getInt32Ty(context),
+        {
+            llvm::PointerType::get(context, 0),  // hHeap
+            llvm::Type::getInt32Ty(context),     // dwFlags
+            llvm::PointerType::get(context, 0)   // lpMem
+        },
+        false
+    );
+    llvm::Function::Create(heapFreeType, llvm::Function::ExternalLinkage,
+                          "HeapFree", module.get());
+    
+    // Create malloc wrapper function
+    llvm::FunctionType* mallocType = llvm::FunctionType::get(
+        llvm::PointerType::get(context, 0),
+        {llvm::Type::getInt64Ty(context)},
+        false
+    );
+    llvm::Function* mallocFunc = llvm::Function::Create(
+        mallocType,
+        llvm::Function::ExternalLinkage,
+        "malloc",
+        module.get()
+    );
+    
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", mallocFunc);
+    llvm::BasicBlock* savedBlock = builder.GetInsertBlock();
+    builder.SetInsertPoint(entry);
+    
+    llvm::Value* sizeArg = mallocFunc->getArg(0);
+    llvm::Function* getProcessHeap = module->getFunction("GetProcessHeap");
+    llvm::Function* heapAlloc = module->getFunction("HeapAlloc");
+    
+    llvm::Value* heap = builder.CreateCall(getProcessHeap, {});
+    llvm::Value* ptr = builder.CreateCall(heapAlloc, {
+        heap,
+        llvm::ConstantInt::get(context, llvm::APInt(32, 0, false)),  // flags = 0
+        sizeArg
+    });
+    builder.CreateRet(ptr);
+    
+    if (savedBlock) {
+        builder.SetInsertPoint(savedBlock);
+    }
+    
+    // Create free wrapper function
+    llvm::FunctionType* freeType = llvm::FunctionType::get(
+        llvm::Type::getVoidTy(context),
+        {llvm::PointerType::get(context, 0)},
+        false
+    );
+    llvm::Function* freeFunc = llvm::Function::Create(
+        freeType,
+        llvm::Function::ExternalLinkage,
+        "free",
+        module.get()
+    );
+    
+    entry = llvm::BasicBlock::Create(context, "entry", freeFunc);
+    savedBlock = builder.GetInsertBlock();
+    builder.SetInsertPoint(entry);
+    
+    llvm::Value* ptrArg = freeFunc->getArg(0);
+    llvm::Function* heapFree = module->getFunction("HeapFree");
+    
+    heap = builder.CreateCall(getProcessHeap, {});
+    builder.CreateCall(heapFree, {
+        heap,
+        llvm::ConstantInt::get(context, llvm::APInt(32, 0, false)),  // flags = 0
+        ptrArg
+    });
+    builder.CreateRetVoid();
+    
+    if (savedBlock) {
+        builder.SetInsertPoint(savedBlock);
+    }
 }
 
 void CodeGenerator::initStandardLibrary() {
@@ -344,6 +453,60 @@ llvm::AllocaInst* CodeGenerator::createEntryBlockAlloca(llvm::Function* function
     llvm::IRBuilder<> tmpBuilder(&function->getEntryBlock(),
                                   function->getEntryBlock().begin());
     return tmpBuilder.CreateAlloca(type, nullptr, varName);
+}
+
+void CodeGenerator::pushScope() {
+    scopeStack.push_back(ScopeInfo());
+}
+
+void CodeGenerator::popScope(llvm::Function* function) {
+    if (scopeStack.empty()) {
+        return;
+    }
+    
+    generateScopeCleanup(function);
+    scopeStack.pop_back();
+}
+
+void CodeGenerator::generateScopeCleanup(llvm::Function* function) {
+    if (scopeStack.empty()) {
+        return;
+    }
+    
+    ScopeInfo& currentScope = scopeStack.back();
+    
+    // Generate free calls for all heap-allocated arrays in this scope
+    for (auto it = currentScope.heapAllocatedArrays.rbegin(); 
+         it != currentScope.heapAllocatedArrays.rend(); ++it) {
+        const std::string& arrayName = it->first;
+        llvm::AllocaInst* ptrAlloca = it->second;
+        
+        // Load the pointer value
+        llvm::Value* arrayPtr = builder.CreateLoad(
+            llvm::PointerType::get(context, 0),
+            ptrAlloca,
+            arrayName + ".ptr"
+        );
+        
+        // Declare free if not already declared
+        llvm::Function* freeFunc = module->getFunction("free");
+        if (!freeFunc) {
+            llvm::FunctionType* freeFuncType = llvm::FunctionType::get(
+                llvm::Type::getVoidTy(context),
+                {llvm::PointerType::get(context, 0)},
+                false
+            );
+            freeFunc = llvm::Function::Create(
+                freeFuncType,
+                llvm::Function::ExternalLinkage,
+                "free",
+                module.get()
+            );
+        }
+        
+        // Call free
+        builder.CreateCall(freeFunc, {arrayPtr});
+    }
 }
 
 llvm::Value* CodeGenerator::generateMathIntrinsic(CallExprAST* callExpr) {
@@ -789,7 +952,7 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         // Determine the type for the alloca
         llvm::Type* allocaType;
         if (varDecl->arraySize > 0) {
-            // Array type: [size x elementType]
+            // Array type: allocate on heap using malloc
             llvm::Type* elementType;
             if (!varDecl->type.empty()) {
                 elementType = getTypeFromString(context, varDecl->type);
@@ -797,7 +960,90 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
                 throw std::runtime_error("Array declaration requires explicit element type at line " + 
                                        std::to_string(varDecl->line));
             }
-            allocaType = llvm::ArrayType::get(elementType, varDecl->arraySize);
+            
+            // Initialize heap management functions on first use
+            initHeapManagement();
+            
+            // Declare malloc if not already declared
+            llvm::Function* mallocFunc = module->getFunction("malloc");
+            if (!mallocFunc) {
+                llvm::FunctionType* mallocFuncType = llvm::FunctionType::get(
+                    llvm::PointerType::get(context, 0),
+                    {llvm::Type::getInt64Ty(context)},
+                    false
+                );
+                mallocFunc = llvm::Function::Create(
+                    mallocFuncType,
+                    llvm::Function::ExternalLinkage,
+                    "malloc",
+                    module.get()
+                );
+            }
+            
+            // Calculate size: arraySize * sizeof(elementType)
+            const llvm::DataLayout& dataLayout = module->getDataLayout();
+            uint64_t elementSize = dataLayout.getTypeAllocSize(elementType);
+            uint64_t totalSize = varDecl->arraySize * elementSize;
+            llvm::Value* sizeVal = llvm::ConstantInt::get(
+                llvm::Type::getInt64Ty(context), 
+                totalSize
+            );
+            
+            // Call malloc
+            llvm::Value* arrayPtr = builder.CreateCall(mallocFunc, {sizeVal}, varDecl->name + ".malloc");
+            
+            // Create alloca to store the pointer
+            llvm::AllocaInst* ptrAlloca = createEntryBlockAlloca(
+                function, 
+                varDecl->name, 
+                llvm::PointerType::get(context, 0)
+            );
+            builder.CreateStore(arrayPtr, ptrAlloca);
+            
+            // Initialize array elements with the initializer value
+            if (initVal) {
+                for (int i = 0; i < varDecl->arraySize; i++) {
+                    llvm::Value* indexVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i);
+                    llvm::Value* elementPtr = builder.CreateGEP(
+                        elementType,
+                        arrayPtr,
+                        indexVal,
+                        "arrayidx"
+                    );
+                    builder.CreateStore(initVal, elementPtr);
+                }
+            }
+            
+            namedValues[varDecl->name] = ptrAlloca;
+            
+            // Track this array for cleanup
+            if (!scopeStack.empty()) {
+                scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, ptrAlloca});
+            }
+            
+            // Create debug info for array pointer variable
+            if (generateDebugInfo && !debugScopeStack.empty()) {
+                llvm::DILocalVariable* debugVar = debugBuilder->createAutoVariable(
+                    debugScopeStack.back(),
+                    varDecl->name,
+                    debugFile,
+                    varDecl->line,
+                    debugBuilder->createBasicType("ptr", 64, llvm::dwarf::DW_ATE_address),
+                    false,
+                    llvm::DINode::FlagZero,
+                    64
+                );
+                
+                debugBuilder->insertDeclare(
+                    ptrAlloca,
+                    debugVar,
+                    debugBuilder->createExpression(),
+                    llvm::DILocation::get(context, varDecl->line, varDecl->column, debugScopeStack.back()),
+                    builder.GetInsertBlock()
+                );
+            }
+            
+            return;
         } else if (!varDecl->type.empty()) {
             // Use explicit type annotation
             allocaType = getTypeFromString(context, varDecl->type);
@@ -854,7 +1100,7 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         // Determine the type for the alloca
         llvm::Type* allocaType;
         if (letDecl->arraySize > 0) {
-            // Array type: [size x elementType]
+            // Array type: allocate on heap using malloc
             llvm::Type* elementType;
             if (!letDecl->type.empty()) {
                 elementType = getTypeFromString(context, letDecl->type);
@@ -862,7 +1108,91 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
                 throw std::runtime_error("Array declaration requires explicit element type at line " + 
                                        std::to_string(letDecl->line));
             }
-            allocaType = llvm::ArrayType::get(elementType, letDecl->arraySize);
+            
+            // Initialize heap management functions on first use
+            initHeapManagement();
+            
+            // Declare malloc if not already declared
+            llvm::Function* mallocFunc = module->getFunction("malloc");
+            if (!mallocFunc) {
+                llvm::FunctionType* mallocFuncType = llvm::FunctionType::get(
+                    llvm::PointerType::get(context, 0),
+                    {llvm::Type::getInt64Ty(context)},
+                    false
+                );
+                mallocFunc = llvm::Function::Create(
+                    mallocFuncType,
+                    llvm::Function::ExternalLinkage,
+                    "malloc",
+                    module.get()
+                );
+            }
+            
+            // Calculate size: arraySize * sizeof(elementType)
+            const llvm::DataLayout& dataLayout = module->getDataLayout();
+            uint64_t elementSize = dataLayout.getTypeAllocSize(elementType);
+            uint64_t totalSize = letDecl->arraySize * elementSize;
+            llvm::Value* sizeVal = llvm::ConstantInt::get(
+                llvm::Type::getInt64Ty(context), 
+                totalSize
+            );
+            
+            // Call malloc
+            llvm::Value* arrayPtr = builder.CreateCall(mallocFunc, {sizeVal}, letDecl->name + ".malloc");
+            
+            // Create alloca to store the pointer
+            llvm::AllocaInst* ptrAlloca = createEntryBlockAlloca(
+                function, 
+                letDecl->name, 
+                llvm::PointerType::get(context, 0)
+            );
+            builder.CreateStore(arrayPtr, ptrAlloca);
+            
+            // Initialize array elements with the initializer value
+            if (initVal) {
+                for (int i = 0; i < letDecl->arraySize; i++) {
+                    llvm::Value* indexVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i);
+                    llvm::Value* elementPtr = builder.CreateGEP(
+                        elementType,
+                        arrayPtr,
+                        indexVal,
+                        "arrayidx"
+                    );
+                    builder.CreateStore(initVal, elementPtr);
+                }
+            }
+            
+            namedValues[letDecl->name] = ptrAlloca;
+            
+            // Track this array for cleanup
+            if (!scopeStack.empty()) {
+                scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, ptrAlloca});
+            }
+            
+            // Create debug info for array pointer variable
+            if (generateDebugInfo && !debugScopeStack.empty()) {
+                llvm::DILocalVariable* debugVar = debugBuilder->createAutoVariable(
+                    debugScopeStack.back(),
+                    letDecl->name,
+                    debugFile,
+                    letDecl->line,
+                    debugBuilder->createBasicType("ptr", 64, llvm::dwarf::DW_ATE_address),
+                    false,
+                    llvm::DINode::FlagZero,
+                    64
+                );
+                
+                debugBuilder->insertDeclare(
+                    ptrAlloca,
+                    debugVar,
+                    debugBuilder->createExpression(),
+                    llvm::DILocation::get(context, letDecl->line, letDecl->column, debugScopeStack.back()),
+                    builder.GetInsertBlock()
+                );
+            }
+            
+            // Note: immutability is enforced at semantic analysis level
+            return;
         } else if (!letDecl->type.empty()) {
             // Use explicit type annotation
             allocaType = getTypeFromString(context, letDecl->type);
@@ -1145,6 +1475,11 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         if (!currentLoopAfter) {
             throw std::runtime_error("Break statement outside of loop");
         }
+        
+        // Note: We don't clean up scopes here because break only exits the loop,
+        // not the entire function. The loop's scope will be cleaned up when the
+        // loop ends normally.
+        
         builder.CreateBr(currentLoopAfter);
         // Create a new basic block for any code after the break (dead code)
         llvm::BasicBlock* deadBB = llvm::BasicBlock::Create(context, "afterbreak", builder.GetInsertBlock()->getParent());
@@ -1178,6 +1513,13 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         if (!retVal) {
             throw std::runtime_error("Failed to generate return value");
         }
+        
+        // Clean up all scopes before returning
+        while (!scopeStack.empty()) {
+            generateScopeCleanup(function);
+            scopeStack.pop_back();
+        }
+        
         builder.CreateRet(retVal);
         return;
     }
@@ -1260,9 +1602,30 @@ void CodeGenerator::generateFunction(FunctionAST* func, const std::string& names
         idx++;
     }
     
+    // Push a scope for the function body
+    pushScope();
+    
     // Generate function body
     for (auto& stmt : func->body) {
         generateStmt(stmt.get(), function);
+    }
+    
+    // If function doesn't have a terminator (return), clean up and add one
+    if (!builder.GetInsertBlock()->getTerminator()) {
+        // Clean up the function scope
+        popScope(function);
+        
+        // Add a default return value (0 for int, 0.0 for float, etc.)
+        llvm::Type* retType = function->getReturnType();
+        if (retType->isIntegerTy()) {
+            builder.CreateRet(llvm::ConstantInt::get(retType, 0));
+        } else if (retType->isFloatingPointTy()) {
+            builder.CreateRet(llvm::ConstantFP::get(retType, 0.0));
+        } else if (retType->isPointerTy()) {
+            builder.CreateRet(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(retType)));
+        } else {
+            builder.CreateRetVoid();
+        }
     }
     
     // Pop debug scope
