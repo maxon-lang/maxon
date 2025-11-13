@@ -23,6 +23,7 @@ private:
     std::unique_ptr<ExprAST> parseComparison();
     std::unique_ptr<ExprAST> parseTerm();
     std::unique_ptr<ExprAST> parseFactor();
+    std::unique_ptr<ExprAST> parseUnary();
     std::unique_ptr<ExprAST> parsePrimary();
     
     std::unique_ptr<StmtAST> parseStatement();

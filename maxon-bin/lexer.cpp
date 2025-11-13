@@ -22,7 +22,20 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"char", TokenType::CHAR},
     {"as", TokenType::AS},
     {"true", TokenType::TRUE},
-    {"false", TokenType::FALSE}
+    {"false", TokenType::FALSE},
+    // Math functions
+    {"sqrt", TokenType::SQRT},
+    {"abs", TokenType::ABS},
+    {"floor", TokenType::FLOOR},
+    {"ceil", TokenType::CEIL},
+    {"round", TokenType::ROUND},
+    {"trunc", TokenType::TRUNC},
+    {"sin", TokenType::SIN},
+    {"cos", TokenType::COS},
+    {"tan", TokenType::TAN},
+    {"log", TokenType::LOG},
+    {"exp", TokenType::EXP},
+    {"pow", TokenType::POW}
 };
 
 Lexer::Lexer(const std::string& src)

@@ -486,7 +486,66 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         addError("Unknown binary operator", expr->line, expr->column);
         return "error";
         
+    } else if (auto unaryExpr = dynamic_cast<UnaryExprAST*>(expr)) {
+        std::string operandType = analyzeExpression(unaryExpr->operand.get());
+        
+        // Unary + and - work on numeric types
+        if (unaryExpr->op == '+' || unaryExpr->op == '-') {
+            if (operandType == "int" || operandType == "float") {
+                return operandType;  // Result type is same as operand type
+            }
+            
+            std::string opName = (unaryExpr->op == '+') ? "unary plus (+)" : "unary minus (-)";
+            addError("Operator " + opName + " requires numeric operand (int or float)" +
+                    std::string("\n  Operand type: ") + operandType,
+                    expr->line, expr->column);
+            return "error";
+        }
+        
+        addError("Unknown unary operator", expr->line, expr->column);
+        return "error";
+        
     } else if (auto callExpr = dynamic_cast<CallExprAST*>(expr)) {
+        // Check if this is a built-in math function
+        static const std::set<std::string> mathIntrinsics = {
+            "sqrt", "abs", "sin", "cos", "tan", "log", "exp", "floor", "ceil", "round", "trunc", "pow"
+        };
+        
+        if (mathIntrinsics.find(callExpr->callee) != mathIntrinsics.end()) {
+            // Validate argument count
+            if (callExpr->callee == "pow") {
+                if (callExpr->args.size() != 2) {
+                    addError("Function 'pow' expects exactly 2 arguments (base, exponent)", 
+                            expr->line, expr->column);
+                    return "float";
+                }
+            } else {
+                if (callExpr->args.size() != 1) {
+                    addError("Function '" + callExpr->callee + "' expects exactly 1 argument", 
+                            expr->line, expr->column);
+                    return "float";
+                }
+            }
+            
+            // Analyze arguments
+            for (auto& arg : callExpr->args) {
+                std::string argType = analyzeExpression(arg.get());
+                // Allow both int and float (int will be promoted)
+                if (argType != "int" && argType != "float" && argType != "error") {
+                    addError("Math function '" + callExpr->callee + "' expects numeric argument, got " + argType,
+                            expr->line, expr->column);
+                }
+            }
+            
+            // Return type: floor, ceil, round, trunc return int, others return float
+            if (callExpr->callee == "floor" || callExpr->callee == "ceil" || 
+                callExpr->callee == "round" || callExpr->callee == "trunc") {
+                return "int";
+            } else {
+                return "float";
+            }
+        }
+        
         // Try to find the function - first exact match, then unqualified lookup
         auto funcIt = functions.find(callExpr->callee);
         

@@ -111,6 +111,16 @@ public:
         : ExprAST(line, col), op(o), left(std::move(l)), right(std::move(r)) {}
 };
 
+// Unary operation (e.g., -x, +x)
+class UnaryExprAST : public ExprAST {
+public:
+    char op;  // '+' or '-'
+    std::unique_ptr<ExprAST> operand;
+    
+    UnaryExprAST(char o, std::unique_ptr<ExprAST> expr, int line = 0, int col = 0)
+        : ExprAST(line, col), op(o), operand(std::move(expr)) {}
+};
+
 // Function call
 class CallExprAST : public ExprAST {
 public:

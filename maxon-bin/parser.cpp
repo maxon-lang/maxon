@@ -132,6 +132,45 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         return std::make_unique<StringLiteralExprAST>(value, line, column);
     }
     
+    // Math function keywords (built-in functions)
+    // Single-argument functions: sqrt, abs, sin, cos, tan, log, exp, floor, ceil, round, trunc
+    if (check(TokenType::SQRT) || check(TokenType::ABS) || check(TokenType::SIN) || 
+        check(TokenType::COS) || check(TokenType::TAN) || check(TokenType::LOG) || 
+        check(TokenType::EXP) || check(TokenType::FLOOR) || check(TokenType::CEIL) ||
+        check(TokenType::ROUND) || check(TokenType::TRUNC)) {
+        std::string funcName = currentToken().value;
+        int line = currentToken().line;
+        int column = currentToken().column;
+        advance();
+        
+        expect(TokenType::LPAREN, "Expected '(' after '" + funcName + "'");
+        auto arg = parseExpression();
+        expect(TokenType::RPAREN, "Expected ')' after argument");
+        
+        std::vector<std::unique_ptr<ExprAST>> args;
+        args.push_back(std::move(arg));
+        return std::make_unique<CallExprAST>(funcName, std::move(args), line, column);
+    }
+    
+    // Two-argument function: pow
+    if (check(TokenType::POW)) {
+        std::string funcName = currentToken().value;
+        int line = currentToken().line;
+        int column = currentToken().column;
+        advance();
+        
+        expect(TokenType::LPAREN, "Expected '(' after 'pow'");
+        auto base = parseExpression();
+        expect(TokenType::COMMA, "Expected ',' after first argument to 'pow'");
+        auto exponent = parseExpression();
+        expect(TokenType::RPAREN, "Expected ')' after arguments");
+        
+        std::vector<std::unique_ptr<ExprAST>> args;
+        args.push_back(std::move(base));
+        args.push_back(std::move(exponent));
+        return std::make_unique<CallExprAST>(funcName, std::move(args), line, column);
+    }
+    
     // Address-of operator: &variable
     if (check(TokenType::AMPERSAND)) {
         int line = currentToken().line;
@@ -224,8 +263,23 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
                             "\n  Note: An expression can be a number, variable, function call, or arithmetic/comparison operation");
 }
 
+std::unique_ptr<ExprAST> Parser::parseUnary() {
+    // Handle unary operators: - and +
+    if (check(TokenType::MINUS) || check(TokenType::PLUS)) {
+        char op = currentToken().value[0];
+        int line = currentToken().line;
+        int column = currentToken().column;
+        advance();
+        
+        auto operand = parseUnary();  // Allow chaining: --x, +-x, etc.
+        return std::make_unique<UnaryExprAST>(op, std::move(operand), line, column);
+    }
+    
+    return parsePrimary();
+}
+
 std::unique_ptr<ExprAST> Parser::parseFactor() {
-    auto expr = parsePrimary();
+    auto expr = parseUnary();
     
     // Handle type cast: expr as type
     if (check(TokenType::AS)) {

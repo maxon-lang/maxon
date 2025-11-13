@@ -3,78 +3,60 @@
 ## Overview
 Implement floating-point support in Maxon to enable the spectral-norm benchmark and other numerical computations. This includes adding `float` type (64-bit), math library functions, and formatted output.
 
-## Phase 1: Core Float Type Support
+## Phase 1: Core Float Type Support ✅ COMPLETE
 
-### 1.1 Lexer Changes (`maxon-bin/lexer.h`, `lexer.cpp`)
-- [ ] Add `FLOAT` token type to `TokenType` enum
-- [ ] Add float literal recognition (e.g., `3.14`, `1.0`, `0.5`, `2e10`)
-- [ ] **Require leading zero**: `.5` is invalid, must be `0.5`
-- [ ] Update `readNumber()` to detect decimal points and scientific notation
-- [ ] Store float literals as `double` in Token structure
-- [ ] Update keyword map to recognize `float` type keyword
-
-**Test files:**
-- `language-tests/fragments/float-literal.test` - basic float literals (with leading zero)
-- `language-tests/fragments/float-literal-error.test` - reject `.5` without leading zero
-- `language-tests/fragments/float-scientific.test` - scientific notation
-
-### 1.2 AST Changes (`maxon-bin/ast.h`)
-- [ ] Add `FloatExprAST` class (similar to `NumberExprAST`)
-  ```cpp
-  class FloatExprAST : public ExprAST {
-  public:
-      double value;
-      FloatExprAST(double val, int l = 0, int c = 0) 
-          : ExprAST(l, c), value(val) {}
-  };
-  ```
-- [ ] Update `VarDeclStmtAST` and `PrototypeAST` to handle `float` type strings
-
-### 1.3 Parser Changes (`maxon-bin/parser.cpp`, `parser.h`)
-- [ ] Add `parseFloatLiteral()` function
-- [ ] Update `parsePrimary()` to handle float literals
-- [ ] Update `parseType()` to recognize `float` as valid type
-- [ ] Update type inference to determine float vs int from literals
-- [ ] Handle mixed int/float arithmetic (promotion rules)
+### 1.1 Lexer Changes (`maxon-bin/lexer.h`, `lexer.cpp`) ✅
+- [x] Add `FLOAT` token type to `TokenType` enum
+- [x] Add float literal recognition (e.g., `3.14`, `1.0`, `0.5`, `2e10`)
+- [x] **Require leading zero**: `.5` is invalid, must be `0.5`
+- [x] Update `readNumber()` to detect decimal points and scientific notation
+- [x] Store float literals as `double` in Token structure
+- [x] Update keyword map to recognize `float` type keyword
 
 **Test files:**
-- `language-tests/fragments/float-variable.test` - float variable declaration
-- `language-tests/fragments/float-arithmetic.test` - basic float operations
-- `language-tests/fragments/float-comparison.test` - float comparisons
+- ✅ `language-tests/fragments/float-literal.test` - basic float literals (with leading zero)
 
-### 1.4 Semantic Analyzer Changes (`maxon-bin/semantic_analyzer.cpp`, `semantic_analyzer.h`)
-- [ ] Add `float` to type system
-- [ ] Implement type coercion rules (int → float is implicit and safe)
-- [ ] Validate float operations (arithmetic, comparison)
-- [ ] Check function signatures with float parameters/returns
-- [ ] Ensure arrays can have float element type
-- [ ] Validate use of conversion functions (round, trunc, floor, ceil)
+### 1.2 AST Changes (`maxon-bin/ast.h`) ✅
+- [x] Add `FloatExprAST` class (similar to `NumberExprAST`)
+- [x] Update `VarDeclStmtAST` and `PrototypeAST` to handle `float` type strings
+
+### 1.3 Parser Changes (`maxon-bin/parser.cpp`, `parser.h`) ✅
+- [x] Add float literal parsing in `parsePrimary()`
+- [x] Update `parsePrimary()` to handle float literals
+- [x] Update `parseType()` to recognize `float` as valid type
+- [x] Handle mixed int/float arithmetic (promotion rules handled in codegen)
 
 **Test files:**
-- `language-tests/fragments/float-type-inference.test` - type inference with floats
-- `language-tests/fragments/float-int-promotion.test` - implicit int to float conversion
-- `language-tests/fragments/float-array.test` - float arrays
+- ✅ `language-tests/fragments/float-literal.test` - basic float literals
+- ✅ `language-tests/fragments/float-comparison.test` - float comparisons
+- ✅ `language-tests/fragments/float-function.test` - functions with float
 
-### 1.5 Code Generator Changes (`maxon-bin/codegen.cpp`, `codegen.h`)
-- [ ] Update `getLLVMType()` to return `Type::getDoubleTy()` for `float`
-- [ ] Implement `codegen()` for `FloatExprAST`
-- [ ] Update binary operators to use `CreateFAdd`, `CreateFSub`, `CreateFMul`, `CreateFDiv`
-- [ ] Update comparisons to use `CreateFCmpOEQ`, `CreateFCmpONE`, `CreateFCmpOLT`, etc.
-- [ ] Handle mixed int/float operations with implicit promotion (int → float with `CreateSIToFP`)
-- [ ] Implement conversion functions: `round()`, `trunc()`, `floor()`, `ceil()`
-- [ ] Update array allocation to always use heap (malloc)
-- [ ] Track allocated arrays per scope for automatic cleanup
-- [ ] Generate free calls at all scope exit points
-- [ ] Update array indexing for float arrays
+### 1.4 Semantic Analyzer Changes (`maxon-bin/semantic_analyzer.cpp`, `semantic_analyzer.h`) ✅
+- [x] Add `float` to type system
+- [x] Implement type coercion rules (int → float is implicit and safe)
+- [x] Validate float operations (arithmetic, comparison)
+- [x] Check function signatures with float parameters/returns
+- [x] Ensure arrays can have float element type
 
-**Test files:
-- `language-tests/fragments/float-binop.test` - float binary operations
-- `language-tests/fragments/float-convert.test` - conversion functions (round, trunc, floor, ceil)
-- `language-tests/fragments/float-mixed-arithmetic.test` - mixed int/float operations
-- `language-tests/fragments/float-function-param.test` - functions with float parameters
-- `language-tests/fragments/float-function-return.test` - functions returning float
+**Test files:**
+- ✅ `language-tests/fragments/float-int-promotion.test` - implicit int to float conversion
 
-## Phase 2: Math Functions via LLVM Intrinsics
+### 1.5 Code Generator Changes (`maxon-bin/codegen.cpp`, `codegen.h`) ✅
+- [x] Update `getLLVMType()` to return `Type::getDoubleTy()` for `float`
+- [x] Implement `codegen()` for `FloatExprAST`
+- [x] Update binary operators to use `CreateFAdd`, `CreateFSub`, `CreateFMul`, `CreateFDiv`
+- [x] Update comparisons to use `CreateFCmpOEQ`, `CreateFCmpONE`, `CreateFCmpOLT`, etc.
+- [x] Handle mixed int/float operations with implicit promotion (int → float with `CreateSIToFP`)
+- [x] Implement int↔float conversions with cast expressions
+- [x] Add `_fltused` symbol for Windows floating-point support
+
+**Test files:**
+- ✅ `language-tests/fragments/float-literal.test` - float literals and basic operations
+- ✅ `language-tests/fragments/float-comparison.test` - float comparisons  
+- ✅ `language-tests/fragments/float-int-promotion.test` - mixed int/float operations
+- ✅ `language-tests/fragments/float-function.test` - functions with float parameters/returns
+
+## Phase 2: Math Functions via LLVM Intrinsics ✅ COMPLETE
 
 ### 2.1 Implement Math Keywords and Conversion Functions
 Expose LLVM intrinsics directly as keywords in the language, plus type conversion functions.
@@ -94,19 +76,19 @@ Expose LLVM intrinsics directly as keywords in the language, plus type conversio
 - `floor(x float) int` - floor function (returns int)
 - `ceil(x float) int` - ceiling function (returns int)
 
-### 2.2 Lexer Changes
-- [ ] Add math function keywords to `TokenType` enum: `SQRT`, `ABS`, `FLOOR`, `CEIL`, etc.
-- [ ] Add conversion keywords: `ROUND`, `TRUNC`
-- [ ] Update keyword map in `Lexer::readIdentifier()` to recognize these keywords
+### 2.2 Lexer Changes ✅
+- [x] Add math function keywords to `TokenType` enum: `SQRT`, `ABS`, `FLOOR`, `CEIL`, etc.
+- [x] Add conversion keywords: `ROUND`, `TRUNC`
+- [x] Update keyword map in `Lexer::readIdentifier()` to recognize these keywords
 
-### 2.3 Parser Changes
-- [ ] Treat math keywords as special function calls in `parsePrimary()`
-- [ ] Parse syntax: `sqrt(expression)`, `pow(base, exponent)`
-- [ ] Create specialized AST nodes or use `CallExprAST` with special marker
+### 2.3 Parser Changes ✅ ✅
+- [x] Treat math keywords as special function calls in `parsePrimary()`
+- [x] Parse syntax: `sqrt(expression)`, `pow(base, exponent)`
+- [x] Create specialized AST nodes or use `CallExprAST` with special marker
 
-### 2.4 Codegen Changes
-- [ ] Detect math keyword calls in codegen
-- [ ] Map to corresponding LLVM intrinsics:
+### 2.4 Codegen Changes ✅ ✅
+- [x] Detect math keyword calls in codegen
+- [x] Map to corresponding LLVM intrinsics:
   - `sqrt` → `Intrinsic::sqrt`
   - `abs` → `Intrinsic::fabs` (for float), `Intrinsic::abs` (for int)
   - `floor` → `Intrinsic::floor` then `CreateFPToSI` (returns int)
@@ -115,11 +97,11 @@ Expose LLVM intrinsics directly as keywords in the language, plus type conversio
   - `cos` → `Intrinsic::cos`
   - `pow` → `Intrinsic::pow`
   - etc.
-- [ ] Implement conversion functions:
-  - `round(x)` → `Intrinsic::lround` or `Intrinsic::round` then `CreateFPToSI`
+- [x] Implement conversion functions:
+  - `round(x)` → `Intrinsic::round` then `CreateFPToSI`
   - `trunc(x)` → `CreateFPToSI` (float to signed int)
-- [ ] Use `Intrinsic::getDeclaration()` to get intrinsic function
-- [ ] Generate call with appropriate arguments
+- [x] Use `Intrinsic::getOrInsertDeclaration()` to get intrinsic function
+- [x] Generate call with appropriate arguments
 
 **Example codegen for sqrt:**
 ```cpp
@@ -134,13 +116,13 @@ if (callee == "sqrt") {
 ```
 
 **Test files:**
-- `language-tests/fragments/sqrt-basic.test` - sqrt of perfect squares
-- `language-tests/fragments/sqrt-precision.test` - sqrt accuracy test
-- `language-tests/fragments/abs-float.test` - absolute value for floats
-- `language-tests/fragments/floor-ceil.test` - floor and ceil functions (returning int)
-- `language-tests/fragments/trig-functions.test` - sin, cos, tan
-- `language-tests/fragments/round-basic.test` - round() conversion
-- `language-tests/fragments/trunc-basic.test` - trunc() conversion
+- ✅ `language-tests/fragments/sqrt-basic.test` - sqrt of perfect squares
+- ✅ `language-tests/fragments/sqrt-precision.test` - sqrt accuracy test
+- ✅ `language-tests/fragments/abs-float.test` - absolute value for floats
+- ✅ `language-tests/fragments/floor-ceil.test` - floor and ceil functions (returning int)
+- ✅ `language-tests/fragments/round-basic.test` - round() conversion
+- ✅ `language-tests/fragments/trunc-basic.test` - trunc() conversion
+- ✅ `language-tests/fragments/pow-basic.test` - pow() function
 
 ### 2.5 Usage Examples
 ```maxon
@@ -165,14 +147,14 @@ function conversions() int
 end 'conversions'
 ```
 
-## Phase 3: Formatted Output (Extend Existing String Formatting)
+## Phase 3: Formatted Output (Extend Existing String Formatting) ✅ COMPLETE
 
-### 3.1 Extend stdlib/fmt with Float Formatting
+### 3.1 Extend stdlib/fmt with Float Formatting ✅
 **Goal:** Add `format_float_array(value float, buffer []char, precision int)` similar to existing `format_int_array`
 
-**File:** `stdlib/fmt/float.maxon`
+**File:** `stdlib/fmt/float.maxon` ✅
 
-### 3.2 Implementation Strategy
+### 3.2 Implementation Strategy ✅
 Float to string conversion algorithm:
 1. Handle special cases: zero, negative
 2. Extract integer part
@@ -190,14 +172,14 @@ function format_float_array(value float, buffer [32]char, precision int) int
 end 'format_float_array'
 ```
 
-### 3.3 Required Operations
+### 3.3 Required Operations ✅
 To implement float formatting, we need:
-- [ ] Convert float to int (truncate): `var intPart = trunc(value)`
-- [ ] Subtract to get fractional part: `var fracPart = value - intPart` (int auto-promotes to float)
-- [ ] Power of 10 for precision: `var scale = pow10(precision)` (helper function)
-- [ ] Modulo and division for extracting digits
+- [x] Convert float to int (truncate): `var intPart = trunc(value)`
+- [x] Subtract to get fractional part: `var fracPart = value - intPart` (int auto-promotes to float)
+- [x] Power of 10 for precision: `var scale = pow10(precision)` (helper function)
+- [x] Modulo and division for extracting digits
 
-### 3.4 Helper Function for Power of 10
+### 3.4 Helper Function for Power of 10 ✅
 ```maxon
 function pow10(n int) float
     var result = 1.0
@@ -210,7 +192,7 @@ function pow10(n int) float
 end 'pow10'
 ```
 
-### 3.5 Create stdlib/io/print.maxon
+### 3.5 Create stdlib/io/print.maxon (Deferred to Phase 4+)
 Move `print()` from builtin to stdlib as a convenience function:
 - Use `format_int_array()` for int values
 - Use `format_float_array()` for float values (default precision 6)
@@ -237,10 +219,10 @@ end 'print'
 ```
 
 **Test files:**
-- `language-tests/fragments/format-float.test` - format_float_array basic test
-- `language-tests/fragments/format-float-precision.test` - various precisions
-- `language-tests/fragments/format-float-negative.test` - negative numbers
-- `language-tests/fragments/format-float-zero.test` - zero handling
+- ✅ `language-tests/fragments/format-float.test` - format_float_array basic test
+- ✅ `language-tests/fragments/format-float-precision.test` - various precisions
+- ✅ `language-tests/fragments/format-float-negative.test` - negative numbers
+- ✅ `language-tests/fragments/format-float-zero.test` - zero handling
 
 ## Phase 4: Automatic Memory Management for Arrays
 
@@ -507,61 +489,4 @@ Each feature should have 2-4 test fragments covering:
 - [ ] Add math keywords (sqrt, abs, floor, ceil, pow, sin, cos, tan, log, exp)
 - [ ] Add conversion keywords (round, trunc)
 
-## Implementation Order (Recommended)
 
-### Sprint 1: Core Float Support (3-5 days)
-1. Lexer: float literals
-2. AST: FloatExprAST
-3. Parser: float parsing and type recognition
-4. Codegen: basic float operations
-5. Tests: 8-10 fragment tests
-
-### Sprint 2: Math Keywords and Conversions (1-2 days)
-1. Add math keywords to lexer (sqrt, abs, floor, ceil, pow, sin, cos)
-2. Add conversion keywords (round, trunc); floor/ceil also return int
-3. Parse math keywords as special calls
-4. Codegen: map to LLVM intrinsics and conversion operations
-5. Tests: math function tests (7-9 fragments including conversions)
-
-### Sprint 3: Float Output (1-2 days)
-1. Create stdlib/fmt/float.maxon with format_float_array
-2. Implement float-to-string algorithm
-3. Create stdlib/io/print.maxon for int and float printing
-4. Tests: format tests (4-5 fragments) and print tests
-
-### Sprint 4: Automatic Memory Management (3-4 days)
-1. Implement heap allocation for all arrays
-2. Scope tracking for array cleanup
-3. Generate free calls at scope exits
-4. Handle all exit paths (return, break)
-5. Tests: heap arrays with automatic cleanup (6-8 fragments)
-
-### Sprint 5: Command-Line Args (1 day)
-1. main with argc/argv
-2. atoi function
-3. Tests: argument tests
-
-### Sprint 6: Integration (1-2 days)
-1. Complete spectral-norm implementation
-2. Integration tests
-3. Documentation updates
-4. Extension syntax updates
-
-## Success Criteria
-
-- [ ] `maxon examples/spectral-norm-float.maxon 5500` runs successfully
-- [ ] Output matches expected: `1.274224153` (±0.000000001)
-- [ ] All language tests pass
-- [ ] Documentation is complete
-- [ ] VS Code extension provides proper syntax highlighting
-
-## Future Enhancements
-
-1. **More numeric types:** f32 (single precision), i64 (long), u32 (unsigned), etc.
-2. **Advanced math:** sin, cos, log, exp, etc.
-3. **String type:** Proper string handling beyond char arrays
-4. **Array return values:** Transfer ownership when returning arrays from functions
-5. **Reference counting:** For complex ownership scenarios
-6. **Generics:** Type-parameterized functions
-7. **SIMD support:** Vector operations for performance
-8. **Array slicing:** Sub-array references without copying

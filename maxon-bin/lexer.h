@@ -26,6 +26,20 @@ enum class TokenType {
     TRUE,       // true keyword
     FALSE,      // false keyword
     
+    // Math functions (keywords)
+    SQRT,       // sqrt keyword
+    ABS,        // abs keyword
+    FLOOR,      // floor keyword
+    CEIL,       // ceil keyword
+    ROUND,      // round keyword
+    TRUNC,      // trunc keyword
+    SIN,        // sin keyword
+    COS,        // cos keyword
+    TAN,        // tan keyword
+    LOG,        // log keyword (natural logarithm)
+    EXP,        // exp keyword (e^x)
+    POW,        // pow keyword (power function)
+    
     // Identifiers and literals
     IDENTIFIER,
     NUMBER,

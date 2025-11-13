@@ -346,6 +346,82 @@ llvm::AllocaInst* CodeGenerator::createEntryBlockAlloca(llvm::Function* function
     return tmpBuilder.CreateAlloca(type, nullptr, varName);
 }
 
+llvm::Value* CodeGenerator::generateMathIntrinsic(CallExprAST* callExpr) {
+    // Generate the argument(s)
+    std::vector<llvm::Value*> args;
+    for (auto& arg : callExpr->args) {
+        llvm::Value* argVal = generateExpr(arg.get());
+        if (!argVal) {
+            throw std::runtime_error("Failed to generate argument for " + callExpr->callee);
+        }
+        
+        // Promote int to float if needed
+        if (argVal->getType()->isIntegerTy(32)) {
+            argVal = builder.CreateSIToFP(argVal, llvm::Type::getDoubleTy(context), "inttofp");
+        }
+        
+        args.push_back(argVal);
+    }
+    
+    // Map function name to LLVM intrinsic
+    llvm::Intrinsic::ID intrinsicID = llvm::Intrinsic::not_intrinsic;
+    bool returnsInt = false;  // For floor, ceil, round, trunc
+    
+    if (callExpr->callee == "sqrt") {
+        intrinsicID = llvm::Intrinsic::sqrt;
+    } else if (callExpr->callee == "abs") {
+        intrinsicID = llvm::Intrinsic::fabs;
+    } else if (callExpr->callee == "floor") {
+        intrinsicID = llvm::Intrinsic::floor;
+        returnsInt = true;
+    } else if (callExpr->callee == "ceil") {
+        intrinsicID = llvm::Intrinsic::ceil;
+        returnsInt = true;
+    } else if (callExpr->callee == "sin") {
+        intrinsicID = llvm::Intrinsic::sin;
+    } else if (callExpr->callee == "cos") {
+        intrinsicID = llvm::Intrinsic::cos;
+    } else if (callExpr->callee == "tan") {
+        intrinsicID = llvm::Intrinsic::tan;
+    } else if (callExpr->callee == "log") {
+        intrinsicID = llvm::Intrinsic::log;
+    } else if (callExpr->callee == "exp") {
+        intrinsicID = llvm::Intrinsic::exp;
+    } else if (callExpr->callee == "pow") {
+        intrinsicID = llvm::Intrinsic::pow;
+    } else if (callExpr->callee == "round") {
+        intrinsicID = llvm::Intrinsic::round;
+        returnsInt = true;
+    } else if (callExpr->callee == "trunc") {
+        // trunc is special - just convert float to int
+        if (args.size() != 1) {
+            throw std::runtime_error("trunc expects exactly 1 argument");
+        }
+        return builder.CreateFPToSI(args[0], llvm::Type::getInt32Ty(context), "trunc");
+    }
+    
+    // Get the intrinsic declaration
+    llvm::Function* intrinsicFn = llvm::Intrinsic::getOrInsertDeclaration(
+        module.get(),
+        intrinsicID,
+        {llvm::Type::getDoubleTy(context)}
+    );
+    
+    if (!intrinsicFn) {
+        throw std::runtime_error("Failed to get intrinsic declaration for " + callExpr->callee);
+    }
+    
+    // Call the intrinsic
+    llvm::Value* result = builder.CreateCall(intrinsicFn, args, callExpr->callee + ".result");
+    
+    // Convert to int if needed
+    if (returnsInt) {
+        result = builder.CreateFPToSI(result, llvm::Type::getInt32Ty(context), "toint");
+    }
+    
+    return result;
+}
+
 llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
     if (auto* numExpr = dynamic_cast<NumberExprAST*>(expr)) {
         return llvm::ConstantInt::get(context, llvm::APInt(32, numExpr->value, true));
@@ -586,7 +662,43 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         }
     }
     
+    if (auto* unaryExpr = dynamic_cast<UnaryExprAST*>(expr)) {
+        llvm::Value* operand = generateExpr(unaryExpr->operand.get());
+        
+        if (!operand) {
+            throw std::runtime_error("Failed to generate unary expression operand");
+        }
+        
+        bool isFloat = operand->getType()->isFloatingPointTy();
+        
+        switch (unaryExpr->op) {
+            case '-':
+                // Negate the operand
+                if (isFloat) {
+                    return builder.CreateFNeg(operand, "fnegtmp");
+                } else {
+                    // For integers: 0 - operand
+                    llvm::Value* zero = llvm::ConstantInt::get(operand->getType(), 0);
+                    return builder.CreateSub(zero, operand, "negtmp");
+                }
+            case '+':
+                // Unary plus: just return the operand unchanged
+                return operand;
+            default:
+                throw std::runtime_error("Unknown unary operator");
+        }
+    }
+    
     if (auto* callExpr = dynamic_cast<CallExprAST*>(expr)) {
+        // Handle math intrinsic functions
+        if (callExpr->callee == "sqrt" || callExpr->callee == "abs" || 
+            callExpr->callee == "floor" || callExpr->callee == "ceil" ||
+            callExpr->callee == "sin" || callExpr->callee == "cos" || callExpr->callee == "tan" ||
+            callExpr->callee == "log" || callExpr->callee == "exp" || callExpr->callee == "pow" ||
+            callExpr->callee == "round" || callExpr->callee == "trunc") {
+            return generateMathIntrinsic(callExpr);
+        }
+        
         // Initialize standard library if calling a standard library function
         if (callExpr->callee == "print") {
             initStandardLibrary();

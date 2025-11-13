@@ -32,3 +32,14 @@ add tests for compiler will all kinds of malformed inputs
 this aint right var buffer [12]char = 0
 
 - must use fully qualified name if there is a collision
+
+## Future Enhancements
+
+1. **More numeric types:** f32 (single precision), i64 (long), u32 (unsigned), etc.
+2. **Advanced math:** sin, cos, log, exp, etc.
+3. **String type:** Proper string handling beyond char arrays
+4. **Array return values:** Transfer ownership when returning arrays from functions
+5. **Reference counting:** For complex ownership scenarios
+6. **Generics:** Type-parameterized functions
+7. **SIMD support:** Vector operations for performance
+8. **Array slicing:** Sub-array references without copying

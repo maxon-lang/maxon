@@ -1,0 +1,303 @@
+function pow10(n int) float
+    var result = 1.0
+    var i = 0
+    while i < n 'loop'
+        result = result * 10.0
+        i = i + 1
+    end 'loop'
+    return result
+end 'pow10'
+
+function format_float_array(value float, buffer [32]char, precision int) int
+    if value = 0.0 'zero_case'
+        buffer[0] = '0' as char
+        buffer[1] = '.' as char
+        var i = 0
+        while i < precision 'zero_decimals'
+            buffer[2 + i] = '0' as char
+            i = i + 1
+        end 'zero_decimals'
+        return 2 + precision
+    end 'zero_case'
+    
+    var pos = 0
+    
+    var work_value = value
+    if value < 0.0 'negative_check'
+        buffer[pos] = '-' as char
+        pos = pos + 1
+        work_value = 0.0 - value
+    end 'negative_check'
+    
+    var int_part = trunc(work_value)
+    
+    var temp [20]char = 0
+    var temp_pos = 19
+    var abs_int = int_part
+    
+    if int_part = 0 'int_zero'
+        temp[temp_pos] = '0' as char
+        temp_pos = temp_pos - 1
+    end 'int_zero'
+    
+    while abs_int > 0 'convert_int'
+        var digit = abs_int % 10
+        var digit_char = ('0' as int) + digit
+        temp[temp_pos] = digit_char as char
+        temp_pos = temp_pos - 1
+        abs_int = abs_int / 10
+    end 'convert_int'
+    
+    var start = temp_pos + 1
+    var length = 20 - start
+    var i = 0
+    while i < length 'copy_int'
+        buffer[pos + i] = temp[start + i]
+        i = i + 1
+    end 'copy_int'
+    pos = pos + length
+    
+    buffer[pos] = '.' as char
+    pos = pos + 1
+    
+    var frac_part = work_value - int_part
+    var scale = pow10(precision)
+    var frac_scaled = trunc(frac_part * scale + 0.5)
+    
+    var j = precision - 1
+    while j >= 0 'convert_frac'
+        var digit = frac_scaled % 10
+        var digit_char = ('0' as int) + digit
+        buffer[pos + j] = digit_char as char
+        frac_scaled = frac_scaled / 10
+        j = j - 1
+    end 'convert_frac'
+    
+    pos = pos + precision
+    return pos
+end 'format_float_array'
+
+function main() int
+    var buffer [32]char = 0
+    var len = format_float_array(0.0, buffer, 3)
+    
+    if len != 5 return 1
+    if buffer[0] as int != '0' as int return 2
+    if buffer[1] as int != '.' as int return 3
+    if buffer[2] as int != '0' as int return 4
+    if buffer[3] as int != '0' as int return 5
+    if buffer[4] as int != '0' as int return 6
+    
+    return 0
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+@_fltused = constant i32 39029
+
+define double @pow10(i32 %0) {
+entry:
+  br label %whilecond
+
+whilecond:                                        ; preds = %loop, %entry
+  %result.0 = phi double [ 1.000000e+00, %entry ], [ %fmultmp, %loop ]
+  %i.0 = phi i32 [ 0, %entry ], [ %addtmp, %loop ]
+  %cmptmp = icmp slt i32 %i.0, %0
+  br i1 %cmptmp, label %loop, label %afterloop
+
+loop:                                             ; preds = %whilecond
+  %fmultmp = fmul double %result.0, 1.000000e+01
+  %addtmp = add i32 %i.0, 1
+  br label %whilecond
+
+afterloop:                                        ; preds = %whilecond
+  ret double %result.0
+}
+
+define i32 @format_float_array(double %0, ptr %1, i32 %2) {
+entry:
+  %temp = alloca [20 x i8], align 1
+  %fcmptmp = fcmp oeq double %0, 0.000000e+00
+  br i1 %fcmptmp, label %then, label %ifcont
+
+then:                                             ; preds = %entry
+  store i8 48, ptr %1, align 1
+  %arrayidx3 = getelementptr inbounds nuw i8, ptr %1, i64 1
+  store i8 46, ptr %arrayidx3, align 1
+  br label %whilecond
+
+whilecond:                                        ; preds = %loop, %then
+  %i.0 = phi i32 [ 0, %then ], [ %addtmp10, %loop ]
+  %cmptmp = icmp slt i32 %i.0, %2
+  br i1 %cmptmp, label %loop, label %afterloop
+
+loop:                                             ; preds = %whilecond
+  %addtmp = add i32 %i.0, 2
+  %3 = sext i32 %addtmp to i64
+  %arrayidx8 = getelementptr inbounds i8, ptr %1, i64 %3
+  store i8 48, ptr %arrayidx8, align 1
+  %addtmp10 = add i32 %i.0, 1
+  br label %whilecond
+
+common.ret:                                       ; preds = %afterloop107, %afterloop
+  %common.ret.op = phi i32 [ %addtmp12, %afterloop ], [ %addtmp110, %afterloop107 ]
+  ret i32 %common.ret.op
+
+afterloop:                                        ; preds = %whilecond
+  %addtmp12 = add i32 %2, 2
+  br label %common.ret
+
+ifcont:                                           ; preds = %entry
+  %fcmptmp15 = fcmp olt double %0, 0.000000e+00
+  br i1 %fcmptmp15, label %then16, label %ifcont23
+
+then16:                                           ; preds = %ifcont
+  store i8 45, ptr %1, align 1
+  %fsubtmp = fsub double 0.000000e+00, %0
+  br label %ifcont23
+
+ifcont23:                                         ; preds = %then16, %ifcont
+  %work_value.0 = phi double [ %fsubtmp, %then16 ], [ %0, %ifcont ]
+  %pos.0 = phi i32 [ 1, %then16 ], [ 0, %ifcont ]
+  %trunc = fptosi double %work_value.0 to i32
+  %cmptmp27 = icmp eq i32 %trunc, 0
+  br i1 %cmptmp27, label %then28, label %ifcont32
+
+then28:                                           ; preds = %ifcont23
+  %arrayidx30 = getelementptr inbounds nuw i8, ptr %temp, i64 19
+  store i8 48, ptr %arrayidx30, align 1
+  br label %ifcont32
+
+ifcont32:                                         ; preds = %then28, %ifcont23
+  %temp_pos.0 = phi i32 [ 18, %then28 ], [ 19, %ifcont23 ]
+  br label %whilecond33
+
+whilecond33:                                      ; preds = %loop36, %ifcont32
+  %abs_int.0 = phi i32 [ %trunc, %ifcont32 ], [ %divtmp, %loop36 ]
+  %temp_pos.1 = phi i32 [ %temp_pos.0, %ifcont32 ], [ %subtmp44, %loop36 ]
+  %cmptmp35 = icmp sgt i32 %abs_int.0, 0
+  br i1 %cmptmp35, label %loop36, label %afterloop46
+
+loop36:                                           ; preds = %whilecond33
+  %modtmp = urem i32 %abs_int.0, 10
+  %4 = trunc nuw nsw i32 %modtmp to i8
+  %trunctmp = or disjoint i8 %4, 48
+  %5 = sext i32 %temp_pos.1 to i64
+  %arrayidx42 = getelementptr inbounds [20 x i8], ptr %temp, i64 0, i64 %5
+  store i8 %trunctmp, ptr %arrayidx42, align 1
+  %subtmp44 = add i32 %temp_pos.1, -1
+  %divtmp = udiv i32 %abs_int.0, 10
+  br label %whilecond33
+
+afterloop46:                                      ; preds = %whilecond33
+  %addtmp48 = add i32 %temp_pos.1, 1
+  %subtmp50 = sub i32 19, %temp_pos.1
+  br label %whilecond52
+
+whilecond52:                                      ; preds = %loop56, %afterloop46
+  %i51.0 = phi i32 [ 0, %afterloop46 ], [ %addtmp67, %loop56 ]
+  %cmptmp55 = icmp slt i32 %i51.0, %subtmp50
+  br i1 %cmptmp55, label %loop56, label %afterloop68
+
+loop56:                                           ; preds = %whilecond52
+  %addtmp59 = add i32 %i51.0, %pos.0
+  %addtmp62 = add i32 %addtmp48, %i51.0
+  %6 = sext i32 %addtmp62 to i64
+  %arrayidx63 = getelementptr inbounds [20 x i8], ptr %temp, i64 0, i64 %6
+  %arrayelem = load i8, ptr %arrayidx63, align 1
+  %7 = sext i32 %addtmp59 to i64
+  %arrayidx65 = getelementptr inbounds i8, ptr %1, i64 %7
+  store i8 %arrayelem, ptr %arrayidx65, align 1
+  %addtmp67 = add i32 %i51.0, 1
+  br label %whilecond52
+
+afterloop68:                                      ; preds = %whilecond52
+  %addtmp71 = add i32 %subtmp50, %pos.0
+  %8 = sext i32 %addtmp71 to i64
+  %arrayidx74 = getelementptr inbounds i8, ptr %1, i64 %8
+  store i8 46, ptr %arrayidx74, align 1
+  %promotetmp = sitofp i32 %trunc to double
+  %fsubtmp79 = fsub double %work_value.0, %promotetmp
+  %9 = call double @pow10(i32 %2)
+  %fmultmp = fmul double %fsubtmp79, %9
+  %faddtmp = fadd double %fmultmp, 5.000000e-01
+  %trunc83 = fptosi double %faddtmp to i32
+  br label %whilecond86
+
+whilecond86:                                      ; preds = %loop89, %afterloop68
+  %frac_scaled.0 = phi i32 [ %trunc83, %afterloop68 ], [ %divtmp104, %loop89 ]
+  %j.0.in = phi i32 [ %2, %afterloop68 ], [ %j.0, %loop89 ]
+  %j.0 = add i32 %j.0.in, -1
+  %cmptmp88 = icmp sgt i32 %j.0, -1
+  br i1 %cmptmp88, label %loop89, label %afterloop107
+
+loop89:                                           ; preds = %whilecond86
+  %modtmp91 = srem i32 %frac_scaled.0, 10
+  %addtmp98 = add i32 %j.0.in, %addtmp71
+  %10 = trunc nsw i32 %modtmp91 to i8
+  %trunctmp100 = add nsw i8 %10, 48
+  %11 = sext i32 %addtmp98 to i64
+  %arrayidx102 = getelementptr inbounds i8, ptr %1, i64 %11
+  store i8 %trunctmp100, ptr %arrayidx102, align 1
+  %divtmp104 = sdiv i32 %frac_scaled.0, 10
+  br label %whilecond86
+
+afterloop107:                                     ; preds = %whilecond86
+  %addtmp76 = add i32 %2, 1
+  %addtmp110 = add i32 %addtmp76, %addtmp71
+  br label %common.ret
+}
+
+define i32 @main() {
+entry:
+  %buffer = alloca [32 x i8], align 1
+  %0 = call i32 @format_float_array(double 0.000000e+00, ptr nonnull %buffer, i32 3)
+  %cmptmp.not = icmp eq i32 %0, 5
+  br i1 %cmptmp.not, label %ifcont, label %common.ret
+
+common.ret:                                       ; preds = %ifcont22, %ifcont16, %ifcont10, %ifcont4, %ifcont, %entry
+  %common.ret.op = phi i32 [ 1, %entry ], [ 2, %ifcont ], [ 3, %ifcont4 ], [ 4, %ifcont10 ], [ 5, %ifcont16 ], [ %., %ifcont22 ]
+  ret i32 %common.ret.op
+
+ifcont:                                           ; preds = %entry
+  %arrayelem = load i8, ptr %buffer, align 1
+  %cmptmp2.not = icmp eq i8 %arrayelem, 48
+  br i1 %cmptmp2.not, label %ifcont4, label %common.ret
+
+ifcont4:                                          ; preds = %ifcont
+  %arrayidx5 = getelementptr inbounds nuw i8, ptr %buffer, i64 1
+  %arrayelem6 = load i8, ptr %arrayidx5, align 1
+  %cmptmp8.not = icmp eq i8 %arrayelem6, 46
+  br i1 %cmptmp8.not, label %ifcont10, label %common.ret
+
+ifcont10:                                         ; preds = %ifcont4
+  %arrayidx11 = getelementptr inbounds nuw i8, ptr %buffer, i64 2
+  %arrayelem12 = load i8, ptr %arrayidx11, align 1
+  %cmptmp14.not = icmp eq i8 %arrayelem12, 48
+  br i1 %cmptmp14.not, label %ifcont16, label %common.ret
+
+ifcont16:                                         ; preds = %ifcont10
+  %arrayidx17 = getelementptr inbounds nuw i8, ptr %buffer, i64 3
+  %arrayelem18 = load i8, ptr %arrayidx17, align 1
+  %cmptmp20.not = icmp eq i8 %arrayelem18, 48
+  br i1 %cmptmp20.not, label %ifcont22, label %common.ret
+
+ifcont22:                                         ; preds = %ifcont16
+  %arrayidx23 = getelementptr inbounds nuw i8, ptr %buffer, i64 4
+  %arrayelem24 = load i8, ptr %arrayidx23, align 1
+  %cmptmp26.not = icmp eq i8 %arrayelem24, 48
+  %. = select i1 %cmptmp26.not, i32 0, i32 6
+  br label %common.ret
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
+---
+ExitCode: 0

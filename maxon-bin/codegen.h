@@ -36,6 +36,8 @@ private:
     void generateStmt(StmtAST* stmt, llvm::Function* function);
     void generateFunction(FunctionAST* func, const std::string& namespaceName = "");
     
+    llvm::Value* generateMathIntrinsic(CallExprAST* callExpr);
+    
     llvm::AllocaInst* createEntryBlockAlloca(llvm::Function* function,
                                               const std::string& varName,
                                               llvm::Type* type = nullptr);

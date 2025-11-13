@@ -1,0 +1,96 @@
+// stdlib/fmt/float.maxon
+// Float formatting functions
+// Namespace: stdlib.fmt (automatically inferred from file path)
+
+/// Helper function: Calculate power of 10
+/// Returns 10^n as a float
+function pow10(n int) float
+    var result = 1.0
+    var i = 0
+    while i < n 'loop'
+        result = result * 10.0
+        i = i + 1
+    end 'loop'
+    return result
+end 'pow10'
+
+/// Format a float to ASCII in a buffer (passed as array)
+/// Returns the number of bytes written
+/// Buffer must be at least 32 bytes
+/// precision = number of decimal places (0-15)
+function format_float_array(value float, buffer [32]char, precision int) int
+    // Handle zero special case
+    if value = 0.0 'zero_case'
+        buffer[0] = '0' as char
+        buffer[1] = '.' as char
+        var i = 0
+        while i < precision 'zero_decimals'
+            buffer[2 + i] = '0' as char
+            i = i + 1
+        end 'zero_decimals'
+        return 2 + precision
+    end 'zero_case'
+    
+    var pos = 0
+    
+    // Handle negative numbers
+    var work_value = value
+    if value < 0.0 'negative_check'
+        buffer[pos] = '-' as char
+        pos = pos + 1
+        work_value = -value
+    end 'negative_check'
+    
+    // Extract integer part
+    var int_part = trunc(work_value)
+    
+    // Format integer part (similar to format_int_array)
+    var temp [20]char = 0
+    var temp_pos = 19
+    var abs_int = int_part
+    
+    if int_part = 0 'int_zero'
+        temp[temp_pos] = '0' as char
+        temp_pos = temp_pos - 1
+    end 'int_zero'
+    
+    while abs_int > 0 'convert_int'
+        var digit = abs_int % 10
+        var digit_char = ('0' as int) + digit
+        temp[temp_pos] = digit_char as char
+        temp_pos = temp_pos - 1
+        abs_int = abs_int / 10
+    end 'convert_int'
+    
+    // Copy integer part to buffer
+    var start = temp_pos + 1
+    var length = 20 - start
+    var i = 0
+    while i < length 'copy_int'
+        buffer[pos + i] = temp[start + i]
+        i = i + 1
+    end 'copy_int'
+    pos = pos + length
+    
+    // Add decimal point
+    buffer[pos] = '.' as char
+    pos = pos + 1
+    
+    // Extract and format fractional part
+    var frac_part = work_value - int_part
+    var scale = pow10(precision)
+    var frac_scaled = trunc(frac_part * scale + 0.5)  // Round
+    
+    // Convert fractional digits to string (need to pad with zeros)
+    var j = precision - 1
+    while j >= 0 'convert_frac'
+        var digit = frac_scaled % 10
+        var digit_char = ('0' as int) + digit
+        buffer[pos + j] = digit_char as char
+        frac_scaled = frac_scaled / 10
+        j = j - 1
+    end 'convert_frac'
+    
+    pos = pos + precision
+    return pos
+end 'format_float_array'
