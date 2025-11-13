@@ -20,6 +20,7 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"float", TokenType::FLOAT},
     {"ptr", TokenType::PTR},
     {"char", TokenType::CHAR},
+    {"string", TokenType::STRING_TYPE},
     {"as", TokenType::AS},
     {"true", TokenType::TRUE},
     {"false", TokenType::FALSE},

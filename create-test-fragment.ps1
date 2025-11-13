@@ -184,6 +184,8 @@ try {
     # Replace source filename with "test.maxon" in IR
     $llvmIR = $llvmIR -replace 'source_filename = ".*?"', 'source_filename = "test.maxon"'
     $llvmIR = $llvmIR -replace "ModuleID = '.*?'", "ModuleID = 'test.maxon'"
+    # Also replace DIFile filename in debug info
+    $llvmIR = $llvmIR -replace 'DIFile\(filename: ".*?"', 'DIFile(filename: "test.maxon"'
     
     # The compiler generates output.exe by default
     $actualExeFile = "output.exe"

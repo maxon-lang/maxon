@@ -8,7 +8,7 @@ function pow10(n int) float
     return result
 end 'pow10'
 
-function format_float_array(value float, buffer [32]char, precision int) int
+function format_float_array(value float, buffer []char, precision int) int
     if value = 0.0 'zero_case'
         buffer[0] = '0' as char
         buffer[1] = '.' as char
@@ -118,7 +118,7 @@ afterloop:                                        ; preds = %whilecond
   ret double %result.0
 }
 
-define i32 @format_float_array(double %0, ptr %1, i32 %2) {
+define i32 @format_float_array(double %0, ptr %1, i32 %2, i32 %3) {
 entry:
   %fcmptmp = fcmp oeq double %0, 0.000000e+00
   br i1 %fcmptmp, label %then, label %ifcont
@@ -131,13 +131,13 @@ then:                                             ; preds = %entry
 
 whilecond:                                        ; preds = %loop, %then
   %i.0 = phi i32 [ 0, %then ], [ %addtmp10, %loop ]
-  %cmptmp = icmp slt i32 %i.0, %2
+  %cmptmp = icmp slt i32 %i.0, %3
   br i1 %cmptmp, label %loop, label %afterloop
 
 loop:                                             ; preds = %whilecond
   %addtmp = add i32 %i.0, 2
-  %3 = sext i32 %addtmp to i64
-  %arrayidx8 = getelementptr inbounds i8, ptr %1, i64 %3
+  %4 = sext i32 %addtmp to i64
+  %arrayidx8 = getelementptr inbounds i8, ptr %1, i64 %4
   store i8 48, ptr %arrayidx8, align 1
   %addtmp10 = add i32 %i.0, 1
   br label %whilecond
@@ -147,7 +147,7 @@ common.ret:                                       ; preds = %afterloop130, %afte
   ret i32 %common.ret.op
 
 afterloop:                                        ; preds = %whilecond
-  %addtmp12 = add i32 %2, 2
+  %addtmp12 = add i32 %3, 2
   br label %common.ret
 
 ifcont:                                           ; preds = %entry
@@ -222,10 +222,10 @@ whilecond54:                                      ; preds = %loop57, %ifcont53
 
 loop57:                                           ; preds = %whilecond54
   %modtmp = urem i32 %abs_int.0, 10
-  %4 = trunc nuw nsw i32 %modtmp to i8
-  %trunctmp = or disjoint i8 %4, 48
-  %5 = sext i32 %temp_pos.1 to i64
-  %arrayidx64 = getelementptr inbounds i8, ptr %temp.malloc, i64 %5
+  %5 = trunc nuw nsw i32 %modtmp to i8
+  %trunctmp = or disjoint i8 %5, 48
+  %6 = sext i32 %temp_pos.1 to i64
+  %arrayidx64 = getelementptr inbounds i8, ptr %temp.malloc, i64 %6
   store i8 %trunctmp, ptr %arrayidx64, align 1
   %subtmp66 = add i32 %temp_pos.1, -1
   %divtmp = udiv i32 %abs_int.0, 10
@@ -244,31 +244,31 @@ whilecond74:                                      ; preds = %loop78, %afterloop6
 loop78:                                           ; preds = %whilecond74
   %addtmp81 = add i32 %i73.0, %pos.0
   %addtmp84 = add i32 %addtmp70, %i73.0
-  %6 = sext i32 %addtmp84 to i64
-  %arrayidx86 = getelementptr inbounds i32, ptr %temp.malloc, i64 %6
+  %7 = sext i32 %addtmp84 to i64
+  %arrayidx86 = getelementptr inbounds i32, ptr %temp.malloc, i64 %7
   %arrayelem = load i32, ptr %arrayidx86, align 4
-  %7 = sext i32 %addtmp81 to i64
-  %arrayidx88 = getelementptr inbounds i32, ptr %1, i64 %7
+  %8 = sext i32 %addtmp81 to i64
+  %arrayidx88 = getelementptr inbounds i32, ptr %1, i64 %8
   store i32 %arrayelem, ptr %arrayidx88, align 4
   %addtmp90 = add i32 %i73.0, 1
   br label %whilecond74
 
 afterloop91:                                      ; preds = %whilecond74
   %addtmp94 = add i32 %subtmp72, %pos.0
-  %8 = sext i32 %addtmp94 to i64
-  %arrayidx97 = getelementptr inbounds i8, ptr %1, i64 %8
+  %9 = sext i32 %addtmp94 to i64
+  %arrayidx97 = getelementptr inbounds i8, ptr %1, i64 %9
   store i8 46, ptr %arrayidx97, align 1
   %promotetmp = sitofp i32 %trunc to double
   %fsubtmp102 = fsub double %work_value.0, %promotetmp
-  %9 = call double @pow10(i32 %2)
-  %fmultmp = fmul double %fsubtmp102, %9
+  %10 = call double @pow10(i32 %3)
+  %fmultmp = fmul double %fsubtmp102, %10
   %faddtmp = fadd double %fmultmp, 5.000000e-01
   %trunc106 = fptosi double %faddtmp to i32
   br label %whilecond109
 
 whilecond109:                                     ; preds = %loop112, %afterloop91
   %frac_scaled.0 = phi i32 [ %trunc106, %afterloop91 ], [ %divtmp127, %loop112 ]
-  %j.0.in = phi i32 [ %2, %afterloop91 ], [ %j.0, %loop112 ]
+  %j.0.in = phi i32 [ %3, %afterloop91 ], [ %j.0, %loop112 ]
   %j.0 = add i32 %j.0.in, -1
   %cmptmp111 = icmp sgt i32 %j.0, -1
   br i1 %cmptmp111, label %loop112, label %afterloop130
@@ -276,16 +276,16 @@ whilecond109:                                     ; preds = %loop112, %afterloop
 loop112:                                          ; preds = %whilecond109
   %modtmp114 = srem i32 %frac_scaled.0, 10
   %addtmp121 = add i32 %j.0.in, %addtmp94
-  %10 = trunc nsw i32 %modtmp114 to i8
-  %trunctmp123 = add nsw i8 %10, 48
-  %11 = sext i32 %addtmp121 to i64
-  %arrayidx125 = getelementptr inbounds i8, ptr %1, i64 %11
+  %11 = trunc nsw i32 %modtmp114 to i8
+  %trunctmp123 = add nsw i8 %11, 48
+  %12 = sext i32 %addtmp121 to i64
+  %arrayidx125 = getelementptr inbounds i8, ptr %1, i64 %12
   store i8 %trunctmp123, ptr %arrayidx125, align 1
   %divtmp127 = sdiv i32 %frac_scaled.0, 10
   br label %whilecond109
 
 afterloop130:                                     ; preds = %whilecond109
-  %addtmp99 = add i32 %2, 1
+  %addtmp99 = add i32 %3, 1
   %addtmp133 = add i32 %addtmp99, %addtmp94
   br label %common.ret
 }
@@ -356,7 +356,7 @@ entry:
   store i32 0, ptr %arrayidx30, align 4
   %arrayidx31 = getelementptr i8, ptr %buffer.malloc, i64 31
   store i32 0, ptr %arrayidx31, align 4
-  %0 = call i32 @format_float_array(double 0x3FF3C0CA4283DE1B, ptr nonnull %buffer.malloc, i32 6)
+  %0 = call i32 @format_float_array(double 0x3FF3C0CA4283DE1B, ptr nonnull %buffer.malloc, i32 32, i32 6)
   %cmptmp.not = icmp eq i32 %0, 8
   br i1 %cmptmp.not, label %ifcont, label %then
 

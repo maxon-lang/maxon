@@ -1,55 +1,55 @@
-// Test that main can receive argc and argv parameters
-// When run with no extra arguments, argc should be 1 (the program name itself)
-// We also test that local arrays have .length property
+function main(args []string) int
+	print("{args[0]}", args[0])
 
-function main(argc int, argv ptr) int
-    // Create a local array to test .length
-    var arr [5]int = 0
+    // Check argc is 3 (program name + 2 args)
+    if args.length != 3 return 1
     
-    // Return argc - 1 + arr.length, which should be 0 + 5 = 5 when run with no arguments
-    return argc - 1 + arr.length
+    // Check first arg (program name) has reasonable length
+	if args[0] != "test.exe" return 2
+    
+    // Check second arg is "hello"
+	if args[1] != "hello" return 3
+    
+    // Check third arg is "world"
+	if args[2] != "world" return 4
+    
+    return 0
 end 'main'
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
 @_fltused = constant i32 39029
+@.str = private constant [8 x i8] c"test.exe"
+@.str.1 = private constant [5 x i8] c"hello"
+@.str.2 = private constant [5 x i8] c"world"
 
-define i32 @main(i32 %0, ptr %1) {
+define i32 @main(ptr %0, i32 %1) {
 entry:
-  %arr.malloc = call ptr @malloc(i64 20)
-  store i32 0, ptr %arr.malloc, align 4
-  %arrayidx1 = getelementptr i8, ptr %arr.malloc, i64 4
-  store i32 0, ptr %arrayidx1, align 4
-  %arrayidx2 = getelementptr i8, ptr %arr.malloc, i64 8
-  store i32 0, ptr %arrayidx2, align 4
-  %arrayidx3 = getelementptr i8, ptr %arr.malloc, i64 12
-  store i32 0, ptr %arrayidx3, align 4
-  %arrayidx4 = getelementptr i8, ptr %arr.malloc, i64 16
-  store i32 0, ptr %arrayidx4, align 4
-  %addtmp = add i32 %0, 4
-  call void @free(ptr nonnull %arr.malloc)
-  ret i32 %addtmp
-}
+  %cmptmp.not = icmp eq i32 %1, 3
+  br i1 %cmptmp.not, label %ifcont, label %common.ret
 
-declare ptr @GetProcessHeap()
+common.ret:                                       ; preds = %ifcont9, %ifcont3, %ifcont, %entry
+  %common.ret.op = phi i32 [ 1, %entry ], [ 2, %ifcont ], [ 3, %ifcont3 ], [ %., %ifcont9 ]
+  ret i32 %common.ret.op
 
-declare ptr @HeapAlloc(ptr, i32, i64)
+ifcont:                                           ; preds = %entry
+  %arrayelem = load ptr, ptr %0, align 8
+  %cmptmp1.not = icmp eq ptr %arrayelem, @.str
+  br i1 %cmptmp1.not, label %ifcont3, label %common.ret
 
-declare i32 @HeapFree(ptr, i32, ptr)
+ifcont3:                                          ; preds = %ifcont
+  %arrayidx5 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  %arrayelem6 = load ptr, ptr %arrayidx5, align 8
+  %cmptmp7.not = icmp eq ptr %arrayelem6, @.str.1
+  br i1 %cmptmp7.not, label %ifcont9, label %common.ret
 
-define ptr @malloc(i64 %0) {
-entry:
-  %1 = call ptr @GetProcessHeap()
-  %2 = call ptr @HeapAlloc(ptr %1, i32 0, i64 %0)
-  ret ptr %2
-}
-
-define void @free(ptr %0) {
-entry:
-  %1 = call ptr @GetProcessHeap()
-  %2 = call i32 @HeapFree(ptr %1, i32 0, ptr %0)
-  ret void
+ifcont9:                                          ; preds = %ifcont3
+  %arrayidx11 = getelementptr inbounds nuw i8, ptr %0, i64 16
+  %arrayelem12 = load ptr, ptr %arrayidx11, align 8
+  %cmptmp13.not = icmp eq ptr %arrayelem12, @.str.2
+  %. = select i1 %cmptmp13.not, i32 0, i32 4
+  br label %common.ret
 }
 
 declare void @ExitProcess(i32)
@@ -64,9 +64,10 @@ entry:
   %1 = alloca i32, align 4
   %2 = call ptr @CommandLineToArgvW(ptr %0, ptr nonnull %1)
   %3 = load i32, ptr %1, align 4
-  %4 = call i32 @main(i32 %3, ptr %2)
+  %4 = call i32 @main(ptr %2, i32 %3)
   call void @ExitProcess(i32 %4)
   unreachable
 }
 ---
-ExitCode: 5
+Args: hello world
+ExitCode: 0

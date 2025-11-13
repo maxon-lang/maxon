@@ -123,7 +123,7 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
         
         // Safety restriction: explicit pointer type with 'var' is not allowed
         // Only check explicit type declarations, not inferred types (e.g., string literals)
-        if (!varDecl->type.empty() && varDecl->type == "ptr") {
+        if (!varDecl->type.empty() && (varDecl->type == "ptr" || varDecl->type == "string")) {
             addError("Pointer variables must be declared with 'let', not 'var'" +
                     std::string("\n  Note: For safety, pointers are immutable and must use 'let'"),
                     stmt->line, stmt->column);
@@ -239,11 +239,11 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
         }
         
     } else if (auto derefAssign = dynamic_cast<DerefAssignStmtAST*>(stmt)) {
-        // Analyze the pointer expression (should result in ptr type)
+        // Analyze the pointer expression (should result in ptr or string type)
         std::string ptrType = analyzeExpression(derefAssign->pointer.get());
-        if (ptrType != "ptr") {
+        if (ptrType != "ptr" && ptrType != "string") {
             addError("Cannot dereference non-pointer type: '" + ptrType + "'" +
-                    std::string("\n  Note: Only pointer (ptr) types can be dereferenced with *"),
+                    std::string("\n  Note: Only pointer (ptr/string) types can be dereferenced with *"),
                     stmt->line, stmt->column);
         }
         
@@ -354,7 +354,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         return "char";
         
     } else if (dynamic_cast<StringLiteralExprAST*>(expr)) {
-        return "ptr";  // String literals are pointers to character data
+        return "string";  // String literals are pointers to character data
         
     } else if (auto castExpr = dynamic_cast<CastExprAST*>(expr)) {
         // Analyze the expression being cast
@@ -382,8 +382,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         // Analyze the expression being dereferenced
         std::string ptrType = analyzeExpression(derefExpr->expr.get());
         
-        // Should be a pointer type
-        if (ptrType != "ptr" && ptrType != "error") {
+        // Should be a pointer type (ptr or string)
+        if (ptrType != "ptr" && ptrType != "string" && ptrType != "error") {
             addError("Dereference operator (*) requires a pointer type" +
                     std::string("\n  Found type: ") + ptrType,
                     expr->line, expr->column);
@@ -674,8 +674,16 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
                     expr->line, expr->column);
         }
         
-        // For now, assume all array elements are ints
-        // TODO: Extract actual element type from array type (e.g., "[5]int" -> "int")
+        // Extract element type from array type (e.g., "[]string" -> "string", "[5]int" -> "int")
+        std::string arrayType = varInfo->type;
+        if (arrayType.size() > 2 && arrayType[0] == '[') {
+            // Find the closing bracket
+            size_t closeBracket = arrayType.find(']');
+            if (closeBracket != std::string::npos && closeBracket + 1 < arrayType.size()) {
+                return arrayType.substr(closeBracket + 1);
+            }
+        }
+        // Fallback if type parsing fails
         return "int";
     
     } else if (auto memberAccessExpr = dynamic_cast<MemberAccessExprAST*>(expr)) {
@@ -779,6 +787,11 @@ bool SemanticAnalyzer::typesMatch(const std::string& type1, const std::string& t
         return true;
     }
     
+    // ptr and string are interchangeable (string is an alias for ptr)
+    if ((type1 == "ptr" && type2 == "string") || (type1 == "string" && type2 == "ptr")) {
+        return true;
+    }
+    
     // Check if both are array types and extract element types
     if (type1[0] == '[' && type2[0] == '[') {
         // Extract element types (everything after the last ']')
@@ -790,7 +803,8 @@ bool SemanticAnalyzer::typesMatch(const std::string& type1, const std::string& t
             std::string elem2 = type2.substr(bracket2 + 1);
             
             // Array types match if element types match, regardless of size
-            return elem1 == elem2;
+            // Use recursive call to handle ptr/string equivalence
+            return typesMatch(elem1, elem2);
         }
     }
     

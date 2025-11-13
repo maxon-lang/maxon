@@ -111,28 +111,33 @@ public class FragmentTests {
 		var expectedMaxoncStderr = "";
 		var expectedStdout = "";
 		var expectedStderr = "";
+		var expectedArgs = "";
+		
+		// Read existing metadata (Args, ExitCode, etc.) regardless of update mode
+		// so we can preserve Args when updating IR
+		var remainingContent = fragmentFile.ReadToEnd();
+		var lines = remainingContent.Split('\n');
+		
+		for (var i = 0; i < lines.Length; i++) {
+			var line = lines[i].TrimEnd('\r');
+			if (line.StartsWith("ExitCode: ")) {
+				expectedExitCode = int.Parse(line[10..]);
+			} else if (line.StartsWith("Args: ")) {
+				expectedArgs = line[6..].Trim();
+			} else if (line.StartsWith("MaxoncStdout: ")) {
+				expectedMaxoncStdout = ReadMultilineContent(lines, ref i, line[14..]);
+			} else if (line.StartsWith("MaxoncStderr: ")) {
+				expectedMaxoncStderr = ReadMultilineContent(lines, ref i, line[14..]);
+			} else if (line.StartsWith("Stdout: ")) {
+				expectedStdout = ReadMultilineContent(lines, ref i, line[8..]);
+			} else if (line.StartsWith("Stderr: ")) {
+				expectedStderr = ReadMultilineContent(lines, ref i, line[8..]);
+			}
+		}
+		
 		if (expectedIR == "" && !updateInsteadOfTest) {
 			// If there's no IR yet and we're not manually updating, enable auto-update
 			updateInsteadOfTest = true;
-		} else if (!updateInsteadOfTest) {
-			// Read the rest of the file after the IR section
-			var remainingContent = fragmentFile.ReadToEnd();
-			var lines = remainingContent.Split('\n');
-			
-			for (var i = 0; i < lines.Length; i++) {
-				var line = lines[i].TrimEnd('\r');
-				if (line.StartsWith("ExitCode: ")) {
-					expectedExitCode = int.Parse(line[10..]);
-				} else if (line.StartsWith("MaxoncStdout: ")) {
-					expectedMaxoncStdout = ReadMultilineContent(lines, ref i, line[14..]);
-				} else if (line.StartsWith("MaxoncStderr: ")) {
-					expectedMaxoncStderr = ReadMultilineContent(lines, ref i, line[14..]);
-				} else if (line.StartsWith("Stdout: ")) {
-					expectedStdout = ReadMultilineContent(lines, ref i, line[8..]);
-				} else if (line.StartsWith("Stderr: ")) {
-					expectedStderr = ReadMultilineContent(lines, ref i, line[8..]);
-				}
-			}
 		}
 
 		fragmentFile.Close();
@@ -183,6 +188,7 @@ public class FragmentTests {
 			if (File.Exists(exeFilename)) {
 				var process = new Process();
 				process.StartInfo.FileName = exeFilename;
+				process.StartInfo.Arguments = expectedArgs;
 				process.StartInfo.RedirectStandardInput = true;
 				process.StartInfo.RedirectStandardOutput = true;
 				process.StartInfo.RedirectStandardError = true;
@@ -219,7 +225,7 @@ public class FragmentTests {
 		}
 
 		if (updateInsteadOfTest) {
-		UpdateFragment(fragmentPath, source, llSource, processExitCode, maxonStdout, maxonStderr, stdout, stderr);
+		UpdateFragment(fragmentPath, source, llSource, processExitCode, maxonStdout, maxonStderr, stdout, stderr, expectedArgs);
 		Assert.Fail("Updated fragment file, please inspect the changes and make sure they are correct.");
 		} else {
 			if (expectedExitCode != -1) {
@@ -260,11 +266,14 @@ public class FragmentTests {
 		}
 	}
 
-	private static void UpdateFragment(string fragmentPath, string source, string llSource, int expectedExitCode, string maxoncStdout, string maxoncStderr, string stdout, string stderr) {
+	private static void UpdateFragment(string fragmentPath, string source, string llSource, int expectedExitCode, string maxoncStdout, string maxoncStderr, string stdout, string stderr, string args = "") {
 		// Use CRLF line endings for Windows
 		var nl = "\r\n";
 		var content = source + "---" + nl + llSource + nl + "---";
 		
+		if (args != "") {
+			content += nl + "Args: " + args;
+		}
 		if (expectedExitCode != -1) {
 			content += nl + "ExitCode: " + expectedExitCode;
 		}

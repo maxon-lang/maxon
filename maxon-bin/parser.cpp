@@ -313,7 +313,7 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
         int column = currentToken().column;
         advance(); // consume 'as'
         
-        // Expect a type keyword (int, float, ptr, char)
+        // Expect a type keyword (int, float, ptr, char, str)
         std::string targetType;
         if (check(TokenType::INT)) {
             targetType = "int";
@@ -327,8 +327,11 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
         } else if (check(TokenType::CHAR)) {
             targetType = "char";
             advance();
+        } else if (check(TokenType::STRING_TYPE)) {
+            targetType = "string";
+            advance();
         } else {
-            throw std::runtime_error("Expected type after 'as' keyword (int, float, ptr, or char)\n  Location: line " +
+            throw std::runtime_error("Expected type after 'as' keyword (int, float, ptr, char, or string)\n  Location: line " +
                                    std::to_string(currentToken().line) + ", column " + 
                                    std::to_string(currentToken().column));
         }
@@ -413,14 +416,14 @@ std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
         expect(TokenType::RBRACKET, "Expected ']' after array size");
         
         // Now expect the element type
-        if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+        if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE)) {
             type = currentToken().value;
             advance();
         } else {
-            throw std::runtime_error("Expected array element type (int, float, ptr, or char) at line " + 
+            throw std::runtime_error("Expected array element type (int, float, ptr, char, or string) at line " + 
                                    std::to_string(currentToken().line));
         }
-    } else if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+    } else if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE)) {
         // Regular type annotation
         type = currentToken().value;
         advance();
@@ -448,14 +451,14 @@ std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
         expect(TokenType::RBRACKET, "Expected ']' after array size");
         
         // Now expect the element type
-        if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+        if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE)) {
             type = currentToken().value;
             advance();
         } else {
-            throw std::runtime_error("Expected array element type (int, float, ptr, or char) at line " + 
+            throw std::runtime_error("Expected array element type (int, float, ptr, char, or string) at line " + 
                                    std::to_string(currentToken().line));
         }
-    } else if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+    } else if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE)) {
         // Regular type annotation
         type = currentToken().value;
         advance();
@@ -734,20 +737,19 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
         do {
             Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
             
-            // Check for array type: []type or [size]type
+            // Check for array type: []type only (sized arrays not allowed in parameters)
             std::string paramType;
             if (check(TokenType::LBRACKET)) {
                 advance(); // consume '['
                 
-                // Check if size is provided or if it's an unsized array parameter
-                std::string sizeStr = "";
+                // Array parameters must be unsized - reject [N]type syntax
                 if (check(TokenType::NUMBER)) {
-                    Token sizeToken = currentToken();
-                    sizeStr = sizeToken.value;
-                    advance();
+                    throw std::runtime_error("Array parameters must be unsized: use []type, not [" + currentToken().value + "]type\n  Location: line " + 
+                                           std::to_string(currentToken().line) + ", column " + 
+                                           std::to_string(currentToken().column));
                 }
                 
-                expect(TokenType::RBRACKET, "Expected ']' after array size");
+                expect(TokenType::RBRACKET, "Expected ']' after '['");
                 
                 // Get element type
                 std::string elementType;
@@ -763,18 +765,17 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                 } else if (check(TokenType::FLOAT)) {
                     elementType = "float";
                     advance();
+                } else if (check(TokenType::STRING_TYPE)) {
+                    elementType = "string";
+                    advance();
                 } else {
-                    throw std::runtime_error("Expected array element type (int, float, ptr, or char)\n  Location: line " + 
+                    throw std::runtime_error("Expected array element type (int, float, ptr, char, or string)\n  Location: line " + 
                                            std::to_string(currentToken().line) + ", column " + 
                                            std::to_string(currentToken().column));
                 }
                 
-                // Encode as "[]type" for unsized or "[size]type" for sized
-                if (sizeStr.empty()) {
-                    paramType = "[]" + elementType;
-                } else {
-                    paramType = "[" + sizeStr + "]" + elementType;
-                }
+                // All array parameters are unsized
+                paramType = "[]" + elementType;
             } else {
                 // Regular scalar type
                 if (check(TokenType::INT)) {
@@ -789,8 +790,11 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                 } else if (check(TokenType::FLOAT)) {
                     paramType = "float";
                     advance();
+                } else if (check(TokenType::STRING_TYPE)) {
+                    paramType = "string";
+                    advance();
                 } else {
-                    throw std::runtime_error("Expected parameter type (int, float, ptr, char, or [size]type)\n  Location: line " + 
+                    throw std::runtime_error("Expected parameter type (int, float, ptr, char, string, or [size]type)\n  Location: line " + 
                                            std::to_string(currentToken().line) + ", column " + 
                                            std::to_string(currentToken().column));
                 }
@@ -804,7 +808,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
     
     // Parse return type (optional - defaults to void)
     std::string returnType = "void";
-    if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+    if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE)) {
         returnType = currentToken().value;
         advance();
     }

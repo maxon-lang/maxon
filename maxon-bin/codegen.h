@@ -16,6 +16,7 @@ private:
     llvm::IRBuilder<> builder;
     std::unique_ptr<llvm::Module> module;
     std::map<std::string, llvm::AllocaInst*> namedValues;
+    std::map<std::string, std::string> variableTypes; // Track Maxon type strings for variables
     
     // Debug information
     bool generateDebugInfo;

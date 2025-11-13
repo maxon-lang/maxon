@@ -33,6 +33,8 @@ static llvm::Type* getTypeFromString(llvm::LLVMContext& context, const std::stri
         return llvm::Type::getDoubleTy(context);  // 64-bit float
     } else if (typeStr == "ptr") {
         return llvm::PointerType::get(context, 0);  // Opaque pointer
+    } else if (typeStr == "string") {
+        return llvm::PointerType::get(context, 0);  // Opaque pointer (alias for ptr)
     } else if (typeStr == "char") {
         return llvm::Type::getInt8Ty(context);
     } else if (typeStr == "void") {
@@ -67,6 +69,13 @@ static llvm::Type* getParamTypeFromString(llvm::LLVMContext& context, const std:
         // Regular parameter type
         return getTypeFromString(context, typeStr);
     }
+}
+
+// Check if a parameter type is an array
+static bool isArrayParam(const std::string& typeStr) {
+    // Only unsized arrays ([]type) need hidden length parameters
+    // Fixed-size arrays ([N]type) don't need them
+    return typeStr.size() >= 2 && typeStr[0] == '[' && typeStr[1] == ']';
 }
 
 CodeGenerator::CodeGenerator(const std::string& moduleName, bool debugInfo, bool verbose)
@@ -754,9 +763,16 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         // Check if this is an array or a pointer (array parameter)
         if (allocatedType->isPointerTy()) {
             // This is a pointer to an array (parameter case)
-            // Need to determine the element type from the parameter
-            // For now, assume i32 (int) as the default element type
-            llvm::Type* elementType = llvm::Type::getInt32Ty(context);
+            // Determine the element type from the tracked variable type
+            std::string varType = variableTypes[arrayIndexExpr->arrayName];
+            std::string elementTypeStr = "int"; // default
+            if (varType.size() > 2 && varType[0] == '[') {
+                size_t closeBracket = varType.find(']');
+                if (closeBracket != std::string::npos && closeBracket + 1 < varType.size()) {
+                    elementTypeStr = varType.substr(closeBracket + 1);
+                }
+            }
+            llvm::Type* elementType = getTypeFromString(context, elementTypeStr);
             
             // First load the pointer, then use GEP with the index
             llvm::Value* arrayPtr = builder.CreateLoad(allocatedType, alloca, "arrayptr");
@@ -914,15 +930,13 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
             throw std::runtime_error("Unknown function referenced: " + callExpr->callee);
         }
         
-        // Check argument count
-        if (calleeF->arg_size() != callExpr->args.size()) {
-            throw std::runtime_error("Incorrect number of arguments passed to function: " + callExpr->callee);
-        }
+        // Note: We don't check arg_size() here because we automatically add hidden length parameters
         
-        // Generate code for arguments
+        // Generate code for arguments (including hidden length parameters for arrays)
         std::vector<llvm::Value*> argsV;
         size_t argIdx = 0;
-        for (auto& arg : callExpr->args) {
+        for (size_t i = 0; i < callExpr->args.size(); i++) {
+            auto& arg = callExpr->args[i];
             // Check if this parameter expects a pointer (array parameter)
             llvm::Type* paramType = calleeF->getFunctionType()->getParamType(argIdx);
             
@@ -949,7 +963,45 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
                         );
                         argsV.push_back(arrayPtr);
                         argIdx++;
+                        
+                        // Check if the next parameter is an int32 (hidden length parameter)
+                        if (argIdx < calleeF->getFunctionType()->getNumParams()) {
+                            llvm::Type* nextParamType = calleeF->getFunctionType()->getParamType(argIdx);
+                            if (nextParamType->isIntegerTy(32)) {
+                                // This is a hidden length parameter, pass the array length
+                                std::string lengthVarName = varExpr->name + ".__length";
+                                if (namedValues.find(lengthVarName) != namedValues.end()) {
+                                    llvm::AllocaInst* lengthAlloca = namedValues[lengthVarName];
+                                    llvm::Value* lengthVal = builder.CreateLoad(llvm::Type::getInt32Ty(context), lengthAlloca, "length");
+                                    argsV.push_back(lengthVal);
+                                    argIdx++;
+                                }
+                            }
+                        }
                         continue;
+                    }
+                    // Check if this is a pointer variable that has a .__length (array parameter)
+                    if (allocatedType->isPointerTy()) {
+                        std::string lengthVarName = varExpr->name + ".__length";
+                        if (namedValues.find(lengthVarName) != namedValues.end()) {
+                            // This is an array parameter being passed to another function
+                            llvm::Value* ptrVal = builder.CreateLoad(allocatedType, alloca, varExpr->name);
+                            argsV.push_back(ptrVal);
+                            argIdx++;
+                            
+                            // Check if the next parameter is an int32 (hidden length parameter)
+                            if (argIdx < calleeF->getFunctionType()->getNumParams()) {
+                                llvm::Type* nextParamType = calleeF->getFunctionType()->getParamType(argIdx);
+                                if (nextParamType->isIntegerTy(32)) {
+                                    // Pass the length
+                                    llvm::AllocaInst* lengthAlloca = namedValues[lengthVarName];
+                                    llvm::Value* lengthVal = builder.CreateLoad(llvm::Type::getInt32Ty(context), lengthAlloca, "length");
+                                    argsV.push_back(lengthVal);
+                                    argIdx++;
+                                }
+                            }
+                            continue;
+                        }
                     }
                     // Otherwise fall through to normal handling (will load the value)
                 }
@@ -1106,6 +1158,7 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         }
         
         namedValues[varDecl->name] = alloca;
+        variableTypes[varDecl->name] = varDecl->type;
         
         // Create debug info for variable
         if (generateDebugInfo && !debugScopeStack.empty()) {
@@ -1267,6 +1320,7 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             builder.CreateStore(initVal, alloca);
         }
         namedValues[letDecl->name] = alloca;
+        variableTypes[letDecl->name] = letDecl->type;
         
         // Create debug info for let variable
         if (generateDebugInfo && !debugScopeStack.empty()) {
@@ -1626,24 +1680,45 @@ void CodeGenerator::generateFunction(FunctionAST* func, const std::string& names
     
     // Clear named values for new function
     namedValues.clear();
+    variableTypes.clear();
+    variableTypes.clear();
     
     // Allocate stack space for parameters
-    size_t idx = 0;
-    for (auto& arg : function->args()) {
-        llvm::Type* paramType = getParamTypeFromString(context, func->parameters[idx].type);
-        llvm::AllocaInst* alloca = createEntryBlockAlloca(function, func->parameters[idx].name, paramType);
+    auto argIter = function->args().begin();
+    for (size_t paramIdx = 0; paramIdx < func->parameters.size(); paramIdx++) {
+        llvm::Type* paramType = getParamTypeFromString(context, func->parameters[paramIdx].type);
+        llvm::AllocaInst* alloca = createEntryBlockAlloca(function, func->parameters[paramIdx].name, paramType);
         
-        // Emit debug location for parameter
+        // Emit debug location for parameter (before store)
         if (generateDebugInfo) {
-            emitLocation(func->line, func->parameters[idx].column);
+            emitLocation(func->line, func->parameters[paramIdx].column);
+        }
+        
+        // Store the parameter value
+        builder.CreateStore(&(*argIter), alloca);
+        namedValues[func->parameters[paramIdx].name] = alloca;
+        variableTypes[func->parameters[paramIdx].name] = func->parameters[paramIdx].type;
+        argIter++;
+        
+        // If this is an array parameter, also store the hidden length parameter
+        if (isArrayParam(func->parameters[paramIdx].type)) {
+            std::string lengthVarName = func->parameters[paramIdx].name + ".__length";
+            llvm::AllocaInst* lengthAlloca = createEntryBlockAlloca(function, lengthVarName, llvm::Type::getInt32Ty(context));
+            builder.CreateStore(&(*argIter), lengthAlloca);
+            namedValues[lengthVarName] = lengthAlloca;
+            argIter++;
+        }
+        
+        // Create debug info for parameter
+        if (generateDebugInfo) {
             
             // Create debug info for parameter
             llvm::DILocalVariable* debugParam = debugBuilder->createParameterVariable(
-                debugSubprogram,             // Scope
-                func->parameters[idx].name,  // Name
-                idx + 1,                     // Arg number (1-indexed)
-                debugFile,                   // File
-                func->line,                  // Line
+                debugSubprogram,                    // Scope
+                func->parameters[paramIdx].name,    // Name
+                paramIdx + 1,                       // Arg number (1-indexed)
+                debugFile,                          // File
+                func->line,                         // Line
                 debugBuilder->createBasicType("int", 32, llvm::dwarf::DW_ATE_signed) // Type
             );
             
@@ -1651,14 +1726,10 @@ void CodeGenerator::generateFunction(FunctionAST* func, const std::string& names
                 alloca,
                 debugParam,
                 debugBuilder->createExpression(),
-                llvm::DILocation::get(context, func->line, func->parameters[idx].column, debugSubprogram),
+                llvm::DILocation::get(context, func->line, func->parameters[paramIdx].column, debugSubprogram),
                 builder.GetInsertBlock()
             );
         }
-        
-        builder.CreateStore(&arg, alloca);
-        namedValues[func->parameters[idx].name] = alloca;
-        idx++;
     }
     
     // Push a scope for the function body
@@ -1731,7 +1802,7 @@ void CodeGenerator::createMinimalEntryPoint() {
         throw std::runtime_error("main function not found");
     }
     
-    // Check if main takes argc/argv parameters
+    // Check if main takes arguments: main(args []string) has 2 LLVM params (ptr, i32 hidden length)
     bool mainTakesArgs = (mainFunc->arg_size() == 2);
     
     // Declare Windows command-line API functions if main takes arguments
@@ -1800,8 +1871,8 @@ void CodeGenerator::createMinimalEntryPoint() {
         // argv is already an opaque pointer, no cast needed in opaque pointer model
         llvm::Value* argv = argvW;
         
-        // Call main with argc and argv
-        mainRetVal = tmpBuilder.CreateCall(mainFunc, {argc, argv});
+        // Call main with argv and argc (main(args []string) gets argv as pointer, argc as hidden length)
+        mainRetVal = tmpBuilder.CreateCall(mainFunc, {argv, argc});
     } else {
         // Call main without arguments
         mainRetVal = tmpBuilder.CreateCall(mainFunc);
@@ -1817,10 +1888,14 @@ void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
         // Get return type
         llvm::Type* returnType = getTypeFromString(context, func->returnType);
         
-        // Create parameter types
+        // Create parameter types (including hidden length parameters for arrays)
         std::vector<llvm::Type*> paramTypes;
         for (const auto& param : func->parameters) {
             paramTypes.push_back(getParamTypeFromString(context, param.type));
+            // Add hidden length parameter for array parameters
+            if (isArrayParam(param.type)) {
+                paramTypes.push_back(llvm::Type::getInt32Ty(context));
+            }
         }
         
         // Create function type
@@ -1840,10 +1915,14 @@ void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
             // Get return type
             llvm::Type* returnType = getTypeFromString(context, func->returnType);
             
-            // Create parameter types
+            // Create parameter types (including hidden length parameters for arrays)
             std::vector<llvm::Type*> paramTypes;
             for (const auto& param : func->parameters) {
                 paramTypes.push_back(getParamTypeFromString(context, param.type));
+                // Add hidden length parameter for array parameters
+                if (isArrayParam(param.type)) {
+                    paramTypes.push_back(llvm::Type::getInt32Ty(context));
+                }
             }
             
             // Create function type

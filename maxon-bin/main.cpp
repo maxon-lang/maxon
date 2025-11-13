@@ -279,13 +279,18 @@ std::string compileProgram(const CompilationOptions& options) {
         // Merge all programs into one for this iteration
         std::unique_ptr<ProgramAST> mergedProgram = std::make_unique<ProgramAST>();
         for (auto& prog : programs) {
+            // Copy functions and namespaces (don't move them, so we can reuse in next iteration)
             for (auto& func : prog->functions) {
+                // We need to move here to transfer ownership to mergedProgram
+                // The programs will be rebuilt with new ASTs if we discover more files
                 mergedProgram->functions.push_back(std::move(func));
             }
             for (auto& ns : prog->namespaces) {
                 mergedProgram->namespaces.push_back(std::move(ns));
             }
         }
+        // Note: We need to rebuild programs from source if we discover new files
+        // So we clear programs here, but keep allFiles and sources for rebuilding
         programs.clear();
         
         // Semantic analysis on merged program
@@ -324,6 +329,15 @@ std::string compileProgram(const CompilationOptions& options) {
                             
                             std::string source = readFile(file);
                             sources.push_back(source);
+                        }
+                    }
+                    
+                    // If we discovered new files, rebuild all programs from sources
+                    if (discoveredNewFiles) {
+                        programs.clear();
+                        for (size_t i = 0; i < allFiles.size(); i++) {
+                            const auto& file = allFiles[i];
+                            const auto& source = sources[i];
                             
                             Lexer lexer(source);
                             std::vector<Token> tokens = lexer.tokenize();

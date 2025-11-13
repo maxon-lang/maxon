@@ -2,6 +2,8 @@
 - tests are going to need both optimized and unoptimized IR
 - remove sin and cos intrinsics
 - tests for the linker
+- codegen using :: for namespaces internally?
+- simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")
 
 https://benchmarksgame-team.pages.debian.net/benchmarksgame/index.html
 

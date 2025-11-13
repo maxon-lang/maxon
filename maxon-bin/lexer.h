@@ -22,6 +22,7 @@ enum class TokenType {
     FLOAT,      // float type keyword
     PTR,        // ptr type keyword
     CHAR,       // char type keyword
+    STRING_TYPE,  // string type keyword (alias for ptr, used for strings)
     AS,         // as keyword for type casting
     TRUE,       // true keyword
     FALSE,      // false keyword
