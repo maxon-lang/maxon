@@ -1,0 +1,228 @@
+// Test transitive dependency autodiscovery
+// pow -> log, exp
+function main() int
+	var result float = pow(2.0, 3.0)
+	if result > 7.5 'check'
+		return 8
+	end 'check'
+	return 0
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+@_fltused = constant i32 39029
+
+define i32 @main() {
+entry:
+  %0 = call double @"stdlib::math::pow"(double 2.000000e+00, double 3.000000e+00)
+  %fcmptmp = fcmp ogt double %0, 7.500000e+00
+  %. = select i1 %fcmptmp, i32 8, i32 0
+  ret i32 %.
+}
+
+define double @"stdlib::math::pow"(double %0, double %1) {
+entry:
+  %fcmptmp = fcmp oeq double %1, 0.000000e+00
+  br i1 %fcmptmp, label %common.ret, label %ifcont
+
+common.ret:                                       ; preds = %ifcont69, %afterloop, %then51, %ifcont9, %ifcont, %entry, %ifcont72
+  %common.ret.op = phi double [ %4, %ifcont72 ], [ 1.000000e+00, %entry ], [ 0.000000e+00, %ifcont ], [ 1.000000e+00, %ifcont9 ], [ %result.3, %then51 ], [ %result.2, %afterloop ], [ 0.000000e+00, %ifcont69 ]
+  ret double %common.ret.op
+
+ifcont:                                           ; preds = %entry
+  %fcmptmp3 = fcmp oeq double %0, 0.000000e+00
+  br i1 %fcmptmp3, label %common.ret, label %ifcont9
+
+ifcont9:                                          ; preds = %ifcont
+  %fcmptmp11 = fcmp oeq double %0, 1.000000e+00
+  br i1 %fcmptmp11, label %common.ret, label %ifcont13
+
+ifcont13:                                         ; preds = %ifcont9
+  %fcmptmp15 = fcmp olt double %0, 0.000000e+00
+  %fnegtmp = fneg double %0
+  %base.0 = select i1 %fcmptmp15, double %fnegtmp, double %0
+  %trunc = fptosi double %1 to i32
+  %promotetmp = sitofp i32 %trunc to double
+  %fcmptmp23 = fcmp oeq double %1, %promotetmp
+  br i1 %fcmptmp23, label %then25, label %ifcont69
+
+then25:                                           ; preds = %ifcont13
+  %cmptmp = icmp slt i32 %trunc, 0
+  %negtmp = sub i32 0, %trunc
+  %spec.select = select i1 %cmptmp, i32 %negtmp, i32 %trunc
+  br label %whilecond
+
+whilecond:                                        ; preds = %loop, %then25
+  %current_base.0 = phi double [ %base.0, %then25 ], [ %fmultmp44, %loop ]
+  %n.1 = phi i32 [ %spec.select, %then25 ], [ %divtmp78, %loop ]
+  %result.0 = phi double [ 1.000000e+00, %then25 ], [ %spec.select79, %loop ]
+  %cmptmp34 = icmp sgt i32 %n.1, 0
+  br i1 %cmptmp34, label %loop, label %afterloop
+
+loop:                                             ; preds = %whilecond
+  %modtmp = and i32 %n.1, 1
+  %cmptmp37.not = icmp eq i32 %modtmp, 0
+  %fmultmp = fmul double %current_base.0, %result.0
+  %spec.select79 = select i1 %cmptmp37.not, double %result.0, double %fmultmp
+  %fmultmp44 = fmul double %current_base.0, %current_base.0
+  %divtmp78 = lshr i32 %n.1, 1
+  br label %whilecond
+
+afterloop:                                        ; preds = %whilecond
+  %fdivtmp = fdiv double 1.000000e+00, %result.0
+  %result.2 = select i1 %cmptmp, double %fdivtmp, double %result.0
+  br i1 %fcmptmp15, label %then51, label %common.ret
+
+then51:                                           ; preds = %afterloop
+  %negtmp57 = sub i32 0, %trunc
+  %spec.select80 = select i1 %cmptmp, i32 %negtmp57, i32 %trunc
+  %2 = and i32 %spec.select80, -2147483647
+  %cmptmp61 = icmp eq i32 %2, 1
+  %fnegtmp65 = fneg double %result.2
+  %result.3 = select i1 %cmptmp61, double %fnegtmp65, double %result.2
+  br label %common.ret
+
+ifcont69:                                         ; preds = %ifcont13
+  br i1 %fcmptmp15, label %common.ret, label %ifcont72
+
+ifcont72:                                         ; preds = %ifcont69
+  %3 = call double @"stdlib::math::log"(double %base.0)
+  %fmultmp76 = fmul double %1, %3
+  %4 = call double @"stdlib::math::exp"(double %fmultmp76)
+  br label %common.ret
+}
+
+define double @"stdlib::math::exp"(double %0) {
+entry:
+  %fcmptmp = fcmp oeq double %0, 0.000000e+00
+  br i1 %fcmptmp, label %common.ret, label %ifcont
+
+common.ret:                                       ; preds = %entry, %afterloop37
+  %common.ret.op = phi double [ %result.1, %afterloop37 ], [ 1.000000e+00, %entry ]
+  ret double %common.ret.op
+
+ifcont:                                           ; preds = %entry
+  %fcmptmp3 = fcmp olt double %0, 0.000000e+00
+  %fnegtmp = fneg double %0
+  %x.0 = select i1 %fcmptmp3, double %fnegtmp, double %0
+  br label %whilecond
+
+whilecond:                                        ; preds = %loop, %ifcont
+  %reduction_count.0 = phi i32 [ 0, %ifcont ], [ %addtmp, %loop ]
+  %x.1 = phi double [ %x.0, %ifcont ], [ %fdivtmp, %loop ]
+  %fcmptmp9 = fcmp ogt double %x.1, 1.000000e+00
+  br i1 %fcmptmp9, label %loop, label %whilecond12
+
+loop:                                             ; preds = %whilecond
+  %fdivtmp = fmul double %x.1, 5.000000e-01
+  %addtmp = add i32 %reduction_count.0, 1
+  br label %whilecond
+
+whilecond12:                                      ; preds = %whilecond, %loop14
+  %term.0 = phi double [ %fdivtmp20, %loop14 ], [ 1.000000e+00, %whilecond ]
+  %sum.0 = phi double [ %faddtmp, %loop14 ], [ 1.000000e+00, %whilecond ]
+  %k.0 = phi i32 [ %addtmp24, %loop14 ], [ 1, %whilecond ]
+  %cmptmp = icmp slt i32 %k.0, 20
+  br i1 %cmptmp, label %loop14, label %whilecond27
+
+loop14:                                           ; preds = %whilecond12
+  %fmultmp = fmul double %x.1, %term.0
+  %int2floattmp = sitofp i32 %k.0 to double
+  %fdivtmp20 = fdiv double %fmultmp, %int2floattmp
+  %faddtmp = fadd double %sum.0, %fdivtmp20
+  %addtmp24 = add i32 %k.0, 1
+  br label %whilecond12
+
+whilecond27:                                      ; preds = %whilecond12, %loop31
+  %result.0 = phi double [ %fmultmp34, %loop31 ], [ %sum.0, %whilecond12 ]
+  %i.0 = phi i32 [ %addtmp36, %loop31 ], [ 0, %whilecond12 ]
+  %cmptmp30 = icmp slt i32 %i.0, %reduction_count.0
+  br i1 %cmptmp30, label %loop31, label %afterloop37
+
+loop31:                                           ; preds = %whilecond27
+  %fmultmp34 = fmul double %result.0, %result.0
+  %addtmp36 = add i32 %i.0, 1
+  br label %whilecond27
+
+afterloop37:                                      ; preds = %whilecond27
+  %fdivtmp41 = fdiv double 1.000000e+00, %result.0
+  %result.1 = select i1 %fcmptmp3, double %fdivtmp41, double %result.0
+  br label %common.ret
+}
+
+define double @"stdlib::math::log"(double %0) {
+entry:
+  %fcmptmp = fcmp ole double %0, 0.000000e+00
+  %fcmptmp3 = fcmp oeq double %0, 1.000000e+00
+  %or.cond = or i1 %fcmptmp, %fcmptmp3
+  br i1 %or.cond, label %common.ret, label %whilecond
+
+common.ret:                                       ; preds = %entry, %afterloop42
+  %common.ret.op = phi double [ %faddtmp51, %afterloop42 ], [ 0.000000e+00, %entry ]
+  ret double %common.ret.op
+
+whilecond:                                        ; preds = %entry, %loop
+  %y.0 = phi double [ %fdivtmp, %loop ], [ %0, %entry ]
+  %n.0 = phi i32 [ %addtmp, %loop ], [ 0, %entry ]
+  %fcmptmp8 = fcmp ult double %y.0, 1.000000e+00
+  br i1 %fcmptmp8, label %whilecond11, label %loop
+
+loop:                                             ; preds = %whilecond
+  %fdivtmp = fmul double %y.0, 5.000000e-01
+  %addtmp = add i32 %n.0, 1
+  br label %whilecond
+
+whilecond11:                                      ; preds = %whilecond, %loop14
+  %y.1 = phi double [ %fmultmp, %loop14 ], [ %y.0, %whilecond ]
+  %n.1 = phi i32 [ %subtmp, %loop14 ], [ %n.0, %whilecond ]
+  %fcmptmp13 = fcmp olt double %y.1, 5.000000e-01
+  br i1 %fcmptmp13, label %loop14, label %afterloop17
+
+loop14:                                           ; preds = %whilecond11
+  %fmultmp = fmul double %y.1, 2.000000e+00
+  %subtmp = add i32 %n.1, -1
+  br label %whilecond11
+
+afterloop17:                                      ; preds = %whilecond11
+  %fsubtmp = fadd double %y.1, -1.000000e+00
+  %faddtmp = fadd double %y.1, 1.000000e+00
+  %fdivtmp20 = fdiv double %fsubtmp, %faddtmp
+  %fmultmp23 = fmul double %fdivtmp20, %fdivtmp20
+  br label %whilecond26
+
+whilecond26:                                      ; preds = %loop28, %afterloop17
+  %k.0 = phi i32 [ 1, %afterloop17 ], [ %addtmp41, %loop28 ]
+  %sum.0 = phi double [ %fdivtmp20, %afterloop17 ], [ %faddtmp39, %loop28 ]
+  %term.0 = phi double [ %fdivtmp20, %afterloop17 ], [ %fmultmp31, %loop28 ]
+  %cmptmp = icmp slt i32 %k.0, 20
+  br i1 %cmptmp, label %loop28, label %afterloop42
+
+loop28:                                           ; preds = %whilecond26
+  %fmultmp31 = fmul double %fmultmp23, %term.0
+  %multmp = shl i32 %k.0, 1
+  %addtmp33 = add nuw nsw i32 %multmp, 1
+  %int2floattmp = sitofp i32 %addtmp33 to double
+  %fdivtmp38 = fdiv double %fmultmp31, %int2floattmp
+  %faddtmp39 = fadd double %sum.0, %fdivtmp38
+  %addtmp41 = add i32 %k.0, 1
+  br label %whilecond26
+
+afterloop42:                                      ; preds = %whilecond26
+  %fmultmp44 = fmul double %sum.0, 2.000000e+00
+  %int2floattmp46 = sitofp i32 %n.1 to double
+  %fmultmp50 = fmul double %int2floattmp46, 0x3FE62E42FEFA39EC
+  %faddtmp51 = fadd double %fmultmp50, %fmultmp44
+  br label %common.ret
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
+---
+ExitCode: 8

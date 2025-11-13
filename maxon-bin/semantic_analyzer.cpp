@@ -506,9 +506,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         return "error";
         
     } else if (auto callExpr = dynamic_cast<CallExprAST*>(expr)) {
-        // Check if this is a built-in math function (intrinsics only, pow and tan are stdlib functions)
+        // Check if this is a built-in math function (intrinsics only)
         static const std::set<std::string> mathIntrinsics = {
-            "sqrt", "abs", "sin", "cos", "log", "exp", "floor", "ceil", "round", "trunc"
+            "sqrt", "abs", "sin", "cos", "floor", "ceil", "round", "trunc"
         };
         
         if (mathIntrinsics.find(callExpr->callee) != mathIntrinsics.end()) {

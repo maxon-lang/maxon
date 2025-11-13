@@ -292,11 +292,11 @@ std::string compileProgram(const CompilationOptions& options) {
         SemanticAnalyzer analyzer;
         std::vector<SemanticError> semanticErrors = analyzer.analyze(mergedProgram.get());
         
-        if (!semanticErrors.empty()) {
-            // Check if any errors are for undefined functions that might be in stdlib
-            std::set<std::string> undefinedFunctions = analyzer.getUndefinedFunctions();
-            
-            if (!undefinedFunctions.empty()) {
+        // Always check for undefined functions, even if semantic analysis passed
+        // This allows us to discover transitive dependencies
+        std::set<std::string> undefinedFunctions = analyzer.getUndefinedFunctions();
+        
+        if (!undefinedFunctions.empty()) {
                 if (options.verbose) {
                     std::cout << "Looking for undefined functions in stdlib: ";
                     for (const auto& func : undefinedFunctions) {
@@ -340,9 +340,10 @@ std::string compileProgram(const CompilationOptions& options) {
                     // Retry compilation with new files
                     continue;
                 }
-            }
-            
-            // Errors that couldn't be resolved by auto-discovery
+        }
+        
+        // Only report errors if they couldn't be resolved by stdlib discovery
+        if (!semanticErrors.empty()) {
             std::cerr << "=== Compilation Failed ===" << std::endl;
             std::cerr << "Found " << semanticErrors.size() << " error" 
                      << (semanticErrors.size() == 1 ? "" : "s") << ":\n" << std::endl;
@@ -357,7 +358,8 @@ std::string compileProgram(const CompilationOptions& options) {
                 );
                 std::cerr << formattedError << std::endl;
             }
-            throw std::runtime_error("Semantic analysis failed");
+            // Error has already been fully reported above
+            throw std::runtime_error("");
         }
         
         if (options.verbose) {
@@ -553,9 +555,12 @@ int main(int argc, char* argv[]) {
     try {
         compileProgram(options);
     } catch (const std::exception& e) {
-        std::cerr << "=== Compilation Failed ===" << std::endl;
-        std::cerr << e.what() << std::endl;
-        std::cerr << "\nCompilation terminated due to errors." << std::endl;
+        // If error message is empty, it means the error was already fully reported
+        if (strlen(e.what()) > 0) {
+            std::cerr << "=== Compilation Failed ===" << std::endl;
+            std::cerr << e.what() << std::endl;
+            std::cerr << "\nCompilation terminated due to errors." << std::endl;
+        }
         return 1;
     }
     
