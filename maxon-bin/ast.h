@@ -141,6 +141,16 @@ public:
         : ExprAST(l, c), arrayName(name), index(std::move(idx)) {}
 };
 
+// Member access expression (e.g., "array.length")
+class MemberAccessExprAST : public ExprAST {
+public:
+    std::string objectName;
+    std::string memberName;
+    
+    MemberAccessExprAST(const std::string& obj, const std::string& member, int l = 0, int c = 0)
+        : ExprAST(l, c), objectName(obj), memberName(member) {}
+};
+
 // Statement nodes
 class StmtAST : public ASTNode {
 public:

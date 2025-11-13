@@ -16,6 +16,7 @@ private:
     Token& peek(int offset = 1);
     bool match(TokenType type);
     bool check(TokenType type);
+    bool check(TokenType type, int offset);  // Check token at offset
     void advance();
     Token expect(TokenType type, const std::string& message);
     

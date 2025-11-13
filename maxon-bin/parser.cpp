@@ -35,6 +35,13 @@ bool Parser::check(TokenType type) {
     return currentToken().type == type;
 }
 
+bool Parser::check(TokenType type, int offset) {
+    if (position + offset < tokens.size()) {
+        return tokens[position + offset].type == type;
+    }
+    return false;
+}
+
 void Parser::advance() {
     if (position < tokens.size()) {
         position++;
@@ -186,6 +193,44 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         int line = currentToken().line;
         int column = currentToken().column;
         advance();
+        
+        // Check for member access (e.g., array.length)
+        // This must come before namespace qualification check
+        if (check(TokenType::DOT) && !check(TokenType::LPAREN, 1)) {
+            advance(); // consume '.'
+            Token member = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
+            
+            // If followed by '(', treat as namespace-qualified function call
+            if (check(TokenType::LPAREN)) {
+                // This is namespace.function() - restore as qualified name
+                std::string qualifiedName = name + "::" + member.value;
+                
+                // Continue building qualified name for multiple namespaces
+                while (check(TokenType::DOT) && peek(1).type == TokenType::IDENTIFIER) {
+                    advance(); // consume '.'
+                    Token nextMember = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
+                    qualifiedName = qualifiedName + "::" + nextMember.value;
+                }
+                
+                advance(); // consume '('
+                std::vector<std::unique_ptr<ExprAST>> args;
+                
+                // Parse arguments
+                if (!check(TokenType::RPAREN)) {
+                    args.push_back(parseExpression());
+                    
+                    while (match(TokenType::COMMA)) {
+                        args.push_back(parseExpression());
+                    }
+                }
+                
+                expect(TokenType::RPAREN, "Expected ')' after function arguments");
+                return std::make_unique<CallExprAST>(qualifiedName, std::move(args), line, column);
+            } else {
+                // This is a member access (e.g., array.length)
+                return std::make_unique<MemberAccessExprAST>(name, member.value, line, column);
+            }
+        }
         
         // Check for namespace qualification (namespace.namespace.function)
         // Support multiple levels: stdlib.fmt.function

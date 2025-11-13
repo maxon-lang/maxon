@@ -677,6 +677,28 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         // For now, assume all array elements are ints
         // TODO: Extract actual element type from array type (e.g., "[5]int" -> "int")
         return "int";
+    
+    } else if (auto memberAccessExpr = dynamic_cast<MemberAccessExprAST*>(expr)) {
+        // Check if object variable exists
+        auto varInfo = lookupVariable(memberAccessExpr->objectName);
+        if (!varInfo.has_value()) {
+            addError("Undefined variable: '" + memberAccessExpr->objectName + "'",
+                    expr->line, expr->column);
+            return "error";
+        }
+        
+        // Mark object variable as used when its member is accessed
+        markVariableAsUsed(memberAccessExpr->objectName);
+        
+        // Currently only support .length on arrays
+        if (memberAccessExpr->memberName == "length") {
+            // .length always returns int
+            return "int";
+        } else {
+            addError("Unknown member: " + memberAccessExpr->memberName,
+                    expr->line, expr->column);
+            return "error";
+        }
     }
     
     return "error";

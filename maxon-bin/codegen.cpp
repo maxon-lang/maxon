@@ -705,6 +705,39 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         return builder.CreateLoad(varType, alloca, varExpr->name);
     }
     
+    if (auto* memberAccessExpr = dynamic_cast<MemberAccessExprAST*>(expr)) {
+        // Currently only support array.length
+        if (memberAccessExpr->memberName == "length") {
+            // Check for the hidden __length variable
+            std::string lengthVar = memberAccessExpr->objectName + ".__length";
+            llvm::AllocaInst* lengthAlloca = namedValues[lengthVar];
+            
+            if (lengthAlloca) {
+                // Load and return the stored length
+                return builder.CreateLoad(llvm::Type::getInt32Ty(context), lengthAlloca, "length");
+            }
+            
+            // Fall back to checking if it's a stack array
+            llvm::AllocaInst* alloca = namedValues[memberAccessExpr->objectName];
+            if (!alloca) {
+                throw std::runtime_error("Unknown variable name: " + memberAccessExpr->objectName);
+            }
+            
+            llvm::Type* allocatedType = alloca->getAllocatedType();
+            
+            // Check if this is a stack-allocated array (old style, shouldn't happen anymore)
+            if (allocatedType->isArrayTy()) {
+                llvm::ArrayType* arrayType = llvm::cast<llvm::ArrayType>(allocatedType);
+                uint64_t arraySize = arrayType->getNumElements();
+                return llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), arraySize);
+            } else {
+                throw std::runtime_error("Variable is not an array: " + memberAccessExpr->objectName);
+            }
+        } else {
+            throw std::runtime_error("Unknown member: " + memberAccessExpr->memberName);
+        }
+    }
+    
     if (auto* arrayIndexExpr = dynamic_cast<ArrayIndexExprAST*>(expr)) {
         llvm::AllocaInst* alloca = namedValues[arrayIndexExpr->arrayName];
         if (!alloca) {
@@ -1000,6 +1033,19 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             );
             builder.CreateStore(arrayPtr, ptrAlloca);
             
+            // Store the array size as a hidden variable for .length access
+            llvm::AllocaInst* sizeAlloca = createEntryBlockAlloca(
+                function,
+                varDecl->name + ".__length",
+                llvm::Type::getInt32Ty(context)
+            );
+            llvm::Value* arraySizeVal = llvm::ConstantInt::get(
+                llvm::Type::getInt32Ty(context),
+                varDecl->arraySize
+            );
+            builder.CreateStore(arraySizeVal, sizeAlloca);
+            namedValues[varDecl->name + ".__length"] = sizeAlloca;
+            
             // Initialize array elements with the initializer value
             if (initVal) {
                 for (int i = 0; i < varDecl->arraySize; i++) {
@@ -1147,6 +1193,19 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
                 llvm::PointerType::get(context, 0)
             );
             builder.CreateStore(arrayPtr, ptrAlloca);
+            
+            // Store the array size as a hidden variable for .length access
+            llvm::AllocaInst* sizeAlloca = createEntryBlockAlloca(
+                function,
+                letDecl->name + ".__length",
+                llvm::Type::getInt32Ty(context)
+            );
+            llvm::Value* arraySizeVal = llvm::ConstantInt::get(
+                llvm::Type::getInt32Ty(context),
+                letDecl->arraySize
+            );
+            builder.CreateStore(arraySizeVal, sizeAlloca);
+            namedValues[letDecl->name + ".__length"] = sizeAlloca;
             
             // Initialize array elements with the initializer value
             if (initVal) {
@@ -1672,6 +1731,41 @@ void CodeGenerator::createMinimalEntryPoint() {
         throw std::runtime_error("main function not found");
     }
     
+    // Check if main takes argc/argv parameters
+    bool mainTakesArgs = (mainFunc->arg_size() == 2);
+    
+    // Declare Windows command-line API functions if main takes arguments
+    llvm::Function* getCommandLineFunc = nullptr;
+    llvm::Function* commandLineToArgvFunc = nullptr;
+    
+    if (mainTakesArgs) {
+        // Declare GetCommandLineW - returns wchar_t* (opaque pointer)
+        llvm::FunctionType* getCommandLineType = llvm::FunctionType::get(
+            llvm::PointerType::get(context, 0),  // wchar_t* as opaque pointer
+            false
+        );
+        getCommandLineFunc = llvm::Function::Create(
+            getCommandLineType,
+            llvm::Function::ExternalLinkage,
+            "GetCommandLineW",
+            module.get()
+        );
+        
+        // Declare CommandLineToArgvW - returns wchar_t** and fills pNumArgs
+        llvm::FunctionType* commandLineToArgvType = llvm::FunctionType::get(
+            llvm::PointerType::get(context, 0),  // wchar_t** as opaque pointer
+            {llvm::PointerType::get(context, 0),  // wchar_t* lpCmdLine
+             llvm::PointerType::get(context, 0)}, // int* pNumArgs
+            false
+        );
+        commandLineToArgvFunc = llvm::Function::Create(
+            commandLineToArgvType,
+            llvm::Function::ExternalLinkage,
+            "CommandLineToArgvW",
+            module.get()
+        );
+    }
+    
     // Create _start function as the real entry point
     llvm::FunctionType* startType = llvm::FunctionType::get(
         llvm::Type::getVoidTy(context),
@@ -1688,7 +1782,31 @@ void CodeGenerator::createMinimalEntryPoint() {
     llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", startFunc);
     llvm::IRBuilder<> tmpBuilder(entry);
     
-    llvm::Value* mainRetVal = tmpBuilder.CreateCall(mainFunc);
+    llvm::Value* mainRetVal = nullptr;
+    
+    if (mainTakesArgs) {
+        // Get command line
+        llvm::Value* cmdLine = tmpBuilder.CreateCall(getCommandLineFunc);
+        
+        // Allocate space for argc
+        llvm::Value* argcPtr = tmpBuilder.CreateAlloca(llvm::Type::getInt32Ty(context));
+        
+        // Parse command line to argv
+        llvm::Value* argvW = tmpBuilder.CreateCall(commandLineToArgvFunc, {cmdLine, argcPtr});
+        
+        // Load argc
+        llvm::Value* argc = tmpBuilder.CreateLoad(llvm::Type::getInt32Ty(context), argcPtr);
+        
+        // argv is already an opaque pointer, no cast needed in opaque pointer model
+        llvm::Value* argv = argvW;
+        
+        // Call main with argc and argv
+        mainRetVal = tmpBuilder.CreateCall(mainFunc, {argc, argv});
+    } else {
+        // Call main without arguments
+        mainRetVal = tmpBuilder.CreateCall(mainFunc);
+    }
+    
     tmpBuilder.CreateCall(exitProcessFunc, {mainRetVal});
     tmpBuilder.CreateUnreachable();  // ExitProcess never returns
 }
@@ -1974,8 +2092,9 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
     // Input object file
     lldArgs.push_back(tempObjFile.c_str());
     
-    // Explicitly link kernel32.lib
+    // Explicitly link required Windows libraries
     lldArgs.push_back("kernel32.lib");
+    lldArgs.push_back("shell32.lib");  // For CommandLineToArgvW
     
     // Call LLD driver directly (in-process)
     bool success = lld::coff::link(lldArgs, llvm::outs(), llvm::errs(), false, false);

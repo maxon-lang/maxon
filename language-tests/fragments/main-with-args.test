@@ -1,0 +1,72 @@
+// Test that main can receive argc and argv parameters
+// When run with no extra arguments, argc should be 1 (the program name itself)
+// We also test that local arrays have .length property
+
+function main(argc int, argv ptr) int
+    // Create a local array to test .length
+    var arr [5]int = 0
+    
+    // Return argc - 1 + arr.length, which should be 0 + 5 = 5 when run with no arguments
+    return argc - 1 + arr.length
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+@_fltused = constant i32 39029
+
+define i32 @main(i32 %0, ptr %1) {
+entry:
+  %arr.malloc = call ptr @malloc(i64 20)
+  store i32 0, ptr %arr.malloc, align 4
+  %arrayidx1 = getelementptr i8, ptr %arr.malloc, i64 4
+  store i32 0, ptr %arrayidx1, align 4
+  %arrayidx2 = getelementptr i8, ptr %arr.malloc, i64 8
+  store i32 0, ptr %arrayidx2, align 4
+  %arrayidx3 = getelementptr i8, ptr %arr.malloc, i64 12
+  store i32 0, ptr %arrayidx3, align 4
+  %arrayidx4 = getelementptr i8, ptr %arr.malloc, i64 16
+  store i32 0, ptr %arrayidx4, align 4
+  %addtmp = add i32 %0, 4
+  call void @free(ptr nonnull %arr.malloc)
+  ret i32 %addtmp
+}
+
+declare ptr @GetProcessHeap()
+
+declare ptr @HeapAlloc(ptr, i32, i64)
+
+declare i32 @HeapFree(ptr, i32, ptr)
+
+define ptr @malloc(i64 %0) {
+entry:
+  %1 = call ptr @GetProcessHeap()
+  %2 = call ptr @HeapAlloc(ptr %1, i32 0, i64 %0)
+  ret ptr %2
+}
+
+define void @free(ptr %0) {
+entry:
+  %1 = call ptr @GetProcessHeap()
+  %2 = call i32 @HeapFree(ptr %1, i32 0, ptr %0)
+  ret void
+}
+
+declare void @ExitProcess(i32)
+
+declare ptr @GetCommandLineW()
+
+declare ptr @CommandLineToArgvW(ptr, ptr)
+
+define void @_start() {
+entry:
+  %0 = call ptr @GetCommandLineW()
+  %1 = alloca i32, align 4
+  %2 = call ptr @CommandLineToArgvW(ptr %0, ptr nonnull %1)
+  %3 = load i32, ptr %1, align 4
+  %4 = call i32 @main(i32 %3, ptr %2)
+  call void @ExitProcess(i32 %4)
+  unreachable
+}
+---
+ExitCode: 5

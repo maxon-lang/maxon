@@ -319,28 +319,61 @@ end 'makeArray'
 - Optional runtime bounds checking for safety
 - Can be disabled with optimization flags
 
-## Phase 5: Command-Line Arguments
+## Phase 5: Command-Line Arguments ✅ COMPLETE
 
-### 5.1 Main Function with Arguments
+### 5.1 Main Function with Arguments ✅
 Change main signature to accept argc/argv:
 ```maxon
 function main(argc int, argv ptr) int
     // argc = argument count
-    // argv = array of string pointers
+    // argv = array of string pointers (wchar_t** from Windows API)
+    // Note: Arrays support .length property
+    var arr [10]int = 0
+    var size = arr.length  // Returns 10
 end 'main'
 ```
 
-### 5.2 String to Int Conversion
-Add stdlib function:
+**Implementation:**
+- [x] Updated codegen to support both `main() int` and `main(argc int, argv ptr) int` signatures
+- [x] Added Windows API declarations: `GetCommandLineW()` and `CommandLineToArgvW()`
+- [x] Modified `_start` entry point to parse command line and pass to main when it takes parameters
+- [x] Added shell32.lib to linker for `CommandLineToArgvW` function
+- [x] Backward compatibility: both signatures work correctly
+
+### 5.2 Array `.length` Property ✅
+Added member access syntax for arrays:
+```maxon
+var arr [10]int = 0
+var size = arr.length  // Returns 10 (int)
+```
+
+**Implementation:**
+- [x] Added `MemberAccessExprAST` node to AST for property access syntax (e.g., `object.member`)
+- [x] Updated parser to handle `.` operator for member access (distinguishes from namespace qualification)
+- [x] Implemented `check(TokenType, offset)` helper for lookahead parsing
+- [x] Modified array allocation to store size in hidden `__length` variable
+- [x] Updated codegen to return stored length for heap-allocated arrays
+- [x] Added semantic analyzer support for member access expressions
+- [x] `.length` returns `int` type
+
+### 5.3 String to Int Conversion (DEFERRED)
+~~Add stdlib function:~~
 ```maxon
 function atoi(str ptr) int
     // Convert C string to integer
 end 'atoi'
 ```
 
+**Status:** DEFERRED - Requires pointer dereferencing operations not yet implemented in the language. To properly implement atoi, we need:
+- Ability to dereference pointers: `*ptr` syntax
+- Pointer arithmetic: `ptr + offset`
+- Array-style pointer indexing: `ptr[i]`
+
+These features will be added in a future phase.
+
 **Test files:**
-- `language-tests/fragments/main-with-args.test` - argc/argv
-- `language-tests/fragments/atoi.test` - string to int conversion
+- ✅ `language-tests/fragments/main-with-args.test` - argc/argv verification and array.length
+- ⏸️ `language-tests/fragments/atoi.test` - DEFERRED (requires pointer dereferencing)
 
 ## Phase 6: Updated Spectral-Norm Implementation
 
