@@ -147,29 +147,50 @@ std::vector<std::string> extractFunctionNames(const std::string& filePath) {
     return functionNames;
 }
 
-// Find stdlib files that define specific functions
+// Build stdlib index: function name -> file path
+// Cached in-memory index built on first use
+std::map<std::string, std::string> getStdlibIndex() {
+    static std::map<std::string, std::string> index;
+    static bool initialized = false;
+    
+    if (!initialized) {
+        std::string stdlibDir = findStdlibDirectory();
+        std::vector<std::string> stdlibFiles = findMaxonFiles(stdlibDir);
+        
+        for (const auto& file : stdlibFiles) {
+            std::vector<std::string> definedFunctions = extractFunctionNames(file);
+            for (const auto& func : definedFunctions) {
+                // Map function name to file path
+                // If multiple files define same function, last one wins (shouldn't happen in well-organized stdlib)
+                index[func] = file;
+            }
+        }
+        
+        initialized = true;
+    }
+    
+    return index;
+}
+
+// Find stdlib files that define specific functions using the index
 std::vector<std::string> findStdlibFilesDefining(const std::set<std::string>& functionNames) {
     std::vector<std::string> resultFiles;
-    std::string stdlibDir = findStdlibDirectory();
-    std::vector<std::string> stdlibFiles = findMaxonFiles(stdlibDir);
+    std::set<std::string> uniqueFiles; // Avoid duplicates
+    const auto& index = getStdlibIndex();
     
-    for (const auto& file : stdlibFiles) {
-        std::vector<std::string> definedFunctions = extractFunctionNames(file);
+    for (const auto& funcName : functionNames) {
+        // Extract the unqualified part (after the last ::)
+        std::string unqualifiedName = funcName;
+        size_t lastSep = funcName.rfind("::");
+        if (lastSep != std::string::npos) {
+            unqualifiedName = funcName.substr(lastSep + 2);
+        }
         
-        // Check if this file defines any of the functions we're looking for
-        // The function names in the input set might be qualified (e.g., "stdlib::fmt::format_int_array")
-        // but definedFunctions contains only unqualified names (e.g., "format_int_array")
-        for (const auto& funcName : functionNames) {
-            // Extract the unqualified part (after the last ::)
-            std::string unqualifiedName = funcName;
-            size_t lastSep = funcName.rfind("::");
-            if (lastSep != std::string::npos) {
-                unqualifiedName = funcName.substr(lastSep + 2);
-            }
-            
-            if (std::find(definedFunctions.begin(), definedFunctions.end(), unqualifiedName) != definedFunctions.end()) {
-                resultFiles.push_back(file);
-                break;  // Only add each file once
+        // Look up in index
+        auto it = index.find(unqualifiedName);
+        if (it != index.end()) {
+            if (uniqueFiles.insert(it->second).second) {
+                resultFiles.push_back(it->second);
             }
         }
     }
@@ -195,6 +216,236 @@ std::string readFile(const std::string& filename) {
     }
     
     return buffer.str();
+}
+
+// Compilation options structure
+struct CompilationOptions {
+    std::vector<std::string> inputFiles;
+    std::string outputFile = "output.exe";
+    bool emitLLVM = false;
+    bool compileOnly = false;
+    bool optimize = false;
+    bool debugInfo = false;
+    bool verbose = false;
+};
+
+// Shared compilation function for both compile modes
+// Returns the output executable path on success, throws on error
+std::string compileProgram(const CompilationOptions& options) {
+    std::vector<std::unique_ptr<ProgramAST>> programs;
+    std::vector<std::string> sources;  // Keep sources for error formatting
+    std::vector<std::string> allFiles = options.inputFiles;
+    std::set<std::string> processedFiles(options.inputFiles.begin(), options.inputFiles.end());
+    
+    // Initial compilation of input files
+    for (const auto& inputFile : options.inputFiles) {
+        std::string source = readFile(inputFile);
+        sources.push_back(source);
+        if (options.verbose) {
+            std::cout << "Compiling " << inputFile << "..." << std::endl;
+        }
+        
+        // Lexical analysis
+        Lexer lexer(source);
+        std::vector<Token> tokens = lexer.tokenize();
+        if (options.verbose) {
+            std::cout << "  Lexical analysis complete. Generated " << tokens.size() << " tokens." << std::endl;
+        }
+        
+        // Parsing
+        Parser parser(tokens);
+        std::string fileNamespace = deriveNamespace(inputFile);
+        parser.setDefaultNamespace(fileNamespace);
+        std::unique_ptr<ProgramAST> program = parser.parse();
+        if (options.verbose) {
+            std::cout << "  Parsing complete." << std::endl;
+            if (!fileNamespace.empty()) {
+                std::cout << "    File namespace: " << fileNamespace << std::endl;
+            }
+        }
+        
+        programs.push_back(std::move(program));
+    }
+    
+    // Iterative compilation with stdlib auto-discovery
+    int iteration = 0;
+    const int maxIterations = 10;
+    bool discoveredNewFiles = false;
+    
+    do {
+        iteration++;
+        discoveredNewFiles = false;
+        
+        // Merge all programs into one for this iteration
+        std::unique_ptr<ProgramAST> mergedProgram = std::make_unique<ProgramAST>();
+        for (auto& prog : programs) {
+            for (auto& func : prog->functions) {
+                mergedProgram->functions.push_back(std::move(func));
+            }
+            for (auto& ns : prog->namespaces) {
+                mergedProgram->namespaces.push_back(std::move(ns));
+            }
+        }
+        programs.clear();
+        
+        // Semantic analysis on merged program
+        SemanticAnalyzer analyzer;
+        std::vector<SemanticError> semanticErrors = analyzer.analyze(mergedProgram.get());
+        
+        if (!semanticErrors.empty()) {
+            // Check if any errors are for undefined functions that might be in stdlib
+            std::set<std::string> undefinedFunctions = analyzer.getUndefinedFunctions();
+            
+            if (!undefinedFunctions.empty()) {
+                if (options.verbose) {
+                    std::cout << "Looking for undefined functions in stdlib: ";
+                    for (const auto& func : undefinedFunctions) {
+                        std::cout << func << " ";
+                    }
+                    std::cout << std::endl;
+                }
+                
+                std::vector<std::string> stdlibFiles = findStdlibFilesDefining(undefinedFunctions);
+                
+                if (!stdlibFiles.empty()) {
+                    if (options.verbose) {
+                        std::cout << "Found " << stdlibFiles.size() << " stdlib file(s) to auto-compile:" << std::endl;
+                        for (const auto& file : stdlibFiles) {
+                            std::cout << "  " << file << std::endl;
+                        }
+                    }
+                    
+                    // Add stdlib files to compilation
+                    for (const auto& file : stdlibFiles) {
+                        if (processedFiles.find(file) == processedFiles.end()) {
+                            processedFiles.insert(file);
+                            allFiles.push_back(file);
+                            discoveredNewFiles = true;
+                            
+                            std::string source = readFile(file);
+                            sources.push_back(source);
+                            
+                            Lexer lexer(source);
+                            std::vector<Token> tokens = lexer.tokenize();
+                            
+                            Parser parser(tokens);
+                            std::string fileNamespace = deriveNamespace(file);
+                            parser.setDefaultNamespace(fileNamespace);
+                            std::unique_ptr<ProgramAST> program = parser.parse();
+                            
+                            programs.push_back(std::move(program));
+                        }
+                    }
+                    
+                    // Retry compilation with new files
+                    continue;
+                }
+            }
+            
+            // Errors that couldn't be resolved by auto-discovery
+            std::cerr << "=== Compilation Failed ===" << std::endl;
+            std::cerr << "Found " << semanticErrors.size() << " error" 
+                     << (semanticErrors.size() == 1 ? "" : "s") << ":\n" << std::endl;
+            
+            for (const auto& error : semanticErrors) {
+                std::string formattedError = ErrorFormatter::formatError(
+                    error.message,
+                    sources[0],
+                    error.line,
+                    error.column,
+                    "Semantic Error"
+                );
+                std::cerr << formattedError << std::endl;
+            }
+            throw std::runtime_error("Semantic analysis failed");
+        }
+        
+        if (options.verbose) {
+            std::cout << "Semantic analysis complete." << std::endl;
+        }
+        
+        // Success - rebuild programs from all sources for codegen
+        programs.clear();
+        for (const auto& file : allFiles) {
+            std::string source = readFile(file);
+            Lexer lexer(source);
+            std::vector<Token> tokens = lexer.tokenize();
+            Parser parser(tokens);
+            std::string fileNamespace = deriveNamespace(file);
+            parser.setDefaultNamespace(fileNamespace);
+            std::unique_ptr<ProgramAST> program = parser.parse();
+            programs.push_back(std::move(program));
+        }
+        break;
+        
+    } while (discoveredNewFiles && iteration < maxIterations);
+    
+    // Final merge for codegen
+    std::unique_ptr<ProgramAST> mergedProgram = std::make_unique<ProgramAST>();
+    for (auto& prog : programs) {
+        for (auto& func : prog->functions) {
+            mergedProgram->functions.push_back(std::move(func));
+        }
+        for (auto& ns : prog->namespaces) {
+            mergedProgram->namespaces.push_back(std::move(ns));
+        }
+    }
+    
+    // Code generation
+    std::string moduleName = options.inputFiles.size() == 1 ? options.inputFiles[0] : "merged";
+    CodeGenerator codegen(moduleName, options.debugInfo, options.verbose);
+    codegen.generate(mergedProgram.get(), !options.compileOnly);
+    if (options.verbose) {
+        std::cout << "Code generation complete." << std::endl;
+    }
+    
+    // Run optimization passes if requested
+    if (options.optimize) {
+        codegen.optimize();
+        if (options.verbose) {
+            std::cout << "Optimization complete." << std::endl;
+        }
+    }
+    
+    // Determine executable output filename
+    std::string exeOutputFile = options.outputFile;
+    
+    // Output
+    if (options.emitLLVM) {
+        if (options.outputFile != "output.exe") {
+            codegen.writeIRToFile(options.outputFile);
+            if (options.verbose) {
+                std::cout << "\nLLVM IR written to: " << options.outputFile << std::endl;
+            }
+            
+            // When emitting LLVM IR to a file, also generate executable with .exe extension
+            size_t lastDot = options.outputFile.find_last_of('.');
+            if (lastDot != std::string::npos) {
+                exeOutputFile = options.outputFile.substr(0, lastDot) + ".exe";
+            } else {
+                exeOutputFile = options.outputFile + ".exe";
+            }
+        } else {
+            std::cout << "\n=== LLVM IR ===" << std::endl;
+            codegen.printIR();
+        }
+    }
+    
+    if (options.compileOnly) {
+        codegen.writeObjectFile(options.outputFile);
+        if (options.verbose) {
+            std::cout << "\nCompilation successful!" << std::endl;
+            std::cout << "Output: " << options.outputFile << std::endl;
+        }
+    } else {
+        codegen.writeExecutable(exeOutputFile);
+        if (options.verbose) {
+            std::cout << "\nCompilation and linking successful!" << std::endl;
+            std::cout << "Executable: " << exeOutputFile << std::endl;
+        }
+    }
+    
+    return exeOutputFile;
 }
 
 int main(int argc, char* argv[]) {
@@ -223,50 +474,29 @@ int main(int argc, char* argv[]) {
             std::filesystem::path tempDir = std::filesystem::temp_directory_path();
             std::string tempExe = (tempDir / ("maxon_temp_" + std::to_string(std::time(nullptr)) + ".exe")).string();
             
-            // Read and compile the source file
-            std::string source = readFile(command);
+            // Set up compilation options
+            CompilationOptions options;
+            options.inputFiles = {command};
+            options.outputFile = tempExe;
+            options.optimize = false;  // Don't optimize for quick compile-and-run
+            options.debugInfo = false;
+            options.verbose = false;
+            options.emitLLVM = false;
+            options.compileOnly = false;
             
-            // Lexical analysis
-            Lexer lexer(source);
-            std::vector<Token> tokens = lexer.tokenize();
-            
-            // Parsing
-            Parser parser(tokens);
-            std::string fileNamespace = deriveNamespace(command);
-            parser.setDefaultNamespace(fileNamespace);
-            std::unique_ptr<ProgramAST> program = parser.parse();
-            
-            // Semantic analysis
-            SemanticAnalyzer analyzer;
-            std::vector<SemanticError> semanticErrors = analyzer.analyze(program.get());
-            
-            if (!semanticErrors.empty()) {
-                std::cerr << "=== Compilation Failed ===" << std::endl;
-                for (const auto& error : semanticErrors) {
-                    std::string formattedError = ErrorFormatter::formatError(
-                        error.message, source, error.line, error.column, "Semantic Error"
-                    );
-                    std::cerr << formattedError << std::endl;
-                }
-                return 1;
-            }
-            
-            // Code generation
-            CodeGenerator codegen(command, false, false);
-            codegen.generate(program.get(), true);
-            codegen.optimize();
-            codegen.writeExecutable(tempExe);
+            // Compile using shared function
+            std::string executablePath = compileProgram(options);
             
             // Run the temporary executable
             int exitCode;
 #ifdef _WIN32
-            exitCode = system(tempExe.c_str());
+            exitCode = system(executablePath.c_str());
 #else
-            exitCode = system(tempExe.c_str());
+            exitCode = system(executablePath.c_str());
 #endif
             
             // Clean up temporary file
-            std::filesystem::remove(tempExe);
+            std::filesystem::remove(executablePath);
             
             return exitCode;
             
@@ -293,264 +523,35 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    std::vector<std::string> inputFiles;
-    std::string outputFile = "output.exe";
-    bool emitLLVM = false;
-    bool compileOnly = false;
-    bool optimize = false;
-    bool debugInfo = false;
-    bool verbose = false;
-    
     // Parse command line arguments
+    CompilationOptions options;
+    
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--emit-llvm") {
-            emitLLVM = true;
+            options.emitLLVM = true;
         } else if (arg == "-c") {
-            compileOnly = true;
+            options.compileOnly = true;
         } else if (arg == "-O") {
-            optimize = true;
+            options.optimize = true;
         } else if (arg == "--debug" || arg == "-g") {
-            debugInfo = true;
+            options.debugInfo = true;
         } else if (arg == "--verbose" || arg == "-v") {
-            verbose = true;
+            options.verbose = true;
         } else if (arg == "-o" && i + 1 < argc) {
-            outputFile = argv[++i];
+            options.outputFile = argv[++i];
         } else if (arg[0] != '-') {
-            // This is an input file
-            inputFiles.push_back(arg);
+            options.inputFiles.push_back(arg);
         }
     }
     
-    if (inputFiles.empty()) {
+    if (options.inputFiles.empty()) {
         std::cerr << "Error: No input files specified" << std::endl;
         return 1;
     }
     
     try {
-        // Compile each input file
-        std::vector<std::unique_ptr<ProgramAST>> programs;
-        std::vector<std::string> sources;  // Keep sources for error formatting
-        
-        for (const auto& inputFile : inputFiles) {
-            // Read source file
-            std::string source = readFile(inputFile);
-            sources.push_back(source);
-            if (verbose) {
-                std::cout << "Compiling " << inputFile << "..." << std::endl;
-            }
-            
-            // Lexical analysis
-            Lexer lexer(source);
-            std::vector<Token> tokens = lexer.tokenize();
-            if (verbose) {
-                std::cout << "  Lexical analysis complete. Generated " << tokens.size() << " tokens." << std::endl;
-            }
-            
-            // Parsing
-            Parser parser(tokens);
-            std::string fileNamespace = deriveNamespace(inputFile);
-            parser.setDefaultNamespace(fileNamespace);
-            std::unique_ptr<ProgramAST> program = parser.parse();
-            if (verbose) {
-                std::cout << "  Parsing complete." << std::endl;
-                if (!fileNamespace.empty()) {
-                    std::cout << "    File namespace: " << fileNamespace << std::endl;
-                }
-            }
-            
-            programs.push_back(std::move(program));
-        }
-        
-        // Iterative compilation with stdlib auto-discovery
-        // Keep track of all files and their parsed ASTs
-        std::vector<std::string> allFiles = inputFiles;
-        std::set<std::string> processedFiles(inputFiles.begin(), inputFiles.end());
-        int iteration = 0;
-        const int maxIterations = 10;  // Prevent infinite loops
-        bool discoveredNewFiles = false;
-        
-        do {
-            iteration++;
-            discoveredNewFiles = false;
-            
-            // Merge all programs into one for this iteration
-            std::unique_ptr<ProgramAST> mergedProgram = std::make_unique<ProgramAST>();
-            for (auto& prog : programs) {
-                for (auto& func : prog->functions) {
-                    mergedProgram->functions.push_back(std::move(func));
-                }
-                for (auto& ns : prog->namespaces) {
-                    mergedProgram->namespaces.push_back(std::move(ns));
-                }
-            }
-            programs.clear();  // We've moved everything
-            
-            // Semantic analysis on merged program
-            SemanticAnalyzer analyzer;
-            std::vector<SemanticError> semanticErrors = analyzer.analyze(mergedProgram.get());
-            
-            if (!semanticErrors.empty()) {
-                // Check if any errors are for undefined functions that might be in stdlib
-                std::set<std::string> undefinedFunctions = analyzer.getUndefinedFunctions();
-                
-                if (!undefinedFunctions.empty() && iteration == 1) {
-                    // First iteration - try to auto-discover stdlib files
-                    if (verbose) {
-                        std::cout << "Looking for undefined functions in stdlib: ";
-                        for (const auto& func : undefinedFunctions) {
-                            std::cout << func << " ";
-                        }
-                        std::cout << std::endl;
-                    }
-                    
-                    std::vector<std::string> stdlibFiles = findStdlibFilesDefining(undefinedFunctions);
-                    
-                    if (!stdlibFiles.empty()) {
-                        if (verbose) {
-                            std::cout << "Found " << stdlibFiles.size() << " stdlib file(s) to auto-compile:" << std::endl;
-                            for (const auto& file : stdlibFiles) {
-                                std::cout << "  " << file << std::endl;
-                            }
-                        }
-                        
-                        // Add stdlib files to compilation
-                        for (const auto& file : stdlibFiles) {
-                            if (processedFiles.find(file) == processedFiles.end()) {
-                                processedFiles.insert(file);
-                                allFiles.push_back(file);
-                                discoveredNewFiles = true;
-                                
-                                // Read and parse stdlib file
-                                std::string source = readFile(file);
-                                sources.push_back(source);
-                                
-                                Lexer lexer(source);
-                                std::vector<Token> tokens = lexer.tokenize();
-                                
-                                Parser parser(tokens);
-                                std::string fileNamespace = deriveNamespace(file);
-                                parser.setDefaultNamespace(fileNamespace);
-                                std::unique_ptr<ProgramAST> program = parser.parse();
-                                
-                                programs.push_back(std::move(program));
-                            }
-                        }
-                        
-                        // Retry compilation with new files
-                        continue;
-                    }
-                }
-                
-                // Errors that couldn't be resolved by auto-discovery
-                std::cerr << "=== Compilation Failed ===" << std::endl;
-                std::cerr << "Found " << semanticErrors.size() << " error" 
-                         << (semanticErrors.size() == 1 ? "" : "s") << ":\n" << std::endl;
-                
-                for (const auto& error : semanticErrors) {
-                    // Find which source file the error came from
-                    // For now, just use the first source
-                    std::string formattedError = ErrorFormatter::formatError(
-                        error.message,
-                        sources[0],
-                        error.line,
-                        error.column,
-                        "Semantic Error"
-                    );
-                    std::cerr << formattedError << std::endl;
-                }
-                return 1;
-            }
-            
-            if (verbose) {
-                std::cout << "Semantic analysis complete." << std::endl;
-            }
-            
-            // Success - rebuild programs from all sources for codegen
-            programs.clear();
-            for (const auto& file : allFiles) {
-                std::string source = readFile(file);
-                Lexer lexer(source);
-                std::vector<Token> tokens = lexer.tokenize();
-                Parser parser(tokens);
-                std::string fileNamespace = deriveNamespace(file);
-                parser.setDefaultNamespace(fileNamespace);
-                std::unique_ptr<ProgramAST> program = parser.parse();
-                programs.push_back(std::move(program));
-            }
-            break;  // Exit iteration loop on success
-            
-        } while (discoveredNewFiles && iteration < maxIterations);
-        
-        // Final merge for codegen
-        std::unique_ptr<ProgramAST> mergedProgram = std::make_unique<ProgramAST>();
-        for (auto& prog : programs) {
-            for (auto& func : prog->functions) {
-                mergedProgram->functions.push_back(std::move(func));
-            }
-            for (auto& ns : prog->namespaces) {
-                mergedProgram->namespaces.push_back(std::move(ns));
-            }
-        }
-        
-        // Code generation
-        std::string moduleName = inputFiles.size() == 1 ? inputFiles[0] : "merged";
-        CodeGenerator codegen(moduleName, debugInfo, verbose);
-        codegen.generate(mergedProgram.get(), !compileOnly);  // Don't need entry point if just compiling
-        if (verbose) {
-            std::cout << "Code generation complete." << std::endl;
-        }
-        
-        // Run optimization passes if requested
-        if (optimize) {
-            codegen.optimize();
-            if (verbose) {
-                std::cout << "Optimization complete." << std::endl;
-            }
-        }
-        
-        // Determine executable output filename
-        std::string exeOutputFile = outputFile;
-        
-        // Output
-        if (emitLLVM) {
-            // Write LLVM IR to file if -o specified, otherwise print to stdout
-            if (outputFile != "output.exe") {
-                codegen.writeIRToFile(outputFile);
-                if (verbose) {
-                    std::cout << "\nLLVM IR written to: " << outputFile << std::endl;
-                }
-                
-                // When emitting LLVM IR to a file, also generate executable with .exe extension
-                // Remove any existing extension and add .exe
-                size_t lastDot = outputFile.find_last_of('.');
-                if (lastDot != std::string::npos) {
-                    exeOutputFile = outputFile.substr(0, lastDot) + ".exe";
-                } else {
-                    exeOutputFile = outputFile + ".exe";
-                }
-            } else {
-                std::cout << "\n=== LLVM IR ===" << std::endl;
-                codegen.printIR();
-            }
-        }
-        
-        if (compileOnly) {
-            // Just compile to object file
-            codegen.writeObjectFile(outputFile);
-            if (verbose) {
-                std::cout << "\nCompilation successful!" << std::endl;
-                std::cout << "Output: " << outputFile << std::endl;
-            }
-        } else {
-            // Compile and link to executable using LLVM's linker
-            codegen.writeExecutable(exeOutputFile);
-            if (verbose) {
-                std::cout << "\nCompilation and linking successful!" << std::endl;
-                std::cout << "Executable: " << exeOutputFile << std::endl;
-            }
-        }
-        
+        compileProgram(options);
     } catch (const std::exception& e) {
         std::cerr << "=== Compilation Failed ===" << std::endl;
         std::cerr << e.what() << std::endl;

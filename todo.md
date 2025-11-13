@@ -1,3 +1,5 @@
+- if x is a float "x as int" should not work, use trunc() or round() or something
+
 https://benchmarksgame-team.pages.debian.net/benchmarksgame/index.html
 
 add "run" to maxon
@@ -9,6 +11,7 @@ add package manager to maxon
 
 self hosting
 mcp server
+AI optimized debugger
 
 get running on linux (devcontainer)
 get running on macos
@@ -43,3 +46,4 @@ this aint right var buffer [12]char = 0
 6. **Generics:** Type-parameterized functions
 7. **SIMD support:** Vector operations for performance
 8. **Array slicing:** Sub-array references without copying
+

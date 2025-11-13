@@ -381,14 +381,6 @@ llvm::Value* CodeGenerator::generateMathIntrinsic(CallExprAST* callExpr) {
         intrinsicID = llvm::Intrinsic::sin;
     } else if (callExpr->callee == "cos") {
         intrinsicID = llvm::Intrinsic::cos;
-    } else if (callExpr->callee == "tan") {
-        intrinsicID = llvm::Intrinsic::tan;
-    } else if (callExpr->callee == "log") {
-        intrinsicID = llvm::Intrinsic::log;
-    } else if (callExpr->callee == "exp") {
-        intrinsicID = llvm::Intrinsic::exp;
-    } else if (callExpr->callee == "pow") {
-        intrinsicID = llvm::Intrinsic::pow;
     } else if (callExpr->callee == "round") {
         intrinsicID = llvm::Intrinsic::round;
         returnsInt = true;
@@ -690,11 +682,11 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
     }
     
     if (auto* callExpr = dynamic_cast<CallExprAST*>(expr)) {
-        // Handle math intrinsic functions
+        // Handle math intrinsic functions (built into LLVM)
+        // Note: log, exp, pow, tan are stdlib functions, not intrinsics
         if (callExpr->callee == "sqrt" || callExpr->callee == "abs" || 
             callExpr->callee == "floor" || callExpr->callee == "ceil" ||
-            callExpr->callee == "sin" || callExpr->callee == "cos" || callExpr->callee == "tan" ||
-            callExpr->callee == "log" || callExpr->callee == "exp" || callExpr->callee == "pow" ||
+            callExpr->callee == "sin" || callExpr->callee == "cos" ||
             callExpr->callee == "round" || callExpr->callee == "trunc") {
             return generateMathIntrinsic(callExpr);
         }

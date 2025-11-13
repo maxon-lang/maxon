@@ -42,10 +42,21 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
             // Run semantic analysis
             SemanticAnalyzer semanticAnalyzer;
             
-            // Register stdlib functions with the semantic analyzer
+            // Get the set of function names defined in the current document
+            std::set<std::string> currentDocFunctions;
+            for (const auto& func : program->functions) {
+                currentDocFunctions.insert(func->name);
+            }
+            
+            // Register stdlib functions with the semantic analyzer,
+            // but SKIP functions that are defined in the current document
+            // to avoid duplicate definition errors when editing stdlib files
             for (const auto& pair : stdlibFunctions) {
                 const StdlibFunction& func = pair.second;
-                semanticAnalyzer.registerExternalFunction(func.name, func.returnType, func.parameters);
+                // Only register as external if NOT defined in current document
+                if (currentDocFunctions.find(func.name) == currentDocFunctions.end()) {
+                    semanticAnalyzer.registerExternalFunction(func.name, func.returnType, func.parameters);
+                }
             }
             
             std::vector<SemanticError> semanticErrors = semanticAnalyzer.analyze(program.get());

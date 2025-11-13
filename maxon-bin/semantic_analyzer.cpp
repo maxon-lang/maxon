@@ -506,25 +506,17 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         return "error";
         
     } else if (auto callExpr = dynamic_cast<CallExprAST*>(expr)) {
-        // Check if this is a built-in math function
+        // Check if this is a built-in math function (intrinsics only, pow and tan are stdlib functions)
         static const std::set<std::string> mathIntrinsics = {
-            "sqrt", "abs", "sin", "cos", "tan", "log", "exp", "floor", "ceil", "round", "trunc", "pow"
+            "sqrt", "abs", "sin", "cos", "log", "exp", "floor", "ceil", "round", "trunc"
         };
         
         if (mathIntrinsics.find(callExpr->callee) != mathIntrinsics.end()) {
-            // Validate argument count
-            if (callExpr->callee == "pow") {
-                if (callExpr->args.size() != 2) {
-                    addError("Function 'pow' expects exactly 2 arguments (base, exponent)", 
-                            expr->line, expr->column);
-                    return "float";
-                }
-            } else {
-                if (callExpr->args.size() != 1) {
-                    addError("Function '" + callExpr->callee + "' expects exactly 1 argument", 
-                            expr->line, expr->column);
-                    return "float";
-                }
+            // Validate argument count (all intrinsics take 1 argument)
+            if (callExpr->args.size() != 1) {
+                addError("Function '" + callExpr->callee + "' expects exactly 1 argument", 
+                        expr->line, expr->column);
+                return "float";
             }
             
             // Analyze arguments

@@ -23,7 +23,7 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"as", TokenType::AS},
     {"true", TokenType::TRUE},
     {"false", TokenType::FALSE},
-    // Math functions
+    // Math intrinsic functions (built into codegen)
     {"sqrt", TokenType::SQRT},
     {"abs", TokenType::ABS},
     {"floor", TokenType::FLOOR},
@@ -31,11 +31,8 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"round", TokenType::ROUND},
     {"trunc", TokenType::TRUNC},
     {"sin", TokenType::SIN},
-    {"cos", TokenType::COS},
-    {"tan", TokenType::TAN},
-    {"log", TokenType::LOG},
-    {"exp", TokenType::EXP},
-    {"pow", TokenType::POW}
+    {"cos", TokenType::COS}
+    // Note: log, exp, pow, tan are stdlib functions, not keywords
 };
 
 Lexer::Lexer(const std::string& src)

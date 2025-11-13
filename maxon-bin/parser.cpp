@@ -132,11 +132,11 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         return std::make_unique<StringLiteralExprAST>(value, line, column);
     }
     
-    // Math function keywords (built-in functions)
-    // Single-argument functions: sqrt, abs, sin, cos, tan, log, exp, floor, ceil, round, trunc
+    // Math intrinsic function keywords (built-in functions)
+    // Single-argument functions: sqrt, abs, sin, cos, floor, ceil, round, trunc
+    // Note: log, exp, pow, tan are stdlib functions, not keywords
     if (check(TokenType::SQRT) || check(TokenType::ABS) || check(TokenType::SIN) || 
-        check(TokenType::COS) || check(TokenType::TAN) || check(TokenType::LOG) || 
-        check(TokenType::EXP) || check(TokenType::FLOOR) || check(TokenType::CEIL) ||
+        check(TokenType::COS) || check(TokenType::FLOOR) || check(TokenType::CEIL) ||
         check(TokenType::ROUND) || check(TokenType::TRUNC)) {
         std::string funcName = currentToken().value;
         int line = currentToken().line;
@@ -149,25 +149,6 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         
         std::vector<std::unique_ptr<ExprAST>> args;
         args.push_back(std::move(arg));
-        return std::make_unique<CallExprAST>(funcName, std::move(args), line, column);
-    }
-    
-    // Two-argument function: pow
-    if (check(TokenType::POW)) {
-        std::string funcName = currentToken().value;
-        int line = currentToken().line;
-        int column = currentToken().column;
-        advance();
-        
-        expect(TokenType::LPAREN, "Expected '(' after 'pow'");
-        auto base = parseExpression();
-        expect(TokenType::COMMA, "Expected ',' after first argument to 'pow'");
-        auto exponent = parseExpression();
-        expect(TokenType::RPAREN, "Expected ')' after arguments");
-        
-        std::vector<std::unique_ptr<ExprAST>> args;
-        args.push_back(std::move(base));
-        args.push_back(std::move(exponent));
         return std::make_unique<CallExprAST>(funcName, std::move(args), line, column);
     }
     

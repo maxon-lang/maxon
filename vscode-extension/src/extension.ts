@@ -79,9 +79,11 @@ export async function activate(ctx: vscode.ExtensionContext) {
     };
 
     clientOptions = {
-        documentSelector: [{ scheme: 'file', language: 'maxon' }],
+        documentSelector: [
+            { scheme: 'file', language: 'maxon', pattern: '**/*.maxon' }
+        ],
         synchronize: {
-            fileEvents: vscode.workspace.createFileSystemWatcher('**/.maxon')
+            fileEvents: vscode.workspace.createFileSystemWatcher('**/*.maxon')
         },
         outputChannel: outputChannel
     };
@@ -106,6 +108,22 @@ export async function activate(ctx: vscode.ExtensionContext) {
         log(`LSP client start failed: ${error}`);
         vscode.window.showErrorMessage(`Maxon Language Server failed to start: ${error}`);
     }
+    
+    // Register restart command
+    const restartCommand = vscode.commands.registerCommand(
+        'maxon.restartLanguageServer',
+        async () => {
+            try {
+                vscode.window.showInformationMessage('Restarting Maxon Language Server...');
+                await restartClient();
+                vscode.window.showInformationMessage('Maxon Language Server restarted successfully');
+            } catch (error) {
+                vscode.window.showErrorMessage(`Failed to restart language server: ${error}`);
+            }
+        }
+    );
+    
+    context.subscriptions.push(restartCommand);
     
     // Add client to subscriptions for cleanup
     context.subscriptions.push(client);
