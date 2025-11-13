@@ -17,6 +17,7 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"break", TokenType::BREAK},
     {"continue", TokenType::CONTINUE},
     {"int", TokenType::INT},
+    {"float", TokenType::FLOAT},
     {"ptr", TokenType::PTR},
     {"char", TokenType::CHAR},
     {"as", TokenType::AS},
@@ -91,10 +92,55 @@ Token Lexer::readNumber() {
     int startLine = line;
     int startColumn = column;
     std::string num;
+    bool isFloat = false;
     
+    // Read integer part
     while (std::isdigit(currentChar())) {
         num += currentChar();
         advance();
+    }
+    
+    // Check for decimal point
+    if (currentChar() == '.' && std::isdigit(peek(1))) {
+        isFloat = true;
+        num += currentChar();
+        advance();
+        
+        // Read fractional part
+        while (std::isdigit(currentChar())) {
+            num += currentChar();
+            advance();
+        }
+    }
+    
+    // Check for scientific notation (e or E)
+    if (currentChar() == 'e' || currentChar() == 'E') {
+        isFloat = true;
+        num += currentChar();
+        advance();
+        
+        // Optional sign
+        if (currentChar() == '+' || currentChar() == '-') {
+            num += currentChar();
+            advance();
+        }
+        
+        // Read exponent
+        if (!std::isdigit(currentChar())) {
+            throw std::runtime_error("Invalid scientific notation at line " + 
+                                   std::to_string(startLine) + ", column " + 
+                                   std::to_string(startColumn));
+        }
+        
+        while (std::isdigit(currentChar())) {
+            num += currentChar();
+            advance();
+        }
+    }
+    
+    if (isFloat) {
+        double value = std::stod(num);
+        return Token(TokenType::FLOAT_LITERAL, num, startLine, startColumn, value);
     }
     
     return Token(TokenType::NUMBER, num, startLine, startColumn);
@@ -319,6 +365,15 @@ std::vector<Token> Lexer::tokenize() {
             advance();
         }
         else if (c == '.') {
+            // Check if this is attempting to be a float literal without leading zero (e.g., .5)
+            if (std::isdigit(peek(1))) {
+                throw std::runtime_error("Invalid float literal at line " + 
+                                       std::to_string(startLine) + ", column " + 
+                                       std::to_string(startColumn) + 
+                                       ": float literals must have a leading zero (use 0" + 
+                                       std::string(1, c) + std::string(1, peek(1)) + " instead of " + 
+                                       std::string(1, c) + std::string(1, peek(1)) + ")");
+            }
             tokens.push_back(Token(TokenType::DOT, ".", startLine, startColumn));
             advance();
         }

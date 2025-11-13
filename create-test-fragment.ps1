@@ -233,8 +233,11 @@ try {
     
     $fragmentContent += "ExitCode: $exitCode"
     
-    # Write fragment file
-    $fragmentContent | Set-Content -Path $outputFragmentPath -NoNewline -Encoding UTF8
+    # Write fragment file (with CRLF line endings for Windows)
+    # Normalize line endings to CRLF
+    $fragmentContent = $fragmentContent -replace "`r`n", "`n" -replace "`n", "`r`n"
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($outputFragmentPath, $fragmentContent, $utf8NoBom)
     
     Write-Host "`nTest fragment created successfully!" -ForegroundColor Green
     Write-Host "Location: $outputFragmentPath" -ForegroundColor Cyan

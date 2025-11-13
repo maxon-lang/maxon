@@ -241,7 +241,7 @@ int main(int argc, char* argv[]) {
             std::vector<SemanticError> semanticErrors = analyzer.analyze(program.get());
             
             if (!semanticErrors.empty()) {
-                std::cerr << "\n=== Compilation Failed ===" << std::endl;
+                std::cerr << "=== Compilation Failed ===" << std::endl;
                 for (const auto& error : semanticErrors) {
                     std::string formattedError = ErrorFormatter::formatError(
                         error.message, source, error.line, error.column, "Semantic Error"
@@ -443,7 +443,7 @@ int main(int argc, char* argv[]) {
                 }
                 
                 // Errors that couldn't be resolved by auto-discovery
-                std::cerr << "\n=== Compilation Failed ===" << std::endl;
+                std::cerr << "=== Compilation Failed ===" << std::endl;
                 std::cerr << "Found " << semanticErrors.size() << " error" 
                          << (semanticErrors.size() == 1 ? "" : "s") << ":\n" << std::endl;
                 
@@ -552,7 +552,7 @@ int main(int argc, char* argv[]) {
         }
         
     } catch (const std::exception& e) {
-        std::cerr << "\n=== Compilation Failed ===" << std::endl;
+        std::cerr << "=== Compilation Failed ===" << std::endl;
         std::cerr << e.what() << std::endl;
         std::cerr << "\nCompilation terminated due to errors." << std::endl;
         return 1;

@@ -32,6 +32,14 @@ public:
     NumberExprAST(int val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
 };
 
+// Float literal
+class FloatExprAST : public ExprAST {
+public:
+    double value;
+    
+    FloatExprAST(double val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
+};
+
 // Variable reference
 class VariableExprAST : public ExprAST {
 public:

@@ -19,6 +19,7 @@ enum class TokenType {
     BREAK,      // break keyword
     CONTINUE,   // continue keyword
     INT,
+    FLOAT,      // float type keyword
     PTR,        // ptr type keyword
     CHAR,       // char type keyword
     AS,         // as keyword for type casting
@@ -28,6 +29,7 @@ enum class TokenType {
     // Identifiers and literals
     IDENTIFIER,
     NUMBER,
+    FLOAT_LITERAL, // Floating-point literal
     STRING,       // Double-quoted string literals
     BLOCK_ID,     // Single-quoted block identifiers  
     CHARACTER,    // Single character literal 'A'
@@ -64,9 +66,10 @@ struct Token {
     std::string value;
     int line;
     int column;
+    double floatValue;  // For FLOAT_LITERAL tokens
     
-    Token(TokenType t, const std::string& v, int l, int c)
-        : type(t), value(v), line(l), column(c) {}
+    Token(TokenType t, const std::string& v, int l, int c, double fv = 0.0)
+        : type(t), value(v), line(l), column(c), floatValue(fv) {}
 };
 
 class Lexer {

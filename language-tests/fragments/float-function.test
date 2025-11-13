@@ -1,0 +1,38 @@
+function add(a float, b float) float
+    return a + b
+end 'add'
+
+function main() int
+    var x = add(3.5, 2.5)
+    var result = x as int
+    return result
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+@_fltused = constant i32 39029
+
+define double @add(double %0, double %1) {
+entry:
+  %faddtmp = fadd double %0, %1
+  ret double %faddtmp
+}
+
+define i32 @main() {
+entry:
+  %0 = call double @add(double 3.500000e+00, double 2.500000e+00)
+  %float2inttmp = fptosi double %0 to i32
+  ret i32 %float2inttmp
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
+---
+ExitCode: 6

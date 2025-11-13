@@ -344,6 +344,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
     if (dynamic_cast<NumberExprAST*>(expr)) {
         return "int";
         
+    } else if (dynamic_cast<FloatExprAST*>(expr)) {
+        return "float";
+        
     } else if (dynamic_cast<BooleanExprAST*>(expr)) {
         return "bool";
         
@@ -426,28 +429,52 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
                 return "error";
             }
             
-            if (leftType != "int" || rightType != "int") {
-                std::string opName;
-                if (binExpr->op == '+') opName = "addition (+)";
-                else if (binExpr->op == '-') opName = "subtraction (-)";
-                else if (binExpr->op == '*') opName = "multiplication (*)";
-                else if (binExpr->op == '/') opName = "division (/)";
-                else opName = "modulo (%)";
-                
-                addError("Arithmetic operator " + opName + " requires integer operands" +
-                        std::string("\n  Left operand type: ") + leftType +
-                        "\n  Right operand type: " + rightType,
-                        expr->line, expr->column);
-                return "error";
+            // Special handling for modulo: requires both operands to be int
+            if (binExpr->op == '%') {
+                if (leftType != "int" || rightType != "int") {
+                    addError("Modulo operator (%) requires integer operands" +
+                            std::string("\n  Left operand type: ") + leftType +
+                            "\n  Right operand type: " + rightType,
+                            expr->line, expr->column);
+                    return "error";
+                }
+                return "int";
             }
-            return "int";
+            
+            // For other arithmetic operators: allow int or float
+            // Result is float if either operand is float (implicit promotion)
+            if ((leftType == "int" || leftType == "float") && 
+                (rightType == "int" || rightType == "float")) {
+                if (leftType == "float" || rightType == "float") {
+                    return "float";
+                }
+                return "int";
+            }
+            
+            std::string opName;
+            if (binExpr->op == '+') opName = "addition (+)";
+            else if (binExpr->op == '-') opName = "subtraction (-)";
+            else if (binExpr->op == '*') opName = "multiplication (*)";
+            else opName = "division (/)";
+            
+            addError("Arithmetic operator " + opName + " requires numeric operands (int or float)" +
+                    std::string("\n  Left operand type: ") + leftType +
+                    "\n  Right operand type: " + rightType,
+                    expr->line, expr->column);
+            return "error";
         }
         
         // Comparison operators: <, >, L (<=), G (>=), E (==), N (!=)
         if (binExpr->op == '<' || binExpr->op == '>' || binExpr->op == 'L' || 
             binExpr->op == 'G' || binExpr->op == 'E' || binExpr->op == 'N') {
+            // Allow comparison between int and float (implicit promotion)
+            if ((leftType == "int" || leftType == "float") && 
+                (rightType == "int" || rightType == "float")) {
+                return "bool";
+            }
+            
             if (leftType != rightType) {
-                addError("Comparison operators require operands of the same type" +
+                addError("Comparison operators require operands of compatible types" +
                         std::string("\n  Left operand type: ") + leftType +
                         "\n  Right operand type: " + rightType,
                         expr->line, expr->column);

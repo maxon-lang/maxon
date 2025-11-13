@@ -29,6 +29,8 @@ bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
 static llvm::Type* getTypeFromString(llvm::LLVMContext& context, const std::string& typeStr) {
     if (typeStr == "int") {
         return llvm::Type::getInt32Ty(context);
+    } else if (typeStr == "float") {
+        return llvm::Type::getDoubleTy(context);  // 64-bit float
     } else if (typeStr == "ptr") {
         return llvm::PointerType::get(context, 0);  // Opaque pointer
     } else if (typeStr == "char") {
@@ -73,6 +75,18 @@ CodeGenerator::CodeGenerator(const std::string& moduleName, bool debugInfo, bool
     if (generateDebugInfo) {
         initDebugInfo(moduleName);
     }
+    
+    // Add _fltused symbol for Windows floating-point support
+    // This is required when using floating-point operations on Windows
+    new llvm::GlobalVariable(
+        *module,
+        llvm::Type::getInt32Ty(context),
+        true,  // isConstant
+        llvm::GlobalValue::ExternalLinkage,
+        llvm::ConstantInt::get(context, llvm::APInt(32, 0x9875, false)),
+        "_fltused"
+    );
+    
     // Don't initialize standard library here - it will be done on demand
 }
 
@@ -337,6 +351,10 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         return llvm::ConstantInt::get(context, llvm::APInt(32, numExpr->value, true));
     }
     
+    if (auto* floatExpr = dynamic_cast<FloatExprAST*>(expr)) {
+        return llvm::ConstantFP::get(context, llvm::APFloat(floatExpr->value));
+    }
+    
     if (auto* boolExpr = dynamic_cast<BooleanExprAST*>(expr)) {
         return llvm::ConstantInt::get(context, llvm::APInt(1, boolExpr->value ? 1 : 0, false));
     }
@@ -371,6 +389,8 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         llvm::Type* targetType = nullptr;
         if (castExpr->targetType == "int") {
             targetType = llvm::Type::getInt32Ty(context);
+        } else if (castExpr->targetType == "float") {
+            targetType = llvm::Type::getDoubleTy(context);
         } else if (castExpr->targetType == "ptr") {
             targetType = llvm::PointerType::get(context, 0);  // Opaque pointer
         } else if (castExpr->targetType == "char") {
@@ -397,6 +417,12 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
                 return builder.CreateTrunc(value, targetType, "trunctmp");
             }
             return value;
+        } else if (sourceType->isIntegerTy() && targetType->isFloatingPointTy()) {
+            // Integer to float (signed)
+            return builder.CreateSIToFP(value, targetType, "int2floattmp");
+        } else if (sourceType->isFloatingPointTy() && targetType->isIntegerTy()) {
+            // Float to integer (truncate toward zero)
+            return builder.CreateFPToSI(value, targetType, "float2inttmp");
         } else if (sourceType->isIntegerTy() && targetType->isPointerTy()) {
             // Integer to pointer
             return builder.CreateIntToPtr(value, targetType, "int2ptrtmp");
@@ -506,29 +532,55 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
             throw std::runtime_error("Failed to generate binary expression operands");
         }
         
+        // Determine if we need to promote to float
+        bool leftIsFloat = left->getType()->isFloatingPointTy();
+        bool rightIsFloat = right->getType()->isFloatingPointTy();
+        bool needsFloatOp = leftIsFloat || rightIsFloat;
+        
+        // Promote int to float if mixed types
+        if (needsFloatOp) {
+            if (!leftIsFloat) {
+                left = builder.CreateSIToFP(left, llvm::Type::getDoubleTy(context), "promotetmp");
+            }
+            if (!rightIsFloat) {
+                right = builder.CreateSIToFP(right, llvm::Type::getDoubleTy(context), "promotetmp");
+            }
+        }
+        
         switch (binExpr->op) {
             case '+':
-                return builder.CreateAdd(left, right, "addtmp");
+                return needsFloatOp ? builder.CreateFAdd(left, right, "faddtmp") 
+                                    : builder.CreateAdd(left, right, "addtmp");
             case '-':
-                return builder.CreateSub(left, right, "subtmp");
+                return needsFloatOp ? builder.CreateFSub(left, right, "fsubtmp") 
+                                    : builder.CreateSub(left, right, "subtmp");
             case '*':
-                return builder.CreateMul(left, right, "multmp");
+                return needsFloatOp ? builder.CreateFMul(left, right, "fmultmp") 
+                                    : builder.CreateMul(left, right, "multmp");
             case '/':
-                return builder.CreateSDiv(left, right, "divtmp");
+                return needsFloatOp ? builder.CreateFDiv(left, right, "fdivtmp") 
+                                    : builder.CreateSDiv(left, right, "divtmp");
             case '%':
+                // Modulo only works with integers
                 return builder.CreateSRem(left, right, "modtmp");
             case '>':
-                return builder.CreateICmpSGT(left, right, "cmptmp");
+                return needsFloatOp ? builder.CreateFCmpOGT(left, right, "fcmptmp") 
+                                    : builder.CreateICmpSGT(left, right, "cmptmp");
             case '<':
-                return builder.CreateICmpSLT(left, right, "cmptmp");
+                return needsFloatOp ? builder.CreateFCmpOLT(left, right, "fcmptmp") 
+                                    : builder.CreateICmpSLT(left, right, "cmptmp");
             case 'G': // >=
-                return builder.CreateICmpSGE(left, right, "cmptmp");
+                return needsFloatOp ? builder.CreateFCmpOGE(left, right, "fcmptmp") 
+                                    : builder.CreateICmpSGE(left, right, "cmptmp");
             case 'L': // <=
-                return builder.CreateICmpSLE(left, right, "cmptmp");
+                return needsFloatOp ? builder.CreateFCmpOLE(left, right, "fcmptmp") 
+                                    : builder.CreateICmpSLE(left, right, "cmptmp");
             case 'E': // == (equality)
-                return builder.CreateICmpEQ(left, right, "cmptmp");
+                return needsFloatOp ? builder.CreateFCmpOEQ(left, right, "fcmptmp") 
+                                    : builder.CreateICmpEQ(left, right, "cmptmp");
             case 'N': // != (not equal)
-                return builder.CreateICmpNE(left, right, "cmptmp");
+                return needsFloatOp ? builder.CreateFCmpONE(left, right, "fcmptmp") 
+                                    : builder.CreateICmpNE(left, right, "cmptmp");
             default:
                 throw std::runtime_error("Unknown binary operator");
         }

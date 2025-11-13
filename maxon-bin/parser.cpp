@@ -63,7 +63,8 @@ Token Parser::expect(TokenType type, const std::string& message) {
             case TokenType::IF: typeStr = "'if'"; break;
             case TokenType::WHILE: typeStr = "'while'"; break;
             case TokenType::COMMA: typeStr = "','"; break;
-            case TokenType::INT: typeStr = "type specifier"; break;
+            case TokenType::INT:
+            case TokenType::FLOAT: typeStr = "type specifier"; break;
             default: typeStr = "token";
         }
         
@@ -91,6 +92,14 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         int column = currentToken().column;
         advance();
         return std::make_unique<NumberExprAST>(value, line, column);
+    }
+    
+    if (check(TokenType::FLOAT_LITERAL)) {
+        double value = currentToken().floatValue;
+        int line = currentToken().line;
+        int column = currentToken().column;
+        advance();
+        return std::make_unique<FloatExprAST>(value, line, column);
     }
     
     if (check(TokenType::TRUE)) {
@@ -224,10 +233,13 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
         int column = currentToken().column;
         advance(); // consume 'as'
         
-        // Expect a type keyword (int, ptr, char)
+        // Expect a type keyword (int, float, ptr, char)
         std::string targetType;
         if (check(TokenType::INT)) {
             targetType = "int";
+            advance();
+        } else if (check(TokenType::FLOAT)) {
+            targetType = "float";
             advance();
         } else if (check(TokenType::PTR)) {
             targetType = "ptr";
@@ -236,7 +248,7 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
             targetType = "char";
             advance();
         } else {
-            throw std::runtime_error("Expected type after 'as' keyword (int, ptr, or char)\n  Location: line " + 
+            throw std::runtime_error("Expected type after 'as' keyword (int, float, ptr, or char)\n  Location: line " +
                                    std::to_string(currentToken().line) + ", column " + 
                                    std::to_string(currentToken().column));
         }
@@ -321,14 +333,14 @@ std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
         expect(TokenType::RBRACKET, "Expected ']' after array size");
         
         // Now expect the element type
-        if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+        if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
             type = currentToken().value;
             advance();
         } else {
-            throw std::runtime_error("Expected array element type (int, ptr, or char) at line " + 
+            throw std::runtime_error("Expected array element type (int, float, ptr, or char) at line " + 
                                    std::to_string(currentToken().line));
         }
-    } else if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+    } else if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
         // Regular type annotation
         type = currentToken().value;
         advance();
@@ -356,14 +368,14 @@ std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
         expect(TokenType::RBRACKET, "Expected ']' after array size");
         
         // Now expect the element type
-        if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+        if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
             type = currentToken().value;
             advance();
         } else {
-            throw std::runtime_error("Expected array element type (int, ptr, or char) at line " + 
+            throw std::runtime_error("Expected array element type (int, float, ptr, or char) at line " + 
                                    std::to_string(currentToken().line));
         }
-    } else if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+    } else if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
         // Regular type annotation
         type = currentToken().value;
         advance();
@@ -668,8 +680,11 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                 } else if (check(TokenType::CHAR)) {
                     elementType = "char";
                     advance();
+                } else if (check(TokenType::FLOAT)) {
+                    elementType = "float";
+                    advance();
                 } else {
-                    throw std::runtime_error("Expected array element type (int, ptr, or char)\n  Location: line " + 
+                    throw std::runtime_error("Expected array element type (int, float, ptr, or char)\n  Location: line " + 
                                            std::to_string(currentToken().line) + ", column " + 
                                            std::to_string(currentToken().column));
                 }
@@ -691,8 +706,11 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                 } else if (check(TokenType::CHAR)) {
                     paramType = "char";
                     advance();
+                } else if (check(TokenType::FLOAT)) {
+                    paramType = "float";
+                    advance();
                 } else {
-                    throw std::runtime_error("Expected parameter type (int, ptr, char, or [size]type)\n  Location: line " + 
+                    throw std::runtime_error("Expected parameter type (int, float, ptr, char, or [size]type)\n  Location: line " + 
                                            std::to_string(currentToken().line) + ", column " + 
                                            std::to_string(currentToken().column));
                 }
@@ -706,7 +724,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
     
     // Parse return type (optional - defaults to void)
     std::string returnType = "void";
-    if (check(TokenType::INT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
+    if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR)) {
         returnType = currentToken().value;
         advance();
     }
