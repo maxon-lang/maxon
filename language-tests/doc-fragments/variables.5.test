@@ -1,0 +1,32 @@
+function main() int
+    var x = 42.0         // float
+    var y = 1            // int
+    var z = x + y        // y promoted to float, z is float (43.0)
+    return trunc(z)      // 43
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+@_fltused = constant i32 39029
+
+define void @__chkstk() {
+entry:
+  ret void
+}
+
+define i32 @main() {
+entry:
+  ret i32 43
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
+---
+ExitCode: 43

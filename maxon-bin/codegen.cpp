@@ -1420,6 +1420,9 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             
             namedValues[varDecl->name] = ptrAlloca;
             
+            // Track the variable type (format: [size]elementType for arrays)
+            variableTypes[varDecl->name] = "[" + std::to_string(varDecl->arraySize) + "]" + varDecl->type;
+            
             // Track this array for cleanup
             if (!scopeStack.empty()) {
                 scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, ptrAlloca});
@@ -1700,10 +1703,21 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         // Check if this is an array or a pointer (array parameter)
         if (allocatedType->isPointerTy()) {
             // This is a pointer to an array (parameter case)
-            // First load the pointer, then use GEP with one index
+            // Determine the element type from the tracked variable type
+            std::string varType = variableTypes[arrayAssign->arrayName];
+            std::string elementTypeStr = "int"; // default
+            if (varType.size() > 2 && varType[0] == '[') {
+                size_t closeBracket = varType.find(']');
+                if (closeBracket != std::string::npos && closeBracket + 1 < varType.size()) {
+                    elementTypeStr = varType.substr(closeBracket + 1);
+                }
+            }
+            llvm::Type* elementType = getTypeFromString(context, elementTypeStr);
+            
+            // First load the pointer, then use GEP with the index
             llvm::Value* arrayPtr = builder.CreateLoad(allocatedType, alloca, "arrayptr");
             llvm::Value* elementPtr = builder.CreateInBoundsGEP(
-                val->getType(),  // Use the type of the value being stored
+                elementType,
                 arrayPtr,
                 indexVal,
                 "arrayidx"

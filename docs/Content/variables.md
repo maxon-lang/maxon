@@ -33,3 +33,71 @@ end 'main'
 
 ExitCode: 12
 ~~~
+
+## Types
+
+Variables in Maxon are statically typed. The type must be specified in the declaration.
+
+### Integer Variables
+
+The `int` type is a 32-bit signed integer:
+
+~~~
+function main() int
+    var count = 42
+    var negative = -100
+    return count + negative + 158
+end 'main'
+
+ExitCode: 100
+~~~
+
+### Float Variables
+
+The `float` type is a 64-bit floating-point number (IEEE 754 double precision). Float literals **must** include a decimal point:
+
+~~~
+function main() int
+    var pi = 3.14159
+    var half = 0.5
+    var result = pi + half
+    return trunc(result)  // Truncate to int: 3
+end 'main'
+
+ExitCode: 3
+~~~
+
+**Important:** Float literals must use a leading zero before the decimal point:
+
+```maxon
+var valid = 0.5      // ✓ Valid
+var invalid = .5     // ✗ Invalid - must use 0.5
+```
+
+To create a float from an integer literal, add `.0`:
+
+~~~
+function main() int
+    var x = 42.0         // float
+    var y = 1            // int
+    var z = x + y        // y promoted to float, z is float (43.0)
+    return trunc(z)      // 43
+end 'main'
+
+ExitCode: 43
+~~~
+
+### Type Coercion
+
+In mixed int/float expressions, integers are automatically promoted to floats:
+
+~~~
+function main() int
+    var x = 5            // int
+    var y = 2.5          // float
+    var result = x + y   // x promoted to 5.0, result is 7.5
+    return trunc(result) // 7
+end 'main'
+
+ExitCode: 7
+~~~

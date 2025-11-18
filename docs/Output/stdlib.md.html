@@ -1,0 +1,250 @@
+<h1 id="standard-library">Standard Library</h1>
+<p>The Maxon standard library provides essential functionality for formatting, file I/O, and mathematical operations.</p>
+<h2 id="string-formatting-stdlibfmt">String Formatting (stdlib/fmt)</h2>
+<h3 id="format_int_array">format_int_array</h3>
+<p>Format an integer to ASCII characters in a buffer.</p>
+<p><strong>Signature:</strong></p>
+<pre><code class="language-maxon">function format_int_array(value int, buffer []char) int
+</code></pre>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>value</code> - The integer to format</li>
+<li><code>buffer</code> - Character array to write into (must be at least 12 bytes)</li>
+</ul>
+<p><strong>Returns:</strong> Number of bytes written</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var num = 42
+var buffer [12]char = 0
+var len = format_int_array(num, buffer)
+// buffer now contains &quot;42&quot;
+</code></pre>
+<p>ExitCode: 42</p>
+<pre><code class="language-maxon">function main() int
+    var num = 42
+    var buffer [12]char = 0
+    format_int_array(num, buffer)
+    return num
+end 'main'
+</code></pre>
+<h3 id="format_float_array">format_float_array</h3>
+<p>Format a floating-point number to ASCII characters in a buffer with specified precision.</p>
+<p><strong>Signature:</strong></p>
+<pre><code class="language-maxon">function format_float_array(value float, buffer [32]char, precision int) int
+</code></pre>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>value</code> - The float to format</li>
+<li><code>buffer</code> - Character array to write into (must be at least 32 bytes)</li>
+<li><code>precision</code> - Number of decimal places (0-15)</li>
+</ul>
+<p><strong>Returns:</strong> Number of bytes written</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var pi = 3.14159265
+var buffer [32]char = 0
+var len = format_float_array(pi, buffer, 6)
+// buffer now contains &quot;3.141593&quot;
+</code></pre>
+<p>ExitCode: 0</p>
+<pre><code class="language-maxon">function main() int
+    var x = 3.14
+    var buffer [32]char = 0
+    format_float_array(x, buffer, 2)
+    // buffer contains &quot;3.14&quot;
+    return 0
+end 'main'
+</code></pre>
+<p><strong>Precision Examples:</strong></p>
+<pre><code class="language-maxon">var x = 123.456789
+var buffer [32]char = 0
+
+format_float_array(x, buffer, 0)  // &quot;123&quot;
+format_float_array(x, buffer, 2)  // &quot;123.46&quot; (rounded)
+format_float_array(x, buffer, 6)  // &quot;123.456789&quot;
+</code></pre>
+<h2 id="automatic-array-memory-management">Automatic Array Memory Management</h2>
+<p>All arrays in Maxon are <strong>automatically heap-allocated</strong> and <strong>automatically freed</strong> when they go out of scope. You don't need to manually allocate or free array memory.</p>
+<h3 id="fixed-size-arrays">Fixed-Size Arrays</h3>
+<pre><code class="language-maxon">function example() int
+    var arr [100]int = 0    // Allocated on heap
+    arr[0] = 42
+    return arr[0]
+    // Array automatically freed here
+end 'example'
+</code></pre>
+<h3 id="dynamic-size-arrays">Dynamic-Size Arrays</h3>
+<p>Array size can be determined at runtime:</p>
+<pre><code class="language-maxon">function createArray(n int) int
+    var arr [n]int = 0      // Size determined by parameter
+    arr[0] = 100
+    return arr[0]
+    // Array automatically freed here
+end 'createArray'
+</code></pre>
+<h3 id="scope-based-cleanup">Scope-Based Cleanup</h3>
+<p>Arrays are freed when their scope ends, including early returns:</p>
+<pre><code class="language-maxon">function conditionalArray(flag bool) int
+    var arr [50]int = 0
+    if flag
+        return arr[0]       // Array freed before return
+    end 'flag'
+    arr[10] = 20
+    return arr[10]          // Array freed before return
+end 'conditionalArray'
+</code></pre>
+<p>ExitCode: 0</p>
+<pre><code class="language-maxon">function main() int
+    var arr [10]int = 0
+    arr[5] = 42
+    if arr[5] &gt; 40
+        return 0            // Array freed before return
+    end 'check'
+    return 1
+end 'main'
+</code></pre>
+<h3 id="array-parameters">Array Parameters</h3>
+<p>Arrays are passed by reference to functions. The <strong>caller retains ownership</strong> and is responsible for cleanup:</p>
+<pre><code class="language-maxon">function fillArray(arr []int, size int) int
+    var i = 0
+    while i &lt; size 'loop'
+        arr[i] = i * 2
+        i = i + 1
+    end 'loop'
+    return 0
+    // Array NOT freed here - caller owns it
+end 'fillArray'
+
+function main() int
+    var myArray [10]int = 0
+    fillArray(myArray, 10)
+    var result = myArray[5]
+    return result
+    // myArray freed here
+end 'main'
+</code></pre>
+<p>ExitCode: 10</p>
+<pre><code class="language-maxon">function setValues(arr []int, size int) int
+    var i = 0
+    while i &lt; size 'loop'
+        arr[i] = i * 2
+        i = i + 1
+    end 'loop'
+    return 0
+end 'setValues'
+
+function main() int
+    var arr [10]int = 0
+    setValues(arr, 10)
+    return arr[5]  // Returns 10 (5 * 2)
+end 'main'
+</code></pre>
+<h3 id="nested-scopes">Nested Scopes</h3>
+<p>Each scope properly cleans up its arrays:</p>
+<pre><code class="language-maxon">function nested() int
+    var outer [20]int = 0
+    outer[0] = 10
+    
+    if true
+        var inner [30]int = 0
+        inner[0] = 20
+        outer[1] = inner[0]
+        // inner freed here at end of if block
+    end 'block'
+    
+    return outer[1]
+    // outer freed here
+end 'nested'
+</code></pre>
+<p>ExitCode: 20</p>
+<pre><code class="language-maxon">function main() int
+    var x = 0
+    if true
+        var arr [10]int = 0
+        arr[0] = 20
+        x = arr[0]
+        // arr freed here
+    end 'block'
+    return x
+end 'main'
+</code></pre>
+<h3 id="arrays-in-loops">Arrays in Loops</h3>
+<p>Arrays allocated in loop bodies are freed at the end of each iteration:</p>
+<pre><code class="language-maxon">function loopArrays(n int) int
+    var sum = 0
+    var i = 0
+    while i &lt; n 'outer'
+        var temp [10]int = 0
+        temp[0] = i
+        sum = sum + temp[0]
+        i = i + 1
+        // temp freed here at end of each iteration
+    end 'outer'
+    return sum
+end 'loopArrays'
+</code></pre>
+<h2 id="array-properties">Array Properties</h2>
+<h3 id="length">.length</h3>
+<p>Get the number of elements in an array:</p>
+<pre><code class="language-maxon">var arr [100]int = 0
+var size = arr.length       // Returns 100 (as int)
+</code></pre>
+<p>ExitCode: 42</p>
+<pre><code class="language-maxon">function main() int
+    var arr [42]int = 0
+    return arr.length       // Returns 42
+end 'main'
+</code></pre>
+<p>The <code>.length</code> property works with both fixed-size and parameter arrays:</p>
+<pre><code class="language-maxon">function processArray(arr []int, expectedSize int) bool
+    if arr.length != expectedSize
+        return false
+    end 'check'
+    return true
+end 'processArray'
+</code></pre>
+<h2 id="command-line-arguments">Command-Line Arguments</h2>
+<p>The <code>main</code> function can optionally accept command-line arguments:</p>
+<pre><code class="language-maxon">function main(argc int, argv ptr) int
+    // argc = number of arguments (including program name)
+    // argv = pointer to array of wide-character strings (wchar_t**)
+    
+    if argc &gt; 1
+        // Process command-line arguments
+        // Note: String parsing requires pointer operations
+        // (not yet fully implemented)
+    end 'hasArgs'
+    
+    return 0
+end 'main'
+</code></pre>
+<p><strong>Without arguments:</strong></p>
+<pre><code class="language-maxon">function main() int
+    return 0
+end 'main'
+</code></pre>
+<p>Both signatures are valid. Use the two-parameter version when you need to process command-line arguments.</p>
+<h2 id="future-features">Future Features</h2>
+<p>The following features are planned but not yet implemented:</p>
+<h3 id="string-to-integer-conversion-atoi">String to Integer Conversion (atoi)</h3>
+<pre><code class="language-maxon">// Planned - requires pointer dereferencing
+function atoi(str ptr) int
+    // Convert C string to integer
+end 'atoi'
+</code></pre>
+<p><strong>Status:</strong> Deferred until pointer dereferencing operations (<code>*ptr</code>, <code>ptr[i]</code>) are implemented.</p>
+<h3 id="print-functions">Print Functions</h3>
+<pre><code class="language-maxon">// Planned - convenience functions for output
+function print(value int) int
+function print(value float) int
+</code></pre>
+<p><strong>Current workaround:</strong> Use <code>format_int_array</code> or <code>format_float_array</code> with file system stream functions.</p>
+<h2 id="file-system-stdlibfs">File System (stdlib/fs)</h2>
+<p>Documentation for file system functions to be added. See source files in <code>stdlib/fs/</code> for available functionality.</p>
+<h2 id="summary">Summary</h2>
+<p>The Maxon standard library provides:</p>
+<ul>
+<li><strong>String formatting</strong> for integers and floats</li>
+<li><strong>Automatic memory management</strong> for all arrays</li>
+<li><strong>Array properties</strong> like <code>.length</code></li>
+<li><strong>Command-line arguments</strong> via optional main parameters</li>
+</ul>
+<p>All array memory is managed automatically - no manual allocation or deallocation required. Arrays are heap-allocated and freed when they go out of scope, including early returns and nested scopes.</p>

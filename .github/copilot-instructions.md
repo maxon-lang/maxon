@@ -35,22 +35,33 @@
 ### Creating Test Fragments
 
 ```powershell
-# Automated script (recommended)
+# Create new test fragment from .maxon source
 .\create-test-fragment.ps1 -TestName "my-test" -SourceFile "examples/test.maxon"
+
+# Update existing test fragment (regenerates IR)
+.\create-test-fragment.ps1 -TestName "my-test" -SourceFile "language-tests/fragments/my-test.test"
 
 # Debug mode (no optimization)
 .\create-test-fragment.ps1 -TestName "my-test" -SourceFile "test.maxon" -UseDebug
 ```
 
-The script compiles with `-O`, extracts normalized LLVM IR, captures exit code, and creates the `.test` file.
+The script:
+- Compiles with `-O` (or `--debug` for debug mode)
+- Extracts normalized LLVM IR
+- Captures exit code and stdout
+- Creates/updates the `.test` file
+- Can update existing `.test` files by parsing them and regenerating IR
 
-**Manual workflow (if needed):**
-```powershell
-maxon compile temp.maxon --emit-llvm -O  # Creates temp.exe and IR output
-# Copy IR, change module name to "test.maxon", run exe for exit code
-# Create .test file in language-tests/fragments/
-make language-tests  # Verify
+**Test Fragment Format:**
 ```
+Maxon source code
+---
+Expected LLVM IR (or N/A for compilation errors)
+---
+ExitCode: N
+```
+
+**Important:** Tests will fail if a fragment has `N/A` for IR but the code compiles successfully. Use the script to regenerate proper IR.
 
 ## Common Tasks
 

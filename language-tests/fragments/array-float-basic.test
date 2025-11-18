@@ -1,0 +1,69 @@
+function main() int
+    var arr [5]float = 0.0
+    arr[0] = 1.5
+    arr[1] = 2.5
+    arr[2] = 3.0
+    
+    var sum = arr[0] + arr[1] + arr[2]
+    return trunc(sum)
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+@_fltused = constant i32 39029
+
+define void @__chkstk() {
+entry:
+  ret void
+}
+
+define i32 @main() {
+entry:
+  %arr.malloc = call ptr @malloc(i64 40)
+  store double 0.000000e+00, ptr %arr.malloc, align 8
+  %arrayidx1 = getelementptr i8, ptr %arr.malloc, i64 8
+  store double 0.000000e+00, ptr %arrayidx1, align 8
+  %arrayidx2 = getelementptr i8, ptr %arr.malloc, i64 16
+  store double 0.000000e+00, ptr %arrayidx2, align 8
+  %arrayidx3 = getelementptr i8, ptr %arr.malloc, i64 24
+  store double 0.000000e+00, ptr %arrayidx3, align 8
+  %arrayidx4 = getelementptr i8, ptr %arr.malloc, i64 32
+  store double 0.000000e+00, ptr %arrayidx4, align 8
+  store double 1.500000e+00, ptr %arr.malloc, align 8
+  store double 2.500000e+00, ptr %arrayidx1, align 8
+  store double 3.000000e+00, ptr %arrayidx2, align 8
+  call void @free(ptr nonnull %arr.malloc)
+  ret i32 7
+}
+
+declare ptr @GetProcessHeap()
+
+declare ptr @HeapAlloc(ptr, i32, i64)
+
+declare i32 @HeapFree(ptr, i32, ptr)
+
+define ptr @malloc(i64 %0) {
+entry:
+  %1 = call ptr @GetProcessHeap()
+  %2 = call ptr @HeapAlloc(ptr %1, i32 0, i64 %0)
+  ret ptr %2
+}
+
+define void @free(ptr %0) {
+entry:
+  %1 = call ptr @GetProcessHeap()
+  %2 = call i32 @HeapFree(ptr %1, i32 0, ptr %0)
+  ret void
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
+---
+ExitCode: 7

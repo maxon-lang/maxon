@@ -73,7 +73,20 @@ if ($SourceFile) {
         Write-Error "Source file not found: $SourceFile"
         exit 1
     }
-    $SourceCode = Get-Content $SourceFile -Raw
+    
+    # Check if this is a .test fragment file
+    if ($SourceFile.EndsWith(".test")) {
+        # Parse the existing fragment to extract just the source code
+        $fragmentContent = Get-Content $SourceFile -Raw
+        $firstSeparator = $fragmentContent.IndexOf("`n---")
+        if ($firstSeparator -eq -1) {
+            Write-Error "Invalid fragment file format: missing --- separator"
+            exit 1
+        }
+        $SourceCode = $fragmentContent.Substring(0, $firstSeparator)
+    } else {
+        $SourceCode = Get-Content $SourceFile -Raw
+    }
 }
 
 # Determine output directory
@@ -95,6 +108,11 @@ $tempSourceFile = "temp_fragment.maxon"
 $tempExeFile = "temp_fragment.exe"
 $compilerPath = ".\build\bin\maxon.exe"
 $outputFragmentPath = Join-Path $OutputDir "$TestName.test"
+
+# If updating an existing fragment that is actually a full path, use it directly
+if ($SourceFile -and (Test-Path $SourceFile) -and $SourceFile.EndsWith(".test")) {
+    $outputFragmentPath = $SourceFile
+}
 
 # Check if compiler exists
 if (-not (Test-Path $compilerPath)) {

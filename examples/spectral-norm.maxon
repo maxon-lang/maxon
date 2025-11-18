@@ -1,82 +1,77 @@
 // Spectral-norm benchmark from Computer Language Benchmarks Game
 // Calculate eigenvalue using the power method
-// for n = 5500 the result should be 1.274224153
+// For n = 5500, result should be approximately 1.274224153
 
-function evalA(i int, j int) int
-	var sum = i + j
-	var denom = ((sum * (sum + 1)) / 2) + i + 1
-	return 1000000 / denom
+function evalA(i int, j int) float
+    var ij = i + j
+    var denom = ((ij * (ij + 1)) / 2) + i + 1
+    return 1.0 / denom
 end 'evalA'
 
-function multiplyAv(v []int, av []int, n int) int
-	var i = 0
-	while i < n 'outer_loop'
-		var sum = 0
-		var j = 0
-		while j < n 'inner_loop'
-			var a_ij = evalA(i, j)
-			var v_j = v[j]
-			sum = sum + ((a_ij * v_j) / 1000000)
-			j = j + 1
-		end 'inner_loop'
-		av[i] = sum
-		i = i + 1
-	end 'outer_loop'
-	return 0
-end 'multiplyAv'
+function times(v []float, u []float, n int) int
+    var i = 0
+    while i < n 'outer'
+        v[i] = 0.0
+        var j = 0
+        while j < n 'inner'
+            v[i] = v[i] + (u[j] * evalA(i, j))
+            j = j + 1
+        end 'inner'
+        i = i + 1
+    end 'outer'
+    return 0
+end 'times'
 
-function multiplyAtv(v []int, atv []int, n int) int
-	var i = 0
-	while i < n 'outer_loop'
-		var sum = 0
-		var j = 0
-		while j < n 'inner_loop'
-			var a_ji = evalA(j, i)
-			var v_j = v[j]
-			sum = sum + ((a_ji * v_j) / 1000000)
-			j = j + 1
-		end 'inner_loop'
-		atv[i] = sum
-		i = i + 1
-	end 'outer_loop'
-	return 0
-end 'multiplyAtv'
+function timesTransp(v []float, u []float, n int) int
+    var i = 0
+    while i < n 'outer'
+        v[i] = 0.0
+        var j = 0
+        while j < n 'inner'
+            v[i] = v[i] + (u[j] * evalA(j, i))
+            j = j + 1
+        end 'inner'
+        i = i + 1
+    end 'outer'
+    return 0
+end 'timesTransp'
 
-function multiplyAtAv(v []int, atav []int, n int) int
-	var tmp [100]int = 0
-	multiplyAv(v, tmp, n)
-	multiplyAtv(tmp, atav, n)
-	return 0
-end 'multiplyAtAv'
-
-function approximate(n int) int
-	var u [100]int = 1000000
-	var v [100]int = 0
-	
-	var iter = 0
-	while iter < 10 'iterations'
-		multiplyAtAv(u, v, n)
-		multiplyAtAv(v, u, n)
-		iter = iter + 1
-	end 'iterations'
-	
-	var vBv = 0
-	var vv = 0
-	var i = 0
-	while i < n 'compute_norm'
-		var ui = u[i]
-		var vi = v[i]
-		vBv = vBv + ((ui * vi) / 1000000)
-		vv = vv + ((vi * vi) / 1000000)
-		i = i + 1
-	end 'compute_norm'
-	
-	return vBv / vv
-end 'approximate'
+function ATimesTransp(v []float, u []float, x []float, n int) int
+    times(x, u, n)
+    timesTransp(v, x, n)
+    return 0
+end 'ATimesTransp'
 
 function main() int
-	var n = 100
-	var result = approximate(n)
-	print(result)
-	return 0
+    var n = 5500
+    
+    var u [5500]float = 0.0
+    var v [5500]float = 0.0
+    var x [5500]float = 0.0
+    
+    var i = 0
+    while i < n 'init'
+        u[i] = 1.0
+        i = i + 1
+    end 'init'
+    
+    i = 0
+    while i < 10 'iter'
+        ATimesTransp(v, u, x, n)
+        ATimesTransp(u, v, x, n)
+        i = i + 1
+    end 'iter'
+    
+    var vBv = 0.0
+    var vv = 0.0
+    i = 0
+    while i < n 'calc'
+        vBv = vBv + (u[i] * v[i])
+        vv = vv + (v[i] * v[i])
+        i = i + 1
+    end 'calc'
+    
+    var result = sqrt(vBv / vv)
+    
+    return trunc(result * 1000000000.0)
 end 'main'

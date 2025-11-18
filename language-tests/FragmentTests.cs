@@ -24,12 +24,6 @@ public class FragmentTests {
 		return [.. Directory.EnumerateFiles(docFragmentsPath, "*.test").Select(f => Path.GetFileName(f))];
 	}
 
-	// Check for UPDATE_FRAGMENTS environment variable
-	private static bool ShouldUpdateFragments() {
-		var envVar = Environment.GetEnvironmentVariable("UPDATE_FRAGMENTS");
-		return envVar == "1" || envVar?.ToLower() == "true";
-	}
-
 	[Test, TestCaseSource(nameof(DocFragments))]
 	public void DocFragmentTest(string fragmentFilename) {
 		TestFragment(fragmentFilename, docFragmentsPath, false, true);
@@ -81,9 +75,6 @@ public class FragmentTests {
 	}
 
 	private static void TestFragment(string fragmentFilename, string path, bool debug, bool optimize) {
-		// Check command line for update flag, otherwise auto-update when IR is empty
-		var updateInsteadOfTest = ShouldUpdateFragments();
-
 		var fragmentPath = Path.Combine(path, fragmentFilename);
 		var fragmentFile = File.OpenText(fragmentPath);
 
@@ -134,11 +125,6 @@ public class FragmentTests {
 				expectedStderr = ReadMultilineContent(lines, ref i, line[8..]);
 			}
 		}
-		
-		if (expectedIR == "" && !updateInsteadOfTest) {
-			// If there's no IR yet and we're not manually updating, enable auto-update
-			updateInsteadOfTest = true;
-		}
 
 		fragmentFile.Close();
 
@@ -178,10 +164,11 @@ public class FragmentTests {
 		if (maxon.ExitCode == 0 && File.Exists(llFilename)) {
 			llSource = File.ReadAllText(llFilename).Trim();
 			
-			// Check the IR if not updating
-			if (!updateInsteadOfTest && expectedIR != "N/A") {
-				Assert.That(llSource, Is.EqualTo(expectedIR), "Generated LLVM IR does not match expected IR");
-			}				// maxon also generates an executable when --emit-llvm is used with -o
+			// Check the IR
+			if (expectedIR == "N/A") {
+				Assert.Fail("Test fragment has N/A for expected IR, but the code compiles successfully. Use create-test-fragment.ps1 to regenerate the expected IR.");
+			}
+			Assert.That(llSource, Is.EqualTo(expectedIR), "Generated LLVM IR does not match expected IR");				// maxon also generates an executable when --emit-llvm is used with -o
 				var exeFilename = Path.Combine(tempDir, "test.exe");
 			
 			// Run the executable if it was generated
@@ -224,11 +211,7 @@ public class FragmentTests {
 			}
 		}
 
-		if (updateInsteadOfTest) {
-		UpdateFragment(fragmentPath, source, llSource, processExitCode, maxonStdout, maxonStderr, stdout, stderr, expectedArgs);
-		Assert.Fail("Updated fragment file, please inspect the changes and make sure they are correct.");
-		} else {
-			if (expectedExitCode != -1) {
+		if (expectedExitCode != -1) {
 				Assert.That(processExitCode, Is.EqualTo(expectedExitCode));
 			}
 			// Only check stdout/stderr if they were explicitly specified in the test
@@ -253,7 +236,6 @@ public class FragmentTests {
 				var normalizedExpectedStderr = expectedStderr.Replace("\r\n", "\n");
 				Assert.That(normalizedStderr, Is.EqualTo(normalizedExpectedStderr), "Test executable stderr does not match expected");
 			}
-		}
 		} finally {
 			// Clean up temporary directory
 			try {
@@ -264,55 +246,5 @@ public class FragmentTests {
 				// Ignore cleanup errors
 			}
 		}
-	}
-
-	private static void UpdateFragment(string fragmentPath, string source, string llSource, int expectedExitCode, string maxoncStdout, string maxoncStderr, string stdout, string stderr, string args = "") {
-		// Use CRLF line endings for Windows
-		var nl = "\r\n";
-		var content = source + "---" + nl + llSource + nl + "---";
-		
-		if (args != "") {
-			content += nl + "Args: " + args;
-		}
-		if (expectedExitCode != -1) {
-			content += nl + "ExitCode: " + expectedExitCode;
-		}
-		if (maxoncStdout != "") {
-			// Use triple backticks for multi-line MaxoncStdout
-			if (maxoncStdout.Contains('\n')) {
-				content += nl + "MaxoncStdout: ```" + nl + maxoncStdout + nl + "```";
-			} else {
-				content += nl + "MaxoncStdout: " + maxoncStdout;
-			}
-		}
-		if (maxoncStderr != "") {
-			// Use triple backticks for multi-line MaxoncStderr
-			var trimmedStderr = maxoncStderr.Trim();
-			if (trimmedStderr.Contains('\n')) {
-				content += nl + "MaxoncStderr: ```" + nl + trimmedStderr + nl + "```";
-			} else {
-				content += nl + "MaxoncStderr: " + trimmedStderr;
-			}
-		}
-		if (stdout != "") {
-			// Use triple backticks for multi-line stdout
-			if (stdout.Contains('\n')) {
-				content += nl + "Stdout: ```" + nl + stdout + nl + "```";
-			} else {
-				content += nl + "Stdout: " + stdout;
-			}
-		}
-		if (stderr != "") {
-			// Use triple backticks for multi-line stderr
-			if (stderr.Contains('\n')) {
-				content += nl + "Stderr: ```" + nl + stderr + nl + "```";
-			} else {
-				content += nl + "Stderr: " + stderr;
-			}
-		}
-		
-		// Write with UTF-8 encoding without BOM, normalizing all line endings to CRLF
-		content = content.Replace("\r\n", "\n").Replace("\n", "\r\n");
-		File.WriteAllText(fragmentPath, content, new System.Text.UTF8Encoding(false));
 	}
 }

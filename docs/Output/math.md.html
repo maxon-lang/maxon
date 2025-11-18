@@ -1,0 +1,361 @@
+<h1 id="mathematical-functions">Mathematical Functions</h1>
+<p>Maxon provides built-in mathematical functions as language keywords. These functions are compiled to efficient LLVM intrinsics.</p>
+<h2 id="type-conversion-functions">Type Conversion Functions</h2>
+<p>Convert floating-point numbers to integers using different rounding strategies.</p>
+<h3 id="trunc">trunc</h3>
+<p>Truncate a float to an integer (toward zero).</p>
+<p><strong>Signature:</strong> <code>trunc(x float) int</code></p>
+<pre><code class="language-maxon">var x = 3.7
+var y = trunc(x)     // 3
+
+var neg = -3.7
+var z = trunc(neg)   // -3 (toward zero)
+</code></pre>
+<p>ExitCode: 3</p>
+<pre><code class="language-maxon">function main() int
+    var x = 3.9
+    return trunc(x)  // Returns 3
+end 'main'
+</code></pre>
+<h3 id="round">round</h3>
+<p>Round a float to the nearest integer.</p>
+<p><strong>Signature:</strong> <code>round(x float) int</code></p>
+<pre><code class="language-maxon">var x = 3.5
+var y = round(x)     // 4 (rounds to nearest)
+
+var z = 2.4
+var w = round(z)     // 2
+</code></pre>
+<p>ExitCode: 4</p>
+<pre><code class="language-maxon">function main() int
+    var x = 3.6
+    return round(x)  // Returns 4
+end 'main'
+</code></pre>
+<h3 id="floor">floor</h3>
+<p>Round down to the nearest integer (toward negative infinity).</p>
+<p><strong>Signature:</strong> <code>floor(x float) int</code></p>
+<pre><code class="language-maxon">var x = 3.9
+var y = floor(x)     // 3
+
+var neg = -3.2
+var z = floor(neg)   // -4 (rounds down)
+</code></pre>
+<p>ExitCode: 3</p>
+<pre><code class="language-maxon">function main() int
+    var x = 3.9
+    return floor(x)  // Returns 3
+end 'main'
+</code></pre>
+<h3 id="ceil">ceil</h3>
+<p>Round up to the nearest integer (toward positive infinity).</p>
+<p><strong>Signature:</strong> <code>ceil(x float) int</code></p>
+<pre><code class="language-maxon">var x = 3.1
+var y = ceil(x)      // 4
+
+var neg = -3.9
+var z = ceil(neg)    // -3 (rounds up)
+</code></pre>
+<p>ExitCode: 4</p>
+<pre><code class="language-maxon">function main() int
+    var x = 3.1
+    return ceil(x)   // Returns 4
+end 'main'
+</code></pre>
+<h3 id="conversion-comparison">Conversion Comparison</h3>
+<pre><code class="language-maxon">var x = 3.7
+
+trunc(x)   // 3  - truncate toward zero
+round(x)   // 4  - round to nearest
+floor(x)   // 3  - round down
+ceil(x)    // 4  - round up
+
+var neg = -3.7
+
+trunc(neg) // -3 - toward zero
+round(neg) // -4 - nearest (tie toward even)
+floor(neg) // -4 - down (more negative)
+ceil(neg)  // -3 - up (less negative)
+</code></pre>
+<p>ExitCode: 0</p>
+<pre><code class="language-maxon">function main() int
+    var x = 3.7
+    var sum = trunc(x) + round(x) + floor(x) + ceil(x)
+    // 3 + 4 + 3 + 4 = 14
+    return sum - 14
+end 'main'
+</code></pre>
+<h2 id="arithmetic-functions">Arithmetic Functions</h2>
+<h3 id="sqrt">sqrt</h3>
+<p>Calculate the square root of a number.</p>
+<p><strong>Signature:</strong> <code>sqrt(x float) float</code></p>
+<pre><code class="language-maxon">var x = 16.0
+var y = sqrt(x)      // 4.0
+
+var z = 2.0
+var w = sqrt(z)      // 1.414213...
+</code></pre>
+<p>ExitCode: 4</p>
+<pre><code class="language-maxon">function main() int
+    var x = 16.0
+    var result = sqrt(x)
+    return trunc(result)  // Returns 4
+end 'main'
+</code></pre>
+<h3 id="abs">abs</h3>
+<p>Calculate the absolute value of a number.</p>
+<p><strong>Signature (float):</strong> <code>abs(x float) float</code><br />
+<strong>Signature (int):</strong> <code>abs(x int) int</code></p>
+<pre><code class="language-maxon">var x = -5.5
+var y = abs(x)       // 5.5
+
+var i = -42
+var j = abs(i)       // 42
+</code></pre>
+<p>ExitCode: 5</p>
+<pre><code class="language-maxon">function main() int
+    var x = -5.3
+    var result = abs(x)
+    return trunc(result)  // Returns 5
+end 'main'
+</code></pre>
+<h3 id="pow">pow</h3>
+<p>Raise a number to a power.</p>
+<p><strong>Signature:</strong> <code>pow(base float, exponent float) float</code></p>
+<pre><code class="language-maxon">var x = pow(2.0, 3.0)    // 8.0
+var y = pow(10.0, 2.0)   // 100.0
+var z = pow(4.0, 0.5)    // 2.0 (square root)
+</code></pre>
+<p>ExitCode: 8</p>
+<pre><code class="language-maxon">function main() int
+    var result = pow(2.0, 3.0)
+    return trunc(result)  // Returns 8
+end 'main'
+</code></pre>
+<h2 id="trigonometric-functions">Trigonometric Functions</h2>
+<p>All trigonometric functions work with radians.</p>
+<h3 id="sin">sin</h3>
+<p>Calculate the sine of an angle (in radians).</p>
+<p><strong>Signature:</strong> <code>sin(x float) float</code></p>
+<pre><code class="language-maxon">var x = 0.0
+var y = sin(x)       // 0.0
+
+// Note: π ≈ 3.14159265
+var halfPi = 1.5708  // π/2
+var z = sin(halfPi)  // 1.0
+</code></pre>
+<h3 id="cos">cos</h3>
+<p>Calculate the cosine of an angle (in radians).</p>
+<p><strong>Signature:</strong> <code>cos(x float) float</code></p>
+<pre><code class="language-maxon">var x = 0.0
+var y = cos(x)       // 1.0
+
+var pi = 3.14159265
+var z = cos(pi)      // -1.0
+</code></pre>
+<h3 id="tan">tan</h3>
+<p>Calculate the tangent of an angle (in radians).</p>
+<p><strong>Signature:</strong> <code>tan(x float) float</code></p>
+<pre><code class="language-maxon">var x = 0.0
+var y = tan(x)       // 0.0
+
+var quarterPi = 0.785398  // π/4
+var z = tan(quarterPi)    // 1.0
+</code></pre>
+<h2 id="logarithmic-and-exponential-functions">Logarithmic and Exponential Functions</h2>
+<h3 id="log">log</h3>
+<p>Calculate the natural logarithm (base e).</p>
+<p><strong>Signature:</strong> <code>log(x float) float</code></p>
+<pre><code class="language-maxon">var e = 2.71828
+var x = log(e)       // 1.0
+
+var y = log(1.0)     // 0.0
+</code></pre>
+<h3 id="exp">exp</h3>
+<p>Calculate e raised to a power.</p>
+<p><strong>Signature:</strong> <code>exp(x float) float</code></p>
+<pre><code class="language-maxon">var x = exp(0.0)     // 1.0
+var y = exp(1.0)     // 2.71828... (e)
+var z = exp(2.0)     // 7.38906... (e²)
+</code></pre>
+<h2 id="implicit-type-promotion">Implicit Type Promotion</h2>
+<p>In mixed int/float expressions, integers are automatically promoted to floats:</p>
+<pre><code class="language-maxon">var x = 5            // int
+var y = sqrt(x)      // 5 promoted to 5.0, y is float (2.236...)
+var z = pow(2, 3.0)  // 2 promoted to 2.0
+</code></pre>
+<p>ExitCode: 7</p>
+<pre><code class="language-maxon">function main() int
+    var x = 5            // int
+    var y = 2.5          // float
+    var sum = x + y      // x promoted to 5.0, sum is 7.5
+    return trunc(sum)    // Returns 7
+end 'main'
+</code></pre>
+<h2 id="float-literal-requirements">Float Literal Requirements</h2>
+<p>Float literals <strong>must</strong> include a decimal point and use a leading zero:</p>
+<pre><code class="language-maxon">var valid = 0.5      // ✓ Valid
+var invalid = .5     // ✗ Invalid - must use 0.5
+
+var x = 42           // int
+var y = 42.0         // float
+</code></pre>
+<p>ExitCode: 42</p>
+<pre><code class="language-maxon">function main() int
+    var x = 42.0         // float
+    return trunc(x)      // Returns 42
+end 'main'
+</code></pre>
+<h2 id="practical-examples">Practical Examples</h2>
+<h3 id="calculate-hypotenuse">Calculate Hypotenuse</h3>
+<pre><code class="language-maxon">function hypotenuse(a float, b float) float
+    var a_squared = a * a
+    var b_squared = b * b
+    var c_squared = a_squared + b_squared
+    return sqrt(c_squared)
+end 'hypotenuse'
+</code></pre>
+<p>ExitCode: 5</p>
+<pre><code class="language-maxon">function hypotenuse(a float, b float) float
+    var a_sq = a * a
+    var b_sq = b * b
+    return sqrt(a_sq + b_sq)
+end 'hypotenuse'
+
+function main() int
+    var result = hypotenuse(3.0, 4.0)
+    return trunc(result)  // Returns 5
+end 'main'
+</code></pre>
+<h3 id="distance-between-points">Distance Between Points</h3>
+<pre><code class="language-maxon">function distance(x1 float, y1 float, x2 float, y2 float) float
+    var dx = x2 - x1
+    var dy = y2 - y1
+    return sqrt((dx * dx) + (dy * dy))
+end 'distance'
+</code></pre>
+<h3 id="rounding-to-decimal-places">Rounding to Decimal Places</h3>
+<pre><code class="language-maxon">function roundToDecimal(value float, places int) float
+    // Round to N decimal places
+    var multiplier = pow(10.0, places)
+    var shifted = value * multiplier
+    var rounded = round(shifted)
+    return rounded / multiplier
+end 'roundToDecimal'
+</code></pre>
+<p>ExitCode: 0</p>
+<pre><code class="language-maxon">function roundToDecimal(value float, places int) float
+    var mult = pow(10.0, places)
+    var shifted = value * mult
+    var rounded_val = round(shifted)
+    return rounded_val / mult
+end 'roundToDecimal'
+
+function main() int
+    var x = 3.14159
+    var rounded = roundToDecimal(x, 2)  // 3.14
+    var expected = 3.14
+    var diff = abs(rounded - expected)
+    if diff &lt; 0.01
+        return 0
+    end 'check'
+    return 1
+end 'main'
+</code></pre>
+<h3 id="clamp-value-to-range">Clamp Value to Range</h3>
+<pre><code class="language-maxon">function clamp(value float, min float, max float) float
+    if value &lt; min
+        return min
+    end 'low'
+    if value &gt; max
+        return max
+    end 'high'
+    return value
+end 'clamp'
+</code></pre>
+<p>ExitCode: 5</p>
+<pre><code class="language-maxon">function clamp(value float, min float, max float) float
+    if value &lt; min return min
+    if value &gt; max return max
+    return value
+end 'clamp'
+
+function main() int
+    var x = 10.0
+    var clamped = clamp(x, 0.0, 5.0)
+    return trunc(clamped)  // Returns 5
+end 'main'
+</code></pre>
+<h2 id="function-summary">Function Summary</h2>
+<table class="table">
+<thead>
+<tr>
+<th>Function</th>
+<th>Signature</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>trunc</code></td>
+<td><code>(float) int</code></td>
+<td>Truncate to integer (toward zero)</td>
+</tr>
+<tr>
+<td><code>round</code></td>
+<td><code>(float) int</code></td>
+<td>Round to nearest integer</td>
+</tr>
+<tr>
+<td><code>floor</code></td>
+<td><code>(float) int</code></td>
+<td>Round down to integer</td>
+</tr>
+<tr>
+<td><code>ceil</code></td>
+<td><code>(float) int</code></td>
+<td>Round up to integer</td>
+</tr>
+<tr>
+<td><code>sqrt</code></td>
+<td><code>(float) float</code></td>
+<td>Square root</td>
+</tr>
+<tr>
+<td><code>abs</code></td>
+<td><code>(float) float</code> or <code>(int) int</code></td>
+<td>Absolute value</td>
+</tr>
+<tr>
+<td><code>pow</code></td>
+<td><code>(float, float) float</code></td>
+<td>Power function</td>
+</tr>
+<tr>
+<td><code>sin</code></td>
+<td><code>(float) float</code></td>
+<td>Sine (radians)</td>
+</tr>
+<tr>
+<td><code>cos</code></td>
+<td><code>(float) float</code></td>
+<td>Cosine (radians)</td>
+</tr>
+<tr>
+<td><code>tan</code></td>
+<td><code>(float) float</code></td>
+<td>Tangent (radians)</td>
+</tr>
+<tr>
+<td><code>log</code></td>
+<td><code>(float) float</code></td>
+<td>Natural logarithm</td>
+</tr>
+<tr>
+<td><code>exp</code></td>
+<td><code>(float) float</code></td>
+<td>Exponential (e^x)</td>
+</tr>
+</tbody>
+</table>
+<p>All math functions are compiled to efficient LLVM intrinsics for optimal performance.</p>
