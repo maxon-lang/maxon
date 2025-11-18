@@ -176,21 +176,8 @@ end 'format_float_array'
 To implement float formatting, we need:
 - [x] Convert float to int (truncate): `var intPart = trunc(value)`
 - [x] Subtract to get fractional part: `var fracPart = value - intPart` (int auto-promotes to float)
-- [x] Power of 10 for precision: `var scale = pow10(precision)` (helper function)
 - [x] Modulo and division for extracting digits
 
-### 3.4 Helper Function for Power of 10 ✅
-```maxon
-function pow10(n int) float
-    var result = 1.0
-    var i = 0
-    while i < n 'loop'
-        result = result * 10.0
-        i = i + 1
-    end 'loop'
-    return result
-end 'pow10'
-```
 
 ### 3.5 Create stdlib/io/print.maxon (Deferred to Phase 4+)
 Move `print()` from builtin to stdlib as a convenience function:
