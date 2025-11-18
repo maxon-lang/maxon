@@ -23,6 +23,12 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
             {FunctionParameter("value", "int", 0, 0)}));
     }
     
+    // print_float(float) -> int
+    if (functions.find("print_float") == functions.end()) {
+        functions.emplace("print_float", FunctionInfo("print_float", "int", 
+            {FunctionParameter("value", "float", 0, 0)}));
+    }
+    
     // First pass: collect all function declarations (including namespace functions)
     for (const auto& func : program->functions) {
         // Build the qualified name if the function has a namespace
