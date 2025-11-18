@@ -141,6 +141,26 @@ public:
         : ExprAST(l, c), arrayName(name), index(std::move(idx)) {}
 };
 
+// Array literal expression
+// Two forms: [5]int (zero-initialized array) or [1,2,3] (value-initialized array)
+class ArrayLiteralExprAST : public ExprAST {
+public:
+    // For [size]type syntax
+    int size;                                      // Array size (0 if value-init)
+    std::string elementType;                       // Element type (empty if value-init)
+    
+    // For [val1, val2, ...] syntax
+    std::vector<std::unique_ptr<ExprAST>> values;  // Element values (empty if size-init)
+    
+    // Constructor for [size]type syntax
+    ArrayLiteralExprAST(int sz, const std::string& elemType, int l = 0, int c = 0)
+        : ExprAST(l, c), size(sz), elementType(elemType) {}
+    
+    // Constructor for [val1, val2, ...] syntax
+    ArrayLiteralExprAST(std::vector<std::unique_ptr<ExprAST>> vals, int l = 0, int c = 0)
+        : ExprAST(l, c), size(0), values(std::move(vals)) {}
+};
+
 // Member access expression (e.g., "array.length")
 class MemberAccessExprAST : public ExprAST {
 public:
@@ -166,11 +186,10 @@ class VarDeclStmtAST : public StmtAST {
 public:
     std::string name;
     std::string type;  // "int", "ptr", "char", or "" for inferred
-    int arraySize;     // 0 if not an array, > 0 for array size
     std::unique_ptr<ExprAST> initializer;
     
-    VarDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, const std::string& t = "", int arrSize = 0, int l = 0, int c = 0)
-        : StmtAST(l, c), name(n), type(t), arraySize(arrSize), initializer(std::move(init)) {}
+    VarDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, const std::string& t = "", int l = 0, int c = 0)
+        : StmtAST(l, c), name(n), type(t), initializer(std::move(init)) {}
 };
 
 // Let declaration (immutable variable)
@@ -178,11 +197,10 @@ class LetDeclStmtAST : public StmtAST {
 public:
     std::string name;
     std::string type;  // "int", "ptr", "char", or "" for inferred
-    int arraySize;     // 0 if not an array, > 0 for array size
     std::unique_ptr<ExprAST> initializer;
     
-    LetDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, const std::string& t = "", int arrSize = 0, int l = 0, int c = 0)
-        : StmtAST(l, c), name(n), type(t), arraySize(arrSize), initializer(std::move(init)) {}
+    LetDeclStmtAST(const std::string& n, std::unique_ptr<ExprAST> init, const std::string& t = "", int l = 0, int c = 0)
+        : StmtAST(l, c), name(n), type(t), initializer(std::move(init)) {}
 };
 
 // Assignment statement

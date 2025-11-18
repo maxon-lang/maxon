@@ -139,6 +139,50 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         return std::make_unique<StringLiteralExprAST>(value, line, column);
     }
     
+    // Array literal: [5]int or [1,2,3]
+    if (check(TokenType::LBRACKET)) {
+        int line = currentToken().line;
+        int column = currentToken().column;
+        advance(); // consume '['
+        
+        // Look ahead to determine which form:
+        // - If first element is a number followed by ']' then type: [size]type
+        // - Otherwise: [val1, val2, ...]
+        
+        if (check(TokenType::NUMBER) && peek(1).type == TokenType::RBRACKET) {
+            // [size]type form
+            Token sizeToken = expect(TokenType::NUMBER, "Expected array size");
+            int size = std::stoi(sizeToken.value);
+            expect(TokenType::RBRACKET, "Expected ']' after array size");
+            
+            // Now expect the element type
+            if (!check(TokenType::INT) && !check(TokenType::FLOAT) && 
+                !check(TokenType::PTR) && !check(TokenType::CHAR) && 
+                !check(TokenType::STRING_TYPE)) {
+                throw std::runtime_error("Expected array element type (int, float, ptr, char, or string) at line " + 
+                                       std::to_string(currentToken().line));
+            }
+            std::string elementType = currentToken().value;
+            advance();
+            
+            return std::make_unique<ArrayLiteralExprAST>(size, elementType, line, column);
+        } else {
+            // [val1, val2, ...] form
+            std::vector<std::unique_ptr<ExprAST>> values;
+            
+            if (!check(TokenType::RBRACKET)) {
+                values.push_back(parseExpression());
+                
+                while (match(TokenType::COMMA)) {
+                    values.push_back(parseExpression());
+                }
+            }
+            
+            expect(TokenType::RBRACKET, "Expected ']' after array values");
+            return std::make_unique<ArrayLiteralExprAST>(std::move(values), line, column);
+        }
+    }
+    
     // Math intrinsic function keywords (built-in functions)
     // Single-argument functions: sqrt, abs, sin, cos, floor, ceil, round, trunc
     // Note: log, exp, pow, tan are stdlib functions, not keywords
@@ -404,27 +448,10 @@ std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
     Token varToken = expect(TokenType::VAR, "Expected 'var'");
     Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
     
-    // Optional type annotation
+    // Optional type annotation (only for non-array types)
     std::string type;
-    int arraySize = 0;
     
-    // Check for array type: [size]type
-    if (check(TokenType::LBRACKET)) {
-        advance(); // consume '['
-        Token sizeToken = expect(TokenType::NUMBER, "Expected array size");
-        arraySize = std::stoi(sizeToken.value);
-        expect(TokenType::RBRACKET, "Expected ']' after array size");
-        
-        // Now expect the element type
-        if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE)) {
-            type = currentToken().value;
-            advance();
-        } else {
-            throw std::runtime_error("Expected array element type (int, float, ptr, char, or string) at line " + 
-                                   std::to_string(currentToken().line));
-        }
-    } else if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE)) {
-        // Regular type annotation
+    if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE)) {
         type = currentToken().value;
         advance();
     }
@@ -432,34 +459,17 @@ std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
     expect(TokenType::EQUALS, "Expected '='");
     auto initializer = parseExpression();
     
-    return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer), type, arraySize, varToken.line, varToken.column);
+    return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer), type, varToken.line, varToken.column);
 }
 
 std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
     Token letToken = expect(TokenType::LET, "Expected 'let'");
     Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
     
-    // Optional type annotation
+    // Optional type annotation (only for non-array types)
     std::string type;
-    int arraySize = 0;
     
-    // Check for array type: [size]type
-    if (check(TokenType::LBRACKET)) {
-        advance(); // consume '['
-        Token sizeToken = expect(TokenType::NUMBER, "Expected array size");
-        arraySize = std::stoi(sizeToken.value);
-        expect(TokenType::RBRACKET, "Expected ']' after array size");
-        
-        // Now expect the element type
-        if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE)) {
-            type = currentToken().value;
-            advance();
-        } else {
-            throw std::runtime_error("Expected array element type (int, float, ptr, char, or string) at line " + 
-                                   std::to_string(currentToken().line));
-        }
-    } else if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE)) {
-        // Regular type annotation
+    if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE)) {
         type = currentToken().value;
         advance();
     }
@@ -467,7 +477,7 @@ std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
     expect(TokenType::EQUALS, "Expected '='");
     auto initializer = parseExpression();
     
-    return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer), type, arraySize, letToken.line, letToken.column);
+    return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer), type, letToken.line, letToken.column);
 }
 
 std::unique_ptr<AssignStmtAST> Parser::parseAssignment(const std::string& name) {

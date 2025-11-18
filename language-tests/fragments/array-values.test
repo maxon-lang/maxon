@@ -1,27 +1,24 @@
+// Test value-initialized array
 function main() int
-    var arr = [5]float
-    arr[0] = 1.5
-    arr[1] = 2.5
-    arr[2] = 3.0
-    
-    var sum = arr[0] + arr[1] + arr[2]
-    return trunc(sum)
+    var arr = [10, 20, 30, 40]
+    return arr[2]
 end 'main'
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
-define i32 @main() #0 {
+define i32 @main() {
 entry:
-  %arr.malloc = call ptr @malloc(i64 40)
-  %0 = call ptr @memset(ptr %arr.malloc, i32 0, i64 40)
-  store double 1.500000e+00, ptr %arr.malloc, align 8
-  %arrayidx2 = getelementptr inbounds nuw i8, ptr %arr.malloc, i64 8
-  store double 2.500000e+00, ptr %arrayidx2, align 8
-  %arrayidx4 = getelementptr inbounds nuw i8, ptr %arr.malloc, i64 16
-  store double 3.000000e+00, ptr %arrayidx4, align 8
+  %arr.malloc = call ptr @malloc(i64 16)
+  store i32 10, ptr %arr.malloc, align 4
+  %arrayidx1 = getelementptr i8, ptr %arr.malloc, i64 4
+  store i32 20, ptr %arrayidx1, align 4
+  %arrayidx2 = getelementptr i8, ptr %arr.malloc, i64 8
+  store i32 30, ptr %arrayidx2, align 4
+  %arrayidx3 = getelementptr i8, ptr %arr.malloc, i64 12
+  store i32 40, ptr %arrayidx3, align 4
   call void @free(ptr nonnull %arr.malloc)
-  ret i32 7
+  ret i32 30
 }
 
 declare ptr @GetProcessHeap()
@@ -44,8 +41,6 @@ entry:
   ret void
 }
 
-declare ptr @memset(ptr, i32, i64)
-
 declare void @ExitProcess(i32)
 
 define void @_start() {
@@ -54,7 +49,5 @@ entry:
   call void @ExitProcess(i32 %0)
   unreachable
 }
-
-attributes #0 = { "no-builtin-memset" }
 ---
-ExitCode: 7
+ExitCode: 30

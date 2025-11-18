@@ -22,7 +22,7 @@ function format_int_array(value int, buffer []char) int
 **Example:**
 ```maxon
 var num = 42
-var buffer [12]char = 0
+var buffer = [12]char
 var len = format_int_array(num, buffer)
 // buffer now contains "42"
 ```
@@ -31,7 +31,7 @@ ExitCode: 42
 ```maxon
 function main() int
     var num = 42
-    var buffer [12]char = 0
+    var buffer = [12]char
     format_int_array(num, buffer)
     return num
 end 'main'
@@ -56,7 +56,7 @@ function format_float_array(value float, buffer [32]char, precision int) int
 **Example:**
 ```maxon
 var pi = 3.14159265
-var buffer [32]char = 0
+var buffer = [32]char
 var len = format_float_array(pi, buffer, 6)
 // buffer now contains "3.141593"
 ```
@@ -65,7 +65,7 @@ ExitCode: 0
 ```maxon
 function main() int
     var x = 3.14
-    var buffer [32]char = 0
+    var buffer = [32]char
     format_float_array(x, buffer, 2)
     // buffer contains "3.14"
     return 0
@@ -75,7 +75,7 @@ end 'main'
 **Precision Examples:**
 ```maxon
 var x = 123.456789
-var buffer [32]char = 0
+var buffer = [32]char
 
 format_float_array(x, buffer, 0)  // "123"
 format_float_array(x, buffer, 2)  // "123.46" (rounded)
@@ -90,7 +90,7 @@ All arrays in Maxon are **automatically heap-allocated** and **automatically fre
 
 ```maxon
 function example() int
-    var arr [100]int = 0    // Allocated on heap
+    var arr = [100]int    // Allocated on heap
     arr[0] = 42
     return arr[0]
     // Array automatically freed here
@@ -116,7 +116,7 @@ Arrays are freed when their scope ends, including early returns:
 
 ```maxon
 function conditionalArray(flag bool) int
-    var arr [50]int = 0
+    var arr = [50]int
     if flag
         return arr[0]       // Array freed before return
     end 'flag'
@@ -128,7 +128,7 @@ end 'conditionalArray'
 ExitCode: 0
 ```maxon
 function main() int
-    var arr [10]int = 0
+    var arr = [10]int
     arr[5] = 42
     if arr[5] > 40
         return 0            // Array freed before return
@@ -153,7 +153,7 @@ function fillArray(arr []int, size int) int
 end 'fillArray'
 
 function main() int
-    var myArray [10]int = 0
+    var myArray = [10]int
     fillArray(myArray, 10)
     var result = myArray[5]
     return result
@@ -173,7 +173,7 @@ function setValues(arr []int, size int) int
 end 'setValues'
 
 function main() int
-    var arr [10]int = 0
+    var arr = [10]int
     setValues(arr, 10)
     return arr[5]  // Returns 10 (5 * 2)
 end 'main'
@@ -185,11 +185,11 @@ Each scope properly cleans up its arrays:
 
 ```maxon
 function nested() int
-    var outer [20]int = 0
+    var outer = [20]int
     outer[0] = 10
     
     if true
-        var inner [30]int = 0
+        var inner = [30]int
         inner[0] = 20
         outer[1] = inner[0]
         // inner freed here at end of if block
@@ -205,7 +205,7 @@ ExitCode: 20
 function main() int
     var x = 0
     if true
-        var arr [10]int = 0
+        var arr = [10]int
         arr[0] = 20
         x = arr[0]
         // arr freed here
@@ -223,7 +223,7 @@ function loopArrays(n int) int
     var sum = 0
     var i = 0
     while i < n 'outer'
-        var temp [10]int = 0
+        var temp = [10]int
         temp[0] = i
         sum = sum + temp[0]
         i = i + 1
@@ -240,14 +240,14 @@ end 'loopArrays'
 Get the number of elements in an array:
 
 ```maxon
-var arr [100]int = 0
+var arr = [100]int
 var size = arr.length       // Returns 100 (as int)
 ```
 
 ExitCode: 42
 ```maxon
 function main() int
-    var arr [42]int = 0
+    var arr = [42]int
     return arr.length       // Returns 42
 end 'main'
 ```
@@ -330,3 +330,5 @@ The Maxon standard library provides:
 - **Command-line arguments** via optional main parameters
 
 All array memory is managed automatically - no manual allocation or deallocation required. Arrays are heap-allocated and freed when they go out of scope, including early returns and nested scopes.
+
+

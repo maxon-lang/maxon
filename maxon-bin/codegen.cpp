@@ -921,6 +921,12 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         return builder.CreateBitCast(strGlobal, llvm::PointerType::get(context, 0));
     }
     
+    if (dynamic_cast<ArrayLiteralExprAST*>(expr)) {
+        // Array literals cannot be generated as standalone expressions
+        // They should only appear as initializers in var/let declarations
+        throw std::runtime_error("Array literal can only be used as an initializer in variable declarations");
+    }
+    
     if (auto* castExpr = dynamic_cast<CastExprAST*>(expr)) {
         llvm::Value* value = generateExpr(castExpr->expr.get());
         if (!value) {
@@ -1330,27 +1336,48 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             emitLocation(varDecl->line, varDecl->column);
         }
         
-        llvm::Value* initVal = nullptr;
-        if (varDecl->initializer) {
-            initVal = generateExpr(varDecl->initializer.get());
-            if (!initVal) {
-                throw std::runtime_error("Failed to generate variable initializer");
-            }
-        }
-        
-        // Determine the type for the alloca
-        llvm::Type* allocaType;
-        if (varDecl->arraySize > 0) {
-            // Array type: allocate on heap using malloc
+        // Check if initializer is an array literal
+        if (auto* arrayLiteral = dynamic_cast<ArrayLiteralExprAST*>(varDecl->initializer.get())) {
+            // Handle array declaration
+            int arraySize;
             llvm::Type* elementType;
-            if (!varDecl->type.empty()) {
-                elementType = getTypeFromString(context, varDecl->type);
+            std::string elementTypeName;
+            std::vector<llvm::Value*> initValues;
+            
+            if (arrayLiteral->size > 0) {
+                // [size]type form - zero-initialized
+                arraySize = arrayLiteral->size;
+                elementTypeName = arrayLiteral->elementType;
+                elementType = getTypeFromString(context, elementTypeName);
             } else {
-                throw std::runtime_error("Array declaration requires explicit element type at line " + 
-                                       std::to_string(varDecl->line));
+                // [val1, val2, ...] form - value-initialized
+                arraySize = arrayLiteral->values.size();
+                
+                // Generate all values and infer type from first element
+                for (auto& valExpr : arrayLiteral->values) {
+                    llvm::Value* val = generateExpr(valExpr.get());
+                    if (!val) {
+                        throw std::runtime_error("Failed to generate array element value");
+                    }
+                    initValues.push_back(val);
+                }
+                
+                // Infer element type from first value
+                elementType = initValues[0]->getType();
+                if (elementType->isIntegerTy(32)) {
+                    elementTypeName = "int";
+                } else if (elementType->isDoubleTy()) {
+                    elementTypeName = "float";
+                } else if (elementType->isIntegerTy(8)) {
+                    elementTypeName = "char";
+                } else if (elementType->isPointerTy()) {
+                    elementTypeName = "ptr";
+                } else {
+                    throw std::runtime_error("Unsupported array element type");
+                }
             }
             
-            // Initialize heap management functions on first use
+            // Initialize heap management functions
             initHeapManagement();
             
             // Declare malloc if not already declared
@@ -1372,19 +1399,16 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             // Calculate size: arraySize * sizeof(elementType)
             const llvm::DataLayout& dataLayout = module->getDataLayout();
             uint64_t elementSize = dataLayout.getTypeAllocSize(elementType);
-            uint64_t totalSize = varDecl->arraySize * elementSize;
-            llvm::Value* sizeVal = llvm::ConstantInt::get(
-                llvm::Type::getInt64Ty(context), 
-                totalSize
-            );
+            uint64_t totalSize = arraySize * elementSize;
+            llvm::Value* sizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), totalSize);
             
             // Call malloc
             llvm::Value* arrayPtr = builder.CreateCall(mallocFunc, {sizeVal}, varDecl->name + ".malloc");
             
             // Create alloca to store the pointer
             llvm::AllocaInst* ptrAlloca = createEntryBlockAlloca(
-                function, 
-                varDecl->name, 
+                function,
+                varDecl->name,
                 llvm::PointerType::get(context, 0)
             );
             builder.CreateStore(arrayPtr, ptrAlloca);
@@ -1395,55 +1419,35 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
                 varDecl->name + ".__length",
                 llvm::Type::getInt32Ty(context)
             );
-            llvm::Value* arraySizeVal = llvm::ConstantInt::get(
-                llvm::Type::getInt32Ty(context),
-                varDecl->arraySize
-            );
+            llvm::Value* arraySizeVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), arraySize);
             builder.CreateStore(arraySizeVal, sizeAlloca);
             namedValues[varDecl->name + ".__length"] = sizeAlloca;
             
-            // Always zero-initialize arrays using runtime memset
-            llvm::Function* memsetFunc = getOrDeclareMemset();
-            llvm::Value* zeroVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-            llvm::Value* memsetSizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), totalSize);
-            builder.CreateCall(memsetFunc, {arrayPtr, zeroVal, memsetSizeVal});
-            
-            // If there's a non-zero initializer, set all elements to that value
-            if (initVal) {
-                // Check if initializer is non-zero
-                bool isNonZeroInit = true;
-                if (llvm::ConstantInt* constInt = llvm::dyn_cast<llvm::ConstantInt>(initVal)) {
-                    isNonZeroInit = !constInt->isZero();
-                } else if (llvm::ConstantFP* constFP = llvm::dyn_cast<llvm::ConstantFP>(initVal)) {
-                    isNonZeroInit = !constFP->isZero();
-                }
-                
-                if (isNonZeroInit) {
-                    // Non-zero initializer: loop through elements
-                    for (int i = 0; i < varDecl->arraySize; i++) {
-                        llvm::Value* indexVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i);
-                        llvm::Value* elementPtr = builder.CreateGEP(
-                            elementType,
-                            arrayPtr,
-                            indexVal,
-                            "arrayidx"
-                        );
-                        builder.CreateStore(initVal, elementPtr);
-                    }
+            // Initialize array elements
+            if (initValues.empty()) {
+                // Zero-initialize using memset
+                llvm::Function* memsetFunc = getOrDeclareMemset();
+                llvm::Value* zeroVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+                llvm::Value* memsetSizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), totalSize);
+                builder.CreateCall(memsetFunc, {arrayPtr, zeroVal, memsetSizeVal});
+            } else {
+                // Store each value
+                for (int i = 0; i < arraySize; i++) {
+                    llvm::Value* indexVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i);
+                    llvm::Value* elementPtr = builder.CreateGEP(elementType, arrayPtr, indexVal, "arrayidx");
+                    builder.CreateStore(initValues[i], elementPtr);
                 }
             }
             
             namedValues[varDecl->name] = ptrAlloca;
-            
-            // Track the variable type (format: [size]elementType for arrays)
-            variableTypes[varDecl->name] = "[" + std::to_string(varDecl->arraySize) + "]" + varDecl->type;
+            variableTypes[varDecl->name] = "[" + std::to_string(arraySize) + "]" + elementTypeName;
             
             // Track this array for cleanup
             if (!scopeStack.empty()) {
                 scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, ptrAlloca});
             }
             
-            // Create debug info for array pointer variable
+            // Create debug info
             if (generateDebugInfo && !debugScopeStack.empty()) {
                 llvm::DILocalVariable* debugVar = debugBuilder->createAutoVariable(
                     debugScopeStack.back(),
@@ -1466,7 +1470,20 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             }
             
             return;
-        } else if (!varDecl->type.empty()) {
+        }
+        
+        // Non-array variable
+        llvm::Value* initVal = nullptr;
+        if (varDecl->initializer) {
+            initVal = generateExpr(varDecl->initializer.get());
+            if (!initVal) {
+                throw std::runtime_error("Failed to generate variable initializer");
+            }
+        }
+        
+        // Determine the type for the alloca
+        llvm::Type* allocaType;
+        if (!varDecl->type.empty()) {
             // Use explicit type annotation
             allocaType = getTypeFromString(context, varDecl->type);
         } else if (initVal) {
@@ -1529,27 +1546,48 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             emitLocation(letDecl->line, letDecl->column);
         }
         
-        llvm::Value* initVal = nullptr;
-        if (letDecl->initializer) {
-            initVal = generateExpr(letDecl->initializer.get());
-            if (!initVal) {
-                throw std::runtime_error("Failed to generate let initializer");
-            }
-        }
-        
-        // Determine the type for the alloca
-        llvm::Type* allocaType;
-        if (letDecl->arraySize > 0) {
-            // Array type: allocate on heap using malloc
+        // Check if initializer is an array literal
+        if (auto* arrayLiteral = dynamic_cast<ArrayLiteralExprAST*>(letDecl->initializer.get())) {
+            // Handle array declaration
+            int arraySize;
             llvm::Type* elementType;
-            if (!letDecl->type.empty()) {
-                elementType = getTypeFromString(context, letDecl->type);
+            std::string elementTypeName;
+            std::vector<llvm::Value*> initValues;
+            
+            if (arrayLiteral->size > 0) {
+                // [size]type form - zero-initialized
+                arraySize = arrayLiteral->size;
+                elementTypeName = arrayLiteral->elementType;
+                elementType = getTypeFromString(context, elementTypeName);
             } else {
-                throw std::runtime_error("Array declaration requires explicit element type at line " + 
-                                       std::to_string(letDecl->line));
+                // [val1, val2, ...] form - value-initialized
+                arraySize = arrayLiteral->values.size();
+                
+                // Generate all values and infer type from first element
+                for (auto& valExpr : arrayLiteral->values) {
+                    llvm::Value* val = generateExpr(valExpr.get());
+                    if (!val) {
+                        throw std::runtime_error("Failed to generate array element value");
+                    }
+                    initValues.push_back(val);
+                }
+                
+                // Infer element type from first value
+                elementType = initValues[0]->getType();
+                if (elementType->isIntegerTy(32)) {
+                    elementTypeName = "int";
+                } else if (elementType->isDoubleTy()) {
+                    elementTypeName = "float";
+                } else if (elementType->isIntegerTy(8)) {
+                    elementTypeName = "char";
+                } else if (elementType->isPointerTy()) {
+                    elementTypeName = "ptr";
+                } else {
+                    throw std::runtime_error("Unsupported array element type");
+                }
             }
             
-            // Initialize heap management functions on first use
+            // Initialize heap management functions
             initHeapManagement();
             
             // Declare malloc if not already declared
@@ -1571,19 +1609,16 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             // Calculate size: arraySize * sizeof(elementType)
             const llvm::DataLayout& dataLayout = module->getDataLayout();
             uint64_t elementSize = dataLayout.getTypeAllocSize(elementType);
-            uint64_t totalSize = letDecl->arraySize * elementSize;
-            llvm::Value* sizeVal = llvm::ConstantInt::get(
-                llvm::Type::getInt64Ty(context), 
-                totalSize
-            );
+            uint64_t totalSize = arraySize * elementSize;
+            llvm::Value* sizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), totalSize);
             
             // Call malloc
             llvm::Value* arrayPtr = builder.CreateCall(mallocFunc, {sizeVal}, letDecl->name + ".malloc");
             
             // Create alloca to store the pointer
             llvm::AllocaInst* ptrAlloca = createEntryBlockAlloca(
-                function, 
-                letDecl->name, 
+                function,
+                letDecl->name,
                 llvm::PointerType::get(context, 0)
             );
             builder.CreateStore(arrayPtr, ptrAlloca);
@@ -1594,52 +1629,35 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
                 letDecl->name + ".__length",
                 llvm::Type::getInt32Ty(context)
             );
-            llvm::Value* arraySizeVal = llvm::ConstantInt::get(
-                llvm::Type::getInt32Ty(context),
-                letDecl->arraySize
-            );
+            llvm::Value* arraySizeVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), arraySize);
             builder.CreateStore(arraySizeVal, sizeAlloca);
             namedValues[letDecl->name + ".__length"] = sizeAlloca;
             
-            // Always zero-initialize arrays using runtime memset
-            llvm::Function* memsetFunc = getOrDeclareMemset();
-            llvm::Value* zeroVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-            llvm::Value* memsetSizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), totalSize);
-            builder.CreateCall(memsetFunc, {arrayPtr, zeroVal, memsetSizeVal});
-            
-            // If there's a non-zero initializer, set all elements to that value
-            if (initVal) {
-                // Check if initializer is non-zero
-                bool isNonZeroInit = true;
-                if (llvm::ConstantInt* constInt = llvm::dyn_cast<llvm::ConstantInt>(initVal)) {
-                    isNonZeroInit = !constInt->isZero();
-                } else if (llvm::ConstantFP* constFP = llvm::dyn_cast<llvm::ConstantFP>(initVal)) {
-                    isNonZeroInit = !constFP->isZero();
-                }
-                
-                if (isNonZeroInit) {
-                    // Non-zero initializer: loop through elements
-                    for (int i = 0; i < letDecl->arraySize; i++) {
-                        llvm::Value* indexVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i);
-                        llvm::Value* elementPtr = builder.CreateGEP(
-                            elementType,
-                            arrayPtr,
-                            indexVal,
-                            "arrayidx"
-                        );
-                        builder.CreateStore(initVal, elementPtr);
-                    }
+            // Initialize array elements
+            if (initValues.empty()) {
+                // Zero-initialize using memset
+                llvm::Function* memsetFunc = getOrDeclareMemset();
+                llvm::Value* zeroVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+                llvm::Value* memsetSizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), totalSize);
+                builder.CreateCall(memsetFunc, {arrayPtr, zeroVal, memsetSizeVal});
+            } else {
+                // Store each value
+                for (int i = 0; i < arraySize; i++) {
+                    llvm::Value* indexVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i);
+                    llvm::Value* elementPtr = builder.CreateGEP(elementType, arrayPtr, indexVal, "arrayidx");
+                    builder.CreateStore(initValues[i], elementPtr);
                 }
             }
             
             namedValues[letDecl->name] = ptrAlloca;
+            variableTypes[letDecl->name] = "[" + std::to_string(arraySize) + "]" + elementTypeName;
             
             // Track this array for cleanup
             if (!scopeStack.empty()) {
                 scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, ptrAlloca});
             }
             
-            // Create debug info for array pointer variable
+            // Create debug info
             if (generateDebugInfo && !debugScopeStack.empty()) {
                 llvm::DILocalVariable* debugVar = debugBuilder->createAutoVariable(
                     debugScopeStack.back(),
@@ -1661,9 +1679,21 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
                 );
             }
             
-            // Note: immutability is enforced at semantic analysis level
             return;
-        } else if (!letDecl->type.empty()) {
+        }
+        
+        // Non-array variable
+        llvm::Value* initVal = nullptr;
+        if (letDecl->initializer) {
+            initVal = generateExpr(letDecl->initializer.get());
+            if (!initVal) {
+                throw std::runtime_error("Failed to generate let initializer");
+            }
+        }
+        
+        // Determine the type for the alloca
+        llvm::Type* allocaType;
+        if (!letDecl->type.empty()) {
             // Use explicit type annotation
             allocaType = getTypeFromString(context, letDecl->type);
         } else if (initVal) {

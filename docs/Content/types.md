@@ -63,12 +63,21 @@ var p ptr = nullptr
 
 Arrays are heap-allocated sequences of elements of the same type. Array memory is automatically managed and freed when the array goes out of scope.
 
-### Fixed-Size Arrays
+### Array Initialization
 
+Arrays can be initialized in two ways:
+
+**Zero-initialized arrays** using `[size]type` syntax:
 ```maxon
-var numbers [10]int = 0        // Array of 10 integers, initialized to 0
-var floats [5]float = 0.0      // Array of 5 floats, initialized to 0.0
-var letters [26]char = 0       // Array of 26 characters
+var numbers = [10]int          // Array of 10 integers, all initialized to 0
+var floats = [5]float          // Array of 5 floats, all initialized to 0.0
+var letters = [26]char         // Array of 26 characters, all initialized to 0
+```
+
+**Value-initialized arrays** using `[val1, val2, ...]` syntax:
+```maxon
+var nums = [10, 20, 30, 40]    // Array of 4 integers with specified values
+var coords = [1.5, 2.5, 3.5]   // Array of 3 floats with specified values
 ```
 
 ### Dynamic-Size Arrays
@@ -77,7 +86,7 @@ Array size can be determined at runtime:
 
 ```maxon
 function createArray(n int) int
-    var arr [n]int = 0         // Size determined by parameter n
+    var arr = [n]int           // Size determined by parameter n
     arr[0] = 42
     return arr[0]
     // Array automatically freed here when function returns
@@ -89,14 +98,14 @@ end 'createArray'
 Arrays have a `.length` property that returns the number of elements:
 
 ```maxon
-var arr [100]int = 0
+var arr = [100]int
 var size = arr.length          // Returns 100 (as int)
 ```
 
 ExitCode: 0
 ```maxon
 function main() int
-    var arr [10]int = 0
+    var arr = [10]int
     return arr.length - 10     // Should return 0
 end 'main'
 ```
@@ -106,7 +115,7 @@ end 'main'
 Arrays are zero-indexed:
 
 ```maxon
-var nums [5]int = 0
+var nums = [5]int
 nums[0] = 10    // First element
 nums[4] = 50    // Last element
 var x = nums[2] // Access element
@@ -128,7 +137,7 @@ function sum(arr [10]int) int
 end 'sum'
 
 function main() int
-    var numbers [10]int = 0
+    var numbers = [10]int
     numbers[0] = 5
     numbers[1] = 10
     var result = sum(numbers)
@@ -152,11 +161,11 @@ function sum(arr []int, length int) int
 end 'sum'
 
 function main() int
-    var small [5]int = 0
+    var small = [5]int
     small[0] = 10
     var result1 = sum(small, 5)
     
-    var large [100]int = 0
+    var large = [100]int
     large[0] = 20
     var result2 = sum(large, 100)
     

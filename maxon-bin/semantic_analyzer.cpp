@@ -138,13 +138,8 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
         // Determine the actual type - use declared type if provided, otherwise infer
         std::string actualType;
         if (!varDecl->type.empty()) {
-            // Use declared type
-            if (varDecl->arraySize > 0) {
-                // Array type: encode as [size]elementType
-                actualType = "[" + std::to_string(varDecl->arraySize) + "]" + varDecl->type;
-            } else {
-                actualType = varDecl->type;
-            }
+            // Use declared type (explicit type annotation)
+            actualType = varDecl->type;
         } else {
             // Type inference from initializer
             actualType = initType;
@@ -170,13 +165,8 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
         // Determine the actual type - use declared type if provided, otherwise infer
         std::string actualType;
         if (!letDecl->type.empty()) {
-            // Use declared type
-            if (letDecl->arraySize > 0) {
-                // Array type: encode as [size]elementType
-                actualType = "[" + std::to_string(letDecl->arraySize) + "]" + letDecl->type;
-            } else {
-                actualType = letDecl->type;
-            }
+            // Use declared type (explicit type annotation)
+            actualType = letDecl->type;
         } else {
             // Type inference from initializer
             actualType = initType;
@@ -361,6 +351,35 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         
     } else if (dynamic_cast<StringLiteralExprAST*>(expr)) {
         return "string";  // String literals are pointers to character data
+        
+    } else if (auto arrayLiteral = dynamic_cast<ArrayLiteralExprAST*>(expr)) {
+        // Array literal: [5]int or [1,2,3]
+        if (arrayLiteral->size > 0) {
+            // [size]type form - zero-initialized array
+            return "[" + std::to_string(arrayLiteral->size) + "]" + arrayLiteral->elementType;
+        } else {
+            // [val1, val2, ...] form - value-initialized array
+            if (arrayLiteral->values.empty()) {
+                addError("Array literal cannot be empty",
+                        expr->line, expr->column);
+                return "error";
+            }
+            
+            // Infer element type from first element
+            std::string elemType = analyzeExpression(arrayLiteral->values[0].get());
+            
+            // Validate all elements have same type
+            for (size_t i = 1; i < arrayLiteral->values.size(); i++) {
+                std::string valueType = analyzeExpression(arrayLiteral->values[i].get());
+                if (!typesMatch(elemType, valueType)) {
+                    addError("Array element type mismatch: expected '" + elemType + "', got '" + valueType + "'" +
+                            std::string("\n  Note: All array elements must have the same type"),
+                            expr->line, expr->column);
+                }
+            }
+            
+            return "[" + std::to_string(arrayLiteral->values.size()) + "]" + elemType;
+        }
         
     } else if (auto castExpr = dynamic_cast<CastExprAST*>(expr)) {
         // Analyze the expression being cast

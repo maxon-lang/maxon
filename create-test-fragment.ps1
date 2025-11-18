@@ -353,21 +353,15 @@ try {
     }
     
     # Write fragment file (with CRLF line endings for Windows)
-    # Normalize line endings to CRLF
+    # Normalize line endings to CRLF and ensure file ends with exactly one newline
+    $fragmentContent = $fragmentContent.TrimEnd()
     $fragmentContent = $fragmentContent -replace "`r`n", "`n" -replace "`n", "`r`n"
+    $fragmentContent += "`r`n"
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($outputFragmentPath, $fragmentContent, $utf8NoBom)
     
     Write-Host "`nTest fragment created successfully!" -ForegroundColor Green
     Write-Host "Location: $outputFragmentPath" -ForegroundColor Cyan
-    Write-Host "`nFragment preview:" -ForegroundColor Yellow
-    Write-Host "=================" -ForegroundColor Gray
-    Write-Host $fragmentContent.Substring(0, [Math]::Min(500, $fragmentContent.Length))
-    if ($fragmentContent.Length -gt 500) {
-        Write-Host "..." -ForegroundColor Gray
-        Write-Host "(truncated, see full file at $outputFragmentPath)" -ForegroundColor Gray
-    }
-    
 } finally {
     # Cleanup temp files
     Remove-Item $tempSourceFile -ErrorAction SilentlyContinue
