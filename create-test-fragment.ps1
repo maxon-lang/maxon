@@ -185,17 +185,30 @@ try {
         $fragmentContent = $SourceCode.TrimEnd()
         $fragmentContent += "`n---`nN/A`n---`n"
         
+        # Preserve Args if it was specified
+        if ($global:PreservedArgs) {
+            $fragmentContent += "Args: $global:PreservedArgs`n"
+        }
+        
         # Add compiler stderr if present (use triple backticks for multiline)
+        # Normalize temp file names in linker errors for consistent test results
         $backticks = '```'
         if ($compileStderr) {
-            $fragmentContent += "MaxoncStderr: $backticks`n$($compileStderr.TrimEnd())`n$backticks"
+            $normalizedStderr = $compileStderr -replace '(>>>.*?)(output|test)\.exe\.tmp\.obj', '$1test.exe.tmp.obj'
+            $fragmentContent += "MaxoncStderr: $backticks`n$($normalizedStderr.TrimEnd())`n$backticks"
         }
         else {
             # If stderr is empty but we have output, use that
-            $fragmentContent += "MaxoncStderr: $backticks`n$($compileOutput.TrimEnd())`n$backticks"
+            $normalizedOutput = $compileOutput -replace '(>>>.*?)(output|test)\.exe\.tmp\.obj', '$1test.exe.tmp.obj'
+            $fragmentContent += "MaxoncStderr: $backticks`n$($normalizedOutput.TrimEnd())`n$backticks"
         }
         
-        $fragmentContent | Set-Content -Path $outputFragmentPath -NoNewline -Encoding UTF8
+        # Normalize line endings to CRLF for Windows
+        $fragmentContent = $fragmentContent -replace "`r`n", "`n" -replace "`n", "`r`n"
+        
+        # Write with UTF-8 no BOM
+        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($outputFragmentPath, $fragmentContent, $utf8NoBom)
         Write-Host "Test fragment created: $outputFragmentPath" -ForegroundColor Green
         Write-Host "(This is an error test - compilation is expected to fail)" -ForegroundColor Yellow
         exit 0
