@@ -494,7 +494,7 @@ int main(int argc, char* argv[]) {
             CompilationOptions options;
             options.inputFiles = {command};
             options.outputFile = tempExe;
-            options.optimize = false;  // Don't optimize for quick compile-and-run
+            options.optimize = false;  // Don't optimize by default - user can use -O flag
             options.debugInfo = false;
             options.verbose = false;
             options.emitLLVM = false;

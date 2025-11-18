@@ -76,7 +76,7 @@ if ($SourceFile) {
     
     # Check if this is a .test fragment file
     if ($SourceFile.EndsWith(".test")) {
-        # Parse the existing fragment to extract just the source code
+        # Parse the existing fragment to extract source code and metadata
         $fragmentContent = Get-Content $SourceFile -Raw
         $firstSeparator = $fragmentContent.IndexOf("`n---")
         if ($firstSeparator -eq -1) {
@@ -84,6 +84,25 @@ if ($SourceFile) {
             exit 1
         }
         $SourceCode = $fragmentContent.Substring(0, $firstSeparator)
+        
+        # Find the second separator (after IR)
+        $secondSeparator = $fragmentContent.IndexOf("`n---", $firstSeparator + 4)
+        if ($secondSeparator -ne -1) {
+            # Extract metadata section (everything after second ---)
+            $metadataSection = $fragmentContent.Substring($secondSeparator + 5).Trim()
+            
+            # Parse metadata fields - only preserve Args (command line arguments)
+            $global:PreservedArgs = ""
+            
+            $lines = $metadataSection -split "`r?`n"
+            for ($i = 0; $i -lt $lines.Length; $i++) {
+                $line = $lines[$i]
+                if ($line -match '^Args:\s*(.*)$') {
+                    $global:PreservedArgs = $matches[1].Trim()
+                    break  # Only need Args, skip the rest
+                }
+            }
+        }
     } else {
         $SourceCode = Get-Content $SourceFile -Raw
     }
@@ -160,11 +179,21 @@ try {
         Write-Host "Compilation failed!" -ForegroundColor Red
         Write-Host $compileOutput
         
-        # For compilation errors, create fragment with N/A for IR
+        # For compilation errors, create fragment with N/A for IR and capture compiler stderr
         Write-Host "Creating error test fragment (compilation should fail)..." -ForegroundColor Yellow
         
         $fragmentContent = $SourceCode.TrimEnd()
-        $fragmentContent += "`n---`nN/A`n---`nExitCode: 1"
+        $fragmentContent += "`n---`nN/A`n---`n"
+        
+        # Add compiler stderr if present (use triple backticks for multiline)
+        $backticks = '```'
+        if ($compileStderr) {
+            $fragmentContent += "MaxoncStderr: $backticks`n$($compileStderr.TrimEnd())`n$backticks"
+        }
+        else {
+            # If stderr is empty but we have output, use that
+            $fragmentContent += "MaxoncStderr: $backticks`n$($compileOutput.TrimEnd())`n$backticks"
+        }
         
         $fragmentContent | Set-Content -Path $outputFragmentPath -NoNewline -Encoding UTF8
         Write-Host "Test fragment created: $outputFragmentPath" -ForegroundColor Green
@@ -208,22 +237,44 @@ try {
     # The compiler generates output.exe by default
     $actualExeFile = "output.exe"
     
-    # Run the executable and capture exit code and stdout
+    # Run the executable and capture exit code, stdout, and stderr
     Write-Host "Running executable..." -ForegroundColor Yellow
+    $exitCode = 0
+    $stdoutCapture = ""
+    $stderrCapture = ""
+    
     if (Test-Path $actualExeFile) {
-        $outputCapture = ""
-        $exitCode = 0
-        
         try {
-            # Run and capture output
-            $process = Start-Process -FilePath ".\$actualExeFile" -Wait -PassThru -NoNewWindow -RedirectStandardOutput "temp_stdout.txt" -RedirectStandardError "temp_stderr.txt"
+            # Build argument list from preserved Args if available
+            $exeArgs = @()
+            if ($global:PreservedArgs) {
+                # Simple space-split - may need more sophisticated parsing for quoted args
+                $exeArgs = $global:PreservedArgs -split '\s+'
+            }
+            
+            # Run with arguments and capture output
+            $processArgs = @{
+                FilePath = ".\$actualExeFile"
+                Wait = $true
+                PassThru = $true
+                NoNewWindow = $true
+                RedirectStandardOutput = "temp_stdout.txt"
+                RedirectStandardError = "temp_stderr.txt"
+            }
+            
+            if ($exeArgs.Count -gt 0) {
+                $processArgs['ArgumentList'] = $exeArgs
+            }
+            
+            $process = Start-Process @processArgs
             $exitCode = $process.ExitCode
             
             if (Test-Path "temp_stdout.txt") {
-                $outputCapture = Get-Content "temp_stdout.txt" -Raw
+                $stdoutCapture = Get-Content "temp_stdout.txt" -Raw
                 Remove-Item "temp_stdout.txt" -ErrorAction SilentlyContinue
             }
             if (Test-Path "temp_stderr.txt") {
+                $stderrCapture = Get-Content "temp_stderr.txt" -Raw
                 Remove-Item "temp_stderr.txt" -ErrorAction SilentlyContinue
             }
         } catch {
@@ -232,13 +283,15 @@ try {
         }
         
         Write-Host "Exit code: $exitCode" -ForegroundColor $(if ($exitCode -eq 0) { "Green" } else { "Yellow" })
-        if ($outputCapture) {
-            Write-Host "Output: $outputCapture" -ForegroundColor Gray
+        if ($stdoutCapture) {
+            Write-Host "Stdout: $stdoutCapture" -ForegroundColor Gray
+        }
+        if ($stderrCapture) {
+            Write-Host "Stderr: $stderrCapture" -ForegroundColor Gray
         }
     } else {
         Write-Warning "Executable not found, assuming exit code 0"
         $exitCode = 0
-        $outputCapture = ""
     }
     
     # Create the fragment content
@@ -247,11 +300,44 @@ try {
     $fragmentContent += $llvmIR
     $fragmentContent += "`n---`n"
     
-    if ($outputCapture) {
-        $fragmentContent += "Output:`n$outputCapture`n"
+    # Add metadata fields in order: ExitCode first, then Args, then Stdout/Stderr
+    $fragmentContent += "ExitCode: $exitCode`n"
+    
+    # Always preserve Args if it was specified
+    if ($global:PreservedArgs) {
+        $fragmentContent += "Args: $global:PreservedArgs`n"
     }
     
-    $fragmentContent += "ExitCode: $exitCode"
+    # Use a variable for triple backticks
+    $backticks = '```'
+    
+    # Add stdout/stderr from executable if present (use triple backticks for multiline)
+    if ($stdoutCapture) {
+        # Check if it's multiline
+        if ($stdoutCapture.Contains("`n")) {
+            $fragmentContent += "Stdout: $backticks`n$($stdoutCapture.TrimEnd())`n$backticks`n"
+        } else {
+            $fragmentContent += "Stdout: $stdoutCapture`n"
+        }
+    }
+    
+    if ($stderrCapture) {
+        # Check if it's multiline
+        if ($stderrCapture.Contains("`n")) {
+            $fragmentContent += "Stderr: $backticks`n$($stderrCapture.TrimEnd())`n$backticks`n"
+        } else {
+            $fragmentContent += "Stderr: $stderrCapture`n"
+        }
+    }
+    
+    # If no Stdout was captured but we have old-style Output, keep it for compatibility
+    if (-not $stdoutCapture -and $outputCapture) {
+        if ($outputCapture.Contains("`n")) {
+            $fragmentContent += "Output: ``````n$outputCapture`n``````n"
+        } else {
+            $fragmentContent += "Output: $outputCapture`n"
+        }
+    }
     
     # Write fragment file (with CRLF line endings for Windows)
     # Normalize line endings to CRLF

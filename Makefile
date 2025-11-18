@@ -6,17 +6,22 @@ CMAKE_GENERATOR = "Ninja"
 CC = "C:/Program Files/LLVM/bin/clang.exe"
 CXX = "C:/Program Files/LLVM/bin/clang++.exe"
 RC = "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe"
+LLC = "C:/Users/Eric/Dev/llvm-project/build/Release/bin/llc.exe"
 
-.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test language-tests language-tests-update docs test
+RUNTIME_LL = maxon-runtime/runtime.ll
+RUNTIME_OBJ = maxon-runtime/runtime.obj
+
+.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test language-tests language-tests-update docs test runtime
 
 # Default target
-all: configure
+all: configure runtime
 	cmake --build $(BUILD_DIR)
 
 help:
 	@echo "Maxon Project Build Targets:"
-	@echo "  all              - Build compiler and LSP (default)"
+	@echo "  all              - Build compiler, runtime library, and LSP (default)"
 	@echo "  configure        - Configure CMake build"
+	@echo "  runtime          - Build Maxon runtime library"
 	@echo "  compiler         - Build only the Maxon compiler"
 	@echo "  lsp-server       - Build only the C++ LSP server"
 	@echo "  extension        - Install dependencies and build VS Code extension"
@@ -33,13 +38,20 @@ help:
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  help             - Show this help message"
 
+# Build Maxon runtime library
+runtime: $(RUNTIME_OBJ)
+
+$(RUNTIME_OBJ): $(RUNTIME_LL)
+	@echo "Building Maxon runtime library..."
+	@$(LLC) -filetype=obj -o $(RUNTIME_OBJ) $(RUNTIME_LL)
+
 # Configure CMake
 configure:
 	@powershell -Command "if (-not (Test-Path '$(BUILD_DIR)')) { New-Item -ItemType Directory -Path '$(BUILD_DIR)' | Out-Null }"
 	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Release
 
-# Build the Maxon compiler
-compiler: configure
+# Build the Maxon compiler (depends on runtime)
+compiler: configure runtime
 	cmake --build $(BUILD_DIR) --target maxon
 
 # Build both LSP server and extension
@@ -132,6 +144,7 @@ clean:
 	@echo Cleaning build artifacts...
 	@powershell -Command "if (Test-Path '$(BUILD_DIR)') { Remove-Item -Recurse -Force '$(BUILD_DIR)' }"
 	@powershell -Command "if (Test-Path 'bin') { Remove-Item -Recurse -Force 'bin' }"
+	@powershell -Command "if (Test-Path '$(RUNTIME_OBJ)') { Remove-Item -Force '$(RUNTIME_OBJ)' }"
 	@powershell -Command "if (Test-Path 'vscode-extension/out') { Remove-Item -Recurse -Force 'vscode-extension/out' }"
 	@powershell -Command "if (Test-Path 'vscode-extension/node_modules') { Remove-Item -Recurse -Force 'vscode-extension/node_modules' }"
 	@powershell -Command "if (Test-Path 'lsp-server/tests/build') { Remove-Item -Recurse -Force 'lsp-server/tests/build' }"

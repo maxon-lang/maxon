@@ -22,13 +22,6 @@ end 'main'
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
-@_fltused = constant i32 39029
-
-define void @__chkstk() {
-entry:
-  ret void
-}
-
 define i32 @sum(ptr %0, i32 %1, i32 %2) {
 entry:
   br label %whilecond
@@ -51,26 +44,22 @@ afterloop:                                        ; preds = %whilecond
   ret i32 %total.0
 }
 
-define i32 @main() {
+define i32 @main() #0 {
 entry:
   %nums.malloc = call ptr @malloc(i64 20)
-  store i32 0, ptr %nums.malloc, align 4
-  %arrayidx1 = getelementptr i8, ptr %nums.malloc, i64 4
-  store i32 0, ptr %arrayidx1, align 4
-  %arrayidx2 = getelementptr i8, ptr %nums.malloc, i64 8
-  store i32 0, ptr %arrayidx2, align 4
-  %arrayidx3 = getelementptr i8, ptr %nums.malloc, i64 12
-  store i32 0, ptr %arrayidx3, align 4
-  %arrayidx4 = getelementptr i8, ptr %nums.malloc, i64 16
-  store i32 0, ptr %arrayidx4, align 4
+  %0 = call ptr @memset(ptr %nums.malloc, i32 0, i64 20)
   store i32 10, ptr %nums.malloc, align 4
-  store i32 20, ptr %arrayidx1, align 4
-  store i32 30, ptr %arrayidx2, align 4
-  store i32 40, ptr %arrayidx3, align 4
-  store i32 50, ptr %arrayidx4, align 4
-  %0 = call i32 @sum(ptr nonnull %nums.malloc, i32 5, i32 5)
+  %arrayidx2 = getelementptr inbounds nuw i8, ptr %nums.malloc, i64 4
+  store i32 20, ptr %arrayidx2, align 4
+  %arrayidx4 = getelementptr inbounds nuw i8, ptr %nums.malloc, i64 8
+  store i32 30, ptr %arrayidx4, align 4
+  %arrayidx6 = getelementptr inbounds nuw i8, ptr %nums.malloc, i64 12
+  store i32 40, ptr %arrayidx6, align 4
+  %arrayidx8 = getelementptr inbounds nuw i8, ptr %nums.malloc, i64 16
+  store i32 50, ptr %arrayidx8, align 4
+  %1 = call i32 @sum(ptr nonnull %nums.malloc, i32 5, i32 5)
   call void @free(ptr nonnull %nums.malloc)
-  ret i32 %0
+  ret i32 %1
 }
 
 declare ptr @GetProcessHeap()
@@ -93,6 +82,8 @@ entry:
   ret void
 }
 
+declare ptr @memset(ptr, i32, i64)
+
 declare void @ExitProcess(i32)
 
 define void @_start() {
@@ -101,5 +92,7 @@ entry:
   call void @ExitProcess(i32 %0)
   unreachable
 }
+
+attributes #0 = { "no-builtin-memset" }
 ---
 ExitCode: 150

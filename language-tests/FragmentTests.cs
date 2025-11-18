@@ -1,7 +1,7 @@
 namespace Test;
 
-using NUnit.Framework;
 using System.Diagnostics;
+using NUnit.Framework;
 
 // trying to embed the test code and expected IR in this file would be a huge PITA
 // due to the way C# handles multiline strings (escaping, indentation, etc.)
@@ -42,7 +42,7 @@ public class FragmentTests {
 	// Helper method to read multiline content (supports both ``` delimited and keyword-delimited formats)
 	private static string ReadMultilineContent(string[] lines, ref int i, string initialContent) {
 		var content = initialContent.Trim();
-		
+
 		if (content == "```") {
 			// Triple backtick delimited format
 			var contentLines = new List<string>();
@@ -60,11 +60,11 @@ public class FragmentTests {
 			var contentLines = new List<string> { content };
 			for (var j = i + 1; j < lines.Length; j++) {
 				var nextLine = lines[j].TrimEnd('\r');
-				if (nextLine.StartsWith("ExitCode: ") || 
-				    nextLine.StartsWith("MaxoncStdout: ") || 
-				    nextLine.StartsWith("MaxoncStderr: ") ||
-				    nextLine.StartsWith("Stdout: ") ||
-				    nextLine.StartsWith("Stderr: ")) {
+				if (nextLine.StartsWith("ExitCode: ") ||
+					nextLine.StartsWith("MaxoncStdout: ") ||
+					nextLine.StartsWith("MaxoncStderr: ") ||
+					nextLine.StartsWith("Stdout: ") ||
+					nextLine.StartsWith("Stderr: ")) {
 					break;
 				}
 				contentLines.Add(nextLine);
@@ -103,12 +103,12 @@ public class FragmentTests {
 		var expectedStdout = "";
 		var expectedStderr = "";
 		var expectedArgs = "";
-		
+
 		// Read existing metadata (Args, ExitCode, etc.) regardless of update mode
 		// so we can preserve Args when updating IR
 		var remainingContent = fragmentFile.ReadToEnd();
 		var lines = remainingContent.Split('\n');
-		
+
 		for (var i = 0; i < lines.Length; i++) {
 			var line = lines[i].TrimEnd('\r');
 			if (line.StartsWith("ExitCode: ")) {
@@ -139,8 +139,8 @@ public class FragmentTests {
 			// The compiler writes IR to this file
 			var llFilename = Path.Combine(tempDir, "test.ll");
 
-		// Call maxon.exe to compile the source
-		var maxonPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "build", "bin", "maxon.exe"));
+			// Call maxon.exe to compile the source
+			var maxonPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "build", "bin", "maxon.exe"));
 			var maxon = new Process();
 			maxon.StartInfo.FileName = maxonPath;
 			var optimizeFlag = optimize ? " -O" : "";
@@ -155,63 +155,66 @@ public class FragmentTests {
 			var maxonStderr = maxon.StandardError.ReadToEnd();
 			maxon.WaitForExit();
 
-	var llSource = "N/A";
-	var processExitCode = -1;
-	var stdout = "";
-		var stderr = "";
+			var llSource = "N/A";
+			var processExitCode = -1;
+			var stdout = "";
+			var stderr = "";
 
-		// Check if compilation succeeded and .ll file was created
-		if (maxon.ExitCode == 0 && File.Exists(llFilename)) {
-			llSource = File.ReadAllText(llFilename).Trim();
-			
-			// Check the IR
-			if (expectedIR == "N/A") {
-				Assert.Fail("Test fragment has N/A for expected IR, but the code compiles successfully. Use create-test-fragment.ps1 to regenerate the expected IR.");
-			}
-			Assert.That(llSource, Is.EqualTo(expectedIR), "Generated LLVM IR does not match expected IR");				// maxon also generates an executable when --emit-llvm is used with -o
-				var exeFilename = Path.Combine(tempDir, "test.exe");
-			
-			// Run the executable if it was generated
-			if (File.Exists(exeFilename)) {
-				var process = new Process();
-				process.StartInfo.FileName = exeFilename;
-				process.StartInfo.Arguments = expectedArgs;
-				process.StartInfo.RedirectStandardInput = true;
-				process.StartInfo.RedirectStandardOutput = true;
-				process.StartInfo.RedirectStandardError = true;
-				process.StartInfo.UseShellExecute = false;
-				process.Start();
-				
-				// Read streams using background threads to avoid deadlock
-				string capturedStdout = "";
-				string capturedStderr = "";
-				var stdoutThread = new System.Threading.Thread(() => {
-					capturedStdout = process.StandardOutput.ReadToEnd();
-				});
-				var stderrThread = new System.Threading.Thread(() => {
-					capturedStderr = process.StandardError.ReadToEnd();
-				});
-				stdoutThread.Start();
-				stderrThread.Start();
-				
-				// Wait up to 100ms for the process to complete
-				if (process.WaitForExit(100)) {
-					processExitCode = process.ExitCode;
-					// Wait for stream reading to complete
-					stdoutThread.Join(100);
-					stderrThread.Join(100);
-					// Read captured output
-					stdout = capturedStdout.Replace("\r\n", "\n").TrimEnd();
-					stderr = capturedStderr.Replace("\r\n", "\n").TrimEnd();
-				} else {
-					// Process timed out
-					process.Kill();
-					processExitCode = -1;
+			// Check if compilation succeeded and .ll file was created
+			if (maxon.ExitCode == 0 && File.Exists(llFilename)) {
+				llSource = File.ReadAllText(llFilename).Trim();
+
+				// Check the IR
+				if (expectedIR == "N/A") {
+					Assert.Fail("Test fragment has N/A for expected IR, but the code compiles successfully. Use create-test-fragment.ps1 to regenerate the expected IR.");
 				}
-			}
-		}
+				Assert.That(llSource, Is.EqualTo(expectedIR), "Generated LLVM IR does not match expected IR");              // maxon also generates an executable when --emit-llvm is used with -o
+				var exeFilename = Path.Combine(tempDir, "test.exe");
 
-		if (expectedExitCode != -1) {
+				// Run the executable if it was generated
+				if (File.Exists(exeFilename)) {
+					var process = new Process();
+					process.StartInfo.FileName = exeFilename;
+					process.StartInfo.Arguments = expectedArgs;
+					process.StartInfo.RedirectStandardInput = true;
+					process.StartInfo.RedirectStandardOutput = true;
+					process.StartInfo.RedirectStandardError = true;
+					process.StartInfo.UseShellExecute = false;
+					process.Start();
+
+					// Read streams using background threads to avoid deadlock
+					string capturedStdout = "";
+					string capturedStderr = "";
+					var stdoutThread = new System.Threading.Thread(() => {
+						capturedStdout = process.StandardOutput.ReadToEnd();
+					});
+					var stderrThread = new System.Threading.Thread(() => {
+						capturedStderr = process.StandardError.ReadToEnd();
+					});
+					stdoutThread.Start();
+					stderrThread.Start();
+
+					// Wait up to 100ms for the process to complete
+					if (process.WaitForExit(100)) {
+						processExitCode = process.ExitCode;
+						// Wait for stream reading to complete
+						stdoutThread.Join(100);
+						stderrThread.Join(100);
+						// Read captured output
+						stdout = capturedStdout.Replace("\r\n", "\n").TrimEnd();
+						stderr = capturedStderr.Replace("\r\n", "\n").TrimEnd();
+					} else {
+						// Process timed out
+						process.Kill();
+						processExitCode = -1;
+					}
+				}
+			} else {
+				// Compilation failed - set exit code from compiler
+				processExitCode = maxon.ExitCode;
+			}
+
+			if (expectedExitCode != -1) {
 				Assert.That(processExitCode, Is.EqualTo(expectedExitCode));
 			}
 			// Only check stdout/stderr if they were explicitly specified in the test

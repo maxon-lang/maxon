@@ -11,28 +11,15 @@ end 'main'
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
-@_fltused = constant i32 39029
-
-define void @__chkstk() {
-entry:
-  ret void
-}
-
-define i32 @main() {
+define i32 @main() #0 {
 entry:
   %arr.malloc = call ptr @malloc(i64 40)
-  store double 0.000000e+00, ptr %arr.malloc, align 8
-  %arrayidx1 = getelementptr i8, ptr %arr.malloc, i64 8
-  store double 0.000000e+00, ptr %arrayidx1, align 8
-  %arrayidx2 = getelementptr i8, ptr %arr.malloc, i64 16
-  store double 0.000000e+00, ptr %arrayidx2, align 8
-  %arrayidx3 = getelementptr i8, ptr %arr.malloc, i64 24
-  store double 0.000000e+00, ptr %arrayidx3, align 8
-  %arrayidx4 = getelementptr i8, ptr %arr.malloc, i64 32
-  store double 0.000000e+00, ptr %arrayidx4, align 8
+  %0 = call ptr @memset(ptr %arr.malloc, i32 0, i64 40)
   store double 1.500000e+00, ptr %arr.malloc, align 8
-  store double 2.500000e+00, ptr %arrayidx1, align 8
-  store double 3.000000e+00, ptr %arrayidx2, align 8
+  %arrayidx2 = getelementptr inbounds nuw i8, ptr %arr.malloc, i64 8
+  store double 2.500000e+00, ptr %arrayidx2, align 8
+  %arrayidx4 = getelementptr inbounds nuw i8, ptr %arr.malloc, i64 16
+  store double 3.000000e+00, ptr %arrayidx4, align 8
   call void @free(ptr nonnull %arr.malloc)
   ret i32 7
 }
@@ -57,6 +44,8 @@ entry:
   ret void
 }
 
+declare ptr @memset(ptr, i32, i64)
+
 declare void @ExitProcess(i32)
 
 define void @_start() {
@@ -65,5 +54,7 @@ entry:
   call void @ExitProcess(i32 %0)
   unreachable
 }
+
+attributes #0 = { "no-builtin-memset" }
 ---
 ExitCode: 7

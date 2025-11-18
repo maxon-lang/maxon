@@ -15,6 +15,11 @@
 - **`/vscode-extension/`** - VS Code Extension (TypeScript, npm)
   - `extension.ts`, `syntaxes/maxon.tmLanguage.json`, `language-configuration.json`
 
+- **`/maxon-runtime/`** - Runtime Library
+  - `runtime.ll` - LLVM IR implementation of runtime functions (memset, etc.)
+  - `runtime.obj` - Compiled runtime library (auto-linked with all programs)
+  - Provides functions that LLVM intrinsics lower to (e.g., `llvm.memset` → `memset`)
+
 - **`/docs/`** - Documentation Generator
   - `DocGen.cs` converts Markdown to HTML and extracts test fragments
   - Code blocks with `ExitCode:` → `language-tests/doc-fragments/*.test`
@@ -93,8 +98,9 @@ ExitCode: N
 Use the top-level Makefile for all build and development tasks. Run from project root: `make <target>`
 
 ### Building
-- `make all` - Configure and build both compiler and LSP server (default target)
+- `make all` - Configure and build compiler, runtime library, and LSP server (default target)
 - `make configure` - Configure CMake build system
+- `make runtime` - Build Maxon runtime library (runtime.obj)
 - `make compiler` - Build only the Maxon compiler (`maxon.exe`)
 - `make lsp-server` - Build only the C++ LSP server
 - `make lsp` - Build both LSP server and VS Code extension
@@ -113,8 +119,24 @@ Use the top-level Makefile for all build and development tasks. Run from project
 - `make docs` - Generate HTML documentation and extract test fragments
 
 ### Cleanup
-- `make clean` - Remove all build artifacts (compiler, LSP, extension)
+- `make clean` - Remove all build artifacts (compiler, LSP, extension, runtime.obj)
 - `make help` - Display all available make targets
+
+## Runtime Library
+
+The Maxon runtime library (`maxon-runtime/runtime.obj`) provides essential functions that the compiler-generated code needs:
+
+- **`memset(ptr, int, int) -> ptr`** - Fill memory with a constant byte value
+  - Called when LLVM lowers `llvm.memset` intrinsics during optimization
+  - Avoids dependency on C runtime library
+  - Automatically linked with all Maxon programs
+
+**Adding runtime functions:**
+1. Add implementation to `maxon-runtime/runtime.ll` (LLVM IR)
+2. `make runtime` to rebuild runtime.obj
+3. Functions are automatically available to all Maxon programs
+
+The runtime library is found relative to the compiler executable and automatically linked during the final linking stage in `codegen.cpp`.
 
 ## General Guidelines
 - **Do not create new documents** unless specifically instructed

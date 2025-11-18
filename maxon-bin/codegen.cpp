@@ -17,6 +17,10 @@
 #include <stdexcept>
 #include <iostream>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 // Forward declare COFF driver function
 namespace lld {
 namespace coff {
@@ -84,37 +88,19 @@ CodeGenerator::CodeGenerator(const std::string& moduleName, bool debugInfo, bool
     if (generateDebugInfo) {
         initDebugInfo(moduleName);
     }
-    
-    // Add _fltused symbol for Windows floating-point support
-    // This is required when using floating-point operations on Windows
-    new llvm::GlobalVariable(
-        *module,
-        llvm::Type::getInt32Ty(context),
-        true,  // isConstant
-        llvm::GlobalValue::ExternalLinkage,
-        llvm::ConstantInt::get(context, llvm::APInt(32, 0x9875, false)),
-        "_fltused"
-    );
-    
-    // Add minimal __chkstk implementation for stack probing
-    // This is called by LLVM when allocating large stack arrays
-    llvm::FunctionType* chkstkType = llvm::FunctionType::get(
-        llvm::Type::getVoidTy(context),
-        {},
-        false
-    );
-    llvm::Function* chkstkFunc = llvm::Function::Create(
-        chkstkType,
-        llvm::Function::ExternalLinkage,
-        "__chkstk",
-        module.get()
-    );
-    llvm::BasicBlock* chkstkEntry = llvm::BasicBlock::Create(context, "entry", chkstkFunc);
-    llvm::IRBuilder<> tempBuilder(chkstkEntry);
-    tempBuilder.CreateRetVoid();  // Minimal implementation - just return
-    
-    // Don't initialize standard library here - it will be done on demand
-    // Don't initialize heap management here - it will be done on demand when arrays are allocated
+}
+
+llvm::Function* CodeGenerator::getOrDeclareMemset() {
+    llvm::Function* memsetFunc = module->getFunction("memset");
+    if (!memsetFunc) {
+        llvm::FunctionType* memsetType = llvm::FunctionType::get(
+            llvm::PointerType::get(context, 0),
+            {llvm::PointerType::get(context, 0), llvm::Type::getInt32Ty(context), llvm::Type::getInt64Ty(context)},
+            false
+        );
+        memsetFunc = llvm::Function::Create(memsetType, llvm::Function::ExternalLinkage, "memset", module.get());
+    }
+    return memsetFunc;
 }
 
 void CodeGenerator::initHeapManagement() {
@@ -231,6 +217,9 @@ void CodeGenerator::initStandardLibrary() {
         return;
     }
     
+    // Get memset function declaration once for use throughout this function
+    llvm::Function* memsetFunc = getOrDeclareMemset();
+    
     // Declare Windows API functions for direct I/O (no CRT dependency)
     // ptr GetStdHandle(i32)
     llvm::FunctionType* getStdHandleType = llvm::FunctionType::get(
@@ -285,9 +274,9 @@ void CodeGenerator::initStandardLibrary() {
     llvm::Value* temp = builder.CreateAlloca(tempType, nullptr, "temp");
     llvm::Value* bytesWritten = builder.CreateAlloca(llvm::Type::getInt32Ty(context), nullptr, "bytesWritten");
     
-    // Initialize buffers to zero
-    builder.CreateMemSet(buffer, llvm::ConstantInt::get(charType, 0), 12, llvm::MaybeAlign(1));
-    builder.CreateMemSet(temp, llvm::ConstantInt::get(charType, 0), 12, llvm::MaybeAlign(1));
+    // Initialize buffers to zero using runtime memset
+    builder.CreateCall(memsetFunc, {buffer, llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0), llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 12)});
+    builder.CreateCall(memsetFunc, {temp, llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0), llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 12)});
     
     // Check if value is zero
     llvm::BasicBlock* zeroCase = llvm::BasicBlock::Create(context, "zero_case", printFunc);
@@ -462,6 +451,9 @@ void CodeGenerator::initStandardLibrary() {
     // Return 0
     builder.CreateRet(llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)));
     
+    // Add attribute to prevent LLVM from converting memset calls to intrinsics
+    printFunc->addFnAttr("no-builtin-memset");
+    
     // Restore insert point
     if (savedBlock) {
         builder.SetInsertPoint(savedBlock);
@@ -492,8 +484,8 @@ void CodeGenerator::initStandardLibrary() {
     llvm::Value* floatBuffer = builder.CreateAlloca(floatBufferType, nullptr, "buffer");
     llvm::Value* floatBytesWritten = builder.CreateAlloca(llvm::Type::getInt32Ty(context), nullptr, "bytesWritten");
     
-    // Initialize buffer to zero
-    builder.CreateMemSet(floatBuffer, llvm::ConstantInt::get(charType, 0), 32, llvm::MaybeAlign(1));
+    // Initialize buffer to zero using runtime memset
+    builder.CreateCall(memsetFunc, {floatBuffer, llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0), llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 32)});
     
     // Default precision = 6
     int precision = 6;
@@ -563,7 +555,7 @@ void CodeGenerator::initStandardLibrary() {
     // Format integer part (similar to print(int))
     llvm::Type* floatTempType = llvm::ArrayType::get(charType, 20);
     llvm::Value* floatTemp = builder.CreateAlloca(floatTempType, nullptr, "float_temp");
-    builder.CreateMemSet(floatTemp, llvm::ConstantInt::get(charType, 0), 20, llvm::MaybeAlign(1));
+    builder.CreateCall(memsetFunc, {floatTemp, llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0), llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 20)});
     
     llvm::Value* floatTempIdx = builder.CreateAlloca(llvm::Type::getInt32Ty(context), nullptr, "float_temp_idx");
     builder.CreateStore(llvm::ConstantInt::get(context, llvm::APInt(32, 19, true)), floatTempIdx);
@@ -750,6 +742,9 @@ void CodeGenerator::initStandardLibrary() {
     
     // Return 0
     builder.CreateRet(llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)));
+    
+    // Add attribute to prevent LLVM from converting memset calls to intrinsics
+    printFloatFunc->addFnAttr("no-builtin-memset");
     
     // Restore insert point
     if (savedBlock) {
@@ -1335,9 +1330,12 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             emitLocation(varDecl->line, varDecl->column);
         }
         
-        llvm::Value* initVal = generateExpr(varDecl->initializer.get());
-        if (!initVal) {
-            throw std::runtime_error("Failed to generate variable initializer");
+        llvm::Value* initVal = nullptr;
+        if (varDecl->initializer) {
+            initVal = generateExpr(varDecl->initializer.get());
+            if (!initVal) {
+                throw std::runtime_error("Failed to generate variable initializer");
+            }
         }
         
         // Determine the type for the alloca
@@ -1404,17 +1402,34 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             builder.CreateStore(arraySizeVal, sizeAlloca);
             namedValues[varDecl->name + ".__length"] = sizeAlloca;
             
-            // Initialize array elements with the initializer value
+            // Always zero-initialize arrays using runtime memset
+            llvm::Function* memsetFunc = getOrDeclareMemset();
+            llvm::Value* zeroVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+            llvm::Value* memsetSizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), totalSize);
+            builder.CreateCall(memsetFunc, {arrayPtr, zeroVal, memsetSizeVal});
+            
+            // If there's a non-zero initializer, set all elements to that value
             if (initVal) {
-                for (int i = 0; i < varDecl->arraySize; i++) {
-                    llvm::Value* indexVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i);
-                    llvm::Value* elementPtr = builder.CreateGEP(
-                        elementType,
-                        arrayPtr,
-                        indexVal,
-                        "arrayidx"
-                    );
-                    builder.CreateStore(initVal, elementPtr);
+                // Check if initializer is non-zero
+                bool isNonZeroInit = true;
+                if (llvm::ConstantInt* constInt = llvm::dyn_cast<llvm::ConstantInt>(initVal)) {
+                    isNonZeroInit = !constInt->isZero();
+                } else if (llvm::ConstantFP* constFP = llvm::dyn_cast<llvm::ConstantFP>(initVal)) {
+                    isNonZeroInit = !constFP->isZero();
+                }
+                
+                if (isNonZeroInit) {
+                    // Non-zero initializer: loop through elements
+                    for (int i = 0; i < varDecl->arraySize; i++) {
+                        llvm::Value* indexVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i);
+                        llvm::Value* elementPtr = builder.CreateGEP(
+                            elementType,
+                            arrayPtr,
+                            indexVal,
+                            "arrayidx"
+                        );
+                        builder.CreateStore(initVal, elementPtr);
+                    }
                 }
             }
             
@@ -1454,16 +1469,30 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         } else if (!varDecl->type.empty()) {
             // Use explicit type annotation
             allocaType = getTypeFromString(context, varDecl->type);
-        } else {
+        } else if (initVal) {
             // Infer from initializer type
             allocaType = initVal->getType();
+        } else {
+            // No type annotation and no initializer - default to i32
+            allocaType = llvm::Type::getInt32Ty(context);
         }
         
         llvm::AllocaInst* alloca = createEntryBlockAlloca(function, varDecl->name, allocaType);
         
-        // Only store initializer if not an array (arrays are typically initialized element by element)
-        if (varDecl->arraySize == 0) {
+        // Store initializer value, or zero-initialize if no initializer provided
+        if (initVal) {
             builder.CreateStore(initVal, alloca);
+        } else {
+            // Zero-initialize
+            llvm::Value* zeroVal;
+            if (allocaType->isIntegerTy()) {
+                zeroVal = llvm::ConstantInt::get(allocaType, 0);
+            } else if (allocaType->isFloatingPointTy()) {
+                zeroVal = llvm::ConstantFP::get(allocaType, 0.0);
+            } else {
+                zeroVal = llvm::Constant::getNullValue(allocaType);
+            }
+            builder.CreateStore(zeroVal, alloca);
         }
         
         namedValues[varDecl->name] = alloca;
@@ -1500,9 +1529,12 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             emitLocation(letDecl->line, letDecl->column);
         }
         
-        llvm::Value* initVal = generateExpr(letDecl->initializer.get());
-        if (!initVal) {
-            throw std::runtime_error("Failed to generate let initializer");
+        llvm::Value* initVal = nullptr;
+        if (letDecl->initializer) {
+            initVal = generateExpr(letDecl->initializer.get());
+            if (!initVal) {
+                throw std::runtime_error("Failed to generate let initializer");
+            }
         }
         
         // Determine the type for the alloca
@@ -1569,17 +1601,34 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             builder.CreateStore(arraySizeVal, sizeAlloca);
             namedValues[letDecl->name + ".__length"] = sizeAlloca;
             
-            // Initialize array elements with the initializer value
+            // Always zero-initialize arrays using runtime memset
+            llvm::Function* memsetFunc = getOrDeclareMemset();
+            llvm::Value* zeroVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+            llvm::Value* memsetSizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), totalSize);
+            builder.CreateCall(memsetFunc, {arrayPtr, zeroVal, memsetSizeVal});
+            
+            // If there's a non-zero initializer, set all elements to that value
             if (initVal) {
-                for (int i = 0; i < letDecl->arraySize; i++) {
-                    llvm::Value* indexVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i);
-                    llvm::Value* elementPtr = builder.CreateGEP(
-                        elementType,
-                        arrayPtr,
-                        indexVal,
-                        "arrayidx"
-                    );
-                    builder.CreateStore(initVal, elementPtr);
+                // Check if initializer is non-zero
+                bool isNonZeroInit = true;
+                if (llvm::ConstantInt* constInt = llvm::dyn_cast<llvm::ConstantInt>(initVal)) {
+                    isNonZeroInit = !constInt->isZero();
+                } else if (llvm::ConstantFP* constFP = llvm::dyn_cast<llvm::ConstantFP>(initVal)) {
+                    isNonZeroInit = !constFP->isZero();
+                }
+                
+                if (isNonZeroInit) {
+                    // Non-zero initializer: loop through elements
+                    for (int i = 0; i < letDecl->arraySize; i++) {
+                        llvm::Value* indexVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i);
+                        llvm::Value* elementPtr = builder.CreateGEP(
+                            elementType,
+                            arrayPtr,
+                            indexVal,
+                            "arrayidx"
+                        );
+                        builder.CreateStore(initVal, elementPtr);
+                    }
                 }
             }
             
@@ -1617,16 +1666,30 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         } else if (!letDecl->type.empty()) {
             // Use explicit type annotation
             allocaType = getTypeFromString(context, letDecl->type);
-        } else {
+        } else if (initVal) {
             // Infer from initializer
             allocaType = initVal->getType();
+        } else {
+            // No type annotation and no initializer - default to i32
+            allocaType = llvm::Type::getInt32Ty(context);
         }
         
         llvm::AllocaInst* alloca = createEntryBlockAlloca(function, letDecl->name, allocaType);
         
-        // Only store initializer if not an array
-        if (letDecl->arraySize == 0) {
+        // Store initializer value, or zero-initialize if no initializer provided
+        if (initVal) {
             builder.CreateStore(initVal, alloca);
+        } else {
+            // Zero-initialize
+            llvm::Value* zeroVal;
+            if (allocaType->isIntegerTy()) {
+                zeroVal = llvm::ConstantInt::get(allocaType, 0);
+            } else if (allocaType->isFloatingPointTy()) {
+                zeroVal = llvm::ConstantFP::get(allocaType, 0.0);
+            } else {
+                zeroVal = llvm::Constant::getNullValue(allocaType);
+            }
+            builder.CreateStore(zeroVal, alloca);
         }
         namedValues[letDecl->name] = alloca;
         variableTypes[letDecl->name] = letDecl->type;
@@ -2083,6 +2146,22 @@ void CodeGenerator::generateFunction(FunctionAST* func, const std::string& names
         debugScopeStack.pop_back();
     }
     
+    // Check if this function calls memset and add no-builtin attribute if needed
+    llvm::Function* memsetFunc = module->getFunction("memset");
+    if (memsetFunc) {
+        for (auto& bb : *function) {
+            for (auto& inst : bb) {
+                if (auto* callInst = llvm::dyn_cast<llvm::CallInst>(&inst)) {
+                    if (callInst->getCalledFunction() == memsetFunc) {
+                        function->addFnAttr("no-builtin-memset");
+                        goto done_checking;  // Break out of nested loops
+                    }
+                }
+            }
+        }
+    }
+done_checking:
+    
     // Verify function
     if (llvm::verifyFunction(*function, &llvm::errs())) {
         throw std::runtime_error("Function verification failed for: " + func->name);
@@ -2488,8 +2567,39 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
     std::string outArg = "/OUT:" + exeFile;
     lldArgs.push_back(outArg.c_str());
     
-    // Input object file
+    // Input object file (program)
     lldArgs.push_back(tempObjFile.c_str());
+    
+    // Add Maxon runtime library
+    // Try to find runtime.obj relative to the executable
+    std::string execPath;
+    #ifdef _WIN32
+    char buffer[MAX_PATH];
+    GetModuleFileNameA(NULL, buffer, MAX_PATH);
+    execPath = buffer;
+    #endif
+    size_t lastSlash = execPath.find_last_of("\\/");
+    std::string execDir = (lastSlash != std::string::npos) ? execPath.substr(0, lastSlash) : ".";
+    std::string runtimeObj = execDir + "/../../maxon-runtime/runtime.obj";
+    
+    // Check if runtime.obj exists
+    if (llvm::sys::fs::exists(runtimeObj)) {
+        lldArgs.push_back(runtimeObj.c_str());
+        if (verbose) {
+            std::cout << "Linking with Maxon runtime library: " << runtimeObj << std::endl;
+        }
+    } else {
+        // Try current directory
+        runtimeObj = "maxon-runtime/runtime.obj";
+        if (llvm::sys::fs::exists(runtimeObj)) {
+            lldArgs.push_back(runtimeObj.c_str());
+            if (verbose) {
+                std::cout << "Linking with Maxon runtime library: " << runtimeObj << std::endl;
+            }
+        } else if (verbose) {
+            std::cout << "Warning: Maxon runtime library not found, assuming memset is provided by code" << std::endl;
+        }
+    }
     
     // Explicitly link required Windows libraries
     lldArgs.push_back("kernel32.lib");

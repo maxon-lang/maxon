@@ -61,3 +61,6 @@ this aint right var buffer [12]char = 0
 7. **SIMD support:** Vector operations for performance
 8. **Array slicing:** Sub-array references without copying
 
+https://llvm.org/docs/Frontend/PerformanceTips.html
+
+- platform specific optimization for runtime.ll

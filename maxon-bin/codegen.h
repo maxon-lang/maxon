@@ -63,6 +63,9 @@ private:
     void initStandardLibrary();
     void initHeapManagement();
     
+    // Runtime library helpers
+    llvm::Function* getOrDeclareMemset();
+    
     // Minimal CRT entry point
     void createMinimalEntryPoint();
     
