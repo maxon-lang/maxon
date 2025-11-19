@@ -60,7 +60,6 @@ lsp: lsp-server extension-install
 
 # Build the C++ LSP server (depends on compiler sources)
 lsp-server: compiler
-	@powershell -Command "if (Test-Path '$(LSP_SERVER_BIN)') { Remove-Item '$(LSP_SERVER_BACKUP)' -ErrorAction SilentlyContinue; Rename-Item '$(LSP_SERVER_BIN)' '$(LSP_SERVER_BACKUP)' -ErrorAction SilentlyContinue }"
 	cmake --build $(BUILD_DIR) --target maxon-lsp-server
 
 # Build the VS Code extension (install + compile)
