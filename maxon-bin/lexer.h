@@ -9,6 +9,7 @@ enum class TokenType {
     FUNCTION,
     EXTERN,     // extern keyword for external declarations
     NAMESPACE,  // namespace keyword
+    STRUCT,     // struct keyword
     VAR,
     LET,        // let keyword (immutable variables)
     WHILE,
@@ -65,7 +66,10 @@ enum class TokenType {
     RPAREN,     // )
     LBRACKET,   // [
     RBRACKET,   // ]
+    LBRACE,     // {
+    RBRACE,     // }
     COMMA,      // ,
+    COLON,      // :
     DOT,        // . (member access / namespace resolution)
     
     // Special

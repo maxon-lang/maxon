@@ -31,7 +31,8 @@ bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
 }
 
 // Helper function to convert Maxon type string to LLVM type
-static llvm::Type* getTypeFromString(llvm::LLVMContext& context, const std::string& typeStr) {
+static llvm::Type* getTypeFromString(llvm::LLVMContext& context, const std::string& typeStr,
+                                     const std::map<std::string, llvm::StructType*>* structTypes = nullptr) {
     if (typeStr == "int") {
         return llvm::Type::getInt32Ty(context);
     } else if (typeStr == "float") {
@@ -56,9 +57,12 @@ static llvm::Type* getTypeFromString(llvm::LLVMContext& context, const std::stri
         std::string elementTypeStr = typeStr.substr(closeBracket + 1);
         
         int arraySize = std::stoi(sizeStr);
-        llvm::Type* elementType = getTypeFromString(context, elementTypeStr);
+        llvm::Type* elementType = getTypeFromString(context, elementTypeStr, structTypes);
         
         return llvm::ArrayType::get(elementType, arraySize);
+    } else if (structTypes && structTypes->find(typeStr) != structTypes->end()) {
+        // Struct type
+        return structTypes->at(typeStr);
     } else {
         throw std::runtime_error("Unknown type: " + typeStr);
     }
@@ -66,13 +70,18 @@ static llvm::Type* getTypeFromString(llvm::LLVMContext& context, const std::stri
 
 // Convert a type to the form used for function parameters
 // Arrays are passed as pointers
-static llvm::Type* getParamTypeFromString(llvm::LLVMContext& context, const std::string& typeStr) {
+// Structs are passed as pointers (by reference)
+static llvm::Type* getParamTypeFromString(llvm::LLVMContext& context, const std::string& typeStr,
+                                          const std::map<std::string, llvm::StructType*>* structTypes = nullptr) {
     if (typeStr[0] == '[') {
         // Array parameter - pass as pointer (opaque pointer for arrays)
         return llvm::PointerType::get(context, 0);
+    } else if (structTypes && structTypes->find(typeStr) != structTypes->end()) {
+        // Struct parameter - pass as pointer (by reference)
+        return llvm::PointerType::get(context, 0);
     } else {
         // Regular parameter type
-        return getTypeFromString(context, typeStr);
+        return getTypeFromString(context, typeStr, structTypes);
     }
 }
 
@@ -1190,9 +1199,89 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         return builder.CreateLoad(varType, alloca, varExpr->name);
     }
     
+    if (dynamic_cast<StructInitExprAST*>(expr)) {
+        // Struct literals should only appear as initializers in variable declarations
+        throw std::runtime_error("Struct literal can only be used as an initializer in variable declarations");
+    }
+    
     if (auto* memberAccessExpr = dynamic_cast<MemberAccessExprAST*>(expr)) {
-        // Currently only support array.length
-        if (memberAccessExpr->memberName == "length") {
+        std::string varType;
+        llvm::Value* objectPtr = nullptr;
+        
+        // Handle both simple variable access and complex expression access
+        if (memberAccessExpr->object) {
+            // Complex expression (e.g., arr[0].field)
+            // First evaluate the expression to get the object
+            llvm::Value* objectValue = generateExpr(memberAccessExpr->object.get());
+            
+            // For array indexing, objectValue is already a loaded value
+            // We need to determine the type from the expression
+            // For now, we need to track the type through the expression evaluation
+            // This is a limitation - we need type information from semantic analysis
+            
+            // Try to determine if it's a struct type from array subscript
+            if (auto* arrayIndexExpr = dynamic_cast<ArrayIndexExprAST*>(memberAccessExpr->object.get())) {
+                // Get the array variable type
+                std::string arrayType = variableTypes[arrayIndexExpr->arrayName];
+                // Extract element type (e.g., "[5]Point" -> "Point")
+                if (arrayType.size() > 2 && arrayType[0] == '[') {
+                    size_t closeBracket = arrayType.find(']');
+                    if (closeBracket != std::string::npos && closeBracket + 1 < arrayType.size()) {
+                        varType = arrayType.substr(closeBracket + 1);
+                    }
+                }
+                
+                // For array element access, objectValue is a pointer to the element
+                objectPtr = objectValue;
+            }
+        } else {
+            // Simple variable access (e.g., obj.field)
+            varType = variableTypes[memberAccessExpr->objectName];
+            llvm::AllocaInst* structAlloca = namedValues[memberAccessExpr->objectName];
+            if (!structAlloca) {
+                throw std::runtime_error("Unknown variable: " + memberAccessExpr->objectName);
+            }
+            
+            llvm::Type* allocatedType = structAlloca->getAllocatedType();
+            
+            if (allocatedType->isPointerTy()) {
+                // This is a parameter - load the pointer first
+                objectPtr = builder.CreateLoad(allocatedType, structAlloca, "struct.ptr");
+            } else {
+                // This is a local variable - use directly
+                objectPtr = structAlloca;
+            }
+        }
+        
+        // Check if this is struct member access
+        if (structTypes.find(varType) != structTypes.end()) {
+            // This is a struct member access
+            llvm::StructType* structType = structTypes[varType];
+            
+            // Find field index
+            const auto& fields = structFields[varType];
+            int fieldIndex = -1;
+            for (size_t i = 0; i < fields.size(); i++) {
+                if (fields[i].first == memberAccessExpr->memberName) {
+                    fieldIndex = static_cast<int>(i);
+                    break;
+                }
+            }
+            
+            if (fieldIndex < 0) {
+                throw std::runtime_error("Unknown field '" + memberAccessExpr->memberName + "' in struct '" + varType + "'");
+            }
+            
+            // Get pointer to field using GEP
+            llvm::Value* fieldPtr = builder.CreateStructGEP(structType, objectPtr, fieldIndex, memberAccessExpr->memberName);
+            
+            // Load and return the field value
+            llvm::Type* fieldType = structType->getElementType(fieldIndex);
+            return builder.CreateLoad(fieldType, fieldPtr, memberAccessExpr->memberName + ".val");
+        }
+        
+        // Currently only support array.length for simple variables
+        if (memberAccessExpr->memberName == "length" && !memberAccessExpr->object) {
             // Check for the hidden __length variable
             std::string lengthVar = memberAccessExpr->objectName + ".__length";
             llvm::AllocaInst* lengthAlloca = namedValues[lengthVar];
@@ -1236,20 +1325,21 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         
         llvm::Type* allocatedType = alloca->getAllocatedType();
         
+        // Determine element type and whether it's a struct
+        std::string elementTypeStr = "int"; // default
+        std::string varType = variableTypes[arrayIndexExpr->arrayName];
+        if (varType.size() > 2 && varType[0] == '[') {
+            size_t closeBracket = varType.find(']');
+            if (closeBracket != std::string::npos && closeBracket + 1 < varType.size()) {
+                elementTypeStr = varType.substr(closeBracket + 1);
+            }
+        }
+        llvm::Type* elementType = getTypeFromString(context, elementTypeStr, &structTypes);
+        bool isStructElement = structTypes.find(elementTypeStr) != structTypes.end();
+        
         // Check if this is an array or a pointer (array parameter)
         if (allocatedType->isPointerTy()) {
             // This is a pointer to an array (parameter case)
-            // Determine the element type from the tracked variable type
-            std::string varType = variableTypes[arrayIndexExpr->arrayName];
-            std::string elementTypeStr = "int"; // default
-            if (varType.size() > 2 && varType[0] == '[') {
-                size_t closeBracket = varType.find(']');
-                if (closeBracket != std::string::npos && closeBracket + 1 < varType.size()) {
-                    elementTypeStr = varType.substr(closeBracket + 1);
-                }
-            }
-            llvm::Type* elementType = getTypeFromString(context, elementTypeStr);
-            
             // First load the pointer, then use GEP with the index
             llvm::Value* arrayPtr = builder.CreateLoad(allocatedType, alloca, "arrayptr");
             llvm::Value* elementPtr = builder.CreateInBoundsGEP(
@@ -1258,8 +1348,13 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
                 indexVal,
                 "arrayidx"
             );
-            // Load the element
-            return builder.CreateLoad(elementType, elementPtr, "arrayelem");
+            
+            // For struct elements, return pointer; for primitives, load the value
+            if (isStructElement) {
+                return elementPtr;
+            } else {
+                return builder.CreateLoad(elementType, elementPtr, "arrayelem");
+            }
         } else if (allocatedType->isArrayTy()) {
             // This is a local array variable
             // Get element pointer: GEP array, 0, index
@@ -1271,10 +1366,14 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
                 "arrayidx"
             );
             
-            // Load the element
-            llvm::ArrayType* arrayType = llvm::cast<llvm::ArrayType>(allocatedType);
-            llvm::Type* elementType = arrayType->getElementType();
-            return builder.CreateLoad(elementType, elementPtr, "arrayelem");
+            // For struct elements, return pointer; for primitives, load the value
+            if (isStructElement) {
+                return elementPtr;
+            } else {
+                llvm::ArrayType* arrayType = llvm::cast<llvm::ArrayType>(allocatedType);
+                llvm::Type* elementType = arrayType->getElementType();
+                return builder.CreateLoad(elementType, elementPtr, "arrayelem");
+            }
         } else {
             throw std::runtime_error("Variable is not an array: " + arrayIndexExpr->arrayName);
         }
@@ -1488,6 +1587,25 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
             if (!argVal) {
                 throw std::runtime_error("Failed to generate function argument");
             }
+            
+            // Check if this is a struct parameter that should be passed by reference
+            // If the parameter type is a pointer and the argument is a struct variable,
+            // we need to pass the alloca (pointer) instead of the loaded value
+            if (paramType->isPointerTy()) {
+                if (auto* varExpr = dynamic_cast<VariableExprAST*>(arg.get())) {
+                    llvm::AllocaInst* alloca = namedValues[varExpr->name];
+                    if (alloca) {
+                        llvm::Type* allocatedType = alloca->getAllocatedType();
+                        // If it's a struct type, pass the pointer instead of the loaded value
+                        if (allocatedType->isStructTy()) {
+                            argsV.push_back(alloca);
+                            argIdx++;
+                            continue;
+                        }
+                    }
+                }
+            }
+            
             argsV.push_back(argVal);
             argIdx++;
         }
@@ -1517,7 +1635,7 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
                 // [size]type form - zero-initialized
                 arraySize = arrayLiteral->size;
                 elementTypeName = arrayLiteral->elementType;
-                elementType = getTypeFromString(context, elementTypeName);
+                elementType = getTypeFromString(context, elementTypeName, &structTypes);
             } else {
                 // [val1, val2, ...] form - value-initialized
                 arraySize = arrayLiteral->values.size();
@@ -1641,7 +1759,49 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             return;
         }
         
-        // Non-array variable
+        // Check if initializer is a struct initialization
+        if (auto* structInitExpr = dynamic_cast<StructInitExprAST*>(varDecl->initializer.get())) {
+            // Get struct type
+            llvm::StructType* structType = structTypes[structInitExpr->structName];
+            if (!structType) {
+                throw std::runtime_error("Unknown struct type: " + structInitExpr->structName);
+            }
+            
+            // Create alloca for the struct
+            llvm::AllocaInst* structAlloca = createEntryBlockAlloca(function, varDecl->name, structType);
+            namedValues[varDecl->name] = structAlloca;
+            variableTypes[varDecl->name] = structInitExpr->structName;
+            
+            // Initialize each field
+            const auto& fields = structFields[structInitExpr->structName];
+            for (const auto& initField : structInitExpr->fields) {
+                // Find field index
+                int fieldIndex = -1;
+                for (size_t j = 0; j < fields.size(); j++) {
+                    if (fields[j].first == initField.name) {
+                        fieldIndex = static_cast<int>(j);
+                        break;
+                    }
+                }
+                
+                if (fieldIndex < 0) {
+                    throw std::runtime_error("Unknown field '" + initField.name + "' in struct '" + structInitExpr->structName + "'");
+                }
+                
+                // Generate value for this field
+                llvm::Value* fieldValue = generateExpr(initField.value.get());
+                
+                // Get pointer to field using GEP
+                llvm::Value* fieldPtr = builder.CreateStructGEP(structType, structAlloca, fieldIndex, initField.name);
+                
+                // Store the value
+                builder.CreateStore(fieldValue, fieldPtr);
+            }
+            
+            return;
+        }
+        
+        // Non-array, non-struct variable
         llvm::Value* initVal = nullptr;
         if (varDecl->initializer) {
             initVal = generateExpr(varDecl->initializer.get());
@@ -1654,7 +1814,7 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         llvm::Type* allocaType;
         if (!varDecl->type.empty()) {
             // Use explicit type annotation
-            allocaType = getTypeFromString(context, varDecl->type);
+            allocaType = getTypeFromString(context, varDecl->type, &structTypes);
         } else if (initVal) {
             // Infer from initializer type
             allocaType = initVal->getType();
@@ -1727,7 +1887,7 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
                 // [size]type form - zero-initialized
                 arraySize = arrayLiteral->size;
                 elementTypeName = arrayLiteral->elementType;
-                elementType = getTypeFromString(context, elementTypeName);
+                elementType = getTypeFromString(context, elementTypeName, &structTypes);
             } else {
                 // [val1, val2, ...] form - value-initialized
                 arraySize = arrayLiteral->values.size();
@@ -1864,7 +2024,7 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         llvm::Type* allocaType;
         if (!letDecl->type.empty()) {
             // Use explicit type annotation
-            allocaType = getTypeFromString(context, letDecl->type);
+            allocaType = getTypeFromString(context, letDecl->type, &structTypes);
         } else if (initVal) {
             // Infer from initializer
             allocaType = initVal->getType();
@@ -1950,17 +2110,13 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             throw std::runtime_error("Failed to generate array index");
         }
         
-        llvm::Value* val = generateExpr(arrayAssign->value.get());
-        if (!val) {
-            throw std::runtime_error("Failed to generate array assignment value");
-        }
-        
         llvm::AllocaInst* alloca = namedValues[arrayAssign->arrayName];
         if (!alloca) {
             throw std::runtime_error("Unknown array name: " + arrayAssign->arrayName);
         }
         
         llvm::Type* allocatedType = alloca->getAllocatedType();
+        llvm::Value* elementPtr = nullptr;
         
         // Check if this is an array or a pointer (array parameter)
         if (allocatedType->isPointerTy()) {
@@ -1974,31 +2130,162 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
                     elementTypeStr = varType.substr(closeBracket + 1);
                 }
             }
-            llvm::Type* elementType = getTypeFromString(context, elementTypeStr);
+            llvm::Type* elementType = getTypeFromString(context, elementTypeStr, &structTypes);
             
             // First load the pointer, then use GEP with the index
             llvm::Value* arrayPtr = builder.CreateLoad(allocatedType, alloca, "arrayptr");
-            llvm::Value* elementPtr = builder.CreateInBoundsGEP(
+            elementPtr = builder.CreateInBoundsGEP(
                 elementType,
                 arrayPtr,
                 indexVal,
                 "arrayidx"
             );
-            builder.CreateStore(val, elementPtr);
         } else if (allocatedType->isArrayTy()) {
             // This is a local array variable
             // Get element pointer: GEP array, 0, index
             llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-            llvm::Value* elementPtr = builder.CreateInBoundsGEP(
+            elementPtr = builder.CreateInBoundsGEP(
                 allocatedType,
                 alloca,
                 {zero, indexVal},
                 "arrayidx"
             );
-            builder.CreateStore(val, elementPtr);
         } else {
             throw std::runtime_error("Variable is not an array: " + arrayAssign->arrayName);
         }
+        
+        // Check if assigning a struct literal
+        if (auto* structInit = dynamic_cast<StructInitExprAST*>(arrayAssign->value.get())) {
+            // Get the struct type
+            llvm::StructType* structType = structTypes[structInit->structName];
+            if (!structType) {
+                throw std::runtime_error("Unknown struct type: " + structInit->structName);
+            }
+            
+            // Initialize fields in the array element
+            for (size_t i = 0; i < structInit->fields.size(); i++) {
+                const auto& field = structInit->fields[i];
+                
+                // Find field index
+                const auto& fieldList = structFields[structInit->structName];
+                int fieldIndex = -1;
+                for (size_t j = 0; j < fieldList.size(); j++) {
+                    if (fieldList[j].first == field.name) {
+                        fieldIndex = static_cast<int>(j);
+                        break;
+                    }
+                }
+                
+                if (fieldIndex < 0) {
+                    throw std::runtime_error("Unknown field '" + field.name + "' in struct '" + structInit->structName + "'");
+                }
+                
+                // Get pointer to field
+                llvm::Value* fieldPtr = builder.CreateStructGEP(
+                    structType,
+                    elementPtr,
+                    fieldIndex,
+                    field.name
+                );
+                
+                // Generate and store field value
+                llvm::Value* fieldVal = generateExpr(field.value.get());
+                builder.CreateStore(fieldVal, fieldPtr);
+            }
+        } else {
+            // Normal value assignment
+            llvm::Value* val = generateExpr(arrayAssign->value.get());
+            if (!val) {
+                throw std::runtime_error("Failed to generate array assignment value");
+            }
+            builder.CreateStore(val, elementPtr);
+        }
+        
+        return;
+    }
+    
+    if (auto* arrayMemberAssign = dynamic_cast<ArrayMemberAssignStmtAST*>(stmt)) {
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(arrayMemberAssign->line, arrayMemberAssign->column);
+        }
+        
+        llvm::Value* indexVal = generateExpr(arrayMemberAssign->index.get());
+        if (!indexVal) {
+            throw std::runtime_error("Failed to generate array index");
+        }
+        
+        llvm::AllocaInst* alloca = namedValues[arrayMemberAssign->arrayName];
+        if (!alloca) {
+            throw std::runtime_error("Unknown array name: " + arrayMemberAssign->arrayName);
+        }
+        
+        llvm::Type* allocatedType = alloca->getAllocatedType();
+        
+        // Determine element type (must be struct)
+        std::string varType = variableTypes[arrayMemberAssign->arrayName];
+        std::string elementTypeStr;
+        if (varType.size() > 2 && varType[0] == '[') {
+            size_t closeBracket = varType.find(']');
+            if (closeBracket != std::string::npos && closeBracket + 1 < varType.size()) {
+                elementTypeStr = varType.substr(closeBracket + 1);
+            }
+        }
+        
+        llvm::StructType* structType = structTypes[elementTypeStr];
+        if (!structType) {
+            throw std::runtime_error("Element type is not a struct: " + elementTypeStr);
+        }
+        
+        // Get pointer to array element
+        llvm::Value* elementPtr;
+        if (allocatedType->isPointerTy()) {
+            // Array parameter case
+            llvm::Value* arrayPtr = builder.CreateLoad(allocatedType, alloca, "arrayptr");
+            elementPtr = builder.CreateInBoundsGEP(
+                structType,
+                arrayPtr,
+                indexVal,
+                "arrayidx"
+            );
+        } else if (allocatedType->isArrayTy()) {
+            // Local array case
+            llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+            elementPtr = builder.CreateInBoundsGEP(
+                allocatedType,
+                alloca,
+                {zero, indexVal},
+                "arrayidx"
+            );
+        } else {
+            throw std::runtime_error("Variable is not an array: " + arrayMemberAssign->arrayName);
+        }
+        
+        // Find field index
+        const auto& fields = structFields[elementTypeStr];
+        int fieldIndex = -1;
+        for (size_t i = 0; i < fields.size(); i++) {
+            if (fields[i].first == arrayMemberAssign->memberName) {
+                fieldIndex = static_cast<int>(i);
+                break;
+            }
+        }
+        
+        if (fieldIndex < 0) {
+            throw std::runtime_error("Unknown field '" + arrayMemberAssign->memberName + "' in struct '" + elementTypeStr + "'");
+        }
+        
+        // Get pointer to field
+        llvm::Value* fieldPtr = builder.CreateStructGEP(
+            structType,
+            elementPtr,
+            fieldIndex,
+            arrayMemberAssign->memberName
+        );
+        
+        // Generate and store value
+        llvm::Value* val = generateExpr(arrayMemberAssign->value.get());
+        builder.CreateStore(val, fieldPtr);
         
         return;
     }
@@ -2268,7 +2555,7 @@ void CodeGenerator::generateFunction(FunctionAST* func, const std::string& names
     // Allocate stack space for parameters
     auto argIter = function->args().begin();
     for (size_t paramIdx = 0; paramIdx < func->parameters.size(); paramIdx++) {
-        llvm::Type* paramType = getParamTypeFromString(context, func->parameters[paramIdx].type);
+        llvm::Type* paramType = getParamTypeFromString(context, func->parameters[paramIdx].type, &structTypes);
         llvm::AllocaInst* alloca = createEntryBlockAlloca(function, func->parameters[paramIdx].name, paramType);
         
         // Emit debug location for parameter (before store)
@@ -2481,15 +2768,38 @@ void CodeGenerator::createMinimalEntryPoint() {
 }
 
 void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
-    // First pass: Create all function declarations (including namespace functions)
+    // First pass: Create all struct types
+    for (const auto& structDef : program->structs) {
+        // Create opaque struct type
+        llvm::StructType* structType = llvm::StructType::create(context, structDef->name);
+        structTypes[structDef->name] = structType;
+        
+        // Store field information for later use
+        std::vector<std::pair<std::string, std::string>> fields;
+        for (const auto& field : structDef->fields) {
+            fields.push_back({field.name, field.type});
+        }
+        structFields[structDef->name] = fields;
+    }
+    
+    // Second pass: Set struct body (now that all struct types are declared)
+    for (const auto& structDef : program->structs) {
+        std::vector<llvm::Type*> fieldTypes;
+        for (const auto& field : structDef->fields) {
+            fieldTypes.push_back(getTypeFromString(context, field.type, &structTypes));
+        }
+        structTypes[structDef->name]->setBody(fieldTypes);
+    }
+    
+    // Third pass: Create all function declarations (including namespace functions)
     for (auto& func : program->functions) {
         // Get return type
-        llvm::Type* returnType = getTypeFromString(context, func->returnType);
+        llvm::Type* returnType = getTypeFromString(context, func->returnType, &structTypes);
         
         // Create parameter types (including hidden length parameters for arrays)
         std::vector<llvm::Type*> paramTypes;
         for (const auto& param : func->parameters) {
-            paramTypes.push_back(getParamTypeFromString(context, param.type));
+            paramTypes.push_back(getParamTypeFromString(context, param.type, &structTypes));
             // Add hidden length parameter for array parameters
             if (isArrayParam(param.type)) {
                 paramTypes.push_back(llvm::Type::getInt32Ty(context));
@@ -2511,12 +2821,12 @@ void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
     for (auto& ns : program->namespaces) {
         for (auto& func : ns->functions) {
             // Get return type
-            llvm::Type* returnType = getTypeFromString(context, func->returnType);
+            llvm::Type* returnType = getTypeFromString(context, func->returnType, &structTypes);
             
             // Create parameter types (including hidden length parameters for arrays)
             std::vector<llvm::Type*> paramTypes;
             for (const auto& param : func->parameters) {
-                paramTypes.push_back(getParamTypeFromString(context, param.type));
+                paramTypes.push_back(getParamTypeFromString(context, param.type, &structTypes));
                 // Add hidden length parameter for array parameters
                 if (isArrayParam(param.type)) {
                     paramTypes.push_back(llvm::Type::getInt32Ty(context));

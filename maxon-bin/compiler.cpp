@@ -64,6 +64,9 @@ std::string compileProgram(const CompilationOptions& options, llvm::raw_ostream*
             for (auto& ns : prog->namespaces) {
                 mergedProgram->namespaces.push_back(std::move(ns));
             }
+            for (auto& structDef : prog->structs) {
+                mergedProgram->structs.push_back(std::move(structDef));
+            }
         }
 
         programs.clear();
@@ -150,6 +153,9 @@ std::string compileProgram(const CompilationOptions& options, llvm::raw_ostream*
         }
         for (auto& ns : prog->namespaces) {
             mergedProgram->namespaces.push_back(std::move(ns));
+        }
+        for (auto& structDef : prog->structs) {
+            mergedProgram->structs.push_back(std::move(structDef));
         }
     }
 

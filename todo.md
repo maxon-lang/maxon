@@ -1,3 +1,6 @@
+*You* Aren't Going To Write It
+You *Are* Going To Read It
+
 - if x is a float "x as int" should not work, use trunc() or round() or something
 - tests are going to need both optimized and unoptimized IR
 - remove sin and cos intrinsics
@@ -32,19 +35,16 @@ vscode extention
 		- unused parameters
 		
 	- highlight block identifiers differently than strings
-
+	- enable "go to definition" for variables
+	- enable intellisense variable type
+	- refactoring: if you rename a struct or function it should also change the end block identifier
 
 - automatically convert int to float parameter
-- enable "go to definition" for variables
-- enable intellisense variable type
 
 pointers should only be used for FFI
 
 add tests for compiler will all kinds of malformed inputs
 
-this aint right var buffer [12]char = 0
-
-- must use fully qualified name if there is a collision
 
 @embedFile from zig
 \\ for multiline strings (zig)
@@ -66,4 +66,7 @@ https://llvm.org/docs/Frontend/PerformanceTips.html
 - platform specific optimization for runtime.ll
 - warnings as errors in release mode
 - LLVM autovectorization
+- multiple verbosity levels during compiling
+- compiler error codes
+- merge doc-fragments into fragments
 

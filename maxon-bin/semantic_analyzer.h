@@ -47,6 +47,28 @@ struct FunctionInfo {
         : name(n), returnType(ret), parameters(std::move(params)) {}
 };
 
+// Struct field information
+struct StructFieldInfo {
+    std::string name;
+    std::string type;
+    int line;
+    int column;
+    
+    StructFieldInfo(const std::string& n, const std::string& t, int l = 0, int c = 0)
+        : name(n), type(t), line(l), column(c) {}
+};
+
+// Struct information
+struct StructInfo {
+    std::string name;
+    std::vector<StructFieldInfo> fields;
+    int line;
+    int column;
+    
+    StructInfo(const std::string& n, std::vector<StructFieldInfo> f, int l = 0, int c = 0)
+        : name(n), fields(std::move(f)), line(l), column(c) {}
+};
+
 class SemanticAnalyzer {
 public:
     SemanticAnalyzer();
@@ -70,6 +92,7 @@ public:
 private:
     std::vector<SemanticError> errors;
     std::map<std::string, FunctionInfo> functions;
+    std::map<std::string, StructInfo> structs; // Struct definitions
     std::map<std::string, VariableInfo> variables; // Current scope variables
     std::vector<std::map<std::string, VariableInfo>> scopeStack; // Stack of variable scopes
     int loopDepth; // Track nested loop depth

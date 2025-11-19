@@ -155,11 +155,11 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
             int size = std::stoi(sizeToken.value);
             expect(TokenType::RBRACKET, "Expected ']' after array size");
             
-            // Now expect the element type
+            // Now expect the element type (primitive or struct)
             if (!check(TokenType::INT) && !check(TokenType::FLOAT) && 
                 !check(TokenType::PTR) && !check(TokenType::CHAR) && 
-                !check(TokenType::STRING_TYPE)) {
-                throw std::runtime_error("Expected array element type (int, float, ptr, char, or string) at line " + 
+                !check(TokenType::STRING_TYPE) && !check(TokenType::IDENTIFIER)) {
+                throw std::runtime_error("Expected array element type (int, float, ptr, char, string, or struct name) at line " + 
                                        std::to_string(currentToken().line));
             }
             std::string elementType = currentToken().value;
@@ -238,6 +238,11 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         int column = currentToken().column;
         advance();
         
+        // Check for struct initialization (e.g., Planet{x: 1.0, y: 2.0})
+        if (check(TokenType::LBRACE)) {
+            return parseStructInit(name);
+        }
+        
         // Check for member access (e.g., array.length)
         // This must come before namespace qualification check
         if (check(TokenType::DOT) && !check(TokenType::LPAREN, 1)) {
@@ -307,7 +312,17 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
             advance(); // consume '['
             auto index = parseExpression();
             expect(TokenType::RBRACKET, "Expected ']' after array index");
-            return std::make_unique<ArrayIndexExprAST>(name, std::move(index), line, column);
+            auto arrayExpr = std::make_unique<ArrayIndexExprAST>(name, std::move(index), line, column);
+            
+            // Check for member access on array element (e.g., arr[0].field)
+            if (check(TokenType::DOT)) {
+                advance(); // consume '.'
+                Token member = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
+                // Create a member access expression with the array index as the object
+                return std::make_unique<MemberAccessExprAST>(std::move(arrayExpr), member.value, line, column);
+            }
+            
+            return arrayExpr;
         }
         
         // Just a variable reference
@@ -679,11 +694,22 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
             name = name + "::" + memberName.value;
         }
         
-        // Check for array indexing assignment: array[index] = value
+        // Check for array indexing assignment: array[index] = value or array[index].member = value
         if (check(TokenType::LBRACKET)) {
             advance(); // consume '['
             auto index = parseExpression();
             expect(TokenType::RBRACKET, "Expected ']' after array index");
+            
+            // Check for member access on array element
+            if (check(TokenType::DOT)) {
+                advance(); // consume '.'
+                Token memberName = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
+                expect(TokenType::EQUALS, "Expected '=' in member assignment");
+                auto value = parseExpression();
+                // Create ArrayMemberAssignStmtAST for arr[i].field = value
+                return std::make_unique<ArrayMemberAssignStmtAST>(name, std::move(index), memberName.value, std::move(value), idLine, idColumn);
+            }
+            
             expect(TokenType::EQUALS, "Expected '=' in array assignment");
             auto value = parseExpression();
             return std::make_unique<ArrayAssignStmtAST>(name, std::move(index), std::move(value), idLine, idColumn);
@@ -778,8 +804,12 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                 } else if (check(TokenType::STRING_TYPE)) {
                     elementType = "string";
                     advance();
+                } else if (check(TokenType::IDENTIFIER)) {
+                    // Struct type
+                    elementType = currentToken().value;
+                    advance();
                 } else {
-                    throw std::runtime_error("Expected array element type (int, float, ptr, char, or string)\n  Location: line " + 
+                    throw std::runtime_error("Expected array element type (int, float, ptr, char, string, or struct name)\n  Location: line " + 
                                            std::to_string(currentToken().line) + ", column " + 
                                            std::to_string(currentToken().column));
                 }
@@ -787,7 +817,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                 // All array parameters are unsized
                 paramType = "[]" + elementType;
             } else {
-                // Regular scalar type
+                // Regular scalar type (or struct)
                 if (check(TokenType::INT)) {
                     paramType = "int";
                     advance();
@@ -803,8 +833,12 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                 } else if (check(TokenType::STRING_TYPE)) {
                     paramType = "string";
                     advance();
+                } else if (check(TokenType::IDENTIFIER)) {
+                    // Struct type
+                    paramType = currentToken().value;
+                    advance();
                 } else {
-                    throw std::runtime_error("Expected parameter type (int, float, ptr, char, string, or [size]type)\n  Location: line " + 
+                    throw std::runtime_error("Expected parameter type (int, float, ptr, char, string, struct name, or [size]type)\n  Location: line " + 
                                            std::to_string(currentToken().line) + ", column " + 
                                            std::to_string(currentToken().column));
                 }
@@ -818,7 +852,8 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
     
     // Parse return type (optional - defaults to void)
     std::string returnType = "void";
-    if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE)) {
+    if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || 
+        check(TokenType::CHAR) || check(TokenType::STRING_TYPE) || check(TokenType::IDENTIFIER)) {
         returnType = currentToken().value;
         advance();
     }
@@ -894,26 +929,109 @@ std::unique_ptr<NamespaceAST> Parser::parseNamespace() {
     return std::make_unique<NamespaceAST>(name.value, std::move(functions), namespaceToken.line, namespaceToken.column);
 }
 
+std::unique_ptr<StructDefAST> Parser::parseStruct() {
+    Token structToken = expect(TokenType::STRUCT, "Expected 'struct'");
+    int line = structToken.line;
+    int column = structToken.column;
+    
+    Token nameToken = expect(TokenType::IDENTIFIER, "Expected struct name after 'struct'");
+    std::string structName = nameToken.value;
+    
+    std::vector<StructField> fields;
+    
+    // Parse fields until we hit 'end'
+    while (!check(TokenType::END) && !check(TokenType::END_OF_FILE)) {
+        Token fieldNameToken = expect(TokenType::IDENTIFIER, "Expected field name");
+        std::string fieldName = fieldNameToken.value;
+        
+        // Parse type (can be INT, FLOAT, PTR, CHAR, STRING_TYPE, or IDENTIFIER for struct types)
+        std::string fieldType;
+        if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || 
+            check(TokenType::CHAR) || check(TokenType::STRING_TYPE) || check(TokenType::IDENTIFIER)) {
+            fieldType = currentToken().value;
+            advance();
+        } else {
+            throw std::runtime_error("Expected type after field name in struct field at line " + 
+                                   std::to_string(currentToken().line) + ", column " + 
+                                   std::to_string(currentToken().column));
+        }
+        
+        fields.push_back(StructField(fieldName, fieldType, fieldNameToken.line, fieldNameToken.column));
+    }
+    
+    expect(TokenType::END, "Expected 'end' to close struct");
+    
+    // Require matching block identifier
+    Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match struct name)");
+    if (blockIdToken.value != structName) {
+        throw std::runtime_error("Block identifier mismatch in struct definition" +
+                               std::string("\n  Expected: '") + structName + "'" +
+                               std::string("\n  Got: '") + blockIdToken.value + "'" +
+                               std::string("\n  at line ") + std::to_string(blockIdToken.line) +
+                               std::string(", column ") + std::to_string(blockIdToken.column));
+    }
+    
+    return std::make_unique<StructDefAST>(structName, std::move(fields), line, column);
+}
+
+std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string& structName) {
+    int line = currentToken().line;
+    int column = currentToken().column;
+    
+    expect(TokenType::LBRACE, "Expected '{' for struct initialization");
+    
+    std::vector<StructInitField> fields;
+    
+    // Parse field initializers: fieldName: value
+    while (!check(TokenType::RBRACE) && !check(TokenType::END_OF_FILE)) {
+        Token fieldNameToken = expect(TokenType::IDENTIFIER, "Expected field name");
+        std::string fieldName = fieldNameToken.value;
+        
+        expect(TokenType::COLON, "Expected ':' after field name");
+        
+        auto value = parseExpression();
+        
+        fields.push_back(StructInitField(fieldName, std::move(value), 
+                                        fieldNameToken.line, fieldNameToken.column));
+        
+        // Check for comma (more fields) or closing brace
+        if (check(TokenType::COMMA)) {
+            advance();
+        } else if (!check(TokenType::RBRACE)) {
+            throw std::runtime_error("Expected ',' or '}' in struct initialization at line " + 
+                                   std::to_string(currentToken().line) + ", column " + 
+                                   std::to_string(currentToken().column));
+        }
+    }
+    
+    expect(TokenType::RBRACE, "Expected '}' to close struct initialization");
+    
+    return std::make_unique<StructInitExprAST>(structName, std::move(fields), line, column);
+}
+
 std::unique_ptr<ProgramAST> Parser::parse() {
     std::vector<std::unique_ptr<FunctionAST>> functions;
     std::vector<std::unique_ptr<NamespaceAST>> namespaces;
+    std::vector<std::unique_ptr<StructDefAST>> structs;
     
     while (!check(TokenType::END_OF_FILE)) {
         if (check(TokenType::END_OF_FILE)) {
             break;
         }
         
-        // Check for namespace, extern, or function keyword
+        // Check for namespace, struct, extern, or function keyword
         if (check(TokenType::NAMESPACE)) {
             namespaces.push_back(parseNamespace());
+        } else if (check(TokenType::STRUCT)) {
+            structs.push_back(parseStruct());
         } else if (check(TokenType::EXTERN) || check(TokenType::FUNCTION)) {
             functions.push_back(parseFunction());
         } else {
-            throw std::runtime_error("Expected 'namespace', 'function', or 'extern function' at top level\n  Location: line " + 
+            throw std::runtime_error("Expected 'namespace', 'struct', 'function', or 'extern function' at top level\n  Location: line " + 
                                    std::to_string(currentToken().line) + ", column " + 
                                    std::to_string(currentToken().column));
         }
     }
     
-    return std::make_unique<ProgramAST>(std::move(functions), std::move(namespaces));
+    return std::make_unique<ProgramAST>(std::move(functions), std::move(namespaces), std::move(structs));
 }

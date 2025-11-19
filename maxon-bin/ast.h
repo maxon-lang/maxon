@@ -164,11 +164,17 @@ public:
 // Member access expression (e.g., "array.length")
 class MemberAccessExprAST : public ExprAST {
 public:
-    std::string objectName;
+    std::unique_ptr<ExprAST> object;  // Can be any expression (variable, array subscript, etc.)
+    std::string objectName;           // Keep for backward compatibility (when object is simple variable)
     std::string memberName;
     
+    // Constructor for simple variable.member access
     MemberAccessExprAST(const std::string& obj, const std::string& member, int l = 0, int c = 0)
-        : ExprAST(l, c), objectName(obj), memberName(member) {}
+        : ExprAST(l, c), object(nullptr), objectName(obj), memberName(member) {}
+    
+    // Constructor for complex expression.member access (e.g., arr[0].member)
+    MemberAccessExprAST(std::unique_ptr<ExprAST> obj, const std::string& member, int l = 0, int c = 0)
+        : ExprAST(l, c), object(std::move(obj)), objectName(""), memberName(member) {}
 };
 
 // Statement nodes
@@ -222,6 +228,18 @@ public:
     
     ArrayAssignStmtAST(const std::string& name, std::unique_ptr<ExprAST> idx, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
         : StmtAST(l, c), arrayName(name), index(std::move(idx)), value(std::move(val)) {}
+};
+
+// Array element member assignment statement (e.g., "arr[0].field = 42")
+class ArrayMemberAssignStmtAST : public StmtAST {
+public:
+    std::string arrayName;
+    std::unique_ptr<ExprAST> index;
+    std::string memberName;
+    std::unique_ptr<ExprAST> value;
+    
+    ArrayMemberAssignStmtAST(const std::string& name, std::unique_ptr<ExprAST> idx, const std::string& member, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
+        : StmtAST(l, c), arrayName(name), index(std::move(idx)), memberName(member), value(std::move(val)) {}
 };
 
 // Pointer dereference assignment statement (e.g., "*ptr = 42")
@@ -292,6 +310,50 @@ public:
         : StmtAST(l, c), expression(std::move(expr)) {}
 };
 
+// Struct field definition
+struct StructField {
+    std::string name;
+    std::string type;
+    int line;
+    int column;
+    
+    StructField(const std::string& n, const std::string& t, int l = 0, int c = 0)
+        : name(n), type(t), line(l), column(c) {}
+};
+
+// Struct initialization field (name: value pair)
+struct StructInitField {
+    std::string name;
+    std::unique_ptr<ExprAST> value;
+    int line;
+    int column;
+    
+    StructInitField(const std::string& n, std::unique_ptr<ExprAST> v, int l = 0, int c = 0)
+        : name(n), value(std::move(v)), line(l), column(c) {}
+};
+
+// Struct definition
+class StructDefAST : public ASTNode {
+public:
+    std::string name;
+    std::vector<StructField> fields;
+    int line;
+    int column;
+    
+    StructDefAST(const std::string& n, std::vector<StructField> f, int l = 0, int c = 0)
+        : name(n), fields(std::move(f)), line(l), column(c) {}
+};
+
+// Struct initialization expression (struct literal)
+class StructInitExprAST : public ExprAST {
+public:
+    std::string structName;
+    std::vector<StructInitField> fields;
+    
+    StructInitExprAST(const std::string& name, std::vector<StructInitField> f, int l = 0, int c = 0)
+        : ExprAST(l, c), structName(name), fields(std::move(f)) {}
+};
+
 // Function parameter
 struct FunctionParameter {
     std::string name;
@@ -345,12 +407,14 @@ class ProgramAST : public ASTNode {
 public:
     std::vector<std::unique_ptr<FunctionAST>> functions;
     std::vector<std::unique_ptr<NamespaceAST>> namespaces;
+    std::vector<std::unique_ptr<StructDefAST>> structs;
     
     ProgramAST() = default;
     
     ProgramAST(std::vector<std::unique_ptr<FunctionAST>> funcs,
-               std::vector<std::unique_ptr<NamespaceAST>> ns = {})
-        : functions(std::move(funcs)), namespaces(std::move(ns)) {}
+               std::vector<std::unique_ptr<NamespaceAST>> ns = {},
+               std::vector<std::unique_ptr<StructDefAST>> st = {})
+        : functions(std::move(funcs)), namespaces(std::move(ns)), structs(std::move(st)) {}
 };
 
 #endif // AST_H

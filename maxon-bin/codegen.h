@@ -17,6 +17,8 @@ private:
     std::unique_ptr<llvm::Module> module;
     std::map<std::string, llvm::AllocaInst*> namedValues;
     std::map<std::string, std::string> variableTypes; // Track Maxon type strings for variables
+    std::map<std::string, llvm::StructType*> structTypes; // LLVM struct types
+    std::map<std::string, std::vector<std::pair<std::string, std::string>>> structFields; // Struct field names and types
     
     // Debug information
     bool generateDebugInfo;

@@ -39,6 +39,8 @@ private:
     
     std::unique_ptr<FunctionAST> parseFunction();
     std::unique_ptr<NamespaceAST> parseNamespace();
+    std::unique_ptr<StructDefAST> parseStruct();
+    std::unique_ptr<StructInitExprAST> parseStructInit(const std::string& structName);
     
 public:
     Parser(const std::vector<Token>& toks);

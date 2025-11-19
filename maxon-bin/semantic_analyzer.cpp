@@ -11,6 +11,7 @@ void SemanticAnalyzer::registerExternalFunction(const std::string& name, const s
 std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
     errors.clear();
     // Note: Don't clear functions here - we want to keep registered external functions
+    structs.clear();
     variables.clear();
     scopeStack.clear();
     loopDepth = 0;
@@ -29,7 +30,31 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
             {FunctionParameter("value", "float", 0, 0)}));
     }
     
-    // First pass: collect all function declarations (including namespace functions)
+    // First pass: collect all struct definitions
+    for (const auto& structDef : program->structs) {
+        if (structs.find(structDef->name) != structs.end()) {
+            addError("Struct '" + structDef->name + "' is already defined",
+                    structDef->line, structDef->column);
+        } else {
+            // Convert StructField to StructFieldInfo
+            std::vector<StructFieldInfo> fields;
+            std::set<std::string> fieldNames;
+            for (const auto& field : structDef->fields) {
+                // Check for duplicate field names
+                if (fieldNames.find(field.name) != fieldNames.end()) {
+                    addError("Duplicate field '" + field.name + "' in struct '" + structDef->name + "'",
+                            field.line, field.column);
+                } else {
+                    fieldNames.insert(field.name);
+                    fields.push_back(StructFieldInfo(field.name, field.type, field.line, field.column));
+                }
+            }
+            structs.emplace(structDef->name, StructInfo(structDef->name, std::move(fields), 
+                                                        structDef->line, structDef->column));
+        }
+    }
+    
+    // Second pass: collect all function declarations (including namespace functions)
     for (const auto& func : program->functions) {
         // Build the qualified name if the function has a namespace
         std::string functionKey = func->namespaceName.empty() ? func->name : func->namespaceName + "::" + func->name;
@@ -232,6 +257,66 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
             
             // Analyze value expression
             analyzeExpression(arrayAssign->value.get());
+        }
+        
+    } else if (auto arrayMemberAssign = dynamic_cast<ArrayMemberAssignStmtAST*>(stmt)) {
+        // Check if array variable exists
+        auto varInfo = lookupVariable(arrayMemberAssign->arrayName);
+        if (!varInfo.has_value()) {
+            addError("Undefined variable: '" + arrayMemberAssign->arrayName + "'" +
+                    std::string("\n  Note: Variable must be declared with 'var' or 'let' before use"),
+                    stmt->line, stmt->column);
+        } else {
+            // Mark array as used
+            markVariableAsUsed(arrayMemberAssign->arrayName);
+            
+            // Check if variable is immutable
+            if (varInfo->isImmutable) {
+                addError("Cannot assign to read-only array element member '" + arrayMemberAssign->arrayName + "'" +
+                        std::string("\n  Array declared with 'let' at line ") + std::to_string(varInfo->line) +
+                        ", column " + std::to_string(varInfo->column),
+                        stmt->line, stmt->column);
+            }
+            
+            // Analyze index expression (should be int)
+            std::string indexType = analyzeExpression(arrayMemberAssign->index.get());
+            if (indexType != "int") {
+                addError("Array index must be an integer" +
+                        std::string("\n  Found type: ") + indexType,
+                        stmt->line, stmt->column);
+            }
+            
+            // Get element type and verify it's a struct
+            std::string arrayType = varInfo->type;
+            if (arrayType.size() > 2 && arrayType[0] == '[') {
+                size_t closeBracket = arrayType.find(']');
+                if (closeBracket != std::string::npos && closeBracket + 1 < arrayType.size()) {
+                    std::string elementType = arrayType.substr(closeBracket + 1);
+                    
+                    if (structs.find(elementType) != structs.end()) {
+                        // Verify member exists
+                        const auto& structInfo = structs.at(elementType);
+                        bool memberFound = false;
+                        for (const auto& field : structInfo.fields) {
+                            if (field.name == arrayMemberAssign->memberName) {
+                                memberFound = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!memberFound) {
+                            addError("Struct '" + elementType + "' has no field named '" + arrayMemberAssign->memberName + "'",
+                                    stmt->line, stmt->column);
+                        }
+                    } else {
+                        addError("Cannot access member '" + arrayMemberAssign->memberName + "' on non-struct array element type '" + elementType + "'",
+                                stmt->line, stmt->column);
+                    }
+                }
+            }
+            
+            // Analyze value expression
+            analyzeExpression(arrayMemberAssign->value.get());
         }
         
     } else if (auto derefAssign = dynamic_cast<DerefAssignStmtAST*>(stmt)) {
@@ -712,16 +797,41 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         return "int";
     
     } else if (auto memberAccessExpr = dynamic_cast<MemberAccessExprAST*>(expr)) {
-        // Check if object variable exists
-        auto varInfo = lookupVariable(memberAccessExpr->objectName);
-        if (!varInfo.has_value()) {
-            addError("Undefined variable: '" + memberAccessExpr->objectName + "'",
+        std::string objectType;
+        
+        // Handle both simple variable access and complex expression access
+        if (memberAccessExpr->object) {
+            // Complex expression (e.g., arr[0].field)
+            objectType = analyzeExpression(memberAccessExpr->object.get());
+        } else {
+            // Simple variable access (e.g., obj.field)
+            auto varInfo = lookupVariable(memberAccessExpr->objectName);
+            if (!varInfo.has_value()) {
+                addError("Undefined variable: '" + memberAccessExpr->objectName + "'",
+                        expr->line, expr->column);
+                return "error";
+            }
+            
+            // Mark object variable as used when its member is accessed
+            markVariableAsUsed(memberAccessExpr->objectName);
+            objectType = varInfo->type;
+        }
+        
+        // Check if it's a struct type
+        if (structs.find(objectType) != structs.end()) {
+            const auto& structInfo = structs.at(objectType);
+            
+            // Find the field
+            for (const auto& field : structInfo.fields) {
+                if (field.name == memberAccessExpr->memberName) {
+                    return field.type;
+                }
+            }
+            
+            addError("Struct '" + objectType + "' has no field named '" + memberAccessExpr->memberName + "'",
                     expr->line, expr->column);
             return "error";
         }
-        
-        // Mark object variable as used when its member is accessed
-        markVariableAsUsed(memberAccessExpr->objectName);
         
         // Currently only support .length on arrays
         if (memberAccessExpr->memberName == "length") {
@@ -732,6 +842,54 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
                     expr->line, expr->column);
             return "error";
         }
+    } else if (auto structInitExpr = dynamic_cast<StructInitExprAST*>(expr)) {
+        // Check if struct type exists
+        if (structs.find(structInitExpr->structName) == structs.end()) {
+            addError("Undefined struct type: '" + structInitExpr->structName + "'",
+                    expr->line, expr->column);
+            return "error";
+        }
+        
+        const auto& structInfo = structs.at(structInitExpr->structName);
+        
+        // Check that all required fields are initialized
+        std::set<std::string> initializedFields;
+        for (const auto& initField : structInitExpr->fields) {
+            initializedFields.insert(initField.name);
+            
+            // Verify field exists in struct
+            bool fieldFound = false;
+            std::string expectedType;
+            for (const auto& structField : structInfo.fields) {
+                if (structField.name == initField.name) {
+                    fieldFound = true;
+                    expectedType = structField.type;
+                    break;
+                }
+            }
+            
+            if (!fieldFound) {
+                addError("Struct '" + structInitExpr->structName + "' has no field named '" + initField.name + "'",
+                        initField.line, initField.column);
+            } else {
+                // Type check the initializer value
+                std::string valueType = analyzeExpression(initField.value.get());
+                if (!typesMatch(expectedType, valueType)) {
+                    addError("Type mismatch for field '" + initField.name + "': expected '" + expectedType + "', got '" + valueType + "'",
+                            initField.line, initField.column);
+                }
+            }
+        }
+        
+        // Check for missing fields
+        for (const auto& structField : structInfo.fields) {
+            if (initializedFields.find(structField.name) == initializedFields.end()) {
+                addError("Missing initialization for field '" + structField.name + "' in struct '" + structInitExpr->structName + "'",
+                        expr->line, expr->column);
+            }
+        }
+        
+        return structInitExpr->structName;
     }
     
     return "error";

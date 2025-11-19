@@ -7,6 +7,7 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"function", TokenType::FUNCTION},
     {"extern", TokenType::EXTERN},
     {"namespace", TokenType::NAMESPACE},
+    {"struct", TokenType::STRUCT},
     {"var", TokenType::VAR},
     {"let", TokenType::LET},
     {"while", TokenType::WHILE},
@@ -371,8 +372,20 @@ std::vector<Token> Lexer::tokenize() {
             tokens.push_back(Token(TokenType::RBRACKET, "]", startLine, startColumn));
             advance();
         }
+        else if (c == '{') {
+            tokens.push_back(Token(TokenType::LBRACE, "{", startLine, startColumn));
+            advance();
+        }
+        else if (c == '}') {
+            tokens.push_back(Token(TokenType::RBRACE, "}", startLine, startColumn));
+            advance();
+        }
         else if (c == ',') {
             tokens.push_back(Token(TokenType::COMMA, ",", startLine, startColumn));
+            advance();
+        }
+        else if (c == ':') {
+            tokens.push_back(Token(TokenType::COLON, ":", startLine, startColumn));
             advance();
         }
         else if (c == '.') {
@@ -398,9 +411,7 @@ std::vector<Token> Lexer::tokenize() {
             }
             
             std::string suggestion;
-            if (c == '{' || c == '}') {
-                suggestion = "\n  Note: Maxon uses 'end' keyword for block termination, not braces";
-            } else if (c == ';') {
+            if (c == ';') {
                 suggestion = "\n  Note: Maxon doesn't require semicolons at the end of statements";
             } else if (c == '[' || c == ']') {
                 suggestion = "\n  Note: Arrays are not yet supported in Maxon";
