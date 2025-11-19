@@ -167,9 +167,6 @@ int regenerateFragments() {
                         if (!args.empty()) {
                             outFile << "Args: " << args << "\n";
                         }
-                        if (!compileStdout.empty()) {
-                            outFile << "MaxoncStdout: ```\n" << compileStdout << "```\n";
-                        }
                         if (!compileError.empty()) {
                             size_t pos = 0;
                             while ((pos = compileError.find("temp-opt.exe.tmp.obj", pos)) != std::string::npos) {
@@ -332,11 +329,6 @@ int regenerateFragments() {
                     }
                     if (debugInstrCount > 0) {
                         testFile << "UnoptimizedInstructionCount: " << debugInstrCount << "\n";
-                    }
-                    if (!compileStdout.empty()) {
-                        testFile << "MaxoncStdout: ```\n" << compileStdout;
-                        if (compileStdout.back() != '\n') testFile << "\n";
-                        testFile << "```\n";
                     }
                     if (!stdout_output.empty()) {
                         testFile << "Stdout: ```\n" << stdout_output;

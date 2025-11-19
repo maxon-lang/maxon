@@ -47,6 +47,29 @@ int main(int argc, char* argv[]) {
         return runTestFragments(verbose);
     }
 
+    // Internal command used by parallel test runner
+    if (command == "test-fragments-subset") {
+        if (argc < 4) {
+            std::cerr << "Error: test-fragments-subset requires output file and test files" << std::endl;
+            return 1;
+        }
+        
+        std::string outputFile = argv[2];
+        bool verbose = false;
+        std::vector<std::string> testFiles;
+        
+        for (int i = 3; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--verbose" || arg == "-v") {
+                verbose = true;
+            } else {
+                testFiles.push_back(arg);
+            }
+        }
+        
+        return runTestFragmentsSubset(testFiles, outputFile, verbose);
+    }
+
     if (argc == 2 && command.length() >= 6 && command.substr(command.length() - 6) == ".maxon") {
         return compileAndRunTemporary(command);
     }

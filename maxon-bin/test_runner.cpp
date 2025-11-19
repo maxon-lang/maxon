@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <thread>
 
 #include <llvm/Support/raw_ostream.h>
 
@@ -34,7 +35,7 @@ struct TestResult {
     double durationSeconds;
 };
 
-void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResult& result) {
+void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResult& result, int threadId = 0) {
     auto testStartTime = std::chrono::high_resolution_clock::now();
     
     result.testName = testPath.stem().string();
@@ -130,9 +131,10 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
     };
     trim(expectedOptIR);
     trim(expectedDebugIR);
+    trim(expectedMaxoncStderr);
 
-    // Use simple fixed temp file names (sequential execution)
-    std::string tempSource = "temp_test_fragment.maxon";
+    // Use unique temp file names for parallel execution
+    std::string tempSource = "temp_test_fragment_" + std::to_string(threadId) + ".maxon";
     std::ofstream tempOut(tempSource);
     if (!tempOut) {
         auto testEndTime = std::chrono::high_resolution_clock::now();
@@ -145,9 +147,9 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
     tempOut << sourceCode;
     tempOut.close();
 
-    std::string tempOptLL = "temp-test-opt.ll";
-    std::string tempDebugLL = "temp-test-debug.ll";
-    std::string tempExe = "temp-test.exe";
+    std::string tempOptLL = "temp-test-opt-" + std::to_string(threadId) + ".ll";
+    std::string tempDebugLL = "temp-test-debug-" + std::to_string(threadId) + ".ll";
+    std::string tempExe = "temp-test-" + std::to_string(threadId) + ".exe";
 
     try {
         CompilationOptions optOpts;
@@ -159,6 +161,7 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
 
         std::string actualOptIR;
         std::string compileError;
+        std::string actualMaxoncStderr;
 
         try {
             std::string llvmErrStr;
@@ -170,13 +173,85 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
                 try {
                     compileProgram(optOpts, &llvmErrCapture);
                     std::cerr.rdbuf(oldCerr);
+                    actualMaxoncStderr = stderrCapture.str();
                 } catch (...) {
                     std::cerr.rdbuf(oldCerr);
+                    actualMaxoncStderr = stderrCapture.str();
                     throw;
                 }
-            } catch (...) {
+            } catch (const std::exception& e) {
                 llvmErrCapture.flush();
                 compileError = llvmErrStr;
+                
+                // Format error message like test_regenerate.cpp does
+                std::string exceptionMsg = e.what();
+                
+                // Combine LLVM errors and exception message
+                std::string combinedError = actualMaxoncStderr;  // semantic errors from stderr
+                if (!compileError.empty()) {
+                    // LLVM/linker errors
+                    if (!combinedError.empty()) {
+                        combinedError += "\n";
+                    }
+                    combinedError += compileError;
+                }
+                
+                // Normalize temp file references like test_regenerate does
+                size_t pos = 0;
+                std::string searchPattern = "temp-test-opt-" + std::to_string(threadId) + ".exe.tmp.obj";
+                while ((pos = combinedError.find(searchPattern, pos)) != std::string::npos) {
+                    combinedError.replace(pos, searchPattern.length(), "test.exe.tmp.obj");
+                    pos += 16;  // length of "test.exe.tmp.obj"
+                }
+                pos = 0;
+                searchPattern = "temp-test-debug-" + std::to_string(threadId) + ".exe.tmp.obj";
+                while ((pos = combinedError.find(searchPattern, pos)) != std::string::npos) {
+                    combinedError.replace(pos, searchPattern.length(), "test.exe.tmp.obj");
+                    pos += 16;
+                }
+                
+                // Add exception message if it's not already in the output
+                if (!exceptionMsg.empty() && combinedError.find(exceptionMsg) == std::string::npos) {
+                    bool isLinkError = (combinedError.find("lld-link:") != std::string::npos);
+                    if (isLinkError) {
+                        // Linking error - append exception message with single newline
+                        if (!combinedError.empty() && combinedError.back() != '\n') {
+                            combinedError += '\n';
+                        }
+                        combinedError += exceptionMsg;
+                    } else {
+                        // Other error - add exception at the end
+                        if (!combinedError.empty() && combinedError.back() != '\n') {
+                            combinedError += '\n';
+                        }
+                        combinedError += exceptionMsg;
+                    }
+                }
+                
+                // Format with header and footer like test_regenerate.cpp
+                bool isLinkingError = combinedError.find("lld-link:") != std::string::npos;
+                
+                if (isLinkingError) {
+                    // For linking errors, insert header before "LLD linking failed"
+                    size_t exMsgStart = combinedError.find("LLD linking failed");
+                    if (exMsgStart != std::string::npos) {
+                        combinedError.insert(exMsgStart, "=== Compilation Failed ===\n");
+                        if (!combinedError.empty() && combinedError.back() != '\n') {
+                            combinedError += '\n';
+                        }
+                        combinedError += "\nCompilation terminated due to errors.";
+                    }
+                } else if (combinedError.find("=== Compilation Failed ===") == std::string::npos) {
+                    // For other errors, add header at beginning
+                    std::string temp = "=== Compilation Failed ===\n" + combinedError;
+                    if (!temp.empty() && temp.back() != '\n') {
+                        temp += '\n';
+                    }
+                    temp += "\nCompilation terminated due to errors.";
+                    combinedError = temp;
+                }
+                
+                actualMaxoncStderr = combinedError;
                 throw;
             }
 
@@ -189,9 +264,20 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
                 trim(actualOptIR);
             }
         } catch (...) {
-            if (expectedOptIR != "N/A") {
+            if (expectedOptIR != "N/A" && expectedMaxoncStderr.empty()) {
                 result.passed = false;
                 result.failureReason = "Compilation failed unexpectedly";
+            }
+        }
+
+        // Verify MaxoncStderr if expected
+        if (!expectedMaxoncStderr.empty()) {
+            trim(actualMaxoncStderr);
+            if (actualMaxoncStderr != expectedMaxoncStderr) {
+                result.passed = false;
+                result.failureReason = "Compiler stderr mismatch";
+                result.failureExpected = expectedMaxoncStderr;
+                result.failureActual = actualMaxoncStderr;
             }
         }
 
@@ -267,8 +353,8 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
 #ifdef _WIN32
                 char tempPath[MAX_PATH];
                 GetTempPathA(MAX_PATH, tempPath);
-                std::string tempOutput = std::string(tempPath) + "maxon_test_output.tmp";
-                std::string tempStderrFile = std::string(tempPath) + "maxon_test_stderr.tmp";
+                std::string tempOutput = std::string(tempPath) + "maxon_test_output_" + std::to_string(threadId) + ".tmp";
+                std::string tempStderrFile = std::string(tempPath) + "maxon_test_stderr_" + std::to_string(threadId) + ".tmp";
 
                 std::string cmdLine = tempExe;
                 if (!args.empty()) {
@@ -337,11 +423,70 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
 
 } // namespace
 
+int runTestFragmentsSubset(const std::vector<std::string>& testFiles, 
+                           const std::string& outputFile, 
+                           bool verbose) {
+    try {
+        // Get a unique thread ID based on the output file name
+        size_t hashVal = std::hash<std::string>{}(outputFile);
+        int threadId = static_cast<int>(hashVal % 1000);
+
+        std::vector<TestResult> results(testFiles.size());
+        
+        // Run tests in this subset
+        for (size_t i = 0; i < testFiles.size(); ++i) {
+            runSingleTest(std::filesystem::path(testFiles[i]), verbose, results[i], threadId);
+        }
+
+        // Write results to output file
+        std::ofstream outFile(outputFile);
+        if (!outFile) {
+            std::cerr << "Error: Cannot write to " << outputFile << std::endl;
+            return 1;
+        }
+
+        // Helper to escape pipes in strings
+        auto escapePipes = [](const std::string& s) {
+            std::string result;
+            for (char c : s) {
+                if (c == '|') {
+                    result += "\\|";
+                } else if (c == '\\') {
+                    result += "\\\\";
+                } else if (c == '\n') {
+                    result += "\\n";
+                } else if (c == '\r') {
+                    result += "\\r";
+                } else {
+                    result += c;
+                }
+            }
+            return result;
+        };
+
+        for (const auto& result : results) {
+            outFile << (result.passed ? "PASS" : "FAIL") << "|"
+                    << escapePipes(result.testName) << "|"
+                    << result.durationSeconds << "|"
+                    << escapePipes(result.failureReason) << "|"
+                    << escapePipes(result.failureExpected) << "|"
+                    << escapePipes(result.failureActual) << "\n";
+        }
+        outFile.flush();
+        outFile.close();
+
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "Error in subset runner: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
 int runTestFragments(bool verbose) {
     try {
         auto startTime = std::chrono::high_resolution_clock::now();
 
-        std::cout << "Running test fragments" << (verbose ? " (verbose mode)" : "") << "..." << std::endl;
+        std::cout << "Running test fragments" << (verbose ? " (verbose mode)" : "") << " in parallel..." << std::endl;
 
         std::string fragmentsDir = "language-tests/fragments";
         if (!std::filesystem::exists(fragmentsDir)) {
@@ -358,27 +503,200 @@ int runTestFragments(bool verbose) {
         }
 
         int totalTests = testFiles.size();
+        if (totalTests == 0) {
+            std::cout << "No test files found." << std::endl;
+            return 0;
+        }
+
+        // Determine number of worker processes
+        // Use number of physical cores (hardware_concurrency / 2 for hyperthreaded CPUs)
+        unsigned int numWorkers = std::thread::hardware_concurrency();
+        if (numWorkers == 0) numWorkers = 4; // fallback
+        if (numWorkers > 8) numWorkers = numWorkers / 2; // use physical cores only
+        if (numWorkers > static_cast<unsigned int>(totalTests)) {
+            numWorkers = totalTests;
+        }
+
+        std::cout << "Using " << numWorkers << " parallel workers..." << std::endl;
+
+        // Split tests into groups
+        std::vector<std::vector<std::string>> testGroups(numWorkers);
+        for (size_t i = 0; i < testFiles.size(); ++i) {
+            testGroups[i % numWorkers].push_back(testFiles[i].string());
+        }
+
+        // Create output files for each worker
+        std::vector<std::string> outputFiles(numWorkers);
+        for (unsigned int i = 0; i < numWorkers; ++i) {
+            char tempPath[MAX_PATH];
+            GetTempPathA(MAX_PATH, tempPath);
+            outputFiles[i] = std::string(tempPath) + "maxon_test_results_" + std::to_string(i) + ".tmp";
+        }
+
+#ifdef _WIN32
+        // Launch child processes
+        std::vector<PROCESS_INFORMATION> processes(numWorkers);
+        std::vector<HANDLE> processHandles(numWorkers);
+
+        // Get current executable path
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+
+        for (unsigned int i = 0; i < numWorkers; ++i) {
+            if (testGroups[i].empty()) continue;
+
+            // Build command line for child process
+            // Format: maxon.exe test-fragments-subset <outputFile> <testFile1> <testFile2> ...
+            std::string cmdLine = std::string("\"") + exePath + "\" test-fragments-subset \"" + outputFiles[i] + "\"";
+            if (verbose) {
+                cmdLine += " --verbose";
+            }
+            for (const auto& testFile : testGroups[i]) {
+                cmdLine += " \"" + testFile + "\"";
+            }
+
+            STARTUPINFOA si = {};
+            si.cb = sizeof(si);
+            si.dwFlags = STARTF_USESTDHANDLES;
+            si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+            si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+            si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+
+            // CreateProcess requires non-const command line
+            std::vector<char> cmdLineBuffer(cmdLine.begin(), cmdLine.end());
+            cmdLineBuffer.push_back('\0');
+
+            if (!CreateProcessA(NULL, cmdLineBuffer.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &processes[i])) {
+                std::cerr << "Error: Failed to create worker process " << i << std::endl;
+                return 1;
+            }
+            processHandles[i] = processes[i].hProcess;
+        }
+
+        // Wait for all processes to complete
+        for (unsigned int i = 0; i < numWorkers; ++i) {
+            if (testGroups[i].empty()) continue;
+            DWORD exitCode = 0;
+            WaitForSingleObject(processHandles[i], INFINITE);
+            GetExitCodeProcess(processHandles[i], &exitCode);
+            if (exitCode != 0 && verbose) {
+                std::cerr << "Warning: Worker " << i << " exited with code " << exitCode << std::endl;
+            }
+            CloseHandle(processes[i].hProcess);
+            CloseHandle(processes[i].hThread);
+        }
+#endif
+
+        // Collect results from output files
         int passedTests = 0;
         int failedTests = 0;
-        std::vector<TestResult> results(totalTests);
+        std::vector<TestResult> allResults;
 
-        // Run tests sequentially
-        for (size_t i = 0; i < testFiles.size(); ++i) {
-            runSingleTest(testFiles[i], verbose, results[i]);
-
-            if (results[i].passed) {
-                passedTests++;
-                if (verbose) {
-                    std::cout << "  PASS: " << results[i].testName << " (" 
-                              << std::fixed << std::setprecision(2) << results[i].durationSeconds << "s)" << std::endl;
+        // Helper to unescape pipes in strings
+        auto unescapePipes = [](const std::string& s) {
+            std::string result;
+            for (size_t i = 0; i < s.length(); ++i) {
+                if (s[i] == '\\' && i + 1 < s.length()) {
+                    if (s[i + 1] == '|') {
+                        result += '|';
+                        ++i;
+                    } else if (s[i + 1] == '\\') {
+                        result += '\\';
+                        ++i;
+                    } else if (s[i + 1] == 'n') {
+                        result += '\n';
+                        ++i;
+                    } else if (s[i + 1] == 'r') {
+                        result += '\r';
+                        ++i;
+                    } else {
+                        result += s[i];
+                    }
+                } else {
+                    result += s[i];
                 }
-            } else {
-                failedTests++;
             }
+            return result;
+        };
+
+        // Helper to find next unescaped pipe
+        auto findNextPipe = [](const std::string& s, size_t start) -> size_t {
+            for (size_t i = start; i < s.length(); ++i) {
+                if (s[i] == '|') {
+                    // Check if it's escaped
+                    size_t backslashes = 0;
+                    size_t j = i;
+                    while (j > 0 && s[j - 1] == '\\') {
+                        ++backslashes;
+                        --j;
+                    }
+                    // If even number of backslashes (or zero), pipe is not escaped
+                    if (backslashes % 2 == 0) {
+                        return i;
+                    }
+                }
+            }
+            return std::string::npos;
+        };
+
+        for (unsigned int i = 0; i < numWorkers; ++i) {
+            std::ifstream inFile(outputFiles[i]);
+            if (!inFile) {
+                if (verbose && !testGroups[i].empty()) {
+                    std::cerr << "Warning: Could not read output file for worker " << i << ": " << outputFiles[i] << std::endl;
+                }
+                continue;
+            }
+
+            std::string line;
+            while (std::getline(inFile, line)) {
+                TestResult result;
+                
+                // Parse: PASS|testName|duration|failureReason|expected|actual
+                size_t pos1 = findNextPipe(line, 0);
+                if (pos1 == std::string::npos) continue;
+                
+                std::string status = line.substr(0, pos1);
+                result.passed = (status == "PASS");
+                
+                size_t pos2 = findNextPipe(line, pos1 + 1);
+                if (pos2 == std::string::npos) continue;
+                result.testName = unescapePipes(line.substr(pos1 + 1, pos2 - pos1 - 1));
+                
+                size_t pos3 = findNextPipe(line, pos2 + 1);
+                if (pos3 == std::string::npos) continue;
+                result.durationSeconds = std::stod(line.substr(pos2 + 1, pos3 - pos2 - 1));
+                
+                size_t pos4 = findNextPipe(line, pos3 + 1);
+                if (pos4 == std::string::npos) continue;
+                result.failureReason = unescapePipes(line.substr(pos3 + 1, pos4 - pos3 - 1));
+                
+                size_t pos5 = findNextPipe(line, pos4 + 1);
+                if (pos5 == std::string::npos) continue;
+                result.failureExpected = unescapePipes(line.substr(pos4 + 1, pos5 - pos4 - 1));
+                
+                result.failureActual = unescapePipes(line.substr(pos5 + 1));
+                
+                allResults.push_back(result);
+                
+                if (result.passed) {
+                    passedTests++;
+                    if (verbose) {
+                        std::cout << "  PASS: " << result.testName << " (" 
+                                  << std::fixed << std::setprecision(2) << result.durationSeconds << "s)" << std::endl;
+                    }
+                } else {
+                    failedTests++;
+                }
+            }
+            inFile.close();
+            
+            // Clean up temp file
+            std::filesystem::remove(outputFiles[i]);
         }
 
         // Print failures after all tests complete
-        for (const auto& result : results) {
+        for (const auto& result : allResults) {
             if (!result.passed) {
                 std::cerr << "  FAIL: " << result.testName << ": " << result.failureReason << " (" 
                           << std::fixed << std::setprecision(2) << result.durationSeconds << "s)" << std::endl;
