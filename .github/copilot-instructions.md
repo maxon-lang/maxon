@@ -33,7 +33,7 @@
 - **Language tests**: `language-tests/` (C# NUnit)
   - `fragments/`: Manual test fragments
   - `doc-fragments/`: Auto-generated from docs
-  - Format: Maxon code, `---`, LLVM IR (or N/A), `---`, ExitCode
+  - Format: Maxon code, `---`, Optimized LLVM IR, `---`, Unoptimized LLVM IR, `---`, Metadata
 - **LSP tests**: `lsp-server/tests/`
 - **Extension tests**: `vscode-extension/src/test/`
 
@@ -51,22 +51,31 @@
 ```
 
 The script:
-- Compiles with `-O` (or `--debug` for debug mode)
-- Extracts normalized LLVM IR
-- Captures exit code and stdout
-- Creates/updates the `.test` file
+- Compiles with `-O` for optimized IR
+- Compiles with `--debug` for unoptimized IR with debug info
+- Compiles with `--profile` to count dynamic instructions via runtime instrumentation
+- Extracts normalized LLVM IR for both versions
+- Captures exit code, stdout, and instruction counts
+- Creates/updates the `.test` file with dual-IR format
 - Can update existing `.test` files by parsing them and regenerating IR
 
-**Test Fragment Format:**
+**Test Fragment Format (Dual-IR):**
 ```
 Maxon source code
 ---
-Expected LLVM IR (or N/A for compilation errors)
+Optimized LLVM IR (or N/A for compilation errors)
+---
+Unoptimized LLVM IR with debug info (or N/A)
 ---
 ExitCode: N
+OptimizedInstructionCount: N
+UnoptimizedInstructionCount: N
 ```
 
-**Important:** Tests will fail if a fragment has `N/A` for IR but the code compiles successfully. Use the script to regenerate proper IR.
+**Important:** 
+- Tests will fail if a fragment has `N/A` for IR but the code compiles successfully
+- Use the script to regenerate proper IR after format changes
+- Instruction counts come from runtime instrumentation (`--profile` flag), not static analysis
 
 ## Common Tasks
 

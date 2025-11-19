@@ -82,11 +82,179 @@ static bool isArrayParam(const std::string& typeStr) {
     return typeStr.size() >= 2 && typeStr[0] == '[' && typeStr[1] == ']';
 }
 
-CodeGenerator::CodeGenerator(const std::string& moduleName, bool debugInfo, bool verbose)
+CodeGenerator::CodeGenerator(const std::string& moduleName, bool debugInfo, bool verbose, bool profile)
     : builder(context), module(std::make_unique<llvm::Module>(moduleName, context)),
-      generateDebugInfo(debugInfo), verbose(verbose), sourceFileName(moduleName) {
+      generateDebugInfo(debugInfo), verbose(verbose), enableProfiling(profile), sourceFileName(moduleName) {
     if (generateDebugInfo) {
         initDebugInfo(moduleName);
+    }
+    if (enableProfiling) {
+        initProfiling();
+    }
+}
+
+void CodeGenerator::initProfiling() {
+    // Create global counter for instruction count
+    bbCountGlobal = new llvm::GlobalVariable(
+        *module,
+        llvm::Type::getInt64Ty(context),
+        false,  // not constant
+        llvm::GlobalValue::InternalLinkage,
+        llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0),
+        "__maxon_instr_count"
+    );
+    
+    // Declare Windows API functions for output (no CRT dependency)
+    // ptr GetStdHandle(i32)
+    llvm::FunctionType* getStdHandleType = llvm::FunctionType::get(
+        llvm::PointerType::get(context, 0),
+        {llvm::Type::getInt32Ty(context)},
+        false
+    );
+    llvm::Function::Create(getStdHandleType, llvm::Function::ExternalLinkage, "GetStdHandle", module.get());
+    
+    // i32 WriteFile(ptr, ptr, i32, ptr, ptr)
+    llvm::FunctionType* writeFileType = llvm::FunctionType::get(
+        llvm::Type::getInt32Ty(context),
+        {
+            llvm::PointerType::get(context, 0),  // hFile
+            llvm::PointerType::get(context, 0),  // lpBuffer
+            llvm::Type::getInt32Ty(context),     // nNumberOfBytesToWrite
+            llvm::PointerType::get(context, 0),  // lpNumberOfBytesWritten
+            llvm::PointerType::get(context, 0)   // lpOverlapped
+        },
+        false
+    );
+    llvm::Function::Create(writeFileType, llvm::Function::ExternalLinkage, "WriteFile", module.get());
+    
+    // Create helper function to output the count in binary format
+    llvm::FunctionType* printFuncType = llvm::FunctionType::get(
+        llvm::Type::getVoidTy(context),
+        false
+    );
+    printBBCountFunc = llvm::Function::Create(
+        printFuncType,
+        llvm::Function::InternalLinkage,
+        "__maxon_print_instr_count",
+        module.get()
+    );
+    
+    llvm::BasicBlock* printBB = llvm::BasicBlock::Create(context, "entry", printBBCountFunc);
+    llvm::IRBuilder<> printBuilder(printBB);
+    
+    // Get stdout handle
+    llvm::Function* getStdHandleFunc = module->getFunction("GetStdHandle");
+    llvm::Value* stdoutHandle = printBuilder.CreateCall(
+        getStdHandleFunc,
+        {llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), -11)}  // STD_OUTPUT_HANDLE
+    );
+    
+    // Create output buffer: "MAXON_PROFILE:" (14 bytes) + i64 count (8 bytes) = 22 bytes
+    llvm::Constant* prefix = llvm::ConstantDataArray::getString(context, "MAXON_PROFILE:", false);
+    llvm::GlobalVariable* prefixGlobal = new llvm::GlobalVariable(
+        *module,
+        prefix->getType(),
+        true,
+        llvm::GlobalValue::PrivateLinkage,
+        prefix,
+        ".str.profile_prefix"
+    );
+    
+    // Allocate buffer on stack
+    llvm::Value* buffer = printBuilder.CreateAlloca(llvm::Type::getInt8Ty(context), llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 22));
+    
+    // Copy prefix to buffer
+    llvm::Function* memcpyFunc = llvm::Intrinsic::getOrInsertDeclaration(
+        module.get(),
+        llvm::Intrinsic::memcpy,
+        {llvm::PointerType::get(context, 0), llvm::PointerType::get(context, 0), llvm::Type::getInt32Ty(context)}
+    );
+    printBuilder.CreateCall(memcpyFunc, {
+        buffer,
+        prefixGlobal,
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 14),
+        llvm::ConstantInt::get(llvm::Type::getInt1Ty(context), false)
+    });
+    
+    // Get pointer to the count portion (after prefix)
+    llvm::Value* countPtr = printBuilder.CreateGEP(
+        llvm::Type::getInt8Ty(context),
+        buffer,
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 14)
+    );
+    
+    // Load the instruction count
+    llvm::Value* count = printBuilder.CreateLoad(llvm::Type::getInt64Ty(context), bbCountGlobal);
+    
+    // Store the count as 8 bytes at countPtr location
+    // Use memcpy to avoid pointer type issues
+    llvm::Value* countAlloca = printBuilder.CreateAlloca(llvm::Type::getInt64Ty(context));
+    printBuilder.CreateStore(count, countAlloca);
+    printBuilder.CreateCall(memcpyFunc, {
+        countPtr,
+        countAlloca,
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 8),
+        llvm::ConstantInt::get(llvm::Type::getInt1Ty(context), false)
+    });
+    
+    // Write the buffer to stdout
+    llvm::Value* bytesWritten = printBuilder.CreateAlloca(llvm::Type::getInt32Ty(context));
+    llvm::Function* writeFileFunc = module->getFunction("WriteFile");
+    printBuilder.CreateCall(writeFileFunc, {
+        stdoutHandle,
+        buffer,
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 22),
+        bytesWritten,
+        llvm::ConstantPointerNull::get(llvm::PointerType::get(context, 0))
+    });
+    
+    printBuilder.CreateRetVoid();
+}
+
+void CodeGenerator::injectInstrCounter() {
+    if (!enableProfiling || !bbCountGlobal) return;
+    
+    // This function instruments the entire module after generation
+    // For each basic block, inject an increment at the start based on the number of instructions
+    
+    for (auto& func : *module) {
+        if (func.isDeclaration()) continue;  // Skip declarations
+        
+        // Skip the profiling helper function itself to avoid self-instrumentation
+        if (&func == printBBCountFunc) continue;
+        
+        for (auto& bb : func) {
+            // Count instructions in this basic block (excluding the injected profiling code)
+            int instrCount = 0;
+            for (auto& instr : bb) {
+                // Don't count terminator instructions or phi nodes
+                if (!instr.isTerminator() && !llvm::isa<llvm::PHINode>(instr)) {
+                    instrCount++;
+                }
+            }
+            
+            if (instrCount == 0) continue;  // Skip empty blocks
+            
+            // Inject counter increment at the start of the basic block
+            llvm::IRBuilder<> bbBuilder(&bb, bb.getFirstInsertionPt());
+            llvm::Value* current = bbBuilder.CreateLoad(llvm::Type::getInt64Ty(context), bbCountGlobal);
+            llvm::Value* incremented = bbBuilder.CreateAdd(current, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), instrCount));
+            bbBuilder.CreateStore(incremented, bbCountGlobal);
+        }
+    }
+}
+
+void CodeGenerator::injectProfileOutput(llvm::Function* mainFunc) {
+    if (!enableProfiling || !printBBCountFunc || !mainFunc) return;
+    
+    // Find all return instructions in main and inject the profile output before them
+    for (auto& bb : *mainFunc) {
+        for (auto it = bb.begin(); it != bb.end(); ++it) {
+            if (llvm::isa<llvm::ReturnInst>(it)) {
+                llvm::IRBuilder<> retBuilder(&bb, it);
+                retBuilder.CreateCall(printBBCountFunc);
+            }
+        }
     }
 }
 
@@ -2415,6 +2583,26 @@ void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
         createMinimalEntryPoint();
     }
     
+    // Inject profiling instrumentation if enabled
+    if (enableProfiling) {
+        // First inject counters in all basic blocks
+        injectInstrCounter();
+        
+        // Then add profile output before main returns
+        // Find the main function (it might be mangled with namespace)
+        llvm::Function* mainFunc = nullptr;
+        for (auto& func : *module) {
+            if (func.getName().contains("::main") || func.getName() == "main") {
+                mainFunc = &func;
+                break;
+            }
+        }
+        
+        if (mainFunc) {
+            injectProfileOutput(mainFunc);
+        }
+    }
+    
     // Finalize debug info if enabled
     finalizeDebugInfo();
 }
@@ -2568,37 +2756,42 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
     }
     
     // Prepare arguments for LLD driver
+    std::vector<std::string> argStorage;  // Store strings so pointers remain valid
     std::vector<const char*> lldArgs;
-    lldArgs.push_back("lld-link");  // Program name
-    lldArgs.push_back("/NOLOGO");
-    lldArgs.push_back("/MACHINE:X64");
-    lldArgs.push_back("/SUBSYSTEM:CONSOLE");
+    
+    argStorage.push_back("lld-link");  // Program name
+    argStorage.push_back("/NOLOGO");
+    argStorage.push_back("/MACHINE:X64");
+    argStorage.push_back("/SUBSYSTEM:CONSOLE");
     
     // Add debug info if enabled
     if (generateDebugInfo) {
-        lldArgs.push_back("/DEBUG");
+        argStorage.push_back("/DEBUG");
     }
     
     // Add library path for Windows SDK (needed for kernel32.lib)
-    std::string sdkLibPath = "/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\um\\x64";
-    lldArgs.push_back(sdkLibPath.c_str());
-	lldArgs.push_back("/DEFAULTLIB:kernel32.lib");
-	lldArgs.push_back("/NODEFAULTLIB"); // Don't link default CRT libraries
-	lldArgs.push_back("/ENTRY:_start");	// Set entry point to _start (our minimal wrapper)
+    argStorage.push_back("/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\um\\x64");
+	argStorage.push_back("/DEFAULTLIB:kernel32.lib");
+	argStorage.push_back("/NODEFAULTLIB"); // Don't link default CRT libraries
+	argStorage.push_back("/ENTRY:_start");	// Set entry point to _start (our minimal wrapper)
 	
 	// Size optimization flags (only when not generating debug info)
 	if (!generateDebugInfo) {
-		lldArgs.push_back("/OPT:REF");    // Remove unreferenced functions/data
-		lldArgs.push_back("/OPT:ICF");    // Identical COMDAT folding
-		lldArgs.push_back("/MERGE:.rdata=.text"); // Merge read-only data into code section
+		argStorage.push_back("/OPT:REF");    // Remove unreferenced functions/data
+		argStorage.push_back("/OPT:ICF");    // Identical COMDAT folding
+		argStorage.push_back("/MERGE:.rdata=.text"); // Merge read-only data into code section
 	}
 
 	// Output file
-    std::string outArg = "/OUT:" + exeFile;
-    lldArgs.push_back(outArg.c_str());
+    argStorage.push_back("/OUT:" + exeFile);
     
     // Input object file (program)
-    lldArgs.push_back(tempObjFile.c_str());
+    argStorage.push_back(tempObjFile);
+    
+    // Convert to const char* pointers
+    for (const auto& arg : argStorage) {
+        lldArgs.push_back(arg.c_str());
+    }
     
     // Add Maxon runtime library
     // Try to find runtime.obj relative to the executable
@@ -2610,30 +2803,45 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
     #endif
     size_t lastSlash = execPath.find_last_of("\\/");
     std::string execDir = (lastSlash != std::string::npos) ? execPath.substr(0, lastSlash) : ".";
-    std::string runtimeObj = execDir + "/../../maxon-runtime/runtime.obj";
+    std::string runtimeObj = execDir + "/../maxon-runtime/runtime.obj";
     
     // Check if runtime.obj exists
     if (llvm::sys::fs::exists(runtimeObj)) {
-        lldArgs.push_back(runtimeObj.c_str());
+        argStorage.push_back(runtimeObj);
         if (verbose) {
             std::cout << "Linking with Maxon runtime library: " << runtimeObj << std::endl;
         }
     } else {
-        // Try current directory
-        runtimeObj = "maxon-runtime/runtime.obj";
+        // Try two levels up (for build/bin/maxon.exe)
+        runtimeObj = execDir + "/../../maxon-runtime/runtime.obj";
         if (llvm::sys::fs::exists(runtimeObj)) {
-            lldArgs.push_back(runtimeObj.c_str());
+            argStorage.push_back(runtimeObj);
             if (verbose) {
                 std::cout << "Linking with Maxon runtime library: " << runtimeObj << std::endl;
             }
-        } else if (verbose) {
-            std::cout << "Warning: Maxon runtime library not found, assuming memset is provided by code" << std::endl;
+        } else {
+            // Try current directory
+            runtimeObj = "maxon-runtime/runtime.obj";
+            if (llvm::sys::fs::exists(runtimeObj)) {
+                argStorage.push_back(runtimeObj);
+                if (verbose) {
+                    std::cout << "Linking with Maxon runtime library: " << runtimeObj << std::endl;
+                }
+            } else if (verbose) {
+                std::cout << "Warning: Maxon runtime library not found, assuming memset is provided by code" << std::endl;
+            }
         }
     }
     
     // Explicitly link required Windows libraries
-    lldArgs.push_back("kernel32.lib");
-    lldArgs.push_back("shell32.lib");  // For CommandLineToArgvW
+    argStorage.push_back("kernel32.lib");
+    argStorage.push_back("shell32.lib");  // For CommandLineToArgvW
+    
+    // Rebuild lldArgs with final pointers
+    lldArgs.clear();
+    for (const auto& arg : argStorage) {
+        lldArgs.push_back(arg.c_str());
+    }
     
     // Call LLD driver directly (in-process)
     bool success = lld::coff::link(lldArgs, llvm::outs(), llvm::errs(), false, false);

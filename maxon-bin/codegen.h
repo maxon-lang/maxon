@@ -21,6 +21,7 @@ private:
     // Debug information
     bool generateDebugInfo;
     bool verbose;
+    bool enableProfiling;
     std::unique_ptr<llvm::DIBuilder> debugBuilder;
     llvm::DICompileUnit* debugCompileUnit;
     llvm::DIFile* debugFile;
@@ -66,11 +67,18 @@ private:
     // Runtime library helpers
     llvm::Function* getOrDeclareMemset();
     
+    // Profiling support
+    llvm::GlobalVariable* bbCountGlobal = nullptr;
+    llvm::Function* printBBCountFunc = nullptr;
+    void initProfiling();
+    void injectInstrCounter();
+    void injectProfileOutput(llvm::Function* mainFunc);
+    
     // Minimal CRT entry point
     void createMinimalEntryPoint();
     
 public:
-    CodeGenerator(const std::string& moduleName, bool debugInfo = false, bool verbose = false);
+    CodeGenerator(const std::string& moduleName, bool debugInfo = false, bool verbose = false, bool profile = false);
     void generate(ProgramAST* program, bool needsEntryPoint = true);
     void optimize();
     void printIR();

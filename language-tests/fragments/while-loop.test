@@ -1,15 +1,48 @@
 function main() int
-	var x = 5
-	var i = 3
-	while i > 0 'loop'
-		x = x + 2
-		i = i - 1
-		if i = 0 'check'
-			break
-		end 'check'
-	end 'loop'
-	return x
+var x = 5
+var i = 3
+while i > 0 'loop'
+x = x + 2
+i = i - 1
+if i = 0 'check'
+break
+end 'check'
+end 'loop'
+return x
 end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+define i32 @main() {
+entry:
+  br label %whilecond
+
+whilecond:                                        ; preds = %loop, %entry
+  %x.0 = phi i32 [ 5, %entry ], [ %addtmp, %loop ]
+  %i.0 = phi i32 [ 3, %entry ], [ %subtmp, %loop ]
+  %cmptmp = icmp sgt i32 %i.0, 0
+  br i1 %cmptmp, label %loop, label %afterloop
+
+loop:                                             ; preds = %whilecond
+  %addtmp = add i32 %x.0, 2
+  %subtmp = add nsw i32 %i.0, -1
+  %cmptmp5 = icmp eq i32 %subtmp, 0
+  br i1 %cmptmp5, label %afterloop, label %whilecond
+
+afterloop:                                        ; preds = %loop, %whilecond
+  %x.1 = phi i32 [ %x.0, %whilecond ], [ %addtmp, %loop ]
+  ret i32 %x.1
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
@@ -75,15 +108,17 @@ entry:
 !6 = !{!7}
 !7 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
 !8 = !{}
-!9 = !DILocation(line: 2, column: 2, scope: !4)
+!9 = !DILocation(line: 2, column: 1, scope: !4)
 !10 = !DILocalVariable(name: "x", scope: !4, file: !1, line: 2, type: !7, align: 32)
-!11 = !DILocation(line: 3, column: 2, scope: !4)
+!11 = !DILocation(line: 3, column: 1, scope: !4)
 !12 = !DILocalVariable(name: "i", scope: !4, file: !1, line: 3, type: !7, align: 32)
-!13 = !DILocation(line: 4, column: 2, scope: !4)
-!14 = !DILocation(line: 5, column: 5, scope: !4)
-!15 = !DILocation(line: 6, column: 5, scope: !4)
-!16 = !DILocation(line: 7, column: 3, scope: !4)
-!17 = !DILocation(line: 8, column: 4, scope: !4)
-!18 = !DILocation(line: 11, column: 2, scope: !4)
+!13 = !DILocation(line: 4, column: 1, scope: !4)
+!14 = !DILocation(line: 5, column: 3, scope: !4)
+!15 = !DILocation(line: 6, column: 3, scope: !4)
+!16 = !DILocation(line: 7, column: 1, scope: !4)
+!17 = !DILocation(line: 8, column: 1, scope: !4)
+!18 = !DILocation(line: 11, column: 1, scope: !4)
 ---
 ExitCode: 11
+OptimizedInstructionCount: 37
+UnoptimizedInstructionCount: 37

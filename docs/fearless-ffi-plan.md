@@ -557,14 +557,6 @@ Create working examples:
 - Integrate with GDB/LLDB for C code
 - Add extensive logging for FFI boundary crossings
 
-### Challenge 4: Backward Compatibility
-**Problem**: Existing `extern` code expects direct FFI
-**Solution**:
-- Phase features in gradually
-- Default to legacy mode, opt-in to fearless FFI
-- Provide migration guide
-- Support both modes simultaneously
-
 ---
 
 ## Success Metrics

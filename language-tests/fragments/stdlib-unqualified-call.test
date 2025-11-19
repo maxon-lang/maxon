@@ -122,4 +122,258 @@ entry:
 
 attributes #0 = { "no-builtin-memset" }
 ---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+define i32 @main() #0 !dbg !4 {
+entry:
+  %buffer.__length = alloca i32, align 4, !dbg !9
+  %buffer = alloca ptr, align 8, !dbg !9
+  %buffer.malloc = call ptr @malloc(i64 12), !dbg !9
+  store ptr %buffer.malloc, ptr %buffer, align 8, !dbg !9
+  store i32 12, ptr %buffer.__length, align 4, !dbg !9
+  %0 = call ptr @memset(ptr %buffer.malloc, i32 0, i64 12), !dbg !9
+    #dbg_declare(ptr %buffer, !10, !DIExpression(), !9)
+  %buffer1 = load ptr, ptr %buffer, align 8, !dbg !12
+  %length = load i32, ptr %buffer.__length, align 4, !dbg !12
+  %1 = call i32 @"stdlib::fmt::format_int_array"(i32 42, ptr %buffer1, i32 %length), !dbg !12
+  %buffer.ptr = load ptr, ptr %buffer, align 8, !dbg !12
+  call void @free(ptr %buffer.ptr), !dbg !12
+  ret i32 %1, !dbg !12
+}
+
+define i32 @"stdlib::fmt::format_int_array"(i32 %0, ptr %1, i32 %2) #0 !dbg !13 {
+entry:
+  %i = alloca i32, align 4
+  %length = alloca i32, align 4
+  %start = alloca i32, align 4
+  %digit_char = alloca i32, align 4
+  %digit = alloca i32, align 4
+  %abs_value = alloca i32, align 4
+  %negative = alloca i32, align 4
+  %pos = alloca i32, align 4
+  %temp.__length = alloca i32, align 4
+  %temp = alloca ptr, align 8
+  %buffer.__length = alloca i32, align 4
+  %buffer = alloca ptr, align 8
+  %value = alloca i32, align 4
+  store i32 %0, ptr %value, align 4, !dbg !16
+    #dbg_declare(ptr %value, !17, !DIExpression(), !16)
+  store ptr %1, ptr %buffer, align 8, !dbg !18
+  store i32 %2, ptr %buffer.__length, align 4, !dbg !18
+    #dbg_declare(ptr %buffer, !19, !DIExpression(), !18)
+  %value1 = load i32, ptr %value, align 4, !dbg !20
+  %cmptmp = icmp eq i32 %value1, 0, !dbg !20
+  br i1 %cmptmp, label %then, label %ifcont, !dbg !20
+
+then:                                             ; preds = %entry
+  %arrayptr = load ptr, ptr %buffer, align 8, !dbg !21
+  %arrayidx = getelementptr inbounds i8, ptr %arrayptr, i32 0, !dbg !21
+  store i8 48, ptr %arrayidx, align 1, !dbg !21
+  ret i32 1, !dbg !22
+
+ifcont:                                           ; preds = %entry
+  %temp.malloc = call ptr @malloc(i64 12), !dbg !23
+  store ptr %temp.malloc, ptr %temp, align 8, !dbg !23
+  store i32 12, ptr %temp.__length, align 4, !dbg !23
+  %3 = call ptr @memset(ptr %temp.malloc, i32 0, i64 12), !dbg !23
+    #dbg_declare(ptr %temp, !24, !DIExpression(), !23)
+  store i32 11, ptr %pos, align 4, !dbg !25
+    #dbg_declare(ptr %pos, !26, !DIExpression(), !25)
+  store i32 0, ptr %negative, align 4, !dbg !27
+    #dbg_declare(ptr %negative, !28, !DIExpression(), !27)
+  %value2 = load i32, ptr %value, align 4, !dbg !29
+  store i32 %value2, ptr %abs_value, align 4, !dbg !29
+    #dbg_declare(ptr %abs_value, !30, !DIExpression(), !29)
+  %value3 = load i32, ptr %value, align 4, !dbg !31
+  %cmptmp4 = icmp slt i32 %value3, 0, !dbg !31
+  br i1 %cmptmp4, label %then5, label %ifcont7, !dbg !31
+
+then5:                                            ; preds = %ifcont
+  store i32 1, ptr %negative, align 4, !dbg !32
+  %value6 = load i32, ptr %value, align 4, !dbg !33
+  %subtmp = sub i32 0, %value6, !dbg !33
+  store i32 %subtmp, ptr %abs_value, align 4, !dbg !33
+  br label %ifcont7, !dbg !33
+
+ifcont7:                                          ; preds = %then5, %ifcont
+  br label %whilecond, !dbg !34
+
+whilecond:                                        ; preds = %loop, %ifcont7
+  %abs_value8 = load i32, ptr %abs_value, align 4, !dbg !34
+  %cmptmp9 = icmp sgt i32 %abs_value8, 0, !dbg !34
+  br i1 %cmptmp9, label %loop, label %afterloop, !dbg !34
+
+loop:                                             ; preds = %whilecond
+  %abs_value10 = load i32, ptr %abs_value, align 4, !dbg !35
+  %modtmp = srem i32 %abs_value10, 10, !dbg !35
+  store i32 %modtmp, ptr %digit, align 4, !dbg !35
+    #dbg_declare(ptr %digit, !36, !DIExpression(), !35)
+  %digit11 = load i32, ptr %digit, align 4, !dbg !37
+  %addtmp = add i32 48, %digit11, !dbg !37
+  store i32 %addtmp, ptr %digit_char, align 4, !dbg !37
+    #dbg_declare(ptr %digit_char, !38, !DIExpression(), !37)
+  %pos12 = load i32, ptr %pos, align 4, !dbg !39
+  %digit_char13 = load i32, ptr %digit_char, align 4, !dbg !39
+  %trunctmp = trunc i32 %digit_char13 to i8, !dbg !39
+  %arrayptr14 = load ptr, ptr %temp, align 8, !dbg !39
+  %arrayidx15 = getelementptr inbounds i8, ptr %arrayptr14, i32 %pos12, !dbg !39
+  store i8 %trunctmp, ptr %arrayidx15, align 1, !dbg !39
+  %pos16 = load i32, ptr %pos, align 4, !dbg !40
+  %subtmp17 = sub i32 %pos16, 1, !dbg !40
+  store i32 %subtmp17, ptr %pos, align 4, !dbg !40
+  %abs_value18 = load i32, ptr %abs_value, align 4, !dbg !41
+  %divtmp = sdiv i32 %abs_value18, 10, !dbg !41
+  store i32 %divtmp, ptr %abs_value, align 4, !dbg !41
+  br label %whilecond, !dbg !41
+
+afterloop:                                        ; preds = %whilecond
+  %negative19 = load i32, ptr %negative, align 4, !dbg !42
+  %cmptmp20 = icmp eq i32 %negative19, 1, !dbg !42
+  br i1 %cmptmp20, label %then21, label %ifcont27, !dbg !42
+
+then21:                                           ; preds = %afterloop
+  %pos22 = load i32, ptr %pos, align 4, !dbg !43
+  %arrayptr23 = load ptr, ptr %temp, align 8, !dbg !43
+  %arrayidx24 = getelementptr inbounds i8, ptr %arrayptr23, i32 %pos22, !dbg !43
+  store i8 45, ptr %arrayidx24, align 1, !dbg !43
+  %pos25 = load i32, ptr %pos, align 4, !dbg !44
+  %subtmp26 = sub i32 %pos25, 1, !dbg !44
+  store i32 %subtmp26, ptr %pos, align 4, !dbg !44
+  br label %ifcont27, !dbg !44
+
+ifcont27:                                         ; preds = %then21, %afterloop
+  %pos28 = load i32, ptr %pos, align 4, !dbg !45
+  %addtmp29 = add i32 %pos28, 1, !dbg !45
+  store i32 %addtmp29, ptr %start, align 4, !dbg !45
+    #dbg_declare(ptr %start, !46, !DIExpression(), !45)
+  %start30 = load i32, ptr %start, align 4, !dbg !47
+  %subtmp31 = sub i32 12, %start30, !dbg !47
+  store i32 %subtmp31, ptr %length, align 4, !dbg !47
+    #dbg_declare(ptr %length, !48, !DIExpression(), !47)
+  store i32 0, ptr %i, align 4, !dbg !49
+    #dbg_declare(ptr %i, !50, !DIExpression(), !49)
+  br label %whilecond32, !dbg !51
+
+whilecond32:                                      ; preds = %loop36, %ifcont27
+  %i33 = load i32, ptr %i, align 4, !dbg !51
+  %length34 = load i32, ptr %length, align 4, !dbg !51
+  %cmptmp35 = icmp slt i32 %i33, %length34, !dbg !51
+  br i1 %cmptmp35, label %loop36, label %afterloop47, !dbg !51
+
+loop36:                                           ; preds = %whilecond32
+  %i37 = load i32, ptr %i, align 4, !dbg !52
+  %start38 = load i32, ptr %start, align 4, !dbg !52
+  %i39 = load i32, ptr %i, align 4, !dbg !52
+  %addtmp40 = add i32 %start38, %i39, !dbg !52
+  %arrayptr41 = load ptr, ptr %temp, align 8, !dbg !52
+  %arrayidx42 = getelementptr inbounds i8, ptr %arrayptr41, i32 %addtmp40, !dbg !52
+  %arrayelem = load i8, ptr %arrayidx42, align 1, !dbg !52
+  %arrayptr43 = load ptr, ptr %buffer, align 8, !dbg !52
+  %arrayidx44 = getelementptr inbounds i8, ptr %arrayptr43, i32 %i37, !dbg !52
+  store i8 %arrayelem, ptr %arrayidx44, align 1, !dbg !52
+  %i45 = load i32, ptr %i, align 4, !dbg !53
+  %addtmp46 = add i32 %i45, 1, !dbg !53
+  store i32 %addtmp46, ptr %i, align 4, !dbg !53
+  br label %whilecond32, !dbg !53
+
+afterloop47:                                      ; preds = %whilecond32
+  %length48 = load i32, ptr %length, align 4, !dbg !54
+  ret i32 %length48, !dbg !54
+}
+
+declare ptr @GetProcessHeap()
+
+declare ptr @HeapAlloc(ptr, i32, i64)
+
+declare i32 @HeapFree(ptr, i32, ptr)
+
+define ptr @malloc(i64 %0) {
+entry:
+  %1 = call ptr @GetProcessHeap(), !dbg !9
+  %2 = call ptr @HeapAlloc(ptr %1, i32 0, i64 %0), !dbg !9
+  ret ptr %2, !dbg !9
+}
+
+define void @free(ptr %0) {
+entry:
+  %1 = call ptr @GetProcessHeap(), !dbg !9
+  %2 = call i32 @HeapFree(ptr %1, i32 0, ptr %0), !dbg !9
+  ret void, !dbg !9
+}
+
+declare ptr @memset(ptr, i32, i64)
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
+
+attributes #0 = { "no-builtin-memset" }
+
+!llvm.dbg.cu = !{!0}
+!llvm.module.flags = !{!2, !3}
+
+!0 = distinct !DICompileUnit(language: DW_LANG_C, file: !1, producer: "Maxon Compiler", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)
+!1 = !DIFile(filename: "test.maxon", directory: ".")
+!2 = !{i32 2, !"CodeView", i32 1}
+!3 = !{i32 2, !"Debug Info Version", i32 3}
+!4 = distinct !DISubprogram(name: "main", linkageName: "main", scope: !1, file: !1, line: 3, type: !5, scopeLine: 3, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
+!5 = !DISubroutineType(types: !6)
+!6 = !{!7}
+!7 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
+!8 = !{}
+!9 = !DILocation(line: 4, column: 5, scope: !4)
+!10 = !DILocalVariable(name: "buffer", scope: !4, file: !1, line: 4, type: !11, align: 64)
+!11 = !DIBasicType(name: "ptr", size: 64, encoding: DW_ATE_address)
+!12 = !DILocation(line: 6, column: 5, scope: !4)
+!13 = distinct !DISubprogram(name: "format_int_array", linkageName: "format_int_array", scope: !1, file: !1, line: 8, type: !14, scopeLine: 8, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
+!14 = !DISubroutineType(types: !15)
+!15 = !{!7, !7, !7}
+!16 = !DILocation(line: 8, column: 27, scope: !13)
+!17 = !DILocalVariable(name: "value", arg: 1, scope: !13, file: !1, line: 8, type: !7)
+!18 = !DILocation(line: 8, column: 38, scope: !13)
+!19 = !DILocalVariable(name: "buffer", arg: 2, scope: !13, file: !1, line: 8, type: !7)
+!20 = !DILocation(line: 10, column: 9, scope: !13)
+!21 = !DILocation(line: 11, column: 13, scope: !13)
+!22 = !DILocation(line: 12, column: 13, scope: !13)
+!23 = !DILocation(line: 16, column: 9, scope: !13)
+!24 = !DILocalVariable(name: "temp", scope: !13, file: !1, line: 16, type: !11, align: 64)
+!25 = !DILocation(line: 17, column: 9, scope: !13)
+!26 = !DILocalVariable(name: "pos", scope: !13, file: !1, line: 17, type: !7, align: 32)
+!27 = !DILocation(line: 20, column: 9, scope: !13)
+!28 = !DILocalVariable(name: "negative", scope: !13, file: !1, line: 20, type: !7, align: 32)
+!29 = !DILocation(line: 21, column: 9, scope: !13)
+!30 = !DILocalVariable(name: "abs_value", scope: !13, file: !1, line: 21, type: !7, align: 32)
+!31 = !DILocation(line: 22, column: 9, scope: !13)
+!32 = !DILocation(line: 23, column: 22, scope: !13)
+!33 = !DILocation(line: 24, column: 23, scope: !13)
+!34 = !DILocation(line: 28, column: 9, scope: !13)
+!35 = !DILocation(line: 29, column: 13, scope: !13)
+!36 = !DILocalVariable(name: "digit", scope: !13, file: !1, line: 29, type: !7, align: 32)
+!37 = !DILocation(line: 30, column: 13, scope: !13)
+!38 = !DILocalVariable(name: "digit_char", scope: !13, file: !1, line: 30, type: !7, align: 32)
+!39 = !DILocation(line: 31, column: 13, scope: !13)
+!40 = !DILocation(line: 32, column: 17, scope: !13)
+!41 = !DILocation(line: 33, column: 23, scope: !13)
+!42 = !DILocation(line: 37, column: 9, scope: !13)
+!43 = !DILocation(line: 38, column: 13, scope: !13)
+!44 = !DILocation(line: 39, column: 17, scope: !13)
+!45 = !DILocation(line: 43, column: 9, scope: !13)
+!46 = !DILocalVariable(name: "start", scope: !13, file: !1, line: 43, type: !7, align: 32)
+!47 = !DILocation(line: 44, column: 9, scope: !13)
+!48 = !DILocalVariable(name: "length", scope: !13, file: !1, line: 44, type: !7, align: 32)
+!49 = !DILocation(line: 45, column: 9, scope: !13)
+!50 = !DILocalVariable(name: "i", scope: !13, file: !1, line: 45, type: !7, align: 32)
+!51 = !DILocation(line: 46, column: 9, scope: !13)
+!52 = !DILocation(line: 47, column: 13, scope: !13)
+!53 = !DILocation(line: 48, column: 15, scope: !13)
+!54 = !DILocation(line: 51, column: 9, scope: !13)
+---
 ExitCode: 2
+OptimizedInstructionCount: 134
+UnoptimizedInstructionCount: 134

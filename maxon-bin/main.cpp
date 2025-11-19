@@ -226,6 +226,7 @@ struct CompilationOptions {
     bool compileOnly = false;
     bool optimize = false;
     bool debugInfo = false;
+    bool profile = false;
     bool verbose = false;
 };
 
@@ -409,7 +410,7 @@ std::string compileProgram(const CompilationOptions& options) {
     
     // Code generation
     std::string moduleName = options.inputFiles.size() == 1 ? options.inputFiles[0] : "merged";
-    CodeGenerator codegen(moduleName, options.debugInfo, options.verbose);
+    CodeGenerator codegen(moduleName, options.debugInfo, options.verbose, options.profile);
     codegen.generate(mergedProgram.get(), !options.compileOnly);
     if (options.verbose) {
         std::cout << "Code generation complete." << std::endl;
@@ -552,6 +553,8 @@ int main(int argc, char* argv[]) {
             options.optimize = true;
         } else if (arg == "--debug" || arg == "-g") {
             options.debugInfo = true;
+        } else if (arg == "--profile") {
+            options.profile = true;
         } else if (arg == "--verbose" || arg == "-v") {
             options.verbose = true;
         } else if (arg == "-o" && i + 1 < argc) {

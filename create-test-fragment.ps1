@@ -1,12 +1,13 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Creates a test fragment file for Maxon language tests.
+    Creates a test fragment file for Maxon language tests with dual IR (optimized and unoptimized).
 
 .DESCRIPTION
-    Takes Maxon source code, compiles it with optimization, captures the LLVM IR,
-    runs the executable to get the exit code and stdout, and creates a properly
-    formatted test fragment file.
+    Takes Maxon source code, compiles it with both optimization (-O) and debug (--debug) modes,
+    captures both LLVM IRs, counts dynamic instructions using lli, runs the executable to get 
+    the exit code and stdout, and creates a properly formatted test fragment file with performance
+    regression detection support.
 
 .PARAMETER TestName
     The name of the test (without .test extension)
@@ -17,11 +18,11 @@
 .PARAMETER SourceFile
     Path to a .maxon file containing the source code (alternative to -SourceCode)
 
-.PARAMETER UseDebug
-    Create a debug fragment (no optimization, in debug-fragments/ directory)
-
 .PARAMETER OutputDir
-    Output directory (defaults to language-tests/fragments/ or language-tests/debug-fragments/)
+    Output directory (defaults to language-tests/fragments/)
+
+.PARAMETER SkipUnoptimized
+    Skip generating unoptimized IR (for error tests or minimal fragments)
 
 .EXAMPLE
     .\create-test-fragment.ps1 -TestName "my-test" -SourceCode @"
@@ -32,9 +33,6 @@
 
 .EXAMPLE
     .\create-test-fragment.ps1 -TestName "my-test" -SourceFile "examples/my-test.maxon"
-
-.EXAMPLE
-    .\create-test-fragment.ps1 -TestName "my-debug-test" -SourceFile "test.maxon" -UseDebug
 #>
 
 param(
@@ -48,13 +46,101 @@ param(
     [string]$SourceFile,
     
     [Parameter(Mandatory=$false)]
-    [switch]$UseDebug,
+    [switch]$SkipUnoptimized,
     
     [Parameter(Mandatory=$false)]
     [string]$OutputDir
 )
 
 $ErrorActionPreference = "Stop"
+
+# Helper function to count instructions dynamically using --profile flag
+function Count-Instructions {
+    param(
+        [string]$SourceFile,
+        [string]$OptimizeFlag,  # "-O" or "--debug"
+        [string]$Args
+    )
+    
+    # Compile with profiling
+    $exePath = [System.IO.Path]::GetTempFileName() + ".exe"
+    $compileOutput = & maxon.exe compile $SourceFile --profile $OptimizeFlag -o $exePath 2>&1
+    
+    if ($LASTEXITCODE -ne 0 -or !(Test-Path $exePath)) {
+        # Compilation failed, fall back to static IR instruction counting
+        # Compilation failed, fall back to static IR instruction counting
+        $llPath = [System.IO.Path]::GetTempFileName() + ".ll"
+        & maxon.exe compile $SourceFile --emit-llvm $OptimizeFlag -o $llPath 2>&1 | Out-Null
+        
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $llPath)) {
+            $irContent = Get-Content $llPath -Raw
+            
+            # Count actual LLVM instructions (not comments, labels, or declarations)
+            $instructions = $irContent -split "`n" | Where-Object {
+                $_ -match '^\s+%' -or                    # Instructions with results
+                $_ -match '^\s+(store|br|ret|call|invoke)' -or  # Instructions without results
+                $_ -match '^\s+(load|add|sub|mul|icmp|fcmp|alloca|getelementptr)'
+            }
+            
+            Remove-Item $llPath -ErrorAction SilentlyContinue
+            return $instructions.Count
+        }
+        
+        return -1
+    }
+    
+    # Run and capture binary output
+    try {
+        # Capture stdout as raw bytes
+        $tempOutput = [System.IO.Path]::GetTempFileName()
+        
+        if ($Args) {
+            $argArray = $Args -split '\s+'
+            $process = Start-Process -FilePath $exePath -ArgumentList $argArray -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tempOutput
+        } else {
+            $process = Start-Process -FilePath $exePath -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tempOutput
+        }
+        
+        # Read the raw bytes (regardless of exit code, program may have printed before exiting)
+        if (Test-Path $tempOutput) {
+            $bytes = [System.IO.File]::ReadAllBytes($tempOutput)
+            
+            # Look for "MAXON_PROFILE:" marker (14 bytes) followed by 8 bytes of i64
+            $marker = [System.Text.Encoding]::ASCII.GetBytes("MAXON_PROFILE:")
+            $markerIndex = -1
+            
+            for ($i = 0; $i -le $bytes.Length - 22; $i++) {
+                $match = $true
+                for ($j = 0; $j -lt 14; $j++) {
+                    if ($bytes[$i + $j] -ne $marker[$j]) {
+                        $match = $false
+                        break
+                    }
+                }
+                if ($match) {
+                    $markerIndex = $i
+                    break
+                }
+            }
+            
+            if ($markerIndex -ge 0) {
+                # Extract the 8 bytes after the marker
+                $countBytes = $bytes[($markerIndex + 14)..($markerIndex + 21)]
+                $count = [BitConverter]::ToInt64($countBytes, 0)
+                
+                Remove-Item $exePath -ErrorAction SilentlyContinue
+                Remove-Item $tempOutput -ErrorAction SilentlyContinue
+                return $count
+            }
+        }
+        
+        Remove-Item $tempOutput -ErrorAction SilentlyContinue
+    } finally {
+        Remove-Item $exePath -ErrorAction SilentlyContinue
+    }
+    
+    return -1
+}
 
 # Validate inputs
 if (-not $SourceCode -and -not $SourceFile) {
@@ -110,11 +196,7 @@ if ($SourceFile) {
 
 # Determine output directory
 if (-not $OutputDir) {
-    if ($UseDebug) {
-        $OutputDir = "language-tests/debug-fragments"
-    } else {
-        $OutputDir = "language-tests/fragments"
-    }
+    $OutputDir = "language-tests/fragments"
 }
 
 # Ensure output directory exists
@@ -140,115 +222,145 @@ if (-not (Test-Path $compilerPath)) {
 }
 
 Write-Host "Creating test fragment: $TestName" -ForegroundColor Cyan
-Write-Host "Debug mode: $UseDebug" -ForegroundColor Gray
 
 try {
     # Write source to temp file (UTF8 without BOM)
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($tempSourceFile, $SourceCode, $utf8NoBom)
     
-    # Compile with appropriate flags
-    $compilerArgs = @("compile", $tempSourceFile, "--emit-llvm")
-    if ($UseDebug) {
-        $compilerArgs += "--debug"
+    # Variables to store both IRs and instruction counts
+    $optimizedIR = ""
+    $unoptimizedIR = ""
+    $optimizedInstructionCount = -1
+    $unoptimizedInstructionCount = -1
+    $exitCode = 0
+    $stdoutCapture = ""
+    $stderrCapture = ""
+    
+    # Compile both optimized and unoptimized versions
+    Write-Host "Compiling optimized version..." -ForegroundColor Yellow
+        
+        # Compile optimized
+        $compilerArgs = @("compile", $tempSourceFile, "--emit-llvm", "-o", "temp-opt.ll", "-O")
+        $compileProcess = Start-Process -FilePath $compilerPath -ArgumentList $compilerArgs -Wait -PassThru -NoNewWindow -RedirectStandardOutput "temp_compile_opt_out.txt" -RedirectStandardError "temp_compile_opt_err.txt"
+        $compileOptExitCode = $compileProcess.ExitCode
+        
+        $compileOptStdout = ""
+        $compileOptStderr = ""
+        if (Test-Path "temp_compile_opt_out.txt") {
+            $temp = Get-Content "temp_compile_opt_out.txt" -Raw
+            if ($temp) { $compileOptStdout = $temp }
+            Remove-Item "temp_compile_opt_out.txt"
+        }
+        if (Test-Path "temp_compile_opt_err.txt") {
+            $temp = Get-Content "temp_compile_opt_err.txt" -Raw
+            if ($temp) { $compileOptStderr = $temp }
+            Remove-Item "temp_compile_opt_err.txt"
+        }
+        
+        $compileOptOutput = $compileOptStdout + $compileOptStderr
+        
+        # Check if optimized compilation failed
+        if ($compileOptExitCode -ne 0) {
+            Write-Host "Optimized compilation failed!" -ForegroundColor Red
+            Write-Host $compileOptOutput
+            
+            # Create error fragment with dual-IR format (both N/A)
+            $fragmentContent = $SourceCode.TrimEnd()
+            $fragmentContent += "`n---`nN/A`n---`nN/A`n---`n"
+            
+            if ($global:PreservedArgs) {
+                $fragmentContent += "Args: $global:PreservedArgs`n"
+            }
+            
+            $backticks = '```'
+            if ($compileOptStderr) {
+                $normalizedStderr = $compileOptStderr -replace '(>>>.*?)(temp-opt|temp-debug|output|test)\.exe\.tmp\.obj', '$1test.exe.tmp.obj'
+                $fragmentContent += "MaxoncStderr: $backticks`n$($normalizedStderr.TrimEnd())`n$backticks"
+            }
+            else {
+                $normalizedOutput = $compileOptOutput -replace '(>>>.*?)(temp-opt|temp-debug|output|test)\.exe\.tmp\.obj', '$1test.exe.tmp.obj'
+                $fragmentContent += "MaxoncStderr: $backticks`n$($normalizedOutput.TrimEnd())`n$backticks"
+            }
+            
+            $fragmentContent = $fragmentContent -replace "`r`n", "`n" -replace "`n", "`r`n"
+            $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+            [System.IO.File]::WriteAllText($outputFragmentPath, $fragmentContent, $utf8NoBom)
+            Write-Host "Test fragment created: $outputFragmentPath" -ForegroundColor Green
+            exit 0
+        }
+        
+        # Extract optimized IR from the generated .ll file
+        $llOptFile = "temp-opt.ll"
+        if (Test-Path $llOptFile) {
+            $optimizedIR = Get-Content $llOptFile -Raw
+            if ($optimizedIR) {
+                $optimizedIR = $optimizedIR.Trim()
+                $optimizedIR = $optimizedIR -replace 'source_filename = ".*?"', 'source_filename = "test.maxon"'
+                $optimizedIR = $optimizedIR -replace "ModuleID = '.*?'", "ModuleID = 'test.maxon'"
+                $optimizedIR = $optimizedIR -replace 'DIFile\(filename: ".*?"', 'DIFile(filename: "test.maxon"'
+                
+                # Count instructions using profiling
+                $optimizedInstructionCount = Count-Instructions -SourceFile $tempSourceFile -OptimizeFlag "-O" -Args $global:PreservedArgs
+                if ($optimizedInstructionCount -gt 0) {
+                    Write-Host "Optimized instruction count: $optimizedInstructionCount" -ForegroundColor Gray
+                }
+            }
+        }
+        
+        # Compile unoptimized (unless SkipUnoptimized)
+        if (-not $SkipUnoptimized) {
+            Write-Host "Compiling unoptimized version..." -ForegroundColor Yellow
+            
+            $compilerArgs = @("compile", $tempSourceFile, "--emit-llvm", "-o", "temp-debug.ll", "--debug")
+            $compileProcess = Start-Process -FilePath $compilerPath -ArgumentList $compilerArgs -Wait -PassThru -NoNewWindow -RedirectStandardOutput "temp_compile_debug_out.txt" -RedirectStandardError "temp_compile_debug_err.txt"
+            $compileDebugExitCode = $compileProcess.ExitCode
+            
+            $compileDebugStdout = ""
+            $compileDebugStderr = ""
+            if (Test-Path "temp_compile_debug_out.txt") {
+                $temp = Get-Content "temp_compile_debug_out.txt" -Raw
+                if ($temp) { $compileDebugStdout = $temp }
+                Remove-Item "temp_compile_debug_out.txt"
+            }
+            if (Test-Path "temp_compile_debug_err.txt") {
+                $temp = Get-Content "temp_compile_debug_err.txt" -Raw
+                if ($temp) { $compileDebugStderr = $temp }
+                Remove-Item "temp_compile_debug_err.txt"
+            }
+            
+            $compileDebugOutput = $compileDebugStdout + $compileDebugStderr
+            
+            if ($compileDebugExitCode -eq 0) {
+                # Extract unoptimized IR from the generated .ll file
+                $llDebugFile = "temp-debug.ll"
+                if (Test-Path $llDebugFile) {
+                    $unoptimizedIR = Get-Content $llDebugFile -Raw
+                    if ($unoptimizedIR) {
+                        $unoptimizedIR = $unoptimizedIR.Trim()
+                        $unoptimizedIR = $unoptimizedIR -replace 'source_filename = ".*?"', 'source_filename = "test.maxon"'
+                        $unoptimizedIR = $unoptimizedIR -replace "ModuleID = '.*?'", "ModuleID = 'test.maxon'"
+                        $unoptimizedIR = $unoptimizedIR -replace 'DIFile\(filename: ".*?"', 'DIFile(filename: "test.maxon"'
+                        
+                        # Count instructions using profiling
+                        $unoptimizedInstructionCount = Count-Instructions -SourceFile $tempSourceFile -OptimizeFlag "--debug" -Args $global:PreservedArgs
+                        if ($unoptimizedInstructionCount -gt 0) {
+                            Write-Host "Unoptimized instruction count: $unoptimizedInstructionCount" -ForegroundColor Gray
+                        }
+                    }
+                }
+            }
+        }
+    
+    # The compiler generates executables alongside the .ll files
+    # For new dual-IR mode, we use the optimized executable
+    $actualExeFile = if (Test-Path "temp-opt.exe") { 
+        "temp-opt.exe" 
+    } elseif (Test-Path "temp-debug.exe") { 
+        "temp-debug.exe"
     } else {
-        $compilerArgs += "-O"
+        "output.exe"  # Fallback for old single-compile mode
     }
-    
-    Write-Host "Compiling..." -ForegroundColor Yellow
-    
-    # Run compiler and capture all output
-    $compileProcess = Start-Process -FilePath $compilerPath -ArgumentList $compilerArgs -Wait -PassThru -NoNewWindow -RedirectStandardOutput "temp_compile_out.txt" -RedirectStandardError "temp_compile_err.txt"
-    $compileExitCode = $compileProcess.ExitCode
-    
-    $compileStdout = ""
-    $compileStderr = ""
-    if (Test-Path "temp_compile_out.txt") {
-        $compileStdout = Get-Content "temp_compile_out.txt" -Raw
-        Remove-Item "temp_compile_out.txt"
-    }
-    if (Test-Path "temp_compile_err.txt") {
-        $compileStderr = Get-Content "temp_compile_err.txt" -Raw
-        Remove-Item "temp_compile_err.txt"
-    }
-    
-    $compileOutput = $compileStdout + $compileStderr
-    
-    # Check if compilation succeeded
-    if ($compileExitCode -ne 0) {
-        Write-Host "Compilation failed!" -ForegroundColor Red
-        Write-Host $compileOutput
-        
-        # For compilation errors, create fragment with N/A for IR and capture compiler stderr
-        Write-Host "Creating error test fragment (compilation should fail)..." -ForegroundColor Yellow
-        
-        $fragmentContent = $SourceCode.TrimEnd()
-        $fragmentContent += "`n---`nN/A`n---`n"
-        
-        # Preserve Args if it was specified
-        if ($global:PreservedArgs) {
-            $fragmentContent += "Args: $global:PreservedArgs`n"
-        }
-        
-        # Add compiler stderr if present (use triple backticks for multiline)
-        # Normalize temp file names in linker errors for consistent test results
-        $backticks = '```'
-        if ($compileStderr) {
-            $normalizedStderr = $compileStderr -replace '(>>>.*?)(output|test)\.exe\.tmp\.obj', '$1test.exe.tmp.obj'
-            $fragmentContent += "MaxoncStderr: $backticks`n$($normalizedStderr.TrimEnd())`n$backticks"
-        }
-        else {
-            # If stderr is empty but we have output, use that
-            $normalizedOutput = $compileOutput -replace '(>>>.*?)(output|test)\.exe\.tmp\.obj', '$1test.exe.tmp.obj'
-            $fragmentContent += "MaxoncStderr: $backticks`n$($normalizedOutput.TrimEnd())`n$backticks"
-        }
-        
-        # Normalize line endings to CRLF for Windows
-        $fragmentContent = $fragmentContent -replace "`r`n", "`n" -replace "`n", "`r`n"
-        
-        # Write with UTF-8 no BOM
-        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-        [System.IO.File]::WriteAllText($outputFragmentPath, $fragmentContent, $utf8NoBom)
-        Write-Host "Test fragment created: $outputFragmentPath" -ForegroundColor Green
-        Write-Host "(This is an error test - compilation is expected to fail)" -ForegroundColor Yellow
-        exit 0
-    }
-    
-    # Extract LLVM IR from output
-    $irStartIndex = $compileOutput.IndexOf("=== LLVM IR ===")
-    if ($irStartIndex -eq -1) {
-        Write-Error "Could not find LLVM IR in compiler output"
-        exit 1
-    }
-    
-    $irStart = $compileOutput.IndexOf("`n", $irStartIndex) + 1
-    $irEnd = $compileOutput.IndexOf("Object file generated.", $irStart)
-    if ($irEnd -eq -1) {
-        $irEnd = $compileOutput.IndexOf("Linking with LLD", $irStart)
-    }
-    if ($irEnd -eq -1) {
-        $irEnd = $compileOutput.IndexOf("Code generation complete.", $irStart)
-    }
-    if ($irEnd -eq -1) {
-        # Use end of string if no marker found
-        $irEnd = $compileOutput.Length
-    }
-    
-    if ($irEnd -le $irStart) {
-        Write-Error "Could not extract LLVM IR properly (invalid indices: start=$irStart, end=$irEnd)"
-        exit 1
-    }
-    
-    $llvmIR = $compileOutput.Substring($irStart, $irEnd - $irStart).Trim()
-    
-    # Replace source filename with "test.maxon" in IR
-    $llvmIR = $llvmIR -replace 'source_filename = ".*?"', 'source_filename = "test.maxon"'
-    $llvmIR = $llvmIR -replace "ModuleID = '.*?'", "ModuleID = 'test.maxon'"
-    # Also replace DIFile filename in debug info
-    $llvmIR = $llvmIR -replace 'DIFile\(filename: ".*?"', 'DIFile(filename: "test.maxon"'
-    
-    # The compiler generates output.exe by default
-    $actualExeFile = "output.exe"
     
     # Run the executable and capture exit code, stdout, and stderr
     Write-Host "Running executable..." -ForegroundColor Yellow
@@ -310,11 +422,33 @@ try {
     # Create the fragment content
     $fragmentContent = $SourceCode.TrimEnd()
     $fragmentContent += "`n---`n"
-    $fragmentContent += $llvmIR
+    
+    # Write IR sections - write what we have, or N/A if compilation failed
+    if ($optimizedIR) {
+        $fragmentContent += $optimizedIR
+    } else {
+        $fragmentContent += "N/A"
+    }
     $fragmentContent += "`n---`n"
     
-    # Add metadata fields in order: ExitCode first, then Args, then Stdout/Stderr
+    if ($unoptimizedIR) {
+        $fragmentContent += $unoptimizedIR
+    } else {
+        $fragmentContent += "N/A"
+    }
+    
+    $fragmentContent += "`n---`n"
+    
+    # Add metadata fields in order: ExitCode, instruction counts, Args, then Stdout/Stderr
     $fragmentContent += "ExitCode: $exitCode`n"
+    
+    # Add instruction counts if available
+    if ($optimizedInstructionCount -gt 0) {
+        $fragmentContent += "OptimizedInstructionCount: $optimizedInstructionCount`n"
+    }
+    if ($unoptimizedInstructionCount -gt 0) {
+        $fragmentContent += "UnoptimizedInstructionCount: $unoptimizedInstructionCount`n"
+    }
     
     # Always preserve Args if it was specified
     if ($global:PreservedArgs) {
@@ -371,6 +505,14 @@ try {
     Remove-Item "output.pdb" -ErrorAction SilentlyContinue
     Remove-Item "temp_stdout.txt" -ErrorAction SilentlyContinue
     Remove-Item "temp_stderr.txt" -ErrorAction SilentlyContinue
+    Remove-Item "temp-opt.ll" -ErrorAction SilentlyContinue
+    Remove-Item "temp-debug.ll" -ErrorAction SilentlyContinue
+    Remove-Item "temp_lli_out.txt" -ErrorAction SilentlyContinue
+    Remove-Item "temp_lli_err.txt" -ErrorAction SilentlyContinue
+    Remove-Item "temp_compile_opt_out.txt" -ErrorAction SilentlyContinue
+    Remove-Item "temp_compile_opt_err.txt" -ErrorAction SilentlyContinue
+    Remove-Item "temp_compile_debug_out.txt" -ErrorAction SilentlyContinue
+    Remove-Item "temp_compile_debug_err.txt" -ErrorAction SilentlyContinue
 }
 
 Write-Host "`nDone!" -ForegroundColor Green

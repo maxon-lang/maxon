@@ -1,18 +1,63 @@
 function main() int
-	var x = 5
-	var i = 3
-	while i > 0 'loop'
-		if i = 3 'check1'
-			x = x + 5
-		else 'check1'
-			if i = 2 'check2'
-				x = x + 2
-			end 'check2'
-		end 'check1'
-		i = i - 1
-	end 'loop'
-	return x
+var x = 5
+var i = 3
+while i > 0 'loop'
+if i = 3 'check1'
+x = x + 5
+else 'check1'
+if i = 2 'check2'
+x = x + 2
+end 'check2'
+end 'check1'
+i = i - 1
+end 'loop'
+return x
 end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+define i32 @main() {
+entry:
+  br label %whilecond
+
+whilecond:                                        ; preds = %ifcont10, %entry
+  %x.0 = phi i32 [ 5, %entry ], [ %x.2, %ifcont10 ]
+  %i.0 = phi i32 [ 3, %entry ], [ %subtmp, %ifcont10 ]
+  %cmptmp = icmp sgt i32 %i.0, 0
+  br i1 %cmptmp, label %loop, label %afterloop
+
+loop:                                             ; preds = %whilecond
+  switch i32 %i.0, label %ifcont10 [
+    i32 3, label %then
+    i32 2, label %then7
+  ]
+
+then:                                             ; preds = %loop
+  %addtmp = add i32 %x.0, 5
+  br label %ifcont10
+
+then7:                                            ; preds = %loop
+  %addtmp9 = add i32 %x.0, 2
+  br label %ifcont10
+
+ifcont10:                                         ; preds = %then7, %loop, %then
+  %x.2 = phi i32 [ %addtmp, %then ], [ %addtmp9, %then7 ], [ %x.0, %loop ]
+  %subtmp = add nsw i32 %i.0, -1
+  br label %whilecond
+
+afterloop:                                        ; preds = %whilecond
+  ret i32 %x.0
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
@@ -89,16 +134,18 @@ entry:
 !6 = !{!7}
 !7 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
 !8 = !{}
-!9 = !DILocation(line: 2, column: 2, scope: !4)
+!9 = !DILocation(line: 2, column: 1, scope: !4)
 !10 = !DILocalVariable(name: "x", scope: !4, file: !1, line: 2, type: !7, align: 32)
-!11 = !DILocation(line: 3, column: 2, scope: !4)
+!11 = !DILocation(line: 3, column: 1, scope: !4)
 !12 = !DILocalVariable(name: "i", scope: !4, file: !1, line: 3, type: !7, align: 32)
-!13 = !DILocation(line: 4, column: 2, scope: !4)
-!14 = !DILocation(line: 5, column: 3, scope: !4)
-!15 = !DILocation(line: 6, column: 6, scope: !4)
-!16 = !DILocation(line: 8, column: 4, scope: !4)
-!17 = !DILocation(line: 9, column: 7, scope: !4)
-!18 = !DILocation(line: 12, column: 5, scope: !4)
-!19 = !DILocation(line: 14, column: 2, scope: !4)
+!13 = !DILocation(line: 4, column: 1, scope: !4)
+!14 = !DILocation(line: 5, column: 1, scope: !4)
+!15 = !DILocation(line: 6, column: 3, scope: !4)
+!16 = !DILocation(line: 8, column: 1, scope: !4)
+!17 = !DILocation(line: 9, column: 3, scope: !4)
+!18 = !DILocation(line: 12, column: 3, scope: !4)
+!19 = !DILocation(line: 14, column: 1, scope: !4)
 ---
 ExitCode: 12
+OptimizedInstructionCount: 40
+UnoptimizedInstructionCount: 40
