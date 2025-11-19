@@ -1,5 +1,7 @@
 #include "compiler.h"
-#include "commands.h"
+#include "test_regenerate.h"
+#include "test_runner.h"
+#include "temp_runner.h"
 
 #include <cstring>
 #include <iostream>

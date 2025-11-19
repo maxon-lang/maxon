@@ -1,0 +1,9 @@
+#pragma once
+
+#include <string>
+
+// Normalize LLVM IR by replacing file paths with a standard name
+std::string normalizeIR(const std::string& ir);
+
+// Display a string with escape sequences visible (for debugging)
+std::string showWithEscapes(const std::string& s, size_t maxLen = 100);

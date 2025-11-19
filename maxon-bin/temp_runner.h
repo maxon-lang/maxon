@@ -2,6 +2,5 @@
 
 #include <string>
 
-int regenerateFragments();
-int runTestFragments(bool verbose);
+// Compile and run a Maxon source file in a temporary executable
 int compileAndRunTemporary(const std::string& sourceFile);

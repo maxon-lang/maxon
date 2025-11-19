@@ -48,7 +48,10 @@ set(SOURCES
     main.cpp
     file_utils.cpp
     compiler.cpp
-    commands.cpp
+    test_utils.cpp
+    test_regenerate.cpp
+    test_runner.cpp
+    temp_runner.cpp
     lexer.cpp
     parser.cpp
     codegen.cpp
