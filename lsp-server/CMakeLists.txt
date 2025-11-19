@@ -41,5 +41,16 @@ set_target_properties(maxon-lsp-server PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin
 )
 
+set(LSP_SERVER_RUNTIME "${CMAKE_SOURCE_DIR}/bin/maxon-lsp-server${CMAKE_EXECUTABLE_SUFFIX}")
+set(LSP_SERVER_BACKUP "${LSP_SERVER_RUNTIME}.old")
+
+add_custom_command(TARGET maxon-lsp-server PRE_BUILD
+    COMMAND ${CMAKE_COMMAND}
+        -DOUTPUT_PATH="${LSP_SERVER_RUNTIME}"
+        -DBACKUP_PATH="${LSP_SERVER_BACKUP}"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/rename_old_maxon_lsp_server.cmake
+    COMMENT "Renaming existing maxon-lsp-server binary before rebuild"
+)
+
 # Installation
 install(TARGETS maxon-lsp-server DESTINATION bin)

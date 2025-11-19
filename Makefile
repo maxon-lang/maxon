@@ -7,6 +7,8 @@ CC = "C:/Program Files/LLVM/bin/clang.exe"
 CXX = "C:/Program Files/LLVM/bin/clang++.exe"
 RC = "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe"
 LLC = "C:/Users/Eric/Dev/llvm-project/build/Release/bin/llc.exe"
+LSP_SERVER_BIN = bin/maxon-lsp-server.exe
+LSP_SERVER_BACKUP = $(LSP_SERVER_BIN).old
 
 RUNTIME_LL = maxon-runtime/runtime.ll
 RUNTIME_OBJ = maxon-runtime/runtime.obj
@@ -58,6 +60,7 @@ lsp: lsp-server extension-install
 
 # Build the C++ LSP server (depends on compiler sources)
 lsp-server: compiler
+	@powershell -Command "if (Test-Path '$(LSP_SERVER_BIN)') { Remove-Item '$(LSP_SERVER_BACKUP)' -ErrorAction SilentlyContinue; Rename-Item '$(LSP_SERVER_BIN)' '$(LSP_SERVER_BACKUP)' -ErrorAction SilentlyContinue }"
 	cmake --build $(BUILD_DIR) --target maxon-lsp-server
 
 # Build the VS Code extension (install + compile)

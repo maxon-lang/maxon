@@ -46,6 +46,9 @@ add_definitions(${LLVM_DEFINITIONS_LIST})
 # Source files
 set(SOURCES
     main.cpp
+    file_utils.cpp
+    compiler.cpp
+    commands.cpp
     lexer.cpp
     parser.cpp
     codegen.cpp
