@@ -637,10 +637,10 @@ void CodeGenerator::initStandardLibrary() {
         builder.SetInsertPoint(savedBlock);
     }
     
-    // Create print_float(float) -> int function
+    // Create print_float(float, int) -> int function
     llvm::FunctionType* printFloatFuncType = llvm::FunctionType::get(
         llvm::Type::getInt32Ty(context),
-        {llvm::Type::getDoubleTy(context)},
+        {llvm::Type::getDoubleTy(context), llvm::Type::getInt32Ty(context)},
         false
     );
     llvm::Function* printFloatFunc = llvm::Function::Create(
@@ -656,6 +656,7 @@ void CodeGenerator::initStandardLibrary() {
     builder.SetInsertPoint(floatEntry);
     
     llvm::Value* floatValueArg = printFloatFunc->getArg(0);
+    llvm::Value* precisionArg = printFloatFunc->getArg(1);
     
     // Allocate buffer on stack (32 bytes for float)
     llvm::Type* floatBufferType = llvm::ArrayType::get(charType, 32);
@@ -664,9 +665,6 @@ void CodeGenerator::initStandardLibrary() {
     
     // Initialize buffer to zero using runtime memset
     builder.CreateCall(memsetFunc, {floatBuffer, llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0), llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 32)});
-    
-    // Default precision = 6
-    int precision = 6;
     
     // Check if value is zero (exactly 0.0)
     llvm::BasicBlock* floatZeroCase = llvm::BasicBlock::Create(context, "zero_case", printFloatFunc);
@@ -685,13 +683,32 @@ void CodeGenerator::initStandardLibrary() {
         {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), llvm::ConstantInt::get(context, llvm::APInt(32, 1))});
     builder.CreateStore(llvm::ConstantInt::get(charType, '.'), zeroPtr1);
     
-    // Fill in precision decimal places with '0'
-    for (int i = 0; i < precision; i++) {
-        llvm::Value* zeroDecPtr = builder.CreateInBoundsGEP(floatBufferType, floatBuffer,
-            {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), llvm::ConstantInt::get(context, llvm::APInt(32, 2 + i))});
-        builder.CreateStore(llvm::ConstantInt::get(charType, '0'), zeroDecPtr);
-    }
-    llvm::Value* zeroLength = llvm::ConstantInt::get(context, llvm::APInt(32, 2 + precision, true));
+    // Fill in precision decimal places with '0' (runtime loop)
+    llvm::BasicBlock* zeroFillLoop = llvm::BasicBlock::Create(context, "zero_fill_loop", printFloatFunc);
+    llvm::BasicBlock* zeroFillBody = llvm::BasicBlock::Create(context, "zero_fill_body", printFloatFunc);
+    llvm::BasicBlock* zeroFillDone = llvm::BasicBlock::Create(context, "zero_fill_done", printFloatFunc);
+    
+    builder.CreateBr(zeroFillLoop);
+    
+    builder.SetInsertPoint(zeroFillLoop);
+    llvm::PHINode* zeroFillIdx = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "zero_fill_idx");
+    zeroFillIdx->addIncoming(llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)), floatZeroCase);
+    
+    llvm::Value* zeroFillCond = builder.CreateICmpSLT(zeroFillIdx, precisionArg);
+    builder.CreateCondBr(zeroFillCond, zeroFillBody, zeroFillDone);
+    
+    builder.SetInsertPoint(zeroFillBody);
+    llvm::Value* zeroFillOffset = builder.CreateAdd(llvm::ConstantInt::get(context, llvm::APInt(32, 2, true)), zeroFillIdx);
+    llvm::Value* zeroDecPtr = builder.CreateInBoundsGEP(floatBufferType, floatBuffer,
+        {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), zeroFillOffset});
+    builder.CreateStore(llvm::ConstantInt::get(charType, '0'), zeroDecPtr);
+    
+    llvm::Value* nextZeroFillIdx = builder.CreateAdd(zeroFillIdx, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
+    zeroFillIdx->addIncoming(nextZeroFillIdx, zeroFillBody);
+    builder.CreateBr(zeroFillLoop);
+    
+    builder.SetInsertPoint(zeroFillDone);
+    llvm::Value* zeroLength = builder.CreateAdd(llvm::ConstantInt::get(context, llvm::APInt(32, 2, true)), precisionArg);
     builder.CreateBr(floatFormatDone);
     
     // Non-zero case: format the float
@@ -841,11 +858,40 @@ void CodeGenerator::initStandardLibrary() {
     // Extract fractional part
     llvm::Value* fracPart = builder.CreateFSub(workValue, intPartFloat, "frac_part");
     
+    // Compute scale = 10^precision dynamically
+    llvm::BasicBlock* scaleLoop = llvm::BasicBlock::Create(context, "scale_loop", printFloatFunc);
+    llvm::BasicBlock* scaleBody = llvm::BasicBlock::Create(context, "scale_body", printFloatFunc);
+    llvm::BasicBlock* scaleDone = llvm::BasicBlock::Create(context, "scale_done", printFloatFunc);
+    
+    builder.CreateBr(scaleLoop);
+    
+    builder.SetInsertPoint(scaleLoop);
+    llvm::PHINode* scaleIdx = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "scale_idx");
+    scaleIdx->addIncoming(llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)), copyIntDone);
+    llvm::PHINode* scaleAccum = builder.CreatePHI(llvm::Type::getDoubleTy(context), 2, "scale_accum");
+    scaleAccum->addIncoming(llvm::ConstantFP::get(context, llvm::APFloat(1.0)), copyIntDone);
+    
+    llvm::Value* scaleCond = builder.CreateICmpSLT(scaleIdx, precisionArg);
+    builder.CreateCondBr(scaleCond, scaleBody, scaleDone);
+    
+    builder.SetInsertPoint(scaleBody);
+    llvm::Value* nextScale = builder.CreateFMul(scaleAccum, llvm::ConstantFP::get(context, llvm::APFloat(10.0)), "next_scale");
+    llvm::Value* nextScaleIdx = builder.CreateAdd(scaleIdx, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
+    
+    scaleAccum->addIncoming(nextScale, scaleBody);
+    scaleIdx->addIncoming(nextScaleIdx, scaleBody);
+    builder.CreateBr(scaleLoop);
+    
+    builder.SetInsertPoint(scaleDone);
+    llvm::Value* scale = scaleAccum;
+    
     // Scale by 10^precision and round
-    llvm::Value* scale = llvm::ConstantFP::get(context, llvm::APFloat(1000000.0));  // 10^6 for precision=6
     llvm::Value* fracScaled = builder.CreateFMul(fracPart, scale, "frac_scaled");
     llvm::Value* fracRounded = builder.CreateFAdd(fracScaled, llvm::ConstantFP::get(context, llvm::APFloat(0.5)), "frac_rounded");
     llvm::Value* fracInt = builder.CreateFPToSI(fracRounded, llvm::Type::getInt32Ty(context), "frac_int");
+    
+    // Compute precision - 1 for loop initialization
+    llvm::Value* precisionMinus1 = builder.CreateSub(precisionArg, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
     
     // Extract fractional digits (right to left)
     llvm::BasicBlock* fracDigitLoop = llvm::BasicBlock::Create(context, "frac_digit_loop", printFloatFunc);
@@ -856,9 +902,9 @@ void CodeGenerator::initStandardLibrary() {
     
     builder.SetInsertPoint(fracDigitLoop);
     llvm::PHINode* fracIdx = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "frac_idx");
-    fracIdx->addIncoming(llvm::ConstantInt::get(context, llvm::APInt(32, precision - 1, true)), copyIntDone);
+    fracIdx->addIncoming(precisionMinus1, scaleDone);
     llvm::PHINode* fracRemaining = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "frac_remaining");
-    fracRemaining->addIncoming(fracInt, copyIntDone);
+    fracRemaining->addIncoming(fracInt, scaleDone);
     
     llvm::Value* fracCond = builder.CreateICmpSGE(fracIdx, llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)));
     builder.CreateCondBr(fracCond, fracDigitBody, fracDigitsDone);
@@ -884,13 +930,13 @@ void CodeGenerator::initStandardLibrary() {
     // Fractional digits done
     builder.SetInsertPoint(fracDigitsDone);
     llvm::Value* finalPosValue = builder.CreateLoad(llvm::Type::getInt32Ty(context), floatPos);
-    llvm::Value* nonZeroLength = builder.CreateAdd(finalPosValue, llvm::ConstantInt::get(context, llvm::APInt(32, precision, true)));
+    llvm::Value* nonZeroLength = builder.CreateAdd(finalPosValue, precisionArg);
     builder.CreateBr(floatFormatDone);
     
     // Format done - write to stdout
     builder.SetInsertPoint(floatFormatDone);
     llvm::PHINode* finalFloatLength = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "final_float_length");
-    finalFloatLength->addIncoming(zeroLength, floatZeroCase);
+    finalFloatLength->addIncoming(zeroLength, zeroFillDone);
     finalFloatLength->addIncoming(nonZeroLength, fracDigitsDone);
     
     // Get stdout handle (-11)
