@@ -60,10 +60,16 @@ function Compile-MaxonIR {
         [string]$SourceFile,
         [string]$OutputLL,
         [string]$OptFlag,  # "-O" or "--debug"
-        [string]$CompilerPath
+        [string]$CompilerPath,
+        [switch]$WithProfile
     )
     
-    $compilerArgs = @("compile", $SourceFile, "--emit-llvm", "-o", $OutputLL, $OptFlag)
+    $compilerArgs = @("compile", $SourceFile, "--emit-llvm", "-o", $OutputLL)
+    if ($WithProfile) {
+        $compilerArgs += "--profile"
+    }
+    $compilerArgs += $OptFlag
+    
     $process = Start-Process -FilePath $CompilerPath -ArgumentList $compilerArgs -Wait -PassThru -NoNewWindow -RedirectStandardOutput "temp_compile_out.txt" -RedirectStandardError "temp_compile_err.txt"
     
     $stdout = ""
@@ -80,6 +86,7 @@ function Compile-MaxonIR {
     }
     
     $ir = ""
+    $exePath = ""
     if ($process.ExitCode -eq 0 -and (Test-Path $OutputLL)) {
         $ir = Get-Content $OutputLL -Raw
         if ($ir) {
@@ -88,11 +95,18 @@ function Compile-MaxonIR {
             $ir = $ir -replace "ModuleID = '.*?'", "ModuleID = 'test.maxon'"
             $ir = $ir -replace 'DIFile\(filename: ".*?"', 'DIFile(filename: "test.maxon"'
         }
+        
+        # Find the executable (same base name as .ll file)
+        $exePath = $OutputLL -replace '\.ll$', '.exe'
+        if (-not (Test-Path $exePath)) {
+            $exePath = ""
+        }
     }
     
     return @{
         ExitCode = $process.ExitCode
         IR = $ir
+        ExePath = $exePath
         Stdout = $stdout
         Stderr = $stderr
     }
@@ -105,54 +119,56 @@ function Normalize-ErrorMessage {
     return $Message -replace '(>>>.*?)(temp-opt|temp-debug|output|test)\.exe\.tmp\.obj', '$1test.exe.tmp.obj'
 }
 
-# Helper function to count instructions dynamically using --profile flag
-function Count-Instructions {
+# Helper function to run profiled executable and extract instruction count and program output
+function Run-ProfiledExecutable {
     param(
-        [string]$SourceFile,
-        [string]$OptimizeFlag,  # "-O" or "--debug"
+        [string]$ExePath,
         [string]$Args
     )
     
-    # Compile with profiling
-    $exePath = [System.IO.Path]::GetTempFileName() + ".exe"
-    $compileOutput = & maxon.exe compile $SourceFile --profile $OptimizeFlag -o $exePath 2>&1
-    
-    if ($LASTEXITCODE -ne 0 -or !(Test-Path $exePath)) {
-        # Compilation failed, fall back to static IR instruction counting
-        # Compilation failed, fall back to static IR instruction counting
-        $llPath = [System.IO.Path]::GetTempFileName() + ".ll"
-        & maxon.exe compile $SourceFile --emit-llvm $OptimizeFlag -o $llPath 2>&1 | Out-Null
-        
-        if ($LASTEXITCODE -eq 0 -and (Test-Path $llPath)) {
-            $irContent = Get-Content $llPath -Raw
-            
-            # Count actual LLVM instructions (not comments, labels, or declarations)
-            $instructions = $irContent -split "`n" | Where-Object {
-                $_ -match '^\s+%' -or                    # Instructions with results
-                $_ -match '^\s+(store|br|ret|call|invoke)' -or  # Instructions without results
-                $_ -match '^\s+(load|add|sub|mul|icmp|fcmp|alloca|getelementptr)'
-            }
-            
-            Remove-Item $llPath -ErrorAction SilentlyContinue
-            return $instructions.Count
+    if (-not $ExePath -or -not (Test-Path $ExePath)) {
+        return @{
+            InstructionCount = -1
+            ExitCode = -1
+            Stdout = ""
+            Stderr = ""
         }
-        
-        return -1
     }
     
     # Run and capture binary output
     try {
         # Capture stdout as raw bytes
         $tempOutput = [System.IO.Path]::GetTempFileName()
+        $tempError = [System.IO.Path]::GetTempFileName()
+        
+        $processArgs = @{
+            FilePath = $ExePath
+            NoNewWindow = $true
+            Wait = $true
+            PassThru = $true
+            RedirectStandardOutput = $tempOutput
+            RedirectStandardError = $tempError
+        }
         
         if ($Args) {
             $argArray = $Args -split '\s+'
-            $process = Start-Process -FilePath $exePath -ArgumentList $argArray -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tempOutput
-        } else {
-            $process = Start-Process -FilePath $exePath -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tempOutput
+            $processArgs['ArgumentList'] = $argArray
         }
         
-        # Read the raw bytes (regardless of exit code, program may have printed before exiting)
+        $process = Start-Process @processArgs
+        $exitCode = $process.ExitCode
+        
+        # Read stderr as text
+        $stderrText = ""
+        if (Test-Path $tempError) {
+            $stderrText = Get-Content $tempError -Raw
+            Remove-Item $tempError -ErrorAction SilentlyContinue
+        }
+        
+        # Read stdout as raw bytes to extract both text and binary marker
+        $stdoutText = ""
+        $instructionCount = -1
+        
         if (Test-Path $tempOutput) {
             $bytes = [System.IO.File]::ReadAllBytes($tempOutput)
             
@@ -177,20 +193,35 @@ function Count-Instructions {
             if ($markerIndex -ge 0) {
                 # Extract the 8 bytes after the marker
                 $countBytes = $bytes[($markerIndex + 14)..($markerIndex + 21)]
-                $count = [BitConverter]::ToInt64($countBytes, 0)
+                $instructionCount = [BitConverter]::ToInt64($countBytes, 0)
                 
-                Remove-Item $exePath -ErrorAction SilentlyContinue
-                Remove-Item $tempOutput -ErrorAction SilentlyContinue
-                return $count
+                # Extract text before the marker (the actual program output)
+                if ($markerIndex -gt 0) {
+                    $textBytes = $bytes[0..($markerIndex - 1)]
+                    $stdoutText = [System.Text.Encoding]::UTF8.GetString($textBytes)
+                }
+            } else {
+                # No marker found, treat entire output as text
+                $stdoutText = [System.Text.Encoding]::UTF8.GetString($bytes)
             }
+            
+            Remove-Item $tempOutput -ErrorAction SilentlyContinue
         }
         
-        Remove-Item $tempOutput -ErrorAction SilentlyContinue
-    } finally {
-        Remove-Item $exePath -ErrorAction SilentlyContinue
+        return @{
+            InstructionCount = $instructionCount
+            ExitCode = $exitCode
+            Stdout = $stdoutText
+            Stderr = $stderrText
+        }
+    } catch {
+        return @{
+            InstructionCount = -1
+            ExitCode = -1
+            Stdout = ""
+            Stderr = ""
+        }
     }
-    
-    return -1
 }
 
 # Validate inputs
@@ -282,7 +313,7 @@ try {
     $stdoutCapture = ""
     $stderrCapture = ""
     
-    # Compile both optimized and unoptimized versions
+    # Compile optimized version for IR (without profiling to keep IR clean)
     Write-Host "Compiling optimized version..." -ForegroundColor Yellow
     
     $optResult = Compile-MaxonIR -SourceFile $tempSourceFile -OutputLL "temp-opt.ll" -OptFlag "-O" -CompilerPath $compilerPath
@@ -313,15 +344,35 @@ try {
     }
     
     $optimizedIR = $optResult.IR
+    
+    # Now compile with profiling to get executable and instruction count
     if ($optimizedIR) {
-        # Count instructions using profiling
-        $optimizedInstructionCount = Count-Instructions -SourceFile $tempSourceFile -OptimizeFlag "-O" -Args $global:PreservedArgs
-        if ($optimizedInstructionCount -gt 0) {
-            Write-Host "Optimized instruction count: $optimizedInstructionCount" -ForegroundColor Gray
+        Write-Host "Compiling with profiling for execution..." -ForegroundColor Yellow
+        $profiledResult = Compile-MaxonIR -SourceFile $tempSourceFile -OutputLL "temp-opt-profiled.ll" -OptFlag "-O" -CompilerPath $compilerPath -WithProfile
+        
+        if ($profiledResult.ExePath) {
+            Write-Host "Running optimized executable..." -ForegroundColor Yellow
+            $runResult = Run-ProfiledExecutable -ExePath $profiledResult.ExePath -Args $global:PreservedArgs
+            
+            $optimizedInstructionCount = $runResult.InstructionCount
+            $exitCode = $runResult.ExitCode
+            $stdoutCapture = $runResult.Stdout
+            $stderrCapture = $runResult.Stderr
+            
+            if ($optimizedInstructionCount -gt 0) {
+                Write-Host "Optimized instruction count: $optimizedInstructionCount" -ForegroundColor Gray
+            }
+            Write-Host "Exit code: $exitCode" -ForegroundColor $(if ($exitCode -eq 0) { "Green" } else { "Yellow" })
+            if ($stdoutCapture) {
+                Write-Host "Stdout: $stdoutCapture" -ForegroundColor Gray
+            }
+            if ($stderrCapture) {
+                Write-Host "Stderr: $stderrCapture" -ForegroundColor Gray
+            }
         }
     }
     
-    # Compile unoptimized (unless SkipUnoptimized)
+    # Compile unoptimized version for IR (unless SkipUnoptimized)
     if (-not $SkipUnoptimized) {
         Write-Host "Compiling unoptimized version..." -ForegroundColor Yellow
         
@@ -329,81 +380,19 @@ try {
         
         if ($debugResult.ExitCode -eq 0) {
             $unoptimizedIR = $debugResult.IR
-            if ($unoptimizedIR) {
-                # Count instructions using profiling
-                $unoptimizedInstructionCount = Count-Instructions -SourceFile $tempSourceFile -OptimizeFlag "--debug" -Args $global:PreservedArgs
+            
+            # Compile with profiling for instruction count
+            $debugProfiledResult = Compile-MaxonIR -SourceFile $tempSourceFile -OutputLL "temp-debug-profiled.ll" -OptFlag "--debug" -CompilerPath $compilerPath -WithProfile
+            
+            if ($debugProfiledResult.ExePath) {
+                $debugRunResult = Run-ProfiledExecutable -ExePath $debugProfiledResult.ExePath -Args $global:PreservedArgs
+                $unoptimizedInstructionCount = $debugRunResult.InstructionCount
+                
                 if ($unoptimizedInstructionCount -gt 0) {
                     Write-Host "Unoptimized instruction count: $unoptimizedInstructionCount" -ForegroundColor Gray
                 }
             }
         }
-    }
-    
-    # The compiler generates executables alongside the .ll files
-    # For new dual-IR mode, we use the optimized executable
-    $actualExeFile = if (Test-Path "temp-opt.exe") { 
-        "temp-opt.exe" 
-    } elseif (Test-Path "temp-debug.exe") { 
-        "temp-debug.exe"
-    } else {
-        "output.exe"  # Fallback for old single-compile mode
-    }
-    
-    # Run the executable and capture exit code, stdout, and stderr
-    Write-Host "Running executable..." -ForegroundColor Yellow
-    $exitCode = 0
-    $stdoutCapture = ""
-    $stderrCapture = ""
-    
-    if (Test-Path $actualExeFile) {
-        try {
-            # Build argument list from preserved Args if available
-            $exeArgs = @()
-            if ($global:PreservedArgs) {
-                # Simple space-split - may need more sophisticated parsing for quoted args
-                $exeArgs = $global:PreservedArgs -split '\s+'
-            }
-            
-            # Run with arguments and capture output
-            $processArgs = @{
-                FilePath = ".\$actualExeFile"
-                Wait = $true
-                PassThru = $true
-                NoNewWindow = $true
-                RedirectStandardOutput = "temp_stdout.txt"
-                RedirectStandardError = "temp_stderr.txt"
-            }
-            
-            if ($exeArgs.Count -gt 0) {
-                $processArgs['ArgumentList'] = $exeArgs
-            }
-            
-            $process = Start-Process @processArgs
-            $exitCode = $process.ExitCode
-            
-            if (Test-Path "temp_stdout.txt") {
-                $stdoutCapture = Get-Content "temp_stdout.txt" -Raw
-                Remove-Item "temp_stdout.txt" -ErrorAction SilentlyContinue
-            }
-            if (Test-Path "temp_stderr.txt") {
-                $stderrCapture = Get-Content "temp_stderr.txt" -Raw
-                Remove-Item "temp_stderr.txt" -ErrorAction SilentlyContinue
-            }
-        } catch {
-            Write-Warning "Could not run executable: $_"
-            $exitCode = 1
-        }
-        
-        Write-Host "Exit code: $exitCode" -ForegroundColor $(if ($exitCode -eq 0) { "Green" } else { "Yellow" })
-        if ($stdoutCapture) {
-            Write-Host "Stdout: $stdoutCapture" -ForegroundColor Gray
-        }
-        if ($stderrCapture) {
-            Write-Host "Stderr: $stderrCapture" -ForegroundColor Gray
-        }
-    } else {
-        Write-Warning "Executable not found, assuming exit code 0"
-        $exitCode = 0
     }
     
     # Create the fragment content
@@ -448,7 +437,7 @@ try {
     # Add stdout/stderr from executable if present (use triple backticks for multiline)
     if ($stdoutCapture) {
         # Check if it's multiline
-        if ($stdoutCapture.Contains("`n")) {
+        if ($stdoutCapture -match "`n") {
             $fragmentContent += "Stdout: $backticks`n$($stdoutCapture.TrimEnd())`n$backticks`n"
         } else {
             $fragmentContent += "Stdout: $stdoutCapture`n"
@@ -457,7 +446,7 @@ try {
     
     if ($stderrCapture) {
         # Check if it's multiline
-        if ($stderrCapture.Contains("`n")) {
+        if ($stderrCapture -match "`n") {
             $fragmentContent += "Stderr: $backticks`n$($stderrCapture.TrimEnd())`n$backticks`n"
         } else {
             $fragmentContent += "Stderr: $stderrCapture`n"
@@ -466,7 +455,7 @@ try {
     
     # If no Stdout was captured but we have old-style Output, keep it for compatibility
     if (-not $stdoutCapture -and $outputCapture) {
-        if ($outputCapture.Contains("`n")) {
+        if ($outputCapture -match "`n") {
             $fragmentContent += "Output: ``````n$outputCapture`n``````n"
         } else {
             $fragmentContent += "Output: $outputCapture`n"
@@ -490,16 +479,20 @@ try {
     Remove-Item "temp_fragment.pdb" -ErrorAction SilentlyContinue
     Remove-Item "output.exe" -ErrorAction SilentlyContinue
     Remove-Item "output.pdb" -ErrorAction SilentlyContinue
-    Remove-Item "temp_stdout.txt" -ErrorAction SilentlyContinue
-    Remove-Item "temp_stderr.txt" -ErrorAction SilentlyContinue
     Remove-Item "temp-opt.ll" -ErrorAction SilentlyContinue
+    Remove-Item "temp-opt.exe" -ErrorAction SilentlyContinue
+    Remove-Item "temp-opt.pdb" -ErrorAction SilentlyContinue
+    Remove-Item "temp-opt-profiled.ll" -ErrorAction SilentlyContinue
+    Remove-Item "temp-opt-profiled.exe" -ErrorAction SilentlyContinue
+    Remove-Item "temp-opt-profiled.pdb" -ErrorAction SilentlyContinue
     Remove-Item "temp-debug.ll" -ErrorAction SilentlyContinue
-    Remove-Item "temp_lli_out.txt" -ErrorAction SilentlyContinue
-    Remove-Item "temp_lli_err.txt" -ErrorAction SilentlyContinue
-    Remove-Item "temp_compile_opt_out.txt" -ErrorAction SilentlyContinue
-    Remove-Item "temp_compile_opt_err.txt" -ErrorAction SilentlyContinue
-    Remove-Item "temp_compile_debug_out.txt" -ErrorAction SilentlyContinue
-    Remove-Item "temp_compile_debug_err.txt" -ErrorAction SilentlyContinue
+    Remove-Item "temp-debug.exe" -ErrorAction SilentlyContinue
+    Remove-Item "temp-debug.pdb" -ErrorAction SilentlyContinue
+    Remove-Item "temp-debug-profiled.ll" -ErrorAction SilentlyContinue
+    Remove-Item "temp-debug-profiled.exe" -ErrorAction SilentlyContinue
+    Remove-Item "temp-debug-profiled.pdb" -ErrorAction SilentlyContinue
+    Remove-Item "temp_compile_out.txt" -ErrorAction SilentlyContinue
+    Remove-Item "temp_compile_err.txt" -ErrorAction SilentlyContinue
 }
 
 Write-Host "`nDone!" -ForegroundColor Green
