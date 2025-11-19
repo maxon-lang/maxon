@@ -236,6 +236,37 @@ struct CompilationOptions {
     bool verbose = false;
 };
 
+// Helper function to parse a single file into an AST
+std::unique_ptr<ProgramAST> parseFile(const std::string& filePath, bool verbose) {
+    std::string source = readFile(filePath);
+    
+    if (verbose) {
+        std::cout << "Compiling " << filePath << "..." << std::endl;
+    }
+    
+    // Lexical analysis
+    Lexer lexer(source);
+    std::vector<Token> tokens = lexer.tokenize();
+    if (verbose) {
+        std::cout << "  Lexical analysis complete. Generated " << tokens.size() << " tokens." << std::endl;
+    }
+    
+    // Parsing
+    Parser parser(tokens);
+    std::string fileNamespace = deriveNamespace(filePath);
+    parser.setDefaultNamespace(fileNamespace);
+    std::unique_ptr<ProgramAST> program = parser.parse();
+    
+    if (verbose) {
+        std::cout << "  Parsing complete." << std::endl;
+        if (!fileNamespace.empty()) {
+            std::cout << "    File namespace: " << fileNamespace << std::endl;
+        }
+    }
+    
+    return program;
+}
+
 // Shared compilation function for both compile modes
 // Returns the output executable path on success, throws on error
 std::string compileProgram(const CompilationOptions& options) {
@@ -246,32 +277,8 @@ std::string compileProgram(const CompilationOptions& options) {
     
     // Initial compilation of input files
     for (const auto& inputFile : options.inputFiles) {
-        std::string source = readFile(inputFile);
-        sources.push_back(source);
-        if (options.verbose) {
-            std::cout << "Compiling " << inputFile << "..." << std::endl;
-        }
-        
-        // Lexical analysis
-        Lexer lexer(source);
-        std::vector<Token> tokens = lexer.tokenize();
-        if (options.verbose) {
-            std::cout << "  Lexical analysis complete. Generated " << tokens.size() << " tokens." << std::endl;
-        }
-        
-        // Parsing
-        Parser parser(tokens);
-        std::string fileNamespace = deriveNamespace(inputFile);
-        parser.setDefaultNamespace(fileNamespace);
-        std::unique_ptr<ProgramAST> program = parser.parse();
-        if (options.verbose) {
-            std::cout << "  Parsing complete." << std::endl;
-            if (!fileNamespace.empty()) {
-                std::cout << "    File namespace: " << fileNamespace << std::endl;
-            }
-        }
-        
-        programs.push_back(std::move(program));
+        sources.push_back(readFile(inputFile));
+        programs.push_back(parseFile(inputFile, options.verbose));
     }
     
     // Iterative compilation with stdlib auto-discovery
@@ -342,19 +349,8 @@ std::string compileProgram(const CompilationOptions& options) {
                     // If we discovered new files, rebuild all programs from sources
                     if (discoveredNewFiles) {
                         programs.clear();
-                        for (size_t i = 0; i < allFiles.size(); i++) {
-                            const auto& file = allFiles[i];
-                            const auto& source = sources[i];
-                            
-                            Lexer lexer(source);
-                            std::vector<Token> tokens = lexer.tokenize();
-                            
-                            Parser parser(tokens);
-                            std::string fileNamespace = deriveNamespace(file);
-                            parser.setDefaultNamespace(fileNamespace);
-                            std::unique_ptr<ProgramAST> program = parser.parse();
-                            
-                            programs.push_back(std::move(program));
+                        for (const auto& file : allFiles) {
+                            programs.push_back(parseFile(file, false));  // Don't verbose log stdlib files
                         }
                     }
                     
@@ -390,14 +386,7 @@ std::string compileProgram(const CompilationOptions& options) {
         // Success - rebuild programs from all sources for codegen
         programs.clear();
         for (const auto& file : allFiles) {
-            std::string source = readFile(file);
-            Lexer lexer(source);
-            std::vector<Token> tokens = lexer.tokenize();
-            Parser parser(tokens);
-            std::string fileNamespace = deriveNamespace(file);
-            parser.setDefaultNamespace(fileNamespace);
-            std::unique_ptr<ProgramAST> program = parser.parse();
-            programs.push_back(std::move(program));
+            programs.push_back(parseFile(file, false));
         }
         break;
         

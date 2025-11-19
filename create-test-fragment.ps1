@@ -54,6 +54,57 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Helper function to compile and extract IR
+function Compile-MaxonIR {
+    param(
+        [string]$SourceFile,
+        [string]$OutputLL,
+        [string]$OptFlag,  # "-O" or "--debug"
+        [string]$CompilerPath
+    )
+    
+    $compilerArgs = @("compile", $SourceFile, "--emit-llvm", "-o", $OutputLL, $OptFlag)
+    $process = Start-Process -FilePath $CompilerPath -ArgumentList $compilerArgs -Wait -PassThru -NoNewWindow -RedirectStandardOutput "temp_compile_out.txt" -RedirectStandardError "temp_compile_err.txt"
+    
+    $stdout = ""
+    $stderr = ""
+    if (Test-Path "temp_compile_out.txt") {
+        $temp = Get-Content "temp_compile_out.txt" -Raw
+        if ($temp) { $stdout = $temp }
+        Remove-Item "temp_compile_out.txt"
+    }
+    if (Test-Path "temp_compile_err.txt") {
+        $temp = Get-Content "temp_compile_err.txt" -Raw
+        if ($temp) { $stderr = $temp }
+        Remove-Item "temp_compile_err.txt"
+    }
+    
+    $ir = ""
+    if ($process.ExitCode -eq 0 -and (Test-Path $OutputLL)) {
+        $ir = Get-Content $OutputLL -Raw
+        if ($ir) {
+            $ir = $ir.Trim()
+            $ir = $ir -replace 'source_filename = ".*?"', 'source_filename = "test.maxon"'
+            $ir = $ir -replace "ModuleID = '.*?'", "ModuleID = 'test.maxon'"
+            $ir = $ir -replace 'DIFile\(filename: ".*?"', 'DIFile(filename: "test.maxon"'
+        }
+    }
+    
+    return @{
+        ExitCode = $process.ExitCode
+        IR = $ir
+        Stdout = $stdout
+        Stderr = $stderr
+    }
+}
+
+# Helper function to normalize error messages
+function Normalize-ErrorMessage {
+    param([string]$Message)
+    
+    return $Message -replace '(>>>.*?)(temp-opt|temp-debug|output|test)\.exe\.tmp\.obj', '$1test.exe.tmp.obj'
+}
+
 # Helper function to count instructions dynamically using --profile flag
 function Count-Instructions {
     param(
@@ -207,18 +258,12 @@ if (-not (Test-Path $OutputDir)) {
 # Paths
 $tempSourceFile = "temp_fragment.maxon"
 $tempExeFile = "temp_fragment.exe"
-$compilerPath = ".\build\bin\maxon.exe"
+$compilerPath = "maxon.exe"  # Use from PATH
 $outputFragmentPath = Join-Path $OutputDir "$TestName.test"
 
 # If updating an existing fragment that is actually a full path, use it directly
 if ($SourceFile -and (Test-Path $SourceFile) -and $SourceFile.EndsWith(".test")) {
     $outputFragmentPath = $SourceFile
-}
-
-# Check if compiler exists
-if (-not (Test-Path $compilerPath)) {
-    Write-Error "Compiler not found at: $compilerPath. Run 'make compiler' first."
-    exit 1
 }
 
 Write-Host "Creating test fragment: $TestName" -ForegroundColor Cyan
@@ -239,118 +284,60 @@ try {
     
     # Compile both optimized and unoptimized versions
     Write-Host "Compiling optimized version..." -ForegroundColor Yellow
+    
+    $optResult = Compile-MaxonIR -SourceFile $tempSourceFile -OutputLL "temp-opt.ll" -OptFlag "-O" -CompilerPath $compilerPath
+    
+    # Check if optimized compilation failed
+    if ($optResult.ExitCode -ne 0) {
+        Write-Host "Optimized compilation failed!" -ForegroundColor Red
+        Write-Host ($optResult.Stdout + $optResult.Stderr)
         
-        # Compile optimized
-        $compilerArgs = @("compile", $tempSourceFile, "--emit-llvm", "-o", "temp-opt.ll", "-O")
-        $compileProcess = Start-Process -FilePath $compilerPath -ArgumentList $compilerArgs -Wait -PassThru -NoNewWindow -RedirectStandardOutput "temp_compile_opt_out.txt" -RedirectStandardError "temp_compile_opt_err.txt"
-        $compileOptExitCode = $compileProcess.ExitCode
+        # Create error fragment with dual-IR format (both N/A)
+        $fragmentContent = $SourceCode.TrimEnd()
+        $fragmentContent += "`n---`nN/A`n---`nN/A`n---`n"
         
-        $compileOptStdout = ""
-        $compileOptStderr = ""
-        if (Test-Path "temp_compile_opt_out.txt") {
-            $temp = Get-Content "temp_compile_opt_out.txt" -Raw
-            if ($temp) { $compileOptStdout = $temp }
-            Remove-Item "temp_compile_opt_out.txt"
-        }
-        if (Test-Path "temp_compile_opt_err.txt") {
-            $temp = Get-Content "temp_compile_opt_err.txt" -Raw
-            if ($temp) { $compileOptStderr = $temp }
-            Remove-Item "temp_compile_opt_err.txt"
+        if ($global:PreservedArgs) {
+            $fragmentContent += "Args: $global:PreservedArgs`n"
         }
         
-        $compileOptOutput = $compileOptStdout + $compileOptStderr
+        $backticks = '```'
+        $errorMessage = if ($optResult.Stderr) { $optResult.Stderr } else { $optResult.Stdout + $optResult.Stderr }
+        $normalizedStderr = Normalize-ErrorMessage $errorMessage
+        $fragmentContent += "MaxoncStderr: $backticks`n$($normalizedStderr.TrimEnd())`n$backticks"
         
-        # Check if optimized compilation failed
-        if ($compileOptExitCode -ne 0) {
-            Write-Host "Optimized compilation failed!" -ForegroundColor Red
-            Write-Host $compileOptOutput
-            
-            # Create error fragment with dual-IR format (both N/A)
-            $fragmentContent = $SourceCode.TrimEnd()
-            $fragmentContent += "`n---`nN/A`n---`nN/A`n---`n"
-            
-            if ($global:PreservedArgs) {
-                $fragmentContent += "Args: $global:PreservedArgs`n"
-            }
-            
-            $backticks = '```'
-            if ($compileOptStderr) {
-                $normalizedStderr = $compileOptStderr -replace '(>>>.*?)(temp-opt|temp-debug|output|test)\.exe\.tmp\.obj', '$1test.exe.tmp.obj'
-                $fragmentContent += "MaxoncStderr: $backticks`n$($normalizedStderr.TrimEnd())`n$backticks"
-            }
-            else {
-                $normalizedOutput = $compileOptOutput -replace '(>>>.*?)(temp-opt|temp-debug|output|test)\.exe\.tmp\.obj', '$1test.exe.tmp.obj'
-                $fragmentContent += "MaxoncStderr: $backticks`n$($normalizedOutput.TrimEnd())`n$backticks"
-            }
-            
-            $fragmentContent = $fragmentContent -replace "`r`n", "`n" -replace "`n", "`r`n"
-            $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-            [System.IO.File]::WriteAllText($outputFragmentPath, $fragmentContent, $utf8NoBom)
-            Write-Host "Test fragment created: $outputFragmentPath" -ForegroundColor Green
-            exit 0
+        $fragmentContent = $fragmentContent -replace "`r`n", "`n" -replace "`n", "`r`n"
+        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($outputFragmentPath, $fragmentContent, $utf8NoBom)
+        Write-Host "Test fragment created: $outputFragmentPath" -ForegroundColor Green
+        exit 0
+    }
+    
+    $optimizedIR = $optResult.IR
+    if ($optimizedIR) {
+        # Count instructions using profiling
+        $optimizedInstructionCount = Count-Instructions -SourceFile $tempSourceFile -OptimizeFlag "-O" -Args $global:PreservedArgs
+        if ($optimizedInstructionCount -gt 0) {
+            Write-Host "Optimized instruction count: $optimizedInstructionCount" -ForegroundColor Gray
         }
+    }
+    
+    # Compile unoptimized (unless SkipUnoptimized)
+    if (-not $SkipUnoptimized) {
+        Write-Host "Compiling unoptimized version..." -ForegroundColor Yellow
         
-        # Extract optimized IR from the generated .ll file
-        $llOptFile = "temp-opt.ll"
-        if (Test-Path $llOptFile) {
-            $optimizedIR = Get-Content $llOptFile -Raw
-            if ($optimizedIR) {
-                $optimizedIR = $optimizedIR.Trim()
-                $optimizedIR = $optimizedIR -replace 'source_filename = ".*?"', 'source_filename = "test.maxon"'
-                $optimizedIR = $optimizedIR -replace "ModuleID = '.*?'", "ModuleID = 'test.maxon'"
-                $optimizedIR = $optimizedIR -replace 'DIFile\(filename: ".*?"', 'DIFile(filename: "test.maxon"'
-                
+        $debugResult = Compile-MaxonIR -SourceFile $tempSourceFile -OutputLL "temp-debug.ll" -OptFlag "--debug" -CompilerPath $compilerPath
+        
+        if ($debugResult.ExitCode -eq 0) {
+            $unoptimizedIR = $debugResult.IR
+            if ($unoptimizedIR) {
                 # Count instructions using profiling
-                $optimizedInstructionCount = Count-Instructions -SourceFile $tempSourceFile -OptimizeFlag "-O" -Args $global:PreservedArgs
-                if ($optimizedInstructionCount -gt 0) {
-                    Write-Host "Optimized instruction count: $optimizedInstructionCount" -ForegroundColor Gray
+                $unoptimizedInstructionCount = Count-Instructions -SourceFile $tempSourceFile -OptimizeFlag "--debug" -Args $global:PreservedArgs
+                if ($unoptimizedInstructionCount -gt 0) {
+                    Write-Host "Unoptimized instruction count: $unoptimizedInstructionCount" -ForegroundColor Gray
                 }
             }
         }
-        
-        # Compile unoptimized (unless SkipUnoptimized)
-        if (-not $SkipUnoptimized) {
-            Write-Host "Compiling unoptimized version..." -ForegroundColor Yellow
-            
-            $compilerArgs = @("compile", $tempSourceFile, "--emit-llvm", "-o", "temp-debug.ll", "--debug")
-            $compileProcess = Start-Process -FilePath $compilerPath -ArgumentList $compilerArgs -Wait -PassThru -NoNewWindow -RedirectStandardOutput "temp_compile_debug_out.txt" -RedirectStandardError "temp_compile_debug_err.txt"
-            $compileDebugExitCode = $compileProcess.ExitCode
-            
-            $compileDebugStdout = ""
-            $compileDebugStderr = ""
-            if (Test-Path "temp_compile_debug_out.txt") {
-                $temp = Get-Content "temp_compile_debug_out.txt" -Raw
-                if ($temp) { $compileDebugStdout = $temp }
-                Remove-Item "temp_compile_debug_out.txt"
-            }
-            if (Test-Path "temp_compile_debug_err.txt") {
-                $temp = Get-Content "temp_compile_debug_err.txt" -Raw
-                if ($temp) { $compileDebugStderr = $temp }
-                Remove-Item "temp_compile_debug_err.txt"
-            }
-            
-            $compileDebugOutput = $compileDebugStdout + $compileDebugStderr
-            
-            if ($compileDebugExitCode -eq 0) {
-                # Extract unoptimized IR from the generated .ll file
-                $llDebugFile = "temp-debug.ll"
-                if (Test-Path $llDebugFile) {
-                    $unoptimizedIR = Get-Content $llDebugFile -Raw
-                    if ($unoptimizedIR) {
-                        $unoptimizedIR = $unoptimizedIR.Trim()
-                        $unoptimizedIR = $unoptimizedIR -replace 'source_filename = ".*?"', 'source_filename = "test.maxon"'
-                        $unoptimizedIR = $unoptimizedIR -replace "ModuleID = '.*?'", "ModuleID = 'test.maxon'"
-                        $unoptimizedIR = $unoptimizedIR -replace 'DIFile\(filename: ".*?"', 'DIFile(filename: "test.maxon"'
-                        
-                        # Count instructions using profiling
-                        $unoptimizedInstructionCount = Count-Instructions -SourceFile $tempSourceFile -OptimizeFlag "--debug" -Args $global:PreservedArgs
-                        if ($unoptimizedInstructionCount -gt 0) {
-                            Write-Host "Unoptimized instruction count: $unoptimizedInstructionCount" -ForegroundColor Gray
-                        }
-                    }
-                }
-            }
-        }
+    }
     
     # The compiler generates executables alongside the .ll files
     # For new dual-IR mode, we use the optimized executable

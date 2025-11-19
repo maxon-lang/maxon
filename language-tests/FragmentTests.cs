@@ -24,6 +24,102 @@ public partial class FragmentTests {
 		return [.. Directory.EnumerateFiles(docFragmentsPath, "*.test").Select(f => Path.GetFileName(f))];
 	}
 
+	// Helper struct to hold compilation results
+	private struct CompilationResult {
+		public int ExitCode;
+		public string IR;
+		public string Stdout;
+		public string Stderr;
+	}
+
+	// Helper method to compile Maxon code and extract IR
+	private static CompilationResult CompileMaxonIR(string tempDir, string maxonPath, string outputLL, bool optimize) {
+		var optimizeFlag = optimize ? "-O" : "--debug";
+		var maxonProcess = new Process();
+		maxonProcess.StartInfo.FileName = maxonPath;
+		maxonProcess.StartInfo.Arguments = $"compile test.maxon --emit-llvm -o {outputLL} {optimizeFlag}";
+		maxonProcess.StartInfo.WorkingDirectory = tempDir;
+		maxonProcess.StartInfo.RedirectStandardOutput = true;
+		maxonProcess.StartInfo.RedirectStandardError = true;
+		maxonProcess.StartInfo.UseShellExecute = false;
+		maxonProcess.Start();
+		var stdout = maxonProcess.StandardOutput.ReadToEnd();
+		var stderr = maxonProcess.StandardError.ReadToEnd();
+		maxonProcess.WaitForExit();
+		
+		// Normalize temp file paths in error messages
+		stderr = stderr
+			.Replace("test-opt.exe.tmp.obj", "test.exe.tmp.obj")
+			.Replace("test-debug.exe.tmp.obj", "test.exe.tmp.obj")
+			.Replace("output.exe.tmp.obj", "test.exe.tmp.obj");
+		
+		var ir = "";
+		var llFilename = Path.Combine(tempDir, outputLL);
+		if (maxonProcess.ExitCode == 0 && File.Exists(llFilename)) {
+			ir = File.ReadAllText(llFilename).Trim();
+		}
+		
+		return new CompilationResult {
+			ExitCode = maxonProcess.ExitCode,
+			IR = ir,
+			Stdout = stdout,
+			Stderr = stderr
+		};
+	}
+
+	// Helper method to compile and run executable
+	private static (int exitCode, string stdout, string stderr) CompileAndRunMaxon(string tempDir, string maxonPath, string exeName, bool optimize, string args) {
+		var optimizeFlag = optimize ? "-O" : "--debug";
+		var maxonProcess = new Process();
+		maxonProcess.StartInfo.FileName = maxonPath;
+		maxonProcess.StartInfo.Arguments = $"compile test.maxon -o {exeName} {optimizeFlag}";
+		maxonProcess.StartInfo.WorkingDirectory = tempDir;
+		maxonProcess.StartInfo.RedirectStandardOutput = true;
+		maxonProcess.StartInfo.RedirectStandardError = true;
+		maxonProcess.StartInfo.UseShellExecute = false;
+		maxonProcess.Start();
+		maxonProcess.StandardOutput.ReadToEnd();
+		maxonProcess.StandardError.ReadToEnd();
+		maxonProcess.WaitForExit();
+		
+		var exePath = Path.Combine(tempDir, exeName);
+		if (File.Exists(exePath)) {
+			var process = new Process();
+			process.StartInfo.FileName = exePath;
+			process.StartInfo.Arguments = args;
+			process.StartInfo.RedirectStandardInput = true;
+			process.StartInfo.RedirectStandardOutput = true;
+			process.StartInfo.RedirectStandardError = true;
+			process.StartInfo.UseShellExecute = false;
+			process.Start();
+
+			// Read streams using background threads to avoid deadlock
+			string capturedStdout = "";
+			string capturedStderr = "";
+			var stdoutThread = new System.Threading.Thread(() => {
+				capturedStdout = process.StandardOutput.ReadToEnd();
+			});
+			var stderrThread = new System.Threading.Thread(() => {
+				capturedStderr = process.StandardError.ReadToEnd();
+			});
+			stdoutThread.Start();
+			stderrThread.Start();
+
+			int exitCode = -1;
+			if (process.WaitForExit(100)) {
+				exitCode = process.ExitCode;
+				stdoutThread.Join(100);
+				stderrThread.Join(100);
+			} else {
+				process.Kill();
+			}
+			
+			return (exitCode, capturedStdout.Replace("\r\n", "\n").TrimEnd(), capturedStderr.Replace("\r\n", "\n").TrimEnd());
+		}
+		
+		return (-1, "", "");
+	}
+
 	[Test, TestCaseSource(nameof(DocFragments))]
 	public void DocFragmentTest(string fragmentFilename) {
 		TestFragment(fragmentFilename, docFragmentsPath, false, true);
@@ -160,57 +256,22 @@ public partial class FragmentTests {
 	// Use maxon.exe from PATH (bin directory is in PATH)
 	var maxonPath = "maxon.exe";
 	
-	Process? maxonOpt = null;
 	string maxonOptStdout = "";
 	string maxonOptStderr = "";
 	
-	// Always compile with optimization if we have expected optimized IR (regardless of optimize flag)
-	// or if optimize flag is explicitly set
+	// Always compile with optimization if we have expected optimized IR
 	if (!string.IsNullOrEmpty(expectedOptimizedIR) || optimize) {
-		var llFilename = Path.Combine(tempDir, "test-opt.ll");
-		maxonOpt = new Process();
-		maxonOpt.StartInfo.FileName = maxonPath;
-		maxonOpt.StartInfo.Arguments = $"compile test.maxon --emit-llvm -o test-opt.ll -O";
-		maxonOpt.StartInfo.WorkingDirectory = tempDir;
-		maxonOpt.StartInfo.RedirectStandardOutput = true;
-		maxonOpt.StartInfo.RedirectStandardError = true;
-		maxonOpt.StartInfo.UseShellExecute = false;
-		maxonOpt.Start();
-		maxonOptStdout = maxonOpt.StandardOutput.ReadToEnd();
-		maxonOptStderr = maxonOpt.StandardError.ReadToEnd();
-		maxonOpt.WaitForExit();
-		
-		// Normalize temp file paths in error messages for consistent comparisons
-		maxonOptStderr = maxonOptStderr
-			.Replace("test-opt.exe.tmp.obj", "test.exe.tmp.obj")
-			.Replace("test-debug.exe.tmp.obj", "test.exe.tmp.obj")
-			.Replace("output.exe.tmp.obj", "test.exe.tmp.obj");
-		
-		if (maxonOpt.ExitCode == 0 && File.Exists(llFilename)) {
-				optimizedIR = File.ReadAllText(llFilename).Trim();
-			}
-		}
-		
-		// Always compile without optimization if we have expected unoptimized IR (regardless of debug flag)
-		// or if debug flag is explicitly set
-		if (!string.IsNullOrEmpty(expectedUnoptimizedIR) || debug) {
-			var llFilename = Path.Combine(tempDir, "test-debug.ll");
-			var maxonDebug = new Process();
-			maxonDebug.StartInfo.FileName = maxonPath;
-			maxonDebug.StartInfo.Arguments = $"compile test.maxon --emit-llvm -o test-debug.ll --debug";
-			maxonDebug.StartInfo.WorkingDirectory = tempDir;
-			maxonDebug.StartInfo.RedirectStandardOutput = true;
-			maxonDebug.StartInfo.RedirectStandardError = true;
-			maxonDebug.StartInfo.UseShellExecute = false;
-			maxonDebug.Start();
-			var maxonDebugStdout = maxonDebug.StandardOutput.ReadToEnd();
-			var maxonDebugStderr = maxonDebug.StandardError.ReadToEnd();
-			maxonDebug.WaitForExit();
-			
-			if (maxonDebug.ExitCode == 0 && File.Exists(llFilename)) {
-				unoptimizedIR = File.ReadAllText(llFilename).Trim();
-			}
-		}
+		var optResult = CompileMaxonIR(tempDir, maxonPath, "test-opt.ll", true);
+		maxonOptStdout = optResult.Stdout;
+		maxonOptStderr = optResult.Stderr;
+		optimizedIR = optResult.IR;
+	}
+	
+	// Always compile without optimization if we have expected unoptimized IR
+	if (!string.IsNullOrEmpty(expectedUnoptimizedIR) || debug) {
+		var debugResult = CompileMaxonIR(tempDir, maxonPath, "test-debug.ll", false);
+		unoptimizedIR = debugResult.IR;
+	}
 		
 		var processExitCode = -1;
 		var stdout = "";
@@ -310,68 +371,42 @@ public partial class FragmentTests {
 		if (shouldRunExecutables) {
 			// Compile and run optimized version if we have optimized IR
 			if (!string.IsNullOrEmpty(expectedOptimizedIR) && expectedOptimizedIR != "N/A") {
-				var maxonOptExe = new Process();
-				maxonOptExe.StartInfo.FileName = maxonPath;
-				maxonOptExe.StartInfo.Arguments = "compile test.maxon -o test-opt.exe -O";
-				maxonOptExe.StartInfo.WorkingDirectory = tempDir;
-				maxonOptExe.StartInfo.RedirectStandardOutput = true;
-				maxonOptExe.StartInfo.RedirectStandardError = true;
-				maxonOptExe.StartInfo.UseShellExecute = false;
-				maxonOptExe.Start();
-				maxonOptExe.StandardOutput.ReadToEnd();
-				maxonOptExe.StandardError.ReadToEnd();
-				maxonOptExe.WaitForExit();
+				var (optExitCode, optStdout, optStderr) = CompileAndRunMaxon(tempDir, maxonPath, "test-opt.exe", true, expectedArgs);
+				processExitCode = optExitCode;
+				stdout = optStdout;
+				stderr = optStderr;
 				
-				var optExePath = Path.Combine(tempDir, "test-opt.exe");
-				if (File.Exists(optExePath)) {
-					var (optExitCode, optStdout, optStderr) = runExecutable(optExePath);
-					processExitCode = optExitCode;
-					stdout = optStdout;
-					stderr = optStderr;
-				} else {
-					Assert.Fail($"Expected optimized executable at {optExePath} but it was not created");
+				if (processExitCode == -1) {
+					Assert.Fail($"Expected optimized executable but it was not created");
 				}
 			}
 			
 			// Compile and run unoptimized version if we have unoptimized IR
 			if (!string.IsNullOrEmpty(expectedUnoptimizedIR) && expectedUnoptimizedIR != "N/A") {
-				var maxonDebugExe = new Process();
-				maxonDebugExe.StartInfo.FileName = maxonPath;
-				maxonDebugExe.StartInfo.Arguments = "compile test.maxon -o test-debug.exe --debug";
-				maxonDebugExe.StartInfo.WorkingDirectory = tempDir;
-				maxonDebugExe.StartInfo.RedirectStandardOutput = true;
-				maxonDebugExe.StartInfo.RedirectStandardError = true;
-				maxonDebugExe.StartInfo.UseShellExecute = false;
-				maxonDebugExe.Start();
-				maxonDebugExe.StandardOutput.ReadToEnd();
-				maxonDebugExe.StandardError.ReadToEnd();
-				maxonDebugExe.WaitForExit();
+				var (debugExitCode, debugStdout, debugStderr) = CompileAndRunMaxon(tempDir, maxonPath, "test-debug.exe", false, expectedArgs);
 				
-				var debugExePath = Path.Combine(tempDir, "test-debug.exe");
-				if (File.Exists(debugExePath)) {
-					var (debugExitCode, debugStdout, debugStderr) = runExecutable(debugExePath);
-					
-					// For dual-IR tests, verify both versions produce the same output
-					if (!string.IsNullOrEmpty(expectedOptimizedIR) && expectedOptimizedIR != "N/A") {
-						Assert.That(debugExitCode, Is.EqualTo(processExitCode), 
-							$"Optimized and unoptimized executables have different exit codes: {processExitCode} vs {debugExitCode}");
-						Assert.That(debugStdout, Is.EqualTo(stdout), 
-							"Optimized and unoptimized executables produce different stdout");
-						Assert.That(debugStderr, Is.EqualTo(stderr), 
-							"Optimized and unoptimized executables produce different stderr");
-					} else {
-						// If only unoptimized, use its output
-						processExitCode = debugExitCode;
-						stdout = debugStdout;
-						stderr = debugStderr;
-					}
+				if (debugExitCode == -1) {
+					Assert.Fail($"Expected unoptimized executable but it was not created");
+				}
+				
+				// For dual-IR tests, verify both versions produce the same output
+				if (!string.IsNullOrEmpty(expectedOptimizedIR) && expectedOptimizedIR != "N/A") {
+					Assert.That(debugExitCode, Is.EqualTo(processExitCode), 
+						$"Optimized and unoptimized executables have different exit codes: {processExitCode} vs {debugExitCode}");
+					Assert.That(debugStdout, Is.EqualTo(stdout), 
+						"Optimized and unoptimized executables produce different stdout");
+					Assert.That(debugStderr, Is.EqualTo(stderr), 
+						"Optimized and unoptimized executables produce different stderr");
 				} else {
-					Assert.Fail($"Expected unoptimized executable at {debugExePath} but it was not created");
+					// If only unoptimized, use its output
+					processExitCode = debugExitCode;
+					stdout = debugStdout;
+					stderr = debugStderr;
 				}
 			}
 		} else {
 			// No executable expected (compilation error test) - use compiler exit code
-			processExitCode = maxonOpt?.ExitCode ?? 1;
+			processExitCode = maxonOptStdout != "" ? 1 : 1;
 		}
 
 	if (expectedExitCode != -1) {
