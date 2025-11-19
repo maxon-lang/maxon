@@ -84,7 +84,7 @@ public:
     void printIR();
     void writeIRToFile(const std::string& filename);
     void writeObjectFile(const std::string& filename);
-    void writeExecutable(const std::string& exeFile);
+    void writeExecutable(const std::string& exeFile, llvm::raw_ostream* errorStream = nullptr);
     llvm::Module* getModule() { return module.get(); }
 };
 

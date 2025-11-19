@@ -11,21 +11,20 @@ end 'main'
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
-define i32 @main() {
+; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)
+define noundef range(i32 0, 9) i32 @main() local_unnamed_addr #0 {
 entry:
-  %0 = call double @"stdlib::math::pow"(double 2.000000e+00, double 3.000000e+00)
-  %fcmptmp = fcmp ogt double %0, 7.500000e+00
-  %. = select i1 %fcmptmp, i32 8, i32 0
-  ret i32 %.
+  ret i32 8
 }
 
-define double @"stdlib::math::pow"(double %0, double %1) {
+; Function Attrs: nofree norecurse nosync nounwind memory(none)
+define double @"stdlib::math::pow"(double %0, double %1) local_unnamed_addr #1 {
 entry:
   %fcmptmp = fcmp oeq double %1, 0.000000e+00
   br i1 %fcmptmp, label %common.ret, label %ifcont
 
-common.ret:                                       ; preds = %ifcont69, %afterloop, %then51, %ifcont9, %ifcont, %entry, %ifcont72
-  %common.ret.op = phi double [ %4, %ifcont72 ], [ 1.000000e+00, %entry ], [ 0.000000e+00, %ifcont ], [ 1.000000e+00, %ifcont9 ], [ %result.3, %then51 ], [ %result.2, %afterloop ], [ 0.000000e+00, %ifcont69 ]
+common.ret:                                       ; preds = %then51, %afterloop, %ifcont69, %ifcont9, %ifcont, %entry, %ifcont72
+  %common.ret.op = phi double [ %4, %ifcont72 ], [ 1.000000e+00, %entry ], [ 0.000000e+00, %ifcont ], [ 1.000000e+00, %ifcont9 ], [ 0.000000e+00, %ifcont69 ], [ %result.2, %afterloop ], [ %spec.select90, %then51 ]
   ret double %common.ret.op
 
 ifcont:                                           ; preds = %entry
@@ -38,8 +37,6 @@ ifcont9:                                          ; preds = %ifcont
 
 ifcont13:                                         ; preds = %ifcont9
   %fcmptmp15 = fcmp olt double %0, 0.000000e+00
-  %fnegtmp = fneg double %0
-  %base.0 = select i1 %fcmptmp15, double %fnegtmp, double %0
   %trunc = fptosi double %1 to i32
   %promotetmp = sitofp i32 %trunc to double
   %fcmptmp23 = fcmp oeq double %1, %promotetmp
@@ -47,51 +44,53 @@ ifcont13:                                         ; preds = %ifcont9
 
 then25:                                           ; preds = %ifcont13
   %cmptmp = icmp slt i32 %trunc, 0
-  %negtmp = sub i32 0, %trunc
-  %spec.select = select i1 %cmptmp, i32 %negtmp, i32 %trunc
-  br label %whilecond
+  %spec.select = tail call i32 @llvm.abs.i32(i32 %trunc, i1 false)
+  %cmptmp3491 = icmp sgt i32 %spec.select, 0
+  br i1 %cmptmp3491, label %loop.preheader, label %afterloop
 
-whilecond:                                        ; preds = %loop, %then25
-  %current_base.0 = phi double [ %base.0, %then25 ], [ %fmultmp44, %loop ]
-  %n.1 = phi i32 [ %spec.select, %then25 ], [ %divtmp78, %loop ]
-  %result.0 = phi double [ 1.000000e+00, %then25 ], [ %spec.select79, %loop ]
-  %cmptmp34 = icmp sgt i32 %n.1, 0
-  br i1 %cmptmp34, label %loop, label %afterloop
+loop.preheader:                                   ; preds = %then25
+  %fnegtmp = fneg double %0
+  %base.0 = select i1 %fcmptmp15, double %fnegtmp, double %0
+  br label %loop
 
-loop:                                             ; preds = %whilecond
-  %modtmp = and i32 %n.1, 1
+loop:                                             ; preds = %loop.preheader, %loop
+  %current_base.094 = phi double [ %fmultmp44, %loop ], [ %base.0, %loop.preheader ]
+  %n.193 = phi i32 [ %divtmp87, %loop ], [ %spec.select, %loop.preheader ]
+  %result.092 = phi double [ %spec.select88, %loop ], [ 1.000000e+00, %loop.preheader ]
+  %modtmp = and i32 %n.193, 1
   %cmptmp37.not = icmp eq i32 %modtmp, 0
-  %fmultmp = fmul double %current_base.0, %result.0
-  %spec.select79 = select i1 %cmptmp37.not, double %result.0, double %fmultmp
-  %fmultmp44 = fmul double %current_base.0, %current_base.0
-  %divtmp78 = lshr i32 %n.1, 1
-  br label %whilecond
+  %fmultmp = fmul double %result.092, %current_base.094
+  %spec.select88 = select i1 %cmptmp37.not, double %result.092, double %fmultmp
+  %fmultmp44 = fmul double %current_base.094, %current_base.094
+  %divtmp87 = lshr i32 %n.193, 1
+  %cmptmp34.not = icmp samesign ult i32 %n.193, 2
+  br i1 %cmptmp34.not, label %afterloop, label %loop
 
-afterloop:                                        ; preds = %whilecond
-  %fdivtmp = fdiv double 1.000000e+00, %result.0
-  %result.2 = select i1 %cmptmp, double %fdivtmp, double %result.0
+afterloop:                                        ; preds = %loop, %then25
+  %result.0.lcssa = phi double [ 1.000000e+00, %then25 ], [ %spec.select88, %loop ]
+  %fdivtmp = fdiv double 1.000000e+00, %result.0.lcssa
+  %result.2 = select i1 %cmptmp, double %fdivtmp, double %result.0.lcssa
   br i1 %fcmptmp15, label %then51, label %common.ret
 
 then51:                                           ; preds = %afterloop
-  %negtmp57 = sub i32 0, %trunc
-  %spec.select80 = select i1 %cmptmp, i32 %negtmp57, i32 %trunc
-  %2 = and i32 %spec.select80, -2147483647
+  %2 = and i32 %spec.select, -2147483647
   %cmptmp61 = icmp eq i32 %2, 1
   %fnegtmp65 = fneg double %result.2
-  %result.3 = select i1 %cmptmp61, double %fnegtmp65, double %result.2
+  %spec.select90 = select i1 %cmptmp61, double %fnegtmp65, double %result.2
   br label %common.ret
 
 ifcont69:                                         ; preds = %ifcont13
   br i1 %fcmptmp15, label %common.ret, label %ifcont72
 
 ifcont72:                                         ; preds = %ifcont69
-  %3 = call double @"stdlib::math::log"(double %base.0)
+  %3 = tail call double @"stdlib::math::log"(double %0)
   %fmultmp76 = fmul double %1, %3
-  %4 = call double @"stdlib::math::exp"(double %fmultmp76)
+  %4 = tail call double @"stdlib::math::exp"(double %fmultmp76)
   br label %common.ret
 }
 
-define double @"stdlib::math::exp"(double %0) {
+; Function Attrs: nofree norecurse nosync nounwind memory(none)
+define double @"stdlib::math::exp"(double %0) local_unnamed_addr #1 {
 entry:
   %fcmptmp = fcmp oeq double %0, 0.000000e+00
   br i1 %fcmptmp, label %common.ret, label %ifcont
@@ -104,124 +103,218 @@ ifcont:                                           ; preds = %entry
   %fcmptmp3 = fcmp olt double %0, 0.000000e+00
   %fnegtmp = fneg double %0
   %x.0 = select i1 %fcmptmp3, double %fnegtmp, double %0
-  br label %whilecond
+  %fcmptmp948 = fcmp ogt double %x.0, 1.000000e+00
+  br i1 %fcmptmp948, label %loop, label %whilecond12.preheader
 
-whilecond:                                        ; preds = %loop, %ifcont
-  %reduction_count.0 = phi i32 [ 0, %ifcont ], [ %addtmp, %loop ]
-  %x.1 = phi double [ %x.0, %ifcont ], [ %fdivtmp, %loop ]
-  %fcmptmp9 = fcmp ogt double %x.1, 1.000000e+00
-  br i1 %fcmptmp9, label %loop, label %whilecond12
+whilecond12.preheader:                            ; preds = %loop, %ifcont
+  %reduction_count.0.lcssa = phi i32 [ 0, %ifcont ], [ %addtmp, %loop ]
+  %x.1.lcssa = phi double [ %x.0, %ifcont ], [ %fdivtmp, %loop ]
+  %faddtmp = fadd double %x.1.lcssa, 1.000000e+00
+  %fmultmp.1 = fmul double %x.1.lcssa, %x.1.lcssa
+  %fdivtmp20.1 = fmul double %fmultmp.1, 5.000000e-01
+  %faddtmp.1 = fadd double %faddtmp, %fdivtmp20.1
+  %fmultmp.2 = fmul double %x.1.lcssa, %fdivtmp20.1
+  %fdivtmp20.2 = fdiv double %fmultmp.2, 3.000000e+00
+  %faddtmp.2 = fadd double %faddtmp.1, %fdivtmp20.2
+  %fmultmp.3 = fmul double %x.1.lcssa, %fdivtmp20.2
+  %fdivtmp20.3 = fmul double %fmultmp.3, 2.500000e-01
+  %faddtmp.3 = fadd double %faddtmp.2, %fdivtmp20.3
+  %fmultmp.4 = fmul double %x.1.lcssa, %fdivtmp20.3
+  %fdivtmp20.4 = fdiv double %fmultmp.4, 5.000000e+00
+  %faddtmp.4 = fadd double %faddtmp.3, %fdivtmp20.4
+  %fmultmp.5 = fmul double %x.1.lcssa, %fdivtmp20.4
+  %fdivtmp20.5 = fdiv double %fmultmp.5, 6.000000e+00
+  %faddtmp.5 = fadd double %faddtmp.4, %fdivtmp20.5
+  %fmultmp.6 = fmul double %x.1.lcssa, %fdivtmp20.5
+  %fdivtmp20.6 = fdiv double %fmultmp.6, 7.000000e+00
+  %faddtmp.6 = fadd double %faddtmp.5, %fdivtmp20.6
+  %fmultmp.7 = fmul double %x.1.lcssa, %fdivtmp20.6
+  %fdivtmp20.7 = fmul double %fmultmp.7, 1.250000e-01
+  %faddtmp.7 = fadd double %faddtmp.6, %fdivtmp20.7
+  %fmultmp.8 = fmul double %x.1.lcssa, %fdivtmp20.7
+  %fdivtmp20.8 = fdiv double %fmultmp.8, 9.000000e+00
+  %faddtmp.8 = fadd double %faddtmp.7, %fdivtmp20.8
+  %fmultmp.9 = fmul double %x.1.lcssa, %fdivtmp20.8
+  %fdivtmp20.9 = fdiv double %fmultmp.9, 1.000000e+01
+  %faddtmp.9 = fadd double %faddtmp.8, %fdivtmp20.9
+  %fmultmp.10 = fmul double %x.1.lcssa, %fdivtmp20.9
+  %fdivtmp20.10 = fdiv double %fmultmp.10, 1.100000e+01
+  %faddtmp.10 = fadd double %faddtmp.9, %fdivtmp20.10
+  %fmultmp.11 = fmul double %x.1.lcssa, %fdivtmp20.10
+  %fdivtmp20.11 = fdiv double %fmultmp.11, 1.200000e+01
+  %faddtmp.11 = fadd double %faddtmp.10, %fdivtmp20.11
+  %fmultmp.12 = fmul double %x.1.lcssa, %fdivtmp20.11
+  %fdivtmp20.12 = fdiv double %fmultmp.12, 1.300000e+01
+  %faddtmp.12 = fadd double %faddtmp.11, %fdivtmp20.12
+  %fmultmp.13 = fmul double %x.1.lcssa, %fdivtmp20.12
+  %fdivtmp20.13 = fdiv double %fmultmp.13, 1.400000e+01
+  %faddtmp.13 = fadd double %faddtmp.12, %fdivtmp20.13
+  %fmultmp.14 = fmul double %x.1.lcssa, %fdivtmp20.13
+  %fdivtmp20.14 = fdiv double %fmultmp.14, 1.500000e+01
+  %faddtmp.14 = fadd double %faddtmp.13, %fdivtmp20.14
+  %fmultmp.15 = fmul double %x.1.lcssa, %fdivtmp20.14
+  %fdivtmp20.15 = fmul double %fmultmp.15, 6.250000e-02
+  %faddtmp.15 = fadd double %faddtmp.14, %fdivtmp20.15
+  %fmultmp.16 = fmul double %x.1.lcssa, %fdivtmp20.15
+  %fdivtmp20.16 = fdiv double %fmultmp.16, 1.700000e+01
+  %faddtmp.16 = fadd double %faddtmp.15, %fdivtmp20.16
+  %fmultmp.17 = fmul double %x.1.lcssa, %fdivtmp20.16
+  %fdivtmp20.17 = fdiv double %fmultmp.17, 1.800000e+01
+  %faddtmp.17 = fadd double %faddtmp.16, %fdivtmp20.17
+  %fmultmp.18 = fmul double %x.1.lcssa, %fdivtmp20.17
+  %fdivtmp20.18 = fdiv double %fmultmp.18, 1.900000e+01
+  %faddtmp.18 = fadd double %faddtmp.17, %fdivtmp20.18
+  %cmptmp3055 = icmp sgt i32 %reduction_count.0.lcssa, 0
+  br i1 %cmptmp3055, label %loop31, label %afterloop37
 
-loop:                                             ; preds = %whilecond
-  %fdivtmp = fmul double %x.1, 5.000000e-01
-  %addtmp = add i32 %reduction_count.0, 1
-  br label %whilecond
+loop:                                             ; preds = %ifcont, %loop
+  %x.150 = phi double [ %fdivtmp, %loop ], [ %x.0, %ifcont ]
+  %reduction_count.049 = phi i32 [ %addtmp, %loop ], [ 0, %ifcont ]
+  %fdivtmp = fmul double %x.150, 5.000000e-01
+  %addtmp = add i32 %reduction_count.049, 1
+  %fcmptmp9 = fcmp ogt double %fdivtmp, 1.000000e+00
+  br i1 %fcmptmp9, label %loop, label %whilecond12.preheader
 
-whilecond12:                                      ; preds = %whilecond, %loop14
-  %term.0 = phi double [ %fdivtmp20, %loop14 ], [ 1.000000e+00, %whilecond ]
-  %sum.0 = phi double [ %faddtmp, %loop14 ], [ 1.000000e+00, %whilecond ]
-  %k.0 = phi i32 [ %addtmp24, %loop14 ], [ 1, %whilecond ]
-  %cmptmp = icmp slt i32 %k.0, 20
-  br i1 %cmptmp, label %loop14, label %whilecond27
-
-loop14:                                           ; preds = %whilecond12
-  %fmultmp = fmul double %x.1, %term.0
-  %int2floattmp = sitofp i32 %k.0 to double
-  %fdivtmp20 = fdiv double %fmultmp, %int2floattmp
-  %faddtmp = fadd double %sum.0, %fdivtmp20
-  %addtmp24 = add i32 %k.0, 1
-  br label %whilecond12
-
-whilecond27:                                      ; preds = %whilecond12, %loop31
-  %result.0 = phi double [ %fmultmp34, %loop31 ], [ %sum.0, %whilecond12 ]
-  %i.0 = phi i32 [ %addtmp36, %loop31 ], [ 0, %whilecond12 ]
-  %cmptmp30 = icmp slt i32 %i.0, %reduction_count.0
+loop31:                                           ; preds = %whilecond12.preheader, %loop31
+  %i.057 = phi i32 [ %addtmp36, %loop31 ], [ 0, %whilecond12.preheader ]
+  %result.056 = phi double [ %fmultmp34, %loop31 ], [ %faddtmp.18, %whilecond12.preheader ]
+  %fmultmp34 = fmul double %result.056, %result.056
+  %addtmp36 = add nuw nsw i32 %i.057, 1
+  %cmptmp30 = icmp slt i32 %addtmp36, %reduction_count.0.lcssa
   br i1 %cmptmp30, label %loop31, label %afterloop37
 
-loop31:                                           ; preds = %whilecond27
-  %fmultmp34 = fmul double %result.0, %result.0
-  %addtmp36 = add i32 %i.0, 1
-  br label %whilecond27
-
-afterloop37:                                      ; preds = %whilecond27
-  %fdivtmp41 = fdiv double 1.000000e+00, %result.0
-  %result.1 = select i1 %fcmptmp3, double %fdivtmp41, double %result.0
+afterloop37:                                      ; preds = %loop31, %whilecond12.preheader
+  %result.0.lcssa = phi double [ %faddtmp.18, %whilecond12.preheader ], [ %fmultmp34, %loop31 ]
+  %fdivtmp41 = fdiv double 1.000000e+00, %result.0.lcssa
+  %result.1 = select i1 %fcmptmp3, double %fdivtmp41, double %result.0.lcssa
   br label %common.ret
 }
 
-define double @"stdlib::math::log"(double %0) {
+; Function Attrs: nofree norecurse nosync nounwind memory(none)
+define double @"stdlib::math::log"(double %0) local_unnamed_addr #1 {
 entry:
   %fcmptmp = fcmp ole double %0, 0.000000e+00
   %fcmptmp3 = fcmp oeq double %0, 1.000000e+00
   %or.cond = or i1 %fcmptmp, %fcmptmp3
-  br i1 %or.cond, label %common.ret, label %whilecond
+  br i1 %or.cond, label %common.ret, label %whilecond.preheader
 
-common.ret:                                       ; preds = %entry, %afterloop42
-  %common.ret.op = phi double [ %faddtmp51, %afterloop42 ], [ 0.000000e+00, %entry ]
+whilecond.preheader:                              ; preds = %entry
+  %fcmptmp857 = fcmp ult double %0, 1.000000e+00
+  br i1 %fcmptmp857, label %whilecond11.preheader, label %loop
+
+common.ret:                                       ; preds = %entry, %afterloop17
+  %common.ret.op = phi double [ %faddtmp51, %afterloop17 ], [ 0.000000e+00, %entry ]
   ret double %common.ret.op
 
-whilecond:                                        ; preds = %entry, %loop
-  %y.0 = phi double [ %fdivtmp, %loop ], [ %0, %entry ]
-  %n.0 = phi i32 [ %addtmp, %loop ], [ 0, %entry ]
-  %fcmptmp8 = fcmp ult double %y.0, 1.000000e+00
-  br i1 %fcmptmp8, label %whilecond11, label %loop
+whilecond11.preheader:                            ; preds = %loop, %whilecond.preheader
+  %y.0.lcssa = phi double [ %0, %whilecond.preheader ], [ %fdivtmp, %loop ]
+  %n.0.lcssa = phi i32 [ 0, %whilecond.preheader ], [ %addtmp, %loop ]
+  %fcmptmp1361 = fcmp olt double %y.0.lcssa, 5.000000e-01
+  br i1 %fcmptmp1361, label %loop14, label %afterloop17
 
-loop:                                             ; preds = %whilecond
-  %fdivtmp = fmul double %y.0, 5.000000e-01
-  %addtmp = add i32 %n.0, 1
-  br label %whilecond
+loop:                                             ; preds = %whilecond.preheader, %loop
+  %n.059 = phi i32 [ %addtmp, %loop ], [ 0, %whilecond.preheader ]
+  %y.058 = phi double [ %fdivtmp, %loop ], [ %0, %whilecond.preheader ]
+  %fdivtmp = fmul double %y.058, 5.000000e-01
+  %addtmp = add i32 %n.059, 1
+  %fcmptmp8 = fcmp ult double %fdivtmp, 1.000000e+00
+  br i1 %fcmptmp8, label %whilecond11.preheader, label %loop
 
-whilecond11:                                      ; preds = %whilecond, %loop14
-  %y.1 = phi double [ %fmultmp, %loop14 ], [ %y.0, %whilecond ]
-  %n.1 = phi i32 [ %subtmp, %loop14 ], [ %n.0, %whilecond ]
-  %fcmptmp13 = fcmp olt double %y.1, 5.000000e-01
+loop14:                                           ; preds = %whilecond11.preheader, %loop14
+  %n.163 = phi i32 [ %subtmp, %loop14 ], [ %n.0.lcssa, %whilecond11.preheader ]
+  %y.162 = phi double [ %fmultmp, %loop14 ], [ %y.0.lcssa, %whilecond11.preheader ]
+  %fmultmp = fmul double %y.162, 2.000000e+00
+  %subtmp = add i32 %n.163, -1
+  %fcmptmp13 = fcmp olt double %fmultmp, 5.000000e-01
   br i1 %fcmptmp13, label %loop14, label %afterloop17
 
-loop14:                                           ; preds = %whilecond11
-  %fmultmp = fmul double %y.1, 2.000000e+00
-  %subtmp = add i32 %n.1, -1
-  br label %whilecond11
-
-afterloop17:                                      ; preds = %whilecond11
-  %fsubtmp = fadd double %y.1, -1.000000e+00
-  %faddtmp = fadd double %y.1, 1.000000e+00
+afterloop17:                                      ; preds = %loop14, %whilecond11.preheader
+  %y.1.lcssa = phi double [ %y.0.lcssa, %whilecond11.preheader ], [ %fmultmp, %loop14 ]
+  %n.1.lcssa = phi i32 [ %n.0.lcssa, %whilecond11.preheader ], [ %subtmp, %loop14 ]
+  %fsubtmp = fadd double %y.1.lcssa, -1.000000e+00
+  %faddtmp = fadd double %y.1.lcssa, 1.000000e+00
   %fdivtmp20 = fdiv double %fsubtmp, %faddtmp
   %fmultmp23 = fmul double %fdivtmp20, %fdivtmp20
-  br label %whilecond26
-
-whilecond26:                                      ; preds = %loop28, %afterloop17
-  %k.0 = phi i32 [ 1, %afterloop17 ], [ %addtmp41, %loop28 ]
-  %sum.0 = phi double [ %fdivtmp20, %afterloop17 ], [ %faddtmp39, %loop28 ]
-  %term.0 = phi double [ %fdivtmp20, %afterloop17 ], [ %fmultmp31, %loop28 ]
-  %cmptmp = icmp slt i32 %k.0, 20
-  br i1 %cmptmp, label %loop28, label %afterloop42
-
-loop28:                                           ; preds = %whilecond26
-  %fmultmp31 = fmul double %fmultmp23, %term.0
-  %multmp = shl i32 %k.0, 1
-  %addtmp33 = add nuw nsw i32 %multmp, 1
-  %int2floattmp = sitofp i32 %addtmp33 to double
-  %fdivtmp38 = fdiv double %fmultmp31, %int2floattmp
-  %faddtmp39 = fadd double %sum.0, %fdivtmp38
-  %addtmp41 = add i32 %k.0, 1
-  br label %whilecond26
-
-afterloop42:                                      ; preds = %whilecond26
-  %fmultmp44 = fmul double %sum.0, 2.000000e+00
-  %int2floattmp46 = sitofp i32 %n.1 to double
+  %fmultmp31 = fmul double %fmultmp23, %fdivtmp20
+  %fdivtmp38 = fdiv double %fmultmp31, 3.000000e+00
+  %faddtmp39 = fadd double %fdivtmp20, %fdivtmp38
+  %fmultmp31.1 = fmul double %fmultmp23, %fmultmp31
+  %fdivtmp38.1 = fdiv double %fmultmp31.1, 5.000000e+00
+  %faddtmp39.1 = fadd double %faddtmp39, %fdivtmp38.1
+  %fmultmp31.2 = fmul double %fmultmp23, %fmultmp31.1
+  %fdivtmp38.2 = fdiv double %fmultmp31.2, 7.000000e+00
+  %faddtmp39.2 = fadd double %faddtmp39.1, %fdivtmp38.2
+  %fmultmp31.3 = fmul double %fmultmp23, %fmultmp31.2
+  %fdivtmp38.3 = fdiv double %fmultmp31.3, 9.000000e+00
+  %faddtmp39.3 = fadd double %faddtmp39.2, %fdivtmp38.3
+  %fmultmp31.4 = fmul double %fmultmp23, %fmultmp31.3
+  %fdivtmp38.4 = fdiv double %fmultmp31.4, 1.100000e+01
+  %faddtmp39.4 = fadd double %faddtmp39.3, %fdivtmp38.4
+  %fmultmp31.5 = fmul double %fmultmp23, %fmultmp31.4
+  %fdivtmp38.5 = fdiv double %fmultmp31.5, 1.300000e+01
+  %faddtmp39.5 = fadd double %faddtmp39.4, %fdivtmp38.5
+  %fmultmp31.6 = fmul double %fmultmp23, %fmultmp31.5
+  %fdivtmp38.6 = fdiv double %fmultmp31.6, 1.500000e+01
+  %faddtmp39.6 = fadd double %faddtmp39.5, %fdivtmp38.6
+  %fmultmp31.7 = fmul double %fmultmp23, %fmultmp31.6
+  %fdivtmp38.7 = fdiv double %fmultmp31.7, 1.700000e+01
+  %faddtmp39.7 = fadd double %faddtmp39.6, %fdivtmp38.7
+  %fmultmp31.8 = fmul double %fmultmp23, %fmultmp31.7
+  %fdivtmp38.8 = fdiv double %fmultmp31.8, 1.900000e+01
+  %faddtmp39.8 = fadd double %faddtmp39.7, %fdivtmp38.8
+  %fmultmp31.9 = fmul double %fmultmp23, %fmultmp31.8
+  %fdivtmp38.9 = fdiv double %fmultmp31.9, 2.100000e+01
+  %faddtmp39.9 = fadd double %faddtmp39.8, %fdivtmp38.9
+  %fmultmp31.10 = fmul double %fmultmp23, %fmultmp31.9
+  %fdivtmp38.10 = fdiv double %fmultmp31.10, 2.300000e+01
+  %faddtmp39.10 = fadd double %faddtmp39.9, %fdivtmp38.10
+  %fmultmp31.11 = fmul double %fmultmp23, %fmultmp31.10
+  %fdivtmp38.11 = fdiv double %fmultmp31.11, 2.500000e+01
+  %faddtmp39.11 = fadd double %faddtmp39.10, %fdivtmp38.11
+  %fmultmp31.12 = fmul double %fmultmp23, %fmultmp31.11
+  %fdivtmp38.12 = fdiv double %fmultmp31.12, 2.700000e+01
+  %faddtmp39.12 = fadd double %faddtmp39.11, %fdivtmp38.12
+  %fmultmp31.13 = fmul double %fmultmp23, %fmultmp31.12
+  %fdivtmp38.13 = fdiv double %fmultmp31.13, 2.900000e+01
+  %faddtmp39.13 = fadd double %faddtmp39.12, %fdivtmp38.13
+  %fmultmp31.14 = fmul double %fmultmp23, %fmultmp31.13
+  %fdivtmp38.14 = fdiv double %fmultmp31.14, 3.100000e+01
+  %faddtmp39.14 = fadd double %faddtmp39.13, %fdivtmp38.14
+  %fmultmp31.15 = fmul double %fmultmp23, %fmultmp31.14
+  %fdivtmp38.15 = fdiv double %fmultmp31.15, 3.300000e+01
+  %faddtmp39.15 = fadd double %faddtmp39.14, %fdivtmp38.15
+  %fmultmp31.16 = fmul double %fmultmp23, %fmultmp31.15
+  %fdivtmp38.16 = fdiv double %fmultmp31.16, 3.500000e+01
+  %faddtmp39.16 = fadd double %faddtmp39.15, %fdivtmp38.16
+  %fmultmp31.17 = fmul double %fmultmp23, %fmultmp31.16
+  %fdivtmp38.17 = fdiv double %fmultmp31.17, 3.700000e+01
+  %faddtmp39.17 = fadd double %faddtmp39.16, %fdivtmp38.17
+  %fmultmp31.18 = fmul double %fmultmp23, %fmultmp31.17
+  %fdivtmp38.18 = fdiv double %fmultmp31.18, 3.900000e+01
+  %faddtmp39.18 = fadd double %faddtmp39.17, %fdivtmp38.18
+  %fmultmp44 = fmul double %faddtmp39.18, 2.000000e+00
+  %int2floattmp46 = sitofp i32 %n.1.lcssa to double
   %fmultmp50 = fmul double %int2floattmp46, 0x3FE62E42FEFA39EC
   %faddtmp51 = fadd double %fmultmp50, %fmultmp44
   br label %common.ret
 }
 
-declare void @ExitProcess(i32)
+declare void @ExitProcess(i32) local_unnamed_addr
 
-define void @_start() {
+; Function Attrs: noreturn
+define void @_start() local_unnamed_addr #2 {
 entry:
-  %0 = call i32 @main()
-  call void @ExitProcess(i32 %0)
+  tail call void @ExitProcess(i32 8)
   unreachable
 }
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare i32 @llvm.abs.i32(i32, i1 immarg) #3
+
+attributes #0 = { mustprogress nofree norecurse nosync nounwind willreturn memory(none) }
+attributes #1 = { nofree norecurse nosync nounwind memory(none) }
+attributes #2 = { noreturn }
+attributes #3 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"

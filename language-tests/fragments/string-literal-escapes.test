@@ -16,27 +16,30 @@ source_filename = "test.maxon"
 
 @.str = private constant [19 x i8] c"Tab:\09here\0ANewline!\0A"
 
-declare ptr @GetStdHandle(i32)
+declare ptr @GetStdHandle(i32) local_unnamed_addr
 
-declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr) local_unnamed_addr
 
-define i32 @main() {
+define noundef i32 @main() local_unnamed_addr {
 entry:
   %written = alloca i32, align 4
-  %0 = call ptr @GetStdHandle(i32 -11)
+  %0 = tail call ptr @GetStdHandle(i32 -11)
   store i32 0, ptr %written, align 4
   %1 = call i32 @WriteFile(ptr %0, ptr nonnull @.str, i32 18, ptr nonnull %written, ptr null)
   ret i32 0
 }
 
-declare void @ExitProcess(i32)
+declare void @ExitProcess(i32) local_unnamed_addr
 
-define void @_start() {
+; Function Attrs: noreturn
+define void @_start() local_unnamed_addr #0 {
 entry:
-  %0 = call i32 @main()
-  call void @ExitProcess(i32 %0)
+  %0 = tail call i32 @main()
+  tail call void @ExitProcess(i32 0)
   unreachable
 }
+
+attributes #0 = { noreturn }
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"

@@ -37,27 +37,22 @@
 - **LSP tests**: `lsp-server/tests/`
 - **Extension tests**: `vscode-extension/src/test/`
 
-### Creating Test Fragments
+### Regenerating Test Fragments
 
 ```powershell
-# Create new test fragment from .maxon source
-.\create-test-fragment.ps1 -TestName "my-test" -SourceFile "examples/test.maxon"
-
-# Update existing test fragment (regenerates IR)
-.\create-test-fragment.ps1 -TestName "my-test" -SourceFile "language-tests/fragments/my-test.test"
-
-# Debug mode (no optimization)
-.\create-test-fragment.ps1 -TestName "my-test" -SourceFile "test.maxon" -UseDebug
+# Regenerate all test fragments (both fragments/ and doc-fragments/)
+maxon.exe regen-tests
 ```
 
-The script:
-- Compiles with `-O` for optimized IR
+The `regen-tests` command:
+- Reads existing `.test` files from `language-tests/fragments/`
+- Compiles source with `-O` for optimized IR
 - Compiles with `--debug` for unoptimized IR with debug info
 - Compiles with `--profile` to count dynamic instructions via runtime instrumentation
-- Extracts normalized LLVM IR for both versions
-- Captures exit code, stdout, and instruction counts
-- Creates/updates the `.test` file with dual-IR format
-- Can update existing `.test` files by parsing them and regenerating IR
+- Runs profiled executables to capture exit code, stdout, stderr, and instruction counts
+- Captures compilation errors (parse/lex/semantic/linking) in `MaxoncStderr` field
+- Normalizes LLVM IR (replaces source filenames with "test.maxon")
+- Writes updated `.test` files with dual-IR format
 
 **Test Fragment Format (Dual-IR):**
 ```
@@ -67,15 +62,25 @@ Optimized LLVM IR (or N/A for compilation errors)
 ---
 Unoptimized LLVM IR with debug info (or N/A)
 ---
+Args: <command-line args if any>
 ExitCode: N
 OptimizedInstructionCount: N
 UnoptimizedInstructionCount: N
+MaxoncStdout: ```<compiler stdout>```
+MaxoncStderr: ```<compiler errors>```
+Stdout: ```<program stdout>```
+Stderr: ```<program stderr>```
 ```
 
+**Creating New Tests:**
+- Manually create a `.test` file in `language-tests/fragments/` with just the Maxon source code
+- Run `maxon.exe regen-tests` to generate the IR and metadata
+- For doc-fragments, add code blocks to `docs/Content/*.md` and run `make docs`
+
 **Important:** 
-- Tests will fail if a fragment has `N/A` for IR but the code compiles successfully
-- Use the script to regenerate proper IR after format changes
 - Instruction counts come from runtime instrumentation (`--profile` flag), not static analysis
+- All metadata fields are optional except the source code section
+- Multiline metadata fields use triple backticks (```) for formatting
 
 ## Common Tasks
 
@@ -96,8 +101,11 @@ UnoptimizedInstructionCount: N
 ### Adding a language feature
 1. Implement lexer/parser/codegen changes
 2. `make compiler`
-3. Create test: `.\create-test-fragment.ps1`
-4. `make language-tests`
+3. Create test file in `language-tests/fragments/` with just the source code
+4. `maxon.exe regen-tests` to generate IR and metadata
+5. `make language-tests` to verify
+6. Update `docs/Content/*.md` if user-facing
+7. `make docs` to update doc-fragment tests
 5. Update `docs/Content/*.md` if user-facing
 6. `make docs` (creates doc-fragment tests)
 

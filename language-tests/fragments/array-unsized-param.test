@@ -22,78 +22,84 @@ end 'main'
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
-define i32 @sum(ptr %0, i32 %1, i32 %2) {
+; Function Attrs: nofree norecurse nosync nounwind memory(argmem: read)
+define i32 @sum(ptr readonly captures(none) %0, i32 %1, i32 %2) local_unnamed_addr #0 {
 entry:
-  br label %whilecond
+  %cmptmp11 = icmp sgt i32 %2, 0
+  br i1 %cmptmp11, label %loop, label %afterloop
 
-whilecond:                                        ; preds = %loop, %entry
-  %total.0 = phi i32 [ 0, %entry ], [ %addtmp, %loop ]
-  %i.0 = phi i32 [ 0, %entry ], [ %addtmp6, %loop ]
-  %cmptmp = icmp slt i32 %i.0, %2
+loop:                                             ; preds = %entry, %loop
+  %i.013 = phi i32 [ %addtmp6, %loop ], [ 0, %entry ]
+  %total.012 = phi i32 [ %addtmp, %loop ], [ 0, %entry ]
+  %3 = zext nneg i32 %i.013 to i64
+  %arrayidx = getelementptr inbounds nuw i32, ptr %0, i64 %3
+  %arrayelem = load i32, ptr %arrayidx, align 4
+  %addtmp = add i32 %arrayelem, %total.012
+  %addtmp6 = add nuw nsw i32 %i.013, 1
+  %cmptmp = icmp slt i32 %addtmp6, %2
   br i1 %cmptmp, label %loop, label %afterloop
 
-loop:                                             ; preds = %whilecond
-  %3 = sext i32 %i.0 to i64
-  %arrayidx = getelementptr inbounds i32, ptr %0, i64 %3
-  %arrayelem = load i32, ptr %arrayidx, align 4
-  %addtmp = add i32 %arrayelem, %total.0
-  %addtmp6 = add i32 %i.0, 1
-  br label %whilecond
-
-afterloop:                                        ; preds = %whilecond
-  ret i32 %total.0
+afterloop:                                        ; preds = %loop, %entry
+  %total.0.lcssa = phi i32 [ 0, %entry ], [ %addtmp, %loop ]
+  ret i32 %total.0.lcssa
 }
 
-define i32 @main() #0 {
+define noundef i32 @main() local_unnamed_addr #1 {
 entry:
-  %nums.malloc = call ptr @malloc(i64 20)
-  %0 = call ptr @memset(ptr %nums.malloc, i32 0, i64 20)
-  store i32 10, ptr %nums.malloc, align 4
-  %arrayidx2 = getelementptr inbounds nuw i8, ptr %nums.malloc, i64 4
+  %0 = tail call ptr @GetProcessHeap()
+  %1 = tail call ptr @HeapAlloc(ptr %0, i32 0, i64 20)
+  %2 = tail call ptr @memset(ptr %1, i32 0, i64 20)
+  store i32 10, ptr %1, align 4
+  %arrayidx2 = getelementptr inbounds nuw i8, ptr %1, i64 4
   store i32 20, ptr %arrayidx2, align 4
-  %arrayidx4 = getelementptr inbounds nuw i8, ptr %nums.malloc, i64 8
+  %arrayidx4 = getelementptr inbounds nuw i8, ptr %1, i64 8
   store i32 30, ptr %arrayidx4, align 4
-  %arrayidx6 = getelementptr inbounds nuw i8, ptr %nums.malloc, i64 12
+  %arrayidx6 = getelementptr inbounds nuw i8, ptr %1, i64 12
   store i32 40, ptr %arrayidx6, align 4
-  %arrayidx8 = getelementptr inbounds nuw i8, ptr %nums.malloc, i64 16
+  %arrayidx8 = getelementptr inbounds nuw i8, ptr %1, i64 16
   store i32 50, ptr %arrayidx8, align 4
-  %1 = call i32 @sum(ptr nonnull %nums.malloc, i32 5, i32 5)
-  call void @free(ptr nonnull %nums.malloc)
-  ret i32 %1
+  %3 = tail call ptr @GetProcessHeap()
+  %4 = tail call i32 @HeapFree(ptr %3, i32 0, ptr nonnull %1)
+  ret i32 150
 }
 
-declare ptr @GetProcessHeap()
+declare ptr @GetProcessHeap() local_unnamed_addr
 
-declare ptr @HeapAlloc(ptr, i32, i64)
+declare ptr @HeapAlloc(ptr, i32, i64) local_unnamed_addr
 
-declare i32 @HeapFree(ptr, i32, ptr)
+declare i32 @HeapFree(ptr, i32, ptr) local_unnamed_addr
 
-define ptr @malloc(i64 %0) {
+define ptr @malloc(i64 %0) local_unnamed_addr {
 entry:
-  %1 = call ptr @GetProcessHeap()
-  %2 = call ptr @HeapAlloc(ptr %1, i32 0, i64 %0)
+  %1 = tail call ptr @GetProcessHeap()
+  %2 = tail call ptr @HeapAlloc(ptr %1, i32 0, i64 %0)
   ret ptr %2
 }
 
-define void @free(ptr %0) {
+define void @free(ptr %0) local_unnamed_addr {
 entry:
-  %1 = call ptr @GetProcessHeap()
-  %2 = call i32 @HeapFree(ptr %1, i32 0, ptr %0)
+  %1 = tail call ptr @GetProcessHeap()
+  %2 = tail call i32 @HeapFree(ptr %1, i32 0, ptr %0)
   ret void
 }
 
-declare ptr @memset(ptr, i32, i64)
+; Function Attrs: mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite)
+declare ptr @memset(ptr writeonly, i32, i64) local_unnamed_addr #2
 
-declare void @ExitProcess(i32)
+declare void @ExitProcess(i32) local_unnamed_addr
 
-define void @_start() {
+; Function Attrs: noreturn
+define void @_start() local_unnamed_addr #3 {
 entry:
-  %0 = call i32 @main()
-  call void @ExitProcess(i32 %0)
+  %0 = tail call i32 @main()
+  tail call void @ExitProcess(i32 %0)
   unreachable
 }
 
-attributes #0 = { "no-builtin-memset" }
+attributes #0 = { nofree norecurse nosync nounwind memory(argmem: read) }
+attributes #1 = { "no-builtin-memset" }
+attributes #2 = { mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite) }
+attributes #3 = { noreturn }
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"

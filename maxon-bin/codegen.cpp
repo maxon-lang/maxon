@@ -2696,7 +2696,7 @@ void CodeGenerator::writeObjectFile(const std::string& filename) {
     }
 }
 
-void CodeGenerator::writeExecutable(const std::string& exeFile) {
+void CodeGenerator::writeExecutable(const std::string& exeFile, llvm::raw_ostream* errorStream) {
     // Initialize targets
     llvm::InitializeAllTargetInfos();
     llvm::InitializeAllTargets();
@@ -2826,7 +2826,8 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
     }
     
     // Call LLD driver directly (in-process)
-    bool success = lld::coff::link(lldArgs, llvm::outs(), llvm::errs(), false, false);
+    llvm::raw_ostream& errStream = errorStream ? *errorStream : llvm::errs();
+    bool success = lld::coff::link(lldArgs, llvm::outs(), errStream, false, false);
     
     // Clean up temporary object file
     llvm::sys::fs::remove(tempObjFile);

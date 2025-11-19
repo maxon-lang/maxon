@@ -8,48 +8,54 @@ end 'main'
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
-define i32 @main() #0 {
+define noundef i32 @main() local_unnamed_addr #0 {
 entry:
-  %nums.malloc = call ptr @malloc(i64 20)
-  %0 = call ptr @memset(ptr %nums.malloc, i32 0, i64 20)
-  %arrayidx = getelementptr inbounds nuw i8, ptr %nums.malloc, i64 8
+  %0 = tail call ptr @GetProcessHeap()
+  %1 = tail call ptr @HeapAlloc(ptr %0, i32 0, i64 20)
+  %2 = tail call ptr @memset(ptr %1, i32 0, i64 20)
+  %arrayidx = getelementptr inbounds nuw i8, ptr %1, i64 8
   store i32 42, ptr %arrayidx, align 4
-  call void @free(ptr %nums.malloc)
+  %3 = tail call ptr @GetProcessHeap()
+  %4 = tail call i32 @HeapFree(ptr %3, i32 0, ptr %1)
   ret i32 42
 }
 
-declare ptr @GetProcessHeap()
+declare ptr @GetProcessHeap() local_unnamed_addr
 
-declare ptr @HeapAlloc(ptr, i32, i64)
+declare ptr @HeapAlloc(ptr, i32, i64) local_unnamed_addr
 
-declare i32 @HeapFree(ptr, i32, ptr)
+declare i32 @HeapFree(ptr, i32, ptr) local_unnamed_addr
 
-define ptr @malloc(i64 %0) {
+define ptr @malloc(i64 %0) local_unnamed_addr {
 entry:
-  %1 = call ptr @GetProcessHeap()
-  %2 = call ptr @HeapAlloc(ptr %1, i32 0, i64 %0)
+  %1 = tail call ptr @GetProcessHeap()
+  %2 = tail call ptr @HeapAlloc(ptr %1, i32 0, i64 %0)
   ret ptr %2
 }
 
-define void @free(ptr %0) {
+define void @free(ptr %0) local_unnamed_addr {
 entry:
-  %1 = call ptr @GetProcessHeap()
-  %2 = call i32 @HeapFree(ptr %1, i32 0, ptr %0)
+  %1 = tail call ptr @GetProcessHeap()
+  %2 = tail call i32 @HeapFree(ptr %1, i32 0, ptr %0)
   ret void
 }
 
-declare ptr @memset(ptr, i32, i64)
+; Function Attrs: mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite)
+declare ptr @memset(ptr writeonly, i32, i64) local_unnamed_addr #1
 
-declare void @ExitProcess(i32)
+declare void @ExitProcess(i32) local_unnamed_addr
 
-define void @_start() {
+; Function Attrs: noreturn
+define void @_start() local_unnamed_addr #2 {
 entry:
-  %0 = call i32 @main()
-  call void @ExitProcess(i32 %0)
+  %0 = tail call i32 @main()
+  tail call void @ExitProcess(i32 42)
   unreachable
 }
 
 attributes #0 = { "no-builtin-memset" }
+attributes #1 = { mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite) }
+attributes #2 = { noreturn }
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"

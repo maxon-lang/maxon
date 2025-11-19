@@ -9,22 +9,35 @@ end 'main'
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
-define i32 @main() #0 {
-entry:
-  %buffer.malloc = call ptr @malloc(i64 12)
-  %0 = call ptr @memset(ptr %buffer.malloc, i32 0, i64 12)
-  %1 = call i32 @"stdlib::fmt::format_int_array"(i32 42, ptr %buffer.malloc, i32 12)
-  call void @free(ptr %buffer.malloc)
-  ret i32 %1
+define noundef i32 @main() local_unnamed_addr #0 {
+"stdlib::fmt::format_int_array.exit":
+  %0 = tail call ptr @GetProcessHeap()
+  %1 = tail call ptr @HeapAlloc(ptr %0, i32 0, i64 12)
+  %2 = tail call ptr @memset(ptr %1, i32 0, i64 12)
+  %3 = tail call ptr @GetProcessHeap()
+  %4 = tail call ptr @HeapAlloc(ptr %3, i32 0, i64 12)
+  %5 = tail call ptr @memset(ptr %4, i32 0, i64 12)
+  %arrayidx15.i = getelementptr inbounds nuw i8, ptr %4, i64 11
+  store i8 50, ptr %arrayidx15.i, align 1
+  %arrayidx15.i.1 = getelementptr inbounds nuw i8, ptr %4, i64 10
+  store i8 52, ptr %arrayidx15.i.1, align 1
+  store i8 52, ptr %1, align 1
+  %arrayelem.i.1 = load i8, ptr %arrayidx15.i, align 1
+  %arrayidx44.i.1 = getelementptr inbounds nuw i8, ptr %1, i64 1
+  store i8 %arrayelem.i.1, ptr %arrayidx44.i.1, align 1
+  %6 = tail call ptr @GetProcessHeap()
+  %7 = tail call i32 @HeapFree(ptr %6, i32 0, ptr nonnull %1)
+  ret i32 2
 }
 
-define i32 @"stdlib::fmt::format_int_array"(i32 %0, ptr %1, i32 %2) #0 {
+define i32 @"stdlib::fmt::format_int_array"(i32 %0, ptr writeonly captures(none) %1, i32 %2) local_unnamed_addr #0 {
 entry:
+  %3 = ptrtoint ptr %1 to i64
   %cmptmp = icmp eq i32 %0, 0
   br i1 %cmptmp, label %then, label %ifcont
 
-common.ret:                                       ; preds = %whilecond32, %then
-  %common.ret.op = phi i32 [ 1, %then ], [ %subtmp31, %whilecond32 ]
+common.ret:                                       ; preds = %loop36, %middle.block, %ifcont27, %then
+  %common.ret.op = phi i32 [ 1, %then ], [ %subtmp31, %ifcont27 ], [ %subtmp31, %middle.block ], [ %subtmp31, %loop36 ]
   ret i32 %common.ret.op
 
 then:                                             ; preds = %entry
@@ -32,95 +45,148 @@ then:                                             ; preds = %entry
   br label %common.ret
 
 ifcont:                                           ; preds = %entry
-  %temp.malloc = call ptr @malloc(i64 12)
-  %3 = call ptr @memset(ptr %temp.malloc, i32 0, i64 12)
+  %4 = tail call ptr @GetProcessHeap()
+  %5 = tail call ptr @HeapAlloc(ptr %4, i32 0, i64 12)
+  %6 = ptrtoint ptr %5 to i64
+  %7 = tail call ptr @memset(ptr %5, i32 0, i64 12)
   %cmptmp4 = icmp slt i32 %0, 0
-  %subtmp = sub i32 0, %0
-  %spec.select = select i1 %cmptmp4, i32 %subtmp, i32 %0
-  br label %whilecond
+  %spec.select = tail call i32 @llvm.abs.i32(i32 %0, i1 false)
+  %cmptmp963 = icmp sgt i32 %spec.select, 0
+  br i1 %cmptmp963, label %loop, label %afterloop
 
-whilecond:                                        ; preds = %loop, %ifcont
-  %abs_value.1 = phi i32 [ %spec.select, %ifcont ], [ %divtmp, %loop ]
-  %pos.0 = phi i32 [ 11, %ifcont ], [ %subtmp17, %loop ]
-  %cmptmp9 = icmp sgt i32 %abs_value.1, 0
-  br i1 %cmptmp9, label %loop, label %afterloop
-
-loop:                                             ; preds = %whilecond
-  %modtmp = urem i32 %abs_value.1, 10
-  %4 = trunc nuw nsw i32 %modtmp to i8
-  %trunctmp = or disjoint i8 %4, 48
-  %5 = sext i32 %pos.0 to i64
-  %arrayidx15 = getelementptr inbounds i8, ptr %temp.malloc, i64 %5
+loop:                                             ; preds = %ifcont, %loop
+  %abs_value.165 = phi i32 [ %divtmp, %loop ], [ %spec.select, %ifcont ]
+  %pos.064 = phi i32 [ %subtmp17, %loop ], [ 11, %ifcont ]
+  %abs_value.165.frozen = freeze i32 %abs_value.165
+  %divtmp = udiv i32 %abs_value.165.frozen, 10
+  %8 = mul i32 %divtmp, 10
+  %modtmp.decomposed = sub i32 %abs_value.165.frozen, %8
+  %9 = trunc nuw nsw i32 %modtmp.decomposed to i8
+  %trunctmp = or disjoint i8 %9, 48
+  %10 = sext i32 %pos.064 to i64
+  %arrayidx15 = getelementptr inbounds i8, ptr %5, i64 %10
   store i8 %trunctmp, ptr %arrayidx15, align 1
-  %subtmp17 = add i32 %pos.0, -1
-  %divtmp = udiv i32 %abs_value.1, 10
-  br label %whilecond
+  %subtmp17 = add i32 %pos.064, -1
+  %cmptmp9.not = icmp samesign ult i32 %abs_value.165, 10
+  br i1 %cmptmp9.not, label %afterloop, label %loop
 
-afterloop:                                        ; preds = %whilecond
+afterloop:                                        ; preds = %loop, %ifcont
+  %pos.0.lcssa = phi i32 [ 11, %ifcont ], [ %subtmp17, %loop ]
   br i1 %cmptmp4, label %then21, label %ifcont27
 
 then21:                                           ; preds = %afterloop
-  %6 = sext i32 %pos.0 to i64
-  %arrayidx24 = getelementptr inbounds i8, ptr %temp.malloc, i64 %6
+  %11 = sext i32 %pos.0.lcssa to i64
+  %arrayidx24 = getelementptr inbounds i8, ptr %5, i64 %11
   store i8 45, ptr %arrayidx24, align 1
-  %subtmp26 = add i32 %pos.0, -1
+  %subtmp26 = add i32 %pos.0.lcssa, -1
   br label %ifcont27
 
 ifcont27:                                         ; preds = %then21, %afterloop
-  %pos.1 = phi i32 [ %subtmp26, %then21 ], [ %pos.0, %afterloop ]
+  %pos.1 = phi i32 [ %subtmp26, %then21 ], [ %pos.0.lcssa, %afterloop ]
   %addtmp29 = add i32 %pos.1, 1
   %subtmp31 = sub i32 11, %pos.1
-  br label %whilecond32
+  %cmptmp3566 = icmp sgt i32 %subtmp31, 0
+  br i1 %cmptmp3566, label %loop36.preheader, label %common.ret
 
-whilecond32:                                      ; preds = %loop36, %ifcont27
-  %i.0 = phi i32 [ 0, %ifcont27 ], [ %addtmp46, %loop36 ]
-  %cmptmp35 = icmp slt i32 %i.0, %subtmp31
-  br i1 %cmptmp35, label %loop36, label %common.ret
+loop36.preheader:                                 ; preds = %ifcont27
+  %min.iters.check = icmp ult i32 %subtmp31, 12
+  %12 = add i32 %pos.1, 1
+  %13 = icmp sgt i32 %12, 11
+  %or.cond = or i1 %min.iters.check, %13
+  br i1 %or.cond, label %loop36.preheader69, label %vector.memcheck
 
-loop36:                                           ; preds = %whilecond32
-  %addtmp40 = add i32 %addtmp29, %i.0
-  %7 = sext i32 %addtmp40 to i64
-  %arrayidx42 = getelementptr inbounds i8, ptr %temp.malloc, i64 %7
+vector.memcheck:                                  ; preds = %loop36.preheader
+  %14 = add i32 %pos.1, 1
+  %15 = sext i32 %14 to i64
+  %16 = add i64 %6, %15
+  %17 = sub i64 %3, %16
+  %diff.check = icmp ult i64 %17, 4
+  br i1 %diff.check, label %loop36.preheader69, label %vector.ph
+
+vector.ph:                                        ; preds = %vector.memcheck
+  %n.vec = and i32 %subtmp31, 2147483644
+  br label %vector.body
+
+vector.body:                                      ; preds = %vector.body, %vector.ph
+  %index = phi i32 [ 0, %vector.ph ], [ %index.next, %vector.body ]
+  %18 = add i32 %addtmp29, %index
+  %19 = sext i32 %18 to i64
+  %20 = getelementptr inbounds i8, ptr %5, i64 %19
+  %wide.load = load <4 x i8>, ptr %20, align 1
+  %21 = zext nneg i32 %index to i64
+  %22 = getelementptr inbounds nuw i8, ptr %1, i64 %21
+  store <4 x i8> %wide.load, ptr %22, align 1
+  %index.next = add nuw i32 %index, 4
+  %23 = icmp eq i32 %index.next, %n.vec
+  br i1 %23, label %middle.block, label %vector.body, !llvm.loop !0
+
+middle.block:                                     ; preds = %vector.body
+  %cmp.n = icmp eq i32 %subtmp31, %n.vec
+  br i1 %cmp.n, label %common.ret, label %loop36.preheader69
+
+loop36.preheader69:                               ; preds = %vector.memcheck, %loop36.preheader, %middle.block
+  %i.067.ph = phi i32 [ 0, %vector.memcheck ], [ 0, %loop36.preheader ], [ %n.vec, %middle.block ]
+  br label %loop36
+
+loop36:                                           ; preds = %loop36.preheader69, %loop36
+  %i.067 = phi i32 [ %addtmp46, %loop36 ], [ %i.067.ph, %loop36.preheader69 ]
+  %addtmp40 = add i32 %addtmp29, %i.067
+  %24 = sext i32 %addtmp40 to i64
+  %arrayidx42 = getelementptr inbounds i8, ptr %5, i64 %24
   %arrayelem = load i8, ptr %arrayidx42, align 1
-  %8 = sext i32 %i.0 to i64
-  %arrayidx44 = getelementptr inbounds i8, ptr %1, i64 %8
+  %25 = zext nneg i32 %i.067 to i64
+  %arrayidx44 = getelementptr inbounds nuw i8, ptr %1, i64 %25
   store i8 %arrayelem, ptr %arrayidx44, align 1
-  %addtmp46 = add i32 %i.0, 1
-  br label %whilecond32
+  %addtmp46 = add nuw nsw i32 %i.067, 1
+  %cmptmp35 = icmp slt i32 %addtmp46, %subtmp31
+  br i1 %cmptmp35, label %loop36, label %common.ret, !llvm.loop !3
 }
 
-declare ptr @GetProcessHeap()
+declare ptr @GetProcessHeap() local_unnamed_addr
 
-declare ptr @HeapAlloc(ptr, i32, i64)
+declare ptr @HeapAlloc(ptr, i32, i64) local_unnamed_addr
 
-declare i32 @HeapFree(ptr, i32, ptr)
+declare i32 @HeapFree(ptr, i32, ptr) local_unnamed_addr
 
-define ptr @malloc(i64 %0) {
+define ptr @malloc(i64 %0) local_unnamed_addr {
 entry:
-  %1 = call ptr @GetProcessHeap()
-  %2 = call ptr @HeapAlloc(ptr %1, i32 0, i64 %0)
+  %1 = tail call ptr @GetProcessHeap()
+  %2 = tail call ptr @HeapAlloc(ptr %1, i32 0, i64 %0)
   ret ptr %2
 }
 
-define void @free(ptr %0) {
+define void @free(ptr %0) local_unnamed_addr {
 entry:
-  %1 = call ptr @GetProcessHeap()
-  %2 = call i32 @HeapFree(ptr %1, i32 0, ptr %0)
+  %1 = tail call ptr @GetProcessHeap()
+  %2 = tail call i32 @HeapFree(ptr %1, i32 0, ptr %0)
   ret void
 }
 
-declare ptr @memset(ptr, i32, i64)
+; Function Attrs: mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite)
+declare ptr @memset(ptr writeonly, i32, i64) local_unnamed_addr #1
 
-declare void @ExitProcess(i32)
+declare void @ExitProcess(i32) local_unnamed_addr
 
-define void @_start() {
+; Function Attrs: noreturn
+define void @_start() local_unnamed_addr #2 {
 entry:
-  %0 = call i32 @main()
-  call void @ExitProcess(i32 %0)
+  %0 = tail call i32 @main()
+  tail call void @ExitProcess(i32 %0)
   unreachable
 }
 
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare i32 @llvm.abs.i32(i32, i1 immarg) #3
+
 attributes #0 = { "no-builtin-memset" }
+attributes #1 = { mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite) }
+attributes #2 = { noreturn }
+attributes #3 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }
+
+!0 = distinct !{!0, !1, !2}
+!1 = !{!"llvm.loop.isvectorized", i32 1}
+!2 = !{!"llvm.loop.unroll.runtime.disable"}
+!3 = distinct !{!3, !1}
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
