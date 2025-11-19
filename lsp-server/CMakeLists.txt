@@ -11,13 +11,6 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Find JSON library (nlohmann/json)
-find_package(nlohmann_json QUIET)
-if(NOT nlohmann_json_FOUND)
-    # If not found, we'll include it as a header-only library
-    message(STATUS "nlohmann/json not found, will use single header include")
-endif()
-
 # Source files
 set(MAXON_SOURCES
     ../maxon-bin/lexer.cpp
@@ -42,11 +35,6 @@ target_compile_options(maxon-lsp-server PRIVATE
     -Wno-unused-parameter
     -Wno-sign-compare
 )
-
-# Link libraries
-if(nlohmann_json_FOUND)
-    target_link_libraries(maxon-lsp-server PRIVATE nlohmann_json::nlohmann_json)
-endif()
 
 # Set output directory to project root bin for easier access
 set_target_properties(maxon-lsp-server PROPERTIES

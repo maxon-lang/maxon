@@ -485,7 +485,6 @@ For each implemented feature, update:
 - Performance profilers
 
 ### External Libraries:
-- ✅ nlohmann/json (already in use)
 - Consider: clang-format for formatter implementation
 
 ---

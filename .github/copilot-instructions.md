@@ -1,170 +1,38 @@
 # GitHub Copilot Instructions for Maxon Language Project
 
-## Project Overview
-
-## Project Structure
-
-- **`/maxon-bin/`** - Compiler (C++17, CMake/Ninja)
-  - `lexer.cpp/h`, `parser.cpp/h`, `ast.h`, `codegen.cpp/h`, `main.cpp`
-  - Lexer → Parser (AST) → Semantic Analyzer → LLVM IR Codegen
-
-- **`/lsp-server/`** - Language Server (C++17, CMake)
-  - `lsp_server.cpp/h`, `json_rpc.cpp/h`, `document_manager.cpp/h`, `analyzer.cpp/h`
-  - Uses nlohmann/json
-
-- **`/vscode-extension/`** - VS Code Extension (TypeScript, npm)
-  - `extension.ts`, `syntaxes/maxon.tmLanguage.json`, `language-configuration.json`
-
-- **`/maxon-runtime/`** - Runtime Library
-  - `runtime.ll` - LLVM IR implementation of runtime functions (memset, etc.)
-  - `runtime.obj` - Compiled runtime library (auto-linked with all programs)
-  - Provides functions that LLVM intrinsics lower to (e.g., `llvm.memset` → `memset`)
-
-- **`/docs/`** - Documentation Generator
-  - `DocGen.cs` converts Markdown to HTML and extracts test fragments
-  - Code blocks with `ExitCode:` → `language-tests/doc-fragments/*.test`
-
-## Coding Standards
-
-**Comments:** Explain *why*, not *what*
-
-## Testing
-
-- **Language tests**: `language-tests/` (C# NUnit)
-  - `fragments/`: Manual test fragments
-  - `doc-fragments/`: Auto-generated from docs
-  - Format: Maxon code, `---`, Optimized LLVM IR, `---`, Unoptimized LLVM IR, `---`, Metadata
-- **LSP tests**: `lsp-server/tests/`
-- **Extension tests**: `vscode-extension/src/test/`
-
-### Regenerating Test Fragments
-
-```powershell
-# Regenerate all test fragments (both fragments/ and doc-fragments/)
-maxon.exe regen-fragments
-```
-
-The `regen-fragments` command:
-- Reads existing `.test` files from `language-tests/fragments/`
-- Compiles source with `-O` for optimized IR
-- Compiles with `--debug` for unoptimized IR with debug info
-- Compiles with `--profile` to count dynamic instructions via runtime instrumentation
-- Runs profiled executables to capture exit code, stdout, stderr, and instruction counts
-- Captures compilation errors (parse/lex/semantic/linking) in `MaxoncStderr` field
-- Normalizes LLVM IR (replaces source filenames with "test.maxon")
-- Writes updated `.test` files with dual-IR format
-
-**Test Fragment Format (Dual-IR):**
-```
-Maxon source code
----
-Optimized LLVM IR (or N/A for compilation errors)
----
-Unoptimized LLVM IR with debug info (or N/A)
----
-Args: <command-line args if any>
-ExitCode: N
-OptimizedInstructionCount: N
-UnoptimizedInstructionCount: N
-MaxoncStdout: ```<compiler stdout>```
-MaxoncStderr: ```<compiler errors>```
-Stdout: ```<program stdout>```
-Stderr: ```<program stderr>```
-```
-
-**Creating New Tests:**
-- Manually create a `.test` file in `language-tests/fragments/` with just the Maxon source code
-- Run `maxon regen-fragments` to generate the IR and metadata
-- For doc-fragments, add code blocks to `docs/Content/*.md` and run `make docs`
-
-**Running Tests:**
-- `maxon test-fragments` - Run all fragment tests (shows only failures and summary)
-- `maxon test-fragments --verbose` - Show all tests including passes
-
-**Important:** 
-- Instruction counts come from runtime instrumentation (`--profile` flag), not static analysis
-- All metadata fields are optional except the source code section
-- Multiline metadata fields use triple backticks (```) for formatting
-- Stdout/stderr are stored as exact bytes - trailing newlines are preserved
-
-## Common Tasks
-
-### Adding a keyword
-1. Add to `TokenType` enum in `lexer.h`
-2. Update `Lexer::readIdentifier()` keyword map in `lexer.cpp`
-3. Add parsing logic in `parser.cpp`
-4. Update AST in `ast.h` if needed
-5. Add codegen in `codegen.cpp`
-6. Update TextMate grammar in `vscode-extension/syntaxes/maxon.tmLanguage.json`
-
-### Adding an LSP feature
-1. Add handler method in `LspServer` class
-2. Register in `JsonRpcHandler`
-3. Implement in `Analyzer`
-4. Update capabilities in `initialize` response
-
-### Adding a language feature
-1. Implement lexer/parser/codegen changes
-2. `make compiler`
-3. Create test file in `language-tests/fragments/` with just the source code
-4. `maxon regen-fragments` to generate IR and metadata
-5. `maxon test-fragments` to verify
-6. Update `docs/Content/*.md` if user-facing
-7. `make docs` to update doc-fragment tests
-
-
-## Make Commands
-
-Use the top-level Makefile for all build and development tasks. Run from project root: `make <target>`
-
-### Building
-- `make all` - Configure and build compiler, runtime library, and LSP server (default target)
-- `make configure` - Configure CMake build system
-- `make runtime` - Build Maxon runtime library (runtime.obj)
-- `make compiler` - Build only the Maxon compiler (`maxon.exe`)
-- `make lsp-server` - Build only the C++ LSP server
-- `make lsp` - Build both LSP server and VS Code extension
-
-### VS Code Extension
-- `make extension` - Install npm dependencies and build the extension
-- `make extension-build` - Compile extension (assumes dependencies installed)
-- `make extension-watch` - Start watch mode for extension development
-- `make extension-test` - Run extension test suite
-- `make extension-package` - Package extension as .vsix file
-- `make extension-install` - Install extension locally in VS Code
+## Key Workflows
 
 ### Testing
-- `make lsp-test` - Build and run LSP C++ unit tests
-- `maxon test-fragments` - Run Maxon language fragment tests
-- `maxon regen-fragments` - Regenerate all test fragments
-- `make docs` - Generate HTML documentation and extract test fragments
+- Use `maxon <file>` to compile and run in one step (no temp files)
+- Create test files in `/temp` and clean up afterwards
+- `maxon regen-fragments` regenerates IR and metadata for `.test` files
+- `maxon test-fragments` runs all language tests (add `--verbose` for details)
 
-### Cleanup
-- `make clean` - Remove all build artifacts (compiler, LSP, extension, runtime.obj)
-- `make help` - Display all available make targets
+### Adding Language Features
+1. Lexer/parser/codegen changes (search codebase for patterns)
+2. `make compiler`
+3. Create `.test` file with just source code in `language-tests/fragments/`
+4. `maxon regen-fragments` to generate IR/metadata
+5. Add docs to `docs/Content/*.md` if user-facing, then `make docs`
+
+### Adding Keywords
+Update: `TokenType` enum, `Lexer::readIdentifier()` map, parser logic, AST if needed, codegen, TextMate grammar
+
+### Adding LSP Features
+Add handler in `LspServer`, register in `JsonRpcHandler`, implement in `Analyzer`, update capabilities
+
+## Build System
+- Use top-level `Makefile` for all builds (see `make help`)
+- `make all` - Full build (default)
+- `make compiler` / `make lsp` / `make extension` - Component builds
+- `maxon.exe` is in PATH (no path prefix needed)
 
 ## Runtime Library
+- `maxon-runtime/runtime.obj` provides functions for LLVM intrinsics (e.g., `llvm.memset` → `memset`)
+- Auto-linked with all programs
+- Add functions in `runtime.ll`, then `make runtime`
+- After build it is copied to 'bin' folder so maxon.exe can find it
 
-The Maxon runtime library (`maxon-runtime/runtime.obj`) provides essential functions that the compiler-generated code needs:
-
-- **`memset(ptr, int, int) -> ptr`** - Fill memory with a constant byte value
-  - Called when LLVM lowers `llvm.memset` intrinsics during optimization
-  - Avoids dependency on C runtime library
-  - Automatically linked with all Maxon programs
-
-**Adding runtime functions:**
-1. Add implementation to `maxon-runtime/runtime.ll` (LLVM IR)
-2. `make runtime` to rebuild runtime.obj
-3. Functions are automatically available to all Maxon programs
-
-The runtime library is found relative to the compiler executable and automatically linked during the final linking stage in `codegen.cpp`.
-
-## General Guidelines
-- **Do not create new documents** unless specifically instructed
-- **Use make commands** for building and testing
-
-The 'bin' directory is in the path so you can just use "maxon.exe" without a path from anywhere.
-
-When testing sample code always use "maxon <file>" to compile and run in one step without leaving temporary files behind.
-
-If you need to create files to test compilation then put them in the /temp directory and clean them up afterwards.
+## Guidelines
+- Don't create new docs unless instructed
+- Comments explain *why*, not *what*
