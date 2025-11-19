@@ -99,17 +99,9 @@ target_include_directories(maxon SYSTEM PRIVATE ${LLD_INCLUDE_DIR})
 
 target_link_libraries(maxon ${llvm_libs} ${lld_libs})
 
-# Set output directory
+# Set output directory to project root bin for easier access and stdlib resolution
 set_target_properties(maxon PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-)
-
-# Copy to project root bin directory for easier access and stdlib resolution
-add_custom_command(TARGET maxon POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:maxon>
-        ${CMAKE_SOURCE_DIR}/bin/$<TARGET_FILE_NAME:maxon>
-    COMMENT "Copying maxon to project root bin directory"
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin
 )
 
 # Installation

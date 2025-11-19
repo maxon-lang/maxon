@@ -2794,7 +2794,7 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
     }
     
     // Add Maxon runtime library
-    // Try to find runtime.obj relative to the executable
+    // Find runtime.obj in the same directory as the executable
     std::string execPath;
     #ifdef _WIN32
     char buffer[MAX_PATH];
@@ -2803,7 +2803,7 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
     #endif
     size_t lastSlash = execPath.find_last_of("\\/");
     std::string execDir = (lastSlash != std::string::npos) ? execPath.substr(0, lastSlash) : ".";
-    std::string runtimeObj = execDir + "/../maxon-runtime/runtime.obj";
+    std::string runtimeObj = execDir + "/runtime.obj";
     
     // Check if runtime.obj exists
     if (llvm::sys::fs::exists(runtimeObj)) {
@@ -2811,26 +2811,8 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
         if (verbose) {
             std::cout << "Linking with Maxon runtime library: " << runtimeObj << std::endl;
         }
-    } else {
-        // Try two levels up (for build/bin/maxon.exe)
-        runtimeObj = execDir + "/../../maxon-runtime/runtime.obj";
-        if (llvm::sys::fs::exists(runtimeObj)) {
-            argStorage.push_back(runtimeObj);
-            if (verbose) {
-                std::cout << "Linking with Maxon runtime library: " << runtimeObj << std::endl;
-            }
-        } else {
-            // Try current directory
-            runtimeObj = "maxon-runtime/runtime.obj";
-            if (llvm::sys::fs::exists(runtimeObj)) {
-                argStorage.push_back(runtimeObj);
-                if (verbose) {
-                    std::cout << "Linking with Maxon runtime library: " << runtimeObj << std::endl;
-                }
-            } else if (verbose) {
-                std::cout << "Warning: Maxon runtime library not found, assuming memset is provided by code" << std::endl;
-            }
-        }
+    } else if (verbose) {
+        std::cout << "Warning: Maxon runtime library not found at " << runtimeObj << std::endl;
     }
     
     // Explicitly link required Windows libraries

@@ -39,11 +39,12 @@ help:
 	@echo "  help             - Show this help message"
 
 # Build Maxon runtime library
-runtime: $(RUNTIME_OBJ)
+runtime: bin/runtime.obj
 
-$(RUNTIME_OBJ): $(RUNTIME_LL)
+bin/runtime.obj: $(RUNTIME_LL)
 	@echo "Building Maxon runtime library..."
-	@$(LLC) -filetype=obj -o $(RUNTIME_OBJ) $(RUNTIME_LL)
+	@powershell -Command "if (-not (Test-Path 'bin')) { New-Item -ItemType Directory -Path 'bin' | Out-Null }"
+	@$(LLC) -filetype=obj -o bin/runtime.obj $(RUNTIME_LL)
 
 # Configure CMake
 configure:
