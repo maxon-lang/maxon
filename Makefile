@@ -13,9 +13,9 @@ RUNTIME_OBJ = maxon-runtime/runtime.obj
 
 .PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test language-tests language-tests-update docs test runtime
 
-# Default target
-all: configure runtime
-	cmake --build $(BUILD_DIR)
+# Default target - build everything
+all: compiler lsp-server extension-install
+	@echo All components built successfully.
 
 help:
 	@echo "Maxon Project Build Targets:"
@@ -56,15 +56,15 @@ compiler: configure runtime
 	cmake --build $(BUILD_DIR) --target maxon
 
 # Build both LSP server and extension
-lsp: lsp-server extension
+lsp: lsp-server extension-install
 
-# Build the C++ LSP server
-lsp-server: configure
+# Build the C++ LSP server (depends on compiler sources)
+lsp-server: compiler
 	@powershell -Command "if (-not (Test-Path 'lsp-server\include\json.hpp')) { Write-Host 'Downloading nlohmann/json library...'; Invoke-WebRequest -Uri 'https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp' -OutFile 'lsp-server/include/json.hpp' }"
 	cmake --build $(BUILD_DIR) --target maxon-lsp-server
 
 # Build the VS Code extension (install + compile)
-extension:
+extension: lsp-server
 	@echo Installing dependencies and building VS Code extension...
 	@powershell -Command "cd vscode-extension; npm install; npm run compile"
 	@echo VS Code extension built successfully.
