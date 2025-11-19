@@ -5,6 +5,7 @@
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Scalar/GVN.h>
 #include <llvm/Transforms/Utils.h>
+#include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/MC/TargetRegistry.h>
@@ -2608,23 +2609,22 @@ void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
 }
 
 void CodeGenerator::optimize() {
-    llvm::legacy::FunctionPassManager fpm(module.get());
-    
-    // Add optimization passes
-    fpm.add(llvm::createPromoteMemoryToRegisterPass()); // mem2reg - promote allocas to registers (must be first)
-    fpm.add(llvm::createInstructionCombiningPass()); // Combine redundant instructions
-    fpm.add(llvm::createReassociatePass());           // Reassociate expressions
-    fpm.add(llvm::createGVNPass());                   // Eliminate common subexpressions
-    fpm.add(llvm::createCFGSimplificationPass());     // Simplify control flow
-    
-    fpm.doInitialization();
-    
-    // Run passes on all functions
-    for (auto& func : module->functions()) {
-        fpm.run(func);
-    }
-    
-    fpm.doFinalization();
+    // Use LLVM's PassBuilder to run an O3-style pipeline over the module.
+    llvm::LoopAnalysisManager     loopAM;
+    llvm::FunctionAnalysisManager funcAM;
+    llvm::CGSCCAnalysisManager    cgsccAM;
+    llvm::ModuleAnalysisManager   moduleAM;
+
+    llvm::PassBuilder pb;
+
+    pb.registerModuleAnalyses(moduleAM);
+    pb.registerCGSCCAnalyses(cgsccAM);
+    pb.registerFunctionAnalyses(funcAM);
+    pb.registerLoopAnalyses(loopAM);
+    pb.crossRegisterProxies(loopAM, funcAM, cgsccAM, moduleAM);
+
+    llvm::ModulePassManager mpm = pb.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O3);
+    mpm.run(*module, moduleAM);
 }
 
 void CodeGenerator::printIR() {
@@ -2668,7 +2668,7 @@ void CodeGenerator::writeObjectFile(const std::string& filename) {
     auto features = "";
     llvm::TargetOptions opt;
     auto targetMachine = target->createTargetMachine(
-        targetTriple, CPU, features, opt, llvm::Reloc::PIC_);
+        targetTriple, CPU, features, opt, llvm::Reloc::PIC_, std::nullopt, llvm::CodeGenOptLevel::Aggressive);
     
     module->setDataLayout(targetMachine->createDataLayout());
     
@@ -2721,7 +2721,7 @@ void CodeGenerator::writeExecutable(const std::string& exeFile) {
     auto features = "";
     llvm::TargetOptions opt;
     auto targetMachine = target->createTargetMachine(
-        targetTriple, CPU, features, opt, llvm::Reloc::PIC_);
+        targetTriple, CPU, features, opt, llvm::Reloc::PIC_, std::nullopt, llvm::CodeGenOptLevel::Aggressive);
     
     module->setDataLayout(targetMachine->createDataLayout());
     
