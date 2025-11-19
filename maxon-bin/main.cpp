@@ -10,6 +10,8 @@
 #include <filesystem>
 #include <algorithm>
 #include <ctime>
+#include <chrono>
+#include <iomanip>
 #include <llvm/Support/raw_ostream.h>
 
 #ifdef _WIN32
@@ -467,8 +469,13 @@ int main(int argc, char* argv[]) {
         std::cerr << "\nCommands:" << std::endl;
         std::cerr << "  compile <input.maxon> [<input2.maxon> ...] [options]" << std::endl;
         std::cerr << "                 Compile Maxon source files" << std::endl;
-        std::cerr << "  regen-tests    Regenerate all test fragments" << std::endl;
+        std::cerr << "  regen-fragments" << std::endl;
+        std::cerr << "                 Regenerate all test fragments" << std::endl;
+        std::cerr << "  test-fragments [options]" << std::endl;
+        std::cerr << "                 Run all test fragments (shows only failures and summary)" << std::endl;
         std::cerr << "  <input.maxon>  Compile and run source file (no artifacts left on disk)" << std::endl;
+        std::cerr << "\nOptions for test-fragments:" << std::endl;
+        std::cerr << "  --verbose, -v  Show all tests including passes" << std::endl;
         std::cerr << "\nOptions for compile:" << std::endl;
         std::cerr << "  --emit-llvm    Print LLVM IR to stdout" << std::endl;
         std::cerr << "  -o <output>    Specify output executable (default: output.exe)" << std::endl;
@@ -527,8 +534,8 @@ int main(int argc, char* argv[]) {
         return normalized;
     };
     
-    // Handle regen-tests command
-    if (command == "regen-tests") {
+    // Handle regen-fragments command
+    if (command == "regen-fragments") {
         try {
             std::cout << "Regenerating test fragments..." << std::endl;
             
@@ -883,12 +890,13 @@ int main(int argc, char* argv[]) {
                         }
                         if (!stdout_output.empty()) {
                             testFile << "Stdout: ```\n" << stdout_output;
-                            if (stdout_output.back() != '\n') testFile << "\n";
+                            // Only add newline before ``` if output doesn't end with one
+                            // This puts ``` on the same line as the last content (no trailing newline case)
+                            // or on its own line (trailing newline case)
                             testFile << "```\n";
                         }
                         if (!stderr_output.empty()) {
                             testFile << "Stderr: ```\n" << stderr_output;
-                            if (stderr_output.back() != '\n') testFile << "\n";
                             testFile << "```\n";
                         }
                         testFile.close();
@@ -918,6 +926,406 @@ int main(int argc, char* argv[]) {
                       << totalTests << " total" << std::endl;
             
             return failCount > 0 ? 1 : 0;
+            
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+            return 1;
+        }
+    }
+    
+    // Handle test-fragments command
+    if (command == "test-fragments") {
+        try {
+            // Parse options
+            bool verbose = false;
+            for (int i = 2; i < argc; i++) {
+                std::string arg = argv[i];
+                if (arg == "--verbose" || arg == "-v") {
+                    verbose = true;
+                }
+            }
+            
+            auto startTime = std::chrono::high_resolution_clock::now();
+            
+            std::cout << "Running test fragments" << (verbose ? " (verbose mode)" : "") << "..." << std::endl;
+            
+            // Find all .test files in language-tests/fragments/
+            std::string fragmentsDir = "language-tests/fragments";
+            if (!std::filesystem::exists(fragmentsDir)) {
+                std::cerr << "Error: Directory not found: " << fragmentsDir << std::endl;
+                return 1;
+            }
+            
+            int totalTests = 0;
+            int passedTests = 0;
+            int failedTests = 0;
+            
+            for (const auto& entry : std::filesystem::directory_iterator(fragmentsDir)) {
+                if (entry.path().extension() == ".test") {
+                    totalTests++;
+                    std::string testPath = entry.path().string();
+                    std::string testName = entry.path().stem().string();
+                    
+                    auto testStartTime = std::chrono::high_resolution_clock::now();
+                    
+                    // Read the test file
+                    std::ifstream inFile(testPath);
+                    if (!inFile) {
+                        auto testEndTime = std::chrono::high_resolution_clock::now();
+                        auto testDuration = std::chrono::duration_cast<std::chrono::milliseconds>(testEndTime - testStartTime);
+                        double testSeconds = testDuration.count() / 1000.0;
+                        std::cerr << "  FAIL: " << testName << ": Cannot read file (" 
+                                  << std::fixed << std::setprecision(2) << testSeconds << "s)" << std::endl;
+                        failedTests++;
+                        continue;
+                    }
+                    
+                    // Read source code (first section)
+                    std::string sourceCode;
+                    std::string line;
+                    while (std::getline(inFile, line)) {
+                        if (line == "---") break;
+                        sourceCode += line + "\n";
+                    }
+                    
+                    // Read optimized IR (second section)
+                    std::string expectedOptIR;
+                    while (std::getline(inFile, line)) {
+                        if (line == "---") break;
+                        expectedOptIR += line + "\n";
+                    }
+                    
+                    // Read debug IR (third section)
+                    std::string expectedDebugIR;
+                    while (std::getline(inFile, line)) {
+                        if (line == "---") break;
+                        expectedDebugIR += line + "\n";
+                    }
+                    
+                    // Read metadata
+                    std::string metadata;
+                    while (std::getline(inFile, line)) {
+                        metadata += line + "\n";
+                    }
+                    inFile.close();
+                    
+                    // Extract expected values from metadata
+                    std::string args;
+                    int expectedExitCode = 0;
+                    std::string expectedStdout;
+                    std::string expectedStderr;
+                    std::string expectedMaxoncStderr;
+                    
+                    std::istringstream metaStream(metadata);
+                    while (std::getline(metaStream, line)) {
+                        if (line.substr(0, 5) == "Args:") {
+                            args = line.substr(5);
+                            args.erase(0, args.find_first_not_of(" \t"));
+                        } else if (line.substr(0, 9) == "ExitCode:") {
+                            expectedExitCode = std::stoi(line.substr(10));
+                        } else if (line.substr(0, 7) == "Stdout:") {
+                            // Read multiline stdout
+                            if (line.find("```") != std::string::npos) {
+                                while (std::getline(metaStream, line)) {
+                                    if (line == "```") {
+                                        // ``` on its own line - we've already added all newlines
+                                        break;
+                                    }
+                                    // Check if line ends with ``` (content and closing marker on same line)
+                                    if (line.length() >= 3 && line.substr(line.length() - 3) == "```") {
+                                        // Last line didn't have trailing newline
+                                        expectedStdout += line.substr(0, line.length() - 3);
+                                        break;
+                                    }
+                                    expectedStdout += line + "\n";
+                                }
+                            }
+                        } else if (line.substr(0, 7) == "Stderr:") {
+                            // Read multiline stderr
+                            if (line.find("```") != std::string::npos) {
+                                while (std::getline(metaStream, line)) {
+                                    if (line == "```") {
+                                        break;
+                                    }
+                                    if (line.length() >= 3 && line.substr(line.length() - 3) == "```") {
+                                        expectedStderr += line.substr(0, line.length() - 3);
+                                        break;
+                                    }
+                                    expectedStderr += line + "\n";
+                                }
+                            }
+                        } else if (line.substr(0, 13) == "MaxoncStderr:") {
+                            // Read multiline compiler stderr
+                            if (line.find("```") != std::string::npos) {
+                                while (std::getline(metaStream, line)) {
+                                    if (line == "```") break;
+                                    expectedMaxoncStderr += line + "\n";
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Trim expected IR
+                    auto trim = [](std::string& s) {
+                        s.erase(0, s.find_first_not_of(" \t\n\r"));
+                        s.erase(s.find_last_not_of(" \t\n\r") + 1);
+                    };
+                    trim(expectedOptIR);
+                    trim(expectedDebugIR);
+                    
+                    // Write source to temp file
+                    std::string tempSource = "temp_test_fragment.maxon";
+                    std::ofstream tempOut(tempSource);
+                    if (!tempOut) {
+                        auto testEndTime = std::chrono::high_resolution_clock::now();
+                        auto testDuration = std::chrono::duration_cast<std::chrono::milliseconds>(testEndTime - testStartTime);
+                        double testSeconds = testDuration.count() / 1000.0;
+                        std::cerr << "  FAIL: " << testName << ": Cannot write temp file (" 
+                                  << std::fixed << std::setprecision(2) << testSeconds << "s)" << std::endl;
+                        failedTests++;
+                        continue;
+                    }
+                    tempOut << sourceCode;
+                    tempOut.close();
+                    
+                    bool testPassed = true;
+                    std::string failureReason;
+                    std::string failureExpected;
+                    std::string failureActual;
+                    
+                    try {
+                        // Test optimized compilation
+                        CompilationOptions optOpts;
+                        optOpts.inputFiles = {tempSource};
+                        optOpts.outputFile = "temp-test-opt.ll";
+                        optOpts.optimize = true;
+                        optOpts.emitLLVM = true;
+                        optOpts.verbose = false;
+                        
+                        std::string actualOptIR;
+                        std::string compileError;
+                        
+                        try {
+                            std::stringstream stderrCapture;
+                            std::string llvmErrStr;
+                            llvm::raw_string_ostream llvmErrCapture(llvmErrStr);
+                            std::streambuf* oldCerr = std::cerr.rdbuf(stderrCapture.rdbuf());
+                            
+                            try {
+                                compileProgram(optOpts, &llvmErrCapture);
+                            } catch (...) {
+                                std::cerr.rdbuf(oldCerr);
+                                llvmErrCapture.flush();
+                                compileError = llvmErrStr + stderrCapture.str();
+                                throw;
+                            }
+                            
+                            std::cerr.rdbuf(oldCerr);
+                            
+                            // Read the IR
+                            std::ifstream irFile("temp-test-opt.ll");
+                            if (irFile) {
+                                actualOptIR = std::string(std::istreambuf_iterator<char>(irFile),
+                                                         std::istreambuf_iterator<char>());
+                                irFile.close();
+                                actualOptIR = normalizeIR(actualOptIR);
+                                trim(actualOptIR);
+                            }
+                        } catch (...) {
+                            // Compilation failed - check if this was expected
+                            if (expectedOptIR != "N/A") {
+                                testPassed = false;
+                                failureReason = "Compilation failed unexpectedly";
+                            }
+                        }
+                        
+                        // Compare optimized IR
+                        if (testPassed && expectedOptIR != "N/A" && actualOptIR != expectedOptIR) {
+                            testPassed = false;
+                            failureReason = "Optimized IR mismatch";
+                            failureExpected = "(See .test file)";
+                            failureActual = "(Regenerate to see actual IR)";
+                        }
+                        
+                        // Test debug compilation if optimized passed
+                        if (testPassed && expectedDebugIR != "N/A") {
+                            CompilationOptions debugOpts;
+                            debugOpts.inputFiles = {tempSource};
+                            debugOpts.outputFile = "temp-test-debug.ll";
+                            debugOpts.debugInfo = true;
+                            debugOpts.emitLLVM = true;
+                            debugOpts.verbose = false;
+                            
+                            std::string actualDebugIR;
+                            
+                            try {
+                                std::stringstream stderrCapture;
+                                std::streambuf* oldCerr = std::cerr.rdbuf(stderrCapture.rdbuf());
+                                compileProgram(debugOpts);
+                                std::cerr.rdbuf(oldCerr);
+                                
+                                std::ifstream irFile("temp-test-debug.ll");
+                                if (irFile) {
+                                    actualDebugIR = std::string(std::istreambuf_iterator<char>(irFile),
+                                                               std::istreambuf_iterator<char>());
+                                    irFile.close();
+                                    actualDebugIR = normalizeIR(actualDebugIR);
+                                    trim(actualDebugIR);
+                                }
+                            } catch (...) {
+                                testPassed = false;
+                                failureReason = "Debug compilation failed unexpectedly";
+                            }
+                            
+                            if (testPassed && actualDebugIR != expectedDebugIR) {
+                                testPassed = false;
+                                failureReason = "Debug IR mismatch";
+                            }
+                        }
+                        
+                        // Test execution if compilation passed and we have expected outputs
+                        if (testPassed && expectedOptIR != "N/A" && (!expectedStdout.empty() || !expectedStderr.empty() || expectedExitCode != 0)) {
+                            CompilationOptions exeOpts;
+                            exeOpts.inputFiles = {tempSource};
+                            exeOpts.outputFile = "temp-test.exe";
+                            exeOpts.optimize = true;
+                            exeOpts.verbose = false;
+                            
+                            try {
+                                std::stringstream stderrCapture;
+                                std::streambuf* oldCerr = std::cerr.rdbuf(stderrCapture.rdbuf());
+                                compileProgram(exeOpts);
+                                std::cerr.rdbuf(oldCerr);
+                                
+                                // Run the executable
+                                int exitCode = 0;
+                                std::string actualStdout;
+                                std::string actualStderr;
+                                
+#ifdef _WIN32
+                                char tempPath[MAX_PATH];
+                                GetTempPathA(MAX_PATH, tempPath);
+                                std::string tempOutput = std::string(tempPath) + "maxon_test_output.tmp";
+                                std::string tempStderrFile = std::string(tempPath) + "maxon_test_stderr.tmp";
+                                
+                                std::string cmdLine = "temp-test.exe";
+                                if (!args.empty()) {
+                                    cmdLine += " " + args;
+                                }
+                                cmdLine += " > \"" + tempOutput + "\" 2>\"" + tempStderrFile + "\"";
+                                
+                                exitCode = system(cmdLine.c_str());
+                                
+                                std::ifstream outFile(tempOutput);
+                                if (outFile) {
+                                    actualStdout = std::string(std::istreambuf_iterator<char>(outFile),
+                                                              std::istreambuf_iterator<char>());
+                                    outFile.close();
+                                }
+                                
+                                std::ifstream stderrFile(tempStderrFile);
+                                if (stderrFile) {
+                                    actualStderr = std::string(std::istreambuf_iterator<char>(stderrFile),
+                                                              std::istreambuf_iterator<char>());
+                                    stderrFile.close();
+                                }
+                                
+                                std::filesystem::remove(tempOutput);
+                                std::filesystem::remove(tempStderrFile);
+#endif
+                                
+                                // Compare results
+                                if (exitCode != expectedExitCode) {
+                                    testPassed = false;
+                                    failureReason = "Exit code mismatch";
+                                    failureExpected = std::to_string(expectedExitCode);
+                                    failureActual = std::to_string(exitCode);
+                                } else if (!expectedStdout.empty() && actualStdout != expectedStdout) {
+                                    testPassed = false;
+                                    failureReason = "Stdout mismatch";
+                                    failureExpected = expectedStdout;
+                                    failureActual = actualStdout;
+                                } else if (!expectedStderr.empty() && actualStderr != expectedStderr) {
+                                    testPassed = false;
+                                    failureReason = "Stderr mismatch";
+                                    failureExpected = expectedStderr;
+                                    failureActual = actualStderr;
+                                }
+                            } catch (...) {
+                                testPassed = false;
+                                failureReason = "Execution test failed";
+                            }
+                        }
+                        
+                        // Cleanup temp files
+                        std::filesystem::remove(tempSource);
+                        std::filesystem::remove("temp-test-opt.ll");
+                        std::filesystem::remove("temp-test-opt.exe");
+                        std::filesystem::remove("temp-test-debug.ll");
+                        std::filesystem::remove("temp-test-debug.exe");
+                        std::filesystem::remove("temp-test.exe");
+                        
+                    } catch (const std::exception& e) {
+                        testPassed = false;
+                        failureReason = std::string("Exception: ") + e.what();
+                    }
+                    
+                    if (testPassed) {
+                        passedTests++;
+                        if (verbose) {
+                            auto testEndTime = std::chrono::high_resolution_clock::now();
+                            auto testDuration = std::chrono::duration_cast<std::chrono::milliseconds>(testEndTime - testStartTime);
+                            double testSeconds = testDuration.count() / 1000.0;
+                            std::cout << "  PASS: " << testName << " (" 
+                                      << std::fixed << std::setprecision(2) << testSeconds << "s)" << std::endl;
+                        }
+                    } else {
+                        failedTests++;
+                        
+                        auto testEndTime = std::chrono::high_resolution_clock::now();
+                        auto testDuration = std::chrono::duration_cast<std::chrono::milliseconds>(testEndTime - testStartTime);
+                        double testSeconds = testDuration.count() / 1000.0;
+                        
+                        // Show string representation with escape sequences visible
+                        auto showWithEscapes = [](const std::string& s, size_t maxLen = 100) -> std::string {
+                            std::string result;
+                            for (size_t i = 0; i < s.length() && result.length() < maxLen; i++) {
+                                unsigned char c = s[i];
+                                if (c == '\n') result += "\\n";
+                                else if (c == '\r') result += "\\r";
+                                else if (c == '\t') result += "\\t";
+                                else if (c == '\\') result += "\\\\";
+                                else if (c >= 32 && c < 127) result += c;
+                                else {
+                                    char buf[5];
+                                    sprintf(buf, "\\x%02x", c);
+                                    result += buf;
+                                }
+                            }
+                            if (s.length() > maxLen) result += "...";
+                            return result;
+                        };
+                        
+                        std::cerr << "  FAIL: " << testName << ": " << failureReason << " (" 
+                                  << std::fixed << std::setprecision(2) << testSeconds << "s)" << std::endl;
+                        if (!failureExpected.empty() && !failureActual.empty()) {
+                            std::cerr << "    Expected: \"" << showWithEscapes(failureExpected) << "\"" << std::endl;
+                            std::cerr << "    Actual:   \"" << showWithEscapes(failureActual) << "\"" << std::endl;
+                        }
+                    }
+                }
+            }
+            
+            // Print summary
+            auto endTime = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
+            double seconds = duration.count() / 1000.0;
+            
+            std::cout << "\n" << passedTests << " passed, " << failedTests << " failed, " 
+                      << totalTests << " total (" << std::fixed << std::setprecision(2) 
+                      << seconds << "s)" << std::endl;
+            
+            return failedTests > 0 ? 1 : 0;
             
         } catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << std::endl;

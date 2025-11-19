@@ -11,7 +11,7 @@ LLC = "C:/Users/Eric/Dev/llvm-project/build/Release/bin/llc.exe"
 RUNTIME_LL = maxon-runtime/runtime.ll
 RUNTIME_OBJ = maxon-runtime/runtime.obj
 
-.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test language-tests language-tests-update docs test runtime
+.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime
 
 # Default target - build everything
 all: compiler lsp-server extension-install
@@ -31,8 +31,6 @@ help:
 	@echo "  extension-package - Package extension as .vsix"
 	@echo "  extension-install - Install extension locally in VS Code"
 	@echo "  lsp-test         - Build and run LSP C++ unit tests"
-	@echo "  language-tests   - Run Maxon language fragment tests"
-	@echo "  language-tests-update - Update all test fragments with current compiler output"
 	@echo "  docs             - Generate HTML documentation and test fragments"
 	@echo "  test FILE=<file> - Compile and run a test program (e.g., make test FILE=test-cast)"
 	@echo "  clean            - Clean all build artifacts"
@@ -105,17 +103,6 @@ lsp-test:
 	@powershell -Command "cd lsp-server\tests\build; cmake --build ."
 	@echo Running LSP tests...
 	@powershell -Command "cd lsp-server\tests\build; ctest --output-on-failure"
-
-# Run Maxon language fragment tests
-language-tests: compiler
-	@echo Running Maxon language fragment tests...
-	@powershell -Command "cd language-tests; dotnet test --verbosity normal"
-
-# Update all test fragments with current compiler output
-language-tests-update: compiler
-	@echo Updating all test fragments with current compiler output...
-	@powershell -Command "cd language-tests; $env:UPDATE_FRAGMENTS='1'; dotnet test --verbosity normal"
-	@echo Test fragments updated. Please inspect the changes carefully.
 
 # Generate documentation (HTML output + test fragments)
 docs:

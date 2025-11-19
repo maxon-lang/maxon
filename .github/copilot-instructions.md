@@ -41,10 +41,10 @@
 
 ```powershell
 # Regenerate all test fragments (both fragments/ and doc-fragments/)
-maxon.exe regen-tests
+maxon.exe regen-fragments
 ```
 
-The `regen-tests` command:
+The `regen-fragments` command:
 - Reads existing `.test` files from `language-tests/fragments/`
 - Compiles source with `-O` for optimized IR
 - Compiles with `--debug` for unoptimized IR with debug info
@@ -74,13 +74,18 @@ Stderr: ```<program stderr>```
 
 **Creating New Tests:**
 - Manually create a `.test` file in `language-tests/fragments/` with just the Maxon source code
-- Run `maxon.exe regen-tests` to generate the IR and metadata
+- Run `maxon regen-fragments` to generate the IR and metadata
 - For doc-fragments, add code blocks to `docs/Content/*.md` and run `make docs`
+
+**Running Tests:**
+- `maxon test-fragments` - Run all fragment tests (shows only failures and summary)
+- `maxon test-fragments --verbose` - Show all tests including passes
 
 **Important:** 
 - Instruction counts come from runtime instrumentation (`--profile` flag), not static analysis
 - All metadata fields are optional except the source code section
 - Multiline metadata fields use triple backticks (```) for formatting
+- Stdout/stderr are stored as exact bytes - trailing newlines are preserved
 
 ## Common Tasks
 
@@ -102,12 +107,10 @@ Stderr: ```<program stderr>```
 1. Implement lexer/parser/codegen changes
 2. `make compiler`
 3. Create test file in `language-tests/fragments/` with just the source code
-4. `maxon.exe regen-tests` to generate IR and metadata
-5. `make language-tests` to verify
+4. `maxon regen-fragments` to generate IR and metadata
+5. `maxon test-fragments` to verify
 6. Update `docs/Content/*.md` if user-facing
 7. `make docs` to update doc-fragment tests
-5. Update `docs/Content/*.md` if user-facing
-6. `make docs` (creates doc-fragment tests)
 
 
 ## Make Commands
@@ -132,7 +135,8 @@ Use the top-level Makefile for all build and development tasks. Run from project
 
 ### Testing
 - `make lsp-test` - Build and run LSP C++ unit tests
-- `make language-tests` - Run Maxon language fragment tests (C# NUnit)
+- `maxon test-fragments` - Run Maxon language fragment tests
+- `maxon regen-fragments` - Regenerate all test fragments
 - `make docs` - Generate HTML documentation and extract test fragments
 
 ### Cleanup
