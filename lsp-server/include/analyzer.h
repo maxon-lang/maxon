@@ -54,6 +54,7 @@ public:
     
 private:
     std::vector<std::string> keywords;
+    std::map<std::string, Lexer::KeywordInfo> keywordMetadata;
     std::map<std::string, StdlibFunction> stdlibFunctions; // Key: unqualified name
     NamespaceNode namespaceRoot;  // Root of namespace hierarchy ("stdlib")
     

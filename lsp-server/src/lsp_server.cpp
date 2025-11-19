@@ -213,7 +213,7 @@ json LspServer::handleCompletion(const json& params) {
     for (const auto& comp : completions) {
         json item = {
             {"label", comp.label},
-            {"kind", comp.kind},
+            {"kind", static_cast<int>(comp.kind)},
             {"detail", comp.detail}
         };
         
@@ -299,7 +299,7 @@ json LspServer::handleDocumentSymbol(const json& params) {
     for (const auto& sym : symbols) {
         json item = {
             {"name", sym.name},
-            {"kind", sym.kind},
+            {"kind", static_cast<int>(sym.kind)},
             {"location", {
                 {"uri", sym.location.uri},
                 {"range", {

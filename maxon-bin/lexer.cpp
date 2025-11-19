@@ -3,42 +3,96 @@
 #include <stdexcept>
 #include <unordered_map>
 
-static const std::unordered_map<std::string, TokenType> keywords = {
-    {"function", TokenType::FUNCTION},
-    {"extern", TokenType::EXTERN},
-    {"namespace", TokenType::NAMESPACE},
-    {"struct", TokenType::STRUCT},
-    {"var", TokenType::VAR},
-    {"let", TokenType::LET},
-    {"while", TokenType::WHILE},
-    {"if", TokenType::IF},
-    {"else", TokenType::ELSE},
-    {"end", TokenType::END},
-    {"return", TokenType::RETURN},
-    {"break", TokenType::BREAK},
-    {"continue", TokenType::CONTINUE},
-    {"int", TokenType::INT},
-    {"float", TokenType::FLOAT},
-    {"ptr", TokenType::PTR},
-    {"char", TokenType::CHAR},
-    {"string", TokenType::STRING_TYPE},
-    {"as", TokenType::AS},
-    {"true", TokenType::TRUE},
-    {"false", TokenType::FALSE},
-    // Math intrinsic functions (built into codegen)
-    {"sqrt", TokenType::SQRT},
-    {"abs", TokenType::ABS},
-    {"floor", TokenType::FLOOR},
-    {"ceil", TokenType::CEIL},
-    {"round", TokenType::ROUND},
-    {"trunc", TokenType::TRUNC},
-    {"sin", TokenType::SIN},
-    {"cos", TokenType::COS}
+// Unified keyword information
+struct KeywordEntry {
+    TokenType tokenType;
+    Lexer::KeywordCategory category;
+    std::string description;
+};
+
+static const std::unordered_map<std::string, KeywordEntry> keywords = {
+    // Types
+    {"int",       {TokenType::INT,        Lexer::KeywordCategory::Type,          "Integer type"}},
+    {"float",     {TokenType::FLOAT,      Lexer::KeywordCategory::Type,          "Floating-point type"}},
+    {"ptr",       {TokenType::PTR,        Lexer::KeywordCategory::Type,          "Pointer type"}},
+    {"char",      {TokenType::CHAR,       Lexer::KeywordCategory::Type,          "Character type"}},
+    {"string",    {TokenType::STRING_TYPE, Lexer::KeywordCategory::Type,         "String type"}},
+    
+    // Control flow
+    {"if",        {TokenType::IF,         Lexer::KeywordCategory::ControlFlow,   "Conditional statement"}},
+    {"else",      {TokenType::ELSE,       Lexer::KeywordCategory::ControlFlow,   "Alternative branch"}},
+    {"while",     {TokenType::WHILE,      Lexer::KeywordCategory::ControlFlow,   "Loop statement"}},
+    {"end",       {TokenType::END,        Lexer::KeywordCategory::ControlFlow,   "Block terminator"}},
+    {"return",    {TokenType::RETURN,     Lexer::KeywordCategory::ControlFlow,   "Return from function"}},
+    {"break",     {TokenType::BREAK,      Lexer::KeywordCategory::ControlFlow,   "Exit loop"}},
+    {"continue",  {TokenType::CONTINUE,   Lexer::KeywordCategory::ControlFlow,   "Skip to next iteration"}},
+    
+    // Declarations
+    {"function",  {TokenType::FUNCTION,   Lexer::KeywordCategory::Declaration,   "Function declaration"}},
+    {"var",       {TokenType::VAR,        Lexer::KeywordCategory::Declaration,   "Mutable variable"}},
+    {"let",       {TokenType::LET,        Lexer::KeywordCategory::Declaration,   "Immutable variable"}},
+    {"struct",    {TokenType::STRUCT,     Lexer::KeywordCategory::Declaration,   "Structure type"}},
+    {"namespace", {TokenType::NAMESPACE,  Lexer::KeywordCategory::Declaration,   "Namespace declaration"}},
+    {"extern",    {TokenType::EXTERN,     Lexer::KeywordCategory::Declaration,   "External declaration"}},
+    
+    // Math intrinsics (built into codegen)
+    {"sqrt",      {TokenType::SQRT,       Lexer::KeywordCategory::MathIntrinsic, "Square root"}},
+    {"abs",       {TokenType::ABS,        Lexer::KeywordCategory::MathIntrinsic, "Absolute value"}},
+    {"floor",     {TokenType::FLOOR,      Lexer::KeywordCategory::MathIntrinsic, "Floor function"}},
+    {"ceil",      {TokenType::CEIL,       Lexer::KeywordCategory::MathIntrinsic, "Ceiling function"}},
+    {"round",     {TokenType::ROUND,      Lexer::KeywordCategory::MathIntrinsic, "Round to nearest"}},
+    {"trunc",     {TokenType::TRUNC,      Lexer::KeywordCategory::MathIntrinsic, "Truncate to integer"}},
+    {"sin",       {TokenType::SIN,        Lexer::KeywordCategory::MathIntrinsic, "Sine function"}},
+    {"cos",       {TokenType::COS,        Lexer::KeywordCategory::MathIntrinsic, "Cosine function"}},
+    
+    // Literals
+    {"true",      {TokenType::TRUE,       Lexer::KeywordCategory::Literal,       "Boolean true"}},
+    {"false",     {TokenType::FALSE,      Lexer::KeywordCategory::Literal,       "Boolean false"}},
+    
+    // Operators
+    {"as",        {TokenType::AS,         Lexer::KeywordCategory::Operator,      "Type cast operator"}}
+    
     // Note: log, exp, pow, tan are stdlib functions, not keywords
 };
 
 Lexer::Lexer(const std::string& src)
     : source(src), position(0), line(1), column(1) {}
+
+std::vector<std::string> Lexer::getKeywords() {
+    std::vector<std::string> keywordList;
+    keywordList.reserve(keywords.size());
+    for (const auto& pair : keywords) {
+        keywordList.push_back(pair.first);
+    }
+    return keywordList;
+}
+
+std::vector<Lexer::KeywordInfo> Lexer::getKeywordInfo() {
+    std::vector<KeywordInfo> info;
+    
+    for (const auto& pair : keywords) {
+        info.push_back({
+            pair.first,                  // name
+            pair.second.category,        // category
+            pair.second.description      // description
+        });
+    }
+    
+    return info;
+}
+
+std::vector<std::string> Lexer::getKeywordsByCategory(KeywordCategory category) {
+    std::vector<std::string> result;
+    auto allInfo = getKeywordInfo();
+    
+    for (const auto& info : allInfo) {
+        if (info.category == category) {
+            result.push_back(info.name);
+        }
+    }
+    
+    return result;
+}
 
 char Lexer::currentChar() {
     if (position >= source.length()) {
@@ -171,7 +225,7 @@ Token Lexer::readIdentifier() {
     // Check if it's a keyword
     auto it = keywords.find(id);
     if (it != keywords.end()) {
-        return Token(it->second, id, startLine, startColumn);
+        return Token(it->second.tokenType, id, startLine, startColumn);
     }
     
     return Token(TokenType::IDENTIFIER, id, startLine, startColumn);

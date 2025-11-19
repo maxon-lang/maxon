@@ -963,6 +963,10 @@ static std::string extractLiteralValue(ExprAST* expr) {
     if (auto numExpr = dynamic_cast<NumberExprAST*>(expr)) {
         return std::to_string(numExpr->value);
     } else if (auto floatExpr = dynamic_cast<FloatExprAST*>(expr)) {
+        // Use the original literal string if available, otherwise format the value
+        if (!floatExpr->literalString.empty()) {
+            return floatExpr->literalString;
+        }
         return std::to_string(floatExpr->value);
     } else if (auto boolExpr = dynamic_cast<BooleanExprAST*>(expr)) {
         return boolExpr->value ? "true" : "false";

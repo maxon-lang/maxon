@@ -105,8 +105,9 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         double value = currentToken().floatValue;
         int line = currentToken().line;
         int column = currentToken().column;
+        std::string literalString = currentToken().value;
         advance();
-        return std::make_unique<FloatExprAST>(value, line, column);
+        return std::make_unique<FloatExprAST>(value, line, column, literalString);
     }
     
     if (check(TokenType::TRUE)) {

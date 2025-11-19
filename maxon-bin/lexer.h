@@ -108,6 +108,31 @@ private:
 public:
     Lexer(const std::string& src);
     std::vector<Token> tokenize();
+    
+    // Keyword category for metadata
+    enum class KeywordCategory {
+        Type,           // int, float, ptr, char, string
+        ControlFlow,    // if, else, while, end, return, break, continue
+        Declaration,    // function, var, let, struct, namespace, extern
+        MathIntrinsic,  // sqrt, abs, floor, ceil, round, trunc, sin, cos
+        Literal,        // true, false
+        Operator        // as
+    };
+    
+    struct KeywordInfo {
+        std::string name;
+        KeywordCategory category;
+        std::string description;
+    };
+    
+    // Get all keyword strings (for IDE/LSP features)
+    static std::vector<std::string> getKeywords();
+    
+    // Get keywords with metadata
+    static std::vector<KeywordInfo> getKeywordInfo();
+    
+    // Get keywords by category
+    static std::vector<std::string> getKeywordsByCategory(KeywordCategory category);
 };
 
 #endif // LEXER_H

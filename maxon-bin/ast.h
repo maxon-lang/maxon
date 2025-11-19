@@ -36,8 +36,10 @@ public:
 class FloatExprAST : public ExprAST {
 public:
     double value;
+    std::string literalString; // Original string representation from source
     
-    FloatExprAST(double val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
+    FloatExprAST(double val, int l = 0, int c = 0, const std::string& literal = "") 
+        : ExprAST(l, c), value(val), literalString(literal) {}
 };
 
 // Variable reference

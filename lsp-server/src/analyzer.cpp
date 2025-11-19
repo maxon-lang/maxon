@@ -9,11 +9,14 @@
 namespace fs = std::filesystem;
 
 Analyzer::Analyzer() {
-    keywords = {
-        "function", "var", "let", "while", "if", "else", "end", 
-        "return", "break", "continue", "true", "false", "int", "string",
-        "struct", "namespace", "extern", "as"
-    };
+    // Get keywords from the lexer - this ensures we always have the latest keywords
+    keywords = Lexer::getKeywords();
+    
+    // Get keyword metadata for hover info
+    auto keywordInfo = Lexer::getKeywordInfo();
+    for (const auto& info : keywordInfo) {
+        keywordMetadata[info.name] = info;
+    }
 }
 
 std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
@@ -137,27 +140,43 @@ std::vector<lsp::CompletionItem> Analyzer::getCompletions(std::shared_ptr<Docume
     // No dot context - provide regular completions
     
     // Add "stdlib" as a root namespace option
-    items.push_back({"stdlib", 9, "Standard library namespace", ""});
+    items.push_back({"stdlib", lsp::CompletionItemKind::Module, "Standard library namespace", ""});
     
-    // Add keyword completions
+    // Add keyword completions with metadata
     for (const auto& keyword : keywords) {
+        auto metaIt = keywordMetadata.find(keyword);
         lsp::CompletionItem item;
         item.label = keyword;
-        item.kind = 14; // Keyword
-        item.detail = "Maxon keyword";
+        
+        // Set appropriate kind based on category
+        if (metaIt != keywordMetadata.end()) {
+            const auto& meta = metaIt->second;
+            switch (meta.category) {
+                case Lexer::KeywordCategory::Type:
+                    item.kind = lsp::CompletionItemKind::TypeParameter;
+                    break;
+                case Lexer::KeywordCategory::MathIntrinsic:
+                    item.kind = lsp::CompletionItemKind::Function;
+                    break;
+                default:
+                    item.kind = lsp::CompletionItemKind::Keyword;
+                    break;
+            }
+            item.detail = meta.description;
+        } else {
+            item.kind = lsp::CompletionItemKind::Keyword;
+            item.detail = "Maxon keyword";
+        }
+        
         items.push_back(item);
     }
-    
-    // Add built-in types
-    items.push_back({"int", 14, "Integer type", ""});
-    items.push_back({"string", 14, "String type", ""});
     
     // Add stdlib function completions
     for (const auto& pair : stdlibFunctions) {
         const StdlibFunction& func = pair.second;
         lsp::CompletionItem item;
         item.label = func.name;
-        item.kind = 3; // Function
+        item.kind = lsp::CompletionItemKind::Function;
         item.detail = func.signature;
         item.documentation = func.documentation;
         items.push_back(item);
@@ -178,7 +197,7 @@ std::vector<lsp::CompletionItem> Analyzer::getCompletions(std::shared_ptr<Docume
         for (const auto& id : identifiers) {
             lsp::CompletionItem item;
             item.label = id;
-            item.kind = 6; // Variable
+            item.kind = lsp::CompletionItemKind::Variable;
             item.detail = "Identifier";
             items.push_back(item);
         }
@@ -257,18 +276,32 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
         return hover;
     }
     
-    if (isKeyword(word)) {
-        hover.contents = "**" + word + "** (keyword)\n\nMaxon language keyword";
-    } else if (word == "int") {
-        hover.contents = "**int** (type)\n\nInteger type in Maxon";
-    } else if (word == "string") {
-        hover.contents = "**string** (type)\n\nString type in Maxon";
-    } else if (word == "float") {
-        hover.contents = "**float** (type)\n\nFloating-point type in Maxon";
-    } else if (word == "ptr") {
-        hover.contents = "**ptr** (type)\n\nPointer type in Maxon";
-    } else if (word == "char") {
-        hover.contents = "**char** (type)\n\nCharacter type in Maxon";
+    // Check if it's a keyword with metadata
+    auto metaIt = keywordMetadata.find(word);
+    if (metaIt != keywordMetadata.end()) {
+        const auto& meta = metaIt->second;
+        std::string categoryName;
+        switch (meta.category) {
+            case Lexer::KeywordCategory::Type:
+                categoryName = "type";
+                break;
+            case Lexer::KeywordCategory::ControlFlow:
+                categoryName = "control flow";
+                break;
+            case Lexer::KeywordCategory::Declaration:
+                categoryName = "declaration";
+                break;
+            case Lexer::KeywordCategory::MathIntrinsic:
+                categoryName = "math intrinsic";
+                break;
+            case Lexer::KeywordCategory::Literal:
+                categoryName = "literal";
+                break;
+            case Lexer::KeywordCategory::Operator:
+                categoryName = "operator";
+                break;
+        }
+        hover.contents = "**" + word + "** (" + categoryName + ")\n\n" + meta.description;
     } else {
         hover.contents = "**" + word + "**\n\nIdentifier";
     }
@@ -322,7 +355,7 @@ std::vector<lsp::SymbolInformation> Analyzer::getSymbols(std::shared_ptr<Documen
                 
                 lsp::SymbolInformation sym;
                 sym.name = tokens[i + 1].value;
-                sym.kind = 12; // Function
+                sym.kind = lsp::SymbolKind::Function;
                 sym.location.uri = doc->uri;
                 sym.location.range = tokenToRange(tokens[i + 1]);
                 symbols.push_back(sym);
@@ -332,7 +365,7 @@ std::vector<lsp::SymbolInformation> Analyzer::getSymbols(std::shared_ptr<Documen
                 
                 lsp::SymbolInformation sym;
                 sym.name = tokens[i + 1].value;
-                sym.kind = 13; // Variable
+                sym.kind = lsp::SymbolKind::Variable;
                 sym.location.uri = doc->uri;
                 sym.location.range = tokenToRange(tokens[i + 1]);
                 symbols.push_back(sym);
@@ -636,7 +669,7 @@ std::vector<lsp::CompletionItem> Analyzer::getQualifiedNameCompletions(const std
             for (const auto& child : node->children) {
                 lsp::CompletionItem item;
                 item.label = child.first;
-                item.kind = 9; // Module
+                item.kind = lsp::CompletionItemKind::Module;
                 item.detail = "stdlib." + child.first + " namespace";
                 items.push_back(item);
             }
@@ -648,7 +681,7 @@ std::vector<lsp::CompletionItem> Analyzer::getQualifiedNameCompletions(const std
                 for (const auto& child : it->second.children) {
                     lsp::CompletionItem item;
                     item.label = child.first;
-                    item.kind = 9; // Module
+                    item.kind = lsp::CompletionItemKind::Module;
                     item.detail = "Module in stdlib." + parts[1];
                     items.push_back(item);
                 }
@@ -667,7 +700,7 @@ std::vector<lsp::CompletionItem> Analyzer::getQualifiedNameCompletions(const std
                             const StdlibFunction& func = funcIt->second;
                             lsp::CompletionItem item;
                             item.label = func.name;
-                            item.kind = 3; // Function
+                            item.kind = lsp::CompletionItemKind::Function;
                             item.detail = func.signature;
                             item.documentation = func.documentation;
                             items.push_back(item);

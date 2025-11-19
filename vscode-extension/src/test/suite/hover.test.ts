@@ -130,6 +130,37 @@ suite('Hover Test Suite', () => {
         
         assert.ok(hoverText.includes('pi'), 'Hover should mention variable name');
         assert.ok(hoverText.includes('float'), 'Hover should show float type');
+        assert.ok(hoverText.includes('3.14159'), 'Hover should show exact literal value');
+        console.log('Float hover text:', hoverText);
+    });
+
+    test('Hover should show exact float literal with many decimal places', async function() {
+        const content = [
+            "function test() float",
+            "    let SOLAR_MASS = 39.478417604357432",
+            "    return SOLAR_MASS",
+            "end 'test'"
+        ].join('\n');
+        
+        testDocument = await createTestFile('test_hover_float_precise.maxon', content);
+        
+        const position = new vscode.Position(2, 15);
+        const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+            'vscode.executeHoverProvider',
+            testDocument.uri,
+            position
+        );
+        
+        assert.ok(hovers && hovers.length > 0, 'Should have hover information');
+        
+        const hoverText = hovers[0].contents.map(c => 
+            typeof c === 'string' ? c : c.value
+        ).join('\n');
+        
+        assert.ok(hoverText.includes('SOLAR_MASS'), 'Hover should mention variable name');
+        assert.ok(hoverText.includes('float'), 'Hover should show float type');
+        assert.ok(hoverText.includes('39.478417604357432'), 'Hover should show exact value as written in source');
+        console.log('Precise float hover text:', hoverText);
     });
 
     test('Hover should show function parameter info', async function() {
@@ -258,8 +289,9 @@ suite('Hover Test Suite', () => {
         ).join('\n');
         
         assert.ok(hoverText.includes('return'), 'Hover should mention return');
-        assert.ok(hoverText.toLowerCase().includes('keyword'), 
-            'Hover should indicate it is a keyword');
+        assert.ok(hoverText.toLowerCase().includes('keyword') || 
+                  hoverText.toLowerCase().includes('control flow'), 
+            'Hover should indicate it is a keyword or control flow');
     });
 
     test('Hover should show array type', async function() {
