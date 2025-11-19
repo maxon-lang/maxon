@@ -49,9 +49,15 @@ std::string findStdlibDirectory() {
         return "stdlib";
     }
     
-    // Try relative to executable (../../stdlib from build/bin/)
+    // Try ../stdlib (for bin/ at root level)
     std::string execDir = getExecutableDirectory();
-    std::filesystem::path stdlibPath = std::filesystem::path(execDir) / ".." / ".." / "stdlib";
+    std::filesystem::path stdlibPath = std::filesystem::path(execDir) / ".." / "stdlib";
+    if (std::filesystem::exists(stdlibPath)) {
+        return stdlibPath.string();
+    }
+    
+    // Try ../../stdlib (for build/bin/)
+    stdlibPath = std::filesystem::path(execDir) / ".." / ".." / "stdlib";
     if (std::filesystem::exists(stdlibPath)) {
         return stdlibPath.string();
     }

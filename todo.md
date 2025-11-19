@@ -64,3 +64,4 @@ this aint right var buffer [12]char = 0
 https://llvm.org/docs/Frontend/PerformanceTips.html
 
 - platform specific optimization for runtime.ll
+- warnings as errors in release mode

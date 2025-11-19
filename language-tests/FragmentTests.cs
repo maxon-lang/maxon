@@ -1,8 +1,11 @@
-namespace Test;
-
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
+
+[assembly: Parallelizable(ParallelScope.All)]
+[assembly: LevelOfParallelism(8)]
+
+namespace Test;
 
 // trying to embed the test code and expected IR in this file would be a huge PITA
 // due to the way C# handles multiline strings (escaping, indentation, etc.)
@@ -154,7 +157,8 @@ public partial class FragmentTests {
 	var optimizedInstructionCount = -1;
 	var unoptimizedInstructionCount = -1;
 	
-	var maxonPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "build", "bin", "maxon.exe"));
+	// Use maxon.exe from PATH (bin directory is in PATH)
+	var maxonPath = "maxon.exe";
 	
 	Process? maxonOpt = null;
 	string maxonOptStdout = "";
