@@ -11,7 +11,8 @@ namespace fs = std::filesystem;
 Analyzer::Analyzer() {
     keywords = {
         "function", "var", "let", "while", "if", "else", "end", 
-        "return", "break", "continue", "true", "false", "int", "string"
+        "return", "break", "continue", "true", "false", "int", "string",
+        "struct", "namespace", "extern", "as"
     };
 }
 
@@ -60,6 +61,12 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
             }
             
             std::vector<SemanticError> semanticErrors = semanticAnalyzer.analyze(program.get());
+            
+            // Cache semantic analysis results for this document
+            SemanticInfo& semInfo = semanticCache[doc->uri];
+            semInfo.variables = semanticAnalyzer.getAllVariables();
+            semInfo.functions = semanticAnalyzer.getFunctions();
+            semInfo.structs = semanticAnalyzer.getStructs();
             
             // Convert semantic errors to LSP diagnostics
             for (const auto& error : semanticErrors) {
@@ -192,6 +199,55 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
     
     lsp::Hover hover;
     
+    // Check cached semantic info for this document
+    auto cacheIt = semanticCache.find(doc->uri);
+    if (cacheIt != semanticCache.end()) {
+        const SemanticInfo& semInfo = cacheIt->second;
+        
+        // Check for variable
+        auto varIt = semInfo.variables.find(word);
+        if (varIt != semInfo.variables.end()) {
+            const VariableInfo& varInfo = varIt->second;
+            std::string mutability = varInfo.isImmutable ? "let" : "var";
+            std::string hoverText = mutability + " " + varInfo.name + ": " + varInfo.type;
+            if (varInfo.isImmutable && !varInfo.initialValue.empty()) {
+                hoverText += " = " + varInfo.initialValue;
+            }
+            hover.contents = "```maxon\n" + hoverText + "\n```";
+            if (varInfo.isParameter) {
+                hover.contents += "\n\nFunction parameter";
+            }
+            return hover;
+        }
+        
+        // Check for function (user-defined)
+        auto funcIt = semInfo.functions.find(word);
+        if (funcIt != semInfo.functions.end()) {
+            const FunctionInfo& funcInfo = funcIt->second;
+            std::string sig = "function " + funcInfo.name + "(";
+            for (size_t i = 0; i < funcInfo.parameters.size(); i++) {
+                if (i > 0) sig += ", ";
+                sig += funcInfo.parameters[i].name + " " + funcInfo.parameters[i].type;
+            }
+            sig += ") " + funcInfo.returnType;
+            hover.contents = "```maxon\n" + sig + "\n```";
+            return hover;
+        }
+        
+        // Check for struct
+        auto structIt = semInfo.structs.find(word);
+        if (structIt != semInfo.structs.end()) {
+            const StructInfo& structInfo = structIt->second;
+            std::string structDef = "struct " + structInfo.name + "\n";
+            for (const auto& field : structInfo.fields) {
+                structDef += "    " + field.name + " " + field.type + "\n";
+            }
+            structDef += "end";
+            hover.contents = "```maxon\n" + structDef + "\n```";
+            return hover;
+        }
+    }
+    
     // Check if it's a stdlib function
     auto it = stdlibFunctions.find(word);
     if (it != stdlibFunctions.end()) {
@@ -207,6 +263,12 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
         hover.contents = "**int** (type)\n\nInteger type in Maxon";
     } else if (word == "string") {
         hover.contents = "**string** (type)\n\nString type in Maxon";
+    } else if (word == "float") {
+        hover.contents = "**float** (type)\n\nFloating-point type in Maxon";
+    } else if (word == "ptr") {
+        hover.contents = "**ptr** (type)\n\nPointer type in Maxon";
+    } else if (word == "char") {
+        hover.contents = "**char** (type)\n\nCharacter type in Maxon";
     } else {
         hover.contents = "**" + word + "**\n\nIdentifier";
     }

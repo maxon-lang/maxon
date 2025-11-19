@@ -30,11 +30,12 @@ struct VariableInfo {
     bool isParameter; // true if this is a function parameter
     int line;
     int column;
+    std::string initialValue; // For immutable variables, stores the literal value if available
     
     VariableInfo() : isImmutable(false), isUsed(false), isParameter(false), line(0), column(0) {}
     
-    VariableInfo(const std::string& n, const std::string& t, bool immutable, int l = 0, int c = 0, bool param = false)
-        : name(n), type(t), isImmutable(immutable), isUsed(false), isParameter(param), line(l), column(c) {}
+    VariableInfo(const std::string& n, const std::string& t, bool immutable, int l = 0, int c = 0, bool param = false, const std::string& initVal = "")
+        : name(n), type(t), isImmutable(immutable), isUsed(false), isParameter(param), line(l), column(c), initialValue(initVal) {}
 };
 
 // Function information
@@ -89,6 +90,18 @@ public:
     // Get list of undefined functions from last analysis
     const std::set<std::string>& getUndefinedFunctions() const { return undefinedFunctions; }
     
+    // Get all variables from all scopes (for LSP hover/completion)
+    std::map<std::string, VariableInfo> getAllVariables() const;
+    
+    // Get all functions
+    const std::map<std::string, FunctionInfo>& getFunctions() const { return functions; }
+    
+    // Get all structs
+    const std::map<std::string, StructInfo>& getStructs() const { return structs; }
+    
+    // Get persistent symbol table (all variables ever declared, for LSP)
+    const std::map<std::string, VariableInfo>& getAllDeclaredVariables() const { return allDeclaredVariables; }
+    
 private:
     std::vector<SemanticError> errors;
     std::map<std::string, FunctionInfo> functions;
@@ -97,6 +110,9 @@ private:
     std::vector<std::map<std::string, VariableInfo>> scopeStack; // Stack of variable scopes
     int loopDepth; // Track nested loop depth
     std::set<std::string> undefinedFunctions; // Track undefined function calls
+    
+    // Persistent symbol table for LSP - stores all variables ever declared
+    std::map<std::string, VariableInfo> allDeclaredVariables;
     
     // Analysis methods
     void analyzeFunction(FunctionAST* func);
@@ -112,7 +128,7 @@ private:
     // Scope management
     void enterScope();
     void exitScope();
-    void declareVariable(const std::string& name, const std::string& type, bool isImmutable, int line = 0, int column = 0, bool isParameter = false);
+    void declareVariable(const std::string& name, const std::string& type, bool isImmutable, int line = 0, int column = 0, bool isParameter = false, const std::string& initialValue = "");
     std::optional<VariableInfo> lookupVariable(const std::string& name);
     
     // Type checking

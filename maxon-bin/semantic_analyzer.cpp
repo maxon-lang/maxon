@@ -1,6 +1,9 @@
 #include "semantic_analyzer.h"
 #include <algorithm>
 
+// Forward declaration of helper function
+static std::string extractLiteralValue(ExprAST* expr);
+
 SemanticAnalyzer::SemanticAnalyzer() : loopDepth(0) {}
 
 void SemanticAnalyzer::registerExternalFunction(const std::string& name, const std::string& returnType, 
@@ -16,6 +19,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
     scopeStack.clear();
     loopDepth = 0;
     undefinedFunctions.clear();
+    allDeclaredVariables.clear(); // Clear persistent symbol table
     
     // Register standard library functions (built-in)
     // print(int) -> int
@@ -197,8 +201,11 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
             actualType = initType;
         }
         
+        // Extract literal value for immutable variables (for LSP hover)
+        std::string literalValue = extractLiteralValue(letDecl->initializer.get());
+        
         // Declare immutable variable
-        declareVariable(letDecl->name, actualType, true, stmt->line, stmt->column);
+        declareVariable(letDecl->name, actualType, true, stmt->line, stmt->column, false, literalValue);
         
     } else if (auto assign = dynamic_cast<AssignStmtAST*>(stmt)) {
         // Check if variable exists
@@ -942,8 +949,30 @@ void SemanticAnalyzer::exitScope() {
     }
 }
 
-void SemanticAnalyzer::declareVariable(const std::string& name, const std::string& type, bool isImmutable, int line, int column, bool isParameter) {
-    variables[name] = VariableInfo(name, type, isImmutable, line, column, isParameter);
+void SemanticAnalyzer::declareVariable(const std::string& name, const std::string& type, bool isImmutable, int line, int column, bool isParameter, const std::string& initialValue) {
+    VariableInfo varInfo(name, type, isImmutable, line, column, isParameter, initialValue);
+    variables[name] = varInfo;
+    // Also store in persistent symbol table for LSP
+    allDeclaredVariables[name] = varInfo;
+}
+
+// Helper function to extract literal value from an expression for display
+static std::string extractLiteralValue(ExprAST* expr) {
+    if (!expr) return "";
+    
+    if (auto numExpr = dynamic_cast<NumberExprAST*>(expr)) {
+        return std::to_string(numExpr->value);
+    } else if (auto floatExpr = dynamic_cast<FloatExprAST*>(expr)) {
+        return std::to_string(floatExpr->value);
+    } else if (auto boolExpr = dynamic_cast<BooleanExprAST*>(expr)) {
+        return boolExpr->value ? "true" : "false";
+    } else if (auto strExpr = dynamic_cast<StringLiteralExprAST*>(expr)) {
+        return "\"" + strExpr->value + "\"";
+    } else if (auto charExpr = dynamic_cast<CharacterExprAST*>(expr)) {
+        return "'" + std::string(1, charExpr->value) + "'";
+    }
+    
+    return ""; // Not a simple literal
 }
 
 std::optional<VariableInfo> SemanticAnalyzer::lookupVariable(const std::string& name) {
@@ -1030,4 +1059,9 @@ void SemanticAnalyzer::checkUnusedVariables() {
                       varInfo.line, varInfo.column, "unused-variable");
         }
     }
+}
+
+std::map<std::string, VariableInfo> SemanticAnalyzer::getAllVariables() const {
+    // Return the persistent symbol table that contains all declared variables
+    return allDeclaredVariables;
 }

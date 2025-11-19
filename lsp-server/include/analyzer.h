@@ -5,6 +5,7 @@
 #include "document_manager.h"
 #include "lexer.h"
 #include "parser.h"
+#include "semantic_analyzer.h"
 #include <vector>
 #include <memory>
 #include <set>
@@ -55,6 +56,14 @@ private:
     std::vector<std::string> keywords;
     std::map<std::string, StdlibFunction> stdlibFunctions; // Key: unqualified name
     NamespaceNode namespaceRoot;  // Root of namespace hierarchy ("stdlib")
+    
+    // Cache of semantic analysis results per document URI
+    struct SemanticInfo {
+        std::map<std::string, VariableInfo> variables;
+        std::map<std::string, FunctionInfo> functions;
+        std::map<std::string, StructInfo> structs;
+    };
+    std::map<std::string, SemanticInfo> semanticCache;
     
     // Helper functions
     std::string getWordAtPosition(const std::string& text, lsp::Position pos);

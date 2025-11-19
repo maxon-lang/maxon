@@ -102,6 +102,117 @@ suite('Syntax Highlighting Test Suite', () => {
         assert.ok(doc.getText().includes("while true 'loop'"), 'Should contain while with block identifier');
     });
 
+    test('Struct keyword should be recognized', async () => {
+        const testContent = [
+            "struct Point",
+            "    x int",
+            "    y int",
+            "end 'Point'",
+            "",
+            "function test() int",
+            "    var p Point",
+            "    return 0",
+            "end 'test'"
+        ].join('\n');
+
+        const doc = await vscode.workspace.openTextDocument({
+            content: testContent,
+            language: 'maxon'
+        });
+
+        assert.strictEqual(doc.languageId, 'maxon');
+        assert.ok(doc.getText().includes("struct Point"), 'Should contain struct keyword');
+        assert.ok(doc.getText().includes("end 'Point'"), 'Should contain struct block identifier');
+    });
+
+    test('All keywords should be recognized', async () => {
+        const testContent = [
+            "extern function external_func() int",
+            "namespace test 'test'",
+            "struct Data",
+            "    value int",
+            "end 'Data'",
+            "function test(x int) int",
+            "    var count = 0",
+            "    let immutable = 42",
+            "    while count < 10 'loop'",
+            "        if count > 5 'check'",
+            "            break",
+            "        else 'other'",
+            "            continue",
+            "        end 'check'",
+            "    end 'loop'",
+            "    return count as int",
+            "end 'test'",
+            "end 'test'"
+        ].join('\n');
+
+        const doc = await vscode.workspace.openTextDocument({
+            content: testContent,
+            language: 'maxon'
+        });
+
+        assert.strictEqual(doc.languageId, 'maxon');
+        
+        // Check all keywords are present
+        const content = doc.getText();
+        assert.ok(content.includes("extern"), 'Should contain extern keyword');
+        assert.ok(content.includes("namespace"), 'Should contain namespace keyword');
+        assert.ok(content.includes("struct"), 'Should contain struct keyword');
+        assert.ok(content.includes("function"), 'Should contain function keyword');
+        assert.ok(content.includes("var"), 'Should contain var keyword');
+        assert.ok(content.includes("let"), 'Should contain let keyword');
+        assert.ok(content.includes("while"), 'Should contain while keyword');
+        assert.ok(content.includes("if"), 'Should contain if keyword');
+        assert.ok(content.includes("else"), 'Should contain else keyword');
+        assert.ok(content.includes("break"), 'Should contain break keyword');
+        assert.ok(content.includes("continue"), 'Should contain continue keyword');
+        assert.ok(content.includes("return"), 'Should contain return keyword');
+        assert.ok(content.includes("as"), 'Should contain as keyword');
+        assert.ok(content.includes("end"), 'Should contain end keyword');
+    });
+
+    test('Boolean literals should be recognized', async () => {
+        const testContent = [
+            "function test() int",
+            "    var flag = true",
+            "    if flag = false 'check'",
+            "        return 1",
+            "    end 'check'",
+            "    return 0",
+            "end 'test'"
+        ].join('\n');
+
+        const doc = await vscode.workspace.openTextDocument({
+            content: testContent,
+            language: 'maxon'
+        });
+
+        assert.strictEqual(doc.languageId, 'maxon');
+        assert.ok(doc.getText().includes("true"), 'Should contain true literal');
+        assert.ok(doc.getText().includes("false"), 'Should contain false literal');
+    });
+
+    test('Multi-line comments should be recognized', async () => {
+        const testContent = [
+            "/* This is a",
+            "   multi-line comment */",
+            "function test() int",
+            "    /* Another comment */",
+            "    return 0",
+            "end 'test'"
+        ].join('\n');
+
+        const doc = await vscode.workspace.openTextDocument({
+            content: testContent,
+            language: 'maxon'
+        });
+
+        assert.strictEqual(doc.languageId, 'maxon');
+        assert.ok(doc.getText().includes("/* This is a"), 'Should contain multi-line comment start');
+        assert.ok(doc.getText().includes("multi-line comment */"), 'Should contain multi-line comment end');
+    });
+
     test('Block identifiers after namespace keyword should be recognized', async () => {
         const testContent = [
             "namespace utils 'utils'",

@@ -251,7 +251,7 @@ end 'main'
     test('Should report error for stdlib function with wrong argument count', async function() {
         // format_int_array expects 2 arguments, we provide 1
         const content = `function main() int
-    var buffer [12]char = 0
+    var buffer = [12]char
     var length = format_int_array(42)
     return length
 end 'main'
