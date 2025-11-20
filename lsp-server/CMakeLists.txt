@@ -52,6 +52,14 @@ add_custom_command(TARGET maxon-lsp-server PRE_BUILD
     COMMENT "Renaming existing maxon-lsp-server binary before rebuild"
 )
 
+add_custom_command(TARGET maxon-lsp-server POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+        -DOUTPUT_PATH="${LSP_SERVER_RUNTIME}"
+        -DBACKUP_PATH="${LSP_SERVER_BACKUP}"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/finalize_maxon_lsp_server.cmake
+    COMMENT "Killing running process and cleaning up old binary after rebuild"
+)
+
 # Installation
 install(TARGETS maxon-lsp-server DESTINATION bin)
 
