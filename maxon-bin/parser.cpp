@@ -103,7 +103,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
     }
     
     if (check(TokenType::FLOAT_LITERAL)) {
-        double value = currentToken().floatValue;
+        double value = std::stod(currentToken().value);
         int line = currentToken().line;
         int column = currentToken().column;
         std::string literalString = currentToken().value;

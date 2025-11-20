@@ -93,12 +93,11 @@ struct Token {
     std::string value;
     int line;
     int column;
-    double floatValue;  // For FLOAT_LITERAL tokens
     std::optional<KeywordCategory> keywordCategory;  // For keyword tokens
     std::optional<std::string> description;  // For keyword tokens
     
-    Token(TokenType t, const std::string& v, int l, int c, double fv = 0.0, std::optional<KeywordCategory> kc = std::nullopt, std::optional<std::string> desc = std::nullopt)
-        : type(t), value(v), line(l), column(c), floatValue(fv), keywordCategory(kc), description(desc) {}
+    Token(TokenType t, const std::string& v, int l, int c, std::optional<KeywordCategory> kc = std::nullopt, std::optional<std::string> desc = std::nullopt)
+        : type(t), value(v), line(l), column(c), keywordCategory(kc), description(desc) {}
 };
 
 class Lexer {
