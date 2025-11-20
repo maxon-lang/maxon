@@ -1047,6 +1047,24 @@ void CodeGenerator::generateScopeCleanup(llvm::Function* function) {
     }
 }
 
+llvm::Function* CodeGenerator::getRuntimeFunction(const std::string& name, llvm::Module* module, llvm::LLVMContext& context) {
+    llvm::Function* func = module->getFunction(name);
+    if (!func) {
+        llvm::FunctionType* funcType = llvm::FunctionType::get(
+            llvm::Type::getDoubleTy(context),
+            {llvm::Type::getDoubleTy(context)},
+            false
+        );
+        func = llvm::Function::Create(
+            funcType,
+            llvm::Function::ExternalLinkage,
+            name,
+            module
+        );
+    }
+    return func;
+}
+
 llvm::Value* CodeGenerator::generateMathIntrinsic(CallExprAST* callExpr) {
     // NOTE: Math intrinsic metadata is defined in lexer.cpp's keywords map.
     // This function uses that metadata to generate the appropriate LLVM IR.
@@ -1095,12 +1113,8 @@ llvm::Value* CodeGenerator::generateMathIntrinsic(CallExprAST* callExpr) {
         }
         
         case MathIntrinsicKind::RuntimeFunction: {
-            // Call runtime library function using the function pointer from metadata
-            if (!info->getRuntimeFn) {
-                throw std::runtime_error("No runtime function provided for " + callExpr->callee);
-            }
-            
-            llvm::Function* runtimeFn = info->getRuntimeFn(module.get(), context);
+            // Call runtime library function by name
+            llvm::Function* runtimeFn = getRuntimeFunction(info->runtimeFunctionName, module.get(), context);
             if (args.size() != 1) {
                 throw std::runtime_error(callExpr->callee + " expects exactly 1 argument");
             }

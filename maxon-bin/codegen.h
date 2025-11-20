@@ -50,6 +50,7 @@ private:
     void generateStmt(StmtAST* stmt, llvm::Function* function);
     void generateFunction(FunctionAST* func, const std::string& namespaceName = "");
     
+    llvm::Function* getRuntimeFunction(const std::string& name, llvm::Module* module, llvm::LLVMContext& context);
     llvm::Value* generateMathIntrinsic(CallExprAST* callExpr);
     
     llvm::AllocaInst* createEntryBlockAlloca(llvm::Function* function,

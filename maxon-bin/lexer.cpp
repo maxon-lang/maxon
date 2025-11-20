@@ -7,12 +7,6 @@
 #include <stdexcept>
 #include <unordered_map>
 
-// Forward declare runtime function helpers
-namespace {
-    llvm::Function* getOrDeclareSin(llvm::Module* module, llvm::LLVMContext& context);
-    llvm::Function* getOrDeclareCos(llvm::Module* module, llvm::LLVMContext& context);
-}
-
 // Unified keyword information
 static const std::unordered_map<std::string, KeywordData> keywords = {
     // Types
@@ -41,14 +35,15 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
     {"extern",    {KeywordCategory::Declaration,   "External declaration"}},
     
     // Math intrinsics (built into codegen)
-    {"sqrt",      {KeywordCategory::MathIntrinsic, "Square root",         {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::sqrt,  nullptr, "float"}}}},
-    {"abs",       {KeywordCategory::MathIntrinsic, "Absolute value",      {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::fabs,  nullptr, "float"}}}},
-    {"floor",     {KeywordCategory::MathIntrinsic, "Floor function",      {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::floor, nullptr, "int"}}}},
-    {"ceil",      {KeywordCategory::MathIntrinsic, "Ceiling function",    {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::ceil,  nullptr, "int"}}}},
-    {"round",     {KeywordCategory::MathIntrinsic, "Round to nearest",    {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::round, nullptr, "int"}}}},
-    {"trunc",     {KeywordCategory::MathIntrinsic, "Truncate to integer", {{MathIntrinsicKind::DirectCast,      0,                      nullptr, "int"}}}},
-    {"sin",       {KeywordCategory::MathIntrinsic, "Sine function",       {{MathIntrinsicKind::RuntimeFunction, 0,                      getOrDeclareSin, "float"}}}},
-    {"cos",       {KeywordCategory::MathIntrinsic, "Cosine function",     {{MathIntrinsicKind::RuntimeFunction, 0,                      getOrDeclareCos, "float"}}}},
+    {"sqrt",      {KeywordCategory::MathIntrinsic, "Square root",         {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::sqrt,  "", "float"}}}},
+    {"abs",       {KeywordCategory::MathIntrinsic, "Absolute value",      {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::fabs,  "", "float"}}}},
+    {"floor",     {KeywordCategory::MathIntrinsic, "Floor function",      {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::floor, "", "int"}}}},
+    {"ceil",      {KeywordCategory::MathIntrinsic, "Ceiling function",    {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::ceil,  "", "int"}}}},
+    {"round",     {KeywordCategory::MathIntrinsic, "Round to nearest",    {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::round, "", "int"}}}},
+    {"trunc",     {KeywordCategory::MathIntrinsic, "Truncate to integer", {{MathIntrinsicKind::DirectCast,      0,                      "", "int"}}}},
+    {"sin",       {KeywordCategory::MathIntrinsic, "Sine function",       {{MathIntrinsicKind::RuntimeFunction, 0,                      "sin", "float"}}}},
+    {"cos",       {KeywordCategory::MathIntrinsic, "Cosine function",     {{MathIntrinsicKind::RuntimeFunction, 0,                      "cos", "float"}}}},
+    {"tan",       {KeywordCategory::MathIntrinsic, "Tangent function",    {{MathIntrinsicKind::RuntimeFunction, 0,                      "tan", "float"}}}},
     
     // Literals
     {"true",      {KeywordCategory::Literal,       "Boolean true"}},
@@ -536,43 +531,4 @@ std::vector<Token> Lexer::tokenize() {
     
     tokens.push_back(Token(TokenType::END_OF_FILE, "", line, column));
     return tokens;
-}
-
-// Runtime function helpers (defined here to avoid circular dependency with codegen)
-namespace {
-    llvm::Function* getOrDeclareSin(llvm::Module* module, llvm::LLVMContext& context) {
-        llvm::Function* sinFunc = module->getFunction("sin");
-        if (!sinFunc) {
-            llvm::FunctionType* sinFuncType = llvm::FunctionType::get(
-                llvm::Type::getDoubleTy(context),
-                {llvm::Type::getDoubleTy(context)},
-                false
-            );
-            sinFunc = llvm::Function::Create(
-                sinFuncType,
-                llvm::Function::ExternalLinkage,
-                "sin",
-                module
-            );
-        }
-        return sinFunc;
-    }
-
-    llvm::Function* getOrDeclareCos(llvm::Module* module, llvm::LLVMContext& context) {
-        llvm::Function* cosFunc = module->getFunction("cos");
-        if (!cosFunc) {
-            llvm::FunctionType* cosFuncType = llvm::FunctionType::get(
-                llvm::Type::getDoubleTy(context),
-                {llvm::Type::getDoubleTy(context)},
-                false
-            );
-            cosFunc = llvm::Function::Create(
-                cosFuncType,
-                llvm::Function::ExternalLinkage,
-                "cos",
-                module
-            );
-        }
-        return cosFunc;
-    }
 }

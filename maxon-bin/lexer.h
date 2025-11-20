@@ -79,7 +79,7 @@ enum class MathIntrinsicKind {
 struct MathIntrinsicInfo {
     MathIntrinsicKind kind;
     llvm::Intrinsic::ID intrinsicID;     // For LLVMIntrinsic kind
-    std::function<llvm::Function*(llvm::Module*, llvm::LLVMContext&)> getRuntimeFn;  // For RuntimeFunction kind
+    std::string runtimeFunctionName;     // For RuntimeFunction kind
     std::string returnType;              // "int" or "float"
 };
 
