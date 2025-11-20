@@ -61,7 +61,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
     // Second pass: collect all function declarations (including namespace functions)
     for (const auto& func : program->functions) {
         // Build the qualified name if the function has a namespace
-        std::string functionKey = func->namespaceName.empty() ? func->name : func->namespaceName + "::" + func->name;
+        std::string functionKey = func->namespaceName.empty() ? func->name : func->namespaceName + "." + func->name;
         
         if (functions.find(functionKey) != functions.end()) {
             addError("Function '" + functionKey + "' is already defined" +
@@ -77,10 +77,10 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
         }
     }
     
-    // Collect namespace functions with qualified names (namespace::function)
+    // Collect namespace functions with qualified names (namespace.function)
     for (const auto& ns : program->namespaces) {
         for (const auto& func : ns->functions) {
-            std::string qualifiedName = ns->name + "::" + func->name;
+            std::string qualifiedName = ns->name + "." + func->name;
             if (functions.find(qualifiedName) != functions.end()) {
                 addError("Function '" + qualifiedName + "' is already defined" +
                         std::string("\n  Note: Each function name must be unique in the namespace"),
@@ -658,17 +658,17 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         // Try to find the function - first exact match, then unqualified lookup
         auto funcIt = functions.find(callExpr->callee);
         
-        // Check if this is a qualified call (contains ::)
-        bool isQualifiedCall = callExpr->callee.find("::") != std::string::npos;
+        // Check if this is a qualified call (contains .)
+        bool isQualifiedCall = callExpr->callee.find(".") != std::string::npos;
         
         // If the call is qualified, check if it's unnecessary
         if (isQualifiedCall && funcIt != functions.end()) {
-            // Extract the unqualified name (everything after the last ::)
-            size_t lastColonPos = callExpr->callee.rfind("::");
-            std::string unqualifiedName = callExpr->callee.substr(lastColonPos + 2);
+            // Extract the unqualified name (everything after the last .)
+            size_t lastDotPos = callExpr->callee.rfind(".");
+            std::string unqualifiedName = callExpr->callee.substr(lastDotPos + 1);
             
             // Check how many functions match the unqualified name
-            std::string searchSuffix = "::" + unqualifiedName;
+            std::string searchSuffix = "." + unqualifiedName;
             std::vector<std::string> matches;
             
             // Check for exact match with unqualified name (global function)
@@ -694,9 +694,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
             }
         }
         
-        // If not found and the name is unqualified (no ::), try suffix matching
-        if (funcIt == functions.end() && callExpr->callee.find("::") == std::string::npos) {
-            std::string searchSuffix = "::" + callExpr->callee;
+        // If not found and the name is unqualified (no .), try suffix matching
+        if (funcIt == functions.end() && callExpr->callee.find(".") == std::string::npos) {
+            std::string searchSuffix = "." + callExpr->callee;
             std::vector<std::string> matches;
             
             for (const auto& pair : functions) {

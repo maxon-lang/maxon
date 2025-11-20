@@ -70,17 +70,20 @@ std::string deriveNamespace(const std::string& filePath) {
         return "";
     }
 
-    std::replace(ns.begin(), ns.end(), '/', ':');
-    std::replace(ns.begin(), ns.end(), '\\', ':');
+    std::replace(ns.begin(), ns.end(), '/', '.');
+    std::replace(ns.begin(), ns.end(), '\\', '.');
 
     std::string result;
     for (size_t i = 0; i < ns.size(); ++i) {
-        if (ns[i] == ':') {
-            result += "::";
-            while (i + 1 < ns.size() && (ns[i + 1] == ':' || ns[i + 1] == '/' || ns[i + 1] == '\\')) {
+        if (ns[i] == '.') {
+            // Skip consecutive dots
+            if (result.empty() || result.back() != '.') {
+                result += '.';
+            }
+            while (i + 1 < ns.size() && (ns[i + 1] == '.' || ns[i + 1] == '/' || ns[i + 1] == '\\')) {
                 ++i;
             }
-        } else if (ns[i] != '.' || i != 0) {
+        } else {
             result += ns[i];
         }
     }

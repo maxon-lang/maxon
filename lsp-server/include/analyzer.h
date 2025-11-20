@@ -14,10 +14,10 @@
 // Information about a stdlib function
 struct StdlibFunction {
     std::string name;           // Unqualified name (e.g., "format_int_array")
-    std::string qualifiedName;  // Fully qualified name (e.g., "stdlib::fmt::format_int_array")
+    std::string qualifiedName;  // Fully qualified name (e.g., "stdlib.fmt.format_int_array")
     std::string signature;      // Function signature for display
     std::string documentation;  // Documentation from comments
-    std::string namespacePath;  // Namespace path (e.g., "stdlib::fmt")
+    std::string namespacePath;  // Namespace path (e.g., "stdlib.fmt")
     std::string moduleName;     // Module name (e.g., "integer")
     std::string returnType;     // Return type
     std::vector<FunctionParameter> parameters; // Function parameters

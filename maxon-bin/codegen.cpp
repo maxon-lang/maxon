@@ -1534,8 +1534,8 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         llvm::Function* calleeF = module->getFunction(callExpr->callee);
         
         // If not found and unqualified, try suffix matching
-        if (!calleeF && callExpr->callee.find("::") == std::string::npos) {
-            std::string searchSuffix = "::" + callExpr->callee;
+        if (!calleeF && callExpr->callee.find(".") == std::string::npos) {
+            std::string searchSuffix = "." + callExpr->callee;
             
             for (auto& func : module->functions()) {
                 std::string funcName = func.getName().str();
@@ -2557,7 +2557,7 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
 
 void CodeGenerator::generateFunction(FunctionAST* func, const std::string& namespaceName) {
     // Determine the actual function name (with namespace if applicable)
-    std::string functionName = namespaceName.empty() ? func->name : namespaceName + "::" + func->name;
+    std::string functionName = namespaceName.empty() ? func->name : namespaceName + "." + func->name;
     
     // Get the function that was already declared
     llvm::Function* function = module->getFunction(functionName);
@@ -2717,12 +2717,12 @@ void CodeGenerator::createMinimalEntryPoint() {
     // Get the main function - try simple name first, then look for any namespace::main
     llvm::Function* mainFunc = module->getFunction("main");
     if (!mainFunc) {
-        // Look for main in any namespace (e.g., examples::main)
+        // Look for main in any namespace (e.g., examples.main)
         for (auto& func : module->functions()) {
             std::string funcName = func.getName().str();
-            // Check if the function name ends with ::main
+            // Check if the function name ends with .main
             if (funcName == "main" || 
-                (funcName.size() > 6 && funcName.substr(funcName.size() - 6) == "::main")) {
+                (funcName.size() > 5 && funcName.substr(funcName.size() - 5) == ".main")) {
                 mainFunc = &func;
                 break;
             }
@@ -2856,7 +2856,7 @@ void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
         llvm::FunctionType* funcType = llvm::FunctionType::get(returnType, paramTypes, false);
         
         // Determine the actual function name (with namespace if applicable)
-        std::string functionName = func->namespaceName.empty() ? func->name : func->namespaceName + "::" + func->name;
+        std::string functionName = func->namespaceName.empty() ? func->name : func->namespaceName + "." + func->name;
         
         // Create function
         llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
@@ -2882,7 +2882,7 @@ void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
             // Create function type
             llvm::FunctionType* funcType = llvm::FunctionType::get(returnType, paramTypes, false);
             
-            std::string qualifiedName = ns->name + "::" + func->name;
+            std::string qualifiedName = ns->name + "." + func->name;
             
             if (func->isExtern) {
                 // For extern functions in namespaces:

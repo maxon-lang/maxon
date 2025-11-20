@@ -253,13 +253,13 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
             // If followed by '(', treat as namespace-qualified function call
             if (check(TokenType::LPAREN)) {
                 // This is namespace.function() - restore as qualified name
-                std::string qualifiedName = name + "::" + member.value;
+                std::string qualifiedName = name + "." + member.value;
                 
                 // Continue building qualified name for multiple namespaces
                 while (check(TokenType::DOT) && peek(1).type == TokenType::IDENTIFIER) {
                     advance(); // consume '.'
                     Token nextMember = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
-                    qualifiedName = qualifiedName + "::" + nextMember.value;
+                    qualifiedName = qualifiedName + "." + nextMember.value;
                 }
                 
                 advance(); // consume '('
@@ -287,7 +287,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         while (check(TokenType::DOT)) {
             advance(); // consume '.'
             Token memberName = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
-            name = name + "::" + memberName.value;
+            name = name + "." + memberName.value;
         }
         
         // Check for function call

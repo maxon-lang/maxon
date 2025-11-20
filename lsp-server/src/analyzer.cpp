@@ -424,14 +424,14 @@ void Analyzer::initializeStdlib(const std::string& stdlibPath) {
     auto files = findStdlibFiles(stdlibPath);
     
     for (const auto& filePath : files) {
-        // Extract namespace from path (e.g., stdlib/fmt/integer.maxon -> stdlib::fmt)
+        // Extract namespace from path (e.g., stdlib/fmt/integer.maxon -> stdlib.fmt)
         fs::path path(filePath);
         fs::path relativePath = fs::relative(path, stdlibPath);
         
         std::string namespaceName = "stdlib";
         if (relativePath.has_parent_path()) {
             for (const auto& part : relativePath.parent_path()) {
-                namespaceName += "::" + part.string();
+                namespaceName += "." + part.string();
             }
         }
         
@@ -478,12 +478,12 @@ void Analyzer::loadStdlibFile(const std::string& filePath, const std::string& na
         fs::path path(filePath);
         std::string moduleName = path.stem().string();
         
-        // Parse namespace to extract parts (e.g., "stdlib::fmt" -> ["stdlib", "fmt"])
+        // Parse namespace to extract parts (e.g., "stdlib.fmt" -> ["stdlib", "fmt"])
         std::vector<std::string> nsParts;
         std::string current;
         for (char c : namespaceName) {
-            if (c == ':') {
-                if (!current.empty() && current != ":") {
+            if (c == '.') {
+                if (!current.empty()) {
                     nsParts.push_back(current);
                     current.clear();
                 }
