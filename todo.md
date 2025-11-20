@@ -14,6 +14,7 @@ add "repl" to maxon
 add "test" to maxon
 add "lint" to maxon
 add "profile" to maxon
+add "docs" to maxon
 add package manager to maxon
 
 self hosting
