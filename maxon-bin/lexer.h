@@ -39,7 +39,6 @@ enum class TokenType {
     TRUNC,      // trunc keyword
     SIN,        // sin keyword
     COS,        // cos keyword
-    // Note: log, exp, pow, tan are stdlib functions, not keywords
     
     // Identifiers and literals
     IDENTIFIER,

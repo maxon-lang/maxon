@@ -296,10 +296,6 @@ end 'main'
     });
 
     test('Should clear diagnostics when file is closed', async function() {
-        // Note: This test is skipped because VS Code's test environment doesn't reliably
-        // trigger textDocument/didClose events. The feature works correctly in actual usage.
-        // Manual testing: create file with errors, see diagnostics, close file, diagnostics disappear.
-        
         // Create a document with errors
         const content = `function main() int
     var unused = 5

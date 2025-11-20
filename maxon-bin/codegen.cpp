@@ -1550,7 +1550,6 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
     
     if (auto* callExpr = dynamic_cast<CallExprAST*>(expr)) {
         // Handle math intrinsic functions (built into LLVM)
-        // Note: log, exp, pow, tan are stdlib functions, not intrinsics
         if (callExpr->callee == "sqrt" || callExpr->callee == "abs" || 
             callExpr->callee == "floor" || callExpr->callee == "ceil" ||
             callExpr->callee == "sin" || callExpr->callee == "cos" ||
@@ -1584,8 +1583,6 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         if (!calleeF) {
             throw std::runtime_error("Unknown function referenced: " + callExpr->callee);
         }
-        
-        // Note: We don't check arg_size() here because we automatically add hidden length parameters
         
         // Generate code for arguments (including hidden length parameters for arrays)
         std::vector<llvm::Value*> argsV;
@@ -2155,7 +2152,6 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
             );
         }
         
-        // Note: immutability is enforced at semantic analysis level
         return;
     }
     

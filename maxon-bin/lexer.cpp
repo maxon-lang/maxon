@@ -46,8 +46,6 @@ static const std::unordered_map<std::string, Token> keywords = {
     
     // Operators
     {"as",        Token(TokenType::AS,         "as",         0, 0, 0.0, KeywordCategory::Operator,      "Type cast operator")}
-    
-    // Note: log, exp, pow, tan are stdlib functions, not keywords
 };
 
 Lexer::Lexer(const std::string& src)
