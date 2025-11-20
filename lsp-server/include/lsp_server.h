@@ -27,6 +27,8 @@ private:
     json handleDefinition(const json& params);
     json handleDocumentSymbol(const json& params);
     json handleCodeAction(const json& params);
+    json handleRename(const json& params);
+    json handleLinkedEditingRange(const json& params);
     
     // LSP Notification handlers
     void handleInitialized(const json& params);

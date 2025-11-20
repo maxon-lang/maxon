@@ -713,3 +713,285 @@ std::vector<lsp::CompletionItem> Analyzer::getQualifiedNameCompletions(const std
     
     return items;
 }
+
+std::optional<lsp::WorkspaceEdit> Analyzer::getRename(std::shared_ptr<Document> doc, lsp::Position pos, const std::string& newName) {
+    try {
+        Lexer lexer(doc->text);
+        std::vector<Token> tokens = lexer.tokenize();
+        
+        // Find the token at the given position
+        Token* targetToken = nullptr;
+        size_t targetIndex = 0;
+        for (size_t i = 0; i < tokens.size(); i++) {
+            auto& token = tokens[i];
+            // Check if position is within this token
+            // Token positions are 1-based, LSP positions are 0-based
+            int tokenLine = token.line - 1;
+            int tokenCol = token.column - 1;
+            int tokenEndCol = tokenCol + token.value.length();
+            
+            if (pos.line == tokenLine && pos.character >= tokenCol && pos.character < tokenEndCol) {
+                targetToken = &token;
+                targetIndex = i;
+                break;
+            }
+        }
+        
+        if (!targetToken) {
+            return std::nullopt;
+        }
+        
+        std::vector<lsp::TextEdit> edits;
+        
+        // Handle block identifiers (quoted strings like 'Planet')
+        if (targetToken->type == TokenType::BLOCK_ID) {
+            std::string oldName = targetToken->value;
+            
+            // Find all BLOCK_ID tokens with the same value
+            for (const auto& token : tokens) {
+                if (token.type == TokenType::BLOCK_ID && token.value == oldName) {
+                    lsp::TextEdit edit;
+                    edit.range.start.line = token.line - 1;
+                    edit.range.start.character = token.column - 1;
+                    edit.range.end.line = token.line - 1;
+                    edit.range.end.character = token.column - 1 + token.value.length();
+                    edit.newText = newName;
+                    edits.push_back(edit);
+                }
+            }
+        }
+        // Handle struct name identifiers
+        else if (targetToken->type == TokenType::IDENTIFIER && targetIndex > 0) {
+            // Check if this is a struct name (preceded by 'struct' keyword)
+            if (tokens[targetIndex - 1].type == TokenType::STRUCT) {
+                std::string oldName = targetToken->value;
+                
+                // Find all usages of this struct name:
+                // 1. The struct declaration: struct NAME
+                // 2. Variable declarations: var x NAME
+                // 3. Function parameters: function foo(p NAME)
+                // 4. Array types: []NAME
+                // 5. The end block identifier: end 'NAME'
+                
+                for (size_t i = 0; i < tokens.size(); i++) {
+                    const auto& token = tokens[i];
+                    
+                    if (token.type == TokenType::IDENTIFIER && token.value == oldName) {
+                        // Check context to see if this is a type usage
+                        bool isTypeUsage = false;
+                        
+                        if (i > 0) {
+                            TokenType prevType = tokens[i - 1].type;
+                            // After struct keyword
+                            if (prevType == TokenType::STRUCT) {
+                                isTypeUsage = true;
+                            }
+                            // After function signature closing paren (return type)
+                            else if (prevType == TokenType::RPAREN) {
+                                isTypeUsage = true;
+                            }
+                            // After variable/parameter name (e.g., "var x Planet" or "param Planet")
+                            else if (prevType == TokenType::IDENTIFIER) {
+                                // Check if the previous identifier is itself after var/let/a comma/lparen
+                                if (i > 1) {
+                                    TokenType prevPrevType = tokens[i - 2].type;
+                                    if (prevPrevType == TokenType::VAR || 
+                                        prevPrevType == TokenType::LET ||
+                                        prevPrevType == TokenType::COMMA ||
+                                        prevPrevType == TokenType::LPAREN) {
+                                        isTypeUsage = true;
+                                    }
+                                }
+                            }
+                            // After array bracket ([]NAME)
+                            else if (prevType == TokenType::RBRACKET) {
+                                isTypeUsage = true;
+                            }
+                        }
+                        
+                        // Check if followed by { for struct literal (e.g., Planet{...})
+                        if (!isTypeUsage && i + 1 < tokens.size()) {
+                            if (tokens[i + 1].type == TokenType::LBRACE) {
+                                isTypeUsage = true;
+                            }
+                        }
+                        
+                        if (isTypeUsage) {
+                            lsp::TextEdit edit;
+                            edit.range.start.line = token.line - 1;
+                            edit.range.start.character = token.column - 1;
+                            edit.range.end.line = token.line - 1;
+                            edit.range.end.character = token.column - 1 + token.value.length();
+                            edit.newText = newName;
+                            edits.push_back(edit);
+                        }
+                    }
+                    // Also rename the block identifier at the end
+                    // Block IDs: token.value contains content without quotes
+                    // token.column points to the opening quote
+                    // Actual source span is: quote + content + quote (2 extra chars)
+                    else if (token.type == TokenType::BLOCK_ID && token.value == oldName) {
+                        lsp::TextEdit edit;
+                        edit.range.start.line = token.line - 1;
+                        edit.range.start.character = token.column - 1;
+                        edit.range.end.line = token.line - 1;
+                        edit.range.end.character = token.column - 1 + token.value.length() + 2; // +2 for quotes
+                        // Need to include quotes in the new text - detect quote style from source
+                        // For now, just use single quotes (the most common)
+                        edit.newText = "'" + newName + "'";
+                        edits.push_back(edit);
+                    }
+                }
+            }
+            // Could also be a function name or variable - but for now we'll skip those
+            else {
+                return std::nullopt;
+            }
+        }
+        else {
+            return std::nullopt;
+        }
+        
+        if (edits.empty()) {
+            return std::nullopt;
+        }
+        
+        lsp::WorkspaceEdit workspaceEdit;
+        workspaceEdit.changes[doc->uri] = edits;
+        
+        return workspaceEdit;
+        
+    } catch (const std::exception& e) {
+        // If lexing fails, return no edits
+        return std::nullopt;
+    }
+}
+
+std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::shared_ptr<Document> doc, lsp::Position pos) {
+    try {
+        Lexer lexer(doc->text);
+        std::vector<Token> tokens = lexer.tokenize();
+        
+        // Find the token at the given position
+        Token* targetToken = nullptr;
+        size_t targetIndex = 0;
+        for (size_t i = 0; i < tokens.size(); i++) {
+            auto& token = tokens[i];
+            int tokenLine = token.line - 1;
+            int tokenCol = token.column - 1;
+            int tokenEndCol = tokenCol + token.value.length();
+            
+            if (pos.line == tokenLine && pos.character >= tokenCol && pos.character < tokenEndCol) {
+                targetToken = &token;
+                targetIndex = i;
+                break;
+            }
+        }
+        
+        if (!targetToken) {
+            return std::nullopt;
+        }
+        
+        std::vector<lsp::Range> ranges;
+        
+        // Handle block identifiers
+        if (targetToken->type == TokenType::BLOCK_ID) {
+            std::string oldName = targetToken->value;
+            
+            // Find all BLOCK_ID tokens with the same value
+            for (const auto& token : tokens) {
+                if (token.type == TokenType::BLOCK_ID && token.value == oldName) {
+                    lsp::Range range;
+                    range.start.line = token.line - 1;
+                    range.start.character = token.column - 1;
+                    range.end.line = token.line - 1;
+                    range.end.character = token.column - 1 + token.value.length();
+                    ranges.push_back(range);
+                }
+            }
+        }
+        // Handle struct name identifiers
+        else if (targetToken->type == TokenType::IDENTIFIER && targetIndex > 0) {
+            if (tokens[targetIndex - 1].type == TokenType::STRUCT) {
+                std::string oldName = targetToken->value;
+                
+                // Find all usages of this struct name
+                for (size_t i = 0; i < tokens.size(); i++) {
+                    const auto& token = tokens[i];
+                    
+                    if (token.type == TokenType::IDENTIFIER && token.value == oldName) {
+                        bool isTypeUsage = false;
+                        
+                        if (i > 0) {
+                            TokenType prevType = tokens[i - 1].type;
+                            if (prevType == TokenType::STRUCT) {
+                                isTypeUsage = true;
+                            }
+                            else if (prevType == TokenType::RPAREN) {
+                                // Return type after function signature
+                                isTypeUsage = true;
+                            }
+                            else if (prevType == TokenType::IDENTIFIER) {
+                                if (i > 1) {
+                                    TokenType prevPrevType = tokens[i - 2].type;
+                                    if (prevPrevType == TokenType::VAR || 
+                                        prevPrevType == TokenType::LET ||
+                                        prevPrevType == TokenType::COMMA ||
+                                        prevPrevType == TokenType::LPAREN) {
+                                        isTypeUsage = true;
+                                    }
+                                }
+                            }
+                            else if (prevType == TokenType::RBRACKET) {
+                                isTypeUsage = true;
+                            }
+                        }
+                        
+                        if (!isTypeUsage && i + 1 < tokens.size()) {
+                            if (tokens[i + 1].type == TokenType::LBRACE) {
+                                isTypeUsage = true;
+                            }
+                        }
+                        
+                        if (isTypeUsage) {
+                            lsp::Range range;
+                            range.start.line = token.line - 1;
+                            range.start.character = token.column - 1;
+                            range.end.line = token.line - 1;
+                            range.end.character = token.column - 1 + token.value.length();
+                            ranges.push_back(range);
+                        }
+                    }
+                    // Include block identifiers that match the struct name
+                    // For linked editing, select only the content inside quotes (not the quotes themselves)
+                    else if (token.type == TokenType::BLOCK_ID && token.value == oldName) {
+                        lsp::Range range;
+                        range.start.line = token.line - 1;
+                        range.start.character = token.column; // token.column points to quote, +1 to skip it (but token.column is 1-based, -1 converts to 0-based, net = token.column)
+                        range.end.line = token.line - 1;
+                        range.end.character = token.column + token.value.length(); // ends before closing quote
+                        ranges.push_back(range);
+                    }
+                }
+            }
+            else {
+                return std::nullopt;
+            }
+        }
+        else {
+            return std::nullopt;
+        }
+        
+        if (ranges.empty()) {
+            return std::nullopt;
+        }
+        
+        return ranges;
+        
+    } catch (const std::exception& e) {
+        return std::nullopt;
+    }
+}
+
+
+

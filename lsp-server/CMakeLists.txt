@@ -54,3 +54,6 @@ add_custom_command(TARGET maxon-lsp-server PRE_BUILD
 
 # Installation
 install(TARGETS maxon-lsp-server DESTINATION bin)
+
+# Add tests subdirectory
+add_subdirectory(tests)

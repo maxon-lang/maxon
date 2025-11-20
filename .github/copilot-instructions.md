@@ -36,3 +36,7 @@ Add handler in `LspServer`, register in `JsonRpcHandler`, implement in `Analyzer
 ## Guidelines
 - Don't create new docs unless instructed
 - Comments explain *why*, not *what*
+
+## Writing VSCode Extension Tests
+- Do not set timeouts
+- Do not use arbitrary delays, wait for what you are expecting

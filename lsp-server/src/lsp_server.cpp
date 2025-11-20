@@ -74,6 +74,10 @@ LspServer::LspServer()
         [this](const json& params) { return handleDocumentSymbol(params); });
     rpcHandler->registerRequestHandler("textDocument/codeAction", 
         [this](const json& params) { return handleCodeAction(params); });
+    rpcHandler->registerRequestHandler("textDocument/rename", 
+        [this](const json& params) { return handleRename(params); });
+    rpcHandler->registerRequestHandler("textDocument/linkedEditingRange", 
+        [this](const json& params) { return handleLinkedEditingRange(params); });
     
     // Register notification handlers
     rpcHandler->registerNotificationHandler("initialized", 
@@ -180,7 +184,9 @@ json LspServer::handleInitialize(const json& params) {
             {"documentSymbolProvider", true},
             {"codeActionProvider", {
                 {"codeActionKinds", json::array({"quickfix"})}
-            }}
+            }},
+            {"renameProvider", true},
+            {"linkedEditingRangeProvider", true}
         }},
         {"serverInfo", {
             {"name", "maxon-lsp"},
@@ -556,6 +562,84 @@ json LspServer::handleCodeAction(const json& params) {
     }
     
     return actions;
+}
+
+json LspServer::handleRename(const json& params) {
+    std::string uri = params["textDocument"]["uri"].get<std::string>();
+    lsp::Position pos;
+    pos.line = params["position"]["line"].get<int>();
+    pos.character = params["position"]["character"].get<int>();
+    std::string newName = params["newName"].get<std::string>();
+    
+    auto doc = docManager->getDocument(uri);
+    if (!doc) {
+        return nullptr;
+    }
+    
+    auto workspaceEdit = analyzer->getRename(doc, pos, newName);
+    
+    if (!workspaceEdit) {
+        return nullptr;
+    }
+    
+    // Convert WorkspaceEdit to JSON
+    json changes = json::object();
+    for (const auto& pair : workspaceEdit->changes) {
+        json edits = json::array();
+        for (const auto& edit : pair.second) {
+            edits.push_back({
+                {"range", {
+                    {"start", {
+                        {"line", edit.range.start.line},
+                        {"character", edit.range.start.character}
+                    }},
+                    {"end", {
+                        {"line", edit.range.end.line},
+                        {"character", edit.range.end.character}
+                    }}
+                }},
+                {"newText", edit.newText}
+            });
+        }
+        changes[pair.first] = edits;
+    }
+    
+    return {{"changes", changes}};
+}
+
+json LspServer::handleLinkedEditingRange(const json& params) {
+    std::string uri = params["textDocument"]["uri"].get<std::string>();
+    lsp::Position pos;
+    pos.line = params["position"]["line"].get<int>();
+    pos.character = params["position"]["character"].get<int>();
+    
+    auto doc = docManager->getDocument(uri);
+    if (!doc) {
+        return nullptr;
+    }
+    
+    auto ranges = analyzer->getLinkedEditingRanges(doc, pos);
+    
+    if (!ranges) {
+        return nullptr;
+    }
+    
+    // Convert ranges to JSON
+    json rangesJson = json::array();
+    for (const auto& range : *ranges) {
+        rangesJson.push_back({
+            {"start", {
+                {"line", range.start.line},
+                {"character", range.start.character}
+            }},
+            {"end", {
+                {"line", range.end.line},
+                {"character", range.end.character}
+            }}
+        });
+    }
+    
+    return {{"ranges", rangesJson}};
 }
 
 void LspServer::handleExit(const json& params) {

@@ -52,6 +52,12 @@ public:
     // Get document symbols
     std::vector<lsp::SymbolInformation> getSymbols(std::shared_ptr<Document> doc);
     
+    // Get rename edits for block identifiers
+    std::optional<lsp::WorkspaceEdit> getRename(std::shared_ptr<Document> doc, lsp::Position pos, const std::string& newName);
+    
+    // Get linked editing ranges (for live typing rename)
+    std::optional<std::vector<lsp::Range>> getLinkedEditingRanges(std::shared_ptr<Document> doc, lsp::Position pos);
+    
 private:
     std::vector<std::string> keywords;
     std::map<std::string, Lexer::KeywordInfo> keywordMetadata;
