@@ -25,27 +25,110 @@
 #include <windows.h>
 #endif
 
+// Extract code fragments from markdown files in docs/Content and create .test files
+static void extractFragmentsFromDocs() {
+    std::string docsDir = "docs/Content";
+    std::string outputDir = "language-tests/doc-fragments";
+    
+    if (!std::filesystem::exists(docsDir)) {
+        std::cerr << "Warning: Directory not found: " << docsDir << std::endl;
+        return;
+    }
+    
+    // Create output directory if it doesn't exist
+    std::filesystem::create_directories(outputDir);
+    
+    std::cout << "\nExtracting fragments from " << docsDir << "..." << std::endl;
+    
+    for (const auto& entry : std::filesystem::directory_iterator(docsDir)) {
+        if (entry.path().extension() != ".md") continue;
+        
+        std::string mdPath = entry.path().string();
+        std::string baseName = entry.path().stem().string();
+        
+        std::ifstream mdFile(mdPath);
+        if (!mdFile) {
+            std::cerr << "  Warning: Cannot read " << mdPath << std::endl;
+            continue;
+        }
+        
+        std::string line;
+        int fragmentIndex = 1;
+        bool inCodeBlock = false;
+        std::string currentFragment;
+        std::string currentMetadata;
+        
+        while (std::getline(mdFile, line)) {
+            if (line == "~~~") {
+                if (inCodeBlock) {
+                    // End of code block - write fragment to file
+                    std::string testFileName = outputDir + "/" + baseName + "." + std::to_string(fragmentIndex) + ".test";
+                    std::ofstream testFile(testFileName);
+                    testFile << currentFragment;
+                    testFile << "---\nN/A\n---\nN/A\n---\n";
+                    if (!currentMetadata.empty()) {
+                        testFile << currentMetadata;
+                    }
+                    testFile.close();
+                    
+                    std::cout << "  Extracted " << baseName << "." << fragmentIndex << std::endl;
+                    fragmentIndex++;
+                    currentFragment.clear();
+                    currentMetadata.clear();
+                } else {
+                    // Start of code block
+                    currentFragment.clear();
+                    currentMetadata.clear();
+                }
+                inCodeBlock = !inCodeBlock;
+            } else if (inCodeBlock) {
+                // Check for metadata lines (ExitCode:, Args:, etc.)
+                if (line.rfind("ExitCode:", 0) == 0 || 
+                    line.rfind("Args:", 0) == 0 ||
+                    line.rfind("Stdout:", 0) == 0 ||
+                    line.rfind("Stderr:", 0) == 0) {
+                    currentMetadata += line + "\n";
+                } else {
+                    currentFragment += line + "\n";
+                }
+            }
+        }
+        
+        mdFile.close();
+    }
+}
+
 int regenerateFragments() {
     try {
         std::cout << "Regenerating test fragments..." << std::endl;
+        
+        // First, extract fragments from docs
+        extractFragmentsFromDocs();
 
-        std::string fragmentsDir = "language-tests/fragments";
-        if (!std::filesystem::exists(fragmentsDir)) {
-            std::cerr << "Error: Directory not found: " << fragmentsDir << std::endl;
-            return 1;
-        }
+        std::vector<std::string> fragmentDirs = {
+            "language-tests/fragments",
+            "language-tests/doc-fragments"
+        };
 
         int totalTests = 0;
         int successCount = 0;
         int failCount = 0;
 
-        for (const auto& entry : std::filesystem::directory_iterator(fragmentsDir)) {
-            if (entry.path().extension() == ".test") {
-                totalTests++;
-                std::string testPath = entry.path().string();
-                std::string testName = entry.path().stem().string();
+        for (const auto& fragmentsDir : fragmentDirs) {
+            if (!std::filesystem::exists(fragmentsDir)) {
+                std::cerr << "Warning: Directory not found: " << fragmentsDir << std::endl;
+                continue;
+            }
 
-                std::cout << "  " << testName << "..." << std::flush;
+            std::cout << "\nProcessing " << fragmentsDir << "..." << std::endl;
+
+            for (const auto& entry : std::filesystem::directory_iterator(fragmentsDir)) {
+                if (entry.path().extension() == ".test") {
+                    totalTests++;
+                    std::string testPath = entry.path().string();
+                    std::string testName = entry.path().stem().string();
+
+                    std::cout << "  " << testName << "..." << std::flush;
 
                 std::ifstream inFile(testPath);
                 if (!inFile) {
@@ -356,6 +439,7 @@ int regenerateFragments() {
                 } catch (const std::exception& e) {
                     std::cerr << " ERROR: " << e.what() << std::endl;
                     failCount++;
+                }
                 }
             }
         }

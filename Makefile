@@ -33,7 +33,7 @@ help:
 	@echo "  extension-package - Package extension as .vsix"
 	@echo "  extension-install - Install extension locally in VS Code"
 	@echo "  lsp-test         - Build and run LSP C++ unit tests"
-	@echo "  docs             - Generate HTML documentation and test fragments"
+	@echo "  docs             - Generate HTML documentation"
 	@echo "  test             - Run all test suites (compiler self-tests, fragment tests, LSP tests, extension tests)"
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  help             - Show this help message"
@@ -105,12 +105,11 @@ lsp-test:
 	@echo Running LSP tests...
 	@powershell -Command "cd lsp-server\tests\build; ctest --output-on-failure"
 
-# Generate documentation (HTML output + test fragments)
+# Generate documentation (HTML output only)
 docs:
 	@echo Generating documentation...
 	@powershell -Command "cd docs; dotnet run"
 	@echo Documentation generated in docs/Output/
-	@echo Test fragments created in language-tests/doc-fragments/
 
 # Run all test suites
 test: compiler lsp-server extension-build
