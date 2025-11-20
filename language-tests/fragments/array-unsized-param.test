@@ -22,29 +22,7 @@ end 'main'
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
-; Function Attrs: nofree norecurse nosync nounwind memory(argmem: read)
-define i32 @sum(ptr readonly captures(none) %0, i32 %1, i32 %2) local_unnamed_addr #0 {
-entry:
-  %cmptmp11 = icmp sgt i32 %2, 0
-  br i1 %cmptmp11, label %loop, label %afterloop
-
-loop:                                             ; preds = %entry, %loop
-  %i.013 = phi i32 [ %addtmp6, %loop ], [ 0, %entry ]
-  %total.012 = phi i32 [ %addtmp, %loop ], [ 0, %entry ]
-  %3 = zext nneg i32 %i.013 to i64
-  %arrayidx = getelementptr inbounds nuw i32, ptr %0, i64 %3
-  %arrayelem = load i32, ptr %arrayidx, align 4
-  %addtmp = add i32 %arrayelem, %total.012
-  %addtmp6 = add nuw nsw i32 %i.013, 1
-  %cmptmp = icmp slt i32 %addtmp6, %2
-  br i1 %cmptmp, label %loop, label %afterloop
-
-afterloop:                                        ; preds = %loop, %entry
-  %total.0.lcssa = phi i32 [ 0, %entry ], [ %addtmp, %loop ]
-  ret i32 %total.0.lcssa
-}
-
-define noundef i32 @main() local_unnamed_addr #1 {
+define noundef i32 @main() local_unnamed_addr #0 {
 entry:
   %0 = tail call ptr @GetProcessHeap()
   %1 = tail call ptr @HeapAlloc(ptr %0, i32 0, i64 20)
@@ -84,27 +62,26 @@ entry:
 }
 
 ; Function Attrs: mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite)
-declare ptr @memset(ptr writeonly, i32, i64) local_unnamed_addr #2
+declare ptr @memset(ptr writeonly, i32, i64) local_unnamed_addr #1
 
 declare void @ExitProcess(i32) local_unnamed_addr
 
 ; Function Attrs: noreturn
-define void @_start() local_unnamed_addr #3 {
+define void @_start() local_unnamed_addr #2 {
 entry:
   %0 = tail call i32 @main()
   tail call void @ExitProcess(i32 %0)
   unreachable
 }
 
-attributes #0 = { nofree norecurse nosync nounwind memory(argmem: read) }
-attributes #1 = { "no-builtin-memset" }
-attributes #2 = { mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite) }
-attributes #3 = { noreturn }
+attributes #0 = { "no-builtin-memset" }
+attributes #1 = { mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite) }
+attributes #2 = { noreturn }
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
-define i32 @sum(ptr %0, i32 %1, i32 %2) !dbg !4 {
+define internal i32 @sum(ptr %0, i32 %1, i32 %2) !dbg !4 {
 entry:
   %i = alloca i32, align 4
   %total = alloca i32, align 4

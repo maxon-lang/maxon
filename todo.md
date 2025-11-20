@@ -2,7 +2,6 @@
 You *Are* Going To Read It
 
 - if x is a float "x as int" should not work, use trunc() or round() or something
-- tests are going to need both optimized and unoptimized IR
 - remove sin and cos intrinsics
 - tests for the linker
 - simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")

@@ -56,33 +56,10 @@ entry:
   ret i32 0
 }
 
-; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)
-define noundef i32 @sys.STD_OUTPUT_HANDLE() local_unnamed_addr #0 {
-entry:
-  ret i32 -11
-}
-
-define ptr @fs.stdout() local_unnamed_addr {
-entry:
-  %0 = tail call ptr @GetStdHandle(i32 -11)
-  ret ptr %0
-}
-
-define i32 @fs.write(ptr %0, ptr %1, i32 %2) local_unnamed_addr {
-entry:
-  %bytesWritten = alloca i32, align 4
-  store i32 0, ptr %bytesWritten, align 4
-  %3 = call i32 @WriteFile(ptr %0, ptr %1, i32 %2, ptr nonnull %bytesWritten, ptr null)
-  %cmptmp = icmp eq i32 %3, 0
-  %bytesWritten7 = load i32, ptr %bytesWritten, align 4
-  %common.ret.op = select i1 %cmptmp, i32 0, i32 %bytesWritten7
-  ret i32 %common.ret.op
-}
-
 declare void @ExitProcess(i32) local_unnamed_addr
 
 ; Function Attrs: noreturn
-define void @_start() local_unnamed_addr #1 {
+define void @_start() local_unnamed_addr #0 {
 entry:
   %0 = tail call i32 @main()
   tail call void @ExitProcess(i32 0)
@@ -90,14 +67,13 @@ entry:
 }
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
-declare void @llvm.lifetime.start.p0(i64 immarg, ptr captures(none)) #2
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr captures(none)) #1
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
-declare void @llvm.lifetime.end.p0(i64 immarg, ptr captures(none)) #2
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr captures(none)) #1
 
-attributes #0 = { mustprogress nofree norecurse nosync nounwind willreturn memory(none) }
-attributes #1 = { noreturn }
-attributes #2 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
+attributes #0 = { noreturn }
+attributes #1 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
@@ -123,12 +99,12 @@ entry:
   ret i32 0, !dbg !14
 }
 
-define i32 @sys.STD_OUTPUT_HANDLE() !dbg !15 {
+define internal i32 @sys.STD_OUTPUT_HANDLE() !dbg !15 {
 entry:
   ret i32 -11, !dbg !16
 }
 
-define ptr @fs.stdout() !dbg !17 {
+define internal ptr @fs.stdout() !dbg !17 {
 entry:
   %h = alloca ptr, align 8, !dbg !18
   %handle = alloca i32, align 4, !dbg !18
@@ -143,7 +119,7 @@ entry:
   ret ptr %h2, !dbg !22
 }
 
-define i32 @fs.write(ptr %0, ptr %1, i32 %2) !dbg !23 {
+define internal i32 @fs.write(ptr %0, ptr %1, i32 %2) !dbg !23 {
 entry:
   %result = alloca i32, align 4
   %overlapped = alloca ptr, align 8

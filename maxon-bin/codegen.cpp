@@ -5,6 +5,7 @@
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Scalar/GVN.h>
 #include <llvm/Transforms/Utils.h>
+#include <llvm/Transforms/IPO/GlobalDCE.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/TargetSelect.h>
@@ -2858,9 +2859,12 @@ void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
         // Determine the actual function name (with namespace if applicable)
         std::string functionName = func->namespaceName.empty() ? func->name : func->namespaceName + "." + func->name;
         
+        // Determine linkage type: ExternalLinkage for main and extern functions, InternalLinkage for others
+        llvm::GlobalValue::LinkageTypes linkage = 
+            (func->name == "main" || func->isExtern) ? llvm::Function::ExternalLinkage : llvm::Function::InternalLinkage;
+        
         // Create function
-        llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
-                             functionName, module.get());
+        llvm::Function::Create(funcType, linkage, functionName, module.get());
     }
     
     // Create namespace functions with qualified names
@@ -2916,8 +2920,9 @@ void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
                     builder.CreateRet(result);
                 }
             } else {
-                // Regular namespace function
-                llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
+                // Regular namespace function - use InternalLinkage for dead code elimination
+                // (main is always top-level, never in a namespace)
+                llvm::Function::Create(funcType, llvm::Function::InternalLinkage,
                                      qualifiedName, module.get());
             }
         }
@@ -2980,6 +2985,28 @@ void CodeGenerator::optimize() {
     pb.crossRegisterProxies(loopAM, funcAM, cgsccAM, moduleAM);
 
     llvm::ModulePassManager mpm = pb.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O3);
+    mpm.run(*module, moduleAM);
+}
+
+void CodeGenerator::runDeadCodeElimination() {
+    // Run minimal dead code elimination to remove unused internal functions
+    // This ensures the linker's /OPT:REF can work effectively
+    llvm::LoopAnalysisManager     loopAM;
+    llvm::FunctionAnalysisManager funcAM;
+    llvm::CGSCCAnalysisManager    cgsccAM;
+    llvm::ModuleAnalysisManager   moduleAM;
+
+    llvm::PassBuilder pb;
+
+    pb.registerModuleAnalyses(moduleAM);
+    pb.registerCGSCCAnalyses(cgsccAM);
+    pb.registerFunctionAnalyses(funcAM);
+    pb.registerLoopAnalyses(loopAM);
+    pb.crossRegisterProxies(loopAM, funcAM, cgsccAM, moduleAM);
+
+    // Run only GlobalDCE pass to remove unused internal functions
+    llvm::ModulePassManager mpm;
+    mpm.addPass(llvm::GlobalDCEPass());
     mpm.run(*module, moduleAM);
 }
 

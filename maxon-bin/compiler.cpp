@@ -166,6 +166,12 @@ std::string compileProgram(const CompilationOptions& options, llvm::raw_ostream*
         std::cout << "Code generation complete." << std::endl;
     }
 
+    // Always run dead code elimination to remove unused internal functions
+    codegen.runDeadCodeElimination();
+    if (options.verbose) {
+        std::cout << "Dead code elimination complete." << std::endl;
+    }
+
     if (options.optimize) {
         codegen.optimize();
         if (options.verbose) {

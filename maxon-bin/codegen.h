@@ -83,6 +83,7 @@ public:
     CodeGenerator(const std::string& moduleName, bool debugInfo = false, bool verbose = false, bool profile = false);
     void generate(ProgramAST* program, bool needsEntryPoint = true);
     void optimize();
+    void runDeadCodeElimination();  // Always run to remove unused internal functions
     void printIR();
     void writeIRToFile(const std::string& filename);
     void writeObjectFile(const std::string& filename);
