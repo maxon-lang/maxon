@@ -1198,6 +1198,8 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
             targetType = llvm::PointerType::get(context, 0);  // Opaque pointer
         } else if (castExpr->targetType == "char") {
             targetType = llvm::Type::getInt8Ty(context);
+        } else if (castExpr->targetType == "bool") {
+            targetType = llvm::Type::getInt1Ty(context);
         } else {
             throw std::runtime_error("Unknown cast target type: " + castExpr->targetType);
         }

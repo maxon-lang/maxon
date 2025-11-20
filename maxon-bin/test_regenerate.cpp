@@ -288,6 +288,8 @@ int regenerateFragments() {
                         outFile.close();
                         std::cout << " COMPILE ERROR" << std::endl;
                         successCount++;
+                        std::filesystem::remove(tempSource);
+                        std::filesystem::remove("temp-opt.ll");
                         continue;
                     }
 
@@ -432,12 +434,28 @@ int regenerateFragments() {
                     std::filesystem::remove("temp-debug.exe");
                     std::filesystem::remove("temp-debug-profiled.ll");
                     std::filesystem::remove("temp-debug-profiled.exe");
+                    std::filesystem::remove("temp-opt-profiled.pdb");
+                    std::filesystem::remove("temp-debug-profiled.pdb");
+                    std::filesystem::remove("temp-debug.pdb");
 
                     std::cout << " OK" << std::endl;
                     successCount++;
 
                 } catch (const std::exception& e) {
                     std::cerr << " ERROR: " << e.what() << std::endl;
+                    // Clean up any temp files that may have been created
+                    std::filesystem::remove(tempSource);
+                    std::filesystem::remove("temp-opt.ll");
+                    std::filesystem::remove("temp-opt.exe");
+                    std::filesystem::remove("temp-opt-profiled.ll");
+                    std::filesystem::remove("temp-opt-profiled.exe");
+                    std::filesystem::remove("temp-opt-profiled.pdb");
+                    std::filesystem::remove("temp-debug.ll");
+                    std::filesystem::remove("temp-debug.exe");
+                    std::filesystem::remove("temp-debug-profiled.ll");
+                    std::filesystem::remove("temp-debug-profiled.exe");
+                    std::filesystem::remove("temp-debug-profiled.pdb");
+                    std::filesystem::remove("temp-debug.pdb");
                     failCount++;
                 }
                 }

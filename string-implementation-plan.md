@@ -103,7 +103,7 @@ extern function strlen(s cstr) int end
 
 function call_c_function()
     let s cstr = "hello\0" as cstr  // Explicit null terminator
-    let len int = strlen(s)
+    let len = strlen(s)
 end 'call_c_function'
 ```
 
@@ -131,7 +131,7 @@ end 'call_c_function'
 # File path handling
 function open_file(path OsStr) int
     # path is in platform-native encoding
-    let fd int = fs.open(path)
+    let fd = fs.open(path)
     return fd
 end 'open_file'
 
@@ -140,7 +140,7 @@ function main()
     let filename str = "test.txt"
     let os_path OsString = OsString.from_str(filename)
     
-    let fd int = open_file(OsString.as_os_str(os_path))
+    let fd = open_file(OsString.as_os_str(os_path))
 end 'main'
 ```
 
@@ -247,7 +247,7 @@ function equals(a str, b str) int
     end
     
     # Compare byte by byte
-    var i int = 0
+    var i = 0
     while i < a.len
         let byte_a char = *(a.data + i)
         let byte_b char = *(b.data + i)
@@ -377,7 +377,7 @@ extern function malloc(size int) ptr end
 extern function free(ptr ptr) end
 
 function new() String
-    let cap int = 16  # Initial capacity
+    let cap = 16  # Initial capacity
     let buffer ptr = malloc(cap)
     
     var s String
@@ -420,7 +420,7 @@ function reserve(s String, min_cap int) String
         return s
     end
     
-    var new_cap int = s.capacity * 2
+    var new_cap = s.capacity * 2
     if new_cap < min_cap
         new_cap = min_cap
     end
@@ -433,7 +433,7 @@ end 'reserve'
 
 # Append string view to owned string
 function push_str(s String, addition str) String
-    let new_len int = s.len + addition.len
+    let new_len = s.len + addition.len
     s = reserve(s, new_len)
     
     # Copy bytes from addition to end of s.data
@@ -445,7 +445,7 @@ end 'push_str'
 
 # Append single char
 function push_char(s String, c char) String
-    let new_len int = s.len + 1
+    let new_len = s.len + 1
     s = reserve(s, new_len)
     
     *(s.data + s.len) = c
@@ -472,7 +472,7 @@ function from_int(value int) String
         return s
     end
     
-    var is_negative int = 0
+    var is_negative = 0
     if value < 0
         is_negative = 1
         value = 0 - value
@@ -480,10 +480,10 @@ function from_int(value int) String
     
     # Build digits in reverse
     var [20]char buffer
-    var pos int = 0
+    var pos = 0
     
     while value > 0
-        let digit int = value % 10
+        let digit = value % 10
         buffer[pos] = ('0' as int + digit) as char
         pos = pos + 1
         value = value / 10
@@ -494,7 +494,7 @@ function from_int(value int) String
     end
     
     # Reverse append
-    var i int = pos - 1
+    var i = pos - 1
     while i >= 0
         s = push_char(s, buffer[i])
         i = i - 1
@@ -505,9 +505,9 @@ end 'from_int'
 
 # Parse integer from string view
 function parse_int(s str) int
-    var result int = 0
-    var is_negative int = 0
-    var i int = 0
+    var result = 0
+    var is_negative = 0
+    var i = 0
     
     # Check for negative sign
     if s.len > 0
@@ -522,7 +522,7 @@ function parse_int(s str) int
         let c char = *(s.data + i)
         if c >= '0'
             if c <= '9'
-                let digit int = (c as int) - ('0' as int)
+                let digit = (c as int) - ('0' as int)
                 result = result * 10 + digit
             end
         end
@@ -610,12 +610,12 @@ namespace str
 
 # Count UTF-8 characters (code points) in string
 function char_count(s str) int
-    var count int = 0
-    var i int = 0
+    var count = 0
+    var i = 0
     
     while i < s.len
         let byte char = *(s.data + i)
-        let byte_val int = byte as int
+        let byte_val = byte as int
         
         if byte_val < 128
             # ASCII (1 byte)
@@ -676,9 +676,9 @@ function next_char(iter CharIter) int
     end
     
     let byte char = *(iter.data + iter.pos)
-    let byte_val int = byte as int
+    let byte_val = byte as int
     
-    var char_val int = 0
+    var char_val = 0
     
     if byte_val < 128
         # ASCII (1 byte)
@@ -706,7 +706,7 @@ namespace str
 # Format string with integer placeholder
 function format(template str, value int) String
     var result String = new()
-    var i int = 0
+    var i = 0
     
     while i < template.len
         let c char = *(template.data + i)
@@ -755,12 +755,12 @@ function find(haystack str, needle str) int
         return -1
     end
     
-    var i int = 0
-    let max int = haystack.len - needle.len
+    var i = 0
+    let max = haystack.len - needle.len
     
     while i <= max
-        var found int = 1
-        var j int = 0
+        var found = 1
+        var j = 0
         
         while j < needle.len
             let h_byte char = *(haystack.data + i + j)
@@ -788,7 +788,7 @@ function starts_with(s str, prefix str) int
         return 0
     end
     
-    var i int = 0
+    var i = 0
     while i < prefix.len
         let s_byte char = *(s.data + i)
         let p_byte char = *(prefix.data + i)
@@ -814,8 +814,8 @@ namespace str
 # Note: Requires dynamic array support
 function split(s str, delimiter char) []str
     # Count occurrences
-    var count int = 1
-    var i int = 0
+    var count = 1
+    var i = 0
     while i < s.len
         let c char = *(s.data + i)
         if c = delimiter
@@ -828,8 +828,8 @@ function split(s str, delimiter char) []str
     var result []str = alloc_array_str(count)
     
     # Fill array with substrings
-    var part_idx int = 0
-    var start int = 0
+    var part_idx = 0
+    var start = 0
     i = 0
     
     while i < s.len
@@ -945,12 +945,12 @@ extern function WideCharToMultiByte(
 ) int end
 
 # UTF-8 code page
-let CP_UTF8 int = 65001
+let CP_UTF8 = 65001
 
 # Convert UTF-8 str to UTF-16 OsString
 function from_str(s str) OsString
     # Calculate required buffer size
-    let wlen int = MultiByteToWideChar(CP_UTF8, 0, s.data, s.len, 0 as ptr, 0)
+    let wlen = MultiByteToWideChar(CP_UTF8, 0, s.data, s.len, 0 as ptr, 0)
     
     if wlen = 0
         # Error handling
@@ -962,11 +962,11 @@ function from_str(s str) OsString
     end
     
     # Allocate buffer for UTF-16
-    let capacity int = wlen * 2  # 2 bytes per wchar_t
+    let capacity = wlen * 2  # 2 bytes per wchar_t
     let buffer ptr = malloc(capacity)
     
     # Perform conversion
-    let result int = MultiByteToWideChar(CP_UTF8, 0, s.data, s.len, buffer, wlen)
+    let result = MultiByteToWideChar(CP_UTF8, 0, s.data, s.len, buffer, wlen)
     
     var os_string OsString
     os_string.data = buffer
@@ -978,7 +978,7 @@ end 'from_str'
 # Convert UTF-16 OsString to UTF-8 str
 function to_str(os OsString) String
     # Calculate required buffer size
-    let len int = WideCharToMultiByte(CP_UTF8, 0, os.data, os.len, 0 as ptr, 0, 0 as ptr, 0 as ptr)
+    let len = WideCharToMultiByte(CP_UTF8, 0, os.data, os.len, 0 as ptr, 0, 0 as ptr, 0 as ptr)
     
     if len = 0
         return String.new()
@@ -988,7 +988,7 @@ function to_str(os OsString) String
     let buffer ptr = malloc(len)
     
     # Perform conversion
-    let result int = WideCharToMultiByte(CP_UTF8, 0, os.data, os.len, buffer, len, 0 as ptr, 0 as ptr)
+    let result = WideCharToMultiByte(CP_UTF8, 0, os.data, os.len, buffer, len, 0 as ptr, 0 as ptr)
     
     var s String
     s.data = buffer
@@ -1099,8 +1099,8 @@ extern function CreateFileW(
     template ptr
 ) ptr end
 
-let GENERIC_READ int = 0x80000000
-let OPEN_EXISTING int = 3
+let GENERIC_READ = 0x80000000
+let OPEN_EXISTING = 3
 
 function open_windows(path Path) ptr
     let os_view OsStr = os.as_os_str(path.inner)
@@ -1120,7 +1120,7 @@ end 'open_windows'
 # Unix version
 extern function open(pathname ptr, flags int) int end
 
-let O_RDONLY int = 0
+let O_RDONLY = 0
 
 function open_unix(path Path) int
     let os_view OsStr = os.as_os_str(path.inner)
@@ -1176,7 +1176,7 @@ extern function printf(format cstr, ...) int end
 
 function test()
     let msg cstr = "Hello\0" as cstr
-    let len int = strlen(msg)
+    let len = strlen(msg)
 end 'test'
 ```
 
@@ -1197,7 +1197,7 @@ end 'to_cstr'
 # Convert cstr to str (view, no allocation)
 function from_cstr(cs cstr) str
     # Find length
-    var len int = 0
+    var len = 0
     while *(cs + len) != '\0'
         len = len + 1
     end

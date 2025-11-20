@@ -4,54 +4,48 @@
 #include <unordered_map>
 
 // Unified keyword information
-struct KeywordEntry {
-    TokenType tokenType;
-    Lexer::KeywordCategory category;
-    std::string description;
-};
-
-static const std::unordered_map<std::string, KeywordEntry> keywords = {
+static const std::unordered_map<std::string, Token> keywords = {
     // Types
-    {"int",       {TokenType::INT,        Lexer::KeywordCategory::Type,          "Integer type"}},
-    {"float",     {TokenType::FLOAT,      Lexer::KeywordCategory::Type,          "Floating-point type"}},
-    {"ptr",       {TokenType::PTR,        Lexer::KeywordCategory::Type,          "Pointer type"}},
-    {"char",      {TokenType::CHAR,       Lexer::KeywordCategory::Type,          "Character type"}},
-    {"string",    {TokenType::STRING_TYPE, Lexer::KeywordCategory::Type,         "String type"}},
-    {"bool",      {TokenType::BOOL,       Lexer::KeywordCategory::Type,          "Boolean type"}},
+    {"int",       Token(TokenType::INT,        "int",        0, 0, 0.0, KeywordCategory::Type,          "Integer type")},
+    {"float",     Token(TokenType::FLOAT,      "float",      0, 0, 0.0, KeywordCategory::Type,          "Floating-point type")},
+    {"ptr",       Token(TokenType::PTR,        "ptr",        0, 0, 0.0, KeywordCategory::Type,          "Pointer type")},
+    {"char",      Token(TokenType::CHAR,       "char",       0, 0, 0.0, KeywordCategory::Type,          "Character type")},
+    {"string",    Token(TokenType::STRING_TYPE,"string",     0, 0, 0.0, KeywordCategory::Type,          "String type")},
+    {"bool",      Token(TokenType::BOOL,       "bool",       0, 0, 0.0, KeywordCategory::Type,          "Boolean type")},
     
     // Control flow
-    {"if",        {TokenType::IF,         Lexer::KeywordCategory::ControlFlow,   "Conditional statement"}},
-    {"else",      {TokenType::ELSE,       Lexer::KeywordCategory::ControlFlow,   "Alternative branch"}},
-    {"while",     {TokenType::WHILE,      Lexer::KeywordCategory::ControlFlow,   "Loop statement"}},
-    {"end",       {TokenType::END,        Lexer::KeywordCategory::ControlFlow,   "Block terminator"}},
-    {"return",    {TokenType::RETURN,     Lexer::KeywordCategory::ControlFlow,   "Return from function"}},
-    {"break",     {TokenType::BREAK,      Lexer::KeywordCategory::ControlFlow,   "Exit loop"}},
-    {"continue",  {TokenType::CONTINUE,   Lexer::KeywordCategory::ControlFlow,   "Skip to next iteration"}},
+    {"if",        Token(TokenType::IF,         "if",         0, 0, 0.0, KeywordCategory::ControlFlow,   "Conditional statement")},
+    {"else",      Token(TokenType::ELSE,       "else",       0, 0, 0.0, KeywordCategory::ControlFlow,   "Alternative branch")},
+    {"while",     Token(TokenType::WHILE,      "while",      0, 0, 0.0, KeywordCategory::ControlFlow,   "Loop statement")},
+    {"end",       Token(TokenType::END,        "end",        0, 0, 0.0, KeywordCategory::ControlFlow,   "Block terminator")},
+    {"return",    Token(TokenType::RETURN,     "return",     0, 0, 0.0, KeywordCategory::ControlFlow,   "Return from function")},
+    {"break",     Token(TokenType::BREAK,      "break",      0, 0, 0.0, KeywordCategory::ControlFlow,   "Exit loop")},
+    {"continue",  Token(TokenType::CONTINUE,   "continue",   0, 0, 0.0, KeywordCategory::ControlFlow,   "Skip to next iteration")},
     
     // Declarations
-    {"function",  {TokenType::FUNCTION,   Lexer::KeywordCategory::Declaration,   "Function declaration"}},
-    {"var",       {TokenType::VAR,        Lexer::KeywordCategory::Declaration,   "Mutable variable"}},
-    {"let",       {TokenType::LET,        Lexer::KeywordCategory::Declaration,   "Immutable variable"}},
-    {"struct",    {TokenType::STRUCT,     Lexer::KeywordCategory::Declaration,   "Structure type"}},
-    {"namespace", {TokenType::NAMESPACE,  Lexer::KeywordCategory::Declaration,   "Namespace declaration"}},
-    {"extern",    {TokenType::EXTERN,     Lexer::KeywordCategory::Declaration,   "External declaration"}},
+    {"function",  Token(TokenType::FUNCTION,   "function",   0, 0, 0.0, KeywordCategory::Declaration,   "Function declaration")},
+    {"var",       Token(TokenType::VAR,        "var",        0, 0, 0.0, KeywordCategory::Declaration,   "Mutable variable")},
+    {"let",       Token(TokenType::LET,        "let",        0, 0, 0.0, KeywordCategory::Declaration,   "Immutable variable")},
+    {"struct",    Token(TokenType::STRUCT,     "struct",     0, 0, 0.0, KeywordCategory::Declaration,   "Structure type")},
+    {"namespace", Token(TokenType::NAMESPACE,  "namespace",  0, 0, 0.0, KeywordCategory::Declaration,   "Namespace declaration")},
+    {"extern",    Token(TokenType::EXTERN,     "extern",     0, 0, 0.0, KeywordCategory::Declaration,   "External declaration")},
     
     // Math intrinsics (built into codegen)
-    {"sqrt",      {TokenType::SQRT,       Lexer::KeywordCategory::MathIntrinsic, "Square root"}},
-    {"abs",       {TokenType::ABS,        Lexer::KeywordCategory::MathIntrinsic, "Absolute value"}},
-    {"floor",     {TokenType::FLOOR,      Lexer::KeywordCategory::MathIntrinsic, "Floor function"}},
-    {"ceil",      {TokenType::CEIL,       Lexer::KeywordCategory::MathIntrinsic, "Ceiling function"}},
-    {"round",     {TokenType::ROUND,      Lexer::KeywordCategory::MathIntrinsic, "Round to nearest"}},
-    {"trunc",     {TokenType::TRUNC,      Lexer::KeywordCategory::MathIntrinsic, "Truncate to integer"}},
-    {"sin",       {TokenType::SIN,        Lexer::KeywordCategory::MathIntrinsic, "Sine function"}},
-    {"cos",       {TokenType::COS,        Lexer::KeywordCategory::MathIntrinsic, "Cosine function"}},
+    {"sqrt",      Token(TokenType::SQRT,       "sqrt",       0, 0, 0.0, KeywordCategory::MathIntrinsic, "Square root")},
+    {"abs",       Token(TokenType::ABS,        "abs",        0, 0, 0.0, KeywordCategory::MathIntrinsic, "Absolute value")},
+    {"floor",     Token(TokenType::FLOOR,      "floor",      0, 0, 0.0, KeywordCategory::MathIntrinsic, "Floor function")},
+    {"ceil",      Token(TokenType::CEIL,       "ceil",       0, 0, 0.0, KeywordCategory::MathIntrinsic, "Ceiling function")},
+    {"round",     Token(TokenType::ROUND,      "round",      0, 0, 0.0, KeywordCategory::MathIntrinsic, "Round to nearest")},
+    {"trunc",     Token(TokenType::TRUNC,      "trunc",      0, 0, 0.0, KeywordCategory::MathIntrinsic, "Truncate to integer")},
+    {"sin",       Token(TokenType::SIN,        "sin",        0, 0, 0.0, KeywordCategory::MathIntrinsic, "Sine function")},
+    {"cos",       Token(TokenType::COS,        "cos",        0, 0, 0.0, KeywordCategory::MathIntrinsic, "Cosine function")},
     
     // Literals
-    {"true",      {TokenType::TRUE,       Lexer::KeywordCategory::Literal,       "Boolean true"}},
-    {"false",     {TokenType::FALSE,      Lexer::KeywordCategory::Literal,       "Boolean false"}},
+    {"true",      Token(TokenType::TRUE,       "true",       0, 0, 0.0, KeywordCategory::Literal,       "Boolean true")},
+    {"false",     Token(TokenType::FALSE,      "false",      0, 0, 0.0, KeywordCategory::Literal,       "Boolean false")},
     
     // Operators
-    {"as",        {TokenType::AS,         Lexer::KeywordCategory::Operator,      "Type cast operator"}}
+    {"as",        Token(TokenType::AS,         "as",         0, 0, 0.0, KeywordCategory::Operator,      "Type cast operator")}
     
     // Note: log, exp, pow, tan are stdlib functions, not keywords
 };
@@ -72,11 +66,14 @@ std::vector<Lexer::KeywordInfo> Lexer::getKeywordInfo() {
     std::vector<KeywordInfo> info;
     
     for (const auto& pair : keywords) {
-        info.push_back({
-            pair.first,                  // name
-            pair.second.category,        // category
-            pair.second.description      // description
-        });
+        const Token& token = pair.second;
+        if (token.keywordCategory.has_value() && token.description.has_value()) {
+            info.push_back({
+                pair.first,                  // name
+                token.keywordCategory.value(), // category
+                token.description.value()    // description
+            });
+        }
     }
     
     return info;
@@ -84,14 +81,11 @@ std::vector<Lexer::KeywordInfo> Lexer::getKeywordInfo() {
 
 std::vector<std::string> Lexer::getKeywordsByCategory(KeywordCategory category) {
     std::vector<std::string> result;
-    auto allInfo = getKeywordInfo();
-    
-    for (const auto& info : allInfo) {
-        if (info.category == category) {
-            result.push_back(info.name);
+    for (const auto& pair : keywords) {
+        if (pair.second.keywordCategory == category) {
+            result.push_back(pair.first);
         }
     }
-    
     return result;
 }
 
@@ -226,7 +220,7 @@ Token Lexer::readIdentifier() {
     // Check if it's a keyword
     auto it = keywords.find(id);
     if (it != keywords.end()) {
-        return Token(it->second.tokenType, id, startLine, startColumn);
+        return Token(it->second.type, id, startLine, startColumn, it->second.floatValue, it->second.keywordCategory, it->second.description);
     }
     
     return Token(TokenType::IDENTIFIER, id, startLine, startColumn);

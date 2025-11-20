@@ -210,6 +210,14 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
                     pos += 16;
                 }
                 
+                // Normalize temp_test_fragment_{threadId}.maxon to temp_fragment.maxon
+                pos = 0;
+                searchPattern = "temp_test_fragment_" + std::to_string(threadId) + ".maxon";
+                while ((pos = combinedError.find(searchPattern, pos)) != std::string::npos) {
+                    combinedError.replace(pos, searchPattern.length(), "temp_fragment.maxon");
+                    pos += 19;  // length of "temp_fragment.maxon"
+                }
+                
                 // Add exception message if it's not already in the output
                 if (!exceptionMsg.empty() && combinedError.find(exceptionMsg) == std::string::npos) {
                     bool isLinkError = (combinedError.find("lld-link:") != std::string::npos);
@@ -272,6 +280,14 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
 
         // Verify MaxoncStderr if expected
         if (!expectedMaxoncStderr.empty()) {
+            // Normalize temp file names in actualMaxoncStderr
+            size_t pos = 0;
+            std::string searchPattern = "temp_test_fragment_" + std::to_string(threadId) + ".maxon";
+            while ((pos = actualMaxoncStderr.find(searchPattern, pos)) != std::string::npos) {
+                actualMaxoncStderr.replace(pos, searchPattern.length(), "temp_fragment.maxon");
+                pos += 19;  // length of "temp_fragment.maxon"
+            }
+            
             trim(actualMaxoncStderr);
             if (actualMaxoncStderr != expectedMaxoncStderr) {
                 result.passed = false;
@@ -407,9 +423,12 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
         std::filesystem::remove(tempSource);
         std::filesystem::remove(tempOptLL);
         std::filesystem::remove(tempOptLL.substr(0, tempOptLL.length() - 3) + ".exe");
+        std::filesystem::remove(tempOptLL.substr(0, tempOptLL.length() - 3) + ".pdb");
         std::filesystem::remove(tempDebugLL);
         std::filesystem::remove(tempDebugLL.substr(0, tempDebugLL.length() - 3) + ".exe");
+        std::filesystem::remove(tempDebugLL.substr(0, tempDebugLL.length() - 3) + ".pdb");
         std::filesystem::remove(tempExe);
+        std::filesystem::remove(tempExe.substr(0, tempExe.length() - 4) + ".pdb");
 
     } catch (const std::exception& e) {
         result.passed = false;

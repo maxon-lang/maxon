@@ -152,10 +152,10 @@ std::vector<lsp::CompletionItem> Analyzer::getCompletions(std::shared_ptr<Docume
         if (metaIt != keywordMetadata.end()) {
             const auto& meta = metaIt->second;
             switch (meta.category) {
-                case Lexer::KeywordCategory::Type:
+                case KeywordCategory::Type:
                     item.kind = lsp::CompletionItemKind::TypeParameter;
                     break;
-                case Lexer::KeywordCategory::MathIntrinsic:
+                case KeywordCategory::MathIntrinsic:
                     item.kind = lsp::CompletionItemKind::Function;
                     break;
                 default:
@@ -282,22 +282,22 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
         const auto& meta = metaIt->second;
         std::string categoryName;
         switch (meta.category) {
-            case Lexer::KeywordCategory::Type:
+            case KeywordCategory::Type:
                 categoryName = "type";
                 break;
-            case Lexer::KeywordCategory::ControlFlow:
+            case KeywordCategory::ControlFlow:
                 categoryName = "control flow";
                 break;
-            case Lexer::KeywordCategory::Declaration:
+            case KeywordCategory::Declaration:
                 categoryName = "declaration";
                 break;
-            case Lexer::KeywordCategory::MathIntrinsic:
+            case KeywordCategory::MathIntrinsic:
                 categoryName = "math intrinsic";
                 break;
-            case Lexer::KeywordCategory::Literal:
+            case KeywordCategory::Literal:
                 categoryName = "literal";
                 break;
-            case Lexer::KeywordCategory::Operator:
+            case KeywordCategory::Operator:
                 categoryName = "operator";
                 break;
         }

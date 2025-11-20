@@ -10,31 +10,40 @@
 #include <vector>
 
 std::unique_ptr<ProgramAST> parseFile(const std::string& filePath, bool verbose) {
-    std::string source = readFile(filePath);
+    try {
+        std::string source = readFile(filePath);
 
-    if (verbose) {
-        std::cout << "Compiling " << filePath << "..." << std::endl;
-    }
-
-    Lexer lexer(source);
-    std::vector<Token> tokens = lexer.tokenize();
-    if (verbose) {
-        std::cout << "  Lexical analysis complete. Generated " << tokens.size() << " tokens." << std::endl;
-    }
-
-    Parser parser(tokens);
-    std::string fileNamespace = deriveNamespace(filePath);
-    parser.setDefaultNamespace(fileNamespace);
-    std::unique_ptr<ProgramAST> program = parser.parse();
-
-    if (verbose) {
-        std::cout << "  Parsing complete." << std::endl;
-        if (!fileNamespace.empty()) {
-            std::cout << "    File namespace: " << fileNamespace << std::endl;
+        if (verbose) {
+            std::cout << "Compiling " << filePath << "..." << std::endl;
         }
-    }
 
-    return program;
+        Lexer lexer(source);
+        std::vector<Token> tokens = lexer.tokenize();
+        if (verbose) {
+            std::cout << "  Lexical analysis complete. Generated " << tokens.size() << " tokens." << std::endl;
+        }
+
+        Parser parser(tokens);
+        std::string fileNamespace = deriveNamespace(filePath);
+        parser.setDefaultNamespace(fileNamespace);
+        std::unique_ptr<ProgramAST> program = parser.parse();
+
+        if (verbose) {
+            std::cout << "  Parsing complete." << std::endl;
+            if (!fileNamespace.empty()) {
+                std::cout << "    File namespace: " << fileNamespace << std::endl;
+            }
+        }
+
+        return program;
+    } catch (const std::runtime_error& e) {
+        // Re-throw with file context if not already in message
+        std::string errorMsg = e.what();
+        if (errorMsg.find("File:") == std::string::npos) {
+            throw std::runtime_error("In file '" + filePath + "':\n" + errorMsg);
+        }
+        throw;
+    }
 }
 
 std::string compileProgram(const CompilationOptions& options, llvm::raw_ostream* errorStream) {

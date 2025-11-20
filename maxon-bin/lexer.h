@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <optional>
 
 enum class TokenType {
     // Keywords
@@ -78,15 +79,27 @@ enum class TokenType {
     UNKNOWN
 };
 
+// Keyword category for metadata
+enum class KeywordCategory {
+    Type,           // int, float, ptr, char, string
+    ControlFlow,    // if, else, while, end, return, break, continue
+    Declaration,    // function, var, let, struct, namespace, extern
+    MathIntrinsic,  // sqrt, abs, floor, ceil, round, trunc, sin, cos
+    Literal,        // true, false
+    Operator        // as
+};
+
 struct Token {
     TokenType type;
     std::string value;
     int line;
     int column;
     double floatValue;  // For FLOAT_LITERAL tokens
+    std::optional<KeywordCategory> keywordCategory;  // For keyword tokens
+    std::optional<std::string> description;  // For keyword tokens
     
-    Token(TokenType t, const std::string& v, int l, int c, double fv = 0.0)
-        : type(t), value(v), line(l), column(c), floatValue(fv) {}
+    Token(TokenType t, const std::string& v, int l, int c, double fv = 0.0, std::optional<KeywordCategory> kc = std::nullopt, std::optional<std::string> desc = std::nullopt)
+        : type(t), value(v), line(l), column(c), floatValue(fv), keywordCategory(kc), description(desc) {}
 };
 
 class Lexer {
@@ -109,16 +122,6 @@ private:
 public:
     Lexer(const std::string& src);
     std::vector<Token> tokenize();
-    
-    // Keyword category for metadata
-    enum class KeywordCategory {
-        Type,           // int, float, ptr, char, string
-        ControlFlow,    // if, else, while, end, return, break, continue
-        Declaration,    // function, var, let, struct, namespace, extern
-        MathIntrinsic,  // sqrt, abs, floor, ceil, round, trunc, sin, cos
-        Literal,        // true, false
-        Operator        // as
-    };
     
     struct KeywordInfo {
         std::string name;

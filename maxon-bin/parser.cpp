@@ -158,9 +158,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
             expect(TokenType::RBRACKET, "Expected ']' after array size");
             
             // Now expect the element type (primitive or struct)
-            if (!check(TokenType::INT) && !check(TokenType::FLOAT) && 
-                !check(TokenType::PTR) && !check(TokenType::CHAR) && 
-                !check(TokenType::STRING_TYPE) && !check(TokenType::IDENTIFIER)) {
+            if (!(currentToken().keywordCategory && *currentToken().keywordCategory == KeywordCategory::Type) && !check(TokenType::IDENTIFIER)) {
                 throw std::runtime_error("Expected array element type (int, float, ptr, char, string, or struct name) at line " + 
                                        std::to_string(currentToken().line));
             }
@@ -374,30 +372,16 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
         int column = currentToken().column;
         advance(); // consume 'as'
         
-        // Expect a type keyword (int, float, ptr, char, str)
-        std::string targetType;
-        if (check(TokenType::INT)) {
-            targetType = "int";
+        // Expect a type keyword
+        if (currentToken().keywordCategory && *currentToken().keywordCategory == KeywordCategory::Type) {
+            std::string targetType = currentToken().value;
             advance();
-        } else if (check(TokenType::FLOAT)) {
-            targetType = "float";
-            advance();
-        } else if (check(TokenType::PTR)) {
-            targetType = "ptr";
-            advance();
-        } else if (check(TokenType::CHAR)) {
-            targetType = "char";
-            advance();
-        } else if (check(TokenType::STRING_TYPE)) {
-            targetType = "string";
-            advance();
+            expr = std::make_unique<CastExprAST>(std::move(expr), targetType, line, column);
         } else {
-            throw std::runtime_error("Expected type after 'as' keyword (int, float, ptr, char, or string)\n  Location: line " +
+            throw std::runtime_error("Expected type after 'as' keyword (int, float, ptr, char, string, or bool)\n  Location: line " +
                                    std::to_string(currentToken().line) + ", column " + 
                                    std::to_string(currentToken().column));
         }
-        
-        expr = std::make_unique<CastExprAST>(std::move(expr), targetType, line, column);
     }
     
     return expr;
@@ -779,30 +763,11 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                 
                 // Get element type
                 std::string elementType;
-                if (check(TokenType::INT)) {
-                    elementType = "int";
-                    advance();
-                } else if (check(TokenType::PTR)) {
-                    elementType = "ptr";
-                    advance();
-                } else if (check(TokenType::CHAR)) {
-                    elementType = "char";
-                    advance();
-                } else if (check(TokenType::FLOAT)) {
-                    elementType = "float";
-                    advance();
-                } else if (check(TokenType::STRING_TYPE)) {
-                    elementType = "string";
-                    advance();
-                } else if (check(TokenType::BOOL)) {
-                    elementType = "bool";
-                    advance();
-                } else if (check(TokenType::IDENTIFIER)) {
-                    // Struct type
+                if ((currentToken().keywordCategory && *currentToken().keywordCategory == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
                     elementType = currentToken().value;
                     advance();
                 } else {
-                    throw std::runtime_error("Expected array element type (int, float, ptr, char, string, or struct name)\n  Location: line " + 
+                    throw std::runtime_error("Expected array element type (int, float, ptr, char, string, bool, or struct name)\n  Location: line " + 
                                            std::to_string(currentToken().line) + ", column " + 
                                            std::to_string(currentToken().column));
                 }
@@ -811,30 +776,11 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                 paramType = "[]" + elementType;
             } else {
                 // Regular scalar type (or struct)
-                if (check(TokenType::INT)) {
-                    paramType = "int";
-                    advance();
-                } else if (check(TokenType::PTR)) {
-                    paramType = "ptr";
-                    advance();
-                } else if (check(TokenType::CHAR)) {
-                    paramType = "char";
-                    advance();
-                } else if (check(TokenType::FLOAT)) {
-                    paramType = "float";
-                    advance();
-                } else if (check(TokenType::STRING_TYPE)) {
-                    paramType = "string";
-                    advance();
-                } else if (check(TokenType::BOOL)) {
-                    paramType = "bool";
-                    advance();
-                } else if (check(TokenType::IDENTIFIER)) {
-                    // Struct type
+                if ((currentToken().keywordCategory && *currentToken().keywordCategory == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
                     paramType = currentToken().value;
                     advance();
                 } else {
-                    throw std::runtime_error("Expected parameter type (int, float, ptr, char, string, struct name, or [size]type)\n  Location: line " + 
+                    throw std::runtime_error("Expected parameter type (int, float, ptr, char, string, bool, struct name, or [size]type)\n  Location: line " + 
                                            std::to_string(currentToken().line) + ", column " + 
                                            std::to_string(currentToken().column));
                 }
@@ -848,8 +794,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
     
     // Parse return type (optional - defaults to void)
     std::string returnType = "void";
-    if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || 
-        check(TokenType::CHAR) || check(TokenType::STRING_TYPE) || check(TokenType::BOOL) || check(TokenType::IDENTIFIER)) {
+    if ((currentToken().keywordCategory && *currentToken().keywordCategory == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
         returnType = currentToken().value;
         advance();
     }
@@ -942,8 +887,7 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
         
         // Parse type (can be INT, FLOAT, PTR, CHAR, STRING_TYPE, or IDENTIFIER for struct types)
         std::string fieldType;
-        if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || 
-            check(TokenType::CHAR) || check(TokenType::STRING_TYPE) || check(TokenType::IDENTIFIER)) {
+        if ((currentToken().keywordCategory && *currentToken().keywordCategory == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
             fieldType = currentToken().value;
             advance();
         } else {
