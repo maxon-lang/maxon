@@ -37,28 +37,28 @@ target_compile_options(lsp_lib PRIVATE
 )
 
 # Test executables
-add_executable(test_lsp_types test_lsp_types.cpp)
+add_executable(test_lsp_types test_lsp_types.cpp catch_amalgamated.cpp)
 target_link_libraries(test_lsp_types lsp_lib)
 
-add_executable(test_document_manager test_document_manager.cpp)
+add_executable(test_document_manager test_document_manager.cpp catch_amalgamated.cpp)
 target_link_libraries(test_document_manager lsp_lib)
 
-add_executable(test_json_rpc test_json_rpc.cpp)
+add_executable(test_json_rpc test_json_rpc.cpp catch_amalgamated.cpp)
 target_link_libraries(test_json_rpc lsp_lib)
 
-add_executable(test_analyzer test_analyzer.cpp)
+add_executable(test_analyzer test_analyzer.cpp catch_amalgamated.cpp)
 target_link_libraries(test_analyzer lsp_lib)
 
-add_executable(test_lsp_server test_lsp_server.cpp)
+add_executable(test_lsp_server test_lsp_server.cpp catch_amalgamated.cpp)
 target_link_libraries(test_lsp_server lsp_lib)
 
-add_executable(test_code_actions test_code_actions.cpp)
+add_executable(test_code_actions test_code_actions.cpp catch_amalgamated.cpp)
 target_link_libraries(test_code_actions lsp_lib)
 
-add_executable(test_hover test_hover.cpp)
+add_executable(test_hover test_hover.cpp catch_amalgamated.cpp)
 target_link_libraries(test_hover lsp_lib)
 
-add_executable(test_rename test_rename.cpp)
+add_executable(test_rename test_rename.cpp catch_amalgamated.cpp)
 target_link_libraries(test_rename lsp_lib)
 
 # Enable testing

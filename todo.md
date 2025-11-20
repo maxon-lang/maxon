@@ -67,5 +67,3 @@ https://llvm.org/docs/Frontend/PerformanceTips.html
 - multiple verbosity levels during compiling
 - compiler error codes
 - merge doc-fragments into fragments
-- don't use assert it calls abort() and causes a popup dialog
-

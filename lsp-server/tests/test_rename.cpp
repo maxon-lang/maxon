@@ -1,20 +1,17 @@
 #include "../include/analyzer.h"
+#include "catch_amalgamated.hpp"
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 
-// Helper to check conditions and throw on failure instead of using assert
-#define CHECK(condition, message) \
-    if (!(condition)) { \
-        throw std::runtime_error(std::string("Check failed: ") + message); \
-    }
+#define CATCH_CONFIG_MAIN
 
 std::shared_ptr<Document> createTestDocument(const std::string& text) {
     return std::make_shared<Document>("file:///test.maxon", text, 0);
 }
 
-void test_rename_function_block_identifier() {
-    std::cout << "Testing rename of function block identifier..." << std::endl;
+TEST_CASE("rename_function_block_identifier", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -29,58 +26,58 @@ void test_rename_function_block_identifier() {
     
     auto edit = analyzer.getRename(doc, pos, newName);
     
-    CHECK(edit.has_value(), "rename should return workspace edit");
-    CHECK(edit->changes.size() == 1, "should have changes for one document");
-    CHECK(edit->changes.count("file:///test.maxon") == 1, "should have changes for test document");
+    REQUIRE(edit.has_value());
+    REQUIRE(edit->changes.size() == 1);
+    REQUIRE(edit->changes.count("file:///test.maxon") == 1);
     
     auto& edits = edit->changes["file:///test.maxon"];
-    CHECK(edits.size() == 1, "should have exactly 1 edit (only end block)");
-    CHECK(edits[0].newText == newName, "new text should match requested name");
-    CHECK(edits[0].range.start.line == 2, "edit should be on line 2");
+    REQUIRE(edits.size() == 1);
+    REQUIRE(edits[0].newText == newName);
+    REQUIRE(edits[0].range.start.line == 2);
     
-    std::cout << "✓ Function block identifier rename works" << std::endl;
+
 }
 
-void test_rename_if_block_identifiers() {
-    std::cout << "Testing rename of if statement block identifiers..." << std::endl;
+TEST_CASE("rename_if_block_identifiers", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
         "function test() int\n"
         "    var x = 5\n"
-        "    if x = 5 'check'\n"
+        "    if x = 5 'REQUIRE'\n"
         "        return 1\n"
-        "    else 'check'\n"
+        "    else 'REQUIRE'\n"
         "        return 0\n"
-        "    end 'check'\n"
+        "    end 'REQUIRE'\n"
         "end 'test'"
     );
     
-    // Position on the first 'check' (line 2, col 14)
+    // Position on the first 'REQUIRE' (line 2, col 14)
     lsp::Position pos{2, 14};
     std::string newName = "'verify'";
     
     auto edit = analyzer.getRename(doc, pos, newName);
     
-    CHECK(edit.has_value(), "rename should return workspace edit");
+    REQUIRE(edit.has_value());
     auto& edits = edit->changes["file:///test.maxon"];
-    CHECK(edits.size() == 3, "should have 3 edits (if, else, end)");
+    REQUIRE(edits.size() == 3);
     
     // Verify all three occurrences are renamed
     for (const auto& e : edits) {
-        CHECK(e.newText == newName, "all edits should have new name");
+        REQUIRE(e.newText == newName);
     }
     
-    // Check that edits are on correct lines
-    CHECK(edits[0].range.start.line == 2, "first edit on if line");
-    CHECK(edits[1].range.start.line == 4, "second edit on else line");
-    CHECK(edits[2].range.start.line == 6, "third edit on end line");
+    // REQUIRE that edits are on correct lines
+    REQUIRE(edits[0].range.start.line == 2);
+    REQUIRE(edits[1].range.start.line == 4);
+    REQUIRE(edits[2].range.start.line == 6);
     
-    std::cout << "✓ If statement block identifiers rename works" << std::endl;
+
 }
 
-void test_rename_while_block_identifiers() {
-    std::cout << "Testing rename of while loop block identifiers..." << std::endl;
+TEST_CASE("rename_while_block_identifiers", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -99,19 +96,19 @@ void test_rename_while_block_identifiers() {
     
     auto edit = analyzer.getRename(doc, pos, newName);
     
-    CHECK(edit.has_value(), "rename should return workspace edit");
+    REQUIRE(edit.has_value());
     auto& edits = edit->changes["file:///test.maxon"];
-    CHECK(edits.size() == 2, "should have 2 edits (while, end)");
+    REQUIRE(edits.size() == 2);
     
     for (const auto& e : edits) {
-        CHECK(e.newText == newName, "all edits should have new name");
+        REQUIRE(e.newText == newName);
     }
     
-    std::cout << "✓ While loop block identifiers rename works" << std::endl;
+
 }
 
-void test_rename_namespace_block_identifiers() {
-    std::cout << "Testing rename of namespace block identifiers..." << std::endl;
+TEST_CASE("rename_namespace_block_identifiers", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -128,15 +125,15 @@ void test_rename_namespace_block_identifiers() {
     
     auto edit = analyzer.getRename(doc, pos, newName);
     
-    CHECK(edit.has_value(), "rename should return workspace edit");
+    REQUIRE(edit.has_value());
     auto& edits = edit->changes["file:///test.maxon"];
-    CHECK(edits.size() == 2, "should have 2 edits (namespace, end)");
+    REQUIRE(edits.size() == 2);
     
-    std::cout << "✓ Namespace block identifiers rename works" << std::endl;
+
 }
 
-void test_rename_struct_block_identifiers() {
-    std::cout << "Testing rename of struct block identifiers..." << std::endl;
+TEST_CASE("rename_struct_block_identifiers", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -152,15 +149,15 @@ void test_rename_struct_block_identifiers() {
     
     auto edit = analyzer.getRename(doc, pos, newName);
     
-    CHECK(edit.has_value(), "rename should return workspace edit");
+    REQUIRE(edit.has_value());
     auto& edits = edit->changes["file:///test.maxon"];
-    CHECK(edits.size() == 1, "should have 1 edit (only end block)");
+    REQUIRE(edits.size() == 1);
     
-    std::cout << "✓ Struct block identifiers rename works" << std::endl;
+
 }
 
-void test_rename_non_block_identifier_returns_null() {
-    std::cout << "Testing rename on non-block identifier returns null..." << std::endl;
+TEST_CASE("rename_non_block_identifier_returns_null", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -176,13 +173,13 @@ void test_rename_non_block_identifier_returns_null() {
     
     auto edit = analyzer.getRename(doc, pos, newName);
     
-    CHECK(!edit.has_value(), "rename on non-block identifier should return nullopt");
+    REQUIRE(!edit.has_value());
     
-    std::cout << "✓ Rename on non-block identifier correctly returns null" << std::endl;
+
 }
 
-void test_rename_nested_blocks() {
-    std::cout << "Testing rename of nested block identifiers..." << std::endl;
+TEST_CASE("rename_nested_blocks", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -201,26 +198,25 @@ void test_rename_nested_blocks() {
     
     // Rename the inner block identifier
     lsp::Position pos{3, 18}; // on 'inner'
-    std::string newName = "'innerCheck'";
+    std::string newName = "'innerREQUIRE'";
     
     auto edit = analyzer.getRename(doc, pos, newName);
     
-    CHECK(edit.has_value(), "rename should return workspace edit");
+    REQUIRE(edit.has_value());
     auto& edits = edit->changes["file:///test.maxon"];
-    CHECK(edits.size() == 3, "should have 3 edits for inner block only");
+    REQUIRE(edits.size() == 3);
     
     // Verify only 'inner' identifiers are renamed, not 'outer'
     for (const auto& e : edits) {
-        CHECK(e.newText == newName, "edits should have new name");
-        CHECK(e.range.start.line >= 3 && e.range.start.line <= 7, 
-              "edits should only be in inner block range");
+        REQUIRE(e.newText == newName);
+        REQUIRE((e.range.start.line >= 3 && e.range.start.line <= 7));
     }
     
-    std::cout << "✓ Nested block identifiers rename correctly" << std::endl;
+
 }
 
-void test_rename_multiple_same_name_blocks() {
-    std::cout << "Testing rename with multiple blocks having same identifier..." << std::endl;
+TEST_CASE("rename_multiple_same_name_blocks", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -243,17 +239,17 @@ void test_rename_multiple_same_name_blocks() {
     
     auto edit = analyzer.getRename(doc, pos, newName);
     
-    CHECK(edit.has_value(), "rename should return workspace edit");
+    REQUIRE(edit.has_value());
     auto& edits = edit->changes["file:///test.maxon"];
     
     // Should rename ALL occurrences of 'block' (2 in first function, 2 in second)
-    CHECK(edits.size() == 4, "should rename all 4 occurrences of 'block'");
+    REQUIRE(edits.size() == 4);
     
-    std::cout << "✓ Multiple blocks with same name all get renamed" << std::endl;
+
 }
 
-void test_rename_struct_name() {
-    std::cout << "Testing rename of struct name identifier..." << std::endl;
+TEST_CASE("rename_struct_name", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -274,7 +270,7 @@ void test_rename_struct_name() {
     
     auto edit = analyzer.getRename(doc, pos, newName);
     
-    CHECK(edit.has_value(), "rename should return workspace edit");
+    REQUIRE(edit.has_value());
     auto& edits = edit->changes["file:///test.maxon"];
     
     std::cout << "  Number of edits: " << edits.size() << std::endl;
@@ -289,13 +285,13 @@ void test_rename_struct_name() {
     // 2. end 'Point' (line 3)
     // 3. function parameter Point (line 5)
     // 4. var q Point (line 6)
-    CHECK(edits.size() >= 3, "should have at least 3 edits");
+    REQUIRE(edits.size() >= 3);
     
-    std::cout << "✓ Struct name identifier rename works" << std::endl;
+
 }
 
-void test_rename_struct_with_array_usage() {
-    std::cout << "Testing rename of struct used in array type..." << std::endl;
+TEST_CASE("rename_struct_with_array_usage", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -314,20 +310,20 @@ void test_rename_struct_with_array_usage() {
     
     auto edit = analyzer.getRename(doc, pos, newName);
     
-    CHECK(edit.has_value(), "rename should return workspace edit");
+    REQUIRE(edit.has_value());
     auto& edits = edit->changes["file:///test.maxon"];
     
     // Should rename:
     // 1. struct Item
     // 2. end 'Item'
     // 3. []Item in parameter
-    CHECK(edits.size() == 3, "should have 3 edits including array usage");
+    REQUIRE(edits.size() == 3);
     
-    std::cout << "✓ Struct name with array type usage rename works" << std::endl;
+
 }
 
-void test_rename_struct_with_literal_syntax() {
-    std::cout << "Testing rename of struct used in literal syntax..." << std::endl;
+TEST_CASE("rename_struct_with_literal_syntax", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -348,7 +344,7 @@ void test_rename_struct_with_literal_syntax() {
     
     auto edit = analyzer.getRename(doc, pos, newName);
     
-    CHECK(edit.has_value(), "rename should return workspace edit");
+    REQUIRE(edit.has_value());
     auto& edits = edit->changes["file:///test.maxon"];
     
     std::cout << "  Number of edits: " << edits.size() << std::endl;
@@ -362,13 +358,13 @@ void test_rename_struct_with_literal_syntax() {
     // 1. struct Point
     // 2. end 'Point'
     // 3. Point{...} in literal
-    CHECK(edits.size() == 3, "should have 3 edits including struct literal");
+    REQUIRE(edits.size() == 3);
     
-    std::cout << "✓ Struct name with literal syntax rename works" << std::endl;
+
 }
 
-void test_linked_editing_struct_with_block_id() {
-    std::cout << "Testing linked editing for struct name with matching block identifier..." << std::endl;
+TEST_CASE("linked_editing_struct_with_block_id", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -388,7 +384,7 @@ void test_linked_editing_struct_with_block_id() {
     
     auto ranges = analyzer.getLinkedEditingRanges(doc, pos);
     
-    CHECK(ranges.has_value(), "linked editing should return ranges");
+    REQUIRE(ranges.has_value());
     auto& rangeList = ranges.value();
     
     std::cout << "  Number of ranges: " << rangeList.size() << std::endl;
@@ -404,7 +400,7 @@ void test_linked_editing_struct_with_block_id() {
     // 3. return type Point (line 5)
     // 4. var p Point (line 6)
     // 5. Point{...} (line 7)
-    CHECK(rangeList.size() == 5, "should have 5 linked ranges");
+    REQUIRE(rangeList.size() == 5);
     
     // Verify each range is correct
     bool hasStructDecl = false;
@@ -421,18 +417,18 @@ void test_linked_editing_struct_with_block_id() {
         if (range.start.line == 7 && range.start.character == 11) hasLiteral = true;
     }
     
-    CHECK(hasStructDecl, "should have struct declaration range");
-    CHECK(hasBlockId, "should have block identifier range");
-    CHECK(hasReturnType, "should have return type range");
-    CHECK(hasVarType, "should have variable type range");
-    CHECK(hasLiteral, "should have literal range");
+    REQUIRE(hasStructDecl);
+    REQUIRE(hasBlockId);
+    REQUIRE(hasReturnType);
+    REQUIRE(hasVarType);
+    REQUIRE(hasLiteral);
 
     
-    std::cout << "✓ Linked editing for struct with block identifier works" << std::endl;
+
 }
 
-void test_linked_editing_block_id_only() {
-    std::cout << "Testing linked editing for block identifier without struct..." << std::endl;
+TEST_CASE("linked_editing_block_id_only", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -448,17 +444,17 @@ void test_linked_editing_block_id_only() {
     
     auto ranges = analyzer.getLinkedEditingRanges(doc, pos);
     
-    CHECK(ranges.has_value(), "linked editing should return ranges");
+    REQUIRE(ranges.has_value());
     auto& rangeList = ranges.value();
     
     // Should include all three 'condition' block identifiers
-    CHECK(rangeList.size() == 3, "should have 3 linked ranges");
+    REQUIRE(rangeList.size() == 3);
     
-    std::cout << "✓ Linked editing for block identifier only works" << std::endl;
+
 }
 
-void test_linked_editing_ranges_exclude_quotes() {
-    std::cout << "Testing linked editing ranges exclude quotes from block identifiers..." << std::endl;
+TEST_CASE("linked_editing_ranges_exclude_quotes", "[rename]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -478,7 +474,7 @@ void test_linked_editing_ranges_exclude_quotes() {
     
     auto ranges = analyzer.getLinkedEditingRanges(doc, pos);
     
-    CHECK(ranges.has_value(), "linked editing should return ranges");
+    REQUIRE(ranges.has_value());
     auto& rangeList = ranges.value();
     
     // Find the block identifier range (line 3)
@@ -490,7 +486,7 @@ void test_linked_editing_ranges_exclude_quotes() {
         }
     }
     
-    CHECK(blockIdRange != nullptr, "should have range for block identifier on line 3");
+    REQUIRE(blockIdRange != nullptr);
     
     std::cout << "  Block ID range: line " << blockIdRange->start.line 
               << ", col " << blockIdRange->start.character 
@@ -502,33 +498,8 @@ void test_linked_editing_ranges_exclude_quotes() {
     // For linked editing, we want to select just "Point" (cols 5-9, exclusive end = 10)
     // NOT "'Point" (cols 4-9) which includes the leading quote
     
-    CHECK(blockIdRange->start.character == 5, "block ID range should start after opening quote");
-    CHECK(blockIdRange->end.character == 10, "block ID range should end before closing quote");
+    REQUIRE(blockIdRange->start.character == 5);
+    REQUIRE(blockIdRange->end.character == 10);
     
-    std::cout << "✓ Linked editing ranges correctly exclude quotes from block identifiers" << std::endl;
-}
 
-int main() {
-    try {
-        test_rename_function_block_identifier();
-        test_rename_if_block_identifiers();
-        test_rename_while_block_identifiers();
-        test_rename_namespace_block_identifiers();
-        test_rename_struct_block_identifiers();
-        test_rename_non_block_identifier_returns_null();
-        test_rename_nested_blocks();
-        test_rename_multiple_same_name_blocks();
-        test_rename_struct_name();
-        test_rename_struct_with_array_usage();
-        test_rename_struct_with_literal_syntax();
-        test_linked_editing_struct_with_block_id();
-        test_linked_editing_block_id_only();
-        test_linked_editing_ranges_exclude_quotes();
-        
-        std::cout << "\n✅ All rename tests passed!" << std::endl;
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "\n❌ Test failed: " << e.what() << std::endl;
-        return 1;
-    }
 }

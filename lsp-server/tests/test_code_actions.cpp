@@ -1,12 +1,14 @@
 #include "../include/lsp_server.h"
 #include "../include/document_manager.h"
 #include "../include/analyzer.h"
-#include <cassert>
+#include "catch_amalgamated.hpp"
 #include <iostream>
 #include <memory>
 
-void test_code_action_structure() {
-    std::cout << "Testing code action request structure..." << std::endl;
+#define CATCH_CONFIG_MAIN
+
+TEST_CASE("code_action_structure", "[code_actions]") {
+
     
     json params = {
         {"textDocument", {{"uri", "file:///test.maxon"}}},
@@ -30,17 +32,17 @@ void test_code_action_structure() {
         }}
     };
     
-    assert(params.contains("textDocument"));
-    assert(params.contains("range"));
-    assert(params.contains("context"));
-    assert(params["context"]["diagnostics"].is_array());
-    assert(params["context"]["diagnostics"][0]["code"] == "unused-variable");
+    REQUIRE(params.contains("textDocument"));
+    REQUIRE(params.contains("range"));
+    REQUIRE(params.contains("context"));
+    REQUIRE(params["context"]["diagnostics"].is_array());
+    REQUIRE(params["context"]["diagnostics"][0]["code"] == "unused-variable");
     
-    std::cout << "✓ Code action request structure validated" << std::endl;
+
 }
 
-void test_unused_variable_diagnostic() {
-    std::cout << "Testing unused variable diagnostic generation..." << std::endl;
+TEST_CASE("unused_variable_diagnostic", "[code_actions]") {
+
     
     std::string testCode = 
         "function test() int\n"
@@ -55,7 +57,7 @@ void test_unused_variable_diagnostic() {
     docManager->openDocument("file:///test.maxon", testCode, 1);
     auto doc = docManager->getDocument("file:///test.maxon");
     
-    assert(doc != nullptr);
+    REQUIRE(doc != nullptr);
     
     auto diagnostics = analyzer->analyze(doc);
     
@@ -65,18 +67,18 @@ void test_unused_variable_diagnostic() {
         if (diag.severity == 2 && diag.message.find("unused") != std::string::npos) {
             foundUnusedWarning = true;
             // Check that it has the code
-            assert(diag.code.has_value());
-            assert(diag.code.value() == "unused-variable");
+            REQUIRE(diag.code.has_value());
+            REQUIRE(diag.code.value() == "unused-variable");
         }
     }
     
-    assert(foundUnusedWarning);
+    REQUIRE(foundUnusedWarning);
     
-    std::cout << "✓ Unused variable diagnostic generated with code" << std::endl;
+
 }
 
-void test_code_action_response_format() {
-    std::cout << "Testing code action response format..." << std::endl;
+TEST_CASE("code_action_response_format", "[code_actions]") {
+
     
     // Expected response format for a quick fix
     json expectedAction = {
@@ -109,17 +111,17 @@ void test_code_action_response_format() {
         }}
     };
     
-    assert(expectedAction.contains("title"));
-    assert(expectedAction.contains("kind"));
-    assert(expectedAction["kind"] == "quickfix");
-    assert(expectedAction.contains("edit"));
-    assert(expectedAction["edit"].contains("changes"));
+    REQUIRE(expectedAction.contains("title"));
+    REQUIRE(expectedAction.contains("kind"));
+    REQUIRE(expectedAction["kind"] == "quickfix");
+    REQUIRE(expectedAction.contains("edit"));
+    REQUIRE(expectedAction["edit"].contains("changes"));
     
-    std::cout << "✓ Code action response format validated" << std::endl;
+
 }
 
-void test_code_action_only_for_warnings() {
-    std::cout << "Testing code actions only provided for warnings..." << std::endl;
+TEST_CASE("code_action_only_for_warnings", "[code_actions]") {
+
     
     json errorDiagnostic = {
         {"range", {
@@ -132,13 +134,13 @@ void test_code_action_only_for_warnings() {
     };
     
     // Code actions should only be provided for severity 2 (warnings)
-    assert(errorDiagnostic["severity"] == 1);
+    REQUIRE(errorDiagnostic["severity"] == 1);
     
-    std::cout << "✓ Code actions filtering validated" << std::endl;
+
 }
 
-void test_workspace_edit_structure() {
-    std::cout << "Testing workspace edit structure..." << std::endl;
+TEST_CASE("workspace_edit_structure", "[code_actions]") {
+
     
     json workspaceEdit = {
         {"changes", {
@@ -154,23 +156,23 @@ void test_workspace_edit_structure() {
         }}
     };
     
-    assert(workspaceEdit.contains("changes"));
-    assert(workspaceEdit["changes"].is_object());
+    REQUIRE(workspaceEdit.contains("changes"));
+    REQUIRE(workspaceEdit["changes"].is_object());
     
     auto& changes = workspaceEdit["changes"];
-    assert(changes.contains("file:///test.maxon"));
-    assert(changes["file:///test.maxon"].is_array());
-    assert(changes["file:///test.maxon"].size() > 0);
+    REQUIRE(changes.contains("file:///test.maxon"));
+    REQUIRE(changes["file:///test.maxon"].is_array());
+    REQUIRE(changes["file:///test.maxon"].size() > 0);
     
     auto& textEdit = changes["file:///test.maxon"][0];
-    assert(textEdit.contains("range"));
-    assert(textEdit.contains("newText"));
+    REQUIRE(textEdit.contains("range"));
+    REQUIRE(textEdit.contains("newText"));
     
-    std::cout << "✓ Workspace edit structure validated" << std::endl;
+
 }
 
-void test_diagnostic_code_field() {
-    std::cout << "Testing diagnostic code field..." << std::endl;
+TEST_CASE("diagnostic_code_field", "[code_actions]") {
+
     
     json diagnostic = {
         {"range", {
@@ -183,15 +185,15 @@ void test_diagnostic_code_field() {
         {"code", "unused-variable"}
     };
     
-    assert(diagnostic.contains("code"));
-    assert(diagnostic["code"].is_string());
-    assert(diagnostic["code"] == "unused-variable");
+    REQUIRE(diagnostic.contains("code"));
+    REQUIRE(diagnostic["code"].is_string());
+    REQUIRE(diagnostic["code"] == "unused-variable");
     
-    std::cout << "✓ Diagnostic code field validated" << std::endl;
+
 }
 
-void test_code_action_capabilities() {
-    std::cout << "Testing code action capabilities..." << std::endl;
+TEST_CASE("code_action_capabilities", "[code_actions]") {
+
     
     // Server should advertise code action support
     json capabilities = {
@@ -200,9 +202,9 @@ void test_code_action_capabilities() {
         }}
     };
     
-    assert(capabilities.contains("codeActionProvider"));
-    assert(capabilities["codeActionProvider"].contains("codeActionKinds"));
-    assert(capabilities["codeActionProvider"]["codeActionKinds"].is_array());
+    REQUIRE(capabilities.contains("codeActionProvider"));
+    REQUIRE(capabilities["codeActionProvider"].contains("codeActionKinds"));
+    REQUIRE(capabilities["codeActionProvider"]["codeActionKinds"].is_array());
     
     bool hasQuickfix = false;
     for (const auto& kind : capabilities["codeActionProvider"]["codeActionKinds"]) {
@@ -211,13 +213,13 @@ void test_code_action_capabilities() {
             break;
         }
     }
-    assert(hasQuickfix);
+    REQUIRE(hasQuickfix);
     
-    std::cout << "✓ Code action capabilities validated" << std::endl;
+
 }
 
-void test_variable_name_extraction() {
-    std::cout << "Testing variable name extraction from diagnostic message..." << std::endl;
+TEST_CASE("variable_name_extraction", "[code_actions]") {
+
     
     std::string message = "The variable 'unused' is assigned but its value is never used";
     
@@ -225,17 +227,17 @@ void test_variable_name_extraction() {
     size_t start = message.find("'");
     size_t end = message.find("'", start + 1);
     
-    assert(start != std::string::npos);
-    assert(end != std::string::npos);
+    REQUIRE(start != std::string::npos);
+    REQUIRE(end != std::string::npos);
     
     std::string varName = message.substr(start + 1, end - start - 1);
-    assert(varName == "unused");
+    REQUIRE(varName == "unused");
     
-    std::cout << "✓ Variable name extraction validated" << std::endl;
+
 }
 
-void test_unnecessary_qualified_name_extraction() {
-    std::cout << "Testing unnecessary qualified name extraction from diagnostic message..." << std::endl;
+TEST_CASE("unnecessary_qualified_name_extraction", "[code_actions]") {
+
     
     std::string message = "Unnecessary qualified name: 'math::add'\n  The unqualified name 'add' is unambiguous\n  Consider using 'add' instead";
     
@@ -245,41 +247,18 @@ void test_unnecessary_qualified_name_extraction() {
     size_t unqualStart = message.find("'", qualEnd + 1);
     size_t unqualEnd = message.find("'", unqualStart + 1);
     
-    assert(qualStart != std::string::npos);
-    assert(qualEnd != std::string::npos);
-    assert(unqualStart != std::string::npos);
-    assert(unqualEnd != std::string::npos);
+    REQUIRE(qualStart != std::string::npos);
+    REQUIRE(qualEnd != std::string::npos);
+    REQUIRE(unqualStart != std::string::npos);
+    REQUIRE(unqualEnd != std::string::npos);
     
     std::string qualifiedName = message.substr(qualStart + 1, qualEnd - qualStart - 1);
     std::string unqualifiedName = message.substr(unqualStart + 1, unqualEnd - unqualStart - 1);
     
-    assert(qualifiedName == "math::add");
-    assert(unqualifiedName == "add");
+    REQUIRE(qualifiedName == "math::add");
+    REQUIRE(unqualifiedName == "add");
     
-    std::cout << "✓ Unnecessary qualified name extraction validated" << std::endl;
+
 }
 
-int main() {
-    std::cout << "\n=== Running Code Action Tests ===\n" << std::endl;
-    
-    try {
-        test_code_action_structure();
-        test_unused_variable_diagnostic();
-        test_code_action_response_format();
-        test_code_action_only_for_warnings();
-        test_workspace_edit_structure();
-        test_diagnostic_code_field();
-        test_code_action_capabilities();
-        test_variable_name_extraction();
-        test_unnecessary_qualified_name_extraction();
-        
-        std::cout << "\n=== All Code Action Tests Passed ✓ ===\n" << std::endl;
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "\n✗ Test failed with exception: " << e.what() << std::endl;
-        return 1;
-    } catch (...) {
-        std::cerr << "\n✗ Test failed with unknown exception" << std::endl;
-        return 1;
-    }
-}
+

@@ -1,7 +1,9 @@
 #include "../include/json_rpc.h"
-#include <cassert>
+#include "catch_amalgamated.hpp"
 #include <iostream>
 #include <sstream>
+
+#define CATCH_CONFIG_MAIN
 
 // Test helper to capture output
 class TestJsonRpcHandler : public JsonRpcHandler {
@@ -14,8 +16,8 @@ public:
     }
 };
 
-void test_request_handler_registration() {
-    std::cout << "Testing request handler registration..." << std::endl;
+TEST_CASE("request_handler_registration", "[json_rpc]") {
+
     
     JsonRpcHandler handler;
     bool handlerCalled = false;
@@ -29,12 +31,12 @@ void test_request_handler_registration() {
     std::string request = R"({"jsonrpc":"2.0","id":1,"method":"test/method","params":{}})";
     handler.processMessage(request);
     
-    assert(handlerCalled);
-    std::cout << "✓ Request handler registration works" << std::endl;
+    REQUIRE(handlerCalled);
+
 }
 
-void test_notification_handler_registration() {
-    std::cout << "Testing notification handler registration..." << std::endl;
+TEST_CASE("notification_handler_registration", "[json_rpc]") {
+
     
     JsonRpcHandler handler;
     bool handlerCalled = false;
@@ -47,12 +49,12 @@ void test_notification_handler_registration() {
     std::string notification = R"({"jsonrpc":"2.0","method":"test/notification","params":{}})";
     handler.processMessage(notification);
     
-    assert(handlerCalled);
-    std::cout << "✓ Notification handler registration works" << std::endl;
+    REQUIRE(handlerCalled);
+
 }
 
-void test_request_with_params() {
-    std::cout << "Testing request with parameters..." << std::endl;
+TEST_CASE("request_with_params", "[json_rpc]") {
+
     
     JsonRpcHandler handler;
     json receivedParams;
@@ -65,13 +67,13 @@ void test_request_with_params() {
     std::string request = R"({"jsonrpc":"2.0","id":1,"method":"test/echo","params":{"message":"hello"}})";
     handler.processMessage(request);
     
-    assert(receivedParams.contains("message"));
-    assert(receivedParams["message"] == "hello");
-    std::cout << "✓ Request with parameters works" << std::endl;
+    REQUIRE(receivedParams.contains("message"));
+    REQUIRE(receivedParams["message"] == "hello");
+
 }
 
-void test_method_not_found() {
-    std::cout << "Testing method not found error..." << std::endl;
+TEST_CASE("method_not_found", "[json_rpc]") {
+
     
     JsonRpcHandler handler;
     
@@ -82,11 +84,11 @@ void test_method_not_found() {
     // Just ensure it doesn't crash
     handler.processMessage(request);
     
-    std::cout << "✓ Method not found error handled gracefully" << std::endl;
+
 }
 
-void test_malformed_json() {
-    std::cout << "Testing malformed JSON..." << std::endl;
+TEST_CASE("malformed_json", "[json_rpc]") {
+
     
     JsonRpcHandler handler;
     
@@ -96,11 +98,11 @@ void test_malformed_json() {
     // Should not crash
     handler.processMessage(malformed);
     
-    std::cout << "✓ Malformed JSON handled gracefully" << std::endl;
+
 }
 
-void test_response_structure() {
-    std::cout << "Testing response structure..." << std::endl;
+TEST_CASE("response_structure", "[json_rpc]") {
+
     
     JsonRpcHandler handler;
     
@@ -115,24 +117,7 @@ void test_response_structure() {
     
     // Response should be sent with proper structure
     // In a real test, we'd capture and verify the output
-    std::cout << "✓ Response structure test completed" << std::endl;
+
 }
 
-int main() {
-    std::cout << "Running JSON-RPC Handler Tests...\n" << std::endl;
-    
-    try {
-        test_request_handler_registration();
-        test_notification_handler_registration();
-        test_request_with_params();
-        test_method_not_found();
-        test_malformed_json();
-        test_response_structure();
-        
-        std::cout << "\n✓ All JSON-RPC tests passed!" << std::endl;
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "\n✗ Test failed: " << e.what() << std::endl;
-        return 1;
-    }
-}
+

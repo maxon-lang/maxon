@@ -1,21 +1,16 @@
 #include "../include/analyzer.h"
+#include "catch_amalgamated.hpp"
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 
-// Helper to check conditions and throw on failure instead of using assert
-#define CHECK(condition, message) \
-    if (!(condition)) { \
-        throw std::runtime_error(std::string("Check failed: ") + message); \
-    }
+#define CATCH_CONFIG_MAIN
 
 std::shared_ptr<Document> createTestDocument(const std::string& text) {
     return std::make_shared<Document>("file:///test.maxon", text, 0);
 }
 
-void test_hover_variable_let() {
-    std::cout << "Testing hover on 'let' variable..." << std::endl;
-    
+TEST_CASE("hover on 'let' variable") {
     Analyzer analyzer;
     auto doc = createTestDocument(
         "function test() int\n"
@@ -31,19 +26,14 @@ void test_hover_variable_let() {
     lsp::Position pos{2, 11}; // Line 2 (0-indexed), char 11 (on 'x')
     auto hover = analyzer.getHover(doc, pos);
     
-    CHECK(hover.has_value(), "hover should have value");
-    CHECK(hover->contents.find("let") != std::string::npos, "hover should contain 'let'");
-    CHECK(hover->contents.find("x") != std::string::npos, "hover should contain 'x'");
-    CHECK(hover->contents.find("int") != std::string::npos, "hover should contain 'int'");
-    CHECK(hover->contents.find("42") != std::string::npos, "hover should show initial value for immutable variable");
-    
-    std::cout << "  Hover text: " << hover->contents << std::endl;
-    std::cout << "✓ Hover on 'let' variable shows type and value" << std::endl;
+    REQUIRE(hover.has_value());
+    REQUIRE(hover->contents.find("let") != std::string::npos);
+    REQUIRE(hover->contents.find("x") != std::string::npos);
+    REQUIRE(hover->contents.find("int") != std::string::npos);
+    REQUIRE(hover->contents.find("42") != std::string::npos);
 }
 
-void test_hover_variable_var() {
-    std::cout << "Testing hover on 'var' variable..." << std::endl;
-    
+TEST_CASE("hover on 'var' variable") {
     Analyzer analyzer;
     auto doc = createTestDocument(
         "function test() int\n"
@@ -59,17 +49,13 @@ void test_hover_variable_var() {
     lsp::Position pos{2, 4};
     auto hover = analyzer.getHover(doc, pos);
     
-    CHECK(hover.has_value(), "hover should have value");
-    CHECK(hover->contents.find("var") != std::string::npos, "hover should contain 'var'");
-    CHECK(hover->contents.find("count") != std::string::npos, "hover should contain 'count'");
-    CHECK(hover->contents.find("int") != std::string::npos, "hover should contain 'int'");
-    
-    std::cout << "✓ Hover on 'var' variable shows type" << std::endl;
+    REQUIRE(hover.has_value());
+    REQUIRE(hover->contents.find("var") != std::string::npos);
+    REQUIRE(hover->contents.find("count") != std::string::npos);
+    REQUIRE(hover->contents.find("int") != std::string::npos);
 }
 
-void test_hover_float_variable() {
-    std::cout << "Testing hover on float variable..." << std::endl;
-    
+TEST_CASE("hover on float variable") {
     Analyzer analyzer;
     auto doc = createTestDocument(
         "function test() float\n"
@@ -83,15 +69,13 @@ void test_hover_float_variable() {
     lsp::Position pos{2, 11};
     auto hover = analyzer.getHover(doc, pos);
     
-    CHECK(hover.has_value(), "hover should have value");
-    CHECK(hover->contents.find("float") != std::string::npos, "hover should contain 'float'");
-    CHECK(hover->contents.find("pi") != std::string::npos, "hover should contain 'pi'");
-    
-    std::cout << "✓ Hover on float variable shows correct type" << std::endl;
+    REQUIRE(hover.has_value());
+    REQUIRE(hover->contents.find("float") != std::string::npos);
+    REQUIRE(hover->contents.find("pi") != std::string::npos);
 }
 
-void test_hover_function_parameter() {
-    std::cout << "Testing hover on function parameter..." << std::endl;
+TEST_CASE("hover on function_parameter", "[hover]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -106,17 +90,17 @@ void test_hover_function_parameter() {
     lsp::Position pos{1, 11};
     auto hover = analyzer.getHover(doc, pos);
     
-    CHECK(hover.has_value(), "hover should have value");
-    CHECK(hover->contents.find("a") != std::string::npos, "hover should contain 'a'");
-    CHECK(hover->contents.find("int") != std::string::npos, "hover should contain 'int'");
-    CHECK(hover->contents.find("parameter") != std::string::npos || 
-           hover->contents.find("Parameter") != std::string::npos, "hover should indicate parameter");
+    REQUIRE(hover.has_value());
+    REQUIRE(hover->contents.find("a") != std::string::npos);
+    REQUIRE(hover->contents.find("int") != std::string::npos);
+    REQUIRE((hover->contents.find("parameter") != std::string::npos || 
+           hover->contents.find("Parameter") != std::string::npos));
     
-    std::cout << "✓ Hover on function parameter shows type and indicates it's a parameter" << std::endl;
+
 }
 
-void test_hover_struct_definition() {
-    std::cout << "Testing hover on struct name..." << std::endl;
+TEST_CASE("hover on struct_definition", "[hover]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -138,29 +122,29 @@ void test_hover_struct_definition() {
     auto hover = analyzer.getHover(doc, pos);
     
     if (!hover.has_value()) {
-        std::cout << "  Warning: No hover information returned" << std::endl;
-        std::cout << "  Skipping struct hover test (may need position adjustment)" << std::endl;
+    
+    
         return;
     }
     
     std::cout << "  Hover text: " << hover->contents << std::endl;
     
-    // Check if it's showing struct info (should have struct keyword and field names)
+    // REQUIRE if it's showing struct info (should have struct keyword and field names)
     bool hasStructKeyword = hover->contents.find("struct") != std::string::npos;
     bool hasPointName = hover->contents.find("Point") != std::string::npos;
     bool hasFields = hover->contents.find("x") != std::string::npos && 
                      hover->contents.find("y") != std::string::npos;
     
     if (hasStructKeyword && hasPointName && hasFields) {
-        std::cout << "✓ Hover on struct shows definition with all fields" << std::endl;
+    
     } else {
-        std::cout << "  Note: Hover returned info but not struct definition" << std::endl;
-        std::cout << "  This may be expected depending on cursor position" << std::endl;
+    
+    
     }
 }
 
-void test_hover_user_function() {
-    std::cout << "Testing hover on user-defined function..." << std::endl;
+TEST_CASE("hover on user_function", "[hover]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -179,17 +163,17 @@ void test_hover_user_function() {
     lsp::Position pos{5, 11};
     auto hover = analyzer.getHover(doc, pos);
     
-    CHECK(hover.has_value(), "hover should have value");
-    CHECK(hover->contents.find("function") != std::string::npos, "hover should contain 'function'");
-    CHECK(hover->contents.find("multiply") != std::string::npos, "hover should contain 'multiply'");
-    CHECK(hover->contents.find("x int") != std::string::npos, "hover should contain 'x int'");
-    CHECK(hover->contents.find("y int") != std::string::npos, "hover should contain 'y int'");
+    REQUIRE(hover.has_value());
+    REQUIRE(hover->contents.find("function") != std::string::npos);
+    REQUIRE(hover->contents.find("multiply") != std::string::npos);
+    REQUIRE(hover->contents.find("x int") != std::string::npos);
+    REQUIRE(hover->contents.find("y int") != std::string::npos);
     
-    std::cout << "✓ Hover on user function shows signature" << std::endl;
+
 }
 
-void test_hover_keyword() {
-    std::cout << "Testing hover on keyword..." << std::endl;
+TEST_CASE("hover on keyword", "[hover]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -204,15 +188,15 @@ void test_hover_keyword() {
     lsp::Position pos{1, 4};
     auto hover = analyzer.getHover(doc, pos);
     
-    CHECK(hover.has_value(), "hover should have value");
-    CHECK(hover->contents.find("return") != std::string::npos, "hover should contain 'return'");
-    CHECK(hover->contents.find("control flow") != std::string::npos, "hover should indicate control flow");
+    REQUIRE(hover.has_value());
+    REQUIRE(hover->contents.find("return") != std::string::npos);
+    REQUIRE(hover->contents.find("control flow") != std::string::npos);
     
-    std::cout << "✓ Hover on keyword shows appropriate info" << std::endl;
+
 }
 
-void test_hover_struct_keyword() {
-    std::cout << "Testing hover on 'struct' keyword..." << std::endl;
+TEST_CASE("hover on struct_keyword", "[hover]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -228,15 +212,15 @@ void test_hover_struct_keyword() {
     lsp::Position pos{0, 2};
     auto hover = analyzer.getHover(doc, pos);
     
-    CHECK(hover.has_value(), "hover should have value");
-    CHECK(hover->contents.find("struct") != std::string::npos, "hover should contain 'struct'");
-    CHECK(hover->contents.find("declaration") != std::string::npos, "hover should indicate it's a declaration");
+    REQUIRE(hover.has_value());
+    REQUIRE(hover->contents.find("struct") != std::string::npos);
+    REQUIRE(hover->contents.find("declaration") != std::string::npos);
     
-    std::cout << "✓ Hover on 'struct' keyword shows it's a keyword" << std::endl;
+
 }
 
-void test_hover_function_keyword() {
-    std::cout << "Testing hover on 'function' keyword..." << std::endl;
+TEST_CASE("hover on function_keyword", "[hover]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -251,15 +235,15 @@ void test_hover_function_keyword() {
     lsp::Position pos{0, 2};
     auto hover = analyzer.getHover(doc, pos);
     
-    CHECK(hover.has_value(), "hover should have value");
-    CHECK(hover->contents.find("function") != std::string::npos, "hover should contain 'function'");
-    CHECK(hover->contents.find("declaration") != std::string::npos, "hover should indicate it's a declaration");
+    REQUIRE(hover.has_value());
+    REQUIRE(hover->contents.find("function") != std::string::npos);
+    REQUIRE(hover->contents.find("declaration") != std::string::npos);
     
-    std::cout << "✓ Hover on 'function' keyword shows it's a keyword" << std::endl;
+
 }
 
-void test_hover_type_name() {
-    std::cout << "Testing hover on type names..." << std::endl;
+TEST_CASE("hover on type_name", "[hover]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -273,26 +257,26 @@ void test_hover_type_name() {
     // Hover over 'int' type
     lsp::Position pos{0, 16};
     auto hoverInt = analyzer.getHover(doc, pos);
-    CHECK(hoverInt.has_value(), "hover on int should have value");
-    CHECK(hoverInt->contents.find("int") != std::string::npos, "hover should contain 'int'");
+    REQUIRE(hoverInt.has_value());
+    REQUIRE(hoverInt->contents.find("int") != std::string::npos);
     
     // Hover over 'float' type
     lsp::Position posFloat{0, 23};
     auto hoverFloat = analyzer.getHover(doc, posFloat);
-    CHECK(hoverFloat.has_value(), "hover on float should have value");
-    CHECK(hoverFloat->contents.find("float") != std::string::npos, "hover should contain 'float'");
+    REQUIRE(hoverFloat.has_value());
+    REQUIRE(hoverFloat->contents.find("float") != std::string::npos);
     
     // Hover over 'ptr' type
     lsp::Position posPtr{0, 32};
     auto hoverPtr = analyzer.getHover(doc, posPtr);
-    CHECK(hoverPtr.has_value(), "hover on ptr should have value");
-    CHECK(hoverPtr->contents.find("ptr") != std::string::npos, "hover should contain 'ptr'");
+    REQUIRE(hoverPtr.has_value());
+    REQUIRE(hoverPtr->contents.find("ptr") != std::string::npos);
     
-    std::cout << "✓ Hover on type names shows type info" << std::endl;
+
 }
 
-void test_hover_array_variable() {
-    std::cout << "Testing hover on array variable..." << std::endl;
+TEST_CASE("hover on array_variable", "[hover]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(
@@ -309,23 +293,23 @@ void test_hover_array_variable() {
     auto hover = analyzer.getHover(doc, pos);
     
     if (!hover.has_value()) {
-        std::cout << "  Note: Array variable hover not working - may need parser support" << std::endl;
-        std::cout << "  Skipping array variable test" << std::endl;
+    
+    
         return;
     }
     
     std::cout << "  Hover text: " << hover->contents << std::endl;
     
-    // Check if it shows variable info (even if type representation varies)
+    // REQUIRE if it shows variable info (even if type representation varies)
     if (hover->contents.find("numbers") != std::string::npos) {
-        std::cout << "✓ Hover on array variable shows information" << std::endl;
+    
     } else {
-        std::cout << "  Note: Hover may need position adjustment" << std::endl;
+    
     }
 }
 
-void test_hover_no_match() {
-    std::cout << "Testing hover on whitespace (no match)..." << std::endl;
+TEST_CASE("hover on no_match", "[hover]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument("function test() int\n    return 42\nend 'test'");
@@ -339,33 +323,6 @@ void test_hover_no_match() {
     // Should still return something, but might be generic
     // This is okay - we just don't want it to crash
     
-    std::cout << "✓ Hover on whitespace doesn't crash" << std::endl;
+
 }
 
-int main() {
-    std::cout << "\n=== Running Hover Tests ===" << std::endl;
-    
-    try {
-        test_hover_variable_let();
-        test_hover_variable_var();
-        test_hover_float_variable();
-        test_hover_function_parameter();
-        test_hover_struct_definition();
-        test_hover_user_function();
-        test_hover_keyword();
-        test_hover_struct_keyword();
-        test_hover_function_keyword();
-        test_hover_type_name();
-        test_hover_array_variable();
-        test_hover_no_match();
-        
-        std::cout << "\n✓ All hover tests passed!" << std::endl;
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "\n✗ Test failed with exception: " << e.what() << std::endl;
-        return 1;
-    } catch (...) {
-        std::cerr << "\n✗ Test failed with unknown exception" << std::endl;
-        return 1;
-    }
-}

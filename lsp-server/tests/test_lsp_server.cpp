@@ -1,20 +1,22 @@
 #include "../include/lsp_server.h"
-#include <cassert>
+#include "catch_amalgamated.hpp"
 #include <iostream>
 #include <memory>
 
+#define CATCH_CONFIG_MAIN
+
 // Mock test for LSP Server initialization
-void test_lsp_server_creation() {
-    std::cout << "Testing LSP server creation..." << std::endl;
+TEST_CASE("lsp_server_creation", "[lsp_server]") {
+
     
     // Just ensure we can create the server without crashing
     LspServer server;
     
-    std::cout << "✓ LSP server creation works" << std::endl;
+
 }
 
-void test_initialize_request() {
-    std::cout << "Testing initialize request..." << std::endl;
+TEST_CASE("initialize_request", "[lsp_server]") {
+
     
     // This would require mocking the JSON-RPC layer
     // For now, just verify the structure exists
@@ -26,24 +28,24 @@ void test_initialize_request() {
     };
     
     // In a real test, we'd call handleInitialize
-    assert(params.contains("rootUri"));
+    REQUIRE(params.contains("rootUri"));
     
-    std::cout << "✓ Initialize request structure validated" << std::endl;
+
 }
 
-void test_shutdown_request() {
-    std::cout << "Testing shutdown request..." << std::endl;
+TEST_CASE("shutdown_request", "[lsp_server]") {
+
     
     // Test that shutdown params can be empty
     json params = json::object();
     
-    assert(params.is_object());
+    REQUIRE(params.is_object());
     
-    std::cout << "✓ Shutdown request structure validated" << std::endl;
+
 }
 
-void test_did_open_notification() {
-    std::cout << "Testing didOpen notification..." << std::endl;
+TEST_CASE("did_open_notification", "[lsp_server]") {
+
     
     json params = {
         {"textDocument", {
@@ -54,14 +56,14 @@ void test_did_open_notification() {
         }}
     };
     
-    assert(params["textDocument"]["uri"] == "file:///test.maxon");
-    assert(params["textDocument"]["text"] == "function main() end");
+    REQUIRE(params["textDocument"]["uri"] == "file:///test.maxon");
+    REQUIRE(params["textDocument"]["text"] == "function main() end");
     
-    std::cout << "✓ didOpen notification structure validated" << std::endl;
+
 }
 
-void test_did_change_notification() {
-    std::cout << "Testing didChange notification..." << std::endl;
+TEST_CASE("did_change_notification", "[lsp_server]") {
+
     
     json params = {
         {"textDocument", {
@@ -73,83 +75,63 @@ void test_did_change_notification() {
         })}
     };
     
-    assert(params["contentChanges"].is_array());
-    assert(params["contentChanges"].size() > 0);
+    REQUIRE(params["contentChanges"].is_array());
+    REQUIRE(params["contentChanges"].size() > 0);
     
-    std::cout << "✓ didChange notification structure validated" << std::endl;
+
 }
 
-void test_completion_request() {
-    std::cout << "Testing completion request..." << std::endl;
+TEST_CASE("completion_request", "[lsp_server]") {
+
     
     json params = {
         {"textDocument", {{"uri", "file:///test.maxon"}}},
         {"position", {{"line", 0}, {"character", 5}}}
     };
     
-    assert(params["position"]["line"] == 0);
-    assert(params["position"]["character"] == 5);
+    REQUIRE(params["position"]["line"] == 0);
+    REQUIRE(params["position"]["character"] == 5);
     
-    std::cout << "✓ Completion request structure validated" << std::endl;
+
 }
 
-void test_hover_request() {
-    std::cout << "Testing hover request..." << std::endl;
+TEST_CASE("hover_request", "[lsp_server]") {
+
     
     json params = {
         {"textDocument", {{"uri", "file:///test.maxon"}}},
         {"position", {{"line", 2}, {"character", 8}}}
     };
     
-    assert(params["textDocument"]["uri"] == "file:///test.maxon");
+    REQUIRE(params["textDocument"]["uri"] == "file:///test.maxon");
     
-    std::cout << "✓ Hover request structure validated" << std::endl;
+
 }
 
-void test_definition_request() {
-    std::cout << "Testing definition request..." << std::endl;
+TEST_CASE("definition_request", "[lsp_server]") {
+
     
     json params = {
         {"textDocument", {{"uri", "file:///test.maxon"}}},
         {"position", {{"line", 1}, {"character", 10}}}
     };
     
-    assert(params.contains("textDocument"));
-    assert(params.contains("position"));
+    REQUIRE(params.contains("textDocument"));
+    REQUIRE(params.contains("position"));
     
-    std::cout << "✓ Definition request structure validated" << std::endl;
+
 }
 
-void test_document_symbol_request() {
-    std::cout << "Testing document symbol request..." << std::endl;
+TEST_CASE("document_symbol_request", "[lsp_server]") {
+
     
     json params = {
         {"textDocument", {{"uri", "file:///test.maxon"}}}
     };
     
-    assert(params["textDocument"]["uri"] == "file:///test.maxon");
+    REQUIRE(params["textDocument"]["uri"] == "file:///test.maxon");
     
-    std::cout << "✓ Document symbol request structure validated" << std::endl;
+
 }
 
-int main() {
-    std::cout << "Running LSP Server Integration Tests...\n" << std::endl;
-    
-    try {
-        test_lsp_server_creation();
-        test_initialize_request();
-        test_shutdown_request();
-        test_did_open_notification();
-        test_did_change_notification();
-        test_completion_request();
-        test_hover_request();
-        test_definition_request();
-        test_document_symbol_request();
-        
-        std::cout << "\n✓ All LSP Server integration tests passed!" << std::endl;
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "\n✗ Test failed: " << e.what() << std::endl;
-        return 1;
-    }
-}
+

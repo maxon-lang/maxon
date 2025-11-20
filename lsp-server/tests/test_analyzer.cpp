@@ -1,14 +1,16 @@
 #include "../include/analyzer.h"
-#include <cassert>
+#include "catch_amalgamated.hpp"
 #include <iostream>
 #include <memory>
+
+#define CATCH_CONFIG_MAIN
 
 std::shared_ptr<Document> createTestDocument(const std::string& text) {
     return std::make_shared<Document>("file:///test.maxon", text, 0);
 }
 
-void test_analyze_valid_code() {
-    std::cout << "Testing analysis of valid code..." << std::endl;
+TEST_CASE("analyze_valid_code", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument("function main() end");
@@ -17,13 +19,13 @@ void test_analyze_valid_code() {
     
     // For now, just check that analysis doesn't crash
     // The actual validity depends on the parser implementation
-    std::cout << "  Found " << diagnostics.size() << " diagnostic(s)" << std::endl;
+
     
-    std::cout << "✓ Code analysis completes without crashing" << std::endl;
+
 }
 
-void test_analyze_invalid_token() {
-    std::cout << "Testing analysis of invalid token..." << std::endl;
+TEST_CASE("analyze_invalid_token", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument("function main() @ end");
@@ -31,13 +33,13 @@ void test_analyze_invalid_token() {
     auto diagnostics = analyzer.analyze(doc);
     
     // Should detect the invalid @ token
-    assert(!diagnostics.empty());
+    REQUIRE(!diagnostics.empty());
     
-    std::cout << "✓ Invalid token detected" << std::endl;
+
 }
 
-void test_keyword_completions() {
-    std::cout << "Testing keyword completions..." << std::endl;
+TEST_CASE("keyword_completions", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument("func");
@@ -46,7 +48,7 @@ void test_keyword_completions() {
     auto completions = analyzer.getCompletions(doc, pos);
     
     // Should have keyword completions
-    assert(!completions.empty());
+    REQUIRE(!completions.empty());
     
     // Check that "function" is in completions
     bool hasFunction = false;
@@ -56,13 +58,13 @@ void test_keyword_completions() {
             break;
         }
     }
-    assert(hasFunction);
+    REQUIRE(hasFunction);
     
-    std::cout << "✓ Keyword completions work" << std::endl;
+
 }
 
-void test_type_completions() {
-    std::cout << "Testing type completions..." << std::endl;
+TEST_CASE("type_completions", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument("var x: ");
@@ -77,14 +79,14 @@ void test_type_completions() {
         if (item.label == "int") hasInt = true;
         if (item.label == "string") hasString = true;
     }
-    assert(hasInt);
-    assert(hasString);
+    REQUIRE(hasInt);
+    REQUIRE(hasString);
     
-    std::cout << "✓ Type completions work" << std::endl;
+
 }
 
-void test_identifier_completions() {
-    std::cout << "Testing identifier completions..." << std::endl;
+TEST_CASE("identifier_completions", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument("var myVariable\nvar my");
@@ -100,13 +102,13 @@ void test_identifier_completions() {
             break;
         }
     }
-    assert(hasMyVariable);
+    REQUIRE(hasMyVariable);
     
-    std::cout << "✓ Identifier completions work" << std::endl;
+
 }
 
-void test_hover_on_keyword() {
-    std::cout << "Testing hover on keyword..." << std::endl;
+TEST_CASE("hover_on_keyword", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument("function main() end");
@@ -115,14 +117,14 @@ void test_hover_on_keyword() {
     auto hover = analyzer.getHover(doc, pos);
     
     // Should return hover information for keyword
-    assert(hover.has_value());
-    assert(!hover->contents.empty());
+    REQUIRE(hover.has_value());
+    REQUIRE(!hover->contents.empty());
     
-    std::cout << "✓ Hover on keyword works" << std::endl;
+
 }
 
-void test_document_symbols() {
-    std::cout << "Testing document symbols..." << std::endl;
+TEST_CASE("document_symbols", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument("function main()\nvar x\nend");
@@ -130,13 +132,13 @@ void test_document_symbols() {
     auto symbols = analyzer.getSymbols(doc);
     
     // Should find function declaration
-    assert(!symbols.empty());
+    REQUIRE(!symbols.empty());
     
-    std::cout << "✓ Document symbols work" << std::endl;
+
 }
 
-void test_analyze_syntax_error() {
-    std::cout << "Testing analysis of syntax error..." << std::endl;
+TEST_CASE("analyze_syntax_error", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument("function main( end"); // Missing closing paren
@@ -144,13 +146,13 @@ void test_analyze_syntax_error() {
     auto diagnostics = analyzer.analyze(doc);
     
     // Should detect syntax error
-    assert(!diagnostics.empty());
+    REQUIRE(!diagnostics.empty());
     
-    std::cout << "✓ Syntax error detected" << std::endl;
+
 }
 
-void test_empty_document() {
-    std::cout << "Testing empty document..." << std::endl;
+TEST_CASE("empty_document", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument("");
@@ -159,13 +161,13 @@ void test_empty_document() {
     auto completions = analyzer.getCompletions(doc, {0, 0});
     
     // Empty document should still provide completions
-    assert(!completions.empty());
+    REQUIRE(!completions.empty());
     
-    std::cout << "✓ Empty document handled correctly" << std::endl;
+
 }
 
-void test_stdlib_initialization() {
-    std::cout << "Testing stdlib initialization..." << std::endl;
+TEST_CASE("stdlib_initialization", "[analyzer]") {
+
     
     Analyzer analyzer;
     
@@ -182,18 +184,18 @@ void test_stdlib_initialization() {
     for (const auto& item : completions) {
         if (item.label == "format_int_array") {
             hasFormatIntArray = true;
-            assert(item.kind == lsp::CompletionItemKind::Function);
-            assert(!item.detail.empty());
+            REQUIRE(item.kind == lsp::CompletionItemKind::Function);
+            REQUIRE(!item.detail.empty());
             break;
         }
     }
-    assert(hasFormatIntArray);
+    REQUIRE(hasFormatIntArray);
     
-    std::cout << "✓ Stdlib initialization works" << std::endl;
+
 }
 
-void test_stdlib_hover() {
-    std::cout << "Testing stdlib function hover..." << std::endl;
+TEST_CASE("stdlib_hover", "[analyzer]") {
+
     
     Analyzer analyzer;
     analyzer.initializeStdlib("../../../stdlib");
@@ -203,16 +205,16 @@ void test_stdlib_hover() {
     auto hover = analyzer.getHover(doc, pos);
     
     // Should return hover information for stdlib function
-    assert(hover.has_value());
-    assert(!hover->contents.empty());
+    REQUIRE(hover.has_value());
+    REQUIRE(!hover->contents.empty());
     // Check for function name (may use different separator formats)
-    assert(hover->contents.find("format_int_array") != std::string::npos);
+    REQUIRE(hover->contents.find("format_int_array") != std::string::npos);
     
-    std::cout << "✓ Stdlib function hover works" << std::endl;
+
 }
 
-void test_stdlib_completion_details() {
-    std::cout << "Testing stdlib function completion details..." << std::endl;
+TEST_CASE("stdlib_completion_details", "[analyzer]") {
+
     
     Analyzer analyzer;
     analyzer.initializeStdlib("../../../stdlib");
@@ -233,20 +235,20 @@ void test_stdlib_completion_details() {
                 bool hasExpectedInfo = item.detail.find("value int") != std::string::npos &&
                                        item.detail.find("buffer") != std::string::npos;
                 if (hasExpectedInfo) {
-                    std::cout << "✓ Stdlib function completion details correct" << std::endl;
+                
                 } else {
-                    std::cout << "  Note: Detail format may vary" << std::endl;
+                
                 }
             }
             return;
         }
     }
     
-    std::cout << "  Note: format_int_array not found in completions" << std::endl;
+
 }
 
-void test_stdlib_nonexistent_directory() {
-    std::cout << "Testing stdlib with nonexistent directory..." << std::endl;
+TEST_CASE("stdlib_nonexistent_directory", "[analyzer]") {
+
     
     Analyzer analyzer;
     
@@ -257,13 +259,13 @@ void test_stdlib_nonexistent_directory() {
     auto completions = analyzer.getCompletions(doc, {0, 0});
     
     // Should still have basic completions (keywords)
-    assert(!completions.empty());
+    REQUIRE(!completions.empty());
     
-    std::cout << "✓ Handles nonexistent stdlib directory gracefully" << std::endl;
+
 }
 
-void test_qualified_name_stdlib_root() {
-    std::cout << "Testing qualified name completion: stdlib root..." << std::endl;
+TEST_CASE("qualified_name_stdlib_root", "[analyzer]") {
+
     
     Analyzer analyzer;
     analyzer.initializeStdlib("../../../stdlib");
@@ -278,17 +280,17 @@ void test_qualified_name_stdlib_root() {
     for (const auto& item : completions) {
         if (item.label == "stdlib") {
             hasStdlib = true;
-            assert(item.kind == lsp::CompletionItemKind::Module);
+            REQUIRE(item.kind == lsp::CompletionItemKind::Module);
             break;
         }
     }
-    assert(hasStdlib);
+    REQUIRE(hasStdlib);
     
-    std::cout << "✓ Stdlib root completion works" << std::endl;
+
 }
 
-void test_qualified_name_after_stdlib_dot() {
-    std::cout << "Testing qualified name completion: after 'stdlib.'..." << std::endl;
+TEST_CASE("qualified_name_after_stdlib_dot", "[analyzer]") {
+
     
     Analyzer analyzer;
     analyzer.initializeStdlib("../../../stdlib");
@@ -303,18 +305,18 @@ void test_qualified_name_after_stdlib_dot() {
     for (const auto& item : completions) {
         if (item.label == "fmt") {
             hasFmt = true;
-            assert(item.kind == lsp::CompletionItemKind::Module);
-            assert(item.detail.find("stdlib.fmt") != std::string::npos);
+            REQUIRE(item.kind == lsp::CompletionItemKind::Module);
+            REQUIRE(item.detail.find("stdlib.fmt") != std::string::npos);
             break;
         }
     }
-    assert(hasFmt);
+    REQUIRE(hasFmt);
     
-    std::cout << "✓ Completions after 'stdlib.' work" << std::endl;
+
 }
 
-void test_qualified_name_after_stdlib_fmt_dot() {
-    std::cout << "Testing qualified name completion: after 'stdlib.fmt.'..." << std::endl;
+TEST_CASE("qualified_name_after_stdlib_fmt_dot", "[analyzer]") {
+
     
     Analyzer analyzer;
     analyzer.initializeStdlib("../../../stdlib");
@@ -329,18 +331,18 @@ void test_qualified_name_after_stdlib_fmt_dot() {
     for (const auto& item : completions) {
         if (item.label == "integer") {
             hasInteger = true;
-            assert(item.kind == lsp::CompletionItemKind::Module);
-            assert(item.detail.find("stdlib.fmt") != std::string::npos);
+            REQUIRE(item.kind == lsp::CompletionItemKind::Module);
+            REQUIRE(item.detail.find("stdlib.fmt") != std::string::npos);
             break;
         }
     }
-    assert(hasInteger);
+    REQUIRE(hasInteger);
     
-    std::cout << "✓ Completions after 'stdlib.fmt.' work" << std::endl;
+
 }
 
-void test_qualified_name_after_module_dot() {
-    std::cout << "Testing qualified name completion: after 'stdlib.fmt.integer.'..." << std::endl;
+TEST_CASE("qualified_name_after_module_dot", "[analyzer]") {
+
     
     Analyzer analyzer;
     analyzer.initializeStdlib("../../../stdlib");
@@ -355,19 +357,19 @@ void test_qualified_name_after_module_dot() {
     for (const auto& item : completions) {
         if (item.label == "format_int_array") {
             hasFormatIntArray = true;
-            assert(item.kind == lsp::CompletionItemKind::Function);
-            assert(!item.detail.empty());
-            assert(item.detail.find("value int") != std::string::npos);
+            REQUIRE(item.kind == lsp::CompletionItemKind::Function);
+            REQUIRE(!item.detail.empty());
+            REQUIRE(item.detail.find("value int") != std::string::npos);
             break;
         }
     }
-    assert(hasFormatIntArray);
+    REQUIRE(hasFormatIntArray);
     
-    std::cout << "✓ Completions after 'stdlib.fmt.integer.' work" << std::endl;
+
 }
 
-void test_qualified_name_multiline() {
-    std::cout << "Testing qualified name completion: multiline context..." << std::endl;
+TEST_CASE("qualified_name_multiline", "[analyzer]") {
+
     
     Analyzer analyzer;
     analyzer.initializeStdlib("../../../stdlib");
@@ -385,13 +387,13 @@ void test_qualified_name_multiline() {
             break;
         }
     }
-    assert(hasInteger);
+    REQUIRE(hasInteger);
     
-    std::cout << "✓ Qualified name completions work in multiline context" << std::endl;
+
 }
 
-void test_qualified_name_with_whitespace() {
-    std::cout << "Testing qualified name completion: with preceding whitespace..." << std::endl;
+TEST_CASE("qualified_name_with_whitespace", "[analyzer]") {
+
     
     Analyzer analyzer;
     analyzer.initializeStdlib("../../../stdlib");
@@ -409,13 +411,13 @@ void test_qualified_name_with_whitespace() {
             break;
         }
     }
-    assert(hasFmt);
+    REQUIRE(hasFmt);
     
-    std::cout << "✓ Qualified name completions work with whitespace" << std::endl;
+
 }
 
-void test_qualified_name_incomplete_prefix() {
-    std::cout << "Testing qualified name completion: incomplete prefix..." << std::endl;
+TEST_CASE("qualified_name_incomplete_prefix", "[analyzer]") {
+
     
     Analyzer analyzer;
     analyzer.initializeStdlib("../../../stdlib");
@@ -433,13 +435,13 @@ void test_qualified_name_incomplete_prefix() {
             break;
         }
     }
-    assert(hasFmt);
+    REQUIRE(hasFmt);
     
-    std::cout << "✓ Qualified name completions work with incomplete prefix" << std::endl;
+
 }
 
-void test_unused_variable_warning() {
-    std::cout << "Testing unused variable warning..." << std::endl;
+TEST_CASE("unused_variable_warning", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(R"(
@@ -452,7 +454,7 @@ end 'main'
     auto diagnostics = analyzer.analyze(doc);
     
     // Debug: print all diagnostics
-    std::cout << "  Found " << diagnostics.size() << " diagnostic(s):" << std::endl;
+
     for (const auto& diag : diagnostics) {
         std::cout << "    Severity " << diag.severity << ": " << diag.message << std::endl;
     }
@@ -464,17 +466,17 @@ end 'main'
             diag.message.find("'i'") != std::string::npos) {
             hasUnusedWarning = true;
             // Verify it's a warning (severity 2), not an error
-            assert(diag.severity == 2);
+            REQUIRE(diag.severity == 2);
             break;
         }
     }
-    assert(hasUnusedWarning);
+    REQUIRE(hasUnusedWarning);
     
-    std::cout << "✓ Unused variable warning detected" << std::endl;
+
 }
 
-void test_used_variable_no_warning() {
-    std::cout << "Testing used variable has no warning..." << std::endl;
+TEST_CASE("used_variable_no_warning", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(R"(
@@ -491,15 +493,15 @@ end 'main'
     for (const auto& diag : diagnostics) {
         if (diag.message.find("never used") != std::string::npos && 
             diag.message.find("'i'") != std::string::npos) {
-            assert(false && "Should not warn about used variable");
+            REQUIRE((false && "Should not warn about used variable"));
         }
     }
     
-    std::cout << "✓ Used variable has no warning" << std::endl;
+
 }
 
-void test_multiple_unused_variables() {
-    std::cout << "Testing multiple unused variables..." << std::endl;
+TEST_CASE("multiple_unused_variables", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(R"(
@@ -521,19 +523,19 @@ end 'main'
             if (diag.message.find("'unused1'") != std::string::npos ||
                 diag.message.find("'unused2'") != std::string::npos) {
                 unusedWarnings++;
-                assert(diag.severity == 2); // Should be warning
+                REQUIRE(diag.severity == 2); // Should be warning
             }
             // Make sure 'used' is not in the warnings
-            assert(diag.message.find("'used'") == std::string::npos);
+            REQUIRE(diag.message.find("'used'") == std::string::npos);
         }
     }
-    assert(unusedWarnings == 2);
+    REQUIRE(unusedWarnings == 2);
     
-    std::cout << "✓ Multiple unused variables detected" << std::endl;
+
 }
 
-void test_unused_variable_severity() {
-    std::cout << "Testing unused variable has warning severity..." << std::endl;
+TEST_CASE("unused_variable_severity", "[analyzer]") {
+
     
     Analyzer analyzer;
     auto doc = createTestDocument(R"(
@@ -553,7 +555,7 @@ end 'main'
     for (const auto& diag : diagnostics) {
         if (diag.message.find("never used") != std::string::npos &&
             diag.message.find("'unused'") != std::string::npos) {
-            assert(diag.severity == 2); // Warning
+            REQUIRE(diag.severity == 2); // Warning
             hasWarning = true;
         }
         if (diag.message.find("Undefined variable") != std::string::npos &&
@@ -562,14 +564,14 @@ end 'main'
         }
     }
     
-    assert(hasWarning);
-    assert(hasError);
+    REQUIRE(hasWarning);
+    REQUIRE(hasError);
     
-    std::cout << "✓ Unused variable has correct warning severity" << std::endl;
+
 }
 
-void test_stdlib_function_no_error() {
-    std::cout << "Testing stdlib function call has no error..." << std::endl;
+TEST_CASE("stdlib_function_no_error", "[analyzer]") {
+
     
     Analyzer analyzer;
     analyzer.initializeStdlib("../../../stdlib");
@@ -589,22 +591,22 @@ end 'main'
         if (diag.message.find("Undefined function") != std::string::npos &&
             diag.message.find("format_int_array") != std::string::npos) {
             std::cerr << "Unexpected error: " << diag.message << std::endl;
-            assert(false && "Should not error on stdlib function call");
+            REQUIRE((false && "Should not error on stdlib function call"));
         }
     }
     
-    std::cout << "✓ Stdlib function call has no error" << std::endl;
+
 }
 
-void test_stdlib_function_wrong_args() {
-    std::cout << "Testing stdlib function call with wrong argument count..." << std::endl;
+TEST_CASE("stdlib_function_wrong_args", "[analyzer]") {
+
     
     Analyzer analyzer;
     analyzer.initializeStdlib("../../../stdlib");
     
     auto doc = createTestDocument(R"(
 function main() int
-    var buffer [12]char = 0
+    var buffer = [12]char
     var length = format_int_array(42)
     return length
 end 'main'
@@ -613,7 +615,7 @@ end 'main'
     auto diagnostics = analyzer.analyze(doc);
     
     // Debug: print all diagnostics
-    std::cout << "  Found " << diagnostics.size() << " diagnostic(s):" << std::endl;
+
     for (const auto& diag : diagnostics) {
         std::cout << "    Severity " << diag.severity << ": " << diag.message << std::endl;
     }
@@ -625,24 +627,24 @@ end 'main'
              diag.message.find("Expected 2 arguments") != std::string::npos) &&
             diag.message.find("format_int_array") != std::string::npos) {
             hasArgCountError = true;
-            assert(diag.severity == 1); // Error
+            REQUIRE(diag.severity == 1); // Error
             break;
         }
     }
-    assert(hasArgCountError);
+    REQUIRE(hasArgCountError);
     
-    std::cout << "✓ Stdlib function with wrong args detected" << std::endl;
+
 }
 
-void test_stdlib_not_initialized_shows_error() {
-    std::cout << "Testing stdlib function call without initialization..." << std::endl;
+TEST_CASE("stdlib_not_initialized_shows_error", "[analyzer]") {
+
     
     Analyzer analyzer;
     // Don't call initializeStdlib
     
     auto doc = createTestDocument(R"(
 function main() int
-    var buffer [12]char = 0
+    var buffer = [12]char
     var length = format_int_array(42, buffer)
     return length
 end 'main'
@@ -656,54 +658,11 @@ end 'main'
         if (diag.message.find("Undefined function") != std::string::npos &&
             diag.message.find("format_int_array") != std::string::npos) {
             hasUndefinedError = true;
-            assert(diag.severity == 1); // Error
+            REQUIRE(diag.severity == 1); // Error
             break;
         }
     }
-    assert(hasUndefinedError);
+    REQUIRE(hasUndefinedError);
     
-    std::cout << "✓ Stdlib function shows error without initialization" << std::endl;
-}
 
-int main() {
-    std::cout << "Running Analyzer Tests...\n" << std::endl;
-    
-    try {
-        test_analyze_valid_code();
-        test_analyze_invalid_token();
-        test_keyword_completions();
-        test_type_completions();
-        test_identifier_completions();
-        test_hover_on_keyword();
-        test_document_symbols();
-        test_analyze_syntax_error();
-        test_empty_document();
-        
-        // Stdlib tests
-        test_stdlib_initialization();
-        test_stdlib_hover();
-        test_stdlib_completion_details();
-        test_stdlib_nonexistent_directory();
-        
-        // Qualified name completion tests
-        test_qualified_name_stdlib_root();
-        test_qualified_name_after_stdlib_dot();
-        test_qualified_name_after_stdlib_fmt_dot();
-        test_qualified_name_after_module_dot();
-        test_qualified_name_multiline();
-        test_qualified_name_with_whitespace();
-        test_qualified_name_incomplete_prefix();
-        
-        // Unused variable warning tests
-        test_unused_variable_warning();
-        test_used_variable_no_warning();
-        test_multiple_unused_variables();
-        test_unused_variable_severity();
-        
-        std::cout << "\n✓ All Analyzer tests passed!" << std::endl;
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "\n✗ Test failed: " << e.what() << std::endl;
-        return 1;
-    }
 }
