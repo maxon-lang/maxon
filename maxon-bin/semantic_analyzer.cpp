@@ -1057,10 +1057,15 @@ void SemanticAnalyzer::checkUnusedVariables() {
     // Check all variables in current scope
     for (const auto& pair : variables) {
         const VariableInfo& varInfo = pair.second;
-        // Skip parameters - it's okay if they're unused
-        if (!varInfo.isUsed && !varInfo.isParameter) {
-            addWarning("The variable '" + varInfo.name + "' is assigned but its value is never used",
-                      varInfo.line, varInfo.column, "unused-variable");
+        
+        if (!varInfo.isUsed) {
+            if (varInfo.isParameter) {
+                addWarning("The parameter '" + varInfo.name + "' is declared but its value is never used",
+                          varInfo.line, varInfo.column, "unused-parameter");
+            } else {
+                addWarning("The variable '" + varInfo.name + "' is assigned but its value is never used",
+                          varInfo.line, varInfo.column, "unused-variable");
+            }
         }
     }
 }

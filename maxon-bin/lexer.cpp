@@ -466,7 +466,7 @@ std::vector<Token> Lexer::tokenize() {
             
             std::string suggestion;
             if (c == ';') {
-                suggestion = "\n  Note: Maxon doesn't require semicolons at the end of statements";
+                suggestion = "\n  Note: Maxon doesn't use semicolons at the end of statements";
             } else if (c == '[' || c == ']') {
                 suggestion = "\n  Note: Arrays are not yet supported in Maxon";
             } else if (c == '"') {
