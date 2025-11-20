@@ -476,13 +476,8 @@ std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
 std::tuple<Token, std::string, std::unique_ptr<ExprAST>> Parser::parseVariableDeclarationComponents() {
     Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
     
-    // Optional type annotation (only for non-array types)
-    std::string type;
-    
-    if (check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::PTR) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE) || check(TokenType::BOOL)) {
-        type = currentToken().value;
-        advance();
-    }
+    // Type is always inferred from initializer
+    std::string type = "";
     
     expect(TokenType::EQUALS, "Expected '='");
     auto initializer = parseExpression();

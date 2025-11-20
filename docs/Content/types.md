@@ -51,16 +51,14 @@ A boolean value (`true` or `false`).
 var flag = true
 var done = false
 
-// Explicit type annotation
-var enabled bool = true
-let is_valid bool = false
+let is_valid = false
 ```
 
 ### ptr
 A generic pointer type. Used for untyped pointers, primarily for interfacing with external functions or system APIs.
 
 ```maxon
-var p ptr = nullptr
+var p = nullptr
 ```
 
 ## Array Types

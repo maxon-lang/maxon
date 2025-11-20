@@ -36,7 +36,7 @@ ExitCode: 12
 
 ## Types
 
-Variables in Maxon are statically typed. The type must be specified in the declaration.
+Variables in Maxon are statically typed. The type is inferred from the initializer expression.
 
 ### Integer Variables
 
