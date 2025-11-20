@@ -5,8 +5,6 @@ You *Are* Going To Read It
 - remove sin and cos intrinsics
 - simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")
 
-https://benchmarksgame-team.pages.debian.net/benchmarksgame/index.html
-
 add "run" to maxon
 add "build" to maxon
 add "repl" to maxon

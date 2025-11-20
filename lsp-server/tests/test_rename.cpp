@@ -503,3 +503,108 @@ TEST_CASE("linked_editing_ranges_exclude_quotes", "[rename]") {
     
 
 }
+
+TEST_CASE("linked_editing_function_name_no_quotes", "[rename]") {
+
+    
+    Analyzer analyzer;
+    auto doc = createTestDocument(
+        "function myFunction() int\n"
+        "    return 42\n"
+        "end 'myFunction'"
+    );
+    
+    // Position on the function name at declaration (line 0, col 9)
+    lsp::Position pos{0, 9};
+    
+    auto ranges = analyzer.getLinkedEditingRanges(doc, pos);
+    
+    REQUIRE(ranges.has_value());
+    auto& rangeList = ranges.value();
+    
+    std::cout << "  Number of ranges: " << rangeList.size() << std::endl;
+    for (size_t i = 0; i < rangeList.size(); i++) {
+        std::cout << "  Range " << i << ": line " << rangeList[i].start.line 
+                  << ", col " << rangeList[i].start.character 
+                  << " to " << rangeList[i].end.character << std::endl;
+    }
+    
+    // Should include:
+    // 1. function myFunction (line 0, cols 9-19)
+    // 2. end 'myFunction' (line 2, cols 5-15, inside quotes)
+    REQUIRE(rangeList.size() == 2);
+    
+    // Verify function name range
+    bool hasFuncName = false;
+    bool hasBlockId = false;
+    
+    for (const auto& range : rangeList) {
+        if (range.start.line == 0 && range.start.character == 9 && range.end.character == 19) {
+            hasFuncName = true;
+        }
+        if (range.start.line == 2 && range.start.character == 5 && range.end.character == 15) {
+            hasBlockId = true;
+        }
+    }
+    
+    REQUIRE(hasFuncName);
+    REQUIRE(hasBlockId);
+
+    
+
+}
+
+TEST_CASE("linked_editing_while_loop_with_quotes", "[rename]") {
+
+    
+    Analyzer analyzer;
+    auto doc = createTestDocument(
+        "function test() int\n"
+        "    var i = 0\n"
+        "    while i < 10 'loop'\n"
+        "        i = i + 1\n"
+        "    end 'loop'\n"
+        "    return i\n"
+        "end 'test'"
+    );
+    
+    // Position on the while block identifier (line 2, col 18 - inside 'loop')
+    lsp::Position pos{2, 18};
+    
+    auto ranges = analyzer.getLinkedEditingRanges(doc, pos);
+    
+    REQUIRE(ranges.has_value());
+    auto& rangeList = ranges.value();
+    
+    std::cout << "  Number of ranges: " << rangeList.size() << std::endl;
+    for (size_t i = 0; i < rangeList.size(); i++) {
+        std::cout << "  Range " << i << ": line " << rangeList[i].start.line 
+                  << ", col " << rangeList[i].start.character 
+                  << " to " << rangeList[i].end.character << std::endl;
+    }
+    
+    // Should include:
+    // 1. while i < 10 'loop' (line 2, cols 18-22, inside quotes)
+    // 2. end 'loop' (line 4, cols 9-13, inside quotes)
+    REQUIRE(rangeList.size() == 2);
+    
+    // Verify both ranges are for "loop" inside quotes
+    bool hasWhileBlockId = false;
+    bool hasEndBlockId = false;
+    
+    for (const auto& range : rangeList) {
+        if (range.start.line == 2 && range.start.character == 18 && range.end.character == 22) {
+            hasWhileBlockId = true;
+        }
+        if (range.start.line == 4 && range.start.character == 9 && range.end.character == 13) {
+            hasEndBlockId = true;
+        }
+    }
+    
+    REQUIRE(hasWhileBlockId);
+    REQUIRE(hasEndBlockId);
+
+    
+
+}
+

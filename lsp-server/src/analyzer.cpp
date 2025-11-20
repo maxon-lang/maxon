@@ -879,12 +879,27 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
             auto& token = tokens[i];
             int tokenLine = token.line - 1;
             int tokenCol = token.column - 1;
-            int tokenEndCol = tokenCol + token.value.length();
             
-            if (pos.line == tokenLine && pos.character >= tokenCol && pos.character < tokenEndCol) {
-                targetToken = &token;
-                targetIndex = i;
-                break;
+            // For BLOCK_ID tokens, the column points to the quote, but we want to match inside the quotes
+            if (token.type == TokenType::BLOCK_ID) {
+                // The range we want to match is inside the quotes: column+1 to column+1+length
+                int tokenStartCol = tokenCol + 1; // Skip opening quote
+                int tokenEndCol = tokenStartCol + token.value.length();
+                
+                if (pos.line == tokenLine && pos.character >= tokenStartCol && pos.character < tokenEndCol) {
+                    targetToken = &token;
+                    targetIndex = i;
+                    break;
+                }
+            } else {
+                // Regular tokens
+                int tokenEndCol = tokenCol + token.value.length();
+                
+                if (pos.line == tokenLine && pos.character >= tokenCol && pos.character < tokenEndCol) {
+                    targetToken = &token;
+                    targetIndex = i;
+                    break;
+                }
             }
         }
         
@@ -903,16 +918,49 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
                 if (token.type == TokenType::BLOCK_ID && token.value == oldName) {
                     lsp::Range range;
                     range.start.line = token.line - 1;
-                    range.start.character = token.column - 1;
+                    // token.column is 1-based and points to the opening quote
+                    // We want the range to be inside the quotes: skip the opening quote
+                    range.start.character = token.column; // token.column (1-based) - 1 (to 0-based) + 1 (skip quote) = token.column
                     range.end.line = token.line - 1;
-                    range.end.character = token.column - 1 + token.value.length();
+                    range.end.character = token.column + token.value.length(); // ends before closing quote
                     ranges.push_back(range);
                 }
             }
         }
-        // Handle struct name identifiers
+        // Handle function name identifiers
         else if (targetToken->type == TokenType::IDENTIFIER && targetIndex > 0) {
-            if (tokens[targetIndex - 1].type == TokenType::STRUCT) {
+            TokenType prevType = tokens[targetIndex - 1].type;
+            
+            if (prevType == TokenType::FUNCTION) {
+                std::string functionName = targetToken->value;
+                
+                // Find the function name declaration and its matching block identifier
+                for (size_t i = 0; i < tokens.size(); i++) {
+                    const auto& token = tokens[i];
+                    
+                    // Function name at declaration
+                    if (token.type == TokenType::IDENTIFIER && token.value == functionName && 
+                        i > 0 && tokens[i - 1].type == TokenType::FUNCTION) {
+                        lsp::Range range;
+                        range.start.line = token.line - 1;
+                        range.start.character = token.column - 1;
+                        range.end.line = token.line - 1;
+                        range.end.character = token.column - 1 + token.value.length();
+                        ranges.push_back(range);
+                    }
+                    // Block identifier matching the function name (in quotes at 'end')
+                    else if (token.type == TokenType::BLOCK_ID && token.value == functionName) {
+                        lsp::Range range;
+                        range.start.line = token.line - 1;
+                        range.start.character = token.column; // Skip opening quote
+                        range.end.line = token.line - 1;
+                        range.end.character = token.column + token.value.length(); // Before closing quote
+                        ranges.push_back(range);
+                    }
+                }
+            }
+            // Handle struct name identifiers
+            else if (prevType == TokenType::STRUCT) {
                 std::string oldName = targetToken->value;
                 
                 // Find all usages of this struct name
@@ -923,15 +971,15 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
                         bool isTypeUsage = false;
                         
                         if (i > 0) {
-                            TokenType prevType = tokens[i - 1].type;
-                            if (prevType == TokenType::STRUCT) {
+                            TokenType prevTokenType = tokens[i - 1].type;
+                            if (prevTokenType == TokenType::STRUCT) {
                                 isTypeUsage = true;
                             }
-                            else if (prevType == TokenType::RPAREN) {
+                            else if (prevTokenType == TokenType::RPAREN) {
                                 // Return type after function signature
                                 isTypeUsage = true;
                             }
-                            else if (prevType == TokenType::IDENTIFIER) {
+                            else if (prevTokenType == TokenType::IDENTIFIER) {
                                 if (i > 1) {
                                     TokenType prevPrevType = tokens[i - 2].type;
                                     if (prevPrevType == TokenType::VAR || 
@@ -942,7 +990,7 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
                                     }
                                 }
                             }
-                            else if (prevType == TokenType::RBRACKET) {
+                            else if (prevTokenType == TokenType::RBRACKET) {
                                 isTypeUsage = true;
                             }
                         }
@@ -967,9 +1015,9 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
                     else if (token.type == TokenType::BLOCK_ID && token.value == oldName) {
                         lsp::Range range;
                         range.start.line = token.line - 1;
-                        range.start.character = token.column; // token.column points to quote, +1 to skip it (but token.column is 1-based, -1 converts to 0-based, net = token.column)
+                        range.start.character = token.column; // Skip opening quote
                         range.end.line = token.line - 1;
-                        range.end.character = token.column + token.value.length(); // ends before closing quote
+                        range.end.character = token.column + token.value.length(); // Before closing quote
                         ranges.push_back(range);
                     }
                 }
