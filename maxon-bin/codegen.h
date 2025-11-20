@@ -68,8 +68,6 @@ private:
     
     // Runtime library helpers
     llvm::Function* getOrDeclareMemset();
-    llvm::Function* getOrDeclareSin();
-    llvm::Function* getOrDeclareCos();
     
     // Profiling support
     llvm::GlobalVariable* bbCountGlobal = nullptr;

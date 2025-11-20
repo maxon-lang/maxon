@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "lexer.h"
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/Transforms/InstCombine/InstCombine.h>
@@ -282,32 +283,6 @@ llvm::Function* CodeGenerator::getOrDeclareMemset() {
         memsetFunc = llvm::Function::Create(memsetType, llvm::Function::ExternalLinkage, "memset", module.get());
     }
     return memsetFunc;
-}
-
-llvm::Function* CodeGenerator::getOrDeclareSin() {
-    llvm::Function* sinFunc = module->getFunction("sin");
-    if (!sinFunc) {
-        llvm::FunctionType* sinType = llvm::FunctionType::get(
-            llvm::Type::getDoubleTy(context),
-            {llvm::Type::getDoubleTy(context)},
-            false
-        );
-        sinFunc = llvm::Function::Create(sinType, llvm::Function::ExternalLinkage, "sin", module.get());
-    }
-    return sinFunc;
-}
-
-llvm::Function* CodeGenerator::getOrDeclareCos() {
-    llvm::Function* cosFunc = module->getFunction("cos");
-    if (!cosFunc) {
-        llvm::FunctionType* cosType = llvm::FunctionType::get(
-            llvm::Type::getDoubleTy(context),
-            {llvm::Type::getDoubleTy(context)},
-            false
-        );
-        cosFunc = llvm::Function::Create(cosType, llvm::Function::ExternalLinkage, "cos", module.get());
-    }
-    return cosFunc;
 }
 
 void CodeGenerator::initHeapManagement() {
@@ -1073,6 +1048,15 @@ void CodeGenerator::generateScopeCleanup(llvm::Function* function) {
 }
 
 llvm::Value* CodeGenerator::generateMathIntrinsic(CallExprAST* callExpr) {
+    // NOTE: Math intrinsic metadata is defined in lexer.cpp's keywords map.
+    // This function uses that metadata to generate the appropriate LLVM IR.
+    
+    // Get math intrinsic info from keywords map
+    const MathIntrinsicInfo* info = Lexer::getMathIntrinsicInfo(callExpr->callee);
+    if (!info) {
+        throw std::runtime_error("Internal error: " + callExpr->callee + " is not a recognized math intrinsic");
+    }
+    
     // Generate the argument(s)
     std::vector<llvm::Value*> args;
     for (auto& arg : callExpr->args) {
@@ -1089,54 +1073,53 @@ llvm::Value* CodeGenerator::generateMathIntrinsic(CallExprAST* callExpr) {
         args.push_back(argVal);
     }
     
-    // Map function name to LLVM intrinsic
-    llvm::Intrinsic::ID intrinsicID = llvm::Intrinsic::not_intrinsic;
-    bool returnsInt = false;  // For floor, ceil, round, trunc
+    llvm::Value* result = nullptr;
     
-    if (callExpr->callee == "sqrt") {
-        intrinsicID = llvm::Intrinsic::sqrt;
-    } else if (callExpr->callee == "abs") {
-        intrinsicID = llvm::Intrinsic::fabs;
-    } else if (callExpr->callee == "floor") {
-        intrinsicID = llvm::Intrinsic::floor;
-        returnsInt = true;
-    } else if (callExpr->callee == "ceil") {
-        intrinsicID = llvm::Intrinsic::ceil;
-        returnsInt = true;
-    } else if (callExpr->callee == "sin" || callExpr->callee == "cos") {
-        // sin and cos are implemented in the runtime library (not LLVM intrinsics)
-        llvm::Function* runtimeFn = (callExpr->callee == "sin") ? getOrDeclareSin() : getOrDeclareCos();
-        if (args.size() != 1) {
-            throw std::runtime_error(callExpr->callee + " expects exactly 1 argument");
+    // Generate code based on intrinsic kind
+    switch (info->kind) {
+        case MathIntrinsicKind::LLVMIntrinsic: {
+            // Use the intrinsic ID directly from metadata
+            llvm::Function* intrinsicFn = llvm::Intrinsic::getOrInsertDeclaration(
+                module.get(),
+                info->intrinsicID,
+                {llvm::Type::getDoubleTy(context)}
+            );
+            
+            if (!intrinsicFn) {
+                throw std::runtime_error("Failed to get intrinsic declaration for " + callExpr->callee);
+            }
+            
+            // Call the intrinsic
+            result = builder.CreateCall(intrinsicFn, args, callExpr->callee + ".result");
+            break;
         }
-        return builder.CreateCall(runtimeFn, args, callExpr->callee + "_result");
-    } else if (callExpr->callee == "round") {
-        intrinsicID = llvm::Intrinsic::round;
-        returnsInt = true;
-    } else if (callExpr->callee == "trunc") {
-        // trunc is special - just convert float to int
-        if (args.size() != 1) {
-            throw std::runtime_error("trunc expects exactly 1 argument");
+        
+        case MathIntrinsicKind::RuntimeFunction: {
+            // Call runtime library function using the function pointer from metadata
+            if (!info->getRuntimeFn) {
+                throw std::runtime_error("No runtime function provided for " + callExpr->callee);
+            }
+            
+            llvm::Function* runtimeFn = info->getRuntimeFn(module.get(), context);
+            if (args.size() != 1) {
+                throw std::runtime_error(callExpr->callee + " expects exactly 1 argument");
+            }
+            result = builder.CreateCall(runtimeFn, args, callExpr->callee + "_result");
+            break;
         }
-        return builder.CreateFPToSI(args[0], llvm::Type::getInt32Ty(context), "trunc");
+        
+        case MathIntrinsicKind::DirectCast: {
+            // Direct IR operation (e.g., trunc: float to int)
+            if (args.size() != 1) {
+                throw std::runtime_error(callExpr->callee + " expects exactly 1 argument");
+            }
+            result = builder.CreateFPToSI(args[0], llvm::Type::getInt32Ty(context), "trunc");
+            break;
+        }
     }
     
-    // Get the intrinsic declaration
-    llvm::Function* intrinsicFn = llvm::Intrinsic::getOrInsertDeclaration(
-        module.get(),
-        intrinsicID,
-        {llvm::Type::getDoubleTy(context)}
-    );
-    
-    if (!intrinsicFn) {
-        throw std::runtime_error("Failed to get intrinsic declaration for " + callExpr->callee);
-    }
-    
-    // Call the intrinsic
-    llvm::Value* result = builder.CreateCall(intrinsicFn, args, callExpr->callee + ".result");
-    
-    // Convert to int if needed
-    if (returnsInt) {
+    // Convert to int if return type is int
+    if (info->returnType == "int" && result->getType()->isDoubleTy()) {
         result = builder.CreateFPToSI(result, llvm::Type::getInt32Ty(context), "toint");
     }
     
@@ -1550,10 +1533,7 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
     
     if (auto* callExpr = dynamic_cast<CallExprAST*>(expr)) {
         // Handle math intrinsic functions (built into LLVM)
-        if (callExpr->callee == "sqrt" || callExpr->callee == "abs" || 
-            callExpr->callee == "floor" || callExpr->callee == "ceil" ||
-            callExpr->callee == "sin" || callExpr->callee == "cos" ||
-            callExpr->callee == "round" || callExpr->callee == "trunc") {
+        if (Lexer::isMathIntrinsic(callExpr->callee)) {
             return generateMathIntrinsic(callExpr);
         }
         

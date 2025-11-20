@@ -1,4 +1,5 @@
 #include "semantic_analyzer.h"
+#include "lexer.h"
 #include <algorithm>
 
 // Forward declaration of helper function
@@ -624,11 +625,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         
     } else if (auto callExpr = dynamic_cast<CallExprAST*>(expr)) {
         // Check if this is a built-in math function (intrinsics only)
-        static const std::set<std::string> mathIntrinsics = {
-            "sqrt", "abs", "sin", "cos", "floor", "ceil", "round", "trunc"
-        };
-        
-        if (mathIntrinsics.find(callExpr->callee) != mathIntrinsics.end()) {
+        // NOTE: The list of math intrinsics is defined in lexer.cpp's keywords map
+        if (Lexer::isMathIntrinsic(callExpr->callee)) {
             // Validate argument count (all intrinsics take 1 argument)
             if (callExpr->args.size() != 1) {
                 addError("Function '" + callExpr->callee + "' expects exactly 1 argument", 
@@ -646,13 +644,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
                 }
             }
             
-            // Return type: floor, ceil, round, trunc return int, others return float
-            if (callExpr->callee == "floor" || callExpr->callee == "ceil" || 
-                callExpr->callee == "round" || callExpr->callee == "trunc") {
-                return "int";
-            } else {
-                return "float";
-            }
+            // Return type from metadata
+            const MathIntrinsicInfo* info = Lexer::getMathIntrinsicInfo(callExpr->callee);
+            return info ? info->returnType : "float";
         }
         
         // Try to find the function - first exact match, then unqualified lookup

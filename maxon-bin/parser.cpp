@@ -184,10 +184,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
     }
     
     // Math intrinsic function keywords (built-in functions)
-    // Single-argument functions: sqrt, abs, sin, cos, floor, ceil, round, trunc
-    if (check(TokenType::SQRT) || check(TokenType::ABS) || check(TokenType::SIN) || 
-        check(TokenType::COS) || check(TokenType::FLOOR) || check(TokenType::CEIL) ||
-        check(TokenType::ROUND) || check(TokenType::TRUNC)) {
+    if (currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::MathIntrinsic) {
         std::string funcName = currentToken().value;
         int line = currentToken().line;
         int column = currentToken().column;

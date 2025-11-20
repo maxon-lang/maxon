@@ -4,6 +4,17 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <functional>
+
+// Forward declarations for LLVM types
+namespace llvm {
+    class Function;
+    class Module;
+    class LLVMContext;
+    namespace Intrinsic {
+        typedef unsigned ID;
+    }
+}
 
 enum class TokenType {
     // Keywords
@@ -88,10 +99,26 @@ enum class KeywordCategory {
     Operator        // as
 };
 
+// How a math intrinsic is implemented
+enum class MathIntrinsicKind {
+    LLVMIntrinsic,   // Use LLVM intrinsic (sqrt, abs, floor, ceil, round)
+    RuntimeFunction, // Call runtime library function (sin, cos)
+    DirectCast       // Direct IR operation (trunc)
+};
+
+// Math intrinsic metadata for code generation
+struct MathIntrinsicInfo {
+    MathIntrinsicKind kind;
+    llvm::Intrinsic::ID intrinsicID;     // For LLVMIntrinsic kind
+    std::function<llvm::Function*(llvm::Module*, llvm::LLVMContext&)> getRuntimeFn;  // For RuntimeFunction kind
+    std::string returnType;              // "int" or "float"
+};
+
 struct KeywordData {
     TokenType type;
     KeywordCategory category;
     std::string description;
+    std::optional<MathIntrinsicInfo> mathInfo;  // Only set for MathIntrinsic category
 };
 
 struct Token {
@@ -140,6 +167,12 @@ public:
     
     // Get keywords by category
     static std::vector<std::string> getKeywordsByCategory(KeywordCategory category);
+    
+    // Check if a name is a math intrinsic
+    static bool isMathIntrinsic(const std::string& name);
+    
+    // Get math intrinsic info for code generation (returns nullptr if not a math intrinsic)
+    static const MathIntrinsicInfo* getMathIntrinsicInfo(const std::string& name);
 };
 
 #endif // LEXER_H
