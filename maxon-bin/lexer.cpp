@@ -16,47 +16,46 @@ namespace {
 // Unified keyword information
 static const std::unordered_map<std::string, KeywordData> keywords = {
     // Types
-    {"int",       {TokenType::INT,        KeywordCategory::Type,          "Integer type"}},
-    {"float",     {TokenType::FLOAT,      KeywordCategory::Type,          "Floating-point type"}},
-    {"ptr",       {TokenType::PTR,        KeywordCategory::Type,          "Pointer type"}},
-    {"char",      {TokenType::CHAR,       KeywordCategory::Type,          "Character type"}},
-    {"string",    {TokenType::STRING_TYPE,KeywordCategory::Type,          "String type"}},
-    {"bool",      {TokenType::BOOL,       KeywordCategory::Type,          "Boolean type"}},
+    {"int",       {KeywordCategory::Type,          "Integer type",        std::nullopt, [](llvm::LLVMContext& ctx) { return llvm::Type::getInt32Ty(ctx); }}},
+    {"float",     {KeywordCategory::Type,          "Floating-point type", std::nullopt, [](llvm::LLVMContext& ctx) { return llvm::Type::getDoubleTy(ctx); }}},
+    {"ptr",       {KeywordCategory::Type,          "Pointer type",        std::nullopt, [](llvm::LLVMContext& ctx) { return llvm::PointerType::get(ctx, 0); }}},
+    {"char",      {KeywordCategory::Type,          "Character type",      std::nullopt, [](llvm::LLVMContext& ctx) { return llvm::Type::getInt8Ty(ctx); }}},
+    {"string",    {KeywordCategory::Type,          "String type",         std::nullopt, [](llvm::LLVMContext& ctx) { return llvm::PointerType::get(ctx, 0); }}},
+    {"bool",      {KeywordCategory::Type,          "Boolean type",        std::nullopt, [](llvm::LLVMContext& ctx) { return llvm::Type::getInt1Ty(ctx); }}},
     
     // Control flow
-    {"if",        {TokenType::IF,         KeywordCategory::ControlFlow,   "Conditional statement"}},
-    {"else",      {TokenType::ELSE,       KeywordCategory::ControlFlow,   "Alternative branch"}},
-    {"while",     {TokenType::WHILE,      KeywordCategory::ControlFlow,   "Loop statement"}},
-    {"end",       {TokenType::END,        KeywordCategory::ControlFlow,   "Block terminator"}},
-    {"return",    {TokenType::RETURN,     KeywordCategory::ControlFlow,   "Return from function"}},
-    {"break",     {TokenType::BREAK,      KeywordCategory::ControlFlow,   "Exit loop"}},
-    {"continue",  {TokenType::CONTINUE,   KeywordCategory::ControlFlow,   "Skip to next iteration"}},
+    {"if",        {KeywordCategory::ControlFlow,   "Conditional statement"}},
+    {"else",      {KeywordCategory::ControlFlow,   "Alternative branch"}},
+    {"while",     {KeywordCategory::ControlFlow,   "Loop statement"}},
+    {"end",       {KeywordCategory::ControlFlow,   "Block terminator"}},
+    {"return",    {KeywordCategory::ControlFlow,   "Return from function"}},
+    {"break",     {KeywordCategory::ControlFlow,   "Exit loop"}},
+    {"continue",  {KeywordCategory::ControlFlow,   "Skip to next iteration"}},
     
     // Declarations
-    {"function",  {TokenType::FUNCTION,   KeywordCategory::Declaration,   "Function declaration"}},
-    {"var",       {TokenType::VAR,        KeywordCategory::Declaration,   "Mutable variable"}},
-    {"let",       {TokenType::LET,        KeywordCategory::Declaration,   "Immutable variable"}},
-    {"struct",    {TokenType::STRUCT,     KeywordCategory::Declaration,   "Structure type"}},
-    {"namespace", {TokenType::NAMESPACE,  KeywordCategory::Declaration,   "Namespace declaration"}},
-    {"extern",    {TokenType::EXTERN,     KeywordCategory::Declaration,   "External declaration"}},
+    {"function",  {KeywordCategory::Declaration,   "Function declaration"}},
+    {"var",       {KeywordCategory::Declaration,   "Mutable variable"}},
+    {"let",       {KeywordCategory::Declaration,   "Immutable variable"}},
+    {"struct",    {KeywordCategory::Declaration,   "Structure type"}},
+    {"namespace", {KeywordCategory::Declaration,   "Namespace declaration"}},
+    {"extern",    {KeywordCategory::Declaration,   "External declaration"}},
     
     // Math intrinsics (built into codegen)
-    // NOTE: This is the single source of truth for math intrinsics
-    {"sqrt",      {TokenType::SQRT,       KeywordCategory::MathIntrinsic, "Square root",         {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::sqrt,  nullptr, "float"}}}},
-    {"abs",       {TokenType::ABS,        KeywordCategory::MathIntrinsic, "Absolute value",      {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::fabs,  nullptr, "float"}}}},
-    {"floor",     {TokenType::FLOOR,      KeywordCategory::MathIntrinsic, "Floor function",      {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::floor, nullptr, "int"}}}},
-    {"ceil",      {TokenType::CEIL,       KeywordCategory::MathIntrinsic, "Ceiling function",    {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::ceil,  nullptr, "int"}}}},
-    {"round",     {TokenType::ROUND,      KeywordCategory::MathIntrinsic, "Round to nearest",    {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::round, nullptr, "int"}}}},
-    {"trunc",     {TokenType::TRUNC,      KeywordCategory::MathIntrinsic, "Truncate to integer", {{MathIntrinsicKind::DirectCast,      0,                      nullptr, "int"}}}},
-    {"sin",       {TokenType::SIN,        KeywordCategory::MathIntrinsic, "Sine function",       {{MathIntrinsicKind::RuntimeFunction, 0,                      getOrDeclareSin, "float"}}}},
-    {"cos",       {TokenType::COS,        KeywordCategory::MathIntrinsic, "Cosine function",     {{MathIntrinsicKind::RuntimeFunction, 0,                      getOrDeclareCos, "float"}}}},
+    {"sqrt",      {KeywordCategory::MathIntrinsic, "Square root",         {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::sqrt,  nullptr, "float"}}}},
+    {"abs",       {KeywordCategory::MathIntrinsic, "Absolute value",      {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::fabs,  nullptr, "float"}}}},
+    {"floor",     {KeywordCategory::MathIntrinsic, "Floor function",      {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::floor, nullptr, "int"}}}},
+    {"ceil",      {KeywordCategory::MathIntrinsic, "Ceiling function",    {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::ceil,  nullptr, "int"}}}},
+    {"round",     {KeywordCategory::MathIntrinsic, "Round to nearest",    {{MathIntrinsicKind::LLVMIntrinsic,   llvm::Intrinsic::round, nullptr, "int"}}}},
+    {"trunc",     {KeywordCategory::MathIntrinsic, "Truncate to integer", {{MathIntrinsicKind::DirectCast,      0,                      nullptr, "int"}}}},
+    {"sin",       {KeywordCategory::MathIntrinsic, "Sine function",       {{MathIntrinsicKind::RuntimeFunction, 0,                      getOrDeclareSin, "float"}}}},
+    {"cos",       {KeywordCategory::MathIntrinsic, "Cosine function",     {{MathIntrinsicKind::RuntimeFunction, 0,                      getOrDeclareCos, "float"}}}},
     
     // Literals
-    {"true",      {TokenType::TRUE,       KeywordCategory::Literal,       "Boolean true"}},
-    {"false",     {TokenType::FALSE,      KeywordCategory::Literal,       "Boolean false"}},
+    {"true",      {KeywordCategory::Literal,       "Boolean true"}},
+    {"false",     {KeywordCategory::Literal,       "Boolean false"}},
     
     // Operators
-    {"as",        {TokenType::AS,         KeywordCategory::Operator,      "Type cast operator"}}
+    {"as",        {KeywordCategory::Operator,      "Type cast operator"}}
 };
 
 Lexer::Lexer(const std::string& src)
@@ -107,6 +106,44 @@ const MathIntrinsicInfo* Lexer::getMathIntrinsicInfo(const std::string& name) {
         return it->second.mathInfo.has_value() ? &it->second.mathInfo.value() : nullptr;
     }
     return nullptr;
+}
+
+bool Lexer::isTypeString(const std::string& name) {
+    auto it = keywords.find(name);
+    return it != keywords.end() && it->second.category == KeywordCategory::Type;
+}
+
+llvm::Type* Lexer::getLLVMTypeForKeyword(const std::string& name, llvm::LLVMContext& context) {
+    auto it = keywords.find(name);
+    if (it != keywords.end() && it->second.llvmTypeFactory.has_value()) {
+        return it->second.llvmTypeFactory.value()(context);
+    }
+    return nullptr;
+}
+
+bool Lexer::isControlFlowToken(const Token& token) {
+    return token.type == TokenType::KEYWORD && token.keywordData.has_value() && 
+           token.keywordData.value().category == KeywordCategory::ControlFlow;
+}
+
+bool Lexer::isDeclarationToken(const Token& token) {
+    return token.type == TokenType::KEYWORD && token.keywordData.has_value() && 
+           token.keywordData.value().category == KeywordCategory::Declaration;
+}
+
+bool Lexer::isTypeToken(const Token& token) {
+    return token.type == TokenType::KEYWORD && token.keywordData.has_value() && 
+           token.keywordData.value().category == KeywordCategory::Type;
+}
+
+bool Lexer::isLiteralToken(const Token& token) {
+    return token.type == TokenType::KEYWORD && token.keywordData.has_value() && 
+           token.keywordData.value().category == KeywordCategory::Literal;
+}
+
+bool Lexer::isMathIntrinsicToken(const Token& token) {
+    return token.type == TokenType::KEYWORD && token.keywordData.has_value() && 
+           token.keywordData.value().category == KeywordCategory::MathIntrinsic;
 }
 
 char Lexer::currentChar() {
@@ -239,7 +276,7 @@ Token Lexer::readIdentifier() {
     // Check if it's a keyword
     auto it = keywords.find(id);
     if (it != keywords.end()) {
-        Token token(it->second.type, id, startLine, startColumn);
+        Token token(TokenType::KEYWORD, id, startLine, startColumn);
         token.keywordData = it->second;
         return token;
     }

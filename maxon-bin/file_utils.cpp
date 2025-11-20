@@ -114,7 +114,7 @@ std::vector<std::string> extractFunctionNames(const std::string& filePath) {
         std::vector<Token> tokens = lexer.tokenize();
 
         for (size_t i = 0; i < tokens.size(); ++i) {
-            if (tokens[i].type == TokenType::FUNCTION && i + 1 < tokens.size()) {
+            if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "function" && i + 1 < tokens.size()) {
                 if (tokens[i + 1].type == TokenType::IDENTIFIER) {
                     functionNames.push_back(tokens[i + 1].value);
                 }

@@ -323,7 +323,7 @@ std::optional<lsp::Location> Analyzer::getDefinition(std::shared_ptr<Document> d
         
         // Look for "var <word>" or "function <word>"
         for (size_t i = 0; i < tokens.size() - 1; i++) {
-            if ((tokens[i].type == TokenType::VAR || tokens[i].type == TokenType::FUNCTION) &&
+            if ((tokens[i].value == "var" || tokens[i].value == "function") &&
                 tokens[i + 1].type == TokenType::IDENTIFIER &&
                 tokens[i + 1].value == word) {
                 
@@ -350,7 +350,7 @@ std::vector<lsp::SymbolInformation> Analyzer::getSymbols(std::shared_ptr<Documen
         
         // Find function declarations
         for (size_t i = 0; i < tokens.size() - 1; i++) {
-            if (tokens[i].type == TokenType::FUNCTION &&
+            if (tokens[i].value == "function" &&
                 tokens[i + 1].type == TokenType::IDENTIFIER) {
                 
                 lsp::SymbolInformation sym;
@@ -360,8 +360,8 @@ std::vector<lsp::SymbolInformation> Analyzer::getSymbols(std::shared_ptr<Documen
                 sym.location.range = tokenToRange(tokens[i + 1]);
                 symbols.push_back(sym);
             }
-            else if (tokens[i].type == TokenType::VAR &&
-                     tokens[i + 1].type == TokenType::IDENTIFIER) {
+            else if (tokens[i].value == "var" &&
+                      tokens[i + 1].type == TokenType::IDENTIFIER) {
                 
                 lsp::SymbolInformation sym;
                 sym.name = tokens[i + 1].value;
@@ -763,7 +763,7 @@ std::optional<lsp::WorkspaceEdit> Analyzer::getRename(std::shared_ptr<Document> 
         // Handle struct name identifiers
         else if (targetToken->type == TokenType::IDENTIFIER && targetIndex > 0) {
             // Check if this is a struct name (preceded by 'struct' keyword)
-            if (tokens[targetIndex - 1].type == TokenType::STRUCT) {
+            if (tokens[targetIndex - 1].value == "struct") {
                 std::string oldName = targetToken->value;
                 
                 // Find all usages of this struct name:
@@ -783,7 +783,7 @@ std::optional<lsp::WorkspaceEdit> Analyzer::getRename(std::shared_ptr<Document> 
                         if (i > 0) {
                             TokenType prevType = tokens[i - 1].type;
                             // After struct keyword
-                            if (prevType == TokenType::STRUCT) {
+                            if (tokens[i - 1].value == "struct") {
                                 isTypeUsage = true;
                             }
                             // After function signature closing paren (return type)
@@ -795,8 +795,8 @@ std::optional<lsp::WorkspaceEdit> Analyzer::getRename(std::shared_ptr<Document> 
                                 // Check if the previous identifier is itself after var/let/a comma/lparen
                                 if (i > 1) {
                                     TokenType prevPrevType = tokens[i - 2].type;
-                                    if (prevPrevType == TokenType::VAR || 
-                                        prevPrevType == TokenType::LET ||
+                                    if (tokens[i - 2].value == "var" || 
+                                        tokens[i - 2].value == "let" ||
                                         prevPrevType == TokenType::COMMA ||
                                         prevPrevType == TokenType::LPAREN) {
                                         isTypeUsage = true;
@@ -931,7 +931,7 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
         else if (targetToken->type == TokenType::IDENTIFIER && targetIndex > 0) {
             TokenType prevType = tokens[targetIndex - 1].type;
             
-            if (prevType == TokenType::FUNCTION) {
+            if (tokens[targetIndex - 1].value == "function") {
                 std::string functionName = targetToken->value;
                 
                 // Find the function name declaration and its matching block identifier
@@ -940,7 +940,7 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
                     
                     // Function name at declaration
                     if (token.type == TokenType::IDENTIFIER && token.value == functionName && 
-                        i > 0 && tokens[i - 1].type == TokenType::FUNCTION) {
+                        i > 0 && tokens[i - 1].value == "function") {
                         lsp::Range range;
                         range.start.line = token.line - 1;
                         range.start.character = token.column - 1;
@@ -960,7 +960,7 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
                 }
             }
             // Handle struct name identifiers
-            else if (prevType == TokenType::STRUCT) {
+            else if (tokens[targetIndex - 1].value == "struct") {
                 std::string oldName = targetToken->value;
                 
                 // Find all usages of this struct name
@@ -972,7 +972,7 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
                         
                         if (i > 0) {
                             TokenType prevTokenType = tokens[i - 1].type;
-                            if (prevTokenType == TokenType::STRUCT) {
+                            if (tokens[i - 1].value == "struct") {
                                 isTypeUsage = true;
                             }
                             else if (prevTokenType == TokenType::RPAREN) {
@@ -982,8 +982,8 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
                             else if (prevTokenType == TokenType::IDENTIFIER) {
                                 if (i > 1) {
                                     TokenType prevPrevType = tokens[i - 2].type;
-                                    if (prevPrevType == TokenType::VAR || 
-                                        prevPrevType == TokenType::LET ||
+                                    if (tokens[i - 2].value == "var" || 
+                                        tokens[i - 2].value == "let" ||
                                         prevPrevType == TokenType::COMMA ||
                                         prevPrevType == TokenType::LPAREN) {
                                         isTypeUsage = true;

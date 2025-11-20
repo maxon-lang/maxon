@@ -54,6 +54,9 @@ configure:
 # Build the Maxon compiler (depends on runtime)
 compiler: configure runtime
 	cmake --build $(BUILD_DIR) --target maxon
+	cmake --build $(BUILD_DIR) --target grammar_generator
+	@echo "Generating TextMate grammar..."
+	@./bin/grammar_generator.exe vscode-extension/syntaxes/maxon.tmLanguage.json
 
 # Build both LSP server and extension
 lsp: lsp-server extension-install
@@ -106,8 +109,9 @@ lsp-test:
 	@powershell -Command "cd lsp-server\tests\build; ctest --output-on-failure"
 
 # Generate documentation (HTML output only)
-docs:
+docs: compiler
 	@echo Generating documentation...
+	@./bin/maxon.exe generate-docs
 	@powershell -Command "cd docs; dotnet run"
 	@echo Documentation generated in docs/Output/
 

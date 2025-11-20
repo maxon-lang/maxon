@@ -19,6 +19,7 @@ private:
     bool check(TokenType type, int offset);  // Check token at offset
     void advance();
     Token expect(TokenType type, const std::string& message);
+    Token expectKeyword(const std::string& keyword, const std::string& message);
     
     std::unique_ptr<ExprAST> parseExpression();
     std::unique_ptr<ExprAST> parseComparison();

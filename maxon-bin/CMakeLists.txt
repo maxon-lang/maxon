@@ -63,6 +63,9 @@ set(SOURCES
 # Create executable
 add_executable(maxon ${SOURCES})
 
+# Create grammar generator executable
+add_executable(grammar_generator grammar_generator.cpp lexer.cpp)
+
 # Use precompiled headers for faster compilation
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
     target_precompile_headers(maxon PRIVATE pch.h)
@@ -106,8 +109,17 @@ target_include_directories(maxon SYSTEM PRIVATE ${LLD_INCLUDE_DIR})
 
 target_link_libraries(maxon ${llvm_libs} ${lld_libs})
 
+# Add LLD include directory to grammar_generator
+target_include_directories(grammar_generator SYSTEM PRIVATE ${LLD_INCLUDE_DIR})
+
+target_link_libraries(grammar_generator ${llvm_libs} ${lld_libs})
+
 # Set output directory to project root bin for easier access and stdlib resolution
 set_target_properties(maxon PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin
+)
+
+set_target_properties(grammar_generator PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin
 )
 

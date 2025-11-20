@@ -7,6 +7,86 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <fstream>
+#include <filesystem>
+#include <map>
+#include <fstream>
+#include <filesystem>
+
+namespace fs = std::filesystem;
+
+int generateDocs() {
+    // Get keyword metadata
+    auto keywordInfo = Lexer::getKeywordInfo();
+    
+    // Group keywords by category
+    std::map<KeywordCategory, std::vector<Lexer::KeywordInfo>> categorizedKeywords;
+    for (const auto& info : keywordInfo) {
+        categorizedKeywords[info.category].push_back(info);
+    }
+    
+    // Create docs/Content directory if it doesn't exist
+    fs::create_directories("../docs/Content");
+    
+    // Generate types.md
+    {
+        std::ofstream out("../docs/Content/types.md");
+        out << "# Types\n\n";
+        out << "Maxon supports the following built-in types:\n\n";
+        for (const auto& info : categorizedKeywords[KeywordCategory::Type]) {
+            out << "## " << info.name << "\n\n";
+            out << info.description << "\n\n";
+        }
+    }
+    
+    // Generate control-flow.md
+    {
+        std::ofstream out("../docs/Content/control-flow.md");
+        out << "# Control Flow\n\n";
+        out << "Maxon provides the following control flow statements:\n\n";
+        for (const auto& info : categorizedKeywords[KeywordCategory::ControlFlow]) {
+            out << "## " << info.name << "\n\n";
+            out << info.description << "\n\n";
+        }
+    }
+    
+    // Generate math.md (update existing file)
+    {
+        std::ofstream out("../docs/Content/math.md");
+        out << "# Mathematical Functions\n\n";
+        out << "Maxon provides built-in mathematical functions as language keywords. These functions are compiled to efficient LLVM intrinsics.\n\n";
+        out << "## Type Conversion Functions\n\n";
+        out << "Convert floating-point numbers to integers using different rounding strategies.\n\n";
+        
+        for (const auto& info : categorizedKeywords[KeywordCategory::MathIntrinsic]) {
+            out << "### " << info.name << "\n\n";
+            out << info.description << "\n\n";
+            out << "**Signature:** `" << info.name << "(x float) ";
+            // Get return type from MathIntrinsicInfo
+            auto mathInfo = Lexer::getMathIntrinsicInfo(info.name);
+            if (mathInfo) {
+                out << mathInfo->returnType;
+            } else {
+                out << "float"; // fallback
+            }
+            out << "`\n\n";
+        }
+    }
+    
+    // Generate variables.md
+    {
+        std::ofstream out("../docs/Content/variables.md");
+        out << "# Variables and Declarations\n\n";
+        out << "Maxon supports variable declarations with different storage semantics:\n\n";
+        for (const auto& info : categorizedKeywords[KeywordCategory::Declaration]) {
+            out << "## " << info.name << "\n\n";
+            out << info.description << "\n\n";
+        }
+    }
+    
+    std::cout << "Generated documentation in docs/Content/" << std::endl;
+    return 0;
+}
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -20,6 +100,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "                 Regenerate all test fragments" << std::endl;
         std::cerr << "  test-fragments [options]" << std::endl;
         std::cerr << "                 Run all test fragments (shows only failures and summary)" << std::endl;
+        std::cerr << "  generate-docs" << std::endl;
+        std::cerr << "                 Generate documentation from keyword metadata" << std::endl;
         std::cerr << "  <input.maxon>  Compile and run source file (no artifacts left on disk)" << std::endl;
         std::cerr << "\nOptions for self-test:" << std::endl;
         std::cerr << "  --verbose, -v  Show detailed test output" << std::endl;
@@ -84,6 +166,10 @@ int main(int argc, char* argv[]) {
         }
         
         return runTestFragmentsSubset(testFiles, outputFile, verbose);
+    }
+
+    if (command == "generate-docs") {
+        return generateDocs();
     }
 
     if (argc == 2 && command.length() >= 6 && command.substr(command.length() - 6) == ".maxon") {

@@ -17,39 +17,8 @@ namespace llvm {
 }
 
 enum class TokenType {
-    // Keywords
-    FUNCTION,
-    EXTERN,     // extern keyword for external declarations
-    NAMESPACE,  // namespace keyword
-    STRUCT,     // struct keyword
-    VAR,
-    LET,        // let keyword (immutable variables)
-    WHILE,
-    IF,
-    ELSE,
-    END,
-    RETURN,
-    BREAK,      // break keyword
-    CONTINUE,   // continue keyword
-    INT,
-    FLOAT,      // float type keyword
-    PTR,        // ptr type keyword
-    CHAR,       // char type keyword
-    STRING_TYPE,  // string type keyword (alias for ptr, used for strings)
-    BOOL,       // bool type keyword
-    AS,         // as keyword for type casting
-    TRUE,       // true keyword
-    FALSE,      // false keyword
-    
-    // Math intrinsic functions (keywords, built into codegen)
-    SQRT,       // sqrt keyword
-    ABS,        // abs keyword
-    FLOOR,      // floor keyword
-    CEIL,       // ceil keyword
-    ROUND,      // round keyword
-    TRUNC,      // trunc keyword
-    SIN,        // sin keyword
-    COS,        // cos keyword
+    // Keywords (all keywords now use KEYWORD)
+    KEYWORD,
     
     // Identifiers and literals
     IDENTIFIER,
@@ -114,11 +83,17 @@ struct MathIntrinsicInfo {
     std::string returnType;              // "int" or "float"
 };
 
+// Forward declarations for LLVM types
+namespace llvm {
+    class Type;
+    class LLVMContext;
+}
+
 struct KeywordData {
-    TokenType type;
     KeywordCategory category;
     std::string description;
     std::optional<MathIntrinsicInfo> mathInfo;  // Only set for MathIntrinsic category
+    std::optional<std::function<llvm::Type*(llvm::LLVMContext&)>> llvmTypeFactory;  // Only set for Type category
 };
 
 struct Token {
@@ -173,6 +148,19 @@ public:
     
     // Get math intrinsic info for code generation (returns nullptr if not a math intrinsic)
     static const MathIntrinsicInfo* getMathIntrinsicInfo(const std::string& name);
+    
+    // Check if a string is a valid type keyword
+    static bool isTypeString(const std::string& name);
+    
+    // Get LLVM type for a type keyword (returns nullptr if not a type keyword)
+    static llvm::Type* getLLVMTypeForKeyword(const std::string& name, llvm::LLVMContext& context);
+    
+    // Check if a token is a keyword of specific category
+    static bool isControlFlowToken(const Token& token);
+    static bool isDeclarationToken(const Token& token);
+    static bool isTypeToken(const Token& token);
+    static bool isLiteralToken(const Token& token);
+    static bool isMathIntrinsicToken(const Token& token);
 };
 
 #endif // LEXER_H

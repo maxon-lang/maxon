@@ -63,16 +63,8 @@ Token Parser::expect(TokenType type, const std::string& message) {
             case TokenType::LBRACKET: typeStr = "'['"; break;
             case TokenType::RBRACKET: typeStr = "']'"; break;
             case TokenType::EQUALS: typeStr = "'='"; break;
-            case TokenType::END: typeStr = "'end'"; break;
-            case TokenType::FUNCTION: typeStr = "'function'"; break;
-            case TokenType::VAR: typeStr = "'var'"; break;
-            case TokenType::LET: typeStr = "'let'"; break;
-            case TokenType::RETURN: typeStr = "'return'"; break;
-            case TokenType::IF: typeStr = "'if'"; break;
-            case TokenType::WHILE: typeStr = "'while'"; break;
             case TokenType::COMMA: typeStr = "','"; break;
-            case TokenType::INT:
-            case TokenType::FLOAT: typeStr = "type specifier"; break;
+            case TokenType::KEYWORD: typeStr = "'" + currentToken().value + "'"; break;
             default: typeStr = "token";
         }
         
@@ -86,6 +78,16 @@ Token Parser::expect(TokenType type, const std::string& message) {
         throw std::runtime_error(message + "\n  Expected: " + typeStr + 
                                "\n  Found: " + foundStr +
                                "\n  Location: line " + std::to_string(currentToken().line) + 
+                               ", column " + std::to_string(currentToken().column));
+    }
+    Token tok = currentToken();
+    advance();
+    return tok;
+}
+
+Token Parser::expectKeyword(const std::string& keyword, const std::string& message) {
+    if (!check(TokenType::KEYWORD) || currentToken().value != keyword) {
+        throw std::runtime_error(message + " at line " + std::to_string(currentToken().line) + 
                                ", column " + std::to_string(currentToken().column));
     }
     Token tok = currentToken();
@@ -111,14 +113,14 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
         return std::make_unique<FloatExprAST>(value, line, column, literalString);
     }
     
-    if (check(TokenType::TRUE)) {
+    if (check(TokenType::KEYWORD) && currentToken().value == "true") {
         int line = currentToken().line;
         int column = currentToken().column;
         advance();
         return std::make_unique<BooleanExprAST>(true, line, column);
     }
     
-    if (check(TokenType::FALSE)) {
+    if (check(TokenType::KEYWORD) && currentToken().value == "false") {
         int line = currentToken().line;
         int column = currentToken().column;
         advance();
@@ -363,7 +365,7 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
     auto expr = parseUnary();
     
     // Handle type cast: expr as type
-    if (check(TokenType::AS)) {
+    if (check(TokenType::KEYWORD) && currentToken().value == "as") {
         int line = currentToken().line;
         int column = currentToken().column;
         advance(); // consume 'as'
@@ -442,13 +444,13 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 }
 
 std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
-    Token varToken = expect(TokenType::VAR, "Expected 'var'");
+    Token varToken = expectKeyword("var", "Expected 'var'");
     auto [name, type, initializer] = parseVariableDeclarationComponents();
     return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer), type, varToken.line, varToken.column);
 }
 
 std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
-    Token letToken = expect(TokenType::LET, "Expected 'let'");
+    Token letToken = expectKeyword("let", "Expected 'let'");
     auto [name, type, initializer] = parseVariableDeclarationComponents();
     return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer), type, letToken.line, letToken.column);
 }
@@ -472,23 +474,23 @@ std::unique_ptr<AssignStmtAST> Parser::parseAssignment(const std::string& name) 
 }
 
 std::unique_ptr<ReturnStmtAST> Parser::parseReturn() {
-    Token returnToken = expect(TokenType::RETURN, "Expected 'return'");
+    Token returnToken = expectKeyword("return", "Expected 'return'");
     auto value = parseExpression();
     return std::make_unique<ReturnStmtAST>(std::move(value), returnToken.line, returnToken.column);
 }
 
 std::unique_ptr<BreakStmtAST> Parser::parseBreak() {
-    Token breakToken = expect(TokenType::BREAK, "Expected 'break'");
+    Token breakToken = expectKeyword("break", "Expected 'break'");
     return std::make_unique<BreakStmtAST>(breakToken.line, breakToken.column);
 }
 
 std::unique_ptr<ContinueStmtAST> Parser::parseContinue() {
-    Token continueToken = expect(TokenType::CONTINUE, "Expected 'continue'");
+    Token continueToken = expectKeyword("continue", "Expected 'continue'");
     return std::make_unique<ContinueStmtAST>(continueToken.line, continueToken.column);
 }
 
 std::unique_ptr<IfStmtAST> Parser::parseIf() {
-    Token ifToken = expect(TokenType::IF, "Expected 'if'");
+    Token ifToken = expectKeyword("if", "Expected 'if'");
     auto condition = parseExpression();
     
     int conditionLine = ifToken.line;
@@ -527,13 +529,15 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
     std::string blockId = blockIdToken.value;
     
     // Parse then body
-    while (!check(TokenType::ELSE) && !check(TokenType::END) && 
+    while (!(check(TokenType::KEYWORD) && currentToken().value == "else") && 
+           !(check(TokenType::KEYWORD) && currentToken().value == "end") && 
            !check(TokenType::END_OF_FILE)) {
         thenBody.push_back(parseStatement());
     }
     
     // Parse optional else
-    if (match(TokenType::ELSE)) {
+    if (check(TokenType::KEYWORD) && currentToken().value == "else") {
+        match(TokenType::KEYWORD); // consume "else"
         // Require same block identifier after else
         Token elseBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else' (must match the 'if' block identifier)");
         if (elseBlockIdToken.value != blockId) {
@@ -545,12 +549,12 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
                                    "\n  Note: The 'else' block identifier must match the 'if' block identifier");
         }
         
-        while (!check(TokenType::END) && !check(TokenType::END_OF_FILE)) {
+        while (!(check(TokenType::KEYWORD) && currentToken().value == "end") && !check(TokenType::END_OF_FILE)) {
             elseBody.push_back(parseStatement());
         }
     }
     
-    expect(TokenType::END, "Expected 'end' to close if block");
+    expectKeyword("end", "Expected 'end' to close if block");
     
     // Require matching block identifier after end
     Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
@@ -570,7 +574,7 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
 }
 
 std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
-    Token whileToken = expect(TokenType::WHILE, "Expected 'while'");
+    Token whileToken = expectKeyword("while", "Expected 'while'");
     auto condition = parseExpression();
     
     // Require block identifier
@@ -580,11 +584,11 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
     std::vector<std::unique_ptr<StmtAST>> body;
     
     // Parse body
-    while (!check(TokenType::END) && !check(TokenType::END_OF_FILE)) {
+    while (!(check(TokenType::KEYWORD) && currentToken().value == "end") && !check(TokenType::END_OF_FILE)) {
         body.push_back(parseStatement());
     }
     
-    expect(TokenType::END, "Expected 'end' to close while loop");
+    expectKeyword("end", "Expected 'end' to close while loop");
     
     // Require matching block identifier after end
     Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
@@ -601,31 +605,31 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
 }
 
 std::unique_ptr<StmtAST> Parser::parseStatement() {
-    if (check(TokenType::VAR)) {
+    if (check(TokenType::KEYWORD) && currentToken().value == "var") {
         return parseVarDecl();
     }
     
-    if (check(TokenType::LET)) {
+    if (check(TokenType::KEYWORD) && currentToken().value == "let") {
         return parseLetDecl();
     }
     
-    if (check(TokenType::IF)) {
+    if (check(TokenType::KEYWORD) && currentToken().value == "if") {
         return parseIf();
     }
     
-    if (check(TokenType::WHILE)) {
+    if (check(TokenType::KEYWORD) && currentToken().value == "while") {
         return parseWhile();
     }
     
-    if (check(TokenType::RETURN)) {
+    if (check(TokenType::KEYWORD) && currentToken().value == "return") {
         return parseReturn();
     }
     
-    if (check(TokenType::BREAK)) {
+    if (check(TokenType::KEYWORD) && currentToken().value == "break") {
         return parseBreak();
     }
     
-    if (check(TokenType::CONTINUE)) {
+    if (check(TokenType::KEYWORD) && currentToken().value == "continue") {
         return parseContinue();
     }
     
@@ -728,12 +732,12 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 std::unique_ptr<FunctionAST> Parser::parseFunction() {
     // Check for extern keyword
     bool isExtern = false;
-    if (check(TokenType::EXTERN)) {
+    if (check(TokenType::KEYWORD) && currentToken().value == "extern") {
         isExtern = true;
         advance(); // consume 'extern'
     }
     
-    Token funcToken = expect(TokenType::FUNCTION, "Expected 'function'");
+    Token funcToken = expectKeyword("function", "Expected 'function'");
     Token name = expect(TokenType::IDENTIFIER, "Expected function name");
     expect(TokenType::LPAREN, "Expected '('");
     
@@ -804,11 +808,11 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
     }
     
     // Parse function body
-    while (!check(TokenType::END) && !check(TokenType::END_OF_FILE)) {
+    while (!(check(TokenType::KEYWORD) && currentToken().value == "end") && !check(TokenType::END_OF_FILE)) {
         body.push_back(parseStatement());
     }
     
-    expect(TokenType::END, "Expected 'end' to close function body");
+    expectKeyword("end", "Expected 'end' to close function body");
     
     // Function has implicit block identifier which is the function name
     // Require matching block identifier after end
@@ -826,7 +830,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 }
 
 std::unique_ptr<NamespaceAST> Parser::parseNamespace() {
-    Token namespaceToken = expect(TokenType::NAMESPACE, "Expected 'namespace'");
+    Token namespaceToken = expectKeyword("namespace", "Expected 'namespace'");
     Token name = expect(TokenType::IDENTIFIER, "Expected namespace name");
     
     // Expect block identifier (namespace name in quotes)
@@ -841,8 +845,9 @@ std::unique_ptr<NamespaceAST> Parser::parseNamespace() {
     
     // Parse functions within the namespace
     std::vector<std::unique_ptr<FunctionAST>> functions;
-    while (!check(TokenType::END) && !check(TokenType::END_OF_FILE)) {
-        if (check(TokenType::EXTERN) || check(TokenType::FUNCTION)) {
+    while (!(check(TokenType::KEYWORD) && currentToken().value == "end") && !check(TokenType::END_OF_FILE)) {
+        if ((check(TokenType::KEYWORD) && currentToken().value == "extern") || 
+            (check(TokenType::KEYWORD) && currentToken().value == "function")) {
             functions.push_back(parseFunction());
         } else {
             throw std::runtime_error("Expected 'function' or 'extern function' in namespace body\n  Location: line " + 
@@ -851,7 +856,7 @@ std::unique_ptr<NamespaceAST> Parser::parseNamespace() {
         }
     }
     
-    expect(TokenType::END, "Expected 'end' to close namespace");
+    expectKeyword("end", "Expected 'end' to close namespace");
     
     // Expect matching block identifier
     Token endBlockId = expect(TokenType::BLOCK_ID, "Expected namespace name as block identifier after 'end'");
@@ -867,7 +872,7 @@ std::unique_ptr<NamespaceAST> Parser::parseNamespace() {
 }
 
 std::unique_ptr<StructDefAST> Parser::parseStruct() {
-    Token structToken = expect(TokenType::STRUCT, "Expected 'struct'");
+    Token structToken = expectKeyword("struct", "Expected 'struct'");
     int line = structToken.line;
     int column = structToken.column;
     
@@ -877,12 +882,12 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
     std::vector<StructField> fields;
     
     // Parse fields until we hit 'end'
-    while (!check(TokenType::END) && !check(TokenType::END_OF_FILE)) {
+    while (!(check(TokenType::KEYWORD) && currentToken().value == "end") && !check(TokenType::END_OF_FILE)) {
         Token fieldNameToken = expect(TokenType::IDENTIFIER, "Expected field name");
         std::string fieldName = fieldNameToken.value;
         
         std::string fieldType;
-        if ((currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+        if (Lexer::isTypeToken(currentToken()) || check(TokenType::IDENTIFIER)) {
             fieldType = currentToken().value;
             advance();
         } else {
@@ -894,7 +899,7 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
         fields.push_back(StructField(fieldName, fieldType, fieldNameToken.line, fieldNameToken.column));
     }
     
-    expect(TokenType::END, "Expected 'end' to close struct");
+    expectKeyword("end", "Expected 'end' to close struct");
     
     // Require matching block identifier
     Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match struct name)");
@@ -955,11 +960,12 @@ std::unique_ptr<ProgramAST> Parser::parse() {
         }
         
         // Check for namespace, struct, extern, or function keyword
-        if (check(TokenType::NAMESPACE)) {
+        if (check(TokenType::KEYWORD) && currentToken().value == "namespace") {
             namespaces.push_back(parseNamespace());
-        } else if (check(TokenType::STRUCT)) {
+        } else if (check(TokenType::KEYWORD) && currentToken().value == "struct") {
             structs.push_back(parseStruct());
-        } else if (check(TokenType::EXTERN) || check(TokenType::FUNCTION)) {
+        } else if ((check(TokenType::KEYWORD) && currentToken().value == "extern") || 
+                   (check(TokenType::KEYWORD) && currentToken().value == "function")) {
             functions.push_back(parseFunction());
         } else {
             throw std::runtime_error("Expected 'namespace', 'struct', 'function', or 'extern function' at top level\n  Location: line " + 

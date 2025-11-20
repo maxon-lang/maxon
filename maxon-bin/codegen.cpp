@@ -35,19 +35,19 @@ bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
 // Helper function to convert Maxon type string to LLVM type
 static llvm::Type* getTypeFromString(llvm::LLVMContext& context, const std::string& typeStr,
                                      const std::map<std::string, llvm::StructType*>* structTypes = nullptr) {
-    if (typeStr == "int") {
-        return llvm::Type::getInt32Ty(context);
-    } else if (typeStr == "float") {
-        return llvm::Type::getDoubleTy(context);  // 64-bit float
-    } else if (typeStr == "ptr") {
-        return llvm::PointerType::get(context, 0);  // Opaque pointer
-    } else if (typeStr == "string") {
-        return llvm::PointerType::get(context, 0);  // Opaque pointer (alias for ptr)
-    } else if (typeStr == "char") {
-        return llvm::Type::getInt8Ty(context);
-    } else if (typeStr == "bool") {
-        return llvm::Type::getInt1Ty(context);
-    } else if (typeStr == "void") {
+    // Validate that type strings come from the keywords map
+    if (!Lexer::isTypeString(typeStr) && typeStr != "void" && typeStr[0] != '[' && 
+        (structTypes == nullptr || structTypes->find(typeStr) == structTypes->end())) {
+        throw std::runtime_error("Unknown type: " + typeStr);
+    }
+    
+    // Try to get LLVM type from keywords map first
+    llvm::Type* llvmType = Lexer::getLLVMTypeForKeyword(typeStr, context);
+    if (llvmType != nullptr) {
+        return llvmType;
+    }
+    
+    if (typeStr == "void") {
         return llvm::Type::getVoidTy(context);
     } else if (typeStr[0] == '[') {
         // Array type: [size]elementType
@@ -1170,6 +1170,11 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
         llvm::Value* value = generateExpr(castExpr->expr.get());
         if (!value) {
             throw std::runtime_error("Failed to generate expression for cast");
+        }
+        
+        // Validate that target type is a valid keyword type
+        if (!Lexer::isTypeString(castExpr->targetType)) {
+            throw std::runtime_error("Invalid cast target type: " + castExpr->targetType);
         }
         
         llvm::Type* targetType = nullptr;
