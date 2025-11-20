@@ -34,7 +34,7 @@ help:
 	@echo "  extension-install - Install extension locally in VS Code"
 	@echo "  lsp-test         - Build and run LSP C++ unit tests"
 	@echo "  docs             - Generate HTML documentation and test fragments"
-	@echo "  test FILE=<file> - Compile and run a test program (e.g., make test FILE=test-cast)"
+	@echo "  test             - Run all test suites (compiler self-tests, fragment tests, LSP tests, extension tests)"
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  help             - Show this help message"
 
@@ -112,21 +112,34 @@ docs:
 	@echo Documentation generated in docs/Output/
 	@echo Test fragments created in language-tests/doc-fragments/
 
-# Compile and run a test program
-# Usage: make test FILE=test-cast
-# This will compile examples/<FILE>.maxon and run it
-test: compiler
-ifndef FILE
-	@echo Error: Please specify FILE parameter
-	@echo Usage: make test FILE=test-cast
-	@echo This will compile and run examples/test-cast.maxon
-	@exit 1
-endif
-	@echo Compiling examples/$(FILE).maxon...
-	@./build/bin/maxon.exe compile examples/$(FILE).maxon -o examples/$(FILE).exe
-	@echo === Running examples/$(FILE).exe ===
-	-@./examples/$(FILE).exe; echo Exit code: $$?
-	@echo === Test complete ===
+# Run all test suites
+test: compiler lsp-server extension-build
+	@echo ============================================================
+	@echo Running all test suites...
+	@echo ============================================================
+	@powershell -Command "Write-Host ''"
+	@echo [1/4] Running compiler self-tests...
+	@echo ------------------------------------------------------------
+	@powershell -Command "maxon self-test"
+	@powershell -Command "Write-Host ''"
+	@echo [2/4] Running language fragment tests...
+	@echo ------------------------------------------------------------
+	@powershell -Command "maxon test-fragments"
+	@powershell -Command "Write-Host ''"
+	@echo [3/4] Running LSP C++ unit tests...
+	@echo ------------------------------------------------------------
+	@powershell -Command "if (!(Test-Path 'lsp-server\tests\build')) { New-Item -ItemType Directory -Path 'lsp-server\tests\build' | Out-Null }"
+	@powershell -Command "cd lsp-server\tests\build; cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER='$(CC)' -DCMAKE_CXX_COMPILER='$(CXX)' -DCMAKE_BUILD_TYPE=Debug" 2>nul
+	@powershell -Command "cd lsp-server\tests\build; cmake --build ." 2>nul
+	@powershell -Command "cd lsp-server\tests\build; ctest --output-on-failure"
+	@powershell -Command "Write-Host ''"
+	@echo [4/4] Running VS Code extension tests...
+	@echo ------------------------------------------------------------
+	@powershell -Command "cd vscode-extension; npm run test"
+	@powershell -Command "Write-Host ''"
+	@echo ============================================================
+	@echo All test suites completed!
+	@echo ============================================================
 
 # Clean build artifacts
 clean:

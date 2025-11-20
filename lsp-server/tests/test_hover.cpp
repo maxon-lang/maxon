@@ -206,7 +206,7 @@ void test_hover_keyword() {
     
     CHECK(hover.has_value(), "hover should have value");
     CHECK(hover->contents.find("return") != std::string::npos, "hover should contain 'return'");
-    CHECK(hover->contents.find("keyword") != std::string::npos, "hover should indicate keyword");
+    CHECK(hover->contents.find("control flow") != std::string::npos, "hover should indicate control flow");
     
     std::cout << "✓ Hover on keyword shows appropriate info" << std::endl;
 }
@@ -230,7 +230,7 @@ void test_hover_struct_keyword() {
     
     CHECK(hover.has_value(), "hover should have value");
     CHECK(hover->contents.find("struct") != std::string::npos, "hover should contain 'struct'");
-    CHECK(hover->contents.find("keyword") != std::string::npos, "hover should indicate it's a keyword");
+    CHECK(hover->contents.find("declaration") != std::string::npos, "hover should indicate it's a declaration");
     
     std::cout << "✓ Hover on 'struct' keyword shows it's a keyword" << std::endl;
 }
@@ -253,7 +253,7 @@ void test_hover_function_keyword() {
     
     CHECK(hover.has_value(), "hover should have value");
     CHECK(hover->contents.find("function") != std::string::npos, "hover should contain 'function'");
-    CHECK(hover->contents.find("keyword") != std::string::npos, "hover should indicate it's a keyword");
+    CHECK(hover->contents.find("declaration") != std::string::npos, "hover should indicate it's a declaration");
     
     std::cout << "✓ Hover on 'function' keyword shows it's a keyword" << std::endl;
 }

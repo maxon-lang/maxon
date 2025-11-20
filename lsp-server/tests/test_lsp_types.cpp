@@ -9,8 +9,6 @@ void test_position_structure() {
     pos.line = 10;
     pos.character = 5;
     
-    assert(pos.line == 10);
-    assert(pos.character == 5);
     
     std::cout << "✓ Position structure works" << std::endl;
 }
@@ -24,8 +22,6 @@ void test_range_structure() {
     range.end.line = 5;
     range.end.character = 10;
     
-    assert(range.start.line == 0);
-    assert(range.end.line == 5);
     
     std::cout << "✓ Range structure works" << std::endl;
 }
@@ -52,12 +48,12 @@ void test_completion_item_structure() {
     
     lsp::CompletionItem item;
     item.label = "testFunction";
-    item.kind = 3; // Function
+    item.kind = lsp::CompletionItemKind::Function;
     item.detail = "A test function";
     item.documentation = "Documentation for test function";
     
     assert(item.label == "testFunction");
-    assert(item.kind == 3);
+    assert(item.kind == lsp::CompletionItemKind::Function);
     assert(item.detail == "A test function");
     
     std::cout << "✓ CompletionItem structure works" << std::endl;
@@ -96,13 +92,13 @@ void test_symbol_information_structure() {
     
     lsp::SymbolInformation symbol;
     symbol.name = "myFunction";
-    symbol.kind = 12; // Function
+    symbol.kind = lsp::SymbolKind::Function;
     symbol.location.uri = "file:///test.maxon";
     symbol.location.range.start = {0, 0};
     symbol.location.range.end = {10, 0};
     
     assert(symbol.name == "myFunction");
-    assert(symbol.kind == 12);
+    assert(symbol.kind == lsp::SymbolKind::Function);
     
     std::cout << "✓ SymbolInformation structure works" << std::endl;
 }

@@ -2,6 +2,7 @@
 #include "test_regenerate.h"
 #include "test_runner.h"
 #include "temp_runner.h"
+#include "self_test.h"
 
 #include <cstring>
 #include <iostream>
@@ -13,11 +14,15 @@ int main(int argc, char* argv[]) {
         std::cerr << "\nCommands:" << std::endl;
         std::cerr << "  compile <input.maxon> [<input2.maxon> ...] [options]" << std::endl;
         std::cerr << "                 Compile Maxon source files" << std::endl;
+        std::cerr << "  self-test [--verbose]" << std::endl;
+        std::cerr << "                 Run compiler self-tests" << std::endl;
         std::cerr << "  regen-fragments" << std::endl;
         std::cerr << "                 Regenerate all test fragments" << std::endl;
         std::cerr << "  test-fragments [options]" << std::endl;
         std::cerr << "                 Run all test fragments (shows only failures and summary)" << std::endl;
         std::cerr << "  <input.maxon>  Compile and run source file (no artifacts left on disk)" << std::endl;
+        std::cerr << "\nOptions for self-test:" << std::endl;
+        std::cerr << "  --verbose, -v  Show detailed test output" << std::endl;
         std::cerr << "\nOptions for test-fragments:" << std::endl;
         std::cerr << "  --verbose, -v  Show all tests including passes" << std::endl;
         std::cerr << "\nOptions for compile:" << std::endl;
@@ -31,6 +36,17 @@ int main(int argc, char* argv[]) {
     }
 
     std::string command = argv[1];
+
+    if (command == "self-test") {
+        bool verbose = false;
+        for (int i = 2; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--verbose" || arg == "-v") {
+                verbose = true;
+            }
+        }
+        return runSelfTest(verbose);
+    }
 
     if (command == "regen-fragments") {
         return regenerateFragments();
