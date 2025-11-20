@@ -17,6 +17,7 @@ static const std::unordered_map<std::string, KeywordEntry> keywords = {
     {"ptr",       {TokenType::PTR,        Lexer::KeywordCategory::Type,          "Pointer type"}},
     {"char",      {TokenType::CHAR,       Lexer::KeywordCategory::Type,          "Character type"}},
     {"string",    {TokenType::STRING_TYPE, Lexer::KeywordCategory::Type,         "String type"}},
+    {"bool",      {TokenType::BOOL,       Lexer::KeywordCategory::Type,          "Boolean type"}},
     
     // Control flow
     {"if",        {TokenType::IF,         Lexer::KeywordCategory::ControlFlow,   "Conditional statement"}},

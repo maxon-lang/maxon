@@ -44,6 +44,8 @@ static llvm::Type* getTypeFromString(llvm::LLVMContext& context, const std::stri
         return llvm::PointerType::get(context, 0);  // Opaque pointer (alias for ptr)
     } else if (typeStr == "char") {
         return llvm::Type::getInt8Ty(context);
+    } else if (typeStr == "bool") {
+        return llvm::Type::getInt1Ty(context);
     } else if (typeStr == "void") {
         return llvm::Type::getVoidTy(context);
     } else if (typeStr[0] == '[') {

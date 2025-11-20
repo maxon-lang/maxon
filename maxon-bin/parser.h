@@ -30,6 +30,7 @@ private:
     std::unique_ptr<StmtAST> parseStatement();
     std::unique_ptr<VarDeclStmtAST> parseVarDecl();
     std::unique_ptr<LetDeclStmtAST> parseLetDecl();
+    std::tuple<Token, std::string, std::unique_ptr<ExprAST>> parseVariableDeclarationComponents();
     std::unique_ptr<AssignStmtAST> parseAssignment(const std::string& name);
     std::unique_ptr<IfStmtAST> parseIf();
     std::unique_ptr<WhileStmtAST> parseWhile();

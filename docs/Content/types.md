@@ -50,6 +50,10 @@ A boolean value (`true` or `false`).
 ```maxon
 var flag = true
 var done = false
+
+// Explicit type annotation
+var enabled bool = true
+let is_valid bool = false
 ```
 
 ### ptr

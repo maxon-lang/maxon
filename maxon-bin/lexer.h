@@ -24,6 +24,7 @@ enum class TokenType {
     PTR,        // ptr type keyword
     CHAR,       // char type keyword
     STRING_TYPE,  // string type keyword (alias for ptr, used for strings)
+    BOOL,       // bool type keyword
     AS,         // as keyword for type casting
     TRUE,       // true keyword
     FALSE,      // false keyword
