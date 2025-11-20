@@ -88,16 +88,21 @@ enum class KeywordCategory {
     Operator        // as
 };
 
+struct KeywordData {
+    TokenType type;
+    KeywordCategory category;
+    std::string description;
+};
+
 struct Token {
     TokenType type;
     std::string value;
     int line;
     int column;
-    std::optional<KeywordCategory> keywordCategory;  // For keyword tokens
-    std::optional<std::string> description;  // For keyword tokens
+    std::optional<KeywordData> keywordData;  // Contains category and description for keyword tokens
     
-    Token(TokenType t, const std::string& v, int l, int c, std::optional<KeywordCategory> kc = std::nullopt, std::optional<std::string> desc = std::nullopt)
-        : type(t), value(v), line(l), column(c), keywordCategory(kc), description(desc) {}
+    Token(TokenType t, const std::string& v, int l, int c)
+        : type(t), value(v), line(l), column(c) {}
 };
 
 class Lexer {

@@ -4,48 +4,48 @@
 #include <unordered_map>
 
 // Unified keyword information
-static const std::unordered_map<std::string, Token> keywords = {
+static const std::unordered_map<std::string, KeywordData> keywords = {
     // Types
-    {"int",       Token(TokenType::INT,        "int",        0, 0, KeywordCategory::Type,          "Integer type")},
-    {"float",     Token(TokenType::FLOAT,      "float",      0, 0, KeywordCategory::Type,          "Floating-point type")},
-    {"ptr",       Token(TokenType::PTR,        "ptr",        0, 0, KeywordCategory::Type,          "Pointer type")},
-    {"char",      Token(TokenType::CHAR,       "char",       0, 0, KeywordCategory::Type,          "Character type")},
-    {"string",    Token(TokenType::STRING_TYPE,"string",     0, 0, KeywordCategory::Type,          "String type")},
-    {"bool",      Token(TokenType::BOOL,       "bool",       0, 0, KeywordCategory::Type,          "Boolean type")},
+    {"int",       {TokenType::INT,        KeywordCategory::Type,          "Integer type"}},
+    {"float",     {TokenType::FLOAT,      KeywordCategory::Type,          "Floating-point type"}},
+    {"ptr",       {TokenType::PTR,        KeywordCategory::Type,          "Pointer type"}},
+    {"char",      {TokenType::CHAR,       KeywordCategory::Type,          "Character type"}},
+    {"string",    {TokenType::STRING_TYPE,KeywordCategory::Type,          "String type"}},
+    {"bool",      {TokenType::BOOL,       KeywordCategory::Type,          "Boolean type"}},
     
     // Control flow
-    {"if",        Token(TokenType::IF,         "if",         0, 0, KeywordCategory::ControlFlow,   "Conditional statement")},
-    {"else",      Token(TokenType::ELSE,       "else",       0, 0, KeywordCategory::ControlFlow,   "Alternative branch")},
-    {"while",     Token(TokenType::WHILE,      "while",      0, 0, KeywordCategory::ControlFlow,   "Loop statement")},
-    {"end",       Token(TokenType::END,        "end",        0, 0, KeywordCategory::ControlFlow,   "Block terminator")},
-    {"return",    Token(TokenType::RETURN,     "return",     0, 0, KeywordCategory::ControlFlow,   "Return from function")},
-    {"break",     Token(TokenType::BREAK,      "break",      0, 0, KeywordCategory::ControlFlow,   "Exit loop")},
-    {"continue",  Token(TokenType::CONTINUE,   "continue",   0, 0, KeywordCategory::ControlFlow,   "Skip to next iteration")},
+    {"if",        {TokenType::IF,         KeywordCategory::ControlFlow,   "Conditional statement"}},
+    {"else",      {TokenType::ELSE,       KeywordCategory::ControlFlow,   "Alternative branch"}},
+    {"while",     {TokenType::WHILE,      KeywordCategory::ControlFlow,   "Loop statement"}},
+    {"end",       {TokenType::END,        KeywordCategory::ControlFlow,   "Block terminator"}},
+    {"return",    {TokenType::RETURN,     KeywordCategory::ControlFlow,   "Return from function"}},
+    {"break",     {TokenType::BREAK,      KeywordCategory::ControlFlow,   "Exit loop"}},
+    {"continue",  {TokenType::CONTINUE,   KeywordCategory::ControlFlow,   "Skip to next iteration"}},
     
     // Declarations
-    {"function",  Token(TokenType::FUNCTION,   "function",   0, 0, KeywordCategory::Declaration,   "Function declaration")},
-    {"var",       Token(TokenType::VAR,        "var",        0, 0, KeywordCategory::Declaration,   "Mutable variable")},
-    {"let",       Token(TokenType::LET,        "let",        0, 0, KeywordCategory::Declaration,   "Immutable variable")},
-    {"struct",    Token(TokenType::STRUCT,     "struct",     0, 0, KeywordCategory::Declaration,   "Structure type")},
-    {"namespace", Token(TokenType::NAMESPACE,  "namespace",  0, 0, KeywordCategory::Declaration,   "Namespace declaration")},
-    {"extern",    Token(TokenType::EXTERN,     "extern",     0, 0, KeywordCategory::Declaration,   "External declaration")},
+    {"function",  {TokenType::FUNCTION,   KeywordCategory::Declaration,   "Function declaration"}},
+    {"var",       {TokenType::VAR,        KeywordCategory::Declaration,   "Mutable variable"}},
+    {"let",       {TokenType::LET,        KeywordCategory::Declaration,   "Immutable variable"}},
+    {"struct",    {TokenType::STRUCT,     KeywordCategory::Declaration,   "Structure type"}},
+    {"namespace", {TokenType::NAMESPACE,  KeywordCategory::Declaration,   "Namespace declaration"}},
+    {"extern",    {TokenType::EXTERN,     KeywordCategory::Declaration,   "External declaration"}},
     
     // Math intrinsics (built into codegen)
-    {"sqrt",      Token(TokenType::SQRT,       "sqrt",       0, 0, KeywordCategory::MathIntrinsic, "Square root")},
-    {"abs",       Token(TokenType::ABS,        "abs",        0, 0, KeywordCategory::MathIntrinsic, "Absolute value")},
-    {"floor",     Token(TokenType::FLOOR,      "floor",      0, 0, KeywordCategory::MathIntrinsic, "Floor function")},
-    {"ceil",      Token(TokenType::CEIL,       "ceil",       0, 0, KeywordCategory::MathIntrinsic, "Ceiling function")},
-    {"round",     Token(TokenType::ROUND,      "round",      0, 0, KeywordCategory::MathIntrinsic, "Round to nearest")},
-    {"trunc",     Token(TokenType::TRUNC,      "trunc",      0, 0, KeywordCategory::MathIntrinsic, "Truncate to integer")},
-    {"sin",       Token(TokenType::SIN,        "sin",        0, 0, KeywordCategory::MathIntrinsic, "Sine function")},
-    {"cos",       Token(TokenType::COS,        "cos",        0, 0, KeywordCategory::MathIntrinsic, "Cosine function")},
+    {"sqrt",      {TokenType::SQRT,       KeywordCategory::MathIntrinsic, "Square root"}},
+    {"abs",       {TokenType::ABS,        KeywordCategory::MathIntrinsic, "Absolute value"}},
+    {"floor",     {TokenType::FLOOR,      KeywordCategory::MathIntrinsic, "Floor function"}},
+    {"ceil",      {TokenType::CEIL,       KeywordCategory::MathIntrinsic, "Ceiling function"}},
+    {"round",     {TokenType::ROUND,      KeywordCategory::MathIntrinsic, "Round to nearest"}},
+    {"trunc",     {TokenType::TRUNC,      KeywordCategory::MathIntrinsic, "Truncate to integer"}},
+    {"sin",       {TokenType::SIN,        KeywordCategory::MathIntrinsic, "Sine function"}},
+    {"cos",       {TokenType::COS,        KeywordCategory::MathIntrinsic, "Cosine function"}},
     
     // Literals
-    {"true",      Token(TokenType::TRUE,       "true",       0, 0, KeywordCategory::Literal,       "Boolean true")},
-    {"false",     Token(TokenType::FALSE,      "false",      0, 0, KeywordCategory::Literal,       "Boolean false")},
+    {"true",      {TokenType::TRUE,       KeywordCategory::Literal,       "Boolean true"}},
+    {"false",     {TokenType::FALSE,      KeywordCategory::Literal,       "Boolean false"}},
     
     // Operators
-    {"as",        Token(TokenType::AS,         "as",         0, 0, KeywordCategory::Operator,      "Type cast operator")}
+    {"as",        {TokenType::AS,         KeywordCategory::Operator,      "Type cast operator"}}
 };
 
 Lexer::Lexer(const std::string& src)
@@ -64,14 +64,12 @@ std::vector<Lexer::KeywordInfo> Lexer::getKeywordInfo() {
     std::vector<KeywordInfo> info;
     
     for (const auto& pair : keywords) {
-        const Token& token = pair.second;
-        if (token.keywordCategory.has_value() && token.description.has_value()) {
-            info.push_back({
-                pair.first,                  // name
-                token.keywordCategory.value(), // category
-                token.description.value()    // description
-            });
-        }
+        const KeywordData& data = pair.second;
+        info.push_back({
+            pair.first,                  // name
+            data.category, // category
+            data.description    // description
+        });
     }
     
     return info;
@@ -80,7 +78,7 @@ std::vector<Lexer::KeywordInfo> Lexer::getKeywordInfo() {
 std::vector<std::string> Lexer::getKeywordsByCategory(KeywordCategory category) {
     std::vector<std::string> result;
     for (const auto& pair : keywords) {
-        if (pair.second.keywordCategory == category) {
+        if (pair.second.category == category) {
             result.push_back(pair.first);
         }
     }
@@ -217,7 +215,9 @@ Token Lexer::readIdentifier() {
     // Check if it's a keyword
     auto it = keywords.find(id);
     if (it != keywords.end()) {
-        return Token(it->second.type, id, startLine, startColumn, it->second.keywordCategory, it->second.description);
+        Token token(it->second.type, id, startLine, startColumn);
+        token.keywordData = it->second;
+        return token;
     }
     
     return Token(TokenType::IDENTIFIER, id, startLine, startColumn);

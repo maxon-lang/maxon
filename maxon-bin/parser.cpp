@@ -158,7 +158,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
             expect(TokenType::RBRACKET, "Expected ']' after array size");
             
             // Now expect the element type (primitive or struct)
-            if (!(currentToken().keywordCategory && *currentToken().keywordCategory == KeywordCategory::Type) && !check(TokenType::IDENTIFIER)) {
+            if (!(currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::Type) && !check(TokenType::IDENTIFIER)) {
                 throw std::runtime_error("Expected array element type (int, float, ptr, char, string, or struct name) at line " + 
                                        std::to_string(currentToken().line));
             }
@@ -372,7 +372,7 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
         advance(); // consume 'as'
         
         // Expect a type keyword
-        if (currentToken().keywordCategory && *currentToken().keywordCategory == KeywordCategory::Type) {
+        if (currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::Type) {
             std::string targetType = currentToken().value;
             advance();
             expr = std::make_unique<CastExprAST>(std::move(expr), targetType, line, column);
@@ -762,7 +762,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                 
                 // Get element type
                 std::string elementType;
-                if ((currentToken().keywordCategory && *currentToken().keywordCategory == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+                if ((currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
                     elementType = currentToken().value;
                     advance();
                 } else {
@@ -775,7 +775,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
                 paramType = "[]" + elementType;
             } else {
                 // Regular scalar type (or struct)
-                if ((currentToken().keywordCategory && *currentToken().keywordCategory == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+                if ((currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
                     paramType = currentToken().value;
                     advance();
                 } else {
@@ -793,7 +793,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
     
     // Parse return type (optional - defaults to void)
     std::string returnType = "void";
-    if ((currentToken().keywordCategory && *currentToken().keywordCategory == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+    if ((currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
         returnType = currentToken().value;
         advance();
     }
@@ -884,9 +884,8 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
         Token fieldNameToken = expect(TokenType::IDENTIFIER, "Expected field name");
         std::string fieldName = fieldNameToken.value;
         
-        // Parse type (can be INT, FLOAT, PTR, CHAR, STRING_TYPE, or IDENTIFIER for struct types)
         std::string fieldType;
-        if ((currentToken().keywordCategory && *currentToken().keywordCategory == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+        if ((currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
             fieldType = currentToken().value;
             advance();
         } else {
