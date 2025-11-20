@@ -2,7 +2,6 @@
 You *Are* Going To Read It
 
 - if x is a float "x as int" should not work, use trunc() or round() or something
-- remove sin and cos intrinsics
 - simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")
 
 add "run" to maxon
@@ -65,3 +64,4 @@ https://llvm.org/docs/Frontend/PerformanceTips.html
 - multiple verbosity levels during compiling
 - compiler error codes
 - merge doc-fragments into fragments
+- break up large files like codegen.cpp

@@ -282,6 +282,32 @@ llvm::Function* CodeGenerator::getOrDeclareMemset() {
     return memsetFunc;
 }
 
+llvm::Function* CodeGenerator::getOrDeclareSin() {
+    llvm::Function* sinFunc = module->getFunction("sin");
+    if (!sinFunc) {
+        llvm::FunctionType* sinType = llvm::FunctionType::get(
+            llvm::Type::getDoubleTy(context),
+            {llvm::Type::getDoubleTy(context)},
+            false
+        );
+        sinFunc = llvm::Function::Create(sinType, llvm::Function::ExternalLinkage, "sin", module.get());
+    }
+    return sinFunc;
+}
+
+llvm::Function* CodeGenerator::getOrDeclareCos() {
+    llvm::Function* cosFunc = module->getFunction("cos");
+    if (!cosFunc) {
+        llvm::FunctionType* cosType = llvm::FunctionType::get(
+            llvm::Type::getDoubleTy(context),
+            {llvm::Type::getDoubleTy(context)},
+            false
+        );
+        cosFunc = llvm::Function::Create(cosType, llvm::Function::ExternalLinkage, "cos", module.get());
+    }
+    return cosFunc;
+}
+
 void CodeGenerator::initHeapManagement() {
     // Check if malloc already exists
     if (module->getFunction("malloc")) {
@@ -1075,10 +1101,13 @@ llvm::Value* CodeGenerator::generateMathIntrinsic(CallExprAST* callExpr) {
     } else if (callExpr->callee == "ceil") {
         intrinsicID = llvm::Intrinsic::ceil;
         returnsInt = true;
-    } else if (callExpr->callee == "sin") {
-        intrinsicID = llvm::Intrinsic::sin;
-    } else if (callExpr->callee == "cos") {
-        intrinsicID = llvm::Intrinsic::cos;
+    } else if (callExpr->callee == "sin" || callExpr->callee == "cos") {
+        // sin and cos are implemented in the runtime library (not LLVM intrinsics)
+        llvm::Function* runtimeFn = (callExpr->callee == "sin") ? getOrDeclareSin() : getOrDeclareCos();
+        if (args.size() != 1) {
+            throw std::runtime_error(callExpr->callee + " expects exactly 1 argument");
+        }
+        return builder.CreateCall(runtimeFn, args, callExpr->callee + "_result");
     } else if (callExpr->callee == "round") {
         intrinsicID = llvm::Intrinsic::round;
         returnsInt = true;
