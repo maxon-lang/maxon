@@ -17,7 +17,7 @@ $specFragments = @($manifest.fragments.PSObject.Properties.Name)
 # Get all fragment files
 $allFragments = @(Get-ChildItem "language-tests\fragments\*.test" | ForEach-Object { $_.Name })
 
-# Find orphans (exclude doc-fragments which are extracted from old docs/Content)
+# Find orphans
 $orphans = @($allFragments | Where-Object { 
     $_ -notin $specFragments -and 
     $_ -notlike "control flow.*" -and 

@@ -47,24 +47,6 @@ end 'main'
 ExitCode: 30
 ```
 
-### Within Same Namespace
-
-Functions in the same namespace can call each other without qualification:
-
-```maxon
-namespace calc 'calc'
-    function helper() int
-        return 10
-    end 'helper'
-    
-    function compute() int
-        return helper()  // No qualification needed
-    end 'compute'
-end 'calc'
-```
-
-Using `calc.helper()` from within `calc` namespace would be an error (unnecessary qualification).
-
 ## Tests
 
 <!-- test: qualified-call -->

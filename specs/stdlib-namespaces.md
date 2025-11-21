@@ -88,7 +88,7 @@ end 'fs'
 function main() int
     let out = stdout()
     var text = "OK"
-    var written = write(out, text, 2)
+    write(out, text, 2)
     return 0
 end 'main'
 ```

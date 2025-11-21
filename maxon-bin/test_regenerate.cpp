@@ -63,11 +63,6 @@ static void writeTestFragment(const std::string& outputDir, const std::string& f
     entry.index = index;
     manifest.fragments[fragmentName + ".test"] = entry;
     
-    std::cout << "  Extracted " << fragmentName;
-    if (isDocExample) {
-        std::cout << " (doc example)";
-    }
-    std::cout << std::endl;
     totalExtracted++;
 }
 
@@ -83,7 +78,10 @@ int extractSpecFragments() {
         return 1;
     }
     
-    // Create output directory if it doesn't exist
+    // Delete and recreate output directory to remove orphaned fragments
+    if (std::filesystem::exists(outputDir)) {
+        std::filesystem::remove_all(outputDir);
+    }
     std::filesystem::create_directories(outputDir);
     
     std::cout << "Extracting test fragments from spec files..." << std::endl;
@@ -98,12 +96,7 @@ int extractSpecFragments() {
         std::string specPath = entry.path().string();
         std::string specBaseName = entry.path().stem().string();
         
-        // Skip README
-        if (specBaseName == "README" || specBaseName == "readme") {
-            continue;
-        }
-        
-        std::cout << "\nProcessing " << specBaseName << ".md..." << std::endl;
+        // std::cout << "\nProcessing " << specBaseName << ".md..." << std::endl;
         
         std::ifstream specFile(specPath);
         if (!specFile) {
@@ -224,13 +217,18 @@ int extractSpecFragments() {
                             inMetadataBlock = true;
                         }
                     } else if (inDocSection && collectingMetadata && !currentTestName.empty()) {
-                        // In doc section, if we hit a non-metadata line after code block, save the example
-                        // This handles doc examples without explicit test metadata
+                        // In doc section, if we hit a non-metadata line after code block, check if we should save
+                        // Only save if there is actual metadata (output blocks) - doc examples without
+                        // output blocks are NOT extracted as test fragments
                         if (line.empty() || line.rfind("###", 0) == 0 || line.rfind("##", 0) == 0) {
-                            int index = testNameCounts[currentTestName];
-                            std::string fragmentName = currentTestName + "." + std::to_string(index);
-                            writeTestFragment(outputDir, fragmentName, currentCode, currentMetadata,
-                                            manifest, specBaseName, currentTestName, index, totalFragmentsExtracted, true);
+                            if (!currentMetadata.empty()) {
+                                // Has metadata - save as test fragment
+                                int index = testNameCounts[currentTestName];
+                                std::string fragmentName = currentTestName + "." + std::to_string(index);
+                                writeTestFragment(outputDir, fragmentName, currentCode, currentMetadata,
+                                                manifest, specBaseName, currentTestName, index, totalFragmentsExtracted, true);
+                            }
+                            // Clear state whether we saved or not
                             currentCode.clear();
                             currentMetadata.clear();
                             currentTestName.clear();
@@ -275,7 +273,7 @@ int extractSpecFragments() {
         manifestFile << "}\n";
         manifestFile.close();
         
-        std::cout << "\nWrote manifest: " << manifestPath << std::endl;
+        // std::cout << "\nWrote manifest: " << manifestPath << std::endl;
     }
     
     std::cout << "\nExtraction complete: " << totalFragmentsExtracted << " fragments extracted" << std::endl;
@@ -284,78 +282,7 @@ int extractSpecFragments() {
 }
 
 
-// Extract code fragments from markdown files in docs/Content and create .test files
-static void extractFragmentsFromDocs() {
-    std::string docsDir = "docs/Content";
-    std::string outputDir = "language-tests/doc-fragments";
-    
-    if (!std::filesystem::exists(docsDir)) {
-        std::cerr << "Warning: Directory not found: " << docsDir << std::endl;
-        return;
-    }
-    
-    // Create output directory if it doesn't exist
-    std::filesystem::create_directories(outputDir);
-    
-    std::cout << "\nExtracting fragments from " << docsDir << "..." << std::endl;
-    
-    for (const auto& entry : std::filesystem::directory_iterator(docsDir)) {
-        if (entry.path().extension() != ".md") continue;
-        
-        std::string mdPath = entry.path().string();
-        std::string baseName = entry.path().stem().string();
-        
-        std::ifstream mdFile(mdPath);
-        if (!mdFile) {
-            std::cerr << "  Warning: Cannot read " << mdPath << std::endl;
-            continue;
-        }
-        
-        std::string line;
-        int fragmentIndex = 1;
-        bool inCodeBlock = false;
-        std::string currentFragment;
-        std::string currentMetadata;
-        
-        while (std::getline(mdFile, line)) {
-            if (line == "~~~") {
-                if (inCodeBlock) {
-                    // End of code block - write fragment to file
-                    std::string testFileName = outputDir + "/" + baseName + "." + std::to_string(fragmentIndex) + ".test";
-                    std::ofstream testFile(testFileName);
-                    testFile << currentFragment;
-                    testFile << "---\nN/A\n---\nN/A\n---\n";
-                    if (!currentMetadata.empty()) {
-                        testFile << currentMetadata;
-                    }
-                    testFile.close();
-                    
-                    std::cout << "  Extracted " << baseName << "." << fragmentIndex << std::endl;
-                    fragmentIndex++;
-                    currentFragment.clear();
-                    currentMetadata.clear();
-                } else {
-                    // Start of code block
-                    currentFragment.clear();
-                    currentMetadata.clear();
-                }
-                inCodeBlock = !inCodeBlock;
-            } else if (inCodeBlock) {
-                // Check for metadata lines (ExitCode:, Args:, etc.)
-                if (line.rfind("ExitCode:", 0) == 0 || 
-                    line.rfind("Args:", 0) == 0 ||
-                    line.rfind("Stdout:", 0) == 0 ||
-                    line.rfind("Stderr:", 0) == 0) {
-                    currentMetadata += line + "\n";
-                } else {
-                    currentFragment += line + "\n";
-                }
-            }
-        }
-        
-        mdFile.close();
-    }
-}
+
 
 // Helper function to regenerate a single fragment
 // Returns: 0 = success, 1 = compile error (expected), 2 = unexpected error
@@ -492,7 +419,18 @@ static int regenerateSingleFragment(const std::string& testPath, const std::stri
                 optIR = normalizeIR(optIR);
             }
         } catch (...) {
-            // Compilation failed - write N/A for IR sections, preserve metadata from spec
+            // Compilation failed - check if this is expected (MaxoncStderr present)
+            bool hasMaxoncStderr = metadata.find("MaxoncStderr:") != std::string::npos;
+            
+            if (!hasMaxoncStderr) {
+                // Unexpected compilation failure
+                statusMsg = "UNEXPECTED COMPILE ERROR: " + compileError;
+                std::filesystem::remove(tempSource);
+                std::filesystem::remove(tempOptLL);
+                return 2;
+            }
+            
+            // Expected compilation failure - write N/A for IR sections, preserve metadata from spec
             std::ofstream outFile(testPath);
             outFile << sourceCode << "---\nN/A\n---\nN/A\n---\n";
             // Write preserved metadata as-is (from spec file)
@@ -691,8 +629,12 @@ int regenerateFragmentsSubset(const std::string& outputFile, const std::vector<s
             failCount++;
         }
         
+        // Replace newlines in status message to avoid parsing issues
+        std::string safeStatusMsg = statusMsg;
+        std::replace(safeStatusMsg.begin(), safeStatusMsg.end(), '\n', '\t');
+        
         // Write result to output file
-        out << testName << "|" << statusMsg << "\n";
+        out << testName << "|" << safeStatusMsg << "\n";
         out.flush();
     }
 
@@ -705,13 +647,9 @@ int regenerateFragments() {
         auto startTime = std::chrono::high_resolution_clock::now();
         
         std::cout << "Regenerating test fragments..." << std::endl;
-        
-        // First, extract fragments from docs
-        extractFragmentsFromDocs();
 
         std::vector<std::string> fragmentDirs = {
-            "language-tests/fragments",
-            "language-tests/doc-fragments"
+            "language-tests/fragments"
         };
 
         // Collect all test files
@@ -722,7 +660,7 @@ int regenerateFragments() {
                 continue;
             }
 
-            std::cout << "\nProcessing " << fragmentsDir << "..." << std::endl;
+            // std::cout << "\nProcessing " << fragmentsDir << "..." << std::endl;
 
             for (const auto& entry : std::filesystem::directory_iterator(fragmentsDir)) {
                 if (entry.path().extension() == ".test") {
@@ -809,6 +747,7 @@ int regenerateFragments() {
         // Collect results from output files
         int successCount = 0;
         int failCount = 0;
+        std::vector<std::pair<std::string, std::string>> failedFragments;
 
         for (unsigned int i = 0; i < numWorkers; ++i) {
             std::ifstream inFile(outputFiles[i]);
@@ -822,16 +761,28 @@ int regenerateFragments() {
                 std::string testName = line.substr(0, pos);
                 std::string status = line.substr(pos + 1);
                 
-                std::cout << "  " << testName << "... " << status << std::endl;
+                // Convert escaped newlines back
+                std::replace(status.begin(), status.end(), '\t', '\n');
+                
+                // std::cout << "  " << testName << "... " << status << std::endl;
                 
                 if (status == "OK" || status == "COMPILE ERROR") {
                     successCount++;
                 } else {
                     failCount++;
+                    failedFragments.emplace_back(testName, status);
                 }
             }
             inFile.close();
             std::filesystem::remove(outputFiles[i]);
+        }
+
+        // Print failed fragments
+        if (!failedFragments.empty()) {
+            std::cout << "\nFailed fragments:" << std::endl;
+            for (const auto& [name, status] : failedFragments) {
+                std::cout << "  " << name << " - " << status << std::endl;
+            }
         }
 
         auto endTime = std::chrono::high_resolution_clock::now();

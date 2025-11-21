@@ -42,15 +42,7 @@ var message = "Hello, World!"
 ### Example
 
 ```maxon
-function main() int
-    // String literal with escape sequence
     var msg = "Hello!\n"
-    // In real code, you'd use print or write to output this
-    return 0
-end 'main'
-```
-```output
-ExitCode: 0
 ```
 
 ## Tests

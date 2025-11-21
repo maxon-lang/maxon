@@ -82,7 +82,7 @@ Stdout: Test
 <!-- test: in-namespace -->
 ```maxon
 namespace api 'api'
-    extern function ExitProcess(exitCode int) void
+    extern function GetStdHandle(nStdHandle int) ptr
 end 'api'
 
 function main() int

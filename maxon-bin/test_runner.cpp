@@ -511,26 +511,17 @@ int runTestFragments(bool verbose) {
         std::cout << "Running test fragments" << (verbose ? " (verbose mode)" : "") << " in parallel..." << std::endl;
 
         std::string fragmentsDir = "language-tests/fragments";
-        std::string docFragmentsDir = "language-tests/doc-fragments";
         
         if (!std::filesystem::exists(fragmentsDir)) {
             std::cerr << "Error: Directory not found: " << fragmentsDir << std::endl;
             return 1;
         }
 
-        // Collect all test files from both directories
+        // Collect all test files
         std::vector<std::filesystem::path> testFiles;
         for (const auto& entry : std::filesystem::directory_iterator(fragmentsDir)) {
             if (entry.path().extension() == ".test") {
                 testFiles.push_back(entry.path());
-            }
-        }
-        
-        if (std::filesystem::exists(docFragmentsDir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(docFragmentsDir)) {
-                if (entry.path().extension() == ".test") {
-                    testFiles.push_back(entry.path());
-                }
             }
         }
 

@@ -29,8 +29,9 @@
   ```
   ```
 - Expected output is visible in generated HTML docs
-- Examples with `output` blocks are NOT extracted as test fragments
-- Only tests in `## Tests` section are extracted to `language-tests/fragments/`
+- Examples WITHOUT `output` blocks are NOT extracted as test fragments (they're just documentation)
+- Examples WITH `output` blocks ARE extracted as test fragments
+- All tests in `## Tests` section are extracted to `language-tests/fragments/`
 
 **Modifying Existing Feature:**
 1. Edit the spec file in `specs/` (update code and/or expected results)

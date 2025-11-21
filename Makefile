@@ -13,7 +13,7 @@ LSP_SERVER_BACKUP = $(LSP_SERVER_BIN).old
 RUNTIME_LL = maxon-runtime/runtime.ll
 RUNTIME_OBJ = maxon-runtime/runtime.obj
 
-.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime
+.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments
 
 # Default target - build everything
 all: compiler lsp-server extension-install
@@ -34,6 +34,7 @@ help:
 	@echo "  extension-install - Install extension locally in VS Code"
 	@echo "  lsp-test         - Build and run LSP C++ unit tests"
 	@echo "  docs             - Generate HTML documentation from specs"
+	@echo "  fragments        - Regenerate fragments, validate specs, and run fragment tests"
 	@echo "  validate-specs   - Check for orphaned test fragments not in any spec"
 	@echo "  test             - Run all test suites (compiler self-tests, fragment tests, LSP tests, extension tests)"
 	@echo "  clean            - Clean all build artifacts"
@@ -120,6 +121,17 @@ docs: compiler
 validate-specs: compiler
 	@echo Validating spec coverage...
 	@powershell -ExecutionPolicy Bypass -File scripts/validate-specs.ps1
+
+# Regenerate fragments, validate specs, and run fragment tests
+fragments: compiler
+	@echo Extracting test fragments from specs...
+	@powershell -Command "maxon extract-specs"
+	@echo Validating spec coverage...
+	@powershell -ExecutionPolicy Bypass -File scripts/validate-specs.ps1
+	@echo Regenerating test fragments...
+	@powershell -Command "maxon regen-fragments"
+	@echo Running fragment tests...
+	@powershell -Command "maxon test-fragments"
 
 # Run all test suites
 test: compiler lsp-server extension-build

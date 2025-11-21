@@ -63,5 +63,4 @@ https://llvm.org/docs/Frontend/PerformanceTips.html
 - LLVM autovectorization
 - multiple verbosity levels during compiling
 - compiler error codes
-- merge doc-fragments into fragments
 - break up large files like codegen.cpp

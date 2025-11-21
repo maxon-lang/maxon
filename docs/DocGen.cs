@@ -478,7 +478,6 @@ body:has(.categories) .header p {
 			return string.Empty;
 		}
 
-		// NOTE: ExtractCodeExamples function removed - we no longer generate doc-fragments
 		// Expected results are now included directly in the Documentation section using ```output blocks
 		// and are rendered in the HTML output for users to see.
 
