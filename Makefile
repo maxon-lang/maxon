@@ -45,19 +45,18 @@ runtime: bin/runtime.obj
 bin/runtime.obj: $(RUNTIME_LL)
 	@echo "Building Maxon runtime library..."
 	@powershell -Command "if (-not (Test-Path 'bin')) { New-Item -ItemType Directory -Path 'bin' | Out-Null }"
-	@$(LLC) -filetype=obj -o bin/runtime.obj $(RUNTIME_LL)
+	@$(LLC) -filetype=obj -o bin/runtime.obj $(RUNTIME_LL) >/dev/null 2>&1
 
 # Configure CMake
 configure:
 	@powershell -Command "if (-not (Test-Path '$(BUILD_DIR)')) { New-Item -ItemType Directory -Path '$(BUILD_DIR)' | Out-Null }"
-	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Release
+	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1
 
 # Build the Maxon compiler (depends on runtime)
 compiler: configure runtime
-	cmake --build $(BUILD_DIR) --target maxon
-	cmake --build $(BUILD_DIR) --target grammar_generator
-	@echo "Generating TextMate grammar..."
-	@./bin/grammar_generator.exe vscode-extension/syntaxes/maxon.tmLanguage.json
+	cmake --build $(BUILD_DIR) --target maxon -- --quiet
+	cmake --build $(BUILD_DIR) --target grammar_generator -- --quiet
+	@if [ bin/grammar_generator.exe -nt vscode-extension/syntaxes/maxon.tmLanguage.json ]; then echo "Generating TextMate grammar..."; ./bin/grammar_generator.exe vscode-extension/syntaxes/maxon.tmLanguage.json; fi
 
 # Build both LSP server and extension
 lsp: lsp-server extension-install
