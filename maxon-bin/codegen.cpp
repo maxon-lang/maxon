@@ -895,6 +895,117 @@ void CodeGenerator::initStandardLibrary() {
     // Use int64 to avoid overflow for high precision values
     llvm::Value* fracInt = builder.CreateFPToSI(fracRounded, llvm::Type::getInt64Ty(context), "frac_int");
     
+    // Handle overflow case: if fracInt >= scale (10^precision), need to carry to integer part
+    // This happens when rounding causes fractional part to overflow, e.g., 0.9999995 with precision 6
+    llvm::BasicBlock* fracOverflowCheck = llvm::BasicBlock::Create(context, "frac_overflow_check", printFloatFunc);
+    llvm::BasicBlock* fracOverflowCase = llvm::BasicBlock::Create(context, "frac_overflow", printFloatFunc);
+    llvm::BasicBlock* fracNoOverflow = llvm::BasicBlock::Create(context, "frac_no_overflow", printFloatFunc);
+    
+    builder.CreateBr(fracOverflowCheck);
+    
+    builder.SetInsertPoint(fracOverflowCheck);
+    llvm::Value* scaleInt64 = builder.CreateFPToSI(scale, llvm::Type::getInt64Ty(context));
+    llvm::Value* hasOverflow = builder.CreateICmpSGE(fracInt, scaleInt64);
+    builder.CreateCondBr(hasOverflow, fracOverflowCase, fracNoOverflow);
+    
+    // Overflow case: need to increment integer part and regenerate buffer
+    builder.SetInsertPoint(fracOverflowCase);
+    // Increment the integer part
+    llvm::Value* newIntPart = builder.CreateAdd(intPart, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
+    // Clear and regenerate integer part in buffer
+    // Reset position to handle potential sign
+    llvm::Value* signOffset = builder.CreateLoad(llvm::Type::getInt32Ty(context), floatPos);
+    llvm::Value* overflowIsNegative = builder.CreateICmpEQ(signOffset, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
+    llvm::Value* overflowStartPos = builder.CreateSelect(overflowIsNegative, 
+        llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)), 
+        llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)));
+    
+    // Clear temp buffer and regenerate digits
+    builder.CreateCall(memsetFunc, {floatTemp, llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0), llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 20)});
+    builder.CreateStore(llvm::ConstantInt::get(context, llvm::APInt(32, 19, true)), floatTempIdx);
+    
+    // Extract digits of newIntPart
+    llvm::BasicBlock* overflowIntLoop = llvm::BasicBlock::Create(context, "overflow_int_loop", printFloatFunc);
+    llvm::BasicBlock* overflowIntBody = llvm::BasicBlock::Create(context, "overflow_int_body", printFloatFunc);
+    llvm::BasicBlock* overflowIntDone = llvm::BasicBlock::Create(context, "overflow_int_done", printFloatFunc);
+    
+    builder.CreateBr(overflowIntLoop);
+    
+    builder.SetInsertPoint(overflowIntLoop);
+    llvm::PHINode* overflowRemaining = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "overflow_remaining");
+    overflowRemaining->addIncoming(newIntPart, fracOverflowCase);
+    llvm::PHINode* overflowTempIdx = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "overflow_temp_idx");
+    overflowTempIdx->addIncoming(llvm::ConstantInt::get(context, llvm::APInt(32, 19, true)), fracOverflowCase);
+    
+    llvm::Value* overflowLoopCond = builder.CreateICmpNE(overflowRemaining, llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)));
+    builder.CreateCondBr(overflowLoopCond, overflowIntBody, overflowIntDone);
+    
+    builder.SetInsertPoint(overflowIntBody);
+    llvm::Value* overflowDigit = builder.CreateSRem(overflowRemaining, llvm::ConstantInt::get(context, llvm::APInt(32, 10, true)));
+    llvm::Value* overflowDigitChar = builder.CreateAdd(overflowDigit, llvm::ConstantInt::get(context, llvm::APInt(32, '0', true)));
+    llvm::Value* overflowDigitChar8 = builder.CreateTrunc(overflowDigitChar, charType);
+    llvm::Value* overflowTempPtr = builder.CreateInBoundsGEP(floatTempType, floatTemp,
+        {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), overflowTempIdx});
+    builder.CreateStore(overflowDigitChar8, overflowTempPtr);
+    llvm::Value* nextOverflowRemaining = builder.CreateSDiv(overflowRemaining, llvm::ConstantInt::get(context, llvm::APInt(32, 10, true)));
+    llvm::Value* nextOverflowTempIdx = builder.CreateSub(overflowTempIdx, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
+    overflowRemaining->addIncoming(nextOverflowRemaining, overflowIntBody);
+    overflowTempIdx->addIncoming(nextOverflowTempIdx, overflowIntBody);
+    builder.CreateBr(overflowIntLoop);
+    
+    builder.SetInsertPoint(overflowIntDone);
+    // Copy the new integer part to buffer
+    llvm::Value* overflowTempFinalIdx = overflowTempIdx;
+    llvm::Value* overflowStartIdx = builder.CreateAdd(overflowTempFinalIdx, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
+    llvm::Value* overflowIntLen = builder.CreateSub(llvm::ConstantInt::get(context, llvm::APInt(32, 20, true)), overflowStartIdx);
+    
+    llvm::BasicBlock* overflowCopyLoop = llvm::BasicBlock::Create(context, "overflow_copy_loop", printFloatFunc);
+    llvm::BasicBlock* overflowCopyBody = llvm::BasicBlock::Create(context, "overflow_copy_body", printFloatFunc);
+    llvm::BasicBlock* overflowCopyDone = llvm::BasicBlock::Create(context, "overflow_copy_done", printFloatFunc);
+    
+    builder.CreateBr(overflowCopyLoop);
+    
+    builder.SetInsertPoint(overflowCopyLoop);
+    llvm::PHINode* overflowCopyIdx = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "overflow_copy_idx");
+    overflowCopyIdx->addIncoming(llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)), overflowIntDone);
+    llvm::Value* overflowCopyCond = builder.CreateICmpSLT(overflowCopyIdx, overflowIntLen);
+    builder.CreateCondBr(overflowCopyCond, overflowCopyBody, overflowCopyDone);
+    
+    builder.SetInsertPoint(overflowCopyBody);
+    llvm::Value* overflowSrcIdx = builder.CreateAdd(overflowStartIdx, overflowCopyIdx);
+    llvm::Value* overflowSrcPtr = builder.CreateInBoundsGEP(floatTempType, floatTemp,
+        {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), overflowSrcIdx});
+    llvm::Value* overflowSrcChar = builder.CreateLoad(charType, overflowSrcPtr);
+    llvm::Value* overflowDstIdx = builder.CreateAdd(overflowStartPos, overflowCopyIdx);
+    llvm::Value* overflowDstPtr = builder.CreateInBoundsGEP(floatBufferType, floatBuffer,
+        {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), overflowDstIdx});
+    builder.CreateStore(overflowSrcChar, overflowDstPtr);
+    llvm::Value* nextOverflowCopyIdx = builder.CreateAdd(overflowCopyIdx, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
+    overflowCopyIdx->addIncoming(nextOverflowCopyIdx, overflowCopyBody);
+    builder.CreateBr(overflowCopyLoop);
+    
+    builder.SetInsertPoint(overflowCopyDone);
+    llvm::Value* overflowNewPos = builder.CreateAdd(overflowStartPos, overflowIntLen);
+    builder.CreateStore(overflowNewPos, floatPos);
+    
+    // Add decimal point
+    llvm::Value* overflowDecimalPos = builder.CreateLoad(llvm::Type::getInt32Ty(context), floatPos);
+    llvm::Value* overflowDecimalPtr = builder.CreateInBoundsGEP(floatBufferType, floatBuffer,
+        {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), overflowDecimalPos});
+    builder.CreateStore(llvm::ConstantInt::get(charType, '.'), overflowDecimalPtr);
+    llvm::Value* overflowPosAfterDecimal = builder.CreateAdd(overflowDecimalPos, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
+    builder.CreateStore(overflowPosAfterDecimal, floatPos);
+    
+    // Set fracInt to 0 (all zeros in fractional part)
+    llvm::Value* overflowFracInt = llvm::ConstantInt::get(context, llvm::APInt(64, 0, true));
+    builder.CreateBr(fracNoOverflow);
+    
+    // No overflow case
+    builder.SetInsertPoint(fracNoOverflow);
+    llvm::PHINode* finalFracInt = builder.CreatePHI(llvm::Type::getInt64Ty(context), 2, "final_frac_int");
+    finalFracInt->addIncoming(overflowFracInt, overflowCopyDone);
+    finalFracInt->addIncoming(fracInt, fracOverflowCheck);
+    
     // Compute precision - 1 for loop initialization
     llvm::Value* precisionMinus1 = builder.CreateSub(precisionArg, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
     
@@ -907,9 +1018,9 @@ void CodeGenerator::initStandardLibrary() {
     
     builder.SetInsertPoint(fracDigitLoop);
     llvm::PHINode* fracIdx = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "frac_idx");
-    fracIdx->addIncoming(precisionMinus1, scaleDone);
+    fracIdx->addIncoming(precisionMinus1, fracNoOverflow);
     llvm::PHINode* fracRemaining = builder.CreatePHI(llvm::Type::getInt64Ty(context), 2, "frac_remaining");
-    fracRemaining->addIncoming(fracInt, scaleDone);
+    fracRemaining->addIncoming(finalFracInt, fracNoOverflow);
     
     llvm::Value* fracCond = builder.CreateICmpSGE(fracIdx, llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)));
     builder.CreateCondBr(fracCond, fracDigitBody, fracDigitsDone);

@@ -39,6 +39,38 @@ struct SpecManifest {
     std::map<std::string, FragmentEntry> fragments; // key: fragment filename
 };
 
+// Helper function to write a test fragment file
+static void writeTestFragment(const std::string& outputDir, const std::string& fragmentName,
+                              const std::string& code, const std::string& metadata,
+                              SpecManifest& manifest, const std::string& specBaseName,
+                              const std::string& testName, int index, int& totalExtracted,
+                              bool isDocExample = false) {
+    std::string testFileName = outputDir + "/" + fragmentName + ".test";
+    
+    std::ofstream testFile(testFileName);
+    testFile << "// Test: " << fragmentName << "\n";
+    testFile << code;
+    testFile << "---\nN/A\n---\nN/A\n---\n";
+    if (!metadata.empty()) {
+        testFile << metadata;
+    }
+    testFile.close();
+    
+    // Add to manifest
+    SpecManifest::FragmentEntry entry;
+    entry.specFile = specBaseName + ".md";
+    entry.testName = testName;
+    entry.index = index;
+    manifest.fragments[fragmentName + ".test"] = entry;
+    
+    std::cout << "  Extracted " << fragmentName;
+    if (isDocExample) {
+        std::cout << " (doc example)";
+    }
+    std::cout << std::endl;
+    totalExtracted++;
+}
+
 // Extract test fragments from spec files in specs/ directory
 int extractSpecFragments() {
     std::string specsDir = "specs";
@@ -81,6 +113,7 @@ int extractSpecFragments() {
         
         std::string line;
         bool inTestSection = false;
+        bool inDocSection = false;
         bool inCodeBlock = false;
         std::string currentTestName;
         std::string currentCode;
@@ -88,15 +121,23 @@ int extractSpecFragments() {
         std::map<std::string, int> testNameCounts; // Track test indices per name
         bool collectingMetadata = false;
         bool inMetadataBlock = false; // For multi-line Stdout/Stderr
+        int docExampleCount = 0; // Counter for unnamed doc examples
         
         while (std::getline(specFile, line)) {
-            // Check if we're entering the Tests section
+            // Check if we're entering the Documentation or Tests section
+            if (line == "## Documentation") {
+                inDocSection = true;
+                inTestSection = false;
+                continue;
+            }
             if (line == "## Tests") {
+                inDocSection = false;
                 inTestSection = true;
                 continue;
             }
             
-            if (!inTestSection) continue;
+            // Skip if not in Documentation or Tests section
+            if (!inTestSection && !inDocSection) continue;
             
             // Check for test marker comment
             std::regex testMarkerRegex(R"(<!--\s*test:\s*([a-zA-Z0-9_.-]+)\s*-->)");
@@ -106,31 +147,14 @@ int extractSpecFragments() {
                 if (!currentTestName.empty() && !currentCode.empty()) {
                     int index = testNameCounts[currentTestName];
                     std::string fragmentName = currentTestName + "." + std::to_string(index);
-                    std::string testFileName = outputDir + "/" + fragmentName + ".test";
-                    
-                    std::ofstream testFile(testFileName);
-                    testFile << currentCode;
-                    testFile << "---\nN/A\n---\nN/A\n---\n";
-                    if (!currentMetadata.empty()) {
-                        testFile << currentMetadata;
-                    }
-                    testFile.close();
-                    
-                    // Add to manifest
-                    SpecManifest::FragmentEntry entry;
-                    entry.specFile = specBaseName + ".md";
-                    entry.testName = currentTestName;
-                    entry.index = index;
-                    manifest.fragments[fragmentName + ".test"] = entry;
-                    
-                    std::cout << "  Extracted " << fragmentName << std::endl;
-                    totalFragmentsExtracted++;
-                    
+                    writeTestFragment(outputDir, fragmentName, currentCode, currentMetadata,
+                                    manifest, specBaseName, currentTestName, index, totalFragmentsExtracted);
                     currentCode.clear();
                     currentMetadata.clear();
                 }
                 
-                currentTestName = match[1].str();
+                // Prefix test name with spec file name
+                currentTestName = specBaseName + "." + match[1].str();
                 testNameCounts[currentTestName]++;
                 collectingMetadata = false;
                 inMetadataBlock = false;
@@ -138,40 +162,80 @@ int extractSpecFragments() {
             }
             
             // Check for code block fence
-            if (line == "```maxon" || (line == "```" && !inMetadataBlock)) {
-                if (!inCodeBlock && line == "```maxon") {
-                    // Start of code block
-                    inCodeBlock = true;
-                    currentCode.clear();
-                } else if (inCodeBlock && line == "```") {
-                    // End of code block - start collecting metadata
-                    inCodeBlock = false;
-                    collectingMetadata = true;
-                }
+            if (line == "```maxon") {
+                // Start of maxon code block
+                inCodeBlock = true;
+                currentCode.clear();
                 continue;
+            } else if (line == "```") {
+                if (inCodeBlock) {
+                    // End of code block
+                    inCodeBlock = false;
+                    
+                    // If in Doc section and no test name set, auto-generate one
+                    if (inDocSection && currentTestName.empty() && !currentCode.empty()) {
+                        docExampleCount++;
+                        currentTestName = specBaseName + ".doc-example-" + std::to_string(docExampleCount);
+                        testNameCounts[currentTestName] = 1;
+                    }
+                    
+                    collectingMetadata = true;
+                    continue;
+                } else if (collectingMetadata && !inMetadataBlock) {
+                    // Start of metadata fence block
+                    inMetadataBlock = true;
+                    continue;
+                } else if (inMetadataBlock) {
+                    // End of metadata fence block
+                    inMetadataBlock = false;
+                    continue;
+                }
             }
             
             if (inCodeBlock) {
                 // Inside code block - accumulate source
                 currentCode += line + "\n";
             } else if (collectingMetadata) {
-                // Check for metadata lines
-                if (line.rfind("ExitCode:", 0) == 0) {
+                if (inMetadataBlock) {
+                    // Inside metadata fence block - collect everything
                     currentMetadata += line + "\n";
-                } else if (line.rfind("Args:", 0) == 0) {
-                    currentMetadata += line + "\n";
-                } else if (line.rfind("Stdout:", 0) == 0 || line.rfind("Stderr:", 0) == 0 || line.rfind("MaxoncStderr:", 0) == 0) {
-                    currentMetadata += line + "\n";
-                    // Check if this starts a multi-line block
-                    if (line.find("```") != std::string::npos) {
-                        inMetadataBlock = true;
-                    }
-                } else if (inMetadataBlock) {
-                    // Inside multi-line metadata block
-                    currentMetadata += line + "\n";
-                    if (line.find("```") != std::string::npos && currentMetadata.find("```\n" + line) != std::string::npos) {
-                        // This is the closing fence
-                        inMetadataBlock = false;
+                } else {
+                    // Check for metadata lines outside fence (single-line format)
+                    if (line.rfind("ExitCode:", 0) == 0) {
+                        currentMetadata += line + "\n";
+                    } else if (line.rfind("Args:", 0) == 0) {
+                        currentMetadata += line + "\n";
+                    } else if (line.rfind("Stdout:", 0) == 0) {
+                        currentMetadata += line + "\n";
+                        // Check if this line starts a multi-line block
+                        if (line.find("```") != std::string::npos) {
+                            inMetadataBlock = true;
+                        }
+                    } else if (line.rfind("Stderr:", 0) == 0) {
+                        currentMetadata += line + "\n";
+                        // Check if this line starts a multi-line block
+                        if (line.find("```") != std::string::npos) {
+                            inMetadataBlock = true;
+                        }
+                    } else if (line.rfind("MaxoncStderr:", 0) == 0) {
+                        currentMetadata += line + "\n";
+                        // Check if this line starts a multi-line block
+                        if (line.find("```") != std::string::npos) {
+                            inMetadataBlock = true;
+                        }
+                    } else if (inDocSection && collectingMetadata && !currentTestName.empty()) {
+                        // In doc section, if we hit a non-metadata line after code block, save the example
+                        // This handles doc examples without explicit test metadata
+                        if (line.empty() || line.rfind("###", 0) == 0 || line.rfind("##", 0) == 0) {
+                            int index = testNameCounts[currentTestName];
+                            std::string fragmentName = currentTestName + "." + std::to_string(index);
+                            writeTestFragment(outputDir, fragmentName, currentCode, currentMetadata,
+                                            manifest, specBaseName, currentTestName, index, totalFragmentsExtracted, true);
+                            currentCode.clear();
+                            currentMetadata.clear();
+                            currentTestName.clear();
+                            collectingMetadata = false;
+                        }
                     }
                 }
             }
@@ -181,25 +245,8 @@ int extractSpecFragments() {
         if (!currentTestName.empty() && !currentCode.empty()) {
             int index = testNameCounts[currentTestName];
             std::string fragmentName = currentTestName + "." + std::to_string(index);
-            std::string testFileName = outputDir + "/" + fragmentName + ".test";
-            
-            std::ofstream testFile(testFileName);
-            testFile << currentCode;
-            testFile << "---\nN/A\n---\nN/A\n---\n";
-            if (!currentMetadata.empty()) {
-                testFile << currentMetadata;
-            }
-            testFile.close();
-            
-            // Add to manifest
-            SpecManifest::FragmentEntry entry;
-            entry.specFile = specBaseName + ".md";
-            entry.testName = currentTestName;
-            entry.index = index;
-            manifest.fragments[fragmentName + ".test"] = entry;
-            
-            std::cout << "  Extracted " << fragmentName << std::endl;
-            totalFragmentsExtracted++;
+            writeTestFragment(outputDir, fragmentName, currentCode, currentMetadata,
+                            manifest, specBaseName, currentTestName, index, totalFragmentsExtracted);
         }
         
         specFile.close();
@@ -327,23 +374,32 @@ static int regenerateSingleFragment(const std::string& testPath, const std::stri
         sourceCode += line + "\n";
     }
 
-    std::string metadata;
-    bool inMetadata = false;
+    // Read past the old IR sections (we'll regenerate these)
     int separatorCount = 1;
     while (std::getline(inFile, line)) {
         if (line == "---") {
             separatorCount++;
             if (separatorCount == 3) {
-                inMetadata = true;
-                continue;
+                // Now we're at the metadata section
+                break;
             }
         }
-        if (inMetadata) {
-            metadata += line + "\n";
+    }
+
+    // Read and preserve metadata from the spec file, but exclude instruction counts
+    // (we'll regenerate those)
+    std::string metadata;
+    while (std::getline(inFile, line)) {
+        // Skip instruction count lines - we'll regenerate them
+        if (line.rfind("OptimizedInstructionCount:", 0) == 0 ||
+            line.rfind("UnoptimizedInstructionCount:", 0) == 0) {
+            continue;
         }
+        metadata += line + "\n";
     }
     inFile.close();
 
+    // Extract args for compilation (if present)
     std::string args;
     std::istringstream metaStream(metadata);
     while (std::getline(metaStream, line)) {
@@ -436,58 +492,11 @@ static int regenerateSingleFragment(const std::string& testPath, const std::stri
                 optIR = normalizeIR(optIR);
             }
         } catch (...) {
+            // Compilation failed - write N/A for IR sections, preserve metadata from spec
             std::ofstream outFile(testPath);
             outFile << sourceCode << "---\nN/A\n---\nN/A\n---\n";
-            if (!args.empty()) {
-                outFile << "Args: " << args << "\n";
-            }
-            if (!compileError.empty()) {
-                // Normalize worker-specific temp filenames to stable names
-                size_t pos = 0;
-                std::regex tempFragmentRegex(R"(temp_fragment_w\d+\.maxon)");
-                compileError = std::regex_replace(compileError, tempFragmentRegex, "temp_fragment.maxon");
-                
-                std::regex tempOptRegex(R"(temp-opt_w\d+\.exe\.tmp\.obj)");
-                compileError = std::regex_replace(compileError, tempOptRegex, "test.exe.tmp.obj");
-                
-                std::regex tempDebugRegex(R"(temp-debug_w\d+\.exe\.tmp\.obj)");
-                compileError = std::regex_replace(compileError, tempDebugRegex, "test.exe.tmp.obj");
-                
-                // Also handle non-worker versions
-                pos = 0;
-                while ((pos = compileError.find("temp-opt.exe.tmp.obj", pos)) != std::string::npos) {
-                    compileError.replace(pos, 20, "test.exe.tmp.obj");
-                    pos += 16;
-                }
-                pos = 0;
-                while ((pos = compileError.find("temp-debug.exe.tmp.obj", pos)) != std::string::npos) {
-                    compileError.replace(pos, 22, "test.exe.tmp.obj");
-                    pos += 16;
-                }
-
-                bool isLinkingError = compileError.find("lld-link:") != std::string::npos;
-
-                if (isLinkingError) {
-                    size_t exMsgStart = compileError.find("\nLLD linking failed");
-                    if (exMsgStart == std::string::npos) {
-                        exMsgStart = compileError.find("LLD linking failed");
-                    }
-                    if (exMsgStart != std::string::npos) {
-                        if (compileError[exMsgStart] == '\n') {
-                            exMsgStart++;
-                        }
-                        compileError.insert(exMsgStart, "=== Compilation Failed ===\n");
-                        compileError += "\nCompilation terminated due to errors.\n";
-                    }
-                } else if (compileError.find("=== Compilation Failed ===") == std::string::npos) {
-                    compileError = "=== Compilation Failed ===\n" + compileError;
-                    if (compileError.back() != '\n') {
-                        compileError += '\n';
-                    }
-                    compileError += "\nCompilation terminated due to errors.\n";
-                }
-                outFile << "MaxoncStderr: ```\n" << compileError << "```\n";
-            }
+            // Write preserved metadata as-is (from spec file)
+            outFile << metadata;
             outFile.close();
             statusMsg = "COMPILE ERROR";
             
@@ -496,6 +505,7 @@ static int regenerateSingleFragment(const std::string& testPath, const std::stri
             return 1;
         }
 
+        // Generate profiled optimized executable to get instruction count
         CompilationOptions optProfileOpts;
         optProfileOpts.inputFiles = {tempSource};
         optProfileOpts.outputFile = tempOptExe;
@@ -504,24 +514,20 @@ static int regenerateSingleFragment(const std::string& testPath, const std::stri
         optProfileOpts.verbose = false;
         compileProgram(optProfileOpts);
 
-        int exitCode = 0;
-        std::string stdout_output;
-        std::string stderr_output;
         int64_t optInstrCount = -1;
 
 #ifdef _WIN32
         char tempPath[MAX_PATH];
         GetTempPathA(MAX_PATH, tempPath);
         std::string tempOutput = std::string(tempPath) + "maxon_output" + workerSuffix + ".tmp";
-        std::string tempStderr = std::string(tempPath) + "maxon_stderr" + workerSuffix + ".tmp";
 
         std::string cmdLine = tempOptExe;
         if (!args.empty()) {
             cmdLine += " " + args;
         }
-        cmdLine += " > \"" + tempOutput + "\" 2>\"" + tempStderr + "\"";
+        cmdLine += " > \"" + tempOutput + "\" 2>&1";
 
-        exitCode = system(cmdLine.c_str());
+        system(cmdLine.c_str());
 
         std::ifstream outFile(tempOutput, std::ios::binary);
         if (outFile) {
@@ -534,23 +540,13 @@ static int regenerateSingleFragment(const std::string& testPath, const std::stri
 
             if (it != buffer.end() && std::distance(it, buffer.end()) >= static_cast<ptrdiff_t>(markerLen + 8)) {
                 std::memcpy(&optInstrCount, &*(it + markerLen), 8);
-                stdout_output = std::string(buffer.begin(), it);
-            } else {
-                stdout_output = std::string(buffer.begin(), buffer.end());
             }
         }
 
-        std::ifstream stderrFile(tempStderr);
-        if (stderrFile) {
-            stderr_output = std::string(std::istreambuf_iterator<char>(stderrFile),
-                                       std::istreambuf_iterator<char>());
-            stderrFile.close();
-        }
-
         std::filesystem::remove(tempOutput);
-        std::filesystem::remove(tempStderr);
 #endif
 
+        // Generate debug IR
         CompilationOptions debugOpts;
         debugOpts.inputFiles = {tempSource};
         debugOpts.outputFile = tempDebugLL;
@@ -569,6 +565,7 @@ static int regenerateSingleFragment(const std::string& testPath, const std::stri
             debugIR = normalizeIR(debugIR);
         }
 
+        // Generate profiled debug executable to get instruction count
         CompilationOptions debugProfileOpts;
         debugProfileOpts.inputFiles = {tempSource};
         debugProfileOpts.outputFile = tempDebugExe;
@@ -603,29 +600,47 @@ static int regenerateSingleFragment(const std::string& testPath, const std::stri
         std::filesystem::remove(tempOutput);
 #endif
 
+        // Write fragment file with regenerated IR, instruction counts, and preserved spec metadata
         std::ofstream testFile(testPath);
         testFile << sourceCode;
         testFile << "---\n" << optIR;
         testFile << "---\n" << debugIR;
         testFile << "---\n";
-        if (!args.empty()) {
-            testFile << "Args: " << args << "\n";
+        
+        // Write preserved metadata from spec first (includes Args, ExitCode, Stdout, Stderr, MaxoncStderr)
+        // Need to properly close any open ``` blocks before appending instruction counts
+        std::string metadataTrimmed = metadata;
+        // Remove trailing whitespace/newlines
+        while (!metadataTrimmed.empty() && (metadataTrimmed.back() == '\n' || metadataTrimmed.back() == '\r' || metadataTrimmed.back() == ' ' || metadataTrimmed.back() == '\t')) {
+            metadataTrimmed.pop_back();
         }
-        testFile << "ExitCode: " << exitCode << "\n";
+        
+        testFile << metadataTrimmed;
+        
+        // Check if metadata ends with an unclosed ``` block (for Stdout/Stderr/MaxoncStderr)
+        std::istringstream metaCheck(metadata);
+        std::string checkLine;
+        int fenceCount = 0;
+        while (std::getline(metaCheck, checkLine)) {
+            if (checkLine.find("```") != std::string::npos) {
+                fenceCount++;
+            }
+        }
+        // If odd number of fences, we need to close
+        if (fenceCount % 2 == 1) {
+            testFile << "\n```";
+        }
+        
+        testFile << "\n";
+        
+        // Add instruction counts after spec metadata
         if (optInstrCount > 0) {
             testFile << "OptimizedInstructionCount: " << optInstrCount << "\n";
         }
         if (debugInstrCount > 0) {
             testFile << "UnoptimizedInstructionCount: " << debugInstrCount << "\n";
         }
-        if (!stdout_output.empty()) {
-            testFile << "Stdout: ```\n" << stdout_output;
-            testFile << "```\n";
-        }
-        if (!stderr_output.empty()) {
-            testFile << "Stderr: ```\n" << stderr_output;
-            testFile << "```\n";
-        }
+        
         testFile.close();
 
         std::filesystem::remove(tempSource);

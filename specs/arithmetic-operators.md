@@ -54,7 +54,15 @@ function main() int
     var prod = a * b     // 30
     var quot = a / b     // 3
     var rem = a % b      // 1
-    return rem
+    
+    // Use the values
+    print(sum)
+    print(diff)
+    print(prod)
+    print(quot)
+    print(rem)
+    
+    return 0
 end 'main'
 ```
 

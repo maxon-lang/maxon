@@ -82,7 +82,11 @@ ExitCode: -2
 function main() int
     var x = 2.5
     var y = round(x)
-    return y
+    print_float(y, 1)
+    return 0
 end 'main'
 ```
-ExitCode: 2
+```
+Stdout: 3.0
+ExitCode: 0
+```

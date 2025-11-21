@@ -99,11 +99,13 @@ ExitCode: 1
 ```maxon
 function main() int
     var result = pow(4.0, 0.5)  // Square root
-    return trunc(result)
+    print_float(result, 1)
+    return 0
 end 'main'
 ```
 ```
-ExitCode: 2
+Stdout: 2.0
+ExitCode: 0
 ```
 
 <!-- test: int-promotion -->

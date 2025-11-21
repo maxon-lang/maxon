@@ -79,28 +79,40 @@ var b = log10(a)     // 1.0 (10^1 = 10)
 ```maxon
 function main() int
     var x = log10(100.0)
-    return x as int
+    print_float(x, 1)
+    return 0
 end 'main'
 ```
-ExitCode: 2
+ExitCode: 0
+Stdout: ```
+2.0
+```
 
 <!-- test: log10.one-thousand -->
 ```maxon
 function main() int
     var x = log10(1000.0)
-    return x as int
+    print_float(x, 1)
+    return 0
 end 'main'
 ```
-ExitCode: 3
+ExitCode: 0
+Stdout: ```
+3.0
+```
 
 <!-- test: log10.ten -->
 ```maxon
 function main() int
     var x = log10(10.0)
-    return x as int
+    print_float(x, 1)
+    return 0
 end 'main'
 ```
-ExitCode: 1
+ExitCode: 0
+Stdout: ```
+1.0
+```
 
 <!-- test: log10.one -->
 ```maxon
@@ -132,16 +144,24 @@ Stdout: ```
 function main() int
     var x = 100  // int
     var result = log10(x)  // x promoted to 100.0
-    return result as int
+    print_float(result, 1)
+    return 0
 end 'main'
 ```
-ExitCode: 2
+ExitCode: 0
+Stdout: ```
+2.0
+```
 
 <!-- test: log10.large-value -->
 ```maxon
 function main() int
     var x = log10(10000.0)
-    return x as int
+    print_float(x, 1)
+    return 0
 end 'main'
 ```
-ExitCode: 4
+ExitCode: 0
+Stdout: ```
+4.0
+```

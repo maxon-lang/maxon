@@ -1,0 +1,110 @@
+// Test: pointers.address-of.1
+function main() int
+    var x = 42
+    var addr = &x
+    var addrAsInt = addr as int
+    if addrAsInt > 0 return 0
+    return 1
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)
+define range(i32 0, 2) i32 @main() local_unnamed_addr #0 {
+entry:
+  %x = alloca i32, align 4
+  %0 = ptrtoint ptr %x to i64
+  %ptr2inttmp = trunc i64 %0 to i32
+  %cmptmp = icmp slt i32 %ptr2inttmp, 1
+  %. = zext i1 %cmptmp to i32
+  ret i32 %.
+}
+
+declare void @ExitProcess(i32) local_unnamed_addr
+
+; Function Attrs: noreturn
+define void @_start() local_unnamed_addr #1 {
+entry:
+  %x.i = alloca i32, align 4
+  call void @llvm.lifetime.start.p0(i64 4, ptr nonnull %x.i)
+  %0 = ptrtoint ptr %x.i to i64
+  %ptr2inttmp.i = trunc i64 %0 to i32
+  %cmptmp.i = icmp slt i32 %ptr2inttmp.i, 1
+  %..i = zext i1 %cmptmp.i to i32
+  call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %x.i)
+  call void @ExitProcess(i32 %..i)
+  unreachable
+}
+
+; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr captures(none)) #2
+
+; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr captures(none)) #2
+
+attributes #0 = { mustprogress nofree norecurse nosync nounwind willreturn memory(none) }
+attributes #1 = { noreturn }
+attributes #2 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+define i32 @main() !dbg !4 {
+entry:
+  %addrAsInt = alloca i32, align 4
+  %addr = alloca ptr, align 8
+  %x = alloca i32, align 4
+  store i32 42, ptr %x, align 4, !dbg !9
+    #dbg_declare(ptr %x, !10, !DIExpression(), !9)
+  store ptr %x, ptr %addr, align 8, !dbg !11
+    #dbg_declare(ptr %addr, !12, !DIExpression(), !11)
+  %addr1 = load ptr, ptr %addr, align 8, !dbg !13
+  %ptr2inttmp = ptrtoint ptr %addr1 to i32, !dbg !13
+  store i32 %ptr2inttmp, ptr %addrAsInt, align 4, !dbg !13
+    #dbg_declare(ptr %addrAsInt, !14, !DIExpression(), !13)
+  %addrAsInt2 = load i32, ptr %addrAsInt, align 4, !dbg !15
+  %cmptmp = icmp sgt i32 %addrAsInt2, 0, !dbg !15
+  br i1 %cmptmp, label %then, label %ifcont, !dbg !15
+
+then:                                             ; preds = %entry
+  ret i32 0, !dbg !16
+
+ifcont:                                           ; preds = %entry
+  ret i32 1, !dbg !17
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
+
+!llvm.dbg.cu = !{!0}
+!llvm.module.flags = !{!2, !3}
+
+!0 = distinct !DICompileUnit(language: DW_LANG_C, file: !1, producer: "Maxon Compiler", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)
+!1 = !DIFile(filename: "test.maxon", directory: ".")
+!2 = !{i32 2, !"CodeView", i32 1}
+!3 = !{i32 2, !"Debug Info Version", i32 3}
+!4 = distinct !DISubprogram(name: "main", linkageName: "main", scope: !1, file: !1, line: 2, type: !5, scopeLine: 2, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
+!5 = !DISubroutineType(types: !6)
+!6 = !{!7}
+!7 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
+!8 = !{}
+!9 = !DILocation(line: 3, column: 5, scope: !4)
+!10 = !DILocalVariable(name: "x", scope: !4, file: !1, line: 3, type: !7, align: 32)
+!11 = !DILocation(line: 4, column: 5, scope: !4)
+!12 = !DILocalVariable(name: "addr", scope: !4, file: !1, line: 4, type: !7, align: 32)
+!13 = !DILocation(line: 5, column: 5, scope: !4)
+!14 = !DILocalVariable(name: "addrAsInt", scope: !4, file: !1, line: 5, type: !7, align: 32)
+!15 = !DILocation(line: 6, column: 5, scope: !4)
+!16 = !DILocation(line: 6, column: 22, scope: !4)
+!17 = !DILocation(line: 7, column: 5, scope: !4)
+---
+ExitCode: 0
+OptimizedInstructionCount: 12
+UnoptimizedInstructionCount: 12

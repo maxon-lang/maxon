@@ -64,11 +64,13 @@ end 'main'
 function main() int
     var e = 2.71828
     var result = log(e)
-    return trunc(result)
+    print_float(result, 6)
+    return 0
 end 'main'
 ```
 ```
-ExitCode: 1
+Stdout: 0.999999
+ExitCode: 0
 ```
 
 <!-- test: ln-of-one -->
@@ -86,25 +88,24 @@ ExitCode: 0
 ```maxon
 function main() int
     var result = log(100.0)  // ln(100) ≈ 4.6
-    return trunc(result)
+    print_float(result, 1)
+    return 0
 end 'main'
 ```
 ```
-ExitCode: 4
+Stdout: 4.6
+ExitCode: 0
 ```
 
 <!-- test: int-promotion -->
 ```maxon
 function main() int
     var result = log(10)  // Int promoted to float
-    return trunc(result)
+    print_float(result, 1)
+    return 0
 end 'main'
 ```
 ```
-ExitCode: 2
-```
-end 'main'
-```
-```
-ExitCode: 2
+Stdout: 2.3
+ExitCode: 0
 ```

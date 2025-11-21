@@ -76,12 +76,96 @@ entry:
   ret double %result2
 }
 
-; sin - sine function using musl's polynomial approximation
-; Algorithm from musl libc (https://git.musl-libc.org/cgit/musl/tree/src/math/__sin.c)
-; Kernel sin function for values bounded by ~pi/4 in magnitude
-; Uses polynomial of degree 13 for approximation
+; sin - sine function with full range reduction
+; Algorithm from musl libc (https://git.musl-libc.org/cgit/musl/tree/src/math/sin.c)
+; Handles all input ranges correctly like other programming languages
 ; double sin(double x)
 define double @sin(double %x) {
+entry:
+  ; Extract bits to check magnitude
+  %x_bits = bitcast double %x to i64
+  %ix_u64 = lshr i64 %x_bits, 32
+  %ix = trunc i64 %ix_u64 to i32
+  %ix_abs = and i32 %ix, 2147483647  ; 0x7fffffff - mask off sign bit
+  
+  ; Check if |x| ~<= pi/4 (0x3fe921fb)
+  %is_small = icmp ule i32 %ix_abs, 1072243195  ; 0x3fe921fb
+  br i1 %is_small, label %small_arg, label %need_reduction
+
+small_arg:
+  ; For small arguments, use kernel sin directly
+  ; Check if |x| < 2**-27 (0x3e400000)
+  %is_tiny = icmp ult i32 %ix_abs, 1041235968  ; 0x3e400000
+  br i1 %is_tiny, label %tiny_arg, label %kernel_direct
+
+tiny_arg:
+  ; For tiny x, sin(x) ≈ x
+  ret double %x
+
+kernel_direct:
+  ; Call kernel sin with y=0
+  %result_kernel = call double @__sin_kernel(double %x, double 0.0)
+  ret double %result_kernel
+
+need_reduction:
+  ; Check for infinity or NaN
+  %is_inf_or_nan = icmp uge i32 %ix_abs, 2146435072  ; 0x7ff00000
+  br i1 %is_inf_or_nan, label %inf_or_nan, label %do_reduction
+
+inf_or_nan:
+  ; sin(inf or NaN) = NaN
+  %nan_result = fsub double %x, %x
+  ret double %nan_result
+
+do_reduction:
+  ; Use rem_pio2 for range reduction
+  %y_alloca = alloca [2 x double], align 8
+  %n = call i32 @__rem_pio2(double %x, ptr %y_alloca)
+  
+  ; Load y[0] and y[1]
+  %y0_ptr = getelementptr [2 x double], ptr %y_alloca, i64 0, i64 0
+  %y1_ptr = getelementptr [2 x double], ptr %y_alloca, i64 0, i64 1
+  %y0 = load double, ptr %y0_ptr
+  %y1 = load double, ptr %y1_ptr
+  
+  ; Determine which function to use based on n
+  ; n & 3: 0 => sin(y), 1 => cos(y), 2 => -sin(y), 3 => -cos(y)
+  %n_mod_4 = and i32 %n, 3
+  
+  switch i32 %n_mod_4, label %case_0 [
+    i32 0, label %case_0
+    i32 1, label %case_1
+    i32 2, label %case_2
+    i32 3, label %case_3
+  ]
+
+case_0:
+  ; sin(y)
+  %result_0 = call double @__sin_kernel(double %y0, double %y1)
+  ret double %result_0
+
+case_1:
+  ; cos(y)
+  %result_1 = call double @__cos_kernel(double %y0, double %y1)
+  ret double %result_1
+
+case_2:
+  ; -sin(y)
+  %result_2_temp = call double @__sin_kernel(double %y0, double %y1)
+  %result_2 = fneg double %result_2_temp
+  ret double %result_2
+
+case_3:
+  ; -cos(y)
+  %result_3_temp = call double @__cos_kernel(double %y0, double %y1)
+  %result_3 = fneg double %result_3_temp
+  ret double %result_3
+}
+
+; __sin_kernel - kernel sin function for arguments in ~[-pi/4, pi/4]
+; Implements optimized polynomial approximation
+; double __sin_kernel(double x, double y)
+define double @__sin_kernel(double %x, double %y) {
 entry:
   ; Polynomial coefficients
   ; S1 = -1/6, S2 = 1/120, S3 = -1/5040, S4 = 1/362880, S5 = -1/39916800, S6 = 1/6227020800
@@ -113,21 +197,96 @@ entry:
   ; v = z * x
   %v = fmul double %z, %x
   
-  ; Compute final result: x + v*(S1 + z*r)
+  ; Compute final result: x + v*(S1 + z*r) + y
   %t9 = fmul double %z, %r
   %t10 = fadd double %S1, %t9
   %t11 = fmul double %v, %t10
-  %result = fadd double %x, %t11
+  %t12 = fadd double %x, %t11
+  %result = fadd double %t12, %y
   
   ret double %result
 }
 
-; cos - cosine function using musl's polynomial approximation
-; Algorithm from musl libc (https://git.musl-libc.org/cgit/musl/tree/src/math/__cos.c)
-; Kernel cos function for values bounded by ~pi/4 in magnitude
-; Uses polynomial of degree 14 for approximation
+; cos - cosine function with full range reduction
+; Algorithm from musl libc (https://git.musl-libc.org/cgit/musl/tree/src/math/cos.c)
+; Handles all input ranges correctly like other programming languages
 ; double cos(double x)
 define double @cos(double %x) {
+entry:
+  ; Extract bits to check magnitude
+  %x_bits = bitcast double %x to i64
+  %ix_u64 = lshr i64 %x_bits, 32
+  %ix = trunc i64 %ix_u64 to i32
+  %ix_abs = and i32 %ix, 2147483647  ; 0x7fffffff - mask off sign bit
+  
+  ; Check if |x| ~<= pi/4 (0x3fe921fb)
+  %is_small = icmp ule i32 %ix_abs, 1072243195  ; 0x3fe921fb
+  br i1 %is_small, label %small_arg, label %need_reduction
+
+small_arg:
+  ; For small arguments, use kernel cos directly
+  %result_kernel = call double @__cos_kernel(double %x, double 0.0)
+  ret double %result_kernel
+
+need_reduction:
+  ; Check for infinity or NaN
+  %is_inf_or_nan = icmp uge i32 %ix_abs, 2146435072  ; 0x7ff00000
+  br i1 %is_inf_or_nan, label %inf_or_nan, label %do_reduction
+
+inf_or_nan:
+  ; cos(inf or NaN) = NaN
+  %nan_result = fsub double %x, %x
+  ret double %nan_result
+
+do_reduction:
+  ; Use rem_pio2 for range reduction
+  %y_alloca = alloca [2 x double], align 8
+  %n = call i32 @__rem_pio2(double %x, ptr %y_alloca)
+  
+  ; Load y[0] and y[1]
+  %y0_ptr = getelementptr [2 x double], ptr %y_alloca, i64 0, i64 0
+  %y1_ptr = getelementptr [2 x double], ptr %y_alloca, i64 0, i64 1
+  %y0 = load double, ptr %y0_ptr
+  %y1 = load double, ptr %y1_ptr
+  
+  ; Determine which function to use based on n
+  ; n & 3: 0 => cos(y), 1 => -sin(y), 2 => -cos(y), 3 => sin(y)
+  %n_mod_4 = and i32 %n, 3
+  
+  switch i32 %n_mod_4, label %case_0 [
+    i32 0, label %case_0
+    i32 1, label %case_1
+    i32 2, label %case_2
+    i32 3, label %case_3
+  ]
+
+case_0:
+  ; cos(y)
+  %result_0 = call double @__cos_kernel(double %y0, double %y1)
+  ret double %result_0
+
+case_1:
+  ; -sin(y)
+  %result_1_temp = call double @__sin_kernel(double %y0, double %y1)
+  %result_1 = fneg double %result_1_temp
+  ret double %result_1
+
+case_2:
+  ; -cos(y)
+  %result_2_temp = call double @__cos_kernel(double %y0, double %y1)
+  %result_2 = fneg double %result_2_temp
+  ret double %result_2
+
+case_3:
+  ; sin(y)
+  %result_3 = call double @__sin_kernel(double %y0, double %y1)
+  ret double %result_3
+}
+
+; __cos_kernel - kernel cos function for arguments in ~[-pi/4, pi/4]
+; Implements optimized polynomial approximation
+; double __cos_kernel(double x, double y)
+define double @__cos_kernel(double %x, double %y) {
 entry:
   ; Polynomial coefficients  
   ; C1 = 1/2!, C2 = -1/4!, C3 = 1/6!, C4 = -1/8!, C5 = 1/10!, C6 = -1/12!
@@ -164,12 +323,14 @@ entry:
   ; w = 1.0 - hz
   %w = fsub double 1.0, %hz
   
-  ; Final result: w + (((1.0 - w) - hz) + z*r)
+  ; Final result: w + (((1.0 - w) - hz) + (z*r - x*y))
   %t12 = fsub double 1.0, %w
   %t13 = fsub double %t12, %hz
   %t14 = fmul double %z, %r
-  %t15 = fadd double %t13, %t14
-  %result = fadd double %w, %t15
+  %x_y = fmul double %x, %y
+  %t15 = fsub double %t14, %x_y
+  %t16 = fadd double %t13, %t15
+  %result = fadd double %w, %t16
   
   ret double %result
 }

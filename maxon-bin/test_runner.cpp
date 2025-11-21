@@ -238,25 +238,28 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
                 
                 // Format with header and footer like test_regenerate.cpp
                 bool isLinkingError = combinedError.find("lld-link:") != std::string::npos;
+                bool hasCompilationHeader = combinedError.find("=== Compilation Failed ===") != std::string::npos;
+                bool hasTerminationFooter = combinedError.find("Compilation terminated due to errors.") != std::string::npos;
                 
                 if (isLinkingError) {
                     // For linking errors, insert header before "LLD linking failed"
                     size_t exMsgStart = combinedError.find("LLD linking failed");
-                    if (exMsgStart != std::string::npos) {
+                    if (exMsgStart != std::string::npos && !hasCompilationHeader) {
                         combinedError.insert(exMsgStart, "=== Compilation Failed ===\n");
-                        if (!combinedError.empty() && combinedError.back() != '\n') {
-                            combinedError += '\n';
-                        }
-                        combinedError += "\nCompilation terminated due to errors.";
                     }
-                } else if (combinedError.find("=== Compilation Failed ===") == std::string::npos) {
-                    // For other errors, add header at beginning
-                    std::string temp = "=== Compilation Failed ===\n" + combinedError;
-                    if (!temp.empty() && temp.back() != '\n') {
-                        temp += '\n';
+                }
+                
+                // Add header if missing
+                if (!hasCompilationHeader && !isLinkingError) {
+                    combinedError = "=== Compilation Failed ===\n" + combinedError;
+                }
+                
+                // Add footer if missing
+                if (!hasTerminationFooter) {
+                    if (!combinedError.empty() && combinedError.back() != '\n') {
+                        combinedError += '\n';
                     }
-                    temp += "\nCompilation terminated due to errors.";
-                    combinedError = temp;
+                    combinedError += "\nCompilation terminated due to errors.";
                 }
                 
                 actualMaxoncStderr = combinedError;
