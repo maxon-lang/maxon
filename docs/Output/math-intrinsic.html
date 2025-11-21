@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Math Intrinsics - Maxon Language Documentation</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+        }
+        .container {
+            display: flex;
+            min-height: 100vh;
+        }
+        .sidebar {
+            width: 250px;
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            padding: 20px;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        .sidebar h2 {
+            margin-top: 0;
+            color: #3498db;
+            font-size: 1.5em;
+        }
+        .sidebar ul {
+            list-style: none;
+            padding: 0;
+        }
+        .sidebar li {
+            margin: 8px 0;
+        }
+        .sidebar a {
+            color: #ecf0f1;
+            text-decoration: none;
+            display: block;
+            padding: 5px 10px;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+        .sidebar a:hover, .sidebar a.active {
+            background-color: #34495e;
+        }
+        .content {
+            margin-left: 250px;
+            padding: 40px;
+            flex: 1;
+            max-width: 900px;
+        }
+        .header {
+            background-color: white;
+            padding: 30px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header h1 {
+            margin: 0 0 10px 0;
+            color: #2c3e50;
+        }
+        .header .breadcrumb {
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }
+        .header .breadcrumb a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        .toc {
+            background-color: white;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .toc h2 {
+            margin-top: 0;
+            color: #2c3e50;
+            font-size: 1.2em;
+        }
+        .toc ul {
+            list-style: none;
+            padding: 0;
+        }
+        .toc li {
+            margin: 8px 0;
+        }
+        .toc a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        .toc a:hover {
+            text-decoration: underline;
+        }
+        .spec-section {
+            background-color: white;
+            padding: 30px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .spec-section h2 {
+            margin-top: 0;
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        .spec-section h3 {
+            color: #34495e;
+            margin-top: 1.5em;
+        }
+        pre {
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            overflow-x: auto;
+        }
+        code {
+            background-color: #f8f8f8;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+        pre code {
+            background-color: transparent;
+            padding: 0;
+        }
+    
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="sidebar">
+            <h2>Maxon Docs</h2>
+            <ul>
+                <li><a href="index.html">← Home</a></li>
+                <li><a href="compilation.html">Compilation</a></li>
+                <li><a href="control-flow.html">Control Flow</a></li>
+                <li><a href="declaration.html">Declarations</a></li>
+                <li><a href="diagnostics.html">Diagnostics</a></li>
+                <li><a href="expressions.html">Expressions</a></li>
+                <li><a href="functions.html">Functions</a></li>
+                <li><a href="interop.html">Interoperability</a></li>
+                <li><a href="literals.html">Literals</a></li>
+                <li><a href="math-intrinsic.html" class="active">Math Intrinsics</a></li>
+                <li><a href="namespaces.html">Namespaces</a></li>
+                <li><a href="operators.html">Operators</a></li>
+                <li><a href="optimization.html">Optimization</a></li>
+                <li><a href="organization.html">Organization</a></li>
+                <li><a href="statements.html">Statements</a></li>
+                <li><a href="stdlib.html">Standard Library</a></li>
+                <li><a href="type-system.html">Type System</a></li>
+                <li><a href="types.html">Types</a></li>
+            </ul>
+        </nav>
+        <main class="content">
+            <div class="header">
+                <h1>Math Intrinsics</h1>
+                <div class="breadcrumb">
+                    <a href="index.html">Home</a> / Math Intrinsics
+                </div>
+            </div>
+            <div class="toc">
+                <h2>Contents</h2>
+                <ul>
+                    <li><a href="#abs">Abs</a></li>
+                    <li><a href="#ceil">Ceil</a></li>
+                    <li><a href="#cos">Cos</a></li>
+                    <li><a href="#floor">Floor</a></li>
+                    <li><a href="#round">Round</a></li>
+                    <li><a href="#sin">Sin</a></li>
+                    <li><a href="#sqrt">Sqrt</a></li>
+                    <li><a href="#tan">Tan</a></li>
+                    <li><a href="#trunc">Trunc</a></li>
+                </ul>
+            </div>
+            <div class="spec-section" id="abs">
+                <h2>Abs</h2>
+<h1 id="abs">abs</h1>
+<p>Calculate the absolute value of a number.</p>
+<p><strong>Signature (float):</strong> <code>abs(x float) float</code></p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>x</code> - The number to take the absolute value of (must be float)</li>
+</ul>
+<p><strong>Returns:</strong> The absolute value of the input (always non-negative)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var x = -5.5
+var y = abs(x)       // 5.5
+
+var i = -42.0
+var j = abs(i)       // 42.0
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li><code>abs(0.0)</code> returns <code>0.0</code></li>
+<li><code>abs(x)</code> always returns a non-negative value</li>
+<li>Currently only works with float type</li>
+<li>For integer values, convert to float first: <code>abs(-42.0)</code></li>
+</ul>
+
+            </div>
+            <div class="spec-section" id="ceil">
+                <h2>Ceil</h2>
+<h1 id="ceil">ceil</h1>
+<p>Round a floating-point number up to the nearest integer (toward positive infinity).</p>
+<p><strong>Signature:</strong> <code>ceil(x float) int</code></p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>x</code> - The floating-point number to round up</li>
+</ul>
+<p><strong>Returns:</strong> The smallest integer greater than or equal to x</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var x = 3.1
+var y = ceil(x)      // 4
+
+var neg = -3.9
+var z = ceil(neg)    // -3 (rounds up toward positive infinity)
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Always rounds toward positive infinity</li>
+<li>Different from truncation for negative numbers</li>
+<li><code>ceil(3.1)</code> returns <code>4</code></li>
+<li><code>ceil(-3.9)</code> returns <code>-3</code> (not <code>-4</code>)</li>
+</ul>
+
+            </div>
+            <div class="spec-section" id="cos">
+                <h2>Cos</h2>
+<h1 id="cos">cos</h1>
+<p>Calculate the cosine of an angle (in radians).</p>
+<p><strong>Signature:</strong> <code>cos(x float) float</code></p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>x</code> - The angle in radians</li>
+</ul>
+<p><strong>Returns:</strong> The cosine of the input angle</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var x = 0.0
+var y = cos(x)       // 1.0
+
+var pi = 3.14159265
+var z = cos(pi)      // -1.0 (approximately)
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>The function works with radians, not degrees</li>
+<li>To convert degrees to radians: <code>radians = degrees * (π / 180)</code></li>
+<li><code>cos(0.0)</code> returns exactly <code>1.0</code></li>
+<li><code>cos(π)</code> returns approximately <code>-1.0</code></li>
+<li>The cosine function oscillates between -1 and 1</li>
+</ul>
+
+            </div>
+            <div class="spec-section" id="floor">
+                <h2>Floor</h2>
+<h1 id="floor">floor</h1>
+<p>Round a floating-point number down to the nearest integer (toward negative infinity).</p>
+<p><strong>Signature:</strong> <code>floor(x float) int</code></p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>x</code> - The floating-point number to round down</li>
+</ul>
+<p><strong>Returns:</strong> The largest integer less than or equal to x</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var x = 3.9
+var y = floor(x)     // 3
+
+var neg = -3.2
+var z = floor(neg)   // -4 (rounds down toward negative infinity)
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Always rounds toward negative infinity</li>
+<li>Different from truncation for negative numbers</li>
+<li><code>floor(3.9)</code> returns <code>3</code></li>
+<li><code>floor(-3.2)</code> returns <code>-4</code> (not <code>-3</code>)</li>
+</ul>
+
+            </div>
+            <div class="spec-section" id="round">
+                <h2>Round</h2>
+<h1 id="round">round</h1>
+<p>Round a floating-point number to the nearest integer.</p>
+<p><strong>Signature:</strong> <code>round(x float) int</code></p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>x</code> - The floating-point number to round</li>
+</ul>
+<p><strong>Returns:</strong> The nearest integer value</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var x = 3.5
+var y = round(x)     // 4 (rounds to nearest)
+
+var z = 2.4
+var w = round(z)     // 2
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Rounds to the nearest integer</li>
+<li>For halfway cases (e.g., 2.5), rounds to nearest even number</li>
+<li><code>round(3.7)</code> returns <code>4</code></li>
+<li><code>round(-2.3)</code> returns <code>-2</code></li>
+</ul>
+
+            </div>
+            <div class="spec-section" id="sin">
+                <h2>Sin</h2>
+<h1 id="sin">sin</h1>
+<p>Calculate the sine of an angle (in radians).</p>
+<p><strong>Signature:</strong> <code>sin(x float) float</code></p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>x</code> - The angle in radians</li>
+</ul>
+<p><strong>Returns:</strong> The sine of the input angle</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var x = 0.0
+var y = sin(x)       // 0.0
+
+// Note: π ≈ 3.14159265
+var halfPi = 1.5708  // π/2
+var z = sin(halfPi)  // 1.0 (approximately)
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>The function works with radians, not degrees</li>
+<li>To convert degrees to radians: <code>radians = degrees * (π / 180)</code></li>
+<li><code>sin(0.0)</code> returns exactly <code>0.0</code></li>
+<li><code>sin(π/2)</code> returns approximately <code>1.0</code></li>
+<li>The sine function oscillates between -1 and 1</li>
+</ul>
+
+            </div>
+            <div class="spec-section" id="sqrt">
+                <h2>Sqrt</h2>
+<h1 id="sqrt">sqrt</h1>
+<p>Calculate the square root of a number.</p>
+<p><strong>Signature:</strong> <code>sqrt(x float) float</code></p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>x</code> - The number to take the square root of (must be non-negative)</li>
+</ul>
+<p><strong>Returns:</strong> The square root of the input</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var x = 16.0
+var y = sqrt(x)      // 4.0
+
+var z = 2.0
+var w = sqrt(z)      // 1.414213... (√2)
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Input must be non-negative (undefined behavior for negative values)</li>
+<li><code>sqrt(0.0)</code> returns <code>0.0</code></li>
+<li><code>sqrt(1.0)</code> returns <code>1.0</code></li>
+<li>For integer inputs, the value is automatically promoted to float</li>
+</ul>
+
+            </div>
+            <div class="spec-section" id="tan">
+                <h2>Tan</h2>
+<h1 id="tan">tan</h1>
+<p>Calculate the tangent of an angle (in radians).</p>
+<p><strong>Signature:</strong> <code>tan(x float) float</code></p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>x</code> - The angle in radians</li>
+</ul>
+<p><strong>Returns:</strong> The tangent of the input angle</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var x = 0.0
+var y = tan(x)       // 0.0
+
+var quarterPi = 0.785398  // π/4
+var z = tan(quarterPi)    // 1.0 (approximately)
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>The function works with radians, not degrees</li>
+<li>To convert degrees to radians: <code>radians = degrees * (π / 180)</code></li>
+<li><code>tan(0.0)</code> returns exactly <code>0.0</code></li>
+<li><code>tan(π/4)</code> returns approximately <code>1.0</code></li>
+<li>The tangent function has vertical asymptotes at odd multiples of π/2</li>
+</ul>
+
+            </div>
+            <div class="spec-section" id="trunc">
+                <h2>Trunc</h2>
+<h1 id="trunc">trunc</h1>
+<p>Truncate a floating-point number to an integer (toward zero).</p>
+<p><strong>Signature:</strong> <code>trunc(x float) int</code></p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>x</code> - The floating-point number to truncate</li>
+</ul>
+<p><strong>Returns:</strong> The integer part of x (fractional part removed)</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var x = 3.7
+var y = trunc(x)     // 3
+
+var neg = -3.7
+var z = trunc(neg)   // -3 (toward zero, removes fractional part)
+</code></pre>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Truncates toward zero (removes decimal part)</li>
+<li>Different from floor/ceil for negative numbers</li>
+<li><code>trunc(3.9)</code> returns <code>3</code></li>
+<li><code>trunc(-3.9)</code> returns <code>-3</code> (not <code>-4</code>)</li>
+<li>Equivalent to casting to int in many languages</li>
+</ul>
+
+            </div>
+        </main>
+    </div>
+</body>
+</html>

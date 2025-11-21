@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diagnostics - Maxon Language Documentation</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+        }
+        .container {
+            display: flex;
+            min-height: 100vh;
+        }
+        .sidebar {
+            width: 250px;
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            padding: 20px;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        .sidebar h2 {
+            margin-top: 0;
+            color: #3498db;
+            font-size: 1.5em;
+        }
+        .sidebar ul {
+            list-style: none;
+            padding: 0;
+        }
+        .sidebar li {
+            margin: 8px 0;
+        }
+        .sidebar a {
+            color: #ecf0f1;
+            text-decoration: none;
+            display: block;
+            padding: 5px 10px;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+        .sidebar a:hover, .sidebar a.active {
+            background-color: #34495e;
+        }
+        .content {
+            margin-left: 250px;
+            padding: 40px;
+            flex: 1;
+            max-width: 900px;
+        }
+        .header {
+            background-color: white;
+            padding: 30px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header h1 {
+            margin: 0 0 10px 0;
+            color: #2c3e50;
+        }
+        .header .breadcrumb {
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }
+        .header .breadcrumb a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        .toc {
+            background-color: white;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .toc h2 {
+            margin-top: 0;
+            color: #2c3e50;
+            font-size: 1.2em;
+        }
+        .toc ul {
+            list-style: none;
+            padding: 0;
+        }
+        .toc li {
+            margin: 8px 0;
+        }
+        .toc a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        .toc a:hover {
+            text-decoration: underline;
+        }
+        .spec-section {
+            background-color: white;
+            padding: 30px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .spec-section h2 {
+            margin-top: 0;
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        .spec-section h3 {
+            color: #34495e;
+            margin-top: 1.5em;
+        }
+        pre {
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            overflow-x: auto;
+        }
+        code {
+            background-color: #f8f8f8;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+        pre code {
+            background-color: transparent;
+            padding: 0;
+        }
+    
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="sidebar">
+            <h2>Maxon Docs</h2>
+            <ul>
+                <li><a href="index.html">← Home</a></li>
+                <li><a href="compilation.html">Compilation</a></li>
+                <li><a href="control-flow.html">Control Flow</a></li>
+                <li><a href="declaration.html">Declarations</a></li>
+                <li><a href="diagnostics.html" class="active">Diagnostics</a></li>
+                <li><a href="expressions.html">Expressions</a></li>
+                <li><a href="functions.html">Functions</a></li>
+                <li><a href="interop.html">Interoperability</a></li>
+                <li><a href="literals.html">Literals</a></li>
+                <li><a href="math-intrinsic.html">Math Intrinsics</a></li>
+                <li><a href="namespaces.html">Namespaces</a></li>
+                <li><a href="operators.html">Operators</a></li>
+                <li><a href="optimization.html">Optimization</a></li>
+                <li><a href="organization.html">Organization</a></li>
+                <li><a href="statements.html">Statements</a></li>
+                <li><a href="stdlib.html">Standard Library</a></li>
+                <li><a href="type-system.html">Type System</a></li>
+                <li><a href="types.html">Types</a></li>
+            </ul>
+        </nav>
+        <main class="content">
+            <div class="header">
+                <h1>Diagnostics</h1>
+                <div class="breadcrumb">
+                    <a href="index.html">Home</a> / Diagnostics
+                </div>
+            </div>
+            <div class="toc">
+                <h2>Contents</h2>
+                <ul>
+                    <li><a href="#missing-return-error">Missing Return Error</a></li>
+                    <li><a href="#operator-errors">Operator Errors</a></li>
+                    <li><a href="#unknown-keyword-error">Unknown Keyword Error</a></li>
+                    <li><a href="#unused-parameters">Unused Parameters</a></li>
+                </ul>
+            </div>
+            <div class="spec-section" id="missing-return-error">
+                <h2>Missing Return Error</h2>
+<p>Functions that declare a return type must return a value on all code paths.</p>
+<h3 id="error-example">Error Example</h3>
+<pre><code class="language-maxon">function test() int
+    // Error: No return statement
+end 'test'
+</code></pre>
+<p>Error message:</p>
+<pre><code>Semantic Error: Function 'test' must return a value of type 'int'
+Note: All execution paths through the function must end with a return statement
+</code></pre>
+<h3 id="solution">Solution</h3>
+<p>Ensure every path returns:</p>
+<pre><code class="language-maxon">function test(x int) int
+    if x &gt; 0 'check'
+        return 1
+    end 'check'
+    return 0  // Handles else case
+end 'test'
+</code></pre>
+
+            </div>
+            <div class="spec-section" id="operator-errors">
+                <h2>Operator Errors</h2>
+<p>Using unsupported operators causes a compilation error.</p>
+<h3 id="unsupported-operators">Unsupported Operators</h3>
+<p>Maxon currently does not support:</p>
+<ul>
+<li>Bitwise operators: <code>&amp;</code>, <code>|</code>, <code>^</code>, <code>~</code>, <code>&lt;&lt;</code>, <code>&gt;&gt;</code></li>
+<li>Logical operators: <code>&amp;&amp;</code>, <code>||</code>, <code>!</code> (planned)</li>
+<li>Compound assignment: <code>+=</code>, <code>-=</code>, <code>*=</code>, etc. (planned)</li>
+</ul>
+<h3 id="error-example">Error Example</h3>
+<pre><code class="language-maxon">function main() int
+    return 3 ^ 4  // Error: '^' is not a valid operator
+end 'main'
+</code></pre>
+<p>Error message:</p>
+<pre><code>Unexpected character '^'
+</code></pre>
+<h3 id="workarounds">Workarounds</h3>
+<p>Use function calls for complex operations:</p>
+<pre><code class="language-maxon">// Instead of: result = a ^ b
+function xor(a int, b int) int
+    // Implement XOR using other operators
+    return (a | b) &amp; ~(a &amp; b)  // When bitwise ops are added
+end 'xor'
+</code></pre>
+
+            </div>
+            <div class="spec-section" id="unknown-keyword-error">
+                <h2>Unknown Keyword Error</h2>
+<p>Using an undefined keyword or bare identifier as a statement causes a parse error.</p>
+<h3 id="error-example">Error Example</h3>
+<pre><code class="language-maxon">function main() int
+    var x = 0
+    foo         // Error: 'foo' is not a keyword
+        x = 5
+    end 'foo'
+    return x
+end 'main'
+</code></pre>
+<p>Error message:</p>
+<pre><code>Unexpected identifier 'foo'
+Note: Did you forget an assignment (=), function call (), or keyword?
+</code></pre>
+<h3 id="common-solutions">Common Solutions</h3>
+<ul>
+<li>Function call: <code>foo()</code> instead of <code>foo</code></li>
+<li>Assignment: <code>foo = 5</code> instead of <code>foo</code></li>
+<li>Check spelling of keywords: <code>while</code>, <code>if</code>, <code>var</code>, <code>let</code>, <code>return</code>, <code>break</code></li>
+</ul>
+
+            </div>
+            <div class="spec-section" id="unused-parameters">
+                <h2>Unused Parameters</h2>
+<p>Maxon requires all function parameters to be used. Declaring unused parameters causes a compilation error.</p>
+<h3 id="example-error">Example Error</h3>
+<pre><code class="language-maxon">function add(a int, b int) int
+    return a  // Error: 'b' is unused
+end 'add'
+</code></pre>
+<p>Error message:</p>
+<pre><code>Semantic Error: The parameter 'b' is declared but its value is never used
+</code></pre>
+<h3 id="solution">Solution</h3>
+<p>Only declare parameters you need:</p>
+<pre><code class="language-maxon">function identity(a int) int
+    return a  // OK: 'a' is used
+end 'identity'
+</code></pre>
+
+            </div>
+        </main>
+    </div>
+</body>
+</html>
