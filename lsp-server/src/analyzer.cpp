@@ -524,7 +524,7 @@ void Analyzer::loadStdlibFile(const std::string& filePath, const std::string& na
             for (const auto& func : program->functions) {
                 StdlibFunction stdlibFunc;
                 stdlibFunc.name = func->name;
-                stdlibFunc.qualifiedName = namespaceName + "::" + func->name;
+                stdlibFunc.qualifiedName = namespaceName + "." + func->name;
                 stdlibFunc.namespacePath = namespaceName;
                 stdlibFunc.moduleName = moduleName;
                 stdlibFunc.returnType = func->returnType;

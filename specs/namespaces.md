@@ -16,7 +16,7 @@ Namespaces provide logical grouping of functions and prevent name collisions. Ke
 - Namespaces can contain function declarations
 - Names are mangled with namespace prefix for uniqueness
 - Functions in a namespace can call other functions in the same namespace without qualification
-- Calling from outside requires qualified name: `namespace::function()`
+- Calling from outside requires qualified name: `namespace.function()`
 - Block identifiers work the same as for functions
 
 The semantic analyzer handles name resolution, looking up symbols first in local scope, then in namespace scope, then globally.

@@ -665,7 +665,7 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
         if (check(TokenType::DOT)) {
             advance(); // consume '.'
             Token memberName = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
-            name = name + "::" + memberName.value;
+            name = name + "." + memberName.value;
         }
         
         // Check for array indexing assignment: array[index] = value or array[index].member = value

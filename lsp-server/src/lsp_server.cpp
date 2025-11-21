@@ -501,13 +501,8 @@ json LspServer::handleCodeAction(const json& params) {
                             lsp::Range replaceRange;
                             bool found = false;
                             
-                            // Convert internal :: to source . for matching
+                            // Qualified names already use dot notation
                             std::string sourceQualifiedName = qualifiedName;
-                            size_t pos = sourceQualifiedName.find("::");
-                            while (pos != std::string::npos) {
-                                sourceQualifiedName.replace(pos, 2, ".");
-                                pos = sourceQualifiedName.find("::", pos + 1);
-                            }
                             
                             while (std::getline(stream, line)) {
                                 if (lineNum == diagRange.start.line) {

@@ -155,9 +155,9 @@ std::vector<std::string> findStdlibFilesDefining(const std::set<std::string>& fu
 
     for (const auto& funcName : functionNames) {
         std::string unqualifiedName = funcName;
-        size_t lastSep = funcName.rfind("::");
+        size_t lastSep = funcName.rfind(".");
         if (lastSep != std::string::npos) {
-            unqualifiedName = funcName.substr(lastSep + 2);
+            unqualifiedName = funcName.substr(lastSep + 1);
         }
 
         auto it = index.find(unqualifiedName);
