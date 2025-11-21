@@ -5,11 +5,28 @@ project(maxon-lsp-tests VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Use Release configuration for LLVM libraries
+set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+
+# Find LLVM (needed by lexer.cpp)
+set(LLVM_BUILD_DIR "C:/Users/Eric/Dev/llvm-project/build")
+if(EXISTS "${LLVM_BUILD_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
+    set(LLVM_DIR "${LLVM_BUILD_DIR}/lib/cmake/llvm")
+    find_package(LLVM REQUIRED CONFIG PATHS ${LLVM_DIR} NO_DEFAULT_PATH)
+    message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+else()
+    message(FATAL_ERROR "Pre-built LLVM not found in ${LLVM_BUILD_DIR}")
+endif()
+
 # Include directories
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${CMAKE_CURRENT_SOURCE_DIR}/../../maxon-bin
+    ${LLVM_INCLUDE_DIRS}
 )
+
+# Add LLVM definitions
+add_definitions(${LLVM_DEFINITIONS})
 
 # Source files from LSP server (needed for testing)
 set(LSP_LIB_SOURCES
@@ -28,6 +45,10 @@ set(MAXON_SOURCES
 
 # Create a library from LSP sources for testing
 add_library(lsp_lib STATIC ${LSP_LIB_SOURCES} ${MAXON_SOURCES})
+
+# Link LLVM libraries
+llvm_map_components_to_libnames(llvm_libs core support)
+target_link_libraries(lsp_lib ${llvm_libs})
 
 # Compiler flags
 target_compile_options(lsp_lib PRIVATE

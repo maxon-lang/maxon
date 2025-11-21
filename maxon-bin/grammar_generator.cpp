@@ -36,12 +36,12 @@ int main(int argc, char* argv[]) {
     // Helper function to create regex pattern from keyword list
     auto makePattern = [](const std::vector<std::string>& keywords) -> std::string {
         if (keywords.empty()) return "";
-        std::string pattern = "\\b(";
+        std::string pattern = "\\\\b(";
         for (size_t i = 0; i < keywords.size(); ++i) {
             if (i > 0) pattern += "|";
             pattern += keywords[i];
         }
-        pattern += ")\\b";
+        pattern += ")\\\\b";
         return pattern;
     };
 
@@ -93,8 +93,8 @@ int main(int argc, char* argv[]) {
     json += "        },\n";
     json += "        \"strings\": {\n";
     json += "            \"patterns\": [\n";
-    json += "                { \"name\": \"string.quoted.double.maxon\", \"begin\": \"\\\"\", \"end\": \"\\\"\", \"patterns\": [{ \"name\": \"constant.character.escape.maxon\", \"match\": \"\\\\\\\\.\" }] },\n";
-    json += "                { \"name\": \"string.quoted.single.maxon\", \"begin\": \"'\", \"end\": \"'\", \"patterns\": [{ \"name\": \"constant.character.escape.maxon\", \"match\": \"\\\\\\\\.\" }] }\n";
+    json += "                { \"name\": \"string.quoted.double.maxon\", \"begin\": \"\\\"\", \"end\": \"\\\"\", \"patterns\": [{ \"name\": \"constant.character.escape.maxon\", \"match\": \"\\\\.\" }] },\n";
+    json += "                { \"name\": \"string.quoted.single.maxon\", \"begin\": \"'\", \"end\": \"'\", \"patterns\": [{ \"name\": \"constant.character.escape.maxon\", \"match\": \"\\\\.\" }] }\n";
     json += "            ]\n";
     json += "        },\n";
     json += "        \"numbers\": {\n";

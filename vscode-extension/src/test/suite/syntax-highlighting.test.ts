@@ -2,6 +2,226 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 
 suite('Syntax Highlighting Test Suite', () => {
+    test('Keywords are highlighted with proper TextMate scopes', async () => {
+        const testContent = [
+            "function main() int",
+            "    var x = 0",
+            "    let y = 42",
+            "    if x > 0 'check'",
+            "        return 1",
+            "    else 'other'",
+            "        while true 'loop'",
+            "            break",
+            "        end 'loop'",
+            "        return 0",
+            "    end 'check'",
+            "end 'main'"
+        ].join('\n');
+
+        const doc = await vscode.workspace.openTextDocument({
+            content: testContent,
+            language: 'maxon'
+        });
+
+        // Verify language ID is set (this ensures TextMate grammar is loaded)
+        assert.strictEqual(doc.languageId, 'maxon', 'Document should have maxon language ID');
+        
+        // Verify keywords exist in the document
+        const content = doc.getText();
+        const keywords = ['function', 'var', 'let', 'if', 'else', 'while', 'break', 'return', 'end'];
+        for (const keyword of keywords) {
+            assert.ok(content.includes(keyword), `Should contain keyword: ${keyword}`);
+        }
+    });
+
+    test('Type keywords are present and can be highlighted', async () => {
+        const testContent = [
+            "function test(a int, b float, c bool, d char) int",
+            "    var ptr_val ptr = 0",
+            "    var str string",
+            "    return a",
+            "end 'test'"
+        ].join('\n');
+
+        const doc = await vscode.workspace.openTextDocument({
+            content: testContent,
+            language: 'maxon'
+        });
+
+        assert.strictEqual(doc.languageId, 'maxon');
+        
+        const content = doc.getText();
+        const types = ['int', 'float', 'bool', 'char', 'ptr', 'string'];
+        for (const type of types) {
+            assert.ok(content.includes(type), `Should contain type: ${type}`);
+        }
+    });
+
+    test('Math intrinsics are present and can be highlighted', async () => {
+        const testContent = [
+            "function test(x float) float",
+            "    var a = sqrt(x)",
+            "    var b = abs(x)",
+            "    var c = floor(x)",
+            "    var d = ceil(x)",
+            "    var e = round(x)",
+            "    var f = sin(x)",
+            "    var g = cos(x)",
+            "    var h = trunc(x)",
+            "    return a",
+            "end 'test'"
+        ].join('\n');
+
+        const doc = await vscode.workspace.openTextDocument({
+            content: testContent,
+            language: 'maxon'
+        });
+
+        assert.strictEqual(doc.languageId, 'maxon');
+        
+        const content = doc.getText();
+        const mathFunctions = ['sqrt', 'abs', 'floor', 'ceil', 'round', 'sin', 'cos', 'trunc'];
+        for (const func of mathFunctions) {
+            assert.ok(content.includes(func), `Should contain math function: ${func}`);
+        }
+    });
+
+    test('Numbers are recognized (integers and floats)', async () => {
+        const testContent = [
+            "function test() int",
+            "    var int_val = 42",
+            "    var float_val = 3.14159",
+            "    var sci_notation = 1.5e10",
+            "    var negative_exp = 2.5e-3",
+            "    return int_val",
+            "end 'test'"
+        ].join('\n');
+
+        const doc = await vscode.workspace.openTextDocument({
+            content: testContent,
+            language: 'maxon'
+        });
+
+        assert.strictEqual(doc.languageId, 'maxon');
+        
+        const content = doc.getText();
+        assert.ok(content.includes('42'), 'Should contain integer');
+        assert.ok(content.includes('3.14159'), 'Should contain float');
+        assert.ok(content.includes('1.5e10'), 'Should contain scientific notation');
+        assert.ok(content.includes('2.5e-3'), 'Should contain negative exponent');
+    });
+
+    test('Comments are recognized (single-line and multi-line)', async () => {
+        const testContent = [
+            "// This is a single-line comment",
+            "function test() int",
+            "    // Another comment",
+            "    /* Multi-line",
+            "       comment here */",
+            "    var x = 0 // inline comment",
+            "    return x",
+            "end 'test'"
+        ].join('\n');
+
+        const doc = await vscode.workspace.openTextDocument({
+            content: testContent,
+            language: 'maxon'
+        });
+
+        assert.strictEqual(doc.languageId, 'maxon');
+        
+        const content = doc.getText();
+        assert.ok(content.includes('// This is a single-line comment'), 'Should contain single-line comment');
+        assert.ok(content.includes('/* Multi-line'), 'Should contain multi-line comment start');
+        assert.ok(content.includes('comment here */'), 'Should contain multi-line comment end');
+    });
+
+    test('Strings are recognized (double and single quotes)', async () => {
+        const testContent = [
+            "function test() int",
+            '    var msg = "Hello, World!"',
+            "    var ch = 'A'",
+            '    var escaped = "Line1\\nLine2"',
+            "    return 0",
+            "end 'test'"
+        ].join('\n');
+
+        const doc = await vscode.workspace.openTextDocument({
+            content: testContent,
+            language: 'maxon'
+        });
+
+        assert.strictEqual(doc.languageId, 'maxon');
+        
+        const content = doc.getText();
+        assert.ok(content.includes('"Hello, World!"'), 'Should contain double-quoted string');
+        assert.ok(content.includes("'A'"), 'Should contain single-quoted character');
+        assert.ok(content.includes('\\n'), 'Should contain escape sequence');
+    });
+
+    test('Operators are recognized', async () => {
+        const testContent = [
+            "function test(a int, b int) int",
+            "    var sum = a + b",
+            "    var diff = a - b",
+            "    var prod = a * b",
+            "    var quot = a / b",
+            "    if a >= b 'check'",
+            "        return 1",
+            "    end 'check'",
+            "    if a <= b 'check2'",
+            "        return 0",
+            "    end 'check2'",
+            "    if a = b 'check3'",
+            "        return -1",
+            "    end 'check3'",
+            "    return sum",
+            "end 'test'"
+        ].join('\n');
+
+        const doc = await vscode.workspace.openTextDocument({
+            content: testContent,
+            language: 'maxon'
+        });
+
+        assert.strictEqual(doc.languageId, 'maxon');
+        
+        const content = doc.getText();
+        assert.ok(content.includes('+'), 'Should contain + operator');
+        assert.ok(content.includes('-'), 'Should contain - operator');
+        assert.ok(content.includes('*'), 'Should contain * operator');
+        assert.ok(content.includes('/'), 'Should contain / operator');
+        assert.ok(content.includes('>='), 'Should contain >= operator');
+        assert.ok(content.includes('<='), 'Should contain <= operator');
+        assert.ok(content.includes('='), 'Should contain = operator');
+    });
+
+    test('Function calls are recognized', async () => {
+        const testContent = [
+            "function helper(x int) int",
+            "    return x * 2",
+            "end 'helper'",
+            "",
+            "function main() int",
+            "    var result = helper(42)",
+            "    var sqr = sqrt(16.0)",
+            "    return result",
+            "end 'main'"
+        ].join('\n');
+
+        const doc = await vscode.workspace.openTextDocument({
+            content: testContent,
+            language: 'maxon'
+        });
+
+        assert.strictEqual(doc.languageId, 'maxon');
+        
+        const content = doc.getText();
+        assert.ok(content.includes('helper(42)'), 'Should contain function call');
+        assert.ok(content.includes('sqrt(16.0)'), 'Should contain math function call');
+    });
+
+
     test('Block identifiers should be highlighted differently from strings', async () => {
         // Create a test document with various block identifier scenarios
         const testContent = [
