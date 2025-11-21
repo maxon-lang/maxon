@@ -1,8 +1,8 @@
 function main() int
-    var x = 42.0         // float
-    var y = 1            // int
-    var z = x + y        // y promoted to float, z is float (43.0)
-    return trunc(z)      // 43
+    var x = 42
+    var y = -x      // y is -42
+    var z = -y      // z is 42
+    return z
 end 'main'
 
 ---
@@ -12,7 +12,7 @@ source_filename = "test.maxon"
 ; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)
 define noundef i32 @main() local_unnamed_addr #0 {
 entry:
-  ret i32 43
+  ret i32 42
 }
 
 declare void @ExitProcess(i32) local_unnamed_addr
@@ -20,7 +20,7 @@ declare void @ExitProcess(i32) local_unnamed_addr
 ; Function Attrs: noreturn
 define void @_start() local_unnamed_addr #1 {
 entry:
-  tail call void @ExitProcess(i32 43)
+  tail call void @ExitProcess(i32 42)
   unreachable
 }
 
@@ -32,22 +32,21 @@ source_filename = "test.maxon"
 
 define i32 @main() !dbg !4 {
 entry:
-  %z = alloca double, align 8
+  %z = alloca i32, align 4
   %y = alloca i32, align 4
-  %x = alloca double, align 8
-  store double 4.200000e+01, ptr %x, align 8, !dbg !9
+  %x = alloca i32, align 4
+  store i32 42, ptr %x, align 4, !dbg !9
     #dbg_declare(ptr %x, !10, !DIExpression(), !9)
-  store i32 1, ptr %y, align 4, !dbg !11
+  %x1 = load i32, ptr %x, align 4, !dbg !11
+  %negtmp = sub i32 0, %x1, !dbg !11
+  store i32 %negtmp, ptr %y, align 4, !dbg !11
     #dbg_declare(ptr %y, !12, !DIExpression(), !11)
-  %x1 = load double, ptr %x, align 8, !dbg !13
   %y2 = load i32, ptr %y, align 4, !dbg !13
-  %promotetmp = sitofp i32 %y2 to double, !dbg !13
-  %faddtmp = fadd double %x1, %promotetmp, !dbg !13
-  store double %faddtmp, ptr %z, align 8, !dbg !13
+  %negtmp3 = sub i32 0, %y2, !dbg !13
+  store i32 %negtmp3, ptr %z, align 4, !dbg !13
     #dbg_declare(ptr %z, !14, !DIExpression(), !13)
-  %z3 = load double, ptr %z, align 8, !dbg !15
-  %trunc = fptosi double %z3 to i32, !dbg !15
-  ret i32 %trunc, !dbg !15
+  %z4 = load i32, ptr %z, align 4, !dbg !15
+  ret i32 %z4, !dbg !15
 }
 
 declare void @ExitProcess(i32)
@@ -79,6 +78,6 @@ entry:
 !14 = !DILocalVariable(name: "z", scope: !4, file: !1, line: 4, type: !7, align: 32)
 !15 = !DILocation(line: 5, column: 5, scope: !4)
 ---
-ExitCode: 43
-OptimizedInstructionCount: 14
-UnoptimizedInstructionCount: 14
+ExitCode: 42
+OptimizedInstructionCount: 13
+UnoptimizedInstructionCount: 13
