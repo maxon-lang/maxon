@@ -929,8 +929,6 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
         }
         // Handle function name identifiers
         else if (targetToken->type == TokenType::IDENTIFIER && targetIndex > 0) {
-            TokenType prevType = tokens[targetIndex - 1].type;
-            
             if (tokens[targetIndex - 1].value == "function") {
                 std::string functionName = targetToken->value;
                 
