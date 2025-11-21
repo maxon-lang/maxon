@@ -123,34 +123,7 @@ validate-specs: compiler
 
 # Run all test suites
 test: compiler lsp-server extension-build
-	@echo ============================================================
-	@echo Running all test suites...
-	@echo ============================================================
-	@powershell -Command "Write-Host ''"
-	@echo [1/4] Running compiler self-tests...
-	@echo ------------------------------------------------------------
-	@powershell -Command "maxon self-test"
-	@powershell -Command "Write-Host ''"
-	@echo [2/4] Running language fragment tests...
-	@echo ------------------------------------------------------------
-	@powershell -Command "maxon extract-specs"
-	@powershell -Command "maxon regen-fragments"
-	@powershell -Command "maxon test-fragments"
-	@powershell -Command "Write-Host ''"
-	@echo [3/4] Running LSP C++ unit tests...
-	@echo ------------------------------------------------------------
-	@powershell -Command "if (!(Test-Path 'lsp-server\tests\build')) { New-Item -ItemType Directory -Path 'lsp-server\tests\build' | Out-Null }"
-	@powershell -Command "cd lsp-server\tests\build; cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER='$(CC)' -DCMAKE_CXX_COMPILER='$(CXX)' -DCMAKE_BUILD_TYPE=Debug" 2>nul
-	@powershell -Command "cd lsp-server\tests\build; cmake --build ." 2>nul
-	@powershell -Command "cd lsp-server\tests\build; ctest --output-on-failure"
-	@powershell -Command "Write-Host ''"
-	@echo [4/4] Running VS Code extension tests...
-	@echo ------------------------------------------------------------
-	@powershell -Command "cd vscode-extension; npm run test"
-	@powershell -Command "Write-Host ''"
-	@echo ============================================================
-	@echo All test suites completed!
-	@echo ============================================================
+	@powershell -ExecutionPolicy Bypass -File scripts/run-all-tests.ps1
 
 # Clean build artifacts
 clean:
