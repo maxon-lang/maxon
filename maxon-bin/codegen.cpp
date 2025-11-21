@@ -892,7 +892,8 @@ void CodeGenerator::initStandardLibrary() {
     // Scale by 10^precision and round
     llvm::Value* fracScaled = builder.CreateFMul(fracPart, scale, "frac_scaled");
     llvm::Value* fracRounded = builder.CreateFAdd(fracScaled, llvm::ConstantFP::get(context, llvm::APFloat(0.5)), "frac_rounded");
-    llvm::Value* fracInt = builder.CreateFPToSI(fracRounded, llvm::Type::getInt32Ty(context), "frac_int");
+    // Use int64 to avoid overflow for high precision values
+    llvm::Value* fracInt = builder.CreateFPToSI(fracRounded, llvm::Type::getInt64Ty(context), "frac_int");
     
     // Compute precision - 1 for loop initialization
     llvm::Value* precisionMinus1 = builder.CreateSub(precisionArg, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
@@ -907,15 +908,15 @@ void CodeGenerator::initStandardLibrary() {
     builder.SetInsertPoint(fracDigitLoop);
     llvm::PHINode* fracIdx = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "frac_idx");
     fracIdx->addIncoming(precisionMinus1, scaleDone);
-    llvm::PHINode* fracRemaining = builder.CreatePHI(llvm::Type::getInt32Ty(context), 2, "frac_remaining");
+    llvm::PHINode* fracRemaining = builder.CreatePHI(llvm::Type::getInt64Ty(context), 2, "frac_remaining");
     fracRemaining->addIncoming(fracInt, scaleDone);
     
     llvm::Value* fracCond = builder.CreateICmpSGE(fracIdx, llvm::ConstantInt::get(context, llvm::APInt(32, 0, true)));
     builder.CreateCondBr(fracCond, fracDigitBody, fracDigitsDone);
     
     builder.SetInsertPoint(fracDigitBody);
-    llvm::Value* fracDigit = builder.CreateSRem(fracRemaining, llvm::ConstantInt::get(context, llvm::APInt(32, 10, true)));
-    llvm::Value* fracDigitChar = builder.CreateAdd(fracDigit, llvm::ConstantInt::get(context, llvm::APInt(32, '0', true)));
+    llvm::Value* fracDigit = builder.CreateSRem(fracRemaining, llvm::ConstantInt::get(context, llvm::APInt(64, 10, true)));
+    llvm::Value* fracDigitChar = builder.CreateAdd(fracDigit, llvm::ConstantInt::get(context, llvm::APInt(64, '0', true)));
     llvm::Value* fracDigitChar8 = builder.CreateTrunc(fracDigitChar, charType);
     
     llvm::Value* fracPosValue = builder.CreateLoad(llvm::Type::getInt32Ty(context), floatPos);
@@ -924,7 +925,7 @@ void CodeGenerator::initStandardLibrary() {
         {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), fracDstIdx});
     builder.CreateStore(fracDigitChar8, fracDstPtr);
     
-    llvm::Value* nextFracRemaining = builder.CreateSDiv(fracRemaining, llvm::ConstantInt::get(context, llvm::APInt(32, 10, true)));
+    llvm::Value* nextFracRemaining = builder.CreateSDiv(fracRemaining, llvm::ConstantInt::get(context, llvm::APInt(64, 10, true)));
     llvm::Value* nextFracIdx = builder.CreateSub(fracIdx, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
     
     fracRemaining->addIncoming(nextFracRemaining, fracDigitBody);

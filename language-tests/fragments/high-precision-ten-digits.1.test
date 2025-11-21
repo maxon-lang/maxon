@@ -1,8 +1,6 @@
 function main() int
-    var x = 42
-    print(x)
-    print(10 + 5)
-    print(100)
+    var x = 0.301029995663981
+    print_float(x, 10)
     return 0
 end 'main'
 ---
@@ -13,9 +11,7 @@ source_filename = "test.maxon"
 
 define noundef i32 @main() local_unnamed_addr {
 entry:
-  %0 = tail call i32 @print(i32 42)
-  %1 = tail call i32 @print(i32 15)
-  %2 = tail call i32 @print(i32 100)
+  %0 = tail call i32 @print_float(double 0x3FD34413509F79FB, i32 10)
   ret i32 0
 }
 
@@ -377,14 +373,12 @@ source_filename = "test.maxon"
 
 define i32 @main() !dbg !4 {
 entry:
-  %x = alloca i32, align 4
-  store i32 42, ptr %x, align 4, !dbg !9
+  %x = alloca double, align 8
+  store double 0x3FD34413509F79FB, ptr %x, align 8, !dbg !9
     #dbg_declare(ptr %x, !10, !DIExpression(), !9)
-  %x1 = load i32, ptr %x, align 4, !dbg !11
-  %0 = call i32 @print(i32 %x1), !dbg !11
-  %1 = call i32 @print(i32 15), !dbg !12
-  %2 = call i32 @print(i32 100), !dbg !13
-  ret i32 0, !dbg !14
+  %x1 = load double, ptr %x, align 8, !dbg !11
+  %0 = call i32 @print_float(double %x1, i32 10), !dbg !11
+  ret i32 0, !dbg !12
 }
 
 declare ptr @memset(ptr, i32, i64)
@@ -663,14 +657,10 @@ attributes #0 = { "no-builtin-memset" }
 !10 = !DILocalVariable(name: "x", scope: !4, file: !1, line: 2, type: !7, align: 32)
 !11 = !DILocation(line: 3, column: 5, scope: !4)
 !12 = !DILocation(line: 4, column: 5, scope: !4)
-!13 = !DILocation(line: 5, column: 5, scope: !4)
-!14 = !DILocation(line: 6, column: 5, scope: !4)
 ---
 ExitCode: 0
-OptimizedInstructionCount: 166
-UnoptimizedInstructionCount: 166
+OptimizedInstructionCount: 185
+UnoptimizedInstructionCount: 185
 Stdout: ```
-42
-15
-100
+0.3010299957
 ```

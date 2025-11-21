@@ -90,3 +90,29 @@ end 'main'
 ExitCode: 0
 Stdout: 0.000000
 ```
+
+<!-- test: high-precision -->
+```maxon
+function main() int
+    var x = 0.301029995663981
+    print_float(x, 15)
+    return 0
+end 'main'
+```
+```
+ExitCode: 0
+Stdout: 0.301029995663981
+```
+
+<!-- test: high-precision-ten-digits -->
+```maxon
+function main() int
+    var x = 0.301029995663981
+    print_float(x, 10)
+    return 0
+end 'main'
+```
+```
+ExitCode: 0
+Stdout: 0.3010299957
+```

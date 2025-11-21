@@ -325,18 +325,18 @@ frac_digit_body.preheader:                        ; preds = %scale_done.thread, 
   %scale_accum.lcssa16 = phi double [ %next_scale, %scale_done.thread ], [ 1.000000e+00, %scale_done ]
   %frac_scaled = fmul double %frac_part, %scale_accum.lcssa16
   %frac_rounded = fadd double %frac_scaled, 5.000000e-01
-  %frac_int = fptosi double %frac_rounded to i32
+  %frac_int = fptosi double %frac_rounded to i64
   br label %frac_digit_body
 
 frac_digit_body:                                  ; preds = %frac_digit_body.preheader, %frac_digit_body
   %frac_idx11 = phi i32 [ %frac_idx, %frac_digit_body ], [ %frac_idx817, %frac_digit_body.preheader ]
-  %frac_remaining10 = phi i32 [ %61, %frac_digit_body ], [ %frac_int, %frac_digit_body.preheader ]
+  %frac_remaining10 = phi i64 [ %61, %frac_digit_body ], [ %frac_int, %frac_digit_body.preheader ]
   %frac_idx.in9 = phi i32 [ %frac_idx11, %frac_digit_body ], [ %1, %frac_digit_body.preheader ]
-  %frac_remaining10.frozen = freeze i32 %frac_remaining10
-  %61 = sdiv i32 %frac_remaining10.frozen, 10
-  %62 = mul i32 %61, 10
-  %.decomposed36 = sub i32 %frac_remaining10.frozen, %62
-  %63 = trunc nsw i32 %.decomposed36 to i8
+  %frac_remaining10.frozen = freeze i64 %frac_remaining10
+  %61 = sdiv i64 %frac_remaining10.frozen, 10
+  %62 = mul i64 %61, 10
+  %.decomposed36 = sub i64 %frac_remaining10.frozen, %62
+  %63 = trunc nsw i64 %.decomposed36 to i8
   %64 = add nsw i8 %63, 48
   %65 = add i32 %frac_idx.in9, %53
   %66 = sext i32 %65 to i64
@@ -617,25 +617,25 @@ scale_body:                                       ; preds = %scale_loop
 scale_done:                                       ; preds = %scale_loop
   %frac_scaled = fmul double %frac_part, %scale_accum, !dbg !11
   %frac_rounded = fadd double %frac_scaled, 5.000000e-01, !dbg !11
-  %frac_int = fptosi double %frac_rounded to i32, !dbg !11
+  %frac_int = fptosi double %frac_rounded to i64, !dbg !11
   %42 = sub i32 %1, 1, !dbg !11
   br label %frac_digit_loop, !dbg !11
 
 frac_digit_loop:                                  ; preds = %frac_digit_body, %scale_done
   %frac_idx = phi i32 [ %42, %scale_done ], [ %51, %frac_digit_body ], !dbg !11
-  %frac_remaining = phi i32 [ %frac_int, %scale_done ], [ %50, %frac_digit_body ], !dbg !11
+  %frac_remaining = phi i64 [ %frac_int, %scale_done ], [ %50, %frac_digit_body ], !dbg !11
   %43 = icmp sge i32 %frac_idx, 0, !dbg !11
   br i1 %43, label %frac_digit_body, label %frac_digits_done, !dbg !11
 
 frac_digit_body:                                  ; preds = %frac_digit_loop
-  %44 = srem i32 %frac_remaining, 10, !dbg !11
-  %45 = add i32 %44, 48, !dbg !11
-  %46 = trunc i32 %45 to i8, !dbg !11
+  %44 = srem i64 %frac_remaining, 10, !dbg !11
+  %45 = add i64 %44, 48, !dbg !11
+  %46 = trunc i64 %45 to i8, !dbg !11
   %47 = load i32, ptr %pos, align 4, !dbg !11
   %48 = add i32 %47, %frac_idx, !dbg !11
   %49 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %48, !dbg !11
   store i8 %46, ptr %49, align 1, !dbg !11
-  %50 = sdiv i32 %frac_remaining, 10, !dbg !11
+  %50 = sdiv i64 %frac_remaining, 10, !dbg !11
   %51 = sub i32 %frac_idx, 1, !dbg !11
   br label %frac_digit_loop, !dbg !11
 

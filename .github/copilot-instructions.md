@@ -45,6 +45,7 @@ Add handler in `LspServer`, register in `JsonRpcHandler`, implement in `Analyzer
 - Auto-linked with all programs
 - Add functions in `runtime.ll`, then `make runtime`
 - After build it is copied to 'bin' folder so maxon.exe can find it
+- NEVER resort to calling the c runtime library, we do not use it!
 
 ## Guidelines
 - Don't create new docs unless instructed
