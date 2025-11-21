@@ -1,0 +1,119 @@
+---
+feature: while-loops
+status: stable
+keywords: while, loop, iteration, control flow
+category: control-flow
+---
+
+## Developer Notes
+
+While loops are the primary iteration construct in Maxon.
+
+**Implementation Details:**
+- Keyword: `while` (lexer.cpp, TokenType::While)
+- Parser: `parseWhile()` in parser.cpp
+- AST node: `WhileAST` (ast.h)
+- Requires block identifier for multi-line body
+- Codegen: Creates basic blocks for condition, body, and continuation
+
+**Syntax:**
+```
+while <condition> 'identifier'
+    <statements>
+end 'identifier'
+```
+
+**Control Flow:**
+- Condition evaluated before each iteration
+- Body executed if condition is true
+- Supports `break` to exit loop
+- Supports `continue` to skip to next iteration
+
+**Code Generation:**
+- Creates three basic blocks: whilecond, whilebody, whilecont
+- Condition block contains comparison and conditional branch
+- Body block contains loop statements
+- Continuation block is the exit point
+
+## Documentation
+
+# While Loops
+
+Execute a block of code repeatedly while a condition is true.
+
+**Syntax:**
+
+```maxon
+while <condition> 'identifier'
+    <statements>
+end 'identifier'
+```
+
+**Parameters:**
+- `condition` - Boolean expression evaluated before each iteration
+- `identifier` - String label for the loop block (must match at `end`)
+
+**Example:**
+
+```maxon
+var x = 5
+var i = 3
+while i > 0 'loop'
+    x = x + 2
+    i = i - 1
+end 'loop'
+// x is now 11
+```
+
+**Notes:**
+- Condition is evaluated before each iteration (pre-test loop)
+- Block identifier is required and must match at `while` and `end`
+- Use `break` to exit the loop early
+- Use `continue` to skip to the next iteration
+- Infinite loops possible with `while true 'loop'`
+
+## Tests
+
+<!-- test: while-loops.basic -->
+```maxon
+function main() int
+var x = 5
+var i = 3
+while i > 0 'loop'
+x = x + 2
+i = i - 1
+if i = 0 'check'
+break
+end 'check'
+end 'loop'
+return x
+end 'main'
+```
+ExitCode: 11
+
+<!-- test: while-loops.break -->
+```maxon
+function main() int
+    var x = 5
+    while true 'loop'
+        x = x + 2
+        if x = 11 'check'
+            break
+        end 'check'
+    end 'loop'
+    return x
+end 'main'
+```
+ExitCode: 11
+
+<!-- test: while-loops.zero-iterations -->
+```maxon
+function main() int
+    var x = 10
+    while x < 5 'loop'
+        x = x + 1
+    end 'loop'
+    return x
+end 'main'
+```
+ExitCode: 10

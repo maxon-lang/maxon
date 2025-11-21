@@ -33,7 +33,8 @@ help:
 	@echo "  extension-package - Package extension as .vsix"
 	@echo "  extension-install - Install extension locally in VS Code"
 	@echo "  lsp-test         - Build and run LSP C++ unit tests"
-	@echo "  docs             - Generate HTML documentation"
+	@echo "  docs             - Generate HTML documentation from specs"
+	@echo "  validate-specs   - Check for orphaned test fragments not in any spec"
 	@echo "  test             - Run all test suites (compiler self-tests, fragment tests, LSP tests, extension tests)"
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  help             - Show this help message"
@@ -108,12 +109,16 @@ lsp-test:
 	@echo Running LSP tests...
 	@powershell -Command "cd lsp-server\tests\build; ctest --output-on-failure"
 
-# Generate documentation (HTML output only)
+# Generate documentation from spec files
 docs: compiler
-	@echo Generating documentation...
-	@./bin/maxon.exe generate-docs
+	@echo Generating documentation from specs...
 	@powershell -Command "cd docs; dotnet run"
 	@echo Documentation generated in docs/Output/
+
+# Validate that all fragments are defined in spec files
+validate-specs: compiler
+	@echo Validating spec coverage...
+	@powershell -ExecutionPolicy Bypass -File scripts/validate-specs.ps1
 
 # Run all test suites
 test: compiler lsp-server extension-build
@@ -127,6 +132,8 @@ test: compiler lsp-server extension-build
 	@powershell -Command "Write-Host ''"
 	@echo [2/4] Running language fragment tests...
 	@echo ------------------------------------------------------------
+	@powershell -Command "maxon extract-specs"
+	@powershell -Command "maxon regen-fragments"
 	@powershell -Command "maxon test-fragments"
 	@powershell -Command "Write-Host ''"
 	@echo [3/4] Running LSP C++ unit tests...

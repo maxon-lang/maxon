@@ -16,14 +16,224 @@
 #include <string>
 #include <vector>
 #include <set>
+#include <map>
 #include <filesystem>
 #include <ctime>
+#include <regex>
 
 #include <llvm/Support/raw_ostream.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+// Structure to hold spec manifest data
+struct SpecManifest {
+    struct FragmentEntry {
+        std::string specFile;
+        std::string testName;
+        int index;
+    };
+    std::map<std::string, FragmentEntry> fragments; // key: fragment filename
+};
+
+// Extract test fragments from spec files in specs/ directory
+int extractSpecFragments() {
+    std::string specsDir = "specs";
+    std::string outputDir = "language-tests/fragments";
+    std::string manifestPath = "language-tests/.spec-manifest.json";
+    
+    if (!std::filesystem::exists(specsDir)) {
+        std::cerr << "Error: Directory not found: " << specsDir << std::endl;
+        std::cerr << "Please create the specs/ directory with spec files." << std::endl;
+        return 1;
+    }
+    
+    // Create output directory if it doesn't exist
+    std::filesystem::create_directories(outputDir);
+    
+    std::cout << "Extracting test fragments from spec files..." << std::endl;
+    
+    SpecManifest manifest;
+    int totalFragmentsExtracted = 0;
+    
+    // Process each spec file
+    for (const auto& entry : std::filesystem::directory_iterator(specsDir)) {
+        if (entry.path().extension() != ".md") continue;
+        
+        std::string specPath = entry.path().string();
+        std::string specBaseName = entry.path().stem().string();
+        
+        // Skip README
+        if (specBaseName == "README" || specBaseName == "readme") {
+            continue;
+        }
+        
+        std::cout << "\nProcessing " << specBaseName << ".md..." << std::endl;
+        
+        std::ifstream specFile(specPath);
+        if (!specFile) {
+            std::cerr << "  Warning: Cannot read " << specPath << std::endl;
+            continue;
+        }
+        
+        std::string line;
+        bool inTestSection = false;
+        bool inCodeBlock = false;
+        std::string currentTestName;
+        std::string currentCode;
+        std::string currentMetadata;
+        std::map<std::string, int> testNameCounts; // Track test indices per name
+        bool collectingMetadata = false;
+        bool inMetadataBlock = false; // For multi-line Stdout/Stderr
+        
+        while (std::getline(specFile, line)) {
+            // Check if we're entering the Tests section
+            if (line == "## Tests") {
+                inTestSection = true;
+                continue;
+            }
+            
+            if (!inTestSection) continue;
+            
+            // Check for test marker comment
+            std::regex testMarkerRegex(R"(<!--\s*test:\s*([a-zA-Z0-9_.-]+)\s*-->)");
+            std::smatch match;
+            if (std::regex_search(line, match, testMarkerRegex)) {
+                // Save previous test if exists
+                if (!currentTestName.empty() && !currentCode.empty()) {
+                    int index = testNameCounts[currentTestName];
+                    std::string fragmentName = currentTestName + "." + std::to_string(index);
+                    std::string testFileName = outputDir + "/" + fragmentName + ".test";
+                    
+                    std::ofstream testFile(testFileName);
+                    testFile << currentCode;
+                    testFile << "---\nN/A\n---\nN/A\n---\n";
+                    if (!currentMetadata.empty()) {
+                        testFile << currentMetadata;
+                    }
+                    testFile.close();
+                    
+                    // Add to manifest
+                    SpecManifest::FragmentEntry entry;
+                    entry.specFile = specBaseName + ".md";
+                    entry.testName = currentTestName;
+                    entry.index = index;
+                    manifest.fragments[fragmentName + ".test"] = entry;
+                    
+                    std::cout << "  Extracted " << fragmentName << std::endl;
+                    totalFragmentsExtracted++;
+                    
+                    currentCode.clear();
+                    currentMetadata.clear();
+                }
+                
+                currentTestName = match[1].str();
+                testNameCounts[currentTestName]++;
+                collectingMetadata = false;
+                inMetadataBlock = false;
+                continue;
+            }
+            
+            // Check for code block fence
+            if (line == "```maxon" || (line == "```" && !inMetadataBlock)) {
+                if (!inCodeBlock && line == "```maxon") {
+                    // Start of code block
+                    inCodeBlock = true;
+                    currentCode.clear();
+                } else if (inCodeBlock && line == "```") {
+                    // End of code block - start collecting metadata
+                    inCodeBlock = false;
+                    collectingMetadata = true;
+                }
+                continue;
+            }
+            
+            if (inCodeBlock) {
+                // Inside code block - accumulate source
+                currentCode += line + "\n";
+            } else if (collectingMetadata) {
+                // Check for metadata lines
+                if (line.rfind("ExitCode:", 0) == 0) {
+                    currentMetadata += line + "\n";
+                } else if (line.rfind("Args:", 0) == 0) {
+                    currentMetadata += line + "\n";
+                } else if (line.rfind("Stdout:", 0) == 0 || line.rfind("Stderr:", 0) == 0 || line.rfind("MaxoncStderr:", 0) == 0) {
+                    currentMetadata += line + "\n";
+                    // Check if this starts a multi-line block
+                    if (line.find("```") != std::string::npos) {
+                        inMetadataBlock = true;
+                    }
+                } else if (inMetadataBlock) {
+                    // Inside multi-line metadata block
+                    currentMetadata += line + "\n";
+                    if (line.find("```") != std::string::npos && currentMetadata.find("```\n" + line) != std::string::npos) {
+                        // This is the closing fence
+                        inMetadataBlock = false;
+                    }
+                }
+            }
+        }
+        
+        // Save last test if exists
+        if (!currentTestName.empty() && !currentCode.empty()) {
+            int index = testNameCounts[currentTestName];
+            std::string fragmentName = currentTestName + "." + std::to_string(index);
+            std::string testFileName = outputDir + "/" + fragmentName + ".test";
+            
+            std::ofstream testFile(testFileName);
+            testFile << currentCode;
+            testFile << "---\nN/A\n---\nN/A\n---\n";
+            if (!currentMetadata.empty()) {
+                testFile << currentMetadata;
+            }
+            testFile.close();
+            
+            // Add to manifest
+            SpecManifest::FragmentEntry entry;
+            entry.specFile = specBaseName + ".md";
+            entry.testName = currentTestName;
+            entry.index = index;
+            manifest.fragments[fragmentName + ".test"] = entry;
+            
+            std::cout << "  Extracted " << fragmentName << std::endl;
+            totalFragmentsExtracted++;
+        }
+        
+        specFile.close();
+    }
+    
+    // Write manifest file
+    std::ofstream manifestFile(manifestPath);
+    if (manifestFile) {
+        manifestFile << "{\n";
+        manifestFile << "  \"version\": \"1.0\",\n";
+        manifestFile << "  \"fragments\": {\n";
+        
+        bool first = true;
+        for (const auto& [fragmentName, entry] : manifest.fragments) {
+            if (!first) manifestFile << ",\n";
+            first = false;
+            
+            manifestFile << "    \"" << fragmentName << "\": {\n";
+            manifestFile << "      \"spec\": \"" << entry.specFile << "\",\n";
+            manifestFile << "      \"test\": \"" << entry.testName << "\",\n";
+            manifestFile << "      \"index\": " << entry.index << "\n";
+            manifestFile << "    }";
+        }
+        
+        manifestFile << "\n  }\n";
+        manifestFile << "}\n";
+        manifestFile.close();
+        
+        std::cout << "\nWrote manifest: " << manifestPath << std::endl;
+    }
+    
+    std::cout << "\nExtraction complete: " << totalFragmentsExtracted << " fragments extracted" << std::endl;
+    
+    return 0;
+}
+
 
 // Extract code fragments from markdown files in docs/Content and create .test files
 static void extractFragmentsFromDocs() {

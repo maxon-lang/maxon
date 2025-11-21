@@ -96,6 +96,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "                 Compile Maxon source files" << std::endl;
         std::cerr << "  self-test [--verbose]" << std::endl;
         std::cerr << "                 Run compiler self-tests" << std::endl;
+        std::cerr << "  extract-specs" << std::endl;
+        std::cerr << "                 Extract test fragments from spec files" << std::endl;
         std::cerr << "  regen-fragments" << std::endl;
         std::cerr << "                 Regenerate all test fragments" << std::endl;
         std::cerr << "  test-fragments [options]" << std::endl;
@@ -128,6 +130,10 @@ int main(int argc, char* argv[]) {
             }
         }
         return runSelfTest(verbose);
+    }
+
+    if (command == "extract-specs") {
+        return extractSpecFragments();
     }
 
     if (command == "regen-fragments") {

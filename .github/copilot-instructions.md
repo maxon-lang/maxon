@@ -2,18 +2,31 @@
 
 ## Key Workflows
 
+### Spec-Driven Development (PRIMARY WORKFLOW)
+- **All language features must have a spec file in `specs/`** - single source of truth
+- Each spec contains: Developer Notes, Documentation (user-facing), and Tests
+- Spec format defined in `specs/README.md`
+
+**Adding a New Feature:**
+1. Create `specs/feature-name.md` with YAML frontmatter, notes, docs, and tests
+2. `maxon extract-specs` - Extract test fragments from spec
+3. `maxon regen-fragments` - Generate IR and metadata for tests  
+4. Implement feature in lexer/parser/codegen until tests pass
+5. `make docs` - Generate HTML documentation from spec
+
+**Modifying Existing Feature:**
+1. Edit the spec file in `specs/`
+2. `make test` - Automatically extracts specs, regenerates, and runs tests
+3. Update implementation if needed
+
+**Validation:**
+- `make validate-specs` - Check for orphaned fragments not in any spec
+- All fragments in `language-tests/fragments/` should be generated from specs
+
 ### Testing
 - Use `maxon <file>` to compile and run in one step (no temp files)
 - Create test files in `/temp` and clean up afterwards
-- `maxon regen-fragments` regenerates IR and metadata for `.test` files
 - `maxon test-fragments` runs all language tests (add `--verbose` for details)
-
-### Adding Language Features
-1. Lexer/parser/codegen changes (search codebase for patterns)
-2. `make compiler`
-3. Create `.test` file with just source code in `language-tests/fragments/`
-4. `maxon regen-fragments` to generate IR/metadata
-5. Add docs to `docs/Content/*.md` if user-facing, then `make docs`
 
 ### Adding Keywords
 Update: `TokenType` enum, `Lexer::readIdentifier()` map, parser logic, AST if needed, codegen, TextMate grammar
