@@ -34,20 +34,17 @@ namespace.functionName(arguments)
 
 ```maxon
 namespace math 'math'
-    function square(x int) int
-        return x * x
-    end 'square'
+    function add(a int, b int) int
+        return a + b
+    end 'add'
 end 'math'
 
-namespace utils 'utils'
-    function test() int
-        return math.square(5)  // Qualified call
-    end 'test'
-end 'utils'
-
 function main() int
-    return math.square(4)  // Qualified call from global scope
+    return add(10, 20)
 end 'main'
+```
+```output
+ExitCode: 30
 ```
 
 ### Within Same Namespace

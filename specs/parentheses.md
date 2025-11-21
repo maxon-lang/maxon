@@ -39,6 +39,9 @@ function main() int
     return b
 end 'main'
 ```
+```output
+ExitCode: 20
+```
 
 ## Tests
 

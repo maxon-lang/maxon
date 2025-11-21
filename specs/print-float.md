@@ -49,6 +49,12 @@ function main() int
     return 0
 end 'main'
 ```
+```output
+ExitCode: 0
+Stdout: 3.14
+3.14159
+-2.5
+```
 
 ## Tests
 

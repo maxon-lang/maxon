@@ -51,6 +51,9 @@ function main() int
     return result as int
 end 'main'
 ```
+```output
+ExitCode: 8
+```
 
 ### Transitive Dependencies
 

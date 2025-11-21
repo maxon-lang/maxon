@@ -65,6 +65,14 @@ function main() int
     return 0
 end 'main'
 ```
+```output
+ExitCode: 0
+Stdout: 13
+7
+30
+3
+1
+```
 
 ## Tests
 

@@ -45,6 +45,9 @@ function main() int
     return x
 end 'main'
 ```
+```output
+ExitCode: 25
+```
 
 ### Restrictions
 

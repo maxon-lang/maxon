@@ -43,6 +43,9 @@ function main() int
     return used()  // Only this is kept
 end 'main'
 ```
+```output
+ExitCode: 42
+```
 
 The `unused()` function won't appear in the optimized output.
 

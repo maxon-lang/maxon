@@ -42,6 +42,9 @@ function main() int
     return z
 end 'main'
 ```
+```output
+ExitCode: 42
+```
 
 ## Tests
 

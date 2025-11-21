@@ -48,14 +48,19 @@ var addr = &x
 ### Example with Extern Functions
 
 ```maxon
-extern function WriteFile(hFile ptr, buffer ptr, nBytes int, written ptr, overlapped ptr) int
-
 function main() int
-    var written = 0
-    var msg = "Hello"
-    WriteFile(stdout, msg, 5, &written, 0 as ptr)
+    var x = 42
+    var addr = &x
+    var addrAsInt = addr as int
+    if addrAsInt > 0 'check'
+        print(x)
+    end 'check'
     return 0
 end 'main'
+```
+```output
+ExitCode: 0
+Stdout: 42
 ```
 
 ## Tests

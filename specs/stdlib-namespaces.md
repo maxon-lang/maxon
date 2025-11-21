@@ -39,22 +39,15 @@ The standard library organizes functions into logical namespaces.
 ### Example
 
 ```maxon
-namespace fs 'fs'
-    function stdout() ptr
-        // Returns stdout handle
-    end 'stdout'
-    
-    function write(handle ptr, buffer ptr, length int) int
-        // Write bytes to file handle
-    end 'write'
-end 'fs'
-
 function main() int
-    let out = stdout()
-    var msg = "Hello\n"
-    write(out, msg, 6)
+    // Use standard library function from sys namespace
+    print(42)
     return 0
 end 'main'
+```
+```output
+ExitCode: 0
+Stdout: 42
 ```
 
 ## Tests

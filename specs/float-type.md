@@ -50,6 +50,9 @@ function main() int
     return area as int  // Returns 78
 end 'main'
 ```
+```output
+ExitCode: 78
+```
 
 ## Tests
 

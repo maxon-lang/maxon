@@ -37,16 +37,14 @@ Note: No function body or `end` statement.
 ### Example
 
 ```maxon
-extern function GetStdHandle(nStdHandle int) ptr
-extern function WriteFile(hFile ptr, buffer ptr, nBytes int, written ptr, overlapped ptr) int
+extern function TestFunc(x int, p ptr, c char) int
 
 function main() int
-    let stdout = GetStdHandle(-11)
-    var written = 0
-    var msg = "Hello!"
-    WriteFile(stdout, msg, 6, &written, 0 as ptr)
     return 0
 end 'main'
+```
+```output
+ExitCode: 0
 ```
 
 ## Tests

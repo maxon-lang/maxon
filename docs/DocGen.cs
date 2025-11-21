@@ -10,34 +10,26 @@ namespace DocGen {
 		public string Title { get; set; } = "";
 	}
 
-	internal class Program {
+	internal partial class Program {
 		static void Main() {
 			var inputPath = "../specs";
-			var docFragmentsPath = "../language-tests/doc-fragments";
 
-			if (Directory.Exists("Output") == false) {
-				Directory.CreateDirectory("Output");
-			}
+		if (Directory.Exists("Output") == false) {
+			Directory.CreateDirectory("Output");
+		}
 
-			foreach (FileInfo file in new DirectoryInfo("Output").EnumerateFiles()) {
-				file.Delete();
-			}
+		foreach (FileInfo file in new DirectoryInfo("Output").EnumerateFiles()) {
+			// Keep the CSS file if it exists
+			if (file.Name == "style.css" || file.Name == "nav.js") continue;
+			file.Delete();
+		}
 
-			// Create doc-fragments directory if it doesn't exist
-			if (Directory.Exists(docFragmentsPath) == false) {
-				Directory.CreateDirectory(docFragmentsPath);
-			}
+		// Generate CSS file
+		GenerateStylesheet();
 
-			// Clear existing doc-fragments
-			foreach (FileInfo file in new DirectoryInfo(docFragmentsPath).EnumerateFiles("*.test")) {
-				file.Delete();
-			}
-
-			var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().UseBootstrap().Build();
-
-			// Collect all specs and group by category
+		var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().UseBootstrap().Build();			// Collect all specs and group by category
 			var specsByCategory = new Dictionary<string, List<SpecInfo>>();
-			int totalExamplesExtracted = 0;
+			var validationErrors = new List<string>();
 
 			foreach (var filename in Directory.EnumerateFiles(inputPath, "*.md")) {
 				var basename = Path.GetFileNameWithoutExtension(filename);
@@ -50,6 +42,9 @@ namespace DocGen {
 
 				var content = File.ReadAllText(filename);
 				
+				// Validate documentation examples have expected outputs
+				ValidateDocumentationExamples(content, basename, validationErrors);
+				
 				var spec = new SpecInfo {
 					Name = basename,
 					Category = ExtractCategory(content),
@@ -58,15 +53,25 @@ namespace DocGen {
 				};
 
 				if (!string.IsNullOrWhiteSpace(spec.DocumentationContent)) {
-					if (!specsByCategory.ContainsKey(spec.Category)) {
-						specsByCategory[spec.Category] = new List<SpecInfo>();
+					if (!specsByCategory.TryGetValue(spec.Category, out var value)) {
+						value = [];
+						specsByCategory[spec.Category] = value;
 					}
-					specsByCategory[spec.Category].Add(spec);
 
-					// Extract code examples from documentation
-					int examplesExtracted = ExtractCodeExamples(spec.DocumentationContent, basename, docFragmentsPath);
-					totalExamplesExtracted += examplesExtracted;
+					value.Add(spec);
 				}
+			}
+
+			// Report validation errors
+			if (validationErrors.Count > 0) {
+				Console.ForegroundColor = ConsoleColor.Red;
+				Console.WriteLine($"\n{validationErrors.Count} validation error(s) found:");
+				Console.ResetColor();
+				foreach (var error in validationErrors) {
+					Console.WriteLine($"  {error}");
+				}
+				Console.WriteLine("\nAll maxon code blocks in Documentation sections must have corresponding ```output blocks.");
+				Environment.Exit(1);
 			}
 
 			// Sort specs within each category by name
@@ -74,12 +79,15 @@ namespace DocGen {
 				specsByCategory[category].Sort((a, b) => string.Compare(a.Title, b.Title, StringComparison.Ordinal));
 			}
 
+			// Generate navigation JavaScript
+			GenerateNavigationScript(specsByCategory);
+
 			// Generate category pages
 			foreach (var kvp in specsByCategory.OrderBy(x => x.Key)) {
 				var category = kvp.Key;
 				var specs = kvp.Value;
 				
-				var htmlContent = GenerateCategoryPage(category, specs, specsByCategory.Keys.OrderBy(x => x).ToList(), pipeline);
+				var htmlContent = GenerateCategoryPage(category, specs, [.. specsByCategory.Keys.OrderBy(x => x)], pipeline);
 				var filename = $"Output/{category}.html";
 				File.WriteAllText(filename, htmlContent);
 				Console.WriteLine($"Generated {category}.html ({specs.Count} specs)");
@@ -89,15 +97,370 @@ namespace DocGen {
 			var indexContent = GenerateIndexPage(specsByCategory);
 			File.WriteAllText("Output/index.html", indexContent);
 			Console.WriteLine("Generated index.html");
+		}
 
-			if (totalExamplesExtracted > 0) {
-				Console.WriteLine($"Extracted {totalExamplesExtracted} code examples to doc-fragments/");
+		static void GenerateStylesheet() {
+			var css = @"/* Maxon Language Documentation Styles */
+
+/* Base styles */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0;
+    background-color: #f5f5f5;
+}
+
+/* Category page layout */
+.container {
+    display: flex;
+    min-height: 100vh;
+}
+
+/* Sidebar navigation */
+.sidebar {
+    width: 250px;
+    background-color: #2c3e50;
+    color: #ecf0f1;
+    padding: 20px;
+    position: fixed;
+    height: 100vh;
+    overflow-y: auto;
+}
+
+.sidebar h2 {
+    margin-top: 0;
+    color: #3498db;
+    font-size: 1.5em;
+}
+
+.sidebar ul {
+    list-style: none;
+    padding: 0;
+}
+
+.sidebar li {
+    margin: 8px 0;
+}
+
+.sidebar a {
+    color: #ecf0f1;
+    text-decoration: none;
+    display: block;
+    padding: 5px 10px;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+}
+
+.sidebar a:hover, .sidebar a.active {
+    background-color: #34495e;
+}
+
+/* Content area */
+.content {
+    margin-left: 250px;
+    padding: 40px;
+    flex: 1;
+    max-width: 900px;
+}
+
+/* Header section */
+.header {
+    background-color: white;
+    padding: 30px;
+    margin-bottom: 30px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.header h1 {
+    margin: 0 0 10px 0;
+    color: #2c3e50;
+}
+
+.header .breadcrumb {
+    color: #7f8c8d;
+    font-size: 0.9em;
+}
+
+.header .breadcrumb a {
+    color: #3498db;
+    text-decoration: none;
+}
+
+/* Table of contents */
+.toc {
+    background-color: white;
+    padding: 20px;
+    margin-bottom: 30px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.toc h2 {
+    margin-top: 0;
+    color: #2c3e50;
+    font-size: 1.2em;
+}
+
+.toc ul {
+    list-style: none;
+    padding: 0;
+}
+
+.toc li {
+    margin: 8px 0;
+}
+
+.toc a {
+    color: #3498db;
+    text-decoration: none;
+}
+
+.toc a:hover {
+    text-decoration: underline;
+}
+
+/* Spec sections */
+.spec-section {
+    background-color: white;
+    padding: 30px;
+    margin-bottom: 30px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.spec-section h2 {
+    margin-top: 0;
+    color: #2c3e50;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 10px;
+}
+
+.spec-section h3 {
+    color: #34495e;
+    margin-top: 1.5em;
+}
+
+/* Code blocks */
+pre {
+    background-color: #f8f8f8;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 15px;
+    overflow-x: auto;
+}
+
+code {
+    background-color: #f8f8f8;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+pre code {
+    background-color: transparent;
+    padding: 0;
+}
+
+/* Expected output styling */
+.expected-output {
+    background-color: #e8f5e9;
+    border: 1px solid #a5d6a7;
+    border-radius: 4px;
+    padding: 15px;
+    margin-top: 10px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    position: relative;
+}
+
+.expected-output::before {
+    content: 'Expected Output:';
+    display: block;
+    font-weight: bold;
+    color: #2e7d32;
+    margin-bottom: 8px;
+    font-size: 0.9em;
+}
+
+.expected-output pre {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+}
+
+/* Index page styles */
+body:has(.categories) .container {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 40px 20px;
+    display: block;
+}
+
+body:has(.categories) .header {
+    text-align: center;
+    padding: 40px;
+    margin-bottom: 40px;
+}
+
+body:has(.categories) .header h1 {
+    font-size: 2.5em;
+}
+
+body:has(.categories) .header p {
+    color: #7f8c8d;
+    font-size: 1.1em;
+}
+
+/* Category cards (index page) */
+.categories {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 20px;
+}
+
+.category-card {
+    background-color: white;
+    padding: 25px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+    text-decoration: none;
+    color: inherit;
+    display: block;
+}
+
+.category-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+.category-card h2 {
+    margin: 0 0 10px 0;
+    color: #3498db;
+    font-size: 1.3em;
+}
+
+.category-card p {
+    margin: 0;
+    color: #7f8c8d;
+}
+
+.spec-count {
+    font-weight: bold;
+    color: #2c3e50;
+}
+";
+			File.WriteAllText("Output/style.css", css);
+			Console.WriteLine("Generated style.css");
+		}
+
+		static void GenerateNavigationScript(Dictionary<string, List<SpecInfo>> specsByCategory) {
+			var js = new System.Text.StringBuilder();
+			js.AppendLine("// Navigation data and dynamic sidebar generation");
+			js.AppendLine("const categories = {");
+			
+			var categoryList = specsByCategory.Keys.OrderBy(x => x).ToList();
+			for (int i = 0; i < categoryList.Count; i++) {
+				var cat = categoryList[i];
+				var displayName = GetCategoryDisplayName(cat);
+				var comma = i < categoryList.Count - 1 ? "," : "";
+				js.AppendLine($"    '{cat}': '{displayName}'{comma}");
+			}
+			
+			js.AppendLine("};");
+			js.AppendLine("");
+			js.AppendLine("// Build and insert sidebar navigation");
+			js.AppendLine("document.addEventListener('DOMContentLoaded', function() {");
+			js.AppendLine("    const sidebar = document.getElementById('sidebar');");
+			js.AppendLine("    if (!sidebar) return;");
+			js.AppendLine("");
+			js.AppendLine("    const activeCategory = sidebar.dataset.active;");
+			js.AppendLine("");
+			js.AppendLine("    let html = '<h2>Maxon Docs</h2><ul>';");
+			js.AppendLine("    html += '<li><a href=\"index.html\">← Home</a></li>';");
+			js.AppendLine("");
+			js.AppendLine("    for (const [key, displayName] of Object.entries(categories)) {");
+			js.AppendLine("        const activeClass = key === activeCategory ? ' class=\"active\"' : '';");
+			js.AppendLine("        html += `<li><a href=\"${key}.html\"${activeClass}>${displayName}</a></li>`;");
+			js.AppendLine("    }");
+			js.AppendLine("");
+			js.AppendLine("    html += '</ul>';");
+			js.AppendLine("    sidebar.innerHTML = html;");
+			js.AppendLine("});");
+			
+			File.WriteAllText("Output/nav.js", js.ToString());
+			Console.WriteLine("Generated nav.js");
+		}
+
+		static void ValidateDocumentationExamples(string content, string basename, List<string> errors) {
+			// Find the Documentation section
+			var docMatch = MyRegex1().Match(content);
+			if (!docMatch.Success) {
+				return; // No Documentation section
+			}
+
+			var docSection = docMatch.Groups[1].Value;
+			var lines = content.Split('\n');
+			
+			// Find line number where Documentation section starts
+			int docSectionLine = 0;
+			for (int i = 0; i < lines.Length; i++) {
+				if (lines[i].Contains("## Documentation")) {
+					docSectionLine = i + 1;
+					break;
+				}
+			}
+
+			// Find all ```maxon blocks in the Documentation section
+			var maxonBlocks = Regex.Matches(docSection, @"```maxon\s*\r?\n", RegexOptions.Multiline);
+			
+			foreach (Match match in maxonBlocks) {
+				// Get position after the maxon block
+				int blockStart = match.Index + match.Length;
+				
+				// Find the closing ``` for this maxon block
+				int blockEnd = docSection.IndexOf("```", blockStart);
+				if (blockEnd == -1) continue;
+				
+				// Extract the code block content
+				var codeBlock = docSection.Substring(blockStart, blockEnd - blockStart);
+				
+				// Only validate blocks that contain "function main()" - these should be executable examples
+				if (!codeBlock.Contains("function main()")) {
+					continue; // Skip syntax examples and snippets
+				}
+				
+				// Check if there's an ```output block immediately after
+				int nextBlockStart = blockEnd + 3;
+				if (nextBlockStart >= docSection.Length) {
+					// Calculate approximate line number
+					int lineNum = docSectionLine + docSection[..match.Index].Count(c => c == '\n');
+					errors.Add($"{basename}.md (line ~{lineNum}): maxon code block without ```output block");
+					continue;
+				}
+				
+				// Skip whitespace after closing ```
+				while (nextBlockStart < docSection.Length && 
+				       (docSection[nextBlockStart] == ' ' || docSection[nextBlockStart] == '\t' || 
+				        docSection[nextBlockStart] == '\r' || docSection[nextBlockStart] == '\n')) {
+					nextBlockStart++;
+				}
+				
+				// Check if next block is ```output
+				if (nextBlockStart >= docSection.Length || 
+				    !docSection[nextBlockStart..].StartsWith("```output")) {
+					// Calculate approximate line number
+					int lineNum = docSectionLine + docSection[..match.Index].Count(c => c == '\n');
+					errors.Add($"{basename}.md (line ~{lineNum}): maxon code block without ```output block");
+				}
 			}
 		}
 
 		static string ExtractCategory(string content) {
 			// Extract category from YAML frontmatter
-			var categoryMatch = Regex.Match(content, @"category:\s*(.+)", RegexOptions.IgnoreCase);
+			var categoryMatch = MyRegex().Match(content);
 			if (categoryMatch.Success) {
 				return categoryMatch.Groups[1].Value.Trim();
 			}
@@ -106,7 +469,7 @@ namespace DocGen {
 
 		static string ExtractDocumentationSection(string content) {
 			// Find the ## Documentation section only, stop at any following ## heading
-			var docMatch = Regex.Match(content, @"## Documentation\s*\r?\n(.*?)(?=\r?\n## |\z)", RegexOptions.Singleline);
+			var docMatch = MyRegex1().Match(content);
 			
 			if (docMatch.Success) {
 				return docMatch.Groups[1].Value.Trim();
@@ -115,46 +478,14 @@ namespace DocGen {
 			return string.Empty;
 		}
 
-		static int ExtractCodeExamples(string documentationContent, string specName, string outputPath) {
-			// Find Example/Examples sections and extract maxon code blocks from them
-			var exampleSections = Regex.Matches(documentationContent, @"###\s+Examples?\s*\r?\n(.*?)(?=\r?\n### |\z)", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-			
-			int exampleNumber = 1;
-			foreach (Match sectionMatch in exampleSections) {
-				var sectionContent = sectionMatch.Groups[1].Value;
-				
-				// Find all maxon code blocks within this section
-				var codeBlocks = Regex.Matches(sectionContent, @"```maxon\s*\r?\n(.*?)```", RegexOptions.Singleline);
-				
-				foreach (Match codeMatch in codeBlocks) {
-					var code = codeMatch.Groups[1].Value.Trim();
-					
-					// Skip empty code blocks
-					if (string.IsNullOrWhiteSpace(code)) {
-						continue;
-					}
-
-					// Skip code blocks that don't look like complete programs (no function definition)
-					if (!code.Contains("function ")) {
-						continue;
-					}
-
-					// Create the .test file format
-					var testContent = code + "\n\n---\n; IR will be generated by maxon regen-fragments\n---\n; Debug IR will be generated by maxon regen-fragments\n";
-					
-					var filename = Path.Combine(outputPath, $"{specName}.{exampleNumber}.test");
-					File.WriteAllText(filename, testContent);
-					exampleNumber++;
-				}
-			}
-
-			return exampleNumber - 1;
-		}
+		// NOTE: ExtractCodeExamples function removed - we no longer generate doc-fragments
+		// Expected results are now included directly in the Documentation section using ```output blocks
+		// and are rendered in the HTML output for users to see.
 
 		static string GenerateTitle(string name) {
 			// Convert hyphenated names to title case
 			return string.Join(" ", name.Split('-').Select(word => 
-				char.ToUpper(word[0]) + word.Substring(1)));
+				char.ToUpper(word[0]) + word[1..]));
 		}
 
 		static string GetCategoryDisplayName(string category) {
@@ -180,9 +511,8 @@ namespace DocGen {
 				{ "uncategorized", "Uncategorized" }
 			};
 
-			return displayNames.ContainsKey(category) 
-				? displayNames[category] 
-				: GenerateTitle(category);
+			return displayNames.TryGetValue(category, out var value) 
+				? value : GenerateTitle(category);
 		}
 
 		static string GenerateCategoryPage(string category, List<SpecInfo> specs, List<string> allCategories, MarkdownPipeline pipeline) {
@@ -196,152 +526,13 @@ namespace DocGen {
 			sb.AppendLine("    <meta charset=\"UTF-8\">");
 			sb.AppendLine("    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">");
 			sb.AppendLine($"    <title>{categoryDisplayName} - Maxon Language Documentation</title>");
-			sb.AppendLine("    <style>");
-			sb.AppendLine(@"        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            line-height: 1.6;
-            margin: 0;
-            padding: 0;
-            background-color: #f5f5f5;
-        }
-        .container {
-            display: flex;
-            min-height: 100vh;
-        }
-        .sidebar {
-            width: 250px;
-            background-color: #2c3e50;
-            color: #ecf0f1;
-            padding: 20px;
-            position: fixed;
-            height: 100vh;
-            overflow-y: auto;
-        }
-        .sidebar h2 {
-            margin-top: 0;
-            color: #3498db;
-            font-size: 1.5em;
-        }
-        .sidebar ul {
-            list-style: none;
-            padding: 0;
-        }
-        .sidebar li {
-            margin: 8px 0;
-        }
-        .sidebar a {
-            color: #ecf0f1;
-            text-decoration: none;
-            display: block;
-            padding: 5px 10px;
-            border-radius: 4px;
-            transition: background-color 0.2s;
-        }
-        .sidebar a:hover, .sidebar a.active {
-            background-color: #34495e;
-        }
-        .content {
-            margin-left: 250px;
-            padding: 40px;
-            flex: 1;
-            max-width: 900px;
-        }
-        .header {
-            background-color: white;
-            padding: 30px;
-            margin-bottom: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .header h1 {
-            margin: 0 0 10px 0;
-            color: #2c3e50;
-        }
-        .header .breadcrumb {
-            color: #7f8c8d;
-            font-size: 0.9em;
-        }
-        .header .breadcrumb a {
-            color: #3498db;
-            text-decoration: none;
-        }
-        .toc {
-            background-color: white;
-            padding: 20px;
-            margin-bottom: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .toc h2 {
-            margin-top: 0;
-            color: #2c3e50;
-            font-size: 1.2em;
-        }
-        .toc ul {
-            list-style: none;
-            padding: 0;
-        }
-        .toc li {
-            margin: 8px 0;
-        }
-        .toc a {
-            color: #3498db;
-            text-decoration: none;
-        }
-        .toc a:hover {
-            text-decoration: underline;
-        }
-        .spec-section {
-            background-color: white;
-            padding: 30px;
-            margin-bottom: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .spec-section h2 {
-            margin-top: 0;
-            color: #2c3e50;
-            border-bottom: 2px solid #3498db;
-            padding-bottom: 10px;
-        }
-        .spec-section h3 {
-            color: #34495e;
-            margin-top: 1.5em;
-        }
-        pre {
-            background-color: #f8f8f8;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            padding: 15px;
-            overflow-x: auto;
-        }
-        code {
-            background-color: #f8f8f8;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-        }
-        pre code {
-            background-color: transparent;
-            padding: 0;
-        }
-    ");
-			sb.AppendLine("    </style>");
+			sb.AppendLine("    <link rel=\"stylesheet\" href=\"style.css\">");
 			sb.AppendLine("</head>");
 			sb.AppendLine("<body>");
 			sb.AppendLine("    <div class=\"container\">");
 			
-			// Sidebar navigation
-			sb.AppendLine("        <nav class=\"sidebar\">");
-			sb.AppendLine("            <h2>Maxon Docs</h2>");
-			sb.AppendLine("            <ul>");
-			sb.AppendLine("                <li><a href=\"index.html\">← Home</a></li>");
-			foreach (var cat in allCategories) {
-				var activeClass = cat == category ? " class=\"active\"" : "";
-				sb.AppendLine($"                <li><a href=\"{cat}.html\"{activeClass}>{GetCategoryDisplayName(cat)}</a></li>");
-			}
-			sb.AppendLine("            </ul>");
-			sb.AppendLine("        </nav>");
+			// Sidebar navigation (loaded dynamically)
+			sb.AppendLine($"        <nav class=\"sidebar\" id=\"sidebar\" data-active=\"{category}\"></nav>");
 			
 			// Main content
 			sb.AppendLine("        <main class=\"content\">");
@@ -369,12 +560,15 @@ namespace DocGen {
 				sb.AppendLine($"            <div class=\"spec-section\" id=\"{spec.Name}\">");
 				sb.AppendLine($"                <h2>{spec.Title}</h2>");
 				var html = Markdown.ToHtml(spec.DocumentationContent, pipeline);
+				// Process output blocks - replace <pre><code class="language-output"> with custom styling
+				html = MyRegex2().Replace(html, @"<div class=""expected-output""><pre>$1</pre></div>");
 				sb.AppendLine(html);
 				sb.AppendLine("            </div>");
 			}
 			
 			sb.AppendLine("        </main>");
 			sb.AppendLine("    </div>");
+			sb.AppendLine("    <script src=\"nav.js\"></script>");
 			sb.AppendLine("</body>");
 			sb.AppendLine("</html>");
 
@@ -390,70 +584,7 @@ namespace DocGen {
 			sb.AppendLine("    <meta charset=\"UTF-8\">");
 			sb.AppendLine("    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">");
 			sb.AppendLine("    <title>Maxon Language Documentation</title>");
-			sb.AppendLine("    <style>");
-			sb.AppendLine(@"        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            line-height: 1.6;
-            margin: 0;
-            padding: 0;
-            background-color: #f5f5f5;
-        }
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-            padding: 40px 20px;
-        }
-        .header {
-            background-color: white;
-            padding: 40px;
-            margin-bottom: 40px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            text-align: center;
-        }
-        .header h1 {
-            margin: 0 0 10px 0;
-            color: #2c3e50;
-            font-size: 2.5em;
-        }
-        .header p {
-            color: #7f8c8d;
-            font-size: 1.1em;
-        }
-        .categories {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
-        }
-        .category-card {
-            background-color: white;
-            padding: 25px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            transition: transform 0.2s, box-shadow 0.2s;
-            text-decoration: none;
-            color: inherit;
-            display: block;
-        }
-        .category-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-        }
-        .category-card h2 {
-            margin: 0 0 10px 0;
-            color: #3498db;
-            font-size: 1.3em;
-        }
-        .category-card p {
-            margin: 0;
-            color: #7f8c8d;
-        }
-        .spec-count {
-            font-weight: bold;
-            color: #2c3e50;
-        }
-    ");
-			sb.AppendLine("    </style>");
+			sb.AppendLine("    <link rel=\"stylesheet\" href=\"style.css\">");
 			sb.AppendLine("</head>");
 			sb.AppendLine("<body>");
 			sb.AppendLine("    <div class=\"container\">");
@@ -486,5 +617,12 @@ namespace DocGen {
 
 			return sb.ToString();
 		}
+
+		[GeneratedRegex(@"category:\s*(.+)", RegexOptions.IgnoreCase, "en-US")]
+		private static partial Regex MyRegex();
+		[GeneratedRegex(@"## Documentation\s*\r?\n(.*?)(?=\r?\n## |\z)", RegexOptions.Singleline)]
+		private static partial Regex MyRegex1();
+		[GeneratedRegex(@"<pre><code class=\""language-output\"">(.*?)</code></pre>", RegexOptions.Singleline)]
+		private static partial Regex MyRegex2();
 	}
 }

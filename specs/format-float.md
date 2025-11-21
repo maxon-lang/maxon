@@ -54,6 +54,9 @@ function main() int
     return len  // Returns 4
 end 'main'
 ```
+```output
+ExitCode: 4
+```
 
 ## Tests
 

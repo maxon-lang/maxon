@@ -39,6 +39,9 @@ function main() int
     return x
 end 'main'
 ```
+```output
+MaxoncStderr: Unexpected identifier 'foo'
+```
 
 Error message:
 ```

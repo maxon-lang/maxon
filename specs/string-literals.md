@@ -42,16 +42,15 @@ var message = "Hello, World!"
 ### Example
 
 ```maxon
-extern function GetStdHandle(nStdHandle int) ptr
-extern function WriteFile(hFile ptr, lpBuffer ptr, nBytes int, written ptr, overlapped ptr) int
-
 function main() int
-    let stdout = GetStdHandle(-11)
-    var written = 0
+    // String literal with escape sequence
     var msg = "Hello!\n"
-    WriteFile(stdout, msg, 7, &written, 0 as ptr)
+    // In real code, you'd use print or write to output this
     return 0
 end 'main'
+```
+```output
+ExitCode: 0
 ```
 
 ## Tests

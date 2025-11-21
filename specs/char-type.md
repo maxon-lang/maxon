@@ -55,6 +55,9 @@ function main() int
     return 0
 end 'main'
 ```
+```output
+ExitCode: 1
+```
 
 ## Tests
 

@@ -14,6 +14,24 @@
 4. Implement feature in lexer/parser/codegen until tests pass
 5. `make docs` - Generate HTML documentation from spec
 
+**Adding Examples to Documentation:**
+- Add example code to `## Documentation` section with expected results:
+  ```markdown
+  ```maxon
+  function main() int
+      print(42)
+      return 0
+  end 'main'
+  ```
+  ```output
+  ExitCode: 0
+  Stdout: 42
+  ```
+  ```
+- Expected output is visible in generated HTML docs
+- Examples with `output` blocks are NOT extracted as test fragments
+- Only tests in `## Tests` section are extracted to `language-tests/fragments/`
+
 **Modifying Existing Feature:**
 1. Edit the spec file in `specs/` (update code and/or expected results)
 2. `make test` - Automatically extracts specs, regenerates IR, and runs tests

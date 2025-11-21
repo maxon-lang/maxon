@@ -53,6 +53,9 @@ function main() int
     return len  // Returns 2
 end 'main'
 ```
+```output
+ExitCode: 2
+```
 
 ### Notes
 

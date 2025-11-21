@@ -47,6 +47,9 @@ function main() int
     return factorial(5)  // Returns 120
 end 'main'
 ```
+```output
+ExitCode: 120
+```
 
 ## Tests
 

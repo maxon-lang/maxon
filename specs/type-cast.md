@@ -50,13 +50,14 @@ value as targetType
 ```maxon
 function main() int
     var pi = 3.14159
-    var approximate = pi as int  // 3
-    
-    var code = 'A' as int        // 65
-    var letter = 65 as char      // 'A'
-    
-    return approximate
+    var approximate = pi as int
+    print(approximate)
+    return 0
 end 'main'
+```
+```output
+ExitCode: 0
+Stdout: 3
 ```
 
 ## Tests

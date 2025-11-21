@@ -62,6 +62,9 @@ function main() int
     return sum
 end 'main'
 ```
+```output
+ExitCode: 45
+```
 
 Optimized IR (simplified):
 ```llvm

@@ -37,6 +37,9 @@ function main() int
     return 3 ^ 4  // Error: '^' is not a valid operator
 end 'main'
 ```
+```output
+MaxoncStderr: Unexpected character '^' at line 2, column 14
+```
 
 Error message:
 ```

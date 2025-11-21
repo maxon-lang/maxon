@@ -44,6 +44,12 @@ function main() int
     return 0
 end 'main'
 ```
+```output
+ExitCode: 0
+Stdout: 42
+15
+100
+```
 
 Each call to `print()` outputs the value followed by a newline.
 

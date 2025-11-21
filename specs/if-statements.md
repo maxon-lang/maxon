@@ -69,19 +69,30 @@ end 'identifier'
 **Example (single-line):**
 
 ```maxon
-var x = 10
-if x > 5 return 1
+function main() int
+    var x = 10
+    if x > 5 return 1
+    return 0
+end 'main'
+```
+```output
+ExitCode: 1
 ```
 
 **Example (multi-line with else):**
 
 ```maxon
-var x = 5
-if x = 5 'check'
-    return 1
-else 'check'
-    return 0
-end 'check'
+function main() int
+    var x = 5
+    if x = 5 'check'
+        return 1
+    else 'check'
+        return 0
+    end 'check'
+end 'main'
+```
+```output
+ExitCode: 1
 ```
 
 **Notes:**

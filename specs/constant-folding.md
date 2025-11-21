@@ -37,8 +37,9 @@ function main() int
     return result
 end 'main'
 ```
-
-The generated code directly returns `14` without performing the arithmetic at runtime.
+```output
+ExitCode: 14
+```
 
 ### Complex Expressions
 
@@ -48,6 +49,9 @@ function main() int
     var x = 4
     return (1+2+x)*(x+(1+2))  // Optimized to: 7 * 7 = 49
 end 'main'
+```
+```output
+ExitCode: 49
 ```
 
 ## Tests

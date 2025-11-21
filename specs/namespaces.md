@@ -50,6 +50,9 @@ function main() int
     return add(3, 4)  // Called from within namespace
 end 'main'
 ```
+```output
+ExitCode: 7
+```
 
 ## Tests
 

@@ -49,6 +49,9 @@ function main() int
     return trunc(result)
 end 'main'
 ```
+```output
+ExitCode: 0
+```
 
 ### Notes
 
