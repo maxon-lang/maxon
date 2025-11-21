@@ -175,7 +175,7 @@ non_zero:                                         ; preds = %entry
   br i1 %11, label %negative, label %extract_int
 
 format_done:                                      ; preds = %frac_digits_done, %zero_fill_done
-  %final_float_length = phi i32 [ %20, %zero_fill_done ], [ %104, %frac_digits_done ]
+  %final_float_length = phi i32 [ %20, %zero_fill_done ], [ %105, %frac_digits_done ]
   %12 = call ptr @GetStdHandle(i32 -11)
   %13 = call i32 @WriteFile(ptr %12, ptr nonnull %buffer, i32 %final_float_length, ptr nonnull %bytesWritten, ptr null)
   %14 = call i32 @WriteFile(ptr %12, ptr nonnull @.str.newline, i32 1, ptr nonnull %bytesWritten, ptr null)
@@ -197,58 +197,64 @@ zero_fill_done:                                   ; preds = %zero_fill_body, %mi
 
 negative:                                         ; preds = %non_zero
   store i8 45, ptr %buffer, align 1
-  %21 = fneg double %0
+  %21 = call double @llvm.fabs.f64(double %0)
   br label %extract_int
 
 extract_int:                                      ; preds = %non_zero, %negative
   %pos_after_int = phi i32 [ 1, %negative ], [ 0, %non_zero ]
   %work_value = phi double [ %21, %negative ], [ %0, %non_zero ]
-  %int_part = fptosi double %work_value to i32
+  %int_part_trunc = fptosi double %work_value to i32
+  %int_part_trunc_float = sitofp i32 %int_part_trunc to double
+  %frac_part_initial = fsub double %work_value, %int_part_trunc_float
+  %22 = fcmp ogt double %frac_part_initial, 9.999000e-01
+  %int_part_rounded = zext i1 %22 to i32
+  %int_part = add i32 %int_part_rounded, %int_part_trunc
   %int_part_float = sitofp i32 %int_part to double
+  %frac_part = fsub double %work_value, %int_part_float
   %float_temp = alloca [20 x i8], align 1
-  %22 = call ptr @memset(ptr nonnull %float_temp, i32 0, i64 20)
-  %23 = icmp eq i32 %int_part, 0
-  br i1 %23, label %int_zero, label %int_digit_body
+  %23 = call ptr @memset(ptr nonnull %float_temp, i32 0, i64 20)
+  %24 = icmp eq i32 %int_part, 0
+  br i1 %24, label %int_zero, label %int_digit_body
 
 int_zero:                                         ; preds = %extract_int
-  %24 = getelementptr inbounds nuw i8, ptr %float_temp, i64 19
-  store i8 48, ptr %24, align 1
+  %25 = getelementptr inbounds nuw i8, ptr %float_temp, i64 19
+  store i8 48, ptr %25, align 1
   br label %int_digits_done
 
 int_digits_done:                                  ; preds = %int_digit_body, %int_zero
-  %final_temp_idx = phi i32 [ 18, %int_zero ], [ %43, %int_digit_body ]
-  %25 = add i32 %final_temp_idx, 1
-  %26 = sub i32 19, %final_temp_idx
-  %27 = icmp sgt i32 %26, 0
-  br i1 %27, label %copy_int_body.preheader, label %copy_int_done
+  %final_temp_idx = phi i32 [ 18, %int_zero ], [ %44, %int_digit_body ]
+  %26 = add i32 %final_temp_idx, 1
+  %27 = sub i32 19, %final_temp_idx
+  %28 = icmp sgt i32 %27, 0
+  br i1 %28, label %copy_int_body.preheader, label %copy_int_done
 
 copy_int_body.preheader:                          ; preds = %int_digits_done
-  %min.iters.check = icmp ult i32 %26, 4
-  %28 = add i32 %final_temp_idx, 1
-  %29 = icmp sgt i32 %28, 19
-  %or.cond52 = or i1 %min.iters.check, %29
+  %min.iters.check = icmp ult i32 %27, 4
+  %29 = add i32 %final_temp_idx, 1
+  %30 = icmp sgt i32 %29, 19
+  %or.cond52 = or i1 %min.iters.check, %30
   br i1 %or.cond52, label %copy_int_body.preheader57, label %vector.ph
 
 vector.ph:                                        ; preds = %copy_int_body.preheader
-  %n.vec = and i32 %26, 2147483644
+  %n.vec = and i32 %27, 2147483644
   br label %vector.body
 
 vector.body:                                      ; preds = %vector.body, %vector.ph
   %index = phi i32 [ 0, %vector.ph ], [ %index.next, %vector.body ]
-  %30 = add i32 %25, %index
-  %31 = sext i32 %30 to i64
-  %32 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %31
-  %wide.load = load <4 x i8>, ptr %32, align 1
-  %33 = or disjoint i32 %pos_after_int, %index
-  %34 = zext nneg i32 %33 to i64
-  %35 = getelementptr inbounds nuw [32 x i8], ptr %buffer, i64 0, i64 %34
-  store <4 x i8> %wide.load, ptr %35, align 1
+  %31 = add i32 %26, %index
+  %32 = sext i32 %31 to i64
+  %33 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %32
+  %wide.load = load <4 x i8>, ptr %33, align 1
+  %34 = or disjoint i32 %pos_after_int, %index
+  %35 = zext nneg i32 %34 to i64
+  %36 = getelementptr inbounds nuw [32 x i8], ptr %buffer, i64 0, i64 %35
+  store <4 x i8> %wide.load, ptr %36, align 1
   %index.next = add nuw i32 %index, 4
-  %36 = icmp eq i32 %index.next, %n.vec
-  br i1 %36, label %middle.block, label %vector.body, !llvm.loop !6
+  %37 = icmp eq i32 %index.next, %n.vec
+  br i1 %37, label %middle.block, label %vector.body, !llvm.loop !6
 
 middle.block:                                     ; preds = %vector.body
-  %cmp.n = icmp eq i32 %26, %n.vec
+  %cmp.n = icmp eq i32 %27, %n.vec
   br i1 %cmp.n, label %copy_int_done, label %copy_int_body.preheader57
 
 copy_int_body.preheader57:                        ; preds = %copy_int_body.preheader, %middle.block
@@ -256,129 +262,128 @@ copy_int_body.preheader57:                        ; preds = %copy_int_body.prehe
   br label %copy_int_body
 
 int_digit_body:                                   ; preds = %extract_int, %int_digit_body
-  %current_temp_idx7 = phi i32 [ %43, %int_digit_body ], [ 19, %extract_int ]
-  %remaining_int6 = phi i32 [ %37, %int_digit_body ], [ %int_part, %extract_int ]
+  %current_temp_idx7 = phi i32 [ %44, %int_digit_body ], [ 19, %extract_int ]
+  %remaining_int6 = phi i32 [ %38, %int_digit_body ], [ %int_part, %extract_int ]
   %remaining_int6.frozen = freeze i32 %remaining_int6
-  %37 = sdiv i32 %remaining_int6.frozen, 10
-  %38 = mul i32 %37, 10
-  %.decomposed = sub i32 %remaining_int6.frozen, %38
-  %39 = trunc nsw i32 %.decomposed to i8
-  %40 = add nsw i8 %39, 48
-  %41 = sext i32 %current_temp_idx7 to i64
-  %42 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %41
-  store i8 %40, ptr %42, align 1
-  %43 = add i32 %current_temp_idx7, -1
+  %38 = sdiv i32 %remaining_int6.frozen, 10
+  %39 = mul i32 %38, 10
+  %.decomposed = sub i32 %remaining_int6.frozen, %39
+  %40 = trunc nsw i32 %.decomposed to i8
+  %41 = add nsw i8 %40, 48
+  %42 = sext i32 %current_temp_idx7 to i64
+  %43 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %42
+  store i8 %41, ptr %43, align 1
+  %44 = add i32 %current_temp_idx7, -1
   %remaining_int6.off = add i32 %remaining_int6, 9
   %.not = icmp ult i32 %remaining_int6.off, 19
   br i1 %.not, label %int_digits_done, label %int_digit_body
 
 copy_int_body:                                    ; preds = %copy_int_body.preheader57, %copy_int_body
-  %copy_idx8 = phi i32 [ %51, %copy_int_body ], [ %copy_idx8.ph, %copy_int_body.preheader57 ]
-  %44 = add i32 %25, %copy_idx8
-  %45 = sext i32 %44 to i64
-  %46 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %45
-  %47 = load i8, ptr %46, align 1
-  %48 = add nuw nsw i32 %pos_after_int, %copy_idx8
-  %49 = zext nneg i32 %48 to i64
-  %50 = getelementptr inbounds nuw [32 x i8], ptr %buffer, i64 0, i64 %49
-  store i8 %47, ptr %50, align 1
-  %51 = add nuw nsw i32 %copy_idx8, 1
-  %52 = icmp slt i32 %51, %26
-  br i1 %52, label %copy_int_body, label %copy_int_done, !llvm.loop !7
+  %copy_idx8 = phi i32 [ %52, %copy_int_body ], [ %copy_idx8.ph, %copy_int_body.preheader57 ]
+  %45 = add i32 %26, %copy_idx8
+  %46 = sext i32 %45 to i64
+  %47 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %46
+  %48 = load i8, ptr %47, align 1
+  %49 = add nuw nsw i32 %pos_after_int, %copy_idx8
+  %50 = zext nneg i32 %49 to i64
+  %51 = getelementptr inbounds nuw [32 x i8], ptr %buffer, i64 0, i64 %50
+  store i8 %48, ptr %51, align 1
+  %52 = add nuw nsw i32 %copy_idx8, 1
+  %53 = icmp slt i32 %52, %27
+  br i1 %53, label %copy_int_body, label %copy_int_done, !llvm.loop !7
 
 copy_int_done:                                    ; preds = %copy_int_body, %middle.block, %int_digits_done
-  %53 = add i32 %pos_after_int, %26
-  %54 = sext i32 %53 to i64
-  %55 = getelementptr inbounds [32 x i8], ptr %buffer, i64 0, i64 %54
-  store i8 46, ptr %55, align 1
-  %frac_part = fsub double %work_value, %int_part_float
-  %56 = icmp sgt i32 %1, 0
-  br i1 %56, label %scale_body, label %scale_done
+  %54 = add i32 %pos_after_int, %27
+  %55 = sext i32 %54 to i64
+  %56 = getelementptr inbounds [32 x i8], ptr %buffer, i64 0, i64 %55
+  store i8 46, ptr %56, align 1
+  %57 = icmp sgt i32 %1, 0
+  br i1 %57, label %scale_body, label %scale_done
 
 scale_body:                                       ; preds = %copy_int_done, %scale_body
   %scale_accum10 = phi double [ %next_scale, %scale_body ], [ 1.000000e+00, %copy_int_done ]
-  %scale_idx9 = phi i32 [ %57, %scale_body ], [ 0, %copy_int_done ]
+  %scale_idx9 = phi i32 [ %58, %scale_body ], [ 0, %copy_int_done ]
   %next_scale = fmul double %scale_accum10, 1.000000e+01
-  %57 = add nuw nsw i32 %scale_idx9, 1
-  %58 = icmp slt i32 %57, %1
-  br i1 %58, label %scale_body, label %scale_done
+  %58 = add nuw nsw i32 %scale_idx9, 1
+  %59 = icmp slt i32 %58, %1
+  br i1 %59, label %scale_body, label %scale_done
 
 scale_done:                                       ; preds = %scale_body, %copy_int_done
   %scale_accum.lcssa = phi double [ 1.000000e+00, %copy_int_done ], [ %next_scale, %scale_body ]
   %frac_scaled = fmul double %frac_part, %scale_accum.lcssa
   %frac_rounded = fadd double %frac_scaled, 5.000000e-01
   %frac_int = fptosi double %frac_rounded to i64
-  %59 = fptosi double %scale_accum.lcssa to i64
-  %.not4 = icmp slt i64 %frac_int, %59
+  %60 = fptosi double %scale_accum.lcssa to i64
+  %.not4 = icmp slt i64 %frac_int, %60
   br i1 %.not4, label %frac_no_overflow, label %frac_overflow
 
 frac_overflow:                                    ; preds = %scale_done
-  %60 = add i32 %int_part, 1
-  %61 = icmp eq i32 %53, 0
-  %62 = zext i1 %61 to i32
-  %63 = call ptr @memset(ptr nonnull %float_temp, i32 0, i64 20)
-  %.not511 = icmp eq i32 %60, 0
+  %61 = add i32 %int_part, 1
+  %62 = icmp eq i32 %54, 0
+  %63 = zext i1 %62 to i32
+  %64 = call ptr @memset(ptr nonnull %float_temp, i32 0, i64 20)
+  %.not511 = icmp eq i32 %61, 0
   br i1 %.not511, label %overflow_int_done, label %overflow_int_body
 
 frac_no_overflow:                                 ; preds = %overflow_copy_done, %scale_done
-  %.in = phi i32 [ %94, %overflow_copy_done ], [ %53, %scale_done ]
+  %.in = phi i32 [ %95, %overflow_copy_done ], [ %54, %scale_done ]
   %final_frac_int = phi i64 [ 0, %overflow_copy_done ], [ %frac_int, %scale_done ]
-  %64 = add i32 %.in, 1
+  %65 = add i32 %.in, 1
   %frac_idx16 = add i32 %1, -1
-  %65 = icmp sgt i32 %frac_idx16, -1
-  br i1 %65, label %frac_digit_body, label %frac_digits_done
+  %66 = icmp sgt i32 %frac_idx16, -1
+  br i1 %66, label %frac_digit_body, label %frac_digits_done
 
 overflow_int_body:                                ; preds = %frac_overflow, %overflow_int_body
-  %overflow_temp_idx13 = phi i32 [ %72, %overflow_int_body ], [ 19, %frac_overflow ]
-  %overflow_remaining12 = phi i32 [ %66, %overflow_int_body ], [ %60, %frac_overflow ]
+  %overflow_temp_idx13 = phi i32 [ %73, %overflow_int_body ], [ 19, %frac_overflow ]
+  %overflow_remaining12 = phi i32 [ %67, %overflow_int_body ], [ %61, %frac_overflow ]
   %overflow_remaining12.frozen = freeze i32 %overflow_remaining12
-  %66 = sdiv i32 %overflow_remaining12.frozen, 10
-  %67 = mul i32 %66, 10
-  %.decomposed60 = sub i32 %overflow_remaining12.frozen, %67
-  %68 = trunc nsw i32 %.decomposed60 to i8
-  %69 = add nsw i8 %68, 48
-  %70 = sext i32 %overflow_temp_idx13 to i64
-  %71 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %70
-  store i8 %69, ptr %71, align 1
-  %72 = add i32 %overflow_temp_idx13, -1
+  %67 = sdiv i32 %overflow_remaining12.frozen, 10
+  %68 = mul i32 %67, 10
+  %.decomposed60 = sub i32 %overflow_remaining12.frozen, %68
+  %69 = trunc nsw i32 %.decomposed60 to i8
+  %70 = add nsw i8 %69, 48
+  %71 = sext i32 %overflow_temp_idx13 to i64
+  %72 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %71
+  store i8 %70, ptr %72, align 1
+  %73 = add i32 %overflow_temp_idx13, -1
   %overflow_remaining12.off = add i32 %overflow_remaining12, 9
   %.not5 = icmp ult i32 %overflow_remaining12.off, 19
   br i1 %.not5, label %overflow_int_done, label %overflow_int_body
 
 overflow_int_done:                                ; preds = %overflow_int_body, %frac_overflow
-  %overflow_temp_idx.lcssa = phi i32 [ 19, %frac_overflow ], [ %72, %overflow_int_body ]
-  %73 = add i32 %overflow_temp_idx.lcssa, 1
-  %74 = sub i32 19, %overflow_temp_idx.lcssa
-  %75 = icmp sgt i32 %74, 0
-  br i1 %75, label %overflow_copy_body.preheader, label %overflow_copy_done
+  %overflow_temp_idx.lcssa = phi i32 [ 19, %frac_overflow ], [ %73, %overflow_int_body ]
+  %74 = add i32 %overflow_temp_idx.lcssa, 1
+  %75 = sub i32 19, %overflow_temp_idx.lcssa
+  %76 = icmp sgt i32 %75, 0
+  br i1 %76, label %overflow_copy_body.preheader, label %overflow_copy_done
 
 overflow_copy_body.preheader:                     ; preds = %overflow_int_done
-  %min.iters.check27 = icmp ult i32 %74, 4
-  %76 = add i32 %overflow_temp_idx.lcssa, 1
-  %77 = icmp sgt i32 %76, 19
-  %or.cond54 = or i1 %min.iters.check27, %77
+  %min.iters.check27 = icmp ult i32 %75, 4
+  %77 = add i32 %overflow_temp_idx.lcssa, 1
+  %78 = icmp sgt i32 %77, 19
+  %or.cond54 = or i1 %min.iters.check27, %78
   br i1 %or.cond54, label %overflow_copy_body.preheader56, label %vector.ph28
 
 vector.ph28:                                      ; preds = %overflow_copy_body.preheader
-  %n.vec30 = and i32 %74, 2147483644
+  %n.vec30 = and i32 %75, 2147483644
   br label %vector.body31
 
 vector.body31:                                    ; preds = %vector.body31, %vector.ph28
   %index32 = phi i32 [ 0, %vector.ph28 ], [ %index.next34, %vector.body31 ]
-  %78 = add i32 %73, %index32
-  %79 = sext i32 %78 to i64
-  %80 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %79
-  %wide.load33 = load <4 x i8>, ptr %80, align 1
-  %81 = or disjoint i32 %index32, %62
-  %82 = zext nneg i32 %81 to i64
-  %83 = getelementptr inbounds nuw [32 x i8], ptr %buffer, i64 0, i64 %82
-  store <4 x i8> %wide.load33, ptr %83, align 1
+  %79 = add i32 %74, %index32
+  %80 = sext i32 %79 to i64
+  %81 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %80
+  %wide.load33 = load <4 x i8>, ptr %81, align 1
+  %82 = or disjoint i32 %index32, %63
+  %83 = zext nneg i32 %82 to i64
+  %84 = getelementptr inbounds nuw [32 x i8], ptr %buffer, i64 0, i64 %83
+  store <4 x i8> %wide.load33, ptr %84, align 1
   %index.next34 = add nuw i32 %index32, 4
-  %84 = icmp eq i32 %index.next34, %n.vec30
-  br i1 %84, label %middle.block35, label %vector.body31, !llvm.loop !8
+  %85 = icmp eq i32 %index.next34, %n.vec30
+  br i1 %85, label %middle.block35, label %vector.body31, !llvm.loop !8
 
 middle.block35:                                   ; preds = %vector.body31
-  %cmp.n36 = icmp eq i32 %74, %n.vec30
+  %cmp.n36 = icmp eq i32 %75, %n.vec30
   br i1 %cmp.n36, label %overflow_copy_done, label %overflow_copy_body.preheader56
 
 overflow_copy_body.preheader56:                   ; preds = %overflow_copy_body.preheader, %middle.block35
@@ -386,52 +391,55 @@ overflow_copy_body.preheader56:                   ; preds = %overflow_copy_body.
   br label %overflow_copy_body
 
 overflow_copy_body:                               ; preds = %overflow_copy_body.preheader56, %overflow_copy_body
-  %overflow_copy_idx15 = phi i32 [ %92, %overflow_copy_body ], [ %overflow_copy_idx15.ph, %overflow_copy_body.preheader56 ]
-  %85 = add i32 %73, %overflow_copy_idx15
-  %86 = sext i32 %85 to i64
-  %87 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %86
-  %88 = load i8, ptr %87, align 1
-  %89 = add nuw nsw i32 %overflow_copy_idx15, %62
-  %90 = zext nneg i32 %89 to i64
-  %91 = getelementptr inbounds nuw [32 x i8], ptr %buffer, i64 0, i64 %90
-  store i8 %88, ptr %91, align 1
-  %92 = add nuw nsw i32 %overflow_copy_idx15, 1
-  %93 = icmp slt i32 %92, %74
-  br i1 %93, label %overflow_copy_body, label %overflow_copy_done, !llvm.loop !9
+  %overflow_copy_idx15 = phi i32 [ %93, %overflow_copy_body ], [ %overflow_copy_idx15.ph, %overflow_copy_body.preheader56 ]
+  %86 = add i32 %74, %overflow_copy_idx15
+  %87 = sext i32 %86 to i64
+  %88 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %87
+  %89 = load i8, ptr %88, align 1
+  %90 = add nuw nsw i32 %overflow_copy_idx15, %63
+  %91 = zext nneg i32 %90 to i64
+  %92 = getelementptr inbounds nuw [32 x i8], ptr %buffer, i64 0, i64 %91
+  store i8 %89, ptr %92, align 1
+  %93 = add nuw nsw i32 %overflow_copy_idx15, 1
+  %94 = icmp slt i32 %93, %75
+  br i1 %94, label %overflow_copy_body, label %overflow_copy_done, !llvm.loop !9
 
 overflow_copy_done:                               ; preds = %overflow_copy_body, %middle.block35, %overflow_int_done
-  %94 = add i32 %74, %62
-  %95 = sext i32 %94 to i64
-  %96 = getelementptr inbounds [32 x i8], ptr %buffer, i64 0, i64 %95
-  store i8 46, ptr %96, align 1
+  %95 = add i32 %75, %63
+  %96 = sext i32 %95 to i64
+  %97 = getelementptr inbounds [32 x i8], ptr %buffer, i64 0, i64 %96
+  store i8 46, ptr %97, align 1
   br label %frac_no_overflow
 
 frac_digit_body:                                  ; preds = %frac_no_overflow, %frac_digit_body
   %frac_idx18 = phi i32 [ %frac_idx, %frac_digit_body ], [ %frac_idx16, %frac_no_overflow ]
-  %frac_remaining17 = phi i64 [ %97, %frac_digit_body ], [ %final_frac_int, %frac_no_overflow ]
+  %frac_remaining17 = phi i64 [ %98, %frac_digit_body ], [ %final_frac_int, %frac_no_overflow ]
   %frac_remaining17.frozen = freeze i64 %frac_remaining17
-  %97 = sdiv i64 %frac_remaining17.frozen, 10
-  %98 = mul i64 %97, 10
-  %.decomposed61 = sub i64 %frac_remaining17.frozen, %98
-  %99 = trunc nsw i64 %.decomposed61 to i8
-  %100 = add nsw i8 %99, 48
-  %101 = add i32 %64, %frac_idx18
-  %102 = sext i32 %101 to i64
-  %103 = getelementptr inbounds [32 x i8], ptr %buffer, i64 0, i64 %102
-  store i8 %100, ptr %103, align 1
+  %98 = sdiv i64 %frac_remaining17.frozen, 10
+  %99 = mul i64 %98, 10
+  %.decomposed61 = sub i64 %frac_remaining17.frozen, %99
+  %100 = trunc nsw i64 %.decomposed61 to i8
+  %101 = add nsw i8 %100, 48
+  %102 = add i32 %65, %frac_idx18
+  %103 = sext i32 %102 to i64
+  %104 = getelementptr inbounds [32 x i8], ptr %buffer, i64 0, i64 %103
+  store i8 %101, ptr %104, align 1
   %frac_idx = add nsw i32 %frac_idx18, -1
   %.not23 = icmp eq i32 %frac_idx18, 0
   br i1 %.not23, label %frac_digits_done, label %frac_digit_body
 
 frac_digits_done:                                 ; preds = %frac_digit_body, %frac_no_overflow
-  %104 = add i32 %64, %1
+  %105 = add i32 %65, %1
   br label %format_done
 }
+
+; Function Attrs: mustprogress nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare double @llvm.fabs.f64(double) #2
 
 declare void @ExitProcess(i32) local_unnamed_addr
 
 ; Function Attrs: noreturn
-define void @_start() local_unnamed_addr #2 {
+define void @_start() local_unnamed_addr #3 {
 entry:
   %0 = tail call i32 @main()
   tail call void @ExitProcess(i32 0)
@@ -440,7 +448,8 @@ entry:
 
 attributes #0 = { mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite) }
 attributes #1 = { "no-builtin-memset" }
-attributes #2 = { noreturn }
+attributes #2 = { mustprogress nocallback nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #3 = { noreturn }
 
 !0 = distinct !{!0, !1, !2}
 !1 = !{!"llvm.loop.isvectorized", i32 1}
@@ -738,10 +747,13 @@ reverse_body:                                     ; preds = %reverse_loop
 
 define i32 @print_float(double %0, i32 %1) #0 {
 entry:
+  %float_value_local = alloca double, align 8, !dbg !11
+  store double %0, ptr %float_value_local, align 8, !dbg !11
+  %float_value = load double, ptr %float_value_local, align 8, !dbg !11
   %buffer = alloca [32 x i8], align 1, !dbg !11
   %bytesWritten = alloca i32, align 4, !dbg !11
   %2 = call ptr @memset(ptr %buffer, i32 0, i64 32), !dbg !11
-  %3 = fcmp oeq double %0, 0.000000e+00, !dbg !11
+  %3 = fcmp oeq double %float_value, 0.000000e+00, !dbg !11
   br i1 %3, label %zero_case, label %non_zero, !dbg !11
 
 zero_case:                                        ; preds = %entry
@@ -754,11 +766,11 @@ zero_case:                                        ; preds = %entry
 non_zero:                                         ; preds = %entry
   %pos = alloca i32, align 4, !dbg !11
   store i32 0, ptr %pos, align 4, !dbg !11
-  %6 = fcmp olt double %0, 0.000000e+00, !dbg !11
+  %6 = fcmp olt double %float_value, 0.000000e+00, !dbg !11
   br i1 %6, label %negative, label %positive, !dbg !11
 
 format_done:                                      ; preds = %frac_digits_done, %zero_fill_done
-  %final_float_length = phi i32 [ %14, %zero_fill_done ], [ %80, %frac_digits_done ], !dbg !11
+  %final_float_length = phi i32 [ %14, %zero_fill_done ], [ %81, %frac_digits_done ], !dbg !11
   %7 = call ptr @GetStdHandle(i32 -11), !dbg !11
   %8 = call i32 @WriteFile(ptr %7, ptr %buffer, i32 %final_float_length, ptr %bytesWritten, ptr null), !dbg !11
   %9 = call i32 @WriteFile(ptr %7, ptr @.str.newline, i32 1, ptr %bytesWritten, ptr null), !dbg !11
@@ -784,26 +796,32 @@ negative:                                         ; preds = %non_zero
   %15 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 0, !dbg !11
   store i8 45, ptr %15, align 1, !dbg !11
   store i32 1, ptr %pos, align 4, !dbg !11
-  %16 = fneg double %0, !dbg !11
+  %16 = call double @llvm.fabs.f64(double %float_value), !dbg !11
   br label %extract_int, !dbg !11
 
 positive:                                         ; preds = %non_zero
   br label %extract_int, !dbg !11
 
 extract_int:                                      ; preds = %positive, %negative
-  %work_value = phi double [ %16, %negative ], [ %0, %positive ], !dbg !11
-  %int_part = fptosi double %work_value to i32, !dbg !11
+  %work_value = phi double [ %16, %negative ], [ %float_value, %positive ], !dbg !11
+  %int_part_trunc = fptosi double %work_value to i32, !dbg !11
+  %int_part_trunc_float = sitofp i32 %int_part_trunc to double, !dbg !11
+  %frac_part_initial = fsub double %work_value, %int_part_trunc_float, !dbg !11
+  %17 = fcmp ogt double %frac_part_initial, 9.999000e-01, !dbg !11
+  %int_part_rounded = add i32 %int_part_trunc, 1, !dbg !11
+  %int_part = select i1 %17, i32 %int_part_rounded, i32 %int_part_trunc, !dbg !11
   %int_part_float = sitofp i32 %int_part to double, !dbg !11
+  %frac_part = fsub double %work_value, %int_part_float, !dbg !11
   %float_temp = alloca [20 x i8], align 1, !dbg !11
-  %17 = call ptr @memset(ptr %float_temp, i32 0, i64 20), !dbg !11
+  %18 = call ptr @memset(ptr %float_temp, i32 0, i64 20), !dbg !11
   %float_temp_idx = alloca i32, align 4, !dbg !11
   store i32 19, ptr %float_temp_idx, align 4, !dbg !11
-  %18 = icmp eq i32 %int_part, 0, !dbg !11
-  br i1 %18, label %int_zero, label %int_nonzero, !dbg !11
+  %19 = icmp eq i32 %int_part, 0, !dbg !11
+  br i1 %19, label %int_zero, label %int_nonzero, !dbg !11
 
 int_zero:                                         ; preds = %extract_int
-  %19 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 19, !dbg !11
-  store i8 48, ptr %19, align 1, !dbg !11
+  %20 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 19, !dbg !11
+  store i8 48, ptr %20, align 1, !dbg !11
   store i32 18, ptr %float_temp_idx, align 4, !dbg !11
   br label %int_digits_done, !dbg !11
 
@@ -812,63 +830,62 @@ int_nonzero:                                      ; preds = %extract_int
 
 int_digits_done:                                  ; preds = %int_digit_loop, %int_zero
   %final_temp_idx = phi i32 [ %current_temp_idx, %int_digit_loop ], [ 18, %int_zero ], !dbg !11
-  %20 = add i32 %final_temp_idx, 1, !dbg !11
-  %21 = sub i32 20, %20, !dbg !11
+  %21 = add i32 %final_temp_idx, 1, !dbg !11
+  %22 = sub i32 20, %21, !dbg !11
   br label %copy_int_loop, !dbg !11
 
 int_digit_loop:                                   ; preds = %int_digit_body, %int_nonzero
-  %remaining_int = phi i32 [ %int_part, %int_nonzero ], [ %27, %int_digit_body ], !dbg !11
-  %current_temp_idx = phi i32 [ 19, %int_nonzero ], [ %28, %int_digit_body ], !dbg !11
-  %22 = icmp ne i32 %remaining_int, 0, !dbg !11
-  br i1 %22, label %int_digit_body, label %int_digits_done, !dbg !11
+  %remaining_int = phi i32 [ %int_part, %int_nonzero ], [ %28, %int_digit_body ], !dbg !11
+  %current_temp_idx = phi i32 [ 19, %int_nonzero ], [ %29, %int_digit_body ], !dbg !11
+  %23 = icmp ne i32 %remaining_int, 0, !dbg !11
+  br i1 %23, label %int_digit_body, label %int_digits_done, !dbg !11
 
 int_digit_body:                                   ; preds = %int_digit_loop
-  %23 = srem i32 %remaining_int, 10, !dbg !11
-  %24 = add i32 %23, 48, !dbg !11
-  %25 = trunc i32 %24 to i8, !dbg !11
-  %26 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 %current_temp_idx, !dbg !11
-  store i8 %25, ptr %26, align 1, !dbg !11
-  %27 = sdiv i32 %remaining_int, 10, !dbg !11
-  %28 = sub i32 %current_temp_idx, 1, !dbg !11
+  %24 = srem i32 %remaining_int, 10, !dbg !11
+  %25 = add i32 %24, 48, !dbg !11
+  %26 = trunc i32 %25 to i8, !dbg !11
+  %27 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 %current_temp_idx, !dbg !11
+  store i8 %26, ptr %27, align 1, !dbg !11
+  %28 = sdiv i32 %remaining_int, 10, !dbg !11
+  %29 = sub i32 %current_temp_idx, 1, !dbg !11
   br label %int_digit_loop, !dbg !11
 
 copy_int_loop:                                    ; preds = %copy_int_body, %int_digits_done
-  %copy_idx = phi i32 [ 0, %int_digits_done ], [ %35, %copy_int_body ], !dbg !11
-  %29 = icmp slt i32 %copy_idx, %21, !dbg !11
-  br i1 %29, label %copy_int_body, label %copy_int_done, !dbg !11
+  %copy_idx = phi i32 [ 0, %int_digits_done ], [ %36, %copy_int_body ], !dbg !11
+  %30 = icmp slt i32 %copy_idx, %22, !dbg !11
+  br i1 %30, label %copy_int_body, label %copy_int_done, !dbg !11
 
 copy_int_body:                                    ; preds = %copy_int_loop
   %current_pos = load i32, ptr %pos, align 4, !dbg !11
-  %30 = add i32 %20, %copy_idx, !dbg !11
-  %31 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 %30, !dbg !11
-  %32 = load i8, ptr %31, align 1, !dbg !11
-  %33 = add i32 %current_pos, %copy_idx, !dbg !11
-  %34 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %33, !dbg !11
-  store i8 %32, ptr %34, align 1, !dbg !11
-  %35 = add i32 %copy_idx, 1, !dbg !11
+  %31 = add i32 %21, %copy_idx, !dbg !11
+  %32 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 %31, !dbg !11
+  %33 = load i8, ptr %32, align 1, !dbg !11
+  %34 = add i32 %current_pos, %copy_idx, !dbg !11
+  %35 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %34, !dbg !11
+  store i8 %33, ptr %35, align 1, !dbg !11
+  %36 = add i32 %copy_idx, 1, !dbg !11
   br label %copy_int_loop, !dbg !11
 
 copy_int_done:                                    ; preds = %copy_int_loop
   %pos_after_int = load i32, ptr %pos, align 4, !dbg !11
-  %36 = add i32 %pos_after_int, %21, !dbg !11
-  store i32 %36, ptr %pos, align 4, !dbg !11
-  %37 = load i32, ptr %pos, align 4, !dbg !11
-  %38 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %37, !dbg !11
-  store i8 46, ptr %38, align 1, !dbg !11
-  %39 = add i32 %37, 1, !dbg !11
-  store i32 %39, ptr %pos, align 4, !dbg !11
-  %frac_part = fsub double %work_value, %int_part_float, !dbg !11
+  %37 = add i32 %pos_after_int, %22, !dbg !11
+  store i32 %37, ptr %pos, align 4, !dbg !11
+  %38 = load i32, ptr %pos, align 4, !dbg !11
+  %39 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %38, !dbg !11
+  store i8 46, ptr %39, align 1, !dbg !11
+  %40 = add i32 %38, 1, !dbg !11
+  store i32 %40, ptr %pos, align 4, !dbg !11
   br label %scale_loop, !dbg !11
 
 scale_loop:                                       ; preds = %scale_body, %copy_int_done
-  %scale_idx = phi i32 [ 0, %copy_int_done ], [ %41, %scale_body ], !dbg !11
+  %scale_idx = phi i32 [ 0, %copy_int_done ], [ %42, %scale_body ], !dbg !11
   %scale_accum = phi double [ 1.000000e+00, %copy_int_done ], [ %next_scale, %scale_body ], !dbg !11
-  %40 = icmp slt i32 %scale_idx, %1, !dbg !11
-  br i1 %40, label %scale_body, label %scale_done, !dbg !11
+  %41 = icmp slt i32 %scale_idx, %1, !dbg !11
+  br i1 %41, label %scale_body, label %scale_done, !dbg !11
 
 scale_body:                                       ; preds = %scale_loop
   %next_scale = fmul double %scale_accum, 1.000000e+01, !dbg !11
-  %41 = add i32 %scale_idx, 1, !dbg !11
+  %42 = add i32 %scale_idx, 1, !dbg !11
   br label %scale_loop, !dbg !11
 
 scale_done:                                       ; preds = %scale_loop
@@ -878,93 +895,96 @@ scale_done:                                       ; preds = %scale_loop
   br label %frac_overflow_check, !dbg !11
 
 frac_overflow_check:                              ; preds = %scale_done
-  %42 = fptosi double %scale_accum to i64, !dbg !11
-  %43 = icmp sge i64 %frac_int, %42, !dbg !11
-  br i1 %43, label %frac_overflow, label %frac_no_overflow, !dbg !11
+  %43 = fptosi double %scale_accum to i64, !dbg !11
+  %44 = icmp sge i64 %frac_int, %43, !dbg !11
+  br i1 %44, label %frac_overflow, label %frac_no_overflow, !dbg !11
 
 frac_overflow:                                    ; preds = %frac_overflow_check
-  %44 = add i32 %int_part, 1, !dbg !11
-  %45 = load i32, ptr %pos, align 4, !dbg !11
-  %46 = icmp eq i32 %45, 1, !dbg !11
-  %47 = select i1 %46, i32 1, i32 0, !dbg !11
-  %48 = call ptr @memset(ptr %float_temp, i32 0, i64 20), !dbg !11
+  %45 = add i32 %int_part, 1, !dbg !11
+  %46 = load i32, ptr %pos, align 4, !dbg !11
+  %47 = icmp eq i32 %46, 1, !dbg !11
+  %48 = select i1 %47, i32 1, i32 0, !dbg !11
+  %49 = call ptr @memset(ptr %float_temp, i32 0, i64 20), !dbg !11
   store i32 19, ptr %float_temp_idx, align 4, !dbg !11
   br label %overflow_int_loop, !dbg !11
 
 frac_no_overflow:                                 ; preds = %overflow_copy_done, %frac_overflow_check
   %final_frac_int = phi i64 [ 0, %overflow_copy_done ], [ %frac_int, %frac_overflow_check ], !dbg !11
-  %49 = sub i32 %1, 1, !dbg !11
+  %50 = sub i32 %1, 1, !dbg !11
   br label %frac_digit_loop, !dbg !11
 
 overflow_int_loop:                                ; preds = %overflow_int_body, %frac_overflow
-  %overflow_remaining = phi i32 [ %44, %frac_overflow ], [ %55, %overflow_int_body ], !dbg !11
-  %overflow_temp_idx = phi i32 [ 19, %frac_overflow ], [ %56, %overflow_int_body ], !dbg !11
-  %50 = icmp ne i32 %overflow_remaining, 0, !dbg !11
-  br i1 %50, label %overflow_int_body, label %overflow_int_done, !dbg !11
+  %overflow_remaining = phi i32 [ %45, %frac_overflow ], [ %56, %overflow_int_body ], !dbg !11
+  %overflow_temp_idx = phi i32 [ 19, %frac_overflow ], [ %57, %overflow_int_body ], !dbg !11
+  %51 = icmp ne i32 %overflow_remaining, 0, !dbg !11
+  br i1 %51, label %overflow_int_body, label %overflow_int_done, !dbg !11
 
 overflow_int_body:                                ; preds = %overflow_int_loop
-  %51 = srem i32 %overflow_remaining, 10, !dbg !11
-  %52 = add i32 %51, 48, !dbg !11
-  %53 = trunc i32 %52 to i8, !dbg !11
-  %54 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 %overflow_temp_idx, !dbg !11
-  store i8 %53, ptr %54, align 1, !dbg !11
-  %55 = sdiv i32 %overflow_remaining, 10, !dbg !11
-  %56 = sub i32 %overflow_temp_idx, 1, !dbg !11
+  %52 = srem i32 %overflow_remaining, 10, !dbg !11
+  %53 = add i32 %52, 48, !dbg !11
+  %54 = trunc i32 %53 to i8, !dbg !11
+  %55 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 %overflow_temp_idx, !dbg !11
+  store i8 %54, ptr %55, align 1, !dbg !11
+  %56 = sdiv i32 %overflow_remaining, 10, !dbg !11
+  %57 = sub i32 %overflow_temp_idx, 1, !dbg !11
   br label %overflow_int_loop, !dbg !11
 
 overflow_int_done:                                ; preds = %overflow_int_loop
-  %57 = add i32 %overflow_temp_idx, 1, !dbg !11
-  %58 = sub i32 20, %57, !dbg !11
+  %58 = add i32 %overflow_temp_idx, 1, !dbg !11
+  %59 = sub i32 20, %58, !dbg !11
   br label %overflow_copy_loop, !dbg !11
 
 overflow_copy_loop:                               ; preds = %overflow_copy_body, %overflow_int_done
-  %overflow_copy_idx = phi i32 [ 0, %overflow_int_done ], [ %65, %overflow_copy_body ], !dbg !11
-  %59 = icmp slt i32 %overflow_copy_idx, %58, !dbg !11
-  br i1 %59, label %overflow_copy_body, label %overflow_copy_done, !dbg !11
+  %overflow_copy_idx = phi i32 [ 0, %overflow_int_done ], [ %66, %overflow_copy_body ], !dbg !11
+  %60 = icmp slt i32 %overflow_copy_idx, %59, !dbg !11
+  br i1 %60, label %overflow_copy_body, label %overflow_copy_done, !dbg !11
 
 overflow_copy_body:                               ; preds = %overflow_copy_loop
-  %60 = add i32 %57, %overflow_copy_idx, !dbg !11
-  %61 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 %60, !dbg !11
-  %62 = load i8, ptr %61, align 1, !dbg !11
-  %63 = add i32 %47, %overflow_copy_idx, !dbg !11
-  %64 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %63, !dbg !11
-  store i8 %62, ptr %64, align 1, !dbg !11
-  %65 = add i32 %overflow_copy_idx, 1, !dbg !11
+  %61 = add i32 %58, %overflow_copy_idx, !dbg !11
+  %62 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 %61, !dbg !11
+  %63 = load i8, ptr %62, align 1, !dbg !11
+  %64 = add i32 %48, %overflow_copy_idx, !dbg !11
+  %65 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %64, !dbg !11
+  store i8 %63, ptr %65, align 1, !dbg !11
+  %66 = add i32 %overflow_copy_idx, 1, !dbg !11
   br label %overflow_copy_loop, !dbg !11
 
 overflow_copy_done:                               ; preds = %overflow_copy_loop
-  %66 = add i32 %47, %58, !dbg !11
-  store i32 %66, ptr %pos, align 4, !dbg !11
-  %67 = load i32, ptr %pos, align 4, !dbg !11
-  %68 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %67, !dbg !11
-  store i8 46, ptr %68, align 1, !dbg !11
-  %69 = add i32 %67, 1, !dbg !11
-  store i32 %69, ptr %pos, align 4, !dbg !11
+  %67 = add i32 %48, %59, !dbg !11
+  store i32 %67, ptr %pos, align 4, !dbg !11
+  %68 = load i32, ptr %pos, align 4, !dbg !11
+  %69 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %68, !dbg !11
+  store i8 46, ptr %69, align 1, !dbg !11
+  %70 = add i32 %68, 1, !dbg !11
+  store i32 %70, ptr %pos, align 4, !dbg !11
   br label %frac_no_overflow, !dbg !11
 
 frac_digit_loop:                                  ; preds = %frac_digit_body, %frac_no_overflow
-  %frac_idx = phi i32 [ %49, %frac_no_overflow ], [ %78, %frac_digit_body ], !dbg !11
-  %frac_remaining = phi i64 [ %final_frac_int, %frac_no_overflow ], [ %77, %frac_digit_body ], !dbg !11
-  %70 = icmp sge i32 %frac_idx, 0, !dbg !11
-  br i1 %70, label %frac_digit_body, label %frac_digits_done, !dbg !11
+  %frac_idx = phi i32 [ %50, %frac_no_overflow ], [ %79, %frac_digit_body ], !dbg !11
+  %frac_remaining = phi i64 [ %final_frac_int, %frac_no_overflow ], [ %78, %frac_digit_body ], !dbg !11
+  %71 = icmp sge i32 %frac_idx, 0, !dbg !11
+  br i1 %71, label %frac_digit_body, label %frac_digits_done, !dbg !11
 
 frac_digit_body:                                  ; preds = %frac_digit_loop
-  %71 = srem i64 %frac_remaining, 10, !dbg !11
-  %72 = add i64 %71, 48, !dbg !11
-  %73 = trunc i64 %72 to i8, !dbg !11
-  %74 = load i32, ptr %pos, align 4, !dbg !11
-  %75 = add i32 %74, %frac_idx, !dbg !11
-  %76 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %75, !dbg !11
-  store i8 %73, ptr %76, align 1, !dbg !11
-  %77 = sdiv i64 %frac_remaining, 10, !dbg !11
-  %78 = sub i32 %frac_idx, 1, !dbg !11
+  %72 = srem i64 %frac_remaining, 10, !dbg !11
+  %73 = add i64 %72, 48, !dbg !11
+  %74 = trunc i64 %73 to i8, !dbg !11
+  %75 = load i32, ptr %pos, align 4, !dbg !11
+  %76 = add i32 %75, %frac_idx, !dbg !11
+  %77 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %76, !dbg !11
+  store i8 %74, ptr %77, align 1, !dbg !11
+  %78 = sdiv i64 %frac_remaining, 10, !dbg !11
+  %79 = sub i32 %frac_idx, 1, !dbg !11
   br label %frac_digit_loop, !dbg !11
 
 frac_digits_done:                                 ; preds = %frac_digit_loop
-  %79 = load i32, ptr %pos, align 4, !dbg !11
-  %80 = add i32 %79, %1, !dbg !11
+  %80 = load i32, ptr %pos, align 4, !dbg !11
+  %81 = add i32 %80, %1, !dbg !11
   br label %format_done, !dbg !11
 }
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare double @llvm.fabs.f64(double) #1
 
 declare void @ExitProcess(i32)
 
@@ -976,6 +996,7 @@ entry:
 }
 
 attributes #0 = { "no-builtin-memset" }
+attributes #1 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }
 
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!2, !3}
@@ -1057,5 +1078,5 @@ ExitCode: 0
 Stdout: ```
 0.301029995663981
 ```
-OptimizedInstructionCount: 761
-UnoptimizedInstructionCount: 761
+OptimizedInstructionCount: 769
+UnoptimizedInstructionCount: 769

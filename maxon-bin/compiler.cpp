@@ -188,32 +188,42 @@ std::string compileProgram(const CompilationOptions& options, llvm::raw_ostream*
         }
     }
 
-    std::string exeOutputFile = options.outputFile;
+    // Generate output filename: use outputFile if set, otherwise derive from first input file
+    std::string baseFilename;
+    if (!options.outputFile.empty()) {
+        // Use provided outputFile and derive base from it
+        size_t lastDot = options.outputFile.find_last_of('.');
+        if (lastDot != std::string::npos) {
+            baseFilename = options.outputFile.substr(0, lastDot);
+        } else {
+            baseFilename = options.outputFile;
+        }
+    } else {
+        // Derive from first input file, preserving the directory path
+        size_t lastDot = options.inputFiles[0].find_last_of('.');
+        if (lastDot != std::string::npos) {
+            baseFilename = options.inputFiles[0].substr(0, lastDot);
+        } else {
+            baseFilename = options.inputFiles[0];
+        }
+    }
+
+    std::string exeOutputFile = baseFilename + ".exe";
 
     if (options.emitLLVM) {
-        if (options.outputFile != "output.exe") {
-            codegen.writeIRToFile(options.outputFile);
-            if (options.verbose) {
-                std::cout << "\nLLVM IR written to: " << options.outputFile << std::endl;
-            }
-
-            size_t lastDot = options.outputFile.find_last_of('.');
-            if (lastDot != std::string::npos) {
-                exeOutputFile = options.outputFile.substr(0, lastDot) + ".exe";
-            } else {
-                exeOutputFile = options.outputFile + ".exe";
-            }
-        } else {
-            std::cout << "\n=== LLVM IR ===" << std::endl;
-            codegen.printIR();
+        std::string llOutputFile = baseFilename + ".ll";
+        codegen.writeIRToFile(llOutputFile);
+        if (options.verbose) {
+            std::cout << "\nLLVM IR written to: " << llOutputFile << std::endl;
         }
     }
 
     if (options.compileOnly) {
-        codegen.writeObjectFile(options.outputFile);
+        std::string objOutputFile = baseFilename + ".obj";
+        codegen.writeObjectFile(objOutputFile);
         if (options.verbose) {
             std::cout << "\nCompilation successful!" << std::endl;
-            std::cout << "Output: " << options.outputFile << std::endl;
+            std::cout << "Output: " << objOutputFile << std::endl;
         }
     } else {
         codegen.writeExecutable(exeOutputFile, errorStream);

@@ -1,0 +1,1778 @@
+// Test: log2.log2.integer-promotion-and-relationships.1
+function main() int
+    // Test integer promotion
+    var int_val = 32
+    var r_int = log2(int_val)  // Should promote 32 to 32.0
+    print_float(r_int, 1)
+    
+    var r_literal = log2(64)   // Integer literal promotion
+    print_float(r_literal, 1)
+    
+    // Verify relationship: log2(x) = log(x) / log(2)
+    var test_val = 100.0
+    var log2_result = log2(test_val)
+    var log_result = log(test_val) / log(2.0)
+    var diff = log2_result - log_result
+    
+    // Check difference is negligible
+    var abs_diff = diff
+    if diff < 0.0 'abs'
+        abs_diff = 0.0 - diff
+    end 'abs'
+    
+    if abs_diff < 0.000001 'pass'
+        print_float(r_int, 1)    // Print again to show test passed
+    end 'pass'
+    
+    // Test relationship: log2(2^x) = x
+    var exponent = 7.0
+    var power_val = pow(2.0, exponent)
+    var r_pow = log2(power_val)
+    print_float(r_pow, 1)
+    
+    return 0
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+@.str.newline = private constant [1 x i8] c"\0A"
+
+define noundef i32 @main() local_unnamed_addr {
+entry:
+  %0 = tail call fastcc double @stdlib.math.log(double 3.200000e+01)
+  %fdivtmp.i = fdiv double %0, 0x3FE62E42FEFA39EF
+  %1 = tail call i32 @print_float(double %fdivtmp.i, i32 1)
+  %2 = tail call fastcc double @stdlib.math.log(double 6.400000e+01)
+  %fdivtmp.i20 = fdiv double %2, 0x3FE62E42FEFA39EF
+  %3 = tail call i32 @print_float(double %fdivtmp.i20, i32 1)
+  %4 = tail call fastcc double @stdlib.math.log(double 1.000000e+02)
+  %fdivtmp.i21 = fdiv double %4, 0x3FE62E42FEFA39EF
+  %5 = tail call fastcc double @stdlib.math.log(double 2.000000e+00)
+  %fdivtmp = fdiv double %4, %5
+  %fsubtmp = fsub double %fdivtmp.i21, %fdivtmp
+  %fcmptmp = fcmp olt double %fsubtmp, 0.000000e+00
+  %fsubtmp11 = fsub double 0.000000e+00, %fsubtmp
+  %abs_diff.0 = select i1 %fcmptmp, double %fsubtmp11, double %fsubtmp
+  %fcmptmp13 = fcmp olt double %abs_diff.0, 0x3EB0C6F7A0B5ED8D
+  br i1 %fcmptmp13, label %then14, label %ifcont16
+
+then14:                                           ; preds = %entry
+  %6 = tail call i32 @print_float(double %fdivtmp.i, i32 1)
+  br label %ifcont16
+
+ifcont16:                                         ; preds = %then14, %entry
+  %7 = tail call fastcc double @stdlib.math.log(double 1.280000e+02)
+  %fdivtmp.i22 = fdiv double %7, 0x3FE62E42FEFA39EF
+  %8 = tail call i32 @print_float(double %fdivtmp.i22, i32 1)
+  ret i32 0
+}
+
+; Function Attrs: nofree norecurse nosync nounwind memory(none)
+define internal fastcc double @stdlib.math.log(double %0) unnamed_addr #0 {
+entry:
+  %fcmptmp = fcmp ole double %0, 0.000000e+00
+  %fcmptmp3 = fcmp oeq double %0, 1.000000e+00
+  %or.cond = or i1 %fcmptmp, %fcmptmp3
+  br i1 %or.cond, label %common.ret, label %whilecond.preheader
+
+whilecond.preheader:                              ; preds = %entry
+  %fcmptmp857 = fcmp ult double %0, 1.000000e+00
+  br i1 %fcmptmp857, label %whilecond11.preheader, label %loop
+
+common.ret:                                       ; preds = %entry, %afterloop17
+  %common.ret.op = phi double [ %faddtmp51, %afterloop17 ], [ 0.000000e+00, %entry ]
+  ret double %common.ret.op
+
+whilecond11.preheader:                            ; preds = %loop, %whilecond.preheader
+  %y.0.lcssa = phi double [ %0, %whilecond.preheader ], [ %fdivtmp, %loop ]
+  %n.0.lcssa = phi i32 [ 0, %whilecond.preheader ], [ %addtmp, %loop ]
+  %fcmptmp1361 = fcmp olt double %y.0.lcssa, 5.000000e-01
+  br i1 %fcmptmp1361, label %loop14, label %afterloop17
+
+loop:                                             ; preds = %whilecond.preheader, %loop
+  %n.059 = phi i32 [ %addtmp, %loop ], [ 0, %whilecond.preheader ]
+  %y.058 = phi double [ %fdivtmp, %loop ], [ %0, %whilecond.preheader ]
+  %fdivtmp = fmul double %y.058, 5.000000e-01
+  %addtmp = add i32 %n.059, 1
+  %fcmptmp8 = fcmp ult double %fdivtmp, 1.000000e+00
+  br i1 %fcmptmp8, label %whilecond11.preheader, label %loop
+
+loop14:                                           ; preds = %whilecond11.preheader, %loop14
+  %n.163 = phi i32 [ %subtmp, %loop14 ], [ %n.0.lcssa, %whilecond11.preheader ]
+  %y.162 = phi double [ %fmultmp, %loop14 ], [ %y.0.lcssa, %whilecond11.preheader ]
+  %fmultmp = fmul double %y.162, 2.000000e+00
+  %subtmp = add i32 %n.163, -1
+  %fcmptmp13 = fcmp olt double %fmultmp, 5.000000e-01
+  br i1 %fcmptmp13, label %loop14, label %afterloop17
+
+afterloop17:                                      ; preds = %loop14, %whilecond11.preheader
+  %y.1.lcssa = phi double [ %y.0.lcssa, %whilecond11.preheader ], [ %fmultmp, %loop14 ]
+  %n.1.lcssa = phi i32 [ %n.0.lcssa, %whilecond11.preheader ], [ %subtmp, %loop14 ]
+  %fsubtmp = fadd double %y.1.lcssa, -1.000000e+00
+  %faddtmp = fadd double %y.1.lcssa, 1.000000e+00
+  %fdivtmp20 = fdiv double %fsubtmp, %faddtmp
+  %fmultmp23 = fmul double %fdivtmp20, %fdivtmp20
+  %fmultmp31 = fmul double %fmultmp23, %fdivtmp20
+  %fdivtmp38 = fdiv double %fmultmp31, 3.000000e+00
+  %faddtmp39 = fadd double %fdivtmp20, %fdivtmp38
+  %fmultmp31.1 = fmul double %fmultmp23, %fmultmp31
+  %fdivtmp38.1 = fdiv double %fmultmp31.1, 5.000000e+00
+  %faddtmp39.1 = fadd double %faddtmp39, %fdivtmp38.1
+  %fmultmp31.2 = fmul double %fmultmp23, %fmultmp31.1
+  %fdivtmp38.2 = fdiv double %fmultmp31.2, 7.000000e+00
+  %faddtmp39.2 = fadd double %faddtmp39.1, %fdivtmp38.2
+  %fmultmp31.3 = fmul double %fmultmp23, %fmultmp31.2
+  %fdivtmp38.3 = fdiv double %fmultmp31.3, 9.000000e+00
+  %faddtmp39.3 = fadd double %faddtmp39.2, %fdivtmp38.3
+  %fmultmp31.4 = fmul double %fmultmp23, %fmultmp31.3
+  %fdivtmp38.4 = fdiv double %fmultmp31.4, 1.100000e+01
+  %faddtmp39.4 = fadd double %faddtmp39.3, %fdivtmp38.4
+  %fmultmp31.5 = fmul double %fmultmp23, %fmultmp31.4
+  %fdivtmp38.5 = fdiv double %fmultmp31.5, 1.300000e+01
+  %faddtmp39.5 = fadd double %faddtmp39.4, %fdivtmp38.5
+  %fmultmp31.6 = fmul double %fmultmp23, %fmultmp31.5
+  %fdivtmp38.6 = fdiv double %fmultmp31.6, 1.500000e+01
+  %faddtmp39.6 = fadd double %faddtmp39.5, %fdivtmp38.6
+  %fmultmp31.7 = fmul double %fmultmp23, %fmultmp31.6
+  %fdivtmp38.7 = fdiv double %fmultmp31.7, 1.700000e+01
+  %faddtmp39.7 = fadd double %faddtmp39.6, %fdivtmp38.7
+  %fmultmp31.8 = fmul double %fmultmp23, %fmultmp31.7
+  %fdivtmp38.8 = fdiv double %fmultmp31.8, 1.900000e+01
+  %faddtmp39.8 = fadd double %faddtmp39.7, %fdivtmp38.8
+  %fmultmp31.9 = fmul double %fmultmp23, %fmultmp31.8
+  %fdivtmp38.9 = fdiv double %fmultmp31.9, 2.100000e+01
+  %faddtmp39.9 = fadd double %faddtmp39.8, %fdivtmp38.9
+  %fmultmp31.10 = fmul double %fmultmp23, %fmultmp31.9
+  %fdivtmp38.10 = fdiv double %fmultmp31.10, 2.300000e+01
+  %faddtmp39.10 = fadd double %faddtmp39.9, %fdivtmp38.10
+  %fmultmp31.11 = fmul double %fmultmp23, %fmultmp31.10
+  %fdivtmp38.11 = fdiv double %fmultmp31.11, 2.500000e+01
+  %faddtmp39.11 = fadd double %faddtmp39.10, %fdivtmp38.11
+  %fmultmp31.12 = fmul double %fmultmp23, %fmultmp31.11
+  %fdivtmp38.12 = fdiv double %fmultmp31.12, 2.700000e+01
+  %faddtmp39.12 = fadd double %faddtmp39.11, %fdivtmp38.12
+  %fmultmp31.13 = fmul double %fmultmp23, %fmultmp31.12
+  %fdivtmp38.13 = fdiv double %fmultmp31.13, 2.900000e+01
+  %faddtmp39.13 = fadd double %faddtmp39.12, %fdivtmp38.13
+  %fmultmp31.14 = fmul double %fmultmp23, %fmultmp31.13
+  %fdivtmp38.14 = fdiv double %fmultmp31.14, 3.100000e+01
+  %faddtmp39.14 = fadd double %faddtmp39.13, %fdivtmp38.14
+  %fmultmp31.15 = fmul double %fmultmp23, %fmultmp31.14
+  %fdivtmp38.15 = fdiv double %fmultmp31.15, 3.300000e+01
+  %faddtmp39.15 = fadd double %faddtmp39.14, %fdivtmp38.15
+  %fmultmp31.16 = fmul double %fmultmp23, %fmultmp31.15
+  %fdivtmp38.16 = fdiv double %fmultmp31.16, 3.500000e+01
+  %faddtmp39.16 = fadd double %faddtmp39.15, %fdivtmp38.16
+  %fmultmp31.17 = fmul double %fmultmp23, %fmultmp31.16
+  %fdivtmp38.17 = fdiv double %fmultmp31.17, 3.700000e+01
+  %faddtmp39.17 = fadd double %faddtmp39.16, %fdivtmp38.17
+  %fmultmp31.18 = fmul double %fmultmp23, %fmultmp31.17
+  %fdivtmp38.18 = fdiv double %fmultmp31.18, 3.900000e+01
+  %faddtmp39.18 = fadd double %faddtmp39.17, %fdivtmp38.18
+  %fmultmp44 = fmul double %faddtmp39.18, 2.000000e+00
+  %int2floattmp46 = sitofp i32 %n.1.lcssa to double
+  %fmultmp50 = fmul double %int2floattmp46, 0x3FE62E42FEFA39EC
+  %faddtmp51 = fadd double %fmultmp50, %fmultmp44
+  br label %common.ret
+}
+
+; Function Attrs: mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite)
+declare ptr @memset(ptr writeonly, i32, i64) local_unnamed_addr #1
+
+declare ptr @GetStdHandle(i32) local_unnamed_addr
+
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr) local_unnamed_addr
+
+define noundef i32 @print(i32 %0) local_unnamed_addr #2 {
+entry:
+  %buffer = alloca [12 x i8], align 1
+  %temp = alloca [12 x i8], align 1
+  %bytesWritten = alloca i32, align 4
+  %1 = call ptr @memset(ptr nonnull %buffer, i32 0, i64 12)
+  %2 = call ptr @memset(ptr nonnull %temp, i32 0, i64 12)
+  %3 = icmp eq i32 %0, 0
+  br i1 %3, label %zero_case, label %non_zero
+
+zero_case:                                        ; preds = %entry
+  store i8 48, ptr %buffer, align 1
+  br label %format_done
+
+non_zero:                                         ; preds = %entry
+  %4 = icmp slt i32 %0, 0
+  br i1 %4, label %negative, label %extract_digits
+
+format_done:                                      ; preds = %reverse_body, %middle.block, %reverse_loop.preheader, %zero_case
+  %final_offset = phi i32 [ 0, %zero_case ], [ %start_offset, %reverse_loop.preheader ], [ %start_offset, %middle.block ], [ %start_offset, %reverse_body ]
+  %final_digit_count = phi i32 [ 1, %zero_case ], [ %23, %reverse_loop.preheader ], [ %23, %middle.block ], [ %23, %reverse_body ]
+  %5 = add i32 %final_digit_count, %final_offset
+  %6 = call ptr @GetStdHandle(i32 -11)
+  %7 = call i32 @WriteFile(ptr %6, ptr nonnull %buffer, i32 %5, ptr nonnull %bytesWritten, ptr null)
+  %8 = call i32 @WriteFile(ptr %6, ptr nonnull @.str.newline, i32 1, ptr nonnull %bytesWritten, ptr null)
+  ret i32 0
+
+negative:                                         ; preds = %non_zero
+  store i8 45, ptr %buffer, align 1
+  %9 = sub i32 0, %0
+  br label %extract_digits
+
+extract_digits:                                   ; preds = %non_zero, %negative
+  %value_abs = phi i32 [ %9, %negative ], [ %0, %non_zero ]
+  %start_offset = phi i32 [ 1, %negative ], [ 0, %non_zero ]
+  br label %digit_loop_body
+
+reverse_loop.preheader:                           ; preds = %digit_loop_body
+  %10 = icmp ult i32 %temp_idx2, 2147483647
+  br i1 %10, label %reverse_body.preheader, label %format_done
+
+reverse_body.preheader:                           ; preds = %reverse_loop.preheader
+  %min.iters.check = icmp ult i32 %23, 4
+  br i1 %min.iters.check, label %reverse_body.preheader4, label %vector.ph
+
+vector.ph:                                        ; preds = %reverse_body.preheader
+  %n.vec = and i32 %23, -4
+  %invariant.gep = getelementptr i8, ptr %temp, i64 -3
+  br label %vector.body
+
+vector.body:                                      ; preds = %vector.body, %vector.ph
+  %index = phi i32 [ 0, %vector.ph ], [ %index.next, %vector.body ]
+  %11 = sub nsw i32 %temp_idx2, %index
+  %12 = sext i32 %11 to i64
+  %gep = getelementptr [12 x i8], ptr %invariant.gep, i64 0, i64 %12
+  %wide.load = load <4 x i8>, ptr %gep, align 1
+  %reverse = shufflevector <4 x i8> %wide.load, <4 x i8> poison, <4 x i32> <i32 3, i32 2, i32 1, i32 0>
+  %13 = or disjoint i32 %index, %start_offset
+  %14 = zext nneg i32 %13 to i64
+  %15 = getelementptr inbounds nuw [12 x i8], ptr %buffer, i64 0, i64 %14
+  store <4 x i8> %reverse, ptr %15, align 1
+  %index.next = add nuw i32 %index, 4
+  %16 = icmp eq i32 %index.next, %n.vec
+  br i1 %16, label %middle.block, label %vector.body, !llvm.loop !0
+
+middle.block:                                     ; preds = %vector.body
+  %cmp.n = icmp eq i32 %23, %n.vec
+  br i1 %cmp.n, label %format_done, label %reverse_body.preheader4
+
+reverse_body.preheader4:                          ; preds = %reverse_body.preheader, %middle.block
+  %reverse_idx3.ph = phi i32 [ 0, %reverse_body.preheader ], [ %n.vec, %middle.block ]
+  br label %reverse_body
+
+digit_loop_body:                                  ; preds = %extract_digits, %digit_loop_body
+  %temp_idx2 = phi i32 [ 0, %extract_digits ], [ %23, %digit_loop_body ]
+  %remaining1 = phi i32 [ %value_abs, %extract_digits ], [ %17, %digit_loop_body ]
+  %remaining1.frozen = freeze i32 %remaining1
+  %17 = sdiv i32 %remaining1.frozen, 10
+  %18 = mul i32 %17, 10
+  %.decomposed = sub i32 %remaining1.frozen, %18
+  %19 = trunc nsw i32 %.decomposed to i8
+  %20 = add nsw i8 %19, 48
+  %21 = sext i32 %temp_idx2 to i64
+  %22 = getelementptr inbounds [12 x i8], ptr %temp, i64 0, i64 %21
+  store i8 %20, ptr %22, align 1
+  %23 = add i32 %temp_idx2, 1
+  %remaining1.off = add i32 %remaining1, 9
+  %.not = icmp ult i32 %remaining1.off, 19
+  br i1 %.not, label %reverse_loop.preheader, label %digit_loop_body
+
+reverse_body:                                     ; preds = %reverse_body.preheader4, %reverse_body
+  %reverse_idx3 = phi i32 [ %31, %reverse_body ], [ %reverse_idx3.ph, %reverse_body.preheader4 ]
+  %24 = sub nsw i32 %temp_idx2, %reverse_idx3
+  %25 = sext i32 %24 to i64
+  %26 = getelementptr inbounds [12 x i8], ptr %temp, i64 0, i64 %25
+  %27 = load i8, ptr %26, align 1
+  %28 = add nuw nsw i32 %reverse_idx3, %start_offset
+  %29 = zext nneg i32 %28 to i64
+  %30 = getelementptr inbounds nuw [12 x i8], ptr %buffer, i64 0, i64 %29
+  store i8 %27, ptr %30, align 1
+  %31 = add nuw nsw i32 %reverse_idx3, 1
+  %32 = icmp slt i32 %31, %23
+  br i1 %32, label %reverse_body, label %format_done, !llvm.loop !3
+}
+
+define noundef i32 @print_float(double %0, i32 %1) local_unnamed_addr #2 {
+entry:
+  %buffer = alloca [32 x i8], align 1
+  %bytesWritten = alloca i32, align 4
+  %2 = call ptr @memset(ptr nonnull %buffer, i32 0, i64 32)
+  %3 = fcmp oeq double %0, 0.000000e+00
+  br i1 %3, label %zero_case, label %non_zero
+
+zero_case:                                        ; preds = %entry
+  store i8 48, ptr %buffer, align 1
+  %4 = getelementptr inbounds nuw i8, ptr %buffer, i64 1
+  store i8 46, ptr %4, align 1
+  %5 = icmp sgt i32 %1, 0
+  br i1 %5, label %zero_fill_body.preheader, label %zero_fill_done
+
+zero_fill_body.preheader:                         ; preds = %zero_case
+  %6 = add nsw i32 %1, -2147483647
+  %or.cond = icmp ult i32 %6, -2147483639
+  br i1 %or.cond, label %zero_fill_body.preheader55, label %vector.ph41
+
+vector.ph41:                                      ; preds = %zero_fill_body.preheader
+  %n.vec43 = and i32 %1, 2147483644
+  br label %vector.body44
+
+vector.body44:                                    ; preds = %vector.body44, %vector.ph41
+  %index45 = phi i32 [ 0, %vector.ph41 ], [ %index.next46, %vector.body44 ]
+  %7 = or disjoint i32 %index45, 2
+  %8 = sext i32 %7 to i64
+  %9 = getelementptr inbounds [32 x i8], ptr %buffer, i64 0, i64 %8
+  store <4 x i8> splat (i8 48), ptr %9, align 1
+  %index.next46 = add nuw i32 %index45, 4
+  %10 = icmp eq i32 %index.next46, %n.vec43
+  br i1 %10, label %middle.block47, label %vector.body44, !llvm.loop !4
+
+middle.block47:                                   ; preds = %vector.body44
+  %cmp.n48 = icmp eq i32 %1, %n.vec43
+  br i1 %cmp.n48, label %zero_fill_done, label %zero_fill_body.preheader55
+
+zero_fill_body.preheader55:                       ; preds = %zero_fill_body.preheader, %middle.block47
+  %zero_fill_idx19.ph = phi i32 [ 0, %zero_fill_body.preheader ], [ %n.vec43, %middle.block47 ]
+  br label %zero_fill_body
+
+non_zero:                                         ; preds = %entry
+  %11 = fcmp olt double %0, 0.000000e+00
+  br i1 %11, label %negative, label %extract_int
+
+format_done:                                      ; preds = %frac_digits_done, %zero_fill_done
+  %final_float_length = phi i32 [ %20, %zero_fill_done ], [ %105, %frac_digits_done ]
+  %12 = call ptr @GetStdHandle(i32 -11)
+  %13 = call i32 @WriteFile(ptr %12, ptr nonnull %buffer, i32 %final_float_length, ptr nonnull %bytesWritten, ptr null)
+  %14 = call i32 @WriteFile(ptr %12, ptr nonnull @.str.newline, i32 1, ptr nonnull %bytesWritten, ptr null)
+  ret i32 0
+
+zero_fill_body:                                   ; preds = %zero_fill_body.preheader55, %zero_fill_body
+  %zero_fill_idx19 = phi i32 [ %18, %zero_fill_body ], [ %zero_fill_idx19.ph, %zero_fill_body.preheader55 ]
+  %15 = add nuw i32 %zero_fill_idx19, 2
+  %16 = sext i32 %15 to i64
+  %17 = getelementptr inbounds [32 x i8], ptr %buffer, i64 0, i64 %16
+  store i8 48, ptr %17, align 1
+  %18 = add nuw nsw i32 %zero_fill_idx19, 1
+  %19 = icmp slt i32 %18, %1
+  br i1 %19, label %zero_fill_body, label %zero_fill_done, !llvm.loop !5
+
+zero_fill_done:                                   ; preds = %zero_fill_body, %middle.block47, %zero_case
+  %20 = add i32 %1, 2
+  br label %format_done
+
+negative:                                         ; preds = %non_zero
+  store i8 45, ptr %buffer, align 1
+  %21 = call double @llvm.fabs.f64(double %0)
+  br label %extract_int
+
+extract_int:                                      ; preds = %non_zero, %negative
+  %pos_after_int = phi i32 [ 1, %negative ], [ 0, %non_zero ]
+  %work_value = phi double [ %21, %negative ], [ %0, %non_zero ]
+  %int_part_trunc = fptosi double %work_value to i32
+  %int_part_trunc_float = sitofp i32 %int_part_trunc to double
+  %frac_part_initial = fsub double %work_value, %int_part_trunc_float
+  %22 = fcmp ogt double %frac_part_initial, 9.999000e-01
+  %int_part_rounded = zext i1 %22 to i32
+  %int_part = add i32 %int_part_rounded, %int_part_trunc
+  %int_part_float = sitofp i32 %int_part to double
+  %frac_part = fsub double %work_value, %int_part_float
+  %float_temp = alloca [20 x i8], align 1
+  %23 = call ptr @memset(ptr nonnull %float_temp, i32 0, i64 20)
+  %24 = icmp eq i32 %int_part, 0
+  br i1 %24, label %int_zero, label %int_digit_body
+
+int_zero:                                         ; preds = %extract_int
+  %25 = getelementptr inbounds nuw i8, ptr %float_temp, i64 19
+  store i8 48, ptr %25, align 1
+  br label %int_digits_done
+
+int_digits_done:                                  ; preds = %int_digit_body, %int_zero
+  %final_temp_idx = phi i32 [ 18, %int_zero ], [ %44, %int_digit_body ]
+  %26 = add i32 %final_temp_idx, 1
+  %27 = sub i32 19, %final_temp_idx
+  %28 = icmp sgt i32 %27, 0
+  br i1 %28, label %copy_int_body.preheader, label %copy_int_done
+
+copy_int_body.preheader:                          ; preds = %int_digits_done
+  %min.iters.check = icmp ult i32 %27, 4
+  %29 = add i32 %final_temp_idx, 1
+  %30 = icmp sgt i32 %29, 19
+  %or.cond52 = or i1 %min.iters.check, %30
+  br i1 %or.cond52, label %copy_int_body.preheader57, label %vector.ph
+
+vector.ph:                                        ; preds = %copy_int_body.preheader
+  %n.vec = and i32 %27, 2147483644
+  br label %vector.body
+
+vector.body:                                      ; preds = %vector.body, %vector.ph
+  %index = phi i32 [ 0, %vector.ph ], [ %index.next, %vector.body ]
+  %31 = add i32 %26, %index
+  %32 = sext i32 %31 to i64
+  %33 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %32
+  %wide.load = load <4 x i8>, ptr %33, align 1
+  %34 = or disjoint i32 %pos_after_int, %index
+  %35 = zext nneg i32 %34 to i64
+  %36 = getelementptr inbounds nuw [32 x i8], ptr %buffer, i64 0, i64 %35
+  store <4 x i8> %wide.load, ptr %36, align 1
+  %index.next = add nuw i32 %index, 4
+  %37 = icmp eq i32 %index.next, %n.vec
+  br i1 %37, label %middle.block, label %vector.body, !llvm.loop !6
+
+middle.block:                                     ; preds = %vector.body
+  %cmp.n = icmp eq i32 %27, %n.vec
+  br i1 %cmp.n, label %copy_int_done, label %copy_int_body.preheader57
+
+copy_int_body.preheader57:                        ; preds = %copy_int_body.preheader, %middle.block
+  %copy_idx8.ph = phi i32 [ 0, %copy_int_body.preheader ], [ %n.vec, %middle.block ]
+  br label %copy_int_body
+
+int_digit_body:                                   ; preds = %extract_int, %int_digit_body
+  %current_temp_idx7 = phi i32 [ %44, %int_digit_body ], [ 19, %extract_int ]
+  %remaining_int6 = phi i32 [ %38, %int_digit_body ], [ %int_part, %extract_int ]
+  %remaining_int6.frozen = freeze i32 %remaining_int6
+  %38 = sdiv i32 %remaining_int6.frozen, 10
+  %39 = mul i32 %38, 10
+  %.decomposed = sub i32 %remaining_int6.frozen, %39
+  %40 = trunc nsw i32 %.decomposed to i8
+  %41 = add nsw i8 %40, 48
+  %42 = sext i32 %current_temp_idx7 to i64
+  %43 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %42
+  store i8 %41, ptr %43, align 1
+  %44 = add i32 %current_temp_idx7, -1
+  %remaining_int6.off = add i32 %remaining_int6, 9
+  %.not = icmp ult i32 %remaining_int6.off, 19
+  br i1 %.not, label %int_digits_done, label %int_digit_body
+
+copy_int_body:                                    ; preds = %copy_int_body.preheader57, %copy_int_body
+  %copy_idx8 = phi i32 [ %52, %copy_int_body ], [ %copy_idx8.ph, %copy_int_body.preheader57 ]
+  %45 = add i32 %26, %copy_idx8
+  %46 = sext i32 %45 to i64
+  %47 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %46
+  %48 = load i8, ptr %47, align 1
+  %49 = add nuw nsw i32 %pos_after_int, %copy_idx8
+  %50 = zext nneg i32 %49 to i64
+  %51 = getelementptr inbounds nuw [32 x i8], ptr %buffer, i64 0, i64 %50
+  store i8 %48, ptr %51, align 1
+  %52 = add nuw nsw i32 %copy_idx8, 1
+  %53 = icmp slt i32 %52, %27
+  br i1 %53, label %copy_int_body, label %copy_int_done, !llvm.loop !7
+
+copy_int_done:                                    ; preds = %copy_int_body, %middle.block, %int_digits_done
+  %54 = add i32 %pos_after_int, %27
+  %55 = sext i32 %54 to i64
+  %56 = getelementptr inbounds [32 x i8], ptr %buffer, i64 0, i64 %55
+  store i8 46, ptr %56, align 1
+  %57 = icmp sgt i32 %1, 0
+  br i1 %57, label %scale_body, label %scale_done
+
+scale_body:                                       ; preds = %copy_int_done, %scale_body
+  %scale_accum10 = phi double [ %next_scale, %scale_body ], [ 1.000000e+00, %copy_int_done ]
+  %scale_idx9 = phi i32 [ %58, %scale_body ], [ 0, %copy_int_done ]
+  %next_scale = fmul double %scale_accum10, 1.000000e+01
+  %58 = add nuw nsw i32 %scale_idx9, 1
+  %59 = icmp slt i32 %58, %1
+  br i1 %59, label %scale_body, label %scale_done
+
+scale_done:                                       ; preds = %scale_body, %copy_int_done
+  %scale_accum.lcssa = phi double [ 1.000000e+00, %copy_int_done ], [ %next_scale, %scale_body ]
+  %frac_scaled = fmul double %frac_part, %scale_accum.lcssa
+  %frac_rounded = fadd double %frac_scaled, 5.000000e-01
+  %frac_int = fptosi double %frac_rounded to i64
+  %60 = fptosi double %scale_accum.lcssa to i64
+  %.not4 = icmp slt i64 %frac_int, %60
+  br i1 %.not4, label %frac_no_overflow, label %frac_overflow
+
+frac_overflow:                                    ; preds = %scale_done
+  %61 = add i32 %int_part, 1
+  %62 = icmp eq i32 %54, 0
+  %63 = zext i1 %62 to i32
+  %64 = call ptr @memset(ptr nonnull %float_temp, i32 0, i64 20)
+  %.not511 = icmp eq i32 %61, 0
+  br i1 %.not511, label %overflow_int_done, label %overflow_int_body
+
+frac_no_overflow:                                 ; preds = %overflow_copy_done, %scale_done
+  %.in = phi i32 [ %95, %overflow_copy_done ], [ %54, %scale_done ]
+  %final_frac_int = phi i64 [ 0, %overflow_copy_done ], [ %frac_int, %scale_done ]
+  %65 = add i32 %.in, 1
+  %frac_idx16 = add i32 %1, -1
+  %66 = icmp sgt i32 %frac_idx16, -1
+  br i1 %66, label %frac_digit_body, label %frac_digits_done
+
+overflow_int_body:                                ; preds = %frac_overflow, %overflow_int_body
+  %overflow_temp_idx13 = phi i32 [ %73, %overflow_int_body ], [ 19, %frac_overflow ]
+  %overflow_remaining12 = phi i32 [ %67, %overflow_int_body ], [ %61, %frac_overflow ]
+  %overflow_remaining12.frozen = freeze i32 %overflow_remaining12
+  %67 = sdiv i32 %overflow_remaining12.frozen, 10
+  %68 = mul i32 %67, 10
+  %.decomposed60 = sub i32 %overflow_remaining12.frozen, %68
+  %69 = trunc nsw i32 %.decomposed60 to i8
+  %70 = add nsw i8 %69, 48
+  %71 = sext i32 %overflow_temp_idx13 to i64
+  %72 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %71
+  store i8 %70, ptr %72, align 1
+  %73 = add i32 %overflow_temp_idx13, -1
+  %overflow_remaining12.off = add i32 %overflow_remaining12, 9
+  %.not5 = icmp ult i32 %overflow_remaining12.off, 19
+  br i1 %.not5, label %overflow_int_done, label %overflow_int_body
+
+overflow_int_done:                                ; preds = %overflow_int_body, %frac_overflow
+  %overflow_temp_idx.lcssa = phi i32 [ 19, %frac_overflow ], [ %73, %overflow_int_body ]
+  %74 = add i32 %overflow_temp_idx.lcssa, 1
+  %75 = sub i32 19, %overflow_temp_idx.lcssa
+  %76 = icmp sgt i32 %75, 0
+  br i1 %76, label %overflow_copy_body.preheader, label %overflow_copy_done
+
+overflow_copy_body.preheader:                     ; preds = %overflow_int_done
+  %min.iters.check27 = icmp ult i32 %75, 4
+  %77 = add i32 %overflow_temp_idx.lcssa, 1
+  %78 = icmp sgt i32 %77, 19
+  %or.cond54 = or i1 %min.iters.check27, %78
+  br i1 %or.cond54, label %overflow_copy_body.preheader56, label %vector.ph28
+
+vector.ph28:                                      ; preds = %overflow_copy_body.preheader
+  %n.vec30 = and i32 %75, 2147483644
+  br label %vector.body31
+
+vector.body31:                                    ; preds = %vector.body31, %vector.ph28
+  %index32 = phi i32 [ 0, %vector.ph28 ], [ %index.next34, %vector.body31 ]
+  %79 = add i32 %74, %index32
+  %80 = sext i32 %79 to i64
+  %81 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %80
+  %wide.load33 = load <4 x i8>, ptr %81, align 1
+  %82 = or disjoint i32 %index32, %63
+  %83 = zext nneg i32 %82 to i64
+  %84 = getelementptr inbounds nuw [32 x i8], ptr %buffer, i64 0, i64 %83
+  store <4 x i8> %wide.load33, ptr %84, align 1
+  %index.next34 = add nuw i32 %index32, 4
+  %85 = icmp eq i32 %index.next34, %n.vec30
+  br i1 %85, label %middle.block35, label %vector.body31, !llvm.loop !8
+
+middle.block35:                                   ; preds = %vector.body31
+  %cmp.n36 = icmp eq i32 %75, %n.vec30
+  br i1 %cmp.n36, label %overflow_copy_done, label %overflow_copy_body.preheader56
+
+overflow_copy_body.preheader56:                   ; preds = %overflow_copy_body.preheader, %middle.block35
+  %overflow_copy_idx15.ph = phi i32 [ 0, %overflow_copy_body.preheader ], [ %n.vec30, %middle.block35 ]
+  br label %overflow_copy_body
+
+overflow_copy_body:                               ; preds = %overflow_copy_body.preheader56, %overflow_copy_body
+  %overflow_copy_idx15 = phi i32 [ %93, %overflow_copy_body ], [ %overflow_copy_idx15.ph, %overflow_copy_body.preheader56 ]
+  %86 = add i32 %74, %overflow_copy_idx15
+  %87 = sext i32 %86 to i64
+  %88 = getelementptr inbounds [20 x i8], ptr %float_temp, i64 0, i64 %87
+  %89 = load i8, ptr %88, align 1
+  %90 = add nuw nsw i32 %overflow_copy_idx15, %63
+  %91 = zext nneg i32 %90 to i64
+  %92 = getelementptr inbounds nuw [32 x i8], ptr %buffer, i64 0, i64 %91
+  store i8 %89, ptr %92, align 1
+  %93 = add nuw nsw i32 %overflow_copy_idx15, 1
+  %94 = icmp slt i32 %93, %75
+  br i1 %94, label %overflow_copy_body, label %overflow_copy_done, !llvm.loop !9
+
+overflow_copy_done:                               ; preds = %overflow_copy_body, %middle.block35, %overflow_int_done
+  %95 = add i32 %75, %63
+  %96 = sext i32 %95 to i64
+  %97 = getelementptr inbounds [32 x i8], ptr %buffer, i64 0, i64 %96
+  store i8 46, ptr %97, align 1
+  br label %frac_no_overflow
+
+frac_digit_body:                                  ; preds = %frac_no_overflow, %frac_digit_body
+  %frac_idx18 = phi i32 [ %frac_idx, %frac_digit_body ], [ %frac_idx16, %frac_no_overflow ]
+  %frac_remaining17 = phi i64 [ %98, %frac_digit_body ], [ %final_frac_int, %frac_no_overflow ]
+  %frac_remaining17.frozen = freeze i64 %frac_remaining17
+  %98 = sdiv i64 %frac_remaining17.frozen, 10
+  %99 = mul i64 %98, 10
+  %.decomposed61 = sub i64 %frac_remaining17.frozen, %99
+  %100 = trunc nsw i64 %.decomposed61 to i8
+  %101 = add nsw i8 %100, 48
+  %102 = add i32 %65, %frac_idx18
+  %103 = sext i32 %102 to i64
+  %104 = getelementptr inbounds [32 x i8], ptr %buffer, i64 0, i64 %103
+  store i8 %101, ptr %104, align 1
+  %frac_idx = add nsw i32 %frac_idx18, -1
+  %.not23 = icmp eq i32 %frac_idx18, 0
+  br i1 %.not23, label %frac_digits_done, label %frac_digit_body
+
+frac_digits_done:                                 ; preds = %frac_digit_body, %frac_no_overflow
+  %105 = add i32 %65, %1
+  br label %format_done
+}
+
+; Function Attrs: mustprogress nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare double @llvm.fabs.f64(double) #3
+
+declare void @ExitProcess(i32) local_unnamed_addr
+
+; Function Attrs: noreturn
+define void @_start() local_unnamed_addr #4 {
+entry:
+  %0 = tail call i32 @main()
+  tail call void @ExitProcess(i32 0)
+  unreachable
+}
+
+attributes #0 = { nofree norecurse nosync nounwind memory(none) }
+attributes #1 = { mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite) }
+attributes #2 = { "no-builtin-memset" }
+attributes #3 = { mustprogress nocallback nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #4 = { noreturn }
+
+!0 = distinct !{!0, !1, !2}
+!1 = !{!"llvm.loop.isvectorized", i32 1}
+!2 = !{!"llvm.loop.unroll.runtime.disable"}
+!3 = distinct !{!3, !2, !1}
+!4 = distinct !{!4, !1, !2}
+!5 = distinct !{!5, !1}
+!6 = distinct !{!6, !1, !2}
+!7 = distinct !{!7, !1}
+!8 = distinct !{!8, !1, !2}
+!9 = distinct !{!9, !1}
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+@.str.newline = private constant [1 x i8] c"\0A"
+
+define i32 @main() !dbg !4 {
+entry:
+  %r_pow = alloca double, align 8
+  %power_val = alloca double, align 8
+  %exponent = alloca double, align 8
+  %abs_diff = alloca double, align 8
+  %diff = alloca double, align 8
+  %log_result = alloca double, align 8
+  %log2_result = alloca double, align 8
+  %test_val = alloca double, align 8
+  %r_literal = alloca double, align 8
+  %r_int = alloca double, align 8
+  %int_val = alloca i32, align 4
+  store i32 32, ptr %int_val, align 4, !dbg !9
+    #dbg_declare(ptr %int_val, !10, !DIExpression(), !9)
+  %int_val1 = load i32, ptr %int_val, align 4, !dbg !11
+  %inttofp = sitofp i32 %int_val1 to double, !dbg !11
+  %0 = call double @stdlib.math.log2(double %inttofp), !dbg !11
+  store double %0, ptr %r_int, align 8, !dbg !11
+    #dbg_declare(ptr %r_int, !12, !DIExpression(), !11)
+  %r_int2 = load double, ptr %r_int, align 8, !dbg !13
+  %1 = call i32 @print_float(double %r_int2, i32 1), !dbg !13
+  %2 = call double @stdlib.math.log2(double 6.400000e+01), !dbg !14
+  store double %2, ptr %r_literal, align 8, !dbg !14
+    #dbg_declare(ptr %r_literal, !15, !DIExpression(), !14)
+  %r_literal3 = load double, ptr %r_literal, align 8, !dbg !16
+  %3 = call i32 @print_float(double %r_literal3, i32 1), !dbg !16
+  store double 1.000000e+02, ptr %test_val, align 8, !dbg !17
+    #dbg_declare(ptr %test_val, !18, !DIExpression(), !17)
+  %test_val4 = load double, ptr %test_val, align 8, !dbg !19
+  %4 = call double @stdlib.math.log2(double %test_val4), !dbg !19
+  store double %4, ptr %log2_result, align 8, !dbg !19
+    #dbg_declare(ptr %log2_result, !20, !DIExpression(), !19)
+  %test_val5 = load double, ptr %test_val, align 8, !dbg !21
+  %5 = call double @stdlib.math.log(double %test_val5), !dbg !21
+  %6 = call double @stdlib.math.log(double 2.000000e+00), !dbg !21
+  %fdivtmp = fdiv double %5, %6, !dbg !21
+  store double %fdivtmp, ptr %log_result, align 8, !dbg !21
+    #dbg_declare(ptr %log_result, !22, !DIExpression(), !21)
+  %log2_result6 = load double, ptr %log2_result, align 8, !dbg !23
+  %log_result7 = load double, ptr %log_result, align 8, !dbg !23
+  %fsubtmp = fsub double %log2_result6, %log_result7, !dbg !23
+  store double %fsubtmp, ptr %diff, align 8, !dbg !23
+    #dbg_declare(ptr %diff, !24, !DIExpression(), !23)
+  %diff8 = load double, ptr %diff, align 8, !dbg !25
+  store double %diff8, ptr %abs_diff, align 8, !dbg !25
+    #dbg_declare(ptr %abs_diff, !26, !DIExpression(), !25)
+  %diff9 = load double, ptr %diff, align 8, !dbg !27
+  %fcmptmp = fcmp olt double %diff9, 0.000000e+00, !dbg !27
+  br i1 %fcmptmp, label %then, label %ifcont, !dbg !27
+
+then:                                             ; preds = %entry
+  %diff10 = load double, ptr %diff, align 8, !dbg !28
+  %fsubtmp11 = fsub double 0.000000e+00, %diff10, !dbg !28
+  store double %fsubtmp11, ptr %abs_diff, align 8, !dbg !28
+  br label %ifcont, !dbg !28
+
+ifcont:                                           ; preds = %then, %entry
+  %abs_diff12 = load double, ptr %abs_diff, align 8, !dbg !29
+  %fcmptmp13 = fcmp olt double %abs_diff12, 0x3EB0C6F7A0B5ED8D, !dbg !29
+  br i1 %fcmptmp13, label %then14, label %ifcont16, !dbg !29
+
+then14:                                           ; preds = %ifcont
+  %r_int15 = load double, ptr %r_int, align 8, !dbg !30
+  %7 = call i32 @print_float(double %r_int15, i32 1), !dbg !30
+  br label %ifcont16, !dbg !30
+
+ifcont16:                                         ; preds = %then14, %ifcont
+  store double 7.000000e+00, ptr %exponent, align 8, !dbg !31
+    #dbg_declare(ptr %exponent, !32, !DIExpression(), !31)
+  %exponent17 = load double, ptr %exponent, align 8, !dbg !33
+  %8 = call double @stdlib.math.pow(double 2.000000e+00, double %exponent17), !dbg !33
+  store double %8, ptr %power_val, align 8, !dbg !33
+    #dbg_declare(ptr %power_val, !34, !DIExpression(), !33)
+  %power_val18 = load double, ptr %power_val, align 8, !dbg !35
+  %9 = call double @stdlib.math.log2(double %power_val18), !dbg !35
+  store double %9, ptr %r_pow, align 8, !dbg !35
+    #dbg_declare(ptr %r_pow, !36, !DIExpression(), !35)
+  %r_pow19 = load double, ptr %r_pow, align 8, !dbg !37
+  %10 = call i32 @print_float(double %r_pow19, i32 1), !dbg !37
+  ret i32 0, !dbg !38
+}
+
+define internal double @stdlib.math.log(double %0) !dbg !39 {
+entry:
+  %n_float = alloca double, align 8
+  %log2 = alloca double, align 8
+  %result = alloca double, align 8
+  %divisor_float = alloca double, align 8
+  %divisor = alloca i32, align 4
+  %k = alloca i32, align 4
+  %sum = alloca double, align 8
+  %term = alloca double, align 8
+  %z_squared = alloca double, align 8
+  %z = alloca double, align 8
+  %y = alloca double, align 8
+  %n = alloca i32, align 4
+  %x = alloca double, align 8
+  store double %0, ptr %x, align 8, !dbg !42
+    #dbg_declare(ptr %x, !43, !DIExpression(), !42)
+  %x1 = load double, ptr %x, align 8, !dbg !44
+  %fcmptmp = fcmp ole double %x1, 0.000000e+00, !dbg !44
+  br i1 %fcmptmp, label %then, label %ifcont, !dbg !44
+
+then:                                             ; preds = %entry
+  ret double 0.000000e+00, !dbg !45
+
+ifcont:                                           ; preds = %entry
+  %x2 = load double, ptr %x, align 8, !dbg !46
+  %fcmptmp3 = fcmp oeq double %x2, 1.000000e+00, !dbg !46
+  br i1 %fcmptmp3, label %then4, label %ifcont5, !dbg !46
+
+then4:                                            ; preds = %ifcont
+  ret double 0.000000e+00, !dbg !47
+
+ifcont5:                                          ; preds = %ifcont
+  store i32 0, ptr %n, align 4, !dbg !48
+    #dbg_declare(ptr %n, !49, !DIExpression(), !48)
+  %x6 = load double, ptr %x, align 8, !dbg !50
+  store double %x6, ptr %y, align 8, !dbg !50
+    #dbg_declare(ptr %y, !51, !DIExpression(), !50)
+  br label %whilecond, !dbg !52
+
+whilecond:                                        ; preds = %loop, %ifcont5
+  %y7 = load double, ptr %y, align 8, !dbg !52
+  %fcmptmp8 = fcmp oge double %y7, 1.000000e+00, !dbg !52
+  br i1 %fcmptmp8, label %loop, label %afterloop, !dbg !52
+
+loop:                                             ; preds = %whilecond
+  %y9 = load double, ptr %y, align 8, !dbg !53
+  %fdivtmp = fdiv double %y9, 2.000000e+00, !dbg !53
+  store double %fdivtmp, ptr %y, align 8, !dbg !53
+  %n10 = load i32, ptr %n, align 4, !dbg !54
+  %addtmp = add i32 %n10, 1, !dbg !54
+  store i32 %addtmp, ptr %n, align 4, !dbg !54
+  br label %whilecond, !dbg !54
+
+afterloop:                                        ; preds = %whilecond
+  br label %whilecond11, !dbg !55
+
+whilecond11:                                      ; preds = %loop14, %afterloop
+  %y12 = load double, ptr %y, align 8, !dbg !55
+  %fcmptmp13 = fcmp olt double %y12, 5.000000e-01, !dbg !55
+  br i1 %fcmptmp13, label %loop14, label %afterloop17, !dbg !55
+
+loop14:                                           ; preds = %whilecond11
+  %y15 = load double, ptr %y, align 8, !dbg !56
+  %fmultmp = fmul double %y15, 2.000000e+00, !dbg !56
+  store double %fmultmp, ptr %y, align 8, !dbg !56
+  %n16 = load i32, ptr %n, align 4, !dbg !57
+  %subtmp = sub i32 %n16, 1, !dbg !57
+  store i32 %subtmp, ptr %n, align 4, !dbg !57
+  br label %whilecond11, !dbg !57
+
+afterloop17:                                      ; preds = %whilecond11
+  %y18 = load double, ptr %y, align 8, !dbg !58
+  %fsubtmp = fsub double %y18, 1.000000e+00, !dbg !58
+  %y19 = load double, ptr %y, align 8, !dbg !58
+  %faddtmp = fadd double %y19, 1.000000e+00, !dbg !58
+  %fdivtmp20 = fdiv double %fsubtmp, %faddtmp, !dbg !58
+  store double %fdivtmp20, ptr %z, align 8, !dbg !58
+    #dbg_declare(ptr %z, !59, !DIExpression(), !58)
+  %z21 = load double, ptr %z, align 8, !dbg !60
+  %z22 = load double, ptr %z, align 8, !dbg !60
+  %fmultmp23 = fmul double %z21, %z22, !dbg !60
+  store double %fmultmp23, ptr %z_squared, align 8, !dbg !60
+    #dbg_declare(ptr %z_squared, !61, !DIExpression(), !60)
+  %z24 = load double, ptr %z, align 8, !dbg !62
+  store double %z24, ptr %term, align 8, !dbg !62
+    #dbg_declare(ptr %term, !63, !DIExpression(), !62)
+  %term25 = load double, ptr %term, align 8, !dbg !64
+  store double %term25, ptr %sum, align 8, !dbg !64
+    #dbg_declare(ptr %sum, !65, !DIExpression(), !64)
+  store i32 1, ptr %k, align 4, !dbg !66
+    #dbg_declare(ptr %k, !67, !DIExpression(), !66)
+  br label %whilecond26, !dbg !68
+
+whilecond26:                                      ; preds = %loop28, %afterloop17
+  %k27 = load i32, ptr %k, align 4, !dbg !68
+  %cmptmp = icmp slt i32 %k27, 20, !dbg !68
+  br i1 %cmptmp, label %loop28, label %afterloop42, !dbg !68
+
+loop28:                                           ; preds = %whilecond26
+  %term29 = load double, ptr %term, align 8, !dbg !69
+  %z_squared30 = load double, ptr %z_squared, align 8, !dbg !69
+  %fmultmp31 = fmul double %term29, %z_squared30, !dbg !69
+  store double %fmultmp31, ptr %term, align 8, !dbg !69
+  %k32 = load i32, ptr %k, align 4, !dbg !70
+  %multmp = mul i32 2, %k32, !dbg !70
+  %addtmp33 = add i32 %multmp, 1, !dbg !70
+  store i32 %addtmp33, ptr %divisor, align 4, !dbg !70
+    #dbg_declare(ptr %divisor, !71, !DIExpression(), !70)
+  %divisor34 = load i32, ptr %divisor, align 4, !dbg !72
+  %int2floattmp = sitofp i32 %divisor34 to double, !dbg !72
+  store double %int2floattmp, ptr %divisor_float, align 8, !dbg !72
+    #dbg_declare(ptr %divisor_float, !73, !DIExpression(), !72)
+  %sum35 = load double, ptr %sum, align 8, !dbg !74
+  %term36 = load double, ptr %term, align 8, !dbg !74
+  %divisor_float37 = load double, ptr %divisor_float, align 8, !dbg !74
+  %fdivtmp38 = fdiv double %term36, %divisor_float37, !dbg !74
+  %faddtmp39 = fadd double %sum35, %fdivtmp38, !dbg !74
+  store double %faddtmp39, ptr %sum, align 8, !dbg !74
+  %k40 = load i32, ptr %k, align 4, !dbg !75
+  %addtmp41 = add i32 %k40, 1, !dbg !75
+  store i32 %addtmp41, ptr %k, align 4, !dbg !75
+  br label %whilecond26, !dbg !75
+
+afterloop42:                                      ; preds = %whilecond26
+  %sum43 = load double, ptr %sum, align 8, !dbg !76
+  %fmultmp44 = fmul double 2.000000e+00, %sum43, !dbg !76
+  store double %fmultmp44, ptr %result, align 8, !dbg !76
+    #dbg_declare(ptr %result, !77, !DIExpression(), !76)
+  store double 0x3FE62E42FEFA39EC, ptr %log2, align 8, !dbg !78
+    #dbg_declare(ptr %log2, !79, !DIExpression(), !78)
+  %n45 = load i32, ptr %n, align 4, !dbg !80
+  %int2floattmp46 = sitofp i32 %n45 to double, !dbg !80
+  store double %int2floattmp46, ptr %n_float, align 8, !dbg !80
+    #dbg_declare(ptr %n_float, !81, !DIExpression(), !80)
+  %result47 = load double, ptr %result, align 8, !dbg !82
+  %n_float48 = load double, ptr %n_float, align 8, !dbg !82
+  %log249 = load double, ptr %log2, align 8, !dbg !82
+  %fmultmp50 = fmul double %n_float48, %log249, !dbg !82
+  %faddtmp51 = fadd double %result47, %fmultmp50, !dbg !82
+  store double %faddtmp51, ptr %result, align 8, !dbg !82
+  %result52 = load double, ptr %result, align 8, !dbg !83
+  ret double %result52, !dbg !83
+}
+
+define internal double @stdlib.math.log2(double %0) !dbg !84 {
+entry:
+  %result = alloca double, align 8
+  %ln_2 = alloca double, align 8
+  %ln_x = alloca double, align 8
+  %x = alloca double, align 8
+  store double %0, ptr %x, align 8, !dbg !85
+    #dbg_declare(ptr %x, !86, !DIExpression(), !85)
+  %x1 = load double, ptr %x, align 8, !dbg !87
+  %fcmptmp = fcmp ole double %x1, 0.000000e+00, !dbg !87
+  br i1 %fcmptmp, label %then, label %ifcont, !dbg !87
+
+then:                                             ; preds = %entry
+  ret double 0.000000e+00, !dbg !88
+
+ifcont:                                           ; preds = %entry
+  %x2 = load double, ptr %x, align 8, !dbg !89
+  %fcmptmp3 = fcmp oeq double %x2, 1.000000e+00, !dbg !89
+  br i1 %fcmptmp3, label %then4, label %ifcont5, !dbg !89
+
+then4:                                            ; preds = %ifcont
+  ret double 0.000000e+00, !dbg !90
+
+ifcont5:                                          ; preds = %ifcont
+  %x6 = load double, ptr %x, align 8, !dbg !91
+  %1 = call double @stdlib.math.log(double %x6), !dbg !91
+  store double %1, ptr %ln_x, align 8, !dbg !91
+    #dbg_declare(ptr %ln_x, !92, !DIExpression(), !91)
+  store double 0x3FE62E42FEFA39EF, ptr %ln_2, align 8, !dbg !93
+    #dbg_declare(ptr %ln_2, !94, !DIExpression(), !93)
+  %ln_x7 = load double, ptr %ln_x, align 8, !dbg !95
+  %ln_28 = load double, ptr %ln_2, align 8, !dbg !95
+  %fdivtmp = fdiv double %ln_x7, %ln_28, !dbg !95
+  store double %fdivtmp, ptr %result, align 8, !dbg !95
+    #dbg_declare(ptr %result, !96, !DIExpression(), !95)
+  %result9 = load double, ptr %result, align 8, !dbg !97
+  ret double %result9, !dbg !97
+}
+
+define internal double @stdlib.math.pow(double %0, double %1) !dbg !98 {
+entry:
+  %exp_times_log = alloca double, align 8
+  %log_base = alloca double, align 8
+  %is_odd = alloca i1, align 1
+  %exp_int_abs = alloca i32, align 4
+  %remainder = alloca i32, align 4
+  %current_base = alloca double, align 8
+  %is_neg_exp = alloca i1, align 1
+  %n = alloca i32, align 4
+  %result = alloca double, align 8
+  %is_int_exp = alloca i1, align 1
+  %exp_int = alloca i32, align 4
+  %is_negative = alloca i1, align 1
+  %exponent = alloca double, align 8
+  %base = alloca double, align 8
+  store double %0, ptr %base, align 8, !dbg !101
+    #dbg_declare(ptr %base, !102, !DIExpression(), !101)
+  store double %1, ptr %exponent, align 8, !dbg !103
+    #dbg_declare(ptr %exponent, !104, !DIExpression(), !103)
+  %exponent1 = load double, ptr %exponent, align 8, !dbg !105
+  %fcmptmp = fcmp oeq double %exponent1, 0.000000e+00, !dbg !105
+  br i1 %fcmptmp, label %then, label %ifcont, !dbg !105
+
+then:                                             ; preds = %entry
+  ret double 1.000000e+00, !dbg !106
+
+ifcont:                                           ; preds = %entry
+  %base2 = load double, ptr %base, align 8, !dbg !107
+  %fcmptmp3 = fcmp oeq double %base2, 0.000000e+00, !dbg !107
+  br i1 %fcmptmp3, label %then4, label %ifcont9, !dbg !107
+
+then4:                                            ; preds = %ifcont
+  %exponent5 = load double, ptr %exponent, align 8, !dbg !108
+  %fcmptmp6 = fcmp ogt double %exponent5, 0.000000e+00, !dbg !108
+  br i1 %fcmptmp6, label %then7, label %ifcont8, !dbg !108
+
+then7:                                            ; preds = %then4
+  ret double 0.000000e+00, !dbg !109
+
+ifcont8:                                          ; preds = %then4
+  ret double 0.000000e+00, !dbg !110
+
+ifcont9:                                          ; preds = %ifcont
+  %base10 = load double, ptr %base, align 8, !dbg !111
+  %fcmptmp11 = fcmp oeq double %base10, 1.000000e+00, !dbg !111
+  br i1 %fcmptmp11, label %then12, label %ifcont13, !dbg !111
+
+then12:                                           ; preds = %ifcont9
+  ret double 1.000000e+00, !dbg !112
+
+ifcont13:                                         ; preds = %ifcont9
+  %base14 = load double, ptr %base, align 8, !dbg !113
+  %fcmptmp15 = fcmp olt double %base14, 0.000000e+00, !dbg !113
+  store i1 %fcmptmp15, ptr %is_negative, align 1, !dbg !113
+    #dbg_declare(ptr %is_negative, !114, !DIExpression(), !113)
+  %is_negative16 = load i1, ptr %is_negative, align 1, !dbg !115
+  br i1 %is_negative16, label %then17, label %ifcont19, !dbg !115
+
+then17:                                           ; preds = %ifcont13
+  %base18 = load double, ptr %base, align 8, !dbg !116
+  %fnegtmp = fneg double %base18, !dbg !116
+  store double %fnegtmp, ptr %base, align 8, !dbg !116
+  br label %ifcont19, !dbg !116
+
+ifcont19:                                         ; preds = %then17, %ifcont13
+  %exponent20 = load double, ptr %exponent, align 8, !dbg !117
+  %trunc = fptosi double %exponent20 to i32, !dbg !117
+  store i32 %trunc, ptr %exp_int, align 4, !dbg !117
+    #dbg_declare(ptr %exp_int, !118, !DIExpression(), !117)
+  %exponent21 = load double, ptr %exponent, align 8, !dbg !119
+  %exp_int22 = load i32, ptr %exp_int, align 4, !dbg !119
+  %promotetmp = sitofp i32 %exp_int22 to double, !dbg !119
+  %fsubtmp = fsub double %exponent21, %promotetmp, !dbg !119
+  %fcmptmp23 = fcmp oeq double %fsubtmp, 0.000000e+00, !dbg !119
+  store i1 %fcmptmp23, ptr %is_int_exp, align 1, !dbg !119
+    #dbg_declare(ptr %is_int_exp, !120, !DIExpression(), !119)
+  %is_int_exp24 = load i1, ptr %is_int_exp, align 1, !dbg !121
+  br i1 %is_int_exp24, label %then25, label %ifcont69, !dbg !121
+
+then25:                                           ; preds = %ifcont19
+  store double 1.000000e+00, ptr %result, align 8, !dbg !122
+    #dbg_declare(ptr %result, !123, !DIExpression(), !122)
+  %exp_int26 = load i32, ptr %exp_int, align 4, !dbg !124
+  store i32 %exp_int26, ptr %n, align 4, !dbg !124
+    #dbg_declare(ptr %n, !125, !DIExpression(), !124)
+  %n27 = load i32, ptr %n, align 4, !dbg !126
+  %cmptmp = icmp slt i32 %n27, 0, !dbg !126
+  store i1 %cmptmp, ptr %is_neg_exp, align 1, !dbg !126
+    #dbg_declare(ptr %is_neg_exp, !127, !DIExpression(), !126)
+  %is_neg_exp28 = load i1, ptr %is_neg_exp, align 1, !dbg !128
+  br i1 %is_neg_exp28, label %then29, label %ifcont31, !dbg !128
+
+then29:                                           ; preds = %then25
+  %n30 = load i32, ptr %n, align 4, !dbg !129
+  %negtmp = sub i32 0, %n30, !dbg !129
+  store i32 %negtmp, ptr %n, align 4, !dbg !129
+  br label %ifcont31, !dbg !129
+
+ifcont31:                                         ; preds = %then29, %then25
+  %base32 = load double, ptr %base, align 8, !dbg !130
+  store double %base32, ptr %current_base, align 8, !dbg !130
+    #dbg_declare(ptr %current_base, !131, !DIExpression(), !130)
+  br label %whilecond, !dbg !132
+
+whilecond:                                        ; preds = %ifcont41, %ifcont31
+  %n33 = load i32, ptr %n, align 4, !dbg !132
+  %cmptmp34 = icmp sgt i32 %n33, 0, !dbg !132
+  br i1 %cmptmp34, label %loop, label %afterloop, !dbg !132
+
+loop:                                             ; preds = %whilecond
+  %n35 = load i32, ptr %n, align 4, !dbg !133
+  %modtmp = srem i32 %n35, 2, !dbg !133
+  store i32 %modtmp, ptr %remainder, align 4, !dbg !133
+    #dbg_declare(ptr %remainder, !134, !DIExpression(), !133)
+  %remainder36 = load i32, ptr %remainder, align 4, !dbg !135
+  %cmptmp37 = icmp eq i32 %remainder36, 1, !dbg !135
+  br i1 %cmptmp37, label %then38, label %ifcont41, !dbg !135
+
+then38:                                           ; preds = %loop
+  %result39 = load double, ptr %result, align 8, !dbg !136
+  %current_base40 = load double, ptr %current_base, align 8, !dbg !136
+  %fmultmp = fmul double %result39, %current_base40, !dbg !136
+  store double %fmultmp, ptr %result, align 8, !dbg !136
+  br label %ifcont41, !dbg !136
+
+ifcont41:                                         ; preds = %then38, %loop
+  %current_base42 = load double, ptr %current_base, align 8, !dbg !137
+  %current_base43 = load double, ptr %current_base, align 8, !dbg !137
+  %fmultmp44 = fmul double %current_base42, %current_base43, !dbg !137
+  store double %fmultmp44, ptr %current_base, align 8, !dbg !137
+  %n45 = load i32, ptr %n, align 4, !dbg !138
+  %divtmp = sdiv i32 %n45, 2, !dbg !138
+  store i32 %divtmp, ptr %n, align 4, !dbg !138
+  br label %whilecond, !dbg !138
+
+afterloop:                                        ; preds = %whilecond
+  %is_neg_exp46 = load i1, ptr %is_neg_exp, align 1, !dbg !139
+  br i1 %is_neg_exp46, label %then47, label %ifcont49, !dbg !139
+
+then47:                                           ; preds = %afterloop
+  %result48 = load double, ptr %result, align 8, !dbg !140
+  %fdivtmp = fdiv double 1.000000e+00, %result48, !dbg !140
+  store double %fdivtmp, ptr %result, align 8, !dbg !140
+  br label %ifcont49, !dbg !140
+
+ifcont49:                                         ; preds = %then47, %afterloop
+  %is_negative50 = load i1, ptr %is_negative, align 1, !dbg !141
+  br i1 %is_negative50, label %then51, label %ifcont67, !dbg !141
+
+then51:                                           ; preds = %ifcont49
+  %exp_int52 = load i32, ptr %exp_int, align 4, !dbg !142
+  store i32 %exp_int52, ptr %exp_int_abs, align 4, !dbg !142
+    #dbg_declare(ptr %exp_int_abs, !143, !DIExpression(), !142)
+  %exp_int53 = load i32, ptr %exp_int, align 4, !dbg !144
+  %cmptmp54 = icmp slt i32 %exp_int53, 0, !dbg !144
+  br i1 %cmptmp54, label %then55, label %ifcont58, !dbg !144
+
+then55:                                           ; preds = %then51
+  %exp_int56 = load i32, ptr %exp_int, align 4, !dbg !145
+  %negtmp57 = sub i32 0, %exp_int56, !dbg !145
+  store i32 %negtmp57, ptr %exp_int_abs, align 4, !dbg !145
+  br label %ifcont58, !dbg !145
+
+ifcont58:                                         ; preds = %then55, %then51
+  %exp_int_abs59 = load i32, ptr %exp_int_abs, align 4, !dbg !146
+  %modtmp60 = srem i32 %exp_int_abs59, 2, !dbg !146
+  %cmptmp61 = icmp eq i32 %modtmp60, 1, !dbg !146
+  store i1 %cmptmp61, ptr %is_odd, align 1, !dbg !146
+    #dbg_declare(ptr %is_odd, !147, !DIExpression(), !146)
+  %is_odd62 = load i1, ptr %is_odd, align 1, !dbg !148
+  br i1 %is_odd62, label %then63, label %ifcont66, !dbg !148
+
+then63:                                           ; preds = %ifcont58
+  %result64 = load double, ptr %result, align 8, !dbg !149
+  %fnegtmp65 = fneg double %result64, !dbg !149
+  store double %fnegtmp65, ptr %result, align 8, !dbg !149
+  br label %ifcont66, !dbg !149
+
+ifcont66:                                         ; preds = %then63, %ifcont58
+  br label %ifcont67, !dbg !149
+
+ifcont67:                                         ; preds = %ifcont66, %ifcont49
+  %result68 = load double, ptr %result, align 8, !dbg !150
+  ret double %result68, !dbg !150
+
+ifcont69:                                         ; preds = %ifcont19
+  %is_negative70 = load i1, ptr %is_negative, align 1, !dbg !151
+  br i1 %is_negative70, label %then71, label %ifcont72, !dbg !151
+
+then71:                                           ; preds = %ifcont69
+  ret double 0.000000e+00, !dbg !152
+
+ifcont72:                                         ; preds = %ifcont69
+  %base73 = load double, ptr %base, align 8, !dbg !153
+  %2 = call double @stdlib.math.log(double %base73), !dbg !153
+  store double %2, ptr %log_base, align 8, !dbg !153
+    #dbg_declare(ptr %log_base, !154, !DIExpression(), !153)
+  %exponent74 = load double, ptr %exponent, align 8, !dbg !155
+  %log_base75 = load double, ptr %log_base, align 8, !dbg !155
+  %fmultmp76 = fmul double %exponent74, %log_base75, !dbg !155
+  store double %fmultmp76, ptr %exp_times_log, align 8, !dbg !155
+    #dbg_declare(ptr %exp_times_log, !156, !DIExpression(), !155)
+  %exp_times_log77 = load double, ptr %exp_times_log, align 8, !dbg !157
+  %3 = call double @stdlib.math.exp(double %exp_times_log77), !dbg !157
+  ret double %3, !dbg !157
+}
+
+define internal double @stdlib.math.exp(double %0) !dbg !158 {
+entry:
+  %i = alloca i32, align 4
+  %result = alloca double, align 8
+  %k_float = alloca double, align 8
+  %k = alloca i32, align 4
+  %sum = alloca double, align 8
+  %term = alloca double, align 8
+  %reduction_count = alloca i32, align 4
+  %is_negative = alloca i1, align 1
+  %x = alloca double, align 8
+  store double %0, ptr %x, align 8, !dbg !159
+    #dbg_declare(ptr %x, !160, !DIExpression(), !159)
+  %x1 = load double, ptr %x, align 8, !dbg !161
+  %fcmptmp = fcmp oeq double %x1, 0.000000e+00, !dbg !161
+  br i1 %fcmptmp, label %then, label %ifcont, !dbg !161
+
+then:                                             ; preds = %entry
+  ret double 1.000000e+00, !dbg !162
+
+ifcont:                                           ; preds = %entry
+  %x2 = load double, ptr %x, align 8, !dbg !163
+  %fcmptmp3 = fcmp olt double %x2, 0.000000e+00, !dbg !163
+  store i1 %fcmptmp3, ptr %is_negative, align 1, !dbg !163
+    #dbg_declare(ptr %is_negative, !164, !DIExpression(), !163)
+  %is_negative4 = load i1, ptr %is_negative, align 1, !dbg !165
+  br i1 %is_negative4, label %then5, label %ifcont7, !dbg !165
+
+then5:                                            ; preds = %ifcont
+  %x6 = load double, ptr %x, align 8, !dbg !166
+  %fnegtmp = fneg double %x6, !dbg !166
+  store double %fnegtmp, ptr %x, align 8, !dbg !166
+  br label %ifcont7, !dbg !166
+
+ifcont7:                                          ; preds = %then5, %ifcont
+  store i32 0, ptr %reduction_count, align 4, !dbg !167
+    #dbg_declare(ptr %reduction_count, !168, !DIExpression(), !167)
+  br label %whilecond, !dbg !169
+
+whilecond:                                        ; preds = %loop, %ifcont7
+  %x8 = load double, ptr %x, align 8, !dbg !169
+  %fcmptmp9 = fcmp ogt double %x8, 1.000000e+00, !dbg !169
+  br i1 %fcmptmp9, label %loop, label %afterloop, !dbg !169
+
+loop:                                             ; preds = %whilecond
+  %x10 = load double, ptr %x, align 8, !dbg !170
+  %fdivtmp = fdiv double %x10, 2.000000e+00, !dbg !170
+  store double %fdivtmp, ptr %x, align 8, !dbg !170
+  %reduction_count11 = load i32, ptr %reduction_count, align 4, !dbg !171
+  %addtmp = add i32 %reduction_count11, 1, !dbg !171
+  store i32 %addtmp, ptr %reduction_count, align 4, !dbg !171
+  br label %whilecond, !dbg !171
+
+afterloop:                                        ; preds = %whilecond
+  store double 1.000000e+00, ptr %term, align 8, !dbg !172
+    #dbg_declare(ptr %term, !173, !DIExpression(), !172)
+  store double 1.000000e+00, ptr %sum, align 8, !dbg !174
+    #dbg_declare(ptr %sum, !175, !DIExpression(), !174)
+  store i32 1, ptr %k, align 4, !dbg !176
+    #dbg_declare(ptr %k, !177, !DIExpression(), !176)
+  br label %whilecond12, !dbg !178
+
+whilecond12:                                      ; preds = %loop14, %afterloop
+  %k13 = load i32, ptr %k, align 4, !dbg !178
+  %cmptmp = icmp slt i32 %k13, 20, !dbg !178
+  br i1 %cmptmp, label %loop14, label %afterloop25, !dbg !178
+
+loop14:                                           ; preds = %whilecond12
+  %term15 = load double, ptr %term, align 8, !dbg !179
+  %x16 = load double, ptr %x, align 8, !dbg !179
+  %fmultmp = fmul double %term15, %x16, !dbg !179
+  store double %fmultmp, ptr %term, align 8, !dbg !179
+  %k17 = load i32, ptr %k, align 4, !dbg !180
+  %int2floattmp = sitofp i32 %k17 to double, !dbg !180
+  store double %int2floattmp, ptr %k_float, align 8, !dbg !180
+    #dbg_declare(ptr %k_float, !181, !DIExpression(), !180)
+  %term18 = load double, ptr %term, align 8, !dbg !182
+  %k_float19 = load double, ptr %k_float, align 8, !dbg !182
+  %fdivtmp20 = fdiv double %term18, %k_float19, !dbg !182
+  store double %fdivtmp20, ptr %term, align 8, !dbg !182
+  %sum21 = load double, ptr %sum, align 8, !dbg !183
+  %term22 = load double, ptr %term, align 8, !dbg !183
+  %faddtmp = fadd double %sum21, %term22, !dbg !183
+  store double %faddtmp, ptr %sum, align 8, !dbg !183
+  %k23 = load i32, ptr %k, align 4, !dbg !184
+  %addtmp24 = add i32 %k23, 1, !dbg !184
+  store i32 %addtmp24, ptr %k, align 4, !dbg !184
+  br label %whilecond12, !dbg !184
+
+afterloop25:                                      ; preds = %whilecond12
+  %sum26 = load double, ptr %sum, align 8, !dbg !185
+  store double %sum26, ptr %result, align 8, !dbg !185
+    #dbg_declare(ptr %result, !186, !DIExpression(), !185)
+  store i32 0, ptr %i, align 4, !dbg !187
+    #dbg_declare(ptr %i, !188, !DIExpression(), !187)
+  br label %whilecond27, !dbg !189
+
+whilecond27:                                      ; preds = %loop31, %afterloop25
+  %i28 = load i32, ptr %i, align 4, !dbg !189
+  %reduction_count29 = load i32, ptr %reduction_count, align 4, !dbg !189
+  %cmptmp30 = icmp slt i32 %i28, %reduction_count29, !dbg !189
+  br i1 %cmptmp30, label %loop31, label %afterloop37, !dbg !189
+
+loop31:                                           ; preds = %whilecond27
+  %result32 = load double, ptr %result, align 8, !dbg !190
+  %result33 = load double, ptr %result, align 8, !dbg !190
+  %fmultmp34 = fmul double %result32, %result33, !dbg !190
+  store double %fmultmp34, ptr %result, align 8, !dbg !190
+  %i35 = load i32, ptr %i, align 4, !dbg !191
+  %addtmp36 = add i32 %i35, 1, !dbg !191
+  store i32 %addtmp36, ptr %i, align 4, !dbg !191
+  br label %whilecond27, !dbg !191
+
+afterloop37:                                      ; preds = %whilecond27
+  %is_negative38 = load i1, ptr %is_negative, align 1, !dbg !192
+  br i1 %is_negative38, label %then39, label %ifcont42, !dbg !192
+
+then39:                                           ; preds = %afterloop37
+  %result40 = load double, ptr %result, align 8, !dbg !193
+  %fdivtmp41 = fdiv double 1.000000e+00, %result40, !dbg !193
+  store double %fdivtmp41, ptr %result, align 8, !dbg !193
+  br label %ifcont42, !dbg !193
+
+ifcont42:                                         ; preds = %then39, %afterloop37
+  %result43 = load double, ptr %result, align 8, !dbg !194
+  ret double %result43, !dbg !194
+}
+
+declare ptr @memset(ptr, i32, i64)
+
+declare ptr @GetStdHandle(i32)
+
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+
+define i32 @print(i32 %0) #0 {
+entry:
+  %buffer = alloca [12 x i8], align 1, !dbg !13
+  %temp = alloca [12 x i8], align 1, !dbg !13
+  %bytesWritten = alloca i32, align 4, !dbg !13
+  %1 = call ptr @memset(ptr %buffer, i32 0, i64 12), !dbg !13
+  %2 = call ptr @memset(ptr %temp, i32 0, i64 12), !dbg !13
+  %3 = icmp eq i32 %0, 0, !dbg !13
+  br i1 %3, label %zero_case, label %non_zero, !dbg !13
+
+zero_case:                                        ; preds = %entry
+  %4 = getelementptr inbounds [12 x i8], ptr %buffer, i32 0, i32 0, !dbg !13
+  store i8 48, ptr %4, align 1, !dbg !13
+  br label %format_done, !dbg !13
+
+non_zero:                                         ; preds = %entry
+  %5 = icmp slt i32 %0, 0, !dbg !13
+  br i1 %5, label %negative, label %positive, !dbg !13
+
+format_done:                                      ; preds = %reverse_loop, %zero_case
+  %final_offset = phi i32 [ 0, %zero_case ], [ %offset_in_reverse, %reverse_loop ], !dbg !13
+  %final_digit_count = phi i32 [ 1, %zero_case ], [ %digit_count_in_reverse, %reverse_loop ], !dbg !13
+  %6 = add i32 %final_offset, %final_digit_count, !dbg !13
+  %7 = call ptr @GetStdHandle(i32 -11), !dbg !13
+  %8 = call i32 @WriteFile(ptr %7, ptr %buffer, i32 %6, ptr %bytesWritten, ptr null), !dbg !13
+  %9 = call i32 @WriteFile(ptr %7, ptr @.str.newline, i32 1, ptr %bytesWritten, ptr null), !dbg !13
+  ret i32 0, !dbg !13
+
+negative:                                         ; preds = %non_zero
+  %10 = getelementptr inbounds [12 x i8], ptr %buffer, i32 0, i32 0, !dbg !13
+  store i8 45, ptr %10, align 1, !dbg !13
+  %11 = sub i32 0, %0, !dbg !13
+  br label %extract_digits, !dbg !13
+
+positive:                                         ; preds = %non_zero
+  br label %extract_digits, !dbg !13
+
+extract_digits:                                   ; preds = %positive, %negative
+  %value_abs = phi i32 [ %11, %negative ], [ %0, %positive ], !dbg !13
+  %start_offset = phi i32 [ 1, %negative ], [ 0, %positive ], !dbg !13
+  br label %digit_loop, !dbg !13
+
+digit_loop:                                       ; preds = %digit_loop_body, %extract_digits
+  %remaining = phi i32 [ %value_abs, %extract_digits ], [ %17, %digit_loop_body ], !dbg !13
+  %temp_idx = phi i32 [ 0, %extract_digits ], [ %18, %digit_loop_body ], !dbg !13
+  %12 = icmp ne i32 %remaining, 0, !dbg !13
+  br i1 %12, label %digit_loop_body, label %reverse_loop, !dbg !13
+
+digit_loop_body:                                  ; preds = %digit_loop
+  %13 = srem i32 %remaining, 10, !dbg !13
+  %14 = add i32 %13, 48, !dbg !13
+  %15 = trunc i32 %14 to i8, !dbg !13
+  %16 = getelementptr inbounds [12 x i8], ptr %temp, i32 0, i32 %temp_idx, !dbg !13
+  store i8 %15, ptr %16, align 1, !dbg !13
+  %17 = sdiv i32 %remaining, 10, !dbg !13
+  %18 = add i32 %temp_idx, 1, !dbg !13
+  br label %digit_loop, !dbg !13
+
+reverse_loop:                                     ; preds = %reverse_body, %digit_loop
+  %reverse_idx = phi i32 [ 0, %digit_loop ], [ %26, %reverse_body ], !dbg !13
+  %offset_in_reverse = phi i32 [ %start_offset, %digit_loop ], [ %offset_in_reverse, %reverse_body ], !dbg !13
+  %digit_count_in_reverse = phi i32 [ %temp_idx, %digit_loop ], [ %digit_count_in_reverse, %reverse_body ], !dbg !13
+  %19 = icmp slt i32 %reverse_idx, %digit_count_in_reverse, !dbg !13
+  br i1 %19, label %reverse_body, label %format_done, !dbg !13
+
+reverse_body:                                     ; preds = %reverse_loop
+  %20 = sub i32 %digit_count_in_reverse, %reverse_idx, !dbg !13
+  %21 = sub i32 %20, 1, !dbg !13
+  %22 = getelementptr inbounds [12 x i8], ptr %temp, i32 0, i32 %21, !dbg !13
+  %23 = load i8, ptr %22, align 1, !dbg !13
+  %24 = add i32 %offset_in_reverse, %reverse_idx, !dbg !13
+  %25 = getelementptr inbounds [12 x i8], ptr %buffer, i32 0, i32 %24, !dbg !13
+  store i8 %23, ptr %25, align 1, !dbg !13
+  %26 = add i32 %reverse_idx, 1, !dbg !13
+  br label %reverse_loop, !dbg !13
+}
+
+define i32 @print_float(double %0, i32 %1) #0 {
+entry:
+  %float_value_local = alloca double, align 8, !dbg !13
+  store double %0, ptr %float_value_local, align 8, !dbg !13
+  %float_value = load double, ptr %float_value_local, align 8, !dbg !13
+  %buffer = alloca [32 x i8], align 1, !dbg !13
+  %bytesWritten = alloca i32, align 4, !dbg !13
+  %2 = call ptr @memset(ptr %buffer, i32 0, i64 32), !dbg !13
+  %3 = fcmp oeq double %float_value, 0.000000e+00, !dbg !13
+  br i1 %3, label %zero_case, label %non_zero, !dbg !13
+
+zero_case:                                        ; preds = %entry
+  %4 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 0, !dbg !13
+  store i8 48, ptr %4, align 1, !dbg !13
+  %5 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 1, !dbg !13
+  store i8 46, ptr %5, align 1, !dbg !13
+  br label %zero_fill_loop, !dbg !13
+
+non_zero:                                         ; preds = %entry
+  %pos = alloca i32, align 4, !dbg !13
+  store i32 0, ptr %pos, align 4, !dbg !13
+  %6 = fcmp olt double %float_value, 0.000000e+00, !dbg !13
+  br i1 %6, label %negative, label %positive, !dbg !13
+
+format_done:                                      ; preds = %frac_digits_done, %zero_fill_done
+  %final_float_length = phi i32 [ %14, %zero_fill_done ], [ %81, %frac_digits_done ], !dbg !13
+  %7 = call ptr @GetStdHandle(i32 -11), !dbg !13
+  %8 = call i32 @WriteFile(ptr %7, ptr %buffer, i32 %final_float_length, ptr %bytesWritten, ptr null), !dbg !13
+  %9 = call i32 @WriteFile(ptr %7, ptr @.str.newline, i32 1, ptr %bytesWritten, ptr null), !dbg !13
+  ret i32 0, !dbg !13
+
+zero_fill_loop:                                   ; preds = %zero_fill_body, %zero_case
+  %zero_fill_idx = phi i32 [ 0, %zero_case ], [ %13, %zero_fill_body ], !dbg !13
+  %10 = icmp slt i32 %zero_fill_idx, %1, !dbg !13
+  br i1 %10, label %zero_fill_body, label %zero_fill_done, !dbg !13
+
+zero_fill_body:                                   ; preds = %zero_fill_loop
+  %11 = add i32 2, %zero_fill_idx, !dbg !13
+  %12 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %11, !dbg !13
+  store i8 48, ptr %12, align 1, !dbg !13
+  %13 = add i32 %zero_fill_idx, 1, !dbg !13
+  br label %zero_fill_loop, !dbg !13
+
+zero_fill_done:                                   ; preds = %zero_fill_loop
+  %14 = add i32 2, %1, !dbg !13
+  br label %format_done, !dbg !13
+
+negative:                                         ; preds = %non_zero
+  %15 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 0, !dbg !13
+  store i8 45, ptr %15, align 1, !dbg !13
+  store i32 1, ptr %pos, align 4, !dbg !13
+  %16 = call double @llvm.fabs.f64(double %float_value), !dbg !13
+  br label %extract_int, !dbg !13
+
+positive:                                         ; preds = %non_zero
+  br label %extract_int, !dbg !13
+
+extract_int:                                      ; preds = %positive, %negative
+  %work_value = phi double [ %16, %negative ], [ %float_value, %positive ], !dbg !13
+  %int_part_trunc = fptosi double %work_value to i32, !dbg !13
+  %int_part_trunc_float = sitofp i32 %int_part_trunc to double, !dbg !13
+  %frac_part_initial = fsub double %work_value, %int_part_trunc_float, !dbg !13
+  %17 = fcmp ogt double %frac_part_initial, 9.999000e-01, !dbg !13
+  %int_part_rounded = add i32 %int_part_trunc, 1, !dbg !13
+  %int_part = select i1 %17, i32 %int_part_rounded, i32 %int_part_trunc, !dbg !13
+  %int_part_float = sitofp i32 %int_part to double, !dbg !13
+  %frac_part = fsub double %work_value, %int_part_float, !dbg !13
+  %float_temp = alloca [20 x i8], align 1, !dbg !13
+  %18 = call ptr @memset(ptr %float_temp, i32 0, i64 20), !dbg !13
+  %float_temp_idx = alloca i32, align 4, !dbg !13
+  store i32 19, ptr %float_temp_idx, align 4, !dbg !13
+  %19 = icmp eq i32 %int_part, 0, !dbg !13
+  br i1 %19, label %int_zero, label %int_nonzero, !dbg !13
+
+int_zero:                                         ; preds = %extract_int
+  %20 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 19, !dbg !13
+  store i8 48, ptr %20, align 1, !dbg !13
+  store i32 18, ptr %float_temp_idx, align 4, !dbg !13
+  br label %int_digits_done, !dbg !13
+
+int_nonzero:                                      ; preds = %extract_int
+  br label %int_digit_loop, !dbg !13
+
+int_digits_done:                                  ; preds = %int_digit_loop, %int_zero
+  %final_temp_idx = phi i32 [ %current_temp_idx, %int_digit_loop ], [ 18, %int_zero ], !dbg !13
+  %21 = add i32 %final_temp_idx, 1, !dbg !13
+  %22 = sub i32 20, %21, !dbg !13
+  br label %copy_int_loop, !dbg !13
+
+int_digit_loop:                                   ; preds = %int_digit_body, %int_nonzero
+  %remaining_int = phi i32 [ %int_part, %int_nonzero ], [ %28, %int_digit_body ], !dbg !13
+  %current_temp_idx = phi i32 [ 19, %int_nonzero ], [ %29, %int_digit_body ], !dbg !13
+  %23 = icmp ne i32 %remaining_int, 0, !dbg !13
+  br i1 %23, label %int_digit_body, label %int_digits_done, !dbg !13
+
+int_digit_body:                                   ; preds = %int_digit_loop
+  %24 = srem i32 %remaining_int, 10, !dbg !13
+  %25 = add i32 %24, 48, !dbg !13
+  %26 = trunc i32 %25 to i8, !dbg !13
+  %27 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 %current_temp_idx, !dbg !13
+  store i8 %26, ptr %27, align 1, !dbg !13
+  %28 = sdiv i32 %remaining_int, 10, !dbg !13
+  %29 = sub i32 %current_temp_idx, 1, !dbg !13
+  br label %int_digit_loop, !dbg !13
+
+copy_int_loop:                                    ; preds = %copy_int_body, %int_digits_done
+  %copy_idx = phi i32 [ 0, %int_digits_done ], [ %36, %copy_int_body ], !dbg !13
+  %30 = icmp slt i32 %copy_idx, %22, !dbg !13
+  br i1 %30, label %copy_int_body, label %copy_int_done, !dbg !13
+
+copy_int_body:                                    ; preds = %copy_int_loop
+  %current_pos = load i32, ptr %pos, align 4, !dbg !13
+  %31 = add i32 %21, %copy_idx, !dbg !13
+  %32 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 %31, !dbg !13
+  %33 = load i8, ptr %32, align 1, !dbg !13
+  %34 = add i32 %current_pos, %copy_idx, !dbg !13
+  %35 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %34, !dbg !13
+  store i8 %33, ptr %35, align 1, !dbg !13
+  %36 = add i32 %copy_idx, 1, !dbg !13
+  br label %copy_int_loop, !dbg !13
+
+copy_int_done:                                    ; preds = %copy_int_loop
+  %pos_after_int = load i32, ptr %pos, align 4, !dbg !13
+  %37 = add i32 %pos_after_int, %22, !dbg !13
+  store i32 %37, ptr %pos, align 4, !dbg !13
+  %38 = load i32, ptr %pos, align 4, !dbg !13
+  %39 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %38, !dbg !13
+  store i8 46, ptr %39, align 1, !dbg !13
+  %40 = add i32 %38, 1, !dbg !13
+  store i32 %40, ptr %pos, align 4, !dbg !13
+  br label %scale_loop, !dbg !13
+
+scale_loop:                                       ; preds = %scale_body, %copy_int_done
+  %scale_idx = phi i32 [ 0, %copy_int_done ], [ %42, %scale_body ], !dbg !13
+  %scale_accum = phi double [ 1.000000e+00, %copy_int_done ], [ %next_scale, %scale_body ], !dbg !13
+  %41 = icmp slt i32 %scale_idx, %1, !dbg !13
+  br i1 %41, label %scale_body, label %scale_done, !dbg !13
+
+scale_body:                                       ; preds = %scale_loop
+  %next_scale = fmul double %scale_accum, 1.000000e+01, !dbg !13
+  %42 = add i32 %scale_idx, 1, !dbg !13
+  br label %scale_loop, !dbg !13
+
+scale_done:                                       ; preds = %scale_loop
+  %frac_scaled = fmul double %frac_part, %scale_accum, !dbg !13
+  %frac_rounded = fadd double %frac_scaled, 5.000000e-01, !dbg !13
+  %frac_int = fptosi double %frac_rounded to i64, !dbg !13
+  br label %frac_overflow_check, !dbg !13
+
+frac_overflow_check:                              ; preds = %scale_done
+  %43 = fptosi double %scale_accum to i64, !dbg !13
+  %44 = icmp sge i64 %frac_int, %43, !dbg !13
+  br i1 %44, label %frac_overflow, label %frac_no_overflow, !dbg !13
+
+frac_overflow:                                    ; preds = %frac_overflow_check
+  %45 = add i32 %int_part, 1, !dbg !13
+  %46 = load i32, ptr %pos, align 4, !dbg !13
+  %47 = icmp eq i32 %46, 1, !dbg !13
+  %48 = select i1 %47, i32 1, i32 0, !dbg !13
+  %49 = call ptr @memset(ptr %float_temp, i32 0, i64 20), !dbg !13
+  store i32 19, ptr %float_temp_idx, align 4, !dbg !13
+  br label %overflow_int_loop, !dbg !13
+
+frac_no_overflow:                                 ; preds = %overflow_copy_done, %frac_overflow_check
+  %final_frac_int = phi i64 [ 0, %overflow_copy_done ], [ %frac_int, %frac_overflow_check ], !dbg !13
+  %50 = sub i32 %1, 1, !dbg !13
+  br label %frac_digit_loop, !dbg !13
+
+overflow_int_loop:                                ; preds = %overflow_int_body, %frac_overflow
+  %overflow_remaining = phi i32 [ %45, %frac_overflow ], [ %56, %overflow_int_body ], !dbg !13
+  %overflow_temp_idx = phi i32 [ 19, %frac_overflow ], [ %57, %overflow_int_body ], !dbg !13
+  %51 = icmp ne i32 %overflow_remaining, 0, !dbg !13
+  br i1 %51, label %overflow_int_body, label %overflow_int_done, !dbg !13
+
+overflow_int_body:                                ; preds = %overflow_int_loop
+  %52 = srem i32 %overflow_remaining, 10, !dbg !13
+  %53 = add i32 %52, 48, !dbg !13
+  %54 = trunc i32 %53 to i8, !dbg !13
+  %55 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 %overflow_temp_idx, !dbg !13
+  store i8 %54, ptr %55, align 1, !dbg !13
+  %56 = sdiv i32 %overflow_remaining, 10, !dbg !13
+  %57 = sub i32 %overflow_temp_idx, 1, !dbg !13
+  br label %overflow_int_loop, !dbg !13
+
+overflow_int_done:                                ; preds = %overflow_int_loop
+  %58 = add i32 %overflow_temp_idx, 1, !dbg !13
+  %59 = sub i32 20, %58, !dbg !13
+  br label %overflow_copy_loop, !dbg !13
+
+overflow_copy_loop:                               ; preds = %overflow_copy_body, %overflow_int_done
+  %overflow_copy_idx = phi i32 [ 0, %overflow_int_done ], [ %66, %overflow_copy_body ], !dbg !13
+  %60 = icmp slt i32 %overflow_copy_idx, %59, !dbg !13
+  br i1 %60, label %overflow_copy_body, label %overflow_copy_done, !dbg !13
+
+overflow_copy_body:                               ; preds = %overflow_copy_loop
+  %61 = add i32 %58, %overflow_copy_idx, !dbg !13
+  %62 = getelementptr inbounds [20 x i8], ptr %float_temp, i32 0, i32 %61, !dbg !13
+  %63 = load i8, ptr %62, align 1, !dbg !13
+  %64 = add i32 %48, %overflow_copy_idx, !dbg !13
+  %65 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %64, !dbg !13
+  store i8 %63, ptr %65, align 1, !dbg !13
+  %66 = add i32 %overflow_copy_idx, 1, !dbg !13
+  br label %overflow_copy_loop, !dbg !13
+
+overflow_copy_done:                               ; preds = %overflow_copy_loop
+  %67 = add i32 %48, %59, !dbg !13
+  store i32 %67, ptr %pos, align 4, !dbg !13
+  %68 = load i32, ptr %pos, align 4, !dbg !13
+  %69 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %68, !dbg !13
+  store i8 46, ptr %69, align 1, !dbg !13
+  %70 = add i32 %68, 1, !dbg !13
+  store i32 %70, ptr %pos, align 4, !dbg !13
+  br label %frac_no_overflow, !dbg !13
+
+frac_digit_loop:                                  ; preds = %frac_digit_body, %frac_no_overflow
+  %frac_idx = phi i32 [ %50, %frac_no_overflow ], [ %79, %frac_digit_body ], !dbg !13
+  %frac_remaining = phi i64 [ %final_frac_int, %frac_no_overflow ], [ %78, %frac_digit_body ], !dbg !13
+  %71 = icmp sge i32 %frac_idx, 0, !dbg !13
+  br i1 %71, label %frac_digit_body, label %frac_digits_done, !dbg !13
+
+frac_digit_body:                                  ; preds = %frac_digit_loop
+  %72 = srem i64 %frac_remaining, 10, !dbg !13
+  %73 = add i64 %72, 48, !dbg !13
+  %74 = trunc i64 %73 to i8, !dbg !13
+  %75 = load i32, ptr %pos, align 4, !dbg !13
+  %76 = add i32 %75, %frac_idx, !dbg !13
+  %77 = getelementptr inbounds [32 x i8], ptr %buffer, i32 0, i32 %76, !dbg !13
+  store i8 %74, ptr %77, align 1, !dbg !13
+  %78 = sdiv i64 %frac_remaining, 10, !dbg !13
+  %79 = sub i32 %frac_idx, 1, !dbg !13
+  br label %frac_digit_loop, !dbg !13
+
+frac_digits_done:                                 ; preds = %frac_digit_loop
+  %80 = load i32, ptr %pos, align 4, !dbg !13
+  %81 = add i32 %80, %1, !dbg !13
+  br label %format_done, !dbg !13
+}
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare double @llvm.fabs.f64(double) #1
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
+
+attributes #0 = { "no-builtin-memset" }
+attributes #1 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }
+
+!llvm.dbg.cu = !{!0}
+!llvm.module.flags = !{!2, !3}
+
+!0 = distinct !DICompileUnit(language: DW_LANG_C, file: !1, producer: "Maxon Compiler", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)
+!1 = !DIFile(filename: "test.maxon", directory: ".")
+!2 = !{i32 2, !"CodeView", i32 1}
+!3 = !{i32 2, !"Debug Info Version", i32 3}
+!4 = distinct !DISubprogram(name: "main", linkageName: "main", scope: !1, file: !1, line: 2, type: !5, scopeLine: 2, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
+!5 = !DISubroutineType(types: !6)
+!6 = !{!7}
+!7 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
+!8 = !{}
+!9 = !DILocation(line: 4, column: 5, scope: !4)
+!10 = !DILocalVariable(name: "int_val", scope: !4, file: !1, line: 4, type: !7, align: 32)
+!11 = !DILocation(line: 5, column: 5, scope: !4)
+!12 = !DILocalVariable(name: "r_int", scope: !4, file: !1, line: 5, type: !7, align: 32)
+!13 = !DILocation(line: 6, column: 5, scope: !4)
+!14 = !DILocation(line: 8, column: 5, scope: !4)
+!15 = !DILocalVariable(name: "r_literal", scope: !4, file: !1, line: 8, type: !7, align: 32)
+!16 = !DILocation(line: 9, column: 5, scope: !4)
+!17 = !DILocation(line: 12, column: 5, scope: !4)
+!18 = !DILocalVariable(name: "test_val", scope: !4, file: !1, line: 12, type: !7, align: 32)
+!19 = !DILocation(line: 13, column: 5, scope: !4)
+!20 = !DILocalVariable(name: "log2_result", scope: !4, file: !1, line: 13, type: !7, align: 32)
+!21 = !DILocation(line: 14, column: 5, scope: !4)
+!22 = !DILocalVariable(name: "log_result", scope: !4, file: !1, line: 14, type: !7, align: 32)
+!23 = !DILocation(line: 15, column: 5, scope: !4)
+!24 = !DILocalVariable(name: "diff", scope: !4, file: !1, line: 15, type: !7, align: 32)
+!25 = !DILocation(line: 18, column: 5, scope: !4)
+!26 = !DILocalVariable(name: "abs_diff", scope: !4, file: !1, line: 18, type: !7, align: 32)
+!27 = !DILocation(line: 19, column: 5, scope: !4)
+!28 = !DILocation(line: 20, column: 18, scope: !4)
+!29 = !DILocation(line: 23, column: 5, scope: !4)
+!30 = !DILocation(line: 24, column: 9, scope: !4)
+!31 = !DILocation(line: 28, column: 5, scope: !4)
+!32 = !DILocalVariable(name: "exponent", scope: !4, file: !1, line: 28, type: !7, align: 32)
+!33 = !DILocation(line: 29, column: 5, scope: !4)
+!34 = !DILocalVariable(name: "power_val", scope: !4, file: !1, line: 29, type: !7, align: 32)
+!35 = !DILocation(line: 30, column: 5, scope: !4)
+!36 = !DILocalVariable(name: "r_pow", scope: !4, file: !1, line: 30, type: !7, align: 32)
+!37 = !DILocation(line: 31, column: 5, scope: !4)
+!38 = !DILocation(line: 33, column: 5, scope: !4)
+!39 = distinct !DISubprogram(name: "log", linkageName: "log", scope: !1, file: !1, line: 7, type: !40, scopeLine: 7, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
+!40 = !DISubroutineType(types: !41)
+!41 = !{!7, !7}
+!42 = !DILocation(line: 7, column: 14, scope: !39)
+!43 = !DILocalVariable(name: "x", arg: 1, scope: !39, file: !1, line: 7, type: !7)
+!44 = !DILocation(line: 9, column: 5, scope: !39)
+!45 = !DILocation(line: 10, column: 9, scope: !39)
+!46 = !DILocation(line: 13, column: 5, scope: !39)
+!47 = !DILocation(line: 14, column: 9, scope: !39)
+!48 = !DILocation(line: 19, column: 5, scope: !39)
+!49 = !DILocalVariable(name: "n", scope: !39, file: !1, line: 19, type: !7, align: 32)
+!50 = !DILocation(line: 20, column: 5, scope: !39)
+!51 = !DILocalVariable(name: "y", scope: !39, file: !1, line: 20, type: !7, align: 32)
+!52 = !DILocation(line: 23, column: 5, scope: !39)
+!53 = !DILocation(line: 24, column: 11, scope: !39)
+!54 = !DILocation(line: 25, column: 11, scope: !39)
+!55 = !DILocation(line: 28, column: 5, scope: !39)
+!56 = !DILocation(line: 29, column: 11, scope: !39)
+!57 = !DILocation(line: 30, column: 11, scope: !39)
+!58 = !DILocation(line: 35, column: 5, scope: !39)
+!59 = !DILocalVariable(name: "z", scope: !39, file: !1, line: 35, type: !7, align: 32)
+!60 = !DILocation(line: 36, column: 5, scope: !39)
+!61 = !DILocalVariable(name: "z_squared", scope: !39, file: !1, line: 36, type: !7, align: 32)
+!62 = !DILocation(line: 37, column: 5, scope: !39)
+!63 = !DILocalVariable(name: "term", scope: !39, file: !1, line: 37, type: !7, align: 32)
+!64 = !DILocation(line: 38, column: 5, scope: !39)
+!65 = !DILocalVariable(name: "sum", scope: !39, file: !1, line: 38, type: !7, align: 32)
+!66 = !DILocation(line: 39, column: 5, scope: !39)
+!67 = !DILocalVariable(name: "k", scope: !39, file: !1, line: 39, type: !7, align: 32)
+!68 = !DILocation(line: 42, column: 5, scope: !39)
+!69 = !DILocation(line: 43, column: 14, scope: !39)
+!70 = !DILocation(line: 44, column: 9, scope: !39)
+!71 = !DILocalVariable(name: "divisor", scope: !39, file: !1, line: 44, type: !7, align: 32)
+!72 = !DILocation(line: 45, column: 9, scope: !39)
+!73 = !DILocalVariable(name: "divisor_float", scope: !39, file: !1, line: 45, type: !7, align: 32)
+!74 = !DILocation(line: 46, column: 13, scope: !39)
+!75 = !DILocation(line: 47, column: 11, scope: !39)
+!76 = !DILocation(line: 50, column: 5, scope: !39)
+!77 = !DILocalVariable(name: "result", scope: !39, file: !1, line: 50, type: !7, align: 32)
+!78 = !DILocation(line: 54, column: 5, scope: !39)
+!79 = !DILocalVariable(name: "log2", scope: !39, file: !1, line: 54, type: !7, align: 32)
+!80 = !DILocation(line: 55, column: 5, scope: !39)
+!81 = !DILocalVariable(name: "n_float", scope: !39, file: !1, line: 55, type: !7, align: 32)
+!82 = !DILocation(line: 56, column: 12, scope: !39)
+!83 = !DILocation(line: 58, column: 5, scope: !39)
+!84 = distinct !DISubprogram(name: "log2", linkageName: "log2", scope: !1, file: !1, line: 7, type: !40, scopeLine: 7, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
+!85 = !DILocation(line: 7, column: 15, scope: !84)
+!86 = !DILocalVariable(name: "x", arg: 1, scope: !84, file: !1, line: 7, type: !7)
+!87 = !DILocation(line: 9, column: 5, scope: !84)
+!88 = !DILocation(line: 10, column: 9, scope: !84)
+!89 = !DILocation(line: 13, column: 5, scope: !84)
+!90 = !DILocation(line: 14, column: 9, scope: !84)
+!91 = !DILocation(line: 18, column: 5, scope: !84)
+!92 = !DILocalVariable(name: "ln_x", scope: !84, file: !1, line: 18, type: !7, align: 32)
+!93 = !DILocation(line: 19, column: 5, scope: !84)
+!94 = !DILocalVariable(name: "ln_2", scope: !84, file: !1, line: 19, type: !7, align: 32)
+!95 = !DILocation(line: 20, column: 5, scope: !84)
+!96 = !DILocalVariable(name: "result", scope: !84, file: !1, line: 20, type: !7, align: 32)
+!97 = !DILocation(line: 21, column: 5, scope: !84)
+!98 = distinct !DISubprogram(name: "pow", linkageName: "pow", scope: !1, file: !1, line: 7, type: !99, scopeLine: 7, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
+!99 = !DISubroutineType(types: !100)
+!100 = !{!7, !7, !7}
+!101 = !DILocation(line: 7, column: 14, scope: !98)
+!102 = !DILocalVariable(name: "base", arg: 1, scope: !98, file: !1, line: 7, type: !7)
+!103 = !DILocation(line: 7, column: 26, scope: !98)
+!104 = !DILocalVariable(name: "exponent", arg: 2, scope: !98, file: !1, line: 7, type: !7)
+!105 = !DILocation(line: 9, column: 5, scope: !98)
+!106 = !DILocation(line: 10, column: 9, scope: !98)
+!107 = !DILocation(line: 13, column: 5, scope: !98)
+!108 = !DILocation(line: 14, column: 9, scope: !98)
+!109 = !DILocation(line: 15, column: 13, scope: !98)
+!110 = !DILocation(line: 18, column: 9, scope: !98)
+!111 = !DILocation(line: 21, column: 5, scope: !98)
+!112 = !DILocation(line: 22, column: 9, scope: !98)
+!113 = !DILocation(line: 26, column: 5, scope: !98)
+!114 = !DILocalVariable(name: "is_negative", scope: !98, file: !1, line: 26, type: !7, align: 32)
+!115 = !DILocation(line: 27, column: 5, scope: !98)
+!116 = !DILocation(line: 28, column: 14, scope: !98)
+!117 = !DILocation(line: 32, column: 5, scope: !98)
+!118 = !DILocalVariable(name: "exp_int", scope: !98, file: !1, line: 32, type: !7, align: 32)
+!119 = !DILocation(line: 33, column: 5, scope: !98)
+!120 = !DILocalVariable(name: "is_int_exp", scope: !98, file: !1, line: 33, type: !7, align: 32)
+!121 = !DILocation(line: 35, column: 5, scope: !98)
+!122 = !DILocation(line: 37, column: 9, scope: !98)
+!123 = !DILocalVariable(name: "result", scope: !98, file: !1, line: 37, type: !7, align: 32)
+!124 = !DILocation(line: 38, column: 9, scope: !98)
+!125 = !DILocalVariable(name: "n", scope: !98, file: !1, line: 38, type: !7, align: 32)
+!126 = !DILocation(line: 39, column: 9, scope: !98)
+!127 = !DILocalVariable(name: "is_neg_exp", scope: !98, file: !1, line: 39, type: !7, align: 32)
+!128 = !DILocation(line: 40, column: 9, scope: !98)
+!129 = !DILocation(line: 41, column: 15, scope: !98)
+!130 = !DILocation(line: 44, column: 9, scope: !98)
+!131 = !DILocalVariable(name: "current_base", scope: !98, file: !1, line: 44, type: !7, align: 32)
+!132 = !DILocation(line: 45, column: 9, scope: !98)
+!133 = !DILocation(line: 46, column: 13, scope: !98)
+!134 = !DILocalVariable(name: "remainder", scope: !98, file: !1, line: 46, type: !7, align: 32)
+!135 = !DILocation(line: 47, column: 13, scope: !98)
+!136 = !DILocation(line: 48, column: 24, scope: !98)
+!137 = !DILocation(line: 50, column: 26, scope: !98)
+!138 = !DILocation(line: 51, column: 15, scope: !98)
+!139 = !DILocation(line: 54, column: 9, scope: !98)
+!140 = !DILocation(line: 55, column: 20, scope: !98)
+!141 = !DILocation(line: 59, column: 9, scope: !98)
+!142 = !DILocation(line: 60, column: 13, scope: !98)
+!143 = !DILocalVariable(name: "exp_int_abs", scope: !98, file: !1, line: 60, type: !7, align: 32)
+!144 = !DILocation(line: 61, column: 13, scope: !98)
+!145 = !DILocation(line: 62, column: 29, scope: !98)
+!146 = !DILocation(line: 64, column: 13, scope: !98)
+!147 = !DILocalVariable(name: "is_odd", scope: !98, file: !1, line: 64, type: !7, align: 32)
+!148 = !DILocation(line: 65, column: 13, scope: !98)
+!149 = !DILocation(line: 66, column: 24, scope: !98)
+!150 = !DILocation(line: 70, column: 9, scope: !98)
+!151 = !DILocation(line: 75, column: 5, scope: !98)
+!152 = !DILocation(line: 76, column: 9, scope: !98)
+!153 = !DILocation(line: 79, column: 5, scope: !98)
+!154 = !DILocalVariable(name: "log_base", scope: !98, file: !1, line: 79, type: !7, align: 32)
+!155 = !DILocation(line: 80, column: 5, scope: !98)
+!156 = !DILocalVariable(name: "exp_times_log", scope: !98, file: !1, line: 80, type: !7, align: 32)
+!157 = !DILocation(line: 81, column: 5, scope: !98)
+!158 = distinct !DISubprogram(name: "exp", linkageName: "exp", scope: !1, file: !1, line: 7, type: !40, scopeLine: 7, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
+!159 = !DILocation(line: 7, column: 14, scope: !158)
+!160 = !DILocalVariable(name: "x", arg: 1, scope: !158, file: !1, line: 7, type: !7)
+!161 = !DILocation(line: 9, column: 5, scope: !158)
+!162 = !DILocation(line: 10, column: 9, scope: !158)
+!163 = !DILocation(line: 15, column: 5, scope: !158)
+!164 = !DILocalVariable(name: "is_negative", scope: !158, file: !1, line: 15, type: !7, align: 32)
+!165 = !DILocation(line: 16, column: 5, scope: !158)
+!166 = !DILocation(line: 17, column: 11, scope: !158)
+!167 = !DILocation(line: 21, column: 5, scope: !158)
+!168 = !DILocalVariable(name: "reduction_count", scope: !158, file: !1, line: 21, type: !7, align: 32)
+!169 = !DILocation(line: 22, column: 5, scope: !158)
+!170 = !DILocation(line: 23, column: 11, scope: !158)
+!171 = !DILocation(line: 24, column: 25, scope: !158)
+!172 = !DILocation(line: 28, column: 5, scope: !158)
+!173 = !DILocalVariable(name: "term", scope: !158, file: !1, line: 28, type: !7, align: 32)
+!174 = !DILocation(line: 29, column: 5, scope: !158)
+!175 = !DILocalVariable(name: "sum", scope: !158, file: !1, line: 29, type: !7, align: 32)
+!176 = !DILocation(line: 30, column: 5, scope: !158)
+!177 = !DILocalVariable(name: "k", scope: !158, file: !1, line: 30, type: !7, align: 32)
+!178 = !DILocation(line: 33, column: 5, scope: !158)
+!179 = !DILocation(line: 34, column: 14, scope: !158)
+!180 = !DILocation(line: 35, column: 9, scope: !158)
+!181 = !DILocalVariable(name: "k_float", scope: !158, file: !1, line: 35, type: !7, align: 32)
+!182 = !DILocation(line: 36, column: 14, scope: !158)
+!183 = !DILocation(line: 37, column: 13, scope: !158)
+!184 = !DILocation(line: 38, column: 11, scope: !158)
+!185 = !DILocation(line: 42, column: 5, scope: !158)
+!186 = !DILocalVariable(name: "result", scope: !158, file: !1, line: 42, type: !7, align: 32)
+!187 = !DILocation(line: 43, column: 5, scope: !158)
+!188 = !DILocalVariable(name: "i", scope: !158, file: !1, line: 43, type: !7, align: 32)
+!189 = !DILocation(line: 44, column: 5, scope: !158)
+!190 = !DILocation(line: 45, column: 16, scope: !158)
+!191 = !DILocation(line: 46, column: 11, scope: !158)
+!192 = !DILocation(line: 50, column: 5, scope: !158)
+!193 = !DILocation(line: 51, column: 16, scope: !158)
+!194 = !DILocation(line: 54, column: 5, scope: !158)
+---
+ExitCode: 0
+Stdout: ```
+5.0
+6.0
+5.0
+7.0
+```
+OptimizedInstructionCount: 3685
+UnoptimizedInstructionCount: 3685

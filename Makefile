@@ -54,8 +54,8 @@ configure:
 
 # Build the Maxon compiler (depends on runtime)
 compiler: configure runtime
-	cmake --build $(BUILD_DIR) --target maxon -- --quiet
-	cmake --build $(BUILD_DIR) --target grammar_generator -- --quiet
+	cmake --build $(BUILD_DIR) --target maxon
+	cmake --build $(BUILD_DIR) --target grammar_generator
 	@if [ bin/grammar_generator.exe -nt vscode-extension/syntaxes/maxon.tmLanguage.json ]; then echo "Generating TextMate grammar..."; ./bin/grammar_generator.exe vscode-extension/syntaxes/maxon.tmLanguage.json; fi
 
 # Build both LSP server and extension

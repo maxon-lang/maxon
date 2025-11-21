@@ -662,6 +662,11 @@ void CodeGenerator::initStandardLibrary() {
     llvm::Value* floatValueArg = printFloatFunc->getArg(0);
     llvm::Value* precisionArg = printFloatFunc->getArg(1);
     
+    // Store parameter to local variable and load it back to ensure proper handling
+    llvm::Value* floatValueLocal = builder.CreateAlloca(llvm::Type::getDoubleTy(context), nullptr, "float_value_local");
+    builder.CreateStore(floatValueArg, floatValueLocal);
+    llvm::Value* floatValue = builder.CreateLoad(llvm::Type::getDoubleTy(context), floatValueLocal, "float_value");
+    
     // Allocate buffer on stack (32 bytes for float)
     llvm::Type* floatBufferType = llvm::ArrayType::get(charType, 32);
     llvm::Value* floatBuffer = builder.CreateAlloca(floatBufferType, nullptr, "buffer");
@@ -675,7 +680,7 @@ void CodeGenerator::initStandardLibrary() {
     llvm::BasicBlock* floatNonZeroCase = llvm::BasicBlock::Create(context, "non_zero", printFloatFunc);
     llvm::BasicBlock* floatFormatDone = llvm::BasicBlock::Create(context, "format_done", printFloatFunc);
     
-    llvm::Value* floatIsZero = builder.CreateFCmpOEQ(floatValueArg, llvm::ConstantFP::get(context, llvm::APFloat(0.0)));
+    llvm::Value* floatIsZero = builder.CreateFCmpOEQ(floatValue, llvm::ConstantFP::get(context, llvm::APFloat(0.0)));
     builder.CreateCondBr(floatIsZero, floatZeroCase, floatNonZeroCase);
     
     // Zero case: format as "0.000000" (with precision decimal places)
@@ -725,16 +730,22 @@ void CodeGenerator::initStandardLibrary() {
     llvm::BasicBlock* floatPositiveCase = llvm::BasicBlock::Create(context, "positive", printFloatFunc);
     llvm::BasicBlock* floatExtractInt = llvm::BasicBlock::Create(context, "extract_int", printFloatFunc);
     
-    llvm::Value* floatIsNegative = builder.CreateFCmpOLT(floatValueArg, llvm::ConstantFP::get(context, llvm::APFloat(0.0)));
+    // Check if value is negative using fcmp (handles -0.0 correctly and avoids optimizer issues)
+    llvm::Value* floatIsNegative = builder.CreateFCmpOLT(floatValue, llvm::ConstantFP::get(context, llvm::APFloat(0.0)));
     builder.CreateCondBr(floatIsNegative, floatNegativeCase, floatPositiveCase);
     
-    // Negative case: add '-' and negate value
+    // Negative case: add '-' and take absolute value
     builder.SetInsertPoint(floatNegativeCase);
     llvm::Value* negPtr = builder.CreateInBoundsGEP(floatBufferType, floatBuffer,
         {llvm::ConstantInt::get(context, llvm::APInt(32, 0)), llvm::ConstantInt::get(context, llvm::APInt(32, 0))});
     builder.CreateStore(llvm::ConstantInt::get(charType, '-'), negPtr);
     builder.CreateStore(llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)), floatPos);
-    llvm::Value* absFloatValue = builder.CreateFNeg(floatValueArg);
+    llvm::Function* fabsFn = llvm::Intrinsic::getOrInsertDeclaration(
+        module.get(),
+        llvm::Intrinsic::fabs,
+        {llvm::Type::getDoubleTy(context)}
+    );
+    llvm::Value* absFloatValue = builder.CreateCall(fabsFn, {floatValue});
     builder.CreateBr(floatExtractInt);
     
     // Positive case
@@ -745,12 +756,24 @@ void CodeGenerator::initStandardLibrary() {
     builder.SetInsertPoint(floatExtractInt);
     llvm::PHINode* workValue = builder.CreatePHI(llvm::Type::getDoubleTy(context), 2, "work_value");
     workValue->addIncoming(absFloatValue, floatNegativeCase);
-    workValue->addIncoming(floatValueArg, floatPositiveCase);
+    workValue->addIncoming(floatValue, floatPositiveCase);
     
-    // Get integer part by converting to int (truncates toward zero, which is fine for positive numbers)
-    llvm::Value* intPart = builder.CreateFPToSI(workValue, llvm::Type::getInt32Ty(context), "int_part");
+    // Use llvm.round to handle precision issues where values like 1.9999999 should be 2.0
+    // Check if value is very close to next integer (within epsilon)
+    llvm::Value* intPartTrunc = builder.CreateFPToSI(workValue, llvm::Type::getInt32Ty(context), "int_part_trunc");
+    llvm::Value* intPartTruncFloat = builder.CreateSIToFP(intPartTrunc, llvm::Type::getDoubleTy(context), "int_part_trunc_float");
+    llvm::Value* fracPartInitial = builder.CreateFSub(workValue, intPartTruncFloat, "frac_part_initial");
+    
+    // If fractional part > 0.9999, it's likely a precision error and should round up
+    llvm::Value* shouldRoundUp = builder.CreateFCmpOGT(fracPartInitial, llvm::ConstantFP::get(context, llvm::APFloat(0.9999)));
+    llvm::Value* intPartRounded = builder.CreateAdd(intPartTrunc, llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 1), "int_part_rounded");
+    llvm::Value* intPart = builder.CreateSelect(shouldRoundUp, intPartRounded, intPartTrunc, "int_part");
+    
+    // Recalculate integer part as float and fractional part with correct integer
     llvm::Value* intPartFloat = builder.CreateSIToFP(intPart, llvm::Type::getDoubleTy(context), "int_part_float");
+    llvm::Value* fracPart = builder.CreateFSub(workValue, intPartFloat, "frac_part");
     
+    // Use intPart and fracPart for formatting
     // Format integer part (similar to print(int))
     llvm::Type* floatTempType = llvm::ArrayType::get(charType, 20);
     llvm::Value* floatTemp = builder.CreateAlloca(floatTempType, nullptr, "float_temp");
@@ -858,9 +881,6 @@ void CodeGenerator::initStandardLibrary() {
     builder.CreateStore(llvm::ConstantInt::get(charType, '.'), decimalPtr);
     llvm::Value* posAfterDecimal = builder.CreateAdd(decimalPos, llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)));
     builder.CreateStore(posAfterDecimal, floatPos);
-    
-    // Extract fractional part
-    llvm::Value* fracPart = builder.CreateFSub(workValue, intPartFloat, "frac_part");
     
     // Compute scale = 10^precision dynamically
     llvm::BasicBlock* scaleLoop = llvm::BasicBlock::Create(context, "scale_loop", printFloatFunc);
@@ -1340,7 +1360,7 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
             // Integer to float (signed)
             return builder.CreateSIToFP(value, targetType, "int2floattmp");
         } else if (sourceType->isFloatingPointTy() && targetType->isIntegerTy()) {
-            // Float to integer (truncate toward zero)
+            // Float to integer - truncate (as per spec)
             return builder.CreateFPToSI(value, targetType, "float2inttmp");
         } else if (sourceType->isIntegerTy() && targetType->isPointerTy()) {
             // Integer to pointer

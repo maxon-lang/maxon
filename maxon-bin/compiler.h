@@ -11,7 +11,7 @@
 
 struct CompilationOptions {
     std::vector<std::string> inputFiles;
-    std::string outputFile = "output.exe";
+    std::string outputFile; // Internal use only, not exposed via CLI
     bool emitLLVM = false;
     bool compileOnly = false;
     bool optimize = false;

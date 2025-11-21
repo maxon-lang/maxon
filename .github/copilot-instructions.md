@@ -50,6 +50,7 @@
 - Use `maxon <file>` to compile and run in one step (no temp files)
 - Create test files in `/temp` and clean up afterwards
 - `maxon test-fragments` runs all language tests (add `--verbose` for details)
+- `maxon compile <file> --emit-llvm` generates an LLVM IR file with the exe
 
 ### Adding Keywords
 Update: `TokenType` enum, `Lexer::readIdentifier()` map, parser logic, AST if needed, codegen, TextMate grammar

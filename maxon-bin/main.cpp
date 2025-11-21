@@ -110,8 +110,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "\nOptions for test-fragments:" << std::endl;
         std::cerr << "  --verbose, -v  Show all tests including passes" << std::endl;
         std::cerr << "\nOptions for compile:" << std::endl;
-        std::cerr << "  --emit-llvm    Print LLVM IR to stdout" << std::endl;
-        std::cerr << "  -o <output>    Specify output executable (default: output.exe)" << std::endl;
+        std::cerr << "  --emit-llvm    Generate .ll file alongside executable" << std::endl;
         std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
         std::cerr << "  -O             Enable optimizations" << std::endl;
         std::cerr << "  --debug, -g    Generate debug information" << std::endl;
@@ -230,8 +229,6 @@ int main(int argc, char* argv[]) {
             options.profile = true;
         } else if (arg == "--verbose" || arg == "-v") {
             options.verbose = true;
-        } else if (arg == "-o" && i + 1 < argc) {
-            options.outputFile = argv[++i];
         } else if (!arg.empty() && arg[0] != '-') {
             options.inputFiles.push_back(arg);
         }
