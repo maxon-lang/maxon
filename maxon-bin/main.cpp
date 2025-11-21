@@ -140,6 +140,23 @@ int main(int argc, char* argv[]) {
         return regenerateFragments();
     }
 
+    // Internal command used by parallel regen runner
+    if (command == "regen-fragments-subset") {
+        if (argc < 4) {
+            std::cerr << "Error: regen-fragments-subset requires output file and test files" << std::endl;
+            return 1;
+        }
+        
+        std::string outputFile = argv[2];
+        std::vector<std::string> testFiles;
+        
+        for (int i = 3; i < argc; ++i) {
+            testFiles.push_back(argv[i]);
+        }
+        
+        return regenerateFragmentsSubset(outputFile, testFiles);
+    }
+
     if (command == "test-fragments") {
         bool verbose = false;
         for (int i = 2; i < argc; ++i) {
