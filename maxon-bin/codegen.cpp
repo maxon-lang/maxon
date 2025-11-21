@@ -1683,6 +1683,11 @@ llvm::Value* CodeGenerator::generateExpr(ExprAST* expr) {
                 }
             }
             
+            // Promote int to float if needed
+            if (paramType->isDoubleTy() && argVal->getType()->isIntegerTy(32)) {
+                argVal = builder.CreateSIToFP(argVal, llvm::Type::getDoubleTy(context), "inttofp");
+            }
+            
             argsV.push_back(argVal);
             argIdx++;
         }

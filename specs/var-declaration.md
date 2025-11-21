@@ -17,9 +17,7 @@ Variables declared with `var` are mutable and can be reassigned.
 - Stored in LLVM alloca (stack variable)
 
 **Type System:**
-- Type can be explicitly specified: `var x int = 5`
-- Type can be inferred: `var x = 5` (infers int)
-- Type must match initializer if both provided
+- Type can only be inferred: `var x = 5` (infers int)
 - All variables must be initialized
 
 **Code Generation:**
@@ -84,12 +82,3 @@ function main() int
 end 'main'
 ```
 ExitCode: 5
-
-<!-- test: var-declaration.explicit-type -->
-```maxon
-function main() int
-    var x int = 100
-    return x
-end 'main'
-```
-ExitCode: 100

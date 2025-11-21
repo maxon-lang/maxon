@@ -87,7 +87,7 @@ ExitCode: 1
 <!-- test: char-in-variable -->
 ```maxon
 function main() int
-    var letter char = 'Z'
+    var letter = 'Z'
     var code = letter as int
     return code
 end 'main'

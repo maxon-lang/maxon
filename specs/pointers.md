@@ -65,7 +65,9 @@ end 'main'
 function main() int
     var x = 42
     var addr = &x
-    return 0
+    var addrAsInt = addr as int
+    if addrAsInt > 0 return 0
+    return 1
 end 'main'
 ```
 ```
@@ -76,6 +78,8 @@ ExitCode: 0
 ```maxon
 function main() int
     var nullPtr = 0 as ptr
+    var nullAsInt = nullPtr as int
+    if nullAsInt > 0 return 0
     return 42
 end 'main'
 ```
@@ -90,6 +94,8 @@ function main() int
     var p1 = &x
     var p2 = p1
     var p3 = p2
+    var result = p3 as int
+    if result > 0 return 1
     return 0
 end 'main'
 ```
@@ -103,9 +109,11 @@ extern function GetStdHandle(handle int) ptr
 
 function main() int
     let stdout = GetStdHandle(-11)
+    var result = stdout as int
+    if result > 0 return 1
     return 0
 end 'main'
 ```
 ```
-ExitCode: 0
+ExitCode: 1
 ```

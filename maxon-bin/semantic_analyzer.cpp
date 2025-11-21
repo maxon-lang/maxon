@@ -752,11 +752,17 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         // Check argument types
         for (size_t i = 0; i < callExpr->args.size(); i++) {
             std::string argType = analyzeExpression(callExpr->args[i].get());
-            if (!typesMatch(funcInfo.parameters[i].type, argType)) {
+            std::string expectedType = funcInfo.parameters[i].type;
+            
+            // Allow implicit int-to-float conversion
+            bool isValidType = typesMatch(expectedType, argType) ||
+                              (expectedType == "float" && argType == "int");
+            
+            if (!isValidType) {
                 addError("Function '" + callExpr->callee + "' argument type mismatch" +
                         std::string("\n  Parameter ") + std::to_string(i + 1) + " ('" + 
                         funcInfo.parameters[i].name + "')" +
-                        "\n  Expected type: " + funcInfo.parameters[i].type +
+                        "\n  Expected type: " + expectedType +
                         "\n  Found type: " + argType,
                         expr->line, expr->column);
             }

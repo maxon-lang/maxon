@@ -103,3 +103,8 @@ end 'main'
 ```
 ExitCode: 2
 ```
+end 'main'
+```
+```
+ExitCode: 2
+```

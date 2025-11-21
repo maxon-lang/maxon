@@ -103,6 +103,8 @@ ExitCode: 7
 ```maxon
 function main() int
     var nullPtr = 0 as ptr
+    var backToInt = nullPtr as int
+    if backToInt > 0 return 0
     return 42
 end 'main'
 ```
