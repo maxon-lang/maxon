@@ -15,7 +15,7 @@ int compileAndRunTemporary(const std::string& sourceFile) {
         CompilationOptions options;
         options.inputFiles = {sourceFile};
         options.outputFile = tempExe;
-        options.optimize = false;
+        options.optimize = true;
         options.debugInfo = false;
         options.verbose = false;
         options.emitLLVM = false;
