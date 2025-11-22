@@ -60,6 +60,11 @@ set(SOURCES
     codegen/codegen_expr.cpp
     codegen/codegen_stmt.cpp
     codegen/codegen_function.cpp
+    codegen/codegen_stdlib.cpp
+    codegen/codegen_utils.cpp
+    codegen/codegen_profile.cpp
+    codegen/codegen_output.cpp
+    codegen/codegen_debug.cpp
     semantic_analyzer.cpp
     error_formatter.cpp
 )

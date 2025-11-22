@@ -66,3 +66,4 @@ https://llvm.org/docs/Frontend/PerformanceTips.html
 - break up large files like codegen.cpp
 - formatter
 - tests for debugging (ie step into, step over, etc)
+- maxon <file> should optimize by default
