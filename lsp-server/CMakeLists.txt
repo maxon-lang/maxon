@@ -33,6 +33,8 @@ set(MAXON_SOURCES
     ../maxon-bin/lexer.cpp
     ../maxon-bin/parser.cpp
     ../maxon-bin/semantic_analyzer.cpp
+    ../maxon-bin/semantic_analyzer/semantic_analyzer_expr.cpp
+    ../maxon-bin/semantic_analyzer/semantic_analyzer_stmt.cpp
 )
 
 set(LSP_SOURCES

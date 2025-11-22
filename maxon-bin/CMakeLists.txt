@@ -66,6 +66,8 @@ set(SOURCES
     codegen/codegen_output.cpp
     codegen/codegen_debug.cpp
     semantic_analyzer.cpp
+    semantic_analyzer/semantic_analyzer_expr.cpp
+    semantic_analyzer/semantic_analyzer_stmt.cpp
     error_formatter.cpp
 )
 
