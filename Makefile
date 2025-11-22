@@ -127,11 +127,12 @@ validate-specs: compiler
 
 # Regenerate fragments, validate specs, and run fragment tests
 fragments: compiler
-	@echo Extracting test fragments from specs...
+	@echo 
 	@powershell -Command "maxon extract-specs"
+	@echo 
 	@echo Validating spec coverage...
 	@powershell -ExecutionPolicy Bypass -File scripts/validate-specs.ps1
-	@echo Regenerating test fragments...
+	@echo 
 	@powershell -Command "maxon regen-fragments"
 	@echo Running fragment tests...
 	@powershell -Command "maxon test-fragments"

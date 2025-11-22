@@ -121,6 +121,30 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
                     if (line == "```") break;
                     expectedMaxoncStderr += line + "\n";
                 }
+            } else {
+                // Handle plain text format: "MaxoncStderr: text content"
+                // Read the rest of the current line after "MaxoncStderr:"
+                std::string firstLine = line.substr(13); // Skip "MaxoncStderr:"
+                firstLine.erase(0, firstLine.find_first_not_of(" \t"));
+                if (!firstLine.empty()) {
+                    expectedMaxoncStderr = firstLine;
+                }
+                // Continue reading following lines as part of MaxoncStderr
+                // until we hit EOF (metadata is last section)
+                while (std::getline(metaStream, line)) {
+                    // Check if this is a new metadata field
+                    if (line.rfind("Args:", 0) == 0 ||
+                        line.rfind("ExitCode:", 0) == 0 ||
+                        line.rfind("Stdout:", 0) == 0 ||
+                        line.rfind("Stderr:", 0) == 0 ||
+                        line.rfind("MaxoncStderr:", 0) == 0) {
+                        // This is a new field, we need to process it
+                        // Put line back by re-processing in main loop
+                        // Since we can't seek in stringstream reliably, just stop
+                        break;
+                    }
+                    expectedMaxoncStderr += "\n" + line;
+                }
             }
         }
     }
@@ -132,6 +156,16 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
     trim(expectedOptIR);
     trim(expectedDebugIR);
     trim(expectedMaxoncStderr);
+
+    // Validate test structure: if IR is N/A, we must have expected MaxoncStderr
+    if (expectedOptIR == "N/A" && expectedMaxoncStderr.empty()) {
+        auto testEndTime = std::chrono::high_resolution_clock::now();
+        auto testDuration = std::chrono::duration_cast<std::chrono::milliseconds>(testEndTime - testStartTime);
+        result.durationSeconds = testDuration.count() / 1000.0;
+        result.passed = false;
+        result.failureReason = "Invalid test: IR is N/A but no MaxoncStderr specified";
+        return;
+    }
 
     // Use unique temp file names for parallel execution
     std::filesystem::path tempDir = "temp";
