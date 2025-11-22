@@ -73,8 +73,9 @@ Add handler in `LspServer`, register in `JsonRpcHandler`, implement in `Analyzer
 - NEVER resort to calling the c runtime library, we do not use it!
 
 ## Guidelines
-- Don't create new docs unless instructed
+- Don't create new documentation files unless instructed
 - Comments explain *why*, not *what*
+- Documentation is generated in `maxon-docs/Output/` via C# DocGen tool
 
 ## Writing VSCode Extension Tests
 - Do not set timeouts

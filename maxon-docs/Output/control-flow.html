@@ -20,6 +20,7 @@
                 <h2>Contents</h2>
                 <ul>
                     <li><a href="#break">Break</a></li>
+                    <li><a href="#for-loops">For Loops</a></li>
                     <li><a href="#if-statements">If Statements</a></li>
                     <li><a href="#single-line-if">Single Line If</a></li>
                     <li><a href="#while-loops">While Loops</a></li>
@@ -49,6 +50,112 @@ end 'loop'
 <li>Must be inside a loop (compile error otherwise)</li>
 <li>Can be used in single-line if: <code>if condition break</code></li>
 </ul>
+
+            </div>
+            <div class="spec-section" id="for-loops">
+                <h2>For Loops</h2>
+<p>For loops provide convenient iteration over ranges and collections using an iterator protocol defined by the standard library.</p>
+<h3 id="syntax">Syntax</h3>
+<pre><code class="language-maxon">for &lt;variable&gt; in &lt;iterable&gt; 'identifier'
+    &lt;statements&gt;
+end 'identifier'
+</code></pre>
+<ul>
+<li><strong>variable</strong>: Loop variable name (immutable, scoped to loop body)</li>
+<li><strong>iterable</strong>: Expression that returns an iterator (e.g., <code>range(0, 10)</code>)</li>
+<li><strong>identifier</strong>: Block identifier (must match on <code>for</code> and <code>end</code> lines)</li>
+</ul>
+<h3 id="range-based-iteration">Range-Based Iteration</h3>
+<p>The <code>range()</code> function creates an iterator over integers. It's automatically available from the standard library:</p>
+<pre><code class="language-maxon">for i in range(0, 5) 'loop'
+    print(i)  // Prints 0, 1, 2, 3, 4
+end 'loop'
+</code></pre>
+<p><strong>Range is half-open:</strong> <code>range(0, 5)</code> iterates over <code>[0, 5)</code> (0, 1, 2, 3, 4).</p>
+<h3 id="example-sum-of-range">Example: Sum of Range</h3>
+<pre><code class="language-maxon">function main() int
+    var sum = 0
+    for i in range(0, 10) 'sum_loop'
+        sum = sum + i
+    end 'sum_loop'
+    return sum  // Returns 45 (0+1+2+...+9)
+end 'main'
+</code></pre>
+<div class="expected-output"><pre>ExitCode: 45
+</pre></div>
+<h3 id="loop-control">Loop Control</h3>
+<p>For loops support <code>break</code> and <code>continue</code> statements:</p>
+<pre><code class="language-maxon">function main() int
+    var sum = 0
+    for i in range(0, 10) 'loop'
+        if i = 5 'skip'
+            continue  // Skip 5
+        end 'skip'
+        if i = 8 'stop'
+            break  // Stop at 8
+        end 'stop'
+        sum = sum + i
+    end 'loop'
+    return sum  // Returns 23 (0+1+2+3+4+6+7)
+end 'main'
+</code></pre>
+<div class="expected-output"><pre>ExitCode: 23
+</pre></div>
+<h3 id="loop-variable-scope">Loop Variable Scope</h3>
+<p>The loop variable is:</p>
+<ul>
+<li><strong>Immutable</strong>: Cannot be reassigned within the loop body</li>
+<li><strong>Block-scoped</strong>: Only visible within the loop</li>
+<li><strong>Fresh each iteration</strong>: Gets new value from iterator each time</li>
+</ul>
+<pre><code class="language-maxon">function main() int
+    var last = 0
+    for i in range(1, 4) 'loop'
+        last = i  // Can copy value to mutable variable
+        // i = 5  // ERROR: Loop variable is immutable
+    end 'loop'
+    // print(i)  // ERROR: i not in scope here
+    return last  // Returns 3
+end 'main'
+</code></pre>
+<div class="expected-output"><pre>ExitCode: 3
+</pre></div>
+<h3 id="how-it-works">How It Works</h3>
+<p>The compiler desugars for loops to iterator-based while loops. This code:</p>
+<pre><code class="language-text">for i in range(0, 3) 'loop'
+    print(i)
+end 'loop'
+</code></pre>
+<p>Becomes:</p>
+<pre><code class="language-text">var __iter = range(0, 3)
+while hasNext(__iter) = 1 'loop'
+    let i = getCurrent(__iter)
+    print(i)
+    __iter = next(__iter)
+end 'loop'
+</code></pre>
+<p>The standard library (automatically available) provides:</p>
+<ul>
+<li><code>Iterator</code> struct definition (exported from <code>stdlib/iter/iterator.maxon</code>)</li>
+<li><code>hasNext(Iterator) int</code> - Check if more elements exist</li>
+<li><code>getCurrent(Iterator) int</code> - Get current element</li>
+<li><code>next(Iterator) Iterator</code> - Advance to next element</li>
+<li><code>range(int, int) Iterator</code> - Create range iterator (from <code>stdlib/iter/range.maxon</code>)</li>
+</ul>
+<p>This design separates concerns:</p>
+<ul>
+<li><strong>Compiler</strong>: Syntax sugar only</li>
+<li><strong>Standard Library</strong>: All iteration logic (auto-discovered, no imports needed)</li>
+</ul>
+<h3 id="iterator-protocol">Iterator Protocol</h3>
+<p>The iterator interface is a contract defined by the standard library. Any type that implements the three required functions can be used with for loops:</p>
+<ul>
+<li><code>Iterator</code> struct with fields: <code>current</code>, <code>limit</code>, <code>step</code></li>
+<li><code>hasNext(Iterator) int</code> - Returns 1 if more elements exist, 0 otherwise</li>
+<li><code>getCurrent(Iterator) int</code> - Returns current element value</li>
+<li><code>next(Iterator) Iterator</code> - Returns new iterator advanced by step</li>
+</ul>
+<p>The <code>Iterator</code> struct is exported from <code>stdlib/iter/iterator.maxon</code> and can be used in any file with the qualified name <code>Iterator</code>.</p>
 
             </div>
             <div class="spec-section" id="if-statements">

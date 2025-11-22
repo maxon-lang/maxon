@@ -20,7 +20,7 @@ For developers working on the compiler.
 
 ## Documentation
 User-facing documentation with examples.
-Generated into HTML docs via `make docs`.
+Generated into HTML in `maxon-docs/Output/` via `make docs`.
 
 ## Tests
 Executable test cases that verify the feature works correctly.
