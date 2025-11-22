@@ -33,24 +33,22 @@ Using an undefined keyword or bare identifier as a statement causes a parse erro
 ```maxon
 function main() int
     var x = 0
-    foo         // Error: 'foo' is not a keyword
+    foo
         x = 5
     end 'foo'
     return x
 end 'main'
 ```
 ```output
-MaxoncStderr: Unexpected identifier 'foo'
-```
-
-Error message:
-```
+MaxoncStderr: In file 'temp\temp_fragment.maxon':
 Unexpected identifier 'foo'
-Note: Did you forget an assignment (=), function call (), or keyword?
+  Location: line 4, column 5
+  Note: Did you forget an assignment (=), function call (), or keyword?
 ```
 
 ### Common Solutions
 
+When you see this error, consider:
 - Function call: `foo()` instead of `foo`
 - Assignment: `foo = 5` instead of `foo`
 - Check spelling of keywords: `while`, `if`, `var`, `let`, `return`, `break`
@@ -68,7 +66,10 @@ function main() int
 end 'main'
 ```
 ```
-MaxoncStderr: Unexpected identifier 'foo'
+MaxoncStderr: In file 'temp\temp_fragment.maxon':
+Unexpected identifier 'foo'
+  Location: line 4, column 5
+  Note: Did you forget an assignment (=), function call (), or keyword?
 ```
 
 <!-- test: typo-keyword -->
@@ -79,7 +80,10 @@ function main() int
 end 'main'
 ```
 ```
-MaxoncStderr: Unexpected identifier 'retur'
+MaxoncStderr: In file 'temp\temp_fragment.maxon':
+Unexpected identifier 'retur'
+  Location: line 4, column 5
+  Note: Did you forget an assignment (=), function call (), or keyword?
 ```
 
 <!-- test: missing-call-parens -->
@@ -94,5 +98,8 @@ function main() int
 end 'main'
 ```
 ```
-MaxoncStderr: Unexpected identifier 'test'
+MaxoncStderr: In file 'temp\temp_fragment.maxon':
+Unexpected identifier 'test'
+  Location: line 7, column 5
+  Note: Did you forget an assignment (=), function call (), or keyword?
 ```

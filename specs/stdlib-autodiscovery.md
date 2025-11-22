@@ -118,4 +118,9 @@ end 'main'
 ```
 MaxoncStderr: Semantic Error: line 3, column 12
 Function 'format_int_array' argument count mismatch
+  Expected: 2 arguments
+  Found: 1 argument
+
+  3 |     return format_int_array(42)
+    |            ^
 ```

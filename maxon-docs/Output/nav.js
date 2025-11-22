@@ -4,6 +4,7 @@ const categories = {
     'control-flow': 'Control Flow',
     'declaration': 'Declarations',
     'diagnostics': 'Diagnostics',
+    'error-handling': 'Error Handling',
     'expressions': 'Expressions',
     'functions': 'Functions',
     'interop': 'Interoperability',

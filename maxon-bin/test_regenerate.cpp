@@ -52,7 +52,176 @@ static void writeTestFragment(const std::string &outputDir, const std::string &f
 	testFile << code;
 	testFile << "---\nN/A\n---\nN/A\n---\n";
 	if (!metadata.empty()) {
-		testFile << metadata;
+		if (isDocExample) {
+			// For doc examples, parse metadata and add fences for multiline values
+			std::istringstream metadataStream(metadata);
+			std::string line;
+			std::string currentField;
+			std::vector<std::string> currentLines;
+
+			auto writeField = [&testFile](const std::string &field, std::vector<std::string> &lines) {
+				// Remove trailing empty lines
+				while (!lines.empty() && lines.back().empty()) {
+					lines.pop_back();
+				}
+
+				if (lines.size() > 1) {
+					// Multiline - needs fences
+					testFile << field << " ```\n";
+					for (const auto &l : lines) {
+						testFile << l << "\n";
+					}
+					testFile << "```\n";
+				} else if (lines.size() == 1) {
+					// Single line
+					testFile << field << " " << lines[0] << "\n";
+				} else {
+					// Empty value
+					testFile << field << "\n";
+				}
+			};
+
+			while (std::getline(metadataStream, line)) {
+				// Check if this is a metadata field header
+				if (line.rfind("ExitCode:", 0) == 0 || line.rfind("Args:", 0) == 0 ||
+					line.rfind("Stdout:", 0) == 0 || line.rfind("Stderr:", 0) == 0 ||
+					line.rfind("MaxoncStderr:", 0) == 0 || line.rfind("OptimizedInstructionCount:", 0) == 0 ||
+					line.rfind("UnoptimizedInstructionCount:", 0) == 0) {
+
+					// Write previous field if it exists
+					if (!currentField.empty()) {
+						writeField(currentField, currentLines);
+						currentLines.clear();
+					}
+
+					// Parse new field
+					size_t colonPos = line.find(':');
+					currentField = line.substr(0, colonPos + 1);
+					std::string value = line.substr(colonPos + 1);
+
+					// Trim leading whitespace from value
+					size_t firstNonSpace = value.find_first_not_of(" \t");
+					if (firstNonSpace != std::string::npos) {
+						value = value.substr(firstNonSpace);
+						if (!value.empty()) {
+							currentLines.push_back(value);
+						}
+					}
+				} else if (!currentField.empty()) {
+					// Continuation line for current field
+					currentLines.push_back(line);
+				}
+			}
+
+			// Write last field
+			if (!currentField.empty()) {
+				writeField(currentField, currentLines);
+			}
+		} else {
+			// For explicit tests, check if metadata contains multiline content that needs fencing
+			std::istringstream metadataStream(metadata);
+			std::string line;
+			std::string output;
+			bool hasMultilineField = false;
+
+			// First pass: check if any field has multiline content
+			std::string tempMetadata = metadata;
+			std::istringstream checkStream(tempMetadata);
+			std::string currentField;
+			int lineCount = 0;
+
+			while (std::getline(checkStream, line)) {
+				if (line.rfind("ExitCode:", 0) == 0 || line.rfind("Args:", 0) == 0 ||
+					line.rfind("Stdout:", 0) == 0 || line.rfind("Stderr:", 0) == 0 ||
+					line.rfind("MaxoncStderr:", 0) == 0 || line.rfind("OptimizedInstructionCount:", 0) == 0 ||
+					line.rfind("UnoptimizedInstructionCount:", 0) == 0) {
+
+					if (!currentField.empty() && lineCount > 1) {
+						hasMultilineField = true;
+						break;
+					}
+					currentField = line.substr(0, line.find(':') + 1);
+					lineCount = 1;
+				} else if (!currentField.empty()) {
+					lineCount++;
+				}
+			}
+			if (!currentField.empty() && lineCount > 1) {
+				hasMultilineField = true;
+			}
+
+			if (hasMultilineField) {
+				// Parse and add fences for multiline values
+				std::vector<std::string> currentLines;
+				currentField.clear();
+
+				auto writeField = [&output](const std::string &field, std::vector<std::string> &lines) {
+					// Remove trailing empty lines
+					while (!lines.empty() && lines.back().empty()) {
+						lines.pop_back();
+					}
+
+					if (lines.size() > 1) {
+						// Multiline - needs fences
+						output += field + " ```\n";
+						for (const auto &l : lines) {
+							output += l + "\n";
+						}
+						output += "```\n";
+					} else if (lines.size() == 1) {
+						// Single line
+						output += field + " " + lines[0] + "\n";
+					} else {
+						// Empty value
+						output += field + "\n";
+					}
+				};
+
+				metadataStream.clear();
+				metadataStream.seekg(0);
+				while (std::getline(metadataStream, line)) {
+					// Check if this is a metadata field header
+					if (line.rfind("ExitCode:", 0) == 0 || line.rfind("Args:", 0) == 0 ||
+						line.rfind("Stdout:", 0) == 0 || line.rfind("Stderr:", 0) == 0 ||
+						line.rfind("MaxoncStderr:", 0) == 0 || line.rfind("OptimizedInstructionCount:", 0) == 0 ||
+						line.rfind("UnoptimizedInstructionCount:", 0) == 0) {
+
+						// Write previous field if it exists
+						if (!currentField.empty()) {
+							writeField(currentField, currentLines);
+							currentLines.clear();
+						}
+
+						// Parse new field
+						size_t colonPos = line.find(':');
+						currentField = line.substr(0, colonPos + 1);
+						std::string value = line.substr(colonPos + 1);
+
+						// Trim leading whitespace from value
+						size_t firstNonSpace = value.find_first_not_of(" \t");
+						if (firstNonSpace != std::string::npos) {
+							value = value.substr(firstNonSpace);
+							if (!value.empty()) {
+								currentLines.push_back(value);
+							}
+						}
+					} else if (!currentField.empty()) {
+						// Continuation line for current field
+						currentLines.push_back(line);
+					}
+				}
+
+				// Write last field
+				if (!currentField.empty()) {
+					writeField(currentField, currentLines);
+				}
+
+				testFile << output;
+			} else {
+				// No multiline content, write as-is
+				testFile << metadata;
+			}
+		}
 	}
 	testFile.close();
 
@@ -162,7 +331,7 @@ int extractSpecFragments() {
 				inCodeBlock = true;
 				currentCode.clear();
 				continue;
-			} else if (line == "```") {
+			} else if (line == "```" || line == "```output") {
 				if (inCodeBlock) {
 					// End of code block
 					inCodeBlock = false;
@@ -196,24 +365,30 @@ int extractSpecFragments() {
 					currentMetadata += line + "\n";
 				} else {
 					// Check for metadata lines outside fence (single-line format)
+					bool isMetadataField = false;
 					if (line.rfind("ExitCode:", 0) == 0) {
 						currentMetadata += line + "\n";
+						isMetadataField = true;
 					} else if (line.rfind("Args:", 0) == 0) {
 						currentMetadata += line + "\n";
+						isMetadataField = true;
 					} else if (line.rfind("Stdout:", 0) == 0) {
 						currentMetadata += line + "\n";
+						isMetadataField = true;
 						// Check if this line starts a multi-line block
 						if (line.find("```") != std::string::npos) {
 							inMetadataBlock = true;
 						}
 					} else if (line.rfind("Stderr:", 0) == 0) {
 						currentMetadata += line + "\n";
+						isMetadataField = true;
 						// Check if this line starts a multi-line block
 						if (line.find("```") != std::string::npos) {
 							inMetadataBlock = true;
 						}
 					} else if (line.rfind("MaxoncStderr:", 0) == 0) {
 						currentMetadata += line + "\n";
+						isMetadataField = true;
 						// Check if this line starts a multi-line block
 						if (line.find("```") != std::string::npos) {
 							inMetadataBlock = true;
@@ -235,7 +410,14 @@ int extractSpecFragments() {
 							currentMetadata.clear();
 							currentTestName.clear();
 							collectingMetadata = false;
+						} else if (!currentMetadata.empty()) {
+							// If we have metadata already and this is a non-metadata line within the output block,
+							// it's a continuation of multi-line metadata content (e.g., MaxoncStderr)
+							currentMetadata += line + "\n";
 						}
+					} else if (!isMetadataField && !currentMetadata.empty()) {
+						// In test section: continuation of multi-line metadata content
+						currentMetadata += line + "\n";
 					}
 				}
 			}

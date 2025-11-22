@@ -71,9 +71,9 @@ function main() int
     return 0
 end 'main'
 ```
+```output
 ExitCode: 0
-Stdout: ```
-1.000000
+Stdout: 1.000000
 0.877583
 0.540302
 -0.000004

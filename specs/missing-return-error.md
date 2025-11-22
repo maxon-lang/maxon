@@ -59,8 +59,12 @@ function main() int
 end 'main'
 ```
 ```
-MaxoncStderr: Semantic Error: line 1, column 1
+MaxoncStderr: Semantic Error: line 2, column 1
 Function 'main' must return a value of type 'int'
+  Note: All execution paths through the function must end with a return statement
+
+  2 | function main() int
+    | ^
 ```
 
 <!-- test: missing-else-return -->
@@ -77,8 +81,12 @@ function main() int
 end 'main'
 ```
 ```
-MaxoncStderr: Semantic Error: line 1, column 1
+MaxoncStderr: Semantic Error: line 2, column 1
 Function 'test' must return a value of type 'int'
+  Note: All execution paths through the function must end with a return statement
+
+  2 | function test(x int) int
+    | ^
 ```
 
 <!-- test: valid-all-paths -->

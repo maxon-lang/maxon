@@ -1,12 +1,16 @@
 // Test: for-loops.doc-example-4.1
 function main() int
-    var last = 0
-    for i in range(1, 4) 'loop'
-        last = i  // Can copy value to mutable variable
-        // i = 5  // ERROR: Loop variable is immutable
+    var sum = 0
+    for i in range(0, 10) 'loop'
+        if i = 5 'skip'
+            continue  // Skip 5
+        end 'skip'
+        if i = 8 'stop'
+            break  // Stop at 8
+        end 'stop'
+        sum = sum + i
     end 'loop'
-    // print(i)  // ERROR: i not in scope here
-    return last  // Returns 3
+    return sum  // Returns 23 (0+1+2+3+4+6+7)
 end 'main'
 ---
 ; ModuleID = 'test.maxon'
@@ -14,8 +18,8 @@ source_filename = "test.maxon"
 
 ; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)
 define noundef i32 @main() local_unnamed_addr #0 {
-entry:
-  ret i32 3
+afterfor:
+  ret i32 23
 }
 
 declare void @ExitProcess(i32) local_unnamed_addr
@@ -23,7 +27,7 @@ declare void @ExitProcess(i32) local_unnamed_addr
 ; Function Attrs: noreturn
 define void @_start() local_unnamed_addr #1 {
 entry:
-  tail call void @ExitProcess(i32 3)
+  tail call void @ExitProcess(i32 23)
   unreachable
 }
 
@@ -37,10 +41,10 @@ source_filename = "test.maxon"
 
 define i32 @main() !dbg !4 {
 entry:
-  %last = alloca i32, align 4
-  store i32 0, ptr %last, align 4, !dbg !9
-    #dbg_declare(ptr %last, !10, !DIExpression(), !9)
-  %0 = call %Iterator @iter.range(i32 1, i32 4), !dbg !11
+  %sum = alloca i32, align 4
+  store i32 0, ptr %sum, align 4, !dbg !9
+    #dbg_declare(ptr %sum, !10, !DIExpression(), !9)
+  %0 = call %Iterator @iter.range(i32 0, i32 10), !dbg !11
   %__iter = alloca %Iterator, align 8, !dbg !11
   store %Iterator %0, ptr %__iter, align 4, !dbg !11
   br label %forcond, !dbg !11
@@ -55,122 +59,146 @@ forloop:                                          ; preds = %forcond
   %i2 = alloca i32, align 4, !dbg !11
   store i32 %i, ptr %i2, align 4, !dbg !11
   %i3 = load i32, ptr %i2, align 4, !dbg !12
-  store i32 %i3, ptr %last, align 4, !dbg !12
-  br label %forincrement, !dbg !12
+  %cmptmp = icmp eq i32 %i3, 5, !dbg !12
+  br i1 %cmptmp, label %then, label %ifcont, !dbg !12
 
-forincrement:                                     ; preds = %forloop
-  %__iter.next = call %Iterator @iter.next(ptr %__iter), !dbg !12
-  store %Iterator %__iter.next, ptr %__iter, align 4, !dbg !12
-  br label %forcond, !dbg !12
+then:                                             ; preds = %forloop
+  br label %forincrement, !dbg !13
 
-afterfor:                                         ; preds = %forcond
-  %last4 = load i32, ptr %last, align 4, !dbg !13
-  ret i32 %last4, !dbg !13
+aftercontinue:                                    ; No predecessors!
+  br label %ifcont, !dbg !13
+
+ifcont:                                           ; preds = %aftercontinue, %forloop
+  %i4 = load i32, ptr %i2, align 4, !dbg !14
+  %cmptmp5 = icmp eq i32 %i4, 8, !dbg !14
+  br i1 %cmptmp5, label %then6, label %ifcont7, !dbg !14
+
+then6:                                            ; preds = %ifcont
+  br label %afterfor, !dbg !15
+
+afterbreak:                                       ; No predecessors!
+  br label %ifcont7, !dbg !15
+
+ifcont7:                                          ; preds = %afterbreak, %ifcont
+  %sum8 = load i32, ptr %sum, align 4, !dbg !16
+  %i9 = load i32, ptr %i2, align 4, !dbg !16
+  %addtmp = add i32 %sum8, %i9, !dbg !16
+  store i32 %addtmp, ptr %sum, align 4, !dbg !16
+  br label %forincrement, !dbg !16
+
+forincrement:                                     ; preds = %ifcont7, %then
+  %__iter.next = call %Iterator @iter.next(ptr %__iter), !dbg !16
+  store %Iterator %__iter.next, ptr %__iter, align 4, !dbg !16
+  br label %forcond, !dbg !16
+
+afterfor:                                         ; preds = %then6, %forcond
+  %sum10 = load i32, ptr %sum, align 4, !dbg !17
+  ret i32 %sum10, !dbg !17
 }
 
-define internal i32 @iter.hasNext(ptr %0) !dbg !14 {
+define internal i32 @iter.hasNext(ptr %0) !dbg !18 {
 entry:
   %it = alloca ptr, align 8
-  store ptr %0, ptr %it, align 8, !dbg !17
-    #dbg_declare(ptr %it, !18, !DIExpression(), !17)
-  %struct.ptr = load ptr, ptr %it, align 8, !dbg !19
-  %step = getelementptr inbounds nuw %Iterator, ptr %struct.ptr, i32 0, i32 2, !dbg !19
-  %step.val = load i32, ptr %step, align 4, !dbg !19
-  %cmptmp = icmp sgt i32 %step.val, 0, !dbg !19
-  br i1 %cmptmp, label %then, label %ifcont5, !dbg !19
+  store ptr %0, ptr %it, align 8, !dbg !21
+    #dbg_declare(ptr %it, !22, !DIExpression(), !21)
+  %struct.ptr = load ptr, ptr %it, align 8, !dbg !23
+  %step = getelementptr inbounds nuw %Iterator, ptr %struct.ptr, i32 0, i32 2, !dbg !23
+  %step.val = load i32, ptr %step, align 4, !dbg !23
+  %cmptmp = icmp sgt i32 %step.val, 0, !dbg !23
+  br i1 %cmptmp, label %then, label %ifcont5, !dbg !23
 
 then:                                             ; preds = %entry
-  %struct.ptr1 = load ptr, ptr %it, align 8, !dbg !20
-  %current = getelementptr inbounds nuw %Iterator, ptr %struct.ptr1, i32 0, i32 0, !dbg !20
-  %current.val = load i32, ptr %current, align 4, !dbg !20
-  %struct.ptr2 = load ptr, ptr %it, align 8, !dbg !20
-  %limit = getelementptr inbounds nuw %Iterator, ptr %struct.ptr2, i32 0, i32 1, !dbg !20
-  %limit.val = load i32, ptr %limit, align 4, !dbg !20
-  %cmptmp3 = icmp slt i32 %current.val, %limit.val, !dbg !20
-  br i1 %cmptmp3, label %then4, label %ifcont, !dbg !20
+  %struct.ptr1 = load ptr, ptr %it, align 8, !dbg !24
+  %current = getelementptr inbounds nuw %Iterator, ptr %struct.ptr1, i32 0, i32 0, !dbg !24
+  %current.val = load i32, ptr %current, align 4, !dbg !24
+  %struct.ptr2 = load ptr, ptr %it, align 8, !dbg !24
+  %limit = getelementptr inbounds nuw %Iterator, ptr %struct.ptr2, i32 0, i32 1, !dbg !24
+  %limit.val = load i32, ptr %limit, align 4, !dbg !24
+  %cmptmp3 = icmp slt i32 %current.val, %limit.val, !dbg !24
+  br i1 %cmptmp3, label %then4, label %ifcont, !dbg !24
 
 then4:                                            ; preds = %then
-  ret i32 1, !dbg !21
+  ret i32 1, !dbg !25
 
 ifcont:                                           ; preds = %then
-  ret i32 0, !dbg !22
+  ret i32 0, !dbg !26
 
 ifcont5:                                          ; preds = %entry
-  %struct.ptr6 = load ptr, ptr %it, align 8, !dbg !23
-  %current7 = getelementptr inbounds nuw %Iterator, ptr %struct.ptr6, i32 0, i32 0, !dbg !23
-  %current.val8 = load i32, ptr %current7, align 4, !dbg !23
-  %struct.ptr9 = load ptr, ptr %it, align 8, !dbg !23
-  %limit10 = getelementptr inbounds nuw %Iterator, ptr %struct.ptr9, i32 0, i32 1, !dbg !23
-  %limit.val11 = load i32, ptr %limit10, align 4, !dbg !23
-  %cmptmp12 = icmp sgt i32 %current.val8, %limit.val11, !dbg !23
-  br i1 %cmptmp12, label %then13, label %ifcont14, !dbg !23
+  %struct.ptr6 = load ptr, ptr %it, align 8, !dbg !27
+  %current7 = getelementptr inbounds nuw %Iterator, ptr %struct.ptr6, i32 0, i32 0, !dbg !27
+  %current.val8 = load i32, ptr %current7, align 4, !dbg !27
+  %struct.ptr9 = load ptr, ptr %it, align 8, !dbg !27
+  %limit10 = getelementptr inbounds nuw %Iterator, ptr %struct.ptr9, i32 0, i32 1, !dbg !27
+  %limit.val11 = load i32, ptr %limit10, align 4, !dbg !27
+  %cmptmp12 = icmp sgt i32 %current.val8, %limit.val11, !dbg !27
+  br i1 %cmptmp12, label %then13, label %ifcont14, !dbg !27
 
 then13:                                           ; preds = %ifcont5
-  ret i32 1, !dbg !24
+  ret i32 1, !dbg !28
 
 ifcont14:                                         ; preds = %ifcont5
-  ret i32 0, !dbg !25
+  ret i32 0, !dbg !29
 }
 
-define internal i32 @iter.getCurrent(ptr %0) !dbg !26 {
+define internal i32 @iter.getCurrent(ptr %0) !dbg !30 {
 entry:
-  %it = alloca ptr, align 8
-  store ptr %0, ptr %it, align 8, !dbg !27
-    #dbg_declare(ptr %it, !28, !DIExpression(), !27)
-  %struct.ptr = load ptr, ptr %it, align 8, !dbg !29
-  %current = getelementptr inbounds nuw %Iterator, ptr %struct.ptr, i32 0, i32 0, !dbg !29
-  %current.val = load i32, ptr %current, align 4, !dbg !29
-  ret i32 %current.val, !dbg !29
-}
-
-define internal %Iterator @iter.next(ptr %0) !dbg !30 {
-entry:
-  %result = alloca %Iterator, align 8
   %it = alloca ptr, align 8
   store ptr %0, ptr %it, align 8, !dbg !31
     #dbg_declare(ptr %it, !32, !DIExpression(), !31)
   %struct.ptr = load ptr, ptr %it, align 8, !dbg !33
   %current = getelementptr inbounds nuw %Iterator, ptr %struct.ptr, i32 0, i32 0, !dbg !33
   %current.val = load i32, ptr %current, align 4, !dbg !33
-  %struct.ptr1 = load ptr, ptr %it, align 8, !dbg !33
-  %step = getelementptr inbounds nuw %Iterator, ptr %struct.ptr1, i32 0, i32 2, !dbg !33
-  %step.val = load i32, ptr %step, align 4, !dbg !33
-  %addtmp = add i32 %current.val, %step.val, !dbg !33
-  %current2 = getelementptr inbounds nuw %Iterator, ptr %result, i32 0, i32 0, !dbg !33
-  store i32 %addtmp, ptr %current2, align 4, !dbg !33
-  %struct.ptr3 = load ptr, ptr %it, align 8, !dbg !33
-  %limit = getelementptr inbounds nuw %Iterator, ptr %struct.ptr3, i32 0, i32 1, !dbg !33
-  %limit.val = load i32, ptr %limit, align 4, !dbg !33
-  %limit4 = getelementptr inbounds nuw %Iterator, ptr %result, i32 0, i32 1, !dbg !33
-  store i32 %limit.val, ptr %limit4, align 4, !dbg !33
-  %struct.ptr5 = load ptr, ptr %it, align 8, !dbg !33
-  %step6 = getelementptr inbounds nuw %Iterator, ptr %struct.ptr5, i32 0, i32 2, !dbg !33
-  %step.val7 = load i32, ptr %step6, align 4, !dbg !33
-  %step8 = getelementptr inbounds nuw %Iterator, ptr %result, i32 0, i32 2, !dbg !33
-  store i32 %step.val7, ptr %step8, align 4, !dbg !33
-  %result9 = load %Iterator, ptr %result, align 4, !dbg !34
-  ret %Iterator %result9, !dbg !34
+  ret i32 %current.val, !dbg !33
 }
 
-define internal %Iterator @iter.range(i32 %0, i32 %1) !dbg !35 {
+define internal %Iterator @iter.next(ptr %0) !dbg !34 {
+entry:
+  %result = alloca %Iterator, align 8
+  %it = alloca ptr, align 8
+  store ptr %0, ptr %it, align 8, !dbg !35
+    #dbg_declare(ptr %it, !36, !DIExpression(), !35)
+  %struct.ptr = load ptr, ptr %it, align 8, !dbg !37
+  %current = getelementptr inbounds nuw %Iterator, ptr %struct.ptr, i32 0, i32 0, !dbg !37
+  %current.val = load i32, ptr %current, align 4, !dbg !37
+  %struct.ptr1 = load ptr, ptr %it, align 8, !dbg !37
+  %step = getelementptr inbounds nuw %Iterator, ptr %struct.ptr1, i32 0, i32 2, !dbg !37
+  %step.val = load i32, ptr %step, align 4, !dbg !37
+  %addtmp = add i32 %current.val, %step.val, !dbg !37
+  %current2 = getelementptr inbounds nuw %Iterator, ptr %result, i32 0, i32 0, !dbg !37
+  store i32 %addtmp, ptr %current2, align 4, !dbg !37
+  %struct.ptr3 = load ptr, ptr %it, align 8, !dbg !37
+  %limit = getelementptr inbounds nuw %Iterator, ptr %struct.ptr3, i32 0, i32 1, !dbg !37
+  %limit.val = load i32, ptr %limit, align 4, !dbg !37
+  %limit4 = getelementptr inbounds nuw %Iterator, ptr %result, i32 0, i32 1, !dbg !37
+  store i32 %limit.val, ptr %limit4, align 4, !dbg !37
+  %struct.ptr5 = load ptr, ptr %it, align 8, !dbg !37
+  %step6 = getelementptr inbounds nuw %Iterator, ptr %struct.ptr5, i32 0, i32 2, !dbg !37
+  %step.val7 = load i32, ptr %step6, align 4, !dbg !37
+  %step8 = getelementptr inbounds nuw %Iterator, ptr %result, i32 0, i32 2, !dbg !37
+  store i32 %step.val7, ptr %step8, align 4, !dbg !37
+  %result9 = load %Iterator, ptr %result, align 4, !dbg !38
+  ret %Iterator %result9, !dbg !38
+}
+
+define internal %Iterator @iter.range(i32 %0, i32 %1) !dbg !39 {
 entry:
   %it = alloca %Iterator, align 8
   %end_exclusive = alloca i32, align 4
   %start = alloca i32, align 4
-  store i32 %0, ptr %start, align 4, !dbg !38
-    #dbg_declare(ptr %start, !39, !DIExpression(), !38)
-  store i32 %1, ptr %end_exclusive, align 4, !dbg !40
-    #dbg_declare(ptr %end_exclusive, !41, !DIExpression(), !40)
-  %start1 = load i32, ptr %start, align 4, !dbg !42
-  %current = getelementptr inbounds nuw %Iterator, ptr %it, i32 0, i32 0, !dbg !42
-  store i32 %start1, ptr %current, align 4, !dbg !42
-  %end_exclusive2 = load i32, ptr %end_exclusive, align 4, !dbg !42
-  %limit = getelementptr inbounds nuw %Iterator, ptr %it, i32 0, i32 1, !dbg !42
-  store i32 %end_exclusive2, ptr %limit, align 4, !dbg !42
-  %step = getelementptr inbounds nuw %Iterator, ptr %it, i32 0, i32 2, !dbg !42
-  store i32 1, ptr %step, align 4, !dbg !42
-  %it3 = load %Iterator, ptr %it, align 4, !dbg !43
-  ret %Iterator %it3, !dbg !43
+  store i32 %0, ptr %start, align 4, !dbg !42
+    #dbg_declare(ptr %start, !43, !DIExpression(), !42)
+  store i32 %1, ptr %end_exclusive, align 4, !dbg !44
+    #dbg_declare(ptr %end_exclusive, !45, !DIExpression(), !44)
+  %start1 = load i32, ptr %start, align 4, !dbg !46
+  %current = getelementptr inbounds nuw %Iterator, ptr %it, i32 0, i32 0, !dbg !46
+  store i32 %start1, ptr %current, align 4, !dbg !46
+  %end_exclusive2 = load i32, ptr %end_exclusive, align 4, !dbg !46
+  %limit = getelementptr inbounds nuw %Iterator, ptr %it, i32 0, i32 1, !dbg !46
+  store i32 %end_exclusive2, ptr %limit, align 4, !dbg !46
+  %step = getelementptr inbounds nuw %Iterator, ptr %it, i32 0, i32 2, !dbg !46
+  store i32 1, ptr %step, align 4, !dbg !46
+  %it3 = load %Iterator, ptr %it, align 4, !dbg !47
+  ret %Iterator %it3, !dbg !47
 }
 
 declare void @ExitProcess(i32)
@@ -195,51 +223,45 @@ entry:
 !7 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
 !8 = !{}
 !9 = !DILocation(line: 3, column: 5, scope: !4)
-!10 = !DILocalVariable(name: "last", scope: !4, file: !1, line: 3, type: !7, align: 32)
+!10 = !DILocalVariable(name: "sum", scope: !4, file: !1, line: 3, type: !7, align: 32)
 !11 = !DILocation(line: 4, column: 5, scope: !4)
-!12 = !DILocation(line: 5, column: 14, scope: !4)
-!13 = !DILocation(line: 9, column: 5, scope: !4)
-!14 = distinct !DISubprogram(name: "hasNext", linkageName: "hasNext", scope: !1, file: !1, line: 13, type: !15, scopeLine: 13, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
-!15 = !DISubroutineType(types: !16)
-!16 = !{!7, !7}
-!17 = !DILocation(line: 13, column: 25, scope: !14)
-!18 = !DILocalVariable(name: "it", arg: 1, scope: !14, file: !1, line: 13, type: !7)
-!19 = !DILocation(line: 14, column: 5, scope: !14)
-!20 = !DILocation(line: 15, column: 9, scope: !14)
-!21 = !DILocation(line: 16, column: 13, scope: !14)
-!22 = !DILocation(line: 18, column: 9, scope: !14)
-!23 = !DILocation(line: 21, column: 5, scope: !14)
-!24 = !DILocation(line: 22, column: 9, scope: !14)
-!25 = !DILocation(line: 24, column: 5, scope: !14)
-!26 = distinct !DISubprogram(name: "getCurrent", linkageName: "getCurrent", scope: !1, file: !1, line: 28, type: !15, scopeLine: 28, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
-!27 = !DILocation(line: 28, column: 28, scope: !26)
-!28 = !DILocalVariable(name: "it", arg: 1, scope: !26, file: !1, line: 28, type: !7)
-!29 = !DILocation(line: 29, column: 5, scope: !26)
-!30 = distinct !DISubprogram(name: "next", linkageName: "next", scope: !1, file: !1, line: 33, type: !15, scopeLine: 33, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
-!31 = !DILocation(line: 33, column: 22, scope: !30)
-!32 = !DILocalVariable(name: "it", arg: 1, scope: !30, file: !1, line: 33, type: !7)
-!33 = !DILocation(line: 34, column: 5, scope: !30)
-!34 = !DILocation(line: 39, column: 5, scope: !30)
-!35 = distinct !DISubprogram(name: "range", linkageName: "range", scope: !1, file: !1, line: 7, type: !36, scopeLine: 7, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
-!36 = !DISubroutineType(types: !37)
-!37 = !{!7, !7, !7}
-!38 = !DILocation(line: 7, column: 23, scope: !35)
-!39 = !DILocalVariable(name: "start", arg: 1, scope: !35, file: !1, line: 7, type: !7)
-!40 = !DILocation(line: 7, column: 34, scope: !35)
-!41 = !DILocalVariable(name: "end_exclusive", arg: 2, scope: !35, file: !1, line: 7, type: !7)
-!42 = !DILocation(line: 8, column: 5, scope: !35)
-!43 = !DILocation(line: 13, column: 5, scope: !35)
+!12 = !DILocation(line: 5, column: 9, scope: !4)
+!13 = !DILocation(line: 6, column: 13, scope: !4)
+!14 = !DILocation(line: 8, column: 9, scope: !4)
+!15 = !DILocation(line: 9, column: 13, scope: !4)
+!16 = !DILocation(line: 11, column: 13, scope: !4)
+!17 = !DILocation(line: 13, column: 5, scope: !4)
+!18 = distinct !DISubprogram(name: "hasNext", linkageName: "hasNext", scope: !1, file: !1, line: 13, type: !19, scopeLine: 13, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
+!19 = !DISubroutineType(types: !20)
+!20 = !{!7, !7}
+!21 = !DILocation(line: 13, column: 25, scope: !18)
+!22 = !DILocalVariable(name: "it", arg: 1, scope: !18, file: !1, line: 13, type: !7)
+!23 = !DILocation(line: 14, column: 5, scope: !18)
+!24 = !DILocation(line: 15, column: 9, scope: !18)
+!25 = !DILocation(line: 16, column: 13, scope: !18)
+!26 = !DILocation(line: 18, column: 9, scope: !18)
+!27 = !DILocation(line: 21, column: 5, scope: !18)
+!28 = !DILocation(line: 22, column: 9, scope: !18)
+!29 = !DILocation(line: 24, column: 5, scope: !18)
+!30 = distinct !DISubprogram(name: "getCurrent", linkageName: "getCurrent", scope: !1, file: !1, line: 28, type: !19, scopeLine: 28, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
+!31 = !DILocation(line: 28, column: 28, scope: !30)
+!32 = !DILocalVariable(name: "it", arg: 1, scope: !30, file: !1, line: 28, type: !7)
+!33 = !DILocation(line: 29, column: 5, scope: !30)
+!34 = distinct !DISubprogram(name: "next", linkageName: "next", scope: !1, file: !1, line: 33, type: !19, scopeLine: 33, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
+!35 = !DILocation(line: 33, column: 22, scope: !34)
+!36 = !DILocalVariable(name: "it", arg: 1, scope: !34, file: !1, line: 33, type: !7)
+!37 = !DILocation(line: 34, column: 5, scope: !34)
+!38 = !DILocation(line: 39, column: 5, scope: !34)
+!39 = distinct !DISubprogram(name: "range", linkageName: "range", scope: !1, file: !1, line: 7, type: !40, scopeLine: 7, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
+!40 = !DISubroutineType(types: !41)
+!41 = !{!7, !7, !7}
+!42 = !DILocation(line: 7, column: 23, scope: !39)
+!43 = !DILocalVariable(name: "start", arg: 1, scope: !39, file: !1, line: 7, type: !7)
+!44 = !DILocation(line: 7, column: 34, scope: !39)
+!45 = !DILocalVariable(name: "end_exclusive", arg: 2, scope: !39, file: !1, line: 7, type: !7)
+!46 = !DILocation(line: 8, column: 5, scope: !39)
+!47 = !DILocation(line: 13, column: 5, scope: !39)
 ---
-ExitCode: 3
-
-### How It Works
-
-The compiler desugars for loops to iterator-based while loops. This code:
-
-```text
-for i in range(0, 3) 'loop'
-    print(i)
-end 'loop'
-```
-OptimizedInstructionCount: 187
-UnoptimizedInstructionCount: 187
+ExitCode: 23
+OptimizedInstructionCount: 491
+UnoptimizedInstructionCount: 491

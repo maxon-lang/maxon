@@ -36,11 +36,16 @@ void printHelp(const char *programName) {
 	std::cerr << "                 Regenerate all test fragments" << std::endl;
 	std::cerr << "  test-fragments [options]" << std::endl;
 	std::cerr << "                 Run all test fragments (shows only failures and summary)" << std::endl;
-	std::cerr << "  <input.maxon>  Compile and run source file (no artifacts left on disk)" << std::endl;
+	std::cerr << "  test <file.test>" << std::endl;
+	std::cerr << "                 Run a single test file and verify expected output" << std::endl;
+	std::cerr << "  <input.maxon|.test>  Compile and run source file (no artifacts left on disk)" << std::endl;
 	std::cerr << "\nOptions for self-test:" << std::endl;
 	std::cerr << "  --verbose, -v  Show detailed test output" << std::endl;
 	std::cerr << "\nOptions for test-fragments:" << std::endl;
 	std::cerr << "  --verbose, -v  Show all tests including passes" << std::endl;
+	std::cerr << "\nOptions for test:" << std::endl;
+	std::cerr << "  --verbose, -v  Show detailed test output" << std::endl;
+	std::cerr << "  --update, -u   Update the test file with actual MaxoncStderr output" << std::endl;
 	std::cerr << "\nOptions for compile:" << std::endl;
 	std::cerr << "  --emit-llvm    Generate .ll file alongside executable" << std::endl;
 	std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
@@ -141,6 +146,29 @@ int main(int argc, char *argv[]) {
 		return runTestFragments(verbose);
 	}
 
+	if (command == "test") {
+		if (argc < 3) {
+			std::cerr << "Error: test command requires a test file" << std::endl;
+			std::cerr << "Usage: maxon test <file.test> [options]" << std::endl;
+			return 1;
+		}
+
+		bool verbose = false;
+		bool update = false;
+		std::string testFile = argv[2];
+
+		for (int i = 3; i < argc; ++i) {
+			std::string arg = argv[i];
+			if (arg == "--verbose" || arg == "-v") {
+				verbose = true;
+			} else if (arg == "--update" || arg == "-u") {
+				update = true;
+			}
+		}
+
+		return runSingleTestFile(testFile, verbose, update);
+	}
+
 	// Internal command used by parallel test runner
 	if (command == "test-fragments-subset") {
 		if (argc < 4) {
@@ -164,8 +192,13 @@ int main(int argc, char *argv[]) {
 		return runTestFragmentsSubset(testFiles, outputFile, verbose);
 	}
 
-	if (argc == 2 && command.length() >= 6 && command.substr(command.length() - 6) == ".maxon") {
-		return compileAndRunTemporary(command);
+	if (argc == 2) {
+		size_t len = command.length();
+		bool isMaxonFile = (len >= 6 && command.substr(len - 6) == ".maxon");
+		bool isTestFile = (len >= 5 && command.substr(len - 5) == ".test");
+		if (isMaxonFile || isTestFile) {
+			return compileAndRunTemporary(command);
+		}
 	}
 
 	if (command != "compile") {
@@ -212,11 +245,6 @@ int main(int argc, char *argv[]) {
 	try {
 		compileProgram(options);
 	} catch (const std::exception &e) {
-		if (std::strlen(e.what()) > 0) {
-			std::cerr << "=== Compilation Failed ===" << std::endl;
-			std::cerr << e.what() << std::endl;
-			std::cerr << "\nCompilation terminated due to errors." << std::endl;
-		}
 		return 1;
 	}
 

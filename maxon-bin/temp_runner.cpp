@@ -4,103 +4,97 @@
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
-#include <iostream>
-#include <string>
-#include <sstream>
 #include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
 
-int compileAndRunTemporary(const std::string& sourceFile) {
-    try {
-        std::filesystem::path tempDir = "temp";
-        std::filesystem::create_directories(tempDir);
-        std::string tempExe = (tempDir / ("maxon_temp_" + std::to_string(std::time(nullptr)) + ".exe")).string();
+int compileAndRunTemporary(const std::string &sourceFile) {
+	try {
+		std::filesystem::path tempDir = "temp";
+		std::filesystem::create_directories(tempDir);
+		std::string tempExe = (tempDir / ("maxon_temp_" + std::to_string(std::time(nullptr)) + ".exe")).string();
 
-        CompilationOptions options;
-        options.inputFiles = {sourceFile};
-        options.outputFile = tempExe;
-        options.optimize = true;
-        options.debugInfo = false;
-        options.verbose = false;
-        options.emitLLVM = false;
-        options.compileOnly = false;
+		CompilationOptions options;
+		options.inputFiles = {sourceFile};
+		options.outputFile = tempExe;
+		options.optimize = true;
+		options.debugInfo = false;
+		options.verbose = false;
+		options.emitLLVM = false;
+		options.compileOnly = false;
 
-        std::string executablePath = compileProgram(options);
+		std::string executablePath = compileProgram(options);
 
-        int exitCode;
-#ifdef _WIN32
-        exitCode = system(executablePath.c_str());
-#else
-        exitCode = system(executablePath.c_str());
-#endif
+		int exitCode = system(executablePath.c_str());
 
-        std::filesystem::remove(executablePath);
+		std::filesystem::remove(executablePath);
 
-        return exitCode;
-
-    } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        return 1;
-    }
+		return exitCode;
+	} catch (const std::exception &e) {
+		std::cerr << "Error: " << e.what() << std::endl;
+		return 1;
+	}
 }
 
 int compileAndRunFromStdin() {
-    try {
-        // Read all input from stdin
-        std::string sourceCode;
-        std::string line;
-        while (std::getline(std::cin, line)) {
-            sourceCode += line + "\n";
-        }
+	try {
+		// Read all input from stdin
+		std::string sourceCode;
+		std::string line;
+		while (std::getline(std::cin, line)) {
+			sourceCode += line + "\n";
+		}
 
-        if (sourceCode.empty()) {
-            std::cerr << "Error: No input provided on stdin" << std::endl;
-            return 1;
-        }
+		if (sourceCode.empty()) {
+			std::cerr << "Error: No input provided on stdin" << std::endl;
+			return 1;
+		}
 
-        // Create a temporary source file
-        std::filesystem::path tempDir = "temp";
-        std::filesystem::create_directories(tempDir);
-        std::string timeStr = std::to_string(std::time(nullptr));
-        std::string tempSource = (tempDir / ("maxon_stdin_" + timeStr + ".maxon")).string();
-        std::string tempExe = (tempDir / ("maxon_temp_" + timeStr + ".exe")).string();
+		// Create a temporary source file
+		std::filesystem::path tempDir = "temp";
+		std::filesystem::create_directories(tempDir);
+		std::string timeStr = std::to_string(std::time(nullptr));
+		std::string tempSource = (tempDir / ("maxon_stdin_" + timeStr + ".maxon")).string();
+		std::string tempExe = (tempDir / ("maxon_temp_" + timeStr + ".exe")).string();
 
-        // Write stdin to temporary source file
-        std::ofstream sourceFile(tempSource);
-        if (!sourceFile) {
-            std::cerr << "Error: Could not create temporary source file" << std::endl;
-            return 1;
-        }
-        sourceFile << sourceCode;
-        sourceFile.close();
+		// Write stdin to temporary source file
+		std::ofstream sourceFile(tempSource);
+		if (!sourceFile) {
+			std::cerr << "Error: Could not create temporary source file" << std::endl;
+			return 1;
+		}
+		sourceFile << sourceCode;
+		sourceFile.close();
 
-        // Compile the temporary source file
-        CompilationOptions options;
-        options.inputFiles = {tempSource};
-        options.outputFile = tempExe;
-        options.optimize = true;
-        options.debugInfo = false;
-        options.verbose = false;
-        options.emitLLVM = false;
-        options.compileOnly = false;
+		// Compile the temporary source file
+		CompilationOptions options;
+		options.inputFiles = {tempSource};
+		options.outputFile = tempExe;
+		options.optimize = true;
+		options.debugInfo = false;
+		options.verbose = false;
+		options.emitLLVM = false;
+		options.compileOnly = false;
 
-        std::string executablePath = compileProgram(options);
+		std::string executablePath = compileProgram(options);
 
-        // Run the executable
-        int exitCode;
+		// Run the executable
+		int exitCode;
 #ifdef _WIN32
-        exitCode = system(executablePath.c_str());
+		exitCode = system(executablePath.c_str());
 #else
-        exitCode = system(executablePath.c_str());
+		exitCode = system(executablePath.c_str());
 #endif
 
-        // Clean up temporary files
-        std::filesystem::remove(executablePath);
-        std::filesystem::remove(tempSource);
+		// Clean up temporary files
+		std::filesystem::remove(executablePath);
+		std::filesystem::remove(tempSource);
 
-        return exitCode;
+		return exitCode;
 
-    } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        return 1;
-    }
+	} catch (const std::exception &e) {
+		std::cerr << "Error: " << e.what() << std::endl;
+		return 1;
+	}
 }

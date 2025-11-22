@@ -20,7 +20,6 @@
                 <h2>Contents</h2>
                 <ul>
                     <li><a href="#missing-return-error">Missing Return Error</a></li>
-                    <li><a href="#operator-errors">Operator Errors</a></li>
                     <li><a href="#unknown-keyword-error">Unknown Keyword Error</a></li>
                     <li><a href="#unused-parameters">Unused Parameters</a></li>
                 </ul>
@@ -48,54 +47,23 @@ end 'test'
 </code></pre>
 
             </div>
-            <div class="spec-section" id="operator-errors">
-                <h2>Operator Errors</h2>
-<p>Using unsupported operators causes a compilation error.</p>
-<h3 id="unsupported-operators">Unsupported Operators</h3>
-<p>Maxon currently does not support:</p>
-<ul>
-<li>Bitwise operators: <code>&amp;</code>, <code>|</code>, <code>^</code>, <code>~</code>, <code>&lt;&lt;</code>, <code>&gt;&gt;</code></li>
-<li>Logical operators: <code>&amp;&amp;</code>, <code>||</code>, <code>!</code> (planned)</li>
-<li>Compound assignment: <code>+=</code>, <code>-=</code>, <code>*=</code>, etc. (planned)</li>
-</ul>
-<h3 id="error-example">Error Example</h3>
-<pre><code class="language-maxon">function main() int
-    return 3 ^ 4  // Error: '^' is not a valid operator
-end 'main'
-</code></pre>
-<div class="expected-output"><pre>MaxoncStderr: Unexpected character '^' at line 2, column 14
-</pre></div>
-<p>Error message:</p>
-<pre><code>Unexpected character '^'
-</code></pre>
-<h3 id="workarounds">Workarounds</h3>
-<p>Use function calls for complex operations:</p>
-<pre><code class="language-maxon">// Instead of: result = a ^ b
-function xor(a int, b int) int
-    // Implement XOR using other operators
-    return (a | b) &amp; ~(a &amp; b)  // When bitwise ops are added
-end 'xor'
-</code></pre>
-
-            </div>
             <div class="spec-section" id="unknown-keyword-error">
                 <h2>Unknown Keyword Error</h2>
 <p>Using an undefined keyword or bare identifier as a statement causes a parse error.</p>
 <h3 id="error-example">Error Example</h3>
 <pre><code class="language-maxon">function main() int
     var x = 0
-    foo         // Error: 'foo' is not a keyword
+    foo
         x = 5
     end 'foo'
     return x
 end 'main'
 </code></pre>
-<div class="expected-output"><pre>MaxoncStderr: Unexpected identifier 'foo'
+<div class="error-output"><pre>In file 'temp\temp_fragment.maxon':
+Unexpected identifier 'foo'
+  Location: line 4, column 5
+  Note: Did you forget an assignment (=), function call (), or keyword?
 </pre></div>
-<p>Error message:</p>
-<pre><code>Unexpected identifier 'foo'
-Note: Did you forget an assignment (=), function call (), or keyword?
-</code></pre>
 <h3 id="common-solutions">Common Solutions</h3>
 <ul>
 <li>Function call: <code>foo()</code> instead of <code>foo</code></li>

@@ -290,6 +290,33 @@ pre code {
     margin: 0;
 }
 
+/* Error output styling (for MaxoncStderr) */
+.error-output {
+    background-color: #ffebee;
+    border: 1px solid #ef9a9a;
+    border-radius: 4px;
+    padding: 15px;
+    margin-top: 10px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    position: relative;
+}
+
+.error-output::before {
+    content: 'Error Output:';
+    display: block;
+    font-weight: bold;
+    color: #c62828;
+    margin-bottom: 8px;
+    font-size: 0.9em;
+}
+
+.error-output pre {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+}
+
 /* Index page styles */
 body:has(.categories) .container {
     max-width: 1000px;
@@ -481,6 +508,22 @@ body:has(.categories) .header p {
 		// Expected results are now included directly in the Documentation section using ```output blocks
 		// and are rendered in the HTML output for users to see.
 
+		static string ProcessMaxoncStderrBlocks(string html) {
+			// Find and replace output blocks that contain MaxoncStderr with error styling
+			// Pattern: <pre><code class="language-output">MaxoncStderr: ...</code></pre>
+			var regex = new Regex(@"<pre><code class=""language-output"">(MaxoncStderr:.*?)</code></pre>", RegexOptions.Singleline);
+			
+			return regex.Replace(html, (match) => {
+				var content = match.Groups[1].Value;
+				// Strip the "MaxoncStderr: " prefix
+				if (content.StartsWith("MaxoncStderr: ")) {
+					content = content.Substring("MaxoncStderr: ".Length);
+				}
+				// Return with error-output styling
+				return $@"<div class=""error-output""><pre>{content}</pre></div>";
+			});
+		}
+
 		static string GenerateTitle(string name) {
 			// Convert hyphenated names to title case
 			return string.Join(" ", name.Split('-').Select(word => 
@@ -559,7 +602,10 @@ body:has(.categories) .header p {
 				sb.AppendLine($"            <div class=\"spec-section\" id=\"{spec.Name}\">");
 				sb.AppendLine($"                <h2>{spec.Title}</h2>");
 				var html = Markdown.ToHtml(spec.DocumentationContent, pipeline);
-				// Process output blocks - replace <pre><code class="language-output"> with custom styling
+				// Process output blocks
+				// First handle error output blocks (MaxoncStderr)
+				html = ProcessMaxoncStderrBlocks(html);
+				// Then handle regular output blocks
 				html = MyRegex2().Replace(html, @"<div class=""expected-output""><pre>$1</pre></div>");
 				sb.AppendLine(html);
 				sb.AppendLine("            </div>");

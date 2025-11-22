@@ -61,8 +61,11 @@ function main() int
 end 'main'
 ```
 ```
-MaxoncStderr: Semantic Error: line 1, column 21
+MaxoncStderr: Semantic Error: line 2, column 21
 The parameter 'b' is declared but its value is never used
+
+  2 | function add(a int, b int) int
+    |                     ^
 ```
 
 <!-- test: multiple-unused -->
@@ -76,8 +79,17 @@ function main() int
 end 'main'
 ```
 ```
-MaxoncStderr: Semantic Error: line 1, column 21
+MaxoncStderr: Semantic Error: line 2, column 22
 The parameter 'b' is declared but its value is never used
+
+  2 | function test(a int, b int, c int) int
+    |                      ^
+
+Semantic Error: line 2, column 29
+The parameter 'c' is declared but its value is never used
+
+  2 | function test(a int, b int, c int) int
+    |                             ^
 ```
 
 <!-- test: all-used-ok -->
@@ -120,6 +132,21 @@ function main() int
 end 'main'
 ```
 ```
-MaxoncStderr: Semantic Error: line 1, column 20
+MaxoncStderr: Semantic Error: line 2, column 20
 The parameter 'x' is declared but its value is never used
+
+  2 | function doNothing(x int, y int)
+    |                    ^
+
+Semantic Error: line 2, column 27
+The parameter 'y' is declared but its value is never used
+
+  2 | function doNothing(x int, y int)
+    |                           ^
+
+Semantic Error: line 3, column 5
+The variable 'z' is assigned but its value is never used
+
+  3 |     var z = 42
+    |     ^
 ```

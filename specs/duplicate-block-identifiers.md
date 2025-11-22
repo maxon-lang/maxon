@@ -43,6 +43,9 @@ function main() int
     return x
 end 'main'
 ```
+```output
+ExitCode: 0
+```
 
 **Valid Code - Shadowing at Different Nesting Levels:**
 
@@ -58,6 +61,9 @@ function main() int
     return x
 end 'main'
 ```
+```output
+ExitCode: 0
+```
 
 **Invalid Code - Duplicate at Same Level:**
 
@@ -72,6 +78,13 @@ function main() int
     end 'check'
     return x
 end 'main'
+```
+```output
+MaxoncStderr: Semantic Error: line 7, column 5
+Duplicate block identifier 'check' in nested blocks
+
+  7 |     while false 'check'
+    |     ^
 ```
 
 **Notes:**

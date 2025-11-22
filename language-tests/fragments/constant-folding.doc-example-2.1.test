@@ -1,9 +1,7 @@
-// Test: assignment.doc-example-2.1
+// Test: constant-folding.doc-example-2.1
 function main() int
-    var x = 10
-    x = 20          // Update x
-    x = x + 5       // x is now 25
-    return x
+    var x = 4
+    return (1+2+x)*(x+(1+2))  // Optimized to: 7 * 7 = 49
 end 'main'
 ---
 ; ModuleID = 'test.maxon'
@@ -12,7 +10,7 @@ source_filename = "test.maxon"
 ; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)
 define noundef i32 @main() local_unnamed_addr #0 {
 entry:
-  ret i32 25
+  ret i32 49
 }
 
 declare void @ExitProcess(i32) local_unnamed_addr
@@ -20,7 +18,7 @@ declare void @ExitProcess(i32) local_unnamed_addr
 ; Function Attrs: noreturn
 define void @_start() local_unnamed_addr #1 {
 entry:
-  tail call void @ExitProcess(i32 25)
+  tail call void @ExitProcess(i32 49)
   unreachable
 }
 
@@ -33,14 +31,14 @@ source_filename = "test.maxon"
 define i32 @main() !dbg !4 {
 entry:
   %x = alloca i32, align 4
-  store i32 10, ptr %x, align 4, !dbg !9
+  store i32 4, ptr %x, align 4, !dbg !9
     #dbg_declare(ptr %x, !10, !DIExpression(), !9)
-  store i32 20, ptr %x, align 4, !dbg !11
-  %x1 = load i32, ptr %x, align 4, !dbg !12
-  %addtmp = add i32 %x1, 5, !dbg !12
-  store i32 %addtmp, ptr %x, align 4, !dbg !12
-  %x2 = load i32, ptr %x, align 4, !dbg !13
-  ret i32 %x2, !dbg !13
+  %x1 = load i32, ptr %x, align 4, !dbg !11
+  %addtmp = add i32 3, %x1, !dbg !11
+  %x2 = load i32, ptr %x, align 4, !dbg !11
+  %addtmp3 = add i32 %x2, 3, !dbg !11
+  %multmp = mul i32 %addtmp, %addtmp3, !dbg !11
+  ret i32 %multmp, !dbg !11
 }
 
 declare void @ExitProcess(i32)
@@ -66,10 +64,8 @@ entry:
 !8 = !{}
 !9 = !DILocation(line: 3, column: 5, scope: !4)
 !10 = !DILocalVariable(name: "x", scope: !4, file: !1, line: 3, type: !7, align: 32)
-!11 = !DILocation(line: 4, column: 7, scope: !4)
-!12 = !DILocation(line: 5, column: 7, scope: !4)
-!13 = !DILocation(line: 6, column: 5, scope: !4)
+!11 = !DILocation(line: 4, column: 5, scope: !4)
 ---
-ExitCode: 25
+ExitCode: 49
 OptimizedInstructionCount: 9
 UnoptimizedInstructionCount: 9
