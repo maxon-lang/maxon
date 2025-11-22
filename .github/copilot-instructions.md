@@ -72,10 +72,26 @@ Add handler in `LspServer`, register in `JsonRpcHandler`, implement in `Analyzer
 - After build it is copied to 'bin' folder so maxon.exe can find it
 - NEVER resort to calling the c runtime library, we do not use it!
 
+## Documentation
+
+### Language Reference
+- **`docs/LANGUAGE_REFERENCE.md`** - Complete language reference for AI coding agents
+  - Full syntax specifications, type system, operators, control flow
+  - Standard library functions with signatures
+  - Memory model and calling conventions
+  - Best practices for writing Maxon code
+  - Quick reference syntax guide
+- **Use this as the authoritative source when writing Maxon code**
+
+### Spec Files
+- Individual specs in `specs/` define each language feature in detail
+- Each spec contains Developer Notes, Documentation, and Tests
+- HTML documentation generated in `maxon-docs/Output/` via C# DocGen tool
+
 ## Guidelines
 - Don't create new documentation files unless instructed
 - Comments explain *why*, not *what*
-- Documentation is generated in `maxon-docs/Output/` via C# DocGen tool
+- Refer to `docs/LANGUAGE_REFERENCE.md` for complete language syntax when writing Maxon code
 
 ## Writing VSCode Extension Tests
 - Do not set timeouts
