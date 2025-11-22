@@ -49,11 +49,8 @@ suite('Diagnostics Tests', () => {
 	 * Helper to log diagnostics and extension logs
 	 */
 	function logDiagnostics(diagnostics: vscode.Diagnostic[]): void {
-		console.log(`Diagnostics: ${diagnostics.map(d => `[${d.severity}] ${d.message}`).join('\n')}`);
-		const logs = getLogs();
-		console.log('\n=== Extension Logs ===');
-		logs.forEach(log => console.log(log));
-		console.log('======================\n');
+		// Diagnostics helper for debugging
+		// Can be used for debugging but does not output in tests
 	}
 
 	setup(async () => {
@@ -63,17 +60,12 @@ suite('Diagnostics Tests', () => {
 		// Ensure LSP client is running
 		let client = getClient();
 		if (!client || (client.state as number) !== 2 /* Running */) {
-			console.log(`LSP Client state: ${client?.state ?? 'undefined'}, restarting...`);
 			try {
 				await restartClient();
 				client = getClient();
-				console.log(`LSP Client restarted, new state: ${client?.state}`);
 			} catch (error) {
-				console.error(`Failed to restart LSP client: ${error}`);
 				throw new Error(`LSP Client not available for diagnostic tests: ${error}`);
 			}
-		} else {
-			console.log(`LSP Client already running (state: ${client.state})`);
 		}
 
 		// Create a temporary test file
@@ -258,7 +250,6 @@ end 'main'
 		await setupTestFile(content);
 		let diagnostics = await waitForDiagnostics(20, (diags) => diags.length > 0);
 
-		console.log(`Initial diagnostics: ${diagnostics.length}`);
 		assert.ok(diagnostics.length > 0, 'Should have initial diagnostics');
 
 		// Get the language client and manually send didClose notification
@@ -277,7 +268,6 @@ end 'main'
 
 		// Check that diagnostics are cleared
 		diagnostics = vscode.languages.getDiagnostics(testFileUri);
-		console.log(`Diagnostics after didClose: ${diagnostics.length}`);
 
 		// Close editor and delete file for cleanup
 		await vscode.commands.executeCommand('workbench.action.closeActiveEditor');

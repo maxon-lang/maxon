@@ -30,9 +30,7 @@ suite('Stdlib Completion Tests', () => {
 		document = await vscode.workspace.openTextDocument(testFilePath);
 		await vscode.window.showTextDocument(document);
 
-		// Check document language ID
-		console.log('Document language ID:', document.languageId);
-		console.log('Document URI:', document.uri.toString());
+
 	});
 
 	teardown(async () => {
@@ -61,10 +59,8 @@ suite('Stdlib Completion Tests', () => {
 
 		assert.ok(completions, 'Completions should be returned');
 
-		// Debug: log available completions
-		console.log(`Found ${completions.items.length} completions`);
+		// Check if completions are available
 		const labels = completions.items.map(item => item.label).slice(0, 20);
-		console.log('First 20 completions:', labels);
 
 		// Check if format_int_array is in the completions
 		const hasFormatIntArray = completions.items.some(
@@ -162,8 +158,6 @@ suite('Stdlib Completion Tests', () => {
 		const hoverText = hovers[0].contents.map(c =>
 			typeof c === 'string' ? c : c.value
 		).join('\n');
-
-		console.log('Hover text:', hoverText);
 
 		// Stdlib functions may not show qualified names when not properly used in context
 		// Just verify we get some hover information
