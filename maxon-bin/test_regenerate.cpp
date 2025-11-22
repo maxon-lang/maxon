@@ -338,14 +338,16 @@ static int regenerateSingleFragment(const std::string& testPath, const std::stri
     }
 
     // Use worker-specific temp files to avoid conflicts
+    std::filesystem::path tempDir = "temp";
+    std::filesystem::create_directories(tempDir);
     std::string workerSuffix = workerId > 0 ? ("_w" + std::to_string(workerId)) : "";
-    std::string tempSource = "temp_fragment" + workerSuffix + ".maxon";
-    std::string tempOptLL = "temp-opt" + workerSuffix + ".ll";
-    std::string tempOptExe = "temp-opt" + workerSuffix + ".exe";
-    std::string tempDebugLL = "temp-debug" + workerSuffix + ".ll";
-    std::string tempDebugExe = "temp-debug" + workerSuffix + ".exe";
-    std::string tempOptPdb = "temp-opt" + workerSuffix + ".pdb";
-    std::string tempDebugPdb = "temp-debug" + workerSuffix + ".pdb";
+    std::string tempSource = (tempDir / ("temp_fragment" + workerSuffix + ".maxon")).string();
+    std::string tempOptLL = (tempDir / ("temp-opt" + workerSuffix + ".ll")).string();
+    std::string tempOptExe = (tempDir / ("temp-opt" + workerSuffix + ".exe")).string();
+    std::string tempDebugLL = (tempDir / ("temp-debug" + workerSuffix + ".ll")).string();
+    std::string tempDebugExe = (tempDir / ("temp-debug" + workerSuffix + ".exe")).string();
+    std::string tempOptPdb = (tempDir / ("temp-opt" + workerSuffix + ".pdb")).string();
+    std::string tempDebugPdb = (tempDir / ("temp-debug" + workerSuffix + ".pdb")).string();
 
     std::ofstream tempOut(tempSource);
     if (!tempOut) {
@@ -455,9 +457,7 @@ static int regenerateSingleFragment(const std::string& testPath, const std::stri
         int64_t optInstrCount = -1;
 
 #ifdef _WIN32
-        char tempPath[MAX_PATH];
-        GetTempPathA(MAX_PATH, tempPath);
-        std::string tempOutput = std::string(tempPath) + "maxon_output" + workerSuffix + ".tmp";
+        std::string tempOutput = (tempDir / ("maxon_output" + workerSuffix + ".tmp")).string();
 
         std::string cmdLine = tempOptExe;
         if (!args.empty()) {

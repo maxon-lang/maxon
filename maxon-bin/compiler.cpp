@@ -8,6 +8,7 @@
 #include <iostream>
 #include <set>
 #include <vector>
+#include <filesystem>
 
 std::unique_ptr<ProgramAST> parseFile(const std::string& filePath, bool verbose) {
     try {
@@ -163,6 +164,11 @@ std::string compileProgram(const CompilationOptions& options, llvm::raw_ostream*
     }
 
     std::string moduleName = options.inputFiles.size() == 1 ? options.inputFiles[0] : "merged";
+    // For temp files (in temp/ directory), use just the filename without path to keep IR clean
+    if (moduleName.find("temp") != std::string::npos) {
+        std::filesystem::path p(moduleName);
+        moduleName = p.filename().string();
+    }
     CodeGenerator codegen(moduleName, options.debugInfo, options.verbose, options.profile);
     codegen.generate(mergedProgram.get(), !options.compileOnly);
     if (options.verbose) {

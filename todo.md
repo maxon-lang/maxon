@@ -48,7 +48,6 @@ add tests for compiler will all kinds of malformed inputs
 ## Future Enhancements
 
 1. **More numeric types:** f32 (single precision), i64 (long), u32 (unsigned), etc.
-2. **Advanced math:** sin, cos, log, exp, etc.
 3. **String type:** Proper string handling beyond char arrays
 4. **Array return values:** Transfer ownership when returning arrays from functions
 5. **Reference counting:** For complex ownership scenarios
@@ -66,4 +65,4 @@ https://llvm.org/docs/Frontend/PerformanceTips.html
 - break up large files like codegen.cpp
 - formatter
 - tests for debugging (ie step into, step over, etc)
-- maxon <file> should optimize by default
+- extensive math function tests

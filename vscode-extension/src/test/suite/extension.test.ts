@@ -35,7 +35,7 @@ suite('Language Client Test Suite', () => {
         // Create a temporary .maxon file to test language association
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (workspaceFolder) {
-            const testFilePath = path.join(workspaceFolder.uri.fsPath, 'test.maxon');
+            const testFilePath = path.join(workspaceFolder.uri.fsPath, 'temp', 'test.maxon');
             const testFileUri = vscode.Uri.file(testFilePath);
             
             // Try to open a document with .maxon extension

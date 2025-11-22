@@ -139,4 +139,5 @@ UnoptimizedInstructionCount: <count>
 - **Specs are authoritative**: Test expected values are defined in spec files
 - **IR is generated**: Never manually edit LLVM IR in `.test` files
 - **Metadata preserved**: `regen-fragments` keeps ExitCode, Stdout, etc. from specs
-- **No temp files**: Use `maxon <file>` to compile and run without artifacts
+- **No temp files**: Use `maxon <file>` or pipe code to compile and run without artifacts
+- **Optimizations enabled by default**: Both `maxon <file>` and piped input compile with optimizations enabled

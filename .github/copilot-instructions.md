@@ -48,10 +48,13 @@
 - All fragments in `language-tests/fragments/` should be generated from specs
 
 ### Testing
-- Use `maxon <file>` to compile and run in one step (no temp files)
+- Use `maxon <file>` to compile and run in one step (no temp files, optimized by default)
+- Pipe code directly: `echo 'function main() int ... end "main"' | maxon`
+- Both file and piped execution optimize by default
 - Create test files in `/temp` and clean up afterwards
 - `maxon test-fragments` runs all language tests (add `--verbose` for details)
 - `maxon compile <file> --emit-llvm` generates an LLVM IR file with the exe
+- `maxon compile <file> -O` explicitly enables optimizations (enabled by default for both piping and direct file execution)
 
 ### Adding Keywords
 Update: `TokenType` enum, `Lexer::readIdentifier()` map, parser logic, AST if needed, codegen, TextMate grammar

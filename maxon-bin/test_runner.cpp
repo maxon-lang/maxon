@@ -134,7 +134,9 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
     trim(expectedMaxoncStderr);
 
     // Use unique temp file names for parallel execution
-    std::string tempSource = "temp_test_fragment_" + std::to_string(threadId) + ".maxon";
+    std::filesystem::path tempDir = "temp";
+    std::filesystem::create_directories(tempDir);
+    std::string tempSource = (tempDir / ("temp_test_fragment_" + std::to_string(threadId) + ".maxon")).string();
     std::ofstream tempOut(tempSource);
     if (!tempOut) {
         auto testEndTime = std::chrono::high_resolution_clock::now();
@@ -147,9 +149,9 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
     tempOut << sourceCode;
     tempOut.close();
 
-    std::string tempOptLL = "temp-test-opt-" + std::to_string(threadId) + ".ll";
-    std::string tempDebugLL = "temp-test-debug-" + std::to_string(threadId) + ".ll";
-    std::string tempExe = "temp-test-" + std::to_string(threadId) + ".exe";
+    std::string tempOptLL = (tempDir / ("temp-test-opt-" + std::to_string(threadId) + ".ll")).string();
+    std::string tempDebugLL = (tempDir / ("temp-test-debug-" + std::to_string(threadId) + ".ll")).string();
+    std::string tempExe = (tempDir / ("temp-test-" + std::to_string(threadId) + ".exe")).string();
 
     try {
         CompilationOptions optOpts;
@@ -370,10 +372,8 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
                 std::string actualStderr;
 
 #ifdef _WIN32
-                char tempPath[MAX_PATH];
-                GetTempPathA(MAX_PATH, tempPath);
-                std::string tempOutput = std::string(tempPath) + "maxon_test_output_" + std::to_string(threadId) + ".tmp";
-                std::string tempStderrFile = std::string(tempPath) + "maxon_test_stderr_" + std::to_string(threadId) + ".tmp";
+                std::string tempOutput = (tempDir / ("maxon_test_output_" + std::to_string(threadId) + ".tmp")).string();
+                std::string tempStderrFile = (tempDir / ("maxon_test_stderr_" + std::to_string(threadId) + ".tmp")).string();
 
                 std::string cmdLine = tempExe;
                 if (!args.empty()) {
@@ -549,11 +549,11 @@ int runTestFragments(bool verbose) {
         }
 
         // Create output files for each worker
+        std::filesystem::path tempDir = "temp";
+        std::filesystem::create_directories(tempDir);
         std::vector<std::string> outputFiles(numWorkers);
         for (unsigned int i = 0; i < numWorkers; ++i) {
-            char tempPath[MAX_PATH];
-            GetTempPathA(MAX_PATH, tempPath);
-            outputFiles[i] = std::string(tempPath) + "maxon_test_results_" + std::to_string(i) + ".tmp";
+            outputFiles[i] = (tempDir / ("maxon_test_results_" + std::to_string(i) + ".tmp")).string();
         }
 
 #ifdef _WIN32

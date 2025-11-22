@@ -35,7 +35,7 @@ suite('Diagnostics Tests', () => {
             throw new Error('No workspace folder found');
         }
         
-        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'test-diagnostics.maxon');
+        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'temp', 'test-diagnostics.maxon');
         testFileUri = vscode.Uri.file(testFilePath);
     });
 

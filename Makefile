@@ -87,6 +87,9 @@ extension-watch:
 extension-test:
 	@echo Running VS Code extension tests...
 	@powershell -Command "cd vscode-extension; npm run test"
+	@echo Cleaning up temporary test files...
+	@powershell -Command "if (Test-Path 'temp') { Remove-Item -Path 'temp\test_*.maxon' -Force -ErrorAction SilentlyContinue }"
+	@echo Extension tests complete.
 
 # Package VS Code extension as .vsix
 extension-package: extension-build

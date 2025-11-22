@@ -35,7 +35,7 @@ suite('Qualified Name Completion Tests', () => {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         assert.ok(workspaceFolder, 'Workspace folder should be available');
         
-        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'test_qualified_name.maxon');
+        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'temp', 'test_qualified_name.maxon');
         
         // Create test file with basic content
         fs.writeFileSync(testFilePath, 'function main() int\n    \nend \'main\'', 'utf-8');

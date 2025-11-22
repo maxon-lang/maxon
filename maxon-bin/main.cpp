@@ -15,6 +15,14 @@
 
 #include <llvm/Support/TargetSelect.h>
 
+#ifdef _WIN32
+#include <io.h>
+#define isatty _isatty
+#define fileno _fileno
+#else
+#include <unistd.h>
+#endif
+
 namespace fs = std::filesystem;
 
 int main(int argc, char* argv[]) {
@@ -27,6 +35,11 @@ int main(int argc, char* argv[]) {
     llvm::InitializeAllAsmPrinters();
 
     if (argc < 2) {
+        // Check if stdin has data (not a TTY)
+        if (!isatty(fileno(stdin))) {
+            return compileAndRunFromStdin();
+        }
+        
         std::cerr << "Usage: " << argv[0] << " <command> [options]" << std::endl;
         std::cerr << "\nCommands:" << std::endl;
         std::cerr << "  compile <input.maxon> [<input2.maxon> ...] [options]" << std::endl;

@@ -41,7 +41,7 @@ suite('Code Action Test Suite', () => {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         assert.ok(workspaceFolder, 'Workspace folder should exist');
         
-        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'test_unused.maxon');
+        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'temp', 'test_unused.maxon');
         const testUri = vscode.Uri.file(testFilePath);
         
         // Create and open the document
@@ -96,7 +96,7 @@ suite('Code Action Test Suite', () => {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         assert.ok(workspaceFolder, 'Workspace folder should exist');
         
-        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'test_structure.maxon');
+        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'temp', 'test_structure.maxon');
         const testUri = vscode.Uri.file(testFilePath);
         
         const edit = new vscode.WorkspaceEdit();
@@ -151,7 +151,7 @@ suite('Code Action Test Suite', () => {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         assert.ok(workspaceFolder, 'Workspace folder should exist');
         
-        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'test_error.maxon');
+        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'temp', 'test_error.maxon');
         const testUri = vscode.Uri.file(testFilePath);
         
         const edit = new vscode.WorkspaceEdit();
@@ -196,7 +196,7 @@ suite('Code Action Test Suite', () => {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         assert.ok(workspaceFolder, 'Workspace folder should exist');
         
-        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'test_remove.maxon');
+        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'temp', 'test_remove.maxon');
         const testUri = vscode.Uri.file(testFilePath);
         
         const edit = new vscode.WorkspaceEdit();
@@ -248,7 +248,7 @@ suite('Code Action Test Suite', () => {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         assert.ok(workspaceFolder, 'Workspace folder should exist');
         
-        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'test_code.maxon');
+        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'temp', 'test_code.maxon');
         const testUri = vscode.Uri.file(testFilePath);
         
         const edit = new vscode.WorkspaceEdit();
@@ -294,7 +294,7 @@ suite('Code Action Test Suite', () => {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         assert.ok(workspaceFolder, 'Workspace folder should exist');
         
-        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'test_multiple.maxon');
+        const testFilePath = path.join(workspaceFolder.uri.fsPath, 'temp', 'test_multiple.maxon');
         const testUri = vscode.Uri.file(testFilePath);
         
         const edit = new vscode.WorkspaceEdit();

@@ -57,6 +57,34 @@ std::string findStdlibDirectory() {
 std::string deriveNamespace(const std::string& filePath) {
     std::filesystem::path p(filePath);
     std::string pathStr = p.string();
+    
+    // Skip "temp" directory (used for temporary files)
+    size_t tempPos = pathStr.find("temp");
+    if (tempPos != std::string::npos) {
+        // Check if "temp" is preceded by a separator (to avoid matching "temporary" etc)
+        bool isTemp = false;
+        if (tempPos == 0 || pathStr[tempPos - 1] == '/' || pathStr[tempPos - 1] == '\\') {
+            // Check if "temp" is followed by a separator or end of string
+            size_t tempEnd = tempPos + 4; // "temp" is 4 chars
+            if (tempEnd >= pathStr.size() || pathStr[tempEnd] == '/' || pathStr[tempEnd] == '\\') {
+                isTemp = true;
+            }
+        }
+        if (isTemp) {
+            // Skip to after the "temp" directory
+            size_t startPos = tempPos + 4; // "temp" is 4 chars
+            if (startPos < pathStr.size() && (pathStr[startPos] == '/' || pathStr[startPos] == '\\')) {
+                startPos++; // skip the separator
+            }
+            std::string tempRelative = pathStr.substr(startPos);
+            p = std::filesystem::path(tempRelative);
+            // Return empty namespace for temp files
+            if (tempRelative.empty() || tempRelative == "." || p.parent_path().string().empty()) {
+                return "";
+            }
+        }
+    }
+    
     size_t stdlibPos = pathStr.find("stdlib");
     if (stdlibPos != std::string::npos) {
         // Skip "stdlib" and the following separator to get the namespace within stdlib
