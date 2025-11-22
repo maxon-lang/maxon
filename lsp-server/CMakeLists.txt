@@ -47,6 +47,7 @@ set(LSP_SOURCES
     src/json_rpc.cpp
     src/document_manager.cpp
     src/analyzer.cpp
+    src/formatter.cpp
 )
 
 # Create executable

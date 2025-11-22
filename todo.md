@@ -11,6 +11,7 @@ add "test" to maxon
 add "lint" to maxon
 add "profile" to maxon
 add "docs" to maxon
+add "fmt" to maxon
 add package manager to maxon
 
 self hosting
@@ -66,3 +67,4 @@ https://llvm.org/docs/Frontend/PerformanceTips.html
 - formatter
 - tests for debugging (ie step into, step over, etc)
 - extensive math function tests
+- no duplicate block identifiers

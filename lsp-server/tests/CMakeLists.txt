@@ -33,6 +33,7 @@ set(LSP_LIB_SOURCES
     ../src/json_rpc.cpp
     ../src/document_manager.cpp
     ../src/analyzer.cpp
+    ../src/formatter.cpp
     ../src/lsp_server.cpp
 )
 
@@ -88,6 +89,9 @@ target_link_libraries(test_hover lsp_lib)
 add_executable(test_rename test_rename.cpp catch_amalgamated.cpp)
 target_link_libraries(test_rename lsp_lib)
 
+add_executable(test_formatter test_formatter.cpp catch_amalgamated.cpp)
+target_link_libraries(test_formatter lsp_lib)
+
 # Enable testing
 enable_testing()
 
@@ -99,3 +103,4 @@ add_test(NAME LSPServer COMMAND test_lsp_server)
 add_test(NAME CodeActions COMMAND test_code_actions)
 add_test(NAME Hover COMMAND test_hover)
 add_test(NAME Rename COMMAND test_rename)
+add_test(NAME Formatter COMMAND test_formatter)

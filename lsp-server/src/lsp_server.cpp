@@ -57,6 +57,7 @@ LspServer::LspServer()
     : rpcHandler(std::make_unique<JsonRpcHandler>()),
       docManager(std::make_unique<DocumentManager>()),
       analyzer(std::make_unique<Analyzer>()),
+      formatter(std::make_unique<Formatter>()),
       initialized(false) {
     
     // Register request handlers
@@ -78,6 +79,10 @@ LspServer::LspServer()
         [this](const json& params) { return handleRename(params); });
     rpcHandler->registerRequestHandler("textDocument/linkedEditingRange", 
         [this](const json& params) { return handleLinkedEditingRange(params); });
+    rpcHandler->registerRequestHandler("textDocument/formatting", 
+        [this](const json& params) { return handleFormatting(params); });
+    rpcHandler->registerRequestHandler("textDocument/rangeFormatting", 
+        [this](const json& params) { return handleRangeFormatting(params); });
     
     // Register notification handlers
     rpcHandler->registerNotificationHandler("initialized", 
@@ -186,7 +191,9 @@ json LspServer::handleInitialize(const json& params) {
                 {"codeActionKinds", json::array({"quickfix"})}
             }},
             {"renameProvider", true},
-            {"linkedEditingRangeProvider", true}
+            {"linkedEditingRangeProvider", true},
+            {"documentFormattingProvider", true},
+            {"documentRangeFormattingProvider", true}
         }},
         {"serverInfo", {
             {"name", "maxon-lsp"},
@@ -639,6 +646,107 @@ json LspServer::handleLinkedEditingRange(const json& params) {
 
 void LspServer::handleExit(const json& params) {
     std::exit(0);
+}
+
+
+
+json LspServer::handleFormatting(const json& params) {
+    std::string uri = params["textDocument"]["uri"].get<std::string>();
+    
+    auto doc = docManager->getDocument(uri);
+    if (!doc) {
+        return json::array();
+    }
+    
+    // Get formatting options from the request
+    bool insertSpaces = true;  // Default to spaces
+    int tabSize = 4;           // Default tab size
+    
+    if (params.contains("options")) {
+        const auto& options = params["options"];
+        if (options.contains("insertSpaces")) {
+            insertSpaces = options["insertSpaces"].get<bool>();
+        }
+        if (options.contains("tabSize")) {
+            tabSize = options["tabSize"].get<int>();
+        }
+    }
+    
+    // Format the document
+    auto edits = formatter->formatDocument(doc->text, insertSpaces, tabSize);
+    
+    // Convert edits to LSP format
+    json result = json::array();
+    for (const auto& edit : edits) {
+        result.push_back({
+            {"range", {
+                {"start", {
+                    {"line", edit.range.start.line},
+                    {"character", edit.range.start.character}
+                }},
+                {"end", {
+                    {"line", edit.range.end.line},
+                    {"character", edit.range.end.character}
+                }}
+            }},
+            {"newText", edit.newText}
+        });
+    }
+    
+    return result;
+}
+
+json LspServer::handleRangeFormatting(const json& params) {
+    std::string uri = params["textDocument"]["uri"].get<std::string>();
+    
+    // Parse the range
+    lsp::Range range;
+    range.start.line = params["range"]["start"]["line"].get<int>();
+    range.start.character = params["range"]["start"]["character"].get<int>();
+    range.end.line = params["range"]["end"]["line"].get<int>();
+    range.end.character = params["range"]["end"]["character"].get<int>();
+    
+    auto doc = docManager->getDocument(uri);
+    if (!doc) {
+        return json::array();
+    }
+    
+    // Get formatting options from the request
+    bool insertSpaces = true;  // Default to spaces
+    int tabSize = 4;           // Default tab size
+    
+    if (params.contains("options")) {
+        const auto& options = params["options"];
+        if (options.contains("insertSpaces")) {
+            insertSpaces = options["insertSpaces"].get<bool>();
+        }
+        if (options.contains("tabSize")) {
+            tabSize = options["tabSize"].get<int>();
+        }
+    }
+    
+    // Format the range
+    auto edits = formatter->formatRange(doc->text, range, insertSpaces, tabSize);
+    
+    // Convert edits to LSP format
+    json result = json::array();
+    for (const auto& edit : edits) {
+        result.push_back({
+            {"range", {
+                {"start", {
+                    {"line", edit.range.start.line},
+                    {"character", edit.range.start.character}
+                }},
+                {"end", {
+                    {"line", edit.range.end.line},
+                    {"character", edit.range.end.character}
+                }}
+            }},
+            {"newText", edit.newText}
+        });
+    }
+    
+    return result;
 }
 
 void LspServer::publishDiagnostics(const std::string& uri, const std::vector<lsp::Diagnostic>& diagnostics) {

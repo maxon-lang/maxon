@@ -4,6 +4,7 @@
 #include "json_rpc.h"
 #include "document_manager.h"
 #include "analyzer.h"
+#include "formatter.h"
 #include <memory>
 
 class LspServer {
@@ -15,6 +16,7 @@ private:
     std::unique_ptr<JsonRpcHandler> rpcHandler;
     std::unique_ptr<DocumentManager> docManager;
     std::unique_ptr<Analyzer> analyzer;
+    std::unique_ptr<Formatter> formatter;
     
     bool initialized;
     std::string rootUri;
@@ -29,6 +31,8 @@ private:
     json handleCodeAction(const json& params);
     json handleRename(const json& params);
     json handleLinkedEditingRange(const json& params);
+    json handleFormatting(const json& params);
+    json handleRangeFormatting(const json& params);
     
     // LSP Notification handlers
     void handleInitialized(const json& params);
