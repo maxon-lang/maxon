@@ -56,6 +56,10 @@ set(SOURCES
     lexer.cpp
     parser.cpp
     codegen.cpp
+    codegen/codegen_types.cpp
+    codegen/codegen_expr.cpp
+    codegen/codegen_stmt.cpp
+    codegen/codegen_function.cpp
     semantic_analyzer.cpp
     error_formatter.cpp
 )
