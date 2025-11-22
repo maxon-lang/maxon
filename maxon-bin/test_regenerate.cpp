@@ -618,9 +618,14 @@ int regenerateFragmentsSubset(const std::string& outputFile, const std::vector<s
     int workerId = GetCurrentProcessId() % 100000;
     int failCount = 0;
 
-    for (const auto& testPath : testFiles) {
+    // std::cerr << "[WORKER " << workerId << "] Processing " << testFiles.size() << " tests..." << std::endl;
+
+    for (size_t idx = 0; idx < testFiles.size(); ++idx) {
+        const auto& testPath = testFiles[idx];
         std::filesystem::path p(testPath);
         std::string testName = p.stem().string();
+        
+        // std::cerr << "[WORKER " << workerId << "] [" << (idx + 1) << "/" << testFiles.size() << "] " << testName << std::endl;
         
         std::string statusMsg;
         int result = regenerateSingleFragment(testPath, testName, statusMsg, workerId);
@@ -719,16 +724,18 @@ int regenerateFragments() {
 
             STARTUPINFOA si = {};
             si.cb = sizeof(si);
-            si.dwFlags = STARTF_USESTDHANDLES;
-            si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-            si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-            si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+            // Don't inherit handles to avoid stderr/stdout contention between workers
+            // si.dwFlags = STARTF_USESTDHANDLES;
+            // si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+            // si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+            // si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 
             // CreateProcess requires non-const command line
             std::vector<char> cmdLineBuffer(cmdLine.begin(), cmdLine.end());
             cmdLineBuffer.push_back('\0');
 
-            if (!CreateProcessA(NULL, cmdLineBuffer.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &processes[i])) {
+            // Don't inherit handles (FALSE) to prevent handle contention
+            if (!CreateProcessA(NULL, cmdLineBuffer.data(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &processes[i])) {
                 std::cerr << "Error: Failed to create worker process " << i << std::endl;
                 return 1;
             }

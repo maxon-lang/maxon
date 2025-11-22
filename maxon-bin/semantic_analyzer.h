@@ -103,6 +103,7 @@ public:
     const std::map<std::string, VariableInfo>& getAllDeclaredVariables() const { return allDeclaredVariables; }
     
 private:
+    const StructInfo* lookupStruct(const std::string& name) const;
     std::vector<SemanticError> errors;
     std::map<std::string, FunctionInfo> functions;
     std::map<std::string, StructInfo> structs; // Struct definitions

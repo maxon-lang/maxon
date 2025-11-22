@@ -7,6 +7,33 @@ static std::string extractLiteralValue(ExprAST* expr);
 
 SemanticAnalyzer::SemanticAnalyzer() : loopDepth(0) {}
 
+const StructInfo* SemanticAnalyzer::lookupStruct(const std::string& name) const {
+    // First try exact match
+    auto it = structs.find(name);
+    if (it != structs.end()) {
+        return &it->second;
+    }
+    
+    // If not found and name contains a dot, it's already qualified
+    if (name.find('.') != std::string::npos) {
+        return nullptr;
+    }
+    
+    // For unqualified names, also try qualified lookups with all known namespaces
+    // This allows unqualified access to exported structs
+    for (const auto& pair : structs) {
+        const std::string& structName = pair.first;
+        // Check if this is a qualified name ending with the requested name
+        if (structName.size() > name.size() + 1 && 
+            structName.substr(structName.size() - name.size()) == name &&
+            structName[structName.size() - name.size() - 1] == '.') {
+            return &pair.second;
+        }
+    }
+    
+    return nullptr;
+}
+
 void SemanticAnalyzer::registerExternalFunction(const std::string& name, const std::string& returnType, 
                                                  const std::vector<FunctionParameter>& parameters) {
     functions.emplace(name, FunctionInfo(name, returnType, parameters));
@@ -37,8 +64,13 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
     
     // First pass: collect all struct definitions
     for (const auto& structDef : program->structs) {
-        if (structs.find(structDef->name) != structs.end()) {
-            addError("Struct '" + structDef->name + "' is already defined",
+        // Build the qualified name if the struct has a namespace and is exported
+        std::string structKey = (structDef->isExported && !structDef->namespaceName.empty()) 
+            ? structDef->namespaceName + "." + structDef->name 
+            : structDef->name;
+        
+        if (structs.find(structKey) != structs.end()) {
+            addError("Struct '" + structKey + "' is already defined",
                     structDef->line, structDef->column);
         } else {
             // Convert StructField to StructFieldInfo
@@ -54,12 +86,18 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
                     fields.push_back(StructFieldInfo(field.name, field.type, field.line, field.column));
                 }
             }
-            structs.emplace(structDef->name, StructInfo(structDef->name, std::move(fields), 
+            structs.emplace(structKey, StructInfo(structDef->name, std::move(fields), 
                                                         structDef->line, structDef->column));
+            
+            // Also register the simple name for use within the same file/namespace
+            if (structs.find(structDef->name) == structs.end()) {
+                structs.emplace(structDef->name, StructInfo(structDef->name, fields, 
+                                                            structDef->line, structDef->column));
+            }
         }
     }
     
-    // Second pass: collect all function declarations (including namespace functions)
+    // Second pass: collect all function declarations
     for (const auto& func : program->functions) {
         // Build the qualified name if the function has a namespace
         std::string functionKey = func->namespaceName.empty() ? func->name : func->namespaceName + "." + func->name;
@@ -78,30 +116,9 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST* program) {
         }
     }
     
-    // Collect namespace functions with qualified names (namespace.function)
-    for (const auto& ns : program->namespaces) {
-        for (const auto& func : ns->functions) {
-            std::string qualifiedName = ns->name + "." + func->name;
-            if (functions.find(qualifiedName) != functions.end()) {
-                addError("Function '" + qualifiedName + "' is already defined" +
-                        std::string("\n  Note: Each function name must be unique in the namespace"),
-                        func->line, func->column);
-            } else {
-                functions.emplace(qualifiedName, FunctionInfo(qualifiedName, func->returnType, func->parameters));
-            }
-        }
-    }
-    
     // Second pass: analyze each function
     for (const auto& func : program->functions) {
         analyzeFunction(func.get());
-    }
-    
-    // Analyze namespace functions
-    for (const auto& ns : program->namespaces) {
-        for (const auto& func : ns->functions) {
-            analyzeFunction(func.get());
-        }
     }
     
     return errors;
@@ -301,7 +318,7 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
                 if (closeBracket != std::string::npos && closeBracket + 1 < arrayType.size()) {
                     std::string elementType = arrayType.substr(closeBracket + 1);
                     
-                    if (structs.find(elementType) != structs.end()) {
+                    if (lookupStruct(elementType) != nullptr) {
                         // Verify member exists
                         const auto& structInfo = structs.at(elementType);
                         bool memberFound = false;
@@ -385,6 +402,41 @@ void SemanticAnalyzer::analyzeStatement(StmtAST* stmt, const std::string& curren
         
         // Analyze loop body
         for (const auto& s : whileStmt->body) {
+            analyzeStatement(s.get(), currentFunctionReturnType);
+        }
+        
+        // Exit loop scope
+        exitScope();
+        loopDepth--;
+        
+    } else if (auto forStmt = dynamic_cast<ForStmtAST*>(stmt)) {
+        // For-loops require iterator functions from stdlib
+        // Ensure iter.hasNext, iter.getCurrent, and iter.next are available
+        std::vector<std::string> requiredFuncs = {"iter.hasNext", "iter.getCurrent", "iter.next"};
+        for (const auto& funcName : requiredFuncs) {
+            if (functions.find(funcName) == functions.end()) {
+                undefinedFunctions.insert(funcName);
+            }
+        }
+        
+        // Analyze iterable expression first (before entering loop scope)
+        std::string iterableType = analyzeExpression(forStmt->iterable.get());
+        
+        // For now, we accept function calls (like range()) or arrays
+        // The iterable type will be validated during codegen
+        // TODO: Add more strict type checking when we have better type system
+        
+        // Enter loop scope
+        loopDepth++;
+        enterScope();
+        
+        // Declare loop variable (immutable, like 'let')
+        // The type is 'int' for now (will be inferred from iterator in future)
+        declareVariable(forStmt->loopVar, "int", true, 
+                       forStmt->line, forStmt->column, false, "");
+        
+        // Analyze loop body
+        for (const auto& s : forStmt->body) {
             analyzeStatement(s.get(), currentFunctionReturnType);
         }
         
@@ -825,8 +877,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         }
         
         // Check if it's a struct type
-        if (structs.find(objectType) != structs.end()) {
-            const auto& structInfo = structs.at(objectType);
+        if (lookupStruct(objectType) != nullptr) {
+            const auto& structInfo = *lookupStruct(objectType);
             
             // Find the field
             for (const auto& field : structInfo.fields) {
@@ -851,13 +903,13 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST* expr) {
         }
     } else if (auto structInitExpr = dynamic_cast<StructInitExprAST*>(expr)) {
         // Check if struct type exists
-        if (structs.find(structInitExpr->structName) == structs.end()) {
+        if (lookupStruct(structInitExpr->structName) == nullptr) {
             addError("Undefined struct type: '" + structInitExpr->structName + "'",
                     expr->line, expr->column);
             return "error";
         }
         
-        const auto& structInfo = structs.at(structInitExpr->structName);
+        const auto& structInfo = *lookupStruct(structInitExpr->structName);
         
         // Check that all required fields are initialized
         std::set<std::string> initializedFields;

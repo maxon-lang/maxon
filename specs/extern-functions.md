@@ -78,17 +78,3 @@ end 'main'
 ExitCode: 0
 Stdout: Test
 ```
-
-<!-- test: in-namespace -->
-```maxon
-namespace api 'api'
-    extern function GetStdHandle(nStdHandle int) ptr
-end 'api'
-
-function main() int
-    return 42
-end 'main'
-```
-```
-ExitCode: 42
-```

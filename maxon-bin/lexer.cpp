@@ -21,6 +21,8 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
     {"if",        {KeywordCategory::ControlFlow,   "Conditional statement"}},
     {"else",      {KeywordCategory::ControlFlow,   "Alternative branch"}},
     {"while",     {KeywordCategory::ControlFlow,   "Loop statement"}},
+    {"for",       {KeywordCategory::ControlFlow,   "For loop statement"}},
+    {"in",        {KeywordCategory::ControlFlow,   "Iterator in for loop"}},
     {"end",       {KeywordCategory::ControlFlow,   "Block terminator"}},
     {"return",    {KeywordCategory::ControlFlow,   "Return from function"}},
     {"break",     {KeywordCategory::ControlFlow,   "Exit loop"}},
@@ -31,7 +33,7 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
     {"var",       {KeywordCategory::Declaration,   "Mutable variable"}},
     {"let",       {KeywordCategory::Declaration,   "Immutable variable"}},
     {"struct",    {KeywordCategory::Declaration,   "Structure type"}},
-    {"namespace", {KeywordCategory::Declaration,   "Namespace declaration"}},
+    {"export",    {KeywordCategory::Declaration,   "Export declaration"}},
     {"extern",    {KeywordCategory::Declaration,   "External declaration"}},
     
     // Math intrinsics (built into codegen)

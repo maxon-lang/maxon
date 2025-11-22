@@ -2660,6 +2660,169 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         return;
     }
     
+    if (auto* forStmt = dynamic_cast<ForStmtAST*>(stmt)) {
+        // Desugar for loop to iterator-based while loop
+        // for i in <iterable> 'label'
+        //     <body>
+        // end 'label'
+        //
+        // Becomes:
+        // var __iter = <iterable>
+        // while hasNext(__iter) = 1 'label'
+        //     let i = getCurrent(__iter)
+        //     <body>
+        //     __iter = next(__iter)
+        // end 'label'
+        
+        // Emit debug location
+        if (generateDebugInfo) {
+            emitLocation(forStmt->line, forStmt->column);
+        }
+        
+        // Generate iterator initialization
+        llvm::Value* iteratorVal = generateExpr(forStmt->iterable.get());
+        if (!iteratorVal) {
+            throw std::runtime_error("Failed to generate for-loop iterable expression");
+        }
+        
+        // Create alloca for iterator variable
+        llvm::Type* iteratorType = iteratorVal->getType();
+        llvm::AllocaInst* iteratorAlloca = builder.CreateAlloca(iteratorType, nullptr, "__iter");
+        builder.CreateStore(iteratorVal, iteratorAlloca);
+        
+        // Create basic blocks for loop
+        llvm::BasicBlock* condBB = llvm::BasicBlock::Create(context, "forcond", function);
+        llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(context, "forloop");
+        llvm::BasicBlock* incrementBB = llvm::BasicBlock::Create(context, "forincrement");
+        llvm::BasicBlock* afterBB = llvm::BasicBlock::Create(context, "afterfor");
+        
+        // Save previous loop context
+        llvm::BasicBlock* prevLoopCond = currentLoopCond;
+        llvm::BasicBlock* prevLoopAfter = currentLoopAfter;
+        
+        // Set current loop context - continue should jump to increment block
+        currentLoopCond = incrementBB;
+        currentLoopAfter = afterBB;
+        
+        // Jump to condition block
+        builder.CreateBr(condBB);
+        
+        // Generate condition block: hasNext(__iter) = 1
+        builder.SetInsertPoint(condBB);
+        
+        // Pass iterator by pointer (structs are passed by reference in Maxon)
+        llvm::Value* iterPtr = iteratorAlloca;
+        
+        // Call hasNext(iterator) from stdlib - use suffix matching like regular calls
+        llvm::Function* hasNextFunc = module->getFunction("hasNext");
+        if (!hasNextFunc) {
+            // Try suffix matching for namespaced function
+            std::string searchSuffix = ".hasNext";
+            for (auto& func : module->functions()) {
+                std::string funcName = func.getName().str();
+                if (funcName.size() > searchSuffix.size() &&
+                    funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
+                    hasNextFunc = &func;
+                    break;
+                }
+            }
+        }
+        if (!hasNextFunc) {
+            throw std::runtime_error("For-loop requires 'hasNext' function from stdlib (iter.hasNext)");
+        }
+        
+        llvm::Value* hasNextResult = builder.CreateCall(hasNextFunc, {iterPtr}, "hasNext.result");
+        
+        // Check if hasNext returned 1 (true)
+        llvm::Value* condVal = builder.CreateICmpEQ(
+            hasNextResult, 
+            llvm::ConstantInt::get(context, llvm::APInt(32, 1, true)), 
+            "forcond");
+        
+        builder.CreateCondBr(condVal, loopBB, afterBB);
+        
+        // Generate loop body
+        function->insert(function->end(), loopBB);
+        builder.SetInsertPoint(loopBB);
+        
+        // Get current value: let <loopVar> = getCurrent(__iter)
+        llvm::Function* getCurrentFunc = module->getFunction("getCurrent");
+        if (!getCurrentFunc) {
+            // Try suffix matching for namespaced function
+            std::string searchSuffix = ".getCurrent";
+            for (auto& func : module->functions()) {
+                std::string funcName = func.getName().str();
+                if (funcName.size() > searchSuffix.size() &&
+                    funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
+                    getCurrentFunc = &func;
+                    break;
+                }
+            }
+        }
+        if (!getCurrentFunc) {
+            throw std::runtime_error("For-loop requires 'getCurrent' function from stdlib (iter.getCurrent)");
+        }
+        llvm::Value* currentVal = builder.CreateCall(getCurrentFunc, {iterPtr}, forStmt->loopVar);
+        
+        // Create alloca for loop variable
+        llvm::AllocaInst* loopVarAlloca = builder.CreateAlloca(
+            llvm::Type::getInt32Ty(context), nullptr, forStmt->loopVar);
+        builder.CreateStore(currentVal, loopVarAlloca);
+        
+        // Register loop variable in scope
+        namedValues[forStmt->loopVar] = loopVarAlloca;
+        
+        // Generate body statements
+        for (auto& s : forStmt->body) {
+            generateStmt(s.get(), function);
+        }
+        
+        // After body, branch to increment block (if no terminator already)
+        if (!builder.GetInsertBlock()->getTerminator()) {
+            builder.CreateBr(incrementBB);
+        }
+        
+        // Generate increment block: __iter = next(__iter)
+        function->insert(function->end(), incrementBB);
+        builder.SetInsertPoint(incrementBB);
+        
+        llvm::Function* nextFunc = module->getFunction("next");
+        if (!nextFunc) {
+            // Try suffix matching for namespaced function
+            std::string searchSuffix = ".next";
+            for (auto& func : module->functions()) {
+                std::string funcName = func.getName().str();
+                if (funcName.size() > searchSuffix.size() &&
+                    funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
+                    nextFunc = &func;
+                    break;
+                }
+            }
+        }
+        if (!nextFunc) {
+            throw std::runtime_error("For-loop requires 'next' function from stdlib (iter.next)");
+        }
+        
+        // next() returns a new Iterator struct by value, store it back
+        llvm::Value* nextResult = builder.CreateCall(nextFunc, {iterPtr}, "__iter.next");
+        builder.CreateStore(nextResult, iteratorAlloca);
+        
+        // Jump back to condition
+        builder.CreateBr(condBB);
+        
+        // Clean up loop variable from scope
+        namedValues.erase(forStmt->loopVar);
+        
+        // Restore previous loop context
+        currentLoopCond = prevLoopCond;
+        currentLoopAfter = prevLoopAfter;
+        
+        // Generate after block
+        function->insert(function->end(), afterBB);
+        builder.SetInsertPoint(afterBB);
+        return;
+    }
+    
     if (auto* breakStmt = dynamic_cast<BreakStmtAST*>(stmt)) {
         // Emit debug location
         if (generateDebugInfo) {
@@ -3003,7 +3166,7 @@ void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
         structTypes[structDef->name]->setBody(fieldTypes);
     }
     
-    // Third pass: Create all function declarations (including namespace functions)
+    // Third pass: Create all function declarations
     for (auto& func : program->functions) {
         // Get return type
         llvm::Type* returnType = getTypeFromString(context, func->returnType, &structTypes);
@@ -3024,85 +3187,23 @@ void CodeGenerator::generate(ProgramAST* program, bool needsEntryPoint) {
         // Determine the actual function name (with namespace if applicable)
         std::string functionName = func->namespaceName.empty() ? func->name : func->namespaceName + "." + func->name;
         
-        // Determine linkage type: ExternalLinkage for main and extern functions, InternalLinkage for others
+        // Determine linkage type:
+        // - ExternalLinkage for main (always exported)
+        // - ExternalLinkage for exported functions
+        // - ExternalLinkage for extern functions
+        // - InternalLinkage for non-exported functions (enables dead code elimination)
         llvm::GlobalValue::LinkageTypes linkage = 
-            (func->name == "main" || func->isExtern) ? llvm::Function::ExternalLinkage : llvm::Function::InternalLinkage;
+            (func->name == "main" || func->isExported || func->isExtern) 
+                ? llvm::Function::ExternalLinkage 
+                : llvm::Function::InternalLinkage;
         
         // Create function
         llvm::Function::Create(funcType, linkage, functionName, module.get());
     }
     
-    // Create namespace functions with qualified names
-    for (auto& ns : program->namespaces) {
-        for (auto& func : ns->functions) {
-            // Get return type
-            llvm::Type* returnType = getTypeFromString(context, func->returnType, &structTypes);
-            
-            // Create parameter types (including hidden length parameters for arrays)
-            std::vector<llvm::Type*> paramTypes;
-            for (const auto& param : func->parameters) {
-                paramTypes.push_back(getParamTypeFromString(context, param.type, &structTypes));
-                // Add hidden length parameter for array parameters
-                if (isArrayParam(param.type)) {
-                    paramTypes.push_back(llvm::Type::getInt32Ty(context));
-                }
-            }
-            
-            // Create function type
-            llvm::FunctionType* funcType = llvm::FunctionType::get(returnType, paramTypes, false);
-            
-            std::string qualifiedName = ns->name + "." + func->name;
-            
-            if (func->isExtern) {
-                // For extern functions in namespaces:
-                // 1. Create the actual extern with simple name (for linker)
-                llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
-                                     func->name, module.get());
-                
-                // 2. Create a wrapper with qualified name that calls the extern
-                llvm::Function* wrapperFunc = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
-                                     qualifiedName, module.get());
-                
-                // 3. Generate wrapper body that just forwards to the extern
-                llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", wrapperFunc);
-                builder.SetInsertPoint(entry);
-                
-                // Get the extern function
-                llvm::Function* externFunc = module->getFunction(func->name);
-                
-                // Collect arguments
-                std::vector<llvm::Value*> args;
-                for (auto& arg : wrapperFunc->args()) {
-                    args.push_back(&arg);
-                }
-                
-                // Call extern and return result
-                if (returnType->isVoidTy()) {
-                    builder.CreateCall(externFunc, args);
-                    builder.CreateRetVoid();
-                } else {
-                    llvm::Value* result = builder.CreateCall(externFunc, args);
-                    builder.CreateRet(result);
-                }
-            } else {
-                // Regular namespace function - use InternalLinkage for dead code elimination
-                // (main is always top-level, never in a namespace)
-                llvm::Function::Create(funcType, llvm::Function::InternalLinkage,
-                                     qualifiedName, module.get());
-            }
-        }
-    }
-    
     // Second pass: Generate function bodies
     for (auto& func : program->functions) {
         generateFunction(func.get(), func->namespaceName);
-    }
-    
-    // Generate namespace function bodies
-    for (auto& ns : program->namespaces) {
-        for (auto& func : ns->functions) {
-            generateFunction(func.get(), ns->name);
-        }
     }
     
     // Create minimal CRT entry point only if needed (for executables)
@@ -3192,13 +3293,6 @@ void CodeGenerator::writeIRToFile(const std::string& filename) {
 }
 
 void CodeGenerator::writeObjectFile(const std::string& filename) {
-    // Initialize targets
-    llvm::InitializeAllTargetInfos();
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmParsers();
-    llvm::InitializeAllAsmPrinters();
-    
     // Get target triple - hardcode for x86-64 since that's what we're building for
     llvm::Triple targetTriple("x86_64-pc-windows-msvc");
     module->setTargetTriple(targetTriple);
@@ -3245,13 +3339,6 @@ void CodeGenerator::writeObjectFile(const std::string& filename) {
 }
 
 void CodeGenerator::writeExecutable(const std::string& exeFile, llvm::raw_ostream* errorStream) {
-    // Initialize targets
-    llvm::InitializeAllTargetInfos();
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmParsers();
-    llvm::InitializeAllAsmPrinters();
-    
     // Get target triple for x86-64 Windows
     llvm::Triple targetTriple("x86_64-pc-windows-msvc");
     module->setTargetTriple(targetTriple);

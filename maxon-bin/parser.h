@@ -20,6 +20,7 @@ private:
     void advance();
     Token expect(TokenType type, const std::string& message);
     Token expectKeyword(const std::string& keyword, const std::string& message);
+    std::string parseQualifiedName(const std::string& context);
     
     std::unique_ptr<ExprAST> parseExpression();
     std::unique_ptr<ExprAST> parseComparison();
@@ -35,12 +36,12 @@ private:
     std::unique_ptr<AssignStmtAST> parseAssignment(const std::string& name);
     std::unique_ptr<IfStmtAST> parseIf();
     std::unique_ptr<WhileStmtAST> parseWhile();
+    std::unique_ptr<ForStmtAST> parseFor();
     std::unique_ptr<ReturnStmtAST> parseReturn();
     std::unique_ptr<BreakStmtAST> parseBreak();
     std::unique_ptr<ContinueStmtAST> parseContinue();
     
     std::unique_ptr<FunctionAST> parseFunction();
-    std::unique_ptr<NamespaceAST> parseNamespace();
     std::unique_ptr<StructDefAST> parseStruct();
     std::unique_ptr<StructInitExprAST> parseStructInit(const std::string& structName);
     

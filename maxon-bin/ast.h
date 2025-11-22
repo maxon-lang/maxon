@@ -282,6 +282,20 @@ public:
         : StmtAST(l, c), condition(std::move(cond)), body(std::move(b)) {}
 };
 
+// For statement (desugars to iterator-based while loop)
+class ForStmtAST : public StmtAST {
+public:
+    std::string loopVar;                            // Loop variable name (e.g., "i")
+    std::unique_ptr<ExprAST> iterable;              // What to iterate over (range, array, etc.)
+    std::vector<std::unique_ptr<StmtAST>> body;     // Loop body
+    
+    ForStmtAST(const std::string& var,
+               std::unique_ptr<ExprAST> iter,
+               std::vector<std::unique_ptr<StmtAST>> b,
+               int l = 0, int c = 0)
+        : StmtAST(l, c), loopVar(var), iterable(std::move(iter)), body(std::move(b)) {}
+};
+
 // Return statement
 class ReturnStmtAST : public StmtAST {
 public:
@@ -338,12 +352,15 @@ struct StructInitField {
 class StructDefAST : public ASTNode {
 public:
     std::string name;
+    std::string namespaceName;  // Namespace this struct belongs to (derived from file path)
     std::vector<StructField> fields;
+    bool isExported;  // true if this struct is exported (visible outside this file)
     int line;
     int column;
     
-    StructDefAST(const std::string& n, std::vector<StructField> f, int l = 0, int c = 0)
-        : name(n), fields(std::move(f)), line(l), column(c) {}
+    StructDefAST(const std::string& n, std::vector<StructField> f, int l = 0, int c = 0,
+                 const std::string& ns = "", bool exp = false)
+        : name(n), namespaceName(ns), fields(std::move(f)), isExported(exp), line(l), column(c) {}
 };
 
 // Struct initialization expression (struct literal)
@@ -371,11 +388,12 @@ struct FunctionParameter {
 class FunctionAST : public ASTNode {
 public:
     std::string name;
-    std::string namespaceName;  // Namespace this function belongs to (may be empty for global)
+    std::string namespaceName;  // Namespace this function belongs to (derived from file path)
     std::vector<FunctionParameter> parameters;
     std::string returnType;
     std::vector<std::unique_ptr<StmtAST>> body;
     bool isExtern;  // true if this is an extern function declaration
+    bool isExported;  // true if this function is exported (visible outside this file)
     int line;
     int column;
     
@@ -385,38 +403,23 @@ public:
                 std::vector<std::unique_ptr<StmtAST>> b,
                 bool ext = false,
                 int l = 1, int c = 1,
-                const std::string& ns = "")
+                const std::string& ns = "",
+                bool exp = false)
         : name(n), namespaceName(ns), parameters(std::move(params)), returnType(ret), body(std::move(b)),
-          isExtern(ext), line(l), column(c) {}
+          isExtern(ext), isExported(exp), line(l), column(c) {}
 };
 
-// Namespace declaration
-class NamespaceAST : public ASTNode {
-public:
-    std::string name;
-    std::vector<std::unique_ptr<FunctionAST>> functions;
-    int line;
-    int column;
-    
-    NamespaceAST(const std::string& n, 
-                 std::vector<std::unique_ptr<FunctionAST>> funcs,
-                 int l = 1, int c = 1)
-        : name(n), functions(std::move(funcs)), line(l), column(c) {}
-};
-
-// Program (collection of functions and namespaces)
+// Program (collection of functions and structs)
 class ProgramAST : public ASTNode {
 public:
     std::vector<std::unique_ptr<FunctionAST>> functions;
-    std::vector<std::unique_ptr<NamespaceAST>> namespaces;
     std::vector<std::unique_ptr<StructDefAST>> structs;
     
     ProgramAST() = default;
     
     ProgramAST(std::vector<std::unique_ptr<FunctionAST>> funcs,
-               std::vector<std::unique_ptr<NamespaceAST>> ns = {},
                std::vector<std::unique_ptr<StructDefAST>> st = {})
-        : functions(std::move(funcs)), namespaces(std::move(ns)), structs(std::move(st)) {}
+        : functions(std::move(funcs)), structs(std::move(st)) {}
 };
 
 #endif // AST_H

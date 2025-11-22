@@ -13,6 +13,8 @@
 #include <fstream>
 #include <filesystem>
 
+#include <llvm/Support/TargetSelect.h>
+
 namespace fs = std::filesystem;
 
 int generateDocs() {
@@ -89,6 +91,14 @@ int generateDocs() {
 }
 
 int main(int argc, char* argv[]) {
+    // Initialize LLVM targets once at program startup
+    // This prevents race conditions when multiple worker processes compile in parallel
+    llvm::InitializeAllTargetInfos();
+    llvm::InitializeAllTargets();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllAsmParsers();
+    llvm::InitializeAllAsmPrinters();
+
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <command> [options]" << std::endl;
         std::cerr << "\nCommands:" << std::endl;

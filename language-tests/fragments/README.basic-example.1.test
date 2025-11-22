@@ -1,0 +1,90 @@
+// Test: README.basic-example.1
+function main() int
+    return 0
+end 'main'
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)
+define noundef i32 @main() local_unnamed_addr #0 {
+entry:
+  ret i32 0
+}
+
+declare void @ExitProcess(i32) local_unnamed_addr
+
+; Function Attrs: noreturn
+define void @_start() local_unnamed_addr #1 {
+entry:
+  tail call void @ExitProcess(i32 0)
+  unreachable
+}
+
+attributes #0 = { mustprogress nofree norecurse nosync nounwind willreturn memory(none) }
+attributes #1 = { noreturn }
+---
+; ModuleID = 'test.maxon'
+source_filename = "test.maxon"
+
+define i32 @main() !dbg !4 {
+entry:
+  ret i32 0, !dbg !8
+}
+
+declare void @ExitProcess(i32)
+
+define void @_start() {
+entry:
+  %0 = call i32 @main()
+  call void @ExitProcess(i32 %0)
+  unreachable
+}
+
+!llvm.dbg.cu = !{!0}
+!llvm.module.flags = !{!2, !3}
+
+!0 = distinct !DICompileUnit(language: DW_LANG_C, file: !1, producer: "Maxon Compiler", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)
+!1 = !DIFile(filename: "test.maxon", directory: ".")
+!2 = !{i32 2, !"CodeView", i32 1}
+!3 = !{i32 2, !"Debug Info Version", i32 3}
+!4 = distinct !DISubprogram(name: "main", linkageName: "main", scope: !1, file: !1, line: 2, type: !5, scopeLine: 2, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0)
+!5 = !DISubroutineType(types: !6)
+!6 = !{!7}
+!7 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
+!8 = !DILocation(line: 3, column: 5, scope: !4)
+---
+ExitCode: 0
+
+## Test Fragment Format
+
+Extracted `.test` files contain:
+
+ExitCode: <number>
+Stdout: <output>
+Stderr: <errors>
+MaxoncStderr: <compiler errors>
+
+## Key Commands
+
+- `maxon extract-specs` - Extract test fragments from specs (preserves metadata)
+- `maxon regen-fragments` - Regenerate LLVM IR sections only (preserves metadata)
+- `maxon test-fragments` - Run all fragment tests
+- `make fragments` - Full workflow: extract + regen + test
+- `make validate-specs` - Check for orphaned fragments
+- `make docs` - Generate HTML documentation
+
+## Validation
+
+`make validate-specs` ensures:
+- All fragments in `language-tests/fragments/` come from spec files
+- No orphaned test files exist
+
+## Important Notes
+
+- **Specs are authoritative**: Test expected values are defined in spec files
+- **IR is generated**: Never manually edit LLVM IR in `.test` files
+- **Metadata preserved**: `regen-fragments` keeps ExitCode, Stdout, etc. from specs
+- **No temp files**: Use `maxon <file>` to compile and run without artifacts
+OptimizedInstructionCount: 2
+UnoptimizedInstructionCount: 2

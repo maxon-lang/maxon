@@ -64,3 +64,5 @@ https://llvm.org/docs/Frontend/PerformanceTips.html
 - multiple verbosity levels during compiling
 - compiler error codes
 - break up large files like codegen.cpp
+- formatter
+- tests for debugging (ie step into, step over, etc)

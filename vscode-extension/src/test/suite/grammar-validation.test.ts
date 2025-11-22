@@ -52,7 +52,7 @@ suite('TextMate Grammar Validation', () => {
         const declarationPattern = keywordsRepo.patterns.find((p: any) => p.name === 'keyword.other.maxon');
         assert.ok(declarationPattern, 'Declaration keyword pattern should exist');
         
-        const declarationKeywords = ['var', 'function', 'let', 'namespace', 'struct', 'extern'];
+        const declarationKeywords = ['var', 'function', 'let', 'export', 'struct', 'extern'];
         for (const kw of declarationKeywords) {
             assert.ok(declarationPattern.match.includes(kw), `Declaration pattern should include ${kw}`);
         }

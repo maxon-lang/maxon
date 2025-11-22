@@ -1,7 +1,7 @@
 ---
 feature: stdlib-namespaces
 status: stable
-keywords: [stdlib, namespace, organization, fs, sys]
+keywords: [stdlib, namespace, organization, fs, sys, export]
 category: stdlib
 ---
 
@@ -9,38 +9,39 @@ category: stdlib
 
 ## Developer Notes
 
-The standard library is organized into namespaces for different functionality areas.
+The standard library is organized into namespaces based on file location.
 
 Current namespaces:
-- `sys/` - System utilities (print, exit, etc.)
-- `fs/` - File system operations
-- `fmt/` - Formatting functions
-- `math/` - Mathematical functions (planned expansion)
+- `stdlib/sys/` - System utilities (Windows API wrappers)
+- `stdlib/fs/` - File system operations
+- `stdlib/fmt/` - Formatting functions
+- `stdlib/math/` - Mathematical functions
+- `stdlib/iter/` - Iterator support
 
 Implementation:
 - Each stdlib namespace is a directory under `stdlib/`
 - Contains `.maxon` files with function definitions
 - Auto-discovered by compiler when functions are called
-- Functions can be called with or without namespace qualification depending on context
-
-Common pattern: Helper functions in same namespace for code organization.
+- Functions use `export` keyword for public API
+- Helper functions without `export` are file-private
 
 ## Documentation
 
-The standard library organizes functions into logical namespaces.
+The standard library organizes functions into logical namespaces based on file paths.
 
 ### Available Namespaces
 
-- **sys** - System operations (I/O, process control)
-- **fs** - File system and stream operations
-- **fmt** - String formatting and conversion
-- **math** - Mathematical functions
+- **stdlib.sys** - System operations (Windows API wrappers)
+- **stdlib.fs** - File system and stream operations  
+- **stdlib.fmt** - String formatting and conversion
+- **stdlib.math** - Mathematical functions
+- **stdlib.iter** - Iterators and ranges
 
 ### Example
 
 ```maxon
 function main() int
-    // Use standard library function from sys namespace
+    // Use standard library function
     print(42)
     return 0
 end 'main'
@@ -54,36 +55,32 @@ Stdout: 42
 
 <!-- test: fs-namespace -->
 ```maxon
-extern function GetStdHandle(nStdHandle int) ptr
-extern function WriteFile(hFile ptr, lpBuffer ptr, nNumberOfBytesToWrite int, lpNumberOfBytesWritten ptr, lpOverlapped ptr) int
+export extern function GetStdHandle(nStdHandle int) ptr
+export extern function WriteFile(hFile ptr, lpBuffer ptr, nNumberOfBytesToWrite int, lpNumberOfBytesWritten ptr, lpOverlapped ptr) int
 
-namespace sys 'sys'
-    function STD_OUTPUT_HANDLE() int
-        return 0 - 11
-    end 'STD_OUTPUT_HANDLE'
-end 'sys'
+export function STD_OUTPUT_HANDLE() int
+    return 0 - 11
+end 'STD_OUTPUT_HANDLE'
 
-namespace fs 'fs'
-    function stdout() ptr
-        var handle = STD_OUTPUT_HANDLE()
-        let h = GetStdHandle(handle)
-        return h
-    end 'stdout'
+export function stdout() ptr
+    var handle = STD_OUTPUT_HANDLE()
+    let h = GetStdHandle(handle)
+    return h
+end 'stdout'
+
+export function write(handle ptr, buffer ptr, length int) int
+    var bytesWritten = 0
+    let pBytesWritten = &bytesWritten
+    let overlapped = 0 as ptr
     
-    function write(handle ptr, buffer ptr, length int) int
-        var bytesWritten = 0
-        let pBytesWritten = &bytesWritten
-        let overlapped = 0 as ptr
-        
-        var result = WriteFile(handle, buffer, length, pBytesWritten, overlapped)
-        
-        if result = 0 'check_result'
-            return 0
-        end 'check_result'
-        
-        return bytesWritten
-    end 'write'
-end 'fs'
+    var result = WriteFile(handle, buffer, length, pBytesWritten, overlapped)
+    
+    if result = 0 'check_result'
+        return 0
+    end 'check_result'
+    
+    return bytesWritten
+end 'write'
 
 function main() int
     let out = stdout()
@@ -92,7 +89,7 @@ function main() int
     return 0
 end 'main'
 ```
-```
+```output
 ExitCode: 0
 Stdout: OK
 ```

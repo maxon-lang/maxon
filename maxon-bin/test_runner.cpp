@@ -580,16 +580,18 @@ int runTestFragments(bool verbose) {
 
             STARTUPINFOA si = {};
             si.cb = sizeof(si);
-            si.dwFlags = STARTF_USESTDHANDLES;
-            si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-            si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-            si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+            // Don't inherit handles to avoid stderr/stdout contention between workers
+            // si.dwFlags = STARTF_USESTDHANDLES;
+            // si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+            // si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+            // si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 
             // CreateProcess requires non-const command line
             std::vector<char> cmdLineBuffer(cmdLine.begin(), cmdLine.end());
             cmdLineBuffer.push_back('\0');
 
-            if (!CreateProcessA(NULL, cmdLineBuffer.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &processes[i])) {
+            // Don't inherit handles (FALSE) to prevent handle contention
+            if (!CreateProcessA(NULL, cmdLineBuffer.data(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &processes[i])) {
                 std::cerr << "Error: Failed to create worker process " << i << std::endl;
                 return 1;
             }

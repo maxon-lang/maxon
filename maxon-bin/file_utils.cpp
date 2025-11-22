@@ -59,7 +59,12 @@ std::string deriveNamespace(const std::string& filePath) {
     std::string pathStr = p.string();
     size_t stdlibPos = pathStr.find("stdlib");
     if (stdlibPos != std::string::npos) {
-        std::string stdlibRelative = pathStr.substr(stdlibPos);
+        // Skip "stdlib" and the following separator to get the namespace within stdlib
+        size_t startPos = stdlibPos + 7; // "stdlib" is 6 chars + 1 for separator
+        if (startPos < pathStr.size() && (pathStr[startPos] == '/' || pathStr[startPos] == '\\')) {
+            startPos++; // skip the separator
+        }
+        std::string stdlibRelative = pathStr.substr(startPos);
         p = std::filesystem::path(stdlibRelative);
     }
 
