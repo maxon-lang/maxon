@@ -122,6 +122,7 @@ function main() int
         x = 1
         while true 'inner'
             x = 2
+            break
         end 'inner'
     end 'outer'
     return x

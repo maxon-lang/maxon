@@ -65,3 +65,4 @@ https://llvm.org/docs/Frontend/PerformanceTips.html
 - compiler error codes
 - tests for debugging (ie step into, step over, etc)
 - extensive math function tests
+- add 'break 'label''

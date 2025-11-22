@@ -457,7 +457,6 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 
 		int64_t optInstrCount = -1;
 
-#ifdef _WIN32
 		std::string tempOutput = (tempDir / ("maxon_output" + workerSuffix + ".tmp")).string();
 
 		std::string cmdLine = tempOptExe;
@@ -466,7 +465,16 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		}
 		cmdLine += " > \"" + tempOutput + "\" 2>&1";
 
-		system(cmdLine.c_str());
+		int exitCode = executeWithTimeout(cmdLine, 5);
+		if (exitCode == -1) {
+			statusMsg = "TIMEOUT: Test execution exceeded 5 seconds (optimized)";
+			std::filesystem::remove(tempSource);
+			std::filesystem::remove(tempOptLL);
+			std::filesystem::remove(tempOptExe);
+			std::filesystem::remove(tempOptPdb);
+			std::filesystem::remove(tempOutput);
+			return 2;
+		}
 
 		std::ifstream outFile(tempOutput, std::ios::binary);
 		if (outFile) {
@@ -483,7 +491,6 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		}
 
 		std::filesystem::remove(tempOutput);
-#endif
 
 		// Generate debug IR
 		CompilationOptions debugOpts;
@@ -514,14 +521,25 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		compileProgram(debugProfileOpts);
 
 		int64_t debugInstrCount = -1;
-#ifdef _WIN32
 		std::string debugCmdLine = tempDebugExe;
 		if (!args.empty()) {
 			debugCmdLine += " " + args;
 		}
 		debugCmdLine += " > \"" + tempOutput + "\" 2>&1";
 
-		system(debugCmdLine.c_str());
+		exitCode = executeWithTimeout(debugCmdLine, 5);
+		if (exitCode == -1) {
+			statusMsg = "TIMEOUT: Test execution exceeded 5 seconds (debug)";
+			std::filesystem::remove(tempSource);
+			std::filesystem::remove(tempOptLL);
+			std::filesystem::remove(tempOptExe);
+			std::filesystem::remove(tempOptPdb);
+			std::filesystem::remove(tempDebugLL);
+			std::filesystem::remove(tempDebugExe);
+			std::filesystem::remove(tempDebugPdb);
+			std::filesystem::remove(tempOutput);
+			return 2;
+		}
 
 		std::ifstream debugOutFile(tempOutput, std::ios::binary);
 		if (debugOutFile) {
@@ -537,7 +555,6 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 			}
 		}
 		std::filesystem::remove(tempOutput);
-#endif
 
 		// Write fragment file with regenerated IR, instruction counts, and preserved spec metadata
 		std::ofstream testFile(testPath);

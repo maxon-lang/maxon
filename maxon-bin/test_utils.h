@@ -7,3 +7,7 @@ std::string normalizeIR(const std::string& ir);
 
 // Display a string with escape sequences visible (for debugging)
 std::string showWithEscapes(const std::string& s, size_t maxLen = 100);
+
+// Execute a command with a timeout (in seconds)
+// Returns: exit code of the process, or -1 if timeout occurred
+int executeWithTimeout(const std::string& command, int timeoutSeconds);

@@ -405,7 +405,6 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
                 std::string actualStdout;
                 std::string actualStderr;
 
-#ifdef _WIN32
                 std::string tempOutput = (tempDir / ("maxon_test_output_" + std::to_string(threadId) + ".tmp")).string();
                 std::string tempStderrFile = (tempDir / ("maxon_test_stderr_" + std::to_string(threadId) + ".tmp")).string();
 
@@ -415,41 +414,48 @@ void runSingleTest(const std::filesystem::path& testPath, bool verbose, TestResu
                 }
                 cmdLine += " > \"" + tempOutput + "\" 2>\"" + tempStderrFile + "\"";
 
-                exitCode = system(cmdLine.c_str());
+                exitCode = executeWithTimeout(cmdLine, 5);
 
-                std::ifstream outFile(tempOutput);
-                if (outFile) {
-                    actualStdout = std::string(std::istreambuf_iterator<char>(outFile),
-                                              std::istreambuf_iterator<char>());
-                    outFile.close();
-                }
-
-                std::ifstream stderrFile(tempStderrFile);
-                if (stderrFile) {
-                    actualStderr = std::string(std::istreambuf_iterator<char>(stderrFile),
-                                              std::istreambuf_iterator<char>());
-                    stderrFile.close();
-                }
-
-                std::filesystem::remove(tempOutput);
-                std::filesystem::remove(tempStderrFile);
-#endif
-
-                if (exitCode != expectedExitCode) {
+                // Check for timeout
+                if (exitCode == -1 && expectedExitCode != -1) {
                     result.passed = false;
-                    result.failureReason = "Exit code mismatch";
-                    result.failureExpected = std::to_string(expectedExitCode);
-                    result.failureActual = std::to_string(exitCode);
-                } else if (!expectedStdout.empty() && actualStdout != expectedStdout) {
-                    result.passed = false;
-                    result.failureReason = "Stdout mismatch";
-                    result.failureExpected = expectedStdout;
-                    result.failureActual = actualStdout;
-                } else if (!expectedStderr.empty() && actualStderr != expectedStderr) {
-                    result.passed = false;
-                    result.failureReason = "Stderr mismatch";
-                    result.failureExpected = expectedStderr;
-                    result.failureActual = actualStderr;
+                    result.failureReason = "TIMEOUT: Test execution exceeded 5 seconds";
+                    std::filesystem::remove(tempOutput);
+                    std::filesystem::remove(tempStderrFile);
+                } else {
+                    std::ifstream outFile(tempOutput);
+                    if (outFile) {
+                        actualStdout = std::string(std::istreambuf_iterator<char>(outFile),
+                                                  std::istreambuf_iterator<char>());
+                        outFile.close();
+                    }
+
+                    std::ifstream stderrFile(tempStderrFile);
+                    if (stderrFile) {
+                        actualStderr = std::string(std::istreambuf_iterator<char>(stderrFile),
+                                                  std::istreambuf_iterator<char>());
+                        stderrFile.close();
+                    }
+
+                    std::filesystem::remove(tempOutput);
+                    std::filesystem::remove(tempStderrFile);
+
+                    if (exitCode != expectedExitCode) {
+                        result.passed = false;
+                        result.failureReason = "Exit code mismatch";
+                        result.failureExpected = std::to_string(expectedExitCode);
+                        result.failureActual = std::to_string(exitCode);
+                    } else if (!expectedStdout.empty() && actualStdout != expectedStdout) {
+                        result.passed = false;
+                        result.failureReason = "Stdout mismatch";
+                        result.failureExpected = expectedStdout;
+                        result.failureActual = actualStdout;
+                    } else if (!expectedStderr.empty() && actualStderr != expectedStderr) {
+                        result.passed = false;
+                        result.failureReason = "Stderr mismatch";
+                        result.failureExpected = expectedStderr;
+                        result.failureActual = actualStderr;
+                    }
                 }
             } catch (...) {
                 result.passed = false;
