@@ -32,6 +32,10 @@ include_directories(
 set(MAXON_SOURCES
     ../maxon-bin/lexer.cpp
     ../maxon-bin/parser.cpp
+    ../maxon-bin/parser/parser_utils.cpp
+    ../maxon-bin/parser/parser_expr.cpp
+    ../maxon-bin/parser/parser_stmt.cpp
+    ../maxon-bin/parser/parser_decl.cpp
     ../maxon-bin/semantic_analyzer.cpp
     ../maxon-bin/semantic_analyzer/semantic_analyzer_expr.cpp
     ../maxon-bin/semantic_analyzer/semantic_analyzer_stmt.cpp

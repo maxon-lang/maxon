@@ -55,6 +55,10 @@ set(SOURCES
     self_test.cpp
     lexer.cpp
     parser.cpp
+    parser/parser_utils.cpp
+    parser/parser_expr.cpp
+    parser/parser_stmt.cpp
+    parser/parser_decl.cpp
     codegen.cpp
     codegen/codegen_types.cpp
     codegen/codegen_expr.cpp
