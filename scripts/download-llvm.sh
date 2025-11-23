@@ -23,7 +23,11 @@ fi
 if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then
     PLATFORM="windows"
 elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    PLATFORM="linux"
+    echo "On Linux, LLVM should be installed via apt packages:"
+    echo "  sudo apt-get install llvm-21 llvm-21-dev clang-21 lld-21 liblld-21-dev libpolly-21-dev"
+    echo ""
+    echo "See README or docs for setup instructions."
+    exit 0
 else
     echo "Unsupported platform: $OSTYPE"
     exit 1
@@ -57,8 +61,8 @@ if [ "$PLATFORM" = "windows" ]; then
     fi
 
 elif [ "$PLATFORM" = "linux" ]; then
-    # Download Linux pre-built LLVM
-    LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/clang+llvm-${LLVM_VERSION}-x86_64-linux-gnu-ubuntu-22.04.tar.xz"
+    # Download Linux pre-built LLVM (using new naming convention for 21.x)
+    LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/LLVM-${LLVM_VERSION}-Linux-X64.tar.xz"
     DOWNLOAD_FILE="$TEMP_DIR/llvm.tar.xz"
 
     echo "Downloading from: $LLVM_URL"
@@ -68,8 +72,8 @@ elif [ "$PLATFORM" = "linux" ]; then
     mkdir -p "$LLVM_DIR"
     tar -xf "$DOWNLOAD_FILE" -C "$TEMP_DIR"
 
-    # Move extracted contents to llvm-build (remove version-specific directory)
-    EXTRACTED_DIR=$(find "$TEMP_DIR" -maxdepth 1 -type d -name "clang+llvm-*" | head -n 1)
+    # Move extracted contents to llvm-build (newer releases extract directly)
+    EXTRACTED_DIR=$(find "$TEMP_DIR" -maxdepth 1 -type d \( -name "clang+llvm-*" -o -name "LLVM-*" \) | head -n 1)
     if [ -n "$EXTRACTED_DIR" ]; then
         mv "$EXTRACTED_DIR"/* "$LLVM_DIR/"
     else

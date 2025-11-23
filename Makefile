@@ -12,14 +12,21 @@ else
     OBJ_EXT := .o
 endif
 
-# LLVM paths (use local llvm-project by default, allow override via environment)
-LLVM_DIR ?= ./llvm-project
-LLVM_DIR_ABS := $(shell pwd)/$(LLVM_DIR)
+# LLVM paths (use system LLVM on Linux, local llvm-project on Windows)
+ifeq ($(PLATFORM),linux)
+    LLVM_DIR ?= /usr/lib/llvm-21
+    CC = clang-21
+    CXX = clang++-21
+    LLC = llc-21
+else
+    LLVM_DIR ?= ./llvm-project
+    CC = "$(LLVM_DIR_ABS)/bin/clang$(EXE_EXT)"
+    CXX = "$(LLVM_DIR_ABS)/bin/clang++$(EXE_EXT)"
+    LLC = "$(LLVM_DIR_ABS)/bin/llc$(EXE_EXT)"
+endif
+LLVM_DIR_ABS := $(shell realpath $(LLVM_DIR) 2>/dev/null || echo $(LLVM_DIR))
 BUILD_DIR = build
 CMAKE_GENERATOR = "Ninja"
-CC = "$(LLVM_DIR_ABS)/bin/clang$(EXE_EXT)"
-CXX = "$(LLVM_DIR_ABS)/bin/clang++$(EXE_EXT)"
-LLC = "$(LLVM_DIR_ABS)/bin/llc$(EXE_EXT)"
 
 # Windows-specific resource compiler (optional on Linux)
 ifeq ($(PLATFORM),windows)
@@ -61,9 +68,13 @@ endif
 all: check-diasdk llvm compiler lsp-server extension-install
 	@echo All components built successfully.
 
-# Download LLVM if not present or version mismatch
+# Download LLVM if not present or version mismatch (Windows only, Linux uses system LLVM)
 llvm:
+ifeq ($(PLATFORM),windows)
 	@bash scripts/download-llvm.sh
+else
+	@echo "Using system LLVM from $(LLVM_DIR)"
+endif
 
 help:
 	@echo "Maxon Project Build Targets:"
