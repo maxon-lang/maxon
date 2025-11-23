@@ -1,23 +1,19 @@
 *You* Aren't Going To Write It
 You *Are* Going To Read It
 
-## Known Issues
-
-### Non-Deterministic Instruction Counts
-- InstructionCount values in `pointers.doc-example-3.1.test` randomly vary between runs (12 vs 61)
-- Root cause: LLVM's internal data structures (Module/Function/BasicBlock) don't guarantee deterministic iteration order between independent compilations
-- Impact: Cosmetic only - instruction counts are NOT tested, just generated as metadata
-- Workaround: Consider removing InstructionCount from test fragments entirely, or accept the variation
-- Investigated approaches:
-  - Sorting by name (failed: many basic blocks have empty names)
-  - Stable sort (failed: natural order itself varies between compilations)
-  - Moving profiling after optimization (failed: causes segfaults)
-  - Pointer address tie-breakers (failed: ASLR makes addresses non-deterministic)
-
 ## TODO
 
 - if x is a float "x as int" should not work, use trunc() or round() or something
 - simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")
+- https://llvm.org/docs/Frontend/PerformanceTips.html
+- platform specific optimization for runtime.ll
+- warnings as errors in release mode
+- LLVM autovectorization
+- multiple verbosity levels during compiling
+- compiler error codes
+- tests for debugging (ie step into, step over, etc)
+- extensive math function tests
+- add 'break 'label''
 
 add "run" to maxon
 add "build" to maxon
@@ -71,13 +67,3 @@ add tests for compiler will all kinds of malformed inputs
 7. **SIMD support:** Vector operations for performance
 8. **Array slicing:** Sub-array references without copying
 
-https://llvm.org/docs/Frontend/PerformanceTips.html
-
-- platform specific optimization for runtime.ll
-- warnings as errors in release mode
-- LLVM autovectorization
-- multiple verbosity levels during compiling
-- compiler error codes
-- tests for debugging (ie step into, step over, etc)
-- extensive math function tests
-- add 'break 'label''

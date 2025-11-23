@@ -31,7 +31,7 @@ The `ptr` type stores memory addresses (pointers).
 
 ### Syntax
 
-```maxon
+```text
 var address ptr = &variable
 var nullPtr = 0 as ptr
 ```
@@ -39,30 +39,10 @@ var nullPtr = 0 as ptr
 
 The `&` operator gets the memory address of a variable:
 
-```maxon
+```text
 var x = 42
 var addr = &x
 ```
-### Example with Extern Functions
-
-```maxon
-function main() int
-    var x = 42
-    var addr = &x
-    var addrAsInt = addr as int
-    if addrAsInt > 0 'check'
-        print(x)
-    end 'check'
-    return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-42
-```
-
 
 ## Tests
 
