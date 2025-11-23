@@ -5,23 +5,68 @@
 #include "lexer.h"
 #include "semantic_analyzer.h"
 
+#include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <set>
 #include <vector>
 
-std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, bool verbose) {
+std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, int verboseLevel) {
 	try {
 		std::string source = readFile(filePath);
 
-		if (verbose) {
-			std::cout << "Compiling " << filePath << "..." << std::endl;
-		}
-
 		Lexer lexer(source);
 		std::vector<Token> tokens = lexer.tokenize();
-		if (verbose) {
-			std::cout << "  Lexical analysis complete. Generated " << tokens.size() << " tokens." << std::endl;
+
+		if (verboseLevel >= 1) {
+			std::cout << "Lexical analysis: " << tokens.size() << " tokens";
+			if (verboseLevel >= 2) {
+				// Count token types
+				std::map<TokenType, int> tokenCounts;
+				for (const auto &token : tokens) {
+					tokenCounts[token.type]++;
+				}
+				std::cout << " (";
+				bool first = true;
+				for (const auto &[type, count] : tokenCounts) {
+					std::string typeName;
+					switch (type) {
+					case TokenType::KEYWORD:
+						typeName = "keyword";
+						break;
+					case TokenType::IDENTIFIER:
+						typeName = "identifier";
+						break;
+					case TokenType::NUMBER:
+						typeName = "number";
+						break;
+					case TokenType::FLOAT_LITERAL:
+						typeName = "float";
+						break;
+					case TokenType::STRING:
+						typeName = "string";
+						break;
+					case TokenType::CHARACTER:
+						typeName = "char";
+						break;
+					case TokenType::BLOCK_ID:
+						typeName = "block_id";
+						break;
+					default:
+						typeName = "";
+						break;
+					}
+					if (typeName.empty())
+						continue;
+					if (!first)
+						std::cout << ", ";
+					std::cout << count << " " << typeName;
+					first = false;
+				}
+				std::cout << ")";
+			}
+			std::cout << std::endl;
 		}
 
 		Parser parser(tokens);
@@ -29,11 +74,14 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, bool verbose)
 		parser.setDefaultNamespace(fileNamespace);
 		std::unique_ptr<ProgramAST> program = parser.parse();
 
-		if (verbose) {
-			std::cout << "  Parsing complete." << std::endl;
-			if (!fileNamespace.empty()) {
-				std::cout << "    File namespace: " << fileNamespace << std::endl;
+		if (verboseLevel >= 1) {
+			int functionCount = program->functions.size();
+			int structCount = program->structs.size();
+			std::cout << "Parsing: " << functionCount << " function(s), " << structCount << " struct(s)";
+			if (verboseLevel >= 2 && !fileNamespace.empty()) {
+				std::cout << " (namespace: " << fileNamespace << ")";
 			}
+			std::cout << std::endl;
 		}
 
 		return program;
@@ -55,7 +103,7 @@ std::string compileProgram(const CompilationOptions &options, llvm::raw_ostream 
 
 	for (const auto &inputFile : options.inputFiles) {
 		sources.push_back(readFile(inputFile));
-		programs.push_back(parseFile(inputFile, options.verbose));
+		programs.push_back(parseFile(inputFile, options.verboseLevel));
 	}
 
 	int iteration = 0;
@@ -84,22 +132,11 @@ std::string compileProgram(const CompilationOptions &options, llvm::raw_ostream 
 		std::set<std::string> undefinedFunctions = analyzer.getUndefinedFunctions();
 
 		if (!undefinedFunctions.empty()) {
-			if (options.verbose) {
-				std::cout << "Looking for undefined functions in stdlib: ";
-				for (const auto &func : undefinedFunctions) {
-					std::cout << func << " ";
-				}
-				std::cout << std::endl;
-			}
-
 			std::vector<std::string> stdlibFiles = findStdlibFilesDefining(undefinedFunctions);
 
 			if (!stdlibFiles.empty()) {
-				if (options.verbose) {
-					std::cout << "Found " << stdlibFiles.size() << " stdlib file(s) to auto-compile:" << std::endl;
-					for (const auto &file : stdlibFiles) {
-						std::cout << "  " << file << std::endl;
-					}
+				if (options.verboseLevel >= 1) {
+					std::cout << "Auto-compiling " << stdlibFiles.size() << " stdlib file(s)" << std::endl;
 				}
 
 				for (const auto &file : stdlibFiles) {
@@ -115,7 +152,7 @@ std::string compileProgram(const CompilationOptions &options, llvm::raw_ostream 
 				if (discoveredNewFiles) {
 					programs.clear();
 					for (const auto &file : allFiles) {
-						programs.push_back(parseFile(file, false));
+						programs.push_back(parseFile(file, 0));
 					}
 				}
 
@@ -136,13 +173,9 @@ std::string compileProgram(const CompilationOptions &options, llvm::raw_ostream 
 			throw std::runtime_error("");
 		}
 
-		if (options.verbose) {
-			std::cout << "Semantic analysis complete." << std::endl;
-		}
-
 		programs.clear();
 		for (const auto &file : allFiles) {
-			programs.push_back(parseFile(file, false));
+			programs.push_back(parseFile(file, 0));
 		}
 		break;
 
@@ -164,22 +197,57 @@ std::string compileProgram(const CompilationOptions &options, llvm::raw_ostream 
 		std::filesystem::path p(moduleName);
 		moduleName = p.filename().string();
 	}
-	CodeGenerator codegen(moduleName, options.debugInfo, options.verbose, options.profile);
-	codegen.generate(mergedProgram.get(), !options.compileOnly);
-	if (options.verbose) {
-		std::cout << "Code generation complete." << std::endl;
+
+	if (options.verboseLevel >= 1) {
+		std::cout << "Semantic analysis" << std::endl;
 	}
 
+	if (options.verboseLevel >= 2) {
+		std::cout << "  Final AST: " << mergedProgram->functions.size() << " function(s), "
+				  << mergedProgram->structs.size() << " struct(s)" << std::endl;
+	}
+
+	if (options.verboseLevel >= 1) {
+		std::cout << "Code generation" << std::endl;
+	}
+
+	CodeGenerator codegen(moduleName, options.debugInfo, options.verboseLevel, options.profile);
+
+	auto codgenStartTime = std::chrono::high_resolution_clock::now();
+	codegen.generate(mergedProgram.get(), !options.compileOnly);
+	auto codgenEndTime = std::chrono::high_resolution_clock::now();
+
+	if (options.verboseLevel >= 2) {
+		auto codgenDuration = std::chrono::duration_cast<std::chrono::milliseconds>(codgenEndTime - codgenStartTime);
+		std::cout << "  Time: " << codgenDuration.count() << "ms" << std::endl;
+	}
+
+	auto dcStartTime = std::chrono::high_resolution_clock::now();
 	// Always run dead code elimination to remove unused internal functions
 	codegen.runDeadCodeElimination();
-	if (options.verbose) {
-		std::cout << "Dead code elimination complete." << std::endl;
+	auto dcEndTime = std::chrono::high_resolution_clock::now();
+
+	if (options.verboseLevel >= 1) {
+		std::cout << "Dead code elimination" << std::endl;
+	}
+
+	if (options.verboseLevel >= 2) {
+		auto dcDuration = std::chrono::duration_cast<std::chrono::milliseconds>(dcEndTime - dcStartTime);
+		std::cout << "  Time: " << dcDuration.count() << "ms" << std::endl;
 	}
 
 	if (options.optimize) {
+		if (options.verboseLevel >= 1) {
+			std::cout << "Optimization" << std::endl;
+		}
+
+		auto optStartTime = std::chrono::high_resolution_clock::now();
 		codegen.optimize();
-		if (options.verbose) {
-			std::cout << "Optimization complete." << std::endl;
+		auto optEndTime = std::chrono::high_resolution_clock::now();
+
+		if (options.verboseLevel >= 2) {
+			auto optDuration = std::chrono::duration_cast<std::chrono::milliseconds>(optEndTime - optStartTime);
+			std::cout << "  Time: " << optDuration.count() << "ms" << std::endl;
 		}
 	}
 
@@ -208,24 +276,30 @@ std::string compileProgram(const CompilationOptions &options, llvm::raw_ostream 
 	if (options.emitLLVM) {
 		std::string llOutputFile = baseFilename + ".ll";
 		codegen.writeIRToFile(llOutputFile);
-		if (options.verbose) {
-			std::cout << "\nLLVM IR written to: " << llOutputFile << std::endl;
+		if (options.verboseLevel >= 2) {
+			std::cout << "  LLVM IR written to: " << llOutputFile << std::endl;
 		}
 	}
 
+	std::string outputFile;
 	if (options.compileOnly) {
 		std::string objOutputFile = baseFilename + ".obj";
 		codegen.writeObjectFile(objOutputFile);
-		if (options.verbose) {
-			std::cout << "\nCompilation successful!" << std::endl;
-			std::cout << "Output: " << objOutputFile << std::endl;
+		outputFile = objOutputFile;
+		if (options.verboseLevel >= 2) {
+			std::cout << "  Object file: " << objOutputFile << std::endl;
 		}
 	} else {
 		codegen.writeExecutable(exeOutputFile, errorStream);
-		if (options.verbose) {
-			std::cout << "\nCompilation and linking successful!" << std::endl;
-			std::cout << "Executable: " << exeOutputFile << std::endl;
-		}
+		outputFile = exeOutputFile;
+	}
+
+	// Print output info
+	if (options.verboseLevel >= 1) {
+		std::cout << "\nOutput: " << outputFile;
+		uint64_t outputFileSize = 0;
+		llvm::sys::fs::file_size(outputFile, outputFileSize);
+		std::cout << " (" << outputFileSize << " bytes)" << std::endl;
 	}
 
 	return exeOutputFile;

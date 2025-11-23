@@ -8,7 +8,6 @@ You *Are* Going To Read It
 - platform specific optimization for runtime.ll
 - warnings as errors in release mode
 - LLVM autovectorization
-- multiple verbosity levels during compiling
 - compiler error codes
 - tests for debugging (ie step into, step over, etc)
 - extensive math function tests

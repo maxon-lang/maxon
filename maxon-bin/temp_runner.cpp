@@ -20,7 +20,7 @@ int compileAndRunTemporary(const std::string &sourceFile) {
 		options.outputFile = tempExe;
 		options.optimize = true;
 		options.debugInfo = false;
-		options.verbose = false;
+		options.verboseLevel = 0;
 		options.emitLLVM = false;
 		options.compileOnly = false;
 
@@ -73,7 +73,7 @@ int compileAndRunFromStdin() {
 		options.outputFile = tempExe;
 		options.optimize = true;
 		options.debugInfo = false;
-		options.verbose = false;
+		options.verboseLevel = 0;
 		options.emitLLVM = false;
 		options.compileOnly = false;
 

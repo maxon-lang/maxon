@@ -28,30 +28,27 @@ void printHelp(const char *programName) {
 	std::cerr << "\nCommands:" << std::endl;
 	std::cerr << "  compile <input.maxon> [<input2.maxon> ...] [options]" << std::endl;
 	std::cerr << "                 Compile Maxon source files" << std::endl;
-	std::cerr << "  self-test [--verbose]" << std::endl;
+	std::cerr << "  self-test [options]" << std::endl;
 	std::cerr << "                 Run compiler self-tests" << std::endl;
-	std::cerr << "  extract-specs" << std::endl;
+	std::cerr << "  extract-specs [options]" << std::endl;
 	std::cerr << "                 Extract test fragments from spec files" << std::endl;
-	std::cerr << "  regen-fragments [--verbose|-v]" << std::endl;
+	std::cerr << "  regen-fragments [options]" << std::endl;
 	std::cerr << "                 Regenerate all test fragments" << std::endl;
 	std::cerr << "  test-fragments [options]" << std::endl;
 	std::cerr << "                 Run all test fragments (shows only failures and summary)" << std::endl;
-	std::cerr << "  test <file.test>" << std::endl;
+	std::cerr << "  test <file.test> [options]" << std::endl;
 	std::cerr << "                 Run a single test file and verify expected output" << std::endl;
 	std::cerr << "  <input.maxon|.test>  Compile and run source file (no artifacts left on disk)" << std::endl;
-	std::cerr << "\nOptions for self-test:" << std::endl;
-	std::cerr << "  --verbose, -v  Show detailed test output" << std::endl;
-	std::cerr << "\nOptions for test-fragments:" << std::endl;
-	std::cerr << "  --verbose, -v  Show all tests including passes" << std::endl;
-	std::cerr << "\nOptions for test:" << std::endl;
-	std::cerr << "  --verbose, -v  Show detailed test output" << std::endl;
-	std::cerr << "  --update, -u   Update the test file with actual MaxoncStderr output" << std::endl;
+	std::cerr << "\nVerbosity (applies to most commands):" << std::endl;
+	std::cerr << "  -v             Level 1 verbosity (progress, basic output)" << std::endl;
+	std::cerr << "  -vv            Level 2 verbosity (detailed information)" << std::endl;
 	std::cerr << "\nOptions for compile:" << std::endl;
 	std::cerr << "  --emit-llvm    Generate .ll file alongside executable" << std::endl;
 	std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
 	std::cerr << "  -O             Enable optimizations" << std::endl;
 	std::cerr << "  --debug, -g    Generate debug information" << std::endl;
-	std::cerr << "  --verbose, -v  Show compilation progress messages" << std::endl;
+	std::cerr << "\nOptions for test:" << std::endl;
+	std::cerr << "  --update, -u   Update the test file with actual MaxoncStderr output" << std::endl;
 	std::cerr << "\nGeneral options:" << std::endl;
 	std::cerr << "  --help, -h     Show this help message" << std::endl;
 }
@@ -87,32 +84,41 @@ int main(int argc, char *argv[]) {
 	std::string command = argv[1];
 
 	if (command == "self-test") {
-		bool verbose = false;
+		int verboseLevel = 0;
 		for (int i = 2; i < argc; ++i) {
 			std::string arg = argv[i];
-			if (arg == "--verbose" || arg == "-v") {
-				verbose = true;
+			if (arg == "-vv") {
+				verboseLevel = 2;
+			} else if (arg == "-v" || arg == "--verbose") {
+				verboseLevel = std::max(verboseLevel, 1);
+		}
+	}
+	return runSelfTest(verboseLevel);
+	}	if (command == "extract-specs") {
+		int verboseLevel = 0;
+		for (int i = 2; i < argc; ++i) {
+			std::string arg = argv[i];
+			if (arg == "-vv") {
+				verboseLevel = 2;
+			} else if (arg == "-v" || arg == "--verbose") {
+				verboseLevel = std::max(verboseLevel, 1);
 			}
 		}
-		return runSelfTest(verbose);
-	}
-
-	if (command == "extract-specs") {
-		return extractSpecFragments();
+		return extractSpecFragments(verboseLevel);
 	}
 
 	if (command == "regen-fragments") {
-		bool verbose = false;
+		int verboseLevel = 0;
 		for (int i = 2; i < argc; ++i) {
 			std::string arg = argv[i];
-			if (arg == "--verbose" || arg == "-v") {
-				verbose = true;
-			}
+			if (arg == "-vv") {
+				verboseLevel = 2;
+			} else if (arg == "-v" || arg == "--verbose") {
+				verboseLevel = std::max(verboseLevel, 1);
 		}
-		return regenerateFragments(verbose);
 	}
-
-	// Internal command used by parallel regen runner
+	return regenerateFragments(verboseLevel);
+	}	// Internal command used by parallel regen runner
 	if (command == "regen-fragments-subset") {
 		if (argc < 4) {
 			std::cerr << "Error: regen-fragments-subset requires output file and test files" << std::endl;
@@ -120,53 +126,57 @@ int main(int argc, char *argv[]) {
 		}
 
 		std::string outputFile = argv[2];
-		bool verbose = false;
+		int verboseLevel = 0;
 		std::vector<std::string> testFiles;
 
 		for (int i = 3; i < argc; ++i) {
 			std::string arg = argv[i];
-			if (arg == "--verbose" || arg == "-v") {
-				verbose = true;
+			if (arg == "-vv") {
+				verboseLevel = 2;
+			} else if (arg == "-v" || arg == "--verbose") {
+				verboseLevel = std::max(verboseLevel, 1);
 			} else {
 				testFiles.push_back(arg);
 			}
 		}
 
-		return regenerateFragmentsSubset(outputFile, testFiles, verbose);
+		return regenerateFragmentsSubset(outputFile, testFiles, verboseLevel);
 	}
 
 	if (command == "test-fragments") {
-		bool verbose = false;
+		int verboseLevel = 0;
 		for (int i = 2; i < argc; ++i) {
 			std::string arg = argv[i];
-			if (arg == "--verbose" || arg == "-v") {
-				verbose = true;
-			}
+			if (arg == "-vv") {
+				verboseLevel = 2;
+			} else if (arg == "-v" || arg == "--verbose") {
+				verboseLevel = std::max(verboseLevel, 1);
 		}
-		return runTestFragments(verbose);
 	}
-
-	if (command == "test") {
+	return runTestFragments(verboseLevel);
+	}	if (command == "test") {
 		if (argc < 3) {
 			std::cerr << "Error: test command requires a test file" << std::endl;
 			std::cerr << "Usage: maxon test <file.test> [options]" << std::endl;
 			return 1;
 		}
 
-		bool verbose = false;
+		int verboseLevel = 0;
 		bool update = false;
 		std::string testFile = argv[2];
 
 		for (int i = 3; i < argc; ++i) {
 			std::string arg = argv[i];
-			if (arg == "--verbose" || arg == "-v") {
-				verbose = true;
+			if (arg == "-vv") {
+				verboseLevel = 2;
+			} else if (arg == "-v" || arg == "--verbose") {
+				verboseLevel = std::max(verboseLevel, 1);
 			} else if (arg == "--update" || arg == "-u") {
 				update = true;
 			}
 		}
 
-		return runSingleTestFile(testFile, verbose, update);
+		return runSingleTestFile(testFile, verboseLevel, update);
 	}
 
 	// Internal command used by parallel test runner
@@ -177,19 +187,21 @@ int main(int argc, char *argv[]) {
 		}
 
 		std::string outputFile = argv[2];
-		bool verbose = false;
+		int verboseLevel = 0;
 		std::vector<std::string> testFiles;
 
 		for (int i = 3; i < argc; ++i) {
 			std::string arg = argv[i];
-			if (arg == "--verbose" || arg == "-v") {
-				verbose = true;
+			if (arg == "-vv") {
+				verboseLevel = 2;
+			} else if (arg == "-v" || arg == "--verbose") {
+				verboseLevel = std::max(verboseLevel, 1);
 			} else {
 				testFiles.push_back(arg);
 			}
 		}
 
-		return runTestFragmentsSubset(testFiles, outputFile, verbose);
+		return runTestFragmentsSubset(testFiles, outputFile, verboseLevel);
 	}
 
 	if (argc == 2) {
@@ -230,8 +242,10 @@ int main(int argc, char *argv[]) {
 			options.debugInfo = true;
 		} else if (arg == "--profile") {
 			options.profile = true;
-		} else if (arg == "--verbose" || arg == "-v") {
-			options.verbose = true;
+		} else if (arg == "-vv") {
+			options.verboseLevel = 2;
+		} else if (arg == "-v" || arg == "--verbose") {
+			options.verboseLevel = std::max(options.verboseLevel, 1);
 		} else if (!arg.empty() && arg[0] != '-') {
 			options.inputFiles.push_back(arg);
 		}

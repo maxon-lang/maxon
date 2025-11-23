@@ -236,7 +236,7 @@ static void writeTestFragment(const std::string &outputDir, const std::string &f
 }
 
 // Extract test fragments from spec files in specs/ directory
-int extractSpecFragments() {
+int extractSpecFragments(int verboseLevel) {
 	std::string specsDir = "specs";
 	std::string outputDir = "language-tests/fragments";
 	std::string manifestPath = "language-tests/.spec-manifest.json";
@@ -253,7 +253,9 @@ int extractSpecFragments() {
 	}
 	std::filesystem::create_directories(outputDir);
 
-	std::cout << "Extracting test fragments from spec files..." << std::endl;
+	if (verboseLevel == 0) {
+		std::cout << "Extracting test fragments from spec files..." << std::endl;
+	}
 
 	SpecManifest manifest;
 	int totalFragmentsExtracted = 0;
@@ -270,7 +272,9 @@ int extractSpecFragments() {
 		if (specBaseName == "README")
 			continue;
 
-		// std::cout << "\nProcessing " << specBaseName << ".md..." << std::endl;
+		if (verboseLevel >= 1) {
+			std::cout << "Processing " << specBaseName << ".md..." << std::endl;
+		}
 
 		std::ifstream specFile(specPath);
 		if (!specFile) {
@@ -288,8 +292,8 @@ int extractSpecFragments() {
 		std::string currentMetadata;
 		std::map<std::string, int> testNameCounts; // Track test indices per name
 		bool collectingMetadata = false;
-		bool inMetadataBlock = false; // For multi-line Stdout/Stderr
-		int docExampleCount = 0;	  // Counter for unnamed doc examples
+		bool inMetadataBlock = false;		 // For multi-line Stdout/Stderr
+		int docExampleCount = 0;			 // Counter for unnamed doc examples
 		std::string expectedOutputBlockType; // Track what type of output block is expected
 
 		while (std::getline(specFile, line)) {
@@ -611,7 +615,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		optOpts.outputFile = tempOptLL;
 		optOpts.optimize = true;
 		optOpts.emitLLVM = true;
-		optOpts.verbose = false;
+		optOpts.verboseLevel = 0;
 
 		std::string optIR;
 		std::string compileError;
@@ -699,7 +703,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		optProfileOpts.outputFile = tempOptExe;
 		optProfileOpts.optimize = true;
 		optProfileOpts.profile = true;
-		optProfileOpts.verbose = false;
+		optProfileOpts.verboseLevel = 0;
 		compileProgram(optProfileOpts);
 
 		int64_t optInstrCount = -1;
@@ -745,7 +749,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		debugOpts.outputFile = tempDebugLL;
 		debugOpts.debugInfo = true;
 		debugOpts.emitLLVM = true;
-		debugOpts.verbose = false;
+		debugOpts.verboseLevel = 0;
 
 		std::string debugIR;
 		std::ifstream debugIRFile;
@@ -764,7 +768,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		debugProfileOpts.outputFile = tempDebugExe;
 		debugProfileOpts.debugInfo = true;
 		debugProfileOpts.profile = true;
-		debugProfileOpts.verbose = false;
+		debugProfileOpts.verboseLevel = 0;
 		compileProgram(debugProfileOpts);
 
 		int64_t debugInstrCount = -1;
@@ -874,7 +878,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 }
 
 // Regenerate a subset of fragments (used for parallel processing)
-int regenerateFragmentsSubset(const std::string &outputFile, const std::vector<std::string> &testFiles, bool verbose) {
+int regenerateFragmentsSubset(const std::string &outputFile, const std::vector<std::string> &testFiles, int verboseLevel) {
 	std::ofstream out(outputFile);
 	if (!out) {
 		std::cerr << "Error: Cannot write to output file: " << outputFile << std::endl;
@@ -885,7 +889,7 @@ int regenerateFragmentsSubset(const std::string &outputFile, const std::vector<s
 	int workerId = GetCurrentProcessId() % 100000;
 	int failCount = 0;
 
-	if (verbose) {
+	if (verboseLevel >= 1) {
 		std::cerr << "[WORKER " << workerId << "] Processing " << testFiles.size() << " tests..." << std::endl;
 	}
 
@@ -894,7 +898,7 @@ int regenerateFragmentsSubset(const std::string &outputFile, const std::vector<s
 		std::filesystem::path p(testPath);
 		std::string testName = p.stem().string();
 
-		if (verbose) {
+		if (verboseLevel >= 1) {
 			std::cerr << "[WORKER " << workerId << "] [" << (idx + 1) << "/" << testFiles.size() << "] " << testName << std::endl;
 		}
 
@@ -918,7 +922,7 @@ int regenerateFragmentsSubset(const std::string &outputFile, const std::vector<s
 	return failCount > 0 ? 1 : 0;
 }
 
-int regenerateFragments(bool verbose) {
+int regenerateFragments(int verboseLevel) {
 	try {
 		auto startTime = std::chrono::high_resolution_clock::now();
 
@@ -991,7 +995,7 @@ int regenerateFragments(bool verbose) {
 
 			// Build command line for child process
 			std::string cmdLine = std::string("\"") + exePath + "\" regen-fragments-subset \"" + outputFiles[i] + "\"";
-			if (verbose) {
+			if (verboseLevel >= 1) {
 				cmdLine += " --verbose";
 			}
 			for (const auto &testFile : testGroups[i]) {
@@ -1050,7 +1054,7 @@ int regenerateFragments(bool verbose) {
 				// Convert escaped newlines back
 				std::replace(status.begin(), status.end(), '\t', '\n');
 
-				if (verbose) {
+				if (verboseLevel >= 1) {
 					std::cout << "  " << testName << "... " << status << std::endl;
 				}
 

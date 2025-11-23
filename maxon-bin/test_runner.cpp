@@ -40,7 +40,7 @@ struct TestResult {
 	std::string metadata;			// For --update option
 };
 
-void runSingleTest(const std::filesystem::path &testPath, bool verbose, TestResult &result, int threadId = 0) {
+void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, TestResult &result, int threadId = 0) {
 	auto testStartTime = std::chrono::high_resolution_clock::now();
 
 	result.testName = testPath.stem().string();
@@ -208,7 +208,7 @@ void runSingleTest(const std::filesystem::path &testPath, bool verbose, TestResu
 		optOpts.outputFile = tempOptLL;
 		optOpts.optimize = true;
 		optOpts.emitLLVM = true;
-		optOpts.verbose = false;
+		optOpts.verboseLevel = 0;
 
 		std::string actualOptIR;
 		std::string compileError;
@@ -340,7 +340,7 @@ void runSingleTest(const std::filesystem::path &testPath, bool verbose, TestResu
 			debugOpts.outputFile = tempDebugLL;
 			debugOpts.debugInfo = true;
 			debugOpts.emitLLVM = true;
-			debugOpts.verbose = false;
+			debugOpts.verboseLevel = 0;
 
 			std::string actualDebugIR;
 
@@ -379,7 +379,7 @@ void runSingleTest(const std::filesystem::path &testPath, bool verbose, TestResu
 			exeOpts.inputFiles = {tempSource};
 			exeOpts.outputFile = tempExe;
 			exeOpts.optimize = true;
-			exeOpts.verbose = false;
+			exeOpts.verboseLevel = 0;
 
 			try {
 				std::stringstream stderrCapture;
@@ -478,7 +478,7 @@ void runSingleTest(const std::filesystem::path &testPath, bool verbose, TestResu
 
 int runTestFragmentsSubset(const std::vector<std::string> &testFiles,
 						   const std::string &outputFile,
-						   bool verbose) {
+						   int verboseLevel) {
 	try {
 		// Get a unique thread ID based on the output file name
 		size_t hashVal = std::hash<std::string>{}(outputFile);
@@ -488,7 +488,7 @@ int runTestFragmentsSubset(const std::vector<std::string> &testFiles,
 
 		// Run tests in this subset
 		for (size_t i = 0; i < testFiles.size(); ++i) {
-			runSingleTest(std::filesystem::path(testFiles[i]), verbose, results[i], threadId);
+			runSingleTest(std::filesystem::path(testFiles[i]), verboseLevel, results[i], threadId);
 		}
 
 		// Write results to output file
@@ -535,11 +535,11 @@ int runTestFragmentsSubset(const std::vector<std::string> &testFiles,
 	}
 }
 
-int runTestFragments(bool verbose) {
+int runTestFragments(int verboseLevel) {
 	try {
 		auto startTime = std::chrono::high_resolution_clock::now();
 
-		std::cout << "Running test fragments" << (verbose ? " (verbose mode)" : "") << " in parallel..." << std::endl;
+		std::cout << "Running test fragments" << (verboseLevel >= 1 ? " (verbose mode)" : "") << " in parallel..." << std::endl;
 
 		std::string fragmentsDir = "language-tests/fragments";
 
@@ -605,7 +605,7 @@ int runTestFragments(bool verbose) {
 			// Build command line for child process
 			// Format: maxon.exe test-fragments-subset <outputFile> <testFile1> <testFile2> ...
 			std::string cmdLine = std::string("\"") + exePath + "\" test-fragments-subset \"" + outputFiles[i] + "\"";
-			if (verbose) {
+			if (verboseLevel >= 1) {
 				cmdLine += " --verbose";
 			}
 			for (const auto &testFile : testGroups[i]) {
@@ -639,7 +639,7 @@ int runTestFragments(bool verbose) {
 			DWORD exitCode = 0;
 			WaitForSingleObject(processHandles[i], INFINITE);
 			GetExitCodeProcess(processHandles[i], &exitCode);
-			if (exitCode != 0 && verbose) {
+			if (exitCode != 0 && verboseLevel >= 1) {
 				std::cerr << "Warning: Worker " << i << " exited with code " << exitCode << std::endl;
 			}
 			CloseHandle(processes[i].hProcess);
@@ -702,7 +702,7 @@ int runTestFragments(bool verbose) {
 		for (unsigned int i = 0; i < numWorkers; ++i) {
 			std::ifstream inFile(outputFiles[i]);
 			if (!inFile) {
-				if (verbose && !testGroups[i].empty()) {
+				if (verboseLevel >= 1 && !testGroups[i].empty()) {
 					std::cerr << "Warning: Could not read output file for worker " << i << ": " << outputFiles[i] << std::endl;
 				}
 				continue;
@@ -746,7 +746,7 @@ int runTestFragments(bool verbose) {
 
 				if (result.passed) {
 					passedTests++;
-					if (verbose) {
+					if (verboseLevel >= 1) {
 						std::cout << "  PASS: " << result.testName << " ("
 								  << std::fixed << std::setprecision(2) << result.durationSeconds << "s)" << std::endl;
 					}
@@ -789,7 +789,7 @@ int runTestFragments(bool verbose) {
 	}
 }
 
-int runSingleTestFile(const std::string &testFile, bool verbose, bool update) {
+int runSingleTestFile(const std::string &testFile, int verboseLevel, bool update) {
 	try {
 		std::filesystem::path testPath(testFile);
 		if (!std::filesystem::exists(testPath)) {
@@ -798,7 +798,7 @@ int runSingleTestFile(const std::string &testFile, bool verbose, bool update) {
 		}
 
 		TestResult result;
-		runSingleTest(testPath, verbose, result, 0);
+		runSingleTest(testPath, verboseLevel, result, 0);
 
 		if (update && !result.actualMaxoncStderr.empty()) {
 			// Update the test file with the actual MaxoncStderr
