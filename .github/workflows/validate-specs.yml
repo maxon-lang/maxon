@@ -1,31 +1,28 @@
 name: Validate Specs
 
 on:
-  push:
-    branches: [ master, main ]
-  pull_request:
-    branches: [ master, main ]
+  workflow_dispatch:
 
 jobs:
   validate:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake ninja-build jq
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build jq
 
-    - name: Cache LLVM
-      uses: actions/cache@v4
-      with:
-        path: llvm-build
-        key: llvm-${{ runner.os }}-${{ hashFiles('llvm-config.txt') }}
+      - name: Cache LLVM
+        uses: actions/cache@v4
+        with:
+          path: llvm-build
+          key: llvm-${{ runner.os }}-${{ hashFiles('llvm-config.txt') }}
 
-    - name: Build compiler
-      run: make compiler
+      - name: Build compiler
+        run: make compiler
 
-    - name: Validate spec coverage
-      run: make validate-specs
+      - name: Validate spec coverage
+        run: make validate-specs

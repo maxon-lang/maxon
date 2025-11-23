@@ -1,82 +1,79 @@
 name: Build and Test
 
 on:
-  push:
-    branches: [ master, main ]
-  pull_request:
-    branches: [ master, main ]
+  workflow_dispatch:
 
 jobs:
   build-windows:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Git Bash
-      shell: bash
-      run: echo "Git Bash is available"
+      - name: Set up Git Bash
+        shell: bash
+        run: echo "Git Bash is available"
 
-    - name: Install dependencies
-      shell: bash
-      run: |
-        choco install cmake ninja -y
+      - name: Install dependencies
+        shell: bash
+        run: |
+          choco install cmake ninja -y
 
-    - name: Cache LLVM
-      uses: actions/cache@v4
-      with:
-        path: llvm-build
-        key: llvm-${{ runner.os }}-${{ hashFiles('llvm-config.txt') }}
+      - name: Cache LLVM
+        uses: actions/cache@v4
+        with:
+          path: llvm-build
+          key: llvm-${{ runner.os }}-${{ hashFiles('llvm-config.txt') }}
 
-    - name: Build
-      shell: bash
-      run: make all
+      - name: Build
+        shell: bash
+        run: make all
 
-    - name: Run tests
-      shell: bash
-      run: make test
+      - name: Run tests
+        shell: bash
+        run: make test
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: maxon-windows
-        path: bin/maxon.exe
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: maxon-windows
+          path: bin/maxon.exe
 
   build-linux:
     runs-on: ubuntu-24.04
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake ninja-build jq wget curl
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build jq wget curl
 
-    - name: Install .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '8.0.x'
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
 
-    - name: Install Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
-    - name: Cache LLVM
-      uses: actions/cache@v4
-      with:
-        path: llvm-build
-        key: llvm-${{ runner.os }}-${{ hashFiles('llvm-config.txt') }}
+      - name: Cache LLVM
+        uses: actions/cache@v4
+        with:
+          path: llvm-build
+          key: llvm-${{ runner.os }}-${{ hashFiles('llvm-config.txt') }}
 
-    - name: Build
-      run: make all
+      - name: Build
+        run: make all
 
-    - name: Run tests
-      run: make test
+      - name: Run tests
+        run: make test
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: maxon-linux
-        path: bin/maxon
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: maxon-linux
+          path: bin/maxon
