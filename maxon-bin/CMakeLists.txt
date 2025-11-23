@@ -25,16 +25,21 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
     set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
 endif()
 
-# Look for pre-built LLVM in C:/Users/Eric/Dev/llvm-project/build directory
-set(LLVM_BUILD_DIR "C:/Users/Eric/Dev/llvm-project/build")
+# Look for LLVM in LLVM_DIR environment variable or default to ./llvm-build
+if(DEFINED ENV{LLVM_DIR})
+    set(LLVM_BUILD_DIR "$ENV{LLVM_DIR}")
+else()
+    set(LLVM_BUILD_DIR "${CMAKE_SOURCE_DIR}/../llvm-build")
+endif()
+
 if(EXISTS "${LLVM_BUILD_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
-    message(STATUS "Using pre-built LLVM from llvm-build directory")
+    message(STATUS "Using LLVM from ${LLVM_BUILD_DIR}")
     set(LLVM_DIR "${LLVM_BUILD_DIR}/lib/cmake/llvm")
     find_package(LLVM REQUIRED CONFIG PATHS ${LLVM_DIR} NO_DEFAULT_PATH)
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
     message(STATUS "LLVM include directories: ${LLVM_INCLUDE_DIRS}")
 else()
-    message(FATAL_ERROR "Pre-built LLVM not found in ${LLVM_BUILD_DIR}. Please run build-llvm.ps1 first.")
+    message(FATAL_ERROR "LLVM not found in ${LLVM_BUILD_DIR}. Please run 'make llvm' first.")
 endif()
 
 # Add LLVM definitions and include directories
@@ -116,10 +121,16 @@ endif()
 
 find_package(LLD REQUIRED CONFIG PATHS ${LLD_DIR} NO_DEFAULT_PATH)
 message(STATUS "Found LLD - using library interface")
-set(lld_libs lldCOFF lldCommon)
 
-# Add LLD include directory
-set(LLD_INCLUDE_DIR "C:/Users/Eric/Dev/llvm-project/lld/include")
+# Platform-specific LLD libraries
+if(WIN32)
+    set(lld_libs lldCOFF lldCommon)
+else()
+    set(lld_libs lldELF lldCommon)
+endif()
+
+# LLD include directory from LLVM build
+set(LLD_INCLUDE_DIR "${LLVM_BUILD_DIR}/include")
 target_include_directories(maxon SYSTEM PRIVATE ${LLD_INCLUDE_DIR})
 
 target_link_libraries(maxon ${llvm_libs} ${lld_libs})

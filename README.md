@@ -8,31 +8,74 @@ Maxon is a statically-typed programming language with LLVM backend, designed for
 - **Language Server (LSP)**: C++ implementation for IDE integration
 - **VS Code Extension**: Syntax highlighting and language features
 
+## Prerequisites
+
+### Windows
+- Git for Windows (Git Bash required)
+- CMake 3.13+
+- Ninja build system
+
+### Linux
+- Use the provided dev container (recommended)
+- Or install: build-essential, cmake, ninja-build, .NET 8.0 SDK, Node.js 20+
+
 ## Building
 
-Use the provided Makefile for all build operations:
+The build system automatically downloads and configures LLVM. Simply run:
 
 ```bash
-make all              # Build compiler and LSP server
+make all              # Downloads LLVM (first time), builds everything
 make compiler         # Build only the compiler
 make lsp              # Build LSP server and extension
 make extension        # Build VS Code extension
+make test             # Run all tests
+make clean            # Clean build artifacts (keeps LLVM)
+make clean-llvm       # Remove LLVM download
 ```
 
-See the Makefile or `.github/copilot-instructions.md` for more commands.
+**Note:** All commands must be run in Git Bash on Windows or bash on Linux.
 
 ## Quick Start
 
+### Windows (Git Bash)
 ```bash
-# Build everything
+# Build everything (downloads LLVM automatically)
 make all
 
 # Compile a Maxon program
-.\build\bin\maxon.exe compile examples/hello-world.maxon
+./bin/maxon examples/hello-world.maxon
 
 # Run tests
-make language-tests
+make test
 ```
+
+### Linux (Dev Container)
+```bash
+# Open project in VS Code with dev container
+
+# Build everything (LLVM downloaded automatically on first build)
+make all
+
+# Compile a Maxon program
+./bin/maxon examples/hello-world.maxon
+
+# Run tests
+make test
+```
+
+## Development with VS Code
+
+### Windows
+1. Install Git for Windows (includes Git Bash)
+2. Install required extensions
+3. Run all Make commands in Git Bash terminal
+
+### Linux
+1. Open folder in container (VS Code will prompt)
+2. Container automatically sets up environment
+3. Run Make commands in integrated terminal
+
+See [docs/CROSS_PLATFORM_PLAN.md](docs/CROSS_PLATFORM_PLAN.md) for detailed cross-platform setup information.
 
 ## License
 

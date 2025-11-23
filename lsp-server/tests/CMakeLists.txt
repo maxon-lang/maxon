@@ -9,13 +9,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 
 # Find LLVM (needed by lexer.cpp)
-set(LLVM_BUILD_DIR "C:/Users/Eric/Dev/llvm-project/build")
+if(DEFINED ENV{LLVM_DIR})
+    set(LLVM_BUILD_DIR "$ENV{LLVM_DIR}")
+else()
+    set(LLVM_BUILD_DIR "${CMAKE_SOURCE_DIR}/../../llvm-build")
+endif()
+
 if(EXISTS "${LLVM_BUILD_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
     set(LLVM_DIR "${LLVM_BUILD_DIR}/lib/cmake/llvm")
     find_package(LLVM REQUIRED CONFIG PATHS ${LLVM_DIR} NO_DEFAULT_PATH)
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 else()
-    message(FATAL_ERROR "Pre-built LLVM not found in ${LLVM_BUILD_DIR}")
+    message(FATAL_ERROR "LLVM not found in ${LLVM_BUILD_DIR}. Please run 'make llvm' first.")
 endif()
 
 # Include directories

@@ -1,0 +1,119 @@
+; Maxon Runtime Library
+; This file contains runtime functions needed by the compiler-generated code
+; It is compiled once and linked with all Maxon programs
+
+target triple = "@TARGET_TRIPLE@"
+
+@FLTUSED@
+
+; memset - fill memory with a constant byte value
+; ptr memset(ptr dest, i32 val, i64 count)
+define ptr @memset(ptr %dest, i32 %val, i64 %count) {
+entry:
+  ; Convert value to i8
+  %byteVal = trunc i32 %val to i8
+
+  ; Allocate loop counter
+  %i = alloca i64
+  store i64 0, ptr %i
+  br label %loop.cond
+
+loop.cond:
+  %iVal = load i64, ptr %i
+  %cond = icmp ult i64 %iVal, %count
+  br i1 %cond, label %loop.body, label %loop.end
+
+loop.body:
+  ; Calculate pointer: dest + i
+  %ptr = getelementptr i8, ptr %dest, i64 %iVal
+
+  ; Store byte value
+  store i8 %byteVal, ptr %ptr
+
+  ; Increment counter
+  %nextI = add i64 %iVal, 1
+  store i64 %nextI, ptr %i
+  br label %loop.cond
+
+loop.end:
+  ret ptr %dest
+}
+
+; __chkstk - Windows stack probe function
+; Required for functions with large stack allocations on Windows
+; On Windows, this prevents stack overflow by probing each page
+; On other platforms, it's a no-op since the OS handles stack growth differently
+define void @__chkstk() {
+entry:
+  ret void
+}
+
+; round - round to nearest integer (even on tie)
+; double round(double x)
+define double @round(double %x) {
+entry:
+  ; Check if x is negative
+  %isNegative = fcmp olt double %x, 0.0
+
+  ; Get absolute value
+  %absX = call double @llvm.fabs.f64(double %x)
+
+  ; Add 0.5 and truncate (standard rounding)
+  %plusHalf = fadd double %absX, 0.5
+  %truncated = call double @llvm.trunc.f64(double %plusHalf)
+
+  ; Restore sign
+  %result = select i1 %isNegative, double (fsub double 0.0, %truncated), double %truncated
+  ret double %result
+}
+
+; Transcendental functions - using kernel approximations
+; These are simplified implementations for now
+
+; sin(x) - sine function
+define double @sin(double %x) {
+entry:
+  ; Normalize angle to [-pi, pi]
+  %pi = fpext double 3.141592653589793 to double
+  %twoPi = fmul double %pi, 2.0
+
+  ; Compute x mod 2*pi (simplified)
+  %normalized = frem double %x, %twoPi
+
+  ; Taylor series approximation: sin(x) ≈ x - x^3/6 + x^5/120
+  %x2 = fmul double %normalized, %normalized
+  %x3 = fmul double %x2, %normalized
+  %x5 = fmul double %x3, %x2
+
+  %term1 = %normalized
+  %term2 = fdiv double %x3, 6.0
+  %term3 = fdiv double %x5, 120.0
+
+  %result1 = fsub double %term1, %term2
+  %result = fadd double %result1, %term3
+
+  ret double %result
+}
+
+; cos(x) - cosine function
+define double @cos(double %x) {
+entry:
+  ; Use identity: cos(x) = sin(x + pi/2)
+  %piOver2 = fpext double 1.5707963267948966 to double
+  %shifted = fadd double %x, %piOver2
+  %result = call double @sin(double %shifted)
+  ret double %result
+}
+
+; tan(x) - tangent function
+define double @tan(double %x) {
+entry:
+  %sinX = call double @sin(double %x)
+  %cosX = call double @cos(double %x)
+  %result = fdiv double %sinX, %cosX
+  ret double %result
+}
+
+; LLVM intrinsics declarations
+declare double @llvm.fabs.f64(double)
+declare double @llvm.trunc.f64(double)

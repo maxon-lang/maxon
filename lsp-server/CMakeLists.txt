@@ -5,16 +5,21 @@ project(maxon-lsp-server VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Look for pre-built LLVM (same as main compiler)
-set(LLVM_BUILD_DIR "C:/Users/Eric/Dev/llvm-project/build")
+# Look for LLVM in LLVM_DIR environment variable or default to ./llvm-build
+if(DEFINED ENV{LLVM_DIR})
+    set(LLVM_BUILD_DIR "$ENV{LLVM_DIR}")
+else()
+    set(LLVM_BUILD_DIR "${CMAKE_SOURCE_DIR}/../llvm-build")
+endif()
+
 if(EXISTS "${LLVM_BUILD_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
-    message(STATUS "Using pre-built LLVM from llvm-build directory")
+    message(STATUS "Using LLVM from ${LLVM_BUILD_DIR}")
     set(LLVM_DIR "${LLVM_BUILD_DIR}/lib/cmake/llvm")
     find_package(LLVM REQUIRED CONFIG PATHS ${LLVM_DIR} NO_DEFAULT_PATH)
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
     message(STATUS "LLVM include directories: ${LLVM_INCLUDE_DIRS}")
 else()
-    message(FATAL_ERROR "Pre-built LLVM not found in ${LLVM_BUILD_DIR}. Please run build-llvm.ps1 first.")
+    message(FATAL_ERROR "LLVM not found in ${LLVM_BUILD_DIR}. Please run 'make llvm' first.")
 endif()
 
 # Add LLVM definitions and include directories
@@ -68,8 +73,8 @@ endif()
 find_package(LLD REQUIRED CONFIG PATHS ${LLD_DIR} NO_DEFAULT_PATH)
 set(lld_libs lldCommon)
 
-# Add LLD include directory
-set(LLD_INCLUDE_DIR "C:/Users/Eric/Dev/llvm-project/lld/include")
+# Add LLD include directory from LLVM build
+set(LLD_INCLUDE_DIR "${LLVM_BUILD_DIR}/include")
 target_include_directories(maxon-lsp-server SYSTEM PRIVATE ${LLD_INCLUDE_DIR})
 
 target_link_libraries(maxon-lsp-server ${llvm_libs} ${lld_libs})

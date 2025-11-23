@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Run all Maxon test suites and report summary
+
+set +e  # Continue on errors
+
+# Colors
+CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Results tracking
+declare -A results
+
+echo -e "${CYAN}============================================================${NC}"
+echo -e "${CYAN}Running all test suites...${NC}"
+echo -e "${CYAN}============================================================${NC}"
+echo ""
+
+# Test 1: Compiler self-tests
+echo -e "${YELLOW}[1/4] Running compiler self-tests...${NC}"
+echo -e "${YELLOW}------------------------------------------------------------${NC}"
+maxon self-test
+results[self-tests]=$?
+echo ""
+
+# Test 2: Language fragment tests
+echo -e "${YELLOW}[2/4] Running language fragment tests...${NC}"
+echo -e "${YELLOW}------------------------------------------------------------${NC}"
+maxon extract-specs >/dev/null
+maxon regen-fragments >/dev/null
+maxon test-fragments
+results[fragment-tests]=$?
+echo ""
+
+# Test 3: LSP C++ unit tests
+echo -e "${YELLOW}[3/4] Running LSP C++ unit tests...${NC}"
+echo -e "${YELLOW}------------------------------------------------------------${NC}"
+mkdir -p lsp-server/tests/build
+pushd lsp-server/tests/build > /dev/null
+cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR:-./llvm-build}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR:-./llvm-build}/bin/clang++${EXE_EXT}" -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR="${LLVM_DIR:-./llvm-build}" 2>&1 >/dev/null
+cmake --build . 2>&1 >/dev/null
+ctest --output-on-failure
+results[lsp-tests]=$?
+popd > /dev/null
+echo ""
+
+# Test 4: VS Code extension tests
+echo -e "${YELLOW}[4/4] Running VS Code extension tests...${NC}"
+echo -e "${YELLOW}------------------------------------------------------------${NC}"
+pushd vscode-extension > /dev/null
+npm run test
+results[extension-tests]=$?
+popd > /dev/null
+echo ""
+
+# Summary
+echo -e "${CYAN}============================================================${NC}"
+echo -e "${CYAN}Test Summary:${NC}"
+echo -e "${CYAN}============================================================${NC}"
+
+failed=0
+if [ "${results[self-tests]}" -ne 0 ]; then
+    echo -e "${RED}[FAILED] Compiler self-tests${NC}"
+    ((failed++))
+else
+    echo -e "${GREEN}[PASSED] Compiler self-tests${NC}"
+fi
+
+if [ "${results[fragment-tests]}" -ne 0 ]; then
+    echo -e "${RED}[FAILED] Language fragment tests${NC}"
+    ((failed++))
+else
+    echo -e "${GREEN}[PASSED] Language fragment tests${NC}"
+fi
+
+if [ "${results[lsp-tests]}" -ne 0 ]; then
+    echo -e "${RED}[FAILED] LSP C++ unit tests${NC}"
+    ((failed++))
+else
+    echo -e "${GREEN}[PASSED] LSP C++ unit tests${NC}"
+fi
+
+if [ "${results[extension-tests]}" -ne 0 ]; then
+    echo -e "${RED}[FAILED] VS Code extension tests${NC}"
+    ((failed++))
+else
+    echo -e "${GREEN}[PASSED] VS Code extension tests${NC}"
+fi
+
+echo ""
+if [ $failed -gt 0 ]; then
+    echo -e "${RED}$failed test suite(s) failed${NC}"
+    exit 1
+else
+    echo -e "${GREEN}All test suites passed!${NC}"
+    exit 0
+fi

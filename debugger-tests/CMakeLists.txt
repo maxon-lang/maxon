@@ -11,24 +11,27 @@ if(NOT WIN32)
     find_package(LLDB QUIET)
 
     if(NOT LLDB_FOUND)
+        # Get LLVM directory from environment or default
+        if(DEFINED ENV{LLVM_DIR})
+            set(LLVM_BUILD_DIR "$ENV{LLVM_DIR}")
+        else()
+            set(LLVM_BUILD_DIR "${CMAKE_SOURCE_DIR}/../llvm-build")
+        endif()
+
         # Try to find LLDB manually
         find_path(LLDB_INCLUDE_DIR
             NAMES lldb/API/LLDB.h
             PATHS
-                "C:/Users/Eric/Dev/llvm-project/lldb/include"
-                $ENV{LLVM_DIR}/include
+                "${LLVM_BUILD_DIR}/include"
                 $ENV{LLVM_HOME}/include
                 /usr/include
                 /usr/local/include
-                "C:/Program Files/LLVM/include"
         )
 
         find_library(LLDB_LIBRARY
             NAMES lldb liblldb
             PATHS
-                "C:/Program Files/LLVM/lib"
-                "C:/Users/Eric/Dev/llvm-project/build/Release/lib"
-                $ENV{LLVM_DIR}/lib
+                "${LLVM_BUILD_DIR}/lib"
                 $ENV{LLVM_HOME}/lib
                 /usr/lib
                 /usr/local/lib

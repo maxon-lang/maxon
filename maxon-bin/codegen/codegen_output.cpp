@@ -19,15 +19,28 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
+#include <linux/limits.h>
 #endif
 
-// Forward declare COFF driver function
+#ifdef _WIN32
+// Forward declare COFF driver function (Windows)
 namespace lld {
 namespace coff {
 bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
 		  llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
 }
 } // namespace lld
+#else
+// Forward declare ELF driver function (Linux)
+namespace lld {
+namespace elf {
+bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
+		  llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
+}
+} // namespace lld
+#endif
 
 void CodeGenerator::optimize() {
 	// Use LLVM's PassBuilder to run an O3-style pipeline over the module.
@@ -87,8 +100,12 @@ void CodeGenerator::writeIRToFile(const std::string &filename) {
 }
 
 void CodeGenerator::writeObjectFile(const std::string &filename) {
-	// Get target triple - hardcode for x86-64 since that's what we're building for
+	// Get target triple based on platform
+#ifdef _WIN32
 	llvm::Triple targetTriple("x86_64-pc-windows-msvc");
+#else
+	llvm::Triple targetTriple("x86_64-pc-linux-gnu");
+#endif
 	module->setTargetTriple(targetTriple);
 
 	// Get target
@@ -135,8 +152,12 @@ void CodeGenerator::writeObjectFile(const std::string &filename) {
 }
 
 void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostream *errorStream) {
-	// Get target triple for x86-64 Windows
+	// Get target triple based on platform
+#ifdef _WIN32
 	llvm::Triple targetTriple("x86_64-pc-windows-msvc");
+#else
+	llvm::Triple targetTriple("x86_64-pc-linux-gnu");
+#endif
 	module->setTargetTriple(targetTriple);
 
 	// Get target
@@ -157,7 +178,11 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 	module->setDataLayout(targetMachine->createDataLayout());
 
 	// First, write to a temporary object file
+#ifdef _WIN32
 	std::string tempObjFile = exeFile + ".tmp.obj";
+#else
+	std::string tempObjFile = exeFile + ".tmp.o";
+#endif
 	std::error_code ec;
 	llvm::raw_fd_ostream dest(tempObjFile, ec, llvm::sys::fs::OF_None);
 
@@ -182,10 +207,12 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 		std::cout << "Linking" << std::endl;
 	}
 
-	// Prepare arguments for LLD driver
+	// Prepare arguments for LLD driver (platform-specific)
 	std::vector<std::string> argStorage; // Store strings so pointers remain valid
 	std::vector<const char *> lldArgs;
 
+#ifdef _WIN32
+	// Windows COFF linker arguments
 	argStorage.push_back("lld-link"); // Program name
 	argStorage.push_back("/NOLOGO");
 	argStorage.push_back("/MACHINE:X64");
@@ -214,6 +241,24 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 
 	// Input object file (program)
 	argStorage.push_back(tempObjFile);
+#else
+	// Linux ELF linker arguments
+	argStorage.push_back("ld.lld"); // Program name
+	argStorage.push_back("-o");
+	argStorage.push_back(exeFile);
+
+	// Entry point
+	argStorage.push_back("--entry=_start");
+
+	// Dynamic linker (for system calls, but we're self-contained)
+	argStorage.push_back("-dynamic-linker");
+	argStorage.push_back("/lib64/ld-linux-x86-64.so.2");
+
+	// Input object file (program)
+	argStorage.push_back(tempObjFile);
+
+	// Note: We don't link libc since Maxon is self-contained via runtime.ll
+#endif
 
 	// Convert to const char* pointers
 	for (const auto &arg : argStorage) {
@@ -221,18 +266,29 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 	}
 
 	// Add Maxon runtime library
-	// Find runtime.obj in the same directory as the executable
+	// Find runtime object file in the same directory as the executable
 	std::string execPath;
 #ifdef _WIN32
 	char buffer[MAX_PATH];
 	GetModuleFileNameA(NULL, buffer, MAX_PATH);
 	execPath = buffer;
+	std::string runtimeExt = ".obj";
+#else
+	char buffer[PATH_MAX];
+	ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+	if (len != -1) {
+		buffer[len] = '\0';
+		execPath = buffer;
+	} else {
+		execPath = ".";
+	}
+	std::string runtimeExt = ".o";
 #endif
 	size_t lastSlash = execPath.find_last_of("\\/");
 	std::string execDir = (lastSlash != std::string::npos) ? execPath.substr(0, lastSlash) : ".";
-	std::string runtimeObj = execDir + "/runtime.obj";
+	std::string runtimeObj = execDir + "/runtime" + runtimeExt;
 
-	// Check if runtime.obj exists
+	// Check if runtime object exists
 	if (llvm::sys::fs::exists(runtimeObj)) {
 		argStorage.push_back(runtimeObj);
 		if (verboseLevel >= 2) {
@@ -242,9 +298,11 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 		std::cout << "  Warning: Maxon runtime library not found at " << runtimeObj << std::endl;
 	}
 
+#ifdef _WIN32
 	// Explicitly link required Windows libraries
 	argStorage.push_back("kernel32.lib");
 	argStorage.push_back("shell32.lib"); // For CommandLineToArgvW
+#endif
 
 	// Rebuild lldArgs with final pointers
 	lldArgs.clear();
@@ -252,9 +310,13 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 		lldArgs.push_back(arg.c_str());
 	}
 
-	// Call LLD driver directly (in-process)
+	// Call LLD driver directly (in-process) - platform-specific
 	llvm::raw_ostream &errStream = errorStream ? *errorStream : llvm::errs();
+#ifdef _WIN32
 	bool success = lld::coff::link(lldArgs, llvm::outs(), errStream, false, false);
+#else
+	bool success = lld::elf::link(lldArgs, llvm::outs(), errStream, false, false);
+#endif
 
 	// Clean up temporary object file
 	llvm::sys::fs::remove(tempObjFile);

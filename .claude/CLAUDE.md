@@ -1,5 +1,14 @@
 # GitHub Copilot Instructions for Maxon Language Project
 
+## Platform Support
+
+**IMPORTANT:** Maxon is cross-platform and supports both Windows and Linux.
+
+- **Windows**: Git Bash is REQUIRED - all build commands must run in Git Bash (not PowerShell/CMD)
+- **Linux**: Native bash or dev container
+- **Build System**: Uses bash scripts everywhere for consistency
+- **LLVM**: Automatically downloaded via `make llvm` (first run of `make all`)
+
 ## Key Workflows
 
 ### Spec-Driven Development (PRIMARY WORKFLOW)
@@ -64,9 +73,13 @@ Add handler in `LspServer`, register in `JsonRpcHandler`, implement in `Analyzer
 
 ## Build System
 - Use top-level `Makefile` for all builds (see `make help`)
-- `make all` - Full build (default)
+- **IMPORTANT:** All commands must be run in Git Bash on Windows (not PowerShell)
+- `make all` - Downloads LLVM (first time) and builds everything (default)
+- `make llvm` - Download/update LLVM only
 - `make compiler` / `make lsp` / `make extension` - Component builds
-- `maxon.exe` is in PATH (no path prefix needed)
+- `make clean` - Clean build artifacts (keeps LLVM)
+- `make clean-llvm` - Remove LLVM download
+- `maxon` (or `maxon.exe` on Windows) is in `bin/` directory
 
 ## Runtime Library
 - `maxon-runtime/runtime.obj` provides functions for LLVM intrinsics (e.g., `llvm.memset` → `memset`)
