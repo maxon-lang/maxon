@@ -174,7 +174,11 @@ extension-install: extension-package
 lsp-test:
 	@echo Configuring and building LSP tests...
 	@mkdir -p lsp-server/tests/build
+ifeq ($(PLATFORM),windows)
+	@cd lsp-server/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
+else
 	@cd lsp-server/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
+endif
 	@cd lsp-server/tests/build && cmake --build .
 	@echo Running LSP tests...
 	@cd lsp-server/tests/build && ctest --output-on-failure
@@ -210,7 +214,11 @@ test: compiler lsp-server extension-build debugger-test
 debugger-test: compiler
 	@echo Configuring and building debugger integration tests...
 	@mkdir -p debugger-tests/build
+ifeq ($(PLATFORM),windows)
+	@cd debugger-tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
+else
 	@cd debugger-tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
+endif
 	@cd debugger-tests/build && cmake --build .
 	@echo Running debugger integration tests...
 	@cd debugger-tests/bin && ./debugger-test-runner$(EXE_EXT)

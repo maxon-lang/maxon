@@ -2,12 +2,20 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getLogs, clearLogs } from '../../logger';
-import { getClient, restartClient } from '../../extension';
+import { getClient } from '../../extension';
 import { State } from 'vscode-languageclient';
 
 suite('Diagnostics Tests', () => {
 	let testFileUri: vscode.Uri;
 	let document: vscode.TextDocument;
+
+	suiteSetup(async function () {
+		// Ensure extension is activated once for the entire suite
+		const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
+		if (ext && !ext.isActive) {
+			await ext.activate();
+		}
+	});
 
 	/**
 	 * Helper to create, open, and optionally edit a test file
@@ -56,17 +64,6 @@ suite('Diagnostics Tests', () => {
 	setup(async () => {
 		// Clear logs before each test for isolation
 		clearLogs();
-
-		// Ensure LSP client is running
-		let client = getClient();
-		if (!client || (client.state as number) !== 2 /* Running */) {
-			try {
-				await restartClient();
-				client = getClient();
-			} catch (error) {
-				throw new Error(`LSP Client not available for diagnostic tests: ${error}`);
-			}
-		}
 
 		// Create a temporary test file
 		const workspaceFolder = vscode.workspace.workspaceFolders?.[0];

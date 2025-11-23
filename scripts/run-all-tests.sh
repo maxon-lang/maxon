@@ -49,7 +49,11 @@ echo -e "${YELLOW}[3/4] Running LSP C++ unit tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 mkdir -p lsp-server/tests/build
 pushd lsp-server/tests/build > /dev/null
-cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR:-./llvm-project}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR:-./llvm-project}/bin/clang++${EXE_EXT}" -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR="${LLVM_DIR:-./llvm-project}" 2>&1 >/dev/null
+if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then
+	cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR:-./llvm-project}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR:-./llvm-project}/bin/clang++${EXE_EXT}" -DCMAKE_RC_COMPILER="C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe" -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR="${LLVM_DIR:-./llvm-project}" 2>&1 >/dev/null
+else
+	cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR:-./llvm-project}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR:-./llvm-project}/bin/clang++${EXE_EXT}" -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR="${LLVM_DIR:-./llvm-project}" 2>&1 >/dev/null
+fi
 cmake --build . 2>&1 >/dev/null
 ctest --output-on-failure
 results[lsp-tests]=$?

@@ -4,11 +4,12 @@
 
 #include "debugger_interface.h"
 #define WIN32_LEAN_AND_MEAN
-#include <dbghelp.h>
+#define NOMINMAX
+#include <windows.h>
 #include <memory>
 #include <string>
 #include <vector>
-#include <windows.h>
+#include <dbghelp.h>
 
 namespace DebuggerTest {
 
