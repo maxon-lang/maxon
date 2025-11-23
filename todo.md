@@ -3,8 +3,6 @@ You *Are* Going To Read It
 
 ## TODO
 
- WARNING  This extension consists of 330 files, out of which 164 are JavaScript files. For performance reasons, you should bundle your extension: https://aka.ms/vscode-bundle-extension. You should also exclude unnecessary files by adding them to your .vscodeignore: https://aka.ms/vscode-vscodeignore.
- 
 - simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")
 - https://llvm.org/docs/Frontend/PerformanceTips.html
 - platform specific optimization for runtime.ll

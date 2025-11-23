@@ -19,7 +19,7 @@
   "activationEvents": [
     "workspaceContains:**/*.maxon"
   ],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "languages": [
       {
@@ -96,14 +96,16 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run bundle",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "bundle": "npm run check-types && node esbuild.js",
+    "check-types": "tsc --noEmit",
+    "watch": "npm run check-types && node esbuild.js --watch",
     "pretest": "npm run compile",
     "test": "npm run test:grammar && node ./out/test/runTest.js",
     "test:grammar": "vscode-tmgrammar-snap -s source.maxon -g syntaxes/maxon.tmLanguage.json test-fixtures/**/*.maxon",
     "test:grammar:update": "vscode-tmgrammar-snap -u -s source.maxon -g syntaxes/maxon.tmLanguage.json test-fixtures/**/*.maxon",
-    "package": "vsce package",
+    "package": "npm run bundle -- --production && vsce package",
     "install-extension": "code --install-extension maxon-lsp-client-0.1.0.vsix"
   },
   "dependencies": {
@@ -115,6 +117,7 @@
     "@types/vscode": "^1.75.0",
     "@vscode/test-electron": "^2.3.9",
     "@vscode/vsce": "^3.7.0",
+    "esbuild": "^0.27.0",
     "mocha": "^10.2.0",
     "typescript": "^5.0.2",
     "vscode-tmgrammar-test": "^0.1.3"
