@@ -33,7 +33,8 @@ private:
     json handleLinkedEditingRange(const json& params);
     json handleFormatting(const json& params);
     json handleRangeFormatting(const json& params);
-    
+    json handleSemanticTokensFull(const json& params);
+
     // LSP Notification handlers
     void handleInitialized(const json& params);
     void handleDidOpen(const json& params);

@@ -80,6 +80,29 @@ Or use the repository's make target for extension tests:
 make extension-test
 ```
 
+## Customizing Colors
+
+The extension provides semantic highlighting for block identifiers (e.g., `'loop_label'`). These are colored based on their nesting depth to help visually distinguish nested blocks.
+
+You can customize these colors in your `settings.json`. To apply changes only to Maxon files:
+
+```json
+"editor.semanticTokenColorCustomizations": {
+    "[maxon]": {
+        "rules": {
+            "label.level0": "#FF0000", // Outermost blocks
+            "label.level1": "#00FF00",
+            "label.level2": "#0000FF",
+            "label.level3": "#FFFF00",
+            "label.level4": "#00FFFF",
+            "label.level5": "#FF00FF"  // Deeply nested blocks
+        }
+    }
+}
+```
+
+The levels cycle every 6 depths (level 0, 1, 2, 3, 4, 5, 0, 1...).
+
 ## License
 
 Licensed under either of:
