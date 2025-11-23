@@ -46,7 +46,7 @@ end 'circleArea'
 
 function main() int
     var area = circleArea(5.0)
-    return area as int  // Returns 78
+    return trunc(area)  // Returns 78
 end 'main'
 ```
 ```exitcode
@@ -62,7 +62,7 @@ function main() int
     var x = 3.14
     var y = 2.0
     var z = x + y
-    var result = z as int
+    var result = trunc(z)
     return result
 end 'main'
 ```
@@ -93,7 +93,7 @@ function main() int
     var a = 10.0
     var b = 3.0
     var result = a / b
-    return result as int
+    return trunc(result)
 end 'main'
 ```
 ```exitcode
@@ -107,7 +107,7 @@ function main() int
     var x = 5
     var y = 2.0
     var result = x + y
-    return result as int
+    return trunc(result)
 end 'main'
 ```
 ```exitcode

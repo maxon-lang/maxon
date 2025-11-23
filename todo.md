@@ -3,7 +3,6 @@ You *Are* Going To Read It
 
 ## TODO
 
-- if x is a float "x as int" should not work, use trunc() or round() or something
 - simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")
 - https://llvm.org/docs/Frontend/PerformanceTips.html
 - platform specific optimization for runtime.ll

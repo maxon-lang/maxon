@@ -64,7 +64,7 @@ var w = sqrt(z)      // 1.414213... (√2)
 ```maxon
 function main() int
     var x = sqrt(16.0)
-    return x as int
+    return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -105,7 +105,7 @@ end 'main'
 function main() int
     var x = 16  // int
     var result = sqrt(x)  // x promoted to 16.0
-    return result as int
+    return trunc(result)
 end 'main'
 ```
 ```exitcode

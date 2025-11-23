@@ -61,7 +61,7 @@ var j = abs(i)       // 42.0
 function main() int
     var neg = 0.0 - 5.5
     var x = abs(neg)
-    var y = x as int
+    var y = trunc(x)
     return y
 end 'main'
 ```
@@ -74,7 +74,7 @@ end 'main'
 function main() int
     var neg = 0.0 - 42.0
     var x = abs(neg)
-    return x as int
+    return trunc(x)
 end 'main'
 ```
 ```exitcode

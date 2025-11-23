@@ -72,7 +72,7 @@ end 'main'
 ```maxon
 function main() int
     var x = 3.14
-    return x as int
+    return trunc(x)
 end 'main'
 ```
 ```exitcode

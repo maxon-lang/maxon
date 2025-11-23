@@ -16,7 +16,6 @@ Implementation:
 - Represented by `CastExpr` AST node
 - Code generation depends on source/target types:
   - `int` to `float`: `sitofp` (signed int to float)
-  - `float` to `int`: `fptosi` (float to signed int, truncates)
   - `int` to `bool`: `icmp ne i32 %val, 0` (non-zero = true)
   - `int` to `char`: `trunc i32 %val to i8`
   - `char` to `int`: `sext i8 %val to i32`
@@ -24,7 +23,13 @@ Implementation:
   - `ptr` to `int`: `ptrtoint`
   - `ptr` to `ptr`: `bitcast`
 
-Type checker validates that the conversion is legal. Some conversions may lose precision (float to int) or be unsafe (int to ptr).
+Type checker validates that the conversion is legal and rejects unsafe conversions.
+
+**Important:** `float` to `int` casting is explicitly disallowed to prevent accidental precision loss. Use explicit functions instead:
+- `trunc(x)` - Truncate toward zero (equivalent to old `as int` behavior)
+- `round(x)` - Round to nearest integer
+- `floor(x)` - Round down to nearest integer
+- `ceil(x)` - Round up to nearest integer
 
 ## Documentation
 
@@ -37,7 +42,7 @@ value as targetType
 ```
 ### Supported Conversions
 
-- `int` ↔ `float` (truncates when converting to int)
+- `int` ↔ `float` (int to float only; float to int requires `trunc()`, `round()`, `floor()`, or `ceil()`)
 - `int` ↔ `char`
 - `int` ↔ `bool`
 - `int` ↔ `ptr`
@@ -49,7 +54,7 @@ value as targetType
 ```maxon
 function main() int
     var pi = 3.14159
-    var approximate = pi as int
+    var approximate = trunc(pi)
     print(approximate)
     return 0
 end 'main'
@@ -64,18 +69,17 @@ end 'main'
 
 ## Tests
 
-<!-- test: float-to-int -->
+<!-- test: int-to-float -->
 ```maxon
 function main() int
-    var x = 3.14
-    var y = 2.0
-    var z = x + y
-    var result = z as int
-    return result
+    var x = 5
+    var y = x as float
+    var z = y + 2.5
+    return trunc(z)
 end 'main'
 ```
 ```exitcode
-5
+7
 ```
 
 
@@ -88,20 +92,6 @@ end 'main'
 ```
 ```exitcode
 65
-```
-
-
-<!-- test: int-to-float -->
-```maxon
-function main() int
-    var x = 5
-    var y = x as float
-    var z = y + 2.5
-    return z as int
-end 'main'
-```
-```exitcode
-7
 ```
 
 

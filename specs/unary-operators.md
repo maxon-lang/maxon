@@ -70,7 +70,7 @@ end 'main'
 function main() int
     var x = -3.5
     var y = -x
-    var result = y as int
+    var result = trunc(y)
     return result
 end 'main'
 ```

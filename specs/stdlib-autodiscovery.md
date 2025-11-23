@@ -48,7 +48,7 @@ No imports or includes needed!
 function main() int
     // pow() is automatically found in stdlib/math/
     var result = pow(2.0, 3.0)
-    return result as int
+    return trunc(result)
 end 'main'
 ```
 ```exitcode
@@ -94,7 +94,7 @@ end 'main'
 ```maxon
 function main() int
     var result = sqrt(16.0)
-    return result as int
+    return trunc(result)
 end 'main'
 ```
 ```exitcode

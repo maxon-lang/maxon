@@ -134,7 +134,7 @@ function main() int
     arr[1] = 2.5
     arr[2] = 3.5
     var sum = arr[0] + arr[1] + arr[2]
-    return sum as int
+    return trunc(sum)
 end 'main'
 ```
 ```exitcode

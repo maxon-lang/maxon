@@ -148,20 +148,35 @@ end 'process'
 
 **Explicit Conversions** (using `as` operator)
 ```maxon
-var f = 3.14
-var i = f as int           // 3 (truncates)
-var c = 65 as char         // 'A'
+var i = 65 as char         // 'A'
 var b = 1 as bool          // true
 var p = 0 as ptr           // null pointer
+var f = 5 as float         // 5.0
 ```
 
 Supported casts:
-- `int` ↔ `float`
+- `int` → `float` (int to float only)
 - `int` ↔ `char`
 - `int` ↔ `bool`
 - `int` ↔ `ptr`
 - `ptr` ↔ `ptr`
 - `char` ↔ `int`
+
+**Converting floats to integers:**
+The `float → int` cast is not supported. Use explicit functions instead to make your intent clear:
+- `trunc(x)` - Truncate toward zero (removes fractional part)
+- `round(x)` - Round to nearest integer
+- `floor(x)` - Round down to nearest integer
+- `ceil(x)` - Round up to nearest integer
+
+Example:
+```maxon
+var f = 3.7
+var i1 = trunc(f)  // 3 (toward zero)
+var i2 = round(f)  // 4 (nearest)
+var i3 = floor(f)  // 3 (down)
+var i4 = ceil(f)   // 4 (up)
+```
 
 ---
 
