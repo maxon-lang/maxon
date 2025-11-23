@@ -6,9 +6,14 @@
 namespace fs = std::filesystem;
 using namespace DebuggerTest;
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
 	// Disable LLDB's Python scripting to avoid Python dependency issues
+#ifdef _WIN32
 	_putenv("LLDB_DISABLE_PYTHON=1");
+#else
+	putenv(const_cast<char *>("LLDB_DISABLE_PYTHON=1"));
+#endif
 
 	std::cout << "Maxon Debugger Integration Tests" << std::endl;
 	std::cout << "=================================" << std::endl;

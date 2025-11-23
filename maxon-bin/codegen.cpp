@@ -10,16 +10,21 @@
 
 CodeGenerator::CodeGenerator(const std::string &moduleName, bool debugInfo, int verboseLevel, bool profile)
 	: builder(context), module(std::make_unique<llvm::Module>(moduleName, context)),
-	  generateDebugInfo(debugInfo), verboseLevel(verboseLevel), enableProfiling(profile), sourceFileName(moduleName) {
-	if (generateDebugInfo) {
+	  generateDebugInfo(debugInfo), verboseLevel(verboseLevel), enableProfiling(profile), sourceFileName(moduleName)
+{
+	if (generateDebugInfo)
+	{
 		initDebugInfo(moduleName);
 	}
-	if (enableProfiling) {
+	if (enableProfiling)
+	{
 		initProfiling();
 	}
 }
 
-void CodeGenerator::createMinimalEntryPoint() {
+void CodeGenerator::createMinimalEntryPoint()
+{
+#ifdef _WIN32
 	// Declare ExitProcess from kernel32
 	llvm::FunctionType *exitProcessType = llvm::FunctionType::get(
 		llvm::Type::getVoidTy(context),
@@ -30,34 +35,52 @@ void CodeGenerator::createMinimalEntryPoint() {
 		llvm::Function::ExternalLinkage,
 		"ExitProcess",
 		module.get());
+#else
+	// Declare exit from libc
+	llvm::FunctionType *exitType = llvm::FunctionType::get(
+		llvm::Type::getVoidTy(context),
+		{llvm::Type::getInt32Ty(context)},
+		false);
+	llvm::Function *exitFunc = llvm::Function::Create(
+		exitType,
+		llvm::Function::ExternalLinkage,
+		"exit",
+		module.get());
+#endif
 
 	// Get the main function - try simple name first, then look for any namespace::main
 	llvm::Function *mainFunc = module->getFunction("main");
-	if (!mainFunc) {
+	if (!mainFunc)
+	{
 		// Look for main in any namespace (e.g., examples.main)
-		for (auto &func : module->functions()) {
+		for (auto &func : module->functions())
+		{
 			std::string funcName = func.getName().str();
 			// Check if the function name ends with .main
 			if (funcName == "main" ||
-				(funcName.size() > 5 && funcName.substr(funcName.size() - 5) == ".main")) {
+				(funcName.size() > 5 && funcName.substr(funcName.size() - 5) == ".main"))
+			{
 				mainFunc = &func;
 				break;
 			}
 		}
 	}
 
-	if (!mainFunc) {
+	if (!mainFunc)
+	{
 		throw std::runtime_error("main function not found");
 	}
 
 	// Check if main takes arguments: main(args []string) has 2 LLVM params (ptr, i32 hidden length)
 	bool mainTakesArgs = (mainFunc->arg_size() == 2);
 
+#ifdef _WIN32
 	// Declare Windows command-line API functions if main takes arguments
 	llvm::Function *getCommandLineFunc = nullptr;
 	llvm::Function *commandLineToArgvFunc = nullptr;
 
-	if (mainTakesArgs) {
+	if (mainTakesArgs)
+	{
 		// Declare GetCommandLineW - returns wchar_t* (opaque pointer)
 		llvm::FunctionType *getCommandLineType = llvm::FunctionType::get(
 			llvm::PointerType::get(context, 0), // wchar_t* as opaque pointer
@@ -80,24 +103,33 @@ void CodeGenerator::createMinimalEntryPoint() {
 			"CommandLineToArgvW",
 			module.get());
 	}
+#endif
 
 	// Create _start function as the real entry point
 	llvm::FunctionType *startType = llvm::FunctionType::get(
 		llvm::Type::getVoidTy(context),
+#ifdef _WIN32
 		false);
+#else
+		// On Linux, _start receives argc and argv from the OS
+		{llvm::Type::getInt32Ty(context), llvm::PointerType::get(context, 0)},
+		false);
+#endif
 	llvm::Function *startFunc = llvm::Function::Create(
 		startType,
 		llvm::Function::ExternalLinkage,
 		"_start",
 		module.get());
 
-	// Generate body: call main, then ExitProcess with main's return value
+	// Generate body: call main, then exit with main's return value
 	llvm::BasicBlock *entry = llvm::BasicBlock::Create(context, "entry", startFunc);
 	llvm::IRBuilder<> tmpBuilder(entry);
 
 	llvm::Value *mainRetVal = nullptr;
 
-	if (mainTakesArgs) {
+	if (mainTakesArgs)
+	{
+#ifdef _WIN32
 		// Get command line
 		llvm::Value *cmdLine = tmpBuilder.CreateCall(getCommandLineFunc);
 
@@ -115,50 +147,75 @@ void CodeGenerator::createMinimalEntryPoint() {
 
 		// Call main with argv and argc (main(args []string) gets argv as pointer, argc as hidden length)
 		mainRetVal = tmpBuilder.CreateCall(mainFunc, {argv, argc});
-	} else {
+#else
+		// On Linux, get argc and argv from _start parameters
+		auto argIter = startFunc->arg_begin();
+		llvm::Value *argc = &(*argIter);
+		++argIter;
+		llvm::Value *argv = &(*argIter);
+
+		// Call main with argv and argc
+		mainRetVal = tmpBuilder.CreateCall(mainFunc, {argv, argc});
+#endif
+	}
+	else
+	{
 		// Call main without arguments
 		mainRetVal = tmpBuilder.CreateCall(mainFunc);
 	}
 
+#ifdef _WIN32
 	tmpBuilder.CreateCall(exitProcessFunc, {mainRetVal});
 	tmpBuilder.CreateUnreachable(); // ExitProcess never returns
+#else
+	tmpBuilder.CreateCall(exitFunc, {mainRetVal});
+	tmpBuilder.CreateUnreachable(); // exit never returns
+#endif
 }
 
-void CodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
+void CodeGenerator::generate(ProgramAST *program, bool needsEntryPoint)
+{
 	// First pass: Create all struct types
-	for (const auto &structDef : program->structs) {
+	for (const auto &structDef : program->structs)
+	{
 		// Create opaque struct type
 		llvm::StructType *structType = llvm::StructType::create(context, structDef->name);
 		structTypes[structDef->name] = structType;
 
 		// Store field information for later use
 		std::vector<std::pair<std::string, std::string>> fields;
-		for (const auto &field : structDef->fields) {
+		for (const auto &field : structDef->fields)
+		{
 			fields.push_back({field.name, field.type});
 		}
 		structFields[structDef->name] = fields;
 	}
 
 	// Second pass: Set struct body (now that all struct types are declared)
-	for (const auto &structDef : program->structs) {
+	for (const auto &structDef : program->structs)
+	{
 		std::vector<llvm::Type *> fieldTypes;
-		for (const auto &field : structDef->fields) {
+		for (const auto &field : structDef->fields)
+		{
 			fieldTypes.push_back(getTypeFromString(context, field.type, &structTypes));
 		}
 		structTypes[structDef->name]->setBody(fieldTypes);
 	}
 
 	// Third pass: Create all function declarations
-	for (auto &func : program->functions) {
+	for (auto &func : program->functions)
+	{
 		// Get return type
 		llvm::Type *returnType = getTypeFromString(context, func->returnType, &structTypes);
 
 		// Create parameter types (including hidden length parameters for arrays)
 		std::vector<llvm::Type *> paramTypes;
-		for (const auto &param : func->parameters) {
+		for (const auto &param : func->parameters)
+		{
 			paramTypes.push_back(getParamTypeFromString(context, param.type, &structTypes));
 			// Add hidden length parameter for array parameters
-			if (isArrayParam(param.type)) {
+			if (isArrayParam(param.type))
+			{
 				paramTypes.push_back(llvm::Type::getInt32Ty(context));
 			}
 		}
@@ -184,31 +241,37 @@ void CodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
 	}
 
 	// Second pass: Generate function bodies
-	for (auto &func : program->functions) {
+	for (auto &func : program->functions)
+	{
 		generateFunction(func.get(), func->namespaceName);
 	}
 
 	// Create minimal CRT entry point only if needed (for executables)
-	if (needsEntryPoint) {
+	if (needsEntryPoint)
+	{
 		createMinimalEntryPoint();
 	}
 
 	// Inject profiling instrumentation if enabled
-	if (enableProfiling) {
+	if (enableProfiling)
+	{
 		// First inject counters in all basic blocks
 		injectInstrCounter();
 
 		// Then add profile output before main returns
 		// Find the main function (it might be mangled with namespace)
 		llvm::Function *mainFunc = nullptr;
-		for (auto &func : *module) {
-			if (func.getName().contains("::main") || func.getName() == "main") {
+		for (auto &func : *module)
+		{
+			if (func.getName().contains("::main") || func.getName() == "main")
+			{
 				mainFunc = &func;
 				break;
 			}
 		}
 
-		if (mainFunc) {
+		if (mainFunc)
+		{
 			injectProfileOutput(mainFunc);
 		}
 	}

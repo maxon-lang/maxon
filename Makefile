@@ -12,14 +12,13 @@ else
     OBJ_EXT := .o
 endif
 
-# LLVM paths (use system LLVM on Linux, local llvm-project on Windows)
+# LLVM paths (use local llvm-project on both platforms)
+LLVM_DIR ?= ./llvm-project
 ifeq ($(PLATFORM),linux)
-    LLVM_DIR ?= /usr/lib/llvm-21
-    CC = clang-21
-    CXX = clang++-21
-    LLC = llc-21
+    CC = "$(LLVM_DIR_ABS)/bin/clang$(EXE_EXT)"
+    CXX = "$(LLVM_DIR_ABS)/bin/clang++$(EXE_EXT)"
+    LLC = "$(LLVM_DIR_ABS)/bin/llc$(EXE_EXT)"
 else
-    LLVM_DIR ?= ./llvm-project
     CC = "$(LLVM_DIR_ABS)/bin/clang$(EXE_EXT)"
     CXX = "$(LLVM_DIR_ABS)/bin/clang++$(EXE_EXT)"
     LLC = "$(LLVM_DIR_ABS)/bin/llc$(EXE_EXT)"
@@ -41,7 +40,7 @@ RUNTIME_LL = maxon-runtime/runtime.ll
 RUNTIME_OBJ = bin/runtime$(OBJ_EXT)
 STUBS_OBJ = bin/stubs$(OBJ_EXT)
 
-.PHONY: all clean clean-llvm clean-all compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test llvm check-diasdk
+.PHONY: all clean clean-llvm clean-all compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test-build debugger-test llvm check-diasdk
 
 # Check DIA SDK requirement on Windows
 check-diasdk:
@@ -65,15 +64,15 @@ ifeq ($(PLATFORM),windows)
 endif
 
 # Default target - build everything (download LLVM first if needed)
-all: check-diasdk llvm compiler lsp-server extension-install
+all: check-diasdk llvm compiler lsp-server extension-install debugger-test-build
 	@echo All components built successfully.
 
-# Download LLVM if not present or version mismatch (Windows only, Linux uses system LLVM)
+# Build or download LLVM if not present or version mismatch
 llvm:
 ifeq ($(PLATFORM),windows)
 	@bash scripts/download-llvm.sh
 else
-	@echo "Using system LLVM from $(LLVM_DIR)"
+	@bash scripts/build-llvm-linux.sh
 endif
 
 help:
@@ -96,7 +95,8 @@ help:
 	@echo "  fragments        - Regenerate fragments, validate specs, and run fragment tests"
 	@echo "  validate-specs   - Check for orphaned test fragments not in any spec"
 	@echo "  test             - Run all test suites (compiler self-tests, fragment tests, LSP tests, extension tests, debugger tests)"
-	@echo "  debugger-test    - Build and run debugger integration tests (requires LLDB)"
+	@echo "  debugger-test-build   - Build debugger integration tests (requires LLDB)"
+	@echo "  debugger-test    - Run debugger integration tests (requires debugger-test-build first)"
 	@echo "  clean            - Clean maxon build artifacts (keep LLVM)"
 	@echo "  clean-llvm       - Remove LLVM download"
 	@echo "  clean-all        - Clean everything including LLVM"
@@ -221,8 +221,8 @@ fragments: compiler
 test: compiler lsp-server extension-build debugger-test
 	@bash scripts/run-all-tests.sh
 
-# Build and run debugger integration tests
-debugger-test: compiler
+# Build debugger integration tests
+debugger-test-build: compiler
 	@echo Configuring and building debugger integration tests...
 	@mkdir -p debugger-tests/build
 ifeq ($(PLATFORM),windows)
@@ -231,8 +231,12 @@ else
 	@cd debugger-tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
 endif
 	@cd debugger-tests/build && cmake --build .
+	@echo Debugger integration tests built successfully.
+
+# Run debugger integration tests
+debugger-test: debugger-test-build
 	@echo Running debugger integration tests...
-	@cd debugger-tests/bin && ./debugger-test-runner$(EXE_EXT)
+	cd debugger-tests/bin && ./debugger-test-runner$(EXE_EXT); \
 
 # Clean build artifacts (keep LLVM)
 clean:

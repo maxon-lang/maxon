@@ -43,14 +43,7 @@ if(NOT WIN32)
             set(LLDB_FOUND TRUE)
             message(STATUS "Found LLDB: ${LLDB_LIBRARY}")
         else()
-            message(STATUS "LLDB not found. Debugger tests will be skipped.")
-            message(STATUS "To build debugger tests, install LLDB with headers (lldb-dev package or build from source)")
-            
-            # Create a dummy target that prints a message
-            add_custom_target(debugger-test-runner
-                COMMAND ${CMAKE_COMMAND} -E echo "Debugger tests skipped: LLDB not found"
-            )
-            return()
+            message(FATAL_ERROR "LLDB not found. To build debugger tests, install LLDB with headers (lldb-dev package or build from source). On Ubuntu/Debian: apt-get install lldb-21-dev liblldb-21-dev")
         endif()
     endif()
 endif()
