@@ -3,11 +3,7 @@ FROM ubuntu:24.04
 # Avoid prompts from apt
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Add LLVM 21 repository
-RUN wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc \
-    && echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" > /etc/apt/sources.list.d/llvm-21.list
-
-# Install base dependencies and LLVM 21
+# Install base dependencies first (including ca-certificates for HTTPS)
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -16,10 +12,19 @@ RUN apt-get update && apt-get install -y \
     wget \
     curl \
     ca-certificates \
+    gnupg \
     jq \
     python3 \
     python3-pip \
     bash \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add LLVM 21 repository (after ca-certificates is installed)
+RUN wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc \
+    && echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" > /etc/apt/sources.list.d/llvm-21.list
+
+# Install LLVM 21
+RUN apt-get update && apt-get install -y \
     llvm-21 \
     llvm-21-dev \
     llvm-21-tools \
