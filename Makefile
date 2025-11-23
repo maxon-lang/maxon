@@ -13,7 +13,7 @@ LSP_SERVER_BACKUP = $(LSP_SERVER_BIN).old
 RUNTIME_LL = maxon-runtime/runtime.ll
 RUNTIME_OBJ = maxon-runtime/runtime.obj
 
-.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments
+.PHONY: all clean compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test
 
 # Default target - build everything
 all: compiler lsp-server extension-install
@@ -37,7 +37,8 @@ help:
 	@echo "  docs             - Generate HTML documentation from specs"
 	@echo "  fragments        - Regenerate fragments, validate specs, and run fragment tests"
 	@echo "  validate-specs   - Check for orphaned test fragments not in any spec"
-	@echo "  test             - Run all test suites (compiler self-tests, fragment tests, LSP tests, extension tests)"
+	@echo "  test             - Run all test suites (compiler self-tests, fragment tests, LSP tests, extension tests, debugger tests)"
+	@echo "  debugger-test    - Build and run debugger integration tests (requires LLDB)"
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  help             - Show this help message"
 
@@ -137,8 +138,17 @@ fragments: compiler
 	@powershell -Command "maxon test-fragments"
 
 # Run all test suites
-test: compiler lsp-server extension-build
+test: compiler lsp-server extension-build debugger-test
 	@powershell -ExecutionPolicy Bypass -File scripts/run-all-tests.ps1
+
+# Build and run debugger integration tests
+debugger-test: compiler
+	@echo Configuring and building debugger integration tests...
+	@powershell -Command "if (!(Test-Path 'debugger-tests\build')) { New-Item -ItemType Directory -Path 'debugger-tests\build' | Out-Null }"
+	@powershell -Command "cd debugger-tests\build; cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER='$(CC)' -DCMAKE_CXX_COMPILER='$(CXX)' -DCMAKE_BUILD_TYPE=Debug"
+	@powershell -Command "cd debugger-tests\build; cmake --build ."
+	@echo Running debugger integration tests...
+	@powershell -Command "cd debugger-tests\bin; .\debugger-test-runner.exe"
 
 # Clean build artifacts
 clean:
@@ -149,4 +159,6 @@ clean:
 	@powershell -Command "if (Test-Path 'vscode-extension/out') { Remove-Item -Recurse -Force 'vscode-extension/out' }"
 	@powershell -Command "if (Test-Path 'vscode-extension/node_modules') { Remove-Item -Recurse -Force 'vscode-extension/node_modules' }"
 	@powershell -Command "if (Test-Path 'lsp-server/tests/build') { Remove-Item -Recurse -Force 'lsp-server/tests/build' }"
+	@powershell -Command "if (Test-Path 'debugger-tests/build') { Remove-Item -Recurse -Force 'debugger-tests/build' }"
+	@powershell -Command "if (Test-Path 'debugger-tests/bin/*.exe') { Remove-Item -Force 'debugger-tests/bin/*.exe' }"
 	@echo Clean complete.

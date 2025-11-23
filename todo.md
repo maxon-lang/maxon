@@ -9,7 +9,6 @@ You *Are* Going To Read It
 - warnings as errors in release mode
 - LLVM autovectorization
 - compiler error codes
-- tests for debugging (ie step into, step over, etc)
 - extensive math function tests
 
 add "run" to maxon
