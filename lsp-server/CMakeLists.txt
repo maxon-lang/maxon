@@ -5,17 +5,23 @@ project(maxon-lsp-server VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Look for LLVM in LLVM_DIR environment variable or default to ./llvm-build
-if(DEFINED ENV{LLVM_DIR})
+# Look for LLVM in MAXON_LLVM_DIR CMake variable, LLVM_DIR env variable, or default to ./llvm-project
+if(DEFINED MAXON_LLVM_DIR)
+    set(LLVM_BUILD_DIR "${MAXON_LLVM_DIR}")
+elseif(DEFINED ENV{LLVM_DIR})
     set(LLVM_BUILD_DIR "$ENV{LLVM_DIR}")
 else()
-    set(LLVM_BUILD_DIR "${CMAKE_SOURCE_DIR}/../llvm-build")
+    set(LLVM_BUILD_DIR "${CMAKE_SOURCE_DIR}/llvm-project")
 endif()
 
 if(EXISTS "${LLVM_BUILD_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
     message(STATUS "Using LLVM from ${LLVM_BUILD_DIR}")
-    set(LLVM_DIR "${LLVM_BUILD_DIR}/lib/cmake/llvm")
-    find_package(LLVM REQUIRED CONFIG PATHS ${LLVM_DIR} NO_DEFAULT_PATH)
+    set(LLVM_CMAKE_DIR "${LLVM_BUILD_DIR}/lib/cmake/llvm")
+    # LLVM may reference LibXml2, create dummy target if not found
+    if(NOT TARGET LibXml2::LibXml2)
+        add_library(LibXml2::LibXml2 INTERFACE IMPORTED)
+    endif()
+    find_package(LLVM REQUIRED CONFIG PATHS ${LLVM_CMAKE_DIR} NO_DEFAULT_PATH)
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
     message(STATUS "LLVM include directories: ${LLVM_INCLUDE_DIRS}")
 else()

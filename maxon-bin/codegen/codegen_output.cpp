@@ -298,6 +298,17 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 		std::cout << "  Warning: Maxon runtime library not found at " << runtimeObj << std::endl;
 	}
 
+	// Link runtime stubs (math functions for LLVM intrinsic lowering)
+	std::string stubsObj = execDir + "/stubs" + runtimeExt;
+	if (llvm::sys::fs::exists(stubsObj)) {
+		argStorage.push_back(stubsObj);
+		if (verboseLevel >= 2) {
+			std::cout << "  Linking with runtime stubs: " << stubsObj << std::endl;
+		}
+	} else if (verboseLevel >= 2) {
+		std::cout << "  Warning: Runtime stubs not found at " << stubsObj << std::endl;
+	}
+
 #ifdef _WIN32
 	// Explicitly link required Windows libraries
 	argStorage.push_back("kernel32.lib");

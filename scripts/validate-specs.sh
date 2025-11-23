@@ -3,6 +3,16 @@
 
 set -e
 
+# Platform detection
+if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then
+    EXE_EXT=".exe"
+else
+    EXE_EXT=""
+fi
+
+# Maxon executable
+MAXON="bin/maxon${EXE_EXT}"
+
 # Colors
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
@@ -11,7 +21,7 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 # Extract specs first
-maxon extract-specs >/dev/null
+$MAXON extract-specs >/dev/null
 
 # Load manifest
 MANIFEST_PATH="language-tests/.spec-manifest.json"

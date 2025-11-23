@@ -11,11 +11,13 @@ if(NOT WIN32)
     find_package(LLDB QUIET)
 
     if(NOT LLDB_FOUND)
-        # Get LLVM directory from environment or default
-        if(DEFINED ENV{LLVM_DIR})
+        # Get LLVM directory from CMake variable, environment, or default
+        if(DEFINED MAXON_LLVM_DIR)
+            set(LLVM_BUILD_DIR "${MAXON_LLVM_DIR}")
+        elseif(DEFINED ENV{LLVM_DIR})
             set(LLVM_BUILD_DIR "$ENV{LLVM_DIR}")
         else()
-            set(LLVM_BUILD_DIR "${CMAKE_SOURCE_DIR}/../llvm-build")
+            set(LLVM_BUILD_DIR "${CMAKE_SOURCE_DIR}/llvm-project")
         endif()
 
         # Try to find LLDB manually

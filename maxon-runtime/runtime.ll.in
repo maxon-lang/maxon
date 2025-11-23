@@ -63,7 +63,8 @@ entry:
   %truncated = call double @llvm.trunc.f64(double %plusHalf)
 
   ; Restore sign
-  %result = select i1 %isNegative, double (fsub double 0.0, %truncated), double %truncated
+  %negTruncated = fsub double 0.0, %truncated
+  %result = select i1 %isNegative, double %negTruncated, double %truncated
   ret double %result
 }
 
@@ -74,8 +75,7 @@ entry:
 define double @sin(double %x) {
 entry:
   ; Normalize angle to [-pi, pi]
-  %pi = fpext double 3.141592653589793 to double
-  %twoPi = fmul double %pi, 2.0
+  %twoPi = fmul double 3.141592653589793, 2.0
 
   ; Compute x mod 2*pi (simplified)
   %normalized = frem double %x, %twoPi
@@ -85,11 +85,10 @@ entry:
   %x3 = fmul double %x2, %normalized
   %x5 = fmul double %x3, %x2
 
-  %term1 = %normalized
   %term2 = fdiv double %x3, 6.0
   %term3 = fdiv double %x5, 120.0
 
-  %result1 = fsub double %term1, %term2
+  %result1 = fsub double %normalized, %term2
   %result = fadd double %result1, %term3
 
   ret double %result
@@ -99,8 +98,7 @@ entry:
 define double @cos(double %x) {
 entry:
   ; Use identity: cos(x) = sin(x + pi/2)
-  %piOver2 = fpext double 1.5707963267948966 to double
-  %shifted = fadd double %x, %piOver2
+  %shifted = fadd double %x, 1.5707963267948966
   %result = call double @sin(double %shifted)
   ret double %result
 }

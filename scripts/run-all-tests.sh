@@ -3,6 +3,16 @@
 
 set +e  # Continue on errors
 
+# Platform detection
+if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then
+    EXE_EXT=".exe"
+else
+    EXE_EXT=""
+fi
+
+# Maxon executable
+MAXON="bin/maxon${EXE_EXT}"
+
 # Colors
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
@@ -21,16 +31,16 @@ echo ""
 # Test 1: Compiler self-tests
 echo -e "${YELLOW}[1/4] Running compiler self-tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
-maxon self-test
+$MAXON self-test
 results[self-tests]=$?
 echo ""
 
 # Test 2: Language fragment tests
 echo -e "${YELLOW}[2/4] Running language fragment tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
-maxon extract-specs >/dev/null
-maxon regen-fragments >/dev/null
-maxon test-fragments
+$MAXON extract-specs >/dev/null
+$MAXON regen-fragments >/dev/null
+$MAXON test-fragments
 results[fragment-tests]=$?
 echo ""
 
@@ -39,7 +49,7 @@ echo -e "${YELLOW}[3/4] Running LSP C++ unit tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 mkdir -p lsp-server/tests/build
 pushd lsp-server/tests/build > /dev/null
-cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR:-./llvm-build}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR:-./llvm-build}/bin/clang++${EXE_EXT}" -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR="${LLVM_DIR:-./llvm-build}" 2>&1 >/dev/null
+cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR:-./llvm-project}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR:-./llvm-project}/bin/clang++${EXE_EXT}" -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR="${LLVM_DIR:-./llvm-project}" 2>&1 >/dev/null
 cmake --build . 2>&1 >/dev/null
 ctest --output-on-failure
 results[lsp-tests]=$?

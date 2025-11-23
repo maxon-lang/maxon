@@ -12,8 +12,11 @@ Maxon is a statically-typed programming language with LLVM backend, designed for
 
 ### Windows
 - Git for Windows (Git Bash required)
+- Visual Studio 2022 with C++ development tools
 - CMake 3.13+
 - Ninja build system
+
+**Important:** Windows requires a one-time DIA SDK setup. See [docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md) for details.
 
 ### Linux
 - Use the provided dev container (recommended)
@@ -39,6 +42,9 @@ make clean-llvm       # Remove LLVM download
 
 ### Windows (Git Bash)
 ```bash
+# First-time setup: Run DIA SDK fix (as Administrator in PowerShell)
+# See docs/WINDOWS_SETUP.md for details
+
 # Build everything (downloads LLVM automatically)
 make all
 

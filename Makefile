@@ -12,29 +12,53 @@ else
     OBJ_EXT := .o
 endif
 
-# LLVM paths (use local llvm-build by default, allow override via environment)
-LLVM_DIR ?= ./llvm-build
+# LLVM paths (use local llvm-project by default, allow override via environment)
+LLVM_DIR ?= ./llvm-project
+LLVM_DIR_ABS := $(shell pwd)/$(LLVM_DIR)
 BUILD_DIR = build
 CMAKE_GENERATOR = "Ninja"
-CC = "$(LLVM_DIR)/bin/clang$(EXE_EXT)"
-CXX = "$(LLVM_DIR)/bin/clang++$(EXE_EXT)"
-LLC = "$(LLVM_DIR)/bin/llc$(EXE_EXT)"
+CC = "$(LLVM_DIR_ABS)/bin/clang$(EXE_EXT)"
+CXX = "$(LLVM_DIR_ABS)/bin/clang++$(EXE_EXT)"
+LLC = "$(LLVM_DIR_ABS)/bin/llc$(EXE_EXT)"
 
 # Windows-specific resource compiler (optional on Linux)
 ifeq ($(PLATFORM),windows)
     RC = "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe"
 endif
 
+MAXON = bin/maxon$(EXE_EXT)
 LSP_SERVER_BIN = bin/maxon-lsp-server$(EXE_EXT)
 LSP_SERVER_BACKUP = $(LSP_SERVER_BIN).old
 
 RUNTIME_LL = maxon-runtime/runtime.ll
 RUNTIME_OBJ = bin/runtime$(OBJ_EXT)
+STUBS_OBJ = bin/stubs$(OBJ_EXT)
 
-.PHONY: all clean clean-llvm clean-all compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test llvm
+.PHONY: all clean clean-llvm clean-all compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test llvm check-diasdk
+
+# Check DIA SDK requirement on Windows
+check-diasdk:
+ifeq ($(PLATFORM),windows)
+	@if [ ! -f "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/DIA SDK/lib/amd64/diaguids.lib" ]; then \
+		echo ""; \
+		echo "ERROR: DIA SDK not found at required location!"; \
+		echo ""; \
+		echo "LLVM requires the DIA SDK library at:"; \
+		echo "  C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/DIA SDK/lib/amd64/diaguids.lib"; \
+		echo ""; \
+		echo "To fix this issue:"; \
+		echo "  1. Right-click on fix-diasdk.ps1 in Windows Explorer"; \
+		echo "  2. Select 'Run with PowerShell'"; \
+		echo "  3. Choose 'Run as Administrator' when prompted"; \
+		echo ""; \
+		echo "For more information, see docs/WINDOWS_SETUP.md"; \
+		echo ""; \
+		exit 1; \
+	fi
+endif
 
 # Default target - build everything (download LLVM first if needed)
-all: llvm compiler lsp-server extension-install
+all: check-diasdk llvm compiler lsp-server extension-install
 	@echo All components built successfully.
 
 # Download LLVM if not present or version mismatch
@@ -68,7 +92,7 @@ help:
 	@echo "  help             - Show this help message"
 
 # Build Maxon runtime library
-runtime: $(RUNTIME_OBJ)
+runtime: $(RUNTIME_OBJ) $(STUBS_OBJ)
 
 # Generate platform-specific runtime.ll from template
 bin/runtime-platform.ll: maxon-runtime/runtime.ll.in
@@ -83,13 +107,17 @@ $(RUNTIME_OBJ): bin/runtime-platform.ll
 	@echo "Building Maxon runtime library..."
 	@$(LLC) -filetype=obj -o $(RUNTIME_OBJ) bin/runtime-platform.ll >/dev/null 2>&1
 
+$(STUBS_OBJ): maxon-runtime/stubs.cpp
+	@echo "Building runtime stubs..."
+	@$(CXX) -c -o $(STUBS_OBJ) maxon-runtime/stubs.cpp
+
 # Configure CMake
 configure:
 	@mkdir -p $(BUILD_DIR)
 ifeq ($(PLATFORM),windows)
-	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$(LLVM_DIR) >/dev/null 2>&1
+	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Release -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS) >/dev/null 2>&1
 else
-	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$(LLVM_DIR) >/dev/null 2>&1
+	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Release -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS) >/dev/null 2>&1
 endif
 
 # Build the Maxon compiler (depends on runtime)
@@ -146,7 +174,7 @@ extension-install: extension-package
 lsp-test:
 	@echo Configuring and building LSP tests...
 	@mkdir -p lsp-server/tests/build
-	@cd lsp-server/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR=$(LLVM_DIR)
+	@cd lsp-server/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
 	@cd lsp-server/tests/build && cmake --build .
 	@echo Running LSP tests...
 	@cd lsp-server/tests/build && ctest --output-on-failure
@@ -165,14 +193,14 @@ validate-specs: compiler
 # Regenerate fragments, validate specs, and run fragment tests
 fragments: compiler
 	@echo
-	@maxon extract-specs
+	@$(MAXON) extract-specs
 	@echo
 	@echo Validating spec coverage...
 	@bash scripts/validate-specs.sh
 	@echo
-	@maxon regen-fragments
+	@$(MAXON) regen-fragments
 	@echo Running fragment tests...
-	@maxon test-fragments
+	@$(MAXON) test-fragments
 
 # Run all test suites
 test: compiler lsp-server extension-build debugger-test
@@ -182,7 +210,7 @@ test: compiler lsp-server extension-build debugger-test
 debugger-test: compiler
 	@echo Configuring and building debugger integration tests...
 	@mkdir -p debugger-tests/build
-	@cd debugger-tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR=$(LLVM_DIR)
+	@cd debugger-tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
 	@cd debugger-tests/build && cmake --build .
 	@echo Running debugger integration tests...
 	@cd debugger-tests/bin && ./debugger-test-runner$(EXE_EXT)

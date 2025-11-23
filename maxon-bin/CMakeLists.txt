@@ -25,17 +25,23 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
     set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
 endif()
 
-# Look for LLVM in LLVM_DIR environment variable or default to ./llvm-build
-if(DEFINED ENV{LLVM_DIR})
+# Look for LLVM in MAXON_LLVM_DIR CMake variable, LLVM_DIR env variable, or default to ./llvm-project
+if(DEFINED MAXON_LLVM_DIR)
+    set(LLVM_BUILD_DIR "${MAXON_LLVM_DIR}")
+elseif(DEFINED ENV{LLVM_DIR})
     set(LLVM_BUILD_DIR "$ENV{LLVM_DIR}")
 else()
-    set(LLVM_BUILD_DIR "${CMAKE_SOURCE_DIR}/../llvm-build")
+    set(LLVM_BUILD_DIR "${CMAKE_SOURCE_DIR}/llvm-project")
 endif()
 
 if(EXISTS "${LLVM_BUILD_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
     message(STATUS "Using LLVM from ${LLVM_BUILD_DIR}")
-    set(LLVM_DIR "${LLVM_BUILD_DIR}/lib/cmake/llvm")
-    find_package(LLVM REQUIRED CONFIG PATHS ${LLVM_DIR} NO_DEFAULT_PATH)
+    set(LLVM_CMAKE_DIR "${LLVM_BUILD_DIR}/lib/cmake/llvm")
+    # LLVM may reference LibXml2, create dummy target if not found
+    if(NOT TARGET LibXml2::LibXml2)
+        add_library(LibXml2::LibXml2 INTERFACE IMPORTED)
+    endif()
+    find_package(LLVM REQUIRED CONFIG PATHS ${LLVM_CMAKE_DIR} NO_DEFAULT_PATH)
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
     message(STATUS "LLVM include directories: ${LLVM_INCLUDE_DIRS}")
 else()
@@ -78,6 +84,7 @@ set(SOURCES
     semantic_analyzer/semantic_analyzer_expr.cpp
     semantic_analyzer/semantic_analyzer_stmt.cpp
     error_formatter.cpp
+    ../maxon-runtime/libxml2-stub.cpp
 )
 
 # Create executable

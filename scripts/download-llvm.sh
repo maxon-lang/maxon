@@ -3,7 +3,7 @@ set -e
 
 # Read LLVM version from config file
 LLVM_VERSION=$(cat llvm-config.txt | tr -d '[:space:]')
-LLVM_DIR="./llvm-build"
+LLVM_DIR="./llvm-project"
 VERSION_FILE="$LLVM_DIR/.llvm-version"
 
 # Check if LLVM is already downloaded with the correct version
@@ -36,25 +36,24 @@ TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
 
 if [ "$PLATFORM" = "windows" ]; then
-    # Download Windows pre-built LLVM
-    LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/LLVM-${LLVM_VERSION}-win64.exe"
-    DOWNLOAD_FILE="$TEMP_DIR/llvm-installer.exe"
+    # Download Windows pre-built LLVM (full archive with libraries and headers)
+    LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/clang+llvm-${LLVM_VERSION}-x86_64-pc-windows-msvc.tar.xz"
+    DOWNLOAD_FILE="$TEMP_DIR/llvm.tar.xz"
 
     echo "Downloading from: $LLVM_URL"
     curl -L -o "$DOWNLOAD_FILE" "$LLVM_URL"
 
-    # Extract the installer (it's a 7z archive)
     echo "Extracting LLVM..."
     mkdir -p "$LLVM_DIR"
+    tar -xf "$DOWNLOAD_FILE" -C "$TEMP_DIR"
 
-    # Use 7z if available, otherwise use the installer in silent mode
-    if command -v 7z &> /dev/null; then
-        7z x "$DOWNLOAD_FILE" -o"$LLVM_DIR" -y > /dev/null
+    # Move extracted contents to llvm-build (remove version-specific directory)
+    EXTRACTED_DIR=$(find "$TEMP_DIR" -maxdepth 1 -type d -name "clang+llvm-*" | head -n 1)
+    if [ -n "$EXTRACTED_DIR" ]; then
+        mv "$EXTRACTED_DIR"/* "$LLVM_DIR/"
     else
-        # Run installer with /S (silent) and /D (destination)
-        # Convert to Windows path format
-        WIN_LLVM_DIR=$(cygpath -w "$(pwd)/$LLVM_DIR" 2>/dev/null || echo "$(pwd)/$LLVM_DIR")
-        "$DOWNLOAD_FILE" /S /D="$WIN_LLVM_DIR"
+        echo "Error: Could not find extracted LLVM directory"
+        exit 1
     fi
 
 elif [ "$PLATFORM" = "linux" ]; then
@@ -105,4 +104,4 @@ fi
 echo "$LLVM_VERSION" > "$VERSION_FILE"
 
 echo "LLVM $LLVM_VERSION downloaded and verified successfully!"
-echo "Installation location: $LLVM_DIR"
+echo "Installation location: $LLVM_DIR (pre-built binaries)"

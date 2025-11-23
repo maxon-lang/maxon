@@ -19,22 +19,22 @@
 - Read version from `llvm-config.txt`
 - Check if already downloaded (skip if version matches)
 - Platform detection:
-  - Windows: Download from https://github.com/llvm/llvm-project/releases (LLVM-{version}-win64.exe or .zip)
+  - Windows: Download from https://github.com/llvm/llvm-project/releases (clang+llvm-{version}-x86_64-pc-windows-msvc.tar.xz)
   - Linux: Download Ubuntu pre-built binaries or use apt
-- Extract to `./llvm-build/`
+- Extract to `./llvm-project/`
 - Create version marker file
 - Verify required components present (clang, lld, llc, includes, libs)
 
 ### 3. Update Makefile
 - Add `llvm` target calling `scripts/download-llvm.sh`
 - Make `llvm` prerequisite of `all`
-- Set `LLVM_DIR = ./llvm-build`
+- Set `LLVM_DIR = ./llvm-project`
 - Update tool paths: `CC`, `CXX`, `LLC` use `$(LLVM_DIR)/bin/`
 - Platform detection for `.exe` extension on Windows
 - Add clean targets: `clean`, `clean-llvm`, `clean-all`
 
 ### 4. Update `.gitignore`
-- Add `llvm-build/`
+- Add `llvm-project/` (pre-built binaries, not building from source)
 
 ## Phase 2: Bash Scripts (Replace PowerShell)
 
@@ -59,7 +59,7 @@
 
 ### 8. Update `maxon-bin/CMakeLists.txt`
 - Replace hardcoded `C:/Users/Eric/Dev/llvm-project/build` with `$ENV{LLVM_DIR}`
-- Default `LLVM_DIR` to `${CMAKE_SOURCE_DIR}/../llvm-build`
+- Default `LLVM_DIR` to `${CMAKE_SOURCE_DIR}/../llvm-project`
 - Platform detection: link `lldCOFF` on Windows, `lldELF` on Linux
 - Make rc.exe optional (Windows only)
 
