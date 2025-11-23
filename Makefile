@@ -21,10 +21,11 @@ all: compiler lsp-server extension-install
 
 help:
 	@echo "Maxon Project Build Targets:"
-	@echo "  all              - Build compiler, runtime library, and LSP (default)"
+	@echo "  all              - Build all components: compiler, LSP server, and VS Code extension (default)"
 	@echo "  configure        - Configure CMake build"
 	@echo "  runtime          - Build Maxon runtime library"
 	@echo "  compiler         - Build only the Maxon compiler"
+	@echo "  lsp              - Build LSP server and install VS Code extension"
 	@echo "  lsp-server       - Build only the C++ LSP server"
 	@echo "  extension        - Install dependencies and build VS Code extension"
 	@echo "  extension-build  - Compile the VS Code extension"
