@@ -42,9 +42,10 @@ function main() int
     return z
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
+
 
 ## Tests
 
@@ -59,9 +60,10 @@ function main() int
     return 1
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-```
+
 
 <!-- test: negate-float -->
 ```maxon
@@ -72,9 +74,10 @@ function main() int
     return result
 end 'main'
 ```
+```exitcode
+3
 ```
-ExitCode: 3
-```
+
 
 <!-- test: double-negation -->
 ```maxon
@@ -84,9 +87,10 @@ function main() int
     return y
 end 'main'
 ```
+```exitcode
+10
 ```
-ExitCode: 10
-```
+
 
 <!-- test: unary-plus -->
 ```maxon
@@ -95,6 +99,7 @@ function main() int
     return x
 end 'main'
 ```
+```exitcode
+42
 ```
-ExitCode: 42
-```
+

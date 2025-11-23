@@ -32,7 +32,6 @@ function add(a int, b int) int
     return a  // Error: 'b' is unused
 end 'add'
 ```
-
 Error message:
 ```
 Semantic Error: The parameter 'b' is declared but its value is never used
@@ -47,7 +46,6 @@ function identity(a int) int
     return a  // OK: 'a' is used
 end 'identity'
 ```
-
 ## Tests
 
 <!-- test: single-unused -->
@@ -60,8 +58,8 @@ function main() int
     return add(5, 10)
 end 'main'
 ```
-```
-MaxoncStderr: Semantic Error: line 2, column 21
+```maxoncstderr
+Semantic Error: line 2, column 21
 The parameter 'b' is declared but its value is never used
 
   2 | function add(a int, b int) int
@@ -78,8 +76,8 @@ function main() int
     return test(1, 2, 3)
 end 'main'
 ```
-```
-MaxoncStderr: Semantic Error: line 2, column 22
+```maxoncstderr
+Semantic Error: line 2, column 22
 The parameter 'b' is declared but its value is never used
 
   2 | function test(a int, b int, c int) int
@@ -102,9 +100,10 @@ function main() int
     return add(5, 10)
 end 'main'
 ```
+```exitcode
+15
 ```
-ExitCode: 15
-```
+
 
 <!-- test: none-unused -->
 ```maxon
@@ -116,9 +115,10 @@ function main() int
     return multiply(7, 6)
 end 'main'
 ```
+```exitcode
+42
 ```
-ExitCode: 42
-```
+
 
 <!-- test: void-function-unused -->
 ```maxon
@@ -131,8 +131,8 @@ function main() int
     return 0
 end 'main'
 ```
-```
-MaxoncStderr: Semantic Error: line 2, column 20
+```maxoncstderr
+Semantic Error: line 2, column 20
 The parameter 'x' is declared but its value is never used
 
   2 | function doNothing(x int, y int)

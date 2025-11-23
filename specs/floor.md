@@ -48,7 +48,6 @@ var y = floor(x)     // 3
 var neg = -3.2
 var z = floor(neg)   // -4 (rounds down toward negative infinity)
 ```
-
 **Notes:**
 - Always rounds toward negative infinity
 - Different from truncation for negative numbers
@@ -65,7 +64,9 @@ function main() int
     return y
 end 'main'
 ```
-ExitCode: 3
+```exitcode
+3
+```
 
 <!-- test: floor.negative -->
 ```maxon
@@ -75,7 +76,9 @@ function main() int
     return y
 end 'main'
 ```
-ExitCode: -4
+```exitcode
+-4
+```
 
 <!-- test: floor.with-ceil -->
 ```maxon
@@ -86,4 +89,6 @@ function main() int
     return a + b
 end 'main'
 ```
-ExitCode: 7
+```exitcode
+7
+```

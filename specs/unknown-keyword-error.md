@@ -39,12 +39,13 @@ function main() int
     return x
 end 'main'
 ```
-```output
-MaxoncStderr: In file 'temp\temp_fragment.maxon':
+```maxoncstderr
+In file 'temp\temp_fragment.maxon':
 Unexpected identifier 'foo'
   Location: line 4, column 5
   Note: Did you forget an assignment (=), function call (), or keyword?
 ```
+
 
 ### Common Solutions
 
@@ -65,8 +66,8 @@ function main() int
     return x
 end 'main'
 ```
-```
-MaxoncStderr: In file 'temp\temp_fragment.maxon':
+```maxoncstderr
+In file 'temp\temp_fragment.maxon':
 Unexpected identifier 'foo'
   Location: line 4, column 5
   Note: Did you forget an assignment (=), function call (), or keyword?
@@ -79,8 +80,8 @@ function main() int
     retur x
 end 'main'
 ```
-```
-MaxoncStderr: In file 'temp\temp_fragment.maxon':
+```maxoncstderr
+In file 'temp\temp_fragment.maxon':
 Unexpected identifier 'retur'
   Location: line 4, column 5
   Note: Did you forget an assignment (=), function call (), or keyword?
@@ -97,8 +98,8 @@ function main() int
     return 0
 end 'main'
 ```
-```
-MaxoncStderr: In file 'temp\temp_fragment.maxon':
+```maxoncstderr
+In file 'temp\temp_fragment.maxon':
 Unexpected identifier 'test'
   Location: line 7, column 5
   Note: Did you forget an assignment (=), function call (), or keyword?

@@ -32,7 +32,6 @@ The `int` type stores 32-bit signed integers ranging from -2,147,483,648 to 2,14
 var count int = 42
 let total = 100
 ```
-
 ### Example
 
 ```maxon
@@ -47,9 +46,10 @@ function main() int
     return factorial(5)  // Returns 120
 end 'main'
 ```
-```output
-ExitCode: 120
+```exitcode
+120
 ```
+
 
 ## Tests
 
@@ -60,9 +60,10 @@ function main() int
     return x
 end 'main'
 ```
+```exitcode
+42
 ```
-ExitCode: 42
-```
+
 
 <!-- test: int-arithmetic -->
 ```maxon
@@ -73,9 +74,10 @@ function main() int
     return sum
 end 'main'
 ```
+```exitcode
+30
 ```
-ExitCode: 30
-```
+
 
 <!-- test: negative-int -->
 ```maxon
@@ -88,9 +90,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+
 
 <!-- test: int-expression -->
 ```maxon
@@ -98,6 +101,7 @@ function main() int
     return 2 + 3 * 4
 end 'main'
 ```
+```exitcode
+14
 ```
-ExitCode: 14
-```
+

@@ -47,7 +47,6 @@ var y = cos(x)       // 1.0
 var pi = 3.14159265
 var z = cos(pi)      // -1.0 (approximately)
 ```
-
 **Notes:**
 - The function works with radians, not degrees
 - To convert degrees to radians: `radians = degrees * (π / 180)`
@@ -71,13 +70,16 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 0
-Stdout: 1.000000
+```exitcode
+0
+```
+```stdout
+1.000000
 0.877583
 0.540302
 -0.000004
 ```
+
 
 <!-- test: cos.zero -->
 ```maxon
@@ -89,7 +91,9 @@ function main() int
     return 1
 end 'main'
 ```
-ExitCode: 0
+```exitcode
+0
+```
 
 <!-- test: cos.with-int-promotion -->
 ```maxon
@@ -102,4 +106,6 @@ function main() int
     return 1
 end 'main'
 ```
-ExitCode: 0
+```exitcode
+0
+```

@@ -65,7 +65,6 @@ var w = log10(z)     // 3.0 (10^3 = 1000)
 var a = 10.0
 var b = log10(a)     // 1.0 (10^1 = 10)
 ```
-
 **Notes:**
 - Input must be positive (returns NaN for negative values)
 - `log10(0.0)` returns negative infinity
@@ -83,8 +82,10 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 0
-Stdout: ```
+```exitcode
+0
+```
+```stdout
 2.0
 ```
 
@@ -96,8 +97,10 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 0
-Stdout: ```
+```exitcode
+0
+```
+```stdout
 3.0
 ```
 
@@ -109,8 +112,10 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 0
-Stdout: ```
+```exitcode
+0
+```
+```stdout
 1.0
 ```
 
@@ -124,7 +129,9 @@ function main() int
     return 1
 end 'main'
 ```
-ExitCode: 0
+```exitcode
+0
+```
 
 <!-- test: log10.precision -->
 ```maxon
@@ -134,8 +141,10 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 0
-Stdout: ```
+```exitcode
+0
+```
+```stdout
 0.301029995663981
 ```
 
@@ -148,8 +157,10 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 0
-Stdout: ```
+```exitcode
+0
+```
+```stdout
 2.0
 ```
 
@@ -161,7 +172,9 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 0
-Stdout: ```
+```exitcode
+0
+```
+```stdout
 4.0
 ```

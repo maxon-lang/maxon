@@ -29,7 +29,6 @@ The `return` statement exits the current function and optionally returns a value
 ```maxon
 return expression
 ```
-
 ### Example
 
 ```maxon
@@ -40,7 +39,6 @@ function isPositive(x int) bool
     return false
 end 'isPositive'
 ```
-
 ## Tests
 
 <!-- test: simple-return -->
@@ -49,9 +47,10 @@ function main() int
     return 42
 end 'main'
 ```
+```exitcode
+42
 ```
-ExitCode: 42
-```
+
 
 <!-- test: expression-return -->
 ```maxon
@@ -59,9 +58,10 @@ function main() int
     return 2 + 3 * 4
 end 'main'
 ```
+```exitcode
+14
 ```
-ExitCode: 14
-```
+
 
 <!-- test: conditional-return -->
 ```maxon
@@ -73,6 +73,7 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+

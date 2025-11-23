@@ -45,7 +45,6 @@ function private_helper(x int) int
     return x * 2
 end 'private_helper'
 ```
-
 Only `public_add` can be called from other files. `private_helper` is file-private.
 
 ### Example
@@ -65,9 +64,10 @@ function main() int
     return add(3, 4)  // Called from within same file
 end 'main'
 ```
-```output
-ExitCode: 7
+```exitcode
+7
 ```
+
 
 ## Tests
 
@@ -81,9 +81,10 @@ function main() int
     return add(10, 20)
 end 'main'
 ```
-```output
-ExitCode: 30
+```exitcode
+30
 ```
+
 
 <!-- test: multiple-functions -->
 ```maxon
@@ -99,9 +100,10 @@ function main() int
     return double(5) + triple(4)
 end 'main'
 ```
-```output
-ExitCode: 22
+```exitcode
+22
 ```
+
 
 <!-- test: nested-calls-in-namespace -->
 ```maxon
@@ -117,6 +119,7 @@ function main() int
     return sum_three(1, 2, 3)
 end 'main'
 ```
-```output
-ExitCode: 6
+```exitcode
+6
 ```
+

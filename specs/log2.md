@@ -68,7 +68,6 @@ var w = log2(z)     // 4.0 (2^4 = 16)
 var a = 1024.0
 var b = log2(a)     // 10.0 (2^10 = 1024)
 ```
-
 **Notes:**
 - Input must be positive (returns 0 for non-positive values in current implementation)
 - `log2(1.0)` returns `0.0` (exact)
@@ -108,8 +107,10 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 0
-Stdout: ```
+```exitcode
+0
+```
+```stdout
 0.0
 1.0
 2.0
@@ -137,13 +138,16 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 0
-Stdout: 1.584962500721155
+```exitcode
+0
+```
+```stdout
+1.584962500721155
 2.321928094887361
 2.5849625007
 19.931569
 ```
+
 
 <!-- test: log2.integer-promotion-and-relationships -->
 ```maxon
@@ -181,8 +185,10 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 0
-Stdout: ```
+```exitcode
+0
+```
+```stdout
 5.0
 6.0
 5.0
@@ -209,8 +215,10 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 0
-Stdout: ```
+```exitcode
+0
+```
+```stdout
 1.442695
 3.321928
 3.584963

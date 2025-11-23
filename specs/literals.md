@@ -30,7 +30,6 @@ Literals are constant values used directly in code.
 -17
 0
 ```
-
 ### Float Literals
 Must include decimal point:
 ```maxon
@@ -38,7 +37,6 @@ Must include decimal point:
 -2.5
 0.0
 ```
-
 ### Character Literals
 Single character in single quotes:
 ```maxon
@@ -46,20 +44,17 @@ Single character in single quotes:
 'z'
 '\n'
 ```
-
 ### String Literals
 Text in double quotes:
 ```maxon
 "Hello, World!"
 "Line1\nLine2"
 ```
-
 ### Boolean Literals
 ```maxon
 true
 false
 ```
-
 ## Tests
 
 <!-- test: integer -->
@@ -68,9 +63,10 @@ function main() int
     return 5
 end 'main'
 ```
+```exitcode
+5
 ```
-ExitCode: 5
-```
+
 
 <!-- test: float -->
 ```maxon
@@ -79,9 +75,10 @@ function main() int
     return x as int
 end 'main'
 ```
+```exitcode
+3
 ```
-ExitCode: 3
-```
+
 
 <!-- test: character -->
 ```maxon
@@ -90,9 +87,10 @@ function main() int
     return ch as int
 end 'main'
 ```
+```exitcode
+88
 ```
-ExitCode: 88
-```
+
 
 <!-- test: boolean -->
 ```maxon
@@ -104,9 +102,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+
 
 <!-- test: string -->
 ```maxon
@@ -121,7 +120,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: Test
+```stdout
+Test
 ```
+

@@ -30,7 +30,6 @@ The `print_float()` function outputs float values with specified decimal precisi
 ```maxon
 print_float(value, precision)
 ```
-
 Parameters:
 - `value` - The float to print
 - `precision` - Number of decimal places
@@ -49,12 +48,15 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 0
-Stdout: 3.14
+```exitcode
+0
+```
+```stdout
+3.14
 3.14159
 -2.5
 ```
+
 
 ## Tests
 
@@ -66,10 +68,13 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: 3.141590
+```stdout
+3.141590
 ```
+
 
 <!-- test: negative -->
 ```maxon
@@ -79,10 +84,13 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: -2.500000
+```stdout
+-2.500000
 ```
+
 
 <!-- test: zero -->
 ```maxon
@@ -92,10 +100,13 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: 0.000000
+```stdout
+0.000000
 ```
+
 
 <!-- test: high-precision -->
 ```maxon
@@ -105,10 +116,13 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: 0.301029995663981
+```stdout
+0.301029995663981
 ```
+
 
 <!-- test: high-precision-ten-digits -->
 ```maxon
@@ -118,7 +132,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: 0.3010299957
+```stdout
+0.3010299957
 ```
+

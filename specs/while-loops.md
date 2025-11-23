@@ -48,7 +48,6 @@ while <condition> 'identifier'
     <statements>
 end 'identifier'
 ```
-
 **Parameters:**
 - `condition` - Boolean expression evaluated before each iteration
 - `identifier` - String label for the loop block (must match at `end`)
@@ -64,7 +63,6 @@ while i > 0 'loop'
 end 'loop'
 // x is now 11
 ```
-
 **Notes:**
 - Condition is evaluated before each iteration (pre-test loop)
 - Block identifier is required and must match at `while` and `end`
@@ -89,7 +87,9 @@ end 'loop'
 return x
 end 'main'
 ```
-ExitCode: 11
+```exitcode
+11
+```
 
 <!-- test: while-loops.break -->
 ```maxon
@@ -104,7 +104,9 @@ function main() int
     return x
 end 'main'
 ```
-ExitCode: 11
+```exitcode
+11
+```
 
 <!-- test: while-loops.zero-iterations -->
 ```maxon
@@ -116,4 +118,6 @@ function main() int
     return x
 end 'main'
 ```
-ExitCode: 10
+```exitcode
+10
+```

@@ -35,7 +35,6 @@ The `exp()` function calculates e raised to a power (e^x).
 ```maxon
 exp(x)
 ```
-
 Parameters:
 - `x` - The exponent (float)
 
@@ -49,9 +48,10 @@ function main() int
     return trunc(result)
 end 'main'
 ```
-```output
-ExitCode: 1
+```exitcode
+1
 ```
+
 
 ### Notes
 
@@ -69,9 +69,10 @@ function main() int
     return trunc(result)
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+
 
 <!-- test: exp-one -->
 ```maxon
@@ -80,9 +81,10 @@ function main() int
     return trunc(result)
 end 'main'
 ```
+```exitcode
+2
 ```
-ExitCode: 2
-```
+
 
 <!-- test: exp-two -->
 ```maxon
@@ -91,9 +93,10 @@ function main() int
     return trunc(result)
 end 'main'
 ```
+```exitcode
+7
 ```
-ExitCode: 7
-```
+
 
 <!-- test: int-promotion -->
 ```maxon
@@ -102,9 +105,10 @@ function main() int
     return trunc(result)
 end 'main'
 ```
+```exitcode
+20
 ```
-ExitCode: 20
-```
+
 
 <!-- test: negative -->
 ```maxon
@@ -113,6 +117,7 @@ function main() int
     return trunc(result)
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-```
+

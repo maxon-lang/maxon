@@ -34,7 +34,6 @@ The `log()` function calculates the natural logarithm (ln) of a number.
 ```maxon
 log(x)
 ```
-
 Parameters:
 - `x` - The value to take the logarithm of (must be positive)
 
@@ -49,9 +48,10 @@ function main() int
     return trunc(result)
 end 'main'
 ```
-```output
-ExitCode: 0
+```exitcode
+0
 ```
+
 
 ### Notes
 
@@ -71,10 +71,13 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-Stdout: 0.999999
-ExitCode: 0
+```stdout
+0.999999
 ```
+
 
 <!-- test: ln-of-one -->
 ```maxon
@@ -83,9 +86,10 @@ function main() int
     return trunc(result)
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-```
+
 
 <!-- test: ln-of-large -->
 ```maxon
@@ -95,10 +99,13 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-Stdout: 4.6
-ExitCode: 0
+```stdout
+4.6
 ```
+
 
 <!-- test: int-promotion -->
 ```maxon
@@ -108,7 +115,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-Stdout: 2.3
-ExitCode: 0
+```stdout
+2.3
 ```
+

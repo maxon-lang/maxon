@@ -31,7 +31,6 @@ The `bool` type stores boolean values - either `true` or `false`.
 var flag bool = true
 let condition = false
 ```
-
 ### Example
 
 ```maxon
@@ -49,9 +48,10 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 1
+```exitcode
+1
 ```
+
 
 ## Tests
 
@@ -67,9 +67,10 @@ function main() int
     end 'check'
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+
 
 <!-- test: bool-parameter -->
 ```maxon
@@ -85,9 +86,10 @@ function main() int
     return test_bool_param(true)
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+
 
 <!-- test: bool-from-comparison -->
 ```maxon
@@ -99,6 +101,7 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+42
 ```
-ExitCode: 42
-```
+

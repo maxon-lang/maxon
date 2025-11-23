@@ -266,6 +266,10 @@ int extractSpecFragments() {
 		std::string specPath = entry.path().string();
 		std::string specBaseName = entry.path().stem().string();
 
+		// Skip README.md - it contains format examples, not actual tests
+		if (specBaseName == "README")
+			continue;
+
 		// std::cout << "\nProcessing " << specBaseName << ".md..." << std::endl;
 
 		std::ifstream specFile(specPath);
@@ -278,6 +282,7 @@ int extractSpecFragments() {
 		bool inTestSection = false;
 		bool inDocSection = false;
 		bool inCodeBlock = false;
+		bool inTextBlock = false; // For non-executable text blocks
 		std::string currentTestName;
 		std::string currentCode;
 		std::string currentMetadata;
@@ -285,6 +290,7 @@ int extractSpecFragments() {
 		bool collectingMetadata = false;
 		bool inMetadataBlock = false; // For multi-line Stdout/Stderr
 		int docExampleCount = 0;	  // Counter for unnamed doc examples
+		std::string expectedOutputBlockType; // Track what type of output block is expected
 
 		while (std::getline(specFile, line)) {
 			// Check if we're entering the Documentation or Tests section
@@ -329,21 +335,23 @@ int extractSpecFragments() {
 			if (line == "```maxon") {
 				// Start of maxon code block
 				inCodeBlock = true;
+				inTextBlock = false;
 				currentCode.clear();
+				expectedOutputBlockType.clear();
 				continue;
-			} else if (line == "```" || line == "```output") {
-				if (inCodeBlock) {
-					// End of code block
+			} else if (line == "```text") {
+				// Start of text block (non-executable, not extracted)
+				inTextBlock = true;
+				inCodeBlock = false;
+				continue;
+			} else if (line == "```") {
+				if (inTextBlock) {
+					// End of text block - skip extraction
+					inTextBlock = false;
+					continue;
+				} else if (inCodeBlock) {
+					// End of code block - must be followed by output block
 					inCodeBlock = false;
-
-					// If in Doc section and no test name set, auto-generate one
-					if (inDocSection && currentTestName.empty() && !currentCode.empty()) {
-						docExampleCount++;
-						currentTestName = specBaseName + ".doc-example-" + std::to_string(docExampleCount);
-						testNameCounts[currentTestName] = 1;
-					}
-
-					collectingMetadata = true;
 					continue;
 				} else if (collectingMetadata && !inMetadataBlock) {
 					// Start of metadata fence block
@@ -352,82 +360,139 @@ int extractSpecFragments() {
 				} else if (inMetadataBlock) {
 					// End of metadata fence block
 					inMetadataBlock = false;
+					// After closing an output block, we might be done or there might be more (e.g., stdout after exitcode)
+					// Don't save yet, just mark that we're no longer in a block
 					continue;
 				}
+			} else if (line == "```exitcode") {
+				// Start of exitcode block (must follow maxon block)
+				if (!currentCode.empty()) {
+					// If in Doc section and no test name set, auto-generate one
+					if (inDocSection && currentTestName.empty()) {
+						docExampleCount++;
+						currentTestName = specBaseName + ".doc-example-" + std::to_string(docExampleCount);
+						testNameCounts[currentTestName] = 1;
+					}
+					expectedOutputBlockType = "exitcode";
+					collectingMetadata = true;
+					inMetadataBlock = true; // Reading the exitcode value
+				}
+				continue;
+			} else if (line == "```stdout") {
+				// Start of stdout block (optional, follows exitcode)
+				// The exitcode should already be saved in currentMetadata
+				expectedOutputBlockType = "stdout";
+				inMetadataBlock = true;
+				continue;
+			} else if (line == "```maxoncstderr") {
+				// Start of maxoncstderr block (must follow maxon block)
+				if (!currentCode.empty()) {
+					// If in Doc section and no test name set, auto-generate one
+					if (inDocSection && currentTestName.empty()) {
+						docExampleCount++;
+						currentTestName = specBaseName + ".doc-example-" + std::to_string(docExampleCount);
+						testNameCounts[currentTestName] = 1;
+					}
+					expectedOutputBlockType = "maxoncstderr";
+					collectingMetadata = true;
+					inMetadataBlock = true;
+				}
+				continue;
 			}
 
-			if (inCodeBlock) {
-				// Inside code block - accumulate source
-				currentCode += line + "\n";
+			if (inCodeBlock || inTextBlock) {
+				// Inside code block - accumulate source (but text blocks won't be extracted)
+				if (inCodeBlock) {
+					currentCode += line + "\n";
+				}
 			} else if (collectingMetadata) {
 				if (inMetadataBlock) {
-					// Inside metadata fence block - collect everything
-					currentMetadata += line + "\n";
+					// Inside metadata fence block - collect content and convert to proper field format
+					if (expectedOutputBlockType == "exitcode") {
+						// This is the exitcode value - save it
+						if (!currentMetadata.empty() && currentMetadata.rfind("ExitCode: ", 0) != 0) {
+							// We already have some metadata, append ExitCode
+							currentMetadata += "ExitCode: " + line + "\n";
+						} else {
+							currentMetadata = "ExitCode: " + line + "\n";
+						}
+						// Don't set inMetadataBlock = false here, let the closing ``` handle it
+					} else if (expectedOutputBlockType == "stdout") {
+						// This is stdout content (multiline) - collect it
+						currentMetadata += line + "\n";
+					} else if (expectedOutputBlockType == "maxoncstderr") {
+						// This is maxoncstderr content (multiline) - collect it
+						currentMetadata += line + "\n";
+					}
 				} else {
-					// Check for metadata lines outside fence (single-line format)
-					bool isMetadataField = false;
-					if (line.rfind("ExitCode:", 0) == 0) {
-						currentMetadata += line + "\n";
-						isMetadataField = true;
-					} else if (line.rfind("Args:", 0) == 0) {
-						currentMetadata += line + "\n";
-						isMetadataField = true;
-					} else if (line.rfind("Stdout:", 0) == 0) {
-						currentMetadata += line + "\n";
-						isMetadataField = true;
-						// Check if this line starts a multi-line block
-						if (line.find("```") != std::string::npos) {
-							inMetadataBlock = true;
-						}
-					} else if (line.rfind("Stderr:", 0) == 0) {
-						currentMetadata += line + "\n";
-						isMetadataField = true;
-						// Check if this line starts a multi-line block
-						if (line.find("```") != std::string::npos) {
-							inMetadataBlock = true;
-						}
-					} else if (line.rfind("MaxoncStderr:", 0) == 0) {
-						currentMetadata += line + "\n";
-						isMetadataField = true;
-						// Check if this line starts a multi-line block
-						if (line.find("```") != std::string::npos) {
-							inMetadataBlock = true;
-						}
-					} else if (inDocSection && collectingMetadata && !currentTestName.empty()) {
-						// In doc section, if we hit a non-metadata line after code block, check if we should save
-						// Only save if there is actual metadata (output blocks) - doc examples without
-						// output blocks are NOT extracted as test fragments
-						if (line.empty() || line.rfind("###", 0) == 0 || line.rfind("##", 0) == 0) {
-							if (!currentMetadata.empty()) {
-								// Has metadata - save as test fragment
-								int index = testNameCounts[currentTestName];
-								std::string fragmentName = currentTestName + "." + std::to_string(index);
-								writeTestFragment(outputDir, fragmentName, currentCode, currentMetadata,
-												  manifest, specBaseName, currentTestName, index, totalFragmentsExtracted, true);
+					// Not in metadata block - check if we need to finish up
+					// Check if we're at end of output blocks or start of new section
+					if (line.empty() || line.rfind("###", 0) == 0 || line.rfind("##", 0) == 0 || line.rfind("<!--", 0) == 0 || line == "```") {
+						// Save fragment if we have code and metadata
+						if (!currentCode.empty() && !currentMetadata.empty()) {
+							// Wrap stdout/maxoncstderr if needed
+							std::string finalMetadata;
+							if (expectedOutputBlockType == "stdout") {
+								// Find the ExitCode line and insert Stdout after it
+								size_t exitCodeEnd = currentMetadata.find('\n');
+								if (exitCodeEnd != std::string::npos) {
+									std::string exitCodeLine = currentMetadata.substr(0, exitCodeEnd + 1);
+									std::string stdoutContent = currentMetadata.substr(exitCodeEnd + 1);
+									// writeTestFragment will wrap multi-line stdout, just pass the field
+									finalMetadata = exitCodeLine + "Stdout: " + stdoutContent;
+								} else {
+									finalMetadata = currentMetadata;
+								}
+							} else if (expectedOutputBlockType == "maxoncstderr") {
+								// Just pass MaxoncStderr field - writeTestFragment will wrap it
+								finalMetadata = "MaxoncStderr: " + currentMetadata;
+							} else {
+								// Just exitcode, no wrapping needed
+								finalMetadata = currentMetadata;
 							}
-							// Clear state whether we saved or not
-							currentCode.clear();
-							currentMetadata.clear();
-							currentTestName.clear();
-							collectingMetadata = false;
-						} else if (!currentMetadata.empty()) {
-							// If we have metadata already and this is a non-metadata line within the output block,
-							// it's a continuation of multi-line metadata content (e.g., MaxoncStderr)
-							currentMetadata += line + "\n";
+
+							int index = testNameCounts[currentTestName];
+							std::string fragmentName = currentTestName + "." + std::to_string(index);
+							writeTestFragment(outputDir, fragmentName, currentCode, finalMetadata,
+											  manifest, specBaseName, currentTestName, index, totalFragmentsExtracted, inDocSection);
 						}
-					} else if (!isMetadataField && !currentMetadata.empty()) {
-						// In test section: continuation of multi-line metadata content
-						currentMetadata += line + "\n";
+						// Clear state
+						currentCode.clear();
+						currentMetadata.clear();
+						currentTestName.clear();
+						collectingMetadata = false;
+						expectedOutputBlockType.clear();
+						inMetadataBlock = false;
 					}
 				}
 			}
 		}
 
 		// Save last test if exists
-		if (!currentTestName.empty() && !currentCode.empty()) {
+		if (!currentTestName.empty() && !currentCode.empty() && !currentMetadata.empty()) {
+			// Prepare metadata - writeTestFragment will handle wrapping
+			std::string finalMetadata;
+			if (expectedOutputBlockType == "stdout") {
+				// Find the ExitCode line and insert Stdout after it
+				size_t exitCodeEnd = currentMetadata.find('\n');
+				if (exitCodeEnd != std::string::npos) {
+					std::string exitCodeLine = currentMetadata.substr(0, exitCodeEnd + 1);
+					std::string stdoutContent = currentMetadata.substr(exitCodeEnd + 1);
+					finalMetadata = exitCodeLine + "Stdout: " + stdoutContent;
+				} else {
+					finalMetadata = currentMetadata;
+				}
+			} else if (expectedOutputBlockType == "maxoncstderr") {
+				// Just pass MaxoncStderr field - writeTestFragment will wrap it
+				finalMetadata = "MaxoncStderr: " + currentMetadata;
+			} else {
+				// Just exitcode, no wrapping needed
+				finalMetadata = currentMetadata;
+			}
+
 			int index = testNameCounts[currentTestName];
 			std::string fragmentName = currentTestName + "." + std::to_string(index);
-			writeTestFragment(outputDir, fragmentName, currentCode, currentMetadata,
+			writeTestFragment(outputDir, fragmentName, currentCode, finalMetadata,
 							  manifest, specBaseName, currentTestName, index, totalFragmentsExtracted);
 		}
 

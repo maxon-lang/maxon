@@ -37,7 +37,6 @@ Exit from the innermost enclosing loop.
 ```maxon
 break
 ```
-
 **Example:**
 
 ```maxon
@@ -50,7 +49,6 @@ while true 'loop'
 end 'loop'
 // x is now 11
 ```
-
 **Notes:**
 - Exits the innermost `while` loop
 - Control flow continues after the loop's `end` statement
@@ -72,7 +70,9 @@ function main() int
     return x
 end 'main'
 ```
-ExitCode: 5
+```exitcode
+5
+```
 
 <!-- test: break.with-single-line-if -->
 ```maxon
@@ -85,7 +85,9 @@ function main() int
     return x
 end 'main'
 ```
-ExitCode: 10
+```exitcode
+10
+```
 
 <!-- test: break.multiple-conditions -->
 ```maxon
@@ -102,4 +104,6 @@ function main() int
     return x
 end 'main'
 ```
-ExitCode: 8
+```exitcode
+8
+```

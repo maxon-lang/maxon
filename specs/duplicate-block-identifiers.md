@@ -43,9 +43,10 @@ function main() int
     return x
 end 'main'
 ```
-```output
-ExitCode: 0
+```exitcode
+0
 ```
+
 
 **Valid Code - Shadowing at Different Nesting Levels:**
 
@@ -61,9 +62,10 @@ function main() int
     return x
 end 'main'
 ```
-```output
-ExitCode: 0
+```exitcode
+0
 ```
+
 
 **Invalid Code - Duplicate at Same Level:**
 
@@ -79,13 +81,14 @@ function main() int
     return x
 end 'main'
 ```
-```output
-MaxoncStderr: Semantic Error: line 7, column 5
+```maxoncstderr
+Semantic Error: line 7, column 5
 Duplicate block identifier 'check' in nested blocks
 
   7 |     while false 'check'
     |     ^
 ```
+
 
 **Notes:**
 - Block identifiers must be unique within the same function scope
@@ -110,7 +113,9 @@ function main() int
     return x
 end 'main'
 ```
-ExitCode: 2
+```exitcode
+2
+```
 
 <!-- test: duplicate-block-identifiers.nested-same-id -->
 ```maxon
@@ -125,7 +130,9 @@ function main() int
     return x
 end 'main'
 ```
-ExitCode: 2
+```exitcode
+2
+```
 
 <!-- test: duplicate-block-identifiers.multiple-nested -->
 ```maxon
@@ -141,7 +148,9 @@ function main() int
     return x
 end 'main'
 ```
-ExitCode: 2
+```exitcode
+2
+```
 
 <!-- test: duplicate-block-identifiers.else-nested -->
 ```maxon
@@ -157,4 +166,6 @@ function main() int
     return x
 end 'main'
 ```
-ExitCode: 2
+```exitcode
+2
+```

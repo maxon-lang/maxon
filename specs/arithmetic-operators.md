@@ -39,10 +39,9 @@ Maxon supports standard arithmetic operations on numeric types.
 ### Precedence
 
 Multiplication, division, and modulo have higher precedence than addition and subtraction:
-```maxon
+```text
 2 + 3 * 4  // Evaluates to 14, not 20
 ```
-
 ### Example
 
 ```maxon
@@ -65,14 +64,17 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 0
-Stdout: 13
+```exitcode
+0
+```
+```stdout
+13
 7
 30
 3
 1
 ```
+
 
 ## Tests
 
@@ -82,9 +84,10 @@ function main() int
     return 5 + 3
 end 'main'
 ```
+```exitcode
+8
 ```
-ExitCode: 8
-```
+
 
 <!-- test: multiplication -->
 ```maxon
@@ -92,9 +95,10 @@ function main() int
     return 6 * 7
 end 'main'
 ```
+```exitcode
+42
 ```
-ExitCode: 42
-```
+
 
 <!-- test: precedence -->
 ```maxon
@@ -102,9 +106,10 @@ function main() int
     return 2 + 3 * 4
 end 'main'
 ```
+```exitcode
+14
 ```
-ExitCode: 14
-```
+
 
 <!-- test: division -->
 ```maxon
@@ -112,9 +117,10 @@ function main() int
     return 20 / 3
 end 'main'
 ```
+```exitcode
+6
 ```
-ExitCode: 6
-```
+
 
 <!-- test: modulo -->
 ```maxon
@@ -122,9 +128,10 @@ function main() int
     return 17 % 5
 end 'main'
 ```
+```exitcode
+2
 ```
-ExitCode: 2
-```
+
 
 <!-- test: complex-expression -->
 ```maxon
@@ -135,6 +142,7 @@ function main() int
     return result
 end 'main'
 ```
+```exitcode
+23
 ```
-ExitCode: 23
-```
+

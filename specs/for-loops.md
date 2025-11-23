@@ -82,7 +82,6 @@ for <variable> in <iterable> 'identifier'
     <statements>
 end 'identifier'
 ```
-
 - **variable**: Loop variable name (immutable, scoped to loop body)
 - **iterable**: Expression that returns an iterator (e.g., `range(0, 10)`)
 - **identifier**: Block identifier (must match on `for` and `end` lines)
@@ -96,7 +95,6 @@ for i in range(0, 5) 'loop'
     print(i)  // Prints 0, 1, 2, 3, 4
 end 'loop'
 ```
-
 **Range is half-open:** `range(0, 5)` iterates over `[0, 5)` (0, 1, 2, 3, 4).
 
 ### Example: Sum of Range
@@ -110,9 +108,10 @@ function main() int
     return sum  // Returns 45 (0+1+2+...+9)
 end 'main'
 ```
-```output
-ExitCode: 45
+```exitcode
+45
 ```
+
 
 ### Loop Control
 
@@ -133,9 +132,10 @@ function main() int
     return sum  // Returns 23 (0+1+2+3+4+6+7)
 end 'main'
 ```
-```output
-ExitCode: 23
+```exitcode
+23
 ```
+
 
 ### Loop Variable Scope
 
@@ -155,9 +155,10 @@ function main() int
     return last  // Returns 3
 end 'main'
 ```
-```output
-ExitCode: 3
+```exitcode
+3
 ```
+
 
 ### How It Works
 
@@ -214,9 +215,10 @@ function main() int
     return sum
 end 'main'
 ```
-```output
-ExitCode: 10
+```exitcode
+10
 ```
+
 
 <!-- test: break-in-for-loop -->
 ```maxon
@@ -231,9 +233,10 @@ function main() int
     return sum
 end 'main'
 ```
-```output
-ExitCode: 10
+```exitcode
+10
 ```
+
 
 <!-- test: continue-in-for-loop -->
 ```maxon
@@ -248,9 +251,10 @@ function main() int
     return sum
 end 'main'
 ```
-```output
-ExitCode: 40
+```exitcode
+40
 ```
+
 
 <!-- test: nested-for-loops -->
 ```maxon
@@ -264,6 +268,7 @@ function main() int
     return sum
 end 'main'
 ```
-```output
-ExitCode: 99
+```exitcode
+99
 ```
+

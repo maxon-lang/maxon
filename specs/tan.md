@@ -47,7 +47,6 @@ var y = tan(x)       // 0.0
 var quarterPi = 0.785398  // π/4
 var z = tan(quarterPi)    // 1.0 (approximately)
 ```
-
 **Notes:**
 - The function works with radians, not degrees
 - To convert degrees to radians: `radians = degrees * (π / 180)`
@@ -67,7 +66,9 @@ function main() int
     return 1
 end 'main'
 ```
-ExitCode: 0
+```exitcode
+0
+```
 
 <!-- test: tan.multiple-values -->
 ```maxon
@@ -83,8 +84,10 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 0
-Stdout: ```
+```exitcode
+0
+```
+```stdout
 0.000000
 0.546302
 1.557408
@@ -104,7 +107,9 @@ function main() int
     return 1
 end 'main'
 ```
-ExitCode: 0
+```exitcode
+0
+```
 
 <!-- test: tan.with-int-promotion -->
 ```maxon
@@ -117,4 +122,6 @@ function main() int
     return 1
 end 'main'
 ```
-ExitCode: 0
+```exitcode
+0
+```

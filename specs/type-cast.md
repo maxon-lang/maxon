@@ -35,7 +35,6 @@ The `as` operator converts a value from one type to another.
 ```maxon
 value as targetType
 ```
-
 ### Supported Conversions
 
 - `int` ↔ `float` (truncates when converting to int)
@@ -55,10 +54,13 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 0
-Stdout: 3
+```exitcode
+0
 ```
+```stdout
+3
+```
+
 
 ## Tests
 
@@ -72,9 +74,10 @@ function main() int
     return result
 end 'main'
 ```
+```exitcode
+5
 ```
-ExitCode: 5
-```
+
 
 <!-- test: char-to-int -->
 ```maxon
@@ -83,9 +86,10 @@ function main() int
     return x as int
 end 'main'
 ```
+```exitcode
+65
 ```
-ExitCode: 65
-```
+
 
 <!-- test: int-to-float -->
 ```maxon
@@ -96,9 +100,10 @@ function main() int
     return z as int
 end 'main'
 ```
+```exitcode
+7
 ```
-ExitCode: 7
-```
+
 
 <!-- test: int-to-ptr -->
 ```maxon
@@ -109,6 +114,7 @@ function main() int
     return 42
 end 'main'
 ```
+```exitcode
+42
 ```
-ExitCode: 42
-```
+

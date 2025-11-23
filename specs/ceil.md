@@ -48,7 +48,6 @@ var y = ceil(x)      // 4
 var neg = -3.9
 var z = ceil(neg)    // -3 (rounds up toward positive infinity)
 ```
-
 **Notes:**
 - Always rounds toward positive infinity
 - Different from truncation for negative numbers
@@ -65,7 +64,9 @@ function main() int
     return y
 end 'main'
 ```
-ExitCode: 4
+```exitcode
+4
+```
 
 <!-- test: ceil.negative -->
 ```maxon
@@ -75,7 +76,9 @@ function main() int
     return y
 end 'main'
 ```
-ExitCode: -3
+```exitcode
+-3
+```
 
 <!-- test: ceil.exact -->
 ```maxon
@@ -85,4 +88,6 @@ function main() int
     return y
 end 'main'
 ```
-ExitCode: 5
+```exitcode
+5
+```

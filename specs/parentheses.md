@@ -29,7 +29,6 @@ Parentheses group expressions and control evaluation order.
 ```maxon
 (expression)
 ```
-
 ### Example
 
 ```maxon
@@ -40,10 +39,13 @@ function main() int
     return b
 end 'main'
 ```
-```output
-ExitCode: 20
-Stdout: 14
+```exitcode
+20
 ```
+```stdout
+14
+```
+
 
 ## Tests
 
@@ -53,9 +55,10 @@ function main() int
     return (2 + 3) * 4
 end 'main'
 ```
+```exitcode
+20
 ```
-ExitCode: 20
-```
+
 
 <!-- test: nested-parentheses -->
 ```maxon
@@ -63,9 +66,10 @@ function main() int
     return ((5 + 3) * 2) - 6
 end 'main'
 ```
+```exitcode
+10
 ```
-ExitCode: 10
-```
+
 
 <!-- test: complex-expression -->
 ```maxon
@@ -74,6 +78,7 @@ function main() int
     return result
 end 'main'
 ```
+```exitcode
+8
 ```
-ExitCode: 8
-```
+

@@ -36,7 +36,6 @@ Expressions combine values, operators, and function calls to compute results.
 x * y
 a > b
 ```
-
 ### Compound Expressions
 
 Combine multiple operations:
@@ -45,14 +44,12 @@ Combine multiple operations:
 a + b * c - d
 x > 0 and y < 10  // When logical operators added
 ```
-
 ### Expressions with Function Calls
 
 ```maxon
 5 + add(3, 4)
 sqrt(x * x + y * y)
 ```
-
 ### Type Compatibility
 
 Operands must have compatible types:
@@ -69,9 +66,10 @@ function main() int
     return (2 + 3) * 5
 end 'main'
 ```
+```exitcode
+25
 ```
-ExitCode: 25
-```
+
 
 <!-- test: with-function-call -->
 ```maxon
@@ -84,9 +82,10 @@ function add(a int, b int) int
     return a + b
 end 'add'
 ```
+```exitcode
+12
 ```
-ExitCode: 12
-```
+
 
 <!-- test: multiple-variables -->
 ```maxon
@@ -97,9 +96,10 @@ function main() int
     return result
 end 'main'
 ```
+```exitcode
+52
 ```
-ExitCode: 52
-```
+
 
 <!-- test: mixed-operators -->
 ```maxon
@@ -109,9 +109,10 @@ function main() int
     return a * 2 + b - 1
 end 'main'
 ```
+```exitcode
+22
 ```
-ExitCode: 22
-```
+
 
 <!-- test: comparison-in-expression -->
 ```maxon
@@ -123,6 +124,7 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+

@@ -36,7 +36,6 @@ The `format_float_array()` function converts a float to a string with specified 
 ```maxon
 format_float_array(value, buffer, precision)
 ```
-
 Parameters:
 - `value` - The float to convert
 - `buffer` - Character array to store result
@@ -54,9 +53,10 @@ function main() int
     return len  // Returns 4
 end 'main'
 ```
-```output
-ExitCode: 4
+```exitcode
+4
 ```
+
 
 ## Tests
 
@@ -68,9 +68,10 @@ function main() int
     return len
 end 'main'
 ```
+```exitcode
+4
 ```
-ExitCode: 4
-```
+
 
 <!-- test: zero -->
 ```maxon
@@ -80,9 +81,10 @@ function main() int
     return len
 end 'main'
 ```
+```exitcode
+8
 ```
-ExitCode: 8
-```
+
 
 <!-- test: negative -->
 ```maxon
@@ -92,9 +94,10 @@ function main() int
     return len
 end 'main'
 ```
+```exitcode
+4
 ```
-ExitCode: 4
-```
+
 
 <!-- test: high-precision -->
 ```maxon
@@ -104,6 +107,7 @@ function main() int
     return len
 end 'main'
 ```
+```exitcode
+7
 ```
-ExitCode: 7
-```
+

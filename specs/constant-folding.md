@@ -37,9 +37,10 @@ function main() int
     return result
 end 'main'
 ```
-```output
-ExitCode: 14
+```exitcode
+14
 ```
+
 
 ### Complex Expressions
 
@@ -50,9 +51,10 @@ function main() int
     return (1+2+x)*(x+(1+2))  // Optimized to: 7 * 7 = 49
 end 'main'
 ```
-```output
-ExitCode: 49
+```exitcode
+49
 ```
+
 
 ## Tests
 
@@ -62,9 +64,10 @@ function main() int
     return 10 + 20
 end 'main'
 ```
+```exitcode
+30
 ```
-ExitCode: 30
-```
+
 
 <!-- test: with-let -->
 ```maxon
@@ -74,9 +77,10 @@ function main() int
     return x % y
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-```
+
 
 <!-- test: complex-expression -->
 ```maxon
@@ -85,9 +89,10 @@ function main() int
     return (1+2+x)*(x+(1+2))
 end 'main'
 ```
+```exitcode
+49
 ```
-ExitCode: 49
-```
+
 
 <!-- test: nested-parentheses -->
 ```maxon
@@ -95,6 +100,7 @@ function main() int
     return ((10 + 5) * 2) - 5
 end 'main'
 ```
+```exitcode
+25
 ```
-ExitCode: 25
-```
+

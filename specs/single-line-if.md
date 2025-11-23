@@ -42,7 +42,6 @@ Compact syntax for simple conditional statements.
 ```maxon
 if <condition> <statement>
 ```
-
 **Example:**
 
 ```maxon
@@ -53,7 +52,6 @@ while i > 0 'loop'
     i = i - 1
 end 'loop'
 ```
-
 **Notes:**
 - Condition and statement must be on the same line
 - No block identifier needed
@@ -75,7 +73,9 @@ function main() int
 	return i
 end 'main'
 ```
-ExitCode: 5
+```exitcode
+5
+```
 
 <!-- test: single-line-if.return -->
 ```maxon
@@ -85,7 +85,9 @@ function main() int
 	return 0
 end 'main'
 ```
-ExitCode: 100
+```exitcode
+100
+```
 
 <!-- test: single-line-if.assignment -->
 ```maxon
@@ -96,4 +98,6 @@ function main() int
 	return result
 end 'main'
 ```
-ExitCode: 42
+```exitcode
+42
+```

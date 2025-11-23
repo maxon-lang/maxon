@@ -48,7 +48,6 @@ var y = abs(x)       // 5.5
 var i = -42.0
 var j = abs(i)       // 42.0
 ```
-
 **Notes:**
 - `abs(0.0)` returns `0.0`
 - `abs(x)` always returns a non-negative value
@@ -66,7 +65,9 @@ function main() int
     return y
 end 'main'
 ```
-ExitCode: 5
+```exitcode
+5
+```
 
 <!-- test: abs.negative-int-as-float -->
 ```maxon
@@ -76,7 +77,9 @@ function main() int
     return x as int
 end 'main'
 ```
-ExitCode: 42
+```exitcode
+42
+```
 
 <!-- test: abs.zero -->
 ```maxon
@@ -88,4 +91,6 @@ function main() int
     return 1
 end 'main'
 ```
-ExitCode: 0
+```exitcode
+0
+```

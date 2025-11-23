@@ -43,9 +43,10 @@ function main() int
     return used()  // Only this is kept
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
+
 
 The `unused()` function won't appear in the optimized output.
 
@@ -70,9 +71,10 @@ function main() int
     return result
 end 'main'
 ```
+```exitcode
+42
 ```
-ExitCode: 42
-```
+
 
 <!-- test: keeps-transitive-calls -->
 ```maxon
@@ -92,6 +94,7 @@ function main() int
     return used()
 end 'main'
 ```
+```exitcode
+10
 ```
-ExitCode: 10
-```
+

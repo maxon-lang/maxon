@@ -36,7 +36,6 @@ The `format_int_array()` function converts an integer to a string representation
 ```maxon
 format_int_array(value, buffer)
 ```
-
 Parameters:
 - `value` - The integer to convert
 - `buffer` - Character array to store result (must be at least 12 bytes)
@@ -53,9 +52,10 @@ function main() int
     return len  // Returns 2
 end 'main'
 ```
-```output
-ExitCode: 2
+```exitcode
+2
 ```
+
 
 ### Notes
 
@@ -73,9 +73,10 @@ function main() int
     return len
 end 'main'
 ```
+```exitcode
+2
 ```
-ExitCode: 2
-```
+
 
 <!-- test: zero -->
 ```maxon
@@ -85,9 +86,10 @@ function main() int
     return len
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+
 
 <!-- test: negative -->
 ```maxon
@@ -97,9 +99,10 @@ function main() int
     return len
 end 'main'
 ```
+```exitcode
+4
 ```
-ExitCode: 4
-```
+
 
 <!-- test: large-value -->
 ```maxon
@@ -109,9 +112,10 @@ function main() int
     return len
 end 'main'
 ```
+```exitcode
+6
 ```
-ExitCode: 6
-```
+
 
 <!-- test: single-digit -->
 ```maxon
@@ -121,6 +125,7 @@ function main() int
     return len
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+

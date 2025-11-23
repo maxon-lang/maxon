@@ -48,7 +48,6 @@ var y = round(x)     // 4 (rounds to nearest)
 var z = 2.4
 var w = round(z)     // 2
 ```
-
 **Notes:**
 - Rounds to the nearest integer
 - For halfway cases (e.g., 2.5), rounds to nearest even number
@@ -65,7 +64,9 @@ function main() int
     return y
 end 'main'
 ```
-ExitCode: 4
+```exitcode
+4
+```
 
 <!-- test: round.negative -->
 ```maxon
@@ -75,7 +76,9 @@ function main() int
     return y
 end 'main'
 ```
-ExitCode: -2
+```exitcode
+-2
+```
 
 <!-- test: round.halfway -->
 ```maxon
@@ -86,7 +89,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-Stdout: 3.0
-ExitCode: 0
+```stdout
+3.0
 ```
+

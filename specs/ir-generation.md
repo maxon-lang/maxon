@@ -62,9 +62,10 @@ function main() int
     return sum
 end 'main'
 ```
-```output
-ExitCode: 45
+```exitcode
+45
 ```
+
 
 Optimized IR (simplified):
 ```llvm
@@ -89,9 +90,10 @@ function main() int
     return sum
 end 'main'
 ```
+```exitcode
+45
 ```
-ExitCode: 45
-```
+
 
 <!-- test: optimization-verification -->
 ```maxon
@@ -109,6 +111,7 @@ function main() int
     return compute()
 end 'main'
 ```
+```exitcode
+30
 ```
-ExitCode: 30
-```
+

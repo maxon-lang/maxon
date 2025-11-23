@@ -33,7 +33,6 @@ The `float` type stores 64-bit double-precision floating-point numbers.
 var pi = 3.14159
 let ratio float = 2.5
 ```
-
 Float literals must include a decimal point:
 - Valid: `3.14`, `2.0`, `0.5`
 - Invalid: `3` (this is an int)
@@ -50,9 +49,10 @@ function main() int
     return area as int  // Returns 78
 end 'main'
 ```
-```output
-ExitCode: 78
+```exitcode
+78
 ```
+
 
 ## Tests
 
@@ -66,9 +66,10 @@ function main() int
     return result
 end 'main'
 ```
+```exitcode
+5
 ```
-ExitCode: 5
-```
+
 
 <!-- test: float-comparison -->
 ```maxon
@@ -81,9 +82,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+
 
 <!-- test: float-arithmetic -->
 ```maxon
@@ -94,9 +96,10 @@ function main() int
     return result as int
 end 'main'
 ```
+```exitcode
+3
 ```
-ExitCode: 3
-```
+
 
 <!-- test: float-promotion -->
 ```maxon
@@ -107,6 +110,7 @@ function main() int
     return result as int
 end 'main'
 ```
+```exitcode
+7
 ```
-ExitCode: 7
-```
+

@@ -32,7 +32,6 @@ The `char` type stores a single character as an 8-bit value.
 var letter = 'A'
 let newline char = '\n'
 ```
-
 Character literals are enclosed in single quotes.
 
 ### Example
@@ -55,9 +54,10 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 1
+```exitcode
+1
 ```
+
 
 ## Tests
 
@@ -68,9 +68,10 @@ function main() int
     return x as int
 end 'main'
 ```
+```exitcode
+65
 ```
-ExitCode: 65
-```
+
 
 <!-- test: char-comparison -->
 ```maxon
@@ -83,9 +84,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+
 
 <!-- test: char-in-variable -->
 ```maxon
@@ -95,6 +97,7 @@ function main() int
     return code
 end 'main'
 ```
+```exitcode
+90
 ```
-ExitCode: 90
-```
+

@@ -34,7 +34,6 @@ The assignment operator `=` updates the value of a mutable variable.
 ```maxon
 variable = expression
 ```
-
 ### Example
 
 ```maxon
@@ -45,9 +44,10 @@ function main() int
     return x
 end 'main'
 ```
-```output
-ExitCode: 25
+```exitcode
+25
 ```
+
 
 ### Restrictions
 
@@ -65,9 +65,10 @@ function main() int
     return x
 end 'main'
 ```
+```exitcode
+5
 ```
-ExitCode: 5
-```
+
 
 <!-- test: multiple-assignments -->
 ```maxon
@@ -79,9 +80,10 @@ function main() int
     return x + y
 end 'main'
 ```
+```exitcode
+50
 ```
-ExitCode: 50
-```
+
 
 <!-- test: assignment-in-loop -->
 ```maxon
@@ -95,6 +97,7 @@ function main() int
     return sum
 end 'main'
 ```
+```exitcode
+15
 ```
-ExitCode: 15
-```
+

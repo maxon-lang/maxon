@@ -48,7 +48,6 @@ var y = sin(x)       // 0.0
 var halfPi = 1.5708  // π/2
 var z = sin(halfPi)  // 1.0 (approximately)
 ```
-
 **Notes:**
 - The function works with radians, not degrees
 - To convert degrees to radians: `radians = degrees * (π / 180)`
@@ -72,8 +71,10 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 0
-Stdout: ```
+```exitcode
+0
+```
+```stdout
 0.000000
 0.479426
 0.841471
@@ -90,7 +91,9 @@ function main() int
     return 1
 end 'main'
 ```
-ExitCode: 0
+```exitcode
+0
+```
 
 <!-- test: sin.with-int-promotion -->
 ```maxon
@@ -103,4 +106,6 @@ function main() int
     return 1
 end 'main'
 ```
-ExitCode: 0
+```exitcode
+0
+```

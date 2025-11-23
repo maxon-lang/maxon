@@ -1,6 +1,6 @@
-﻿using Markdig;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text.RegularExpressions;
+using Markdig;
 
 namespace DocGen {
 	internal class SpecInfo {
@@ -14,37 +14,37 @@ namespace DocGen {
 		static void Main() {
 			var inputPath = "../specs";
 
-		if (Directory.Exists("Output") == false) {
-			Directory.CreateDirectory("Output");
-		}
+			if (Directory.Exists("Output") == false) {
+				Directory.CreateDirectory("Output");
+			}
 
-		foreach (FileInfo file in new DirectoryInfo("Output").EnumerateFiles()) {
-			// Keep the CSS file if it exists
-			if (file.Name == "style.css" || file.Name == "nav.js") continue;
-			file.Delete();
-		}
+			foreach (FileInfo file in new DirectoryInfo("Output").EnumerateFiles()) {
+				// Keep the CSS file if it exists
+				if (file.Name == "style.css" || file.Name == "nav.js") continue;
+				file.Delete();
+			}
 
-		// Generate CSS file
-		GenerateStylesheet();
+			// Generate CSS file
+			GenerateStylesheet();
 
-		var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().UseBootstrap().Build();			// Collect all specs and group by category
+			var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().UseBootstrap().Build();            // Collect all specs and group by category
 			var specsByCategory = new Dictionary<string, List<SpecInfo>>();
 			var validationErrors = new List<string>();
 
 			foreach (var filename in Directory.EnumerateFiles(inputPath, "*.md")) {
 				var basename = Path.GetFileNameWithoutExtension(filename);
-				
+
 				// Skip README and status files
 				if (basename.Equals("README", StringComparison.OrdinalIgnoreCase) ||
-				    basename.Contains("CLEANUP") || basename.Contains("IMPLEMENTATION")) {
+					basename.Contains("CLEANUP") || basename.Contains("IMPLEMENTATION")) {
 					continue;
 				}
 
 				var content = File.ReadAllText(filename);
-				
+
 				// Validate documentation examples have expected outputs
 				ValidateDocumentationExamples(content, basename, validationErrors);
-				
+
 				var spec = new SpecInfo {
 					Name = basename,
 					Category = ExtractCategory(content),
@@ -86,8 +86,8 @@ namespace DocGen {
 			foreach (var kvp in specsByCategory.OrderBy(x => x.Key)) {
 				var category = kvp.Key;
 				var specs = kvp.Value;
-				
-				var htmlContent = GenerateCategoryPage(category, specs, [.. specsByCategory.Keys.OrderBy(x => x)], pipeline);
+
+				var htmlContent = GenerateCategoryPage(category, specs, pipeline);
 				var filename = $"Output/{category}.html";
 				File.WriteAllText(filename, htmlContent);
 				Console.WriteLine($"Generated {category}.html ({specs.Count} specs)");
@@ -274,12 +274,10 @@ pre code {
     position: relative;
 }
 
-.expected-output::before {
-    content: 'Expected Output:';
-    display: block;
-    font-weight: bold;
+.expected-output legend {
     color: #2e7d32;
-    margin-bottom: 8px;
+    font-weight: bold;
+    padding: 0 5px;
     font-size: 0.9em;
 }
 
@@ -301,12 +299,10 @@ pre code {
     position: relative;
 }
 
-.error-output::before {
-    content: 'Error Output:';
-    display: block;
-    font-weight: bold;
+.error-output legend {
     color: #c62828;
-    margin-bottom: 8px;
+    font-weight: bold;
+    padding: 0 5px;
     font-size: 0.9em;
 }
 
@@ -387,7 +383,7 @@ body:has(.categories) .header p {
 			var js = new System.Text.StringBuilder();
 			js.AppendLine("// Navigation data and dynamic sidebar generation");
 			js.AppendLine("const categories = {");
-			
+
 			var categoryList = specsByCategory.Keys.OrderBy(x => x).ToList();
 			for (int i = 0; i < categoryList.Count; i++) {
 				var cat = categoryList[i];
@@ -395,7 +391,7 @@ body:has(.categories) .header p {
 				var comma = i < categoryList.Count - 1 ? "," : "";
 				js.AppendLine($"    '{cat}': '{displayName}'{comma}");
 			}
-			
+
 			js.AppendLine("};");
 			js.AppendLine("");
 			js.AppendLine("// Build and insert sidebar navigation");
@@ -416,7 +412,7 @@ body:has(.categories) .header p {
 			js.AppendLine("    html += '</ul>';");
 			js.AppendLine("    sidebar.innerHTML = html;");
 			js.AppendLine("});");
-			
+
 			File.WriteAllText("Output/nav.js", js.ToString());
 			Console.WriteLine("Generated nav.js");
 		}
@@ -430,7 +426,7 @@ body:has(.categories) .header p {
 
 			var docSection = docMatch.Groups[1].Value;
 			var lines = content.Split('\n');
-			
+
 			// Find line number where Documentation section starts
 			int docSectionLine = 0;
 			for (int i = 0; i < lines.Length; i++) {
@@ -441,46 +437,47 @@ body:has(.categories) .header p {
 			}
 
 			// Find all ```maxon blocks in the Documentation section
-			var maxonBlocks = Regex.Matches(docSection, @"```maxon\s*\r?\n", RegexOptions.Multiline);
-			
+			var maxonBlocks = MyRegex6().Matches(docSection);
+
 			foreach (Match match in maxonBlocks) {
 				// Get position after the maxon block
 				int blockStart = match.Index + match.Length;
-				
+
 				// Find the closing ``` for this maxon block
 				int blockEnd = docSection.IndexOf("```", blockStart);
 				if (blockEnd == -1) continue;
-				
+
 				// Extract the code block content
-				var codeBlock = docSection.Substring(blockStart, blockEnd - blockStart);
-				
+				var codeBlock = docSection[blockStart..blockEnd];
+
 				// Only validate blocks that contain "function main()" - these should be executable examples
 				if (!codeBlock.Contains("function main()")) {
 					continue; // Skip syntax examples and snippets
 				}
-				
-				// Check if there's an ```output block immediately after
+
+				// Check if there's an ```exitcode or ```maxoncstderr block immediately after
 				int nextBlockStart = blockEnd + 3;
 				if (nextBlockStart >= docSection.Length) {
 					// Calculate approximate line number
 					int lineNum = docSectionLine + docSection[..match.Index].Count(c => c == '\n');
-					errors.Add($"{basename}.md (line ~{lineNum}): maxon code block without ```output block");
+					errors.Add($"{basename}.md (line ~{lineNum}): maxon code block without ```exitcode or ```maxoncstderr block");
 					continue;
 				}
-				
+
 				// Skip whitespace after closing ```
-				while (nextBlockStart < docSection.Length && 
-				       (docSection[nextBlockStart] == ' ' || docSection[nextBlockStart] == '\t' || 
-				        docSection[nextBlockStart] == '\r' || docSection[nextBlockStart] == '\n')) {
+				while (nextBlockStart < docSection.Length &&
+					   (docSection[nextBlockStart] == ' ' || docSection[nextBlockStart] == '\t' ||
+						docSection[nextBlockStart] == '\r' || docSection[nextBlockStart] == '\n')) {
 					nextBlockStart++;
 				}
-				
-				// Check if next block is ```output
-				if (nextBlockStart >= docSection.Length || 
-				    !docSection[nextBlockStart..].StartsWith("```output")) {
+
+				// Check if next block is ```exitcode or ```maxoncstderr
+				if (nextBlockStart >= docSection.Length ||
+					(!docSection[nextBlockStart..].StartsWith("```exitcode") &&
+					 !docSection[nextBlockStart..].StartsWith("```maxoncstderr"))) {
 					// Calculate approximate line number
 					int lineNum = docSectionLine + docSection[..match.Index].Count(c => c == '\n');
-					errors.Add($"{basename}.md (line ~{lineNum}): maxon code block without ```output block");
+					errors.Add($"{basename}.md (line ~{lineNum}): maxon code block without ```exitcode or ```maxoncstderr block");
 				}
 			}
 		}
@@ -497,36 +494,65 @@ body:has(.categories) .header p {
 		static string ExtractDocumentationSection(string content) {
 			// Find the ## Documentation section only, stop at any following ## heading
 			var docMatch = MyRegex1().Match(content);
-			
+
 			if (docMatch.Success) {
 				return docMatch.Groups[1].Value.Trim();
 			}
-			
+
 			return string.Empty;
 		}
 
-		// Expected results are now included directly in the Documentation section using ```output blocks
-		// and are rendered in the HTML output for users to see.
+		// Expected results are now included directly in the Documentation section using ```exitcode/```stdout blocks
+		// or ```maxoncstderr blocks, and are rendered in the HTML output for users to see.
+
+		static string ProcessExitCodeBlocks(string html) {
+			// Find and combine exitcode and stdout blocks into a single expected output block
+			// Pattern: <pre><code class="language-exitcode">exitCode</code></pre> followed by 
+			// <pre><code class="language-stdout">content</code></pre>
+			var combinedRegex = MyRegex7();
+
+			html = combinedRegex.Replace(html, (match) => {
+				var exitCode = match.Groups[1].Value.Trim();
+				var stdout = match.Groups[2].Value.Trim();
+				return $@"<fieldset class=""expected-output""><legend>Expected Output</legend><pre>{stdout}{(string.IsNullOrEmpty(stdout) ? "" : "\n")}Exit Code: {exitCode}</pre></fieldset>";
+			});
+
+			// Handle standalone exitcode blocks (those without stdout)
+			var exitCodeRegex = MyRegex3();
+			html = exitCodeRegex.Replace(html, (match) => {
+				var exitCode = match.Groups[1].Value.Trim();
+				return $@"<fieldset class=""expected-output""><legend>Expected Output</legend><pre>Exit Code: {exitCode}</pre></fieldset>";
+			});
+
+			return html;
+		}
+
+		static string ProcessStdoutBlocks(string html) {
+			// Handle standalone stdout blocks (those without exitcode)
+			// Pattern: <pre><code class="language-stdout">content</code></pre>
+			var regex = MyRegex4();
+
+			return regex.Replace(html, (match) => {
+				var content = match.Groups[1].Value.Trim();
+				return $@"<fieldset class=""expected-output""><legend>Expected Output</legend><pre>{content}</pre></fieldset>";
+			});
+		}
 
 		static string ProcessMaxoncStderrBlocks(string html) {
-			// Find and replace output blocks that contain MaxoncStderr with error styling
-			// Pattern: <pre><code class="language-output">MaxoncStderr: ...</code></pre>
-			var regex = new Regex(@"<pre><code class=""language-output"">(MaxoncStderr:.*?)</code></pre>", RegexOptions.Singleline);
-			
+			// Find and replace maxoncstderr blocks with error styling
+			// Pattern: <pre><code class="language-maxoncstderr">error content</code></pre>
+			var regex = MyRegex5();
+
 			return regex.Replace(html, (match) => {
-				var content = match.Groups[1].Value;
-				// Strip the "MaxoncStderr: " prefix
-				if (content.StartsWith("MaxoncStderr: ")) {
-					content = content.Substring("MaxoncStderr: ".Length);
-				}
+				var content = match.Groups[1].Value.Trim();
 				// Return with error-output styling
-				return $@"<div class=""error-output""><pre>{content}</pre></div>";
+				return $@"<fieldset class=""error-output""><legend>Error Output</legend><pre>{content}</pre></fieldset>";
 			});
 		}
 
 		static string GenerateTitle(string name) {
 			// Convert hyphenated names to title case
-			return string.Join(" ", name.Split('-').Select(word => 
+			return string.Join(" ", name.Split('-').Select(word =>
 				char.ToUpper(word[0]) + word[1..]));
 		}
 
@@ -553,11 +579,11 @@ body:has(.categories) .header p {
 				{ "uncategorized", "Uncategorized" }
 			};
 
-			return displayNames.TryGetValue(category, out var value) 
+			return displayNames.TryGetValue(category, out var value)
 				? value : GenerateTitle(category);
 		}
 
-		static string GenerateCategoryPage(string category, List<SpecInfo> specs, List<string> allCategories, MarkdownPipeline pipeline) {
+		static string GenerateCategoryPage(string category, List<SpecInfo> specs, MarkdownPipeline pipeline) {
 			var sb = new System.Text.StringBuilder();
 			var categoryDisplayName = GetCategoryDisplayName(category);
 
@@ -572,13 +598,13 @@ body:has(.categories) .header p {
 			sb.AppendLine("</head>");
 			sb.AppendLine("<body>");
 			sb.AppendLine("    <div class=\"container\">");
-			
+
 			// Sidebar navigation (loaded dynamically)
 			sb.AppendLine($"        <nav class=\"sidebar\" id=\"sidebar\" data-active=\"{category}\"></nav>");
-			
+
 			// Main content
 			sb.AppendLine("        <main class=\"content\">");
-			
+
 			// Header
 			sb.AppendLine("            <div class=\"header\">");
 			sb.AppendLine($"                <h1>{categoryDisplayName}</h1>");
@@ -586,7 +612,7 @@ body:has(.categories) .header p {
 			sb.AppendLine($"                    <a href=\"index.html\">Home</a> / {categoryDisplayName}");
 			sb.AppendLine("                </div>");
 			sb.AppendLine("            </div>");
-			
+
 			// Table of contents
 			sb.AppendLine("            <div class=\"toc\">");
 			sb.AppendLine("                <h2>Contents</h2>");
@@ -596,7 +622,7 @@ body:has(.categories) .header p {
 			}
 			sb.AppendLine("                </ul>");
 			sb.AppendLine("            </div>");
-			
+
 			// Spec sections
 			foreach (var spec in specs) {
 				sb.AppendLine($"            <div class=\"spec-section\" id=\"{spec.Name}\">");
@@ -605,12 +631,16 @@ body:has(.categories) .header p {
 				// Process output blocks
 				// First handle error output blocks (MaxoncStderr)
 				html = ProcessMaxoncStderrBlocks(html);
-				// Then handle regular output blocks
-				html = MyRegex2().Replace(html, @"<div class=""expected-output""><pre>$1</pre></div>");
+				// Then handle exitcode blocks (which may be combined with stdout)
+				html = ProcessExitCodeBlocks(html);
+				// Then handle standalone stdout blocks
+				html = ProcessStdoutBlocks(html);
+				// Finally handle legacy output blocks
+				html = MyRegex2().Replace(html, @"<fieldset class=""expected-output""><legend>Expected Output</legend><pre>$1</pre></fieldset>");
 				sb.AppendLine(html);
 				sb.AppendLine("            </div>");
 			}
-			
+
 			sb.AppendLine("        </main>");
 			sb.AppendLine("    </div>");
 			sb.AppendLine("    <script src=\"nav.js\"></script>");
@@ -633,13 +663,13 @@ body:has(.categories) .header p {
 			sb.AppendLine("</head>");
 			sb.AppendLine("<body>");
 			sb.AppendLine("    <div class=\"container\">");
-			
+
 			// Header
 			sb.AppendLine("        <div class=\"header\">");
 			sb.AppendLine("            <h1>Maxon Language Documentation</h1>");
 			sb.AppendLine("            <p>Comprehensive reference for the Maxon programming language</p>");
 			sb.AppendLine("        </div>");
-			
+
 			// Category cards
 			sb.AppendLine("        <div class=\"categories\">");
 			foreach (var kvp in specsByCategory.OrderBy(x => x.Key)) {
@@ -648,14 +678,14 @@ body:has(.categories) .header p {
 				var displayName = GetCategoryDisplayName(category);
 				var specCount = specs.Count;
 				var specWord = specCount == 1 ? "spec" : "specs";
-				
+
 				sb.AppendLine($"            <a href=\"{category}.html\" class=\"category-card\">");
 				sb.AppendLine($"                <h2>{displayName}</h2>");
 				sb.AppendLine($"                <p><span class=\"spec-count\">{specCount}</span> {specWord}</p>");
 				sb.AppendLine("            </a>");
 			}
 			sb.AppendLine("        </div>");
-			
+
 			sb.AppendLine("    </div>");
 			sb.AppendLine("</body>");
 			sb.AppendLine("</html>");
@@ -669,5 +699,15 @@ body:has(.categories) .header p {
 		private static partial Regex MyRegex1();
 		[GeneratedRegex(@"<pre><code class=\""language-output\"">(.*?)</code></pre>", RegexOptions.Singleline)]
 		private static partial Regex MyRegex2();
+		[GeneratedRegex(@"<pre><code class=""language-exitcode"">(.*?)</code></pre>", RegexOptions.Singleline)]
+		private static partial Regex MyRegex3();
+		[GeneratedRegex(@"<pre><code class=""language-stdout"">(.*?)</code></pre>", RegexOptions.Singleline)]
+		private static partial Regex MyRegex4();
+		[GeneratedRegex(@"<pre><code class=""language-maxoncstderr"">(.*?)</code></pre>", RegexOptions.Singleline)]
+		private static partial Regex MyRegex5();
+		[GeneratedRegex(@"```maxon\s*\r?\n", RegexOptions.Multiline)]
+		private static partial Regex MyRegex6();
+		[GeneratedRegex(@"<pre><code class=""language-exitcode"">(.*?)</code></pre>\s*<pre><code class=""language-stdout"">(.*?)</code></pre>", RegexOptions.Singleline)]
+		private static partial Regex MyRegex7();
 	}
 }

@@ -55,7 +55,6 @@ Execute code conditionally based on a boolean expression.
 ```maxon
 if <condition> <statement>
 ```
-
 **Multi-Line Syntax:**
 
 ```maxon
@@ -65,7 +64,6 @@ else 'identifier'
     <statements>
 end 'identifier'
 ```
-
 **Example (single-line):**
 
 ```maxon
@@ -75,9 +73,10 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 1
+```exitcode
+1
 ```
+
 
 **Example (multi-line with else):**
 
@@ -91,9 +90,10 @@ function main() int
     end 'check'
 end 'main'
 ```
-```output
-ExitCode: 1
+```exitcode
+1
 ```
+
 
 **Notes:**
 - Single-line if requires statement on same line
@@ -115,7 +115,9 @@ function main() int
     end 'check'
 end 'main'
 ```
-ExitCode: 1
+```exitcode
+1
+```
 
 <!-- test: if-statements.elseif -->
 ```maxon
@@ -132,7 +134,9 @@ function main() int
     end 'check'
 end 'main'
 ```
-ExitCode: 3
+```exitcode
+3
+```
 
 <!-- test: if-statements.simple -->
 ```maxon
@@ -144,4 +148,6 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 1
+```exitcode
+1
+```

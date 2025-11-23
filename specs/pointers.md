@@ -35,7 +35,6 @@ The `ptr` type stores memory addresses (pointers).
 var address ptr = &variable
 var nullPtr = 0 as ptr
 ```
-
 ### Address-Of Operator
 
 The `&` operator gets the memory address of a variable:
@@ -44,7 +43,6 @@ The `&` operator gets the memory address of a variable:
 var x = 42
 var addr = &x
 ```
-
 ### Example with Extern Functions
 
 ```maxon
@@ -58,10 +56,13 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 0
-Stdout: 42
+```exitcode
+0
 ```
+```stdout
+42
+```
+
 
 ## Tests
 
@@ -75,9 +76,10 @@ function main() int
     return 1
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-```
+
 
 <!-- test: null-pointer -->
 ```maxon
@@ -88,9 +90,10 @@ function main() int
     return 42
 end 'main'
 ```
+```exitcode
+42
 ```
-ExitCode: 42
-```
+
 
 <!-- test: pointer-chain-cast -->
 ```maxon
@@ -104,9 +107,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-```
+
 
 <!-- test: with-extern -->
 ```maxon
@@ -119,6 +123,7 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+

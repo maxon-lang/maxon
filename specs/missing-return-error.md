@@ -31,7 +31,6 @@ function test() int
     // Error: No return statement
 end 'test'
 ```
-
 Error message:
 ```
 Semantic Error: Function 'test' must return a value of type 'int'
@@ -50,7 +49,6 @@ function test(x int) int
     return 0  // Handles else case
 end 'test'
 ```
-
 ## Tests
 
 <!-- test: no-return -->
@@ -58,8 +56,8 @@ end 'test'
 function main() int
 end 'main'
 ```
-```
-MaxoncStderr: Semantic Error: line 2, column 1
+```maxoncstderr
+Semantic Error: line 2, column 1
 Function 'main' must return a value of type 'int'
   Note: All execution paths through the function must end with a return statement
 
@@ -80,8 +78,8 @@ function main() int
     return test(5)
 end 'main'
 ```
-```
-MaxoncStderr: Semantic Error: line 2, column 1
+```maxoncstderr
+Semantic Error: line 2, column 1
 Function 'test' must return a value of type 'int'
   Note: All execution paths through the function must end with a return statement
 
@@ -102,6 +100,7 @@ function main() int
     return test(5)
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+

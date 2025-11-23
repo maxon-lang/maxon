@@ -51,9 +51,10 @@ function main() int
     return result as int
 end 'main'
 ```
-```output
-ExitCode: 8
+```exitcode
+8
 ```
+
 
 ### Transitive Dependencies
 
@@ -68,9 +69,10 @@ function main() int
     return format_int_array(42, buffer)
 end 'main'
 ```
+```exitcode
+2
 ```
-ExitCode: 2
-```
+
 
 <!-- test: transitive -->
 ```maxon
@@ -83,9 +85,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+8
 ```
-ExitCode: 8
-```
+
 
 <!-- test: unqualified-call -->
 ```maxon
@@ -94,9 +97,10 @@ function main() int
     return result as int
 end 'main'
 ```
+```exitcode
+4
 ```
-ExitCode: 4
-```
+
 
 <!-- test: qualified-call -->
 ```maxon
@@ -105,9 +109,10 @@ function main() int
     return format_int_array(42, buffer)
 end 'main'
 ```
+```exitcode
+2
 ```
-ExitCode: 2
-```
+
 
 <!-- test: wrong-arg-count -->
 ```maxon
@@ -115,8 +120,8 @@ function main() int
     return format_int_array(42)
 end 'main'
 ```
-```
-MaxoncStderr: Semantic Error: line 3, column 12
+```maxoncstderr
+Semantic Error: line 3, column 12
 Function 'format_int_array' argument count mismatch
   Expected: 2 arguments
   Found: 1 argument
@@ -124,3 +129,4 @@ Function 'format_int_array' argument count mismatch
   3 |     return format_int_array(42)
     |            ^
 ```
+

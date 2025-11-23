@@ -34,7 +34,6 @@ The `pow()` function raises a number to a power.
 ```maxon
 pow(base, exponent)
 ```
-
 Parameters:
 - `base` - The base number (float)
 - `exponent` - The exponent (float)
@@ -49,9 +48,10 @@ function main() int
     return trunc(result)
 end 'main'
 ```
-```output
-ExitCode: 8
+```exitcode
+8
 ```
+
 
 ### Notes
 
@@ -72,9 +72,10 @@ function main() int
     return trunc(result)
 end 'main'
 ```
+```exitcode
+8
 ```
-ExitCode: 8
-```
+
 
 <!-- test: square -->
 ```maxon
@@ -83,9 +84,10 @@ function main() int
     return trunc(result)
 end 'main'
 ```
+```exitcode
+25
 ```
-ExitCode: 25
-```
+
 
 <!-- test: zero-exponent -->
 ```maxon
@@ -94,9 +96,10 @@ function main() int
     return trunc(result)
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+
 
 <!-- test: fractional-exponent -->
 ```maxon
@@ -106,10 +109,13 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-Stdout: 2.0
-ExitCode: 0
+```stdout
+2.0
 ```
+
 
 <!-- test: int-promotion -->
 ```maxon
@@ -118,6 +124,7 @@ function main() int
     return trunc(result)
 end 'main'
 ```
+```exitcode
+9
 ```
-ExitCode: 9
-```
+

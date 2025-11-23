@@ -31,7 +31,6 @@ String literals are text enclosed in double quotes.
 ```maxon
 var message = "Hello, World!"
 ```
-
 ### Escape Sequences
 
 - `\n` - Newline
@@ -44,7 +43,6 @@ var message = "Hello, World!"
 ```maxon
     var msg = "Hello!\n"
 ```
-
 ## Tests
 
 <!-- test: simple -->
@@ -62,10 +60,13 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: Hello!
+```stdout
+Hello!
 ```
+
 
 <!-- test: with-escapes -->
 ```maxon
@@ -75,16 +76,19 @@ extern function WriteFile(hFile ptr, lpBuffer ptr, nBytes int, written ptr, over
 function main() int
     let stdout = GetStdHandle(-11)
     var written = 0
-    var msg = "Line1\nLine2\tTabbed"
-    WriteFile(stdout, msg, 18, &written, 0 as ptr)
+    var msg = "Line1\nLine2\tTabbed\n"
+    WriteFile(stdout, msg, 19, &written, 0 as ptr)
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: Line1
+```stdout
+Line1
 Line2	Tabbed
 ```
+
 
 <!-- test: multiple -->
 ```maxon
@@ -101,7 +105,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: Hello World!
+```stdout
+Hello World!
 ```
+

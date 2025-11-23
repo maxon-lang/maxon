@@ -32,7 +32,6 @@ namespace.functionName(arguments)
 // or
 functionName(arguments)  // if unambiguous
 ```
-
 ### Example
 
 ```maxon
@@ -44,8 +43,9 @@ function main() int
     return add(10, 20)  // Unqualified call within same namespace
 end 'main'
 ```
-```output
-ExitCode: 30
+```exitcode
+30
 ```
+
 
 ## Tests

@@ -46,10 +46,13 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 0
-Stdout: 42
+```exitcode
+0
 ```
+```stdout
+42
+```
+
 
 ## Tests
 
@@ -89,7 +92,10 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 0
-Stdout: OK
+```exitcode
+0
 ```
+```stdout
+OK
+```
+

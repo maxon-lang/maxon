@@ -116,8 +116,6 @@ lsp-test:
 docs: compiler
 	@echo Generating documentation from specs...
 	@powershell -Command "cd maxon-docs; dotnet run"
-	@echo Regenerating documentation fragments...
-	@powershell -Command "maxon regen-fragments"
 	@echo Documentation generated in maxon-docs/Output/
 
 # Validate that all fragments are defined in spec files

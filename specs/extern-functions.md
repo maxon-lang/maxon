@@ -31,7 +31,6 @@ The `extern` keyword declares functions defined outside your Maxon code, such as
 ```maxon
 extern function name(param1 type1, param2 type2) returnType
 ```
-
 Note: No function body or `end` statement.
 
 ### Example
@@ -43,9 +42,10 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 0
+```exitcode
+0
 ```
+
 
 ## Tests
 
@@ -57,9 +57,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-```
+
 
 <!-- test: windows-api -->
 ```maxon
@@ -74,7 +75,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: Test
+```stdout
+Test
 ```
+

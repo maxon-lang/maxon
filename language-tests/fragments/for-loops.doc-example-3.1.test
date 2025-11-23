@@ -1,10 +1,12 @@
 // Test: for-loops.doc-example-3.1
 function main() int
-    var sum = 0
-    for i in range(0, 10) 'sum_loop'
-        sum = sum + i
-    end 'sum_loop'
-    return sum  // Returns 45 (0+1+2+...+9)
+    var last = 0
+    for i in range(1, 4) 'loop'
+        last = i  // Can copy value to mutable variable
+        // i = 5  // ERROR: Loop variable is immutable
+    end 'loop'
+    // print(i)  // ERROR: i not in scope here
+    return last  // Returns 3
 end 'main'
 ---
 ; ModuleID = 'test.maxon'
@@ -13,7 +15,7 @@ source_filename = "test.maxon"
 ; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)
 define noundef i32 @main() local_unnamed_addr #0 {
 entry:
-  ret i32 45
+  ret i32 3
 }
 
 declare void @ExitProcess(i32) local_unnamed_addr
@@ -21,7 +23,7 @@ declare void @ExitProcess(i32) local_unnamed_addr
 ; Function Attrs: noreturn
 define void @_start() local_unnamed_addr #1 {
 entry:
-  tail call void @ExitProcess(i32 45)
+  tail call void @ExitProcess(i32 3)
   unreachable
 }
 
@@ -35,10 +37,10 @@ source_filename = "test.maxon"
 
 define i32 @main() !dbg !4 {
 entry:
-  %sum = alloca i32, align 4
-  store i32 0, ptr %sum, align 4, !dbg !9
-    #dbg_declare(ptr %sum, !10, !DIExpression(), !9)
-  %0 = call %Iterator @iter.range(i32 0, i32 10), !dbg !11
+  %last = alloca i32, align 4
+  store i32 0, ptr %last, align 4, !dbg !9
+    #dbg_declare(ptr %last, !10, !DIExpression(), !9)
+  %0 = call %Iterator @iter.range(i32 1, i32 4), !dbg !11
   %__iter = alloca %Iterator, align 8, !dbg !11
   store %Iterator %0, ptr %__iter, align 4, !dbg !11
   br label %forcond, !dbg !11
@@ -52,10 +54,8 @@ forloop:                                          ; preds = %forcond
   %i = call i32 @iter.getCurrent(ptr %__iter), !dbg !11
   %i2 = alloca i32, align 4, !dbg !11
   store i32 %i, ptr %i2, align 4, !dbg !11
-  %sum3 = load i32, ptr %sum, align 4, !dbg !12
-  %i4 = load i32, ptr %i2, align 4, !dbg !12
-  %addtmp = add i32 %sum3, %i4, !dbg !12
-  store i32 %addtmp, ptr %sum, align 4, !dbg !12
+  %i3 = load i32, ptr %i2, align 4, !dbg !12
+  store i32 %i3, ptr %last, align 4, !dbg !12
   br label %forincrement, !dbg !12
 
 forincrement:                                     ; preds = %forloop
@@ -64,8 +64,8 @@ forincrement:                                     ; preds = %forloop
   br label %forcond, !dbg !12
 
 afterfor:                                         ; preds = %forcond
-  %sum5 = load i32, ptr %sum, align 4, !dbg !13
-  ret i32 %sum5, !dbg !13
+  %last4 = load i32, ptr %last, align 4, !dbg !13
+  ret i32 %last4, !dbg !13
 }
 
 define internal i32 @iter.hasNext(ptr %0) !dbg !14 {
@@ -195,10 +195,10 @@ entry:
 !7 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
 !8 = !{}
 !9 = !DILocation(line: 3, column: 5, scope: !4)
-!10 = !DILocalVariable(name: "sum", scope: !4, file: !1, line: 3, type: !7, align: 32)
+!10 = !DILocalVariable(name: "last", scope: !4, file: !1, line: 3, type: !7, align: 32)
 !11 = !DILocation(line: 4, column: 5, scope: !4)
-!12 = !DILocation(line: 5, column: 13, scope: !4)
-!13 = !DILocation(line: 7, column: 5, scope: !4)
+!12 = !DILocation(line: 5, column: 14, scope: !4)
+!13 = !DILocation(line: 9, column: 5, scope: !4)
 !14 = distinct !DISubprogram(name: "hasNext", linkageName: "hasNext", scope: !1, file: !1, line: 13, type: !15, scopeLine: 13, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
 !15 = !DISubroutineType(types: !16)
 !16 = !{!7, !7}
@@ -230,6 +230,6 @@ entry:
 !42 = !DILocation(line: 8, column: 5, scope: !35)
 !43 = !DILocation(line: 13, column: 5, scope: !35)
 ---
-ExitCode: 45
-OptimizedInstructionCount: 557
-UnoptimizedInstructionCount: 557
+ExitCode: 3
+OptimizedInstructionCount: 187
+UnoptimizedInstructionCount: 187

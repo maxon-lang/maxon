@@ -52,7 +52,6 @@ var y = sqrt(x)      // 4.0
 var z = 2.0
 var w = sqrt(z)      // 1.414213... (√2)
 ```
-
 **Notes:**
 - Input must be non-negative (undefined behavior for negative values)
 - `sqrt(0.0)` returns `0.0`
@@ -68,7 +67,9 @@ function main() int
     return x as int
 end 'main'
 ```
-ExitCode: 4
+```exitcode
+4
+```
 
 <!-- test: sqrt.precision -->
 ```maxon
@@ -78,8 +79,10 @@ function main() int
     return 0
 end 'main'
 ```
-ExitCode: 0
-Stdout: ```
+```exitcode
+0
+```
+```stdout
 1.414213562373095
 ```
 
@@ -93,7 +96,9 @@ function main() int
     return 1
 end 'main'
 ```
-ExitCode: 0
+```exitcode
+0
+```
 
 <!-- test: sqrt.with-int-promotion -->
 ```maxon
@@ -103,4 +108,6 @@ function main() int
     return result as int
 end 'main'
 ```
-ExitCode: 4
+```exitcode
+4
+```

@@ -49,7 +49,6 @@ var y = trunc(x)     // 3
 var neg = -3.7
 var z = trunc(neg)   // -3 (toward zero, removes fractional part)
 ```
-
 **Notes:**
 - Truncates toward zero (removes decimal part)
 - Different from floor/ceil for negative numbers
@@ -67,7 +66,9 @@ function main() int
     return y
 end 'main'
 ```
-ExitCode: -3
+```exitcode
+-3
+```
 
 <!-- test: trunc.positive -->
 ```maxon
@@ -77,7 +78,9 @@ function main() int
     return y
 end 'main'
 ```
-ExitCode: 7
+```exitcode
+7
+```
 
 <!-- test: trunc.zero -->
 ```maxon
@@ -87,4 +90,6 @@ function main() int
     return y
 end 'main'
 ```
-ExitCode: 0
+```exitcode
+0
+```

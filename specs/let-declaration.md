@@ -38,7 +38,6 @@ Declare an immutable variable that cannot be reassigned.
 let <name> = <initializer>
 let <name> <type> = <initializer>
 ```
-
 **Example:**
 
 ```maxon
@@ -46,14 +45,12 @@ let x = 42              // Type inferred as int
 let y int = 10          // Explicit type
 let result = x + y      // result is 52
 ```
-
 **Immutability:**
 
 ```maxon
 let x = 3
 x = 5                   // ERROR: Cannot assign to immutable variable
 ```
-
 **Notes:**
 - Variables declared with `let` cannot be reassigned
 - Immutability is enforced at compile time
@@ -71,7 +68,9 @@ function main() int
     return result
 end 'main'
 ```
-ExitCode: 52
+```exitcode
+52
+```
 
 <!-- test: let-declaration.immutable-error -->
 ```maxon
@@ -81,8 +80,8 @@ function main() int
     return x
 end 'main'
 ```
-```
-MaxoncStderr: Semantic Error: line 4, column 7
+```maxoncstderr
+Semantic Error: line 4, column 7
 Cannot assign to read-only variable 'x'
   Variable declared with 'let' at line 3, column 5
   Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable variables
@@ -90,3 +89,4 @@ Cannot assign to read-only variable 'x'
   4 |     x = 5
     |       ^
 ```
+

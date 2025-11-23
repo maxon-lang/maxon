@@ -1,9 +1,12 @@
-// Test: print-function.doc-example-2.1
+// Test: print-float.doc-example-1.1
 function main() int
-    var x = 42
-    print(x)        // Prints: 42
-    print(10 + 5)   // Prints: 15
-    print(100)      // Prints: 100
+    var pi = 3.14159
+    print_float(pi, 2)     // Prints: 3.14
+    print_float(pi, 5)     // Prints: 3.14159
+    
+    var x = -2.5
+    print_float(x, 1)      // Prints: -2.5
+    
     return 0
 end 'main'
 ---
@@ -14,9 +17,9 @@ source_filename = "test.maxon"
 
 define noundef i32 @main() local_unnamed_addr {
 entry:
-  %0 = tail call i32 @print(i32 42)
-  %1 = tail call i32 @print(i32 15)
-  %2 = tail call i32 @print(i32 100)
+  %0 = tail call i32 @print_float(double 3.141590e+00, i32 2)
+  %1 = tail call i32 @print_float(double 3.141590e+00, i32 5)
+  %2 = tail call i32 @print_float(double -2.500000e+00, i32 1)
   ret i32 0
 }
 
@@ -473,14 +476,19 @@ source_filename = "test.maxon"
 
 define i32 @main() !dbg !4 {
 entry:
-  %x = alloca i32, align 4
-  store i32 42, ptr %x, align 4, !dbg !9
-    #dbg_declare(ptr %x, !10, !DIExpression(), !9)
-  %x1 = load i32, ptr %x, align 4, !dbg !11
-  %0 = call i32 @print(i32 %x1), !dbg !11
-  %1 = call i32 @print(i32 15), !dbg !12
-  %2 = call i32 @print(i32 100), !dbg !13
-  ret i32 0, !dbg !14
+  %x = alloca double, align 8
+  %pi = alloca double, align 8
+  store double 3.141590e+00, ptr %pi, align 8, !dbg !9
+    #dbg_declare(ptr %pi, !10, !DIExpression(), !9)
+  %pi1 = load double, ptr %pi, align 8, !dbg !11
+  %0 = call i32 @print_float(double %pi1, i32 2), !dbg !11
+  %pi2 = load double, ptr %pi, align 8, !dbg !12
+  %1 = call i32 @print_float(double %pi2, i32 5), !dbg !12
+  store double -2.500000e+00, ptr %x, align 8, !dbg !13
+    #dbg_declare(ptr %x, !14, !DIExpression(), !13)
+  %x3 = load double, ptr %x, align 8, !dbg !15
+  %2 = call i32 @print_float(double %x3, i32 1), !dbg !15
+  ret i32 0, !dbg !16
 }
 
 declare ptr @memset(ptr, i32, i64)
@@ -832,17 +840,19 @@ attributes #1 = { nocallback nofree nosync nounwind speculatable willreturn memo
 !7 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
 !8 = !{}
 !9 = !DILocation(line: 3, column: 5, scope: !4)
-!10 = !DILocalVariable(name: "x", scope: !4, file: !1, line: 3, type: !7, align: 32)
+!10 = !DILocalVariable(name: "pi", scope: !4, file: !1, line: 3, type: !7, align: 32)
 !11 = !DILocation(line: 4, column: 5, scope: !4)
 !12 = !DILocation(line: 5, column: 5, scope: !4)
-!13 = !DILocation(line: 6, column: 5, scope: !4)
-!14 = !DILocation(line: 7, column: 5, scope: !4)
+!13 = !DILocation(line: 7, column: 5, scope: !4)
+!14 = !DILocalVariable(name: "x", scope: !4, file: !1, line: 7, type: !7, align: 32)
+!15 = !DILocation(line: 8, column: 5, scope: !4)
+!16 = !DILocation(line: 10, column: 5, scope: !4)
 ---
 ExitCode: 0
 Stdout: ```
-42
-15
-100
+3.14
+3.14159
+-2.5
 ```
-OptimizedInstructionCount: 166
-UnoptimizedInstructionCount: 166
+OptimizedInstructionCount: 315
+UnoptimizedInstructionCount: 315

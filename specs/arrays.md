@@ -45,19 +45,16 @@ Fixed-size array:
 ```maxon
 var arr = [5]int        // Array of 5 integers
 ```
-
 Value-initialized array:
 ```maxon
 var values = [10, 20, 30]  // Array with initial values
 ```
-
 Array parameter (unsized):
 ```maxon
 function process(arr []int) int
     return arr.length
 end 'process'
 ```
-
 **Example:**
 
 ```maxon
@@ -66,14 +63,12 @@ arr[0] = 10             // Set first element
 arr[1] = 20             // Set second element
 return arr[1]           // Returns 20
 ```
-
 **Example with length:**
 
 ```maxon
 var values = [1, 2, 3, 4, 5]
 return values.length    // Returns 5
 ```
-
 **Notes:**
 - Arrays are zero-indexed
 - All arrays are heap-allocated
@@ -94,7 +89,9 @@ function main() int
     return arr[1]
 end 'main'
 ```
-ExitCode: 20
+```exitcode
+20
+```
 
 <!-- test: arrays.values -->
 ```maxon
@@ -103,7 +100,9 @@ function main() int
     return values[1]
 end 'main'
 ```
-ExitCode: 20
+```exitcode
+20
+```
 
 <!-- test: arrays.length -->
 ```maxon
@@ -112,7 +111,9 @@ function main() int
     return arr.length
 end 'main'
 ```
-ExitCode: 5
+```exitcode
+5
+```
 
 <!-- test: arrays.value-length -->
 ```maxon
@@ -121,7 +122,9 @@ function main() int
     return values.length
 end 'main'
 ```
-ExitCode: 5
+```exitcode
+5
+```
 
 <!-- test: arrays.float -->
 ```maxon
@@ -134,9 +137,10 @@ function main() int
     return sum as int
 end 'main'
 ```
+```exitcode
+7
 ```
-ExitCode: 7
-```
+
 
 <!-- test: heap-allocation -->
 ```maxon
@@ -149,9 +153,10 @@ function main() int
     return sum
 end 'main'
 ```
+```exitcode
+60
 ```
-ExitCode: 60
-```
+
 
 <!-- test: function-parameter -->
 ```maxon
@@ -173,9 +178,10 @@ function main() int
     return sum_array(data, 3)
 end 'main'
 ```
+```exitcode
+30
 ```
-ExitCode: 30
-```
+
 
 <!-- test: unsized-parameter -->
 ```maxon
@@ -192,6 +198,7 @@ function main() int
     return get_first(nums)
 end 'main'
 ```
+```exitcode
+42
 ```
-ExitCode: 42
-```
+

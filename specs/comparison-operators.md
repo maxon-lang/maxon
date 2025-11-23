@@ -51,9 +51,10 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 1
+```exitcode
+1
 ```
+
 
 ## Tests
 
@@ -67,9 +68,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+
 
 <!-- test: not-equal -->
 ```maxon
@@ -81,9 +83,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+
 
 <!-- test: greater-than -->
 ```maxon
@@ -94,9 +97,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+42
 ```
-ExitCode: 42
-```
+
 
 <!-- test: less-than-or-equal -->
 ```maxon
@@ -109,9 +113,10 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+
 
 <!-- test: float-comparison -->
 ```maxon
@@ -124,6 +129,7 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+1
 ```
-ExitCode: 1
-```
+

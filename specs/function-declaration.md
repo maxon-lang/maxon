@@ -38,7 +38,6 @@ function name(param1 type1, param2 type2) returnType
     return value
 end 'name'
 ```
-
 ### Example
 
 ```maxon
@@ -50,9 +49,10 @@ function main() int
     return add(3, 4)
 end 'main'
 ```
-```output
-ExitCode: 7
+```exitcode
+7
 ```
+
 
 ## Tests
 
@@ -66,9 +66,10 @@ function main() int
     return add()
 end 'main'
 ```
+```exitcode
+7
 ```
-ExitCode: 7
-```
+
 
 <!-- test: with-parameters -->
 ```maxon
@@ -80,9 +81,10 @@ function main() int
     return add(10, 20)
 end 'main'
 ```
+```exitcode
+30
 ```
-ExitCode: 30
-```
+
 
 <!-- test: nested-calls -->
 ```maxon
@@ -98,6 +100,7 @@ function main() int
     return quadruple(3)
 end 'main'
 ```
+```exitcode
+12
 ```
-ExitCode: 12
-```
+

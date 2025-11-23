@@ -30,7 +30,6 @@ The `print()` function outputs integer values to standard output (console).
 ```maxon
 print(value)
 ```
-
 Where `value` is an `int` expression.
 
 ### Example
@@ -44,12 +43,15 @@ function main() int
     return 0
 end 'main'
 ```
-```output
-ExitCode: 0
-Stdout: 42
+```exitcode
+0
+```
+```stdout
+42
 15
 100
 ```
+
 
 Each call to `print()` outputs the value followed by a newline.
 
@@ -63,10 +65,13 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: 42
+```stdout
+42
 ```
+
 
 <!-- test: expression -->
 ```maxon
@@ -75,10 +80,13 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: 15
+```stdout
+15
 ```
+
 
 <!-- test: multiple-calls -->
 ```maxon
@@ -90,9 +98,12 @@ function main() int
     return 0
 end 'main'
 ```
+```exitcode
+0
 ```
-ExitCode: 0
-Stdout: 42
+```stdout
+42
 15
 100
 ```
+
