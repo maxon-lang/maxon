@@ -11,7 +11,6 @@ You *Are* Going To Read It
 - compiler error codes
 - tests for debugging (ie step into, step over, etc)
 - extensive math function tests
-- add 'break 'label''
 
 add "run" to maxon
 add "build" to maxon

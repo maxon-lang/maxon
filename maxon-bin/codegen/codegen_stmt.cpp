@@ -785,14 +785,9 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         llvm::BasicBlock* condBB = llvm::BasicBlock::Create(context, "whilecond", function);
         llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(context, "loop");
         llvm::BasicBlock* afterBB = llvm::BasicBlock::Create(context, "afterloop");
-        
-        // Save previous loop context
-        llvm::BasicBlock* prevLoopCond = currentLoopCond;
-        llvm::BasicBlock* prevLoopAfter = currentLoopAfter;
-        
-        // Set current loop context
-        currentLoopCond = condBB;
-        currentLoopAfter = afterBB;
+
+        // Push loop context onto stack
+        loopStack.push_back({whileStmt->blockId, condBB, afterBB});
         
         // Jump to condition block
         builder.CreateBr(condBB);
@@ -822,10 +817,9 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         if (!builder.GetInsertBlock()->getTerminator()) {
             builder.CreateBr(condBB);
         }
-        
-        // Restore previous loop context
-        currentLoopCond = prevLoopCond;
-        currentLoopAfter = prevLoopAfter;
+
+        // Pop loop context from stack
+        loopStack.pop_back();
         
         // Generate after block
         function->insert(function->end(), afterBB);
@@ -868,14 +862,9 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(context, "forloop");
         llvm::BasicBlock* incrementBB = llvm::BasicBlock::Create(context, "forincrement");
         llvm::BasicBlock* afterBB = llvm::BasicBlock::Create(context, "afterfor");
-        
-        // Save previous loop context
-        llvm::BasicBlock* prevLoopCond = currentLoopCond;
-        llvm::BasicBlock* prevLoopAfter = currentLoopAfter;
-        
-        // Set current loop context - continue should jump to increment block
-        currentLoopCond = incrementBB;
-        currentLoopAfter = afterBB;
+
+        // Push loop context onto stack - continue should jump to increment block
+        loopStack.push_back({forStmt->blockId, incrementBB, afterBB});
         
         // Jump to condition block
         builder.CreateBr(condBB);
@@ -985,10 +974,9 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         
         // Clean up loop variable from scope
         namedValues.erase(forStmt->loopVar);
-        
-        // Restore previous loop context
-        currentLoopCond = prevLoopCond;
-        currentLoopAfter = prevLoopAfter;
+
+        // Pop loop context from stack
+        loopStack.pop_back();
         
         // Generate after block
         function->insert(function->end(), afterBB);
@@ -1001,16 +989,36 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         if (generateDebugInfo) {
             emitLocation(breakStmt->line, breakStmt->column);
         }
-        
-        if (!currentLoopAfter) {
+
+        if (loopStack.empty()) {
             throw std::runtime_error("Break statement outside of loop");
         }
-        
+
+        llvm::BasicBlock* targetBlock = nullptr;
+
+        if (breakStmt->targetLabel.empty()) {
+            // No label: break innermost loop
+            targetBlock = loopStack.back().afterBlock;
+        } else {
+            // Search for matching label from innermost to outermost
+            for (auto it = loopStack.rbegin(); it != loopStack.rend(); ++it) {
+                if (it->label == breakStmt->targetLabel) {
+                    targetBlock = it->afterBlock;
+                    break;
+                }
+            }
+
+            if (!targetBlock) {
+                throw std::runtime_error("Break target label '" + breakStmt->targetLabel +
+                                         "' not found in enclosing loops");
+            }
+        }
+
         // Note: We don't clean up scopes here because break only exits the loop,
         // not the entire function. The loop's scope will be cleaned up when the
         // loop ends normally.
-        
-        builder.CreateBr(currentLoopAfter);
+
+        builder.CreateBr(targetBlock);
         // Create a new basic block for any code after the break (dead code)
         llvm::BasicBlock* deadBB = llvm::BasicBlock::Create(context, "afterbreak", builder.GetInsertBlock()->getParent());
         builder.SetInsertPoint(deadBB);
@@ -1022,11 +1030,32 @@ void CodeGenerator::generateStmt(StmtAST* stmt, llvm::Function* function) {
         if (generateDebugInfo) {
             emitLocation(continueStmt->line, continueStmt->column);
         }
-        
-        if (!currentLoopCond) {
+
+        if (loopStack.empty()) {
             throw std::runtime_error("Continue statement outside of loop");
         }
-        builder.CreateBr(currentLoopCond);
+
+        llvm::BasicBlock* targetBlock = nullptr;
+
+        if (continueStmt->targetLabel.empty()) {
+            // No label: continue innermost loop
+            targetBlock = loopStack.back().condBlock;
+        } else {
+            // Search for matching label from innermost to outermost
+            for (auto it = loopStack.rbegin(); it != loopStack.rend(); ++it) {
+                if (it->label == continueStmt->targetLabel) {
+                    targetBlock = it->condBlock;
+                    break;
+                }
+            }
+
+            if (!targetBlock) {
+                throw std::runtime_error("Continue target label '" + continueStmt->targetLabel +
+                                         "' not found in enclosing loops");
+            }
+        }
+
+        builder.CreateBr(targetBlock);
         // Create a new basic block for any code after the continue (dead code)
         llvm::BasicBlock* deadBB = llvm::BasicBlock::Create(context, "aftercontinue", builder.GetInsertBlock()->getParent());
         builder.SetInsertPoint(deadBB);

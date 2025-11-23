@@ -265,6 +265,7 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 
 		// Enter loop scope
 		loopDepth++;
+		loopLabelStack.push_back(whileStmt->blockId);
 		enterScope();
 
 		// Enter nested block scope for nested blocks within the while block
@@ -281,6 +282,7 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		// Exit loop scope
 		exitScope();
 		loopDepth--;
+		loopLabelStack.pop_back();
 
 	} else if (auto forStmt = dynamic_cast<ForStmtAST *>(stmt)) {
 		// For-loops require iterator functions from stdlib
@@ -304,6 +306,7 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 
 		// Enter loop scope
 		loopDepth++;
+		loopLabelStack.push_back(forStmt->blockId);
 		enterScope();
 
 		// Enter nested block scope for nested blocks within the for block
@@ -325,21 +328,50 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		// Exit loop scope
 		exitScope();
 		loopDepth--;
+		loopLabelStack.pop_back();
 
-	} else if (dynamic_cast<BreakStmtAST *>(stmt)) {
+	} else if (auto breakStmt = dynamic_cast<BreakStmtAST *>(stmt)) {
 		// Validate break is inside a loop
 		if (loopDepth == 0) {
 			addError("'break' statement must be inside a loop" +
 						 std::string("\n  Note: 'break' can only be used within 'while' loops"),
 					 stmt->line, stmt->column);
+		} else if (!breakStmt->targetLabel.empty()) {
+			// Verify label exists in enclosing loops
+			bool found = false;
+			for (const auto &label : loopLabelStack) {
+				if (label == breakStmt->targetLabel) {
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				addError("Break target label '" + breakStmt->targetLabel +
+							 "' does not match any enclosing loop",
+						 stmt->line, stmt->column);
+			}
 		}
 
-	} else if (dynamic_cast<ContinueStmtAST *>(stmt)) {
+	} else if (auto continueStmt = dynamic_cast<ContinueStmtAST *>(stmt)) {
 		// Validate continue is inside a loop
 		if (loopDepth == 0) {
 			addError("'continue' statement must be inside a loop" +
 						 std::string("\n  Note: 'continue' can only be used within 'while' loops"),
 					 stmt->line, stmt->column);
+		} else if (!continueStmt->targetLabel.empty()) {
+			// Verify label exists in enclosing loops
+			bool found = false;
+			for (const auto &label : loopLabelStack) {
+				if (label == continueStmt->targetLabel) {
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				addError("Continue target label '" + continueStmt->targetLabel +
+							 "' does not match any enclosing loop",
+						 stmt->line, stmt->column);
+			}
 		}
 
 	} else if (auto returnStmt = dynamic_cast<ReturnStmtAST *>(stmt)) {

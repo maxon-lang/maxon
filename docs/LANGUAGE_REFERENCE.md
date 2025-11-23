@@ -429,15 +429,26 @@ end 'loop'
 
 ### Break Statement
 ```maxon
-break
+break           // Break from innermost loop
+break 'label'   // Break from loop with specified label
 ```
-Exits the innermost loop (while or for).
+Exits the innermost loop (while or for), or breaks to a specific labeled loop.
+
+**Example:**
+```maxon
+while true 'outer'
+    while true 'inner'
+        break 'outer'  // Breaks out of outer loop
+    end 'inner'
+end 'outer'
+```
 
 ### Continue Statement
 ```maxon
-continue
+continue           // Continue innermost loop
+continue 'label'   // Continue loop with specified label
 ```
-Skips to next iteration of the innermost loop.
+Skips to next iteration of the innermost loop, or continues to a specific labeled loop.
 
 ---
 

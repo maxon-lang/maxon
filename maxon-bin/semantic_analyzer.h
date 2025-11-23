@@ -111,6 +111,7 @@ class SemanticAnalyzer {
 	std::vector<std::map<std::string, VariableInfo>> scopeStack; // Stack of variable scopes
 	int loopDepth;												 // Track nested loop depth
 	std::vector<std::set<std::string>> blockIdStack;			 // Stack of block identifier sets per nesting level
+	std::vector<std::string> loopLabelStack;					 // Stack of loop labels for break/continue validation
 	std::set<std::string> undefinedFunctions;					 // Track undefined function calls
 
 	// Persistent symbol table for LSP - stores all variables ever declared

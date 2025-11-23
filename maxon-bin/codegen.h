@@ -33,8 +33,12 @@ class CodeGenerator {
 	std::vector<llvm::DIScope *> debugScopeStack;
 
 	// Loop context for break/continue
-	llvm::BasicBlock *currentLoopCond = nullptr;
-	llvm::BasicBlock *currentLoopAfter = nullptr;
+	struct LoopContext {
+		std::string label;			   // Block identifier
+		llvm::BasicBlock *condBlock;   // For continue
+		llvm::BasicBlock *afterBlock;  // For break
+	};
+	std::vector<LoopContext> loopStack;
 
 	// Scope tracking for automatic array cleanup
 	struct ScopeInfo {

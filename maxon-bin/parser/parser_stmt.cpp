@@ -39,12 +39,28 @@ std::unique_ptr<ReturnStmtAST> Parser::parseReturn() {
 
 std::unique_ptr<BreakStmtAST> Parser::parseBreak() {
 	Token breakToken = expectKeyword("break", "Expected 'break'");
-	return std::make_unique<BreakStmtAST>(breakToken.line, breakToken.column);
+
+	// Check for optional label
+	std::string label = "";
+	if (check(TokenType::BLOCK_ID)) {
+		Token labelToken = expect(TokenType::BLOCK_ID, "Expected block identifier");
+		label = labelToken.value;
+	}
+
+	return std::make_unique<BreakStmtAST>(breakToken.line, breakToken.column, label);
 }
 
 std::unique_ptr<ContinueStmtAST> Parser::parseContinue() {
 	Token continueToken = expectKeyword("continue", "Expected 'continue'");
-	return std::make_unique<ContinueStmtAST>(continueToken.line, continueToken.column);
+
+	// Check for optional label
+	std::string label = "";
+	if (check(TokenType::BLOCK_ID)) {
+		Token labelToken = expect(TokenType::BLOCK_ID, "Expected block identifier");
+		label = labelToken.value;
+	}
+
+	return std::make_unique<ContinueStmtAST>(continueToken.line, continueToken.column, label);
 }
 
 std::unique_ptr<IfStmtAST> Parser::parseIf() {

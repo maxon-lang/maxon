@@ -315,13 +315,19 @@ class ReturnStmtAST : public StmtAST {
 // Break statement
 class BreakStmtAST : public StmtAST {
   public:
-	BreakStmtAST(int l = 0, int c = 0) : StmtAST(l, c) {}
+	std::string targetLabel; // Empty string means break innermost loop
+
+	BreakStmtAST(int l = 0, int c = 0, const std::string &label = "")
+		: StmtAST(l, c), targetLabel(label) {}
 };
 
 // Continue statement
 class ContinueStmtAST : public StmtAST {
   public:
-	ContinueStmtAST(int l = 0, int c = 0) : StmtAST(l, c) {}
+	std::string targetLabel; // Empty string means continue innermost loop
+
+	ContinueStmtAST(int l = 0, int c = 0, const std::string &label = "")
+		: StmtAST(l, c), targetLabel(label) {}
 };
 
 // Expression statement (e.g., function call)
