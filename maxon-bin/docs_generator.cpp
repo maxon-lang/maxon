@@ -437,8 +437,8 @@ bool DocsGenerator::validateDocumentationExamples(const std::string &content,
 
 		// Check if next block is ```exitcode or ```maxoncstderr
 		if (nextBlockStart >= docSection.size() ||
-			(docSection.substr(nextBlockStart, 12) != "```exitcode" &&
-			 docSection.substr(nextBlockStart, 16) != "```maxoncstderr")) {
+			(docSection.substr(nextBlockStart, 11) != "```exitcode" &&
+			 docSection.substr(nextBlockStart, 15) != "```maxoncstderr")) {
 			// Calculate approximate line number
 			int lineNum = docSectionLine + std::count(docSection.begin(),
 													  docSection.begin() + iter->position(), '\n');
@@ -674,6 +674,9 @@ std::vector<DocsGenerator::SpecInfo> DocsGenerator::collectSpecs(const std::stri
 	if (!validationErrors.empty()) {
 		std::cerr << "\nWarning: " << validationErrors.size() << " validation issue(s) found:" << std::endl;
 		std::cerr << "(These examples without output blocks won't be extracted as tests)" << std::endl;
+		for (const auto &error : validationErrors) {
+			std::cerr << "  " << error << std::endl;
+		}
 		// Don't exit - just continue with documentation generation
 	}
 
