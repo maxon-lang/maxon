@@ -2,6 +2,7 @@
 #include "file_utils.h"
 #include "vendor/md4c-html.h"
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -670,14 +671,14 @@ std::vector<DocsGenerator::SpecInfo> DocsGenerator::collectSpecs(const std::stri
 		}
 	}
 
-	// Report validation errors (as warnings, not fatal)
+	// Report validation errors
 	if (!validationErrors.empty()) {
-		std::cerr << "\nWarning: " << validationErrors.size() << " validation issue(s) found:" << std::endl;
-		std::cerr << "(These examples without output blocks won't be extracted as tests)" << std::endl;
+		std::cerr << "\n" << validationErrors.size() << " validation error(s) found:" << std::endl;
 		for (const auto &error : validationErrors) {
 			std::cerr << "  " << error << std::endl;
 		}
-		// Don't exit - just continue with documentation generation
+		std::cerr << "\nAll maxon code blocks in Documentation sections must have corresponding ```output blocks." << std::endl;
+		std::exit(1); // Exit immediately like the C# version did
 	}
 
 	return specs;
@@ -921,7 +922,7 @@ int DocsGenerator::generateDocumentation() {
 	// Generate CSS file
 	generateStylesheet(outputDir);
 
-	// Collect all specs
+	// Collect all specs (exits with code 1 if validation fails)
 	std::vector<SpecInfo> allSpecs = collectSpecs(specsPath);
 
 	// Group by category
