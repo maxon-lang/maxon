@@ -84,7 +84,7 @@ fi
 
 # Verify installation
 echo "Verifying LLVM installation..."
-REQUIRED_TOOLS=("clang" "llc" "lld")
+REQUIRED_TOOLS=("clang" "llc" "lld" "llvm-objdump")
 MISSING_TOOLS=()
 
 for tool in "${REQUIRED_TOOLS[@]}"; do

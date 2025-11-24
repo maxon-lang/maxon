@@ -103,6 +103,27 @@ echo "$LLVM_VERSION" > "../$VERSION_FILE"
 cd ..
 
 echo ""
+echo "Verifying LLVM installation..."
+REQUIRED_TOOLS=("clang" "llc" "lld" "llvm-objdump")
+MISSING_TOOLS=()
+
+for tool in "${REQUIRED_TOOLS[@]}"; do
+    if [ ! -f "$LLVM_DIR/bin/$tool" ]; then
+        MISSING_TOOLS+=("$tool")
+    fi
+done
+
+if [ ${#MISSING_TOOLS[@]} -ne 0 ]; then
+    echo "Error: The following required tools are missing:"
+    for tool in "${MISSING_TOOLS[@]}"; do
+        echo "  - $tool"
+    done
+    exit 1
+fi
+
+echo "All required LLVM tools found!"
+
+echo ""
 echo "=================================================="
 echo "LLVM $LLVM_VERSION built successfully!"
 echo "Installation directory: $LLVM_DIR"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run all Maxon test suites and report summary
 
-set +e  # Continue on errors
+set -e  # Stop on first error
 
 # Platform detection
 if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then

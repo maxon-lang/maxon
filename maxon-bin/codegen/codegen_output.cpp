@@ -26,23 +26,28 @@
 
 #ifdef _WIN32
 // Forward declare COFF driver function (Windows)
-namespace lld {
-namespace coff {
-bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
-		  llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
-}
+namespace lld
+{
+	namespace coff
+	{
+		bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
+				  llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
+	}
 } // namespace lld
 #else
 // Forward declare ELF driver function (Linux)
-namespace lld {
-namespace elf {
-bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
-		  llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
-}
+namespace lld
+{
+	namespace elf
+	{
+		bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
+				  llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
+	}
 } // namespace lld
 #endif
 
-void CodeGenerator::optimize() {
+void CodeGenerator::optimize()
+{
 	// Use LLVM's PassBuilder to run an O3-style pipeline over the module.
 	llvm::LoopAnalysisManager loopAM;
 	llvm::FunctionAnalysisManager funcAM;
@@ -61,7 +66,8 @@ void CodeGenerator::optimize() {
 	mpm.run(*module, moduleAM);
 }
 
-void CodeGenerator::runDeadCodeElimination() {
+void CodeGenerator::runDeadCodeElimination()
+{
 	// Run minimal dead code elimination to remove unused internal functions
 	// This ensures the linker's /OPT:REF can work effectively
 	llvm::LoopAnalysisManager loopAM;
@@ -83,15 +89,18 @@ void CodeGenerator::runDeadCodeElimination() {
 	mpm.run(*module, moduleAM);
 }
 
-void CodeGenerator::printIR() {
+void CodeGenerator::printIR()
+{
 	module->print(llvm::outs(), nullptr);
 }
 
-void CodeGenerator::writeIRToFile(const std::string &filename) {
+void CodeGenerator::writeIRToFile(const std::string &filename)
+{
 	std::error_code EC;
 	llvm::raw_fd_ostream dest(filename, EC);
 
-	if (EC) {
+	if (EC)
+	{
 		throw std::runtime_error("Could not open file: " + EC.message());
 	}
 
@@ -99,7 +108,8 @@ void CodeGenerator::writeIRToFile(const std::string &filename) {
 	dest.flush();
 }
 
-void CodeGenerator::writeObjectFile(const std::string &filename) {
+void CodeGenerator::writeObjectFile(const std::string &filename)
+{
 	// Get target triple based on platform
 #ifdef _WIN32
 	llvm::Triple targetTriple("x86_64-pc-windows-msvc");
@@ -112,7 +122,8 @@ void CodeGenerator::writeObjectFile(const std::string &filename) {
 	std::string error;
 	auto target = llvm::TargetRegistry::lookupTarget(targetTriple.str(), error);
 
-	if (!target) {
+	if (!target)
+	{
 		throw std::runtime_error("Failed to lookup target: " + error);
 	}
 
@@ -129,7 +140,8 @@ void CodeGenerator::writeObjectFile(const std::string &filename) {
 	std::error_code ec;
 	llvm::raw_fd_ostream dest(filename, ec, llvm::sys::fs::OF_None);
 
-	if (ec) {
+	if (ec)
+	{
 		throw std::runtime_error("Could not open file: " + ec.message());
 	}
 
@@ -137,21 +149,24 @@ void CodeGenerator::writeObjectFile(const std::string &filename) {
 	llvm::legacy::PassManager pass;
 	auto fileType = llvm::CodeGenFileType::ObjectFile;
 
-	if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, fileType)) {
+	if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, fileType))
+	{
 		throw std::runtime_error("TargetMachine can't emit a file of this type");
 	}
 
 	pass.run(*module);
 	dest.flush();
 
-	if (verboseLevel >= 2) {
+	if (verboseLevel >= 2)
+	{
 		uint64_t fileSize = 0;
 		llvm::sys::fs::file_size(filename, fileSize);
 		std::cout << "Object file size: " << fileSize << " bytes" << std::endl;
 	}
 }
 
-void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostream *errorStream) {
+void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostream *errorStream)
+{
 	// Get target triple based on platform
 #ifdef _WIN32
 	llvm::Triple targetTriple("x86_64-pc-windows-msvc");
@@ -164,7 +179,8 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 	std::string error;
 	auto target = llvm::TargetRegistry::lookupTarget(targetTriple.str(), error);
 
-	if (!target) {
+	if (!target)
+	{
 		throw std::runtime_error("Failed to lookup target: " + error);
 	}
 
@@ -186,7 +202,8 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 	std::error_code ec;
 	llvm::raw_fd_ostream dest(tempObjFile, ec, llvm::sys::fs::OF_None);
 
-	if (ec) {
+	if (ec)
+	{
 		throw std::runtime_error("Could not create temporary object file: " + ec.message());
 	}
 
@@ -194,7 +211,8 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 	llvm::legacy::PassManager pass;
 	auto fileType = llvm::CodeGenFileType::ObjectFile;
 
-	if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, fileType)) {
+	if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, fileType))
+	{
 		throw std::runtime_error("TargetMachine can't emit a file of this type");
 	}
 
@@ -203,7 +221,8 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 	dest.close();
 
 	// Use LLD as a library (in-process linking)
-	if (verboseLevel >= 1) {
+	if (verboseLevel >= 1)
+	{
 		std::cout << "Linking" << std::endl;
 	}
 
@@ -219,7 +238,8 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 	argStorage.push_back("/SUBSYSTEM:CONSOLE");
 
 	// Add debug info if enabled
-	if (generateDebugInfo) {
+	if (generateDebugInfo)
+	{
 		argStorage.push_back("/DEBUG");
 	}
 
@@ -230,7 +250,8 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 	argStorage.push_back("/ENTRY:_start"); // Set entry point to _start (our minimal wrapper)
 
 	// Size optimization flags (only when not generating debug info)
-	if (!generateDebugInfo) {
+	if (!generateDebugInfo)
+	{
 		argStorage.push_back("/OPT:REF");			 // Remove unreferenced functions/data
 		argStorage.push_back("/OPT:ICF");			 // Identical COMDAT folding
 		argStorage.push_back("/MERGE:.rdata=.text"); // Merge read-only data into code section
@@ -250,18 +271,18 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 	// Entry point
 	argStorage.push_back("--entry=_start");
 
-	// Dynamic linker (for system calls, but we're self-contained)
-	argStorage.push_back("-dynamic-linker");
-	argStorage.push_back("/lib64/ld-linux-x86-64.so.2");
+	// Static executable (no dynamic linking)
+	argStorage.push_back("-static");
 
 	// Input object file (program)
 	argStorage.push_back(tempObjFile);
 
-	// Note: We don't link libc since Maxon is self-contained via runtime.ll
+	// Note: We don't link libc - Maxon is self-contained via runtime and stubs
 #endif
 
 	// Convert to const char* pointers
-	for (const auto &arg : argStorage) {
+	for (const auto &arg : argStorage)
+	{
 		lldArgs.push_back(arg.c_str());
 	}
 
@@ -276,10 +297,13 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 #else
 	char buffer[PATH_MAX];
 	ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
-	if (len != -1) {
+	if (len != -1)
+	{
 		buffer[len] = '\0';
 		execPath = buffer;
-	} else {
+	}
+	else
+	{
 		execPath = ".";
 	}
 	std::string runtimeExt = ".o";
@@ -289,23 +313,31 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 	std::string runtimeObj = execDir + "/runtime" + runtimeExt;
 
 	// Check if runtime object exists
-	if (llvm::sys::fs::exists(runtimeObj)) {
+	if (llvm::sys::fs::exists(runtimeObj))
+	{
 		argStorage.push_back(runtimeObj);
-		if (verboseLevel >= 2) {
+		if (verboseLevel >= 2)
+		{
 			std::cout << "  Linking with Maxon runtime library: " << runtimeObj << std::endl;
 		}
-	} else if (verboseLevel >= 2) {
+	}
+	else if (verboseLevel >= 2)
+	{
 		std::cout << "  Warning: Maxon runtime library not found at " << runtimeObj << std::endl;
 	}
 
 	// Link runtime stubs (math functions for LLVM intrinsic lowering)
 	std::string stubsObj = execDir + "/stubs" + runtimeExt;
-	if (llvm::sys::fs::exists(stubsObj)) {
+	if (llvm::sys::fs::exists(stubsObj))
+	{
 		argStorage.push_back(stubsObj);
-		if (verboseLevel >= 2) {
+		if (verboseLevel >= 2)
+		{
 			std::cout << "  Linking with runtime stubs: " << stubsObj << std::endl;
 		}
-	} else if (verboseLevel >= 2) {
+	}
+	else if (verboseLevel >= 2)
+	{
 		std::cout << "  Warning: Runtime stubs not found at " << stubsObj << std::endl;
 	}
 
@@ -317,7 +349,8 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 
 	// Rebuild lldArgs with final pointers
 	lldArgs.clear();
-	for (const auto &arg : argStorage) {
+	for (const auto &arg : argStorage)
+	{
 		lldArgs.push_back(arg.c_str());
 	}
 
@@ -332,7 +365,8 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 	// Clean up temporary object file
 	llvm::sys::fs::remove(tempObjFile);
 
-	if (!success) {
+	if (!success)
+	{
 		throw std::runtime_error("LLD linking failed");
 	}
 }

@@ -79,15 +79,8 @@ int compileAndRunFromStdin() {
 
 		std::string executablePath = compileProgram(options);
 
-		// Run the executable
-		int exitCode;
-#ifdef _WIN32
-		exitCode = system(executablePath.c_str());
-#else
-		exitCode = system(executablePath.c_str());
-#endif
-
-		// Clean up temporary files
+	// Run the executable
+	int exitCode = system(executablePath.c_str());		// Clean up temporary files
 		std::filesystem::remove(executablePath);
 		std::filesystem::remove(tempSource);
 
