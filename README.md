@@ -20,7 +20,7 @@ Maxon is a statically-typed programming language with LLVM backend, designed for
 
 ### Linux
 - Use the provided dev container (recommended)
-- Or install: build-essential, cmake, ninja-build, .NET 8.0 SDK, Node.js 20+
+- Or install: build-essential, cmake, ninja-build, Node.js 20+
 
 ## Building
 

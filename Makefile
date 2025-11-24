@@ -197,7 +197,8 @@ endif
 # Generate documentation from spec files
 docs: compiler
 	@echo Generating documentation from specs...
-	@cd maxon-docs && dotnet run
+	@maxon generate-docs
+	@echo Documentation generated in maxon-docs/Output/
 	@echo Documentation generated in maxon-docs/Output/
 
 # Validate that all fragments are defined in spec files

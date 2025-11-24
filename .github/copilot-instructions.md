@@ -89,7 +89,7 @@ Add handler in `LspServer`, register in `JsonRpcHandler`, implement in `Analyzer
 ### Spec Files
 - Individual specs in `specs/` define each language feature in detail
 - Each spec contains Developer Notes, Documentation, and Tests
-- HTML documentation generated in `maxon-docs/Output/` via C# DocGen tool
+- HTML documentation generated in `maxon-docs/Output/` via `maxon generate-docs` command
 - Refer to `docs/SPECS.md` for details on writing specs
 
 ## Guidelines

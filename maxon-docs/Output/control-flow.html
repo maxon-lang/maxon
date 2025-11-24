@@ -28,10 +28,11 @@
             </div>
             <div class="spec-section" id="break">
                 <h2>Break</h2>
-<h1 id="break-statement">Break Statement</h1>
+<h1>Break Statement</h1>
 <p>Exit from the innermost enclosing loop.</p>
 <p><strong>Syntax:</strong></p>
-<pre><code class="language-maxon">break
+<pre><code class="language-maxon">break           // Break from innermost loop
+break 'label'   // Break from loop with specified label
 </code></pre>
 <p><strong>Example:</strong></p>
 <pre><code class="language-maxon">var x = 5
@@ -43,19 +44,39 @@ while true 'loop'
 end 'loop'
 // x is now 11
 </code></pre>
+<p><strong>Labeled Break Example:</strong></p>
+<pre><code class="language-maxon">while true 'outer'
+    while true 'inner'
+        break 'outer'  // Breaks out of outer loop
+    end 'inner'
+end 'outer'
+</code></pre>
+<p><strong>Labeled Continue:</strong></p>
+<p>The same syntax works for <code>continue</code> to jump to a specific loop's next iteration:</p>
+<pre><code class="language-maxon">while x &lt; 10 'outer'
+    x = x + 1
+    while y &lt; 10 'inner'
+        y = y + 1
+        if y = 3 'check'
+            continue 'outer'  // Skips to next iteration of outer loop
+        end 'check'
+    end 'inner'
+end 'outer'
+</code></pre>
 <p><strong>Notes:</strong></p>
 <ul>
-<li>Exits the innermost <code>while</code> loop</li>
+<li>Exits the innermost <code>while</code> or <code>for</code> loop</li>
 <li>Control flow continues after the loop's <code>end</code> statement</li>
 <li>Must be inside a loop (compile error otherwise)</li>
 <li>Can be used in single-line if: <code>if condition break</code></li>
+<li>Label must match an enclosing loop's label</li>
+<li><code>continue 'label'</code> jumps to the next iteration of the labeled loop</li>
 </ul>
-
             </div>
             <div class="spec-section" id="for-loops">
                 <h2>For Loops</h2>
 <p>For loops provide convenient iteration over ranges and collections using an iterator protocol defined by the standard library.</p>
-<h3 id="syntax">Syntax</h3>
+<h3>Syntax</h3>
 <pre><code class="language-maxon">for &lt;variable&gt; in &lt;iterable&gt; 'identifier'
     &lt;statements&gt;
 end 'identifier'
@@ -65,14 +86,14 @@ end 'identifier'
 <li><strong>iterable</strong>: Expression that returns an iterator (e.g., <code>range(0, 10)</code>)</li>
 <li><strong>identifier</strong>: Block identifier (must match on <code>for</code> and <code>end</code> lines)</li>
 </ul>
-<h3 id="range-based-iteration">Range-Based Iteration</h3>
+<h3>Range-Based Iteration</h3>
 <p>The <code>range()</code> function creates an iterator over integers. It's automatically available from the standard library:</p>
 <pre><code class="language-maxon">for i in range(0, 5) 'loop'
     print(i)  // Prints 0, 1, 2, 3, 4
 end 'loop'
 </code></pre>
 <p><strong>Range is half-open:</strong> <code>range(0, 5)</code> iterates over <code>[0, 5)</code> (0, 1, 2, 3, 4).</p>
-<h3 id="example-sum-of-range">Example: Sum of Range</h3>
+<h3>Example: Sum of Range</h3>
 <pre><code class="language-maxon">function main() int
     var sum = 0
     for i in range(0, 10) 'sum_loop'
@@ -82,7 +103,7 @@ end 'loop'
 end 'main'
 </code></pre>
 <fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 45</pre></fieldset>
-<h3 id="loop-control">Loop Control</h3>
+<h3>Loop Control</h3>
 <p>For loops support <code>break</code> and <code>continue</code> statements:</p>
 <pre><code class="language-maxon">function main() int
     var sum = 0
@@ -99,7 +120,7 @@ end 'main'
 end 'main'
 </code></pre>
 <fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 23</pre></fieldset>
-<h3 id="loop-variable-scope">Loop Variable Scope</h3>
+<h3>Loop Variable Scope</h3>
 <p>The loop variable is:</p>
 <ul>
 <li><strong>Immutable</strong>: Cannot be reassigned within the loop body</li>
@@ -117,7 +138,7 @@ end 'main'
 end 'main'
 </code></pre>
 <fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 3</pre></fieldset>
-<h3 id="how-it-works">How It Works</h3>
+<h3>How It Works</h3>
 <p>The compiler desugars for loops to iterator-based while loops. This code:</p>
 <pre><code class="language-text">for i in range(0, 3) 'loop'
     print(i)
@@ -144,7 +165,7 @@ end 'loop'
 <li><strong>Compiler</strong>: Syntax sugar only</li>
 <li><strong>Standard Library</strong>: All iteration logic (auto-discovered, no imports needed)</li>
 </ul>
-<h3 id="iterator-protocol">Iterator Protocol</h3>
+<h3>Iterator Protocol</h3>
 <p>The iterator interface is a contract defined by the standard library. Any type that implements the three required functions can be used with for loops:</p>
 <ul>
 <li><code>Iterator</code> struct with fields: <code>current</code>, <code>limit</code>, <code>step</code></li>
@@ -153,11 +174,10 @@ end 'loop'
 <li><code>next(Iterator) Iterator</code> - Returns new iterator advanced by step</li>
 </ul>
 <p>The <code>Iterator</code> struct is exported from <code>stdlib/iter/iterator.maxon</code> and can be used in any file with the qualified name <code>Iterator</code>.</p>
-
             </div>
             <div class="spec-section" id="if-statements">
                 <h2>If Statements</h2>
-<h1 id="if-statements">If Statements</h1>
+<h1>If Statements</h1>
 <p>Execute code conditionally based on a boolean expression.</p>
 <p><strong>Single-Line Syntax:</strong></p>
 <pre><code class="language-maxon">if &lt;condition&gt; &lt;statement&gt;
@@ -196,11 +216,10 @@ end 'main'
 <li>Conditions can be any boolean expression</li>
 <li>Else clause is optional</li>
 </ul>
-
             </div>
             <div class="spec-section" id="single-line-if">
                 <h2>Single Line If</h2>
-<h1 id="single-line-if">Single-Line If</h1>
+<h1>Single-Line If</h1>
 <p>Compact syntax for simple conditional statements.</p>
 <p><strong>Syntax:</strong></p>
 <pre><code class="language-maxon">if &lt;condition&gt; &lt;statement&gt;
@@ -221,11 +240,10 @@ end 'loop'
 <li>No else clause possible</li>
 <li>Ideal for simple guards like <code>if x = 0 break</code> or <code>if done return result</code></li>
 </ul>
-
             </div>
             <div class="spec-section" id="while-loops">
                 <h2>While Loops</h2>
-<h1 id="while-loops">While Loops</h1>
+<h1>While Loops</h1>
 <p>Execute a block of code repeatedly while a condition is true.</p>
 <p><strong>Syntax:</strong></p>
 <pre><code class="language-maxon">while &lt;condition&gt; 'identifier'
@@ -254,7 +272,6 @@ end 'loop'
 <li>Use <code>continue</code> to skip to the next iteration</li>
 <li>Infinite loops possible with <code>while true 'loop'</code></li>
 </ul>
-
             </div>
         </main>
     </div>

@@ -1,4 +1,5 @@
 #include "compiler.h"
+#include "docs_generator.h"
 #include "self_test.h"
 #include "temp_runner.h"
 #include "test_regenerate.h"
@@ -34,6 +35,8 @@ void printHelp(const char *programName) {
 	std::cerr << "                 Extract test fragments from spec files" << std::endl;
 	std::cerr << "  regen-fragments [options]" << std::endl;
 	std::cerr << "                 Regenerate all test fragments" << std::endl;
+	std::cerr << "  generate-docs [options]" << std::endl;
+	std::cerr << "                 Generate HTML documentation from spec files" << std::endl;
 	std::cerr << "  test-fragments [options]" << std::endl;
 	std::cerr << "                 Run all test fragments (shows only failures and summary)" << std::endl;
 	std::cerr << "  test <file.test> [options]" << std::endl;
@@ -91,10 +94,11 @@ int main(int argc, char *argv[]) {
 				verboseLevel = 2;
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
+			}
 		}
+		return runSelfTest(verboseLevel);
 	}
-	return runSelfTest(verboseLevel);
-	}	if (command == "extract-specs") {
+	if (command == "extract-specs") {
 		int verboseLevel = 0;
 		for (int i = 2; i < argc; ++i) {
 			std::string arg = argv[i];
@@ -107,6 +111,10 @@ int main(int argc, char *argv[]) {
 		return extractSpecFragments(verboseLevel);
 	}
 
+	if (command == "generate-docs") {
+		return DocsGenerator::generateDocumentation();
+	}
+
 	if (command == "regen-fragments") {
 		int verboseLevel = 0;
 		for (int i = 2; i < argc; ++i) {
@@ -115,10 +123,10 @@ int main(int argc, char *argv[]) {
 				verboseLevel = 2;
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
+			}
 		}
-	}
-	return regenerateFragments(verboseLevel);
-	}	// Internal command used by parallel regen runner
+		return regenerateFragments(verboseLevel);
+	} // Internal command used by parallel regen runner
 	if (command == "regen-fragments-subset") {
 		if (argc < 4) {
 			std::cerr << "Error: regen-fragments-subset requires output file and test files" << std::endl;
@@ -151,10 +159,11 @@ int main(int argc, char *argv[]) {
 				verboseLevel = 2;
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
+			}
 		}
+		return runTestFragments(verboseLevel);
 	}
-	return runTestFragments(verboseLevel);
-	}	if (command == "test") {
+	if (command == "test") {
 		if (argc < 3) {
 			std::cerr << "Error: test command requires a test file" << std::endl;
 			std::cerr << "Usage: maxon test <file.test> [options]" << std::endl;

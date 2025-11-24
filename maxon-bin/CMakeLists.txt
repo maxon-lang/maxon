@@ -64,6 +64,7 @@ set(SOURCES
     test_runner.cpp
     temp_runner.cpp
     self_test.cpp
+    docs_generator.cpp
     lexer.cpp
     parser.cpp
     parser/parser_utils.cpp
@@ -84,6 +85,9 @@ set(SOURCES
     semantic_analyzer/semantic_analyzer_expr.cpp
     semantic_analyzer/semantic_analyzer_stmt.cpp
     error_formatter.cpp
+    vendor/md4c.c
+    vendor/md4c-html.c
+    vendor/entity.c
     ../maxon-runtime/libxml2-stub.cpp
 )
 
@@ -96,6 +100,8 @@ add_executable(grammar_generator grammar_generator.cpp lexer.cpp)
 # Use precompiled headers for faster compilation
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
     target_precompile_headers(maxon PRIVATE pch.h)
+    # Exclude C files from PCH
+    set_source_files_properties(vendor/md4c.c vendor/md4c-html.c vendor/entity.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()
 
 # Link LLVM libraries
