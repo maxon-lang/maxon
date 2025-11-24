@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     gnupg \
+    file \
     jq \
     python3 \
     python3-pip \

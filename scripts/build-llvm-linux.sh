@@ -6,6 +6,7 @@ set -e
 # - X86 target backend
 # - Clang compiler
 # - LLD linker
+# - LLDB debugger
 # - Core LLVM libraries
 
 echo "=================================================="
@@ -17,20 +18,7 @@ LLVM_VERSION=$(cat llvm-config.txt | tr -d '[:space:]')
 LLVM_DIR="./llvm-project"
 VERSION_FILE="$LLVM_DIR/.llvm-version"
 BUILD_DIR="./llvm-build"
-
-# Check if LLVM is already built with the correct version
-if [ -f "$VERSION_FILE" ]; then
-    INSTALLED_VERSION=$(cat "$VERSION_FILE" | tr -d '[:space:]')
-    if [ "$INSTALLED_VERSION" = "$LLVM_VERSION" ]; then
-        echo "LLVM $LLVM_VERSION is already built. Skipping."
-        exit 0
-    else
-        echo "LLVM version mismatch. Installed: $INSTALLED_VERSION, Required: $LLVM_VERSION"
-        echo "Removing old LLVM installation..."
-        rm -rf "$LLVM_DIR"
-        rm -rf "$BUILD_DIR"
-    fi
-fi
+SOURCE_DIR="./llvm-source"
 
 # Check for required tools
 for tool in git cmake ninja; do
@@ -40,10 +28,37 @@ for tool in git cmake ninja; do
     fi
 done
 
-echo ""
-echo "Cloning LLVM $LLVM_VERSION..."
-git clone --depth 1 --branch "llvmorg-${LLVM_VERSION}" https://github.com/llvm/llvm-project.git llvm-source
-cd llvm-source
+# Clone LLVM source if not present
+if [ ! -d "$SOURCE_DIR" ]; then
+    echo ""
+    echo "Cloning LLVM $LLVM_VERSION..."
+    git clone --depth 1 --branch "llvmorg-${LLVM_VERSION}" https://github.com/llvm/llvm-project.git "$SOURCE_DIR"
+else
+    # Check if the source directory has the correct version
+    cd "$SOURCE_DIR"
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    EXPECTED_TAG="llvmorg-${LLVM_VERSION}"
+    
+    if [ "$CURRENT_BRANCH" != "$EXPECTED_TAG" ]; then
+        echo ""
+        echo "Source directory exists but version mismatch detected."
+        echo "Fetching and checking out $EXPECTED_TAG..."
+        git fetch --depth 1 origin "refs/tags/$EXPECTED_TAG:refs/tags/$EXPECTED_TAG" 2>/dev/null || true
+        git checkout "$EXPECTED_TAG" 2>/dev/null || {
+            echo "Failed to checkout correct version. Removing source and cloning fresh..."
+            cd ..
+            rm -rf "$SOURCE_DIR"
+            git clone --depth 1 --branch "$EXPECTED_TAG" https://github.com/llvm/llvm-project.git "$SOURCE_DIR"
+            cd "$SOURCE_DIR"
+        }
+    else
+        echo ""
+        echo "Source directory already at correct version: $EXPECTED_TAG"
+    fi
+    cd ..
+fi
+
+cd "$SOURCE_DIR"
 
 echo ""
 echo "Configuring LLVM build (Release mode, X86 target only)..."
@@ -51,7 +66,7 @@ cmake -S llvm -B "../$BUILD_DIR" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="../$LLVM_DIR" \
     -DLLVM_TARGETS_TO_BUILD=X86 \
-    -DLLVM_ENABLE_PROJECTS="clang;lld" \
+    -DLLVM_ENABLE_PROJECTS="clang;lld;lldb" \
     -DLLVM_ENABLE_RTTI=ON \
     -DLLVM_ENABLE_EH=ON \
     -DLLVM_BUILD_TESTS=OFF \
@@ -66,13 +81,17 @@ cmake -S llvm -B "../$BUILD_DIR" -G Ninja \
     -DLLVM_ENABLE_Z3_SOLVER=OFF \
     -DLLVM_OPTIMIZED_TABLEGEN=ON
 
-# Get number of CPU cores
+# Get number of CPU cores and limit to avoid memory issues
 NPROC=$(nproc)
+PARALLEL_JOBS=$(( NPROC / 2 ))
+if [ $PARALLEL_JOBS -lt 1 ]; then
+    PARALLEL_JOBS=1
+fi
 
 echo ""
-echo "Building LLVM with $NPROC parallel jobs..."
+echo "Building LLVM with $PARALLEL_JOBS parallel jobs (of $NPROC available cores)..."
 echo "This will take approximately 15-20 minutes..."
-cmake --build "../$BUILD_DIR" --parallel $NPROC
+cmake --build "../$BUILD_DIR" --parallel $PARALLEL_JOBS
 
 echo ""
 echo "Installing LLVM to $LLVM_DIR..."
@@ -81,12 +100,7 @@ cmake --install "../$BUILD_DIR"
 # Create version marker file
 echo "$LLVM_VERSION" > "../$VERSION_FILE"
 
-# Clean up
 cd ..
-echo ""
-echo "Cleaning up temporary files..."
-rm -rf llvm-source
-rm -rf "$BUILD_DIR"
 
 echo ""
 echo "=================================================="

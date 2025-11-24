@@ -63,9 +63,16 @@ ifeq ($(PLATFORM),windows)
 	fi
 endif
 
-# Default target - build everything (download LLVM first if needed)
-all: check-diasdk llvm compiler lsp-server extension-install debugger-test-build
+# Default target - build everything (build LLVM only if llvm-project doesn't exist)
+all: check-diasdk llvm-check compiler lsp-server extension-install debugger-test-build
 	@echo All components built successfully.
+
+# Check if LLVM exists, build if not
+llvm-check:
+	@if [ ! -d "$(LLVM_DIR)" ]; then \
+		echo "LLVM not found at $(LLVM_DIR), building..."; \
+		$(MAKE) llvm; \
+	fi
 
 # Build or download LLVM if not present or version mismatch
 llvm:
@@ -132,7 +139,7 @@ else
 endif
 
 # Build the Maxon compiler (depends on runtime)
-compiler: configure runtime
+compiler: llvm-check configure runtime
 	cmake --build $(BUILD_DIR) --target maxon
 	cmake --build $(BUILD_DIR) --target grammar_generator
 	@if [ bin/grammar_generator$(EXE_EXT) -nt vscode-extension/syntaxes/maxon.tmLanguage.json ]; then echo "Generating TextMate grammar..."; ./bin/grammar_generator$(EXE_EXT) vscode-extension/syntaxes/maxon.tmLanguage.json; fi
@@ -150,10 +157,10 @@ extension: lsp-server
 	@cd vscode-extension && npm install && npm run compile
 	@echo VS Code extension built successfully.
 
-# Compile the VS Code extension (assumes dependencies are installed)
+# Compile the VS Code extension
 extension-build:
 	@echo Compiling VS Code extension...
-	@cd vscode-extension && npm run compile
+	@cd vscode-extension && npm install && npm run compile
 	@echo Extension compiled.
 
 # Watch mode for VS Code extension development
