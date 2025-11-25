@@ -21,7 +21,7 @@ int compileAndRunTemporary(const std::string &sourceFile) {
 		options.optimize = true;
 		options.debugInfo = false;
 		options.verboseLevel = 0;
-		options.emitLLVM = false;
+		options.emitIR = false;
 		options.compileOnly = false;
 
 		std::string executablePath = compileProgram(options);

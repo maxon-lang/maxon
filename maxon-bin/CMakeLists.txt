@@ -38,7 +38,6 @@ set(SOURCES
     docs_generator.cpp
     lexer.cpp
     parser.cpp
-    $<$<PLATFORM_ID:Windows>:libxml2_stubs.cpp>
     parser/parser_utils.cpp
     parser/parser_expr.cpp
     parser/parser_stmt.cpp

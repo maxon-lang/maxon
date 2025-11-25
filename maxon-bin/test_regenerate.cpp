@@ -617,7 +617,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		optOpts.inputFiles = {tempSource};
 		optOpts.outputFile = tempOptLL;
 		optOpts.optimize = true;
-		optOpts.emitLLVM = true;
+		optOpts.emitIR = true;
 		optOpts.verboseLevel = 0;
 
 		std::string optIR;
@@ -742,7 +742,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		debugOpts.inputFiles = {tempSource};
 		debugOpts.outputFile = tempDebugLL;
 		debugOpts.debugInfo = true;
-		debugOpts.emitLLVM = true;
+		debugOpts.emitIR = true;
 		debugOpts.verboseLevel = 0;
 
 		std::string debugIR;

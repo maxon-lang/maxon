@@ -107,7 +107,7 @@ else
 endif
 
 # Build the Maxon compiler (depends on runtime)
-compiler: llvm-check configure runtime
+compiler: configure runtime
 	cmake --build $(BUILD_DIR) --target maxon
 	cmake --build $(BUILD_DIR) --target grammar_generator
 	@if [ bin/grammar_generator$(EXE_EXT) -nt vscode-extension/syntaxes/maxon.tmLanguage.json ]; then echo "Generating TextMate grammar..."; ./bin/grammar_generator$(EXE_EXT) vscode-extension/syntaxes/maxon.tmLanguage.json; fi

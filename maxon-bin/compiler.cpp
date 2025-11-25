@@ -311,7 +311,7 @@ std::string compileProgram(const CompilationOptions &options) {
 
 	std::string exeOutputFile = baseFilename + ".exe";
 
-	if (options.emitLLVM) {
+	if (options.emitIR) {
 		std::string llOutputFile = baseFilename + ".ir";
 		codegen.writeIRToFile(llOutputFile);
 		logger.detail(LogPhase::MIR, "MIR written to: ", llOutputFile);

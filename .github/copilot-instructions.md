@@ -67,13 +67,11 @@ Add handler in `LspServer`, register in `JsonRpcHandler`, implement in `Analyzer
 - `maxon.exe` is in PATH (no path prefix needed)
 
 ## Runtime Library
-- `maxon-runtime/runtime-windows.obj` (or `runtime-linux.o` on Linux) provides all runtime functions
-- Includes LLVM intrinsic implementations (e.g., `llvm.memset` → `memset`)
-- Includes system functions (malloc, free, exit, fmod, write)
-- Platform-specific implementations in `platform_windows.ll` and `platform_linux.ll`
-- Auto-linked with all programs
-- Edit `runtime.ll`, then `make runtime` to rebuild
-- After build it is copied to 'bin' folder so maxon.exe can find it
+- Runtime is in MIR format: `maxon-runtime/runtime.mir` (platform-independent)
+- Platform-specific: `runtime_windows.mir` and `runtime_linux.mir`
+- Provides: memset, malloc, free, exit, math functions (sin, cos, tan, fmod, round, etc.)
+- Automatically merged with user code during compilation
+- See `maxon-runtime/README.md` for details
 - NEVER resort to calling the C runtime library, we do not use it!
 
 ## Documentation

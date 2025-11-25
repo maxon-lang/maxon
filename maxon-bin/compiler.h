@@ -11,7 +11,7 @@
 struct CompilationOptions {
 	std::vector<std::string> inputFiles;
 	std::string outputFile; // Internal use only, not exposed via CLI
-	bool emitLLVM = false;	// Now emits MIR instead of LLVM IR
+	bool emitIR = false;
 	bool compileOnly = false;
 	bool optimize = false;
 	bool debugInfo = false;

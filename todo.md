@@ -4,10 +4,8 @@ You *Are* Going To Read It
 ## TODO
 
 - simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")
-- https://llvm.org/docs/Frontend/PerformanceTips.html
 - platform specific optimization for runtime.ll
 - warnings as errors in release mode
-- LLVM autovectorization
 - compiler error codes
 - extensive math function tests
 
