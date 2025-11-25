@@ -1,10 +1,10 @@
 # Maxon Programming Language
 
-Maxon is a statically-typed programming language with LLVM backend, designed for clear syntax and robust IDE support.
+Maxon is a statically-typed programming language with a custom native x86-64 backend, designed for clear syntax and robust IDE support.
 
 ## Project Components
 
-- **Compiler (`maxon`)**: C++ compiler with LLVM backend
+- **Compiler (`maxon`)**: C++ compiler with native x86-64 backend
 - **Language Server (LSP)**: C++ implementation for IDE integration
 - **VS Code Extension**: Syntax highlighting and language features
 
@@ -16,24 +16,19 @@ Maxon is a statically-typed programming language with LLVM backend, designed for
 - CMake 3.13+
 - Ninja build system
 
-**Important:** Windows requires a one-time DIA SDK setup. See [docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md) for details.
-
 ### Linux
 - Use the provided dev container (recommended)
 - Or install: build-essential, cmake, ninja-build, Node.js 20+
 
 ## Building
 
-The build system automatically downloads and configures LLVM. Simply run:
-
 ```bash
-make all              # Downloads LLVM (first time), builds everything
+make all              # Build everything
 make compiler         # Build only the compiler
 make lsp              # Build LSP server and extension
 make extension        # Build VS Code extension
 make test             # Run all tests
-make clean            # Clean build artifacts (keeps LLVM)
-make clean-llvm       # Remove LLVM download
+make clean            # Clean build artifacts
 ```
 
 **Note:** All commands must be run in Git Bash on Windows or bash on Linux.
@@ -42,10 +37,7 @@ make clean-llvm       # Remove LLVM download
 
 ### Windows (Git Bash)
 ```bash
-# First-time setup: Run DIA SDK fix (as Administrator in PowerShell)
-# See docs/WINDOWS_SETUP.md for details
-
-# Build everything (downloads LLVM automatically)
+# Build everything
 make all
 
 # Compile a Maxon program
@@ -59,7 +51,7 @@ make test
 ```bash
 # Open project in VS Code with dev container
 
-# Build everything (LLVM downloaded automatically on first build)
+# Build everything
 make all
 
 # Compile a Maxon program

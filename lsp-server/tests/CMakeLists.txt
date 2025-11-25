@@ -28,7 +28,7 @@ if(EXISTS "${LLVM_BUILD_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
     find_package(LLVM REQUIRED CONFIG PATHS ${LLVM_CMAKE_DIR} NO_DEFAULT_PATH)
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 else()
-    message(FATAL_ERROR "LLVM not found in ${LLVM_BUILD_DIR}. Please run 'make llvm' first.")
+    message(FATAL_ERROR "LLVM not found in ${LLVM_BUILD_DIR}. Please ensure llvm-project exists.")
 endif()
 
 # Include directories

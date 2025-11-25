@@ -45,52 +45,15 @@ else
     RUNTIME_OBJ = $(RUNTIME_OBJ_LINUX)
 endif
 
-.PHONY: all clean clean-llvm clean-all compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test-build debugger-test llvm check-diasdk
+.PHONY: all clean clean-all compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test-build debugger-test
 
-# Check DIA SDK requirement on Windows
-check-diasdk:
-ifeq ($(PLATFORM),windows)
-	@if [ ! -f "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/DIA SDK/lib/amd64/diaguids.lib" ]; then \
-		echo ""; \
-		echo "ERROR: DIA SDK not found at required location!"; \
-		echo ""; \
-		echo "LLVM requires the DIA SDK library at:"; \
-		echo "  C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/DIA SDK/lib/amd64/diaguids.lib"; \
-		echo ""; \
-		echo "To fix this issue:"; \
-		echo "  1. Right-click on fix-diasdk.ps1 in Windows Explorer"; \
-		echo "  2. Select 'Run with PowerShell'"; \
-		echo "  3. Choose 'Run as Administrator' when prompted"; \
-		echo ""; \
-		echo "For more information, see docs/WINDOWS_SETUP.md"; \
-		echo ""; \
-		exit 1; \
-	fi
-endif
-
-# Default target - build everything (build LLVM only if llvm-project doesn't exist)
-all: check-diasdk llvm-check compiler lsp-server extension-install debugger-test-build
+# Default target - build everything
+all: compiler lsp-server extension-install debugger-test-build
 	@echo All components built successfully.
-
-# Check if LLVM exists, build if not
-llvm-check:
-	@if [ ! -d "$(LLVM_DIR)" ]; then \
-		echo "LLVM not found at $(LLVM_DIR), building..."; \
-		$(MAKE) llvm; \
-	fi
-
-# Build or download LLVM if not present or version mismatch
-llvm:
-ifeq ($(PLATFORM),windows)
-	@bash scripts/download-llvm.sh
-else
-	@bash scripts/build-llvm-linux.sh
-endif
 
 help:
 	@echo "Maxon Project Build Targets:"
 	@echo "  all              - Build all components: compiler, LSP server, and VS Code extension (default)"
-	@echo "  llvm             - Download LLVM if not present or version changed"
 	@echo "  configure        - Configure CMake build"
 	@echo "  runtime          - Build Maxon runtime library"
 	@echo "  compiler         - Build only the Maxon compiler"
@@ -110,9 +73,8 @@ help:
 	@echo "  test             - Run all test suites (compiler self-tests, fragment tests, LSP tests, extension tests, debugger tests)"
 	@echo "  debugger-test-build   - Build debugger integration tests (requires LLDB)"
 	@echo "  debugger-test    - Run debugger integration tests (requires debugger-test-build first)"
-	@echo "  clean            - Clean maxon build artifacts (keep LLVM)"
-	@echo "  clean-llvm       - Remove LLVM download"
-	@echo "  clean-all        - Clean everything including LLVM"
+	@echo "  clean            - Clean build artifacts"
+	@echo "  clean-all        - Clean everything including generated files"
 	@echo "  help             - Show this help message"
 
 # Build Maxon runtime library
@@ -265,7 +227,7 @@ debugger-test: debugger-test-build
 	@echo Running debugger integration tests...
 	cd debugger-tests/bin && ./debugger-test-runner$(EXE_EXT); \
 
-# Clean build artifacts (keep LLVM)
+# Clean build artifacts
 clean:
 	@echo Cleaning build artifacts...
 	@rm -rf $(BUILD_DIR)
@@ -277,12 +239,6 @@ clean:
 	@rm -f debugger-tests/bin/*$(EXE_EXT)
 	@echo Clean complete.
 
-# Clean LLVM download
-clean-llvm:
-	@echo Removing LLVM download...
-	@rm -rf llvm-build
-	@echo LLVM removed.
-
-# Clean everything including LLVM
-clean-all: clean clean-llvm
-	@echo All build artifacts and LLVM removed.
+# Clean everything
+clean-all: clean
+	@echo All build artifacts removed.

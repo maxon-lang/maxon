@@ -25,7 +25,7 @@ if(EXISTS "${LLVM_BUILD_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
     message(STATUS "LLVM include directories: ${LLVM_INCLUDE_DIRS}")
 else()
-    message(FATAL_ERROR "LLVM not found in ${LLVM_BUILD_DIR}. Please run 'make llvm' first.")
+    message(FATAL_ERROR "LLVM not found in ${LLVM_BUILD_DIR}. Please ensure llvm-project exists.")
 endif()
 
 # Add LLVM definitions and include directories
