@@ -372,7 +372,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 										  ? calleeF->parameters[argIdx]->type
 										  : mir::MIRType::getInt32();
 
-			// Handle array arguments
+			// Handle array and struct arguments
 			if (auto *varExpr = dynamic_cast<VariableExprAST *>(arg.get())) {
 				std::string varType = variableTypes[varExpr->name];
 				mir::MIRValue *alloca = namedValues[varExpr->name];
@@ -394,6 +394,20 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 							argIdx++;
 						}
 					}
+					continue;
+				}
+
+				// Handle struct arguments - pass pointer instead of value
+				if (alloca && structTypes.find(varType) != structTypes.end()) {
+					// If this is a struct parameter, it's already a pointer - load it
+					// Otherwise it's a local struct variable - pass the alloca pointer
+					if (isStructParameter(varExpr->name)) {
+						mir::MIRValue *ptrVal = builder->createLoad(mir::MIRType::getPtr(), alloca, varExpr->name);
+						argsV.push_back(ptrVal);
+					} else {
+						argsV.push_back(alloca);
+					}
+					argIdx++;
 					continue;
 				}
 			}
