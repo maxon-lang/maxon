@@ -105,25 +105,3 @@ end 'main'
 ```exitcode
 1
 ```
-
-
-<!-- test: string -->
-```maxon
-extern function GetStdHandle(handle int) ptr
-extern function WriteFile(hFile ptr, buffer ptr, nBytes int, written ptr, overlapped ptr) int
-
-function main() int
-    let stdout = GetStdHandle(-11)
-    var written = 0
-    var str = "Test"
-    WriteFile(stdout, str, 4, &written, 0 as ptr)
-    return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-Test
-```
-

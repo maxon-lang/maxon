@@ -88,7 +88,6 @@ set(SOURCES
     vendor/md4c.c
     vendor/md4c-html.c
     vendor/entity.c
-    ../maxon-runtime/libxml2-stub.cpp
 )
 
 # Create executable

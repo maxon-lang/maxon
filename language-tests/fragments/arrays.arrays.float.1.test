@@ -11,62 +11,25 @@ end 'main'
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
-define noundef i32 @main() local_unnamed_addr #0 {
+define i32 @main() {
 entry:
-  %0 = tail call ptr @GetProcessHeap()
-  %1 = tail call ptr @HeapAlloc(ptr %0, i32 0, i64 24)
-  %2 = tail call ptr @memset(ptr %1, i32 0, i64 24)
-  store double 1.500000e+00, ptr %1, align 8
-  %arrayidx2 = getelementptr inbounds nuw i8, ptr %1, i64 8
-  store double 2.500000e+00, ptr %arrayidx2, align 8
-  %arrayidx4 = getelementptr inbounds nuw i8, ptr %1, i64 16
-  store double 3.500000e+00, ptr %arrayidx4, align 8
-  %3 = tail call ptr @GetProcessHeap()
-  %4 = tail call i32 @HeapFree(ptr %3, i32 0, ptr nonnull %1)
   ret i32 7
 }
 
-declare ptr @GetProcessHeap() local_unnamed_addr
+declare void @exit(i32)
 
-declare ptr @HeapAlloc(ptr, i32, i64) local_unnamed_addr
-
-declare i32 @HeapFree(ptr, i32, ptr) local_unnamed_addr
-
-define ptr @malloc(i64 %0) local_unnamed_addr {
-entry:
-  %1 = tail call ptr @GetProcessHeap()
-  %2 = tail call ptr @HeapAlloc(ptr %1, i32 0, i64 %0)
-  ret ptr %2
-}
-
-define void @free(ptr %0) local_unnamed_addr {
-entry:
-  %1 = tail call ptr @GetProcessHeap()
-  %2 = tail call i32 @HeapFree(ptr %1, i32 0, ptr %0)
-  ret void
-}
-
-; Function Attrs: mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite)
-declare ptr @memset(ptr writeonly, i32, i64) local_unnamed_addr #1
-
-declare void @ExitProcess(i32) local_unnamed_addr
-
-; Function Attrs: noreturn
-define void @_start() local_unnamed_addr #2 {
+define void @_start() {
 entry:
   %0 = tail call i32 @main()
-  tail call void @ExitProcess(i32 %0)
+  tail call void @exit(i32 %0)
   unreachable
 }
 
-attributes #0 = { "no-builtin-memset" }
-attributes #1 = { mustprogress nocallback nofree nounwind willreturn memory(argmem: readwrite) }
-attributes #2 = { noreturn }
 ---
 ; ModuleID = 'test.maxon'
 source_filename = "test.maxon"
 
-define i32 @main() #0 !dbg !4 {
+define i32 @main() !dbg !4 {
 entry:
   %sum = alloca double, align 8, !dbg !9
   %arr.__length = alloca i32, align 4, !dbg !9
@@ -105,45 +68,28 @@ entry:
   ret i32 %trunc, !dbg !17
 }
 
-declare ptr @GetProcessHeap()
+declare ptr @malloc(i64)
 
-declare ptr @HeapAlloc(ptr, i32, i64)
-
-declare i32 @HeapFree(ptr, i32, ptr)
-
-define ptr @malloc(i64 %0) {
-entry:
-  %1 = call ptr @GetProcessHeap(), !dbg !9
-  %2 = call ptr @HeapAlloc(ptr %1, i32 0, i64 %0), !dbg !9
-  ret ptr %2, !dbg !9
-}
-
-define void @free(ptr %0) {
-entry:
-  %1 = call ptr @GetProcessHeap(), !dbg !9
-  %2 = call i32 @HeapFree(ptr %1, i32 0, ptr %0), !dbg !9
-  ret void, !dbg !9
-}
+declare void @free(ptr)
 
 declare ptr @memset(ptr, i32, i64)
 
-declare void @ExitProcess(i32)
+declare void @exit(i32)
 
 define void @_start() {
 entry:
   %0 = call i32 @main()
-  call void @ExitProcess(i32 %0)
+  call void @exit(i32 %0)
   unreachable
 }
 
-attributes #0 = { "no-builtin-memset" }
 
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!2, !3}
 
 !0 = distinct !DICompileUnit(language: DW_LANG_C, file: !1, producer: "Maxon Compiler", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)
 !1 = !DIFile(filename: "test.maxon", directory: ".")
-!2 = !{i32 2, !"CodeView", i32 1}
+!2 = !{i32 2, !"Dwarf Version", i32 4}
 !3 = !{i32 2, !"Debug Info Version", i32 3}
 !4 = distinct !DISubprogram(name: "main", linkageName: "main", scope: !1, file: !1, line: 2, type: !5, scopeLine: 2, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
 !5 = !DISubroutineType(types: !6)
@@ -161,5 +107,5 @@ attributes #0 = { "no-builtin-memset" }
 !17 = !DILocation(line: 8, column: 5, scope: !4)
 ---
 ExitCode: 7
-OptimizedInstructionCount: 38
-UnoptimizedInstructionCount: 38
+OptimizedInstructionCount: 34
+UnoptimizedInstructionCount: 34

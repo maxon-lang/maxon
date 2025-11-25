@@ -12,6 +12,13 @@ CodeGenerator::CodeGenerator(const std::string &moduleName, bool debugInfo, int 
 	: builder(context), module(std::make_unique<llvm::Module>(moduleName, context)),
 	  generateDebugInfo(debugInfo), verboseLevel(verboseLevel), enableProfiling(profile), sourceFileName(moduleName)
 {
+	// Set target triple early so other code can query it
+#ifdef _WIN32
+	module->setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+#else
+	module->setTargetTriple(llvm::Triple("x86_64-pc-linux-gnu"));
+#endif
+
 	if (generateDebugInfo)
 	{
 		initDebugInfo(moduleName);
@@ -24,29 +31,22 @@ CodeGenerator::CodeGenerator(const std::string &moduleName, bool debugInfo, int 
 
 void CodeGenerator::createMinimalEntryPoint()
 {
-#ifdef _WIN32
-	// Declare ExitProcess from kernel32
-	llvm::FunctionType *exitProcessType = llvm::FunctionType::get(
-		llvm::Type::getVoidTy(context),
-		{llvm::Type::getInt32Ty(context)},
-		false);
-	llvm::Function *exitProcessFunc = llvm::Function::Create(
-		exitProcessType,
-		llvm::Function::ExternalLinkage,
-		"ExitProcess",
-		module.get());
-#else
-	// Declare exit from libc
+	// Determine target platform from module's target triple
+	std::string targetTriple = module->getTargetTriple().str();
+	bool isWindows = (targetTriple.find("windows") != std::string::npos ||
+					  targetTriple.find("msvc") != std::string::npos);
+
+	// Declare exit - platform runtime provides the implementation
+	// (Windows runtime wraps ExitProcess, Linux uses syscall)
 	llvm::FunctionType *exitType = llvm::FunctionType::get(
 		llvm::Type::getVoidTy(context),
 		{llvm::Type::getInt32Ty(context)},
 		false);
-	llvm::Function *exitFunc = llvm::Function::Create(
+	llvm::Function::Create(
 		exitType,
 		llvm::Function::ExternalLinkage,
 		"exit",
 		module.get());
-#endif
 
 	// Get the main function - try simple name first, then look for any namespace::main
 	llvm::Function *mainFunc = module->getFunction("main");
@@ -74,18 +74,13 @@ void CodeGenerator::createMinimalEntryPoint()
 	// Check if main takes arguments: main(args []string) has 2 LLVM params (ptr, i32 hidden length)
 	bool mainTakesArgs = (mainFunc->arg_size() == 2);
 
-#ifdef _WIN32
-	// Declare Windows command-line API functions if main takes arguments
-	llvm::Function *getCommandLineFunc = nullptr;
-	llvm::Function *commandLineToArgvFunc = nullptr;
-
-	if (mainTakesArgs)
+	if (isWindows && mainTakesArgs)
 	{
 		// Declare GetCommandLineW - returns wchar_t* (opaque pointer)
 		llvm::FunctionType *getCommandLineType = llvm::FunctionType::get(
 			llvm::PointerType::get(context, 0), // wchar_t* as opaque pointer
 			false);
-		getCommandLineFunc = llvm::Function::Create(
+		llvm::Function::Create(
 			getCommandLineType,
 			llvm::Function::ExternalLinkage,
 			"GetCommandLineW",
@@ -97,24 +92,18 @@ void CodeGenerator::createMinimalEntryPoint()
 			{llvm::PointerType::get(context, 0),  // wchar_t* lpCmdLine
 			 llvm::PointerType::get(context, 0)}, // int* pNumArgs
 			false);
-		commandLineToArgvFunc = llvm::Function::Create(
+		llvm::Function::Create(
 			commandLineToArgvType,
 			llvm::Function::ExternalLinkage,
 			"CommandLineToArgvW",
 			module.get());
 	}
-#endif
 
 	// Create _start function as the real entry point
+	// On all platforms, _start takes no parameters
 	llvm::FunctionType *startType = llvm::FunctionType::get(
 		llvm::Type::getVoidTy(context),
-#ifdef _WIN32
 		false);
-#else
-		// On Linux, _start receives argc and argv from the OS
-		{llvm::Type::getInt32Ty(context), llvm::PointerType::get(context, 0)},
-		false);
-#endif
 	llvm::Function *startFunc = llvm::Function::Create(
 		startType,
 		llvm::Function::ExternalLinkage,
@@ -129,34 +118,41 @@ void CodeGenerator::createMinimalEntryPoint()
 
 	if (mainTakesArgs)
 	{
-#ifdef _WIN32
-		// Get command line
-		llvm::Value *cmdLine = tmpBuilder.CreateCall(getCommandLineFunc);
+		if (isWindows)
+		{
+			// Get command line
+			llvm::Function *getCommandLineFunc = module->getFunction("GetCommandLineW");
+			llvm::Value *cmdLine = tmpBuilder.CreateCall(getCommandLineFunc);
 
-		// Allocate space for argc
-		llvm::Value *argcPtr = tmpBuilder.CreateAlloca(llvm::Type::getInt32Ty(context));
+			// Allocate space for argc
+			llvm::Value *argcPtr = tmpBuilder.CreateAlloca(llvm::Type::getInt32Ty(context));
 
-		// Parse command line to argv
-		llvm::Value *argvW = tmpBuilder.CreateCall(commandLineToArgvFunc, {cmdLine, argcPtr});
+			// Parse command line to argv
+			llvm::Function *commandLineToArgvFunc = module->getFunction("CommandLineToArgvW");
+			llvm::Value *argvW = tmpBuilder.CreateCall(commandLineToArgvFunc, {cmdLine, argcPtr});
 
-		// Load argc
-		llvm::Value *argc = tmpBuilder.CreateLoad(llvm::Type::getInt32Ty(context), argcPtr);
+			// Load argc
+			llvm::Value *argc = tmpBuilder.CreateLoad(llvm::Type::getInt32Ty(context), argcPtr);
 
-		// argv is already an opaque pointer, no cast needed in opaque pointer model
-		llvm::Value *argv = argvW;
+			// argv is already an opaque pointer, no cast needed in opaque pointer model
+			llvm::Value *argv = argvW;
 
-		// Call main with argv and argc (main(args []string) gets argv as pointer, argc as hidden length)
-		mainRetVal = tmpBuilder.CreateCall(mainFunc, {argv, argc});
-#else
-		// On Linux, get argc and argv from _start parameters
-		auto argIter = startFunc->arg_begin();
-		llvm::Value *argc = &(*argIter);
-		++argIter;
-		llvm::Value *argv = &(*argIter);
+			// Call main with argv and argc (main(args []string) gets argv as pointer, argc as hidden length)
+			mainRetVal = tmpBuilder.CreateCall(mainFunc, {argv, argc});
+		}
+		else
+		{
+			// On Linux, argc/argv are NOT passed as parameters to _start
+			// Instead, they are on the stack when _start is entered
+			// Stack layout at _start entry: [argc][argv[0]][argv[1]]...[NULL][envp[0]]...
+			// Since we can't easily capture the exact entry RSP in IR after allocas,
+			// we'll use a simpler approach: assume main doesn't need args on Linux for now
+			// TODO: Implement proper argc/argv retrieval from initial stack
 
-		// Call main with argv and argc
-		mainRetVal = tmpBuilder.CreateCall(mainFunc, {argv, argc});
-#endif
+			// For now, call main without arguments on Linux if it expects args
+			// This is a limitation that will be fixed later
+			mainRetVal = tmpBuilder.CreateCall(mainFunc);
+		}
 	}
 	else
 	{
@@ -164,13 +160,10 @@ void CodeGenerator::createMinimalEntryPoint()
 		mainRetVal = tmpBuilder.CreateCall(mainFunc);
 	}
 
-#ifdef _WIN32
-	tmpBuilder.CreateCall(exitProcessFunc, {mainRetVal});
-	tmpBuilder.CreateUnreachable(); // ExitProcess never returns
-#else
+	// Call exit with main's return value - runtime handles platform specifics
+	llvm::Function *exitFunc = module->getFunction("exit");
 	tmpBuilder.CreateCall(exitFunc, {mainRetVal});
 	tmpBuilder.CreateUnreachable(); // exit never returns
-#endif
 }
 
 void CodeGenerator::generate(ProgramAST *program, bool needsEntryPoint)

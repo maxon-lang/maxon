@@ -9,7 +9,7 @@ category: interop
 
 ## Developer Notes
 
-The `extern` keyword declares functions that are defined outside the Maxon program (typically in Windows API or C libraries).
+The `extern` keyword declares functions that are defined outside the Maxon program (typically in system libraries or C libraries).
 
 Implementation:
 - Parsed in `Parser::parseExternFunction()`
@@ -18,13 +18,13 @@ Implementation:
 - Code generation creates LLVM `declare` statement
 - Calling convention defaults to C calling convention
 - No name mangling applied to extern functions
-- Common use: Windows API functions (GetStdHandle, WriteFile, etc.)
+- Common use: System APIs and C library functions
 
 The compiler assumes extern functions exist at link time. The linker resolves them against system libraries or maxon-runtime.
 
 ## Documentation
 
-The `extern` keyword declares functions defined outside your Maxon code, such as Windows API functions.
+The `extern` keyword declares functions defined outside your Maxon code, such as system APIs or C library functions.
 
 ### Syntax
 
@@ -59,26 +59,5 @@ end 'main'
 ```
 ```exitcode
 0
-```
-
-
-<!-- test: windows-api -->
-```maxon
-extern function GetStdHandle(handle int) ptr
-extern function WriteFile(hFile ptr, buffer ptr, nBytes int, written ptr, overlapped ptr) int
-
-function main() int
-    let stdout = GetStdHandle(-11)
-    var written = 0
-    var text = "Test"
-    WriteFile(stdout, text, 4, &written, 0 as ptr)
-    return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-Test
 ```
 

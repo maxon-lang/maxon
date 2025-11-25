@@ -18,7 +18,7 @@ Implementation:
 - Stored as LLVM global constant array
 - Supports escape sequences: `\n`, `\t`, `\\`, `\"`
 - Null-terminated automatically
-- Used primarily with extern functions (WriteFile, etc.)
+- Used with extern functions and as data
 
 The string literal is converted to LLVM `[N x i8]` constant and referenced via `getelementptr`.
 
@@ -44,71 +44,3 @@ var message = "Hello, World!"
     var msg = "Hello!\n"
 ```
 ## Tests
-
-<!-- test: simple -->
-```maxon
-extern function GetStdHandle(nStdHandle int) ptr
-extern function WriteFile(hFile ptr, lpBuffer ptr, nNumberOfBytesToWrite int, lpNumberOfBytesWritten ptr, lpOverlapped ptr) int
-
-function main() int
-    let stdoutHandle = 0 - 11
-    let stdout = GetStdHandle(stdoutHandle)
-    var message = "Hello!"
-    var written = 0
-    
-    WriteFile(stdout, message, 6, &written, 0 as ptr)
-    return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-Hello!
-```
-
-
-<!-- test: with-escapes -->
-```maxon
-extern function GetStdHandle(nStdHandle int) ptr
-extern function WriteFile(hFile ptr, lpBuffer ptr, nBytes int, written ptr, overlapped ptr) int
-
-function main() int
-    let stdout = GetStdHandle(-11)
-    var written = 0
-    var msg = "Line1\nLine2\tTabbed\n"
-    WriteFile(stdout, msg, 19, &written, 0 as ptr)
-    return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-Line1
-Line2	Tabbed
-```
-
-
-<!-- test: multiple -->
-```maxon
-extern function GetStdHandle(nStdHandle int) ptr
-extern function WriteFile(hFile ptr, lpBuffer ptr, nBytes int, written ptr, overlapped ptr) int
-
-function main() int
-    let stdout = GetStdHandle(-11)
-    var written = 0
-    var msg1 = "Hello "
-    var msg2 = "World!"
-    WriteFile(stdout, msg1, 6, &written, 0 as ptr)
-    WriteFile(stdout, msg2, 6, &written, 0 as ptr)
-    return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-Hello World!
-```
-

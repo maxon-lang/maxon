@@ -82,9 +82,7 @@ Add handler in `LspServer`, register in `JsonRpcHandler`, implement in `Analyzer
 - `maxon` (or `maxon.exe` on Windows) is in `bin/` directory
 
 ## Runtime Library
-- `maxon-runtime/runtime.obj` provides functions for LLVM intrinsics (e.g., `llvm.memset` → `memset`)
-- Auto-linked with all programs
-- Add functions in `runtime.ll`, then `make runtime`
+- see maxon-runtime/README.md
 - After build it is copied to 'bin' folder so maxon.exe can find it
 - NEVER resort to calling the c runtime library, we do not use it!
 

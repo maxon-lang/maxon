@@ -37,8 +37,13 @@ LSP_SERVER_BIN = bin/maxon-lsp-server$(EXE_EXT)
 LSP_SERVER_BACKUP = $(LSP_SERVER_BIN).old
 
 RUNTIME_LL = maxon-runtime/runtime.ll
-RUNTIME_OBJ = bin/runtime$(OBJ_EXT)
-STUBS_OBJ = bin/stubs$(OBJ_EXT)
+RUNTIME_OBJ_WINDOWS = bin/runtime-windows.obj
+RUNTIME_OBJ_LINUX = bin/runtime-linux.o
+ifeq ($(PLATFORM),windows)
+    RUNTIME_OBJ = $(RUNTIME_OBJ_WINDOWS)
+else
+    RUNTIME_OBJ = $(RUNTIME_OBJ_LINUX)
+endif
 
 .PHONY: all clean clean-llvm clean-all compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test-build debugger-test llvm check-diasdk
 
@@ -110,24 +115,24 @@ help:
 	@echo "  help             - Show this help message"
 
 # Build Maxon runtime library
-runtime: $(RUNTIME_OBJ) $(STUBS_OBJ)
+runtime: $(RUNTIME_OBJ)
+	@echo "Maxon runtime library ready."
 
-# Generate platform-specific runtime.ll from template
-bin/runtime-platform.ll: maxon-runtime/runtime.ll.in
+# Build Windows runtime
+$(RUNTIME_OBJ_WINDOWS): maxon-runtime/runtime.ll maxon-runtime/platform_windows.ll
 	@mkdir -p bin
-ifeq ($(PLATFORM),windows)
-	@sed 's/@TARGET_TRIPLE@/x86_64-pc-windows-msvc/g; s/@FLTUSED@/; _fltused - Windows floating-point support symbol\n; Required when using floating-point operations on Windows\n@_fltused = constant i32 39029/g' maxon-runtime/runtime.ll.in > bin/runtime-platform.ll
-else
-	@sed 's/@TARGET_TRIPLE@/x86_64-pc-linux-gnu/g; s/@FLTUSED@//g' maxon-runtime/runtime.ll.in > bin/runtime-platform.ll
-endif
+	@cat maxon-runtime/platform_windows.ll maxon-runtime/runtime.ll > bin/runtime-windows.tmp
+	@echo "Building Maxon runtime library for Windows..."
+	@$(LLC) -filetype=obj -o $(RUNTIME_OBJ_WINDOWS) bin/runtime-windows.tmp >/dev/null 2>&1
+	@rm bin/runtime-windows.tmp
 
-$(RUNTIME_OBJ): bin/runtime-platform.ll
-	@echo "Building Maxon runtime library..."
-	@$(LLC) -filetype=obj -o $(RUNTIME_OBJ) bin/runtime-platform.ll >/dev/null 2>&1
-
-$(STUBS_OBJ): maxon-runtime/stubs.cpp
-	@echo "Building runtime stubs..."
-	@$(CXX) -c -o $(STUBS_OBJ) maxon-runtime/stubs.cpp
+# Build Linux runtime
+$(RUNTIME_OBJ_LINUX): maxon-runtime/runtime.ll maxon-runtime/platform_linux.ll
+	@mkdir -p bin
+	@cat maxon-runtime/platform_linux.ll maxon-runtime/runtime.ll > bin/runtime-linux.tmp
+	@echo "Building Maxon runtime library for Linux..."
+	@$(LLC) -filetype=obj -o $(RUNTIME_OBJ_LINUX) bin/runtime-linux.tmp >/dev/null 2>&1
+	@rm bin/runtime-linux.tmp
 
 # Configure CMake
 configure:

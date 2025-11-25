@@ -124,6 +124,10 @@ void CodeGenerator::generateFunction(FunctionAST* func, const std::string& names
         debugScopeStack.pop_back();
     }
     
+    // Ensure stack alignment for all functions to prevent segfaults with SSE instructions
+    // x86-64 ABI requires 16-byte alignment, but LLVM's fastcc doesn't guarantee this
+    function->addFnAttr("stackrealign");
+
     // Check if this function calls memset and add no-builtin attribute if needed
     llvm::Function* memsetFunc = module->getFunction("memset");
     if (memsetFunc) {

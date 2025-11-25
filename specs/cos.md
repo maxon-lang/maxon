@@ -12,7 +12,7 @@ The `cos` function is implemented as a **runtime function** rather than an LLVM 
 **Implementation Details:**
 - Keyword category: `MathIntrinsic` (lexer.cpp:45)
 - Intrinsic kind: `MathIntrinsicKind::RuntimeFunction`
-- Links to external `cos` function from `maxon-runtime/runtime.obj`
+- Links to external `cos` function from `maxon-runtime`
 - Codegen: Uses `getRuntimeFunction()` to declare/link the runtime function (codegen.cpp:1115-1117)
 - The runtime function has signature: `double cos(double)`
 

@@ -9,13 +9,14 @@ category: stdlib
 
 ## Developer Notes
 
-The `print()` function is a built-in stdlib function that outputs integer values to stdout.
+The `print()` function is a stdlib function that outputs integer values to stdout.
 
 Implementation:
 - Defined in `stdlib/sys/print.maxon`
 - Auto-discovered by compiler when referenced
-- Converts int to string using `format_int_array()`
-- Writes to stdout using Windows API `WriteFile()`
+- Uses `format_int_array()` from `stdlib/fmt/integer.maxon` to convert int to string
+- Writes to stdout using `write_stdout()` from `maxon-runtime`
+- `write_stdout()` is platform-specific: POSIX write() on Linux, WriteFile API on Windows
 - Automatically adds newline after each value
 - Part of the standard library, not a language keyword
 

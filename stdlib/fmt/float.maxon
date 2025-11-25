@@ -29,8 +29,13 @@ export function format_float_array(value float, buffer []char, precision int) in
         work_value = -value
     end 'negative_check'
     
+    // Rounding: add 0.5 * 10^-precision
+    var rounding = 0.5 * pow(10.0, -(precision as float))
+    work_value = work_value + rounding
+
     // Extract integer part
     var int_part = trunc(work_value)
+    var frac_part = work_value - int_part
     
     // Format integer part (similar to format_int_array)
     var temp = [20]char
@@ -64,19 +69,15 @@ export function format_float_array(value float, buffer []char, precision int) in
     buffer[pos] = '.' as char
     pos = pos + 1
     
-    // Extract and format fractional part
-    var frac_part = work_value - int_part
-    var scale = pow(10.0, precision as float)
-    var frac_scaled = trunc(frac_part * scale + 0.5)  // Round
-    
-    // Convert fractional digits to string (need to pad with zeros)
-    var j = precision - 1
-    while j >= 0 'convert_frac'
-        var digit = frac_scaled % 10
+    // Convert fractional digits one by one
+    var j = 0
+    while j < precision 'convert_frac'
+        frac_part = frac_part * 10.0
+        var digit = trunc(frac_part)
         var digit_char = ('0' as int) + digit
         buffer[pos + j] = digit_char as char
-        frac_scaled = frac_scaled / 10
-        j = j - 1
+        frac_part = frac_part - (digit as float)
+        j = j + 1
     end 'convert_frac'
     
     pos = pos + precision

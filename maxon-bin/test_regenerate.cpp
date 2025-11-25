@@ -29,6 +29,7 @@
 #include <windows.h>
 #else
 #include <unistd.h>
+#include <sys/wait.h>
 #endif
 
 // Structure to hold spec manifest data
@@ -658,7 +659,7 @@ int extractSpecFragments(int verboseLevel)
 // Helper function to regenerate a single fragment
 // Returns: 0 = success, 1 = compile error (expected), 2 = unexpected error
 static int regenerateSingleFragment(const std::string &testPath, const std::string &testName,
-									std::string &statusMsg, int workerId = 0)
+									std::string &statusMsg, int workerId = 0, int verboseLevel = 0)
 {
 	std::ifstream inFile(testPath);
 	if (!inFile)
@@ -863,6 +864,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		cmdLine += " > \"" + tempOutput + "\" 2>&1";
 
 		int exitCode = executeWithTimeout(cmdLine, 5);
+
 		if (exitCode == -1)
 		{
 			statusMsg = "TIMEOUT: Test execution exceeded 5 seconds (optimized)";
@@ -903,6 +905,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		std::string debugIR;
 		std::ifstream debugIRFile;
 		compileProgram(debugOpts);
+
 		debugIRFile.open(tempDebugLL);
 		if (debugIRFile)
 		{
@@ -930,6 +933,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		debugCmdLine += " > \"" + tempOutput + "\" 2>&1";
 
 		exitCode = executeWithTimeout(debugCmdLine, 5);
+
 		if (exitCode == -1)
 		{
 			statusMsg = "TIMEOUT: Test execution exceeded 5 seconds (debug)";
@@ -1027,6 +1031,10 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 	{
 		statusMsg = std::string("ERROR: ") + e.what();
 		// Clean up any temp files that may have been created
+		std::filesystem::path tempDir = "temp";
+		std::string workerSuffix = workerId > 0 ? ("_w" + std::to_string(workerId)) : "";
+		std::string tempOutput = (tempDir / ("maxon_output" + workerSuffix + ".tmp")).string();
+
 		std::filesystem::remove(tempSource);
 		std::filesystem::remove(tempOptLL);
 		std::filesystem::remove(tempOptExe);
@@ -1034,6 +1042,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		std::filesystem::remove(tempDebugLL);
 		std::filesystem::remove(tempDebugExe);
 		std::filesystem::remove(tempDebugPdb);
+		std::filesystem::remove(tempOutput);
 		return 2;
 	}
 }
@@ -1073,7 +1082,7 @@ int regenerateFragmentsSubset(const std::string &outputFile, const std::vector<s
 		}
 
 		std::string statusMsg;
-		int result = regenerateSingleFragment(testPath, testName, statusMsg, workerId);
+		int result = regenerateSingleFragment(testPath, testName, statusMsg, workerId, verboseLevel);
 
 		if (result != 0 && result != 1)
 		{
@@ -1138,11 +1147,11 @@ int regenerateFragments(int verboseLevel)
 			numWorkers = 4;
 		if (numWorkers > 8)
 			numWorkers = numWorkers / 2;
+
 		if (numWorkers > static_cast<unsigned int>(totalTests))
 		{
 			numWorkers = totalTests;
 		}
-
 		std::cout << "Using " << numWorkers << " parallel workers..." << std::endl;
 
 		// Split tests into groups
@@ -1184,7 +1193,11 @@ int regenerateFragments(int verboseLevel)
 
 			// Build command line for child process
 			std::string cmdLine = std::string("\"") + exePath + "\" regen-fragments-subset \"" + outputFiles[i] + "\"";
-			if (verboseLevel >= 1)
+			if (verboseLevel >= 2)
+			{
+				cmdLine += " -vv";
+			}
+			else if (verboseLevel >= 1)
 			{
 				cmdLine += " --verbose";
 			}
@@ -1222,6 +1235,81 @@ int regenerateFragments(int verboseLevel)
 			WaitForSingleObject(processHandles[i], INFINITE);
 			CloseHandle(processes[i].hProcess);
 			CloseHandle(processes[i].hThread);
+		}
+#else
+		// POSIX implementation - fork worker processes
+		std::vector<pid_t> workerPids(numWorkers, -1);
+
+		for (unsigned int i = 0; i < numWorkers; ++i)
+		{
+			if (testGroups[i].empty())
+				continue;
+
+			pid_t pid = fork();
+			if (pid == -1)
+			{
+				std::cerr << "Error: Failed to fork worker process " << i << std::endl;
+				return 1;
+			}
+			else if (pid == 0)
+			{
+				// Child process - execute regen-fragments-subset
+				// Build arguments - need to keep strings alive until execvp
+				std::vector<std::string> argStrings;
+				argStrings.push_back("maxon");
+				argStrings.push_back("regen-fragments-subset");
+				argStrings.push_back(outputFiles[i]);
+
+				if (verboseLevel >= 2)
+				{
+					argStrings.push_back("-vv");
+				}
+				else if (verboseLevel >= 1)
+				{
+					argStrings.push_back("--verbose");
+				}
+
+				// Add test files
+				for (const auto &testFile : testGroups[i])
+				{
+					argStrings.push_back(testFile);
+				}
+
+				// Convert to char* array
+				std::vector<char *> args;
+				for (auto &str : argStrings)
+				{
+					args.push_back(const_cast<char *>(str.c_str()));
+				}
+				args.push_back(nullptr);
+
+				// Execute
+				execvp("maxon", args.data());
+
+				// If execvp returns, it failed
+				std::cerr << "Error: Failed to exec worker process " << i << ": " << strerror(errno) << std::endl;
+				exit(1);
+			}
+			else
+			{
+				// Parent process - store child PID
+				workerPids[i] = pid;
+			}
+		}
+
+		// Wait for all child processes to complete
+		for (unsigned int i = 0; i < numWorkers; ++i)
+		{
+			if (workerPids[i] == -1)
+				continue;
+
+			int status;
+			waitpid(workerPids[i], &status, 0);
+
+			if (WIFEXITED(status) && WEXITSTATUS(status) != 0 && verboseLevel >= 1)
+			{
+				std::cerr << "Warning: Worker " << i << " exited with code " << WEXITSTATUS(status) << std::endl;
+			}
 		}
 #endif
 
@@ -1285,6 +1373,13 @@ int regenerateFragments(int verboseLevel)
 		std::cout << "\nSummary: " << successCount << " succeeded, " << failCount << " failed, "
 				  << totalTests << " total" << std::endl;
 		std::cout << "Elapsed time: " << std::fixed << std::setprecision(2) << seconds << "s" << std::endl;
+
+		// If no fragments were processed (worker processes didn't execute), this is a failure
+		if (successCount == 0 && failCount == 0 && totalTests > 0)
+		{
+			std::cerr << "Error: No fragments were regenerated. This may indicate worker processes failed to run." << std::endl;
+			return 1;
+		}
 
 		return failCount > 0 ? 1 : 0;
 	}

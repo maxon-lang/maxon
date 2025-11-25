@@ -14,8 +14,9 @@ The `print_float()` function outputs float values to stdout with specified preci
 Implementation:
 - Defined in `stdlib/sys/print_float.maxon`
 - Signature: `print_float(value float, precision int) int`
-- Uses `format_float_array()` internally to convert float to string
-- Writes to stdout using Windows API
+- Uses `format_float_array()` from `stdlib/fmt/float.maxon` to convert float to string
+- Writes to stdout using `write_stdout()` from `maxon-runtime`
+- `write_stdout()` is platform-specific: POSIX write() on Linux, WriteFile API on Windows
 - Adds newline after output
 - Auto-discovered by compiler
 

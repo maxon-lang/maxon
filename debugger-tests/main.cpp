@@ -19,7 +19,9 @@ int main(int argc, char *argv[])
 	std::cout << "=================================" << std::endl;
 
 	// Determine paths - go up from bin/ to debugger-tests/
-	fs::path binDir = fs::path(argv[0]).parent_path();
+	// Use absolute + canonical path to properly resolve . and ..
+	fs::path exePath = fs::canonical(fs::absolute(argv[0]));
+	fs::path binDir = exePath.parent_path();
 	fs::path debuggerTestsDir = binDir.parent_path();
 	fs::path testProgramsDir = debuggerTestsDir / "test-programs";
 

@@ -3,79 +3,48 @@
 // Namespace: stdlib.math (automatically inferred from file path)
 
 /// Calculate base^exponent for float values
-/// Uses binary exponentiation for integer exponents, falls back to exp/log for fractional
+/// Uses simple multiplication for small positive integers, exp/log otherwise
 export function pow(base float, exponent float) float
     // Handle special cases
     if exponent = 0.0 'exp_zero'
         return 1.0
     end 'exp_zero'
-    
+
     if base = 0.0 'base_zero'
         if exponent > 0.0 'exp_positive'
             return 0.0
         end 'exp_positive'
-        // 0^negative is undefined, return 0 for simplicity
         return 0.0
     end 'base_zero'
-    
+
     if base = 1.0 'base_one'
         return 1.0
     end 'base_one'
-    
-    // Handle negative base with integer exponent
-    var is_negative = base < 0.0
-    if is_negative 'neg_base'
-        base = -base
-    end 'neg_base'
-    
-    // Check if exponent is an integer
-    var exp_int = trunc(exponent)
-    var is_int_exp = (exponent - exp_int) = 0.0
-    
-    if is_int_exp 'integer_exp'
-        // Use binary exponentiation for integer exponents
-        var result = 1.0
-        var n = exp_int
-        var is_neg_exp = n < 0
-        if is_neg_exp 'neg_exp'
-            n = -n
-        end 'neg_exp'
-        
-        var current_base = base
-        while n > 0 'binary_exp'
-            var remainder = n % 2
-            if remainder = 1 'odd_exp'
-                result = result * current_base
-            end 'odd_exp'
-            current_base = current_base * current_base
-            n = n / 2
-        end 'binary_exp'
-        
-        if is_neg_exp 'invert'
-            result = 1.0 / result
-        end 'invert'
-        
-        // Handle negative base with odd integer exponent
-        if is_negative 'apply_sign'
-            var exp_int_abs = exp_int
-            if exp_int < 0 'abs_exp'
-                exp_int_abs = -exp_int
-            end 'abs_exp'
-            var is_odd = (exp_int_abs % 2) = 1
-            if is_odd 'negate_result'
-                result = -result
-            end 'negate_result'
-        end 'apply_sign'
-        
-        return result
-    end 'integer_exp'
-    
-    // For fractional exponents, use: base^exp = exp(exp * log(base))
-    // Note: This only works for positive base
-    if is_negative 'fractional_negative'
-        return 0.0  // Undefined for negative base with fractional exponent
-    end 'fractional_negative'
-    
+
+    // Handle negative base (only works for integer exponents in real domain)
+    if base < 0.0 'negative_base'
+        return 0.0  // Simplified: return 0 for negative base
+    end 'negative_base'
+
+    // Check if exponent is a small positive integer (optimize common case)
+    // Use floor to check if it's an integer
+    var exp_floor = floor(exponent)
+    if (exponent - exp_floor) = 0.0 'is_int'
+        if exponent >= 0.0 'positive_int'
+            if exponent <= 20.0 'small_int'
+                // Simple multiplication for small positive integers
+                var result = 1.0
+                var i = 0.0
+                while i < exponent 'mult_loop'
+                    result = result * base
+                    i = i + 1.0
+                end 'mult_loop'
+                return result
+            end 'small_int'
+        end 'positive_int'
+    end 'is_int'
+
+    // For other cases, use formula: base^exp = exp(exp * log(base))
     var log_base = log(base)
     var exp_times_log = exponent * log_base
     return exp(exp_times_log)

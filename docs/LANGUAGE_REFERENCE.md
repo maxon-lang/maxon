@@ -515,10 +515,10 @@ exp(x float) float              // e^x
 log(x float) float              // Natural logarithm
 log2(x float) float             // Base-2 logarithm
 log10(x float) float            // Base-10 logarithm
-floor(x float) float            // Round down
-ceil(x float) float             // Round up
-round(x float) float            // Round to nearest
-trunc(x float) float            // Truncate decimal
+floor(x float) int              // Round down
+ceil(x float) int               // Round up
+round(x float) int              // Round to nearest
+trunc(x float) int              // Truncate toward zero
 ```
 
 **Formatting Functions**
@@ -575,7 +575,7 @@ Located in `stdlib/` directory:
 - LLVM optimization passes (inline, DCE, etc.)
 
 ### Runtime Library
-- Located in `maxon-runtime/runtime.obj`
+- Located in `maxon-runtime/runtime-windows.obj` or `maxon-runtime/runtime-linux.o`
 - Provides implementations for LLVM intrinsics
 - Auto-linked with all programs
 - No C runtime dependency

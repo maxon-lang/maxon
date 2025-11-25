@@ -1,0 +1,26 @@
+// stdlib/sys/print.maxon
+// Integer printing function
+// Namespace: stdlib.sys
+
+/// Print an integer to stdout with a newline
+/// Returns 0 on success
+
+export function print(value int) int
+    // Allocate buffer for integer formatting (12 bytes max for -2147483648)
+    var buffer = [12]char
+    
+    // Format the integer into the buffer
+    var length = format_int_array(value, buffer)
+    
+    // Write the formatted integer to stdout
+    var result = write_stdout(buffer as ptr, length as int)
+    
+    // Write newline (only if first write succeeded)
+    if result >= 0 'write_newline'
+        var newline = [1]char
+        newline[0] = 10 as char
+        result = write_stdout(newline as ptr, 1)
+    end 'write_newline'
+    
+    return result
+end 'print'

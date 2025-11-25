@@ -310,7 +310,13 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 #endif
 	size_t lastSlash = execPath.find_last_of("\\/");
 	std::string execDir = (lastSlash != std::string::npos) ? execPath.substr(0, lastSlash) : ".";
-	std::string runtimeObj = execDir + "/runtime" + runtimeExt;
+
+	// Use platform-specific runtime file
+#ifdef _WIN32
+	std::string runtimeObj = execDir + "/runtime-windows.obj";
+#else
+	std::string runtimeObj = execDir + "/runtime-linux.o";
+#endif
 
 	// Check if runtime object exists
 	if (llvm::sys::fs::exists(runtimeObj))
@@ -326,20 +332,8 @@ void CodeGenerator::writeExecutable(const std::string &exeFile, llvm::raw_ostrea
 		std::cout << "  Warning: Maxon runtime library not found at " << runtimeObj << std::endl;
 	}
 
-	// Link runtime stubs (math functions for LLVM intrinsic lowering)
-	std::string stubsObj = execDir + "/stubs" + runtimeExt;
-	if (llvm::sys::fs::exists(stubsObj))
-	{
-		argStorage.push_back(stubsObj);
-		if (verboseLevel >= 2)
-		{
-			std::cout << "  Linking with runtime stubs: " << stubsObj << std::endl;
-		}
-	}
-	else if (verboseLevel >= 2)
-	{
-		std::cout << "  Warning: Runtime stubs not found at " << stubsObj << std::endl;
-	}
+	// Note: Runtime library now includes all stubs (malloc, free, fmod, etc.)
+	// No separate stubs.obj needed anymore
 
 #ifdef _WIN32
 	// Explicitly link required Windows libraries

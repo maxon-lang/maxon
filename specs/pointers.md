@@ -22,7 +22,7 @@ Implementation:
 
 Common patterns:
 - Getting address of local variable: `&variable`
-- Passing to extern functions: `WriteFile(stdout, &written, ...)`
+- Passing to extern functions
 - String literals are `ptr` type
 
 ## Documentation
@@ -90,20 +90,3 @@ end 'main'
 ```exitcode
 0
 ```
-
-
-<!-- test: with-extern -->
-```maxon
-extern function GetStdHandle(handle int) ptr
-
-function main() int
-    let stdout = GetStdHandle(-11)
-    var result = stdout as int
-    if result > 0 return 1
-    return 0
-end 'main'
-```
-```exitcode
-1
-```
-

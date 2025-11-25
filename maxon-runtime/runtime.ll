@@ -2,12 +2,6 @@
 ; This file contains runtime functions needed by the compiler-generated code
 ; It is compiled once and linked with all Maxon programs
 
-target triple = "x86_64-pc-windows-msvc"
-
-; _fltused - Windows floating-point support symbol
-; Required when using floating-point operations on Windows
-@_fltused = constant i32 39029
-
 ; memset - fill memory with a constant byte value
 ; ptr memset(ptr dest, i32 val, i64 count)
 define ptr @memset(ptr %dest, i32 %val, i64 %count) {
@@ -39,14 +33,6 @@ loop.end:
   ret ptr %dest
 }
 
-; __chkstk - stack probe for large stack allocations
-; This is called by LLVM when allocating large stack arrays
-; Windows requires stack probing to ensure stack pages are committed
-define void @__chkstk() {
-entry:
-  ret void
-}
-
 ; round - round floating point value to nearest integer (half away from zero)
 ; double round(double x)
 ; This is needed because LLVM's llvm.round intrinsic lowers to a library call on Windows
@@ -74,6 +60,41 @@ entry:
   %result2 = select i1 %is_neg_and_round_down, double %sub_one, double %result1
   
   ret double %result2
+}
+
+; floor - round down to nearest integer
+; double floor(double x)
+; Returns the largest integer value not greater than x
+define double @floor(double %x) {
+entry:
+  ; Check for special cases: infinity, NaN, or already an integer
+  %x_bits = bitcast double %x to i64
+  %ix_u64 = lshr i64 %x_bits, 52
+  %exponent = trunc i64 %ix_u64 to i32
+  %exp_only = and i32 %exponent, 2047  ; 0x7ff - mask to get exponent
+  
+  ; If exponent >= 1023+52, the value is >= 2^52, which means it's already an integer
+  ; or it's infinity/NaN
+  %is_large = icmp uge i32 %exp_only, 1075  ; 1023 + 52
+  br i1 %is_large, label %return_x, label %compute_floor
+
+return_x:
+  ret double %x
+
+compute_floor:
+  ; Convert to i64 (truncates toward zero)
+  %x_as_i64 = fptosi double %x to i64
+  %truncated = sitofp i64 %x_as_i64 to double
+  
+  ; For negative numbers, if there was a fractional part, subtract 1
+  %is_negative = fcmp olt double %x, 0.0
+  %has_frac = fcmp one double %x, %truncated
+  %need_adjust = and i1 %is_negative, %has_frac
+  
+  %adjusted = fsub double %truncated, 1.0
+  %result = select i1 %need_adjust, double %adjusted, double %truncated
+  
+  ret double %result
 }
 
 ; sin - sine function with full range reduction
@@ -594,9 +615,3 @@ slow_path:
   store double %y1_slow_final, ptr %y1_ptr_slow
   ret i32 %n_slow
 }
-
-; Future runtime functions can be added here:
-; - memcpy
-; - memcmp
-; - memmove
-; - strlen
