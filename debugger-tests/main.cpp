@@ -1,13 +1,13 @@
 #include "debugger_test.h"
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 
 namespace fs = std::filesystem;
 using namespace DebuggerTest;
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
 	// Disable LLDB's Python scripting to avoid Python dependency issues
 #ifdef _WIN32
 	_putenv("LLDB_DISABLE_PYTHON=1");
@@ -15,8 +15,27 @@ int main(int argc, char *argv[])
 	putenv(const_cast<char *>("LLDB_DISABLE_PYTHON=1"));
 #endif
 
-	std::cout << "Maxon Debugger Integration Tests" << std::endl;
-	std::cout << "=================================" << std::endl;
+	// Parse command line arguments
+	int verboseLevel = 0;
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+			verboseLevel = 1;
+		} else if (strcmp(argv[i], "-vv") == 0) {
+			verboseLevel = 2;
+		} else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+			std::cout << "Usage: " << argv[0] << " [options]" << std::endl;
+			std::cout << "Options:" << std::endl;
+			std::cout << "  -v, --verbose   Enable verbose output" << std::endl;
+			std::cout << "  -vv             Enable extra verbose output" << std::endl;
+			std::cout << "  -h, --help      Show this help message" << std::endl;
+			return 0;
+		}
+	}
+
+	if (verboseLevel >= 1) {
+		std::cout << "Maxon Debugger Integration Tests" << std::endl;
+		std::cout << "=================================" << std::endl;
+	}
 
 	// Determine paths - go up from bin/ to debugger-tests/
 	// Use absolute + canonical path to properly resolve . and ..
@@ -29,6 +48,7 @@ int main(int argc, char *argv[])
 	fs::create_directories(binDir);
 
 	DebuggerTestRunner runner;
+	runner.setVerbose(verboseLevel);
 
 	// Test 1: Simple Variables Test
 	{

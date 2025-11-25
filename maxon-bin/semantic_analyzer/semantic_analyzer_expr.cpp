@@ -298,6 +298,10 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				addError("Undefined function: '" + callExpr->callee + "'" +
 							 std::string("\n  Note: Function must be defined before it can be called"),
 						 expr->line, expr->column);
+				// Still analyze arguments to mark variables as used
+				for (auto &arg : callExpr->args) {
+					analyzeExpression(arg.get());
+				}
 				return "error";
 			} else if (matches.size() > 1) {
 				// Ambiguous call
@@ -308,6 +312,10 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				}
 				errorMsg += "\n  Use a qualified name to disambiguate (e.g., namespace.function)";
 				addError(errorMsg, expr->line, expr->column);
+				// Still analyze arguments to mark variables as used
+				for (auto &arg : callExpr->args) {
+					analyzeExpression(arg.get());
+				}
 				return "error";
 			}
 
@@ -323,6 +331,10 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			addError("Undefined function: '" + callExpr->callee + "'" +
 						 std::string("\n  Note: Function must be defined before it can be called"),
 					 expr->line, expr->column);
+			// Still analyze arguments to mark variables as used
+			for (auto &arg : callExpr->args) {
+				analyzeExpression(arg.get());
+			}
 			return "error";
 		}
 

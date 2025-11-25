@@ -88,6 +88,7 @@ target_link_libraries(maxon-lsp-server ${llvm_libs} ${lld_libs})
 # Compiler flags for Clang
 target_compile_options(maxon-lsp-server PRIVATE
     -Wall
+    -Werror
     -Wno-unused-parameter
     -Wno-sign-compare
 )

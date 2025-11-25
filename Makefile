@@ -14,6 +14,7 @@ endif
 
 # LLVM paths (use local llvm-project on both platforms)
 LLVM_DIR ?= ./llvm-project
+LLVM_DIR_ABS := $(shell realpath $(LLVM_DIR) 2>/dev/null || echo $(LLVM_DIR))
 ifeq ($(PLATFORM),linux)
     CC = "$(LLVM_DIR_ABS)/bin/clang$(EXE_EXT)"
     CXX = "$(LLVM_DIR_ABS)/bin/clang++$(EXE_EXT)"
@@ -23,7 +24,6 @@ else
     CXX = "$(LLVM_DIR_ABS)/bin/clang++$(EXE_EXT)"
     LLC = "$(LLVM_DIR_ABS)/bin/llc$(EXE_EXT)"
 endif
-LLVM_DIR_ABS := $(shell realpath $(LLVM_DIR) 2>/dev/null || echo $(LLVM_DIR))
 BUILD_DIR = build
 CMAKE_GENERATOR = "Ninja"
 

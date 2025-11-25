@@ -120,7 +120,7 @@ bool WindowsDebugger::waitForStop(int timeoutSeconds) {
 bool WindowsDebugger::handleDebugEvent() {
 	switch (debugEvent_.dwDebugEventCode) {
 	case CREATE_PROCESS_DEBUG_EVENT: {
-		std::cout << "  Process created" << std::endl;
+		// Process created - symbols will be loaded next
 
 		// Load symbols for the main executable
 		DWORD64 baseAddress = (DWORD64)debugEvent_.u.CreateProcessInfo.lpBaseOfImage;
@@ -134,20 +134,14 @@ bool WindowsDebugger::handleDebugEvent() {
 			nullptr,
 			0);
 
-		if (moduleBaseAddress_ == 0) {
-			std::cout << "  Warning: Failed to load symbols: " << GetLastError() << std::endl;
-		} else {
-			std::cout << "  Loaded symbols at base 0x" << std::hex << moduleBaseAddress_ << std::dec << std::endl;
-		}
+		// Symbol loading is silent - errors will show up later if breakpoints fail
 
 		CloseHandle(debugEvent_.u.CreateProcessInfo.hFile);
 
 		// Set breakpoints now that symbols are loaded
 		for (auto &bp : breakpoints_) {
 			if (!bp.enabled && findAddressForLine(bp.sourceFile, bp.lineNumber, bp.address)) {
-				if (setBreakpointAtAddress(bp.address, bp)) {
-					std::cout << "  Set breakpoint at line " << bp.lineNumber << std::endl;
-				}
+				setBreakpointAtAddress(bp.address, bp);
 			}
 		}
 
@@ -166,7 +160,7 @@ bool WindowsDebugger::handleDebugEvent() {
 		break;
 
 	case EXIT_PROCESS_DEBUG_EVENT:
-		std::cout << "  Process exited with code " << debugEvent_.u.ExitProcess.dwExitCode << std::endl;
+		// Process exited silently
 		isDebugging_ = false;
 		isStopped_ = false;
 		continueDebugEvent(DBG_CONTINUE);
@@ -185,14 +179,14 @@ bool WindowsDebugger::handleDebugEvent() {
 	return true;
 }
 
-bool WindowsDebugger::findAddressForLine(const std::string &sourceFile, int lineNumber, DWORD64 &outAddress) {
+bool WindowsDebugger::findAddressForLine(const std::string &sourceFile, [[maybe_unused]] int lineNumber, [[maybe_unused]] DWORD64 &outAddress) {
 	// Use SymEnumLines to find address for source line
 	// This is a simplified implementation - full version would enumerate all lines
 	// For now, we'll store breakpoints and resolve them when we hit any breakpoint
 
 	// Extract just the filename from the path
 	size_t lastSlash = sourceFile.find_last_of("/\\");
-	std::string fileName = (lastSlash != std::string::npos) ? sourceFile.substr(lastSlash + 1) : sourceFile;
+	[[maybe_unused]] std::string fileName = (lastSlash != std::string::npos) ? sourceFile.substr(lastSlash + 1) : sourceFile;
 
 	// We need to enumerate symbols and find the line
 	// For now, return false and we'll handle breakpoints differently
@@ -243,7 +237,7 @@ void WindowsDebugger::kill() {
 	}
 }
 
-bool WindowsDebugger::selectThread(int threadIndex) {
+bool WindowsDebugger::selectThread([[maybe_unused]] int threadIndex) {
 	// Simplified - just use current thread
 	return currentThread_ != nullptr;
 }
@@ -261,20 +255,16 @@ int WindowsDebugger::getCurrentLine() {
 	// Get instruction pointer from context
 	DWORD64 pc = threadContext_.Rip;
 
-	std::cout << "    Debug: PC = 0x" << std::hex << pc << std::dec << std::endl;
-
 	// Use SymGetLineFromAddr64 to get line information
 	IMAGEHLP_LINE64 line{};
 	line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
 	DWORD displacement = 0;
 
 	if (SymGetLineFromAddr64(processInfo_.hProcess, pc, &displacement, &line)) {
-		std::cout << "    Debug: Found line " << line.LineNumber << " in " << line.FileName << std::endl;
 		return line.LineNumber;
 	}
 
 	DWORD err = GetLastError();
-	std::cout << "    Debug: SymGetLineFromAddr64 failed with error " << err << std::endl;
 	lastError_ = "Failed to get line info: " + std::to_string(err);
 	return -1;
 }
@@ -325,7 +315,7 @@ std::string WindowsDebugger::getCurrentFile() {
 	return "";
 }
 
-bool WindowsDebugger::getVariableValue(const std::string &varName, std::string &outValue) {
+bool WindowsDebugger::getVariableValue([[maybe_unused]] const std::string &varName, [[maybe_unused]] std::string &outValue) {
 	// Variable inspection requires walking the stack frame and reading local variables
 	// This is complex and requires parsing debug info structures
 	// For a basic implementation, we'd need to:

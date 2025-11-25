@@ -3,13 +3,18 @@
 #ifdef _WIN32
 
 #include "debugger_interface.h"
+
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
+
+#include <dbghelp.h>
+
 #include <memory>
 #include <string>
 #include <vector>
-#include <dbghelp.h>
 
 namespace DebuggerTest {
 

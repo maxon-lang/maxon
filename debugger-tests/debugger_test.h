@@ -42,10 +42,15 @@ class DebuggerTestRunner {
 	bool runTest(const TestCase &testCase);
 	void printSummary();
 
+	// Control verbosity level (0 = quiet, 1 = normal, 2 = verbose)
+	void setVerbose(int level) { verboseLevel_ = level; }
+	int getVerbose() const { return verboseLevel_; }
+
   private:
 	int testsRun = 0;
 	int testsPassed = 0;
 	int testsFailed = 0;
+	int verboseLevel_ = 0; // Default to quiet
 
 	bool compileTestProgram(const std::string &sourceFile, const std::string &outputExe);
 };

@@ -13,6 +13,9 @@ fi
 # Maxon executable
 MAXON="bin/maxon${EXE_EXT}"
 
+# LLVM directory (convert to absolute path)
+LLVM_DIR_ABS="$(cd "${LLVM_DIR:-./llvm-project}" && pwd)"
+
 # Colors
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
@@ -50,9 +53,9 @@ echo -e "${YELLOW}------------------------------------------------------------${
 mkdir -p lsp-server/tests/build
 pushd lsp-server/tests/build > /dev/null
 if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then
-	cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR:-./llvm-project}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR:-./llvm-project}/bin/clang++${EXE_EXT}" -DCMAKE_RC_COMPILER="C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe" -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR="${LLVM_DIR:-./llvm-project}" 2>&1 >/dev/null
+	cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR_ABS}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR_ABS}/bin/clang++${EXE_EXT}" -DCMAKE_RC_COMPILER="C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe" -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR="${LLVM_DIR_ABS}" 2>&1 >/dev/null
 else
-	cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR:-./llvm-project}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR:-./llvm-project}/bin/clang++${EXE_EXT}" -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR="${LLVM_DIR:-./llvm-project}" 2>&1 >/dev/null
+	cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR_ABS}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR_ABS}/bin/clang++${EXE_EXT}" -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR="${LLVM_DIR_ABS}" 2>&1 >/dev/null
 fi
 cmake --build . 2>&1 >/dev/null
 ctest --output-on-failure

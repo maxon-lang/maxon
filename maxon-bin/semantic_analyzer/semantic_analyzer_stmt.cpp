@@ -232,6 +232,9 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 
 		// Exit nested block scope
 		blockIdStack.pop_back();
+
+		// Check for unused variables before exiting scope
+		checkUnusedVariables();
 		exitScope();
 
 		// Analyze else block
@@ -247,6 +250,9 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 
 			// Exit nested block scope
 			blockIdStack.pop_back();
+
+			// Check for unused variables before exiting scope
+			checkUnusedVariables();
 			exitScope();
 		}
 
@@ -278,6 +284,9 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 
 		// Exit nested block scope
 		blockIdStack.pop_back();
+
+		// Check for unused variables before exiting scope
+		checkUnusedVariables();
 
 		// Exit loop scope
 		exitScope();
@@ -324,6 +333,9 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 
 		// Exit nested block scope
 		blockIdStack.pop_back();
+
+		// Check for unused variables before exiting scope
+		checkUnusedVariables();
 
 		// Exit loop scope
 		exitScope();

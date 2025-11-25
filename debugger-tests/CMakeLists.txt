@@ -103,4 +103,11 @@ if(WIN32)
     )
 endif()
 
+# Compiler warnings (treat warnings as errors)
+if(MSVC)
+    target_compile_options(debugger-test-runner PRIVATE /W4 /WX)
+else()
+    target_compile_options(debugger-test-runner PRIVATE -Wall -Wextra -Werror)
+endif()
+
 message(STATUS "Debugger test runner will be built")
