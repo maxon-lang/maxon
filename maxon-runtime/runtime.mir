@@ -1,0 +1,622 @@
+; Maxon Runtime Library - Core Functions
+; Textual MIR format (similar to LLVM IR)
+; This file contains platform-independent runtime functions
+
+;==============================================================================
+; memset - fill memory with a constant byte value
+; ptr memset(ptr dest, i32 val, i64 count)
+;==============================================================================
+define ptr @memset(ptr %dest, i32 %val, i64 %count) {
+entry:
+    ; Convert value to i8
+    %byteVal = trunc i32 %val to i8
+    ; Allocate loop counter
+    %i = alloca i64
+    store i64 0, ptr %i
+    br label %loop.cond
+
+loop.cond:
+    %iVal = load i64, ptr %i
+    %cond = icmp ult i64 %iVal, %count
+    br i1 %cond, label %loop.body, label %loop.end
+
+loop.body:
+    ; Calculate pointer: dest + i
+    %ptr = getelementptr i8, ptr %dest, i64 %iVal
+    ; Store byte
+    store i8 %byteVal, ptr %ptr
+    ; Increment counter
+    %iNext = add i64 %iVal, 1
+    store i64 %iNext, ptr %i
+    br label %loop.cond
+
+loop.end:
+    ret ptr %dest
+}
+
+;==============================================================================
+; round - round to nearest integer (half away from zero)
+; double round(double x)
+;==============================================================================
+define f64 @round(f64 %x) {
+entry:
+    ; Truncate to integer and back to get integer part
+    %x_as_i64 = fptosi f64 %x to i64
+    %truncated = sitofp i64 %x_as_i64 to f64
+    
+    ; Get fractional part
+    %frac = fsub f64 %x, %truncated
+    
+    ; Check if we need to round up or down
+    %is_pos_round_up = fcmp oge f64 %frac, 0.5
+    %is_neg_round_down = fcmp ole f64 %frac, -0.5
+    
+    ; Compute adjusted values
+    %add_one = fadd f64 %truncated, 1.0
+    %sub_one = fsub f64 %truncated, 1.0
+    
+    ; Select result based on conditions
+    br i1 %is_pos_round_up, label %round_up, label %check_neg
+
+round_up:
+    ret f64 %add_one
+
+check_neg:
+    br i1 %is_neg_round_down, label %round_down, label %no_adjust
+
+round_down:
+    ret f64 %sub_one
+
+no_adjust:
+    ret f64 %truncated
+}
+
+;==============================================================================
+; floor - round down to nearest integer
+; double floor(double x)
+;==============================================================================
+define f64 @floor(f64 %x) {
+entry:
+    ; Check for special cases using bit manipulation
+    %x_bits = bitcast f64 %x to i64
+    %ix_u64 = lshr i64 %x_bits, 52
+    %exponent = trunc i64 %ix_u64 to i32
+    %exp_only = and i32 %exponent, 2047
+    
+    ; If exponent >= 1075 (1023 + 52), already an integer or inf/nan
+    %is_large = icmp uge i32 %exp_only, 1075
+    br i1 %is_large, label %return_x, label %compute_floor
+
+return_x:
+    ret f64 %x
+
+compute_floor:
+    ; Truncate toward zero
+    %x_as_i64 = fptosi f64 %x to i64
+    %truncated = sitofp i64 %x_as_i64 to f64
+    
+    ; For negative numbers with fractional part, subtract 1
+    %is_negative = fcmp olt f64 %x, 0.0
+    %has_frac = fcmp one f64 %x, %truncated
+    %need_adjust = and i1 %is_negative, %has_frac
+    br i1 %need_adjust, label %adjust, label %no_adjust
+
+adjust:
+    %adjusted = fsub f64 %truncated, 1.0
+    ret f64 %adjusted
+
+no_adjust:
+    ret f64 %truncated
+}
+
+;==============================================================================
+; ceil - round up to nearest integer
+; double ceil(double x)
+;==============================================================================
+define f64 @ceil(f64 %x) {
+entry:
+    ; Truncate toward zero
+    %x_as_i64 = fptosi f64 %x to i64
+    %truncated = sitofp i64 %x_as_i64 to f64
+    
+    ; For positive numbers with fractional part, add 1
+    %is_positive = fcmp ogt f64 %x, 0.0
+    %has_frac = fcmp one f64 %x, %truncated
+    %need_adjust = and i1 %is_positive, %has_frac
+    br i1 %need_adjust, label %adjust, label %no_adjust
+
+adjust:
+    %adjusted = fadd f64 %truncated, 1.0
+    ret f64 %adjusted
+
+no_adjust:
+    ret f64 %truncated
+}
+
+;==============================================================================
+; trunc - truncate toward zero
+; double trunc(double x)
+;==============================================================================
+define f64 @trunc(f64 %x) {
+entry:
+    %x_as_i64 = fptosi f64 %x to i64
+    %result = sitofp i64 %x_as_i64 to f64
+    ret f64 %result
+}
+
+;==============================================================================
+; __sin_kernel - kernel sin for [-pi/4, pi/4]
+; double __sin_kernel(double x, double y)
+;==============================================================================
+define f64 @__sin_kernel(f64 %x, f64 %y) {
+entry:
+    ; Polynomial coefficients (hardcoded)
+    ; S1 = -1.66666666666666324348e-01
+    ; S2 = 8.33333333332248946124e-03
+    ; S3 = -1.98412698298579493134e-04
+    ; S4 = 2.75573137070700676789e-06
+    ; S5 = -2.50507602534068634195e-08
+    ; S6 = 1.58969099521155010221e-10
+    
+    ; z = x * x
+    %z = fmul f64 %x, %x
+    ; w = z * z
+    %w = fmul f64 %z, %z
+    
+    ; r = S2 + z*(S3 + z*S4) + z*w*(S5 + z*S6)
+    %t1 = fmul f64 %z, 1.58969099521155010221e-10
+    %t2 = fadd f64 -2.50507602534068634195e-08, %t1
+    %t3 = fmul f64 %z, %t2
+    %t4 = fmul f64 %w, %t3
+    
+    %t5 = fmul f64 %z, 2.75573137070700676789e-06
+    %t6 = fadd f64 -1.98412698298579493134e-04, %t5
+    %t7 = fmul f64 %z, %t6
+    %t8 = fadd f64 8.33333333332248946124e-03, %t7
+    
+    %r = fadd f64 %t8, %t4
+    
+    ; v = z * x
+    %v = fmul f64 %z, %x
+    
+    ; result = x + v*(S1 + z*r) + y
+    %t9 = fmul f64 %z, %r
+    %t10 = fadd f64 -1.66666666666666324348e-01, %t9
+    %t11 = fmul f64 %v, %t10
+    %t12 = fadd f64 %x, %t11
+    %result = fadd f64 %t12, %y
+    
+    ret f64 %result
+}
+
+;==============================================================================
+; __cos_kernel - kernel cos for [-pi/4, pi/4]
+; double __cos_kernel(double x, double y)
+;==============================================================================
+define f64 @__cos_kernel(f64 %x, f64 %y) {
+entry:
+    ; Polynomial coefficients
+    ; C1 = 4.16666666666666019037e-02
+    ; C2 = -1.38888888888741095749e-03
+    ; C3 = 2.48015872894767294178e-05
+    ; C4 = -2.75573143513906633035e-07
+    ; C5 = 2.08757232129817482790e-09
+    ; C6 = -1.13596475577881948265e-11
+    
+    ; z = x * x
+    %z = fmul f64 %x, %x
+    ; zs = z * z
+    %zs = fmul f64 %z, %z
+    
+    ; r = z*(C1 + z*(C2 + z*C3)) + zs*zs*(C4 + z*(C5 + z*C6))
+    %t1 = fmul f64 %z, -1.13596475577881948265e-11
+    %t2 = fadd f64 2.08757232129817482790e-09, %t1
+    %t3 = fmul f64 %z, %t2
+    %t4 = fadd f64 -2.75573143513906633035e-07, %t3
+    %t5 = fmul f64 %zs, %zs
+    %t6 = fmul f64 %t5, %t4
+    
+    %t7 = fmul f64 %z, 2.48015872894767294178e-05
+    %t8 = fadd f64 -1.38888888888741095749e-03, %t7
+    %t9 = fmul f64 %z, %t8
+    %t10 = fadd f64 4.16666666666666019037e-02, %t9
+    %t11 = fmul f64 %z, %t10
+    
+    %r = fadd f64 %t11, %t6
+    
+    ; hz = 0.5 * z
+    %hz = fmul f64 0.5, %z
+    ; w = 1.0 - hz
+    %w0 = fsub f64 1.0, %hz
+    
+    ; result = w + (((1.0 - w) - hz) + (z*r - x*y))
+    %t12 = fsub f64 1.0, %w0
+    %t13 = fsub f64 %t12, %hz
+    %t14 = fmul f64 %z, %r
+    %x_y = fmul f64 %x, %y
+    %t15 = fsub f64 %t14, %x_y
+    %t16 = fadd f64 %t13, %t15
+    %result = fadd f64 %w0, %t16
+    
+    ret f64 %result
+}
+
+;==============================================================================
+; __tan_kernel - kernel tan for [-pi/4, pi/4]
+; double __tan_kernel(double x, double y, i1 odd)
+;==============================================================================
+define f64 @__tan_kernel(f64 %x, f64 %y, i1 %odd) {
+entry:
+    ; Polynomial coefficients (T0-T12 from musl)
+    
+    ; z = x * x
+    %z = fmul f64 %x, %x
+    ; w = z * z
+    %w = fmul f64 %z, %z
+    
+    ; r = T[1] + w*(T[3] + w*(T[5] + w*(T[7] + w*(T[9] + w*T[11]))))
+    %r1 = fmul f64 %w, -1.85586374855275456654e-05
+    %r2 = fadd f64 7.81794442939557092300e-05, %r1
+    %r3 = fmul f64 %w, %r2
+    %r4 = fadd f64 5.88041240820264096874e-04, %r3
+    %r5 = fmul f64 %w, %r4
+    %r6 = fadd f64 3.59212803657248101358e-03, %r5
+    %r7 = fmul f64 %w, %r6
+    %r8 = fadd f64 2.18694882948595424599e-02, %r7
+    %r9 = fmul f64 %w, %r8
+    %r = fadd f64 1.33333333333201242699e-01, %r9
+    
+    ; v = z*(T[2] + w*(T[4] + w*(T[6] + w*(T[8] + w*(T[10] + w*T[12])))))
+    %v1 = fmul f64 %w, 2.59073051863633712884e-05
+    %v2 = fadd f64 7.14072491382608190305e-05, %v1
+    %v3 = fmul f64 %w, %v2
+    %v4 = fadd f64 2.46463134818469906812e-04, %v3
+    %v5 = fmul f64 %w, %v4
+    %v6 = fadd f64 1.45620945432529025516e-03, %v5
+    %v7 = fmul f64 %w, %v6
+    %v8 = fadd f64 8.86323982359930005737e-03, %v7
+    %v9 = fmul f64 %w, %v8
+    %v10 = fadd f64 5.39682539762260521377e-02, %v9
+    %v = fmul f64 %z, %v10
+    
+    ; s = z * x
+    %s = fmul f64 %z, %x
+    
+    ; poly = y + z*(s*(r+v) + y) + T[0]*s
+    %rv_sum = fadd f64 %r, %v
+    %s_rv = fmul f64 %s, %rv_sum
+    %s_rv_y = fadd f64 %s_rv, %y
+    %z_term = fmul f64 %z, %s_rv_y
+    %y_z_term = fadd f64 %y, %z_term
+    %t0_s = fmul f64 3.33333333333334091986e-01, %s
+    %poly = fadd f64 %y_z_term, %t0_s
+    
+    ; w_result = x + poly
+    %w_result = fadd f64 %x, %poly
+    
+    ; Return -1/w or w based on odd flag
+    br i1 %odd, label %return_recip, label %return_direct
+
+return_direct:
+    ret f64 %w_result
+
+return_recip:
+    %neg_recip = fdiv f64 -1.0, %w_result
+    ret f64 %neg_recip
+}
+
+;==============================================================================
+; __rem_pio2 - range reduction for trig functions
+; Returns n where y = x - n*pi/2, stores y[0] and y[1] at ptr
+; i32 __rem_pio2(f64 x, ptr y)
+;==============================================================================
+define i32 @__rem_pio2(f64 %x, ptr %y) {
+entry:
+    ; Constants
+    ; pio2_1  = 1.57079632673412561417e+00
+    ; pio2_1t = 6.07710050650619224932e-11
+    ; invpio2 = 6.36619772367581382433e-01
+    ; toint   = 6.75539944105574154e+15
+    
+    ; Extract sign and magnitude
+    %x_bits = bitcast f64 %x to i64
+    %sign_bit = lshr i64 %x_bits, 63
+    %is_negative = icmp ne i64 %sign_bit, 0
+    %ix_u64 = lshr i64 %x_bits, 32
+    %ix = trunc i64 %ix_u64 to i32
+    %ix_abs = and i32 %ix, 2147483647
+    
+    ; Check range |x| <= 5pi/4 (0x400f6a7a = 1074977402)
+    %in_range = icmp ule i32 %ix_abs, 1074977402
+    br i1 %in_range, label %fast_path, label %slow_path
+
+fast_path:
+    ; Check if |x| <= 3pi/4 (0x4002d97c = 1073928572)
+    %small_range = icmp ule i32 %ix_abs, 1073928572
+    br i1 %small_range, label %range_1, label %range_2
+
+range_1:
+    ; |x| ~<= 3pi/4: return +-1, y = x -+ pi/2
+    br i1 %is_negative, label %neg_1, label %pos_1
+
+pos_1:
+    %z_p1 = fsub f64 %x, 1.57079632673412561417e+00
+    %y0_p1 = fsub f64 %z_p1, 6.07710050650619224932e-11
+    %y1_p1_t = fsub f64 %z_p1, %y0_p1
+    %y1_p1 = fsub f64 %y1_p1_t, 6.07710050650619224932e-11
+    %y0_ptr_p1 = getelementptr f64, ptr %y, i64 0
+    %y1_ptr_p1 = getelementptr f64, ptr %y, i64 1
+    store f64 %y0_p1, ptr %y0_ptr_p1
+    store f64 %y1_p1, ptr %y1_ptr_p1
+    ret i32 1
+
+neg_1:
+    %z_n1 = fadd f64 %x, 1.57079632673412561417e+00
+    %y0_n1 = fadd f64 %z_n1, 6.07710050650619224932e-11
+    %y1_n1_t = fsub f64 %z_n1, %y0_n1
+    %y1_n1 = fadd f64 %y1_n1_t, 6.07710050650619224932e-11
+    %y0_ptr_n1 = getelementptr f64, ptr %y, i64 0
+    %y1_ptr_n1 = getelementptr f64, ptr %y, i64 1
+    store f64 %y0_n1, ptr %y0_ptr_n1
+    store f64 %y1_n1, ptr %y1_ptr_n1
+    ret i32 -1
+
+range_2:
+    ; 3pi/4 < |x| <= 5pi/4: return +-2
+    br i1 %is_negative, label %neg_2, label %pos_2
+
+pos_2:
+    %two_pio2_1_p = fmul f64 1.57079632673412561417e+00, 2.0
+    %two_pio2_1t_p = fmul f64 6.07710050650619224932e-11, 2.0
+    %z_p2 = fsub f64 %x, %two_pio2_1_p
+    %y0_p2 = fsub f64 %z_p2, %two_pio2_1t_p
+    %y1_p2_t = fsub f64 %z_p2, %y0_p2
+    %y1_p2 = fsub f64 %y1_p2_t, %two_pio2_1t_p
+    %y0_ptr_p2 = getelementptr f64, ptr %y, i64 0
+    %y1_ptr_p2 = getelementptr f64, ptr %y, i64 1
+    store f64 %y0_p2, ptr %y0_ptr_p2
+    store f64 %y1_p2, ptr %y1_ptr_p2
+    ret i32 2
+
+neg_2:
+    %two_pio2_1_n = fmul f64 1.57079632673412561417e+00, 2.0
+    %two_pio2_1t_n = fmul f64 6.07710050650619224932e-11, 2.0
+    %z_n2 = fadd f64 %x, %two_pio2_1_n
+    %y0_n2 = fadd f64 %z_n2, %two_pio2_1t_n
+    %y1_n2_t = fsub f64 %z_n2, %y0_n2
+    %y1_n2 = fadd f64 %y1_n2_t, %two_pio2_1t_n
+    %y0_ptr_n2 = getelementptr f64, ptr %y, i64 0
+    %y1_ptr_n2 = getelementptr f64, ptr %y, i64 1
+    store f64 %y0_n2, ptr %y0_ptr_n2
+    store f64 %y1_n2, ptr %y1_ptr_n2
+    ret i32 -2
+
+slow_path:
+    ; General case: fn = round(x / (pi/2))
+    %x_div_pio2 = fmul f64 %x, 6.36619772367581382433e-01
+    %fn_round1 = fadd f64 %x_div_pio2, 6.75539944105574154e+15
+    %fn_approx = fsub f64 %fn_round1, 6.75539944105574154e+15
+    %n_slow = fptosi f64 %fn_approx to i32
+    
+    ; r = x - fn * pio2_1
+    %fn_pio2_1 = fmul f64 %fn_approx, 1.57079632673412561417e+00
+    %r_slow = fsub f64 %x, %fn_pio2_1
+    
+    ; w = fn * pio2_1t
+    %w_slow = fmul f64 %fn_approx, 6.07710050650619224932e-11
+    
+    ; y[0] = r - w, y[1] = (r - y0) - w
+    %y0_slow = fsub f64 %r_slow, %w_slow
+    %y1_slow_t = fsub f64 %r_slow, %y0_slow
+    %y1_slow = fsub f64 %y1_slow_t, %w_slow
+    
+    %y0_ptr_slow = getelementptr f64, ptr %y, i64 0
+    %y1_ptr_slow = getelementptr f64, ptr %y, i64 1
+    store f64 %y0_slow, ptr %y0_ptr_slow
+    store f64 %y1_slow, ptr %y1_ptr_slow
+    ret i32 %n_slow
+}
+
+;==============================================================================
+; sin - sine function with full range reduction
+; double sin(double x)
+;==============================================================================
+define f64 @sin(f64 %x) {
+entry:
+    ; Extract magnitude bits
+    %x_bits = bitcast f64 %x to i64
+    %ix_u64 = lshr i64 %x_bits, 32
+    %ix = trunc i64 %ix_u64 to i32
+    %ix_abs = and i32 %ix, 2147483647
+    
+    ; Check if |x| ~<= pi/4 (0x3fe921fb = 1072243195)
+    %is_small = icmp ule i32 %ix_abs, 1072243195
+    br i1 %is_small, label %small_arg, label %need_reduction
+
+small_arg:
+    ; Check if |x| < 2^-27 (0x3e400000 = 1041235968)
+    %is_tiny = icmp ult i32 %ix_abs, 1041235968
+    br i1 %is_tiny, label %tiny_arg, label %kernel_direct
+
+tiny_arg:
+    ret f64 %x
+
+kernel_direct:
+    %result_kernel = call f64 @__sin_kernel(f64 %x, f64 0.0)
+    ret f64 %result_kernel
+
+need_reduction:
+    ; Check for infinity or NaN (0x7ff00000 = 2146435072)
+    %is_inf_nan = icmp uge i32 %ix_abs, 2146435072
+    br i1 %is_inf_nan, label %inf_nan, label %do_reduction
+
+inf_nan:
+    %nan_result = fsub f64 %x, %x
+    ret f64 %nan_result
+
+do_reduction:
+    ; Use rem_pio2 for range reduction
+    %y_alloca = alloca [2 x f64]
+    %n = call i32 @__rem_pio2(f64 %x, ptr %y_alloca)
+    
+    %y0_ptr = getelementptr [2 x f64], ptr %y_alloca, i64 0, i64 0
+    %y1_ptr = getelementptr [2 x f64], ptr %y_alloca, i64 0, i64 1
+    %y0 = load f64, ptr %y0_ptr
+    %y1 = load f64, ptr %y1_ptr
+    
+    ; n & 3 determines which function to use
+    %n_mod_4 = and i32 %n, 3
+    
+    %is_0 = icmp eq i32 %n_mod_4, 0
+    br i1 %is_0, label %case_0, label %check_1
+
+check_1:
+    %is_1 = icmp eq i32 %n_mod_4, 1
+    br i1 %is_1, label %case_1, label %check_2
+
+check_2:
+    %is_2 = icmp eq i32 %n_mod_4, 2
+    br i1 %is_2, label %case_2, label %case_3
+
+case_0:
+    %r0 = call f64 @__sin_kernel(f64 %y0, f64 %y1)
+    ret f64 %r0
+
+case_1:
+    %r1 = call f64 @__cos_kernel(f64 %y0, f64 %y1)
+    ret f64 %r1
+
+case_2:
+    %r2_t = call f64 @__sin_kernel(f64 %y0, f64 %y1)
+    %r2 = fneg f64 %r2_t
+    ret f64 %r2
+
+case_3:
+    %r3_t = call f64 @__cos_kernel(f64 %y0, f64 %y1)
+    %r3 = fneg f64 %r3_t
+    ret f64 %r3
+}
+
+;==============================================================================
+; cos - cosine function with full range reduction
+; double cos(double x)
+;==============================================================================
+define f64 @cos(f64 %x) {
+entry:
+    ; Extract magnitude bits
+    %x_bits = bitcast f64 %x to i64
+    %ix_u64 = lshr i64 %x_bits, 32
+    %ix = trunc i64 %ix_u64 to i32
+    %ix_abs = and i32 %ix, 2147483647
+    
+    ; Check if |x| ~<= pi/4
+    %is_small = icmp ule i32 %ix_abs, 1072243195
+    br i1 %is_small, label %small_arg, label %need_reduction
+
+small_arg:
+    %result_kernel = call f64 @__cos_kernel(f64 %x, f64 0.0)
+    ret f64 %result_kernel
+
+need_reduction:
+    ; Check for infinity or NaN
+    %is_inf_nan = icmp uge i32 %ix_abs, 2146435072
+    br i1 %is_inf_nan, label %inf_nan, label %do_reduction
+
+inf_nan:
+    %nan_result = fsub f64 %x, %x
+    ret f64 %nan_result
+
+do_reduction:
+    %y_alloca = alloca [2 x f64]
+    %n = call i32 @__rem_pio2(f64 %x, ptr %y_alloca)
+    
+    %y0_ptr = getelementptr [2 x f64], ptr %y_alloca, i64 0, i64 0
+    %y1_ptr = getelementptr [2 x f64], ptr %y_alloca, i64 0, i64 1
+    %y0 = load f64, ptr %y0_ptr
+    %y1 = load f64, ptr %y1_ptr
+    
+    %n_mod_4 = and i32 %n, 3
+    
+    %is_0 = icmp eq i32 %n_mod_4, 0
+    br i1 %is_0, label %case_0, label %check_1
+
+check_1:
+    %is_1 = icmp eq i32 %n_mod_4, 1
+    br i1 %is_1, label %case_1, label %check_2
+
+check_2:
+    %is_2 = icmp eq i32 %n_mod_4, 2
+    br i1 %is_2, label %case_2, label %case_3
+
+case_0:
+    %r0 = call f64 @__cos_kernel(f64 %y0, f64 %y1)
+    ret f64 %r0
+
+case_1:
+    %r1_t = call f64 @__sin_kernel(f64 %y0, f64 %y1)
+    %r1 = fneg f64 %r1_t
+    ret f64 %r1
+
+case_2:
+    %r2_t = call f64 @__cos_kernel(f64 %y0, f64 %y1)
+    %r2 = fneg f64 %r2_t
+    ret f64 %r2
+
+case_3:
+    %r3 = call f64 @__sin_kernel(f64 %y0, f64 %y1)
+    ret f64 %r3
+}
+
+;==============================================================================
+; tan - tangent function with full range reduction
+; double tan(double x)
+;==============================================================================
+define f64 @tan(f64 %x) {
+entry:
+    ; Extract magnitude bits
+    %x_bits = bitcast f64 %x to i64
+    %ix_u64 = lshr i64 %x_bits, 32
+    %ix = trunc i64 %ix_u64 to i32
+    %ix_abs = and i32 %ix, 2147483647
+    
+    ; Check if |x| ~<= pi/4
+    %is_small = icmp ule i32 %ix_abs, 1072243195
+    br i1 %is_small, label %small_arg, label %need_reduction
+
+small_arg:
+    ; Check if |x| < 2^-27
+    %is_tiny = icmp ult i32 %ix_abs, 1041235968
+    br i1 %is_tiny, label %tiny_arg, label %kernel_direct
+
+tiny_arg:
+    ret f64 %x
+
+kernel_direct:
+    %result_kernel = call f64 @__tan_kernel(f64 %x, f64 0.0, i1 false)
+    ret f64 %result_kernel
+
+need_reduction:
+    ; Check for infinity or NaN
+    %is_inf_nan = icmp uge i32 %ix_abs, 2146435072
+    br i1 %is_inf_nan, label %inf_nan, label %do_reduction
+
+inf_nan:
+    %nan_result = fsub f64 %x, %x
+    ret f64 %nan_result
+
+do_reduction:
+    %y_alloca = alloca [2 x f64]
+    %n = call i32 @__rem_pio2(f64 %x, ptr %y_alloca)
+    
+    %y0_ptr = getelementptr [2 x f64], ptr %y_alloca, i64 0, i64 0
+    %y1_ptr = getelementptr [2 x f64], ptr %y_alloca, i64 0, i64 1
+    %y0 = load f64, ptr %y0_ptr
+    %y1 = load f64, ptr %y1_ptr
+    
+    ; odd = (n & 1) != 0
+    %n_and_1 = and i32 %n, 1
+    %is_odd = icmp ne i32 %n_and_1, 0
+    
+    %result = call f64 @__tan_kernel(f64 %y0, f64 %y1, i1 %is_odd)
+    ret f64 %result
+}

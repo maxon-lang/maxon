@@ -1,0 +1,81 @@
+; Maxon Runtime Library - Windows Platform Functions
+; Uses Win32 API for memory allocation, I/O, and process control
+
+; External Windows API declarations
+declare ptr @GetProcessHeap()
+declare ptr @HeapAlloc(ptr, i32, i64)
+declare i1 @HeapFree(ptr, i32, ptr)
+declare void @ExitProcess(i32)
+declare ptr @GetStdHandle(i32)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+
+; Windows-specific global: _fltused (required for floating-point)
+@_fltused = constant i32 39029
+
+;==============================================================================
+; malloc - allocate memory using HeapAlloc
+; ptr malloc(i64 size)
+;==============================================================================
+define ptr @malloc(i64 %size) {
+entry:
+    %heap = call ptr @GetProcessHeap()
+    %ptr = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %size)
+    ret ptr %ptr
+}
+
+;==============================================================================
+; free - free memory using HeapFree
+; void free(ptr ptr)
+;==============================================================================
+define void @free(ptr %ptr) {
+entry:
+    %heap = call ptr @GetProcessHeap()
+    %result = call i1 @HeapFree(ptr %heap, i32 0, ptr %ptr)
+    ret void
+}
+
+;==============================================================================
+; exit - terminate process using ExitProcess
+; void exit(i32 code)
+;==============================================================================
+define void @exit(i32 %code) {
+entry:
+    call void @ExitProcess(i32 %code)
+    ret void
+}
+
+;==============================================================================
+; write_stdout - write to stdout using WriteFile
+; i32 write_stdout(ptr buf, i32 count)
+;==============================================================================
+define i32 @write_stdout(ptr %buf, i32 %count) {
+entry:
+    ; Allocate space for bytes written
+    %bytesWritten = alloca i32
+    
+    ; Get stdout handle (STD_OUTPUT_HANDLE = -11)
+    %handle = call ptr @GetStdHandle(i32 -11)
+    
+    ; Call WriteFile
+    %success = call i32 @WriteFile(ptr %handle, ptr %buf, i32 %count, ptr %bytesWritten, ptr null)
+    
+    ; Check if WriteFile succeeded
+    %failed = icmp eq i32 %success, 0
+    br i1 %failed, label %error, label %success_case
+
+success_case:
+    %written = load i32, ptr %bytesWritten
+    ret i32 %written
+
+error:
+    ret i32 -1
+}
+
+;==============================================================================
+; __chkstk - stack probe for large stack allocations
+; Required by Windows when allocating large stack arrays
+;==============================================================================
+define void @__chkstk() {
+entry:
+    ret void
+}

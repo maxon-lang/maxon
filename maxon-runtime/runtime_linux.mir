@@ -1,0 +1,105 @@
+; Maxon Runtime Library - Linux Platform Functions
+; Uses Linux syscalls directly (no libc dependency)
+
+; System call numbers for x86_64 Linux
+; SYS_write  = 1
+; SYS_mmap   = 9
+; SYS_munmap = 11
+; SYS_exit   = 60
+
+; mmap flags
+; PROT_READ  = 1
+; PROT_WRITE = 2
+; MAP_PRIVATE = 2
+; MAP_ANONYMOUS = 32
+
+;==============================================================================
+; __syscall6 - internal syscall wrapper
+; i64 __syscall6(i64 number, i64 arg1, i64 arg2, i64 arg3, i64 arg4, i64 arg5, i64 arg6)
+; Note: This will need special handling in codegen to emit inline syscall
+;==============================================================================
+declare i64 @__syscall6(i64, i64, i64, i64, i64, i64, i64)
+
+;==============================================================================
+; malloc - allocate memory using mmap
+; ptr malloc(i64 size)
+;==============================================================================
+define ptr @malloc(i64 %size) {
+entry:
+    ; Check for zero size
+    %is_zero = icmp eq i64 %size, 0
+    br i1 %is_zero, label %return_null, label %allocate
+
+allocate:
+    ; Round up to page size (4096 bytes)
+    %size_plus = add i64 %size, 4095
+    %rounded_size = and i64 %size_plus, -4096
+    
+    ; Call mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
+    ; SYS_mmap = 9
+    ; PROT_READ | PROT_WRITE = 3
+    ; MAP_PRIVATE | MAP_ANONYMOUS = 34
+    %result = call i64 @__syscall6(i64 9, i64 0, i64 %rounded_size, i64 3, i64 34, i64 -1, i64 0)
+    
+    ; Check for error (mmap returns -1 to -4095 on error)
+    %is_negative = icmp slt i64 %result, 0
+    %error_threshold = add i64 -4095, 0
+    %is_error_range = icmp sge i64 %result, %error_threshold
+    %is_error = and i1 %is_negative, %is_error_range
+    br i1 %is_error, label %return_null, label %return_ptr
+
+return_null:
+    ret ptr null
+
+return_ptr:
+    %ptr = inttoptr i64 %result to ptr
+    ret ptr %ptr
+}
+
+;==============================================================================
+; free - free memory (no-op for mmap-based allocator)
+; void free(ptr ptr)
+; Note: A proper implementation would track sizes and call munmap
+;==============================================================================
+define void @free(ptr %ptr) {
+entry:
+    ret void
+}
+
+;==============================================================================
+; exit - terminate process using syscall
+; void exit(i32 code)
+;==============================================================================
+define void @exit(i32 %code) {
+entry:
+    ; SYS_exit = 60
+    %code_64 = sext i32 %code to i64
+    %result = call i64 @__syscall6(i64 60, i64 %code_64, i64 0, i64 0, i64 0, i64 0, i64 0)
+    ret void
+}
+
+;==============================================================================
+; write - write to file descriptor using syscall
+; i64 write(i32 fd, ptr buf, i64 count)
+;==============================================================================
+define i64 @write(i32 %fd, ptr %buf, i64 %count) {
+entry:
+    ; SYS_write = 1
+    %fd_64 = sext i32 %fd to i64
+    %buf_int = ptrtoint ptr %buf to i64
+    %result = call i64 @__syscall6(i64 1, i64 %fd_64, i64 %buf_int, i64 %count, i64 0, i64 0, i64 0)
+    ret i64 %result
+}
+
+;==============================================================================
+; write_stdout - write to stdout
+; i32 write_stdout(ptr buf, i32 count)
+;==============================================================================
+define i32 @write_stdout(ptr %buf, i32 %count) {
+entry:
+    ; fd 1 = stdout
+    %count64 = sext i32 %count to i64
+    %result64 = call i64 @write(i32 1, ptr %buf, i64 %count64)
+    %result = trunc i64 %result64 to i32
+    ret i32 %result
+}

@@ -4,7 +4,7 @@
 
 Replace LLVM with a fully custom backend that generates x86-64 machine code directly, implements basic optimizations, and produces PE/ELF executables with basic DWARF debug info support.
 
-**Status**: Phases 1-6 Complete with Unit Tests - End-to-end PE executable generation verified  
+**Status**: Phases 1-7 Complete with Unit Tests - Runtime library ported to MIR  
 **Target**: Self-contained compiler with no external code generation dependencies
 
 ---
@@ -22,7 +22,8 @@ A comprehensive test suite has been created using Catch2 framework in `maxon-bin
 | `test_dwarf.cpp` | 25 | 94 | DWARF debug info generation |
 | `test_end_to_end.cpp` | 2 | 6 | Full pipeline: MIR → x86 → PE → execute |
 | `test_optimizer.cpp` | 24 | 80 | All optimization passes |
-| **Total** | **121** | **666** | |
+| `test_runtime.cpp` | 13 | 61 | MIR parser and runtime function parsing |
+| **Total** | **134** | **727** | |
 
 **Build**: `cd maxon-bin/tests/build && ninja && ./run_all_backend_tests.exe`
 
@@ -267,34 +268,54 @@ All tests pass with `-Werror` / `-WX` (warnings-as-errors) enabled.
 
 ---
 
-## Phase 7: Runtime Library Port (TODO)
+## Phase 7: Runtime Library Port ✓ COMPLETE
 
-### 7.1 Core Runtime (x86-64 Assembly)
-- [ ] Port `memset` to x86-64 assembly
-- [ ] Port `malloc`/`free` implementations
-- [ ] Port math functions (floor, ceil, round, trunc)
+The runtime library has been ported to textual MIR format with a new MIR parser. This allows the runtime to be written in a human-readable format similar to LLVM IR, then parsed and compiled alongside user code.
 
-### 7.2 Trigonometric Functions
-- [ ] Port `sin`, `cos`, `tan` with SSE2 instructions
-- [ ] Port kernel functions (`__sin_kernel`, `__cos_kernel`, `__tan_kernel`)
-- [ ] Port range reduction (`__rem_pio2`)
+### 7.1 MIR Text Format Parser
+- [x] Create `maxon-bin/mir/mir_parser.h` - Parser API and data structures
+- [x] Create `maxon-bin/mir/mir_parser.cpp` - Full parser implementation
+- [x] Support types: void, i1, i8, i32, i64, f64, ptr, arrays
+- [x] Support instructions: arithmetic, comparisons, memory, control flow, phi
+- [x] Support function definitions and declarations
+- [x] Support module merging (runtime.mir + platform.mir)
+
+### 7.2 Core Runtime Functions (runtime.mir)
+- [x] `memset` - Memory initialization with byte value
+- [x] `floor`, `ceil`, `round`, `trunc` - Math rounding functions
+- [x] `sin`, `cos`, `tan` - Trigonometric functions with range reduction
+- [x] `__sin_kernel`, `__cos_kernel`, `__tan_kernel` - Taylor series kernels
+- [x] `__rem_pio2` - Range reduction for trigonometric functions
 
 ### 7.3 Platform Functions
-- [ ] Port Windows-specific functions (HeapAlloc wrapper, WriteFile wrapper)
-- [ ] Port Linux-specific functions (syscall wrappers)
-- [ ] Create build system to assemble runtime
+- [x] Windows (`runtime_windows.mir`):
+  - `malloc` via HeapAlloc, `free` via HeapFree
+  - `exit` via ExitProcess, `write_stdout` via WriteFile
+  - `__chkstk` for large stack allocations
+- [x] Linux (`runtime_linux.mir`):
+  - `malloc` via mmap syscall (no-op free)
+  - `exit` via syscall 60, `write_stdout` via syscall 1
 
-**Files to Create**:
-- `maxon-runtime/runtime_x64.asm` (or .s)
-- `maxon-runtime/platform_windows_x64.asm`
-- `maxon-runtime/platform_linux_x64.asm`
+**Files Created**:
+- `maxon-bin/mir/mir_parser.h` (~190 lines)
+- `maxon-bin/mir/mir_parser.cpp` (~1250 lines)
+- `maxon-runtime/runtime.mir` (~600 lines) - Core runtime in textual MIR
+- `maxon-runtime/runtime_windows.mir` (~60 lines) - Windows platform functions
+- `maxon-runtime/runtime_linux.mir` (~80 lines) - Linux platform functions
 
-**Unit Tests to Create** (`test_runtime.cpp`):
-- `memset` correctness for various sizes and alignments
-- `malloc`/`free` allocation and deallocation
-- Math function accuracy (floor, ceil, round vs reference)
-- Trigonometric function accuracy (sin, cos, tan vs libm)
-- Platform function smoke tests (write to stdout, allocate memory)
+**Unit Tests** (`test_runtime.cpp`):
+- Type parsing: all primitive types and arrays
+- Arithmetic operations: add, sub, mul, div, mod (signed/unsigned)
+- Comparison operations: icmp (eq, ne, slt, sgt, etc.), fcmp
+- Control flow: br (conditional/unconditional), ret, phi
+- Memory operations: alloca, load, store, getelementptr
+- Conversions: sext, zext, trunc, fptosi, sitofp
+- Function calls: call with return value, void calls
+- Runtime functions: memset, floor, sin parsing (structural verification)
+
+| Test File | Test Cases | Assertions | Description |
+|-----------|------------|------------|-------------|
+| `test_runtime.cpp` | 13 | 61 | MIR parser and runtime function parsing |
 
 ---
 

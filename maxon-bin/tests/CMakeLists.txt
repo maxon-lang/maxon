@@ -24,6 +24,7 @@ set(CATCH_SOURCE ${PROJECT_ROOT}/lsp-server/tests/catch_amalgamated.cpp)
 set(BACKEND_SOURCES
     ../mir/mir.cpp
     ../mir/mir_builder.cpp
+    ../mir/mir_parser.cpp
     ../mir/optimizer.cpp
     ../backend/x86_encoding.cpp
     ../backend/x86_codegen.cpp
@@ -79,6 +80,10 @@ add_executable(test_optimizer test_optimizer.cpp ${CATCH_SOURCE})
 target_link_libraries(test_optimizer backend_lib)
 target_compile_options(test_optimizer PRIVATE ${TEST_COMPILE_OPTIONS})
 
+add_executable(test_runtime test_runtime.cpp ${CATCH_SOURCE})
+target_link_libraries(test_runtime backend_lib)
+target_compile_options(test_runtime PRIVATE ${TEST_COMPILE_OPTIONS})
+
 # Combined test runner
 add_executable(run_all_backend_tests
     test_mir.cpp
@@ -87,6 +92,7 @@ add_executable(run_all_backend_tests
     test_executable_writers.cpp
     test_dwarf.cpp
     test_optimizer.cpp
+    test_runtime.cpp
     ${CATCH_SOURCE}
 )
 target_link_libraries(run_all_backend_tests backend_lib)
@@ -101,4 +107,5 @@ add_test(NAME RegisterAllocation COMMAND test_regalloc)
 add_test(NAME ExecutableWriters COMMAND test_executable_writers)
 add_test(NAME DWARF COMMAND test_dwarf)
 add_test(NAME Optimizer COMMAND test_optimizer)
+add_test(NAME Runtime COMMAND test_runtime)
 add_test(NAME AllBackendTests COMMAND run_all_backend_tests)
