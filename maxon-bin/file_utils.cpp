@@ -3,8 +3,8 @@
 #include "lexer.h"
 
 #include <algorithm>
-#include <fstream>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <stdexcept>
 
@@ -15,256 +15,216 @@
 #include <unistd.h>
 #endif
 
-std::string getExecutableDirectory()
-{
+std::string getExecutableDirectory() {
 #ifdef _WIN32
-    char buffer[MAX_PATH];
-    GetModuleFileNameA(NULL, buffer, MAX_PATH);
-    std::string execPath(buffer);
-    size_t pos = execPath.find_last_of("\\/");
-    return (pos != std::string::npos) ? execPath.substr(0, pos) : ".";
+	char buffer[MAX_PATH];
+	GetModuleFileNameA(NULL, buffer, MAX_PATH);
+	std::string execPath(buffer);
+	size_t pos = execPath.find_last_of("\\/");
+	return (pos != std::string::npos) ? execPath.substr(0, pos) : ".";
 #else
-    char buffer[PATH_MAX];
-    ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
-    if (len != -1)
-    {
-        buffer[len] = '\0';
-        std::string execPath(buffer);
-        size_t pos = execPath.find_last_of('/');
-        return (pos != std::string::npos) ? execPath.substr(0, pos) : ".";
-    }
-    return ".";
+	char buffer[PATH_MAX];
+	ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+	if (len != -1) {
+		buffer[len] = '\0';
+		std::string execPath(buffer);
+		size_t pos = execPath.find_last_of('/');
+		return (pos != std::string::npos) ? execPath.substr(0, pos) : ".";
+	}
+	return ".";
 #endif
 }
 
-std::string findStdlibDirectory()
-{
-    if (std::filesystem::exists("stdlib"))
-    {
-        return "stdlib";
-    }
+std::string findStdlibDirectory() {
+	if (std::filesystem::exists("stdlib")) {
+		return "stdlib";
+	}
 
-    std::string execDir = getExecutableDirectory();
-    std::filesystem::path stdlibPath = std::filesystem::path(execDir) / ".." / "stdlib";
-    if (std::filesystem::exists(stdlibPath))
-    {
-        return stdlibPath.string();
-    }
+	std::string execDir = getExecutableDirectory();
+	std::filesystem::path stdlibPath = std::filesystem::path(execDir) / ".." / "stdlib";
+	if (std::filesystem::exists(stdlibPath)) {
+		return stdlibPath.string();
+	}
 
-    stdlibPath = std::filesystem::path(execDir) / ".." / ".." / "stdlib";
-    if (std::filesystem::exists(stdlibPath))
-    {
-        return stdlibPath.string();
-    }
+	stdlibPath = std::filesystem::path(execDir) / ".." / ".." / "stdlib";
+	if (std::filesystem::exists(stdlibPath)) {
+		return stdlibPath.string();
+	}
 
-    return "stdlib";
+	return "stdlib";
 }
 
-std::string deriveNamespace(const std::string &filePath)
-{
-    std::filesystem::path p(filePath);
-    std::string pathStr = p.string();
+std::string deriveNamespace(const std::string &filePath) {
+	std::filesystem::path p(filePath);
+	std::string pathStr = p.string();
 
-    // Skip "temp" directory (used for temporary files)
-    size_t tempPos = pathStr.find("temp");
-    if (tempPos != std::string::npos)
-    {
-        // Check if "temp" is preceded by a separator (to avoid matching "temporary" etc)
-        bool isTemp = false;
-        if (tempPos == 0 || pathStr[tempPos - 1] == '/' || pathStr[tempPos - 1] == '\\')
-        {
-            // Check if "temp" is followed by a separator or end of string
-            size_t tempEnd = tempPos + 4; // "temp" is 4 chars
-            if (tempEnd >= pathStr.size() || pathStr[tempEnd] == '/' || pathStr[tempEnd] == '\\')
-            {
-                isTemp = true;
-            }
-        }
-        if (isTemp)
-        {
-            // Skip to after the "temp" directory
-            size_t startPos = tempPos + 4; // "temp" is 4 chars
-            if (startPos < pathStr.size() && (pathStr[startPos] == '/' || pathStr[startPos] == '\\'))
-            {
-                startPos++; // skip the separator
-            }
-            std::string tempRelative = pathStr.substr(startPos);
-            p = std::filesystem::path(tempRelative);
-            // Return empty namespace for temp files
-            if (tempRelative.empty() || tempRelative == "." || p.parent_path().string().empty())
-            {
-                return "";
-            }
-        }
-    }
+	// Skip "temp" directory (used for temporary files)
+	size_t tempPos = pathStr.find("temp");
+	if (tempPos != std::string::npos) {
+		// Check if "temp" is preceded by a separator (to avoid matching "temporary" etc)
+		bool isTemp = false;
+		if (tempPos == 0 || pathStr[tempPos - 1] == '/' || pathStr[tempPos - 1] == '\\') {
+			// Check if "temp" is followed by a separator or end of string
+			size_t tempEnd = tempPos + 4; // "temp" is 4 chars
+			if (tempEnd >= pathStr.size() || pathStr[tempEnd] == '/' || pathStr[tempEnd] == '\\') {
+				isTemp = true;
+			}
+		}
+		if (isTemp) {
+			// Skip to after the "temp" directory
+			size_t startPos = tempPos + 4; // "temp" is 4 chars
+			if (startPos < pathStr.size() && (pathStr[startPos] == '/' || pathStr[startPos] == '\\')) {
+				startPos++; // skip the separator
+			}
+			std::string tempRelative = pathStr.substr(startPos);
+			p = std::filesystem::path(tempRelative);
+			// Return empty namespace for temp files
+			if (tempRelative.empty() || tempRelative == "." || p.parent_path().string().empty()) {
+				return "";
+			}
+		}
+	}
 
-    size_t stdlibPos = pathStr.find("stdlib");
-    if (stdlibPos != std::string::npos)
-    {
-        // Skip "stdlib" and the following separator to get the namespace within stdlib
-        size_t startPos = stdlibPos + 7; // "stdlib" is 6 chars + 1 for separator
-        if (startPos < pathStr.size() && (pathStr[startPos] == '/' || pathStr[startPos] == '\\'))
-        {
-            startPos++; // skip the separator
-        }
-        std::string stdlibRelative = pathStr.substr(startPos);
-        p = std::filesystem::path(stdlibRelative);
-    }
+	size_t stdlibPos = pathStr.find("stdlib");
+	if (stdlibPos != std::string::npos) {
+		// Skip "stdlib" and the following separator to get the namespace within stdlib
+		size_t startPos = stdlibPos + 7; // "stdlib" is 6 chars + 1 for separator
+		if (startPos < pathStr.size() && (pathStr[startPos] == '/' || pathStr[startPos] == '\\')) {
+			startPos++; // skip the separator
+		}
+		std::string stdlibRelative = pathStr.substr(startPos);
+		p = std::filesystem::path(stdlibRelative);
+	}
 
-    std::filesystem::path dir = p.parent_path();
-    std::string ns = dir.string();
+	std::filesystem::path dir = p.parent_path();
+	std::string ns = dir.string();
 
-    if (ns.empty() || ns == ".")
-    {
-        return "";
-    }
+	if (ns.empty() || ns == ".") {
+		return "";
+	}
 
-    std::replace(ns.begin(), ns.end(), '/', '.');
-    std::replace(ns.begin(), ns.end(), '\\', '.');
+	std::replace(ns.begin(), ns.end(), '/', '.');
+	std::replace(ns.begin(), ns.end(), '\\', '.');
 
-    std::string result;
-    for (size_t i = 0; i < ns.size(); ++i)
-    {
-        if (ns[i] == '.')
-        {
-            // Skip consecutive dots
-            if (result.empty() || result.back() != '.')
-            {
-                result += '.';
-            }
-            while (i + 1 < ns.size() && (ns[i + 1] == '.' || ns[i + 1] == '/' || ns[i + 1] == '\\'))
-            {
-                ++i;
-            }
-        }
-        else
-        {
-            result += ns[i];
-        }
-    }
+	std::string result;
+	for (size_t i = 0; i < ns.size(); ++i) {
+		if (ns[i] == '.') {
+			// Skip consecutive dots
+			if (result.empty() || result.back() != '.') {
+				result += '.';
+			}
+			while (i + 1 < ns.size() && (ns[i + 1] == '.' || ns[i + 1] == '/' || ns[i + 1] == '\\')) {
+				++i;
+			}
+		} else {
+			result += ns[i];
+		}
+	}
 
-    return result;
+	return result;
 }
 
-std::vector<std::string> findMaxonFiles(const std::string &directory)
-{
-    std::vector<std::string> files;
-    if (!std::filesystem::exists(directory))
-    {
-        return files;
-    }
+std::vector<std::string> findMaxonFiles(const std::string &directory) {
+	std::vector<std::string> files;
+	if (!std::filesystem::exists(directory)) {
+		return files;
+	}
 
-    for (const auto &entry : std::filesystem::recursive_directory_iterator(directory))
-    {
-        if (entry.is_regular_file() && entry.path().extension() == ".maxon")
-        {
-            files.push_back(entry.path().string());
-        }
-    }
+	for (const auto &entry : std::filesystem::recursive_directory_iterator(directory)) {
+		if (entry.is_regular_file() && entry.path().extension() == ".maxon") {
+			files.push_back(entry.path().string());
+		}
+	}
 
-    return files;
+	return files;
 }
 
-std::vector<std::string> extractFunctionNames(const std::string &filePath)
-{
-    std::vector<std::string> functionNames;
-    try
-    {
-        std::string source = readFile(filePath);
-        Lexer lexer(source);
-        std::vector<Token> tokens = lexer.tokenize();
+std::vector<std::string> extractFunctionNames(const std::string &filePath) {
+	std::vector<std::string> functionNames;
+	try {
+		std::string source = readFile(filePath);
+		Lexer lexer(source);
+		std::vector<Token> tokens = lexer.tokenize();
 
-        for (size_t i = 0; i < tokens.size(); ++i)
-        {
-            if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "function" && i + 1 < tokens.size())
-            {
-                if (tokens[i + 1].type == TokenType::IDENTIFIER)
-                {
-                    functionNames.push_back(tokens[i + 1].value);
-                }
-            }
-        }
-    }
-    catch (...)
-    {
-        // Ignore parsing issues while building index
-    }
+		for (size_t i = 0; i < tokens.size(); ++i) {
+			if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "function" && i + 1 < tokens.size()) {
+				if (tokens[i + 1].type == TokenType::IDENTIFIER) {
+					functionNames.push_back(tokens[i + 1].value);
+				}
+			}
+		}
+	} catch (...) {
+		// Ignore parsing issues while building index
+	}
 
-    return functionNames;
+	return functionNames;
 }
 
-const std::map<std::string, std::string> &getStdlibIndex()
-{
-    static std::map<std::string, std::string> index;
-    static bool initialized = false;
+const std::map<std::string, std::string> &getStdlibIndex() {
+	static std::map<std::string, std::string> index;
+	static bool initialized = false;
 
-    if (!initialized)
-    {
-        std::string stdlibDir = findStdlibDirectory();
-        std::vector<std::string> stdlibFiles = findMaxonFiles(stdlibDir);
+	if (!initialized) {
+		std::string stdlibDir = findStdlibDirectory();
+		std::vector<std::string> stdlibFiles = findMaxonFiles(stdlibDir);
 
-        for (const auto &file : stdlibFiles)
-        {
-            std::vector<std::string> definedFunctions = extractFunctionNames(file);
-            for (const auto &func : definedFunctions)
-            {
-                index[func] = file;
-            }
-        }
+		for (const auto &file : stdlibFiles) {
+			std::vector<std::string> definedFunctions = extractFunctionNames(file);
+			for (const auto &func : definedFunctions) {
+				index[func] = file;
+			}
+		}
 
-        initialized = true;
-    }
+		initialized = true;
+	}
 
-    return index;
+	return index;
 }
 
-std::vector<std::string> findStdlibFilesDefining(const std::set<std::string> &functionNames)
-{
-    std::vector<std::string> resultFiles;
-    std::set<std::string> uniqueFiles;
-    const auto &index = getStdlibIndex();
+std::vector<std::string> findStdlibFilesDefining(const std::set<std::string> &functionNames) {
+	std::vector<std::string> resultFiles;
+	std::set<std::string> uniqueFiles;
+	const auto &index = getStdlibIndex();
 
-    for (const auto &funcName : functionNames)
-    {
-        std::string unqualifiedName = funcName;
-        size_t lastSep = funcName.rfind(".");
-        if (lastSep != std::string::npos)
-        {
-            unqualifiedName = funcName.substr(lastSep + 1);
-        }
+	for (const auto &funcName : functionNames) {
+		std::string unqualifiedName = funcName;
+		size_t lastSep = funcName.rfind(".");
+		if (lastSep != std::string::npos) {
+			unqualifiedName = funcName.substr(lastSep + 1);
+		}
 
-        auto it = index.find(unqualifiedName);
-        if (it != index.end())
-        {
-            if (uniqueFiles.insert(it->second).second)
-            {
-                resultFiles.push_back(it->second);
-            }
-        }
-    }
+		auto it = index.find(unqualifiedName);
+		if (it != index.end()) {
+			if (uniqueFiles.insert(it->second).second) {
+				resultFiles.push_back(it->second);
+			}
+		}
+	}
 
-    return resultFiles;
+	return resultFiles;
 }
 
-std::string readFile(const std::string &filename)
-{
-    std::ifstream file(filename);
-    if (!file)
-    {
-        throw std::runtime_error("Could not open file: " + filename);
-    }
+std::string readFile(const std::string &filename) {
+	std::ifstream file(filename);
+	if (!file) {
+		throw std::runtime_error("Could not open file: " + normalizePathForDisplay(filename));
+	}
 
-    std::stringstream buffer;
-    std::string line;
+	std::stringstream buffer;
+	std::string line;
 
-    while (std::getline(file, line))
-    {
-        if (line == "---")
-        {
-            break;
-        }
-        buffer << line << '\n';
-    }
+	while (std::getline(file, line)) {
+		if (line == "---") {
+			break;
+		}
+		buffer << line << '\n';
+	}
 
-    return buffer.str();
+	return buffer.str();
+}
+
+std::string normalizePathForDisplay(const std::string &path) {
+	std::string result = path;
+	std::replace(result.begin(), result.end(), '\\', '/');
+	return result;
 }

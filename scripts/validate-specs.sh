@@ -32,8 +32,8 @@ fi
 
 # Check if jq is available, otherwise use python
 if command -v jq &> /dev/null; then
-    # Use jq to extract fragment names
-    spec_fragments=$(jq -r '.fragments | keys[]' "$MANIFEST_PATH")
+    # Use jq to extract fragment names (strip CR for Windows compatibility)
+    spec_fragments=$(jq -r '.fragments | keys[]' "$MANIFEST_PATH" | tr -d '\r')
 else
     # Fallback to python
     spec_fragments=$(python3 -c "import json; import sys; data = json.load(open('$MANIFEST_PATH')); print('\n'.join(data['fragments'].keys()))")
@@ -42,19 +42,23 @@ fi
 # Get all fragment files
 all_fragments=$(ls -1 language-tests/fragments/*.test 2>/dev/null | xargs -n 1 basename)
 
-# Find orphans
-orphans=()
-while IFS= read -r fragment; do
-    # Skip control flow and variables fragments (legacy)
-    if [[ "$fragment" == "control flow"* ]] || [[ "$fragment" == "variables"* ]]; then
-        continue
-    fi
+# Find orphans efficiently using comm (requires sorted input)
+# Create temp files for sorted lists
+spec_sorted=$(mktemp)
+all_sorted=$(mktemp)
+trap "rm -f '$spec_sorted' '$all_sorted'" EXIT
 
-    # Check if fragment is in spec manifest
-    if ! echo "$spec_fragments" | grep -q "^${fragment}$"; then
-        orphans+=("$fragment")
-    fi
-done <<< "$all_fragments"
+echo "$spec_fragments" | sort > "$spec_sorted"
+echo "$all_fragments" | grep -v "^control flow\." | grep -v "^variables\." | sort > "$all_sorted"
+
+# comm -23 outputs lines only in file1 (all_sorted) - these are orphans
+orphan_list=$(comm -23 "$all_sorted" "$spec_sorted")
+orphans=()
+if [ -n "$orphan_list" ]; then
+    while IFS= read -r line; do
+        orphans+=("$line")
+    done <<< "$orphan_list"
+fi
 
 # Count fragments
 total_count=$(echo "$all_fragments" | wc -l)
