@@ -201,12 +201,6 @@ std::vector<uint8_t> PeWriter::buildImportDirectory(uint32_t baseRva) {
 	size_t numDlls = imports.size();
 	size_t descriptorTableSize = (numDlls + 1) * sizeof(ImportDescriptor); // +1 for null terminator
 
-	// Calculate total function entries
-	size_t totalFunctions = 0;
-	for (const auto &imp : imports) {
-		totalFunctions += imp.functions.size();
-	}
-
 	// Each DLL needs an INT and IAT, each entry is 8 bytes (64-bit), plus null terminator
 	size_t iatSize = 0;
 	for (const auto &imp : imports) {

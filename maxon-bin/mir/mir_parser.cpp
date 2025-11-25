@@ -849,7 +849,7 @@ MIRInstruction *MIRParser::parseFCmp(MIRValue *result) {
 
 MIRInstruction *MIRParser::parseAlloca(MIRValue *result) {
 	skipWhitespace();
-	MIRType *type = parseType();
+	(void)parseType(); // Consume type but don't use
 
 	auto inst = new MIRInstruction(MIROpcode::Alloca);
 	// Store allocated type in operand as a type marker
@@ -935,8 +935,8 @@ MIRInstruction *MIRParser::parseGEP(MIRValue *result) {
 		}
 	}
 
-	// Base type
-	MIRType *baseType = parseType();
+	// Base type - consumed but pointer semantics used
+	(void)parseType();
 	expect(',', "after GEP base type");
 	skipWhitespace();
 
@@ -1186,7 +1186,6 @@ MIRValue *MIRParser::parseValue(MIRType *expectedType) {
 MIRValue *MIRParser::parseConstant(MIRType *type) {
 	// Check for floating-point
 	bool isFloat = false;
-	size_t savedPos = pos;
 
 	// Scan ahead to see if this looks like a float
 	bool hasDecimal = false;

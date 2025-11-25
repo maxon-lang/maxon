@@ -358,7 +358,7 @@ void DwarfGenerator::generateInfo() {
 	write32(debugInfo, 0); // debug_abbrev_offset
 	write8(debugInfo, 8);  // address_size (64-bit)
 
-	size_t dieStart = debugInfo.size();
+	(void)headerStart; // Reserved for future use
 
 	// Compile Unit DIE (abbreviation 1)
 	writeULEB128(debugInfo, 1);
@@ -549,6 +549,7 @@ void DwarfGenerator::generateLine() {
 			write8(debugLine, DW_LNE_set_address);
 			write64(debugLine, entry.address);
 			currentAddr = entry.address;
+			(void)currentAddr; // Reserved for future delta calculations
 
 			// Set file if changed
 			if (entry.fileIndex != currentFile) {

@@ -82,6 +82,21 @@ set(SOURCES
     codegen/codegen_profile.cpp
     codegen/codegen_output.cpp
     codegen/codegen_debug.cpp
+    codegen_mir.cpp
+    codegen_mir/codegen_mir_expr.cpp
+    codegen_mir/codegen_mir_stmt.cpp
+    codegen_mir/codegen_mir_function.cpp
+    codegen_mir/codegen_mir_output.cpp
+    mir/mir.cpp
+    mir/mir_builder.cpp
+    mir/mir_parser.cpp
+    mir/optimizer.cpp
+    backend/x86_codegen.cpp
+    backend/x86_encoding.cpp
+    backend/regalloc.cpp
+    backend/pe_writer.cpp
+    backend/elf_writer.cpp
+    backend/dwarf.cpp
     semantic_analyzer.cpp
     semantic_analyzer/semantic_analyzer_expr.cpp
     semantic_analyzer/semantic_analyzer_stmt.cpp

@@ -374,7 +374,6 @@ bool ElfWriter::write(const std::string &filename) {
 		symtabData.insert(symtabData.end(), ptr, ptr + sizeof(Elf64_Sym));
 	}
 
-	uint32_t symtabIdx = static_cast<uint32_t>(sections.size());
 	{
 		ElfSection symtabSec;
 		symtabSec.name = ".symtab";

@@ -147,7 +147,8 @@ class RegisterCoalescer {
 class SpillCodeInserter {
   private:
 	mir::MIRFunction *function;
-	const RegisterAllocResult &allocResult;
+	// Note: allocResult stored for future use in advanced spill code generation
+	[[maybe_unused]] const RegisterAllocResult &allocResult;
 
   public:
 	SpillCodeInserter(mir::MIRFunction *func, const RegisterAllocResult &result)
