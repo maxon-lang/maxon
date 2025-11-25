@@ -555,3 +555,120 @@ TEST_CASE("MIR codegen: fibonacci", "[codegen_mir][integration]") {
 
 	REQUIRE(codegen->getModule() != nullptr);
 }
+
+//==============================================================================
+// Struct Return From Function Tests
+//==============================================================================
+
+TEST_CASE("MIR codegen: struct return from function - member access", "[codegen_mir][struct][large-struct]") {
+	// This test verifies that when a variable is initialized with a function call
+	// that returns a struct, the variable type is correctly tracked so that
+	// member access works correctly.
+	SECTION("small struct (8 bytes) returned by value") {
+		auto codegen = compileToMIR(R"(
+            struct Point
+                x int
+                y int
+            end 'Point'
+
+            function makePoint(a int, b int) Point
+                var p = Point { x: a, y: b }
+                return p
+            end 'makePoint'
+
+            function main() int
+                var p = makePoint(10, 20)
+                return p.x + p.y
+            end 'main'
+        )");
+
+		MIRModule *mod = codegen->getModule();
+		REQUIRE(mod != nullptr);
+
+		MIRFunction *main = mod->getFunction("main");
+		REQUIRE(main != nullptr);
+	}
+
+	SECTION("large struct (12 bytes) returned via hidden pointer") {
+		// This is the case that was failing - Point3D is 12 bytes (3 ints)
+		// which requires Windows x64 ABI hidden pointer return
+		auto codegen = compileToMIR(R"(
+            struct Point3D
+                x int
+                y int
+                z int
+            end 'Point3D'
+
+            function makePoint(a int, b int, c int) Point3D
+                var p = Point3D { x: a, y: b, z: c }
+                return p
+            end 'makePoint'
+
+            function main() int
+                var p = makePoint(10, 20, 30)
+                return p.x + p.y + p.z
+            end 'main'
+        )");
+
+		MIRModule *mod = codegen->getModule();
+		REQUIRE(mod != nullptr);
+
+		MIRFunction *main = mod->getFunction("main");
+		REQUIRE(main != nullptr);
+
+		// The main function should have generated MIR successfully
+		// This would have failed before the fix with "Unknown member: x"
+		REQUIRE(main->basicBlocks.size() >= 1);
+	}
+}
+
+TEST_CASE("MIR codegen: struct return - variable type tracking", "[codegen_mir][struct]") {
+	// Test that variableTypes is correctly set when type is inferred from function return
+	SECTION("inferred type from function call") {
+		auto codegen = compileToMIR(R"(
+            struct Vec2
+                x int
+                y int
+            end 'Vec2'
+
+            function createVec(a int, b int) Vec2
+                var v = Vec2 { x: a, y: b }
+                return v
+            end 'createVec'
+
+            function useVec(v Vec2) int
+                return v.x * v.y
+            end 'useVec'
+
+            function main() int
+                var v = createVec(3, 4)
+                return useVec(v)
+            end 'main'
+        )");
+
+		MIRModule *mod = codegen->getModule();
+		REQUIRE(mod != nullptr);
+	}
+
+	SECTION("explicit type annotation") {
+		auto codegen = compileToMIR(R"(
+            struct Vec2
+                x int
+                y int
+            end 'Vec2'
+
+            function createVec(a int, b int) Vec2
+                var v = Vec2 { x: a, y: b }
+                return v
+            end 'createVec'
+
+            function main() int
+                var v Vec2 = createVec(3, 4)
+                return v.x + v.y
+            end 'main'
+        )");
+
+		MIRModule *mod = codegen->getModule();
+		REQUIRE(mod != nullptr);
+	}
+}

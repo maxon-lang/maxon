@@ -96,6 +96,12 @@ void X86CodeGen::generatePrologue() {
 		encoder.subRI64(X86Reg::RSP, regAlloc.frameSize);
 	}
 
+	// Save hidden return pointer if this function returns a large struct
+	// Windows x64 ABI: The hidden pointer arrives in RCX
+	if (regAlloc.hasHiddenRetPtr) {
+		encoder.movMR64(X86Mem(X86Reg::RBP, regAlloc.hiddenRetPtrOffset), X86Reg::RCX);
+	}
+
 	// Save callee-saved registers
 	for (X86Reg reg : regAlloc.usedCalleeSaved) {
 		encoder.pushR(reg);
@@ -298,6 +304,13 @@ static uint64_t makeAllocKey(mir::MIRValue *value) {
 void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	regAlloc = RegAllocInfo();
 
+	// Check if this function returns a large struct (> 8 bytes)
+	// Windows x64 ABI: Large structs are returned via hidden pointer in RCX
+	// This shifts all other parameters right by one register
+	bool hasLargeStructReturn = func->returnType->isStruct() &&
+								func->returnType->sizeInBytes > 8;
+	regAlloc.hasHiddenRetPtr = hasLargeStructReturn;
+
 	// Available general-purpose registers (excluding RSP, RBP)
 	std::vector<X86Reg> availableRegs;
 	std::vector<X86Reg> paramRegs; // Registers used for passing parameters (ABI)
@@ -322,20 +335,31 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	// Simple allocation: assign registers to virtual registers in order
 	// This is a placeholder - real implementation would use linear scan
 	size_t regIdx = 0;
-	int32_t stackOffset = -8; // Start below RBP
+	int32_t stackOffset = 0; // Will be decremented before each allocation
+
+	// Reserve stack slot for hidden return pointer if needed
+	// This must be done before allocating other stack slots
+	if (hasLargeStructReturn) {
+		stackOffset -= 8; // 8 bytes for the pointer
+		regAlloc.hiddenRetPtrOffset = stackOffset;
+	}
 
 	// Allocate parameters to their ABI registers (where they arrive from caller)
+	// If we have a hidden return pointer, parameters are shifted right by 1
+	// (hidden ptr in RCX, first real param in RDX, etc.)
 	for (size_t i = 0; i < func->parameters.size(); ++i) {
 		auto *param = func->parameters[i];
 		uint64_t key = makeAllocKey(param);
-		if (i < paramRegs.size()) {
+		// Shift parameter index if hidden return pointer takes RCX
+		size_t regIndex = hasLargeStructReturn ? i + 1 : i;
+		if (regIndex < paramRegs.size()) {
 			// Parameter arrives in this register per the calling convention
-			regAlloc.regMap[key] = paramRegs[i];
+			regAlloc.regMap[key] = paramRegs[regIndex];
 		} else {
 			// Parameter is passed on the stack
 			// On Windows x64, stack params start at RSP+40 (after return addr + shadow space)
-			// But after our prologue, they're at RBP+16 + (i-4)*8
-			regAlloc.stackSlots[key] = 16 + static_cast<int32_t>((i - paramRegs.size()) * 8);
+			// But after our prologue, they're at RBP+16 + (regIndex-4)*8
+			regAlloc.stackSlots[key] = 16 + static_cast<int32_t>((regIndex - paramRegs.size()) * 8);
 		}
 	}
 
@@ -354,11 +378,14 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 					// Align to 8 bytes
 					allocSize = (allocSize + 7) & ~7;
 				}
+				// Decrement stackOffset FIRST, then store
+				// This ensures the alloca base is at the LOWEST address of its region
+				// and fields at positive offsets won't overlap with previous allocas
+				stackOffset -= allocSize;
 				// Allocas are always VirtualReg, use key with kind=0
 				uint64_t key = static_cast<uint64_t>(regId); // VirtualReg has kind bit = 0
 				regAlloc.stackSlots[key] = stackOffset;
 				regAlloc.allocaRegs.insert(regId); // Track this as an alloca
-				stackOffset -= allocSize;
 			}
 		}
 	}
@@ -371,13 +398,20 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 				if (regAlloc.regMap.find(key) == regAlloc.regMap.end() &&
 					regAlloc.stackSlots.find(key) == regAlloc.stackSlots.end()) {
 
+					// Force large structs to stack (for Windows x64 ABI compatibility)
+					bool forceStack = inst->result->type->isStruct() &&
+									  inst->result->type->sizeInBytes > 8;
+
 					// Try to allocate a register
-					if (regIdx < availableRegs.size()) {
+					if (!forceStack && regIdx < availableRegs.size()) {
 						regAlloc.regMap[key] = availableRegs[regIdx++];
 					} else {
-						// Spill to stack
+						// Spill to stack - decrement first, then store
+						int allocSize = forceStack ? static_cast<int>(inst->result->type->sizeInBytes) : 8;
+						// Align to 8 bytes
+						allocSize = (allocSize + 7) & ~7;
+						stackOffset -= allocSize;
 						regAlloc.stackSlots[key] = stackOffset;
-						stackOffset -= 8;
 					}
 				}
 			}
@@ -871,18 +905,44 @@ void X86CodeGen::genFCmp(mir::MIRInstruction *inst) {
 
 void X86CodeGen::genAlloca(mir::MIRInstruction *inst) {
 	// Alloca results are always assigned stack slots during register allocation
-	// The stack slot holds the allocated memory; we return its address
-	X86Mem slot = getStackSlot(inst->result);
-	encoder.lea64(X86Reg::RAX, slot);
-	// Note: We don't call storeResult because the alloca's result IS the stack slot
-	// The pointer value (address) is computed when needed via lea
+	// The stack slot holds the allocated memory
+	// NO CODE is generated here - the address is computed lazily when the
+	// alloca result is used (via lea in loadValue for allocaRegs)
+	(void)inst; // Suppress unused parameter warning
 }
 
 void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
+	mir::MIRType *loadType = inst->result->type;
+
+	// Handle large struct loads specially
+	if (loadType->isStruct() && loadType->sizeInBytes > 8) {
+		// For large structs, we can't load into a register
+		// Instead, copy from source to result's stack slot
+		X86Reg srcPtr = loadValue(inst->operands[0], X86Reg::RSI);
+
+		// Get destination (result's stack slot)
+		X86Mem dstSlot = getStackSlot(inst->result);
+		encoder.lea64(X86Reg::RDI, dstSlot);
+
+		// Copy the struct
+		uint64_t structSize = loadType->sizeInBytes;
+		uint64_t offset = 0;
+		for (; offset + 8 <= structSize; offset += 8) {
+			encoder.movRM64(X86Reg::RAX, X86Mem(srcPtr, static_cast<int32_t>(offset)));
+			encoder.movMR64(X86Mem(X86Reg::RDI, static_cast<int32_t>(offset)), X86Reg::RAX);
+		}
+		if (offset + 4 <= structSize) {
+			encoder.movRM32(X86Reg::EAX, X86Mem(srcPtr, static_cast<int32_t>(offset)));
+			encoder.movMR32(X86Mem(X86Reg::RDI, static_cast<int32_t>(offset)), X86Reg::EAX);
+			offset += 4;
+		}
+		// Result is already in its stack slot, nothing more to do
+		return;
+	}
+
 	X86Reg ptr = loadValue(inst->operands[0], X86Reg::RAX);
 	X86Mem mem(ptr);
 
-	mir::MIRType *loadType = inst->result->type;
 	if (loadType->isFloat()) {
 		encoder.movsdRM(X86Reg::XMM0, mem);
 		storeResultFloat(inst->result, X86Reg::XMM0);
@@ -919,10 +979,60 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 		X86Mem mem(ptrReg);
 		encoder.movsdMR(mem, valReg);
 	} else if (value->type->kind == mir::MIRTypeKind::Struct) {
+		// Check if this is a large struct from a call (Windows x64 ABI hidden pointer case)
+		// AND the destination is the same as the call result's stack slot
+		bool canSkipCopy = false;
+		if (value->type->sizeInBytes > 8 &&
+			value->kind == mir::MIRValueKind::VirtualReg &&
+			value->definingInst &&
+			value->definingInst->opcode == mir::MIROpcode::Call) {
+
+			// Large struct from call - check if source and dest are the same stack slot
+			// Get source (call result) and dest (store ptr) stack offsets
+			uint64_t srcKey = makeAllocKey(value);
+			auto srcIt = regAlloc.stackSlots.find(srcKey);
+
+			// For the destination, if it's an alloca result, get its stack slot
+			if (ptr->kind == mir::MIRValueKind::VirtualReg &&
+				regAlloc.allocaRegs.count(ptr->regId)) {
+				uint64_t dstKey = static_cast<uint64_t>(ptr->regId);
+				auto dstIt = regAlloc.stackSlots.find(dstKey);
+
+				if (srcIt != regAlloc.stackSlots.end() &&
+					dstIt != regAlloc.stackSlots.end() &&
+					srcIt->second == dstIt->second) {
+					// Source and dest are the same stack slot - skip copy
+					canSkipCopy = true;
+				}
+			}
+		}
+
+		if (canSkipCopy) {
+			// Struct is already at the destination via hidden pointer mechanism
+			return;
+		}
+
 		// Struct store - need to copy all bytes
-		// For now, handle by copying word by word
-		X86Reg srcReg = loadValue(value, X86Reg::RAX); // Source ptr (struct value is really a ptr)
-		X86Reg dstReg = loadValue(ptr, X86Reg::RCX);   // Dest ptr
+		// For large structs stored directly on the stack (e.g., from call results),
+		// we need the ADDRESS of the stack slot, not the value at the stack slot.
+		// For struct pointers (from GEP or alloca), loadValue gives us the address.
+		X86Reg srcReg;
+		bool isLargeStructOnStack = value->type->sizeInBytes > 8 &&
+									value->kind == mir::MIRValueKind::VirtualReg &&
+									!regAlloc.allocaRegs.count(value->regId) &&
+									getAllocatedReg(value) == X86Reg::None;
+
+		if (isLargeStructOnStack) {
+			// Large struct is stored directly on stack - use lea to get address
+			X86Mem slot = getStackSlot(value);
+			encoder.lea64(X86Reg::RAX, slot);
+			srcReg = X86Reg::RAX;
+		} else {
+			// Struct pointer or small struct in register - loadValue gives address/value
+			srcReg = loadValue(value, X86Reg::RAX);
+		}
+
+		X86Reg dstReg = loadValue(ptr, X86Reg::RCX); // Dest ptr
 
 		size_t structSize = value->type->sizeInBytes;
 		size_t offset = 0;
@@ -1181,7 +1291,49 @@ void X86CodeGen::genCondBr(mir::MIRInstruction *inst) {
 void X86CodeGen::genRet(mir::MIRInstruction *inst) {
 	mir::MIRValue *retVal = inst->operands[0];
 
-	if (retVal->type->isFloat()) {
+	// Check if returning a struct larger than 8 bytes
+	if (retVal->type->isStruct() && retVal->type->sizeInBytes > 8) {
+		// Windows x64 ABI: Large structs are returned via hidden pointer
+		// The hidden pointer was saved to stack in prologue (from RCX)
+		// We need to copy the struct to that location and return the pointer in RAX
+
+		// Load the hidden pointer from the saved stack location into RDI
+		encoder.movRM64(X86Reg::RDI, X86Mem(X86Reg::RBP, regAlloc.hiddenRetPtrOffset));
+
+		// Get the ADDRESS of the return value struct into RSI
+		// For large structs, the value is stored on the stack - we need LEA, not MOV
+		X86Reg srcReg;
+		if (retVal->kind == mir::MIRValueKind::VirtualReg &&
+			!regAlloc.allocaRegs.count(retVal->regId) &&
+			getAllocatedReg(retVal) == X86Reg::None) {
+			// Large struct is stored directly on stack - use lea to get address
+			X86Mem slot = getStackSlot(retVal);
+			encoder.lea64(X86Reg::RSI, slot);
+			srcReg = X86Reg::RSI;
+		} else {
+			// For alloca results or other pointer values, loadValue gives address
+			srcReg = loadValue(retVal, X86Reg::RSI);
+		}
+
+		// Copy the struct (use 8-byte moves when possible for efficiency)
+		uint64_t structSize = retVal->type->sizeInBytes;
+		uint64_t offset = 0;
+		// Copy 8 bytes at a time
+		for (; offset + 8 <= structSize; offset += 8) {
+			encoder.movRM64(X86Reg::RAX, X86Mem(srcReg, offset));
+			encoder.movMR64(X86Mem(X86Reg::RDI, offset), X86Reg::RAX);
+		}
+		// Copy remaining 4 bytes if any
+		if (offset + 4 <= structSize) {
+			encoder.movRM32(X86Reg::EAX, X86Mem(srcReg, offset));
+			encoder.movMR32(X86Mem(X86Reg::RDI, offset), X86Reg::EAX);
+			offset += 4;
+		}
+		// Note: Remaining 1-3 bytes would need byte moves, but structs are typically aligned
+
+		// Return the pointer in RAX per ABI
+		encoder.movRR64(X86Reg::RAX, X86Reg::RDI);
+	} else if (retVal->type->isFloat()) {
 		loadValueFloat(retVal, X86Reg::XMM0);
 	} else {
 		loadValue(retVal, X86Reg::RAX);
@@ -1199,13 +1351,32 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 		argRegs = {X86Reg::RDI, X86Reg::RSI, X86Reg::RDX, X86Reg::RCX, X86Reg::R8, X86Reg::R9};
 	}
 
-	// Load arguments into registers
-	for (size_t i = 0; i < inst->operands.size() && i < argRegs.size(); ++i) {
+	// Check if this function returns a large struct (> 8 bytes)
+	bool hasHiddenRetPtr = false;
+	if (inst->result && inst->result->type->isStruct() && inst->result->type->sizeInBytes > 8) {
+		// Windows x64 ABI: Caller allocates space and passes pointer as first arg
+		hasHiddenRetPtr = true;
+
+		// The struct result needs a stack location - get its stack slot
+		X86Mem slot = getStackSlot(inst->result);
+
+		// Load the address of that slot into the first argument register
+		encoder.lea64(argRegs[0], slot);
+	}
+
+	// Load arguments into registers (shift by 1 if we have hidden return pointer)
+	size_t argOffset = hasHiddenRetPtr ? 1 : 0;
+	for (size_t i = 0; i < inst->operands.size(); ++i) {
+		size_t regIndex = i + argOffset;
+		if (regIndex >= argRegs.size()) {
+			break; // TODO: Handle stack arguments
+		}
+
 		mir::MIRValue *arg = inst->operands[i];
 		if (arg->type->isFloat()) {
 			loadValueFloat(arg, static_cast<X86Reg>(static_cast<int>(X86Reg::XMM0) + i));
 		} else {
-			loadValue(arg, argRegs[i]);
+			loadValue(arg, argRegs[regIndex]);
 		}
 	}
 
@@ -1231,7 +1402,10 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 
 	// Store result
 	if (inst->result) {
-		if (inst->result->type->isFloat()) {
+		if (hasHiddenRetPtr) {
+			// Result was written to the hidden pointer location, nothing to do
+			// The struct is already in the right place
+		} else if (inst->result->type->isFloat()) {
 			storeResultFloat(inst->result, X86Reg::XMM0);
 		} else {
 			storeResult(inst->result, X86Reg::RAX);

@@ -45,7 +45,22 @@ maxon test-fragments           # Run all language tests
 maxon test-fragments --verbose # With detailed output
 ```
 
-### 4. Debug Output in Code
+### 4. Run Backend Unit Tests
+```bash
+make backend-test              # Build and run all backend tests
+```
+
+Unit tests are located in `maxon-bin/tests/` and test the MIR and x86 codegen in isolation:
+- `test_mir.cpp` - MIR data structures and builder
+- `test_x86_encoding.cpp` - x86 instruction encoding
+- `test_regalloc.cpp` - Register allocation
+- `test_large_struct_return.cpp` - Windows x64 ABI struct returns
+
+**When to use unit tests vs language tests:**
+- **Unit tests** - Debug specific backend components without full compilation pipeline
+- **Language tests** - Verify end-to-end behavior of language features
+
+### 5. Debug Output in Code
 
 Add `std::cerr` statements to trace execution. Key locations:
 
@@ -233,8 +248,74 @@ struct RegAllocation {
 
 2. **Check optimizer effects** - Many bugs appear after optimization. Test with and without `-O`.
 
+
 3. **Use `--emit-ir` liberally** - The MIR is much easier to read than x86 assembly.
 
 4. **Windows ABI quirks** - Struct returns, shadow space, and parameter passing all have Windows-specific rules.
 
 5. **Alloca semantics** - An `alloca` result is a POINTER to stack memory. Loading from it gives you the stored value. Using it directly in GEP treats it as the base address.
+
+## Current Issue: Large Struct Returns (Iterator - 12 bytes)
+
+**Problem:** Functions returning structs >8 bytes need special handling per Windows x64 ABI.
+
+**Windows x64 ABI Requirements:**
+- Structs ≤8 bytes: Returned in RAX
+- Structs >8 bytes: Returned via hidden pointer
+  1. Caller allocates space and passes pointer in RCX
+  2. Real parameters shift right: RDX, R8, R9, stack...
+  3. Callee fills struct at pointer location
+  4. Callee returns pointer in RAX
+
+**Implementation Status:**
+
+✅ **MIR Type Tracking** (`codegen_mir_stmt.cpp`)
+- Fixed: When `var` or `let` declarations infer type from function call returning struct,
+  the `variableTypes` map now correctly stores the struct name (e.g., "Point3D")
+- Previously, `variableTypes[name]` was empty, causing "Unknown member" errors on field access
+- Fix: Check if `allocaType->kind == MIRTypeKind::Struct` and use `allocaType->structName`
+
+✅ **Prologue Tracking** (`x86_codegen.cpp:~101`)
+- Save RCX (hidden pointer) to dedicated stack slot in prologue
+- `regAlloc.hiddenRetPtrOffset` tracks the saved location
+
+✅ **Register Allocation** (`x86_codegen.cpp:~304-350`)
+- Detect `hasLargeStructReturn` for structs >8 bytes
+- Reserve stack slot for hidden pointer before other allocations
+- Shift parameter registers (hidden ptr in RCX, first real param in RDX, etc.)
+
+✅ **Caller Side** (`x86_codegen.cpp:~1314-1370`)
+- Allocate stack space for struct result
+- Pass address in RCX via `lea` before other arguments
+- Arguments shifted right by 1 register position
+- Skip storing result after call (already at destination)
+
+✅ **Callee Return** (`x86_codegen.cpp:~1262-1300`)
+- Load hidden pointer from saved stack slot into RDI
+- Load source struct address into RSI  
+- Copy struct bytes (8 bytes at a time, then 4-byte tail)
+- Return pointer in RAX per ABI
+
+✅ **Unit Tests** (`maxon-bin/tests/test_large_struct_return.cpp`)
+- Tests for RegAllocInfo flags
+- Tests for prologue RCX save
+- Tests for parameter register shift
+- Tests for caller hidden pointer setup
+
+**Remaining Issue:**
+End-to-end language tests still crash (exit code 139 = SIGSEGV/access violation).
+MIR generation is now correct but something in x86 codegen is still broken.
+
+**Next Steps:**
+1. ✅ MIR now generates correctly - `var p = makePoint(...)` works
+2. Disassemble the generated executable to trace the crash
+3. Check if x86 codegen correctly handles large struct store/load operations
+
+**Test file:** `temp/large_struct_return.maxon`
+```maxon
+function makePoint(a int, b int, c int) Point3D
+    var p = Point3D{ x: a, y: b, z: c }
+    return p
+end 'makePoint'
+```
+

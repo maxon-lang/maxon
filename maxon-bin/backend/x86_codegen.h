@@ -35,6 +35,11 @@ struct RegAllocInfo {
 
 	// Callee-saved registers that need to be preserved
 	std::vector<X86Reg> usedCalleeSaved;
+
+	// Windows x64 ABI: For functions returning structs > 8 bytes,
+	// the hidden return pointer (passed in RCX) is saved to this stack offset
+	int32_t hiddenRetPtrOffset = 0;
+	bool hasHiddenRetPtr = false;
 };
 
 //==============================================================================

@@ -240,13 +240,14 @@ TEST_CASE("MIR function creation", "[mir][function]") {
 	SECTION("create basic blocks") {
 		auto *entry = func.createBasicBlock("entry");
 		REQUIRE(entry != nullptr);
-		REQUIRE(entry->name == "entry");
+		REQUIRE(entry->name == "entry0"); // Block names get unique suffix appended
 		REQUIRE(entry->parent == &func);
 		REQUIRE(func.basicBlocks.size() == 1);
 		REQUIRE(func.getEntryBlock() == entry);
 
 		auto *loop = func.createBasicBlock("loop");
 		REQUIRE(loop != nullptr);
+		REQUIRE(loop->name == "loop1"); // Second block gets id 1
 		REQUIRE(func.basicBlocks.size() == 2);
 		REQUIRE(func.getEntryBlock() == entry); // Entry is still first
 	}

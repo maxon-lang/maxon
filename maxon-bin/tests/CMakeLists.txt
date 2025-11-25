@@ -84,6 +84,10 @@ add_executable(test_runtime test_runtime.cpp ${CATCH_SOURCE})
 target_link_libraries(test_runtime backend_lib)
 target_compile_options(test_runtime PRIVATE ${TEST_COMPILE_OPTIONS})
 
+add_executable(test_large_struct_return test_large_struct_return.cpp ${CATCH_SOURCE})
+target_link_libraries(test_large_struct_return backend_lib)
+target_compile_options(test_large_struct_return PRIVATE ${TEST_COMPILE_OPTIONS})
+
 # Combined test runner
 add_executable(run_all_backend_tests
     test_mir.cpp
@@ -93,6 +97,7 @@ add_executable(run_all_backend_tests
     test_dwarf.cpp
     test_optimizer.cpp
     test_runtime.cpp
+    test_large_struct_return.cpp
     ${CATCH_SOURCE}
 )
 target_link_libraries(run_all_backend_tests backend_lib)
@@ -108,4 +113,5 @@ add_test(NAME ExecutableWriters COMMAND test_executable_writers)
 add_test(NAME DWARF COMMAND test_dwarf)
 add_test(NAME Optimizer COMMAND test_optimizer)
 add_test(NAME Runtime COMMAND test_runtime)
+add_test(NAME LargeStructReturn COMMAND test_large_struct_return)
 add_test(NAME AllBackendTests COMMAND run_all_backend_tests)

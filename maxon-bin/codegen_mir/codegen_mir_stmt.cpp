@@ -169,7 +169,15 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		}
 
 		namedValues[varDecl->name] = alloca;
-		variableTypes[varDecl->name] = varDecl->type;
+		// If type was explicitly specified, use it; otherwise derive from the alloca type
+		if (!varDecl->type.empty()) {
+			variableTypes[varDecl->name] = varDecl->type;
+		} else if (allocaType->kind == mir::MIRTypeKind::Struct) {
+			// For structs, use the struct name so member access works
+			variableTypes[varDecl->name] = allocaType->structName;
+		} else {
+			variableTypes[varDecl->name] = "";
+		}
 		return;
 	}
 
@@ -284,7 +292,15 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		}
 
 		namedValues[letDecl->name] = alloca;
-		variableTypes[letDecl->name] = letDecl->type;
+		// If type was explicitly specified, use it; otherwise derive from the alloca type
+		if (!letDecl->type.empty()) {
+			variableTypes[letDecl->name] = letDecl->type;
+		} else if (allocaType->kind == mir::MIRTypeKind::Struct) {
+			// For structs, use the struct name so member access works
+			variableTypes[letDecl->name] = allocaType->structName;
+		} else {
+			variableTypes[letDecl->name] = "";
+		}
 		return;
 	}
 

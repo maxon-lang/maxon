@@ -236,7 +236,7 @@ end 'add'
 ```maxon
 function sum(numbers []int, count int) int
     var total = 0
-    for i in 0..count 'loop'
+    for i in range(0, count) 'loop'
         total = total + numbers[i]
     end 'loop'
     return total
@@ -417,7 +417,7 @@ end 'label'
 
 **Range Iteration:**
 ```maxon
-for i in 0..10 'loop'
+for i in range(0, 10) 'loop'
     print(i)
 end 'loop'
 ```
@@ -607,7 +607,7 @@ end 'forever'
 ### Array Iteration
 ```maxon
 var numbers = [1, 2, 3, 4, 5]
-for i in 0..numbers.length 'iter'
+for i in range(0, numbers.length) 'iter'
     print(numbers[i])
 end 'iter'
 ```
@@ -742,7 +742,7 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 
 6. **Use `for` loops for ranges**:
    ```maxon
-   for i in 0..10 'loop'
+   for i in range(0, 10) 'loop'
        // i is 0, 1, 2, ..., 9
    end 'loop'
    ```

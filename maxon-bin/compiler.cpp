@@ -97,6 +97,37 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, int verboseLe
 }
 
 std::string compileProgram(const CompilationOptions &options) {
+	// Generate output filename early to determine what files to clean up
+	std::string baseFilename;
+	if (!options.outputFile.empty()) {
+		// Use provided outputFile and derive base from it
+		size_t lastDot = options.outputFile.find_last_of('.');
+		if (lastDot != std::string::npos) {
+			baseFilename = options.outputFile.substr(0, lastDot);
+		} else {
+			baseFilename = options.outputFile;
+		}
+	} else {
+		// Derive from first input file, preserving the directory path
+		size_t lastDot = options.inputFiles[0].find_last_of('.');
+		if (lastDot != std::string::npos) {
+			baseFilename = options.inputFiles[0].substr(0, lastDot);
+		} else {
+			baseFilename = options.inputFiles[0];
+		}
+	}
+
+	// Delete existing IR and executable files before compilation starts
+	std::string irFile = baseFilename + ".ir";
+	std::string exeFile = baseFilename + ".exe";
+
+	if (std::filesystem::exists(irFile)) {
+		std::filesystem::remove(irFile);
+	}
+	if (std::filesystem::exists(exeFile)) {
+		std::filesystem::remove(exeFile);
+	}
+
 	std::vector<std::unique_ptr<ProgramAST>> programs;
 	std::vector<std::string> sources;
 	std::vector<std::string> allFiles = options.inputFiles;
@@ -254,26 +285,6 @@ std::string compileProgram(const CompilationOptions &options) {
 		if (options.verboseLevel >= 2) {
 			auto optDuration = std::chrono::duration_cast<std::chrono::milliseconds>(optEndTime - optStartTime);
 			std::cout << "  Time: " << optDuration.count() << "ms" << std::endl;
-		}
-	}
-
-	// Generate output filename: use outputFile if set, otherwise derive from first input file
-	std::string baseFilename;
-	if (!options.outputFile.empty()) {
-		// Use provided outputFile and derive base from it
-		size_t lastDot = options.outputFile.find_last_of('.');
-		if (lastDot != std::string::npos) {
-			baseFilename = options.outputFile.substr(0, lastDot);
-		} else {
-			baseFilename = options.outputFile;
-		}
-	} else {
-		// Derive from first input file, preserving the directory path
-		size_t lastDot = options.inputFiles[0].find_last_of('.');
-		if (lastDot != std::string::npos) {
-			baseFilename = options.inputFiles[0].substr(0, lastDot);
-		} else {
-			baseFilename = options.inputFiles[0];
 		}
 	}
 
