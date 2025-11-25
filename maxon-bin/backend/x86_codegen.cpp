@@ -102,6 +102,12 @@ void X86CodeGen::generatePrologue() {
 		encoder.movMR64(X86Mem(X86Reg::RBP, regAlloc.hiddenRetPtrOffset), X86Reg::RCX);
 	}
 
+	// Save shifted parameters to stack (only for functions with hidden return pointer)
+	// These arrive in RDX, R8, R9 which are volatile and may be clobbered
+	for (const auto &save : regAlloc.shiftedParamSaves) {
+		encoder.movMR64(X86Mem(X86Reg::RBP, save.second), save.first);
+	}
+
 	// Save callee-saved registers
 	for (X86Reg reg : regAlloc.usedCalleeSaved) {
 		encoder.pushR(reg);
@@ -347,14 +353,23 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	// Allocate parameters to their ABI registers (where they arrive from caller)
 	// If we have a hidden return pointer, parameters are shifted right by 1
 	// (hidden ptr in RCX, first real param in RDX, etc.)
+	// For functions with hidden return pointer, shifted parameters must be saved
+	// to stack because RDX, R8, R9 are volatile and may be clobbered.
 	for (size_t i = 0; i < func->parameters.size(); ++i) {
 		auto *param = func->parameters[i];
 		uint64_t key = makeAllocKey(param);
 		// Shift parameter index if hidden return pointer takes RCX
 		size_t regIndex = hasLargeStructReturn ? i + 1 : i;
 		if (regIndex < paramRegs.size()) {
-			// Parameter arrives in this register per the calling convention
-			regAlloc.regMap[key] = paramRegs[regIndex];
+			if (hasLargeStructReturn) {
+				// Shifted params must be saved to stack (volatile regs may be clobbered)
+				stackOffset -= 8;
+				regAlloc.stackSlots[key] = stackOffset;
+				regAlloc.shiftedParamSaves.push_back({paramRegs[regIndex], stackOffset});
+			} else {
+				// Normal case: parameter stays in its arrival register
+				regAlloc.regMap[key] = paramRegs[regIndex];
+			}
 		} else {
 			// Parameter is passed on the stack
 			// On Windows x64, stack params start at RSP+40 (after return addr + shadow space)

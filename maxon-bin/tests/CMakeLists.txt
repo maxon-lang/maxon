@@ -20,7 +20,7 @@ include_directories(
 # Catch2 source (use from lsp-server/tests)
 set(CATCH_SOURCE ${PROJECT_ROOT}/lsp-server/tests/catch_amalgamated.cpp)
 
-# Backend source files
+# Backend source files (MIR infrastructure + x86 backend)
 set(BACKEND_SOURCES
     ../mir/mir.cpp
     ../mir/mir_builder.cpp
@@ -34,14 +34,38 @@ set(BACKEND_SOURCES
     ../backend/dwarf.cpp
 )
 
+# Frontend source files (lexer, parser, semantic analyzer, codegen_mir)
+set(FRONTEND_SOURCES
+    ../lexer.cpp
+    ../parser.cpp
+    ../parser/parser_utils.cpp
+    ../parser/parser_expr.cpp
+    ../parser/parser_stmt.cpp
+    ../parser/parser_decl.cpp
+    ../semantic_analyzer.cpp
+    ../semantic_analyzer/semantic_analyzer_expr.cpp
+    ../semantic_analyzer/semantic_analyzer_stmt.cpp
+    ../codegen_mir.cpp
+    ../codegen_mir/codegen_mir_expr.cpp
+    ../codegen_mir/codegen_mir_stmt.cpp
+    ../codegen_mir/codegen_mir_function.cpp
+    ../codegen_mir/codegen_mir_output.cpp
+)
+
 # Create a library from backend sources
 add_library(backend_lib STATIC ${BACKEND_SOURCES})
+
+# Create a library from frontend sources (depends on backend_lib for MIR types)
+add_library(frontend_lib STATIC ${FRONTEND_SOURCES})
+target_link_libraries(frontend_lib backend_lib)
 
 # Compiler flags - warnings as errors
 if(MSVC)
     target_compile_options(backend_lib PRIVATE /W3 /WX /wd4267 /wd4244)
+    target_compile_options(frontend_lib PRIVATE /W3 /WX /wd4267 /wd4244)
 else()
     target_compile_options(backend_lib PRIVATE -Wall -Werror -Wno-unused-parameter -Wno-sign-compare -Wno-unused-variable -Wno-unused-but-set-variable -Wno-deprecated-declarations -Wno-unused-private-field)
+    target_compile_options(frontend_lib PRIVATE -Wall -Werror -Wno-unused-parameter -Wno-sign-compare -Wno-unused-variable -Wno-unused-but-set-variable -Wno-deprecated-declarations -Wno-unused-private-field)
 endif()
 
 # Common test compile options (includes Catch2 warning suppressions)
@@ -51,67 +75,89 @@ else()
     set(TEST_COMPILE_OPTIONS -Wall -Werror -Wno-unused-parameter -Wno-sign-compare -Wno-deprecated-literal-operator)
 endif()
 
-# Test executables
+#==============================================================================
+# Test executables - organized by compilation stage
+#==============================================================================
+
+# Stage 1: MIR data structures
 add_executable(test_mir test_mir.cpp ${CATCH_SOURCE})
 target_link_libraries(test_mir backend_lib)
 target_compile_options(test_mir PRIVATE ${TEST_COMPILE_OPTIONS})
 
-add_executable(test_x86_encoding test_x86_encoding.cpp ${CATCH_SOURCE})
-target_link_libraries(test_x86_encoding backend_lib)
-target_compile_options(test_x86_encoding PRIVATE ${TEST_COMPILE_OPTIONS})
+# Stage 2: MIR text format parser
+add_executable(test_mir_parser test_mir_parser.cpp ${CATCH_SOURCE})
+target_link_libraries(test_mir_parser backend_lib)
+target_compile_options(test_mir_parser PRIVATE ${TEST_COMPILE_OPTIONS})
 
-add_executable(test_regalloc test_regalloc.cpp ${CATCH_SOURCE})
-target_link_libraries(test_regalloc backend_lib)
-target_compile_options(test_regalloc PRIVATE ${TEST_COMPILE_OPTIONS})
+# Stage 3: AST to MIR code generation (requires frontend)
+add_executable(test_codegen_mir test_codegen_mir.cpp ${CATCH_SOURCE})
+target_link_libraries(test_codegen_mir frontend_lib backend_lib)
+target_compile_options(test_codegen_mir PRIVATE ${TEST_COMPILE_OPTIONS})
 
-add_executable(test_executable_writers test_executable_writers.cpp ${CATCH_SOURCE})
-target_link_libraries(test_executable_writers backend_lib)
-target_compile_options(test_executable_writers PRIVATE ${TEST_COMPILE_OPTIONS})
-
-add_executable(test_dwarf test_dwarf.cpp ${CATCH_SOURCE})
-target_link_libraries(test_dwarf backend_lib)
-target_compile_options(test_dwarf PRIVATE ${TEST_COMPILE_OPTIONS})
-
-add_executable(test_end_to_end test_end_to_end.cpp ${CATCH_SOURCE})
-target_link_libraries(test_end_to_end backend_lib)
-target_compile_options(test_end_to_end PRIVATE ${TEST_COMPILE_OPTIONS})
-
+# Stage 4: MIR optimizer passes
 add_executable(test_optimizer test_optimizer.cpp ${CATCH_SOURCE})
 target_link_libraries(test_optimizer backend_lib)
 target_compile_options(test_optimizer PRIVATE ${TEST_COMPILE_OPTIONS})
 
-add_executable(test_runtime test_runtime.cpp ${CATCH_SOURCE})
-target_link_libraries(test_runtime backend_lib)
-target_compile_options(test_runtime PRIVATE ${TEST_COMPILE_OPTIONS})
+# Stage 5: Register allocation
+add_executable(test_regalloc test_regalloc.cpp ${CATCH_SOURCE})
+target_link_libraries(test_regalloc backend_lib)
+target_compile_options(test_regalloc PRIVATE ${TEST_COMPILE_OPTIONS})
 
-add_executable(test_large_struct_return test_large_struct_return.cpp ${CATCH_SOURCE})
-target_link_libraries(test_large_struct_return backend_lib)
-target_compile_options(test_large_struct_return PRIVATE ${TEST_COMPILE_OPTIONS})
+# Stage 6: x86 instruction encoding
+add_executable(test_x86_encoding test_x86_encoding.cpp ${CATCH_SOURCE})
+target_link_libraries(test_x86_encoding backend_lib)
+target_compile_options(test_x86_encoding PRIVATE ${TEST_COMPILE_OPTIONS})
 
-# Combined test runner
+# Stage 7: x86 code generation from MIR
+add_executable(test_x86_codegen test_x86_codegen.cpp ${CATCH_SOURCE})
+target_link_libraries(test_x86_codegen backend_lib)
+target_compile_options(test_x86_codegen PRIVATE ${TEST_COMPILE_OPTIONS})
+
+# Stage 8: Executable writers (PE/ELF)
+add_executable(test_executable_writers test_executable_writers.cpp ${CATCH_SOURCE})
+target_link_libraries(test_executable_writers backend_lib)
+target_compile_options(test_executable_writers PRIVATE ${TEST_COMPILE_OPTIONS})
+
+# Stage 9: Debug info (DWARF)
+add_executable(test_dwarf test_dwarf.cpp ${CATCH_SOURCE})
+target_link_libraries(test_dwarf backend_lib)
+target_compile_options(test_dwarf PRIVATE ${TEST_COMPILE_OPTIONS})
+
+#==============================================================================
+# Combined test runner (all backend tests without frontend dependency)
+#==============================================================================
 add_executable(run_all_backend_tests
     test_mir.cpp
-    test_x86_encoding.cpp
+    test_mir_parser.cpp
+    test_optimizer.cpp
     test_regalloc.cpp
+    test_x86_encoding.cpp
+    test_x86_codegen.cpp
     test_executable_writers.cpp
     test_dwarf.cpp
-    test_optimizer.cpp
-    test_runtime.cpp
-    test_large_struct_return.cpp
     ${CATCH_SOURCE}
 )
 target_link_libraries(run_all_backend_tests backend_lib)
 target_compile_options(run_all_backend_tests PRIVATE ${TEST_COMPILE_OPTIONS})
 
-# Enable testing
+#==============================================================================
+# CTest registration
+#==============================================================================
 enable_testing()
 
+# Backend-only tests (fast, no frontend dependency)
 add_test(NAME MIR COMMAND test_mir)
-add_test(NAME X86Encoding COMMAND test_x86_encoding)
+add_test(NAME MIRParser COMMAND test_mir_parser)
+add_test(NAME Optimizer COMMAND test_optimizer)
 add_test(NAME RegisterAllocation COMMAND test_regalloc)
+add_test(NAME X86Encoding COMMAND test_x86_encoding)
+add_test(NAME X86Codegen COMMAND test_x86_codegen)
 add_test(NAME ExecutableWriters COMMAND test_executable_writers)
 add_test(NAME DWARF COMMAND test_dwarf)
-add_test(NAME Optimizer COMMAND test_optimizer)
-add_test(NAME Runtime COMMAND test_runtime)
-add_test(NAME LargeStructReturn COMMAND test_large_struct_return)
+
+# Frontend + backend tests (slower, full pipeline)
+add_test(NAME CodegenMIR COMMAND test_codegen_mir)
+
+# Combined runner
 add_test(NAME AllBackendTests COMMAND run_all_backend_tests)

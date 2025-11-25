@@ -1,5 +1,9 @@
-// test_runtime.cpp - Unit tests for MIR parser and runtime library
-// Part of Phase 7: Runtime Library Port for LLVM Elimination Plan
+/**
+ * Unit tests for MIR Parser
+ *
+ * Tests parsing of textual MIR format into MIRModule data structures.
+ * This parser is used to load the runtime library from .mir files.
+ */
 
 #include "../mir/mir.h"
 #include "../mir/mir_parser.h"
@@ -11,7 +15,7 @@ using namespace mir;
 // MIR Parser Basic Tests
 //==============================================================================
 
-TEST_CASE("MIR Parser - Type Parsing", "[mir][parser]") {
+TEST_CASE("MIR Parser - Type Parsing", "[mir-parser][types]") {
 	SECTION("Basic types") {
 		auto result = MIRParser::parse(R"(
 			define void @test_void() {
@@ -68,7 +72,7 @@ TEST_CASE("MIR Parser - Type Parsing", "[mir][parser]") {
 	}
 }
 
-TEST_CASE("MIR Parser - Arithmetic Instructions", "[mir][parser]") {
+TEST_CASE("MIR Parser - Arithmetic Instructions", "[mir-parser][arithmetic]") {
 	SECTION("Integer arithmetic") {
 		auto result = MIRParser::parse(R"(
 			define i32 @add_test(i32 %a, i32 %b) {
@@ -132,7 +136,7 @@ TEST_CASE("MIR Parser - Arithmetic Instructions", "[mir][parser]") {
 	}
 }
 
-TEST_CASE("MIR Parser - Comparisons", "[mir][parser]") {
+TEST_CASE("MIR Parser - Comparisons", "[mir-parser][comparisons]") {
 	SECTION("Integer comparisons") {
 		auto result = MIRParser::parse(R"(
 			define i1 @icmp_test(i32 %a, i32 %b) {
@@ -165,7 +169,7 @@ TEST_CASE("MIR Parser - Comparisons", "[mir][parser]") {
 	}
 }
 
-TEST_CASE("MIR Parser - Control Flow", "[mir][parser]") {
+TEST_CASE("MIR Parser - Control Flow", "[mir-parser][control-flow]") {
 	SECTION("Unconditional branch") {
 		auto result = MIRParser::parse(R"(
 			define void @br_test() {
@@ -214,7 +218,7 @@ TEST_CASE("MIR Parser - Control Flow", "[mir][parser]") {
 	}
 }
 
-TEST_CASE("MIR Parser - Memory Operations", "[mir][parser]") {
+TEST_CASE("MIR Parser - Memory Operations", "[mir-parser][memory]") {
 	SECTION("Alloca and load/store") {
 		auto result = MIRParser::parse(R"(
 			define i32 @mem_test() {
@@ -240,7 +244,7 @@ TEST_CASE("MIR Parser - Memory Operations", "[mir][parser]") {
 	}
 }
 
-TEST_CASE("MIR Parser - Conversions", "[mir][parser]") {
+TEST_CASE("MIR Parser - Conversions", "[mir-parser][conversions]") {
 	SECTION("Integer conversions") {
 		auto result = MIRParser::parse(R"(
 			define i64 @conv_test(i32 %x) {
@@ -279,7 +283,7 @@ TEST_CASE("MIR Parser - Conversions", "[mir][parser]") {
 	}
 }
 
-TEST_CASE("MIR Parser - Function Calls", "[mir][parser]") {
+TEST_CASE("MIR Parser - Function Calls", "[mir-parser][calls]") {
 	SECTION("Simple call") {
 		auto result = MIRParser::parse(R"(
 			declare i32 @external_func(i32)
@@ -309,7 +313,7 @@ TEST_CASE("MIR Parser - Function Calls", "[mir][parser]") {
 	}
 }
 
-TEST_CASE("MIR Parser - External Declarations", "[mir][parser]") {
+TEST_CASE("MIR Parser - External Declarations", "[mir-parser][external]") {
 	SECTION("Windows-style declarations") {
 		auto result = MIRParser::parse(R"(
 			declare ptr @GetProcessHeap()
@@ -327,7 +331,7 @@ TEST_CASE("MIR Parser - External Declarations", "[mir][parser]") {
 // Runtime Function Tests
 //==============================================================================
 
-TEST_CASE("MIR Parser - Runtime: memset", "[mir][parser][runtime]") {
+TEST_CASE("MIR Parser - Runtime: memset", "[mir-parser][runtime]") {
 	auto result = MIRParser::parse(R"(
 		define ptr @memset(ptr %dest, i32 %val, i64 %count) {
 		entry:
@@ -356,7 +360,7 @@ TEST_CASE("MIR Parser - Runtime: memset", "[mir][parser][runtime]") {
 	REQUIRE(func->basicBlocks.size() == 4);
 }
 
-TEST_CASE("MIR Parser - Runtime: floor", "[mir][parser][runtime]") {
+TEST_CASE("MIR Parser - Runtime: floor", "[mir-parser][runtime]") {
 	auto result = MIRParser::parse(R"(
 		define f64 @floor(f64 %x) {
 		entry:
@@ -379,7 +383,7 @@ TEST_CASE("MIR Parser - Runtime: floor", "[mir][parser][runtime]") {
 	REQUIRE(func != nullptr);
 }
 
-TEST_CASE("MIR Parser - Runtime: sin kernel", "[mir][parser][runtime]") {
+TEST_CASE("MIR Parser - Runtime: sin kernel", "[mir-parser][runtime]") {
 	auto result = MIRParser::parse(R"(
 		define f64 @__sin_kernel(f64 %x, f64 %y) {
 		entry:
@@ -402,7 +406,7 @@ TEST_CASE("MIR Parser - Runtime: sin kernel", "[mir][parser][runtime]") {
 // Parse Error Tests
 //==============================================================================
 
-TEST_CASE("MIR Parser - Error handling", "[mir][parser][errors]") {
+TEST_CASE("MIR Parser - Error handling", "[mir-parser][errors]") {
 	SECTION("Unknown instruction") {
 		auto result = MIRParser::parse(R"(
 			define void @test() {
@@ -431,7 +435,7 @@ TEST_CASE("MIR Parser - Error handling", "[mir][parser][errors]") {
 // Module Merge Tests
 //==============================================================================
 
-TEST_CASE("MIR Parser - Module merge", "[mir][parser]") {
+TEST_CASE("MIR Parser - Module merge", "[mir-parser][merge]") {
 	auto result1 = MIRParser::parse(R"(
 		define i32 @func1() {
 		entry:

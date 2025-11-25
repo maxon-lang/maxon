@@ -17,14 +17,14 @@ A comprehensive test suite has been created using Catch2 framework in `maxon-bin
 |-----------|------------|------------|-------------|
 | `test_mir.cpp` | 17 | 171 | MIR construction, types, instructions, control flow |
 | `test_x86_encoding.cpp` | 23 | 223 | x86-64 instruction encoding, ModR/M, SIB, REX |
+| `test_x86_codegen.cpp` | ~20 | ~100 | X86CodeGen: instruction selection, calling conventions |
 | `test_regalloc.cpp` | 14 | 31 | Liveness analysis, linear-scan allocation, spilling |
 | `test_executable_writers.cpp` | 16 | 61 | ELF/PE structure generation and validation |
 | `test_dwarf.cpp` | 25 | 94 | DWARF debug info generation |
-| `test_end_to_end.cpp` | 2 | 6 | Full pipeline: MIR → x86 → PE → execute |
 | `test_optimizer.cpp` | 24 | 80 | All optimization passes |
-| `test_runtime.cpp` | 13 | 61 | MIR parser and runtime function parsing |
-| `test_codegen_mir.cpp` | 25 | ~50 | MIR codegen from Maxon AST |
-| **Total** | **159** | **~780** | |
+| `test_mir_parser.cpp` | 13 | 61 | MIR textual format parsing |
+| `test_codegen_mir.cpp` | ~50 | ~150 | AST-to-MIR code generation |
+| **Total** | **~200** | **~970** | |
 
 **Build**: `cd maxon-bin/tests/build && ninja && ./run_all_backend_tests.exe`
 
@@ -183,14 +183,13 @@ All tests pass with `-Werror` / `-WX` (warnings-as-errors) enabled.
 - `maxon-bin/backend/pe_writer.h` (~300 lines)
 - `maxon-bin/backend/pe_writer.cpp` (~600 lines)
 
-**Unit Tests** (`test_executable_writers.cpp`, `test_end_to_end.cpp`):
+**Unit Tests** (`test_executable_writers.cpp`):
 - ELF header validation (magic, class, machine type)
 - ELF section generation (.text, .data, .bss, .symtab, .strtab)
 - PE DOS header and PE signature
 - PE optional header and data directories
 - PE section table (.text, .data, .rdata, .idata)
 - Import directory and IAT generation
-- **End-to-end**: Generate PE from x86 code → run executable → verify exit code 42
 
 ---
 
@@ -304,7 +303,7 @@ The runtime library has been ported to textual MIR format with a new MIR parser.
 - `maxon-runtime/runtime_windows.mir` (~60 lines) - Windows platform functions
 - `maxon-runtime/runtime_linux.mir` (~80 lines) - Linux platform functions
 
-**Unit Tests** (`test_runtime.cpp`):
+**Unit Tests** (`test_mir_parser.cpp`):
 - Type parsing: all primitive types and arrays
 - Arithmetic operations: add, sub, mul, div, mod (signed/unsigned)
 - Comparison operations: icmp (eq, ne, slt, sgt, etc.), fcmp
@@ -316,7 +315,7 @@ The runtime library has been ported to textual MIR format with a new MIR parser.
 
 | Test File | Test Cases | Assertions | Description |
 |-----------|------------|------------|-------------|
-| `test_runtime.cpp` | 13 | 61 | MIR parser and runtime function parsing |
+| `test_mir_parser.cpp` | 13 | 61 | MIR textual format parsing |
 
 ---
 
@@ -348,7 +347,7 @@ A new `MIRCodeGenerator` class was created as a parallel implementation to the e
 - `maxon-bin/codegen_mir/codegen_mir_stmt.cpp` (~650 lines) - Statement generation
 - `maxon-bin/codegen_mir/codegen_mir_function.cpp` (~90 lines) - Function generation
 - `maxon-bin/codegen_mir/codegen_mir_output.cpp` (~230 lines) - Output/executable generation
-- `maxon-bin/tests/test_codegen_mir.cpp` (~400 lines) - Unit tests
+- `maxon-bin/tests/test_codegen_mir.cpp` (~1200 lines) - Unit tests
 
 **CMakeLists.txt Updated**:
 - Added MIR library files (mir.cpp, mir_builder.cpp, mir_parser.cpp, optimizer.cpp)
@@ -417,13 +416,14 @@ A new `MIRCodeGenerator` class was created as a parallel implementation to the e
 | Phase | Test File | Status |
 |-------|-----------|--------|
 | Phase 1 (MIR) | `test_mir.cpp` | ✓ Complete |
-| Phase 2 (x86) | `test_x86_encoding.cpp` | ✓ Complete |
+| Phase 2 (x86 Encoding) | `test_x86_encoding.cpp` | ✓ Complete |
+| Phase 2 (x86 CodeGen) | `test_x86_codegen.cpp` | ✓ Complete |
 | Phase 3 (RegAlloc) | `test_regalloc.cpp` | ✓ Complete |
-| Phase 4 (ELF/PE) | `test_executable_writers.cpp`, `test_end_to_end.cpp` | ✓ Complete |
+| Phase 4 (ELF/PE) | `test_executable_writers.cpp` | ✓ Complete |
 | Phase 5 (Optimizer) | `test_optimizer.cpp` | ✓ Complete |
 | Phase 6 (DWARF) | `test_dwarf.cpp` | ✓ Complete |
-| Phase 7 (Runtime) | `test_runtime.cpp` | TODO |
-| Phase 8 (Codegen) | `test_codegen_mir.cpp` | TODO |
+| Phase 7 (MIR Parser) | `test_mir_parser.cpp` | ✓ Complete |
+| Phase 8 (AST→MIR) | `test_codegen_mir.cpp` | ✓ Complete |
 
 ### End-to-End Tests ✓ VERIFIED
 - [x] Generate PE executable from hand-written x86 assembly

@@ -50,15 +50,50 @@ maxon test-fragments --verbose # With detailed output
 make backend-test              # Build and run all backend tests
 ```
 
-Unit tests are located in `maxon-bin/tests/` and test the MIR and x86 codegen in isolation:
-- `test_mir.cpp` - MIR data structures and builder
-- `test_x86_encoding.cpp` - x86 instruction encoding
-- `test_regalloc.cpp` - Register allocation
-- `test_large_struct_return.cpp` - Windows x64 ABI struct returns
+Unit tests are located in `maxon-bin/tests/` and cover all stages of the compilation pipeline:
+
+| Test File | Description |
+|-----------|-------------|
+| `test_mir.cpp` | MIR data structures, types, instructions, control flow |
+| `test_mir_parser.cpp` | MIR textual format parsing |
+| `test_codegen_mir.cpp` | AST-to-MIR code generation (expressions, statements, functions) |
+| `test_optimizer.cpp` | All optimization passes |
+| `test_regalloc.cpp` | Liveness analysis, linear-scan allocation, spilling |
+| `test_x86_encoding.cpp` | x86-64 instruction encoding, ModR/M, SIB, REX |
+| `test_x86_codegen.cpp` | X86CodeGen instruction selection, calling conventions, large struct returns |
+| `test_executable_writers.cpp` | ELF/PE structure generation and validation |
+| `test_dwarf.cpp` | DWARF debug info generation |
 
 **When to use unit tests vs language tests:**
 - **Unit tests** - Debug specific backend components without full compilation pipeline
 - **Language tests** - Verify end-to-end behavior of language features
+
+**Using unit tests to fix issues:**
+
+When a bug is identified (e.g., large struct returns crash at runtime), the workflow is:
+
+1. **Write a failing unit test** that isolates the specific behavior:
+   ```cpp
+   TEST_CASE("X86CodeGen: large struct return - parameter shift", "[x86-codegen][large-struct]") {
+       // Create MIR with large struct return and parameters
+       // Generate x86 code
+       // CHECK for expected machine code patterns
+   }
+   ```
+
+2. **Run just that test** to confirm it fails:
+   ```bash
+   cd maxon-bin/tests/build && ./test_x86_codegen.exe "[large-struct]"
+   ```
+
+3. **Fix the code** until the test passes
+
+4. **Run all backend tests** to ensure no regressions:
+   ```bash
+   make backend-test
+   ```
+
+This approach lets you debug complex issues (like ABI compliance) without needing the full compilation pipeline, and the test documents the expected behavior for future reference.
 
 ### 5. Debug Output in Code
 
@@ -255,7 +290,7 @@ struct RegAllocation {
 
 5. **Alloca semantics** - An `alloca` result is a POINTER to stack memory. Loading from it gives you the stored value. Using it directly in GEP treats it as the base address.
 
-## Current Issue: Large Struct Returns (Iterator - 12 bytes)
+## Resolved: Large Struct Returns (Iterator - 12 bytes)
 
 **Problem:** Functions returning structs >8 bytes need special handling per Windows x64 ABI.
 
@@ -284,6 +319,12 @@ struct RegAllocation {
 - Reserve stack slot for hidden pointer before other allocations
 - Shift parameter registers (hidden ptr in RCX, first real param in RDX, etc.)
 
+✅ **Shifted Parameter Saves** (`x86_codegen.cpp`)
+- For functions with hidden return pointer, shifted parameters (RDX, R8, R9) must be saved to stack
+- Added `regAlloc.shiftedParamSaves` vector to track {arrivalReg, stackOffset} pairs
+- Prologue now saves shifted parameters immediately after saving hidden pointer
+- Parameters allocated to stack slots instead of registers when `hasLargeStructReturn` is true
+
 ✅ **Caller Side** (`x86_codegen.cpp:~1314-1370`)
 - Allocate stack space for struct result
 - Pass address in RCX via `lea` before other arguments
@@ -295,21 +336,6 @@ struct RegAllocation {
 - Load source struct address into RSI  
 - Copy struct bytes (8 bytes at a time, then 4-byte tail)
 - Return pointer in RAX per ABI
-
-✅ **Unit Tests** (`maxon-bin/tests/test_large_struct_return.cpp`)
-- Tests for RegAllocInfo flags
-- Tests for prologue RCX save
-- Tests for parameter register shift
-- Tests for caller hidden pointer setup
-
-**Remaining Issue:**
-End-to-end language tests still crash (exit code 139 = SIGSEGV/access violation).
-MIR generation is now correct but something in x86 codegen is still broken.
-
-**Next Steps:**
-1. ✅ MIR now generates correctly - `var p = makePoint(...)` works
-2. Disassemble the generated executable to trace the crash
-3. Check if x86 codegen correctly handles large struct store/load operations
 
 **Test file:** `temp/large_struct_return.maxon`
 ```maxon

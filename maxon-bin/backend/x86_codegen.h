@@ -40,6 +40,10 @@ struct RegAllocInfo {
 	// the hidden return pointer (passed in RCX) is saved to this stack offset
 	int32_t hiddenRetPtrOffset = 0;
 	bool hasHiddenRetPtr = false;
+
+	// For functions with hidden return pointer, shifted parameters need to be
+	// saved to stack in prologue. Each entry is {arrivalReg, stackOffset}
+	std::vector<std::pair<X86Reg, int32_t>> shiftedParamSaves;
 };
 
 //==============================================================================
