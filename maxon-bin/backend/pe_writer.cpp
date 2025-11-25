@@ -7,6 +7,15 @@
 
 namespace backend {
 
+// Helper to copy a section name into a fixed-size buffer (avoids strncpy deprecation warning)
+static void copySectionName(char (&dest)[8], const char *src) {
+	std::memset(dest, 0, 8);
+	size_t len = std::strlen(src);
+	if (len > 8)
+		len = 8;
+	std::memcpy(dest, src, len);
+}
+
 PeWriter::PeWriter()
 	: subsystem(IMAGE_SUBSYSTEM_WINDOWS_CUI),
 	  imageBase(0x140000000), // Default for 64-bit Windows executables
@@ -99,6 +108,15 @@ void PeWriter::addRelocation(uint32_t rva, uint16_t type) {
 	rel.rva = rva;
 	rel.type = type;
 	baseRelocations.push_back(rel);
+}
+
+void PeWriter::addImportRelocation(uint32_t codeOffset, const std::string &dllName,
+								   const std::string &funcName) {
+	ImportCallReloc reloc;
+	reloc.codeOffset = codeOffset;
+	reloc.dllName = dllName;
+	reloc.funcName = funcName;
+	importCallRelocs.push_back(reloc);
 }
 
 uint32_t PeWriter::getImportRva(const std::string &dllName,
@@ -402,6 +420,40 @@ bool PeWriter::write(const std::string &filename) {
 		importRva = currentRva;
 		importData = buildImportDirectory(importRva);
 		currentRva = alignTo(currentRva + static_cast<uint32_t>(importData.size()), SECTION_ALIGNMENT);
+
+		// Now patch import call relocations in the code section
+		// After buildImportDirectory, importRvaMap is populated
+		if (!sections.empty() && !importCallRelocs.empty()) {
+			// Find the .text section
+			for (auto &sec : sections) {
+				if (sec.name == ".text") {
+					for (const auto &reloc : importCallRelocs) {
+						std::string key = reloc.dllName + "!" + reloc.funcName;
+						auto iatIt = importRvaMap.find(key);
+						if (iatIt != importRvaMap.end()) {
+							// Calculate RIP-relative displacement
+							// The call instruction is at (section RVA + code offset)
+							// The displacement is relative to the end of the instruction
+							// CALL [RIP+disp32] is 6 bytes: FF 15 xx xx xx xx
+							// disp32 is at offset+0, end of instruction is offset+4
+							uint32_t callRva = sec.virtualAddress + reloc.codeOffset;
+							uint32_t callEnd = callRva + 4; // After the disp32
+							uint32_t iatRva = iatIt->second;
+							int32_t disp = static_cast<int32_t>(iatRva - callEnd);
+
+							// Patch the displacement in the code
+							if (reloc.codeOffset + 3 < sec.data.size()) {
+								sec.data[reloc.codeOffset + 0] = static_cast<uint8_t>(disp & 0xFF);
+								sec.data[reloc.codeOffset + 1] = static_cast<uint8_t>((disp >> 8) & 0xFF);
+								sec.data[reloc.codeOffset + 2] = static_cast<uint8_t>((disp >> 16) & 0xFF);
+								sec.data[reloc.codeOffset + 3] = static_cast<uint8_t>((disp >> 24) & 0xFF);
+							}
+						}
+					}
+					break;
+				}
+			}
+		}
 	}
 
 	if (!baseRelocations.empty()) {
@@ -542,7 +594,7 @@ bool PeWriter::write(const std::string &filename) {
 
 	for (const auto &sec : sections) {
 		SectionHeader shdr = {};
-		std::strncpy(shdr.Name, sec.name.c_str(), 8);
+		copySectionName(shdr.Name, sec.name.c_str());
 		shdr.VirtualSize = sec.virtualSize;
 		shdr.VirtualAddress = sec.virtualAddress;
 		shdr.SizeOfRawData = sec.data.empty() ? 0 : alignTo(static_cast<uint32_t>(sec.data.size()), FILE_ALIGNMENT);
@@ -565,7 +617,7 @@ bool PeWriter::write(const std::string &filename) {
 	// Write import section header if needed
 	if (!imports.empty()) {
 		SectionHeader shdr = {};
-		std::strncpy(shdr.Name, ".idata", 8);
+		copySectionName(shdr.Name, ".idata");
 		shdr.VirtualSize = static_cast<uint32_t>(importData.size());
 		shdr.VirtualAddress = importRva;
 		shdr.SizeOfRawData = alignTo(static_cast<uint32_t>(importData.size()), FILE_ALIGNMENT);
@@ -582,7 +634,7 @@ bool PeWriter::write(const std::string &filename) {
 	// Write relocation section header if needed
 	if (!baseRelocations.empty()) {
 		SectionHeader shdr = {};
-		std::strncpy(shdr.Name, ".reloc", 8);
+		copySectionName(shdr.Name, ".reloc");
 		shdr.VirtualSize = static_cast<uint32_t>(relocData.size());
 		shdr.VirtualAddress = relocRva;
 		shdr.SizeOfRawData = alignTo(static_cast<uint32_t>(relocData.size()), FILE_ALIGNMENT);

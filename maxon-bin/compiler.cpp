@@ -1,12 +1,13 @@
 #include "compiler.h"
 
-#include "codegen.h"
+#include "codegen_mir.h"
 #include "error_formatter.h"
 #include "lexer.h"
 #include "semantic_analyzer.h"
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <set>
@@ -95,7 +96,7 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, int verboseLe
 	}
 }
 
-std::string compileProgram(const CompilationOptions &options, llvm::raw_ostream *errorStream) {
+std::string compileProgram(const CompilationOptions &options) {
 	std::vector<std::unique_ptr<ProgramAST>> programs;
 	std::vector<std::string> sources;
 	std::vector<std::string> allFiles = options.inputFiles;
@@ -216,7 +217,7 @@ std::string compileProgram(const CompilationOptions &options, llvm::raw_ostream 
 		std::cout << "Code generation" << std::endl;
 	}
 
-	CodeGenerator codegen(moduleName, options.debugInfo, options.verboseLevel, options.profile);
+	MIRCodeGenerator codegen(moduleName, options.debugInfo, options.verboseLevel);
 
 	auto codgenStartTime = std::chrono::high_resolution_clock::now();
 	codegen.generate(mergedProgram.get(), !options.compileOnly);
@@ -279,10 +280,10 @@ std::string compileProgram(const CompilationOptions &options, llvm::raw_ostream 
 	std::string exeOutputFile = baseFilename + ".exe";
 
 	if (options.emitLLVM) {
-		std::string llOutputFile = baseFilename + ".ll";
+		std::string llOutputFile = baseFilename + ".mir";
 		codegen.writeIRToFile(llOutputFile);
 		if (options.verboseLevel >= 2) {
-			std::cout << "  LLVM IR written to: " << llOutputFile << std::endl;
+			std::cout << "  MIR written to: " << llOutputFile << std::endl;
 		}
 	}
 
@@ -295,16 +296,20 @@ std::string compileProgram(const CompilationOptions &options, llvm::raw_ostream 
 			std::cout << "  Object file: " << objOutputFile << std::endl;
 		}
 	} else {
-		codegen.writeExecutable(exeOutputFile, errorStream);
+		codegen.writeExecutable(exeOutputFile);
 		outputFile = exeOutputFile;
 	}
 
 	// Print output info
 	if (options.verboseLevel >= 1) {
 		std::cout << "\nOutput: " << outputFile;
-		uint64_t outputFileSize = 0;
-		llvm::sys::fs::file_size(outputFile, outputFileSize);
-		std::cout << " (" << outputFileSize << " bytes)" << std::endl;
+		// Get file size using standard library
+		std::ifstream file(outputFile, std::ios::binary | std::ios::ate);
+		if (file) {
+			uint64_t outputFileSize = file.tellg();
+			std::cout << " (" << outputFileSize << " bytes)";
+		}
+		std::cout << std::endl;
 	}
 
 	return exeOutputFile;

@@ -3,6 +3,7 @@
 #include "../mir/mir.h"
 #include "x86_encoding.h"
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace backend {
@@ -25,6 +26,9 @@ struct RegAllocInfo {
 	std::unordered_map<uint32_t, X86Reg> regMap;
 	std::unordered_map<uint32_t, int32_t> stackSlots; // Stack offset from RBP
 
+	// Track which virtual registers are alloca results (their stack slots hold the allocated memory)
+	std::unordered_set<uint32_t> allocaRegs;
+
 	// Total stack frame size
 	uint32_t frameSize = 0;
 
@@ -40,7 +44,8 @@ struct Relocation {
 	enum class Type {
 		Rel32,		  // 32-bit relative (for jumps/calls within module)
 		Abs64,		  // 64-bit absolute (for data references)
-		FunctionCall, // Call to another function (may be external)
+		FunctionCall, // Direct call to another function (within module)
+		ImportCall,	  // Indirect call to imported function (via IAT)
 		GlobalRef,	  // Reference to global variable
 	};
 

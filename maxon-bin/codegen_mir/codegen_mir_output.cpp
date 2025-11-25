@@ -9,6 +9,8 @@
 #include "../backend/regalloc.h"
 #include "../backend/x86_codegen.h"
 #include "../codegen_mir.h"
+#include "../file_utils.h"
+#include "../mir/mir_parser.h"
 #include "../mir/optimizer.h"
 #include <fstream>
 #include <iostream>
@@ -59,6 +61,37 @@ void MIRCodeGenerator::runDeadCodeElimination() {
 }
 
 //==============================================================================
+// Runtime Library Location
+//==============================================================================
+
+static std::string findRuntimeFile(const std::string &filename) {
+	// Try relative to executable first
+	std::string exeDir = getExecutableDirectory();
+	std::string path = exeDir + "/" + filename;
+
+	std::ifstream f(path);
+	if (f.good()) {
+		return path;
+	}
+
+	// Try maxon-runtime directory (for development)
+	path = exeDir + "/../maxon-runtime/" + filename;
+	f = std::ifstream(path);
+	if (f.good()) {
+		return path;
+	}
+
+	// Try current directory
+	path = filename;
+	f = std::ifstream(path);
+	if (f.good()) {
+		return path;
+	}
+
+	return ""; // Not found
+}
+
+//==============================================================================
 // Object File Generation
 //==============================================================================
 
@@ -80,6 +113,65 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 	// Determine calling convention based on target
 	bool isWindows = (module->targetTriple.find("windows") != std::string::npos);
 
+	// Step 0: Load and merge runtime library
+	std::string runtimePath = isWindows ? "runtime_windows.mir" : "runtime_linux.mir";
+	std::string runtimeMirPath = findRuntimeFile(runtimePath);
+
+	if (!runtimeMirPath.empty()) {
+		auto runtimeResult = mir::MIRParser::parseFile(runtimeMirPath);
+		if (!runtimeResult.errors.empty()) {
+			std::cerr << "Warning: Failed to parse runtime library: " << runtimeResult.errors[0].message << std::endl;
+		} else if (runtimeResult.module) {
+			// First pass: Add external declarations from runtime that we don't have
+			// (these are Windows API functions like ExitProcess, HeapAlloc, etc.)
+			for (auto &func : runtimeResult.module->functions) {
+				if (func->isExternal) {
+					if (!module->getFunction(func->name)) {
+						// Add external declaration
+						module->functions.push_back(std::move(func));
+					}
+				}
+			}
+
+			// Second pass: Replace declarations with definitions from runtime
+			for (auto &func : runtimeResult.module->functions) {
+				if (!func)
+					continue; // Already moved in first pass
+				if (func->isExternal)
+					continue; // Skip remaining externals
+
+				// Check if we have a declaration for this function that we can replace
+				mir::MIRFunction *existing = module->getFunction(func->name);
+				if (existing && existing->isExternal) {
+					// Replace the declaration with the definition
+					for (auto it = module->functions.begin(); it != module->functions.end(); ++it) {
+						if ((*it)->name == func->name) {
+							*it = std::move(func);
+							break;
+						}
+					}
+				} else if (!existing) {
+					// New function not in user module
+					module->functions.push_back(std::move(func));
+				}
+				// If existing && !existing->isExternal, keep the user's definition
+			}
+
+			// Update calleeFunc pointers in all call instructions
+			// This is needed because we replaced some functions
+			for (auto &func : module->functions) {
+				for (auto &block : func->basicBlocks) {
+					for (auto &inst : block->instructions) {
+						if (inst->opcode == mir::MIROpcode::Call && !inst->calleeName.empty()) {
+							// Re-lookup the function by name
+							inst->calleeFunc = module->getFunction(inst->calleeName);
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Step 1: Generate x86-64 code from MIR
 	backend::CallingConv cc = isWindows ? backend::CallingConv::Win64 : backend::CallingConv::SysV64;
 	backend::X86CodeGen x86gen(cc);
@@ -98,13 +190,55 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 		std::cout << "  Data section size: " << dataSection.size() << " bytes" << std::endl;
 	}
 
-	// Collect all code into single buffer
+	// Collect all code into single buffer and track function positions
 	std::vector<uint8_t> codeBuffer;
 	std::unordered_map<std::string, size_t> functionOffsets;
 
+	// Collect all relocations with their adjusted offsets
+	struct AdjustedRelocation {
+		backend::Relocation reloc;
+		size_t funcBaseOffset; // Offset of the function containing this relocation
+	};
+	std::vector<AdjustedRelocation> allRelocations;
+
 	for (const auto &func : functionCodes) {
-		functionOffsets[func.name] = codeBuffer.size();
+		size_t funcOffset = codeBuffer.size();
+		functionOffsets[func.name] = funcOffset;
 		codeBuffer.insert(codeBuffer.end(), func.code.begin(), func.code.end());
+
+		// Collect relocations with adjusted offsets
+		for (const auto &reloc : func.relocations) {
+			allRelocations.push_back({reloc, funcOffset});
+		}
+	}
+
+	// Apply relocations for internal function calls and collect import relocations
+	std::vector<std::pair<size_t, std::string>> importRelocations; // offset, symbolName
+
+	for (const auto &adj : allRelocations) {
+		const auto &reloc = adj.reloc;
+
+		if (reloc.type == backend::Relocation::Type::FunctionCall) {
+			auto targetIt = functionOffsets.find(reloc.symbolName);
+			if (targetIt != functionOffsets.end()) {
+				// This is an internal function call - patch the rel32
+				size_t patchOffset = adj.funcBaseOffset + reloc.offset;
+				size_t callEnd = patchOffset + 4; // After the rel32
+				int32_t rel = static_cast<int32_t>(targetIt->second - callEnd);
+
+				// Patch the 4-byte relative offset
+				codeBuffer[patchOffset + 0] = static_cast<uint8_t>(rel & 0xFF);
+				codeBuffer[patchOffset + 1] = static_cast<uint8_t>((rel >> 8) & 0xFF);
+				codeBuffer[patchOffset + 2] = static_cast<uint8_t>((rel >> 16) & 0xFF);
+				codeBuffer[patchOffset + 3] = static_cast<uint8_t>((rel >> 24) & 0xFF);
+			}
+			// External function calls that aren't found will fall through (shouldn't happen)
+		} else if (reloc.type == backend::Relocation::Type::ImportCall) {
+			// Indirect call through IAT - collect for later patching by PE writer
+			size_t patchOffset = adj.funcBaseOffset + reloc.offset;
+			importRelocations.push_back({patchOffset, reloc.symbolName});
+		}
+		// GlobalRef relocations will be handled by PE/ELF writer
 	}
 
 	if (verboseLevel >= 2) {
@@ -113,22 +247,47 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 
 	// Step 2: Write executable using PE or ELF writer
 #ifdef _WIN32
-	writeWindowsExecutable(exeFile, codeBuffer, dataSection, functionOffsets);
+	writeWindowsExecutable(exeFile, codeBuffer, dataSection, functionOffsets, importRelocations);
 #else
-	writeLinuxExecutable(exeFile, codeBuffer, dataSection, functionOffsets);
+	writeLinuxExecutable(exeFile, codeBuffer, dataSection, functionOffsets, importRelocations);
 #endif
 }
 
 #ifdef _WIN32
 void MIRCodeGenerator::writeWindowsExecutable(
 	const std::string &exeFile,
-	const std::vector<uint8_t> &code,
+	std::vector<uint8_t> &code, // non-const to allow patching
 	const std::vector<uint8_t> &data,
-	const std::unordered_map<std::string, size_t> &funcOffsets) {
+	const std::unordered_map<std::string, size_t> &funcOffsets,
+	const std::vector<std::pair<size_t, std::string>> &importRelocs) {
 
 	backend::PeWriter pe;
 
-	// Add code section
+	// Add imports for Windows runtime functions FIRST (before sections)
+	// so we know the IAT layout
+	pe.addImport("kernel32.dll", "ExitProcess");
+	pe.addImport("kernel32.dll", "GetProcessHeap");
+	pe.addImport("kernel32.dll", "HeapAlloc");
+	pe.addImport("kernel32.dll", "HeapFree");
+	pe.addImport("kernel32.dll", "GetStdHandle");
+	pe.addImport("kernel32.dll", "WriteFile");
+
+	// Map of symbol names to their DLL!function format
+	std::unordered_map<std::string, std::string> importMapping = {
+		{"ExitProcess", "kernel32.dll!ExitProcess"},
+		{"GetProcessHeap", "kernel32.dll!GetProcessHeap"},
+		{"HeapAlloc", "kernel32.dll!HeapAlloc"},
+		{"HeapFree", "kernel32.dll!HeapFree"},
+		{"GetStdHandle", "kernel32.dll!GetStdHandle"},
+		{"WriteFile", "kernel32.dll!WriteFile"},
+	};
+
+	// Patch import call relocations in code buffer
+	// For each import call, we need to compute the RIP-relative offset to the IAT entry
+	// This will be patched after the PE layout is finalized
+	// For now, store the relocation info for the PE writer to handle
+
+	// Add code section (with potentially modified code)
 	uint32_t textSection = pe.addTextSection(code);
 
 	// Add data section if non-empty
@@ -139,20 +298,26 @@ void MIRCodeGenerator::writeWindowsExecutable(
 	// Find _start function and set as entry point
 	auto startIt = funcOffsets.find("_start");
 	if (startIt != funcOffsets.end()) {
-		// Entry point is RVA = section base + offset
-		// PeWriter handles the section base internally
-		pe.setEntryPoint(static_cast<uint32_t>(startIt->second));
+		// Entry point is RVA = section base (0x1000) + offset within code
+		uint32_t entryRva = 0x1000 + static_cast<uint32_t>(startIt->second);
+		pe.setEntryPoint(entryRva);
 	} else {
 		throw std::runtime_error("Entry point _start not found");
 	}
 
-	// Add imports for Windows runtime functions
-	pe.addImport("kernel32.dll", "ExitProcess");
-	pe.addImport("kernel32.dll", "GetProcessHeap");
-	pe.addImport("kernel32.dll", "HeapAlloc");
-	pe.addImport("kernel32.dll", "HeapFree");
-	pe.addImport("kernel32.dll", "GetStdHandle");
-	pe.addImport("kernel32.dll", "WriteFile");
+	// Register import relocations with PE writer
+	for (const auto &[offset, symbolName] : importRelocs) {
+		auto mappingIt = importMapping.find(symbolName);
+		if (mappingIt != importMapping.end()) {
+			// Parse DLL!func format
+			size_t bangPos = mappingIt->second.find('!');
+			std::string dllName = mappingIt->second.substr(0, bangPos);
+			std::string funcName = mappingIt->second.substr(bangPos + 1);
+
+			// Add import relocation - PE writer will patch this
+			pe.addImportRelocation(static_cast<uint32_t>(offset), dllName, funcName);
+		}
+	}
 
 	// Add symbols for debugging
 	for (const auto &[name, offset] : funcOffsets) {

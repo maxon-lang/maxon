@@ -7,12 +7,10 @@
 #include <string>
 #include <vector>
 
-#include <llvm/Support/raw_ostream.h>
-
 struct CompilationOptions {
 	std::vector<std::string> inputFiles;
 	std::string outputFile; // Internal use only, not exposed via CLI
-	bool emitLLVM = false;
+	bool emitLLVM = false;	// Now emits MIR instead of LLVM IR
 	bool compileOnly = false;
 	bool optimize = false;
 	bool debugInfo = false;
@@ -21,4 +19,4 @@ struct CompilationOptions {
 };
 
 std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, int verboseLevel = 0);
-std::string compileProgram(const CompilationOptions &options, llvm::raw_ostream *errorStream = nullptr);
+std::string compileProgram(const CompilationOptions &options);

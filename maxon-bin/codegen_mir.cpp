@@ -159,10 +159,10 @@ void MIRCodeGenerator::initStandardLibrary() {
 	// Declare print_float function
 	getOrDeclareFunction("print_float", mir::MIRType::getVoid(), {mir::MIRType::getFloat64()});
 
-	// Declare write_stdout function (used by print)
+	// Declare write_stdout function (used by print) - returns bytes written or error code
 	getOrDeclareFunction("write_stdout",
-						 mir::MIRType::getVoid(),
-						 {mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+						 mir::MIRType::getInt32(),
+						 {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
 }
 
 void MIRCodeGenerator::initHeapManagement() {

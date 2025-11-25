@@ -89,15 +89,17 @@ class MIRCodeGenerator {
 #ifdef _WIN32
 	void writeWindowsExecutable(
 		const std::string &exeFile,
-		const std::vector<uint8_t> &code,
+		std::vector<uint8_t> &code,
 		const std::vector<uint8_t> &data,
-		const std::unordered_map<std::string, size_t> &funcOffsets);
+		const std::unordered_map<std::string, size_t> &funcOffsets,
+		const std::vector<std::pair<size_t, std::string>> &importRelocs);
 #else
 	void writeLinuxExecutable(
 		const std::string &exeFile,
-		const std::vector<uint8_t> &code,
+		std::vector<uint8_t> &code,
 		const std::vector<uint8_t> &data,
-		const std::unordered_map<std::string, size_t> &funcOffsets);
+		const std::unordered_map<std::string, size_t> &funcOffsets,
+		const std::vector<std::pair<size_t, std::string>> &importRelocs);
 #endif
 
   public:

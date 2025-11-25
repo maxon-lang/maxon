@@ -260,6 +260,10 @@ class PeWriter {
 	// Add a base relocation
 	void addRelocation(uint32_t rva, uint16_t type = IMAGE_REL_BASED_DIR64);
 
+	// Add an import call relocation (for patching indirect calls through IAT)
+	void addImportRelocation(uint32_t codeOffset, const std::string &dllName,
+							 const std::string &funcName);
+
 	// Get RVA for an imported function (after layout)
 	uint32_t getImportRva(const std::string &dllName, const std::string &funcName) const;
 
@@ -278,6 +282,14 @@ class PeWriter {
 
 	// Import function RVA lookup (populated after buildImportDirectory)
 	mutable std::unordered_map<std::string, uint32_t> importRvaMap;
+
+	// Import call relocations (code offset -> import info)
+	struct ImportCallReloc {
+		uint32_t codeOffset; // Offset in .text section
+		std::string dllName;
+		std::string funcName;
+	};
+	std::vector<ImportCallReloc> importCallRelocs;
 
 	uint16_t subsystem;
 	uint64_t imageBase;

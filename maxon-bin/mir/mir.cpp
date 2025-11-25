@@ -378,6 +378,14 @@ std::string MIRInstruction::toString() const {
 		   << ", ptr " << operands[1]->toString();
 	} else if (opcode == MIROpcode::Load) {
 		ss << " " << result->type->toString() << ", ptr " << operands[0]->toString();
+	} else if (isComparison()) {
+		// For comparison instructions, output the operand type, not the result type (i1)
+		ss << " " << operands[0]->type->toString();
+		for (size_t i = 0; i < operands.size(); ++i) {
+			ss << " " << operands[i]->toString();
+			if (i < operands.size() - 1)
+				ss << ",";
+		}
 	} else {
 		// Generic binary/unary operations
 		if (result) {

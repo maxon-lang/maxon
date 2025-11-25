@@ -324,10 +324,23 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		}
 	}
 
-	// Allocate registers/stack for virtual registers in basic blocks
+	// First pass: allocate stack slots for alloca instructions
+	// Alloca results MUST be on stack since they represent addresses of stack memory
 	for (auto &block : func->basicBlocks) {
 		for (auto &inst : block->instructions) {
-			if (inst->result) {
+			if (inst->opcode == mir::MIROpcode::Alloca && inst->result) {
+				uint32_t regId = inst->result->regId;
+				regAlloc.stackSlots[regId] = stackOffset;
+				regAlloc.allocaRegs.insert(regId); // Track this as an alloca
+				stackOffset -= 8;
+			}
+		}
+	}
+
+	// Second pass: allocate registers/stack for other virtual registers
+	for (auto &block : func->basicBlocks) {
+		for (auto &inst : block->instructions) {
+			if (inst->result && inst->opcode != mir::MIROpcode::Alloca) {
 				uint32_t regId = inst->result->regId;
 				if (regAlloc.regMap.find(regId) == regAlloc.regMap.end() &&
 					regAlloc.stackSlots.find(regId) == regAlloc.stackSlots.end()) {
@@ -373,7 +386,8 @@ X86Mem X86CodeGen::getStackSlot(mir::MIRValue *value) {
 	if (it != regAlloc.stackSlots.end()) {
 		return X86Mem(X86Reg::RBP, it->second);
 	}
-	throw std::runtime_error("Value not found in stack slots");
+	throw std::runtime_error("Value not found in stack slots: regId=" + std::to_string(value->regId) +
+							 ", kind=" + std::to_string(static_cast<int>(value->kind)));
 }
 
 //==============================================================================
@@ -392,6 +406,13 @@ X86Reg X86CodeGen::loadValue(mir::MIRValue *value, X86Reg hint) {
 	}
 	case mir::MIRValueKind::VirtualReg:
 	case mir::MIRValueKind::Parameter: {
+		// Check if this is an alloca result - if so, compute address via lea
+		if (regAlloc.allocaRegs.count(value->regId)) {
+			X86Mem slot = getStackSlot(value);
+			encoder.lea64(hint, slot);
+			return hint;
+		}
+
 		X86Reg reg = getAllocatedReg(value);
 		if (reg != X86Reg::None) {
 			if (reg != hint) {
@@ -808,11 +829,12 @@ void X86CodeGen::genFCmp(mir::MIRInstruction *inst) {
 //==============================================================================
 
 void X86CodeGen::genAlloca(mir::MIRInstruction *inst) {
-	// Alloca result is already assigned a stack slot during register allocation
-	// Just compute the address
+	// Alloca results are always assigned stack slots during register allocation
+	// The stack slot holds the allocated memory; we return its address
 	X86Mem slot = getStackSlot(inst->result);
 	encoder.lea64(X86Reg::RAX, slot);
-	storeResult(inst->result, X86Reg::RAX);
+	// Note: We don't call storeResult because the alloca's result IS the stack slot
+	// The pointer value (address) is computed when needed via lea
 }
 
 void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
@@ -840,22 +862,46 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 	mir::MIRValue *value = inst->operands[0];
 	mir::MIRValue *ptr = inst->operands[1];
 
-	X86Reg ptrReg = loadValue(ptr, X86Reg::RCX);
-	X86Mem mem(ptrReg);
+	// Check if value is allocated to RCX (which we'll use for ptr)
+	X86Reg valueAllocReg = X86Reg::None;
+	if (value->kind == mir::MIRValueKind::VirtualReg && !regAlloc.allocaRegs.count(value->regId)) {
+		valueAllocReg = getAllocatedReg(value);
+	}
 
+	// Load value FIRST to avoid clobbering if ptr load overwrites value's register
 	if (value->type->isFloat()) {
 		X86Reg valReg = loadValueFloat(value, X86Reg::XMM0);
+		X86Reg ptrReg = loadValue(ptr, X86Reg::RCX);
+		X86Mem mem(ptrReg);
 		encoder.movsdMR(mem, valReg);
 	} else if (value->type->kind == mir::MIRTypeKind::Int8 ||
 			   value->type->kind == mir::MIRTypeKind::Int1) {
 		X86Reg valReg = loadValue(value, X86Reg::RAX);
+		X86Reg ptrReg = loadValue(ptr, X86Reg::RCX);
+		X86Mem mem(ptrReg);
 		encoder.movMR8(mem, valReg);
+		// Restore value's register if it was clobbered
+		if (valueAllocReg == X86Reg::RCX) {
+			encoder.movRR64(X86Reg::RCX, X86Reg::RAX);
+		}
 	} else if (value->type->kind == mir::MIRTypeKind::Int32) {
 		X86Reg valReg = loadValue(value, X86Reg::RAX);
+		X86Reg ptrReg = loadValue(ptr, X86Reg::RCX);
+		X86Mem mem(ptrReg);
 		encoder.movMR32(mem, valReg);
+		// Restore value's register if it was clobbered
+		if (valueAllocReg == X86Reg::RCX) {
+			encoder.movRR64(X86Reg::RCX, X86Reg::RAX);
+		}
 	} else {
 		X86Reg valReg = loadValue(value, X86Reg::RAX);
+		X86Reg ptrReg = loadValue(ptr, X86Reg::RCX);
+		X86Mem mem(ptrReg);
 		encoder.movMR64(mem, valReg);
+		// Restore value's register if it was clobbered
+		if (valueAllocReg == X86Reg::RCX) {
+			encoder.movRR64(X86Reg::RCX, X86Reg::RAX);
+		}
 	}
 }
 
@@ -1024,11 +1070,23 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 
 	// TODO: Handle stack arguments for more than 4/6 args
 
-	// Call the function
-	encoder.callRel32(0); // Placeholder
-	relocations.push_back({Relocation::Type::FunctionCall,
-						   encoder.getOffset() - 4,
-						   inst->calleeName});
+	// Check if this is an external function (needs indirect call through IAT)
+	bool isExternal = inst->calleeFunc && inst->calleeFunc->isExternal;
+
+	if (isExternal) {
+		// External call via IAT - generate indirect call with RIP-relative addressing
+		// CALL [RIP + disp32] - will be patched with actual IAT offset
+		encoder.callM(X86Mem::RipRel(0)); // Placeholder displacement
+		relocations.push_back({Relocation::Type::ImportCall,
+							   encoder.getOffset() - 4,
+							   inst->calleeName});
+	} else {
+		// Internal call - direct relative call
+		encoder.callRel32(0); // Placeholder
+		relocations.push_back({Relocation::Type::FunctionCall,
+							   encoder.getOffset() - 4,
+							   inst->calleeName});
+	}
 
 	// Store result
 	if (inst->result) {

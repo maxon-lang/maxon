@@ -12,8 +12,6 @@
 #include <map>
 #include <string>
 
-#include <llvm/Support/TargetSelect.h>
-
 #ifdef _WIN32
 #include <io.h>
 #define isatty _isatty
@@ -57,14 +55,6 @@ void printHelp(const char *programName) {
 }
 
 int main(int argc, char *argv[]) {
-	// Initialize LLVM targets once at program startup
-	// This prevents race conditions when multiple worker processes compile in parallel
-	llvm::InitializeAllTargetInfos();
-	llvm::InitializeAllTargets();
-	llvm::InitializeAllTargetMCs();
-	llvm::InitializeAllAsmParsers();
-	llvm::InitializeAllAsmPrinters();
-
 	// Check for help flag first
 	for (int i = 1; i < argc; ++i) {
 		std::string arg = argv[i];
@@ -268,6 +258,7 @@ int main(int argc, char *argv[]) {
 	try {
 		compileProgram(options);
 	} catch (const std::exception &e) {
+		std::cerr << "Error: " << e.what() << std::endl;
 		return 1;
 	}
 

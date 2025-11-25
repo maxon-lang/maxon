@@ -137,7 +137,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		if (varDecl->initializer) {
 			initVal = generateExpr(varDecl->initializer.get());
 			if (!initVal) {
-				throw std::runtime_error("Failed to generate variable initializer");
+				throw std::runtime_error("Failed to generate variable initializer for '" + varDecl->name + "'");
 			}
 		}
 
@@ -523,7 +523,9 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		for (auto &s : whileStmt->body) {
 			generateStmt(s.get(), function);
 		}
-		if (!loopBB->hasTerminator()) {
+		// Check current insert block (may differ from loopBB if body contains control flow)
+		mir::MIRBasicBlock *currentBB = builder->getInsertBlock();
+		if (!currentBB->hasTerminator()) {
 			builder->createBr(condBB);
 		}
 

@@ -248,6 +248,17 @@ class MIRInstruction {
 		return opcode == MIROpcode::Br || opcode == MIROpcode::CondBr;
 	}
 
+	bool isComparison() const {
+		return opcode == MIROpcode::ICmpEq || opcode == MIROpcode::ICmpNe ||
+			   opcode == MIROpcode::ICmpSLT || opcode == MIROpcode::ICmpSLE ||
+			   opcode == MIROpcode::ICmpSGT || opcode == MIROpcode::ICmpSGE ||
+			   opcode == MIROpcode::ICmpULT || opcode == MIROpcode::ICmpULE ||
+			   opcode == MIROpcode::ICmpUGT || opcode == MIROpcode::ICmpUGE ||
+			   opcode == MIROpcode::FCmpEq || opcode == MIROpcode::FCmpNe ||
+			   opcode == MIROpcode::FCmpLT || opcode == MIROpcode::FCmpLE ||
+			   opcode == MIROpcode::FCmpGT || opcode == MIROpcode::FCmpGE;
+	}
+
 	std::string toString() const;
 	static const char *opcodeToString(MIROpcode op);
 };
