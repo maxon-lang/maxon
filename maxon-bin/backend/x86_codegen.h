@@ -22,9 +22,10 @@ enum class CallingConv {
 //==============================================================================
 
 struct RegAllocInfo {
-	// Map from MIR virtual register ID to physical register or stack slot
-	std::unordered_map<uint32_t, X86Reg> regMap;
-	std::unordered_map<uint32_t, int32_t> stackSlots; // Stack offset from RBP
+	// Map from allocation key (encodes kind + regId) to physical register or stack slot
+	// Use uint64_t to encode both MIRValueKind and regId to avoid collisions
+	std::unordered_map<uint64_t, X86Reg> regMap;
+	std::unordered_map<uint64_t, int32_t> stackSlots; // Stack offset from RBP
 
 	// Track which virtual registers are alloca results (their stack slots hold the allocated memory)
 	std::unordered_set<uint32_t> allocaRegs;

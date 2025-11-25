@@ -12,14 +12,6 @@
 #include <map>
 #include <string>
 
-#ifdef _WIN32
-#include <io.h>
-#define isatty _isatty
-#define fileno _fileno
-#else
-#include <unistd.h>
-#endif
-
 namespace fs = std::filesystem;
 
 void printHelp(const char *programName) {
@@ -44,7 +36,7 @@ void printHelp(const char *programName) {
 	std::cerr << "  -v             Level 1 verbosity (progress, basic output)" << std::endl;
 	std::cerr << "  -vv            Level 2 verbosity (detailed information)" << std::endl;
 	std::cerr << "\nOptions for compile:" << std::endl;
-	std::cerr << "  --emit-llvm    Generate .ll file alongside executable" << std::endl;
+	std::cerr << "  --emit-ir      Generate .ir file alongside executable" << std::endl;
 	std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
 	std::cerr << "  -O             Enable optimizations" << std::endl;
 	std::cerr << "  --debug, -g    Generate debug information" << std::endl;
@@ -65,11 +57,6 @@ int main(int argc, char *argv[]) {
 	}
 
 	if (argc < 2) {
-		// Check if stdin has data (not a TTY)
-		if (!isatty(fileno(stdin))) {
-			return compileAndRunFromStdin();
-		}
-
 		printHelp(argv[0]);
 		return 1;
 	}
@@ -231,7 +218,7 @@ int main(int argc, char *argv[]) {
 
 	for (int i = 1; i < argc; ++i) {
 		std::string arg = argv[i];
-		if (arg == "--emit-llvm") {
+		if (arg == "--emit-ir") {
 			options.emitLLVM = true;
 		} else if (arg == "-c") {
 			options.compileOnly = true;

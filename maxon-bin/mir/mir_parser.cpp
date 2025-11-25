@@ -358,6 +358,19 @@ bool MIRParser::expect(const char *str, const std::string &context) {
 MIRType *MIRParser::parseType() {
 	skipWhitespace();
 
+	// Handle struct types: %StructName
+	if (peek() == '%') {
+		advance(); // '%'
+		std::string structName = readIdentifier();
+		// Look up or create the struct type
+		// For now, assume Iterator struct with 3 i32 fields
+		if (structName == "Iterator") {
+			return MIRType::getStruct(structName, {MIRType::getInt32(), MIRType::getInt32(), MIRType::getInt32()});
+		}
+		// Unknown struct - create placeholder with default size
+		return MIRType::getStruct(structName, {});
+	}
+
 	std::string typeName = readIdentifier();
 
 	if (typeName == "void")
@@ -849,11 +862,10 @@ MIRInstruction *MIRParser::parseFCmp(MIRValue *result) {
 
 MIRInstruction *MIRParser::parseAlloca(MIRValue *result) {
 	skipWhitespace();
-	(void)parseType(); // Consume type but don't use
+	MIRType *allocType = parseType();
 
 	auto inst = new MIRInstruction(MIROpcode::Alloca);
-	// Store allocated type in operand as a type marker
-	// (We'll use a special constant for this)
+	inst->allocatedType = allocType; // Store the allocated type for code generation
 
 	if (result) {
 		result->type = MIRType::getPtr();
@@ -935,8 +947,8 @@ MIRInstruction *MIRParser::parseGEP(MIRValue *result) {
 		}
 	}
 
-	// Base type - consumed but pointer semantics used
-	(void)parseType();
+	// Parse element type and store it for code generation
+	MIRType *elemType = parseType();
 	expect(',', "after GEP base type");
 	skipWhitespace();
 
@@ -960,6 +972,7 @@ MIRInstruction *MIRParser::parseGEP(MIRValue *result) {
 	}
 
 	auto inst = new MIRInstruction(MIROpcode::GetElementPtr);
+	inst->elementType = elemType; // Store element type for code generation
 	inst->operands.push_back(ptr);
 	for (auto idx : indices) {
 		inst->operands.push_back(idx);

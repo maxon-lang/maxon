@@ -86,6 +86,10 @@ bool MIRCodeGenerator::isArrayParam(const std::string &typeStr) {
 	return typeStr.size() > 2 && typeStr[0] == '[';
 }
 
+bool MIRCodeGenerator::isStructParameter(const std::string &varName) {
+	return structParameters.find(varName) != structParameters.end();
+}
+
 //==============================================================================
 // Scope Management
 //==============================================================================

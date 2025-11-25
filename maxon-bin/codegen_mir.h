@@ -6,6 +6,7 @@
 #include "mir/mir_builder.h"
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -27,6 +28,9 @@ class MIRCodeGenerator {
 
 	// Type tracking for variables (needed for struct/array access)
 	std::map<std::string, std::string> variableTypes;
+
+	// Track which variables are struct parameters (passed by pointer)
+	std::set<std::string> structParameters;
 
 	// Struct type definitions
 	std::map<std::string, mir::MIRType *> structTypes;
@@ -64,6 +68,7 @@ class MIRCodeGenerator {
 	mir::MIRType *getTypeFromString(const std::string &typeStr);
 	mir::MIRType *getParamTypeFromString(const std::string &typeStr);
 	bool isArrayParam(const std::string &typeStr);
+	bool isStructParameter(const std::string &varName);
 
 	// Alloca creation helper
 	mir::MIRValue *createEntryBlockAlloca(mir::MIRFunction *function,

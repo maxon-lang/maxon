@@ -165,7 +165,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			// Check if this is a pointer to struct or struct directly
 			std::string storedType = variableTypes[memberAccessExpr->objectName];
 			if (isArrayParam(storedType)) {
-				// It's a pointer parameter - load the pointer first
+				// It's an array parameter - load the pointer first
+				objectPtr = builder->createLoad(mir::MIRType::getPtr(), structAlloca, "struct.ptr");
+			} else if (isStructParameter(memberAccessExpr->objectName)) {
+				// Struct parameters are passed by pointer - load the pointer first
 				objectPtr = builder->createLoad(mir::MIRType::getPtr(), structAlloca, "struct.ptr");
 			} else {
 				objectPtr = structAlloca;

@@ -280,7 +280,7 @@ std::string compileProgram(const CompilationOptions &options) {
 	std::string exeOutputFile = baseFilename + ".exe";
 
 	if (options.emitLLVM) {
-		std::string llOutputFile = baseFilename + ".mir";
+		std::string llOutputFile = baseFilename + ".ir";
 		codegen.writeIRToFile(llOutputFile);
 		if (options.verboseLevel >= 2) {
 			std::cout << "  MIR written to: " << llOutputFile << std::endl;

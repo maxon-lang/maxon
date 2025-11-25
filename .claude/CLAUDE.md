@@ -58,12 +58,10 @@
 
 ### Testing
 - Use `maxon <file>` to compile and run in one step (no temp files, optimized by default)
-- Pipe code directly: `echo 'function main() int ... end "main"' | maxon`
-- Both file and piped execution optimize by default
 - Create test files in `/temp` and clean up afterwards
 - `maxon test-fragments` runs all language tests (add `--verbose` for details)
-- `maxon compile <file> --emit-llvm` generates an LLVM IR file with the exe
-- `maxon compile <file> -O` explicitly enables optimizations (enabled by default for both piping and direct file execution)
+- `maxon compile <file> --emit-ir` generates an IR file with the exe
+- `maxon compile <file> -O` explicitly enables optimizations
 
 ### Adding Keywords
 Update: `TokenType` enum, `Lexer::readIdentifier()` map, parser logic, AST if needed, codegen, TextMate grammar

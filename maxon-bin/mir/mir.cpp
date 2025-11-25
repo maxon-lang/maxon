@@ -365,7 +365,12 @@ std::string MIRInstruction::toString() const {
 			   << phiIncoming[i].second->name << " ]";
 		}
 	} else if (opcode == MIROpcode::Alloca) {
-		ss << " " << result->type->toString();
+		// Print the allocated type, not the result type (which is always ptr)
+		if (allocatedType) {
+			ss << " " << allocatedType->toString();
+		} else {
+			ss << " " << result->type->toString();
+		}
 	} else if (opcode == MIROpcode::CondBr) {
 		ss << " i1 " << operands[0]->toString() << ", label %"
 		   << operands[1]->blockRef->name << ", label %" << operands[2]->blockRef->name;
@@ -378,6 +383,17 @@ std::string MIRInstruction::toString() const {
 		   << ", ptr " << operands[1]->toString();
 	} else if (opcode == MIROpcode::Load) {
 		ss << " " << result->type->toString() << ", ptr " << operands[0]->toString();
+	} else if (opcode == MIROpcode::GetElementPtr) {
+		// Format: getelementptr <elemType>, ptr <basePtr>, <idx1>, <idx2>, ...
+		if (elementType) {
+			ss << " " << elementType->toString();
+		} else {
+			ss << " i8"; // Default to i8 if no element type specified
+		}
+		ss << ", ptr " << operands[0]->toString();
+		for (size_t i = 1; i < operands.size(); ++i) {
+			ss << ", " << operands[i]->type->toString() << " " << operands[i]->toString();
+		}
 	} else if (isComparison()) {
 		// For comparison instructions, output the operand type, not the result type (i1)
 		ss << " " << operands[0]->type->toString();
@@ -386,6 +402,13 @@ std::string MIRInstruction::toString() const {
 			if (i < operands.size() - 1)
 				ss << ",";
 		}
+	} else if (opcode == MIROpcode::Trunc || opcode == MIROpcode::ZExt ||
+			   opcode == MIROpcode::SExt || opcode == MIROpcode::FPToSI ||
+			   opcode == MIROpcode::SIToFP || opcode == MIROpcode::PtrToInt ||
+			   opcode == MIROpcode::IntToPtr || opcode == MIROpcode::Bitcast) {
+		// Conversion instructions: <op> <srcType> <value> to <destType>
+		ss << " " << operands[0]->type->toString() << " " << operands[0]->toString()
+		   << " to " << result->type->toString();
 	} else {
 		// Generic binary/unary operations
 		if (result) {
@@ -437,7 +460,9 @@ std::string MIRBasicBlock::toString() const {
 //==============================================================================
 
 MIRBasicBlock *MIRFunction::createBasicBlock(const std::string &blockName) {
-	auto block = std::make_unique<MIRBasicBlock>(blockName);
+	// Append unique ID to block name to ensure uniqueness
+	std::string uniqueName = blockName + std::to_string(nextBlockId);
+	auto block = std::make_unique<MIRBasicBlock>(uniqueName);
 	block->parent = this;
 	block->id = nextBlockId++;
 	MIRBasicBlock *ptr = block.get();

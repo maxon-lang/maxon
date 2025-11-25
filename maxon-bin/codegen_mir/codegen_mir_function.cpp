@@ -30,6 +30,7 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 	// Clear named values for new function
 	namedValues.clear();
 	variableTypes.clear();
+	structParameters.clear();
 
 	// Allocate stack space for parameters
 	size_t argIdx = 0;
@@ -44,6 +45,11 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 		namedValues[param.name] = alloca;
 		variableTypes[param.name] = param.type;
 		argIdx++;
+
+		// Track if this is a struct parameter (passed by pointer)
+		if (structTypes.find(param.type) != structTypes.end()) {
+			structParameters.insert(param.name);
+		}
 
 		// If this is an array parameter, also store the hidden length parameter
 		if (isArrayParam(param.type)) {

@@ -224,6 +224,12 @@ class MIRInstruction {
 	// For Phi nodes: incoming values paired with basic blocks
 	std::vector<std::pair<MIRValue *, MIRBasicBlock *>> phiIncoming;
 
+	// For GEP instructions: the element type being indexed into
+	MIRType *elementType = nullptr;
+
+	// For Alloca instructions: the type being allocated
+	MIRType *allocatedType = nullptr;
+
 	// Source location for debug info
 	int sourceLine = 0;
 	int sourceColumn = 0;

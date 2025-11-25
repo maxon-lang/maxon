@@ -312,8 +312,8 @@ MIRValue *MIRBuilder::createAlloca(MIRType *type, const std::string &name) {
 	auto inst = std::make_unique<MIRInstruction>(MIROpcode::Alloca);
 	// Alloca returns a pointer
 	inst->result = currentFunction->createVirtualReg(MIRType::getPtr());
-	// Store the allocated type info (we'll need it for codegen)
-	// We can use operands[0] to store a type indicator, but for now we'll track it differently
+	// Store the allocated type for serialization and code generation
+	inst->allocatedType = type;
 	MIRValue *result = inst->result;
 	insertInstruction(std::move(inst));
 	return result;
@@ -338,6 +338,7 @@ MIRValue *MIRBuilder::createGEP(MIRType *baseType, MIRValue *ptr,
 								const std::vector<MIRValue *> &indices, const std::string &name) {
 	auto inst = std::make_unique<MIRInstruction>(MIROpcode::GetElementPtr);
 	inst->result = currentFunction->createVirtualReg(MIRType::getPtr());
+	inst->elementType = baseType; // Store the element type for code generation
 	inst->operands.push_back(ptr);
 	for (auto *idx : indices) {
 		inst->operands.push_back(idx);

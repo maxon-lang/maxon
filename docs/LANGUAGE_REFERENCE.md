@@ -654,7 +654,7 @@ maxon program.maxon
 maxon compile program.maxon -o program.exe
 
 # Emit LLVM IR alongside executable
-maxon compile program.maxon --emit-llvm
+maxon compile program.maxon --emit-ir
 
 # Run language tests
 maxon test-fragments

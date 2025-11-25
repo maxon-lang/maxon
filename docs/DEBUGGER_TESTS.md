@@ -123,7 +123,7 @@ If tests fail to build:
 
 If tests fail to run:
 - Ensure `maxon.exe` is in your PATH
-- Check that debug information is being generated (`maxon compile -g --emit-llvm` to inspect)
+- Check that debug information is being generated (`maxon compile -g --emit-ir` to inspect)
 - For full debugging in development, use Visual Studio debugger or cppvsdbg in VS Code
 
 ### Linux/macOS

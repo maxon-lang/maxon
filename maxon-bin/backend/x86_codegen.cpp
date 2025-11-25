@@ -287,24 +287,35 @@ void X86CodeGen::generateInstruction(mir::MIRInstruction *inst) {
 // Simple Register Allocation
 //==============================================================================
 
+// Helper to create unique keys for register allocation maps
+// Parameters and VirtualRegs can have the same regId, so we encode the kind
+static uint64_t makeAllocKey(mir::MIRValue *value) {
+	// Use high bit to distinguish parameters from virtual regs
+	uint64_t kindBit = (value->kind == mir::MIRValueKind::Parameter) ? (1ULL << 32) : 0;
+	return kindBit | value->regId;
+}
+
 void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	regAlloc = RegAllocInfo();
 
 	// Available general-purpose registers (excluding RSP, RBP)
 	std::vector<X86Reg> availableRegs;
+	std::vector<X86Reg> paramRegs; // Registers used for passing parameters (ABI)
 	if (callingConv == CallingConv::Win64) {
+		// Windows x64 ABI: first 4 integer params in RCX, RDX, R8, R9
+		paramRegs = {X86Reg::RCX, X86Reg::RDX, X86Reg::R8, X86Reg::R9};
 		// Windows: RAX, RCX, RDX, R8-R11 are caller-saved (volatile)
 		// RBX, RSI, RDI, R12-R15 are callee-saved
-		availableRegs = {X86Reg::RAX, X86Reg::RCX, X86Reg::RDX,
-						 X86Reg::R8, X86Reg::R9, X86Reg::R10, X86Reg::R11,
+		// Start with RAX (not used for params), then R10, R11, then callee-saved
+		availableRegs = {X86Reg::RAX, X86Reg::R10, X86Reg::R11,
 						 X86Reg::RBX, X86Reg::RSI, X86Reg::RDI,
 						 X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15};
 	} else {
-		// System V: RAX, RCX, RDX, RSI, RDI, R8-R11 are caller-saved
+		// System V: first 6 integer params in RDI, RSI, RDX, RCX, R8, R9
+		paramRegs = {X86Reg::RDI, X86Reg::RSI, X86Reg::RDX, X86Reg::RCX, X86Reg::R8, X86Reg::R9};
+		// RAX, RCX, RDX, RSI, RDI, R8-R11 are caller-saved
 		// RBX, R12-R15 are callee-saved
-		availableRegs = {X86Reg::RAX, X86Reg::RCX, X86Reg::RDX,
-						 X86Reg::RSI, X86Reg::RDI,
-						 X86Reg::R8, X86Reg::R9, X86Reg::R10, X86Reg::R11,
+		availableRegs = {X86Reg::RAX, X86Reg::R10, X86Reg::R11,
 						 X86Reg::RBX, X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15};
 	}
 
@@ -313,14 +324,18 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	size_t regIdx = 0;
 	int32_t stackOffset = -8; // Start below RBP
 
-	// Reserve stack space for parameters (moved to stack in prologue)
+	// Allocate parameters to their ABI registers (where they arrive from caller)
 	for (size_t i = 0; i < func->parameters.size(); ++i) {
 		auto *param = func->parameters[i];
-		if (regIdx < availableRegs.size()) {
-			regAlloc.regMap[param->regId] = availableRegs[regIdx++];
+		uint64_t key = makeAllocKey(param);
+		if (i < paramRegs.size()) {
+			// Parameter arrives in this register per the calling convention
+			regAlloc.regMap[key] = paramRegs[i];
 		} else {
-			regAlloc.stackSlots[param->regId] = stackOffset;
-			stackOffset -= 8;
+			// Parameter is passed on the stack
+			// On Windows x64, stack params start at RSP+40 (after return addr + shadow space)
+			// But after our prologue, they're at RBP+16 + (i-4)*8
+			regAlloc.stackSlots[key] = 16 + static_cast<int32_t>((i - paramRegs.size()) * 8);
 		}
 	}
 
@@ -330,9 +345,20 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		for (auto &inst : block->instructions) {
 			if (inst->opcode == mir::MIROpcode::Alloca && inst->result) {
 				uint32_t regId = inst->result->regId;
-				regAlloc.stackSlots[regId] = stackOffset;
+				// Use the allocated type's size if available, otherwise default to 8 bytes
+				int allocSize = 8;
+				if (inst->allocatedType) {
+					allocSize = static_cast<int>(inst->allocatedType->sizeInBytes);
+					if (allocSize == 0)
+						allocSize = 8; // Fallback
+					// Align to 8 bytes
+					allocSize = (allocSize + 7) & ~7;
+				}
+				// Allocas are always VirtualReg, use key with kind=0
+				uint64_t key = static_cast<uint64_t>(regId); // VirtualReg has kind bit = 0
+				regAlloc.stackSlots[key] = stackOffset;
 				regAlloc.allocaRegs.insert(regId); // Track this as an alloca
-				stackOffset -= 8;
+				stackOffset -= allocSize;
 			}
 		}
 	}
@@ -341,16 +367,16 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	for (auto &block : func->basicBlocks) {
 		for (auto &inst : block->instructions) {
 			if (inst->result && inst->opcode != mir::MIROpcode::Alloca) {
-				uint32_t regId = inst->result->regId;
-				if (regAlloc.regMap.find(regId) == regAlloc.regMap.end() &&
-					regAlloc.stackSlots.find(regId) == regAlloc.stackSlots.end()) {
+				uint64_t key = makeAllocKey(inst->result);
+				if (regAlloc.regMap.find(key) == regAlloc.regMap.end() &&
+					regAlloc.stackSlots.find(key) == regAlloc.stackSlots.end()) {
 
 					// Try to allocate a register
 					if (regIdx < availableRegs.size()) {
-						regAlloc.regMap[regId] = availableRegs[regIdx++];
+						regAlloc.regMap[key] = availableRegs[regIdx++];
 					} else {
 						// Spill to stack
-						regAlloc.stackSlots[regId] = stackOffset;
+						regAlloc.stackSlots[key] = stackOffset;
 						stackOffset -= 8;
 					}
 				}
@@ -373,7 +399,8 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 X86Reg X86CodeGen::getAllocatedReg(mir::MIRValue *value) {
 	if (value->kind == mir::MIRValueKind::VirtualReg ||
 		value->kind == mir::MIRValueKind::Parameter) {
-		auto it = regAlloc.regMap.find(value->regId);
+		uint64_t key = makeAllocKey(value);
+		auto it = regAlloc.regMap.find(key);
 		if (it != regAlloc.regMap.end()) {
 			return it->second;
 		}
@@ -382,7 +409,8 @@ X86Reg X86CodeGen::getAllocatedReg(mir::MIRValue *value) {
 }
 
 X86Mem X86CodeGen::getStackSlot(mir::MIRValue *value) {
-	auto it = regAlloc.stackSlots.find(value->regId);
+	uint64_t key = makeAllocKey(value);
+	auto it = regAlloc.stackSlots.find(key);
 	if (it != regAlloc.stackSlots.end()) {
 		return X86Mem(X86Reg::RBP, it->second);
 	}
@@ -404,8 +432,21 @@ X86Reg X86CodeGen::loadValue(mir::MIRValue *value, X86Reg hint) {
 		encoder.xorRR64(hint, hint); // XOR reg, reg to zero
 		return hint;
 	}
-	case mir::MIRValueKind::VirtualReg:
 	case mir::MIRValueKind::Parameter: {
+		// Parameters are never allocas - they're passed in registers or on stack
+		X86Reg reg = getAllocatedReg(value);
+		if (reg != X86Reg::None) {
+			if (reg != hint) {
+				encoder.movRR64(hint, reg);
+			}
+			return hint;
+		}
+		// Load from stack
+		X86Mem slot = getStackSlot(value);
+		encoder.movRM64(hint, slot);
+		return hint;
+	}
+	case mir::MIRValueKind::VirtualReg: {
 		// Check if this is an alloca result - if so, compute address via lea
 		if (regAlloc.allocaRegs.count(value->regId)) {
 			X86Mem slot = getStackSlot(value);
@@ -862,46 +903,82 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 	mir::MIRValue *value = inst->operands[0];
 	mir::MIRValue *ptr = inst->operands[1];
 
-	// Check if value is allocated to RCX (which we'll use for ptr)
-	X86Reg valueAllocReg = X86Reg::None;
-	if (value->kind == mir::MIRValueKind::VirtualReg && !regAlloc.allocaRegs.count(value->regId)) {
-		valueAllocReg = getAllocatedReg(value);
+	// Check what registers value and ptr are allocated to
+	X86Reg ptrAllocReg = X86Reg::None;
+	if (ptr->kind == mir::MIRValueKind::VirtualReg && !regAlloc.allocaRegs.count(ptr->regId)) {
+		ptrAllocReg = getAllocatedReg(ptr);
 	}
 
-	// Load value FIRST to avoid clobbering if ptr load overwrites value's register
+	// If ptr is allocated to RAX, we need to load ptr FIRST before loading value
+	// (since loading value uses RAX as the target)
+	bool loadPtrFirst = (ptrAllocReg == X86Reg::RAX);
+
 	if (value->type->isFloat()) {
 		X86Reg valReg = loadValueFloat(value, X86Reg::XMM0);
 		X86Reg ptrReg = loadValue(ptr, X86Reg::RCX);
 		X86Mem mem(ptrReg);
 		encoder.movsdMR(mem, valReg);
+	} else if (value->type->kind == mir::MIRTypeKind::Struct) {
+		// Struct store - need to copy all bytes
+		// For now, handle by copying word by word
+		X86Reg srcReg = loadValue(value, X86Reg::RAX); // Source ptr (struct value is really a ptr)
+		X86Reg dstReg = loadValue(ptr, X86Reg::RCX);   // Dest ptr
+
+		size_t structSize = value->type->sizeInBytes;
+		size_t offset = 0;
+
+		// Copy 8 bytes at a time
+		while (offset + 8 <= structSize) {
+			encoder.movRM64(X86Reg::R10, X86Mem(srcReg, static_cast<int32_t>(offset)));
+			encoder.movMR64(X86Mem(dstReg, static_cast<int32_t>(offset)), X86Reg::R10);
+			offset += 8;
+		}
+		// Copy remaining 4 bytes if any
+		if (offset + 4 <= structSize) {
+			encoder.movRM32(X86Reg::R10, X86Mem(srcReg, static_cast<int32_t>(offset)));
+			encoder.movMR32(X86Mem(dstReg, static_cast<int32_t>(offset)), X86Reg::R10);
+			offset += 4;
+		}
+		// Copy remaining bytes one at a time
+		while (offset < structSize) {
+			encoder.movRM8(X86Reg::R10, X86Mem(srcReg, static_cast<int32_t>(offset)));
+			encoder.movMR8(X86Mem(dstReg, static_cast<int32_t>(offset)), X86Reg::R10);
+			offset += 1;
+		}
 	} else if (value->type->kind == mir::MIRTypeKind::Int8 ||
 			   value->type->kind == mir::MIRTypeKind::Int1) {
-		X86Reg valReg = loadValue(value, X86Reg::RAX);
-		X86Reg ptrReg = loadValue(ptr, X86Reg::RCX);
+		X86Reg ptrReg, valReg;
+		if (loadPtrFirst) {
+			ptrReg = loadValue(ptr, X86Reg::RCX);
+			valReg = loadValue(value, X86Reg::RAX);
+		} else {
+			valReg = loadValue(value, X86Reg::RAX);
+			ptrReg = loadValue(ptr, X86Reg::RCX);
+		}
 		X86Mem mem(ptrReg);
 		encoder.movMR8(mem, valReg);
-		// Restore value's register if it was clobbered
-		if (valueAllocReg == X86Reg::RCX) {
-			encoder.movRR64(X86Reg::RCX, X86Reg::RAX);
-		}
 	} else if (value->type->kind == mir::MIRTypeKind::Int32) {
-		X86Reg valReg = loadValue(value, X86Reg::RAX);
-		X86Reg ptrReg = loadValue(ptr, X86Reg::RCX);
+		X86Reg ptrReg, valReg;
+		if (loadPtrFirst) {
+			ptrReg = loadValue(ptr, X86Reg::RCX);
+			valReg = loadValue(value, X86Reg::RAX);
+		} else {
+			valReg = loadValue(value, X86Reg::RAX);
+			ptrReg = loadValue(ptr, X86Reg::RCX);
+		}
 		X86Mem mem(ptrReg);
 		encoder.movMR32(mem, valReg);
-		// Restore value's register if it was clobbered
-		if (valueAllocReg == X86Reg::RCX) {
-			encoder.movRR64(X86Reg::RCX, X86Reg::RAX);
-		}
 	} else {
-		X86Reg valReg = loadValue(value, X86Reg::RAX);
-		X86Reg ptrReg = loadValue(ptr, X86Reg::RCX);
+		X86Reg ptrReg, valReg;
+		if (loadPtrFirst) {
+			ptrReg = loadValue(ptr, X86Reg::RCX);
+			valReg = loadValue(value, X86Reg::RAX);
+		} else {
+			valReg = loadValue(value, X86Reg::RAX);
+			ptrReg = loadValue(ptr, X86Reg::RCX);
+		}
 		X86Mem mem(ptrReg);
 		encoder.movMR64(mem, valReg);
-		// Restore value's register if it was clobbered
-		if (valueAllocReg == X86Reg::RCX) {
-			encoder.movRR64(X86Reg::RCX, X86Reg::RAX);
-		}
 	}
 }
 
@@ -909,17 +986,81 @@ void X86CodeGen::genGEP(mir::MIRInstruction *inst) {
 	// Load base pointer
 	X86Reg base = loadValue(inst->operands[0], X86Reg::RAX);
 
-	// For now, simple GEP: base + index * element_size
-	if (inst->operands.size() >= 2) {
-		mir::MIRValue *index = inst->operands[1];
+	// GEP format: base, index0, [index1, ...]
+	// - For arrays: index0 is element index (or 0 if accessing first element)
+	// - For structs: index0 is 0, index1 is field index
 
-		if (index->kind == mir::MIRValueKind::ConstantInt) {
-			int32_t offset = static_cast<int32_t>(index->intValue * 8); // Assume 8-byte elements
-			encoder.lea64(X86Reg::RAX, X86Mem(base, offset));
+	if (!inst->elementType) {
+		// No element type - just return the base pointer
+		storeResult(inst->result, base);
+		return;
+	}
+
+	int64_t offset = 0;
+
+	if (inst->elementType->kind == mir::MIRTypeKind::Struct && inst->operands.size() >= 3) {
+		// Struct field access: getelementptr %Struct, ptr %base, i32 0, i32 <field_idx>
+		// The second index is the field index within the struct
+		mir::MIRValue *fieldIdx = inst->operands[2];
+
+		if (fieldIdx->kind == mir::MIRValueKind::ConstantInt) {
+			// Calculate byte offset to the field
+			int fieldIndex = static_cast<int>(fieldIdx->intValue);
+			for (int i = 0; i < fieldIndex && i < (int)inst->elementType->fieldTypes.size(); ++i) {
+				offset += inst->elementType->fieldTypes[i]->sizeInBytes;
+			}
+			encoder.lea64(X86Reg::RAX, X86Mem(base, static_cast<int32_t>(offset)));
 		} else {
-			X86Reg idxReg = loadValue(index, X86Reg::RCX);
-			// lea rax, [base + index*8]
-			encoder.lea64(X86Reg::RAX, X86Mem(base, idxReg, 8, 0));
+			// Dynamic field index - not commonly used, fall back to 4-byte fields
+			X86Reg idxReg = loadValue(fieldIdx, X86Reg::RCX);
+			encoder.lea64(X86Reg::RAX, X86Mem(base, idxReg, 4, 0));
+		}
+	} else {
+		// Array element access or simple pointer arithmetic
+		int elementSize = 8; // Default to 8 bytes (pointer size)
+		switch (inst->elementType->kind) {
+		case mir::MIRTypeKind::Int1:
+		case mir::MIRTypeKind::Int8:
+			elementSize = 1;
+			break;
+		case mir::MIRTypeKind::Int32:
+			elementSize = 4;
+			break;
+		case mir::MIRTypeKind::Int64:
+		case mir::MIRTypeKind::Ptr:
+		case mir::MIRTypeKind::Float64:
+			elementSize = 8;
+			break;
+		case mir::MIRTypeKind::Struct:
+			elementSize = static_cast<int>(inst->elementType->sizeInBytes);
+			break;
+		default:
+			elementSize = 8;
+			break;
+		}
+
+		// For array access: base + index * element_size
+		// We use the last meaningful index (skip leading 0 index)
+		mir::MIRValue *index = nullptr;
+		if (inst->operands.size() >= 3) {
+			index = inst->operands[2]; // Second index for array element
+		} else if (inst->operands.size() >= 2) {
+			index = inst->operands[1]; // Single index
+		}
+
+		if (index) {
+			if (index->kind == mir::MIRValueKind::ConstantInt) {
+				int32_t offsetBytes = static_cast<int32_t>(index->intValue * elementSize);
+				encoder.lea64(X86Reg::RAX, X86Mem(base, offsetBytes));
+			} else {
+				X86Reg idxReg = loadValue(index, X86Reg::RCX);
+				if (elementSize == 1 || elementSize == 2 || elementSize == 4 || elementSize == 8) {
+					encoder.lea64(X86Reg::RAX, X86Mem(base, idxReg, elementSize, 0));
+				} else {
+					encoder.imulRRI64(idxReg, idxReg, elementSize);
+					encoder.lea64(X86Reg::RAX, X86Mem(base, idxReg, 1, 0));
+				}
+			}
 		}
 	}
 
