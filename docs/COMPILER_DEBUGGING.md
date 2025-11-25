@@ -26,17 +26,17 @@ maxon compile file.maxon --emit-ir -O  # optimization ON
 
 ### 2. Disassemble Generated Executables
 ```bash
-llvm-objdump -d file.exe | less
+llvm-project/bin/llvm-objdump -d file.exe | less
 ```
 
 To find a specific function:
 ```bash
-llvm-objdump -d file.exe | grep -A50 "<functionName>:"
+llvm-project/bin/llvm-objdump -d file.exe | grep -A50 "<functionName>:"
 ```
 
 To disassemble starting at a specific address:
 ```bash
-llvm-objdump -d file.exe | grep -A30 "1400010dd:"
+llvm-project/bin/llvm-objdump -d file.exe | grep -A30 "1400010dd:"
 ```
 
 ### 3. Run Test Fragments
@@ -251,7 +251,7 @@ struct RegAllocation {
 
 3. **Disassemble if MIR looks correct:**
    ```bash
-   llvm-objdump -d temp/test.exe | grep -A30 "<main>:"
+   llvm-project/bin/llvm-objdump -d temp/test.exe | grep -A30 "<main>:"
    ```
 
 4. **Add debug output to trace the issue:**
@@ -289,59 +289,4 @@ struct RegAllocation {
 4. **Windows ABI quirks** - Struct returns, shadow space, and parameter passing all have Windows-specific rules.
 
 5. **Alloca semantics** - An `alloca` result is a POINTER to stack memory. Loading from it gives you the stored value. Using it directly in GEP treats it as the base address.
-
-## Resolved: Large Struct Returns (Iterator - 12 bytes)
-
-**Problem:** Functions returning structs >8 bytes need special handling per Windows x64 ABI.
-
-**Windows x64 ABI Requirements:**
-- Structs ≤8 bytes: Returned in RAX
-- Structs >8 bytes: Returned via hidden pointer
-  1. Caller allocates space and passes pointer in RCX
-  2. Real parameters shift right: RDX, R8, R9, stack...
-  3. Callee fills struct at pointer location
-  4. Callee returns pointer in RAX
-
-**Implementation Status:**
-
-✅ **MIR Type Tracking** (`codegen_mir_stmt.cpp`)
-- Fixed: When `var` or `let` declarations infer type from function call returning struct,
-  the `variableTypes` map now correctly stores the struct name (e.g., "Point3D")
-- Previously, `variableTypes[name]` was empty, causing "Unknown member" errors on field access
-- Fix: Check if `allocaType->kind == MIRTypeKind::Struct` and use `allocaType->structName`
-
-✅ **Prologue Tracking** (`x86_codegen.cpp:~101`)
-- Save RCX (hidden pointer) to dedicated stack slot in prologue
-- `regAlloc.hiddenRetPtrOffset` tracks the saved location
-
-✅ **Register Allocation** (`x86_codegen.cpp:~304-350`)
-- Detect `hasLargeStructReturn` for structs >8 bytes
-- Reserve stack slot for hidden pointer before other allocations
-- Shift parameter registers (hidden ptr in RCX, first real param in RDX, etc.)
-
-✅ **Shifted Parameter Saves** (`x86_codegen.cpp`)
-- For functions with hidden return pointer, shifted parameters (RDX, R8, R9) must be saved to stack
-- Added `regAlloc.shiftedParamSaves` vector to track {arrivalReg, stackOffset} pairs
-- Prologue now saves shifted parameters immediately after saving hidden pointer
-- Parameters allocated to stack slots instead of registers when `hasLargeStructReturn` is true
-
-✅ **Caller Side** (`x86_codegen.cpp:~1314-1370`)
-- Allocate stack space for struct result
-- Pass address in RCX via `lea` before other arguments
-- Arguments shifted right by 1 register position
-- Skip storing result after call (already at destination)
-
-✅ **Callee Return** (`x86_codegen.cpp:~1262-1300`)
-- Load hidden pointer from saved stack slot into RDI
-- Load source struct address into RSI  
-- Copy struct bytes (8 bytes at a time, then 4-byte tail)
-- Return pointer in RAX per ABI
-
-**Test file:** `temp/large_struct_return.maxon`
-```maxon
-function makePoint(a int, b int, c int) Point3D
-    var p = Point3D{ x: a, y: b, z: c }
-    return p
-end 'makePoint'
-```
 

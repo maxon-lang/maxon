@@ -955,7 +955,15 @@ void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 		return;
 	}
 
-	X86Reg ptr = loadValue(inst->operands[0], X86Reg::RAX);
+	// Check if result has an allocated register, and load directly into it
+	X86Reg targetReg = getAllocatedReg(inst->result);
+	if (targetReg == X86Reg::None) {
+		targetReg = X86Reg::RAX; // Use RAX as temporary if no register allocated
+	}
+
+	// Use a different register for the pointer to avoid clobbering the target
+	X86Reg ptrReg = (targetReg == X86Reg::RCX) ? X86Reg::RDX : X86Reg::RCX;
+	X86Reg ptr = loadValue(inst->operands[0], ptrReg);
 	X86Mem mem(ptr);
 
 	if (loadType->isFloat()) {
@@ -963,30 +971,20 @@ void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 		storeResultFloat(inst->result, X86Reg::XMM0);
 	} else if (loadType->kind == mir::MIRTypeKind::Int8 ||
 			   loadType->kind == mir::MIRTypeKind::Int1) {
-		encoder.movzxRM32_8(X86Reg::RAX, mem);
-		storeResult(inst->result, X86Reg::RAX);
+		encoder.movzxRM32_8(targetReg, mem);
+		storeResult(inst->result, targetReg);
 	} else if (loadType->kind == mir::MIRTypeKind::Int32) {
-		encoder.movRM32(X86Reg::RAX, mem);
-		storeResult(inst->result, X86Reg::RAX);
+		encoder.movRM32(targetReg, mem);
+		storeResult(inst->result, targetReg);
 	} else {
-		encoder.movRM64(X86Reg::RAX, mem);
-		storeResult(inst->result, X86Reg::RAX);
+		encoder.movRM64(targetReg, mem);
+		storeResult(inst->result, targetReg);
 	}
 }
 
 void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 	mir::MIRValue *value = inst->operands[0];
 	mir::MIRValue *ptr = inst->operands[1];
-
-	// Check what registers value and ptr are allocated to
-	X86Reg ptrAllocReg = X86Reg::None;
-	if (ptr->kind == mir::MIRValueKind::VirtualReg && !regAlloc.allocaRegs.count(ptr->regId)) {
-		ptrAllocReg = getAllocatedReg(ptr);
-	}
-
-	// If ptr is allocated to RAX, we need to load ptr FIRST before loading value
-	// (since loading value uses RAX as the target)
-	bool loadPtrFirst = (ptrAllocReg == X86Reg::RAX);
 
 	if (value->type->isFloat()) {
 		X86Reg valReg = loadValueFloat(value, X86Reg::XMM0);
@@ -1072,36 +1070,21 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 		}
 	} else if (value->type->kind == mir::MIRTypeKind::Int8 ||
 			   value->type->kind == mir::MIRTypeKind::Int1) {
-		X86Reg ptrReg, valReg;
-		if (loadPtrFirst) {
-			ptrReg = loadValue(ptr, X86Reg::RCX);
-			valReg = loadValue(value, X86Reg::RAX);
-		} else {
-			valReg = loadValue(value, X86Reg::RAX);
-			ptrReg = loadValue(ptr, X86Reg::RCX);
-		}
+		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
+		X86Reg valReg = loadValue(value, X86Reg::R10);
+		X86Reg ptrReg = loadValue(ptr, X86Reg::R11);
 		X86Mem mem(ptrReg);
 		encoder.movMR8(mem, valReg);
 	} else if (value->type->kind == mir::MIRTypeKind::Int32) {
-		X86Reg ptrReg, valReg;
-		if (loadPtrFirst) {
-			ptrReg = loadValue(ptr, X86Reg::RCX);
-			valReg = loadValue(value, X86Reg::RAX);
-		} else {
-			valReg = loadValue(value, X86Reg::RAX);
-			ptrReg = loadValue(ptr, X86Reg::RCX);
-		}
+		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
+		X86Reg valReg = loadValue(value, X86Reg::R10);
+		X86Reg ptrReg = loadValue(ptr, X86Reg::R11);
 		X86Mem mem(ptrReg);
 		encoder.movMR32(mem, valReg);
 	} else {
-		X86Reg ptrReg, valReg;
-		if (loadPtrFirst) {
-			ptrReg = loadValue(ptr, X86Reg::RCX);
-			valReg = loadValue(value, X86Reg::RAX);
-		} else {
-			valReg = loadValue(value, X86Reg::RAX);
-			ptrReg = loadValue(ptr, X86Reg::RCX);
-		}
+		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
+		X86Reg valReg = loadValue(value, X86Reg::R10);
+		X86Reg ptrReg = loadValue(ptr, X86Reg::R11);
 		X86Mem mem(ptrReg);
 		encoder.movMR64(mem, valReg);
 	}
