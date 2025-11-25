@@ -75,6 +75,9 @@ constexpr uint16_t IMAGE_REL_BASED_LOW = 2;
 constexpr uint16_t IMAGE_REL_BASED_HIGHLOW = 3;
 constexpr uint16_t IMAGE_REL_BASED_DIR64 = 10;
 
+// Additional section characteristics
+constexpr uint32_t IMAGE_SCN_MEM_DISCARDABLE = 0x02000000;
+
 //==============================================================================
 // PE Structures
 //==============================================================================

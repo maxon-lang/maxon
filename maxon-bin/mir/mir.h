@@ -68,6 +68,9 @@ class MIRType {
 
 	std::string toString() const;
 
+	// Allow recomputation of size (needed when building struct types)
+	void recomputeSize() { computeSize(); }
+
   private:
 	void computeSize();
 };

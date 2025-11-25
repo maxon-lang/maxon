@@ -558,7 +558,7 @@ MIRType *MIRModule::getOrCreateStructType(const std::string &structName, const s
 	auto type = std::make_unique<MIRType>(MIRTypeKind::Struct);
 	type->structName = structName;
 	type->fieldTypes = fields;
-	type->computeSize();
+	type->recomputeSize();
 	MIRType *ptr = type.get();
 	structTypes[structName] = std::move(type);
 	return ptr;

@@ -94,6 +94,12 @@ MIRInstruction *MIRBuilder::insertInstruction(std::unique_ptr<MIRInstruction> in
 	inst->sourceLine = currentLine;
 	inst->sourceColumn = currentColumn;
 	MIRInstruction *ptr = inst.get();
+
+	// Link result value back to its defining instruction
+	if (ptr->result) {
+		ptr->result->definingInst = ptr;
+	}
+
 	insertBlock->addInstruction(std::move(inst));
 	return ptr;
 }
@@ -103,8 +109,9 @@ MIRValue *MIRBuilder::createBinaryOp(MIROpcode op, MIRValue *lhs, MIRValue *rhs,
 	auto inst = std::make_unique<MIRInstruction>(op);
 	inst->result = currentFunction->createVirtualReg(lhs->type);
 	inst->operands = {lhs, rhs};
+	MIRValue *result = inst->result;
 	insertInstruction(std::move(inst));
-	return inst->result;
+	return result;
 }
 
 MIRValue *MIRBuilder::createCmpOp(MIROpcode op, MIRValue *lhs, MIRValue *rhs,
@@ -112,8 +119,9 @@ MIRValue *MIRBuilder::createCmpOp(MIROpcode op, MIRValue *lhs, MIRValue *rhs,
 	auto inst = std::make_unique<MIRInstruction>(op);
 	inst->result = currentFunction->createVirtualReg(MIRType::getInt1());
 	inst->operands = {lhs, rhs};
+	MIRValue *result = inst->result;
 	insertInstruction(std::move(inst));
-	return inst->result;
+	return result;
 }
 
 MIRValue *MIRBuilder::createCastOp(MIROpcode op, MIRValue *val, MIRType *destType,
@@ -121,8 +129,9 @@ MIRValue *MIRBuilder::createCastOp(MIROpcode op, MIRValue *val, MIRType *destTyp
 	auto inst = std::make_unique<MIRInstruction>(op);
 	inst->result = currentFunction->createVirtualReg(destType);
 	inst->operands = {val};
+	MIRValue *result = inst->result;
 	insertInstruction(std::move(inst));
-	return inst->result;
+	return result;
 }
 
 //==============================================================================
@@ -161,8 +170,9 @@ MIRValue *MIRBuilder::createNeg(MIRValue *val, const std::string &name) {
 	auto inst = std::make_unique<MIRInstruction>(MIROpcode::Neg);
 	inst->result = currentFunction->createVirtualReg(val->type);
 	inst->operands = {val};
+	MIRValue *result = inst->result;
 	insertInstruction(std::move(inst));
-	return inst->result;
+	return result;
 }
 
 //==============================================================================
@@ -221,8 +231,9 @@ MIRValue *MIRBuilder::createFNeg(MIRValue *val, const std::string &name) {
 	auto inst = std::make_unique<MIRInstruction>(MIROpcode::FNeg);
 	inst->result = currentFunction->createVirtualReg(val->type);
 	inst->operands = {val};
+	MIRValue *result = inst->result;
 	insertInstruction(std::move(inst));
-	return inst->result;
+	return result;
 }
 
 //==============================================================================
@@ -303,16 +314,18 @@ MIRValue *MIRBuilder::createAlloca(MIRType *type, const std::string &name) {
 	inst->result = currentFunction->createVirtualReg(MIRType::getPtr());
 	// Store the allocated type info (we'll need it for codegen)
 	// We can use operands[0] to store a type indicator, but for now we'll track it differently
+	MIRValue *result = inst->result;
 	insertInstruction(std::move(inst));
-	return inst->result;
+	return result;
 }
 
 MIRValue *MIRBuilder::createLoad(MIRType *type, MIRValue *ptr, const std::string &name) {
 	auto inst = std::make_unique<MIRInstruction>(MIROpcode::Load);
 	inst->result = currentFunction->createVirtualReg(type);
 	inst->operands = {ptr};
+	MIRValue *result = inst->result;
 	insertInstruction(std::move(inst));
-	return inst->result;
+	return result;
 }
 
 void MIRBuilder::createStore(MIRValue *value, MIRValue *ptr) {
@@ -329,8 +342,9 @@ MIRValue *MIRBuilder::createGEP(MIRType *baseType, MIRValue *ptr,
 	for (auto *idx : indices) {
 		inst->operands.push_back(idx);
 	}
+	MIRValue *result = inst->result;
 	insertInstruction(std::move(inst));
-	return inst->result;
+	return result;
 }
 
 MIRValue *MIRBuilder::createArrayGEP(MIRType *elemType, MIRValue *arrayPtr, MIRValue *index,
@@ -429,12 +443,14 @@ MIRValue *MIRBuilder::createCall(MIRFunction *callee, const std::vector<MIRValue
 	inst->calleeFunc = callee;
 	inst->operands = args;
 
+	MIRValue *result = nullptr;
 	if (!callee->returnType->isVoid()) {
 		inst->result = currentFunction->createVirtualReg(callee->returnType);
+		result = inst->result;
 	}
 
 	insertInstruction(std::move(inst));
-	return inst->result;
+	return result;
 }
 
 MIRValue *MIRBuilder::createCall(const std::string &calleeName, MIRType *returnType,
@@ -443,12 +459,14 @@ MIRValue *MIRBuilder::createCall(const std::string &calleeName, MIRType *returnT
 	inst->calleeName = calleeName;
 	inst->operands = args;
 
+	MIRValue *result = nullptr;
 	if (!returnType->isVoid()) {
 		inst->result = currentFunction->createVirtualReg(returnType);
+		result = inst->result;
 	}
 
 	insertInstruction(std::move(inst));
-	return inst->result;
+	return result;
 }
 
 //==============================================================================
@@ -458,8 +476,9 @@ MIRValue *MIRBuilder::createCall(const std::string &calleeName, MIRType *returnT
 MIRValue *MIRBuilder::createPhi(MIRType *type, const std::string &name) {
 	auto inst = std::make_unique<MIRInstruction>(MIROpcode::Phi);
 	inst->result = currentFunction->createVirtualReg(type);
+	MIRValue *result = inst->result;
 	insertInstruction(std::move(inst));
-	return inst->result;
+	return result;
 }
 
 void MIRBuilder::addPhiIncoming(MIRValue *phi, MIRValue *value, MIRBasicBlock *block) {

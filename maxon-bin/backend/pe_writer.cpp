@@ -108,6 +108,39 @@ uint32_t PeWriter::getImportRva(const std::string &dllName,
 	if (it != importRvaMap.end()) {
 		return it->second;
 	}
+
+	// If not yet populated (before write()), calculate expected position
+	// Import directory starts after all user sections
+	// Layout: .text at 0x1000, then other sections, then .idata
+	uint32_t importBaseRva = SECTION_ALIGNMENT; // First section starts at 0x1000
+	for (const auto &sec : sections) {
+		importBaseRva = alignTo(importBaseRva + sec.virtualSize, SECTION_ALIGNMENT);
+	}
+
+	// Import directory layout:
+	// - Import descriptors: (numDlls + 1) * 20 bytes
+	// - IAT: 8 bytes per function + 8 null terminator per DLL
+	// - INT: same as IAT
+	// - Strings
+
+	size_t numDlls = imports.size();
+	size_t descriptorTableSize = (numDlls + 1) * sizeof(ImportDescriptor);
+
+	// IAT starts right after descriptors
+	uint32_t currentIatRva = importBaseRva + static_cast<uint32_t>(descriptorTableSize);
+
+	// Find the function in imports
+	for (const auto &imp : imports) {
+		for (const auto &func : imp.functions) {
+			if (imp.dllName == dllName && func == funcName) {
+				importRvaMap[key] = currentIatRva;
+				return currentIatRva;
+			}
+			currentIatRva += 8; // 64-bit IAT entry
+		}
+		currentIatRva += 8; // Null terminator for this DLL
+	}
+
 	return 0;
 }
 
