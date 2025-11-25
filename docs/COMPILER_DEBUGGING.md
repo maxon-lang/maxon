@@ -1,6 +1,7 @@
 # Debugging the Maxon MIR Compiler
 
-This document summarizes techniques and lessons learned for debugging the Maxon compiler's MIR (Mid-level Intermediate Representation) backend and x86-64 code generator.
+This document summarizes techniques and lessons learned for debugging the Maxon compiler's MIR (Mid-level Intermediate Representation) backend and x86-64 code generator. The compiler is brand new and still being implemented so there
+could be bugs in any part.
 
 ## Architecture Overview
 
@@ -47,7 +48,15 @@ maxon test-fragments --verbose # With detailed output
 
 ### 4. Run Backend Unit Tests
 ```bash
-make backend-test              # Build and run all backend tests
+make backend-test              # Build and run all backend tests (one line per test)
+```
+
+Output shows one line per test with pass/fail status. To see detailed output for a specific test:
+```bash
+cd maxon-bin/tests/build
+./test_x86_codegen.exe                    # Detailed output with all assertions
+./test_x86_codegen.exe --reporter compact # Summary only
+./test_x86_codegen.exe "[load]"           # Run tests matching tag [load]
 ```
 
 Unit tests are located in `maxon-bin/tests/` and cover all stages of the compilation pipeline:

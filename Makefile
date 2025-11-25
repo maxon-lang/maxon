@@ -218,7 +218,7 @@ else
 endif
 	@cd maxon-bin/tests/build && cmake --build .
 	@echo Running backend tests...
-	@cd maxon-bin/tests/build && ctest --output-on-failure
+	@cd maxon-bin/tests/build && ctest --output-on-failure | grep -E '^\s*[0-9]+/|passed|failed|^Total'
 
 # Generate documentation from spec files
 docs: compiler

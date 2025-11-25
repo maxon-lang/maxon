@@ -147,17 +147,18 @@ target_compile_options(run_all_backend_tests PRIVATE ${TEST_COMPILE_OPTIONS})
 enable_testing()
 
 # Backend-only tests (fast, no frontend dependency)
-add_test(NAME MIR COMMAND test_mir)
-add_test(NAME MIRParser COMMAND test_mir_parser)
-add_test(NAME Optimizer COMMAND test_optimizer)
-add_test(NAME RegisterAllocation COMMAND test_regalloc)
-add_test(NAME X86Encoding COMMAND test_x86_encoding)
-add_test(NAME X86Codegen COMMAND test_x86_codegen)
-add_test(NAME ExecutableWriters COMMAND test_executable_writers)
-add_test(NAME DWARF COMMAND test_dwarf)
+# Use --reporter compact for one-line-per-test output
+add_test(NAME MIR COMMAND test_mir --reporter compact)
+add_test(NAME MIRParser COMMAND test_mir_parser --reporter compact)
+add_test(NAME Optimizer COMMAND test_optimizer --reporter compact)
+add_test(NAME RegisterAllocation COMMAND test_regalloc --reporter compact)
+add_test(NAME X86Encoding COMMAND test_x86_encoding --reporter compact)
+add_test(NAME X86Codegen COMMAND test_x86_codegen --reporter compact)
+add_test(NAME ExecutableWriters COMMAND test_executable_writers --reporter compact)
+add_test(NAME DWARF COMMAND test_dwarf --reporter compact)
 
 # Frontend + backend tests (slower, full pipeline)
-add_test(NAME CodegenMIR COMMAND test_codegen_mir)
+add_test(NAME CodegenMIR COMMAND test_codegen_mir --reporter compact)
 
 # Combined runner
-add_test(NAME AllBackendTests COMMAND run_all_backend_tests)
+add_test(NAME AllBackendTests COMMAND run_all_backend_tests --reporter compact)
