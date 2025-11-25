@@ -606,6 +606,19 @@ std::string MIRModule::toString() const {
 	}
 	ss << "\n";
 
+	// Struct type definitions
+	for (const auto &[name, type] : structTypes) {
+		ss << "%" << name << " = type { ";
+		for (size_t i = 0; i < type->fieldTypes.size(); ++i) {
+			if (i > 0)
+				ss << ", ";
+			ss << type->fieldTypes[i]->toString();
+		}
+		ss << " }\n";
+	}
+	if (!structTypes.empty())
+		ss << "\n";
+
 	// Globals
 	for (const auto &global : globals) {
 		ss << global->toString();
