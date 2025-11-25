@@ -4,7 +4,7 @@
 
 Replace LLVM with a fully custom backend that generates x86-64 machine code directly, implements basic optimizations, and produces PE/ELF executables with basic DWARF debug info support.
 
-**Status**: Phases 1-4, 6 Complete with Unit Tests - End-to-end PE executable generation verified  
+**Status**: Phases 1-6 Complete with Unit Tests - End-to-end PE executable generation verified  
 **Target**: Self-contained compiler with no external code generation dependencies
 
 ---
@@ -21,7 +21,8 @@ A comprehensive test suite has been created using Catch2 framework in `maxon-bin
 | `test_executable_writers.cpp` | 16 | 61 | ELF/PE structure generation and validation |
 | `test_dwarf.cpp` | 25 | 94 | DWARF debug info generation |
 | `test_end_to_end.cpp` | 2 | 6 | Full pipeline: MIR → x86 → PE → execute |
-| **Total** | **97** | **586** | |
+| `test_optimizer.cpp` | 24 | 80 | All optimization passes |
+| **Total** | **121** | **666** | |
 
 **Build**: `cd maxon-bin/tests/build && ninja && ./run_all_backend_tests.exe`
 
@@ -191,35 +192,33 @@ All tests pass with `-Werror` / `-WX` (warnings-as-errors) enabled.
 
 ---
 
-## Phase 5: Basic Optimizations (TODO)
+## Phase 5: Basic Optimizations ✓ COMPLETE
 
 ### 5.1 Constant Folding
-- [ ] Create `maxon-bin/mir/optimizer.cpp`
-- [ ] Fold arithmetic on constants at compile time
-- [ ] Fold comparisons on constants
-- [ ] Propagate constants through assignments
+- [x] Create `maxon-bin/mir/optimizer.cpp`
+- [x] Fold arithmetic on constants at compile time
+- [x] Fold comparisons on constants
+- [x] Propagate constants through assignments
 
 ### 5.2 Dead Code Elimination
-- [ ] Remove instructions whose results are never used
-- [ ] Remove unreachable basic blocks
-- [ ] Remove unused functions
+- [x] Remove instructions whose results are never used
+- [x] Remove unreachable basic blocks
+- [x] Remove unused functions
 
 ### 5.3 Simple Inlining
-- [ ] Inline small leaf functions (< N instructions)
-- [ ] Inline functions called only once
+- [x] Inline small leaf functions (< N instructions)
+- [x] Inline functions called only once
 
 ### 5.4 Peephole Optimizations
-- [ ] Strength reduction (mul by power of 2 → shift)
-- [ ] Algebraic simplifications (x + 0 → x, x * 1 → x)
-- [ ] Redundant load/store elimination
+- [x] Strength reduction (mul by power of 2 → shift)
+- [x] Algebraic simplifications (x + 0 → x, x * 1 → x)
+- [x] Redundant load/store elimination
 
-**Files to Create**:
-- `maxon-bin/mir/optimizer.h`
-- `maxon-bin/mir/optimizer.cpp`
-- `maxon-bin/mir/const_fold.cpp`
-- `maxon-bin/mir/dce.cpp`
+**Files Created**:
+- `maxon-bin/mir/optimizer.h` (~320 lines)
+- `maxon-bin/mir/optimizer.cpp` (~1050 lines)
 
-**Unit Tests to Create** (`test_optimizer.cpp`):
+**Unit Tests** (`test_optimizer.cpp`):
 - Constant folding: `add 3, 4` → `7`, `mul 5, 0` → `0`
 - Constant propagation: `x = 5; y = x + 1` → `y = 6`
 - Dead code elimination: remove unused assignments
@@ -227,6 +226,9 @@ All tests pass with `-Werror` / `-WX` (warnings-as-errors) enabled.
 - Strength reduction: `x * 8` → `x << 3`
 - Algebraic simplification: `x + 0` → `x`, `x * 1` → `x`
 - Load/store elimination: redundant load after store to same address
+- Copy propagation: replace uses of copy with original value
+- Simple function inlining: inline small leaf functions
+- Integration tests: multiple passes working together
 
 ---
 
@@ -384,7 +386,7 @@ All tests pass with `-Werror` / `-WX` (warnings-as-errors) enabled.
 | Phase 2 (x86) | `test_x86_encoding.cpp` | ✓ Complete |
 | Phase 3 (RegAlloc) | `test_regalloc.cpp` | ✓ Complete |
 | Phase 4 (ELF/PE) | `test_executable_writers.cpp`, `test_end_to_end.cpp` | ✓ Complete |
-| Phase 5 (Optimizer) | `test_optimizer.cpp` | TODO |
+| Phase 5 (Optimizer) | `test_optimizer.cpp` | ✓ Complete |
 | Phase 6 (DWARF) | `test_dwarf.cpp` | ✓ Complete |
 | Phase 7 (Runtime) | `test_runtime.cpp` | TODO |
 | Phase 8 (Codegen) | `test_codegen_mir.cpp` | TODO |
@@ -406,9 +408,9 @@ All tests pass with `-Werror` / `-WX` (warnings-as-errors) enabled.
 | M4 | PE executable generation working on Windows | ✓ Complete |
 | M5 | ELF executable generation working on Linux | ✓ Complete (untested) |
 | M6 | DWARF debug info generation | ✓ Complete |
-| M7 | Unit test suite with 580+ assertions | ✓ Complete |
+| M7 | Unit test suite with 660+ assertions | ✓ Complete |
 | M8 | End-to-end: generate and run PE executable | ✓ Complete |
-| M9 | Optimizations implemented | TODO |
+| M9 | Optimizations implemented | ✓ Complete |
 | M10 | Runtime library ported to x86-64 assembly | TODO |
 | M11 | Codegen refactored to emit MIR | TODO |
 | M12 | All language tests passing with new backend | TODO |
