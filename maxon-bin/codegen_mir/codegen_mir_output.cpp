@@ -44,19 +44,21 @@ void MIRCodeGenerator::writeIRToFile(const std::string &filename) {
 //==============================================================================
 
 void MIRCodeGenerator::optimize() {
-	// Create standard optimization pipeline
-	mir::MIROptimizer optimizer = mir::MIROptimizer::createStandardPipeline();
+	logProgress("Running optimization passes...");
+
+	// Create standard optimization pipeline with verbosity
+	mir::MIROptimizer optimizer = mir::MIROptimizer::createStandardPipeline(verboseLevel);
 
 	// Run passes until convergence
 	optimizer.runPasses(*module);
 
-	if (verboseLevel >= 1) {
-		std::cout << "Optimization complete" << std::endl;
-	}
+	logProgress("Optimization complete");
 }
 
 void MIRCodeGenerator::runDeadCodeElimination() {
+	logDetail("Running dead code elimination");
 	mir::DeadCodeEliminationPass dce;
+	dce.setVerboseLevel(verboseLevel);
 	dce.run(*module);
 }
 

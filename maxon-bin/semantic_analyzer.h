@@ -2,6 +2,7 @@
 #define SEMANTIC_ANALYZER_H
 
 #include "ast.h"
+#include "logger.h"
 #include <map>
 #include <memory>
 #include <optional>
@@ -74,6 +75,9 @@ class SemanticAnalyzer {
   public:
 	SemanticAnalyzer();
 
+	// Set optional logger for detailed tracing
+	void setLogger(Logger *logger) { logger_ = logger; }
+
 	// Analyze entire program and return errors
 	std::vector<SemanticError> analyze(ProgramAST *program);
 
@@ -103,6 +107,7 @@ class SemanticAnalyzer {
 	const std::map<std::string, VariableInfo> &getAllDeclaredVariables() const { return allDeclaredVariables; }
 
   private:
+	Logger *logger_ = nullptr; // Optional logger for detailed tracing
 	const StructInfo *lookupStruct(const std::string &name) const;
 	std::vector<SemanticError> errors;
 	std::map<std::string, FunctionInfo> functions;
@@ -116,6 +121,10 @@ class SemanticAnalyzer {
 
 	// Persistent symbol table for LSP - stores all variables ever declared
 	std::map<std::string, VariableInfo> allDeclaredVariables;
+
+	// Logging helpers
+	void logTrace(const std::string &msg);
+	void logDetail(const std::string &msg);
 
 	// Analysis methods
 	void analyzeFunction(FunctionAST *func);

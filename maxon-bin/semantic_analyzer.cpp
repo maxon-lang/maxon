@@ -4,6 +4,20 @@
 
 SemanticAnalyzer::SemanticAnalyzer() : loopDepth(0) {}
 
+// Logging helper for trace-level messages (level 3)
+void SemanticAnalyzer::logTrace(const std::string &msg) {
+	if (logger_ && logger_->isEnabled(3)) {
+		logger_->trace(LogPhase::Semantic, msg);
+	}
+}
+
+// Logging helper for detail-level messages (level 2)
+void SemanticAnalyzer::logDetail(const std::string &msg) {
+	if (logger_ && logger_->isEnabled(2)) {
+		logger_->detail(LogPhase::Semantic, msg);
+	}
+}
+
 const StructInfo *SemanticAnalyzer::lookupStruct(const std::string &name) const {
 	// First try exact match
 	auto it = structs.find(name);
@@ -47,12 +61,17 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	undefinedFunctions.clear();
 	allDeclaredVariables.clear(); // Clear persistent symbol table
 
+	logDetail("Starting semantic analysis");
+	logTrace("Registered external functions: " + std::to_string(functions.size()));
+
 	// First pass: collect all struct definitions
 	for (const auto &structDef : program->structs) {
 		// Build the qualified name if the struct has a namespace and is exported
 		std::string structKey = (structDef->isExported && !structDef->namespaceName.empty())
 									? structDef->namespaceName + "." + structDef->name
 									: structDef->name;
+
+		logTrace("Registering struct: " + structKey);
 
 		if (structs.find(structKey) != structs.end()) {
 			addError("Struct '" + structKey + "' is already defined",
@@ -83,9 +102,12 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	}
 
 	// Second pass: collect all function declarations
+	logTrace("Pass 2: Collecting function declarations");
 	for (const auto &func : program->functions) {
 		// Build the qualified name if the function has a namespace
 		std::string functionKey = func->namespaceName.empty() ? func->name : func->namespaceName + "." + func->name;
+
+		logTrace("Registering function: " + functionKey + " -> " + func->returnType);
 
 		if (functions.find(functionKey) != functions.end()) {
 			addError("Function '" + functionKey + "' is already defined" +
@@ -102,9 +124,14 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	}
 
 	// Second pass: analyze each function
+	logTrace("Pass 3: Analyzing function bodies");
 	for (const auto &func : program->functions) {
 		analyzeFunction(func.get());
 	}
+
+	logDetail("Analysis complete: " + std::to_string(structs.size()) + " structs, " +
+			  std::to_string(functions.size()) + " functions, " +
+			  std::to_string(errors.size()) + " error(s)");
 
 	return errors;
 }
@@ -112,8 +139,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 	// If this is an extern function, skip body analysis
 	if (func->isExtern) {
+		logTrace("Skipping extern function: " + func->name);
 		return;
 	}
+
+	logTrace("Analyzing function body: " + func->name);
 
 	// Initialize block ID tracking for this function
 	blockIdStack.clear();
@@ -124,6 +154,7 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 
 	// Declare parameters as variables
 	for (const auto &param : func->parameters) {
+		logTrace("  Parameter: " + param.name + " : " + param.type);
 		declareVariable(param.name, param.type, false, param.line, param.column, true);
 	}
 

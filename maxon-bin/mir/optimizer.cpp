@@ -1302,35 +1302,63 @@ bool CopyPropagationPass::runOnBasicBlock(MIRBasicBlock &block,
 //==============================================================================
 
 void MIROptimizer::addPass(std::unique_ptr<OptimizationPass> pass) {
+	pass->setVerboseLevel(verboseLevel_);
 	passes.push_back(std::move(pass));
 }
 
 int MIROptimizer::runAllPasses(MIRModule &module) {
 	int totalChanges = 0;
 	bool anyChange;
+	int iteration = 0;
+
+	if (verboseLevel_ >= 1) {
+		std::cout << "[Opt] Starting optimization passes (" << passes.size() << " passes)" << std::endl;
+	}
 
 	do {
 		anyChange = false;
+		iteration++;
+		if (verboseLevel_ >= 2) {
+			std::cout << "[Opt] Iteration " << iteration << std::endl;
+		}
 		for (auto &pass : passes) {
 			if (pass->run(module)) {
 				anyChange = true;
 				totalChanges++;
+				if (verboseLevel_ >= 2) {
+					std::cout << "[Opt]   Pass '" << pass->getName() << "' made changes" << std::endl;
+				}
 			}
 		}
 	} while (anyChange);
+
+	if (verboseLevel_ >= 1) {
+		std::cout << "[Opt] Optimization complete after " << iteration << " iteration(s), "
+				  << totalChanges << " total changes" << std::endl;
+	}
 
 	return totalChanges;
 }
 
 void MIROptimizer::runPasses(MIRModule &module, int maxIterations) {
+	if (verboseLevel_ >= 1) {
+		std::cout << "[Opt] Running passes (max " << maxIterations << " iterations)" << std::endl;
+	}
+
 	for (int i = 0; i < maxIterations; ++i) {
 		bool anyChange = false;
 		for (auto &pass : passes) {
 			if (pass->run(module)) {
 				anyChange = true;
+				if (verboseLevel_ >= 2) {
+					std::cout << "[Opt]   Pass '" << pass->getName() << "' made changes" << std::endl;
+				}
 			}
 		}
 		if (!anyChange) {
+			if (verboseLevel_ >= 1) {
+				std::cout << "[Opt] Converged after " << (i + 1) << " iteration(s)" << std::endl;
+			}
 			break;
 		}
 	}
@@ -1340,8 +1368,9 @@ void MIROptimizer::clearPasses() {
 	passes.clear();
 }
 
-MIROptimizer MIROptimizer::createStandardPipeline() {
+MIROptimizer MIROptimizer::createStandardPipeline(int verboseLevel) {
 	MIROptimizer optimizer;
+	optimizer.setVerboseLevel(verboseLevel);
 
 	// Order matters: run simpler passes first, then more complex ones
 	optimizer.addPass(std::make_unique<ConstantFoldingPass>());

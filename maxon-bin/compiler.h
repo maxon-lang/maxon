@@ -1,6 +1,7 @@
 #pragma once
 
 #include "file_utils.h"
+#include "logger.h"
 #include "parser.h"
 
 #include <memory>
@@ -15,8 +16,8 @@ struct CompilationOptions {
 	bool optimize = false;
 	bool debugInfo = false;
 	bool profile = false;
-	int verboseLevel = 0; // 0 = silent, 1 = verbose, 2 = debug
+	int verboseLevel = 0; // 0 = silent, 1 = progress, 2 = detailed, 3 = trace
 };
 
-std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, int verboseLevel = 0);
+std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logger);
 std::string compileProgram(const CompilationOptions &options);

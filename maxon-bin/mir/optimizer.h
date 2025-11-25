@@ -2,6 +2,7 @@
 
 #include "mir.h"
 #include <functional>
+#include <iostream>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -20,12 +21,31 @@ class OptimizationPass {
   public:
 	virtual ~OptimizationPass() = default;
 
+	// Set verbosity level for logging (0=silent, 1=progress, 2=detailed, 3=trace)
+	void setVerboseLevel(int level) { verboseLevel_ = level; }
+	int getVerboseLevel() const { return verboseLevel_; }
+
 	// Get the name of this pass (for debugging/logging)
 	virtual const char *getName() const = 0;
 
 	// Run the pass on the module
 	// Returns true if any changes were made
 	virtual bool run(MIRModule &module) = 0;
+
+  protected:
+	int verboseLevel_ = 0;
+
+	// Logging helpers
+	void logDetail(const std::string &msg) const {
+		if (verboseLevel_ >= 2) {
+			std::cout << "[Opt] " << getName() << ": " << msg << std::endl;
+		}
+	}
+	void logTrace(const std::string &msg) const {
+		if (verboseLevel_ >= 3) {
+			std::cout << "[Opt]   " << getName() << ": " << msg << std::endl;
+		}
+	}
 };
 
 //==============================================================================
@@ -311,6 +331,9 @@ class MIROptimizer {
 	// Add a pass to the pipeline
 	void addPass(std::unique_ptr<OptimizationPass> pass);
 
+	// Set verbosity level for all passes
+	void setVerboseLevel(int level) { verboseLevel_ = level; }
+
 	// Run all passes until no more changes are made
 	// Returns the total number of passes that made changes
 	int runAllPasses(MIRModule &module);
@@ -325,10 +348,11 @@ class MIROptimizer {
 	size_t getPassCount() const { return passes.size(); }
 
 	// Create a standard optimization pipeline
-	static MIROptimizer createStandardPipeline();
+	static MIROptimizer createStandardPipeline(int verboseLevel = 0);
 
   private:
 	std::vector<std::unique_ptr<OptimizationPass>> passes;
+	int verboseLevel_ = 0;
 };
 
 //==============================================================================

@@ -97,6 +97,7 @@ Add handler in `LspServer`, register in `JsonRpcHandler`, implement in `Analyzer
 - Don't create new documentation files unless instructed
 - Comments explain *why*, not *what*
 - Refer to `docs/LANGUAGE_REFERENCE.md` for complete language syntax when writing Maxon code
+- Don't use here documents or echo commands to create files, just write the files directly
 
 ## Writing VSCode Extension Tests
 - Do not set timeouts

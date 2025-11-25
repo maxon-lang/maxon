@@ -35,6 +35,7 @@ void printHelp(const char *programName) {
 	std::cerr << "\nVerbosity (applies to most commands):" << std::endl;
 	std::cerr << "  -v             Level 1 verbosity (progress, basic output)" << std::endl;
 	std::cerr << "  -vv            Level 2 verbosity (detailed information)" << std::endl;
+	std::cerr << "  -vvv           Level 3 verbosity (trace, deep debugging)" << std::endl;
 	std::cerr << "\nOptions for compile:" << std::endl;
 	std::cerr << "  --emit-ir      Generate .ir file alongside executable" << std::endl;
 	std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
@@ -67,8 +68,10 @@ int main(int argc, char *argv[]) {
 		int verboseLevel = 0;
 		for (int i = 2; i < argc; ++i) {
 			std::string arg = argv[i];
-			if (arg == "-vv") {
-				verboseLevel = 2;
+			if (arg == "-vvv") {
+				verboseLevel = 3;
+			} else if (arg == "-vv") {
+				verboseLevel = std::max(verboseLevel, 2);
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
 			}
@@ -79,8 +82,10 @@ int main(int argc, char *argv[]) {
 		int verboseLevel = 0;
 		for (int i = 2; i < argc; ++i) {
 			std::string arg = argv[i];
-			if (arg == "-vv") {
-				verboseLevel = 2;
+			if (arg == "-vvv") {
+				verboseLevel = 3;
+			} else if (arg == "-vv") {
+				verboseLevel = std::max(verboseLevel, 2);
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
 			}
@@ -96,8 +101,10 @@ int main(int argc, char *argv[]) {
 		int verboseLevel = 0;
 		for (int i = 2; i < argc; ++i) {
 			std::string arg = argv[i];
-			if (arg == "-vv") {
-				verboseLevel = 2;
+			if (arg == "-vvv") {
+				verboseLevel = 3;
+			} else if (arg == "-vv") {
+				verboseLevel = std::max(verboseLevel, 2);
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
 			}
@@ -116,8 +123,10 @@ int main(int argc, char *argv[]) {
 
 		for (int i = 3; i < argc; ++i) {
 			std::string arg = argv[i];
-			if (arg == "-vv") {
-				verboseLevel = 2;
+			if (arg == "-vvv") {
+				verboseLevel = 3;
+			} else if (arg == "-vv") {
+				verboseLevel = std::max(verboseLevel, 2);
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
 			} else {
@@ -132,8 +141,10 @@ int main(int argc, char *argv[]) {
 		int verboseLevel = 0;
 		for (int i = 2; i < argc; ++i) {
 			std::string arg = argv[i];
-			if (arg == "-vv") {
-				verboseLevel = 2;
+			if (arg == "-vvv") {
+				verboseLevel = 3;
+			} else if (arg == "-vv") {
+				verboseLevel = std::max(verboseLevel, 2);
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
 			}
@@ -153,8 +164,10 @@ int main(int argc, char *argv[]) {
 
 		for (int i = 3; i < argc; ++i) {
 			std::string arg = argv[i];
-			if (arg == "-vv") {
-				verboseLevel = 2;
+			if (arg == "-vvv") {
+				verboseLevel = 3;
+			} else if (arg == "-vv") {
+				verboseLevel = std::max(verboseLevel, 2);
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
 			} else if (arg == "--update" || arg == "-u") {
@@ -228,8 +241,10 @@ int main(int argc, char *argv[]) {
 			options.debugInfo = true;
 		} else if (arg == "--profile") {
 			options.profile = true;
+		} else if (arg == "-vvv") {
+			options.verboseLevel = 3;
 		} else if (arg == "-vv") {
-			options.verboseLevel = 2;
+			options.verboseLevel = std::max(options.verboseLevel, 2);
 		} else if (arg == "-v" || arg == "--verbose") {
 			options.verboseLevel = std::max(options.verboseLevel, 1);
 		} else if (!arg.empty() && arg[0] != '-') {

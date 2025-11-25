@@ -7,13 +7,67 @@ could be bugs in any part.
 
 The compilation pipeline is:
 1. **Lexer/Parser** → AST
-2. **MIR Code Generator** (`codegen_mir*.cpp`) → MIR instructions
-3. **MIR Optimizer** (`optimizer.cpp`) → Optimized MIR
-4. **x86 Code Generator** (`x86_codegen.cpp`) → Native x86-64 machine code
+2. **Semantic Analyzer** → Type checking, scope analysis
+3. **MIR Code Generator** (`codegen_mir*.cpp`) → MIR instructions
+4. **MIR Optimizer** (`optimizer.cpp`) → Optimized MIR
+5. **x86 Code Generator** (`x86_codegen.cpp`) → Native x86-64 machine code
 
 ## Key Debugging Tools
 
-### 1. Emit MIR Output
+### 1. Verbose Logging
+
+The compiler has built-in verbose logging at three levels:
+
+```bash
+maxon compile file.maxon -v      # Level 1: Progress, phase names
+maxon compile file.maxon -vv     # Level 2: Detailed info, timing
+maxon compile file.maxon -vvv    # Level 3: Trace, individual items
+```
+
+**Level 1 (`-v`)** shows phase progress:
+```
+=== Maxon Compiler ===
+[Lexer] Tokenized: 43 tokens from file.maxon
+[Parser] Parsed: 1 function(s), 0 struct(s)
+[Semantic] Semantic analysis complete
+[MIR] Generating MIR...
+[Opt] Dead code elimination complete
+[x86] Generating executable...
+Output: file.exe
+```
+
+**Level 2 (`-vv`)** adds timing and counts:
+```
+[Lexer]   Tokenization time: 45µs
+[Lexer]   Token breakdown: 11 keywords, 10 identifiers, 6 numbers
+[Parser]   Parse time: 82µs
+[Semantic]   Analysis time: 47µs
+[MIR]   Pass 1: Creating struct types (0 structs)
+[MIR]   Pass 2: Creating function declarations (1 functions)
+[Opt]   Dead code elimination time: 139µs
+```
+
+**Level 3 (`-vvv`)** shows individual items (useful for debugging):
+```
+[Lexer]     Token[0]: type=0 value='function' line=1 col=1
+[Lexer]     Token[1]: type=1 value='main' line=1 col=10
+[Parser]     Function: main -> int (0 params)
+[Semantic]     Dependency resolution iteration 1
+[MIR]     Declaring function: main -> int
+[MIR]     Target triple: x86_64-pc-windows-msvc
+```
+
+**Log phase prefixes:**
+- `[Lexer]` - Tokenization
+- `[Parser]` - AST generation
+- `[Semantic]` - Type checking, scope analysis
+- `[MIR]` - MIR code generation
+- `[Opt]` - Optimization passes
+- `[RegAlloc]` - Register allocation
+- `[x86]` - x86-64 code generation
+- `[PE]` / `[ELF]` - Executable writing
+
+### 2. Emit MIR Output
 ```bash
 maxon compile file.maxon --emit-ir
 ```
@@ -25,7 +79,7 @@ maxon compile file.maxon --emit-ir   # optimization is OFF by default
 maxon compile file.maxon --emit-ir -O  # optimization ON
 ```
 
-### 2. Disassemble Generated Executables
+### 3. Disassemble Generated Executables
 ```bash
 llvm-project/bin/llvm-objdump -d file.exe | less
 ```
@@ -40,13 +94,14 @@ To disassemble starting at a specific address:
 llvm-project/bin/llvm-objdump -d file.exe | grep -A30 "1400010dd:"
 ```
 
-### 3. Run Test Fragments
+### 4. Run Test Fragments
 ```bash
 maxon test-fragments           # Run all language tests
-maxon test-fragments --verbose # With detailed output
+maxon test-fragments -v        # With progress output
+maxon test-fragments -vv       # With detailed output
 ```
 
-### 4. Run Backend Unit Tests
+### 5. Run Backend Unit Tests
 ```bash
 make backend-test              # Build and run all backend tests (one line per test)
 ```
@@ -104,24 +159,31 @@ When a bug is identified (e.g., large struct returns crash at runtime), the work
 
 This approach lets you debug complex issues (like ABI compliance) without needing the full compilation pipeline, and the test documents the expected behavior for future reference.
 
-### 5. Debug Output in Code
+### 6. Debug Output in Code
 
-Add `std::cerr` statements to trace execution. Key locations:
+The compiler uses the `Logger` class (in `logger.h`) for structured output. When you need more detail than `-vvv` provides, add logging calls at key locations:
 
-**MIR Generation (`codegen_mir/codegen_mir_expr.cpp`):**
+**Adding temporary debug output:**
+```cpp
+// In any file that includes compiler.h or logger.h:
+logger.trace(LogPhase::Parser, "varName='", varName, "' type='", type, "'");
+logger.trace(LogPhase::MIR, "createLoad %", result->regId, " = load ptr %", ptr->regId);
+logger.trace(LogPhase::x86, "loadValue regId=", value->regId, " kind=", static_cast<int>(value->kind));
+```
+
+**For quick debugging without Logger access:**
 ```cpp
 std::cerr << "[DEBUG] varName='" << varName << "' type='" << type << "'\n";
 ```
 
-**MIR Builder (`mir/mir_builder.cpp`):**
-```cpp
-std::cerr << "[DEBUG createLoad] %"<< result->regId << " = load " << type->toString() << ", ptr %" << ptr->regId << "\n";
-```
+**Key locations for debugging:**
 
-**x86 Code Generator (`backend/x86_codegen.cpp`):**
-```cpp
-std::cerr << "[DEBUG loadValue] regId=" << value->regId << " kind=" << static_cast<int>(value->kind) << "\n";
-```
+| Component | File | What to log |
+|-----------|------|-------------|
+| MIR Generation | `codegen_mir/codegen_mir_expr.cpp` | Variable lookups, type conversions |
+| MIR Builder | `mir/mir_builder.cpp` | Instruction creation, register allocation |
+| x86 CodeGen | `backend/x86_codegen.cpp` | Instruction selection, register assignments |
+| Optimizer | `mir/optimizer.cpp` | Value replacements, instruction deletions |
 
 ## Common Issues and Debugging Strategies
 

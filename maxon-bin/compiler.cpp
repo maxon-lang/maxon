@@ -3,6 +3,7 @@
 #include "codegen_mir.h"
 #include "error_formatter.h"
 #include "lexer.h"
+#include "logger.h"
 #include "semantic_analyzer.h"
 
 #include <chrono>
@@ -13,76 +14,99 @@
 #include <set>
 #include <vector>
 
-std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, int verboseLevel) {
+std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logger) {
 	try {
 		std::string source = readFile(filePath);
 
+		auto lexStart = logger.startTimer();
 		Lexer lexer(source);
 		std::vector<Token> tokens = lexer.tokenize();
+		logger.logElapsed(LogPhase::Lexer, "Tokenization time", lexStart);
 
-		if (verboseLevel >= 1) {
-			std::cout << "Lexical analysis: " << tokens.size() << " tokens";
-			if (verboseLevel >= 2) {
-				// Count token types
-				std::map<TokenType, int> tokenCounts;
-				for (const auto &token : tokens) {
-					tokenCounts[token.type]++;
-				}
-				std::cout << " (";
-				bool first = true;
-				for (const auto &[type, count] : tokenCounts) {
-					std::string typeName;
-					switch (type) {
-					case TokenType::KEYWORD:
-						typeName = "keyword";
-						break;
-					case TokenType::IDENTIFIER:
-						typeName = "identifier";
-						break;
-					case TokenType::NUMBER:
-						typeName = "number";
-						break;
-					case TokenType::FLOAT_LITERAL:
-						typeName = "float";
-						break;
-					case TokenType::STRING:
-						typeName = "string";
-						break;
-					case TokenType::CHARACTER:
-						typeName = "char";
-						break;
-					case TokenType::BLOCK_ID:
-						typeName = "block_id";
-						break;
-					default:
-						typeName = "";
-						break;
-					}
-					if (typeName.empty())
-						continue;
-					if (!first)
-						std::cout << ", ";
-					std::cout << count << " " << typeName;
-					first = false;
-				}
-				std::cout << ")";
+		logger.progress(LogPhase::Lexer, "Tokenized: ", tokens.size(), " tokens from ", normalizePathForDisplay(filePath));
+
+		if (logger.isEnabled(2)) {
+			// Count token types for detailed logging
+			std::map<TokenType, int> tokenCounts;
+			for (const auto &token : tokens) {
+				tokenCounts[token.type]++;
 			}
-			std::cout << std::endl;
+			std::ostringstream details;
+			bool first = true;
+			for (const auto &[type, count] : tokenCounts) {
+				std::string typeName;
+				switch (type) {
+				case TokenType::KEYWORD:
+					typeName = "keywords";
+					break;
+				case TokenType::IDENTIFIER:
+					typeName = "identifiers";
+					break;
+				case TokenType::NUMBER:
+					typeName = "numbers";
+					break;
+				case TokenType::FLOAT_LITERAL:
+					typeName = "floats";
+					break;
+				case TokenType::STRING:
+					typeName = "strings";
+					break;
+				case TokenType::CHARACTER:
+					typeName = "chars";
+					break;
+				case TokenType::BLOCK_ID:
+					typeName = "block_ids";
+					break;
+				default:
+					typeName = "";
+					break;
+				}
+				if (typeName.empty())
+					continue;
+				if (!first)
+					details << ", ";
+				details << count << " " << typeName;
+				first = false;
+			}
+			logger.detail(LogPhase::Lexer, "Token breakdown: ", details.str());
 		}
 
+		// Trace level: log individual tokens
+		if (logger.isEnabled(3)) {
+			for (size_t i = 0; i < tokens.size() && i < 50; ++i) {
+				const auto &tok = tokens[i];
+				logger.trace(LogPhase::Lexer, "Token[", i, "]: type=", static_cast<int>(tok.type),
+							 " value='", tok.value, "' line=", tok.line, " col=", tok.column);
+			}
+			if (tokens.size() > 50) {
+				logger.trace(LogPhase::Lexer, "... and ", tokens.size() - 50, " more tokens");
+			}
+		}
+
+		auto parseStart = logger.startTimer();
 		Parser parser(tokens);
 		std::string fileNamespace = deriveNamespace(filePath);
 		parser.setDefaultNamespace(fileNamespace);
 		std::unique_ptr<ProgramAST> program = parser.parse();
+		logger.logElapsed(LogPhase::Parser, "Parse time", parseStart);
 
-		if (verboseLevel >= 1) {
-			int functionCount = program->functions.size();
-			int structCount = program->structs.size();
-			std::cout << "Parsing: " << functionCount << " function(s), " << structCount << " struct(s)";
-			if (verboseLevel >= 2 && !fileNamespace.empty()) {
-				std::cout << " (namespace: " << fileNamespace << ")";
+		int functionCount = program->functions.size();
+		int structCount = program->structs.size();
+		logger.progress(LogPhase::Parser, "Parsed: ", functionCount, " function(s), ", structCount, " struct(s)");
+
+		if (logger.isEnabled(2) && !fileNamespace.empty()) {
+			logger.detail(LogPhase::Parser, "Namespace: ", fileNamespace);
+		}
+
+		// Trace level: log function names
+		if (logger.isEnabled(3)) {
+			for (const auto &func : program->functions) {
+				logger.trace(LogPhase::Parser, "Function: ", func->name, " -> ", func->returnType,
+							 " (", func->parameters.size(), " params)");
 			}
-			std::cout << std::endl;
+			for (const auto &st : program->structs) {
+				logger.trace(LogPhase::Parser, "Struct: ", st->name, " (", st->fields.size(), " fields)");
+			}
 		}
 
 		return program;
@@ -97,6 +121,14 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, int verboseLe
 }
 
 std::string compileProgram(const CompilationOptions &options) {
+	Logger logger(options.verboseLevel);
+	[[maybe_unused]] auto totalStart = logger.startTimer();
+
+	logger.progress(LogPhase::General, "=== Maxon Compiler ===");
+	logger.detail(LogPhase::General, "Input files: ", options.inputFiles.size());
+	logger.detail(LogPhase::General, "Optimize: ", options.optimize ? "yes" : "no");
+	logger.detail(LogPhase::General, "Debug info: ", options.debugInfo ? "yes" : "no");
+
 	// Generate output filename early to determine what files to clean up
 	std::string baseFilename;
 	if (!options.outputFile.empty()) {
@@ -123,9 +155,11 @@ std::string compileProgram(const CompilationOptions &options) {
 
 	if (std::filesystem::exists(irFile)) {
 		std::filesystem::remove(irFile);
+		logger.trace(LogPhase::General, "Removed existing IR file: ", irFile);
 	}
 	if (std::filesystem::exists(exeFile)) {
 		std::filesystem::remove(exeFile);
+		logger.trace(LogPhase::General, "Removed existing exe file: ", exeFile);
 	}
 
 	std::vector<std::unique_ptr<ProgramAST>> programs;
@@ -135,7 +169,7 @@ std::string compileProgram(const CompilationOptions &options) {
 
 	for (const auto &inputFile : options.inputFiles) {
 		sources.push_back(readFile(inputFile));
-		programs.push_back(parseFile(inputFile, options.verboseLevel));
+		programs.push_back(parseFile(inputFile, logger));
 	}
 
 	int iteration = 0;
@@ -144,6 +178,7 @@ std::string compileProgram(const CompilationOptions &options) {
 
 	do {
 		iteration++;
+		logger.trace(LogPhase::Semantic, "Dependency resolution iteration ", iteration);
 		discoveredNewFiles = false;
 
 		std::unique_ptr<ProgramAST> mergedProgram = std::make_unique<ProgramAST>();
@@ -164,20 +199,22 @@ std::string compileProgram(const CompilationOptions &options) {
 		analyzer.registerExternalFunction("write_stdout", "int",
 										  {FunctionParameter("buf", "ptr", 0, 0), FunctionParameter("count", "int", 0, 0)});
 
+		auto semanticStart = logger.startTimer();
 		std::vector<SemanticError> semanticErrors = analyzer.analyze(mergedProgram.get());
+		logger.logElapsed(LogPhase::Semantic, "Analysis time", semanticStart);
 
 		std::set<std::string> undefinedFunctions = analyzer.getUndefinedFunctions();
 
 		if (!undefinedFunctions.empty()) {
+			logger.trace(LogPhase::Semantic, "Undefined functions: ", undefinedFunctions.size());
 			std::vector<std::string> stdlibFiles = findStdlibFilesDefining(undefinedFunctions);
 
 			if (!stdlibFiles.empty()) {
-				if (options.verboseLevel >= 1) {
-					std::cout << "Auto-compiling " << stdlibFiles.size() << " stdlib file(s)" << std::endl;
-				}
+				logger.progress(LogPhase::Semantic, "Auto-importing ", stdlibFiles.size(), " stdlib file(s)");
 
 				for (const auto &file : stdlibFiles) {
 					if (processedFiles.find(file) == processedFiles.end()) {
+						logger.detail(LogPhase::Semantic, "Adding stdlib: ", normalizePathForDisplay(file));
 						processedFiles.insert(file);
 						allFiles.push_back(file);
 						discoveredNewFiles = true;
@@ -189,7 +226,9 @@ std::string compileProgram(const CompilationOptions &options) {
 				if (discoveredNewFiles) {
 					programs.clear();
 					for (const auto &file : allFiles) {
-						programs.push_back(parseFile(file, 0));
+						// Use a silent logger for re-parsing to avoid duplicate output
+						Logger silentLogger(0);
+						programs.push_back(parseFile(file, silentLogger));
 					}
 				}
 
@@ -212,7 +251,9 @@ std::string compileProgram(const CompilationOptions &options) {
 
 		programs.clear();
 		for (const auto &file : allFiles) {
-			programs.push_back(parseFile(file, 0));
+			// Use a silent logger for re-parsing to avoid duplicate output
+			Logger silentLogger(0);
+			programs.push_back(parseFile(file, silentLogger));
 		}
 		break;
 
@@ -235,57 +276,37 @@ std::string compileProgram(const CompilationOptions &options) {
 		moduleName = p.filename().string();
 	}
 
-	if (options.verboseLevel >= 1) {
-		std::cout << "Semantic analysis" << std::endl;
+	logger.progress(LogPhase::Semantic, "Semantic analysis complete");
+	logger.detail(LogPhase::Semantic, "Final AST: ", mergedProgram->functions.size(), " function(s), ",
+				  mergedProgram->structs.size(), " struct(s)");
+
+	// Trace level: list all functions in final AST
+	if (logger.isEnabled(3)) {
+		for (const auto &func : mergedProgram->functions) {
+			logger.trace(LogPhase::Semantic, "Final function: ", func->name);
+		}
 	}
 
-	if (options.verboseLevel >= 2) {
-		std::cout << "  Final AST: " << mergedProgram->functions.size() << " function(s), "
-				  << mergedProgram->structs.size() << " struct(s)" << std::endl;
-	}
-
-	if (options.verboseLevel >= 1) {
-		std::cout << "Code generation" << std::endl;
-	}
+	logger.progress(LogPhase::MIR, "Generating MIR...");
 
 	MIRCodeGenerator codegen(moduleName, options.debugInfo, options.verboseLevel);
 
-	auto codgenStartTime = std::chrono::high_resolution_clock::now();
+	auto codegenStart = logger.startTimer();
 	codegen.generate(mergedProgram.get(), !options.compileOnly);
-	auto codgenEndTime = std::chrono::high_resolution_clock::now();
+	logger.logElapsed(LogPhase::MIR, "MIR generation time", codegenStart);
 
-	if (options.verboseLevel >= 2) {
-		auto codgenDuration = std::chrono::duration_cast<std::chrono::milliseconds>(codgenEndTime - codgenStartTime);
-		std::cout << "  Time: " << codgenDuration.count() << "ms" << std::endl;
-	}
-
-	auto dcStartTime = std::chrono::high_resolution_clock::now();
+	auto dcStart = logger.startTimer();
 	// Always run dead code elimination to remove unused internal functions
 	codegen.runDeadCodeElimination();
-	auto dcEndTime = std::chrono::high_resolution_clock::now();
-
-	if (options.verboseLevel >= 1) {
-		std::cout << "Dead code elimination" << std::endl;
-	}
-
-	if (options.verboseLevel >= 2) {
-		auto dcDuration = std::chrono::duration_cast<std::chrono::milliseconds>(dcEndTime - dcStartTime);
-		std::cout << "  Time: " << dcDuration.count() << "ms" << std::endl;
-	}
+	logger.logElapsed(LogPhase::Opt, "Dead code elimination time", dcStart);
+	logger.progress(LogPhase::Opt, "Dead code elimination complete");
 
 	if (options.optimize) {
-		if (options.verboseLevel >= 1) {
-			std::cout << "Optimization" << std::endl;
-		}
+		logger.progress(LogPhase::Opt, "Running optimization passes...");
 
-		auto optStartTime = std::chrono::high_resolution_clock::now();
+		auto optStart = logger.startTimer();
 		codegen.optimize();
-		auto optEndTime = std::chrono::high_resolution_clock::now();
-
-		if (options.verboseLevel >= 2) {
-			auto optDuration = std::chrono::duration_cast<std::chrono::milliseconds>(optEndTime - optStartTime);
-			std::cout << "  Time: " << optDuration.count() << "ms" << std::endl;
-		}
+		logger.logElapsed(LogPhase::Opt, "Optimization time", optStart);
 	}
 
 	std::string exeOutputFile = baseFilename + ".exe";
@@ -293,35 +314,34 @@ std::string compileProgram(const CompilationOptions &options) {
 	if (options.emitLLVM) {
 		std::string llOutputFile = baseFilename + ".ir";
 		codegen.writeIRToFile(llOutputFile);
-		if (options.verboseLevel >= 2) {
-			std::cout << "  MIR written to: " << llOutputFile << std::endl;
-		}
+		logger.detail(LogPhase::MIR, "MIR written to: ", llOutputFile);
 	}
 
 	std::string outputFile;
 	if (options.compileOnly) {
 		std::string objOutputFile = baseFilename + ".obj";
+		logger.progress(LogPhase::x86, "Generating object file...");
 		codegen.writeObjectFile(objOutputFile);
 		outputFile = objOutputFile;
-		if (options.verboseLevel >= 2) {
-			std::cout << "  Object file: " << objOutputFile << std::endl;
-		}
+		logger.detail(LogPhase::x86, "Object file: ", objOutputFile);
 	} else {
+		logger.progress(LogPhase::x86, "Generating executable...");
+		auto exeStart = logger.startTimer();
 		codegen.writeExecutable(exeOutputFile);
+		logger.logElapsed(LogPhase::PE, "Executable generation time", exeStart);
 		outputFile = exeOutputFile;
 	}
 
 	// Print output info
-	if (options.verboseLevel >= 1) {
-		std::cout << "\nOutput: " << outputFile;
-		// Get file size using standard library
-		std::ifstream file(outputFile, std::ios::binary | std::ios::ate);
-		if (file) {
-			uint64_t outputFileSize = file.tellg();
-			std::cout << " (" << outputFileSize << " bytes)";
-		}
-		std::cout << std::endl;
+	logger.progress(LogPhase::General, "Output: ", outputFile);
+	// Get file size using standard library
+	std::ifstream file(outputFile, std::ios::binary | std::ios::ate);
+	if (file) {
+		uint64_t outputFileSize = file.tellg();
+		logger.detail(LogPhase::General, "Size: ", outputFileSize, " bytes");
 	}
+
+	logger.logTotalElapsed("Total compilation time");
 
 	return exeOutputFile;
 }

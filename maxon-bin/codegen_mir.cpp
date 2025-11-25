@@ -10,7 +10,7 @@
 #include <stdexcept>
 
 MIRCodeGenerator::MIRCodeGenerator(const std::string &moduleName, bool debugInfo, int verboseLevel)
-	: generateDebugInfo(debugInfo), verboseLevel(verboseLevel), sourceFileName(moduleName) {
+	: generateDebugInfo(debugInfo), verboseLevel(verboseLevel), sourceFileName(moduleName), logger_(verboseLevel) {
 	module = std::make_unique<mir::MIRModule>(moduleName);
 
 	// Set target triple
@@ -21,9 +21,25 @@ MIRCodeGenerator::MIRCodeGenerator(const std::string &moduleName, bool debugInfo
 #endif
 
 	builder = std::make_unique<mir::MIRBuilder>(module.get());
+
+	logDetail("MIR CodeGenerator initialized for module: " + moduleName);
+	logTrace("Target triple: " + module->targetTriple);
 }
 
 MIRCodeGenerator::~MIRCodeGenerator() = default;
+
+// Logging helpers
+void MIRCodeGenerator::logProgress(const std::string &msg) {
+	logger_.progress(LogPhase::MIR, msg);
+}
+
+void MIRCodeGenerator::logDetail(const std::string &msg) {
+	logger_.detail(LogPhase::MIR, msg);
+}
+
+void MIRCodeGenerator::logTrace(const std::string &msg) {
+	logger_.trace(LogPhase::MIR, msg);
+}
 
 //==============================================================================
 // Type Conversion Helpers
@@ -244,7 +260,10 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 //==============================================================================
 
 void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
+	logProgress("Starting MIR generation");
+
 	// First pass: Create all struct types
+	logDetail("Pass 1: Creating struct types (" + std::to_string(program->structs.size()) + " structs)");
 	for (const auto &structDef : program->structs) {
 		std::vector<mir::MIRType *> fieldTypes;
 		std::vector<std::pair<std::string, std::string>> fields;
@@ -254,12 +273,15 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
 			fields.push_back({field.name, field.type});
 		}
 
+		logTrace("Creating struct type: " + structDef->name + " (" + std::to_string(fieldTypes.size()) + " fields)");
+
 		mir::MIRType *structType = module->getOrCreateStructType(structDef->name, fieldTypes);
 		structTypes[structDef->name] = structType;
 		structFields[structDef->name] = fields;
 	}
 
 	// Second pass: Create all function declarations
+	logDetail("Pass 2: Creating function declarations (" + std::to_string(program->functions.size()) + " functions)");
 	for (auto &func : program->functions) {
 		mir::MIRType *returnType = getTypeFromString(func->returnType);
 
@@ -273,6 +295,8 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
 		}
 
 		std::string functionName = func->namespaceName.empty() ? func->name : func->namespaceName + "." + func->name;
+
+		logTrace("Declaring function: " + functionName + " -> " + func->returnType);
 
 		if (func->isExtern) {
 			// External declaration
@@ -295,6 +319,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
 	}
 
 	// Third pass: Generate function bodies
+	logDetail("Pass 3: Generating function bodies");
 	for (auto &func : program->functions) {
 		if (!func->isExtern) {
 			generateFunction(func.get(), func->namespaceName);
@@ -303,6 +328,10 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
 
 	// Create entry point if needed
 	if (needsEntryPoint) {
+		logDetail("Creating entry point (_start)");
 		createMinimalEntryPoint();
 	}
+
+	logProgress("MIR generation complete: " + std::to_string(module->functions.size()) + " functions, " +
+				std::to_string(module->globals.size()) + " globals");
 }

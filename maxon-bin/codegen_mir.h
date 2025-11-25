@@ -2,6 +2,7 @@
 #define CODEGEN_MIR_H
 
 #include "ast.h"
+#include "logger.h"
 #include "mir/mir.h"
 #include "mir/mir_builder.h"
 #include <map>
@@ -38,8 +39,14 @@ class MIRCodeGenerator {
 
 	// Debug information
 	bool generateDebugInfo;
-	int verboseLevel; // 0 = silent, 1 = verbose, 2 = debug
+	int verboseLevel; // 0 = silent, 1 = progress, 2 = detailed, 3 = trace
 	std::string sourceFileName;
+	Logger logger_; // Internal logger instance
+
+	// Logging helpers
+	void logProgress(const std::string &msg);
+	void logDetail(const std::string &msg);
+	void logTrace(const std::string &msg);
 
 	// Loop context for break/continue
 	struct LoopContext {
