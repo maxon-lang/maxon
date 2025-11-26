@@ -66,7 +66,8 @@ help:
 	@echo "  extension-package - Package extension as .vsix"
 	@echo "  extension-install - Install extension locally in VS Code"
 	@echo "  lsp-test         - Build and run LSP C++ unit tests"
-	@echo "  backend-test     - Build and run backend C++ unit tests"
+	@echo "  backend-test-build - Build the backend test runner"
+	@echo "  backend-test     - Build and run backend tests (compile/run verification)"
 	@echo "  docs             - Generate HTML documentation from specs"
 	@echo "  fragments        - Regenerate fragments, validate specs, and run fragment tests"
 	@echo "  validate-specs   - Check for orphaned test fragments not in any spec"
@@ -169,18 +170,21 @@ endif
 	@echo Running LSP tests...
 	@cd lsp-server/tests/build && ctest --output-on-failure
 
-# Build and run backend C++ unit tests
-backend-test:
-	@echo Configuring and building backend tests...
-	@mkdir -p maxon-bin/tests/build
+# Build and run backend test runner (standalone executable)
+backend-test-build: compiler
+	@echo Configuring and building backend test runner...
+	@mkdir -p backend-tests/runner/build
 ifeq ($(PLATFORM),windows)
-	@cd maxon-bin/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Debug
+	@cd backend-tests/runner/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$(LLVM_DIR_ABS)
 else
-	@cd maxon-bin/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug
+	@cd backend-tests/runner/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$(LLVM_DIR_ABS)
 endif
-	@cd maxon-bin/tests/build && cmake --build .
+	@cd backend-tests/runner/build && cmake --build .
+
+# Run backend tests
+backend-test: backend-test-build
 	@echo Running backend tests...
-	@cd maxon-bin/tests/build && ctest --output-on-failure | grep -E '^\s*[0-9]+/|passed|failed|^Total'
+	@./backend-tests/runner/build/backend-test-runner$(EXE_EXT) -v
 
 # Generate documentation from spec files
 docs: compiler
@@ -236,6 +240,7 @@ clean:
 	@rm -rf vscode-extension/node_modules
 	@rm -rf lsp-server/tests/build
 	@rm -rf debugger-tests/build
+	@rm -rf backend-tests/runner/build
 	@rm -f debugger-tests/bin/*$(EXE_EXT)
 	@echo Clean complete.
 
