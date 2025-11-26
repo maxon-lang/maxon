@@ -78,28 +78,10 @@ class StringLiteralExprAST : public ExprAST {
 class CastExprAST : public ExprAST {
   public:
 	std::unique_ptr<ExprAST> expr;
-	std::string targetType; // "int", "ptr", "char"
+	std::string targetType; // "int", "float", "char", "bool"
 
 	CastExprAST(std::unique_ptr<ExprAST> e, const std::string &type, int l = 0, int c = 0)
 		: ExprAST(l, c), expr(std::move(e)), targetType(type) {}
-};
-
-// Address-of expression (e.g., "&variable")
-class AddressOfExprAST : public ExprAST {
-  public:
-	std::string varName;
-
-	AddressOfExprAST(const std::string &name, int l = 0, int c = 0)
-		: ExprAST(l, c), varName(name) {}
-};
-
-// Dereference expression (e.g., "*ptr")
-class DerefExprAST : public ExprAST {
-  public:
-	std::unique_ptr<ExprAST> expr;
-
-	DerefExprAST(std::unique_ptr<ExprAST> e, int l = 0, int c = 0)
-		: ExprAST(l, c), expr(std::move(e)) {}
 };
 
 // Binary operation
@@ -253,16 +235,6 @@ class MemberAssignStmtAST : public StmtAST {
 
 	MemberAssignStmtAST(const std::string &obj, const std::string &member, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
 		: StmtAST(l, c), objectName(obj), memberName(member), value(std::move(val)) {}
-};
-
-// Pointer dereference assignment statement (e.g., "*ptr = 42")
-class DerefAssignStmtAST : public StmtAST {
-  public:
-	std::unique_ptr<ExprAST> pointer;
-	std::unique_ptr<ExprAST> value;
-
-	DerefAssignStmtAST(std::unique_ptr<ExprAST> ptr, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
-		: StmtAST(l, c), pointer(std::move(ptr)), value(std::move(val)) {}
 };
 
 // If statement

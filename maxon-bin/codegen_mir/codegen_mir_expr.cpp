@@ -84,29 +84,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			return builder->createPtrToInt(value, targetType, "ptr2inttmp");
 		}
 
-		// Pointer to pointer
-		if (sourceType->isPointer() && targetType->isPointer()) {
-			return builder->createBitcast(value, targetType, "ptrcasttmp");
-		}
-
 		throw std::runtime_error("Unsupported cast");
-	}
-
-	if (auto *addrExpr = dynamic_cast<AddressOfExprAST *>(expr)) {
-		mir::MIRValue *alloca = namedValues[addrExpr->varName];
-		if (!alloca) {
-			throw std::runtime_error("Unknown variable name: " + addrExpr->varName);
-		}
-		return alloca; // Alloca is already a pointer
-	}
-
-	if (auto *derefExpr = dynamic_cast<DerefExprAST *>(expr)) {
-		mir::MIRValue *ptr = generateExpr(derefExpr->expr.get());
-		if (!ptr) {
-			throw std::runtime_error("Failed to generate pointer expression for dereference");
-		}
-		// Default to loading i32
-		return builder->createLoad(mir::MIRType::getInt32(), ptr, "dereftmp");
 	}
 
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {

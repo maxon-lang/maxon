@@ -8,7 +8,6 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
 	// Types
 	{"int", {KeywordCategory::Type, "Integer type"}},
 	{"float", {KeywordCategory::Type, "Floating-point type"}},
-	{"ptr", {KeywordCategory::Type, "Pointer type"}},
 	{"char", {KeywordCategory::Type, "Character type"}},
 	{"string", {KeywordCategory::Type, "String type"}},
 	{"bool", {KeywordCategory::Type, "Boolean type"}},
@@ -417,9 +416,6 @@ std::vector<Token> Lexer::tokenize() {
 			advance();
 		} else if (c == '/') {
 			tokens.push_back(Token(TokenType::DIVIDE, "/", startLine, startColumn));
-			advance();
-		} else if (c == '&') {
-			tokens.push_back(Token(TokenType::AMPERSAND, "&", startLine, startColumn));
 			advance();
 		} else if (c == '=') {
 			advance();

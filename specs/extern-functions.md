@@ -36,7 +36,7 @@ Note: No function body or `end` statement.
 ### Example
 
 ```maxon
-extern function TestFunc(x int, p ptr, c char) int
+extern function TestFunc(x int, y int, c char) int
 
 function main() int
     return 0
@@ -51,7 +51,7 @@ end 'main'
 
 <!-- test: basic-extern -->
 ```maxon
-extern function TestFunc(x int, p ptr, c char) int
+extern function TestFunc(x int, y int, c char) int
 
 function main() int
     return 0

@@ -470,26 +470,11 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		// Get pointer to the field
 		mir::MIRValue *fieldPtr = builder->createStructGEP(structType, alloca,
 														   fieldIndex, memberAssign->memberName);
-		
+
 		// Generate the value and store it
 		mir::MIRValue *val = generateExpr(memberAssign->value.get());
 		builder->createStore(val, fieldPtr);
 
-		return;
-	}
-
-	if (auto *derefAssign = dynamic_cast<DerefAssignStmtAST *>(stmt)) {
-		mir::MIRValue *ptr = generateExpr(derefAssign->pointer.get());
-		if (!ptr) {
-			throw std::runtime_error("Failed to generate pointer for dereference assignment");
-		}
-
-		mir::MIRValue *val = generateExpr(derefAssign->value.get());
-		if (!val) {
-			throw std::runtime_error("Failed to generate value for dereference assignment");
-		}
-
-		builder->createStore(val, ptr);
 		return;
 	}
 
@@ -762,7 +747,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 	if (auto *retStmt = dynamic_cast<ReturnStmtAST *>(stmt)) {
 		mir::MIRValue *retVal = nullptr;
-		
+
 		// Special handling for struct literals in return statements
 		if (auto *structInitExpr = dynamic_cast<StructInitExprAST *>(retStmt->value.get())) {
 			mir::MIRType *structType = structTypes[structInitExpr->structName];

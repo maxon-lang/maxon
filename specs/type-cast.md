@@ -19,9 +19,6 @@ Implementation:
   - `int` to `bool`: `icmp ne i32 %val, 0` (non-zero = true)
   - `int` to `char`: `trunc i32 %val to i8`
   - `char` to `int`: `sext i8 %val to i32`
-  - `int` to `ptr`: `inttoptr`
-  - `ptr` to `int`: `ptrtoint`
-  - `ptr` to `ptr`: `bitcast`
 
 Type checker validates that the conversion is legal and rejects unsafe conversions.
 
@@ -42,11 +39,9 @@ value as targetType
 ```
 ### Supported Conversions
 
-- `int` ↔ `float` (int to float only; float to int requires `trunc()`, `round()`, `floor()`, or `ceil()`)
+- `int` → `float` (int to float only; float to int requires `trunc()`, `round()`, `floor()`, or `ceil()`)
 - `int` ↔ `char`
 - `int` ↔ `bool`
-- `int` ↔ `ptr`
-- `ptr` ↔ `ptr` (pointer casting)
 - `char` ↔ `int`
 
 ### Example
@@ -92,19 +87,5 @@ end 'main'
 ```
 ```exitcode
 65
-```
-
-
-<!-- test: int-to-ptr -->
-```maxon
-function main() int
-    var nullPtr = 0 as ptr
-    var backToInt = nullPtr as int
-    if backToInt > 0 return 0
-    return 42
-end 'main'
-```
-```exitcode
-42
 ```
 

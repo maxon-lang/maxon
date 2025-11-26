@@ -59,7 +59,7 @@ Single-line comments only:
 ### Keywords
 ```
 and, as, bool, break, char, continue, else, end, export, extern,
-false, float, for, function, if, in, int, let, not, or, ptr,
+false, float, for, function, if, in, int, let, not, or,
 return, then, true, var, while
 ```
 
@@ -118,7 +118,7 @@ false
 | `float` | 64-bit | IEEE 754 double | `double` |
 | `bool` | 1-bit | Boolean (true/false) | `i1` |
 | `char` | 8-bit | Single character | `i8` |
-| `ptr` | platform | Untyped pointer | `ptr` |
+| `string` | 24-byte | UTF-8 string | struct |
 
 ### Array Types
 
@@ -150,7 +150,6 @@ end 'process'
 ```maxon
 var i = 65 as char         // 'A'
 var b = 1 as bool          // true
-var p = 0 as ptr           // null pointer
 var f = 5 as float         // 5.0
 ```
 
@@ -158,8 +157,6 @@ Supported casts:
 - `int` → `float` (int to float only)
 - `int` ↔ `char`
 - `int` ↔ `bool`
-- `int` ↔ `ptr`
-- `ptr` ↔ `ptr`
 - `char` ↔ `int`
 
 **Converting floats to integers:**
@@ -253,8 +250,8 @@ var answer = getAnswer()
 
 Declare external functions (Windows API, C libraries):
 ```maxon
-extern function GetStdHandle(nStdHandle int) ptr
-extern function WriteFile(hFile ptr, lpBuffer ptr, nBytes int, written ptr, overlapped ptr) int
+extern function GetStdHandle(nStdHandle int) int
+extern function ExitProcess(uExitCode int) int
 ```
 
 **Notes:**
@@ -270,7 +267,7 @@ extern function WriteFile(hFile ptr, lpBuffer ptr, nBytes int, written ptr, over
 ### Operator Precedence (highest to lowest)
 
 1. **Postfix**: `[]` (array indexing), `.` (member access), `as` (cast), function call `()`
-2. **Unary**: `-` (negation), `not` (logical not), `&` (address-of), `*` (dereference)
+2. **Unary**: `-` (negation), `not` (logical not)
 3. **Multiplicative**: `*` `/` `mod`
 4. **Additive**: `+` `-`
 5. **Comparison**: `=` `!=` `<` `>` `<=` `>=`
@@ -316,8 +313,6 @@ extern function WriteFile(hFile ptr, lpBuffer ptr, nBytes int, written ptr, over
 |----------|-------------|---------|
 | `-` | Negation | `-x` |
 | `not` | Logical NOT | `not condition` |
-| `&` | Address-of | `&variable` |
-| `*` | Dereference | `*pointer` (limited support) |
 
 ### Parentheses
 Override precedence:
@@ -531,8 +526,8 @@ trunc(x float) int              // Truncate toward zero
 
 **Formatting Functions**
 ```maxon
-format_int(value int) ptr       // Format int as string
-format_float(value float) ptr   // Format float as string
+format_int(value int) string    // Format int as string
+format_float(value float) string // Format float as string
 ```
 
 ### Standard Library Modules
@@ -553,15 +548,14 @@ Located in `stdlib/` directory:
 
 ### Heap Allocation
 - Arrays (all array types)
+- Strings (when dynamically allocated)
 - Allocated with Windows `HeapAlloc`
 - Automatically freed at end of scope
 - No manual `free` or garbage collector needed
 
-### Pointer Safety
-- No null pointer checks (undefined behavior)
+### Safety
 - No bounds checking on arrays
-- Address-of operator `&` creates pointer to variable
-- Dereference operator `*` has limited support
+- No null checks
 
 ### Calling Convention
 - Simple types (int, float, bool, char, ptr) passed by value

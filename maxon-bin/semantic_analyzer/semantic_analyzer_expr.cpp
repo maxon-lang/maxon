@@ -60,38 +60,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return "error";
 		}
 
-		// Valid casts: int <-> ptr, int <-> char, char <-> int, ptr <-> int
+		// Valid casts: int <-> char, char <-> int
 		return castExpr->targetType;
-
-	} else if (auto addrExpr = dynamic_cast<AddressOfExprAST *>(expr)) {
-		// Check if variable exists
-		auto varInfo = lookupVariable(addrExpr->varName);
-		if (!varInfo.has_value()) {
-			addError("Undefined variable: '" + addrExpr->varName + "'" +
-						 std::string("\n  Note: Cannot take address of undefined variable"),
-					 expr->line, expr->column);
-			return "error";
-		}
-		// Mark variable as used when taking its address
-		markVariableAsUsed(addrExpr->varName);
-		// Address-of always returns a pointer type
-		return "ptr";
-
-	} else if (auto derefExpr = dynamic_cast<DerefExprAST *>(expr)) {
-		// Analyze the expression being dereferenced
-		std::string ptrType = analyzeExpression(derefExpr->expr.get());
-
-		// Should be a pointer type (ptr or string)
-		if (ptrType != "ptr" && ptrType != "string" && ptrType != "error") {
-			addError("Dereference operator (*) requires a pointer type" +
-						 std::string("\n  Found type: ") + ptrType,
-					 expr->line, expr->column);
-			return "error";
-		}
-
-		// Dereferencing a pointer gives us an int (for now, we assume pointers point to ints)
-		// TODO: Add proper type tracking for what pointers point to
-		return "int";
 
 	} else if (auto varExpr = dynamic_cast<VariableExprAST *>(expr)) {
 		auto varInfo = lookupVariable(varExpr->name);
@@ -112,27 +82,6 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Arithmetic operators: +, -, *, /, %
 		if (binExpr->op == '+' || binExpr->op == '-' || binExpr->op == '*' ||
 			binExpr->op == '/' || binExpr->op == '%') {
-			// Safety restriction: no pointer arithmetic allowed
-			if (leftType == "ptr" || rightType == "ptr") {
-				std::string opName;
-				if (binExpr->op == '+')
-					opName = "addition (+)";
-				else if (binExpr->op == '-')
-					opName = "subtraction (-)";
-				else if (binExpr->op == '*')
-					opName = "multiplication (*)";
-				else if (binExpr->op == '/')
-					opName = "division (/";
-				else
-					opName = "modulo (%)";
-
-				addError("Pointer arithmetic is not allowed" +
-							 std::string("\n  Operator: ") + opName +
-							 "\n  Note: For safety, pointers cannot be used in arithmetic operations",
-						 expr->line, expr->column);
-				return "error";
-			}
-
 			// Special handling for modulo: requires both operands to be int
 			if (binExpr->op == '%') {
 				if (leftType != "int" || rightType != "int") {

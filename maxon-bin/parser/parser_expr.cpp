@@ -111,35 +111,6 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		return std::make_unique<CallExprAST>(funcName, std::move(args), line, column);
 	}
 
-	// Address-of operator: &variable
-	if (check(TokenType::AMPERSAND)) {
-		int line = currentToken().line;
-		int column = currentToken().column;
-		advance(); // consume '&'
-
-		// Expect an identifier (variable name)
-		if (!check(TokenType::IDENTIFIER)) {
-			throw std::runtime_error("Expected variable name after '&' operator\n  Location: line " +
-									 std::to_string(currentToken().line) + ", column " +
-									 std::to_string(currentToken().column));
-		}
-
-		std::string varName = currentToken().value;
-		advance();
-		return std::make_unique<AddressOfExprAST>(varName, line, column);
-	}
-
-	// Dereference operator: *expr
-	if (check(TokenType::MULTIPLY)) {
-		int line = currentToken().line;
-		int column = currentToken().column;
-		advance(); // consume '*'
-
-		// Parse the expression to dereference
-		auto expr = parsePrimary();
-		return std::make_unique<DerefExprAST>(std::move(expr), line, column);
-	}
-
 	if (check(TokenType::IDENTIFIER)) {
 		std::string name = currentToken().value;
 		int line = currentToken().line;

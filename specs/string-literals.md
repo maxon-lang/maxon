@@ -14,7 +14,7 @@ String literals are sequences of characters enclosed in double quotes. They are 
 Implementation:
 - Parsed in `Lexer::readStringLiteral()`
 - Represented as `StringLiteral` AST node
-- Type is `ptr` (pointer to char array)
+- Type is `string`
 - Stored as LLVM global constant array
 - Supports escape sequences: `\n`, `\t`, `\\`, `\"`
 - Null-terminated automatically

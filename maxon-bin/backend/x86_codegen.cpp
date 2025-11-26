@@ -386,7 +386,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	// These values MUST be in callee-saved registers or on the stack
 	// =========================================================================
 	std::unordered_set<uint64_t> liveAcrossCalls;
-	
+
 	// For each basic block, compute which values are defined before a call
 	// and used after a call (within the same block or in successor blocks)
 	for (auto &block : func->basicBlocks) {
@@ -397,21 +397,22 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 				callIndices.push_back(i);
 			}
 		}
-		
-		if (callIndices.empty()) continue;
-		
+
+		if (callIndices.empty())
+			continue;
+
 		// For each value defined before a call, check if it's used after any call
 		std::unordered_map<uint64_t, size_t> defIndex; // value key -> instruction index where defined
-		
+
 		for (size_t i = 0; i < block->instructions.size(); ++i) {
 			auto &inst = block->instructions[i];
-			
+
 			// Record where values are defined
 			if (inst->result) {
 				uint64_t key = makeAllocKey(inst->result);
 				defIndex[key] = i;
 			}
-			
+
 			// For each operand use, check if it crosses a call
 			for (auto *op : inst->operands) {
 				if (op->kind != mir::MIRValueKind::VirtualReg &&
@@ -419,7 +420,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 					continue;
 				}
 				uint64_t key = makeAllocKey(op);
-				
+
 				// Check if this value was defined before a call that's before this use
 				auto defIt = defIndex.find(key);
 				if (defIt != defIndex.end()) {
@@ -444,7 +445,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 				}
 			}
 		}
-		
+
 		// Values used in successor blocks that are defined before the last call
 		// are also live across that call
 		if (!callIndices.empty()) {
@@ -466,7 +467,8 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 								}
 							}
 						}
-						if (usedAfterCall) break;
+						if (usedAfterCall)
+							break;
 					}
 					// If used after call in same block, already handled above
 					// For cross-block uses, we'd need full dataflow analysis
@@ -483,7 +485,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 			}
 		}
 	}
-	
+
 	// Also mark all parameters as live across calls (conservative)
 	for (auto *param : func->parameters) {
 		uint64_t key = makeAllocKey(param);
@@ -493,7 +495,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	// =========================================================================
 	// Register allocation with liveness information
 	// =========================================================================
-	
+
 	// Available general-purpose registers (excluding RSP, RBP)
 	// Split into callee-saved (safe across calls) and caller-saved (clobbered by calls)
 	std::vector<X86Reg> calleeSavedRegs;
@@ -501,7 +503,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	std::vector<X86Reg> calleeSavedFloatRegs;
 	std::vector<X86Reg> callerSavedFloatRegs;
 	std::vector<X86Reg> paramRegs; // Registers used for passing parameters (ABI)
-	
+
 	if (callingConv == CallingConv::Win64) {
 		// Windows x64 ABI: first 4 integer params in RCX, RDX, R8, R9
 		paramRegs = {X86Reg::RCX, X86Reg::RDX, X86Reg::R8, X86Reg::R9};
@@ -512,8 +514,8 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		callerSavedRegs = {X86Reg::R10, X86Reg::R11}; // RAX reserved for return values
 		// XMM registers: XMM6-XMM15 are callee-saved on Windows
 		calleeSavedFloatRegs = {X86Reg::XMM6, X86Reg::XMM7, X86Reg::XMM8, X86Reg::XMM9,
-							    X86Reg::XMM10, X86Reg::XMM11, X86Reg::XMM12, X86Reg::XMM13,
-							    X86Reg::XMM14, X86Reg::XMM15};
+								X86Reg::XMM10, X86Reg::XMM11, X86Reg::XMM12, X86Reg::XMM13,
+								X86Reg::XMM14, X86Reg::XMM15};
 		callerSavedFloatRegs = {}; // XMM0-5 used for params/returns
 	} else {
 		// System V: first 6 integer params in RDI, RSI, RDX, RCX, R8, R9
@@ -524,13 +526,13 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		// All XMM registers are caller-saved on System V
 		calleeSavedFloatRegs = {};
 		callerSavedFloatRegs = {X86Reg::XMM8, X86Reg::XMM9, X86Reg::XMM10, X86Reg::XMM11,
-							    X86Reg::XMM12, X86Reg::XMM13, X86Reg::XMM14, X86Reg::XMM15};
+								X86Reg::XMM12, X86Reg::XMM13, X86Reg::XMM14, X86Reg::XMM15};
 	}
-	
+
 	// Combined lists for allocation (callee-saved first, then caller-saved)
 	std::vector<X86Reg> availableRegs = calleeSavedRegs;
 	availableRegs.insert(availableRegs.end(), callerSavedRegs.begin(), callerSavedRegs.end());
-	
+
 	std::vector<X86Reg> availableFloatRegs = calleeSavedFloatRegs;
 	availableFloatRegs.insert(availableFloatRegs.end(), callerSavedFloatRegs.begin(), callerSavedFloatRegs.end());
 
@@ -670,7 +672,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	size_t callerSavedRegIdx = 0;
 	size_t calleeSavedFloatIdx = paramFloatRegIdx;
 	size_t callerSavedFloatIdx = 0;
-	
+
 	for (auto &block : func->basicBlocks) {
 		for (auto &inst : block->instructions) {
 			if (inst->result && inst->opcode != mir::MIROpcode::Alloca) {
@@ -684,7 +686,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 
 					// Check if this value is live across a call
 					bool needsCalleeSaved = liveAcrossCalls.count(key) > 0;
-					
+
 					// Check if this is a float type
 					bool isFloat = inst->result->type->isFloat();
 
@@ -707,7 +709,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 									allocatedReg = callerSavedFloatRegs[callerSavedFloatIdx++];
 								}
 							}
-							
+
 							if (allocatedReg != X86Reg::None) {
 								regAlloc.regMap[key] = allocatedReg;
 								if (isCalleeSaved(allocatedReg, callingConv)) {
@@ -739,7 +741,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 									allocatedReg = callerSavedRegs[callerSavedRegIdx++];
 								}
 							}
-							
+
 							if (allocatedReg != X86Reg::None) {
 								regAlloc.regMap[key] = allocatedReg;
 								if (isCalleeSaved(allocatedReg, callingConv)) {

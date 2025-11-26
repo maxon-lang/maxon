@@ -21,14 +21,6 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		// Analyze initializer
 		std::string initType = analyzeExpression(varDecl->initializer.get());
 
-		// Safety restriction: explicit pointer type with 'var' is not allowed
-		// Only check explicit type declarations, not inferred types (e.g., string literals)
-		if (!varDecl->type.empty() && (varDecl->type == "ptr" || varDecl->type == "string")) {
-			addError("Pointer variables must be declared with 'let', not 'var'" +
-						 std::string("\n  Note: For safety, pointers are immutable and must use 'let'"),
-					 stmt->line, stmt->column);
-		}
-
 		// Determine the actual type - use declared type if provided, otherwise infer
 		std::string actualType;
 		if (!varDecl->type.empty()) {
@@ -243,18 +235,6 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 				}
 			}
 		}
-
-	} else if (auto derefAssign = dynamic_cast<DerefAssignStmtAST *>(stmt)) {
-		// Analyze the pointer expression (should result in ptr or string type)
-		std::string ptrType = analyzeExpression(derefAssign->pointer.get());
-		if (ptrType != "ptr" && ptrType != "string") {
-			addError("Cannot dereference non-pointer type: '" + ptrType + "'" +
-						 std::string("\n  Note: Only pointer (ptr/string) types can be dereferenced with *"),
-					 stmt->line, stmt->column);
-		}
-
-		// Analyze value expression
-		analyzeExpression(derefAssign->value.get());
 
 	} else if (auto exprStmt = dynamic_cast<ExprStmtAST *>(stmt)) {
 		// Analyze the expression (e.g., function call)

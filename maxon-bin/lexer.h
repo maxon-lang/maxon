@@ -19,19 +19,18 @@ enum class TokenType {
 	CHARACTER,	   // Single character literal 'A'
 
 	// Operators
-	ASSIGN,		   // = (assignment)
-	EQUAL_EQUAL,   // == (equality comparison)
-	PLUS,	   // +
-	MINUS,	   // -
-	MULTIPLY,  // *
-	DIVIDE,	   // /
-	MODULO,	   // % (modulo/remainder)
-	AMPERSAND, // & (address-of operator)
-	NOT_EQUAL, // != (not equal)
-	GT,		   // >
-	LT,		   // <
-	GTE,	   // >=
-	LTE,	   // <=
+	ASSIGN,		 // = (assignment)
+	EQUAL_EQUAL, // == (equality comparison)
+	PLUS,		 // +
+	MINUS,		 // -
+	MULTIPLY,	 // *
+	DIVIDE,		 // /
+	MODULO,		 // % (modulo/remainder)
+	NOT_EQUAL,	 // != (not equal)
+	GT,			 // >
+	LT,			 // <
+	GTE,		 // >=
+	LTE,		 // <=
 
 	// Delimiters
 	LPAREN,	  // (

@@ -221,11 +221,6 @@ std::unique_ptr<ForStmtAST> Parser::parseFor() {
 }
 
 std::unique_ptr<StmtAST> Parser::parseStatement() {
-	// DEBUG - temporary
-	Token tok = currentToken();
-	std::cerr << "parseStatement: token type=" << static_cast<int>(tok.type) 
-	          << " value='" << tok.value << "' at line " << tok.line << "\n";
-
 	if (check(TokenType::KEYWORD) && currentToken().value == "var") {
 		return parseVarDecl();
 	}
@@ -258,28 +253,6 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 		return parseContinue();
 	}
 
-	// Check for pointer dereference assignment: *ptr = value
-	if (check(TokenType::MULTIPLY)) {
-		int line = currentToken().line;
-		int column = currentToken().column;
-		advance(); // consume '*'
-
-		// Parse just the pointer identifier/expression (not a full expression that includes =)
-		auto ptrExpr = parsePrimary();
-
-		// Expect '='
-		if (!check(TokenType::ASSIGN)) {
-			throw std::runtime_error("Expected '=' after pointer dereference in assignment at line " +
-									 std::to_string(line) + ", column " + std::to_string(column));
-		}
-		advance(); // consume '='
-
-		// Parse the value to assign
-		auto value = parseLogicalOr();
-
-		return std::make_unique<DerefAssignStmtAST>(std::move(ptrExpr), std::move(value), line, column);
-	}
-
 	if (check(TokenType::IDENTIFIER)) {
 		std::string name = currentToken().value;
 		int idLine = currentToken().line;
@@ -290,14 +263,14 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 		if (check(TokenType::DOT)) {
 			advance(); // consume '.'
 			Token memberName = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
-			
+
 			// If followed by assignment, this is struct member assignment
 			if (check(TokenType::ASSIGN)) {
 				advance(); // consume '='
 				auto value = parseLogicalOr();
 				return std::make_unique<MemberAssignStmtAST>(name, memberName.value, std::move(value), idLine, idColumn);
 			}
-			
+
 			// Otherwise, continue treating as namespace qualification for function calls
 			name = name + "." + memberName.value;
 		}

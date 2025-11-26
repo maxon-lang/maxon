@@ -18,7 +18,7 @@ Key implementation:
 - Can be cast to `int` to get ASCII value
 - Can be compared using comparison operators
 - Lexer handles escape sequences in `readCharLiteral()`
-- Used for string manipulation (strings are `ptr` to char array)
+- Used for string manipulation
 
 Common escape sequences: `\n` (newline), `\t` (tab), `\\` (backslash), `\'` (single quote).
 

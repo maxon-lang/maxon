@@ -280,11 +280,6 @@ bool SemanticAnalyzer::typesMatch(const std::string &type1, const std::string &t
 		return true;
 	}
 
-	// ptr and string are interchangeable (string is an alias for ptr)
-	if ((type1 == "ptr" && type2 == "string") || (type1 == "string" && type2 == "ptr")) {
-		return true;
-	}
-
 	// Check if both are array types and extract element types
 	if (type1[0] == '[' && type2[0] == '[') {
 		// Extract element types (everything after the last ']')
@@ -296,7 +291,7 @@ bool SemanticAnalyzer::typesMatch(const std::string &type1, const std::string &t
 			std::string elem2 = type2.substr(bracket2 + 1);
 
 			// Array types match if element types match, regardless of size
-			// Use recursive call to handle ptr/string equivalence
+			// Use recursive call
 			return typesMatch(elem1, elem2);
 		}
 	}
