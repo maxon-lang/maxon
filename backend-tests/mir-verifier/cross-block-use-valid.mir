@@ -1,0 +1,20 @@
+; EXPECT: pass
+; Test: cross-block value use WITH dominance
+; %val is defined in block 'define_val' and used in 'use_val' which IS dominated by 'define_val'
+
+define i32 @test_cross_block_valid() {
+entry:
+    br label %define_val
+
+define_val:
+    %val = add i32 10, 20
+    br label %use_val
+
+use_val:
+    ; OK: define_val dominates use_val (only path to use_val goes through define_val)
+    %result = add i32 %val, 5
+    br label %exit
+
+exit:
+    ret i32 %result
+}

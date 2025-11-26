@@ -348,6 +348,129 @@ std::vector<fs::path> discoverTests(const fs::path &testDir) {
 	return tests;
 }
 
+// ===== MIR Verifier Tests =====
+
+struct MIRTestExpectation {
+	bool expectPass = true; // true = should pass, false = should fail
+};
+
+// Parse EXPECT marker from MIR file
+MIRTestExpectation parseMIRExpectation(const fs::path &mirFile) {
+	MIRTestExpectation exp;
+	std::ifstream file(mirFile);
+	std::string line;
+
+	while (std::getline(file, line)) {
+		// Look for ; EXPECT: pass or ; EXPECT: fail
+		if (line.find("; EXPECT:") != std::string::npos) {
+			if (line.find("fail") != std::string::npos) {
+				exp.expectPass = false;
+			} else if (line.find("pass") != std::string::npos) {
+				exp.expectPass = true;
+			}
+			break;
+		}
+		// Stop at first non-comment line
+		if (!line.empty() && line[0] != ';') {
+			break;
+		}
+	}
+
+	return exp;
+}
+
+// Discover MIR verifier test files
+std::vector<fs::path> discoverMIRTests(const fs::path &testDir) {
+	std::vector<fs::path> tests;
+	fs::path mirDir = testDir / "mir-verifier";
+
+	if (!fs::exists(mirDir) || !fs::is_directory(mirDir)) {
+		return tests;
+	}
+
+	for (const auto &entry : fs::directory_iterator(mirDir)) {
+		if (entry.is_regular_file() && entry.path().extension() == ".mir") {
+			tests.push_back(entry.path());
+		}
+	}
+
+	// Sort by filename
+	std::sort(tests.begin(), tests.end(), [](const fs::path &a, const fs::path &b) {
+		return a.filename().string() < b.filename().string();
+	});
+
+	return tests;
+}
+
+// Run MIR verifier test
+// Returns true if test passed
+bool runMIRTest(const fs::path &mirFile, bool verbose) {
+	MIRTestExpectation exp = parseMIRExpectation(mirFile);
+	std::string testName = mirFile.stem().string();
+
+	// Run maxon verify-mir
+	std::string cmd = "maxon verify-mir \"" + mirFile.string() + "\"";
+	auto result = runCommand(cmd);
+
+	bool testPassed = false;
+	if (exp.expectPass) {
+		// Should pass verification
+		testPassed = (result.exitCode == 0);
+	} else {
+		// Should fail verification
+		testPassed = (result.exitCode != 0);
+	}
+
+	if (verbose) {
+		std::cout << CYAN << "Running: " << RESET << testName << "... ";
+		if (testPassed) {
+			std::cout << GREEN << "PASSED" << RESET << "\n";
+		} else {
+			std::cout << RED << "FAILED" << RESET;
+			if (exp.expectPass) {
+				std::cout << " (should have been accepted)";
+			} else {
+				std::cout << " (should have been rejected)";
+			}
+			std::cout << "\n";
+			if (!result.output.empty()) {
+				std::cout << "  Output: " << result.output << "\n";
+			}
+		}
+	}
+
+	return testPassed;
+}
+
+// Run all MIR verifier tests
+// Returns pair<passed, failed>
+std::pair<int, int> runMIRTests(const std::vector<fs::path> &mirTests, bool verbose) {
+	int passed = 0;
+	int failed = 0;
+
+	if (mirTests.empty()) {
+		return {0, 0};
+	}
+
+	for (const auto &mirFile : mirTests) {
+		if (runMIRTest(mirFile, verbose)) {
+			passed++;
+			if (!verbose) {
+				std::cout << GREEN << "." << RESET;
+				std::cout.flush();
+			}
+		} else {
+			failed++;
+			if (!verbose) {
+				std::cout << RED << "F" << RESET;
+				std::cout.flush();
+			}
+		}
+	}
+
+	return {passed, failed};
+}
+
 // Generate diagnostic artifacts for a failed test
 // Returns list of generated artifact filenames
 std::vector<std::string> generateDiagnostics(const fs::path &testFile, const fs::path &testDir,
@@ -612,12 +735,14 @@ int main(int argc, char *argv[]) {
 
 	// Discover tests
 	auto tests = discoverTests(testDir);
-	if (tests.empty()) {
+	auto mirTests = discoverMIRTests(testDir);
+
+	if (tests.empty() && mirTests.empty()) {
 		std::cerr << YELLOW << "No test files found in " << testDir << RESET << "\n";
 		return 1;
 	}
 
-	std::cout << "Found " << tests.size() << " tests\n\n";
+	std::cout << "Found " << (tests.size() + mirTests.size()) << " tests\n\n";
 
 	// Run tests
 	int passed = 0;
@@ -667,14 +792,25 @@ int main(int argc, char *argv[]) {
 		std::cout << "\n";
 	}
 
-	// Summary
+	// Run MIR verifier tests (continues seamlessly from backend tests)
+	auto [mirPassed, mirFailed] = runMIRTests(mirTests, verbose);
+
+	if (!verbose && mirPassed + mirFailed > 0) {
+		std::cout << "\n";
+	}
+
+	// Overall summary
+	int totalPassed = passed + mirPassed;
+	int totalFailed = failed + mirFailed;
+	int totalTests = tests.size() + mirTests.size();
+
 	std::cout << "\n"
 			  << BOLD << "Results: " << RESET;
-	std::cout << GREEN << passed << " passed" << RESET;
-	if (failed > 0) {
-		std::cout << ", " << RED << failed << " failed" << RESET;
+	std::cout << GREEN << totalPassed << " passed" << RESET;
+	if (totalFailed > 0) {
+		std::cout << ", " << RED << totalFailed << " failed" << RESET;
 	}
-	std::cout << " / " << tests.size() << " total\n";
+	std::cout << " / " << totalTests << " total\n";
 
-	return failed > 0 ? 1 : 0;
+	return totalFailed > 0 ? 1 : 0;
 }

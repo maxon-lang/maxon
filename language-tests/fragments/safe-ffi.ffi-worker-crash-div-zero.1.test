@@ -1,0 +1,364 @@
+// Test: safe-ffi.ffi-worker-crash-div-zero.1
+extern function crash_divide_by_zero(n int) int "ffi_test_lib"
+
+function main() int
+    var result = crash_divide_by_zero(42)
+    return result
+end 'main'
+---
+; Module: temp_fragment_w77360.maxon
+
+@__ffi_initialized = global i32
+@__ffi_shm_handle = global ptr
+@__ffi_shm_ptr = global ptr
+@__ffi_sem_request = global ptr
+@__ffi_sem_response = global ptr
+@__ffi_worker_handle = global ptr
+@__ffi_is_worker = global i32
+@__ffi_dll_ffi_test_lib = constant [17 x i8] c"ffi_test_lib.dll\00"
+@__ffi_func_0 = constant [21 x i8] c"crash_divide_by_zero\00"
+@__ffi_crash_error_0 = constant [35 x i8] c"FFI Error: Worker process crashed
+\00"
+@__ffi_dll_error_0 = constant [50 x i8] c"FFI Error: Failed to load DLL 'ffi_test_lib.dll'
+\00"
+@__ffi_func_error_0 = constant [76 x i8] c"FFI Error: Function 'crash_divide_by_zero' not found in 'ffi_test_lib.dll'
+\00"
+
+declare i32 @crash_divide_by_zero(i32 %arg0)
+
+define i32 @main() {
+entry0:
+  %0 = call i32 @__ffi_parent_init()
+  %1 = icmp eq i32 %0, 0
+  br i1 %1, label %ffi_init_ok1, label %ffi_init_fail2
+ffi_init_ok1:
+  %2 = load ptr, ptr @ffi_parent_shared_mem
+  %3 = getelementptr i8, ptr %2, i64 0
+  store i32 1, ptr %3
+  %4 = getelementptr i8, ptr %2, i64 4
+  store i32 0, ptr %4
+  %5 = getelementptr i8, ptr %2, i64 8
+  store i32 1, ptr %5
+  %6 = getelementptr i8, ptr %2, i64 16
+  store i32 42, ptr %6
+  %8 = load ptr, ptr @ffi_parent_req_sem
+  %9 = call i1 @ffi_signal_semaphore(ptr %8)
+  %10 = load ptr, ptr @ffi_parent_rsp_sem
+  %11 = load ptr, ptr @ffi_parent_worker_handle
+  %12 = call i32 @ffi_wait_with_crash_detect(ptr %10, ptr %11)
+  %13 = icmp eq i32 %12, 1
+  br i1 %13, label %ffi_worker_crashed3, label %ffi_check_status4
+ffi_init_fail2:
+  call void @exit(i32 99)
+  ret void
+ffi_worker_crashed3:
+  %14 = call i32 @write_stdout(ptr @__ffi_crash_error_0, i32 34)
+  call void @exit(i32 103)
+  ret void
+ffi_check_status4:
+  %15 = getelementptr i8, ptr %2, i64 12
+  %16 = load i32, ptr %15
+  %17 = icmp eq i32 %16, 0
+  br i1 %17, label %ffi_call_ok5, label %ffi_check_error6
+ffi_call_ok5:
+  %21 = getelementptr i8, ptr %2, i64 144
+  %22 = load i64, ptr %21
+  %23 = trunc i64 %22 to i32
+  %24 = alloca i32
+  store i32 %23, ptr %24
+  ret i32 %23
+ffi_check_error6:
+  %18 = icmp eq i32 %16, 100
+  br i1 %18, label %ffi_dll_error7, label %ffi_func_error8
+ffi_dll_error7:
+  %19 = call i32 @write_stdout(ptr @__ffi_dll_error_0, i32 49)
+  call void @exit(i32 100)
+  ret void
+ffi_func_error8:
+  %20 = call i32 @write_stdout(ptr @__ffi_func_error_0, i32 75)
+  call void @exit(i32 101)
+  ret void
+}
+
+define void @__ffi_init() {
+entry0:
+  %0 = load i32, ptr @__ffi_initialized
+  %1 = icmp ne i32 %0, 0
+  br i1 %1, label %already_init2, label %do_init1
+do_init1:
+  store i32 1, ptr @__ffi_initialized
+  ret void
+already_init2:
+  ret void
+}
+
+declare ptr @ffi_create_shared_memory(i32 %arg0, ptr %arg1)
+
+define void @__ffi_cleanup() {
+entry0:
+  ret void
+}
+
+declare ptr @LoadLibraryA(ptr %arg0)
+
+declare ptr @GetProcAddress(ptr %arg0, ptr %arg1)
+
+define void @__ffi_dispatch(ptr %shm_ptr, i32 %func_id) {
+entry0:
+  %0 = icmp eq i32 %func_id, 0
+  br i1 %0, label %call_03, label %check_14
+unknown_func1:
+  %15 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 102, ptr %15
+  br label %done2
+done2:
+  ret void
+call_03:
+  br label %load_lib_06
+check_14:
+  br label %unknown_func1
+do_call_05:
+  %5 = getelementptr i8, ptr %shm_ptr, i64 16
+  %6 = getelementptr i8, ptr %5, i64 0
+  %7 = load i64, ptr %6
+  %8 = trunc i64 %7 to i32
+  %9 = call_indirect i32 %3(i32 %8)
+  %10 = getelementptr i8, ptr %shm_ptr, i64 144
+  %11 = zext i32 %9 to i64
+  store i64 %11, ptr %10
+  %12 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 0, ptr %12
+  br label %done2
+load_lib_06:
+  %1 = call ptr @LoadLibraryA(ptr @__ffi_dll_ffi_test_lib)
+  %2 = icmp ne ptr %1, null
+  br i1 %2, label %get_addr_07, label %dll_error_08
+get_addr_07:
+  %3 = call ptr @GetProcAddress(ptr %1, ptr @__ffi_func_0)
+  %4 = icmp ne ptr %3, null
+  br i1 %4, label %do_call_05, label %func_error_09
+dll_error_08:
+  %13 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 100, ptr %13
+  br label %done2
+func_error_09:
+  %14 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 101, ptr %14
+  br label %done2
+}
+
+declare i32 @__ffi_parent_init()
+
+declare void @exit(i32 %arg0)
+
+declare i1 @ffi_signal_semaphore(ptr %arg0)
+
+declare i32 @ffi_wait_with_crash_detect(ptr %arg0, ptr %arg1)
+
+declare i32 @write_stdout(ptr %arg0, i32 %arg1)
+
+define void @_start() {
+entry0:
+  br label %check_worker1
+check_worker1:
+  %0 = call i32 @ffi_is_worker_mode()
+  %1 = icmp ne i32 %0, 0
+  br i1 %1, label %run_worker3, label %run_main2
+run_main2:
+  %3 = call i32 @main()
+  call void @__ffi_parent_cleanup()
+  call void @exit(i32 %3)
+  ret void
+run_worker3:
+  %2 = call i32 @__ffi_worker_main()
+  call void @exit(i32 %2)
+  ret void
+}
+
+declare i32 @ffi_is_worker_mode()
+
+declare i32 @__ffi_worker_main()
+
+declare void @__ffi_parent_cleanup()
+
+---
+; Module: temp_fragment_w77360.maxon
+
+@__ffi_initialized = global i32
+@__ffi_shm_handle = global ptr
+@__ffi_shm_ptr = global ptr
+@__ffi_sem_request = global ptr
+@__ffi_sem_response = global ptr
+@__ffi_worker_handle = global ptr
+@__ffi_is_worker = global i32
+@__ffi_dll_ffi_test_lib = constant [17 x i8] c"ffi_test_lib.dll\00"
+@__ffi_func_0 = constant [21 x i8] c"crash_divide_by_zero\00"
+@__ffi_crash_error_0 = constant [35 x i8] c"FFI Error: Worker process crashed
+\00"
+@__ffi_dll_error_0 = constant [50 x i8] c"FFI Error: Failed to load DLL 'ffi_test_lib.dll'
+\00"
+@__ffi_func_error_0 = constant [76 x i8] c"FFI Error: Function 'crash_divide_by_zero' not found in 'ffi_test_lib.dll'
+\00"
+
+declare i32 @crash_divide_by_zero(i32 %arg0)
+
+define i32 @main() {
+entry0:
+  %0 = call i32 @__ffi_parent_init()
+  %1 = icmp eq i32 %0, 0
+  br i1 %1, label %ffi_init_ok1, label %ffi_init_fail2
+ffi_init_ok1:
+  %2 = load ptr, ptr @ffi_parent_shared_mem
+  %3 = getelementptr i8, ptr %2, i64 0
+  store i32 1, ptr %3
+  %4 = getelementptr i8, ptr %2, i64 4
+  store i32 0, ptr %4
+  %5 = getelementptr i8, ptr %2, i64 8
+  store i32 1, ptr %5
+  %6 = getelementptr i8, ptr %2, i64 16
+  %7 = zext i32 42 to i64
+  store i64 %7, ptr %6
+  %8 = load ptr, ptr @ffi_parent_req_sem
+  %9 = call i1 @ffi_signal_semaphore(ptr %8)
+  %10 = load ptr, ptr @ffi_parent_rsp_sem
+  %11 = load ptr, ptr @ffi_parent_worker_handle
+  %12 = call i32 @ffi_wait_with_crash_detect(ptr %10, ptr %11)
+  %13 = icmp eq i32 %12, 1
+  br i1 %13, label %ffi_worker_crashed3, label %ffi_check_status4
+ffi_init_fail2:
+  call void @exit(i32 99)
+  ret void
+ffi_worker_crashed3:
+  %14 = call i32 @write_stdout(ptr @__ffi_crash_error_0, i32 34)
+  call void @exit(i32 103)
+  ret void
+ffi_check_status4:
+  %15 = getelementptr i8, ptr %2, i64 12
+  %16 = load i32, ptr %15
+  %17 = icmp eq i32 %16, 0
+  br i1 %17, label %ffi_call_ok5, label %ffi_check_error6
+ffi_call_ok5:
+  %21 = getelementptr i8, ptr %2, i64 144
+  %22 = load i64, ptr %21
+  %23 = trunc i64 %22 to i32
+  %24 = alloca i32
+  store i32 %23, ptr %24
+  %25 = load i32, ptr %24
+  ret i32 %25
+ffi_check_error6:
+  %18 = icmp eq i32 %16, 100
+  br i1 %18, label %ffi_dll_error7, label %ffi_func_error8
+ffi_dll_error7:
+  %19 = call i32 @write_stdout(ptr @__ffi_dll_error_0, i32 49)
+  call void @exit(i32 100)
+  ret void
+ffi_func_error8:
+  %20 = call i32 @write_stdout(ptr @__ffi_func_error_0, i32 75)
+  call void @exit(i32 101)
+  ret void
+}
+
+define void @__ffi_init() {
+entry0:
+  %0 = load i32, ptr @__ffi_initialized
+  %1 = icmp ne i32 %0, 0
+  br i1 %1, label %already_init2, label %do_init1
+do_init1:
+  store i32 1, ptr @__ffi_initialized
+  ret void
+already_init2:
+  ret void
+}
+
+declare ptr @ffi_create_shared_memory(i32 %arg0, ptr %arg1)
+
+define void @__ffi_cleanup() {
+entry0:
+  ret void
+}
+
+declare ptr @LoadLibraryA(ptr %arg0)
+
+declare ptr @GetProcAddress(ptr %arg0, ptr %arg1)
+
+define void @__ffi_dispatch(ptr %shm_ptr, i32 %func_id) {
+entry0:
+  %0 = icmp eq i32 %func_id, 0
+  br i1 %0, label %call_03, label %check_14
+unknown_func1:
+  %15 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 102, ptr %15
+  br label %done2
+done2:
+  ret void
+call_03:
+  br label %load_lib_06
+check_14:
+  br label %unknown_func1
+do_call_05:
+  %5 = getelementptr i8, ptr %shm_ptr, i64 16
+  %6 = getelementptr i8, ptr %5, i64 0
+  %7 = load i64, ptr %6
+  %8 = trunc i64 %7 to i32
+  %9 = call_indirect i32 %3(i32 %8)
+  %10 = getelementptr i8, ptr %shm_ptr, i64 144
+  %11 = zext i32 %9 to i64
+  store i64 %11, ptr %10
+  %12 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 0, ptr %12
+  br label %done2
+load_lib_06:
+  %1 = call ptr @LoadLibraryA(ptr @__ffi_dll_ffi_test_lib)
+  %2 = icmp ne ptr %1, null
+  br i1 %2, label %get_addr_07, label %dll_error_08
+get_addr_07:
+  %3 = call ptr @GetProcAddress(ptr %1, ptr @__ffi_func_0)
+  %4 = icmp ne ptr %3, null
+  br i1 %4, label %do_call_05, label %func_error_09
+dll_error_08:
+  %13 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 100, ptr %13
+  br label %done2
+func_error_09:
+  %14 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 101, ptr %14
+  br label %done2
+}
+
+declare i32 @__ffi_parent_init()
+
+declare void @exit(i32 %arg0)
+
+declare i1 @ffi_signal_semaphore(ptr %arg0)
+
+declare i32 @ffi_wait_with_crash_detect(ptr %arg0, ptr %arg1)
+
+declare i32 @write_stdout(ptr %arg0, i32 %arg1)
+
+define void @_start() {
+entry0:
+  br label %check_worker1
+check_worker1:
+  %0 = call i32 @ffi_is_worker_mode()
+  %1 = icmp ne i32 %0, 0
+  br i1 %1, label %run_worker3, label %run_main2
+run_main2:
+  %3 = call i32 @main()
+  call void @__ffi_parent_cleanup()
+  call void @exit(i32 %3)
+  ret void
+run_worker3:
+  %2 = call i32 @__ffi_worker_main()
+  call void @exit(i32 %2)
+  ret void
+}
+
+declare i32 @ffi_is_worker_mode()
+
+declare i32 @__ffi_worker_main()
+
+declare void @__ffi_parent_cleanup()
+
+---
+ExitCode: 103
+Stdout: FFI Error: Worker process crashed

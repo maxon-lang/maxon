@@ -1,0 +1,21 @@
+; EXPECT: pass
+; Test: loop with value defined in loop header
+; This tests the tricky case where a loop header defines a value used in the loop body
+
+define i32 @test_loop_header_def() {
+entry:
+    br label %loop
+
+loop:
+    %i = phi i32 [0, %entry], [%next, %body]
+    %done = icmp sge i32 %i, 10
+    br i1 %done, label %exit, label %body
+
+body:
+    ; OK: %i is defined in loop header which dominates body
+    %next = add i32 %i, 1
+    br label %loop
+
+exit:
+    ret i32 %i
+}

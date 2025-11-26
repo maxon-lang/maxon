@@ -2,6 +2,7 @@
 // Part of Phase 7: Runtime Library Port for LLVM Elimination Plan
 
 #include "mir_parser.h"
+#include "ssa_verifier.h"
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
@@ -82,8 +83,17 @@ MIRParseResult MIRParser::run() {
 	parseModule();
 
 	MIRParseResult result;
-	result.module = std::move(module);
 	result.errors = std::move(errors);
+
+	// Run SSA verification if parsing succeeded (no errors yet)
+	if (result.errors.empty() && module) {
+		MIRVerifyResult verifyResult = MIRVerifier::verify(*module);
+		for (const auto &verifyError : verifyResult.errors) {
+			result.errors.push_back({0, 0, verifyError.toString()});
+		}
+	}
+
+	result.module = std::move(module);
 	return result;
 }
 

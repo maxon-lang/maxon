@@ -1,5 +1,6 @@
 #include "compiler.h"
 #include "docs_generator.h"
+#include "mir/mir_parser.h"
 #include "self_test.h"
 #include "temp_runner.h"
 #include "test_regenerate.h"
@@ -95,6 +96,23 @@ int main(int argc, char *argv[]) {
 
 	if (command == "generate-docs") {
 		return DocsGenerator::generateDocumentation();
+	}
+
+	if (command == "verify-mir") {
+		if (argc < 3) {
+			std::cerr << "Usage: " << argv[0] << " verify-mir <file.mir>" << std::endl;
+			return 1;
+		}
+		std::string mirFile = argv[2];
+		auto result = mir::MIRParser::parseFile(mirFile);
+		if (!result.errors.empty()) {
+			for (const auto &err : result.errors) {
+				std::cerr << err.toString() << std::endl;
+			}
+			return 1;
+		}
+		std::cout << "MIR file verified successfully: " << mirFile << std::endl;
+		return 0;
 	}
 
 	if (command == "regen-fragments") {

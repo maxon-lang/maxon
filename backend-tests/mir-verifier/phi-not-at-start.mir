@@ -1,0 +1,20 @@
+; EXPECT: fail
+; Test: PHI node not at start of block
+
+define i32 @test_phi_not_at_start() {
+entry:
+    %cond = icmp eq i32 1, 1
+    br i1 %cond, label %left, label %right
+
+left:
+    br label %merge
+
+right:
+    br label %merge
+
+merge:
+    %x = add i32 1, 2
+    ; ERROR: PHI must appear before non-PHI instructions
+    %val = phi i32 [10, %left], [20, %right]
+    ret i32 %val
+}
