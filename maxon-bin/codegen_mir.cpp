@@ -97,6 +97,34 @@ mir::MIRType *MIRCodeGenerator::getParamTypeFromString(const std::string &typeSt
 	return getTypeFromString(typeStr);
 }
 
+std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
+	if (!type)
+		return "int";
+	switch (type->kind) {
+	case mir::MIRTypeKind::Int32:
+		return "int";
+	case mir::MIRTypeKind::Float64:
+		return "float";
+	case mir::MIRTypeKind::Int1:
+		return "bool";
+	case mir::MIRTypeKind::Int8:
+		return "char";
+	case mir::MIRTypeKind::Int64:
+		return "int"; // Map i64 to int for now
+	case mir::MIRTypeKind::Ptr:
+		return "ptr";
+	case mir::MIRTypeKind::Void:
+		return "void";
+	case mir::MIRTypeKind::Struct:
+		return type->structName;
+	case mir::MIRTypeKind::Array:
+		// Format: [size]elementType
+		return "[" + std::to_string(type->arraySize) + "]" +
+			   getMaxonTypeFromMIRType(type->elementType);
+	}
+	return "int";
+}
+
 bool MIRCodeGenerator::isArrayParam(const std::string &typeStr) {
 	// Check for []type (dynamic array parameter) or [size]type
 	return typeStr.size() > 2 && typeStr[0] == '[';

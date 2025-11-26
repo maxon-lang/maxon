@@ -133,31 +133,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
 	context.subscriptions.push(restartCommand);
 
-	// Force LF on save
-	context.subscriptions.push(vscode.workspace.onWillSaveTextDocument(e => {
-		if (e.document.languageId === 'maxon') {
-			log('onWillSaveTextDocument');
-			const edits: vscode.TextEdit[] = [];
-
-			// 1. Set EOL to LF
-			edits.push(vscode.TextEdit.setEndOfLine(vscode.EndOfLine.LF));
-
-			// 2. Check for CRLF in the text and replace if found
-			const text = e.document.getText();
-			if (text.includes('\r')) {
-				log('Document contains CRLF, replacing with LF');
-				const newText = text.replace(/\r/g, '');
-				const fullRange = new vscode.Range(
-					e.document.positionAt(0),
-					e.document.positionAt(text.length)
-				);
-				edits.push(vscode.TextEdit.replace(fullRange, newText));
-			}
-
-			e.waitUntil(Promise.resolve(edits));
-		}
-	}));
-
 	// Add client to subscriptions for cleanup
 	context.subscriptions.push(client);
 	log('Maxon extension activated successfully');

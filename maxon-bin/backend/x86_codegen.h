@@ -44,6 +44,10 @@ struct RegAllocInfo {
 	// For functions with hidden return pointer, shifted parameters need to be
 	// saved to stack in prologue. Each entry is {arrivalReg, stackOffset}
 	std::vector<std::pair<X86Reg, int32_t>> shiftedParamSaves;
+
+	// Space reserved for outgoing stack arguments (beyond register args)
+	// On Win64, this is for args beyond the 4th; on SysV, beyond the 6th
+	uint32_t outgoingStackArgsSize = 0;
 };
 
 //==============================================================================
@@ -202,6 +206,8 @@ class X86CodeGen {
 	void genSExt(mir::MIRInstruction *inst);
 	void genFPToSI(mir::MIRInstruction *inst);
 	void genSIToFP(mir::MIRInstruction *inst);
+	void genBitcast(mir::MIRInstruction *inst);
+	void genCopyConversion(mir::MIRInstruction *inst);
 
 	// Control flow
 	void genBr(mir::MIRInstruction *inst);

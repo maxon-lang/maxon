@@ -115,60 +115,74 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 	// Determine calling convention based on target
 	bool isWindows = (module->targetTriple.find("windows") != std::string::npos);
 
-	// Step 0: Load and merge runtime library
-	std::string runtimePath = isWindows ? "runtime_windows.mir" : "runtime_linux.mir";
-	std::string runtimeMirPath = findRuntimeFile(runtimePath);
-
-	if (!runtimeMirPath.empty()) {
+	// Helper lambda to merge a runtime module into the current module
+	auto mergeRuntime = [this](const std::string &runtimeMirPath) {
 		auto runtimeResult = mir::MIRParser::parseFile(runtimeMirPath);
 		if (!runtimeResult.errors.empty()) {
 			std::cerr << "Warning: Failed to parse runtime library: " << runtimeResult.errors[0].message << std::endl;
-		} else if (runtimeResult.module) {
-			// First pass: Add external declarations from runtime that we don't have
-			// (these are Windows API functions like ExitProcess, HeapAlloc, etc.)
-			for (auto &func : runtimeResult.module->functions) {
-				if (func->isExternal) {
-					if (!module->getFunction(func->name)) {
-						// Add external declaration
-						module->functions.push_back(std::move(func));
-					}
-				}
-			}
+			return;
+		}
+		if (!runtimeResult.module)
+			return;
 
-			// Second pass: Replace declarations with definitions from runtime
-			for (auto &func : runtimeResult.module->functions) {
-				if (!func)
-					continue; // Already moved in first pass
-				if (func->isExternal)
-					continue; // Skip remaining externals
-
-				// Check if we have a declaration for this function that we can replace
-				mir::MIRFunction *existing = module->getFunction(func->name);
-				if (existing && existing->isExternal) {
-					// Replace the declaration with the definition
-					for (auto it = module->functions.begin(); it != module->functions.end(); ++it) {
-						if ((*it)->name == func->name) {
-							*it = std::move(func);
-							break;
-						}
-					}
-				} else if (!existing) {
-					// New function not in user module
+		// First pass: Add external declarations from runtime that we don't have
+		// (these are Windows API functions like ExitProcess, HeapAlloc, etc.)
+		for (auto &func : runtimeResult.module->functions) {
+			if (func->isExternal) {
+				if (!module->getFunction(func->name)) {
+					// Add external declaration
 					module->functions.push_back(std::move(func));
 				}
-				// If existing && !existing->isExternal, keep the user's definition
 			}
+		}
 
-			// Update calleeFunc pointers in all call instructions
-			// This is needed because we replaced some functions
-			for (auto &func : module->functions) {
-				for (auto &block : func->basicBlocks) {
-					for (auto &inst : block->instructions) {
-						if (inst->opcode == mir::MIROpcode::Call && !inst->calleeName.empty()) {
-							// Re-lookup the function by name
-							inst->calleeFunc = module->getFunction(inst->calleeName);
-						}
+		// Second pass: Replace declarations with definitions from runtime
+		for (auto &func : runtimeResult.module->functions) {
+			if (!func)
+				continue; // Already moved in first pass
+			if (func->isExternal)
+				continue; // Skip remaining externals
+
+			// Check if we have a declaration for this function that we can replace
+			mir::MIRFunction *existing = module->getFunction(func->name);
+			if (existing && existing->isExternal) {
+				// Replace the declaration with the definition
+				for (auto it = module->functions.begin(); it != module->functions.end(); ++it) {
+					if ((*it)->name == func->name) {
+						*it = std::move(func);
+						break;
 					}
+				}
+			} else if (!existing) {
+				// New function not in user module
+				module->functions.push_back(std::move(func));
+			}
+			// If existing && !existing->isExternal, keep the user's definition
+		}
+	};
+
+	// Step 0: Load and merge runtime libraries
+	// First load platform-specific runtime (malloc, free, exit, etc.)
+	std::string platformRuntimePath = isWindows ? "runtime_windows.mir" : "runtime_linux.mir";
+	std::string platformMirPath = findRuntimeFile(platformRuntimePath);
+	if (!platformMirPath.empty()) {
+		mergeRuntime(platformMirPath);
+	}
+
+	// Then load platform-independent runtime (math functions like trunc, floor, sin, etc.)
+	std::string commonMirPath = findRuntimeFile("runtime.mir");
+	if (!commonMirPath.empty()) {
+		mergeRuntime(commonMirPath);
+	}
+
+	// Update calleeFunc pointers in all call instructions
+	// This is needed because we replaced some functions
+	for (auto &func : module->functions) {
+		for (auto &block : func->basicBlocks) {
+			for (auto &inst : block->instructions) {
+				if (inst->opcode == mir::MIROpcode::Call && !inst->calleeName.empty()) {
+					// Re-lookup the function by name
+					inst->calleeFunc = module->getFunction(inst->calleeName);
 				}
 			}
 		}
@@ -214,8 +228,9 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 		}
 	}
 
-	// Apply relocations for internal function calls and collect import relocations
+	// Apply relocations for internal function calls and collect import/data relocations
 	std::vector<std::pair<size_t, std::string>> importRelocations; // offset, symbolName
+	std::vector<std::pair<size_t, size_t>> dataRelocations;		   // codeOffset, dataOffset
 
 	for (const auto &adj : allRelocations) {
 		const auto &reloc = adj.reloc;
@@ -239,8 +254,17 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 			// Indirect call through IAT - collect for later patching by PE writer
 			size_t patchOffset = adj.funcBaseOffset + reloc.offset;
 			importRelocations.push_back({patchOffset, reloc.symbolName});
+		} else if (reloc.type == backend::Relocation::Type::GlobalRef) {
+			// RIP-relative reference to data section (e.g., float constants)
+			// Symbol name format: ".constN" where N is the offset in data section
+			size_t patchOffset = adj.funcBaseOffset + reloc.offset;
+			// Parse data offset from symbol name (e.g., ".const0" -> 0, ".const8" -> 8)
+			size_t dataOffset = 0;
+			if (reloc.symbolName.substr(0, 6) == ".const") {
+				dataOffset = std::stoull(reloc.symbolName.substr(6));
+			}
+			dataRelocations.push_back({patchOffset, dataOffset});
 		}
-		// GlobalRef relocations will be handled by PE/ELF writer
 	}
 
 	if (verboseLevel >= 2) {
@@ -249,7 +273,7 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 
 	// Step 2: Write executable using PE or ELF writer
 #ifdef _WIN32
-	writeWindowsExecutable(exeFile, codeBuffer, dataSection, functionOffsets, importRelocations);
+	writeWindowsExecutable(exeFile, codeBuffer, dataSection, functionOffsets, importRelocations, dataRelocations);
 #else
 	writeLinuxExecutable(exeFile, codeBuffer, dataSection, functionOffsets, importRelocations);
 #endif
@@ -261,7 +285,8 @@ void MIRCodeGenerator::writeWindowsExecutable(
 	std::vector<uint8_t> &code, // non-const to allow patching
 	const std::vector<uint8_t> &data,
 	const std::unordered_map<std::string, size_t> &funcOffsets,
-	const std::vector<std::pair<size_t, std::string>> &importRelocs) {
+	const std::vector<std::pair<size_t, std::string>> &importRelocs,
+	const std::vector<std::pair<size_t, size_t>> &dataRelocs) {
 
 	backend::PeWriter pe;
 
@@ -319,6 +344,11 @@ void MIRCodeGenerator::writeWindowsExecutable(
 			// Add import relocation - PE writer will patch this
 			pe.addImportRelocation(static_cast<uint32_t>(offset), dllName, funcName);
 		}
+	}
+
+	// Register data section relocations with PE writer (for float constants, etc.)
+	for (const auto &[codeOffset, dataOffset] : dataRelocs) {
+		pe.addDataRelocation(static_cast<uint32_t>(codeOffset), static_cast<uint32_t>(dataOffset));
 	}
 
 	// Add symbols for debugging

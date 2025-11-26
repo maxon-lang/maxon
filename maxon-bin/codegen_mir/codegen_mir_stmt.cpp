@@ -176,7 +176,8 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			// For structs, use the struct name so member access works
 			variableTypes[varDecl->name] = allocaType->structName;
 		} else {
-			variableTypes[varDecl->name] = "";
+			// Derive type from the allocated MIR type
+			variableTypes[varDecl->name] = getMaxonTypeFromMIRType(allocaType);
 		}
 		return;
 	}
@@ -299,7 +300,8 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			// For structs, use the struct name so member access works
 			variableTypes[letDecl->name] = allocaType->structName;
 		} else {
-			variableTypes[letDecl->name] = "";
+			// Derive type from the allocated MIR type
+			variableTypes[letDecl->name] = getMaxonTypeFromMIRType(allocaType);
 		}
 		return;
 	}

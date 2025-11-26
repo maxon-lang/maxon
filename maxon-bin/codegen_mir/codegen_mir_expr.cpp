@@ -454,6 +454,11 @@ mir::MIRValue *MIRCodeGenerator::generateMathIntrinsic(CallExprAST *callExpr) {
 	// Declare the math function if not already declared
 	mir::MIRFunction *mathFunc = nullptr;
 
+	// Rounding functions (trunc, floor, ceil, round) return int in Maxon
+	// But the underlying C library functions return float, so we need to convert
+	bool isRoundingFunction = (name == "trunc" || name == "floor" ||
+							   name == "ceil" || name == "round");
+
 	if (name == "sin" || name == "cos" || name == "tan" ||
 		name == "sqrt" || name == "floor" || name == "ceil" ||
 		name == "round" || name == "trunc" || name == "abs") {
@@ -477,5 +482,12 @@ mir::MIRValue *MIRCodeGenerator::generateMathIntrinsic(CallExprAST *callExpr) {
 		args.push_back(argVal);
 	}
 
-	return builder->createCall(mathFunc, args);
+	mir::MIRValue *result = builder->createCall(mathFunc, args);
+
+	// Rounding functions return int in Maxon, convert from float
+	if (isRoundingFunction) {
+		result = builder->createFPToSI(result, mir::MIRType::getInt32(), "fptositmp");
+	}
+
+	return result;
 }

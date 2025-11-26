@@ -264,6 +264,9 @@ class PeWriter {
 	void addImportRelocation(uint32_t codeOffset, const std::string &dllName,
 							 const std::string &funcName);
 
+	// Add a data section relocation (for patching RIP-relative references to data)
+	void addDataRelocation(uint32_t codeOffset, uint32_t dataOffset);
+
 	// Get RVA for an imported function (after layout)
 	uint32_t getImportRva(const std::string &dllName, const std::string &funcName) const;
 
@@ -290,6 +293,13 @@ class PeWriter {
 		std::string funcName;
 	};
 	std::vector<ImportCallReloc> importCallRelocs;
+
+	// Data section relocations (code offset -> data offset)
+	struct DataReloc {
+		uint32_t codeOffset; // Offset in .text section where disp32 needs patching
+		uint32_t dataOffset; // Offset within data section
+	};
+	std::vector<DataReloc> dataRelocs;
 
 	uint16_t subsystem;
 	uint64_t imageBase;

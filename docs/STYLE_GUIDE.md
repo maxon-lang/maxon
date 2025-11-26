@@ -60,16 +60,6 @@ All Maxon source files should use **LF (line feed, `\n`)** line endings, not CRL
 
 **Why:** LF is the standard across most development environments and version control systems.
 
-### Setting in VSCode
-
-To ensure LF line endings in VSCode:
-
-1. Click "CRLF" or "LF" in the bottom right status bar
-2. Select **LF**
-3. Save the file
-
-The VSCode extension for Maxon will preserve your chosen line ending mode.
-
 ---
 
 ## Naming Conventions

@@ -119,6 +119,13 @@ void PeWriter::addImportRelocation(uint32_t codeOffset, const std::string &dllNa
 	importCallRelocs.push_back(reloc);
 }
 
+void PeWriter::addDataRelocation(uint32_t codeOffset, uint32_t dataOffset) {
+	DataReloc reloc;
+	reloc.codeOffset = codeOffset;
+	reloc.dataOffset = dataOffset;
+	dataRelocs.push_back(reloc);
+}
+
 uint32_t PeWriter::getImportRva(const std::string &dllName,
 								const std::string &funcName) const {
 	std::string key = dllName + "!" + funcName;
@@ -451,6 +458,39 @@ bool PeWriter::write(const std::string &filename) {
 						}
 					}
 					break;
+				}
+			}
+		}
+	}
+
+	// Patch data section relocations (RIP-relative references to .data)
+	if (!dataRelocs.empty()) {
+		// Find .text and .data sections
+		PeSection *textSec = nullptr;
+		PeSection *dataSec = nullptr;
+		for (auto &sec : sections) {
+			if (sec.name == ".text")
+				textSec = &sec;
+			if (sec.name == ".data")
+				dataSec = &sec;
+		}
+
+		if (textSec && dataSec) {
+			for (const auto &reloc : dataRelocs) {
+				// Calculate RIP-relative displacement from code to data
+				// The instruction references [RIP+disp32]
+				// disp32 is relative to the end of the instruction (after the 4-byte disp)
+				uint32_t instrRva = textSec->virtualAddress + reloc.codeOffset;
+				uint32_t instrEnd = instrRva + 4; // After the disp32
+				uint32_t dataRva = dataSec->virtualAddress + reloc.dataOffset;
+				int32_t disp = static_cast<int32_t>(dataRva - instrEnd);
+
+				// Patch the displacement in the code
+				if (reloc.codeOffset + 3 < textSec->data.size()) {
+					textSec->data[reloc.codeOffset + 0] = static_cast<uint8_t>(disp & 0xFF);
+					textSec->data[reloc.codeOffset + 1] = static_cast<uint8_t>((disp >> 8) & 0xFF);
+					textSec->data[reloc.codeOffset + 2] = static_cast<uint8_t>((disp >> 16) & 0xFF);
+					textSec->data[reloc.codeOffset + 3] = static_cast<uint8_t>((disp >> 24) & 0xFF);
 				}
 			}
 		}

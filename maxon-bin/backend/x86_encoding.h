@@ -394,6 +394,10 @@ class X86Encoder {
 	void cvttsd2siRR64(X86Reg dst, X86Reg src);
 	void cvttsd2siRR32(X86Reg dst, X86Reg src);
 
+	// MOVQ (move quadword between XMM and GPR - for bitcast)
+	void movqXmmToGpr(X86Reg gpr, X86Reg xmm); // MOVQ r64, xmm
+	void movqGprToXmm(X86Reg xmm, X86Reg gpr); // MOVQ xmm, r64
+
 	//--------------------------------------------------------------------------
 	// Fixup support
 	//--------------------------------------------------------------------------

@@ -74,6 +74,7 @@ class MIRCodeGenerator {
 	// Type conversion helpers
 	mir::MIRType *getTypeFromString(const std::string &typeStr);
 	mir::MIRType *getParamTypeFromString(const std::string &typeStr);
+	std::string getMaxonTypeFromMIRType(mir::MIRType *type);
 	bool isArrayParam(const std::string &typeStr);
 	bool isStructParameter(const std::string &varName);
 
@@ -104,7 +105,8 @@ class MIRCodeGenerator {
 		std::vector<uint8_t> &code,
 		const std::vector<uint8_t> &data,
 		const std::unordered_map<std::string, size_t> &funcOffsets,
-		const std::vector<std::pair<size_t, std::string>> &importRelocs);
+		const std::vector<std::pair<size_t, std::string>> &importRelocs,
+		const std::vector<std::pair<size_t, size_t>> &dataRelocs);
 #else
 	void writeLinuxExecutable(
 		const std::string &exeFile,

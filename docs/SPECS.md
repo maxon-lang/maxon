@@ -196,7 +196,7 @@ var y = abs(x)  // Returns 5.5
 ```maxon
 function main() int
     var x = abs(-5.0)
-    return x as int
+    return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -209,7 +209,7 @@ end 'main'
 ```maxon
 function main() int
     var x = abs(-5.5)
-    return x as int
+    return trunc(x)
 end 'main'
 ```
 ```exitcode

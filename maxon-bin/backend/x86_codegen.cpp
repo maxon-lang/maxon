@@ -275,6 +275,14 @@ void X86CodeGen::generateInstruction(mir::MIRInstruction *inst) {
 	case mir::MIROpcode::SIToFP:
 		genSIToFP(inst);
 		break;
+	case mir::MIROpcode::Bitcast:
+		genBitcast(inst);
+		break;
+	case mir::MIROpcode::PtrToInt:
+	case mir::MIROpcode::IntToPtr:
+		// These are no-ops on x86-64 since pointers and i64 are the same size
+		genCopyConversion(inst);
+		break;
 
 	// Control flow
 	case mir::MIROpcode::Br:
@@ -401,6 +409,15 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	// (hidden ptr in RCX, first real param in RDX, etc.)
 	// For functions with hidden return pointer, shifted parameters must be saved
 	// to stack because RDX, R8, R9 are volatile and may be clobbered.
+	//
+	// Windows x64 ABI: Parameters are passed based on position, not type:
+	// - Position 0: RCX or XMM0 depending on type
+	// - Position 1: RDX or XMM1 depending on type
+	// - Position 2: R8 or XMM2 depending on type
+	// - Position 3: R9 or XMM3 depending on type
+	// - Position 4+: on stack
+	std::vector<X86Reg> floatParamRegs = {X86Reg::XMM0, X86Reg::XMM1, X86Reg::XMM2, X86Reg::XMM3};
+
 	for (size_t i = 0; i < func->parameters.size(); ++i) {
 		auto *param = func->parameters[i];
 		uint64_t key = makeAllocKey(param);
@@ -414,13 +431,25 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 				regAlloc.shiftedParamSaves.push_back({paramRegs[regIndex], stackOffset});
 			} else {
 				// Normal case: parameter stays in its arrival register
-				regAlloc.regMap[key] = paramRegs[regIndex];
+				// For float params, use XMM register; for int params, use GPR
+				if (param->type->isFloat()) {
+					regAlloc.regMap[key] = floatParamRegs[regIndex];
+				} else {
+					regAlloc.regMap[key] = paramRegs[regIndex];
+				}
 			}
 		} else {
-			// Parameter is passed on the stack
-			// On Windows x64, stack params start at RSP+40 (after return addr + shadow space)
-			// But after our prologue, they're at RBP+16 + (regIndex-4)*8
-			regAlloc.stackSlots[key] = 16 + static_cast<int32_t>((regIndex - paramRegs.size()) * 8);
+			// Parameter is passed on the stack by caller
+			// Stack layout after callee prologue (push rbp; mov rsp, rbp):
+			//   RBP+0:  saved RBP
+			//   RBP+8:  return address
+			//   RBP+16: shadow space (32 bytes on Win64, 0 on SysV)
+			//   RBP+48: first stack argument (on Win64)
+			// Formula: 16 (saved RBP + ret addr) + shadowSpace + (stackArgIndex * 8)
+			int32_t shadowSpace = (callingConv == CallingConv::Win64) ? 32 : 0;
+			int32_t stackArgOffset = 16 + shadowSpace +
+									 static_cast<int32_t>((regIndex - paramRegs.size()) * 8);
+			regAlloc.stackSlots[key] = stackArgOffset;
 		}
 	}
 
@@ -489,6 +518,30 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		}
 	}
 
+	// Third pass: Calculate maximum outgoing stack arguments for any call
+	// This determines how much extra space we need beyond shadow space
+	size_t maxOutgoingStackArgs = 0;
+	size_t numRegisterArgs = (callingConv == CallingConv::Win64) ? 4 : 6;
+	for (auto &block : func->basicBlocks) {
+		for (auto &inst : block->instructions) {
+			if (inst->opcode == mir::MIROpcode::Call) {
+				size_t numArgs = inst->operands.size();
+				// Account for hidden return pointer if callee returns large struct
+				if (inst->result && inst->result->type->isStruct() &&
+					inst->result->type->sizeInBytes > 8) {
+					numArgs++; // Hidden return pointer takes one register slot
+				}
+				if (numArgs > numRegisterArgs) {
+					size_t stackArgs = numArgs - numRegisterArgs;
+					if (stackArgs > maxOutgoingStackArgs) {
+						maxOutgoingStackArgs = stackArgs;
+					}
+				}
+			}
+		}
+	}
+	regAlloc.outgoingStackArgsSize = static_cast<uint32_t>(maxOutgoingStackArgs * 8);
+
 	// Calculate frame size considering callee-saved register pushes for alignment
 	// After push rbp: RSP % 16 == 0
 	// After N callee-saved pushes: RSP % 16 == (N % 2) * 8
@@ -500,6 +553,9 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	if (callingConv == CallingConv::Win64) {
 		baseFrameSize += 32; // 4 * 8 bytes shadow space
 	}
+
+	// Add space for outgoing stack arguments (beyond register args)
+	baseFrameSize += regAlloc.outgoingStackArgsSize;
 
 	// Now align considering the callee-saved pushes
 	// After push rbp + N callee-saved pushes, RSP is offset by (N % 2) * 8 from 16-alignment
@@ -1360,6 +1416,37 @@ void X86CodeGen::genSIToFP(mir::MIRInstruction *inst) {
 	storeResultFloat(inst->result, X86Reg::XMM0);
 }
 
+void X86CodeGen::genBitcast(mir::MIRInstruction *inst) {
+	mir::MIRValue *src = inst->operands[0];
+	mir::MIRType *srcType = src->type;
+	mir::MIRType *dstType = inst->result->type;
+
+	// f64 -> i64: MOVQ r64, xmm
+	if (srcType->kind == mir::MIRTypeKind::Float64 && dstType->kind == mir::MIRTypeKind::Int64) {
+		X86Reg val = loadValueFloat(src, X86Reg::XMM0);
+		encoder.movqXmmToGpr(X86Reg::RAX, val);
+		storeResult(inst->result, X86Reg::RAX);
+	}
+	// i64 -> f64: MOVQ xmm, r64
+	else if (srcType->kind == mir::MIRTypeKind::Int64 && dstType->kind == mir::MIRTypeKind::Float64) {
+		X86Reg val = loadValue(src, X86Reg::RAX);
+		encoder.movqGprToXmm(X86Reg::XMM0, val);
+		storeResultFloat(inst->result, X86Reg::XMM0);
+	}
+	// ptr -> ptr or same-size int: just copy
+	else {
+		X86Reg val = loadValue(src, X86Reg::RAX);
+		storeResult(inst->result, val);
+	}
+}
+
+void X86CodeGen::genCopyConversion(mir::MIRInstruction *inst) {
+	// For PtrToInt and IntToPtr on x86-64, these are no-ops
+	// since pointers and i64 are the same size
+	X86Reg val = loadValue(inst->operands[0], X86Reg::RAX);
+	storeResult(inst->result, val);
+}
+
 //==============================================================================
 // Control Flow
 //==============================================================================
@@ -1485,12 +1572,37 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 		encoder.lea64(argRegs[0], slot);
 	}
 
-	// Load arguments into registers (shift by 1 if we have hidden return pointer)
+	// First, handle stack arguments (args beyond register count)
+	// Stack args go at RSP+32+offset on Win64 (after shadow space)
 	size_t argOffset = hasHiddenRetPtr ? 1 : 0;
+	size_t numRegisterArgs = argRegs.size();
+	int32_t shadowSpaceSize = (callingConv == CallingConv::Win64) ? 32 : 0;
+
+	for (size_t i = 0; i < inst->operands.size(); ++i) {
+		size_t regIndex = i + argOffset;
+		if (regIndex >= numRegisterArgs) {
+			// This argument goes on the stack
+			mir::MIRValue *arg = inst->operands[i];
+			size_t stackArgIndex = regIndex - numRegisterArgs;
+			int32_t stackOffset = shadowSpaceSize + static_cast<int32_t>(stackArgIndex * 8);
+
+			if (arg->type->isFloat()) {
+				// Load float to XMM0, then store to stack
+				loadValueFloat(arg, X86Reg::XMM0);
+				encoder.movsdMR(X86Mem(X86Reg::RSP, stackOffset), X86Reg::XMM0);
+			} else {
+				// Load to R10 (scratch register), then store to stack
+				loadValue(arg, X86Reg::R10);
+				encoder.movMR64(X86Mem(X86Reg::RSP, stackOffset), X86Reg::R10);
+			}
+		}
+	}
+
+	// Load register arguments (args that fit in registers)
 	for (size_t i = 0; i < inst->operands.size(); ++i) {
 		size_t regIndex = i + argOffset;
 		if (regIndex >= argRegs.size()) {
-			break; // TODO: Handle stack arguments
+			break; // Remaining args are on stack, already handled above
 		}
 
 		mir::MIRValue *arg = inst->operands[i];
@@ -1500,8 +1612,6 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 			loadValue(arg, argRegs[regIndex]);
 		}
 	}
-
-	// TODO: Handle stack arguments for more than 4/6 args
 
 	// Check if this is an external function (needs indirect call through IAT)
 	bool isExternal = inst->calleeFunc && inst->calleeFunc->isExternal;

@@ -1042,6 +1042,24 @@ void X86Encoder::cvttsd2siRR32(X86Reg dst, X86Reg src) {
 	emitModRM(0x03, dst, src);
 }
 
+void X86Encoder::movqXmmToGpr(X86Reg gpr, X86Reg xmm) {
+	// MOVQ r64, xmm: 66 REX.W 0F 7E /r
+	emit8(0x66);
+	emitREX(true, xmm, gpr); // W=1, R from xmm, B from gpr
+	emit8(0x0F);
+	emit8(0x7E);
+	emitModRM(0x03, xmm, gpr);
+}
+
+void X86Encoder::movqGprToXmm(X86Reg xmm, X86Reg gpr) {
+	// MOVQ xmm, r64: 66 REX.W 0F 6E /r
+	emit8(0x66);
+	emitREX(true, xmm, gpr); // W=1, R from xmm, B from gpr
+	emit8(0x0F);
+	emit8(0x6E);
+	emitModRM(0x03, xmm, gpr);
+}
+
 //==============================================================================
 // Fixup support
 //==============================================================================
