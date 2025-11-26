@@ -481,6 +481,33 @@ MIRValue *MIRBuilder::createCall(const std::string &calleeName, MIRType *returnT
 	return result;
 }
 
+MIRValue *MIRBuilder::createCallIndirect(MIRValue *funcPtr, MIRType *returnType,
+										 const std::vector<MIRType *> &paramTypes,
+										 const std::vector<MIRValue *> &args,
+										 const std::string &name) {
+	auto inst = std::make_unique<MIRInstruction>(MIROpcode::CallIndirect);
+
+	// First operand is the function pointer
+	inst->operands.push_back(funcPtr);
+	// Remaining operands are the call arguments
+	for (auto *arg : args) {
+		inst->operands.push_back(arg);
+	}
+
+	// Store type information for the call
+	inst->indirectReturnType = returnType;
+	inst->indirectParamTypes = paramTypes;
+
+	MIRValue *result = nullptr;
+	if (!returnType->isVoid()) {
+		inst->result = currentFunction->createVirtualReg(returnType);
+		result = inst->result;
+	}
+
+	insertInstruction(std::move(inst));
+	return result;
+}
+
 //==============================================================================
 // SSA Phi node
 //==============================================================================

@@ -543,6 +543,7 @@ bool DeadCodeEliminationPass::hasSideEffects(MIRInstruction *inst) {
 	switch (inst->opcode) {
 	case MIROpcode::Store:
 	case MIROpcode::Call:
+	case MIROpcode::CallIndirect:
 	case MIROpcode::Br:
 	case MIROpcode::CondBr:
 	case MIROpcode::Ret:

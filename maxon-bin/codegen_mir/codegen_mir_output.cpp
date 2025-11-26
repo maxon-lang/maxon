@@ -353,61 +353,45 @@ void MIRCodeGenerator::writeWindowsExecutable(
 
 	backend::PeWriter pe;
 
+	// Map of symbol names to their DLL!function format
+	// This is populated automatically by addImportWithMapping below
+	std::unordered_map<std::string, std::string> importMapping;
+
+	// Helper to add import and mapping in one step - prevents forgetting either
+	auto addImportWithMapping = [&](const char *dll, const char *func) {
+		pe.addImport(dll, func);
+		importMapping[func] = std::string(dll) + "!" + func;
+	};
+
 	// Add imports for Windows runtime functions FIRST (before sections)
 	// so we know the IAT layout
-	pe.addImport("kernel32.dll", "ExitProcess");
-	pe.addImport("kernel32.dll", "GetProcessHeap");
-	pe.addImport("kernel32.dll", "HeapAlloc");
-	pe.addImport("kernel32.dll", "HeapFree");
-	pe.addImport("kernel32.dll", "GetStdHandle");
-	pe.addImport("kernel32.dll", "WriteFile");
-	pe.addImport("kernel32.dll", "CloseHandle");
+	addImportWithMapping("kernel32.dll", "ExitProcess");
+	addImportWithMapping("kernel32.dll", "GetProcessHeap");
+	addImportWithMapping("kernel32.dll", "HeapAlloc");
+	addImportWithMapping("kernel32.dll", "HeapFree");
+	addImportWithMapping("kernel32.dll", "GetStdHandle");
+	addImportWithMapping("kernel32.dll", "WriteFile");
+	addImportWithMapping("kernel32.dll", "CloseHandle");
 
 	// Safe FFI IPC imports
-	pe.addImport("kernel32.dll", "CreateProcessA");
-	pe.addImport("kernel32.dll", "TerminateProcess");
-	pe.addImport("kernel32.dll", "GetExitCodeProcess");
-	pe.addImport("kernel32.dll", "WaitForSingleObject");
-	pe.addImport("kernel32.dll", "CreateFileMappingA");
-	pe.addImport("kernel32.dll", "OpenFileMappingA");
-	pe.addImport("kernel32.dll", "MapViewOfFile");
-	pe.addImport("kernel32.dll", "UnmapViewOfFile");
-	pe.addImport("kernel32.dll", "CreateSemaphoreA");
-	pe.addImport("kernel32.dll", "OpenSemaphoreA");
-	pe.addImport("kernel32.dll", "ReleaseSemaphore");
-	pe.addImport("kernel32.dll", "GetLastError");
-	pe.addImport("kernel32.dll", "GetCommandLineA");
-	pe.addImport("kernel32.dll", "GetEnvironmentVariableA");
-	pe.addImport("kernel32.dll", "SetEnvironmentVariableA");
-	pe.addImport("kernel32.dll", "GetCurrentProcessId");
-
-	// Map of symbol names to their DLL!function format
-	std::unordered_map<std::string, std::string> importMapping = {
-		{"ExitProcess", "kernel32.dll!ExitProcess"},
-		{"GetProcessHeap", "kernel32.dll!GetProcessHeap"},
-		{"HeapAlloc", "kernel32.dll!HeapAlloc"},
-		{"HeapFree", "kernel32.dll!HeapFree"},
-		{"GetStdHandle", "kernel32.dll!GetStdHandle"},
-		{"WriteFile", "kernel32.dll!WriteFile"},
-		{"CloseHandle", "kernel32.dll!CloseHandle"},
-		// Safe FFI IPC
-		{"CreateProcessA", "kernel32.dll!CreateProcessA"},
-		{"TerminateProcess", "kernel32.dll!TerminateProcess"},
-		{"GetExitCodeProcess", "kernel32.dll!GetExitCodeProcess"},
-		{"WaitForSingleObject", "kernel32.dll!WaitForSingleObject"},
-		{"CreateFileMappingA", "kernel32.dll!CreateFileMappingA"},
-		{"OpenFileMappingA", "kernel32.dll!OpenFileMappingA"},
-		{"MapViewOfFile", "kernel32.dll!MapViewOfFile"},
-		{"UnmapViewOfFile", "kernel32.dll!UnmapViewOfFile"},
-		{"CreateSemaphoreA", "kernel32.dll!CreateSemaphoreA"},
-		{"OpenSemaphoreA", "kernel32.dll!OpenSemaphoreA"},
-		{"ReleaseSemaphore", "kernel32.dll!ReleaseSemaphore"},
-		{"GetLastError", "kernel32.dll!GetLastError"},
-		{"GetCommandLineA", "kernel32.dll!GetCommandLineA"},
-		{"GetEnvironmentVariableA", "kernel32.dll!GetEnvironmentVariableA"},
-		{"SetEnvironmentVariableA", "kernel32.dll!SetEnvironmentVariableA"},
-		{"GetCurrentProcessId", "kernel32.dll!GetCurrentProcessId"},
-	};
+	addImportWithMapping("kernel32.dll", "CreateProcessA");
+	addImportWithMapping("kernel32.dll", "TerminateProcess");
+	addImportWithMapping("kernel32.dll", "GetExitCodeProcess");
+	addImportWithMapping("kernel32.dll", "WaitForSingleObject");
+	addImportWithMapping("kernel32.dll", "CreateFileMappingA");
+	addImportWithMapping("kernel32.dll", "OpenFileMappingA");
+	addImportWithMapping("kernel32.dll", "MapViewOfFile");
+	addImportWithMapping("kernel32.dll", "UnmapViewOfFile");
+	addImportWithMapping("kernel32.dll", "CreateSemaphoreA");
+	addImportWithMapping("kernel32.dll", "OpenSemaphoreA");
+	addImportWithMapping("kernel32.dll", "ReleaseSemaphore");
+	addImportWithMapping("kernel32.dll", "GetLastError");
+	addImportWithMapping("kernel32.dll", "GetCommandLineA");
+	addImportWithMapping("kernel32.dll", "GetEnvironmentVariableA");
+	addImportWithMapping("kernel32.dll", "SetEnvironmentVariableA");
+	addImportWithMapping("kernel32.dll", "GetCurrentProcessId");
+	addImportWithMapping("kernel32.dll", "LoadLibraryA");
+	addImportWithMapping("kernel32.dll", "GetProcAddress");
 
 	// Patch import call relocations in code buffer
 	// For each import call, we need to compute the RIP-relative offset to the IAT entry
@@ -443,6 +427,13 @@ void MIRCodeGenerator::writeWindowsExecutable(
 
 			// Add import relocation - PE writer will patch this
 			pe.addImportRelocation(static_cast<uint32_t>(offset), dllName, funcName);
+		} else {
+			// This is a serious error - the function is being called but not in the import table
+			// This will cause the call to jump to address 0 and crash/hang
+			throw std::runtime_error(
+				"Internal compiler error: Import symbol '" + symbolName +
+				"' is called but not added to PE import table. "
+				"Add it to addImport() and importMapping in codegen_mir_output.cpp");
 		}
 	}
 

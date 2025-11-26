@@ -202,7 +202,8 @@ enum class MIROpcode {
 	RetVoid, // Return void
 
 	// Function calls
-	Call, // Function call
+	Call,		  // Function call (direct)
+	CallIndirect, // Indirect call through function pointer
 
 	// SSA
 	Phi, // Phi node for SSA
@@ -220,6 +221,10 @@ class MIRInstruction {
 	// For function calls
 	std::string calleeName;
 	MIRFunction *calleeFunc = nullptr;
+
+	// For indirect calls: the return type and parameter types (since we don't have calleeFunc)
+	MIRType *indirectReturnType = nullptr;
+	std::vector<MIRType *> indirectParamTypes;
 
 	// For Phi nodes: incoming values paired with basic blocks
 	std::vector<std::pair<MIRValue *, MIRBasicBlock *>> phiIncoming;

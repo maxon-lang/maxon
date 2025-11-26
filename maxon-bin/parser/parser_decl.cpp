@@ -92,9 +92,17 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 	// External functions don't have bodies
 	if (isExtern) {
-		// No body for extern functions - they're just declarations
-		logTrace("Extern function '" + name.value + "' -> " + returnType + " (" + std::to_string(parameters.size()) + " params)");
-		return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported);
+		// Parse required DLL name for extern functions
+		if (!check(TokenType::STRING)) {
+			throw std::runtime_error("Expected DLL name as string after return type for extern function\n  Example: extern function foo(x int) int \"mydll\"\n  Location: line " +
+									 std::to_string(currentToken().line) + ", column " +
+									 std::to_string(currentToken().column));
+		}
+		std::string dllName = currentToken().value;
+		advance();
+
+		logTrace("Extern function '" + name.value + "' -> " + returnType + " from DLL '" + dllName + "' (" + std::to_string(parameters.size()) + " params)");
+		return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported, dllName);
 	}
 
 	// Parse function body

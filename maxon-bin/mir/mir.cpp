@@ -330,6 +330,8 @@ const char *MIRInstruction::opcodeToString(MIROpcode op) {
 		return "ret void";
 	case MIROpcode::Call:
 		return "call";
+	case MIROpcode::CallIndirect:
+		return "call_indirect";
 	case MIROpcode::Phi:
 		return "phi";
 	case MIROpcode::Copy:
@@ -352,6 +354,16 @@ std::string MIRInstruction::toString() const {
 		ss << " " << (result ? result->type->toString() : "void") << " @" << calleeName << "(";
 		for (size_t i = 0; i < operands.size(); ++i) {
 			if (i > 0)
+				ss << ", ";
+			ss << operands[i]->type->toString() << " " << operands[i]->toString();
+		}
+		ss << ")";
+	} else if (opcode == MIROpcode::CallIndirect) {
+		// First operand is function pointer, rest are arguments
+		ss << " " << (indirectReturnType ? indirectReturnType->toString() : "void");
+		ss << " " << operands[0]->toString() << "(";
+		for (size_t i = 1; i < operands.size(); ++i) {
+			if (i > 1)
 				ss << ", ";
 			ss << operands[i]->type->toString() << " " << operands[i]->toString();
 		}

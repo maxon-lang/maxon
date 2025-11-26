@@ -62,6 +62,7 @@ void MIRCodeGenerator::registerExternFunction(FunctionAST *func) {
 	ExternFuncInfo info;
 	info.id = nextExternId++;
 	info.name = funcName;
+	info.dllName = func->dllName;
 	info.returnType = getTypeTagFromString(func->returnType);
 
 	for (const auto &param : func->parameters) {
@@ -70,7 +71,7 @@ void MIRCodeGenerator::registerExternFunction(FunctionAST *func) {
 
 	externFunctions[funcName] = info;
 
-	logTrace("Registered extern function: " + funcName + " (id=" + std::to_string(info.id) + ")");
+	logTrace("Registered extern function: " + funcName + " (id=" + std::to_string(info.id) + ", dll=" + info.dllName + ")");
 }
 
 //==============================================================================
@@ -319,6 +320,7 @@ void MIRCodeGenerator::generateFFICleanup() {
 
 //==============================================================================
 // FFI Dispatch Function - Called by worker to dispatch to extern functions
+// Uses LoadLibraryA and GetProcAddress to dynamically load and call functions
 //==============================================================================
 
 void MIRCodeGenerator::generateFFIDispatch() {
@@ -326,10 +328,35 @@ void MIRCodeGenerator::generateFFIDispatch() {
 		return;
 	}
 
-	logDetail("Generating __ffi_dispatch function");
+	logDetail("Generating __ffi_dispatch function with dynamic DLL loading");
 
-	// Use the builder's createFunction which handles parameters properly
-	// Shared memory layout:
+	// First, create string constants for DLL names and function names
+	// We'll need DLL name + ".dll" and the function name
+	std::map<std::string, mir::MIRGlobal *> dllNameGlobals;	 // dllName -> global for "dllName.dll"
+	std::map<std::string, mir::MIRGlobal *> funcNameGlobals; // funcName -> global for function name
+
+	for (const auto &entry : externFunctions) {
+		const ExternFuncInfo &info = entry.second;
+
+		// Create DLL name constant (dllName + ".dll")
+		if (dllNameGlobals.find(info.dllName) == dllNameGlobals.end()) {
+			std::string dllWithExt = info.dllName + ".dll";
+			std::string globalName = "__ffi_dll_" + info.dllName;
+			mir::MIRGlobal *dllGlobal = builder->createStringConstant(globalName, dllWithExt);
+			dllNameGlobals[info.dllName] = dllGlobal;
+		}
+
+		// Create function name constant
+		std::string globalName = "__ffi_func_" + std::to_string(info.id);
+		mir::MIRGlobal *funcGlobal = builder->createStringConstant(globalName, info.name);
+		funcNameGlobals[info.name] = funcGlobal;
+	}
+
+	// Declare LoadLibraryA and GetProcAddress
+	mir::MIRFunction *loadLibraryFunc = getOrDeclareFunction("LoadLibraryA", mir::MIRType::getPtr(),
+															 {mir::MIRType::getPtr()});
+	mir::MIRFunction *getProcAddrFunc = getOrDeclareFunction("GetProcAddress", mir::MIRType::getPtr(),
+															 {mir::MIRType::getPtr(), mir::MIRType::getPtr()}); // Shared memory layout:
 	//   Offset 0:  i32 command (0=exit, 1=call)
 	//   Offset 4:  i32 function_id
 	//   Offset 8:  i32 arg_count
@@ -392,13 +419,44 @@ void MIRCodeGenerator::generateFFIDispatch() {
 		if (bbIt == funcBlocks.end())
 			continue;
 
+		mir::MIRBasicBlock *loadLibBlock = dispatchFunc->createBasicBlock("load_lib_" + std::to_string(info.id));
+		mir::MIRBasicBlock *getAddrBlock = dispatchFunc->createBasicBlock("get_addr_" + std::to_string(info.id));
+		mir::MIRBasicBlock *callBlock = dispatchFunc->createBasicBlock("do_call_" + std::to_string(info.id));
+		mir::MIRBasicBlock *errorBlock = dispatchFunc->createBasicBlock("error_" + std::to_string(info.id));
+
 		builder->setInsertPoint(bbIt->second);
+		builder->createBr(loadLibBlock);
+
+		// Load the DLL
+		builder->setInsertPoint(loadLibBlock);
+		mir::MIRGlobal *dllGlobal = dllNameGlobals[info.dllName];
+		mir::MIRValue *dllNamePtr = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), dllGlobal->name);
+		mir::MIRValue *dllHandle = builder->createCall(loadLibraryFunc, {dllNamePtr}, "dll_handle");
+
+		// Check if LoadLibrary succeeded
+		mir::MIRValue *nullPtr = builder->getNull();
+		mir::MIRValue *loadOk = builder->createICmpNe(dllHandle, nullPtr, "load_ok");
+		builder->createCondBr(loadOk, getAddrBlock, errorBlock);
+
+		// Get the function address
+		builder->setInsertPoint(getAddrBlock);
+		mir::MIRGlobal *funcGlobal = funcNameGlobals[name];
+		mir::MIRValue *funcNamePtr = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), funcGlobal->name);
+		mir::MIRValue *funcAddr = builder->createCall(getProcAddrFunc, {dllHandle, funcNamePtr}, "func_addr");
+
+		// Check if GetProcAddress succeeded
+		mir::MIRValue *addrOk = builder->createICmpNe(funcAddr, nullPtr, "addr_ok");
+		builder->createCondBr(addrOk, callBlock, errorBlock);
+
+		// Prepare arguments and call the function
+		builder->setInsertPoint(callBlock);
 
 		// Load arguments from shared memory (offset 16 = args array)
 		mir::MIRValue *argsBase = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
 													 {builder->getInt64(16)}, "args_base");
 
 		std::vector<mir::MIRValue *> callArgs;
+		std::vector<mir::MIRType *> paramTypes;
 		for (size_t i = 0; i < info.paramTypes.size(); i++) {
 			// Get pointer to arg[i] (each arg is 8 bytes)
 			mir::MIRValue *argOffset = builder->getInt64(static_cast<int64_t>(i * 8));
@@ -413,43 +471,57 @@ void MIRCodeGenerator::generateFFIDispatch() {
 			safeffi::TypeTag paramType = info.paramTypes[i];
 			if (paramType == safeffi::TypeTag::Int32) {
 				argVal = builder->createTrunc(argVal, mir::MIRType::getInt32(), "arg_i32_" + std::to_string(i));
+				paramTypes.push_back(mir::MIRType::getInt32());
 			} else if (paramType == safeffi::TypeTag::Float64) {
 				argVal = builder->createBitcast(argVal, mir::MIRType::getFloat64(), "arg_f64_" + std::to_string(i));
+				paramTypes.push_back(mir::MIRType::getFloat64());
 			} else if (paramType == safeffi::TypeTag::Ptr) {
 				argVal = builder->createIntToPtr(argVal, mir::MIRType::getPtr(), "arg_ptr_" + std::to_string(i));
+				paramTypes.push_back(mir::MIRType::getPtr());
+			} else {
+				// Int64
+				paramTypes.push_back(mir::MIRType::getInt64());
 			}
-			// Int64 is already the right type
 
 			callArgs.push_back(argVal);
 		}
 
-		// Call the extern function
-		mir::MIRFunction *externFunc = module->getFunction(name);
-		if (externFunc) {
-			mir::MIRValue *result = nullptr;
-			if (externFunc->returnType->kind != mir::MIRTypeKind::Void) {
-				result = builder->createCall(externFunc, callArgs, "call_result");
-			} else {
-				builder->createCall(externFunc, callArgs);
+		// Get the return type
+		mir::MIRType *returnType = mir::MIRType::getVoid();
+		if (info.returnType == safeffi::TypeTag::Int32) {
+			returnType = mir::MIRType::getInt32();
+		} else if (info.returnType == safeffi::TypeTag::Float64) {
+			returnType = mir::MIRType::getFloat64();
+		} else if (info.returnType == safeffi::TypeTag::Ptr) {
+			returnType = mir::MIRType::getPtr();
+		} else if (info.returnType == safeffi::TypeTag::Int32) {
+			returnType = mir::MIRType::getInt64();
+		}
+
+		// Call through the function pointer
+		mir::MIRValue *result = nullptr;
+		if (returnType->kind != mir::MIRTypeKind::Void) {
+			result = builder->createCallIndirect(funcAddr, returnType, paramTypes, callArgs, "call_result");
+		} else {
+			builder->createCallIndirect(funcAddr, returnType, paramTypes, callArgs);
+		}
+
+		// Write result back to shared memory (offset 144)
+		if (result) {
+			mir::MIRValue *resultPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+														  {builder->getInt64(144)}, "result_ptr");
+
+			// Convert result to i64 for storage
+			mir::MIRValue *resultI64 = result;
+			if (returnType->kind == mir::MIRTypeKind::Int32) {
+				resultI64 = builder->createZExt(result, mir::MIRType::getInt64(), "result_i64");
+			} else if (returnType->kind == mir::MIRTypeKind::Float64) {
+				resultI64 = builder->createBitcast(result, mir::MIRType::getInt64(), "result_i64");
+			} else if (returnType->kind == mir::MIRTypeKind::Ptr) {
+				resultI64 = builder->createPtrToInt(result, mir::MIRType::getInt64(), "result_i64");
 			}
 
-			// Write result back to shared memory (offset 144)
-			if (result) {
-				mir::MIRValue *resultPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
-															  {builder->getInt64(144)}, "result_ptr");
-
-				// Convert result to i64 for storage
-				mir::MIRValue *resultI64 = result;
-				if (externFunc->returnType->kind == mir::MIRTypeKind::Int32) {
-					resultI64 = builder->createZExt(result, mir::MIRType::getInt64(), "result_i64");
-				} else if (externFunc->returnType->kind == mir::MIRTypeKind::Float64) {
-					resultI64 = builder->createBitcast(result, mir::MIRType::getInt64(), "result_i64");
-				} else if (externFunc->returnType->kind == mir::MIRTypeKind::Ptr) {
-					resultI64 = builder->createPtrToInt(result, mir::MIRType::getInt64(), "result_i64");
-				}
-
-				builder->createStore(resultI64, resultPtr);
-			}
+			builder->createStore(resultI64, resultPtr);
 		}
 
 		// Set status to 0 (success) - offset 12
@@ -457,6 +529,13 @@ void MIRCodeGenerator::generateFFIDispatch() {
 													  {builder->getInt64(12)}, "status_ptr");
 		builder->createStore(builder->getInt32(0), statusPtr);
 
+		builder->createBr(done);
+
+		// Error block - set status to 1 (error)
+		builder->setInsertPoint(errorBlock);
+		mir::MIRValue *errorStatusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+														   {builder->getInt64(12)}, "status_ptr");
+		builder->createStore(builder->getInt32(1), errorStatusPtr);
 		builder->createBr(done);
 	}
 

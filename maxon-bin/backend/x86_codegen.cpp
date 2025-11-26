@@ -314,6 +314,9 @@ void X86CodeGen::generateInstruction(mir::MIRInstruction *inst) {
 	case mir::MIROpcode::Call:
 		genCall(inst);
 		break;
+	case mir::MIROpcode::CallIndirect:
+		genCallIndirect(inst);
+		break;
 
 	// SSA
 	case mir::MIROpcode::Phi:
@@ -1924,6 +1927,68 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 			// Result was written to the hidden pointer location, nothing to do
 			// The struct is already in the right place
 		} else if (inst->result->type->isFloat()) {
+			storeResultFloat(inst->result, X86Reg::XMM0);
+		} else {
+			storeResult(inst->result, X86Reg::RAX);
+		}
+	}
+}
+
+void X86CodeGen::genCallIndirect(mir::MIRInstruction *inst) {
+	// CallIndirect: First operand is function pointer, rest are arguments
+
+	// Set up arguments according to calling convention
+	std::vector<X86Reg> argRegs;
+	if (callingConv == CallingConv::Win64) {
+		argRegs = {X86Reg::RCX, X86Reg::RDX, X86Reg::R8, X86Reg::R9};
+	} else {
+		argRegs = {X86Reg::RDI, X86Reg::RSI, X86Reg::RDX, X86Reg::RCX, X86Reg::R8, X86Reg::R9};
+	}
+
+	// First operand is function pointer, skip it for argument handling
+	// Arguments start from operands[1]
+	size_t numArgs = inst->operands.size() - 1;
+
+	// Handle stack arguments first (args beyond register count)
+	int32_t shadowSpaceSize = (callingConv == CallingConv::Win64) ? 32 : 0;
+
+	for (size_t i = 0; i < numArgs; ++i) {
+		if (i >= argRegs.size()) {
+			// This argument goes on the stack
+			mir::MIRValue *arg = inst->operands[i + 1]; // +1 to skip function pointer
+			size_t stackArgIndex = i - argRegs.size();
+			int32_t stackOffset = shadowSpaceSize + static_cast<int32_t>(stackArgIndex * 8);
+
+			if (arg->type->isFloat()) {
+				loadValueFloat(arg, X86Reg::XMM0);
+				encoder.movsdMR(X86Mem(X86Reg::RSP, stackOffset), X86Reg::XMM0);
+			} else {
+				loadValue(arg, X86Reg::R10);
+				encoder.movMR64(X86Mem(X86Reg::RSP, stackOffset), X86Reg::R10);
+			}
+		}
+	}
+
+	// Load register arguments
+	for (size_t i = 0; i < numArgs && i < argRegs.size(); ++i) {
+		mir::MIRValue *arg = inst->operands[i + 1]; // +1 to skip function pointer
+		if (arg->type->isFloat()) {
+			loadValueFloat(arg, static_cast<X86Reg>(static_cast<int>(X86Reg::XMM0) + i));
+		} else {
+			loadValue(arg, argRegs[i]);
+		}
+	}
+
+	// Load function pointer to RAX (safe because args are in other registers)
+	mir::MIRValue *funcPtr = inst->operands[0];
+	loadValue(funcPtr, X86Reg::RAX);
+
+	// Indirect call through RAX: CALL RAX (FF D0)
+	encoder.callR(X86Reg::RAX);
+
+	// Store result
+	if (inst->result) {
+		if (inst->result->type->isFloat()) {
 			storeResultFloat(inst->result, X86Reg::XMM0);
 		} else {
 			storeResult(inst->result, X86Reg::RAX);

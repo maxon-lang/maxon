@@ -388,8 +388,9 @@ class FunctionAST : public ASTNode {
 	std::vector<FunctionParameter> parameters;
 	std::string returnType;
 	std::vector<std::unique_ptr<StmtAST>> body;
-	bool isExtern;	 // true if this is an extern function declaration
-	bool isExported; // true if this function is exported (visible outside this file)
+	bool isExtern;		 // true if this is an extern function declaration
+	bool isExported;	 // true if this function is exported (visible outside this file)
+	std::string dllName; // DLL name for extern functions (without .dll extension)
 	int line;
 	int column;
 
@@ -400,9 +401,10 @@ class FunctionAST : public ASTNode {
 				bool ext = false,
 				int l = 1, int c = 1,
 				const std::string &ns = "",
-				bool exp = false)
+				bool exp = false,
+				const std::string &dll = "")
 		: name(n), namespaceName(ns), parameters(std::move(params)), returnType(ret), body(std::move(b)),
-		  isExtern(ext), isExported(exp), line(l), column(c) {}
+		  isExtern(ext), isExported(exp), dllName(dll), line(l), column(c) {}
 };
 
 // Program (collection of functions and structs)

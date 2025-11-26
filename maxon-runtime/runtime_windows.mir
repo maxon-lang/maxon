@@ -120,6 +120,11 @@ declare ptr @GetCommandLineA()
 declare i32 @GetEnvironmentVariableA(ptr, ptr, i32)
 declare i1 @SetEnvironmentVariableA(ptr, ptr)
 
+; DLL loading (for extern function calls)
+declare ptr @LoadLibraryA(ptr)
+declare ptr @GetProcAddress(ptr, ptr)
+declare i1 @FreeLibrary(ptr)
+
 ; Error handling
 declare i32 @GetLastError()
 
@@ -878,6 +883,22 @@ done:
 ; This is called instead of main() when the process is spawned as an FFI worker.
 ; It opens shared memory and semaphores, then enters a loop waiting for calls.
 ; i32 __ffi_worker_main()
+;
+; IMPORTANT: MIR/SSA Pattern for Handles
+; ---------------------------------------
+; MIR uses SSA (Static Single Assignment) form where each value is defined once.
+; Values defined in one basic block are NOT visible in other basic blocks unless
+; they are passed via PHI nodes or stored in globals.
+;
+; This function stores handles to globals immediately after obtaining them:
+;   store ptr %handle, ptr @ffi_worker_shared_handle
+;
+; Then ALWAYS loads from the global when using the handle:
+;   %handle_reload = load ptr, ptr @ffi_worker_shared_handle
+;   call ... @SomeFunction(ptr %handle_reload)
+;
+; DO NOT try to use the original SSA value across basic block boundaries.
+; Always load from the global at point of use.
 ;==============================================================================
 define i32 @__ffi_worker_main() {
 entry:
@@ -905,47 +926,68 @@ get_rsp_name:
     br i1 %has_rsp, label %open_shared, label %error_exit
 
 open_shared:
-    ; Open shared memory
-    %shared_handle = call ptr @ffi_open_shared_memory(ptr %shared_name_buf)
+    ; Open shared memory - reload buffer pointer from global
+    %shared_name_buf2 = getelementptr [64 x i8], ptr @ffi_worker_shared_name_buf, i64 0, i64 0
+    %shared_handle = call ptr @ffi_open_shared_memory(ptr %shared_name_buf2)
     %has_shared_handle = icmp ne ptr %shared_handle, null
-    br i1 %has_shared_handle, label %map_shared, label %error_exit
+    br i1 %has_shared_handle, label %store_shared_handle, label %error_exit
+
+store_shared_handle:
+    ; Store handle immediately so cleanup can access it
+    store ptr %shared_handle, ptr @ffi_worker_shared_handle
+    br label %map_shared
 
 map_shared:
+    ; Reload shared_handle from global for use
+    %shared_handle2 = load ptr, ptr @ffi_worker_shared_handle
     ; Map shared memory into address space
     ; FILE_MAP_ALL_ACCESS = 0xF001F
-    %shared_mem = call ptr @MapViewOfFile(ptr %shared_handle, i32 983071, i32 0, i32 0, i64 4096)
+    %shared_mem = call ptr @MapViewOfFile(ptr %shared_handle2, i32 983071, i32 0, i32 0, i64 4096)
     %has_shared_mem = icmp ne ptr %shared_mem, null
-    br i1 %has_shared_mem, label %open_req_sem, label %cleanup_shared_handle
+    br i1 %has_shared_mem, label %store_shared_mem, label %cleanup_shared_handle
+
+store_shared_mem:
+    ; Store mapped ptr immediately so cleanup can access it
+    store ptr %shared_mem, ptr @ffi_worker_shared_mem
+    br label %open_req_sem
 
 open_req_sem:
-    ; Open request semaphore
-    %req_sem = call ptr @ffi_open_semaphore(ptr %req_name_buf)
+    ; Open request semaphore - reload buffer pointer from global
+    %req_name_buf2 = getelementptr [64 x i8], ptr @ffi_worker_req_name_buf, i64 0, i64 0
+    %req_sem = call ptr @ffi_open_semaphore(ptr %req_name_buf2)
     %has_req_sem = icmp ne ptr %req_sem, null
-    br i1 %has_req_sem, label %open_rsp_sem, label %cleanup_shared_mem
+    br i1 %has_req_sem, label %store_req_sem, label %cleanup_shared_mem
+
+store_req_sem:
+    ; Store semaphore handle immediately
+    store ptr %req_sem, ptr @ffi_worker_req_sem
+    br label %open_rsp_sem
 
 open_rsp_sem:
-    ; Open response semaphore
-    %rsp_sem = call ptr @ffi_open_semaphore(ptr %rsp_name_buf)
+    ; Open response semaphore - reload buffer pointer from global
+    %rsp_name_buf2 = getelementptr [64 x i8], ptr @ffi_worker_rsp_name_buf, i64 0, i64 0
+    %rsp_sem = call ptr @ffi_open_semaphore(ptr %rsp_name_buf2)
     %has_rsp_sem = icmp ne ptr %rsp_sem, null
-    br i1 %has_rsp_sem, label %store_handles, label %cleanup_req_sem
+    br i1 %has_rsp_sem, label %store_rsp_sem, label %cleanup_req_sem
 
-store_handles:
-    ; Store handles in globals for use by worker loop
-    store ptr %shared_handle, ptr @ffi_worker_shared_handle
-    store ptr %shared_mem, ptr @ffi_worker_shared_mem
-    store ptr %req_sem, ptr @ffi_worker_req_sem
+store_rsp_sem:
+    ; Store semaphore handle immediately
     store ptr %rsp_sem, ptr @ffi_worker_rsp_sem
     br label %worker_loop
 
 worker_loop:
+    ; Reload handles from globals (SSA values from earlier blocks not valid here)
+    %req_sem_loop = load ptr, ptr @ffi_worker_req_sem
     ; Wait for a request (INFINITE timeout = 0xFFFFFFFF)
-    %wait_result = call i32 @ffi_wait_semaphore(ptr %req_sem, i32 -1)
+    %wait_result = call i32 @ffi_wait_semaphore(ptr %req_sem_loop, i32 -1)
     %wait_ok = icmp eq i32 %wait_result, 0
     br i1 %wait_ok, label %process_request, label %error_exit
 
 process_request:
+    ; Reload shared memory pointer from global
+    %shared_mem_loop = load ptr, ptr @ffi_worker_shared_mem
     ; Read command from shared memory (offset 0)
-    %cmd_ptr = getelementptr i8, ptr %shared_mem, i64 0
+    %cmd_ptr = getelementptr i8, ptr %shared_mem_loop, i64 0
     %cmd = load i32, ptr %cmd_ptr
     
     ; Check if exit command (command 0)
@@ -953,16 +995,19 @@ process_request:
     br i1 %is_exit, label %cleanup_and_exit, label %dispatch_call
 
 dispatch_call:
+    ; Reload shared memory pointer from global
+    %shared_mem_dispatch = load ptr, ptr @ffi_worker_shared_mem
     ; Read function ID (offset 4)
-    %func_id_ptr = getelementptr i8, ptr %shared_mem, i64 4
+    %func_id_ptr = getelementptr i8, ptr %shared_mem_dispatch, i64 4
     %func_id = load i32, ptr %func_id_ptr
     
     ; Call the FFI dispatch function (generated by compiler)
     ; This reads args from shared memory, calls the function, writes result back
-    call void @__ffi_dispatch(ptr %shared_mem, i32 %func_id)
+    call void @__ffi_dispatch(ptr %shared_mem_dispatch, i32 %func_id)
     
-    ; Signal response ready
-    %sig_result = call i1 @ffi_signal_semaphore(ptr %rsp_sem)
+    ; Reload response semaphore from global and signal response ready
+    %rsp_sem_loop = load ptr, ptr @ffi_worker_rsp_sem
+    %sig_result = call i1 @ffi_signal_semaphore(ptr %rsp_sem_loop)
     br label %worker_loop
 
 cleanup_and_exit:
@@ -978,15 +1023,21 @@ cleanup_and_exit:
     ret i32 0
 
 cleanup_req_sem:
-    call i1 @ffi_close_handle(ptr %req_sem)
+    ; Reload req_sem from where it was stored before open_rsp_sem
+    %req_sem_cleanup = load ptr, ptr @ffi_worker_req_sem
+    call i1 @ffi_close_handle(ptr %req_sem_cleanup)
     br label %cleanup_shared_mem
 
 cleanup_shared_mem:
-    call i1 @UnmapViewOfFile(ptr %shared_mem)
+    ; Reload shared_mem from where it was stored
+    %shared_mem_cleanup = load ptr, ptr @ffi_worker_shared_mem
+    call i1 @UnmapViewOfFile(ptr %shared_mem_cleanup)
     br label %cleanup_shared_handle
 
 cleanup_shared_handle:
-    call i1 @ffi_close_handle(ptr %shared_handle)
+    ; Reload shared_handle from where it was stored
+    %shared_handle_cleanup = load ptr, ptr @ffi_worker_shared_handle
+    call i1 @ffi_close_handle(ptr %shared_handle_cleanup)
     br label %error_exit
 
 error_exit:

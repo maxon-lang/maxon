@@ -189,6 +189,12 @@ class MIRBuilder {
 	MIRValue *createCall(const std::string &calleeName, MIRType *returnType,
 						 const std::vector<MIRValue *> &args, const std::string &name = "");
 
+	// Indirect call through function pointer
+	MIRValue *createCallIndirect(MIRValue *funcPtr, MIRType *returnType,
+								 const std::vector<MIRType *> &paramTypes,
+								 const std::vector<MIRValue *> &args,
+								 const std::string &name = "");
+
 	//--------------------------------------------------------------------------
 	// SSA Phi node
 	//--------------------------------------------------------------------------

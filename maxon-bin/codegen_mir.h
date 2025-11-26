@@ -42,6 +42,7 @@ class MIRCodeGenerator {
 	struct ExternFuncInfo {
 		uint32_t id;							  // Function ID in extern table
 		std::string name;						  // Function name
+		std::string dllName;					  // DLL name (without .dll extension)
 		std::vector<safeffi::TypeTag> paramTypes; // Parameter types
 		safeffi::TypeTag returnType;			  // Return type
 	};

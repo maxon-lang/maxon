@@ -223,6 +223,7 @@ class X86CodeGen {
 	void genCondBr(mir::MIRInstruction *inst);
 	void genRet(mir::MIRInstruction *inst);
 	void genCall(mir::MIRInstruction *inst);
+	void genCallIndirect(mir::MIRInstruction *inst);
 
 	// SSA
 	void genPhi(mir::MIRInstruction *inst);

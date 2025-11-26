@@ -150,17 +150,15 @@ end 'main'
 2. **GEP pointer reload needed**: Pointers stored early in a function can become invalid after many function calls (register spill/reload issue). Workaround: reload GEP fresh right before use
 3. **CREATE_NO_WINDOW hides child output**: When debugging, use 0 for dwCreationFlags to see child process output
 4. **ffi_create_semaphore signature**: Fixed to `(i32 initial, i32 max, ptr name)` to match CreateSemaphoreA parameter order
+5. **LoadLibraryA/GetProcAddress not in PE imports**: The dynamic DLL loading functions were declared but not added to the PE import table, causing calls to go to address 0 and hang
 
 ### Remaining Work:
 
-1. **DLL import support** - Currently only runtime-defined extern functions work. For external DLLs:
-   - Add syntax to specify DLL name for extern functions
-   - Add DLL+function to PE import table
-   - Worker subprocess needs to load the DLL
-
-2. **Error handling improvements**
+1. **Error handling improvements**
    - Worker crash detection
    - Timeout handling for unresponsive workers
+
+2. **Remove debug output from runtime** - The runtime still prints debug characters (S, W, w, L, R, D, C, X) during FFI calls
 
 ## Key Bug Fixes This Session
 
