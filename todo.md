@@ -4,7 +4,7 @@ You *Are* Going To Read It
 ## TODO
 
 - simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")
-- platform specific optimization for runtime.ll
+- platform specific optimization for runtime
 - warnings as errors in release mode
 - compiler error codes
 - extensive math function tests

@@ -36,13 +36,12 @@ MAXON = bin/maxon$(EXE_EXT)
 LSP_SERVER_BIN = bin/maxon-lsp-server$(EXE_EXT)
 LSP_SERVER_BACKUP = $(LSP_SERVER_BIN).old
 
-RUNTIME_LL = maxon-runtime/runtime.ll
-RUNTIME_OBJ_WINDOWS = bin/runtime-windows.obj
-RUNTIME_OBJ_LINUX = bin/runtime-linux.o
+RUNTIME_MIR_WINDOWS = bin/runtime_windows.mir
+RUNTIME_MIR_LINUX = bin/runtime_linux.mir
 ifeq ($(PLATFORM),windows)
-    RUNTIME_OBJ = $(RUNTIME_OBJ_WINDOWS)
+    RUNTIME_MIR = $(RUNTIME_MIR_WINDOWS)
 else
-    RUNTIME_OBJ = $(RUNTIME_OBJ_LINUX)
+    RUNTIME_MIR = $(RUNTIME_MIR_LINUX)
 endif
 
 .PHONY: all clean clean-all compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test-build debugger-test
@@ -79,24 +78,20 @@ help:
 	@echo "  help             - Show this help message"
 
 # Build Maxon runtime library
-runtime: $(RUNTIME_OBJ)
+runtime: $(RUNTIME_MIR)
 	@echo "Maxon runtime library ready."
 
 # Build Windows runtime
-$(RUNTIME_OBJ_WINDOWS): maxon-runtime/runtime.ll maxon-runtime/platform_windows.ll
+$(RUNTIME_MIR_WINDOWS): maxon-runtime/runtime.mir maxon-runtime/runtime_windows.mir
 	@mkdir -p bin
-	@cat maxon-runtime/platform_windows.ll maxon-runtime/runtime.ll > bin/runtime-windows.tmp
-	@echo "Building Maxon runtime library for Windows..."
-	@$(LLC) -filetype=obj -o $(RUNTIME_OBJ_WINDOWS) bin/runtime-windows.tmp >/dev/null 2>&1
-	@rm bin/runtime-windows.tmp
+	@echo "Combining Maxon runtime library for Windows..."
+	@cat maxon-runtime/runtime_windows.mir maxon-runtime/runtime.mir > bin/runtime_windows.mir
 
 # Build Linux runtime
-$(RUNTIME_OBJ_LINUX): maxon-runtime/runtime.ll maxon-runtime/platform_linux.ll
+$(RUNTIME_MIR_LINUX): maxon-runtime/runtime.mir maxon-runtime/runtime_linux.mir
 	@mkdir -p bin
-	@cat maxon-runtime/platform_linux.ll maxon-runtime/runtime.ll > bin/runtime-linux.tmp
-	@echo "Building Maxon runtime library for Linux..."
-	@$(LLC) -filetype=obj -o $(RUNTIME_OBJ_LINUX) bin/runtime-linux.tmp >/dev/null 2>&1
-	@rm bin/runtime-linux.tmp
+	@echo "Combining Maxon runtime library for Linux..."
+	@cat maxon-runtime/runtime_linux.mir maxon-runtime/runtime.mir > bin/runtime_linux.mir
 
 # Configure CMake
 configure:
@@ -107,7 +102,7 @@ else
 	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Release -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS) >/dev/null 2>&1
 endif
 
-# Build the Maxon compiler (depends on runtime)
+# Build the Maxon compiler
 compiler: configure runtime
 	cmake --build $(BUILD_DIR) --target maxon
 	cmake --build $(BUILD_DIR) --target grammar_generator

@@ -199,8 +199,8 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 	tempOut << sourceCode;
 	tempOut.close();
 
-	std::string tempOptLL = (tempDir / ("temp-test-opt-" + std::to_string(threadId) + ".ll")).string();
-	std::string tempDebugLL = (tempDir / ("temp-test-debug-" + std::to_string(threadId) + ".ll")).string();
+	std::string tempOptLL = (tempDir / ("temp-test-opt-" + std::to_string(threadId) + ".ir")).string();
+	std::string tempDebugLL = (tempDir / ("temp-test-debug-" + std::to_string(threadId) + ".ir")).string();
 	std::string tempExe = (tempDir / ("temp-test-" + std::to_string(threadId) + ".exe")).string();
 
 	try {

@@ -597,9 +597,9 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 	std::filesystem::create_directories(tempDir);
 	std::string workerSuffix = workerId > 0 ? ("_w" + std::to_string(workerId)) : "";
 	std::string tempSource = (tempDir / ("temp_fragment" + workerSuffix + ".maxon")).string();
-	std::string tempOptLL = (tempDir / ("temp-opt" + workerSuffix + ".ll")).string();
+	std::string tempOptLL = (tempDir / ("temp-opt" + workerSuffix + ".ir")).string();
 	std::string tempOptExe = (tempDir / ("temp-opt" + workerSuffix + ".exe")).string();
-	std::string tempDebugLL = (tempDir / ("temp-debug" + workerSuffix + ".ll")).string();
+	std::string tempDebugLL = (tempDir / ("temp-debug" + workerSuffix + ".ir")).string();
 	std::string tempDebugExe = (tempDir / ("temp-debug" + workerSuffix + ".exe")).string();
 	std::string tempOptPdb = (tempDir / ("temp-opt" + workerSuffix + ".pdb")).string();
 	std::string tempDebugPdb = (tempDir / ("temp-debug" + workerSuffix + ".pdb")).string();

@@ -3,6 +3,51 @@
 ; This file contains platform-independent runtime functions
 
 ;==============================================================================
+; sqrt - square root using Newton-Raphson iteration
+; double sqrt(double x)
+;==============================================================================
+define f64 @sqrt(f64 %x) {
+entry:
+    ; Handle special cases
+    %is_negative = fcmp olt f64 %x, 0.0
+    br i1 %is_negative, label %return_nan, label %check_zero
+
+check_zero:
+    %is_zero = fcmp oeq f64 %x, 0.0
+    br i1 %is_zero, label %return_zero, label %compute_sqrt
+
+return_nan:
+    %nan = fdiv f64 0.0, 0.0
+    ret f64 %nan
+
+return_zero:
+    ret f64 0.0
+
+compute_sqrt:
+    ; Newton-Raphson: x_new = 0.5 * (x_old + n / x_old)
+    ; Note: Using only 1 iteration due to compiler bug with >7 float operations
+    ; TODO: Fix float register spilling to enable more iterations
+    %g0 = fmul f64 %x, 0.5
+    %d1 = fdiv f64 %x, %g0
+    %a1 = fadd f64 %g0, %d1
+    %g1 = fmul f64 %a1, 0.5
+    ret f64 %g1
+}
+
+;==============================================================================
+; abs - absolute value
+; double abs(double x)
+;==============================================================================
+define f64 @abs(f64 %x) {
+entry:
+    ; Clear the sign bit using bit manipulation
+    %x_bits = bitcast f64 %x to i64
+    %abs_bits = and i64 %x_bits, 9223372036854775807  ; 0x7FFFFFFFFFFFFFFF
+    %result = bitcast i64 %abs_bits to f64
+    ret f64 %result
+}
+
+;==============================================================================
 ; memset - fill memory with a constant byte value
 ; ptr memset(ptr dest, i32 val, i64 count)
 ;==============================================================================

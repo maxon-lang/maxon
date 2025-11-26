@@ -371,6 +371,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 
 	// Available general-purpose registers (excluding RSP, RBP)
 	std::vector<X86Reg> availableRegs;
+	std::vector<X86Reg> availableFloatRegs;
 	std::vector<X86Reg> paramRegs; // Registers used for passing parameters (ABI)
 	if (callingConv == CallingConv::Win64) {
 		// Windows x64 ABI: first 4 integer params in RCX, RDX, R8, R9
@@ -382,6 +383,10 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		availableRegs = {X86Reg::RBX, X86Reg::RSI, X86Reg::RDI,
 						 X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15,
 						 X86Reg::RAX, X86Reg::R10, X86Reg::R11};
+		// XMM registers for float values (XMM6-XMM15 are non-volatile on Windows)
+		availableFloatRegs = {X86Reg::XMM6, X86Reg::XMM7, X86Reg::XMM8, X86Reg::XMM9,
+							  X86Reg::XMM10, X86Reg::XMM11, X86Reg::XMM12, X86Reg::XMM13,
+							  X86Reg::XMM14, X86Reg::XMM15};
 	} else {
 		// System V: first 6 integer params in RDI, RSI, RDX, RCX, R8, R9
 		paramRegs = {X86Reg::RDI, X86Reg::RSI, X86Reg::RDX, X86Reg::RCX, X86Reg::R8, X86Reg::R9};
@@ -390,11 +395,15 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		// Prioritize callee-saved registers to avoid issues with calls.
 		availableRegs = {X86Reg::RBX, X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15,
 						 X86Reg::RAX, X86Reg::R10, X86Reg::R11};
+		// XMM registers for float values (all volatile on System V)
+		availableFloatRegs = {X86Reg::XMM8, X86Reg::XMM9, X86Reg::XMM10, X86Reg::XMM11,
+							  X86Reg::XMM12, X86Reg::XMM13, X86Reg::XMM14, X86Reg::XMM15};
 	}
 
 	// Simple allocation: assign registers to virtual registers in order
 	// This is a placeholder - real implementation would use linear scan
 	size_t regIdx = 0;
+	size_t floatRegIdx = 0;
 	int32_t stackOffset = 0; // Will be decremented before each allocation
 
 	// Reserve stack slot for hidden return pointer if needed
@@ -492,23 +501,44 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 					bool forceStack = inst->result->type->isStruct() &&
 									  inst->result->type->sizeInBytes > 8;
 
+					// Check if this is a float type
+					bool isFloat = inst->result->type->isFloat();
+
 					// Try to allocate a register
-					if (!forceStack && regIdx < availableRegs.size()) {
-						X86Reg allocatedReg = availableRegs[regIdx++];
-						regAlloc.regMap[key] = allocatedReg;
-						// Track callee-saved register usage
-						if (isCalleeSaved(allocatedReg, callingConv)) {
-							// Check if not already tracked
-							if (std::find(regAlloc.usedCalleeSaved.begin(),
-										  regAlloc.usedCalleeSaved.end(),
-										  allocatedReg) == regAlloc.usedCalleeSaved.end()) {
-								regAlloc.usedCalleeSaved.push_back(allocatedReg);
+					if (!forceStack) {
+						if (isFloat && floatRegIdx < availableFloatRegs.size()) {
+							// Allocate XMM register for float types
+							X86Reg allocatedReg = availableFloatRegs[floatRegIdx++];
+							regAlloc.regMap[key] = allocatedReg;
+							// XMM6-XMM15 are callee-saved on Windows
+							if (callingConv == CallingConv::Win64 && isCalleeSaved(allocatedReg, callingConv)) {
+								if (std::find(regAlloc.usedCalleeSaved.begin(),
+											  regAlloc.usedCalleeSaved.end(),
+											  allocatedReg) == regAlloc.usedCalleeSaved.end()) {
+									regAlloc.usedCalleeSaved.push_back(allocatedReg);
+								}
 							}
+						} else if (!isFloat && regIdx < availableRegs.size()) {
+							// Allocate GPR for integer types
+							X86Reg allocatedReg = availableRegs[regIdx++];
+							regAlloc.regMap[key] = allocatedReg;
+							// Track callee-saved register usage
+							if (isCalleeSaved(allocatedReg, callingConv)) {
+								if (std::find(regAlloc.usedCalleeSaved.begin(),
+											  regAlloc.usedCalleeSaved.end(),
+											  allocatedReg) == regAlloc.usedCalleeSaved.end()) {
+									regAlloc.usedCalleeSaved.push_back(allocatedReg);
+								}
+							}
+						} else {
+							// Spill to stack - decrement first, then store
+							int allocSize = 8;
+							stackOffset -= allocSize;
+							regAlloc.stackSlots[key] = stackOffset;
 						}
 					} else {
-						// Spill to stack - decrement first, then store
-						int allocSize = forceStack ? static_cast<int>(inst->result->type->sizeInBytes) : 8;
-						// Align to 8 bytes
+						// Large struct - spill to stack
+						int allocSize = static_cast<int>(inst->result->type->sizeInBytes);
 						allocSize = (allocSize + 7) & ~7;
 						stackOffset -= allocSize;
 						regAlloc.stackSlots[key] = stackOffset;

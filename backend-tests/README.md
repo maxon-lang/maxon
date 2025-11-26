@@ -72,8 +72,8 @@ make backend-test
 When a test fails, these files are created:
 - `NNN-test-name.opt.exe` - Optimized executable
 - `NNN-test-name.debug.exe` - Debug executable
-- `NNN-test-name.opt.ll` - Optimized IR
-- `NNN-test-name.debug.ll` - Debug IR
+- `NNN-test-name.opt.ir` - Optimized IR
+- `NNN-test-name.debug.ir` - Debug IR
 - `NNN-test-name.opt.objdump` - Optimized disassembly
 - `NNN-test-name.debug.objdump` - Debug disassembly
 - `NNN-test-name.compile-error.txt` - Verbose compile output (if compilation failed)

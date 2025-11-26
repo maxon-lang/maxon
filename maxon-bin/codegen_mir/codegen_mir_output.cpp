@@ -122,8 +122,15 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 			std::cerr << "Warning: Failed to parse runtime library: " << runtimeResult.errors[0].message << std::endl;
 			return;
 		}
-		if (!runtimeResult.module)
+		if (!runtimeResult.module) {
+			if (verboseLevel >= 1) {
+				std::cerr << "Warning: Runtime module is null after parsing: " << runtimeMirPath << std::endl;
+			}
 			return;
+		}
+		if (verboseLevel >= 2) {
+			std::cout << "[MIR]   Parsed " << runtimeResult.module->functions.size() << " functions from runtime" << std::endl;
+		}
 
 		// First pass: Add external declarations from runtime that we don't have
 		// (these are Windows API functions like ExitProcess, HeapAlloc, etc.)
@@ -146,6 +153,9 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 			// Check if we have a declaration for this function that we can replace
 			mir::MIRFunction *existing = module->getFunction(func->name);
 			if (existing && existing->isExternal) {
+				if (verboseLevel >= 3) {
+					std::cout << "[MIR]     Replacing declaration of '" << func->name << "' with runtime definition" << std::endl;
+				}
 				// Replace the declaration with the definition
 				for (auto it = module->functions.begin(); it != module->functions.end(); ++it) {
 					if ((*it)->name == func->name) {
@@ -154,6 +164,9 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 					}
 				}
 			} else if (!existing) {
+				if (verboseLevel >= 3) {
+					std::cout << "[MIR]     Adding new runtime function '" << func->name << "'" << std::endl;
+				}
 				// New function not in user module
 				module->functions.push_back(std::move(func));
 			}
@@ -161,18 +174,17 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 		}
 	};
 
-	// Step 0: Load and merge runtime libraries
-	// First load platform-specific runtime (malloc, free, exit, etc.)
+	// Step 0: Load and merge runtime library
+	// Load the combined platform-specific runtime (includes both platform and common functions)
 	std::string platformRuntimePath = isWindows ? "runtime_windows.mir" : "runtime_linux.mir";
 	std::string platformMirPath = findRuntimeFile(platformRuntimePath);
 	if (!platformMirPath.empty()) {
+		if (verboseLevel >= 2) {
+			std::cout << "[MIR] Loading runtime: " << platformMirPath << std::endl;
+		}
 		mergeRuntime(platformMirPath);
-	}
-
-	// Then load platform-independent runtime (math functions like trunc, floor, sin, etc.)
-	std::string commonMirPath = findRuntimeFile("runtime.mir");
-	if (!commonMirPath.empty()) {
-		mergeRuntime(commonMirPath);
+	} else if (verboseLevel >= 1) {
+		std::cerr << "Warning: Runtime not found: " << platformRuntimePath << std::endl;
 	}
 
 	// Update calleeFunc pointers in all call instructions

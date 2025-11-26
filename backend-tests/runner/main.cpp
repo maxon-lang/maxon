@@ -404,13 +404,13 @@ std::vector<std::string> generateDiagnostics(const fs::path &testFile, const fs:
 	}
 
 	// Track generated IR files
-	fs::path optIR = artifactsDir / (basename + ".opt.ll");
-	fs::path debugIR = artifactsDir / (basename + ".debug.ll");
+	fs::path optIR = artifactsDir / (basename + ".opt.ir");
+	fs::path debugIR = artifactsDir / (basename + ".debug.ir");
 	if (fs::exists(optIR)) {
-		artifacts.push_back(basename + ".opt.ll");
+		artifacts.push_back(basename + ".opt.ir");
 	}
 	if (fs::exists(debugIR)) {
-		artifacts.push_back(basename + ".debug.ll");
+		artifacts.push_back(basename + ".debug.ir");
 	}
 
 	// Track executables
