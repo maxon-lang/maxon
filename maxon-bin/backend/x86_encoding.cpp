@@ -986,6 +986,17 @@ void X86Encoder::divsdRM(X86Reg dst, const X86Mem &src) {
 	emitModRMMem(dst, src);
 }
 
+void X86Encoder::sqrtsdRR(X86Reg dst, X86Reg src) {
+	// SQRTSD xmm1, xmm2: F2 0F 51 /r
+	emit8(0xF2);
+	if (isExtendedReg(dst) || isExtendedReg(src)) {
+		emitREXOpt(false, dst, src);
+	}
+	emit8(0x0F);
+	emit8(0x51);
+	emitModRM(0x03, dst, src);
+}
+
 void X86Encoder::ucomisdRR(X86Reg lhs, X86Reg rhs) {
 	emit8(0x66);
 	if (isExtendedReg(lhs) || isExtendedReg(rhs)) {

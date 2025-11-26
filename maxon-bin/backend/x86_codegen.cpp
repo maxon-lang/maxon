@@ -114,6 +114,18 @@ void X86CodeGen::generatePrologue() {
 		encoder.movMR64(X86Mem(X86Reg::RBP, save.second), save.first);
 	}
 
+	// Copy integer parameters from volatile RCX/RDX/R8/R9 to non-volatile GPRs
+	// Must be done early before any calls can clobber the volatile regs
+	for (const auto &save : regAlloc.intParamSaves) {
+		encoder.movRR64(save.second, save.first);
+	}
+
+	// Copy float parameters from volatile XMM0-3 to non-volatile XMM6-15
+	// Must be done early before any calls can clobber XMM0-3
+	for (const auto &save : regAlloc.floatParamSaves) {
+		encoder.movsdRR(save.second, save.first);
+	}
+
 	// Windows x64: Allocate shadow space if needed
 	if (callingConv == CallingConv::Win64) {
 		// Shadow space is handled in frameSize calculation
@@ -425,6 +437,11 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	// - Position 2: R8 or XMM2 depending on type
 	// - Position 3: R9 or XMM3 depending on type
 	// - Position 4+: on stack
+	//
+	// Float parameters arrive in volatile XMM0-3 and must be copied to non-volatile
+	// registers (XMM6-15) in the prologue to survive across function calls.
+	// Integer parameters arrive in volatile RCX/RDX/R8/R9 and must be copied to
+	// non-volatile registers (RBX, RSI, RDI, R12-R15) in the prologue.
 	std::vector<X86Reg> floatParamRegs = {X86Reg::XMM0, X86Reg::XMM1, X86Reg::XMM2, X86Reg::XMM3};
 
 	for (size_t i = 0; i < func->parameters.size(); ++i) {
@@ -439,12 +456,48 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 				regAlloc.stackSlots[key] = stackOffset;
 				regAlloc.shiftedParamSaves.push_back({paramRegs[regIndex], stackOffset});
 			} else {
-				// Normal case: parameter stays in its arrival register
-				// For float params, use XMM register; for int params, use GPR
+				// Normal case: parameter arrives in volatile register
+				// Copy to non-volatile register to survive across function calls
 				if (param->type->isFloat()) {
-					regAlloc.regMap[key] = floatParamRegs[regIndex];
+					// Float param arrives in volatile XMM0-3, allocate a non-volatile XMM
+					if (floatRegIdx < availableFloatRegs.size()) {
+						X86Reg destReg = availableFloatRegs[floatRegIdx++];
+						regAlloc.regMap[key] = destReg;
+						regAlloc.floatParamSaves.push_back({floatParamRegs[regIndex], destReg});
+						// Track callee-saved register usage (XMM6-15 on Windows)
+						if (callingConv == CallingConv::Win64 && isCalleeSaved(destReg, callingConv)) {
+							if (std::find(regAlloc.usedCalleeSaved.begin(),
+										  regAlloc.usedCalleeSaved.end(),
+										  destReg) == regAlloc.usedCalleeSaved.end()) {
+								regAlloc.usedCalleeSaved.push_back(destReg);
+							}
+						}
+					} else {
+						// No more XMM registers available, spill to stack
+						stackOffset -= 8;
+						regAlloc.stackSlots[key] = stackOffset;
+						// TODO: Add support for saving float params to stack
+					}
 				} else {
-					regAlloc.regMap[key] = paramRegs[regIndex];
+					// Integer param arrives in volatile RCX/RDX/R8/R9
+					// Allocate a non-volatile GPR to hold it
+					if (regIdx < availableRegs.size()) {
+						X86Reg destReg = availableRegs[regIdx++];
+						regAlloc.regMap[key] = destReg;
+						regAlloc.intParamSaves.push_back({paramRegs[regIndex], destReg});
+						// Track callee-saved register usage
+						if (isCalleeSaved(destReg, callingConv)) {
+							if (std::find(regAlloc.usedCalleeSaved.begin(),
+										  regAlloc.usedCalleeSaved.end(),
+										  destReg) == regAlloc.usedCalleeSaved.end()) {
+								regAlloc.usedCalleeSaved.push_back(destReg);
+							}
+						}
+					} else {
+						// No more GPRs available, spill to stack
+						stackOffset -= 8;
+						regAlloc.stackSlots[key] = stackOffset;
+					}
 				}
 			}
 		} else {
@@ -1581,6 +1634,18 @@ void X86CodeGen::genRet(mir::MIRInstruction *inst) {
 }
 
 void X86CodeGen::genCall(mir::MIRInstruction *inst) {
+	// Check for intrinsic math functions that can be inlined with native instructions
+	if (inst->calleeName == "sqrt" && inst->operands.size() == 1 &&
+		inst->operands[0]->type->isFloat()) {
+		// Use native SQRTSD instruction instead of calling runtime function
+		X86Reg src = loadValueFloat(inst->operands[0], X86Reg::XMM0);
+		encoder.sqrtsdRR(X86Reg::XMM0, src);
+		if (inst->result) {
+			storeResultFloat(inst->result, X86Reg::XMM0);
+		}
+		return;
+	}
+
 	// Set up arguments according to calling convention
 	std::vector<X86Reg> argRegs;
 	if (callingConv == CallingConv::Win64) {

@@ -380,6 +380,9 @@ class X86Encoder {
 	void divsdRR(X86Reg dst, X86Reg src);
 	void divsdRM(X86Reg dst, const X86Mem &src);
 
+	// SQRTSD (square root)
+	void sqrtsdRR(X86Reg dst, X86Reg src);
+
 	// UCOMISD (compare for flags)
 	void ucomisdRR(X86Reg lhs, X86Reg rhs);
 

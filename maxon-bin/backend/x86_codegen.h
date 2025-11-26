@@ -45,6 +45,14 @@ struct RegAllocInfo {
 	// saved to stack in prologue. Each entry is {arrivalReg, stackOffset}
 	std::vector<std::pair<X86Reg, int32_t>> shiftedParamSaves;
 
+	// Float parameters arrive in volatile XMM0-3 and need to be copied to
+	// non-volatile registers in prologue. Each entry is {arrivalXMM, destXMM}
+	std::vector<std::pair<X86Reg, X86Reg>> floatParamSaves;
+
+	// Integer parameters arrive in volatile RCX/RDX/R8/R9 and need to be copied
+	// to non-volatile registers in prologue. Each entry is {arrivalReg, destReg}
+	std::vector<std::pair<X86Reg, X86Reg>> intParamSaves;
+
 	// Space reserved for outgoing stack arguments (beyond register args)
 	// On Win64, this is for args beyond the 4th; on SysV, beyond the 6th
 	uint32_t outgoingStackArgsSize = 0;
