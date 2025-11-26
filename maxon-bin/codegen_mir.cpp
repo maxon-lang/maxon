@@ -264,6 +264,41 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 	mir::MIRBasicBlock *entry = builder->createBasicBlock("entry");
 	builder->setInsertPoint(entry);
 
+	// If we have any extern declarations, check if we're running as a worker
+	// Note: __ffi_worker_main is provided by the runtime, so we declare it here
+	// and it will be linked when the runtime MIR is merged
+	if (hasExternCalls) {
+		// Declare runtime functions (these are defined in runtime_windows.mir)
+		mir::MIRFunction *isWorkerFunc = getOrDeclareFunction("ffi_is_worker_mode",
+															  mir::MIRType::getInt32(), {});
+		mir::MIRFunction *workerMain = getOrDeclareFunction("__ffi_worker_main",
+															mir::MIRType::getInt32(), {});
+
+		// Check if we're running as a worker (via environment variable)
+		mir::MIRBasicBlock *checkWorker = builder->createBasicBlock("check_worker");
+		mir::MIRBasicBlock *runMain = builder->createBasicBlock("run_main");
+		mir::MIRBasicBlock *runWorker = builder->createBasicBlock("run_worker");
+
+		builder->createBr(checkWorker);
+		builder->setInsertPoint(checkWorker);
+
+		// Call ffi_is_worker_mode to check environment variable
+		mir::MIRValue *isWorkerVal = builder->createCall(isWorkerFunc, {});
+		mir::MIRValue *zero = builder->getInt32(0);
+		mir::MIRValue *isWorker = builder->createICmpNe(isWorkerVal, zero, "check_is_worker");
+		builder->createCondBr(isWorker, runWorker, runMain);
+
+		// Run as worker - call worker main and exit with its return code
+		builder->setInsertPoint(runWorker);
+		mir::MIRValue *workerResult = builder->createCall(workerMain, {});
+		mir::MIRFunction *exitFuncW = module->getFunction("exit");
+		builder->createCall(exitFuncW, {workerResult});
+		builder->createRetVoid();
+
+		// Run as main
+		builder->setInsertPoint(runMain);
+	}
+
 	mir::MIRValue *mainRetVal = nullptr;
 
 	if (mainTakesArgs && isWindows) {
@@ -308,7 +343,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
 		structFields[structDef->name] = fields;
 	}
 
-	// Second pass: Create all function declarations
+	// Second pass: Create all function declarations and register extern functions
 	logDetail("Pass 2: Creating function declarations (" + std::to_string(program->functions.size()) + " functions)");
 	for (auto &func : program->functions) {
 		mir::MIRType *returnType = getTypeFromString(func->returnType);
@@ -327,8 +362,9 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
 		logTrace("Declaring function: " + functionName + " -> " + func->returnType);
 
 		if (func->isExtern) {
-			// External declaration
+			// External declaration - register for Safe FFI
 			builder->declareFunction(functionName, returnType, paramTypes);
+			registerExternFunction(func.get());
 		} else {
 			// Will be defined later - create declaration first
 			mir::MIRFunction *mirFunc = module->createFunction(functionName, returnType);
@@ -344,6 +380,16 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
 				}
 			}
 		}
+	}
+
+	// Generate Safe FFI infrastructure (only if there are extern functions)
+	if (!externFunctions.empty()) {
+		logDetail("Generating Safe FFI infrastructure for " + std::to_string(externFunctions.size()) + " extern functions");
+		generateFFIGlobals();
+		generateFFIInitFunction();
+		generateFFICleanup();
+		generateFFIDispatch();	 // Dispatch function for worker
+		generateFFIWorkerMain(); // Worker subprocess main loop (provided by runtime)
 	}
 
 	// Third pass: Generate function bodies

@@ -331,6 +331,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			initStandardLibrary();
 		}
 
+		// Check if this is an extern function that should go through Safe FFI
+		bool usesSafeFfi = externFunctions.find(callExpr->callee) != externFunctions.end();
+
 		// Look up function
 		mir::MIRFunction *calleeF = module->getFunction(callExpr->callee);
 
@@ -342,6 +345,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				if (funcName.size() > searchSuffix.size() &&
 					funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
 					calleeF = func.get();
+					// Also check if namespaced version is extern
+					if (externFunctions.find(funcName) != externFunctions.end()) {
+						usesSafeFfi = true;
+					}
 					break;
 				}
 			}
@@ -416,6 +423,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			argIdx++;
 		}
 
+		// Use Safe FFI for extern functions, direct call otherwise
+		if (usesSafeFfi) {
+			return generateSafeFFICall(calleeF->name, argsV, calleeF->returnType);
+		}
 		return builder->createCall(calleeF, argsV);
 	}
 

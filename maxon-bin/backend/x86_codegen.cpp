@@ -1566,7 +1566,17 @@ void X86CodeGen::genGEP(mir::MIRInstruction *inst) {
 	} else {
 		// Array element access or simple pointer arithmetic
 		int elementSize = 8; // Default to 8 bytes (pointer size)
-		switch (inst->elementType->kind) {
+
+		// Determine element type for sizing
+		mir::MIRType *sizeType = inst->elementType;
+
+		// If we have two indices and elementType is an array, the second index
+		// indexes into the array elements, so use the array's element type
+		if (inst->operands.size() >= 3 && inst->elementType->kind == mir::MIRTypeKind::Array) {
+			sizeType = inst->elementType->elementType;
+		}
+
+		switch (sizeType->kind) {
 		case mir::MIRTypeKind::Int1:
 		case mir::MIRTypeKind::Int8:
 			elementSize = 1;
@@ -1580,7 +1590,11 @@ void X86CodeGen::genGEP(mir::MIRInstruction *inst) {
 			elementSize = 8;
 			break;
 		case mir::MIRTypeKind::Struct:
-			elementSize = static_cast<int>(inst->elementType->sizeInBytes);
+			elementSize = static_cast<int>(sizeType->sizeInBytes);
+			break;
+		case mir::MIRTypeKind::Array:
+			// Array of arrays - use the inner array size
+			elementSize = static_cast<int>(sizeType->sizeInBytes);
 			break;
 		default:
 			elementSize = 8;

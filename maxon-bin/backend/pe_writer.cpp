@@ -594,7 +594,6 @@ bool PeWriter::write(const std::string &filename) {
 	opt.Subsystem = subsystem;
 	opt.DllCharacteristics = IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE |
 							 IMAGE_DLLCHARACTERISTICS_NX_COMPAT |
-							 IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA |
 							 IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE;
 	opt.SizeOfStackReserve = 0x100000; // 1MB
 	opt.SizeOfStackCommit = 0x1000;	   // 4KB

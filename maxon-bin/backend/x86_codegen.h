@@ -131,6 +131,7 @@ class X86CodeGen {
 	const std::vector<FunctionCode> &getFunctionCodes() const { return functionCodes; }
 	const std::vector<uint8_t> &getDataSection() const { return dataSection; }
 	const std::vector<Relocation> &getRelocations() const { return relocations; }
+	const std::unordered_map<std::string, size_t> &getGlobalOffsets() const { return globalOffsets; }
 
   private:
 	//--------------------------------------------------------------------------

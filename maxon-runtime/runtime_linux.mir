@@ -103,3 +103,179 @@ entry:
     %result = trunc i64 %result64 to i32
     ret i32 %result
 }
+
+;==============================================================================
+; Safe FFI - Linux IPC Functions
+; Uses Linux syscalls directly for subprocess isolation
+;
+; Syscall numbers (x86_64):
+; SYS_fork    = 57
+; SYS_waitpid (wait4) = 61
+; SYS_kill    = 62
+; SYS_pipe    = 22
+; SYS_dup2    = 33
+; SYS_execve  = 59
+; SYS_clone   = 56
+; SYS_futex   = 202
+; SYS_mmap    = 9 (already declared above)
+; SYS_munmap  = 11
+;==============================================================================
+
+;==============================================================================
+; ffi_fork - Fork the current process
+; i64 ffi_fork()
+; Returns: 0 in child, child PID in parent, negative on error
+;==============================================================================
+define i64 @ffi_fork() {
+entry:
+    ; SYS_fork = 57
+    %result = call i64 @__syscall6(i64 57, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+    ret i64 %result
+}
+
+;==============================================================================
+; ffi_waitpid - Wait for child process
+; i64 ffi_waitpid(i64 pid, ptr status, i64 options)
+; Returns: PID of child that changed state, or negative on error
+;==============================================================================
+define i64 @ffi_waitpid(i64 %pid, ptr %status, i64 %options) {
+entry:
+    ; SYS_wait4 = 61 (waitpid is implemented via wait4 with rusage=NULL)
+    %status_int = ptrtoint ptr %status to i64
+    %result = call i64 @__syscall6(i64 61, i64 %pid, i64 %status_int, i64 %options, i64 0, i64 0, i64 0)
+    ret i64 %result
+}
+
+;==============================================================================
+; ffi_kill - Send signal to process
+; i64 ffi_kill(i64 pid, i32 sig)
+;==============================================================================
+define i64 @ffi_kill(i64 %pid, i32 %sig) {
+entry:
+    ; SYS_kill = 62
+    %sig_64 = sext i32 %sig to i64
+    %result = call i64 @__syscall6(i64 62, i64 %pid, i64 %sig_64, i64 0, i64 0, i64 0, i64 0)
+    ret i64 %result
+}
+
+;==============================================================================
+; ffi_create_shared_memory - Create shared memory region
+; ptr ffi_create_shared_memory(i64 size)
+; Uses mmap with MAP_SHARED | MAP_ANONYMOUS
+; Returns pointer to shared memory, or null on failure
+;==============================================================================
+define ptr @ffi_create_shared_memory(i64 %size) {
+entry:
+    ; SYS_mmap = 9
+    ; PROT_READ | PROT_WRITE = 3
+    ; MAP_SHARED | MAP_ANONYMOUS = 0x21 = 33
+    %result = call i64 @__syscall6(i64 9, i64 0, i64 %size, i64 3, i64 33, i64 -1, i64 0)
+    
+    ; Check for error
+    %is_negative = icmp slt i64 %result, 0
+    %error_threshold = add i64 -4095, 0
+    %is_error_range = icmp sge i64 %result, %error_threshold
+    %is_error = and i1 %is_negative, %is_error_range
+    br i1 %is_error, label %return_null, label %return_ptr
+
+return_null:
+    ret ptr null
+
+return_ptr:
+    %ptr = inttoptr i64 %result to ptr
+    ret ptr %ptr
+}
+
+;==============================================================================
+; ffi_unmap_shared_memory - Unmap shared memory region
+; i64 ffi_unmap_shared_memory(ptr addr, i64 size)
+;==============================================================================
+define i64 @ffi_unmap_shared_memory(ptr %addr, i64 %size) {
+entry:
+    ; SYS_munmap = 11
+    %addr_int = ptrtoint ptr %addr to i64
+    %result = call i64 @__syscall6(i64 11, i64 %addr_int, i64 %size, i64 0, i64 0, i64 0, i64 0)
+    ret i64 %result
+}
+
+;==============================================================================
+; Futex-based semaphore operations
+; Linux doesn't have POSIX semaphores as syscalls, so we use futex
+; Futex word: 0 = locked/wait, 1 = unlocked/signaled
+;==============================================================================
+
+;==============================================================================
+; ffi_sem_init - Initialize a semaphore (futex word)
+; void ffi_sem_init(ptr sem, i32 value)
+;==============================================================================
+define void @ffi_sem_init(ptr %sem, i32 %value) {
+entry:
+    store i32 %value, ptr %sem
+    ret void
+}
+
+;==============================================================================
+; ffi_sem_wait - Wait on a semaphore
+; i64 ffi_sem_wait(ptr sem)
+; Blocks until semaphore value becomes non-zero, then decrements
+;==============================================================================
+define i64 @ffi_sem_wait(ptr %sem) {
+entry:
+    br label %spin
+
+spin:
+    ; Try to decrement from 1 to 0
+    %old = atomicrmw xchg ptr %sem, i32 0 seq_cst
+    %was_signaled = icmp ne i32 %old, 0
+    br i1 %was_signaled, label %done, label %wait
+
+wait:
+    ; SYS_futex = 202
+    ; FUTEX_WAIT = 0
+    %sem_int = ptrtoint ptr %sem to i64
+    ; Wait if value is still 0
+    %result = call i64 @__syscall6(i64 202, i64 %sem_int, i64 0, i64 0, i64 0, i64 0, i64 0)
+    ; Retry after wakeup
+    br label %spin
+
+done:
+    ret i64 0
+}
+
+;==============================================================================
+; ffi_sem_post - Signal a semaphore
+; i64 ffi_sem_post(ptr sem)
+; Sets semaphore value to 1 and wakes one waiter
+;==============================================================================
+define i64 @ffi_sem_post(ptr %sem) {
+entry:
+    ; Set value to 1
+    store i32 1, ptr %sem
+    
+    ; SYS_futex = 202
+    ; FUTEX_WAKE = 1
+    %sem_int = ptrtoint ptr %sem to i64
+    ; Wake 1 waiter
+    %result = call i64 @__syscall6(i64 202, i64 %sem_int, i64 1, i64 1, i64 0, i64 0, i64 0)
+    ret i64 %result
+}
+
+;==============================================================================
+; ffi_sem_trywait - Non-blocking semaphore wait
+; i64 ffi_sem_trywait(ptr sem)
+; Returns 0 if acquired, -1 if would block
+;==============================================================================
+define i64 @ffi_sem_trywait(ptr %sem) {
+entry:
+    %old = atomicrmw xchg ptr %sem, i32 0 seq_cst
+    %was_signaled = icmp ne i32 %old, 0
+    br i1 %was_signaled, label %success, label %fail
+
+success:
+    ret i64 0
+
+fail:
+    ; Restore the value since we didn't actually acquire
+    store i32 0, ptr %sem
+    ret i64 -1
+}

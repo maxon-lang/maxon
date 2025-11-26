@@ -48,6 +48,7 @@ set(SOURCES
     codegen_mir/codegen_mir_stmt.cpp
     codegen_mir/codegen_mir_function.cpp
     codegen_mir/codegen_mir_output.cpp
+    codegen_mir/codegen_mir_safeffi.cpp
     # MIR infrastructure
     mir/mir.cpp
     mir/mir_builder.cpp

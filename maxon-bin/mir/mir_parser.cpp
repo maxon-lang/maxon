@@ -561,10 +561,84 @@ void MIRParser::parseGlobal() {
 	// Parse initializer if present
 	skipWhitespace();
 	if (!isAtEnd() && peek() != '\n' && peek() != ';') {
-		// For now, just skip the initializer
-		// TODO: Parse initializer properly
-		while (!isAtEnd() && peek() != '\n' && peek() != ';') {
-			advance();
+		// Check for zeroinitializer
+		if (source.substr(pos, 15) == "zeroinitializer") {
+			pos += 15;
+			global->hasInitializer = true;
+			// Allocate zero-filled buffer
+			size_t size = type->sizeInBytes;
+			global->initializer.resize(size, 0);
+		}
+		// Check for c"..." string constant
+		else if (peek() == 'c' && pos + 1 < source.size() && source[pos + 1] == '"') {
+			advance(); // skip 'c'
+			advance(); // skip '"'
+			std::string strValue;
+			while (!isAtEnd() && peek() != '"') {
+				if (peek() == '\\') {
+					advance(); // skip backslash
+					char escaped = advance();
+					if (escaped == '0') {
+						// Check for two-digit hex code like \00
+						if (!isAtEnd() && std::isxdigit(peek())) {
+							char hex1 = advance();
+							if (!isAtEnd() && std::isxdigit(peek())) {
+								char hex2 = advance();
+								int val = 0;
+								if (hex1 >= '0' && hex1 <= '9')
+									val = (hex1 - '0') * 16;
+								else if (hex1 >= 'a' && hex1 <= 'f')
+									val = (hex1 - 'a' + 10) * 16;
+								else if (hex1 >= 'A' && hex1 <= 'F')
+									val = (hex1 - 'A' + 10) * 16;
+								if (hex2 >= '0' && hex2 <= '9')
+									val += (hex2 - '0');
+								else if (hex2 >= 'a' && hex2 <= 'f')
+									val += (hex2 - 'a' + 10);
+								else if (hex2 >= 'A' && hex2 <= 'F')
+									val += (hex2 - 'A' + 10);
+								strValue.push_back(static_cast<char>(val));
+							} else {
+								// Just \0X where X is single hex digit
+								int val = 0;
+								if (hex1 >= '0' && hex1 <= '9')
+									val = hex1 - '0';
+								else if (hex1 >= 'a' && hex1 <= 'f')
+									val = hex1 - 'a' + 10;
+								else if (hex1 >= 'A' && hex1 <= 'F')
+									val = hex1 - 'A' + 10;
+								strValue.push_back(static_cast<char>(val));
+							}
+						} else {
+							strValue.push_back('\0');
+						}
+					} else if (escaped == 'n') {
+						strValue.push_back('\n');
+					} else if (escaped == 't') {
+						strValue.push_back('\t');
+					} else if (escaped == 'r') {
+						strValue.push_back('\r');
+					} else if (escaped == '\\') {
+						strValue.push_back('\\');
+					} else if (escaped == '"') {
+						strValue.push_back('"');
+					} else {
+						strValue.push_back(escaped);
+					}
+				} else {
+					strValue.push_back(advance());
+				}
+			}
+			if (peek() == '"')
+				advance(); // skip closing quote
+			global->isStringConstant = true;
+			global->stringValue = strValue;
+		}
+		// Skip other initializers for now
+		else {
+			while (!isAtEnd() && peek() != '\n' && peek() != ';') {
+				advance();
+			}
 		}
 	}
 }

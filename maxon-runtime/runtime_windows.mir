@@ -79,3 +79,850 @@ define void @__chkstk() {
 entry:
     ret void
 }
+
+;==============================================================================
+; ffi_debug_checkpoint - Write a single byte marker to stdout for debugging
+; void ffi_debug_checkpoint(i32 marker)
+;==============================================================================
+@ffi_debug_buf = global [2 x i8] zeroinitializer
+
+define void @ffi_debug_checkpoint(i32 %marker) {
+entry:
+    %buf = getelementptr [2 x i8], ptr @ffi_debug_buf, i64 0, i64 0
+    %char = add i32 %marker, 48   ; Convert 0-9 to '0'-'9'
+    %byte = trunc i32 %char to i8
+    store i8 %byte, ptr %buf
+    %buf1 = getelementptr i8, ptr %buf, i64 1
+    store i8 10, ptr %buf1        ; newline
+    %written = call i32 @write_stdout(ptr %buf, i32 2)
+    ret void
+}
+
+;==============================================================================
+; Safe FFI - Windows IPC Functions
+; Used for subprocess isolation of extern function calls
+;==============================================================================
+
+; Process management
+declare i1 @CreateProcessA(ptr, ptr, ptr, ptr, i1, i32, ptr, ptr, ptr, ptr)
+declare i1 @TerminateProcess(ptr, i32)
+declare i1 @GetExitCodeProcess(ptr, ptr)
+declare i32 @WaitForSingleObject(ptr, i32)
+declare i1 @CloseHandle(ptr)
+declare i32 @GetCurrentProcessId()
+
+; Shared memory
+declare ptr @CreateFileMappingA(ptr, ptr, i32, i32, i32, ptr)
+declare ptr @OpenFileMappingA(i32, i1, ptr)
+declare ptr @MapViewOfFile(ptr, i32, i32, i32, i64)
+declare i1 @UnmapViewOfFile(ptr)
+
+; Semaphores
+declare ptr @CreateSemaphoreA(ptr, i32, i32, ptr)
+declare ptr @OpenSemaphoreA(i32, i1, ptr)
+declare i1 @ReleaseSemaphore(ptr, i32, ptr)
+
+; Command line and environment
+declare ptr @GetCommandLineA()
+declare i32 @GetEnvironmentVariableA(ptr, ptr, i32)
+declare i1 @SetEnvironmentVariableA(ptr, ptr)
+
+; Error handling
+declare i32 @GetLastError()
+
+;==============================================================================
+; ffi_create_shared_memory - Create shared memory for FFI communication
+; ptr ffi_create_shared_memory(i32 size, ptr name)
+; Returns handle to file mapping, or null on failure
+;==============================================================================
+define ptr @ffi_create_shared_memory(i32 %size, ptr %name) {
+entry:
+    ; INVALID_HANDLE_VALUE = -1, PAGE_READWRITE = 0x04
+    %invalid_handle = inttoptr i64 -1 to ptr
+    %handle = call ptr @CreateFileMappingA(ptr %invalid_handle, ptr null, i32 4, i32 0, i32 %size, ptr %name)
+    ret ptr %handle
+}
+
+;==============================================================================
+; ffi_map_shared_memory - Map shared memory into address space
+; ptr ffi_map_shared_memory(ptr handle, i64 size)
+; Returns pointer to mapped memory, or null on failure
+;==============================================================================
+define ptr @ffi_map_shared_memory(ptr %handle, i64 %size) {
+entry:
+    ; FILE_MAP_ALL_ACCESS = 0xF001F
+    %ptr = call ptr @MapViewOfFile(ptr %handle, i32 983071, i32 0, i32 0, i64 %size)
+    ret ptr %ptr
+}
+
+;==============================================================================
+; ffi_unmap_shared_memory - Unmap shared memory
+; i1 ffi_unmap_shared_memory(ptr addr)
+;==============================================================================
+define i1 @ffi_unmap_shared_memory(ptr %addr) {
+entry:
+    %result = call i1 @UnmapViewOfFile(ptr %addr)
+    ret i1 %result
+}
+
+;==============================================================================
+; ffi_create_semaphore - Create a semaphore for FFI synchronization
+; ptr ffi_create_semaphore(ptr name, i32 initial)
+; Returns handle to semaphore, or null on failure
+;==============================================================================
+define ptr @ffi_create_semaphore(ptr %name, i32 %initial) {
+entry:
+    ; Max count = 1 for binary semaphore
+    %handle = call ptr @CreateSemaphoreA(ptr null, i32 %initial, i32 1, ptr %name)
+    ret ptr %handle
+}
+
+;==============================================================================
+; ffi_wait_semaphore - Wait on a semaphore
+; i32 ffi_wait_semaphore(ptr handle, i32 timeout_ms)
+; Returns 0 on success, non-zero on timeout/error
+;==============================================================================
+define i32 @ffi_wait_semaphore(ptr %handle, i32 %timeout_ms) {
+entry:
+    %result = call i32 @WaitForSingleObject(ptr %handle, i32 %timeout_ms)
+    ret i32 %result
+}
+
+;==============================================================================
+; ffi_signal_semaphore - Signal a semaphore
+; i1 ffi_signal_semaphore(ptr handle)
+;==============================================================================
+define i1 @ffi_signal_semaphore(ptr %handle) {
+entry:
+    %result = call i1 @ReleaseSemaphore(ptr %handle, i32 1, ptr null)
+    ret i1 %result
+}
+
+;==============================================================================
+; ffi_spawn_worker - Spawn FFI worker subprocess
+; ptr ffi_spawn_worker(ptr command_line)
+; Returns process handle, or null on failure
+; Note: Caller must provide STARTUPINFO and PROCESS_INFORMATION structures
+;==============================================================================
+define ptr @ffi_spawn_worker(ptr %cmdline, ptr %startup_info, ptr %process_info) {
+entry:
+    ; CREATE_NO_WINDOW = 0x08000000
+    %success = call i1 @CreateProcessA(ptr null, ptr %cmdline, ptr null, ptr null, i1 false, i32 134217728, ptr null, ptr null, ptr %startup_info, ptr %process_info)
+    br i1 %success, label %get_handle, label %failed
+
+get_handle:
+    ; Process handle is at offset 0 of PROCESS_INFORMATION
+    %handle_ptr = getelementptr i8, ptr %process_info, i64 0
+    %handle = load ptr, ptr %handle_ptr
+    ret ptr %handle
+
+failed:
+    ret ptr null
+}
+
+;==============================================================================
+; ffi_terminate_worker - Terminate FFI worker subprocess
+; i1 ffi_terminate_worker(ptr handle, i32 exit_code)
+;==============================================================================
+define i1 @ffi_terminate_worker(ptr %handle, i32 %exit_code) {
+entry:
+    %result = call i1 @TerminateProcess(ptr %handle, i32 %exit_code)
+    ret i1 %result
+}
+
+;==============================================================================
+; ffi_get_worker_exit_code - Get exit code of worker process
+; i32 ffi_get_worker_exit_code(ptr handle)
+; Returns exit code, or -1 if still running (STILL_ACTIVE = 259)
+;==============================================================================
+define i32 @ffi_get_worker_exit_code(ptr %handle) {
+entry:
+    %exit_code_ptr = alloca i32
+    %success = call i1 @GetExitCodeProcess(ptr %handle, ptr %exit_code_ptr)
+    br i1 %success, label %got_code, label %failed
+
+got_code:
+    %code = load i32, ptr %exit_code_ptr
+    ret i32 %code
+
+failed:
+    ret i32 -1
+}
+
+;==============================================================================
+; ffi_close_handle - Close a Windows handle
+; i1 ffi_close_handle(ptr handle)
+;==============================================================================
+define i1 @ffi_close_handle(ptr %handle) {
+entry:
+    %result = call i1 @CloseHandle(ptr %handle)
+    ret i1 %result
+}
+
+;==============================================================================
+; ffi_open_shared_memory - Open existing shared memory for worker
+; ptr ffi_open_shared_memory(ptr name)
+; Returns handle to file mapping, or null on failure
+;==============================================================================
+define ptr @ffi_open_shared_memory(ptr %name) {
+entry:
+    ; FILE_MAP_ALL_ACCESS = 0xF001F
+    %handle = call ptr @OpenFileMappingA(i32 983071, i1 false, ptr %name)
+    ret ptr %handle
+}
+
+;==============================================================================
+; ffi_open_semaphore - Open existing semaphore for worker
+; ptr ffi_open_semaphore(ptr name)
+; Returns handle to semaphore, or null on failure
+;==============================================================================
+define ptr @ffi_open_semaphore(ptr %name) {
+entry:
+    ; SEMAPHORE_ALL_ACCESS = 0x1F0003
+    %handle = call ptr @OpenSemaphoreA(i32 2031619, i1 false, ptr %name)
+    ret ptr %handle
+}
+
+;==============================================================================
+; ffi_get_env - Get environment variable value
+; i32 ffi_get_env(ptr name, ptr buffer, i32 size)
+; Returns length of value, or 0 if not set
+;==============================================================================
+define i32 @ffi_get_env(ptr %name, ptr %buffer, i32 %size) {
+entry:
+    %len = call i32 @GetEnvironmentVariableA(ptr %name, ptr %buffer, i32 %size)
+    ret i32 %len
+}
+
+;==============================================================================
+; ffi_get_command_line - Get command line string
+; ptr ffi_get_command_line()
+;==============================================================================
+define ptr @ffi_get_command_line() {
+entry:
+    %cmdline = call ptr @GetCommandLineA()
+    ret ptr %cmdline
+}
+
+;==============================================================================
+; ffi_get_pid - Get current process ID
+; i32 ffi_get_pid()
+;==============================================================================
+define i32 @ffi_get_pid() {
+entry:
+    %pid = call i32 @GetCurrentProcessId()
+    ret i32 %pid
+}
+
+;==============================================================================
+; ffi_set_env - Set environment variable
+; i1 ffi_set_env(ptr name, ptr value)
+;==============================================================================
+define i1 @ffi_set_env(ptr %name, ptr %value) {
+entry:
+    %result = call i1 @SetEnvironmentVariableA(ptr %name, ptr %value)
+    ret i1 %result
+}
+
+;==============================================================================
+; ffi_format_pid - Format PID as decimal string into buffer
+; Returns number of characters written
+; i32 ffi_format_pid(ptr buffer, i32 pid)
+;==============================================================================
+define i32 @ffi_format_pid(ptr %buffer, i32 %pid) {
+entry:
+    ; All allocas in entry block for proper stack frame
+    %idx = alloca i32
+    %temp_buf = alloca [16 x i8]
+    %temp_idx = alloca i32
+    %remaining = alloca i32
+    %out_idx = alloca i32
+    
+    store i32 0, ptr %idx
+    store i32 0, ptr %temp_idx
+    
+    ; Handle zero case
+    %is_zero = icmp eq i32 %pid, 0
+    br i1 %is_zero, label %write_zero, label %extract_digits
+
+write_zero:
+    store i8 48, ptr %buffer  ; '0' = 48
+    %next_ptr = getelementptr i8, ptr %buffer, i64 1
+    store i8 0, ptr %next_ptr  ; null terminator
+    ret i32 1
+
+extract_digits:
+    ; Extract digits in reverse order
+    store i32 %pid, ptr %remaining
+    br label %extract_loop
+
+extract_loop:
+    %rem_val = load i32, ptr %remaining
+    %is_done = icmp eq i32 %rem_val, 0
+    br i1 %is_done, label %reverse_digits, label %extract_one
+
+extract_one:
+    ; Get last digit
+    %digit = srem i32 %rem_val, 10
+    %digit_char = add i32 %digit, 48  ; '0' = 48
+    %digit_byte = trunc i32 %digit_char to i8
+    
+    ; Store in temp buffer
+    %ti = load i32, ptr %temp_idx
+    %ti64 = sext i32 %ti to i64
+    %temp_ptr = getelementptr [16 x i8], ptr %temp_buf, i64 0, i64 %ti64
+    store i8 %digit_byte, ptr %temp_ptr
+    
+    ; Update remaining
+    %new_rem = sdiv i32 %rem_val, 10
+    store i32 %new_rem, ptr %remaining
+    
+    ; Increment temp index
+    %new_ti = add i32 %ti, 1
+    store i32 %new_ti, ptr %temp_idx
+    br label %extract_loop
+
+reverse_digits:
+    ; Copy from temp buffer to output in reverse
+    %total = load i32, ptr %temp_idx
+    store i32 0, ptr %out_idx
+    br label %reverse_loop
+
+reverse_loop:
+    %oi = load i32, ptr %out_idx
+    %done_reverse = icmp sge i32 %oi, %total
+    br i1 %done_reverse, label %write_null, label %copy_one
+
+copy_one:
+    ; Read from temp[total - 1 - oi]
+    %read_idx = sub i32 %total, 1
+    %read_idx2 = sub i32 %read_idx, %oi
+    %read_idx64 = sext i32 %read_idx2 to i64
+    %read_ptr = getelementptr [16 x i8], ptr %temp_buf, i64 0, i64 %read_idx64
+    %ch = load i8, ptr %read_ptr
+    
+    ; Write to buffer[oi]
+    %write_idx64 = sext i32 %oi to i64
+    %write_ptr = getelementptr i8, ptr %buffer, i64 %write_idx64
+    store i8 %ch, ptr %write_ptr
+    
+    ; Increment output index
+    %new_oi = add i32 %oi, 1
+    store i32 %new_oi, ptr %out_idx
+    br label %reverse_loop
+
+write_null:
+    ; Write null terminator
+    %total64 = sext i32 %total to i64
+    %null_ptr = getelementptr i8, ptr %buffer, i64 %total64
+    store i8 0, ptr %null_ptr
+    ret i32 %total
+}
+
+;==============================================================================
+; String constants for FFI worker detection
+;==============================================================================
+@ffi_worker_env_name = constant [21 x i8] c"__MAXON_FFI_WORKER__\00"
+@ffi_worker_shared_env = constant [20 x i8] c"__MAXON_FFI_SHARED_\00"
+@ffi_worker_req_env = constant [17 x i8] c"__MAXON_FFI_REQ_\00"
+@ffi_worker_rsp_env = constant [17 x i8] c"__MAXON_FFI_RSP_\00"
+@ffi_worker_check_buf = global [32 x i8] zeroinitializer
+@ffi_worker_shared_name_buf = global [64 x i8] zeroinitializer
+@ffi_worker_req_name_buf = global [64 x i8] zeroinitializer
+@ffi_worker_rsp_name_buf = global [64 x i8] zeroinitializer
+
+; Worker IPC handles (initialized in __ffi_worker_main)
+@ffi_worker_shared_handle = global ptr null
+@ffi_worker_shared_mem = global ptr null
+@ffi_worker_req_sem = global ptr null
+@ffi_worker_rsp_sem = global ptr null
+
+; Parent-side IPC globals (initialized lazily when first FFI call is made)
+@ffi_parent_initialized = global i32 0
+@ffi_parent_shared_handle = global ptr null
+@ffi_parent_shared_mem = global ptr null
+@ffi_parent_req_sem = global ptr null
+@ffi_parent_rsp_sem = global ptr null
+@ffi_parent_worker_handle = global ptr null
+@ffi_parent_shared_name = global [64 x i8] zeroinitializer
+@ffi_parent_req_name = global [64 x i8] zeroinitializer
+@ffi_parent_rsp_name = global [64 x i8] zeroinitializer
+@ffi_parent_startup_info = global [104 x i8] zeroinitializer
+@ffi_parent_process_info = global [24 x i8] zeroinitializer
+
+; String constants for env var values
+@ffi_worker_env_value = constant [2 x i8] c"1\00"
+
+;==============================================================================
+; ffi_check_worker_mode - Check if running as FFI worker
+; Sets __ffi_is_worker global to 1 if __MAXON_FFI_WORKER__ env var is set
+; void ffi_check_worker_mode()
+;==============================================================================
+define void @ffi_check_worker_mode() {
+entry:
+    ; Get the env var name pointer
+    %env_name = getelementptr [21 x i8], ptr @ffi_worker_env_name, i64 0, i64 0
+    %buf = getelementptr [32 x i8], ptr @ffi_worker_check_buf, i64 0, i64 0
+    ; Check if the env variable is set (returns 0 if not set)
+    %len = call i32 @GetEnvironmentVariableA(ptr %env_name, ptr %buf, i32 32)
+    ret void
+}
+
+;==============================================================================
+; ffi_is_worker_mode - Return 1 if running as FFI worker, 0 otherwise
+; i32 ffi_is_worker_mode()
+;==============================================================================
+define i32 @ffi_is_worker_mode() {
+entry:
+    ; Get the env var name pointer
+    %env_name = getelementptr [21 x i8], ptr @ffi_worker_env_name, i64 0, i64 0
+    %buf = getelementptr [32 x i8], ptr @ffi_worker_check_buf, i64 0, i64 0
+    ; Check if the env variable is set (returns 0 if not set)
+    %len = call i32 @GetEnvironmentVariableA(ptr %env_name, ptr %buf, i32 32)
+    ; If len > 0, we're in worker mode
+    %is_worker = icmp ugt i32 %len, 0
+    br i1 %is_worker, label %is_worker_yes, label %is_worker_no
+
+is_worker_yes:
+    ret i32 1
+
+is_worker_no:
+    ret i32 0
+}
+
+;==============================================================================
+; __ffi_parent_init - Initialize FFI parent side (create worker subprocess)
+; Called lazily on first FFI call.
+; i32 __ffi_parent_init()
+; Returns 0 on success, non-zero on failure
+;==============================================================================
+define i32 @__ffi_parent_init() {
+entry:
+    ; Check if already initialized
+    %init_flag = load i32, ptr @ffi_parent_initialized
+    %already_init = icmp ne i32 %init_flag, 0
+    br i1 %already_init, label %already_done, label %do_init
+
+already_done:
+    ret i32 0
+
+do_init:
+    ; Get our PID for unique names
+    %pid = call i32 @GetCurrentProcessId()
+    
+    ; Build shared memory name: "__MAXON_FFI_SHM_<pid>"
+    %shm_name = getelementptr [64 x i8], ptr @ffi_parent_shared_name, i64 0, i64 0
+    ; Prefix: "__MAXON_FFI_SHM_"
+    store i8 95, ptr %shm_name                ; '_'
+    %shm1 = getelementptr i8, ptr %shm_name, i64 1
+    store i8 95, ptr %shm1                     ; '_'
+    %shm2 = getelementptr i8, ptr %shm_name, i64 2
+    store i8 77, ptr %shm2                     ; 'M'
+    %shm3 = getelementptr i8, ptr %shm_name, i64 3
+    store i8 65, ptr %shm3                     ; 'A'
+    %shm4 = getelementptr i8, ptr %shm_name, i64 4
+    store i8 88, ptr %shm4                     ; 'X'
+    %shm5 = getelementptr i8, ptr %shm_name, i64 5
+    store i8 79, ptr %shm5                     ; 'O'
+    %shm6 = getelementptr i8, ptr %shm_name, i64 6
+    store i8 78, ptr %shm6                     ; 'N'
+    %shm7 = getelementptr i8, ptr %shm_name, i64 7
+    store i8 95, ptr %shm7                     ; '_'
+    %shm8 = getelementptr i8, ptr %shm_name, i64 8
+    store i8 70, ptr %shm8                     ; 'F'
+    %shm9 = getelementptr i8, ptr %shm_name, i64 9
+    store i8 70, ptr %shm9                     ; 'F'
+    %shm10 = getelementptr i8, ptr %shm_name, i64 10
+    store i8 73, ptr %shm10                    ; 'I'
+    %shm11 = getelementptr i8, ptr %shm_name, i64 11
+    store i8 95, ptr %shm11                    ; '_'
+    %shm12 = getelementptr i8, ptr %shm_name, i64 12
+    store i8 83, ptr %shm12                    ; 'S'
+    %shm13 = getelementptr i8, ptr %shm_name, i64 13
+    store i8 72, ptr %shm13                    ; 'H'
+    %shm14 = getelementptr i8, ptr %shm_name, i64 14
+    store i8 77, ptr %shm14                    ; 'M'
+    %shm15 = getelementptr i8, ptr %shm_name, i64 15
+    store i8 95, ptr %shm15                    ; '_'
+    %shm_pid_buf = getelementptr i8, ptr %shm_name, i64 16
+    call i32 @ffi_format_pid(ptr %shm_pid_buf, i32 %pid)
+    
+    ; Build request semaphore name: "__MAXON_FFI_REQ_<pid>"
+    %req_name = getelementptr [64 x i8], ptr @ffi_parent_req_name, i64 0, i64 0
+    store i8 95, ptr %req_name
+    %req1 = getelementptr i8, ptr %req_name, i64 1
+    store i8 95, ptr %req1
+    %req2 = getelementptr i8, ptr %req_name, i64 2
+    store i8 77, ptr %req2
+    %req3 = getelementptr i8, ptr %req_name, i64 3
+    store i8 65, ptr %req3
+    %req4 = getelementptr i8, ptr %req_name, i64 4
+    store i8 88, ptr %req4
+    %req5 = getelementptr i8, ptr %req_name, i64 5
+    store i8 79, ptr %req5
+    %req6 = getelementptr i8, ptr %req_name, i64 6
+    store i8 78, ptr %req6
+    %req7 = getelementptr i8, ptr %req_name, i64 7
+    store i8 95, ptr %req7
+    %req8 = getelementptr i8, ptr %req_name, i64 8
+    store i8 70, ptr %req8
+    %req9 = getelementptr i8, ptr %req_name, i64 9
+    store i8 70, ptr %req9
+    %req10 = getelementptr i8, ptr %req_name, i64 10
+    store i8 73, ptr %req10
+    %req11 = getelementptr i8, ptr %req_name, i64 11
+    store i8 95, ptr %req11
+    %req12 = getelementptr i8, ptr %req_name, i64 12
+    store i8 82, ptr %req12                    ; 'R'
+    %req13 = getelementptr i8, ptr %req_name, i64 13
+    store i8 69, ptr %req13                    ; 'E'
+    %req14 = getelementptr i8, ptr %req_name, i64 14
+    store i8 81, ptr %req14                    ; 'Q'
+    %req15 = getelementptr i8, ptr %req_name, i64 15
+    store i8 95, ptr %req15
+    %req_pid_buf = getelementptr i8, ptr %req_name, i64 16
+    call i32 @ffi_format_pid(ptr %req_pid_buf, i32 %pid)
+    
+    ; Build response semaphore name: "__MAXON_FFI_RSP_<pid>"
+    %rsp_name = getelementptr [64 x i8], ptr @ffi_parent_rsp_name, i64 0, i64 0
+    store i8 95, ptr %rsp_name
+    %rsp1 = getelementptr i8, ptr %rsp_name, i64 1
+    store i8 95, ptr %rsp1
+    %rsp2 = getelementptr i8, ptr %rsp_name, i64 2
+    store i8 77, ptr %rsp2
+    %rsp3 = getelementptr i8, ptr %rsp_name, i64 3
+    store i8 65, ptr %rsp3
+    %rsp4 = getelementptr i8, ptr %rsp_name, i64 4
+    store i8 88, ptr %rsp4
+    %rsp5 = getelementptr i8, ptr %rsp_name, i64 5
+    store i8 79, ptr %rsp5
+    %rsp6 = getelementptr i8, ptr %rsp_name, i64 6
+    store i8 78, ptr %rsp6
+    %rsp7 = getelementptr i8, ptr %rsp_name, i64 7
+    store i8 95, ptr %rsp7
+    %rsp8 = getelementptr i8, ptr %rsp_name, i64 8
+    store i8 70, ptr %rsp8
+    %rsp9 = getelementptr i8, ptr %rsp_name, i64 9
+    store i8 70, ptr %rsp9
+    %rsp10 = getelementptr i8, ptr %rsp_name, i64 10
+    store i8 73, ptr %rsp10
+    %rsp11 = getelementptr i8, ptr %rsp_name, i64 11
+    store i8 95, ptr %rsp11
+    %rsp12 = getelementptr i8, ptr %rsp_name, i64 12
+    store i8 82, ptr %rsp12                    ; 'R'
+    %rsp13 = getelementptr i8, ptr %rsp_name, i64 13
+    store i8 83, ptr %rsp13                    ; 'S'
+    %rsp14 = getelementptr i8, ptr %rsp_name, i64 14
+    store i8 80, ptr %rsp14                    ; 'P'
+    %rsp15 = getelementptr i8, ptr %rsp_name, i64 15
+    store i8 95, ptr %rsp15
+    %rsp_pid_buf = getelementptr i8, ptr %rsp_name, i64 16
+    call i32 @ffi_format_pid(ptr %rsp_pid_buf, i32 %pid)
+    
+    ; Create shared memory (4KB is enough for FFI calls)
+    %shm_handle = call ptr @ffi_create_shared_memory(i32 4096, ptr %shm_name)
+    %has_shm = icmp ne ptr %shm_handle, null
+    br i1 %has_shm, label %map_shm, label %init_failed
+
+map_shm:
+    ; Map shared memory
+    %shm_ptr = call ptr @ffi_map_shared_memory(ptr %shm_handle, i64 4096)
+    %has_shm_ptr = icmp ne ptr %shm_ptr, null
+    br i1 %has_shm_ptr, label %create_req_sem, label %cleanup_shm_handle
+
+create_req_sem:
+    ; Create request semaphore (initial count 0, max count 1)
+    %req_sem = call ptr @ffi_create_semaphore(i32 0, i32 1, ptr %req_name)
+    %has_req_sem = icmp ne ptr %req_sem, null
+    br i1 %has_req_sem, label %create_rsp_sem, label %cleanup_shm_ptr
+
+create_rsp_sem:
+    ; Create response semaphore (initial count 0, max count 1)
+    %rsp_sem = call ptr @ffi_create_semaphore(i32 0, i32 1, ptr %rsp_name)
+    %has_rsp_sem = icmp ne ptr %rsp_sem, null
+    br i1 %has_rsp_sem, label %set_env_vars, label %cleanup_req_sem
+
+set_env_vars:
+    ; Set environment variables for the worker subprocess
+    ; __MAXON_FFI_WORKER__ = "1"
+    %worker_env = getelementptr [21 x i8], ptr @ffi_worker_env_name, i64 0, i64 0
+    %worker_val = getelementptr [2 x i8], ptr @ffi_worker_env_value, i64 0, i64 0
+    call i1 @ffi_set_env(ptr %worker_env, ptr %worker_val)
+    
+    ; __MAXON_FFI_SHARED_ = shared memory name
+    %shared_env = getelementptr [20 x i8], ptr @ffi_worker_shared_env, i64 0, i64 0
+    call i1 @ffi_set_env(ptr %shared_env, ptr %shm_name)
+    
+    ; __MAXON_FFI_REQ_ = request semaphore name
+    %req_env = getelementptr [17 x i8], ptr @ffi_worker_req_env, i64 0, i64 0
+    call i1 @ffi_set_env(ptr %req_env, ptr %req_name)
+    
+    ; __MAXON_FFI_RSP_ = response semaphore name
+    %rsp_env = getelementptr [17 x i8], ptr @ffi_worker_rsp_env, i64 0, i64 0
+    call i1 @ffi_set_env(ptr %rsp_env, ptr %rsp_name)
+    br label %spawn_worker
+
+spawn_worker:
+    ; Get our own command line to spawn the worker
+    %cmdline = call ptr @GetCommandLineA()
+    
+    ; Initialize STARTUPINFOA (size = 104 bytes on x64)
+    ; First 4 bytes = cb = 104
+    %startup = getelementptr [104 x i8], ptr @ffi_parent_startup_info, i64 0, i64 0
+    store i32 104, ptr %startup
+    
+    ; Zero out rest of startup info (simplified - just zero first 8 bytes after cb)
+    %startup4 = getelementptr i8, ptr %startup, i64 4
+    store i32 0, ptr %startup4
+    
+    ; Process info
+    %procinfo = getelementptr [24 x i8], ptr @ffi_parent_process_info, i64 0, i64 0
+    
+    ; Spawn the worker
+    %worker_handle = call ptr @ffi_spawn_worker(ptr %cmdline, ptr %startup, ptr %procinfo)
+    %has_worker = icmp ne ptr %worker_handle, null
+    br i1 %has_worker, label %store_handles, label %cleanup_rsp_sem
+
+store_handles:
+    ; Store all handles in globals
+    store ptr %shm_handle, ptr @ffi_parent_shared_handle
+    store ptr %shm_ptr, ptr @ffi_parent_shared_mem
+    store ptr %req_sem, ptr @ffi_parent_req_sem
+    store ptr %rsp_sem, ptr @ffi_parent_rsp_sem
+    store ptr %worker_handle, ptr @ffi_parent_worker_handle
+    
+    ; Mark as initialized
+    store i32 1, ptr @ffi_parent_initialized
+    
+    ; Clear the worker env var so we don't stay in worker mode if we spawn children
+    call i1 @ffi_set_env(ptr %worker_env, ptr null)
+    
+    ret i32 0
+
+cleanup_rsp_sem:
+    call i1 @ffi_close_handle(ptr %rsp_sem)
+    br label %cleanup_req_sem
+
+cleanup_req_sem:
+    call i1 @ffi_close_handle(ptr %req_sem)
+    br label %cleanup_shm_ptr
+
+cleanup_shm_ptr:
+    call i1 @UnmapViewOfFile(ptr %shm_ptr)
+    br label %cleanup_shm_handle
+
+cleanup_shm_handle:
+    call i1 @ffi_close_handle(ptr %shm_handle)
+    br label %init_failed
+
+init_failed:
+    ret i32 1
+}
+
+;==============================================================================
+; __ffi_call - Make an FFI call through the worker subprocess
+; i64 __ffi_call(i32 func_id, i32 arg_count, ptr args)
+; Returns the return value from the extern function
+;==============================================================================
+define i64 @__ffi_call(i32 %func_id, i32 %arg_count, ptr %args) {
+entry:
+    ; Ensure parent is initialized
+    %init_result = call i32 @__ffi_parent_init()
+    %init_ok = icmp eq i32 %init_result, 0
+    br i1 %init_ok, label %do_call, label %call_failed
+
+do_call:
+    ; Get shared memory pointer
+    %shm = load ptr, ptr @ffi_parent_shared_mem
+    
+    ; Write command (1 = call)
+    %cmd_ptr = getelementptr i8, ptr %shm, i64 0
+    store i32 1, ptr %cmd_ptr
+    
+    ; Write function ID
+    %fid_ptr = getelementptr i8, ptr %shm, i64 4
+    store i32 %func_id, ptr %fid_ptr
+    
+    ; Write arg count
+    %argc_ptr = getelementptr i8, ptr %shm, i64 8
+    store i32 %arg_count, ptr %argc_ptr
+    
+    ; Copy arguments (up to 16)
+    %args_base = getelementptr i8, ptr %shm, i64 16
+    br label %copy_args_loop
+
+copy_args_loop:
+    %i = phi i32 [ 0, %do_call ], [ %next_i, %copy_one_arg ]
+    %done = icmp sge i32 %i, %arg_count
+    br i1 %done, label %signal_request, label %copy_one_arg
+
+copy_one_arg:
+    ; Read arg from input array
+    %i64 = sext i32 %i to i64
+    %src_ptr = getelementptr i64, ptr %args, i64 %i64
+    %arg_val = load i64, ptr %src_ptr
+    
+    ; Write to shared memory
+    %dst_ptr = getelementptr i64, ptr %args_base, i64 %i64
+    store i64 %arg_val, ptr %dst_ptr
+    
+    %next_i = add i32 %i, 1
+    br label %copy_args_loop
+
+signal_request:
+    ; Signal the request semaphore
+    %req_sem = load ptr, ptr @ffi_parent_req_sem
+    call i1 @ffi_signal_semaphore(ptr %req_sem)
+    
+    ; Wait for response (INFINITE = -1)
+    %rsp_sem = load ptr, ptr @ffi_parent_rsp_sem
+    %wait = call i32 @ffi_wait_semaphore(ptr %rsp_sem, i32 -1)
+    
+    ; Read return value (offset 144)
+    %ret_ptr = getelementptr i8, ptr %shm, i64 144
+    %ret_val = load i64, ptr %ret_ptr
+    ret i64 %ret_val
+
+call_failed:
+    ret i64 0
+}
+
+;==============================================================================
+; __ffi_worker_main - Worker process entry point
+; This is called instead of main() when the process is spawned as an FFI worker.
+; It opens shared memory and semaphores, then enters a loop waiting for calls.
+; i32 __ffi_worker_main()
+;==============================================================================
+define i32 @__ffi_worker_main() {
+entry:
+    ; Get shared memory name from environment
+    %shared_name_buf = getelementptr [64 x i8], ptr @ffi_worker_shared_name_buf, i64 0, i64 0
+    %shared_env = getelementptr [20 x i8], ptr @ffi_worker_shared_env, i64 0, i64 0
+    %shared_len = call i32 @GetEnvironmentVariableA(ptr %shared_env, ptr %shared_name_buf, i32 64)
+    %has_shared = icmp ugt i32 %shared_len, 0
+    br i1 %has_shared, label %get_req_name, label %error_exit
+
+get_req_name:
+    ; Get request semaphore name from environment
+    %req_name_buf = getelementptr [64 x i8], ptr @ffi_worker_req_name_buf, i64 0, i64 0
+    %req_env = getelementptr [17 x i8], ptr @ffi_worker_req_env, i64 0, i64 0
+    %req_len = call i32 @GetEnvironmentVariableA(ptr %req_env, ptr %req_name_buf, i32 64)
+    %has_req = icmp ugt i32 %req_len, 0
+    br i1 %has_req, label %get_rsp_name, label %error_exit
+
+get_rsp_name:
+    ; Get response semaphore name from environment
+    %rsp_name_buf = getelementptr [64 x i8], ptr @ffi_worker_rsp_name_buf, i64 0, i64 0
+    %rsp_env = getelementptr [17 x i8], ptr @ffi_worker_rsp_env, i64 0, i64 0
+    %rsp_len = call i32 @GetEnvironmentVariableA(ptr %rsp_env, ptr %rsp_name_buf, i32 64)
+    %has_rsp = icmp ugt i32 %rsp_len, 0
+    br i1 %has_rsp, label %open_shared, label %error_exit
+
+open_shared:
+    ; Open shared memory
+    %shared_handle = call ptr @ffi_open_shared_memory(ptr %shared_name_buf)
+    %has_shared_handle = icmp ne ptr %shared_handle, null
+    br i1 %has_shared_handle, label %map_shared, label %error_exit
+
+map_shared:
+    ; Map shared memory into address space
+    ; FILE_MAP_ALL_ACCESS = 0xF001F
+    %shared_mem = call ptr @MapViewOfFile(ptr %shared_handle, i32 983071, i32 0, i32 0, i64 4096)
+    %has_shared_mem = icmp ne ptr %shared_mem, null
+    br i1 %has_shared_mem, label %open_req_sem, label %cleanup_shared_handle
+
+open_req_sem:
+    ; Open request semaphore
+    %req_sem = call ptr @ffi_open_semaphore(ptr %req_name_buf)
+    %has_req_sem = icmp ne ptr %req_sem, null
+    br i1 %has_req_sem, label %open_rsp_sem, label %cleanup_shared_mem
+
+open_rsp_sem:
+    ; Open response semaphore
+    %rsp_sem = call ptr @ffi_open_semaphore(ptr %rsp_name_buf)
+    %has_rsp_sem = icmp ne ptr %rsp_sem, null
+    br i1 %has_rsp_sem, label %store_handles, label %cleanup_req_sem
+
+store_handles:
+    ; Store handles in globals for use by worker loop
+    store ptr %shared_handle, ptr @ffi_worker_shared_handle
+    store ptr %shared_mem, ptr @ffi_worker_shared_mem
+    store ptr %req_sem, ptr @ffi_worker_req_sem
+    store ptr %rsp_sem, ptr @ffi_worker_rsp_sem
+    br label %worker_loop
+
+worker_loop:
+    ; Wait for a request (INFINITE timeout = 0xFFFFFFFF)
+    %wait_result = call i32 @ffi_wait_semaphore(ptr %req_sem, i32 -1)
+    %wait_ok = icmp eq i32 %wait_result, 0
+    br i1 %wait_ok, label %process_request, label %error_exit
+
+process_request:
+    ; Read command from shared memory (offset 0)
+    %cmd_ptr = getelementptr i8, ptr %shared_mem, i64 0
+    %cmd = load i32, ptr %cmd_ptr
+    
+    ; Check if exit command (command 0)
+    %is_exit = icmp eq i32 %cmd, 0
+    br i1 %is_exit, label %cleanup_and_exit, label %dispatch_call
+
+dispatch_call:
+    ; Read function ID (offset 4)
+    %func_id_ptr = getelementptr i8, ptr %shared_mem, i64 4
+    %func_id = load i32, ptr %func_id_ptr
+    
+    ; Call the FFI dispatch function (generated by compiler)
+    ; This reads args from shared memory, calls the function, writes result back
+    call void @__ffi_dispatch(ptr %shared_mem, i32 %func_id)
+    
+    ; Signal response ready
+    %sig_result = call i1 @ffi_signal_semaphore(ptr %rsp_sem)
+    br label %worker_loop
+
+cleanup_and_exit:
+    ; Clean up handles
+    %rsp_sem_loaded = load ptr, ptr @ffi_worker_rsp_sem
+    call i1 @ffi_close_handle(ptr %rsp_sem_loaded)
+    %req_sem_loaded = load ptr, ptr @ffi_worker_req_sem
+    call i1 @ffi_close_handle(ptr %req_sem_loaded)
+    %shared_mem_loaded = load ptr, ptr @ffi_worker_shared_mem
+    call i1 @UnmapViewOfFile(ptr %shared_mem_loaded)
+    %shared_handle_loaded = load ptr, ptr @ffi_worker_shared_handle
+    call i1 @ffi_close_handle(ptr %shared_handle_loaded)
+    ret i32 0
+
+cleanup_req_sem:
+    call i1 @ffi_close_handle(ptr %req_sem)
+    br label %cleanup_shared_mem
+
+cleanup_shared_mem:
+    call i1 @UnmapViewOfFile(ptr %shared_mem)
+    br label %cleanup_shared_handle
+
+cleanup_shared_handle:
+    call i1 @ffi_close_handle(ptr %shared_handle)
+    br label %error_exit
+
+error_exit:
+    ret i32 1
+}
+
+;==============================================================================
+; __ffi_dispatch - Default FFI dispatch function (no extern functions)
+; This is replaced by the compiler when extern functions are present.
+; Shared memory layout:
+;   Offset 0:  i32 command (0=exit, 1=call)
+;   Offset 4:  i32 function_id
+;   Offset 8:  i32 arg_count
+;   Offset 12: i32 status (0=ok, 1=error, 2=unknown_function)
+;   Offset 16: [16 x i64] args
+;   Offset 144: i64 return_value
+; void __ffi_dispatch(ptr shared_mem, i32 func_id)
+;==============================================================================
+define void @__ffi_dispatch(ptr %shared_mem, i32 %func_id) {
+entry:
+    ; No extern functions - set status to unknown function (2)
+    %status_ptr = getelementptr i8, ptr %shared_mem, i64 12
+    store i32 2, ptr %status_ptr
+    ret void
+}

@@ -129,7 +129,25 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 			return;
 		}
 		if (verboseLevel >= 2) {
-			std::cout << "[MIR]   Parsed " << runtimeResult.module->functions.size() << " functions from runtime" << std::endl;
+			std::cout << "[MIR]   Parsed " << runtimeResult.module->functions.size() << " functions, "
+					  << runtimeResult.module->globals.size() << " globals from runtime" << std::endl;
+		}
+
+		// Merge globals from runtime that we don't have
+		for (auto &global : runtimeResult.module->globals) {
+			bool found = false;
+			for (const auto &existing : module->globals) {
+				if (existing->name == global->name) {
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				if (verboseLevel >= 2) {
+					std::cout << "[MIR]     Adding runtime global '" << global->name << "'" << std::endl;
+				}
+				module->globals.push_back(std::move(global));
+			}
 		}
 
 		// First pass: Add external declarations from runtime that we don't have
@@ -152,9 +170,14 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 
 			// Check if we have a declaration for this function that we can replace
 			mir::MIRFunction *existing = module->getFunction(func->name);
+			if (verboseLevel >= 2) {
+				std::cout << "[MIR]   Processing runtime function '" << func->name
+						  << "' (existing=" << (existing ? "yes" : "no")
+						  << ", isExternal=" << (existing && existing->isExternal ? "yes" : "no") << ")" << std::endl;
+			}
 			if (existing && existing->isExternal) {
-				if (verboseLevel >= 3) {
-					std::cout << "[MIR]     Replacing declaration of '" << func->name << "' with runtime definition" << std::endl;
+				if (verboseLevel >= 2) {
+					std::cout << "[MIR]     Replacing declaration '" << func->name << "' with runtime definition" << std::endl;
 				}
 				// Replace the declaration with the definition
 				for (auto it = module->functions.begin(); it != module->functions.end(); ++it) {
@@ -195,6 +218,10 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 				if (inst->opcode == mir::MIROpcode::Call && !inst->calleeName.empty()) {
 					// Re-lookup the function by name
 					inst->calleeFunc = module->getFunction(inst->calleeName);
+					if (verboseLevel >= 3 && inst->calleeFunc) {
+						std::cout << "[MIR]   Call to " << inst->calleeName
+								  << " -> isExternal=" << inst->calleeFunc->isExternal << std::endl;
+					}
 				}
 			}
 		}
@@ -212,10 +239,15 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 
 	const auto &functionCodes = x86gen.getFunctionCodes();
 	const auto &dataSection = x86gen.getDataSection();
+	const auto &globalOffsets = x86gen.getGlobalOffsets();
 
 	if (verboseLevel >= 2) {
 		std::cout << "  Generated " << functionCodes.size() << " functions" << std::endl;
 		std::cout << "  Data section size: " << dataSection.size() << " bytes" << std::endl;
+		std::cout << "  Global offsets: " << globalOffsets.size() << " entries" << std::endl;
+		for (const auto &kv : globalOffsets) {
+			std::cout << "    " << kv.first << " -> " << kv.second << std::endl;
+		}
 	}
 
 	// Collect all code into single buffer and track function positions
@@ -226,17 +258,21 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 	struct AdjustedRelocation {
 		backend::Relocation reloc;
 		size_t funcBaseOffset; // Offset of the function containing this relocation
+		std::string funcName;  // Name of function containing this relocation
 	};
 	std::vector<AdjustedRelocation> allRelocations;
 
 	for (const auto &func : functionCodes) {
 		size_t funcOffset = codeBuffer.size();
 		functionOffsets[func.name] = funcOffset;
+		if (verboseLevel >= 3) {
+			std::cout << "[FUNC] " << func.name << " at offset " << funcOffset << " (size " << func.code.size() << ")" << std::endl;
+		}
 		codeBuffer.insert(codeBuffer.end(), func.code.begin(), func.code.end());
 
 		// Collect relocations with adjusted offsets
 		for (const auto &reloc : func.relocations) {
-			allRelocations.push_back({reloc, funcOffset});
+			allRelocations.push_back({reloc, funcOffset, func.name});
 		}
 	}
 
@@ -246,6 +282,13 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 
 	for (const auto &adj : allRelocations) {
 		const auto &reloc = adj.reloc;
+
+		if (verboseLevel >= 3) {
+			std::cout << "[RELOC] " << (reloc.type == backend::Relocation::Type::FunctionCall ? "FunctionCall" : reloc.type == backend::Relocation::Type::ImportCall ? "ImportCall"
+																																									 : "Other")
+					  << " " << reloc.symbolName << " at offset " << (adj.funcBaseOffset + reloc.offset)
+					  << " (in " << adj.funcName << ")" << std::endl;
+		}
 
 		if (reloc.type == backend::Relocation::Type::FunctionCall) {
 			auto targetIt = functionOffsets.find(reloc.symbolName);
@@ -267,13 +310,21 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 			size_t patchOffset = adj.funcBaseOffset + reloc.offset;
 			importRelocations.push_back({patchOffset, reloc.symbolName});
 		} else if (reloc.type == backend::Relocation::Type::GlobalRef) {
-			// RIP-relative reference to data section (e.g., float constants)
-			// Symbol name format: ".constN" where N is the offset in data section
+			// RIP-relative reference to data section (e.g., float constants or named globals)
 			size_t patchOffset = adj.funcBaseOffset + reloc.offset;
-			// Parse data offset from symbol name (e.g., ".const0" -> 0, ".const8" -> 8)
 			size_t dataOffset = 0;
+
+			// First check if it's a float constant (.constN format)
 			if (reloc.symbolName.substr(0, 6) == ".const") {
 				dataOffset = std::stoull(reloc.symbolName.substr(6));
+			} else {
+				// Look up named global in globalOffsets map
+				auto it = globalOffsets.find(reloc.symbolName);
+				if (it != globalOffsets.end()) {
+					dataOffset = it->second;
+				} else if (verboseLevel >= 1) {
+					std::cerr << "Warning: GlobalRef to unknown global '" << reloc.symbolName << "'" << std::endl;
+				}
 			}
 			dataRelocations.push_back({patchOffset, dataOffset});
 		}
@@ -310,6 +361,25 @@ void MIRCodeGenerator::writeWindowsExecutable(
 	pe.addImport("kernel32.dll", "HeapFree");
 	pe.addImport("kernel32.dll", "GetStdHandle");
 	pe.addImport("kernel32.dll", "WriteFile");
+	pe.addImport("kernel32.dll", "CloseHandle");
+
+	// Safe FFI IPC imports
+	pe.addImport("kernel32.dll", "CreateProcessA");
+	pe.addImport("kernel32.dll", "TerminateProcess");
+	pe.addImport("kernel32.dll", "GetExitCodeProcess");
+	pe.addImport("kernel32.dll", "WaitForSingleObject");
+	pe.addImport("kernel32.dll", "CreateFileMappingA");
+	pe.addImport("kernel32.dll", "OpenFileMappingA");
+	pe.addImport("kernel32.dll", "MapViewOfFile");
+	pe.addImport("kernel32.dll", "UnmapViewOfFile");
+	pe.addImport("kernel32.dll", "CreateSemaphoreA");
+	pe.addImport("kernel32.dll", "OpenSemaphoreA");
+	pe.addImport("kernel32.dll", "ReleaseSemaphore");
+	pe.addImport("kernel32.dll", "GetLastError");
+	pe.addImport("kernel32.dll", "GetCommandLineA");
+	pe.addImport("kernel32.dll", "GetEnvironmentVariableA");
+	pe.addImport("kernel32.dll", "SetEnvironmentVariableA");
+	pe.addImport("kernel32.dll", "GetCurrentProcessId");
 
 	// Map of symbol names to their DLL!function format
 	std::unordered_map<std::string, std::string> importMapping = {
@@ -319,6 +389,24 @@ void MIRCodeGenerator::writeWindowsExecutable(
 		{"HeapFree", "kernel32.dll!HeapFree"},
 		{"GetStdHandle", "kernel32.dll!GetStdHandle"},
 		{"WriteFile", "kernel32.dll!WriteFile"},
+		{"CloseHandle", "kernel32.dll!CloseHandle"},
+		// Safe FFI IPC
+		{"CreateProcessA", "kernel32.dll!CreateProcessA"},
+		{"TerminateProcess", "kernel32.dll!TerminateProcess"},
+		{"GetExitCodeProcess", "kernel32.dll!GetExitCodeProcess"},
+		{"WaitForSingleObject", "kernel32.dll!WaitForSingleObject"},
+		{"CreateFileMappingA", "kernel32.dll!CreateFileMappingA"},
+		{"OpenFileMappingA", "kernel32.dll!OpenFileMappingA"},
+		{"MapViewOfFile", "kernel32.dll!MapViewOfFile"},
+		{"UnmapViewOfFile", "kernel32.dll!UnmapViewOfFile"},
+		{"CreateSemaphoreA", "kernel32.dll!CreateSemaphoreA"},
+		{"OpenSemaphoreA", "kernel32.dll!OpenSemaphoreA"},
+		{"ReleaseSemaphore", "kernel32.dll!ReleaseSemaphore"},
+		{"GetLastError", "kernel32.dll!GetLastError"},
+		{"GetCommandLineA", "kernel32.dll!GetCommandLineA"},
+		{"GetEnvironmentVariableA", "kernel32.dll!GetEnvironmentVariableA"},
+		{"SetEnvironmentVariableA", "kernel32.dll!SetEnvironmentVariableA"},
+		{"GetCurrentProcessId", "kernel32.dll!GetCurrentProcessId"},
 	};
 
 	// Patch import call relocations in code buffer

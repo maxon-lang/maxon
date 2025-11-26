@@ -5,6 +5,7 @@
 #include "logger.h"
 #include "mir/mir.h"
 #include "mir/mir_builder.h"
+#include "safe_ffi.h"
 #include <map>
 #include <memory>
 #include <set>
@@ -36,6 +37,17 @@ class MIRCodeGenerator {
 	// Struct type definitions
 	std::map<std::string, mir::MIRType *> structTypes;
 	std::map<std::string, std::vector<std::pair<std::string, std::string>>> structFields;
+
+	// Safe FFI: Track extern functions for subprocess isolation
+	struct ExternFuncInfo {
+		uint32_t id;							  // Function ID in extern table
+		std::string name;						  // Function name
+		std::vector<safeffi::TypeTag> paramTypes; // Parameter types
+		safeffi::TypeTag returnType;			  // Return type
+	};
+	std::map<std::string, ExternFuncInfo> externFunctions;
+	uint32_t nextExternId = 0;
+	bool hasExternCalls = false; // Track if any extern calls exist
 
 	// Debug information
 	bool generateDebugInfo;
@@ -94,6 +106,20 @@ class MIRCodeGenerator {
 
 	// Math intrinsic generation
 	mir::MIRValue *generateMathIntrinsic(CallExprAST *callExpr);
+
+	// Safe FFI generation
+	void registerExternFunction(FunctionAST *func);
+	safeffi::TypeTag getTypeTagFromString(const std::string &typeStr);
+	mir::MIRValue *generateSafeFFICall(const std::string &funcName,
+									   const std::vector<mir::MIRValue *> &args,
+									   mir::MIRType *returnType);
+	void generateFFIGlobals();		// Generate FFI state globals
+	void generateFFIInitFunction(); // Generate __ffi_init function
+	void generateFFICallFunction(); // Generate __ffi_call wrapper
+	void generateFFICleanup();		// Generate cleanup at program exit
+	void generateFFIWorkerMain();	// Generate __ffi_worker_main function
+	void generateFFIDispatch();		// Generate __ffi_dispatch function
+	bool isFFIWorkerMode();			// Check if running as FFI worker
 
 	// Minimal CRT entry point
 	void createMinimalEntryPoint();
