@@ -104,6 +104,12 @@ declare i32 @WaitForSingleObject(ptr, i32)
 declare i32 @WaitForMultipleObjects(i32, ptr, i32, i32)
 declare i1 @CloseHandle(ptr)
 declare i32 @GetCurrentProcessId()
+declare i32 @ResumeThread(ptr)
+
+; Job Objects - auto-terminate worker when parent exits
+declare ptr @CreateJobObjectA(ptr, ptr)
+declare i32 @SetInformationJobObject(ptr, i32, ptr, i32)
+declare i32 @AssignProcessToJobObject(ptr, ptr)
 
 ; Shared memory
 declare ptr @CreateFileMappingA(ptr, ptr, i32, i32, i32, ptr)
@@ -235,16 +241,111 @@ return_error:
 }
 
 ;==============================================================================
-; ffi_spawn_worker - Spawn FFI worker subprocess
+; ffi_spawn_worker - Spawn FFI worker subprocess with Job Object protection
 ; ptr ffi_spawn_worker(ptr command_line)
 ; Returns process handle, or null on failure
 ; Note: Caller must provide STARTUPINFO and PROCESS_INFORMATION structures
+; The worker is assigned to a Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+; so it will be automatically terminated when the parent process exits.
 ;==============================================================================
+
+; Job Object info structure (144 bytes for JOBOBJECT_EXTENDED_LIMIT_INFORMATION on x64)
+; LimitFlags is at offset 16 (BasicLimitInformation.LimitFlags)
+@ffi_job_info = global [144 x i8] zeroinitializer
+
 define ptr @ffi_spawn_worker(ptr %cmdline, ptr %startup_info, ptr %process_info) {
 entry:
-    ; CREATE_NO_WINDOW = 0x08000000 (use 0 for debugging to see worker output)
-    %success = call i1 @CreateProcessA(ptr null, ptr %cmdline, ptr null, ptr null, i1 false, i32 0, ptr null, ptr null, ptr %startup_info, ptr %process_info)
-    br i1 %success, label %get_handle, label %failed
+    ; Create a Job Object so child dies with parent
+    %job = call ptr @CreateJobObjectA(ptr null, ptr null)
+    %has_job = icmp ne ptr %job, null
+    br i1 %has_job, label %job_created, label %spawn_no_job
+
+job_created:
+    ; Job created, store handle for cleanup
+    store ptr %job, ptr @ffi_parent_job_handle
+    
+    ; Configure job with JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    ; Structure is 144 bytes on x64
+    ; BasicLimitInformation (48 bytes) starts at offset 0
+    ; LimitFlags is at offset 16 within BasicLimitInformation
+    ; We need to set JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+    %job_info_ptr = getelementptr [144 x i8], ptr @ffi_job_info, i64 0, i64 0
+    
+    ; Zero the structure using explicit stores (avoiding memset call issue)
+    ; Zero all 18 i64 slots (18 * 8 = 144 bytes)
+    %q0 = getelementptr i64, ptr %job_info_ptr, i64 0
+    store i64 0, ptr %q0
+    %q1 = getelementptr i64, ptr %job_info_ptr, i64 1
+    store i64 0, ptr %q1
+    %q2 = getelementptr i64, ptr %job_info_ptr, i64 2
+    store i64 0, ptr %q2
+    %q3 = getelementptr i64, ptr %job_info_ptr, i64 3
+    store i64 0, ptr %q3
+    %q4 = getelementptr i64, ptr %job_info_ptr, i64 4
+    store i64 0, ptr %q4
+    %q5 = getelementptr i64, ptr %job_info_ptr, i64 5
+    store i64 0, ptr %q5
+    %q6 = getelementptr i64, ptr %job_info_ptr, i64 6
+    store i64 0, ptr %q6
+    %q7 = getelementptr i64, ptr %job_info_ptr, i64 7
+    store i64 0, ptr %q7
+    %q8 = getelementptr i64, ptr %job_info_ptr, i64 8
+    store i64 0, ptr %q8
+    %q9 = getelementptr i64, ptr %job_info_ptr, i64 9
+    store i64 0, ptr %q9
+    %q10 = getelementptr i64, ptr %job_info_ptr, i64 10
+    store i64 0, ptr %q10
+    %q11 = getelementptr i64, ptr %job_info_ptr, i64 11
+    store i64 0, ptr %q11
+    %q12 = getelementptr i64, ptr %job_info_ptr, i64 12
+    store i64 0, ptr %q12
+    %q13 = getelementptr i64, ptr %job_info_ptr, i64 13
+    store i64 0, ptr %q13
+    %q14 = getelementptr i64, ptr %job_info_ptr, i64 14
+    store i64 0, ptr %q14
+    %q15 = getelementptr i64, ptr %job_info_ptr, i64 15
+    store i64 0, ptr %q15
+    %q16 = getelementptr i64, ptr %job_info_ptr, i64 16
+    store i64 0, ptr %q16
+    %q17 = getelementptr i64, ptr %job_info_ptr, i64 17
+    store i64 0, ptr %q17
+    
+    ; Set LimitFlags at offset 16 to JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000)
+    %limit_flags_ptr = getelementptr i8, ptr %job_info_ptr, i64 16
+    store i32 8192, ptr %limit_flags_ptr
+    
+    ; Call SetInformationJobObject(job, JobObjectExtendedLimitInformation=9, &info, 144)
+    %set_result = call i32 @SetInformationJobObject(ptr %job, i32 9, ptr %job_info_ptr, i32 144)
+    %set_ok = icmp ne i32 %set_result, 0
+    br i1 %set_ok, label %spawn_with_job, label %spawn_no_job
+
+spawn_with_job:
+    ; Spawn the worker process SUSPENDED so we can assign to job before it runs
+    ; CREATE_SUSPENDED = 0x4
+    %success1 = call i1 @CreateProcessA(ptr null, ptr %cmdline, ptr null, ptr null, i1 false, i32 4, ptr null, ptr null, ptr %startup_info, ptr %process_info)
+    br i1 %success1, label %assign_to_job, label %failed
+
+assign_to_job:
+    ; Get the process handle from PROCESS_INFORMATION (offset 0)
+    %proc_handle_ptr = getelementptr i8, ptr %process_info, i64 0
+    %proc_handle = load ptr, ptr %proc_handle_ptr
+    
+    ; Assign the process to the job object
+    %assign_result = call i1 @AssignProcessToJobObject(ptr %job, ptr %proc_handle)
+    
+    ; Get the thread handle from PROCESS_INFORMATION (offset 8)
+    %thread_handle_ptr = getelementptr i8, ptr %process_info, i64 8
+    %thread_handle = load ptr, ptr %thread_handle_ptr
+    
+    ; Resume the thread to let the process run
+    %resume_result = call i32 @ResumeThread(ptr %thread_handle)
+    
+    ret ptr %proc_handle
+
+spawn_no_job:
+    ; Spawn the worker process normally (no job object protection)
+    %success2 = call i1 @CreateProcessA(ptr null, ptr %cmdline, ptr null, ptr null, i1 false, i32 0, ptr null, ptr null, ptr %startup_info, ptr %process_info)
+    br i1 %success2, label %get_handle, label %failed
 
 get_handle:
     ; Process handle is at offset 0 of PROCESS_INFORMATION
@@ -483,6 +584,7 @@ write_null:
 @ffi_parent_req_sem = global ptr null
 @ffi_parent_rsp_sem = global ptr null
 @ffi_parent_worker_handle = global ptr null
+@ffi_parent_job_handle = global ptr null
 @ffi_parent_shared_name = global [64 x i8] zeroinitializer
 @ffi_parent_req_name = global [64 x i8] zeroinitializer
 @ffi_parent_rsp_name = global [64 x i8] zeroinitializer
@@ -912,12 +1014,24 @@ do_cleanup:
     %req_sem = load ptr, ptr @ffi_parent_req_sem
     call i1 @ffi_signal_semaphore(ptr %req_sem)
     
-    ; Wait for worker to exit (5 second timeout = 5000ms)
+    ; Brief wait for graceful shutdown (100ms)
     %worker_handle = load ptr, ptr @ffi_parent_worker_handle
-    %wait_result = call i32 @WaitForSingleObject(ptr %worker_handle, i32 5000)
+    call i32 @WaitForSingleObject(ptr %worker_handle, i32 100)
     
     ; Close worker handle
     call i1 @ffi_close_handle(ptr %worker_handle)
+    
+    ; Close job handle - this will auto-terminate worker if still running
+    ; due to JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE flag
+    %job_handle = load ptr, ptr @ffi_parent_job_handle
+    %has_job = icmp ne ptr %job_handle, null
+    br i1 %has_job, label %close_job, label %close_semaphores
+
+close_job:
+    call i1 @ffi_close_handle(ptr %job_handle)
+    br label %close_semaphores
+
+close_semaphores:
     
     ; Close semaphores
     %rsp_sem = load ptr, ptr @ffi_parent_rsp_sem

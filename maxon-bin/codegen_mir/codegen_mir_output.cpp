@@ -453,6 +453,12 @@ static const std::pair<const char *, const char *> WINDOWS_IMPORTS[] = {
 	{"kernel32.dll", "WaitForSingleObject"},
 	{"kernel32.dll", "WaitForMultipleObjects"},
 	{"kernel32.dll", "GetCurrentProcessId"},
+	{"kernel32.dll", "ResumeThread"},
+
+	// Safe FFI - Job Objects (auto-terminate worker on parent exit)
+	{"kernel32.dll", "CreateJobObjectA"},
+	{"kernel32.dll", "SetInformationJobObject"},
+	{"kernel32.dll", "AssignProcessToJobObject"},
 
 	// Safe FFI - Shared memory
 	{"kernel32.dll", "CreateFileMappingA"},

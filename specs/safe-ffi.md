@@ -327,3 +327,15 @@ end 'main'
 ```stdout
 FFI Error: Worker process crashed
 ```
+
+<!-- test: ffi-worker-terminates-with-parent -->
+```maxon
+extern function GetCurrentProcessId() int "kernel32"
+
+function main() int
+    return GetCurrentProcessId() - GetCurrentProcessId()
+end 'main'
+```
+```exitcode
+0
+```
