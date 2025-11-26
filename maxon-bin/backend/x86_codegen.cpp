@@ -830,6 +830,29 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	}
 
 	regAlloc.frameSize = baseFrameSize;
+
+	// Adjust stack slot offsets to account for callee-saved register pushes
+	// Callee-saved registers are pushed BETWEEN setting RBP and allocating the frame,
+	// so they occupy [RBP-8], [RBP-16], etc.
+	// Our local stack slots (allocas, spilled values) need to be below these.
+	// Shift all negative offsets by -numCalleeSaved*8
+	if (numCalleeSaved > 0) {
+		int32_t adjustment = -static_cast<int32_t>(numCalleeSaved * 8);
+		for (auto &slot : regAlloc.stackSlots) {
+			if (slot.second < 0) {
+				slot.second += adjustment;
+			}
+		}
+		// Also adjust hiddenRetPtrOffset and shiftedParamSaves
+		if (regAlloc.hiddenRetPtrOffset < 0) {
+			regAlloc.hiddenRetPtrOffset += adjustment;
+		}
+		for (auto &save : regAlloc.shiftedParamSaves) {
+			if (save.second < 0) {
+				save.second += adjustment;
+			}
+		}
+	}
 }
 
 X86Reg X86CodeGen::getAllocatedReg(mir::MIRValue *value) {

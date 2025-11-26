@@ -586,6 +586,14 @@ TestResult runTest(const fs::path &testFile, const fs::path &testDir, bool verbo
 	fs::path artifactsDir = testDir / "artifacts";
 	fs::create_directories(artifactsDir);
 
+	// Copy any DLLs from test directory to artifacts (for FFI tests)
+	for (const auto &entry : fs::directory_iterator(testDir)) {
+		if (entry.is_regular_file() && entry.path().extension() == ".dll") {
+			fs::path destDll = artifactsDir / entry.path().filename();
+			fs::copy_file(entry.path(), destDll, fs::copy_options::skip_existing);
+		}
+	}
+
 	// Copy source to temp files (maxon has no -o option, output name is based on input name)
 	fs::path optSource = artifactsDir / (basename + ".opt.maxon");
 	fs::path debugSource = artifactsDir / (basename + ".debug.maxon");
