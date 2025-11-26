@@ -1005,10 +1005,25 @@ dispatch_call:
     ; This reads args from shared memory, calls the function, writes result back
     call void @__ffi_dispatch(ptr %shared_mem_dispatch, i32 %func_id)
     
+    ; Check status after dispatch - if non-zero, we need to exit after signaling
+    %status_ptr = getelementptr i8, ptr %shared_mem_dispatch, i64 12
+    %status = load i32, ptr %status_ptr
+    %status_ok = icmp eq i32 %status, 0
+    
     ; Reload response semaphore from global and signal response ready
     %rsp_sem_loop = load ptr, ptr @ffi_worker_rsp_sem
     %sig_result = call i1 @ffi_signal_semaphore(ptr %rsp_sem_loop)
-    br label %worker_loop
+    
+    ; If status was non-zero (error), exit with that status code
+    br i1 %status_ok, label %worker_loop, label %error_exit_with_status
+
+error_exit_with_status:
+    ; Reload status and exit with that code (100 for DLL/func error, 101 for unknown func)
+    %shared_mem_exit = load ptr, ptr @ffi_worker_shared_mem
+    %exit_status_ptr = getelementptr i8, ptr %shared_mem_exit, i64 12
+    %exit_status = load i32, ptr %exit_status_ptr
+    call void @ExitProcess(i32 %exit_status)
+    ret i32 %exit_status
 
 cleanup_and_exit:
     ; Clean up handles

@@ -62,6 +62,7 @@ void MIRCodeGenerator::registerExternFunction(FunctionAST *func) {
 	ExternFuncInfo info;
 	info.id = nextExternId++;
 	info.name = funcName;
+	info.exportName = func->name; // Raw name for DLL lookup
 	info.dllName = func->dllName;
 	info.returnType = getTypeTagFromString(func->returnType);
 
@@ -270,6 +271,57 @@ mir::MIRValue *MIRCodeGenerator::generateSafeFFICall(
 													  mir::MIRType::getInt32(), {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
 	builder->createCall(waitFunc, {rspSem, builder->getInt32(-1)});
 
+	// Check status field (offset 12): 0=success, 100=DLL load failed, 101=function not found
+	mir::MIRValue *statusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+												  {builder->getInt64(12)}, "status_ptr");
+	mir::MIRValue *status = builder->createLoad(mir::MIRType::getInt32(), statusPtr, "ffi_status");
+
+	// Create blocks for error handling
+	mir::MIRBasicBlock *callSuccess = currentFunc->createBasicBlock("ffi_call_ok");
+	mir::MIRBasicBlock *checkError = currentFunc->createBasicBlock("ffi_check_error");
+	mir::MIRBasicBlock *dllError = currentFunc->createBasicBlock("ffi_dll_error");
+	mir::MIRBasicBlock *funcError = currentFunc->createBasicBlock("ffi_func_error");
+
+	// Check for success (status == 0)
+	mir::MIRValue *statusOk = builder->createICmpEq(status, builder->getInt32(0), "status_ok");
+	builder->createCondBr(statusOk, callSuccess, checkError);
+
+	// Check which error - status 100 = DLL error, status 101 = function not found
+	builder->setInsertPoint(checkError);
+	mir::MIRValue *isDllError = builder->createICmpEq(status, builder->getInt32(100), "is_dll_error");
+	builder->createCondBr(isDllError, dllError, funcError);
+
+	// DLL load error - exit code 100
+	builder->setInsertPoint(dllError);
+	{
+		std::string errorMsg = "FFI Error: Failed to load DLL '" + info.dllName + ".dll'\n";
+		std::string errorGlobalName = "__ffi_dll_error_" + std::to_string(info.id);
+		builder->createStringConstant(errorGlobalName, errorMsg);
+		mir::MIRFunction *writeStdout = getOrDeclareFunction("write_stdout", mir::MIRType::getInt32(),
+															 {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+		mir::MIRValue *errorMsgPtr = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), errorGlobalName);
+		builder->createCall(writeStdout, {errorMsgPtr, builder->getInt32(static_cast<int32_t>(errorMsg.size()))});
+		builder->createCall(exitFunc, {builder->getInt32(100)});
+		builder->createRetVoid();
+	}
+
+	// Function not found error - exit code 101
+	builder->setInsertPoint(funcError);
+	{
+		std::string errorMsg = "FFI Error: Function '" + info.exportName + "' not found in '" + info.dllName + ".dll'\n";
+		std::string errorGlobalName = "__ffi_func_error_" + std::to_string(info.id);
+		builder->createStringConstant(errorGlobalName, errorMsg);
+		mir::MIRFunction *writeStdout = getOrDeclareFunction("write_stdout", mir::MIRType::getInt32(),
+															 {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+		mir::MIRValue *errorMsgPtr = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), errorGlobalName);
+		builder->createCall(writeStdout, {errorMsgPtr, builder->getInt32(static_cast<int32_t>(errorMsg.size()))});
+		builder->createCall(exitFunc, {builder->getInt32(101)});
+		builder->createRetVoid();
+	}
+
+	// Call succeeded - continue with result
+	builder->setInsertPoint(callSuccess);
+
 	// Read return value from shared memory (offset 144)
 	mir::MIRValue *resultPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
 												  {builder->getInt64(144)}, "result_ptr");
@@ -346,9 +398,9 @@ void MIRCodeGenerator::generateFFIDispatch() {
 			dllNameGlobals[info.dllName] = dllGlobal;
 		}
 
-		// Create function name constant
+		// Create function name constant (use exportName for DLL lookup)
 		std::string globalName = "__ffi_func_" + std::to_string(info.id);
-		mir::MIRGlobal *funcGlobal = builder->createStringConstant(globalName, info.name);
+		mir::MIRGlobal *funcGlobal = builder->createStringConstant(globalName, info.exportName);
 		funcNameGlobals[info.name] = funcGlobal;
 	}
 
@@ -422,7 +474,8 @@ void MIRCodeGenerator::generateFFIDispatch() {
 		mir::MIRBasicBlock *loadLibBlock = dispatchFunc->createBasicBlock("load_lib_" + std::to_string(info.id));
 		mir::MIRBasicBlock *getAddrBlock = dispatchFunc->createBasicBlock("get_addr_" + std::to_string(info.id));
 		mir::MIRBasicBlock *callBlock = dispatchFunc->createBasicBlock("do_call_" + std::to_string(info.id));
-		mir::MIRBasicBlock *errorBlock = dispatchFunc->createBasicBlock("error_" + std::to_string(info.id));
+		mir::MIRBasicBlock *dllErrorBlock = dispatchFunc->createBasicBlock("dll_error_" + std::to_string(info.id));
+		mir::MIRBasicBlock *funcErrorBlock = dispatchFunc->createBasicBlock("func_error_" + std::to_string(info.id));
 
 		builder->setInsertPoint(bbIt->second);
 		builder->createBr(loadLibBlock);
@@ -433,10 +486,10 @@ void MIRCodeGenerator::generateFFIDispatch() {
 		mir::MIRValue *dllNamePtr = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), dllGlobal->name);
 		mir::MIRValue *dllHandle = builder->createCall(loadLibraryFunc, {dllNamePtr}, "dll_handle");
 
-		// Check if LoadLibrary succeeded
+		// Check if LoadLibrary succeeded - if not, go to DLL error block
 		mir::MIRValue *nullPtr = builder->getNull();
 		mir::MIRValue *loadOk = builder->createICmpNe(dllHandle, nullPtr, "load_ok");
-		builder->createCondBr(loadOk, getAddrBlock, errorBlock);
+		builder->createCondBr(loadOk, getAddrBlock, dllErrorBlock);
 
 		// Get the function address
 		builder->setInsertPoint(getAddrBlock);
@@ -444,9 +497,9 @@ void MIRCodeGenerator::generateFFIDispatch() {
 		mir::MIRValue *funcNamePtr = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), funcGlobal->name);
 		mir::MIRValue *funcAddr = builder->createCall(getProcAddrFunc, {dllHandle, funcNamePtr}, "func_addr");
 
-		// Check if GetProcAddress succeeded
+		// Check if GetProcAddress succeeded - if not, go to function error block
 		mir::MIRValue *addrOk = builder->createICmpNe(funcAddr, nullPtr, "addr_ok");
-		builder->createCondBr(addrOk, callBlock, errorBlock);
+		builder->createCondBr(addrOk, callBlock, funcErrorBlock);
 
 		// Prepare arguments and call the function
 		builder->setInsertPoint(callBlock);
@@ -531,19 +584,26 @@ void MIRCodeGenerator::generateFFIDispatch() {
 
 		builder->createBr(done);
 
-		// Error block - set status to 1 (error)
-		builder->setInsertPoint(errorBlock);
-		mir::MIRValue *errorStatusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
-														   {builder->getInt64(12)}, "status_ptr");
-		builder->createStore(builder->getInt32(1), errorStatusPtr);
+		// DLL error block - set status to 100 (DLL load failed)
+		builder->setInsertPoint(dllErrorBlock);
+		mir::MIRValue *dllErrorStatusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+															  {builder->getInt64(12)}, "status_ptr");
+		builder->createStore(builder->getInt32(100), dllErrorStatusPtr);
+		builder->createBr(done);
+
+		// Function error block - set status to 101 (function not found)
+		builder->setInsertPoint(funcErrorBlock);
+		mir::MIRValue *funcErrorStatusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+															   {builder->getInt64(12)}, "status_ptr");
+		builder->createStore(builder->getInt32(101), funcErrorStatusPtr);
 		builder->createBr(done);
 	}
 
-	// Unknown function - set status to 2 (unknown_function)
+	// Unknown function ID - set status to 102
 	builder->setInsertPoint(unknownFunc);
 	mir::MIRValue *statusPtrUnknown = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
 														 {builder->getInt64(12)}, "status_ptr");
-	builder->createStore(builder->getInt32(2), statusPtrUnknown);
+	builder->createStore(builder->getInt32(102), statusPtrUnknown);
 	builder->createBr(done);
 
 	// Done - return void

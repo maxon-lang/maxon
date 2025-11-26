@@ -44,7 +44,7 @@ else
     RUNTIME_MIR = $(RUNTIME_MIR_LINUX)
 endif
 
-.PHONY: all clean clean-all compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test-build debugger-test
+.PHONY: all clean clean-all compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test-build debugger-test ffi-test-lib
 
 # Default target - build everything
 all: compiler lsp-server extension-install debugger-test-build
@@ -188,13 +188,25 @@ docs: compiler
 	@echo Documentation generated in maxon-docs/Output/
 	@echo Documentation generated in maxon-docs/Output/
 
+# Build FFI test library
+ffi-test-lib:
+	@echo Building FFI test library...
+ifeq ($(PLATFORM),windows)
+	@cd language-tests/ffi-test-lib && cmd.exe /c build.bat release
+else
+	@cd language-tests/ffi-test-lib && ./build.sh release
+endif
+	@mkdir -p temp
+	@cp language-tests/ffi-test-lib/ffi_test_lib.dll temp/ 2>/dev/null || cp language-tests/ffi-test-lib/libffi_test_lib.so temp/ 2>/dev/null || true
+	@echo FFI test library ready.
+
 # Validate that all fragments are defined in spec files
 validate-specs: compiler
 	@echo Validating spec coverage...
 	@bash scripts/validate-specs.sh
 
 # Regenerate fragments, validate specs, and run fragment tests
-fragments: compiler
+fragments: compiler ffi-test-lib
 	@echo
 	@$(MAXON) extract-specs
 	@echo
@@ -206,7 +218,7 @@ fragments: compiler
 	@$(MAXON) test-fragments
 
 # Run all test suites
-test: compiler lsp-server extension-build debugger-test
+test: compiler lsp-server extension-build debugger-test ffi-test-lib
 	@bash scripts/run-all-tests.sh
 
 # Build debugger integration tests

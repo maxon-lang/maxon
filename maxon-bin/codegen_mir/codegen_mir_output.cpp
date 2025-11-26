@@ -342,6 +342,53 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 #endif
 }
 
+//==============================================================================
+// Windows Import Table
+// Maps function names to their DLLs. This table is used to populate the PE
+// import directory. When adding a new external function to runtime_windows.mir,
+// add it here as well.
+//==============================================================================
+
+static const std::pair<const char *, const char *> WINDOWS_IMPORTS[] = {
+	// Core runtime functions
+	{"kernel32.dll", "ExitProcess"},
+	{"kernel32.dll", "GetProcessHeap"},
+	{"kernel32.dll", "HeapAlloc"},
+	{"kernel32.dll", "HeapFree"},
+	{"kernel32.dll", "GetStdHandle"},
+	{"kernel32.dll", "WriteFile"},
+	{"kernel32.dll", "CloseHandle"},
+
+	// Safe FFI - Process management
+	{"kernel32.dll", "CreateProcessA"},
+	{"kernel32.dll", "TerminateProcess"},
+	{"kernel32.dll", "GetExitCodeProcess"},
+	{"kernel32.dll", "WaitForSingleObject"},
+	{"kernel32.dll", "GetCurrentProcessId"},
+
+	// Safe FFI - Shared memory
+	{"kernel32.dll", "CreateFileMappingA"},
+	{"kernel32.dll", "OpenFileMappingA"},
+	{"kernel32.dll", "MapViewOfFile"},
+	{"kernel32.dll", "UnmapViewOfFile"},
+
+	// Safe FFI - Semaphores
+	{"kernel32.dll", "CreateSemaphoreA"},
+	{"kernel32.dll", "OpenSemaphoreA"},
+	{"kernel32.dll", "ReleaseSemaphore"},
+
+	// Safe FFI - Misc
+	{"kernel32.dll", "GetLastError"},
+	{"kernel32.dll", "GetCommandLineA"},
+	{"kernel32.dll", "GetEnvironmentVariableA"},
+	{"kernel32.dll", "SetEnvironmentVariableA"},
+
+	// Dynamic library loading
+	{"kernel32.dll", "LoadLibraryA"},
+	{"kernel32.dll", "GetProcAddress"},
+	{"kernel32.dll", "FreeLibrary"},
+};
+
 #ifdef _WIN32
 void MIRCodeGenerator::writeWindowsExecutable(
 	const std::string &exeFile,
@@ -353,111 +400,62 @@ void MIRCodeGenerator::writeWindowsExecutable(
 
 	backend::PeWriter pe;
 
-	// Map of symbol names to their DLL!function format
-	// This is populated automatically by addImportWithMapping below
+	// Build import mapping from the static table
 	std::unordered_map<std::string, std::string> importMapping;
-
-	// Helper to add import and mapping in one step - prevents forgetting either
-	auto addImportWithMapping = [&](const char *dll, const char *func) {
+	for (const auto &[dll, func] : WINDOWS_IMPORTS) {
 		pe.addImport(dll, func);
 		importMapping[func] = std::string(dll) + "!" + func;
-	};
+	}
 
-	// Add imports for Windows runtime functions FIRST (before sections)
-	// so we know the IAT layout
-	addImportWithMapping("kernel32.dll", "ExitProcess");
-	addImportWithMapping("kernel32.dll", "GetProcessHeap");
-	addImportWithMapping("kernel32.dll", "HeapAlloc");
-	addImportWithMapping("kernel32.dll", "HeapFree");
-	addImportWithMapping("kernel32.dll", "GetStdHandle");
-	addImportWithMapping("kernel32.dll", "WriteFile");
-	addImportWithMapping("kernel32.dll", "CloseHandle");
-
-	// Safe FFI IPC imports
-	addImportWithMapping("kernel32.dll", "CreateProcessA");
-	addImportWithMapping("kernel32.dll", "TerminateProcess");
-	addImportWithMapping("kernel32.dll", "GetExitCodeProcess");
-	addImportWithMapping("kernel32.dll", "WaitForSingleObject");
-	addImportWithMapping("kernel32.dll", "CreateFileMappingA");
-	addImportWithMapping("kernel32.dll", "OpenFileMappingA");
-	addImportWithMapping("kernel32.dll", "MapViewOfFile");
-	addImportWithMapping("kernel32.dll", "UnmapViewOfFile");
-	addImportWithMapping("kernel32.dll", "CreateSemaphoreA");
-	addImportWithMapping("kernel32.dll", "OpenSemaphoreA");
-	addImportWithMapping("kernel32.dll", "ReleaseSemaphore");
-	addImportWithMapping("kernel32.dll", "GetLastError");
-	addImportWithMapping("kernel32.dll", "GetCommandLineA");
-	addImportWithMapping("kernel32.dll", "GetEnvironmentVariableA");
-	addImportWithMapping("kernel32.dll", "SetEnvironmentVariableA");
-	addImportWithMapping("kernel32.dll", "GetCurrentProcessId");
-	addImportWithMapping("kernel32.dll", "LoadLibraryA");
-	addImportWithMapping("kernel32.dll", "GetProcAddress");
-
-	// Patch import call relocations in code buffer
-	// For each import call, we need to compute the RIP-relative offset to the IAT entry
-	// This will be patched after the PE layout is finalized
-	// For now, store the relocation info for the PE writer to handle
-
-	// Add code section (with potentially modified code)
+	// Add code and data sections
 	uint32_t textSection = pe.addTextSection(code);
-
-	// Add data section if non-empty
 	if (!data.empty()) {
 		pe.addDataSection(data);
 	}
 
-	// Find _start function and set as entry point
+	// Set entry point
 	auto startIt = funcOffsets.find("_start");
-	if (startIt != funcOffsets.end()) {
-		// Entry point is RVA = section base (0x1000) + offset within code
-		uint32_t entryRva = 0x1000 + static_cast<uint32_t>(startIt->second);
-		pe.setEntryPoint(entryRva);
-	} else {
+	if (startIt == funcOffsets.end()) {
 		throw std::runtime_error("Entry point _start not found");
 	}
+	pe.setEntryPoint(0x1000 + static_cast<uint32_t>(startIt->second));
 
-	// Register import relocations with PE writer
+	// Register import relocations
 	for (const auto &[offset, symbolName] : importRelocs) {
 		auto mappingIt = importMapping.find(symbolName);
-		if (mappingIt != importMapping.end()) {
-			// Parse DLL!func format
-			size_t bangPos = mappingIt->second.find('!');
-			std::string dllName = mappingIt->second.substr(0, bangPos);
-			std::string funcName = mappingIt->second.substr(bangPos + 1);
-
-			// Add import relocation - PE writer will patch this
-			pe.addImportRelocation(static_cast<uint32_t>(offset), dllName, funcName);
-		} else {
-			// This is a serious error - the function is being called but not in the import table
-			// This will cause the call to jump to address 0 and crash/hang
+		if (mappingIt == importMapping.end()) {
 			throw std::runtime_error(
 				"Internal compiler error: Import symbol '" + symbolName +
-				"' is called but not added to PE import table. "
-				"Add it to addImport() and importMapping in codegen_mir_output.cpp");
+				"' is called but not in WINDOWS_IMPORTS table. "
+				"Add it to codegen_mir_output.cpp");
 		}
+
+		size_t bangPos = mappingIt->second.find('!');
+		pe.addImportRelocation(
+			static_cast<uint32_t>(offset),
+			mappingIt->second.substr(0, bangPos),
+			mappingIt->second.substr(bangPos + 1));
 	}
 
-	// Register data section relocations with PE writer (for float constants, etc.)
+	// Register data relocations
 	for (const auto &[codeOffset, dataOffset] : dataRelocs) {
 		pe.addDataRelocation(static_cast<uint32_t>(codeOffset), static_cast<uint32_t>(dataOffset));
 	}
 
-	// Add symbols for debugging
+	// Add function symbols for debugging
 	for (const auto &[name, offset] : funcOffsets) {
-		// Estimate function size (until next function or end of section)
-		uint32_t size = 0;
+		// Calculate function size (distance to next function or end of code)
 		size_t nextOffset = code.size();
 		for (const auto &[otherName, otherOffset] : funcOffsets) {
 			if (otherOffset > offset && otherOffset < nextOffset) {
 				nextOffset = otherOffset;
 			}
 		}
-		size = static_cast<uint32_t>(nextOffset - offset);
-
-		pe.addSymbol(name, static_cast<uint32_t>(offset), size, true, textSection);
+		pe.addSymbol(name, static_cast<uint32_t>(offset),
+					 static_cast<uint32_t>(nextOffset - offset), true, textSection);
 	}
 
-	// Write the PE file
+	// Write PE file
 	if (!pe.write(exeFile)) {
 		throw std::runtime_error("Failed to write PE executable");
 	}

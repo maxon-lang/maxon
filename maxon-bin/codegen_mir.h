@@ -41,7 +41,8 @@ class MIRCodeGenerator {
 	// Safe FFI: Track extern functions for subprocess isolation
 	struct ExternFuncInfo {
 		uint32_t id;							  // Function ID in extern table
-		std::string name;						  // Function name
+		std::string name;						  // Function name (possibly with namespace prefix)
+		std::string exportName;					  // Raw function name for DLL lookup (no namespace)
 		std::string dllName;					  // DLL name (without .dll extension)
 		std::vector<safeffi::TypeTag> paramTypes; // Parameter types
 		safeffi::TypeTag returnType;			  // Return type

@@ -75,6 +75,11 @@ When the subprocess crashes:
 3. Main process prints error message and exits with code 1
 4. Future: `try_extern` syntax to handle crashes gracefully
 
+**FFI Error Codes:**
+- `100` - DLL failed to load (file not found, wrong architecture, etc.)
+- `101` - Function not found in DLL (typo in function name, wrong DLL, etc.)
+- `102` - Unknown function ID (internal error)
+
 **Performance Considerations:**
 - First extern call incurs subprocess spawn overhead (~10-50ms)
 - Subsequent calls: ~10-100μs overhead (shared memory + semaphores)
@@ -147,9 +152,22 @@ var x = crash_now()  ' Program exits with FFI error, not segfault
 
 ## Tests
 
+<!-- test: ffi-call-add-numbers -->
+```maxon
+extern function add_numbers(a int, b int) int "ffi_test_lib"
+
+function main() int
+    var result = add_numbers(5, 3)
+    return result
+end 'main'
+```
+```exitcode
+8
+```
+
 <!-- test: basic-extern-int -->
 ```maxon
-extern function TestExtern(x int) int
+extern function add_numbers(x int, y int) int "ffi_test_lib"
 
 function main() int
     return 0
@@ -161,7 +179,7 @@ end 'main'
 
 <!-- test: extern-no-params -->
 ```maxon
-extern function GetValue() int
+extern function get_constant() int "ffi_test_lib"
 
 function main() int
     return 0
@@ -173,7 +191,7 @@ end 'main'
 
 <!-- test: extern-float-return -->
 ```maxon
-extern function Compute(x float, y float) float
+extern function add_floats(x float, y float) float "ffi_test_lib"
 
 function main() int
     return 0
@@ -185,7 +203,7 @@ end 'main'
 
 <!-- test: extern-void-return -->
 ```maxon
-extern function DoSomething(x int)
+extern function do_nothing(x int) "ffi_test_lib"
 
 function main() int
     return 0
@@ -197,7 +215,7 @@ end 'main'
 
 <!-- test: extern-ptr-param -->
 ```maxon
-extern function ProcessPtr(p ptr) int
+extern function process_ptr(p ptr) int "ffi_test_lib"
 
 function main() int
     return 0
@@ -205,4 +223,36 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: ffi-error-missing-dll -->
+```maxon
+extern function some_function(x int) int "nonexistent_dll"
+
+function main() int
+    var result = some_function(42)
+    return result
+end 'main'
+```
+```exitcode
+100
+```
+```stdout
+FFI Error: Failed to load DLL 'nonexistent_dll.dll'
+```
+
+<!-- test: ffi-error-missing-function -->
+```maxon
+extern function nonexistent_function(a int, b int) int "ffi_test_lib"
+
+function main() int
+    var result = nonexistent_function(5, 3)
+    return result
+end 'main'
+```
+```exitcode
+101
+```
+```stdout
+FFI Error: Function 'nonexistent_function' not found in 'ffi_test_lib.dll'
 ```
