@@ -43,13 +43,18 @@ class MIRCodeGenerator {
 		uint32_t id;							  // Function ID in extern table
 		std::string name;						  // Function name (possibly with namespace prefix)
 		std::string exportName;					  // Raw function name for DLL lookup (no namespace)
-		std::string dllName;					  // DLL name (without .dll extension)
+		std::string dllName;					  // DLL/lib name (without extension)
 		std::vector<safeffi::TypeTag> paramTypes; // Parameter types
 		safeffi::TypeTag returnType;			  // Return type
+		bool isStaticLib;						  // true if linking against static library
+		std::string libPath;					  // Full path to static library (if isStaticLib)
 	};
 	std::map<std::string, ExternFuncInfo> externFunctions;
 	uint32_t nextExternId = 0;
-	bool hasExternCalls = false; // Track if any extern calls exist
+	bool hasExternCalls = false; // Track if any extern calls exist (DLLs only)
+
+	// Static library paths for linking
+	std::set<std::string> staticLibPaths;
 
 	// Debug information
 	bool generateDebugInfo;

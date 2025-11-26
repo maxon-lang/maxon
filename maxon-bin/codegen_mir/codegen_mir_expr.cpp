@@ -423,7 +423,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			argIdx++;
 		}
 
-		// Use Safe FFI for extern functions, direct call otherwise
+		// Use Safe FFI for all extern functions (both DLLs and static libs)
+		// Static libs are linked into the worker executable, DLLs are loaded dynamically
 		if (usesSafeFfi) {
 			return generateSafeFFICall(calleeF->name, argsV, calleeF->returnType);
 		}

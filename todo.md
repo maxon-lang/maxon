@@ -39,8 +39,6 @@ vscode extention
 	- enable "go to definition" for variables
 	- enable intellisense variable type
 
-pointers should only be used for FFI
-
 add tests for compiler will all kinds of malformed inputs
 
 

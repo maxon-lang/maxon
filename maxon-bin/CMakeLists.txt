@@ -61,6 +61,7 @@ set(SOURCES
     backend/pe_writer.cpp
     backend/elf_writer.cpp
     backend/dwarf.cpp
+    backend/coff_lib_reader.cpp
     # Semantic analysis
     semantic_analyzer.cpp
     semantic_analyzer/semantic_analyzer_expr.cpp

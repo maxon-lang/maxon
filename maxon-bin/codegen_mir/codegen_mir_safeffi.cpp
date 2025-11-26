@@ -43,9 +43,6 @@ void MIRCodeGenerator::registerExternFunction(FunctionAST *func) {
 							   ? func->name
 							   : func->namespaceName + "." + func->name;
 
-	// Any extern declaration means we may need worker mode checking
-	hasExternCalls = true;
-
 	// Skip if already registered
 	if (externFunctions.find(funcName) != externFunctions.end()) {
 		return;
@@ -62,9 +59,11 @@ void MIRCodeGenerator::registerExternFunction(FunctionAST *func) {
 	ExternFuncInfo info;
 	info.id = nextExternId++;
 	info.name = funcName;
-	info.exportName = func->name; // Raw name for DLL lookup
+	info.exportName = func->name; // Raw name for DLL/lib lookup
 	info.dllName = func->dllName;
 	info.returnType = getTypeTagFromString(func->returnType);
+	info.isStaticLib = func->isStaticLib;
+	info.libPath = func->libPath;
 
 	for (const auto &param : func->parameters) {
 		info.paramTypes.push_back(getTypeTagFromString(param.type));
@@ -72,7 +71,19 @@ void MIRCodeGenerator::registerExternFunction(FunctionAST *func) {
 
 	externFunctions[funcName] = info;
 
-	logTrace("Registered extern function: " + funcName + " (id=" + std::to_string(info.id) + ", dll=" + info.dllName + ")");
+	// Both DLL and static lib extern calls need worker mode (Safe FFI)
+	hasExternCalls = true;
+
+	// Track static library paths for linking into the worker executable
+	if (func->isStaticLib && !func->libPath.empty()) {
+		staticLibPaths.insert(func->libPath);
+	}
+
+	if (func->isStaticLib) {
+		logTrace("Registered static lib extern function: " + funcName + " (id=" + std::to_string(info.id) + ", lib=" + info.libPath + ")");
+	} else {
+		logTrace("Registered DLL extern function: " + funcName + " (id=" + std::to_string(info.id) + ", dll=" + info.dllName + ")");
+	}
 }
 
 //==============================================================================
@@ -383,12 +394,18 @@ void MIRCodeGenerator::generateFFIDispatch() {
 	logDetail("Generating __ffi_dispatch function with dynamic DLL loading");
 
 	// First, create string constants for DLL names and function names
-	// We'll need DLL name + ".dll" and the function name
+	// We'll need DLL name + ".dll" and the function name (only for DLL-based functions)
 	std::map<std::string, mir::MIRGlobal *> dllNameGlobals;	 // dllName -> global for "dllName.dll"
 	std::map<std::string, mir::MIRGlobal *> funcNameGlobals; // funcName -> global for function name
 
 	for (const auto &entry : externFunctions) {
 		const ExternFuncInfo &info = entry.second;
+
+		// Static lib functions don't need DLL name or function name constants
+		// They are called directly since they're linked into the worker executable
+		if (info.isStaticLib) {
+			continue;
+		}
 
 		// Create DLL name constant (dllName + ".dll")
 		if (dllNameGlobals.find(info.dllName) == dllNameGlobals.end()) {
@@ -404,11 +421,24 @@ void MIRCodeGenerator::generateFFIDispatch() {
 		funcNameGlobals[info.name] = funcGlobal;
 	}
 
-	// Declare LoadLibraryA and GetProcAddress
-	mir::MIRFunction *loadLibraryFunc = getOrDeclareFunction("LoadLibraryA", mir::MIRType::getPtr(),
-															 {mir::MIRType::getPtr()});
-	mir::MIRFunction *getProcAddrFunc = getOrDeclareFunction("GetProcAddress", mir::MIRType::getPtr(),
-															 {mir::MIRType::getPtr(), mir::MIRType::getPtr()}); // Shared memory layout:
+	// Check if we have any DLL functions that need dynamic loading
+	bool hasDllFunctions = false;
+	for (const auto &entry : externFunctions) {
+		if (!entry.second.isStaticLib) {
+			hasDllFunctions = true;
+			break;
+		}
+	}
+
+	// Declare LoadLibraryA and GetProcAddress (only if we have DLL functions)
+	mir::MIRFunction *loadLibraryFunc = nullptr;
+	mir::MIRFunction *getProcAddrFunc = nullptr;
+	if (hasDllFunctions) {
+		loadLibraryFunc = getOrDeclareFunction("LoadLibraryA", mir::MIRType::getPtr(),
+											   {mir::MIRType::getPtr()});
+		getProcAddrFunc = getOrDeclareFunction("GetProcAddress", mir::MIRType::getPtr(),
+											   {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+	} // Shared memory layout:
 	//   Offset 0:  i32 command (0=exit, 1=call)
 	//   Offset 4:  i32 function_id
 	//   Offset 8:  i32 arg_count
@@ -471,132 +501,199 @@ void MIRCodeGenerator::generateFFIDispatch() {
 		if (bbIt == funcBlocks.end())
 			continue;
 
-		mir::MIRBasicBlock *loadLibBlock = dispatchFunc->createBasicBlock("load_lib_" + std::to_string(info.id));
-		mir::MIRBasicBlock *getAddrBlock = dispatchFunc->createBasicBlock("get_addr_" + std::to_string(info.id));
 		mir::MIRBasicBlock *callBlock = dispatchFunc->createBasicBlock("do_call_" + std::to_string(info.id));
-		mir::MIRBasicBlock *dllErrorBlock = dispatchFunc->createBasicBlock("dll_error_" + std::to_string(info.id));
-		mir::MIRBasicBlock *funcErrorBlock = dispatchFunc->createBasicBlock("func_error_" + std::to_string(info.id));
 
-		builder->setInsertPoint(bbIt->second);
-		builder->createBr(loadLibBlock);
+		if (info.isStaticLib) {
+			// Static library function: call directly (linked into worker executable)
+			builder->setInsertPoint(bbIt->second);
+			builder->createBr(callBlock);
 
-		// Load the DLL
-		builder->setInsertPoint(loadLibBlock);
-		mir::MIRGlobal *dllGlobal = dllNameGlobals[info.dllName];
-		mir::MIRValue *dllNamePtr = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), dllGlobal->name);
-		mir::MIRValue *dllHandle = builder->createCall(loadLibraryFunc, {dllNamePtr}, "dll_handle");
+			builder->setInsertPoint(callBlock);
 
-		// Check if LoadLibrary succeeded - if not, go to DLL error block
-		mir::MIRValue *nullPtr = builder->getNull();
-		mir::MIRValue *loadOk = builder->createICmpNe(dllHandle, nullPtr, "load_ok");
-		builder->createCondBr(loadOk, getAddrBlock, dllErrorBlock);
+			// Load arguments from shared memory (offset 16 = args array)
+			mir::MIRValue *argsBase = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+														 {builder->getInt64(16)}, "args_base");
 
-		// Get the function address
-		builder->setInsertPoint(getAddrBlock);
-		mir::MIRGlobal *funcGlobal = funcNameGlobals[name];
-		mir::MIRValue *funcNamePtr = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), funcGlobal->name);
-		mir::MIRValue *funcAddr = builder->createCall(getProcAddrFunc, {dllHandle, funcNamePtr}, "func_addr");
+			std::vector<mir::MIRValue *> callArgs;
+			std::vector<mir::MIRType *> paramTypes;
+			for (size_t i = 0; i < info.paramTypes.size(); i++) {
+				mir::MIRValue *argOffset = builder->getInt64(static_cast<int64_t>(i * 8));
+				mir::MIRValue *argPtr = builder->createGEP(mir::MIRType::getInt8(), argsBase,
+														   {argOffset}, "arg_ptr_" + std::to_string(i));
+				mir::MIRValue *argVal = builder->createLoad(mir::MIRType::getInt64(), argPtr,
+															"arg_" + std::to_string(i));
 
-		// Check if GetProcAddress succeeded - if not, go to function error block
-		mir::MIRValue *addrOk = builder->createICmpNe(funcAddr, nullPtr, "addr_ok");
-		builder->createCondBr(addrOk, callBlock, funcErrorBlock);
+				safeffi::TypeTag paramType = info.paramTypes[i];
+				if (paramType == safeffi::TypeTag::Int32) {
+					argVal = builder->createTrunc(argVal, mir::MIRType::getInt32(), "arg_i32_" + std::to_string(i));
+					paramTypes.push_back(mir::MIRType::getInt32());
+				} else if (paramType == safeffi::TypeTag::Float64) {
+					argVal = builder->createBitcast(argVal, mir::MIRType::getFloat64(), "arg_f64_" + std::to_string(i));
+					paramTypes.push_back(mir::MIRType::getFloat64());
+				} else if (paramType == safeffi::TypeTag::Ptr) {
+					argVal = builder->createIntToPtr(argVal, mir::MIRType::getPtr(), "arg_ptr_" + std::to_string(i));
+					paramTypes.push_back(mir::MIRType::getPtr());
+				} else {
+					paramTypes.push_back(mir::MIRType::getInt64());
+				}
+				callArgs.push_back(argVal);
+			}
 
-		// Prepare arguments and call the function
-		builder->setInsertPoint(callBlock);
+			// Get the return type
+			mir::MIRType *returnType = mir::MIRType::getVoid();
+			if (info.returnType == safeffi::TypeTag::Int32) {
+				returnType = mir::MIRType::getInt32();
+			} else if (info.returnType == safeffi::TypeTag::Float64) {
+				returnType = mir::MIRType::getFloat64();
+			} else if (info.returnType == safeffi::TypeTag::Ptr) {
+				returnType = mir::MIRType::getPtr();
+			}
 
-		// Load arguments from shared memory (offset 16 = args array)
-		mir::MIRValue *argsBase = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
-													 {builder->getInt64(16)}, "args_base");
-
-		std::vector<mir::MIRValue *> callArgs;
-		std::vector<mir::MIRType *> paramTypes;
-		for (size_t i = 0; i < info.paramTypes.size(); i++) {
-			// Get pointer to arg[i] (each arg is 8 bytes)
-			mir::MIRValue *argOffset = builder->getInt64(static_cast<int64_t>(i * 8));
-			mir::MIRValue *argPtr = builder->createGEP(mir::MIRType::getInt8(), argsBase,
-													   {argOffset}, "arg_ptr_" + std::to_string(i));
-
-			// Load the argument value (as i64)
-			mir::MIRValue *argVal = builder->createLoad(mir::MIRType::getInt64(), argPtr,
-														"arg_" + std::to_string(i));
-
-			// Convert to the expected type if needed
-			safeffi::TypeTag paramType = info.paramTypes[i];
-			if (paramType == safeffi::TypeTag::Int32) {
-				argVal = builder->createTrunc(argVal, mir::MIRType::getInt32(), "arg_i32_" + std::to_string(i));
-				paramTypes.push_back(mir::MIRType::getInt32());
-			} else if (paramType == safeffi::TypeTag::Float64) {
-				argVal = builder->createBitcast(argVal, mir::MIRType::getFloat64(), "arg_f64_" + std::to_string(i));
-				paramTypes.push_back(mir::MIRType::getFloat64());
-			} else if (paramType == safeffi::TypeTag::Ptr) {
-				argVal = builder->createIntToPtr(argVal, mir::MIRType::getPtr(), "arg_ptr_" + std::to_string(i));
-				paramTypes.push_back(mir::MIRType::getPtr());
+			// Get or declare the static lib function and call it directly
+			mir::MIRFunction *staticFunc = getOrDeclareFunction(info.exportName, returnType, paramTypes);
+			mir::MIRValue *result = nullptr;
+			if (returnType->kind != mir::MIRTypeKind::Void) {
+				result = builder->createCall(staticFunc, callArgs, "call_result");
 			} else {
-				// Int64
-				paramTypes.push_back(mir::MIRType::getInt64());
+				builder->createCall(staticFunc, callArgs);
 			}
 
-			callArgs.push_back(argVal);
-		}
+			// Write result back to shared memory (offset 144)
+			if (result) {
+				mir::MIRValue *resultPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+															  {builder->getInt64(144)}, "result_ptr");
+				mir::MIRValue *resultI64 = result;
+				if (returnType->kind == mir::MIRTypeKind::Int32) {
+					resultI64 = builder->createZExt(result, mir::MIRType::getInt64(), "result_i64");
+				} else if (returnType->kind == mir::MIRTypeKind::Float64) {
+					resultI64 = builder->createBitcast(result, mir::MIRType::getInt64(), "result_i64");
+				} else if (returnType->kind == mir::MIRTypeKind::Ptr) {
+					resultI64 = builder->createPtrToInt(result, mir::MIRType::getInt64(), "result_i64");
+				}
+				builder->createStore(resultI64, resultPtr);
+			}
 
-		// Get the return type
-		mir::MIRType *returnType = mir::MIRType::getVoid();
-		if (info.returnType == safeffi::TypeTag::Int32) {
-			returnType = mir::MIRType::getInt32();
-		} else if (info.returnType == safeffi::TypeTag::Float64) {
-			returnType = mir::MIRType::getFloat64();
-		} else if (info.returnType == safeffi::TypeTag::Ptr) {
-			returnType = mir::MIRType::getPtr();
-		} else if (info.returnType == safeffi::TypeTag::Int32) {
-			returnType = mir::MIRType::getInt64();
-		}
-
-		// Call through the function pointer
-		mir::MIRValue *result = nullptr;
-		if (returnType->kind != mir::MIRTypeKind::Void) {
-			result = builder->createCallIndirect(funcAddr, returnType, paramTypes, callArgs, "call_result");
+			// Set status to 0 (success) - offset 12
+			mir::MIRValue *statusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+														  {builder->getInt64(12)}, "status_ptr");
+			builder->createStore(builder->getInt32(0), statusPtr);
+			builder->createBr(done);
 		} else {
-			builder->createCallIndirect(funcAddr, returnType, paramTypes, callArgs);
-		}
+			// DLL function: use LoadLibraryA and GetProcAddress for dynamic loading
+			mir::MIRBasicBlock *loadLibBlock = dispatchFunc->createBasicBlock("load_lib_" + std::to_string(info.id));
+			mir::MIRBasicBlock *getAddrBlock = dispatchFunc->createBasicBlock("get_addr_" + std::to_string(info.id));
+			mir::MIRBasicBlock *dllErrorBlock = dispatchFunc->createBasicBlock("dll_error_" + std::to_string(info.id));
+			mir::MIRBasicBlock *funcErrorBlock = dispatchFunc->createBasicBlock("func_error_" + std::to_string(info.id));
 
-		// Write result back to shared memory (offset 144)
-		if (result) {
-			mir::MIRValue *resultPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
-														  {builder->getInt64(144)}, "result_ptr");
+			builder->setInsertPoint(bbIt->second);
+			builder->createBr(loadLibBlock);
 
-			// Convert result to i64 for storage
-			mir::MIRValue *resultI64 = result;
-			if (returnType->kind == mir::MIRTypeKind::Int32) {
-				resultI64 = builder->createZExt(result, mir::MIRType::getInt64(), "result_i64");
-			} else if (returnType->kind == mir::MIRTypeKind::Float64) {
-				resultI64 = builder->createBitcast(result, mir::MIRType::getInt64(), "result_i64");
-			} else if (returnType->kind == mir::MIRTypeKind::Ptr) {
-				resultI64 = builder->createPtrToInt(result, mir::MIRType::getInt64(), "result_i64");
+			// Load the DLL
+			builder->setInsertPoint(loadLibBlock);
+			mir::MIRGlobal *dllGlobal = dllNameGlobals[info.dllName];
+			mir::MIRValue *dllNamePtr = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), dllGlobal->name);
+			mir::MIRValue *dllHandle = builder->createCall(loadLibraryFunc, {dllNamePtr}, "dll_handle");
+
+			// Check if LoadLibrary succeeded
+			mir::MIRValue *nullPtr = builder->getNull();
+			mir::MIRValue *loadOk = builder->createICmpNe(dllHandle, nullPtr, "load_ok");
+			builder->createCondBr(loadOk, getAddrBlock, dllErrorBlock);
+
+			// Get the function address
+			builder->setInsertPoint(getAddrBlock);
+			mir::MIRGlobal *funcGlobal = funcNameGlobals[name];
+			mir::MIRValue *funcNamePtr = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), funcGlobal->name);
+			mir::MIRValue *funcAddr = builder->createCall(getProcAddrFunc, {dllHandle, funcNamePtr}, "func_addr");
+
+			// Check if GetProcAddress succeeded
+			mir::MIRValue *addrOk = builder->createICmpNe(funcAddr, nullPtr, "addr_ok");
+			builder->createCondBr(addrOk, callBlock, funcErrorBlock);
+
+			// Prepare arguments and call the function
+			builder->setInsertPoint(callBlock);
+
+			// Load arguments from shared memory (offset 16 = args array)
+			mir::MIRValue *argsBase = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+														 {builder->getInt64(16)}, "args_base");
+
+			std::vector<mir::MIRValue *> callArgs;
+			std::vector<mir::MIRType *> paramTypes;
+			for (size_t i = 0; i < info.paramTypes.size(); i++) {
+				mir::MIRValue *argOffset = builder->getInt64(static_cast<int64_t>(i * 8));
+				mir::MIRValue *argPtr = builder->createGEP(mir::MIRType::getInt8(), argsBase,
+														   {argOffset}, "arg_ptr_" + std::to_string(i));
+				mir::MIRValue *argVal = builder->createLoad(mir::MIRType::getInt64(), argPtr,
+															"arg_" + std::to_string(i));
+
+				safeffi::TypeTag paramType = info.paramTypes[i];
+				if (paramType == safeffi::TypeTag::Int32) {
+					argVal = builder->createTrunc(argVal, mir::MIRType::getInt32(), "arg_i32_" + std::to_string(i));
+					paramTypes.push_back(mir::MIRType::getInt32());
+				} else if (paramType == safeffi::TypeTag::Float64) {
+					argVal = builder->createBitcast(argVal, mir::MIRType::getFloat64(), "arg_f64_" + std::to_string(i));
+					paramTypes.push_back(mir::MIRType::getFloat64());
+				} else if (paramType == safeffi::TypeTag::Ptr) {
+					argVal = builder->createIntToPtr(argVal, mir::MIRType::getPtr(), "arg_ptr_" + std::to_string(i));
+					paramTypes.push_back(mir::MIRType::getPtr());
+				} else {
+					paramTypes.push_back(mir::MIRType::getInt64());
+				}
+				callArgs.push_back(argVal);
 			}
 
-			builder->createStore(resultI64, resultPtr);
+			// Get the return type
+			mir::MIRType *returnType = mir::MIRType::getVoid();
+			if (info.returnType == safeffi::TypeTag::Int32) {
+				returnType = mir::MIRType::getInt32();
+			} else if (info.returnType == safeffi::TypeTag::Float64) {
+				returnType = mir::MIRType::getFloat64();
+			} else if (info.returnType == safeffi::TypeTag::Ptr) {
+				returnType = mir::MIRType::getPtr();
+			}
+
+			// Call through the function pointer
+			mir::MIRValue *result = nullptr;
+			if (returnType->kind != mir::MIRTypeKind::Void) {
+				result = builder->createCallIndirect(funcAddr, returnType, paramTypes, callArgs, "call_result");
+			} else {
+				builder->createCallIndirect(funcAddr, returnType, paramTypes, callArgs);
+			}
+
+			// Write result back to shared memory (offset 144)
+			if (result) {
+				mir::MIRValue *resultPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+															  {builder->getInt64(144)}, "result_ptr");
+				mir::MIRValue *resultI64 = result;
+				if (returnType->kind == mir::MIRTypeKind::Int32) {
+					resultI64 = builder->createZExt(result, mir::MIRType::getInt64(), "result_i64");
+				} else if (returnType->kind == mir::MIRTypeKind::Float64) {
+					resultI64 = builder->createBitcast(result, mir::MIRType::getInt64(), "result_i64");
+				} else if (returnType->kind == mir::MIRTypeKind::Ptr) {
+					resultI64 = builder->createPtrToInt(result, mir::MIRType::getInt64(), "result_i64");
+				}
+				builder->createStore(resultI64, resultPtr);
+			}
+
+			// Set status to 0 (success) - offset 12
+			mir::MIRValue *statusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+														  {builder->getInt64(12)}, "status_ptr");
+			builder->createStore(builder->getInt32(0), statusPtr);
+			builder->createBr(done);
+
+			// DLL error block - set status to 100 (DLL load failed)
+			builder->setInsertPoint(dllErrorBlock);
+			mir::MIRValue *dllErrorStatusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+																  {builder->getInt64(12)}, "status_ptr");
+			builder->createStore(builder->getInt32(100), dllErrorStatusPtr);
+			builder->createBr(done);
+
+			// Function error block - set status to 101 (function not found)
+			builder->setInsertPoint(funcErrorBlock);
+			mir::MIRValue *funcErrorStatusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
+																   {builder->getInt64(12)}, "status_ptr");
+			builder->createStore(builder->getInt32(101), funcErrorStatusPtr);
+			builder->createBr(done);
 		}
-
-		// Set status to 0 (success) - offset 12
-		mir::MIRValue *statusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
-													  {builder->getInt64(12)}, "status_ptr");
-		builder->createStore(builder->getInt32(0), statusPtr);
-
-		builder->createBr(done);
-
-		// DLL error block - set status to 100 (DLL load failed)
-		builder->setInsertPoint(dllErrorBlock);
-		mir::MIRValue *dllErrorStatusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
-															  {builder->getInt64(12)}, "status_ptr");
-		builder->createStore(builder->getInt32(100), dllErrorStatusPtr);
-		builder->createBr(done);
-
-		// Function error block - set status to 101 (function not found)
-		builder->setInsertPoint(funcErrorBlock);
-		mir::MIRValue *funcErrorStatusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,
-															   {builder->getInt64(12)}, "status_ptr");
-		builder->createStore(builder->getInt32(101), funcErrorStatusPtr);
-		builder->createBr(done);
 	}
 
 	// Unknown function ID - set status to 102

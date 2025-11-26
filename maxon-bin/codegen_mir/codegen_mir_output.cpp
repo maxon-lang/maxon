@@ -16,6 +16,7 @@
 #include <iostream>
 
 #ifdef _WIN32
+#include "../backend/coff_lib_reader.h"
 #include "../backend/pe_writer.h"
 #else
 #include "../backend/elf_writer.h"
@@ -275,6 +276,92 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 			allRelocations.push_back({reloc, funcOffset, func.name});
 		}
 	}
+
+#ifdef _WIN32
+	// Link static libraries - extract and append code for each static lib function
+	if (!staticLibPaths.empty()) {
+		if (verboseLevel >= 1) {
+			std::cout << "  Linking " << staticLibPaths.size() << " static library(ies)..." << std::endl;
+		}
+
+		// Collect functions needed from static libraries
+		std::set<std::string> neededFunctions;
+		for (const auto &[funcName, info] : externFunctions) {
+			if (info.isStaticLib) {
+				neededFunctions.insert(info.exportName);
+			}
+		}
+
+		// Process each static library
+		for (const std::string &libPath : staticLibPaths) {
+			if (verboseLevel >= 2) {
+				std::cout << "    Loading: " << libPath << std::endl;
+			}
+
+			backend::CoffLibReader libReader;
+			if (!libReader.load(libPath)) {
+				throw std::runtime_error("Failed to load static library: " + libPath + " (" + libReader.getError() + ")");
+			}
+
+			// Extract each needed function from this library
+			for (const std::string &funcName : neededFunctions) {
+				if (libReader.hasSymbol(funcName)) {
+					if (verboseLevel >= 2) {
+						std::cout << "      Extracting: " << funcName << std::endl;
+					}
+
+					backend::LibFunction libFunc = libReader.extractFunction(funcName);
+					if (!libFunc.found) {
+						throw std::runtime_error("Failed to extract function '" + funcName + "' from " + libPath + ": " + libReader.getError());
+					}
+
+					// Add function code to our code buffer
+					size_t funcOffset = codeBuffer.size();
+					functionOffsets[funcName] = funcOffset;
+					codeBuffer.insert(codeBuffer.end(), libFunc.code.begin(), libFunc.code.end());
+
+					if (verboseLevel >= 2) {
+						std::cout << "        Added at offset " << funcOffset << " (" << libFunc.code.size() << " bytes, " << libFunc.relocations.size() << " relocs)" << std::endl;
+					}
+
+					// Process relocations from the static lib function
+					for (const auto &reloc : libFunc.relocations) {
+						backend::Relocation r;
+						r.offset = reloc.offset;
+						r.symbolName = reloc.symbolName;
+
+						// Convert COFF relocation type to our internal type
+						if (reloc.type == backend::IMAGE_REL_AMD64_REL32 ||
+							reloc.type == backend::IMAGE_REL_AMD64_REL32_1 ||
+							reloc.type == backend::IMAGE_REL_AMD64_REL32_2 ||
+							reloc.type == backend::IMAGE_REL_AMD64_REL32_3 ||
+							reloc.type == backend::IMAGE_REL_AMD64_REL32_4 ||
+							reloc.type == backend::IMAGE_REL_AMD64_REL32_5) {
+							// Check if it's a call to an import or internal function
+							if (functionOffsets.find(reloc.symbolName) != functionOffsets.end()) {
+								r.type = backend::Relocation::Type::FunctionCall;
+							} else {
+								// Assume it's an import - the symbol will be resolved from Windows imports
+								r.type = backend::Relocation::Type::ImportCall;
+							}
+						} else if (reloc.type == backend::IMAGE_REL_AMD64_ADDR32NB) {
+							r.type = backend::Relocation::Type::GlobalRef;
+						} else if (reloc.type == backend::IMAGE_REL_AMD64_ADDR64) {
+							r.type = backend::Relocation::Type::GlobalRef;
+						} else {
+							if (verboseLevel >= 1) {
+								std::cerr << "Warning: Unknown COFF relocation type " << reloc.type << " for " << reloc.symbolName << std::endl;
+							}
+							continue;
+						}
+
+						allRelocations.push_back({r, funcOffset, funcName});
+					}
+				}
+			}
+		}
+	}
+#endif
 
 	// Apply relocations for internal function calls and collect import/data relocations
 	std::vector<std::pair<size_t, std::string>> importRelocations; // offset, symbolName

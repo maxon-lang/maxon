@@ -84,7 +84,33 @@ When the subprocess crashes:
 - First extern call incurs subprocess spawn overhead (~10-50ms)
 - Subsequent calls: ~10-100μs overhead (shared memory + semaphores)
 - Batching multiple calls not yet supported
-- Future: `@trusted extern` annotation for zero-overhead direct calls
+- Static library functions have same IPC overhead as DLL functions, but the worker process has the code already linked in (no LoadLibrary/GetProcAddress at runtime)
+
+### Static Library Linking
+
+When the compiler finds a `.lib` file matching the library name specified in an `extern` declaration, it uses static linking to embed the library code into the FFI worker executable.
+
+**How It Works:**
+1. At compile time, parser searches for `<libname>.lib` in:
+   - Current directory
+   - Executable directory
+   - `lib/` subdirectory relative to executable
+   - Parent directory's `lib/` folder
+2. If `.lib` found: Function code is linked into the worker executable
+3. If `.lib` not found: DLL is loaded dynamically at runtime by the worker
+
+**Important:** Both static library and DLL functions use Safe FFI subprocess isolation. The only difference is:
+- **Static lib:** Function code is compiled into the worker executable, called directly
+- **DLL:** Function is loaded at runtime via LoadLibraryA/GetProcAddress
+
+**Static Library Advantages:**
+- Function code embedded in worker executable
+- No runtime DLL lookup needed (faster first call)
+- All code self-contained (no external DLL dependencies)
+
+**Static Library Trade-offs:**
+- Must recompile to update library code
+- Larger worker executable size
 
 ### Files Modified
 
@@ -92,6 +118,8 @@ When the subprocess crashes:
 - `maxon-runtime/runtime_linux.mir` - Add Linux IPC syscalls
 - `maxon-bin/codegen_mir.cpp` - Generate FFI wrapper code
 - `maxon-bin/codegen_mir_output.cpp` - Add PE/ELF imports
+- `maxon-bin/parser/parser_decl.cpp` - Detect static libraries at parse time
+- `maxon-bin/backend/coff_lib_reader.cpp` - Parse Windows static library files
 
 ## Documentation
 
@@ -101,7 +129,7 @@ Maxon's Safe FFI automatically isolates external code in a subprocess, protectin
 
 ## How It Works
 
-When you call an `extern` function, Maxon:
+When you call an `extern` function linked to a DLL, Maxon:
 1. Serializes arguments to shared memory
 2. Signals a worker subprocess to execute the call
 3. Waits for the result
@@ -109,12 +137,23 @@ When you call an `extern` function, Maxon:
 
 If the external code crashes, your program detects the failure and reports an error instead of crashing itself.
 
+## Static Libraries vs DLLs
+
+The compiler automatically detects whether to use static or dynamic linking:
+
+- **Static library (.lib found):** Code is linked directly into your executable. No crash isolation, but zero runtime overhead.
+- **DLL (no .lib found):** Code runs in a subprocess with crash isolation. Small overhead per call.
+
+The compiler searches for `<libname>.lib` in the current directory and standard locations. If found, static linking is used automatically.
+
 ## Declaring Extern Functions
 
 ```text
-extern function add_numbers(a int, b int) int
-extern function multiply_floats(x float, y float) float
+extern function add_numbers(a int, b int) int "mylib"
+extern function multiply_floats(x float, y float) float "mathlib"
 ```
+
+The library name is specified as a string after the return type. If `mylib.lib` exists, static linking is used. Otherwise, `mylib.dll` is loaded at runtime.
 
 ## Calling Extern Functions
 
@@ -127,7 +166,7 @@ var product = multiply_floats(3.14, 2.0)
 
 ## Crash Isolation
 
-If external code crashes, Maxon reports an error:
+If external code in a DLL crashes, Maxon reports an error:
 
 ```text
 ' If crash_now() dereferences null:

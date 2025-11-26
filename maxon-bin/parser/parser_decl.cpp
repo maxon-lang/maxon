@@ -1,5 +1,42 @@
+#include "../file_utils.h"
 #include "../parser.h"
+#include <filesystem>
 #include <stdexcept>
+
+// Search for a static library file (.lib) in common locations
+static bool findStaticLibrary(const std::string &libName, std::string &outPath) {
+	std::string libFileName = libName + ".lib";
+
+	// 1. Check current directory
+	if (std::filesystem::exists(libFileName)) {
+		outPath = libFileName;
+		return true;
+	}
+
+	// 2. Check relative to executable directory
+	std::string exeDir = getExecutableDirectory();
+	std::string path = exeDir + "/" + libFileName;
+	if (std::filesystem::exists(path)) {
+		outPath = path;
+		return true;
+	}
+
+	// 3. Check in lib subdirectory relative to executable
+	path = exeDir + "/lib/" + libFileName;
+	if (std::filesystem::exists(path)) {
+		outPath = path;
+		return true;
+	}
+
+	// 4. Check parent directory's lib folder (for development)
+	path = exeDir + "/../lib/" + libFileName;
+	if (std::filesystem::exists(path)) {
+		outPath = path;
+		return true;
+	}
+
+	return false;
+}
 
 std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	// Check for export keyword
@@ -92,17 +129,26 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 	// External functions don't have bodies
 	if (isExtern) {
-		// Parse required DLL name for extern functions
+		// Parse required library name for extern functions
 		if (!check(TokenType::STRING)) {
-			throw std::runtime_error("Expected DLL name as string after return type for extern function\n  Example: extern function foo(x int) int \"mydll\"\n  Location: line " +
+			throw std::runtime_error("Expected library name as string after return type for extern function\n  Example: extern function foo(x int) int \"mydll\"\n  Location: line " +
 									 std::to_string(currentToken().line) + ", column " +
 									 std::to_string(currentToken().column));
 		}
-		std::string dllName = currentToken().value;
+		std::string libName = currentToken().value;
 		advance();
 
-		logTrace("Extern function '" + name.value + "' -> " + returnType + " from DLL '" + dllName + "' (" + std::to_string(parameters.size()) + " params)");
-		return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported, dllName);
+		// Check if a static library (.lib) file exists - if so, use static linking
+		// Otherwise, assume it's a DLL and use dynamic linking (Safe FFI)
+		std::string libPath;
+		bool isStaticLib = findStaticLibrary(libName, libPath);
+
+		if (isStaticLib) {
+			logTrace("Extern function '" + name.value + "' -> " + returnType + " from static lib '" + libPath + "' (" + std::to_string(parameters.size()) + " params)");
+		} else {
+			logTrace("Extern function '" + name.value + "' -> " + returnType + " from DLL '" + libName + "' (" + std::to_string(parameters.size()) + " params)");
+		}
+		return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported, libName, isStaticLib, libPath);
 	}
 
 	// Parse function body
