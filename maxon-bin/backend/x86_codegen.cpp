@@ -1077,10 +1077,21 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 		encoder.movMR8(mem, valReg);
 	} else if (value->type->kind == mir::MIRTypeKind::Int32) {
 		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
-		X86Reg valReg = loadValue(value, X86Reg::R10);
-		X86Reg ptrReg = loadValue(ptr, X86Reg::R11);
-		X86Mem mem(ptrReg);
-		encoder.movMR32(mem, valReg);
+		// Check if value is already in R11 - if so, we need to save it before loading ptr into R11
+		X86Reg valueAllocReg = getAllocatedReg(value);
+		if (valueAllocReg == X86Reg::R11) {
+			// Value is in R11, load it to R10 first, then load pointer to R11
+			X86Reg valReg = loadValue(value, X86Reg::R10);
+			X86Reg ptrReg = loadValue(ptr, X86Reg::R11);
+			X86Mem mem(ptrReg);
+			encoder.movMR32(mem, valReg);
+		} else {
+			// Normal case: load pointer first, then value
+			X86Reg ptrReg = loadValue(ptr, X86Reg::R11);
+			X86Reg valReg = loadValue(value, X86Reg::R10);
+			X86Mem mem(ptrReg);
+			encoder.movMR32(mem, valReg);
+		}
 	} else {
 		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
 		X86Reg valReg = loadValue(value, X86Reg::R10);

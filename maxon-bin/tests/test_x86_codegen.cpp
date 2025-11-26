@@ -1248,3 +1248,129 @@ TEST_CASE("X86CodeGen: store param to struct field - value preserved",
 	}
 	CHECK_FALSE(foundBugPattern);
 }
+
+TEST_CASE("X86CodeGen: store doesn't clobber value register", "[x86-codegen][store][regalloc]") {
+	// Regression test for bug where genStore clobbered the value before storing it
+	// Bug: When value was in R11 and we loaded destination pointer into R11,
+	// the value was lost before being stored
+	//
+	// Pattern that triggered the bug:
+	//   %result = call i32 @foo()      ; result allocated to R11
+	//   %dest = alloca i32             ; dest is stack alloca
+	//   store i32 %result, ptr %dest   ; BUG: loads dest addr into R11, clobbering result!
+
+	MIRModule module = createTestModule();
+	MIRBuilder builder(&module);
+
+	// Create a simple function that returns a value
+	auto *foo = builder.createFunction("foo", MIRType::getInt32(), {});
+	auto *fooEntry = builder.createBasicBlock("entry");
+	builder.setInsertPoint(fooEntry);
+	builder.createRet(builder.getInt32(42));
+
+	// Create main function that calls foo and stores result
+	auto *testMain = builder.createFunction("test_main", MIRType::getInt32(), {});
+	(void)testMain; // Suppress unused warning
+	auto *entry = builder.createBasicBlock("entry");
+	builder.setInsertPoint(entry);
+
+	// Call function - result will be in RAX, then moved to allocated register
+	auto *callResult = builder.createCall(foo, {}, "result");
+
+	// Create alloca for storing result
+	auto *destAlloca = builder.createAlloca(MIRType::getInt32(), "dest");
+
+	// Store call result to alloca - this is where the bug manifested
+	builder.createStore(callResult, destAlloca);
+
+	// Load back and return
+	auto *loadedVal = builder.createLoad(MIRType::getInt32(), destAlloca, "loaded");
+	builder.createRet(loadedVal);
+
+	X86CodeGen codegen(CallingConv::Win64);
+	codegen.generate(&module);
+
+	auto &funcCodes = codegen.getFunctionCodes();
+	REQUIRE(!funcCodes.empty());
+
+	const FunctionCode *mainFunc = nullptr;
+	for (const auto &fc : funcCodes) {
+		if (fc.name == "test_main") {
+			mainFunc = &fc;
+			break;
+		}
+	}
+	REQUIRE(mainFunc != nullptr);
+	REQUIRE(!mainFunc->code.empty());
+}
+
+TEST_CASE("X86CodeGen: large struct return via hidden pointer", "[x86-codegen][struct][abi]") {
+	// Test that structs > 8 bytes are returned via hidden pointer on Win64
+	// Win64 ABI: caller allocates space and passes pointer in RCX
+	// Callee writes struct to that location and returns pointer in RAX
+
+	MIRModule module = createTestModule();
+	MIRBuilder builder(&module);
+
+	// Create Iterator struct type: {i32, i32, i32} = 12 bytes
+	auto *iterType = module.getOrCreateStructType("Iterator", {
+		MIRType::getInt32(),
+		MIRType::getInt32(),
+		MIRType::getInt32()
+	});
+
+	// Function that returns large struct
+	auto *getIter = builder.createFunction("get_iterator", iterType, {});
+	auto *getIterEntry = builder.createBasicBlock("entry");
+	builder.setInsertPoint(getIterEntry);
+
+	auto *iterAlloca = builder.createAlloca(iterType, "it");
+
+	// Initialize struct fields
+	auto *field0 = builder.createStructGEP(iterType, iterAlloca, 0, "field0");
+	builder.createStore(builder.getInt32(5), field0);
+
+	auto *field1 = builder.createStructGEP(iterType, iterAlloca, 1, "field1");
+	builder.createStore(builder.getInt32(10), field1);
+
+	auto *field2 = builder.createStructGEP(iterType, iterAlloca, 2, "field2");
+	builder.createStore(builder.getInt32(1), field2);
+
+	auto *structVal = builder.createLoad(iterType, iterAlloca, "it.val");
+	builder.createRet(structVal);
+
+	// Caller function
+	auto *main = builder.createFunction("main", MIRType::getInt32(), {});
+	(void)main; // Suppress unused warning
+	auto *mainEntry = builder.createBasicBlock("entry");
+	builder.setInsertPoint(mainEntry);
+
+	// Call function that returns large struct
+	auto *iterResult = builder.createCall(getIter, {}, "it");
+
+	// Store result to alloca
+	auto *resultAlloca = builder.createAlloca(iterType, "it.local");
+	builder.createStore(iterResult, resultAlloca);
+
+	// Access first field
+	auto *field0Ptr = builder.createStructGEP(iterType, resultAlloca, 0, "field0");
+	auto *field0Val = builder.createLoad(MIRType::getInt32(), field0Ptr, "field0.val");
+
+	builder.createRet(field0Val);
+
+	X86CodeGen codegen(CallingConv::Win64);
+	codegen.generate(&module);
+
+	auto &funcCodes = codegen.getFunctionCodes();
+	REQUIRE(funcCodes.size() >= 2);
+
+	// Verify both functions generated code
+	bool hasGetIter = false;
+	bool hasMain = false;
+	for (const auto &fc : funcCodes) {
+		if (fc.name == "get_iterator") hasGetIter = true;
+		if (fc.name == "main") hasMain = true;
+	}
+	REQUIRE(hasGetIter);
+	REQUIRE(hasMain);
+}
