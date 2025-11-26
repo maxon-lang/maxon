@@ -350,7 +350,18 @@ MIRValue *MIRBuilder::createGEP(MIRType *baseType, MIRValue *ptr,
 
 MIRValue *MIRBuilder::createArrayGEP(MIRType *elemType, MIRValue *arrayPtr, MIRValue *index,
 									 const std::string &name) {
-	return createGEP(elemType, arrayPtr, {getInt64(0), index}, name);
+	// Ensure index is i64 for consistent GEP indexing
+	MIRValue *index64 = index;
+	if (index->type != MIRType::getInt64()) {
+		if (index->kind == MIRValueKind::ConstantInt) {
+			// For constant indices, create an i64 constant directly
+			index64 = getInt64(index->intValue);
+		} else if (index->type->isInteger()) {
+			// For variable indices, sign-extend to i64
+			index64 = createSExt(index, MIRType::getInt64(), "idx.ext");
+		}
+	}
+	return createGEP(elemType, arrayPtr, {getInt64(0), index64}, name);
 }
 
 MIRValue *MIRBuilder::createStructGEP(MIRType *structType, MIRValue *structPtr, uint32_t fieldIndex,
