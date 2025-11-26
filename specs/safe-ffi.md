@@ -70,15 +70,15 @@ Offset  Size    Description
 
 **Crash Handling:**
 When the subprocess crashes:
-1. `WaitForSingleObject` times out or returns due to process termination
-2. `GetExitCodeProcess` confirms crash
-3. Main process prints error message and exits with code 1
-4. Future: `try_extern` syntax to handle crashes gracefully
+1. `WaitForMultipleObjects` detects process termination (process handle becomes signaled)
+2. Main process prints error message and exits with code 103
+3. Future: `try_extern` syntax to handle crashes gracefully
 
 **FFI Error Codes:**
 - `100` - DLL failed to load (file not found, wrong architecture, etc.)
 - `101` - Function not found in DLL (typo in function name, wrong DLL, etc.)
 - `102` - Unknown function ID (internal error)
+- `103` - Worker process crashed (null pointer, divide by zero, stack overflow, etc.)
 
 **Performance Considerations:**
 - First extern call incurs subprocess spawn overhead (~10-50ms)
@@ -294,4 +294,36 @@ end 'main'
 ```
 ```stdout
 FFI Error: Function 'nonexistent_function' not found in 'ffi_test_lib.dll'
+```
+
+<!-- test: ffi-worker-crash-null-deref -->
+```maxon
+extern function crash_null_deref() int "ffi_test_lib"
+
+function main() int
+    var result = crash_null_deref()
+    return result
+end 'main'
+```
+```exitcode
+103
+```
+```stdout
+FFI Error: Worker process crashed
+```
+
+<!-- test: ffi-worker-crash-div-zero -->
+```maxon
+extern function crash_divide_by_zero(n int) int "ffi_test_lib"
+
+function main() int
+    var result = crash_divide_by_zero(42)
+    return result
+end 'main'
+```
+```exitcode
+103
+```
+```stdout
+FFI Error: Worker process crashed
 ```

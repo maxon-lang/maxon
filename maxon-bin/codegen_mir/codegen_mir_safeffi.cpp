@@ -275,12 +275,38 @@ mir::MIRValue *MIRCodeGenerator::generateSafeFFICall(
 														mir::MIRType::getInt1(), {mir::MIRType::getPtr()});
 	builder->createCall(signalFunc, {reqSem});
 
-	// Wait on response semaphore (INFINITE timeout = -1)
+	// Wait on response semaphore with crash detection
+	// ffi_wait_with_crash_detect returns: 0=semaphore signaled (success), 1=process crashed
 	mir::MIRValue *rspSemGlobal = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), "ffi_parent_rsp_sem");
 	mir::MIRValue *rspSem = builder->createLoad(mir::MIRType::getPtr(), rspSemGlobal, "rsp_sem");
-	mir::MIRFunction *waitFunc = getOrDeclareFunction("ffi_wait_semaphore",
-													  mir::MIRType::getInt32(), {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-	builder->createCall(waitFunc, {rspSem, builder->getInt32(-1)});
+	mir::MIRValue *workerHandleGlobal = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), "ffi_parent_worker_handle");
+	mir::MIRValue *workerHandle = builder->createLoad(mir::MIRType::getPtr(), workerHandleGlobal, "worker_handle");
+	mir::MIRFunction *waitFunc = getOrDeclareFunction("ffi_wait_with_crash_detect",
+													  mir::MIRType::getInt32(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+	mir::MIRValue *waitResult = builder->createCall(waitFunc, {rspSem, workerHandle}, "wait_result");
+
+	// Check for worker crash (waitResult == 1)
+	mir::MIRBasicBlock *crashBlock = currentFunc->createBasicBlock("ffi_worker_crashed");
+	mir::MIRBasicBlock *checkStatus = currentFunc->createBasicBlock("ffi_check_status");
+	mir::MIRValue *isCrash = builder->createICmpEq(waitResult, builder->getInt32(1), "is_crash");
+	builder->createCondBr(isCrash, crashBlock, checkStatus);
+
+	// Worker crashed - exit code 103
+	builder->setInsertPoint(crashBlock);
+	{
+		std::string crashMsg = "FFI Error: Worker process crashed\n";
+		std::string crashGlobalName = "__ffi_crash_error_" + std::to_string(info.id);
+		builder->createStringConstant(crashGlobalName, crashMsg);
+		mir::MIRFunction *writeStdout = getOrDeclareFunction("write_stdout", mir::MIRType::getInt32(),
+															 {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+		mir::MIRValue *crashMsgPtr = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), crashGlobalName);
+		builder->createCall(writeStdout, {crashMsgPtr, builder->getInt32(static_cast<int32_t>(crashMsg.size()))});
+		builder->createCall(exitFunc, {builder->getInt32(103)});
+		builder->createRetVoid();
+	}
+
+	// Continue checking status
+	builder->setInsertPoint(checkStatus);
 
 	// Check status field (offset 12): 0=success, 100=DLL load failed, 101=function not found
 	mir::MIRValue *statusPtr = builder->createGEP(mir::MIRType::getInt8(), shmPtr,

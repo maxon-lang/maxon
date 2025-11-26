@@ -73,6 +73,7 @@ Add handler in `LspServer`, register in `JsonRpcHandler`, implement in `Analyzer
 - Automatically merged with user code during compilation
 - See `maxon-runtime/README.md` for details
 - NEVER resort to calling the C runtime library, we do not use it!
+- if you modify the runtime you must rebuild the compiler: `make compiler`
 
 ## Documentation
 

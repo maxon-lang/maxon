@@ -451,6 +451,7 @@ static const std::pair<const char *, const char *> WINDOWS_IMPORTS[] = {
 	{"kernel32.dll", "TerminateProcess"},
 	{"kernel32.dll", "GetExitCodeProcess"},
 	{"kernel32.dll", "WaitForSingleObject"},
+	{"kernel32.dll", "WaitForMultipleObjects"},
 	{"kernel32.dll", "GetCurrentProcessId"},
 
 	// Safe FFI - Shared memory
@@ -466,6 +467,7 @@ static const std::pair<const char *, const char *> WINDOWS_IMPORTS[] = {
 
 	// Safe FFI - Misc
 	{"kernel32.dll", "GetLastError"},
+	{"kernel32.dll", "SetErrorMode"},
 	{"kernel32.dll", "GetCommandLineA"},
 	{"kernel32.dll", "GetEnvironmentVariableA"},
 	{"kernel32.dll", "SetEnvironmentVariableA"},

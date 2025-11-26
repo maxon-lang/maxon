@@ -101,6 +101,7 @@ declare i1 @CreateProcessA(ptr, ptr, ptr, ptr, i1, i32, ptr, ptr, ptr, ptr)
 declare i1 @TerminateProcess(ptr, i32)
 declare i1 @GetExitCodeProcess(ptr, ptr)
 declare i32 @WaitForSingleObject(ptr, i32)
+declare i32 @WaitForMultipleObjects(i32, ptr, i32, i32)
 declare i1 @CloseHandle(ptr)
 declare i32 @GetCurrentProcessId()
 
@@ -127,6 +128,7 @@ declare i1 @FreeLibrary(ptr)
 
 ; Error handling
 declare i32 @GetLastError()
+declare i32 @SetErrorMode(i32)
 
 ;==============================================================================
 ; ffi_create_shared_memory - Create shared memory for FFI communication
@@ -193,6 +195,43 @@ define i1 @ffi_signal_semaphore(ptr %handle) {
 entry:
     %result = call i1 @ReleaseSemaphore(ptr %handle, i32 1, ptr null)
     ret i1 %result
+}
+
+;==============================================================================
+; ffi_wait_with_crash_detect - Wait for semaphore while detecting worker crash
+; i32 ffi_wait_with_crash_detect(ptr semaphore, ptr process_handle)
+; Uses WaitForMultipleObjects to wait on both semaphore and process handle.
+; Returns:
+;   0 = semaphore signaled (success)
+;   1 = process terminated (worker crashed)
+;  -1 = error
+;==============================================================================
+define i32 @ffi_wait_with_crash_detect(ptr %semaphore, ptr %process_handle) {
+entry:
+    ; Use global array for handles (avoids alloca issues)
+    ; handles[0] = semaphore (we want this to signal for success)
+    %slot0 = getelementptr [2 x ptr], ptr @ffi_wait_handles, i64 0, i64 0
+    store ptr %semaphore, ptr %slot0
+    
+    ; handles[1] = process handle (signals when process exits)
+    %slot1 = getelementptr [2 x ptr], ptr @ffi_wait_handles, i64 0, i64 1
+    store ptr %process_handle, ptr %slot1
+    
+    ; WaitForMultipleObjects(count=2, handles, waitAll=false, timeout=INFINITE)
+    ; Returns WAIT_OBJECT_0 + index of signaled handle
+    ; WAIT_OBJECT_0 = 0, so returns 0 for semaphore, 1 for process
+    %handles_ptr = getelementptr [2 x ptr], ptr @ffi_wait_handles, i64 0, i64 0
+    %result = call i32 @WaitForMultipleObjects(i32 2, ptr %handles_ptr, i32 0, i32 -1)
+    
+    ; Check if result is in valid range (0 or 1)
+    %is_error = icmp ugt i32 %result, 1
+    br i1 %is_error, label %return_error, label %return_result
+
+return_result:
+    ret i32 %result
+
+return_error:
+    ret i32 -1
 }
 
 ;==============================================================================
@@ -416,6 +455,9 @@ write_null:
     ret i32 %total
 }
 
+; Global array for WaitForMultipleObjects handle array
+@ffi_wait_handles = global [2 x ptr] zeroinitializer
+
 ;==============================================================================
 ; String constants for FFI worker detection
 ;==============================================================================
@@ -446,6 +488,9 @@ write_null:
 @ffi_parent_rsp_name = global [64 x i8] zeroinitializer
 @ffi_parent_startup_info = global [104 x i8] zeroinitializer
 @ffi_parent_process_info = global [24 x i8] zeroinitializer
+
+; Error message for worker crash
+@ffi_crash_error_msg = constant [35 x i8] c"FFI Error: Worker process crashed\0A\00"
 
 ; String constants for env var values
 @ffi_worker_env_value = constant [2 x i8] c"1\00"
@@ -818,10 +863,24 @@ signal_request:
     %req_sem = load ptr, ptr @ffi_parent_req_sem
     call i1 @ffi_signal_semaphore(ptr %req_sem)
     
-    ; Wait for response (INFINITE = -1)
+    ; Wait for response while detecting worker crash
+    ; Uses WaitForMultipleObjects to wait on both semaphore and process handle
     %rsp_sem = load ptr, ptr @ffi_parent_rsp_sem
-    %wait = call i32 @ffi_wait_semaphore(ptr %rsp_sem, i32 -1)
+    %worker_handle = load ptr, ptr @ffi_parent_worker_handle
+    %wait_result = call i32 @ffi_wait_with_crash_detect(ptr %rsp_sem, ptr %worker_handle)
     
+    ; Check result: 0 = semaphore signaled (success), 1 = process died (crash)
+    %is_crash = icmp eq i32 %wait_result, 1
+    br i1 %is_crash, label %worker_crashed, label %read_result
+
+worker_crashed:
+    ; Worker process crashed - print error and exit with code 103
+    %crash_msg = getelementptr [35 x i8], ptr @ffi_crash_error_msg, i64 0, i64 0
+    call i32 @write_stdout(ptr %crash_msg, i32 34)
+    call void @ExitProcess(i32 103)
+    ret i64 0  ; Never reached but needed for valid IR
+
+read_result:
     ; Read return value (offset 144)
     %ret_ptr = getelementptr i8, ptr %shm, i64 144
     %ret_val = load i64, ptr %ret_ptr
@@ -902,6 +961,10 @@ done:
 ;==============================================================================
 define i32 @__ffi_worker_main() {
 entry:
+    ; Disable error dialogs so crashes terminate immediately
+    ; SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX = 0x8007
+    call i32 @SetErrorMode(i32 32775)
+    
     ; Get shared memory name from environment
     %shared_name_buf = getelementptr [64 x i8], ptr @ffi_worker_shared_name_buf, i64 0, i64 0
     %shared_env = getelementptr [20 x i8], ptr @ffi_worker_shared_env, i64 0, i64 0
