@@ -34,7 +34,6 @@ Source (.maxon) → Lexer → Parser → AST → Semantic Analyzer → MIR → O
 Quick reminders:
 - Block identifiers must match: if x 'label' ... end 'label'
 - Keywords: and, or, not (not &&, ||, !)
-- Single = for equality (not ==)
 - Float literals require decimal: 5.0 not 5
 
 ## Constraints

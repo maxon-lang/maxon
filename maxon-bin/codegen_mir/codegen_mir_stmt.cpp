@@ -581,7 +581,102 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 	}
 
 	if (auto *forStmt = dynamic_cast<ForStmtAST *>(stmt)) {
-		// Generate iterator initialization
+		// Check if iterating over an array variable
+		bool isArrayIteration = false;
+		std::string arrayVarName;
+		std::string elementTypeStr = "int";
+		mir::MIRType *elementType = mir::MIRType::getInt32();
+
+		if (auto *varExpr = dynamic_cast<VariableExprAST *>(forStmt->iterable.get())) {
+			arrayVarName = varExpr->name;
+			auto it = variableTypes.find(arrayVarName);
+			if (it != variableTypes.end()) {
+				const std::string &varType = it->second;
+				// Check if it's an array type like "[4]int"
+				if (varType.size() > 2 && varType[0] == '[') {
+					isArrayIteration = true;
+					size_t closeBracket = varType.find(']');
+					if (closeBracket != std::string::npos && closeBracket + 1 < varType.size()) {
+						elementTypeStr = varType.substr(closeBracket + 1);
+						elementType = getTypeFromString(elementTypeStr);
+					}
+				}
+			}
+		}
+
+		if (isArrayIteration) {
+			// Array iteration: generate inline index-based loop
+			// This is equivalent to: for (int i = 0; i < arr.length; i++) { x = arr[i]; ... }
+
+			mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
+			if (!arrayAlloca) {
+				throw std::runtime_error("Unknown array variable: " + arrayVarName);
+			}
+
+			// Get array length
+			mir::MIRValue *lengthAlloca = namedValues[arrayVarName + ".__length"];
+			if (!lengthAlloca) {
+				throw std::runtime_error("Array length not found for: " + arrayVarName);
+			}
+			mir::MIRValue *arrayLength = builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "arrlen");
+
+			// Load array pointer
+			mir::MIRValue *arrayPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "arrptr");
+
+			// Create index variable (starts at 0)
+			mir::MIRValue *indexAlloca = builder->createAlloca(mir::MIRType::getInt32(), "__arr_idx");
+			builder->createStore(builder->getInt32(0), indexAlloca);
+
+			mir::MIRBasicBlock *condBB = builder->createBasicBlock("forcond");
+			mir::MIRBasicBlock *loopBB = builder->createBasicBlock("forloop");
+			mir::MIRBasicBlock *incrementBB = builder->createBasicBlock("forincrement");
+			mir::MIRBasicBlock *afterBB = builder->createBasicBlock("afterfor");
+
+			loopStack.push_back({forStmt->blockId, incrementBB, afterBB});
+
+			builder->createBr(condBB);
+
+			// Condition: index < length
+			builder->setInsertPoint(condBB);
+			mir::MIRValue *currentIndex = builder->createLoad(mir::MIRType::getInt32(), indexAlloca, "idx");
+			mir::MIRValue *condVal = builder->createICmpSLT(currentIndex, arrayLength, "arrcond");
+			builder->createCondBr(condVal, loopBB, afterBB);
+
+			// Loop body: load current element into loop variable
+			builder->setInsertPoint(loopBB);
+			mir::MIRValue *currentIndexForGEP = builder->createLoad(mir::MIRType::getInt32(), indexAlloca, "idx.gep");
+			mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayPtr, currentIndexForGEP, "elemptr");
+			mir::MIRValue *elementVal = builder->createLoad(elementType, elementPtr, forStmt->loopVar);
+
+			// Create loop variable and store current element
+			mir::MIRValue *loopVarAlloca = builder->createAlloca(elementType, forStmt->loopVar);
+			builder->createStore(elementVal, loopVarAlloca);
+			namedValues[forStmt->loopVar] = loopVarAlloca;
+
+			// Generate loop body statements
+			for (auto &s : forStmt->body) {
+				generateStmt(s.get(), function);
+			}
+
+			if (!builder->getInsertBlock()->hasTerminator()) {
+				builder->createBr(incrementBB);
+			}
+
+			// Increment: index++
+			builder->setInsertPoint(incrementBB);
+			mir::MIRValue *oldIndex = builder->createLoad(mir::MIRType::getInt32(), indexAlloca, "oldidx");
+			mir::MIRValue *newIndex = builder->createAdd(oldIndex, builder->getInt32(1), "newidx");
+			builder->createStore(newIndex, indexAlloca);
+			builder->createBr(condBB);
+
+			namedValues.erase(forStmt->loopVar);
+			loopStack.pop_back();
+
+			builder->setInsertPoint(afterBB);
+			return;
+		}
+
+		// Non-array iteration (range, etc.): use iterator protocol
 		mir::MIRValue *iteratorVal = generateExpr(forStmt->iterable.get());
 		if (!iteratorVal) {
 			throw std::runtime_error("Failed to generate for-loop iterable expression");

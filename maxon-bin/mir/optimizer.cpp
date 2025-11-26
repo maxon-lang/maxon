@@ -133,7 +133,25 @@ bool ConstantFoldingPass::runOnBasicBlock(MIRBasicBlock &block) {
 }
 
 MIRValue *ConstantFoldingPass::tryFold(MIRInstruction *inst) {
-	// Check if all operands are constants
+	// Handle unary operations first (Neg, FNeg)
+	if (inst->operands.size() == 1) {
+		auto *operand = inst->operands[0];
+		if (!operand->isConstant()) {
+			return nullptr;
+		}
+
+		if (inst->opcode == MIROpcode::Neg && operand->kind == MIRValueKind::ConstantInt) {
+			return MIRValue::createConstantInt(
+				inst->result ? inst->result->type : MIRType::getInt32(),
+				-operand->intValue);
+		}
+		if (inst->opcode == MIROpcode::FNeg && operand->kind == MIRValueKind::ConstantFloat) {
+			return MIRValue::createConstantFloat(-operand->floatValue);
+		}
+		return nullptr;
+	}
+
+	// Check if all operands are constants (binary operations)
 	if (inst->operands.size() < 2) {
 		return nullptr;
 	}
@@ -397,7 +415,10 @@ bool ConstantPropagationPass::runOnFunction(MIRFunction &func) {
 				// Check if this is effectively a constant (single operand that is constant)
 				// or if all operands are constants (result will be folded later)
 				// Skip Call instructions - their result is not a copy of the argument!
+				// Skip Neg/FNeg - those are transformations, not copies!
 				if (inst->opcode != MIROpcode::Call &&
+					inst->opcode != MIROpcode::Neg &&
+					inst->opcode != MIROpcode::FNeg &&
 					inst->operands.size() == 1 && inst->operands[0]->isConstant()) {
 					// Copy of a constant
 					constMap[inst->result->regId] = inst->operands[0];
@@ -433,8 +454,11 @@ bool ConstantPropagationPass::runOnBasicBlock(MIRBasicBlock &block,
 
 		// Update constMap if this instruction produces a constant
 		// Skip Call instructions - their result is not a copy of the argument!
+		// Skip Neg/FNeg - those are transformations, not copies!
 		if (inst->result != nullptr && inst->result->kind == MIRValueKind::VirtualReg) {
 			if (inst->opcode != MIROpcode::Call &&
+				inst->opcode != MIROpcode::Neg &&
+				inst->opcode != MIROpcode::FNeg &&
 				inst->operands.size() == 1 && inst->operands[0]->isConstant()) {
 				constMap[inst->result->regId] = inst->operands[0];
 			}
