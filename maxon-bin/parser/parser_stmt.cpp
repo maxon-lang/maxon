@@ -19,21 +19,21 @@ std::tuple<Token, std::string, std::unique_ptr<ExprAST>> Parser::parseVariableDe
 	// Type is always inferred from initializer
 	std::string type = "";
 
-	expect(TokenType::EQUALS, "Expected '='");
-	auto initializer = parseExpression();
+	expect(TokenType::ASSIGN, "Expected '='");
+	auto initializer = parseLogicalOr();
 
 	return {name, type, std::move(initializer)};
 }
 
 std::unique_ptr<AssignStmtAST> Parser::parseAssignment(const std::string &name) {
-	Token assignToken = expect(TokenType::EQUALS, "Expected '='");
-	auto value = parseExpression();
+	Token assignToken = expect(TokenType::ASSIGN, "Expected '='");
+	auto value = parseLogicalOr();
 	return std::make_unique<AssignStmtAST>(name, std::move(value), assignToken.line, assignToken.column);
 }
 
 std::unique_ptr<ReturnStmtAST> Parser::parseReturn() {
 	Token returnToken = expectKeyword("return", "Expected 'return'");
-	auto value = parseExpression();
+	auto value = parseLogicalOr();
 	return std::make_unique<ReturnStmtAST>(std::move(value), returnToken.line, returnToken.column);
 }
 
@@ -65,42 +65,45 @@ std::unique_ptr<ContinueStmtAST> Parser::parseContinue() {
 
 std::unique_ptr<IfStmtAST> Parser::parseIf() {
 	Token ifToken = expectKeyword("if", "Expected 'if'");
-	auto condition = parseExpression();
+	auto condition = parseLogicalOr();
 
-	int conditionLine = ifToken.line;
-
-	// Check if this is a single-line if statement (no block identifier)
-	// Single-line if: if <condition> <statement>
+	// Check if this is a single-line if statement (uses 'then' keyword)
+	// Single-line if: if <condition> then <statement>
 	// Multi-line if: if <condition> 'blockId' ... end 'blockId'
 	bool isSingleLine = false;
-	if (!check(TokenType::BLOCK_ID)) {
-		// No block identifier means single-line if
+	std::string blockId;
+
+	if (check(TokenType::KEYWORD) && currentToken().value == "then") {
+		// Single-line if
 		isSingleLine = true;
+		advance(); // consume 'then'
+	} else {
+		// Multi-line if requires block identifier
+		Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'if' condition (use 'id' where id is any string)");
+		blockId = blockIdToken.value;
 	}
 
 	std::vector<std::unique_ptr<StmtAST>> thenBody;
 	std::vector<std::unique_ptr<StmtAST>> elseBody;
 
 	if (isSingleLine) {
-		// Single-line if: parse one statement that must be on the same line
-		if (currentToken().line != conditionLine) {
-			throw std::runtime_error("Single-line if statement must have statement on same line" +
-									 std::string("\n  Location: line ") + std::to_string(conditionLine) +
-									 ", column " + std::to_string(ifToken.column) +
-									 "\n  Note: For multi-line if blocks, use: if <condition> 'id' ... end 'id'");
-		}
+		// Single-line if: parse one statement after 'then'
 		thenBody.push_back(parseStatement());
 
-		// Single-line if doesn't support else
+		// Check for single-line else (no block id)
+		if (check(TokenType::KEYWORD) && currentToken().value == "else") {
+			advance(); // consume 'else'
+			// Single-line else: else <statement>
+			elseBody.push_back(parseStatement());
+		}
+
 		return std::make_unique<IfStmtAST>(std::move(condition),
 										   std::move(thenBody),
 										   std::move(elseBody),
-										   ifToken.line, ifToken.column, "");
+										   ifToken.line, ifToken.column, blockId);
 	}
 
-	// Multi-line if with block identifier
-	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'if' condition (use 'id' where id is any string)");
-	std::string blockId = blockIdToken.value;
+	// Multi-line if
 
 	// Parse then body
 	while (!(check(TokenType::KEYWORD) && currentToken().value == "else") &&
@@ -148,7 +151,7 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
 }
 std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
 	Token whileToken = expectKeyword("while", "Expected 'while'");
-	auto condition = parseExpression();
+	auto condition = parseLogicalOr();
 
 	// Require block identifier
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'while' condition (use 'id' where id is any string)");
@@ -188,7 +191,7 @@ std::unique_ptr<ForStmtAST> Parser::parseFor() {
 	expectKeyword("in", "Expected 'in' after loop variable");
 
 	// Parse iterable expression (range call, array variable, etc.)
-	auto iterable = parseExpression();
+	auto iterable = parseLogicalOr();
 
 	// Require block identifier
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'for' iterable (use 'id' where id is any string)");
@@ -260,14 +263,14 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 		auto ptrExpr = parsePrimary();
 
 		// Expect '='
-		if (!check(TokenType::EQUALS)) {
+		if (!check(TokenType::ASSIGN)) {
 			throw std::runtime_error("Expected '=' after pointer dereference in assignment at line " +
 									 std::to_string(line) + ", column " + std::to_string(column));
 		}
 		advance(); // consume '='
 
 		// Parse the value to assign
-		auto value = parseExpression();
+		auto value = parseLogicalOr();
 
 		return std::make_unique<DerefAssignStmtAST>(std::move(ptrExpr), std::move(value), line, column);
 	}
@@ -288,25 +291,25 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 		// Check for array indexing assignment: array[index] = value or array[index].member = value
 		if (check(TokenType::LBRACKET)) {
 			advance(); // consume '['
-			auto index = parseExpression();
+			auto index = parseLogicalOr();
 			expect(TokenType::RBRACKET, "Expected ']' after array index");
 
 			// Check for member access on array element
 			if (check(TokenType::DOT)) {
 				advance(); // consume '.'
 				Token memberName = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
-				expect(TokenType::EQUALS, "Expected '=' in member assignment");
-				auto value = parseExpression();
+				expect(TokenType::ASSIGN, "Expected '=' in member assignment");
+				auto value = parseLogicalOr();
 				// Create ArrayMemberAssignStmtAST for arr[i].field = value
 				return std::make_unique<ArrayMemberAssignStmtAST>(name, std::move(index), memberName.value, std::move(value), idLine, idColumn);
 			}
 
-			expect(TokenType::EQUALS, "Expected '=' in array assignment");
-			auto value = parseExpression();
+			expect(TokenType::ASSIGN, "Expected '=' in array assignment");
+			auto value = parseLogicalOr();
 			return std::make_unique<ArrayAssignStmtAST>(name, std::move(index), std::move(value), idLine, idColumn);
 		}
 
-		if (check(TokenType::EQUALS)) {
+		if (check(TokenType::ASSIGN)) {
 			return parseAssignment(name);
 		}
 
@@ -317,7 +320,7 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 			std::vector<std::unique_ptr<ExprAST>> args;
 			if (!check(TokenType::RPAREN)) {
 				do {
-					args.push_back(parseExpression());
+					args.push_back(parseLogicalOr());
 				} while (match(TokenType::COMMA));
 			}
 

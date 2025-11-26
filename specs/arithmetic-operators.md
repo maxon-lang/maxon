@@ -9,11 +9,11 @@ category: operators
 
 ## Developer Notes
 
-Maxon supports five binary arithmetic operators: `+`, `-`, `*`, `/`, `%` (modulo).
+Maxon supports five binary arithmetic operators: `+`, `-`, `*`, `/`, `mod` (modulo).
 
 Implementation details:
 - Parsed in `Parser::parseBinaryExpression()` with precedence handling
-- `*`, `/`, `%` have higher precedence than `+`, `-`
+- `*`, `/`, `mod` have higher precedence than `+`, `-`
 - Left-associative evaluation
 - Represented by `BinaryExpr` AST node with operator token
 - Code generation in `CodeGenerator::generateBinaryExpr()`
@@ -34,7 +34,7 @@ Maxon supports standard arithmetic operations on numeric types.
 - `-` - Subtraction
 - `*` - Multiplication
 - `/` - Division (integer division truncates)
-- `%` - Modulo (remainder after division, integers only)
+- `mod` - Modulo (remainder after division, integers only)
 
 ### Precedence
 
@@ -52,7 +52,7 @@ function main() int
     var diff = a - b     // 7
     var prod = a * b     // 30
     var quot = a / b     // 3
-    var rem = a % b      // 1
+    var rem = a mod b      // 1
     
     // Use the values
     print(sum)
@@ -125,7 +125,7 @@ end 'main'
 <!-- test: modulo -->
 ```maxon
 function main() int
-    return 17 % 5
+    return 17 mod 5
 end 'main'
 ```
 ```exitcode

@@ -20,7 +20,7 @@ Implementation:
 - Type checker ensures both operands have same type (or promotes int to float)
 - Common in condition expressions for `if` and `while`
 
-Note: Maxon uses `=` for equality (not `==`) and `!=` for inequality.
+Note: Maxon uses `==` for equality and `!=` for inequality.
 
 ## Documentation
 
@@ -28,7 +28,7 @@ Comparison operators compare two values and return `true` or `false`.
 
 ### Operators
 
-- `=` - Equal to
+- `==` - Equal to
 - `!=` - Not equal to
 - `<` - Less than
 - `>` - Greater than
@@ -62,7 +62,7 @@ end 'main'
 ```maxon
 function main() int
     var x = 42
-    if x = 42 'check'
+    if x == 42 'check'
         return 1
     end 'check'
     return 0

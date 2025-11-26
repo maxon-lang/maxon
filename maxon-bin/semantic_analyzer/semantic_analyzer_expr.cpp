@@ -191,6 +191,21 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return "bool";
 		}
 
+		// Logical operators: & (and), | (or)
+		if (binExpr->op == '&' || binExpr->op == '|') {
+			// Logical operators work on bool operands or int (truthy/falsy)
+			if ((leftType == "bool" || leftType == "int") &&
+				(rightType == "bool" || rightType == "int")) {
+				return "bool";
+			}
+			std::string opName = binExpr->op == '&' ? "and" : "or";
+			addError("Logical operator '" + opName + "' requires boolean or integer operands" +
+						 std::string("\n  Left operand type: ") + leftType +
+						 "\n  Right operand type: " + rightType,
+					 expr->line, expr->column);
+			return "error";
+		}
+
 		addError("Unknown binary operator", expr->line, expr->column);
 		return "error";
 
@@ -205,6 +220,17 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 			std::string opName = (unaryExpr->op == '+') ? "unary plus (+)" : "unary minus (-)";
 			addError("Operator " + opName + " requires numeric operand (int or float)" +
+						 std::string("\n  Operand type: ") + operandType,
+					 expr->line, expr->column);
+			return "error";
+		}
+
+		// Logical not: works on bool or int
+		if (unaryExpr->op == '!') {
+			if (operandType == "bool" || operandType == "int") {
+				return "bool";
+			}
+			addError("Operator 'not' requires boolean or integer operand" +
 						 std::string("\n  Operand type: ") + operandType,
 					 expr->line, expr->column);
 			return "error";

@@ -25,6 +25,8 @@ class Parser {
 	std::string parseQualifiedName(const std::string &context);
 
 	std::unique_ptr<ExprAST> parseExpression();
+	std::unique_ptr<ExprAST> parseLogicalAnd();
+	std::unique_ptr<ExprAST> parseLogicalOr();
 	std::unique_ptr<ExprAST> parseComparison();
 	std::unique_ptr<ExprAST> parseTerm();
 	std::unique_ptr<ExprAST> parseFactor();

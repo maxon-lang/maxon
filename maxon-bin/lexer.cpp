@@ -15,6 +15,7 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
 
 	// Control flow
 	{"if", {KeywordCategory::ControlFlow, "Conditional statement"}},
+	{"then", {KeywordCategory::ControlFlow, "Single-line if body"}},
 	{"else", {KeywordCategory::ControlFlow, "Alternative branch"}},
 	{"while", {KeywordCategory::ControlFlow, "Loop statement"}},
 	{"for", {KeywordCategory::ControlFlow, "For loop statement"}},
@@ -48,7 +49,11 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
 	{"false", {KeywordCategory::Literal, "Boolean false"}},
 
 	// Operators
-	{"as", {KeywordCategory::Operator, "Type cast operator"}}};
+	{"as", {KeywordCategory::Operator, "Type cast operator"}},
+	{"and", {KeywordCategory::Operator, "Logical and"}},
+	{"or", {KeywordCategory::Operator, "Logical or"}},
+	{"not", {KeywordCategory::Operator, "Logical not"}},
+	{"mod", {KeywordCategory::Operator, "Modulo operator"}}};
 
 Lexer::Lexer(const std::string &src)
 	: source(src), position(0), line(1), column(1) {}
@@ -413,15 +418,17 @@ std::vector<Token> Lexer::tokenize() {
 		} else if (c == '/') {
 			tokens.push_back(Token(TokenType::DIVIDE, "/", startLine, startColumn));
 			advance();
-		} else if (c == '%') {
-			tokens.push_back(Token(TokenType::MODULO, "%", startLine, startColumn));
-			advance();
 		} else if (c == '&') {
 			tokens.push_back(Token(TokenType::AMPERSAND, "&", startLine, startColumn));
 			advance();
 		} else if (c == '=') {
-			tokens.push_back(Token(TokenType::EQUALS, "=", startLine, startColumn));
 			advance();
+			if (currentChar() == '=') {
+				tokens.push_back(Token(TokenType::EQUAL_EQUAL, "==", startLine, startColumn));
+				advance();
+			} else {
+				tokens.push_back(Token(TokenType::ASSIGN, "=", startLine, startColumn));
+			}
 		} else if (c == '!') {
 			advance();
 			if (currentChar() == '=') {

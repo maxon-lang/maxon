@@ -149,6 +149,16 @@ class X86CodeGen {
 	X86Reg loadValue(mir::MIRValue *value, X86Reg hint = X86Reg::RAX);
 	X86Reg loadValueFloat(mir::MIRValue *value, X86Reg hint = X86Reg::XMM0);
 
+	// Load two operands for binary operations, handling register conflicts
+	// Returns pair of (lhs register, rhs register)
+	std::pair<X86Reg, X86Reg> loadBinaryOperands(mir::MIRValue *lhs, mir::MIRValue *rhs,
+												 X86Reg lhsHint, X86Reg rhsHint);
+	std::pair<X86Reg, X86Reg> loadBinaryOperandsFloat(mir::MIRValue *lhs, mir::MIRValue *rhs,
+													  X86Reg lhsHint, X86Reg rhsHint);
+
+	// Get the physical register a value is currently in (or None if not in a register)
+	X86Reg getValueLocation(mir::MIRValue *value);
+
 	// Store result to allocated location
 	void storeResult(mir::MIRValue *result, X86Reg reg);
 	void storeResultFloat(mir::MIRValue *result, X86Reg xmmReg);

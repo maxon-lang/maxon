@@ -396,7 +396,9 @@ bool ConstantPropagationPass::runOnFunction(MIRFunction &func) {
 			if (inst->result != nullptr && inst->result->kind == MIRValueKind::VirtualReg) {
 				// Check if this is effectively a constant (single operand that is constant)
 				// or if all operands are constants (result will be folded later)
-				if (inst->operands.size() == 1 && inst->operands[0]->isConstant()) {
+				// Skip Call instructions - their result is not a copy of the argument!
+				if (inst->opcode != MIROpcode::Call &&
+					inst->operands.size() == 1 && inst->operands[0]->isConstant()) {
 					// Copy of a constant
 					constMap[inst->result->regId] = inst->operands[0];
 				}
@@ -430,8 +432,10 @@ bool ConstantPropagationPass::runOnBasicBlock(MIRBasicBlock &block,
 		}
 
 		// Update constMap if this instruction produces a constant
+		// Skip Call instructions - their result is not a copy of the argument!
 		if (inst->result != nullptr && inst->result->kind == MIRValueKind::VirtualReg) {
-			if (inst->operands.size() == 1 && inst->operands[0]->isConstant()) {
+			if (inst->opcode != MIROpcode::Call &&
+				inst->operands.size() == 1 && inst->operands[0]->isConstant()) {
 				constMap[inst->result->regId] = inst->operands[0];
 			}
 		}

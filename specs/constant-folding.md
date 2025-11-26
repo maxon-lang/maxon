@@ -74,7 +74,7 @@ end 'main'
 function main() int
     let x = 100
     let y = 25
-    return x % y
+    return x mod y
 end 'main'
 ```
 ```exitcode

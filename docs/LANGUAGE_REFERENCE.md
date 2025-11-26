@@ -60,7 +60,7 @@ Single-line comments only:
 ```
 and, as, bool, break, char, continue, else, end, export, extern,
 false, float, for, function, if, in, int, let, not, or, ptr,
-return, true, var, while
+return, then, true, var, while
 ```
 
 ### Literals
@@ -271,7 +271,7 @@ extern function WriteFile(hFile ptr, lpBuffer ptr, nBytes int, written ptr, over
 
 1. **Postfix**: `[]` (array indexing), `.` (member access), `as` (cast), function call `()`
 2. **Unary**: `-` (negation), `not` (logical not), `&` (address-of), `*` (dereference)
-3. **Multiplicative**: `*` `/` `%`
+3. **Multiplicative**: `*` `/` `mod`
 4. **Additive**: `+` `-`
 5. **Comparison**: `=` `!=` `<` `>` `<=` `>=`
 6. **Logical AND**: `and`
@@ -285,7 +285,7 @@ extern function WriteFile(hFile ptr, lpBuffer ptr, nBytes int, written ptr, over
 | `-` | Subtraction | int, float | `a - b` |
 | `*` | Multiplication | int, float | `a * b` |
 | `/` | Division | int, float | `a / b` |
-| `%` | Modulo | int only | `a % b` |
+| `mod` | Modulo | int only | `a mod b` |
 
 **Notes:**
 - Integer division truncates
@@ -295,7 +295,7 @@ extern function WriteFile(hFile ptr, lpBuffer ptr, nBytes int, written ptr, over
 
 | Operator | Description | Result Type |
 |----------|-------------|-------------|
-| `=` | Equal to | bool |
+| `==` | Equal to | bool |
 | `!=` | Not equal to | bool |
 | `<` | Less than | bool |
 | `>` | Greater than | bool |
@@ -307,7 +307,7 @@ extern function WriteFile(hFile ptr, lpBuffer ptr, nBytes int, written ptr, over
 | Operator | Description | Example |
 |----------|-------------|---------|
 | `and` | Logical AND | `a > 0 and b < 10` |
-| `or` | Logical OR | `x = 1 or x = 2` |
+| `or` | Logical OR | `x == 1 or x == 2` |
 | `not` | Logical NOT | `not done` |
 
 ### Unary Operators
@@ -366,9 +366,14 @@ array[index] = value
 
 ### If Statement
 
-**Single-Line**
+**Single-Line If**
 ```maxon
-if condition statement
+if condition then statement
+```
+
+**Single-Line If-Else**
+```maxon
+if condition then statement else statement
 ```
 
 **Multi-Line**
@@ -378,7 +383,7 @@ if condition 'label'
 end 'label'
 ```
 
-**With Else**
+**Multi-Line With Else**
 ```maxon
 if condition 'label'
     statements
@@ -388,9 +393,12 @@ end 'label'
 ```
 
 **Notes:**
-- Block identifier required for multi-line
+- Single-line if requires `then` keyword before the statement
+- Single-line else does NOT use `then`
+- Block identifier required for multiline if statements
 - Condition must be `bool` type
 - Can nest arbitrarily
+- Can mix single-line if with multi-line else
 
 ### While Loop
 ```maxon
@@ -806,7 +814,7 @@ int float bool char ptr
 []type     // unsized array (parameters)
 
 // Operators
-+ - * / %                    // arithmetic
++ - * / mod                  // arithmetic
 = != < > <= >=               // comparison
 and or not                   // logical
 as                           // type cast

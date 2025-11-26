@@ -19,7 +19,8 @@ enum class TokenType {
 	CHARACTER,	   // Single character literal 'A'
 
 	// Operators
-	EQUALS,	   // = (used for both assignment and equality comparison)
+	ASSIGN,		   // = (assignment)
+	EQUAL_EQUAL,   // == (equality comparison)
 	PLUS,	   // +
 	MINUS,	   // -
 	MULTIPLY,  // *

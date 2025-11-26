@@ -21,7 +21,7 @@ Implementation:
 
 Operator precedence (highest to lowest):
 1. Unary: `-`, `+`
-2. Multiplicative: `*`, `/`, `%`
+2. Multiplicative: `*`, `/`, `mod`
 3. Additive: `+`, `-`
 4. Comparison: `=`, `!=`, `<`, `>`, `<=`, `>=`
 

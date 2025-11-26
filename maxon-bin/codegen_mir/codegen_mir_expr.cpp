@@ -304,6 +304,13 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		case 'N': // !=
 			return needsFloatOp ? builder->createFCmpNe(left, right, "fcmptmp")
 								: builder->createICmpNe(left, right, "cmptmp");
+		case '&': // logical and
+			// Both operands should be booleans (i1 or i32)
+			// Result is 1 if both are non-zero, 0 otherwise
+			return builder->createAnd(left, right, "andtmp");
+		case '|': // logical or
+			// Result is 1 if either is non-zero, 0 otherwise
+			return builder->createOr(left, right, "ortmp");
 		default:
 			throw std::runtime_error("Unknown binary operator");
 		}
@@ -326,6 +333,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			}
 		case '+':
 			return operand;
+		case '!': // logical not
+			// Result is 1 if operand is 0, 0 otherwise
+			return builder->createICmpEq(operand,
+										 mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), 0), "nottmp");
 		default:
 			throw std::runtime_error("Unknown unary operator");
 		}

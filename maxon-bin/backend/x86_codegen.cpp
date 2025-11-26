@@ -91,7 +91,13 @@ void X86CodeGen::generatePrologue() {
 	// mov rbp, rsp
 	encoder.movRR64(X86Reg::RBP, X86Reg::RSP);
 
-	// Allocate stack space
+	// Save callee-saved registers BEFORE allocating the stack frame
+	// This way, RSP-relative offsets in the function body are consistent
+	for (X86Reg reg : regAlloc.usedCalleeSaved) {
+		encoder.pushR(reg);
+	}
+
+	// Allocate stack space (after callee-saved pushes)
 	if (regAlloc.frameSize > 0) {
 		encoder.subRI64(X86Reg::RSP, regAlloc.frameSize);
 	}
@@ -108,11 +114,6 @@ void X86CodeGen::generatePrologue() {
 		encoder.movMR64(X86Mem(X86Reg::RBP, save.second), save.first);
 	}
 
-	// Save callee-saved registers
-	for (X86Reg reg : regAlloc.usedCalleeSaved) {
-		encoder.pushR(reg);
-	}
-
 	// Windows x64: Allocate shadow space if needed
 	if (callingConv == CallingConv::Win64) {
 		// Shadow space is handled in frameSize calculation
@@ -120,14 +121,26 @@ void X86CodeGen::generatePrologue() {
 }
 
 void X86CodeGen::generateEpilogue() {
-	// Restore callee-saved registers (reverse order)
+	// Callee-saved registers were pushed after setting RBP
+	// So they're at [rbp - 8], [rbp - 16], etc.
+	// We need to position RSP to pop them in reverse order
+	size_t numCalleeSaved = regAlloc.usedCalleeSaved.size();
+	if (numCalleeSaved > 0) {
+		// Position RSP to point to the last pushed callee-saved register
+		// lea rsp, [rbp - numCalleeSaved * 8]
+		encoder.lea64(X86Reg::RSP, X86Mem(X86Reg::RBP, -static_cast<int32_t>(numCalleeSaved * 8)));
+	} else {
+		// No callee-saved registers, just restore RSP from RBP
+		encoder.movRR64(X86Reg::RSP, X86Reg::RBP);
+	}
+
+	// Restore callee-saved registers (reverse order of push)
 	for (auto it = regAlloc.usedCalleeSaved.rbegin();
 		 it != regAlloc.usedCalleeSaved.rend(); ++it) {
 		encoder.popR(*it);
 	}
 
-	// mov rsp, rbp
-	encoder.movRR64(X86Reg::RSP, X86Reg::RBP);
+	// Now RSP points to saved RBP
 	// pop rbp
 	encoder.popR(X86Reg::RBP);
 	// ret
@@ -307,6 +320,37 @@ static uint64_t makeAllocKey(mir::MIRValue *value) {
 	return kindBit | value->regId;
 }
 
+// Helper to check if a register is callee-saved for the given calling convention
+static bool isCalleeSaved(X86Reg reg, CallingConv conv) {
+	if (conv == CallingConv::Win64) {
+		// Windows x64: RBX, RSI, RDI, R12-R15 are callee-saved
+		switch (reg) {
+		case X86Reg::RBX:
+		case X86Reg::RSI:
+		case X86Reg::RDI:
+		case X86Reg::R12:
+		case X86Reg::R13:
+		case X86Reg::R14:
+		case X86Reg::R15:
+			return true;
+		default:
+			return false;
+		}
+	} else {
+		// System V: RBX, R12-R15 are callee-saved
+		switch (reg) {
+		case X86Reg::RBX:
+		case X86Reg::R12:
+		case X86Reg::R13:
+		case X86Reg::R14:
+		case X86Reg::R15:
+			return true;
+		default:
+			return false;
+		}
+	}
+}
+
 void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	regAlloc = RegAllocInfo();
 
@@ -325,17 +369,19 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		paramRegs = {X86Reg::RCX, X86Reg::RDX, X86Reg::R8, X86Reg::R9};
 		// Windows: RAX, RCX, RDX, R8-R11 are caller-saved (volatile)
 		// RBX, RSI, RDI, R12-R15 are callee-saved
-		// Start with RAX (not used for params), then R10, R11, then callee-saved
-		availableRegs = {X86Reg::RAX, X86Reg::R10, X86Reg::R11,
-						 X86Reg::RBX, X86Reg::RSI, X86Reg::RDI,
-						 X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15};
+		// Prioritize callee-saved registers to avoid issues with calls.
+		// RAX is kept for return values, R10/R11 for scratch/temps.
+		availableRegs = {X86Reg::RBX, X86Reg::RSI, X86Reg::RDI,
+						 X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15,
+						 X86Reg::RAX, X86Reg::R10, X86Reg::R11};
 	} else {
 		// System V: first 6 integer params in RDI, RSI, RDX, RCX, R8, R9
 		paramRegs = {X86Reg::RDI, X86Reg::RSI, X86Reg::RDX, X86Reg::RCX, X86Reg::R8, X86Reg::R9};
 		// RAX, RCX, RDX, RSI, RDI, R8-R11 are caller-saved
 		// RBX, R12-R15 are callee-saved
-		availableRegs = {X86Reg::RAX, X86Reg::R10, X86Reg::R11,
-						 X86Reg::RBX, X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15};
+		// Prioritize callee-saved registers to avoid issues with calls.
+		availableRegs = {X86Reg::RBX, X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15,
+						 X86Reg::RAX, X86Reg::R10, X86Reg::R11};
 	}
 
 	// Simple allocation: assign registers to virtual registers in order
@@ -419,7 +465,17 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 
 					// Try to allocate a register
 					if (!forceStack && regIdx < availableRegs.size()) {
-						regAlloc.regMap[key] = availableRegs[regIdx++];
+						X86Reg allocatedReg = availableRegs[regIdx++];
+						regAlloc.regMap[key] = allocatedReg;
+						// Track callee-saved register usage
+						if (isCalleeSaved(allocatedReg, callingConv)) {
+							// Check if not already tracked
+							if (std::find(regAlloc.usedCalleeSaved.begin(),
+										  regAlloc.usedCalleeSaved.end(),
+										  allocatedReg) == regAlloc.usedCalleeSaved.end()) {
+								regAlloc.usedCalleeSaved.push_back(allocatedReg);
+							}
+						}
 					} else {
 						// Spill to stack - decrement first, then store
 						int allocSize = forceStack ? static_cast<int>(inst->result->type->sizeInBytes) : 8;
@@ -433,16 +489,37 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		}
 	}
 
-	// Calculate frame size (aligned to 16 bytes)
-	regAlloc.frameSize = static_cast<uint32_t>(-stackOffset);
-	if (regAlloc.frameSize % 16 != 0) {
-		regAlloc.frameSize += 16 - (regAlloc.frameSize % 16);
+	// Calculate frame size considering callee-saved register pushes for alignment
+	// After push rbp: RSP % 16 == 0
+	// After N callee-saved pushes: RSP % 16 == (N % 2) * 8
+	// We need the final RSP (after sub) to be 16-aligned for calls
+	size_t numCalleeSaved = regAlloc.usedCalleeSaved.size();
+	uint32_t baseFrameSize = static_cast<uint32_t>(-stackOffset);
+
+	// Add shadow space for Windows first
+	if (callingConv == CallingConv::Win64) {
+		baseFrameSize += 32; // 4 * 8 bytes shadow space
 	}
 
-	// Add shadow space for Windows
-	if (callingConv == CallingConv::Win64) {
-		regAlloc.frameSize += 32; // 4 * 8 bytes shadow space
+	// Now align considering the callee-saved pushes
+	// After push rbp + N callee-saved pushes, RSP is offset by (N % 2) * 8 from 16-alignment
+	// If N is odd, we need frameSize to be 8 mod 16 to restore 16-alignment
+	// If N is even, we need frameSize to be 0 mod 16
+	if (numCalleeSaved % 2 == 1) {
+		// Odd number of callee-saved pushes, need frameSize % 16 == 8
+		if (baseFrameSize % 16 == 0) {
+			baseFrameSize += 8;
+		} else if (baseFrameSize % 16 != 8) {
+			baseFrameSize += (24 - (baseFrameSize % 16)) % 16;
+		}
+	} else {
+		// Even number of callee-saved pushes, need frameSize % 16 == 0
+		if (baseFrameSize % 16 != 0) {
+			baseFrameSize += 16 - (baseFrameSize % 16);
+		}
 	}
+
+	regAlloc.frameSize = baseFrameSize;
 }
 
 X86Reg X86CodeGen::getAllocatedReg(mir::MIRValue *value) {
@@ -588,13 +665,61 @@ void X86CodeGen::storeResultFloat(mir::MIRValue *result, X86Reg xmmReg) {
 	encoder.movsdMR(slot, xmmReg);
 }
 
+X86Reg X86CodeGen::getValueLocation(mir::MIRValue *value) {
+	// Returns the physical register where a value is currently located,
+	// or X86Reg::None if it's not in a register (e.g., constant or on stack)
+	if (value->kind == mir::MIRValueKind::ConstantInt ||
+		value->kind == mir::MIRValueKind::ConstantFloat ||
+		value->kind == mir::MIRValueKind::ConstantNull ||
+		value->kind == mir::MIRValueKind::Global) {
+		return X86Reg::None; // Not in a register
+	}
+	return getAllocatedReg(value);
+}
+
+std::pair<X86Reg, X86Reg> X86CodeGen::loadBinaryOperands(
+	mir::MIRValue *lhs, mir::MIRValue *rhs, X86Reg lhsHint, X86Reg rhsHint) {
+	// Check if loading lhs into lhsHint would clobber rhs
+	X86Reg rhsLocation = getValueLocation(rhs);
+
+	if (rhsLocation == lhsHint) {
+		// Loading lhs into lhsHint would clobber rhs, so load rhs first
+		X86Reg rhsReg = loadValue(rhs, rhsHint);
+		X86Reg lhsReg = loadValue(lhs, lhsHint);
+		return {lhsReg, rhsReg};
+	}
+
+	// Safe to load in normal order
+	X86Reg lhsReg = loadValue(lhs, lhsHint);
+	X86Reg rhsReg = loadValue(rhs, rhsHint);
+	return {lhsReg, rhsReg};
+}
+
+std::pair<X86Reg, X86Reg> X86CodeGen::loadBinaryOperandsFloat(
+	mir::MIRValue *lhs, mir::MIRValue *rhs, X86Reg lhsHint, X86Reg rhsHint) {
+	// Check if loading lhs into lhsHint would clobber rhs
+	X86Reg rhsLocation = getValueLocation(rhs);
+
+	if (rhsLocation == lhsHint) {
+		// Loading lhs into lhsHint would clobber rhs, so load rhs first
+		X86Reg rhsReg = loadValueFloat(rhs, rhsHint);
+		X86Reg lhsReg = loadValueFloat(lhs, lhsHint);
+		return {lhsReg, rhsReg};
+	}
+
+	// Safe to load in normal order
+	X86Reg lhsReg = loadValueFloat(lhs, lhsHint);
+	X86Reg rhsReg = loadValueFloat(rhs, rhsHint);
+	return {lhsReg, rhsReg};
+}
+
 //==============================================================================
 // Integer Arithmetic
 //==============================================================================
 
 void X86CodeGen::genAdd(mir::MIRInstruction *inst) {
-	X86Reg lhs = loadValue(inst->operands[0], X86Reg::RAX);
-	X86Reg rhs = loadValue(inst->operands[1], X86Reg::RCX);
+	auto [lhs, rhs] = loadBinaryOperands(inst->operands[0], inst->operands[1],
+										 X86Reg::RAX, X86Reg::RCX);
 
 	if (inst->result->type->kind == mir::MIRTypeKind::Int32) {
 		encoder.addRR32(lhs, rhs);
@@ -606,8 +731,8 @@ void X86CodeGen::genAdd(mir::MIRInstruction *inst) {
 }
 
 void X86CodeGen::genSub(mir::MIRInstruction *inst) {
-	X86Reg lhs = loadValue(inst->operands[0], X86Reg::RAX);
-	X86Reg rhs = loadValue(inst->operands[1], X86Reg::RCX);
+	auto [lhs, rhs] = loadBinaryOperands(inst->operands[0], inst->operands[1],
+										 X86Reg::RAX, X86Reg::RCX);
 
 	if (inst->result->type->kind == mir::MIRTypeKind::Int32) {
 		encoder.subRR32(lhs, rhs);
@@ -619,8 +744,8 @@ void X86CodeGen::genSub(mir::MIRInstruction *inst) {
 }
 
 void X86CodeGen::genMul(mir::MIRInstruction *inst) {
-	X86Reg lhs = loadValue(inst->operands[0], X86Reg::RAX);
-	X86Reg rhs = loadValue(inst->operands[1], X86Reg::RCX);
+	auto [lhs, rhs] = loadBinaryOperands(inst->operands[0], inst->operands[1],
+										 X86Reg::RAX, X86Reg::RCX);
 
 	if (inst->result->type->kind == mir::MIRTypeKind::Int32) {
 		encoder.imulRR32(lhs, rhs);
@@ -634,8 +759,8 @@ void X86CodeGen::genMul(mir::MIRInstruction *inst) {
 void X86CodeGen::genDiv(mir::MIRInstruction *inst, bool isSigned) {
 	// Division uses RAX for dividend, RDX:RAX for 128-bit dividend
 	// Result in RAX
-	loadValue(inst->operands[0], X86Reg::RAX);
-	X86Reg divisor = loadValue(inst->operands[1], X86Reg::RCX);
+	auto [dividend, divisor] = loadBinaryOperands(inst->operands[0], inst->operands[1],
+												  X86Reg::RAX, X86Reg::RCX);
 
 	if (inst->result->type->kind == mir::MIRTypeKind::Int32) {
 		if (isSigned) {
@@ -660,8 +785,8 @@ void X86CodeGen::genDiv(mir::MIRInstruction *inst, bool isSigned) {
 
 void X86CodeGen::genRem(mir::MIRInstruction *inst, bool isSigned) {
 	// Remainder is in RDX after division
-	loadValue(inst->operands[0], X86Reg::RAX);
-	X86Reg divisor = loadValue(inst->operands[1], X86Reg::RCX);
+	auto [dividend, divisor] = loadBinaryOperands(inst->operands[0], inst->operands[1],
+												  X86Reg::RAX, X86Reg::RCX);
 
 	if (inst->result->type->kind == mir::MIRTypeKind::Int32) {
 		if (isSigned) {
@@ -701,29 +826,29 @@ void X86CodeGen::genNeg(mir::MIRInstruction *inst) {
 //==============================================================================
 
 void X86CodeGen::genFAdd(mir::MIRInstruction *inst) {
-	X86Reg lhs = loadValueFloat(inst->operands[0], X86Reg::XMM0);
-	X86Reg rhs = loadValueFloat(inst->operands[1], X86Reg::XMM1);
+	auto [lhs, rhs] = loadBinaryOperandsFloat(inst->operands[0], inst->operands[1],
+											  X86Reg::XMM0, X86Reg::XMM1);
 	encoder.addsdRR(lhs, rhs);
 	storeResultFloat(inst->result, lhs);
 }
 
 void X86CodeGen::genFSub(mir::MIRInstruction *inst) {
-	X86Reg lhs = loadValueFloat(inst->operands[0], X86Reg::XMM0);
-	X86Reg rhs = loadValueFloat(inst->operands[1], X86Reg::XMM1);
+	auto [lhs, rhs] = loadBinaryOperandsFloat(inst->operands[0], inst->operands[1],
+											  X86Reg::XMM0, X86Reg::XMM1);
 	encoder.subsdRR(lhs, rhs);
 	storeResultFloat(inst->result, lhs);
 }
 
 void X86CodeGen::genFMul(mir::MIRInstruction *inst) {
-	X86Reg lhs = loadValueFloat(inst->operands[0], X86Reg::XMM0);
-	X86Reg rhs = loadValueFloat(inst->operands[1], X86Reg::XMM1);
+	auto [lhs, rhs] = loadBinaryOperandsFloat(inst->operands[0], inst->operands[1],
+											  X86Reg::XMM0, X86Reg::XMM1);
 	encoder.mulsdRR(lhs, rhs);
 	storeResultFloat(inst->result, lhs);
 }
 
 void X86CodeGen::genFDiv(mir::MIRInstruction *inst) {
-	X86Reg lhs = loadValueFloat(inst->operands[0], X86Reg::XMM0);
-	X86Reg rhs = loadValueFloat(inst->operands[1], X86Reg::XMM1);
+	auto [lhs, rhs] = loadBinaryOperandsFloat(inst->operands[0], inst->operands[1],
+											  X86Reg::XMM0, X86Reg::XMM1);
 	encoder.divsdRR(lhs, rhs);
 	storeResultFloat(inst->result, lhs);
 }
@@ -742,8 +867,8 @@ void X86CodeGen::genFNeg(mir::MIRInstruction *inst) {
 //==============================================================================
 
 void X86CodeGen::genAnd(mir::MIRInstruction *inst) {
-	X86Reg lhs = loadValue(inst->operands[0], X86Reg::RAX);
-	X86Reg rhs = loadValue(inst->operands[1], X86Reg::RCX);
+	auto [lhs, rhs] = loadBinaryOperands(inst->operands[0], inst->operands[1],
+										 X86Reg::RAX, X86Reg::RCX);
 
 	if (inst->result->type->kind == mir::MIRTypeKind::Int32) {
 		encoder.andRR32(lhs, rhs);
@@ -755,8 +880,8 @@ void X86CodeGen::genAnd(mir::MIRInstruction *inst) {
 }
 
 void X86CodeGen::genOr(mir::MIRInstruction *inst) {
-	X86Reg lhs = loadValue(inst->operands[0], X86Reg::RAX);
-	X86Reg rhs = loadValue(inst->operands[1], X86Reg::RCX);
+	auto [lhs, rhs] = loadBinaryOperands(inst->operands[0], inst->operands[1],
+										 X86Reg::RAX, X86Reg::RCX);
 
 	if (inst->result->type->kind == mir::MIRTypeKind::Int32) {
 		encoder.orRR32(lhs, rhs);
@@ -768,8 +893,8 @@ void X86CodeGen::genOr(mir::MIRInstruction *inst) {
 }
 
 void X86CodeGen::genXor(mir::MIRInstruction *inst) {
-	X86Reg lhs = loadValue(inst->operands[0], X86Reg::RAX);
-	X86Reg rhs = loadValue(inst->operands[1], X86Reg::RCX);
+	auto [lhs, rhs] = loadBinaryOperands(inst->operands[0], inst->operands[1],
+										 X86Reg::RAX, X86Reg::RCX);
 
 	if (inst->result->type->kind == mir::MIRTypeKind::Int32) {
 		encoder.xorRR32(lhs, rhs);
@@ -885,8 +1010,8 @@ X86Cond X86CodeGen::getConditionCode(mir::MIROpcode op) {
 }
 
 void X86CodeGen::genICmp(mir::MIRInstruction *inst) {
-	X86Reg lhs = loadValue(inst->operands[0], X86Reg::RAX);
-	X86Reg rhs = loadValue(inst->operands[1], X86Reg::RCX);
+	auto [lhs, rhs] = loadBinaryOperands(inst->operands[0], inst->operands[1],
+										 X86Reg::RAX, X86Reg::RCX);
 
 	if (inst->operands[0]->type->kind == mir::MIRTypeKind::Int32) {
 		encoder.cmpRR32(lhs, rhs);
@@ -902,8 +1027,8 @@ void X86CodeGen::genICmp(mir::MIRInstruction *inst) {
 }
 
 void X86CodeGen::genFCmp(mir::MIRInstruction *inst) {
-	X86Reg lhs = loadValueFloat(inst->operands[0], X86Reg::XMM0);
-	X86Reg rhs = loadValueFloat(inst->operands[1], X86Reg::XMM1);
+	auto [lhs, rhs] = loadBinaryOperandsFloat(inst->operands[0], inst->operands[1],
+											  X86Reg::XMM0, X86Reg::XMM1);
 
 	encoder.ucomisdRR(lhs, rhs);
 
@@ -1071,31 +1196,18 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 	} else if (value->type->kind == mir::MIRTypeKind::Int8 ||
 			   value->type->kind == mir::MIRTypeKind::Int1) {
 		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
-		X86Reg valReg = loadValue(value, X86Reg::R10);
-		X86Reg ptrReg = loadValue(ptr, X86Reg::R11);
+		// Check if ptr is in R10 - if so, load it first to avoid clobbering
+		auto [valReg, ptrReg] = loadBinaryOperands(value, ptr, X86Reg::R10, X86Reg::R11);
 		X86Mem mem(ptrReg);
 		encoder.movMR8(mem, valReg);
 	} else if (value->type->kind == mir::MIRTypeKind::Int32) {
 		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
-		// Check if value is already in R11 - if so, we need to save it before loading ptr into R11
-		X86Reg valueAllocReg = getAllocatedReg(value);
-		if (valueAllocReg == X86Reg::R11) {
-			// Value is in R11, load it to R10 first, then load pointer to R11
-			X86Reg valReg = loadValue(value, X86Reg::R10);
-			X86Reg ptrReg = loadValue(ptr, X86Reg::R11);
-			X86Mem mem(ptrReg);
-			encoder.movMR32(mem, valReg);
-		} else {
-			// Normal case: load pointer first, then value
-			X86Reg ptrReg = loadValue(ptr, X86Reg::R11);
-			X86Reg valReg = loadValue(value, X86Reg::R10);
-			X86Mem mem(ptrReg);
-			encoder.movMR32(mem, valReg);
-		}
+		auto [valReg, ptrReg] = loadBinaryOperands(value, ptr, X86Reg::R10, X86Reg::R11);
+		X86Mem mem(ptrReg);
+		encoder.movMR32(mem, valReg);
 	} else {
 		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
-		X86Reg valReg = loadValue(value, X86Reg::R10);
-		X86Reg ptrReg = loadValue(ptr, X86Reg::R11);
+		auto [valReg, ptrReg] = loadBinaryOperands(value, ptr, X86Reg::R10, X86Reg::R11);
 		X86Mem mem(ptrReg);
 		encoder.movMR64(mem, valReg);
 	}

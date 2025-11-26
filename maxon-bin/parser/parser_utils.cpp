@@ -54,7 +54,8 @@ Token Parser::expect(TokenType type, const std::string& message) {
             case TokenType::RPAREN: typeStr = "')'"; break;
             case TokenType::LBRACKET: typeStr = "'['"; break;
             case TokenType::RBRACKET: typeStr = "']'"; break;
-            case TokenType::EQUALS: typeStr = "'='"; break;
+            case TokenType::ASSIGN: typeStr = "'='"; break;
+            case TokenType::EQUAL_EQUAL: typeStr = "'=='"; break;
             case TokenType::COMMA: typeStr = "','"; break;
             case TokenType::KEYWORD: typeStr = "'" + currentToken().value + "'"; break;
             default: typeStr = "token";
