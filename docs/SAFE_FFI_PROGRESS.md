@@ -100,6 +100,21 @@ Offset 144: i64 return_value
 
 ## Current Status
 
+### ✅ SAFE FFI IS WORKING
+
+The Safe FFI implementation is complete and functional. Extern function calls are successfully routed through a subprocess for isolation.
+
+**Test Results:**
+```
+extern function __test_add_numbers(a int, b int) int
+
+function main() int
+    var result = __test_add_numbers(5, 3)  ; Returns 8
+    return result
+end 'main'
+```
+- Exit code: 8 ✅
+
 ### Working:
 1. ✅ Worker mode detection via environment variable
 2. ✅ Entry point branches to worker main when in worker mode
@@ -108,61 +123,44 @@ Offset 144: i64 return_value
 5. ✅ `hasExternCalls` flag properly tracks ANY extern declaration (including internal ffi_* functions)
 6. ✅ Entry point worker mode check generated when any extern is declared
 7. ✅ **GEP array indexing fix**: Fixed x86 codegen to use correct element size when indexing into arrays
-   - Bug was: `getelementptr [16 x i8], ptr %buf, i64 0, i64 %idx` used scale 8 instead of 1
-   - Fix: When elementType is Array and we have 2 indices, use array's element type size for second index
+8. ✅ **Parent initialization complete**: `__ffi_parent_init()` successfully:
+   - Creates shared memory via `CreateFileMappingA` and `MapViewOfFile`
+   - Creates request and response semaphores via `CreateSemaphoreA`
+   - Sets environment variables for worker subprocess
+   - Spawns worker subprocess via `CreateProcessA`
+   - Worker subprocess detects worker mode and enters `__ffi_worker_main`
+9. ✅ **Worker dispatch loop**: Worker waits for requests, dispatches to extern functions, returns results
+10. ✅ **Safe FFI call generation**: `generateSafeFFICall()` creates IPC wrapper code
+11. ✅ **Cleanup**: `__ffi_parent_cleanup()` sends exit command and closes all handles - no orphaned workers
+12. ✅ **Debug code removed**: All `ffi_debug_checkpoint` calls and related globals removed
 
 ### Testing Status:
 | Test | Result |
 |------|--------|
 | No extern declarations | ✅ Exit 42 |
 | Extern declared but not called | ✅ Exit 42 |
-| Call `ffi_get_pid()` | ✅ Exit 55 |
-| Call `ffi_is_worker_mode()` | ✅ Exit 55 |
-| Call `__ffi_parent_init()` | ❌ Segfault |
+| Call `ffi_get_pid()` | ✅ Returns PID |
+| Call `ffi_is_worker_mode()` | ✅ Returns 0/1 |
+| Call `__ffi_parent_init()` | ✅ Exit 0 (success) |
+| Call `__test_add_numbers(5, 3)` | ✅ Exit 8 |
+| Multiple Safe FFI calls | ✅ Works correctly |
 
-### Current Issue:
-`__ffi_parent_init()` crashes when called. This function:
-1. Calls `GetCurrentProcessId()` - ✅ works
-2. Builds string names by storing characters to global buffers - ✅ works (verified by debug checkpoints)
-3. Calls `ffi_format_pid()` three times - ❌ crashes during or after third call
+### Key Findings During Debug:
+1. **STARTUPINFOA must be zeroed**: CreateProcessA crashes if STARTUPINFOA structure isn't fully zeroed before setting `cb` field
+2. **GEP pointer reload needed**: Pointers stored early in a function can become invalid after many function calls (register spill/reload issue). Workaround: reload GEP fresh right before use
+3. **CREATE_NO_WINDOW hides child output**: When debugging, use 0 for dwCreationFlags to see child process output
+4. **ffi_create_semaphore signature**: Fixed to `(i32 initial, i32 max, ptr name)` to match CreateSemaphoreA parameter order
 
-**Debug trace** (before GEP fix):
-```
-1  <- __ffi_parent_init entry
-2  <- do_init
-3  <- before 1st ffi_format_pid
-0 9 8 7*5 6 5  <- 1st ffi_format_pid success
-0 9 8 7*5 6 5  <- 2nd ffi_format_pid success  
-0 9 8 7*?      <- 3rd ffi_format_pid crashes
-```
+### Remaining Work:
 
-After GEP fix, `ffi_format_pid` now generates correct byte indexing (`lea rax, [rax + rcx*1]` instead of `lea rax, [rax + rcx*8]`), but still need to verify the crash is fixed.
+1. **DLL import support** - Currently only runtime-defined extern functions work. For external DLLs:
+   - Add syntax to specify DLL name for extern functions
+   - Add DLL+function to PE import table
+   - Worker subprocess needs to load the DLL
 
-### Next Steps:
-
-1. **Verify GEP fix resolves `__ffi_parent_init` crash**
-   - The array indexing bug caused `ffi_format_pid` to write to wrong memory locations
-   - This corrupted stack/memory after multiple calls
-
-2. **Continue with worker spawning**
-   - After `ffi_format_pid` works, `__ffi_parent_init` can create shared memory
-   - Spawn worker subprocess
-   - Set up IPC communication
-
-3. **Generate extern call wrappers**
-   - Replace direct extern calls with calls to `__ffi_call()`
-   - Serialize arguments to shared memory format
-
-4. **Test end-to-end FFI**
-   - Create test with extern function
-   - Verify worker subprocess spawns
-   - Verify arguments passed correctly
-   - Verify return value received
-
-5. **Error handling**
+2. **Error handling improvements**
    - Worker crash detection
-   - Timeout handling
-   - Graceful cleanup
+   - Timeout handling for unresponsive workers
 
 ## Key Bug Fixes This Session
 

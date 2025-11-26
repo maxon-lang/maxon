@@ -310,6 +310,13 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 		mainRetVal = builder->createCall(mainFunc, {});
 	}
 
+	// Clean up FFI resources before exiting (if any extern calls were made)
+	if (hasExternCalls) {
+		mir::MIRFunction *cleanupFunc = getOrDeclareFunction("__ffi_parent_cleanup",
+															 mir::MIRType::getVoid(), {});
+		builder->createCall(cleanupFunc, {});
+	}
+
 	// Call exit with main's return value
 	mir::MIRFunction *exitFunc = module->getFunction("exit");
 	builder->createCall(exitFunc, {mainRetVal});
