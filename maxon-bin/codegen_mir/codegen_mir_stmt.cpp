@@ -438,6 +438,46 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		return;
 	}
 
+	if (auto *memberAssign = dynamic_cast<MemberAssignStmtAST *>(stmt)) {
+		// Struct member assignment: obj.field = value
+		mir::MIRValue *alloca = namedValues[memberAssign->objectName];
+		if (!alloca) {
+			throw std::runtime_error("Unknown variable: " + memberAssign->objectName);
+		}
+
+		// Get the struct type
+		std::string structTypeName = variableTypes[memberAssign->objectName];
+		mir::MIRType *structType = structTypes[structTypeName];
+		if (!structType) {
+			throw std::runtime_error("Variable '" + memberAssign->objectName + "' is not a struct type");
+		}
+
+		// Find field index
+		const auto &fields = structFields[structTypeName];
+		int fieldIndex = -1;
+		for (size_t i = 0; i < fields.size(); i++) {
+			if (fields[i].first == memberAssign->memberName) {
+				fieldIndex = static_cast<int>(i);
+				break;
+			}
+		}
+
+		if (fieldIndex < 0) {
+			throw std::runtime_error("Unknown field '" + memberAssign->memberName +
+									 "' in struct '" + structTypeName + "'");
+		}
+
+		// Get pointer to the field
+		mir::MIRValue *fieldPtr = builder->createStructGEP(structType, alloca,
+														   fieldIndex, memberAssign->memberName);
+		
+		// Generate the value and store it
+		mir::MIRValue *val = generateExpr(memberAssign->value.get());
+		builder->createStore(val, fieldPtr);
+
+		return;
+	}
+
 	if (auto *derefAssign = dynamic_cast<DerefAssignStmtAST *>(stmt)) {
 		mir::MIRValue *ptr = generateExpr(derefAssign->pointer.get());
 		if (!ptr) {
@@ -721,9 +761,47 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 	}
 
 	if (auto *retStmt = dynamic_cast<ReturnStmtAST *>(stmt)) {
-		mir::MIRValue *retVal = generateExpr(retStmt->value.get());
-		if (!retVal) {
-			throw std::runtime_error("Failed to generate return value");
+		mir::MIRValue *retVal = nullptr;
+		
+		// Special handling for struct literals in return statements
+		if (auto *structInitExpr = dynamic_cast<StructInitExprAST *>(retStmt->value.get())) {
+			mir::MIRType *structType = structTypes[structInitExpr->structName];
+			if (!structType) {
+				throw std::runtime_error("Unknown struct type: " + structInitExpr->structName);
+			}
+
+			// Create temporary alloca for the struct
+			mir::MIRValue *structAlloca = builder->createAlloca(structType, "ret.tmp");
+
+			// Initialize fields
+			const auto &fields = structFields[structInitExpr->structName];
+			for (const auto &initField : structInitExpr->fields) {
+				int fieldIndex = -1;
+				for (size_t j = 0; j < fields.size(); j++) {
+					if (fields[j].first == initField.name) {
+						fieldIndex = static_cast<int>(j);
+						break;
+					}
+				}
+
+				if (fieldIndex < 0) {
+					throw std::runtime_error("Unknown field '" + initField.name +
+											 "' in struct '" + structInitExpr->structName + "'");
+				}
+
+				mir::MIRValue *fieldValue = generateExpr(initField.value.get());
+				mir::MIRValue *fieldPtr = builder->createStructGEP(structType, structAlloca,
+																   fieldIndex, initField.name);
+				builder->createStore(fieldValue, fieldPtr);
+			}
+
+			// Load the struct for return
+			retVal = builder->createLoad(structType, structAlloca, "ret.val");
+		} else {
+			retVal = generateExpr(retStmt->value.get());
+			if (!retVal) {
+				throw std::runtime_error("Failed to generate return value");
+			}
 		}
 
 		// Clean up all scopes before returning

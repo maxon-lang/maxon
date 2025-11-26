@@ -244,6 +244,17 @@ class ArrayMemberAssignStmtAST : public StmtAST {
 		: StmtAST(l, c), arrayName(name), index(std::move(idx)), memberName(member), value(std::move(val)) {}
 };
 
+// Struct member assignment statement (e.g., "point.x = 42")
+class MemberAssignStmtAST : public StmtAST {
+  public:
+	std::string objectName;
+	std::string memberName;
+	std::unique_ptr<ExprAST> value;
+
+	MemberAssignStmtAST(const std::string &obj, const std::string &member, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
+		: StmtAST(l, c), objectName(obj), memberName(member), value(std::move(val)) {}
+};
+
 // Pointer dereference assignment statement (e.g., "*ptr = 42")
 class DerefAssignStmtAST : public StmtAST {
   public:

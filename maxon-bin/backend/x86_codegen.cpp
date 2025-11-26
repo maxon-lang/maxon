@@ -381,41 +381,162 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 								func->returnType->sizeInBytes > 8;
 	regAlloc.hasHiddenRetPtr = hasLargeStructReturn;
 
+	// =========================================================================
+	// Liveness analysis: find values that are live across call instructions
+	// These values MUST be in callee-saved registers or on the stack
+	// =========================================================================
+	std::unordered_set<uint64_t> liveAcrossCalls;
+	
+	// For each basic block, compute which values are defined before a call
+	// and used after a call (within the same block or in successor blocks)
+	for (auto &block : func->basicBlocks) {
+		// Find all call instruction indices
+		std::vector<size_t> callIndices;
+		for (size_t i = 0; i < block->instructions.size(); ++i) {
+			if (block->instructions[i]->opcode == mir::MIROpcode::Call) {
+				callIndices.push_back(i);
+			}
+		}
+		
+		if (callIndices.empty()) continue;
+		
+		// For each value defined before a call, check if it's used after any call
+		std::unordered_map<uint64_t, size_t> defIndex; // value key -> instruction index where defined
+		
+		for (size_t i = 0; i < block->instructions.size(); ++i) {
+			auto &inst = block->instructions[i];
+			
+			// Record where values are defined
+			if (inst->result) {
+				uint64_t key = makeAllocKey(inst->result);
+				defIndex[key] = i;
+			}
+			
+			// For each operand use, check if it crosses a call
+			for (auto *op : inst->operands) {
+				if (op->kind != mir::MIRValueKind::VirtualReg &&
+					op->kind != mir::MIRValueKind::Parameter) {
+					continue;
+				}
+				uint64_t key = makeAllocKey(op);
+				
+				// Check if this value was defined before a call that's before this use
+				auto defIt = defIndex.find(key);
+				if (defIt != defIndex.end()) {
+					size_t defIdx = defIt->second;
+					// Check if any call is between definition and this use
+					for (size_t callIdx : callIndices) {
+						if (defIdx < callIdx && callIdx < i) {
+							// Value is live across this call
+							liveAcrossCalls.insert(key);
+							break;
+						}
+					}
+				} else {
+					// Value defined in a previous block or is a parameter
+					// If there's any call before this use, the value crosses it
+					for (size_t callIdx : callIndices) {
+						if (callIdx < i) {
+							liveAcrossCalls.insert(key);
+							break;
+						}
+					}
+				}
+			}
+		}
+		
+		// Values used in successor blocks that are defined before the last call
+		// are also live across that call
+		if (!callIndices.empty()) {
+			size_t lastCallIdx = callIndices.back();
+			for (auto &[key, defIdx] : defIndex) {
+				if (defIdx < lastCallIdx) {
+					// Check if this value is used in any successor block
+					// For simplicity, assume values defined before a call and not
+					// used after it in the same block might still be used later
+					// This is conservative but safe
+					bool usedAfterCall = false;
+					for (size_t i = lastCallIdx + 1; i < block->instructions.size(); ++i) {
+						for (auto *op : block->instructions[i]->operands) {
+							if (op->kind == mir::MIRValueKind::VirtualReg ||
+								op->kind == mir::MIRValueKind::Parameter) {
+								if (makeAllocKey(op) == key) {
+									usedAfterCall = true;
+									break;
+								}
+							}
+						}
+						if (usedAfterCall) break;
+					}
+					// If used after call in same block, already handled above
+					// For cross-block uses, we'd need full dataflow analysis
+					// For now, be conservative: if a block has calls and terminates
+					// with a branch (not ret), assume values might be used later
+					if (!usedAfterCall && !block->instructions.empty()) {
+						auto &lastInst = block->instructions.back();
+						if (lastInst->opcode != mir::MIROpcode::Ret) {
+							// Conservative: mark as live across call
+							liveAcrossCalls.insert(key);
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// Also mark all parameters as live across calls (conservative)
+	for (auto *param : func->parameters) {
+		uint64_t key = makeAllocKey(param);
+		liveAcrossCalls.insert(key);
+	}
+
+	// =========================================================================
+	// Register allocation with liveness information
+	// =========================================================================
+	
 	// Available general-purpose registers (excluding RSP, RBP)
-	std::vector<X86Reg> availableRegs;
-	std::vector<X86Reg> availableFloatRegs;
+	// Split into callee-saved (safe across calls) and caller-saved (clobbered by calls)
+	std::vector<X86Reg> calleeSavedRegs;
+	std::vector<X86Reg> callerSavedRegs;
+	std::vector<X86Reg> calleeSavedFloatRegs;
+	std::vector<X86Reg> callerSavedFloatRegs;
 	std::vector<X86Reg> paramRegs; // Registers used for passing parameters (ABI)
+	
 	if (callingConv == CallingConv::Win64) {
 		// Windows x64 ABI: first 4 integer params in RCX, RDX, R8, R9
 		paramRegs = {X86Reg::RCX, X86Reg::RDX, X86Reg::R8, X86Reg::R9};
 		// Windows: RAX, RCX, RDX, R8-R11 are caller-saved (volatile)
-		// RBX, RSI, RDI, R12-R15 are callee-saved
-		// Prioritize callee-saved registers to avoid issues with calls.
-		// RAX is kept for return values, R10/R11 for scratch/temps.
-		availableRegs = {X86Reg::RBX, X86Reg::RSI, X86Reg::RDI,
-						 X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15,
-						 X86Reg::RAX, X86Reg::R10, X86Reg::R11};
-		// XMM registers for float values (XMM6-XMM15 are non-volatile on Windows)
-		availableFloatRegs = {X86Reg::XMM6, X86Reg::XMM7, X86Reg::XMM8, X86Reg::XMM9,
-							  X86Reg::XMM10, X86Reg::XMM11, X86Reg::XMM12, X86Reg::XMM13,
-							  X86Reg::XMM14, X86Reg::XMM15};
+		// RBX, RSI, RDI, R12-R15 are callee-saved (non-volatile)
+		calleeSavedRegs = {X86Reg::RBX, X86Reg::RSI, X86Reg::RDI,
+						   X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15};
+		callerSavedRegs = {X86Reg::R10, X86Reg::R11}; // RAX reserved for return values
+		// XMM registers: XMM6-XMM15 are callee-saved on Windows
+		calleeSavedFloatRegs = {X86Reg::XMM6, X86Reg::XMM7, X86Reg::XMM8, X86Reg::XMM9,
+							    X86Reg::XMM10, X86Reg::XMM11, X86Reg::XMM12, X86Reg::XMM13,
+							    X86Reg::XMM14, X86Reg::XMM15};
+		callerSavedFloatRegs = {}; // XMM0-5 used for params/returns
 	} else {
 		// System V: first 6 integer params in RDI, RSI, RDX, RCX, R8, R9
 		paramRegs = {X86Reg::RDI, X86Reg::RSI, X86Reg::RDX, X86Reg::RCX, X86Reg::R8, X86Reg::R9};
-		// RAX, RCX, RDX, RSI, RDI, R8-R11 are caller-saved
-		// RBX, R12-R15 are callee-saved
-		// Prioritize callee-saved registers to avoid issues with calls.
-		availableRegs = {X86Reg::RBX, X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15,
-						 X86Reg::RAX, X86Reg::R10, X86Reg::R11};
-		// XMM registers for float values (all volatile on System V)
-		availableFloatRegs = {X86Reg::XMM8, X86Reg::XMM9, X86Reg::XMM10, X86Reg::XMM11,
-							  X86Reg::XMM12, X86Reg::XMM13, X86Reg::XMM14, X86Reg::XMM15};
+		// System V: RBX, R12-R15 are callee-saved
+		calleeSavedRegs = {X86Reg::RBX, X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15};
+		callerSavedRegs = {X86Reg::R10, X86Reg::R11}; // RAX reserved for return values
+		// All XMM registers are caller-saved on System V
+		calleeSavedFloatRegs = {};
+		callerSavedFloatRegs = {X86Reg::XMM8, X86Reg::XMM9, X86Reg::XMM10, X86Reg::XMM11,
+							    X86Reg::XMM12, X86Reg::XMM13, X86Reg::XMM14, X86Reg::XMM15};
 	}
+	
+	// Combined lists for allocation (callee-saved first, then caller-saved)
+	std::vector<X86Reg> availableRegs = calleeSavedRegs;
+	availableRegs.insert(availableRegs.end(), callerSavedRegs.begin(), callerSavedRegs.end());
+	
+	std::vector<X86Reg> availableFloatRegs = calleeSavedFloatRegs;
+	availableFloatRegs.insert(availableFloatRegs.end(), callerSavedFloatRegs.begin(), callerSavedFloatRegs.end());
 
-	// Simple allocation: assign registers to virtual registers in order
-	// This is a placeholder - real implementation would use linear scan
-	size_t regIdx = 0;
-	size_t floatRegIdx = 0;
+	// Indices for parameter allocation (parameters always use callee-saved registers)
+	size_t paramRegIdx = 0;
+	size_t paramFloatRegIdx = 0;
 	int32_t stackOffset = 0; // Will be decremented before each allocation
 
 	// Reserve stack slot for hidden return pointer if needed
@@ -460,8 +581,8 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 				// Copy to non-volatile register to survive across function calls
 				if (param->type->isFloat()) {
 					// Float param arrives in volatile XMM0-3, allocate a non-volatile XMM
-					if (floatRegIdx < availableFloatRegs.size()) {
-						X86Reg destReg = availableFloatRegs[floatRegIdx++];
+					if (paramFloatRegIdx < calleeSavedFloatRegs.size()) {
+						X86Reg destReg = calleeSavedFloatRegs[paramFloatRegIdx++];
 						regAlloc.regMap[key] = destReg;
 						regAlloc.floatParamSaves.push_back({floatParamRegs[regIndex], destReg});
 						// Track callee-saved register usage (XMM6-15 on Windows)
@@ -481,8 +602,8 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 				} else {
 					// Integer param arrives in volatile RCX/RDX/R8/R9
 					// Allocate a non-volatile GPR to hold it
-					if (regIdx < availableRegs.size()) {
-						X86Reg destReg = availableRegs[regIdx++];
+					if (paramRegIdx < calleeSavedRegs.size()) {
+						X86Reg destReg = calleeSavedRegs[paramRegIdx++];
 						regAlloc.regMap[key] = destReg;
 						regAlloc.intParamSaves.push_back({paramRegs[regIndex], destReg});
 						// Track callee-saved register usage
@@ -543,6 +664,13 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	}
 
 	// Second pass: allocate registers/stack for other virtual registers
+	// Values live across calls MUST use callee-saved registers or stack
+	// Start from where parameter allocation left off
+	size_t calleeSavedRegIdx = paramRegIdx;
+	size_t callerSavedRegIdx = 0;
+	size_t calleeSavedFloatIdx = paramFloatRegIdx;
+	size_t callerSavedFloatIdx = 0;
+	
 	for (auto &block : func->basicBlocks) {
 		for (auto &inst : block->instructions) {
 			if (inst->result && inst->opcode != mir::MIROpcode::Alloca) {
@@ -554,40 +682,78 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 					bool forceStack = inst->result->type->isStruct() &&
 									  inst->result->type->sizeInBytes > 8;
 
+					// Check if this value is live across a call
+					bool needsCalleeSaved = liveAcrossCalls.count(key) > 0;
+					
 					// Check if this is a float type
 					bool isFloat = inst->result->type->isFloat();
 
 					// Try to allocate a register
 					if (!forceStack) {
-						if (isFloat && floatRegIdx < availableFloatRegs.size()) {
-							// Allocate XMM register for float types
-							X86Reg allocatedReg = availableFloatRegs[floatRegIdx++];
-							regAlloc.regMap[key] = allocatedReg;
-							// XMM6-XMM15 are callee-saved on Windows
-							if (callingConv == CallingConv::Win64 && isCalleeSaved(allocatedReg, callingConv)) {
-								if (std::find(regAlloc.usedCalleeSaved.begin(),
-											  regAlloc.usedCalleeSaved.end(),
-											  allocatedReg) == regAlloc.usedCalleeSaved.end()) {
-									regAlloc.usedCalleeSaved.push_back(allocatedReg);
+						if (isFloat) {
+							// Float allocation
+							X86Reg allocatedReg = X86Reg::None;
+							if (needsCalleeSaved) {
+								// Must use callee-saved float register
+								if (calleeSavedFloatIdx < calleeSavedFloatRegs.size()) {
+									allocatedReg = calleeSavedFloatRegs[calleeSavedFloatIdx++];
+								}
+								// If no callee-saved available, will spill to stack below
+							} else {
+								// Can use any float register (try callee-saved first, then caller-saved)
+								if (calleeSavedFloatIdx < calleeSavedFloatRegs.size()) {
+									allocatedReg = calleeSavedFloatRegs[calleeSavedFloatIdx++];
+								} else if (callerSavedFloatIdx < callerSavedFloatRegs.size()) {
+									allocatedReg = callerSavedFloatRegs[callerSavedFloatIdx++];
 								}
 							}
-						} else if (!isFloat && regIdx < availableRegs.size()) {
-							// Allocate GPR for integer types
-							X86Reg allocatedReg = availableRegs[regIdx++];
-							regAlloc.regMap[key] = allocatedReg;
-							// Track callee-saved register usage
-							if (isCalleeSaved(allocatedReg, callingConv)) {
-								if (std::find(regAlloc.usedCalleeSaved.begin(),
-											  regAlloc.usedCalleeSaved.end(),
-											  allocatedReg) == regAlloc.usedCalleeSaved.end()) {
-									regAlloc.usedCalleeSaved.push_back(allocatedReg);
+							
+							if (allocatedReg != X86Reg::None) {
+								regAlloc.regMap[key] = allocatedReg;
+								if (isCalleeSaved(allocatedReg, callingConv)) {
+									if (std::find(regAlloc.usedCalleeSaved.begin(),
+												  regAlloc.usedCalleeSaved.end(),
+												  allocatedReg) == regAlloc.usedCalleeSaved.end()) {
+										regAlloc.usedCalleeSaved.push_back(allocatedReg);
+									}
 								}
+							} else {
+								// Spill to stack
+								stackOffset -= 8;
+								regAlloc.stackSlots[key] = stackOffset;
 							}
 						} else {
-							// Spill to stack - decrement first, then store
-							int allocSize = 8;
-							stackOffset -= allocSize;
-							regAlloc.stackSlots[key] = stackOffset;
+							// Integer allocation
+							X86Reg allocatedReg = X86Reg::None;
+							if (needsCalleeSaved) {
+								// Must use callee-saved GPR
+								if (calleeSavedRegIdx < calleeSavedRegs.size()) {
+									allocatedReg = calleeSavedRegs[calleeSavedRegIdx++];
+								}
+								// If no callee-saved available, will spill to stack below
+							} else {
+								// Can use any GPR (try callee-saved first, then caller-saved)
+								if (calleeSavedRegIdx < calleeSavedRegs.size()) {
+									allocatedReg = calleeSavedRegs[calleeSavedRegIdx++];
+								} else if (callerSavedRegIdx < callerSavedRegs.size()) {
+									allocatedReg = callerSavedRegs[callerSavedRegIdx++];
+								}
+							}
+							
+							if (allocatedReg != X86Reg::None) {
+								regAlloc.regMap[key] = allocatedReg;
+								if (isCalleeSaved(allocatedReg, callingConv)) {
+									if (std::find(regAlloc.usedCalleeSaved.begin(),
+												  regAlloc.usedCalleeSaved.end(),
+												  allocatedReg) == regAlloc.usedCalleeSaved.end()) {
+										regAlloc.usedCalleeSaved.push_back(allocatedReg);
+									}
+								}
+							} else {
+								// Spill to stack
+								stackOffset -= 8;
+								regAlloc.stackSlots[key] = stackOffset;
+							}
 						}
 					} else {
 						// Large struct - spill to stack
@@ -1289,13 +1455,23 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 			return;
 		}
 
-		// Struct store - need to copy all bytes
+		// Small structs (<= 8 bytes) may be returned in RAX as a value, not a pointer
+		// We need to handle this differently from large structs
+		if (value->type->sizeInBytes <= 8) {
+			// Small struct - value is directly in a register (like RAX for return values)
+			// Just load the 8-byte value and store it to the destination
+			X86Reg valReg = loadValue(value, X86Reg::RAX);
+			X86Reg dstReg = loadValue(ptr, X86Reg::RCX);
+			encoder.movMR64(X86Mem(dstReg), valReg);
+			return;
+		}
+
+		// Large struct store - need to copy all bytes
 		// For large structs stored directly on the stack (e.g., from call results),
 		// we need the ADDRESS of the stack slot, not the value at the stack slot.
 		// For struct pointers (from GEP or alloca), loadValue gives us the address.
 		X86Reg srcReg;
-		bool isLargeStructOnStack = value->type->sizeInBytes > 8 &&
-									value->kind == mir::MIRValueKind::VirtualReg &&
+		bool isLargeStructOnStack = value->kind == mir::MIRValueKind::VirtualReg &&
 									!regAlloc.allocaRegs.count(value->regId) &&
 									getAllocatedReg(value) == X86Reg::None;
 
@@ -1305,7 +1481,7 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 			encoder.lea64(X86Reg::RAX, slot);
 			srcReg = X86Reg::RAX;
 		} else {
-			// Struct pointer or small struct in register - loadValue gives address/value
+			// Struct pointer - loadValue gives address
 			srcReg = loadValue(value, X86Reg::RAX);
 		}
 

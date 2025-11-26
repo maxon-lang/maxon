@@ -191,6 +191,59 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			analyzeExpression(arrayMemberAssign->value.get());
 		}
 
+	} else if (auto memberAssign = dynamic_cast<MemberAssignStmtAST *>(stmt)) {
+		// Struct member assignment: obj.field = value
+		auto varInfo = lookupVariable(memberAssign->objectName);
+		if (!varInfo.has_value()) {
+			addError("Undefined variable: '" + memberAssign->objectName + "'" +
+						 std::string("\n  Note: Variable must be declared with 'var' or 'let' before use"),
+					 stmt->line, stmt->column);
+		} else {
+			// Mark variable as used
+			markVariableAsUsed(memberAssign->objectName);
+
+			// Check if variable is immutable
+			if (varInfo->isImmutable) {
+				addError("Cannot assign to field of read-only struct '" + memberAssign->objectName + "'" +
+							 std::string("\n  Variable declared with 'let' at line ") + std::to_string(varInfo->line) +
+							 ", column " + std::to_string(varInfo->column) +
+							 "\n  Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable structs",
+						 stmt->line, stmt->column);
+			}
+
+			// Get the struct type and verify the member exists
+			std::string structType = varInfo->type;
+			auto *structInfo = lookupStruct(structType);
+			if (structInfo == nullptr) {
+				addError("Cannot access member '" + memberAssign->memberName + "' on non-struct type '" + structType + "'",
+						 stmt->line, stmt->column);
+			} else {
+				// Verify member exists
+				bool memberFound = false;
+				std::string memberType;
+				for (const auto &field : structInfo->fields) {
+					if (field.name == memberAssign->memberName) {
+						memberFound = true;
+						memberType = field.type;
+						break;
+					}
+				}
+
+				if (!memberFound) {
+					addError("Struct '" + structType + "' has no field named '" + memberAssign->memberName + "'",
+							 stmt->line, stmt->column);
+				} else {
+					// Check type compatibility
+					std::string valueType = analyzeExpression(memberAssign->value.get());
+					if (!typesMatch(memberType, valueType)) {
+						addError("Type mismatch: cannot assign '" + valueType + "' to field '" +
+									 memberAssign->memberName + "' of type '" + memberType + "'",
+								 stmt->line, stmt->column);
+					}
+				}
+			}
+		}
+
 	} else if (auto derefAssign = dynamic_cast<DerefAssignStmtAST *>(stmt)) {
 		// Analyze the pointer expression (should result in ptr or string type)
 		std::string ptrType = analyzeExpression(derefAssign->pointer.get());

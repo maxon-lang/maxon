@@ -221,6 +221,11 @@ std::unique_ptr<ForStmtAST> Parser::parseFor() {
 }
 
 std::unique_ptr<StmtAST> Parser::parseStatement() {
+	// DEBUG - temporary
+	Token tok = currentToken();
+	std::cerr << "parseStatement: token type=" << static_cast<int>(tok.type) 
+	          << " value='" << tok.value << "' at line " << tok.line << "\n";
+
 	if (check(TokenType::KEYWORD) && currentToken().value == "var") {
 		return parseVarDecl();
 	}
@@ -281,10 +286,19 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 		int idColumn = currentToken().column;
 		advance();
 
-		// Check for namespace qualification
+		// Check for member access (struct.field = value) or namespace qualification
 		if (check(TokenType::DOT)) {
 			advance(); // consume '.'
 			Token memberName = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
+			
+			// If followed by assignment, this is struct member assignment
+			if (check(TokenType::ASSIGN)) {
+				advance(); // consume '='
+				auto value = parseLogicalOr();
+				return std::make_unique<MemberAssignStmtAST>(name, memberName.value, std::move(value), idLine, idColumn);
+			}
+			
+			// Otherwise, continue treating as namespace qualification for function calls
 			name = name + "." + memberName.value;
 		}
 
