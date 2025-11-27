@@ -39,7 +39,7 @@ For loops in Maxon use an iterator-based approach where the compiler provides sy
 **Semantic Analysis** (`maxon-bin/semantic_analyzer.cpp`):
 - Declares loop variable as immutable (like `let`)
 - Increments `loopDepth` for break/continue validation
-- Type is `int` for now (will be inferred in future)
+- Infers loop variable type from iterable (array element type or `int` for range)
 
 **Code Generation** (`maxon-bin/codegen.cpp`):
 - Desugars to:
@@ -270,5 +270,21 @@ end 'main'
 ```
 ```exitcode
 99
+```
+
+
+<!-- test: float-array-iteration -->
+```maxon
+function main() int
+    let arr = [1.0, 2.0, 3.0, 4.0, 5.0]
+    var sum = 0.0
+    for x in arr 'loop'
+        sum = sum + x
+    end 'loop'
+    return trunc(sum)
+end 'main'
+```
+```exitcode
+15
 ```
 

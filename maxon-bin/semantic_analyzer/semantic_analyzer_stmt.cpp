@@ -382,8 +382,16 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		blockIdStack.push_back(std::set<std::string>());
 
 		// Declare loop variable (immutable, like 'let')
-		// The type is 'int' for now (will be inferred from iterator in future)
-		declareVariable(forStmt->loopVar, "int", true,
+		// Infer type from iterable: array element type or int for range()
+		std::string loopVarType = "int"; // Default for range() iteration
+		if (iterableType.size() > 2 && iterableType[0] == '[') {
+			// Array type like "[5]float" - extract element type after ']'
+			size_t closeBracket = iterableType.find(']');
+			if (closeBracket != std::string::npos && closeBracket + 1 < iterableType.size()) {
+				loopVarType = iterableType.substr(closeBracket + 1);
+			}
+		}
+		declareVariable(forStmt->loopVar, loopVarType, true,
 						forStmt->line, forStmt->column, false, "");
 
 		// Analyze loop body

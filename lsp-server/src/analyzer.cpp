@@ -267,7 +267,62 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
 
 	lsp::Hover hover;
 
-	// Check cached semantic info for this document
+	// Check if this is a member access (e.g., hovering over "capacity" in "arr.capacity")
+	std::string textBeforeCursor = getTextBeforePosition(doc->text, pos);
+	size_t lastDot = textBeforeCursor.find_last_of('.');
+
+	if (lastDot != std::string::npos) {
+		// Check if the word we're hovering over is right after the dot
+		// Extract text between the dot and cursor
+		std::string afterDot = textBeforeCursor.substr(lastDot + 1);
+
+		// If afterDot matches the word (or is a prefix), this is likely member access
+		if (word.find(afterDot) == 0 || afterDot.find(word) == 0) {
+			// Extract the object name before the dot
+			size_t start = lastDot;
+			while (start > 0 && (std::isalnum(textBeforeCursor[start - 1]) ||
+								 textBeforeCursor[start - 1] == '_')) {
+				start--;
+			}
+			std::string objectName = textBeforeCursor.substr(start, lastDot - start);
+
+			// Look up the object in semantic cache
+			auto cacheIt = semanticCache.find(doc->uri);
+			if (cacheIt != semanticCache.end()) {
+				const SemanticInfo &semInfo = cacheIt->second;
+				auto varIt = semInfo.variables.find(objectName);
+
+				if (varIt != semInfo.variables.end()) {
+					const std::string &typeName = varIt->second.type;
+
+					// Check if it's a struct type
+					auto structIt = semInfo.structs.find(typeName);
+					if (structIt != semInfo.structs.end()) {
+						// Find the field
+						for (const auto &field : structIt->second.fields) {
+							if (field.name == word) {
+								hover.contents = "```maxon\n(field) " + field.name + ": " + field.type + "\n```\n\nField of struct `" + typeName + "`";
+								return hover;
+							}
+						}
+					}
+
+					// Check if it's an array type
+					if (!typeName.empty() && typeName[0] == '[') {
+						if (word == "length") {
+							hover.contents = "```maxon\n(property) length: int\n```\n\nNumber of elements in the array";
+							return hover;
+						} else if (word == "capacity") {
+							hover.contents = "```maxon\n(property) capacity: int\n```\n\nCapacity of the array (number of elements it can hold without reallocation)";
+							return hover;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Not a member access, check cached semantic info for this document
 	auto cacheIt = semanticCache.find(doc->uri);
 	if (cacheIt != semanticCache.end()) {
 		const SemanticInfo &semInfo = cacheIt->second;

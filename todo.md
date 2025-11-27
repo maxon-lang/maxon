@@ -8,6 +8,7 @@ You *Are* Going To Read It
 - warnings as errors in release mode
 - compiler error codes
 - extensive math function tests
+- centralize help text from the lsp server analyzer
 
 add "run" to maxon
 add "build" to maxon

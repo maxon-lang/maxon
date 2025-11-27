@@ -250,7 +250,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 				arrayPtr = builder->createAlloca(arrayType, letDecl->name);
 				namedValues[letDecl->name] = arrayPtr;
 				stackAllocatedArrays.insert(letDecl->name); // Mark as stack-allocated
-				// No heap cleanup needed for stack arrays
+															// No heap cleanup needed for stack arrays
 			}
 
 			// Store array length as hidden variable (for .length access)
@@ -678,6 +678,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			mir::MIRValue *loopVarAlloca = builder->createAlloca(elementType, forStmt->loopVar);
 			builder->createStore(elementVal, loopVarAlloca);
 			namedValues[forStmt->loopVar] = loopVarAlloca;
+			variableTypes[forStmt->loopVar] = elementTypeStr;
 
 			// Generate loop body statements
 			for (auto &s : forStmt->body) {
