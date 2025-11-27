@@ -31,6 +31,22 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			actualType = initType;
 		}
 
+		// For var arrays, convert static array type [N]type to dynamic []type
+		// var arrays are always dynamic (mutable, growable)
+		if (actualType.size() > 2 && actualType[0] == '[') {
+			size_t closeBracket = actualType.find(']');
+			if (closeBracket != std::string::npos && closeBracket > 1) {
+				// Check if this is a static array type [N]type (has a number)
+				std::string sizeStr = actualType.substr(1, closeBracket - 1);
+				bool isStaticArray = !sizeStr.empty() && std::all_of(sizeStr.begin(), sizeStr.end(), ::isdigit);
+				if (isStaticArray) {
+					// Convert [N]type to []type for var arrays
+					std::string elemType = actualType.substr(closeBracket + 1);
+					actualType = "[]" + elemType;
+				}
+			}
+		}
+
 		// Declare variable
 		declareVariable(varDecl->name, actualType, false, stmt->line, stmt->column);
 

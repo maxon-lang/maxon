@@ -4,6 +4,7 @@
 ; External Windows API declarations
 declare ptr @GetProcessHeap()
 declare ptr @HeapAlloc(ptr, i32, i64)
+declare ptr @HeapReAlloc(ptr, i32, ptr, i64)
 declare i1 @HeapFree(ptr, i32, ptr)
 declare void @ExitProcess(i32)
 declare ptr @GetStdHandle(i32)
@@ -43,6 +44,19 @@ entry:
     %heap = call ptr @GetProcessHeap()
     %result = call i1 @HeapFree(ptr %heap, i32 0, ptr %ptr)
     ret void
+}
+
+;==============================================================================
+; realloc - reallocate memory using HeapReAlloc
+; ptr realloc(ptr ptr, i64 old_size, i64 new_size)
+; Note: old_size is unused on Windows but kept for cross-platform compatibility
+;==============================================================================
+define ptr @realloc(ptr %ptr, i64 %old_size, i64 %new_size) {
+entry:
+    %heap = call ptr @GetProcessHeap()
+    ; HeapReAlloc doesn't need old_size, Windows tracks it internally
+    %newptr = call ptr @HeapReAlloc(ptr %heap, i32 0, ptr %ptr, i64 %new_size)
+    ret ptr %newptr
 }
 
 ;==============================================================================

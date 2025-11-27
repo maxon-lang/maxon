@@ -67,6 +67,53 @@ entry:
 }
 
 ;==============================================================================
+; realloc - reallocate memory
+; ptr realloc(ptr oldptr, i64 old_size, i64 new_size)
+; Note: This is a 3-argument version since mmap doesn't track sizes
+;==============================================================================
+declare ptr @memcpy(ptr, ptr, i64)
+
+define ptr @realloc(ptr %oldptr, i64 %old_size, i64 %new_size) {
+entry:
+    ; Check if old pointer is null (just malloc)
+    %is_null = icmp eq ptr %oldptr, null
+    br i1 %is_null, label %just_malloc, label %do_realloc
+
+just_malloc:
+    %newmem = call ptr @malloc(i64 %new_size)
+    ret ptr %newmem
+
+do_realloc:
+    ; Allocate new memory
+    %newptr = call ptr @malloc(i64 %new_size)
+    %alloc_failed = icmp eq ptr %newptr, null
+    br i1 %alloc_failed, label %return_null, label %copy_data
+
+copy_data:
+    ; Copy min(old_size, new_size) bytes
+    %copy_size = call i64 @__min_i64(i64 %old_size, i64 %new_size)
+    call ptr @memcpy(ptr %newptr, ptr %oldptr, i64 %copy_size)
+    ; Note: old memory is leaked since free is a no-op
+    ret ptr %newptr
+
+return_null:
+    ret ptr null
+}
+
+; Helper: min of two i64 values
+define i64 @__min_i64(i64 %a, i64 %b) {
+entry:
+    %cond = icmp ult i64 %a, %b
+    br i1 %cond, label %return_a, label %return_b
+
+return_a:
+    ret i64 %a
+
+return_b:
+    ret i64 %b
+}
+
+;==============================================================================
 ; exit - terminate process using syscall
 ; void exit(i32 code)
 ;==============================================================================

@@ -34,6 +34,9 @@ class MIRCodeGenerator {
 	// Track which variables are struct parameters (passed by pointer)
 	std::set<std::string> structParameters;
 
+	// Track which arrays are stack-allocated (direct access, no pointer indirection)
+	std::set<std::string> stackAllocatedArrays;
+
 	// Struct type definitions
 	std::map<std::string, mir::MIRType *> structTypes;
 	std::map<std::string, std::vector<std::pair<std::string, std::string>>> structFields;
@@ -113,6 +116,9 @@ class MIRCodeGenerator {
 
 	// Math intrinsic generation
 	mir::MIRValue *generateMathIntrinsic(CallExprAST *callExpr);
+
+	// Array intrinsic generation (push, pop)
+	mir::MIRValue *generateArrayIntrinsic(CallExprAST *callExpr);
 
 	// Safe FFI generation
 	void registerExternFunction(FunctionAST *func);

@@ -213,6 +213,48 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			const MathIntrinsicInfo *info = Lexer::getMathIntrinsicInfo(callExpr->callee);
 			return info ? info->returnType : "float";
 		}
+		
+		// Check for array intrinsics: push(arr, val), pop(arr)
+		// These are transformed from arr.push(val), arr.pop() by the parser
+		if (callExpr->callee == "push") {
+			if (callExpr->args.size() != 2) {
+				addError("push() requires exactly 2 arguments: array and value",
+						 expr->line, expr->column);
+				return "void";
+			}
+			// First arg should be a dynamic array
+			std::string arrType = analyzeExpression(callExpr->args[0].get());
+			if (arrType.size() < 2 || arrType[0] != '[' || arrType[1] != ']') {
+				addError("push() can only be used on dynamic arrays, not " + arrType,
+						 expr->line, expr->column);
+				return "void";
+			}
+			// Second arg should match element type
+			std::string elemType = arrType.substr(2); // Skip "[]"
+			std::string valType = analyzeExpression(callExpr->args[1].get());
+			if (valType != elemType && valType != "error") {
+				addError("push() value type " + valType + " doesn't match array element type " + elemType,
+						 expr->line, expr->column);
+			}
+			return "void";
+		}
+		
+		if (callExpr->callee == "pop") {
+			if (callExpr->args.size() != 1) {
+				addError("pop() requires exactly 1 argument: array",
+						 expr->line, expr->column);
+				return "error";
+			}
+			// Arg should be a dynamic array
+			std::string arrType = analyzeExpression(callExpr->args[0].get());
+			if (arrType.size() < 2 || arrType[0] != '[' || arrType[1] != ']') {
+				addError("pop() can only be used on dynamic arrays, not " + arrType,
+						 expr->line, expr->column);
+				return "error";
+			}
+			// Return element type
+			return arrType.substr(2); // Skip "[]"
+		}
 
 		// Try to find the function - first exact match, then unqualified lookup
 		auto funcIt = functions.find(callExpr->callee);
@@ -417,9 +459,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return "error";
 		}
 
-		// Currently only support .length on arrays
-		if (memberAccessExpr->memberName == "length") {
-			// .length always returns int
+		// Support .length and .capacity on arrays
+		if (memberAccessExpr->memberName == "length" || memberAccessExpr->memberName == "capacity") {
+			// Both .length and .capacity return int
 			return "int";
 		} else {
 			addError("Unknown member: " + memberAccessExpr->memberName,

@@ -96,6 +96,40 @@ loop.end:
 }
 
 ;==============================================================================
+; memcpy - copy memory from source to destination
+; ptr memcpy(ptr dest, ptr src, i64 count)
+;==============================================================================
+define ptr @memcpy(ptr %dest, ptr %src, i64 %count) {
+entry:
+    ; Allocate loop counter
+    %i = alloca i64
+    store i64 0, ptr %i
+    br label %loop.cond
+
+loop.cond:
+    %iVal = load i64, ptr %i
+    %cond = icmp ult i64 %iVal, %count
+    br i1 %cond, label %loop.body, label %loop.end
+
+loop.body:
+    ; Calculate source pointer: src + i
+    %srcPtr = getelementptr i8, ptr %src, i64 %iVal
+    ; Load byte from source
+    %byte = load i8, ptr %srcPtr
+    ; Calculate dest pointer: dest + i
+    %destPtr = getelementptr i8, ptr %dest, i64 %iVal
+    ; Store byte to destination
+    store i8 %byte, ptr %destPtr
+    ; Increment counter
+    %iNext = add i64 %iVal, 1
+    store i64 %iNext, ptr %i
+    br label %loop.cond
+
+loop.end:
+    ret ptr %dest
+}
+
+;==============================================================================
 ; round - round to nearest integer (half away from zero)
 ; double round(double x)
 ;==============================================================================

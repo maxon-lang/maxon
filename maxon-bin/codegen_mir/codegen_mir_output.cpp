@@ -459,6 +459,7 @@ static const std::pair<const char *, const char *> WINDOWS_IMPORTS[] = {
 	{"kernel32.dll", "GetProcessHeap"},
 	{"kernel32.dll", "HeapAlloc"},
 	{"kernel32.dll", "HeapFree"},
+	{"kernel32.dll", "HeapReAlloc"},
 	{"kernel32.dll", "GetStdHandle"},
 	{"kernel32.dll", "WriteFile"},
 	{"kernel32.dll", "CloseHandle"},

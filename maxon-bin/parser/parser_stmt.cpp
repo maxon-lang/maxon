@@ -259,7 +259,7 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 		int idColumn = currentToken().column;
 		advance();
 
-		// Check for member access (struct.field = value) or namespace qualification
+		// Check for member access (struct.field = value) or namespace qualification or method call
 		if (check(TokenType::DOT)) {
 			advance(); // consume '.'
 			Token memberName = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
@@ -269,6 +269,29 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 				advance(); // consume '='
 				auto value = parseLogicalOr();
 				return std::make_unique<MemberAssignStmtAST>(name, memberName.value, std::move(value), idLine, idColumn);
+			}
+
+			// Check for method call: arr.push(5) -> push(arr, 5)
+			// This is method call if name is a simple identifier (no dots)
+			if (check(TokenType::LPAREN) && name.find('.') == std::string::npos) {
+				std::string methodName = memberName.value;
+				advance(); // consume '('
+
+				std::vector<std::unique_ptr<ExprAST>> args;
+				// First argument is the object itself
+				args.push_back(std::make_unique<VariableExprAST>(name, idLine, idColumn));
+
+				// Parse remaining arguments
+				if (!check(TokenType::RPAREN)) {
+					args.push_back(parseLogicalOr());
+					while (match(TokenType::COMMA)) {
+						args.push_back(parseLogicalOr());
+					}
+				}
+
+				expect(TokenType::RPAREN, "Expected ')' after method arguments");
+				auto callExpr = std::make_unique<CallExprAST>(methodName, std::move(args), idLine, idColumn);
+				return std::make_unique<ExprStmtAST>(std::move(callExpr), idLine, idColumn);
 			}
 
 			// Otherwise, continue treating as namespace qualification for function calls
