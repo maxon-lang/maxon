@@ -81,6 +81,7 @@ private:
     std::vector<std::string> findStdlibFiles(const std::string& stdlibPath);
     std::string extractDocumentation(const std::string& sourceText, const std::string& functionName, int functionLine);
     std::vector<lsp::CompletionItem> getQualifiedNameCompletions(const std::string& prefix);
+    std::vector<lsp::CompletionItem> getMemberCompletions(const std::string& typeName, const SemanticInfo& semInfo);
 };
 
 #endif // ANALYZER_H

@@ -89,11 +89,39 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
 
 		} catch (const std::exception &e) {
 			lsp::Diagnostic diag;
-			diag.range.start.line = 0;
-			diag.range.start.character = 0;
-			diag.range.end.line = 0;
-			diag.range.end.character = 1;
-			diag.message = std::string("Parse error: ") + e.what();
+
+			// Try to extract line and column from error message
+			// Parser errors have format: "...Location: line X, column Y"
+			std::string errorMsg = e.what();
+			int errorLine = 0;
+			int errorColumn = 0;
+
+			size_t locPos = errorMsg.find("Location: line ");
+			if (locPos != std::string::npos) {
+				size_t lineStart = locPos + 15; // Length of "Location: line "
+				size_t lineEnd = errorMsg.find(',', lineStart);
+				if (lineEnd != std::string::npos) {
+					std::string lineStr = errorMsg.substr(lineStart, lineEnd - lineStart);
+					errorLine = std::stoi(lineStr);
+
+					size_t colPos = errorMsg.find("column ", lineEnd);
+					if (colPos != std::string::npos) {
+						size_t colStart = colPos + 7; // Length of "column "
+						size_t colEnd = errorMsg.find_first_not_of("0123456789", colStart);
+						if (colEnd == std::string::npos) {
+							colEnd = errorMsg.length();
+						}
+						std::string colStr = errorMsg.substr(colStart, colEnd - colStart);
+						errorColumn = std::stoi(colStr);
+					}
+				}
+			}
+
+			diag.range.start.line = errorLine > 0 ? errorLine - 1 : 0;
+			diag.range.start.character = errorColumn > 0 ? errorColumn - 1 : 0;
+			diag.range.end.line = errorLine > 0 ? errorLine - 1 : 0;
+			diag.range.end.character = errorColumn > 0 ? errorColumn : 1;
+			diag.message = std::string("Parse error: ") + errorMsg;
 			diag.severity = 1; // Error
 			diag.source = "maxon";
 			diagnostics.push_back(diag);
@@ -125,8 +153,8 @@ std::vector<lsp::CompletionItem> Analyzer::getCompletions(std::shared_ptr<Docume
 	size_t lastDot = textBeforeCursor.find_last_of('.');
 
 	if (lastDot != std::string::npos) {
-		// We're after a dot - provide qualified name completions
-		// Extract the prefix before the dot (e.g., "stdlib" from "stdlib.")
+		// We're after a dot - could be qualified name (stdlib.fmt) or member access (arr.length)
+		// Extract the prefix before the dot (e.g., "stdlib" from "stdlib." or "arr" from "arr.")
 		size_t start = lastDot;
 		while (start > 0 && (std::isalnum(textBeforeCursor[start - 1]) ||
 							 textBeforeCursor[start - 1] == '_' || textBeforeCursor[start - 1] == '.')) {
@@ -134,6 +162,27 @@ std::vector<lsp::CompletionItem> Analyzer::getCompletions(std::shared_ptr<Docume
 		}
 		std::string prefix = textBeforeCursor.substr(start, lastDot - start);
 
+		// Check if prefix is a variable name with a known type
+		// Extract just the identifier (last part before the dot)
+		size_t lastDotInPrefix = prefix.find_last_of('.');
+		std::string identifierName = (lastDotInPrefix != std::string::npos)
+			? prefix.substr(lastDotInPrefix + 1)
+			: prefix;
+
+		// Look up the identifier in semantic cache
+		auto cacheIt = semanticCache.find(doc->uri);
+		if (cacheIt != semanticCache.end()) {
+			const SemanticInfo &semInfo = cacheIt->second;
+			auto varIt = semInfo.variables.find(identifierName);
+
+			if (varIt != semInfo.variables.end()) {
+				const VariableInfo &varInfo = varIt->second;
+				// Get member completions for this type (handles arrays, structs, etc.)
+				return getMemberCompletions(varInfo.type, semInfo);
+			}
+		}
+
+		// Not a known variable, try qualified name completions (stdlib.fmt, etc.)
 		return getQualifiedNameCompletions(prefix);
 	}
 
@@ -635,6 +684,49 @@ std::string Analyzer::getTextBeforePosition(const std::string &text, lsp::Positi
 	}
 
 	return line.substr(0, pos.character);
+}
+
+std::vector<lsp::CompletionItem> Analyzer::getMemberCompletions(const std::string &typeName, const SemanticInfo &semInfo) {
+	std::vector<lsp::CompletionItem> items;
+
+	// Check if it's a struct type
+	auto structIt = semInfo.structs.find(typeName);
+	if (structIt != semInfo.structs.end()) {
+		// Return struct fields
+		const StructInfo &structInfo = structIt->second;
+		for (const auto &field : structInfo.fields) {
+			lsp::CompletionItem item;
+			item.label = field.name;
+			item.kind = lsp::CompletionItemKind::Field;
+			item.detail = field.type;
+			item.documentation = "Field of struct " + typeName;
+			items.push_back(item);
+		}
+		return items;
+	}
+
+	// Check if it's an array type (e.g., "[int]", "[float]")
+	if (!typeName.empty() && typeName[0] == '[') {
+		// Array type - provide length and capacity members
+		lsp::CompletionItem lengthItem;
+		lengthItem.label = "length";
+		lengthItem.kind = lsp::CompletionItemKind::Property;
+		lengthItem.detail = "int";
+		lengthItem.documentation = "Number of elements in the array";
+		items.push_back(lengthItem);
+
+		lsp::CompletionItem capacityItem;
+		capacityItem.label = "capacity";
+		capacityItem.kind = lsp::CompletionItemKind::Property;
+		capacityItem.detail = "int";
+		capacityItem.documentation = "Capacity of the array (number of elements it can hold without reallocation)";
+		items.push_back(capacityItem);
+
+		return items;
+	}
+
+	// No members found for this type
+	return items;
 }
 
 std::vector<lsp::CompletionItem> Analyzer::getQualifiedNameCompletions(const std::string &prefix) {

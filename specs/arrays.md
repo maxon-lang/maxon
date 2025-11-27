@@ -261,3 +261,109 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: error.let-sized-form -->
+```maxon
+function main() int
+    let arr = [5]int
+    return 0
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 3, column 5
+Static arrays (declared with 'let') must use value literals
+  Use: let arr = [value1, value2, ...]
+  Not: let arr = [5]int
+  Note: Use 'var' for dynamically-sized arrays
+
+  3 |     let arr = [5]int
+    |     ^
+
+Semantic Error: line 3, column 5
+The variable 'arr' is assigned but its value is never used
+
+  3 |     let arr = [5]int
+    |     ^
+```
+
+<!-- test: error.static-array-assignment -->
+```maxon
+function main() int
+    let arr = [1, 2, 3]
+    arr[0] = 10
+    return 0
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 4, column 5
+Cannot assign to read-only array 'arr'
+  Array declared with 'let' at line 3, column 5
+  Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable arrays
+
+  4 |     arr[0] = 10
+    |     ^
+```
+
+<!-- test: error.push-on-static-array -->
+```maxon
+function main() int
+    let arr = [1, 2, 3]
+    arr.push(4)
+    return 0
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 4, column 5
+push() can only be used on dynamic arrays, not [3]int
+
+  4 |     arr.push(4)
+    |     ^
+```
+
+<!-- test: error.pop-on-static-array -->
+```maxon
+function main() int
+    let arr = [1, 2, 3]
+    arr.pop()
+    return 0
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 4, column 5
+pop() can only be used on dynamic arrays, not [3]int
+
+  4 |     arr.pop()
+    |     ^
+```
+
+<!-- test: error.push-type-mismatch -->
+```maxon
+function main() int
+    var arr = [1, 2, 3]
+    arr.push(3.14)
+    return 0
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 4, column 5
+push() value type float doesn't match array element type int
+
+  4 |     arr.push(3.14)
+    |     ^
+```
+
+<!-- test: error.non-integer-index -->
+```maxon
+function main() int
+    var arr = [1, 2, 3]
+    return arr[1.5]
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 4, column 12
+Array index must be an integer
+  Found type: float
+
+  4 |     return arr[1.5]
+    |            ^
+```
