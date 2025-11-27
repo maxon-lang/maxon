@@ -192,7 +192,7 @@ docs: compiler
 ffi-test-lib:
 	@echo Building FFI test library...
 ifeq ($(PLATFORM),windows)
-	@cd language-tests/ffi-test-lib && cmd.exe /c build.bat release
+	@cd language-tests/ffi-test-lib && "$(LLVM_DIR_ABS)/bin/clang.exe" -O2 -Wall -Wextra -Werror -shared -DFFI_TEST_LIB_EXPORTS -o ffi_test_lib.dll ffi_test_lib.c
 else
 	@cd language-tests/ffi-test-lib && ./build.sh release
 endif

@@ -318,6 +318,62 @@ class CopyPropagationPass : public OptimizationPass {
 };
 
 //==============================================================================
+// PHI Elimination Pass
+//==============================================================================
+
+/**
+ * Eliminate PHI nodes by inserting copy instructions at predecessor block ends.
+ * This pass converts SSA form to a form suitable for register allocation.
+ *
+ * PHI elimination works by:
+ * 1. For each PHI node in a basic block
+ * 2. For each incoming value/block pair in the PHI
+ * 3. Insert a Copy instruction at the end of the predecessor block (before terminator)
+ *    that copies the incoming value to the PHI result
+ * 4. Remove the PHI instruction
+ *
+ * Critical edges are handled by inserting a new intermediate block when:
+ * - The predecessor has multiple successors AND
+ * - The PHI's block has multiple predecessors
+ *
+ * Example:
+ *   merge:
+ *     %result = phi i32 [%a, %left], [%b, %right]
+ *
+ * Becomes:
+ *   left:
+ *     ...
+ *     %result = copy %a   ; inserted before branch
+ *     br merge
+ *   right:
+ *     ...
+ *     %result = copy %b   ; inserted before branch
+ *     br merge
+ *   merge:
+ *     ; PHI removed, %result already has correct value
+ */
+class PhiEliminationPass : public OptimizationPass {
+  public:
+	const char *getName() const override { return "phi-elimination"; }
+	bool run(MIRModule &module) override;
+
+  private:
+	bool runOnFunction(MIRFunction &func);
+
+	// Check if an edge is critical (pred has multiple succs, succ has multiple preds)
+	bool isCriticalEdge(MIRBasicBlock *pred, MIRBasicBlock *succ);
+
+	// Split a critical edge by inserting a new block
+	MIRBasicBlock *splitCriticalEdge(MIRFunction &func, MIRBasicBlock *pred, MIRBasicBlock *succ);
+
+	// Insert copy instruction at the end of a block (before terminator)
+	void insertCopyBeforeTerminator(MIRBasicBlock *block, MIRValue *dest, MIRValue *src);
+
+	// Counter for generating unique split block names
+	int splitBlockCounter_ = 0;
+};
+
+//==============================================================================
 // MIR Optimizer (Pass Manager)
 //==============================================================================
 

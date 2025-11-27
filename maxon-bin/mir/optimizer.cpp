@@ -1327,6 +1327,189 @@ bool CopyPropagationPass::runOnBasicBlock(MIRBasicBlock &block,
 }
 
 //==============================================================================
+// PHI Elimination Pass Implementation
+//==============================================================================
+
+bool PhiEliminationPass::run(MIRModule &module) {
+	bool changed = false;
+	splitBlockCounter_ = 0;
+
+	for (auto &func : module.functions) {
+		if (!func->isExternal) {
+			changed |= runOnFunction(*func);
+		}
+	}
+	return changed;
+}
+
+bool PhiEliminationPass::runOnFunction(MIRFunction &func) {
+	bool changed = false;
+
+	// Collect all PHI nodes and their blocks first
+	// (we'll modify blocks during iteration, so collect upfront)
+	struct PhiInfo {
+		MIRBasicBlock *block;
+		MIRInstruction *phi;
+	};
+	std::vector<PhiInfo> phiNodes;
+
+	for (auto &block : func.basicBlocks) {
+		for (auto &inst : block->instructions) {
+			if (inst->opcode == MIROpcode::Phi) {
+				phiNodes.push_back({block.get(), inst.get()});
+			}
+		}
+	}
+
+	if (phiNodes.empty()) {
+		return false;
+	}
+
+	logDetail("Processing " + std::to_string(phiNodes.size()) + " PHI node(s) in " + func.name);
+
+	// Map to track split blocks: (pred, succ) -> splitBlock
+	std::map<std::pair<MIRBasicBlock *, MIRBasicBlock *>, MIRBasicBlock *> splitBlocks;
+
+	// Process each PHI node
+	for (auto &phiInfo : phiNodes) {
+		MIRBasicBlock *phiBlock = phiInfo.block;
+		MIRInstruction *phi = phiInfo.phi;
+		MIRValue *phiResult = phi->result;
+
+		logTrace("Processing PHI: %" + std::to_string(phiResult->regId) +
+				 " in block " + phiBlock->name);
+
+		// For each incoming value/block pair
+		for (auto &incoming : phi->phiIncoming) {
+			MIRValue *incomingValue = incoming.first;
+			MIRBasicBlock *predBlock = incoming.second;
+
+			logTrace("  Incoming: value from " + predBlock->name);
+
+			// Check if this is a critical edge
+			MIRBasicBlock *insertBlock = predBlock;
+			if (isCriticalEdge(predBlock, phiBlock)) {
+				// Check if we already split this edge
+				auto key = std::make_pair(predBlock, phiBlock);
+				auto it = splitBlocks.find(key);
+				if (it != splitBlocks.end()) {
+					insertBlock = it->second;
+				} else {
+					insertBlock = splitCriticalEdge(func, predBlock, phiBlock);
+					splitBlocks[key] = insertBlock;
+					logTrace("    Split critical edge: " + predBlock->name + " -> " +
+							 insertBlock->name + " -> " + phiBlock->name);
+				}
+			}
+
+			// Insert copy instruction at the end of insertBlock (before terminator)
+			insertCopyBeforeTerminator(insertBlock, phiResult, incomingValue);
+			changed = true;
+		}
+	}
+
+	// Remove all PHI instructions
+	for (auto &block : func.basicBlocks) {
+		auto &instructions = block->instructions;
+		instructions.erase(
+			std::remove_if(instructions.begin(), instructions.end(),
+						   [](const std::unique_ptr<MIRInstruction> &inst) {
+							   return inst->opcode == MIROpcode::Phi;
+						   }),
+			instructions.end());
+	}
+
+	return changed;
+}
+
+bool PhiEliminationPass::isCriticalEdge(MIRBasicBlock *pred, MIRBasicBlock *succ) {
+	// Critical edge: pred has multiple successors AND succ has multiple predecessors
+	return pred->successors.size() > 1 && succ->predecessors.size() > 1;
+}
+
+MIRBasicBlock *PhiEliminationPass::splitCriticalEdge(MIRFunction &func,
+													 MIRBasicBlock *pred,
+													 MIRBasicBlock *succ) {
+	// Create a new basic block for the split edge
+	std::string splitName = "split." + pred->name + "." + succ->name + "." +
+							std::to_string(splitBlockCounter_++);
+
+	auto splitBlock = std::make_unique<MIRBasicBlock>(splitName);
+	MIRBasicBlock *splitPtr = splitBlock.get();
+
+	// The split block just branches unconditionally to succ
+	auto brInst = std::make_unique<MIRInstruction>(MIROpcode::Br);
+	brInst->operands.push_back(MIRValue::createBlockRef(succ));
+	splitBlock->instructions.push_back(std::move(brInst));
+
+	// Update predecessor's terminator to branch to splitBlock instead of succ
+	if (!pred->instructions.empty()) {
+		auto &terminator = pred->instructions.back();
+		for (auto &operand : terminator->operands) {
+			if (operand->kind == MIRValueKind::BasicBlockRef &&
+				operand->blockRef == succ) {
+				operand->blockRef = splitPtr;
+			}
+		}
+	}
+
+	// Update CFG: pred -> split -> succ
+	// Remove succ from pred's successors, add splitBlock
+	pred->successors.erase(
+		std::remove(pred->successors.begin(), pred->successors.end(), succ),
+		pred->successors.end());
+	pred->successors.push_back(splitPtr);
+
+	// Remove pred from succ's predecessors, add splitBlock
+	succ->predecessors.erase(
+		std::remove(succ->predecessors.begin(), succ->predecessors.end(), pred),
+		succ->predecessors.end());
+	succ->predecessors.push_back(splitPtr);
+
+	// Set up split block's CFG
+	splitPtr->predecessors.push_back(pred);
+	splitPtr->successors.push_back(succ);
+
+	// Add split block to function (insert after pred for better ordering)
+	auto it = std::find_if(func.basicBlocks.begin(), func.basicBlocks.end(),
+						   [pred](const std::unique_ptr<MIRBasicBlock> &b) { return b.get() == pred; });
+	if (it != func.basicBlocks.end()) {
+		++it; // Insert after pred
+	}
+	func.basicBlocks.insert(it, std::move(splitBlock));
+
+	return splitPtr;
+}
+
+void PhiEliminationPass::insertCopyBeforeTerminator(MIRBasicBlock *block,
+													MIRValue *dest,
+													MIRValue *src) {
+	// Create a copy instruction
+	auto copyInst = std::make_unique<MIRInstruction>(MIROpcode::Copy);
+	copyInst->result = dest;
+	copyInst->operands.push_back(src);
+
+	// Find the terminator instruction (should be at the end)
+	auto &instructions = block->instructions;
+	if (instructions.empty()) {
+		instructions.push_back(std::move(copyInst));
+		return;
+	}
+
+	// Insert before the last instruction (assumed to be terminator)
+	auto insertPos = instructions.end();
+	--insertPos; // Point to the terminator
+
+	// Verify the last instruction is actually a terminator
+	if ((*insertPos)->isTerminator()) {
+		instructions.insert(insertPos, std::move(copyInst));
+	} else {
+		// No terminator? Just append
+		instructions.push_back(std::move(copyInst));
+	}
+}
+
+//==============================================================================
 // MIR Optimizer (Pass Manager) Implementation
 //==============================================================================
 

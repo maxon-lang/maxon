@@ -1,6 +1,9 @@
+#include "backend/pe_writer.h"
+#include "backend/x86_codegen.h"
 #include "compiler.h"
 #include "docs_generator.h"
 #include "mir/mir_parser.h"
+#include "mir/optimizer.h"
 #include "self_test.h"
 #include "temp_runner.h"
 #include "test_regenerate.h"
@@ -12,6 +15,7 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -115,6 +119,141 @@ int main(int argc, char *argv[]) {
 		return 0;
 	}
 
+	// Compile a standalone MIR file directly to an executable
+	if (command == "compile-mir") {
+		if (argc < 3) {
+			std::cerr << "Usage: " << argv[0] << " compile-mir <file.mir> [-o output.exe]" << std::endl;
+			return 1;
+		}
+		std::string mirFile = argv[2];
+		std::string outputFile;
+		int verboseLevel = 0;
+
+		for (int i = 3; i < argc; ++i) {
+			std::string arg = argv[i];
+			if (arg == "-o" && i + 1 < argc) {
+				outputFile = argv[++i];
+			} else if (arg == "-vvv") {
+				verboseLevel = 3;
+			} else if (arg == "-vv") {
+				verboseLevel = std::max(verboseLevel, 2);
+			} else if (arg == "-v" || arg == "--verbose") {
+				verboseLevel = std::max(verboseLevel, 1);
+			}
+		}
+
+		// Default output file: same name as input but .exe
+		if (outputFile.empty()) {
+			size_t lastDot = mirFile.find_last_of('.');
+			if (lastDot != std::string::npos) {
+				outputFile = mirFile.substr(0, lastDot) + ".exe";
+			} else {
+				outputFile = mirFile + ".exe";
+			}
+		}
+
+		// Parse MIR file
+		auto result = mir::MIRParser::parseFile(mirFile);
+		if (!result.errors.empty()) {
+			for (const auto &err : result.errors) {
+				std::cerr << err.toString() << std::endl;
+			}
+			return 1;
+		}
+		if (!result.module) {
+			std::cerr << "Error: Failed to parse MIR file" << std::endl;
+			return 1;
+		}
+
+		// Run PHI elimination pass before code generation
+		mir::PhiEliminationPass phiElim;
+		phiElim.run(*result.module);
+
+		// Generate x86-64 code
+		backend::X86CodeGen codegen(backend::CallingConv::Win64);
+		codegen.generate(result.module.get());
+
+		// Get generated code
+		const auto &functionCodes = codegen.getFunctionCodes();
+		const auto &dataSection = codegen.getDataSection();
+
+		// Collect code and function offsets
+		std::vector<uint8_t> codeBuffer;
+		std::unordered_map<std::string, size_t> functionOffsets;
+
+		for (const auto &func : functionCodes) {
+			size_t funcOffset = codeBuffer.size();
+			functionOffsets[func.name] = funcOffset;
+			codeBuffer.insert(codeBuffer.end(), func.code.begin(), func.code.end());
+		}
+
+		// Apply function-to-function relocations
+		for (const auto &func : functionCodes) {
+			size_t funcBaseOffset = functionOffsets[func.name];
+			for (const auto &reloc : func.relocations) {
+				if (reloc.type == backend::Relocation::Type::FunctionCall) {
+					auto it = functionOffsets.find(reloc.symbolName);
+					if (it != functionOffsets.end()) {
+						size_t patchOffset = funcBaseOffset + reloc.offset;
+						size_t callEnd = patchOffset + 4;
+						int32_t rel = static_cast<int32_t>(it->second - callEnd);
+						codeBuffer[patchOffset] = rel & 0xFF;
+						codeBuffer[patchOffset + 1] = (rel >> 8) & 0xFF;
+						codeBuffer[patchOffset + 2] = (rel >> 16) & 0xFF;
+						codeBuffer[patchOffset + 3] = (rel >> 24) & 0xFF;
+					}
+				}
+			}
+		}
+
+		// Find entry point - look for main or _start
+		size_t entryPoint = 0;
+		auto mainIt = functionOffsets.find("main");
+		if (mainIt != functionOffsets.end()) {
+			entryPoint = mainIt->second;
+		} else {
+			auto startIt = functionOffsets.find("_start");
+			if (startIt != functionOffsets.end()) {
+				entryPoint = startIt->second;
+			} else {
+				std::cerr << "Error: No 'main' or '_start' function found in MIR" << std::endl;
+				return 1;
+			}
+		}
+
+		// Write PE executable
+		backend::PeWriter pe;
+		pe.addTextSection(codeBuffer);
+		if (!dataSection.empty()) {
+			pe.addDataSection(std::vector<uint8_t>(dataSection));
+		}
+		// Entry point RVA = base of .text (0x1000) + offset within code
+		pe.setEntryPoint(0x1000 + static_cast<uint32_t>(entryPoint));
+
+		// Add data relocations
+		for (const auto &func : functionCodes) {
+			size_t funcBaseOffset = functionOffsets[func.name];
+			for (const auto &reloc : func.relocations) {
+				if (reloc.type == backend::Relocation::Type::GlobalRef) {
+					size_t patchOffset = funcBaseOffset + reloc.offset;
+					// The addend contains the data offset
+					pe.addDataRelocation(static_cast<uint32_t>(patchOffset),
+										 static_cast<uint32_t>(reloc.addend));
+				}
+			}
+		}
+
+		if (!pe.write(outputFile)) {
+			std::cerr << "Error: Failed to write executable" << std::endl;
+			return 1;
+		}
+
+		if (verboseLevel >= 1) {
+			std::cout << "Compiled " << mirFile << " -> " << outputFile << std::endl;
+		}
+
+		return 0;
+	}
 	if (command == "regen-fragments") {
 		int verboseLevel = 0;
 		for (int i = 2; i < argc; ++i) {

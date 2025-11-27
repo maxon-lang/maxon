@@ -1,0 +1,43 @@
+; ExitCode: 42
+; Test: Nested control flow with multiple phi nodes
+; This tests phi elimination with critical edges (pred has multiple succs, phi block has multiple preds)
+; Logic: if n > 0 then (if n > 5 then 30 else 20) else 10
+; With n = 3: outer condition true, inner condition false -> 20
+; Then we add 22 to get 42
+
+define i32 @test_nested(i32 %n) {
+entry:
+    %cmp_outer = icmp sgt i32 %n, 0
+    br i1 %cmp_outer, label %outer_then, label %outer_else
+
+outer_then:
+    ; Nested if: n > 5 ?
+    %cmp_inner = icmp sgt i32 %n, 5
+    br i1 %cmp_inner, label %inner_then, label %inner_else
+
+inner_then:
+    br label %outer_merge
+
+inner_else:
+    br label %outer_merge
+
+outer_else:
+    br label %outer_merge
+
+outer_merge:
+    ; Multiple phi values from 3 different paths
+    %result = phi i32 [30, %inner_then], [20, %inner_else], [10, %outer_else]
+    ret i32 %result
+}
+
+define i32 @main() {
+entry:
+    ; Call test_nested with n = 3
+    ; 3 > 0 is true, so we go to outer_then
+    ; 3 > 5 is false, so we go to inner_else
+    ; result = 20
+    %val = call i32 @test_nested(i32 3)
+    ; Add 22 to get 42
+    %final = add i32 %val, 22
+    ret i32 %final
+}

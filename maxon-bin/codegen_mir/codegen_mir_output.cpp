@@ -228,7 +228,15 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 		}
 	}
 
-	// Step 1: Generate x86-64 code from MIR
+	// Step 1: Run PHI elimination pass to convert SSA form to machine-ready form
+	// This must happen after runtime merging but before x86 code generation
+	if (verboseLevel >= 2) {
+		std::cout << "  Running PHI elimination pass..." << std::endl;
+	}
+	mir::PhiEliminationPass phiElim;
+	phiElim.run(*module);
+
+	// Step 2: Generate x86-64 code from MIR
 	backend::CallingConv cc = isWindows ? backend::CallingConv::Win64 : backend::CallingConv::SysV64;
 	backend::X86CodeGen x86gen(cc);
 

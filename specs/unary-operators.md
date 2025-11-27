@@ -54,7 +54,7 @@ end 'main'
 function main() int
     var x = -42
     var y = -x
-    if y = 42 'check'
+    if y == 42 'check'
         return 0
     end 'check'
     return 1

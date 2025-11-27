@@ -1,0 +1,28 @@
+; ExitCode: 55
+; Test: Phi node in a loop - sum integers 1 to 10
+; This tests phi elimination with a back-edge (loop)
+; sum = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 = 55
+
+define i32 @main() {
+entry:
+    br label %loop
+
+loop:
+    ; i starts at 1, increments each iteration
+    %i = phi i32 [1, %entry], [%next_i, %loop]
+    ; sum accumulates the running total
+    %sum = phi i32 [0, %entry], [%next_sum, %loop]
+    
+    ; Add i to sum
+    %next_sum = add i32 %sum, %i
+    
+    ; Increment i
+    %next_i = add i32 %i, 1
+    
+    ; Loop while i <= 10
+    %done = icmp sgt i32 %next_i, 10
+    br i1 %done, label %exit, label %loop
+
+exit:
+    ret i32 %next_sum
+}

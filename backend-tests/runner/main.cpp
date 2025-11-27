@@ -380,7 +380,7 @@ MIRTestExpectation parseMIRExpectation(const fs::path &mirFile) {
 }
 
 // Discover MIR verifier test files
-std::vector<fs::path> discoverMIRTests(const fs::path &testDir) {
+std::vector<fs::path> discoverMIRVerifierTests(const fs::path &testDir) {
 	std::vector<fs::path> tests;
 	fs::path mirDir = testDir / "mir-verifier";
 
@@ -402,9 +402,133 @@ std::vector<fs::path> discoverMIRTests(const fs::path &testDir) {
 	return tests;
 }
 
+// Discover MIR execution test files (in mir/ subdirectory)
+std::vector<fs::path> discoverMIRExecutionTests(const fs::path &testDir) {
+	std::vector<fs::path> tests;
+	fs::path mirDir = testDir / "mir";
+
+	if (!fs::exists(mirDir) || !fs::is_directory(mirDir)) {
+		return tests;
+	}
+
+	for (const auto &entry : fs::directory_iterator(mirDir)) {
+		if (entry.is_regular_file() && entry.path().extension() == ".mir") {
+			tests.push_back(entry.path());
+		}
+	}
+
+	// Sort by filename
+	std::sort(tests.begin(), tests.end(), [](const fs::path &a, const fs::path &b) {
+		return a.filename().string() < b.filename().string();
+	});
+
+	return tests;
+}
+
+// Parse expected exit code from MIR execution test
+// Looks for: ; ExitCode: N
+int parseMIRExitCode(const fs::path &mirFile) {
+	std::ifstream file(mirFile);
+	std::string line;
+	while (std::getline(file, line)) {
+		// Trim whitespace
+		size_t start = line.find_first_not_of(" \t");
+		if (start == std::string::npos)
+			continue;
+		line = line.substr(start);
+
+		// Check for ExitCode comment
+		if (line.rfind("; ExitCode:", 0) == 0) {
+			std::string value = line.substr(11);
+			size_t numStart = value.find_first_not_of(" \t");
+			if (numStart != std::string::npos) {
+				return std::stoi(value.substr(numStart));
+			}
+		}
+	}
+	return 0; // Default to 0 if not specified
+}
+
+// Run MIR execution test (compile .mir to .exe and run it)
+// Returns true if test passed
+bool runMIRExecutionTest(const fs::path &mirFile, bool verbose) {
+	std::string testName = mirFile.stem().string();
+	int expectedExitCode = parseMIRExitCode(mirFile);
+
+	// Create temp directory for output
+	fs::path tempDir = mirFile.parent_path() / "temp";
+	fs::create_directories(tempDir);
+	fs::path exePath = tempDir / (testName + ".exe");
+
+	// Compile MIR to executable using compile-mir command
+	std::string compileCmd = "maxon compile-mir \"" + mirFile.string() + "\" -o \"" + exePath.string() + "\"";
+	auto compileResult = runCommand(compileCmd);
+
+	bool testPassed = false;
+	std::string failReason;
+
+	if (compileResult.exitCode != 0) {
+		failReason = "compilation failed: " + compileResult.output;
+	} else {
+		// Run the compiled executable
+		auto runResult = runCommand("\"" + exePath.string() + "\"");
+		if (runResult.exitCode == expectedExitCode) {
+			testPassed = true;
+		} else {
+			failReason = "exit code " + std::to_string(runResult.exitCode) +
+						 " (expected " + std::to_string(expectedExitCode) + ")";
+		}
+	}
+
+	// Clean up temp files
+	if (fs::exists(exePath)) {
+		fs::remove(exePath);
+	}
+
+	if (verbose) {
+		std::cout << CYAN << "Running: " << RESET << testName << "... ";
+		if (testPassed) {
+			std::cout << GREEN << "PASSED" << RESET << "\n";
+		} else {
+			std::cout << RED << "FAILED" << RESET << " - " << failReason << "\n";
+		}
+	}
+
+	return testPassed;
+}
+
+// Run all MIR execution tests
+// Returns pair<passed, failed>
+std::pair<int, int> runMIRExecutionTests(const std::vector<fs::path> &mirTests, bool verbose) {
+	int passed = 0;
+	int failed = 0;
+
+	if (mirTests.empty()) {
+		return {0, 0};
+	}
+
+	for (const auto &mirFile : mirTests) {
+		if (runMIRExecutionTest(mirFile, verbose)) {
+			passed++;
+			if (!verbose) {
+				std::cout << GREEN << "." << RESET;
+				std::cout.flush();
+			}
+		} else {
+			failed++;
+			if (!verbose) {
+				std::cout << RED << "F" << RESET;
+				std::cout.flush();
+			}
+		}
+	}
+
+	return {passed, failed};
+}
+
 // Run MIR verifier test
 // Returns true if test passed
-bool runMIRTest(const fs::path &mirFile, bool verbose) {
+bool runMIRVerifierTest(const fs::path &mirFile, bool verbose) {
 	MIRTestExpectation exp = parseMIRExpectation(mirFile);
 	std::string testName = mirFile.stem().string();
 
@@ -444,7 +568,7 @@ bool runMIRTest(const fs::path &mirFile, bool verbose) {
 
 // Run all MIR verifier tests
 // Returns pair<passed, failed>
-std::pair<int, int> runMIRTests(const std::vector<fs::path> &mirTests, bool verbose) {
+std::pair<int, int> runMIRVerifierTests(const std::vector<fs::path> &mirTests, bool verbose) {
 	int passed = 0;
 	int failed = 0;
 
@@ -453,7 +577,7 @@ std::pair<int, int> runMIRTests(const std::vector<fs::path> &mirTests, bool verb
 	}
 
 	for (const auto &mirFile : mirTests) {
-		if (runMIRTest(mirFile, verbose)) {
+		if (runMIRVerifierTest(mirFile, verbose)) {
 			passed++;
 			if (!verbose) {
 				std::cout << GREEN << "." << RESET;
@@ -743,14 +867,20 @@ int main(int argc, char *argv[]) {
 
 	// Discover tests
 	auto tests = discoverTests(testDir);
-	auto mirTests = discoverMIRTests(testDir);
+	auto mirVerifierTests = discoverMIRVerifierTests(testDir);
+	auto mirExecTests = discoverMIRExecutionTests(testDir);
 
-	if (tests.empty() && mirTests.empty()) {
+	if (tests.empty() && mirVerifierTests.empty() && mirExecTests.empty()) {
 		std::cerr << YELLOW << "No test files found in " << testDir << RESET << "\n";
 		return 1;
 	}
 
-	std::cout << "Found " << (tests.size() + mirTests.size()) << " tests\n\n";
+	size_t totalTests = tests.size() + mirVerifierTests.size() + mirExecTests.size();
+	std::cout << "Found " << totalTests << " tests";
+	if (!mirExecTests.empty()) {
+		std::cout << " (" << mirExecTests.size() << " MIR execution)";
+	}
+	std::cout << "\n\n";
 
 	// Run tests
 	int passed = 0;
@@ -801,16 +931,23 @@ int main(int argc, char *argv[]) {
 	}
 
 	// Run MIR verifier tests (continues seamlessly from backend tests)
-	auto [mirPassed, mirFailed] = runMIRTests(mirTests, verbose);
+	auto [mirVerifierPassed, mirVerifierFailed] = runMIRVerifierTests(mirVerifierTests, verbose);
 
-	if (!verbose && mirPassed + mirFailed > 0) {
+	if (!verbose && mirVerifierPassed + mirVerifierFailed > 0) {
+		std::cout << "\n";
+	}
+
+	// Run MIR execution tests
+	auto [mirExecPassed, mirExecFailed] = runMIRExecutionTests(mirExecTests, verbose);
+
+	if (!verbose && mirExecPassed + mirExecFailed > 0) {
 		std::cout << "\n";
 	}
 
 	// Overall summary
-	int totalPassed = passed + mirPassed;
-	int totalFailed = failed + mirFailed;
-	int totalTests = tests.size() + mirTests.size();
+	int totalPassed = passed + mirVerifierPassed + mirExecPassed;
+	int totalFailed = failed + mirVerifierFailed + mirExecFailed;
+	int totalTestCount = tests.size() + mirVerifierTests.size() + mirExecTests.size();
 
 	std::cout << "\n"
 			  << BOLD << "Results: " << RESET;
@@ -818,7 +955,7 @@ int main(int argc, char *argv[]) {
 	if (totalFailed > 0) {
 		std::cout << ", " << RED << totalFailed << " failed" << RESET;
 	}
-	std::cout << " / " << totalTests << " total\n";
+	std::cout << " / " << totalTestCount << " total\n";
 
 	return totalFailed > 0 ? 1 : 0;
 }
