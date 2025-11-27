@@ -166,8 +166,8 @@ std::vector<lsp::CompletionItem> Analyzer::getCompletions(std::shared_ptr<Docume
 		// Extract just the identifier (last part before the dot)
 		size_t lastDotInPrefix = prefix.find_last_of('.');
 		std::string identifierName = (lastDotInPrefix != std::string::npos)
-			? prefix.substr(lastDotInPrefix + 1)
-			: prefix;
+										 ? prefix.substr(lastDotInPrefix + 1)
+										 : prefix;
 
 		// Look up the identifier in semantic cache
 		auto cacheIt = semanticCache.find(doc->uri);
@@ -258,7 +258,84 @@ std::vector<lsp::CompletionItem> Analyzer::getCompletions(std::shared_ptr<Docume
 	return items;
 }
 
+// Helper function to check if position is inside a string or character literal
+// Returns: 0 = not in literal, 1 = in string literal, 2 = in character literal
+static int getLiteralTypeAtPosition(const std::string &text, lsp::Position pos) {
+	std::istringstream stream(text);
+	std::string line;
+	int currentLine = 0;
+
+	while (std::getline(stream, line) && currentLine < pos.line) {
+		currentLine++;
+	}
+
+	if (currentLine != pos.line || pos.character >= (int)line.length()) {
+		return 0;
+	}
+
+	// Scan the line from the beginning to check if we're inside a literal
+	bool inString = false;
+	bool inChar = false;
+	int literalStart = -1;
+
+	for (int i = 0; i < (int)line.length(); i++) {
+		char c = line[i];
+		char prev = (i > 0) ? line[i - 1] : '\0';
+
+		// Handle escape sequences (skip escaped quotes)
+		if (prev == '\\') {
+			continue;
+		}
+
+		if (c == '"' && !inChar) {
+			if (!inString) {
+				inString = true;
+				literalStart = i;
+			} else {
+				inString = false;
+				// Check if cursor was in this string
+				if (pos.character > literalStart && pos.character <= i) {
+					return 1; // String literal
+				}
+			}
+		} else if (c == '\'' && !inString) {
+			if (!inChar) {
+				inChar = true;
+				literalStart = i;
+			} else {
+				inChar = false;
+				// Check if cursor was in this char
+				if (pos.character > literalStart && pos.character <= i) {
+					return 2; // Character literal
+				}
+			}
+		}
+	}
+
+	// If still in a literal at cursor position
+	if (inString && pos.character > literalStart) {
+		return 1;
+	}
+	if (inChar && pos.character > literalStart) {
+		return 2;
+	}
+
+	return 0;
+}
+
 std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp::Position pos) {
+	// Check if cursor is inside a string or character literal first
+	int literalType = getLiteralTypeAtPosition(doc->text, pos);
+	if (literalType == 1) {
+		lsp::Hover hover;
+		hover.contents = "```maxon\nstring\n```\n\nString literal";
+		return hover;
+	} else if (literalType == 2) {
+		lsp::Hover hover;
+		hover.contents = "```maxon\nchar\n```\n\nCharacter literal";
+		return hover;
+	}
+
 	std::string word = getWordAtPosition(doc->text, pos);
 
 	if (word.empty()) {

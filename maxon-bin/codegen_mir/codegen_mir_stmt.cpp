@@ -139,7 +139,25 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 		// Non-array, non-struct variable
 		mir::MIRValue *initVal = nullptr;
+		bool isStringInit = false;
 		if (varDecl->initializer) {
+			// Check if initializer is a string literal
+			if (dynamic_cast<StringLiteralExprAST *>(varDecl->initializer.get())) {
+				isStringInit = true;
+			}
+			// Check if initializer is a string concatenation (string + string)
+			if (auto *binExpr = dynamic_cast<BinaryExprAST *>(varDecl->initializer.get())) {
+				if (binExpr->op == '+' && isStringExpression(binExpr->left.get()) &&
+					isStringExpression(binExpr->right.get())) {
+					isStringInit = true;
+				}
+			}
+			// Check if initializer is a string variable
+			if (auto *varExpr = dynamic_cast<VariableExprAST *>(varDecl->initializer.get())) {
+				if (isStringExpression(varExpr)) {
+					isStringInit = true;
+				}
+			}
 			initVal = generateExpr(varDecl->initializer.get());
 			if (!initVal) {
 				throw std::runtime_error("Failed to generate variable initializer for '" + varDecl->name + "'");
@@ -150,6 +168,9 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		mir::MIRType *allocaType;
 		if (!varDecl->type.empty()) {
 			allocaType = getTypeFromString(varDecl->type);
+		} else if (isStringInit) {
+			// String literals return a ptr to __string struct, but we store that ptr
+			allocaType = mir::MIRType::getPtr();
 		} else if (initVal) {
 			allocaType = initVal->type;
 		} else {
@@ -177,6 +198,9 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		// If type was explicitly specified, use it; otherwise derive from the alloca type
 		if (!varDecl->type.empty()) {
 			variableTypes[varDecl->name] = varDecl->type;
+		} else if (isStringInit) {
+			// String variables track as "string" type for comparison purposes
+			variableTypes[varDecl->name] = "string";
 		} else if (allocaType->kind == mir::MIRTypeKind::Struct) {
 			// For structs, use the struct name so member access works
 			variableTypes[varDecl->name] = allocaType->structName;

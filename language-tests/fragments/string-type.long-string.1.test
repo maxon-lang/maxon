@@ -1,0 +1,95 @@
+// Test: string-type.long-string.1
+function main() int
+    var s = "this string is longer than fifteen bytes"
+    if s == "this string is longer than fifteen bytes" 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 21
+
+@.str = constant [41 x i8] c"this string is longer than fifteen bytes\00"
+@.str = constant [41 x i8] c"this string is longer than fifteen bytes\00"
+
+define i32 @main() {
+entry0:
+  %0 = alloca %__string
+  %1 = ptrtoint ptr @.str to i64
+  %2 = getelementptr %__string, ptr %0, i32 0, i32 0
+  store i64 %1, ptr %2
+  %3 = getelementptr %__string, ptr %0, i32 0, i32 1
+  store i64 -9223371860761116632, ptr %3
+  %4 = alloca ptr
+  store ptr %0, ptr %4
+  %6 = alloca %__string
+  %7 = ptrtoint ptr @.str to i64
+  %8 = getelementptr %__string, ptr %6, i32 0, i32 0
+  store i64 %7, ptr %8
+  %9 = getelementptr %__string, ptr %6, i32 0, i32 1
+  store i64 -9223371860761116632, ptr %9
+  %10 = call i1 @__string_equals(ptr %0, ptr %6)
+  br i1 %10, label %then1, label %ifcont2
+then1:
+  ret i32 0
+ifcont2:
+  ret i32 1
+}
+
+declare i1 @__string_equals(ptr %arg0, ptr %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 22
+
+@.str = constant [41 x i8] c"this string is longer than fifteen bytes\00"
+@.str = constant [41 x i8] c"this string is longer than fifteen bytes\00"
+
+define i32 @main() {
+entry0:
+  %0 = alloca %__string
+  %1 = ptrtoint ptr @.str to i64
+  %2 = getelementptr %__string, ptr %0, i32 0, i32 0
+  store i64 %1, ptr %2
+  %3 = getelementptr %__string, ptr %0, i32 0, i32 1
+  store i64 -9223371860761116632, ptr %3
+  %4 = alloca ptr
+  store ptr %0, ptr %4
+  %5 = load ptr, ptr %4
+  %6 = alloca %__string
+  %7 = ptrtoint ptr @.str to i64
+  %8 = getelementptr %__string, ptr %6, i32 0, i32 0
+  store i64 %7, ptr %8
+  %9 = getelementptr %__string, ptr %6, i32 0, i32 1
+  store i64 -9223371860761116632, ptr %9
+  %10 = call i1 @__string_equals(ptr %5, ptr %6)
+  br i1 %10, label %then1, label %ifcont2
+then1:
+  ret i32 0
+ifcont2:
+  ret i32 1
+}
+
+declare i1 @__string_equals(ptr %arg0, ptr %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 0

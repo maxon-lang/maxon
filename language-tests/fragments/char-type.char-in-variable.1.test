@@ -1,8 +1,10 @@
 // Test: char-type.char-in-variable.1
 function main() int
     var letter = 'Z'
-    var code = letter as int
-    return code
+    if letter == 'Z' 'check'
+        return 0
+    end 'check'
+    return 1
 end 'main'
 ---
 ; Module: test.maxon
@@ -13,10 +15,12 @@ entry0:
   %0 = alloca i8
   store i8 90, ptr %0
   %1 = load i8, ptr %0
-  %2 = zext i8 %1 to i32
-  %3 = alloca i32
-  store i32 %2, ptr %3
-  ret i32 %2
+  %2 = icmp eq i8 %1, 90
+  br i1 %2, label %then1, label %ifcont2
+then1:
+  ret i32 0
+ifcont2:
+  ret i32 1
 }
 
 declare void @exit(i32 %arg0)
@@ -30,18 +34,19 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 11
+; Instructions: 10
 
 define i32 @main() {
 entry0:
   %0 = alloca i8
   store i8 90, ptr %0
   %1 = load i8, ptr %0
-  %2 = zext i8 %1 to i32
-  %3 = alloca i32
-  store i32 %2, ptr %3
-  %4 = load i32, ptr %3
-  ret i32 %4
+  %2 = icmp eq i8 %1, 90
+  br i1 %2, label %then1, label %ifcont2
+then1:
+  ret i32 0
+ifcont2:
+  ret i32 1
 }
 
 declare void @exit(i32 %arg0)
@@ -54,4 +59,4 @@ entry0:
 }
 
 ---
-ExitCode: 90
+ExitCode: 0

@@ -3,9 +3,10 @@
     "name": "Maxon",
     "patterns": [
         { "include": "#comments" },
+        { "include": "#block-labels" },
         { "include": "#keywords" },
-        { "include": "#block-identifiers" },
         { "include": "#strings" },
+        { "include": "#characters" },
         { "include": "#numbers" },
         { "include": "#operators" },
         { "include": "#functions" },
@@ -26,27 +27,55 @@
                 { "name": "support.function.math.maxon", "match": "\\b(floor|trunc|sqrt|abs|ceil|round|sin|cos)\\b" }
             ]
         },
-        "block-identifiers": {
+        "block-labels": {
             "patterns": [
-                { "name": "entity.name.label.maxon", "match": "(?<=\\b(then|if|in|else|while|for|end|return|break|continue|var|function|let|struct|export|extern)\\s+[^'\"]*?)('[^']*'|\"[^\"]*\")" }
+                {
+                    "comment": "Block labels like 'main' after end, if, then, while, for, etc.",
+                    "match": "(\\b(?:end|if|then|else|while|for)\\b)\\s*('[^']*')",
+                    "captures": {
+                        "1": { "name": "keyword.control.maxon" },
+                        "2": { "name": "entity.name.label.maxon" }
+                    }
+                }
             ]
         },
         "strings": {
             "patterns": [
-                { "name": "string.quoted.double.maxon", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.maxon", "match": "\\." }] },
-                { "name": "string.quoted.single.maxon", "begin": "'", "end": "'", "patterns": [{ "name": "constant.character.escape.maxon", "match": "\\." }] }
+                {
+                    "name": "string.quoted.double.maxon",
+                    "begin": "\"",
+                    "end": "\"",
+                    "patterns": [
+                        { "name": "constant.character.escape.maxon", "match": "\\\\." }
+                    ]
+                }
+            ]
+        },
+        "characters": {
+            "patterns": [
+                {
+                    "comment": "Character literal with escape sequence",
+                    "name": "constant.character.maxon",
+                    "match": "'\\\\.'" 
+                },
+                {
+                    "comment": "Single character literal",
+                    "name": "constant.character.maxon",
+                    "match": "'[^\\\\']'" 
+                }
             ]
         },
         "numbers": {
             "patterns": [
                 { "name": "constant.numeric.float.maxon", "match": "\\b[0-9]+\\.[0-9]+([eE][+-]?[0-9]+)?\\b" },
+                { "name": "constant.numeric.byte.maxon", "match": "\\b[0-9]+b\\b" },
                 { "name": "constant.numeric.integer.maxon", "match": "\\b[0-9]+\\b" }
             ]
         },
         "operators": {
             "patterns": [
                 { "name": "keyword.operator.arithmetic.maxon", "match": "[+\\-*/]" },
-                { "name": "keyword.operator.comparison.maxon", "match": "(>=?|<=?|=)" },
+                { "name": "keyword.operator.comparison.maxon", "match": "(==|!=|>=?|<=?)" },
                 { "name": "keyword.operator.assignment.maxon", "match": "=" }
             ]
         },
@@ -57,7 +86,7 @@
         },
         "types": {
             "patterns": [
-                { "name": "storage.type.maxon", "match": "\\b(int|char|bool|float|string)\\b" }
+                { "name": "storage.type.maxon", "match": "\\b(int|char|bool|float|byte|string)\\b" }
             ]
         }
     },

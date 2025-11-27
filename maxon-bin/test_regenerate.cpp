@@ -377,6 +377,12 @@ int extractSpecFragments(int verboseLevel) {
 						currentTestName = specBaseName + ".doc-example-" + std::to_string(docExampleCount);
 						testNameCounts[currentTestName] = 1;
 					}
+					// If in Tests section, test name is required
+					if (inTestSection && currentTestName.empty()) {
+						std::cerr << "Error: Test in " << specBaseName << ".md is missing <!-- test: name --> marker" << std::endl;
+						std::cerr << "Code block starts with: " << currentCode.substr(0, currentCode.find('\n')) << std::endl;
+						return 1;
+					}
 					expectedOutputBlockType = "exitcode";
 					collectingMetadata = true;
 					inMetadataBlock = true; // Reading the exitcode value
@@ -396,6 +402,12 @@ int extractSpecFragments(int verboseLevel) {
 						docExampleCount++;
 						currentTestName = specBaseName + ".doc-example-" + std::to_string(docExampleCount);
 						testNameCounts[currentTestName] = 1;
+					}
+					// If in Tests section, test name is required
+					if (inTestSection && currentTestName.empty()) {
+						std::cerr << "Error: Test in " << specBaseName << ".md is missing <!-- test: name --> marker" << std::endl;
+						std::cerr << "Code block starts with: " << currentCode.substr(0, currentCode.find('\n')) << std::endl;
+						return 1;
 					}
 					expectedOutputBlockType = "maxoncstderr";
 					collectingMetadata = true;

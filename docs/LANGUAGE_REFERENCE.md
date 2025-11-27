@@ -72,6 +72,13 @@ return, then, true, var, while
 0
 ```
 
+**Byte Literals** (with `b` suffix, range 0-255)
+```maxon
+42b
+0b
+255b
+```
+
 **Float Literals** (must contain decimal point)
 ```maxon
 3.14
@@ -117,8 +124,34 @@ false
 | `int` | 32-bit | Signed integer | `i32` |
 | `float` | 64-bit | IEEE 754 double | `double` |
 | `bool` | 1-bit | Boolean (true/false) | `i1` |
-| `char` | 8-bit | Single character | `i8` |
-| `string` | 24-byte | UTF-8 string | struct |
+| `byte` | 8-bit | Unsigned byte | `i8` |
+| `char` | 8-bit | Unicode scalar (alias for byte) | `i8` |
+
+### String Types
+
+| Type | Size | Description |
+|------|------|-------------|
+| `string` | 16-byte | UTF-8 string (owned, copy-on-write) |
+| `substring` | 24-byte | String view (reference to string data) |
+
+**String Characteristics:**
+- UTF-8 encoded
+- Small String Optimization (SSO): strings ≤15 bytes stored inline
+- Large strings: heap-allocated with copy-on-write semantics
+- Reference counted for automatic memory management
+
+**String Operations:**
+```maxon
+var s = "hello"              // Small string (SSO)
+var len = s.count()          // Get length in bytes
+var empty = s.is_empty()     // Check if empty
+```
+
+**Substring Type:**
+- Lightweight view into another string's data
+- Does not own the data (keeps parent string alive)
+- Immutable
+- Automatically converts to `string` when needed (with copy)
 
 ### Array Types
 

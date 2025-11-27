@@ -58,6 +58,24 @@ add tests for compiler will all kinds of malformed inputs
 8. **Array slicing:** Sub-array references without copying
 
 
+can't instantiate vars with built in types. you have to create a user defined type that defines its range
+
+Struct literal can only be used as an initializer in variable declarations
+
+Rust defaults to Deep Immutability for everything.
+
+	
+oh god what about error handling
+	- defined error handling block
+
+debugging
+
+
+Higher RAII - Linear Types
+
+
+
+
 Implement Phi elimination pass in maxon-bin/mir/optimizer.cpp: Create a new pass that inserts Copy instructions at predecessor block ends for each phiIncoming value, then removes the Phi instruction.
 
 Review register allocation liveness analysis at [x86_codegen.cpp:390-500[](c:\Users\Eric\Dev\maxon\maxon-bin\backend\x86_codegen.cpp): The cross-block liveness analysis is conservative but incomplete—it doesn't do full dataflow for values defined in predecessor blocks and used after calls. Compare against LLVM's ](http://_vscodecontentref_/0)LiveIntervals.cpp.

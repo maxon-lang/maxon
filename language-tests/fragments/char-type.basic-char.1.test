@@ -1,19 +1,26 @@
 // Test: char-type.basic-char.1
 function main() int
     var x = 'A'
-    return x as int
+    if x == 'A' 'check'
+        return 0
+    end 'check'
+    return 1
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 8
+; Instructions: 10
 
 define i32 @main() {
 entry0:
   %0 = alloca i8
   store i8 65, ptr %0
   %1 = load i8, ptr %0
-  %2 = zext i8 %1 to i32
-  ret i32 %2
+  %2 = icmp eq i8 %1, 65
+  br i1 %2, label %then1, label %ifcont2
+then1:
+  ret i32 0
+ifcont2:
+  ret i32 1
 }
 
 declare void @exit(i32 %arg0)
@@ -27,15 +34,19 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 8
+; Instructions: 10
 
 define i32 @main() {
 entry0:
   %0 = alloca i8
   store i8 65, ptr %0
   %1 = load i8, ptr %0
-  %2 = zext i8 %1 to i32
-  ret i32 %2
+  %2 = icmp eq i8 %1, 65
+  br i1 %2, label %then1, label %ifcont2
+then1:
+  ret i32 0
+ifcont2:
+  ret i32 1
 }
 
 declare void @exit(i32 %arg0)
@@ -48,4 +59,4 @@ entry0:
 }
 
 ---
-ExitCode: 65
+ExitCode: 0

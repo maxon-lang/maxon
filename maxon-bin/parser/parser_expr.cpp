@@ -10,6 +10,14 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		return std::make_unique<NumberExprAST>(value, line, column);
 	}
 
+	if (check(TokenType::BYTE_LITERAL)) {
+		uint8_t value = static_cast<uint8_t>(std::stoi(currentToken().value));
+		int line = currentToken().line;
+		int column = currentToken().column;
+		advance();
+		return std::make_unique<ByteExprAST>(value, line, column);
+	}
+
 	if (check(TokenType::FLOAT_LITERAL)) {
 		double value = std::stod(currentToken().value);
 		int line = currentToken().line;

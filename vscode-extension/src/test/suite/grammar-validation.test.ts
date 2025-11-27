@@ -27,7 +27,7 @@ suite('TextMate Grammar Validation', () => {
 
 	test('Grammar includes all pattern types', () => {
 		const patterns = grammar.patterns.map((p: any) => p.include);
-		const expectedPatterns = ['#comments', '#keywords', '#block-identifiers', '#strings', '#numbers', '#operators', '#functions', '#types'];
+		const expectedPatterns = ['#comments', '#keywords', '#block-labels', '#strings', '#characters', '#numbers', '#operators', '#functions', '#types'];
 
 		for (const expected of expectedPatterns) {
 			assert.ok(patterns.includes(expected), `Grammar should include ${expected}`);
@@ -113,8 +113,11 @@ suite('TextMate Grammar Validation', () => {
 		assert.ok(doubleQuotePattern.begin, 'Double-quoted string should have begin');
 		assert.ok(doubleQuotePattern.end, 'Double-quoted string should have end');
 
-		const singleQuotePattern = stringsRepo.patterns.find((p: any) => p.name === 'string.quoted.single.maxon');
-		assert.ok(singleQuotePattern, 'Single-quoted string pattern should exist');
+		// Character literals are separate from strings (single-quoted)
+		const charactersRepo = grammar.repository.characters;
+		assert.ok(charactersRepo, 'Characters repository should exist');
+		const charPattern = charactersRepo.patterns.find((p: any) => p.name === 'constant.character.maxon');
+		assert.ok(charPattern, 'Character literal pattern should exist');
 	});
 
 	test('Number patterns exist', () => {

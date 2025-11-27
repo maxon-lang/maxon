@@ -51,31 +51,37 @@ all: compiler lsp-server extension-install debugger-test-build
 	@echo All components built successfully.
 
 help:
-	@echo "Maxon Project Build Targets:"
-	@echo "  all              - Build all components: compiler, LSP server, and VS Code extension (default)"
-	@echo "  configure        - Configure CMake build"
-	@echo "  runtime          - Build Maxon runtime library"
-	@echo "  compiler         - Build only the Maxon compiler"
-	@echo "  lsp              - Build LSP server and install VS Code extension"
-	@echo "  lsp-server       - Build only the C++ LSP server"
-	@echo "  extension        - Install dependencies and build VS Code extension"
-	@echo "  extension-build  - Compile the VS Code extension"
-	@echo "  extension-watch  - Watch and compile VS Code extension on changes"
-	@echo "  extension-test   - Run VS Code extension tests"
-	@echo "  extension-package - Package extension as .vsix"
-	@echo "  extension-install - Install extension locally in VS Code"
-	@echo "  lsp-test         - Build and run LSP C++ unit tests"
-	@echo "  backend-test-build - Build the backend test runner"
-	@echo "  backend-test     - Build and run backend tests (compile/run verification)"
-	@echo "  docs             - Generate HTML documentation from specs"
-	@echo "  fragments        - Regenerate fragments, validate specs, and run fragment tests"
-	@echo "  validate-specs   - Check for orphaned test fragments not in any spec"
-	@echo "  test             - Run all test suites (compiler self-tests, fragment tests, LSP tests, extension tests, debugger tests)"
-	@echo "  debugger-test-build   - Build debugger integration tests (requires LLDB)"
-	@echo "  debugger-test    - Run debugger integration tests (requires debugger-test-build first)"
-	@echo "  clean            - Clean build artifacts"
-	@echo "  clean-all        - Clean everything including generated files"
-	@echo "  help             - Show this help message"
+	@echo ""
+	@echo "Maxon Project Build System"
+	@echo "=========================="
+	@echo ""
+	@echo "  all                Build everything (default)"
+	@echo "  compiler           Build the Maxon compiler and grammar generator"
+	@echo "  runtime            Build Maxon runtime library"
+	@echo "  backend-test       Build and run backend tests"
+	@echo ""
+	@echo "  lsp                Build LSP server and install VS Code extension"
+	@echo "  lsp-server         Build the C++ LSP server"
+	@echo "  lsp-test           Build and run LSP unit tests"
+	@echo ""
+	@echo "  extension          Install dependencies and build VS Code extension"
+	@echo "  extension-build    Compile the VS Code extension"
+	@echo "  extension-watch    Watch and compile extension on changes"
+	@echo "  extension-test     Run VS Code extension tests"
+	@echo "  extension-package  Package extension as .vsix"
+	@echo "  extension-install  Install extension locally in VS Code"
+	@echo ""
+	@echo "  debugger-test      Run debugger integration tests"
+	@echo ""
+	@echo "  docs               Generate HTML documentation from specs"
+	@echo "  fragments          Regenerate fragments, validate specs, run fragment tests"
+	@echo "  validate-specs     Check for orphaned test fragments"
+	@echo ""
+	@echo "  test               Run all test suites"
+	@echo "  configure          Force CMake reconfiguration"
+	@echo "  clean              Clean build artifacts"
+	@echo "  clean-all          Clean everything including generated files"
+	@echo ""
 
 # Build Maxon runtime library
 runtime: $(RUNTIME_MIR)
@@ -93,8 +99,8 @@ $(RUNTIME_MIR_LINUX): maxon-runtime/runtime.mir maxon-runtime/runtime_linux.mir
 	@echo "Combining Maxon runtime library for Linux..."
 	@cat maxon-runtime/runtime_linux.mir maxon-runtime/runtime.mir > bin/runtime_linux.mir
 
-# Configure CMake
-configure:
+# Configure CMake (only if build.ninja doesn't exist)
+$(BUILD_DIR)/build.ninja: CMakeLists.txt
 	@mkdir -p $(BUILD_DIR)
 ifeq ($(PLATFORM),windows)
 	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Release -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS) >/dev/null 2>&1
@@ -102,8 +108,13 @@ else
 	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Release -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS) >/dev/null 2>&1
 endif
 
+# Force reconfigure
+configure: 
+	@rm -f $(BUILD_DIR)/build.ninja
+	@$(MAKE) $(BUILD_DIR)/build.ninja
+
 # Build the Maxon compiler
-compiler: configure runtime
+compiler: $(BUILD_DIR)/build.ninja runtime
 	cmake --build $(BUILD_DIR) --target maxon
 	cmake --build $(BUILD_DIR) --target grammar_generator
 	@if [ bin/grammar_generator$(EXE_EXT) -nt vscode-extension/syntaxes/maxon.tmLanguage.json ]; then echo "Generating TextMate grammar..."; ./bin/grammar_generator$(EXE_EXT) vscode-extension/syntaxes/maxon.tmLanguage.json; fi
@@ -153,27 +164,31 @@ extension-install: extension-package
 	@echo Extension installed. Reload VS Code to activate.
 
 # Build and run LSP C++ unit tests
-lsp-test:
-	@echo Configuring and building LSP tests...
+lsp-server/tests/build/build.ninja: lsp-server/tests/CMakeLists.txt
 	@mkdir -p lsp-server/tests/build
 ifeq ($(PLATFORM),windows)
 	@cd lsp-server/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
 else
 	@cd lsp-server/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
 endif
+
+lsp-test: lsp-server/tests/build/build.ninja
+	@echo Building and running LSP tests...
 	@cd lsp-server/tests/build && cmake --build .
 	@echo Running LSP tests...
 	@cd lsp-server/tests/build && ctest --output-on-failure
 
 # Build and run backend test runner (standalone executable)
-backend-test-build: compiler
-	@echo Configuring and building backend test runner...
+backend-tests/runner/build/build.ninja: backend-tests/runner/CMakeLists.txt
 	@mkdir -p backend-tests/runner/build
 ifeq ($(PLATFORM),windows)
 	@cd backend-tests/runner/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$(LLVM_DIR_ABS)
 else
 	@cd backend-tests/runner/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$(LLVM_DIR_ABS)
 endif
+
+backend-test-build: compiler backend-tests/runner/build/build.ninja
+	@echo Building backend test runner...
 	@cd backend-tests/runner/build && cmake --build .
 
 # Run backend tests
@@ -222,14 +237,16 @@ test: compiler backend-test-build lsp-server extension-build debugger-test ffi-t
 	@bash scripts/run-all-tests.sh
 
 # Build debugger integration tests
-debugger-test-build: compiler
-	@echo Configuring and building debugger integration tests...
+debugger-tests/build/build.ninja: debugger-tests/CMakeLists.txt
 	@mkdir -p debugger-tests/build
 ifeq ($(PLATFORM),windows)
 	@cd debugger-tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
 else
 	@cd debugger-tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
 endif
+
+debugger-test-build: compiler debugger-tests/build/build.ninja
+	@echo Building debugger integration tests...
 	@cd debugger-tests/build && cmake --build .
 	@echo Debugger integration tests built successfully.
 

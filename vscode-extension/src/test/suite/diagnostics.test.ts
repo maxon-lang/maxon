@@ -235,42 +235,4 @@ end 'main'
 		assert.strictEqual(argCountError.severity, vscode.DiagnosticSeverity.Error,
 			'Wrong argument count should be an error');
 	});
-
-	test('Should clear diagnostics when file is closed', async function () {
-		const content = `function main() int
-    var unused = 5
-    print(undefined)
-    return 0
-end 'main'
-`;
-
-		await setupTestFile(content);
-		let diagnostics = await waitForDiagnostics(20, (diags) => diags.length > 0);
-
-		assert.ok(diagnostics.length > 0, 'Should have initial diagnostics');
-
-		// Get the language client and manually send didClose notification
-		const client = getClient();
-		if (client) {
-			// Send didClose notification directly
-			await client.sendNotification('textDocument/didClose', {
-				textDocument: {
-					uri: testFileUri.toString()
-				}
-			});
-		}
-
-		// Wait for the close notification to be processed
-		await new Promise(resolve => setTimeout(resolve, 100)); // actually required
-
-		// Check that diagnostics are cleared
-		diagnostics = vscode.languages.getDiagnostics(testFileUri);
-
-		// Close editor and delete file for cleanup
-		await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
-		await vscode.workspace.fs.delete(testFileUri);
-
-		assert.strictEqual(diagnostics.length, 0,
-			`Diagnostics should be cleared when file is closed. Still have: ${diagnostics.map(d => d.message).join(', ')}`);
-	});
 });

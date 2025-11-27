@@ -8,8 +8,9 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
 	// Types
 	{"int", {KeywordCategory::Type, "Integer type"}},
 	{"float", {KeywordCategory::Type, "Floating-point type"}},
-	{"char", {KeywordCategory::Type, "Character type"}},
-	{"string", {KeywordCategory::Type, "String type"}},
+	{"char", {KeywordCategory::Type, "Extended Grapheme Cluster (user-perceived character)"}},
+	{"byte", {KeywordCategory::Type, "8-bit unsigned integer"}},
+	{"string", {KeywordCategory::Type, "UTF-8 string (owned, COW)"}},
 	{"bool", {KeywordCategory::Type, "Boolean type"}},
 
 	// Control flow
@@ -204,6 +205,21 @@ Token Lexer::readNumber() {
 	while (std::isdigit(currentChar())) {
 		num += currentChar();
 		advance();
+	}
+
+	// Check for byte suffix 'b' (must come before decimal point check)
+	if (currentChar() == 'b' && !std::isalnum(peek(1))) {
+		advance(); // consume 'b'
+
+		// Range check: byte must be 0-255
+		long long value = std::stoll(num);
+		if (value < 0 || value > 255) {
+			throw std::runtime_error("Byte literal out of range (0-255): " + num +
+									 " at line " + std::to_string(startLine) +
+									 ", column " + std::to_string(startColumn));
+		}
+
+		return Token(TokenType::BYTE_LITERAL, num, startLine, startColumn);
 	}
 
 	// Check for decimal point

@@ -32,6 +32,14 @@ class NumberExprAST : public ExprAST {
 	NumberExprAST(int val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
 };
 
+// Byte literal (8-bit unsigned, 0-255)
+class ByteExprAST : public ExprAST {
+  public:
+	uint8_t value;
+
+	ByteExprAST(uint8_t val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
+};
+
 // Float literal
 class FloatExprAST : public ExprAST {
   public:
@@ -71,7 +79,8 @@ class StringLiteralExprAST : public ExprAST {
   public:
 	std::string value;
 
-	StringLiteralExprAST(const std::string &val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
+	StringLiteralExprAST(const std::string &val, int l = 0, int c = 0)
+		: ExprAST(l, c), value(val) {}
 };
 
 // Type cast expression (e.g., "value as ptr")

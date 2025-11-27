@@ -82,6 +82,11 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Arithmetic operators: +, -, *, /, %
 		if (binExpr->op == '+' || binExpr->op == '-' || binExpr->op == '*' ||
 			binExpr->op == '/' || binExpr->op == '%') {
+			// Special case: string + string = string concatenation
+			if (binExpr->op == '+' && leftType == "string" && rightType == "string") {
+				return "string";
+			}
+
 			// Special handling for modulo: requires both operands to be int
 			if (binExpr->op == '%') {
 				if (leftType != "int" || rightType != "int") {
@@ -213,7 +218,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			const MathIntrinsicInfo *info = Lexer::getMathIntrinsicInfo(callExpr->callee);
 			return info ? info->returnType : "float";
 		}
-		
+
 		// Check for array intrinsics: push(arr, val), pop(arr)
 		// These are transformed from arr.push(val), arr.pop() by the parser
 		if (callExpr->callee == "push") {
@@ -238,7 +243,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			}
 			return "void";
 		}
-		
+
 		if (callExpr->callee == "pop") {
 			if (callExpr->args.size() != 1) {
 				addError("pop() requires exactly 1 argument: array",
@@ -376,6 +381,11 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			// Allow implicit int-to-float conversion
 			bool isValidType = typesMatch(expectedType, argType) ||
 							   (expectedType == "float" && argType == "int");
+
+			// Special case: print() accepts strings as well as ints (polymorphic built-in)
+			if (!isValidType && callExpr->callee == "print" && argType == "string") {
+				isValidType = true;
+			}
 
 			if (!isValidType) {
 				addError("Function '" + callExpr->callee + "' argument type mismatch" +

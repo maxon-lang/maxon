@@ -23,10 +23,10 @@ This document outlines a plan to implement strings in Maxon following Swift's de
 - Reference counted for automatic memory management
 - Efficient for passing strings around
 
-### 4. **String vs Substring**
-- `String`: Owned, heap-allocated string type
+### 4. **string vs Substring**
+- `string`: Owned, heap-allocated string type
 - `Substring`: View into another string's storage (avoids copies when slicing)
-- `Substring` automatically converts to `String` when needed (with copy)
+- `Substring` automatically converts to `string` when needed (with copy)
 - Prevents accidental memory leaks from long-lived substrings
 
 ### 5. **Multiple Views**
@@ -51,11 +51,12 @@ This document outlines a plan to implement strings in Maxon following Swift's de
 | Type | Purpose | Storage | Owned | Mutable | Size |
 |------|---------|---------|-------|---------|------|
 | `string` | Owned UTF-8 string | Inline or heap (COW) | Yes | Yes | 16 bytes |
-| `substring` | String view | Reference to string | No | No | 24 bytes |
-| `char` | Unicode scalar (code point) | Variable-length UTF-8 | No | No | 12 bytes |
+| `char` | Extended Grapheme Cluster | Inline or heap (SSO) | Yes | No | 16 bytes |
 | `byte` | Single byte | 8-bit unsigned | Yes | Yes | 1 byte |
 
-### Type 1: `string` (Owned UTF-8 String)
+Note: The separate `substring` type has been removed. String slicing operations return immutable `string` copies instead.
+
+### Type 1: `string` (Owned UTF-8 string)
 
 **Memory Layout** (16 bytes on 64-bit):
 ```
@@ -102,38 +103,49 @@ var cmp = s.compare(s2)                   // -1, 0, or 1
 
 ```
 
-### Type 2: `substring` (String View)
+### Type 2: `char` (Extended Grapheme Cluster)
 
-**Memory Layout** (24 bytes on 64-bit):
+**Memory Layout** (16 bytes on 64-bit):
+Uses identical SSO layout as `string`:
+
 ```
-[bytes 0-7: pointer to string's storage/data]
-[bytes 8-15: start offset in bytes]
-[bytes 16-23: length in bytes]
+Small Char (MSB of byte 15 = 0):
+[bytes 0-14: UTF-8 data (inline)]
+[byte 15: remaining capacity (15 - length)]
+
+Large Char (MSB of byte 15 = 1):
+[bytes 0-7: pointer to heap buffer]
+[bytes 8-11: count (length in bytes)]
+[bytes 12-15: capacity | 0x80000000]
 ```
 
 **Characteristics**:
-- Lightweight view into another string's data
-- Does not own the data (keeps parent string alive)
+- Represents an Extended Grapheme Cluster (user-perceived character)
+- NOT an alias for `byte` — UTF-8 characters can span multiple bytes
+- Most characters fit in SSO (15 bytes covers vast majority of grapheme clusters)
+- Complex emoji sequences (e.g., family emoji) may require heap allocation
 - Immutable
-- Automatically converts to `string` when passed to functions expecting `string` (with copy)
-- Prevents memory leaks by being explicit about views vs. owned strings
+
+**Examples**:
+```maxon
+var letter = 'A'           // 1 byte (ASCII)
+var accent = 'é'           // 2 bytes (Latin Extended)
+var chinese = '中'         // 3 bytes (CJK)
+var emoji = '🎉'           // 4 bytes (Emoji)
+var family = '👨‍👩‍👧‍👦'          // 25 bytes (Family emoji with ZWJ)
+```
 
 **Operations**:
 ```maxon
-// Created from string slicing
-var s = "hello world"
-var sub = s[0..5]                   // "hello"
-
-// Querying
-var len = sub.count()                     // Length
-var isEmpty = sub.is_empty()
-
-// Conversion to owned string
-var owned = sub.to_string()               // Creates a copy
+// String iteration yields char values
+var s = "café"
+for c in s 'chars'
+    // c is 'c', 'a', 'f', 'é' (4 iterations, not 5 bytes)
+end 'chars'
 
 // Comparison
-var eq = sub.equals(sub2)
-var eq2 = sub.equals_string(s)            // Compare with string
+var eq = c1 == c2
+var lt = c1 < c2
 
 ```
 
@@ -221,33 +233,28 @@ var eq2 = sub.equals_string(s)            // Compare with string
 - `language-tests/fragments/string-cow.test` - Copy-on-write behavior
 - `language-tests/fragments/string-copy.test` - String copies and sharing
 
-### Phase 4: Substring Type
+### Phase 4: String Slicing
 
-**Goals**: Implement `substring` for efficient string views
+**Goals**: Implement string slicing that returns immutable `string` references (views)
 
 **Components**:
-1. **Substring Structure** (`stdlib/string/substring.maxon`)
-   - 24-byte layout: `[base_ptr: ptr][start: int][length: int]`
-   - References parent string's storage
-   - Immutable view
+1. **String Slicing Operations**:
+   - `string.slice(start, end)` → `string` (immutable reference to original)
+   - `string.slice_from(start)` → `string` (immutable reference to original)
+   - `string.slice_to(end)` → `string` (immutable reference to original)
 
-2. **String Slicing**:
-   - `string.slice(start, end)` → `substring`
-   - `string.slice_from(start)` → `substring`
-   - `string.slice_to(end)` → `substring`
+2. **Semantics**:
+   - Slicing returns an immutable string that references the original storage
+   - No data copying — the slice is a view into the original string
+   - Result is immutable to prevent modification of shared storage
+   - Keeps original string alive (reference counting)
 
-3. **Substring Operations**:
-   - `count()`, `is_empty()`
-   - `to_string()` - Copy to owned String
-   - Comparison: `equals()`
-
-4. **Automatic Conversion**:
-   - `substring` → `string` when calling functions expecting `string`
-   - Compiler inserts implicit `to_string()` call
+3. **Index Types**:
+   - Indices operate on grapheme cluster boundaries
+   - `s[0..5]` returns first 5 characters (not bytes)
 
 **Test Files**:
-- `language-tests/fragments/substring.test` - Substring creation and use
-- `language-tests/fragments/substring-conversion.test` - Automatic conversions
+- `language-tests/fragments/string-slice.test` - String slicing operations
 
 ### Phase 6: UTF-8 Validation and Iteration
 

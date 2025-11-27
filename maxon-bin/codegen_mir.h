@@ -120,6 +120,17 @@ class MIRCodeGenerator {
 	// Array intrinsic generation (push, pop)
 	mir::MIRValue *generateArrayIntrinsic(CallExprAST *callExpr);
 
+	// String literal generation (SSO - Small String Optimization)
+	mir::MIRValue *generateStringLiteral(StringLiteralExprAST *strExpr);
+	mir::MIRValue *generateSmallStringLiteral(const std::string &str);
+	mir::MIRValue *generateLargeStringLiteral(const std::string &str);
+
+	// String operations
+	mir::MIRValue *generateStringEquals(mir::MIRValue *left, mir::MIRValue *right);
+	mir::MIRValue *generateStringConcat(mir::MIRValue *left, mir::MIRValue *right);
+	bool isStringExpression(ExprAST *expr);
+	mir::MIRValue *generateStringOperand(ExprAST *expr);
+
 	// Safe FFI generation
 	void registerExternFunction(FunctionAST *func);
 	safeffi::TypeTag getTypeTagFromString(const std::string &typeStr);

@@ -13,6 +13,7 @@ enum class TokenType {
 	// Identifiers and literals
 	IDENTIFIER,
 	NUMBER,
+	BYTE_LITERAL,  // Byte literal with 'b' suffix (e.g., 42b)
 	FLOAT_LITERAL, // Floating-point literal
 	STRING,		   // Double-quoted string literals
 	BLOCK_ID,	   // Single-quoted block identifiers

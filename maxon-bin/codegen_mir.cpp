@@ -53,11 +53,21 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 	} else if (typeStr == "bool") {
 		return mir::MIRType::getInt1();
 	} else if (typeStr == "char") {
+		// Char type: 8-bit signed integer (for compatibility with existing stdlib)
+		// Note: Future EGC (Extended Grapheme Cluster) iteration will use a different approach
 		return mir::MIRType::getInt8();
+	} else if (typeStr == "byte") {
+		return mir::MIRType::getInt8(); // byte is 8-bit unsigned
 	} else if (typeStr == "ptr") {
 		return mir::MIRType::getPtr();
 	} else if (typeStr == "void") {
 		return mir::MIRType::getVoid();
+	} else if (typeStr == "string") {
+		// String type: 16-byte struct {i64, i64}
+		// Layout: [bytes 0-7: data/ptr][bytes 8-15: count/flags]
+		// Small strings (<=15 bytes): stored inline, MSB of byte 15 = 0
+		// Large strings: heap pointer, MSB of byte 15 = 1
+		return mir::MIRType::getStruct("__string", {mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 	} else if (typeStr.empty()) {
 		return mir::MIRType::getInt32(); // Default type
 	}
@@ -108,7 +118,7 @@ std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
 	case mir::MIRTypeKind::Int1:
 		return "bool";
 	case mir::MIRTypeKind::Int8:
-		return "char";
+		return "char"; // Could also be byte, but char is the common case
 	case mir::MIRTypeKind::Int64:
 		return "int"; // Map i64 to int for now
 	case mir::MIRTypeKind::Ptr:
@@ -116,6 +126,9 @@ std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
 	case mir::MIRTypeKind::Void:
 		return "void";
 	case mir::MIRTypeKind::Struct:
+		// Handle built-in string type
+		if (type->structName == "__string")
+			return "string";
 		return type->structName;
 	case mir::MIRTypeKind::Array:
 		// Format: [size]elementType
@@ -325,6 +338,9 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 
 void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
 	logProgress("Starting MIR generation");
+
+	// Note: Standard library (write_stdout) is initialized on-demand when
+	// print/print_float is called - see codegen_mir_expr.cpp
 
 	// First pass: Create all struct types
 	logDetail("Pass 1: Creating struct types (" + std::to_string(program->structs.size()) + " structs)");
