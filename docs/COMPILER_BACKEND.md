@@ -228,6 +228,8 @@ store x, [ptr]
 %y = load [ptr]     ; Replace %y with x, eliminate load
 ```
 
+**Status:** Currently disabled due to a bug that incorrectly correlates stores and loads across different allocas. See [maxon-bin/mir/optimizer.cpp:1187-1193](maxon-bin/mir/optimizer.cpp#L1187-L1193) for details.
+
 **Location:** [maxon-bin/mir/optimizer.h:270-292](maxon-bin/mir/optimizer.h#L270-L292)
 
 #### 9. Copy Propagation
@@ -238,6 +240,31 @@ Propagates copy instructions to eliminate unnecessary moves:
 ```
 
 **Location:** [maxon-bin/mir/optimizer.h:294-318](maxon-bin/mir/optimizer.h#L294-L318)
+
+#### 10. PHI Elimination
+Converts SSA form to a form suitable for register allocation by eliminating PHI nodes. For each PHI node, this pass inserts copy instructions at the end of predecessor blocks (before terminators) that copy the incoming value to the PHI result.
+
+Critical edges are handled by splitting edges when a predecessor has multiple successors and a successor has multiple predecessors, inserting an intermediate block between them.
+
+**Example:**
+```llvm
+merge:
+  %result = phi i32 [%a, %left], [%b, %right]
+
+; Becomes:
+left:
+  ...
+  %result = copy %a   ; inserted before branch
+  br merge
+right:
+  ...
+  %result = copy %b   ; inserted before branch
+  br merge
+merge:
+  ; PHI removed, %result already has correct value
+```
+
+**Location:** [maxon-bin/mir/optimizer.h:320-373](maxon-bin/mir/optimizer.h#L320-L373)
 
 ### Standard Optimization Pipeline
 
@@ -251,12 +278,15 @@ optimizer.addPass(std::make_unique<AlgebraicSimplificationPass>());
 optimizer.addPass(std::make_unique<DeadCodeEliminationPass>());
 optimizer.addPass(std::make_unique<CopyPropagationPass>());
 optimizer.addPass(std::make_unique<StrengthReductionPass>());
-optimizer.addPass(std::make_unique<RedundantLoadStoreEliminationPass>());
+// RedundantLoadStoreEliminationPass is currently disabled
 optimizer.addPass(std::make_unique<UnreachableBlockEliminationPass>());
+optimizer.addPass(std::make_unique<PhiEliminationPass>());  // Must run before register allocation
 optimizer.runAllPasses(module);  // Runs until convergence
 ```
 
 **Typical iterations:** 2-4 passes for most code
+
+**Important:** PHI Elimination must run after all other optimizations and before register allocation, as it converts SSA form to a form suitable for register allocation.
 
 ## Register Allocation
 
@@ -274,7 +304,8 @@ Winchester uses a **linear-scan register allocator** with liveness analysis, pro
 #### Windows x64 (Microsoft ABI)
 
 **General Purpose (Caller-saved):**
-- RAX, RCX, RDX, R8, R9, R10, R11
+- RAX (reserved for return values)
+- RCX, RDX, R8, R9 (parameter passing)
 
 **General Purpose (Callee-saved):**
 - RBX, RDI, RSI, R12, R13, R14, R15
@@ -288,11 +319,13 @@ Winchester uses a **linear-scan register allocator** with liveness analysis, pro
 **Reserved:**
 - RSP (stack pointer)
 - RBP (frame pointer)
+- R10, R11 (scratch registers for code generation)
 
 #### Linux x64 (System V ABI)
 
 **General Purpose (Caller-saved):**
-- RAX, RCX, RDX, RSI, RDI, R8, R9, R10, R11
+- RAX (reserved for return values)
+- RCX, RDX, RSI, RDI, R8, R9 (parameter passing)
 
 **General Purpose (Callee-saved):**
 - RBX, R12, R13, R14, R15
@@ -303,6 +336,7 @@ Winchester uses a **linear-scan register allocator** with liveness analysis, pro
 **Reserved:**
 - RSP (stack pointer)
 - RBP (frame pointer)
+- R10, R11 (scratch registers for code generation)
 
 ### Spill Strategy
 
@@ -316,13 +350,16 @@ When no registers are available, the allocator:
 ```
 [RBP + N]   ← Parameters (beyond register args)
 [RBP + 0]   ← Saved RBP
-[RBP - 8]   ← Spill slot 1
-[RBP - 16]  ← Spill slot 2
+[RBP - 8]   ← Callee-saved register 1
+[RBP - 16]  ← Callee-saved register 2
 ...
-[RBP - M]   ← Spill slot N
-            ← Local allocas
+[RBP - M]   ← Callee-saved register N
+[RBP - M-8] ← Spill slot 1 / Local allocas
+...
 [RSP]       ← Stack pointer
 ```
+
+**Important:** Stack slot offsets are automatically adjusted to account for callee-saved register pushes. Callee-saved registers are pushed between setting RBP and allocating the frame, so local stack slots and spilled values are placed below them. See [maxon-bin/backend/x86_codegen.cpp:837-858](maxon-bin/backend/x86_codegen.cpp#L837-L858).
 
 ### Register Coalescing (Planned)
 
@@ -808,5 +845,23 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 ---
 
 **Last Updated:** 2025-11-26
-**Version:** Winchester 1.0
+**Version:** Winchester 1.1
 **Maintainer:** Maxon Compiler Team
+
+## Recent Changes
+
+### Winchester 1.1 (2025-11-26)
+
+**Optimizer Improvements:**
+- Added PHI Elimination pass to convert SSA form to register-allocatable form
+- Fixed constant propagation to skip type conversion instructions (SIToFP, FPToSI, ZExt, SExt, Trunc, PtrToInt, IntToPtr, Bitcast)
+- Temporarily disabled Redundant Load/Store Elimination due to bug with cross-alloca optimization
+
+**Register Allocation Improvements:**
+- Reserved R10/R11 as scratch registers for code generation (no longer available for allocation)
+- Fixed stack slot offset calculation to account for callee-saved register pushes
+- Corrected stack frame layout to place local variables below callee-saved registers
+
+**Code Generation:**
+- Improved handling of intermediate values during store operations
+- Enhanced support for complex addressing modes
