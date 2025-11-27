@@ -4,590 +4,757 @@ function main() int
     return trunc(result)
 end 'main'
 ---
-; ModuleID = 'test.maxon'
-source_filename = "test.maxon"
+; Module: test.maxon
 
 define i32 @main() {
-entry:
-  ret i32 8
+entry0:
+  %0 = call f64 @math.pow(f64 2, f64 3)
+  %1 = alloca f64
+  store f64 %0, ptr %1
+  %3 = call f64 @trunc(f64 %0)
+  %4 = fptosi f64 %3 to i32
+  ret i32 %4
 }
 
-declare void @exit(i32)
+define f64 @math.pow(f64 %base, f64 %exponent) {
+entry0:
+  %0 = alloca f64
+  store f64 %base, ptr %0
+  %1 = alloca f64
+  store f64 %exponent, ptr %1
+  %3 = fcmp oeq f64 %exponent, 0
+  br i1 %3, label %then1, label %ifcont2
+then1:
+  ret f64 1
+ifcont2:
+  %4 = load f64, ptr %0
+  %5 = fcmp oeq f64 %4, 0
+  br i1 %5, label %then3, label %ifcont4
+then3:
+  %6 = load f64, ptr %1
+  %7 = fcmp ogt f64 %6, 0
+  br i1 %7, label %then5, label %ifcont6
+ifcont4:
+  %8 = load f64, ptr %0
+  %9 = fcmp oeq f64 %8, 1
+  br i1 %9, label %then7, label %ifcont8
+then5:
+  ret f64 0
+ifcont6:
+  ret f64 0
+then7:
+  ret f64 1
+ifcont8:
+  %10 = load f64, ptr %0
+  %11 = fcmp olt f64 %10, 0
+  br i1 %11, label %then9, label %ifcont10
+then9:
+  ret f64 0
+ifcont10:
+  %12 = load f64, ptr %1
+  %13 = call f64 @floor(f64 %12)
+  %14 = fptosi f64 %13 to i32
+  %15 = alloca i32
+  store i32 %14, ptr %15
+  %16 = load f64, ptr %1
+  %18 = sitofp i32 %14 to f64
+  %19 = fsub f64 %16, %18
+  %20 = fcmp oeq f64 %19, 0
+  br i1 %20, label %then11, label %ifcont12
+then11:
+  %21 = load f64, ptr %1
+  %22 = fcmp ogt f64 %21, 0
+  br i1 %22, label %then13, label %ifcont14
+ifcont12:
+  %54 = load f64, ptr %0
+  %55 = call f64 @math.log(f64 %54)
+  %56 = alloca f64
+  store f64 %55, ptr %56
+  %57 = load f64, ptr %1
+  %59 = fmul f64 %57, %55
+  %60 = alloca f64
+  store f64 %59, ptr %60
+  %62 = call f64 @math.exp(f64 %59)
+  ret f64 %62
+then13:
+  %23 = load f64, ptr %1
+  %24 = fcmp ole f64 %23, 20
+  br i1 %24, label %then15, label %ifcont16
+ifcont14:
+  %36 = load f64, ptr %1
+  %37 = fcmp olt f64 %36, 0
+  br i1 %37, label %then20, label %ifcont21
+then15:
+  %25 = alloca f64
+  store f64 1, ptr %25
+  %26 = alloca f64
+  store f64 0, ptr %26
+  br label %whilecond17
+ifcont16:
+  br label %ifcont14
+whilecond17:
+  %27 = load f64, ptr %26
+  %28 = load f64, ptr %1
+  %29 = fcmp olt f64 %27, %28
+  br i1 %29, label %loop18, label %afterloop19
+loop18:
+  %30 = load f64, ptr %25
+  %31 = load f64, ptr %0
+  %32 = fmul f64 %30, %31
+  store f64 %32, ptr %25
+  %33 = load f64, ptr %26
+  %34 = fadd f64 %33, 1
+  store f64 %34, ptr %26
+  br label %whilecond17
+afterloop19:
+  %35 = load f64, ptr %25
+  ret f64 %35
+then20:
+  %38 = load f64, ptr %1
+  %39 = fneg f64 %38
+  %40 = alloca f64
+  store f64 %39, ptr %40
+  %42 = fcmp ole f64 %39, 20
+  br i1 %42, label %then22, label %ifcont23
+ifcont21:
+  br label %ifcont12
+then22:
+  %43 = alloca f64
+  store f64 1, ptr %43
+  %44 = alloca f64
+  store f64 0, ptr %44
+  br label %whilecond24
+ifcont23:
+  br label %ifcont21
+whilecond24:
+  %45 = load f64, ptr %44
+  %46 = load f64, ptr %40
+  %47 = fcmp olt f64 %45, %46
+  br i1 %47, label %loop25, label %afterloop26
+loop25:
+  %48 = load f64, ptr %43
+  %49 = load f64, ptr %0
+  %50 = fdiv f64 %48, %49
+  store f64 %50, ptr %43
+  %51 = load f64, ptr %44
+  %52 = fadd f64 %51, 1
+  store f64 %52, ptr %44
+  br label %whilecond24
+afterloop26:
+  %53 = load f64, ptr %43
+  ret f64 %53
+}
+
+define f64 @math.exp(f64 %x) {
+entry0:
+  %0 = alloca f64
+  store f64 %x, ptr %0
+  %2 = fcmp oeq f64 %x, 0
+  br i1 %2, label %then1, label %ifcont2
+then1:
+  ret f64 1
+ifcont2:
+  %3 = load f64, ptr %0
+  %4 = fcmp olt f64 %3, 0
+  %5 = alloca i1
+  store i1 %4, ptr %5
+  br i1 %4, label %then3, label %ifcont4
+then3:
+  %7 = load f64, ptr %0
+  %8 = fneg f64 %7
+  store f64 %8, ptr %0
+  br label %ifcont4
+ifcont4:
+  %9 = alloca i32
+  store i32 0, ptr %9
+  br label %whilecond5
+whilecond5:
+  %10 = load f64, ptr %0
+  %11 = fcmp ogt f64 %10, 1
+  br i1 %11, label %loop6, label %afterloop7
+loop6:
+  %12 = load f64, ptr %0
+  %13 = fdiv f64 %12, 2
+  store f64 %13, ptr %0
+  %14 = load i32, ptr %9
+  %15 = add i32 %14, 1
+  store i32 %15, ptr %9
+  br label %whilecond5
+afterloop7:
+  %16 = alloca f64
+  store f64 1, ptr %16
+  %17 = alloca f64
+  store f64 1, ptr %17
+  %18 = alloca i32
+  store i32 1, ptr %18
+  br label %whilecond8
+whilecond8:
+  %19 = load i32, ptr %18
+  %20 = icmp slt i32 %19, 20
+  br i1 %20, label %loop9, label %afterloop10
+loop9:
+  %21 = load f64, ptr %16
+  %22 = load f64, ptr %0
+  %23 = fmul f64 %21, %22
+  %24 = load i32, ptr %18
+  %25 = sitofp i32 %24 to f64
+  %26 = alloca f64
+  store f64 %25, ptr %26
+  %29 = fdiv f64 %23, %25
+  store f64 %29, ptr %16
+  %30 = load f64, ptr %17
+  %32 = fadd f64 %30, %29
+  store f64 %32, ptr %17
+  %33 = load i32, ptr %18
+  %34 = add i32 %33, 1
+  store i32 %34, ptr %18
+  br label %whilecond8
+afterloop10:
+  %35 = load f64, ptr %17
+  %36 = alloca f64
+  store f64 %35, ptr %36
+  %37 = alloca i32
+  store i32 0, ptr %37
+  br label %whilecond11
+whilecond11:
+  %38 = load i32, ptr %37
+  %39 = load i32, ptr %9
+  %40 = icmp slt i32 %38, %39
+  br i1 %40, label %loop12, label %afterloop13
+loop12:
+  %41 = load f64, ptr %36
+  %42 = load f64, ptr %36
+  %43 = fmul f64 %41, %42
+  store f64 %43, ptr %36
+  %44 = load i32, ptr %37
+  %45 = add i32 %44, 1
+  store i32 %45, ptr %37
+  br label %whilecond11
+afterloop13:
+  %46 = load i1, ptr %5
+  br i1 %46, label %then14, label %ifcont15
+then14:
+  %47 = load f64, ptr %36
+  %48 = fdiv f64 1, %47
+  store f64 %48, ptr %36
+  br label %ifcont15
+ifcont15:
+  %49 = load f64, ptr %36
+  ret f64 %49
+}
+
+define f64 @math.log(f64 %x) {
+entry0:
+  %0 = alloca f64
+  store f64 %x, ptr %0
+  %2 = fcmp ole f64 %x, 0
+  br i1 %2, label %then1, label %ifcont2
+then1:
+  ret f64 0
+ifcont2:
+  %3 = load f64, ptr %0
+  %4 = fcmp oeq f64 %3, 1
+  br i1 %4, label %then3, label %ifcont4
+then3:
+  ret f64 0
+ifcont4:
+  %5 = alloca i32
+  store i32 0, ptr %5
+  %6 = load f64, ptr %0
+  %7 = alloca f64
+  store f64 %6, ptr %7
+  br label %whilecond5
+whilecond5:
+  %8 = load f64, ptr %7
+  %9 = fcmp oge f64 %8, 1
+  br i1 %9, label %loop6, label %afterloop7
+loop6:
+  %10 = load f64, ptr %7
+  %11 = fdiv f64 %10, 2
+  store f64 %11, ptr %7
+  %12 = load i32, ptr %5
+  %13 = add i32 %12, 1
+  store i32 %13, ptr %5
+  br label %whilecond5
+afterloop7:
+  br label %whilecond8
+whilecond8:
+  %14 = load f64, ptr %7
+  %15 = fcmp olt f64 %14, 0.5
+  br i1 %15, label %loop9, label %afterloop10
+loop9:
+  %16 = load f64, ptr %7
+  %17 = fmul f64 %16, 2
+  store f64 %17, ptr %7
+  %18 = load i32, ptr %5
+  %19 = sub i32 %18, 1
+  store i32 %19, ptr %5
+  br label %whilecond8
+afterloop10:
+  %20 = load f64, ptr %7
+  %21 = fsub f64 %20, 1
+  %22 = alloca f64
+  store f64 %21, ptr %22
+  %23 = load f64, ptr %7
+  %24 = fadd f64 %23, 1
+  %25 = alloca f64
+  store f64 %24, ptr %25
+  %28 = fdiv f64 %21, %24
+  %29 = alloca f64
+  store f64 %28, ptr %29
+  %32 = fmul f64 %28, %28
+  %33 = alloca f64
+  store f64 %32, ptr %33
+  %35 = alloca f64
+  store f64 %28, ptr %35
+  %37 = alloca f64
+  store f64 %28, ptr %37
+  %38 = alloca i32
+  store i32 1, ptr %38
+  br label %whilecond11
+whilecond11:
+  %39 = load i32, ptr %38
+  %40 = icmp slt i32 %39, 20
+  br i1 %40, label %loop12, label %afterloop13
+loop12:
+  %41 = load f64, ptr %35
+  %42 = load f64, ptr %33
+  %43 = fmul f64 %41, %42
+  store f64 %43, ptr %35
+  %44 = load i32, ptr %38
+  %45 = shl i32 %44, 1
+  %46 = add i32 %45, 1
+  %47 = alloca i32
+  store i32 %46, ptr %47
+  %49 = sitofp i32 %46 to f64
+  %50 = alloca f64
+  store f64 %49, ptr %50
+  %51 = load f64, ptr %37
+  %54 = fdiv f64 %43, %49
+  %55 = fadd f64 %51, %54
+  store f64 %55, ptr %37
+  %56 = load i32, ptr %38
+  %57 = add i32 %56, 1
+  store i32 %57, ptr %38
+  br label %whilecond11
+afterloop13:
+  %58 = load f64, ptr %37
+  %59 = fmul f64 2, %58
+  %60 = alloca f64
+  %61 = alloca f64
+  store f64 0.693147, ptr %61
+  %62 = load i32, ptr %5
+  %63 = sitofp i32 %62 to f64
+  %64 = alloca f64
+  store f64 %63, ptr %64
+  %68 = fmul f64 %63, 0.693147
+  %69 = fadd f64 %59, %68
+  store f64 %69, ptr %60
+  ret f64 %69
+}
+
+declare f64 @trunc(f64 %arg0)
+
+declare f64 @floor(f64 %arg0)
+
+declare void @exit(i32 %arg0)
 
 define void @_start() {
-entry:
-  tail call void @exit(i32 8)
-  unreachable
-}
-
----
-; ModuleID = 'test.maxon'
-source_filename = "test.maxon"
-
-define i32 @main() !dbg !4 {
-entry:
-  %result = alloca double, align 8, !dbg !9
-  %0 = call double @math.pow(double 2.000000e+00, double 3.000000e+00), !dbg !9
-  store double %0, ptr %result, align 8, !dbg !9
-    #dbg_declare(ptr %result, !10, !DIExpression(), !9)
-  %result1 = load double, ptr %result, align 8, !dbg !11
-  %trunc = fptosi double %result1 to i32, !dbg !11
-  ret i32 %trunc, !dbg !11
-}
-
-define internal double @math.pow(double %0, double %1) !dbg !12 {
-entry:
-  %exp_times_log = alloca double, align 8
-  %log_base = alloca double, align 8
-  %i = alloca double, align 8
-  %result = alloca double, align 8
-  %exp_floor = alloca i32, align 4
-  %exponent = alloca double, align 8
-  %base = alloca double, align 8
-  store double %0, ptr %base, align 8, !dbg !15
-    #dbg_declare(ptr %base, !16, !DIExpression(), !15)
-  store double %1, ptr %exponent, align 8, !dbg !17
-    #dbg_declare(ptr %exponent, !18, !DIExpression(), !17)
-  %exponent1 = load double, ptr %exponent, align 8, !dbg !19
-  %fcmptmp = fcmp oeq double %exponent1, 0.000000e+00, !dbg !19
-  br i1 %fcmptmp, label %then, label %ifcont, !dbg !19
-
-then:                                             ; preds = %entry
-  ret double 1.000000e+00, !dbg !20
-
-ifcont:                                           ; preds = %entry
-  %base2 = load double, ptr %base, align 8, !dbg !21
-  %fcmptmp3 = fcmp oeq double %base2, 0.000000e+00, !dbg !21
-  br i1 %fcmptmp3, label %then4, label %ifcont9, !dbg !21
-
-then4:                                            ; preds = %ifcont
-  %exponent5 = load double, ptr %exponent, align 8, !dbg !22
-  %fcmptmp6 = fcmp ogt double %exponent5, 0.000000e+00, !dbg !22
-  br i1 %fcmptmp6, label %then7, label %ifcont8, !dbg !22
-
-then7:                                            ; preds = %then4
-  ret double 0.000000e+00, !dbg !23
-
-ifcont8:                                          ; preds = %then4
-  ret double 0.000000e+00, !dbg !24
-
-ifcont9:                                          ; preds = %ifcont
-  %base10 = load double, ptr %base, align 8, !dbg !25
-  %fcmptmp11 = fcmp oeq double %base10, 1.000000e+00, !dbg !25
-  br i1 %fcmptmp11, label %then12, label %ifcont13, !dbg !25
-
-then12:                                           ; preds = %ifcont9
-  ret double 1.000000e+00, !dbg !26
-
-ifcont13:                                         ; preds = %ifcont9
-  %base14 = load double, ptr %base, align 8, !dbg !27
-  %fcmptmp15 = fcmp olt double %base14, 0.000000e+00, !dbg !27
-  br i1 %fcmptmp15, label %then16, label %ifcont17, !dbg !27
-
-then16:                                           ; preds = %ifcont13
-  ret double 0.000000e+00, !dbg !28
-
-ifcont17:                                         ; preds = %ifcont13
-  %exponent18 = load double, ptr %exponent, align 8, !dbg !29
-  %floor.result = call double @llvm.floor.f64(double %exponent18), !dbg !29
-  %toint = fptosi double %floor.result to i32, !dbg !29
-  store i32 %toint, ptr %exp_floor, align 4, !dbg !29
-    #dbg_declare(ptr %exp_floor, !30, !DIExpression(), !29)
-  %exponent19 = load double, ptr %exponent, align 8, !dbg !31
-  %exp_floor20 = load i32, ptr %exp_floor, align 4, !dbg !31
-  %promotetmp = sitofp i32 %exp_floor20 to double, !dbg !31
-  %fsubtmp = fsub double %exponent19, %promotetmp, !dbg !31
-  %fcmptmp21 = fcmp oeq double %fsubtmp, 0.000000e+00, !dbg !31
-  br i1 %fcmptmp21, label %then22, label %ifcont38, !dbg !31
-
-then22:                                           ; preds = %ifcont17
-  %exponent23 = load double, ptr %exponent, align 8, !dbg !32
-  %fcmptmp24 = fcmp oge double %exponent23, 0.000000e+00, !dbg !32
-  br i1 %fcmptmp24, label %then25, label %ifcont37, !dbg !32
-
-then25:                                           ; preds = %then22
-  %exponent26 = load double, ptr %exponent, align 8, !dbg !33
-  %fcmptmp27 = fcmp ole double %exponent26, 2.000000e+01, !dbg !33
-  br i1 %fcmptmp27, label %then28, label %ifcont36, !dbg !33
-
-then28:                                           ; preds = %then25
-  store double 1.000000e+00, ptr %result, align 8, !dbg !34
-    #dbg_declare(ptr %result, !35, !DIExpression(), !34)
-  store double 0.000000e+00, ptr %i, align 8, !dbg !36
-    #dbg_declare(ptr %i, !37, !DIExpression(), !36)
-  br label %whilecond, !dbg !38
-
-whilecond:                                        ; preds = %loop, %then28
-  %i29 = load double, ptr %i, align 8, !dbg !38
-  %exponent30 = load double, ptr %exponent, align 8, !dbg !38
-  %fcmptmp31 = fcmp olt double %i29, %exponent30, !dbg !38
-  br i1 %fcmptmp31, label %loop, label %afterloop, !dbg !38
-
-loop:                                             ; preds = %whilecond
-  %result32 = load double, ptr %result, align 8, !dbg !39
-  %base33 = load double, ptr %base, align 8, !dbg !39
-  %fmultmp = fmul double %result32, %base33, !dbg !39
-  store double %fmultmp, ptr %result, align 8, !dbg !39
-  %i34 = load double, ptr %i, align 8, !dbg !40
-  %faddtmp = fadd double %i34, 1.000000e+00, !dbg !40
-  store double %faddtmp, ptr %i, align 8, !dbg !40
-  br label %whilecond, !dbg !40
-
-afterloop:                                        ; preds = %whilecond
-  %result35 = load double, ptr %result, align 8, !dbg !41
-  ret double %result35, !dbg !41
-
-ifcont36:                                         ; preds = %then25
-  br label %ifcont37, !dbg !41
-
-ifcont37:                                         ; preds = %ifcont36, %then22
-  br label %ifcont38, !dbg !41
-
-ifcont38:                                         ; preds = %ifcont37, %ifcont17
-  %base39 = load double, ptr %base, align 8, !dbg !42
-  %2 = call double @math.log(double %base39), !dbg !42
-  store double %2, ptr %log_base, align 8, !dbg !42
-    #dbg_declare(ptr %log_base, !43, !DIExpression(), !42)
-  %exponent40 = load double, ptr %exponent, align 8, !dbg !44
-  %log_base41 = load double, ptr %log_base, align 8, !dbg !44
-  %fmultmp42 = fmul double %exponent40, %log_base41, !dbg !44
-  store double %fmultmp42, ptr %exp_times_log, align 8, !dbg !44
-    #dbg_declare(ptr %exp_times_log, !45, !DIExpression(), !44)
-  %exp_times_log43 = load double, ptr %exp_times_log, align 8, !dbg !46
-  %3 = call double @math.exp(double %exp_times_log43), !dbg !46
-  ret double %3, !dbg !46
-}
-
-define internal double @math.exp(double %0) !dbg !47 {
-entry:
-  %i = alloca i32, align 4
-  %result = alloca double, align 8
-  %k_float = alloca double, align 8
-  %k = alloca i32, align 4
-  %sum = alloca double, align 8
-  %term = alloca double, align 8
-  %reduction_count = alloca i32, align 4
-  %is_negative = alloca i1, align 1
-  %x = alloca double, align 8
-  store double %0, ptr %x, align 8, !dbg !50
-    #dbg_declare(ptr %x, !51, !DIExpression(), !50)
-  %x1 = load double, ptr %x, align 8, !dbg !52
-  %fcmptmp = fcmp oeq double %x1, 0.000000e+00, !dbg !52
-  br i1 %fcmptmp, label %then, label %ifcont, !dbg !52
-
-then:                                             ; preds = %entry
-  ret double 1.000000e+00, !dbg !53
-
-ifcont:                                           ; preds = %entry
-  %x2 = load double, ptr %x, align 8, !dbg !54
-  %fcmptmp3 = fcmp olt double %x2, 0.000000e+00, !dbg !54
-  store i1 %fcmptmp3, ptr %is_negative, align 1, !dbg !54
-    #dbg_declare(ptr %is_negative, !55, !DIExpression(), !54)
-  %is_negative4 = load i1, ptr %is_negative, align 1, !dbg !56
-  br i1 %is_negative4, label %then5, label %ifcont7, !dbg !56
-
-then5:                                            ; preds = %ifcont
-  %x6 = load double, ptr %x, align 8, !dbg !57
-  %fnegtmp = fneg double %x6, !dbg !57
-  store double %fnegtmp, ptr %x, align 8, !dbg !57
-  br label %ifcont7, !dbg !57
-
-ifcont7:                                          ; preds = %then5, %ifcont
-  store i32 0, ptr %reduction_count, align 4, !dbg !58
-    #dbg_declare(ptr %reduction_count, !59, !DIExpression(), !58)
-  br label %whilecond, !dbg !60
-
-whilecond:                                        ; preds = %loop, %ifcont7
-  %x8 = load double, ptr %x, align 8, !dbg !60
-  %fcmptmp9 = fcmp ogt double %x8, 1.000000e+00, !dbg !60
-  br i1 %fcmptmp9, label %loop, label %afterloop, !dbg !60
-
-loop:                                             ; preds = %whilecond
-  %x10 = load double, ptr %x, align 8, !dbg !61
-  %fdivtmp = fdiv double %x10, 2.000000e+00, !dbg !61
-  store double %fdivtmp, ptr %x, align 8, !dbg !61
-  %reduction_count11 = load i32, ptr %reduction_count, align 4, !dbg !62
-  %addtmp = add i32 %reduction_count11, 1, !dbg !62
-  store i32 %addtmp, ptr %reduction_count, align 4, !dbg !62
-  br label %whilecond, !dbg !62
-
-afterloop:                                        ; preds = %whilecond
-  store double 1.000000e+00, ptr %term, align 8, !dbg !63
-    #dbg_declare(ptr %term, !64, !DIExpression(), !63)
-  store double 1.000000e+00, ptr %sum, align 8, !dbg !65
-    #dbg_declare(ptr %sum, !66, !DIExpression(), !65)
-  store i32 1, ptr %k, align 4, !dbg !67
-    #dbg_declare(ptr %k, !68, !DIExpression(), !67)
-  br label %whilecond12, !dbg !69
-
-whilecond12:                                      ; preds = %loop14, %afterloop
-  %k13 = load i32, ptr %k, align 4, !dbg !69
-  %cmptmp = icmp slt i32 %k13, 20, !dbg !69
-  br i1 %cmptmp, label %loop14, label %afterloop25, !dbg !69
-
-loop14:                                           ; preds = %whilecond12
-  %term15 = load double, ptr %term, align 8, !dbg !70
-  %x16 = load double, ptr %x, align 8, !dbg !70
-  %fmultmp = fmul double %term15, %x16, !dbg !70
-  store double %fmultmp, ptr %term, align 8, !dbg !70
-  %k17 = load i32, ptr %k, align 4, !dbg !71
-  %int2floattmp = sitofp i32 %k17 to double, !dbg !71
-  store double %int2floattmp, ptr %k_float, align 8, !dbg !71
-    #dbg_declare(ptr %k_float, !72, !DIExpression(), !71)
-  %term18 = load double, ptr %term, align 8, !dbg !73
-  %k_float19 = load double, ptr %k_float, align 8, !dbg !73
-  %fdivtmp20 = fdiv double %term18, %k_float19, !dbg !73
-  store double %fdivtmp20, ptr %term, align 8, !dbg !73
-  %sum21 = load double, ptr %sum, align 8, !dbg !74
-  %term22 = load double, ptr %term, align 8, !dbg !74
-  %faddtmp = fadd double %sum21, %term22, !dbg !74
-  store double %faddtmp, ptr %sum, align 8, !dbg !74
-  %k23 = load i32, ptr %k, align 4, !dbg !75
-  %addtmp24 = add i32 %k23, 1, !dbg !75
-  store i32 %addtmp24, ptr %k, align 4, !dbg !75
-  br label %whilecond12, !dbg !75
-
-afterloop25:                                      ; preds = %whilecond12
-  %sum26 = load double, ptr %sum, align 8, !dbg !76
-  store double %sum26, ptr %result, align 8, !dbg !76
-    #dbg_declare(ptr %result, !77, !DIExpression(), !76)
-  store i32 0, ptr %i, align 4, !dbg !78
-    #dbg_declare(ptr %i, !79, !DIExpression(), !78)
-  br label %whilecond27, !dbg !80
-
-whilecond27:                                      ; preds = %loop31, %afterloop25
-  %i28 = load i32, ptr %i, align 4, !dbg !80
-  %reduction_count29 = load i32, ptr %reduction_count, align 4, !dbg !80
-  %cmptmp30 = icmp slt i32 %i28, %reduction_count29, !dbg !80
-  br i1 %cmptmp30, label %loop31, label %afterloop37, !dbg !80
-
-loop31:                                           ; preds = %whilecond27
-  %result32 = load double, ptr %result, align 8, !dbg !81
-  %result33 = load double, ptr %result, align 8, !dbg !81
-  %fmultmp34 = fmul double %result32, %result33, !dbg !81
-  store double %fmultmp34, ptr %result, align 8, !dbg !81
-  %i35 = load i32, ptr %i, align 4, !dbg !82
-  %addtmp36 = add i32 %i35, 1, !dbg !82
-  store i32 %addtmp36, ptr %i, align 4, !dbg !82
-  br label %whilecond27, !dbg !82
-
-afterloop37:                                      ; preds = %whilecond27
-  %is_negative38 = load i1, ptr %is_negative, align 1, !dbg !83
-  br i1 %is_negative38, label %then39, label %ifcont42, !dbg !83
-
-then39:                                           ; preds = %afterloop37
-  %result40 = load double, ptr %result, align 8, !dbg !84
-  %fdivtmp41 = fdiv double 1.000000e+00, %result40, !dbg !84
-  store double %fdivtmp41, ptr %result, align 8, !dbg !84
-  br label %ifcont42, !dbg !84
-
-ifcont42:                                         ; preds = %then39, %afterloop37
-  %result43 = load double, ptr %result, align 8, !dbg !85
-  ret double %result43, !dbg !85
-}
-
-define internal double @math.log(double %0) !dbg !86 {
-entry:
-  %n_float = alloca double, align 8
-  %log2 = alloca double, align 8
-  %result = alloca double, align 8
-  %divisor_float = alloca double, align 8
-  %divisor = alloca i32, align 4
-  %k = alloca i32, align 4
-  %sum = alloca double, align 8
-  %term = alloca double, align 8
-  %z_squared = alloca double, align 8
-  %z = alloca double, align 8
-  %den = alloca double, align 8
-  %num = alloca double, align 8
-  %y = alloca double, align 8
-  %n = alloca i32, align 4
-  %x = alloca double, align 8
-  store double %0, ptr %x, align 8, !dbg !87
-    #dbg_declare(ptr %x, !88, !DIExpression(), !87)
-  %x1 = load double, ptr %x, align 8, !dbg !89
-  %fcmptmp = fcmp ole double %x1, 0.000000e+00, !dbg !89
-  br i1 %fcmptmp, label %then, label %ifcont, !dbg !89
-
-then:                                             ; preds = %entry
-  ret double 0.000000e+00, !dbg !90
-
-ifcont:                                           ; preds = %entry
-  %x2 = load double, ptr %x, align 8, !dbg !91
-  %fcmptmp3 = fcmp oeq double %x2, 1.000000e+00, !dbg !91
-  br i1 %fcmptmp3, label %then4, label %ifcont5, !dbg !91
-
-then4:                                            ; preds = %ifcont
-  ret double 0.000000e+00, !dbg !92
-
-ifcont5:                                          ; preds = %ifcont
-  store i32 0, ptr %n, align 4, !dbg !93
-    #dbg_declare(ptr %n, !94, !DIExpression(), !93)
-  %x6 = load double, ptr %x, align 8, !dbg !95
-  store double %x6, ptr %y, align 8, !dbg !95
-    #dbg_declare(ptr %y, !96, !DIExpression(), !95)
-  br label %whilecond, !dbg !97
-
-whilecond:                                        ; preds = %loop, %ifcont5
-  %y7 = load double, ptr %y, align 8, !dbg !97
-  %fcmptmp8 = fcmp oge double %y7, 1.000000e+00, !dbg !97
-  br i1 %fcmptmp8, label %loop, label %afterloop, !dbg !97
-
-loop:                                             ; preds = %whilecond
-  %y9 = load double, ptr %y, align 8, !dbg !98
-  %fdivtmp = fdiv double %y9, 2.000000e+00, !dbg !98
-  store double %fdivtmp, ptr %y, align 8, !dbg !98
-  %n10 = load i32, ptr %n, align 4, !dbg !99
-  %addtmp = add i32 %n10, 1, !dbg !99
-  store i32 %addtmp, ptr %n, align 4, !dbg !99
-  br label %whilecond, !dbg !99
-
-afterloop:                                        ; preds = %whilecond
-  br label %whilecond11, !dbg !100
-
-whilecond11:                                      ; preds = %loop14, %afterloop
-  %y12 = load double, ptr %y, align 8, !dbg !100
-  %fcmptmp13 = fcmp olt double %y12, 5.000000e-01, !dbg !100
-  br i1 %fcmptmp13, label %loop14, label %afterloop17, !dbg !100
-
-loop14:                                           ; preds = %whilecond11
-  %y15 = load double, ptr %y, align 8, !dbg !101
-  %fmultmp = fmul double %y15, 2.000000e+00, !dbg !101
-  store double %fmultmp, ptr %y, align 8, !dbg !101
-  %n16 = load i32, ptr %n, align 4, !dbg !102
-  %subtmp = sub i32 %n16, 1, !dbg !102
-  store i32 %subtmp, ptr %n, align 4, !dbg !102
-  br label %whilecond11, !dbg !102
-
-afterloop17:                                      ; preds = %whilecond11
-  %y18 = load double, ptr %y, align 8, !dbg !103
-  %fsubtmp = fsub double %y18, 1.000000e+00, !dbg !103
-  store double %fsubtmp, ptr %num, align 8, !dbg !103
-    #dbg_declare(ptr %num, !104, !DIExpression(), !103)
-  %y19 = load double, ptr %y, align 8, !dbg !105
-  %faddtmp = fadd double %y19, 1.000000e+00, !dbg !105
-  store double %faddtmp, ptr %den, align 8, !dbg !105
-    #dbg_declare(ptr %den, !106, !DIExpression(), !105)
-  %num20 = load double, ptr %num, align 8, !dbg !107
-  %den21 = load double, ptr %den, align 8, !dbg !107
-  %fdivtmp22 = fdiv double %num20, %den21, !dbg !107
-  store double %fdivtmp22, ptr %z, align 8, !dbg !107
-    #dbg_declare(ptr %z, !108, !DIExpression(), !107)
-  %z23 = load double, ptr %z, align 8, !dbg !109
-  %z24 = load double, ptr %z, align 8, !dbg !109
-  %fmultmp25 = fmul double %z23, %z24, !dbg !109
-  store double %fmultmp25, ptr %z_squared, align 8, !dbg !109
-    #dbg_declare(ptr %z_squared, !110, !DIExpression(), !109)
-  %z26 = load double, ptr %z, align 8, !dbg !111
-  store double %z26, ptr %term, align 8, !dbg !111
-    #dbg_declare(ptr %term, !112, !DIExpression(), !111)
-  %term27 = load double, ptr %term, align 8, !dbg !113
-  store double %term27, ptr %sum, align 8, !dbg !113
-    #dbg_declare(ptr %sum, !114, !DIExpression(), !113)
-  store i32 1, ptr %k, align 4, !dbg !115
-    #dbg_declare(ptr %k, !116, !DIExpression(), !115)
-  br label %whilecond28, !dbg !117
-
-whilecond28:                                      ; preds = %loop30, %afterloop17
-  %k29 = load i32, ptr %k, align 4, !dbg !117
-  %cmptmp = icmp slt i32 %k29, 20, !dbg !117
-  br i1 %cmptmp, label %loop30, label %afterloop44, !dbg !117
-
-loop30:                                           ; preds = %whilecond28
-  %term31 = load double, ptr %term, align 8, !dbg !118
-  %z_squared32 = load double, ptr %z_squared, align 8, !dbg !118
-  %fmultmp33 = fmul double %term31, %z_squared32, !dbg !118
-  store double %fmultmp33, ptr %term, align 8, !dbg !118
-  %k34 = load i32, ptr %k, align 4, !dbg !119
-  %multmp = mul i32 2, %k34, !dbg !119
-  %addtmp35 = add i32 %multmp, 1, !dbg !119
-  store i32 %addtmp35, ptr %divisor, align 4, !dbg !119
-    #dbg_declare(ptr %divisor, !120, !DIExpression(), !119)
-  %divisor36 = load i32, ptr %divisor, align 4, !dbg !121
-  %int2floattmp = sitofp i32 %divisor36 to double, !dbg !121
-  store double %int2floattmp, ptr %divisor_float, align 8, !dbg !121
-    #dbg_declare(ptr %divisor_float, !122, !DIExpression(), !121)
-  %sum37 = load double, ptr %sum, align 8, !dbg !123
-  %term38 = load double, ptr %term, align 8, !dbg !123
-  %divisor_float39 = load double, ptr %divisor_float, align 8, !dbg !123
-  %fdivtmp40 = fdiv double %term38, %divisor_float39, !dbg !123
-  %faddtmp41 = fadd double %sum37, %fdivtmp40, !dbg !123
-  store double %faddtmp41, ptr %sum, align 8, !dbg !123
-  %k42 = load i32, ptr %k, align 4, !dbg !124
-  %addtmp43 = add i32 %k42, 1, !dbg !124
-  store i32 %addtmp43, ptr %k, align 4, !dbg !124
-  br label %whilecond28, !dbg !124
-
-afterloop44:                                      ; preds = %whilecond28
-  %sum45 = load double, ptr %sum, align 8, !dbg !125
-  %fmultmp46 = fmul double 2.000000e+00, %sum45, !dbg !125
-  store double %fmultmp46, ptr %result, align 8, !dbg !125
-    #dbg_declare(ptr %result, !126, !DIExpression(), !125)
-  store double 0x3FE62E42FEFA39EC, ptr %log2, align 8, !dbg !127
-    #dbg_declare(ptr %log2, !128, !DIExpression(), !127)
-  %n47 = load i32, ptr %n, align 4, !dbg !129
-  %int2floattmp48 = sitofp i32 %n47 to double, !dbg !129
-  store double %int2floattmp48, ptr %n_float, align 8, !dbg !129
-    #dbg_declare(ptr %n_float, !130, !DIExpression(), !129)
-  %result49 = load double, ptr %result, align 8, !dbg !131
-  %n_float50 = load double, ptr %n_float, align 8, !dbg !131
-  %log251 = load double, ptr %log2, align 8, !dbg !131
-  %fmultmp52 = fmul double %n_float50, %log251, !dbg !131
-  %faddtmp53 = fadd double %result49, %fmultmp52, !dbg !131
-  store double %faddtmp53, ptr %result, align 8, !dbg !131
-  %result54 = load double, ptr %result, align 8, !dbg !132
-  ret double %result54, !dbg !132
-}
-
-declare double @llvm.floor.f64(double)
-
-declare void @exit(i32)
-
-define void @_start() {
-entry:
+entry0:
   %0 = call i32 @main()
   call void @exit(i32 %0)
-  unreachable
+  ret void
 }
 
+---
+; Module: test.maxon
 
-!llvm.dbg.cu = !{!0}
-!llvm.module.flags = !{!2, !3}
+define i32 @main() {
+entry0:
+  %0 = call f64 @math.pow(f64 2, f64 3)
+  %1 = alloca f64
+  store f64 %0, ptr %1
+  %2 = load f64, ptr %1
+  %3 = call f64 @trunc(f64 %2)
+  %4 = fptosi f64 %3 to i32
+  ret i32 %4
+}
 
-!0 = distinct !DICompileUnit(language: DW_LANG_C, file: !1, producer: "Maxon Compiler", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)
-!1 = !DIFile(filename: "test.maxon", directory: ".")
-!2 = !{i32 2, !"Dwarf Version", i32 4}
-!3 = !{i32 2, !"Debug Info Version", i32 3}
-!4 = distinct !DISubprogram(name: "main", linkageName: "main", scope: !1, file: !1, line: 2, type: !5, scopeLine: 2, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
-!5 = !DISubroutineType(types: !6)
-!6 = !{!7}
-!7 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
-!8 = !{}
-!9 = !DILocation(line: 3, column: 5, scope: !4)
-!10 = !DILocalVariable(name: "result", scope: !4, file: !1, line: 3, type: !7, align: 32)
-!11 = !DILocation(line: 4, column: 5, scope: !4)
-!12 = distinct !DISubprogram(name: "pow", linkageName: "pow", scope: !1, file: !1, line: 7, type: !13, scopeLine: 7, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
-!13 = !DISubroutineType(types: !14)
-!14 = !{!7, !7, !7}
-!15 = !DILocation(line: 7, column: 21, scope: !12)
-!16 = !DILocalVariable(name: "base", arg: 1, scope: !12, file: !1, line: 7, type: !7)
-!17 = !DILocation(line: 7, column: 33, scope: !12)
-!18 = !DILocalVariable(name: "exponent", arg: 2, scope: !12, file: !1, line: 7, type: !7)
-!19 = !DILocation(line: 9, column: 5, scope: !12)
-!20 = !DILocation(line: 10, column: 9, scope: !12)
-!21 = !DILocation(line: 13, column: 5, scope: !12)
-!22 = !DILocation(line: 14, column: 9, scope: !12)
-!23 = !DILocation(line: 15, column: 13, scope: !12)
-!24 = !DILocation(line: 17, column: 9, scope: !12)
-!25 = !DILocation(line: 20, column: 5, scope: !12)
-!26 = !DILocation(line: 21, column: 9, scope: !12)
-!27 = !DILocation(line: 25, column: 5, scope: !12)
-!28 = !DILocation(line: 26, column: 9, scope: !12)
-!29 = !DILocation(line: 31, column: 5, scope: !12)
-!30 = !DILocalVariable(name: "exp_floor", scope: !12, file: !1, line: 31, type: !7, align: 32)
-!31 = !DILocation(line: 32, column: 5, scope: !12)
-!32 = !DILocation(line: 33, column: 9, scope: !12)
-!33 = !DILocation(line: 34, column: 13, scope: !12)
-!34 = !DILocation(line: 36, column: 17, scope: !12)
-!35 = !DILocalVariable(name: "result", scope: !12, file: !1, line: 36, type: !7, align: 32)
-!36 = !DILocation(line: 37, column: 17, scope: !12)
-!37 = !DILocalVariable(name: "i", scope: !12, file: !1, line: 37, type: !7, align: 32)
-!38 = !DILocation(line: 38, column: 17, scope: !12)
-!39 = !DILocation(line: 39, column: 28, scope: !12)
-!40 = !DILocation(line: 40, column: 23, scope: !12)
-!41 = !DILocation(line: 42, column: 17, scope: !12)
-!42 = !DILocation(line: 48, column: 5, scope: !12)
-!43 = !DILocalVariable(name: "log_base", scope: !12, file: !1, line: 48, type: !7, align: 32)
-!44 = !DILocation(line: 49, column: 5, scope: !12)
-!45 = !DILocalVariable(name: "exp_times_log", scope: !12, file: !1, line: 49, type: !7, align: 32)
-!46 = !DILocation(line: 50, column: 5, scope: !12)
-!47 = distinct !DISubprogram(name: "exp", linkageName: "exp", scope: !1, file: !1, line: 7, type: !48, scopeLine: 7, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
-!48 = !DISubroutineType(types: !49)
-!49 = !{!7, !7}
-!50 = !DILocation(line: 7, column: 21, scope: !47)
-!51 = !DILocalVariable(name: "x", arg: 1, scope: !47, file: !1, line: 7, type: !7)
-!52 = !DILocation(line: 9, column: 5, scope: !47)
-!53 = !DILocation(line: 10, column: 9, scope: !47)
-!54 = !DILocation(line: 15, column: 5, scope: !47)
-!55 = !DILocalVariable(name: "is_negative", scope: !47, file: !1, line: 15, type: !7, align: 32)
-!56 = !DILocation(line: 16, column: 5, scope: !47)
-!57 = !DILocation(line: 17, column: 11, scope: !47)
-!58 = !DILocation(line: 21, column: 5, scope: !47)
-!59 = !DILocalVariable(name: "reduction_count", scope: !47, file: !1, line: 21, type: !7, align: 32)
-!60 = !DILocation(line: 22, column: 5, scope: !47)
-!61 = !DILocation(line: 23, column: 11, scope: !47)
-!62 = !DILocation(line: 24, column: 25, scope: !47)
-!63 = !DILocation(line: 28, column: 5, scope: !47)
-!64 = !DILocalVariable(name: "term", scope: !47, file: !1, line: 28, type: !7, align: 32)
-!65 = !DILocation(line: 29, column: 5, scope: !47)
-!66 = !DILocalVariable(name: "sum", scope: !47, file: !1, line: 29, type: !7, align: 32)
-!67 = !DILocation(line: 30, column: 5, scope: !47)
-!68 = !DILocalVariable(name: "k", scope: !47, file: !1, line: 30, type: !7, align: 32)
-!69 = !DILocation(line: 33, column: 5, scope: !47)
-!70 = !DILocation(line: 34, column: 14, scope: !47)
-!71 = !DILocation(line: 35, column: 9, scope: !47)
-!72 = !DILocalVariable(name: "k_float", scope: !47, file: !1, line: 35, type: !7, align: 32)
-!73 = !DILocation(line: 36, column: 14, scope: !47)
-!74 = !DILocation(line: 37, column: 13, scope: !47)
-!75 = !DILocation(line: 38, column: 11, scope: !47)
-!76 = !DILocation(line: 42, column: 5, scope: !47)
-!77 = !DILocalVariable(name: "result", scope: !47, file: !1, line: 42, type: !7, align: 32)
-!78 = !DILocation(line: 43, column: 5, scope: !47)
-!79 = !DILocalVariable(name: "i", scope: !47, file: !1, line: 43, type: !7, align: 32)
-!80 = !DILocation(line: 44, column: 5, scope: !47)
-!81 = !DILocation(line: 45, column: 16, scope: !47)
-!82 = !DILocation(line: 46, column: 11, scope: !47)
-!83 = !DILocation(line: 50, column: 5, scope: !47)
-!84 = !DILocation(line: 51, column: 16, scope: !47)
-!85 = !DILocation(line: 54, column: 5, scope: !47)
-!86 = distinct !DISubprogram(name: "log", linkageName: "log", scope: !1, file: !1, line: 7, type: !48, scopeLine: 7, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !8)
-!87 = !DILocation(line: 7, column: 21, scope: !86)
-!88 = !DILocalVariable(name: "x", arg: 1, scope: !86, file: !1, line: 7, type: !7)
-!89 = !DILocation(line: 9, column: 5, scope: !86)
-!90 = !DILocation(line: 10, column: 9, scope: !86)
-!91 = !DILocation(line: 13, column: 5, scope: !86)
-!92 = !DILocation(line: 14, column: 9, scope: !86)
-!93 = !DILocation(line: 19, column: 5, scope: !86)
-!94 = !DILocalVariable(name: "n", scope: !86, file: !1, line: 19, type: !7, align: 32)
-!95 = !DILocation(line: 20, column: 5, scope: !86)
-!96 = !DILocalVariable(name: "y", scope: !86, file: !1, line: 20, type: !7, align: 32)
-!97 = !DILocation(line: 23, column: 5, scope: !86)
-!98 = !DILocation(line: 24, column: 11, scope: !86)
-!99 = !DILocation(line: 25, column: 11, scope: !86)
-!100 = !DILocation(line: 28, column: 5, scope: !86)
-!101 = !DILocation(line: 29, column: 11, scope: !86)
-!102 = !DILocation(line: 30, column: 11, scope: !86)
-!103 = !DILocation(line: 35, column: 5, scope: !86)
-!104 = !DILocalVariable(name: "num", scope: !86, file: !1, line: 35, type: !7, align: 32)
-!105 = !DILocation(line: 36, column: 5, scope: !86)
-!106 = !DILocalVariable(name: "den", scope: !86, file: !1, line: 36, type: !7, align: 32)
-!107 = !DILocation(line: 37, column: 5, scope: !86)
-!108 = !DILocalVariable(name: "z", scope: !86, file: !1, line: 37, type: !7, align: 32)
-!109 = !DILocation(line: 38, column: 5, scope: !86)
-!110 = !DILocalVariable(name: "z_squared", scope: !86, file: !1, line: 38, type: !7, align: 32)
-!111 = !DILocation(line: 39, column: 5, scope: !86)
-!112 = !DILocalVariable(name: "term", scope: !86, file: !1, line: 39, type: !7, align: 32)
-!113 = !DILocation(line: 40, column: 5, scope: !86)
-!114 = !DILocalVariable(name: "sum", scope: !86, file: !1, line: 40, type: !7, align: 32)
-!115 = !DILocation(line: 41, column: 5, scope: !86)
-!116 = !DILocalVariable(name: "k", scope: !86, file: !1, line: 41, type: !7, align: 32)
-!117 = !DILocation(line: 44, column: 5, scope: !86)
-!118 = !DILocation(line: 45, column: 14, scope: !86)
-!119 = !DILocation(line: 46, column: 9, scope: !86)
-!120 = !DILocalVariable(name: "divisor", scope: !86, file: !1, line: 46, type: !7, align: 32)
-!121 = !DILocation(line: 47, column: 9, scope: !86)
-!122 = !DILocalVariable(name: "divisor_float", scope: !86, file: !1, line: 47, type: !7, align: 32)
-!123 = !DILocation(line: 48, column: 13, scope: !86)
-!124 = !DILocation(line: 49, column: 11, scope: !86)
-!125 = !DILocation(line: 52, column: 5, scope: !86)
-!126 = !DILocalVariable(name: "result", scope: !86, file: !1, line: 52, type: !7, align: 32)
-!127 = !DILocation(line: 56, column: 5, scope: !86)
-!128 = !DILocalVariable(name: "log2", scope: !86, file: !1, line: 56, type: !7, align: 32)
-!129 = !DILocation(line: 57, column: 5, scope: !86)
-!130 = !DILocalVariable(name: "n_float", scope: !86, file: !1, line: 57, type: !7, align: 32)
-!131 = !DILocation(line: 58, column: 12, scope: !86)
-!132 = !DILocation(line: 60, column: 5, scope: !86)
+define f64 @math.pow(f64 %base, f64 %exponent) {
+entry0:
+  %0 = alloca f64
+  store f64 %base, ptr %0
+  %1 = alloca f64
+  store f64 %exponent, ptr %1
+  %2 = load f64, ptr %1
+  %3 = fcmp oeq f64 %2, 0
+  br i1 %3, label %then1, label %ifcont2
+then1:
+  ret f64 1
+ifcont2:
+  %4 = load f64, ptr %0
+  %5 = fcmp oeq f64 %4, 0
+  br i1 %5, label %then3, label %ifcont4
+then3:
+  %6 = load f64, ptr %1
+  %7 = fcmp ogt f64 %6, 0
+  br i1 %7, label %then5, label %ifcont6
+ifcont4:
+  %8 = load f64, ptr %0
+  %9 = fcmp oeq f64 %8, 1
+  br i1 %9, label %then7, label %ifcont8
+then5:
+  ret f64 0
+ifcont6:
+  ret f64 0
+then7:
+  ret f64 1
+ifcont8:
+  %10 = load f64, ptr %0
+  %11 = fcmp olt f64 %10, 0
+  br i1 %11, label %then9, label %ifcont10
+then9:
+  ret f64 0
+ifcont10:
+  %12 = load f64, ptr %1
+  %13 = call f64 @floor(f64 %12)
+  %14 = fptosi f64 %13 to i32
+  %15 = alloca i32
+  store i32 %14, ptr %15
+  %16 = load f64, ptr %1
+  %17 = load i32, ptr %15
+  %18 = sitofp i32 %17 to f64
+  %19 = fsub f64 %16, %18
+  %20 = fcmp oeq f64 %19, 0
+  br i1 %20, label %then11, label %ifcont12
+then11:
+  %21 = load f64, ptr %1
+  %22 = fcmp ogt f64 %21, 0
+  br i1 %22, label %then13, label %ifcont14
+ifcont12:
+  %54 = load f64, ptr %0
+  %55 = call f64 @math.log(f64 %54)
+  %56 = alloca f64
+  store f64 %55, ptr %56
+  %57 = load f64, ptr %1
+  %58 = load f64, ptr %56
+  %59 = fmul f64 %57, %58
+  %60 = alloca f64
+  store f64 %59, ptr %60
+  %61 = load f64, ptr %60
+  %62 = call f64 @math.exp(f64 %61)
+  ret f64 %62
+then13:
+  %23 = load f64, ptr %1
+  %24 = fcmp ole f64 %23, 20
+  br i1 %24, label %then15, label %ifcont16
+ifcont14:
+  %36 = load f64, ptr %1
+  %37 = fcmp olt f64 %36, 0
+  br i1 %37, label %then20, label %ifcont21
+then15:
+  %25 = alloca f64
+  store f64 1, ptr %25
+  %26 = alloca f64
+  store f64 0, ptr %26
+  br label %whilecond17
+ifcont16:
+  br label %ifcont14
+whilecond17:
+  %27 = load f64, ptr %26
+  %28 = load f64, ptr %1
+  %29 = fcmp olt f64 %27, %28
+  br i1 %29, label %loop18, label %afterloop19
+loop18:
+  %30 = load f64, ptr %25
+  %31 = load f64, ptr %0
+  %32 = fmul f64 %30, %31
+  store f64 %32, ptr %25
+  %33 = load f64, ptr %26
+  %34 = fadd f64 %33, 1
+  store f64 %34, ptr %26
+  br label %whilecond17
+afterloop19:
+  %35 = load f64, ptr %25
+  ret f64 %35
+then20:
+  %38 = load f64, ptr %1
+  %39 = fneg f64 %38
+  %40 = alloca f64
+  store f64 %39, ptr %40
+  %41 = load f64, ptr %40
+  %42 = fcmp ole f64 %41, 20
+  br i1 %42, label %then22, label %ifcont23
+ifcont21:
+  br label %ifcont12
+then22:
+  %43 = alloca f64
+  store f64 1, ptr %43
+  %44 = alloca f64
+  store f64 0, ptr %44
+  br label %whilecond24
+ifcont23:
+  br label %ifcont21
+whilecond24:
+  %45 = load f64, ptr %44
+  %46 = load f64, ptr %40
+  %47 = fcmp olt f64 %45, %46
+  br i1 %47, label %loop25, label %afterloop26
+loop25:
+  %48 = load f64, ptr %43
+  %49 = load f64, ptr %0
+  %50 = fdiv f64 %48, %49
+  store f64 %50, ptr %43
+  %51 = load f64, ptr %44
+  %52 = fadd f64 %51, 1
+  store f64 %52, ptr %44
+  br label %whilecond24
+afterloop26:
+  %53 = load f64, ptr %43
+  ret f64 %53
+}
+
+define f64 @math.exp(f64 %x) {
+entry0:
+  %0 = alloca f64
+  store f64 %x, ptr %0
+  %1 = load f64, ptr %0
+  %2 = fcmp oeq f64 %1, 0
+  br i1 %2, label %then1, label %ifcont2
+then1:
+  ret f64 1
+ifcont2:
+  %3 = load f64, ptr %0
+  %4 = fcmp olt f64 %3, 0
+  %5 = alloca i1
+  store i1 %4, ptr %5
+  %6 = load i1, ptr %5
+  br i1 %6, label %then3, label %ifcont4
+then3:
+  %7 = load f64, ptr %0
+  %8 = fneg f64 %7
+  store f64 %8, ptr %0
+  br label %ifcont4
+ifcont4:
+  %9 = alloca i32
+  store i32 0, ptr %9
+  br label %whilecond5
+whilecond5:
+  %10 = load f64, ptr %0
+  %11 = fcmp ogt f64 %10, 1
+  br i1 %11, label %loop6, label %afterloop7
+loop6:
+  %12 = load f64, ptr %0
+  %13 = fdiv f64 %12, 2
+  store f64 %13, ptr %0
+  %14 = load i32, ptr %9
+  %15 = add i32 %14, 1
+  store i32 %15, ptr %9
+  br label %whilecond5
+afterloop7:
+  %16 = alloca f64
+  store f64 1, ptr %16
+  %17 = alloca f64
+  store f64 1, ptr %17
+  %18 = alloca i32
+  store i32 1, ptr %18
+  br label %whilecond8
+whilecond8:
+  %19 = load i32, ptr %18
+  %20 = icmp slt i32 %19, 20
+  br i1 %20, label %loop9, label %afterloop10
+loop9:
+  %21 = load f64, ptr %16
+  %22 = load f64, ptr %0
+  %23 = fmul f64 %21, %22
+  store f64 %23, ptr %16
+  %24 = load i32, ptr %18
+  %25 = sitofp i32 %24 to f64
+  %26 = alloca f64
+  store f64 %25, ptr %26
+  %27 = load f64, ptr %16
+  %28 = load f64, ptr %26
+  %29 = fdiv f64 %27, %28
+  store f64 %29, ptr %16
+  %30 = load f64, ptr %17
+  %31 = load f64, ptr %16
+  %32 = fadd f64 %30, %31
+  store f64 %32, ptr %17
+  %33 = load i32, ptr %18
+  %34 = add i32 %33, 1
+  store i32 %34, ptr %18
+  br label %whilecond8
+afterloop10:
+  %35 = load f64, ptr %17
+  %36 = alloca f64
+  store f64 %35, ptr %36
+  %37 = alloca i32
+  store i32 0, ptr %37
+  br label %whilecond11
+whilecond11:
+  %38 = load i32, ptr %37
+  %39 = load i32, ptr %9
+  %40 = icmp slt i32 %38, %39
+  br i1 %40, label %loop12, label %afterloop13
+loop12:
+  %41 = load f64, ptr %36
+  %42 = load f64, ptr %36
+  %43 = fmul f64 %41, %42
+  store f64 %43, ptr %36
+  %44 = load i32, ptr %37
+  %45 = add i32 %44, 1
+  store i32 %45, ptr %37
+  br label %whilecond11
+afterloop13:
+  %46 = load i1, ptr %5
+  br i1 %46, label %then14, label %ifcont15
+then14:
+  %47 = load f64, ptr %36
+  %48 = fdiv f64 1, %47
+  store f64 %48, ptr %36
+  br label %ifcont15
+ifcont15:
+  %49 = load f64, ptr %36
+  ret f64 %49
+}
+
+define f64 @math.log(f64 %x) {
+entry0:
+  %0 = alloca f64
+  store f64 %x, ptr %0
+  %1 = load f64, ptr %0
+  %2 = fcmp ole f64 %1, 0
+  br i1 %2, label %then1, label %ifcont2
+then1:
+  ret f64 0
+ifcont2:
+  %3 = load f64, ptr %0
+  %4 = fcmp oeq f64 %3, 1
+  br i1 %4, label %then3, label %ifcont4
+then3:
+  ret f64 0
+ifcont4:
+  %5 = alloca i32
+  store i32 0, ptr %5
+  %6 = load f64, ptr %0
+  %7 = alloca f64
+  store f64 %6, ptr %7
+  br label %whilecond5
+whilecond5:
+  %8 = load f64, ptr %7
+  %9 = fcmp oge f64 %8, 1
+  br i1 %9, label %loop6, label %afterloop7
+loop6:
+  %10 = load f64, ptr %7
+  %11 = fdiv f64 %10, 2
+  store f64 %11, ptr %7
+  %12 = load i32, ptr %5
+  %13 = add i32 %12, 1
+  store i32 %13, ptr %5
+  br label %whilecond5
+afterloop7:
+  br label %whilecond8
+whilecond8:
+  %14 = load f64, ptr %7
+  %15 = fcmp olt f64 %14, 0.5
+  br i1 %15, label %loop9, label %afterloop10
+loop9:
+  %16 = load f64, ptr %7
+  %17 = fmul f64 %16, 2
+  store f64 %17, ptr %7
+  %18 = load i32, ptr %5
+  %19 = sub i32 %18, 1
+  store i32 %19, ptr %5
+  br label %whilecond8
+afterloop10:
+  %20 = load f64, ptr %7
+  %21 = fsub f64 %20, 1
+  %22 = alloca f64
+  store f64 %21, ptr %22
+  %23 = load f64, ptr %7
+  %24 = fadd f64 %23, 1
+  %25 = alloca f64
+  store f64 %24, ptr %25
+  %26 = load f64, ptr %22
+  %27 = load f64, ptr %25
+  %28 = fdiv f64 %26, %27
+  %29 = alloca f64
+  store f64 %28, ptr %29
+  %30 = load f64, ptr %29
+  %31 = load f64, ptr %29
+  %32 = fmul f64 %30, %31
+  %33 = alloca f64
+  store f64 %32, ptr %33
+  %34 = load f64, ptr %29
+  %35 = alloca f64
+  store f64 %34, ptr %35
+  %36 = load f64, ptr %35
+  %37 = alloca f64
+  store f64 %36, ptr %37
+  %38 = alloca i32
+  store i32 1, ptr %38
+  br label %whilecond11
+whilecond11:
+  %39 = load i32, ptr %38
+  %40 = icmp slt i32 %39, 20
+  br i1 %40, label %loop12, label %afterloop13
+loop12:
+  %41 = load f64, ptr %35
+  %42 = load f64, ptr %33
+  %43 = fmul f64 %41, %42
+  store f64 %43, ptr %35
+  %44 = load i32, ptr %38
+  %45 = mul i32 2, %44
+  %46 = add i32 %45, 1
+  %47 = alloca i32
+  store i32 %46, ptr %47
+  %48 = load i32, ptr %47
+  %49 = sitofp i32 %48 to f64
+  %50 = alloca f64
+  store f64 %49, ptr %50
+  %51 = load f64, ptr %37
+  %52 = load f64, ptr %35
+  %53 = load f64, ptr %50
+  %54 = fdiv f64 %52, %53
+  %55 = fadd f64 %51, %54
+  store f64 %55, ptr %37
+  %56 = load i32, ptr %38
+  %57 = add i32 %56, 1
+  store i32 %57, ptr %38
+  br label %whilecond11
+afterloop13:
+  %58 = load f64, ptr %37
+  %59 = fmul f64 2, %58
+  %60 = alloca f64
+  store f64 %59, ptr %60
+  %61 = alloca f64
+  store f64 0.693147, ptr %61
+  %62 = load i32, ptr %5
+  %63 = sitofp i32 %62 to f64
+  %64 = alloca f64
+  store f64 %63, ptr %64
+  %65 = load f64, ptr %60
+  %66 = load f64, ptr %64
+  %67 = load f64, ptr %61
+  %68 = fmul f64 %66, %67
+  %69 = fadd f64 %65, %68
+  store f64 %69, ptr %60
+  %70 = load f64, ptr %60
+  ret f64 %70
+}
+
+declare f64 @trunc(f64 %arg0)
+
+declare f64 @floor(f64 %arg0)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
 ExitCode: 8
-OptimizedInstructionCount: 73
-UnoptimizedInstructionCount: 73

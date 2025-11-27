@@ -11,6 +11,59 @@ function main() int
     return used()  // Only this is kept
 end 'main'
 ---
+; Module: test.maxon
+
+define i32 @used() {
+entry0:
+  ret i32 42
+}
+
+define i32 @unused() {
+entry0:
+  ret i32 999
+}
+
+define i32 @main() {
+entry0:
+  ret i32 42
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
+; Module: test.maxon
+
+define i32 @used() {
+entry0:
+  ret i32 42
+}
+
+define i32 @unused() {
+entry0:
+  ret i32 999
+}
+
+define i32 @main() {
+entry0:
+  %0 = call i32 @used()
+  ret i32 %0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
 ExitCode: 42

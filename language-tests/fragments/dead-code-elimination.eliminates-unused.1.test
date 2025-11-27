@@ -16,6 +16,74 @@ function main() int
     return result
 end 'main'
 ---
+; Module: test.maxon
+
+define i32 @used_function() {
+entry0:
+  ret i32 42
+}
+
+define i32 @unused_function() {
+entry0:
+  ret i32 999
+}
+
+define i32 @another_unused_function() {
+entry0:
+  ret i32 123
+}
+
+define i32 @main() {
+entry0:
+  %1 = alloca i32
+  store i32 42, ptr %1
+  ret i32 42
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
+; Module: test.maxon
+
+define i32 @used_function() {
+entry0:
+  ret i32 42
+}
+
+define i32 @unused_function() {
+entry0:
+  ret i32 999
+}
+
+define i32 @another_unused_function() {
+entry0:
+  ret i32 123
+}
+
+define i32 @main() {
+entry0:
+  %0 = call i32 @used_function()
+  %1 = alloca i32
+  store i32 %0, ptr %1
+  %2 = load i32, ptr %1
+  ret i32 %2
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
 ExitCode: 42
