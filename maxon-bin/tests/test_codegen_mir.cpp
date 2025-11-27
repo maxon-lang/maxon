@@ -21,9 +21,9 @@ using namespace mir;
 // Parse Maxon source code and generate MIR
 static std::unique_ptr<MIRCodeGenerator> compileToMIR(const std::string &source) {
 	Lexer lexer(source);
-	auto tokens = lexer.tokenize();
+	auto stream = lexer.tokenize_stream();
 
-	Parser parser(tokens);
+	Parser parser(std::move(stream));
 	auto program = parser.parse();
 
 	auto codegen = std::make_unique<MIRCodeGenerator>("test_module", false, 0);
@@ -35,9 +35,9 @@ static std::unique_ptr<MIRCodeGenerator> compileToMIR(const std::string &source)
 // Parse and generate MIR with entry point
 static std::unique_ptr<MIRCodeGenerator> compileToMIRWithEntry(const std::string &source) {
 	Lexer lexer(source);
-	auto tokens = lexer.tokenize();
+	auto stream = lexer.tokenize_stream();
 
-	Parser parser(tokens);
+	Parser parser(std::move(stream));
 	auto program = parser.parse();
 
 	auto codegen = std::make_unique<MIRCodeGenerator>("test_module", false, 0);

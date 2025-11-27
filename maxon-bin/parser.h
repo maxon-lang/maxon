@@ -4,24 +4,45 @@
 #include "ast.h"
 #include "lexer.h"
 #include "logger.h"
+#include "parser_support.h"
+#include "token_stream.h"
 #include <memory>
 #include <vector>
 
 class Parser {
   private:
-	std::vector<Token> tokens;
+	// Optimized token storage
+	TokenStream stream_;
+	LookaheadCache cache_;
+	BlockBoundaryAnalyzer boundary_;
+
 	size_t position;
 	std::string defaultNamespace; // Namespace derived from file path
 	Logger *logger_ = nullptr;	  // Optional logger for detailed tracing
 
-	Token &currentToken();
-	Token &peek(int offset = 1);
+	// Token access methods (use SIMD-optimized TokenStream)
+	TokenType currentType() const;
+	std::string_view currentValue() const;
+	int currentLine() const;
+	int currentColumn() const;
+	std::optional<KeywordData> currentKeywordData() const;
+
+	// Legacy compatibility - constructs Token on demand
+	Token currentToken();
+	Token peekToken(int offset = 1);
+
 	bool match(TokenType type);
-	bool check(TokenType type);
-	bool check(TokenType type, int offset); // Check token at offset
+	bool check(TokenType type) const;
+	bool check(TokenType type, int offset) const; // Check token at offset
+	bool checkKeyword(const std::string &keyword) const;
+	bool checkKeyword(const std::string &keyword, int offset) const;
 	void advance();
 	Token expect(TokenType type, const std::string &message);
 	Token expectKeyword(const std::string &keyword, const std::string &message);
+
+	// Zero-allocation variants - use when Token result is discarded
+	void expectAdvance(TokenType type, const std::string &message);
+	void expectKeywordAdvance(const std::string &keyword, const std::string &message);
 	std::string parseQualifiedName(const std::string &context);
 
 	std::unique_ptr<ExprAST> parseExpression();
@@ -54,7 +75,12 @@ class Parser {
 	void logDetail(const std::string &msg);
 
   public:
-	Parser(const std::vector<Token> &toks);
+	// Primary constructor: accepts TokenStream directly
+	explicit Parser(TokenStream &&stream);
+
+	// Legacy constructor for compatibility (converts to TokenStream internally)
+	explicit Parser(const std::vector<Token> &toks);
+
 	void setDefaultNamespace(const std::string &ns);
 	void setLogger(Logger *logger) { logger_ = logger; }
 	std::unique_ptr<ProgramAST> parse();

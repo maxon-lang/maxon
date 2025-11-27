@@ -52,8 +52,7 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
 	std::vector<lsp::Diagnostic> diagnostics;
 
 	try {
-		Lexer lexer(doc->text);
-		std::vector<Token> tokens = lexer.tokenize();
+		std::vector<Token> tokens = tokenize(doc->text);
 
 		// Check for lexer errors (UNKNOWN tokens)
 		for (const auto &token : tokens) {
@@ -262,8 +261,7 @@ std::vector<lsp::CompletionItem> Analyzer::getCompletions(std::shared_ptr<Docume
 
 	// Try to extract identifiers from document for variable/function completions
 	try {
-		Lexer lexer(doc->text);
-		std::vector<Token> tokens = lexer.tokenize();
+		std::vector<Token> tokens = tokenize(doc->text);
 
 		std::set<std::string> identifiers;
 		for (const auto &token : tokens) {
@@ -529,8 +527,7 @@ std::optional<lsp::Location> Analyzer::getDefinition(std::shared_ptr<Document> d
 
 	// Try to find the first occurrence of this identifier being declared
 	try {
-		Lexer lexer(doc->text);
-		std::vector<Token> tokens = lexer.tokenize();
+		std::vector<Token> tokens = tokenize(doc->text);
 
 		// Look for "var <word>" or "function <word>"
 		for (size_t i = 0; i < tokens.size() - 1; i++) {
@@ -556,8 +553,7 @@ std::vector<lsp::SymbolInformation> Analyzer::getSymbols(std::shared_ptr<Documen
 	std::vector<lsp::SymbolInformation> symbols;
 
 	try {
-		Lexer lexer(doc->text);
-		std::vector<Token> tokens = lexer.tokenize();
+		std::vector<Token> tokens = tokenize(doc->text);
 
 		// Find function declarations
 		for (size_t i = 0; i < tokens.size() - 1; i++) {
@@ -678,8 +674,7 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 		file.close();
 
 		// Parse the file to extract function signatures
-		Lexer lexer(content);
-		std::vector<Token> tokens = lexer.tokenize();
+		std::vector<Token> tokens = tokenize(content);
 
 		Parser parser(tokens);
 		auto program = parser.parse();
@@ -993,8 +988,7 @@ std::vector<lsp::CompletionItem> Analyzer::getQualifiedNameCompletions(const std
 
 std::optional<lsp::WorkspaceEdit> Analyzer::getRename(std::shared_ptr<Document> doc, lsp::Position pos, const std::string &newName) {
 	try {
-		Lexer lexer(doc->text);
-		std::vector<Token> tokens = lexer.tokenize();
+		std::vector<Token> tokens = tokenize(doc->text);
 
 		// Find the token at the given position
 		Token *targetToken = nullptr;
@@ -1145,8 +1139,7 @@ std::optional<lsp::WorkspaceEdit> Analyzer::getRename(std::shared_ptr<Document> 
 
 std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::shared_ptr<Document> doc, lsp::Position pos) {
 	try {
-		Lexer lexer(doc->text);
-		std::vector<Token> tokens = lexer.tokenize();
+		std::vector<Token> tokens = tokenize(doc->text);
 
 		// Find the token at the given position
 		Token *targetToken = nullptr;

@@ -2,16 +2,13 @@
 #include "backend/x86_codegen.h"
 #include "compiler.h"
 #include "docs_generator.h"
+#include "lexer.h"
 #include "mir/mir_parser.h"
 #include "mir/optimizer.h"
 #include "self_test.h"
 #include "temp_runner.h"
 #include "test_regenerate.h"
 #include "test_runner.h"
-
-#ifdef MAXON_SIMD_ENABLED
-#include "simd/simd.h"
-#endif
 
 #include <cstring>
 #include <filesystem>
@@ -110,20 +107,22 @@ int main(int argc, char *argv[]) {
 		return DocsGenerator::generateDocumentation();
 	}
 
-#ifdef MAXON_SIMD_ENABLED
 	if (command == "benchmark") {
 		if (argc < 3) {
-			std::cerr << "Usage: " << argv[0] << " benchmark <input.maxon> [-n iterations]" << std::endl;
+			std::cerr << "Usage: " << argv[0] << " benchmark <input.maxon> [-n iterations] [--pipeline]" << std::endl;
 			return 1;
 		}
 
 		std::string inputFile = argv[2];
 		int iterations = 100; // Default iterations
+		bool pipelineMode = false;
 
 		for (int i = 3; i < argc; ++i) {
 			std::string arg = argv[i];
 			if (arg == "-n" && i + 1 < argc) {
 				iterations = std::stoi(argv[++i]);
+			} else if (arg == "--pipeline" || arg == "-p") {
+				pipelineMode = true;
 			}
 		}
 
@@ -136,11 +135,15 @@ int main(int argc, char *argv[]) {
 		std::string source((std::istreambuf_iterator<char>(file)),
 						   std::istreambuf_iterator<char>());
 
-		// Run benchmark comparison
-		simd::run_benchmark_comparison(source, inputFile, iterations);
+		// Run benchmark
+		run_lexer_benchmark(source, inputFile, iterations);
+
+		// Also run pipeline benchmark if requested
+		if (pipelineMode) {
+			run_pipeline_benchmark(source, inputFile, iterations);
+		}
 		return 0;
 	}
-#endif
 
 	if (command == "verify-mir") {
 		if (argc < 3) {

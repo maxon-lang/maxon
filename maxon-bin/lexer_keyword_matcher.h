@@ -1,26 +1,17 @@
-#ifndef SIMD_KEYWORD_MATCHER_H
-#define SIMD_KEYWORD_MATCHER_H
+#ifndef LEXER_KEYWORD_MATCHER_H
+#define LEXER_KEYWORD_MATCHER_H
 
 /**
- * SIMD Keyword Matcher
+ * Keyword Matcher
  *
- * Provides fast keyword recognition using a perfect hash function and
- * SIMD-accelerated prefix matching. Replaces std::unordered_map lookup
- * for the 47 Maxon keywords.
- *
- * Performance:
- * - Hash map lookup: ~20-50ns (L2/L3 cache miss on map structure)
- * - Perfect hash: ~2ns (single uint32 load + multiply + shift)
- * - Speedup: 10-25x for keyword recognition
+ * Provides fast keyword recognition using a perfect hash function.
  */
 
-#include "../lexer.h"
-#include "simd_platform.h"
+#include "lexer.h"
+#include "lexer_platform.h"
 #include <array>
 #include <cstring>
 #include <string_view>
-
-namespace simd {
 
 /**
  * Keyword entry in the hash table
@@ -322,6 +313,4 @@ class KeywordPrefixMatcher {
 	}
 };
 
-} // namespace simd
-
-#endif // SIMD_KEYWORD_MATCHER_H
+#endif // LEXER_KEYWORD_MATCHER_H

@@ -1,31 +1,20 @@
-#ifndef SIMD_TOKEN_STREAM_H
-#define SIMD_TOKEN_STREAM_H
+#ifndef TOKEN_STREAM_H
+#define TOKEN_STREAM_H
 
 /**
- * SIMD-Optimized Token Stream
+ * Token Stream
  *
  * Provides a cache-efficient Structure-of-Arrays (SoA) layout for tokens,
- * with string interning for deduplication and fast lookups.
- *
- * Memory Layout Comparison:
- * - Original Token: ~100 bytes/token (std::string, std::optional<KeywordData>)
- * - CompactToken:   ~16 bytes/token (6.25x memory reduction)
- *
- * Benefits:
- * - 4x more tokens per cache line
- * - Vectorized token type scanning (32 tokens/instruction with AVX2)
- * - String deduplication for keywords/identifiers
+ * with string interning for deduplication.
  */
 
-#include "../lexer.h"
-#include "simd_platform.h"
+#include "lexer.h"
+#include "lexer/lexer_platform.h"
 #include <cstring>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
-
-namespace simd {
 
 /**
  * String Table for string interning
@@ -475,6 +464,4 @@ class TokenStream {
 	}
 };
 
-} // namespace simd
-
-#endif // SIMD_TOKEN_STREAM_H
+#endif // TOKEN_STREAM_H

@@ -5,11 +5,7 @@
 #include "lexer.h"
 #include "logger.h"
 #include "semantic_analyzer.h"
-
-// SIMD-optimized lexer (optional, enabled with MAXON_SIMD_ENABLED)
-#ifdef MAXON_SIMD_ENABLED
-#include "simd/simd.h"
-#endif
+#include "token_stream.h"
 
 #include <chrono>
 #include <filesystem>
@@ -25,32 +21,20 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logge
 
 		auto lexStart = logger.startTimer();
 
-#ifdef MAXON_SIMD_ENABLED
-		// Use SIMD lexer for larger files, scalar for smaller files
-		std::vector<Token> tokens;
-		if (simd::should_use_simd(source.size())) {
-			simd::SIMDLexer lexer(source);
-			tokens = lexer.tokenize();
-			logger.trace(LogPhase::Lexer, "Using SIMD lexer (", simd::get_simd_capability(), ")");
-		} else {
-			Lexer lexer(source);
-			tokens = lexer.tokenize();
-			logger.trace(LogPhase::Lexer, "Using scalar lexer (small file)");
-		}
-#else
+		// Use lexer which returns TokenStream directly
 		Lexer lexer(source);
-		std::vector<Token> tokens = lexer.tokenize();
-#endif
+		TokenStream stream = lexer.tokenize_stream();
+		logger.trace(LogPhase::Lexer, "Using SIMD lexer (", get_lexer_capability(), ")");
 
 		logger.logElapsed(LogPhase::Lexer, "Tokenization time", lexStart);
 
-		logger.progress(LogPhase::Lexer, "Tokenized: ", tokens.size(), " tokens from ", normalizePathForDisplay(filePath));
+		logger.progress(LogPhase::Lexer, "Tokenized: ", stream.size(), " tokens from ", normalizePathForDisplay(filePath));
 
 		if (logger.isEnabled(2)) {
 			// Count token types for detailed logging
 			std::map<TokenType, int> tokenCounts;
-			for (const auto &token : tokens) {
-				tokenCounts[token.type]++;
+			for (size_t i = 0; i < stream.size(); ++i) {
+				tokenCounts[stream[i].get_type()]++;
 			}
 			std::ostringstream details;
 			bool first = true;
@@ -94,18 +78,18 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logge
 
 		// Trace level: log individual tokens
 		if (logger.isEnabled(3)) {
-			for (size_t i = 0; i < tokens.size() && i < 50; ++i) {
-				const auto &tok = tokens[i];
-				logger.trace(LogPhase::Lexer, "Token[", i, "]: type=", static_cast<int>(tok.type),
-							 " value='", tok.value, "' line=", tok.line, " col=", tok.column);
+			for (size_t i = 0; i < stream.size() && i < 50; ++i) {
+				const auto &ct = stream[i];
+				logger.trace(LogPhase::Lexer, "Token[", i, "]: type=", static_cast<int>(ct.get_type()),
+							 " value='", stream.get_value(i), "' line=", ct.get_line(), " col=", ct.get_column());
 			}
-			if (tokens.size() > 50) {
-				logger.trace(LogPhase::Lexer, "... and ", tokens.size() - 50, " more tokens");
+			if (stream.size() > 50) {
+				logger.trace(LogPhase::Lexer, "... and ", stream.size() - 50, " more tokens");
 			}
 		}
 
 		auto parseStart = logger.startTimer();
-		Parser parser(tokens);
+		Parser parser(std::move(stream));
 		std::string fileNamespace = deriveNamespace(filePath);
 		parser.setDefaultNamespace(fileNamespace);
 		std::unique_ptr<ProgramAST> program = parser.parse();

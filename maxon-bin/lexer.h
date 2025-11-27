@@ -1,10 +1,21 @@
 #ifndef LEXER_H
 #define LEXER_H
 
+/**
+ * Maxon Lexer
+ *
+ * Provides tokenization of Maxon source code using SIMD-optimized algorithms.
+ * Includes token types, keyword metadata, and the Lexer class.
+ */
+
 #include <functional>
 #include <optional>
 #include <string>
 #include <vector>
+
+// ============================================================================
+// Token Types
+// ============================================================================
 
 enum class TokenType {
 	// Keywords (all keywords now use KEYWORD)
@@ -50,7 +61,10 @@ enum class TokenType {
 	UNKNOWN
 };
 
-// Keyword category for metadata
+// ============================================================================
+// Keyword Metadata
+// ============================================================================
+
 enum class KeywordCategory {
 	Type,		   // int, float, ptr, char, string
 	ControlFlow,   // if, else, while, end, return, break, continue
@@ -60,14 +74,12 @@ enum class KeywordCategory {
 	Operator	   // as
 };
 
-// How a math intrinsic is implemented
 enum class MathIntrinsicKind {
 	Intrinsic,		 // Built-in (sqrt, abs, floor, ceil, round)
 	RuntimeFunction, // Call runtime library function (sin, cos)
 	DirectCast		 // Direct IR operation (trunc)
 };
 
-// Math intrinsic metadata for code generation
 struct MathIntrinsicInfo {
 	MathIntrinsicKind kind;
 	std::string runtimeFunctionName; // For RuntimeFunction kind
@@ -80,37 +92,62 @@ struct KeywordData {
 	std::optional<MathIntrinsicInfo> mathInfo; // Only set for MathIntrinsic category
 };
 
+// ============================================================================
+// Token
+// ============================================================================
+
 struct Token {
 	TokenType type;
 	std::string value;
 	int line;
 	int column;
-	std::optional<KeywordData> keywordData; // Contains category and description for keyword tokens
+	std::optional<KeywordData> keywordData;
 
 	Token(TokenType t, const std::string &v, int l, int c)
 		: type(t), value(v), line(l), column(c) {}
 };
 
+// ============================================================================
+// Lexer Class
+// ============================================================================
+
+// Forward declarations for internal types
+class CharClassifier;
+class KeywordMatcher;
+class TokenStream;
+
+/**
+ * Lexer - Tokenizes Maxon source code
+ *
+ * Uses SIMD-optimized algorithms for fast lexing.
+ */
 class Lexer {
-  private:
-	std::string source;
-	size_t position;
-	int line;
-	int column;
-
-	char currentChar();
-	char peek(int offset = 1);
-	void advance();
-	void skipWhitespace();
-	void skipComment();
-	Token readNumber();
-	Token readIdentifier();
-	Token readString();
-	Token readStringLiteral(); // For double-quoted strings
-
   public:
-	Lexer(const std::string &src);
+	/**
+	 * Construct lexer with source code
+	 */
+	explicit Lexer(const std::string &source);
+
+	/**
+	 * Construct lexer with source code (C string + length)
+	 */
+	Lexer(const char *source, size_t length);
+
+	/**
+	 * Tokenize the source code
+	 * Returns a vector of tokens for the parser
+	 */
 	std::vector<Token> tokenize();
+
+	/**
+	 * Tokenize to optimized token stream
+	 * More efficient for the parser
+	 */
+	TokenStream tokenize_stream();
+
+	// ========================================================================
+	// Static keyword query methods (for IDE/LSP features)
+	// ========================================================================
 
 	struct KeywordInfo {
 		std::string name;
@@ -118,7 +155,7 @@ class Lexer {
 		std::string description;
 	};
 
-	// Get all keyword strings (for IDE/LSP features)
+	// Get all keyword strings
 	static std::vector<std::string> getKeywords();
 
 	// Get keywords with metadata
@@ -130,7 +167,7 @@ class Lexer {
 	// Check if a name is a math intrinsic
 	static bool isMathIntrinsic(const std::string &name);
 
-	// Get math intrinsic info for code generation (returns nullptr if not a math intrinsic)
+	// Get math intrinsic info (returns nullptr if not a math intrinsic)
 	static const MathIntrinsicInfo *getMathIntrinsicInfo(const std::string &name);
 
 	// Check if a string is a valid type keyword
@@ -142,6 +179,61 @@ class Lexer {
 	static bool isTypeToken(const Token &token);
 	static bool isLiteralToken(const Token &token);
 	static bool isMathIntrinsicToken(const Token &token);
+
+  private:
+	const char *source_;
+	size_t length_;
+	size_t position_;
+	int line_;
+	int column_;
+
+	char currentChar() const;
+	char peek(int offset = 1) const;
+	void advance();
+	void advanceBy(size_t n);
+	void skipWhitespace();
+	void updateLineColumn(size_t start, size_t end);
+	void skipLineComment();
+	void skipBlockComment();
+
+	Token readNextToken();
+	Token readNumber();
+	Token readIdentifier();
+	Token readString();
+	Token readStringLiteral();
+	Token readOperatorOrDelimiter(int startLine, int startColumn);
 };
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+/**
+ * Convenience function to tokenize a source string
+ */
+inline std::vector<Token> tokenize(const std::string &source) {
+	Lexer lexer(source);
+	return lexer.tokenize();
+}
+
+/**
+ * Get SIMD capability string for diagnostics
+ */
+const char *get_lexer_capability();
+
+/**
+ * Print CPU features (for debugging)
+ */
+void print_cpu_features();
+
+/**
+ * Run lexer benchmark
+ */
+void run_lexer_benchmark(const std::string &source, const std::string &filename, int iterations);
+
+/**
+ * Run full pipeline benchmark (lexer + parser)
+ */
+void run_pipeline_benchmark(const std::string &source, const std::string &filename, int iterations);
 
 #endif // LEXER_H

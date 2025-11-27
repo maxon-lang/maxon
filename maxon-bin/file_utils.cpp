@@ -143,8 +143,7 @@ std::vector<std::string> extractFunctionNames(const std::string &filePath) {
 	std::vector<std::string> functionNames;
 	try {
 		std::string source = readFile(filePath);
-		Lexer lexer(source);
-		std::vector<Token> tokens = lexer.tokenize();
+		std::vector<Token> tokens = tokenize(source);
 
 		for (size_t i = 0; i < tokens.size(); ++i) {
 			if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "function" && i + 1 < tokens.size()) {

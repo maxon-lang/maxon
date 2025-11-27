@@ -1,22 +1,17 @@
-#ifndef SIMD_CHAR_CLASS_H
-#define SIMD_CHAR_CLASS_H
+#ifndef LEXER_CHAR_CLASS_H
+#define LEXER_CHAR_CLASS_H
 
 /**
  * SIMD Character Classification
  *
  * Provides vectorized character classification for lexing operations.
  * Processes 16-32 characters in parallel using SSE4.2/AVX2 instructions.
- *
- * Performance:
- * - Scalar: ~4-6 cycles per character (function call + comparison + branch)
- * - SIMD: ~1 cycle per 16-32 characters = 0.03-0.06 cycles/char
- * - Speedup: ~80x for character classification
  */
 
-#include "simd_platform.h"
+#include "lexer_platform.h"
 #include <cstdint>
 
-namespace simd {
+
 
 /**
  * Character class bitmasks for classification results
@@ -536,6 +531,6 @@ class CharClassifier {
 	}
 };
 
-} // namespace simd
 
-#endif // SIMD_CHAR_CLASS_H
+
+#endif // LEXER_CHAR_CLASS_H

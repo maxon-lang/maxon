@@ -1,26 +1,17 @@
-#ifndef SIMD_NUMBER_PARSER_H
-#define SIMD_NUMBER_PARSER_H
+#ifndef LEXER_NUMBER_PARSER_H
+#define LEXER_NUMBER_PARSER_H
 
 /**
- * SIMD Number Parser
+ * Number Parser
  *
  * Provides SIMD-accelerated parsing of integer and floating-point literals.
- * Scans digits in batches of 16-32 characters and accumulates values inline
- * without string allocation.
- *
- * Performance:
- * - String-based parsing: ~10ns/digit (allocation + character copy)
- * - SIMD parsing: ~1ns/digit (direct value accumulation)
- * - Speedup: ~10x for number parsing
  */
 
-#include "simd_char_class.h"
+#include "lexer_char_class.h"
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
-
-namespace simd {
 
 /**
  * Result of number parsing
@@ -320,6 +311,4 @@ class IntToString {
 	}
 };
 
-} // namespace simd
-
-#endif // SIMD_NUMBER_PARSER_H
+#endif // LEXER_NUMBER_PARSER_H

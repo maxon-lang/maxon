@@ -1,4 +1,5 @@
 #include "lsp_server.h"
+#include "lexer.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -648,8 +649,7 @@ json LspServer::handleSemanticTokensFull(const json &params) {
 	}
 
 	// Parse the document to get tokens
-	Lexer lexer(doc->text);
-	std::vector<Token> tokens = lexer.tokenize();
+	std::vector<Token> tokens = tokenize(doc->text);
 
 	// Track nesting depth for block identifiers
 	int currentDepth = 0;

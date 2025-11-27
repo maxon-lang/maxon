@@ -1,29 +1,21 @@
-#ifndef SIMD_PARSER_SUPPORT_H
-#define SIMD_PARSER_SUPPORT_H
+#ifndef PARSER_SUPPORT_H
+#define PARSER_SUPPORT_H
 
 /**
- * SIMD Parser Support
+ * Parser Support
  *
  * Provides optimizations for the parser including:
  * - Block boundary precomputation (O(1) lookup for matching 'end' keywords)
  * - Lookahead caching for faster token matching
- * - Vectorized token type searching
- *
- * Performance Targets:
- * - Block boundary lookup: O(n) -> O(1)
- * - Token type matching: 5 cycles/token -> 1 cycle/token
- * - Overall parser: 2-4x faster
  */
 
-#include "../lexer.h"
-#include "simd_platform.h"
-#include "simd_token_stream.h"
+#include "lexer.h"
+#include "lexer/lexer_platform.h"
+#include "token_stream.h"
 #include <algorithm>
 #include <stack>
 #include <unordered_map>
 #include <vector>
-
-namespace simd {
 
 /**
  * Block Boundary Information
@@ -500,6 +492,4 @@ struct ParserStats {
 	size_t block_lookup_saves = 0; // Tokens saved by O(1) lookup
 };
 
-} // namespace simd
-
-#endif // SIMD_PARSER_SUPPORT_H
+#endif // PARSER_SUPPORT_H

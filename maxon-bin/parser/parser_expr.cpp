@@ -3,86 +3,87 @@
 
 std::unique_ptr<ExprAST> Parser::parsePrimary() {
 	if (check(TokenType::NUMBER)) {
-		int value = std::stoi(currentToken().value);
-		int line = currentToken().line;
-		int column = currentToken().column;
+		int value = std::stoi(std::string(currentValue()));
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 		return std::make_unique<NumberExprAST>(value, line, column);
 	}
 
 	if (check(TokenType::BYTE_LITERAL)) {
-		uint8_t value = static_cast<uint8_t>(std::stoi(currentToken().value));
-		int line = currentToken().line;
-		int column = currentToken().column;
+		uint8_t value = static_cast<uint8_t>(std::stoi(std::string(currentValue())));
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 		return std::make_unique<ByteExprAST>(value, line, column);
 	}
 
 	if (check(TokenType::FLOAT_LITERAL)) {
-		double value = std::stod(currentToken().value);
-		int line = currentToken().line;
-		int column = currentToken().column;
-		std::string literalString = currentToken().value;
+		double value = std::stod(std::string(currentValue()));
+		int line = currentLine();
+		int column = currentColumn();
+		std::string literalString = std::string(currentValue());
 		advance();
 		return std::make_unique<FloatExprAST>(value, line, column, literalString);
 	}
 
-	if (check(TokenType::KEYWORD) && currentToken().value == "true") {
-		int line = currentToken().line;
-		int column = currentToken().column;
+	if (checkKeyword("true")) {
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 		return std::make_unique<BooleanExprAST>(true, line, column);
 	}
 
-	if (check(TokenType::KEYWORD) && currentToken().value == "false") {
-		int line = currentToken().line;
-		int column = currentToken().column;
+	if (checkKeyword("false")) {
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 		return std::make_unique<BooleanExprAST>(false, line, column);
 	}
 
 	if (check(TokenType::CHARACTER)) {
-		char value = currentToken().value[0]; // Get first character
-		int line = currentToken().line;
-		int column = currentToken().column;
+		char value = currentValue()[0]; // Get first character
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 		return std::make_unique<CharacterExprAST>(value, line, column);
 	}
 
 	if (check(TokenType::STRING)) {
-		std::string value = currentToken().value;
-		int line = currentToken().line;
-		int column = currentToken().column;
+		std::string value = std::string(currentValue());
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 		return std::make_unique<StringLiteralExprAST>(value, line, column);
 	}
 
 	// Array literal: [5]int or [1,2,3]
 	if (check(TokenType::LBRACKET)) {
-		int line = currentToken().line;
-		int column = currentToken().column;
+		int line = currentLine();
+		int column = currentColumn();
 		advance(); // consume '['
 
 		// Look ahead to determine which form:
 		// - If first element is a number followed by ']' then type: [size]type
 		// - Otherwise: [val1, val2, ...]
 
-		if (check(TokenType::NUMBER) && peek(1).type == TokenType::RBRACKET) {
+		if (check(TokenType::NUMBER) && peekToken(1).type == TokenType::RBRACKET) {
 			// [size]type form
 			Token sizeToken = expect(TokenType::NUMBER, "Expected array size");
 			int size = std::stoi(sizeToken.value);
-			expect(TokenType::RBRACKET, "Expected ']' after array size");
+			expectAdvance(TokenType::RBRACKET, "Expected ']' after array size");
 
 			// Now expect the element type (primitive or struct)
 			std::string elementType;
-			if (currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::Type) {
-				elementType = currentToken().value;
+			auto kd = currentKeywordData();
+			if (kd && kd->category == KeywordCategory::Type) {
+				elementType = std::string(currentValue());
 				advance();
 			} else if (check(TokenType::IDENTIFIER)) {
 				elementType = parseQualifiedName("array element type");
 			} else {
 				throw std::runtime_error("Expected array element type (int, float, ptr, char, string, or struct name) at line " +
-										 std::to_string(currentToken().line));
+										 std::to_string(currentLine()));
 			}
 
 			return std::make_unique<ArrayLiteralExprAST>(size, elementType, line, column);
@@ -98,21 +99,22 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 				}
 			}
 
-			expect(TokenType::RBRACKET, "Expected ']' after array values");
+			expectAdvance(TokenType::RBRACKET, "Expected ']' after array values");
 			return std::make_unique<ArrayLiteralExprAST>(std::move(values), line, column);
 		}
 	}
 
 	// Math intrinsic function keywords (built-in functions)
-	if (currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::MathIntrinsic) {
-		std::string funcName = currentToken().value;
-		int line = currentToken().line;
-		int column = currentToken().column;
+	auto mathKd = currentKeywordData();
+	if (mathKd && mathKd->category == KeywordCategory::MathIntrinsic) {
+		std::string funcName = std::string(currentValue());
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 
-		expect(TokenType::LPAREN, "Expected '(' after '" + funcName + "'");
+		expectAdvance(TokenType::LPAREN, "Expected '(' after '" + funcName + "'");
 		auto arg = parseLogicalOr();
-		expect(TokenType::RPAREN, "Expected ')' after argument");
+		expectAdvance(TokenType::RPAREN, "Expected ')' after argument");
 
 		std::vector<std::unique_ptr<ExprAST>> args;
 		args.push_back(std::move(arg));
@@ -120,9 +122,9 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 	}
 
 	if (check(TokenType::IDENTIFIER)) {
-		std::string name = currentToken().value;
-		int line = currentToken().line;
-		int column = currentToken().column;
+		std::string name = std::string(currentValue());
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 
 		// Check for struct initialization (e.g., Planet{x: 1.0, y: 2.0})
@@ -159,7 +161,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 						}
 					}
 
-					expect(TokenType::RPAREN, "Expected ')' after method arguments");
+					expectAdvance(TokenType::RPAREN, "Expected ')' after method arguments");
 					return std::make_unique<CallExprAST>(methodName, std::move(args), line, column);
 				}
 
@@ -167,7 +169,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 				std::string qualifiedName = name + "." + member.value;
 
 				// Continue building qualified name for multiple namespaces
-				while (check(TokenType::DOT) && peek(1).type == TokenType::IDENTIFIER) {
+				while (check(TokenType::DOT) && peekToken(1).type == TokenType::IDENTIFIER) {
 					advance(); // consume '.'
 					Token nextMember = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
 					qualifiedName = qualifiedName + "." + nextMember.value;
@@ -185,7 +187,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 					}
 				}
 
-				expect(TokenType::RPAREN, "Expected ')' after function arguments");
+				expectAdvance(TokenType::RPAREN, "Expected ')' after function arguments");
 				return std::make_unique<CallExprAST>(qualifiedName, std::move(args), line, column);
 			} else {
 				// This is a member access (e.g., array.length)
@@ -215,7 +217,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 				}
 			}
 
-			expect(TokenType::RPAREN, "Expected ')' after function arguments");
+			expectAdvance(TokenType::RPAREN, "Expected ')' after function arguments");
 			return std::make_unique<CallExprAST>(name, std::move(args), line, column);
 		}
 
@@ -227,7 +229,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 			if (check(TokenType::DOT_DOT)) {
 				advance(); // consume '..'
 				auto endExpr = parseLogicalOr();
-				expect(TokenType::RBRACKET, "Expected ']' after slice end");
+				expectAdvance(TokenType::RBRACKET, "Expected ']' after slice end");
 				return std::make_unique<SliceExprAST>(name, nullptr, std::move(endExpr), line, column);
 			}
 
@@ -246,12 +248,12 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 
 				// Full slice: s[start..end]
 				auto endExpr = parseLogicalOr();
-				expect(TokenType::RBRACKET, "Expected ']' after slice end");
+				expectAdvance(TokenType::RBRACKET, "Expected ']' after slice end");
 				return std::make_unique<SliceExprAST>(name, std::move(firstExpr), std::move(endExpr), line, column);
 			}
 
 			// Regular array index
-			expect(TokenType::RBRACKET, "Expected ']' after array index");
+			expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
 			auto arrayExpr = std::make_unique<ArrayIndexExprAST>(name, std::move(firstExpr), line, column);
 
 			// Check for member access on array element (e.g., arr[0].field)
@@ -271,29 +273,29 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 
 	if (match(TokenType::LPAREN)) {
 		auto expr = parseLogicalOr();
-		expect(TokenType::RPAREN, "Expected ')' to close parenthesized expression");
+		expectAdvance(TokenType::RPAREN, "Expected ')' to close parenthesized expression");
 		return expr;
 	}
 
 	std::string foundStr;
-	if (currentToken().type == TokenType::END_OF_FILE) {
+	if (currentType() == TokenType::END_OF_FILE) {
 		foundStr = "end of file";
 	} else {
-		foundStr = "'" + currentToken().value + "'";
+		foundStr = "'" + std::string(currentValue()) + "'";
 	}
 
 	throw std::runtime_error("Expected expression\n  Found: " + foundStr +
-							 "\n  Location: line " + std::to_string(currentToken().line) +
-							 ", column " + std::to_string(currentToken().column) +
+							 "\n  Location: line " + std::to_string(currentLine()) +
+							 ", column " + std::to_string(currentColumn()) +
 							 "\n  Note: An expression can be a number, variable, function call, or arithmetic/comparison operation");
 }
 
 std::unique_ptr<ExprAST> Parser::parseUnary() {
 	// Handle unary operators: -, +, not
 	if (check(TokenType::MINUS) || check(TokenType::PLUS)) {
-		char op = currentToken().value[0];
-		int line = currentToken().line;
-		int column = currentToken().column;
+		char op = currentValue()[0];
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 
 		auto operand = parseUnary(); // Allow chaining: --x, +-x, etc.
@@ -301,9 +303,9 @@ std::unique_ptr<ExprAST> Parser::parseUnary() {
 	}
 
 	// Handle 'not' keyword
-	if (check(TokenType::KEYWORD) && currentToken().value == "not") {
-		int line = currentToken().line;
-		int column = currentToken().column;
+	if (checkKeyword("not")) {
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 
 		auto operand = parseUnary(); // Allow chaining: not not x
@@ -317,20 +319,21 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
 	auto expr = parseUnary();
 
 	// Handle type cast: expr as type
-	if (check(TokenType::KEYWORD) && currentToken().value == "as") {
-		int line = currentToken().line;
-		int column = currentToken().column;
+	if (checkKeyword("as")) {
+		int line = currentLine();
+		int column = currentColumn();
 		advance(); // consume 'as'
 
 		// Expect a type keyword
-		if (currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::Type) {
-			std::string targetType = currentToken().value;
+		auto kd = currentKeywordData();
+		if (kd && kd->category == KeywordCategory::Type) {
+			std::string targetType = std::string(currentValue());
 			advance();
 			expr = std::make_unique<CastExprAST>(std::move(expr), targetType, line, column);
 		} else {
 			throw std::runtime_error("Expected type after 'as' keyword (int, float, ptr, char, string, or bool)\n  Location: line " +
-									 std::to_string(currentToken().line) + ", column " +
-									 std::to_string(currentToken().column));
+									 std::to_string(currentLine()) + ", column " +
+									 std::to_string(currentColumn()));
 		}
 	}
 
@@ -340,16 +343,15 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
 std::unique_ptr<ExprAST> Parser::parseTerm() {
 	auto left = parseFactor();
 
-	while (check(TokenType::MULTIPLY) || check(TokenType::DIVIDE) ||
-		   (check(TokenType::KEYWORD) && currentToken().value == "mod")) {
+	while (check(TokenType::MULTIPLY) || check(TokenType::DIVIDE) || checkKeyword("mod")) {
 		char op;
-		if (check(TokenType::KEYWORD) && currentToken().value == "mod") {
+		if (checkKeyword("mod")) {
 			op = '%';
 		} else {
-			op = currentToken().value[0];
+			op = currentValue()[0];
 		}
-		int line = currentToken().line;
-		int column = currentToken().column;
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 		auto right = parseFactor();
 		left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
@@ -362,9 +364,9 @@ std::unique_ptr<ExprAST> Parser::parseComparison() {
 	auto left = parseTerm();
 
 	while (check(TokenType::PLUS) || check(TokenType::MINUS)) {
-		char op = currentToken().value[0];
-		int line = currentToken().line;
-		int column = currentToken().column;
+		char op = currentValue()[0];
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 		auto right = parseTerm();
 		left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
@@ -376,15 +378,13 @@ std::unique_ptr<ExprAST> Parser::parseComparison() {
 std::unique_ptr<ExprAST> Parser::parseExpression() {
 	auto left = parseComparison();
 
-	// Handle comparison operators
-	if (check(TokenType::EQUAL_EQUAL) || check(TokenType::NOT_EQUAL) ||
-		check(TokenType::GT) || check(TokenType::LT) ||
-		check(TokenType::GTE) || check(TokenType::LTE)) {
+	// Handle comparison operators using bitmask lookup
+	if (ParseDecisionTable::is_comparison_op(currentType())) {
 
 		char op;
-		TokenType type = currentToken().type;
-		int line = currentToken().line;
-		int column = currentToken().column;
+		TokenType type = currentType();
+		int line = currentLine();
+		int column = currentColumn();
 
 		if (type == TokenType::EQUAL_EQUAL)
 			op = 'E'; // == (equality)
@@ -411,9 +411,9 @@ std::unique_ptr<ExprAST> Parser::parseLogicalAnd() {
 	auto left = parseExpression();
 
 	// Handle 'and' operator
-	while (check(TokenType::KEYWORD) && currentToken().value == "and") {
-		int line = currentToken().line;
-		int column = currentToken().column;
+	while (checkKeyword("and")) {
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 		auto right = parseExpression();
 		left = std::make_unique<BinaryExprAST>('&', std::move(left), std::move(right), line, column);
@@ -426,9 +426,9 @@ std::unique_ptr<ExprAST> Parser::parseLogicalOr() {
 	auto left = parseLogicalAnd();
 
 	// Handle 'or' operator
-	while (check(TokenType::KEYWORD) && currentToken().value == "or") {
-		int line = currentToken().line;
-		int column = currentToken().column;
+	while (checkKeyword("or")) {
+		int line = currentLine();
+		int column = currentColumn();
 		advance();
 		auto right = parseLogicalAnd();
 		left = std::make_unique<BinaryExprAST>('|', std::move(left), std::move(right), line, column);

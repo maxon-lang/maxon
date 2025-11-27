@@ -1,8 +1,30 @@
 #include "parser.h"
 #include <stdexcept>
 
+// Primary constructor: accepts TokenStream directly
+Parser::Parser(TokenStream &&stream)
+	: stream_(std::move(stream)), position(0), defaultNamespace("") {
+	// Initialize lookahead cache
+	cache_.initialize(&stream_);
+	cache_.set_position(0);
+
+	// Analyze block boundaries for O(1) end-matching
+	boundary_.analyze(stream_);
+}
+
+// Legacy constructor for compatibility (converts to TokenStream internally)
 Parser::Parser(const std::vector<Token> &toks)
-	: tokens(toks), position(0), defaultNamespace("") {}
+	: position(0), defaultNamespace("") {
+	// Import tokens into SIMD-optimized stream
+	stream_.import_tokens(toks);
+
+	// Initialize lookahead cache
+	cache_.initialize(&stream_);
+	cache_.set_position(0);
+
+	// Analyze block boundaries
+	boundary_.analyze(stream_);
+}
 
 void Parser::setDefaultNamespace(const std::string &ns) {
 	defaultNamespace = ns;
@@ -34,33 +56,31 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 		}
 
 		// Check for struct, export, extern, or function keyword
-		if (check(TokenType::KEYWORD) && currentToken().value == "struct") {
+		if (checkKeyword("struct")) {
 			logTrace("Parsing struct definition");
 			structs.push_back(parseStruct());
-		} else if (check(TokenType::KEYWORD) && currentToken().value == "export") {
+		} else if (checkKeyword("export")) {
 			// Check what comes after export
 			Token exportToken = currentToken();
 			advance(); // consume 'export'
-			if (check(TokenType::KEYWORD) && currentToken().value == "struct") {
+			if (checkKeyword("struct")) {
 				logTrace("Parsing exported struct definition");
 				structs.push_back(parseStruct());
-			} else if ((check(TokenType::KEYWORD) && currentToken().value == "extern") ||
-					   (check(TokenType::KEYWORD) && currentToken().value == "function")) {
+			} else if (checkKeyword("extern") || checkKeyword("function")) {
 				logTrace("Parsing exported function definition");
 				functions.push_back(parseFunction());
 			} else {
 				throw std::runtime_error("Expected 'struct', 'extern function', or 'function' after 'export'\n  Location: line " +
-										 std::to_string(currentToken().line) + ", column " +
-										 std::to_string(currentToken().column));
+										 std::to_string(currentLine()) + ", column " +
+										 std::to_string(currentColumn()));
 			}
-		} else if ((check(TokenType::KEYWORD) && currentToken().value == "extern") ||
-				   (check(TokenType::KEYWORD) && currentToken().value == "function")) {
+		} else if (checkKeyword("extern") || checkKeyword("function")) {
 			logTrace("Parsing function definition");
 			functions.push_back(parseFunction());
 		} else {
 			throw std::runtime_error("Expected 'struct', 'export', 'function', or 'extern function' at top level\n  Location: line " +
-									 std::to_string(currentToken().line) + ", column " +
-									 std::to_string(currentToken().column));
+									 std::to_string(currentLine()) + ", column " +
+									 std::to_string(currentColumn()));
 		}
 	}
 

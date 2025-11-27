@@ -41,14 +41,14 @@ static bool findStaticLibrary(const std::string &libName, std::string &outPath) 
 std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	// Check for export keyword
 	bool isExported = false;
-	if (check(TokenType::KEYWORD) && currentToken().value == "export") {
+	if (checkKeyword("export")) {
 		isExported = true;
 		advance(); // consume 'export'
 	}
 
 	// Check for extern keyword
 	bool isExtern = false;
-	if (check(TokenType::KEYWORD) && currentToken().value == "extern") {
+	if (checkKeyword("extern")) {
 		isExtern = true;
 		advance(); // consume 'extern'
 	}
@@ -61,7 +61,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 			 (isExported ? " (exported)" : "") +
 			 " at line " + std::to_string(funcToken.line));
 
-	expect(TokenType::LPAREN, "Expected '('");
+	expectAdvance(TokenType::LPAREN, "Expected '('");
 
 	// Parse function parameters
 	std::vector<FunctionParameter> parameters;
@@ -76,39 +76,41 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 				// Array parameters must be unsized - reject [N]type syntax
 				if (check(TokenType::NUMBER)) {
-					throw std::runtime_error("Array parameters must be unsized: use []type, not [" + currentToken().value + "]type\n  Location: line " +
-											 std::to_string(currentToken().line) + ", column " +
-											 std::to_string(currentToken().column));
+					throw std::runtime_error("Array parameters must be unsized: use []type, not [" + std::string(currentValue()) + "]type\n  Location: line " +
+											 std::to_string(currentLine()) + ", column " +
+											 std::to_string(currentColumn()));
 				}
 
-				expect(TokenType::RBRACKET, "Expected ']' after '['");
+				expectAdvance(TokenType::RBRACKET, "Expected ']' after '['");
 
 				// Get element type
 				std::string elementType;
-				if (currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::Type) {
-					elementType = currentToken().value;
+				auto kd = currentKeywordData();
+				if (kd && kd->category == KeywordCategory::Type) {
+					elementType = std::string(currentValue());
 					advance();
 				} else if (check(TokenType::IDENTIFIER)) {
 					elementType = parseQualifiedName("array element type");
 				} else {
 					throw std::runtime_error("Expected array element type (int, float, ptr, char, string, bool, or struct name)\n  Location: line " +
-											 std::to_string(currentToken().line) + ", column " +
-											 std::to_string(currentToken().column));
+											 std::to_string(currentLine()) + ", column " +
+											 std::to_string(currentColumn()));
 				}
 
 				// All array parameters are unsized
 				paramType = "[]" + elementType;
 			} else {
 				// Regular scalar type (or struct)
-				if (currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::Type) {
-					paramType = currentToken().value;
+				auto kd2 = currentKeywordData();
+				if (kd2 && kd2->category == KeywordCategory::Type) {
+					paramType = std::string(currentValue());
 					advance();
 				} else if (check(TokenType::IDENTIFIER)) {
 					paramType = parseQualifiedName("parameter type");
 				} else {
 					throw std::runtime_error("Expected parameter type (int, float, ptr, char, string, bool, struct name, or [size]type)\n  Location: line " +
-											 std::to_string(currentToken().line) + ", column " +
-											 std::to_string(currentToken().column));
+											 std::to_string(currentLine()) + ", column " +
+											 std::to_string(currentColumn()));
 				}
 			}
 
@@ -116,12 +118,13 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 		} while (match(TokenType::COMMA));
 	}
 
-	expect(TokenType::RPAREN, "Expected ')'");
+	expectAdvance(TokenType::RPAREN, "Expected ')'");
 
 	// Parse return type (optional - defaults to void)
 	std::string returnType = "void";
-	if ((currentToken().keywordData && currentToken().keywordData->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
-		returnType = currentToken().value;
+	auto retKd = currentKeywordData();
+	if ((retKd && retKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+		returnType = std::string(currentValue());
 		advance();
 	}
 
@@ -132,10 +135,10 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 		// Parse required library name for extern functions
 		if (!check(TokenType::STRING)) {
 			throw std::runtime_error("Expected library name as string after return type for extern function\n  Example: extern function foo(x int) int \"mydll\"\n  Location: line " +
-									 std::to_string(currentToken().line) + ", column " +
-									 std::to_string(currentToken().column));
+									 std::to_string(currentLine()) + ", column " +
+									 std::to_string(currentColumn()));
 		}
-		std::string libName = currentToken().value;
+		std::string libName = std::string(currentValue());
 		advance();
 
 		// Check if a static library (.lib) file exists - if so, use static linking
@@ -152,11 +155,11 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	}
 
 	// Parse function body
-	while (!(check(TokenType::KEYWORD) && currentToken().value == "end") && !check(TokenType::END_OF_FILE)) {
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
 		body.push_back(parseStatement());
 	}
 
-	expectKeyword("end", "Expected 'end' to close function body");
+	expectKeywordAdvance("end", "Expected 'end' to close function body");
 
 	// Function has implicit block identifier which is the function name
 	// Require matching block identifier after end
@@ -178,7 +181,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 std::unique_ptr<StructDefAST> Parser::parseStruct() {
 	// Check for export keyword
 	bool isExported = false;
-	if (check(TokenType::KEYWORD) && currentToken().value == "export") {
+	if (checkKeyword("export")) {
 		isExported = true;
 		advance(); // consume 'export'
 	}
@@ -193,26 +196,26 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 	std::vector<StructField> fields;
 
 	// Parse fields until we hit 'end'
-	while (!(check(TokenType::KEYWORD) && currentToken().value == "end") && !check(TokenType::END_OF_FILE)) {
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
 		Token fieldNameToken = expect(TokenType::IDENTIFIER, "Expected field name");
 		std::string fieldName = fieldNameToken.value;
 
 		std::string fieldType;
 		if (Lexer::isTypeToken(currentToken())) {
-			fieldType = currentToken().value;
+			fieldType = std::string(currentValue());
 			advance();
 		} else if (check(TokenType::IDENTIFIER)) {
 			fieldType = parseQualifiedName("struct field type");
 		} else {
 			throw std::runtime_error("Expected type after field name in struct field at line " +
-									 std::to_string(currentToken().line) + ", column " +
-									 std::to_string(currentToken().column));
+									 std::to_string(currentLine()) + ", column " +
+									 std::to_string(currentColumn()));
 		}
 
 		fields.push_back(StructField(fieldName, fieldType, fieldNameToken.line, fieldNameToken.column));
 	}
 
-	expectKeyword("end", "Expected 'end' to close struct");
+	expectKeywordAdvance("end", "Expected 'end' to close struct");
 
 	// Require matching block identifier
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match struct name)");
@@ -228,10 +231,10 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 }
 
 std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &structName) {
-	int line = currentToken().line;
-	int column = currentToken().column;
+	int line = currentLine();
+	int column = currentColumn();
 
-	expect(TokenType::LBRACE, "Expected '{' for struct initialization");
+	expectAdvance(TokenType::LBRACE, "Expected '{' for struct initialization");
 
 	std::vector<StructInitField> fields;
 
@@ -240,7 +243,7 @@ std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &st
 		Token fieldNameToken = expect(TokenType::IDENTIFIER, "Expected field name");
 		std::string fieldName = fieldNameToken.value;
 
-		expect(TokenType::COLON, "Expected ':' after field name");
+		expectAdvance(TokenType::COLON, "Expected ':' after field name");
 
 		auto value = parseExpression();
 
@@ -252,12 +255,12 @@ std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &st
 			advance();
 		} else if (!check(TokenType::RBRACE)) {
 			throw std::runtime_error("Expected ',' or '}' in struct initialization at line " +
-									 std::to_string(currentToken().line) + ", column " +
-									 std::to_string(currentToken().column));
+									 std::to_string(currentLine()) + ", column " +
+									 std::to_string(currentColumn()));
 		}
 	}
 
-	expect(TokenType::RBRACE, "Expected '}' to close struct initialization");
+	expectAdvance(TokenType::RBRACE, "Expected '}' to close struct initialization");
 
 	return std::make_unique<StructInitExprAST>(structName, std::move(fields), line, column);
 }

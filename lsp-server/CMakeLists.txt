@@ -5,34 +5,6 @@ project(maxon-lsp-server VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Look for LLVM in MAXON_LLVM_DIR CMake variable, LLVM_DIR env variable, or default to ./llvm-project
-if(DEFINED MAXON_LLVM_DIR)
-    set(LLVM_BUILD_DIR "${MAXON_LLVM_DIR}")
-elseif(DEFINED ENV{LLVM_DIR})
-    set(LLVM_BUILD_DIR "$ENV{LLVM_DIR}")
-else()
-    set(LLVM_BUILD_DIR "${CMAKE_SOURCE_DIR}/llvm-project")
-endif()
-
-if(EXISTS "${LLVM_BUILD_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
-    message(STATUS "Using LLVM from ${LLVM_BUILD_DIR}")
-    set(LLVM_CMAKE_DIR "${LLVM_BUILD_DIR}/lib/cmake/llvm")
-    # LLVM may reference LibXml2, create dummy target if not found
-    if(NOT TARGET LibXml2::LibXml2)
-        add_library(LibXml2::LibXml2 INTERFACE IMPORTED)
-    endif()
-    find_package(LLVM REQUIRED CONFIG PATHS ${LLVM_CMAKE_DIR} NO_DEFAULT_PATH)
-    message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
-    message(STATUS "LLVM include directories: ${LLVM_INCLUDE_DIRS}")
-else()
-    message(FATAL_ERROR "LLVM not found in ${LLVM_BUILD_DIR}. Please ensure llvm-project exists.")
-endif()
-
-# Add LLVM definitions and include directories
-include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
-separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
-add_definitions(${LLVM_DEFINITIONS_LIST})
-
 # Include directories
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/../maxon-bin
@@ -65,33 +37,14 @@ set(LSP_SOURCES
 # Create executable
 add_executable(maxon-lsp-server ${LSP_SOURCES} ${MAXON_SOURCES})
 
-# Link LLVM libraries (minimal set needed for lexer)
-llvm_map_components_to_libnames(llvm_libs 
-    Core
-    Support
-)
-
-# Link LLD libraries (required by lexer headers)
-set(LLD_DIR "${LLVM_BUILD_DIR}/lib/cmake/lld")
-if(NOT EXISTS "${LLD_DIR}/LLDConfig.cmake")
-    message(FATAL_ERROR "LLD not found. Please rebuild LLVM with LLD support.")
-endif()
-
-find_package(LLD REQUIRED CONFIG PATHS ${LLD_DIR} NO_DEFAULT_PATH)
-set(lld_libs lldCommon)
-
-# Add LLD include directory from LLVM build
-set(LLD_INCLUDE_DIR "${LLVM_BUILD_DIR}/include")
-target_include_directories(maxon-lsp-server SYSTEM PRIVATE ${LLD_INCLUDE_DIR})
-
-target_link_libraries(maxon-lsp-server ${llvm_libs} ${lld_libs})
-
-# Compiler flags for Clang
+# Compiler flags
 target_compile_options(maxon-lsp-server PRIVATE
     -Wall
     -Werror
     -Wno-unused-parameter
     -Wno-sign-compare
+    -mavx2
+    -msse4.2
 )
 
 # Set output directory to project root bin for easier access

@@ -19,7 +19,7 @@ std::tuple<Token, std::string, std::unique_ptr<ExprAST>> Parser::parseVariableDe
 	// Type is always inferred from initializer
 	std::string type = "";
 
-	expect(TokenType::ASSIGN, "Expected '='");
+	expectAdvance(TokenType::ASSIGN, "Expected '='");
 	auto initializer = parseLogicalOr();
 
 	return {name, type, std::move(initializer)};
@@ -73,7 +73,7 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
 	bool isSingleLine = false;
 	std::string blockId;
 
-	if (check(TokenType::KEYWORD) && currentToken().value == "then") {
+	if (checkKeyword("then")) {
 		// Single-line if
 		isSingleLine = true;
 		advance(); // consume 'then'
@@ -91,7 +91,7 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
 		thenBody.push_back(parseStatement());
 
 		// Check for single-line else (no block id)
-		if (check(TokenType::KEYWORD) && currentToken().value == "else") {
+		if (checkKeyword("else")) {
 			advance(); // consume 'else'
 			// Single-line else: else <statement>
 			elseBody.push_back(parseStatement());
@@ -106,14 +106,12 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
 	// Multi-line if
 
 	// Parse then body
-	while (!(check(TokenType::KEYWORD) && currentToken().value == "else") &&
-		   !(check(TokenType::KEYWORD) && currentToken().value == "end") &&
-		   !check(TokenType::END_OF_FILE)) {
+	while (!checkKeyword("else") && !checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
 		thenBody.push_back(parseStatement());
 	}
 
 	// Parse optional else
-	if (check(TokenType::KEYWORD) && currentToken().value == "else") {
+	if (checkKeyword("else")) {
 		match(TokenType::KEYWORD); // consume "else"
 		// Require same block identifier after else
 		Token elseBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else' (must match the 'if' block identifier)");
@@ -126,12 +124,12 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
 									 "\n  Note: The 'else' block identifier must match the 'if' block identifier");
 		}
 
-		while (!(check(TokenType::KEYWORD) && currentToken().value == "end") && !check(TokenType::END_OF_FILE)) {
+		while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
 			elseBody.push_back(parseStatement());
 		}
 	}
 
-	expectKeyword("end", "Expected 'end' to close if block");
+	expectKeywordAdvance("end", "Expected 'end' to close if block");
 
 	// Require matching block identifier after end
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
@@ -160,11 +158,11 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
 	std::vector<std::unique_ptr<StmtAST>> body;
 
 	// Parse body
-	while (!(check(TokenType::KEYWORD) && currentToken().value == "end") && !check(TokenType::END_OF_FILE)) {
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
 		body.push_back(parseStatement());
 	}
 
-	expectKeyword("end", "Expected 'end' to close while loop");
+	expectKeywordAdvance("end", "Expected 'end' to close while loop");
 
 	// Require matching block identifier after end
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
@@ -188,7 +186,7 @@ std::unique_ptr<ForStmtAST> Parser::parseFor() {
 	std::string loopVar = varToken.value;
 
 	// Expect 'in' keyword
-	expectKeyword("in", "Expected 'in' after loop variable");
+	expectKeywordAdvance("in", "Expected 'in' after loop variable");
 
 	// Parse iterable expression (range call, array variable, etc.)
 	auto iterable = parseLogicalOr();
@@ -200,11 +198,11 @@ std::unique_ptr<ForStmtAST> Parser::parseFor() {
 	std::vector<std::unique_ptr<StmtAST>> body;
 
 	// Parse body
-	while (!(check(TokenType::KEYWORD) && currentToken().value == "end") && !check(TokenType::END_OF_FILE)) {
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
 		body.push_back(parseStatement());
 	}
 
-	expectKeyword("end", "Expected 'end' to close for loop");
+	expectKeywordAdvance("end", "Expected 'end' to close for loop");
 
 	// Require matching block identifier after end
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
@@ -221,42 +219,42 @@ std::unique_ptr<ForStmtAST> Parser::parseFor() {
 }
 
 std::unique_ptr<StmtAST> Parser::parseStatement() {
-	if (check(TokenType::KEYWORD) && currentToken().value == "var") {
+	if (checkKeyword("var")) {
 		return parseVarDecl();
 	}
 
-	if (check(TokenType::KEYWORD) && currentToken().value == "let") {
+	if (checkKeyword("let")) {
 		return parseLetDecl();
 	}
 
-	if (check(TokenType::KEYWORD) && currentToken().value == "if") {
+	if (checkKeyword("if")) {
 		return parseIf();
 	}
 
-	if (check(TokenType::KEYWORD) && currentToken().value == "while") {
+	if (checkKeyword("while")) {
 		return parseWhile();
 	}
 
-	if (check(TokenType::KEYWORD) && currentToken().value == "for") {
+	if (checkKeyword("for")) {
 		return parseFor();
 	}
 
-	if (check(TokenType::KEYWORD) && currentToken().value == "return") {
+	if (checkKeyword("return")) {
 		return parseReturn();
 	}
 
-	if (check(TokenType::KEYWORD) && currentToken().value == "break") {
+	if (checkKeyword("break")) {
 		return parseBreak();
 	}
 
-	if (check(TokenType::KEYWORD) && currentToken().value == "continue") {
+	if (checkKeyword("continue")) {
 		return parseContinue();
 	}
 
 	if (check(TokenType::IDENTIFIER)) {
-		std::string name = currentToken().value;
-		int idLine = currentToken().line;
-		int idColumn = currentToken().column;
+		std::string name = std::string(currentValue());
+		int idLine = currentLine();
+		int idColumn = currentColumn();
 		advance();
 
 		// Check for member access (struct.field = value) or namespace qualification or method call
@@ -289,7 +287,7 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 					}
 				}
 
-				expect(TokenType::RPAREN, "Expected ')' after method arguments");
+				expectAdvance(TokenType::RPAREN, "Expected ')' after method arguments");
 				auto callExpr = std::make_unique<CallExprAST>(methodName, std::move(args), idLine, idColumn);
 				return std::make_unique<ExprStmtAST>(std::move(callExpr), idLine, idColumn);
 			}
@@ -302,19 +300,19 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 		if (check(TokenType::LBRACKET)) {
 			advance(); // consume '['
 			auto index = parseLogicalOr();
-			expect(TokenType::RBRACKET, "Expected ']' after array index");
+			expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
 
 			// Check for member access on array element
 			if (check(TokenType::DOT)) {
 				advance(); // consume '.'
 				Token memberName = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
-				expect(TokenType::ASSIGN, "Expected '=' in member assignment");
+				expectAdvance(TokenType::ASSIGN, "Expected '=' in member assignment");
 				auto value = parseLogicalOr();
 				// Create ArrayMemberAssignStmtAST for arr[i].field = value
 				return std::make_unique<ArrayMemberAssignStmtAST>(name, std::move(index), memberName.value, std::move(value), idLine, idColumn);
 			}
 
-			expect(TokenType::ASSIGN, "Expected '=' in array assignment");
+			expectAdvance(TokenType::ASSIGN, "Expected '=' in array assignment");
 			auto value = parseLogicalOr();
 			return std::make_unique<ArrayAssignStmtAST>(name, std::move(index), std::move(value), idLine, idColumn);
 		}
@@ -334,7 +332,7 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 				} while (match(TokenType::COMMA));
 			}
 
-			expect(TokenType::RPAREN, "Expected ')' after function arguments");
+			expectAdvance(TokenType::RPAREN, "Expected ')' after function arguments");
 
 			auto callExpr = std::make_unique<CallExprAST>(name, std::move(args), idLine, idColumn);
 			return std::make_unique<ExprStmtAST>(std::move(callExpr), idLine, idColumn);
@@ -347,14 +345,14 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 	}
 
 	std::string foundStr;
-	if (currentToken().type == TokenType::END_OF_FILE) {
+	if (currentType() == TokenType::END_OF_FILE) {
 		foundStr = "end of file";
 	} else {
-		foundStr = "'" + currentToken().value + "'";
+		foundStr = "'" + std::string(currentValue()) + "'";
 	}
 
 	throw std::runtime_error("Unexpected token: " + foundStr +
-							 "\n  Location: line " + std::to_string(currentToken().line) +
-							 ", column " + std::to_string(currentToken().column) +
+							 "\n  Location: line " + std::to_string(currentLine()) +
+							 ", column " + std::to_string(currentColumn()) +
 							 "\n  Note: Expected a statement (var, let, if, while, return, break, continue, or assignment)");
 }

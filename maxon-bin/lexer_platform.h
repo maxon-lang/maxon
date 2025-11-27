@@ -1,8 +1,8 @@
-#ifndef SIMD_PLATFORM_H
-#define SIMD_PLATFORM_H
+#ifndef LEXER_PLATFORM_H
+#define LEXER_PLATFORM_H
 
 /**
- * SIMD Platform Abstraction Header
+ * SIMD Platform Abstraction
  *
  * Provides cross-platform SIMD intrinsics (SSE4.2, AVX2, AVX-512)
  * with runtime CPU feature detection and fallback support.
@@ -446,4 +446,4 @@ inline bool has_sse42() {
 	return has_feature(get_cpu_features(), CPUFeature::SSE42);
 }
 
-#endif // SIMD_PLATFORM_H
+#endif // LEXER_PLATFORM_H
