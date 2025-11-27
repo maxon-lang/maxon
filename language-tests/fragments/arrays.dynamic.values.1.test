@@ -1,7 +1,8 @@
-// Test: arrays.arrays.values.1
+// Test: arrays.dynamic.values.1
 function main() int
     var values = [10, 20, 30]
-    return values[1]
+    values[0] = 100
+    return values[0]
 end 'main'
 ---
 ; Module: test.maxon
@@ -14,17 +15,17 @@ entry0:
   store ptr %0, ptr %1
   %2 = alloca i32
   store i32 3, ptr %2
-  %3 = getelementptr i32, ptr %0, i64 0, i64 0
-  store i32 10, ptr %3
   %4 = getelementptr i32, ptr %0, i64 0, i64 1
   store i32 20, ptr %4
   %5 = getelementptr i32, ptr %0, i64 0, i64 2
   store i32 30, ptr %5
-  %7 = getelementptr i32, ptr %0, i64 0, i64 1
-  %8 = load i32, ptr %7
-  %9 = load ptr, ptr %1
-  call void @free(ptr %9)
-  ret i32 %8
+  %7 = getelementptr i32, ptr %0, i64 0, i64 0
+  store i32 100, ptr %7
+  %9 = getelementptr i32, ptr %0, i64 0, i64 0
+  %10 = load i32, ptr %9
+  %11 = load ptr, ptr %1
+  call void @free(ptr %11)
+  ret i32 %10
 }
 
 declare ptr @malloc(i64 %arg0)
@@ -44,7 +45,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 20
+; Instructions: 23
 
 define i32 @main() {
 entry0:
@@ -60,11 +61,14 @@ entry0:
   %5 = getelementptr i32, ptr %0, i64 0, i64 2
   store i32 30, ptr %5
   %6 = load ptr, ptr %1
-  %7 = getelementptr i32, ptr %6, i64 0, i64 1
-  %8 = load i32, ptr %7
-  %9 = load ptr, ptr %1
-  call void @free(ptr %9)
-  ret i32 %8
+  %7 = getelementptr i32, ptr %6, i64 0, i64 0
+  store i32 100, ptr %7
+  %8 = load ptr, ptr %1
+  %9 = getelementptr i32, ptr %8, i64 0, i64 0
+  %10 = load i32, ptr %9
+  %11 = load ptr, ptr %1
+  call void @free(ptr %11)
+  ret i32 %10
 }
 
 declare ptr @malloc(i64 %arg0)
@@ -83,4 +87,4 @@ entry0:
 }
 
 ---
-ExitCode: 20
+ExitCode: 100

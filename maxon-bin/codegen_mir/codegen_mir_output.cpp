@@ -228,6 +228,15 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 		}
 	}
 
+	// Run dead code elimination again after merging runtime library
+	// This eliminates unused runtime functions
+	if (verboseLevel >= 2) {
+		std::cout << "  Running dead code elimination on merged module..." << std::endl;
+	}
+	mir::DeadCodeEliminationPass dce;
+	dce.setVerboseLevel(verboseLevel);
+	dce.run(*module);
+
 	// Step 1: Run PHI elimination pass to convert SSA form to machine-ready form
 	// This must happen after runtime merging but before x86 code generation
 	if (verboseLevel >= 2) {

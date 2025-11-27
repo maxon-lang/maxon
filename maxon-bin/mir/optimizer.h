@@ -136,6 +136,7 @@ class DeadCodeEliminationPass : public OptimizationPass {
 
   private:
 	bool runOnFunction(MIRFunction &func);
+	bool eliminateUnusedFunctions(MIRModule &module);
 
 	// Compute the set of values that are used
 	std::unordered_set<MIRValue *> computeUsedValues(MIRFunction &func);

@@ -218,7 +218,7 @@ fragments: compiler ffi-test-lib
 	@$(MAXON) test-fragments
 
 # Run all test suites
-test: compiler lsp-server extension-build debugger-test ffi-test-lib
+test: compiler backend-test-build lsp-server extension-build debugger-test ffi-test-lib
 	@bash scripts/run-all-tests.sh
 
 # Build debugger integration tests

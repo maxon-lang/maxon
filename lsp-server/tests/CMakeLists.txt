@@ -61,6 +61,7 @@ set(MAXON_SOURCES
     ../../maxon-bin/semantic_analyzer.cpp
     ../../maxon-bin/semantic_analyzer/semantic_analyzer_expr.cpp
     ../../maxon-bin/semantic_analyzer/semantic_analyzer_stmt.cpp
+    ../../maxon-bin/file_utils.cpp
 )
 
 # Create a library from LSP sources for testing

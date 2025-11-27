@@ -493,11 +493,86 @@ bool ConstantPropagationPass::runOnBasicBlock(MIRBasicBlock &block,
 
 bool DeadCodeEliminationPass::run(MIRModule &module) {
 	bool changed = false;
+
+	// First, eliminate unused functions (function-level DCE)
+	changed |= eliminateUnusedFunctions(module);
+
+	// Then, eliminate dead instructions within remaining functions
 	for (auto &func : module.functions) {
 		if (!func->isExternal) {
 			changed |= runOnFunction(*func);
 		}
 	}
+	return changed;
+}
+
+bool DeadCodeEliminationPass::eliminateUnusedFunctions(MIRModule &module) {
+	// Compute reachable functions starting from main and exported functions
+	std::unordered_set<std::string> reachable;
+	std::vector<std::string> worklist;
+
+	// Find all entry points
+	// - main and _start are obvious entry points
+	// - __ffi_dispatch is special: it's called from __ffi_worker_main and dynamically
+	//   dispatches to extern functions based on function ID. Since the calls are dynamic
+	//   (not static Call instructions), we need to mark it as a root to prevent it and
+	//   the functions it references from being eliminated.
+	for (auto &func : module.functions) {
+		if (func->name == "main" || func->name == "_start" || func->name == "__ffi_dispatch") {
+			reachable.insert(func->name);
+			worklist.push_back(func->name);
+		}
+	}
+
+	// Build a map of function name to MIRFunction for quick lookup
+	std::unordered_map<std::string, MIRFunction *> functionMap;
+	for (auto &func : module.functions) {
+		functionMap[func->name] = func.get();
+	}
+
+	// Traverse call graph to find all reachable functions
+	while (!worklist.empty()) {
+		std::string currentName = worklist.back();
+		worklist.pop_back();
+
+		auto it = functionMap.find(currentName);
+		if (it == functionMap.end() || it->second->isExternal) {
+			continue;
+		}
+
+		MIRFunction *currentFunc = it->second;
+
+		// Scan all instructions for function calls
+		for (auto &block : currentFunc->basicBlocks) {
+			for (auto &inst : block->instructions) {
+				if (inst->opcode == MIROpcode::Call && !inst->calleeName.empty()) {
+					// The function being called is stored in calleeName
+					if (reachable.find(inst->calleeName) == reachable.end()) {
+						reachable.insert(inst->calleeName);
+						worklist.push_back(inst->calleeName);
+					}
+				}
+			}
+		}
+	}
+
+	// Remove unreachable functions
+	size_t originalSize = module.functions.size();
+	module.functions.erase(
+		std::remove_if(module.functions.begin(), module.functions.end(),
+					   [&](const std::unique_ptr<MIRFunction> &func) {
+						   // Keep external functions and reachable functions
+						   return !func->isExternal && reachable.find(func->name) == reachable.end();
+					   }),
+		module.functions.end());
+
+	bool changed = (module.functions.size() < originalSize);
+	if (changed && verboseLevel_ >= 2) {
+		size_t eliminated = originalSize - module.functions.size();
+		std::cout << "  Dead Code Elimination: removed " << eliminated
+				  << " unused function(s)" << std::endl;
+	}
+
 	return changed;
 }
 

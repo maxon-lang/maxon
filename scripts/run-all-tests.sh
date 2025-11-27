@@ -32,14 +32,21 @@ echo -e "${CYAN}============================================================${NC
 echo ""
 
 # Test 1: Compiler self-tests
-echo -e "${YELLOW}[1/4] Running compiler self-tests...${NC}"
+echo -e "${YELLOW}[1/5] Running compiler self-tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 $MAXON self-test
 results[self-tests]=$?
 echo ""
 
-# Test 2: Language fragment tests
-echo -e "${YELLOW}[2/4] Running language fragment tests...${NC}"
+# Test 2: Backend MIR tests
+echo -e "${YELLOW}[2/5] Running backend MIR tests...${NC}"
+echo -e "${YELLOW}------------------------------------------------------------${NC}"
+./backend-tests/runner/build/backend-test-runner${EXE_EXT} -v
+results[backend-tests]=$?
+echo ""
+
+# Test 3: Language fragment tests
+echo -e "${YELLOW}[3/5] Running language fragment tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 $MAXON extract-specs >/dev/null
 $MAXON regen-fragments >/dev/null
@@ -47,15 +54,18 @@ $MAXON test-fragments
 results[fragment-tests]=$?
 echo ""
 
-# Test 3: LSP C++ unit tests
-echo -e "${YELLOW}[3/4] Running LSP C++ unit tests...${NC}"
+# Test 4: LSP C++ unit tests
+echo -e "${YELLOW}[4/5] Running LSP C++ unit tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 mkdir -p lsp-server/tests/build
 pushd lsp-server/tests/build > /dev/null
-if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then
-	cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR_ABS}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR_ABS}/bin/clang++${EXE_EXT}" -DCMAKE_RC_COMPILER="C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe" -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR="${LLVM_DIR_ABS}" 2>&1 >/dev/null
-else
-	cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR_ABS}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR_ABS}/bin/clang++${EXE_EXT}" -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR="${LLVM_DIR_ABS}" 2>&1 >/dev/null
+# Only configure if not already configured
+if [ ! -f "CMakeCache.txt" ]; then
+	if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then
+		cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR_ABS}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR_ABS}/bin/clang++${EXE_EXT}" -DCMAKE_RC_COMPILER="C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe" -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR="${LLVM_DIR_ABS}" 2>&1 >/dev/null
+	else
+		cmake .. -G "Ninja" -DCMAKE_C_COMPILER="${LLVM_DIR_ABS}/bin/clang${EXE_EXT}" -DCMAKE_CXX_COMPILER="${LLVM_DIR_ABS}/bin/clang++${EXE_EXT}" -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR="${LLVM_DIR_ABS}" 2>&1 >/dev/null
+	fi
 fi
 cmake --build . 2>&1 >/dev/null
 ctest --output-on-failure
@@ -63,8 +73,8 @@ results[lsp-tests]=$?
 popd > /dev/null
 echo ""
 
-# Test 4: VS Code extension tests
-echo -e "${YELLOW}[4/4] Running VS Code extension tests...${NC}"
+# Test 5: VS Code extension tests
+echo -e "${YELLOW}[5/5] Running VS Code extension tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 pushd vscode-extension > /dev/null
 npm run test
@@ -83,6 +93,13 @@ if [ "${results[self-tests]}" -ne 0 ]; then
     ((failed++))
 else
     echo -e "${GREEN}[PASSED] Compiler self-tests${NC}"
+fi
+
+if [ "${results[backend-tests]}" -ne 0 ]; then
+    echo -e "${RED}[FAILED] Backend MIR tests${NC}"
+    ((failed++))
+else
+    echo -e "${GREEN}[PASSED] Backend MIR tests${NC}"
 fi
 
 if [ "${results[fragment-tests]}" -ne 0 ]; then
