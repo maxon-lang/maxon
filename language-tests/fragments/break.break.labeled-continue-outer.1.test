@@ -8,7 +8,7 @@ function main() int
         while y < 5 'inner'
             y = y + 1
             count = count + 1
-            if y = 2 'check'
+            if y == 2 'check'
                 continue 'outer'
             end 'check'
         end 'inner'
@@ -16,6 +16,116 @@ function main() int
     return count
 end 'main'
 ---
+; Module: test.maxon
+
+define i32 @main() {
+entry0:
+  %0 = alloca i32
+  store i32 0, ptr %0
+  %1 = alloca i32
+  store i32 0, ptr %1
+  br label %whilecond1
+whilecond1:
+  %2 = load i32, ptr %0
+  %3 = icmp slt i32 %2, 3
+  br i1 %3, label %loop2, label %afterloop3
+loop2:
+  %4 = load i32, ptr %0
+  %5 = add i32 %4, 1
+  store i32 %5, ptr %0
+  %6 = alloca i32
+  store i32 0, ptr %6
+  br label %whilecond4
+afterloop3:
+  %15 = load i32, ptr %1
+  ret i32 %15
+whilecond4:
+  %7 = load i32, ptr %6
+  %8 = icmp slt i32 %7, 5
+  br i1 %8, label %loop5, label %afterloop6
+loop5:
+  %9 = load i32, ptr %6
+  %10 = add i32 %9, 1
+  store i32 %10, ptr %6
+  %11 = load i32, ptr %1
+  %12 = add i32 %11, 1
+  store i32 %12, ptr %1
+  %13 = load i32, ptr %6
+  %14 = icmp eq i32 %13, 2
+  br i1 %14, label %then7, label %ifcont8
+afterloop6:
+  br label %whilecond1
+then7:
+  br label %whilecond1
+ifcont8:
+  br label %whilecond4
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
+; Module: test.maxon
+
+define i32 @main() {
+entry0:
+  %0 = alloca i32
+  store i32 0, ptr %0
+  %1 = alloca i32
+  store i32 0, ptr %1
+  br label %whilecond1
+whilecond1:
+  %2 = load i32, ptr %0
+  %3 = icmp slt i32 %2, 3
+  br i1 %3, label %loop2, label %afterloop3
+loop2:
+  %4 = load i32, ptr %0
+  %5 = add i32 %4, 1
+  store i32 %5, ptr %0
+  %6 = alloca i32
+  store i32 0, ptr %6
+  br label %whilecond4
+afterloop3:
+  %15 = load i32, ptr %1
+  ret i32 %15
+whilecond4:
+  %7 = load i32, ptr %6
+  %8 = icmp slt i32 %7, 5
+  br i1 %8, label %loop5, label %afterloop6
+loop5:
+  %9 = load i32, ptr %6
+  %10 = add i32 %9, 1
+  store i32 %10, ptr %6
+  %11 = load i32, ptr %1
+  %12 = add i32 %11, 1
+  store i32 %12, ptr %1
+  %13 = load i32, ptr %6
+  %14 = icmp eq i32 %13, 2
+  br i1 %14, label %then7, label %ifcont8
+afterloop6:
+  br label %whilecond1
+then7:
+  br label %whilecond1
+ifcont8:
+  br label %whilecond4
+aftercontinue9:
+  br label %ifcont8
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
 ExitCode: 6

@@ -5,7 +5,7 @@ function main() int
         while true 'middle'
             while true 'inner'
                 result = result + 1
-                if result = 5 'check'
+                if result == 5 'check'
                     break 'outer'
                 end 'check'
             end 'inner'
@@ -14,6 +14,100 @@ function main() int
     return result
 end 'main'
 ---
+; Module: test.maxon
+
+define i32 @main() {
+entry0:
+  %0 = alloca i32
+  store i32 0, ptr %0
+  br label %whilecond1
+whilecond1:
+  br i1 1, label %loop2, label %afterloop3
+loop2:
+  br label %whilecond4
+afterloop3:
+  %5 = load i32, ptr %0
+  ret i32 %5
+whilecond4:
+  br i1 1, label %loop5, label %afterloop6
+loop5:
+  br label %whilecond7
+afterloop6:
+  br label %whilecond1
+whilecond7:
+  br i1 1, label %loop8, label %afterloop9
+loop8:
+  %1 = load i32, ptr %0
+  %2 = add i32 %1, 1
+  store i32 %2, ptr %0
+  %3 = load i32, ptr %0
+  %4 = icmp eq i32 %3, 5
+  br i1 %4, label %then10, label %ifcont11
+afterloop9:
+  br label %whilecond4
+then10:
+  br label %afterloop3
+ifcont11:
+  br label %whilecond7
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
+; Module: test.maxon
+
+define i32 @main() {
+entry0:
+  %0 = alloca i32
+  store i32 0, ptr %0
+  br label %whilecond1
+whilecond1:
+  br i1 1, label %loop2, label %afterloop3
+loop2:
+  br label %whilecond4
+afterloop3:
+  %5 = load i32, ptr %0
+  ret i32 %5
+whilecond4:
+  br i1 1, label %loop5, label %afterloop6
+loop5:
+  br label %whilecond7
+afterloop6:
+  br label %whilecond1
+whilecond7:
+  br i1 1, label %loop8, label %afterloop9
+loop8:
+  %1 = load i32, ptr %0
+  %2 = add i32 %1, 1
+  store i32 %2, ptr %0
+  %3 = load i32, ptr %0
+  %4 = icmp eq i32 %3, 5
+  br i1 %4, label %then10, label %ifcont11
+afterloop9:
+  br label %whilecond4
+then10:
+  br label %afterloop3
+ifcont11:
+  br label %whilecond7
+afterbreak12:
+  br label %ifcont11
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
 ExitCode: 5

@@ -212,7 +212,6 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 		optOpts.verboseLevel = 0;
 
 		std::string actualOptIR;
-		std::string compileError;
 		std::string actualMaxoncStderr;
 
 		try {
@@ -229,20 +228,11 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 					throw;
 				}
 			} catch (const std::exception &e) {
-				compileError = actualMaxoncStderr;
-
 				// Format error message like test_regenerate.cpp does
 				std::string exceptionMsg = e.what();
 
-				// Combine LLVM errors and exception message
-				std::string combinedError = actualMaxoncStderr; // semantic errors from stderr
-				if (!compileError.empty()) {
-					// LLVM/linker errors
-					if (!combinedError.empty()) {
-						combinedError += "\n";
-					}
-					combinedError += compileError;
-				}
+				// Start with stderr output (semantic errors)
+				std::string combinedError = actualMaxoncStderr;
 
 				// Normalize temp file references like test_regenerate does
 				size_t pos = 0;

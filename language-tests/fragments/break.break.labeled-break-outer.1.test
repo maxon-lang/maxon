@@ -4,7 +4,7 @@ function main() int
     while x < 10 'outer'
         x = x + 1
         while true 'inner'
-            if x = 3 'check'
+            if x == 3 'check'
                 break 'outer'
             end 'check'
             break 'inner'
@@ -13,6 +13,94 @@ function main() int
     return x
 end 'main'
 ---
+; Module: test.maxon
+
+define i32 @main() {
+entry0:
+  %0 = alloca i32
+  store i32 0, ptr %0
+  br label %whilecond1
+whilecond1:
+  %1 = load i32, ptr %0
+  %2 = icmp slt i32 %1, 10
+  br i1 %2, label %loop2, label %afterloop3
+loop2:
+  %3 = load i32, ptr %0
+  %4 = add i32 %3, 1
+  store i32 %4, ptr %0
+  br label %whilecond4
+afterloop3:
+  %7 = load i32, ptr %0
+  ret i32 %7
+whilecond4:
+  br i1 1, label %loop5, label %afterloop6
+loop5:
+  %5 = load i32, ptr %0
+  %6 = icmp eq i32 %5, 3
+  br i1 %6, label %then7, label %ifcont8
+afterloop6:
+  br label %whilecond1
+then7:
+  br label %afterloop3
+ifcont8:
+  br label %afterloop6
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
+; Module: test.maxon
+
+define i32 @main() {
+entry0:
+  %0 = alloca i32
+  store i32 0, ptr %0
+  br label %whilecond1
+whilecond1:
+  %1 = load i32, ptr %0
+  %2 = icmp slt i32 %1, 10
+  br i1 %2, label %loop2, label %afterloop3
+loop2:
+  %3 = load i32, ptr %0
+  %4 = add i32 %3, 1
+  store i32 %4, ptr %0
+  br label %whilecond4
+afterloop3:
+  %7 = load i32, ptr %0
+  ret i32 %7
+whilecond4:
+  br i1 1, label %loop5, label %afterloop6
+loop5:
+  %5 = load i32, ptr %0
+  %6 = icmp eq i32 %5, 3
+  br i1 %6, label %then7, label %ifcont8
+afterloop6:
+  br label %whilecond1
+then7:
+  br label %afterloop3
+ifcont8:
+  br label %afterloop6
+afterbreak9:
+  br label %ifcont8
+afterbreak10:
+  br label %whilecond4
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
 ExitCode: 3

@@ -27,8 +27,7 @@ Source (.maxon) → Lexer → Parser → AST → Semantic Analyzer → MIR → O
 
 ### When Building the Compiler
 
-Use `make compiler` to build the compiler. Use `m
-ake all` to build everything. See [BUILD.md](BUILD.md) for all build targets.
+Use `make compiler` to build the compiler. Use `make all` to build everything. See [BUILD.md](BUILD.md) for all build targets.
 
 ### When Debugging Compiler Issues
 

@@ -379,15 +379,23 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					argsV.push_back(ptrVal);
 					argIdx++;
 
-					// Pass hidden length parameter if expected
+					// Pass hidden length parameter if expected by the callee
+					// Check if the callee's next parameter is a hidden length param (name ends with ".__length")
 					if (argIdx < calleeF->parameters.size()) {
-						std::string lengthVarName = varExpr->name + ".__length";
-						if (namedValues.find(lengthVarName) != namedValues.end()) {
-							mir::MIRValue *lengthAlloca = namedValues[lengthVarName];
-							mir::MIRValue *lengthVal = builder->createLoad(
-								mir::MIRType::getInt32(), lengthAlloca, "length");
-							argsV.push_back(lengthVal);
-							argIdx++;
+						mir::MIRValue *nextParam = calleeF->parameters[argIdx];
+						bool expectsHiddenLength = !nextParam->name.empty() &&
+												   nextParam->name.size() > 9 &&
+												   nextParam->name.substr(nextParam->name.size() - 9) == ".__length";
+
+						if (expectsHiddenLength) {
+							std::string lengthVarName = varExpr->name + ".__length";
+							if (namedValues.find(lengthVarName) != namedValues.end()) {
+								mir::MIRValue *lengthAlloca = namedValues[lengthVarName];
+								mir::MIRValue *lengthVal = builder->createLoad(
+									mir::MIRType::getInt32(), lengthAlloca, "length");
+								argsV.push_back(lengthVal);
+								argIdx++;
+							}
 						}
 					}
 					continue;

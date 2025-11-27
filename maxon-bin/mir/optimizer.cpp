@@ -416,9 +416,18 @@ bool ConstantPropagationPass::runOnFunction(MIRFunction &func) {
 				// or if all operands are constants (result will be folded later)
 				// Skip Call instructions - their result is not a copy of the argument!
 				// Skip Neg/FNeg - those are transformations, not copies!
+				// Skip type conversion instructions - they change the type, not just copy!
 				if (inst->opcode != MIROpcode::Call &&
 					inst->opcode != MIROpcode::Neg &&
 					inst->opcode != MIROpcode::FNeg &&
+					inst->opcode != MIROpcode::SIToFP &&
+					inst->opcode != MIROpcode::FPToSI &&
+					inst->opcode != MIROpcode::ZExt &&
+					inst->opcode != MIROpcode::SExt &&
+					inst->opcode != MIROpcode::Trunc &&
+					inst->opcode != MIROpcode::PtrToInt &&
+					inst->opcode != MIROpcode::IntToPtr &&
+					inst->opcode != MIROpcode::Bitcast &&
 					inst->operands.size() == 1 && inst->operands[0]->isConstant()) {
 					// Copy of a constant
 					constMap[inst->result->regId] = inst->operands[0];
@@ -455,10 +464,19 @@ bool ConstantPropagationPass::runOnBasicBlock(MIRBasicBlock &block,
 		// Update constMap if this instruction produces a constant
 		// Skip Call instructions - their result is not a copy of the argument!
 		// Skip Neg/FNeg - those are transformations, not copies!
+		// Skip type conversion instructions - they change the type, not just copy!
 		if (inst->result != nullptr && inst->result->kind == MIRValueKind::VirtualReg) {
 			if (inst->opcode != MIROpcode::Call &&
 				inst->opcode != MIROpcode::Neg &&
 				inst->opcode != MIROpcode::FNeg &&
+				inst->opcode != MIROpcode::SIToFP &&
+				inst->opcode != MIROpcode::FPToSI &&
+				inst->opcode != MIROpcode::ZExt &&
+				inst->opcode != MIROpcode::SExt &&
+				inst->opcode != MIROpcode::Trunc &&
+				inst->opcode != MIROpcode::PtrToInt &&
+				inst->opcode != MIROpcode::IntToPtr &&
+				inst->opcode != MIROpcode::Bitcast &&
 				inst->operands.size() == 1 && inst->operands[0]->isConstant()) {
 				constMap[inst->result->regId] = inst->operands[0];
 			}
@@ -1167,6 +1185,12 @@ bool RedundantLoadStoreEliminationPass::runOnFunction(MIRFunction &func) {
 }
 
 bool RedundantLoadStoreEliminationPass::runOnBasicBlock(MIRBasicBlock &block) {
+	// TODO: This pass has a bug where it incorrectly correlates stores and loads
+	// across different allocas, causing incorrect optimization.
+	// Example: var x = 10; var y = 20; x = y; y = 30; return x + y
+	// Gets incorrectly optimized. Disabling until fixed.
+	return false;
+
 	bool changed = false;
 
 	// Track the last stored value for each pointer

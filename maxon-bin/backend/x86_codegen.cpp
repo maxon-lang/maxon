@@ -514,7 +514,9 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		// RBX, RSI, RDI, R12-R15 are callee-saved (non-volatile)
 		calleeSavedRegs = {X86Reg::RBX, X86Reg::RSI, X86Reg::RDI,
 						   X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15};
-		callerSavedRegs = {X86Reg::R10, X86Reg::R11}; // RAX reserved for return values
+		// R10/R11 reserved as scratch registers for codegen (used by genStore, etc.)
+		// RAX reserved for return values
+		callerSavedRegs = {};
 		// XMM registers: XMM6-XMM15 are callee-saved on Windows
 		calleeSavedFloatRegs = {X86Reg::XMM6, X86Reg::XMM7, X86Reg::XMM8, X86Reg::XMM9,
 								X86Reg::XMM10, X86Reg::XMM11, X86Reg::XMM12, X86Reg::XMM13,
@@ -525,7 +527,9 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		paramRegs = {X86Reg::RDI, X86Reg::RSI, X86Reg::RDX, X86Reg::RCX, X86Reg::R8, X86Reg::R9};
 		// System V: RBX, R12-R15 are callee-saved
 		calleeSavedRegs = {X86Reg::RBX, X86Reg::R12, X86Reg::R13, X86Reg::R14, X86Reg::R15};
-		callerSavedRegs = {X86Reg::R10, X86Reg::R11}; // RAX reserved for return values
+		// R10/R11 reserved as scratch registers for codegen (used by genStore, etc.)
+		// RAX reserved for return values
+		callerSavedRegs = {};
 		// All XMM registers are caller-saved on System V
 		calleeSavedFloatRegs = {};
 		callerSavedFloatRegs = {X86Reg::XMM8, X86Reg::XMM9, X86Reg::XMM10, X86Reg::XMM11,
