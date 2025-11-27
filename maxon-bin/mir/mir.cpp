@@ -609,10 +609,23 @@ MIRType *MIRModule::getOrCreateStructType(const std::string &structName, const s
 	return ptr;
 }
 
+size_t MIRModule::countInstructions() const {
+	size_t count = 0;
+	for (const auto &func : functions) {
+		if (func->isExternal)
+			continue;
+		for (const auto &block : func->basicBlocks) {
+			count += block->instructions.size();
+		}
+	}
+	return count;
+}
+
 std::string MIRModule::toString() const {
 	std::ostringstream ss;
 
 	ss << "; Module: " << name << "\n";
+	ss << "; Instructions: " << countInstructions() << "\n";
 	if (!targetTriple.empty()) {
 		ss << "target triple = \"" << targetTriple << "\"\n";
 	}

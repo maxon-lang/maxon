@@ -88,8 +88,7 @@ static void writeTestFragment(const std::string &outputDir, const std::string &f
 				// Check if this is a metadata field header
 				if (line.rfind("ExitCode:", 0) == 0 || line.rfind("Args:", 0) == 0 ||
 					line.rfind("Stdout:", 0) == 0 || line.rfind("Stderr:", 0) == 0 ||
-					line.rfind("MaxoncStderr:", 0) == 0 || line.rfind("OptimizedInstructionCount:", 0) == 0 ||
-					line.rfind("UnoptimizedInstructionCount:", 0) == 0) {
+					line.rfind("MaxoncStderr:", 0) == 0) {
 
 					// Write previous field if it exists
 					if (!currentField.empty()) {
@@ -136,8 +135,7 @@ static void writeTestFragment(const std::string &outputDir, const std::string &f
 			while (std::getline(checkStream, line)) {
 				if (line.rfind("ExitCode:", 0) == 0 || line.rfind("Args:", 0) == 0 ||
 					line.rfind("Stdout:", 0) == 0 || line.rfind("Stderr:", 0) == 0 ||
-					line.rfind("MaxoncStderr:", 0) == 0 || line.rfind("OptimizedInstructionCount:", 0) == 0 ||
-					line.rfind("UnoptimizedInstructionCount:", 0) == 0) {
+					line.rfind("MaxoncStderr:", 0) == 0) {
 
 					if (!currentField.empty() && lineCount > 1) {
 						hasMultilineField = true;
@@ -186,8 +184,7 @@ static void writeTestFragment(const std::string &outputDir, const std::string &f
 					// Check if this is a metadata field header
 					if (line.rfind("ExitCode:", 0) == 0 || line.rfind("Args:", 0) == 0 ||
 						line.rfind("Stdout:", 0) == 0 || line.rfind("Stderr:", 0) == 0 ||
-						line.rfind("MaxoncStderr:", 0) == 0 || line.rfind("OptimizedInstructionCount:", 0) == 0 ||
-						line.rfind("UnoptimizedInstructionCount:", 0) == 0) {
+						line.rfind("MaxoncStderr:", 0) == 0) {
 
 						// Write previous field if it exists
 						if (!currentField.empty()) {
@@ -568,15 +565,9 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		}
 	}
 
-	// Read and preserve metadata from the spec file, but exclude instruction counts
-	// (we'll regenerate those)
+	// Read and preserve metadata from the spec file
 	std::string metadata;
 	while (std::getline(inFile, line)) {
-		// Skip instruction count lines - we'll regenerate them
-		if (line.rfind("OptimizedInstructionCount:", 0) == 0 ||
-			line.rfind("UnoptimizedInstructionCount:", 0) == 0) {
-			continue;
-		}
 		metadata += line + "\n";
 	}
 	inFile.close();
@@ -598,11 +589,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 	std::string workerSuffix = workerId > 0 ? ("_w" + std::to_string(workerId)) : "";
 	std::string tempSource = (tempDir / ("temp_fragment" + workerSuffix + ".maxon")).string();
 	std::string tempOptLL = (tempDir / ("temp-opt" + workerSuffix + ".ir")).string();
-	std::string tempOptExe = (tempDir / ("temp-opt" + workerSuffix + ".exe")).string();
 	std::string tempDebugLL = (tempDir / ("temp-debug" + workerSuffix + ".ir")).string();
-	std::string tempDebugExe = (tempDir / ("temp-debug" + workerSuffix + ".exe")).string();
-	std::string tempOptPdb = (tempDir / ("temp-opt" + workerSuffix + ".pdb")).string();
-	std::string tempDebugPdb = (tempDir / ("temp-debug" + workerSuffix + ".pdb")).string();
 
 	std::ofstream tempOut(tempSource);
 	if (!tempOut) {
@@ -690,53 +677,6 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 			return 1;
 		}
 
-		// Generate profiled optimized executable to get instruction count
-		CompilationOptions optProfileOpts;
-		optProfileOpts.inputFiles = {tempSource};
-		optProfileOpts.outputFile = tempOptExe;
-		optProfileOpts.optimize = true;
-		optProfileOpts.profile = true;
-		optProfileOpts.verboseLevel = 0;
-		compileProgram(optProfileOpts);
-
-		int64_t optInstrCount = -1;
-
-		std::string tempOutput = (tempDir / ("maxon_output" + workerSuffix + ".tmp")).string();
-
-		std::string cmdLine = tempOptExe;
-		if (!args.empty()) {
-			cmdLine += " " + args;
-		}
-		cmdLine += " > \"" + tempOutput + "\" 2>&1";
-
-		int exitCode = executeWithTimeout(cmdLine, 5);
-
-		if (exitCode == -1) {
-			statusMsg = "TIMEOUT: Test execution exceeded 5 seconds (optimized)";
-			std::filesystem::remove(tempSource);
-			std::filesystem::remove(tempOptLL);
-			std::filesystem::remove(tempOptExe);
-			std::filesystem::remove(tempOptPdb);
-			std::filesystem::remove(tempOutput);
-			return 2;
-		}
-
-		std::ifstream outFile(tempOutput, std::ios::binary);
-		if (outFile) {
-			std::vector<char> buffer(std::istreambuf_iterator<char>(outFile), {});
-			outFile.close();
-
-			const char *marker = "MAXON_PROFILE:";
-			size_t markerLen = 14;
-			auto it = std::search(buffer.begin(), buffer.end(), marker, marker + markerLen);
-
-			if (it != buffer.end() && std::distance(it, buffer.end()) >= static_cast<ptrdiff_t>(markerLen + 8)) {
-				std::memcpy(&optInstrCount, &*(it + markerLen), 8);
-			}
-		}
-
-		std::filesystem::remove(tempOutput);
-
 		// Generate debug IR
 		CompilationOptions debugOpts;
 		debugOpts.inputFiles = {tempSource};
@@ -757,53 +697,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 			debugIR = normalizeIR(debugIR);
 		}
 
-		// Generate profiled debug executable to get instruction count
-		CompilationOptions debugProfileOpts;
-		debugProfileOpts.inputFiles = {tempSource};
-		debugProfileOpts.outputFile = tempDebugExe;
-		debugProfileOpts.debugInfo = true;
-		debugProfileOpts.profile = true;
-		debugProfileOpts.verboseLevel = 0;
-		compileProgram(debugProfileOpts);
-
-		int64_t debugInstrCount = -1;
-		std::string debugCmdLine = tempDebugExe;
-		if (!args.empty()) {
-			debugCmdLine += " " + args;
-		}
-		debugCmdLine += " > \"" + tempOutput + "\" 2>&1";
-
-		exitCode = executeWithTimeout(debugCmdLine, 5);
-
-		if (exitCode == -1) {
-			statusMsg = "TIMEOUT: Test execution exceeded 5 seconds (debug)";
-			std::filesystem::remove(tempSource);
-			std::filesystem::remove(tempOptLL);
-			std::filesystem::remove(tempOptExe);
-			std::filesystem::remove(tempOptPdb);
-			std::filesystem::remove(tempDebugLL);
-			std::filesystem::remove(tempDebugExe);
-			std::filesystem::remove(tempDebugPdb);
-			std::filesystem::remove(tempOutput);
-			return 2;
-		}
-
-		std::ifstream debugOutFile(tempOutput, std::ios::binary);
-		if (debugOutFile) {
-			std::vector<char> dbuffer(std::istreambuf_iterator<char>(debugOutFile), {});
-			debugOutFile.close();
-
-			const char *marker = "MAXON_PROFILE:";
-			size_t markerLen = 14;
-			auto it = std::search(dbuffer.begin(), dbuffer.end(), marker, marker + markerLen);
-
-			if (it != dbuffer.end() && std::distance(it, dbuffer.end()) >= static_cast<ptrdiff_t>(markerLen + 8)) {
-				std::memcpy(&debugInstrCount, &*(it + markerLen), 8);
-			}
-		}
-		std::filesystem::remove(tempOutput);
-
-		// Write fragment file with regenerated IR, instruction counts, and preserved spec metadata
+		// Write fragment file with regenerated IR and preserved spec metadata
 		std::ofstream testFile(testPath);
 		testFile << sourceCode;
 		testFile << "---\n"
@@ -812,8 +706,8 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 				 << debugIR;
 		testFile << "---\n";
 
-		// Write preserved metadata from spec first (includes Args, ExitCode, Stdout, Stderr, MaxoncStderr)
-		// Need to properly close any open ``` blocks before appending instruction counts
+		// Write preserved metadata from spec (includes Args, ExitCode, Stdout, Stderr, MaxoncStderr)
+		// Need to properly close any open ``` blocks
 		std::string metadataTrimmed = metadata;
 		// Remove trailing whitespace/newlines
 		while (!metadataTrimmed.empty() && (metadataTrimmed.back() == '\n' || metadataTrimmed.back() == '\r' || metadataTrimmed.back() == ' ' || metadataTrimmed.back() == '\t')) {
@@ -837,42 +731,20 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		}
 
 		testFile << "\n";
-
-		// Add instruction counts after spec metadata
-		if (optInstrCount > 0) {
-			testFile << "OptimizedInstructionCount: " << optInstrCount << "\n";
-		}
-		if (debugInstrCount > 0) {
-			testFile << "UnoptimizedInstructionCount: " << debugInstrCount << "\n";
-		}
-
 		testFile.close();
 
 		std::filesystem::remove(tempSource);
 		std::filesystem::remove(tempOptLL);
-		std::filesystem::remove(tempOptExe);
 		std::filesystem::remove(tempDebugLL);
-		std::filesystem::remove(tempDebugExe);
-		std::filesystem::remove(tempOptPdb);
-		std::filesystem::remove(tempDebugPdb);
 
 		statusMsg = "OK";
 		return 0;
 	} catch (const std::exception &e) {
 		statusMsg = std::string("ERROR: ") + e.what();
 		// Clean up any temp files that may have been created
-		std::filesystem::path tempDir = "temp";
-		std::string workerSuffix = workerId > 0 ? ("_w" + std::to_string(workerId)) : "";
-		std::string tempOutput = (tempDir / ("maxon_output" + workerSuffix + ".tmp")).string();
-
 		std::filesystem::remove(tempSource);
 		std::filesystem::remove(tempOptLL);
-		std::filesystem::remove(tempOptExe);
-		std::filesystem::remove(tempOptPdb);
 		std::filesystem::remove(tempDebugLL);
-		std::filesystem::remove(tempDebugExe);
-		std::filesystem::remove(tempDebugPdb);
-		std::filesystem::remove(tempOutput);
 		return 2;
 	}
 }

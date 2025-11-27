@@ -404,6 +404,9 @@ class MIRModule {
 	// Create or get struct type
 	MIRType *getOrCreateStructType(const std::string &name, const std::vector<MIRType *> &fields);
 
+	// Count total instructions across all functions
+	size_t countInstructions() const;
+
 	std::string toString() const;
 	void print() const;
 };
