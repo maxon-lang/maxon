@@ -45,6 +45,17 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 					 stmt->line, stmt->column);
 		}
 
+		// Check if initializer is a sized-form array literal (not allowed with let)
+		if (auto arrayLit = dynamic_cast<ArrayLiteralExprAST *>(letDecl->initializer.get())) {
+			if (arrayLit->size > 0 && !arrayLit->elementType.empty()) {
+				addError("Static arrays (declared with 'let') must use value literals" +
+							 std::string("\n  Use: let ") + letDecl->name + " = [value1, value2, ...]" +
+							 "\n  Not: let " + letDecl->name + " = [" + std::to_string(arrayLit->size) + "]" +
+							 arrayLit->elementType + "\n  Note: Use 'var' for dynamically-sized arrays",
+						 stmt->line, stmt->column);
+			}
+		}
+
 		// Analyze initializer
 		std::string initType = analyzeExpression(letDecl->initializer.get());
 

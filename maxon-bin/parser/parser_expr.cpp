@@ -122,14 +122,39 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 			return parseStructInit(name);
 		}
 
-		// Check for member access (e.g., array.length)
+		// Check for member access (e.g., array.length) or method call (e.g., arr.push(5))
 		// This must come before namespace qualification check
 		if (check(TokenType::DOT) && !check(TokenType::LPAREN, 1)) {
 			advance(); // consume '.'
 			Token member = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
 
-			// If followed by '(', treat as namespace-qualified function call
+			// If followed by '(', could be namespace call or method call
 			if (check(TokenType::LPAREN)) {
+				// Check if this is a method call: simple variable name followed by method(args)
+				// vs namespace call: namespace.namespace.function(args)
+				// Method calls have no dots in the object name
+				if (name.find('.') == std::string::npos) {
+					// This is a method call: arr.push(5) -> push(arr, 5)
+					std::string methodName = member.value;
+					advance(); // consume '('
+					std::vector<std::unique_ptr<ExprAST>> args;
+
+					// First argument is the object itself
+					args.push_back(std::make_unique<VariableExprAST>(name, line, column));
+
+					// Parse remaining arguments
+					if (!check(TokenType::RPAREN)) {
+						args.push_back(parseLogicalOr());
+
+						while (match(TokenType::COMMA)) {
+							args.push_back(parseLogicalOr());
+						}
+					}
+
+					expect(TokenType::RPAREN, "Expected ')' after method arguments");
+					return std::make_unique<CallExprAST>(methodName, std::move(args), line, column);
+				}
+
 				// This is namespace.function() - restore as qualified name
 				std::string qualifiedName = name + "." + member.value;
 

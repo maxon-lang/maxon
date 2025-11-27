@@ -47,6 +47,7 @@ set(MAXON_SOURCES
     ../maxon-bin/parser/parser_expr.cpp
     ../maxon-bin/parser/parser_stmt.cpp
     ../maxon-bin/parser/parser_decl.cpp
+    ../maxon-bin/file_utils.cpp
     ../maxon-bin/semantic_analyzer.cpp
     ../maxon-bin/semantic_analyzer/semantic_analyzer_expr.cpp
     ../maxon-bin/semantic_analyzer/semantic_analyzer_stmt.cpp

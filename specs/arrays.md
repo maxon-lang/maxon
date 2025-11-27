@@ -1,87 +1,160 @@
 ---
 feature: arrays
 status: stable
-keywords: array, collection, indexing, memory
+keywords: array, collection, indexing, memory, static, dynamic
 category: type-system
 ---
 
 ## Developer Notes
 
-Arrays are fixed-size, heap-allocated collections with automatic memory management.
+Arrays come in two forms: **static** (stack-allocated, immutable) and **dynamic** (heap-allocated, growable).
 
-**Implementation Details:**
-- Syntax: `[size]type` for fixed-size arrays
-- Syntax: `[]type` for unsized (function parameter) arrays
-- Value initialization: `[val1, val2, val3]`
-- Parser: `parseArrayType()` and `parseArrayLiteral()` in parser.cpp
-- AST nodes: `ArrayTypeAST`, `ArrayLiteralExprAST`
+**Static Arrays (let):**
+- Declared with `let` and value literals: `let arr = [1, 2, 3]`
+- Type inferred from values: `[3]int`
+- Stack-allocated, no heap allocation
+- Immutable: elements cannot be modified after creation
+- No automatic cleanup needed (stack memory)
+- `.length` is a compile-time constant
 
-**Memory Management:**
-- Heap allocated using Windows HeapAlloc
-- Automatic deallocation at end of scope (scope-based cleanup)
-- Array pointer stored on stack
-- Cleanup code generated at scope exit
+**Dynamic Arrays (var):**
+- Declared with `var`: `var arr = [5]int` or `var arr = [1, 2, 3]`
+- Heap-allocated with capacity tracking
+- Mutable: elements can be modified
+- Growable via `push()` method
+- Automatic deallocation at end of scope
+- `.length` and `.capacity` properties
 
 **Type System:**
-- Fixed-size: `[10]int` - array of 10 integers
-- Unsized: `[]int` - for function parameters (size unknown)
-- Element type can be any Maxon type (int, float, struct, etc.)
-- Arrays have `.length` property
+- Static: `[N]type` - size is part of the type (e.g., `[3]int`)
+- Dynamic: `[]type` - size not part of type, tracked at runtime
+- Static and dynamic are incompatible types (no implicit conversion)
+- Function parameters:
+  - `fn(arr [3]int)` - accepts static array of exactly 3 ints (by reference)
+  - `fn(arr []int)` - accepts dynamic array (by reference, ptr+len+cap)
 
-**Indexing:**
-- Zero-based indexing
-- No bounds checking at runtime (undefined behavior for out-of-bounds)
-- Index must be integer expression
+**Method Syntax:**
+- `arr.push(val)` transforms to `push(arr, val)` at parse time
+- Methods implemented in stdlib for dynamic arrays only
+
+**Memory Layout:**
+- Static: just the array data on stack
+- Dynamic: pointer to heap data, plus `__length` and `__capacity` on stack
+
+**Parser:**
+- `parseArrayType()` and `parseArrayLiteral()` in parser.cpp
+- Method calls: `expr.method(args)` → `method(expr, args)`
+
+**AST nodes:** `ArrayTypeAST`, `ArrayLiteralExprAST`
+
+**Semantic Checks:**
+- `let arr = [5]int` → error (let requires value literal)
+- `arr[i] = val` on let array → error (immutable)
 
 ## Documentation
 
 # Arrays
 
-Fixed-size, heap-allocated collections with automatic memory management.
+Maxon has two types of arrays: **static arrays** (immutable, stack-allocated) and **dynamic arrays** (mutable, heap-allocated, growable).
 
-**Syntax:**
+## Static Arrays
 
-Fixed-size array:
+Static arrays are declared with `let` using value literals. They are stack-allocated, immutable, and their size is part of the type.
+
 ```maxon
-var arr = [5]int        // Array of 5 integers
+let arr = [1, 2, 3]     // Static array of type [3]int
+let x = arr[0]          // Read element: OK
+// arr[0] = 10          // ERROR: static arrays are immutable
 ```
-Value-initialized array:
+
+**Properties:**
+- Type is inferred from values: `[1, 2, 3]` has type `[3]int`
+- Elements cannot be modified after creation
+- `.length` is a compile-time constant
+- No heap allocation, very efficient
+
+## Dynamic Arrays
+
+Dynamic arrays are declared with `var`. They are heap-allocated, mutable, and can grow.
+
 ```maxon
-var values = [10, 20, 30]  // Array with initial values
+var arr = [5]int        // Dynamic array with 5 zeros, capacity 5
+var vals = [10, 20, 30] // Dynamic array with values, capacity 3
+var empty = []int       // Empty dynamic array, capacity 0
 ```
-Array parameter (unsized):
+
+**Properties:**
+- Mutable: elements can be read and written
+- Growable: use `.push()` to add elements
+- `.length` returns current number of elements
+- `.capacity` returns allocated capacity
+- Automatic cleanup at end of scope
+
+**Methods (via stdlib):**
 ```maxon
-function process(arr []int) int
-    return arr.length
+var arr = [1, 2, 3]
+arr.push(4)             // Add element, grow if needed
+var last = arr.pop()    // Remove and return last element
+var cap = arr.capacity  // Get capacity
+arr.reserve(100)        // Preallocate space
+```
+
+## Function Parameters
+
+**Static array parameters** require the exact size in the type:
+```maxon
+function process(arr [3]int) int
+    return arr[0] + arr[1] + arr[2]
 end 'process'
-```
-**Example:**
 
-```maxon
-var arr = [5]int        // Create array of 5 integers
-arr[0] = 10             // Set first element
-arr[1] = 20             // Set second element
-return arr[1]           // Returns 20
+let data = [10, 20, 30]
+return process(data)    // OK: [3]int matches [3]int
 ```
-**Example with length:**
 
+**Dynamic array parameters** use unsized syntax:
 ```maxon
-var values = [1, 2, 3, 4, 5]
-return values.length    // Returns 5
+function sum(arr []int) int
+    var total = 0
+    var i = 0
+    while i < arr.length 'loop'
+        total = total + arr[i]
+        i = i + 1
+    end 'loop'
+    return total
+end 'sum'
+
+var data = [1, 2, 3, 4, 5]
+return sum(data)        // OK: passes ptr+len+cap
 ```
-**Notes:**
-- Arrays are zero-indexed
-- All arrays are heap-allocated
-- Memory is automatically freed at end of scope
-- Arrays have a `.length` property
-- Fixed-size arrays must specify size: `[10]int`
-- Function parameters use unsized syntax: `[]int`
+
+**Note:** Static and dynamic arrays are incompatible types. A static `[3]int` cannot be passed to a function expecting `[]int`.
 
 ## Tests
 
-<!-- test: arrays.basic -->
+<!-- test: static.basic -->
 ```maxon
-// Test new array syntax
+function main() int
+    let arr = [10, 20, 30]
+    return arr[1]
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: static.length -->
+```maxon
+function main() int
+    let arr = [1, 2, 3, 4, 5]
+    return arr.length
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: dynamic.basic -->
+```maxon
 function main() int
     var arr = [5]int
     arr[0] = 10
@@ -93,18 +166,19 @@ end 'main'
 20
 ```
 
-<!-- test: arrays.values -->
+<!-- test: dynamic.values -->
 ```maxon
 function main() int
     var values = [10, 20, 30]
-    return values[1]
+    values[0] = 100
+    return values[0]
 end 'main'
 ```
 ```exitcode
-20
+100
 ```
 
-<!-- test: arrays.length -->
+<!-- test: dynamic.length -->
 ```maxon
 function main() int
     var arr = [5]int
@@ -115,18 +189,7 @@ end 'main'
 5
 ```
 
-<!-- test: arrays.value-length -->
-```maxon
-function main() int
-    var values = [1, 2, 3, 4, 5]
-    return values.length
-end 'main'
-```
-```exitcode
-5
-```
-
-<!-- test: arrays.float -->
+<!-- test: dynamic.float -->
 ```maxon
 function main() int
     var arr = [3]float
@@ -141,8 +204,7 @@ end 'main'
 7
 ```
 
-
-<!-- test: heap-allocation -->
+<!-- test: dynamic.heap-allocation -->
 ```maxon
 function main() int
     var arr = [5]int
@@ -157,8 +219,7 @@ end 'main'
 60
 ```
 
-
-<!-- test: function-parameter -->
+<!-- test: dynamic.function-parameter -->
 ```maxon
 function sum_array(arr []int, len int) int
     var total = 0
@@ -182,8 +243,7 @@ end 'main'
 30
 ```
 
-
-<!-- test: unsized-parameter -->
+<!-- test: dynamic.unsized-parameter -->
 ```maxon
 function get_first(arr []int) int
     return arr[0]
@@ -201,4 +261,3 @@ end 'main'
 ```exitcode
 42
 ```
-
