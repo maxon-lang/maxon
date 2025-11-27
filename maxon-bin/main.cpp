@@ -9,6 +9,10 @@
 #include "test_regenerate.h"
 #include "test_runner.h"
 
+#ifdef MAXON_SIMD_ENABLED
+#include "simd/simd.h"
+#endif
+
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -36,6 +40,8 @@ void printHelp(const char *programName) {
 	std::cerr << "                 Run all test fragments (shows only failures and summary)" << std::endl;
 	std::cerr << "  test <file.test> [options]" << std::endl;
 	std::cerr << "                 Run a single test file and verify expected output" << std::endl;
+	std::cerr << "  benchmark <input.maxon> [options]" << std::endl;
+	std::cerr << "                 Benchmark SIMD vs scalar lexer performance" << std::endl;
 	std::cerr << "  <input.maxon|.test>  Compile and run source file (no artifacts left on disk)" << std::endl;
 	std::cerr << "\nVerbosity (applies to most commands):" << std::endl;
 	std::cerr << "  -v             Level 1 verbosity (progress, basic output)" << std::endl;
@@ -46,6 +52,8 @@ void printHelp(const char *programName) {
 	std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
 	std::cerr << "  -O             Enable optimizations" << std::endl;
 	std::cerr << "  --debug, -g    Generate debug information" << std::endl;
+	std::cerr << "\nOptions for benchmark:" << std::endl;
+	std::cerr << "  -n <count>     Number of iterations (default: 100)" << std::endl;
 	std::cerr << "\nOptions for test:" << std::endl;
 	std::cerr << "  --update, -u   Update the test file with actual MaxoncStderr output" << std::endl;
 	std::cerr << "\nGeneral options:" << std::endl;
@@ -101,6 +109,38 @@ int main(int argc, char *argv[]) {
 	if (command == "generate-docs") {
 		return DocsGenerator::generateDocumentation();
 	}
+
+#ifdef MAXON_SIMD_ENABLED
+	if (command == "benchmark") {
+		if (argc < 3) {
+			std::cerr << "Usage: " << argv[0] << " benchmark <input.maxon> [-n iterations]" << std::endl;
+			return 1;
+		}
+
+		std::string inputFile = argv[2];
+		int iterations = 100; // Default iterations
+
+		for (int i = 3; i < argc; ++i) {
+			std::string arg = argv[i];
+			if (arg == "-n" && i + 1 < argc) {
+				iterations = std::stoi(argv[++i]);
+			}
+		}
+
+		// Read the source file
+		std::ifstream file(inputFile);
+		if (!file) {
+			std::cerr << "Error: Cannot open file: " << inputFile << std::endl;
+			return 1;
+		}
+		std::string source((std::istreambuf_iterator<char>(file)),
+						   std::istreambuf_iterator<char>());
+
+		// Run benchmark comparison
+		simd::run_benchmark_comparison(source, inputFile, iterations);
+		return 0;
+	}
+#endif
 
 	if (command == "verify-mir") {
 		if (argc < 3) {

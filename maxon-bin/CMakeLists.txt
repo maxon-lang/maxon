@@ -20,6 +20,19 @@ add_compile_options(
 	-Wno-sign-compare
 )
 
+# SIMD optimization flags
+# Enable AVX2 for SIMD-optimized lexer/parser
+option(ENABLE_SIMD "Enable SIMD optimizations for lexer/parser" ON)
+if(ENABLE_SIMD)
+    if(MSVC)
+        add_compile_options(/arch:AVX2)
+    else()
+        add_compile_options(-mavx2 -msse4.2)
+    endif()
+    add_compile_definitions(MAXON_SIMD_ENABLED)
+    message(STATUS "SIMD optimizations enabled (AVX2)")
+endif()
+
 # Use precompiled headers for faster compilation
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
     set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
@@ -42,6 +55,8 @@ set(SOURCES
     parser/parser_expr.cpp
     parser/parser_stmt.cpp
     parser/parser_decl.cpp
+    # SIMD-optimized lexer/parser (header-only)
+    simd/simd_lexer.cpp
     # MIR-based code generator
     codegen_mir.cpp
     codegen_mir/codegen_mir_expr.cpp

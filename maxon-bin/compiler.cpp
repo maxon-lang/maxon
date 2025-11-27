@@ -6,6 +6,11 @@
 #include "logger.h"
 #include "semantic_analyzer.h"
 
+// SIMD-optimized lexer (optional, enabled with MAXON_SIMD_ENABLED)
+#ifdef MAXON_SIMD_ENABLED
+#include "simd/simd.h"
+#endif
+
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -19,8 +24,24 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logge
 		std::string source = readFile(filePath);
 
 		auto lexStart = logger.startTimer();
+
+#ifdef MAXON_SIMD_ENABLED
+		// Use SIMD lexer for larger files, scalar for smaller files
+		std::vector<Token> tokens;
+		if (simd::should_use_simd(source.size())) {
+			simd::SIMDLexer lexer(source);
+			tokens = lexer.tokenize();
+			logger.trace(LogPhase::Lexer, "Using SIMD lexer (", simd::get_simd_capability(), ")");
+		} else {
+			Lexer lexer(source);
+			tokens = lexer.tokenize();
+			logger.trace(LogPhase::Lexer, "Using scalar lexer (small file)");
+		}
+#else
 		Lexer lexer(source);
 		std::vector<Token> tokens = lexer.tokenize();
+#endif
+
 		logger.logElapsed(LogPhase::Lexer, "Tokenization time", lexStart);
 
 		logger.progress(LogPhase::Lexer, "Tokenized: ", tokens.size(), " tokens from ", normalizePathForDisplay(filePath));
