@@ -219,12 +219,40 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 			return std::make_unique<CallExprAST>(name, std::move(args), line, column);
 		}
 
-		// Check for array indexing
+		// Check for array indexing or slicing
 		if (check(TokenType::LBRACKET)) {
 			advance(); // consume '['
-			auto index = parseLogicalOr();
+
+			// Check for slice starting with .. (e.g., s[..end])
+			if (check(TokenType::DOT_DOT)) {
+				advance(); // consume '..'
+				auto endExpr = parseLogicalOr();
+				expect(TokenType::RBRACKET, "Expected ']' after slice end");
+				return std::make_unique<SliceExprAST>(name, nullptr, std::move(endExpr), line, column);
+			}
+
+			// Parse first expression (could be index or slice start)
+			auto firstExpr = parseLogicalOr();
+
+			// Check for slice syntax: s[start..end] or s[start..]
+			if (check(TokenType::DOT_DOT)) {
+				advance(); // consume '..'
+
+				// Check for open-ended slice: s[start..]
+				if (check(TokenType::RBRACKET)) {
+					advance(); // consume ']'
+					return std::make_unique<SliceExprAST>(name, std::move(firstExpr), nullptr, line, column);
+				}
+
+				// Full slice: s[start..end]
+				auto endExpr = parseLogicalOr();
+				expect(TokenType::RBRACKET, "Expected ']' after slice end");
+				return std::make_unique<SliceExprAST>(name, std::move(firstExpr), std::move(endExpr), line, column);
+			}
+
+			// Regular array index
 			expect(TokenType::RBRACKET, "Expected ']' after array index");
-			auto arrayExpr = std::make_unique<ArrayIndexExprAST>(name, std::move(index), line, column);
+			auto arrayExpr = std::make_unique<ArrayIndexExprAST>(name, std::move(firstExpr), line, column);
 
 			// Check for member access on array element (e.g., arr[0].field)
 			if (check(TokenType::DOT)) {

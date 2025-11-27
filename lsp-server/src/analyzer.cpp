@@ -17,6 +17,35 @@ Analyzer::Analyzer() {
 	for (const auto &info : keywordInfo) {
 		keywordMetadata[info.name] = info;
 	}
+
+	// Initialize type members (methods and properties for built-in types)
+	initializeTypeMembers();
+}
+
+void Analyzer::initializeTypeMembers() {
+	// String type members
+	typeMembers["string"] = {
+		// Properties
+		{"count", false, "int", "", "Number of codepoints in the string (UTF-8 aware)"},
+		{"isEmpty", false, "bool", "", "Returns true if string has no characters"},
+		// Search methods
+		{"starts_with", true, "bool", "(prefix string)", "Returns true if string starts with the given prefix"},
+		{"ends_with", true, "bool", "(suffix string)", "Returns true if string ends with the given suffix"},
+		{"contains", true, "bool", "(needle string)", "Returns true if string contains the given substring"},
+		{"find", true, "int", "(needle string)", "Returns index of substring, or -1 if not found"},
+		// Transform methods
+		{"to_upper", true, "string", "()", "Returns uppercase copy of string"},
+		{"to_lower", true, "string", "()", "Returns lowercase copy of string"},
+		{"trim", true, "string", "()", "Returns string with leading/trailing whitespace removed"},
+	};
+
+	// Array type members (use "[]" as key for any array type)
+	typeMembers["[]"] = {
+		{"length", false, "int", "", "Number of elements in the array"},
+		{"capacity", false, "int", "", "Capacity of the array (number of elements it can hold without reallocation)"},
+		{"push", true, "void", "(element)", "Add element to end of dynamic array"},
+		{"pop", true, "element", "()", "Remove and return last element of dynamic array"},
+	};
 }
 
 std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
@@ -837,23 +866,46 @@ std::vector<lsp::CompletionItem> Analyzer::getMemberCompletions(const std::strin
 		return items;
 	}
 
+	// Check type members registry (handles string, etc.)
+	auto typeIt = typeMembers.find(typeName);
+	if (typeIt != typeMembers.end()) {
+		for (const auto &member : typeIt->second) {
+			lsp::CompletionItem item;
+			item.label = member.name;
+			item.kind = member.isMethod ? lsp::CompletionItemKind::Method : lsp::CompletionItemKind::Property;
+			item.detail = member.isMethod ? member.signature + " " + member.returnType : member.returnType;
+			item.documentation = member.documentation;
+
+			// For methods, add parentheses
+			if (member.isMethod) {
+				item.insertText = member.name + "()";
+			}
+
+			items.push_back(item);
+		}
+		return items;
+	}
+
 	// Check if it's an array type (e.g., "[int]", "[float]")
 	if (!typeName.empty() && typeName[0] == '[') {
-		// Array type - provide length and capacity members
-		lsp::CompletionItem lengthItem;
-		lengthItem.label = "length";
-		lengthItem.kind = lsp::CompletionItemKind::Property;
-		lengthItem.detail = "int";
-		lengthItem.documentation = "Number of elements in the array";
-		items.push_back(lengthItem);
+		// Use array members from registry
+		auto arrayIt = typeMembers.find("[]");
+		if (arrayIt != typeMembers.end()) {
+			for (const auto &member : arrayIt->second) {
+				lsp::CompletionItem item;
+				item.label = member.name;
+				item.kind = member.isMethod ? lsp::CompletionItemKind::Method : lsp::CompletionItemKind::Property;
+				item.detail = member.isMethod ? member.signature + " " + member.returnType : member.returnType;
+				item.documentation = member.documentation;
 
-		lsp::CompletionItem capacityItem;
-		capacityItem.label = "capacity";
-		capacityItem.kind = lsp::CompletionItemKind::Property;
-		capacityItem.detail = "int";
-		capacityItem.documentation = "Capacity of the array (number of elements it can hold without reallocation)";
-		items.push_back(capacityItem);
+				// For methods, add parentheses
+				if (member.isMethod) {
+					item.insertText = member.name + "()";
+				}
 
+				items.push_back(item);
+			}
+		}
 		return items;
 	}
 

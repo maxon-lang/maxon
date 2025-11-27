@@ -158,6 +158,10 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 					isStringInit = true;
 				}
 			}
+			// Check if initializer is a string slice
+			if (dynamic_cast<SliceExprAST *>(varDecl->initializer.get())) {
+				isStringInit = true;
+			}
 			initVal = generateExpr(varDecl->initializer.get());
 			if (!initVal) {
 				throw std::runtime_error("Failed to generate variable initializer for '" + varDecl->name + "'");

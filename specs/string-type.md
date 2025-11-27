@@ -55,12 +55,44 @@ var short = "hello"        // Stored inline (5 bytes)
 var longer = "this is a longer string"  // Heap allocated
 ```
 
-### String Operations
+### String Properties
 
 ```maxon
 var s = "hello"
-var len = s.count()        // Returns 5
-var empty = s.is_empty()   // Returns false
+var len = s.count          // Returns 5 (codepoint count)
+var empty = s.isEmpty      // Returns false
+```
+
+### String Slicing
+
+Extract substrings using the slice syntax `s[start..end]`:
+
+```maxon
+var s = "hello world"
+var sub1 = s[0..5]         // "hello" (start to end, exclusive)
+var sub2 = s[6..]          // "world" (start to end of string)
+var sub3 = s[..5]          // "hello" (beginning to end, exclusive)
+```
+
+### Search Methods
+
+```maxon
+var s = "hello world"
+s.starts_with("hello")     // true
+s.ends_with("world")       // true
+s.contains("lo wo")        // true
+s.find("world")            // 6 (index, or -1 if not found)
+```
+
+### Transform Methods
+
+```maxon
+var s = "Hello World"
+s.to_upper()               // "HELLO WORLD"
+s.to_lower()               // "hello world"
+
+var padded = "  hello  "
+padded.trim()              // "hello"
 ```
 
 ## Tests
@@ -184,4 +216,201 @@ end 'main'
 ```
 ```stdout
 Hello, Maxon!
+```
+
+<!-- test: count-property -->
+```maxon
+function main() int
+    var s = "hello"
+    print(s.count)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11
+```
+
+<!-- test: isEmpty-property -->
+```maxon
+function main() int
+    var empty = ""
+    var nonempty = "hello"
+    if empty.isEmpty 'check1'
+        print(1)
+    end 'check1'
+    if nonempty.isEmpty 'check2'
+        print(0)
+    else 'check2'
+        print(2)
+    end 'check2'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+2
+```
+
+<!-- test: slice-start-end -->
+```maxon
+function main() int
+    var s = "hello world"
+    var sub = s[0..5]
+    print(sub)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- test: slice-from -->
+```maxon
+function main() int
+    var s = "hello world"
+    var sub = s[6..]
+    print(sub)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+world
+```
+
+<!-- test: slice-to -->
+```maxon
+function main() int
+    var s = "hello world"
+    var sub = s[..5]
+    print(sub)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- test: starts-with -->
+```maxon
+function main() int
+    var s = "hello world"
+    if s.starts_with("hello") then print(1)
+    if s.starts_with("world") then print(0)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: ends-with -->
+```maxon
+function main() int
+    var s = "hello world"
+    if s.ends_with("world") then print(1)
+    if s.ends_with("hello") then print(0)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: contains -->
+```maxon
+function main() int
+    var s = "hello world"
+    if s.contains("lo wo") then print(1)
+    if s.contains("xyz") then print(0)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: find -->
+```maxon
+function main() int
+    var s = "hello world"
+    print(s.find("world"))
+    print(s.find("xyz"))
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+-1
+```
+
+<!-- test: to-upper -->
+```maxon
+function main() int
+    var s = "Hello World"
+    print(s.to_upper())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+HELLO WORLD
+```
+
+<!-- test: to-lower -->
+```maxon
+function main() int
+    var s = "Hello World"
+    print(s.to_lower())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world
+```
+
+<!-- test: trim -->
+```maxon
+function main() int
+    var s = "  hello  "
+    print(s.trim())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
 ```

@@ -134,6 +134,17 @@ class ArrayIndexExprAST : public ExprAST {
 		: ExprAST(l, c), arrayName(name), index(std::move(idx)) {}
 };
 
+// Slice expression (e.g., "str[0..5]", "str[2..]", "str[..5]")
+class SliceExprAST : public ExprAST {
+  public:
+	std::string objectName;
+	std::unique_ptr<ExprAST> start; // nullptr means from beginning (0)
+	std::unique_ptr<ExprAST> end;	// nullptr means to end
+
+	SliceExprAST(const std::string &name, std::unique_ptr<ExprAST> s, std::unique_ptr<ExprAST> e, int l = 0, int c = 0)
+		: ExprAST(l, c), objectName(name), start(std::move(s)), end(std::move(e)) {}
+};
+
 // Array literal expression
 // Two forms: [5]int (zero-initialized array) or [1,2,3] (value-initialized array)
 class ArrayLiteralExprAST : public ExprAST {

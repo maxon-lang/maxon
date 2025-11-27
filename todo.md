@@ -10,6 +10,17 @@ You *Are* Going To Read It
 - extensive math function tests
 - centralize help text from the lsp server analyzer
 
+
+## Ideas
+- array syntax: var x = array of 10 int
+- define structs by usage 
+	var p = Point { x: 3, y: 4 }
+	struct has x and y
+	var p2 = Point { x: 3, y: 4, z: 0 }
+	struct now has x y and z
+	
+
+
 add "run" to maxon
 add "build" to maxon
 add "repl" to maxon

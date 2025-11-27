@@ -174,6 +174,17 @@ bool MIRCodeGenerator::isStringExpression(ExprAST *expr) {
 			return true;
 		}
 	}
+	// Check for string slice expression - slicing a string returns a string
+	if (dynamic_cast<SliceExprAST *>(expr)) {
+		return true;
+	}
+	// Check for string-returning function calls (transform methods)
+	if (auto *callExpr = dynamic_cast<CallExprAST *>(expr)) {
+		if (callExpr->callee == "to_upper" || callExpr->callee == "to_lower" ||
+			callExpr->callee == "trim") {
+			return true;
+		}
+	}
 	return false;
 }
 
@@ -199,6 +210,17 @@ mir::MIRValue *MIRCodeGenerator::generateStringOperand(ExprAST *expr) {
 			mir::MIRValue *leftStr = generateStringOperand(binExpr->left.get());
 			mir::MIRValue *rightStr = generateStringOperand(binExpr->right.get());
 			return generateStringConcat(leftStr, rightStr);
+		}
+	}
+	// Handle slice expressions - use the generateExpr code path
+	if (auto *sliceExpr = dynamic_cast<SliceExprAST *>(expr)) {
+		return generateExpr(sliceExpr);
+	}
+	// Handle call expressions that return strings (to_upper, to_lower, trim)
+	if (auto *callExpr = dynamic_cast<CallExprAST *>(expr)) {
+		if (callExpr->callee == "to_upper" || callExpr->callee == "to_lower" ||
+			callExpr->callee == "trim") {
+			return generateExpr(callExpr);
 		}
 	}
 	throw std::runtime_error("Unsupported string expression type");
@@ -403,7 +425,96 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			throw std::runtime_error("Variable is not an array: " + memberAccessExpr->objectName);
 		}
 
+		// Handle string methods
+		if (varType == "string" && !memberAccessExpr->object) {
+			mir::MIRValue *strAlloca = namedValues[memberAccessExpr->objectName];
+			if (!strAlloca) {
+				throw std::runtime_error("Unknown string variable: " + memberAccessExpr->objectName);
+			}
+			// Load the string pointer
+			mir::MIRValue *strPtr = builder->createLoad(mir::MIRType::getPtr(), strAlloca,
+														memberAccessExpr->objectName + ".strptr");
+
+			// String.count - returns codepoint count (UTF-8 aware)
+			if (memberAccessExpr->memberName == "count") {
+				mir::MIRFunction *countFunc = getOrDeclareFunction("__string_codepoint_count",
+																   mir::MIRType::getInt32(),
+																   {mir::MIRType::getPtr()});
+				return builder->createCall(countFunc, {strPtr}, "str.count");
+			}
+
+			// String.isEmpty - returns true if string has no codepoints
+			if (memberAccessExpr->memberName == "isEmpty") {
+				mir::MIRFunction *emptyFunc = getOrDeclareFunction("__string_is_empty",
+																   mir::MIRType::getInt1(),
+																   {mir::MIRType::getPtr()});
+				return builder->createCall(emptyFunc, {strPtr}, "str.isEmpty");
+			}
+		}
+
 		throw std::runtime_error("Unknown member: " + memberAccessExpr->memberName);
+	}
+
+	// String slice expression (e.g., s[0..5], s[2..], s[..5])
+	if (auto *sliceExpr = dynamic_cast<SliceExprAST *>(expr)) {
+		// Get the source string
+		mir::MIRValue *srcAlloca = namedValues[sliceExpr->objectName];
+		if (!srcAlloca) {
+			throw std::runtime_error("Unknown variable for slicing: " + sliceExpr->objectName);
+		}
+
+		std::string varType = variableTypes[sliceExpr->objectName];
+		if (varType != "string") {
+			throw std::runtime_error("Slicing is currently only supported for strings");
+		}
+
+		// Load the source string pointer (srcAlloca holds ptr to ptr to string)
+		mir::MIRValue *srcPtr = builder->createLoad(mir::MIRType::getPtr(), srcAlloca, sliceExpr->objectName + ".strptr");
+
+		// Allocate space for result string (16 bytes)
+		mir::MIRValue *destAlloca = builder->createAlloca(getTypeFromString("string"), "slice_result");
+
+		// Generate start and end indices
+		mir::MIRValue *startVal;
+		mir::MIRValue *endVal;
+
+		if (sliceExpr->start) {
+			startVal = generateExpr(sliceExpr->start.get());
+		} else {
+			startVal = mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), 0);
+		}
+
+		if (sliceExpr->end) {
+			endVal = generateExpr(sliceExpr->end.get());
+		} else {
+			// Use -1 as sentinel for "to end", runtime will handle it
+			endVal = mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), -1);
+		}
+
+		// Call the appropriate runtime function
+		mir::MIRFunction *sliceFunc;
+		if (!sliceExpr->start && sliceExpr->end) {
+			// s[..end] -> __string_slice_to
+			sliceFunc = getOrDeclareFunction("__string_slice_to",
+											 mir::MIRType::getPtr(),
+											 {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+			builder->createCall(sliceFunc, {destAlloca, srcPtr, endVal});
+		} else if (sliceExpr->start && !sliceExpr->end) {
+			// s[start..] -> __string_slice_from
+			sliceFunc = getOrDeclareFunction("__string_slice_from",
+											 mir::MIRType::getPtr(),
+											 {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+			builder->createCall(sliceFunc, {destAlloca, srcPtr, startVal});
+		} else {
+			// s[start..end] -> __string_slice
+			sliceFunc = getOrDeclareFunction("__string_slice",
+											 mir::MIRType::getPtr(),
+											 {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+			builder->createCall(sliceFunc, {destAlloca, srcPtr, startVal, endVal});
+		}
+
+		// Return pointer to result string struct
+		return destAlloca;
 	}
 
 	if (auto *arrayIndexExpr = dynamic_cast<ArrayIndexExprAST *>(expr)) {
@@ -595,6 +706,75 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 			std::vector<mir::MIRValue *> args = {strPtr};
 			return builder->createCall(strPrintFunc, args, "strprint");
+		}
+
+		// Handle string methods that take string arguments
+		// These are transformed from method syntax: s.starts_with("x") -> starts_with(s, "x")
+		if (callExpr->callee == "starts_with" && callExpr->args.size() == 2 &&
+			isStringExpression(callExpr->args[0].get()) && isStringExpression(callExpr->args[1].get())) {
+			mir::MIRValue *str = generateStringOperand(callExpr->args[0].get());
+			mir::MIRValue *prefix = generateStringOperand(callExpr->args[1].get());
+			mir::MIRFunction *func = getOrDeclareFunction("__string_starts_with",
+														  mir::MIRType::getInt1(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+			return builder->createCall(func, {str, prefix}, "starts_with");
+		}
+
+		if (callExpr->callee == "ends_with" && callExpr->args.size() == 2 &&
+			isStringExpression(callExpr->args[0].get()) && isStringExpression(callExpr->args[1].get())) {
+			mir::MIRValue *str = generateStringOperand(callExpr->args[0].get());
+			mir::MIRValue *suffix = generateStringOperand(callExpr->args[1].get());
+			mir::MIRFunction *func = getOrDeclareFunction("__string_ends_with",
+														  mir::MIRType::getInt1(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+			return builder->createCall(func, {str, suffix}, "ends_with");
+		}
+
+		if (callExpr->callee == "contains" && callExpr->args.size() == 2 &&
+			isStringExpression(callExpr->args[0].get()) && isStringExpression(callExpr->args[1].get())) {
+			mir::MIRValue *haystack = generateStringOperand(callExpr->args[0].get());
+			mir::MIRValue *needle = generateStringOperand(callExpr->args[1].get());
+			mir::MIRFunction *func = getOrDeclareFunction("__string_contains",
+														  mir::MIRType::getInt1(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+			return builder->createCall(func, {haystack, needle}, "contains");
+		}
+
+		if (callExpr->callee == "find" && callExpr->args.size() == 2 &&
+			isStringExpression(callExpr->args[0].get()) && isStringExpression(callExpr->args[1].get())) {
+			mir::MIRValue *haystack = generateStringOperand(callExpr->args[0].get());
+			mir::MIRValue *needle = generateStringOperand(callExpr->args[1].get());
+			mir::MIRFunction *func = getOrDeclareFunction("__string_find",
+														  mir::MIRType::getInt32(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+			return builder->createCall(func, {haystack, needle}, "find");
+		}
+
+		// String transform methods (to_upper, to_lower, trim)
+		if (callExpr->callee == "to_upper" && callExpr->args.size() == 1 &&
+			isStringExpression(callExpr->args[0].get())) {
+			mir::MIRValue *str = generateStringOperand(callExpr->args[0].get());
+			mir::MIRValue *dest = builder->createAlloca(getTypeFromString("string"), "upper_result");
+			mir::MIRFunction *func = getOrDeclareFunction("__string_to_upper",
+														  mir::MIRType::getPtr(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+			builder->createCall(func, {dest, str});
+			return dest;
+		}
+
+		if (callExpr->callee == "to_lower" && callExpr->args.size() == 1 &&
+			isStringExpression(callExpr->args[0].get())) {
+			mir::MIRValue *str = generateStringOperand(callExpr->args[0].get());
+			mir::MIRValue *dest = builder->createAlloca(getTypeFromString("string"), "lower_result");
+			mir::MIRFunction *func = getOrDeclareFunction("__string_to_lower",
+														  mir::MIRType::getPtr(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+			builder->createCall(func, {dest, str});
+			return dest;
+		}
+
+		if (callExpr->callee == "trim" && callExpr->args.size() == 1 &&
+			isStringExpression(callExpr->args[0].get())) {
+			mir::MIRValue *str = generateStringOperand(callExpr->args[0].get());
+			mir::MIRValue *dest = builder->createAlloca(getTypeFromString("string"), "trim_result");
+			mir::MIRFunction *func = getOrDeclareFunction("__string_trim",
+														  mir::MIRType::getPtr(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+			builder->createCall(func, {dest, str});
+			return dest;
 		}
 
 		// Initialize standard library if needed

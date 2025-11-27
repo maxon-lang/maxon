@@ -43,6 +43,7 @@ enum class TokenType {
 	COMMA,	  // ,
 	COLON,	  // :
 	DOT,	  // . (member access / namespace resolution)
+	DOT_DOT,  // .. (range operator for slicing)
 
 	// Special
 	END_OF_FILE,

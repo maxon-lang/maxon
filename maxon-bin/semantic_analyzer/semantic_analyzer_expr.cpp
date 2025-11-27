@@ -399,6 +399,47 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 		return funcInfo.returnType;
 
+	} else if (auto sliceExpr = dynamic_cast<SliceExprAST *>(expr)) {
+		// Check if object variable exists
+		auto varInfo = lookupVariable(sliceExpr->objectName);
+		if (!varInfo.has_value()) {
+			addError("Undefined variable: '" + sliceExpr->objectName + "'" +
+						 std::string("\n  Note: Variable must be declared before slicing"),
+					 expr->line, expr->column);
+			return "error";
+		}
+
+		// Mark variable as used
+		markVariableAsUsed(sliceExpr->objectName);
+
+		// Analyze start expression if present
+		if (sliceExpr->start) {
+			std::string startType = analyzeExpression(sliceExpr->start.get());
+			if (startType != "int" && startType != "error") {
+				addError("Slice start index must be an integer" +
+							 std::string("\n  Found type: ") + startType,
+						 expr->line, expr->column);
+			}
+		}
+
+		// Analyze end expression if present
+		if (sliceExpr->end) {
+			std::string endType = analyzeExpression(sliceExpr->end.get());
+			if (endType != "int" && endType != "error") {
+				addError("Slice end index must be an integer" +
+							 std::string("\n  Found type: ") + endType,
+						 expr->line, expr->column);
+			}
+		}
+
+		// Slicing a string returns a string
+		if (varInfo->type == "string") {
+			return "string";
+		}
+
+		// For arrays, return the same array type (slice creates a view/copy)
+		return varInfo->type;
+
 	} else if (auto arrayExpr = dynamic_cast<ArrayIndexExprAST *>(expr)) {
 		// Check if array variable exists
 		auto varInfo = lookupVariable(arrayExpr->arrayName);
@@ -473,6 +514,21 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		if (memberAccessExpr->memberName == "length" || memberAccessExpr->memberName == "capacity") {
 			// Both .length and .capacity return int
 			return "int";
+		}
+
+		// Support string methods
+		if (objectType == "string") {
+			if (memberAccessExpr->memberName == "count") {
+				// Returns codepoint count
+				return "int";
+			}
+			if (memberAccessExpr->memberName == "isEmpty") {
+				// Returns bool
+				return "bool";
+			}
+			addError("Unknown string member: " + memberAccessExpr->memberName,
+					 expr->line, expr->column);
+			return "error";
 		} else {
 			addError("Unknown member: " + memberAccessExpr->memberName,
 					 expr->line, expr->column);

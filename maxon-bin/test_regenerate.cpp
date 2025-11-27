@@ -602,6 +602,8 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 	std::string tempSource = (tempDir / ("temp_fragment" + workerSuffix + ".maxon")).string();
 	std::string tempOptLL = (tempDir / ("temp-opt" + workerSuffix + ".ir")).string();
 	std::string tempDebugLL = (tempDir / ("temp-debug" + workerSuffix + ".ir")).string();
+	std::string tempOptExe = (tempDir / ("temp-opt" + workerSuffix + ".exe")).string();
+	std::string tempDebugExe = (tempDir / ("temp-debug" + workerSuffix + ".exe")).string();
 
 	std::ofstream tempOut(tempSource);
 	if (!tempOut) {
@@ -673,6 +675,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 				statusMsg = "UNEXPECTED COMPILE ERROR: " + compileError;
 				std::filesystem::remove(tempSource);
 				std::filesystem::remove(tempOptLL);
+				std::filesystem::remove(tempOptExe);
 				return 2;
 			}
 
@@ -686,6 +689,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 
 			std::filesystem::remove(tempSource);
 			std::filesystem::remove(tempOptLL);
+			std::filesystem::remove(tempOptExe);
 			return 1;
 		}
 
@@ -748,6 +752,8 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		std::filesystem::remove(tempSource);
 		std::filesystem::remove(tempOptLL);
 		std::filesystem::remove(tempDebugLL);
+		std::filesystem::remove(tempOptExe);
+		std::filesystem::remove(tempDebugExe);
 
 		statusMsg = "OK";
 		return 0;
@@ -757,6 +763,8 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		std::filesystem::remove(tempSource);
 		std::filesystem::remove(tempOptLL);
 		std::filesystem::remove(tempDebugLL);
+		std::filesystem::remove(tempOptExe);
+		std::filesystem::remove(tempDebugExe);
 		return 2;
 	}
 }

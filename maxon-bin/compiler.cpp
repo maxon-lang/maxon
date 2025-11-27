@@ -199,6 +199,22 @@ std::string compileProgram(const CompilationOptions &options) {
 		analyzer.registerExternalFunction("write_stdout", "int",
 										  {FunctionParameter("buf", "[]char", 0, 0), FunctionParameter("count", "int", 0, 0)});
 
+		// Register string methods (these are runtime intrinsics)
+		analyzer.registerExternalFunction("starts_with", "bool",
+										  {FunctionParameter("str", "string", 0, 0), FunctionParameter("prefix", "string", 0, 0)});
+		analyzer.registerExternalFunction("ends_with", "bool",
+										  {FunctionParameter("str", "string", 0, 0), FunctionParameter("suffix", "string", 0, 0)});
+		analyzer.registerExternalFunction("contains", "bool",
+										  {FunctionParameter("haystack", "string", 0, 0), FunctionParameter("needle", "string", 0, 0)});
+		analyzer.registerExternalFunction("find", "int",
+										  {FunctionParameter("haystack", "string", 0, 0), FunctionParameter("needle", "string", 0, 0)});
+		analyzer.registerExternalFunction("to_upper", "string",
+										  {FunctionParameter("str", "string", 0, 0)});
+		analyzer.registerExternalFunction("to_lower", "string",
+										  {FunctionParameter("str", "string", 0, 0)});
+		analyzer.registerExternalFunction("trim", "string",
+										  {FunctionParameter("str", "string", 0, 0)});
+
 		auto semanticStart = logger.startTimer();
 		std::vector<SemanticError> semanticErrors = analyzer.analyze(mergedProgram.get());
 		logger.logElapsed(LogPhase::Semantic, "Analysis time", semanticStart);

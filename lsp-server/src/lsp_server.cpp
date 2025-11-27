@@ -226,6 +226,11 @@ json LspServer::handleCompletion(const json &params) {
 			item["documentation"] = comp.documentation;
 		}
 
+		// Add insertText if present
+		if (comp.insertText.has_value()) {
+			item["insertText"] = comp.insertText.value();
+		}
+
 		items.push_back(item);
 	}
 

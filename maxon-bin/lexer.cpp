@@ -493,17 +493,24 @@ std::vector<Token> Lexer::tokenize() {
 			tokens.push_back(Token(TokenType::COLON, ":", startLine, startColumn));
 			advance();
 		} else if (c == '.') {
+			// Check for range operator ..
+			if (peek(1) == '.') {
+				tokens.push_back(Token(TokenType::DOT_DOT, "..", startLine, startColumn));
+				advance();
+				advance();
+			}
 			// Check if this is attempting to be a float literal without leading zero (e.g., .5)
-			if (std::isdigit(peek(1))) {
+			else if (std::isdigit(peek(1))) {
 				throw std::runtime_error("Invalid float literal at line " +
 										 std::to_string(startLine) + ", column " +
 										 std::to_string(startColumn) +
 										 ": float literals must have a leading zero (use 0" +
 										 std::string(1, c) + std::string(1, peek(1)) + " instead of " +
 										 std::string(1, c) + std::string(1, peek(1)) + ")");
+			} else {
+				tokens.push_back(Token(TokenType::DOT, ".", startLine, startColumn));
+				advance();
 			}
-			tokens.push_back(Token(TokenType::DOT, ".", startLine, startColumn));
-			advance();
 		} else {
 			// Unknown character - provide helpful error
 			std::string charDesc;

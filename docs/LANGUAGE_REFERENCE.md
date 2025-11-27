@@ -143,8 +143,42 @@ false
 **String Operations:**
 ```maxon
 var s = "hello"              // Small string (SSO)
-var len = s.count()          // Get length in bytes
-var empty = s.is_empty()     // Check if empty
+var greeting = s + " world"  // Concatenation
+print(s)                     // Print string to stdout
+```
+
+**String Properties:**
+```maxon
+var s = "hello"
+var len = s.count            // Codepoint count (UTF-8 aware): 5
+var empty = s.isEmpty        // Check if empty: false
+```
+
+**String Slicing:**
+```maxon
+var s = "hello world"
+var sub1 = s[0..5]           // "hello" (start..end, exclusive end)
+var sub2 = s[6..]            // "world" (from index to end)
+var sub3 = s[..5]            // "hello" (from start to index)
+```
+
+**String Search Methods:**
+```maxon
+var s = "hello world"
+if s.starts_with("hello") then print(1)   // true
+if s.ends_with("world") then print(2)     // true
+if s.contains("lo wo") then print(3)      // true
+var pos = s.find("world")                 // 6 (or -1 if not found)
+```
+
+**String Transform Methods:**
+```maxon
+var s = "Hello World"
+var upper = s.to_upper()     // "HELLO WORLD"
+var lower = s.to_lower()     // "hello world"
+
+var padded = "  hello  "
+var trimmed = padded.trim()  // "hello"
 ```
 
 **Substring Type:**
@@ -561,6 +595,29 @@ trunc(x float) int              // Truncate toward zero
 ```maxon
 format_int(value int) string    // Format int as string
 format_float(value float) string // Format float as string
+```
+
+**String Functions**
+```maxon
+// Properties (accessed as s.property)
+s.count                         // Codepoint count (UTF-8 aware)
+s.isEmpty                       // Returns bool
+
+// Slicing (accessed as s[start..end])
+s[start..end]                   // Substring from start to end (exclusive)
+s[start..]                      // Substring from start to end of string
+s[..end]                        // Substring from beginning to end (exclusive)
+
+// Search methods (accessed as s.method(arg))
+s.starts_with(prefix string) bool   // Check if starts with prefix
+s.ends_with(suffix string) bool     // Check if ends with suffix  
+s.contains(needle string) bool      // Check if contains substring
+s.find(needle string) int           // Find index of substring (-1 if not found)
+
+// Transform methods (accessed as s.method())
+s.to_upper() string                 // Convert to uppercase
+s.to_lower() string                 // Convert to lowercase
+s.trim() string                     // Remove leading/trailing whitespace
 ```
 
 ### Standard Library Modules
