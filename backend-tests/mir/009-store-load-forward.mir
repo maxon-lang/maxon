@@ -1,0 +1,28 @@
+; ExitCode: 6
+; Test: Store-load forwarding for same location
+; This tests that a load immediately after a store to the same location
+; can be replaced with the stored value.
+;
+; Equivalent to:
+;   var x = 0
+;   x = 3
+;   var y = x  ; should forward 3
+;   return x + y  ; 3 + 3 = 6
+
+define i32 @main() {
+entry:
+    %x = alloca i32
+    %y = alloca i32
+    
+    store i32 0, ptr %x
+    store i32 3, ptr %x
+    
+    ; This load should be forwarded to 3
+    %xval = load i32, ptr %x
+    store i32 %xval, ptr %y
+    
+    %xval2 = load i32, ptr %x
+    %yval = load i32, ptr %y
+    %sum = add i32 %xval2, %yval
+    ret i32 %sum
+}

@@ -1,0 +1,34 @@
+; ExitCode: 45
+; Test: Load from one variable after copying to another
+; This tests that a load from variable A is not replaced by a stale value
+; from variable B just because B's value was stored to A earlier.
+;
+; Equivalent to:
+;   var a = 10
+;   var b = 15
+;   a = b      ; a = 15
+;   b = 30     ; b = 30
+;   return a + b  ; should be 15 + 30 = 45
+
+define i32 @main() {
+entry:
+    %a = alloca i32
+    %b = alloca i32
+    
+    ; a = 10, b = 15
+    store i32 10, ptr %a
+    store i32 15, ptr %b
+    
+    ; a = b (copy b to a)
+    %bval = load i32, ptr %b
+    store i32 %bval, ptr %a
+    
+    ; b = 30 (modify b)
+    store i32 30, ptr %b
+    
+    ; return a + b (15 + 30 = 45)
+    %aval = load i32, ptr %a
+    %bval2 = load i32, ptr %b
+    %sum = add i32 %aval, %bval2
+    ret i32 %sum
+}

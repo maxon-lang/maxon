@@ -1,0 +1,30 @@
+; ExitCode: 2
+; Test: Array element access - stores to different indices must not be eliminated
+; This tests that the optimizer doesn't incorrectly mark stores to different
+; array elements as dead stores.
+;
+; Equivalent to:
+;   var arr[3] = [1, 2, 3]
+;   return arr[1]  ; should be 2
+
+define i32 @main() {
+entry:
+    ; Allocate array of 3 i32s (12 bytes)
+    %arr = alloca [3 x i32]
+    
+    ; Store arr[0] = 1
+    %ptr0 = getelementptr [3 x i32], ptr %arr, i64 0, i64 0
+    store i32 1, ptr %ptr0
+    
+    ; Store arr[1] = 2
+    %ptr1 = getelementptr [3 x i32], ptr %arr, i64 0, i64 1
+    store i32 2, ptr %ptr1
+    
+    ; Store arr[2] = 3
+    %ptr2 = getelementptr [3 x i32], ptr %arr, i64 0, i64 2
+    store i32 3, ptr %ptr2
+    
+    ; Load arr[1] and return
+    %val = load i32, ptr %ptr1
+    ret i32 %val
+}

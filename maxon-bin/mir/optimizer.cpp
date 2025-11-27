@@ -1,4 +1,5 @@
 #include "optimizer.h"
+#include "memory_ssa.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -1177,103 +1178,156 @@ bool RedundantLoadStoreEliminationPass::run(MIRModule &module) {
 }
 
 bool RedundantLoadStoreEliminationPass::runOnFunction(MIRFunction &func) {
-	bool changed = false;
-	for (auto &block : func.basicBlocks) {
-		changed |= runOnBasicBlock(*block);
-	}
-	return changed;
-}
-
-bool RedundantLoadStoreEliminationPass::runOnBasicBlock(MIRBasicBlock &block) {
-	// TODO: This pass has a bug where it incorrectly correlates stores and loads
-	// across different allocas, causing incorrect optimization.
-	// Example: var x = 10; var y = 20; x = y; y = 30; return x + y
-	// Gets incorrectly optimized. Disabling until fixed.
-	return false;
+	// Build MemorySSA for the function
+	MemorySSA &mssa = memorySSACache_.getMemorySSA(func);
 
 	bool changed = false;
 
-	// Track the last stored value for each pointer
-	// Key: pointer value, Value: stored value
-	std::unordered_map<MIRValue *, MIRValue *> lastStore;
-
-	// Track which stores to remove (dead stores)
-	std::unordered_set<MIRInstruction *> deadStores;
-
-	// Track which instructions to mark for value replacement
+	// Track load replacements: load instruction -> value to replace with
 	std::unordered_map<MIRInstruction *, MIRValue *> loadReplacements;
 
-	for (auto &inst : block.instructions) {
-		if (inst->opcode == MIROpcode::Store) {
-			// store value, ptr
-			if (inst->operands.size() >= 2) {
-				auto *value = inst->operands[0];
-				auto *ptr = inst->operands[1];
+	// Track dead stores: store instructions that are overwritten before being read
+	std::unordered_set<MIRInstruction *> deadStores;
 
-				// If we have a previous store to the same pointer with no
-				// intervening load, the previous store is dead
-				auto it = lastStore.find(ptr);
-				if (it != lastStore.end()) {
-					// Find the store instruction and mark it for removal
-					for (auto &prevInst : block.instructions) {
-						if (prevInst->opcode == MIROpcode::Store &&
-							prevInst->operands.size() >= 2 &&
-							prevInst->operands[1] == ptr &&
-							prevInst.get() != inst.get() &&
-							deadStores.find(prevInst.get()) == deadStores.end()) {
-							// Check if it's the most recent store
-							if (prevInst->operands[0] == it->second) {
-								deadStores.insert(prevInst.get());
-								changed = true;
-							}
+	// Process each block
+	for (auto &block : func.basicBlocks) {
+		// Track stores in this block
+		// We store a list of (pointer, store instruction, stored value) tuples
+		// and use mustAlias to find exact matches
+		struct StoreInfo {
+			MIRValue *ptr;
+			MIRInstruction *inst;
+			MIRValue *value;
+		};
+		std::vector<StoreInfo> storesInBlock;
+
+		for (auto &inst : block->instructions) {
+			if (inst->opcode == MIROpcode::Store) {
+				if (inst->operands.size() >= 2) {
+					auto *value = inst->operands[0];
+					auto *ptr = inst->operands[1];
+
+					// Check if there's a previous store to the EXACT same location
+					for (auto &storeInfo : storesInBlock) {
+						if (mssa.mustAlias(ptr, storeInfo.ptr)) {
+							// Previous store to exact same location is dead
+							deadStores.insert(storeInfo.inst);
+							changed = true;
+							// Update the existing entry instead of adding new one
+							storeInfo.inst = inst.get();
+							storeInfo.value = value;
+							goto nextInst;
 						}
 					}
+
+					// No exact match found - add new store info
+					storesInBlock.push_back({ptr, inst.get(), value});
+				}
+			} else if (inst->opcode == MIROpcode::Load) {
+				if (!inst->operands.empty()) {
+					auto *ptr = inst->operands[0];
+					auto *underlyingObj = mssa.getUnderlyingObject(ptr);
+
+					// Look for a store to the EXACT same location
+					StoreInfo *matchingStore = nullptr;
+					for (auto &storeInfo : storesInBlock) {
+						if (mssa.mustAlias(ptr, storeInfo.ptr)) {
+							matchingStore = &storeInfo;
+							break;
+						}
+					}
+
+					if (matchingStore) {
+						MIRValue *storedValue = matchingStore->value;
+
+						// Check if the stored value is "safe" to propagate:
+						// - Constants are always safe
+						// - Values from the same underlying object are safe
+						// - Load results from OTHER allocas may become stale
+						bool safeToPropagate = storedValue->isConstant();
+
+						if (!safeToPropagate && storedValue->definingInst) {
+							// Check if this is a load from the same alloca
+							if (storedValue->definingInst->opcode == MIROpcode::Load &&
+								!storedValue->definingInst->operands.empty()) {
+								auto *sourcePtr = storedValue->definingInst->operands[0];
+								auto *sourceObj = mssa.getUnderlyingObject(sourcePtr);
+								// Only safe if same underlying object (self-reference)
+								safeToPropagate = (sourceObj == underlyingObj);
+							} else if (storedValue->definingInst->opcode != MIROpcode::Load) {
+								// Arithmetic results, etc. are safe
+								safeToPropagate = true;
+							}
+						} else if (!storedValue->definingInst) {
+							// Parameters, globals - be conservative
+							safeToPropagate = (storedValue->kind == MIRValueKind::Parameter);
+						}
+
+						if (safeToPropagate) {
+							loadReplacements[inst.get()] = storedValue;
+							changed = true;
+						}
+					}
+
+					// This load reads from a location - remove stores to locations that
+					// may-alias with the load from the "dead store" candidates
+					// (since their value might have been needed)
+					storesInBlock.erase(
+						std::remove_if(storesInBlock.begin(), storesInBlock.end(),
+									   [&](const StoreInfo &si) {
+										   return mssa.mayAlias(ptr, si.ptr);
+									   }),
+						storesInBlock.end());
+				}
+			} else if (inst->opcode == MIROpcode::Call || inst->opcode == MIROpcode::CallIndirect) {
+				// Check if call may write memory
+				bool mayWrite = true;
+				if (inst->callDoesNotWriteMemory) {
+					mayWrite = false;
+				} else if (inst->calleeFunc && inst->calleeFunc->doesNotWriteMemory) {
+					mayWrite = false;
 				}
 
-				lastStore[ptr] = value;
-			}
-		} else if (inst->opcode == MIROpcode::Load) {
-			// load ptr
-			if (inst->operands.size() >= 1) {
-				auto *ptr = inst->operands[0];
-
-				// If we have a recent store to this pointer, use the stored value
-				auto it = lastStore.find(ptr);
-				if (it != lastStore.end()) {
-					loadReplacements[inst.get()] = it->second;
-					changed = true;
+				if (mayWrite) {
+					// Conservative: function call may modify any memory
+					// Clear all tracked stores (they're no longer known to be dead)
+					storesInBlock.clear();
 				}
 			}
-		} else if (inst->opcode == MIROpcode::Call) {
-			// Function calls may modify memory - invalidate all tracked stores
-			lastStore.clear();
+		nextInst:;
 		}
 	}
 
 	// Apply load replacements
 	for (auto &[loadInst, replacement] : loadReplacements) {
 		if (loadInst->result != nullptr) {
-			opt_utils::replaceAllUsesInBlock(block, loadInst->result, replacement);
-			if (block.parent != nullptr) {
-				for (auto &otherBlock : block.parent->basicBlocks) {
-					if (otherBlock.get() != &block) {
-						opt_utils::replaceAllUsesInBlock(*otherBlock, loadInst->result, replacement);
-					}
-				}
-			}
+			opt_utils::replaceAllUsesWith(func, loadInst->result, replacement);
 		}
 	}
 
 	// Remove dead stores
-	auto &instructions = block.instructions;
-	instructions.erase(
-		std::remove_if(instructions.begin(), instructions.end(),
-					   [&](const std::unique_ptr<MIRInstruction> &inst) {
-						   return deadStores.find(inst.get()) != deadStores.end();
-					   }),
-		instructions.end());
+	for (auto &block : func.basicBlocks) {
+		auto &instructions = block->instructions;
+		instructions.erase(
+			std::remove_if(instructions.begin(), instructions.end(),
+						   [&](const std::unique_ptr<MIRInstruction> &inst) {
+							   return deadStores.count(inst.get()) > 0;
+						   }),
+			instructions.end());
+	}
+
+	// Invalidate MemorySSA cache if we made changes
+	if (changed) {
+		memorySSACache_.invalidate(func);
+	}
 
 	return changed;
+}
+
+bool RedundantLoadStoreEliminationPass::runOnBasicBlock(MIRBasicBlock &block) {
+	// This method is no longer used - processing is done in runOnFunction
+	// Keep it for API compatibility
+	return false;
 }
 
 //==============================================================================

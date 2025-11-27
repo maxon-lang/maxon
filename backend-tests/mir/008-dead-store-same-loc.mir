@@ -1,0 +1,23 @@
+; ExitCode: 30
+; Test: Dead store elimination for same location
+; This tests that consecutive stores to the SAME location properly
+; eliminate the first store as dead.
+;
+; Equivalent to:
+;   var x = 10  ; dead store
+;   x = 20      ; dead store
+;   x = 30      ; live
+;   return x    ; should be 30
+
+define i32 @main() {
+entry:
+    %x = alloca i32
+    
+    ; These first two stores should be eliminated as dead
+    store i32 10, ptr %x
+    store i32 20, ptr %x
+    store i32 30, ptr %x
+    
+    %val = load i32, ptr %x
+    ret i32 %val
+}

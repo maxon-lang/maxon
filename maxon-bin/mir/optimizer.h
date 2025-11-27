@@ -1,5 +1,6 @@
 #pragma once
 
+#include "memory_ssa.h"
 #include "mir.h"
 #include <functional>
 #include <iostream>
@@ -272,7 +273,10 @@ class SimpleFunctionInliningPass : public OptimizationPass {
 //==============================================================================
 
 /**
- * Eliminate redundant loads and stores within a basic block.
+ * Eliminate redundant loads and stores using MemorySSA.
+ *
+ * This pass uses MemorySSA to precisely track memory dependencies, avoiding
+ * incorrect optimizations when values are copied between allocas.
  *
  * Examples:
  *   store x, [ptr]
@@ -280,6 +284,10 @@ class SimpleFunctionInliningPass : public OptimizationPass {
  *
  *   store x, [ptr]
  *   store y, [ptr]  (eliminate first store)
+ *
+ * Safe handling of copies:
+ *   var x = 10; var y = 20; x = y; y = 30; return x + y
+ *   Correctly returns 50 (x gets 20, y gets 30)
  */
 class RedundantLoadStoreEliminationPass : public OptimizationPass {
   public:
@@ -289,6 +297,9 @@ class RedundantLoadStoreEliminationPass : public OptimizationPass {
   private:
 	bool runOnFunction(MIRFunction &func);
 	bool runOnBasicBlock(MIRBasicBlock &block);
+
+	// Cached MemorySSA instances
+	MemorySSACache memorySSACache_;
 };
 
 //==============================================================================

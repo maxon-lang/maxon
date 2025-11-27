@@ -1,0 +1,35 @@
+; ExitCode: 50
+; Test: Copy value between variables, then modify source
+; This tests that the optimizer correctly tracks memory dependencies
+; and doesn't propagate stale values after the source is modified.
+;
+; Equivalent to:
+;   var x = 10
+;   var y = 20  
+;   x = y      ; x = 20
+;   y = 30     ; y = 30
+;   return x + y  ; should be 20 + 30 = 50
+
+define i32 @main() {
+entry:
+    ; Allocate x and y
+    %x = alloca i32
+    %y = alloca i32
+    
+    ; x = 10, y = 20
+    store i32 10, ptr %x
+    store i32 20, ptr %y
+    
+    ; x = y (copy y's value to x)
+    %tmp = load i32, ptr %y
+    store i32 %tmp, ptr %x
+    
+    ; y = 30 (modify y after copy)
+    store i32 30, ptr %y
+    
+    ; return x + y (should be 20 + 30 = 50)
+    %xval = load i32, ptr %x
+    %yval = load i32, ptr %y
+    %sum = add i32 %xval, %yval
+    ret i32 %sum
+}

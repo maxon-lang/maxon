@@ -54,6 +54,7 @@ set(SOURCES
     mir/mir_builder.cpp
     mir/mir_parser.cpp
     mir/optimizer.cpp
+    mir/memory_ssa.cpp
     mir/ssa_verifier.cpp
     # Custom x86-64 backend
     backend/x86_codegen.cpp

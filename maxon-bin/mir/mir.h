@@ -239,6 +239,11 @@ class MIRInstruction {
 	int sourceLine = 0;
 	int sourceColumn = 0;
 
+	// Memory attributes for Call/CallIndirect (override callee's attributes)
+	bool callDoesNotReadMemory = false;
+	bool callDoesNotWriteMemory = false;
+	bool callOnlyAccessesArgMemory = false;
+
 	// Parent basic block
 	MIRBasicBlock *parent = nullptr;
 
@@ -329,6 +334,11 @@ class MIRFunction {
 
 	// Linkage
 	bool isExternal = false; // Declaration only (no body)
+
+	// Memory attributes (for optimization)
+	bool doesNotReadMemory = false;		// Function does not read from memory (writeonly)
+	bool doesNotWriteMemory = false;	// Function does not write to memory (readonly)
+	bool onlyAccessesArgMemory = false; // Function only accesses memory through pointer args
 
 	MIRFunction(const std::string &n, MIRType *retType) : name(n), returnType(retType) {}
 
