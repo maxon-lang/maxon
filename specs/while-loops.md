@@ -80,7 +80,7 @@ var i = 3
 while i > 0 'loop'
 x = x + 2
 i = i - 1
-if i = 0 'check'
+if i == 0 'check'
 break
 end 'check'
 end 'loop'
@@ -97,7 +97,7 @@ function main() int
     var x = 5
     while true 'loop'
         x = x + 2
-        if x = 11 'check'
+        if x == 11 'check'
             break
         end 'check'
     end 'loop'

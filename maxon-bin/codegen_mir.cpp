@@ -201,12 +201,6 @@ mir::MIRFunction *MIRCodeGenerator::getOrDeclareFunction(const std::string &name
 }
 
 void MIRCodeGenerator::initStandardLibrary() {
-	// Declare print function
-	getOrDeclareFunction("print", mir::MIRType::getVoid(), {mir::MIRType::getInt32()});
-
-	// Declare print_float function
-	getOrDeclareFunction("print_float", mir::MIRType::getVoid(), {mir::MIRType::getFloat64()});
-
 	// Declare write_stdout function (used by print) - returns bytes written or error code
 	getOrDeclareFunction("write_stdout",
 						 mir::MIRType::getInt32(),

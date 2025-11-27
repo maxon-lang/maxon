@@ -121,10 +121,10 @@ For loops support `break` and `continue` statements:
 function main() int
     var sum = 0
     for i in range(0, 10) 'loop'
-        if i = 5 'skip'
+        if i == 5 'skip'
             continue  // Skip 5
         end 'skip'
-        if i = 8 'stop'
+        if i == 8 'stop'
             break  // Stop at 8
         end 'stop'
         sum = sum + i
@@ -225,7 +225,7 @@ end 'main'
 function main() int
     var sum = 0
     for i in range(0, 10) 'loop'
-        if i = 5 'check'
+        if i == 5 'check'
             break
         end 'check'
         sum = sum + i
@@ -243,7 +243,7 @@ end 'main'
 function main() int
     var sum = 0
     for i in range(0, 10) 'loop'
-        if i = 5 'skip'
+        if i == 5 'skip'
             continue
         end 'skip'
         sum = sum + i

@@ -45,7 +45,7 @@ break 'label'   // Break from loop with specified label
 var x = 5
 while true 'loop'
     x = x + 2
-    if x = 11 'check'
+    if x == 11 'check'
         break
     end 'check'
 end 'loop'
@@ -71,7 +71,7 @@ while x < 10 'outer'
     x = x + 1
     while y < 10 'inner'
         y = y + 1
-        if y = 3 'check'
+        if y == 3 'check'
             continue 'outer'  // Skips to next iteration of outer loop
         end 'check'
     end 'inner'
@@ -94,7 +94,7 @@ function main() int
     var x = 0
     while true 'loop'
         x = x + 1
-        if x = 5 'check'
+        if x == 5 'check'
             break
         end 'check'
     end 'loop'
@@ -111,7 +111,7 @@ function main() int
     var x = 0
     while true 'loop'
         x = x + 1
-        if x = 10 break
+        if x == 10 then break
     end 'loop'
     return x
 end 'main'
@@ -128,7 +128,7 @@ function main() int
     while x < 100 'loop'
         x = x + 1
         count = count + 1
-        if count = 3 'check'
+        if count == 3 'check'
             break
         end 'check'
     end 'loop'
@@ -146,7 +146,7 @@ function main() int
     while x < 10 'outer'
         x = x + 1
         while true 'inner'
-            if x = 3 'check'
+            if x == 3 'check'
                 break 'outer'
             end 'check'
             break 'inner'
@@ -168,7 +168,7 @@ function main() int
         x = x + 1
         while y < 10 'inner'
             y = y + 1
-            if y = 3 'check'
+            if y == 3 'check'
                 break 'inner'
             end 'check'
         end 'inner'
@@ -188,7 +188,7 @@ function main() int
         while true 'middle'
             while true 'inner'
                 result = result + 1
-                if result = 5 'check'
+                if result == 5 'check'
                     break 'outer'
                 end 'check'
             end 'inner'
@@ -212,7 +212,7 @@ function main() int
         while y < 5 'inner'
             y = y + 1
             count = count + 1
-            if y = 2 'check'
+            if y == 2 'check'
                 continue 'outer'
             end 'check'
         end 'inner'
@@ -234,7 +234,7 @@ function main() int
         var y = 0
         while y < 5 'inner'
             y = y + 1
-            if y = 3 'check'
+            if y == 3 'check'
                 continue 'inner'
             end 'check'
             sum = sum + 1
@@ -261,7 +261,7 @@ function main() int
             while c < 4 'inner'
                 c = c + 1
                 count = count + 1
-                if c = 2 'check'
+                if c == 2 'check'
                     continue 'middle'
                 end 'check'
             end 'inner'

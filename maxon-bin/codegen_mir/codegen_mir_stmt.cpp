@@ -513,8 +513,9 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		for (auto &s : ifStmt->thenBody) {
 			generateStmt(s.get(), function);
 		}
-		bool thenTerminated = thenBB->hasTerminator();
-		if (!thenTerminated) {
+		// Check current insert block (may differ from thenBB if body contains control flow)
+		mir::MIRBasicBlock *thenEndBB = builder->getInsertBlock();
+		if (!thenEndBB->hasTerminator()) {
 			builder->createBr(mergeBB);
 		}
 
@@ -525,7 +526,9 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			for (auto &s : ifStmt->elseBody) {
 				generateStmt(s.get(), function);
 			}
-			elseTerminated = elseBB->hasTerminator();
+			// Check current insert block (may differ from elseBB if body contains control flow)
+			mir::MIRBasicBlock *elseEndBB = builder->getInsertBlock();
+			elseTerminated = elseEndBB->hasTerminator();
 			if (!elseTerminated) {
 				builder->createBr(mergeBB);
 			}

@@ -85,7 +85,7 @@ end 'main'
 ```maxon
 function main() int
     var x = abs(0.0)
-    if x = 0.0 'check'
+    if x == 0.0 'check'
         return 0
     end 'check'
     return 1

@@ -6,48 +6,47 @@
 /// Returns the number of bytes written
 /// Buffer must be at least 12 bytes (enough for -2147483648\0)
 export function format_int_array(value int, buffer []char) int
-        // Handle zero special case
-        if value = 0 'zero_case'
-            buffer[0] = '0' as char
-            return 1
-        end 'zero_case'
-        
-        // Temporary buffer for digit reversal
-        var temp = [12]char
-        var pos = 11
-        
-        // Handle negative numbers
-        var negative = 0
-        var abs_value = value
-        if value < 0 'negative_check'
-            negative = 1
-            abs_value = 0 - value
-        end 'negative_check'
-        
-        // Convert digits (right to left)
-        while abs_value > 0 'convert'
-            var digit = abs_value % 10
-            var digit_char = ('0' as int) + digit
-            temp[pos] = digit_char as char
-            pos = pos - 1
-            abs_value = abs_value / 10
-        end 'convert'
-        
-        // Add negative sign if needed
-        if negative = 1 'add_sign'
-            temp[pos] = '-' as char
-            pos = pos - 1
-        end 'add_sign'
-        
-        // Copy from temp to output buffer
-        var start = pos + 1
-        var length = 12 - start
-        var i = 0
-        while i < length 'copy'
-            buffer[i] = temp[start + i]
-            i = i + 1
-        end 'copy'
-        
-        return length
-end 'format_int_array'
+// Handle zero special case
+if value == 0 'zero_case'
+    buffer[0] = '0' as char
+    return 1
+end 'zero_case'
 
+// Temporary buffer for digit reversal
+var temp = [12]char
+var pos = 11
+
+// Handle negative numbers
+var negative = 0
+var abs_value = value
+if value < 0 'negative_check'
+    negative = 1
+    abs_value = 0 - value
+end 'negative_check'
+
+// Convert digits (right to left)
+while abs_value > 0 'convert'
+    var digit = abs_value mod 10
+    var digit_char = ('0' as int) + digit
+    temp[pos] = digit_char as char
+    pos = pos - 1
+    abs_value = abs_value / 10
+end 'convert'
+
+// Add negative sign if needed
+if negative == 1 'add_sign'
+    temp[pos] = '-' as char
+    pos = pos - 1
+end 'add_sign'
+
+// Copy from temp to output buffer
+var start = pos + 1
+var length = 12 - start
+var i = 0
+while i < length 'copy'
+    buffer[i] = temp[start + i]
+    i = i + 1
+end 'copy'
+
+return length
+end 'format_int_array'

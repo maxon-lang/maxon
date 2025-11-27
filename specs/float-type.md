@@ -16,8 +16,8 @@ Key implementation:
 - Float literals must contain a decimal point
 - Parsed in `Lexer::readNumber()` when '.' is encountered
 - Supports arithmetic: `+`, `-`, `*`, `/` (no modulo)
-- Supports comparison: `=`, `!=`, `<`, `>`, `<=`, `>=`
-- Can be cast to `int` (truncates toward zero)
+- Supports comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
+- Cannot be cast to `int`; use `trunc()` for truncation toward zero
 - Math intrinsics operate on floats: `sin`, `cos`, `tan`, `sqrt`, `abs`, `floor`, `ceil`, `round`, `trunc`
 - Integer values are promoted to float in mixed operations
 

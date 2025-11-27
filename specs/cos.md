@@ -85,7 +85,7 @@ end 'main'
 ```maxon
 function main() int
     var result = cos(0.0)
-    if result = 1.0 'check'
+    if result == 1.0 'check'
         return 0
     end 'check'
     return 1
@@ -100,7 +100,7 @@ end 'main'
 function main() int
     var x = 0  // int
     var result = cos(x)  // x promoted to 0.0
-    if result = 1.0 'check'
+    if result == 1.0 'check'
         return 0
     end 'check'
     return 1

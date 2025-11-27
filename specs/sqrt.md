@@ -90,7 +90,7 @@ end 'main'
 ```maxon
 function main() int
     var result = sqrt(0.0)
-    if result = 0.0 'check'
+    if result == 0.0 'check'
         return 0
     end 'check'
     return 1

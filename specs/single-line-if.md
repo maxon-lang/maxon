@@ -10,26 +10,26 @@ category: control-flow
 Single-line if statements provide a compact syntax for simple conditionals.
 
 **Implementation Details:**
-- Parser: `parseIf()` detects single-line vs multi-line based on newline
+- Parser: `parseIf()` detects single-line vs multi-line based on `then` keyword
 - No block identifier required for single-line
-- Statement must be on the same line as the condition
+- Uses `then` keyword to introduce the statement
 - Codegen: Same as multi-line if, creates conditional branch
 
 **Syntax:**
 ```
-if <condition> <statement>
+if <condition> then <statement>
 ```
 
 **Restrictions:**
 - Only one statement allowed
-- Statement must be on the same line
-- No `else` clause possible
-- Common use: `if <cond> break`, `if <cond> return <value>`
+- `then` keyword required before statement
+- Single-line else is possible: `if <cond> then <stmt> else <stmt>`
+- Common use: `if <cond> then break`, `if <cond> then return <value>`
 
 **Parser Behavior:**
-- If newline found after condition → expects block identifier
-- If statement found on same line → single-line mode
-- Error if statement is on next line without block identifier
+- If `then` keyword found after condition → single-line mode
+- If block identifier found after condition → multi-line mode
+- Error if neither `then` nor block identifier found
 
 ## Documentation
 
@@ -40,7 +40,7 @@ Compact syntax for simple conditional statements.
 **Syntax:**
 
 ```maxon
-if <condition> <statement>
+if <condition> then <statement>
 ```
 **Example:**
 
@@ -48,16 +48,16 @@ if <condition> <statement>
 var x = 11
 var i = 5
 while i > 0 'loop'
-    if x = 11 break
+    if x == 11 then break
     i = i - 1
 end 'loop'
 ```
 **Notes:**
-- Condition and statement must be on the same line
+- Use `then` keyword before the statement
 - No block identifier needed
 - Only one statement allowed
-- No else clause possible
-- Ideal for simple guards like `if x = 0 break` or `if done return result`
+- Single-line else is possible: `if <cond> then <stmt> else <stmt>`
+- Ideal for simple guards like `if x == 0 then break` or `if done then return result`
 
 ## Tests
 
@@ -67,7 +67,7 @@ function main() int
 	var x = 11
 	var i = 5
 	while i > 0 'loop'
-		if x = 11 break
+		if x == 11 then break
 		i = i - 1
 	end 'loop'
 	return i
@@ -81,7 +81,7 @@ end 'main'
 ```maxon
 function main() int
 	var x = 42
-	if x = 42 return 100
+	if x == 42 then return 100
 	return 0
 end 'main'
 ```
@@ -94,7 +94,7 @@ end 'main'
 function main() int
 	var x = 10
 	var result = 0
-	if x = 10 result = 42
+	if x == 10 then result = 42
 	return result
 end 'main'
 ```

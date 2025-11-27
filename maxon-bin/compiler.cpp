@@ -197,7 +197,7 @@ std::string compileProgram(const CompilationOptions &options) {
 
 		// Register runtime functions so stdlib can use them
 		analyzer.registerExternalFunction("write_stdout", "int",
-										  {FunctionParameter("buf", "ptr", 0, 0), FunctionParameter("count", "int", 0, 0)});
+										  {FunctionParameter("buf", "[]char", 0, 0), FunctionParameter("count", "int", 0, 0)});
 
 		auto semanticStart = logger.startTimer();
 		std::vector<SemanticError> semanticErrors = analyzer.analyze(mergedProgram.get());

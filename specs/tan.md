@@ -60,7 +60,7 @@ var z = tan(quarterPi)    // 1.0 (approximately)
 ```maxon
 function main() int
     var result = tan(0.0)
-    if result = 0.0 'check'
+    if result == 0.0 'check'
         return 0
     end 'check'
     return 1
@@ -116,7 +116,7 @@ end 'main'
 function main() int
     var x = 0  // int
     var result = tan(x)  // x promoted to 0.0
-    if result = 0.0 'check'
+    if result == 0.0 'check'
         return 0
     end 'check'
     return 1
