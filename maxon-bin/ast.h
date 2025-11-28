@@ -125,14 +125,23 @@ class CallExprAST : public ExprAST {
 		: ExprAST(l, col), callee(c), args(std::move(a)) {}
 };
 
-// Array index expression (e.g., "array[5]")
+// Array index expression (e.g., "array[5]" or "struct.field[5]")
 class ArrayIndexExprAST : public ExprAST {
   public:
-	std::string arrayName;
+	std::string arrayName;				// For simple array[i] access
+	std::unique_ptr<ExprAST> arrayExpr; // For complex array access (e.g., struct.field[i])
 	std::unique_ptr<ExprAST> index;
 
+	// Constructor for simple array[i] access
 	ArrayIndexExprAST(const std::string &name, std::unique_ptr<ExprAST> idx, int l = 0, int c = 0)
-		: ExprAST(l, c), arrayName(name), index(std::move(idx)) {}
+		: ExprAST(l, c), arrayName(name), arrayExpr(nullptr), index(std::move(idx)) {}
+
+	// Constructor for complex expr[i] access (e.g., struct.field[i])
+	ArrayIndexExprAST(std::unique_ptr<ExprAST> arrExpr, std::unique_ptr<ExprAST> idx, int l = 0, int c = 0)
+		: ExprAST(l, c), arrayName(""), arrayExpr(std::move(arrExpr)), index(std::move(idx)) {}
+
+	// Helper to check if this is a complex array access
+	bool hasArrayExpr() const { return arrayExpr != nullptr; }
 };
 
 // Slice expression (e.g., "str[0..5]", "str[2..]", "str[..5]")
@@ -258,6 +267,18 @@ class MemberAssignStmtAST : public StmtAST {
 		: StmtAST(l, c), objectName(obj), memberName(member), value(std::move(val)) {}
 };
 
+// Struct member array element assignment statement (e.g., "obj.arrayField[i] = value")
+class MemberArrayAssignStmtAST : public StmtAST {
+  public:
+	std::string objectName;
+	std::string memberName;
+	std::unique_ptr<ExprAST> index;
+	std::unique_ptr<ExprAST> value;
+
+	MemberArrayAssignStmtAST(const std::string &obj, const std::string &member, std::unique_ptr<ExprAST> idx, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
+		: StmtAST(l, c), objectName(obj), memberName(member), index(std::move(idx)), value(std::move(val)) {}
+};
+
 // If statement
 class IfStmtAST : public StmtAST {
   public:
@@ -363,7 +384,7 @@ struct InterfaceMethodSignature {
 	int column;
 
 	InterfaceMethodSignature(const std::string &n, std::vector<FunctionParameter> params,
-							const std::string &ret, int l = 0, int c = 0)
+							 const std::string &ret, int l = 0, int c = 0)
 		: name(n), parameters(std::move(params)), returnType(ret), line(l), column(c) {}
 };
 
@@ -378,7 +399,7 @@ class InterfaceDefAST : public ASTNode {
 	int column;
 
 	InterfaceDefAST(const std::string &n, std::vector<InterfaceMethodSignature> m,
-				   int l = 0, int c = 0, const std::string &ns = "", bool exp = false)
+					int l = 0, int c = 0, const std::string &ns = "", bool exp = false)
 		: name(n), namespaceName(ns), methods(std::move(m)), isExported(exp), line(l), column(c) {}
 };
 

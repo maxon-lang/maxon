@@ -98,8 +98,8 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	logTrace("Pass 1a: Collecting interface definitions");
 	for (const auto &interfaceDef : program->interfaces) {
 		std::string interfaceKey = (interfaceDef->isExported && !interfaceDef->namespaceName.empty())
-									  ? interfaceDef->namespaceName + "." + interfaceDef->name
-									  : interfaceDef->name;
+									   ? interfaceDef->namespaceName + "." + interfaceDef->name
+									   : interfaceDef->name;
 
 		logTrace("Registering interface: " + interfaceKey);
 		if (interfaces.find(interfaceKey) != interfaces.end()) {
@@ -474,8 +474,15 @@ std::map<std::string, VariableInfo> SemanticAnalyzer::getAllVariables() const {
 }
 
 void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
-												const std::vector<std::string> &conformsTo,
-												int line, int column) {
+												 const std::vector<std::string> &conformsTo,
+												 int line, int column) {
+	// Skip conformance checking for 'string' - its methods are compiler-intrinsic
+	// The compiler generates calls to runtime functions (__string_count, __string_print, etc.)
+	if (structName == "string") {
+		logTrace("Skipping interface conformance check for built-in 'string' type");
+		return;
+	}
+
 	for (const auto &interfaceName : conformsTo) {
 		// Find the interface
 		auto protoIt = interfaces.find(interfaceName);

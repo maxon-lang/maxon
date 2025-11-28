@@ -11,219 +11,104 @@
 #include <stdexcept>
 
 //==============================================================================
-// String Literal Generation (Small String Optimization)
+// String Literal Generation
 //==============================================================================
 
-// SSO constants
-constexpr size_t SSO_MAX_LENGTH = 15; // Max string length for inline storage
-
-mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *strExpr) {
-	// All string literals use SSO (Small String Optimization)
-	if (strExpr->value.length() <= SSO_MAX_LENGTH) {
-		return generateSmallStringLiteral(strExpr->value);
-	} else {
-		return generateLargeStringLiteral(strExpr->value);
+// Helper function to get Maxon type from an AST expression
+// This is used for type-aware code generation (e.g., Equatable comparison)
+static std::string getExpressionMaxonType(ExprAST *expr,
+										  const std::map<std::string, std::string> &variableTypes,
+										  const std::map<std::string, mir::MIRType *> &structTypes) {
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
+		auto it = variableTypes.find(varExpr->name);
+		if (it != variableTypes.end()) {
+			return it->second;
+		}
+		return "";
 	}
+	if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(expr)) {
+		(void)strLit; // Unused, just for type check
+		return "string";
+	}
+	if (auto *structInit = dynamic_cast<StructInitExprAST *>(expr)) {
+		return structInit->structName;
+	}
+	if (auto *intLit = dynamic_cast<NumberExprAST *>(expr)) {
+		(void)intLit;
+		return "int";
+	}
+	if (auto *floatLit = dynamic_cast<FloatExprAST *>(expr)) {
+		(void)floatLit;
+		return "float";
+	}
+	if (auto *boolLit = dynamic_cast<BooleanExprAST *>(expr)) {
+		(void)boolLit;
+		return "bool";
+	}
+	if (auto *memberAccess = dynamic_cast<MemberAccessExprAST *>(expr)) {
+		// Try to determine member access type
+		if (!memberAccess->objectName.empty()) {
+			auto it = variableTypes.find(memberAccess->objectName);
+			if (it != variableTypes.end()) {
+				// Need to look up field type - for now return empty
+				// The caller will fall back to non-Equatable path
+			}
+		}
+		return "";
+	}
+	// For other expression types, return empty (will use default behavior)
+	return "";
 }
 
-mir::MIRValue *MIRCodeGenerator::generateSmallStringLiteral(const std::string &str) {
-	// Small String Optimization (SSO)
-	// Layout: 16 bytes total
-	// [bytes 0-14: UTF-8 data, zero-padded]
-	// [byte 15: remaining capacity (15 - length), MSB = 0 for small string]
+// String layout: struct with _data field which is [16]byte
+// _data[0..14] is string data, _data[15] is length
 
+mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *strExpr) {
+	// Get the string struct type (defined by stdlib with _data [16]byte field)
 	mir::MIRType *stringType = getTypeFromString("string");
 
 	// Create alloca for the string struct
-	mir::MIRValue *stringAlloca = builder->createAlloca(stringType, "str.sso");
+	mir::MIRValue *stringAlloca = builder->createAlloca(stringType, "str.literal");
 
-	// Pack the string data into two i64 values
+	// Get the string content
+	const std::string &str = strExpr->value;
+	size_t len = std::min(str.length(), size_t(15)); // Cap at 15 bytes
+
+	// Get pointer to the _data array field (field 0)
+	mir::MIRValue *dataPtr = builder->createStructGEP(stringType, stringAlloca, 0, "str.data.ptr");
+
+	// Pack the string data into two i64 values for efficient storage
+	// The array is [16 x i8], stored as two i64 words in memory
 	// First i64: bytes 0-7
-	// Second i64: bytes 8-15 (includes capacity byte at position 7 of this word)
+	// Second i64: bytes 8-15 (byte 15 is the length)
 
 	uint64_t word0 = 0;
 	uint64_t word1 = 0;
-	size_t len = str.length();
 
 	// Copy bytes into word0 (bytes 0-7)
 	for (size_t i = 0; i < std::min(len, size_t(8)); i++) {
 		word0 |= (static_cast<uint64_t>(static_cast<unsigned char>(str[i])) << (i * 8));
 	}
 
-	// Copy bytes into word1 (bytes 8-14), leave byte 15 for capacity
+	// Copy bytes into word1 (bytes 8-14)
 	for (size_t i = 8; i < std::min(len, size_t(15)); i++) {
 		word1 |= (static_cast<uint64_t>(static_cast<unsigned char>(str[i])) << ((i - 8) * 8));
 	}
 
-	// Set capacity byte at position 15 (byte 7 of word1)
-	// Capacity = 15 - length, MSB = 0 for small string
-	uint8_t capacityByte = static_cast<uint8_t>(SSO_MAX_LENGTH - len);
-	word1 |= (static_cast<uint64_t>(capacityByte) << 56);
+	// Set byte 15 (byte 7 of word1) to the length
+	word1 |= (static_cast<uint64_t>(len) << 56);
 
-	// Store word0 (first i64)
-	mir::MIRValue *field0Ptr = builder->createStructGEP(stringType, stringAlloca, 0, "str.word0.ptr");
-	builder->createStore(builder->getInt64(static_cast<int64_t>(word0)), field0Ptr);
+	// Store the two words directly to the array
+	// dataPtr points to the start of the [16 x i8] array, we cast to i64* and store
+	builder->createStore(builder->getInt64(static_cast<int64_t>(word0)), dataPtr);
 
-	// Store word1 (second i64)
-	mir::MIRValue *field1Ptr = builder->createStructGEP(stringType, stringAlloca, 1, "str.word1.ptr");
-	builder->createStore(builder->getInt64(static_cast<int64_t>(word1)), field1Ptr);
+	// Use GEP with i8 type to get byte offset 8
+	mir::MIRValue *dataPtr8 = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+												 {builder->getInt64(8)}, "str.data.ptr8");
+	builder->createStore(builder->getInt64(static_cast<int64_t>(word1)), dataPtr8);
 
-	// Return the alloca pointer (the string struct is by-value in Maxon)
+	// Return the alloca pointer
 	return stringAlloca;
-}
-
-mir::MIRValue *MIRCodeGenerator::generateLargeStringLiteral(const std::string &str) {
-	// Large string: heap-allocated with copy-on-write semantics
-	// Layout: 16 bytes total
-	// [bytes 0-7: pointer to heap buffer (tagged)]
-	// [bytes 8-11: count (length in bytes)]
-	// [bytes 12-15: capacity and flags, MSB of byte 15 = 1 for large string]
-
-	mir::MIRType *stringType = getTypeFromString("string");
-
-	// Create a global constant for the string data (for static strings)
-	mir::MIRGlobal *strGlobal = builder->createStringConstant(".str", str);
-
-	// Create alloca for the string struct
-	mir::MIRValue *stringAlloca = builder->createAlloca(stringType, "str.large");
-
-	// For static string literals, we point directly to the global data
-	// The global is already null-terminated by createStringConstant
-
-	// Get pointer to the global string data
-	mir::MIRValue *strPtr = mir::MIRValue::createGlobal(mir::MIRType::getPtr(), strGlobal->name);
-
-	// First i64: pointer (with a tag bit set if we want, but for static strings, no tag needed)
-	mir::MIRValue *ptrAsInt = builder->createPtrToInt(strPtr, mir::MIRType::getInt64(), "str.ptr.int");
-
-	// Store pointer as first word
-	mir::MIRValue *field0Ptr = builder->createStructGEP(stringType, stringAlloca, 0, "str.ptr.field");
-	builder->createStore(ptrAsInt, field0Ptr);
-
-	// Second i64: pack count (32-bit) and capacity+flags (32-bit)
-	// Lower 32 bits: count (string length)
-	// Upper 32 bits: capacity (31 bits) + is_large flag (1 bit, MSB)
-	size_t len = str.length();
-	size_t capacity = len + 1; // Include null terminator space
-
-	// Pack: count in lower 32 bits, capacity | 0x80000000 in upper 32 bits
-	uint64_t word1 = static_cast<uint64_t>(len) |
-					 (static_cast<uint64_t>(capacity | 0x80000000) << 32);
-
-	mir::MIRValue *field1Ptr = builder->createStructGEP(stringType, stringAlloca, 1, "str.meta.field");
-	builder->createStore(builder->getInt64(static_cast<int64_t>(word1)), field1Ptr);
-
-	return stringAlloca;
-}
-
-mir::MIRValue *MIRCodeGenerator::generateStringEquals(mir::MIRValue *left, mir::MIRValue *right) {
-	// Call __string_equals runtime function
-	// bool __string_equals(ptr str1, ptr str2)
-
-	// Declare the runtime function if not already declared
-	mir::MIRFunction *strEqualsFunc = module->getFunction("__string_equals");
-	if (!strEqualsFunc) {
-		std::vector<mir::MIRType *> paramTypes = {mir::MIRType::getPtr(), mir::MIRType::getPtr()};
-		strEqualsFunc = builder->declareFunction("__string_equals", mir::MIRType::getInt1(), paramTypes);
-	}
-
-	// Both left and right are pointers to string structs (from alloca)
-	// Pass them directly to the comparison function
-	std::vector<mir::MIRValue *> args = {left, right};
-	return builder->createCall(strEqualsFunc, args, "streq");
-}
-
-mir::MIRValue *MIRCodeGenerator::generateStringConcat(mir::MIRValue *left, mir::MIRValue *right) {
-	// Call __string_concat runtime function
-	// ptr __string_concat(ptr dest, ptr str1, ptr str2)
-
-	// Declare the runtime function if not already declared
-	mir::MIRFunction *strConcatFunc = module->getFunction("__string_concat");
-	if (!strConcatFunc) {
-		std::vector<mir::MIRType *> paramTypes = {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getPtr()};
-		strConcatFunc = builder->declareFunction("__string_concat", mir::MIRType::getPtr(), paramTypes);
-	}
-
-	// Allocate destination string struct
-	mir::MIRType *stringType = getTypeFromString("string");
-	mir::MIRValue *destAlloca = builder->createAlloca(stringType, "str.concat");
-
-	// Call __string_concat(dest, left, right)
-	std::vector<mir::MIRValue *> args = {destAlloca, left, right};
-	builder->createCall(strConcatFunc, args, "concat");
-
-	// Return the dest pointer (it's the result string)
-	return destAlloca;
-}
-
-bool MIRCodeGenerator::isStringExpression(ExprAST *expr) {
-	// Check if expression has string type
-	if (dynamic_cast<StringLiteralExprAST *>(expr)) {
-		return true;
-	}
-	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
-		auto it = variableTypes.find(varExpr->name);
-		if (it != variableTypes.end() && (it->second == "string" || it->second == "__string")) {
-			return true;
-		}
-	}
-	// Check for string concatenation (binary + with string operands)
-	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
-		if (binExpr->op == '+' && isStringExpression(binExpr->left.get()) &&
-			isStringExpression(binExpr->right.get())) {
-			return true;
-		}
-	}
-	// Check for string slice expression - slicing a string returns a string
-	if (dynamic_cast<SliceExprAST *>(expr)) {
-		return true;
-	}
-	// Check for string-returning function calls (transform methods)
-	if (auto *callExpr = dynamic_cast<CallExprAST *>(expr)) {
-		if (callExpr->callee == "to_upper" || callExpr->callee == "to_lower" ||
-			callExpr->callee == "trim") {
-			return true;
-		}
-	}
-	return false;
-}
-
-mir::MIRValue *MIRCodeGenerator::generateStringOperand(ExprAST *expr) {
-	// Generate a pointer to a string struct
-	if (auto *strExpr = dynamic_cast<StringLiteralExprAST *>(expr)) {
-		// String literal returns alloca pointer directly
-		return generateStringLiteral(strExpr);
-	}
-	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
-		// Variable - load the pointer to the string struct
-		mir::MIRValue *alloca = namedValues[varExpr->name];
-		if (!alloca) {
-			throw std::runtime_error("Unknown variable name: " + varExpr->name);
-		}
-		// Load the pointer that points to the string struct
-		return builder->createLoad(mir::MIRType::getPtr(), alloca, varExpr->name + ".strptr");
-	}
-	// Handle binary expressions (string concatenation)
-	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
-		if (binExpr->op == '+' && isStringExpression(binExpr->left.get()) &&
-			isStringExpression(binExpr->right.get())) {
-			mir::MIRValue *leftStr = generateStringOperand(binExpr->left.get());
-			mir::MIRValue *rightStr = generateStringOperand(binExpr->right.get());
-			return generateStringConcat(leftStr, rightStr);
-		}
-	}
-	// Handle slice expressions - use the generateExpr code path
-	if (auto *sliceExpr = dynamic_cast<SliceExprAST *>(expr)) {
-		return generateExpr(sliceExpr);
-	}
-	// Handle call expressions that return strings (to_upper, to_lower, trim)
-	if (auto *callExpr = dynamic_cast<CallExprAST *>(expr)) {
-		if (callExpr->callee == "to_upper" || callExpr->callee == "to_lower" ||
-			callExpr->callee == "trim") {
-			return generateExpr(callExpr);
-		}
-	}
-	throw std::runtime_error("Unsupported string expression type");
 }
 
 mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
@@ -394,6 +279,13 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			mir::MIRValue *fieldPtr = builder->createStructGEP(structType, objectPtr,
 															   fieldIndex, memberAccessExpr->memberName);
 
+			// Check if the field is an array type - return pointer instead of loading
+			std::string fieldTypeStr = fields[fieldIndex].second;
+			if (fieldTypeStr.size() > 2 && fieldTypeStr[0] == '[') {
+				// Array field - return pointer to the array (for subsequent indexing)
+				return fieldPtr;
+			}
+
 			// Load the field value
 			mir::MIRType *fieldType = structType->fieldTypes[fieldIndex];
 			return builder->createLoad(fieldType, fieldPtr, memberAccessExpr->memberName + ".val");
@@ -425,107 +317,58 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			throw std::runtime_error("Variable is not an array: " + memberAccessExpr->objectName);
 		}
 
-		// Handle string methods
-		if (varType == "string" && !memberAccessExpr->object) {
-			mir::MIRValue *strAlloca = namedValues[memberAccessExpr->objectName];
-			if (!strAlloca) {
-				throw std::runtime_error("Unknown string variable: " + memberAccessExpr->objectName);
-			}
-			// Load the string pointer
-			mir::MIRValue *strPtr = builder->createLoad(mir::MIRType::getPtr(), strAlloca,
-														memberAccessExpr->objectName + ".strptr");
-
-			// String.count - returns codepoint count (UTF-8 aware)
-			if (memberAccessExpr->memberName == "count") {
-				mir::MIRFunction *countFunc = getOrDeclareFunction("__string_codepoint_count",
-																   mir::MIRType::getInt32(),
-																   {mir::MIRType::getPtr()});
-				return builder->createCall(countFunc, {strPtr}, "str.count");
-			}
-
-			// String.isEmpty - returns true if string has no codepoints
-			if (memberAccessExpr->memberName == "isEmpty") {
-				mir::MIRFunction *emptyFunc = getOrDeclareFunction("__string_is_empty",
-																   mir::MIRType::getInt1(),
-																   {mir::MIRType::getPtr()});
-				return builder->createCall(emptyFunc, {strPtr}, "str.isEmpty");
-			}
-		}
-
 		throw std::runtime_error("Unknown member: " + memberAccessExpr->memberName);
 	}
 
-	// String slice expression (e.g., s[0..5], s[2..], s[..5])
-	if (auto *sliceExpr = dynamic_cast<SliceExprAST *>(expr)) {
-		// Get the source string
-		mir::MIRValue *srcAlloca = namedValues[sliceExpr->objectName];
-		if (!srcAlloca) {
-			throw std::runtime_error("Unknown variable for slicing: " + sliceExpr->objectName);
-		}
-
-		std::string varType = variableTypes[sliceExpr->objectName];
-		if (varType != "string") {
-			throw std::runtime_error("Slicing is currently only supported for strings");
-		}
-
-		// Load the source string pointer (srcAlloca holds ptr to ptr to string)
-		mir::MIRValue *srcPtr = builder->createLoad(mir::MIRType::getPtr(), srcAlloca, sliceExpr->objectName + ".strptr");
-
-		// Allocate space for result string (16 bytes)
-		mir::MIRValue *destAlloca = builder->createAlloca(getTypeFromString("string"), "slice_result");
-
-		// Generate start and end indices
-		mir::MIRValue *startVal;
-		mir::MIRValue *endVal;
-
-		if (sliceExpr->start) {
-			startVal = generateExpr(sliceExpr->start.get());
-		} else {
-			startVal = mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), 0);
-		}
-
-		if (sliceExpr->end) {
-			endVal = generateExpr(sliceExpr->end.get());
-		} else {
-			// Use -1 as sentinel for "to end", runtime will handle it
-			endVal = mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), -1);
-		}
-
-		// Call the appropriate runtime function
-		mir::MIRFunction *sliceFunc;
-		if (!sliceExpr->start && sliceExpr->end) {
-			// s[..end] -> __string_slice_to
-			sliceFunc = getOrDeclareFunction("__string_slice_to",
-											 mir::MIRType::getPtr(),
-											 {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-			builder->createCall(sliceFunc, {destAlloca, srcPtr, endVal});
-		} else if (sliceExpr->start && !sliceExpr->end) {
-			// s[start..] -> __string_slice_from
-			sliceFunc = getOrDeclareFunction("__string_slice_from",
-											 mir::MIRType::getPtr(),
-											 {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-			builder->createCall(sliceFunc, {destAlloca, srcPtr, startVal});
-		} else {
-			// s[start..end] -> __string_slice
-			sliceFunc = getOrDeclareFunction("__string_slice",
-											 mir::MIRType::getPtr(),
-											 {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
-			builder->createCall(sliceFunc, {destAlloca, srcPtr, startVal, endVal});
-		}
-
-		// Return pointer to result string struct
-		return destAlloca;
-	}
-
 	if (auto *arrayIndexExpr = dynamic_cast<ArrayIndexExprAST *>(expr)) {
-		mir::MIRValue *alloca = namedValues[arrayIndexExpr->arrayName];
-		if (!alloca) {
-			throw std::runtime_error("Unknown array name: " + arrayIndexExpr->arrayName);
-		}
-
 		mir::MIRValue *indexVal = generateExpr(arrayIndexExpr->index.get());
 		if (!indexVal) {
 			throw std::runtime_error("Failed to generate array index");
+		}
+
+		// Handle complex array access (e.g., struct.field[i])
+		if (arrayIndexExpr->hasArrayExpr()) {
+			// Generate the array expression (e.g., struct.field)
+			mir::MIRValue *arrayVal = generateExpr(arrayIndexExpr->arrayExpr.get());
+			if (!arrayVal) {
+				throw std::runtime_error("Failed to generate array expression");
+			}
+
+			// For member access on struct, the result is a pointer to the array field
+			// We need to determine the element type from the expression
+			std::string elementTypeStr = "byte"; // Default for now
+
+			// Check if this is a member access - we need the type info
+			if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(arrayIndexExpr->arrayExpr.get())) {
+				// Get the struct type from the object name
+				std::string objType = variableTypes[memberExpr->objectName];
+				if (structFields.find(objType) != structFields.end()) {
+					const auto &fields = structFields[objType];
+					for (const auto &field : fields) {
+						if (field.first == memberExpr->memberName) {
+							// Parse array element type from field type "[16]byte" -> "byte"
+							std::string fieldType = field.second;
+							if (fieldType.size() > 2 && fieldType[0] == '[') {
+								size_t closeBracket = fieldType.find(']');
+								if (closeBracket != std::string::npos && closeBracket + 1 < fieldType.size()) {
+									elementTypeStr = fieldType.substr(closeBracket + 1);
+								}
+							}
+							break;
+						}
+					}
+				}
+			}
+
+			mir::MIRType *elementType = getTypeFromString(elementTypeStr);
+			mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayVal, indexVal, "fieldarray.idx");
+			return builder->createLoad(elementType, elementPtr, "fieldarray.elem");
+		}
+
+		// Simple array[i] access
+		mir::MIRValue *alloca = namedValues[arrayIndexExpr->arrayName];
+		if (!alloca) {
+			throw std::runtime_error("Unknown array name: " + arrayIndexExpr->arrayName);
 		}
 
 		// Determine element type
@@ -560,30 +403,68 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	}
 
 	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
-		// Check for string comparison BEFORE generating expressions
-		// We need to check the source type, not the MIR type
-		bool leftIsString = isStringExpression(binExpr->left.get());
-		bool rightIsString = isStringExpression(binExpr->right.get());
+		// For == and != on Equatable struct types, route to equals method
+		if (binExpr->op == 'E' || binExpr->op == 'N') {
+			std::string leftType = getExpressionMaxonType(binExpr->left.get(), variableTypes, structTypes);
 
-		if (leftIsString && rightIsString && (binExpr->op == 'E' || binExpr->op == 'N')) {
-			// String comparison - get pointers to string structs
-			mir::MIRValue *left = generateStringOperand(binExpr->left.get());
-			mir::MIRValue *right = generateStringOperand(binExpr->right.get());
+			// Check if this is an Equatable struct type
+			auto structIt = structTypes.find(leftType);
+			if (structIt != structTypes.end()) {
+				auto conformsIt = structConformsTo.find(leftType);
+				if (conformsIt != structConformsTo.end()) {
+					bool isEquatable = false;
+					for (const auto &iface : conformsIt->second) {
+						if (iface == "Equatable") {
+							isEquatable = true;
+							break;
+						}
+					}
 
-			if (binExpr->op == 'E') { // ==
-				return generateStringEquals(left, right);
-			} else { // !=
-				mir::MIRValue *eq = generateStringEquals(left, right);
-				// Negate the result
-				return builder->createICmpEq(eq, mir::MIRValue::createConstantInt(mir::MIRType::getInt1(), 0), "strnetmp");
+					if (isEquatable) {
+						// Generate call to TypeName.equals(left, right)
+						std::string equalsFuncName = leftType + ".equals";
+						mir::MIRFunction *equalsFunc = module->getFunction(equalsFuncName);
+
+						if (equalsFunc) {
+							// For struct types, we need to pass pointers, not loaded values
+							// Get pointer to left operand
+							mir::MIRValue *leftPtr = nullptr;
+							if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->left.get())) {
+								leftPtr = namedValues[varExpr->name];
+							} else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(binExpr->left.get())) {
+								leftPtr = generateStringLiteral(strLit);
+							} else {
+								leftPtr = generateExpr(binExpr->left.get());
+							}
+
+							// Get pointer to right operand
+							mir::MIRValue *rightPtr = nullptr;
+							if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->right.get())) {
+								rightPtr = namedValues[varExpr->name];
+							} else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(binExpr->right.get())) {
+								rightPtr = generateStringLiteral(strLit);
+							} else {
+								rightPtr = generateExpr(binExpr->right.get());
+							}
+
+							if (!leftPtr || !rightPtr) {
+								throw std::runtime_error("Failed to generate Equatable comparison operands");
+							}
+
+							std::vector<mir::MIRValue *> args = {leftPtr, rightPtr};
+							mir::MIRValue *result = builder->createCall(equalsFunc, args, "eqtmp");
+
+							// For !=, negate the result
+							if (binExpr->op == 'N') {
+								result = builder->createICmpEq(result,
+															   mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), 0), "neqtmp");
+							}
+
+							return result;
+						}
+					}
+				}
 			}
-		}
-
-		// String concatenation with + operator
-		if (leftIsString && rightIsString && binExpr->op == '+') {
-			mir::MIRValue *leftStr = generateStringOperand(binExpr->left.get());
-			mir::MIRValue *rightStr = generateStringOperand(binExpr->right.get());
-			return generateStringConcat(leftStr, rightStr);
 		}
 
 		mir::MIRValue *left = generateExpr(binExpr->left.get());
@@ -687,94 +568,6 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		// Handle array intrinsics (push, pop)
 		if (callExpr->callee == "push" || callExpr->callee == "pop") {
 			return generateArrayIntrinsic(callExpr);
-		}
-
-		// Handle print() with string argument - call __string_print runtime function
-		if (callExpr->callee == "print" && callExpr->args.size() == 1 &&
-			isStringExpression(callExpr->args[0].get())) {
-			mir::MIRValue *strPtr = generateStringOperand(callExpr->args[0].get());
-
-			// Declare __string_print if not already declared
-			mir::MIRFunction *strPrintFunc = module->getFunction("__string_print");
-			if (!strPrintFunc) {
-				std::vector<mir::MIRType *> paramTypes = {mir::MIRType::getPtr()};
-				strPrintFunc = builder->declareFunction("__string_print", mir::MIRType::getInt32(), paramTypes);
-			}
-
-			// __string_print calls write_stdout internally, so declare it
-			initStandardLibrary();
-
-			std::vector<mir::MIRValue *> args = {strPtr};
-			return builder->createCall(strPrintFunc, args, "strprint");
-		}
-
-		// Handle string methods that take string arguments
-		// These are transformed from method syntax: s.starts_with("x") -> starts_with(s, "x")
-		if (callExpr->callee == "starts_with" && callExpr->args.size() == 2 &&
-			isStringExpression(callExpr->args[0].get()) && isStringExpression(callExpr->args[1].get())) {
-			mir::MIRValue *str = generateStringOperand(callExpr->args[0].get());
-			mir::MIRValue *prefix = generateStringOperand(callExpr->args[1].get());
-			mir::MIRFunction *func = getOrDeclareFunction("__string_starts_with",
-														  mir::MIRType::getInt1(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
-			return builder->createCall(func, {str, prefix}, "starts_with");
-		}
-
-		if (callExpr->callee == "ends_with" && callExpr->args.size() == 2 &&
-			isStringExpression(callExpr->args[0].get()) && isStringExpression(callExpr->args[1].get())) {
-			mir::MIRValue *str = generateStringOperand(callExpr->args[0].get());
-			mir::MIRValue *suffix = generateStringOperand(callExpr->args[1].get());
-			mir::MIRFunction *func = getOrDeclareFunction("__string_ends_with",
-														  mir::MIRType::getInt1(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
-			return builder->createCall(func, {str, suffix}, "ends_with");
-		}
-
-		if (callExpr->callee == "contains" && callExpr->args.size() == 2 &&
-			isStringExpression(callExpr->args[0].get()) && isStringExpression(callExpr->args[1].get())) {
-			mir::MIRValue *haystack = generateStringOperand(callExpr->args[0].get());
-			mir::MIRValue *needle = generateStringOperand(callExpr->args[1].get());
-			mir::MIRFunction *func = getOrDeclareFunction("__string_contains",
-														  mir::MIRType::getInt1(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
-			return builder->createCall(func, {haystack, needle}, "contains");
-		}
-
-		if (callExpr->callee == "find" && callExpr->args.size() == 2 &&
-			isStringExpression(callExpr->args[0].get()) && isStringExpression(callExpr->args[1].get())) {
-			mir::MIRValue *haystack = generateStringOperand(callExpr->args[0].get());
-			mir::MIRValue *needle = generateStringOperand(callExpr->args[1].get());
-			mir::MIRFunction *func = getOrDeclareFunction("__string_find",
-														  mir::MIRType::getInt32(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
-			return builder->createCall(func, {haystack, needle}, "find");
-		}
-
-		// String transform methods (to_upper, to_lower, trim)
-		if (callExpr->callee == "to_upper" && callExpr->args.size() == 1 &&
-			isStringExpression(callExpr->args[0].get())) {
-			mir::MIRValue *str = generateStringOperand(callExpr->args[0].get());
-			mir::MIRValue *dest = builder->createAlloca(getTypeFromString("string"), "upper_result");
-			mir::MIRFunction *func = getOrDeclareFunction("__string_to_upper",
-														  mir::MIRType::getPtr(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
-			builder->createCall(func, {dest, str});
-			return dest;
-		}
-
-		if (callExpr->callee == "to_lower" && callExpr->args.size() == 1 &&
-			isStringExpression(callExpr->args[0].get())) {
-			mir::MIRValue *str = generateStringOperand(callExpr->args[0].get());
-			mir::MIRValue *dest = builder->createAlloca(getTypeFromString("string"), "lower_result");
-			mir::MIRFunction *func = getOrDeclareFunction("__string_to_lower",
-														  mir::MIRType::getPtr(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
-			builder->createCall(func, {dest, str});
-			return dest;
-		}
-
-		if (callExpr->callee == "trim" && callExpr->args.size() == 1 &&
-			isStringExpression(callExpr->args[0].get())) {
-			mir::MIRValue *str = generateStringOperand(callExpr->args[0].get());
-			mir::MIRValue *dest = builder->createAlloca(getTypeFromString("string"), "trim_result");
-			mir::MIRFunction *func = getOrDeclareFunction("__string_trim",
-														  mir::MIRType::getPtr(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
-			builder->createCall(func, {dest, str});
-			return dest;
 		}
 
 		// Initialize standard library if needed

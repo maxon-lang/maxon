@@ -56,7 +56,6 @@ class KeywordMatcher {
 		add_keyword("float", KeywordCategory::Type);
 		add_keyword("char", KeywordCategory::Type);
 		add_keyword("byte", KeywordCategory::Type);
-		add_keyword("string", KeywordCategory::Type);
 		add_keyword("bool", KeywordCategory::Type);
 
 		add_keyword("if", KeywordCategory::ControlFlow);

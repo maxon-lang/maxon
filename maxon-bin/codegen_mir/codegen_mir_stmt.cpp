@@ -134,9 +134,11 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			const auto &fields = structFields[structInitExpr->structName];
 			for (const auto &initField : structInitExpr->fields) {
 				int fieldIndex = -1;
+				std::string fieldTypeStr;
 				for (size_t j = 0; j < fields.size(); j++) {
 					if (fields[j].first == initField.name) {
 						fieldIndex = static_cast<int>(j);
+						fieldTypeStr = fields[j].second;
 						break;
 					}
 				}
@@ -146,40 +148,48 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 											 "' in struct '" + structInitExpr->structName + "'");
 				}
 
-				mir::MIRValue *fieldValue = generateExpr(initField.value.get());
 				mir::MIRValue *fieldPtr = builder->createStructGEP(structType, structAlloca,
 																   fieldIndex, initField.name);
-				builder->createStore(fieldValue, fieldPtr);
+
+				// Handle array field initialization
+				if (auto *arrayLit = dynamic_cast<ArrayLiteralExprAST *>(initField.value.get())) {
+					// Array literal for struct field - initialize in place
+					if (!arrayLit->values.empty()) {
+						// Value-initialized array [1, 2, 3]
+						for (size_t i = 0; i < arrayLit->values.size(); i++) {
+							mir::MIRValue *elemValue = generateExpr(arrayLit->values[i].get());
+							mir::MIRValue *elemPtr = builder->createArrayGEP(elemValue->type, fieldPtr,
+																			 mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), i),
+																			 initField.name + ".elem");
+							builder->createStore(elemValue, elemPtr);
+						}
+					} else {
+						// Zero-initialized array [16]byte - already zero from alloca
+						// Nothing extra needed
+					}
+				} else {
+					// Regular field value
+					mir::MIRValue *fieldValue = generateExpr(initField.value.get());
+					builder->createStore(fieldValue, fieldPtr);
+				}
 			}
 
 			return;
 		}
 
+		// Handle string literal initialization
+		// String literals return a pointer to a stack-allocated string struct
+		// We use that directly as the variable's storage
+		if (auto *strLiteral = dynamic_cast<StringLiteralExprAST *>(varDecl->initializer.get())) {
+			mir::MIRValue *stringPtr = generateStringLiteral(strLiteral);
+			namedValues[varDecl->name] = stringPtr;
+			variableTypes[varDecl->name] = "string";
+			return;
+		}
+
 		// Non-array, non-struct variable
 		mir::MIRValue *initVal = nullptr;
-		bool isStringInit = false;
 		if (varDecl->initializer) {
-			// Check if initializer is a string literal
-			if (dynamic_cast<StringLiteralExprAST *>(varDecl->initializer.get())) {
-				isStringInit = true;
-			}
-			// Check if initializer is a string concatenation (string + string)
-			if (auto *binExpr = dynamic_cast<BinaryExprAST *>(varDecl->initializer.get())) {
-				if (binExpr->op == '+' && isStringExpression(binExpr->left.get()) &&
-					isStringExpression(binExpr->right.get())) {
-					isStringInit = true;
-				}
-			}
-			// Check if initializer is a string variable
-			if (auto *varExpr = dynamic_cast<VariableExprAST *>(varDecl->initializer.get())) {
-				if (isStringExpression(varExpr)) {
-					isStringInit = true;
-				}
-			}
-			// Check if initializer is a string slice
-			if (dynamic_cast<SliceExprAST *>(varDecl->initializer.get())) {
-				isStringInit = true;
-			}
 			initVal = generateExpr(varDecl->initializer.get());
 			if (!initVal) {
 				throw std::runtime_error("Failed to generate variable initializer for '" + varDecl->name + "'");
@@ -190,9 +200,6 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		mir::MIRType *allocaType;
 		if (!varDecl->type.empty()) {
 			allocaType = getTypeFromString(varDecl->type);
-		} else if (isStringInit) {
-			// String literals return a ptr to __string struct, but we store that ptr
-			allocaType = mir::MIRType::getPtr();
 		} else if (initVal) {
 			allocaType = initVal->type;
 		} else {
@@ -220,9 +227,6 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		// If type was explicitly specified, use it; otherwise derive from the alloca type
 		if (!varDecl->type.empty()) {
 			variableTypes[varDecl->name] = varDecl->type;
-		} else if (isStringInit) {
-			// String variables track as "string" type for comparison purposes
-			variableTypes[varDecl->name] = "string";
 		} else if (allocaType->kind == mir::MIRTypeKind::Struct) {
 			// For structs, use the struct name so member access works
 			variableTypes[varDecl->name] = allocaType->structName;
@@ -314,6 +318,14 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 			variableTypes[letDecl->name] = "[" + std::to_string(arraySize) + "]" + elementTypeName;
 
+			return;
+		}
+
+		// Handle string literal initialization
+		if (auto *strLiteral = dynamic_cast<StringLiteralExprAST *>(letDecl->initializer.get())) {
+			mir::MIRValue *stringPtr = generateStringLiteral(strLiteral);
+			namedValues[letDecl->name] = stringPtr;
+			variableTypes[letDecl->name] = "string";
 			return;
 		}
 
@@ -538,6 +550,64 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		// Generate the value and store it
 		mir::MIRValue *val = generateExpr(memberAssign->value.get());
 		builder->createStore(val, fieldPtr);
+
+		return;
+	}
+
+	if (auto *memberArrayAssign = dynamic_cast<MemberArrayAssignStmtAST *>(stmt)) {
+		// Struct member array element assignment: obj.arrayField[i] = value
+		mir::MIRValue *alloca = namedValues[memberArrayAssign->objectName];
+		if (!alloca) {
+			throw std::runtime_error("Unknown variable: " + memberArrayAssign->objectName);
+		}
+
+		// Get the struct type
+		std::string structTypeName = variableTypes[memberArrayAssign->objectName];
+		mir::MIRType *structType = structTypes[structTypeName];
+		if (!structType) {
+			throw std::runtime_error("Variable '" + memberArrayAssign->objectName + "' is not a struct type");
+		}
+
+		// Find field index and type
+		const auto &fields = structFields[structTypeName];
+		int fieldIndex = -1;
+		std::string fieldTypeStr;
+		for (size_t i = 0; i < fields.size(); i++) {
+			if (fields[i].first == memberArrayAssign->memberName) {
+				fieldIndex = static_cast<int>(i);
+				fieldTypeStr = fields[i].second;
+				break;
+			}
+		}
+
+		if (fieldIndex < 0) {
+			throw std::runtime_error("Unknown field '" + memberArrayAssign->memberName +
+									 "' in struct '" + structTypeName + "'");
+		}
+
+		// Get pointer to the array field
+		mir::MIRValue *fieldPtr = builder->createStructGEP(structType, alloca,
+														   fieldIndex, memberArrayAssign->memberName);
+
+		// Generate index
+		mir::MIRValue *indexVal = generateExpr(memberArrayAssign->index.get());
+
+		// Determine element type from field type "[16]byte" -> "byte"
+		std::string elemTypeStr = "int";
+		if (fieldTypeStr.size() > 2 && fieldTypeStr[0] == '[') {
+			size_t closeBracket = fieldTypeStr.find(']');
+			if (closeBracket != std::string::npos && closeBracket + 1 < fieldTypeStr.size()) {
+				elemTypeStr = fieldTypeStr.substr(closeBracket + 1);
+			}
+		}
+		mir::MIRType *elemType = getTypeFromString(elemTypeStr);
+
+		// Get pointer to the array element
+		mir::MIRValue *elemPtr = builder->createArrayGEP(elemType, fieldPtr, indexVal, "fieldarray.elem");
+
+		// Generate value and store
+		mir::MIRValue *val = generateExpr(memberArrayAssign->value.get());
+		builder->createStore(val, elemPtr);
 
 		return;
 	}

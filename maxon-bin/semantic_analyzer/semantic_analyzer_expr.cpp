@@ -7,6 +7,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 	if (dynamic_cast<NumberExprAST *>(expr)) {
 		return "int";
 
+	} else if (dynamic_cast<ByteExprAST *>(expr)) {
+		return "byte";
+
 	} else if (dynamic_cast<FloatExprAST *>(expr)) {
 		return "float";
 
@@ -17,7 +20,12 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		return "char";
 
 	} else if (dynamic_cast<StringLiteralExprAST *>(expr)) {
-		return "string"; // String literals are pointers to character data
+		// String literals require the stdlib 'string' struct
+		// Track as undefined so it gets auto-discovered
+		if (lookupStruct("string") == nullptr) {
+			undefinedStructs.insert("string");
+		}
+		return "string";
 
 	} else if (auto arrayLiteral = dynamic_cast<ArrayLiteralExprAST *>(expr)) {
 		// Array literal: [5]int or [1,2,3]
@@ -133,6 +141,41 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			if ((leftType == "int" || leftType == "float") &&
 				(rightType == "int" || rightType == "float")) {
 				return "bool";
+			}
+
+			// For == and != on struct types, check Equatable conformance
+			if (binExpr->op == 'E' || binExpr->op == 'N') {
+				const StructInfo *leftStruct = lookupStruct(leftType);
+				const StructInfo *rightStruct = lookupStruct(rightType);
+
+				if (leftStruct != nullptr || rightStruct != nullptr) {
+					// At least one operand is a struct type
+					if (leftType != rightType) {
+						addError("Cannot compare different struct types with == or !=" +
+									 std::string("\n  Left operand type: ") + leftType +
+									 "\n  Right operand type: " + rightType,
+								 expr->line, expr->column);
+						return "error";
+					}
+
+					// Both are the same struct type, check Equatable conformance
+					bool conformsToEquatable = false;
+					for (const auto &iface : leftStruct->conformsTo) {
+						if (iface == "Equatable") {
+							conformsToEquatable = true;
+							break;
+						}
+					}
+
+					if (!conformsToEquatable) {
+						addError("Cannot use == or != on struct type '" + leftType +
+									 "' because it does not implement the Equatable interface",
+								 expr->line, expr->column);
+						return "error";
+					}
+
+					return "bool";
+				}
 			}
 
 			if (leftType != rightType) {
@@ -469,19 +512,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		return varInfo->type;
 
 	} else if (auto arrayExpr = dynamic_cast<ArrayIndexExprAST *>(expr)) {
-		// Check if array variable exists
-		auto varInfo = lookupVariable(arrayExpr->arrayName);
-		if (!varInfo.has_value()) {
-			addError("Undefined variable: '" + arrayExpr->arrayName + "'" +
-						 std::string("\n  Note: Array must be declared before use"),
-					 expr->line, expr->column);
-			return "error";
-		}
-
-		// Mark array variable as used when accessed
-		markVariableAsUsed(arrayExpr->arrayName);
-
-		// Analyze the index expression
+		// Analyze the index expression first
 		std::string indexType = analyzeExpression(arrayExpr->index.get());
 		if (indexType != "int" && indexType != "error") {
 			addError("Array index must be an integer" +
@@ -489,8 +520,27 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 					 expr->line, expr->column);
 		}
 
-		// Extract element type from array type (e.g., "[]string" -> "string", "[5]int" -> "int")
-		std::string arrayType = varInfo->type;
+		std::string arrayType;
+
+		// Handle complex array access (e.g., struct.field[i])
+		if (arrayExpr->hasArrayExpr()) {
+			arrayType = analyzeExpression(arrayExpr->arrayExpr.get());
+		} else {
+			// Simple array[i] access - check if array variable exists
+			auto varInfo = lookupVariable(arrayExpr->arrayName);
+			if (!varInfo.has_value()) {
+				addError("Undefined variable: '" + arrayExpr->arrayName + "'" +
+							 std::string("\n  Note: Array must be declared before use"),
+						 expr->line, expr->column);
+				return "error";
+			}
+
+			// Mark array variable as used when accessed
+			markVariableAsUsed(arrayExpr->arrayName);
+			arrayType = varInfo->type;
+		}
+
+		// Extract element type from array type (e.g., "[]string" -> "string", "[5]int" -> "int", "[16]byte" -> "byte")
 		if (arrayType.size() > 2 && arrayType[0] == '[') {
 			// Find the closing bracket
 			size_t closeBracket = arrayType.find(']');

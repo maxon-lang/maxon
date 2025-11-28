@@ -223,7 +223,36 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 		std::string fieldName = fieldNameToken.value;
 
 		std::string fieldType;
-		if (Lexer::isTypeToken(currentToken())) {
+		// Check for array type: [size]type or []type
+		if (check(TokenType::LBRACKET)) {
+			advance(); // consume '['
+
+			std::string sizeStr = "";
+			if (check(TokenType::NUMBER)) {
+				// Sized array: [16]byte
+				sizeStr = std::string(currentValue());
+				advance();
+			}
+			// else: unsized array []type
+
+			expectAdvance(TokenType::RBRACKET, "Expected ']' after array size");
+
+			// Get element type
+			std::string elementType;
+			if (Lexer::isTypeToken(currentToken())) {
+				elementType = std::string(currentValue());
+				advance();
+			} else if (check(TokenType::IDENTIFIER)) {
+				elementType = parseQualifiedName("array element type");
+			} else {
+				throw std::runtime_error("Expected array element type after ']' at line " +
+										 std::to_string(currentLine()) + ", column " +
+										 std::to_string(currentColumn()));
+			}
+
+			// Build array type string
+			fieldType = "[" + sizeStr + "]" + elementType;
+		} else if (Lexer::isTypeToken(currentToken())) {
 			fieldType = std::string(currentValue());
 			advance();
 		} else if (check(TokenType::IDENTIFIER)) {
@@ -359,7 +388,7 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 		}
 
 		methods.push_back(InterfaceMethodSignature(methodName, std::move(parameters), returnType,
-												  methodNameToken.line, methodNameToken.column));
+												   methodNameToken.line, methodNameToken.column));
 
 		logTrace("  Method '" + methodName + "' -> " + returnType);
 	}

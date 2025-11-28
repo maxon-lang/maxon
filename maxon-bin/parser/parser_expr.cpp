@@ -149,7 +149,8 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 					// Or a Type.method(args) call - we distinguish by checking if name looks like a type
 					// Types start with uppercase; variables are lowercase
 					// Note: For Type.method() static calls, we still treat as qualified function
-					bool looksLikeVariable = !name.empty() && (name[0] >= 'a' && name[0] <= 'z');
+					// Special case: 'string' is a type name even though it's lowercase
+					bool looksLikeVariable = !name.empty() && (name[0] >= 'a' && name[0] <= 'z') && name != "string";
 
 					if (looksLikeVariable) {
 						// This is a method call on a variable: arr.push(5) -> push(arr, 5)
@@ -199,8 +200,18 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 				expectAdvance(TokenType::RPAREN, "Expected ')' after function arguments");
 				return std::make_unique<CallExprAST>(qualifiedName, std::move(args), line, column);
 			} else {
-				// This is a member access (e.g., array.length)
-				return std::make_unique<MemberAccessExprAST>(name, member.value, line, column);
+				// This is a member access (e.g., struct.field or struct.arrayField)
+				auto memberExpr = std::make_unique<MemberAccessExprAST>(name, member.value, line, column);
+
+				// Check for array indexing on the member (e.g., struct.arrayField[i])
+				if (check(TokenType::LBRACKET)) {
+					advance(); // consume '['
+					auto index = parseLogicalOr();
+					expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
+					return std::make_unique<ArrayIndexExprAST>(std::move(memberExpr), std::move(index), line, column);
+				}
+
+				return memberExpr;
 			}
 		}
 

@@ -263,6 +263,69 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			}
 		}
 
+	} else if (auto memberArrayAssign = dynamic_cast<MemberArrayAssignStmtAST *>(stmt)) {
+		// Struct member array element assignment: obj.arrayField[i] = value
+		auto varInfo = lookupVariable(memberArrayAssign->objectName);
+		if (!varInfo.has_value()) {
+			addError("Undefined variable: '" + memberArrayAssign->objectName + "'" +
+						 std::string("\n  Note: Variable must be declared with 'var' or 'let' before use"),
+					 stmt->line, stmt->column);
+		} else {
+			markVariableAsUsed(memberArrayAssign->objectName);
+
+			if (varInfo->isImmutable) {
+				addError("Cannot assign to field of read-only struct '" + memberArrayAssign->objectName + "'",
+						 stmt->line, stmt->column);
+			}
+
+			std::string structType = varInfo->type;
+			auto *structInfo = lookupStruct(structType);
+			if (structInfo == nullptr) {
+				addError("Cannot access member '" + memberArrayAssign->memberName + "' on non-struct type '" + structType + "'",
+						 stmt->line, stmt->column);
+			} else {
+				// Find the array field
+				bool memberFound = false;
+				std::string memberType;
+				for (const auto &field : structInfo->fields) {
+					if (field.name == memberArrayAssign->memberName) {
+						memberFound = true;
+						memberType = field.type;
+						break;
+					}
+				}
+
+				if (!memberFound) {
+					addError("Struct '" + structType + "' has no field named '" + memberArrayAssign->memberName + "'",
+							 stmt->line, stmt->column);
+				} else {
+					// Verify it's an array type
+					if (memberType.empty() || memberType[0] != '[') {
+						addError("Field '" + memberArrayAssign->memberName + "' is not an array type",
+								 stmt->line, stmt->column);
+					} else {
+						// Analyze index expression
+						std::string indexType = analyzeExpression(memberArrayAssign->index.get());
+						if (indexType != "int" && indexType != "error") {
+							addError("Array index must be an integer, found '" + indexType + "'",
+									 stmt->line, stmt->column);
+						}
+
+						// Extract element type and check value type
+						size_t closeBracket = memberType.find(']');
+						if (closeBracket != std::string::npos && closeBracket + 1 < memberType.size()) {
+							std::string elemType = memberType.substr(closeBracket + 1);
+							std::string valueType = analyzeExpression(memberArrayAssign->value.get());
+							if (!typesMatch(elemType, valueType)) {
+								addError("Type mismatch: cannot assign '" + valueType + "' to array element of type '" + elemType + "'",
+										 stmt->line, stmt->column);
+							}
+						}
+					}
+				}
+			}
+		}
+
 	} else if (auto exprStmt = dynamic_cast<ExprStmtAST *>(stmt)) {
 		// Analyze the expression (e.g., function call)
 		analyzeExpression(exprStmt->expression.get());

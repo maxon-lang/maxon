@@ -31,7 +31,6 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
 	{"float", {KeywordCategory::Type, "Floating-point type"}},
 	{"char", {KeywordCategory::Type, "Extended Grapheme Cluster (user-perceived character)"}},
 	{"byte", {KeywordCategory::Type, "8-bit unsigned integer"}},
-	{"string", {KeywordCategory::Type, "UTF-8 string (owned, COW)"}},
 	{"bool", {KeywordCategory::Type, "Boolean type"}},
 
 	// Control flow

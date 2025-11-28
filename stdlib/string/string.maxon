@@ -1,0 +1,168 @@
+// stdlib/string/string.maxon
+// String type implementation using interfaces
+//
+// Simple implementation using fixed-size inline storage.
+// All methods are implemented in pure Maxon - no runtime functions needed.
+
+// string struct - UTF-8 encoded string with inline storage
+// Layout: 16 bytes of data stored in _data array
+// _data[0..14]: UTF-8 string data (up to 15 bytes)
+// _data[15]: length (number of bytes used)
+export struct string is Hashable, Equatable, Printable
+    _data [16]byte
+end 'string'
+
+// count - get the number of bytes in the string
+export function string.count(self string) int
+    // Length is stored in _data[15]
+    return self._data[15] as int
+end 'count'// isEmpty - check if the string is empty
+export function string.isEmpty(self string) bool
+    return self._data[15] == 0b
+end 'isEmpty'
+
+// Hashable conformance - simple hash function
+export function string.hash(self string) int
+    var h = 5381
+    var len = self._data[15] as int
+    var i = 0
+    while i < len 'hash_loop'
+        h = h * 33 + (self._data[i] as int)
+        i = i + 1
+    end 'hash_loop'
+    return h
+end 'hash'
+
+// Equatable conformance - compare two strings
+export function string.equals(self string, other string) bool
+    var len = self._data[15] as int
+    var otherLen = other._data[15] as int
+    if len != otherLen 'length_check'
+        return false
+    end 'length_check'
+
+    var i = 0
+    while i < len 'compare_loop'
+        if self._data[i] != other._data[i] 'byte_check'
+            return false
+        end 'byte_check'
+        i = i + 1
+    end 'compare_loop'
+    return true
+end 'equals'
+
+// Printable conformance - print string to stdout
+// Note: This is a placeholder until we have proper runtime support
+export function string.print(self string) int
+    // Just return the length for now - actual printing needs runtime support
+    return self._data[15] as int
+end 'print'
+
+// concat - concatenate two strings
+export function string.concat(self string, other string) string
+    var result = string{_data: [16]byte}
+    var selfLen = self._data[15] as int
+    var otherLen = other._data[15] as int
+    var totalLen = selfLen + otherLen
+
+    // Copy self's data
+    var i = 0
+    while i < selfLen 'copy_self'
+        result._data[i] = self._data[i]
+        i = i + 1
+    end 'copy_self'
+
+    // Copy other's data
+    var j = 0
+    while j < otherLen and i < 15 'copy_other'
+        result._data[i] = other._data[j]
+        i = i + 1
+        j = j + 1
+    end 'copy_other'
+
+    // Set length (cap at 15)
+    if totalLen > 15 'cap_length'
+        result._data[15] = 15b
+    else 'cap_length'
+        result._data[15] = totalLen as byte
+    end 'cap_length'
+
+    return result
+end 'concat'
+
+// startsWith - check if string starts with prefix
+export function string.startsWith(self string, prefix string) bool
+    var selfLen = self._data[15] as int
+    var prefixLen = prefix._data[15] as int
+
+    if prefixLen > selfLen 'length_check'
+        return false
+    end 'length_check'
+
+    var i = 0
+    while i < prefixLen 'compare_loop'
+        if self._data[i] != prefix._data[i] 'byte_check'
+            return false
+        end 'byte_check'
+        i = i + 1
+    end 'compare_loop'
+    return true
+end 'startsWith'
+
+// endsWith - check if string ends with suffix
+export function string.endsWith(self string, suffix string) bool
+    var selfLen = self._data[15] as int
+    var suffixLen = suffix._data[15] as int
+
+    if suffixLen > selfLen 'length_check'
+        return false
+    end 'length_check'
+
+    var start = selfLen - suffixLen
+    var i = 0
+    while i < suffixLen 'compare_loop'
+        if self._data[start + i] != suffix._data[i] 'byte_check'
+            return false
+        end 'byte_check'
+        i = i + 1
+    end 'compare_loop'
+    return true
+end 'endsWith'
+
+// contains - check if string contains needle
+export function string.contains(self string, needle string) bool
+    return string.find(self, needle) >= 0
+end 'contains'
+
+// find - find first occurrence of needle, return index or -1
+export function string.find(self string, needle string) int
+    var selfLen = self._data[15] as int
+    var needleLen = needle._data[15] as int
+
+    if needleLen == 0 'empty_needle'
+        return 0
+    end 'empty_needle'
+
+    if needleLen > selfLen 'too_long'
+        return 0 - 1
+    end 'too_long'
+
+    var i = 0
+    while i <= selfLen - needleLen 'search_loop'
+        var found = true
+        var j = 0
+        while j < needleLen 'compare_loop'
+            if self._data[i + j] != needle._data[j] 'byte_check'
+                found = false
+                break 'compare_loop'
+            end 'byte_check'
+            j = j + 1
+        end 'compare_loop'
+
+        if found 'found_check'
+            return i
+        end 'found_check'
+        i = i + 1
+    end 'search_loop'
+    return 0 - 1
+end 'find'

@@ -46,6 +46,12 @@ void MIRCodeGenerator::logTrace(const std::string &msg) {
 //==============================================================================
 
 mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
+	// Check for user-defined struct types first (allows stdlib to define types like 'string')
+	auto it = structTypes.find(typeStr);
+	if (it != structTypes.end()) {
+		return it->second;
+	}
+
 	if (typeStr == "int") {
 		return mir::MIRType::getInt32();
 	} else if (typeStr == "float") {
@@ -62,12 +68,6 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return mir::MIRType::getPtr();
 	} else if (typeStr == "void") {
 		return mir::MIRType::getVoid();
-	} else if (typeStr == "string") {
-		// String type: 16-byte struct {i64, i64}
-		// Layout: [bytes 0-7: data/ptr][bytes 8-15: count/flags]
-		// Small strings (<=15 bytes): stored inline, MSB of byte 15 = 0
-		// Large strings: heap pointer, MSB of byte 15 = 1
-		return mir::MIRType::getStruct("__string", {mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 	} else if (typeStr.empty()) {
 		return mir::MIRType::getInt32(); // Default type
 	}
@@ -82,12 +82,6 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 			mir::MIRType *elementType = getTypeFromString(elemType);
 			return mir::MIRType::getArray(elementType, size);
 		}
-	}
-
-	// Check for struct type
-	auto it = structTypes.find(typeStr);
-	if (it != structTypes.end()) {
-		return it->second;
 	}
 
 	throw std::runtime_error("Unknown type: " + typeStr);
@@ -362,6 +356,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		mir::MIRType *structType = module->getOrCreateStructType(structDef->name, fieldTypes);
 		structTypes[structDef->name] = structType;
 		structFields[structDef->name] = fields;
+		structConformsTo[structDef->name] = structDef->conformsTo;
 	}
 
 	// Second pass: Create all function declarations and register extern functions

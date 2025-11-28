@@ -43,6 +43,7 @@ class MIRCodeGenerator {
 	// Struct type definitions
 	std::map<std::string, mir::MIRType *> structTypes;
 	std::map<std::string, std::vector<std::pair<std::string, std::string>>> structFields;
+	std::map<std::string, std::vector<std::string>> structConformsTo; // Track interface conformance
 
 	// Safe FFI: Track extern functions for subprocess isolation
 	struct ExternFuncInfo {
@@ -123,16 +124,8 @@ class MIRCodeGenerator {
 	// Array intrinsic generation (push, pop)
 	mir::MIRValue *generateArrayIntrinsic(CallExprAST *callExpr);
 
-	// String literal generation (SSO - Small String Optimization)
+	// String literal generation
 	mir::MIRValue *generateStringLiteral(StringLiteralExprAST *strExpr);
-	mir::MIRValue *generateSmallStringLiteral(const std::string &str);
-	mir::MIRValue *generateLargeStringLiteral(const std::string &str);
-
-	// String operations
-	mir::MIRValue *generateStringEquals(mir::MIRValue *left, mir::MIRValue *right);
-	mir::MIRValue *generateStringConcat(mir::MIRValue *left, mir::MIRValue *right);
-	bool isStringExpression(ExprAST *expr);
-	mir::MIRValue *generateStringOperand(ExprAST *expr);
 
 	// Safe FFI generation
 	void registerExternFunction(FunctionAST *func);

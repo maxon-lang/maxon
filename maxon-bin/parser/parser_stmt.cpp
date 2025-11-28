@@ -262,6 +262,16 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 			advance(); // consume '.'
 			Token memberName = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
 
+			// Check for array index on member (struct.field[i] = value)
+			if (check(TokenType::LBRACKET)) {
+				advance(); // consume '['
+				auto index = parseLogicalOr();
+				expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
+				expectAdvance(TokenType::ASSIGN, "Expected '=' in array member assignment");
+				auto value = parseLogicalOr();
+				return std::make_unique<MemberArrayAssignStmtAST>(name, memberName.value, std::move(index), std::move(value), idLine, idColumn);
+			}
+
 			// If followed by assignment, this is struct member assignment
 			if (check(TokenType::ASSIGN)) {
 				advance(); // consume '='
@@ -270,8 +280,9 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 			}
 
 			// Check for method call: arr.push(5) -> push(arr, 5)
-			// This is method call if name is a simple identifier (no dots)
-			if (check(TokenType::LPAREN) && name.find('.') == std::string::npos) {
+			// This is method call if name is a simple identifier (no dots) and NOT a known type
+			// Special case: 'string' is a type name even though it's lowercase
+			if (check(TokenType::LPAREN) && name.find('.') == std::string::npos && name != "string") {
 				std::string methodName = memberName.value;
 				advance(); // consume '('
 
