@@ -782,6 +782,17 @@ Generated code quality is competitive with optimizing compilers:
 
 ### Implementation Files
 
+**Lexer & Parser (Frontend):**
+- [maxon-bin/lexer.h](maxon-bin/lexer.h) - Lexer API and token definitions
+- [maxon-bin/lexer.cpp](maxon-bin/lexer.cpp) - SIMD-optimized lexer implementation
+- [maxon-bin/lexer/lexer_platform.h](maxon-bin/lexer/lexer_platform.h) - Platform-specific SIMD intrinsics
+- [maxon-bin/lexer/lexer_char_class.h](maxon-bin/lexer/lexer_char_class.h) - SIMD character classification
+- [maxon-bin/lexer/lexer_keyword_matcher.h](maxon-bin/lexer/lexer_keyword_matcher.h) - Perfect hash keyword matching
+- [maxon-bin/lexer/lexer_number_parser.h](maxon-bin/lexer/lexer_number_parser.h) - SIMD number literal parsing
+- [maxon-bin/token_stream.h](maxon-bin/token_stream.h) - Cache-efficient SoA token storage
+- [maxon-bin/parser_support.h](maxon-bin/parser_support.h) - Parser optimizations (lookahead, block boundary)
+- [maxon-bin/parser.h](maxon-bin/parser.h) - Recursive descent parser
+
 **Core MIR:**
 - [maxon-bin/mir/mir.h](maxon-bin/mir/mir.h) - MIR type system and instructions
 - [maxon-bin/mir/mir_builder.h](maxon-bin/mir/mir_builder.h) - MIR construction API
@@ -844,11 +855,25 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 
 ---
 
-**Last Updated:** 2025-11-26
-**Version:** Winchester 1.1
+**Last Updated:** 2025-11-27
+**Version:** Winchester 1.2
 **Maintainer:** Maxon Compiler Team
 
 ## Recent Changes
+
+### Winchester 1.2 (2025-11-27)
+
+**Lexer Reorganization:**
+- SIMD-optimized lexer is now the default and only lexer implementation
+- Removed `simd::` namespace - all lexer types are now in global namespace
+- Lexer support files moved to `maxon-bin/lexer/` directory:
+  - `lexer_platform.h` - Platform-specific SIMD intrinsics (AVX2/SSE4.2)
+  - `lexer_char_class.h` - Vectorized character classification
+  - `lexer_keyword_matcher.h` - Perfect hash keyword matching
+  - `lexer_number_parser.h` - SIMD number literal parsing
+- `Lexer` class replaces `simd::SIMDLexer`
+- `TokenStream` provides cache-efficient SoA token storage with string interning
+- `tokenize()` free function provides simple interface for one-shot tokenization
 
 ### Winchester 1.1 (2025-11-26)
 

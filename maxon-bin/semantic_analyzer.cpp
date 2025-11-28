@@ -48,6 +48,10 @@ const StructInfo *SemanticAnalyzer::lookupStruct(const std::string &name) const 
 void SemanticAnalyzer::registerExternalFunction(const std::string &name, const std::string &returnType,
 												const std::vector<FunctionParameter> &parameters) {
 	functions.emplace(name, FunctionInfo(name, returnType, parameters));
+	// External functions get indices starting from a high offset to avoid conflicts
+	// We'll assign them sequential IDs starting from a large base
+	static size_t externalFunctionIdBase = 1000000;
+	functionIndices[name] = externalFunctionIdBase++;
 }
 
 std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
@@ -101,8 +105,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 		}
 	}
 
-	// Second pass: collect all function declarations
+	// Second pass: collect all function declarations and build function index map
 	logTrace("Pass 2: Collecting function declarations");
+	functionIndices.clear(); // Reset indices for new analysis
+	size_t nextFunctionId = 0;
+
 	for (const auto &func : program->functions) {
 		// Build the qualified name if the function has a namespace
 		std::string functionKey = func->namespaceName.empty() ? func->name : func->namespaceName + "." + func->name;
@@ -115,11 +122,13 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 					 func->line, func->column);
 		} else {
 			functions.emplace(functionKey, FunctionInfo(functionKey, func->returnType, func->parameters));
+			functionIndices[functionKey] = nextFunctionId++;
 		}
 
 		// Also register the simple name if in global namespace (for backward compatibility)
 		if (func->namespaceName.empty() && functions.find(func->name) == functions.end()) {
 			functions.emplace(func->name, FunctionInfo(func->name, func->returnType, func->parameters));
+			functionIndices[func->name] = functionIndices[functionKey]; // Same ID for both names
 		}
 	}
 

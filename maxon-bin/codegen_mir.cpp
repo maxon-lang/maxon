@@ -336,8 +336,12 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 // Main Generation
 //==============================================================================
 
-void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
+void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
+								const std::map<std::string, size_t> *functionIndices) {
 	logProgress("Starting MIR generation");
+
+	// Clear function ID map for new generation
+	functionIdToMIR.clear();
 
 	// Note: Standard library (write_stdout) is initialized on-demand when
 	// print/print_float is called - see codegen_mir_expr.cpp
@@ -394,6 +398,14 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint) {
 
 				if (isArrayParam(param.type)) {
 					mirFunc->addParameter(mir::MIRType::getInt32(), param.name + ".__length");
+				}
+			}
+
+			// Store function ID mapping for fast lookups during codegen
+			if (functionIndices) {
+				auto it = functionIndices->find(functionName);
+				if (it != functionIndices->end()) {
+					functionIdToMIR[it->second] = mirFunc;
 				}
 			}
 		}

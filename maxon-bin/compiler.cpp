@@ -179,14 +179,16 @@ std::string compileProgram(const CompilationOptions &options) {
 
 	int iteration = 0;
 	const int maxIterations = 10;
+	std::map<std::string, size_t> functionIndices; // Store function indices from semantic analysis
 	bool discoveredNewFiles = false;
+	std::unique_ptr<ProgramAST> mergedProgram; // Declare outside loop to preserve function IDs
 
 	do {
 		iteration++;
 		logger.trace(LogPhase::Semantic, "Dependency resolution iteration ", iteration);
 		discoveredNewFiles = false;
 
-		std::unique_ptr<ProgramAST> mergedProgram = std::make_unique<ProgramAST>();
+		mergedProgram = std::make_unique<ProgramAST>();
 		for (auto &prog : programs) {
 			for (auto &func : prog->functions) {
 				mergedProgram->functions.push_back(std::move(func));
@@ -223,6 +225,9 @@ std::string compileProgram(const CompilationOptions &options) {
 		auto semanticStart = logger.startTimer();
 		std::vector<SemanticError> semanticErrors = analyzer.analyze(mergedProgram.get());
 		logger.logElapsed(LogPhase::Semantic, "Analysis time", semanticStart);
+
+		// Store function indices for codegen optimization
+		functionIndices = analyzer.getFunctionIndices();
 
 		std::set<std::string> undefinedFunctions = analyzer.getUndefinedFunctions();
 
@@ -270,25 +275,13 @@ std::string compileProgram(const CompilationOptions &options) {
 			throw std::runtime_error("");
 		}
 
-		programs.clear();
-		for (const auto &file : allFiles) {
-			// Use a silent logger for re-parsing to avoid duplicate output
-			Logger silentLogger(0);
-			programs.push_back(parseFile(file, silentLogger));
-		}
+		// Semantic analysis succeeded - break out of the loop
+		// Note: We don't re-parse here because it would lose the function IDs set during semantic analysis
 		break;
 
 	} while (discoveredNewFiles && iteration < maxIterations);
 
-	std::unique_ptr<ProgramAST> mergedProgram = std::make_unique<ProgramAST>();
-	for (auto &prog : programs) {
-		for (auto &func : prog->functions) {
-			mergedProgram->functions.push_back(std::move(func));
-		}
-		for (auto &structDef : prog->structs) {
-			mergedProgram->structs.push_back(std::move(structDef));
-		}
-	}
+	// mergedProgram now contains the AST with function IDs set from semantic analysis
 
 	std::string moduleName = options.inputFiles.size() == 1 ? options.inputFiles[0] : "merged";
 	// For temp files (in temp/ directory), use just the filename without path to keep IR clean
@@ -313,7 +306,7 @@ std::string compileProgram(const CompilationOptions &options) {
 	MIRCodeGenerator codegen(moduleName, options.debugInfo, options.verboseLevel);
 
 	auto codegenStart = logger.startTimer();
-	codegen.generate(mergedProgram.get(), !options.compileOnly);
+	codegen.generate(mergedProgram.get(), !options.compileOnly, &functionIndices);
 	logger.logElapsed(LogPhase::MIR, "MIR generation time", codegenStart);
 
 	auto dcStart = logger.startTimer();

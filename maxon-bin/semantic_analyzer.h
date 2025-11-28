@@ -100,6 +100,9 @@ class SemanticAnalyzer {
 	// Get all functions
 	const std::map<std::string, FunctionInfo> &getFunctions() const { return functions; }
 
+	// Get function indices for codegen optimization
+	const std::map<std::string, size_t> &getFunctionIndices() const { return functionIndices; }
+
 	// Get all structs
 	const std::map<std::string, StructInfo> &getStructs() const { return structs; }
 
@@ -111,6 +114,7 @@ class SemanticAnalyzer {
 	const StructInfo *lookupStruct(const std::string &name) const;
 	std::vector<SemanticError> errors;
 	std::map<std::string, FunctionInfo> functions;
+	std::map<std::string, size_t> functionIndices;				 // Map function name to index for O(1) codegen lookup
 	std::map<std::string, StructInfo> structs;					 // Struct definitions
 	std::map<std::string, VariableInfo> variables;				 // Current scope variables
 	std::vector<std::map<std::string, VariableInfo>> scopeStack; // Stack of variable scopes

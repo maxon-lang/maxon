@@ -341,9 +341,14 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				return "error";
 			}
 
-			// Exactly one match - use it for validation (don't modify AST)
+			// Exactly one match - use it for validation and set function ID
 			// Note: We found the function, so it's not undefined
 			funcIt = functions.find(matches[0]);
+			// Store the resolved function ID in the AST for fast codegen lookup
+			auto idIt = functionIndices.find(matches[0]);
+			if (idIt != functionIndices.end()) {
+				callExpr->functionId = idIt->second;
+			}
 		}
 
 		if (funcIt == functions.end()) {
@@ -361,6 +366,12 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		}
 
 		const FunctionInfo &funcInfo = funcIt->second;
+
+		// Store the resolved function ID in the AST for fast codegen lookup
+		auto idIt = functionIndices.find(funcIt->first);
+		if (idIt != functionIndices.end()) {
+			callExpr->functionId = idIt->second;
+		}
 
 		// Check argument count
 		if (callExpr->args.size() != funcInfo.parameters.size()) {

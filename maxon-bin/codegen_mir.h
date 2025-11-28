@@ -31,6 +31,9 @@ class MIRCodeGenerator {
 	// Type tracking for variables (needed for struct/array access)
 	std::map<std::string, std::string> variableTypes;
 
+	// Function ID to MIR function mapping (for fast lookups during codegen)
+	std::map<size_t, mir::MIRFunction *> functionIdToMIR;
+
 	// Track which variables are struct parameters (passed by pointer)
 	std::set<std::string> structParameters;
 
@@ -171,7 +174,8 @@ class MIRCodeGenerator {
 	~MIRCodeGenerator();
 
 	// Main generation entry point
-	void generate(ProgramAST *program, bool needsEntryPoint = true);
+	void generate(ProgramAST *program, bool needsEntryPoint = true,
+				  const std::map<std::string, size_t> *functionIndices = nullptr);
 
 	// Optimization
 	void optimize();

@@ -785,22 +785,35 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		// Check if this is an extern function that should go through Safe FFI
 		bool usesSafeFfi = externFunctions.find(callExpr->callee) != externFunctions.end();
 
-		// Look up function
-		mir::MIRFunction *calleeF = module->getFunction(callExpr->callee);
+		// Look up function - use O(1) function ID lookup if available
+		mir::MIRFunction *calleeF = nullptr;
 
-		// If not found, try suffix matching for namespaced functions
-		if (!calleeF && callExpr->callee.find(".") == std::string::npos) {
-			std::string searchSuffix = "." + callExpr->callee;
-			for (auto &func : module->functions) {
-				const std::string &funcName = func->name;
-				if (funcName.size() > searchSuffix.size() &&
-					funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
-					calleeF = func.get();
-					// Also check if namespaced version is extern
-					if (externFunctions.find(funcName) != externFunctions.end()) {
-						usesSafeFfi = true;
+		if (callExpr->functionId != SIZE_MAX) {
+			// Fast path: function was resolved during semantic analysis
+			auto it = functionIdToMIR.find(callExpr->functionId);
+			if (it != functionIdToMIR.end()) {
+				calleeF = it->second;
+			}
+		}
+
+		// Fallback to name-based lookup if function ID not available
+		if (!calleeF) {
+			calleeF = module->getFunction(callExpr->callee);
+
+			// If not found, try suffix matching for namespaced functions
+			if (!calleeF && callExpr->callee.find(".") == std::string::npos) {
+				std::string searchSuffix = "." + callExpr->callee;
+				for (auto &func : module->functions) {
+					const std::string &funcName = func->name;
+					if (funcName.size() > searchSuffix.size() &&
+						funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
+						calleeF = func.get();
+						// Also check if namespaced version is extern
+						if (externFunctions.find(funcName) != externFunctions.end()) {
+							usesSafeFfi = true;
+						}
+						break;
 					}
-					break;
 				}
 			}
 		}
