@@ -80,10 +80,11 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
 	clientOptions = {
 		documentSelector: [
-			{ scheme: 'file', language: 'maxon', pattern: '**/*.maxon' }
+			{ scheme: 'file', language: 'maxon', pattern: '**/*.maxon' },
+			{ scheme: 'file', language: 'maxon', pattern: '**/*.test' }
 		],
 		synchronize: {
-			fileEvents: vscode.workspace.createFileSystemWatcher('**/*.maxon'),
+			fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{maxon,test}'),
 			configurationSection: 'maxon'
 		},
 		outputChannel: outputChannel,

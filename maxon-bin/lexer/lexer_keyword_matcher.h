@@ -74,6 +74,7 @@ class KeywordMatcher {
 		add_keyword("var", KeywordCategory::Declaration);
 		add_keyword("let", KeywordCategory::Declaration);
 		add_keyword("struct", KeywordCategory::Declaration);
+		add_keyword("interface", KeywordCategory::Declaration);
 		add_keyword("export", KeywordCategory::Declaration);
 		add_keyword("extern", KeywordCategory::Declaration);
 
@@ -105,6 +106,7 @@ class KeywordMatcher {
 		add_keyword("or", KeywordCategory::Operator);
 		add_keyword("not", KeywordCategory::Operator);
 		add_keyword("mod", KeywordCategory::Operator);
+		add_keyword("is", KeywordCategory::Operator);
 
 		initialized_ = true;
 	}
@@ -121,18 +123,13 @@ class KeywordMatcher {
 		if (!initialized_)
 			initialize();
 
-		// Quick length check: all keywords are 2-8 characters
-		if (len < 2 || len > 8) {
-			return false;
-		}
-
 		// Compute hash
 		uint32_t hash = compute_hash(str, len);
 
 		// Linear probing to find the keyword
-		// Maximum probes needed is the number of keywords (38) but in practice
+		// Maximum probes needed is the number of keywords but in practice
 		// we should find it quickly or hit an empty slot
-		for (size_t probe = 0; probe < 16; ++probe) { // 16 probes max should be plenty
+		for (size_t probe = 0; probe < 64; ++probe) { // 64 probes max to handle collisions
 			uint32_t current_hash = (hash + probe) & (TABLE_SIZE - 1);
 			uint32_t slot = hash_table_[current_hash];
 

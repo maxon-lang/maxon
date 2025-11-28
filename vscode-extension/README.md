@@ -4,6 +4,7 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 
 ## Features
 - Syntax highlighting for `.maxon` files using a TextMate grammar
+- **Test file support**: Full language support for `.test` fragment files (only the Maxon code portion)
 - Language Server Protocol support (completion, diagnostics, go-to-definition, etc.) when the `maxon-lsp` server is available
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
 - **Code formatting**: Format your Maxon code with customizable indentation settings
@@ -45,6 +46,7 @@ If/when published, the extension will be installable from the VS Code Marketplac
 
 ## Usage
 - Open a `.maxon` file in VS Code. If the LSP server binary is available and runs correctly, you should get diagnostics, code completion, and basic navigation features.
+- Open a `.test` file (language test fragments) and get full LSP support for the Maxon code portion (before the `---` separator).
 - If you only want syntax highlighting, no LSP server is required.
 
 ### Server location

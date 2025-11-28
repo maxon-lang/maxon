@@ -495,7 +495,7 @@ end 'loop'
 **Notes:**
 - Loop variable is immutable (like `let`)
 - Currently supports ranges (`start..end`)
-- Desugars to while loop with iterator protocol
+- Desugars to while loop with iterator interface
 
 ### Break Statement
 ```maxon
@@ -625,7 +625,7 @@ s.trim() string                     // Remove leading/trailing whitespace
 Located in `stdlib/` directory:
 - `stdlib/fmt/` - Formatting utilities
 - `stdlib/fs/` - File system operations
-- `stdlib/iter/` - Iterator protocol
+- `stdlib/iter/` - Iterator interface
 
 ---
 

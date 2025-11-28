@@ -82,18 +82,98 @@ TEST_CASE("multiple_documents", "[document_manager]") {
 
 TEST_CASE("document_versioning", "[document_manager]") {
 
-    
+
     DocumentManager manager;
     std::string uri = "file:///test.maxon";
-    
+
     manager.openDocument(uri, "v0", 0);
     REQUIRE(manager.getDocument(uri)->version == 0);
-    
+
     manager.updateDocument(uri, "v1", 1);
     REQUIRE(manager.getDocument(uri)->version == 1);
-    
+
     manager.updateDocument(uri, "v2", 2);
     REQUIRE(manager.getDocument(uri)->version == 2);
-    
 
+
+}
+
+TEST_CASE("test_fragment_strips_after_separator", "[document_manager][test_fragments]") {
+    DocumentManager manager;
+    std::string uri = "file:///c:/Users/Eric/Dev/maxon/language-tests/fragments/test.test";
+    std::string fullText =
+        "// Test: test\n"
+        "function main() int\n"
+        "    return 42\n"
+        "end 'main'\n"
+        "---\n"
+        "; Module: test.maxon\n"
+        "; Instructions: 10\n";
+
+    std::string expectedText =
+        "// Test: test\n"
+        "function main() int\n"
+        "    return 42\n"
+        "end 'main'";
+
+    manager.openDocument(uri, fullText, 1);
+
+    auto doc = manager.getDocument(uri);
+    REQUIRE(doc != nullptr);
+    REQUIRE(doc->text == expectedText);
+}
+
+TEST_CASE("test_fragment_update_strips_content", "[document_manager][test_fragments]") {
+    DocumentManager manager;
+    std::string uri = "file:///c:/Users/Eric/Dev/maxon/language-tests/fragments/test.test";
+    std::string text1 = "var x: i32 = 5\n---\nIR output";
+    std::string text2 = "var x: i32 = 10\n---\nDifferent IR";
+
+    manager.openDocument(uri, text1, 1);
+    manager.updateDocument(uri, text2, 2);
+
+    auto doc = manager.getDocument(uri);
+    REQUIRE(doc != nullptr);
+    REQUIRE(doc->text == "var x: i32 = 10");
+    REQUIRE(doc->version == 2);
+}
+
+TEST_CASE("regular_test_file_not_stripped", "[document_manager][test_fragments]") {
+    DocumentManager manager;
+    std::string uri = "file:///c:/Users/Eric/Dev/maxon/examples/test.test";
+    std::string fullText =
+        "function main() int\n"
+        "    var separator = \"---\"\n"
+        "    return 42\n"
+        "end 'main'";
+
+    manager.openDocument(uri, fullText, 1);
+
+    auto doc = manager.getDocument(uri);
+    REQUIRE(doc != nullptr);
+    REQUIRE(doc->text == fullText);  // Should not be stripped
+}
+
+TEST_CASE("test_fragment_without_separator_unchanged", "[document_manager][test_fragments]") {
+    DocumentManager manager;
+    std::string uri = "file:///c:/Users/Eric/Dev/maxon/language-tests/fragments/test.test";
+    std::string text = "function main() int\n    return 42\nend 'main'";
+
+    manager.openDocument(uri, text, 1);
+
+    auto doc = manager.getDocument(uri);
+    REQUIRE(doc != nullptr);
+    REQUIRE(doc->text == text);  // No separator, so unchanged
+}
+
+TEST_CASE("unix_path_test_fragment", "[document_manager][test_fragments]") {
+    DocumentManager manager;
+    std::string uri = "file:///home/user/maxon/language-tests/fragments/test.test";
+    std::string fullText = "var x: i32 = 5\n---\nIR output";
+
+    manager.openDocument(uri, fullText, 1);
+
+    auto doc = manager.getDocument(uri);
+    REQUIRE(doc != nullptr);
+    REQUIRE(doc->text == "var x: i32 = 5");
 }

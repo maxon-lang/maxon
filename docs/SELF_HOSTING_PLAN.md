@@ -225,7 +225,7 @@ var parts = str.split(' ')
 
 **Language Feature:**
 ```maxon
-var symbols = HashMap<String, int>()
+var symbols = map from string to int
 symbols.insert("foo", 42)
 var value = symbols.get("foo")
 var exists = symbols.contains("foo")

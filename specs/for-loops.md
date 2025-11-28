@@ -60,7 +60,7 @@ For loops in Maxon use an iterator-based approach where the compiler provides sy
 - `range.maxon`: Provides `range(start, end)` function
 - `array.maxon`: Provides array iteration (future)
 
-### Iterator Protocol
+### Iterator Interface
 
 The iterator interface is a contract defined by the standard library in `stdlib/iter/iterator.maxon`:
 
@@ -73,7 +73,7 @@ Any type that implements these three functions can be used with for loops.
 
 ## Documentation
 
-For loops provide convenient iteration over ranges and collections using an iterator protocol defined by the standard library.
+For loops provide convenient iteration over ranges and collections using an iterator interface defined by the standard library.
 
 ### Syntax
 
@@ -192,7 +192,7 @@ This design separates concerns:
 - **Compiler**: Syntax sugar only
 - **Standard Library**: All iteration logic (auto-discovered, no imports needed)
 
-### Iterator Protocol
+### Iterator Interface
 
 The iterator interface is a contract defined by the standard library. Any type that implements the three required functions can be used with for loops:
 

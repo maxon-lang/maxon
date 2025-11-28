@@ -148,7 +148,21 @@ std::vector<std::string> extractFunctionNames(const std::string &filePath) {
 		for (size_t i = 0; i < tokens.size(); ++i) {
 			if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "function" && i + 1 < tokens.size()) {
 				if (tokens[i + 1].type == TokenType::IDENTIFIER) {
-					functionNames.push_back(tokens[i + 1].value);
+					std::string funcName = tokens[i + 1].value;
+
+					// Check for method syntax: function Type.method(...)
+					// If next tokens are DOT and IDENTIFIER, this is a method
+					if (i + 3 < tokens.size() &&
+						tokens[i + 2].type == TokenType::DOT &&
+						tokens[i + 3].type == TokenType::IDENTIFIER) {
+						// Register as "Type.method" for method-style lookup
+						functionNames.push_back(funcName + "." + tokens[i + 3].value);
+						// Also register just the method name for compatibility
+						functionNames.push_back(tokens[i + 3].value);
+					} else {
+						// Regular function
+						functionNames.push_back(funcName);
+					}
 				}
 			}
 		}
@@ -157,6 +171,26 @@ std::vector<std::string> extractFunctionNames(const std::string &filePath) {
 	}
 
 	return functionNames;
+}
+
+std::vector<std::string> extractStructNames(const std::string &filePath) {
+	std::vector<std::string> structNames;
+	try {
+		std::string source = readFile(filePath);
+		std::vector<Token> tokens = tokenize(source);
+
+		for (size_t i = 0; i < tokens.size(); ++i) {
+			if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "struct" && i + 1 < tokens.size()) {
+				if (tokens[i + 1].type == TokenType::IDENTIFIER) {
+					structNames.push_back(tokens[i + 1].value);
+				}
+			}
+		}
+	} catch (...) {
+		// Ignore parsing issues while building index
+	}
+
+	return structNames;
 }
 
 const std::map<std::string, std::string> &getStdlibIndex() {
@@ -193,6 +227,102 @@ std::vector<std::string> findStdlibFilesDefining(const std::set<std::string> &fu
 		}
 
 		auto it = index.find(unqualifiedName);
+		if (it != index.end()) {
+			if (uniqueFiles.insert(it->second).second) {
+				resultFiles.push_back(it->second);
+			}
+		}
+	}
+
+	return resultFiles;
+}
+
+const std::map<std::string, std::string> &getStdlibStructIndex() {
+	static std::map<std::string, std::string> index;
+	static bool initialized = false;
+
+	if (!initialized) {
+		std::string stdlibDir = findStdlibDirectory();
+		std::vector<std::string> stdlibFiles = findMaxonFiles(stdlibDir);
+
+		for (const auto &file : stdlibFiles) {
+			std::vector<std::string> definedStructs = extractStructNames(file);
+			for (const auto &structName : definedStructs) {
+				index[structName] = file;
+			}
+		}
+
+		initialized = true;
+	}
+
+	return index;
+}
+
+std::vector<std::string> findStdlibFilesDefiningStructs(const std::set<std::string> &structNames) {
+	std::vector<std::string> resultFiles;
+	std::set<std::string> uniqueFiles;
+	const auto &index = getStdlibStructIndex();
+
+	for (const auto &structName : structNames) {
+		auto it = index.find(structName);
+		if (it != index.end()) {
+			if (uniqueFiles.insert(it->second).second) {
+				resultFiles.push_back(it->second);
+			}
+		}
+	}
+
+	return resultFiles;
+}
+
+std::vector<std::string> extractInterfaceNames(const std::string &filePath) {
+	std::vector<std::string> interfaceNames;
+	try {
+		std::string source = readFile(filePath);
+		std::vector<Token> tokens = tokenize(source);
+
+		for (size_t i = 0; i < tokens.size(); ++i) {
+			if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "interface" && i + 1 < tokens.size()) {
+				if (tokens[i + 1].type == TokenType::IDENTIFIER) {
+					interfaceNames.push_back(tokens[i + 1].value);
+				}
+			}
+		}
+	} catch (...) {
+		// Ignore parsing issues while building index
+	}
+
+	return interfaceNames;
+}
+
+const std::map<std::string, std::string> &getStdlibInterfaceIndex() {
+	static std::map<std::string, std::string> index;
+	static bool initialized = false;
+
+	if (!initialized) {
+		std::string stdlibDir = findStdlibDirectory();
+		std::vector<std::string> stdlibFiles = findMaxonFiles(stdlibDir);
+
+		for (const auto &file : stdlibFiles) {
+			std::vector<std::string> definedInterfaces = extractInterfaceNames(file);
+			for (const auto &proto : definedInterfaces) {
+				index[proto] = file;
+			}
+		}
+
+		initialized = true;
+	}
+
+	return index;
+}
+
+std::vector<std::string> findStdlibFilesDefiningInterfaces(const std::set<std::string> &interfaceNames) {
+	std::vector<std::string> resultFiles;
+	std::set<std::string> uniqueFiles;
+	const auto &index = getStdlibInterfaceIndex();
+
+	for (const auto &protoName : interfaceNames) {
+		auto it = index.find(protoName);
 		if (it != index.end()) {
 			if (uniqueFiles.insert(it->second).second) {
 				resultFiles.push_back(it->second);

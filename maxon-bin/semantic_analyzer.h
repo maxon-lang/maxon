@@ -64,11 +64,34 @@ struct StructFieldInfo {
 struct StructInfo {
 	std::string name;
 	std::vector<StructFieldInfo> fields;
+	std::vector<std::string> conformsTo; // Interfaces this struct conforms to
 	int line;
 	int column;
 
-	StructInfo(const std::string &n, std::vector<StructFieldInfo> f, int l = 0, int c = 0)
-		: name(n), fields(std::move(f)), line(l), column(c) {}
+	StructInfo(const std::string &n, std::vector<StructFieldInfo> f, int l = 0, int c = 0,
+			   std::vector<std::string> conforms = {})
+		: name(n), fields(std::move(f)), conformsTo(std::move(conforms)), line(l), column(c) {}
+};
+
+// Interface method signature information
+struct InterfaceMethodInfo {
+	std::string name;
+	std::string returnType;
+	std::vector<FunctionParameter> parameters;
+
+	InterfaceMethodInfo(const std::string &n, const std::string &ret, std::vector<FunctionParameter> params)
+		: name(n), returnType(ret), parameters(std::move(params)) {}
+};
+
+// Interface information
+struct InterfaceInfo {
+	std::string name;
+	std::vector<InterfaceMethodInfo> methods;
+	int line;
+	int column;
+
+	InterfaceInfo(const std::string &n, int l = 0, int c = 0)
+		: name(n), line(l), column(c) {}
 };
 
 class SemanticAnalyzer {
@@ -85,6 +108,10 @@ class SemanticAnalyzer {
 	void registerExternalFunction(const std::string &name, const std::string &returnType,
 								  const std::vector<FunctionParameter> &parameters);
 
+	// Register all built-in functions (string methods, runtime functions, etc.)
+	// Call this before analyze() to make built-ins available
+	void registerBuiltinFunctions();
+
 	// Get errors from last analysis
 	const std::vector<SemanticError> &getErrors() const { return errors; }
 
@@ -93,6 +120,12 @@ class SemanticAnalyzer {
 
 	// Get list of undefined functions from last analysis
 	const std::set<std::string> &getUndefinedFunctions() const { return undefinedFunctions; }
+
+	// Get list of undefined structs from last analysis
+	const std::set<std::string> &getUndefinedStructs() const { return undefinedStructs; }
+
+	// Get list of undefined interfaces from last analysis
+	const std::set<std::string> &getUndefinedInterfaces() const { return undefinedInterfaces; }
 
 	// Get all variables from all scopes (for LSP hover/completion)
 	std::map<std::string, VariableInfo> getAllVariables() const;
@@ -106,6 +139,9 @@ class SemanticAnalyzer {
 	// Get all structs
 	const std::map<std::string, StructInfo> &getStructs() const { return structs; }
 
+	// Get all interfaces
+	const std::map<std::string, InterfaceInfo> &getInterfaces() const { return interfaces; }
+
 	// Get persistent symbol table (all variables ever declared, for LSP)
 	const std::map<std::string, VariableInfo> &getAllDeclaredVariables() const { return allDeclaredVariables; }
 
@@ -116,12 +152,15 @@ class SemanticAnalyzer {
 	std::map<std::string, FunctionInfo> functions;
 	std::map<std::string, size_t> functionIndices;				 // Map function name to index for O(1) codegen lookup
 	std::map<std::string, StructInfo> structs;					 // Struct definitions
+	std::map<std::string, InterfaceInfo> interfaces;				 // Interface definitions
 	std::map<std::string, VariableInfo> variables;				 // Current scope variables
 	std::vector<std::map<std::string, VariableInfo>> scopeStack; // Stack of variable scopes
 	int loopDepth;												 // Track nested loop depth
 	std::vector<std::set<std::string>> blockIdStack;			 // Stack of block identifier sets per nesting level
 	std::vector<std::string> loopLabelStack;					 // Stack of loop labels for break/continue validation
 	std::set<std::string> undefinedFunctions;					 // Track undefined function calls
+	std::set<std::string> undefinedStructs;						 // Track undefined struct types
+	std::set<std::string> undefinedInterfaces;					 // Track undefined interfaces in conformance
 
 	// Persistent symbol table for LSP - stores all variables ever declared
 	std::map<std::string, VariableInfo> allDeclaredVariables;
@@ -158,6 +197,7 @@ class SemanticAnalyzer {
 	bool hasReturnInPath(const std::vector<std::unique_ptr<StmtAST>> &statements);
 	void markVariableAsUsed(const std::string &name);
 	void checkUnusedVariables();
+	void checkInterfaceConformance(const std::string &structName, const std::vector<std::string> &conformsTo, int line, int column);
 };
 
 #endif // SEMANTIC_ANALYZER_H

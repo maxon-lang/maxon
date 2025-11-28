@@ -56,7 +56,19 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	Token funcToken = expectKeyword("function", "Expected 'function'");
 	Token name = expect(TokenType::IDENTIFIER, "Expected function name");
 
-	logTrace("Parsing function '" + name.value + "'" +
+	// Check for method syntax: function Type.method(...)
+	std::string receiverType = "";
+	std::string methodName = name.value;
+	if (check(TokenType::DOT)) {
+		// This is a method definition: function ReceiverType.methodName(...)
+		receiverType = name.value;
+		advance(); // consume '.'
+		Token methodToken = expect(TokenType::IDENTIFIER, "Expected method name after '.'");
+		methodName = methodToken.value;
+	}
+
+	logTrace(std::string("Parsing ") + (receiverType.empty() ? "function" : "method") + " '" +
+			 (receiverType.empty() ? methodName : receiverType + "." + methodName) + "'" +
 			 (isExtern ? " (extern)" : "") +
 			 (isExported ? " (exported)" : "") +
 			 " at line " + std::to_string(funcToken.line));
@@ -147,11 +159,11 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 		bool isStaticLib = findStaticLibrary(libName, libPath);
 
 		if (isStaticLib) {
-			logTrace("Extern function '" + name.value + "' -> " + returnType + " from static lib '" + libPath + "' (" + std::to_string(parameters.size()) + " params)");
+			logTrace("Extern function '" + methodName + "' -> " + returnType + " from static lib '" + libPath + "' (" + std::to_string(parameters.size()) + " params)");
 		} else {
-			logTrace("Extern function '" + name.value + "' -> " + returnType + " from DLL '" + libName + "' (" + std::to_string(parameters.size()) + " params)");
+			logTrace("Extern function '" + methodName + "' -> " + returnType + " from DLL '" + libName + "' (" + std::to_string(parameters.size()) + " params)");
 		}
-		return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported, libName, isStaticLib, libPath);
+		return std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported, libName, isStaticLib, libPath, receiverType);
 	}
 
 	// Parse function body
@@ -161,21 +173,21 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 	expectKeywordAdvance("end", "Expected 'end' to close function body");
 
-	// Function has implicit block identifier which is the function name
+	// Function/method has implicit block identifier which is the function/method name
 	// Require matching block identifier after end
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected function name as block identifier after 'end'");
-	if (endBlockIdToken.value != name.value) {
+	if (endBlockIdToken.value != methodName) {
 		throw std::runtime_error("Block identifier mismatch in function definition" +
-								 std::string("\n  Expected: '") + name.value + "'" +
+								 std::string("\n  Expected: '") + methodName + "'" +
 								 "\n  Found: '" + endBlockIdToken.value + "'" +
 								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
 								 ", column " + std::to_string(endBlockIdToken.column) +
 								 "\n  Note: The 'end' block identifier must match the function name");
 	}
 
-	logTrace("Function '" + name.value + "' -> " + returnType + " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
+	logTrace((receiverType.empty() ? "Function" : "Method") + std::string(" '") + methodName + "' -> " + returnType + " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
 
-	return std::make_unique<FunctionAST>(name.value, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported);
+	return std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported, "", false, "", receiverType);
 }
 
 std::unique_ptr<StructDefAST> Parser::parseStruct() {
@@ -192,6 +204,16 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 
 	Token nameToken = expect(TokenType::IDENTIFIER, "Expected struct name after 'struct'");
 	std::string structName = nameToken.value;
+
+	// Parse interface conformance: struct Foo is Interface1, Interface2
+	std::vector<std::string> conformsTo;
+	if (checkKeyword("is")) {
+		advance(); // consume 'is'
+		do {
+			Token protoToken = expect(TokenType::IDENTIFIER, "Expected interface name after 'is'");
+			conformsTo.push_back(protoToken.value);
+		} while (match(TokenType::COMMA));
+	}
 
 	std::vector<StructField> fields;
 
@@ -227,7 +249,7 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 								 std::string(", column ") + std::to_string(blockIdToken.column));
 	}
 
-	return std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported);
+	return std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo));
 }
 
 std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &structName) {
@@ -263,4 +285,98 @@ std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &st
 	expectAdvance(TokenType::RBRACE, "Expected '}' to close struct initialization");
 
 	return std::make_unique<StructInitExprAST>(structName, std::move(fields), line, column);
+}
+
+std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
+	// Check for export keyword
+	bool isExported = false;
+	if (checkKeyword("export")) {
+		isExported = true;
+		advance(); // consume 'export'
+	}
+
+	Token protoToken = expectKeyword("interface", "Expected 'interface'");
+	int line = protoToken.line;
+	int column = protoToken.column;
+
+	Token nameToken = expect(TokenType::IDENTIFIER, "Expected interface name after 'interface'");
+	std::string interfaceName = nameToken.value;
+
+	logTrace("Parsing interface '" + interfaceName + "'" +
+			 (isExported ? " (exported)" : "") +
+			 " at line " + std::to_string(line));
+
+	std::vector<InterfaceMethodSignature> methods;
+
+	// Parse method signatures until we hit 'end'
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+		// Each method starts with 'function'
+		Token funcToken = expectKeyword("function", "Expected 'function' for method signature in interface");
+		Token methodNameToken = expect(TokenType::IDENTIFIER, "Expected method name");
+		std::string methodName = methodNameToken.value;
+
+		expectAdvance(TokenType::LPAREN, "Expected '(' after method name");
+
+		// Parse parameters
+		std::vector<FunctionParameter> parameters;
+		if (!check(TokenType::RPAREN)) {
+			do {
+				Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
+
+				// Handle Self type specially
+				std::string paramType;
+				if (check(TokenType::IDENTIFIER) && std::string(currentValue()) == "Self") {
+					paramType = "Self";
+					advance();
+				} else if (Lexer::isTypeToken(currentToken())) {
+					paramType = std::string(currentValue());
+					advance();
+				} else if (check(TokenType::IDENTIFIER)) {
+					paramType = parseQualifiedName("parameter type");
+				} else {
+					throw std::runtime_error("Expected parameter type in interface method signature\n  Location: line " +
+											 std::to_string(currentLine()) + ", column " +
+											 std::to_string(currentColumn()));
+				}
+
+				parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
+			} while (match(TokenType::COMMA));
+		}
+
+		expectAdvance(TokenType::RPAREN, "Expected ')' after method parameters");
+
+		// Parse return type (optional - defaults to void)
+		std::string returnType = "void";
+		if (check(TokenType::IDENTIFIER) && std::string(currentValue()) == "Self") {
+			returnType = "Self";
+			advance();
+		} else {
+			auto retKd = currentKeywordData();
+			if ((retKd && retKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+				returnType = std::string(currentValue());
+				advance();
+			}
+		}
+
+		methods.push_back(InterfaceMethodSignature(methodName, std::move(parameters), returnType,
+												  methodNameToken.line, methodNameToken.column));
+
+		logTrace("  Method '" + methodName + "' -> " + returnType);
+	}
+
+	expectKeywordAdvance("end", "Expected 'end' to close interface");
+
+	// Require matching block identifier
+	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match interface name)");
+	if (blockIdToken.value != interfaceName) {
+		throw std::runtime_error("Block identifier mismatch in interface definition" +
+								 std::string("\n  Expected: '") + interfaceName + "'" +
+								 std::string("\n  Got: '") + blockIdToken.value + "'" +
+								 std::string("\n  at line ") + std::to_string(blockIdToken.line) +
+								 std::string(", column ") + std::to_string(blockIdToken.column));
+	}
+
+	logTrace("Interface '" + interfaceName + "' with " + std::to_string(methods.size()) + " methods");
+
+	return std::make_unique<InterfaceDefAST>(interfaceName, std::move(methods), line, column, defaultNamespace, isExported);
 }

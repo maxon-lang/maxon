@@ -196,31 +196,17 @@ std::string compileProgram(const CompilationOptions &options) {
 			for (auto &structDef : prog->structs) {
 				mergedProgram->structs.push_back(std::move(structDef));
 			}
+			for (auto &interfaceDef : prog->interfaces) {
+				mergedProgram->interfaces.push_back(std::move(interfaceDef));
+			}
 		}
 
 		programs.clear();
 
 		SemanticAnalyzer analyzer;
 
-		// Register runtime functions so stdlib can use them
-		analyzer.registerExternalFunction("write_stdout", "int",
-										  {FunctionParameter("buf", "[]char", 0, 0), FunctionParameter("count", "int", 0, 0)});
-
-		// Register string methods (these are runtime intrinsics)
-		analyzer.registerExternalFunction("starts_with", "bool",
-										  {FunctionParameter("str", "string", 0, 0), FunctionParameter("prefix", "string", 0, 0)});
-		analyzer.registerExternalFunction("ends_with", "bool",
-										  {FunctionParameter("str", "string", 0, 0), FunctionParameter("suffix", "string", 0, 0)});
-		analyzer.registerExternalFunction("contains", "bool",
-										  {FunctionParameter("haystack", "string", 0, 0), FunctionParameter("needle", "string", 0, 0)});
-		analyzer.registerExternalFunction("find", "int",
-										  {FunctionParameter("haystack", "string", 0, 0), FunctionParameter("needle", "string", 0, 0)});
-		analyzer.registerExternalFunction("to_upper", "string",
-										  {FunctionParameter("str", "string", 0, 0)});
-		analyzer.registerExternalFunction("to_lower", "string",
-										  {FunctionParameter("str", "string", 0, 0)});
-		analyzer.registerExternalFunction("trim", "string",
-										  {FunctionParameter("str", "string", 0, 0)});
+		// Register all built-in functions (runtime functions, string methods, etc.)
+		analyzer.registerBuiltinFunctions();
 
 		auto semanticStart = logger.startTimer();
 		std::vector<SemanticError> semanticErrors = analyzer.analyze(mergedProgram.get());
@@ -229,37 +215,66 @@ std::string compileProgram(const CompilationOptions &options) {
 		// Store function indices for codegen optimization
 		functionIndices = analyzer.getFunctionIndices();
 
-		std::set<std::string> undefinedFunctions = analyzer.getUndefinedFunctions();
+		// Collect all undefined items and their corresponding stdlib files
+		std::set<std::string> filesToImport;
 
+		// Check for undefined functions
+		std::set<std::string> undefinedFunctions = analyzer.getUndefinedFunctions();
 		if (!undefinedFunctions.empty()) {
 			logger.trace(LogPhase::Semantic, "Undefined functions: ", undefinedFunctions.size());
 			std::vector<std::string> stdlibFiles = findStdlibFilesDefining(undefinedFunctions);
-
-			if (!stdlibFiles.empty()) {
-				logger.progress(LogPhase::Semantic, "Auto-importing ", stdlibFiles.size(), " stdlib file(s)");
-
-				for (const auto &file : stdlibFiles) {
-					if (processedFiles.find(file) == processedFiles.end()) {
-						logger.detail(LogPhase::Semantic, "Adding stdlib: ", normalizePathForDisplay(file));
-						processedFiles.insert(file);
-						allFiles.push_back(file);
-						discoveredNewFiles = true;
-						std::string source = readFile(file);
-						sources.push_back(source);
-					}
+			for (const auto &file : stdlibFiles) {
+				if (processedFiles.find(file) == processedFiles.end()) {
+					filesToImport.insert(file);
 				}
-
-				if (discoveredNewFiles) {
-					programs.clear();
-					for (const auto &file : allFiles) {
-						// Use a silent logger for re-parsing to avoid duplicate output
-						Logger silentLogger(0);
-						programs.push_back(parseFile(file, silentLogger));
-					}
-				}
-
-				continue;
 			}
+		}
+
+		// Check for undefined structs
+		std::set<std::string> undefinedStructs = analyzer.getUndefinedStructs();
+		if (!undefinedStructs.empty()) {
+			logger.trace(LogPhase::Semantic, "Undefined structs: ", undefinedStructs.size());
+			std::vector<std::string> stdlibFiles = findStdlibFilesDefiningStructs(undefinedStructs);
+			for (const auto &file : stdlibFiles) {
+				if (processedFiles.find(file) == processedFiles.end()) {
+					filesToImport.insert(file);
+				}
+			}
+		}
+
+		// Check for undefined interfaces
+		std::set<std::string> undefinedInterfaces = analyzer.getUndefinedInterfaces();
+		if (!undefinedInterfaces.empty()) {
+			logger.trace(LogPhase::Semantic, "Undefined interfaces: ", undefinedInterfaces.size());
+			std::vector<std::string> stdlibFiles = findStdlibFilesDefiningInterfaces(undefinedInterfaces);
+			for (const auto &file : stdlibFiles) {
+				if (processedFiles.find(file) == processedFiles.end()) {
+					filesToImport.insert(file);
+				}
+			}
+		}
+
+		// Import all collected files
+		if (!filesToImport.empty()) {
+			logger.progress(LogPhase::Semantic, "Auto-importing ", filesToImport.size(), " stdlib file(s)");
+
+			for (const auto &file : filesToImport) {
+				logger.progress(LogPhase::Semantic, "  -> ", normalizePathForDisplay(file));
+				processedFiles.insert(file);
+				allFiles.push_back(file);
+				discoveredNewFiles = true;
+				std::string source = readFile(file);
+				sources.push_back(source);
+			}
+
+			programs.clear();
+			for (const auto &file : allFiles) {
+				// Use a silent logger for re-parsing to avoid duplicate output
+				Logger silentLogger(0);
+				programs.push_back(parseFile(file, silentLogger));
+			}
+
+			continue;
 		}
 
 		if (!semanticErrors.empty()) {

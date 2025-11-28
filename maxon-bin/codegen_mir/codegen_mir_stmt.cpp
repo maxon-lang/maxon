@@ -815,7 +815,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			}
 		}
 
-		// Non-array iteration (range, etc.): use iterator protocol
+		// Non-array iteration (range, etc.): use iterator interface
 		mir::MIRValue *iteratorVal = generateExpr(forStmt->iterable.get());
 		if (!iteratorVal) {
 			throw std::runtime_error("Failed to generate for-loop iterable expression");

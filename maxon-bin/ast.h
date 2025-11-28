@@ -343,6 +343,45 @@ class ExprStmtAST : public StmtAST {
 		: StmtAST(l, c), expression(std::move(expr)) {}
 };
 
+// Function parameter (defined early for use by InterfaceMethodSignature)
+struct FunctionParameter {
+	std::string name;
+	std::string type;
+	int line;
+	int column;
+
+	FunctionParameter(const std::string &n, const std::string &t, int l = 0, int c = 0)
+		: name(n), type(t), line(l), column(c) {}
+};
+
+// Interface method signature (for interface definitions)
+struct InterfaceMethodSignature {
+	std::string name;
+	std::vector<FunctionParameter> parameters; // First param is 'self' with type 'Self'
+	std::string returnType;
+	int line;
+	int column;
+
+	InterfaceMethodSignature(const std::string &n, std::vector<FunctionParameter> params,
+							const std::string &ret, int l = 0, int c = 0)
+		: name(n), parameters(std::move(params)), returnType(ret), line(l), column(c) {}
+};
+
+// Interface definition
+class InterfaceDefAST : public ASTNode {
+  public:
+	std::string name;
+	std::string namespaceName; // Namespace this interface belongs to
+	std::vector<InterfaceMethodSignature> methods;
+	bool isExported;
+	int line;
+	int column;
+
+	InterfaceDefAST(const std::string &n, std::vector<InterfaceMethodSignature> m,
+				   int l = 0, int c = 0, const std::string &ns = "", bool exp = false)
+		: name(n), namespaceName(ns), methods(std::move(m)), isExported(exp), line(l), column(c) {}
+};
+
 // Struct field definition
 struct StructField {
 	std::string name;
@@ -371,13 +410,16 @@ class StructDefAST : public ASTNode {
 	std::string name;
 	std::string namespaceName; // Namespace this struct belongs to (derived from file path)
 	std::vector<StructField> fields;
-	bool isExported; // true if this struct is exported (visible outside this file)
+	std::vector<std::string> conformsTo; // Interface names this struct conforms to (via 'is')
+	bool isExported;					 // true if this struct is exported (visible outside this file)
 	int line;
 	int column;
 
 	StructDefAST(const std::string &n, std::vector<StructField> f, int l = 0, int c = 0,
-				 const std::string &ns = "", bool exp = false)
-		: name(n), namespaceName(ns), fields(std::move(f)), isExported(exp), line(l), column(c) {}
+				 const std::string &ns = "", bool exp = false,
+				 std::vector<std::string> interfaces = {})
+		: name(n), namespaceName(ns), fields(std::move(f)), conformsTo(std::move(interfaces)),
+		  isExported(exp), line(l), column(c) {}
 };
 
 // Struct initialization expression (struct literal)
@@ -390,22 +432,12 @@ class StructInitExprAST : public ExprAST {
 		: ExprAST(l, c), structName(name), fields(std::move(f)) {}
 };
 
-// Function parameter
-struct FunctionParameter {
-	std::string name;
-	std::string type;
-	int line;
-	int column;
-
-	FunctionParameter(const std::string &n, const std::string &t, int l = 0, int c = 0)
-		: name(n), type(t), line(l), column(c) {}
-};
-
 // Function declaration
 class FunctionAST : public ASTNode {
   public:
 	std::string name;
 	std::string namespaceName; // Namespace this function belongs to (derived from file path)
+	std::string receiverType;  // For methods: the type this method belongs to (e.g., "Point")
 	std::vector<FunctionParameter> parameters;
 	std::string returnType;
 	std::vector<std::unique_ptr<StmtAST>> body;
@@ -417,6 +449,9 @@ class FunctionAST : public ASTNode {
 	int line;
 	int column;
 
+	// Check if this is a method (has a receiver type)
+	bool isMethod() const { return !receiverType.empty(); }
+
 	FunctionAST(const std::string &n,
 				std::vector<FunctionParameter> params,
 				const std::string &ret,
@@ -427,22 +462,25 @@ class FunctionAST : public ASTNode {
 				bool exp = false,
 				const std::string &dll = "",
 				bool staticLib = false,
-				const std::string &libFilePath = "")
-		: name(n), namespaceName(ns), parameters(std::move(params)), returnType(ret), body(std::move(b)),
+				const std::string &libFilePath = "",
+				const std::string &receiver = "")
+		: name(n), namespaceName(ns), receiverType(receiver), parameters(std::move(params)), returnType(ret), body(std::move(b)),
 		  isExtern(ext), isExported(exp), dllName(dll), isStaticLib(staticLib), libPath(libFilePath), line(l), column(c) {}
 };
 
-// Program (collection of functions and structs)
+// Program (collection of functions, structs, and interfaces)
 class ProgramAST : public ASTNode {
   public:
 	std::vector<std::unique_ptr<FunctionAST>> functions;
 	std::vector<std::unique_ptr<StructDefAST>> structs;
+	std::vector<std::unique_ptr<InterfaceDefAST>> interfaces;
 
 	ProgramAST() = default;
 
 	ProgramAST(std::vector<std::unique_ptr<FunctionAST>> funcs,
-			   std::vector<std::unique_ptr<StructDefAST>> st = {})
-		: functions(std::move(funcs)), structs(std::move(st)) {}
+			   std::vector<std::unique_ptr<StructDefAST>> st = {},
+			   std::vector<std::unique_ptr<InterfaceDefAST>> protos = {})
+		: functions(std::move(funcs)), structs(std::move(st)), interfaces(std::move(protos)) {}
 };
 
 #endif // AST_H

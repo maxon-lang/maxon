@@ -268,35 +268,52 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		bool isQualifiedCall = callExpr->callee.find(".") != std::string::npos;
 
 		// If the call is qualified, check if it's unnecessary
+		// But skip this check for method calls (Type.method) since qualification is required
 		if (isQualifiedCall && funcIt != functions.end()) {
-			// Extract the unqualified name (everything after the last .)
+			// Check if this is a method call (qualifier is a type name)
 			size_t lastDotPos = callExpr->callee.rfind(".");
+			std::string qualifier = callExpr->callee.substr(0, lastDotPos);
 			std::string unqualifiedName = callExpr->callee.substr(lastDotPos + 1);
 
-			// Check how many functions match the unqualified name
-			std::string searchSuffix = "." + unqualifiedName;
-			std::vector<std::string> matches;
+			// Check if qualifier is a type (struct) name - if so, this is a method call
+			bool isMethodCall = (structs.find(qualifier) != structs.end());
 
-			// Check for exact match with unqualified name (global function)
-			if (functions.find(unqualifiedName) != functions.end()) {
-				matches.push_back(unqualifiedName);
-			}
+			// Only warn about unnecessary qualification for namespace-qualified calls, not method calls
+			if (!isMethodCall) {
+				// Check how many functions match the unqualified name
+				std::string searchSuffix = "." + unqualifiedName;
+				std::vector<std::string> matches;
 
-			// Check for qualified matches
-			for (const auto &pair : functions) {
-				const std::string &funcName = pair.first;
-				if (funcName.size() > searchSuffix.size() &&
-					funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
-					matches.push_back(funcName);
+				// Check for exact match with unqualified name (global function)
+				if (functions.find(unqualifiedName) != functions.end()) {
+					matches.push_back(unqualifiedName);
 				}
-			}
 
-			// If there's only one match, the qualified name is unnecessary
-			if (matches.size() == 1) {
-				addWarning("Unnecessary qualified name: '" + callExpr->callee + "'" +
-							   std::string("\n  The unqualified name '") + unqualifiedName + "' is unambiguous" +
-							   "\n  Consider using '" + unqualifiedName + "' instead",
-						   expr->line, expr->column, "unnecessary-qualified-name");
+				// Check for qualified matches (but exclude method-style qualifications)
+				for (const auto &pair : functions) {
+					const std::string &funcName = pair.first;
+					if (funcName.size() > searchSuffix.size() &&
+						funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
+						// Check if this is a method (qualifier is a type)
+						size_t dotPos = funcName.rfind(".");
+						if (dotPos != std::string::npos) {
+							std::string funcQualifier = funcName.substr(0, dotPos);
+							if (structs.find(funcQualifier) != structs.end()) {
+								// This is a method, don't include in matches for unqualified resolution
+								continue;
+							}
+						}
+						matches.push_back(funcName);
+					}
+				}
+
+				// If there's only one match, the qualified name is unnecessary
+				if (matches.size() == 1) {
+					addWarning("Unnecessary qualified name: '" + callExpr->callee + "'" +
+								   std::string("\n  The unqualified name '") + unqualifiedName + "' is unambiguous" +
+								   "\n  Consider using '" + unqualifiedName + "' instead",
+							   expr->line, expr->column, "unnecessary-qualified-name");
+				}
 			}
 		}
 
@@ -548,6 +565,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 	} else if (auto structInitExpr = dynamic_cast<StructInitExprAST *>(expr)) {
 		// Check if struct type exists
 		if (lookupStruct(structInitExpr->structName) == nullptr) {
+			// Track as undefined for auto-import from stdlib
+			undefinedStructs.insert(structInitExpr->structName);
 			addError("Undefined struct type: '" + structInitExpr->structName + "'",
 					 expr->line, expr->column);
 			return "error";

@@ -11,6 +11,7 @@ You *Are* Going To Read It
 - centralize help text from the lsp server analyzer
 - cross compiling
 - command line arguments for main
+- refactor lsp semantic analyzer with compiler
 
 ## Ideas
 - array syntax: var x = array of 10 int

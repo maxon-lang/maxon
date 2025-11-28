@@ -54,21 +54,77 @@ void SemanticAnalyzer::registerExternalFunction(const std::string &name, const s
 	functionIndices[name] = externalFunctionIdBase++;
 }
 
+void SemanticAnalyzer::registerBuiltinFunctions() {
+	// Register runtime functions
+	registerExternalFunction("write_stdout", "int",
+							 {FunctionParameter("buf", "[]char", 0, 0), FunctionParameter("count", "int", 0, 0)});
+
+	// Register string methods (these are runtime intrinsics)
+	// The parser transforms s.method() -> method(s), so these are called as functions
+	registerExternalFunction("starts_with", "bool",
+							 {FunctionParameter("str", "string", 0, 0), FunctionParameter("prefix", "string", 0, 0)});
+	registerExternalFunction("ends_with", "bool",
+							 {FunctionParameter("str", "string", 0, 0), FunctionParameter("suffix", "string", 0, 0)});
+	registerExternalFunction("contains", "bool",
+							 {FunctionParameter("haystack", "string", 0, 0), FunctionParameter("needle", "string", 0, 0)});
+	registerExternalFunction("find", "int",
+							 {FunctionParameter("haystack", "string", 0, 0), FunctionParameter("needle", "string", 0, 0)});
+	registerExternalFunction("to_upper", "string",
+							 {FunctionParameter("str", "string", 0, 0)});
+	registerExternalFunction("to_lower", "string",
+							 {FunctionParameter("str", "string", 0, 0)});
+	registerExternalFunction("trim", "string",
+							 {FunctionParameter("str", "string", 0, 0)});
+}
+
 std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	errors.clear();
 	// Note: Don't clear functions here - we want to keep registered external functions
 	structs.clear();
+	interfaces.clear();
 	variables.clear();
 	scopeStack.clear();
 	loopDepth = 0;
 	blockIdStack.clear(); // Clear block ID stack for new analysis
 	undefinedFunctions.clear();
+	undefinedStructs.clear();
+	undefinedInterfaces.clear();
 	allDeclaredVariables.clear(); // Clear persistent symbol table
 
 	logDetail("Starting semantic analysis");
 	logTrace("Registered external functions: " + std::to_string(functions.size()));
 
+	// First pass: collect all interface definitions
+	logTrace("Pass 1a: Collecting interface definitions");
+	for (const auto &interfaceDef : program->interfaces) {
+		std::string interfaceKey = (interfaceDef->isExported && !interfaceDef->namespaceName.empty())
+									  ? interfaceDef->namespaceName + "." + interfaceDef->name
+									  : interfaceDef->name;
+
+		logTrace("Registering interface: " + interfaceKey);
+		if (interfaces.find(interfaceKey) != interfaces.end()) {
+			addError("Interface '" + interfaceKey + "' is already defined",
+					 interfaceDef->line, interfaceDef->column);
+		} else {
+			InterfaceInfo protoInfo(interfaceDef->name, interfaceDef->line, interfaceDef->column);
+			for (const auto &method : interfaceDef->methods) {
+				protoInfo.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters));
+			}
+			interfaces.emplace(interfaceKey, std::move(protoInfo));
+
+			// Also register simple name
+			if (interfaces.find(interfaceDef->name) == interfaces.end()) {
+				InterfaceInfo protoInfoSimple(interfaceDef->name, interfaceDef->line, interfaceDef->column);
+				for (const auto &method : interfaceDef->methods) {
+					protoInfoSimple.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters));
+				}
+				interfaces.emplace(interfaceDef->name, std::move(protoInfoSimple));
+			}
+		}
+	}
+
 	// First pass: collect all struct definitions
+	logTrace("Pass 1b: Collecting struct definitions");
 	for (const auto &structDef : program->structs) {
 		// Build the qualified name if the struct has a namespace and is exported
 		std::string structKey = (structDef->isExported && !structDef->namespaceName.empty())
@@ -94,13 +150,15 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 					fields.push_back(StructFieldInfo(field.name, field.type, field.line, field.column));
 				}
 			}
-			structs.emplace(structKey, StructInfo(structDef->name, std::move(fields),
-												  structDef->line, structDef->column));
+
+			// Register with qualified name
+			structs.emplace(structKey, StructInfo(structDef->name, fields,
+												  structDef->line, structDef->column, structDef->conformsTo));
 
 			// Also register the simple name for use within the same file/namespace
 			if (structs.find(structDef->name) == structs.end()) {
 				structs.emplace(structDef->name, StructInfo(structDef->name, fields,
-															structDef->line, structDef->column));
+															structDef->line, structDef->column, structDef->conformsTo));
 			}
 		}
 	}
@@ -111,10 +169,17 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	size_t nextFunctionId = 0;
 
 	for (const auto &func : program->functions) {
-		// Build the qualified name if the function has a namespace
-		std::string functionKey = func->namespaceName.empty() ? func->name : func->namespaceName + "." + func->name;
+		// Build the function key: for methods use ReceiverType.methodName, otherwise use namespace.name
+		std::string functionKey;
+		if (func->isMethod()) {
+			// Method: use ReceiverType.methodName
+			functionKey = func->receiverType + "." + func->name;
+		} else {
+			// Regular function: use namespace.name
+			functionKey = func->namespaceName.empty() ? func->name : func->namespaceName + "." + func->name;
+		}
 
-		logTrace("Registering function: " + functionKey + " -> " + func->returnType);
+		logTrace(std::string("Registering ") + (func->isMethod() ? "method" : "function") + ": " + functionKey + " -> " + func->returnType);
 
 		if (functions.find(functionKey) != functions.end()) {
 			addError("Function '" + functionKey + "' is already defined" +
@@ -126,13 +191,22 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 		}
 
 		// Also register the simple name if in global namespace (for backward compatibility)
-		if (func->namespaceName.empty() && functions.find(func->name) == functions.end()) {
+		// But NOT for methods - they should only be accessible via Type.method
+		if (!func->isMethod() && func->namespaceName.empty() && functions.find(func->name) == functions.end()) {
 			functions.emplace(func->name, FunctionInfo(func->name, func->returnType, func->parameters));
 			functionIndices[func->name] = functionIndices[functionKey]; // Same ID for both names
 		}
 	}
 
-	// Second pass: analyze each function
+	// Pass 2b: Check interface conformance for all structs
+	logTrace("Pass 2b: Checking interface conformance");
+	for (const auto &structDef : program->structs) {
+		if (!structDef->conformsTo.empty()) {
+			checkInterfaceConformance(structDef->name, structDef->conformsTo, structDef->line, structDef->column);
+		}
+	}
+
+	// Third pass: analyze each function
 	logTrace("Pass 3: Analyzing function bodies");
 	for (const auto &func : program->functions) {
 		analyzeFunction(func.get());
@@ -153,6 +227,37 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 	}
 
 	logTrace("Analyzing function body: " + func->name);
+
+	// Validate return type - track undefined struct types for auto-import
+	if (func->returnType != "void" && func->returnType != "int" &&
+		func->returnType != "float" && func->returnType != "bool" &&
+		func->returnType != "string" && func->returnType != "char" &&
+		func->returnType[0] != '[') { // Not an array type
+		// Could be a struct type - check if it exists
+		if (lookupStruct(func->returnType) == nullptr) {
+			undefinedStructs.insert(func->returnType);
+		}
+	}
+
+	// Validate parameter types - track undefined struct types for auto-import
+	for (const auto &param : func->parameters) {
+		std::string paramType = param.type;
+		// Strip array brackets if present
+		if (paramType.size() > 2 && paramType[0] == '[') {
+			size_t closeBracket = paramType.find(']');
+			if (closeBracket != std::string::npos && closeBracket + 1 < paramType.size()) {
+				paramType = paramType.substr(closeBracket + 1);
+			}
+		}
+		if (paramType != "void" && paramType != "int" &&
+			paramType != "float" && paramType != "bool" &&
+			paramType != "string" && paramType != "char") {
+			// Could be a struct type - check if it exists
+			if (lookupStruct(paramType) == nullptr) {
+				undefinedStructs.insert(paramType);
+			}
+		}
+	}
 
 	// Initialize block ID tracking for this function
 	blockIdStack.clear();
@@ -366,4 +471,81 @@ void SemanticAnalyzer::checkUnusedVariables() {
 std::map<std::string, VariableInfo> SemanticAnalyzer::getAllVariables() const {
 	// Return the persistent symbol table that contains all declared variables
 	return allDeclaredVariables;
+}
+
+void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
+												const std::vector<std::string> &conformsTo,
+												int line, int column) {
+	for (const auto &interfaceName : conformsTo) {
+		// Find the interface
+		auto protoIt = interfaces.find(interfaceName);
+		if (protoIt == interfaces.end()) {
+			// Track as undefined for auto-discovery from stdlib
+			undefinedInterfaces.insert(interfaceName);
+			logTrace("Interface '" + interfaceName + "' not found, marking for auto-discovery");
+			continue;
+		}
+
+		const InterfaceInfo &interface = protoIt->second;
+		logTrace("Checking conformance of " + structName + " to " + interfaceName);
+
+		// Check each method in the interface
+		for (const auto &protoMethod : interface.methods) {
+			// Build expected method name: StructName.methodName
+			std::string expectedMethodName = structName + "." + protoMethod.name;
+
+			auto funcIt = functions.find(expectedMethodName);
+			if (funcIt == functions.end()) {
+				std::string paramStr;
+				for (size_t i = 0; i < protoMethod.parameters.size(); i++) {
+					if (i > 0)
+						paramStr += ", ";
+					// Replace Self with actual struct name
+					std::string paramType = protoMethod.parameters[i].type;
+					if (paramType == "Self")
+						paramType = structName;
+					paramStr += protoMethod.parameters[i].name + " " + paramType;
+				}
+				std::string returnType = protoMethod.returnType == "Self" ? structName : protoMethod.returnType;
+
+				addError("Struct '" + structName + "' does not implement required method '" + protoMethod.name +
+							 "' from interface '" + interfaceName + "'" +
+							 std::string("\n  Expected: function ") + structName + "." + protoMethod.name +
+							 "(" + paramStr + ") " + returnType,
+						 line, column);
+				continue;
+			}
+
+			// Check return type (substituting Self for structName)
+			const FunctionInfo &implFunc = funcIt->second;
+			std::string expectedReturnType = protoMethod.returnType == "Self" ? structName : protoMethod.returnType;
+			if (implFunc.returnType != expectedReturnType) {
+				addError("Method '" + expectedMethodName + "' has return type '" + implFunc.returnType +
+							 "' but interface '" + interfaceName + "' requires '" + expectedReturnType + "'",
+						 line, column);
+			}
+
+			// Check parameter count
+			if (implFunc.parameters.size() != protoMethod.parameters.size()) {
+				addError("Method '" + expectedMethodName + "' has " + std::to_string(implFunc.parameters.size()) +
+							 " parameter(s) but interface '" + interfaceName + "' requires " +
+							 std::to_string(protoMethod.parameters.size()),
+						 line, column);
+				continue;
+			}
+
+			// Check parameter types (substituting Self for structName)
+			for (size_t i = 0; i < protoMethod.parameters.size(); i++) {
+				std::string expectedParamType = protoMethod.parameters[i].type == "Self"
+													? structName
+													: protoMethod.parameters[i].type;
+				if (implFunc.parameters[i].type != expectedParamType) {
+					addError("Method '" + expectedMethodName + "' parameter " + std::to_string(i + 1) +
+								 " has type '" + implFunc.parameters[i].type +
+								 "' but interface '" + interfaceName + "' requires '" + expectedParamType + "'",
+							 line, column);
+				}
+			}
+		}
+	}
 }

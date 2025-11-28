@@ -1,0 +1,83 @@
+// Test: interfaces.method-with-params.1
+interface Calculator
+    function add(self Self, n int) int
+end 'Calculator'
+
+struct Accumulator is Calculator
+    total int
+end 'Accumulator'
+
+function Accumulator.add(self Accumulator, n int) int
+    return self.total + n
+end 'add'
+
+function main() int
+    var acc = Accumulator{total: 10}
+    return Accumulator.add(acc, 5)
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 10
+
+%Accumulator = type { i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Accumulator
+  %1 = getelementptr %Accumulator, ptr %0, i32 0, i32 0
+  store i32 10, ptr %1
+  %3 = getelementptr %Accumulator, ptr %0, i32 0, i32 0
+  %4 = load i32, ptr %3
+  %5 = add i32 %4, 5
+  ret i32 %5
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 18
+
+%Accumulator = type { i32 }
+
+define i32 @Accumulator.add(ptr %self, i32 %n) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 %n, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %Accumulator, ptr %2, i32 0, i32 0
+  %4 = load i32, ptr %3
+  %5 = load i32, ptr %1
+  %6 = add i32 %4, %5
+  ret i32 %6
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Accumulator
+  %1 = getelementptr %Accumulator, ptr %0, i32 0, i32 0
+  store i32 10, ptr %1
+  %2 = call i32 @Accumulator.add(ptr %0, i32 5)
+  ret i32 %2
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 15

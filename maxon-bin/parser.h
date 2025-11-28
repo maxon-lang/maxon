@@ -68,6 +68,7 @@ class Parser {
 
 	std::unique_ptr<FunctionAST> parseFunction();
 	std::unique_ptr<StructDefAST> parseStruct();
+	std::unique_ptr<InterfaceDefAST> parseInterface();
 	std::unique_ptr<StructInitExprAST> parseStructInit(const std::string &structName);
 
 	// Logging helpers

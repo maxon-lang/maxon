@@ -51,6 +51,7 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
 	{"var", {KeywordCategory::Declaration, "Mutable variable"}},
 	{"let", {KeywordCategory::Declaration, "Immutable variable"}},
 	{"struct", {KeywordCategory::Declaration, "Structure type"}},
+	{"interface", {KeywordCategory::Declaration, "Interface declaration"}},
 	{"export", {KeywordCategory::Declaration, "Export declaration"}},
 	{"extern", {KeywordCategory::Declaration, "External declaration"}},
 
@@ -74,7 +75,8 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
 	{"and", {KeywordCategory::Operator, "Logical and"}},
 	{"or", {KeywordCategory::Operator, "Logical or"}},
 	{"not", {KeywordCategory::Operator, "Logical not"}},
-	{"mod", {KeywordCategory::Operator, "Modulo operator"}}};
+	{"mod", {KeywordCategory::Operator, "Modulo operator"}},
+	{"is", {KeywordCategory::Operator, "Interface conformance"}}};
 
 // ============================================================================
 // Static Initialization

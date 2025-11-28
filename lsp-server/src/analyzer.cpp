@@ -74,6 +74,9 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
 			// Run semantic analysis
 			SemanticAnalyzer semanticAnalyzer;
 
+			// Register all built-in functions (runtime functions, string methods, etc.)
+			semanticAnalyzer.registerBuiltinFunctions();
+
 			// Get the set of function names defined in the current document
 			std::set<std::string> currentDocFunctions;
 			for (const auto &func : program->functions) {

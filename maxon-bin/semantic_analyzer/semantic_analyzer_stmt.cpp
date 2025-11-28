@@ -354,9 +354,9 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		loopLabelStack.pop_back();
 
 	} else if (auto forStmt = dynamic_cast<ForStmtAST *>(stmt)) {
-		// For-loops require iterator functions from stdlib
-		// Ensure iter.hasNext, iter.getCurrent, and iter.next are available
-		std::vector<std::string> requiredFuncs = {"iter.hasNext", "iter.getCurrent", "iter.next"};
+		// For-loops require iterator methods from stdlib (Iterable interface)
+		// These are method-style: Iterator.hasNext, Iterator.getCurrent, Iterator.next
+		std::vector<std::string> requiredFuncs = {"Iterator.hasNext", "Iterator.getCurrent", "Iterator.next"};
 		for (const auto &funcName : requiredFuncs) {
 			if (functions.find(funcName) == functions.end()) {
 				undefinedFunctions.insert(funcName);

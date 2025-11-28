@@ -1,0 +1,92 @@
+// Test: interfaces.basic-interface.1
+interface Hashable
+    function hash(self Self) int
+end 'Hashable'
+
+struct Point is Hashable
+    x int
+    y int
+end 'Point'
+
+function Point.hash(self Point) int
+    return self.x + self.y * 31
+end 'hash'
+
+function main() int
+    var p = Point{x: 10, y: 20}
+    return Point.hash(p)
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 15
+
+%Point = type { i32, i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Point
+  %1 = getelementptr %Point, ptr %0, i32 0, i32 0
+  store i32 10, ptr %1
+  %2 = getelementptr %Point, ptr %0, i32 0, i32 1
+  store i32 20, ptr %2
+  %4 = getelementptr %Point, ptr %0, i32 0, i32 0
+  %5 = load i32, ptr %4
+  %6 = getelementptr %Point, ptr %0, i32 0, i32 1
+  %7 = load i32, ptr %6
+  %8 = mul i32 %7, 31
+  %9 = add i32 %5, %8
+  ret i32 %9
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 21
+
+%Point = type { i32, i32 }
+
+define i32 @Point.hash(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Point, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  %4 = load ptr, ptr %0
+  %5 = getelementptr %Point, ptr %4, i32 0, i32 1
+  %6 = load i32, ptr %5
+  %7 = mul i32 %6, 31
+  %8 = add i32 %3, %7
+  ret i32 %8
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Point
+  %1 = getelementptr %Point, ptr %0, i32 0, i32 0
+  store i32 10, ptr %1
+  %2 = getelementptr %Point, ptr %0, i32 0, i32 1
+  store i32 20, ptr %2
+  %3 = call i32 @Point.hash(ptr %0)
+  ret i32 %3
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 630

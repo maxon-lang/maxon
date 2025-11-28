@@ -767,3 +767,58 @@ TEST_CASE("struct_field_completions_via_dot", "[analyzer]") {
 	REQUIRE(hasX);
 	REQUIRE(hasY);
 }
+
+TEST_CASE("builtin_method_calls_no_errors", "[analyzer]") {
+	Analyzer analyzer;
+
+	// Test that built-in method calls like s.to_lower() don't produce "undefined function" errors
+	// The parser transforms s.to_lower() -> to_lower(s), and the semantic analyzer must recognize
+	// the built-in function
+	auto doc = createTestDocument(
+		"function main() int\n"
+		"    var s = \"hello\"\n"
+		"    print(s.to_lower())\n"
+		"    print(s.to_upper())\n"
+		"    print(s.trim())\n"
+		"    return 0\n"
+		"end 'main'");
+
+	auto diagnostics = analyzer.analyze(doc);
+
+	// Should have no errors about undefined functions
+	for (const auto &diag : diagnostics) {
+		// Fail if we see any "Undefined function" error for the built-in methods
+		bool isUndefinedBuiltin = diag.message.find("Undefined function") != std::string::npos &&
+								  (diag.message.find("to_lower") != std::string::npos ||
+								   diag.message.find("to_upper") != std::string::npos ||
+								   diag.message.find("trim") != std::string::npos);
+		REQUIRE_FALSE(isUndefinedBuiltin);
+	}
+}
+
+TEST_CASE("builtin_string_search_methods_no_errors", "[analyzer]") {
+	Analyzer analyzer;
+
+	// Test built-in string search methods
+	auto doc = createTestDocument(
+		"function main() int\n"
+		"    var s = \"hello world\"\n"
+		"    var a = s.starts_with(\"hello\")\n"
+		"    var b = s.ends_with(\"world\")\n"
+		"    var c = s.contains(\"lo\")\n"
+		"    var d = s.find(\"wo\")\n"
+		"    return 0\n"
+		"end 'main'");
+
+	auto diagnostics = analyzer.analyze(doc);
+
+	// Should have no errors about undefined functions
+	for (const auto &diag : diagnostics) {
+		bool isUndefinedBuiltin = diag.message.find("Undefined function") != std::string::npos &&
+								  (diag.message.find("starts_with") != std::string::npos ||
+								   diag.message.find("ends_with") != std::string::npos ||
+								   diag.message.find("contains") != std::string::npos ||
+								   diag.message.find("find") != std::string::npos);
+		REQUIRE_FALSE(isUndefinedBuiltin);
+	}
+}

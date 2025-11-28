@@ -138,34 +138,43 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 			advance(); // consume '.'
 			Token member = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
 
-			// If followed by '(', could be namespace call or method call
+			// If followed by '(', could be namespace call, static method call, or instance method call
 			if (check(TokenType::LPAREN)) {
-				// Check if this is a method call: simple variable name followed by method(args)
-				// vs namespace call: namespace.namespace.function(args)
-				// Method calls have no dots in the object name
+				// Check if this is a method call on a variable: simple variable name followed by method(args)
+				// vs namespace/type call: Type.method(args) or namespace.function(args)
+				// Method calls have no dots in the object name and are lowercase (variable names)
+				// Type names and namespaces typically start with uppercase or are known patterns
 				if (name.find('.') == std::string::npos) {
-					// This is a method call: arr.push(5) -> push(arr, 5)
-					std::string methodName = member.value;
-					advance(); // consume '('
-					std::vector<std::unique_ptr<ExprAST>> args;
+					// This could be a method call on a variable: arr.push(5) -> push(arr, 5)
+					// Or a Type.method(args) call - we distinguish by checking if name looks like a type
+					// Types start with uppercase; variables are lowercase
+					// Note: For Type.method() static calls, we still treat as qualified function
+					bool looksLikeVariable = !name.empty() && (name[0] >= 'a' && name[0] <= 'z');
 
-					// First argument is the object itself
-					args.push_back(std::make_unique<VariableExprAST>(name, line, column));
+					if (looksLikeVariable) {
+						// This is a method call on a variable: arr.push(5) -> push(arr, 5)
+						std::string methodName = member.value;
+						advance(); // consume '('
+						std::vector<std::unique_ptr<ExprAST>> args;
 
-					// Parse remaining arguments
-					if (!check(TokenType::RPAREN)) {
-						args.push_back(parseLogicalOr());
+						// First argument is the object itself
+						args.push_back(std::make_unique<VariableExprAST>(name, line, column));
 
-						while (match(TokenType::COMMA)) {
+						// Parse remaining arguments
+						if (!check(TokenType::RPAREN)) {
 							args.push_back(parseLogicalOr());
-						}
-					}
 
-					expectAdvance(TokenType::RPAREN, "Expected ')' after method arguments");
-					return std::make_unique<CallExprAST>(methodName, std::move(args), line, column);
+							while (match(TokenType::COMMA)) {
+								args.push_back(parseLogicalOr());
+							}
+						}
+
+						expectAdvance(TokenType::RPAREN, "Expected ')' after method arguments");
+						return std::make_unique<CallExprAST>(methodName, std::move(args), line, column);
+					}
 				}
 
-				// This is namespace.function() - restore as qualified name
+				// This is Type.method() or namespace.function() - treat as qualified function call
 				std::string qualifiedName = name + "." + member.value;
 
 				// Continue building qualified name for multiple namespaces

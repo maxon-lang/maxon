@@ -47,6 +47,7 @@ void Parser::logDetail(const std::string &msg) {
 std::unique_ptr<ProgramAST> Parser::parse() {
 	std::vector<std::unique_ptr<FunctionAST>> functions;
 	std::vector<std::unique_ptr<StructDefAST>> structs;
+	std::vector<std::unique_ptr<InterfaceDefAST>> interfaces;
 
 	logDetail("Starting parse...");
 
@@ -55,22 +56,35 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 			break;
 		}
 
-		// Check for struct, export, extern, or function keyword
+		// Check for struct, interface, export, extern, or function keyword
 		if (checkKeyword("struct")) {
 			logTrace("Parsing struct definition");
 			structs.push_back(parseStruct());
+		} else if (checkKeyword("interface")) {
+			logTrace("Parsing interface definition");
+			interfaces.push_back(parseInterface());
 		} else if (checkKeyword("export")) {
-			// Check what comes after export
-			Token exportToken = currentToken();
-			advance(); // consume 'export'
+			// Peek at what comes after export (don't consume - let the parse functions handle export)
+			// We need to look ahead to determine which parser to call
+			size_t savedPos = position;
+			advance(); // temporarily consume 'export' to peek
 			if (checkKeyword("struct")) {
+				position = savedPos; // restore position
+				cache_.set_position(savedPos);
 				logTrace("Parsing exported struct definition");
 				structs.push_back(parseStruct());
+			} else if (checkKeyword("interface")) {
+				position = savedPos; // restore position
+				cache_.set_position(savedPos);
+				logTrace("Parsing exported interface definition");
+				interfaces.push_back(parseInterface());
 			} else if (checkKeyword("extern") || checkKeyword("function")) {
+				position = savedPos; // restore position
+				cache_.set_position(savedPos);
 				logTrace("Parsing exported function definition");
 				functions.push_back(parseFunction());
 			} else {
-				throw std::runtime_error("Expected 'struct', 'extern function', or 'function' after 'export'\n  Location: line " +
+				throw std::runtime_error("Expected 'struct', 'interface', 'extern function', or 'function' after 'export'\n  Location: line " +
 										 std::to_string(currentLine()) + ", column " +
 										 std::to_string(currentColumn()));
 			}
@@ -78,13 +92,15 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 			logTrace("Parsing function definition");
 			functions.push_back(parseFunction());
 		} else {
-			throw std::runtime_error("Expected 'struct', 'export', 'function', or 'extern function' at top level\n  Location: line " +
+			throw std::runtime_error("Expected 'struct', 'interface', 'export', 'function', or 'extern function' at top level\n  Location: line " +
 									 std::to_string(currentLine()) + ", column " +
 									 std::to_string(currentColumn()));
 		}
 	}
 
-	logDetail("Parse complete: " + std::to_string(functions.size()) + " functions, " + std::to_string(structs.size()) + " structs");
+	logDetail("Parse complete: " + std::to_string(functions.size()) + " functions, " +
+			  std::to_string(structs.size()) + " structs, " +
+			  std::to_string(interfaces.size()) + " interfaces");
 
-	return std::make_unique<ProgramAST>(std::move(functions), std::move(structs));
+	return std::make_unique<ProgramAST>(std::move(functions), std::move(structs), std::move(interfaces));
 }

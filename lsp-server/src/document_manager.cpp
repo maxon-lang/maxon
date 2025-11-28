@@ -5,7 +5,23 @@
 DocumentManager::DocumentManager() {}
 
 void DocumentManager::openDocument(const std::string& uri, const std::string& text, int version) {
-    documents[uri] = std::make_shared<Document>(uri, text, version);
+    std::string processedText = text;
+
+    // For .test files in language-tests/fragments/, extract only the Maxon code before the --- separator
+    // This handles test fragment files while leaving other .test files intact
+    // Check for both forward slashes (URI) and backslashes (Windows paths)
+    bool isTestFile = uri.find(".test") != std::string::npos;
+    bool isFragmentPath = uri.find("language-tests/fragments/") != std::string::npos ||
+                          uri.find("language-tests\\fragments\\") != std::string::npos;
+
+    if (isTestFile && isFragmentPath) {
+        size_t separatorPos = text.find("\n---");
+        if (separatorPos != std::string::npos) {
+            processedText = text.substr(0, separatorPos);
+        }
+    }
+
+    documents[uri] = std::make_shared<Document>(uri, processedText, version);
 }
 
 void DocumentManager::closeDocument(const std::string& uri) {
@@ -15,7 +31,23 @@ void DocumentManager::closeDocument(const std::string& uri) {
 void DocumentManager::updateDocument(const std::string& uri, const std::string& text, int version) {
     auto it = documents.find(uri);
     if (it != documents.end()) {
-        it->second->text = text;
+        std::string processedText = text;
+
+        // For .test files in language-tests/fragments/, extract only the Maxon code before the --- separator
+        // This handles test fragment files while leaving other .test files intact
+        // Check for both forward slashes (URI) and backslashes (Windows paths)
+        bool isTestFile = uri.find(".test") != std::string::npos;
+        bool isFragmentPath = uri.find("language-tests/fragments/") != std::string::npos ||
+                              uri.find("language-tests\\fragments\\") != std::string::npos;
+
+        if (isTestFile && isFragmentPath) {
+            size_t separatorPos = text.find("\n---");
+            if (separatorPos != std::string::npos) {
+                processedText = text.substr(0, separatorPos);
+            }
+        }
+
+        it->second->text = processedText;
         it->second->version = version;
     }
 }

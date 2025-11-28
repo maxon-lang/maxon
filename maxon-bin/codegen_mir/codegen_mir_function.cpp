@@ -8,8 +8,18 @@
 #include <stdexcept>
 
 void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &namespaceName) {
-	// Determine the actual function name (with namespace if applicable)
-	std::string functionName = namespaceName.empty() ? func->name : namespaceName + "." + func->name;
+	// Determine the actual function name
+	// For methods: ReceiverType.name
+	// For namespaced functions: namespace.name
+	// Otherwise: just name
+	std::string functionName;
+	if (!func->receiverType.empty()) {
+		functionName = func->receiverType + "." + func->name;
+	} else if (!namespaceName.empty()) {
+		functionName = namespaceName + "." + func->name;
+	} else {
+		functionName = func->name;
+	}
 
 	// Get the function that was already declared
 	mir::MIRFunction *function = module->getFunction(functionName);

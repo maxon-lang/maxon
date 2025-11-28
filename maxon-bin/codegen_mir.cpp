@@ -378,7 +378,16 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 			}
 		}
 
-		std::string functionName = func->namespaceName.empty() ? func->name : func->namespaceName + "." + func->name;
+		// Build function name: for methods use "ReceiverType.name", otherwise "namespace.name" or just "name"
+		std::string functionName;
+		if (!func->receiverType.empty()) {
+			// This is a method
+			functionName = func->receiverType + "." + func->name;
+		} else if (!func->namespaceName.empty()) {
+			functionName = func->namespaceName + "." + func->name;
+		} else {
+			functionName = func->name;
+		}
 
 		logTrace("Declaring function: " + functionName + " -> " + func->returnType);
 
