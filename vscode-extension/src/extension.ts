@@ -83,15 +83,30 @@ export async function activate(ctx: vscode.ExtensionContext) {
 			{ scheme: 'file', language: 'maxon', pattern: '**/*.maxon' }
 		],
 		synchronize: {
-			fileEvents: vscode.workspace.createFileSystemWatcher('**/*.maxon')
+			fileEvents: vscode.workspace.createFileSystemWatcher('**/*.maxon'),
+			configurationSection: 'maxon'
 		},
 		outputChannel: outputChannel,
 		middleware: {
 			provideDocumentFormattingEdits: async (document, options, token, next) => {
 				log('Formatting requested for ' + document.uri.toString());
-				const result = await next(document, options, token);
+
+				// Override options with Maxon-specific settings
+				const config = vscode.workspace.getConfiguration('maxon.formatting');
+				const insertSpaces = config.get<boolean>('insertSpaces', false);
+				const tabSize = config.get<number>('tabSize', 4);
+
+				const maxonOptions = {
+					...options,
+					insertSpaces,
+					tabSize
+				};
+
+				log(`Formatting with insertSpaces=${insertSpaces}, tabSize=${tabSize}`);
+				const result = await next(document, maxonOptions, token);
 				const edits = result || [];
 				log(`Received ${edits.length} edits from server`);
+
 				// Force LF by appending a setEndOfLine edit
 				const eolEdit = vscode.TextEdit.setEndOfLine(vscode.EndOfLine.LF);
 				log('Appending setEndOfLine(LF) edit');

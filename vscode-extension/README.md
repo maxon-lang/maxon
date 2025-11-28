@@ -6,6 +6,7 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 - Syntax highlighting for `.maxon` files using a TextMate grammar
 - Language Server Protocol support (completion, diagnostics, go-to-definition, etc.) when the `maxon-lsp` server is available
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
+- **Code formatting**: Format your Maxon code with customizable indentation settings
 
 Note: LSP features are provided by the Maxon Language Server. This extension acts as an LSP client and will only enable advanced language features once the language server binary (`maxon-lsp-server` or `maxon-lsp-server.exe`) is built and accessible.
 
@@ -79,6 +80,39 @@ Or use the repository's make target for extension tests:
 # from repo root
 make extension-test
 ```
+
+## Code Formatting
+
+The extension provides automatic code formatting for Maxon files. You can format your code using:
+
+- **Right-click** in the editor and select "Format Document"
+- Press **Shift+Alt+F** (Windows/Linux) or **Shift+Option+F** (Mac)
+- Enable format-on-save in your settings
+
+### Formatting Configuration
+
+Configure formatting behavior in your VSCode settings:
+
+```json
+{
+  "maxon.formatting.insertSpaces": false,  // Use tabs (default)
+  "maxon.formatting.tabSize": 4,           // Tab size (when using spaces)
+  "[maxon]": {
+    "editor.formatOnSave": true,           // Format on save (optional)
+    "editor.tabSize": 4,
+    "editor.insertSpaces": false
+  }
+}
+```
+
+### What the formatter does:
+- Normalizes indentation based on block structure (function, if, while, for, struct)
+- Indents struct field declarations inside `struct...end` blocks
+- Indents struct literal fields inside `{...}` braces
+- Removes trailing whitespace
+- Collapses multiple consecutive blank lines into one
+- Ensures proper indentation of `end` statements and closing `}`
+- Converts line endings to LF (Unix-style)
 
 ## Customizing Colors
 

@@ -75,6 +75,17 @@ make test
 
 See [docs/CROSS_PLATFORM_PLAN.md](docs/CROSS_PLATFORM_PLAN.md) for detailed cross-platform setup information.
 
+## Line Endings
+
+This project enforces **LF (Unix-style)** line endings for all source files, including on Windows. The repository includes `.gitattributes` and `.editorconfig` files that handle this automatically.
+
+**Windows developers:** Run this once after cloning:
+```bash
+git config --global core.autocrlf input
+```
+
+See [docs/LINE_ENDINGS.md](docs/LINE_ENDINGS.md) for complete details.
+
 ## License
 
 Licensed under either of:

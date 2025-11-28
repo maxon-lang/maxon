@@ -19,7 +19,11 @@ You *Are* Going To Read It
 	struct has x and y
 	var p2 = Point { x: 3, y: 4, z: 0 }
 	struct now has x y and z
-	
+
+ private struct Entry {
+        let key: Key
+        var value: Value
+    }	
 
 
 add "run" to maxon

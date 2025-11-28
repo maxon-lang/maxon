@@ -115,7 +115,7 @@ bool Formatter::shouldIncreaseIndent(const std::string &line) {
 	trimmed.erase(0, trimmed.find_first_not_of(" \t"));
 
 	// Check if line starts with block-opening keywords
-	const char *openingKeywords[] = {"function", "if", "else", "while", "for"};
+	const char *openingKeywords[] = {"function", "if", "else", "while", "for", "struct"};
 	for (const auto &keyword : openingKeywords) {
 		if (trimmed.find(keyword) == 0) {
 			// Make sure it's a complete keyword (followed by space or non-alphanumeric)
@@ -129,6 +129,12 @@ bool Formatter::shouldIncreaseIndent(const std::string &line) {
 				return true;
 			}
 		}
+	}
+
+	// Check if line ends with an opening brace (for struct literals)
+	size_t lastNonWhitespace = trimmed.find_last_not_of(" \t");
+	if (lastNonWhitespace != std::string::npos && trimmed[lastNonWhitespace] == '{') {
+		return true;
 	}
 
 	return false;
@@ -150,6 +156,11 @@ bool Formatter::shouldDecreaseIndent(const std::string &line) {
 		} else if (keywordLen == trimmed.length()) {
 			return true;
 		}
+	}
+
+	// Check if line starts with a closing brace (for struct literals)
+	if (!trimmed.empty() && trimmed[0] == '}') {
+		return true;
 	}
 
 	return false;
