@@ -117,6 +117,161 @@ class ConstantPropagationPass : public OptimizationPass {
 };
 
 //==============================================================================
+// Dominance Analysis Helper
+//==============================================================================
+
+/**
+ * Computes dominance information for SSA construction.
+ *
+ * A block A dominates block B if all paths from entry to B go through A.
+ * The dominance frontier of a block A is the set of blocks where A's
+ * dominance stops - these are where PHI nodes are needed.
+ */
+class DominanceInfo {
+  public:
+	DominanceInfo(MIRFunction &func);
+
+	// Check if block A dominates block B
+	bool dominates(MIRBasicBlock *a, MIRBasicBlock *b) const;
+
+	// Get the immediate dominator of a block
+	MIRBasicBlock *getIDom(MIRBasicBlock *block) const;
+
+	// Get the dominance frontier of a block
+	const std::set<MIRBasicBlock *> &getDominanceFrontier(MIRBasicBlock *block) const;
+
+	// Get blocks dominated by this block (immediate children in dom tree)
+	const std::vector<MIRBasicBlock *> &getDominatedBlocks(MIRBasicBlock *block) const;
+
+  private:
+	void computeDominators(MIRFunction &func);
+	void computeDominanceFrontiers(MIRFunction &func);
+
+	std::unordered_map<MIRBasicBlock *, MIRBasicBlock *> idom_;
+	std::unordered_map<MIRBasicBlock *, std::set<MIRBasicBlock *>> domFrontier_;
+	std::unordered_map<MIRBasicBlock *, std::vector<MIRBasicBlock *>> domTree_;
+	std::unordered_map<MIRBasicBlock *, std::set<MIRBasicBlock *>> dominators_;
+};
+
+//==============================================================================
+// Mem2Reg Pass (Memory to Register Promotion)
+//==============================================================================
+
+/**
+ * Promotes allocas to virtual registers using SSA construction.
+ *
+ * This is the most critical optimization pass for performance. It eliminates
+ * stack-allocated variables and promotes them to registers/SSA values.
+ *
+ * Example:
+ *   %ptr = alloca i32
+ *   store i32 5, ptr %ptr
+ *   %val = load i32, ptr %ptr
+ *   %result = add i32 %val, 1
+ * Becomes:
+ *   %reg = 5
+ *   %result = add i32 %reg, 1
+ *
+ * For variables defined in multiple blocks, inserts PHI nodes:
+ *   if.then:
+ *     %ptr = alloca i32
+ *     store i32 5, ptr %ptr
+ *     br merge
+ *   if.else:
+ *     store i32 10, ptr %ptr
+ *     br merge
+ *   merge:
+ *     %val = load i32, ptr %ptr
+ * Becomes:
+ *   if.then:
+ *     %reg.1 = 5
+ *     br merge
+ *   if.else:
+ *     %reg.2 = 10
+ *     br merge
+ *   merge:
+ *     %val = phi i32 [%reg.1, %if.then], [%reg.2, %if.else]
+ */
+class Mem2RegPass : public OptimizationPass {
+  public:
+	const char *getName() const override { return "mem2reg"; }
+	bool run(MIRModule &module) override;
+
+  private:
+	bool runOnFunction(MIRFunction &func);
+
+	// Check if an alloca is promotable (only used by loads/stores)
+	bool isAllocaPromotable(MIRFunction &func, MIRInstruction *alloca);
+
+	// Promote a single alloca to registers
+	bool promoteAlloca(MIRFunction &func, MIRInstruction *alloca);
+
+	// Insert PHI nodes for a variable
+	void insertPhiNodes(MIRFunction &func, MIRInstruction *alloca,
+	                    const std::set<MIRBasicBlock *> &defBlocks);
+
+	// Rename variables (SSA construction)
+	void renameVariables(MIRFunction &func, MIRInstruction *alloca,
+	                     MIRBasicBlock *block, MIRValue *incoming,
+	                     std::unordered_map<MIRBasicBlock *, MIRValue *> &currentDef);
+};
+
+//==============================================================================
+// Loop Induction Variable Optimization
+//==============================================================================
+
+/**
+ * Optimizes loop induction variables by converting to PHI nodes.
+ *
+ * Identifies simple loop counters (alloca + load/store pattern in loops)
+ * and converts them to PHI-based SSA form specifically for loops.
+ *
+ * Example:
+ *   entry:
+ *     %i = alloca i32
+ *     store i32 0, ptr %i
+ *     br loop_header
+ *   loop_header:
+ *     %val = load i32, ptr %i
+ *     %cmp = icmp slt %val, 10
+ *     br i1 %cmp, loop_body, exit
+ *   loop_body:
+ *     ...
+ *     %next = add i32 %val, 1
+ *     store i32 %next, ptr %i
+ *     br loop_header
+ *
+ * Becomes:
+ *   entry:
+ *     br loop_header
+ *   loop_header:
+ *     %i.phi = phi i32 [0, %entry], [%next, %loop_body]
+ *     %cmp = icmp slt %i.phi, 10
+ *     br i1 %cmp, loop_body, exit
+ *   loop_body:
+ *     ...
+ *     %next = add i32 %i.phi, 1
+ *     br loop_header
+ */
+class LoopIVOptimizationPass : public OptimizationPass {
+  public:
+	const char *getName() const override { return "loop-iv-opt"; }
+	bool run(MIRModule &module) override;
+
+  private:
+	bool runOnFunction(MIRFunction &func);
+
+	// Detect loop headers (blocks with back-edges)
+	std::set<MIRBasicBlock *> detectLoopHeaders(MIRFunction &func);
+
+	// Check if an alloca is a simple loop IV
+	bool isLoopIV(MIRFunction &func, MIRInstruction *alloca, MIRBasicBlock *loopHeader);
+
+	// Convert loop IV to PHI
+	bool convertIVToPhi(MIRFunction &func, MIRInstruction *alloca, MIRBasicBlock *loopHeader);
+};
+
+//==============================================================================
 // Dead Code Elimination Pass
 //==============================================================================
 
