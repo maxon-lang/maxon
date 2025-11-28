@@ -350,6 +350,59 @@ static int getLiteralTypeAtPosition(const std::string &text, lsp::Position pos) 
 	return 0;
 }
 
+// Returns the type of numeric literal at the given position:
+// 0 = not a number, 1 = integer, 2 = float, 3 = byte literal
+static int getNumericLiteralType(const std::string &text, lsp::Position pos) {
+	std::istringstream stream(text);
+	std::string line;
+	int currentLine = 0;
+
+	while (std::getline(stream, line) && currentLine < pos.line) {
+		currentLine++;
+	}
+
+	if (currentLine != pos.line || pos.character >= (int)line.length()) {
+		return 0;
+	}
+
+	// Find the word boundaries at cursor position
+	int start = pos.character;
+	int end = pos.character;
+
+	// Expand to include digits, dots, and 'b' suffix
+	while (start > 0 && (std::isdigit(line[start - 1]) || line[start - 1] == '.')) {
+		start--;
+	}
+
+	while (end < (int)line.length() && (std::isdigit(line[end]) || line[end] == '.' || line[end] == 'b')) {
+		end++;
+	}
+
+	if (start >= end) {
+		return 0;
+	}
+
+	std::string literal = line.substr(start, end - start);
+
+	// Check if this is a valid numeric literal
+	if (literal.empty() || !std::isdigit(literal[0])) {
+		return 0;
+	}
+
+	// Check for byte literal (ends with 'b')
+	if (literal.size() > 1 && literal.back() == 'b') {
+		return 3;
+	}
+
+	// Check for float (contains '.')
+	if (literal.find('.') != std::string::npos) {
+		return 2;
+	}
+
+	// Integer literal
+	return 1;
+}
+
 std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp::Position pos) {
 	// Check if cursor is inside a string or character literal first
 	int literalType = getLiteralTypeAtPosition(doc->text, pos);
@@ -360,6 +413,22 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
 	} else if (literalType == 2) {
 		lsp::Hover hover;
 		hover.contents = "```maxon\nchar\n```\n\nCharacter literal";
+		return hover;
+	}
+
+	// Check if cursor is on a numeric literal
+	int numericType = getNumericLiteralType(doc->text, pos);
+	if (numericType == 1) {
+		lsp::Hover hover;
+		hover.contents = "```maxon\nint\n```\n\nInteger literal";
+		return hover;
+	} else if (numericType == 2) {
+		lsp::Hover hover;
+		hover.contents = "```maxon\nfloat\n```\n\nFloating-point literal";
+		return hover;
+	} else if (numericType == 3) {
+		lsp::Hover hover;
+		hover.contents = "```maxon\nbyte\n```\n\nByte literal";
 		return hover;
 	}
 

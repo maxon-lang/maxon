@@ -31,6 +31,7 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 	namedValues.clear();
 	variableTypes.clear();
 	structParameters.clear();
+	stackAllocatedArrays.clear();
 
 	// Allocate stack space for parameters
 	size_t argIdx = 0;

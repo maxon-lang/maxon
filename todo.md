@@ -9,7 +9,8 @@ You *Are* Going To Read It
 - compiler error codes
 - extensive math function tests
 - centralize help text from the lsp server analyzer
-
+- cross compiling
+- command line arguments for main
 
 ## Ideas
 - array syntax: var x = array of 10 int

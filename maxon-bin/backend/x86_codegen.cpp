@@ -91,7 +91,7 @@ void X86CodeGen::generatePrologue() {
 	// mov rbp, rsp
 	encoder.movRR64(X86Reg::RBP, X86Reg::RSP);
 
-	// Save callee-saved registers BEFORE allocating the stack frame
+	// Save callee-saved GPR registers BEFORE allocating the stack frame
 	// This way, RSP-relative offsets in the function body are consistent
 	for (X86Reg reg : regAlloc.usedCalleeSaved) {
 		encoder.pushR(reg);
@@ -100,6 +100,12 @@ void X86CodeGen::generatePrologue() {
 	// Allocate stack space (after callee-saved pushes)
 	if (regAlloc.frameSize > 0) {
 		encoder.subRI64(X86Reg::RSP, regAlloc.frameSize);
+	}
+
+	// Save callee-saved XMM registers to stack BEFORE using them
+	// This preserves the caller's values in XMM6-15
+	for (const auto &save : regAlloc.usedCalleeSavedXMM) {
+		encoder.movsdMR(X86Mem(X86Reg::RBP, save.second), save.first);
 	}
 
 	// Save hidden return pointer if this function returns a large struct
@@ -122,6 +128,8 @@ void X86CodeGen::generatePrologue() {
 
 	// Copy float parameters from volatile XMM0-3 to non-volatile XMM6-15
 	// Must be done early before any calls can clobber XMM0-3
+	// Note: This OVERWRITES the XMM6-15 values we just saved, which is intentional
+	// - we saved the CALLER's values, now we're setting up OUR parameter values
 	for (const auto &save : regAlloc.floatParamSaves) {
 		encoder.movsdRR(save.second, save.first);
 	}
@@ -133,7 +141,13 @@ void X86CodeGen::generatePrologue() {
 }
 
 void X86CodeGen::generateEpilogue() {
-	// Callee-saved registers were pushed after setting RBP
+	// Restore callee-saved XMM registers from stack
+	// This must be done BEFORE we deallocate the stack frame
+	for (const auto &save : regAlloc.usedCalleeSavedXMM) {
+		encoder.movsdRM(save.first, X86Mem(X86Reg::RBP, save.second));
+	}
+
+	// Callee-saved GPR registers were pushed after setting RBP
 	// So they're at [rbp - 8], [rbp - 16], etc.
 	// We need to position RSP to pop them in reverse order
 	size_t numCalleeSaved = regAlloc.usedCalleeSaved.size();
@@ -146,7 +160,7 @@ void X86CodeGen::generateEpilogue() {
 		encoder.movRR64(X86Reg::RSP, X86Reg::RBP);
 	}
 
-	// Restore callee-saved registers (reverse order of push)
+	// Restore callee-saved GPR registers (reverse order of push)
 	for (auto it = regAlloc.usedCalleeSaved.rbegin();
 		 it != regAlloc.usedCalleeSaved.rend(); ++it) {
 		encoder.popR(*it);
@@ -374,6 +388,18 @@ static bool isCalleeSaved(X86Reg reg, CallingConv conv) {
 	}
 }
 
+// Helper to check if an XMM register is callee-saved (XMM6-XMM15 on Windows x64)
+static bool isCalleeSavedXMM(X86Reg reg, CallingConv conv) {
+	if (conv == CallingConv::Win64) {
+		int regNum = static_cast<int>(reg);
+		int xmm6 = static_cast<int>(X86Reg::XMM6);
+		int xmm15 = static_cast<int>(X86Reg::XMM15);
+		return regNum >= xmm6 && regNum <= xmm15;
+	}
+	// System V ABI: XMM registers are caller-saved
+	return false;
+}
+
 void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	regAlloc = RegAllocInfo();
 
@@ -577,6 +603,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	for (size_t i = 0; i < func->parameters.size(); ++i) {
 		auto *param = func->parameters[i];
 		uint64_t key = makeAllocKey(param);
+
 		// Shift parameter index if hidden return pointer takes RCX
 		size_t regIndex = hasLargeStructReturn ? i + 1 : i;
 		if (regIndex < paramRegs.size()) {
@@ -594,12 +621,19 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 						X86Reg destReg = calleeSavedFloatRegs[paramFloatRegIdx++];
 						regAlloc.regMap[key] = destReg;
 						regAlloc.floatParamSaves.push_back({floatParamRegs[regIndex], destReg});
-						// Track callee-saved register usage (XMM6-15 on Windows)
-						if (callingConv == CallingConv::Win64 && isCalleeSaved(destReg, callingConv)) {
-							if (std::find(regAlloc.usedCalleeSaved.begin(),
-										  regAlloc.usedCalleeSaved.end(),
-										  destReg) == regAlloc.usedCalleeSaved.end()) {
-								regAlloc.usedCalleeSaved.push_back(destReg);
+						// Track callee-saved XMM register usage (XMM6-15 on Windows)
+						// Note: we'll allocate stack slots for these after counting all uses
+						if (isCalleeSavedXMM(destReg, callingConv)) {
+							bool found = false;
+							for (const auto &entry : regAlloc.usedCalleeSavedXMM) {
+								if (entry.first == destReg) {
+									found = true;
+									break;
+								}
+							}
+							if (!found) {
+								// Stack offset will be assigned later
+								regAlloc.usedCalleeSavedXMM.push_back({destReg, 0});
 							}
 						}
 					} else {
@@ -719,11 +753,16 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 
 							if (allocatedReg != X86Reg::None) {
 								regAlloc.regMap[key] = allocatedReg;
-								if (isCalleeSaved(allocatedReg, callingConv)) {
-									if (std::find(regAlloc.usedCalleeSaved.begin(),
-												  regAlloc.usedCalleeSaved.end(),
-												  allocatedReg) == regAlloc.usedCalleeSaved.end()) {
-										regAlloc.usedCalleeSaved.push_back(allocatedReg);
+								if (isCalleeSavedXMM(allocatedReg, callingConv)) {
+									bool found = false;
+									for (const auto &entry : regAlloc.usedCalleeSavedXMM) {
+										if (entry.first == allocatedReg) {
+											found = true;
+											break;
+										}
+									}
+									if (!found) {
+										regAlloc.usedCalleeSavedXMM.push_back({allocatedReg, 0});
 									}
 								}
 							} else {
@@ -830,6 +869,34 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		// Even number of callee-saved pushes, need frameSize % 16 == 0
 		if (baseFrameSize % 16 != 0) {
 			baseFrameSize += 16 - (baseFrameSize % 16);
+		}
+	}
+
+	// Allocate stack space for callee-saved XMM registers
+	// These need to be saved via movsd (can't push XMM registers)
+	// Assign stack offsets to each XMM register that needs saving
+	size_t numXMMSaves = regAlloc.usedCalleeSavedXMM.size();
+	if (numXMMSaves > 0) {
+		// Each XMM save takes 8 bytes (we only save the low 64-bits via movsd)
+		// Allocate them at the end of the frame, before alignment padding
+		int32_t xmmSaveOffset = -static_cast<int32_t>(baseFrameSize + numCalleeSaved * 8);
+		for (size_t i = 0; i < numXMMSaves; ++i) {
+			xmmSaveOffset -= 8;
+			regAlloc.usedCalleeSavedXMM[i].second = xmmSaveOffset;
+		}
+		baseFrameSize += static_cast<uint32_t>(numXMMSaves * 8);
+
+		// Re-align after adding XMM save space
+		if (numCalleeSaved % 2 == 1) {
+			if (baseFrameSize % 16 == 0) {
+				baseFrameSize += 8;
+			} else if (baseFrameSize % 16 != 8) {
+				baseFrameSize += (24 - (baseFrameSize % 16)) % 16;
+			}
+		} else {
+			if (baseFrameSize % 16 != 0) {
+				baseFrameSize += 16 - (baseFrameSize % 16);
+			}
 		}
 	}
 

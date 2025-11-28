@@ -839,7 +839,14 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 				if (alloca && isArrayParam(varType)) {
 					// Pass array pointer and length
-					mir::MIRValue *ptrVal = builder->createLoad(mir::MIRType::getPtr(), alloca, varExpr->name);
+					mir::MIRValue *ptrVal;
+					if (stackAllocatedArrays.count(varExpr->name) > 0) {
+						// Stack-allocated array: alloca IS the array pointer
+						ptrVal = alloca;
+					} else {
+						// Heap-allocated array: alloca contains a pointer to the array
+						ptrVal = builder->createLoad(mir::MIRType::getPtr(), alloca, varExpr->name);
+					}
 					argsV.push_back(ptrVal);
 					argIdx++;
 

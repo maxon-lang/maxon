@@ -48,20 +48,47 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 				}
 			}
 
-			initHeapManagement();
-
 			// Calculate size
 			uint64_t elementSize = elementType->sizeInBytes;
 			uint64_t totalSize = arraySize * elementSize;
 
-			// Call malloc
-			mir::MIRFunction *mallocFunc = module->getFunction("malloc");
-			mir::MIRValue *sizeVal = builder->getInt64(totalSize);
-			mir::MIRValue *arrayPtr = builder->createCall(mallocFunc, {sizeVal}, varDecl->name + ".malloc");
+			// Threshold for stack allocation (4KB) - larger arrays go on heap
+			constexpr uint64_t STACK_ARRAY_THRESHOLD = 4096;
+			bool useHeap = totalSize > STACK_ARRAY_THRESHOLD;
 
-			// Create alloca to store the pointer
-			mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name);
-			builder->createStore(arrayPtr, ptrAlloca);
+			mir::MIRValue *arrayPtr;
+
+			if (useHeap) {
+				// Large array: heap-allocate
+				initHeapManagement();
+				mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+				mir::MIRValue *sizeVal = builder->getInt64(totalSize);
+				arrayPtr = builder->createCall(mallocFunc, {sizeVal}, varDecl->name + ".malloc");
+
+				// Create alloca to store the pointer
+				mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name);
+				builder->createStore(arrayPtr, ptrAlloca);
+				namedValues[varDecl->name] = ptrAlloca;
+				variableTypes[varDecl->name] = "[]" + elementTypeName; // Dynamic array type
+
+				// Track for cleanup
+				if (!scopeStack.empty()) {
+					scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, ptrAlloca});
+				}
+
+				// Store array capacity as hidden variable (for dynamic arrays)
+				mir::MIRValue *capacityAlloca = builder->createAlloca(mir::MIRType::getInt32(), varDecl->name + ".__capacity");
+				mir::MIRValue *arraySizeVal = builder->getInt32(arraySize);
+				builder->createStore(arraySizeVal, capacityAlloca);
+				namedValues[varDecl->name + ".__capacity"] = capacityAlloca;
+			} else {
+				// Small array: stack-allocate directly (much faster)
+				mir::MIRType *arrayType = mir::MIRType::getArray(elementType, arraySize);
+				arrayPtr = builder->createAlloca(arrayType, varDecl->name);
+				namedValues[varDecl->name] = arrayPtr;
+				stackAllocatedArrays.insert(varDecl->name); // Mark as stack-allocated
+				variableTypes[varDecl->name] = "[" + std::to_string(arraySize) + "]" + elementTypeName;
+			}
 
 			// Store array length as hidden variable
 			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt32(), varDecl->name + ".__length");
@@ -69,15 +96,14 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			builder->createStore(arraySizeVal, lengthAlloca);
 			namedValues[varDecl->name + ".__length"] = lengthAlloca;
 
-			// Store array capacity as hidden variable (for dynamic arrays)
-			mir::MIRValue *capacityAlloca = builder->createAlloca(mir::MIRType::getInt32(), varDecl->name + ".__capacity");
-			builder->createStore(arraySizeVal, capacityAlloca); // Initially capacity = length
-			namedValues[varDecl->name + ".__capacity"] = capacityAlloca;
-
 			// Initialize array elements
 			if (initValues.empty()) {
 				// Zero-initialize using memset
 				mir::MIRFunction *memsetFunc = module->getFunction("memset");
+				if (!memsetFunc) {
+					initHeapManagement();
+					memsetFunc = module->getFunction("memset");
+				}
 				mir::MIRValue *zeroVal = builder->getInt32(0);
 				mir::MIRValue *memsetSizeVal = builder->getInt64(totalSize);
 				builder->createCall(memsetFunc, {arrayPtr, zeroVal, memsetSizeVal});
@@ -88,14 +114,6 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 					mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayPtr, indexVal, "arrayidx");
 					builder->createStore(initValues[i], elementPtr);
 				}
-			}
-
-			namedValues[varDecl->name] = ptrAlloca;
-			variableTypes[varDecl->name] = "[]" + elementTypeName; // Dynamic array type (no fixed size)
-
-			// Track for cleanup
-			if (!scopeStack.empty()) {
-				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, ptrAlloca});
 			}
 
 			return;
@@ -729,6 +747,72 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 			builder->setInsertPoint(afterBB);
 			return;
+		}
+
+		// Check for range() call - compile inline for performance
+		// This avoids function call overhead for iter.hasNext/getCurrent/next on every iteration
+		if (auto *callExpr = dynamic_cast<CallExprAST *>(forStmt->iterable.get())) {
+			if (callExpr->callee == "range" && callExpr->args.size() == 2) {
+				// Generate inline range loop: for i in range(start, end) becomes:
+				// var i = start; while i < end { ... ; i = i + 1 }
+
+				mir::MIRValue *startVal = generateExpr(callExpr->args[0].get());
+				mir::MIRValue *endVal = generateExpr(callExpr->args[1].get());
+
+				if (!startVal || !endVal) {
+					throw std::runtime_error("Failed to generate range bounds");
+				}
+
+				// Create loop variable alloca and initialize with start value
+				mir::MIRValue *loopVarAlloca = builder->createAlloca(mir::MIRType::getInt32(), forStmt->loopVar);
+				builder->createStore(startVal, loopVarAlloca);
+				namedValues[forStmt->loopVar] = loopVarAlloca;
+				variableTypes[forStmt->loopVar] = "int";
+
+				// Store end value in alloca (in case it's a complex expression)
+				mir::MIRValue *endAlloca = builder->createAlloca(mir::MIRType::getInt32(), "__range_end");
+				builder->createStore(endVal, endAlloca);
+
+				mir::MIRBasicBlock *condBB = builder->createBasicBlock("forcond");
+				mir::MIRBasicBlock *loopBB = builder->createBasicBlock("forloop");
+				mir::MIRBasicBlock *incrementBB = builder->createBasicBlock("forincrement");
+				mir::MIRBasicBlock *afterBB = builder->createBasicBlock("afterfor");
+
+				loopStack.push_back({forStmt->blockId, incrementBB, afterBB});
+
+				builder->createBr(condBB);
+
+				// Condition: loopVar < end
+				builder->setInsertPoint(condBB);
+				mir::MIRValue *currentVal = builder->createLoad(mir::MIRType::getInt32(), loopVarAlloca, "i");
+				mir::MIRValue *endValLoad = builder->createLoad(mir::MIRType::getInt32(), endAlloca, "end");
+				mir::MIRValue *condVal = builder->createICmpSLT(currentVal, endValLoad, "rangecond");
+				builder->createCondBr(condVal, loopBB, afterBB);
+
+				// Loop body
+				builder->setInsertPoint(loopBB);
+
+				for (auto &s : forStmt->body) {
+					generateStmt(s.get(), function);
+				}
+
+				if (!builder->getInsertBlock()->hasTerminator()) {
+					builder->createBr(incrementBB);
+				}
+
+				// Increment: loopVar++
+				builder->setInsertPoint(incrementBB);
+				mir::MIRValue *oldVal = builder->createLoad(mir::MIRType::getInt32(), loopVarAlloca, "oldval");
+				mir::MIRValue *newVal = builder->createAdd(oldVal, builder->getInt32(1), "newval");
+				builder->createStore(newVal, loopVarAlloca);
+				builder->createBr(condBB);
+
+				namedValues.erase(forStmt->loopVar);
+				loopStack.pop_back();
+
+				builder->setInsertPoint(afterBB);
+				return;
+			}
 		}
 
 		// Non-array iteration (range, etc.): use iterator protocol

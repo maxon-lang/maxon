@@ -14,7 +14,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 99
+; Instructions: 33
 
 %Iterator = type { i32, i32, i32 }
 
@@ -22,23 +22,24 @@ define i32 @main() {
 entry0:
   %0 = alloca i32
   store i32 0, ptr %0
-  %1 = call %Iterator @iter.range(i32 0, i32 10)
-  %2 = alloca %Iterator
-  store %Iterator %1, ptr %2
+  %1 = alloca i32
+  store i32 0, ptr %1
+  %2 = alloca i32
+  store i32 10, ptr %2
   br label %forcond1
 forcond1:
-  %3 = call i32 @iter.hasNext(ptr %2)
-  %4 = icmp eq i32 %3, 1
-  br i1 %4, label %forloop2, label %afterfor4
+  %3 = load i32, ptr %1
+  %4 = load i32, ptr %2
+  %5 = icmp slt i32 %3, %4
+  br i1 %5, label %forloop2, label %afterfor4
 forloop2:
-  %5 = call i32 @iter.getCurrent(ptr %2)
-  %6 = alloca i32
-  store i32 %5, ptr %6
-  %8 = icmp eq i32 %5, 5
-  br i1 %8, label %then5, label %ifcont6
+  %6 = load i32, ptr %1
+  %7 = icmp eq i32 %6, 5
+  br i1 %7, label %then5, label %ifcont6
 forincrement3:
-  %14 = call %Iterator @iter.next(ptr %2)
-  store %Iterator %14, ptr %2
+  %13 = load i32, ptr %1
+  %14 = add i32 %13, 1
+  store i32 %14, ptr %1
   br label %forcond1
 afterfor4:
   %15 = load i32, ptr %0
@@ -46,106 +47,17 @@ afterfor4:
 then5:
   br label %forincrement3
 ifcont6:
-  %9 = load i32, ptr %6
-  %10 = icmp eq i32 %9, 8
-  br i1 %10, label %then8, label %ifcont9
+  %8 = load i32, ptr %1
+  %9 = icmp eq i32 %8, 8
+  br i1 %9, label %then8, label %ifcont9
 then8:
   br label %afterfor4
 ifcont9:
-  %11 = load i32, ptr %0
-  %12 = load i32, ptr %6
-  %13 = add i32 %11, %12
-  store i32 %13, ptr %0
+  %10 = load i32, ptr %0
+  %11 = load i32, ptr %1
+  %12 = add i32 %10, %11
+  store i32 %12, ptr %0
   br label %forincrement3
-}
-
-define i32 @iter.hasNext(ptr %it) {
-entry0:
-  %0 = alloca ptr
-  store ptr %it, ptr %0
-  %2 = getelementptr %Iterator, ptr %it, i32 0, i32 2
-  %3 = load i32, ptr %2
-  %4 = icmp sgt i32 %3, 0
-  br i1 %4, label %then1, label %ifcont2
-then1:
-  %5 = load ptr, ptr %0
-  %6 = getelementptr %Iterator, ptr %5, i32 0, i32 0
-  %7 = load i32, ptr %6
-  %8 = load ptr, ptr %0
-  %9 = getelementptr %Iterator, ptr %8, i32 0, i32 1
-  %10 = load i32, ptr %9
-  %11 = icmp slt i32 %7, %10
-  br i1 %11, label %then3, label %ifcont4
-ifcont2:
-  %12 = load ptr, ptr %0
-  %13 = getelementptr %Iterator, ptr %12, i32 0, i32 0
-  %14 = load i32, ptr %13
-  %15 = load ptr, ptr %0
-  %16 = getelementptr %Iterator, ptr %15, i32 0, i32 1
-  %17 = load i32, ptr %16
-  %18 = icmp sgt i32 %14, %17
-  br i1 %18, label %then5, label %ifcont6
-then3:
-  ret i32 1
-ifcont4:
-  ret i32 0
-then5:
-  ret i32 1
-ifcont6:
-  ret i32 0
-}
-
-define i32 @iter.getCurrent(ptr %it) {
-entry0:
-  %0 = alloca ptr
-  store ptr %it, ptr %0
-  %2 = getelementptr %Iterator, ptr %it, i32 0, i32 0
-  %3 = load i32, ptr %2
-  ret i32 %3
-}
-
-define %Iterator @iter.next(ptr %it) {
-entry0:
-  %0 = alloca ptr
-  store ptr %it, ptr %0
-  %1 = alloca %Iterator
-  %3 = getelementptr %Iterator, ptr %it, i32 0, i32 0
-  %4 = load i32, ptr %3
-  %5 = load ptr, ptr %0
-  %6 = getelementptr %Iterator, ptr %5, i32 0, i32 2
-  %7 = load i32, ptr %6
-  %8 = add i32 %4, %7
-  %9 = getelementptr %Iterator, ptr %1, i32 0, i32 0
-  store i32 %8, ptr %9
-  %10 = load ptr, ptr %0
-  %11 = getelementptr %Iterator, ptr %10, i32 0, i32 1
-  %12 = load i32, ptr %11
-  %13 = getelementptr %Iterator, ptr %1, i32 0, i32 1
-  store i32 %12, ptr %13
-  %14 = load ptr, ptr %0
-  %15 = getelementptr %Iterator, ptr %14, i32 0, i32 2
-  %16 = load i32, ptr %15
-  %17 = getelementptr %Iterator, ptr %1, i32 0, i32 2
-  store i32 %16, ptr %17
-  %18 = load %Iterator, ptr %1
-  ret %Iterator %18
-}
-
-define %Iterator @iter.range(i32 %start, i32 %end_exclusive) {
-entry0:
-  %0 = alloca i32
-  store i32 %start, ptr %0
-  %1 = alloca i32
-  store i32 %end_exclusive, ptr %1
-  %2 = alloca %Iterator
-  %4 = getelementptr %Iterator, ptr %2, i32 0, i32 0
-  store i32 %start, ptr %4
-  %6 = getelementptr %Iterator, ptr %2, i32 0, i32 1
-  store i32 %end_exclusive, ptr %6
-  %7 = getelementptr %Iterator, ptr %2, i32 0, i32 2
-  store i32 1, ptr %7
-  %8 = load %Iterator, ptr %2
-  ret %Iterator %8
 }
 
 declare void @exit(i32 %arg0)
@@ -159,7 +71,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 107
+; Instructions: 35
 
 %Iterator = type { i32, i32, i32 }
 
@@ -167,24 +79,24 @@ define i32 @main() {
 entry0:
   %0 = alloca i32
   store i32 0, ptr %0
-  %1 = call %Iterator @iter.range(i32 0, i32 10)
-  %2 = alloca %Iterator
-  store %Iterator %1, ptr %2
+  %1 = alloca i32
+  store i32 0, ptr %1
+  %2 = alloca i32
+  store i32 10, ptr %2
   br label %forcond1
 forcond1:
-  %3 = call i32 @iter.hasNext(ptr %2)
-  %4 = icmp eq i32 %3, 1
-  br i1 %4, label %forloop2, label %afterfor4
+  %3 = load i32, ptr %1
+  %4 = load i32, ptr %2
+  %5 = icmp slt i32 %3, %4
+  br i1 %5, label %forloop2, label %afterfor4
 forloop2:
-  %5 = call i32 @iter.getCurrent(ptr %2)
-  %6 = alloca i32
-  store i32 %5, ptr %6
-  %7 = load i32, ptr %6
-  %8 = icmp eq i32 %7, 5
-  br i1 %8, label %then5, label %ifcont6
+  %6 = load i32, ptr %1
+  %7 = icmp eq i32 %6, 5
+  br i1 %7, label %then5, label %ifcont6
 forincrement3:
-  %14 = call %Iterator @iter.next(ptr %2)
-  store %Iterator %14, ptr %2
+  %13 = load i32, ptr %1
+  %14 = add i32 %13, 1
+  store i32 %14, ptr %1
   br label %forcond1
 afterfor4:
   %15 = load i32, ptr %0
@@ -192,115 +104,21 @@ afterfor4:
 then5:
   br label %forincrement3
 ifcont6:
-  %9 = load i32, ptr %6
-  %10 = icmp eq i32 %9, 8
-  br i1 %10, label %then8, label %ifcont9
+  %8 = load i32, ptr %1
+  %9 = icmp eq i32 %8, 8
+  br i1 %9, label %then8, label %ifcont9
 aftercontinue7:
   br label %ifcont6
 then8:
   br label %afterfor4
 ifcont9:
-  %11 = load i32, ptr %0
-  %12 = load i32, ptr %6
-  %13 = add i32 %11, %12
-  store i32 %13, ptr %0
+  %10 = load i32, ptr %0
+  %11 = load i32, ptr %1
+  %12 = add i32 %10, %11
+  store i32 %12, ptr %0
   br label %forincrement3
 afterbreak10:
   br label %ifcont9
-}
-
-define i32 @iter.hasNext(ptr %it) {
-entry0:
-  %0 = alloca ptr
-  store ptr %it, ptr %0
-  %1 = load ptr, ptr %0
-  %2 = getelementptr %Iterator, ptr %1, i32 0, i32 2
-  %3 = load i32, ptr %2
-  %4 = icmp sgt i32 %3, 0
-  br i1 %4, label %then1, label %ifcont2
-then1:
-  %5 = load ptr, ptr %0
-  %6 = getelementptr %Iterator, ptr %5, i32 0, i32 0
-  %7 = load i32, ptr %6
-  %8 = load ptr, ptr %0
-  %9 = getelementptr %Iterator, ptr %8, i32 0, i32 1
-  %10 = load i32, ptr %9
-  %11 = icmp slt i32 %7, %10
-  br i1 %11, label %then3, label %ifcont4
-ifcont2:
-  %12 = load ptr, ptr %0
-  %13 = getelementptr %Iterator, ptr %12, i32 0, i32 0
-  %14 = load i32, ptr %13
-  %15 = load ptr, ptr %0
-  %16 = getelementptr %Iterator, ptr %15, i32 0, i32 1
-  %17 = load i32, ptr %16
-  %18 = icmp sgt i32 %14, %17
-  br i1 %18, label %then5, label %ifcont6
-then3:
-  ret i32 1
-ifcont4:
-  ret i32 0
-then5:
-  ret i32 1
-ifcont6:
-  ret i32 0
-}
-
-define i32 @iter.getCurrent(ptr %it) {
-entry0:
-  %0 = alloca ptr
-  store ptr %it, ptr %0
-  %1 = load ptr, ptr %0
-  %2 = getelementptr %Iterator, ptr %1, i32 0, i32 0
-  %3 = load i32, ptr %2
-  ret i32 %3
-}
-
-define %Iterator @iter.next(ptr %it) {
-entry0:
-  %0 = alloca ptr
-  store ptr %it, ptr %0
-  %1 = alloca %Iterator
-  %2 = load ptr, ptr %0
-  %3 = getelementptr %Iterator, ptr %2, i32 0, i32 0
-  %4 = load i32, ptr %3
-  %5 = load ptr, ptr %0
-  %6 = getelementptr %Iterator, ptr %5, i32 0, i32 2
-  %7 = load i32, ptr %6
-  %8 = add i32 %4, %7
-  %9 = getelementptr %Iterator, ptr %1, i32 0, i32 0
-  store i32 %8, ptr %9
-  %10 = load ptr, ptr %0
-  %11 = getelementptr %Iterator, ptr %10, i32 0, i32 1
-  %12 = load i32, ptr %11
-  %13 = getelementptr %Iterator, ptr %1, i32 0, i32 1
-  store i32 %12, ptr %13
-  %14 = load ptr, ptr %0
-  %15 = getelementptr %Iterator, ptr %14, i32 0, i32 2
-  %16 = load i32, ptr %15
-  %17 = getelementptr %Iterator, ptr %1, i32 0, i32 2
-  store i32 %16, ptr %17
-  %18 = load %Iterator, ptr %1
-  ret %Iterator %18
-}
-
-define %Iterator @iter.range(i32 %start, i32 %end_exclusive) {
-entry0:
-  %0 = alloca i32
-  store i32 %start, ptr %0
-  %1 = alloca i32
-  store i32 %end_exclusive, ptr %1
-  %2 = alloca %Iterator
-  %3 = load i32, ptr %0
-  %4 = getelementptr %Iterator, ptr %2, i32 0, i32 0
-  store i32 %3, ptr %4
-  %5 = load i32, ptr %1
-  %6 = getelementptr %Iterator, ptr %2, i32 0, i32 1
-  store i32 %5, ptr %6
-  %7 = getelementptr %Iterator, ptr %2, i32 0, i32 2
-  store i32 1, ptr %7
-  %8 = load %Iterator, ptr %2
-  ret %Iterator %8
 }
 
 declare void @exit(i32 %arg0)

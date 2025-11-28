@@ -33,8 +33,12 @@ struct RegAllocInfo {
 	// Total stack frame size
 	uint32_t frameSize = 0;
 
-	// Callee-saved registers that need to be preserved
+	// Callee-saved GPR registers that need to be preserved (pushed/popped)
 	std::vector<X86Reg> usedCalleeSaved;
+
+	// Callee-saved XMM registers that need to be preserved (saved/restored via movsd)
+	// Each entry is {XMMreg, stackOffset} where stackOffset is relative to RBP
+	std::vector<std::pair<X86Reg, int32_t>> usedCalleeSavedXMM;
 
 	// Windows x64 ABI: For functions returning structs > 8 bytes,
 	// the hidden return pointer (passed in RCX) is saved to this stack offset

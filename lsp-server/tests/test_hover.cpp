@@ -310,19 +310,61 @@ TEST_CASE("hover on array_variable", "[hover]") {
 
 TEST_CASE("hover on no_match", "[hover]") {
 
-    
+
     Analyzer analyzer;
     auto doc = createTestDocument("function test() int\n    return 42\nend 'test'");
-    
+
     analyzer.analyze(doc);
-    
+
     // Hover over whitespace
     lsp::Position pos{1, 0};
     auto hover = analyzer.getHover(doc, pos);
-    
+
     // Should still return something, but might be generic
     // This is okay - we just don't want it to crash
-    
 
+
+}
+
+TEST_CASE("hover on numeric_literals", "[hover]") {
+    Analyzer analyzer;
+    auto doc = createTestDocument(
+        "function test() int\n"
+        "    var i = 42\n"
+        "    var f = 3.14\n"
+        "    var b = 255b\n"
+        "    return 0\n"
+        "end 'test'"
+    );
+
+    analyzer.analyze(doc);
+
+    // Hover over integer literal '42'
+    lsp::Position posInt{1, 12};
+    auto hoverInt = analyzer.getHover(doc, posInt);
+    REQUIRE(hoverInt.has_value());
+    REQUIRE(hoverInt->contents.find("int") != std::string::npos);
+    REQUIRE(hoverInt->contents.find("Integer literal") != std::string::npos);
+
+    // Hover over float literal '3.14'
+    lsp::Position posFloat{2, 12};
+    auto hoverFloat = analyzer.getHover(doc, posFloat);
+    REQUIRE(hoverFloat.has_value());
+    REQUIRE(hoverFloat->contents.find("float") != std::string::npos);
+    REQUIRE(hoverFloat->contents.find("Floating-point literal") != std::string::npos);
+
+    // Hover over byte literal '255b'
+    lsp::Position posByte{3, 12};
+    auto hoverByte = analyzer.getHover(doc, posByte);
+    REQUIRE(hoverByte.has_value());
+    REQUIRE(hoverByte->contents.find("byte") != std::string::npos);
+    REQUIRE(hoverByte->contents.find("Byte literal") != std::string::npos);
+
+    // Hover over return value '0'
+    lsp::Position posZero{4, 11};
+    auto hoverZero = analyzer.getHover(doc, posZero);
+    REQUIRE(hoverZero.has_value());
+    REQUIRE(hoverZero->contents.find("int") != std::string::npos);
+    REQUIRE(hoverZero->contents.find("Integer literal") != std::string::npos);
 }
 
