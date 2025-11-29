@@ -569,6 +569,7 @@ end 'main'
 
 TEST_CASE("string_member_completions_via_dot", "[analyzer]") {
 	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
 
 	// Create valid document with string variable, then request completion after a dot
 	// We'll use two calls: first analyze valid code to populate cache, then
@@ -585,17 +586,17 @@ TEST_CASE("string_member_completions_via_dot", "[analyzer]") {
 	lsp::Position pos{2, 13}; // After "return s."
 	auto completions = analyzer.getCompletions(doc, pos);
 
-	// Should have string properties
+	// Should have string methods count() and isEmpty()
 	bool hasCount = false;
 	bool hasIsEmpty = false;
 	for (const auto &item : completions) {
 		if (item.label == "count") {
 			hasCount = true;
-			REQUIRE(item.kind == lsp::CompletionItemKind::Property);
+			REQUIRE(item.kind == lsp::CompletionItemKind::Method);
 		}
 		if (item.label == "isEmpty") {
 			hasIsEmpty = true;
-			REQUIRE(item.kind == lsp::CompletionItemKind::Property);
+			REQUIRE(item.kind == lsp::CompletionItemKind::Method);
 		}
 	}
 	REQUIRE(hasCount);
@@ -604,6 +605,7 @@ TEST_CASE("string_member_completions_via_dot", "[analyzer]") {
 
 TEST_CASE("string_method_completions_via_dot", "[analyzer]") {
 	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
 
 	// Analyze valid code to populate cache
 	auto doc = createTestDocument("function main() int\n    var s = \"hello\"\n    return s.count\nend 'main'");
@@ -622,14 +624,14 @@ TEST_CASE("string_method_completions_via_dot", "[analyzer]") {
 	bool hasFind = false;
 	bool hasToUpper = false;
 	bool hasToLower = false;
-	bool hasTrim = false;
+	bool hasTrimWhitespace = false;
 
 	for (const auto &item : completions) {
-		if (item.label == "starts_with") {
+		if (item.label == "startsWith") {
 			hasStartsWith = true;
 			REQUIRE(item.kind == lsp::CompletionItemKind::Method);
 		}
-		if (item.label == "ends_with") {
+		if (item.label == "endsWith") {
 			hasEndsWith = true;
 			REQUIRE(item.kind == lsp::CompletionItemKind::Method);
 		}
@@ -641,16 +643,16 @@ TEST_CASE("string_method_completions_via_dot", "[analyzer]") {
 			hasFind = true;
 			REQUIRE(item.kind == lsp::CompletionItemKind::Method);
 		}
-		if (item.label == "to_upper") {
+		if (item.label == "toUpper") {
 			hasToUpper = true;
 			REQUIRE(item.kind == lsp::CompletionItemKind::Method);
 		}
-		if (item.label == "to_lower") {
+		if (item.label == "toLower") {
 			hasToLower = true;
 			REQUIRE(item.kind == lsp::CompletionItemKind::Method);
 		}
-		if (item.label == "trim") {
-			hasTrim = true;
+		if (item.label == "trimWhitespace") {
+			hasTrimWhitespace = true;
 			REQUIRE(item.kind == lsp::CompletionItemKind::Method);
 		}
 	}
@@ -661,11 +663,12 @@ TEST_CASE("string_method_completions_via_dot", "[analyzer]") {
 	REQUIRE(hasFind);
 	REQUIRE(hasToUpper);
 	REQUIRE(hasToLower);
-	REQUIRE(hasTrim);
+	REQUIRE(hasTrimWhitespace);
 }
 
 TEST_CASE("string_method_has_insertText", "[analyzer]") {
 	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
 
 	auto doc = createTestDocument("function main() int\n    var s = \"hello\"\n    return s.count\nend 'main'");
 	analyzer.analyze(doc);
@@ -676,19 +679,20 @@ TEST_CASE("string_method_has_insertText", "[analyzer]") {
 
 	// Check that methods have insertText with parentheses
 	for (const auto &item : completions) {
-		if (item.label == "to_upper") {
+		if (item.label == "toUpper") {
 			REQUIRE(item.insertText.has_value());
-			REQUIRE(item.insertText.value() == "to_upper()");
+			REQUIRE(item.insertText.value() == "toUpper()");
 		}
-		if (item.label == "starts_with") {
+		if (item.label == "startsWith") {
 			REQUIRE(item.insertText.has_value());
-			REQUIRE(item.insertText.value() == "starts_with()");
+			REQUIRE(item.insertText.value() == "startsWith()");
 		}
 	}
 }
 
 TEST_CASE("array_member_completions_via_dot", "[analyzer]") {
 	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
 
 	// Correct Maxon syntax: var arr = [5]int
 	auto doc = createTestDocument("function main() int\n    var arr = [5]int\n    return arr.length\nend 'main'");
@@ -700,25 +704,20 @@ TEST_CASE("array_member_completions_via_dot", "[analyzer]") {
 
 	// Should have array properties
 	bool hasLength = false;
-	bool hasCapacity = false;
 
 	for (const auto &item : completions) {
 		if (item.label == "length") {
 			hasLength = true;
 			REQUIRE(item.kind == lsp::CompletionItemKind::Property);
 		}
-		if (item.label == "capacity") {
-			hasCapacity = true;
-			REQUIRE(item.kind == lsp::CompletionItemKind::Property);
-		}
 	}
 
 	REQUIRE(hasLength);
-	REQUIRE(hasCapacity);
 }
 
 TEST_CASE("struct_field_completions_via_dot", "[analyzer]") {
 	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
 
 	// Correct Maxon syntax: var p = Point { x: 0, y: 0 }
 	auto doc = createTestDocument("struct Point\n    x int\n    y int\nend 'Point'\n\nfunction main() int\n    var p = Point { x: 0, y: 0 }\n    return p.x\nend 'main'");
@@ -749,16 +748,17 @@ TEST_CASE("struct_field_completions_via_dot", "[analyzer]") {
 
 TEST_CASE("builtin_method_calls_no_errors", "[analyzer]") {
 	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
 
-	// Test that built-in method calls like s.to_lower() don't produce "undefined function" errors
-	// The parser transforms s.to_lower() -> to_lower(s), and the semantic analyzer must recognize
-	// the built-in function
+	// Test that method calls like s.toLower() don't produce "undefined function" errors
+	// The parser transforms s.toLower() -> toLower(s), and the semantic analyzer must recognize
+	// the method from the stdlib string type
 	auto doc = createTestDocument(
 		"function main() int\n"
 		"    var s = \"hello\"\n"
-		"    print(s.to_lower())\n"
-		"    print(s.to_upper())\n"
-		"    print(s.trim())\n"
+		"    print(s.toLower())\n"
+		"    print(s.toUpper())\n"
+		"    print(s.trimWhitespace())\n"
 		"    return 0\n"
 		"end 'main'");
 
@@ -766,24 +766,25 @@ TEST_CASE("builtin_method_calls_no_errors", "[analyzer]") {
 
 	// Should have no errors about undefined functions
 	for (const auto &diag : diagnostics) {
-		// Fail if we see any "Undefined function" error for the built-in methods
+		// Fail if we see any "Undefined function" error for the methods
 		bool isUndefinedBuiltin = diag.message.find("Undefined function") != std::string::npos &&
-								  (diag.message.find("to_lower") != std::string::npos ||
-								   diag.message.find("to_upper") != std::string::npos ||
-								   diag.message.find("trim") != std::string::npos);
+								  (diag.message.find("toLower") != std::string::npos ||
+								   diag.message.find("toUpper") != std::string::npos ||
+								   diag.message.find("trimWhitespace") != std::string::npos);
 		REQUIRE_FALSE(isUndefinedBuiltin);
 	}
 }
 
 TEST_CASE("builtin_string_search_methods_no_errors", "[analyzer]") {
 	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
 
-	// Test built-in string search methods
+	// Test string search methods from stdlib
 	auto doc = createTestDocument(
 		"function main() int\n"
 		"    var s = \"hello world\"\n"
-		"    var a = s.starts_with(\"hello\")\n"
-		"    var b = s.ends_with(\"world\")\n"
+		"    var a = s.startsWith(\"hello\")\n"
+		"    var b = s.endsWith(\"world\")\n"
 		"    var c = s.contains(\"lo\")\n"
 		"    var d = s.find(\"wo\")\n"
 		"    return 0\n"
@@ -794,8 +795,8 @@ TEST_CASE("builtin_string_search_methods_no_errors", "[analyzer]") {
 	// Should have no errors about undefined functions
 	for (const auto &diag : diagnostics) {
 		bool isUndefinedBuiltin = diag.message.find("Undefined function") != std::string::npos &&
-								  (diag.message.find("starts_with") != std::string::npos ||
-								   diag.message.find("ends_with") != std::string::npos ||
+								  (diag.message.find("startsWith") != std::string::npos ||
+								   diag.message.find("endsWith") != std::string::npos ||
 								   diag.message.find("contains") != std::string::npos ||
 								   diag.message.find("find") != std::string::npos);
 		REQUIRE_FALSE(isUndefinedBuiltin);

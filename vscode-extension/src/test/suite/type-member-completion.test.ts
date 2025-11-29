@@ -134,7 +134,7 @@ end 'main'`;
 		assert.ok(completions, 'Completions should be returned');
 
 		// Check for string methods
-		const methodNames = ['starts_with', 'ends_with', 'contains', 'find', 'to_upper', 'to_lower', 'trim'];
+		const methodNames = ['startsWith', 'endsWith', 'contains', 'find', 'toUpper', 'toLower', 'trimWhitespace'];
 		for (const methodName of methodNames) {
 			const hasMethod = completions.items.some(item => item.label === methodName);
 			assert.ok(hasMethod, `Should include "${methodName}" method for string`);
@@ -159,17 +159,15 @@ end 'main'`;
 			new vscode.Position(2, 6)
 		);
 
-		// Check that properties have Property kind
+		// Check that count() is a method (it's a function in stdlib)
 		const countItem = completions.items.find(item => item.label === 'count');
-		if (countItem) {
-			assert.strictEqual(countItem.kind, vscode.CompletionItemKind.Property, 'count should be Property kind');
-		}
+		assert.ok(countItem, 'count should be in completions');
+		assert.strictEqual(countItem.kind, vscode.CompletionItemKind.Method, 'count should be Method kind');
 
 		// Check that methods have Method kind
-		const toUpperItem = completions.items.find(item => item.label === 'to_upper');
-		if (toUpperItem) {
-			assert.strictEqual(toUpperItem.kind, vscode.CompletionItemKind.Method, 'to_upper should be Method kind');
-		}
+		const toUpperItem = completions.items.find(item => item.label === 'toUpper');
+		assert.ok(toUpperItem, 'toUpper should be in completions');
+		assert.strictEqual(toUpperItem.kind, vscode.CompletionItemKind.Method, 'toUpper should be Method kind');
 	});
 
 	test('String method completions should have detail with return type', async function () {
@@ -192,24 +190,21 @@ end 'main'`;
 
 		// Check count has int detail
 		const countItem = completions.items.find(item => item.label === 'count');
-		if (countItem) {
-			assert.ok(countItem.detail, 'count should have detail');
-			assert.ok((countItem.detail as string).includes('int'), 'count detail should include "int"');
-		}
+		assert.ok(countItem, 'count should be in completions');
+		assert.ok(countItem.detail, 'count should have detail');
+		assert.ok((countItem.detail as string).includes('int'), 'count detail should include "int"');
 
-		// Check to_upper has string detail
-		const toUpperItem = completions.items.find(item => item.label === 'to_upper');
-		if (toUpperItem) {
-			assert.ok(toUpperItem.detail, 'to_upper should have detail');
-			assert.ok((toUpperItem.detail as string).includes('string'), 'to_upper detail should include "string"');
-		}
+		// Check toUpper has string detail
+		const toUpperItem = completions.items.find(item => item.label === 'toUpper');
+		assert.ok(toUpperItem, 'toUpper should be in completions');
+		assert.ok(toUpperItem.detail, 'toUpper should have detail');
+		assert.ok((toUpperItem.detail as string).includes('string'), 'toUpper detail should include "string"');
 
 		// Check find has int detail
 		const findItem = completions.items.find(item => item.label === 'find');
-		if (findItem) {
-			assert.ok(findItem.detail, 'find should have detail');
-			assert.ok((findItem.detail as string).includes('int'), 'find detail should include "int"');
-		}
+		assert.ok(findItem, 'find should be in completions');
+		assert.ok(findItem.detail, 'find should have detail');
+		assert.ok((findItem.detail as string).includes('int'), 'find detail should include "int"');
 	});
 
 	test('String method completions should have documentation', async function () {
@@ -230,15 +225,13 @@ end 'main'`;
 			new vscode.Position(2, 6)
 		);
 
-		const toUpperItem = completions.items.find(item => item.label === 'to_upper');
-		if (toUpperItem) {
-			assert.ok(toUpperItem.documentation, 'to_upper should have documentation');
-		}
+		const toUpperItem = completions.items.find(item => item.label === 'toUpper');
+		assert.ok(toUpperItem, 'toUpper should be in completions');
+		assert.ok(toUpperItem.documentation, 'toUpper should have documentation');
 
 		const containsItem = completions.items.find(item => item.label === 'contains');
-		if (containsItem) {
-			assert.ok(containsItem.documentation, 'contains should have documentation');
-		}
+		assert.ok(containsItem, 'contains should be in completions');
+		assert.ok(containsItem.documentation, 'contains should have documentation');
 	});
 
 	test('Should provide array member completions after dot', async function () {
@@ -264,9 +257,6 @@ end 'main'`;
 		// Check for array properties
 		const hasLength = completions.items.some(item => item.label === 'length');
 		assert.ok(hasLength, 'Should include "length" property for array');
-
-		const hasCapacity = completions.items.some(item => item.label === 'capacity');
-		assert.ok(hasCapacity, 'Should include "capacity" property for array');
 	});
 
 	test('Array length should have Property kind and int detail', async function () {
@@ -288,11 +278,10 @@ end 'main'`;
 		);
 
 		const lengthItem = completions.items.find(item => item.label === 'length');
-		if (lengthItem) {
-			assert.strictEqual(lengthItem.kind, vscode.CompletionItemKind.Property, 'length should be Property kind');
-			assert.ok(lengthItem.detail, 'length should have detail');
-			assert.ok((lengthItem.detail as string).includes('int'), 'length detail should include "int"');
-		}
+		assert.ok(lengthItem, 'length should be in completions');
+		assert.strictEqual(lengthItem.kind, vscode.CompletionItemKind.Property, 'length should be Property kind');
+		assert.ok(lengthItem.detail, 'length should have detail');
+		assert.ok((lengthItem.detail as string).includes('int'), 'length detail should include "int"');
 	});
 
 	test('Should provide struct field completions after dot', async function () {
@@ -362,11 +351,10 @@ end 'main'`;
 		);
 
 		const xItem = completions.items.find(item => item.label === 'x');
-		if (xItem) {
-			assert.strictEqual(xItem.kind, vscode.CompletionItemKind.Field, 'x should be Field kind');
-			assert.ok(xItem.detail, 'x should have detail');
-			assert.strictEqual(xItem.detail, 'int', 'x detail should be "int"');
-		}
+		assert.ok(xItem, 'x should be in completions');
+		assert.strictEqual(xItem.kind, vscode.CompletionItemKind.Field, 'x should be Field kind');
+		assert.ok(xItem.detail, 'x should have detail');
+		assert.strictEqual(xItem.detail, 'int', 'x detail should be "int"');
 	});
 
 	test('String method with parentheses should have insertText', async function () {
@@ -388,12 +376,12 @@ end 'main'`;
 		);
 
 		// Check that methods have insertText with parentheses
-		const toUpperItem = completions.items.find(item => item.label === 'to_upper');
-		if (toUpperItem && toUpperItem.insertText) {
-			const insertText = typeof toUpperItem.insertText === 'string'
-				? toUpperItem.insertText
-				: toUpperItem.insertText.value;
-			assert.ok(insertText.includes('()'), 'to_upper insertText should include parentheses');
-		}
+		const toUpperItem = completions.items.find(item => item.label === 'toUpper');
+		assert.ok(toUpperItem, 'toUpper should be in completions');
+		assert.ok(toUpperItem.insertText, 'toUpper should have insertText');
+		const insertText = typeof toUpperItem.insertText === 'string'
+			? toUpperItem.insertText
+			: toUpperItem.insertText.value;
+		assert.ok(insertText.includes('()'), 'toUpper insertText should include parentheses');
 	});
 });

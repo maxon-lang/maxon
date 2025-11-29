@@ -18,34 +18,9 @@ Analyzer::Analyzer() {
 		keywordMetadata[info.name] = info;
 	}
 
-	// Initialize type members (methods and properties for built-in types)
-	initializeTypeMembers();
-}
-
-void Analyzer::initializeTypeMembers() {
-	// String type members
-	typeMembers["string"] = {
-		// Properties
-		{"count", false, "int", "", "Number of codepoints in the string (UTF-8 aware)"},
-		{"isEmpty", false, "bool", "", "Returns true if string has no characters"},
-		// Search methods
-		{"starts_with", true, "bool", "(prefix string)", "Returns true if string starts with the given prefix"},
-		{"ends_with", true, "bool", "(suffix string)", "Returns true if string ends with the given suffix"},
-		{"contains", true, "bool", "(needle string)", "Returns true if string contains the given substring"},
-		{"find", true, "int", "(needle string)", "Returns index of substring, or -1 if not found"},
-		// Transform methods
-		{"to_upper", true, "string", "()", "Returns uppercase copy of string"},
-		{"to_lower", true, "string", "()", "Returns lowercase copy of string"},
-		{"trim", true, "string", "()", "Returns string with leading/trailing whitespace removed"},
-	};
-
-	// Array type members (use "[]" as key for any array type)
+	// Initialize array type members (arrays are language primitives, not in stdlib)
 	typeMembers["[]"] = {
-		{"length", false, "int", "", "Number of elements in the array"},
-		{"capacity", false, "int", "", "Capacity of the array (number of elements it can hold without reallocation)"},
-		{"push", true, "void", "(element)", "Add element to end of dynamic array"},
-		{"pop", true, "element", "()", "Remove and return last element of dynamic array"},
-	};
+		{"length", false, "int", "", "Number of elements in the array"}};
 }
 
 std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
@@ -91,6 +66,14 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
 				// Only register as external if NOT defined in current document
 				if (currentDocFunctions.find(func.name) == currentDocFunctions.end()) {
 					semanticAnalyzer.registerExternalFunction(func.name, func.returnType, func.parameters);
+				}
+			}
+
+			// Register stdlib struct methods with the semantic analyzer
+			for (const auto &method : stdlibStructMethods) {
+				// Only register if NOT defined in current document
+				if (currentDocFunctions.find(method.methodName) == currentDocFunctions.end()) {
+					semanticAnalyzer.registerExternalFunction(method.methodName, method.returnType, method.parameters);
 				}
 			}
 
@@ -828,6 +811,68 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 
 				// Add function to module node
 				moduleNode->functions.push_back(func->name);
+			}
+
+			// Extract struct definitions and their members for type completion
+			for (const auto &structDef : program->structs) {
+				std::vector<TypeMember> members;
+
+				// Add fields as properties
+				for (const auto &field : structDef->fields) {
+					TypeMember member;
+					member.name = field.name;
+					member.isMethod = false;
+					member.returnType = field.type;
+					member.signature = "";
+					member.documentation = "Field of " + structDef->name;
+					members.push_back(member);
+				}
+
+				// Add methods
+				for (const auto &method : structDef->methods) {
+					TypeMember member;
+					member.name = method->name;
+					member.isMethod = true;
+					member.returnType = method->returnType;
+
+					// Build method signature (skip first 'self' parameter for display)
+					std::string sig = "(";
+					bool first = true;
+					for (size_t i = 0; i < method->parameters.size(); i++) {
+						// Skip 'self' parameter
+						if (method->parameters[i].name == "self") {
+							continue;
+						}
+						if (!first) {
+							sig += ", ";
+						}
+						sig += method->parameters[i].name + " " + method->parameters[i].type;
+						first = false;
+					}
+					sig += ")";
+					member.signature = sig;
+
+					// Extract documentation
+					member.documentation = extractDocumentation(content, method->name, method->line);
+					if (member.documentation.empty()) {
+						member.documentation = "Method of " + structDef->name;
+					}
+
+					members.push_back(member);
+
+					// Also store for semantic analysis registration
+					StdlibStructMethod structMethod;
+					structMethod.structName = structDef->name;
+					structMethod.methodName = method->name;
+					structMethod.returnType = method->returnType;
+					structMethod.parameters = method->parameters;
+					stdlibStructMethods.push_back(structMethod);
+				}
+
+				// Store members by struct name
+				if (!members.empty()) {
+					typeMembers[structDef->name] = members;
+				}
 			}
 		}
 

@@ -526,11 +526,33 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			callExpr->functionId = idIt->second;
 		}
 
+		// Check if this is a sibling method call (calling another method of the same type from within a method)
+		// In this case, the caller passes N args but the method expects N+1 (with implicit self)
+		bool isSiblingMethodCall = false;
+		size_t expectedArgCount = funcInfo.parameters.size();
+
+		if (!currentReceiverType.empty() && funcInfo.parameters.size() > 0) {
+			// We're inside a method - check if the called function is a method of the same type
+			std::string resolvedName = funcIt->first;
+			size_t dotPos = resolvedName.rfind(".");
+			if (dotPos != std::string::npos) {
+				std::string methodType = resolvedName.substr(0, dotPos);
+				// Check if the first parameter is 'self' of our receiver type
+				if (methodType == currentReceiverType &&
+					funcInfo.parameters[0].name == "self" &&
+					funcInfo.parameters[0].type == currentReceiverType) {
+					isSiblingMethodCall = true;
+					expectedArgCount = funcInfo.parameters.size() - 1; // Don't count implicit self
+					callExpr->isSiblingMethodCall = true;			   // Mark for codegen
+				}
+			}
+		}
+
 		// Check argument count
-		if (callExpr->args.size() != funcInfo.parameters.size()) {
+		if (callExpr->args.size() != expectedArgCount) {
 			addError("Function '" + callExpr->callee + "' argument count mismatch" +
-						 std::string("\n  Expected: ") + std::to_string(funcInfo.parameters.size()) + " argument" +
-						 (funcInfo.parameters.size() == 1 ? "" : "s") +
+						 std::string("\n  Expected: ") + std::to_string(expectedArgCount) + " argument" +
+						 (expectedArgCount == 1 ? "" : "s") +
 						 "\n  Found: " + std::to_string(callExpr->args.size()) + " argument" +
 						 (callExpr->args.size() == 1 ? "" : "s"),
 					 expr->line, expr->column);
@@ -538,9 +560,11 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		}
 
 		// Check argument types
+		// For sibling method calls, args[i] corresponds to funcInfo.parameters[i+1] (skip self)
+		size_t paramOffset = isSiblingMethodCall ? 1 : 0;
 		for (size_t i = 0; i < callExpr->args.size(); i++) {
 			std::string argType = analyzeExpression(callExpr->args[i].get());
-			std::string expectedType = funcInfo.parameters[i].type;
+			std::string expectedType = funcInfo.parameters[i + paramOffset].type;
 
 			// Allow implicit int-to-float conversion
 			bool isValidType = typesMatch(expectedType, argType) ||
@@ -554,7 +578,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			if (!isValidType) {
 				addError("Function '" + callExpr->callee + "' argument type mismatch" +
 							 std::string("\n  Parameter ") + std::to_string(i + 1) + " ('" +
-							 funcInfo.parameters[i].name + "')" +
+							 funcInfo.parameters[i + paramOffset].name + "')" +
 							 "\n  Expected type: " + expectedType +
 							 "\n  Found type: " + argType,
 						 expr->line, expr->column);

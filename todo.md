@@ -13,6 +13,7 @@ StringProtocol: Extends BidirectionalCollection. This is the specific protocol t
 Why do this? By making String a Collection, you get hundreds of algorithms for free: .map, .filter, .reduce, .dropFirst, .split. The Swift team didn't have to write these specifically for Strings; they just inherited them from the Collection protocol logic.
 
 ## Priorities
+- refactor lsp semantic analyzer with compiler
 - let and var in structs
 - map
 - debugging (speed up the dev process)
@@ -29,7 +30,6 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - centralize help text from the lsp server analyzer
 - cross compiling
 - command line arguments for main
-- refactor lsp semantic analyzer with compiler
 - enums
 - remove ptr
 - remove redundant backend tests (test fragments are faster)

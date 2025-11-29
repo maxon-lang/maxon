@@ -23,6 +23,14 @@ struct StdlibFunction {
 	std::vector<FunctionParameter> parameters; // Function parameters
 };
 
+// Information about a stdlib struct method (for semantic analysis registration)
+struct StdlibStructMethod {
+	std::string structName;					   // The struct this method belongs to (e.g., "string")
+	std::string methodName;					   // Method name (e.g., "toLower")
+	std::string returnType;					   // Return type
+	std::vector<FunctionParameter> parameters; // Parameters including 'self'
+};
+
 // Information about a type method or property
 struct TypeMember {
 	std::string name;		   // Method/property name
@@ -71,6 +79,7 @@ class Analyzer {
 	std::vector<std::string> keywords;
 	std::map<std::string, Lexer::KeywordInfo> keywordMetadata;
 	std::map<std::string, StdlibFunction> stdlibFunctions;		// Key: unqualified name
+	std::vector<StdlibStructMethod> stdlibStructMethods;		// Struct methods from stdlib
 	std::map<std::string, std::vector<TypeMember>> typeMembers; // Key: type name (e.g., "string", "[]")
 	NamespaceNode namespaceRoot;								// Root of namespace hierarchy ("stdlib")
 

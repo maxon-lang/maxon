@@ -58,23 +58,6 @@ void SemanticAnalyzer::registerBuiltinFunctions() {
 	// Register runtime functions
 	registerExternalFunction("write_stdout", "int",
 							 {FunctionParameter("buf", "[]char", 0, 0), FunctionParameter("count", "int", 0, 0)});
-
-	// Register string methods (these are runtime intrinsics)
-	// The parser transforms s.method() -> method(s), so these are called as functions
-	registerExternalFunction("starts_with", "bool",
-							 {FunctionParameter("str", "string", 0, 0), FunctionParameter("prefix", "string", 0, 0)});
-	registerExternalFunction("ends_with", "bool",
-							 {FunctionParameter("str", "string", 0, 0), FunctionParameter("suffix", "string", 0, 0)});
-	registerExternalFunction("contains", "bool",
-							 {FunctionParameter("haystack", "string", 0, 0), FunctionParameter("needle", "string", 0, 0)});
-	registerExternalFunction("find", "int",
-							 {FunctionParameter("haystack", "string", 0, 0), FunctionParameter("needle", "string", 0, 0)});
-	registerExternalFunction("to_upper", "string",
-							 {FunctionParameter("str", "string", 0, 0)});
-	registerExternalFunction("to_lower", "string",
-							 {FunctionParameter("str", "string", 0, 0)});
-	registerExternalFunction("trim", "string",
-							 {FunctionParameter("str", "string", 0, 0)});
 }
 
 std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {

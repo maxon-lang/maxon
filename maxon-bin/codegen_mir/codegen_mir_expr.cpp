@@ -1258,6 +1258,17 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		std::vector<mir::MIRValue *> argsV;
 		size_t argIdx = 0;
 
+		// For sibling method calls, inject 'self' as the first argument
+		if (callExpr->isSiblingMethodCall && !currentReceiverType.empty()) {
+			// Load self pointer from the first parameter (which is always 'self' in methods)
+			if (namedValues.find("self") != namedValues.end()) {
+				mir::MIRValue *selfAlloca = namedValues["self"];
+				mir::MIRValue *selfPtr = builder->createLoad(mir::MIRType::getPtr(), selfAlloca, "self");
+				argsV.push_back(selfPtr);
+				argIdx++;
+			}
+		}
+
 		for (size_t i = 0; i < callExpr->args.size(); i++) {
 			auto &arg = callExpr->args[i];
 			mir::MIRType *paramType = (argIdx < calleeF->parameters.size())

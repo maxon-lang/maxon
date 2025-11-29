@@ -122,7 +122,8 @@ class CallExprAST : public ExprAST {
   public:
 	std::string callee;
 	std::vector<std::unique_ptr<ExprAST>> args;
-	size_t functionId = SIZE_MAX; // Resolved during semantic analysis (SIZE_MAX = unresolved)
+	size_t functionId = SIZE_MAX;	  // Resolved during semantic analysis (SIZE_MAX = unresolved)
+	bool isSiblingMethodCall = false; // True when calling another method of the same type from within a method
 
 	CallExprAST(const std::string &c, std::vector<std::unique_ptr<ExprAST>> a, int l = 0, int col = 0)
 		: ExprAST(l, col), callee(c), args(std::move(a)) {}

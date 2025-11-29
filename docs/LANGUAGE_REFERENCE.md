@@ -163,25 +163,6 @@ var sub2 = s[6..]            // "world" (from index to end)
 var sub3 = s[..5]            // "hello" (from start to index)
 ```
 
-**String Search Methods:**
-```maxon
-var s = "hello world"
-if s.starts_with("hello") then print(1)   // true
-if s.ends_with("world") then print(2)     // true
-if s.contains("lo wo") then print(3)      // true
-var pos = s.find("world")                 // 6 (or -1 if not found)
-```
-
-**String Transform Methods:**
-```maxon
-var s = "Hello World"
-var upper = s.to_upper()     // "HELLO WORLD"
-var lower = s.to_lower()     // "hello world"
-
-var padded = "  hello  "
-var trimmed = padded.trim()  // "hello"
-```
-
 **Substring Type:**
 - Lightweight view into another string's data
 - Does not own the data (keeps parent string alive)
@@ -703,17 +684,6 @@ s.isEmpty                       // Returns bool
 s[start..end]                   // Substring from start to end (exclusive)
 s[start..]                      // Substring from start to end of string
 s[..end]                        // Substring from beginning to end (exclusive)
-
-// Search methods (accessed as s.method(arg))
-s.starts_with(prefix string) bool   // Check if starts with prefix
-s.ends_with(suffix string) bool     // Check if ends with suffix  
-s.contains(needle string) bool      // Check if contains substring
-s.find(needle string) int           // Find index of substring (-1 if not found)
-
-// Transform methods (accessed as s.method())
-s.to_upper() string                 // Convert to uppercase
-s.to_lower() string                 // Convert to lowercase
-s.trim() string                     // Remove leading/trailing whitespace
 ```
 
 ### Standard Library Modules
