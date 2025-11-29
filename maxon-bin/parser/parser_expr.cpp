@@ -392,7 +392,7 @@ std::unique_ptr<ExprAST> Parser::parseTerm() {
 	return left;
 }
 
-std::unique_ptr<ExprAST> Parser::parseComparison() {
+std::unique_ptr<ExprAST> Parser::parseAdditive() {
 	auto left = parseTerm();
 
 	while (check(TokenType::PLUS) || check(TokenType::MINUS)) {
@@ -403,6 +403,28 @@ std::unique_ptr<ExprAST> Parser::parseComparison() {
 		auto right = parseTerm();
 		left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
 	}
+
+	return left;
+}
+
+std::unique_ptr<ExprAST> Parser::parseShift() {
+	auto left = parseAdditive();
+
+	// Handle bitwise shift operators: <<, >>
+	while (check(TokenType::LSHIFT) || check(TokenType::RSHIFT)) {
+		char op = check(TokenType::LSHIFT) ? 'S' : 'H'; // S = shift left, H = shift right
+		int line = currentLine();
+		int column = currentColumn();
+		advance();
+		auto right = parseAdditive();
+		left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
+	}
+
+	return left;
+}
+
+std::unique_ptr<ExprAST> Parser::parseComparison() {
+	auto left = parseShift();
 
 	return left;
 }
@@ -439,11 +461,11 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 	return left;
 }
 
-std::unique_ptr<ExprAST> Parser::parseLogicalAnd() {
+std::unique_ptr<ExprAST> Parser::parseBitwiseAnd() {
 	auto left = parseExpression();
 
-	// Handle 'and' operator
-	while (checkKeyword("and")) {
+	// Handle bitwise AND operator: &
+	while (check(TokenType::AMPERSAND)) {
 		int line = currentLine();
 		int column = currentColumn();
 		advance();
@@ -454,16 +476,61 @@ std::unique_ptr<ExprAST> Parser::parseLogicalAnd() {
 	return left;
 }
 
+std::unique_ptr<ExprAST> Parser::parseBitwiseXor() {
+	auto left = parseBitwiseAnd();
+
+	// Handle bitwise XOR operator: ^
+	while (check(TokenType::CARET)) {
+		int line = currentLine();
+		int column = currentColumn();
+		advance();
+		auto right = parseBitwiseAnd();
+		left = std::make_unique<BinaryExprAST>('^', std::move(left), std::move(right), line, column);
+	}
+
+	return left;
+}
+
+std::unique_ptr<ExprAST> Parser::parseBitwiseOr() {
+	auto left = parseBitwiseXor();
+
+	// Handle bitwise OR operator: |
+	while (check(TokenType::PIPE)) {
+		int line = currentLine();
+		int column = currentColumn();
+		advance();
+		auto right = parseBitwiseXor();
+		left = std::make_unique<BinaryExprAST>('|', std::move(left), std::move(right), line, column);
+	}
+
+	return left;
+}
+
+std::unique_ptr<ExprAST> Parser::parseLogicalAnd() {
+	auto left = parseBitwiseOr();
+
+	// Handle 'and' operator (logical AND)
+	while (checkKeyword("and")) {
+		int line = currentLine();
+		int column = currentColumn();
+		advance();
+		auto right = parseBitwiseOr();
+		left = std::make_unique<BinaryExprAST>('A', std::move(left), std::move(right), line, column);
+	}
+
+	return left;
+}
+
 std::unique_ptr<ExprAST> Parser::parseLogicalOr() {
 	auto left = parseLogicalAnd();
 
-	// Handle 'or' operator
+	// Handle 'or' operator (logical OR)
 	while (checkKeyword("or")) {
 		int line = currentLine();
 		int column = currentColumn();
 		advance();
 		auto right = parseLogicalAnd();
-		left = std::make_unique<BinaryExprAST>('|', std::move(left), std::move(right), line, column);
+		left = std::make_unique<BinaryExprAST>('O', std::move(left), std::move(right), line, column);
 	}
 
 	return left;

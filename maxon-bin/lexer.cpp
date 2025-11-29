@@ -479,8 +479,24 @@ Token Lexer::readOperatorOrDelimiter(int startLine, int startColumn) {
 								 std::to_string(startLine) + ", column " + std::to_string(startColumn) +
 								 ": did you mean '!=' (not equal)?");
 
+	case '&':
+		advance();
+		return Token(TokenType::AMPERSAND, "&", startLine, startColumn);
+
+	case '|':
+		advance();
+		return Token(TokenType::PIPE, "|", startLine, startColumn);
+
+	case '^':
+		advance();
+		return Token(TokenType::CARET, "^", startLine, startColumn);
+
 	case '>':
 		advance();
+		if (currentChar() == '>') {
+			advance();
+			return Token(TokenType::RSHIFT, ">>", startLine, startColumn);
+		}
 		if (currentChar() == '=') {
 			advance();
 			return Token(TokenType::GTE, ">=", startLine, startColumn);
@@ -489,6 +505,10 @@ Token Lexer::readOperatorOrDelimiter(int startLine, int startColumn) {
 
 	case '<':
 		advance();
+		if (currentChar() == '<') {
+			advance();
+			return Token(TokenType::LSHIFT, "<<", startLine, startColumn);
+		}
 		if (currentChar() == '=') {
 			advance();
 			return Token(TokenType::LTE, "<=", startLine, startColumn);

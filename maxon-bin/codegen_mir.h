@@ -85,9 +85,10 @@ class MIRCodeGenerator {
 	};
 	std::vector<LoopContext> loopStack;
 
-	// Scope tracking for automatic array cleanup
+	// Scope tracking for automatic array/string cleanup
 	struct ScopeInfo {
 		std::vector<std::pair<std::string, mir::MIRValue *>> heapAllocatedArrays;
+		std::vector<std::pair<std::string, mir::MIRValue *>> heapAllocatedStrings; // Data pointer for heap strings
 	};
 	std::vector<ScopeInfo> scopeStack;
 

@@ -638,3 +638,224 @@ end 'main'
 ```stdout
 1
 ```
+
+<!-- test: heap-string-count -->
+```maxon
+function main() int
+    // String > 15 bytes triggers heap allocation
+    var s = "This is a longer string that exceeds 15 bytes"
+    print(s.count())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+45
+```
+
+<!-- test: heap-string-data-access -->
+```maxon
+function main() int
+    // Verify heap-allocated string data is accessible
+    var s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    var first = s.data[0] as int
+    var last = s.data[25] as int
+    print(first)  // 'A' = 65
+    print(last)   // 'Z' = 90
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+65
+90
+```
+
+<!-- test: heap-string-equality -->
+```maxon
+function main() int
+    var a = "This string is definitely longer than fifteen bytes"
+    var b = "This string is definitely longer than fifteen bytes"
+    if a == b 'check'
+        print(1)
+    else 'check'
+        print(0)
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: heap-string-inequality -->
+```maxon
+function main() int
+    var a = "This string is definitely longer than fifteen bytes"
+    var b = "This string is definitely longer than fifteen chars"
+    if a != b 'check'
+        print(1)
+    else 'check'
+        print(0)
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: heap-string-iteration -->
+```maxon
+function main() int
+    var s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
+    var sum = 0
+    for c in s 'loop'
+        sum = sum + c
+    end 'loop'
+    print(sum)  // 65+66+...+80 = 1160
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1160
+```
+
+<!-- test: heap-string-byteview -->
+```maxon
+function main() int
+    var s = "ABCDEFGHIJKLMNOPQR"  // 18 bytes, heap allocated
+    var count = 0
+    for b in s.bytes() 'loop'
+        // Use b to avoid unused variable warning
+        if b > 0 'use'
+            count = count + 1
+        end 'use'
+    end 'loop'
+    print(count)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18
+```
+
+<!-- test: sso-vs-heap-boundary -->
+```maxon
+function main() int
+    // Exactly 15 bytes - should use SSO (constant data)
+    var sso = "123456789012345"
+    print(sso.count())
+    
+    // 16 bytes - should use heap
+    var heap = "1234567890123456"
+    print(heap.count())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+15
+16
+```
+
+<!-- test: heap-string-startsWith -->
+```maxon
+function main() int
+    var s = "This is a very long string that is heap allocated"
+    if s.startsWith("This is") then print(1)
+    if s.startsWith("That is") then print(0)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: heap-string-endsWith -->
+```maxon
+function main() int
+    var s = "This is a very long string that is heap allocated"
+    if s.endsWith("heap allocated") then print(1)
+    if s.endsWith("stack allocated") then print(0)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: heap-string-contains -->
+```maxon
+function main() int
+    var s = "This is a very long string that is heap allocated"
+    if s.contains("long string") then print(1)
+    if s.contains("short string") then print(0)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: heap-string-find -->
+```maxon
+function main() int
+    var s = "This is a very long string that is heap allocated"
+    print(s.find("very"))
+    print(s.find("missing"))
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+-1
+```
+
+<!-- test: mixed-sso-heap-comparison -->
+```maxon
+function main() int
+    var small = "hello"
+    var large = "This is a longer string"
+    if small != large 'check'
+        print(1)
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```

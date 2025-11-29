@@ -200,15 +200,49 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return "bool";
 		}
 
-		// Logical operators: & (and), | (or)
-		if (binExpr->op == '&' || binExpr->op == '|') {
+		// Logical operators: A (and), O (or)
+		if (binExpr->op == 'A' || binExpr->op == 'O') {
 			// Logical operators work on bool operands or int (truthy/falsy)
 			if ((leftType == "bool" || leftType == "int") &&
 				(rightType == "bool" || rightType == "int")) {
 				return "bool";
 			}
-			std::string opName = binExpr->op == '&' ? "and" : "or";
+			std::string opName = binExpr->op == 'A' ? "and" : "or";
 			addError("Logical operator '" + opName + "' requires boolean or integer operands" +
+						 std::string("\n  Left operand type: ") + leftType +
+						 "\n  Right operand type: " + rightType,
+					 expr->line, expr->column);
+			return "error";
+		}
+
+		// Bitwise operators: & (AND), | (OR), ^ (XOR)
+		if (binExpr->op == '&' || binExpr->op == '|' || binExpr->op == '^') {
+			// Bitwise operators require integer operands
+			if (leftType == "int" && rightType == "int") {
+				return "int";
+			}
+			std::string opName;
+			if (binExpr->op == '&')
+				opName = "bitwise AND (&)";
+			else if (binExpr->op == '|')
+				opName = "bitwise OR (|)";
+			else
+				opName = "bitwise XOR (^)";
+			addError("Operator " + opName + " requires integer operands" +
+						 std::string("\n  Left operand type: ") + leftType +
+						 "\n  Right operand type: " + rightType,
+					 expr->line, expr->column);
+			return "error";
+		}
+
+		// Shift operators: S (<<), H (>>)
+		if (binExpr->op == 'S' || binExpr->op == 'H') {
+			// Shift operators require integer operands
+			if (leftType == "int" && rightType == "int") {
+				return "int";
+			}
+			std::string opName = binExpr->op == 'S' ? "left shift (<<)" : "right shift (>>)";
+			addError("Operator " + opName + " requires integer operands" +
 						 std::string("\n  Left operand type: ") + leftType +
 						 "\n  Right operand type: " + rightType,
 					 expr->line, expr->column);

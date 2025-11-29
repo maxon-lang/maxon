@@ -43,6 +43,11 @@ enum class TokenType {
 	LT,			 // <
 	GTE,		 // >=
 	LTE,		 // <=
+	AMPERSAND,	 // & (bitwise AND)
+	PIPE,		 // | (bitwise OR)
+	CARET,		 // ^ (bitwise XOR)
+	LSHIFT,		 // << (left shift)
+	RSHIFT,		 // >> (right shift)
 
 	// Delimiters
 	LPAREN,	  // (

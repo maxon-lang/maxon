@@ -1,0 +1,573 @@
+// Test: string-type.heap-string-inequality.1
+function main() int
+    var a = "This string is definitely longer than fifteen bytes"
+    var b = "This string is definitely longer than fifteen chars"
+    if a != b 'check'
+        print(1)
+    else 'check'
+        print(0)
+    end 'check'
+    return 0
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 195
+
+%__unsized_array_byte = type { ptr, i32 }
+%string = type { %__unsized_array_byte, i32, i32 }
+%ByteView = type { %string, i32 }
+%UTF16View = type { %string, i32, i32 }
+
+@.str.0 = constant [51 x i8] c"This string is definitely longer than fifteen bytes\00"
+@.str.1 = constant [51 x i8] c"This string is definitely longer than fifteen chars\00"
+
+define i1 @string.equals(ptr %self, ptr %other) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca ptr
+  store ptr %other, ptr %1
+  %3 = getelementptr %string, ptr %self, i32 0, i32 1
+  %4 = load i32, ptr %3
+  %5 = load ptr, ptr %1
+  %6 = getelementptr %string, ptr %5, i32 0, i32 1
+  %7 = load i32, ptr %6
+  %8 = icmp ne i32 %4, %7
+  br i1 %8, label %then1, label %ifcont2
+then1:
+  ret i1 0
+ifcont2:
+  %9 = alloca i32
+  store i32 0, ptr %9
+  br label %whilecond3
+whilecond3:
+  %10 = load i32, ptr %9
+  %11 = load ptr, ptr %0
+  %12 = getelementptr %string, ptr %11, i32 0, i32 1
+  %13 = load i32, ptr %12
+  %14 = icmp slt i32 %10, %13
+  br i1 %14, label %loop4, label %afterloop5
+loop4:
+  %15 = load i32, ptr %9
+  %16 = load ptr, ptr %0
+  %17 = getelementptr %string, ptr %16, i32 0, i32 0
+  %18 = getelementptr %__unsized_array_byte, ptr %17, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  %20 = sext i32 %15 to i64
+  %21 = getelementptr i8, ptr %19, i64 0, i64 %20
+  %22 = load i8, ptr %21
+  %23 = load i32, ptr %9
+  %24 = load ptr, ptr %1
+  %25 = getelementptr %string, ptr %24, i32 0, i32 0
+  %26 = getelementptr %__unsized_array_byte, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  %28 = sext i32 %23 to i64
+  %29 = getelementptr i8, ptr %27, i64 0, i64 %28
+  %30 = load i8, ptr %29
+  %31 = icmp ne i8 %22, %30
+  br i1 %31, label %then6, label %ifcont7
+afterloop5:
+  ret i1 1
+then6:
+  ret i1 0
+ifcont7:
+  %32 = load i32, ptr %9
+  %33 = add i32 %32, 1
+  store i32 %33, ptr %9
+  br label %whilecond3
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = call ptr @malloc(i64 51)
+  %2 = call ptr @memcpy(ptr %1, ptr @.str.0, i64 51)
+  %3 = alloca ptr
+  store ptr %1, ptr %3
+  %4 = getelementptr %string, ptr %0, i32 0, i32 0
+  %5 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 0
+  store ptr %1, ptr %5
+  %6 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 1
+  store i32 51, ptr %6
+  %7 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i32 51, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 2
+  store i32 0, ptr %8
+  %9 = alloca %string
+  %10 = call ptr @malloc(i64 51)
+  %11 = call ptr @memcpy(ptr %10, ptr @.str.1, i64 51)
+  %12 = alloca ptr
+  store ptr %10, ptr %12
+  %13 = getelementptr %string, ptr %9, i32 0, i32 0
+  %14 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 0
+  store ptr %10, ptr %14
+  %15 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 1
+  store i32 51, ptr %15
+  %16 = getelementptr %string, ptr %9, i32 0, i32 1
+  store i32 51, ptr %16
+  %17 = getelementptr %string, ptr %9, i32 0, i32 2
+  store i32 0, ptr %17
+  %18 = call i1 @string.equals(ptr %0, ptr %9)
+  %19 = icmp eq i1 %18, 0
+  br i1 %19, label %then1, label %else3
+then1:
+  %20 = call i32 @sys.print(i32 1)
+  br label %ifcont2
+ifcont2:
+  %22 = load ptr, ptr %3
+  call void @free(ptr %22)
+  %23 = load ptr, ptr %12
+  call void @free(ptr %23)
+  ret i32 0
+else3:
+  %21 = call i32 @sys.print(i32 0)
+  br label %ifcont2
+}
+
+define i32 @sys.print(i32 %value) {
+entry0:
+  %1 = alloca [12 x i8]
+  %3 = call ptr @memset(ptr %1, i32 0, i64 12)
+  %6 = call i32 @fmt.format_int_array(i32 %value, ptr %1, i32 12)
+  %9 = call i32 @write_stdout(ptr %1, i32 %6)
+  %10 = alloca i32
+  store i32 %9, ptr %10
+  %12 = icmp sge i32 %9, 0
+  br i1 %12, label %then1, label %ifcont2
+then1:
+  %13 = alloca [1 x i8]
+  %15 = call ptr @memset(ptr %13, i32 0, i64 1)
+  %16 = getelementptr i8, ptr %13, i64 0, i64 0
+  %17 = trunc i32 10 to i8
+  store i8 %17, ptr %16
+  %18 = call i32 @write_stdout(ptr %13, i32 1)
+  store i32 %18, ptr %10
+  br label %ifcont2
+ifcont2:
+  %19 = load i32, ptr %10
+  ret i32 %19
+}
+
+define i32 @fmt.format_int_array(i32 %value, ptr %buffer, i32 %buffer.__length) {
+entry0:
+  %0 = alloca i32
+  store i32 %value, ptr %0
+  %1 = alloca ptr
+  store ptr %buffer, ptr %1
+  %4 = icmp eq i32 %value, 0
+  br i1 %4, label %then1, label %ifcont2
+then1:
+  %5 = load ptr, ptr %1
+  %6 = getelementptr i8, ptr %5, i64 0, i64 0
+  store i8 48, ptr %6
+  ret i32 1
+ifcont2:
+  %7 = alloca [12 x i8]
+  %9 = call ptr @memset(ptr %7, i32 0, i64 12)
+  %10 = alloca i32
+  store i32 11, ptr %10
+  %11 = alloca i32
+  store i32 0, ptr %11
+  %12 = load i32, ptr %0
+  %13 = alloca i32
+  store i32 %12, ptr %13
+  %14 = load i32, ptr %0
+  %15 = icmp slt i32 %14, 0
+  br i1 %15, label %then3, label %ifcont4
+then3:
+  store i32 1, ptr %11
+  %16 = load i32, ptr %0
+  %17 = sub i32 0, %16
+  store i32 %17, ptr %13
+  br label %ifcont4
+ifcont4:
+  br label %whilecond5
+whilecond5:
+  %18 = load i32, ptr %13
+  %19 = icmp sgt i32 %18, 0
+  br i1 %19, label %loop6, label %afterloop7
+loop6:
+  %20 = load i32, ptr %13
+  %21 = srem i32 %20, 10
+  %23 = zext i8 48 to i32
+  %25 = add i32 %23, %21
+  %27 = load i32, ptr %10
+  %28 = sext i32 %27 to i64
+  %29 = getelementptr i8, ptr %7, i64 0, i64 %28
+  %31 = trunc i32 %25 to i8
+  store i8 %31, ptr %29
+  %32 = load i32, ptr %10
+  %33 = sub i32 %32, 1
+  store i32 %33, ptr %10
+  %34 = load i32, ptr %13
+  %35 = sdiv i32 %34, 10
+  store i32 %35, ptr %13
+  br label %whilecond5
+afterloop7:
+  %36 = load i32, ptr %11
+  %37 = icmp eq i32 %36, 1
+  br i1 %37, label %then8, label %ifcont9
+then8:
+  %38 = load i32, ptr %10
+  %39 = sext i32 %38 to i64
+  %40 = getelementptr i8, ptr %7, i64 0, i64 %39
+  store i8 45, ptr %40
+  %41 = load i32, ptr %10
+  %42 = sub i32 %41, 1
+  store i32 %42, ptr %10
+  br label %ifcont9
+ifcont9:
+  %43 = load i32, ptr %10
+  %44 = add i32 %43, 1
+  %45 = alloca i32
+  store i32 %44, ptr %45
+  %47 = sub i32 12, %44
+  %48 = alloca i32
+  store i32 %47, ptr %48
+  %49 = alloca i32
+  store i32 0, ptr %49
+  br label %whilecond10
+whilecond10:
+  %50 = load i32, ptr %49
+  %51 = load i32, ptr %48
+  %52 = icmp slt i32 %50, %51
+  br i1 %52, label %loop11, label %afterloop12
+loop11:
+  %53 = load i32, ptr %49
+  %54 = load ptr, ptr %1
+  %55 = sext i32 %53 to i64
+  %56 = getelementptr i8, ptr %54, i64 0, i64 %55
+  %57 = load i32, ptr %45
+  %58 = load i32, ptr %49
+  %59 = add i32 %57, %58
+  %60 = sext i32 %59 to i64
+  %61 = getelementptr i8, ptr %7, i64 0, i64 %60
+  %62 = load i8, ptr %61
+  store i8 %62, ptr %56
+  %63 = load i32, ptr %49
+  %64 = add i32 %63, 1
+  store i32 %64, ptr %49
+  br label %whilecond10
+afterloop12:
+  %65 = load i32, ptr %48
+  ret i32 %65
+}
+
+declare ptr @malloc(i64 %arg0)
+
+declare void @free(ptr %arg0)
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare i32 @refcount_inc(ptr %arg0)
+
+declare i32 @refcount_dec(ptr %arg0)
+
+declare i32 @write_stdout(ptr %arg0, i32 %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 220
+
+%__unsized_array_byte = type { ptr, i32 }
+%string = type { %__unsized_array_byte, i32, i32 }
+%ByteView = type { %string, i32 }
+%UTF16View = type { %string, i32, i32 }
+
+@.str.0 = constant [51 x i8] c"This string is definitely longer than fifteen bytes\00"
+@.str.1 = constant [51 x i8] c"This string is definitely longer than fifteen chars\00"
+
+define i1 @string.equals(ptr %self, ptr %other) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca ptr
+  store ptr %other, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %string, ptr %2, i32 0, i32 1
+  %4 = load i32, ptr %3
+  %5 = load ptr, ptr %1
+  %6 = getelementptr %string, ptr %5, i32 0, i32 1
+  %7 = load i32, ptr %6
+  %8 = icmp ne i32 %4, %7
+  br i1 %8, label %then1, label %ifcont2
+then1:
+  ret i1 0
+ifcont2:
+  %9 = alloca i32
+  store i32 0, ptr %9
+  br label %whilecond3
+whilecond3:
+  %10 = load i32, ptr %9
+  %11 = load ptr, ptr %0
+  %12 = getelementptr %string, ptr %11, i32 0, i32 1
+  %13 = load i32, ptr %12
+  %14 = icmp slt i32 %10, %13
+  br i1 %14, label %loop4, label %afterloop5
+loop4:
+  %15 = load i32, ptr %9
+  %16 = load ptr, ptr %0
+  %17 = getelementptr %string, ptr %16, i32 0, i32 0
+  %18 = getelementptr %__unsized_array_byte, ptr %17, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  %20 = sext i32 %15 to i64
+  %21 = getelementptr i8, ptr %19, i64 0, i64 %20
+  %22 = load i8, ptr %21
+  %23 = load i32, ptr %9
+  %24 = load ptr, ptr %1
+  %25 = getelementptr %string, ptr %24, i32 0, i32 0
+  %26 = getelementptr %__unsized_array_byte, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  %28 = sext i32 %23 to i64
+  %29 = getelementptr i8, ptr %27, i64 0, i64 %28
+  %30 = load i8, ptr %29
+  %31 = icmp ne i8 %22, %30
+  br i1 %31, label %then6, label %ifcont7
+afterloop5:
+  ret i1 1
+then6:
+  ret i1 0
+ifcont7:
+  %32 = load i32, ptr %9
+  %33 = add i32 %32, 1
+  store i32 %33, ptr %9
+  br label %whilecond3
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = call ptr @malloc(i64 51)
+  %2 = call ptr @memcpy(ptr %1, ptr @.str.0, i64 51)
+  %3 = alloca ptr
+  store ptr %1, ptr %3
+  %4 = getelementptr %string, ptr %0, i32 0, i32 0
+  %5 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 0
+  store ptr %1, ptr %5
+  %6 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 1
+  store i32 51, ptr %6
+  %7 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i32 51, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 2
+  store i32 0, ptr %8
+  %9 = alloca %string
+  %10 = call ptr @malloc(i64 51)
+  %11 = call ptr @memcpy(ptr %10, ptr @.str.1, i64 51)
+  %12 = alloca ptr
+  store ptr %10, ptr %12
+  %13 = getelementptr %string, ptr %9, i32 0, i32 0
+  %14 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 0
+  store ptr %10, ptr %14
+  %15 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 1
+  store i32 51, ptr %15
+  %16 = getelementptr %string, ptr %9, i32 0, i32 1
+  store i32 51, ptr %16
+  %17 = getelementptr %string, ptr %9, i32 0, i32 2
+  store i32 0, ptr %17
+  %18 = call i1 @string.equals(ptr %0, ptr %9)
+  %19 = icmp eq i1 %18, 0
+  br i1 %19, label %then1, label %else3
+then1:
+  %20 = call i32 @sys.print(i32 1)
+  br label %ifcont2
+ifcont2:
+  %22 = load ptr, ptr %3
+  call void @free(ptr %22)
+  %23 = load ptr, ptr %12
+  call void @free(ptr %23)
+  ret i32 0
+else3:
+  %21 = call i32 @sys.print(i32 0)
+  br label %ifcont2
+}
+
+define i32 @sys.print(i32 %value) {
+entry0:
+  %0 = alloca i32
+  store i32 %value, ptr %0
+  %1 = alloca [12 x i8]
+  %2 = alloca i32
+  store i32 12, ptr %2
+  %3 = call ptr @memset(ptr %1, i32 0, i64 12)
+  %4 = load i32, ptr %0
+  %5 = load i32, ptr %2
+  %6 = call i32 @fmt.format_int_array(i32 %4, ptr %1, i32 %5)
+  %7 = alloca i32
+  store i32 %6, ptr %7
+  %8 = load i32, ptr %7
+  %9 = call i32 @write_stdout(ptr %1, i32 %8)
+  %10 = alloca i32
+  store i32 %9, ptr %10
+  %11 = load i32, ptr %10
+  %12 = icmp sge i32 %11, 0
+  br i1 %12, label %then1, label %ifcont2
+then1:
+  %13 = alloca [1 x i8]
+  %14 = alloca i32
+  store i32 1, ptr %14
+  %15 = call ptr @memset(ptr %13, i32 0, i64 1)
+  %16 = getelementptr i8, ptr %13, i64 0, i64 0
+  %17 = trunc i32 10 to i8
+  store i8 %17, ptr %16
+  %18 = call i32 @write_stdout(ptr %13, i32 1)
+  store i32 %18, ptr %10
+  br label %ifcont2
+ifcont2:
+  %19 = load i32, ptr %10
+  ret i32 %19
+}
+
+define i32 @fmt.format_int_array(i32 %value, ptr %buffer, i32 %buffer.__length) {
+entry0:
+  %0 = alloca i32
+  store i32 %value, ptr %0
+  %1 = alloca ptr
+  store ptr %buffer, ptr %1
+  %2 = alloca i32
+  store i32 %buffer.__length, ptr %2
+  %3 = load i32, ptr %0
+  %4 = icmp eq i32 %3, 0
+  br i1 %4, label %then1, label %ifcont2
+then1:
+  %5 = load ptr, ptr %1
+  %6 = getelementptr i8, ptr %5, i64 0, i64 0
+  store i8 48, ptr %6
+  ret i32 1
+ifcont2:
+  %7 = alloca [12 x i8]
+  %8 = alloca i32
+  store i32 12, ptr %8
+  %9 = call ptr @memset(ptr %7, i32 0, i64 12)
+  %10 = alloca i32
+  store i32 11, ptr %10
+  %11 = alloca i32
+  store i32 0, ptr %11
+  %12 = load i32, ptr %0
+  %13 = alloca i32
+  store i32 %12, ptr %13
+  %14 = load i32, ptr %0
+  %15 = icmp slt i32 %14, 0
+  br i1 %15, label %then3, label %ifcont4
+then3:
+  store i32 1, ptr %11
+  %16 = load i32, ptr %0
+  %17 = sub i32 0, %16
+  store i32 %17, ptr %13
+  br label %ifcont4
+ifcont4:
+  br label %whilecond5
+whilecond5:
+  %18 = load i32, ptr %13
+  %19 = icmp sgt i32 %18, 0
+  br i1 %19, label %loop6, label %afterloop7
+loop6:
+  %20 = load i32, ptr %13
+  %21 = srem i32 %20, 10
+  %22 = alloca i32
+  store i32 %21, ptr %22
+  %23 = zext i8 48 to i32
+  %24 = load i32, ptr %22
+  %25 = add i32 %23, %24
+  %26 = alloca i32
+  store i32 %25, ptr %26
+  %27 = load i32, ptr %10
+  %28 = sext i32 %27 to i64
+  %29 = getelementptr i8, ptr %7, i64 0, i64 %28
+  %30 = load i32, ptr %26
+  %31 = trunc i32 %30 to i8
+  store i8 %31, ptr %29
+  %32 = load i32, ptr %10
+  %33 = sub i32 %32, 1
+  store i32 %33, ptr %10
+  %34 = load i32, ptr %13
+  %35 = sdiv i32 %34, 10
+  store i32 %35, ptr %13
+  br label %whilecond5
+afterloop7:
+  %36 = load i32, ptr %11
+  %37 = icmp eq i32 %36, 1
+  br i1 %37, label %then8, label %ifcont9
+then8:
+  %38 = load i32, ptr %10
+  %39 = sext i32 %38 to i64
+  %40 = getelementptr i8, ptr %7, i64 0, i64 %39
+  store i8 45, ptr %40
+  %41 = load i32, ptr %10
+  %42 = sub i32 %41, 1
+  store i32 %42, ptr %10
+  br label %ifcont9
+ifcont9:
+  %43 = load i32, ptr %10
+  %44 = add i32 %43, 1
+  %45 = alloca i32
+  store i32 %44, ptr %45
+  %46 = load i32, ptr %45
+  %47 = sub i32 12, %46
+  %48 = alloca i32
+  store i32 %47, ptr %48
+  %49 = alloca i32
+  store i32 0, ptr %49
+  br label %whilecond10
+whilecond10:
+  %50 = load i32, ptr %49
+  %51 = load i32, ptr %48
+  %52 = icmp slt i32 %50, %51
+  br i1 %52, label %loop11, label %afterloop12
+loop11:
+  %53 = load i32, ptr %49
+  %54 = load ptr, ptr %1
+  %55 = sext i32 %53 to i64
+  %56 = getelementptr i8, ptr %54, i64 0, i64 %55
+  %57 = load i32, ptr %45
+  %58 = load i32, ptr %49
+  %59 = add i32 %57, %58
+  %60 = sext i32 %59 to i64
+  %61 = getelementptr i8, ptr %7, i64 0, i64 %60
+  %62 = load i8, ptr %61
+  store i8 %62, ptr %56
+  %63 = load i32, ptr %49
+  %64 = add i32 %63, 1
+  store i32 %64, ptr %49
+  br label %whilecond10
+afterloop12:
+  %65 = load i32, ptr %48
+  ret i32 %65
+}
+
+declare ptr @malloc(i64 %arg0)
+
+declare void @free(ptr %arg0)
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare i32 @refcount_inc(ptr %arg0)
+
+declare i32 @refcount_dec(ptr %arg0)
+
+declare i32 @write_stdout(ptr %arg0, i32 %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 0
+Stdout: 1

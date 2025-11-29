@@ -133,6 +133,32 @@ loop.end:
 }
 
 ;==============================================================================
+; refcount_inc - increment reference count at pointer (non-atomic)
+; Reads i32 at ptr, increments it, stores back, returns new value
+; i32 refcount_inc(ptr counter)
+;==============================================================================
+define i32 @refcount_inc(ptr %counter) {
+entry:
+    %old = load i32, ptr %counter
+    %new = add i32 %old, 1
+    store i32 %new, ptr %counter
+    ret i32 %new
+}
+
+;==============================================================================
+; refcount_dec - decrement reference count at pointer (non-atomic)
+; Reads i32 at ptr, decrements it, stores back, returns new value
+; i32 refcount_dec(ptr counter)
+;==============================================================================
+define i32 @refcount_dec(ptr %counter) {
+entry:
+    %old = load i32, ptr %counter
+    %new = sub i32 %old, 1
+    store i32 %new, ptr %counter
+    ret i32 %new
+}
+
+;==============================================================================
 ; round - round to nearest integer (half away from zero)
 ; double round(double x)
 ;==============================================================================
@@ -141,18 +167,18 @@ entry:
     ; Truncate to integer and back to get integer part
     %x_as_i64 = fptosi f64 %x to i64
     %truncated = sitofp i64 %x_as_i64 to f64
-    
+
     ; Get fractional part
     %frac = fsub f64 %x, %truncated
-    
+
     ; Check if we need to round up or down
     %is_pos_round_up = fcmp oge f64 %frac, 0.5
     %is_neg_round_down = fcmp ole f64 %frac, -0.5
-    
+
     ; Compute adjusted values
     %add_one = fadd f64 %truncated, 1.0
     %sub_one = fsub f64 %truncated, 1.0
-    
+
     ; Select result based on conditions
     br i1 %is_pos_round_up, label %round_up, label %check_neg
 
@@ -180,7 +206,7 @@ entry:
     %ix_u64 = lshr i64 %x_bits, 52
     %exponent = trunc i64 %ix_u64 to i32
     %exp_only = and i32 %exponent, 2047
-    
+
     ; If exponent >= 1075 (1023 + 52), already an integer or inf/nan
     %is_large = icmp uge i32 %exp_only, 1075
     br i1 %is_large, label %return_x, label %compute_floor
@@ -192,7 +218,7 @@ compute_floor:
     ; Truncate toward zero
     %x_as_i64 = fptosi f64 %x to i64
     %truncated = sitofp i64 %x_as_i64 to f64
-    
+
     ; For negative numbers with fractional part, subtract 1
     %is_negative = fcmp olt f64 %x, 0.0
     %has_frac = fcmp one f64 %x, %truncated
@@ -216,7 +242,7 @@ entry:
     ; Truncate toward zero
     %x_as_i64 = fptosi f64 %x to i64
     %truncated = sitofp i64 %x_as_i64 to f64
-    
+
     ; For positive numbers with fractional part, add 1
     %is_positive = fcmp ogt f64 %x, 0.0
     %has_frac = fcmp one f64 %x, %truncated
@@ -255,35 +281,35 @@ entry:
     ; S4 = 2.75573137070700676789e-06
     ; S5 = -2.50507602534068634195e-08
     ; S6 = 1.58969099521155010221e-10
-    
+
     ; z = x * x
     %z = fmul f64 %x, %x
     ; w = z * z
     %w = fmul f64 %z, %z
-    
+
     ; r = S2 + z*(S3 + z*S4) + z*w*(S5 + z*S6)
     %t1 = fmul f64 %z, 1.58969099521155010221e-10
     %t2 = fadd f64 -2.50507602534068634195e-08, %t1
     %t3 = fmul f64 %z, %t2
     %t4 = fmul f64 %w, %t3
-    
+
     %t5 = fmul f64 %z, 2.75573137070700676789e-06
     %t6 = fadd f64 -1.98412698298579493134e-04, %t5
     %t7 = fmul f64 %z, %t6
     %t8 = fadd f64 8.33333333332248946124e-03, %t7
-    
+
     %r = fadd f64 %t8, %t4
-    
+
     ; v = z * x
     %v = fmul f64 %z, %x
-    
+
     ; result = x + v*(S1 + z*r) + y
     %t9 = fmul f64 %z, %r
     %t10 = fadd f64 -1.66666666666666324348e-01, %t9
     %t11 = fmul f64 %v, %t10
     %t12 = fadd f64 %x, %t11
     %result = fadd f64 %t12, %y
-    
+
     ret f64 %result
 }
 
@@ -300,12 +326,12 @@ entry:
     ; C4 = -2.75573143513906633035e-07
     ; C5 = 2.08757232129817482790e-09
     ; C6 = -1.13596475577881948265e-11
-    
+
     ; z = x * x
     %z = fmul f64 %x, %x
     ; zs = z * z
     %zs = fmul f64 %z, %z
-    
+
     ; r = z*(C1 + z*(C2 + z*C3)) + zs*zs*(C4 + z*(C5 + z*C6))
     %t1 = fmul f64 %z, -1.13596475577881948265e-11
     %t2 = fadd f64 2.08757232129817482790e-09, %t1
@@ -313,20 +339,20 @@ entry:
     %t4 = fadd f64 -2.75573143513906633035e-07, %t3
     %t5 = fmul f64 %zs, %zs
     %t6 = fmul f64 %t5, %t4
-    
+
     %t7 = fmul f64 %z, 2.48015872894767294178e-05
     %t8 = fadd f64 -1.38888888888741095749e-03, %t7
     %t9 = fmul f64 %z, %t8
     %t10 = fadd f64 4.16666666666666019037e-02, %t9
     %t11 = fmul f64 %z, %t10
-    
+
     %r = fadd f64 %t11, %t6
-    
+
     ; hz = 0.5 * z
     %hz = fmul f64 0.5, %z
     ; w = 1.0 - hz
     %w0 = fsub f64 1.0, %hz
-    
+
     ; result = w + (((1.0 - w) - hz) + (z*r - x*y))
     %t12 = fsub f64 1.0, %w0
     %t13 = fsub f64 %t12, %hz
@@ -335,7 +361,7 @@ entry:
     %t15 = fsub f64 %t14, %x_y
     %t16 = fadd f64 %t13, %t15
     %result = fadd f64 %w0, %t16
-    
+
     ret f64 %result
 }
 
@@ -346,12 +372,12 @@ entry:
 define f64 @__tan_kernel(f64 %x, f64 %y, i1 %odd) {
 entry:
     ; Polynomial coefficients (T0-T12 from musl)
-    
+
     ; z = x * x
     %z = fmul f64 %x, %x
     ; w = z * z
     %w = fmul f64 %z, %z
-    
+
     ; r = T[1] + w*(T[3] + w*(T[5] + w*(T[7] + w*(T[9] + w*T[11]))))
     %r1 = fmul f64 %w, -1.85586374855275456654e-05
     %r2 = fadd f64 7.81794442939557092300e-05, %r1
@@ -363,7 +389,7 @@ entry:
     %r8 = fadd f64 2.18694882948595424599e-02, %r7
     %r9 = fmul f64 %w, %r8
     %r = fadd f64 1.33333333333201242699e-01, %r9
-    
+
     ; v = z*(T[2] + w*(T[4] + w*(T[6] + w*(T[8] + w*(T[10] + w*T[12])))))
     %v1 = fmul f64 %w, 2.59073051863633712884e-05
     %v2 = fadd f64 7.14072491382608190305e-05, %v1
@@ -376,10 +402,10 @@ entry:
     %v9 = fmul f64 %w, %v8
     %v10 = fadd f64 5.39682539762260521377e-02, %v9
     %v = fmul f64 %z, %v10
-    
+
     ; s = z * x
     %s = fmul f64 %z, %x
-    
+
     ; poly = y + z*(s*(r+v) + y) + T[0]*s
     %rv_sum = fadd f64 %r, %v
     %s_rv = fmul f64 %s, %rv_sum
@@ -388,10 +414,10 @@ entry:
     %y_z_term = fadd f64 %y, %z_term
     %t0_s = fmul f64 3.33333333333334091986e-01, %s
     %poly = fadd f64 %y_z_term, %t0_s
-    
+
     ; w_result = x + poly
     %w_result = fadd f64 %x, %poly
-    
+
     ; Return -1/w or w based on odd flag
     br i1 %odd, label %return_recip, label %return_direct
 
@@ -415,7 +441,7 @@ entry:
     ; pio2_1t = 6.07710050650619224932e-11
     ; invpio2 = 6.36619772367581382433e-01
     ; toint   = 6.75539944105574154e+15
-    
+
     ; Extract sign and magnitude
     %x_bits = bitcast f64 %x to i64
     %sign_bit = lshr i64 %x_bits, 63
@@ -423,7 +449,7 @@ entry:
     %ix_u64 = lshr i64 %x_bits, 32
     %ix = trunc i64 %ix_u64 to i32
     %ix_abs = and i32 %ix, 2147483647
-    
+
     ; Check range |x| <= 5pi/4 (0x400f6a7a = 1074977402)
     %in_range = icmp ule i32 %ix_abs, 1074977402
     br i1 %in_range, label %fast_path, label %slow_path
@@ -495,19 +521,19 @@ slow_path:
     %fn_round1 = fadd f64 %x_div_pio2, 6.75539944105574154e+15
     %fn_approx = fsub f64 %fn_round1, 6.75539944105574154e+15
     %n_slow = fptosi f64 %fn_approx to i32
-    
+
     ; r = x - fn * pio2_1
     %fn_pio2_1 = fmul f64 %fn_approx, 1.57079632673412561417e+00
     %r_slow = fsub f64 %x, %fn_pio2_1
-    
+
     ; w = fn * pio2_1t
     %w_slow = fmul f64 %fn_approx, 6.07710050650619224932e-11
-    
+
     ; y[0] = r - w, y[1] = (r - y0) - w
     %y0_slow = fsub f64 %r_slow, %w_slow
     %y1_slow_t = fsub f64 %r_slow, %y0_slow
     %y1_slow = fsub f64 %y1_slow_t, %w_slow
-    
+
     %y0_ptr_slow = getelementptr f64, ptr %y, i64 0
     %y1_ptr_slow = getelementptr f64, ptr %y, i64 1
     store f64 %y0_slow, ptr %y0_ptr_slow
@@ -526,7 +552,7 @@ entry:
     %ix_u64 = lshr i64 %x_bits, 32
     %ix = trunc i64 %ix_u64 to i32
     %ix_abs = and i32 %ix, 2147483647
-    
+
     ; Check if |x| ~<= pi/4 (0x3fe921fb = 1072243195)
     %is_small = icmp ule i32 %ix_abs, 1072243195
     br i1 %is_small, label %small_arg, label %need_reduction
@@ -556,15 +582,15 @@ do_reduction:
     ; Use rem_pio2 for range reduction
     %y_alloca = alloca [2 x f64]
     %n = call i32 @__rem_pio2(f64 %x, ptr %y_alloca)
-    
+
     %y0_ptr = getelementptr [2 x f64], ptr %y_alloca, i64 0, i64 0
     %y1_ptr = getelementptr [2 x f64], ptr %y_alloca, i64 0, i64 1
     %y0 = load f64, ptr %y0_ptr
     %y1 = load f64, ptr %y1_ptr
-    
+
     ; n & 3 determines which function to use
     %n_mod_4 = and i32 %n, 3
-    
+
     %is_0 = icmp eq i32 %n_mod_4, 0
     br i1 %is_0, label %case_0, label %check_1
 
@@ -606,7 +632,7 @@ entry:
     %ix_u64 = lshr i64 %x_bits, 32
     %ix = trunc i64 %ix_u64 to i32
     %ix_abs = and i32 %ix, 2147483647
-    
+
     ; Check if |x| ~<= pi/4
     %is_small = icmp ule i32 %ix_abs, 1072243195
     br i1 %is_small, label %small_arg, label %need_reduction
@@ -627,14 +653,14 @@ inf_nan:
 do_reduction:
     %y_alloca = alloca [2 x f64]
     %n = call i32 @__rem_pio2(f64 %x, ptr %y_alloca)
-    
+
     %y0_ptr = getelementptr [2 x f64], ptr %y_alloca, i64 0, i64 0
     %y1_ptr = getelementptr [2 x f64], ptr %y_alloca, i64 0, i64 1
     %y0 = load f64, ptr %y0_ptr
     %y1 = load f64, ptr %y1_ptr
-    
+
     %n_mod_4 = and i32 %n, 3
-    
+
     %is_0 = icmp eq i32 %n_mod_4, 0
     br i1 %is_0, label %case_0, label %check_1
 
@@ -676,7 +702,7 @@ entry:
     %ix_u64 = lshr i64 %x_bits, 32
     %ix = trunc i64 %ix_u64 to i32
     %ix_abs = and i32 %ix, 2147483647
-    
+
     ; Check if |x| ~<= pi/4
     %is_small = icmp ule i32 %ix_abs, 1072243195
     br i1 %is_small, label %small_arg, label %need_reduction
@@ -705,16 +731,16 @@ inf_nan:
 do_reduction:
     %y_alloca = alloca [2 x f64]
     %n = call i32 @__rem_pio2(f64 %x, ptr %y_alloca)
-    
+
     %y0_ptr = getelementptr [2 x f64], ptr %y_alloca, i64 0, i64 0
     %y1_ptr = getelementptr [2 x f64], ptr %y_alloca, i64 0, i64 1
     %y0 = load f64, ptr %y0_ptr
     %y1 = load f64, ptr %y1_ptr
-    
+
     ; odd = (n & 1) != 0
     %n_and_1 = and i32 %n, 1
     %is_odd = icmp ne i32 %n_and_1, 0
-    
+
     %result = call f64 @__tan_kernel(f64 %y0, f64 %y1, i1 %is_odd)
     ret f64 %result
 }

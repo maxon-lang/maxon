@@ -184,6 +184,19 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 			{mir::MIRType::getPtr()});
 		builder->createCall(freeFunc, {ptr});
 	}
+
+	// Free heap-allocated strings in this scope
+	for (const auto &[name, dataPtrAlloca] : scopeStack.back().heapAllocatedStrings) {
+		// Load the data pointer
+		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrAlloca, name + ".data.ptr");
+
+		// Call free on the data pointer
+		mir::MIRFunction *freeFunc = getOrDeclareFunction(
+			"free",
+			mir::MIRType::getVoid(),
+			{mir::MIRType::getPtr()});
+		builder->createCall(freeFunc, {dataPtr});
+	}
 }
 
 //==============================================================================
@@ -234,6 +247,17 @@ void MIRCodeGenerator::initHeapManagement() {
 	getOrDeclareFunction("memset",
 						 mir::MIRType::getPtr(),
 						 {mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getInt64()});
+
+	// Declare memcpy
+	getOrDeclareFunction("memcpy",
+						 mir::MIRType::getPtr(),
+						 {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+
+	// Declare refcount_inc (for COW strings)
+	getOrDeclareFunction("refcount_inc", mir::MIRType::getInt32(), {mir::MIRType::getPtr()});
+
+	// Declare refcount_dec (for COW strings)
+	getOrDeclareFunction("refcount_dec", mir::MIRType::getInt32(), {mir::MIRType::getPtr()});
 }
 
 //==============================================================================

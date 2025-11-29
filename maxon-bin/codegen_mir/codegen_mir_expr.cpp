@@ -89,6 +89,7 @@ struct MemberAddressResult {
 
 // String layout: struct string { data []byte, _len int, _iterPos int }
 // where []byte is a fat pointer { ptr, i32 }
+// SSO threshold: strings <= 15 bytes use constant data; > 15 bytes use heap allocation
 
 mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *strExpr) {
 	// Check if we should generate as []byte slice instead of full string struct
@@ -106,10 +107,41 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 	const std::string &str = strExpr->value;
 	size_t len = str.length();
 
-	// Create a global constant for the string data
-	// This allocates the byte data in read-only memory
-	std::string globalName = ".str." + std::to_string(stringLiteralCounter++);
-	mir::MIRValue *dataPtr = module->createGlobalString(globalName, str);
+	// SSO threshold: 15 bytes (to match spec's 16-byte inline layout)
+	constexpr size_t SSO_THRESHOLD = 15;
+
+	mir::MIRValue *dataPtr;
+	bool isHeapAllocated = (len > SSO_THRESHOLD);
+
+	if (isHeapAllocated) {
+		// Large string: heap-allocate the data
+		initHeapManagement();
+		mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+		mir::MIRFunction *memcpyFunc = module->getFunction("memcpy");
+
+		// Allocate heap buffer for string data
+		mir::MIRValue *sizeVal = builder->getInt64(len);
+		dataPtr = builder->createCall(mallocFunc, {sizeVal}, "str.heap.alloc");
+
+		// Create a global constant for the string data (source for copy)
+		std::string globalName = ".str." + std::to_string(stringLiteralCounter++);
+		mir::MIRValue *constDataPtr = module->createGlobalString(globalName, str);
+
+		// Copy from constant data to heap buffer
+		builder->createCall(memcpyFunc, {dataPtr, constDataPtr, sizeVal}, "str.heap.copy");
+
+		// Track for cleanup at scope exit
+		// We need to store the data pointer somewhere we can load it from during cleanup
+		mir::MIRValue *dataPtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), "str.heap.ptr");
+		builder->createStore(dataPtr, dataPtrAlloca);
+		if (!scopeStack.empty()) {
+			scopeStack.back().heapAllocatedStrings.push_back({"str.heap", dataPtrAlloca});
+		}
+	} else {
+		// Small string: use constant data in read-only memory (no heap allocation)
+		std::string globalName = ".str." + std::to_string(stringLiteralCounter++);
+		dataPtr = module->createGlobalString(globalName, str);
+	}
 
 	// Field 0: data []byte (fat pointer: {ptr, i32})
 	// Get pointer to the data field (field 0 of string struct)
@@ -714,11 +746,21 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		case 'N': // !=
 			return needsFloatOp ? builder->createFCmpNe(left, right, "fcmptmp")
 								: builder->createICmpNe(left, right, "cmptmp");
-		case '&': // logical and
+		case '&': // bitwise AND
+			return builder->createAnd(left, right, "bandtmp");
+		case '|': // bitwise OR
+			return builder->createOr(left, right, "bortmp");
+		case '^': // bitwise XOR
+			return builder->createXor(left, right, "bxortmp");
+		case 'S': // shift left (<<)
+			return builder->createShl(left, right, "shltmp");
+		case 'H': // shift right (>>) - logical shift for unsigned semantics
+			return builder->createLShr(left, right, "lshrtmp");
+		case 'A': // logical AND (and keyword)
 			// Both operands should be booleans (i1 or i32)
 			// Result is 1 if both are non-zero, 0 otherwise
 			return builder->createAnd(left, right, "andtmp");
-		case '|': // logical or
+		case 'O': // logical OR (or keyword)
 			// Result is 1 if either is non-zero, 0 otherwise
 			return builder->createOr(left, right, "ortmp");
 		default:
