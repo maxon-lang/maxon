@@ -1,5 +1,6 @@
 #include "../lexer.h"
 #include "../semantic_analyzer.h"
+#include "../type_members.h"
 #include <algorithm>
 
 // Expression analysis implementation
@@ -713,10 +714,12 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return "error";
 		}
 
-		// Support .length and .capacity on arrays
-		if (memberAccessExpr->memberName == "length" || memberAccessExpr->memberName == "capacity") {
-			// Both .length and .capacity return int
-			return "int";
+		// Support array member access using shared type registry
+		if (objectType.length() > 0 && objectType[0] == '[') {
+			std::string memberType = getArrayMemberType(memberAccessExpr->memberName);
+			if (!memberType.empty()) {
+				return memberType;
+			}
 		}
 
 		// Check if objectType.memberName is a known method

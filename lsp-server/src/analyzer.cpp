@@ -1,5 +1,6 @@
 #include "analyzer.h"
 #include "semantic_analyzer.h"
+#include "type_members.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -18,9 +19,11 @@ Analyzer::Analyzer() {
 		keywordMetadata[info.name] = info;
 	}
 
-	// Initialize array type members (arrays are language primitives, not in stdlib)
-	typeMembers["[]"] = {
-		{"length", false, "int", "", "Number of elements in the array"}};
+	// Initialize array type members from shared type registry
+	// This ensures compiler and LSP use the same definitions
+	for (const auto &member : getArrayTypeMembers()) {
+		typeMembers["[]"].push_back({member.name, member.isMethod, member.returnType, member.signature, member.documentation});
+	}
 }
 
 std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
