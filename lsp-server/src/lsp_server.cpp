@@ -54,6 +54,20 @@ static std::string getExecutableDirectory() {
 #endif
 }
 
+// Helper function to convert file:// URI to filesystem path
+static std::string uriToPath(const std::string &uri) {
+	std::string path = uri;
+	if (path.substr(0, 7) == "file://") {
+		path = path.substr(7);
+	}
+	path = urlDecode(path);
+	// On Windows, remove leading slash from /C:/...
+	if (path.size() > 2 && path[0] == '/' && path[2] == ':') {
+		path = path.substr(1);
+	}
+	return path;
+}
+
 LspServer::LspServer()
 	: rpcHandler(std::make_unique<JsonRpcHandler>()),
 	  docManager(std::make_unique<DocumentManager>()),
@@ -352,6 +366,12 @@ void LspServer::handleDidClose(const json &params) {
 
 void LspServer::handleDidSave(const json &params) {
 	std::string uri = params["textDocument"]["uri"].get<std::string>();
+
+	// Check if this is a stdlib file and reload it if so
+	std::string filePath = uriToPath(uri);
+	if (analyzer->isStdlibFile(filePath)) {
+		analyzer->reloadStdlibFile(filePath);
+	}
 
 	// Re-analyze on save
 	auto doc = docManager->getDocument(uri);

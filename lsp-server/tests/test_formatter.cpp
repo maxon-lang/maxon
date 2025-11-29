@@ -328,3 +328,172 @@ TEST_CASE("format_removes_trailing_blank_lines", "[formatter]") {
 	// Should NOT end with \n\n
 	REQUIRE(edits[0].newText.substr(edits[0].newText.length() - 2) != "\n\n");
 }
+
+TEST_CASE("format_struct_literal_multiline", "[formatter]") {
+	Formatter formatter;
+
+	// A function that creates a struct literal spanning multiple lines
+	// The 'return' statement after the struct literal should be properly indented
+	std::string source =
+		"function createIterator() Iterator\n"
+		"    var it = Iterator{\n"
+		"        current: 0,\n"
+		"        limit: 10,\n"
+		"        step: 1\n"
+		"    }\n"
+		"    return it\n"
+		"end 'createIterator'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	// The 'return it' line should be indented at function level (1 tab), not at base level
+	REQUIRE(edits[0].newText.find("\treturn it") != std::string::npos);
+	// It should NOT be at base level (no indent)
+	REQUIRE(edits[0].newText.find("\nreturn it") == std::string::npos);
+}
+
+TEST_CASE("format_struct_literal_no_trailing_newline", "[formatter]") {
+	Formatter formatter;
+
+	// Same as above but WITHOUT a trailing newline after the closing brace
+	// This simulates an edge case in range.maxon where the file was formatted incorrectly
+	std::string source =
+		"function range_step(start int, end_exclusive int, step int) Iterator\n"
+		"    var it = Iterator{\n"
+		"        current: start,\n"
+		"        limit: end_exclusive,\n"
+		"        step: step\n"
+		"    }\n"	  // Closing brace for struct literal
+		"return it\n" // This line is at column 0 (BUG!) - should be indented
+		"end 'range_step'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::cerr << "Formatted output:\n"
+			  << edits[0].newText << std::endl;
+
+	// The 'return it' line should be indented at function level (1 tab)
+	REQUIRE(edits[0].newText.find("\treturn it") != std::string::npos);
+	// It should NOT be at base level (no indent)
+	REQUIRE(edits[0].newText.find("\nreturn it") == std::string::npos);
+}
+
+TEST_CASE("format_range_is_valid", "[formatter]") {
+	Formatter formatter;
+
+	std::string source =
+		"function main() int\n"
+		"return 0\n"
+		"end 'main'\n";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	// The range should be valid - start line >= 0 and end line >= start line
+	REQUIRE(edits[0].range.start.line >= 0);
+	REQUIRE(edits[0].range.start.character >= 0);
+	REQUIRE(edits[0].range.end.line >= 0);
+	REQUIRE(edits[0].range.end.character >= 0);
+	REQUIRE(edits[0].range.end.line >= edits[0].range.start.line);
+
+	// For a 4-line source (lines 0, 1, 2, 3), end line should be 3 (last line index)
+	// But we're including a trailing newline, so the actual line count might be 4
+	// Let's just ensure it's in a reasonable range
+	std::cerr << "Range: start=" << edits[0].range.start.line << "," << edits[0].range.start.character
+			  << " end=" << edits[0].range.end.line << "," << edits[0].range.end.character << std::endl;
+}
+
+TEST_CASE("format_range_is_valid_for_short_file", "[formatter]") {
+	Formatter formatter;
+
+	// Single line file
+	std::string source = "return 0\n";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	REQUIRE(edits[0].range.start.line >= 0);
+	REQUIRE(edits[0].range.start.character >= 0);
+	REQUIRE(edits[0].range.end.line >= 0);
+	REQUIRE(edits[0].range.end.character >= 0);
+	REQUIRE(edits[0].range.end.line >= edits[0].range.start.line);
+
+	std::cerr << "Single line range: start=" << edits[0].range.start.line << "," << edits[0].range.start.character
+			  << " end=" << edits[0].range.end.line << "," << edits[0].range.end.character << std::endl;
+}
+
+TEST_CASE("format_struct_literal_preserves_function_indent", "[formatter]") {
+	Formatter formatter;
+
+	// This is the exact pattern from range.maxon that was failing
+	// The struct literal should NOT affect the indentation of code after it
+	std::string source =
+		"export function range(start int, end_exclusive int) Iterator\n"
+		"var it = Iterator{\n"
+		"current: start,\n"
+		"limit: end_exclusive,\n"
+		"step: 1\n"
+		"}\n"
+		"return it\n"
+		"end 'range'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Formatted result:\n"
+			  << result << std::endl;
+
+	// Check structure:
+	// export function range(...) Iterator   <- level 0
+	// \tvar it = Iterator{                  <- level 1 (inside function)
+	// \t\tcurrent: start,                   <- level 2 (inside struct literal)
+	// \t\tlimit: end_exclusive,             <- level 2
+	// \t\tstep: 1                           <- level 2
+	// \t}                                   <- level 1 (closing brace)
+	// \treturn it                           <- level 1 (still inside function!)
+	// end 'range'                           <- level 0
+
+	REQUIRE(result.find("\tvar it = Iterator{") != std::string::npos);
+	REQUIRE(result.find("\t\tcurrent: start") != std::string::npos);
+	REQUIRE(result.find("\t\tlimit: end_exclusive") != std::string::npos);
+	REQUIRE(result.find("\t\tstep: 1") != std::string::npos);
+	REQUIRE(result.find("\t}") != std::string::npos);
+	REQUIRE(result.find("\treturn it") != std::string::npos);
+	REQUIRE(result.find("\nreturn it") == std::string::npos); // NOT at column 0
+	REQUIRE(result.find("end 'range'") != std::string::npos);
+	REQUIRE(result.find("\tend 'range'") == std::string::npos); // end should NOT be indented
+}
+
+TEST_CASE("format_multiple_struct_literals_in_function", "[formatter]") {
+	Formatter formatter;
+
+	// Two struct literals in sequence
+	std::string source =
+		"function test() int\n"
+		"var a = Point{\n"
+		"x: 1,\n"
+		"y: 2\n"
+		"}\n"
+		"var b = Point{\n"
+		"x: 3,\n"
+		"y: 4\n"
+		"}\n"
+		"return 0\n"
+		"end 'test'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+
+	// Both var statements should be at level 1
+	// Both struct literal contents should be at level 2
+	// return should be at level 1
+	REQUIRE(result.find("\tvar a = Point{") != std::string::npos);
+	REQUIRE(result.find("\t\tx: 1") != std::string::npos);
+	REQUIRE(result.find("\tvar b = Point{") != std::string::npos);
+	REQUIRE(result.find("\treturn 0") != std::string::npos);
+}

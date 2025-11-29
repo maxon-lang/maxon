@@ -9,8 +9,11 @@ std::vector<TextEdit> Formatter::formatDocument(
 	int tabSize) {
 	std::vector<TextEdit> edits;
 
+	int lineCount = getLineCount(source);
+
 	auto lines = splitLines(source);
 	int currentIndentLevel = 0;
+	int braceDepth = 0; // Track struct literal brace depth separately
 	int consecutiveBlankCount = 0;
 
 	std::string formattedText;
@@ -40,8 +43,15 @@ std::vector<TextEdit> Formatter::formatDocument(
 		std::string trimmedLine = originalLine;
 		trimmedLine.erase(0, trimmedLine.find_first_not_of(" \t"));
 
-		// Decrease indent for 'end' statements
-		if (shouldDecreaseIndent(trimmedLine)) {
+		// Check for closing brace (struct literal end)
+		bool startsWithCloseBrace = !trimmedLine.empty() && trimmedLine[0] == '}';
+		if (startsWithCloseBrace && braceDepth > 0) {
+			braceDepth--;
+			currentIndentLevel = std::max(0, currentIndentLevel - 1);
+		}
+
+		// Decrease indent for 'end' statements (control flow)
+		if (shouldDecreaseIndentForEnd(trimmedLine)) {
 			currentIndentLevel = std::max(0, currentIndentLevel - 1);
 		}
 
@@ -59,16 +69,27 @@ std::vector<TextEdit> Formatter::formatDocument(
 
 		formattedText += normalizedLine + "\n";
 
-		// Increase indent for statements that open blocks
-		if (shouldIncreaseIndent(trimmedLine)) {
+		// Check for opening brace at end of line (struct literal start)
+		size_t lastNonWhitespace = trimmedLine.find_last_not_of(" \t");
+		bool endsWithOpenBrace = lastNonWhitespace != std::string::npos && trimmedLine[lastNonWhitespace] == '{';
+
+		if (endsWithOpenBrace) {
+			braceDepth++;
+			currentIndentLevel++;
+		} else if (shouldIncreaseIndentForKeyword(trimmedLine)) {
+			// Increase indent for control flow keywords (function, if, while, etc.)
 			currentIndentLevel++;
 		}
 	}
 
 	// Create one edit replacing the whole document
-	int lineCount = getLineCount(source);
+	// LSP positions are 0-indexed. For a document with N lines (0 to N-1),
+	// we use line N-1 (the last line) with a large character to capture everything.
+	// Or we can use line N with character 0, but that may cause issues with some clients.
+	// The safest approach is to use the actual last line with character set beyond its length.
 	lsp::Position start{0, 0};
-	lsp::Position end{lineCount + 1, 0};
+	// Use lineCount - 1 as the last line (0-indexed), and a large character to capture the whole line
+	lsp::Position end{lineCount > 0 ? lineCount - 1 : 0, 10000};
 
 	edits.push_back({{start, end}, formattedText});
 
@@ -109,13 +130,13 @@ int Formatter::calculateIndentLevel(const std::string &line) {
 	return level;
 }
 
-bool Formatter::shouldIncreaseIndent(const std::string &line) {
+bool Formatter::shouldIncreaseIndentForKeyword(const std::string &line) {
 	// Remove leading whitespace for checking
 	std::string trimmed = line;
 	trimmed.erase(0, trimmed.find_first_not_of(" \t"));
 
-	// Check if line starts with block-opening keywords
-	const char *openingKeywords[] = {"function", "if", "else", "while", "for", "struct"};
+	// Check if line starts with block-opening keywords (or export + keyword)
+	const char *openingKeywords[] = {"function", "if", "else", "while", "for", "struct", "export function", "export struct"};
 	for (const auto &keyword : openingKeywords) {
 		if (trimmed.find(keyword) == 0) {
 			// Make sure it's a complete keyword (followed by space or non-alphanumeric)
@@ -131,16 +152,11 @@ bool Formatter::shouldIncreaseIndent(const std::string &line) {
 		}
 	}
 
-	// Check if line ends with an opening brace (for struct literals)
-	size_t lastNonWhitespace = trimmed.find_last_not_of(" \t");
-	if (lastNonWhitespace != std::string::npos && trimmed[lastNonWhitespace] == '{') {
-		return true;
-	}
-
+	// Note: Opening braces for struct literals are handled separately in formatDocument
 	return false;
 }
 
-bool Formatter::shouldDecreaseIndent(const std::string &line) {
+bool Formatter::shouldDecreaseIndentForEnd(const std::string &line) {
 	// Remove leading whitespace for checking
 	std::string trimmed = line;
 	trimmed.erase(0, trimmed.find_first_not_of(" \t"));
@@ -158,11 +174,7 @@ bool Formatter::shouldDecreaseIndent(const std::string &line) {
 		}
 	}
 
-	// Check if line starts with a closing brace (for struct literals)
-	if (!trimmed.empty() && trimmed[0] == '}') {
-		return true;
-	}
-
+	// Note: Closing braces for struct literals are handled separately in formatDocument
 	return false;
 }
 

@@ -4,22 +4,59 @@
 
 // Create an iterator for a range [start, end)
 // Example: range(0, 10) iterates over 0, 1, 2, ..., 9
-export function range(start int, end_exclusive int) Iterator
-    var it = Iterator{
-        current: start,
-        limit: end_exclusive,
-        step: 1
-    }
-    return it
+export function range(start int, end_exclusive int) RangeIterator
+	var it = RangeIterator{
+		current: start,
+		limit: end_exclusive,
+		step: 1
+	}
+	return it
 end 'range'
 
 // Create an iterator for a range with custom step
 // Example: range_step(0, 10, 2) iterates over 0, 2, 4, 6, 8
-export function range_step(start int, end_exclusive int, step int) Iterator
-    var it = Iterator{
-        current: start,
-        limit: end_exclusive,
-        step: step
-    }
-    return it
+export function range_step(start int, end_exclusive int, step int) RangeIterator
+	var it = RangeIterator {
+		current: start,
+		limit: end_exclusive,
+		step: step
+	}
+	return it
 end 'range_step'
+
+export struct RangeIterator is Iterable with int
+	current int
+	limit int
+	step int
+
+	// Check if iterator has more elements
+	// Returns: 1 if more elements available, 0 if done
+	export function Iterable.hasNext() int
+		if step > 0 'forward'
+			if current < limit 'check'
+				return 1
+			end 'check'
+			return 0
+		end 'forward'
+
+		if current > limit 'backward_check'
+			return 1
+		end 'backward_check'
+		return 0
+	end 'hasNext'
+
+	// Get current value from iterator
+	export function Iterable.getCurrent() int
+		return current
+	end 'getCurrent'
+
+	// Advance iterator to next element
+	export function Iterable.next() RangeIterator
+		var result = RangeIterator{
+			current: current + step,
+			limit: limit,
+			step: step
+		}
+		return result
+	end 'next'
+end 'RangeIterator'

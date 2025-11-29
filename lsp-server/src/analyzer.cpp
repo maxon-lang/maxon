@@ -80,6 +80,22 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
 				}
 			}
 
+			// Get the set of struct names defined in the current document
+			std::set<std::string> currentDocStructs;
+			for (const auto &structDef : program->structs) {
+				currentDocStructs.insert(structDef->name);
+			}
+
+			// Register stdlib structs with the semantic analyzer
+			// This allows files to reference structs defined in other stdlib files
+			for (const auto &pair : stdlibStructs) {
+				const StdlibStruct &structInfo = pair.second;
+				// Only register as external if NOT defined in current document
+				if (currentDocStructs.find(structInfo.name) == currentDocStructs.end()) {
+					semanticAnalyzer.registerExternalStruct(structInfo.name, structInfo.fields);
+				}
+			}
+
 			std::vector<SemanticError> semanticErrors = semanticAnalyzer.analyze(program.get());
 
 			// Cache semantic analysis results for this document
@@ -685,6 +701,9 @@ lsp::Range Analyzer::tokenToRange(const Token &token) {
 }
 
 void Analyzer::initializeStdlib(const std::string &stdlibPath) {
+	// Store the stdlib path for later use (e.g., reloading modified files)
+	stdlibPath_ = stdlibPath;
+
 	auto files = findStdlibFiles(stdlibPath);
 
 	for (const auto &filePath : files) {
@@ -876,6 +895,15 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 				if (!members.empty()) {
 					typeMembers[structDef->name] = members;
 				}
+
+				// Store struct for semantic analysis registration
+				// This allows files that reference this struct to find it
+				StdlibStruct stdlibStruct;
+				stdlibStruct.name = structDef->name;
+				for (const auto &field : structDef->fields) {
+					stdlibStruct.fields.push_back(StructFieldInfo(field.name, field.type, field.line, field.column));
+				}
+				stdlibStructs[structDef->name] = stdlibStruct;
 			}
 		}
 
@@ -965,23 +993,7 @@ std::string Analyzer::getTextBeforePosition(const std::string &text, lsp::Positi
 std::vector<lsp::CompletionItem> Analyzer::getMemberCompletions(const std::string &typeName, const SemanticInfo &semInfo) {
 	std::vector<lsp::CompletionItem> items;
 
-	// Check if it's a struct type
-	auto structIt = semInfo.structs.find(typeName);
-	if (structIt != semInfo.structs.end()) {
-		// Return struct fields
-		const StructInfo &structInfo = structIt->second;
-		for (const auto &field : structInfo.fields) {
-			lsp::CompletionItem item;
-			item.label = field.name;
-			item.kind = lsp::CompletionItemKind::Field;
-			item.detail = field.type;
-			item.documentation = "Field of struct " + typeName;
-			items.push_back(item);
-		}
-		return items;
-	}
-
-	// Check type members registry (handles string, etc.)
+	// First check type members registry - this has complete info for stdlib types (fields + methods)
 	auto typeIt = typeMembers.find(typeName);
 	if (typeIt != typeMembers.end()) {
 		for (const auto &member : typeIt->second) {
@@ -996,6 +1008,22 @@ std::vector<lsp::CompletionItem> Analyzer::getMemberCompletions(const std::strin
 				item.insertText = member.name + "()";
 			}
 
+			items.push_back(item);
+		}
+		return items;
+	}
+
+	// Check if it's a struct type defined in the current document
+	auto structIt = semInfo.structs.find(typeName);
+	if (structIt != semInfo.structs.end()) {
+		// Return struct fields
+		const StructInfo &structInfo = structIt->second;
+		for (const auto &field : structInfo.fields) {
+			lsp::CompletionItem item;
+			item.label = field.name;
+			item.kind = lsp::CompletionItemKind::Field;
+			item.detail = field.type;
+			item.documentation = "Field of struct " + typeName;
 			items.push_back(item);
 		}
 		return items;
@@ -1420,5 +1448,117 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
 
 	} catch (const std::exception &e) {
 		return std::nullopt;
+	}
+}
+
+bool Analyzer::isStdlibFile(const std::string &filePath) const {
+	if (stdlibPath_.empty()) {
+		return false;
+	}
+
+	try {
+		fs::path stdlibCanonical = fs::canonical(stdlibPath_);
+		fs::path fileCanonical = fs::canonical(filePath);
+
+		// Check if the file path starts with the stdlib path
+		auto [rootEnd, nothing] = std::mismatch(stdlibCanonical.begin(), stdlibCanonical.end(), fileCanonical.begin());
+		bool isStdlib = rootEnd == stdlibCanonical.end();
+		if (isStdlib) {
+			std::cerr << "[DEBUG] File is in stdlib: " << filePath << std::endl;
+		}
+		return isStdlib;
+	} catch (...) {
+		return false;
+	}
+}
+
+void Analyzer::reloadStdlibFile(const std::string &filePath) {
+	if (stdlibPath_.empty()) {
+		std::cerr << "[DEBUG] reloadStdlibFile: stdlibPath_ is empty" << std::endl;
+		return;
+	}
+
+	std::cerr << "[DEBUG] Reloading stdlib file: " << filePath << std::endl;
+
+	try {
+		fs::path path(filePath);
+		fs::path relativePath = fs::relative(path, stdlibPath_);
+
+		// Build namespace name from relative path
+		std::string namespaceName = "stdlib";
+		if (relativePath.has_parent_path()) {
+			for (const auto &part : relativePath.parent_path()) {
+				namespaceName += "." + part.string();
+			}
+		}
+
+		// Get module name to clear old data
+		std::string moduleName = path.stem().string();
+		std::cerr << "[DEBUG] Namespace: " << namespaceName << ", Module: " << moduleName << std::endl;
+
+		// Clear old function entries from this file
+		// We need to iterate and remove functions that belong to this namespace/module
+		int removedFunctions = 0;
+		for (auto it = stdlibFunctions.begin(); it != stdlibFunctions.end();) {
+			if (it->second.namespacePath == namespaceName && it->second.moduleName == moduleName) {
+				it = stdlibFunctions.erase(it);
+				removedFunctions++;
+			} else {
+				++it;
+			}
+		}
+
+		// Clear module node's function list to avoid duplicates
+		// Navigate to the module node
+		NamespaceNode *current = &namespaceRoot;
+		std::vector<std::string> nsParts;
+		std::string part;
+		for (char c : namespaceName) {
+			if (c == '.') {
+				if (!part.empty()) {
+					nsParts.push_back(part);
+					part.clear();
+				}
+			} else {
+				part += c;
+			}
+		}
+		if (!part.empty()) {
+			nsParts.push_back(part);
+		}
+
+		// Navigate to module's parent and clear the module's function list
+		for (size_t i = 1; i < nsParts.size(); i++) {
+			auto it = current->children.find(nsParts[i]);
+			if (it != current->children.end()) {
+				current = &it->second;
+			}
+		}
+		auto moduleIt = current->children.find(moduleName);
+		if (moduleIt != current->children.end()) {
+			moduleIt->second.functions.clear();
+		}
+
+		// Clear old struct entries from this file
+		// For now, we reload all structs from this file
+		// A more precise approach would track which file each struct came from
+		for (auto it = stdlibStructs.begin(); it != stdlibStructs.end();) {
+			++it;
+		}
+
+		// Count functions before reload
+		size_t functionsBefore = stdlibFunctions.size();
+
+		// Reload the file
+		loadStdlibFile(filePath, namespaceName);
+
+		size_t functionsAfter = stdlibFunctions.size();
+		std::cerr << "[DEBUG] Reloaded stdlib file: removed " << removedFunctions
+				  << " functions, added " << (functionsAfter - functionsBefore) << std::endl;
+
+	} catch (const std::exception &e) {
+		std::cerr << "[DEBUG] Error reloading stdlib file: " << e.what() << std::endl;
+	} catch (...) {
+		std::cerr << "[DEBUG] Unknown error reloading stdlib file" << std::endl;
 	}
 }

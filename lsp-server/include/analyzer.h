@@ -31,6 +31,12 @@ struct StdlibStructMethod {
 	std::vector<FunctionParameter> parameters; // Parameters including 'self'
 };
 
+// Information about a stdlib struct (for semantic analysis registration)
+struct StdlibStruct {
+	std::string name;					 // Struct name
+	std::vector<StructFieldInfo> fields; // Fields of the struct
+};
+
 // Information about a type method or property
 struct TypeMember {
 	std::string name;		   // Method/property name
@@ -54,6 +60,12 @@ class Analyzer {
 	// Initialize stdlib function cache
 	void initializeStdlib(const std::string &stdlibPath);
 
+	// Reload a single stdlib file (called when a stdlib file is modified)
+	void reloadStdlibFile(const std::string &filePath);
+
+	// Check if a file path is within the stdlib directory
+	bool isStdlibFile(const std::string &filePath) const;
+
 	// Analyze document and return diagnostics
 	std::vector<lsp::Diagnostic> analyze(std::shared_ptr<Document> doc);
 
@@ -76,10 +88,12 @@ class Analyzer {
 	std::optional<std::vector<lsp::Range>> getLinkedEditingRanges(std::shared_ptr<Document> doc, lsp::Position pos);
 
   private:
+	std::string stdlibPath_; // Stored stdlib path for reloading
 	std::vector<std::string> keywords;
 	std::map<std::string, Lexer::KeywordInfo> keywordMetadata;
 	std::map<std::string, StdlibFunction> stdlibFunctions;		// Key: unqualified name
 	std::vector<StdlibStructMethod> stdlibStructMethods;		// Struct methods from stdlib
+	std::map<std::string, StdlibStruct> stdlibStructs;			// Key: struct name, for semantic analysis registration
 	std::map<std::string, std::vector<TypeMember>> typeMembers; // Key: type name (e.g., "string", "[]")
 	NamespaceNode namespaceRoot;								// Root of namespace hierarchy ("stdlib")
 

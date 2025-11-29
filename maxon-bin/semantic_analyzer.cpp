@@ -54,6 +54,14 @@ void SemanticAnalyzer::registerExternalFunction(const std::string &name, const s
 	functionIndices[name] = externalFunctionIdBase++;
 }
 
+void SemanticAnalyzer::registerExternalStruct(const std::string &name, const std::vector<StructFieldInfo> &fields) {
+	// Only register if not already defined
+	if (structs.find(name) == structs.end()) {
+		structs.emplace(name, StructInfo(name, fields, 0, 0));
+		logTrace("Registered external struct: " + name);
+	}
+}
+
 void SemanticAnalyzer::registerBuiltinFunctions() {
 	// Register runtime functions
 	registerExternalFunction("write_stdout", "int",
@@ -62,8 +70,8 @@ void SemanticAnalyzer::registerBuiltinFunctions() {
 
 std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	errors.clear();
-	// Note: Don't clear functions here - we want to keep registered external functions
-	structs.clear();
+	// Note: Don't clear functions or structs here - we want to keep registered external ones
+	// structs.clear(); // Preserve external structs registered before analysis
 	interfaces.clear();
 	variables.clear();
 	scopeStack.clear();
@@ -76,6 +84,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 	logDetail("Starting semantic analysis");
 	logTrace("Registered external functions: " + std::to_string(functions.size()));
+	logTrace("Registered external structs: " + std::to_string(structs.size()));
 
 	// First pass: collect all interface definitions
 	logTrace("Pass 1a: Collecting interface definitions");

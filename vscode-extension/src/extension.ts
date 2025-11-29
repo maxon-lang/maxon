@@ -108,10 +108,10 @@ export async function activate(ctx: vscode.ExtensionContext) {
 				const edits = result || [];
 				log(`Received ${edits.length} edits from server`);
 
-				// Force LF by appending a setEndOfLine edit
-				const eolEdit = vscode.TextEdit.setEndOfLine(vscode.EndOfLine.LF);
-				log('Appending setEndOfLine(LF) edit');
-				return [...edits, eolEdit];
+				// Note: We can't use TextEdit.setEndOfLine here because it creates an edit
+				// with a `newEol` property that's not compatible with the LSP protocol.
+				// The formatter already normalizes to LF line endings.
+				return edits;
 			}
 		}
 	};
