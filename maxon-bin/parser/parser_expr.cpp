@@ -203,6 +203,14 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 				// This is a member access (e.g., struct.field or struct.arrayField)
 				auto memberExpr = std::make_unique<MemberAccessExprAST>(name, member.value, line, column);
 
+				// Handle chained member access (e.g., self.data.length)
+				while (check(TokenType::DOT)) {
+					advance(); // consume '.'
+					Token nextMember = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
+					// Wrap the current expression in a new MemberAccessExprAST
+					memberExpr = std::make_unique<MemberAccessExprAST>(std::move(memberExpr), nextMember.value, line, column);
+				}
+
 				// Check for array indexing on the member (e.g., struct.arrayField[i])
 				if (check(TokenType::LBRACKET)) {
 					advance(); // consume '['

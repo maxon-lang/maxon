@@ -1,46 +1,31 @@
-// Test: string-type.ends-with.1
+// Test: string-type.utf16-valid-surrogate-pair.1
 function main() int
-    var s = "hello world"
-    if s.ends_with("world") then print(1)
-    if s.ends_with("hello") then print(0)
+    if utf16_is_valid_surrogate_pair(55357, 56832) then print(1)  // valid pair
+    if utf16_is_valid_surrogate_pair(56832, 55357) then print(0)  // reversed
+    if utf16_is_valid_surrogate_pair(65, 66) then print(0)        // not surrogates
     return 0
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 137
+; Instructions: 120
 
 define i32 @main() {
 entry0:
-  %0 = alloca %__string
-  %1 = getelementptr %__string, ptr %0, i32 0, i32 0
-  store i64 8031924123371070824, ptr %1
-  %2 = getelementptr %__string, ptr %0, i32 0, i32 1
-  store i64 288230376158293106, ptr %2
-  %3 = alloca ptr
-  store ptr %0, ptr %3
-  %5 = alloca %__string
-  %6 = getelementptr %__string, ptr %5, i32 0, i32 0
-  store i64 431316168567, ptr %6
-  %7 = getelementptr %__string, ptr %5, i32 0, i32 1
-  store i64 720575940379279360, ptr %7
-  %8 = call i1 @__string_ends_with(ptr %0, ptr %5)
-  br i1 %8, label %then1, label %ifcont2
+  br i1 1, label %then1, label %ifcont2
 then1:
-  %9 = call i32 @sys.print(i32 1)
+  %1 = call i32 @sys.print(i32 1)
   br label %ifcont2
 ifcont2:
-  %10 = load ptr, ptr %3
-  %11 = alloca %__string
-  %12 = getelementptr %__string, ptr %11, i32 0, i32 0
-  store i64 478560413032, ptr %12
-  %13 = getelementptr %__string, ptr %11, i32 0, i32 1
-  store i64 720575940379279360, ptr %13
-  %14 = call i1 @__string_ends_with(ptr %10, ptr %11)
-  br i1 %14, label %then3, label %ifcont4
+  br i1 0, label %then3, label %ifcont4
 then3:
-  %15 = call i32 @sys.print(i32 0)
+  %3 = call i32 @sys.print(i32 0)
   br label %ifcont4
 ifcont4:
+  br i1 0, label %then5, label %ifcont6
+then5:
+  %5 = call i32 @sys.print(i32 0)
+  br label %ifcont6
+ifcont6:
   ret i32 0
 }
 
@@ -173,8 +158,6 @@ afterloop12:
   ret i32 %65
 }
 
-declare i1 @__string_ends_with(ptr %arg0, ptr %arg1)
-
 declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 
 declare ptr @malloc(i64 %arg0)
@@ -194,42 +177,67 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 162
+; Instructions: 173
 
 define i32 @main() {
 entry0:
-  %0 = alloca %__string
-  %1 = getelementptr %__string, ptr %0, i32 0, i32 0
-  store i64 8031924123371070824, ptr %1
-  %2 = getelementptr %__string, ptr %0, i32 0, i32 1
-  store i64 288230376158293106, ptr %2
-  %3 = alloca ptr
-  store ptr %0, ptr %3
-  %4 = load ptr, ptr %3
-  %5 = alloca %__string
-  %6 = getelementptr %__string, ptr %5, i32 0, i32 0
-  store i64 431316168567, ptr %6
-  %7 = getelementptr %__string, ptr %5, i32 0, i32 1
-  store i64 720575940379279360, ptr %7
-  %8 = call i1 @__string_ends_with(ptr %4, ptr %5)
-  br i1 %8, label %then1, label %ifcont2
+  %0 = call i1 @string.utf16_is_valid_surrogate_pair(i32 55357, i32 56832)
+  br i1 %0, label %then1, label %ifcont2
 then1:
-  %9 = call i32 @sys.print(i32 1)
+  %1 = call i32 @sys.print(i32 1)
   br label %ifcont2
 ifcont2:
-  %10 = load ptr, ptr %3
-  %11 = alloca %__string
-  %12 = getelementptr %__string, ptr %11, i32 0, i32 0
-  store i64 478560413032, ptr %12
-  %13 = getelementptr %__string, ptr %11, i32 0, i32 1
-  store i64 720575940379279360, ptr %13
-  %14 = call i1 @__string_ends_with(ptr %10, ptr %11)
-  br i1 %14, label %then3, label %ifcont4
+  %2 = call i1 @string.utf16_is_valid_surrogate_pair(i32 56832, i32 55357)
+  br i1 %2, label %then3, label %ifcont4
 then3:
-  %15 = call i32 @sys.print(i32 0)
+  %3 = call i32 @sys.print(i32 0)
   br label %ifcont4
 ifcont4:
+  %4 = call i1 @string.utf16_is_valid_surrogate_pair(i32 65, i32 66)
+  br i1 %4, label %then5, label %ifcont6
+then5:
+  %5 = call i32 @sys.print(i32 0)
+  br label %ifcont6
+ifcont6:
   ret i32 0
+}
+
+define i1 @string.utf16_is_lead_surrogate(i32 %codeUnit) {
+entry0:
+  %0 = alloca i32
+  store i32 %codeUnit, ptr %0
+  %1 = load i32, ptr %0
+  %2 = icmp sge i32 %1, 55296
+  %3 = load i32, ptr %0
+  %4 = icmp sle i32 %3, 56319
+  %5 = and i1 %2, %4
+  ret i1 %5
+}
+
+define i1 @string.utf16_is_trail_surrogate(i32 %codeUnit) {
+entry0:
+  %0 = alloca i32
+  store i32 %codeUnit, ptr %0
+  %1 = load i32, ptr %0
+  %2 = icmp sge i32 %1, 56320
+  %3 = load i32, ptr %0
+  %4 = icmp sle i32 %3, 57343
+  %5 = and i1 %2, %4
+  ret i1 %5
+}
+
+define i1 @string.utf16_is_valid_surrogate_pair(i32 %high, i32 %low) {
+entry0:
+  %0 = alloca i32
+  store i32 %high, ptr %0
+  %1 = alloca i32
+  store i32 %low, ptr %1
+  %2 = load i32, ptr %0
+  %3 = call i1 @string.utf16_is_lead_surrogate(i32 %2)
+  %4 = load i32, ptr %1
+  %5 = call i1 @string.utf16_is_trail_surrogate(i32 %4)
+  %6 = and i1 %3, %5
+  ret i1 %6
 }
 
 define i32 @sys.print(i32 %value) {
@@ -384,8 +392,6 @@ afterloop12:
   %65 = load i32, ptr %48
   ret i32 %65
 }
-
-declare i1 @__string_ends_with(ptr %arg0, ptr %arg1)
 
 declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 

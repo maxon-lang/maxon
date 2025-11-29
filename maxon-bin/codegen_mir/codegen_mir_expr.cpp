@@ -18,7 +18,8 @@
 // This is used for type-aware code generation (e.g., Equatable comparison)
 static std::string getExpressionMaxonType(ExprAST *expr,
 										  const std::map<std::string, std::string> &variableTypes,
-										  const std::map<std::string, mir::MIRType *> &structTypes) {
+										  const std::map<std::string, mir::MIRType *> &structTypes,
+										  const std::map<std::string, std::vector<std::pair<std::string, std::string>>> &structFields) {
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
 		auto it = variableTypes.find(varExpr->name);
 		if (it != variableTypes.end()) {
@@ -46,12 +47,28 @@ static std::string getExpressionMaxonType(ExprAST *expr,
 		return "bool";
 	}
 	if (auto *memberAccess = dynamic_cast<MemberAccessExprAST *>(expr)) {
-		// Try to determine member access type
-		if (!memberAccess->objectName.empty()) {
+		// Determine the type of the object being accessed
+		std::string objectType;
+		if (memberAccess->object) {
+			// Recursive case: complex expression (e.g., a.b in a.b.c)
+			objectType = getExpressionMaxonType(memberAccess->object.get(), variableTypes, structTypes, structFields);
+		} else {
+			// Base case: simple variable access (e.g., self in self.field)
 			auto it = variableTypes.find(memberAccess->objectName);
 			if (it != variableTypes.end()) {
-				// Need to look up field type - for now return empty
-				// The caller will fall back to non-Equatable path
+				objectType = it->second;
+			}
+		}
+
+		// Now look up the field type in the struct
+		if (!objectType.empty()) {
+			auto fieldsIt = structFields.find(objectType);
+			if (fieldsIt != structFields.end()) {
+				for (const auto &field : fieldsIt->second) {
+					if (field.first == memberAccess->memberName) {
+						return field.second; // Return the field's type
+					}
+				}
 			}
 		}
 		return "";
@@ -60,11 +77,21 @@ static std::string getExpressionMaxonType(ExprAST *expr,
 	return "";
 }
 
-// String layout: struct with _data field which is [16]byte
-// _data[0..14] is string data, _data[15] is length
+//==============================================================================
+// Helper: Generate pointer to struct field (without loading)
+//==============================================================================
+
+// Helper struct to return both pointer and type info
+struct MemberAddressResult {
+	mir::MIRValue *ptr;
+	std::string type;
+};
+
+// String layout: struct string { data []byte, _len int, _iterPos int }
+// where []byte is a fat pointer { ptr, i32 }
 
 mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *strExpr) {
-	// Get the string struct type (defined by stdlib with _data [16]byte field)
+	// Get the string struct type (defined by stdlib)
 	mir::MIRType *stringType = getTypeFromString("string");
 
 	// Create alloca for the string struct
@@ -72,40 +99,42 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 
 	// Get the string content
 	const std::string &str = strExpr->value;
-	size_t len = std::min(str.length(), size_t(15)); // Cap at 15 bytes
+	size_t len = str.length();
 
-	// Get pointer to the _data array field (field 0)
-	mir::MIRValue *dataPtr = builder->createStructGEP(stringType, stringAlloca, 0, "str.data.ptr");
+	// Create a global constant for the string data
+	// This allocates the byte data in read-only memory
+	std::string globalName = ".str." + std::to_string(stringLiteralCounter++);
+	mir::MIRValue *dataPtr = module->createGlobalString(globalName, str);
 
-	// Pack the string data into two i64 values for efficient storage
-	// The array is [16 x i8], stored as two i64 words in memory
-	// First i64: bytes 0-7
-	// Second i64: bytes 8-15 (byte 15 is the length)
+	// Field 0: data []byte (fat pointer: {ptr, i32})
+	// Get pointer to the data field (field 0 of string struct)
+	mir::MIRValue *dataFieldPtr = builder->createStructGEP(stringType, stringAlloca, 0, "str.data");
 
-	uint64_t word0 = 0;
-	uint64_t word1 = 0;
-
-	// Copy bytes into word0 (bytes 0-7)
-	for (size_t i = 0; i < std::min(len, size_t(8)); i++) {
-		word0 |= (static_cast<uint64_t>(static_cast<unsigned char>(str[i])) << (i * 8));
+	// Get the unsized array type for []byte
+	mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+	if (!unsizedArrayType) {
+		// Create it if it doesn't exist
+		unsizedArrayType = module->getOrCreateStructType(
+			"__unsized_array_byte",
+			{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+		structTypes["__unsized_array_byte"] = unsizedArrayType;
 	}
 
-	// Copy bytes into word1 (bytes 8-14)
-	for (size_t i = 8; i < std::min(len, size_t(15)); i++) {
-		word1 |= (static_cast<uint64_t>(static_cast<unsigned char>(str[i])) << ((i - 8) * 8));
-	}
+	// Store the data pointer (field 0 of the fat pointer)
+	mir::MIRValue *fatPtrDataPtr = builder->createStructGEP(unsizedArrayType, dataFieldPtr, 0, "str.data.ptr");
+	builder->createStore(dataPtr, fatPtrDataPtr);
 
-	// Set byte 15 (byte 7 of word1) to the length
-	word1 |= (static_cast<uint64_t>(len) << 56);
+	// Store the length in the fat pointer (field 1 of the fat pointer)
+	mir::MIRValue *fatPtrLenPtr = builder->createStructGEP(unsizedArrayType, dataFieldPtr, 1, "str.data.len");
+	builder->createStore(builder->getInt32(static_cast<int>(len)), fatPtrLenPtr);
 
-	// Store the two words directly to the array
-	// dataPtr points to the start of the [16 x i8] array, we cast to i64* and store
-	builder->createStore(builder->getInt64(static_cast<int64_t>(word0)), dataPtr);
+	// Field 1: _len int (explicit length for the string)
+	mir::MIRValue *lenFieldPtr = builder->createStructGEP(stringType, stringAlloca, 1, "str._len");
+	builder->createStore(builder->getInt32(static_cast<int>(len)), lenFieldPtr);
 
-	// Use GEP with i8 type to get byte offset 8
-	mir::MIRValue *dataPtr8 = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
-												 {builder->getInt64(8)}, "str.data.ptr8");
-	builder->createStore(builder->getInt64(static_cast<int64_t>(word1)), dataPtr8);
+	// Field 2: _iterPos int (iteration position, starts at 0)
+	mir::MIRValue *iterPosFieldPtr = builder->createStructGEP(stringType, stringAlloca, 2, "str._iterPos");
+	builder->createStore(builder->getInt32(0), iterPosFieldPtr);
 
 	// Return the alloca pointer
 	return stringAlloca;
@@ -211,6 +240,15 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			loadType = mir::MIRType::getPtr();
 		}
 
+		// For struct parameters, we need to load the pointer first, then load the struct
+		// The alloca contains a pointer to the struct (passed by reference)
+		if (isStructParameter(varExpr->name)) {
+			// Load the pointer to the struct
+			mir::MIRValue *structPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, varExpr->name + ".ptr");
+			// Load the struct value through the pointer
+			return builder->createLoad(loadType, structPtr, varExpr->name);
+		}
+
 		return builder->createLoad(loadType, alloca, varExpr->name);
 	}
 
@@ -223,10 +261,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		mir::MIRValue *objectPtr = nullptr;
 
 		if (memberAccessExpr->object) {
-			// Complex expression (e.g., arr[0].field)
-			mir::MIRValue *objectValue = generateExpr(memberAccessExpr->object.get());
-
+			// Complex expression (e.g., arr[0].field or self._str._len)
 			if (auto *arrayIndexExpr = dynamic_cast<ArrayIndexExprAST *>(memberAccessExpr->object.get())) {
+				// Array index expression (e.g., arr[0].field)
+				mir::MIRValue *objectValue = generateExpr(memberAccessExpr->object.get());
 				std::string arrayType = variableTypes[arrayIndexExpr->arrayName];
 				if (arrayType.size() > 2 && arrayType[0] == '[') {
 					size_t closeBracket = arrayType.find(']');
@@ -234,6 +272,81 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 						varType = arrayType.substr(closeBracket + 1);
 					}
 				}
+				objectPtr = objectValue;
+			} else if (auto *nestedMemberExpr = dynamic_cast<MemberAccessExprAST *>(memberAccessExpr->object.get())) {
+				// Nested member access (e.g., self._str in self._str._len)
+				// We need to get a pointer to the intermediate struct field, NOT load it!
+				(void)nestedMemberExpr; // Used for type check above
+
+				// First, determine the base object and its type
+				std::string baseObjType;
+				mir::MIRValue *basePtr = nullptr;
+
+				// Collect the chain of member accesses
+				std::vector<MemberAccessExprAST *> chain;
+				ExprAST *current = memberAccessExpr->object.get();
+				while (auto *ma = dynamic_cast<MemberAccessExprAST *>(current)) {
+					chain.push_back(ma);
+					if (ma->object) {
+						current = ma->object.get();
+					} else {
+						// Reached the base variable
+						baseObjType = variableTypes[ma->objectName];
+						mir::MIRValue *structAlloca = namedValues[ma->objectName];
+						if (!structAlloca) {
+							throw std::runtime_error("Unknown variable: " + ma->objectName);
+						}
+						if (isStructParameter(ma->objectName)) {
+							basePtr = builder->createLoad(mir::MIRType::getPtr(), structAlloca, "struct.ptr");
+						} else {
+							basePtr = structAlloca;
+						}
+						break;
+					}
+				}
+
+				// Now traverse the chain from base to get the pointer to the intermediate field
+				// The chain is in reverse order, so we need to reverse it
+				std::reverse(chain.begin(), chain.end());
+
+				mir::MIRValue *currentPtr = basePtr;
+				std::string currentType = baseObjType;
+
+				for (auto *ma : chain) {
+					// Get the struct type
+					if (structTypes.find(currentType) == structTypes.end()) {
+						throw std::runtime_error("Expected struct type for member access: " + currentType);
+					}
+					mir::MIRType *structType = structTypes[currentType];
+					const auto &fields = structFields[currentType];
+
+					// Find the field index
+					int fieldIndex = -1;
+					std::string fieldType;
+					for (size_t i = 0; i < fields.size(); i++) {
+						if (fields[i].first == ma->memberName) {
+							fieldIndex = static_cast<int>(i);
+							fieldType = fields[i].second;
+							break;
+						}
+					}
+
+					if (fieldIndex < 0) {
+						throw std::runtime_error("Unknown field '" + ma->memberName + "' in struct '" + currentType + "'");
+					}
+
+					// GEP to get pointer to the field
+					currentPtr = builder->createStructGEP(structType, currentPtr, fieldIndex, ma->memberName);
+					currentType = fieldType;
+				}
+
+				// Now objectPtr points to the intermediate struct field
+				objectPtr = currentPtr;
+				varType = currentType;
+			} else {
+				// Other complex expression
+				mir::MIRValue *objectValue = generateExpr(memberAccessExpr->object.get());
+				varType = getExpressionMaxonType(memberAccessExpr->object.get(), variableTypes, structTypes, structFields);
 				objectPtr = objectValue;
 			}
 		} else {
@@ -337,31 +450,37 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			// For member access on struct, the result is a pointer to the array field
 			// We need to determine the element type from the expression
 			std::string elementTypeStr = "byte"; // Default for now
+			bool isUnsizedArray = false;
 
-			// Check if this is a member access - we need the type info
-			if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(arrayIndexExpr->arrayExpr.get())) {
-				// Get the struct type from the object name
-				std::string objType = variableTypes[memberExpr->objectName];
-				if (structFields.find(objType) != structFields.end()) {
-					const auto &fields = structFields[objType];
-					for (const auto &field : fields) {
-						if (field.first == memberExpr->memberName) {
-							// Parse array element type from field type "[16]byte" -> "byte"
-							std::string fieldType = field.second;
-							if (fieldType.size() > 2 && fieldType[0] == '[') {
-								size_t closeBracket = fieldType.find(']');
-								if (closeBracket != std::string::npos && closeBracket + 1 < fieldType.size()) {
-									elementTypeStr = fieldType.substr(closeBracket + 1);
-								}
-							}
-							break;
-						}
-					}
+			// Get the array field type using getExpressionMaxonType for nested member access
+			std::string arrayFieldType = getExpressionMaxonType(arrayIndexExpr->arrayExpr.get(), variableTypes, structTypes, structFields);
+			if (arrayFieldType.size() > 2 && arrayFieldType[0] == '[') {
+				size_t closeBracket = arrayFieldType.find(']');
+				if (closeBracket != std::string::npos && closeBracket + 1 < arrayFieldType.size()) {
+					std::string sizeStr = arrayFieldType.substr(1, closeBracket - 1);
+					elementTypeStr = arrayFieldType.substr(closeBracket + 1);
+					// Check for unsized array: []type (empty size)
+					isUnsizedArray = sizeStr.empty();
 				}
 			}
 
 			mir::MIRType *elementType = getTypeFromString(elementTypeStr);
-			mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayVal, indexVal, "fieldarray.idx");
+
+			// For unsized arrays, arrayVal points to the fat pointer struct {ptr, i32}
+			// We need to extract the data pointer (field 0) and load it
+			mir::MIRValue *dataPtr = arrayVal;
+			if (isUnsizedArray) {
+				// Get the unsized array struct type
+				mir::MIRType *unsizedArrayType = module->getOrCreateStructType(
+					"__unsized_array_" + elementTypeStr,
+					{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+				// Get pointer to the data pointer field (field 0)
+				mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, arrayVal, 0, "unsized.data.ptr");
+				// Load the actual data pointer
+				dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrField, "unsized.data");
+			}
+
+			mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, dataPtr, indexVal, "fieldarray.idx");
 			return builder->createLoad(elementType, elementPtr, "fieldarray.elem");
 		}
 
@@ -405,7 +524,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
 		// For == and != on Equatable struct types, route to equals method
 		if (binExpr->op == 'E' || binExpr->op == 'N') {
-			std::string leftType = getExpressionMaxonType(binExpr->left.get(), variableTypes, structTypes);
+			std::string leftType = getExpressionMaxonType(binExpr->left.get(), variableTypes, structTypes, structFields);
 
 			// Check if this is an Equatable struct type
 			auto structIt = structTypes.find(leftType);

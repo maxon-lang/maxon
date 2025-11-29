@@ -25,6 +25,9 @@ class MIRCodeGenerator {
 	std::unique_ptr<mir::MIRModule> module;
 	std::unique_ptr<mir::MIRBuilder> builder;
 
+	// Counter for unique string literal names
+	int stringLiteralCounter = 0;
+
 	// Variable tracking: name -> alloca value
 	std::map<std::string, mir::MIRValue *> namedValues;
 

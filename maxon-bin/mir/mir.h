@@ -104,6 +104,9 @@ class MIRValue {
 	// For globals and parameters
 	std::string name;
 
+	// True if this is a reference to a global variable
+	bool isGlobalRef = false;
+
 	// For basic block references
 	MIRBasicBlock *blockRef = nullptr;
 
@@ -111,6 +114,9 @@ class MIRValue {
 	MIRInstruction *definingInst = nullptr;
 
 	MIRValue(MIRValueKind k, MIRType *t) : kind(k), type(t) {}
+
+	// Constructor for creating global references by name
+	MIRValue(MIRType *t, const std::string &n) : kind(MIRValueKind::Global), type(t), name(n), isGlobalRef(true) {}
 
 	static MIRValue *createVirtualReg(MIRType *type, uint32_t id);
 	static MIRValue *createConstantInt(MIRType *type, int64_t value);
@@ -400,6 +406,9 @@ class MIRModule {
 	MIRFunction *getFunction(const std::string &name);
 	MIRGlobal *createGlobal(const std::string &name, MIRType *type);
 	MIRGlobal *getGlobal(const std::string &name);
+
+	// Create a global string constant and return a pointer to it
+	MIRValue *createGlobalString(const std::string &name, const std::string &value);
 
 	// Create or get struct type
 	MIRType *getOrCreateStructType(const std::string &name, const std::vector<MIRType *> &fields);

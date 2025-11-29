@@ -1,33 +1,32 @@
-// Test: string-type.print-string.1
+// Test: string-type.utf16-is-trail-surrogate.1
 function main() int
-    var s = "hello"
-    print(s)
+    // 0xDE00 = 56832 (low surrogate for 😀)
+    if utf16_is_trail_surrogate(56832) then print(1)
+    if utf16_is_trail_surrogate(55357) then print(0)
+    if utf16_is_trail_surrogate(65) then print(0)
     return 0
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 122
-
-%string = type { %__unsized_array_byte, i32, i32 }
-%__unsized_array_byte = type { ptr, i32 }
-%ByteView = type { %string, i32 }
-%UTF16View = type { %string, i32, i32 }
-
-@.str.0 = constant [5 x i8] c"hello\00"
+; Instructions: 120
 
 define i32 @main() {
 entry0:
-  %0 = alloca %string
-  %1 = getelementptr %string, ptr %0, i32 0, i32 0
-  %2 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 0
-  store ptr @.str.0, ptr %2
-  %3 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 1
-  store i32 5, ptr %3
-  %4 = getelementptr %string, ptr %0, i32 0, i32 1
-  store i32 5, ptr %4
-  %5 = getelementptr %string, ptr %0, i32 0, i32 2
-  store i32 0, ptr %5
-  %6 = call i32 @sys.print(ptr %0)
+  br i1 1, label %then1, label %ifcont2
+then1:
+  %1 = call i32 @sys.print(i32 1)
+  br label %ifcont2
+ifcont2:
+  br i1 0, label %then3, label %ifcont4
+then3:
+  %3 = call i32 @sys.print(i32 0)
+  br label %ifcont4
+ifcont4:
+  br i1 0, label %then5, label %ifcont6
+then5:
+  %5 = call i32 @sys.print(i32 0)
+  br label %ifcont6
+ifcont6:
   ret i32 0
 }
 
@@ -160,13 +159,13 @@ afterloop12:
   ret i32 %65
 }
 
+declare i32 @write_stdout(ptr %arg0, i32 %arg1)
+
 declare ptr @malloc(i64 %arg0)
 
 declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
-
-declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -179,29 +178,41 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 146
-
-%string = type { %__unsized_array_byte, i32, i32 }
-%__unsized_array_byte = type { ptr, i32 }
-%ByteView = type { %string, i32 }
-%UTF16View = type { %string, i32, i32 }
-
-@.str.0 = constant [5 x i8] c"hello\00"
+; Instructions: 155
 
 define i32 @main() {
 entry0:
-  %0 = alloca %string
-  %1 = getelementptr %string, ptr %0, i32 0, i32 0
-  %2 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 0
-  store ptr @.str.0, ptr %2
-  %3 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 1
-  store i32 5, ptr %3
-  %4 = getelementptr %string, ptr %0, i32 0, i32 1
-  store i32 5, ptr %4
-  %5 = getelementptr %string, ptr %0, i32 0, i32 2
-  store i32 0, ptr %5
-  %6 = call i32 @sys.print(ptr %0)
+  %0 = call i1 @string.utf16_is_trail_surrogate(i32 56832)
+  br i1 %0, label %then1, label %ifcont2
+then1:
+  %1 = call i32 @sys.print(i32 1)
+  br label %ifcont2
+ifcont2:
+  %2 = call i1 @string.utf16_is_trail_surrogate(i32 55357)
+  br i1 %2, label %then3, label %ifcont4
+then3:
+  %3 = call i32 @sys.print(i32 0)
+  br label %ifcont4
+ifcont4:
+  %4 = call i1 @string.utf16_is_trail_surrogate(i32 65)
+  br i1 %4, label %then5, label %ifcont6
+then5:
+  %5 = call i32 @sys.print(i32 0)
+  br label %ifcont6
+ifcont6:
   ret i32 0
+}
+
+define i1 @string.utf16_is_trail_surrogate(i32 %codeUnit) {
+entry0:
+  %0 = alloca i32
+  store i32 %codeUnit, ptr %0
+  %1 = load i32, ptr %0
+  %2 = icmp sge i32 %1, 56320
+  %3 = load i32, ptr %0
+  %4 = icmp sle i32 %3, 57343
+  %5 = and i1 %2, %4
+  ret i1 %5
 }
 
 define i32 @sys.print(i32 %value) {
@@ -357,13 +368,13 @@ afterloop12:
   ret i32 %65
 }
 
+declare i32 @write_stdout(ptr %arg0, i32 %arg1)
+
 declare ptr @malloc(i64 %arg0)
 
 declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
-
-declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -376,4 +387,4 @@ entry0:
 
 ---
 ExitCode: 0
-Stdout: hello
+Stdout: 1

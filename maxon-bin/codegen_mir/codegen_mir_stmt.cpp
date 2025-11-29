@@ -178,11 +178,16 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		}
 
 		// Handle string literal initialization
-		// String literals return a pointer to a stack-allocated string struct
-		// We use that directly as the variable's storage
+		// generateStringLiteral creates an alloca, initializes it, and returns the pointer
+		// We use that alloca directly (don't create a second one)
 		if (auto *strLiteral = dynamic_cast<StringLiteralExprAST *>(varDecl->initializer.get())) {
-			mir::MIRValue *stringPtr = generateStringLiteral(strLiteral);
-			namedValues[varDecl->name] = stringPtr;
+			mir::MIRValue *stringAlloca = generateStringLiteral(strLiteral);
+
+			// Use the alloca from generateStringLiteral directly
+			// Rename it to match the variable name
+			stringAlloca->name = varDecl->name;
+
+			namedValues[varDecl->name] = stringAlloca;
 			variableTypes[varDecl->name] = "string";
 			return;
 		}
@@ -895,6 +900,9 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		mir::MIRValue *iteratorAlloca = builder->createAlloca(iteratorVal->type, "__iter");
 		builder->createStore(iteratorVal, iteratorAlloca);
 
+		// Get the iterator type name to look up the correct Iterable methods
+		std::string iterTypeName = iteratorVal->type->structName;
+
 		mir::MIRBasicBlock *condBB = builder->createBasicBlock("forcond");
 		mir::MIRBasicBlock *loopBB = builder->createBasicBlock("forloop");
 		mir::MIRBasicBlock *incrementBB = builder->createBasicBlock("forincrement");
@@ -907,9 +915,16 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		// Condition block
 		builder->setInsertPoint(condBB);
 
-		mir::MIRFunction *hasNextFunc = module->getFunction("hasNext");
+		// Look up TypeName.hasNext first, then fall back to suffix matching
+		mir::MIRFunction *hasNextFunc = nullptr;
+		if (!iterTypeName.empty()) {
+			hasNextFunc = module->getFunction(iterTypeName + ".hasNext");
+		}
 		if (!hasNextFunc) {
-			// Try suffix matching
+			hasNextFunc = module->getFunction("hasNext");
+		}
+		if (!hasNextFunc) {
+			// Try suffix matching as last resort
 			for (auto &func : module->functions) {
 				if (func->name.size() > 8 &&
 					func->name.substr(func->name.size() - 8) == ".hasNext") {
@@ -931,7 +946,14 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		// Loop body
 		builder->setInsertPoint(loopBB);
 
-		mir::MIRFunction *getCurrentFunc = module->getFunction("getCurrent");
+		// Look up TypeName.getCurrent first, then fall back to suffix matching
+		mir::MIRFunction *getCurrentFunc = nullptr;
+		if (!iterTypeName.empty()) {
+			getCurrentFunc = module->getFunction(iterTypeName + ".getCurrent");
+		}
+		if (!getCurrentFunc) {
+			getCurrentFunc = module->getFunction("getCurrent");
+		}
 		if (!getCurrentFunc) {
 			for (auto &func : module->functions) {
 				if (func->name.size() > 11 &&
@@ -962,7 +984,14 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		// Increment block
 		builder->setInsertPoint(incrementBB);
 
-		mir::MIRFunction *nextFunc = module->getFunction("next");
+		// Look up TypeName.next first, then fall back to suffix matching
+		mir::MIRFunction *nextFunc = nullptr;
+		if (!iterTypeName.empty()) {
+			nextFunc = module->getFunction(iterTypeName + ".next");
+		}
+		if (!nextFunc) {
+			nextFunc = module->getFunction("next");
+		}
 		if (!nextFunc) {
 			for (auto &func : module->functions) {
 				if (func->name.size() > 5 &&
@@ -1066,9 +1095,11 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			const auto &fields = structFields[structInitExpr->structName];
 			for (const auto &initField : structInitExpr->fields) {
 				int fieldIndex = -1;
+				std::string fieldType;
 				for (size_t j = 0; j < fields.size(); j++) {
 					if (fields[j].first == initField.name) {
 						fieldIndex = static_cast<int>(j);
+						fieldType = fields[j].second;
 						break;
 					}
 				}
@@ -1081,7 +1112,18 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 				mir::MIRValue *fieldValue = generateExpr(initField.value.get());
 				mir::MIRValue *fieldPtr = builder->createStructGEP(structType, structAlloca,
 																   fieldIndex, initField.name);
-				builder->createStore(fieldValue, fieldPtr);
+
+				// If the field is an unsized array type (like []byte), the value from generateExpr
+				// is a pointer to the fat pointer. We need to load the fat pointer struct and
+				// store it (copy semantics for the fat pointer).
+				if (fieldType.size() >= 2 && fieldType[0] == '[' && fieldType[1] == ']') {
+					// Unsized array - load the fat pointer struct
+					mir::MIRType *fatPtrType = structType->fieldTypes[fieldIndex];
+					mir::MIRValue *fatPtrValue = builder->createLoad(fatPtrType, fieldValue, initField.name + ".fatptr");
+					builder->createStore(fatPtrValue, fieldPtr);
+				} else {
+					builder->createStore(fieldValue, fieldPtr);
+				}
 			}
 
 			// Load the struct for return

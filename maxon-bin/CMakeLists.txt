@@ -13,12 +13,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Enable parallel compilation and optimization flags
-add_compile_options(
-	-Wall
-	-Werror
-	-Wno-unused-parameter
-	-Wno-sign-compare
-)
+if(MSVC)
+	add_compile_options(/W3)
+else()
+	add_compile_options(
+		-Wall
+		-Werror
+		-Wno-unused-parameter
+		-Wno-sign-compare
+	)
+endif()
 
 # SIMD optimization flags (required for SIMD lexer/parser)
 if(MSVC)

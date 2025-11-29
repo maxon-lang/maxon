@@ -7,6 +7,7 @@
 
 // Forward declarations
 class Visitor;
+class FunctionAST;
 
 // Base AST Node
 class ASTNode {
@@ -431,16 +432,18 @@ class StructDefAST : public ASTNode {
 	std::string name;
 	std::string namespaceName; // Namespace this struct belongs to (derived from file path)
 	std::vector<StructField> fields;
-	std::vector<std::string> conformsTo; // Interface names this struct conforms to (via 'is')
-	bool isExported;					 // true if this struct is exported (visible outside this file)
+	std::vector<std::unique_ptr<FunctionAST>> methods; // Methods declared inside the struct
+	std::vector<std::string> conformsTo;			   // Interface names this struct conforms to (via 'is')
+	bool isExported;								   // true if this struct is exported (visible outside this file)
 	int line;
 	int column;
 
 	StructDefAST(const std::string &n, std::vector<StructField> f, int l = 0, int c = 0,
 				 const std::string &ns = "", bool exp = false,
-				 std::vector<std::string> interfaces = {})
-		: name(n), namespaceName(ns), fields(std::move(f)), conformsTo(std::move(interfaces)),
-		  isExported(exp), line(l), column(c) {}
+				 std::vector<std::string> interfaces = {},
+				 std::vector<std::unique_ptr<FunctionAST>> m = {})
+		: name(n), namespaceName(ns), fields(std::move(f)), methods(std::move(m)),
+		  conformsTo(std::move(interfaces)), isExported(exp), line(l), column(c) {}
 };
 
 // Struct initialization expression (struct literal)

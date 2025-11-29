@@ -12,13 +12,14 @@ This reference provides complete syntax and semantics for the Maxon programming 
 1. [Program Structure](#program-structure)
 2. [Lexical Elements](#lexical-elements)
 3. [Types](#types)
-4. [Variables](#variables)
-5. [Functions](#functions)
-6. [Expressions](#expressions)
-7. [Statements](#statements)
-8. [Namespaces](#namespaces)
-9. [Standard Library](#standard-library)
-10. [Memory Model](#memory-model)
+4. [Structs](#structs)
+5. [Variables](#variables)
+6. [Functions](#functions)
+7. [Expressions](#expressions)
+8. [Statements](#statements)
+9. [Namespaces](#namespaces)
+10. [Standard Library](#standard-library)
+11. [Memory Model](#memory-model)
 
 ---
 
@@ -59,8 +60,8 @@ Single-line comments only:
 ### Keywords
 ```
 and, as, bool, break, char, continue, else, end, export, extern,
-false, float, for, function, if, in, int, let, not, or,
-return, then, true, var, while
+false, float, for, function, if, in, int, interface, is, let, not, or,
+return, struct, then, true, var, while
 ```
 
 ### Literals
@@ -241,6 +242,101 @@ var i2 = round(f)  // 4 (nearest)
 var i3 = floor(f)  // 3 (down)
 var i4 = ceil(f)   // 4 (up)
 ```
+
+---
+
+## Structs
+
+### Declaration
+Structs are user-defined composite types containing named fields:
+
+```maxon
+struct Point
+    x int
+    y int
+end 'Point'
+```
+
+### Struct Literals
+Create struct instances using field initializers:
+
+```maxon
+var p = Point{x: 10, y: 20}
+var origin = Point{x: 0, y: 0}
+```
+
+### Field Access
+Access fields using dot notation:
+
+```maxon
+var p = Point{x: 10, y: 20}
+var xVal = p.x           // Read field
+p.x = 15                 // Write field (if var, not let)
+```
+
+### Methods
+
+Methods are defined **inside the struct body** with an explicit `self` parameter:
+
+```maxon
+struct Point
+    x int
+    y int
+
+    function add(self Point, other Point) Point
+        return Point{x: self.x + other.x, y: self.y + other.y}
+    end 'add'
+
+    export function magnitude(self Point) float
+        return sqrt((self.x * self.x + self.y * self.y) as float)
+    end 'magnitude'
+end 'Point'
+```
+
+**Method Syntax Rules:**
+- Methods must be declared inside the struct body
+- The first parameter must be named `self` with the struct's type
+- Use `export` keyword before `function` to export individual methods
+- Methods are called with `Type.method(instance, args)` syntax
+
+### Calling Methods
+
+Methods are called using explicit type qualification:
+
+```maxon
+var p1 = Point{x: 10, y: 20}
+var p2 = Point{x: 5, y: 10}
+var p3 = Point.add(p1, p2)      // p3 = {x: 15, y: 30}
+var mag = Point.magnitude(p1)
+```
+
+### Interfaces
+
+Interfaces define a set of method signatures that structs can implement:
+
+```maxon
+interface Hashable
+    function hash(self Self) int
+end 'Hashable'
+```
+
+Structs declare conformance using the `is` keyword:
+
+```maxon
+struct Point is Hashable
+    x int
+    y int
+
+    function hash(self Point) int
+        return self.x + self.y * 31
+    end 'hash'
+end 'Point'
+```
+
+**Interface Notes:**
+- `Self` in interface signatures refers to the conforming type
+- A struct can conform to multiple interfaces: `struct Foo is A, B`
+- Methods implementing interface requirements follow the same syntax as regular methods
 
 ---
 
@@ -648,7 +744,7 @@ Located in `stdlib/` directory:
 - No null checks
 
 ### Calling Convention
-- Simple types (int, float, bool, char, ptr) passed by value
+- Simple types (int, float, bool, char) passed by value
 - Arrays passed as pointer
 - Return values passed by value (in register or stack)
 
@@ -704,19 +800,6 @@ for i in range(0, numbers.length) 'iter'
 end 'iter'
 ```
 
-### String Output via Extern
-```maxon
-extern function GetStdHandle(nStdHandle int) ptr
-extern function WriteFile(hFile ptr, lpBuffer ptr, nBytes int, written ptr, overlapped ptr) int
-
-function main() int
-    let stdout = GetStdHandle(-11)
-    var written = 0
-    var message = "Hello, World!\n"
-    WriteFile(stdout, message, 14, &written, 0 as ptr)
-    return 0
-end 'main'
-```
 
 ### Factorial Example
 ```maxon
@@ -893,7 +976,7 @@ var elem = arr[0]
 var size = arr.length
 
 // Types
-int float bool char ptr
+int float bool char
 [N]type    // fixed-size array
 []type     // unsized array (parameters)
 
@@ -902,7 +985,6 @@ int float bool char ptr
 = != < > <= >=               // comparison
 and or not                   // logical
 as                           // type cast
-& *                          // address-of, dereference
 
 // Literals
 42                           // int

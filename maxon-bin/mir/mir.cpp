@@ -594,6 +594,26 @@ MIRGlobal *MIRModule::getGlobal(const std::string &globalName) {
 	return nullptr;
 }
 
+MIRValue *MIRModule::createGlobalString(const std::string &globalName, const std::string &value) {
+	// Create array type for the string data [N x i8]
+	size_t len = value.length();
+	MIRType *charType = MIRType::getInt8();
+	MIRType *arrayType = MIRType::getArray(charType, len);
+
+	// Create the global
+	auto global = std::make_unique<MIRGlobal>(globalName, arrayType);
+	global->setStringInitializer(value);
+	global->isConstant = true;
+
+	globals.push_back(std::move(global));
+
+	// Return a value that references this global
+	// The value represents a pointer to the global's data
+	MIRValue *globalRef = new MIRValue(MIRType::getPtr(), globalName);
+	globalRef->isGlobalRef = true;
+	return globalRef;
+}
+
 MIRType *MIRModule::getOrCreateStructType(const std::string &structName, const std::vector<MIRType *> &fields) {
 	auto it = structTypes.find(structName);
 	if (it != structTypes.end()) {

@@ -32,6 +32,7 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
 	{"char", {KeywordCategory::Type, "Extended Grapheme Cluster (user-perceived character)"}},
 	{"byte", {KeywordCategory::Type, "8-bit unsigned integer"}},
 	{"bool", {KeywordCategory::Type, "Boolean type"}},
+	{"string", {KeywordCategory::Type, "UTF-8 encoded string type"}},
 
 	// Control flow
 	{"if", {KeywordCategory::ControlFlow, "Conditional statement"}},

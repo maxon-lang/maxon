@@ -583,7 +583,15 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				}
 			}
 
-			addError("Struct '" + objectType + "' has no field named '" + memberAccessExpr->memberName + "'",
+			// Not a field - check if it's a method call (Type.method)
+			std::string methodName = objectType + "." + memberAccessExpr->memberName;
+			auto methodIt = functions.find(methodName);
+			if (methodIt != functions.end()) {
+				// Found a method - return its return type
+				return methodIt->second.returnType;
+			}
+
+			addError("Struct '" + objectType + "' has no field or method named '" + memberAccessExpr->memberName + "'",
 					 expr->line, expr->column);
 			return "error";
 		}
@@ -594,24 +602,16 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return "int";
 		}
 
-		// Support string methods
-		if (objectType == "string") {
-			if (memberAccessExpr->memberName == "count") {
-				// Returns codepoint count
-				return "int";
-			}
-			if (memberAccessExpr->memberName == "isEmpty") {
-				// Returns bool
-				return "bool";
-			}
-			addError("Unknown string member: " + memberAccessExpr->memberName,
-					 expr->line, expr->column);
-			return "error";
-		} else {
-			addError("Unknown member: " + memberAccessExpr->memberName,
-					 expr->line, expr->column);
-			return "error";
+		// Check if objectType.memberName is a known method
+		std::string methodName = objectType + "." + memberAccessExpr->memberName;
+		auto methodIt = functions.find(methodName);
+		if (methodIt != functions.end()) {
+			return methodIt->second.returnType;
 		}
+
+		addError("Unknown member: " + memberAccessExpr->memberName + " on type " + objectType,
+				 expr->line, expr->column);
+		return "error";
 	} else if (auto structInitExpr = dynamic_cast<StructInitExprAST *>(expr)) {
 		// Check if struct type exists
 		if (lookupStruct(structInitExpr->structName) == nullptr) {

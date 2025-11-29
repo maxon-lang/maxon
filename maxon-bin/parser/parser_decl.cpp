@@ -56,19 +56,20 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	Token funcToken = expectKeyword("function", "Expected 'function'");
 	Token name = expect(TokenType::IDENTIFIER, "Expected function name");
 
-	// Check for method syntax: function Type.method(...)
-	std::string receiverType = "";
-	std::string methodName = name.value;
+	// Reject external method syntax: function Type.method(...)
+	// Methods must be declared inside struct bodies
 	if (check(TokenType::DOT)) {
-		// This is a method definition: function ReceiverType.methodName(...)
-		receiverType = name.value;
-		advance(); // consume '.'
-		Token methodToken = expect(TokenType::IDENTIFIER, "Expected method name after '.'");
-		methodName = methodToken.value;
+		throw std::runtime_error("Methods must be declared inside struct bodies, not using 'function Type.method()' syntax\n"
+								 "  Move this method inside the '" +
+								 name.value + "' struct definition\n"
+											  "  Location: line " +
+								 std::to_string(funcToken.line) +
+								 ", column " + std::to_string(funcToken.column));
 	}
 
-	logTrace(std::string("Parsing ") + (receiverType.empty() ? "function" : "method") + " '" +
-			 (receiverType.empty() ? methodName : receiverType + "." + methodName) + "'" +
+	std::string functionName = name.value;
+
+	logTrace(std::string("Parsing function '") + functionName + "'" +
 			 (isExtern ? " (extern)" : "") +
 			 (isExported ? " (exported)" : "") +
 			 " at line " + std::to_string(funcToken.line));
@@ -159,11 +160,11 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 		bool isStaticLib = findStaticLibrary(libName, libPath);
 
 		if (isStaticLib) {
-			logTrace("Extern function '" + methodName + "' -> " + returnType + " from static lib '" + libPath + "' (" + std::to_string(parameters.size()) + " params)");
+			logTrace("Extern function '" + functionName + "' -> " + returnType + " from static lib '" + libPath + "' (" + std::to_string(parameters.size()) + " params)");
 		} else {
-			logTrace("Extern function '" + methodName + "' -> " + returnType + " from DLL '" + libName + "' (" + std::to_string(parameters.size()) + " params)");
+			logTrace("Extern function '" + functionName + "' -> " + returnType + " from DLL '" + libName + "' (" + std::to_string(parameters.size()) + " params)");
 		}
-		return std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported, libName, isStaticLib, libPath, receiverType);
+		return std::make_unique<FunctionAST>(functionName, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported, libName, isStaticLib, libPath, "");
 	}
 
 	// Parse function body
@@ -173,21 +174,133 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 	expectKeywordAdvance("end", "Expected 'end' to close function body");
 
-	// Function/method has implicit block identifier which is the function/method name
+	// Function has implicit block identifier which is the function name
 	// Require matching block identifier after end
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected function name as block identifier after 'end'");
-	if (endBlockIdToken.value != methodName) {
+	if (endBlockIdToken.value != functionName) {
 		throw std::runtime_error("Block identifier mismatch in function definition" +
-								 std::string("\n  Expected: '") + methodName + "'" +
+								 std::string("\n  Expected: '") + functionName + "'" +
 								 "\n  Found: '" + endBlockIdToken.value + "'" +
 								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
 								 ", column " + std::to_string(endBlockIdToken.column) +
 								 "\n  Note: The 'end' block identifier must match the function name");
 	}
 
-	logTrace((receiverType.empty() ? "Function" : "Method") + std::string(" '") + methodName + "' -> " + returnType + " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
+	logTrace(std::string("Function '") + functionName + "' -> " + returnType + " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
 
-	return std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported, "", false, "", receiverType);
+	return std::make_unique<FunctionAST>(functionName, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported, "", false, "", "");
+}
+
+// Parse a method declaration inside a struct body
+// The receiverType is implicitly the struct name (passed in)
+std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) {
+	// Check for export keyword
+	bool isExported = false;
+	if (checkKeyword("export")) {
+		isExported = true;
+		advance(); // consume 'export'
+	}
+
+	Token funcToken = expectKeyword("function", "Expected 'function'");
+	Token name = expect(TokenType::IDENTIFIER, "Expected method name");
+	std::string methodName = name.value;
+
+	logTrace(std::string("Parsing method '") + structName + "." + methodName + "'" +
+			 (isExported ? " (exported)" : "") +
+			 " at line " + std::to_string(funcToken.line));
+
+	expectAdvance(TokenType::LPAREN, "Expected '('");
+
+	// Parse method parameters
+	std::vector<FunctionParameter> parameters;
+	if (!check(TokenType::RPAREN)) {
+		do {
+			Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
+
+			// Check for array type: []type only (sized arrays not allowed in parameters)
+			std::string paramType;
+			if (check(TokenType::LBRACKET)) {
+				advance(); // consume '['
+
+				// Array parameters must be unsized - reject [N]type syntax
+				if (check(TokenType::NUMBER)) {
+					throw std::runtime_error("Array parameters must be unsized: use []type, not [" + std::string(currentValue()) + "]type\n  Location: line " +
+											 std::to_string(currentLine()) + ", column " +
+											 std::to_string(currentColumn()));
+				}
+
+				expectAdvance(TokenType::RBRACKET, "Expected ']' after '['");
+
+				// Get element type
+				std::string elementType;
+				auto kd = currentKeywordData();
+				if (kd && kd->category == KeywordCategory::Type) {
+					elementType = std::string(currentValue());
+					advance();
+				} else if (check(TokenType::IDENTIFIER)) {
+					elementType = parseQualifiedName("array element type");
+				} else {
+					throw std::runtime_error("Expected array element type (int, float, ptr, char, string, bool, or struct name)\n  Location: line " +
+											 std::to_string(currentLine()) + ", column " +
+											 std::to_string(currentColumn()));
+				}
+
+				// All array parameters are unsized
+				paramType = "[]" + elementType;
+			} else {
+				// Regular scalar type (or struct)
+				auto kd2 = currentKeywordData();
+				if (kd2 && kd2->category == KeywordCategory::Type) {
+					paramType = std::string(currentValue());
+					advance();
+				} else if (check(TokenType::IDENTIFIER)) {
+					paramType = parseQualifiedName("parameter type");
+				} else {
+					throw std::runtime_error("Expected parameter type (int, float, ptr, char, string, bool, struct name, or [size]type)\n  Location: line " +
+											 std::to_string(currentLine()) + ", column " +
+											 std::to_string(currentColumn()));
+				}
+			}
+
+			parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
+		} while (match(TokenType::COMMA));
+	}
+
+	expectAdvance(TokenType::RPAREN, "Expected ')'");
+
+	// Parse return type (optional - defaults to void)
+	std::string returnType = "void";
+	auto retKd = currentKeywordData();
+	if ((retKd && retKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+		returnType = std::string(currentValue());
+		advance();
+	}
+
+	std::vector<std::unique_ptr<StmtAST>> body;
+
+	// Parse method body
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+		body.push_back(parseStatement());
+	}
+
+	expectKeywordAdvance("end", "Expected 'end' to close method body");
+
+	// Method has implicit block identifier which is the method name
+	// Require matching block identifier after end
+	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected method name as block identifier after 'end'");
+	if (endBlockIdToken.value != methodName) {
+		throw std::runtime_error("Block identifier mismatch in method definition" +
+								 std::string("\n  Expected: '") + methodName + "'" +
+								 "\n  Found: '" + endBlockIdToken.value + "'" +
+								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
+								 ", column " + std::to_string(endBlockIdToken.column) +
+								 "\n  Note: The 'end' block identifier must match the method name");
+	}
+
+	logTrace(std::string("Method '") + structName + "." + methodName + "' -> " + returnType + " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
+
+	// receiverType is set to structName
+	return std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body), false, funcToken.line, funcToken.column, defaultNamespace, isExported, "", false, "", structName);
 }
 
 std::unique_ptr<StructDefAST> Parser::parseStruct() {
@@ -216,10 +329,28 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 	}
 
 	std::vector<StructField> fields;
+	std::vector<std::unique_ptr<FunctionAST>> methods;
+	bool parsingFields = true; // Fields must come before methods
 
-	// Parse fields until we hit 'end'
+	// Parse fields and methods until we hit 'end'
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		Token fieldNameToken = expect(TokenType::IDENTIFIER, "Expected field name");
+		// Check for method: 'function' or 'export function'
+		if (checkKeyword("function") || (checkKeyword("export") && checkKeyword("function", 1))) {
+			parsingFields = false; // Once we see a method, no more fields allowed
+			methods.push_back(parseMethod(structName));
+			continue;
+		}
+
+		// If we're past fields section and see something that's not a method, error
+		if (!parsingFields) {
+			throw std::runtime_error("Fields must be declared before methods in struct '" + structName + "'\n"
+																										 "  Location: line " +
+									 std::to_string(currentLine()) +
+									 ", column " + std::to_string(currentColumn()));
+		}
+
+		// Parse field: name type
+		Token fieldNameToken = expect(TokenType::IDENTIFIER, "Expected field name or 'function' keyword");
 		std::string fieldName = fieldNameToken.value;
 
 		std::string fieldType;
@@ -278,7 +409,7 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 								 std::string(", column ") + std::to_string(blockIdToken.column));
 	}
 
-	return std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo));
+	return std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo), std::move(methods));
 }
 
 std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &structName) {

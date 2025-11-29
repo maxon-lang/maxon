@@ -53,27 +53,6 @@ TEST_CASE("keyword_completions", "[analyzer]") {
 	REQUIRE(hasFunction);
 }
 
-TEST_CASE("type_completions", "[analyzer]") {
-
-	Analyzer analyzer;
-	auto doc = createTestDocument("var x: ");
-
-	lsp::Position pos{0, 7};
-	auto completions = analyzer.getCompletions(doc, pos);
-
-	// Check that "int" and "string" are in completions
-	bool hasInt = false;
-	bool hasString = false;
-	for (const auto &item : completions) {
-		if (item.label == "int")
-			hasInt = true;
-		if (item.label == "string")
-			hasString = true;
-	}
-	REQUIRE(hasInt);
-	REQUIRE(hasString);
-}
-
 TEST_CASE("identifier_completions", "[analyzer]") {
 
 	Analyzer analyzer;

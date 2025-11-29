@@ -72,12 +72,21 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return mir::MIRType::getInt32(); // Default type
 	}
 
-	// Check for array type: [size]elementType
+	// Check for array type: [size]elementType or []elementType (unsized)
 	if (typeStr.size() > 2 && typeStr[0] == '[') {
 		size_t closeBracket = typeStr.find(']');
 		if (closeBracket != std::string::npos) {
 			std::string sizeStr = typeStr.substr(1, closeBracket - 1);
 			std::string elemType = typeStr.substr(closeBracket + 1);
+
+			// Unsized array []type - represented as struct { ptr, length }
+			if (sizeStr.empty()) {
+				mir::MIRType *ptrType = mir::MIRType::getPtr();
+				mir::MIRType *lengthType = mir::MIRType::getInt32();
+				return module->getOrCreateStructType("__unsized_array_" + elemType, {ptrType, lengthType});
+			}
+
+			// Sized array [N]type
 			int size = std::stoi(sizeStr);
 			mir::MIRType *elementType = getTypeFromString(elemType);
 			return mir::MIRType::getArray(elementType, size);
@@ -360,8 +369,11 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	}
 
 	// Second pass: Create all function declarations and register extern functions
-	logDetail("Pass 2: Creating function declarations (" + std::to_string(program->functions.size()) + " functions)");
-	for (auto &func : program->functions) {
+	// This includes both top-level functions and methods declared inside structs
+	logDetail("Pass 2: Creating function declarations");
+
+	// Helper lambda to declare a function/method
+	auto declareFunction = [&](FunctionAST *func, const std::string &namespaceName) {
 		mir::MIRType *returnType = getTypeFromString(func->returnType);
 
 		std::vector<mir::MIRType *> paramTypes;
@@ -378,8 +390,8 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		if (!func->receiverType.empty()) {
 			// This is a method
 			functionName = func->receiverType + "." + func->name;
-		} else if (!func->namespaceName.empty()) {
-			functionName = func->namespaceName + "." + func->name;
+		} else if (!namespaceName.empty()) {
+			functionName = namespaceName + "." + func->name;
 		} else {
 			functionName = func->name;
 		}
@@ -389,7 +401,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		if (func->isExtern) {
 			// External declaration - register for Safe FFI
 			builder->declareFunction(functionName, returnType, paramTypes);
-			registerExternFunction(func.get());
+			registerExternFunction(func);
 		} else {
 			// Will be defined later - create declaration first
 			mir::MIRFunction *mirFunc = module->createFunction(functionName, returnType);
@@ -413,6 +425,18 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 				}
 			}
 		}
+	};
+
+	// First, declare methods from struct definitions
+	for (auto &structDef : program->structs) {
+		for (auto &method : structDef->methods) {
+			declareFunction(method.get(), structDef->namespaceName);
+		}
+	}
+
+	// Then declare top-level functions
+	for (auto &func : program->functions) {
+		declareFunction(func.get(), func->namespaceName);
 	}
 
 	// Generate Safe FFI infrastructure (only if there are extern functions)
@@ -425,8 +449,17 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		generateFFIWorkerMain(); // Worker subprocess main loop (provided by runtime)
 	}
 
-	// Third pass: Generate function bodies
+	// Third pass: Generate function bodies (both methods inside structs and top-level functions)
 	logDetail("Pass 3: Generating function bodies");
+
+	// First, generate method bodies from structs
+	for (auto &structDef : program->structs) {
+		for (auto &method : structDef->methods) {
+			generateFunction(method.get(), structDef->namespaceName);
+		}
+	}
+
+	// Then generate top-level function bodies
 	for (auto &func : program->functions) {
 		if (!func->isExtern) {
 			generateFunction(func.get(), func->namespaceName);

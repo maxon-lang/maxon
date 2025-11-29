@@ -12,6 +12,8 @@ You *Are* Going To Read It
 - cross compiling
 - command line arguments for main
 - refactor lsp semantic analyzer with compiler
+- enums
+- remove ptr
 
 ## Ideas
 - array syntax: var x = array of 10 int
@@ -26,6 +28,9 @@ You *Are* Going To Read It
         var value: Value
     }	
 
+
+- how to have the language prevent users doing this
+The Trap: If you make an O(n) operation look like a property (s.count), a user might innocently write for i in 0..s.count, inadvertently creating an O(n²) loop because the language recalculates the count on every iteration.
 
 add "run" to maxon
 add "build" to maxon

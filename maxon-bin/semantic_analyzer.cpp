@@ -164,15 +164,37 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	}
 
 	// Second pass: collect all function declarations and build function index map
+	// This includes both top-level functions and methods declared inside structs
 	logTrace("Pass 2: Collecting function declarations");
 	functionIndices.clear(); // Reset indices for new analysis
 	size_t nextFunctionId = 0;
 
+	// First, register methods from struct definitions (inline methods)
+	for (const auto &structDef : program->structs) {
+		for (const auto &method : structDef->methods) {
+			// Method key is StructName.methodName
+			std::string methodKey = structDef->name + "." + method->name;
+
+			logTrace("Registering method: " + methodKey + " -> " + method->returnType);
+
+			if (functions.find(methodKey) != functions.end()) {
+				addError("Method '" + methodKey + "' is already defined" +
+							 std::string("\n  Note: Each method name must be unique within its struct"),
+						 method->line, method->column);
+			} else {
+				functions.emplace(methodKey, FunctionInfo(methodKey, method->returnType, method->parameters));
+				functionIndices[methodKey] = nextFunctionId++;
+			}
+		}
+	}
+
+	// Then register top-level functions
 	for (const auto &func : program->functions) {
 		// Build the function key: for methods use ReceiverType.methodName, otherwise use namespace.name
 		std::string functionKey;
 		if (func->isMethod()) {
-			// Method: use ReceiverType.methodName
+			// Method: use ReceiverType.methodName (this path shouldn't be hit anymore,
+			// but kept for backward compatibility with any edge cases)
 			functionKey = func->receiverType + "." + func->name;
 		} else {
 			// Regular function: use namespace.name
@@ -206,8 +228,17 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 		}
 	}
 
-	// Third pass: analyze each function
+	// Third pass: analyze each function and method body
 	logTrace("Pass 3: Analyzing function bodies");
+
+	// Analyze methods inside structs first
+	for (const auto &structDef : program->structs) {
+		for (const auto &method : structDef->methods) {
+			analyzeFunction(method.get());
+		}
+	}
+
+	// Then analyze top-level functions
 	for (const auto &func : program->functions) {
 		analyzeFunction(func.get());
 	}

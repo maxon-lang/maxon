@@ -14,7 +14,7 @@ Interfaces define interfaces that structs can conform to. Key implementation:
 - `interface` keyword parsed in `Parser::parseInterface()` (parser_decl.cpp)
 - Interface AST node `InterfaceDefAST` contains method signatures
 - Struct conformance declared with `is` keyword: `struct Foo is Interface1, Interface2`
-- Method syntax: `function Type.method(self Type, ...) RetType`
+- **Methods defined inside struct body** with explicit `self` parameter
 - Methods registered with qualified name `ReceiverType.methodName` in semantic analyzer
 - `Self` type in interface signatures replaced with conforming type during checking
 - Conformance validation in `SemanticAnalyzer::checkInterfaceConformance()`
@@ -60,15 +60,31 @@ end 'Point'
 
 ### Method Implementation
 
-Methods are defined using the `function Type.method(...)` syntax:
+Methods are defined **inside the struct body** using the `function` keyword with an explicit `self` parameter:
 
 ```maxon
-function Point.hash(self Point) int
-    return self.x + self.y * 31
-end 'hash'
+struct Point is Hashable
+    x int
+    y int
+
+    function hash(self Point) int
+        return self.x + self.y * 31
+    end 'hash'
+end 'Point'
 ```
 
-The first parameter is typically named `self` and has the receiver type.
+The first parameter must be named `self` and have the struct's type. Methods can be exported with the `export` keyword:
+
+```maxon
+struct Point
+    x int
+    y int
+
+    export function getX(self Point) int
+        return self.x
+    end 'getX'
+end 'Point'
+```
 
 ### Calling Methods
 
@@ -91,11 +107,11 @@ end 'Cloneable'
 struct Point is Cloneable
     x int
     y int
-end 'Point'
 
-function Point.clone(self Point) Point
-    return Point{x: self.x, y: self.y}
-end 'clone'
+    function clone(self Point) Point
+        return Point{x: self.x, y: self.y}
+    end 'clone'
+end 'Point'
 ```
 
 ### Standard Library Interfaces
@@ -123,11 +139,11 @@ end 'Hashable'
 struct Point is Hashable
     x int
     y int
-end 'Point'
 
-function Point.hash(self Point) int
-    return self.x + self.y * 31
-end 'hash'
+    function hash(self Point) int
+        return self.x + self.y * 31
+    end 'hash'
+end 'Point'
 
 function main() int
     var p = Point{x: 10, y: 20}
@@ -153,11 +169,11 @@ end 'Hashable'
 struct Point is Hashable
     x int
     y int
-end 'Point'
 
-function Point.hash(self Point) int
-    return self.x + self.y * 31
-end 'hash'
+    function hash(self Point) int
+        return self.x + self.y * 31
+    end 'hash'
+end 'Point'
 
 function main() int
     var p = Point{x: 10, y: 20}
@@ -178,15 +194,15 @@ end 'Describable'
 
 struct Counter is Describable
     count int
+
+    function describe(self Counter) int
+        return 100 + self.count
+    end 'describe'
+
+    function value(self Counter) int
+        return self.count
+    end 'value'
 end 'Counter'
-
-function Counter.describe(self Counter) int
-    return 100 + self.count
-end 'describe'
-
-function Counter.value(self Counter) int
-    return self.count
-end 'value'
 
 function main() int
     var c = Counter{count: 42}
@@ -206,11 +222,11 @@ end 'Calculator'
 
 struct Accumulator is Calculator
     total int
-end 'Accumulator'
 
-function Accumulator.add(self Accumulator, n int) int
-    return self.total + n
-end 'add'
+    function add(self Accumulator, n int) int
+        return self.total + n
+    end 'add'
+end 'Accumulator'
 
 function main() int
     var acc = Accumulator{total: 10}
@@ -235,16 +251,16 @@ end 'Equatable'
 struct Point is Hashable, Equatable
     x int
     y int
+
+    function hash(self Point) int
+        return self.x + self.y
+    end 'hash'
+
+    function equals(self Point, other Point) int
+        if self.x == other.x and self.y == other.y then return 1
+        return 0
+    end 'equals'
 end 'Point'
-
-function Point.hash(self Point) int
-    return self.x + self.y
-end 'hash'
-
-function Point.equals(self Point, other Point) int
-    if self.x == other.x and self.y == other.y then return 1
-    return 0
-end 'equals'
 
 function main() int
     var p1 = Point{x: 3, y: 4}
@@ -266,11 +282,11 @@ end 'Movable'
 struct Point is Movable
     x int
     y int
-end 'Point'
 
-function Point.move(self Point, dx int, dy int) Point
-    return Point{x: self.x + dx, y: self.y + dy}
-end 'move'
+    function move(self Point, dx int, dy int) Point
+        return Point{x: self.x + dx, y: self.y + dy}
+    end 'move'
+end 'Point'
 
 function main() int
     var p = Point{x: 10, y: 20}

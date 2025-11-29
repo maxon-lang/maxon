@@ -1,52 +1,38 @@
-// Test: string-type.isEmpty-property.1
+// Test: string-type.utf16-is-bmp.1
 function main() int
-    var empty = ""
-    var nonempty = "hello"
-    if empty.isEmpty 'check1'
-        print(1)
-    end 'check1'
-    if nonempty.isEmpty 'check2'
-        print(0)
-    else 'check2'
-        print(2)
-    end 'check2'
+    if utf16_is_bmp(65) then print(1)       // ASCII
+    if utf16_is_bmp(945) then print(2)      // Greek α
+    if utf16_is_bmp(65535) then print(3)    // U+FFFF (last BMP)
+    if utf16_is_bmp(128512) then print(0)   // 😀 (not BMP)
     return 0
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 134
+; Instructions: 123
 
 define i32 @main() {
 entry0:
-  %0 = alloca %__string
-  %1 = getelementptr %__string, ptr %0, i32 0, i32 0
-  store i64 0, ptr %1
-  %2 = getelementptr %__string, ptr %0, i32 0, i32 1
-  store i64 1080863910568919040, ptr %2
-  %4 = alloca %__string
-  %5 = getelementptr %__string, ptr %4, i32 0, i32 0
-  store i64 478560413032, ptr %5
-  %6 = getelementptr %__string, ptr %4, i32 0, i32 1
-  store i64 720575940379279360, ptr %6
-  %7 = alloca ptr
-  store ptr %4, ptr %7
-  %9 = call i1 @__string_is_empty(ptr %0)
-  br i1 %9, label %then1, label %ifcont2
+  br i1 1, label %then1, label %ifcont2
 then1:
-  %10 = call i32 @sys.print(i32 1)
+  %1 = call i32 @sys.print(i32 1)
   br label %ifcont2
 ifcont2:
-  %11 = load ptr, ptr %7
-  %12 = call i1 @__string_is_empty(ptr %11)
-  br i1 %12, label %then3, label %else5
+  br i1 1, label %then3, label %ifcont4
 then3:
-  %13 = call i32 @sys.print(i32 0)
+  %3 = call i32 @sys.print(i32 2)
   br label %ifcont4
 ifcont4:
+  br i1 1, label %then5, label %ifcont6
+then5:
+  %5 = call i32 @sys.print(i32 3)
+  br label %ifcont6
+ifcont6:
+  br i1 0, label %then7, label %ifcont8
+then7:
+  %7 = call i32 @sys.print(i32 0)
+  br label %ifcont8
+ifcont8:
   ret i32 0
-else5:
-  %14 = call i32 @sys.print(i32 2)
-  br label %ifcont4
 }
 
 define i32 @sys.print(i32 %value) {
@@ -178,8 +164,6 @@ afterloop12:
   ret i32 %65
 }
 
-declare i1 @__string_is_empty(ptr %arg0)
-
 declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 
 declare ptr @malloc(i64 %arg0)
@@ -199,42 +183,47 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 161
+; Instructions: 159
 
 define i32 @main() {
 entry0:
-  %0 = alloca %__string
-  %1 = getelementptr %__string, ptr %0, i32 0, i32 0
-  store i64 0, ptr %1
-  %2 = getelementptr %__string, ptr %0, i32 0, i32 1
-  store i64 1080863910568919040, ptr %2
-  %3 = alloca ptr
-  store ptr %0, ptr %3
-  %4 = alloca %__string
-  %5 = getelementptr %__string, ptr %4, i32 0, i32 0
-  store i64 478560413032, ptr %5
-  %6 = getelementptr %__string, ptr %4, i32 0, i32 1
-  store i64 720575940379279360, ptr %6
-  %7 = alloca ptr
-  store ptr %4, ptr %7
-  %8 = load ptr, ptr %3
-  %9 = call i1 @__string_is_empty(ptr %8)
-  br i1 %9, label %then1, label %ifcont2
+  %0 = call i1 @string.utf16_is_bmp(i32 65)
+  br i1 %0, label %then1, label %ifcont2
 then1:
-  %10 = call i32 @sys.print(i32 1)
+  %1 = call i32 @sys.print(i32 1)
   br label %ifcont2
 ifcont2:
-  %11 = load ptr, ptr %7
-  %12 = call i1 @__string_is_empty(ptr %11)
-  br i1 %12, label %then3, label %else5
+  %2 = call i1 @string.utf16_is_bmp(i32 945)
+  br i1 %2, label %then3, label %ifcont4
 then3:
-  %13 = call i32 @sys.print(i32 0)
+  %3 = call i32 @sys.print(i32 2)
   br label %ifcont4
 ifcont4:
+  %4 = call i1 @string.utf16_is_bmp(i32 65535)
+  br i1 %4, label %then5, label %ifcont6
+then5:
+  %5 = call i32 @sys.print(i32 3)
+  br label %ifcont6
+ifcont6:
+  %6 = call i1 @string.utf16_is_bmp(i32 128512)
+  br i1 %6, label %then7, label %ifcont8
+then7:
+  %7 = call i32 @sys.print(i32 0)
+  br label %ifcont8
+ifcont8:
   ret i32 0
-else5:
-  %14 = call i32 @sys.print(i32 2)
-  br label %ifcont4
+}
+
+define i1 @string.utf16_is_bmp(i32 %codepoint) {
+entry0:
+  %0 = alloca i32
+  store i32 %codepoint, ptr %0
+  %1 = load i32, ptr %0
+  %2 = icmp sge i32 %1, 0
+  %3 = load i32, ptr %0
+  %4 = icmp slt i32 %3, 65536
+  %5 = and i1 %2, %4
+  ret i1 %5
 }
 
 define i32 @sys.print(i32 %value) {
@@ -390,8 +379,6 @@ afterloop12:
   ret i32 %65
 }
 
-declare i1 @__string_is_empty(ptr %arg0)
-
 declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 
 declare ptr @malloc(i64 %arg0)
@@ -414,4 +401,5 @@ ExitCode: 0
 Stdout: ```
 1
 2
+3
 ```

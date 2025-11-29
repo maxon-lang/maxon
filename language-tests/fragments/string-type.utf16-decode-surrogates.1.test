@@ -1,33 +1,17 @@
-// Test: string-type.print-string.1
+// Test: string-type.utf16-decode-surrogates.1
 function main() int
-    var s = "hello"
-    print(s)
+    // Decode surrogate pair back to codepoint
+    var cp = utf16_decode_surrogates(55357, 56832)
+    print(cp)  // 128512 (U+1F600)
     return 0
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 122
-
-%string = type { %__unsized_array_byte, i32, i32 }
-%__unsized_array_byte = type { ptr, i32 }
-%ByteView = type { %string, i32 }
-%UTF16View = type { %string, i32, i32 }
-
-@.str.0 = constant [5 x i8] c"hello\00"
+; Instructions: 112
 
 define i32 @main() {
 entry0:
-  %0 = alloca %string
-  %1 = getelementptr %string, ptr %0, i32 0, i32 0
-  %2 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 0
-  store ptr @.str.0, ptr %2
-  %3 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 1
-  store i32 5, ptr %3
-  %4 = getelementptr %string, ptr %0, i32 0, i32 1
-  store i32 5, ptr %4
-  %5 = getelementptr %string, ptr %0, i32 0, i32 2
-  store i32 0, ptr %5
-  %6 = call i32 @sys.print(ptr %0)
+  %3 = call i32 @sys.print(i32 128512)
   ret i32 0
 }
 
@@ -160,13 +144,13 @@ afterloop12:
   ret i32 %65
 }
 
+declare i32 @write_stdout(ptr %arg0, i32 %arg1)
+
 declare ptr @malloc(i64 %arg0)
 
 declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
-
-declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -179,29 +163,38 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 146
-
-%string = type { %__unsized_array_byte, i32, i32 }
-%__unsized_array_byte = type { ptr, i32 }
-%ByteView = type { %string, i32 }
-%UTF16View = type { %string, i32, i32 }
-
-@.str.0 = constant [5 x i8] c"hello\00"
+; Instructions: 158
 
 define i32 @main() {
 entry0:
-  %0 = alloca %string
-  %1 = getelementptr %string, ptr %0, i32 0, i32 0
-  %2 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 0
-  store ptr @.str.0, ptr %2
-  %3 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 1
-  store i32 5, ptr %3
-  %4 = getelementptr %string, ptr %0, i32 0, i32 1
-  store i32 5, ptr %4
-  %5 = getelementptr %string, ptr %0, i32 0, i32 2
-  store i32 0, ptr %5
-  %6 = call i32 @sys.print(ptr %0)
+  %0 = call i32 @string.utf16_decode_surrogates(i32 55357, i32 56832)
+  %1 = alloca i32
+  store i32 %0, ptr %1
+  %2 = load i32, ptr %1
+  %3 = call i32 @sys.print(i32 %2)
   ret i32 0
+}
+
+define i32 @string.utf16_decode_surrogates(i32 %high, i32 %low) {
+entry0:
+  %0 = alloca i32
+  store i32 %high, ptr %0
+  %1 = alloca i32
+  store i32 %low, ptr %1
+  %2 = load i32, ptr %0
+  %3 = sub i32 %2, 55296
+  %4 = alloca i32
+  store i32 %3, ptr %4
+  %5 = load i32, ptr %1
+  %6 = sub i32 %5, 56320
+  %7 = alloca i32
+  store i32 %6, ptr %7
+  %8 = load i32, ptr %4
+  %9 = mul i32 %8, 1024
+  %10 = add i32 65536, %9
+  %11 = load i32, ptr %7
+  %12 = add i32 %10, %11
+  ret i32 %12
 }
 
 define i32 @sys.print(i32 %value) {
@@ -357,13 +350,13 @@ afterloop12:
   ret i32 %65
 }
 
+declare i32 @write_stdout(ptr %arg0, i32 %arg1)
+
 declare ptr @malloc(i64 %arg0)
 
 declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
-
-declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -376,4 +369,4 @@ entry0:
 
 ---
 ExitCode: 0
-Stdout: hello
+Stdout: 128512

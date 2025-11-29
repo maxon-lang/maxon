@@ -1,0 +1,141 @@
+// stdlib/string/utf8.maxon
+// UTF-8 utility functions for string processing
+//
+// UTF-8 encoding:
+//   1-byte (ASCII):  0xxxxxxx         (0x00-0x7F)
+//   2-byte:          110xxxxx 10xxxxxx (0x80-0x7FF)
+//   3-byte:          1110xxxx 10xxxxxx 10xxxxxx (0x800-0xFFFF)
+//   4-byte:          11110xxx 10xxxxxx 10xxxxxx 10xxxxxx (0x10000-0x10FFFF)
+
+// utf8_byte_length - Get the number of bytes in a UTF-8 sequence from its lead byte
+// Returns 1-4 for valid lead bytes
+export function utf8_byte_length(leadByte byte) int
+    var b = leadByte as int
+
+    // ASCII (0xxxxxxx)
+    if b < 128 'ascii'
+        return 1
+    end 'ascii'
+
+    // Invalid continuation byte or overlong encoding
+    if b < 192 'invalid'
+        return 1
+    end 'invalid'
+
+    // 2-byte sequence (110xxxxx)
+    if b < 224 'two_byte'
+        return 2
+    end 'two_byte'
+
+    // 3-byte sequence (1110xxxx)
+    if b < 240 'three_byte'
+        return 3
+    end 'three_byte'
+
+    // 4-byte sequence (11110xxx)
+    return 4
+end 'utf8_byte_length'
+
+// utf8_is_continuation - Check if a byte is a UTF-8 continuation byte (10xxxxxx)
+export function utf8_is_continuation(b byte) bool
+    var val = b as int
+    return val >= 128 and val < 192
+end 'utf8_is_continuation'
+
+// utf8_is_lead - Check if a byte is a valid UTF-8 lead byte
+export function utf8_is_lead(b byte) bool
+    var val = b as int
+    // Lead byte is either ASCII (< 128) or starts with 11xxxxxx (>= 192)
+    return val < 128 or val >= 192
+end 'utf8_is_lead'
+
+// utf8_is_ascii - Check if a byte is ASCII (0-127)
+export function utf8_is_ascii(b byte) bool
+    return (b as int) < 128
+end 'utf8_is_ascii'
+
+// utf8_codepoint_count - Count the number of UTF-8 codepoints in a byte array
+// This counts lead bytes only (skips continuation bytes)
+export function utf8_codepoint_count(data []byte, len int) int
+    var count = 0
+    var i = 0
+
+    while i < len 'count_loop'
+        var b = data[i] as int
+
+        // Only count non-continuation bytes
+        if b < 128 or b >= 192 'is_lead'
+            count = count + 1
+        end 'is_lead'
+
+        i = i + 1
+    end 'count_loop'
+
+    return count
+end 'utf8_codepoint_count'
+
+// utf8_decode - Decode a UTF-8 codepoint from a byte array at the given offset
+// Returns the codepoint value as an integer
+// Assumes valid UTF-8 encoding at the offset
+export function utf8_decode(data []byte, offset int) int
+    var b0 = data[offset] as int
+
+    // ASCII (1 byte): 0xxxxxxx
+    if b0 < 128 'ascii'
+        return b0
+    end 'ascii'
+
+    // 2-byte sequence: 110xxxxx 10xxxxxx
+    if b0 < 224 'two_byte'
+        var b1 = data[offset + 1] as int
+        var cp = ((b0 mod 32) * 64) + (b1 mod 64)
+        return cp
+    end 'two_byte'
+
+    // 3-byte sequence: 1110xxxx 10xxxxxx 10xxxxxx
+    if b0 < 240 'three_byte'
+        var b1 = data[offset + 1] as int
+        var b2 = data[offset + 2] as int
+        var cp = ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
+        return cp
+    end 'three_byte'
+
+    // 4-byte sequence: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+    var b1 = data[offset + 1] as int
+    var b2 = data[offset + 2] as int
+    var b3 = data[offset + 3] as int
+    var cp = ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+    return cp
+end 'utf8_decode'
+
+// utf8_encode_length - Get the number of bytes needed to encode a codepoint
+export function utf8_encode_length(codepoint int) int
+    if codepoint < 128 'ascii'
+        return 1
+    end 'ascii'
+
+    if codepoint < 2048 'two_byte'
+        return 2
+    end 'two_byte'
+
+    if codepoint < 65536 'three_byte'
+        return 3
+    end 'three_byte'
+
+    return 4
+end 'utf8_encode_length'
+
+// utf8_is_valid_codepoint - Check if an integer is a valid Unicode codepoint
+export function utf8_is_valid_codepoint(cp int) bool
+    // Valid range: 0x0000-0x10FFFF, excluding surrogate pairs (0xD800-0xDFFF)
+    if cp < 0 or cp > 1114111 'range_check'
+        return false
+    end 'range_check'
+
+    // Exclude surrogate pairs
+    if cp >= 55296 and cp <= 57343 'surrogate_check'
+        return false
+    end 'surrogate_check'
+
+    return true
+end 'utf8_is_valid_codepoint'

@@ -1,168 +1,450 @@
 // stdlib/string/string.maxon
-// String type implementation using interfaces
+// String type - Swift-style implementation with interfaces
 //
-// Simple implementation using fixed-size inline storage.
-// All methods are implemented in pure Maxon - no runtime functions needed.
+// String struct - Reference-based design with explicit length tracking
+//
+// **Memory Layout**:
+// - data: Reference to byte array (compiler-allocated constant data for literals)
+// - _len: Explicit length field (since []byte struct fields don't have .length)
+// - _iterPos: Current byte position for iteration
+//
+// **Characteristics**:
+// - UTF-8 encoded
+// - String literals reference compiler-allocated constant data
+// - Iteration state tracked in _iterPos for Iterable conformance
 
-// string struct - UTF-8 encoded string with inline storage
-// Layout: 16 bytes of data stored in _data array
-// _data[0..14]: UTF-8 string data (up to 15 bytes)
-// _data[15]: length (number of bytes used)
-export struct string is Hashable, Equatable, Printable
-    _data [16]byte
+export struct string is Hashable, Equatable, Subscriptable, Iterable
+    data []byte     // Reference to UTF-8 byte data
+    _len int        // Explicit length (compiler passes this)
+    _iterPos int    // Current byte position for iteration (0 = start)
+
+    // ============================================
+    // ExpressibleByStringLiteral conformance
+    // ============================================
+
+    // Initialize string from raw UTF-8 literal data
+    // The compiler passes a reference to the literal's byte array and its length
+    export function initFromStringLiteral(data []byte, len int) string
+        return string{data: data, _len: len, _iterPos: 0}
+    end 'initFromStringLiteral'
+
+    // ============================================
+    // Internal helpers
+    // ============================================
+
+    // Get byte count
+    export function count(self string) int
+        return self._len
+    end 'count'
+
+    // Get byte at index
+    function _byteAt(self string, index int) byte
+        return self.data[index]
+    end '_byteAt'
+
+    // isEmpty - check if the string is empty
+    export function isEmpty(self string) bool
+        return self._len == 0
+    end 'isEmpty'
+
+    // ============================================
+    // Iterable conformance - character iteration
+    // ============================================
+
+    // Check if more characters available
+    export function hasNext(self string) int
+        if self._iterPos < self._len 'check'
+            return 1
+        end 'check'
+        return 0
+    end 'hasNext'
+
+    // Get current character (codepoint as int)
+    export function getCurrent(self string) int
+        var b0 = self.data[self._iterPos] as int
+
+        // ASCII (1 byte)
+        if b0 < 128 'ascii'
+            return b0
+        end 'ascii'
+
+        // 2-byte sequence (110xxxxx 10xxxxxx)
+        if b0 < 224 'two_byte'
+            var b1 = self.data[self._iterPos + 1] as int
+            var cp = ((b0 mod 32) * 64) + (b1 mod 64)
+            return cp
+        end 'two_byte'
+
+        // 3-byte sequence (1110xxxx 10xxxxxx 10xxxxxx)
+        if b0 < 240 'three_byte'
+            var b1 = self.data[self._iterPos + 1] as int
+            var b2 = self.data[self._iterPos + 2] as int
+            var cp = ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
+            return cp
+        end 'three_byte'
+
+        // 4-byte sequence (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
+        var b1 = self.data[self._iterPos + 1] as int
+        var b2 = self.data[self._iterPos + 2] as int
+        var b3 = self.data[self._iterPos + 3] as int
+        var cp = ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+        return cp
+    end 'getCurrent'
+
+    // Advance to next character
+    export function next(self string) string
+        var b0 = self.data[self._iterPos] as int
+        var advance = 1
+
+        if b0 >= 240 'four_byte'
+            advance = 4
+        else 'four_byte'
+            if b0 >= 224 'three_byte'
+                advance = 3
+            else 'three_byte'
+                if b0 >= 192 'two_byte'
+                    advance = 2
+                end 'two_byte'
+            end 'three_byte'
+        end 'four_byte'
+
+        // Return copy of string with updated position
+        return string{data: self.data, _len: self._len, _iterPos: self._iterPos + advance}
+    end 'next'
+
+    // ============================================
+    // Other interface conformances
+    // ============================================
+
+    // Hashable conformance
+    export function hash(self string) int
+        var h = 5381
+        var i = 0
+        while i < self._len 'hash_loop'
+            var b = self.data[i]
+            h = h * 33 + (b as int)
+            i = i + 1
+        end 'hash_loop'
+        return h
+    end 'hash'
+
+    // Equatable conformance
+    export function equals(self string, other string) bool
+        if self._len != other._len 'length_check'
+            return false
+        end 'length_check'
+
+        var i = 0
+        while i < self._len 'compare_loop'
+            if self.data[i] != other.data[i] 'byte_check'
+                return false
+            end 'byte_check'
+            i = i + 1
+        end 'compare_loop'
+        return true
+    end 'equals'
+
+    // Subscriptable conformance - string slicing
+    export function subscript(self string, startIndex int, endIndex int) string
+        // Validate indices
+        if startIndex < 0 'validate_start'
+            startIndex = 0
+        end 'validate_start'
+        if endIndex > self._len 'validate_end'
+            endIndex = self._len
+        end 'validate_end'
+        if startIndex >= endIndex 'validate_range'
+            // Empty slice - return empty string
+            var empty = [1]byte
+            return string{data: empty, _len: 0, _iterPos: 0}
+        end 'validate_range'
+
+        var sliceLen = endIndex - startIndex
+
+        // Create new array for the slice
+        var sliceData = [256]byte
+        var i = 0
+        while i < sliceLen and i < 256 'copy'
+            sliceData[i] = self.data[startIndex + i]
+            i = i + 1
+        end 'copy'
+
+        return string{data: sliceData, _len: sliceLen, _iterPos: 0}
+    end 'subscript'
+
+    // ============================================
+    // String operations
+    // ============================================
+
+    // concat - concatenate two strings
+    export function concat(self string, other string) string
+        // Build combined byte array
+        var combined = [512]byte
+        var i = 0
+        while i < self._len and i < 512 'copy_self'
+            combined[i] = self.data[i]
+            i = i + 1
+        end 'copy_self'
+
+        var j = 0
+        while j < other._len and i < 512 'copy_other'
+            combined[i] = other.data[j]
+            i = i + 1
+            j = j + 1
+        end 'copy_other'
+
+        return string{data: combined, _len: self._len + other._len, _iterPos: 0}
+    end 'concat'
+
+    // startsWith - check if string starts with prefix
+    export function startsWith(self string, prefix string) bool
+        if prefix._len > self._len 'length_check'
+            return false
+        end 'length_check'
+
+        var i = 0
+        while i < prefix._len 'compare_loop'
+            if self.data[i] != prefix.data[i] 'byte_check'
+                return false
+            end 'byte_check'
+            i = i + 1
+        end 'compare_loop'
+        return true
+    end 'startsWith'
+
+    // endsWith - check if string ends with suffix
+    export function endsWith(self string, suffix string) bool
+        if suffix._len > self._len 'length_check'
+            return false
+        end 'length_check'
+
+        var start = self._len - suffix._len
+        var i = 0
+        while i < suffix._len 'compare_loop'
+            if self.data[start + i] != suffix.data[i] 'byte_check'
+                return false
+            end 'byte_check'
+            i = i + 1
+        end 'compare_loop'
+        return true
+    end 'endsWith'
+
+    // find - find first occurrence of needle, return index or -1
+    export function find(self string, needle string) int
+        if needle._len == 0 'empty_needle'
+            return 0
+        end 'empty_needle'
+
+        if needle._len > self._len 'too_long'
+            return 0 - 1
+        end 'too_long'
+
+        var i = 0
+        while i <= self._len - needle._len 'search_loop'
+            var found = true
+            var j = 0
+            while j < needle._len 'compare_loop'
+                if self.data[i + j] != needle.data[j] 'byte_check'
+                    found = false
+                    break 'compare_loop'
+                end 'byte_check'
+                j = j + 1
+            end 'compare_loop'
+
+            if found 'found_check'
+                return i
+            end 'found_check'
+            i = i + 1
+        end 'search_loop'
+        return 0 - 1
+    end 'find'
+
+    // contains - check if string contains needle
+    export function contains(self string, needle string) bool
+        return string.find(self, needle) >= 0
+    end 'contains'
+
+    // Create a ByteView for iterating over raw bytes
+    export function bytes(self string) ByteView
+        return ByteView{_str: self, _pos: 0}
+    end 'bytes'
+
+    // Create a UTF16View for iterating over UTF-16 code units
+    export function utf16(self string) UTF16View
+        return UTF16View{_str: self, _bytePos: 0, _highSurrogate: 0}
+    end 'utf16'
 end 'string'
 
-// count - get the number of bytes in the string
-export function string.count(self string) int
-    // Length is stored in _data[15]
-    return self._data[15] as int
-end 'count'// isEmpty - check if the string is empty
-export function string.isEmpty(self string) bool
-    return self._data[15] == 0b
-end 'isEmpty'
+// ============================================
+// String Views (like Swift)
+// ============================================
 
-// Hashable conformance - simple hash function
-export function string.hash(self string) int
-    var h = 5381
-    var len = self._data[15] as int
-    var i = 0
-    while i < len 'hash_loop'
-        h = h * 33 + (self._data[i] as int)
-        i = i + 1
-    end 'hash_loop'
-    return h
-end 'hash'
+// ByteView - iterate over raw UTF-8 bytes
+// Usage: for b in s.bytes 'loop' ... end 'loop'
+export struct ByteView is Iterable
+    _str string     // Reference to the source string
+    _pos int        // Current byte position
 
-// Equatable conformance - compare two strings
-export function string.equals(self string, other string) bool
-    var len = self._data[15] as int
-    var otherLen = other._data[15] as int
-    if len != otherLen 'length_check'
-        return false
-    end 'length_check'
-
-    var i = 0
-    while i < len 'compare_loop'
-        if self._data[i] != other._data[i] 'byte_check'
-            return false
-        end 'byte_check'
-        i = i + 1
-    end 'compare_loop'
-    return true
-end 'equals'
-
-// Printable conformance - print string to stdout
-// Note: This is a placeholder until we have proper runtime support
-export function string.print(self string) int
-    // Just return the length for now - actual printing needs runtime support
-    return self._data[15] as int
-end 'print'
-
-// concat - concatenate two strings
-export function string.concat(self string, other string) string
-    var result = string{_data: [16]byte}
-    var selfLen = self._data[15] as int
-    var otherLen = other._data[15] as int
-    var totalLen = selfLen + otherLen
-
-    // Copy self's data
-    var i = 0
-    while i < selfLen 'copy_self'
-        result._data[i] = self._data[i]
-        i = i + 1
-    end 'copy_self'
-
-    // Copy other's data
-    var j = 0
-    while j < otherLen and i < 15 'copy_other'
-        result._data[i] = other._data[j]
-        i = i + 1
-        j = j + 1
-    end 'copy_other'
-
-    // Set length (cap at 15)
-    if totalLen > 15 'cap_length'
-        result._data[15] = 15b
-    else 'cap_length'
-        result._data[15] = totalLen as byte
-    end 'cap_length'
-
-    return result
-end 'concat'
-
-// startsWith - check if string starts with prefix
-export function string.startsWith(self string, prefix string) bool
-    var selfLen = self._data[15] as int
-    var prefixLen = prefix._data[15] as int
-
-    if prefixLen > selfLen 'length_check'
-        return false
-    end 'length_check'
-
-    var i = 0
-    while i < prefixLen 'compare_loop'
-        if self._data[i] != prefix._data[i] 'byte_check'
-            return false
-        end 'byte_check'
-        i = i + 1
-    end 'compare_loop'
-    return true
-end 'startsWith'
-
-// endsWith - check if string ends with suffix
-export function string.endsWith(self string, suffix string) bool
-    var selfLen = self._data[15] as int
-    var suffixLen = suffix._data[15] as int
-
-    if suffixLen > selfLen 'length_check'
-        return false
-    end 'length_check'
-
-    var start = selfLen - suffixLen
-    var i = 0
-    while i < suffixLen 'compare_loop'
-        if self._data[start + i] != suffix._data[i] 'byte_check'
-            return false
-        end 'byte_check'
-        i = i + 1
-    end 'compare_loop'
-    return true
-end 'endsWith'
-
-// contains - check if string contains needle
-export function string.contains(self string, needle string) bool
-    return string.find(self, needle) >= 0
-end 'contains'
-
-// find - find first occurrence of needle, return index or -1
-export function string.find(self string, needle string) int
-    var selfLen = self._data[15] as int
-    var needleLen = needle._data[15] as int
-
-    if needleLen == 0 'empty_needle'
+    // ByteView.hasNext - check if more bytes available
+    export function hasNext(self ByteView) int
+        if self._pos < self._str._len 'check'
+            return 1
+        end 'check'
         return 0
-    end 'empty_needle'
+    end 'hasNext'
 
-    if needleLen > selfLen 'too_long'
-        return 0 - 1
-    end 'too_long'
+    // ByteView.getCurrent - get current byte as int
+    export function getCurrent(self ByteView) int
+        return self._str.data[self._pos] as int
+    end 'getCurrent'
 
-    var i = 0
-    while i <= selfLen - needleLen 'search_loop'
-        var found = true
-        var j = 0
-        while j < needleLen 'compare_loop'
-            if self._data[i + j] != needle._data[j] 'byte_check'
-                found = false
-                break 'compare_loop'
-            end 'byte_check'
-            j = j + 1
-        end 'compare_loop'
+    // ByteView.next - advance to next byte
+    export function next(self ByteView) ByteView
+        return ByteView{_str: self._str, _pos: self._pos + 1}
+    end 'next'
 
-        if found 'found_check'
-            return i
-        end 'found_check'
-        i = i + 1
-    end 'search_loop'
-    return 0 - 1
-end 'find'
+    // ByteView.length - get number of bytes
+    export function length(self ByteView) int
+        return self._str._len
+    end 'length'
+end 'ByteView'
+
+// UTF16View - iterate over UTF-16 code units
+// Transcodes UTF-8 to UTF-16 on-the-fly
+// Codepoints in BMP (U+0000 to U+FFFF) yield one 16-bit code unit
+// Codepoints above BMP (U+10000+) yield a surrogate pair (two 16-bit code units)
+// Usage: for u in s.utf16() 'loop' ... end 'loop'
+export struct UTF16View is Iterable
+    _str string     // Reference to the source string
+    _bytePos int    // Current byte position in UTF-8 data
+    _highSurrogate int  // Pending high surrogate (0 if none)
+
+    // UTF16View.hasNext - check if more UTF-16 code units available
+    export function hasNext(self UTF16View) int
+        // If we have a pending high surrogate, the low surrogate is next
+        if self._highSurrogate != 0 'has_surrogate'
+            return 1
+        end 'has_surrogate'
+        // Otherwise check if we have more bytes to decode
+        if self._bytePos < self._str._len 'check'
+            return 1
+        end 'check'
+        return 0
+    end 'hasNext'
+
+    // UTF16View.getCurrent - get current UTF-16 code unit as int
+    export function getCurrent(self UTF16View) int
+        // If we have a pending high surrogate, return the low surrogate
+        if self._highSurrogate != 0 'return_low'
+            // Calculate low surrogate from the stored high surrogate
+            // We stored (codepoint - 0x10000) in _highSurrogate as a flag
+            // Actually, let's store the actual high surrogate value
+            // and compute the low surrogate here
+            // Wait - we need the original codepoint to compute both surrogates
+            // Let's store the codepoint offset instead
+            var offset = self._highSurrogate
+            var lowSurrogate = 56320 + (offset mod 1024)  // 0xDC00 + low 10 bits
+            return lowSurrogate
+        end 'return_low'
+
+        // Decode UTF-8 codepoint at current position
+        var b0 = self._str.data[self._bytePos] as int
+
+        // ASCII (1 byte) - direct UTF-16 code unit
+        if b0 < 128 'ascii'
+            return b0
+        end 'ascii'
+
+        // 2-byte sequence (110xxxxx 10xxxxxx)
+        if b0 < 224 'two_byte'
+            var b1 = self._str.data[self._bytePos + 1] as int
+            var cp = ((b0 mod 32) * 64) + (b1 mod 64)
+            return cp  // BMP, single code unit
+        end 'two_byte'
+
+        // 3-byte sequence (1110xxxx 10xxxxxx 10xxxxxx)
+        if b0 < 240 'three_byte'
+            var b1 = self._str.data[self._bytePos + 1] as int
+            var b2 = self._str.data[self._bytePos + 2] as int
+            var cp = ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
+            return cp  // BMP, single code unit
+        end 'three_byte'
+
+        // 4-byte sequence (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
+        // Codepoint > U+FFFF, needs surrogate pair
+        var b1 = self._str.data[self._bytePos + 1] as int
+        var b2 = self._str.data[self._bytePos + 2] as int
+        var b3 = self._str.data[self._bytePos + 3] as int
+        var cp = ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+
+        // Return high surrogate: 0xD800 + high 10 bits of (cp - 0x10000)
+        var offset = cp - 65536  // cp - 0x10000
+        var highSurrogate = 55296 + (offset / 1024)  // 0xD800 + high 10 bits
+        return highSurrogate
+    end 'getCurrent'
+
+    // UTF16View.next - advance to next UTF-16 code unit
+    export function next(self UTF16View) UTF16View
+        // If we have a pending high surrogate, consume it (return low surrogate state)
+        if self._highSurrogate != 0 'consume_surrogate'
+            // Low surrogate has been returned, clear the flag and stay at same byte position
+            // Actually we need to advance the byte position now
+            return UTF16View{_str: self._str, _bytePos: self._bytePos + 4, _highSurrogate: 0}
+        end 'consume_surrogate'
+
+        // Decode current codepoint to determine byte advance
+        var b0 = self._str.data[self._bytePos] as int
+
+        // ASCII (1 byte)
+        if b0 < 128 'ascii'
+            return UTF16View{_str: self._str, _bytePos: self._bytePos + 1, _highSurrogate: 0}
+        end 'ascii'
+
+        // 2-byte sequence
+        if b0 < 224 'two_byte'
+            return UTF16View{_str: self._str, _bytePos: self._bytePos + 2, _highSurrogate: 0}
+        end 'two_byte'
+
+        // 3-byte sequence
+        if b0 < 240 'three_byte'
+            return UTF16View{_str: self._str, _bytePos: self._bytePos + 3, _highSurrogate: 0}
+        end 'three_byte'
+
+        // 4-byte sequence - this is a surrogate pair
+        // Return state with high surrogate pending (don't advance byte pos yet)
+        var b1 = self._str.data[self._bytePos + 1] as int
+        var b2 = self._str.data[self._bytePos + 2] as int
+        var b3 = self._str.data[self._bytePos + 3] as int
+        var cp = ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+        var offset = cp - 65536  // Store offset for computing low surrogate
+        return UTF16View{_str: self._str, _bytePos: self._bytePos, _highSurrogate: offset}
+    end 'next'
+
+    // UTF16View.length - count total UTF-16 code units (expensive - must scan string)
+    export function length(self UTF16View) int
+        var count = 0
+        var pos = 0
+        while pos < self._str._len 'count_loop'
+            var b0 = self._str.data[pos] as int
+            if b0 < 128 'ascii'
+                count = count + 1
+                pos = pos + 1
+            else 'ascii'
+                if b0 < 224 'two_byte'
+                    count = count + 1
+                    pos = pos + 2
+                else 'two_byte'
+                    if b0 < 240 'three_byte'
+                        count = count + 1
+                        pos = pos + 3
+                    else 'three_byte'
+                        // 4-byte = surrogate pair = 2 UTF-16 code units
+                        count = count + 2
+                        pos = pos + 4
+                    end 'three_byte'
+                end 'two_byte'
+            end 'ascii'
+        end 'count_loop'
+        return count
+    end 'length'
+end 'UTF16View'

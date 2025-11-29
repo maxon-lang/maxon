@@ -1,19 +1,117 @@
-// Test: string-type.print-string.1
+// Test: string-type.utf16-length.1
 function main() int
-    var s = "hello"
-    print(s)
+    var s = "A😀B"
+    var view = s.utf16()
+    print(UTF16View.length(view))
     return 0
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 122
+; Instructions: 203
 
 %string = type { %__unsized_array_byte, i32, i32 }
 %__unsized_array_byte = type { ptr, i32 }
 %ByteView = type { %string, i32 }
 %UTF16View = type { %string, i32, i32 }
 
-@.str.0 = constant [5 x i8] c"hello\00"
+@.str.0 = constant [6 x i8] c"A😀B\00"
+
+define %UTF16View @string.utf16(ptr %self) {
+entry0:
+  %1 = alloca %UTF16View
+  %3 = load %string, ptr %self
+  %4 = getelementptr %UTF16View, ptr %1, i32 0, i32 0
+  store %string %3, ptr %4
+  %5 = getelementptr %UTF16View, ptr %1, i32 0, i32 1
+  store i32 0, ptr %5
+  %6 = getelementptr %UTF16View, ptr %1, i32 0, i32 2
+  store i32 0, ptr %6
+  %7 = load %UTF16View, ptr %1
+  ret %UTF16View %7
+}
+
+define i32 @UTF16View.length(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 0, ptr %1
+  %2 = alloca i32
+  store i32 0, ptr %2
+  br label %whilecond1
+whilecond1:
+  %3 = load i32, ptr %2
+  %4 = load ptr, ptr %0
+  %5 = getelementptr %UTF16View, ptr %4, i32 0, i32 0
+  %6 = getelementptr %string, ptr %5, i32 0, i32 1
+  %7 = load i32, ptr %6
+  %8 = icmp slt i32 %3, %7
+  br i1 %8, label %loop2, label %afterloop3
+loop2:
+  %9 = load i32, ptr %2
+  %10 = load ptr, ptr %0
+  %11 = getelementptr %UTF16View, ptr %10, i32 0, i32 0
+  %12 = getelementptr %string, ptr %11, i32 0, i32 0
+  %13 = getelementptr %__unsized_array_byte, ptr %12, i32 0, i32 0
+  %14 = load ptr, ptr %13
+  %15 = sext i32 %9 to i64
+  %16 = getelementptr i8, ptr %14, i64 0, i64 %15
+  %17 = load i8, ptr %16
+  %18 = zext i8 %17 to i32
+  %19 = alloca i32
+  store i32 %18, ptr %19
+  %21 = icmp slt i32 %18, 128
+  br i1 %21, label %then4, label %else6
+afterloop3:
+  %42 = load i32, ptr %1
+  ret i32 %42
+then4:
+  %22 = load i32, ptr %1
+  %23 = add i32 %22, 1
+  store i32 %23, ptr %1
+  %24 = load i32, ptr %2
+  %25 = add i32 %24, 1
+  store i32 %25, ptr %2
+  br label %ifcont5
+ifcont5:
+  br label %whilecond1
+else6:
+  %26 = load i32, ptr %19
+  %27 = icmp slt i32 %26, 224
+  br i1 %27, label %then7, label %else9
+then7:
+  %28 = load i32, ptr %1
+  %29 = add i32 %28, 1
+  store i32 %29, ptr %1
+  %30 = load i32, ptr %2
+  %31 = add i32 %30, 2
+  store i32 %31, ptr %2
+  br label %ifcont8
+ifcont8:
+  br label %ifcont5
+else9:
+  %32 = load i32, ptr %19
+  %33 = icmp slt i32 %32, 240
+  br i1 %33, label %then10, label %else12
+then10:
+  %34 = load i32, ptr %1
+  %35 = add i32 %34, 1
+  store i32 %35, ptr %1
+  %36 = load i32, ptr %2
+  %37 = add i32 %36, 3
+  store i32 %37, ptr %2
+  br label %ifcont11
+ifcont11:
+  br label %ifcont8
+else12:
+  %38 = load i32, ptr %1
+  %39 = add i32 %38, 2
+  store i32 %39, ptr %1
+  %40 = load i32, ptr %2
+  %41 = add i32 %40, 4
+  store i32 %41, ptr %2
+  br label %ifcont11
+}
 
 define i32 @main() {
 entry0:
@@ -22,12 +120,16 @@ entry0:
   %2 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 0
   store ptr @.str.0, ptr %2
   %3 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 1
-  store i32 5, ptr %3
+  store i32 6, ptr %3
   %4 = getelementptr %string, ptr %0, i32 0, i32 1
-  store i32 5, ptr %4
+  store i32 6, ptr %4
   %5 = getelementptr %string, ptr %0, i32 0, i32 2
   store i32 0, ptr %5
-  %6 = call i32 @sys.print(ptr %0)
+  %6 = call %UTF16View @string.utf16(ptr %0)
+  %7 = alloca %UTF16View
+  store %UTF16View %6, ptr %7
+  %8 = call i32 @UTF16View.length(ptr %7)
+  %9 = call i32 @sys.print(i32 %8)
   ret i32 0
 }
 
@@ -179,14 +281,115 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 146
+; Instructions: 231
 
 %string = type { %__unsized_array_byte, i32, i32 }
 %__unsized_array_byte = type { ptr, i32 }
 %ByteView = type { %string, i32 }
 %UTF16View = type { %string, i32, i32 }
 
-@.str.0 = constant [5 x i8] c"hello\00"
+@.str.0 = constant [6 x i8] c"A😀B\00"
+
+define %UTF16View @string.utf16(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca %UTF16View
+  %2 = load ptr, ptr %0
+  %3 = load %string, ptr %2
+  %4 = getelementptr %UTF16View, ptr %1, i32 0, i32 0
+  store %string %3, ptr %4
+  %5 = getelementptr %UTF16View, ptr %1, i32 0, i32 1
+  store i32 0, ptr %5
+  %6 = getelementptr %UTF16View, ptr %1, i32 0, i32 2
+  store i32 0, ptr %6
+  %7 = load %UTF16View, ptr %1
+  ret %UTF16View %7
+}
+
+define i32 @UTF16View.length(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 0, ptr %1
+  %2 = alloca i32
+  store i32 0, ptr %2
+  br label %whilecond1
+whilecond1:
+  %3 = load i32, ptr %2
+  %4 = load ptr, ptr %0
+  %5 = getelementptr %UTF16View, ptr %4, i32 0, i32 0
+  %6 = getelementptr %string, ptr %5, i32 0, i32 1
+  %7 = load i32, ptr %6
+  %8 = icmp slt i32 %3, %7
+  br i1 %8, label %loop2, label %afterloop3
+loop2:
+  %9 = load i32, ptr %2
+  %10 = load ptr, ptr %0
+  %11 = getelementptr %UTF16View, ptr %10, i32 0, i32 0
+  %12 = getelementptr %string, ptr %11, i32 0, i32 0
+  %13 = getelementptr %__unsized_array_byte, ptr %12, i32 0, i32 0
+  %14 = load ptr, ptr %13
+  %15 = sext i32 %9 to i64
+  %16 = getelementptr i8, ptr %14, i64 0, i64 %15
+  %17 = load i8, ptr %16
+  %18 = zext i8 %17 to i32
+  %19 = alloca i32
+  store i32 %18, ptr %19
+  %20 = load i32, ptr %19
+  %21 = icmp slt i32 %20, 128
+  br i1 %21, label %then4, label %else6
+afterloop3:
+  %42 = load i32, ptr %1
+  ret i32 %42
+then4:
+  %22 = load i32, ptr %1
+  %23 = add i32 %22, 1
+  store i32 %23, ptr %1
+  %24 = load i32, ptr %2
+  %25 = add i32 %24, 1
+  store i32 %25, ptr %2
+  br label %ifcont5
+ifcont5:
+  br label %whilecond1
+else6:
+  %26 = load i32, ptr %19
+  %27 = icmp slt i32 %26, 224
+  br i1 %27, label %then7, label %else9
+then7:
+  %28 = load i32, ptr %1
+  %29 = add i32 %28, 1
+  store i32 %29, ptr %1
+  %30 = load i32, ptr %2
+  %31 = add i32 %30, 2
+  store i32 %31, ptr %2
+  br label %ifcont8
+ifcont8:
+  br label %ifcont5
+else9:
+  %32 = load i32, ptr %19
+  %33 = icmp slt i32 %32, 240
+  br i1 %33, label %then10, label %else12
+then10:
+  %34 = load i32, ptr %1
+  %35 = add i32 %34, 1
+  store i32 %35, ptr %1
+  %36 = load i32, ptr %2
+  %37 = add i32 %36, 3
+  store i32 %37, ptr %2
+  br label %ifcont11
+ifcont11:
+  br label %ifcont8
+else12:
+  %38 = load i32, ptr %1
+  %39 = add i32 %38, 2
+  store i32 %39, ptr %1
+  %40 = load i32, ptr %2
+  %41 = add i32 %40, 4
+  store i32 %41, ptr %2
+  br label %ifcont11
+}
 
 define i32 @main() {
 entry0:
@@ -195,12 +398,16 @@ entry0:
   %2 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 0
   store ptr @.str.0, ptr %2
   %3 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 1
-  store i32 5, ptr %3
+  store i32 6, ptr %3
   %4 = getelementptr %string, ptr %0, i32 0, i32 1
-  store i32 5, ptr %4
+  store i32 6, ptr %4
   %5 = getelementptr %string, ptr %0, i32 0, i32 2
   store i32 0, ptr %5
-  %6 = call i32 @sys.print(ptr %0)
+  %6 = call %UTF16View @string.utf16(ptr %0)
+  %7 = alloca %UTF16View
+  store %UTF16View %6, ptr %7
+  %8 = call i32 @UTF16View.length(ptr %7)
+  %9 = call i32 @sys.print(i32 %8)
   ret i32 0
 }
 
@@ -376,4 +583,4 @@ entry0:
 
 ---
 ExitCode: 0
-Stdout: hello
+Stdout: 4
