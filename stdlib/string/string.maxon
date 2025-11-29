@@ -26,6 +26,7 @@
 // - Iteration state tracked in _iterPos for Iterable conformance
 
 export struct string is Hashable, Equatable, Subscriptable, Iterable, ExpressibleByStringLiteral
+    type Element = int  // Unicode codepoint
     data []byte     // Reference to UTF-8 byte data
     _len int        // Explicit length (compiler passes this)
     _capacity int   // 0 = constant data, >0 = heap with refcount header
@@ -300,6 +301,7 @@ end 'string'
 // ByteView - iterate over raw UTF-8 bytes
 // Usage: for b in s.bytes 'loop' ... end 'loop'
 export struct ByteView is Iterable
+    type Element = int  // Byte value as int (0-255)
     _str string     // Reference to the source string
     _pos int        // Current byte position
 
@@ -333,6 +335,7 @@ end 'ByteView'
 // Codepoints above BMP (U+10000+) yield a surrogate pair (two 16-bit code units)
 // Usage: for u in s.utf16() 'loop' ... end 'loop'
 export struct UTF16View is Iterable
+    type Element = int  // UTF-16 code unit (0-65535)
     _str string     // Reference to the source string
     _bytePos int    // Current byte position in UTF-8 data
     _highSurrogate int  // Pending high surrogate (0 if none)

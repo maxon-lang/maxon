@@ -445,13 +445,22 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		blockIdStack.push_back(std::set<std::string>());
 
 		// Declare loop variable (immutable, like 'let')
-		// Infer type from iterable: array element type or int for range()
+		// Infer type from iterable: array element type, or Element associated type for Iterable structs
 		std::string loopVarType = "int"; // Default for range() iteration
 		if (iterableType.size() > 2 && iterableType[0] == '[') {
 			// Array type like "[5]float" - extract element type after ']'
 			size_t closeBracket = iterableType.find(']');
 			if (closeBracket != std::string::npos && closeBracket + 1 < iterableType.size()) {
 				loopVarType = iterableType.substr(closeBracket + 1);
+			}
+		} else {
+			// Check if this is a struct type with an Element associated type
+			auto structIt = structs.find(iterableType);
+			if (structIt != structs.end()) {
+				auto typeIt = structIt->second.typeAssignments.find("Element");
+				if (typeIt != structIt->second.typeAssignments.end()) {
+					loopVarType = typeIt->second;
+				}
 			}
 		}
 		declareVariable(forStmt->loopVar, loopVarType, true,

@@ -46,7 +46,8 @@ class MIRCodeGenerator {
 	// Struct type definitions
 	std::map<std::string, mir::MIRType *> structTypes;
 	std::map<std::string, std::vector<std::pair<std::string, std::string>>> structFields;
-	std::map<std::string, std::vector<std::string>> structConformsTo; // Track interface conformance
+	std::map<std::string, std::vector<std::string>> structConformsTo;				 // Track interface conformance
+	std::map<std::string, std::map<std::string, std::string>> structTypeAssignments; // Associated type assignments
 
 	// Safe FFI: Track extern functions for subprocess isolation
 	struct ExternFuncInfo {

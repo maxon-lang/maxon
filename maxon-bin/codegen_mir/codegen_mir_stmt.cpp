@@ -1003,9 +1003,22 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 		mir::MIRValue *currentVal = builder->createCall(getCurrentFunc, {iteratorAlloca}, forStmt->loopVar);
 
-		mir::MIRValue *loopVarAlloca = builder->createAlloca(mir::MIRType::getInt32(), forStmt->loopVar);
+		// Determine loop variable type from iterator's Element associated type
+		mir::MIRType *loopVarType = mir::MIRType::getInt32(); // Default
+		std::string loopVarTypeStr = "int";
+		auto typeAssignIt = structTypeAssignments.find(iterTypeName);
+		if (typeAssignIt != structTypeAssignments.end()) {
+			auto elementIt = typeAssignIt->second.find("Element");
+			if (elementIt != typeAssignIt->second.end()) {
+				loopVarTypeStr = elementIt->second;
+				loopVarType = getTypeFromString(loopVarTypeStr);
+			}
+		}
+
+		mir::MIRValue *loopVarAlloca = builder->createAlloca(loopVarType, forStmt->loopVar);
 		builder->createStore(currentVal, loopVarAlloca);
 		namedValues[forStmt->loopVar] = loopVarAlloca;
+		variableTypes[forStmt->loopVar] = loopVarTypeStr;
 
 		for (auto &s : forStmt->body) {
 			generateStmt(s.get(), function);

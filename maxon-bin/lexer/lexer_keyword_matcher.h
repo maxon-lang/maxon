@@ -74,6 +74,7 @@ class KeywordMatcher {
 		add_keyword("let", KeywordCategory::Declaration);
 		add_keyword("struct", KeywordCategory::Declaration);
 		add_keyword("interface", KeywordCategory::Declaration);
+		add_keyword("type", KeywordCategory::Declaration);
 		add_keyword("export", KeywordCategory::Declaration);
 		add_keyword("extern", KeywordCategory::Declaration);
 

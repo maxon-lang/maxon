@@ -1,0 +1,87 @@
+// Test: associated-types.char-element-type.1
+interface CharSource
+    type Element
+    function getChar(self Self) Element
+end 'CharSource'
+
+struct SingleChar is CharSource
+    ch char
+
+    type Element = char
+
+    function getChar(self SingleChar) char
+        return self.ch
+    end 'getChar'
+end 'SingleChar'
+
+function main() int
+    var s = SingleChar{ch: 'A'}
+    var c = SingleChar.getChar(s)
+    return c as int
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 10
+
+%SingleChar = type { i8 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca %SingleChar
+  %1 = getelementptr %SingleChar, ptr %0, i32 0, i32 0
+  store i8 65, ptr %1
+  %6 = getelementptr %SingleChar, ptr %0, i32 0, i32 0
+  %7 = load i8, ptr %6
+  %5 = zext i8 %7 to i32
+  ret i32 %5
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 18
+
+%SingleChar = type { i8 }
+
+define i8 @SingleChar.getChar(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %SingleChar, ptr %1, i32 0, i32 0
+  %3 = load i8, ptr %2
+  ret i8 %3
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %SingleChar
+  %1 = getelementptr %SingleChar, ptr %0, i32 0, i32 0
+  store i8 65, ptr %1
+  %2 = call i8 @SingleChar.getChar(ptr %0)
+  %3 = alloca i8
+  store i8 %2, ptr %3
+  %4 = load i8, ptr %3
+  %5 = zext i8 %4 to i32
+  ret i32 %5
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 65

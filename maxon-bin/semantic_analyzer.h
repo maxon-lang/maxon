@@ -64,13 +64,16 @@ struct StructFieldInfo {
 struct StructInfo {
 	std::string name;
 	std::vector<StructFieldInfo> fields;
-	std::vector<std::string> conformsTo; // Interfaces this struct conforms to
+	std::vector<std::string> conformsTo;				// Interfaces this struct conforms to
+	std::map<std::string, std::string> typeAssignments; // Associated type assignments (e.g., "Element" -> "char")
 	int line;
 	int column;
 
 	StructInfo(const std::string &n, std::vector<StructFieldInfo> f, int l = 0, int c = 0,
-			   std::vector<std::string> conforms = {})
-		: name(n), fields(std::move(f)), conformsTo(std::move(conforms)), line(l), column(c) {}
+			   std::vector<std::string> conforms = {},
+			   std::map<std::string, std::string> typeAssigns = {})
+		: name(n), fields(std::move(f)), conformsTo(std::move(conforms)),
+		  typeAssignments(std::move(typeAssigns)), line(l), column(c) {}
 };
 
 // Interface method signature information
@@ -87,11 +90,13 @@ struct InterfaceMethodInfo {
 struct InterfaceInfo {
 	std::string name;
 	std::vector<InterfaceMethodInfo> methods;
+	std::vector<std::string> associatedTypes; // Associated type declarations (e.g., "Element")
 	int line;
 	int column;
 
-	InterfaceInfo(const std::string &n, int l = 0, int c = 0)
-		: name(n), line(l), column(c) {}
+	InterfaceInfo(const std::string &n, int l = 0, int c = 0,
+				  std::vector<std::string> assocTypes = {})
+		: name(n), associatedTypes(std::move(assocTypes)), line(l), column(c) {}
 };
 
 class SemanticAnalyzer {
@@ -152,7 +157,7 @@ class SemanticAnalyzer {
 	std::map<std::string, FunctionInfo> functions;
 	std::map<std::string, size_t> functionIndices;				 // Map function name to index for O(1) codegen lookup
 	std::map<std::string, StructInfo> structs;					 // Struct definitions
-	std::map<std::string, InterfaceInfo> interfaces;				 // Interface definitions
+	std::map<std::string, InterfaceInfo> interfaces;			 // Interface definitions
 	std::map<std::string, VariableInfo> variables;				 // Current scope variables
 	std::vector<std::map<std::string, VariableInfo>> scopeStack; // Stack of variable scopes
 	int loopDepth;												 // Track nested loop depth

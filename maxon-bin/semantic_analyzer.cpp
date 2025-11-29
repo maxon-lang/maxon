@@ -106,7 +106,8 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 			addError("Interface '" + interfaceKey + "' is already defined",
 					 interfaceDef->line, interfaceDef->column);
 		} else {
-			InterfaceInfo protoInfo(interfaceDef->name, interfaceDef->line, interfaceDef->column);
+			InterfaceInfo protoInfo(interfaceDef->name, interfaceDef->line, interfaceDef->column,
+									interfaceDef->associatedTypes);
 			for (const auto &method : interfaceDef->methods) {
 				protoInfo.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters));
 			}
@@ -114,7 +115,8 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 			// Also register simple name
 			if (interfaces.find(interfaceDef->name) == interfaces.end()) {
-				InterfaceInfo protoInfoSimple(interfaceDef->name, interfaceDef->line, interfaceDef->column);
+				InterfaceInfo protoInfoSimple(interfaceDef->name, interfaceDef->line, interfaceDef->column,
+											  interfaceDef->associatedTypes);
 				for (const auto &method : interfaceDef->methods) {
 					protoInfoSimple.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters));
 				}
@@ -153,12 +155,14 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 			// Register with qualified name
 			structs.emplace(structKey, StructInfo(structDef->name, fields,
-												  structDef->line, structDef->column, structDef->conformsTo));
+												  structDef->line, structDef->column, structDef->conformsTo,
+												  structDef->typeAssignments));
 
 			// Also register the simple name for use within the same file/namespace
 			if (structs.find(structDef->name) == structs.end()) {
 				structs.emplace(structDef->name, StructInfo(structDef->name, fields,
-															structDef->line, structDef->column, structDef->conformsTo));
+															structDef->line, structDef->column, structDef->conformsTo,
+															structDef->typeAssignments));
 			}
 		}
 	}
@@ -514,6 +518,28 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 		return;
 	}
 
+	// Get the struct's type assignments for resolving associated types
+	auto structIt = structs.find(structName);
+	const std::map<std::string, std::string> *typeAssignments = nullptr;
+	if (structIt != structs.end()) {
+		typeAssignments = &structIt->second.typeAssignments;
+	}
+
+	// Helper lambda to resolve associated types in a type string
+	auto resolveType = [&](const std::string &type) -> std::string {
+		if (type == "Self") {
+			return structName;
+		}
+		// Check if this type name is an associated type
+		if (typeAssignments) {
+			auto assignIt = typeAssignments->find(type);
+			if (assignIt != typeAssignments->end()) {
+				return assignIt->second;
+			}
+		}
+		return type;
+	};
+
 	for (const auto &interfaceName : conformsTo) {
 		// Find the interface
 		auto protoIt = interfaces.find(interfaceName);
@@ -527,6 +553,15 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 		const InterfaceInfo &interface = protoIt->second;
 		logTrace("Checking conformance of " + structName + " to " + interfaceName);
 
+		// First, check that all associated types are defined
+		for (const auto &assocType : interface.associatedTypes) {
+			if (!typeAssignments || typeAssignments->find(assocType) == typeAssignments->end()) {
+				addError("Struct '" + structName + "' does not define required associated type '" + assocType +
+							 "' from interface '" + interfaceName + "'",
+						 line, column);
+			}
+		}
+
 		// Check each method in the interface
 		for (const auto &protoMethod : interface.methods) {
 			// Build expected method name: StructName.methodName
@@ -538,13 +573,10 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 				for (size_t i = 0; i < protoMethod.parameters.size(); i++) {
 					if (i > 0)
 						paramStr += ", ";
-					// Replace Self with actual struct name
-					std::string paramType = protoMethod.parameters[i].type;
-					if (paramType == "Self")
-						paramType = structName;
+					std::string paramType = resolveType(protoMethod.parameters[i].type);
 					paramStr += protoMethod.parameters[i].name + " " + paramType;
 				}
-				std::string returnType = protoMethod.returnType == "Self" ? structName : protoMethod.returnType;
+				std::string returnType = resolveType(protoMethod.returnType);
 
 				addError("Struct '" + structName + "' does not implement required method '" + protoMethod.name +
 							 "' from interface '" + interfaceName + "'" +
@@ -554,9 +586,9 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 				continue;
 			}
 
-			// Check return type (substituting Self for structName)
+			// Check return type (substituting Self and associated types)
 			const FunctionInfo &implFunc = funcIt->second;
-			std::string expectedReturnType = protoMethod.returnType == "Self" ? structName : protoMethod.returnType;
+			std::string expectedReturnType = resolveType(protoMethod.returnType);
 			if (implFunc.returnType != expectedReturnType) {
 				addError("Method '" + expectedMethodName + "' has return type '" + implFunc.returnType +
 							 "' but interface '" + interfaceName + "' requires '" + expectedReturnType + "'",
@@ -572,11 +604,9 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 				continue;
 			}
 
-			// Check parameter types (substituting Self for structName)
+			// Check parameter types (substituting Self and associated types)
 			for (size_t i = 0; i < protoMethod.parameters.size(); i++) {
-				std::string expectedParamType = protoMethod.parameters[i].type == "Self"
-													? structName
-													: protoMethod.parameters[i].type;
+				std::string expectedParamType = resolveType(protoMethod.parameters[i].type);
 				if (implFunc.parameters[i].type != expectedParamType) {
 					addError("Method '" + expectedMethodName + "' parameter " + std::to_string(i + 1) +
 								 " has type '" + implFunc.parameters[i].type +

@@ -2,15 +2,23 @@
 You *Are* Going To Read It
 
 
-## Priorities
-- associated types
+Sequence: The most basic protocol. Allows you to iterate (use a for loop).
 
+Collection: Extends Sequence. Adds the ability to access elements by index (str[i]) and count elements.
+
+BidirectionalCollection: Extends Collection. Adds the ability to traverse backwards (needed for finding the last index of a character).
+
+StringProtocol: Extends BidirectionalCollection. This is the specific protocol that adds string-like behaviors (comparisons, uppercase/lowercase transformations, C-string interoperability).
+
+Why do this? By making String a Collection, you get hundreds of algorithms for free: .map, .filter, .reduce, .dropFirst, .split. The Swift team didn't have to write these specifically for Strings; they just inherited them from the Collection protocol logic.
+
+## Priorities
 - debugging (speed up the dev process)
 - memory safety (generational references)
 - string formatting
+- self hosting features
 
 ## TODO
-
 - simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")
 - platform specific optimization for runtime
 - warnings as errors in release mode
@@ -22,8 +30,10 @@ You *Are* Going To Read It
 - refactor lsp semantic analyzer with compiler
 - enums
 - remove ptr
+- remove redundant backend tests (test fragments are faster)
 
 ## Ideas
+- reorganize structs to improve cache locality
 - array syntax: var x = array of 10 int
 - define structs by usage 
 	var p = Point { x: 3, y: 4 }

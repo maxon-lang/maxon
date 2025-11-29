@@ -52,6 +52,7 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
 	{"let", {KeywordCategory::Declaration, "Immutable variable"}},
 	{"struct", {KeywordCategory::Declaration, "Structure type"}},
 	{"interface", {KeywordCategory::Declaration, "Interface declaration"}},
+	{"type", {KeywordCategory::Declaration, "Associated type declaration"}},
 	{"export", {KeywordCategory::Declaration, "Export declaration"}},
 	{"extern", {KeywordCategory::Declaration, "External declaration"}},
 

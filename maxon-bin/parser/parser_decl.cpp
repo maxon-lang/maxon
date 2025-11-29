@@ -330,10 +330,56 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 
 	std::vector<StructField> fields;
 	std::vector<std::unique_ptr<FunctionAST>> methods;
+	std::map<std::string, std::string> typeAssignments;
 	bool parsingFields = true; // Fields must come before methods
 
-	// Parse fields and methods until we hit 'end'
+	// Parse fields, type assignments, and methods until we hit 'end'
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+		// Check for type assignment: type Name = ConcreteType
+		if (checkKeyword("type")) {
+			advance(); // consume 'type'
+			Token typeNameToken = expect(TokenType::IDENTIFIER, "Expected associated type name after 'type'");
+			expectAdvance(TokenType::ASSIGN, "Expected '=' after associated type name");
+
+			// Parse the concrete type
+			std::string concreteType;
+			if (check(TokenType::LBRACKET)) {
+				// Array type: [size]type or []type
+				advance(); // consume '['
+				std::string sizeStr = "";
+				if (check(TokenType::NUMBER)) {
+					sizeStr = std::string(currentValue());
+					advance();
+				}
+				expectAdvance(TokenType::RBRACKET, "Expected ']' after array size");
+				std::string elementType;
+				if (Lexer::isTypeToken(currentToken())) {
+					elementType = std::string(currentValue());
+					advance();
+				} else if (check(TokenType::IDENTIFIER)) {
+					elementType = parseQualifiedName("array element type");
+				} else {
+					throw std::runtime_error("Expected array element type after ']' at line " +
+											 std::to_string(currentLine()) + ", column " +
+											 std::to_string(currentColumn()));
+				}
+				concreteType = "[" + sizeStr + "]" + elementType;
+			} else if (Lexer::isTypeToken(currentToken())) {
+				concreteType = std::string(currentValue());
+				advance();
+			} else if (check(TokenType::IDENTIFIER)) {
+				concreteType = parseQualifiedName("concrete type");
+			} else {
+				throw std::runtime_error("Expected concrete type after '=' in type assignment at line " +
+										 std::to_string(currentLine()) + ", column " +
+										 std::to_string(currentColumn()));
+			}
+
+			typeAssignments[typeNameToken.value] = concreteType;
+			logTrace("  Type assignment '" + typeNameToken.value + "' = " + concreteType);
+			continue;
+		}
+
 		// Check for method: 'function' or 'export function'
 		if (checkKeyword("function") || (checkKeyword("export") && checkKeyword("function", 1))) {
 			parsingFields = false; // Once we see a method, no more fields allowed
@@ -409,7 +455,7 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 								 std::string(", column ") + std::to_string(blockIdToken.column));
 	}
 
-	return std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo), std::move(methods));
+	return std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo), std::move(methods), std::move(typeAssignments));
 }
 
 std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &structName) {
@@ -467,11 +513,21 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 			 " at line " + std::to_string(line));
 
 	std::vector<InterfaceMethodSignature> methods;
+	std::vector<std::string> associatedTypes;
 
-	// Parse method signatures until we hit 'end'
+	// Parse associated types and method signatures until we hit 'end'
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+		// Check for associated type declaration: type Name
+		if (checkKeyword("type")) {
+			advance(); // consume 'type'
+			Token typeNameToken = expect(TokenType::IDENTIFIER, "Expected associated type name after 'type'");
+			associatedTypes.push_back(typeNameToken.value);
+			logTrace("  Associated type '" + typeNameToken.value + "'");
+			continue;
+		}
+
 		// Each method starts with 'function'
-		Token funcToken = expectKeyword("function", "Expected 'function' for method signature in interface");
+		Token funcToken = expectKeyword("function", "Expected 'function' or 'type' in interface");
 		Token methodNameToken = expect(TokenType::IDENTIFIER, "Expected method name");
 		std::string methodName = methodNameToken.value;
 
@@ -565,7 +621,8 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 								 std::string(", column ") + std::to_string(blockIdToken.column));
 	}
 
-	logTrace("Interface '" + interfaceName + "' with " + std::to_string(methods.size()) + " methods");
+	logTrace("Interface '" + interfaceName + "' with " + std::to_string(methods.size()) + " methods" +
+			 (associatedTypes.empty() ? "" : ", " + std::to_string(associatedTypes.size()) + " associated type(s)"));
 
-	return std::make_unique<InterfaceDefAST>(interfaceName, std::move(methods), line, column, defaultNamespace, isExported);
+	return std::make_unique<InterfaceDefAST>(interfaceName, std::move(methods), line, column, defaultNamespace, isExported, std::move(associatedTypes));
 }

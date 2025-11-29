@@ -1,0 +1,126 @@
+// Test: associated-types.associated-type-in-param.1
+interface Accumulator
+    type Item
+    function add(self Self, item Item) Self
+    function total(self Self) int
+end 'Accumulator'
+
+struct IntSum is Accumulator
+    sum int
+
+    type Item = int
+
+    function add(self IntSum, item int) IntSum
+        return IntSum{sum: self.sum + item}
+    end 'add'
+
+    function total(self IntSum) int
+        return self.sum
+    end 'total'
+end 'IntSum'
+
+function main() int
+    var acc = IntSum{sum: 0}
+    acc = IntSum.add(acc, 10)
+    acc = IntSum.add(acc, 32)
+    return IntSum.total(acc)
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 21
+
+%IntSum = type { i32 }
+
+define %IntSum @IntSum.add(ptr %self, i32 %item) {
+entry0:
+  %2 = alloca %IntSum
+  %4 = getelementptr %IntSum, ptr %self, i32 0, i32 0
+  %5 = load i32, ptr %4
+  %7 = add i32 %5, %item
+  %8 = getelementptr %IntSum, ptr %2, i32 0, i32 0
+  store i32 %7, ptr %8
+  %9 = load %IntSum, ptr %2
+  ret %IntSum %9
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %IntSum
+  %1 = getelementptr %IntSum, ptr %0, i32 0, i32 0
+  store i32 0, ptr %1
+  %2 = call %IntSum @IntSum.add(ptr %0, i32 10)
+  store %IntSum %2, ptr %0
+  %3 = call %IntSum @IntSum.add(ptr %0, i32 32)
+  store %IntSum %3, ptr %0
+  %5 = getelementptr %IntSum, ptr %0, i32 0, i32 0
+  %6 = load i32, ptr %5
+  ret i32 %6
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 32
+
+%IntSum = type { i32 }
+
+define %IntSum @IntSum.add(ptr %self, i32 %item) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 %item, ptr %1
+  %2 = alloca %IntSum
+  %3 = load ptr, ptr %0
+  %4 = getelementptr %IntSum, ptr %3, i32 0, i32 0
+  %5 = load i32, ptr %4
+  %6 = load i32, ptr %1
+  %7 = add i32 %5, %6
+  %8 = getelementptr %IntSum, ptr %2, i32 0, i32 0
+  store i32 %7, ptr %8
+  %9 = load %IntSum, ptr %2
+  ret %IntSum %9
+}
+
+define i32 @IntSum.total(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %IntSum, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  ret i32 %3
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %IntSum
+  %1 = getelementptr %IntSum, ptr %0, i32 0, i32 0
+  store i32 0, ptr %1
+  %2 = call %IntSum @IntSum.add(ptr %0, i32 10)
+  store %IntSum %2, ptr %0
+  %3 = call %IntSum @IntSum.add(ptr %0, i32 32)
+  store %IntSum %3, ptr %0
+  %4 = call i32 @IntSum.total(ptr %0)
+  ret i32 %4
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 42

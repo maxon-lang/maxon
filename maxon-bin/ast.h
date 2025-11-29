@@ -1,6 +1,7 @@
 #ifndef AST_H
 #define AST_H
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -396,13 +397,16 @@ class InterfaceDefAST : public ASTNode {
 	std::string name;
 	std::string namespaceName; // Namespace this interface belongs to
 	std::vector<InterfaceMethodSignature> methods;
+	std::vector<std::string> associatedTypes; // Associated type declarations (e.g., "Element")
 	bool isExported;
 	int line;
 	int column;
 
 	InterfaceDefAST(const std::string &n, std::vector<InterfaceMethodSignature> m,
-					int l = 0, int c = 0, const std::string &ns = "", bool exp = false)
-		: name(n), namespaceName(ns), methods(std::move(m)), isExported(exp), line(l), column(c) {}
+					int l = 0, int c = 0, const std::string &ns = "", bool exp = false,
+					std::vector<std::string> assocTypes = {})
+		: name(n), namespaceName(ns), methods(std::move(m)), associatedTypes(std::move(assocTypes)),
+		  isExported(exp), line(l), column(c) {}
 };
 
 // Struct field definition
@@ -433,18 +437,21 @@ class StructDefAST : public ASTNode {
 	std::string name;
 	std::string namespaceName; // Namespace this struct belongs to (derived from file path)
 	std::vector<StructField> fields;
-	std::vector<std::unique_ptr<FunctionAST>> methods; // Methods declared inside the struct
-	std::vector<std::string> conformsTo;			   // Interface names this struct conforms to (via 'is')
-	bool isExported;								   // true if this struct is exported (visible outside this file)
+	std::vector<std::unique_ptr<FunctionAST>> methods;	// Methods declared inside the struct
+	std::vector<std::string> conformsTo;				// Interface names this struct conforms to (via 'is')
+	std::map<std::string, std::string> typeAssignments; // Associated type assignments (e.g., "Element" -> "char")
+	bool isExported;									// true if this struct is exported (visible outside this file)
 	int line;
 	int column;
 
 	StructDefAST(const std::string &n, std::vector<StructField> f, int l = 0, int c = 0,
 				 const std::string &ns = "", bool exp = false,
 				 std::vector<std::string> interfaces = {},
-				 std::vector<std::unique_ptr<FunctionAST>> m = {})
+				 std::vector<std::unique_ptr<FunctionAST>> m = {},
+				 std::map<std::string, std::string> typeAssigns = {})
 		: name(n), namespaceName(ns), fields(std::move(f)), methods(std::move(m)),
-		  conformsTo(std::move(interfaces)), isExported(exp), line(l), column(c) {}
+		  conformsTo(std::move(interfaces)), typeAssignments(std::move(typeAssigns)),
+		  isExported(exp), line(l), column(c) {}
 };
 
 // Struct initialization expression (struct literal)

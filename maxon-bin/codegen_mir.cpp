@@ -428,6 +428,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		mir::MIRType *structType = module->getOrCreateStructType(structDef->name, {});
 		structTypes[structDef->name] = structType;
 		structConformsTo[structDef->name] = structDef->conformsTo;
+		structTypeAssignments[structDef->name] = structDef->typeAssignments;
 	}
 
 	// Second pass: Fill in struct fields now that all types are declared
