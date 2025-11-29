@@ -16,14 +16,27 @@
 
 // Helper function to get Maxon type from an AST expression
 // This is used for type-aware code generation (e.g., Equatable comparison)
+// currentReceiverType is used for implicit field access resolution
 static std::string getExpressionMaxonType(ExprAST *expr,
 										  const std::map<std::string, std::string> &variableTypes,
 										  const std::map<std::string, mir::MIRType *> &structTypes,
-										  const std::map<std::string, std::vector<std::pair<std::string, std::string>>> &structFields) {
+										  const std::map<std::string, std::vector<std::pair<std::string, std::string>>> &structFields,
+										  const std::string &currentReceiverType = "") {
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
 		auto it = variableTypes.find(varExpr->name);
 		if (it != variableTypes.end()) {
 			return it->second;
+		}
+		// Check for implicit field access
+		if (!currentReceiverType.empty()) {
+			auto fieldsIt = structFields.find(currentReceiverType);
+			if (fieldsIt != structFields.end()) {
+				for (const auto &field : fieldsIt->second) {
+					if (field.first == varExpr->name) {
+						return field.second;
+					}
+				}
+			}
 		}
 		return "";
 	}
@@ -51,12 +64,24 @@ static std::string getExpressionMaxonType(ExprAST *expr,
 		std::string objectType;
 		if (memberAccess->object) {
 			// Recursive case: complex expression (e.g., a.b in a.b.c)
-			objectType = getExpressionMaxonType(memberAccess->object.get(), variableTypes, structTypes, structFields);
+			objectType = getExpressionMaxonType(memberAccess->object.get(), variableTypes, structTypes, structFields, currentReceiverType);
 		} else {
 			// Base case: simple variable access (e.g., self in self.field)
 			auto it = variableTypes.find(memberAccess->objectName);
-			if (it != variableTypes.end()) {
+			// Check if key exists AND has a non-empty value (empty values are inserted by operator[])
+			if (it != variableTypes.end() && !it->second.empty()) {
 				objectType = it->second;
+			} else if (!currentReceiverType.empty()) {
+				// Check for implicit field access
+				auto fieldsIt = structFields.find(currentReceiverType);
+				if (fieldsIt != structFields.end()) {
+					for (const auto &field : fieldsIt->second) {
+						if (field.first == memberAccess->objectName) {
+							objectType = field.second;
+							break;
+						}
+					}
+				}
 			}
 		}
 
@@ -76,8 +101,8 @@ static std::string getExpressionMaxonType(ExprAST *expr,
 	// Handle binary expressions - recursively determine result type
 	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
 		if (binExpr->op == '+') {
-			std::string leftType = getExpressionMaxonType(binExpr->left.get(), variableTypes, structTypes, structFields);
-			std::string rightType = getExpressionMaxonType(binExpr->right.get(), variableTypes, structTypes, structFields);
+			std::string leftType = getExpressionMaxonType(binExpr->left.get(), variableTypes, structTypes, structFields, currentReceiverType);
+			std::string rightType = getExpressionMaxonType(binExpr->right.get(), variableTypes, structTypes, structFields, currentReceiverType);
 			if (leftType == "string" && rightType == "string") {
 				return "string";
 			}
@@ -363,6 +388,51 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
 		mir::MIRValue *alloca = namedValues[varExpr->name];
 		if (!alloca) {
+			// If we're in a method and variable not found, check if it's a struct field
+			// This enables implicit self field access: 'count' instead of 'self.count'
+			if (!currentReceiverType.empty()) {
+				auto fieldsIt = structFields.find(currentReceiverType);
+				if (fieldsIt != structFields.end()) {
+					int fieldIndex = -1;
+					std::string fieldType;
+					for (size_t i = 0; i < fieldsIt->second.size(); i++) {
+						if (fieldsIt->second[i].first == varExpr->name) {
+							fieldIndex = static_cast<int>(i);
+							fieldType = fieldsIt->second[i].second;
+							break;
+						}
+					}
+
+					if (fieldIndex >= 0) {
+						// Generate field access through implicit 'self' parameter
+						// self is always a struct pointer (first parameter)
+						mir::MIRValue *selfAlloca = namedValues["self"];
+						if (selfAlloca) {
+							// self is a struct - load pointer to it
+							mir::MIRValue *selfPtr;
+							if (isStructParameter("self")) {
+								// Load the pointer from the alloca
+								selfPtr = builder->createLoad(mir::MIRType::getPtr(), selfAlloca, "self.ptr");
+							} else {
+								selfPtr = selfAlloca;
+							}
+
+							// Get field pointer with GEP
+							mir::MIRType *structType = structTypes[currentReceiverType];
+							mir::MIRValue *fieldPtr = builder->createStructGEP(structType, selfPtr, fieldIndex, varExpr->name + ".ptr");
+
+							// For array/unsized array fields, return pointer (for subsequent indexing or struct init)
+							if (fieldType.size() > 2 && fieldType[0] == '[') {
+								return fieldPtr;
+							}
+
+							// Load the field value for non-array fields
+							mir::MIRType *fieldMIRType = getTypeFromString(fieldType);
+							return builder->createLoad(fieldMIRType, fieldPtr, varExpr->name);
+						}
+					}
+				}
+			}
 			throw std::runtime_error("Unknown variable name: " + varExpr->name);
 		}
 
@@ -434,12 +504,45 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 						baseObjType = variableTypes[ma->objectName];
 						mir::MIRValue *structAlloca = namedValues[ma->objectName];
 						if (!structAlloca) {
-							throw std::runtime_error("Unknown variable: " + ma->objectName);
-						}
-						if (isStructParameter(ma->objectName)) {
-							basePtr = builder->createLoad(mir::MIRType::getPtr(), structAlloca, "struct.ptr");
+							// Check for implicit field access
+							if (!currentReceiverType.empty()) {
+								auto fieldsIt = structFields.find(currentReceiverType);
+								if (fieldsIt != structFields.end()) {
+									int fieldIndex = -1;
+									std::string fieldType;
+									for (size_t i = 0; i < fieldsIt->second.size(); i++) {
+										if (fieldsIt->second[i].first == ma->objectName) {
+											fieldIndex = static_cast<int>(i);
+											fieldType = fieldsIt->second[i].second;
+											break;
+										}
+									}
+									if (fieldIndex >= 0) {
+										mir::MIRValue *selfAlloca = namedValues["self"];
+										if (selfAlloca) {
+											mir::MIRValue *selfPtr;
+											if (isStructParameter("self")) {
+												selfPtr = builder->createLoad(mir::MIRType::getPtr(), selfAlloca, "self.ptr");
+											} else {
+												selfPtr = selfAlloca;
+											}
+											mir::MIRType *structType = structTypes[currentReceiverType];
+											basePtr = builder->createStructGEP(structType, selfPtr, fieldIndex, ma->objectName + ".ptr");
+											baseObjType = fieldType;
+											break;
+										}
+									}
+								}
+							}
+							if (!basePtr) {
+								throw std::runtime_error("Unknown variable: " + ma->objectName);
+							}
 						} else {
-							basePtr = structAlloca;
+							if (isStructParameter(ma->objectName)) {
+								basePtr = builder->createLoad(mir::MIRType::getPtr(), structAlloca, "struct.ptr");
+							} else {
+								basePtr = structAlloca;
+							}
 						}
 						break;
 					}
@@ -486,7 +589,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			} else {
 				// Other complex expression
 				mir::MIRValue *objectValue = generateExpr(memberAccessExpr->object.get());
-				varType = getExpressionMaxonType(memberAccessExpr->object.get(), variableTypes, structTypes, structFields);
+				varType = getExpressionMaxonType(memberAccessExpr->object.get(), variableTypes, structTypes, structFields, currentReceiverType);
 				objectPtr = objectValue;
 			}
 		} else {
@@ -494,6 +597,36 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			varType = variableTypes[memberAccessExpr->objectName];
 			mir::MIRValue *structAlloca = namedValues[memberAccessExpr->objectName];
 			if (!structAlloca) {
+				// Check for implicit field access
+				if (!currentReceiverType.empty()) {
+					auto fieldsIt = structFields.find(currentReceiverType);
+					if (fieldsIt != structFields.end()) {
+						int fieldIndex = -1;
+						std::string fieldType;
+						for (size_t i = 0; i < fieldsIt->second.size(); i++) {
+							if (fieldsIt->second[i].first == memberAccessExpr->objectName) {
+								fieldIndex = static_cast<int>(i);
+								fieldType = fieldsIt->second[i].second;
+								break;
+							}
+						}
+						if (fieldIndex >= 0) {
+							mir::MIRValue *selfAlloca = namedValues["self"];
+							if (selfAlloca) {
+								mir::MIRValue *selfPtr;
+								if (isStructParameter("self")) {
+									selfPtr = builder->createLoad(mir::MIRType::getPtr(), selfAlloca, "self.ptr");
+								} else {
+									selfPtr = selfAlloca;
+								}
+								mir::MIRType *structType = structTypes[currentReceiverType];
+								objectPtr = builder->createStructGEP(structType, selfPtr, fieldIndex, memberAccessExpr->objectName + ".ptr");
+								varType = fieldType;
+								goto handle_member_access;
+							}
+						}
+					}
+				}
 				throw std::runtime_error("Unknown variable: " + memberAccessExpr->objectName);
 			}
 
@@ -509,6 +642,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				objectPtr = structAlloca;
 			}
 		}
+
+	handle_member_access:
 
 		// Check for struct member access
 		if (structTypes.find(varType) != structTypes.end()) {
@@ -593,7 +728,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			bool isUnsizedArray = false;
 
 			// Get the array field type using getExpressionMaxonType for nested member access
-			std::string arrayFieldType = getExpressionMaxonType(arrayIndexExpr->arrayExpr.get(), variableTypes, structTypes, structFields);
+			std::string arrayFieldType = getExpressionMaxonType(arrayIndexExpr->arrayExpr.get(), variableTypes, structTypes, structFields, currentReceiverType);
+			logTrace("ArrayIndex in '" + currentReceiverType + "': arrayFieldType = '" + arrayFieldType + "'");
 			if (arrayFieldType.size() > 2 && arrayFieldType[0] == '[') {
 				size_t closeBracket = arrayFieldType.find(']');
 				if (closeBracket != std::string::npos && closeBracket + 1 < arrayFieldType.size()) {
@@ -601,6 +737,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					elementTypeStr = arrayFieldType.substr(closeBracket + 1);
 					// Check for unsized array: []type (empty size)
 					isUnsizedArray = sizeStr.empty();
+					logTrace("ArrayIndex in '" + currentReceiverType + "': elementTypeStr = '" + elementTypeStr + "', isUnsizedArray = " + (isUnsizedArray ? "true" : "false"));
 				}
 			}
 
@@ -627,6 +764,59 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		// Simple array[i] access
 		mir::MIRValue *alloca = namedValues[arrayIndexExpr->arrayName];
 		if (!alloca) {
+			// If we're in a method and array not found, check if it's a struct field
+			// This enables implicit self field access for arrays: 'data[i]' instead of 'self.data[i]'
+			if (!currentReceiverType.empty()) {
+				auto fieldsIt = structFields.find(currentReceiverType);
+				if (fieldsIt != structFields.end()) {
+					int fieldIndex = -1;
+					std::string fieldType;
+					for (size_t i = 0; i < fieldsIt->second.size(); i++) {
+						if (fieldsIt->second[i].first == arrayIndexExpr->arrayName) {
+							fieldIndex = static_cast<int>(i);
+							fieldType = fieldsIt->second[i].second;
+							break;
+						}
+					}
+
+					if (fieldIndex >= 0 && fieldType.size() > 2 && fieldType[0] == '[') {
+						// Found array field - generate access through implicit 'self' parameter
+						mir::MIRValue *selfAlloca = namedValues["self"];
+						if (selfAlloca) {
+							mir::MIRValue *selfPtr;
+							if (isStructParameter("self")) {
+								selfPtr = builder->createLoad(mir::MIRType::getPtr(), selfAlloca, "self.ptr");
+							} else {
+								selfPtr = selfAlloca;
+							}
+
+							// Get field pointer with GEP
+							mir::MIRType *structType = structTypes[currentReceiverType];
+							mir::MIRValue *fieldPtr = builder->createStructGEP(structType, selfPtr, fieldIndex, arrayIndexExpr->arrayName + ".ptr");
+
+							// Determine element type
+							size_t closeBracket = fieldType.find(']');
+							std::string elementTypeStr = fieldType.substr(closeBracket + 1);
+							std::string sizeStr = fieldType.substr(1, closeBracket - 1);
+							bool isUnsizedArray = sizeStr.empty();
+							mir::MIRType *elementType = getTypeFromString(elementTypeStr);
+
+							// For unsized arrays, load the data pointer from fat pointer
+							mir::MIRValue *dataPtr = fieldPtr;
+							if (isUnsizedArray) {
+								mir::MIRType *unsizedArrayType = module->getOrCreateStructType(
+									"__unsized_array_" + elementTypeStr,
+									{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+								mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, fieldPtr, 0, "unsized.data.ptr");
+								dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrField, "unsized.data");
+							}
+
+							mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, dataPtr, indexVal, "implicitfield.array.idx");
+							return builder->createLoad(elementType, elementPtr, "implicitfield.array.elem");
+						}
+					}
+				}
+			}
 			throw std::runtime_error("Unknown array name: " + arrayIndexExpr->arrayName);
 		}
 
@@ -664,7 +854,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
 		// For == and != on Equatable struct types, route to equals method
 		if (binExpr->op == 'E' || binExpr->op == 'N') {
-			std::string leftType = getExpressionMaxonType(binExpr->left.get(), variableTypes, structTypes, structFields);
+			std::string leftType = getExpressionMaxonType(binExpr->left.get(), variableTypes, structTypes, structFields, currentReceiverType);
 
 			// Check if this is an Equatable struct type
 			auto structIt = structTypes.find(leftType);
@@ -728,8 +918,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 		// Special handling for string + string -> call concat and heap-allocate result
 		if (binExpr->op == '+') {
-			std::string leftType = getExpressionMaxonType(binExpr->left.get(), variableTypes, structTypes, structFields);
-			std::string rightType = getExpressionMaxonType(binExpr->right.get(), variableTypes, structTypes, structFields);
+			std::string leftType = getExpressionMaxonType(binExpr->left.get(), variableTypes, structTypes, structFields, currentReceiverType);
+			std::string rightType = getExpressionMaxonType(binExpr->right.get(), variableTypes, structTypes, structFields, currentReceiverType);
 
 			if (leftType == "string" && rightType == "string") {
 				// Initialize heap management for string_alloc

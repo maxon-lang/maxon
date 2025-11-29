@@ -53,6 +53,8 @@ static const std::unordered_map<std::string, KeywordData> keywords = {
 	{"struct", {KeywordCategory::Declaration, "Structure type"}},
 	{"interface", {KeywordCategory::Declaration, "Interface declaration"}},
 	{"type", {KeywordCategory::Declaration, "Associated type declaration"}},
+	{"uses", {KeywordCategory::Declaration, "Interface associated type declaration"}},
+	{"with", {KeywordCategory::Declaration, "Struct associated type binding"}},
 	{"export", {KeywordCategory::Declaration, "Export declaration"}},
 	{"extern", {KeywordCategory::Declaration, "External declaration"}},
 

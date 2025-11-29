@@ -1,29 +1,26 @@
 // Test: associated-types.associated-type-in-param.1
-interface Accumulator
-    type Item
-    function add(self Self, item Item) Self
-    function total(self Self) int
+interface Accumulator uses Item
+    function add(item Item) Self
+    function total() int
 end 'Accumulator'
 
-struct IntSum is Accumulator
+struct IntSum is Accumulator with int
     sum int
 
-    type Item = int
-
-    function add(self IntSum, item int) IntSum
-        return IntSum{sum: self.sum + item}
+    function add(item int) IntSum
+        return IntSum{sum: sum + item}
     end 'add'
 
-    function total(self IntSum) int
-        return self.sum
+    function total() int
+        return sum
     end 'total'
 end 'IntSum'
 
 function main() int
     var acc = IntSum{sum: 0}
-    acc = IntSum.add(acc, 10)
-    acc = IntSum.add(acc, 32)
-    return IntSum.total(acc)
+    acc = acc.add(10)
+    acc = acc.add(32)
+    return acc.total()
 end 'main'
 ---
 ; Module: test.maxon

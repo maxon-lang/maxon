@@ -367,42 +367,52 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			// Check if qualifier is a type (struct) name - if so, this is a method call
 			bool isMethodCall = (structs.find(qualifier) != structs.end());
 
-			// Only warn about unnecessary qualification for namespace-qualified calls, not method calls
-			if (!isMethodCall) {
-				// Check how many functions match the unqualified name
-				std::string searchSuffix = "." + unqualifiedName;
-				std::vector<std::string> matches;
-
-				// Check for exact match with unqualified name (global function)
-				if (functions.find(unqualifiedName) != functions.end()) {
-					matches.push_back(unqualifiedName);
+			// Disallow qualified method calls - use instance.method() syntax instead
+			if (isMethodCall) {
+				addError("Qualified method call not allowed: '" + callExpr->callee + "'" +
+							 std::string("\n  Use method call syntax instead: instance.") + unqualifiedName + "()",
+						 expr->line, expr->column);
+				// Still analyze arguments to mark variables as used
+				for (auto &arg : callExpr->args) {
+					analyzeExpression(arg.get());
 				}
+				return "error";
+			}
 
-				// Check for qualified matches (but exclude method-style qualifications)
-				for (const auto &pair : functions) {
-					const std::string &funcName = pair.first;
-					if (funcName.size() > searchSuffix.size() &&
-						funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
-						// Check if this is a method (qualifier is a type)
-						size_t dotPos = funcName.rfind(".");
-						if (dotPos != std::string::npos) {
-							std::string funcQualifier = funcName.substr(0, dotPos);
-							if (structs.find(funcQualifier) != structs.end()) {
-								// This is a method, don't include in matches for unqualified resolution
-								continue;
-							}
+			// Only warn about unnecessary qualification for namespace-qualified calls
+			// Check how many functions match the unqualified name
+			std::string searchSuffix = "." + unqualifiedName;
+			std::vector<std::string> matches;
+
+			// Check for exact match with unqualified name (global function)
+			if (functions.find(unqualifiedName) != functions.end()) {
+				matches.push_back(unqualifiedName);
+			}
+
+			// Check for qualified matches (but exclude method-style qualifications)
+			for (const auto &pair : functions) {
+				const std::string &funcName = pair.first;
+				if (funcName.size() > searchSuffix.size() &&
+					funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
+					// Check if this is a method (qualifier is a type)
+					size_t dotPos = funcName.rfind(".");
+					if (dotPos != std::string::npos) {
+						std::string funcQualifier = funcName.substr(0, dotPos);
+						if (structs.find(funcQualifier) != structs.end()) {
+							// This is a method, don't include in matches for unqualified resolution
+							continue;
 						}
-						matches.push_back(funcName);
 					}
+					matches.push_back(funcName);
 				}
+			}
 
-				// If there's only one match, the qualified name is unnecessary
-				if (matches.size() == 1) {
-					addWarning("Unnecessary qualified name: '" + callExpr->callee + "'" +
-								   std::string("\n  The unqualified name '") + unqualifiedName + "' is unambiguous" +
-								   "\n  Consider using '" + unqualifiedName + "' instead",
-							   expr->line, expr->column, "unnecessary-qualified-name");
-				}
+			// If there's only one match, the qualified name is unnecessary
+			if (matches.size() == 1) {
+				addWarning("Unnecessary qualified name: '" + callExpr->callee + "'" +
+							   std::string("\n  The unqualified name '") + unqualifiedName + "' is unambiguous" +
+							   "\n  Consider using '" + unqualifiedName + "' instead",
+						   expr->line, expr->column, "unnecessary-qualified-name");
 			}
 		}
 
@@ -432,28 +442,65 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				}
 				return "error";
 			} else if (matches.size() > 1) {
-				// Ambiguous call
-				std::string errorMsg = "Ambiguous function call: '" + callExpr->callee + "'" +
-									   std::string("\n  Multiple definitions found:");
-				for (const auto &match : matches) {
-					errorMsg += "\n    - " + match;
-				}
-				errorMsg += "\n  Use a qualified name to disambiguate (e.g., namespace.function)";
-				addError(errorMsg, expr->line, expr->column);
-				// Still analyze arguments to mark variables as used
-				for (auto &arg : callExpr->args) {
-					analyzeExpression(arg.get());
-				}
-				return "error";
-			}
+				// Multiple matches found - try to disambiguate using first argument type
+				// This handles method calls where obj.method() becomes method(obj)
+				// and the first argument's type can resolve which Type.method to call
+				std::string resolvedMatch;
 
-			// Exactly one match - use it for validation and set function ID
-			// Note: We found the function, so it's not undefined
-			funcIt = functions.find(matches[0]);
-			// Store the resolved function ID in the AST for fast codegen lookup
-			auto idIt = functionIndices.find(matches[0]);
-			if (idIt != functionIndices.end()) {
-				callExpr->functionId = idIt->second;
+				if (!callExpr->args.empty()) {
+					// Get the type of the first argument
+					std::string firstArgType = analyzeExpression(callExpr->args[0].get());
+
+					// Look for a method with matching qualifier (Type.method where Type == firstArgType)
+					for (const auto &match : matches) {
+						size_t dotPos = match.rfind(".");
+						if (dotPos != std::string::npos) {
+							std::string qualifier = match.substr(0, dotPos);
+							// Check if qualifier matches the first argument's type
+							if (qualifier == firstArgType) {
+								if (resolvedMatch.empty()) {
+									resolvedMatch = match;
+								} else {
+									// Multiple matches even with type narrowing - still ambiguous
+									resolvedMatch.clear();
+									break;
+								}
+							}
+						}
+					}
+				}
+
+				if (!resolvedMatch.empty()) {
+					// Found exactly one match based on receiver type
+					funcIt = functions.find(resolvedMatch);
+					auto idIt = functionIndices.find(resolvedMatch);
+					if (idIt != functionIndices.end()) {
+						callExpr->functionId = idIt->second;
+					}
+				} else {
+					// Still ambiguous - report error
+					std::string errorMsg = "Ambiguous function call: '" + callExpr->callee + "'" +
+										   std::string("\n  Multiple definitions found:");
+					for (const auto &match : matches) {
+						errorMsg += "\n    - " + match;
+					}
+					errorMsg += "\n  Use a qualified name to disambiguate (e.g., namespace.function)";
+					addError(errorMsg, expr->line, expr->column);
+					// Still analyze remaining arguments to mark variables as used (first already analyzed)
+					for (size_t i = 1; i < callExpr->args.size(); ++i) {
+						analyzeExpression(callExpr->args[i].get());
+					}
+					return "error";
+				}
+			} else {
+				// Exactly one match - use it for validation and set function ID
+				// Note: We found the function, so it's not undefined
+				funcIt = functions.find(matches[0]);
+				// Store the resolved function ID in the AST for fast codegen lookup
+				auto idIt = functionIndices.find(matches[0]);
+				if (idIt != functionIndices.end()) {
+					callExpr->functionId = idIt->second;
+				}
 			}
 		}
 

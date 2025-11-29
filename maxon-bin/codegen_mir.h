@@ -74,6 +74,9 @@ class MIRCodeGenerator {
 	std::string sourceFileName;
 	Logger logger_; // Internal logger instance
 
+	// Current method context for implicit self field access
+	std::string currentReceiverType; // Set when generating a method, empty for free functions
+
 	// Logging helpers
 	void logProgress(const std::string &msg);
 	void logDetail(const std::string &msg);

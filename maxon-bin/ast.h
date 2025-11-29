@@ -437,10 +437,11 @@ class StructDefAST : public ASTNode {
 	std::string name;
 	std::string namespaceName; // Namespace this struct belongs to (derived from file path)
 	std::vector<StructField> fields;
-	std::vector<std::unique_ptr<FunctionAST>> methods;	// Methods declared inside the struct
-	std::vector<std::string> conformsTo;				// Interface names this struct conforms to (via 'is')
-	std::map<std::string, std::string> typeAssignments; // Associated type assignments (e.g., "Element" -> "char")
-	bool isExported;									// true if this struct is exported (visible outside this file)
+	std::vector<std::unique_ptr<FunctionAST>> methods;					   // Methods declared inside the struct
+	std::vector<std::string> conformsTo;								   // Interface names this struct conforms to (via 'is')
+	std::map<std::string, std::string> typeAssignments;					   // Associated type assignments (e.g., "Element" -> "char")
+	std::map<std::string, std::vector<std::string>> interfaceTypeBindings; // Per-interface 'with' types (resolved to typeAssignments in semantic analyzer)
+	bool isExported;													   // true if this struct is exported (visible outside this file)
 	int line;
 	int column;
 
@@ -448,9 +449,11 @@ class StructDefAST : public ASTNode {
 				 const std::string &ns = "", bool exp = false,
 				 std::vector<std::string> interfaces = {},
 				 std::vector<std::unique_ptr<FunctionAST>> m = {},
-				 std::map<std::string, std::string> typeAssigns = {})
+				 std::map<std::string, std::string> typeAssigns = {},
+				 std::map<std::string, std::vector<std::string>> ifaceBindings = {})
 		: name(n), namespaceName(ns), fields(std::move(f)), methods(std::move(m)),
 		  conformsTo(std::move(interfaces)), typeAssignments(std::move(typeAssigns)),
+		  interfaceTypeBindings(std::move(ifaceBindings)),
 		  isExported(exp), line(l), column(c) {}
 };
 

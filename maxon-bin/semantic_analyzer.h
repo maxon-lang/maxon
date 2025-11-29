@@ -166,6 +166,7 @@ class SemanticAnalyzer {
 	std::set<std::string> undefinedFunctions;					 // Track undefined function calls
 	std::set<std::string> undefinedStructs;						 // Track undefined struct types
 	std::set<std::string> undefinedInterfaces;					 // Track undefined interfaces in conformance
+	std::string currentReceiverType;							 // Current struct type when analyzing a method (empty for free functions)
 
 	// Persistent symbol table for LSP - stores all variables ever declared
 	std::map<std::string, VariableInfo> allDeclaredVariables;

@@ -1,0 +1,80 @@
+// Test: interfaces.method-call-syntax.1
+interface Incrementable
+    function inc() int
+end 'Incrementable'
+
+struct Value is Incrementable
+    n int
+
+    function inc() int
+        return n + 1
+    end 'inc'
+end 'Value'
+
+function main() int
+    var v = Value{n: 41}
+    return v.inc()
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 10
+
+%Value = type { i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Value
+  %1 = getelementptr %Value, ptr %0, i32 0, i32 0
+  store i32 41, ptr %1
+  %3 = getelementptr %Value, ptr %0, i32 0, i32 0
+  %4 = load i32, ptr %3
+  %5 = add i32 %4, 1
+  ret i32 %5
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 15
+
+%Value = type { i32 }
+
+define i32 @Value.inc(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Value, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  %4 = add i32 %3, 1
+  ret i32 %4
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Value
+  %1 = getelementptr %Value, ptr %0, i32 0, i32 0
+  store i32 41, ptr %1
+  %2 = call i32 @Value.inc(ptr %0)
+  ret i32 %2
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 42

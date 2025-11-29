@@ -193,6 +193,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 // Parse a method declaration inside a struct body
 // The receiverType is implicitly the struct name (passed in)
+// Methods have an implicit 'self' parameter auto-injected
 std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) {
 	// Check for export keyword
 	bool isExported = false;
@@ -211,8 +212,11 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 
 	expectAdvance(TokenType::LPAREN, "Expected '('");
 
-	// Parse method parameters
+	// Auto-inject implicit 'self' parameter as first parameter
 	std::vector<FunctionParameter> parameters;
+	parameters.push_back(FunctionParameter("self", structName, funcToken.line, funcToken.column));
+
+	// Parse explicit method parameters (after implicit self)
 	if (!check(TokenType::RPAREN)) {
 		do {
 			Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
@@ -318,68 +322,100 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 	Token nameToken = expect(TokenType::IDENTIFIER, "Expected struct name after 'struct'");
 	std::string structName = nameToken.value;
 
-	// Parse interface conformance: struct Foo is Interface1, Interface2
+	// Parse interface conformance with associated type bindings:
+	// Syntax: struct Name is Interface1 with Type1, Type2, Interface2 with Type3
+	// - 'with' clause can have multiple types separated by commas
+	// - After types, a comma followed by an identifier that's not a built-in type starts a new interface
 	std::vector<std::string> conformsTo;
+	std::map<std::string, std::vector<std::string>> interfaceTypeBindings;
+
 	if (checkKeyword("is")) {
 		advance(); // consume 'is'
-		do {
-			Token protoToken = expect(TokenType::IDENTIFIER, "Expected interface name after 'is'");
-			conformsTo.push_back(protoToken.value);
-		} while (match(TokenType::COMMA));
+
+		bool expectingInterface = true;
+		while (expectingInterface) {
+			Token protoToken = expect(TokenType::IDENTIFIER, "Expected interface name");
+			std::string interfaceName = protoToken.value;
+			conformsTo.push_back(interfaceName);
+
+			// Parse optional 'with' clause for this interface
+			if (checkKeyword("with")) {
+				advance(); // consume 'with'
+				std::vector<std::string> withTypes;
+
+				// Parse first type
+				bool parsingTypes = true;
+				while (parsingTypes) {
+					std::string concreteType;
+					if (check(TokenType::LBRACKET)) {
+						// Array type: [size]type or []type
+						advance(); // consume '['
+						std::string sizeStr = "";
+						if (check(TokenType::NUMBER)) {
+							sizeStr = std::string(currentValue());
+							advance();
+						}
+						expectAdvance(TokenType::RBRACKET, "Expected ']' after array size");
+						std::string elementType;
+						if (Lexer::isTypeToken(currentToken())) {
+							elementType = std::string(currentValue());
+							advance();
+						} else if (check(TokenType::IDENTIFIER)) {
+							elementType = parseQualifiedName("array element type");
+						} else {
+							throw std::runtime_error("Expected array element type after ']' at line " +
+													 std::to_string(currentLine()) + ", column " +
+													 std::to_string(currentColumn()));
+						}
+						concreteType = "[" + sizeStr + "]" + elementType;
+					} else if (Lexer::isTypeToken(currentToken())) {
+						concreteType = std::string(currentValue());
+						advance();
+					} else if (check(TokenType::IDENTIFIER)) {
+						concreteType = parseQualifiedName("concrete type");
+					} else {
+						throw std::runtime_error("Expected type in 'with' clause at line " +
+												 std::to_string(currentLine()) + ", column " +
+												 std::to_string(currentColumn()));
+					}
+					withTypes.push_back(concreteType);
+
+					// Check if comma followed by another type (continue) or interface (stop)
+					if (check(TokenType::COMMA)) {
+						// Peek at the token after the comma to decide
+						Token nextTok = peekToken(1);
+						bool isAnotherType = Lexer::isTypeToken(nextTok) || nextTok.type == TokenType::LBRACKET;
+						if (isAnotherType) {
+							advance(); // consume comma, continue parsing types
+						} else {
+							parsingTypes = false; // comma is for interface list
+						}
+					} else {
+						parsingTypes = false; // No comma, done with this 'with' clause
+					}
+				}
+
+				interfaceTypeBindings[interfaceName] = std::move(withTypes);
+			}
+
+			// Check for comma to continue with more interfaces
+			if (match(TokenType::COMMA)) {
+				// Expect another interface after comma
+				expectingInterface = true;
+			} else {
+				// No comma - done with interface list
+				expectingInterface = false;
+			}
+		}
 	}
 
 	std::vector<StructField> fields;
 	std::vector<std::unique_ptr<FunctionAST>> methods;
-	std::map<std::string, std::string> typeAssignments;
-	bool parsingFields = true; // Fields must come before methods
+	std::map<std::string, std::string> typeAssignments; // Will be populated by semantic analyzer from interfaceTypeBindings
+	bool parsingFields = true;							// Fields must come before methods
 
-	// Parse fields, type assignments, and methods until we hit 'end'
+	// Parse fields and methods until we hit 'end'
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		// Check for type assignment: type Name = ConcreteType
-		if (checkKeyword("type")) {
-			advance(); // consume 'type'
-			Token typeNameToken = expect(TokenType::IDENTIFIER, "Expected associated type name after 'type'");
-			expectAdvance(TokenType::ASSIGN, "Expected '=' after associated type name");
-
-			// Parse the concrete type
-			std::string concreteType;
-			if (check(TokenType::LBRACKET)) {
-				// Array type: [size]type or []type
-				advance(); // consume '['
-				std::string sizeStr = "";
-				if (check(TokenType::NUMBER)) {
-					sizeStr = std::string(currentValue());
-					advance();
-				}
-				expectAdvance(TokenType::RBRACKET, "Expected ']' after array size");
-				std::string elementType;
-				if (Lexer::isTypeToken(currentToken())) {
-					elementType = std::string(currentValue());
-					advance();
-				} else if (check(TokenType::IDENTIFIER)) {
-					elementType = parseQualifiedName("array element type");
-				} else {
-					throw std::runtime_error("Expected array element type after ']' at line " +
-											 std::to_string(currentLine()) + ", column " +
-											 std::to_string(currentColumn()));
-				}
-				concreteType = "[" + sizeStr + "]" + elementType;
-			} else if (Lexer::isTypeToken(currentToken())) {
-				concreteType = std::string(currentValue());
-				advance();
-			} else if (check(TokenType::IDENTIFIER)) {
-				concreteType = parseQualifiedName("concrete type");
-			} else {
-				throw std::runtime_error("Expected concrete type after '=' in type assignment at line " +
-										 std::to_string(currentLine()) + ", column " +
-										 std::to_string(currentColumn()));
-			}
-
-			typeAssignments[typeNameToken.value] = concreteType;
-			logTrace("  Type assignment '" + typeNameToken.value + "' = " + concreteType);
-			continue;
-		}
-
 		// Check for method: 'function' or 'export function'
 		if (checkKeyword("function") || (checkKeyword("export") && checkKeyword("function", 1))) {
 			parsingFields = false; // Once we see a method, no more fields allowed
@@ -455,7 +491,7 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 								 std::string(", column ") + std::to_string(blockIdToken.column));
 	}
 
-	return std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo), std::move(methods), std::move(typeAssignments));
+	return std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo), std::move(methods), std::move(typeAssignments), std::move(interfaceTypeBindings));
 }
 
 std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &structName) {
@@ -515,25 +551,27 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 	std::vector<InterfaceMethodSignature> methods;
 	std::vector<std::string> associatedTypes;
 
-	// Parse associated types and method signatures until we hit 'end'
-	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		// Check for associated type declaration: type Name
-		if (checkKeyword("type")) {
-			advance(); // consume 'type'
-			Token typeNameToken = expect(TokenType::IDENTIFIER, "Expected associated type name after 'type'");
+	// Parse associated types from 'uses' clause: interface Name uses Type1, Type2
+	if (checkKeyword("uses")) {
+		advance(); // consume 'uses'
+		do {
+			Token typeNameToken = expect(TokenType::IDENTIFIER, "Expected associated type name after 'uses'");
 			associatedTypes.push_back(typeNameToken.value);
 			logTrace("  Associated type '" + typeNameToken.value + "'");
-			continue;
-		}
+		} while (match(TokenType::COMMA));
+	}
 
+	// Parse method signatures until we hit 'end'
+	// Methods have implicit self parameter - not declared in signature
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
 		// Each method starts with 'function'
-		Token funcToken = expectKeyword("function", "Expected 'function' or 'type' in interface");
+		Token funcToken = expectKeyword("function", "Expected 'function' in interface");
 		Token methodNameToken = expect(TokenType::IDENTIFIER, "Expected method name");
 		std::string methodName = methodNameToken.value;
 
 		expectAdvance(TokenType::LPAREN, "Expected '(' after method name");
 
-		// Parse parameters
+		// Parse parameters (no self parameter - it's implicit)
 		std::vector<FunctionParameter> parameters;
 		if (!check(TokenType::RPAREN)) {
 			do {

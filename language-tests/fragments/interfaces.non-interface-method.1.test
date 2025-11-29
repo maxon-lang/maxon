@@ -1,0 +1,97 @@
+// Test: interfaces.non-interface-method.1
+struct Calculator
+    value int
+
+    function double() int
+        return value * 2
+    end 'double'
+    
+    function triple() int
+        return value * 3
+    end 'triple'
+end 'Calculator'
+
+function main() int
+    var c = Calculator{value: 7}
+    return c.double() + c.triple()
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 14
+
+%Calculator = type { i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Calculator
+  %1 = getelementptr %Calculator, ptr %0, i32 0, i32 0
+  store i32 7, ptr %1
+  %5 = getelementptr %Calculator, ptr %0, i32 0, i32 0
+  %6 = load i32, ptr %5
+  %7 = shl i32 %6, 1
+  %8 = getelementptr %Calculator, ptr %0, i32 0, i32 0
+  %9 = load i32, ptr %8
+  %10 = mul i32 %9, 3
+  %4 = add i32 %7, %10
+  ret i32 %4
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 24
+
+%Calculator = type { i32 }
+
+define i32 @Calculator.double(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Calculator, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  %4 = mul i32 %3, 2
+  ret i32 %4
+}
+
+define i32 @Calculator.triple(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Calculator, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  %4 = mul i32 %3, 3
+  ret i32 %4
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Calculator
+  %1 = getelementptr %Calculator, ptr %0, i32 0, i32 0
+  store i32 7, ptr %1
+  %2 = call i32 @Calculator.double(ptr %0)
+  %3 = call i32 @Calculator.triple(ptr %0)
+  %4 = add i32 %2, %3
+  ret i32 %4
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 35

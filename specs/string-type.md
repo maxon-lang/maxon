@@ -491,7 +491,7 @@ end 'main'
 function main() int
     var s = "A😀B"
     var view = s.utf16()
-    print(UTF16View.length(view))
+    print(view.length())
     return 0
 end 'main'
 ```

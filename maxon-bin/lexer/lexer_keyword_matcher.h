@@ -75,6 +75,8 @@ class KeywordMatcher {
 		add_keyword("struct", KeywordCategory::Declaration);
 		add_keyword("interface", KeywordCategory::Declaration);
 		add_keyword("type", KeywordCategory::Declaration);
+		add_keyword("uses", KeywordCategory::Declaration);
+		add_keyword("with", KeywordCategory::Declaration);
 		add_keyword("export", KeywordCategory::Declaration);
 		add_keyword("extern", KeywordCategory::Declaration);
 
@@ -288,17 +290,17 @@ class KeywordPrefixMatcher {
 	 * Returns true if the string CANNOT be a keyword based on first char
 	 */
 	static bool not_keyword_prefix(char first) {
-		// Maxon keywords start with: a,b,c,e,f,i,l,m,n,o,r,s,t,v,w
+		// Maxon keywords start with: a,b,c,e,f,i,l,m,n,o,r,s,t,u,v,w
 		// Characters that CANNOT start a keyword:
-		// d, g, h, j, k, p, q, u, x, y, z
+		// d, g, h, j, k, p, q, x, y, z
 		// Also uppercase letters and digits
 
 		// Quick lookup table
 		static constexpr uint32_t not_keyword_chars[] = {
-			// Lowercase d,g,h,j,k,p,q,u,x,y,z
+			// Lowercase d,g,h,j,k,p,q,x,y,z
 			(1u << ('d' - 'a')) | (1u << ('g' - 'a')) | (1u << ('h' - 'a')) |
 			(1u << ('j' - 'a')) | (1u << ('k' - 'a')) | (1u << ('p' - 'a')) |
-			(1u << ('q' - 'a')) | (1u << ('u' - 'a')) | (1u << ('x' - 'a')) |
+			(1u << ('q' - 'a')) | (1u << ('x' - 'a')) |
 			(1u << ('y' - 'a')) | (1u << ('z' - 'a'))};
 
 		if (first >= 'a' && first <= 'z') {

@@ -21,6 +21,9 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 		functionName = func->name;
 	}
 
+	// Track receiver type for implicit self field access
+	currentReceiverType = func->receiverType;
+
 	// Get the function that was already declared
 	mir::MIRFunction *function = module->getFunction(functionName);
 	if (!function) {
@@ -104,4 +107,7 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 			builder->createRetVoid();
 		}
 	}
+
+	// Clear receiver type after generating function
+	currentReceiverType.clear();
 }

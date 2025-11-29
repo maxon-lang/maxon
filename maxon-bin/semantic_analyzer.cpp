@@ -153,16 +153,46 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 				}
 			}
 
+			// Build typeAssignments from interfaceTypeBindings by resolving positionally
+			// against interface associated types
+			std::map<std::string, std::string> resolvedTypeAssignments = structDef->typeAssignments;
+			for (const auto &binding : structDef->interfaceTypeBindings) {
+				const std::string &interfaceName = binding.first;
+				const std::vector<std::string> &withTypes = binding.second;
+
+				// Look up the interface
+				auto protoIt = interfaces.find(interfaceName);
+				if (protoIt != interfaces.end()) {
+					const InterfaceInfo &interface = protoIt->second;
+					// Map positionally: withTypes[i] -> associatedTypes[i]
+					for (size_t i = 0; i < withTypes.size() && i < interface.associatedTypes.size(); i++) {
+						const std::string &assocTypeName = interface.associatedTypes[i];
+						const std::string &concreteType = withTypes[i];
+						resolvedTypeAssignments[assocTypeName] = concreteType;
+						logTrace("  Type binding: " + assocTypeName + " = " + concreteType +
+								 " (from interface " + interfaceName + ")");
+					}
+					// Check for count mismatch
+					if (withTypes.size() != interface.associatedTypes.size()) {
+						addError("Interface '" + interfaceName + "' requires " +
+									 std::to_string(interface.associatedTypes.size()) + " type(s) in 'with' clause, but got " +
+									 std::to_string(withTypes.size()),
+								 structDef->line, structDef->column);
+					}
+				}
+				// If interface not found, will be caught later during conformance check
+			}
+
 			// Register with qualified name
 			structs.emplace(structKey, StructInfo(structDef->name, fields,
 												  structDef->line, structDef->column, structDef->conformsTo,
-												  structDef->typeAssignments));
+												  resolvedTypeAssignments));
 
 			// Also register the simple name for use within the same file/namespace
 			if (structs.find(structDef->name) == structs.end()) {
 				structs.emplace(structDef->name, StructInfo(structDef->name, fields,
 															structDef->line, structDef->column, structDef->conformsTo,
-															structDef->typeAssignments));
+															resolvedTypeAssignments));
 			}
 		}
 	}
@@ -263,6 +293,9 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 
 	logTrace("Analyzing function body: " + func->name);
 
+	// Set current receiver type for method field resolution (implicit self)
+	currentReceiverType = func->receiverType;
+
 	// Validate return type - track undefined struct types for auto-import
 	if (func->returnType != "void" && func->returnType != "int" &&
 		func->returnType != "float" && func->returnType != "bool" &&
@@ -329,6 +362,9 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 
 	// Clear block ID stack for this function
 	blockIdStack.clear();
+
+	// Clear receiver type after analyzing method
+	currentReceiverType.clear();
 }
 
 bool SemanticAnalyzer::validateReturn(FunctionAST *func) {
@@ -420,6 +456,23 @@ std::optional<VariableInfo> SemanticAnalyzer::lookupVariable(const std::string &
 		}
 	}
 
+	// If we're in a method (have a receiver type), check struct fields
+	// This enables implicit self field access: 'count' instead of 'self.count'
+	if (!currentReceiverType.empty()) {
+		auto structIt = structs.find(currentReceiverType);
+		if (structIt != structs.end()) {
+			for (const auto &field : structIt->second.fields) {
+				if (field.name == name) {
+					// Return field as if it were a variable
+					// Mark as used through 'self' parameter
+					markVariableAsUsed("self");
+					// Return field type - this is a synthetic variable reference
+					return VariableInfo(name, field.type, false, field.line, field.column, false);
+				}
+			}
+		}
+	}
+
 	return std::nullopt;
 }
 
@@ -492,6 +545,12 @@ void SemanticAnalyzer::checkUnusedVariables() {
 		}
 
 		if (!varInfo.isUsed) {
+			// Skip unused 'self' parameters - they're auto-injected and may not be used
+			// in static factory methods like initFromStringLiteral
+			if (varInfo.isParameter && varInfo.name == "self") {
+				continue;
+			}
+
 			if (varInfo.isParameter) {
 				addWarning("The parameter '" + varInfo.name + "' is declared but its value is never used",
 						   varInfo.line, varInfo.column, "unused-parameter");
@@ -540,6 +599,9 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 		return type;
 	};
 
+	// Collect all missing methods for partial implementation error
+	std::vector<std::string> missingMethods;
+
 	for (const auto &interfaceName : conformsTo) {
 		// Find the interface
 		auto protoIt = interfaces.find(interfaceName);
@@ -569,6 +631,7 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 
 			auto funcIt = functions.find(expectedMethodName);
 			if (funcIt == functions.end()) {
+				// Build parameter string for error message (without implicit self)
 				std::string paramStr;
 				for (size_t i = 0; i < protoMethod.parameters.size(); i++) {
 					if (i > 0)
@@ -578,11 +641,7 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 				}
 				std::string returnType = resolveType(protoMethod.returnType);
 
-				addError("Struct '" + structName + "' does not implement required method '" + protoMethod.name +
-							 "' from interface '" + interfaceName + "'" +
-							 std::string("\n  Expected: function ") + structName + "." + protoMethod.name +
-							 "(" + paramStr + ") " + returnType,
-						 line, column);
+				missingMethods.push_back(protoMethod.name + "(" + paramStr + ") " + returnType);
 				continue;
 			}
 
@@ -595,25 +654,55 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 						 line, column);
 			}
 
-			// Check parameter count
-			if (implFunc.parameters.size() != protoMethod.parameters.size()) {
-				addError("Method '" + expectedMethodName + "' has " + std::to_string(implFunc.parameters.size()) +
-							 " parameter(s) but interface '" + interfaceName + "' requires " +
+			// Check parameter count - impl has implicit 'self' as first param (+1)
+			// Interface params don't include self (it's implicit)
+			size_t expectedParamCount = protoMethod.parameters.size() + 1; // +1 for implicit self
+			if (implFunc.parameters.size() != expectedParamCount) {
+				addError("Method '" + expectedMethodName + "' has " + std::to_string(implFunc.parameters.size() - 1) +
+							 " explicit parameter(s) but interface '" + interfaceName + "' requires " +
 							 std::to_string(protoMethod.parameters.size()),
 						 line, column);
 				continue;
 			}
 
-			// Check parameter types (substituting Self and associated types)
+			// Verify first param is 'self' with correct type
+			if (implFunc.parameters.empty() || implFunc.parameters[0].name != "self") {
+				addError("Method '" + expectedMethodName + "' is missing implicit 'self' parameter",
+						 line, column);
+				continue;
+			}
+			if (implFunc.parameters[0].type != structName) {
+				addError("Method '" + expectedMethodName + "' has self type '" + implFunc.parameters[0].type +
+							 "' but expected '" + structName + "'",
+						 line, column);
+			}
+
+			// Check parameter types (skip first param which is implicit self)
 			for (size_t i = 0; i < protoMethod.parameters.size(); i++) {
 				std::string expectedParamType = resolveType(protoMethod.parameters[i].type);
-				if (implFunc.parameters[i].type != expectedParamType) {
+				// implFunc params are offset by 1 due to implicit self
+				if (implFunc.parameters[i + 1].type != expectedParamType) {
 					addError("Method '" + expectedMethodName + "' parameter " + std::to_string(i + 1) +
-								 " has type '" + implFunc.parameters[i].type +
+								 " has type '" + implFunc.parameters[i + 1].type +
 								 "' but interface '" + interfaceName + "' requires '" + expectedParamType + "'",
 							 line, column);
 				}
 			}
 		}
+	}
+
+	// Report all missing methods at once for partial implementation error
+	if (!missingMethods.empty()) {
+		std::string missingList;
+		for (size_t i = 0; i < missingMethods.size(); i++) {
+			if (i > 0)
+				missingList += "\n  - ";
+			else
+				missingList += "  - ";
+			missingList += missingMethods[i];
+		}
+		addError("Partial interface implementation: struct '" + structName + "' is missing " +
+					 std::to_string(missingMethods.size()) + " method(s):\n" + missingList,
+				 line, column);
 	}
 }
