@@ -68,6 +68,7 @@ class MIRCodeGenerator {
 
 	// Debug information
 	bool generateDebugInfo;
+	bool trackAllocs; // Log memory allocations for debugging
 	int verboseLevel; // 0 = silent, 1 = progress, 2 = detailed, 3 = trace
 	std::string sourceFileName;
 	Logger logger_; // Internal logger instance
@@ -107,6 +108,7 @@ class MIRCodeGenerator {
 	std::string getMaxonTypeFromMIRType(mir::MIRType *type);
 	bool isArrayParam(const std::string &typeStr);
 	bool isStructParameter(const std::string &varName);
+	bool isStringConcatExpr(BinaryExprAST *binExpr);
 
 	// Alloca creation helper
 	mir::MIRValue *createEntryBlockAlloca(mir::MIRFunction *function,
@@ -168,7 +170,8 @@ class MIRCodeGenerator {
 #endif
 
   public:
-	MIRCodeGenerator(const std::string &moduleName, bool debugInfo = false, int verboseLevel = 0);
+	MIRCodeGenerator(const std::string &moduleName, bool debugInfo = false, int verboseLevel = 0,
+					 bool trackAllocs = false);
 	~MIRCodeGenerator();
 
 	// Main generation entry point

@@ -120,7 +120,8 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 	auto mergeRuntime = [this](const std::string &runtimeMirPath) {
 		auto runtimeResult = mir::MIRParser::parseFile(runtimeMirPath);
 		if (!runtimeResult.errors.empty()) {
-			std::cerr << "Warning: Failed to parse runtime library: " << runtimeResult.errors[0].message << std::endl;
+			std::cerr << "Warning: Failed to parse runtime library at line " << runtimeResult.errors[0].line
+					  << ": " << runtimeResult.errors[0].message << std::endl;
 			return;
 		}
 		if (!runtimeResult.module) {

@@ -595,8 +595,8 @@ MIRGlobal *MIRModule::getGlobal(const std::string &globalName) {
 }
 
 MIRValue *MIRModule::createGlobalString(const std::string &globalName, const std::string &value) {
-	// Create array type for the string data [N x i8]
-	size_t len = value.length();
+	// Create array type for the string data [N+1 x i8] (including null terminator)
+	size_t len = value.length() + 1; // Include null terminator
 	MIRType *charType = MIRType::getInt8();
 	MIRType *arrayType = MIRType::getArray(charType, len);
 

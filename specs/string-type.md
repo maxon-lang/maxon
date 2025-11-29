@@ -859,3 +859,115 @@ end 'main'
 ```stdout
 1
 ```
+
+<!-- test: memory-tracking-simple-concat -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() int
+    var s = "hello" + " world"
+    print(s.count())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ALLOC #1: 19 bytes (string concat)
+11
+FREE #1: 19 bytes (string concat)
+
+=== ALLOC STATS ===
+Allocated: 19 bytes
+Freed:     19 bytes
+Leaked:    0 bytes
+```
+
+<!-- test: memory-tracking-chained-concat -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() int
+    var s = "a" + "b" + "c" + "d"
+    print(s.count())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ALLOC #1: 10 bytes (string concat)
+ALLOC #2: 11 bytes (string concat)
+ALLOC #3: 12 bytes (string concat)
+4
+FREE #1: 10 bytes (string concat)
+FREE #2: 11 bytes (string concat)
+FREE #3: 12 bytes (string concat)
+
+=== ALLOC STATS ===
+Allocated: 33 bytes
+Freed:     33 bytes
+Leaked:    0 bytes
+```
+
+<!-- test: memory-tracking-loop-concat -->
+<!-- TrackAllocs: true -->
+```maxon
+// Note: Loop reassignment currently leaks intermediate strings.
+// This will be fixed when we implement release-before-reassign.
+function main() int
+    var s = ""
+    var i = 0
+    while i < 3 'loop'
+        s = s + "x"
+        i = i + 1
+    end 'loop'
+    print(s.count())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ALLOC #1: 9 bytes (string concat)
+ALLOC #2: 10 bytes (string concat)
+ALLOC #3: 11 bytes (string concat)
+3
+FREE #3: 11 bytes (string concat)
+
+=== LEAKS ===
+LEAK #1: 9 bytes (string concat)
+LEAK #2: 10 bytes (string concat)
+
+=== ALLOC STATS ===
+Allocated: 30 bytes
+Freed:     11 bytes
+Leaked:    19 bytes
+```
+
+<!-- test: memory-tracking-no-leak-scope-exit -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() int
+    if true 'scope'
+        var temp = "heap allocated string here!"
+        print(temp.count())
+    end 'scope'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ALLOC #1: 35 bytes (string literal)
+27
+FREE #1: 35 bytes (string literal)
+
+=== ALLOC STATS ===
+Allocated: 35 bytes
+Freed:     35 bytes
+Leaked:    0 bytes
+```
+

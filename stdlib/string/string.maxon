@@ -6,16 +6,29 @@
 // **Memory Layout**:
 // - data: Reference to byte array (compiler-allocated constant data for literals)
 // - _len: Explicit length field (since []byte struct fields don't have .length)
+// - _capacity: 0 = constant/SSO data, >0 = heap-allocated with refcount header
 // - _iterPos: Current byte position for iteration
+//
+// **Heap String Layout** (when _capacity > 0):
+// The data pointer points to offset +8 of a heap buffer:
+//   [refcount:i32][capacity:i32][...data bytes...]
+//        -8           -4            0+
+//
+// **Automatic Memory Management**:
+// - The compiler generates string_release() calls at scope exit for heap strings
+// - The compiler generates string_retain() calls when copying heap strings
+// - User code never calls these functions directly
 //
 // **Characteristics**:
 // - UTF-8 encoded
-// - String literals reference compiler-allocated constant data
+// - String literals reference compiler-allocated constant data (_capacity=0)
+// - Heap strings have refcount header for automatic memory management
 // - Iteration state tracked in _iterPos for Iterable conformance
 
 export struct string is Hashable, Equatable, Subscriptable, Iterable, ExpressibleByStringLiteral
     data []byte     // Reference to UTF-8 byte data
     _len int        // Explicit length (compiler passes this)
+    _capacity int   // 0 = constant data, >0 = heap with refcount header
     _iterPos int    // Current byte position for iteration (0 = start)
 
     // ============================================
@@ -23,9 +36,10 @@ export struct string is Hashable, Equatable, Subscriptable, Iterable, Expressibl
     // ============================================
 
     // Initialize string from raw UTF-8 literal data
-    // The compiler passes a reference to the literal's byte array and its length
-    export function initFromStringLiteral(data []byte, len int) string
-        return string{data: data, _len: len, _iterPos: 0}
+    // The compiler passes a reference to the literal's byte array, length, and capacity
+    // capacity = 0 for constant/SSO data, >0 for heap-allocated
+    export function initFromStringLiteral(data []byte, len int, capacity int) string
+        return string{data: data, _len: len, _capacity: capacity, _iterPos: 0}
     end 'initFromStringLiteral'
 
     // ============================================
@@ -108,8 +122,8 @@ export struct string is Hashable, Equatable, Subscriptable, Iterable, Expressibl
             end 'three_byte'
         end 'four_byte'
 
-        // Return copy of string with updated position
-        return string{data: self.data, _len: self._len, _iterPos: self._iterPos + advance}
+        // Return copy of string with updated position (preserve capacity for ref counting)
+        return string{data: self.data, _len: self._len, _capacity: self._capacity, _iterPos: self._iterPos + advance}
     end 'next'
 
     // ============================================
@@ -154,9 +168,9 @@ export struct string is Hashable, Equatable, Subscriptable, Iterable, Expressibl
             endIndex = self._len
         end 'validate_end'
         if startIndex >= endIndex 'validate_range'
-            // Empty slice - return empty string
+            // Empty slice - return empty string with constant data (capacity=0)
             var empty = [1]byte
-            return string{data: empty, _len: 0, _iterPos: 0}
+            return string{data: empty, _len: 0, _capacity: 0, _iterPos: 0}
         end 'validate_range'
 
         var sliceLen = endIndex - startIndex
@@ -169,7 +183,9 @@ export struct string is Hashable, Equatable, Subscriptable, Iterable, Expressibl
             i = i + 1
         end 'copy'
 
-        return string{data: sliceData, _len: sliceLen, _iterPos: 0}
+        // Note: sliceData is stack-allocated, so capacity=0 (not heap)
+        // TODO: For proper COW, slices should share the original's buffer
+        return string{data: sliceData, _len: sliceLen, _capacity: 0, _iterPos: 0}
     end 'subscript'
 
     // ============================================
@@ -193,7 +209,9 @@ export struct string is Hashable, Equatable, Subscriptable, Iterable, Expressibl
             j = j + 1
         end 'copy_other'
 
-        return string{data: combined, _len: self._len + other._len, _iterPos: 0}
+        // Note: combined is stack-allocated, capacity=0 indicates no heap cleanup needed
+        // TODO: Use string_alloc for heap allocation with proper refcount
+        return string{data: combined, _len: self._len + other._len, _capacity: 0, _iterPos: 0}
     end 'concat'
 
     // startsWith - check if string starts with prefix

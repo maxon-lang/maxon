@@ -11,15 +11,19 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 194
+; Instructions: 198
 
 %__unsized_array_byte = type { ptr, i32 }
-%string = type { %__unsized_array_byte, i32, i32 }
+%string = type { %__unsized_array_byte, i32, i32, i32 }
 %ByteView = type { %string, i32 }
 %UTF16View = type { %string, i32, i32 }
 
-@.str.0 = constant [51 x i8] c"This string is definitely longer than fifteen bytes\00"
-@.str.1 = constant [51 x i8] c"This string is definitely longer than fifteen bytes\00"
+@.__tag.str.lit = constant [15 x i8] c"string literal\00"
+@.str.0 = constant [52 x i8] c"This string is definitely longer than fifteen bytes\00"
+@.__tag.str.lit = constant [15 x i8] c"string literal\00"
+@.str.1 = constant [52 x i8] c"This string is definitely longer than fifteen bytes\00"
+@.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
+@.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
 
 define i1 @string.equals(ptr %self, ptr %other) {
 entry0:
@@ -80,7 +84,7 @@ ifcont7:
 define i32 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 51)
+  %1 = call ptr @string_alloc(i64 51, ptr @.__tag.str.lit)
   %2 = call ptr @memcpy(ptr %1, ptr @.str.0, i64 51)
   %3 = alloca ptr
   store ptr %1, ptr %3
@@ -92,34 +96,38 @@ entry0:
   %7 = getelementptr %string, ptr %0, i32 0, i32 1
   store i32 51, ptr %7
   %8 = getelementptr %string, ptr %0, i32 0, i32 2
-  store i32 0, ptr %8
-  %9 = alloca %string
-  %10 = call ptr @malloc(i64 51)
-  %11 = call ptr @memcpy(ptr %10, ptr @.str.1, i64 51)
-  %12 = alloca ptr
-  store ptr %10, ptr %12
-  %13 = getelementptr %string, ptr %9, i32 0, i32 0
-  %14 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 0
-  store ptr %10, ptr %14
-  %15 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 1
-  store i32 51, ptr %15
-  %16 = getelementptr %string, ptr %9, i32 0, i32 1
+  store i32 51, ptr %8
+  %9 = getelementptr %string, ptr %0, i32 0, i32 3
+  store i32 0, ptr %9
+  %10 = alloca %string
+  %11 = call ptr @string_alloc(i64 51, ptr @.__tag.str.lit)
+  %12 = call ptr @memcpy(ptr %11, ptr @.str.1, i64 51)
+  %13 = alloca ptr
+  store ptr %11, ptr %13
+  %14 = getelementptr %string, ptr %10, i32 0, i32 0
+  %15 = getelementptr %__unsized_array_byte, ptr %14, i32 0, i32 0
+  store ptr %11, ptr %15
+  %16 = getelementptr %__unsized_array_byte, ptr %14, i32 0, i32 1
   store i32 51, ptr %16
-  %17 = getelementptr %string, ptr %9, i32 0, i32 2
-  store i32 0, ptr %17
-  %18 = call i1 @string.equals(ptr %0, ptr %9)
-  br i1 %18, label %then1, label %else3
+  %17 = getelementptr %string, ptr %10, i32 0, i32 1
+  store i32 51, ptr %17
+  %18 = getelementptr %string, ptr %10, i32 0, i32 2
+  store i32 51, ptr %18
+  %19 = getelementptr %string, ptr %10, i32 0, i32 3
+  store i32 0, ptr %19
+  %20 = call i1 @string.equals(ptr %0, ptr %10)
+  br i1 %20, label %then1, label %else3
 then1:
-  %19 = call i32 @sys.print(i32 1)
+  %21 = call i32 @sys.print(i32 1)
   br label %ifcont2
 ifcont2:
-  %21 = load ptr, ptr %3
-  call void @free(ptr %21)
-  %22 = load ptr, ptr %12
-  call void @free(ptr %22)
+  %23 = load ptr, ptr %3
+  call void @string_release(ptr %23, ptr @.__tag.free.str.heap)
+  %24 = load ptr, ptr %13
+  call void @string_release(ptr %24, ptr @.__tag.free.str.heap)
   ret i32 0
 else3:
-  %20 = call i32 @sys.print(i32 0)
+  %22 = call i32 @sys.print(i32 0)
   br label %ifcont2
 }
 
@@ -264,7 +272,11 @@ declare i32 @refcount_inc(ptr %arg0)
 
 declare i32 @refcount_dec(ptr %arg0)
 
+declare ptr @string_alloc(i64 %arg0, ptr %arg1)
+
 declare i32 @write_stdout(ptr %arg0, i32 %arg1)
+
+declare void @string_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -277,15 +289,19 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 219
+; Instructions: 223
 
 %__unsized_array_byte = type { ptr, i32 }
-%string = type { %__unsized_array_byte, i32, i32 }
+%string = type { %__unsized_array_byte, i32, i32, i32 }
 %ByteView = type { %string, i32 }
 %UTF16View = type { %string, i32, i32 }
 
-@.str.0 = constant [51 x i8] c"This string is definitely longer than fifteen bytes\00"
-@.str.1 = constant [51 x i8] c"This string is definitely longer than fifteen bytes\00"
+@.__tag.str.lit = constant [15 x i8] c"string literal\00"
+@.str.0 = constant [52 x i8] c"This string is definitely longer than fifteen bytes\00"
+@.__tag.str.lit = constant [15 x i8] c"string literal\00"
+@.str.1 = constant [52 x i8] c"This string is definitely longer than fifteen bytes\00"
+@.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
+@.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
 
 define i1 @string.equals(ptr %self, ptr %other) {
 entry0:
@@ -347,7 +363,7 @@ ifcont7:
 define i32 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 51)
+  %1 = call ptr @string_alloc(i64 51, ptr @.__tag.str.lit)
   %2 = call ptr @memcpy(ptr %1, ptr @.str.0, i64 51)
   %3 = alloca ptr
   store ptr %1, ptr %3
@@ -359,34 +375,38 @@ entry0:
   %7 = getelementptr %string, ptr %0, i32 0, i32 1
   store i32 51, ptr %7
   %8 = getelementptr %string, ptr %0, i32 0, i32 2
-  store i32 0, ptr %8
-  %9 = alloca %string
-  %10 = call ptr @malloc(i64 51)
-  %11 = call ptr @memcpy(ptr %10, ptr @.str.1, i64 51)
-  %12 = alloca ptr
-  store ptr %10, ptr %12
-  %13 = getelementptr %string, ptr %9, i32 0, i32 0
-  %14 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 0
-  store ptr %10, ptr %14
-  %15 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 1
-  store i32 51, ptr %15
-  %16 = getelementptr %string, ptr %9, i32 0, i32 1
+  store i32 51, ptr %8
+  %9 = getelementptr %string, ptr %0, i32 0, i32 3
+  store i32 0, ptr %9
+  %10 = alloca %string
+  %11 = call ptr @string_alloc(i64 51, ptr @.__tag.str.lit)
+  %12 = call ptr @memcpy(ptr %11, ptr @.str.1, i64 51)
+  %13 = alloca ptr
+  store ptr %11, ptr %13
+  %14 = getelementptr %string, ptr %10, i32 0, i32 0
+  %15 = getelementptr %__unsized_array_byte, ptr %14, i32 0, i32 0
+  store ptr %11, ptr %15
+  %16 = getelementptr %__unsized_array_byte, ptr %14, i32 0, i32 1
   store i32 51, ptr %16
-  %17 = getelementptr %string, ptr %9, i32 0, i32 2
-  store i32 0, ptr %17
-  %18 = call i1 @string.equals(ptr %0, ptr %9)
-  br i1 %18, label %then1, label %else3
+  %17 = getelementptr %string, ptr %10, i32 0, i32 1
+  store i32 51, ptr %17
+  %18 = getelementptr %string, ptr %10, i32 0, i32 2
+  store i32 51, ptr %18
+  %19 = getelementptr %string, ptr %10, i32 0, i32 3
+  store i32 0, ptr %19
+  %20 = call i1 @string.equals(ptr %0, ptr %10)
+  br i1 %20, label %then1, label %else3
 then1:
-  %19 = call i32 @sys.print(i32 1)
+  %21 = call i32 @sys.print(i32 1)
   br label %ifcont2
 ifcont2:
-  %21 = load ptr, ptr %3
-  call void @free(ptr %21)
-  %22 = load ptr, ptr %12
-  call void @free(ptr %22)
+  %23 = load ptr, ptr %3
+  call void @string_release(ptr %23, ptr @.__tag.free.str.heap)
+  %24 = load ptr, ptr %13
+  call void @string_release(ptr %24, ptr @.__tag.free.str.heap)
   ret i32 0
 else3:
-  %20 = call i32 @sys.print(i32 0)
+  %22 = call i32 @sys.print(i32 0)
   br label %ifcont2
 }
 
@@ -555,7 +575,11 @@ declare i32 @refcount_inc(ptr %arg0)
 
 declare i32 @refcount_dec(ptr %arg0)
 
+declare ptr @string_alloc(i64 %arg0, ptr %arg1)
+
 declare i32 @write_stdout(ptr %arg0, i32 %arg1)
+
+declare void @string_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

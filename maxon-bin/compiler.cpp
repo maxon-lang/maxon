@@ -318,7 +318,7 @@ std::string compileProgram(const CompilationOptions &options) {
 
 	logger.progress(LogPhase::MIR, "Generating MIR...");
 
-	MIRCodeGenerator codegen(moduleName, options.debugInfo, options.verboseLevel);
+	MIRCodeGenerator codegen(moduleName, options.debugInfo, options.verboseLevel, options.trackAllocs);
 
 	auto codegenStart = logger.startTimer();
 	codegen.generate(mergedProgram.get(), !options.compileOnly, &functionIndices);

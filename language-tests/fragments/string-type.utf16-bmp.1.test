@@ -8,14 +8,14 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 464
+; Instructions: 466
 
 %__unsized_array_byte = type { ptr, i32 }
-%string = type { %__unsized_array_byte, i32, i32 }
+%string = type { %__unsized_array_byte, i32, i32, i32 }
 %ByteView = type { %string, i32 }
 %UTF16View = type { %string, i32, i32 }
 
-@.str.0 = constant [6 x i8] c"αβγ\00"
+@.str.0 = constant [7 x i8] c"αβγ\00"
 
 define %UTF16View @string.utf16(ptr %self) {
 entry0:
@@ -395,21 +395,23 @@ entry0:
   store i32 6, ptr %4
   %5 = getelementptr %string, ptr %0, i32 0, i32 2
   store i32 0, ptr %5
-  %6 = call %UTF16View @string.utf16(ptr %0)
-  %7 = alloca %UTF16View
-  store %UTF16View %6, ptr %7
+  %6 = getelementptr %string, ptr %0, i32 0, i32 3
+  store i32 0, ptr %6
+  %7 = call %UTF16View @string.utf16(ptr %0)
+  %8 = alloca %UTF16View
+  store %UTF16View %7, ptr %8
   br label %forcond1
 forcond1:
-  %8 = call i32 @UTF16View.hasNext(ptr %7)
-  %9 = icmp eq i32 %8, 1
-  br i1 %9, label %forloop2, label %afterfor4
+  %9 = call i32 @UTF16View.hasNext(ptr %8)
+  %10 = icmp eq i32 %9, 1
+  br i1 %10, label %forloop2, label %afterfor4
 forloop2:
-  %10 = call i32 @UTF16View.getCurrent(ptr %7)
-  %13 = call i32 @sys.print(i32 %10)
+  %11 = call i32 @UTF16View.getCurrent(ptr %8)
+  %14 = call i32 @sys.print(i32 %11)
   br label %forincrement3
 forincrement3:
-  %14 = call %UTF16View @UTF16View.next(ptr %7)
-  store %UTF16View %14, ptr %7
+  %15 = call %UTF16View @UTF16View.next(ptr %8)
+  store %UTF16View %15, ptr %8
   br label %forcond1
 afterfor4:
   ret i32 0
@@ -569,14 +571,14 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 553
+; Instructions: 555
 
 %__unsized_array_byte = type { ptr, i32 }
-%string = type { %__unsized_array_byte, i32, i32 }
+%string = type { %__unsized_array_byte, i32, i32, i32 }
 %ByteView = type { %string, i32 }
 %UTF16View = type { %string, i32, i32 }
 
-@.str.0 = constant [6 x i8] c"αβγ\00"
+@.str.0 = constant [7 x i8] c"αβγ\00"
 
 define %UTF16View @string.utf16(ptr %self) {
 entry0:
@@ -1018,24 +1020,26 @@ entry0:
   store i32 6, ptr %4
   %5 = getelementptr %string, ptr %0, i32 0, i32 2
   store i32 0, ptr %5
-  %6 = call %UTF16View @string.utf16(ptr %0)
-  %7 = alloca %UTF16View
-  store %UTF16View %6, ptr %7
+  %6 = getelementptr %string, ptr %0, i32 0, i32 3
+  store i32 0, ptr %6
+  %7 = call %UTF16View @string.utf16(ptr %0)
+  %8 = alloca %UTF16View
+  store %UTF16View %7, ptr %8
   br label %forcond1
 forcond1:
-  %8 = call i32 @UTF16View.hasNext(ptr %7)
-  %9 = icmp eq i32 %8, 1
-  br i1 %9, label %forloop2, label %afterfor4
+  %9 = call i32 @UTF16View.hasNext(ptr %8)
+  %10 = icmp eq i32 %9, 1
+  br i1 %10, label %forloop2, label %afterfor4
 forloop2:
-  %10 = call i32 @UTF16View.getCurrent(ptr %7)
-  %11 = alloca i32
-  store i32 %10, ptr %11
-  %12 = load i32, ptr %11
-  %13 = call i32 @sys.print(i32 %12)
+  %11 = call i32 @UTF16View.getCurrent(ptr %8)
+  %12 = alloca i32
+  store i32 %11, ptr %12
+  %13 = load i32, ptr %12
+  %14 = call i32 @sys.print(i32 %13)
   br label %forincrement3
 forincrement3:
-  %14 = call %UTF16View @UTF16View.next(ptr %7)
-  store %UTF16View %14, ptr %7
+  %15 = call %UTF16View @UTF16View.next(ptr %8)
+  store %UTF16View %15, ptr %8
   br label %forcond1
 afterfor4:
   ret i32 0

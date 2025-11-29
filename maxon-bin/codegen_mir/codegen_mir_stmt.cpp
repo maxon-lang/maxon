@@ -192,6 +192,22 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			return;
 		}
 
+		// Handle string concatenation (string + string produces a string struct)
+		// The expression returns an alloca pointer - use it directly like string literals
+		// This also handles chained concatenation like a + b + c
+		if (auto *binExpr = dynamic_cast<BinaryExprAST *>(varDecl->initializer.get())) {
+			if (isStringConcatExpr(binExpr)) {
+				mir::MIRValue *stringAlloca = generateExpr(varDecl->initializer.get());
+
+				// Use the alloca from concat directly
+				stringAlloca->name = varDecl->name;
+
+				namedValues[varDecl->name] = stringAlloca;
+				variableTypes[varDecl->name] = "string";
+				return;
+			}
+		}
+
 		// Non-array, non-struct variable
 		mir::MIRValue *initVal = nullptr;
 		if (varDecl->initializer) {
@@ -397,15 +413,15 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		// For structs, val is a pointer to the source struct, so we need memcpy
 		std::string varType = variableTypes[assign->name];
 		mir::MIRType *structType = structTypes.count(varType) ? structTypes[varType] : nullptr;
-		
+
 		if (structType && val->type->kind == mir::MIRTypeKind::Ptr) {
 			// Struct assignment - use memcpy to copy the struct contents
 			mir::MIRFunction *memcpyFunc = module->getFunction("memcpy");
 			if (!memcpyFunc) {
 				// Declare memcpy: ptr memcpy(ptr dest, ptr src, i64 count)
 				memcpyFunc = getOrDeclareFunction("memcpy",
-					mir::MIRType::getPtr(),
-					{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+												  mir::MIRType::getPtr(),
+												  {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 			}
 			mir::MIRValue *sizeVal = builder->getInt64(structType->sizeInBytes);
 			builder->createCall(memcpyFunc, {alloca, val, sizeVal});

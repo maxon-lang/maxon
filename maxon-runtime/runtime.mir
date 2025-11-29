@@ -6,6 +6,453 @@
 declare i32 @write_stdout(ptr %buf, i32 %count)
 
 ;==============================================================================
+; Allocation Tracking (for --track-allocs debugging)
+; Global counters and tracking table for memory allocation tracking
+;==============================================================================
+
+; Global counters (initialized to 0)
+@__alloc_count = global i64 0       ; Total allocations
+@__free_count = global i64 0        ; Total frees
+@__alloc_bytes = global i64 0       ; Total bytes allocated
+@__free_bytes = global i64 0        ; Total bytes freed
+@__track_enabled = global i32 0     ; 0 = disabled, 1 = enabled
+@__next_alloc_id = global i64 0     ; Next allocation ID (starts at 0)
+
+; Tracking table: stores up to 256 active allocations
+; Each entry: { ptr (8 bytes), size (8 bytes), tag_ptr (8 bytes), id (8 bytes) } = 32 bytes
+; Total: 256 * 32 = 8192 bytes
+@__track_table = global [8192 x i8] zeroinitializer
+@__track_table_count = global i32 0  ; Number of active entries
+
+; Messages for tracking output
+@__alloc_msg = constant [8 x i8] c"ALLOC #\00"
+@__free_msg = constant [7 x i8] c"FREE #\00"
+@__colon_msg = constant [3 x i8] c": \00"
+@__bytes_msg = constant [8 x i8] c" bytes\n\00"
+@__bytes_paren_msg = constant [9 x i8] c" bytes (\00"
+@__close_paren_msg = constant [3 x i8] c")\n\00"
+@__summary_msg = constant [21 x i8] c"\n=== ALLOC STATS ===\00"
+@__allocs_label = constant [13 x i8] c"\nAllocated: \00"
+@__frees_label = constant [13 x i8] c"\nFreed:     \00"
+@__leaked_label = constant [13 x i8] c"\nLeaked:    \00"
+@__bytes_label = constant [7 x i8] c" bytes\00"
+@__newline = constant [2 x i8] c"\n\00"
+@__leak_header = constant [16 x i8] c"\n=== LEAKS ===\n\00"
+@__leak_msg = constant [7 x i8] c"LEAK #\00"
+
+; Default tags for allocations
+@__tag_string_concat = constant [14 x i8] c"string concat\00"
+
+;==============================================================================
+; __track_alloc_with_ptr - record an allocation with pointer (internal use)
+; void __track_alloc_with_ptr(ptr alloc_ptr, i64 size, ptr tag)
+; Stores allocation info in tracking table and prints message
+;==============================================================================
+define void @__track_alloc_with_ptr(ptr %alloc_ptr, i64 %size, ptr %tag) {
+entry:
+    ; Check if tracking is enabled
+    %enabled = load i32, ptr @__track_enabled
+    %is_enabled = icmp ne i32 %enabled, 0
+    br i1 %is_enabled, label %do_track, label %done
+
+do_track:
+    ; Increment and get allocation ID (so IDs start at 1)
+    %old_id = load i64, ptr @__next_alloc_id
+    %id = add i64 %old_id, 1
+    store i64 %id, ptr @__next_alloc_id
+
+    ; Increment allocation count
+    %old_count = load i64, ptr @__alloc_count
+    %new_count = add i64 %old_count, 1
+    store i64 %new_count, ptr @__alloc_count
+
+    ; Add to total bytes
+    %old_bytes = load i64, ptr @__alloc_bytes
+    %new_bytes = add i64 %old_bytes, %size
+    store i64 %new_bytes, ptr @__alloc_bytes
+
+    ; Add entry to tracking table if space available
+    %table_count = load i32, ptr @__track_table_count
+    %has_space = icmp slt i32 %table_count, 256
+    br i1 %has_space, label %add_entry, label %print_msg
+
+add_entry:
+    ; Calculate entry offset: table_count * 32
+    %offset = mul i32 %table_count, 32
+    %offset64 = sext i32 %offset to i64
+    %entry_ptr = getelementptr i8, ptr @__track_table, i64 %offset64
+
+    ; Store ptr at offset 0
+    store ptr %alloc_ptr, ptr %entry_ptr
+
+    ; Store size at offset 8
+    %size_ptr = getelementptr i8, ptr %entry_ptr, i64 8
+    store i64 %size, ptr %size_ptr
+
+    ; Store tag at offset 16
+    %tag_ptr = getelementptr i8, ptr %entry_ptr, i64 16
+    store ptr %tag, ptr %tag_ptr
+
+    ; Store id at offset 24
+    %id_ptr = getelementptr i8, ptr %entry_ptr, i64 24
+    store i64 %id, ptr %id_ptr
+
+    ; Increment table count
+    %new_table_count = add i32 %table_count, 1
+    store i32 %new_table_count, ptr @__track_table_count
+    br label %print_msg
+
+print_msg:
+    ; Check if tag is provided
+    %has_tag = icmp ne ptr %tag, null
+    br i1 %has_tag, label %print_with_tag, label %print_no_tag
+
+print_with_tag:
+    ; Print "ALLOC #<id>: <size> bytes (<tag>)\n"
+    call i32 @write_stdout(ptr @__alloc_msg, i32 7)
+    call void @__print_i64(i64 %id)
+    call i32 @write_stdout(ptr @__colon_msg, i32 2)
+    call void @__print_i64(i64 %size)
+    call i32 @write_stdout(ptr @__bytes_paren_msg, i32 8)
+    %tag_len = call i32 @__strlen(ptr %tag)
+    call i32 @write_stdout(ptr %tag, i32 %tag_len)
+    call i32 @write_stdout(ptr @__close_paren_msg, i32 2)
+    br label %done
+
+print_no_tag:
+    ; Print "ALLOC #<id>: <size> bytes\n"
+    call i32 @write_stdout(ptr @__alloc_msg, i32 7)
+    call void @__print_i64(i64 %id)
+    call i32 @write_stdout(ptr @__colon_msg, i32 2)
+    call void @__print_i64(i64 %size)
+    call i32 @write_stdout(ptr @__bytes_msg, i32 7)
+    br label %done
+
+done:
+    ret void
+}
+
+;==============================================================================
+; __track_free_with_ptr - record a free with pointer lookup (internal use)
+; void __track_free_with_ptr(ptr alloc_ptr, i64 size, ptr tag)
+; Finds allocation in table by pointer, prints with ID, removes entry
+;==============================================================================
+define void @__track_free_with_ptr(ptr %alloc_ptr, i64 %size, ptr %tag) {
+entry:
+    ; Check if tracking is enabled
+    %enabled = load i32, ptr @__track_enabled
+    %is_enabled = icmp ne i32 %enabled, 0
+    br i1 %is_enabled, label %do_track, label %done
+
+do_track:
+    ; Increment free count
+    %old_count = load i64, ptr @__free_count
+    %new_count = add i64 %old_count, 1
+    store i64 %new_count, ptr @__free_count
+
+    ; Add to total bytes freed
+    %old_bytes = load i64, ptr @__free_bytes
+    %new_bytes = add i64 %old_bytes, %size
+    store i64 %new_bytes, ptr @__free_bytes
+
+    ; Search for this pointer in the tracking table
+    %table_count = load i32, ptr @__track_table_count
+    %found_id = alloca i64
+    store i64 0, ptr %found_id
+    %found_idx = alloca i32
+    store i32 -1, ptr %found_idx
+    br label %search_loop
+
+search_loop:
+    %i = phi i32 [0, %do_track], [%next_i, %search_continue]
+    %done_searching = icmp sge i32 %i, %table_count
+    br i1 %done_searching, label %print_msg, label %check_entry
+
+check_entry:
+    ; Calculate entry offset: i * 32
+    %offset = mul i32 %i, 32
+    %offset64 = sext i32 %offset to i64
+    %entry_ptr = getelementptr i8, ptr @__track_table, i64 %offset64
+
+    ; Load stored pointer
+    %stored_ptr = load ptr, ptr %entry_ptr
+    %is_match = icmp eq ptr %stored_ptr, %alloc_ptr
+    br i1 %is_match, label %found_entry, label %search_continue
+
+found_entry:
+    ; Load the ID from offset 24
+    %id_ptr = getelementptr i8, ptr %entry_ptr, i64 24
+    %entry_id = load i64, ptr %id_ptr
+    store i64 %entry_id, ptr %found_id
+    store i32 %i, ptr %found_idx
+    br label %remove_entry
+
+remove_entry:
+    ; Remove entry by swapping with last entry
+    %last_idx = sub i32 %table_count, 1
+    %is_last = icmp eq i32 %i, %last_idx
+    br i1 %is_last, label %decrement_count, label %swap_entry
+
+swap_entry:
+    ; Copy last entry to this position
+    %last_offset = mul i32 %last_idx, 32
+    %last_offset64 = sext i32 %last_offset to i64
+    %last_entry = getelementptr i8, ptr @__track_table, i64 %last_offset64
+
+    ; Copy all 32 bytes (ptr, size, tag, id)
+    %last_ptr = load ptr, ptr %last_entry
+    store ptr %last_ptr, ptr %entry_ptr
+
+    %last_size_ptr = getelementptr i8, ptr %last_entry, i64 8
+    %last_size = load i64, ptr %last_size_ptr
+    %entry_size_ptr = getelementptr i8, ptr %entry_ptr, i64 8
+    store i64 %last_size, ptr %entry_size_ptr
+
+    %last_tag_ptr = getelementptr i8, ptr %last_entry, i64 16
+    %last_tag = load ptr, ptr %last_tag_ptr
+    %entry_tag_ptr = getelementptr i8, ptr %entry_ptr, i64 16
+    store ptr %last_tag, ptr %entry_tag_ptr
+
+    %last_id_ptr = getelementptr i8, ptr %last_entry, i64 24
+    %last_id = load i64, ptr %last_id_ptr
+    %entry_id_ptr2 = getelementptr i8, ptr %entry_ptr, i64 24
+    store i64 %last_id, ptr %entry_id_ptr2
+    br label %decrement_count
+
+decrement_count:
+    ; Decrement table count
+    %new_table_count = sub i32 %table_count, 1
+    store i32 %new_table_count, ptr @__track_table_count
+    br label %print_msg
+
+search_continue:
+    %next_i = add i32 %i, 1
+    br label %search_loop
+
+print_msg:
+    %alloc_id = load i64, ptr %found_id
+    ; Check if tag is provided
+    %has_tag = icmp ne ptr %tag, null
+    br i1 %has_tag, label %print_with_tag, label %print_no_tag
+
+print_with_tag:
+    ; Print "FREE #<id>: <size> bytes (<tag>)\n"
+    call i32 @write_stdout(ptr @__free_msg, i32 6)
+    call void @__print_i64(i64 %alloc_id)
+    call i32 @write_stdout(ptr @__colon_msg, i32 2)
+    call void @__print_i64(i64 %size)
+    call i32 @write_stdout(ptr @__bytes_paren_msg, i32 8)
+    %tag_len = call i32 @__strlen(ptr %tag)
+    call i32 @write_stdout(ptr %tag, i32 %tag_len)
+    call i32 @write_stdout(ptr @__close_paren_msg, i32 2)
+    br label %done
+
+print_no_tag:
+    ; Print "FREE #<id>: <size> bytes\n"
+    call i32 @write_stdout(ptr @__free_msg, i32 6)
+    call void @__print_i64(i64 %alloc_id)
+    call i32 @write_stdout(ptr @__colon_msg, i32 2)
+    call void @__print_i64(i64 %size)
+    call i32 @write_stdout(ptr @__bytes_msg, i32 7)
+    br label %done
+
+done:
+    ret void
+}
+
+;==============================================================================
+; __strlen - compute length of null-terminated string
+; i32 __strlen(ptr str)
+;==============================================================================
+define i32 @__strlen(ptr %str) {
+entry:
+    %counter = alloca i32
+    store i32 0, ptr %counter
+    br label %loop
+
+loop:
+    %i = load i32, ptr %counter
+    %i64 = sext i32 %i to i64
+    %char_ptr = getelementptr i8, ptr %str, i64 %i64
+    %char = load i8, ptr %char_ptr
+    %is_zero = icmp eq i8 %char, 0
+    br i1 %is_zero, label %done, label %continue
+
+continue:
+    %next_i = add i32 %i, 1
+    store i32 %next_i, ptr %counter
+    br label %loop
+
+done:
+    %result = load i32, ptr %counter
+    ret i32 %result
+}
+
+;==============================================================================
+; __print_alloc_summary - print allocation statistics (call at program exit)
+; void __print_alloc_summary()
+; Prints leaks first (if any), then stats
+;==============================================================================
+define void @__print_alloc_summary() {
+entry:
+    ; Check if tracking is enabled
+    %enabled = load i32, ptr @__track_enabled
+    %is_enabled = icmp ne i32 %enabled, 0
+    br i1 %is_enabled, label %check_leaks, label %done
+
+check_leaks:
+    ; Check if there are any leaks to report
+    %table_count = load i32, ptr @__track_table_count
+    %has_leaks = icmp sgt i32 %table_count, 0
+    br i1 %has_leaks, label %print_leaks, label %print_stats
+
+print_leaks:
+    ; Print leak header (includes trailing newline)
+    call i32 @write_stdout(ptr @__leak_header, i32 15)
+    br label %leak_loop
+
+leak_loop:
+    %i = phi i32 [0, %print_leaks], [%next_i, %leak_continue]
+    %done_leaks = icmp sge i32 %i, %table_count
+    br i1 %done_leaks, label %print_stats, label %print_leak_entry
+
+print_leak_entry:
+    ; Calculate entry offset: i * 32
+    %offset = mul i32 %i, 32
+    %offset64 = sext i32 %offset to i64
+    %entry_ptr = getelementptr i8, ptr @__track_table, i64 %offset64
+
+    ; Load id from offset 24
+    %id_ptr = getelementptr i8, ptr %entry_ptr, i64 24
+    %leak_id = load i64, ptr %id_ptr
+
+    ; Load size from offset 8
+    %size_ptr = getelementptr i8, ptr %entry_ptr, i64 8
+    %leak_size = load i64, ptr %size_ptr
+
+    ; Load tag from offset 16
+    %tag_ptr_ptr = getelementptr i8, ptr %entry_ptr, i64 16
+    %leak_tag = load ptr, ptr %tag_ptr_ptr
+
+    ; Print "LEAK #<id>: <size> bytes (<tag>)\n"
+    call i32 @write_stdout(ptr @__leak_msg, i32 6)
+    call void @__print_i64(i64 %leak_id)
+    call i32 @write_stdout(ptr @__colon_msg, i32 2)
+    call void @__print_i64(i64 %leak_size)
+
+    ; Check if tag exists
+    %has_tag = icmp ne ptr %leak_tag, null
+    br i1 %has_tag, label %print_leak_tag, label %print_leak_newline
+
+print_leak_tag:
+    call i32 @write_stdout(ptr @__bytes_paren_msg, i32 8)
+    %tag_len = call i32 @__strlen(ptr %leak_tag)
+    call i32 @write_stdout(ptr %leak_tag, i32 %tag_len)
+    call i32 @write_stdout(ptr @__close_paren_msg, i32 2)
+    br label %leak_continue
+
+print_leak_newline:
+    call i32 @write_stdout(ptr @__bytes_msg, i32 7)
+    br label %leak_continue
+
+leak_continue:
+    %next_i = add i32 %i, 1
+    br label %leak_loop
+
+print_stats:
+    ; Print header (20 chars: newline + "=== ALLOC STATS ===")
+    call i32 @write_stdout(ptr @__summary_msg, i32 20)
+
+    ; Print allocated bytes (12 chars: newline + "Allocated: ")
+    call i32 @write_stdout(ptr @__allocs_label, i32 12)
+    %alloc_bytes = load i64, ptr @__alloc_bytes
+    call void @__print_i64(i64 %alloc_bytes)
+    call i32 @write_stdout(ptr @__bytes_label, i32 6)
+
+    ; Print freed bytes (12 chars: newline + "Freed:     ")
+    call i32 @write_stdout(ptr @__frees_label, i32 12)
+    %free_bytes = load i64, ptr @__free_bytes
+    call void @__print_i64(i64 %free_bytes)
+    call i32 @write_stdout(ptr @__bytes_label, i32 6)
+
+    ; Print leaked bytes (12 chars: newline + "Leaked:    ")
+    call i32 @write_stdout(ptr @__leaked_label, i32 12)
+    %leaked = sub i64 %alloc_bytes, %free_bytes
+    call void @__print_i64(i64 %leaked)
+    call i32 @write_stdout(ptr @__bytes_label, i32 6)
+    call i32 @write_stdout(ptr @__newline, i32 1)
+    br label %done
+
+done:
+    ret void
+}
+
+;==============================================================================
+; __enable_alloc_tracking - enable allocation tracking
+; void __enable_alloc_tracking()
+;==============================================================================
+define void @__enable_alloc_tracking() {
+entry:
+    store i32 1, ptr @__track_enabled
+    ret void
+}
+
+;==============================================================================
+; __print_i64 - helper to print an i64 as decimal (internal)
+; void __print_i64(i64 value)
+;==============================================================================
+define void @__print_i64(i64 %value) {
+entry:
+    ; Buffer for digits (max 20 digits for i64)
+    %buf = alloca [21 x i8]
+    %is_zero = icmp eq i64 %value, 0
+    br i1 %is_zero, label %print_zero, label %convert
+
+print_zero:
+    %zero_ptr = getelementptr [21 x i8], ptr %buf, i64 0, i64 0
+    store i8 48, ptr %zero_ptr  ; '0'
+    call i32 @write_stdout(ptr %zero_ptr, i32 1)
+    br label %done
+
+convert:
+    ; Start from end of buffer
+    %end_ptr = getelementptr [21 x i8], ptr %buf, i64 0, i64 20
+    store i8 0, ptr %end_ptr  ; null terminator
+    br label %digit_loop
+
+digit_loop:
+    %pos = phi ptr [ %end_ptr, %convert ], [ %new_pos, %digit_loop ]
+    %val = phi i64 [ %value, %convert ], [ %next_val, %digit_loop ]
+
+    ; Get last digit
+    %digit = urem i64 %val, 10
+    %char = add i64 %digit, 48  ; '0' = 48
+    %char8 = trunc i64 %char to i8
+
+    ; Move back one position and store
+    %new_pos = getelementptr i8, ptr %pos, i64 -1
+    store i8 %char8, ptr %new_pos
+
+    ; Divide by 10 for next iteration
+    %next_val = udiv i64 %val, 10
+    %more = icmp ne i64 %next_val, 0
+    br i1 %more, label %digit_loop, label %print_result
+
+print_result:
+    ; Calculate length
+    %start = phi ptr [ %new_pos, %digit_loop ]
+    %start_int = ptrtoint ptr %start to i64
+    %end_int = ptrtoint ptr %end_ptr to i64
+    %len64 = sub i64 %end_int, %start_int
+    %len = trunc i64 %len64 to i32
+    call i32 @write_stdout(ptr %start, i32 %len)
+    br label %done
+
+done:
+    ret void
+}
+
+;==============================================================================
 ; sqrt - square root using Newton-Raphson iteration
 ; double sqrt(double x)
 ;==============================================================================
@@ -156,6 +603,126 @@ entry:
     %new = sub i32 %old, 1
     store i32 %new, ptr %counter
     ret i32 %new
+}
+
+;==============================================================================
+; string_alloc - allocate string buffer with refcount header
+; Allocates capacity + 8 bytes (4 for refcount, 4 for capacity)
+; Initializes refcount to 1, stores capacity
+; Returns pointer to data area (after 8-byte header)
+; ptr string_alloc(i64 capacity, ptr tag)
+; tag is optional (can be null) - describes what this allocation is for
+;==============================================================================
+define ptr @string_alloc(i64 %capacity, ptr %tag) {
+entry:
+    ; Allocate capacity + 8 bytes for header (refcount + capacity)
+    %total = add i64 %capacity, 8
+    %raw = call ptr @malloc(i64 %total)
+
+    ; Check for allocation failure
+    %is_null = icmp eq ptr %raw, null
+    br i1 %is_null, label %return_null, label %init_header
+
+init_header:
+    ; Initialize refcount to 1 at offset 0
+    store i32 1, ptr %raw
+
+    ; Store capacity at offset 4
+    %cap_ptr = getelementptr i8, ptr %raw, i64 4
+    %cap_i32 = trunc i64 %capacity to i32
+    store i32 %cap_i32, ptr %cap_ptr
+
+    ; Calculate data pointer (offset 8)
+    %data = getelementptr i8, ptr %raw, i64 8
+
+    ; Track allocation if enabled (pass data pointer for lookup during free)
+    %tracking_enabled = load i32, ptr @__track_enabled
+    %do_track = icmp ne i32 %tracking_enabled, 0
+    br i1 %do_track, label %track_alloc, label %return_data
+
+track_alloc:
+    call void @__track_alloc_with_ptr(ptr %data, i64 %total, ptr %tag)
+    br label %return_data
+
+return_data:
+    ret ptr %data
+
+return_null:
+    ret ptr null
+}
+
+;==============================================================================
+; string_retain - increment refcount for heap string
+; Call this when copying a heap-allocated string (capacity > 0)
+; void string_retain(ptr data)
+;==============================================================================
+define void @string_retain(ptr %data) {
+entry:
+    ; Get header pointer (data - 8)
+    %header = getelementptr i8, ptr %data, i64 -8
+    %new_count = call i32 @refcount_inc(ptr %header)
+    ret void
+}
+
+;==============================================================================
+; string_release - decrement refcount, free if zero
+; Call this when a heap string goes out of scope or is overwritten
+; void string_release(ptr data, ptr tag)
+; tag is optional (can be null) - describes what this release is for
+;==============================================================================
+define void @string_release(ptr %data, ptr %tag) {
+entry:
+    ; Get header pointer (data - 8)
+    %header = getelementptr i8, ptr %data, i64 -8
+    %new_count = call i32 @refcount_dec(ptr %header)
+    %is_zero = icmp eq i32 %new_count, 0
+    br i1 %is_zero, label %do_free, label %done
+
+do_free:
+    ; Track release if enabled (before freeing)
+    %tracking_enabled = load i32, ptr @__track_enabled
+    %do_track = icmp ne i32 %tracking_enabled, 0
+    br i1 %do_track, label %track_release, label %free_mem
+
+track_release:
+    ; Get capacity from header+4 to calculate total bytes
+    %cap_ptr = getelementptr i8, ptr %header, i64 4
+    %cap_i32 = load i32, ptr %cap_ptr
+    %cap_i64 = zext i32 %cap_i32 to i64
+    %total = add i64 %cap_i64, 8
+    ; Use __track_free_with_ptr to find and remove from tracking table
+    call void @__track_free_with_ptr(ptr %data, i64 %total, ptr %tag)
+    br label %free_mem
+
+free_mem:
+    call void @free(ptr %header)
+    br label %done
+
+done:
+    ret void
+}
+
+;==============================================================================
+; string_get_refcount - get current refcount for heap string
+; Useful for debugging and testing COW behavior
+; i32 string_get_refcount(ptr data)
+;==============================================================================
+define i32 @string_get_refcount(ptr %data) {
+entry:
+    %header = getelementptr i8, ptr %data, i64 -8
+    %count = load i32, ptr %header
+    ret i32 %count
+}
+
+;==============================================================================
+; string_get_capacity - get capacity from heap string header
+; i32 string_get_capacity(ptr data)
+;==============================================================================
+define i32 @string_get_capacity(ptr %data) {
+entry:
+    %cap_ptr = getelementptr i8, ptr %data, i64 -4
+    %cap = load i32, ptr %cap_ptr
+    ret i32 %cap
 }
 
 ;==============================================================================

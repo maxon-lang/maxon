@@ -135,7 +135,7 @@ static void writeTestFragment(const std::string &outputDir, const std::string &f
 			while (std::getline(checkStream, line)) {
 				if (line.rfind("ExitCode:", 0) == 0 || line.rfind("Args:", 0) == 0 ||
 					line.rfind("Stdout:", 0) == 0 || line.rfind("Stderr:", 0) == 0 ||
-					line.rfind("MaxoncStderr:", 0) == 0) {
+					line.rfind("MaxoncStderr:", 0) == 0 || line.rfind("TrackAllocs:", 0) == 0) {
 
 					if (!currentField.empty() && lineCount > 1) {
 						hasMultilineField = true;
@@ -184,7 +184,7 @@ static void writeTestFragment(const std::string &outputDir, const std::string &f
 					// Check if this is a metadata field header
 					if (line.rfind("ExitCode:", 0) == 0 || line.rfind("Args:", 0) == 0 ||
 						line.rfind("Stdout:", 0) == 0 || line.rfind("Stderr:", 0) == 0 ||
-						line.rfind("MaxoncStderr:", 0) == 0) {
+						line.rfind("MaxoncStderr:", 0) == 0 || line.rfind("TrackAllocs:", 0) == 0) {
 
 						// Write previous field if it exists
 						if (!currentField.empty()) {
@@ -295,6 +295,7 @@ int extractSpecFragments(int verboseLevel) {
 		bool inMetadataBlock = false;		 // For multi-line Stdout/Stderr
 		int docExampleCount = 0;			 // Counter for unnamed doc examples
 		std::string expectedOutputBlockType; // Track what type of output block is expected
+		bool currentTrackAllocs = false;	 // Track --track-allocs flag for current test
 
 		while (std::getline(specFile, line)) {
 			// Check if we're entering the Documentation or Tests section
@@ -332,6 +333,14 @@ int extractSpecFragments(int verboseLevel) {
 				testNameCounts[currentTestName]++;
 				collectingMetadata = false;
 				inMetadataBlock = false;
+				continue;
+			}
+
+			// Check for TrackAllocs comment (must follow test marker)
+			std::regex trackAllocsRegex(R"(<!--\s*TrackAllocs:\s*(true|false|yes|no|1|0)\s*-->)");
+			if (std::regex_search(line, match, trackAllocsRegex)) {
+				std::string val = match[1].str();
+				currentTrackAllocs = (val == "true" || val == "yes" || val == "1");
 				continue;
 			}
 
@@ -467,6 +476,11 @@ int extractSpecFragments(int verboseLevel) {
 								finalMetadata = currentMetadata;
 							}
 
+							// Prepend TrackAllocs if set
+							if (currentTrackAllocs) {
+								finalMetadata = "TrackAllocs: true\n" + finalMetadata;
+							}
+
 							int index = testNameCounts[currentTestName];
 							std::string fragmentName = currentTestName + "." + std::to_string(index);
 							writeTestFragment(outputDir, fragmentName, currentCode, finalMetadata,
@@ -479,6 +493,7 @@ int extractSpecFragments(int verboseLevel) {
 						collectingMetadata = false;
 						expectedOutputBlockType.clear();
 						inMetadataBlock = false;
+						currentTrackAllocs = false;
 					}
 				}
 			}
@@ -504,6 +519,11 @@ int extractSpecFragments(int verboseLevel) {
 			} else {
 				// Just exitcode, no wrapping needed
 				finalMetadata = currentMetadata;
+			}
+
+			// Prepend TrackAllocs if set
+			if (currentTrackAllocs) {
+				finalMetadata = "TrackAllocs: true\n" + finalMetadata;
 			}
 
 			int index = testNameCounts[currentTestName];
@@ -584,14 +604,18 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 	}
 	inFile.close();
 
-	// Extract args for compilation (if present)
+	// Extract args and trackAllocs for compilation (if present)
 	std::string args;
+	bool trackAllocs = false;
 	std::istringstream metaStream(metadata);
 	while (std::getline(metaStream, line)) {
 		if (line.rfind("Args:", 0) == 0) {
 			args = line.substr(5);
 			args.erase(0, args.find_first_not_of(" \t"));
-			break;
+		} else if (line.rfind("TrackAllocs:", 0) == 0) {
+			std::string val = line.substr(12);
+			val.erase(0, val.find_first_not_of(" \t"));
+			trackAllocs = (val == "true" || val == "1" || val == "yes");
 		}
 	}
 
@@ -620,6 +644,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		optOpts.optimize = true;
 		optOpts.emitIR = true;
 		optOpts.verboseLevel = 0;
+		optOpts.trackAllocs = trackAllocs;
 
 		std::string optIR;
 		std::string compileError;
@@ -700,6 +725,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		debugOpts.debugInfo = true;
 		debugOpts.emitIR = true;
 		debugOpts.verboseLevel = 0;
+		debugOpts.trackAllocs = trackAllocs;
 
 		std::string debugIR;
 		std::ifstream debugIRFile;

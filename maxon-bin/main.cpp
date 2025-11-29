@@ -403,12 +403,33 @@ int main(int argc, char *argv[]) {
 		return runTestFragmentsSubset(testFiles, outputFile, verboseLevel);
 	}
 
-	if (argc == 2) {
-		size_t len = command.length();
-		bool isMaxonFile = (len >= 6 && command.substr(len - 6) == ".maxon");
-		bool isTestFile = (len >= 5 && command.substr(len - 5) == ".test");
-		if (isMaxonFile || isTestFile) {
-			return compileAndRunTemporary(command);
+	// Handle shortcut: maxon <file.maxon|.test> [--track-allocs]
+	// Only applies when the first argument is NOT a known command
+	if (command != "compile" && command != "self-test" && command != "extract-specs" &&
+		command != "regen-fragments" && command != "generate-docs" && command != "test-fragments" &&
+		command != "test" && command != "benchmark" && command != "compile-mir" &&
+		command != "validate-specs") {
+		std::string inputFile;
+		bool trackAllocs = false;
+		bool isValidShortcut = false;
+
+		for (int i = 1; i < argc; ++i) {
+			std::string arg = argv[i];
+			if (arg == "--track-allocs") {
+				trackAllocs = true;
+			} else if (!arg.empty() && arg[0] != '-') {
+				size_t len = arg.length();
+				bool isMaxonFile = (len >= 6 && arg.substr(len - 6) == ".maxon");
+				bool isTestFile = (len >= 5 && arg.substr(len - 5) == ".test");
+				if (isMaxonFile || isTestFile) {
+					inputFile = arg;
+					isValidShortcut = true;
+				}
+			}
+		}
+
+		if (isValidShortcut && !inputFile.empty()) {
+			return compileAndRunTemporary(inputFile, trackAllocs);
 		}
 	}
 
@@ -441,6 +462,8 @@ int main(int argc, char *argv[]) {
 			options.debugInfo = true;
 		} else if (arg == "--profile") {
 			options.profile = true;
+		} else if (arg == "--track-allocs") {
+			options.trackAllocs = true;
 		} else if (arg == "-vvv") {
 			options.verboseLevel = 3;
 		} else if (arg == "-vv") {

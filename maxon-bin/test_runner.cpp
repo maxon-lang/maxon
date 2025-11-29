@@ -96,12 +96,17 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 	std::string expectedStdout;
 	std::string expectedStderr;
 	std::string expectedMaxoncStderr;
+	bool trackAllocs = false;
 
 	std::istringstream metaStream(metadata);
 	while (std::getline(metaStream, line)) {
 		if (line.rfind("Args:", 0) == 0) {
 			args = line.substr(5);
 			args.erase(0, args.find_first_not_of(" \t"));
+		} else if (line.rfind("TrackAllocs:", 0) == 0) {
+			std::string val = line.substr(12);
+			val.erase(0, val.find_first_not_of(" \t"));
+			trackAllocs = (val == "true" || val == "1" || val == "yes");
 		} else if (line.rfind("ExitCode:", 0) == 0) {
 			expectedExitCode = std::stoi(line.substr(10));
 		} else if (line.rfind("Stdout:", 0) == 0) {
@@ -210,6 +215,7 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 		optOpts.optimize = true;
 		optOpts.emitIR = true;
 		optOpts.verboseLevel = 0;
+		optOpts.trackAllocs = trackAllocs;
 
 		std::string actualOptIR;
 		std::string actualMaxoncStderr;
@@ -328,6 +334,7 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 			debugOpts.debugInfo = true;
 			debugOpts.emitIR = true;
 			debugOpts.verboseLevel = 0;
+			debugOpts.trackAllocs = trackAllocs;
 
 			std::string actualDebugIR;
 
@@ -367,6 +374,7 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 			exeOpts.outputFile = tempExe;
 			exeOpts.optimize = true;
 			exeOpts.verboseLevel = 0;
+			exeOpts.trackAllocs = trackAllocs;
 
 			try {
 				std::stringstream stderrCapture;

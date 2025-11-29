@@ -42,8 +42,10 @@ export interface Subscriptable
 end 'Subscriptable'
 
 // ExpressibleByStringLiteral - types that can be initialized from string literals
-// The compiler calls Type.initFromStringLiteral(data []byte, len int) -> Type
-// This is a marker interface - conforming types must provide initFromStringLiteral method
-// The compiler detects conformance and transforms: var x MyType = "hello" -> var x = MyType.initFromStringLiteral(bytes, len)
+// The compiler calls Type.initFromStringLiteral(data []byte, len int, capacity int) -> Type
+// - capacity = 0 for constant/SSO data (no heap cleanup needed)
+// - capacity > 0 for heap-allocated data with refcount header
+// The compiler detects conformance and transforms: var x MyType = "hello" -> var x = MyType.initFromStringLiteral(bytes, len, 0)
 export interface ExpressibleByStringLiteral
+    function initFromStringLiteral(data []byte, len int, capacity int) Self
 end 'ExpressibleByStringLiteral'

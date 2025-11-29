@@ -16,7 +16,8 @@ struct CompilationOptions {
 	bool optimize = false;
 	bool debugInfo = false;
 	bool profile = false;
-	int verboseLevel = 0; // 0 = silent, 1 = progress, 2 = detailed, 3 = trace
+	bool trackAllocs = false; // Log memory allocations for debugging
+	int verboseLevel = 0;	  // 0 = silent, 1 = progress, 2 = detailed, 3 = trace
 };
 
 std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logger);

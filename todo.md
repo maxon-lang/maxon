@@ -1,6 +1,14 @@
 *You* Aren't Going To Write It
 You *Are* Going To Read It
 
+
+## Priorities
+- associated types
+
+- debugging (speed up the dev process)
+- memory safety (generational references)
+- string formatting
+
 ## TODO
 
 - simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")

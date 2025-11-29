@@ -9,8 +9,10 @@
 #include "lexer.h"
 #include <stdexcept>
 
-MIRCodeGenerator::MIRCodeGenerator(const std::string &moduleName, bool debugInfo, int verboseLevel)
-	: generateDebugInfo(debugInfo), verboseLevel(verboseLevel), sourceFileName(moduleName), logger_(verboseLevel) {
+MIRCodeGenerator::MIRCodeGenerator(const std::string &moduleName, bool debugInfo, int verboseLevel,
+								   bool trackAllocs)
+	: generateDebugInfo(debugInfo), trackAllocs(trackAllocs), verboseLevel(verboseLevel),
+	  sourceFileName(moduleName), logger_(verboseLevel) {
 	module = std::make_unique<mir::MIRModule>(moduleName);
 
 	// Set target triple
@@ -150,6 +152,33 @@ bool MIRCodeGenerator::isStructParameter(const std::string &varName) {
 	return structParameters.find(varName) != structParameters.end();
 }
 
+// Check if a binary expression is a string concatenation (including nested ones)
+bool MIRCodeGenerator::isStringConcatExpr(BinaryExprAST *binExpr) {
+	if (binExpr->op != '+') {
+		return false;
+	}
+
+	// Helper lambda to get type of an expression
+	auto getExprType = [this](ExprAST *expr) -> std::string {
+		if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
+			auto it = variableTypes.find(varExpr->name);
+			return (it != variableTypes.end()) ? it->second : "";
+		}
+		if (dynamic_cast<StringLiteralExprAST *>(expr)) {
+			return "string";
+		}
+		if (auto *nestedBin = dynamic_cast<BinaryExprAST *>(expr)) {
+			return isStringConcatExpr(nestedBin) ? "string" : "";
+		}
+		return "";
+	};
+
+	std::string leftType = getExprType(binExpr->left.get());
+	std::string rightType = getExprType(binExpr->right.get());
+
+	return leftType == "string" && rightType == "string";
+}
+
 //==============================================================================
 // Scope Management
 //==============================================================================
@@ -185,17 +214,22 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		builder->createCall(freeFunc, {ptr});
 	}
 
-	// Free heap-allocated strings in this scope
+	// Free heap-allocated strings in this scope using string_release
+	// string_release handles the refcount header and frees only when refcount reaches 0
 	for (const auto &[name, dataPtrAlloca] : scopeStack.back().heapAllocatedStrings) {
 		// Load the data pointer
 		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrAlloca, name + ".data.ptr");
 
-		// Call free on the data pointer
-		mir::MIRFunction *freeFunc = getOrDeclareFunction(
-			"free",
+		// Create tag for tracking based on allocation name
+		std::string tagStr = (name.find("concat") != std::string::npos) ? "string concat" : "string literal";
+		mir::MIRValue *tag = module->createGlobalString(".__tag.free." + name, tagStr);
+
+		// Call string_release on the data pointer (handles refcount and free)
+		mir::MIRFunction *stringReleaseFunc = getOrDeclareFunction(
+			"string_release",
 			mir::MIRType::getVoid(),
-			{mir::MIRType::getPtr()});
-		builder->createCall(freeFunc, {dataPtr});
+			{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+		builder->createCall(stringReleaseFunc, {dataPtr, tag});
 	}
 }
 
@@ -335,6 +369,13 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 
 	mir::MIRValue *mainRetVal = nullptr;
 
+	// Enable allocation tracking if requested (before calling main)
+	if (trackAllocs) {
+		mir::MIRFunction *trackEnableFunc = getOrDeclareFunction("__enable_alloc_tracking",
+																 mir::MIRType::getVoid(), {});
+		builder->createCall(trackEnableFunc, {});
+	}
+
 	if (mainTakesArgs && isWindows) {
 		// TODO: Implement Windows command line argument handling
 		// For now, call main without arguments
@@ -342,6 +383,13 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 	} else {
 		// Call main without arguments
 		mainRetVal = builder->createCall(mainFunc, {});
+	}
+
+	// Print allocation stats if tracking was enabled (before cleanup/exit)
+	if (trackAllocs) {
+		mir::MIRFunction *printStatsFunc = getOrDeclareFunction("__print_alloc_summary",
+																mir::MIRType::getVoid(), {});
+		builder->createCall(printStatsFunc, {});
 	}
 
 	// Clean up FFI resources before exiting (if any extern calls were made)

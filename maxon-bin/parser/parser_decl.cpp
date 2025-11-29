@@ -488,6 +488,35 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 				if (check(TokenType::IDENTIFIER) && std::string(currentValue()) == "Self") {
 					paramType = "Self";
 					advance();
+				} else if (check(TokenType::LBRACKET)) {
+					// Array type: [size]type or []type
+					advance(); // consume '['
+
+					std::string sizeStr = "";
+					if (check(TokenType::NUMBER)) {
+						// Sized array: [16]byte
+						sizeStr = std::string(currentValue());
+						advance();
+					}
+					// else: unsized array []type
+
+					expectAdvance(TokenType::RBRACKET, "Expected ']' after array size");
+
+					// Get element type
+					std::string elementType;
+					if (Lexer::isTypeToken(currentToken())) {
+						elementType = std::string(currentValue());
+						advance();
+					} else if (check(TokenType::IDENTIFIER)) {
+						elementType = parseQualifiedName("array element type");
+					} else {
+						throw std::runtime_error("Expected array element type after ']' in interface method signature\n  Location: line " +
+												 std::to_string(currentLine()) + ", column " +
+												 std::to_string(currentColumn()));
+					}
+
+					// Build array type string
+					paramType = "[" + sizeStr + "]" + elementType;
 				} else if (Lexer::isTypeToken(currentToken())) {
 					paramType = std::string(currentValue());
 					advance();
