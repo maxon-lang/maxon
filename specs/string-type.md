@@ -205,6 +205,21 @@ end 'main'
 0
 ```
 
+<!-- test: equality-with-logical-and -->
+```maxon
+function main() int
+    var s = "hello"
+    var c = 'A'
+    if s == "hello" and c == 'A' 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: print-string -->
 ```maxon
 function main() int
@@ -971,3 +986,17 @@ Freed:     35 bytes
 Leaked:    0 bytes
 ```
 
+<!-- test: toLower -->
+```maxon
+function main() int
+    var s = "HELLO"
+    print(s.toLower())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```

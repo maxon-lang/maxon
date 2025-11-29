@@ -116,7 +116,8 @@ class SemanticAnalyzer {
 
 	// Register external/stdlib struct types
 	// Call this before analyze() to make external structs available
-	void registerExternalStruct(const std::string &name, const std::vector<StructFieldInfo> &fields);
+	void registerExternalStruct(const std::string &name, const std::vector<StructFieldInfo> &fields,
+								const std::vector<std::string> &conformsTo = {});
 
 	// Register all built-in functions (string methods, runtime functions, etc.)
 	// Call this before analyze() to make built-ins available

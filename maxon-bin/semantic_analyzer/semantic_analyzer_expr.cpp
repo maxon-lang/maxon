@@ -352,7 +352,19 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		}
 
 		// Try to find the function - first exact match, then unqualified lookup
-		auto funcIt = functions.find(callExpr->callee);
+		// First, if we're inside a method, check for a sibling method call
+		// This handles the case where find(needle) inside string.contains() should resolve to string.find
+		auto funcIt = functions.end();
+		if (!currentReceiverType.empty() && callExpr->callee.find(".") == std::string::npos) {
+			// Try qualified name: currentReceiverType.callee (e.g., "string.find")
+			std::string qualifiedName = currentReceiverType + "." + callExpr->callee;
+			funcIt = functions.find(qualifiedName);
+		}
+
+		// If not found as sibling method, try exact match with the callee name
+		if (funcIt == functions.end()) {
+			funcIt = functions.find(callExpr->callee);
+		}
 
 		// Check if this is a qualified call (contains .)
 		bool isQualifiedCall = callExpr->callee.find(".") != std::string::npos;

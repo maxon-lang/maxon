@@ -92,7 +92,7 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
 				const StdlibStruct &structInfo = pair.second;
 				// Only register as external if NOT defined in current document
 				if (currentDocStructs.find(structInfo.name) == currentDocStructs.end()) {
-					semanticAnalyzer.registerExternalStruct(structInfo.name, structInfo.fields);
+					semanticAnalyzer.registerExternalStruct(structInfo.name, structInfo.fields, structInfo.conformsTo);
 				}
 			}
 
@@ -526,10 +526,16 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
 		if (funcIt != semInfo.functions.end()) {
 			const FunctionInfo &funcInfo = funcIt->second;
 			std::string sig = "function " + funcInfo.name + "(";
+			bool first = true;
 			for (size_t i = 0; i < funcInfo.parameters.size(); i++) {
-				if (i > 0)
+				// Skip implicit 'self' parameter for methods
+				if (funcInfo.parameters[i].name == "self") {
+					continue;
+				}
+				if (!first)
 					sig += ", ";
 				sig += funcInfo.parameters[i].name + " " + funcInfo.parameters[i].type;
+				first = false;
 			}
 			sig += ") " + funcInfo.returnType;
 			hover.contents = "```maxon\n" + sig + "\n```";
@@ -903,6 +909,7 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 				for (const auto &field : structDef->fields) {
 					stdlibStruct.fields.push_back(StructFieldInfo(field.name, field.type, field.line, field.column));
 				}
+				stdlibStruct.conformsTo = structDef->conformsTo;
 				stdlibStructs[structDef->name] = stdlibStruct;
 			}
 		}

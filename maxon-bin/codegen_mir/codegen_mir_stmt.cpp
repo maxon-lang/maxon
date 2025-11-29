@@ -5,6 +5,7 @@
  */
 
 #include "../codegen_mir.h"
+#include <algorithm>
 #include <stdexcept>
 
 void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
@@ -1160,14 +1161,94 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 				mir::MIRValue *fieldPtr = builder->createStructGEP(structType, structAlloca,
 																   fieldIndex, initField.name);
 
-				// If the field is an unsized array type (like []byte), the value from generateExpr
-				// is a pointer to the fat pointer. We need to load the fat pointer struct and
-				// store it (copy semantics for the fat pointer).
+				// If the field is an unsized array type (like []byte), we need to handle
+				// the conversion from either a fat pointer or a static array
 				if (fieldType.size() >= 2 && fieldType[0] == '[' && fieldType[1] == ']') {
-					// Unsized array - load the fat pointer struct
+					// Get the value's type if it's a variable
+					std::string valueType;
+					if (auto *varExpr = dynamic_cast<VariableExprAST *>(initField.value.get())) {
+						auto it = variableTypes.find(varExpr->name);
+						if (it != variableTypes.end()) {
+							valueType = it->second;
+						}
+					}
+
+					// Check if the value is a static array (format: [size]type where size is digits)
+					bool isStaticArray = false;
+					int staticArraySize = 0;
+					std::string elemType;
+					if (valueType.size() >= 3 && valueType[0] == '[') {
+						size_t closeBracket = valueType.find(']');
+						if (closeBracket != std::string::npos && closeBracket > 1) {
+							std::string sizeStr = valueType.substr(1, closeBracket - 1);
+							if (!sizeStr.empty() && std::all_of(sizeStr.begin(), sizeStr.end(), ::isdigit)) {
+								isStaticArray = true;
+								staticArraySize = std::stoi(sizeStr);
+								elemType = valueType.substr(closeBracket + 1);
+							}
+						}
+					}
+
 					mir::MIRType *fatPtrType = structType->fieldTypes[fieldIndex];
-					mir::MIRValue *fatPtrValue = builder->createLoad(fatPtrType, fieldValue, initField.name + ".fatptr");
-					builder->createStore(fatPtrValue, fieldPtr);
+
+					if (isStaticArray) {
+						// Convert static array to fat pointer:
+						// fieldValue is a pointer to the static array [size x elemType]
+						// We need to store {ptr, len} into the fat pointer field
+
+						// Store the data pointer (field 0 of the fat pointer)
+						mir::MIRValue *fatPtrDataPtr = builder->createStructGEP(fatPtrType, fieldPtr, 0,
+																				initField.name + ".ptr");
+						builder->createStore(fieldValue, fatPtrDataPtr);
+
+						// Store the length (field 1 of the fat pointer)
+						// Use the actual string length from _len field, not the buffer size
+						// But we don't have _len yet - use the static array size as max
+						// Actually, we need to get _len from the struct literal
+						// For now, find the _len field in the struct literal
+						int strLen = staticArraySize; // Default to buffer size
+						for (const auto &otherField : structInitExpr->fields) {
+							if (otherField.name == "_len") {
+								if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(otherField.value.get())) {
+									// _len: _len means copy from self._len
+									// We need to load this from self
+									if (memberExpr->memberName == "_len") {
+										// Get self pointer
+										auto selfIt = namedValues.find("self");
+										if (selfIt != namedValues.end()) {
+											mir::MIRType *selfStructType = structTypes[structInitExpr->structName];
+											// Find _len field index
+											const auto &selfFields = structFields[structInitExpr->structName];
+											for (size_t fi = 0; fi < selfFields.size(); fi++) {
+												if (selfFields[fi].first == "_len") {
+													mir::MIRValue *selfLenPtr = builder->createStructGEP(
+														selfStructType, selfIt->second, static_cast<int>(fi), "self._len.ptr");
+													mir::MIRValue *selfLenVal = builder->createLoad(
+														mir::MIRType::getInt32(), selfLenPtr, "self._len.val");
+													mir::MIRValue *fatPtrLenPtr = builder->createStructGEP(
+														fatPtrType, fieldPtr, 1, initField.name + ".len");
+													builder->createStore(selfLenVal, fatPtrLenPtr);
+													goto done_len_store;
+												}
+											}
+										}
+									}
+								}
+								break;
+							}
+						}
+						{
+							// Fallback: use static array size
+							mir::MIRValue *fatPtrLenPtr = builder->createStructGEP(fatPtrType, fieldPtr, 1,
+																				   initField.name + ".len");
+							builder->createStore(builder->getInt32(strLen), fatPtrLenPtr);
+						}
+					done_len_store:;
+					} else {
+						// Unsized array - load the fat pointer struct and store it
+						mir::MIRValue *fatPtrValue = builder->createLoad(fatPtrType, fieldValue, initField.name + ".fatptr");
+						builder->createStore(fatPtrValue, fieldPtr);
+					}
 				} else {
 					builder->createStore(fieldValue, fieldPtr);
 				}

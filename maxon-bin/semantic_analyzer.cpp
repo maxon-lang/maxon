@@ -54,10 +54,11 @@ void SemanticAnalyzer::registerExternalFunction(const std::string &name, const s
 	functionIndices[name] = externalFunctionIdBase++;
 }
 
-void SemanticAnalyzer::registerExternalStruct(const std::string &name, const std::vector<StructFieldInfo> &fields) {
+void SemanticAnalyzer::registerExternalStruct(const std::string &name, const std::vector<StructFieldInfo> &fields,
+											  const std::vector<std::string> &conformsTo) {
 	// Only register if not already defined
 	if (structs.find(name) == structs.end()) {
-		structs.emplace(name, StructInfo(name, fields, 0, 0));
+		structs.emplace(name, StructInfo(name, fields, 0, 0, conformsTo));
 		logTrace("Registered external struct: " + name);
 	}
 }

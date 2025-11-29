@@ -1,7 +1,9 @@
 #include "../include/analyzer.h"
 #include "catch_amalgamated.hpp"
+#include <fstream>
 #include <iostream>
 #include <memory>
+#include <sstream>
 
 #define CATCH_CONFIG_MAIN
 
@@ -801,4 +803,116 @@ TEST_CASE("builtin_string_search_methods_no_errors", "[analyzer]") {
 								   diag.message.find("find") != std::string::npos);
 		REQUIRE_FALSE(isUndefinedBuiltin);
 	}
+}
+
+TEST_CASE("sibling_method_call_no_self", "[analyzer]") {
+	// Test that calling a sibling method without 'self.' prefix works
+	// This tests the implicit method resolution within a struct
+	Analyzer analyzer;
+
+	auto doc = createTestDocument(
+		"export struct TestStruct\n"
+		"    _x int\n"
+		"    export function bar() int\n"
+		"        return 42\n"
+		"    end 'bar'\n"
+		"    export function foo() int\n"
+		"        return bar()\n" // Should resolve to TestStruct.bar() implicitly
+		"    end 'foo'\n"
+		"end 'TestStruct'\n"
+		"function main() int\n"
+		"    return 0\n"
+		"end 'main'");
+
+	auto diagnostics = analyzer.analyze(doc);
+
+	// Should have no errors - bar() should be recognized as a sibling method call
+	bool hasArgCountError = false;
+	bool hasUndefinedError = false;
+	for (const auto &diag : diagnostics) {
+		if (diag.message.find("argument count mismatch") != std::string::npos) {
+			hasArgCountError = true;
+			INFO("Unexpected argument count error: " << diag.message);
+		}
+		if (diag.message.find("Undefined function") != std::string::npos &&
+			diag.message.find("bar") != std::string::npos) {
+			hasUndefinedError = true;
+			INFO("Unexpected undefined function error: " << diag.message);
+		}
+	}
+	REQUIRE_FALSE(hasArgCountError);
+	REQUIRE_FALSE(hasUndefinedError);
+}
+
+TEST_CASE("sibling_method_call_with_args", "[analyzer]") {
+	// Test sibling method call with arguments (like contains calling find)
+	Analyzer analyzer;
+
+	auto doc = createTestDocument(
+		"export struct MyString\n"
+		"    _len int\n"
+		"    export function find(needle int) int\n"
+		"        return needle\n"
+		"    end 'find'\n"
+		"    export function contains(needle int) bool\n"
+		"        return find(needle) >= 0\n" // Sibling call with argument
+		"    end 'contains'\n"
+		"end 'MyString'\n"
+		"function main() int\n"
+		"    return 0\n"
+		"end 'main'");
+
+	auto diagnostics = analyzer.analyze(doc);
+
+	// Should have no errors about argument count mismatch
+	bool hasArgCountError = false;
+	for (const auto &diag : diagnostics) {
+		if (diag.message.find("argument count mismatch") != std::string::npos) {
+			hasArgCountError = true;
+			INFO("Unexpected argument count error: " << diag.message);
+		}
+	}
+	REQUIRE_FALSE(hasArgCountError);
+}
+
+TEST_CASE("stdlib_string_file_sibling_method_call", "[analyzer]") {
+	// This test reproduces the bug seen in VSCode when opening stdlib/string/string.maxon
+	// The contains() method calls find(needle) without 'self.' prefix
+	// This should work because find() is a sibling method of the same struct
+
+	// Read the actual stdlib string.maxon file
+	std::ifstream file("../../../stdlib/string/string.maxon");
+	REQUIRE(file.is_open());
+
+	std::stringstream buffer;
+	buffer << file.rdbuf();
+	std::string content = buffer.str();
+	file.close();
+
+	// Create analyzer and initialize stdlib (for other types like ByteView)
+	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
+
+	// Create document from the file content
+	auto doc = std::make_shared<Document>("file:///stdlib/string/string.maxon", content, 0);
+
+	auto diagnostics = analyzer.analyze(doc);
+
+	// Check for the specific bug: argument count mismatch for find() in contains()
+	// The error would be: "Function 'find' argument count mismatch - Expected: 2 arguments, Found: 1 argument"
+	bool hasFindArgCountError = false;
+	std::string errorMessage;
+	for (const auto &diag : diagnostics) {
+		if (diag.message.find("find") != std::string::npos &&
+			diag.message.find("argument") != std::string::npos &&
+			diag.message.find("mismatch") != std::string::npos) {
+			hasFindArgCountError = true;
+			errorMessage = diag.message;
+			INFO("Found argument count error for find(): " << diag.message);
+		}
+	}
+
+	// This should NOT have an argument count error
+	// find(needle) inside contains() should implicitly resolve to self.find(needle)
+	REQUIRE_FALSE(hasFindArgCountError);
 }

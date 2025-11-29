@@ -121,6 +121,11 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 					}
 					expectedStdout += line + "\n";
 				}
+			} else {
+				// Single line format: "Stdout: hello"
+				expectedStdout = line.substr(7); // Skip "Stdout:"
+				expectedStdout.erase(0, expectedStdout.find_first_not_of(" \t"));
+				expectedStdout += "\n"; // Add newline since output typically has one
 			}
 		} else if (line.rfind("Stderr:", 0) == 0) {
 			if (line.find("```") != std::string::npos) {
@@ -134,6 +139,11 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 					}
 					expectedStderr += line + "\n";
 				}
+			} else {
+				// Single line format: "Stderr: error message"
+				expectedStderr = line.substr(7); // Skip "Stderr:"
+				expectedStderr.erase(0, expectedStderr.find_first_not_of(" \t"));
+				expectedStderr += "\n";
 			}
 		} else if (line.rfind("MaxoncStderr:", 0) == 0) {
 			if (line.find("```") != std::string::npos) {
@@ -445,7 +455,92 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 				}
 			} catch (...) {
 				result.passed = false;
-				result.failureReason = "Execution test failed";
+				result.failureReason = "Optimized execution test failed";
+			}
+		}
+
+		// Also run unoptimized version and verify same results
+		if (result.passed && expectedOptIR != "N/A" && (!expectedStdout.empty() || !expectedStderr.empty() || expectedExitCode != 0)) {
+			std::string tempUnoptExe = (tempDir / ("temp-test-unopt-" + std::to_string(threadId) + ".exe")).string();
+			CompilationOptions unoptOpts;
+			unoptOpts.inputFiles = {tempSource};
+			unoptOpts.outputFile = tempUnoptExe;
+			unoptOpts.optimize = false;
+			unoptOpts.verboseLevel = 0;
+			unoptOpts.trackAllocs = trackAllocs;
+
+			try {
+				std::stringstream stderrCapture;
+				std::streambuf *oldCerr = std::cerr.rdbuf(stderrCapture.rdbuf());
+				try {
+					compileProgram(unoptOpts);
+					std::cerr.rdbuf(oldCerr);
+				} catch (...) {
+					std::cerr.rdbuf(oldCerr);
+					throw;
+				}
+
+				int exitCode = 0;
+				std::string actualStdout;
+				std::string actualStderr;
+
+				std::string tempOutput = (tempDir / ("maxon_test_unopt_output_" + std::to_string(threadId) + ".tmp")).string();
+				std::string tempStderrFile = (tempDir / ("maxon_test_unopt_stderr_" + std::to_string(threadId) + ".tmp")).string();
+
+				std::string cmdLine = tempUnoptExe;
+				if (!args.empty()) {
+					cmdLine += " " + args;
+				}
+				cmdLine += " > \"" + tempOutput + "\" 2>\"" + tempStderrFile + "\"";
+
+				exitCode = executeWithTimeout(cmdLine, 5);
+
+				if (exitCode == -1 && expectedExitCode != -1) {
+					result.passed = false;
+					result.failureReason = "TIMEOUT: Unoptimized test execution exceeded 5 seconds";
+					std::filesystem::remove(tempOutput);
+					std::filesystem::remove(tempStderrFile);
+				} else {
+					std::ifstream outFile(tempOutput);
+					if (outFile) {
+						actualStdout = std::string(std::istreambuf_iterator<char>(outFile),
+												   std::istreambuf_iterator<char>());
+						outFile.close();
+					}
+
+					std::ifstream stderrFile(tempStderrFile);
+					if (stderrFile) {
+						actualStderr = std::string(std::istreambuf_iterator<char>(stderrFile),
+												   std::istreambuf_iterator<char>());
+						stderrFile.close();
+					}
+
+					std::filesystem::remove(tempOutput);
+					std::filesystem::remove(tempStderrFile);
+
+					if (exitCode != expectedExitCode) {
+						result.passed = false;
+						result.failureReason = "Unoptimized exit code mismatch";
+						result.failureExpected = std::to_string(expectedExitCode);
+						result.failureActual = std::to_string(exitCode);
+					} else if (!expectedStdout.empty() && actualStdout != expectedStdout) {
+						result.passed = false;
+						result.failureReason = "Unoptimized stdout mismatch";
+						result.failureExpected = expectedStdout;
+						result.failureActual = actualStdout;
+					} else if (!expectedStderr.empty() && actualStderr != expectedStderr) {
+						result.passed = false;
+						result.failureReason = "Unoptimized stderr mismatch";
+						result.failureExpected = expectedStderr;
+						result.failureActual = actualStderr;
+					}
+				}
+
+				std::filesystem::remove(tempUnoptExe);
+				std::filesystem::remove(tempUnoptExe.substr(0, tempUnoptExe.length() - 4) + ".pdb");
+			} catch (...) {
+				result.passed = false;
+				result.failureReason = "Unoptimized execution test failed";
 			}
 		}
 

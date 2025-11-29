@@ -35,6 +35,7 @@ struct StdlibStructMethod {
 struct StdlibStruct {
 	std::string name;					 // Struct name
 	std::vector<StructFieldInfo> fields; // Fields of the struct
+	std::vector<std::string> conformsTo; // Interfaces this struct conforms to
 };
 
 // Information about a type method or property
