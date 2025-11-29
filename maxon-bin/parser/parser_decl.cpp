@@ -194,6 +194,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 // Parse a method declaration inside a struct body
 // The receiverType is implicitly the struct name (passed in)
 // Methods have an implicit 'self' parameter auto-injected
+// Syntax: function methodName(...) or function InterfaceName.methodName(...)
 std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) {
 	// Check for export keyword
 	bool isExported = false;
@@ -203,10 +204,23 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 	}
 
 	Token funcToken = expectKeyword("function", "Expected 'function'");
-	Token name = expect(TokenType::IDENTIFIER, "Expected method name");
-	std::string methodName = name.value;
+	Token firstIdent = expect(TokenType::IDENTIFIER, "Expected method name or interface name");
+
+	std::string methodName;
+	std::string implementsInterface;
+
+	// Check for Interface.methodName syntax
+	if (check(TokenType::DOT)) {
+		advance(); // consume '.'
+		implementsInterface = firstIdent.value;
+		Token methodNameToken = expect(TokenType::IDENTIFIER, "Expected method name after interface name");
+		methodName = methodNameToken.value;
+	} else {
+		methodName = firstIdent.value;
+	}
 
 	logTrace(std::string("Parsing method '") + structName + "." + methodName + "'" +
+			 (implementsInterface.empty() ? "" : " (implements " + implementsInterface + ")") +
 			 (isExported ? " (exported)" : "") +
 			 " at line " + std::to_string(funcToken.line));
 
@@ -301,10 +315,12 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 								 "\n  Note: The 'end' block identifier must match the method name");
 	}
 
-	logTrace(std::string("Method '") + structName + "." + methodName + "' -> " + returnType + " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
+	logTrace(std::string("Method '") + structName + "." + methodName + "' -> " + returnType +
+			 (implementsInterface.empty() ? "" : " (implements " + implementsInterface + ")") +
+			 " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
 
-	// receiverType is set to structName
-	return std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body), false, funcToken.line, funcToken.column, defaultNamespace, isExported, "", false, "", structName);
+	// receiverType is set to structName, implementsInterface tracks interface conformance
+	return std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body), false, funcToken.line, funcToken.column, defaultNamespace, isExported, "", false, "", structName, implementsInterface);
 }
 
 std::unique_ptr<StructDefAST> Parser::parseStruct() {

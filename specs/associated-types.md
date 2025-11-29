@@ -26,11 +26,11 @@ end 'Container'
 struct IntArray is Container with int
     data [100]int
     
-    function get(index int) int
+    function Container.get(index int) int
         return data[index]
     end 'get'
     
-    function set(index int, value int) IntArray
+    function Container.set(index int, value int) IntArray
         data[index] = value
         return IntArray{data: data}
     end 'set'
@@ -44,7 +44,8 @@ end 'IntArray'
   - `parseInterface()` parses `interface Name uses Type1, Type2` header, stores in `associatedTypes` vector
   - `parseStruct()` parses `is Interface with Type1, Type2`, maps positionally to interface's associated types
   - Method signatures have **no explicit `self` parameter** - it is implicit
-  - Methods use simple `function methodName(params)` format
+  - **Interface methods use `function InterfaceName.methodName(params)` syntax** to explicitly declare which interface a method implements
+  - Non-interface methods use simple `function methodName(params)` format
 - **AST**:
   - `InterfaceDefAST` gets `std::vector<std::string> associatedTypes` from `uses` clause
   - `StructDefAST` gets `std::map<std::string, std::string> typeAssignments` from `with` clause (positional mapping)
@@ -129,18 +130,18 @@ Associated types can be used in:
 
 ### Implementing Associated Types in Structs
 
-Structs bind concrete types to associated types using `with` after the interface name:
+Structs bind concrete types to associated types using `with` after the interface name. Interface methods use `function InterfaceName.methodName(params)` syntax:
 
 ```maxon
 struct IntArray is Container with int
     data [100]int
     len int
 
-    function get(index int) int
+    function Container.get(index int) int
         return data[index]
     end 'get'
 
-    function set(index int, value int) IntArray
+    function Container.set(index int, value int) IntArray
         data[index] = value
         return IntArray{data: data, len: len}
     end 'set'
@@ -163,11 +164,11 @@ struct IntFloat is Pair with int, float
     a int
     b float
     
-    function getFirst() int
+    function Pair.getFirst() int
         return a
     end 'getFirst'
     
-    function getSecond() float
+    function Pair.getSecond() float
         return b
     end 'getSecond'
 end 'IntFloat'
@@ -229,7 +230,7 @@ struct IntPair is Summable with int
     a int
     b int
 
-    function sum() int
+    function Summable.sum() int
         return a + b
     end 'sum'
 end 'IntPair'
@@ -264,7 +265,7 @@ end 'HasElement'
 struct Broken is HasElement
     value int
 
-    function get() int
+    function HasElement.get() int
         return value
     end 'get'
 end 'Broken'
@@ -300,7 +301,7 @@ end 'TwoMethods'
 struct Partial is TwoMethods with int
     value int
 
-    function first() int
+    function TwoMethods.first() int
         return value
     end 'first'
 end 'Partial'
@@ -330,7 +331,7 @@ end 'Producer'
 struct WrongReturn is Producer with float
     value int
 
-    function produce() int
+    function Producer.produce() int
         return value
     end 'produce'
 end 'WrongReturn'
@@ -359,7 +360,7 @@ end 'Wrapper'
 struct IntBox is Wrapper with int
     value int
 
-    function unwrap() int
+    function Wrapper.unwrap() int
         return value
     end 'unwrap'
 end 'IntBox'
@@ -384,11 +385,11 @@ end 'Accumulator'
 struct IntSum is Accumulator with int
     sum int
 
-    function add(item int) IntSum
+    function Accumulator.add(item int) IntSum
         return IntSum{sum: sum + item}
     end 'add'
 
-    function total() int
+    function Accumulator.total() int
         return sum
     end 'total'
 end 'IntSum'
@@ -416,11 +417,11 @@ struct IntFloat is Pair with int, float
     a int
     b float
 
-    function getFirst() int
+    function Pair.getFirst() int
         return a
     end 'getFirst'
 
-    function getSecond() float
+    function Pair.getSecond() float
         return b
     end 'getSecond'
 end 'IntFloat'
@@ -446,7 +447,7 @@ end 'CharSource'
 struct SingleChar is CharSource with char
     ch char
 
-    function getChar() char
+    function CharSource.getChar() char
         return ch
     end 'getChar'
 end 'SingleChar'
@@ -471,7 +472,7 @@ end 'ByteSource'
 struct SingleByte is ByteSource with byte
     b byte
 
-    function getByte() byte
+    function ByteSource.getByte() byte
         return b
     end 'getByte'
 end 'SingleByte'
@@ -496,7 +497,7 @@ end 'NeedsElement'
 struct Missing is NeedsElement
     value int
 
-    function get() int
+    function NeedsElement.get() int
         return value
     end 'get'
 end 'Missing'
@@ -530,7 +531,7 @@ end 'TwoMethods'
 struct Partial is TwoMethods with int
     value int
 
-    function first() int
+    function TwoMethods.first() int
         return value
     end 'first'
 end 'Partial'
@@ -558,7 +559,7 @@ end 'Typed'
 struct WrongType is Typed with float
     value int
 
-    function make() int
+    function Typed.make() int
         return value
     end 'make'
 end 'WrongType'
@@ -585,7 +586,7 @@ end 'Acceptor'
 struct WrongParam is Acceptor with float
     value int
 
-    function accept(val int) int
+    function Acceptor.accept(val int) int
         return value + val
     end 'accept'
 end 'WrongParam'
@@ -612,7 +613,7 @@ end 'Countable'
 struct Counter is Countable
     count int
 
-    function getCount() int
+    function Countable.getCount() int
         return count
     end 'getCount'
 end 'Counter'
@@ -636,7 +637,7 @@ end 'Addable'
 struct Number is Addable
     value int
 
-    function addOne() int
+    function Addable.addOne() int
         return value + 1
     end 'addOne'
 end 'Number'

@@ -38,7 +38,7 @@ export struct string is Hashable, Equatable, Subscriptable, Iterable with int, E
     // Initialize string from raw UTF-8 literal data
     // The compiler passes a reference to the literal's byte array, length, and capacity
     // capacity = 0 for constant/SSO data, >0 for heap-allocated
-    export function initFromStringLiteral(data []byte, len int, capacity int) string
+    export function ExpressibleByStringLiteral.initFromStringLiteral(data []byte, len int, capacity int) string
         return string{data: data, _len: len, _capacity: capacity, _iterPos: 0}
     end 'initFromStringLiteral'
 
@@ -66,7 +66,7 @@ export struct string is Hashable, Equatable, Subscriptable, Iterable with int, E
     // ============================================
 
     // Check if more characters available
-    export function hasNext() int
+    export function Iterable.hasNext() int
         if _iterPos < _len 'check'
             return 1
         end 'check'
@@ -74,7 +74,7 @@ export struct string is Hashable, Equatable, Subscriptable, Iterable with int, E
     end 'hasNext'
 
     // Get current character (codepoint as int)
-    export function getCurrent() int
+    export function Iterable.getCurrent() int
         var b0 = data[_iterPos] as int
 
         // ASCII (1 byte)
@@ -106,7 +106,7 @@ export struct string is Hashable, Equatable, Subscriptable, Iterable with int, E
     end 'getCurrent'
 
     // Advance to next character
-    export function next() string
+    export function Iterable.next() string
         var b0 = data[_iterPos] as int
         var advance = 1
 
@@ -131,7 +131,7 @@ export struct string is Hashable, Equatable, Subscriptable, Iterable with int, E
     // ============================================
 
     // Hashable conformance
-    export function hash() int
+    export function Hashable.hash() int
         var h = 5381
         var i = 0
         while i < _len 'hash_loop'
@@ -143,7 +143,7 @@ export struct string is Hashable, Equatable, Subscriptable, Iterable with int, E
     end 'hash'
 
     // Equatable conformance
-    export function equals(other string) bool
+    export function Equatable.equals(other string) bool
         if _len != other._len 'length_check'
             return false
         end 'length_check'
@@ -159,7 +159,7 @@ export struct string is Hashable, Equatable, Subscriptable, Iterable with int, E
     end 'equals'
 
     // Subscriptable conformance - string slicing
-    export function subscript(startIndex int, endIndex int) string
+    export function Subscriptable.subscript(startIndex int, endIndex int) string
         // Validate indices
         if startIndex < 0 'validate_start'
             startIndex = 0
@@ -377,7 +377,7 @@ export struct ByteView is Iterable with int
     _pos int        // Current byte position
 
     // ByteView.hasNext - check if more bytes available
-    export function hasNext() int
+    export function Iterable.hasNext() int
         if _pos < _str._len 'check'
             return 1
         end 'check'
@@ -385,12 +385,12 @@ export struct ByteView is Iterable with int
     end 'hasNext'
 
     // ByteView.getCurrent - get current byte as int
-    export function getCurrent() int
+    export function Iterable.getCurrent() int
         return _str.data[_pos] as int
     end 'getCurrent'
 
     // ByteView.next - advance to next byte
-    export function next() ByteView
+    export function Iterable.next() ByteView
         return ByteView{_str: _str, _pos: _pos + 1}
     end 'next'
 
@@ -411,7 +411,7 @@ export struct UTF16View is Iterable with int
     _highSurrogate int  // Pending high surrogate (0 if none)
 
     // UTF16View.hasNext - check if more UTF-16 code units available
-    export function hasNext() int
+    export function Iterable.hasNext() int
         // If we have a pending high surrogate, the low surrogate is next
         if _highSurrogate != 0 'has_surrogate'
             return 1
@@ -424,7 +424,7 @@ export struct UTF16View is Iterable with int
     end 'hasNext'
 
     // UTF16View.getCurrent - get current UTF-16 code unit as int
-    export function getCurrent() int
+    export function Iterable.getCurrent() int
         // If we have a pending high surrogate, return the low surrogate
         if _highSurrogate != 0 'return_low'
             // Calculate low surrogate from the stored high surrogate
@@ -475,7 +475,7 @@ export struct UTF16View is Iterable with int
     end 'getCurrent'
 
     // UTF16View.next - advance to next UTF-16 code unit
-    export function next() UTF16View
+    export function Iterable.next() UTF16View
         // If we have a pending high surrogate, consume it (return low surrogate state)
         if _highSurrogate != 0 'consume_surrogate'
             // Low surrogate has been returned, clear the flag and stay at same byte position

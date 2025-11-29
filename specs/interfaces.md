@@ -16,7 +16,8 @@ Interfaces define contracts that structs can conform to. Key implementation:
 - Associated types declared with `uses`: `interface Foo uses Element`
 - Struct conformance with `is` and type binding with `with`: `struct Bar is Foo with int`
 - **Methods have implicit `self` parameter** - not declared in signatures
-- Methods defined inside struct body with simple `function methodName(params)` format
+- **Interface methods use `function InterfaceName.methodName(params)` syntax** to explicitly declare which interface a method implements
+- Non-interface methods use simple `function methodName(params)` syntax
 - Methods registered with qualified name `ReceiverType.methodName` in semantic analyzer
 - `Self` type in interface signatures replaced with conforming type during checking
 - Conformance validation in `SemanticAnalyzer::checkInterfaceConformance()`
@@ -64,14 +65,14 @@ end 'Point'
 
 ### Method Implementation
 
-Methods are defined **inside the struct body** using simple `function methodName(params)` syntax. The `self` parameter is implicit:
+Methods implementing interface requirements are defined **inside the struct body** using `function InterfaceName.methodName(params)` syntax. The interface prefix explicitly declares which interface the method implements. The `self` parameter is implicit:
 
 ```maxon
 struct Point is Hashable
     x int
     y int
 
-    function hash() int
+    function Hashable.hash() int
         return x + y * 31
     end 'hash'
 end 'Point'
@@ -83,7 +84,7 @@ Inside method bodies, you can access struct fields directly without `self.` pref
 
 You can still use `self.field` explicitly if needed, especially when a parameter shadows a field name.
 
-Methods can be exported with the `export` keyword:
+Non-interface methods (methods that don't implement any interface) use simple `function methodName(params)` syntax without a prefix:
 
 ```maxon
 struct Point
@@ -120,7 +121,7 @@ struct Point is Cloneable
     x int
     y int
 
-    function clone() Point
+    function Cloneable.clone() Point
         return Point{x: x, y: y}
     end 'clone'
 end 'Point'
@@ -138,7 +139,7 @@ end 'Container'
 struct IntArray is Container with int
     data [10]int
     
-    function get(index int) int
+    function Container.get(index int) int
         return data[index]
     end 'get'
 end 'IntArray'
@@ -157,10 +158,10 @@ interface TwoMethods
 end 'TwoMethods'
 
 struct Incomplete is TwoMethods
-    function first() int
+    function TwoMethods.first() int
         return 1
     end 'first'
-    // Missing: second()
+    // Missing: TwoMethods.second()
 end 'Incomplete'
 ```
 
@@ -193,7 +194,7 @@ struct Point is Hashable
     x int
     y int
 
-    function hash() int
+    function Hashable.hash() int
         return x + y * 31
     end 'hash'
 end 'Point'
@@ -223,7 +224,7 @@ struct Point is Hashable
     x int
     y int
 
-    function hash() int
+    function Hashable.hash() int
         return x + y * 31
     end 'hash'
 end 'Point'
@@ -248,11 +249,11 @@ end 'Describable'
 struct Counter is Describable
     count int
 
-    function describe() int
+    function Describable.describe() int
         return 100 + count
     end 'describe'
 
-    function value() int
+    function Describable.value() int
         return count
     end 'value'
 end 'Counter'
@@ -276,7 +277,7 @@ end 'Calculator'
 struct Accumulator is Calculator
     total int
 
-    function add(n int) int
+    function Calculator.add(n int) int
         return total + n
     end 'add'
 end 'Accumulator'
@@ -305,11 +306,11 @@ struct Point is Hashable, Equatable
     x int
     y int
 
-    function hash() int
+    function Hashable.hash() int
         return x + y
     end 'hash'
 
-    function equals(other Point) int
+    function Equatable.equals(other Point) int
         if x == other.x and y == other.y then return 1
         return 0
     end 'equals'
@@ -336,7 +337,7 @@ struct Point is Movable
     x int
     y int
 
-    function move(dx int, dy int) Point
+    function Movable.move(dx int, dy int) Point
         return Point{x: x + dx, y: y + dy}
     end 'move'
 end 'Point'
@@ -361,7 +362,7 @@ end 'Incrementable'
 struct Value is Incrementable
     n int
 
-    function inc() int
+    function Incrementable.inc() int
         return n + 1
     end 'inc'
 end 'Value'
@@ -387,7 +388,7 @@ end 'ThreeMethods'
 struct Incomplete is ThreeMethods
     value int
 
-    function one() int
+    function ThreeMethods.one() int
         return 1
     end 'one'
 end 'Incomplete'

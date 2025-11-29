@@ -472,8 +472,9 @@ class StructInitExprAST : public ExprAST {
 class FunctionAST : public ASTNode {
   public:
 	std::string name;
-	std::string namespaceName; // Namespace this function belongs to (derived from file path)
-	std::string receiverType;  // For methods: the type this method belongs to (e.g., "Point")
+	std::string namespaceName;		 // Namespace this function belongs to (derived from file path)
+	std::string receiverType;		 // For methods: the type this method belongs to (e.g., "Point")
+	std::string implementsInterface; // For interface methods: the interface this method implements (e.g., "Hashable")
 	std::vector<FunctionParameter> parameters;
 	std::string returnType;
 	std::vector<std::unique_ptr<StmtAST>> body;
@@ -499,8 +500,9 @@ class FunctionAST : public ASTNode {
 				const std::string &dll = "",
 				bool staticLib = false,
 				const std::string &libFilePath = "",
-				const std::string &receiver = "")
-		: name(n), namespaceName(ns), receiverType(receiver), parameters(std::move(params)), returnType(ret), body(std::move(b)),
+				const std::string &receiver = "",
+				const std::string &implInterface = "")
+		: name(n), namespaceName(ns), receiverType(receiver), implementsInterface(implInterface), parameters(std::move(params)), returnType(ret), body(std::move(b)),
 		  isExtern(ext), isExported(exp), dllName(dll), isStaticLib(staticLib), libPath(libFilePath), line(l), column(c) {}
 };
 

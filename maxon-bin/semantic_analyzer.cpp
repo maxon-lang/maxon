@@ -192,14 +192,34 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 			// Method key is StructName.methodName
 			std::string methodKey = structDef->name + "." + method->name;
 
-			logTrace("Registering method: " + methodKey + " -> " + method->returnType);
+			logTrace("Registering method: " + methodKey + " -> " + method->returnType +
+					 (method->implementsInterface.empty() ? "" : " (implements " + method->implementsInterface + ")"));
+
+			// Validate implementsInterface if specified
+			if (!method->implementsInterface.empty()) {
+				// Check that the struct declares conformance to this interface
+				bool conformsToInterface = false;
+				for (const auto &iface : structDef->conformsTo) {
+					if (iface == method->implementsInterface) {
+						conformsToInterface = true;
+						break;
+					}
+				}
+				if (!conformsToInterface) {
+					addError("Method '" + method->name + "' declares implementation of interface '" +
+								 method->implementsInterface + "' but struct '" + structDef->name +
+								 "' does not conform to this interface\n  Add '" + method->implementsInterface +
+								 "' to the struct's 'is' clause",
+							 method->line, method->column);
+				}
+			}
 
 			if (functions.find(methodKey) != functions.end()) {
 				addError("Method '" + methodKey + "' is already defined" +
 							 std::string("\n  Note: Each method name must be unique within its struct"),
 						 method->line, method->column);
 			} else {
-				functions.emplace(methodKey, FunctionInfo(methodKey, method->returnType, method->parameters));
+				functions.emplace(methodKey, FunctionInfo(methodKey, method->returnType, method->parameters, method->implementsInterface));
 				functionIndices[methodKey] = nextFunctionId++;
 			}
 		}
@@ -628,8 +648,16 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 				continue;
 			}
 
-			// Check return type (substituting Self and associated types)
+			// Check that the method has the required interface prefix
 			const FunctionInfo &implFunc = funcIt->second;
+			if (implFunc.implementsInterface != interfaceName) {
+				addError("Method '" + protoMethod.name + "' implements interface '" + interfaceName +
+							 "' but is missing the required prefix\n  Use: function " + interfaceName + "." +
+							 protoMethod.name + "(...) instead of: function " + protoMethod.name + "(...)",
+						 line, column);
+			}
+
+			// Check return type (substituting Self and associated types)
 			std::string expectedReturnType = resolveType(protoMethod.returnType);
 			if (implFunc.returnType != expectedReturnType) {
 				addError("Method '" + expectedMethodName + "' has return type '" + implFunc.returnType +
