@@ -79,6 +79,7 @@ class CharacterExprAST : public ExprAST {
 class StringLiteralExprAST : public ExprAST {
   public:
 	std::string value;
+	bool asByteSlice = false; // When true, generate as []byte slice instead of string struct
 
 	StringLiteralExprAST(const std::string &val, int l = 0, int c = 0)
 		: ExprAST(l, c), value(val) {}

@@ -91,6 +91,11 @@ struct MemberAddressResult {
 // where []byte is a fat pointer { ptr, i32 }
 
 mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *strExpr) {
+	// Check if we should generate as []byte slice instead of full string struct
+	if (strExpr->asByteSlice) {
+		return generateStringLiteralAsSlice(strExpr);
+	}
+
 	// Get the string struct type (defined by stdlib)
 	mir::MIRType *stringType = getTypeFromString("string");
 
@@ -140,6 +145,41 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 	return stringAlloca;
 }
 
+// Generate a string literal as a []byte slice (fat pointer: {ptr, len})
+// Used by ExpressibleByStringLiteral to pass raw bytes to initFromStringLiteral
+mir::MIRValue *MIRCodeGenerator::generateStringLiteralAsSlice(StringLiteralExprAST *strExpr) {
+	// Get the string content
+	const std::string &str = strExpr->value;
+	size_t len = str.length();
+
+	// Create a global constant for the string data
+	std::string globalName = ".str." + std::to_string(stringLiteralCounter++);
+	mir::MIRValue *dataPtr = module->createGlobalString(globalName, str);
+
+	// Get or create the unsized array type for []byte
+	mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+	if (!unsizedArrayType) {
+		unsizedArrayType = module->getOrCreateStructType(
+			"__unsized_array_byte",
+			{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+		structTypes["__unsized_array_byte"] = unsizedArrayType;
+	}
+
+	// Create alloca for the fat pointer struct
+	mir::MIRValue *sliceAlloca = builder->createAlloca(unsizedArrayType, "slice.literal");
+
+	// Store the data pointer (field 0)
+	mir::MIRValue *ptrFieldPtr = builder->createStructGEP(unsizedArrayType, sliceAlloca, 0, "slice.ptr");
+	builder->createStore(dataPtr, ptrFieldPtr);
+
+	// Store the length (field 1)
+	mir::MIRValue *lenFieldPtr = builder->createStructGEP(unsizedArrayType, sliceAlloca, 1, "slice.len");
+	builder->createStore(builder->getInt32(static_cast<int>(len)), lenFieldPtr);
+
+	// Return pointer to the fat pointer struct
+	return sliceAlloca;
+}
+
 mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	if (auto *numExpr = dynamic_cast<NumberExprAST *>(expr)) {
 		return builder->getInt32(numExpr->value);
@@ -172,6 +212,40 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	}
 
 	if (auto *castExpr = dynamic_cast<CastExprAST *>(expr)) {
+		// Check for ExpressibleByStringLiteral: "literal" as Type
+		// Transform to: Type.initFromStringLiteral(bytes, len)
+		if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(castExpr->expr.get())) {
+			// Check if target type conforms to ExpressibleByStringLiteral
+			auto structIt = structConformsTo.find(castExpr->targetType);
+			if (structIt != structConformsTo.end()) {
+				bool conformsToExpressible = false;
+				for (const auto &iface : structIt->second) {
+					if (iface == "ExpressibleByStringLiteral") {
+						conformsToExpressible = true;
+						break;
+					}
+				}
+				if (conformsToExpressible) {
+					// Generate the string literal as a []byte slice
+					strLit->asByteSlice = true;
+					mir::MIRValue *bytesVal = generateStringLiteralAsSlice(strLit);
+
+					// Generate the length argument
+					mir::MIRValue *lenVal = builder->getInt32(static_cast<int>(strLit->value.length()));
+
+					// Call Type.initFromStringLiteral(bytes, len)
+					std::string methodName = castExpr->targetType + ".initFromStringLiteral";
+					mir::MIRFunction *initFunc = module->getFunction(methodName);
+					if (!initFunc) {
+						throw std::runtime_error("Type '" + castExpr->targetType +
+												 "' conforms to ExpressibleByStringLiteral but has no initFromStringLiteral method");
+					}
+
+					return builder->createCall(initFunc, {bytesVal, lenVal}, "literal.init");
+				}
+			}
+		}
+
 		mir::MIRValue *value = generateExpr(castExpr->expr.get());
 		if (!value) {
 			throw std::runtime_error("Failed to generate expression for cast");

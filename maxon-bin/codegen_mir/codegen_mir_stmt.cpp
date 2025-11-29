@@ -393,7 +393,25 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			throw std::runtime_error("Unknown variable name: " + assign->name);
 		}
 
-		builder->createStore(val, alloca);
+		// Check if this is a struct assignment
+		// For structs, val is a pointer to the source struct, so we need memcpy
+		std::string varType = variableTypes[assign->name];
+		mir::MIRType *structType = structTypes.count(varType) ? structTypes[varType] : nullptr;
+		
+		if (structType && val->type->kind == mir::MIRTypeKind::Ptr) {
+			// Struct assignment - use memcpy to copy the struct contents
+			mir::MIRFunction *memcpyFunc = module->getFunction("memcpy");
+			if (!memcpyFunc) {
+				// Declare memcpy: ptr memcpy(ptr dest, ptr src, i64 count)
+				memcpyFunc = getOrDeclareFunction("memcpy",
+					mir::MIRType::getPtr(),
+					{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+			}
+			mir::MIRValue *sizeVal = builder->getInt64(structType->sizeInBytes);
+			builder->createCall(memcpyFunc, {alloca, val, sizeVal});
+		} else {
+			builder->createStore(val, alloca);
+		}
 		return;
 	}
 

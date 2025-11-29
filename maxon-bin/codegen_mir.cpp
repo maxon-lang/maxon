@@ -349,8 +349,17 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	// Note: Standard library (write_stdout) is initialized on-demand when
 	// print/print_float is called - see codegen_mir_expr.cpp
 
-	// First pass: Create all struct types
-	logDetail("Pass 1: Creating struct types (" + std::to_string(program->structs.size()) + " structs)");
+	// First pass: Forward-declare all struct types (to handle circular/forward references)
+	logDetail("Pass 1a: Forward-declaring struct types (" + std::to_string(program->structs.size()) + " structs)");
+	for (const auto &structDef : program->structs) {
+		// Create struct with empty fields first
+		mir::MIRType *structType = module->getOrCreateStructType(structDef->name, {});
+		structTypes[structDef->name] = structType;
+		structConformsTo[structDef->name] = structDef->conformsTo;
+	}
+
+	// Second pass: Fill in struct fields now that all types are declared
+	logDetail("Pass 1b: Filling in struct fields");
 	for (const auto &structDef : program->structs) {
 		std::vector<mir::MIRType *> fieldTypes;
 		std::vector<std::pair<std::string, std::string>> fields;
@@ -360,12 +369,13 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 			fields.push_back({field.name, field.type});
 		}
 
-		logTrace("Creating struct type: " + structDef->name + " (" + std::to_string(fieldTypes.size()) + " fields)");
+		logTrace("Defining struct type: " + structDef->name + " (" + std::to_string(fieldTypes.size()) + " fields)");
 
-		mir::MIRType *structType = module->getOrCreateStructType(structDef->name, fieldTypes);
-		structTypes[structDef->name] = structType;
+		// Update the existing struct type with actual fields
+		mir::MIRType *structType = structTypes[structDef->name];
+		structType->fieldTypes = fieldTypes;
+		structType->recomputeSize();
 		structFields[structDef->name] = fields;
-		structConformsTo[structDef->name] = structDef->conformsTo;
 	}
 
 	// Second pass: Create all function declarations and register extern functions

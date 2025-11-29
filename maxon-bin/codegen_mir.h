@@ -129,6 +129,7 @@ class MIRCodeGenerator {
 
 	// String literal generation
 	mir::MIRValue *generateStringLiteral(StringLiteralExprAST *strExpr);
+	mir::MIRValue *generateStringLiteralAsSlice(StringLiteralExprAST *strExpr);
 
 	// Safe FFI generation
 	void registerExternFunction(FunctionAST *func);

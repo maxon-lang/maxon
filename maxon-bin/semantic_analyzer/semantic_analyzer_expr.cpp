@@ -68,7 +68,19 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return "error";
 		}
 
-		// Valid casts: int <-> char, char <-> int
+		// Check if target type is a struct - if so, track as undefined for auto-import
+		const std::string &targetType = castExpr->targetType;
+		bool isBuiltinType = (targetType == "int" || targetType == "float" ||
+							  targetType == "bool" || targetType == "char" ||
+							  targetType == "string" || targetType == "void" ||
+							  targetType.substr(0, 1) == "["); // Array types
+
+		if (!isBuiltinType && structs.find(targetType) == structs.end()) {
+			// Target type is a struct that isn't defined yet - track for auto-import
+			undefinedStructs.insert(targetType);
+		}
+
+		// Valid casts: int <-> char, char <-> int, or ExpressibleByStringLiteral types
 		return castExpr->targetType;
 
 	} else if (auto varExpr = dynamic_cast<VariableExprAST *>(expr)) {

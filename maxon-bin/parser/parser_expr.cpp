@@ -352,17 +352,21 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
 		int column = currentColumn();
 		advance(); // consume 'as'
 
-		// Expect a type keyword
+		// Expect a type keyword or struct name (identifier)
+		std::string targetType;
 		auto kd = currentKeywordData();
 		if (kd && kd->category == KeywordCategory::Type) {
-			std::string targetType = std::string(currentValue());
+			targetType = std::string(currentValue());
 			advance();
-			expr = std::make_unique<CastExprAST>(std::move(expr), targetType, line, column);
+		} else if (check(TokenType::IDENTIFIER)) {
+			// Allow struct type names for ExpressibleByStringLiteral etc.
+			targetType = parseQualifiedName("cast target type");
 		} else {
-			throw std::runtime_error("Expected type after 'as' keyword (int, float, ptr, char, string, or bool)\n  Location: line " +
+			throw std::runtime_error("Expected type after 'as' keyword (int, float, ptr, char, string, bool, or struct name)\n  Location: line " +
 									 std::to_string(currentLine()) + ", column " +
 									 std::to_string(currentColumn()));
 		}
+		expr = std::make_unique<CastExprAST>(std::move(expr), targetType, line, column);
 	}
 
 	return expr;
