@@ -1,0 +1,123 @@
+// Test: substring-type.sso-string-no-refcount.1
+function main() int
+    // Short string uses SSO (no heap)
+    var s = "Hello"
+    var refcount = __string_get_refcount(s._managed)
+    // SSO strings return -1 for refcount
+    return refcount
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 31
+
+%__unsized_array_byte = type { ptr, i32 }
+%string = type { ptr }
+%__ManagedStringData = type { %__unsized_array_byte, i32, i32, i32 }
+
+@.str.0 = constant [6 x i8] c"Hello\00"
+
+define i32 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.0, ptr %3
+  %4 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 1
+  store i32 5, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i32 5, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i32 0, ptr %6
+  %7 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 3
+  store i32 0, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %8
+  %11 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  %12 = load i32, ptr %11
+  %13 = icmp sgt i32 %12, 0
+  br i1 %13, label %refcount.heap1, label %refcount.const2
+refcount.heap1:
+  %14 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %15 = getelementptr %__unsized_array_byte, ptr %14, i32 0, i32 0
+  %16 = load ptr, ptr %15
+  %17 = getelementptr i8, ptr %16, i64 -8
+  %18 = load i32, ptr %17
+  br label %refcount.merge3
+refcount.const2:
+  br label %refcount.merge3
+refcount.merge3:
+  %19 = phi i32 [ %18, %refcount.heap1 ], [ -1, %refcount.const2 ]
+  ret i32 %19
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 36
+
+%__unsized_array_byte = type { ptr, i32 }
+%string = type { ptr }
+%__ManagedStringData = type { %__unsized_array_byte, i32, i32, i32 }
+
+@.str.0 = constant [6 x i8] c"Hello\00"
+
+define i32 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.0, ptr %3
+  %4 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 1
+  store i32 5, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i32 5, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i32 0, ptr %6
+  %7 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 3
+  store i32 0, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %8
+  %9 = getelementptr %string, ptr %0, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 2
+  %12 = load i32, ptr %11
+  %13 = icmp sgt i32 %12, 0
+  br i1 %13, label %refcount.heap1, label %refcount.const2
+refcount.heap1:
+  %14 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 0
+  %15 = getelementptr %__unsized_array_byte, ptr %14, i32 0, i32 0
+  %16 = load ptr, ptr %15
+  %17 = getelementptr i8, ptr %16, i64 -8
+  %18 = load i32, ptr %17
+  br label %refcount.merge3
+refcount.const2:
+  br label %refcount.merge3
+refcount.merge3:
+  %19 = phi i32 [ %18, %refcount.heap1 ], [ -1, %refcount.const2 ]
+  %20 = alloca i32
+  store i32 %19, ptr %20
+  %21 = load i32, ptr %20
+  ret i32 %21
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: -1

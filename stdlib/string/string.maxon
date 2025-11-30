@@ -157,8 +157,8 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 	// String slicing
 	// ============================================
 
-	// slice - extract substring by byte range
-	export function slice(startIndex int, endIndex int) string
+	// slice - extract substring view by byte range (zero-copy)
+	export function slice(startIndex int, endIndex int) substring
 		var len = __string_len(_managed)
 
 		// Validate indices
@@ -169,11 +169,11 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 			endIndex = len
 		end 'validate_end'
 		if startIndex >= endIndex 'validate_range'
-			// Empty slice - use intrinsic to create empty string
-			return string{_managed: __string_slice(_managed, 0, 0)}
+			// Empty slice
+			return __string_slice(_managed, 0, 0)
 		end 'validate_range'
 
-		return string{_managed: __string_slice(_managed, startIndex, endIndex)}
+		return __string_slice(_managed, startIndex, endIndex)
 	end 'slice'
 
 	// ============================================
@@ -300,7 +300,8 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 			endPos = endPos - 1
 		end 'find_end'
 
-		return slice(start, endPos)
+		var sub = slice(start, endPos)
+		return sub.toString()
 	end 'trimWhitespace'
 
 	// ============================================
@@ -430,13 +431,23 @@ export struct CharCollection is Iterable with int, Collection with int
 	end 'get'
 
 	// Collection.set - set character at index (triggers COW)
-	// TODO: Implement with proper COW via _managed_string_make_unique
-	// For now, this is a no-op that returns self unchanged
+	// Ensures exclusive ownership before mutation via _managed_string_make_unique
+	// Note: This only works correctly for ASCII characters (single-byte)
+	// UTF-8 multi-byte character replacement would require more complex logic
 	export function Collection.set(index int, value int) CharCollection
-		// Mark parameters as used to silence warnings - this is a TODO stub
-		if index < 0 and value < 0 'never_true'
-			return self
-		end 'never_true'
+		// Validate index
+		var len = __string_len(_str._managed)
+		if index < 0 or index >= len 'bounds_check'
+			return self  // Out of bounds - return unchanged
+		end 'bounds_check'
+
+		// Ensure exclusive ownership (COW) before mutation
+		// This will copy the buffer if refcount > 1
+		__string_make_unique(_str._managed)
+
+		// Now safe to mutate - set the byte
+		__string_set_byte(_str._managed, index, value)
+
 		return self
 	end 'set'
 
@@ -583,3 +594,252 @@ export struct UTF16View is Iterable with int
 		return count
 	end 'length'
 end 'UTF16View'
+
+// ============================================
+// Substring - immutable view into a string
+// ============================================
+// Substrings are always immutable and share storage with parent string.
+// The parent string's refcount is retained while substring exists.
+// Use .toString() to create an owned copy if mutation is needed.
+//
+// **Intrinsics used**:
+//   __substring_len(sub)           - get byte length
+//   __substring_byte_at(sub, i)    - get byte at index
+//   __substring_iter_pos(sub)      - get current iteration position
+//   __substring_with_iter_pos(sub, pos) - create copy with new iter position
+
+export struct substring is Hashable, Equatable, Iterable with int
+	_parentManaged _ManagedString  // Parent string's managed data (for refcount)
+	_ptr ptr                        // Pointer into parent's buffer
+	_len int                        // Byte length of this substring
+	_iterPos int                    // Current iteration position
+
+	// ============================================
+	// Basic properties
+	// ============================================
+
+	// Get byte count
+	export function count() int
+		return __substring_len(self)
+	end 'count'
+
+	// Check if the substring is empty
+	export function isEmpty() bool
+		return __substring_len(self) == 0
+	end 'isEmpty'
+
+	// ============================================
+	// Iterable conformance - character iteration
+	// ============================================
+	// Returns Unicode codepoints as int values
+
+	export function Iterable.hasNext() int
+		if __substring_iter_pos(self) < __substring_len(self) 'check'
+			return 1
+		end 'check'
+		return 0
+	end 'hasNext'
+
+	export function Iterable.getCurrent() int
+		var pos = __substring_iter_pos(self)
+		var b0 = __substring_byte_at(self, pos) as int
+
+		// ASCII (1 byte)
+		if b0 < 128 'ascii'
+			return b0
+		end 'ascii'
+
+		// 2-byte sequence (110xxxxx 10xxxxxx)
+		if b0 < 224 'two_byte'
+			var b1 = __substring_byte_at(self, pos + 1) as int
+			var cp = ((b0 mod 32) * 64) + (b1 mod 64)
+			return cp
+		end 'two_byte'
+
+		// 3-byte sequence (1110xxxx 10xxxxxx 10xxxxxx)
+		if b0 < 240 'three_byte'
+			var b1 = __substring_byte_at(self, pos + 1) as int
+			var b2 = __substring_byte_at(self, pos + 2) as int
+			var cp = ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
+			return cp
+		end 'three_byte'
+
+		// 4-byte sequence (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
+		var b1 = __substring_byte_at(self, pos + 1) as int
+		var b2 = __substring_byte_at(self, pos + 2) as int
+		var b3 = __substring_byte_at(self, pos + 3) as int
+		var cp = ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+		return cp
+	end 'getCurrent'
+
+	export function Iterable.next() substring
+		var pos = __substring_iter_pos(self)
+		var b0 = __substring_byte_at(self, pos) as int
+		var advance = 1
+
+		if b0 >= 240 'four_byte'
+			advance = 4
+		else 'four_byte'
+			if b0 >= 224 'three_byte'
+				advance = 3
+			else 'three_byte'
+				if b0 >= 192 'two_byte'
+					advance = 2
+				end 'two_byte'
+			end 'three_byte'
+		end 'four_byte'
+
+		// Return copy with updated iterator position
+		return __substring_with_iter_pos(self, pos + advance)
+	end 'next'
+
+	// ============================================
+	// Hashable conformance
+	// ============================================
+
+	export function Hashable.hash() int
+		var h = 5381
+		var i = 0
+		var len = __substring_len(self)
+		while i < len 'hash_loop'
+			var b = __substring_byte_at(self, i)
+			h = h * 33 + (b as int)
+			i = i + 1
+		end 'hash_loop'
+		return h
+	end 'hash'
+
+	// ============================================
+	// Equatable conformance
+	// ============================================
+
+	export function Equatable.equals(other substring) bool
+		var len = __substring_len(self)
+		if len != __substring_len(other) 'length_check'
+			return false
+		end 'length_check'
+
+		var i = 0
+		while i < len 'compare_loop'
+			if __substring_byte_at(self, i) != __substring_byte_at(other, i) 'byte_check'
+				return false
+			end 'byte_check'
+			i = i + 1
+		end 'compare_loop'
+		return true
+	end 'equals'
+
+	// ============================================
+	// String conversion
+	// ============================================
+
+	// toString - create an owned copy as a string
+	// Use this when you need a mutable string or want to release parent reference
+	export function toString() string
+		return string{_managed: __substring_to_string(self)}
+	end 'toString'
+
+	// ============================================
+	// Slicing (returns another substring)
+	// ============================================
+
+	// slice - extract a sub-range of this substring
+	export function slice(startIndex int, endIndex int) substring
+		var len = __substring_len(self)
+
+		// Validate indices
+		if startIndex < 0 'validate_start'
+			startIndex = 0
+		end 'validate_start'
+		if endIndex > len 'validate_end'
+			endIndex = len
+		end 'validate_end'
+		if startIndex >= endIndex 'validate_range'
+			// Empty slice
+			return __substring_slice(self, 0, 0)
+		end 'validate_range'
+
+		return __substring_slice(self, startIndex, endIndex)
+	end 'slice'
+
+	// ============================================
+	// Search methods
+	// ============================================
+
+	// startsWith - check if substring starts with prefix
+	export function startsWith(prefix string) bool
+		var len = __substring_len(self)
+		var prefixLen = __string_len(prefix._managed)
+
+		if prefixLen > len 'length_check'
+			return false
+		end 'length_check'
+
+		var i = 0
+		while i < prefixLen 'compare_loop'
+			if __substring_byte_at(self, i) != __string_byte_at(prefix._managed, i) 'byte_check'
+				return false
+			end 'byte_check'
+			i = i + 1
+		end 'compare_loop'
+		return true
+	end 'startsWith'
+
+	// endsWith - check if substring ends with suffix
+	export function endsWith(suffix string) bool
+		var len = __substring_len(self)
+		var suffixLen = __string_len(suffix._managed)
+
+		if suffixLen > len 'length_check'
+			return false
+		end 'length_check'
+
+		var start = len - suffixLen
+		var i = 0
+		while i < suffixLen 'compare_loop'
+			if __substring_byte_at(self, start + i) != __string_byte_at(suffix._managed, i) 'byte_check'
+				return false
+			end 'byte_check'
+			i = i + 1
+		end 'compare_loop'
+		return true
+	end 'endsWith'
+
+	// find - find first occurrence of needle, return byte index or -1
+	export function find(needle string) int
+		var len = __substring_len(self)
+		var needleLen = __string_len(needle._managed)
+
+		if needleLen == 0 'empty_needle'
+			return 0
+		end 'empty_needle'
+
+		if needleLen > len 'too_long'
+			return 0 - 1
+		end 'too_long'
+
+		var i = 0
+		while i <= len - needleLen 'search_loop'
+			var found = true
+			var j = 0
+			while j < needleLen 'compare_loop'
+				if __substring_byte_at(self, i + j) != __string_byte_at(needle._managed, j) 'byte_check'
+					found = false
+					break 'compare_loop'
+				end 'byte_check'
+				j = j + 1
+			end 'compare_loop'
+
+			if found 'found_check'
+				return i
+			end 'found_check'
+			i = i + 1
+		end 'search_loop'
+		return 0 - 1
+	end 'find'
+
+	// contains - check if substring contains needle
+	export function contains(needle string) bool
+		return find(needle) >= 0
+	end 'contains'
+end 'substring'

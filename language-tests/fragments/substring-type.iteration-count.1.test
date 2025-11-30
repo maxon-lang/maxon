@@ -1,0 +1,806 @@
+// Test: substring-type.iteration-count.1
+function main() int
+    var s = "abcde"
+    var sub = s.slice(1, 4)
+    var sum = 0
+    for c in sub 'loop'
+        sum = sum + c
+    end 'loop'
+    // 98 + 99 + 100 = 297 (b, c, d)
+    return sum - 294
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 302
+
+%__unsized_array_byte = type { ptr, i32 }
+%substring = type { ptr, ptr, i32, i32 }
+%string = type { ptr }
+%__ManagedStringData = type { %__unsized_array_byte, i32, i32, i32 }
+
+@.str.0 = constant [6 x i8] c"abcde\00"
+@.__tag.free.sub = constant [17 x i8] c"substring parent\00"
+
+define %substring @string.slice(ptr %self, i32 %startIndex, i32 %endIndex) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 %startIndex, ptr %1
+  %2 = alloca i32
+  store i32 %endIndex, ptr %2
+  %4 = getelementptr %string, ptr %self, i32 0, i32 0
+  %5 = load ptr, ptr %4
+  %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 1
+  %7 = load i32, ptr %6
+  %8 = alloca i32
+  store i32 %7, ptr %8
+  %9 = load i32, ptr %1
+  %10 = icmp slt i32 %9, 0
+  br i1 %10, label %then1, label %ifcont2
+then1:
+  store i32 0, ptr %1
+  br label %ifcont2
+ifcont2:
+  %11 = load i32, ptr %2
+  %12 = load i32, ptr %8
+  %13 = icmp sgt i32 %11, %12
+  br i1 %13, label %then3, label %ifcont4
+then3:
+  %14 = load i32, ptr %8
+  store i32 %14, ptr %2
+  br label %ifcont4
+ifcont4:
+  %15 = load i32, ptr %1
+  %16 = load i32, ptr %2
+  %17 = icmp sge i32 %15, %16
+  br i1 %17, label %then5, label %ifcont6
+then5:
+  %18 = load ptr, ptr %0
+  %19 = getelementptr %string, ptr %18, i32 0, i32 0
+  %20 = load ptr, ptr %19
+  %22 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 0
+  %23 = getelementptr %__unsized_array_byte, ptr %22, i32 0, i32 0
+  %24 = load ptr, ptr %23
+  %25 = sext i32 0 to i64
+  %26 = getelementptr i8, ptr %24, i64 0, i64 %25
+  %27 = alloca %substring
+  %28 = getelementptr %substring, ptr %27, i32 0, i32 0
+  store ptr %20, ptr %28
+  %29 = getelementptr %substring, ptr %27, i32 0, i32 1
+  store ptr %26, ptr %29
+  %30 = getelementptr %substring, ptr %27, i32 0, i32 2
+  store i32 0, ptr %30
+  %31 = getelementptr %substring, ptr %27, i32 0, i32 3
+  store i32 0, ptr %31
+  %32 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 2
+  %33 = load i32, ptr %32
+  %34 = icmp sgt i32 %33, 0
+  br i1 %34, label %slice.retain7, label %slice.continue8
+ifcont6:
+  %36 = load ptr, ptr %0
+  %37 = getelementptr %string, ptr %36, i32 0, i32 0
+  %38 = load ptr, ptr %37
+  %39 = load i32, ptr %1
+  %40 = load i32, ptr %2
+  %41 = sub i32 %40, %39
+  %42 = getelementptr %__ManagedStringData, ptr %38, i32 0, i32 0
+  %43 = getelementptr %__unsized_array_byte, ptr %42, i32 0, i32 0
+  %44 = load ptr, ptr %43
+  %45 = sext i32 %39 to i64
+  %46 = getelementptr i8, ptr %44, i64 0, i64 %45
+  %47 = alloca %substring
+  %48 = getelementptr %substring, ptr %47, i32 0, i32 0
+  store ptr %38, ptr %48
+  %49 = getelementptr %substring, ptr %47, i32 0, i32 1
+  store ptr %46, ptr %49
+  %50 = getelementptr %substring, ptr %47, i32 0, i32 2
+  store i32 %41, ptr %50
+  %51 = getelementptr %substring, ptr %47, i32 0, i32 3
+  store i32 0, ptr %51
+  %52 = getelementptr %__ManagedStringData, ptr %38, i32 0, i32 2
+  %53 = load i32, ptr %52
+  %54 = icmp sgt i32 %53, 0
+  br i1 %54, label %slice.retain9, label %slice.continue10
+slice.retain7:
+  call void @_managed_string_retain(ptr %24)
+  br label %slice.continue8
+slice.continue8:
+  %35 = load %substring, ptr %27
+  ret %substring %35
+slice.retain9:
+  call void @_managed_string_retain(ptr %44)
+  br label %slice.continue10
+slice.continue10:
+  %55 = load %substring, ptr %47
+  ret %substring %55
+}
+
+define i32 @substring.hasNext(ptr %self) {
+entry0:
+  %2 = getelementptr %substring, ptr %self, i32 0, i32 3
+  %3 = load i32, ptr %2
+  %5 = getelementptr %substring, ptr %self, i32 0, i32 2
+  %6 = load i32, ptr %5
+  %7 = icmp slt i32 %3, %6
+  br i1 %7, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  ret i32 0
+}
+
+define i32 @substring.getCurrent(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %2 = getelementptr %substring, ptr %self, i32 0, i32 3
+  %3 = load i32, ptr %2
+  %4 = alloca i32
+  store i32 %3, ptr %4
+  %5 = load ptr, ptr %0
+  %6 = load i32, ptr %4
+  %7 = getelementptr %substring, ptr %5, i32 0, i32 1
+  %8 = load ptr, ptr %7
+  %9 = sext i32 %6 to i64
+  %10 = getelementptr i8, ptr %8, i64 0, i64 %9
+  %11 = load i8, ptr %10
+  %12 = zext i8 %11 to i32
+  %13 = alloca i32
+  store i32 %12, ptr %13
+  %15 = icmp slt i32 %12, 128
+  br i1 %15, label %then1, label %ifcont2
+then1:
+  %16 = load i32, ptr %13
+  ret i32 %16
+ifcont2:
+  %17 = load i32, ptr %13
+  %18 = icmp slt i32 %17, 224
+  br i1 %18, label %then3, label %ifcont4
+then3:
+  %19 = load ptr, ptr %0
+  %20 = load i32, ptr %4
+  %21 = add i32 %20, 1
+  %22 = getelementptr %substring, ptr %19, i32 0, i32 1
+  %23 = load ptr, ptr %22
+  %24 = sext i32 %21 to i64
+  %25 = getelementptr i8, ptr %23, i64 0, i64 %24
+  %26 = load i8, ptr %25
+  %27 = zext i8 %26 to i32
+  %29 = load i32, ptr %13
+  %30 = srem i32 %29, 32
+  %31 = shl i32 %30, 6
+  %33 = srem i32 %27, 64
+  %34 = add i32 %31, %33
+  ret i32 %34
+ifcont4:
+  %37 = load i32, ptr %13
+  %38 = icmp slt i32 %37, 240
+  br i1 %38, label %then5, label %ifcont6
+then5:
+  %39 = load ptr, ptr %0
+  %40 = load i32, ptr %4
+  %41 = add i32 %40, 1
+  %42 = getelementptr %substring, ptr %39, i32 0, i32 1
+  %43 = load ptr, ptr %42
+  %44 = sext i32 %41 to i64
+  %45 = getelementptr i8, ptr %43, i64 0, i64 %44
+  %46 = load i8, ptr %45
+  %47 = zext i8 %46 to i32
+  %49 = load ptr, ptr %0
+  %50 = load i32, ptr %4
+  %51 = add i32 %50, 2
+  %52 = getelementptr %substring, ptr %49, i32 0, i32 1
+  %53 = load ptr, ptr %52
+  %54 = sext i32 %51 to i64
+  %55 = getelementptr i8, ptr %53, i64 0, i64 %54
+  %56 = load i8, ptr %55
+  %57 = zext i8 %56 to i32
+  %59 = load i32, ptr %13
+  %60 = srem i32 %59, 16
+  %61 = shl i32 %60, 12
+  %63 = srem i32 %47, 64
+  %64 = shl i32 %63, 6
+  %65 = add i32 %61, %64
+  %67 = srem i32 %57, 64
+  %68 = add i32 %65, %67
+  ret i32 %68
+ifcont6:
+  %71 = load ptr, ptr %0
+  %72 = load i32, ptr %4
+  %73 = add i32 %72, 1
+  %74 = getelementptr %substring, ptr %71, i32 0, i32 1
+  %75 = load ptr, ptr %74
+  %76 = sext i32 %73 to i64
+  %77 = getelementptr i8, ptr %75, i64 0, i64 %76
+  %78 = load i8, ptr %77
+  %79 = zext i8 %78 to i32
+  %81 = load ptr, ptr %0
+  %82 = load i32, ptr %4
+  %83 = add i32 %82, 2
+  %84 = getelementptr %substring, ptr %81, i32 0, i32 1
+  %85 = load ptr, ptr %84
+  %86 = sext i32 %83 to i64
+  %87 = getelementptr i8, ptr %85, i64 0, i64 %86
+  %88 = load i8, ptr %87
+  %89 = zext i8 %88 to i32
+  %91 = load ptr, ptr %0
+  %92 = load i32, ptr %4
+  %93 = add i32 %92, 3
+  %94 = getelementptr %substring, ptr %91, i32 0, i32 1
+  %95 = load ptr, ptr %94
+  %96 = sext i32 %93 to i64
+  %97 = getelementptr i8, ptr %95, i64 0, i64 %96
+  %98 = load i8, ptr %97
+  %99 = zext i8 %98 to i32
+  %101 = load i32, ptr %13
+  %102 = srem i32 %101, 8
+  %103 = shl i32 %102, 18
+  %105 = srem i32 %79, 64
+  %106 = shl i32 %105, 12
+  %107 = add i32 %103, %106
+  %109 = srem i32 %89, 64
+  %110 = shl i32 %109, 6
+  %111 = add i32 %107, %110
+  %113 = srem i32 %99, 64
+  %114 = add i32 %111, %113
+  ret i32 %114
+}
+
+define %substring @substring.next(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %2 = getelementptr %substring, ptr %self, i32 0, i32 3
+  %3 = load i32, ptr %2
+  %4 = alloca i32
+  store i32 %3, ptr %4
+  %5 = load ptr, ptr %0
+  %6 = load i32, ptr %4
+  %7 = getelementptr %substring, ptr %5, i32 0, i32 1
+  %8 = load ptr, ptr %7
+  %9 = sext i32 %6 to i64
+  %10 = getelementptr i8, ptr %8, i64 0, i64 %9
+  %11 = load i8, ptr %10
+  %12 = zext i8 %11 to i32
+  %13 = alloca i32
+  store i32 %12, ptr %13
+  %14 = alloca i32
+  store i32 1, ptr %14
+  %16 = icmp sge i32 %12, 240
+  br i1 %16, label %then1, label %else3
+then1:
+  store i32 4, ptr %14
+  br label %ifcont2
+ifcont2:
+  %21 = load ptr, ptr %0
+  %22 = load i32, ptr %4
+  %23 = load i32, ptr %14
+  %24 = add i32 %22, %23
+  %25 = alloca %substring
+  %26 = getelementptr %substring, ptr %21, i32 0, i32 0
+  %27 = getelementptr %substring, ptr %25, i32 0, i32 0
+  %28 = load ptr, ptr %26
+  store ptr %28, ptr %27
+  %29 = getelementptr %substring, ptr %21, i32 0, i32 1
+  %30 = getelementptr %substring, ptr %25, i32 0, i32 1
+  %31 = load ptr, ptr %29
+  store ptr %31, ptr %30
+  %32 = getelementptr %substring, ptr %21, i32 0, i32 2
+  %33 = getelementptr %substring, ptr %25, i32 0, i32 2
+  %34 = load i32, ptr %32
+  store i32 %34, ptr %33
+  %35 = getelementptr %substring, ptr %25, i32 0, i32 3
+  store i32 %24, ptr %35
+  %36 = load %substring, ptr %25
+  ret %substring %36
+else3:
+  %17 = load i32, ptr %13
+  %18 = icmp sge i32 %17, 224
+  br i1 %18, label %then4, label %else6
+then4:
+  store i32 3, ptr %14
+  br label %ifcont5
+ifcont5:
+  br label %ifcont2
+else6:
+  %19 = load i32, ptr %13
+  %20 = icmp sge i32 %19, 192
+  br i1 %20, label %then7, label %ifcont8
+then7:
+  store i32 2, ptr %14
+  br label %ifcont8
+ifcont8:
+  br label %ifcont5
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.0, ptr %3
+  %4 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 1
+  store i32 5, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i32 5, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i32 0, ptr %6
+  %7 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 3
+  store i32 0, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %8
+  %9 = call %substring @string.slice(ptr %0, i32 1, i32 4)
+  %10 = alloca %substring
+  store %substring %9, ptr %10
+  %11 = alloca i32
+  store i32 0, ptr %11
+  %13 = alloca %substring
+  store %substring %9, ptr %13
+  br label %forcond1
+forcond1:
+  %14 = call i32 @substring.hasNext(ptr %13)
+  %15 = icmp eq i32 %14, 1
+  br i1 %15, label %forloop2, label %afterfor4
+forloop2:
+  %16 = call i32 @substring.getCurrent(ptr %13)
+  %18 = load i32, ptr %11
+  %20 = add i32 %18, %16
+  store i32 %20, ptr %11
+  br label %forincrement3
+forincrement3:
+  %21 = call %substring @substring.next(ptr %13)
+  store %substring %21, ptr %13
+  br label %forcond1
+afterfor4:
+  %22 = load i32, ptr %11
+  %23 = sub i32 %22, 294
+  %24 = getelementptr %substring, ptr %10, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = getelementptr %__ManagedStringData, ptr %25, i32 0, i32 2
+  %27 = load i32, ptr %26
+  %28 = icmp sgt i32 %27, 0
+  br i1 %28, label %sub.release5, label %sub.continue6
+sub.release5:
+  %29 = getelementptr %__ManagedStringData, ptr %25, i32 0, i32 0
+  %30 = getelementptr %__unsized_array_byte, ptr %29, i32 0, i32 0
+  %31 = load ptr, ptr %30
+  call void @_managed_string_release(ptr %31, ptr @.__tag.free.sub)
+  br label %sub.continue6
+sub.continue6:
+  ret i32 %23
+}
+
+declare void @_managed_string_retain(ptr %arg0)
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 343
+
+%__unsized_array_byte = type { ptr, i32 }
+%substring = type { ptr, ptr, i32, i32 }
+%string = type { ptr }
+%__ManagedStringData = type { %__unsized_array_byte, i32, i32, i32 }
+
+@.str.0 = constant [6 x i8] c"abcde\00"
+@.__tag.free.sub = constant [17 x i8] c"substring parent\00"
+
+define %substring @string.slice(ptr %self, i32 %startIndex, i32 %endIndex) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 %startIndex, ptr %1
+  %2 = alloca i32
+  store i32 %endIndex, ptr %2
+  %3 = load ptr, ptr %0
+  %4 = getelementptr %string, ptr %3, i32 0, i32 0
+  %5 = load ptr, ptr %4
+  %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 1
+  %7 = load i32, ptr %6
+  %8 = alloca i32
+  store i32 %7, ptr %8
+  %9 = load i32, ptr %1
+  %10 = icmp slt i32 %9, 0
+  br i1 %10, label %then1, label %ifcont2
+then1:
+  store i32 0, ptr %1
+  br label %ifcont2
+ifcont2:
+  %11 = load i32, ptr %2
+  %12 = load i32, ptr %8
+  %13 = icmp sgt i32 %11, %12
+  br i1 %13, label %then3, label %ifcont4
+then3:
+  %14 = load i32, ptr %8
+  store i32 %14, ptr %2
+  br label %ifcont4
+ifcont4:
+  %15 = load i32, ptr %1
+  %16 = load i32, ptr %2
+  %17 = icmp sge i32 %15, %16
+  br i1 %17, label %then5, label %ifcont6
+then5:
+  %18 = load ptr, ptr %0
+  %19 = getelementptr %string, ptr %18, i32 0, i32 0
+  %20 = load ptr, ptr %19
+  %21 = sub i32 0, 0
+  %22 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 0
+  %23 = getelementptr %__unsized_array_byte, ptr %22, i32 0, i32 0
+  %24 = load ptr, ptr %23
+  %25 = sext i32 0 to i64
+  %26 = getelementptr i8, ptr %24, i64 0, i64 %25
+  %27 = alloca %substring
+  %28 = getelementptr %substring, ptr %27, i32 0, i32 0
+  store ptr %20, ptr %28
+  %29 = getelementptr %substring, ptr %27, i32 0, i32 1
+  store ptr %26, ptr %29
+  %30 = getelementptr %substring, ptr %27, i32 0, i32 2
+  store i32 %21, ptr %30
+  %31 = getelementptr %substring, ptr %27, i32 0, i32 3
+  store i32 0, ptr %31
+  %32 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 2
+  %33 = load i32, ptr %32
+  %34 = icmp sgt i32 %33, 0
+  br i1 %34, label %slice.retain7, label %slice.continue8
+ifcont6:
+  %36 = load ptr, ptr %0
+  %37 = getelementptr %string, ptr %36, i32 0, i32 0
+  %38 = load ptr, ptr %37
+  %39 = load i32, ptr %1
+  %40 = load i32, ptr %2
+  %41 = sub i32 %40, %39
+  %42 = getelementptr %__ManagedStringData, ptr %38, i32 0, i32 0
+  %43 = getelementptr %__unsized_array_byte, ptr %42, i32 0, i32 0
+  %44 = load ptr, ptr %43
+  %45 = sext i32 %39 to i64
+  %46 = getelementptr i8, ptr %44, i64 0, i64 %45
+  %47 = alloca %substring
+  %48 = getelementptr %substring, ptr %47, i32 0, i32 0
+  store ptr %38, ptr %48
+  %49 = getelementptr %substring, ptr %47, i32 0, i32 1
+  store ptr %46, ptr %49
+  %50 = getelementptr %substring, ptr %47, i32 0, i32 2
+  store i32 %41, ptr %50
+  %51 = getelementptr %substring, ptr %47, i32 0, i32 3
+  store i32 0, ptr %51
+  %52 = getelementptr %__ManagedStringData, ptr %38, i32 0, i32 2
+  %53 = load i32, ptr %52
+  %54 = icmp sgt i32 %53, 0
+  br i1 %54, label %slice.retain9, label %slice.continue10
+slice.retain7:
+  call void @_managed_string_retain(ptr %24)
+  br label %slice.continue8
+slice.continue8:
+  %35 = load %substring, ptr %27
+  ret %substring %35
+slice.retain9:
+  call void @_managed_string_retain(ptr %44)
+  br label %slice.continue10
+slice.continue10:
+  %55 = load %substring, ptr %47
+  ret %substring %55
+}
+
+define i32 @substring.hasNext(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %substring, ptr %1, i32 0, i32 3
+  %3 = load i32, ptr %2
+  %4 = load ptr, ptr %0
+  %5 = getelementptr %substring, ptr %4, i32 0, i32 2
+  %6 = load i32, ptr %5
+  %7 = icmp slt i32 %3, %6
+  br i1 %7, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  ret i32 0
+}
+
+define i32 @substring.getCurrent(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %substring, ptr %1, i32 0, i32 3
+  %3 = load i32, ptr %2
+  %4 = alloca i32
+  store i32 %3, ptr %4
+  %5 = load ptr, ptr %0
+  %6 = load i32, ptr %4
+  %7 = getelementptr %substring, ptr %5, i32 0, i32 1
+  %8 = load ptr, ptr %7
+  %9 = sext i32 %6 to i64
+  %10 = getelementptr i8, ptr %8, i64 0, i64 %9
+  %11 = load i8, ptr %10
+  %12 = zext i8 %11 to i32
+  %13 = alloca i32
+  store i32 %12, ptr %13
+  %14 = load i32, ptr %13
+  %15 = icmp slt i32 %14, 128
+  br i1 %15, label %then1, label %ifcont2
+then1:
+  %16 = load i32, ptr %13
+  ret i32 %16
+ifcont2:
+  %17 = load i32, ptr %13
+  %18 = icmp slt i32 %17, 224
+  br i1 %18, label %then3, label %ifcont4
+then3:
+  %19 = load ptr, ptr %0
+  %20 = load i32, ptr %4
+  %21 = add i32 %20, 1
+  %22 = getelementptr %substring, ptr %19, i32 0, i32 1
+  %23 = load ptr, ptr %22
+  %24 = sext i32 %21 to i64
+  %25 = getelementptr i8, ptr %23, i64 0, i64 %24
+  %26 = load i8, ptr %25
+  %27 = zext i8 %26 to i32
+  %28 = alloca i32
+  store i32 %27, ptr %28
+  %29 = load i32, ptr %13
+  %30 = srem i32 %29, 32
+  %31 = mul i32 %30, 64
+  %32 = load i32, ptr %28
+  %33 = srem i32 %32, 64
+  %34 = add i32 %31, %33
+  %35 = alloca i32
+  store i32 %34, ptr %35
+  %36 = load i32, ptr %35
+  ret i32 %36
+ifcont4:
+  %37 = load i32, ptr %13
+  %38 = icmp slt i32 %37, 240
+  br i1 %38, label %then5, label %ifcont6
+then5:
+  %39 = load ptr, ptr %0
+  %40 = load i32, ptr %4
+  %41 = add i32 %40, 1
+  %42 = getelementptr %substring, ptr %39, i32 0, i32 1
+  %43 = load ptr, ptr %42
+  %44 = sext i32 %41 to i64
+  %45 = getelementptr i8, ptr %43, i64 0, i64 %44
+  %46 = load i8, ptr %45
+  %47 = zext i8 %46 to i32
+  %48 = alloca i32
+  store i32 %47, ptr %48
+  %49 = load ptr, ptr %0
+  %50 = load i32, ptr %4
+  %51 = add i32 %50, 2
+  %52 = getelementptr %substring, ptr %49, i32 0, i32 1
+  %53 = load ptr, ptr %52
+  %54 = sext i32 %51 to i64
+  %55 = getelementptr i8, ptr %53, i64 0, i64 %54
+  %56 = load i8, ptr %55
+  %57 = zext i8 %56 to i32
+  %58 = alloca i32
+  store i32 %57, ptr %58
+  %59 = load i32, ptr %13
+  %60 = srem i32 %59, 16
+  %61 = mul i32 %60, 4096
+  %62 = load i32, ptr %48
+  %63 = srem i32 %62, 64
+  %64 = mul i32 %63, 64
+  %65 = add i32 %61, %64
+  %66 = load i32, ptr %58
+  %67 = srem i32 %66, 64
+  %68 = add i32 %65, %67
+  %69 = alloca i32
+  store i32 %68, ptr %69
+  %70 = load i32, ptr %69
+  ret i32 %70
+ifcont6:
+  %71 = load ptr, ptr %0
+  %72 = load i32, ptr %4
+  %73 = add i32 %72, 1
+  %74 = getelementptr %substring, ptr %71, i32 0, i32 1
+  %75 = load ptr, ptr %74
+  %76 = sext i32 %73 to i64
+  %77 = getelementptr i8, ptr %75, i64 0, i64 %76
+  %78 = load i8, ptr %77
+  %79 = zext i8 %78 to i32
+  %80 = alloca i32
+  store i32 %79, ptr %80
+  %81 = load ptr, ptr %0
+  %82 = load i32, ptr %4
+  %83 = add i32 %82, 2
+  %84 = getelementptr %substring, ptr %81, i32 0, i32 1
+  %85 = load ptr, ptr %84
+  %86 = sext i32 %83 to i64
+  %87 = getelementptr i8, ptr %85, i64 0, i64 %86
+  %88 = load i8, ptr %87
+  %89 = zext i8 %88 to i32
+  %90 = alloca i32
+  store i32 %89, ptr %90
+  %91 = load ptr, ptr %0
+  %92 = load i32, ptr %4
+  %93 = add i32 %92, 3
+  %94 = getelementptr %substring, ptr %91, i32 0, i32 1
+  %95 = load ptr, ptr %94
+  %96 = sext i32 %93 to i64
+  %97 = getelementptr i8, ptr %95, i64 0, i64 %96
+  %98 = load i8, ptr %97
+  %99 = zext i8 %98 to i32
+  %100 = alloca i32
+  store i32 %99, ptr %100
+  %101 = load i32, ptr %13
+  %102 = srem i32 %101, 8
+  %103 = mul i32 %102, 262144
+  %104 = load i32, ptr %80
+  %105 = srem i32 %104, 64
+  %106 = mul i32 %105, 4096
+  %107 = add i32 %103, %106
+  %108 = load i32, ptr %90
+  %109 = srem i32 %108, 64
+  %110 = mul i32 %109, 64
+  %111 = add i32 %107, %110
+  %112 = load i32, ptr %100
+  %113 = srem i32 %112, 64
+  %114 = add i32 %111, %113
+  %115 = alloca i32
+  store i32 %114, ptr %115
+  %116 = load i32, ptr %115
+  ret i32 %116
+}
+
+define %substring @substring.next(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %substring, ptr %1, i32 0, i32 3
+  %3 = load i32, ptr %2
+  %4 = alloca i32
+  store i32 %3, ptr %4
+  %5 = load ptr, ptr %0
+  %6 = load i32, ptr %4
+  %7 = getelementptr %substring, ptr %5, i32 0, i32 1
+  %8 = load ptr, ptr %7
+  %9 = sext i32 %6 to i64
+  %10 = getelementptr i8, ptr %8, i64 0, i64 %9
+  %11 = load i8, ptr %10
+  %12 = zext i8 %11 to i32
+  %13 = alloca i32
+  store i32 %12, ptr %13
+  %14 = alloca i32
+  store i32 1, ptr %14
+  %15 = load i32, ptr %13
+  %16 = icmp sge i32 %15, 240
+  br i1 %16, label %then1, label %else3
+then1:
+  store i32 4, ptr %14
+  br label %ifcont2
+ifcont2:
+  %21 = load ptr, ptr %0
+  %22 = load i32, ptr %4
+  %23 = load i32, ptr %14
+  %24 = add i32 %22, %23
+  %25 = alloca %substring
+  %26 = getelementptr %substring, ptr %21, i32 0, i32 0
+  %27 = getelementptr %substring, ptr %25, i32 0, i32 0
+  %28 = load ptr, ptr %26
+  store ptr %28, ptr %27
+  %29 = getelementptr %substring, ptr %21, i32 0, i32 1
+  %30 = getelementptr %substring, ptr %25, i32 0, i32 1
+  %31 = load ptr, ptr %29
+  store ptr %31, ptr %30
+  %32 = getelementptr %substring, ptr %21, i32 0, i32 2
+  %33 = getelementptr %substring, ptr %25, i32 0, i32 2
+  %34 = load i32, ptr %32
+  store i32 %34, ptr %33
+  %35 = getelementptr %substring, ptr %25, i32 0, i32 3
+  store i32 %24, ptr %35
+  %36 = load %substring, ptr %25
+  ret %substring %36
+else3:
+  %17 = load i32, ptr %13
+  %18 = icmp sge i32 %17, 224
+  br i1 %18, label %then4, label %else6
+then4:
+  store i32 3, ptr %14
+  br label %ifcont5
+ifcont5:
+  br label %ifcont2
+else6:
+  %19 = load i32, ptr %13
+  %20 = icmp sge i32 %19, 192
+  br i1 %20, label %then7, label %ifcont8
+then7:
+  store i32 2, ptr %14
+  br label %ifcont8
+ifcont8:
+  br label %ifcont5
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.0, ptr %3
+  %4 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 1
+  store i32 5, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i32 5, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i32 0, ptr %6
+  %7 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 3
+  store i32 0, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %8
+  %9 = call %substring @string.slice(ptr %0, i32 1, i32 4)
+  %10 = alloca %substring
+  store %substring %9, ptr %10
+  %11 = alloca i32
+  store i32 0, ptr %11
+  %12 = load %substring, ptr %10
+  %13 = alloca %substring
+  store %substring %12, ptr %13
+  br label %forcond1
+forcond1:
+  %14 = call i32 @substring.hasNext(ptr %13)
+  %15 = icmp eq i32 %14, 1
+  br i1 %15, label %forloop2, label %afterfor4
+forloop2:
+  %16 = call i32 @substring.getCurrent(ptr %13)
+  %17 = alloca i32
+  store i32 %16, ptr %17
+  %18 = load i32, ptr %11
+  %19 = load i32, ptr %17
+  %20 = add i32 %18, %19
+  store i32 %20, ptr %11
+  br label %forincrement3
+forincrement3:
+  %21 = call %substring @substring.next(ptr %13)
+  store %substring %21, ptr %13
+  br label %forcond1
+afterfor4:
+  %22 = load i32, ptr %11
+  %23 = sub i32 %22, 294
+  %24 = getelementptr %substring, ptr %10, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = getelementptr %__ManagedStringData, ptr %25, i32 0, i32 2
+  %27 = load i32, ptr %26
+  %28 = icmp sgt i32 %27, 0
+  br i1 %28, label %sub.release5, label %sub.continue6
+sub.release5:
+  %29 = getelementptr %__ManagedStringData, ptr %25, i32 0, i32 0
+  %30 = getelementptr %__unsized_array_byte, ptr %29, i32 0, i32 0
+  %31 = load ptr, ptr %30
+  call void @_managed_string_release(ptr %31, ptr @.__tag.free.sub)
+  br label %sub.continue6
+sub.continue6:
+  ret i32 %23
+}
+
+declare void @_managed_string_retain(ptr %arg0)
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 3

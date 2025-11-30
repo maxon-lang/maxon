@@ -378,6 +378,13 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			// Derive type from the allocated MIR type
 			variableTypes[varDecl->name] = getMaxonTypeFromMIRType(allocaType);
 		}
+
+		// Track substring variables for cleanup at scope exit
+		// Substrings may hold a reference to a heap-allocated parent's buffer
+		std::string finalType = variableTypes[varDecl->name];
+		if (finalType == "substring" && !scopeStack.empty()) {
+			scopeStack.back().substringAllocas.push_back({varDecl->name, alloca});
+		}
 		return;
 	}
 
@@ -609,6 +616,13 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		} else {
 			// Derive type from the allocated MIR type
 			variableTypes[letDecl->name] = getMaxonTypeFromMIRType(allocaType);
+		}
+
+		// Track substring variables for cleanup at scope exit
+		// Substrings may hold a reference to a heap-allocated parent's buffer
+		std::string finalType = variableTypes[letDecl->name];
+		if (finalType == "substring" && !scopeStack.empty()) {
+			scopeStack.back().substringAllocas.push_back({letDecl->name, alloca});
 		}
 		return;
 	}

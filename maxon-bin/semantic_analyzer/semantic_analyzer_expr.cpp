@@ -417,7 +417,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				analyzeExpression(callExpr->args[0].get());
 				analyzeExpression(callExpr->args[1].get());
 				analyzeExpression(callExpr->args[2].get());
-				return "_ManagedString";
+				return "substring"; // Returns substring view, not copied string
 			}
 			if (name == "__string_concat") {
 				if (callExpr->args.size() != 2) {
@@ -436,9 +436,109 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				analyzeExpression(callExpr->args[0].get());
 				return "_ManagedString";
 			}
+			// __string_make_unique(managed) - ensure exclusive ownership for COW
+			// Returns the same or new _ManagedString pointer
+			if (name == "__string_make_unique") {
+				if (callExpr->args.size() != 1) {
+					addError("__string_make_unique requires exactly 1 argument", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				return "_ManagedString";
+			}
+			// __string_set_byte(managed, index, value) - set byte at index (low-level mutation)
+			// Returns void, used after make_unique to perform actual mutation
+			if (name == "__string_set_byte") {
+				if (callExpr->args.size() != 3) {
+					addError("__string_set_byte requires exactly 3 arguments", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				analyzeExpression(callExpr->args[1].get());
+				analyzeExpression(callExpr->args[2].get());
+				return "void";
+			}
+			// __string_get_refcount(managed) - get current refcount (for testing/debugging)
+			if (name == "__string_get_refcount") {
+				if (callExpr->args.size() != 1) {
+					addError("__string_get_refcount requires exactly 1 argument", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				return "int";
+			}
 
 			// Unknown string intrinsic
 			addError("Unknown string intrinsic: " + name, expr->line, expr->column);
+			return "error";
+		}
+
+		// Handle substring intrinsics (__substring_* functions)
+		// These are compiler-internal functions for accessing substring struct fields
+		if (callExpr->callee.rfind("__substring_", 0) == 0) {
+			const std::string &name = callExpr->callee;
+
+			// __substring_len(sub) - get byte length
+			if (name == "__substring_len") {
+				if (callExpr->args.size() != 1) {
+					addError("__substring_len requires exactly 1 argument", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				return "int";
+			}
+			// __substring_byte_at(sub, index) - get byte at index
+			if (name == "__substring_byte_at") {
+				if (callExpr->args.size() != 2) {
+					addError("__substring_byte_at requires exactly 2 arguments", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				analyzeExpression(callExpr->args[1].get());
+				return "byte";
+			}
+			// __substring_iter_pos(sub) - get current iteration position
+			if (name == "__substring_iter_pos") {
+				if (callExpr->args.size() != 1) {
+					addError("__substring_iter_pos requires exactly 1 argument", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				return "int";
+			}
+			// __substring_with_iter_pos(sub, pos) - create copy with new iter position
+			if (name == "__substring_with_iter_pos") {
+				if (callExpr->args.size() != 2) {
+					addError("__substring_with_iter_pos requires exactly 2 arguments", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				analyzeExpression(callExpr->args[1].get());
+				return "substring";
+			}
+			// __substring_to_string(sub) - create owned string copy
+			if (name == "__substring_to_string") {
+				if (callExpr->args.size() != 1) {
+					addError("__substring_to_string requires exactly 1 argument", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				return "_ManagedString";
+			}
+			// __substring_slice(sub, start, end) - create sub-slice
+			if (name == "__substring_slice") {
+				if (callExpr->args.size() != 3) {
+					addError("__substring_slice requires exactly 3 arguments", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				analyzeExpression(callExpr->args[1].get());
+				analyzeExpression(callExpr->args[2].get());
+				return "substring";
+			}
+
+			// Unknown substring intrinsic
+			addError("Unknown substring intrinsic: " + name, expr->line, expr->column);
 			return "error";
 		}
 

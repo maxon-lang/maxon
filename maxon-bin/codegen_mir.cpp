@@ -270,6 +270,69 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 			{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
 		builder->createCall(stringReleaseFunc, {dataPtr, tag});
 	}
+
+	// Release parent references for substrings in this scope
+	// Substrings hold a reference to their parent's buffer if the parent was heap-allocated
+	for (const auto &[name, substringAlloca] : scopeStack.back().substringAllocas) {
+		// Get or create substring type
+		mir::MIRType *substringType = structTypes["substring"];
+		if (!substringType) {
+			substringType = module->getOrCreateStructType(
+				"substring",
+				{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+			structTypes["substring"] = substringType;
+		}
+
+		// Get __ManagedStringData type
+		mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
+		if (!managedStringType) {
+			mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+			if (!unsizedArrayType) {
+				unsizedArrayType = module->getOrCreateStructType(
+					"__unsized_array_byte",
+					{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+				structTypes["__unsized_array_byte"] = unsizedArrayType;
+			}
+			managedStringType = module->getOrCreateStructType(
+				"__ManagedStringData",
+				{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+			structTypes["__ManagedStringData"] = managedStringType;
+		}
+		mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+
+		// Load _parentManaged pointer from substring
+		mir::MIRValue *parentPtrPtr = builder->createStructGEP(substringType, substringAlloca, 0, name + "._parentManaged.ptr");
+		mir::MIRValue *parentPtr = builder->createLoad(mir::MIRType::getPtr(), parentPtrPtr, name + "._parentManaged");
+
+		// Check if parent is heap-allocated (capacity > 0)
+		mir::MIRValue *parentCapPtr = builder->createStructGEP(managedStringType, parentPtr, 2, name + ".parent._capacity.ptr");
+		mir::MIRValue *parentCap = builder->createLoad(mir::MIRType::getInt32(), parentCapPtr, name + ".parent._capacity");
+		mir::MIRValue *isHeap = builder->createICmpSGT(parentCap, builder->getInt32(0), name + ".isHeap");
+
+		// Conditional release: only release if parent was heap-allocated
+		mir::MIRBasicBlock *releaseBlock = builder->createBasicBlock(name + ".release");
+		mir::MIRBasicBlock *continueBlock = builder->createBasicBlock(name + ".continue");
+		builder->createCondBr(isHeap, releaseBlock, continueBlock);
+
+		builder->setInsertPoint(releaseBlock);
+		// Get the buffer pointer from parent's _buffer field
+		mir::MIRValue *parentBufferPtr = builder->createStructGEP(managedStringType, parentPtr, 0, name + ".parent._buffer");
+		mir::MIRValue *parentDataPtrPtr = builder->createStructGEP(unsizedArrayType, parentBufferPtr, 0, name + ".parent.data.ptr.ptr");
+		mir::MIRValue *parentDataPtr = builder->createLoad(mir::MIRType::getPtr(), parentDataPtrPtr, name + ".parent.data.ptr");
+
+		// Create tag for tracking
+		mir::MIRValue *tag = module->createGlobalString(".__tag.free." + name, "substring parent");
+
+		// Call _managed_string_release on the data pointer
+		mir::MIRFunction *stringReleaseFunc = getOrDeclareFunction(
+			"_managed_string_release",
+			mir::MIRType::getVoid(),
+			{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+		builder->createCall(stringReleaseFunc, {parentDataPtr, tag});
+		builder->createBr(continueBlock);
+
+		builder->setInsertPoint(continueBlock);
+	}
 }
 
 //==============================================================================

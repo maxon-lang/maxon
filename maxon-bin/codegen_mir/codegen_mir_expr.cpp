@@ -1280,6 +1280,11 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			return generateStringIntrinsic(callExpr);
 		}
 
+		// Handle substring intrinsics (__substring_* functions)
+		if (isSubstringIntrinsic(callExpr->callee)) {
+			return generateSubstringIntrinsic(callExpr);
+		}
+
 		// Initialize standard library if needed
 		if (callExpr->callee == "print" || callExpr->callee == "print_float") {
 			initStandardLibrary();
@@ -2034,8 +2039,8 @@ mir::MIRValue *MIRCodeGenerator::generateStringIntrinsic(CallExprAST *callExpr) 
 		return newManaged;
 	}
 
-	// __string_slice(managed, start, end) - extract substring
-	// Returns a heap-allocated _ManagedString pointer (opaque ptr to __ManagedStringData)
+	// __string_slice(managed, start, end) - create substring view (zero-copy)
+	// Returns a substring struct by value that references the parent's buffer
 	if (name == "__string_slice") {
 		if (callExpr->args.size() != 3) {
 			throw std::runtime_error("__string_slice requires exactly 3 arguments");
@@ -2047,51 +2052,59 @@ mir::MIRValue *MIRCodeGenerator::generateStringIntrinsic(CallExprAST *callExpr) 
 		// Calculate new length
 		mir::MIRValue *newLen = builder->createSub(endIdx, startIdx, "slice.len");
 
-		// Get source buffer pointer
+		// Get source buffer pointer and offset to start position
 		mir::MIRValue *srcBufferPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "src._buffer");
 		mir::MIRValue *srcPtrPtr = builder->createStructGEP(unsizedArrayType, srcBufferPtr, 0, "src.ptr.ptr");
 		mir::MIRValue *srcPtr = builder->createLoad(mir::MIRType::getPtr(), srcPtrPtr, "src.ptr");
-
-		// Offset to start position
 		mir::MIRValue *start64 = builder->createSExt(startIdx, mir::MIRType::getInt64(), "start64");
 		mir::MIRValue *slicePtr = builder->createArrayGEP(mir::MIRType::getInt8(), srcPtr, start64, "slice.ptr");
 
-		// Allocate new buffer for the string data
-		mir::MIRValue *newLen64 = builder->createSExt(newLen, mir::MIRType::getInt64(), "newlen64");
-		mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
-		mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {newLen64}, "slice.buffer");
+		// Get or create substring struct type
+		mir::MIRType *substringType = structTypes["substring"];
+		if (!substringType) {
+			substringType = module->getOrCreateStructType(
+				"substring",
+				{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+			structTypes["substring"] = substringType;
+		}
 
-		// Copy data: memcpy(dest, src, len)
-		mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
-															{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
-		builder->createCall(memcpyFunc, {newBuffer, slicePtr, newLen64});
+		// Allocate substring struct on stack
+		mir::MIRValue *newSub = builder->createAlloca(substringType, "slice.substring");
 
-		// Heap-allocate the __ManagedStringData struct (32 bytes for alignment)
-		mir::MIRValue *managedSize = builder->getInt64(32);
-		mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize}, "slice.managed");
+		// Set _parentManaged to point to the parent's managed string data
+		mir::MIRValue *dstParentPtr = builder->createStructGEP(substringType, newSub, 0, "dst._parentManaged");
+		builder->createStore(managedPtr, dstParentPtr);
 
-		// Set buffer fields: _buffer.ptr
-		mir::MIRValue *dstBufferPtr = builder->createStructGEP(managedStringType, newManaged, 0, "dst._buffer");
-		mir::MIRValue *dstPtrPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 0, "dst.ptr.ptr");
-		builder->createStore(newBuffer, dstPtrPtr);
-		// Set _buffer.len
-		mir::MIRValue *dstBufLenPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 1, "dst.buflen.ptr");
-		builder->createStore(newLen, dstBufLenPtr);
+		// Set _ptr to point into parent's buffer at start position
+		mir::MIRValue *dstPtrPtr = builder->createStructGEP(substringType, newSub, 1, "dst._ptr");
+		builder->createStore(slicePtr, dstPtrPtr);
 
 		// Set _len
-		mir::MIRValue *dstLenPtr = builder->createStructGEP(managedStringType, newManaged, 1, "dst._len");
+		mir::MIRValue *dstLenPtr = builder->createStructGEP(substringType, newSub, 2, "dst._len");
 		builder->createStore(newLen, dstLenPtr);
 
-		// Set _capacity (same as len for new allocation)
-		mir::MIRValue *dstCapPtr = builder->createStructGEP(managedStringType, newManaged, 2, "dst._capacity");
-		builder->createStore(newLen, dstCapPtr);
-
 		// Set _iterPos to 0
-		mir::MIRValue *dstIterPosPtr = builder->createStructGEP(managedStringType, newManaged, 3, "dst._iterPos");
+		mir::MIRValue *dstIterPosPtr = builder->createStructGEP(substringType, newSub, 3, "dst._iterPos");
 		builder->createStore(builder->getInt32(0), dstIterPosPtr);
 
-		// Return the pointer to the new __ManagedStringData (opaque _ManagedString)
-		return newManaged;
+		// Retain parent if heap-allocated (capacity > 0)
+		mir::MIRValue *parentCapPtr = builder->createStructGEP(managedStringType, managedPtr, 2, "parent._capacity");
+		mir::MIRValue *parentCap = builder->createLoad(mir::MIRType::getInt32(), parentCapPtr, "parent.cap");
+		mir::MIRValue *isHeap = builder->createICmpSGT(parentCap, builder->getInt32(0), "isHeap");
+
+		mir::MIRBasicBlock *retainBlock = builder->createBasicBlock("slice.retain");
+		mir::MIRBasicBlock *continueBlock = builder->createBasicBlock("slice.continue");
+		builder->createCondBr(isHeap, retainBlock, continueBlock);
+
+		builder->setInsertPoint(retainBlock);
+		mir::MIRFunction *retainFunc = getOrDeclareFunction("_managed_string_retain", mir::MIRType::getVoid(), {mir::MIRType::getPtr()});
+		builder->createCall(retainFunc, {srcPtr}); // Retain the buffer pointer
+		builder->createBr(continueBlock);
+
+		builder->setInsertPoint(continueBlock);
+
+		// Load and return the substring struct by value
+		return builder->createLoad(substringType, newSub, "slice.result");
 	}
 
 	// __string_concat(m1, m2) - concatenate two strings
@@ -2370,5 +2383,391 @@ mir::MIRValue *MIRCodeGenerator::generateStringIntrinsic(CallExprAST *callExpr) 
 		return newManaged;
 	}
 
+	// __string_make_unique(managed) - ensure exclusive ownership for COW
+	// If refcount > 1, allocate new buffer and copy data; otherwise return same
+	if (name == "__string_make_unique") {
+		if (callExpr->args.size() != 1) {
+			throw std::runtime_error("__string_make_unique requires exactly 1 argument");
+		}
+		mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+
+		// Get length and capacity
+		mir::MIRValue *lenPtr = builder->createStructGEP(managedStringType, managedPtr, 1, "src._len");
+		mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
+		mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, "src._capacity");
+		mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtr, "cap");
+
+		// Check if heap-allocated (capacity > 0)
+		mir::MIRValue *isHeap = builder->createICmpSGT(cap, builder->getInt32(0), "isHeap");
+
+		mir::MIRBasicBlock *heapBlock = builder->createBasicBlock("make_unique.heap");
+		mir::MIRBasicBlock *constBlock = builder->createBasicBlock("make_unique.const");
+		mir::MIRBasicBlock *mergeBlock = builder->createBasicBlock("make_unique.merge");
+
+		builder->createCondBr(isHeap, heapBlock, constBlock);
+
+		// Heap-allocated path: call _managed_string_make_unique
+		builder->setInsertPoint(heapBlock);
+		mir::MIRValue *srcBufPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "src._buffer");
+		mir::MIRValue *srcPtrPtr = builder->createStructGEP(unsizedArrayType, srcBufPtr, 0, "src.ptr.ptr");
+		mir::MIRValue *srcDataPtr = builder->createLoad(mir::MIRType::getPtr(), srcPtrPtr, "src.data.ptr");
+
+		mir::MIRValue *tag = module->createGlobalString(".__tag.str.cow", "string COW");
+		mir::MIRFunction *makeUniqueFunc = getOrDeclareFunction("_managed_string_make_unique",
+																mir::MIRType::getPtr(),
+																{mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getPtr()});
+		mir::MIRValue *newDataPtr = builder->createCall(makeUniqueFunc, {srcDataPtr, len, tag}, "unique.data");
+
+		// Update the managed string's buffer pointer if it changed
+		// Store the possibly-new buffer pointer back
+		builder->createStore(newDataPtr, srcPtrPtr);
+		builder->createBr(mergeBlock);
+
+		// Constant/SSO path: nothing to do, buffer is not shared
+		builder->setInsertPoint(constBlock);
+		builder->createBr(mergeBlock);
+
+		builder->setInsertPoint(mergeBlock);
+
+		// Return the (possibly updated) managed pointer
+		return managedPtr;
+	}
+
+	// __string_set_byte(managed, index, value) - set byte at index
+	// For use after make_unique to perform actual mutation
+	if (name == "__string_set_byte") {
+		if (callExpr->args.size() != 3) {
+			throw std::runtime_error("__string_set_byte requires exactly 3 arguments");
+		}
+		mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+		mir::MIRValue *index = generateExpr(callExpr->args[1].get());
+		mir::MIRValue *value = generateExpr(callExpr->args[2].get());
+
+		// Get buffer pointer
+		mir::MIRValue *bufPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "managed._buffer");
+		mir::MIRValue *ptrPtr = builder->createStructGEP(unsizedArrayType, bufPtr, 0, "buffer.ptr.ptr");
+		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), ptrPtr, "data.ptr");
+
+		// Index into buffer and store byte
+		mir::MIRValue *index64 = builder->createSExt(index, mir::MIRType::getInt64(), "idx64");
+		mir::MIRValue *bytePtr = builder->createArrayGEP(mir::MIRType::getInt8(), dataPtr, index64, "byte.ptr");
+
+		// Truncate value to i8 if needed
+		mir::MIRValue *byteVal = value;
+		if (value->type->kind != mir::MIRTypeKind::Int8) {
+			byteVal = builder->createTrunc(value, mir::MIRType::getInt8(), "byte.val");
+		}
+		builder->createStore(byteVal, bytePtr);
+
+		// Return void (null ptr as placeholder)
+		return builder->getNull();
+	}
+
+	// __string_get_refcount(managed) - get current refcount (for testing/debugging)
+	if (name == "__string_get_refcount") {
+		if (callExpr->args.size() != 1) {
+			throw std::runtime_error("__string_get_refcount requires exactly 1 argument");
+		}
+		mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+
+		// Get capacity to check if heap-allocated
+		mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, "src._capacity");
+		mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtr, "cap");
+		mir::MIRValue *isHeap = builder->createICmpSGT(cap, builder->getInt32(0), "isHeap");
+
+		mir::MIRBasicBlock *heapBlock = builder->createBasicBlock("refcount.heap");
+		mir::MIRBasicBlock *constBlock = builder->createBasicBlock("refcount.const");
+		mir::MIRBasicBlock *mergeBlock = builder->createBasicBlock("refcount.merge");
+
+		builder->createCondBr(isHeap, heapBlock, constBlock);
+
+		// Heap-allocated: read refcount from buffer header
+		builder->setInsertPoint(heapBlock);
+		mir::MIRValue *srcBufPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "src._buffer");
+		mir::MIRValue *srcPtrPtr = builder->createStructGEP(unsizedArrayType, srcBufPtr, 0, "src.ptr.ptr");
+		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), srcPtrPtr, "data.ptr");
+
+		// Refcount is at dataPtr - 8
+		mir::MIRValue *headerPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+													  {builder->getInt64(-8)}, "header.ptr");
+		mir::MIRValue *heapRefcount = builder->createLoad(mir::MIRType::getInt32(), headerPtr, "heap.refcount");
+		builder->createBr(mergeBlock);
+
+		// Constant/SSO: refcount is effectively infinite (return -1 to indicate non-heap)
+		builder->setInsertPoint(constBlock);
+		mir::MIRValue *constRefcount = builder->getInt32(-1);
+		builder->createBr(mergeBlock);
+
+		builder->setInsertPoint(mergeBlock);
+
+		// PHI node to select the result
+		mir::MIRValue *refcount = builder->createPhi(mir::MIRType::getInt32(), "refcount");
+		builder->addPhiIncoming(refcount, heapRefcount, heapBlock);
+		builder->addPhiIncoming(refcount, constRefcount, constBlock);
+
+		return refcount;
+	}
+
 	throw std::runtime_error("Unknown string intrinsic: " + name);
+}
+
+bool MIRCodeGenerator::isSubstringIntrinsic(const std::string &name) {
+	return name.rfind("__substring_", 0) == 0;
+}
+
+mir::MIRValue *MIRCodeGenerator::generateSubstringIntrinsic(CallExprAST *callExpr) {
+	const std::string &name = callExpr->callee;
+
+	// Get or create substring struct type
+	// Layout: { _parentManaged ptr, _ptr ptr, _len i32, _iterPos i32 }
+	mir::MIRType *substringType = structTypes["substring"];
+	if (!substringType) {
+		substringType = module->getOrCreateStructType(
+			"substring",
+			{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+		structTypes["substring"] = substringType;
+	}
+
+	// Get or create __ManagedStringData type (for parent access)
+	mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
+	if (!managedStringType) {
+		mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+		if (!unsizedArrayType) {
+			unsizedArrayType = module->getOrCreateStructType(
+				"__unsized_array_byte",
+				{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+			structTypes["__unsized_array_byte"] = unsizedArrayType;
+		}
+		managedStringType = module->getOrCreateStructType(
+			"__ManagedStringData",
+			{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+		structTypes["__ManagedStringData"] = managedStringType;
+	}
+	mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+
+	// Helper to get substring struct pointer from an expression
+	auto getSubstringPtr = [this](ExprAST *arg) -> mir::MIRValue * {
+		// If the argument is self access within a method, get the pointer
+		if (auto *varExpr = dynamic_cast<VariableExprAST *>(arg)) {
+			if (varExpr->name == "self") {
+				// self is a pointer to the struct - need to load it from the alloca
+				auto it = namedValues.find("self");
+				if (it != namedValues.end()) {
+					// self is a ptr parameter stored in alloca - load it
+					return builder->createLoad(mir::MIRType::getPtr(), it->second, "self.ptr");
+				}
+			}
+			// Check if it's a local variable
+			auto it = namedValues.find(varExpr->name);
+			if (it != namedValues.end()) {
+				// For local struct variables, the alloca IS the struct, return as-is
+				return it->second;
+			}
+		}
+		// Fallback - generate expr and assume it's a ptr value
+		return generateExpr(arg);
+	};
+
+	// __substring_len(sub) - get byte length
+	if (name == "__substring_len") {
+		if (callExpr->args.size() != 1) {
+			throw std::runtime_error("__substring_len requires exactly 1 argument");
+		}
+		mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
+		// _len is at field index 2
+		mir::MIRValue *lenPtr = builder->createStructGEP(substringType, subPtr, 2, "sub._len");
+		return builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
+	}
+
+	// __substring_byte_at(sub, index) - get byte at index
+	if (name == "__substring_byte_at") {
+		if (callExpr->args.size() != 2) {
+			throw std::runtime_error("__substring_byte_at requires exactly 2 arguments");
+		}
+		mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
+		mir::MIRValue *index = generateExpr(callExpr->args[1].get());
+
+		// Get buffer pointer: _ptr is at field 1
+		mir::MIRValue *bufferPtrPtr = builder->createStructGEP(substringType, subPtr, 1, "sub._ptr.ptr");
+		mir::MIRValue *bufferPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtrPtr, "sub._ptr");
+
+		// Index into buffer
+		mir::MIRValue *index64 = builder->createSExt(index, mir::MIRType::getInt64(), "idx64");
+		mir::MIRValue *bytePtr = builder->createArrayGEP(mir::MIRType::getInt8(), bufferPtr, index64, "byte.ptr");
+		return builder->createLoad(mir::MIRType::getInt8(), bytePtr, "byte");
+	}
+
+	// __substring_iter_pos(sub) - get current iteration position
+	if (name == "__substring_iter_pos") {
+		if (callExpr->args.size() != 1) {
+			throw std::runtime_error("__substring_iter_pos requires exactly 1 argument");
+		}
+		mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
+		// _iterPos is at field index 3
+		mir::MIRValue *iterPosPtr = builder->createStructGEP(substringType, subPtr, 3, "sub._iterPos");
+		return builder->createLoad(mir::MIRType::getInt32(), iterPosPtr, "iterPos");
+	}
+
+	// __substring_with_iter_pos(sub, pos) - create copy with new iteration position
+	// Returns substring struct by value (allocated on stack)
+	if (name == "__substring_with_iter_pos") {
+		if (callExpr->args.size() != 2) {
+			throw std::runtime_error("__substring_with_iter_pos requires exactly 2 arguments");
+		}
+		mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
+		mir::MIRValue *newPos = generateExpr(callExpr->args[1].get());
+
+		// Allocate new substring struct on stack
+		mir::MIRValue *newSub = builder->createAlloca(substringType, "iter.substring");
+
+		// Copy _parentManaged
+		mir::MIRValue *srcParentPtr = builder->createStructGEP(substringType, subPtr, 0, "src._parentManaged");
+		mir::MIRValue *dstParentPtr = builder->createStructGEP(substringType, newSub, 0, "dst._parentManaged");
+		mir::MIRValue *parentManaged = builder->createLoad(mir::MIRType::getPtr(), srcParentPtr, "parentManaged");
+		builder->createStore(parentManaged, dstParentPtr);
+
+		// Copy _ptr
+		mir::MIRValue *srcPtrPtr = builder->createStructGEP(substringType, subPtr, 1, "src._ptr");
+		mir::MIRValue *dstPtrPtr = builder->createStructGEP(substringType, newSub, 1, "dst._ptr");
+		mir::MIRValue *bufPtr = builder->createLoad(mir::MIRType::getPtr(), srcPtrPtr, "bufPtr");
+		builder->createStore(bufPtr, dstPtrPtr);
+
+		// Copy _len
+		mir::MIRValue *srcLenPtr = builder->createStructGEP(substringType, subPtr, 2, "src._len");
+		mir::MIRValue *dstLenPtr = builder->createStructGEP(substringType, newSub, 2, "dst._len");
+		mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), srcLenPtr, "len");
+		builder->createStore(len, dstLenPtr);
+
+		// Store new iteration position
+		mir::MIRValue *dstIterPosPtr = builder->createStructGEP(substringType, newSub, 3, "dst._iterPos");
+		builder->createStore(newPos, dstIterPosPtr);
+
+		// Note: We do NOT retain here - the parent is already retained by the source substring
+		// and we're just updating the iteration position. Retaining again would cause leaks.
+
+		// Load and return the substring struct by value
+		return builder->createLoad(substringType, newSub, "iter.result");
+	}
+
+	// __substring_to_string(sub) - create owned string copy from substring
+	// Returns pointer to new _ManagedString (heap-allocated with refcount)
+	if (name == "__substring_to_string") {
+		if (callExpr->args.size() != 1) {
+			throw std::runtime_error("__substring_to_string requires exactly 1 argument");
+		}
+		mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
+
+		// Get substring's buffer pointer and length
+		mir::MIRValue *bufPtrPtr = builder->createStructGEP(substringType, subPtr, 1, "sub._ptr.ptr");
+		mir::MIRValue *bufPtr = builder->createLoad(mir::MIRType::getPtr(), bufPtrPtr, "sub._ptr");
+		mir::MIRValue *lenPtr = builder->createStructGEP(substringType, subPtr, 2, "sub._len.ptr");
+		mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "sub._len");
+
+		mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
+		mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
+															{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+
+		// Allocate new buffer for string data using _managed_string_alloc (includes refcount header)
+		mir::MIRValue *len64 = builder->createSExt(len, mir::MIRType::getInt64(), "len64");
+		mir::MIRFunction *stringAllocFunc = getOrDeclareFunction("_managed_string_alloc", mir::MIRType::getPtr(),
+																 {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
+		// Tag for allocation tracking
+		mir::MIRValue *tag = module->createGlobalString(".__tag.str.substr.tostring", "substring.toString");
+		mir::MIRValue *newBuffer = builder->createCall(stringAllocFunc, {len64, tag}, "str.buffer");
+
+		// Copy data from substring buffer to new buffer
+		builder->createCall(memcpyFunc, {newBuffer, bufPtr, len64});
+
+		// Allocate __ManagedStringData struct (32 bytes)
+		mir::MIRValue *managedSize = builder->getInt64(32);
+		mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize}, "str.managed");
+
+		// Set buffer fields: _buffer.ptr
+		mir::MIRValue *dstBufferPtr = builder->createStructGEP(managedStringType, newManaged, 0, "dst._buffer");
+		mir::MIRValue *dstPtrPtrStore = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 0, "dst.ptr.ptr");
+		builder->createStore(newBuffer, dstPtrPtrStore);
+		// Set _buffer.len
+		mir::MIRValue *dstBufLenPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 1, "dst.buflen.ptr");
+		builder->createStore(len, dstBufLenPtr);
+
+		// Set _len
+		mir::MIRValue *dstLenPtr = builder->createStructGEP(managedStringType, newManaged, 1, "dst._len");
+		builder->createStore(len, dstLenPtr);
+
+		// Set _capacity (same as len to indicate heap-allocated with refcount)
+		mir::MIRValue *dstCapPtr = builder->createStructGEP(managedStringType, newManaged, 2, "dst._capacity");
+		builder->createStore(len, dstCapPtr);
+
+		// Set _iterPos to 0
+		mir::MIRValue *dstIterPosPtr = builder->createStructGEP(managedStringType, newManaged, 3, "dst._iterPos");
+		builder->createStore(builder->getInt32(0), dstIterPosPtr);
+
+		return newManaged;
+	}
+
+	// __substring_slice(sub, start, end) - create sub-slice of substring
+	// Returns substring struct by value (allocated on stack)
+	if (name == "__substring_slice") {
+		if (callExpr->args.size() != 3) {
+			throw std::runtime_error("__substring_slice requires exactly 3 arguments");
+		}
+		mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
+		mir::MIRValue *startIdx = generateExpr(callExpr->args[1].get());
+		mir::MIRValue *endIdx = generateExpr(callExpr->args[2].get());
+
+		// Calculate new length
+		mir::MIRValue *newLen = builder->createSub(endIdx, startIdx, "slice.len");
+
+		// Get source buffer pointer and offset to start position
+		mir::MIRValue *srcPtrPtrLoad = builder->createStructGEP(substringType, subPtr, 1, "src._ptr.ptr");
+		mir::MIRValue *srcPtr = builder->createLoad(mir::MIRType::getPtr(), srcPtrPtrLoad, "src._ptr");
+		mir::MIRValue *start64 = builder->createSExt(startIdx, mir::MIRType::getInt64(), "start64");
+		mir::MIRValue *slicePtr = builder->createArrayGEP(mir::MIRType::getInt8(), srcPtr, start64, "slice.ptr");
+
+		// Allocate new substring struct on stack
+		mir::MIRValue *newSub = builder->createAlloca(substringType, "subslice.substring");
+
+		// Copy _parentManaged (same parent as source substring)
+		mir::MIRValue *srcParentPtr = builder->createStructGEP(substringType, subPtr, 0, "src._parentManaged");
+		mir::MIRValue *dstParentPtr = builder->createStructGEP(substringType, newSub, 0, "dst._parentManaged");
+		mir::MIRValue *parentManaged = builder->createLoad(mir::MIRType::getPtr(), srcParentPtr, "parentManaged");
+		builder->createStore(parentManaged, dstParentPtr);
+
+		// Set _ptr to the sliced position
+		mir::MIRValue *dstPtrPtr = builder->createStructGEP(substringType, newSub, 1, "dst._ptr");
+		builder->createStore(slicePtr, dstPtrPtr);
+
+		// Set _len
+		mir::MIRValue *dstLenPtr = builder->createStructGEP(substringType, newSub, 2, "dst._len");
+		builder->createStore(newLen, dstLenPtr);
+
+		// Set _iterPos to 0
+		mir::MIRValue *dstIterPosPtr = builder->createStructGEP(substringType, newSub, 3, "dst._iterPos");
+		builder->createStore(builder->getInt32(0), dstIterPosPtr);
+
+		// Retain parent if heap-allocated
+		mir::MIRValue *parentBufFieldPtr = builder->createStructGEP(managedStringType, parentManaged, 0, "parent._buffer");
+		mir::MIRValue *parentBufPtrPtr = builder->createStructGEP(unsizedArrayType, parentBufFieldPtr, 0, "parent.ptr.ptr");
+		mir::MIRValue *parentBufPtr = builder->createLoad(mir::MIRType::getPtr(), parentBufPtrPtr, "parent.buf.ptr");
+
+		mir::MIRValue *parentCapPtr = builder->createStructGEP(managedStringType, parentManaged, 2, "parent._capacity");
+		mir::MIRValue *parentCap = builder->createLoad(mir::MIRType::getInt32(), parentCapPtr, "parent.cap");
+		mir::MIRValue *isHeap = builder->createICmpSGT(parentCap, builder->getInt32(0), "isHeap");
+
+		mir::MIRBasicBlock *retainBlock = builder->createBasicBlock("subslice.retain");
+		mir::MIRBasicBlock *continueBlock = builder->createBasicBlock("subslice.continue");
+		builder->createCondBr(isHeap, retainBlock, continueBlock);
+
+		builder->setInsertPoint(retainBlock);
+		mir::MIRFunction *retainFunc = getOrDeclareFunction("_managed_string_retain", mir::MIRType::getVoid(), {mir::MIRType::getPtr()});
+		builder->createCall(retainFunc, {parentBufPtr});
+		builder->createBr(continueBlock);
+
+		builder->setInsertPoint(continueBlock);
+
+		// Load and return the substring struct by value
+		return builder->createLoad(substringType, newSub, "subslice.result");
+	}
+
+	throw std::runtime_error("Unknown substring intrinsic: " + name);
 }
