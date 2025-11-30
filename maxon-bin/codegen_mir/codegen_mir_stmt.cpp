@@ -900,6 +900,10 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		builder->setInsertPoint(thenBB);
 		for (auto &s : ifStmt->thenBody) {
 			generateStmt(s.get(), function);
+			// Stop after terminator - subsequent code is unreachable
+			if (builder->getInsertBlock()->hasTerminator()) {
+				break;
+			}
 		}
 		// Check current insert block (may differ from thenBB if body contains control flow)
 		mir::MIRBasicBlock *thenEndBB = builder->getInsertBlock();
@@ -913,6 +917,10 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			builder->setInsertPoint(elseBB);
 			for (auto &s : ifStmt->elseBody) {
 				generateStmt(s.get(), function);
+				// Stop after terminator - subsequent code is unreachable
+				if (builder->getInsertBlock()->hasTerminator()) {
+					break;
+				}
 			}
 			// Check current insert block (may differ from elseBB if body contains control flow)
 			mir::MIRBasicBlock *elseEndBB = builder->getInsertBlock();
@@ -956,6 +964,10 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		builder->setInsertPoint(loopBB);
 		for (auto &s : whileStmt->body) {
 			generateStmt(s.get(), function);
+			// Stop after terminator (break, continue, return) - subsequent code is unreachable
+			if (builder->getInsertBlock()->hasTerminator()) {
+				break;
+			}
 		}
 		// Check current insert block (may differ from loopBB if body contains control flow)
 		mir::MIRBasicBlock *currentBB = builder->getInsertBlock();
@@ -1053,6 +1065,10 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			// Generate loop body statements
 			for (auto &s : forStmt->body) {
 				generateStmt(s.get(), function);
+				// Stop after terminator - subsequent code is unreachable
+				if (builder->getInsertBlock()->hasTerminator()) {
+					break;
+				}
 			}
 
 			if (!builder->getInsertBlock()->hasTerminator()) {
@@ -1118,6 +1134,10 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 				for (auto &s : forStmt->body) {
 					generateStmt(s.get(), function);
+					// Stop after terminator - subsequent code is unreachable
+					if (builder->getInsertBlock()->hasTerminator()) {
+						break;
+					}
 				}
 
 				if (!builder->getInsertBlock()->hasTerminator()) {
@@ -1237,6 +1257,10 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 		for (auto &s : forStmt->body) {
 			generateStmt(s.get(), function);
+			// Stop after terminator - subsequent code is unreachable
+			if (builder->getInsertBlock()->hasTerminator()) {
+				break;
+			}
 		}
 
 		if (!builder->getInsertBlock()->hasTerminator()) {

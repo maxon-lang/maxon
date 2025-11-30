@@ -87,6 +87,11 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 	// Generate function body
 	for (auto &stmt : func->body) {
 		generateStmt(stmt.get(), function);
+		// Stop generating after a terminator (return, break, continue)
+		// Any subsequent code is unreachable
+		if (builder->getInsertBlock()->hasTerminator()) {
+			break;
+		}
 	}
 
 	// If function doesn't have a terminator (return), clean up and add one
