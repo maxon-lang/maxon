@@ -1,7 +1,9 @@
 #include "compiler.h"
 
+#include "ast.h"
 #include "call_graph.h"
 #include "codegen_mir.h"
+#include "compiler_stats.h"
 #include "error_formatter.h"
 #include "lexer.h"
 #include "logger.h"
@@ -16,10 +18,116 @@
 #include <set>
 #include <vector>
 
-std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logger) {
+// Forward declarations for AST counting
+static void countAstExpr(const ExprAST *expr, size_t &exprCount);
+static void countAstStmt(const StmtAST *stmt, size_t &exprCount, size_t &stmtCount);
+
+// Count AST nodes in an expression
+static void countAstExpr(const ExprAST *expr, size_t &exprCount) {
+	if (!expr)
+		return;
+	exprCount++;
+
+	if (auto *binary = dynamic_cast<const BinaryExprAST *>(expr)) {
+		countAstExpr(binary->left.get(), exprCount);
+		countAstExpr(binary->right.get(), exprCount);
+	} else if (auto *unary = dynamic_cast<const UnaryExprAST *>(expr)) {
+		countAstExpr(unary->operand.get(), exprCount);
+	} else if (auto *call = dynamic_cast<const CallExprAST *>(expr)) {
+		for (const auto &arg : call->args) {
+			countAstExpr(arg.get(), exprCount);
+		}
+	} else if (auto *arrIdx = dynamic_cast<const ArrayIndexExprAST *>(expr)) {
+		countAstExpr(arrIdx->arrayExpr.get(), exprCount);
+		countAstExpr(arrIdx->index.get(), exprCount);
+	} else if (auto *slice = dynamic_cast<const SliceExprAST *>(expr)) {
+		countAstExpr(slice->start.get(), exprCount);
+		countAstExpr(slice->end.get(), exprCount);
+	} else if (auto *arrLit = dynamic_cast<const ArrayLiteralExprAST *>(expr)) {
+		countAstExpr(arrLit->sizeExpr.get(), exprCount);
+		for (const auto &val : arrLit->values) {
+			countAstExpr(val.get(), exprCount);
+		}
+	} else if (auto *member = dynamic_cast<const MemberAccessExprAST *>(expr)) {
+		countAstExpr(member->object.get(), exprCount);
+	} else if (auto *cast = dynamic_cast<const CastExprAST *>(expr)) {
+		countAstExpr(cast->expr.get(), exprCount);
+	} else if (auto *structInit = dynamic_cast<const StructInitExprAST *>(expr)) {
+		for (const auto &field : structInit->fields) {
+			countAstExpr(field.value.get(), exprCount);
+		}
+	}
+}
+
+// Count AST nodes in a statement
+static void countAstStmt(const StmtAST *stmt, size_t &exprCount, size_t &stmtCount) {
+	if (!stmt)
+		return;
+	stmtCount++;
+
+	if (auto *varDecl = dynamic_cast<const VarDeclStmtAST *>(stmt)) {
+		countAstExpr(varDecl->initializer.get(), exprCount);
+	} else if (auto *letDecl = dynamic_cast<const LetDeclStmtAST *>(stmt)) {
+		countAstExpr(letDecl->initializer.get(), exprCount);
+	} else if (auto *assign = dynamic_cast<const AssignStmtAST *>(stmt)) {
+		countAstExpr(assign->value.get(), exprCount);
+	} else if (auto *arrAssign = dynamic_cast<const ArrayAssignStmtAST *>(stmt)) {
+		countAstExpr(arrAssign->index.get(), exprCount);
+		countAstExpr(arrAssign->value.get(), exprCount);
+	} else if (auto *arrMemAssign = dynamic_cast<const ArrayMemberAssignStmtAST *>(stmt)) {
+		countAstExpr(arrMemAssign->index.get(), exprCount);
+		countAstExpr(arrMemAssign->value.get(), exprCount);
+	} else if (auto *memAssign = dynamic_cast<const MemberAssignStmtAST *>(stmt)) {
+		countAstExpr(memAssign->value.get(), exprCount);
+	} else if (auto *memArrAssign = dynamic_cast<const MemberArrayAssignStmtAST *>(stmt)) {
+		countAstExpr(memArrAssign->index.get(), exprCount);
+		countAstExpr(memArrAssign->value.get(), exprCount);
+	} else if (auto *ifStmt = dynamic_cast<const IfStmtAST *>(stmt)) {
+		countAstExpr(ifStmt->condition.get(), exprCount);
+		for (const auto &s : ifStmt->thenBody) {
+			countAstStmt(s.get(), exprCount, stmtCount);
+		}
+		for (const auto &s : ifStmt->elseBody) {
+			countAstStmt(s.get(), exprCount, stmtCount);
+		}
+	} else if (auto *whileStmt = dynamic_cast<const WhileStmtAST *>(stmt)) {
+		countAstExpr(whileStmt->condition.get(), exprCount);
+		for (const auto &s : whileStmt->body) {
+			countAstStmt(s.get(), exprCount, stmtCount);
+		}
+	} else if (auto *forStmt = dynamic_cast<const ForStmtAST *>(stmt)) {
+		countAstExpr(forStmt->iterable.get(), exprCount);
+		for (const auto &s : forStmt->body) {
+			countAstStmt(s.get(), exprCount, stmtCount);
+		}
+	} else if (auto *retStmt = dynamic_cast<const ReturnStmtAST *>(stmt)) {
+		countAstExpr(retStmt->value.get(), exprCount);
+	} else if (auto *exprStmt = dynamic_cast<const ExprStmtAST *>(stmt)) {
+		countAstExpr(exprStmt->expression.get(), exprCount);
+	}
+}
+
+// Count all AST nodes in a program
+static void countAstNodes(const ProgramAST *program, size_t &exprCount, size_t &stmtCount) {
+	exprCount = 0;
+	stmtCount = 0;
+
+	for (const auto &func : program->functions) {
+		for (const auto &stmt : func->body) {
+			countAstStmt(stmt.get(), exprCount, stmtCount);
+		}
+	}
+}
+
+std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logger, CompilerStats *stats) {
 	try {
 		std::string source = readFile(filePath);
 
+		// Track per-file timings
+		auto fileStart = std::chrono::high_resolution_clock::now();
+
+		if (stats)
+			stats->startPhase("Lexer");
 		auto lexStart = logger.startTimer();
 
 		// Use lexer which returns TokenStream directly
@@ -28,6 +136,17 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logge
 		logger.trace(LogPhase::Lexer, "Using SIMD lexer (", get_lexer_capability(), ")");
 
 		logger.logElapsed(LogPhase::Lexer, "Tokenization time", lexStart);
+
+		auto lexEnd = std::chrono::high_resolution_clock::now();
+		auto fileLexTime = std::chrono::duration_cast<std::chrono::microseconds>(lexEnd - fileStart);
+
+		if (stats) {
+			stats->endPhase("Lexer");
+			stats->setTokenCount(stats->getTokenCount() + stream.size());
+		}
+
+		// Save token count before stream is moved
+		size_t fileTokenCount = stream.size();
 
 		logger.progress(LogPhase::Lexer, "Tokenized: ", stream.size(), " tokens from ", normalizePathForDisplay(filePath));
 
@@ -89,6 +208,8 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logge
 			}
 		}
 
+		if (stats)
+			stats->startPhase("Parser");
 		auto parseStart = logger.startTimer();
 		Parser parser(std::move(stream));
 		std::string fileNamespace = deriveNamespace(filePath);
@@ -96,9 +217,31 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logge
 		std::unique_ptr<ProgramAST> program = parser.parse();
 		logger.logElapsed(LogPhase::Parser, "Parse time", parseStart);
 
+		auto parseEnd = std::chrono::high_resolution_clock::now();
+		auto fileParseTime = std::chrono::duration_cast<std::chrono::microseconds>(parseEnd - lexEnd);
+
+		if (stats) {
+			stats->endPhase("Parser");
+		}
+
 		int functionCount = program->functions.size();
 		int structCount = program->structs.size();
 		logger.progress(LogPhase::Parser, "Parsed: ", functionCount, " function(s), ", structCount, " struct(s)");
+
+		// Count AST nodes for stats
+		size_t fileExprCount = 0, fileStmtCount = 0;
+		if (stats) {
+			countAstNodes(program.get(), fileExprCount, fileStmtCount);
+			stats->setAstExpressionCount(stats->getAstExpressionCount() + fileExprCount);
+			stats->setAstStatementCount(stats->getAstStatementCount() + fileStmtCount);
+		}
+
+		// Record per-file stats
+		if (stats) {
+			std::string displayName = normalizePathForDisplay(filePath);
+			stats->recordFile(displayName, fileTokenCount, functionCount, structCount,
+							  fileExprCount, fileStmtCount, fileLexTime, fileParseTime);
+		}
 
 		if (logger.isEnabled(2) && !fileNamespace.empty()) {
 			logger.detail(LogPhase::Parser, "Namespace: ", fileNamespace);
@@ -129,6 +272,12 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logge
 std::string compileProgram(const CompilationOptions &options) {
 	Logger logger(options.verboseLevel);
 	[[maybe_unused]] auto totalStart = logger.startTimer();
+
+	// Create stats collector if requested
+	std::unique_ptr<CompilerStats> stats;
+	if (options.showStats) {
+		stats = std::make_unique<CompilerStats>();
+	}
 
 	logger.progress(LogPhase::General, "=== Maxon Compiler ===");
 	logger.detail(LogPhase::General, "Input files: ", options.inputFiles.size());
@@ -175,7 +324,7 @@ std::string compileProgram(const CompilationOptions &options) {
 
 	for (const auto &inputFile : options.inputFiles) {
 		sources.push_back(readFile(inputFile));
-		programs.push_back(parseFile(inputFile, logger));
+		programs.push_back(parseFile(inputFile, logger, stats.get()));
 	}
 
 	int iteration = 0;
@@ -209,9 +358,13 @@ std::string compileProgram(const CompilationOptions &options) {
 		// Register all built-in functions (runtime functions, string methods, etc.)
 		analyzer.registerBuiltinFunctions();
 
+		if (stats)
+			stats->startPhase("Semantic");
 		auto semanticStart = logger.startTimer();
 		std::vector<SemanticError> semanticErrors = analyzer.analyze(mergedProgram.get());
 		logger.logElapsed(LogPhase::Semantic, "Analysis time", semanticStart);
+		if (stats)
+			stats->endPhase("Semantic");
 
 		// Store function indices for codegen optimization
 		functionIndices = analyzer.getFunctionIndices();
@@ -371,6 +524,12 @@ std::string compileProgram(const CompilationOptions &options) {
 	logger.detail(LogPhase::Semantic, "Final AST: ", mergedProgram->functions.size(), " function(s), ",
 				  mergedProgram->structs.size(), " struct(s)");
 
+	// Record stats for final AST
+	if (stats) {
+		stats->setFunctionCount(mergedProgram->functions.size());
+		stats->setStructCount(mergedProgram->structs.size());
+	}
+
 	// Trace level: list all functions in final AST
 	if (logger.isEnabled(3)) {
 		for (const auto &func : mergedProgram->functions) {
@@ -382,22 +541,41 @@ std::string compileProgram(const CompilationOptions &options) {
 
 	MIRCodeGenerator codegen(moduleName, options.debugInfo, options.verboseLevel, options.trackAllocs);
 
+	if (stats)
+		stats->startPhase("MIR Generation");
 	auto codegenStart = logger.startTimer();
 	codegen.generate(mergedProgram.get(), !options.compileOnly, &functionIndices);
 	logger.logElapsed(LogPhase::MIR, "MIR generation time", codegenStart);
+	if (stats) {
+		stats->endPhase("MIR Generation");
+		stats->setMirInstructionsBefore(codegen.getInstructionCount());
+	}
 
+	if (stats)
+		stats->startPhase("Dead Code Elimination");
 	auto dcStart = logger.startTimer();
 	// Always run dead code elimination to remove unused internal functions
 	codegen.runDeadCodeElimination();
 	logger.logElapsed(LogPhase::Opt, "Dead code elimination time", dcStart);
 	logger.progress(LogPhase::Opt, "Dead code elimination complete");
+	if (stats)
+		stats->endPhase("Dead Code Elimination");
 
 	if (options.optimize) {
 		logger.progress(LogPhase::Opt, "Running optimization passes...");
 
+		if (stats)
+			stats->startPhase("Optimization");
 		auto optStart = logger.startTimer();
-		codegen.optimize();
+		codegen.optimize(stats.get());
 		logger.logElapsed(LogPhase::Opt, "Optimization time", optStart);
+		if (stats) {
+			stats->endPhase("Optimization");
+			stats->setMirInstructionsAfter(codegen.getInstructionCount());
+		}
+	} else if (stats) {
+		// If no optimization, after == before
+		stats->setMirInstructionsAfter(codegen.getInstructionCount());
 	}
 
 	std::string exeOutputFile = baseFilename + ".exe";
@@ -412,14 +590,22 @@ std::string compileProgram(const CompilationOptions &options) {
 	if (options.compileOnly) {
 		std::string objOutputFile = baseFilename + ".obj";
 		logger.progress(LogPhase::x86, "Generating object file...");
+		if (stats)
+			stats->startPhase("x86 CodeGen");
 		codegen.writeObjectFile(objOutputFile);
+		if (stats)
+			stats->endPhase("x86 CodeGen");
 		outputFile = objOutputFile;
 		logger.detail(LogPhase::x86, "Object file: ", objOutputFile);
 	} else {
 		logger.progress(LogPhase::x86, "Generating executable...");
+		if (stats)
+			stats->startPhase("x86 CodeGen");
 		auto exeStart = logger.startTimer();
 		codegen.writeExecutable(exeOutputFile);
 		logger.logElapsed(LogPhase::PE, "Executable generation time", exeStart);
+		if (stats)
+			stats->endPhase("x86 CodeGen");
 		outputFile = exeOutputFile;
 	}
 
@@ -427,12 +613,19 @@ std::string compileProgram(const CompilationOptions &options) {
 	logger.progress(LogPhase::General, "Output: ", outputFile);
 	// Get file size using standard library
 	std::ifstream file(outputFile, std::ios::binary | std::ios::ate);
+	uint64_t outputFileSize = 0;
 	if (file) {
-		uint64_t outputFileSize = file.tellg();
+		outputFileSize = file.tellg();
 		logger.detail(LogPhase::General, "Size: ", outputFileSize, " bytes");
 	}
 
 	logger.logTotalElapsed("Total compilation time");
+
+	// Print stats if requested
+	if (stats) {
+		stats->setExecutableSize(outputFileSize);
+		stats->print();
+	}
 
 	return exeOutputFile;
 }

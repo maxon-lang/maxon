@@ -1,6 +1,8 @@
 #include "optimizer.h"
+#include "../compiler_stats.h"
 #include "memory_ssa.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -127,6 +129,7 @@ bool ConstantFoldingPass::runOnBasicBlock(MIRBasicBlock &block) {
 				}
 			}
 			changed = true;
+			lastRunStats_++; // Track constants folded
 		}
 	}
 
@@ -458,6 +461,7 @@ bool ConstantPropagationPass::runOnBasicBlock(MIRBasicBlock &block,
 				if (it != constMap.end()) {
 					inst->operands[i] = it->second;
 					changed = true;
+					lastRunStats_++; // Track constants propagated
 				}
 			}
 		}
@@ -647,6 +651,7 @@ bool DeadCodeEliminationPass::runOnFunction(MIRFunction &func) {
 	// Remove dead instructions
 	for (auto &block : func.basicBlocks) {
 		auto &instructions = block->instructions;
+		size_t sizeBefore = instructions.size();
 		auto newEnd = std::remove_if(
 			instructions.begin(), instructions.end(),
 			[&](const std::unique_ptr<MIRInstruction> &inst) {
@@ -667,6 +672,7 @@ bool DeadCodeEliminationPass::runOnFunction(MIRFunction &func) {
 			});
 
 		instructions.erase(newEnd, instructions.end());
+		lastRunStats_ += static_cast<int>(sizeBefore - instructions.size());
 	}
 
 	return changed;
@@ -741,6 +747,9 @@ bool UnreachableBlockEliminationPass::runOnFunction(MIRFunction &func) {
 						   return reachable.find(block.get()) == reachable.end();
 					   }),
 		blocks.end());
+
+	// Track blocks removed
+	lastRunStats_ += static_cast<int>(originalSize - blocks.size());
 
 	// Update predecessor/successor lists for remaining blocks
 	for (auto &block : blocks) {
@@ -826,6 +835,7 @@ bool StrengthReductionPass::runOnBasicBlock(MIRBasicBlock &block) {
 					inst->opcode = MIROpcode::Shl;
 					inst->operands[1] = MIRValue::createConstantInt(rhs->type, exponent);
 					changed = true;
+					lastRunStats_++;
 					continue;
 				}
 			}
@@ -837,6 +847,7 @@ bool StrengthReductionPass::runOnBasicBlock(MIRBasicBlock &block) {
 					inst->operands[0] = rhs;
 					inst->operands[1] = MIRValue::createConstantInt(lhs->type, exponent);
 					changed = true;
+					lastRunStats_++;
 					continue;
 				}
 			}
@@ -851,6 +862,7 @@ bool StrengthReductionPass::runOnBasicBlock(MIRBasicBlock &block) {
 					inst->opcode = MIROpcode::LShr;
 					inst->operands[1] = MIRValue::createConstantInt(rhs->type, exponent);
 					changed = true;
+					lastRunStats_++;
 				}
 			}
 		}
@@ -864,6 +876,7 @@ bool StrengthReductionPass::runOnBasicBlock(MIRBasicBlock &block) {
 					inst->opcode = MIROpcode::And;
 					inst->operands[1] = MIRValue::createConstantInt(rhs->type, (1LL << exponent) - 1);
 					changed = true;
+					lastRunStats_++;
 				}
 			}
 		}
@@ -925,6 +938,7 @@ bool AlgebraicSimplificationPass::runOnBasicBlock(MIRBasicBlock &block) {
 					}
 				}
 			}
+			lastRunStats_++;
 			changed = true;
 		}
 	}
@@ -1138,6 +1152,7 @@ bool SimpleFunctionInliningPass::run(MIRModule &module) {
 					auto it = inlineCandidates.find(inst->calleeName);
 					if (it != inlineCandidates.end() && it->second != func.get()) {
 						if (inlineCallSite(*func, *block, inst, *it->second)) {
+							lastRunStats_++;
 							changed = true;
 							// Don't increment i - we need to reprocess this position
 							--i;
@@ -1466,6 +1481,9 @@ bool RedundantLoadStoreEliminationPass::runOnFunction(MIRFunction &func) {
 			instructions.end());
 	}
 
+	// Track stats: count of loads forwarded + dead stores eliminated
+	lastRunStats_ += static_cast<int>(loadReplacements.size() + deadStores.size());
+
 	// Invalidate MemorySSA cache if we made changes
 	if (changed) {
 		memorySSACache_.invalidate(func);
@@ -1534,6 +1552,7 @@ bool CopyPropagationPass::runOnBasicBlock(MIRBasicBlock &block,
 				auto it = copyMap.find(operand->regId);
 				if (it != copyMap.end()) {
 					inst->operands[i] = it->second;
+					lastRunStats_++;
 					changed = true;
 				}
 			}
@@ -1545,6 +1564,7 @@ bool CopyPropagationPass::runOnBasicBlock(MIRBasicBlock &block,
 				auto it = copyMap.find(incoming.first->regId);
 				if (it != copyMap.end()) {
 					incoming.first = it->second;
+					lastRunStats_++;
 					changed = true;
 				}
 			}
@@ -1592,6 +1612,9 @@ bool PhiEliminationPass::runOnFunction(MIRFunction &func) {
 	if (phiNodes.empty()) {
 		return false;
 	}
+
+	// Track stat: number of PHIs eliminated
+	lastRunStats_ += static_cast<int>(phiNodes.size());
 
 	logDetail("Processing " + std::to_string(phiNodes.size()) + " PHI node(s) in " + func.name);
 
@@ -1741,12 +1764,25 @@ void PhiEliminationPass::insertCopyBeforeTerminator(MIRBasicBlock *block,
 // MIR Optimizer (Pass Manager) Implementation
 //==============================================================================
 
+// Helper to count total instructions in a module
+static size_t countModuleInstructions(MIRModule &module) {
+	size_t count = 0;
+	for (const auto &func : module.functions) {
+		if (!func->isExternal) {
+			for (const auto &block : func->basicBlocks) {
+				count += block->instructions.size();
+			}
+		}
+	}
+	return count;
+}
+
 void MIROptimizer::addPass(std::unique_ptr<OptimizationPass> pass) {
 	pass->setVerboseLevel(verboseLevel_);
 	passes.push_back(std::move(pass));
 }
 
-int MIROptimizer::runAllPasses(MIRModule &module) {
+int MIROptimizer::runAllPasses(MIRModule &module, CompilerStats *stats) {
 	int totalChanges = 0;
 	bool anyChange;
 	int iteration = 0;
@@ -1762,7 +1798,27 @@ int MIROptimizer::runAllPasses(MIRModule &module) {
 			std::cout << "[Opt] Iteration " << iteration << std::endl;
 		}
 		for (auto &pass : passes) {
-			if (pass->run(module)) {
+			size_t instrBefore = stats ? countModuleInstructions(module) : 0;
+			auto passStart = std::chrono::high_resolution_clock::now();
+
+			if (stats) {
+				pass->resetStats();
+			}
+			bool madeChanges = pass->run(module);
+
+			if (stats) {
+				auto passEnd = std::chrono::high_resolution_clock::now();
+				auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(passEnd - passStart);
+				size_t instrAfter = countModuleInstructions(module);
+				stats->recordOptimizerPass(pass->getName(), elapsed, madeChanges, instrBefore, instrAfter);
+				// Record pass-specific stats
+				auto [count, label] = pass->getPassSpecificStats();
+				if (count > 0 && label) {
+					stats->addPassSpecificStat(pass->getName(), count, label);
+				}
+			}
+
+			if (madeChanges) {
 				anyChange = true;
 				totalChanges++;
 				if (verboseLevel_ >= 2) {
@@ -1772,6 +1828,10 @@ int MIROptimizer::runAllPasses(MIRModule &module) {
 		}
 	} while (anyChange);
 
+	if (stats) {
+		stats->setOptimizerIterations(iteration);
+	}
+
 	if (verboseLevel_ >= 1) {
 		std::cout << "[Opt] Optimization complete after " << iteration << " iteration(s), "
 				  << totalChanges << " total changes" << std::endl;
@@ -1780,15 +1840,37 @@ int MIROptimizer::runAllPasses(MIRModule &module) {
 	return totalChanges;
 }
 
-void MIROptimizer::runPasses(MIRModule &module, int maxIterations) {
+void MIROptimizer::runPasses(MIRModule &module, int maxIterations, CompilerStats *stats) {
 	if (verboseLevel_ >= 1) {
 		std::cout << "[Opt] Running passes (max " << maxIterations << " iterations)" << std::endl;
 	}
 
+	int iteration = 0;
 	for (int i = 0; i < maxIterations; ++i) {
 		bool anyChange = false;
+		iteration++;
 		for (auto &pass : passes) {
-			if (pass->run(module)) {
+			size_t instrBefore = stats ? countModuleInstructions(module) : 0;
+			auto passStart = std::chrono::high_resolution_clock::now();
+
+			if (stats) {
+				pass->resetStats();
+			}
+			bool madeChanges = pass->run(module);
+
+			if (stats) {
+				auto passEnd = std::chrono::high_resolution_clock::now();
+				auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(passEnd - passStart);
+				size_t instrAfter = countModuleInstructions(module);
+				stats->recordOptimizerPass(pass->getName(), elapsed, madeChanges, instrBefore, instrAfter);
+				// Record pass-specific stats
+				auto [count, label] = pass->getPassSpecificStats();
+				if (count > 0 && label) {
+					stats->addPassSpecificStat(pass->getName(), count, label);
+				}
+			}
+
+			if (madeChanges) {
 				anyChange = true;
 				if (verboseLevel_ >= 2) {
 					std::cout << "[Opt]   Pass '" << pass->getName() << "' made changes" << std::endl;
@@ -1801,6 +1883,10 @@ void MIROptimizer::runPasses(MIRModule &module, int maxIterations) {
 			}
 			break;
 		}
+	}
+
+	if (stats) {
+		stats->setOptimizerIterations(iteration);
 	}
 }
 
@@ -2209,6 +2295,7 @@ bool Mem2RegPass::runOnFunction(MIRFunction &func) {
 	// Promote each alloca
 	for (auto *alloca : promotableAllocas) {
 		if (promoteAlloca(func, alloca)) {
+			lastRunStats_++;
 			changed = true;
 		}
 	}

@@ -9,6 +9,7 @@
 #include "../backend/regalloc.h"
 #include "../backend/x86_codegen.h"
 #include "../codegen_mir.h"
+#include "../compiler_stats.h"
 #include "../file_utils.h"
 #include "../mir/mir_parser.h"
 #include "../mir/optimizer.h"
@@ -44,14 +45,14 @@ void MIRCodeGenerator::writeIRToFile(const std::string &filename) {
 // Optimization
 //==============================================================================
 
-void MIRCodeGenerator::optimize() {
+void MIRCodeGenerator::optimize(CompilerStats *stats) {
 	logProgress("Running optimization passes...");
 
 	// Create standard optimization pipeline with verbosity
 	mir::MIROptimizer optimizer = mir::MIROptimizer::createStandardPipeline(verboseLevel);
 
-	// Run passes until convergence
-	optimizer.runPasses(*module);
+	// Run passes until convergence, collecting stats if requested
+	optimizer.runPasses(*module, 10, stats);
 
 	logProgress("Optimization complete");
 }
@@ -61,6 +62,18 @@ void MIRCodeGenerator::runDeadCodeElimination() {
 	mir::DeadCodeEliminationPass dce;
 	dce.setVerboseLevel(verboseLevel);
 	dce.run(*module);
+}
+
+size_t MIRCodeGenerator::getInstructionCount() const {
+	size_t count = 0;
+	for (const auto &func : module->functions) {
+		if (!func->isExternal) {
+			for (const auto &block : func->basicBlocks) {
+				count += block->instructions.size();
+			}
+		}
+	}
+	return count;
 }
 
 //==============================================================================

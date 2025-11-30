@@ -13,6 +13,9 @@
 #include <unordered_map>
 #include <vector>
 
+// Forward declaration for stats collection
+class CompilerStats;
+
 /**
  * MIR Code Generator
  *
@@ -189,8 +192,11 @@ class MIRCodeGenerator {
 				  const std::map<std::string, size_t> *functionIndices = nullptr);
 
 	// Optimization
-	void optimize();
+	void optimize(CompilerStats *stats = nullptr);
 	void runDeadCodeElimination();
+
+	// Get instruction count (for stats)
+	size_t getInstructionCount() const;
 
 	// Output methods
 	void printIR();

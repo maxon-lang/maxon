@@ -44,11 +44,12 @@ void printHelp(const char *programName) {
 	std::cerr << "  -v             Level 1 verbosity (progress, basic output)" << std::endl;
 	std::cerr << "  -vv            Level 2 verbosity (detailed information)" << std::endl;
 	std::cerr << "  -vvv           Level 3 verbosity (trace, deep debugging)" << std::endl;
-	std::cerr << "\nOptions for compile:" << std::endl;
+	std::cerr << "Options for compile:" << std::endl;
 	std::cerr << "  --emit-ir      Generate .ir file alongside executable" << std::endl;
 	std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
 	std::cerr << "  -O             Enable optimizations" << std::endl;
 	std::cerr << "  --debug, -g    Generate debug information" << std::endl;
+	std::cerr << "  --stats        Show compilation statistics" << std::endl;
 	std::cerr << "\nOptions for benchmark:" << std::endl;
 	std::cerr << "  -n <count>     Number of iterations (default: 100)" << std::endl;
 	std::cerr << "\nOptions for test:" << std::endl;
@@ -403,7 +404,7 @@ int main(int argc, char *argv[]) {
 		return runTestFragmentsSubset(testFiles, outputFile, verboseLevel);
 	}
 
-	// Handle shortcut: maxon <file.maxon|.test> [--track-allocs]
+	// Handle shortcut: maxon <file.maxon|.test> [--track-allocs] [--stats]
 	// Only applies when the first argument is NOT a known command
 	if (command != "compile" && command != "self-test" && command != "extract-specs" &&
 		command != "regen-fragments" && command != "generate-docs" && command != "test-fragments" &&
@@ -411,12 +412,15 @@ int main(int argc, char *argv[]) {
 		command != "validate-specs") {
 		std::string inputFile;
 		bool trackAllocs = false;
+		bool showStats = false;
 		bool isValidShortcut = false;
 
 		for (int i = 1; i < argc; ++i) {
 			std::string arg = argv[i];
 			if (arg == "--track-allocs") {
 				trackAllocs = true;
+			} else if (arg == "--stats") {
+				showStats = true;
 			} else if (!arg.empty() && arg[0] != '-') {
 				size_t len = arg.length();
 				bool isMaxonFile = (len >= 6 && arg.substr(len - 6) == ".maxon");
@@ -429,7 +433,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		if (isValidShortcut && !inputFile.empty()) {
-			return compileAndRunTemporary(inputFile, trackAllocs);
+			return compileAndRunTemporary(inputFile, trackAllocs, showStats);
 		}
 	}
 
@@ -464,6 +468,8 @@ int main(int argc, char *argv[]) {
 			options.profile = true;
 		} else if (arg == "--track-allocs") {
 			options.trackAllocs = true;
+		} else if (arg == "--stats") {
+			options.showStats = true;
 		} else if (arg == "-vvv") {
 			options.verboseLevel = 3;
 		} else if (arg == "-vv") {

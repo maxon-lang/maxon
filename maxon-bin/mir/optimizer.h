@@ -8,6 +8,9 @@
 #include <unordered_map>
 #include <unordered_set>
 
+// Forward declaration for stats collection
+class CompilerStats;
+
 namespace mir {
 
 //==============================================================================
@@ -33,8 +36,16 @@ class OptimizationPass {
 	// Returns true if any changes were made
 	virtual bool run(MIRModule &module) = 0;
 
+	// Get pass-specific statistics (count, label)
+	// Override in derived classes to report meaningful stats
+	virtual std::pair<int, const char *> getPassSpecificStats() const { return {0, nullptr}; }
+
+	// Reset pass-specific statistics (called before each run in stats mode)
+	virtual void resetStats() { lastRunStats_ = 0; }
+
   protected:
 	int verboseLevel_ = 0;
+	int lastRunStats_ = 0; // Pass-specific stat counter for last run
 
 	// Logging helpers
 	void logDetail(const std::string &msg) const {
@@ -65,6 +76,7 @@ class ConstantFoldingPass : public OptimizationPass {
   public:
 	const char *getName() const override { return "constant-folding"; }
 	bool run(MIRModule &module) override;
+	std::pair<int, const char *> getPassSpecificStats() const override { return {lastRunStats_, "folded"}; }
 
   private:
 	bool runOnFunction(MIRFunction &func);
@@ -109,6 +121,7 @@ class ConstantPropagationPass : public OptimizationPass {
   public:
 	const char *getName() const override { return "constant-propagation"; }
 	bool run(MIRModule &module) override;
+	std::pair<int, const char *> getPassSpecificStats() const override { return {lastRunStats_, "propagated"}; }
 
   private:
 	bool runOnFunction(MIRFunction &func);
@@ -196,6 +209,7 @@ class Mem2RegPass : public OptimizationPass {
   public:
 	const char *getName() const override { return "mem2reg"; }
 	bool run(MIRModule &module) override;
+	std::pair<int, const char *> getPassSpecificStats() const override { return {lastRunStats_, "allocas promoted"}; }
 
   private:
 	bool runOnFunction(MIRFunction &func);
@@ -288,6 +302,7 @@ class DeadCodeEliminationPass : public OptimizationPass {
   public:
 	const char *getName() const override { return "dead-code-elimination"; }
 	bool run(MIRModule &module) override;
+	std::pair<int, const char *> getPassSpecificStats() const override { return {lastRunStats_, "dead instr"}; }
 
   private:
 	bool runOnFunction(MIRFunction &func);
@@ -312,6 +327,7 @@ class UnreachableBlockEliminationPass : public OptimizationPass {
   public:
 	const char *getName() const override { return "unreachable-block-elimination"; }
 	bool run(MIRModule &module) override;
+	std::pair<int, const char *> getPassSpecificStats() const override { return {lastRunStats_, "blocks removed"}; }
 
   private:
 	bool runOnFunction(MIRFunction &func);
@@ -337,6 +353,7 @@ class StrengthReductionPass : public OptimizationPass {
   public:
 	const char *getName() const override { return "strength-reduction"; }
 	bool run(MIRModule &module) override;
+	std::pair<int, const char *> getPassSpecificStats() const override { return {lastRunStats_, "reduced"}; }
 
   private:
 	bool runOnFunction(MIRFunction &func);
@@ -372,6 +389,7 @@ class AlgebraicSimplificationPass : public OptimizationPass {
   public:
 	const char *getName() const override { return "algebraic-simplification"; }
 	bool run(MIRModule &module) override;
+	std::pair<int, const char *> getPassSpecificStats() const override { return {lastRunStats_, "simplified"}; }
 
   private:
 	bool runOnFunction(MIRFunction &func);
@@ -404,6 +422,7 @@ class SimpleFunctionInliningPass : public OptimizationPass {
 
 	const char *getName() const override { return "simple-function-inlining"; }
 	bool run(MIRModule &module) override;
+	std::pair<int, const char *> getPassSpecificStats() const override { return {lastRunStats_, "inlined"}; }
 
   private:
 	size_t maxInlineInstructions;
@@ -450,6 +469,7 @@ class RedundantLoadStoreEliminationPass : public OptimizationPass {
   public:
 	const char *getName() const override { return "redundant-load-store-elimination"; }
 	bool run(MIRModule &module) override;
+	std::pair<int, const char *> getPassSpecificStats() const override { return {lastRunStats_, "eliminated"}; }
 
   private:
 	bool runOnFunction(MIRFunction &func);
@@ -478,6 +498,7 @@ class CopyPropagationPass : public OptimizationPass {
   public:
 	const char *getName() const override { return "copy-propagation"; }
 	bool run(MIRModule &module) override;
+	std::pair<int, const char *> getPassSpecificStats() const override { return {lastRunStats_, "copies propagated"}; }
 
   private:
 	bool runOnFunction(MIRFunction &func);
@@ -524,6 +545,7 @@ class PhiEliminationPass : public OptimizationPass {
   public:
 	const char *getName() const override { return "phi-elimination"; }
 	bool run(MIRModule &module) override;
+	std::pair<int, const char *> getPassSpecificStats() const override { return {lastRunStats_, "phis eliminated"}; }
 
   private:
 	bool runOnFunction(MIRFunction &func);
@@ -560,10 +582,12 @@ class MIROptimizer {
 
 	// Run all passes until no more changes are made
 	// Returns the total number of passes that made changes
-	int runAllPasses(MIRModule &module);
+	// If stats is provided, per-pass statistics are recorded
+	int runAllPasses(MIRModule &module, CompilerStats *stats = nullptr);
 
 	// Run a fixed number of iterations
-	void runPasses(MIRModule &module, int maxIterations = 10);
+	// If stats is provided, per-pass statistics are recorded
+	void runPasses(MIRModule &module, int maxIterations = 10, CompilerStats *stats = nullptr);
 
 	// Clear all passes
 	void clearPasses();

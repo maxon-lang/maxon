@@ -9,7 +9,7 @@
 #include <sstream>
 #include <string>
 
-int compileAndRunTemporary(const std::string &sourceFile, bool trackAllocs) {
+int compileAndRunTemporary(const std::string &sourceFile, bool trackAllocs, bool showStats) {
 	try {
 		std::filesystem::path tempDir = "temp";
 		std::filesystem::create_directories(tempDir);
@@ -24,6 +24,7 @@ int compileAndRunTemporary(const std::string &sourceFile, bool trackAllocs) {
 		options.emitIR = false;
 		options.compileOnly = false;
 		options.trackAllocs = trackAllocs;
+		options.showStats = showStats;
 
 		std::string executablePath = compileProgram(options);
 
