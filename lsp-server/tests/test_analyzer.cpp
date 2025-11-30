@@ -978,7 +978,7 @@ TEST_CASE("go_to_definition_struct_method", "[analyzer]") {
 	REQUIRE(location->uri != doc->uri);
 	REQUIRE(location->uri.find("string.maxon") != std::string::npos);
 
-	// toLower is defined at line 270 in string.maxon (0-indexed = 269)
+	// toLower is defined at line 267 in string.maxon (0-indexed = 266)
 	INFO("Got line: " << location->range.start.line);
-	REQUIRE(location->range.start.line == 269);
+	REQUIRE(location->range.start.line == 266);
 }

@@ -12,8 +12,6 @@
 // Access is through compiler intrinsics:
 //   __string_len(s)           - get byte length
 //   __string_byte_at(s, i)    - get byte at index
-//   __string_iter_pos(s)      - get current iteration position
-//   __string_with_iter_pos(s, pos) - create copy with new iter position
 //
 // **Heap Buffer Layout** (when capacity > 0):
 //   [refcount:i32][capacity:i32][...data bytes...]
@@ -27,6 +25,7 @@
 
 export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStringLiteral
 	_managed _ManagedString  // Compiler-managed opaque string storage
+	_iterPos int             // Current iteration position (for Iterable)
 
 	// ============================================
 	// ExpressibleByStringLiteral conformance
@@ -35,7 +34,7 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 	// Initialize string from compiler-constructed _ManagedString
 	// The compiler passes an opaque _ManagedString value
 	export function ExpressibleByStringLiteral.init(managed _ManagedString) string
-		return string{_managed: managed}
+		return string{_managed: managed, _iterPos: 0}
 	end 'init'
 
 	// ============================================
@@ -58,15 +57,14 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 	// Returns Unicode codepoints as int values
 
 	export function Iterable.hasNext() int
-		if __string_iter_pos(_managed) < __string_len(_managed) 'check'
+		if _iterPos < __string_len(_managed) 'check'
 			return 1
 		end 'check'
 		return 0
 	end 'hasNext'
 
 	export function Iterable.getCurrent() int
-		var pos = __string_iter_pos(_managed)
-		var b0 = __string_byte_at(_managed, pos) as int
+		var b0 = __string_byte_at(_managed, _iterPos) as int
 
 		// ASCII (1 byte)
 		if b0 < 128 'ascii'
@@ -75,30 +73,29 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 
 		// 2-byte sequence (110xxxxx 10xxxxxx)
 		if b0 < 224 'two_byte'
-			var b1 = __string_byte_at(_managed, pos + 1) as int
+			var b1 = __string_byte_at(_managed, _iterPos + 1) as int
 			var cp = ((b0 mod 32) * 64) + (b1 mod 64)
 			return cp
 		end 'two_byte'
 
 		// 3-byte sequence (1110xxxx 10xxxxxx 10xxxxxx)
 		if b0 < 240 'three_byte'
-			var b1 = __string_byte_at(_managed, pos + 1) as int
-			var b2 = __string_byte_at(_managed, pos + 2) as int
+			var b1 = __string_byte_at(_managed, _iterPos + 1) as int
+			var b2 = __string_byte_at(_managed, _iterPos + 2) as int
 			var cp = ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
 			return cp
 		end 'three_byte'
 
 		// 4-byte sequence (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
-		var b1 = __string_byte_at(_managed, pos + 1) as int
-		var b2 = __string_byte_at(_managed, pos + 2) as int
-		var b3 = __string_byte_at(_managed, pos + 3) as int
+		var b1 = __string_byte_at(_managed, _iterPos + 1) as int
+		var b2 = __string_byte_at(_managed, _iterPos + 2) as int
+		var b3 = __string_byte_at(_managed, _iterPos + 3) as int
 		var cp = ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
 		return cp
 	end 'getCurrent'
 
 	export function Iterable.next() string
-		var pos = __string_iter_pos(_managed)
-		var b0 = __string_byte_at(_managed, pos) as int
+		var b0 = __string_byte_at(_managed, _iterPos) as int
 		var advance = 1
 
 		if b0 >= 240 'four_byte'
@@ -114,7 +111,7 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 		end 'four_byte'
 
 		// Return copy with updated iterator position
-		return string{_managed: __string_with_iter_pos(_managed, pos + advance)}
+		return string{_managed: _managed, _iterPos: _iterPos + advance}
 	end 'next'
 
 	// ============================================
@@ -182,7 +179,7 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 
 	// concat - concatenate two strings
 	export function concat(other string) string
-		return string{_managed: __string_concat(_managed, other._managed)}
+		return string{_managed: __string_concat(_managed, other._managed), _iterPos: 0}
 	end 'concat'
 
 	// startsWith - check if string starts with prefix
@@ -268,12 +265,34 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 
 	// toLower - convert ASCII letters to lowercase
 	export function toLower() string
-		return string{_managed: __string_to_lower(_managed)}
+		var result = __string_make_unique(_managed)
+		var len = __string_len(_managed)
+		var i = 0
+		while i < len 'lower_loop'
+			var b = __string_byte_at(_managed, i) as int
+			// Check if uppercase ASCII (65-90 = 'A'-'Z')
+			if b >= 65 and b <= 90 'is_upper'
+				__string_set_byte(result, i, b + 32)
+			end 'is_upper'
+			i = i + 1
+		end 'lower_loop'
+		return string{_managed: result, _iterPos: 0}
 	end 'toLower'
 
 	// toUpper - convert ASCII letters to uppercase
 	export function toUpper() string
-		return string{_managed: __string_to_upper(_managed)}
+		var result = __string_make_unique(_managed)
+		var len = __string_len(_managed)
+		var i = 0
+		while i < len 'upper_loop'
+			var b = __string_byte_at(_managed, i) as int
+			// Check if lowercase ASCII (97-122 = 'a'-'z')
+			if b >= 97 and b <= 122 'is_lower'
+				__string_set_byte(result, i, b - 32)
+			end 'is_lower'
+			i = i + 1
+		end 'upper_loop'
+		return string{_managed: result, _iterPos: 0}
 	end 'toUpper'
 
 	// trimWhitespace - remove leading and trailing whitespace
@@ -736,7 +755,7 @@ export struct substring is Hashable, Equatable, Iterable with int
 	// toString - create an owned copy as a string
 	// Use this when you need a mutable string or want to release parent reference
 	export function toString() string
-		return string{_managed: __substring_to_string(self)}
+		return string{_managed: __substring_to_string(self), _iterPos: 0}
 	end 'toString'
 
 	// ============================================

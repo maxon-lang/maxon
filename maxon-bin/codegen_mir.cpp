@@ -295,7 +295,7 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 			}
 			managedStringType = module->getOrCreateStructType(
 				"__ManagedStringData",
-				{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+				{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
 			structTypes["__ManagedStringData"] = managedStringType;
 		}
 		mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];

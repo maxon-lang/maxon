@@ -375,14 +375,6 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				analyzeExpression(callExpr->args[0].get());
 				return "int";
 			}
-			if (name == "__string_buffer") {
-				if (callExpr->args.size() != 1) {
-					addError("__string_buffer requires exactly 1 argument", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				return "ptr"; // Returns raw pointer to buffer bytes
-			}
 			if (name == "__string_byte_at") {
 				if (callExpr->args.size() != 2) {
 					addError("__string_byte_at requires exactly 2 arguments", expr->line, expr->column);
@@ -391,23 +383,6 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				analyzeExpression(callExpr->args[0].get());
 				analyzeExpression(callExpr->args[1].get());
 				return "byte";
-			}
-			if (name == "__string_iter_pos") {
-				if (callExpr->args.size() != 1) {
-					addError("__string_iter_pos requires exactly 1 argument", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				return "int";
-			}
-			if (name == "__string_with_iter_pos") {
-				if (callExpr->args.size() != 2) {
-					addError("__string_with_iter_pos requires exactly 2 arguments", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				analyzeExpression(callExpr->args[1].get());
-				return "_ManagedString";
 			}
 			if (name == "__string_slice") {
 				if (callExpr->args.size() != 3) {
@@ -426,14 +401,6 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				}
 				analyzeExpression(callExpr->args[0].get());
 				analyzeExpression(callExpr->args[1].get());
-				return "_ManagedString";
-			}
-			if (name == "__string_to_lower" || name == "__string_to_upper") {
-				if (callExpr->args.size() != 1) {
-					addError(name + " requires exactly 1 argument", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
 				return "_ManagedString";
 			}
 			// __string_make_unique(managed) - ensure exclusive ownership for COW
