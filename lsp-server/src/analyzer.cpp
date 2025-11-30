@@ -103,6 +103,7 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
 			semInfo.variables = semanticAnalyzer.getAllVariables();
 			semInfo.functions = semanticAnalyzer.getFunctions();
 			semInfo.structs = semanticAnalyzer.getStructs();
+			semInfo.interfaces = semanticAnalyzer.getInterfaces();
 
 			// Convert semantic errors to LSP diagnostics
 			for (const auto &error : semanticErrors) {
@@ -605,13 +606,171 @@ std::optional<lsp::Location> Analyzer::getDefinition(std::shared_ptr<Document> d
 		return std::nullopt;
 	}
 
-	// Try to find the first occurrence of this identifier being declared
+	// Check if this is a member access (e.g., "field" in "myStruct.field")
+	std::string textBeforeCursor = getTextBeforePosition(doc->text, pos);
+	size_t lastDot = textBeforeCursor.find_last_of('.');
+
+	if (lastDot != std::string::npos) {
+		// Check if the word we're on is right after the dot
+		std::string afterDot = textBeforeCursor.substr(lastDot + 1);
+
+		if (word.find(afterDot) == 0 || afterDot.find(word) == 0) {
+			// Extract the object name before the dot
+			size_t start = lastDot;
+			while (start > 0 && (std::isalnum(textBeforeCursor[start - 1]) ||
+								 textBeforeCursor[start - 1] == '_')) {
+				start--;
+			}
+			std::string objectName = textBeforeCursor.substr(start, lastDot - start);
+
+			// Look up the object in semantic cache to get its type
+			auto cacheIt = semanticCache.find(doc->uri);
+			if (cacheIt != semanticCache.end()) {
+				const SemanticInfo &semInfo = cacheIt->second;
+				auto varIt = semInfo.variables.find(objectName);
+
+				if (varIt != semInfo.variables.end()) {
+					const std::string &typeName = varIt->second.type;
+
+					// Check if it's a struct type and find the field
+					auto structIt = semInfo.structs.find(typeName);
+					if (structIt != semInfo.structs.end()) {
+						for (const auto &field : structIt->second.fields) {
+							if (field.name == word) {
+								// Navigate to field definition within the struct
+								lsp::Location loc;
+								loc.uri = doc->uri;
+								loc.range.start.line = field.line > 0 ? field.line - 1 : 0;
+								loc.range.start.character = field.column > 0 ? field.column - 1 : 0;
+								loc.range.end.line = loc.range.start.line;
+								loc.range.end.character = loc.range.start.character + field.name.length();
+								return loc;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Not a member access - check cached semantic info
+	auto cacheIt = semanticCache.find(doc->uri);
+	if (cacheIt != semanticCache.end()) {
+		const SemanticInfo &semInfo = cacheIt->second;
+
+		// Check for variable
+		auto varIt = semInfo.variables.find(word);
+		if (varIt != semInfo.variables.end()) {
+			const VariableInfo &varInfo = varIt->second;
+			lsp::Location loc;
+			loc.uri = doc->uri;
+			loc.range.start.line = varInfo.line > 0 ? varInfo.line - 1 : 0;
+			loc.range.start.character = varInfo.column > 0 ? varInfo.column - 1 : 0;
+			loc.range.end.line = loc.range.start.line;
+			loc.range.end.character = loc.range.start.character + varInfo.name.length();
+			return loc;
+		}
+
+		// Check for function
+		auto funcIt = semInfo.functions.find(word);
+		if (funcIt != semInfo.functions.end()) {
+			const FunctionInfo &funcInfo = funcIt->second;
+
+			// If this function implements an interface, navigate to the interface declaration
+			if (!funcInfo.implementsInterface.empty()) {
+				auto ifaceIt = semInfo.interfaces.find(funcInfo.implementsInterface);
+				if (ifaceIt != semInfo.interfaces.end()) {
+					const InterfaceInfo &ifaceInfo = ifaceIt->second;
+					lsp::Location loc;
+					loc.uri = doc->uri;
+					loc.range.start.line = ifaceInfo.line > 0 ? ifaceInfo.line - 1 : 0;
+					loc.range.start.character = ifaceInfo.column > 0 ? ifaceInfo.column - 1 : 0;
+					loc.range.end.line = loc.range.start.line;
+					loc.range.end.character = loc.range.start.character + ifaceInfo.name.length();
+					return loc;
+				}
+			}
+
+			// Otherwise navigate to the function definition
+			lsp::Location loc;
+			loc.uri = doc->uri;
+			loc.range.start.line = funcInfo.line > 0 ? funcInfo.line - 1 : 0;
+			loc.range.start.character = funcInfo.column > 0 ? funcInfo.column - 1 : 0;
+			loc.range.end.line = loc.range.start.line;
+			loc.range.end.character = loc.range.start.character + word.length();
+			return loc;
+		}
+
+		// Check for struct type
+		auto structIt = semInfo.structs.find(word);
+		if (structIt != semInfo.structs.end()) {
+			const StructInfo &structInfo = structIt->second;
+			lsp::Location loc;
+			loc.uri = doc->uri;
+			loc.range.start.line = structInfo.line > 0 ? structInfo.line - 1 : 0;
+			loc.range.start.character = structInfo.column > 0 ? structInfo.column - 1 : 0;
+			loc.range.end.line = loc.range.start.line;
+			loc.range.end.character = loc.range.start.character + structInfo.name.length();
+			return loc;
+		}
+
+		// Check for interface type
+		auto ifaceIt = semInfo.interfaces.find(word);
+		if (ifaceIt != semInfo.interfaces.end()) {
+			const InterfaceInfo &ifaceInfo = ifaceIt->second;
+			lsp::Location loc;
+			loc.uri = doc->uri;
+			loc.range.start.line = ifaceInfo.line > 0 ? ifaceInfo.line - 1 : 0;
+			loc.range.start.character = ifaceInfo.column > 0 ? ifaceInfo.column - 1 : 0;
+			loc.range.end.line = loc.range.start.line;
+			loc.range.end.character = loc.range.start.character + ifaceInfo.name.length();
+			return loc;
+		}
+	}
+
+	// Check stdlib functions
+	auto stdlibFuncIt = stdlibFunctions.find(word);
+	if (stdlibFuncIt != stdlibFunctions.end()) {
+		const StdlibFunction &func = stdlibFuncIt->second;
+		if (!func.filePath.empty() && func.line > 0) {
+			lsp::Location loc;
+			// Convert file path to URI format
+			loc.uri = "file:///" + func.filePath;
+			// Replace backslashes with forward slashes for URI
+			std::replace(loc.uri.begin(), loc.uri.end(), '\\', '/');
+			loc.range.start.line = func.line - 1;
+			loc.range.start.character = func.column > 0 ? func.column - 1 : 0;
+			loc.range.end.line = loc.range.start.line;
+			loc.range.end.character = loc.range.start.character + func.name.length();
+			return loc;
+		}
+	}
+
+	// Check stdlib structs
+	auto stdlibStructIt = stdlibStructs.find(word);
+	if (stdlibStructIt != stdlibStructs.end()) {
+		const StdlibStruct &structInfo = stdlibStructIt->second;
+		if (!structInfo.filePath.empty() && structInfo.line > 0) {
+			lsp::Location loc;
+			// Convert file path to URI format
+			loc.uri = "file:///" + structInfo.filePath;
+			// Replace backslashes with forward slashes for URI
+			std::replace(loc.uri.begin(), loc.uri.end(), '\\', '/');
+			loc.range.start.line = structInfo.line - 1;
+			loc.range.start.character = structInfo.column > 0 ? structInfo.column - 1 : 0;
+			loc.range.end.line = loc.range.start.line;
+			loc.range.end.character = loc.range.start.character + structInfo.name.length();
+			return loc;
+		}
+	}
+
+	// Fallback: tokenize and search for declaration (for cases not in semantic cache)
 	try {
 		std::vector<Token> tokens = tokenize(doc->text);
 
-		// Look for "var <word>" or "function <word>"
+		// Look for "var <word>", "let <word>", or "function <word>"
 		for (size_t i = 0; i < tokens.size() - 1; i++) {
-			if ((tokens[i].value == "var" || tokens[i].value == "function") &&
+			if ((tokens[i].value == "var" || tokens[i].value == "let" || tokens[i].value == "function") &&
 				tokens[i + 1].type == TokenType::IDENTIFIER &&
 				tokens[i + 1].value == word) {
 
@@ -817,6 +976,9 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 				stdlibFunc.moduleName = moduleName;
 				stdlibFunc.returnType = func->returnType;
 				stdlibFunc.parameters = func->parameters;
+				stdlibFunc.filePath = filePath;
+				stdlibFunc.line = func->line;
+				stdlibFunc.column = func->column;
 
 				// Build signature
 				std::string sig = "function " + func->name + "(";
@@ -910,6 +1072,9 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 					stdlibStruct.fields.push_back(StructFieldInfo(field.name, field.type, field.line, field.column));
 				}
 				stdlibStruct.conformsTo = structDef->conformsTo;
+				stdlibStruct.filePath = filePath;
+				stdlibStruct.line = structDef->line;
+				stdlibStruct.column = structDef->column;
 				stdlibStructs[structDef->name] = stdlibStruct;
 			}
 		}

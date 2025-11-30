@@ -21,6 +21,9 @@ struct StdlibFunction {
 	std::string moduleName;					   // Module name (e.g., "integer")
 	std::string returnType;					   // Return type
 	std::vector<FunctionParameter> parameters; // Function parameters
+	std::string filePath;					   // Absolute file path for go-to-definition
+	int line;								   // 1-based line number
+	int column;								   // 1-based column number
 };
 
 // Information about a stdlib struct method (for semantic analysis registration)
@@ -36,6 +39,9 @@ struct StdlibStruct {
 	std::string name;					 // Struct name
 	std::vector<StructFieldInfo> fields; // Fields of the struct
 	std::vector<std::string> conformsTo; // Interfaces this struct conforms to
+	std::string filePath;				 // Absolute file path for go-to-definition
+	int line;							 // 1-based line number
+	int column;							 // 1-based column number
 };
 
 // Information about a type method or property
@@ -103,6 +109,7 @@ class Analyzer {
 		std::map<std::string, VariableInfo> variables;
 		std::map<std::string, FunctionInfo> functions;
 		std::map<std::string, StructInfo> structs;
+		std::map<std::string, InterfaceInfo> interfaces;
 	};
 	std::map<std::string, SemanticInfo> semanticCache;
 
