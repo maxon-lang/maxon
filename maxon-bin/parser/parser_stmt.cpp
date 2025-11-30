@@ -90,11 +90,40 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
 		// Single-line if: parse one statement after 'then'
 		thenBody.push_back(parseStatement());
 
-		// Check for single-line else (no block id)
+		// Check for else
 		if (checkKeyword("else")) {
 			advance(); // consume 'else'
-			// Single-line else: else <statement>
-			elseBody.push_back(parseStatement());
+
+			// Check if this is multi-line else (has block identifier) or single-line else
+			if (check(TokenType::BLOCK_ID)) {
+				// Multi-line else: else 'blockid' ... end 'blockid'
+				Token elseBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else'");
+				blockId = elseBlockIdToken.value;
+
+				// Check if statement follows on same line (single-line else with block id)
+				// or if statements are on following lines (multi-line else)
+				Token nextToken = currentToken();
+				if (nextToken.line == elseBlockIdToken.line && !checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+					// Single-line else: else 'id' <statement>
+					elseBody.push_back(parseStatement());
+				} else {
+					// Multi-line else: else 'id' <newline> <statements> end 'id'
+					while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+						elseBody.push_back(parseStatement());
+					}
+
+					expectKeywordAdvance("end", "Expected 'end' to close else block");
+					Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end'");
+					if (endBlockIdToken.value != blockId) {
+						throw std::runtime_error("Block identifier mismatch in else block" +
+												 std::string("\n  Expected: '") + blockId + "'" +
+												 "\n  Found: '" + endBlockIdToken.value + "'");
+					}
+				}
+			} else {
+				// Single-line else: else <statement>
+				elseBody.push_back(parseStatement());
+			}
 		}
 
 		return std::make_unique<IfStmtAST>(std::move(condition),
@@ -111,7 +140,9 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
 	}
 
 	// Parse optional else
+	bool singleLineElse = false;
 	if (checkKeyword("else")) {
+		Token elseToken = currentToken();
 		match(TokenType::KEYWORD); // consume "else"
 		// Require same block identifier after else
 		Token elseBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else' (must match the 'if' block identifier)");
@@ -124,22 +155,38 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
 									 "\n  Note: The 'else' block identifier must match the 'if' block identifier");
 		}
 
-		while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-			elseBody.push_back(parseStatement());
+		// Check if this is a single-line else (statement on same line as else 'id')
+		// or multi-line else (statements on following lines, ended with 'end')
+		if (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+			// Check if next token is on the same line as the else block id
+			Token nextToken = currentToken();
+			if (nextToken.line == elseBlockIdToken.line) {
+				// Single-line else: else 'id' <statement>
+				// Parse one statement and we're done (no 'end' needed)
+				singleLineElse = true;
+				elseBody.push_back(parseStatement());
+			} else {
+				// Multi-line else: else 'id' <newline> <statements> end 'id'
+				while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+					elseBody.push_back(parseStatement());
+				}
+			}
 		}
 	}
 
-	expectKeywordAdvance("end", "Expected 'end' to close if block");
+	if (!singleLineElse) {
+		expectKeywordAdvance("end", "Expected 'end' to close if block");
 
-	// Require matching block identifier after end
-	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
-	if (endBlockIdToken.value != blockId) {
-		throw std::runtime_error("Block identifier mismatch in if statement" +
-								 std::string("\n  Expected: '") + blockId + "'" +
-								 "\n  Found: '" + endBlockIdToken.value + "'" +
-								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
-								 ", column " + std::to_string(endBlockIdToken.column) +
-								 "\n  Note: The 'end' block identifier must match the opening 'if' block identifier");
+		// Require matching block identifier after end
+		Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
+		if (endBlockIdToken.value != blockId) {
+			throw std::runtime_error("Block identifier mismatch in if statement" +
+									 std::string("\n  Expected: '") + blockId + "'" +
+									 "\n  Found: '" + endBlockIdToken.value + "'" +
+									 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
+									 ", column " + std::to_string(endBlockIdToken.column) +
+									 "\n  Note: The 'end' block identifier must match the opening 'if' block identifier");
+		}
 	}
 
 	return std::make_unique<IfStmtAST>(std::move(condition),

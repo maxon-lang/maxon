@@ -55,6 +55,11 @@ std::vector<TextEdit> Formatter::formatDocument(
 			currentIndentLevel = std::max(0, currentIndentLevel - 1);
 		}
 
+		// Decrease indent for 'else' statements (should be at same level as 'if')
+		if (shouldDecreaseIndentForElse(trimmedLine)) {
+			currentIndentLevel = std::max(0, currentIndentLevel - 1);
+		}
+
 		// Normalize the line with correct indentation
 		std::string indent = getIndent(currentIndentLevel, insertSpaces, tabSize);
 		std::string normalizedLine = indent + trimmedLine;
@@ -135,6 +140,66 @@ bool Formatter::shouldIncreaseIndentForKeyword(const std::string &line) {
 	std::string trimmed = line;
 	trimmed.erase(0, trimmed.find_first_not_of(" \t"));
 
+	// Check for single-line if with 'then' but NO block identifier
+	// e.g., "if x > 5 then return 1" is complete on one line (no else/end needed)
+	// But "if x > 5 'check' then return 1" has a block identifier, so else/end may follow
+	if (trimmed.find("if ") == 0 && trimmed.find(" then ") != std::string::npos) {
+		// Check if there's a block identifier (single-quoted string before 'then')
+		size_t thenPos = trimmed.find(" then ");
+		bool hasBlockId = false;
+		for (size_t i = 3; i < thenPos; i++) {
+			if (trimmed[i] == '\'') {
+				hasBlockId = true;
+				break;
+			}
+		}
+		// If no block identifier, check for pattern: if ... then ... else 'id' at end
+		// This means multi-line else follows
+		if (!hasBlockId) {
+			// Check if line ends with else 'identifier'
+			// Pattern: "if ... then ... else 'id'"
+			if (endsWithElseBlockId(trimmed)) {
+				return true; // Multi-line else block follows
+			}
+			return false;
+		}
+		// Has block identifier with then - the if body is on this line, so don't increase indent
+		// But else/end may follow, which will be handled by decrease/increase for else
+		return false;
+	}
+
+	// Check for single-line else without block identifier - does NOT increase indent
+	// e.g., "else return 0" is complete on one line
+	if (trimmed.find("else ") == 0) {
+		// Check if there's a block identifier (starts with ')
+		size_t afterElse = 5; // length of "else "
+		while (afterElse < trimmed.length() && std::isspace(trimmed[afterElse])) {
+			afterElse++;
+		}
+		// If what follows is NOT a block identifier ('), this is single-line else
+		if (afterElse < trimmed.length() && trimmed[afterElse] != '\'') {
+			return false;
+		}
+		// Has block identifier - check if there's a statement after it
+		// e.g., "else 'check' return 0" is single-line else with block id
+		if (afterElse < trimmed.length() && trimmed[afterElse] == '\'') {
+			// Find end of block identifier
+			size_t blockIdStart = afterElse;
+			size_t blockIdEnd = trimmed.find('\'', blockIdStart + 1);
+			if (blockIdEnd != std::string::npos) {
+				// Check if there's anything after the block identifier
+				size_t afterBlockId = blockIdEnd + 1;
+				while (afterBlockId < trimmed.length() && std::isspace(trimmed[afterBlockId])) {
+					afterBlockId++;
+				}
+				// If there's more content after the block id, this is single-line else
+				if (afterBlockId < trimmed.length()) {
+					return false;
+				}
+			}
+		}
+	}
+
 	// Check if line starts with block-opening keywords (or export + keyword)
 	const char *openingKeywords[] = {"function", "if", "else", "while", "for", "struct", "export function", "export struct"};
 	for (const auto &keyword : openingKeywords) {
@@ -176,6 +241,66 @@ bool Formatter::shouldDecreaseIndentForEnd(const std::string &line) {
 
 	// Note: Closing braces for struct literals are handled separately in formatDocument
 	return false;
+}
+
+bool Formatter::shouldDecreaseIndentForElse(const std::string &line) {
+	// Remove leading whitespace for checking
+	std::string trimmed = line;
+	trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+
+	// Check if line starts with 'else'
+	if (trimmed.find("else") == 0) {
+		size_t keywordLen = 4;
+		if (keywordLen < trimmed.length()) {
+			char nextChar = trimmed[keywordLen];
+			if (!std::isalnum(nextChar) && nextChar != '_') {
+				// Check if this is a multi-line else (has block identifier)
+				// Skip whitespace after 'else'
+				size_t pos = keywordLen;
+				while (pos < trimmed.length() && std::isspace(trimmed[pos])) {
+					pos++;
+				}
+				// If what follows is a block identifier ('), this is multi-line else
+				if (pos < trimmed.length() && trimmed[pos] == '\'') {
+					return true;
+				}
+				// Single-line else (e.g., "else return 0") - don't decrease indent
+				return false;
+			}
+		} else if (keywordLen == trimmed.length()) {
+			// Just "else" alone - treat as multi-line
+			return true;
+		}
+	}
+
+	return false;
+}
+
+bool Formatter::endsWithElseBlockId(const std::string &line) {
+	// Check if line ends with pattern: else 'identifier'
+	// This indicates a single-line if with multi-line else
+
+	// Look for " else '" near the end of the line
+	size_t elsePos = line.rfind(" else '");
+	if (elsePos == std::string::npos) {
+		return false;
+	}
+
+	// Find the closing quote
+	size_t openQuotePos = elsePos + 7; // position after " else '"
+	size_t closeQuotePos = line.find('\'', openQuotePos);
+	if (closeQuotePos == std::string::npos) {
+		return false;
+	}
+
+	// Check if there's anything meaningful after the closing quote (just whitespace is ok)
+	for (size_t i = closeQuotePos + 1; i < line.length(); i++) {
+		if (!std::isspace(line[i])) {
+			return false; // There's something after the block id
+		}
+	}
+
+	return true;
 }
 
 std::string Formatter::normalizeLine(const std::string &line, bool insertSpaces, int tabSize) {

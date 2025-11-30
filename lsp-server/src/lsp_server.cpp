@@ -713,6 +713,7 @@ json LspServer::handleSemanticTokensFull(const json &params) {
 	bool lastWasBlockOpener = false; // Track if previous token opens/closes a block
 	bool lastWasEnd = false;
 	bool lastWasBreakOrContinue = false;
+	bool lastWasElse = false; // Track if previous token was 'else'
 
 	for (size_t i = 0; i < tokens.size(); ++i) {
 		const Token &token = tokens[i];
@@ -735,22 +736,35 @@ json LspServer::handleSemanticTokensFull(const json &params) {
 				currentDepth++;
 				lastWasBlockOpener = false;
 				lastWasEnd = false;
+				lastWasElse = false;
 			} else if (token.value == "if" || token.value == "while" || token.value == "for") {
 				// These blocks have explicit block IDs
 				// Push current depth (this is the depth of the block identifier itself)
 				depthStack.push_back(currentDepth);
 				lastWasBlockOpener = true;
 				lastWasEnd = false;
+				lastWasElse = false;
 				// Note: We increment currentDepth AFTER processing the block ID
+			} else if (token.value == "else") {
+				// else continues the same block - use same depth as the if
+				// Don't push to stack since we're not starting a new nesting level
+				lastWasBlockOpener = false;
+				lastWasEnd = false;
+				lastWasElse = true;
 			} else if (token.value == "end") {
 				// Closing a block - the BLOCK_ID should be at the same depth as when it opened
 				// So we set lastWasEnd but don't pop the stack yet
 				lastWasBlockOpener = false;
 				lastWasEnd = true;
+				lastWasElse = false;
 				// Note: We pop the stack AFTER processing the closing block ID
 			} else if (token.value == "break" || token.value == "continue") {
 				// Set flag to handle the following BLOCK_ID as a target label
 				lastWasBreakOrContinue = true;
+			} else {
+				// Any other keyword (return, var, let, etc.) - reset else flag
+				// This handles single-line else like "else return 1"
+				lastWasElse = false;
 			}
 			// Don't reset lastWasBlockOpener/lastWasEnd here - wait for BLOCK_ID
 		}
@@ -763,6 +777,17 @@ json LspServer::handleSemanticTokensFull(const json &params) {
 				if (it != blockIdDepths.end()) {
 					addToken(token.line, token.column, token.value.length() + 2, it->second);
 				}
+			} else if (lastWasElse) {
+				// else block identifier - use the depth of the matching if block
+				auto it = blockIdDepths.find(token.value);
+				if (it != blockIdDepths.end()) {
+					addToken(token.line, token.column, token.value.length() + 2, it->second);
+				} else {
+					// Fallback: use current depth - 1 (one level up from inside the if body)
+					int depth = currentDepth > 0 ? currentDepth - 1 : 0;
+					addToken(token.line, token.column, token.value.length() + 2, depth);
+				}
+				// Don't increment currentDepth - else continues at the same level
 			} else if (lastWasBlockOpener) {
 				// Opening block identifier - use current depth
 				addToken(token.line, token.column, token.value.length() + 2, currentDepth);
@@ -788,6 +813,7 @@ json LspServer::handleSemanticTokensFull(const json &params) {
 			lastWasBlockOpener = false;
 			lastWasEnd = false;
 			lastWasBreakOrContinue = false;
+			lastWasElse = false;
 		}
 	}
 

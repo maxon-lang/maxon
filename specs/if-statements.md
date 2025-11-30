@@ -21,34 +21,39 @@ If statements provide conditional execution in Maxon.
 
 **Single-line if:**
 ```
-if <condition> 'identifier' then <statement>
+if <condition> then <statement>
 ```
 
-**Single-line if-else:**
+**Single-line if-else (all on one line):**
 ```
-if <condition> 'identifier' then <statement>
-else <statement>
+if <condition> then <statement> else <statement>
 ```
 
-**Multi-line:**
+**Single-line if with multi-line else:**
+```
+if <condition> then <statement> else 'identifier'
+    <statements>
+end 'identifier'
+```
+
+**Multi-line if:**
 ```
 if <condition> 'identifier'
     <statements>
 end 'identifier'
 ```
 
-**Multi-line with else:**
+**Multi-line if with single-line else:**
 ```
 if <condition> 'identifier'
     <statements>
-else 'identifier'
-    <statements>
-end 'identifier'
+else 'identifier' <statement>
 ```
 
-**Mixed single-line if with multi-line else:**
+**Multi-line if with multi-line else:**
 ```
-if <condition> 'identifier' then <statement>
+if <condition> 'identifier'
+    <statements>
 else 'identifier'
     <statements>
 end 'identifier'
@@ -68,14 +73,13 @@ Execute code conditionally based on a boolean expression.
 **Single-Line Syntax:**
 
 ```maxon
-if <condition> 'identifier' then <statement>
+if <condition> then <statement>
 ```
 
 **Single-Line If-Else:**
 
 ```maxon
-if <condition> 'identifier' then <statement>
-else <statement>
+if <condition> then <statement> else <statement>
 ```
 
 **Multi-Line Syntax:**
@@ -107,8 +111,7 @@ end 'main'
 ```maxon
 function main() int
     var x = 3
-    if x > 5 then return 1
-    else return 0
+    if x > 5 then return 1 else return 0
 end 'main'
 ```
 ```exitcode
@@ -134,13 +137,12 @@ end 'main'
 
 
 **Notes:**
-- Single-line if requires `then` keyword before the statement
-- Single-line else does NOT use `then`, just `else <statement>`
-- Multi-line if requires block identifier matching at all keywords
+- Single-line if/else uses `then` keyword
+- Multi-line if/else uses block identifier (no `then` on `if` line)
+- The if and else can independently be single-line or multi-line
 - Block identifier must be a string literal
 - Conditions can be any boolean expression
 - Else clause is optional
-- Can mix single-line if with multi-line else
 
 ## Tests
 
@@ -208,10 +210,35 @@ end 'main'
 ```maxon
 function main() int
     var x = 3
-    if x > 5 then return 1
-    else return 0
+    if x > 5 then return 1 else return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: if-statements.single-if-multi-else -->
+```maxon
+function main() int
+    var x = 3
+    if x > 5 then return 1 else 'check'
+        return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: if-statements.multi-if-single-else -->
+```maxon
+function main() int
+    var x = 10
+    if x > 5 'check'
+        return 1
+    else 'check' return 0
+end 'main'
+```
+```exitcode
+1
 ```

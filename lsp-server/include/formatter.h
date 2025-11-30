@@ -37,6 +37,8 @@ class Formatter {
 	int calculateIndentLevel(const std::string &line);
 	bool shouldIncreaseIndentForKeyword(const std::string &line);
 	bool shouldDecreaseIndentForEnd(const std::string &line);
+	bool shouldDecreaseIndentForElse(const std::string &line);
+	bool endsWithElseBlockId(const std::string &line);
 	std::string normalizeLine(const std::string &line, bool insertSpaces, int tabSize);
 	std::string normalizeEncoding(const std::string &source);
 	std::vector<std::string> splitLines(const std::string &source);

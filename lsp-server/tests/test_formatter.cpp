@@ -497,3 +497,314 @@ TEST_CASE("format_multiple_struct_literals_in_function", "[formatter]") {
 	REQUIRE(result.find("\tvar b = Point{") != std::string::npos);
 	REQUIRE(result.find("\treturn 0") != std::string::npos);
 }
+
+// ============================================
+// If/Else formatting tests
+// ============================================
+
+TEST_CASE("format_single_line_if_with_then", "[formatter]") {
+	Formatter formatter;
+
+	// Single-line if with then keyword (no block identifier needed)
+	std::string source =
+		"function main() int\n"
+		"var x = 10\n"
+		"if x > 5 then return 1\n"
+		"return 0\n"
+		"end 'main'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Single-line if with then:\n"
+			  << result << std::endl;
+
+	// All statements inside function should be at level 1
+	REQUIRE(result.find("\tvar x = 10") != std::string::npos);
+	REQUIRE(result.find("\tif x > 5 then return 1") != std::string::npos);
+	REQUIRE(result.find("\treturn 0") != std::string::npos);
+}
+
+TEST_CASE("format_single_line_if_else_with_then", "[formatter]") {
+	Formatter formatter;
+
+	// Single-line if-else - must be entirely on one line
+	std::string source =
+		"function main() int\n"
+		"var x = 3\n"
+		"if x > 5 then return 1 else return 0\n"
+		"end 'main'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Single-line if-else with then:\n"
+			  << result << std::endl;
+
+	// All statements should be at level 1
+	REQUIRE(result.find("\tvar x = 3") != std::string::npos);
+	REQUIRE(result.find("\tif x > 5 then return 1 else return 0") != std::string::npos);
+}
+
+TEST_CASE("format_multiline_if_with_block_id", "[formatter]") {
+	Formatter formatter;
+
+	// Multi-line if with block identifier
+	std::string source =
+		"function main() int\n"
+		"var x = 10\n"
+		"if x > 5 'check'\n"
+		"return 1\n"
+		"end 'check'\n"
+		"return 0\n"
+		"end 'main'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Multi-line if with block id:\n"
+			  << result << std::endl;
+
+	// function body at level 1
+	REQUIRE(result.find("\tvar x = 10") != std::string::npos);
+	REQUIRE(result.find("\tif x > 5 'check'") != std::string::npos);
+	// if body at level 2
+	REQUIRE(result.find("\t\treturn 1") != std::string::npos);
+	// end at level 1
+	REQUIRE(result.find("\tend 'check'") != std::string::npos);
+	// after if block, back to level 1
+	REQUIRE(result.find("\treturn 0") != std::string::npos);
+}
+
+TEST_CASE("format_multiline_if_else_with_block_id", "[formatter]") {
+	Formatter formatter;
+
+	// Multi-line if-else with block identifier
+	std::string source =
+		"function main() int\n"
+		"var x = 5\n"
+		"if x == 5 'check'\n"
+		"return 1\n"
+		"else 'check'\n"
+		"return 0\n"
+		"end 'check'\n"
+		"end 'main'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Multi-line if-else with block id:\n"
+			  << result << std::endl;
+
+	// function body at level 1
+	REQUIRE(result.find("\tvar x = 5") != std::string::npos);
+	REQUIRE(result.find("\tif x == 5 'check'") != std::string::npos);
+	// if body at level 2
+	REQUIRE(result.find("\t\treturn 1") != std::string::npos);
+	// else at level 1 (same as if)
+	REQUIRE(result.find("\telse 'check'") != std::string::npos);
+	// else body at level 2
+	REQUIRE(result.find("\t\treturn 0") != std::string::npos);
+	// end at level 1
+	REQUIRE(result.find("\tend 'check'") != std::string::npos);
+}
+
+TEST_CASE("format_nested_if_else", "[formatter]") {
+	Formatter formatter;
+
+	// Nested if-else (else-if pattern)
+	std::string source =
+		"function main() int\n"
+		"var x = 3\n"
+		"if x == 1 'check'\n"
+		"return 1\n"
+		"else 'check'\n"
+		"if x == 2 'inner'\n"
+		"return 2\n"
+		"else 'inner'\n"
+		"return 3\n"
+		"end 'inner'\n"
+		"end 'check'\n"
+		"end 'main'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Nested if-else:\n"
+			  << result << std::endl;
+
+	// Level 1: function body
+	REQUIRE(result.find("\tvar x = 3") != std::string::npos);
+	REQUIRE(result.find("\tif x == 1 'check'") != std::string::npos);
+	// Level 2: outer if body
+	REQUIRE(result.find("\t\treturn 1") != std::string::npos);
+	// Level 1: else (same level as if)
+	REQUIRE(result.find("\telse 'check'") != std::string::npos);
+	// Level 2: inner if inside else body
+	REQUIRE(result.find("\t\tif x == 2 'inner'") != std::string::npos);
+	// Level 3: inner if body
+	REQUIRE(result.find("\t\t\treturn 2") != std::string::npos);
+	// Level 2: inner else
+	REQUIRE(result.find("\t\telse 'inner'") != std::string::npos);
+	// Level 3: inner else body
+	REQUIRE(result.find("\t\t\treturn 3") != std::string::npos);
+	// Level 2: inner end
+	REQUIRE(result.find("\t\tend 'inner'") != std::string::npos);
+	// Level 1: outer end
+	REQUIRE(result.find("\tend 'check'") != std::string::npos);
+}
+
+TEST_CASE("format_if_in_while_loop", "[formatter]") {
+	Formatter formatter;
+
+	// If-else inside a while loop
+	std::string source =
+		"function main() int\n"
+		"var i = 0\n"
+		"var sum = 0\n"
+		"while i < 10 'loop'\n"
+		"if i > 5 'check'\n"
+		"sum = sum + i\n"
+		"else 'check'\n"
+		"sum = sum + 1\n"
+		"end 'check'\n"
+		"i = i + 1\n"
+		"end 'loop'\n"
+		"return sum\n"
+		"end 'main'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "If-else in while loop:\n"
+			  << result << std::endl;
+
+	// Level 1: function body
+	REQUIRE(result.find("\tvar i = 0") != std::string::npos);
+	REQUIRE(result.find("\twhile i < 10 'loop'") != std::string::npos);
+	// Level 2: while body
+	REQUIRE(result.find("\t\tif i > 5 'check'") != std::string::npos);
+	// Level 3: if body
+	REQUIRE(result.find("\t\t\tsum = sum + i") != std::string::npos);
+	// Level 2: else
+	REQUIRE(result.find("\t\telse 'check'") != std::string::npos);
+	// Level 3: else body
+	REQUIRE(result.find("\t\t\tsum = sum + 1") != std::string::npos);
+	// Level 2: end check
+	REQUIRE(result.find("\t\tend 'check'") != std::string::npos);
+	// Level 2: after if, still in while
+	REQUIRE(result.find("\t\ti = i + 1") != std::string::npos);
+	// Level 1: end loop
+	REQUIRE(result.find("\tend 'loop'") != std::string::npos);
+	// Level 1: after while
+	REQUIRE(result.find("\treturn sum") != std::string::npos);
+}
+
+TEST_CASE("format_deeply_nested_else_if_chain", "[formatter]") {
+	Formatter formatter;
+
+	// Deep else-if chain (common pattern)
+	std::string source =
+		"function grade(score int) int\n"
+		"if score >= 90 'a'\n"
+		"return 4\n"
+		"else 'a'\n"
+		"if score >= 80 'b'\n"
+		"return 3\n"
+		"else 'b'\n"
+		"if score >= 70 'c'\n"
+		"return 2\n"
+		"else 'c'\n"
+		"return 1\n"
+		"end 'c'\n"
+		"end 'b'\n"
+		"end 'a'\n"
+		"end 'grade'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Deeply nested else-if chain:\n"
+			  << result << std::endl;
+
+	// Check proper nesting levels
+	REQUIRE(result.find("function grade(score int) int") != std::string::npos);
+	REQUIRE(result.find("\tif score >= 90 'a'") != std::string::npos);
+	REQUIRE(result.find("\t\treturn 4") != std::string::npos);
+	REQUIRE(result.find("\telse 'a'") != std::string::npos);
+	REQUIRE(result.find("\t\tif score >= 80 'b'") != std::string::npos);
+	REQUIRE(result.find("\t\t\treturn 3") != std::string::npos);
+	REQUIRE(result.find("\t\telse 'b'") != std::string::npos);
+	REQUIRE(result.find("\t\t\tif score >= 70 'c'") != std::string::npos);
+	REQUIRE(result.find("\t\t\t\treturn 2") != std::string::npos);
+	REQUIRE(result.find("\t\t\telse 'c'") != std::string::npos);
+	REQUIRE(result.find("\t\t\t\treturn 1") != std::string::npos);
+	REQUIRE(result.find("\t\t\tend 'c'") != std::string::npos);
+	REQUIRE(result.find("\t\tend 'b'") != std::string::npos);
+	REQUIRE(result.find("\tend 'a'") != std::string::npos);
+	REQUIRE(result.find("end 'grade'") != std::string::npos);
+}
+
+TEST_CASE("format_multiline_if_single_line_else", "[formatter]") {
+	Formatter formatter;
+
+	// Multi-line if with single-line else (else 'id' <statement>)
+	// This is: if block has multiple lines, else has statement on same line as else 'id'
+	std::string source =
+		"function main() int\n"
+		"var x = 10\n"
+		"if x > 5 'check'\n"
+		"return 1\n"
+		"else 'check' return 0\n"
+		"end 'main'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Multi-line if, single-line else:\n"
+			  << result << std::endl;
+
+	// Level 1: function body
+	REQUIRE(result.find("\tvar x = 10") != std::string::npos);
+	REQUIRE(result.find("\tif x > 5 'check'") != std::string::npos);
+	// Level 2: if body
+	REQUIRE(result.find("\t\treturn 1") != std::string::npos);
+	// Level 1: else 'check' return 0 (single line, no indent change after)
+	REQUIRE(result.find("\telse 'check' return 0") != std::string::npos);
+}
+
+TEST_CASE("format_single_line_if_multiline_else", "[formatter]") {
+	Formatter formatter;
+
+	// Single-line if with multi-line else
+	std::string source =
+		"function main() int\n"
+		"var x = 3\n"
+		"if x > 5 then return 1 else 'fallback'\n"
+		"return 0\n"
+		"end 'fallback'\n"
+		"end 'main'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Single-line if, multi-line else:\n"
+			  << result << std::endl;
+
+	// Level 1: function body
+	REQUIRE(result.find("\tvar x = 3") != std::string::npos);
+	REQUIRE(result.find("\tif x > 5 then return 1 else 'fallback'") != std::string::npos);
+	// Level 2: else body
+	REQUIRE(result.find("\t\treturn 0") != std::string::npos);
+	// Level 1: end fallback
+	REQUIRE(result.find("\tend 'fallback'") != std::string::npos);
+}
