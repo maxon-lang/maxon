@@ -149,15 +149,15 @@ suite('Go to Definition Test Suite', () => {
 			"end 'Point'",
 			"",
 			"function test() int",
-			"    var p Point",
+			"    var p = Point{x: 0, y: 0}",
 			"    return 0",
 			"end 'test'"
 		].join('\n');
 
 		testDocument = await createTestFile('test_def_struct.maxon', content);
 
-		// Go to definition on 'Point' type in var declaration (line 6, col 10)
-		const position = new vscode.Position(6, 10);
+		// Go to definition on 'Point' type in struct literal (line 6, col 12)
+		const position = new vscode.Position(6, 12);
 		const locations = await getDefinitionLocations(testDocument, position);
 
 		assert.ok(locations.length > 0, 'Should find definition');
@@ -172,7 +172,7 @@ suite('Go to Definition Test Suite', () => {
 			"end 'Point'",
 			"",
 			"function test() int",
-			"    var p Point",
+			"    var p = Point{x: 0, y: 0}",
 			"    p.x = 10",
 			"    return p.x",
 			"end 'test'"
@@ -299,12 +299,12 @@ suite('Go to Definition Test Suite', () => {
 		const position = new vscode.Position(1, 4);
 		const locations = await getDefinitionLocations(testDocument, position);
 
-		// print is a built-in - may or may not have a file location
-		// Just verify the call doesn't crash
-		// If stdlib is loaded with file paths, we should get a location
-		if (locations.length > 0) {
-			assert.ok(locations[0].uri, 'Should have a URI');
-		}
+		// print should navigate to stdlib/sys/print.maxon
+		assert.ok(locations.length > 0, 'Should find definition for stdlib function');
+		assert.ok(locations[0].uri, 'Should have a URI');
+		console.log('Got location URI:', locations[0].uri.toString());
+		console.log('Got location fsPath:', locations[0].uri.fsPath);
+		assert.ok(locations[0].uri.fsPath.includes('print.maxon'), `Should navigate to print.maxon, got: ${locations[0].uri.fsPath}`);
 	});
 
 	test('Go to definition for function with multiple params', async function () {
@@ -320,8 +320,8 @@ suite('Go to Definition Test Suite', () => {
 
 		testDocument = await createTestFile('test_def_multi_param.maxon', content);
 
-		// Go to definition on 'b' in the return (line 1, col 17)
-		const position = new vscode.Position(1, 17);
+		// Go to definition on 'b' in the return (line 1, col 15)
+		const position = new vscode.Position(1, 15);
 		const locations = await getDefinitionLocations(testDocument, position);
 
 		assert.ok(locations.length > 0, 'Should find definition');
@@ -337,7 +337,7 @@ suite('Go to Definition Test Suite', () => {
 			"end 'Rectangle'",
 			"",
 			"function test() int",
-			"    var r Rectangle",
+			"    var r = Rectangle{width: 0, height: 0, area: 0}",
 			"    r.width = 10",
 			"    r.height = 20",
 			"    return r.area",

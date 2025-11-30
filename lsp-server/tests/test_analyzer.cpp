@@ -916,3 +916,69 @@ TEST_CASE("stdlib_string_file_sibling_method_call", "[analyzer]") {
 	// find(needle) inside contains() should implicitly resolve to self.find(needle)
 	REQUIRE_FALSE(hasFindArgCountError);
 }
+
+TEST_CASE("go_to_definition_stdlib_function", "[analyzer]") {
+	// Test that go-to-definition on a stdlib function like 'print'
+	// navigates to the stdlib file, not the current document
+
+	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
+
+	auto doc = createTestDocument(
+		"function main() int\n"
+		"    print(42)\n"
+		"    return 0\n"
+		"end 'main'");
+
+	// Analyze the document first to populate semantic cache
+	analyzer.analyze(doc);
+
+	// Go to definition on 'print' at line 1, column 4
+	lsp::Position pos{1, 4};
+	auto location = analyzer.getDefinition(doc, pos);
+
+	// Should find definition
+	REQUIRE(location.has_value());
+
+	// Should point to stdlib file, not current document
+	REQUIRE(location->uri != doc->uri);
+	REQUIRE(location->uri.find("print.maxon") != std::string::npos);
+
+	// Should point to the correct line (line 8 in print.maxon, 0-indexed = 7)
+	REQUIRE(location->range.start.line == 7);
+}
+
+TEST_CASE("go_to_definition_struct_method", "[analyzer]") {
+	// Test that go-to-definition on a struct method like 'toLower'
+	// navigates to the stdlib file where the method is defined
+
+	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
+
+	auto doc = createTestDocument(
+		"function main() int\n"
+		"    var s = \"hello\"\n"
+		"    print(s.toLower())\n"
+		"    return 0\n"
+		"end 'main'");
+
+	// Analyze the document first to populate semantic cache
+	analyzer.analyze(doc);
+
+	// Go to definition on 'toLower' at line 2 (s.toLower())
+	// "    print(s.toLower())" - toLower starts at column 12
+	lsp::Position pos{2, 12};
+	auto location = analyzer.getDefinition(doc, pos);
+
+	// Should find definition
+	REQUIRE(location.has_value());
+
+	// Should point to stdlib string file, not current document
+	INFO("Got URI: " << location->uri);
+	REQUIRE(location->uri != doc->uri);
+	REQUIRE(location->uri.find("string.maxon") != std::string::npos);
+
+	// toLower is defined at line 270 in string.maxon (0-indexed = 269)
+	INFO("Got line: " << location->range.start.line);
+	REQUIRE(location->range.start.line == 269);
+}

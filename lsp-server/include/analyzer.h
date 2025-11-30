@@ -32,6 +32,9 @@ struct StdlibStructMethod {
 	std::string methodName;					   // Method name (e.g., "toLower")
 	std::string returnType;					   // Return type
 	std::vector<FunctionParameter> parameters; // Parameters including 'self'
+	std::string filePath;					   // Absolute file path for go-to-definition
+	int line;								   // 1-based line number
+	int column;								   // 1-based column number
 };
 
 // Information about a stdlib struct (for semantic analysis registration)

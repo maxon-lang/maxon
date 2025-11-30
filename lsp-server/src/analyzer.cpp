@@ -648,6 +648,22 @@ std::optional<lsp::Location> Analyzer::getDefinition(std::shared_ptr<Document> d
 							}
 						}
 					}
+
+					// Check for struct methods in stdlib
+					for (const auto &method : stdlibStructMethods) {
+						if (method.structName == typeName && method.methodName == word) {
+							if (!method.filePath.empty() && method.line > 0) {
+								lsp::Location loc;
+								loc.uri = "file:///" + method.filePath;
+								std::replace(loc.uri.begin(), loc.uri.end(), '\\', '/');
+								loc.range.start.line = method.line - 1;
+								loc.range.start.character = method.column > 0 ? method.column - 1 : 0;
+								loc.range.end.line = loc.range.start.line;
+								loc.range.end.character = loc.range.start.character + method.methodName.length();
+								return loc;
+							}
+						}
+					}
 				}
 			}
 		}
@@ -676,29 +692,34 @@ std::optional<lsp::Location> Analyzer::getDefinition(std::shared_ptr<Document> d
 		if (funcIt != semInfo.functions.end()) {
 			const FunctionInfo &funcInfo = funcIt->second;
 
-			// If this function implements an interface, navigate to the interface declaration
-			if (!funcInfo.implementsInterface.empty()) {
-				auto ifaceIt = semInfo.interfaces.find(funcInfo.implementsInterface);
-				if (ifaceIt != semInfo.interfaces.end()) {
-					const InterfaceInfo &ifaceInfo = ifaceIt->second;
-					lsp::Location loc;
-					loc.uri = doc->uri;
-					loc.range.start.line = ifaceInfo.line > 0 ? ifaceInfo.line - 1 : 0;
-					loc.range.start.character = ifaceInfo.column > 0 ? ifaceInfo.column - 1 : 0;
-					loc.range.end.line = loc.range.start.line;
-					loc.range.end.character = loc.range.start.character + ifaceInfo.name.length();
-					return loc;
+			// Only use local semantic info if function has a valid source location
+			// External/stdlib functions registered via registerExternalFunction have line=0
+			if (funcInfo.line > 0) {
+				// If this function implements an interface, navigate to the interface declaration
+				if (!funcInfo.implementsInterface.empty()) {
+					auto ifaceIt = semInfo.interfaces.find(funcInfo.implementsInterface);
+					if (ifaceIt != semInfo.interfaces.end()) {
+						const InterfaceInfo &ifaceInfo = ifaceIt->second;
+						lsp::Location loc;
+						loc.uri = doc->uri;
+						loc.range.start.line = ifaceInfo.line > 0 ? ifaceInfo.line - 1 : 0;
+						loc.range.start.character = ifaceInfo.column > 0 ? ifaceInfo.column - 1 : 0;
+						loc.range.end.line = loc.range.start.line;
+						loc.range.end.character = loc.range.start.character + ifaceInfo.name.length();
+						return loc;
+					}
 				}
-			}
 
-			// Otherwise navigate to the function definition
-			lsp::Location loc;
-			loc.uri = doc->uri;
-			loc.range.start.line = funcInfo.line > 0 ? funcInfo.line - 1 : 0;
-			loc.range.start.character = funcInfo.column > 0 ? funcInfo.column - 1 : 0;
-			loc.range.end.line = loc.range.start.line;
-			loc.range.end.character = loc.range.start.character + word.length();
-			return loc;
+				// Navigate to the function definition in the current document
+				lsp::Location loc;
+				loc.uri = doc->uri;
+				loc.range.start.line = funcInfo.line - 1;
+				loc.range.start.character = funcInfo.column > 0 ? funcInfo.column - 1 : 0;
+				loc.range.end.line = loc.range.start.line;
+				loc.range.end.character = loc.range.start.character + word.length();
+				return loc;
+			}
+			// If line is 0, fall through to check stdlibFunctions
 		}
 
 		// Check for struct type
@@ -1056,6 +1077,9 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 					structMethod.methodName = method->name;
 					structMethod.returnType = method->returnType;
 					structMethod.parameters = method->parameters;
+					structMethod.filePath = filePath;
+					structMethod.line = method->line;
+					structMethod.column = method->column;
 					stdlibStructMethods.push_back(structMethod);
 				}
 
