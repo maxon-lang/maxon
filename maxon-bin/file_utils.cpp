@@ -333,6 +333,68 @@ std::vector<std::string> findStdlibFilesDefiningInterfaces(const std::set<std::s
 	return resultFiles;
 }
 
+// Reverse index: file -> set of functions defined in that file
+static std::map<std::string, std::set<std::string>> &getStdlibFileFunctionsIndex() {
+	static std::map<std::string, std::set<std::string>> index;
+	static bool initialized = false;
+
+	if (!initialized) {
+		std::string stdlibDir = findStdlibDirectory();
+		std::vector<std::string> stdlibFiles = findMaxonFiles(stdlibDir);
+
+		for (const auto &file : stdlibFiles) {
+			std::vector<std::string> definedFunctions = extractFunctionNames(file);
+			for (const auto &func : definedFunctions) {
+				index[file].insert(func);
+			}
+		}
+
+		initialized = true;
+	}
+
+	return index;
+}
+
+const std::set<std::string> &getStdlibFunctionsInFile(const std::string &filePath) {
+	static const std::set<std::string> emptySet;
+	const auto &index = getStdlibFileFunctionsIndex();
+	auto it = index.find(filePath);
+	if (it != index.end()) {
+		return it->second;
+	}
+	return emptySet;
+}
+
+std::vector<std::string> findStdlibFilesForFunctions(const std::set<std::string> &neededFunctions,
+                                                      const std::set<std::string> &alreadyDefinedFunctions) {
+	std::vector<std::string> resultFiles;
+	std::set<std::string> uniqueFiles;
+	const auto &index = getStdlibIndex();
+
+	for (const auto &funcName : neededFunctions) {
+		// Skip if already defined
+		if (alreadyDefinedFunctions.count(funcName) > 0) {
+			continue;
+		}
+
+		// Get unqualified name for lookup
+		std::string unqualifiedName = funcName;
+		size_t lastSep = funcName.rfind(".");
+		if (lastSep != std::string::npos) {
+			unqualifiedName = funcName.substr(lastSep + 1);
+		}
+
+		auto it = index.find(unqualifiedName);
+		if (it != index.end()) {
+			if (uniqueFiles.insert(it->second).second) {
+				resultFiles.push_back(it->second);
+			}
+		}
+	}
+
+	return resultFiles;
+}
+
 std::string readFile(const std::string &filename) {
 	std::ifstream file(filename);
 	if (!file) {

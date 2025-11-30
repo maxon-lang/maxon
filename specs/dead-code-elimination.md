@@ -1,7 +1,7 @@
 ---
 feature: dead-code-elimination
 status: stable
-keywords: [optimization, dead-code, unused-functions]
+keywords: [optimization, dead-code, unused-functions, ast-pruning]
 category: optimization
 ---
 
@@ -9,16 +9,26 @@ category: optimization
 
 ## Developer Notes
 
-LLVM's optimization passes automatically remove unused functions.
+Dead code elimination happens at two levels:
 
-Implementation:
-- Not implemented by Maxon directly - handled by LLVM
+### AST-Level Pruning (Compile-Time)
+Before generating MIR, the compiler builds a call graph starting from entry points
+(`main`, `_start`, `__ffi_dispatch`, and extern functions) and prunes any functions
+not reachable through the call graph.
+
+Implementation in `call_graph.cpp` and `compiler.cpp`:
+- `CallGraphBuilder` traverses function bodies to extract all call sites
+- Handles implicit calls: for-loop iterator methods, Equatable comparisons, string concat
+- Uses name aliasing to resolve unqualified names to qualified stdlib names
+- Filters `mergedProgram->functions` to only include reachable functions
+- This eliminates unused stdlib functions before MIR generation
+
+### LLVM DCE (Link-Time)
+LLVM's optimization passes provide additional dead code elimination:
 - When optimization is enabled (`-O1` or higher)
-- Functions not reachable from `main()` are eliminated
+- GlobalDCE removes any remaining unused functions
+- Eliminates unreachable basic blocks within functions
 - Reduces binary size and improves performance
-- Also eliminates unreachable basic blocks within functions
-
-The compiler generates all functions, but LLVM's GlobalDCE (Dead Code Elimination) pass removes unused ones during linking.
 
 ## Documentation
 

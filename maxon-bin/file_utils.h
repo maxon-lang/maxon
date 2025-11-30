@@ -20,3 +20,11 @@ std::vector<std::string> findStdlibFilesDefiningStructs(const std::set<std::stri
 std::vector<std::string> findStdlibFilesDefiningInterfaces(const std::set<std::string> &interfaceNames);
 std::string readFile(const std::string &filename);
 std::string normalizePathForDisplay(const std::string &path);
+
+// Get all functions defined in a specific stdlib file
+const std::set<std::string> &getStdlibFunctionsInFile(const std::string &filePath);
+
+// Find stdlib files that define any of the given functions
+// Returns only files containing at least one needed function
+std::vector<std::string> findStdlibFilesForFunctions(const std::set<std::string> &neededFunctions,
+                                                      const std::set<std::string> &alreadyDefinedFunctions);

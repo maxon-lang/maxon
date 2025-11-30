@@ -41,6 +41,7 @@ endif()
 set(SOURCES
     main.cpp
     file_utils.cpp
+    call_graph.cpp
     compiler.cpp
     test_utils.cpp
     test_regenerate.cpp
