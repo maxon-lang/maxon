@@ -160,23 +160,36 @@ class SliceExprAST : public ExprAST {
 };
 
 // Array literal expression
-// Two forms: [5]int (zero-initialized array) or [1,2,3] (value-initialized array)
+// Three forms:
+//   [5]int           - constant-size zero-initialized array
+//   [_len]byte       - variable-size zero-initialized array (runtime expression)
+//   [1,2,3]          - value-initialized array
 class ArrayLiteralExprAST : public ExprAST {
   public:
-	// For [size]type syntax
-	int size;				 // Array size (0 if value-init)
+	// For [size]type syntax (constant size)
+	int size;				 // Array size (0 if value-init or variable-size)
 	std::string elementType; // Element type (empty if value-init)
+
+	// For [expr]type syntax (variable size at runtime)
+	std::unique_ptr<ExprAST> sizeExpr; // Runtime size expression (nullptr if constant or value-init)
 
 	// For [val1, val2, ...] syntax
 	std::vector<std::unique_ptr<ExprAST>> values; // Element values (empty if size-init)
 
-	// Constructor for [size]type syntax
+	// Constructor for [size]type syntax (constant size)
 	ArrayLiteralExprAST(int sz, const std::string &elemType, int l = 0, int c = 0)
-		: ExprAST(l, c), size(sz), elementType(elemType) {}
+		: ExprAST(l, c), size(sz), elementType(elemType), sizeExpr(nullptr) {}
+
+	// Constructor for [expr]type syntax (variable size)
+	ArrayLiteralExprAST(std::unique_ptr<ExprAST> szExpr, const std::string &elemType, int l = 0, int c = 0)
+		: ExprAST(l, c), size(0), elementType(elemType), sizeExpr(std::move(szExpr)) {}
 
 	// Constructor for [val1, val2, ...] syntax
 	ArrayLiteralExprAST(std::vector<std::unique_ptr<ExprAST>> vals, int l = 0, int c = 0)
-		: ExprAST(l, c), size(0), values(std::move(vals)) {}
+		: ExprAST(l, c), size(0), sizeExpr(nullptr), values(std::move(vals)) {}
+
+	// Helper to check if this is a variable-sized array
+	bool hasVariableSize() const { return sizeExpr != nullptr; }
 };
 
 // Member access expression (e.g., "array.length")

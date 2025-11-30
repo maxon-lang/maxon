@@ -12,19 +12,25 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 	if (auto *varDecl = dynamic_cast<VarDeclStmtAST *>(stmt)) {
 		// Handle array literal initialization
 		if (auto *arrayLiteral = dynamic_cast<ArrayLiteralExprAST *>(varDecl->initializer.get())) {
-			int arraySize;
 			mir::MIRType *elementType;
 			std::string elementTypeName;
 			std::vector<mir::MIRValue *> initValues;
+			mir::MIRValue *runtimeSize = nullptr; // For variable-sized arrays
+			int constantArraySize = 0;
 
-			if (arrayLiteral->size > 0) {
-				// [size]type form - zero-initialized
-				arraySize = arrayLiteral->size;
+			if (arrayLiteral->hasVariableSize()) {
+				// [expr]type form - variable-sized array (runtime size)
+				runtimeSize = generateExpr(arrayLiteral->sizeExpr.get());
+				elementTypeName = arrayLiteral->elementType;
+				elementType = getTypeFromString(elementTypeName);
+			} else if (arrayLiteral->size > 0) {
+				// [size]type form - constant-size zero-initialized
+				constantArraySize = arrayLiteral->size;
 				elementTypeName = arrayLiteral->elementType;
 				elementType = getTypeFromString(elementTypeName);
 			} else {
 				// [val1, val2, ...] form - value-initialized
-				arraySize = static_cast<int>(arrayLiteral->values.size());
+				constantArraySize = static_cast<int>(arrayLiteral->values.size());
 
 				for (auto &valExpr : arrayLiteral->values) {
 					mir::MIRValue *val = generateExpr(valExpr.get());
@@ -49,71 +55,135 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 				}
 			}
 
-			// Calculate size
 			uint64_t elementSize = elementType->sizeInBytes;
-			uint64_t totalSize = arraySize * elementSize;
-
-			// Threshold for stack allocation (4KB) - larger arrays go on heap
-			constexpr uint64_t STACK_ARRAY_THRESHOLD = 4096;
-			bool useHeap = totalSize > STACK_ARRAY_THRESHOLD;
-
 			mir::MIRValue *arrayPtr;
 
-			if (useHeap) {
-				// Large array: heap-allocate
+			if (runtimeSize) {
+				// Variable-sized array: always heap-allocate with header
+				// Layout: [length:i32][capacity:i32][...data...]
+				//              -8          -4           0+
 				initHeapManagement();
 				mir::MIRFunction *mallocFunc = module->getFunction("malloc");
-				mir::MIRValue *sizeVal = builder->getInt64(totalSize);
-				arrayPtr = builder->createCall(mallocFunc, {sizeVal}, varDecl->name + ".malloc");
 
-				// Create alloca to store the pointer
+				// Calculate total size: 8 (header) + size * elementSize
+				mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
+				mir::MIRValue *size64 = builder->createSExt(runtimeSize, mir::MIRType::getInt64(), "size.ext");
+				mir::MIRValue *dataSize = builder->createMul(size64, elemSizeVal, "data.size");
+				mir::MIRValue *headerSize = builder->getInt64(8);
+				mir::MIRValue *totalSize = builder->createAdd(dataSize, headerSize, "total.size");
+
+				// Allocate memory
+				mir::MIRValue *basePtr = builder->createCall(mallocFunc, {totalSize}, varDecl->name + ".base");
+
+				// Store length at offset 0 (basePtr already points here)
+				builder->createStore(runtimeSize, basePtr);
+
+				// Store capacity at offset 4
+				mir::MIRValue *capPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
+														   {builder->getInt64(4)}, "cap.ptr");
+				builder->createStore(runtimeSize, capPtr); // capacity = length initially
+
+				// Data pointer is at offset 8
+				arrayPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
+											  {builder->getInt64(8)}, varDecl->name + ".data");
+
+				// Create alloca to store the data pointer
 				mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name);
 				builder->createStore(arrayPtr, ptrAlloca);
 				namedValues[varDecl->name] = ptrAlloca;
-				variableTypes[varDecl->name] = "[]" + elementTypeName; // Dynamic array type
+				variableTypes[varDecl->name] = "[]" + elementTypeName;
 
-				// Track for cleanup
+				// Track base pointer for cleanup (we need to free basePtr, not dataPtr)
 				if (!scopeStack.empty()) {
-					scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, ptrAlloca});
+					// Store base pointer in a hidden alloca for cleanup
+					mir::MIRValue *basePtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__base");
+					builder->createStore(basePtr, basePtrAlloca);
+					scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, basePtrAlloca});
 				}
 
-				// Store array capacity as hidden variable (for dynamic arrays)
-				mir::MIRValue *capacityAlloca = builder->createAlloca(mir::MIRType::getInt32(), varDecl->name + ".__capacity");
-				mir::MIRValue *arraySizeVal = builder->getInt32(arraySize);
-				builder->createStore(arraySizeVal, capacityAlloca);
-				namedValues[varDecl->name + ".__capacity"] = capacityAlloca;
-			} else {
-				// Small array: stack-allocate directly (much faster)
-				mir::MIRType *arrayType = mir::MIRType::getArray(elementType, arraySize);
-				arrayPtr = builder->createAlloca(arrayType, varDecl->name);
-				namedValues[varDecl->name] = arrayPtr;
-				stackAllocatedArrays.insert(varDecl->name); // Mark as stack-allocated
-				variableTypes[varDecl->name] = "[" + std::to_string(arraySize) + "]" + elementTypeName;
-			}
-
-			// Store array length as hidden variable
-			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt32(), varDecl->name + ".__length");
-			mir::MIRValue *arraySizeVal = builder->getInt32(arraySize);
-			builder->createStore(arraySizeVal, lengthAlloca);
-			namedValues[varDecl->name + ".__length"] = lengthAlloca;
-
-			// Initialize array elements
-			if (initValues.empty()) {
-				// Zero-initialize using memset
+				// Zero-initialize data using memset
 				mir::MIRFunction *memsetFunc = module->getFunction("memset");
 				if (!memsetFunc) {
 					initHeapManagement();
 					memsetFunc = module->getFunction("memset");
 				}
 				mir::MIRValue *zeroVal = builder->getInt32(0);
-				mir::MIRValue *memsetSizeVal = builder->getInt64(totalSize);
-				builder->createCall(memsetFunc, {arrayPtr, zeroVal, memsetSizeVal});
+				builder->createCall(memsetFunc, {arrayPtr, zeroVal, dataSize});
+
 			} else {
-				// Store each value
-				for (int i = 0; i < arraySize; i++) {
-					mir::MIRValue *indexVal = builder->getInt32(i);
-					mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayPtr, indexVal, "arrayidx");
-					builder->createStore(initValues[i], elementPtr);
+				// Constant-sized array
+				uint64_t totalSize = constantArraySize * elementSize;
+
+				// Threshold for stack allocation (4KB) - larger arrays go on heap
+				constexpr uint64_t STACK_ARRAY_THRESHOLD = 4096;
+				bool useHeap = totalSize > STACK_ARRAY_THRESHOLD;
+
+				if (useHeap) {
+					// Large array: heap-allocate with header
+					// Layout: [length:i32][capacity:i32][...data...]
+					initHeapManagement();
+					mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+					mir::MIRValue *sizeVal = builder->getInt64(8 + totalSize);
+					mir::MIRValue *basePtr = builder->createCall(mallocFunc, {sizeVal}, varDecl->name + ".base");
+
+					// Store length at offset 0 (basePtr already points here)
+					mir::MIRValue *lengthVal = builder->getInt32(constantArraySize);
+					builder->createStore(lengthVal, basePtr);
+
+					// Store capacity at offset 4
+					mir::MIRValue *capPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
+															   {builder->getInt64(4)}, "cap.ptr");
+					builder->createStore(lengthVal, capPtr);
+
+					// Data pointer is at offset 8
+					arrayPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
+												  {builder->getInt64(8)}, varDecl->name + ".data");
+
+					// Create alloca to store the data pointer
+					mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name);
+					builder->createStore(arrayPtr, ptrAlloca);
+					namedValues[varDecl->name] = ptrAlloca;
+					variableTypes[varDecl->name] = "[]" + elementTypeName;
+
+					// Track base pointer for cleanup
+					if (!scopeStack.empty()) {
+						mir::MIRValue *basePtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__base");
+						builder->createStore(basePtr, basePtrAlloca);
+						scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, basePtrAlloca});
+					}
+				} else {
+					// Small array: stack-allocate directly (much faster)
+					mir::MIRType *arrayType = mir::MIRType::getArray(elementType, constantArraySize);
+					arrayPtr = builder->createAlloca(arrayType, varDecl->name);
+					namedValues[varDecl->name] = arrayPtr;
+					stackAllocatedArrays.insert(varDecl->name);
+					variableTypes[varDecl->name] = "[" + std::to_string(constantArraySize) + "]" + elementTypeName;
+
+					// For stack arrays, still store length in hidden alloca for .length access
+					mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt32(), varDecl->name + ".__length");
+					mir::MIRValue *arraySizeVal = builder->getInt32(constantArraySize);
+					builder->createStore(arraySizeVal, lengthAlloca);
+					namedValues[varDecl->name + ".__length"] = lengthAlloca;
+				}
+
+				// Initialize array elements
+				if (initValues.empty()) {
+					// Zero-initialize using memset
+					mir::MIRFunction *memsetFunc = module->getFunction("memset");
+					if (!memsetFunc) {
+						initHeapManagement();
+						memsetFunc = module->getFunction("memset");
+					}
+					mir::MIRValue *zeroVal = builder->getInt32(0);
+					mir::MIRValue *memsetSizeVal = builder->getInt64(totalSize);
+					builder->createCall(memsetFunc, {arrayPtr, zeroVal, memsetSizeVal});
+				} else {
+					// Store each value
+					for (int i = 0; i < constantArraySize; i++) {
+						mir::MIRValue *indexVal = builder->getInt32(i);
+						mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayPtr, indexVal, "arrayidx");
+						builder->createStore(initValues[i], elementPtr);
+					}
 				}
 			}
 
@@ -167,6 +237,55 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 					} else {
 						// Zero-initialized array [16]byte - already zero from alloca
 						// Nothing extra needed
+					}
+				} else if (fieldTypeStr.size() > 2 && fieldTypeStr[0] == '[' && fieldTypeStr[1] == ']') {
+					// Slice field ([]T) - need to create fat pointer {ptr, len}
+					// Check if the value is a variable reference to a variable-sized array
+					std::string elementTypeStr = fieldTypeStr.substr(2);
+					std::string unsizedArrayTypeName = "__unsized_array_" + elementTypeStr;
+
+					// Get or create the unsized array struct type
+					mir::MIRType *unsizedArrayType = structTypes[unsizedArrayTypeName];
+					if (!unsizedArrayType) {
+						unsizedArrayType = module->getOrCreateStructType(
+							unsizedArrayTypeName,
+							{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+						structTypes[unsizedArrayTypeName] = unsizedArrayType;
+					}
+
+					auto *varExpr = dynamic_cast<VariableExprAST *>(initField.value.get());
+					if (varExpr) {
+						std::string varType = variableTypes[varExpr->name];
+						// Check if this is a variable-sized array (type starts with [])
+						if (varType.size() > 2 && varType[0] == '[' && varType[1] == ']') {
+							// Variable-sized array - load data pointer and length from header
+							mir::MIRValue *arrayAlloca = namedValues[varExpr->name];
+							if (arrayAlloca) {
+								// Load the data pointer
+								mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+
+								// Load length from header at dataPtr - 8
+								mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+																			  {builder->getInt64(-8)}, "length.ptr");
+								mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "length");
+
+								// Store into the fat pointer field
+								mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, fieldPtr, 0, initField.name + ".ptr");
+								builder->createStore(dataPtr, dataPtrField);
+								mir::MIRValue *lenField = builder->createStructGEP(unsizedArrayType, fieldPtr, 1, initField.name + ".len");
+								builder->createStore(length, lenField);
+							} else {
+								throw std::runtime_error("Unknown variable in struct field init: " + varExpr->name);
+							}
+						} else {
+							// Not a variable-sized array - use regular field value
+							mir::MIRValue *fieldValue = generateExpr(initField.value.get());
+							builder->createStore(fieldValue, fieldPtr);
+						}
+					} else {
+						// Not a variable reference - use regular field value
+						mir::MIRValue *fieldValue = generateExpr(initField.value.get());
+						builder->createStore(fieldValue, fieldPtr);
 					}
 				} else {
 					// Regular field value
@@ -260,85 +379,161 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 	}
 
 	if (auto *letDecl = dynamic_cast<LetDeclStmtAST *>(stmt)) {
-		// Handle array literal initialization - static arrays
+		// Handle array literal initialization - static or variable-sized arrays
 		if (auto *arrayLiteral = dynamic_cast<ArrayLiteralExprAST *>(letDecl->initializer.get())) {
-			// Semantic analyzer ensures only value literals are used with let
-			// (not [N]type form), so we always have initValues
-			int arraySize = static_cast<int>(arrayLiteral->values.size());
 			mir::MIRType *elementType;
 			std::string elementTypeName;
 			std::vector<mir::MIRValue *> initValues;
+			mir::MIRValue *runtimeSize = nullptr;
+			int constantArraySize = 0;
 
-			for (auto &valExpr : arrayLiteral->values) {
-				mir::MIRValue *val = generateExpr(valExpr.get());
-				if (!val) {
-					throw std::runtime_error("Failed to generate array element value");
-				}
-				initValues.push_back(val);
-			}
-
-			// Infer element type from first value
-			elementType = initValues[0]->type;
-			if (elementType->kind == mir::MIRTypeKind::Int32) {
-				elementTypeName = "int";
-			} else if (elementType->kind == mir::MIRTypeKind::Float64) {
-				elementTypeName = "float";
-			} else if (elementType->kind == mir::MIRTypeKind::Int8) {
-				elementTypeName = "char";
-			} else if (elementType->kind == mir::MIRTypeKind::Ptr) {
-				elementTypeName = "ptr";
+			if (arrayLiteral->hasVariableSize()) {
+				// [expr]type form - variable-sized immutable array
+				runtimeSize = generateExpr(arrayLiteral->sizeExpr.get());
+				elementTypeName = arrayLiteral->elementType;
+				elementType = getTypeFromString(elementTypeName);
 			} else {
-				throw std::runtime_error("Unsupported array element type");
+				// Value literal form [val1, val2, ...]
+				constantArraySize = static_cast<int>(arrayLiteral->values.size());
+
+				for (auto &valExpr : arrayLiteral->values) {
+					mir::MIRValue *val = generateExpr(valExpr.get());
+					if (!val) {
+						throw std::runtime_error("Failed to generate array element value");
+					}
+					initValues.push_back(val);
+				}
+
+				// Infer element type from first value
+				elementType = initValues[0]->type;
+				if (elementType->kind == mir::MIRTypeKind::Int32) {
+					elementTypeName = "int";
+				} else if (elementType->kind == mir::MIRTypeKind::Float64) {
+					elementTypeName = "float";
+				} else if (elementType->kind == mir::MIRTypeKind::Int8) {
+					elementTypeName = "char";
+				} else if (elementType->kind == mir::MIRTypeKind::Ptr) {
+					elementTypeName = "ptr";
+				} else {
+					throw std::runtime_error("Unsupported array element type");
+				}
 			}
 
 			uint64_t elementSize = elementType->sizeInBytes;
-			uint64_t totalSize = arraySize * elementSize;
-
-			// Threshold for stack allocation (4KB) - larger arrays go on heap
-			constexpr uint64_t STACK_ARRAY_THRESHOLD = 4096;
-
 			mir::MIRValue *arrayPtr;
-			bool useHeap = totalSize > STACK_ARRAY_THRESHOLD;
 
-			if (useHeap) {
-				// Large array: heap-allocate (but still immutable)
+			if (runtimeSize) {
+				// Variable-sized array: always heap-allocate with header
+				// Layout: [length:i32][capacity:i32][...data...]
 				initHeapManagement();
 				mir::MIRFunction *mallocFunc = module->getFunction("malloc");
-				mir::MIRValue *sizeVal = builder->getInt64(totalSize);
-				arrayPtr = builder->createCall(mallocFunc, {sizeVal}, letDecl->name + ".malloc");
 
-				// Create alloca to store the pointer
+				// Calculate total size: 8 (header) + size * elementSize
+				mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
+				mir::MIRValue *size64 = builder->createSExt(runtimeSize, mir::MIRType::getInt64(), "size.ext");
+				mir::MIRValue *dataSize = builder->createMul(size64, elemSizeVal, "data.size");
+				mir::MIRValue *headerSize = builder->getInt64(8);
+				mir::MIRValue *totalSize = builder->createAdd(dataSize, headerSize, "total.size");
+
+				// Allocate memory
+				mir::MIRValue *basePtr = builder->createCall(mallocFunc, {totalSize}, letDecl->name + ".base");
+
+				// Store length at offset 0 (basePtr already points here)
+				builder->createStore(runtimeSize, basePtr);
+
+				// Store capacity at offset 4
+				mir::MIRValue *capPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
+														   {builder->getInt64(4)}, "cap.ptr");
+				builder->createStore(runtimeSize, capPtr);
+
+				// Data pointer is at offset 8
+				arrayPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
+											  {builder->getInt64(8)}, letDecl->name + ".data");
+
+				// Create alloca to store the data pointer
 				mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name);
 				builder->createStore(arrayPtr, ptrAlloca);
 				namedValues[letDecl->name] = ptrAlloca;
+				variableTypes[letDecl->name] = "[]" + elementTypeName;
 
-				// Track for cleanup
+				// Track base pointer for cleanup
 				if (!scopeStack.empty()) {
-					scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, ptrAlloca});
+					mir::MIRValue *basePtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name + ".__base");
+					builder->createStore(basePtr, basePtrAlloca);
+					scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, basePtrAlloca});
 				}
+
+				// Zero-initialize data using memset
+				mir::MIRFunction *memsetFunc = module->getFunction("memset");
+				if (!memsetFunc) {
+					initHeapManagement();
+					memsetFunc = module->getFunction("memset");
+				}
+				mir::MIRValue *zeroVal = builder->getInt32(0);
+				builder->createCall(memsetFunc, {arrayPtr, zeroVal, dataSize});
+
 			} else {
-				// Small array: stack-allocate directly
-				mir::MIRType *arrayType = mir::MIRType::getArray(elementType, arraySize);
-				arrayPtr = builder->createAlloca(arrayType, letDecl->name);
-				namedValues[letDecl->name] = arrayPtr;
-				stackAllocatedArrays.insert(letDecl->name); // Mark as stack-allocated
-															// No heap cleanup needed for stack arrays
+				// Constant-sized array (value literals)
+				uint64_t totalSize = constantArraySize * elementSize;
+
+				// Threshold for stack allocation (4KB)
+				constexpr uint64_t STACK_ARRAY_THRESHOLD = 4096;
+				bool useHeap = totalSize > STACK_ARRAY_THRESHOLD;
+
+				if (useHeap) {
+					// Large array: heap-allocate with header
+					initHeapManagement();
+					mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+					mir::MIRValue *sizeVal = builder->getInt64(8 + totalSize);
+					mir::MIRValue *basePtr = builder->createCall(mallocFunc, {sizeVal}, letDecl->name + ".base");
+
+					// Store length at offset 0 (basePtr already points here)
+					mir::MIRValue *lengthVal = builder->getInt32(constantArraySize);
+					builder->createStore(lengthVal, basePtr);
+
+					// Store capacity at offset 4
+					mir::MIRValue *capPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
+															   {builder->getInt64(4)}, "cap.ptr");
+					builder->createStore(lengthVal, capPtr);
+
+					// Data pointer is at offset 8
+					arrayPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
+												  {builder->getInt64(8)}, letDecl->name + ".data");
+
+					// Create alloca to store the data pointer
+					mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name);
+					builder->createStore(arrayPtr, ptrAlloca);
+					namedValues[letDecl->name] = ptrAlloca;
+
+					// Track base pointer for cleanup
+					if (!scopeStack.empty()) {
+						mir::MIRValue *basePtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name + ".__base");
+						builder->createStore(basePtr, basePtrAlloca);
+						scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, basePtrAlloca});
+					}
+				} else {
+					// Small array: stack-allocate directly
+					mir::MIRType *arrayType = mir::MIRType::getArray(elementType, constantArraySize);
+					arrayPtr = builder->createAlloca(arrayType, letDecl->name);
+					namedValues[letDecl->name] = arrayPtr;
+					stackAllocatedArrays.insert(letDecl->name);
+
+					// Store length in hidden alloca for .length access
+					mir::MIRValue *sizeAlloca = builder->createAlloca(mir::MIRType::getInt32(), letDecl->name + ".__length");
+					mir::MIRValue *arraySizeVal = builder->getInt32(constantArraySize);
+					builder->createStore(arraySizeVal, sizeAlloca);
+					namedValues[letDecl->name + ".__length"] = sizeAlloca;
+				}
+
+				// Initialize array elements
+				for (int i = 0; i < constantArraySize; i++) {
+					mir::MIRValue *indexVal = builder->getInt32(i);
+					mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayPtr, indexVal, "arrayidx");
+					builder->createStore(initValues[i], elementPtr);
+				}
+
+				variableTypes[letDecl->name] = "[" + std::to_string(constantArraySize) + "]" + elementTypeName;
 			}
-
-			// Store array length as hidden variable (for .length access)
-			mir::MIRValue *sizeAlloca = builder->createAlloca(mir::MIRType::getInt32(), letDecl->name + ".__length");
-			mir::MIRValue *arraySizeVal = builder->getInt32(arraySize);
-			builder->createStore(arraySizeVal, sizeAlloca);
-			namedValues[letDecl->name + ".__length"] = sizeAlloca;
-
-			// Initialize array elements
-			for (int i = 0; i < arraySize; i++) {
-				mir::MIRValue *indexVal = builder->getInt32(i);
-				mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayPtr, indexVal, "arrayidx");
-				builder->createStore(initValues[i], elementPtr);
-			}
-
-			variableTypes[letDecl->name] = "[" + std::to_string(arraySize) + "]" + elementTypeName;
 
 			return;
 		}
@@ -1162,11 +1357,12 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 																   fieldIndex, initField.name);
 
 				// If the field is an unsized array type (like []byte), we need to handle
-				// the conversion from either a fat pointer or a static array
+				// the conversion from either a fat pointer, static array, or variable-sized array
 				if (fieldType.size() >= 2 && fieldType[0] == '[' && fieldType[1] == ']') {
 					// Get the value's type if it's a variable
 					std::string valueType;
-					if (auto *varExpr = dynamic_cast<VariableExprAST *>(initField.value.get())) {
+					auto *varExpr = dynamic_cast<VariableExprAST *>(initField.value.get());
+					if (varExpr) {
 						auto it = variableTypes.find(varExpr->name);
 						if (it != variableTypes.end()) {
 							valueType = it->second;
@@ -1175,6 +1371,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 					// Check if the value is a static array (format: [size]type where size is digits)
 					bool isStaticArray = false;
+					bool isVariableSizedArray = false;
 					int staticArraySize = 0;
 					std::string elemType;
 					if (valueType.size() >= 3 && valueType[0] == '[') {
@@ -1186,12 +1383,38 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 								staticArraySize = std::stoi(sizeStr);
 								elemType = valueType.substr(closeBracket + 1);
 							}
+						} else if (closeBracket == 1) {
+							// []type - variable-sized array
+							isVariableSizedArray = true;
+							elemType = valueType.substr(2);
 						}
 					}
 
 					mir::MIRType *fatPtrType = structType->fieldTypes[fieldIndex];
 
-					if (isStaticArray) {
+					if (isVariableSizedArray && varExpr) {
+						// Variable-sized array - load data pointer and length from header
+						mir::MIRValue *arrayAlloca = namedValues[varExpr->name];
+						if (arrayAlloca) {
+							// Load the data pointer
+							mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+
+							// Load length from header at dataPtr - 8
+							mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+																		  {builder->getInt64(-8)}, "length.ptr");
+							mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "length");
+
+							// Store into the fat pointer field
+							mir::MIRValue *fatPtrDataPtr = builder->createStructGEP(fatPtrType, fieldPtr, 0,
+																					initField.name + ".ptr");
+							builder->createStore(dataPtr, fatPtrDataPtr);
+							mir::MIRValue *fatPtrLenPtr = builder->createStructGEP(fatPtrType, fieldPtr, 1,
+																				   initField.name + ".len");
+							builder->createStore(length, fatPtrLenPtr);
+						} else {
+							throw std::runtime_error("Unknown variable in return struct field init: " + varExpr->name);
+						}
+					} else if (isStaticArray) {
 						// Convert static array to fat pointer:
 						// fieldValue is a pointer to the static array [size x elemType]
 						// We need to store {ptr, len} into the fat pointer field

@@ -274,7 +274,7 @@ Semantic Error: line 3, column 5
 Static arrays (declared with 'let') must use value literals
   Use: let arr = [value1, value2, ...]
   Not: let arr = [5]int
-  Note: Use 'var' for dynamically-sized arrays
+  Note: Use 'var' for dynamically-sized arrays, or use [expr]type for runtime-sized immutable arrays
 
   3 |     let arr = [5]int
     |     ^

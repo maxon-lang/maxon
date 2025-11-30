@@ -681,21 +681,48 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 		// Handle array.length
 		if (memberAccessExpr->memberName == "length" && !memberAccessExpr->object) {
+			// First check for hidden __length alloca (stack-allocated arrays)
 			std::string lengthVar = memberAccessExpr->objectName + ".__length";
 			mir::MIRValue *lengthAlloca = namedValues[lengthVar];
 			if (lengthAlloca) {
 				return builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "length");
+			}
+
+			// For heap-allocated arrays with header layout, read from dataPtr - 8
+			// Layout: [length:i32][capacity:i32][...data...]
+			//              -8          -4           0+
+			mir::MIRValue *arrayAlloca = namedValues[memberAccessExpr->objectName];
+			if (arrayAlloca) {
+				// Load the data pointer
+				mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+				// Get pointer to length at offset -8 (use GEP with i8 type for byte offsets)
+				mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+															  {builder->getInt64(-8)}, "length.ptr");
+				return builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "length");
 			}
 			throw std::runtime_error("Variable is not an array: " + memberAccessExpr->objectName);
 		}
 
 		// Handle array.capacity (dynamic arrays only)
 		if (memberAccessExpr->memberName == "capacity" && !memberAccessExpr->object) {
+			// First check for hidden __capacity alloca (old-style heap arrays)
 			std::string capacityVar = memberAccessExpr->objectName + ".__capacity";
 			mir::MIRValue *capacityAlloca = namedValues[capacityVar];
 			if (capacityAlloca) {
 				return builder->createLoad(mir::MIRType::getInt32(), capacityAlloca, "capacity");
 			}
+
+			// For heap-allocated arrays with header layout, read from dataPtr - 4
+			mir::MIRValue *arrayAlloca = namedValues[memberAccessExpr->objectName];
+			if (arrayAlloca) {
+				// Load the data pointer
+				mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+				// Get pointer to capacity at offset -4 (use GEP with i8 type for byte offsets)
+				mir::MIRValue *capPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+														   {builder->getInt64(-4)}, "cap.ptr");
+				return builder->createLoad(mir::MIRType::getInt32(), capPtr, "capacity");
+			}
+
 			// Static arrays don't have capacity - capacity == length
 			std::string lengthVar = memberAccessExpr->objectName + ".__length";
 			mir::MIRValue *lengthAlloca = namedValues[lengthVar];

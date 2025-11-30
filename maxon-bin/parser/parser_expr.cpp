@@ -57,18 +57,20 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		return std::make_unique<StringLiteralExprAST>(value, line, column);
 	}
 
-	// Array literal: [5]int or [1,2,3]
+	// Array literal: [5]int, [_len]byte, or [1,2,3]
 	if (check(TokenType::LBRACKET)) {
 		int line = currentLine();
 		int column = currentColumn();
 		advance(); // consume '['
 
 		// Look ahead to determine which form:
-		// - If first element is a number followed by ']' then type: [size]type
-		// - Otherwise: [val1, val2, ...]
+		// - [size]type where size is a constant number
+		// - [expr]type where expr is a runtime expression (variable, arithmetic, etc.)
+		// - [val1, val2, ...] value-initialized array
 
+		// Check for [size]type form with constant integer
 		if (check(TokenType::NUMBER) && peekToken(1).type == TokenType::RBRACKET) {
-			// [size]type form
+			// [size]type form with constant size
 			Token sizeToken = expect(TokenType::NUMBER, "Expected array size");
 			int size = std::stoi(sizeToken.value);
 			expectAdvance(TokenType::RBRACKET, "Expected ']' after array size");
@@ -87,21 +89,73 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 			}
 
 			return std::make_unique<ArrayLiteralExprAST>(size, elementType, line, column);
-		} else {
-			// [val1, val2, ...] form
-			std::vector<std::unique_ptr<ExprAST>> values;
+		}
 
-			if (!check(TokenType::RBRACKET)) {
-				values.push_back(parseLogicalOr());
+		// Check for [expr]type form with variable size (e.g., [_len]byte, [n + 1]int)
+		// This is an identifier (or expression) followed by ']' then a type
+		if (check(TokenType::IDENTIFIER) && peekToken(1).type == TokenType::RBRACKET) {
+			// Parse the size expression
+			auto sizeExpr = parseLogicalOr();
+			expectAdvance(TokenType::RBRACKET, "Expected ']' after array size expression");
 
-				while (match(TokenType::COMMA)) {
-					values.push_back(parseLogicalOr());
+			// Check if followed by a type (indicating [expr]type form)
+			auto kd = currentKeywordData();
+			if ((kd && kd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+				// [expr]type form - variable-sized array
+				std::string elementType;
+				if (kd && kd->category == KeywordCategory::Type) {
+					elementType = std::string(currentValue());
+					advance();
+				} else {
+					elementType = parseQualifiedName("array element type");
+				}
+				return std::make_unique<ArrayLiteralExprAST>(std::move(sizeExpr), elementType, line, column);
+			} else {
+				// Not followed by type - this is a single-element array literal [val]
+				// Re-wrap the expression as a value array
+				std::vector<std::unique_ptr<ExprAST>> values;
+				values.push_back(std::move(sizeExpr));
+				return std::make_unique<ArrayLiteralExprAST>(std::move(values), line, column);
+			}
+		}
+
+		// [val1, val2, ...] form or more complex [expr]type form
+		std::vector<std::unique_ptr<ExprAST>> values;
+
+		if (!check(TokenType::RBRACKET)) {
+			values.push_back(parseLogicalOr());
+
+			// Check if this might be [expr]type after parsing first expression
+			if (check(TokenType::RBRACKET)) {
+				size_t savedPos = position;
+				advance(); // consume ']'
+
+				// Check if followed by a type
+				auto kd = currentKeywordData();
+				if ((kd && kd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+					// [expr]type form - variable-sized array
+					std::string elementType;
+					if (kd && kd->category == KeywordCategory::Type) {
+						elementType = std::string(currentValue());
+						advance();
+					} else {
+						elementType = parseQualifiedName("array element type");
+					}
+					return std::make_unique<ArrayLiteralExprAST>(std::move(values[0]), elementType, line, column);
+				} else {
+					// Not followed by type - restore and treat as single-element array
+					position = savedPos;
+					cache_.set_position(savedPos);
 				}
 			}
 
-			expectAdvance(TokenType::RBRACKET, "Expected ']' after array values");
-			return std::make_unique<ArrayLiteralExprAST>(std::move(values), line, column);
+			while (match(TokenType::COMMA)) {
+				values.push_back(parseLogicalOr());
+			}
 		}
+
+		expectAdvance(TokenType::RBRACKET, "Expected ']' after array values");
+		return std::make_unique<ArrayLiteralExprAST>(std::move(values), line, column);
 	}
 
 	// Math intrinsic function keywords (built-in functions)

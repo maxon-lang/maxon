@@ -29,9 +29,19 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		return "string";
 
 	} else if (auto arrayLiteral = dynamic_cast<ArrayLiteralExprAST *>(expr)) {
-		// Array literal: [5]int or [1,2,3]
-		if (arrayLiteral->size > 0) {
-			// [size]type form - zero-initialized array
+		// Array literal: [5]int, [_len]byte, or [1,2,3]
+		if (arrayLiteral->hasVariableSize()) {
+			// [expr]type form - variable-sized array (runtime size)
+			std::string sizeType = analyzeExpression(arrayLiteral->sizeExpr.get());
+			if (sizeType != "int") {
+				addError("Array size expression must be of type 'int', got '" + sizeType + "'",
+						 expr->line, expr->column);
+				return "error";
+			}
+			// Variable-sized arrays have dynamic type []type (size not known at compile time)
+			return "[]" + arrayLiteral->elementType;
+		} else if (arrayLiteral->size > 0) {
+			// [size]type form - constant-size zero-initialized array
 			return "[" + std::to_string(arrayLiteral->size) + "]" + arrayLiteral->elementType;
 		} else {
 			// [val1, val2, ...] form - value-initialized array

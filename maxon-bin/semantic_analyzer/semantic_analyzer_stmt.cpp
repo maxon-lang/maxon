@@ -61,13 +61,14 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 					 stmt->line, stmt->column);
 		}
 
-		// Check if initializer is a sized-form array literal (not allowed with let)
+		// Check if initializer is a constant-sized array literal (not allowed with let)
+		// Variable-sized arrays like [_len]byte ARE allowed with let (immutable but runtime size)
 		if (auto arrayLit = dynamic_cast<ArrayLiteralExprAST *>(letDecl->initializer.get())) {
-			if (arrayLit->size > 0 && !arrayLit->elementType.empty()) {
+			if (arrayLit->size > 0 && !arrayLit->elementType.empty() && !arrayLit->hasVariableSize()) {
 				addError("Static arrays (declared with 'let') must use value literals" +
 							 std::string("\n  Use: let ") + letDecl->name + " = [value1, value2, ...]" +
 							 "\n  Not: let " + letDecl->name + " = [" + std::to_string(arrayLit->size) + "]" +
-							 arrayLit->elementType + "\n  Note: Use 'var' for dynamically-sized arrays",
+							 arrayLit->elementType + "\n  Note: Use 'var' for dynamically-sized arrays, or use [expr]type for runtime-sized immutable arrays",
 						 stmt->line, stmt->column);
 			}
 		}
