@@ -651,8 +651,12 @@ std::string MIRModule::toString() const {
 	}
 	ss << "\n";
 
-	// Struct type definitions
+	// Struct type definitions (only emit types that are actually used)
+	bool hasUsedTypes = false;
 	for (const auto &[name, type] : structTypes) {
+		if (!type->used)
+			continue;
+		hasUsedTypes = true;
 		ss << "%" << name << " = type { ";
 		for (size_t i = 0; i < type->fieldTypes.size(); ++i) {
 			if (i > 0)
@@ -661,7 +665,7 @@ std::string MIRModule::toString() const {
 		}
 		ss << " }\n";
 	}
-	if (!structTypes.empty())
+	if (hasUsedTypes)
 		ss << "\n";
 
 	// Globals

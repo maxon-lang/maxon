@@ -110,6 +110,34 @@ static std::string getExpressionMaxonType(ExprAST *expr,
 		// For other binary ops, return empty (will use default numeric behavior)
 		return "";
 	}
+	// Handle call expressions - check for known string-returning methods
+	if (auto *callExpr = dynamic_cast<CallExprAST *>(expr)) {
+		// Check if callee is a string method that returns string
+		const std::string &callee = callExpr->callee;
+		// Common string methods that return string
+		// The callee can be either unqualified "toLower" (method call syntax s.toLower())
+		// or qualified "string.toLower" (direct call syntax string.toLower(s))
+		if (callee == "string.toLower" || callee == "string.toUpper" ||
+			callee == "string.concat" || callee == "string.trimWhitespace" ||
+			callee == "string.slice" ||
+			callee == "toLower" || callee == "toUpper" ||
+			callee == "concat" || callee == "trimWhitespace" ||
+			callee == "slice") {
+			// For unqualified method calls, check if first arg is a string
+			if (!callExpr->args.empty()) {
+				std::string firstArgType = getExpressionMaxonType(callExpr->args[0].get(), variableTypes, structTypes, structFields, currentReceiverType);
+				if (firstArgType == "string") {
+					return "string";
+				}
+			}
+			// For qualified calls, return string directly
+			if (callee.find("string.") == 0) {
+				return "string";
+			}
+		}
+		// For other calls, return empty (will use default behavior)
+		return "";
+	}
 	// For other expression types, return empty (will use default behavior)
 	return "";
 }
@@ -127,7 +155,7 @@ struct MemberAddressResult {
 // String layout: struct string { data []byte, _len int, _capacity int, _iterPos int }
 // where []byte is a fat pointer { ptr, i32 }
 // SSO threshold: strings <= 15 bytes use constant data; > 15 bytes use heap allocation
-// Heap strings use string_alloc which prepends a refcount header for COW
+// Heap strings use _managed_string_alloc which prepends a refcount header for COW
 
 mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *strExpr) {
 	// Check if we should generate as []byte slice instead of full string struct
@@ -136,7 +164,26 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 	}
 
 	// Get the string struct type (defined by stdlib)
+	// string = { _managed ptr }  where _managed is an OPAQUE POINTER
+	// The data at that pointer has layout: { _buffer []byte, _len int, _capacity int, _iterPos int }
 	mir::MIRType *stringType = getTypeFromString("string");
+
+	// Get or create __ManagedStringData type (internal layout at the pointer)
+	mir::MIRType *managedDataType = structTypes["__ManagedStringData"];
+	if (!managedDataType) {
+		mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+		if (!unsizedArrayType) {
+			unsizedArrayType = module->getOrCreateStructType(
+				"__unsized_array_byte",
+				{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+			structTypes["__unsized_array_byte"] = unsizedArrayType;
+		}
+		managedDataType = module->getOrCreateStructType(
+			"__ManagedStringData",
+			{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+		structTypes["__ManagedStringData"] = managedDataType;
+	}
+	mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
 
 	// Create alloca for the string struct
 	mir::MIRValue *stringAlloca = builder->createAlloca(stringType, "str.literal");
@@ -153,13 +200,13 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 	int capacity = 0; // 0 = constant/SSO data, >0 = heap with refcount
 
 	if (isHeapAllocated) {
-		// Large string: heap-allocate with refcount header using string_alloc
+		// Large string: heap-allocate with refcount header using _managed_string_alloc
 		initHeapManagement();
 
-		// Declare string_alloc if not already declared (takes size and tag)
-		mir::MIRFunction *stringAllocFunc = module->getFunction("string_alloc");
+		// Declare _managed_string_alloc if not already declared (takes size and tag)
+		mir::MIRFunction *stringAllocFunc = module->getFunction("_managed_string_alloc");
 		if (!stringAllocFunc) {
-			stringAllocFunc = builder->declareFunction("string_alloc",
+			stringAllocFunc = builder->declareFunction("_managed_string_alloc",
 													   mir::MIRType::getPtr(),
 													   {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 		}
@@ -180,7 +227,7 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 		// Copy from constant data to heap buffer
 		builder->createCall(memcpyFunc, {dataPtr, constDataPtr, sizeVal}, "str.heap.copy");
 
-		// Track for cleanup at scope exit using string_release
+		// Track for cleanup at scope exit using _managed_string_release
 		// We need to store the data pointer somewhere we can load it from during cleanup
 		mir::MIRValue *dataPtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), "str.heap.ptr");
 		builder->createStore(dataPtr, dataPtrAlloca);
@@ -194,39 +241,37 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 		capacity = 0; // Constant data, no refcount
 	}
 
-	// Field 0: data []byte (fat pointer: {ptr, i32})
-	// Get pointer to the data field (field 0 of string struct)
-	mir::MIRValue *dataFieldPtr = builder->createStructGEP(stringType, stringAlloca, 0, "str.data");
+	// Allocate the __ManagedStringData struct on the stack
+	mir::MIRValue *managedDataAlloca = builder->createAlloca(managedDataType, "managed.data");
 
-	// Get the unsized array type for []byte
-	mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
-	if (!unsizedArrayType) {
-		// Create it if it doesn't exist
-		unsizedArrayType = module->getOrCreateStructType(
-			"__unsized_array_byte",
-			{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-		structTypes["__unsized_array_byte"] = unsizedArrayType;
-	}
+	// Populate the __ManagedStringData fields
+	// Field 0: _buffer []byte (fat pointer: {ptr, i32})
+	mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedDataType, managedDataAlloca, 0, "managed._buffer");
 
 	// Store the data pointer (field 0 of the fat pointer)
-	mir::MIRValue *fatPtrDataPtr = builder->createStructGEP(unsizedArrayType, dataFieldPtr, 0, "str.data.ptr");
-	builder->createStore(dataPtr, fatPtrDataPtr);
+	mir::MIRValue *bufferPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, "buffer.ptr");
+	builder->createStore(dataPtr, bufferPtrPtr);
 
 	// Store the length in the fat pointer (field 1 of the fat pointer)
-	mir::MIRValue *fatPtrLenPtr = builder->createStructGEP(unsizedArrayType, dataFieldPtr, 1, "str.data.len");
-	builder->createStore(builder->getInt32(static_cast<int>(len)), fatPtrLenPtr);
+	mir::MIRValue *bufferLenPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 1, "buffer.len");
+	builder->createStore(builder->getInt32(static_cast<int>(len)), bufferLenPtr);
 
-	// Field 1: _len int (explicit length for the string)
-	mir::MIRValue *lenFieldPtr = builder->createStructGEP(stringType, stringAlloca, 1, "str._len");
+	// Field 1: _len int
+	mir::MIRValue *lenFieldPtr = builder->createStructGEP(managedDataType, managedDataAlloca, 1, "managed._len");
 	builder->createStore(builder->getInt32(static_cast<int>(len)), lenFieldPtr);
 
 	// Field 2: _capacity int (0 = constant/SSO, >0 = heap with refcount header)
-	mir::MIRValue *capacityFieldPtr = builder->createStructGEP(stringType, stringAlloca, 2, "str._capacity");
+	mir::MIRValue *capacityFieldPtr = builder->createStructGEP(managedDataType, managedDataAlloca, 2, "managed._capacity");
 	builder->createStore(builder->getInt32(capacity), capacityFieldPtr);
 
 	// Field 3: _iterPos int (iteration position, starts at 0)
-	mir::MIRValue *iterPosFieldPtr = builder->createStructGEP(stringType, stringAlloca, 3, "str._iterPos");
+	mir::MIRValue *iterPosFieldPtr = builder->createStructGEP(managedDataType, managedDataAlloca, 3, "managed._iterPos");
 	builder->createStore(builder->getInt32(0), iterPosFieldPtr);
+
+	// Store the POINTER to the managed data in the string struct's _managed field
+	// string._managed is of type ptr (opaque pointer)
+	mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, stringAlloca, 0, "str._managed");
+	builder->createStore(managedDataAlloca, managedFieldPtr);
 
 	// Return the alloca pointer
 	return stringAlloca;
@@ -300,7 +345,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 	if (auto *castExpr = dynamic_cast<CastExprAST *>(expr)) {
 		// Check for ExpressibleByStringLiteral: "literal" as Type
-		// Transform to: Type.initFromStringLiteral(bytes, len)
+		// Transform to: Type.initFromStringLiteral(managed)
+		// where managed is a _ManagedString struct
 		if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(castExpr->expr.get())) {
 			// Check if target type conforms to ExpressibleByStringLiteral
 			auto structIt = structConformsTo.find(castExpr->targetType);
@@ -313,18 +359,59 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					}
 				}
 				if (conformsToExpressible) {
-					// Generate the string literal as a []byte slice
-					strLit->asByteSlice = true;
-					mir::MIRValue *bytesVal = generateStringLiteralAsSlice(strLit);
+					// Get or create the _ManagedString struct type
+					// Layout: { _buffer []byte, _len int, _capacity int, _iterPos int }
+					mir::MIRType *managedStringType = structTypes["_ManagedString"];
+					if (!managedStringType) {
+						// _ManagedString should be defined in stdlib, but create fallback
+						mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+						if (!unsizedArrayType) {
+							unsizedArrayType = module->getOrCreateStructType(
+								"__unsized_array_byte",
+								{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+							structTypes["__unsized_array_byte"] = unsizedArrayType;
+						}
+						managedStringType = module->getOrCreateStructType(
+							"_ManagedString",
+							{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+						structTypes["_ManagedString"] = managedStringType;
+					}
 
-					// Generate the length argument
-					mir::MIRValue *lenVal = builder->getInt32(static_cast<int>(strLit->value.length()));
+					// Create the _ManagedString struct
+					mir::MIRValue *managedAlloca = builder->createAlloca(managedStringType, "managed.literal");
 
-					// Generate the capacity argument (0 = constant data, no refcount)
-					// ExpressibleByStringLiteral uses constant data stored in read-only section
-					mir::MIRValue *capacityVal = builder->getInt32(0);
+					// Get string content
+					const std::string &str = strLit->value;
+					size_t len = str.length();
 
-					// Call Type.initFromStringLiteral(bytes, len, capacity)
+					// Create global constant for string data
+					std::string globalName = ".str." + std::to_string(stringLiteralCounter++);
+					mir::MIRValue *dataPtr = module->createGlobalString(globalName, str);
+
+					// Get the unsized array type for []byte (the _buffer field)
+					mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+
+					// Field 0: _buffer []byte (fat pointer: {ptr, i32})
+					mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 0, "managed._buffer");
+					mir::MIRValue *bufferDataPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, "managed._buffer.ptr");
+					builder->createStore(dataPtr, bufferDataPtr);
+					mir::MIRValue *bufferLenPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 1, "managed._buffer.len");
+					builder->createStore(builder->getInt32(static_cast<int>(len)), bufferLenPtr);
+
+					// Field 1: _len int
+					mir::MIRValue *lenFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 1, "managed._len");
+					builder->createStore(builder->getInt32(static_cast<int>(len)), lenFieldPtr);
+
+					// Field 2: _capacity int (0 = constant data)
+					mir::MIRValue *capacityFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 2, "managed._capacity");
+					builder->createStore(builder->getInt32(0), capacityFieldPtr);
+
+					// Field 3: _iterPos int (0 = start)
+					mir::MIRValue *iterPosFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 3, "managed._iterPos");
+					builder->createStore(builder->getInt32(0), iterPosFieldPtr);
+
+					// Call Type.initFromStringLiteral(self, managed)
+					// Note: self is null since this is a factory method that creates a new instance
 					std::string methodName = castExpr->targetType + ".initFromStringLiteral";
 					mir::MIRFunction *initFunc = module->getFunction(methodName);
 					if (!initFunc) {
@@ -332,7 +419,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 												 "' conforms to ExpressibleByStringLiteral but has no initFromStringLiteral method");
 					}
 
-					return builder->createCall(initFunc, {bytesVal, lenVal, capacityVal}, "literal.init");
+					// Pass null for self (factory method doesn't use it)
+					mir::MIRValue *nullSelf = builder->getNull();
+					return builder->createCall(initFunc, {nullSelf, managedAlloca}, "literal.init");
 				}
 			}
 		}
@@ -949,7 +1038,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			std::string rightType = getExpressionMaxonType(binExpr->right.get(), variableTypes, structTypes, structFields, currentReceiverType);
 
 			if (leftType == "string" && rightType == "string") {
-				// Initialize heap management for string_alloc
+				// Initialize heap management for _managed_string_alloc
 				initHeapManagement();
 
 				// Get pointers to both string structs
@@ -976,20 +1065,33 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 				mir::MIRType *stringType = structTypes["string"];
 				mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+				mir::MIRType *managedStringDataType = structTypes["__ManagedStringData"];
+				if (!managedStringDataType) {
+					managedStringDataType = module->getOrCreateStructType(
+						"__ManagedStringData",
+						{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+					structTypes["__ManagedStringData"] = managedStringDataType;
+				}
 
-				// Get lengths from both strings (field 1 = _len)
-				mir::MIRValue *leftLenPtr = builder->createStructGEP(stringType, leftPtr, 1, "left_len_ptr");
+				// Get _managed pointers from both strings (field 0 of string is _managed ptr)
+				mir::MIRValue *leftManagedFieldPtr = builder->createStructGEP(stringType, leftPtr, 0, "left_managed_field");
+				mir::MIRValue *leftManagedPtr = builder->createLoad(mir::MIRType::getPtr(), leftManagedFieldPtr, "left_managed_ptr");
+				mir::MIRValue *rightManagedFieldPtr = builder->createStructGEP(stringType, rightPtr, 0, "right_managed_field");
+				mir::MIRValue *rightManagedPtr = builder->createLoad(mir::MIRType::getPtr(), rightManagedFieldPtr, "right_managed_ptr");
+
+				// Get lengths from __ManagedStringData (field 1 = _len)
+				mir::MIRValue *leftLenPtr = builder->createStructGEP(managedStringDataType, leftManagedPtr, 1, "left_len_ptr");
 				mir::MIRValue *leftLen = builder->createLoad(mir::MIRType::getInt32(), leftLenPtr, "left_len");
-				mir::MIRValue *rightLenPtr = builder->createStructGEP(stringType, rightPtr, 1, "right_len_ptr");
+				mir::MIRValue *rightLenPtr = builder->createStructGEP(managedStringDataType, rightManagedPtr, 1, "right_len_ptr");
 				mir::MIRValue *rightLen = builder->createLoad(mir::MIRType::getInt32(), rightLenPtr, "right_len");
 
 				// Calculate combined length
 				mir::MIRValue *combinedLen = builder->createAdd(leftLen, rightLen, "combined_len");
 
-				// Allocate heap buffer with refcount header using string_alloc
-				mir::MIRFunction *stringAllocFunc = module->getFunction("string_alloc");
+				// Allocate heap buffer with refcount header using _managed_string_alloc
+				mir::MIRFunction *stringAllocFunc = module->getFunction("_managed_string_alloc");
 				if (!stringAllocFunc) {
-					stringAllocFunc = builder->declareFunction("string_alloc",
+					stringAllocFunc = builder->declareFunction("_managed_string_alloc",
 															   mir::MIRType::getPtr(),
 															   {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 				}
@@ -1002,44 +1104,54 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				// Get memcpy function
 				mir::MIRFunction *memcpyFunc = module->getFunction("memcpy");
 
-				// Copy left string data
-				mir::MIRValue *leftDataFieldPtr = builder->createStructGEP(stringType, leftPtr, 0, "left_data_field");
-				mir::MIRValue *leftDataPtrPtr = builder->createStructGEP(unsizedArrayType, leftDataFieldPtr, 0, "left_data_ptr_ptr");
+				// Copy left string data - get buffer ptr from __ManagedStringData
+				mir::MIRValue *leftBufFieldPtr = builder->createStructGEP(managedStringDataType, leftManagedPtr, 0, "left_buf_field");
+				mir::MIRValue *leftDataPtrPtr = builder->createStructGEP(unsizedArrayType, leftBufFieldPtr, 0, "left_data_ptr_ptr");
 				mir::MIRValue *leftDataPtr = builder->createLoad(mir::MIRType::getPtr(), leftDataPtrPtr, "left_data_ptr");
 				mir::MIRValue *leftLen64 = builder->createSExt(leftLen, mir::MIRType::getInt64(), "left_len64");
 				builder->createCall(memcpyFunc, {newDataPtr, leftDataPtr, leftLen64}, "copy_left");
 
 				// Copy right string data (at offset = leftLen)
 				mir::MIRValue *destOffset = builder->createGEP(mir::MIRType::getInt8(), newDataPtr, {leftLen64}, "dest_offset");
-				mir::MIRValue *rightDataFieldPtr = builder->createStructGEP(stringType, rightPtr, 0, "right_data_field");
-				mir::MIRValue *rightDataPtrPtr = builder->createStructGEP(unsizedArrayType, rightDataFieldPtr, 0, "right_data_ptr_ptr");
+				mir::MIRValue *rightBufFieldPtr = builder->createStructGEP(managedStringDataType, rightManagedPtr, 0, "right_buf_field");
+				mir::MIRValue *rightDataPtrPtr = builder->createStructGEP(unsizedArrayType, rightBufFieldPtr, 0, "right_data_ptr_ptr");
 				mir::MIRValue *rightDataPtr = builder->createLoad(mir::MIRType::getPtr(), rightDataPtrPtr, "right_data_ptr");
 				mir::MIRValue *rightLen64 = builder->createSExt(rightLen, mir::MIRType::getInt64(), "right_len64");
 				builder->createCall(memcpyFunc, {destOffset, rightDataPtr, rightLen64}, "copy_right");
 
+				// Heap-allocate the __ManagedStringData struct for the result
+				mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
+				mir::MIRValue *managedSize = builder->getInt64(32);
+				mir::MIRValue *newManagedPtr = builder->createCall(mallocFunc, {managedSize}, "concat_managed");
+
+				// Set up the __ManagedStringData struct
+				// Field 0: _buffer (fat pointer)
+				mir::MIRValue *newBufFieldPtr = builder->createStructGEP(managedStringDataType, newManagedPtr, 0, "new_buf_field");
+				mir::MIRValue *newBufPtrPtr = builder->createStructGEP(unsizedArrayType, newBufFieldPtr, 0, "new_buf_ptr_ptr");
+				builder->createStore(newDataPtr, newBufPtrPtr);
+				mir::MIRValue *newBufLenPtr = builder->createStructGEP(unsizedArrayType, newBufFieldPtr, 1, "new_buf_len_ptr");
+				builder->createStore(combinedLen, newBufLenPtr);
+
+				// Field 1: _len
+				mir::MIRValue *newLenPtr = builder->createStructGEP(managedStringDataType, newManagedPtr, 1, "new_len_ptr");
+				builder->createStore(combinedLen, newLenPtr);
+
+				// Field 2: _capacity
+				mir::MIRValue *newCapPtr = builder->createStructGEP(managedStringDataType, newManagedPtr, 2, "new_cap_ptr");
+				builder->createStore(combinedLen, newCapPtr);
+
+				// Field 3: _iterPos
+				mir::MIRValue *newIterPosPtr = builder->createStructGEP(managedStringDataType, newManagedPtr, 3, "new_iterpos_ptr");
+				builder->createStore(builder->getInt32(0), newIterPosPtr);
+
 				// Create the result string struct on stack
 				mir::MIRValue *resultAlloca = builder->createAlloca(stringType, "concat_result");
 
-				// Field 0: data []byte (fat pointer)
-				mir::MIRValue *resultDataField = builder->createStructGEP(stringType, resultAlloca, 0, "result_data_field");
-				mir::MIRValue *resultDataPtrPtr = builder->createStructGEP(unsizedArrayType, resultDataField, 0, "result_data_ptr");
-				builder->createStore(newDataPtr, resultDataPtrPtr);
-				mir::MIRValue *resultDataLenPtr = builder->createStructGEP(unsizedArrayType, resultDataField, 1, "result_data_len");
-				builder->createStore(combinedLen, resultDataLenPtr);
+				// Field 0: _managed (ptr to __ManagedStringData)
+				mir::MIRValue *resultManagedFieldPtr = builder->createStructGEP(stringType, resultAlloca, 0, "result_managed_field");
+				builder->createStore(newManagedPtr, resultManagedFieldPtr);
 
-				// Field 1: _len
-				mir::MIRValue *resultLenPtr = builder->createStructGEP(stringType, resultAlloca, 1, "result_len");
-				builder->createStore(combinedLen, resultLenPtr);
-
-				// Field 2: _capacity (> 0 indicates heap allocation with refcount)
-				mir::MIRValue *resultCapacityPtr = builder->createStructGEP(stringType, resultAlloca, 2, "result_capacity");
-				builder->createStore(combinedLen, resultCapacityPtr);
-
-				// Field 3: _iterPos
-				mir::MIRValue *resultIterPosPtr = builder->createStructGEP(stringType, resultAlloca, 3, "result_iterpos");
-				builder->createStore(builder->getInt32(0), resultIterPosPtr);
-
-				// Track for cleanup at scope exit
+				// Track for cleanup at scope exit - track both the buffer and the managed struct
 				mir::MIRValue *dataPtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), "concat.heap.ptr");
 				builder->createStore(newDataPtr, dataPtrAlloca);
 				if (!scopeStack.empty()) {
@@ -1163,6 +1275,11 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			return generateArrayIntrinsic(callExpr);
 		}
 
+		// Handle string intrinsics (__string_* functions)
+		if (isStringIntrinsic(callExpr->callee)) {
+			return generateStringIntrinsic(callExpr);
+		}
+
 		// Initialize standard library if needed
 		if (callExpr->callee == "print" || callExpr->callee == "print_float") {
 			initStandardLibrary();
@@ -1176,16 +1293,26 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				argType = variableTypes[varExpr->name];
 			} else if (dynamic_cast<StringLiteralExprAST *>(callExpr->args[0].get())) {
 				argType = "string";
+			} else if (auto *callArg = dynamic_cast<CallExprAST *>(callExpr->args[0].get())) {
+				// Check if it's a method call returning string (e.g., s.toLower())
+				argType = getExpressionMaxonType(callArg, variableTypes, structTypes, structFields, currentReceiverType);
+			} else if (auto *binArg = dynamic_cast<BinaryExprAST *>(callExpr->args[0].get())) {
+				// Check if it's a binary expression returning string (e.g., a + b where both are strings)
+				argType = getExpressionMaxonType(binArg, variableTypes, structTypes, structFields, currentReceiverType);
 			}
 
 			if (argType == "string") {
 				// Generate inline string printing:
-				// 1. Get pointer to string struct
-				// 2. Extract data pointer (field 0, subfield 0) and length (field 1)
-				// 3. Call write_stdout(data, length)
-				// 4. Print newline
+				// string = { _managed _ManagedString }
+				// _ManagedString = { _buffer []byte, _len int, _capacity int, _iterPos int }
+				// []byte = { ptr, i32 }
+				//
+				// So: string._managed._buffer.ptr = field 0, field 0, field 0
+				//     string._managed._len = field 0, field 1
 
 				mir::MIRValue *strPtr = nullptr;
+				mir::MIRType *stringType = structTypes["string"];
+
 				if (auto *varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].get())) {
 					mir::MIRValue *alloca = namedValues[varExpr->name];
 					if (isStructParameter(varExpr->name)) {
@@ -1193,26 +1320,45 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					} else {
 						strPtr = alloca;
 					}
-				} else {
+				} else if (dynamic_cast<StringLiteralExprAST *>(callExpr->args[0].get())) {
 					// String literal - generate it and get its pointer
 					strPtr = generateExpr(callExpr->args[0].get());
+				} else if (dynamic_cast<BinaryExprAST *>(callExpr->args[0].get())) {
+					// Binary expression (e.g., a + b) returns a pointer to string struct
+					strPtr = generateExpr(callExpr->args[0].get());
+				} else {
+					// Method call or other expression returning a string value
+					// Generate the expression - it may return a string VALUE (not pointer)
+					mir::MIRValue *strValue = generateExpr(callExpr->args[0].get());
+					// Check if it's already a pointer (alloca) or a loaded value
+					// If the result type is %string (struct), we need to store it
+					// If it's ptr, we can use it directly
+					if (strValue->type->isPointer()) {
+						strPtr = strValue;
+					} else {
+						// Allocate storage and store the value
+						strPtr = builder->createAlloca(stringType, "print.str.tmp");
+						builder->createStore(strValue, strPtr);
+					}
 				}
 
-				// Get string struct type and unsized array type
-				mir::MIRType *stringType = structTypes["string"];
+				// Get __ManagedStringData type (the internal struct that _managed points to)
+				mir::MIRType *managedStringDataType = structTypes["__ManagedStringData"];
 				mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
 
-				// Get the data pointer: string.data.ptr (field 0, subfield 0)
-				// String layout: { {ptr, i32}, i32, i32, i32 } = { data[]byte, _len, _capacity, _iterPos }
-				mir::MIRValue *dataFieldPtr = builder->createStructGEP(stringType, strPtr, 0, "data_field");
-				mir::MIRValue *dataPtrPtr = builder->createStructGEP(unsizedArrayType, dataFieldPtr, 0, "data_ptr_ptr");
+				// Get _managed field pointer: string._managed (field 0) - this is a ptr field
+				mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, strPtr, 0, "_managed.field.ptr");
+				// Load the _managed pointer value (it points to __ManagedStringData)
+				mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, "_managed.ptr");
+
+				// Get the data pointer: managedData._buffer.ptr (field 0, subfield 0)
+				mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringDataType, managedPtr, 0, "_buffer.ptr");
+				mir::MIRValue *dataPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, "data_ptr_ptr");
 				mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrPtr, "data_ptr");
 
-				// Get the length: string._len (field 1)
-				mir::MIRValue *lenPtr = builder->createStructGEP(stringType, strPtr, 1, "len_ptr");
-				mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
-
-				// Call write_stdout(data, length)
+				// Get the length: managedData._len (field 1)
+				mir::MIRValue *lenPtr = builder->createStructGEP(managedStringDataType, managedPtr, 1, "_len.ptr");
+				mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len"); // Call write_stdout(data, length)
 				mir::MIRFunction *writeStdout = getOrDeclareFunction("write_stdout",
 																	 mir::MIRType::getInt32(),
 																	 {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
@@ -1627,4 +1773,602 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 	}
 
 	throw std::runtime_error("Unknown array intrinsic: " + callExpr->callee);
+}
+
+//==============================================================================
+// String Intrinsic Generation
+//==============================================================================
+
+bool MIRCodeGenerator::isStringIntrinsic(const std::string &name) {
+	return name.rfind("__string_", 0) == 0;
+}
+
+mir::MIRValue *MIRCodeGenerator::generateStringIntrinsic(CallExprAST *callExpr) {
+	const std::string &name = callExpr->callee;
+
+	// Get or create the internal __ManagedStringData struct type
+	// This is the layout of data pointed to by the opaque _ManagedString pointer
+	// Layout: { _buffer []byte, _len int, _capacity int, _iterPos int }
+	mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
+	if (!managedStringType) {
+		mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+		if (!unsizedArrayType) {
+			unsizedArrayType = module->getOrCreateStructType(
+				"__unsized_array_byte",
+				{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+			structTypes["__unsized_array_byte"] = unsizedArrayType;
+		}
+		managedStringType = module->getOrCreateStructType(
+			"__ManagedStringData",
+			{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+		structTypes["__ManagedStringData"] = managedStringType;
+	}
+	mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+
+	// Helper lambda to get the _ManagedString POINTER VALUE from an expression
+	// _ManagedString is an opaque pointer - the `_managed` field stores a ptr
+	// This returns the pointer value (to be used directly for GEP on __ManagedStringData)
+	auto getManagedStringPtr = [&](ExprAST *arg) -> mir::MIRValue * {
+		// Check if this is an implicit field access (just a field name like _managed)
+		if (auto *varExpr = dynamic_cast<VariableExprAST *>(arg)) {
+			// Check for implicit field access (field name from current struct)
+			if (!currentReceiverType.empty()) {
+				auto fieldsIt = structFields.find(currentReceiverType);
+				if (fieldsIt != structFields.end()) {
+					for (size_t i = 0; i < fieldsIt->second.size(); i++) {
+						if (fieldsIt->second[i].first == varExpr->name) {
+							// Found the field - get pointer to it via self
+							mir::MIRValue *selfAlloca = namedValues["self"];
+							if (selfAlloca) {
+								mir::MIRValue *selfPtr;
+								if (isStructParameter("self")) {
+									selfPtr = builder->createLoad(mir::MIRType::getPtr(), selfAlloca, "self.ptr");
+								} else {
+									selfPtr = selfAlloca;
+								}
+								mir::MIRType *structType = structTypes[currentReceiverType];
+								// Get pointer to the _managed field
+								mir::MIRValue *managedFieldPtr = builder->createStructGEP(structType, selfPtr, static_cast<int>(i), varExpr->name + ".ptr");
+								// _managed is a ptr type - load the pointer value
+								return builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, varExpr->name + ".val");
+							}
+						}
+					}
+				}
+			}
+			// Regular variable - return its value (should be a ptr)
+			auto it = namedValues.find(varExpr->name);
+			if (it != namedValues.end()) {
+				return builder->createLoad(mir::MIRType::getPtr(), it->second, varExpr->name + ".val");
+			}
+		}
+		// Check for member access like str._managed or _str._managed
+		if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(arg)) {
+			// Generate the object pointer
+			mir::MIRValue *objectPtr = nullptr;
+			std::string objectType;
+
+			if (memberExpr->object) {
+				// Explicit object expression - generate it
+				objectPtr = generateExpr(memberExpr->object.get());
+				objectType = getExpressionMaxonType(memberExpr->object.get(), variableTypes, structTypes, structFields, currentReceiverType);
+			} else {
+				// Just objectName - could be a local variable or an implicit self field access
+				auto allocaIt = namedValues.find(memberExpr->objectName);
+				// Check if it exists AND has a non-null value (namedValues can have null entries)
+				if (allocaIt != namedValues.end() && allocaIt->second != nullptr) {
+					// It's a local variable
+					objectType = variableTypes[memberExpr->objectName];
+					if (isStructParameter(memberExpr->objectName)) {
+						objectPtr = builder->createLoad(mir::MIRType::getPtr(), allocaIt->second, "struct.ptr");
+					} else {
+						objectPtr = allocaIt->second;
+					}
+				} else if (!currentReceiverType.empty()) {
+					// Check if it's an implicit self field access
+					auto fieldsIt = structFields.find(currentReceiverType);
+					if (fieldsIt != structFields.end()) {
+						for (size_t i = 0; i < fieldsIt->second.size(); i++) {
+							if (fieldsIt->second[i].first == memberExpr->objectName) {
+								// It's a field of self - get pointer to it
+								mir::MIRValue *selfAlloca = namedValues["self"];
+								if (!selfAlloca) {
+									throw std::runtime_error("Field found but no self: " + memberExpr->objectName + " in " + currentReceiverType);
+								}
+								mir::MIRValue *selfPtr;
+								if (isStructParameter("self")) {
+									selfPtr = builder->createLoad(mir::MIRType::getPtr(), selfAlloca, "self.ptr");
+								} else {
+									selfPtr = selfAlloca;
+								}
+								mir::MIRType *selfStructType = structTypes[currentReceiverType];
+								if (!selfStructType) {
+									throw std::runtime_error("No struct type for: " + currentReceiverType);
+								}
+								objectPtr = builder->createStructGEP(selfStructType, selfPtr, static_cast<int>(i), memberExpr->objectName + ".field.ptr");
+								objectType = fieldsIt->second[i].second;
+								break;
+							}
+						}
+					}
+				}
+
+				if (!objectPtr) {
+					std::string debugInfo = "Unknown variable: " + memberExpr->objectName +
+											" (currentReceiverType=" + currentReceiverType +
+											", structFields has " + std::to_string(structFields.count(currentReceiverType)) + " entry";
+					auto fieldsIt = structFields.find(currentReceiverType);
+					if (fieldsIt != structFields.end()) {
+						debugInfo += ", fields: [";
+						for (size_t i = 0; i < fieldsIt->second.size(); i++) {
+							if (i > 0)
+								debugInfo += ", ";
+							debugInfo += fieldsIt->second[i].first + ":" + fieldsIt->second[i].second;
+						}
+						debugInfo += "]";
+					}
+					debugInfo += ")";
+					throw std::runtime_error(debugInfo);
+				}
+			}
+
+			// Find the _managed field index and load the pointer value
+			auto fieldsIt = structFields.find(objectType);
+			if (fieldsIt != structFields.end()) {
+				for (size_t i = 0; i < fieldsIt->second.size(); i++) {
+					if (fieldsIt->second[i].first == memberExpr->memberName) {
+						mir::MIRType *structType = structTypes[objectType];
+						mir::MIRValue *fieldPtr = builder->createStructGEP(structType, objectPtr, static_cast<int>(i), memberExpr->memberName + ".ptr");
+						// _managed is ptr type - load the pointer value
+						return builder->createLoad(mir::MIRType::getPtr(), fieldPtr, memberExpr->memberName + ".val");
+					}
+				}
+			}
+		}
+		// Fallback - generate expr and assume it's a ptr value
+		return generateExpr(arg);
+	};
+
+	// __string_len(managed) - get byte length
+	if (name == "__string_len") {
+		if (callExpr->args.size() != 1) {
+			throw std::runtime_error("__string_len requires exactly 1 argument");
+		}
+		mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+
+		// _len is at field index 1
+		mir::MIRValue *lenPtr = builder->createStructGEP(managedStringType, managedPtr, 1, "managed._len");
+		return builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
+	}
+
+	// __string_buffer(managed) - get pointer to the raw buffer bytes
+	if (name == "__string_buffer") {
+		if (callExpr->args.size() != 1) {
+			throw std::runtime_error("__string_buffer requires exactly 1 argument");
+		}
+		mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+
+		// Get buffer pointer: _buffer.ptr is at field 0, subfield 0
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "managed._buffer");
+		mir::MIRValue *bufferPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, "buffer.ptr.ptr");
+		return builder->createLoad(mir::MIRType::getPtr(), bufferPtrPtr, "buffer.ptr");
+	}
+
+	// __string_byte_at(managed, index) - get byte at index
+	if (name == "__string_byte_at") {
+		if (callExpr->args.size() != 2) {
+			throw std::runtime_error("__string_byte_at requires exactly 2 arguments");
+		}
+		mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+		mir::MIRValue *index = generateExpr(callExpr->args[1].get());
+
+		// Get buffer pointer: _buffer.ptr is at field 0, subfield 0
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "managed._buffer");
+		mir::MIRValue *bufferPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, "buffer.ptr.ptr");
+		mir::MIRValue *bufferPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtrPtr, "buffer.ptr");
+
+		// Index into buffer
+		mir::MIRValue *index64 = builder->createSExt(index, mir::MIRType::getInt64(), "idx64");
+		mir::MIRValue *bytePtr = builder->createArrayGEP(mir::MIRType::getInt8(), bufferPtr, index64, "byte.ptr");
+		return builder->createLoad(mir::MIRType::getInt8(), bytePtr, "byte");
+	}
+
+	// __string_iter_pos(managed) - get current iteration position
+	if (name == "__string_iter_pos") {
+		if (callExpr->args.size() != 1) {
+			throw std::runtime_error("__string_iter_pos requires exactly 1 argument");
+		}
+		mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+
+		// _iterPos is at field index 3
+		mir::MIRValue *iterPosPtr = builder->createStructGEP(managedStringType, managedPtr, 3, "managed._iterPos");
+		return builder->createLoad(mir::MIRType::getInt32(), iterPosPtr, "iterPos");
+	}
+
+	// __string_with_iter_pos(managed, pos) - create copy with new iteration position
+	// Returns a heap-allocated _ManagedString pointer (opaque ptr to __ManagedStringData)
+	// This shares the same buffer as the original string (COW semantics)
+	if (name == "__string_with_iter_pos") {
+		if (callExpr->args.size() != 2) {
+			throw std::runtime_error("__string_with_iter_pos requires exactly 2 arguments");
+		}
+		mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+		mir::MIRValue *newPos = generateExpr(callExpr->args[1].get());
+
+		// Heap-allocate a new __ManagedStringData struct (32 bytes for alignment)
+		mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
+		mir::MIRValue *managedSize = builder->getInt64(32);
+		mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize}, "new.managed");
+
+		// Copy buffer field (ptr and len) - sharing the underlying buffer
+		mir::MIRValue *srcBufferPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "src._buffer");
+		mir::MIRValue *dstBufferPtr = builder->createStructGEP(managedStringType, newManaged, 0, "dst._buffer");
+		// Copy buffer.ptr
+		mir::MIRValue *srcPtrPtr = builder->createStructGEP(unsizedArrayType, srcBufferPtr, 0, "src.ptr.ptr");
+		mir::MIRValue *dstPtrPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 0, "dst.ptr.ptr");
+		mir::MIRValue *bufferPtr = builder->createLoad(mir::MIRType::getPtr(), srcPtrPtr, "buffer.ptr");
+		builder->createStore(bufferPtr, dstPtrPtr);
+		// Copy buffer.len
+		mir::MIRValue *srcBufLenPtr = builder->createStructGEP(unsizedArrayType, srcBufferPtr, 1, "src.buflen.ptr");
+		mir::MIRValue *dstBufLenPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 1, "dst.buflen.ptr");
+		mir::MIRValue *bufLen = builder->createLoad(mir::MIRType::getInt32(), srcBufLenPtr, "buf.len");
+		builder->createStore(bufLen, dstBufLenPtr);
+
+		// Copy _len
+		mir::MIRValue *srcLenPtr = builder->createStructGEP(managedStringType, managedPtr, 1, "src._len");
+		mir::MIRValue *dstLenPtr = builder->createStructGEP(managedStringType, newManaged, 1, "dst._len");
+		mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), srcLenPtr, "len");
+		builder->createStore(len, dstLenPtr);
+
+		// Copy _capacity
+		mir::MIRValue *srcCapPtr = builder->createStructGEP(managedStringType, managedPtr, 2, "src._capacity");
+		mir::MIRValue *dstCapPtr = builder->createStructGEP(managedStringType, newManaged, 2, "dst._capacity");
+		mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), srcCapPtr, "capacity");
+		builder->createStore(cap, dstCapPtr);
+
+		// Store the new iteration position
+		mir::MIRValue *dstIterPosPtr = builder->createStructGEP(managedStringType, newManaged, 3, "dst._iterPos");
+		builder->createStore(newPos, dstIterPosPtr);
+
+		// Return the pointer to the new __ManagedStringData (opaque _ManagedString)
+		return newManaged;
+	}
+
+	// __string_slice(managed, start, end) - extract substring
+	// Returns a heap-allocated _ManagedString pointer (opaque ptr to __ManagedStringData)
+	if (name == "__string_slice") {
+		if (callExpr->args.size() != 3) {
+			throw std::runtime_error("__string_slice requires exactly 3 arguments");
+		}
+		mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+		mir::MIRValue *startIdx = generateExpr(callExpr->args[1].get());
+		mir::MIRValue *endIdx = generateExpr(callExpr->args[2].get());
+
+		// Calculate new length
+		mir::MIRValue *newLen = builder->createSub(endIdx, startIdx, "slice.len");
+
+		// Get source buffer pointer
+		mir::MIRValue *srcBufferPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "src._buffer");
+		mir::MIRValue *srcPtrPtr = builder->createStructGEP(unsizedArrayType, srcBufferPtr, 0, "src.ptr.ptr");
+		mir::MIRValue *srcPtr = builder->createLoad(mir::MIRType::getPtr(), srcPtrPtr, "src.ptr");
+
+		// Offset to start position
+		mir::MIRValue *start64 = builder->createSExt(startIdx, mir::MIRType::getInt64(), "start64");
+		mir::MIRValue *slicePtr = builder->createArrayGEP(mir::MIRType::getInt8(), srcPtr, start64, "slice.ptr");
+
+		// Allocate new buffer for the string data
+		mir::MIRValue *newLen64 = builder->createSExt(newLen, mir::MIRType::getInt64(), "newlen64");
+		mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
+		mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {newLen64}, "slice.buffer");
+
+		// Copy data: memcpy(dest, src, len)
+		mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
+															{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+		builder->createCall(memcpyFunc, {newBuffer, slicePtr, newLen64});
+
+		// Heap-allocate the __ManagedStringData struct (32 bytes for alignment)
+		mir::MIRValue *managedSize = builder->getInt64(32);
+		mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize}, "slice.managed");
+
+		// Set buffer fields: _buffer.ptr
+		mir::MIRValue *dstBufferPtr = builder->createStructGEP(managedStringType, newManaged, 0, "dst._buffer");
+		mir::MIRValue *dstPtrPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 0, "dst.ptr.ptr");
+		builder->createStore(newBuffer, dstPtrPtr);
+		// Set _buffer.len
+		mir::MIRValue *dstBufLenPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 1, "dst.buflen.ptr");
+		builder->createStore(newLen, dstBufLenPtr);
+
+		// Set _len
+		mir::MIRValue *dstLenPtr = builder->createStructGEP(managedStringType, newManaged, 1, "dst._len");
+		builder->createStore(newLen, dstLenPtr);
+
+		// Set _capacity (same as len for new allocation)
+		mir::MIRValue *dstCapPtr = builder->createStructGEP(managedStringType, newManaged, 2, "dst._capacity");
+		builder->createStore(newLen, dstCapPtr);
+
+		// Set _iterPos to 0
+		mir::MIRValue *dstIterPosPtr = builder->createStructGEP(managedStringType, newManaged, 3, "dst._iterPos");
+		builder->createStore(builder->getInt32(0), dstIterPosPtr);
+
+		// Return the pointer to the new __ManagedStringData (opaque _ManagedString)
+		return newManaged;
+	}
+
+	// __string_concat(m1, m2) - concatenate two strings
+	// Returns a heap-allocated _ManagedString pointer (opaque ptr to __ManagedStringData)
+	if (name == "__string_concat") {
+		if (callExpr->args.size() != 2) {
+			throw std::runtime_error("__string_concat requires exactly 2 arguments");
+		}
+		mir::MIRValue *m1Ptr = getManagedStringPtr(callExpr->args[0].get());
+		mir::MIRValue *m2Ptr = getManagedStringPtr(callExpr->args[1].get());
+
+		// Get lengths
+		mir::MIRValue *len1Ptr = builder->createStructGEP(managedStringType, m1Ptr, 1, "m1._len");
+		mir::MIRValue *len1 = builder->createLoad(mir::MIRType::getInt32(), len1Ptr, "len1");
+		mir::MIRValue *len2Ptr = builder->createStructGEP(managedStringType, m2Ptr, 1, "m2._len");
+		mir::MIRValue *len2 = builder->createLoad(mir::MIRType::getInt32(), len2Ptr, "len2");
+
+		// Calculate total length
+		mir::MIRValue *totalLen = builder->createAdd(len1, len2, "total.len");
+		mir::MIRValue *totalLen64 = builder->createSExt(totalLen, mir::MIRType::getInt64(), "total64");
+
+		// Get source pointers
+		mir::MIRValue *buf1Ptr = builder->createStructGEP(managedStringType, m1Ptr, 0, "m1._buffer");
+		mir::MIRValue *ptr1Ptr = builder->createStructGEP(unsizedArrayType, buf1Ptr, 0, "ptr1.ptr");
+		mir::MIRValue *ptr1 = builder->createLoad(mir::MIRType::getPtr(), ptr1Ptr, "ptr1");
+
+		mir::MIRValue *buf2Ptr = builder->createStructGEP(managedStringType, m2Ptr, 0, "m2._buffer");
+		mir::MIRValue *ptr2Ptr = builder->createStructGEP(unsizedArrayType, buf2Ptr, 0, "ptr2.ptr");
+		mir::MIRValue *ptr2 = builder->createLoad(mir::MIRType::getPtr(), ptr2Ptr, "ptr2");
+
+		// Allocate buffer for string data
+		mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
+		mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {totalLen64}, "concat.buffer");
+
+		// Copy first string
+		mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
+															{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+		mir::MIRValue *len1_64 = builder->createSExt(len1, mir::MIRType::getInt64(), "len1_64");
+		builder->createCall(memcpyFunc, {newBuffer, ptr1, len1_64});
+
+		// Copy second string to newBuffer + len1 (pointer arithmetic with single index)
+		mir::MIRValue *destOffset = builder->createGEP(mir::MIRType::getInt8(), newBuffer, {len1_64}, "dest.offset");
+		mir::MIRValue *len2_64 = builder->createSExt(len2, mir::MIRType::getInt64(), "len2_64");
+		builder->createCall(memcpyFunc, {destOffset, ptr2, len2_64});
+
+		// Heap-allocate the __ManagedStringData struct (24 bytes: 2*ptr + 3*i32 + padding)
+		// __ManagedStringData = { __unsized_array_byte, i32, i32, i32 }
+		// __unsized_array_byte = { ptr, i32 } = 16 bytes on 64-bit
+		// So total: 16 + 4 + 4 + 4 = 28 bytes, rounded to 32 for alignment
+		mir::MIRValue *managedSize = builder->getInt64(32);
+		mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize}, "concat.managed");
+
+		// Set buffer fields: _buffer.ptr
+		mir::MIRValue *dstBufferPtr = builder->createStructGEP(managedStringType, newManaged, 0, "dst._buffer");
+		mir::MIRValue *dstPtrPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 0, "dst.ptr.ptr");
+		builder->createStore(newBuffer, dstPtrPtr);
+		// Set _buffer.len
+		mir::MIRValue *dstBufLenPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 1, "dst.buflen.ptr");
+		builder->createStore(totalLen, dstBufLenPtr);
+
+		// Set _len
+		mir::MIRValue *dstLenPtr = builder->createStructGEP(managedStringType, newManaged, 1, "dst._len");
+		builder->createStore(totalLen, dstLenPtr);
+
+		// Set _capacity
+		mir::MIRValue *dstCapPtr = builder->createStructGEP(managedStringType, newManaged, 2, "dst._capacity");
+		builder->createStore(totalLen, dstCapPtr);
+
+		// Set _iterPos to 0
+		mir::MIRValue *dstIterPosPtr = builder->createStructGEP(managedStringType, newManaged, 3, "dst._iterPos");
+		builder->createStore(builder->getInt32(0), dstIterPosPtr);
+
+		// Return the pointer to the new __ManagedStringData (opaque _ManagedString)
+		return newManaged;
+	}
+
+	// __string_to_lower(managed) - convert to lowercase
+	if (name == "__string_to_lower") {
+		if (callExpr->args.size() != 1) {
+			throw std::runtime_error("__string_to_lower requires exactly 1 argument");
+		}
+		mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+
+		// Get length
+		mir::MIRValue *lenPtr = builder->createStructGEP(managedStringType, managedPtr, 1, "src._len");
+		mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
+		mir::MIRValue *len64 = builder->createSExt(len, mir::MIRType::getInt64(), "len64");
+
+		// Allocate new buffer
+		mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
+		mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {len64}, "lower.buffer");
+
+		// Get source buffer
+		mir::MIRValue *srcBufPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "src._buffer");
+		mir::MIRValue *srcPtrPtr = builder->createStructGEP(unsizedArrayType, srcBufPtr, 0, "src.ptr.ptr");
+		mir::MIRValue *srcPtr = builder->createLoad(mir::MIRType::getPtr(), srcPtrPtr, "src.ptr");
+
+		// Loop to convert each byte
+		mir::MIRBasicBlock *loopEntry = builder->createBasicBlock("lower.loop.entry");
+		mir::MIRBasicBlock *loopBody = builder->createBasicBlock("lower.loop.body");
+		mir::MIRBasicBlock *loopExit = builder->createBasicBlock("lower.loop.exit");
+
+		mir::MIRValue *idxAlloca = builder->createAlloca(mir::MIRType::getInt32(), "idx");
+		builder->createStore(builder->getInt32(0), idxAlloca);
+		builder->createBr(loopEntry);
+
+		builder->setInsertPoint(loopEntry);
+		mir::MIRValue *idx = builder->createLoad(mir::MIRType::getInt32(), idxAlloca, "idx");
+		mir::MIRValue *cond = builder->createICmpSLT(idx, len, "cond");
+		builder->createCondBr(cond, loopBody, loopExit);
+
+		builder->setInsertPoint(loopBody);
+		mir::MIRValue *idx64 = builder->createSExt(idx, mir::MIRType::getInt64(), "idx64");
+		mir::MIRValue *srcBytePtr = builder->createArrayGEP(mir::MIRType::getInt8(), srcPtr, idx64, "src.byte.ptr");
+		mir::MIRValue *byte = builder->createLoad(mir::MIRType::getInt8(), srcBytePtr, "byte");
+
+		// Check if byte is uppercase (65-90 = 'A'-'Z') and convert to lowercase
+		// Use control flow with PHI node instead of select
+		mir::MIRValue *byte32 = builder->createZExt(byte, mir::MIRType::getInt32(), "byte32");
+		mir::MIRValue *isUpper1 = builder->createICmpSGE(byte32, builder->getInt32(65), "isUpper1");
+		mir::MIRValue *isUpper2 = builder->createICmpSLE(byte32, builder->getInt32(90), "isUpper2");
+		mir::MIRValue *isUpper = builder->createAnd(isUpper1, isUpper2, "isUpper");
+
+		mir::MIRBasicBlock *convertBlock = builder->createBasicBlock("lower.convert");
+		mir::MIRBasicBlock *storeBlock = builder->createBasicBlock("lower.store");
+		builder->createCondBr(isUpper, convertBlock, storeBlock);
+
+		// Convert block: add 32 to uppercase letter
+		builder->setInsertPoint(convertBlock);
+		mir::MIRValue *lowered32 = builder->createAdd(byte32, builder->getInt32(32), "lowered32");
+		builder->createBr(storeBlock);
+
+		// Store block: use PHI to select between original and converted
+		builder->setInsertPoint(storeBlock);
+		mir::MIRValue *result32 = builder->createPhi(mir::MIRType::getInt32(), "result32");
+		builder->addPhiIncoming(result32, lowered32, convertBlock);
+		builder->addPhiIncoming(result32, byte32, loopBody);
+		mir::MIRValue *result8 = builder->createTrunc(result32, mir::MIRType::getInt8(), "result8");
+
+		mir::MIRValue *dstBytePtr = builder->createArrayGEP(mir::MIRType::getInt8(), newBuffer, idx64, "dst.byte.ptr");
+		builder->createStore(result8, dstBytePtr);
+
+		// Increment index
+		mir::MIRValue *nextIdx = builder->createAdd(idx, builder->getInt32(1), "next.idx");
+		builder->createStore(nextIdx, idxAlloca);
+		builder->createBr(loopEntry);
+
+		builder->setInsertPoint(loopExit);
+
+		// Heap-allocate the __ManagedStringData struct (32 bytes for alignment)
+		mir::MIRValue *managedSize = builder->getInt64(32);
+		mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize}, "lower.managed");
+
+		// Set buffer fields: _buffer.ptr
+		mir::MIRValue *dstBufferPtr = builder->createStructGEP(managedStringType, newManaged, 0, "dst._buffer");
+		mir::MIRValue *dstPtrPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 0, "dst.ptr.ptr");
+		builder->createStore(newBuffer, dstPtrPtr);
+		// Set _buffer.len
+		mir::MIRValue *dstBufLenPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 1, "dst.buflen.ptr");
+		builder->createStore(len, dstBufLenPtr);
+
+		// Set _len
+		mir::MIRValue *dstLenPtr = builder->createStructGEP(managedStringType, newManaged, 1, "dst._len");
+		builder->createStore(len, dstLenPtr);
+
+		// Set _capacity
+		mir::MIRValue *dstCapPtr = builder->createStructGEP(managedStringType, newManaged, 2, "dst._capacity");
+		builder->createStore(len, dstCapPtr);
+
+		// Set _iterPos to 0
+		mir::MIRValue *dstIterPosPtr = builder->createStructGEP(managedStringType, newManaged, 3, "dst._iterPos");
+		builder->createStore(builder->getInt32(0), dstIterPosPtr);
+
+		// Return the pointer to the new __ManagedStringData (opaque _ManagedString)
+		return newManaged;
+	}
+
+	// __string_to_upper(managed) - convert to uppercase
+	if (name == "__string_to_upper") {
+		if (callExpr->args.size() != 1) {
+			throw std::runtime_error("__string_to_upper requires exactly 1 argument");
+		}
+		mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+
+		// Get length
+		mir::MIRValue *lenPtr = builder->createStructGEP(managedStringType, managedPtr, 1, "src._len");
+		mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
+		mir::MIRValue *len64 = builder->createSExt(len, mir::MIRType::getInt64(), "len64");
+
+		// Allocate new buffer
+		mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
+		mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {len64}, "upper.buffer");
+
+		// Get source buffer
+		mir::MIRValue *srcBufPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "src._buffer");
+		mir::MIRValue *srcPtrPtr = builder->createStructGEP(unsizedArrayType, srcBufPtr, 0, "src.ptr.ptr");
+		mir::MIRValue *srcPtr = builder->createLoad(mir::MIRType::getPtr(), srcPtrPtr, "src.ptr");
+
+		// Loop to convert each byte
+		mir::MIRBasicBlock *loopEntry = builder->createBasicBlock("upper.loop.entry");
+		mir::MIRBasicBlock *loopBody = builder->createBasicBlock("upper.loop.body");
+		mir::MIRBasicBlock *loopExit = builder->createBasicBlock("upper.loop.exit");
+
+		mir::MIRValue *idxAlloca = builder->createAlloca(mir::MIRType::getInt32(), "idx");
+		builder->createStore(builder->getInt32(0), idxAlloca);
+		builder->createBr(loopEntry);
+
+		builder->setInsertPoint(loopEntry);
+		mir::MIRValue *idx = builder->createLoad(mir::MIRType::getInt32(), idxAlloca, "idx");
+		mir::MIRValue *cond = builder->createICmpSLT(idx, len, "cond");
+		builder->createCondBr(cond, loopBody, loopExit);
+
+		builder->setInsertPoint(loopBody);
+		mir::MIRValue *idx64 = builder->createSExt(idx, mir::MIRType::getInt64(), "idx64");
+		mir::MIRValue *srcBytePtr = builder->createArrayGEP(mir::MIRType::getInt8(), srcPtr, idx64, "src.byte.ptr");
+		mir::MIRValue *byte = builder->createLoad(mir::MIRType::getInt8(), srcBytePtr, "byte");
+
+		// Check if byte is lowercase (97-122 = 'a'-'z') and convert to uppercase
+		// Use control flow with PHI node instead of select
+		mir::MIRValue *byte32 = builder->createZExt(byte, mir::MIRType::getInt32(), "byte32");
+		mir::MIRValue *isLower1 = builder->createICmpSGE(byte32, builder->getInt32(97), "isLower1");
+		mir::MIRValue *isLower2 = builder->createICmpSLE(byte32, builder->getInt32(122), "isLower2");
+		mir::MIRValue *isLower = builder->createAnd(isLower1, isLower2, "isLower");
+
+		mir::MIRBasicBlock *convertBlock = builder->createBasicBlock("upper.convert");
+		mir::MIRBasicBlock *storeBlock = builder->createBasicBlock("upper.store");
+		builder->createCondBr(isLower, convertBlock, storeBlock);
+
+		// Convert block: subtract 32 from lowercase letter
+		builder->setInsertPoint(convertBlock);
+		mir::MIRValue *uppered32 = builder->createSub(byte32, builder->getInt32(32), "uppered32");
+		builder->createBr(storeBlock);
+
+		// Store block: use PHI to select between original and converted
+		builder->setInsertPoint(storeBlock);
+		mir::MIRValue *result32 = builder->createPhi(mir::MIRType::getInt32(), "result32");
+		builder->addPhiIncoming(result32, uppered32, convertBlock);
+		builder->addPhiIncoming(result32, byte32, loopBody);
+		mir::MIRValue *result8 = builder->createTrunc(result32, mir::MIRType::getInt8(), "result8");
+
+		mir::MIRValue *dstBytePtr = builder->createArrayGEP(mir::MIRType::getInt8(), newBuffer, idx64, "dst.byte.ptr");
+		builder->createStore(result8, dstBytePtr);
+
+		// Increment index
+		mir::MIRValue *nextIdx = builder->createAdd(idx, builder->getInt32(1), "next.idx");
+		builder->createStore(nextIdx, idxAlloca);
+		builder->createBr(loopEntry);
+
+		builder->setInsertPoint(loopExit);
+
+		// Heap-allocate the __ManagedStringData struct (32 bytes for alignment)
+		mir::MIRValue *managedSize = builder->getInt64(32);
+		mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize}, "upper.managed");
+
+		// Set buffer fields: _buffer.ptr
+		mir::MIRValue *dstBufferPtr = builder->createStructGEP(managedStringType, newManaged, 0, "dst._buffer");
+		mir::MIRValue *dstPtrPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 0, "dst.ptr.ptr");
+		builder->createStore(newBuffer, dstPtrPtr);
+		// Set _buffer.len
+		mir::MIRValue *dstBufLenPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 1, "dst.buflen.ptr");
+		builder->createStore(len, dstBufLenPtr);
+
+		// Set _len
+		mir::MIRValue *dstLenPtr = builder->createStructGEP(managedStringType, newManaged, 1, "dst._len");
+		builder->createStore(len, dstLenPtr);
+
+		// Set _capacity
+		mir::MIRValue *dstCapPtr = builder->createStructGEP(managedStringType, newManaged, 2, "dst._capacity");
+		builder->createStore(len, dstCapPtr);
+
+		// Set _iterPos to 0
+		mir::MIRValue *dstIterPosPtr = builder->createStructGEP(managedStringType, newManaged, 3, "dst._iterPos");
+		builder->createStore(builder->getInt32(0), dstIterPosPtr);
+
+		// Return the pointer to the new __ManagedStringData (opaque _ManagedString)
+		return newManaged;
+	}
+
+	throw std::runtime_error("Unknown string intrinsic: " + name);
 }

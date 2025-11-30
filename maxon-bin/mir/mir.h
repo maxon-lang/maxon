@@ -46,6 +46,9 @@ class MIRType {
 	uint64_t sizeInBytes = 0;
 	uint64_t alignmentInBytes = 0;
 
+	// Track if this type is actually used in generated code (for filtering IR output)
+	bool used = false;
+
 	MIRType(MIRTypeKind k) : kind(k) { computeSize(); }
 
 	static MIRType *getVoid();

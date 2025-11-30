@@ -47,10 +47,48 @@ void MIRCodeGenerator::logTrace(const std::string &msg) {
 // Type Conversion Helpers
 //==============================================================================
 
+// Mark a struct type and all its field types as used (for lazy type emission)
+void MIRCodeGenerator::markFieldTypesUsed(mir::MIRType *type) {
+	if (!type || type->kind != mir::MIRTypeKind::Struct)
+		return;
+	for (mir::MIRType *fieldType : type->fieldTypes) {
+		if (fieldType->kind == mir::MIRTypeKind::Struct && !fieldType->used) {
+			fieldType->used = true;
+			markFieldTypesUsed(fieldType); // Recursively mark nested struct types
+		}
+	}
+}
+
+// Get type without marking it as used (for struct field definitions)
+mir::MIRType *MIRCodeGenerator::getTypeFromStringNoMark(const std::string &typeStr) {
+	// _ManagedString is an opaque pointer type - not a struct
+	if (typeStr == "_ManagedString") {
+		return mir::MIRType::getPtr();
+	}
+
+	// Check for user-defined struct types first
+	auto it = structTypes.find(typeStr);
+	if (it != structTypes.end()) {
+		return it->second;
+	}
+
+	// For primitive types, delegate to regular getTypeFromString (they don't have used flag)
+	return getTypeFromString(typeStr);
+}
+
 mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
+	// _ManagedString is an opaque pointer type - not a struct
+	if (typeStr == "_ManagedString") {
+		return mir::MIRType::getPtr();
+	}
+
 	// Check for user-defined struct types first (allows stdlib to define types like 'string')
 	auto it = structTypes.find(typeStr);
 	if (it != structTypes.end()) {
+		// Mark this type as used when it's actually referenced
+		it->second->used = true;
+		// Also mark field types as used (for transitive dependencies)
+		markFieldTypesUsed(it->second);
 		return it->second;
 	}
 
@@ -109,7 +147,8 @@ mir::MIRType *MIRCodeGenerator::getParamTypeFromString(const std::string &typeSt
 		return mir::MIRType::getPtr();
 	}
 
-	return getTypeFromString(typeStr);
+	// Use no-mark variant - types are marked when actually used in code generation
+	return getTypeFromStringNoMark(typeStr);
 }
 
 std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
@@ -214,8 +253,8 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		builder->createCall(freeFunc, {ptr});
 	}
 
-	// Free heap-allocated strings in this scope using string_release
-	// string_release handles the refcount header and frees only when refcount reaches 0
+	// Free heap-allocated strings in this scope using _managed_string_release
+	// _managed_string_release handles the refcount header and frees only when refcount reaches 0
 	for (const auto &[name, dataPtrAlloca] : scopeStack.back().heapAllocatedStrings) {
 		// Load the data pointer
 		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrAlloca, name + ".data.ptr");
@@ -224,9 +263,9 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		std::string tagStr = (name.find("concat") != std::string::npos) ? "string concat" : "string literal";
 		mir::MIRValue *tag = module->createGlobalString(".__tag.free." + name, tagStr);
 
-		// Call string_release on the data pointer (handles refcount and free)
+		// Call _managed_string_release on the data pointer (handles refcount and free)
 		mir::MIRFunction *stringReleaseFunc = getOrDeclareFunction(
-			"string_release",
+			"_managed_string_release",
 			mir::MIRType::getVoid(),
 			{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
 		builder->createCall(stringReleaseFunc, {dataPtr, tag});
@@ -418,8 +457,16 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	// Clear function ID map for new generation
 	functionIdToMIR.clear();
 
+	// Note: Dead code elimination (unused function removal) is handled by the
+	// optimizer pass after codegen, not here. This ensures all functions are
+	// available during codegen (e.g., for interface method lookups in for-loops).
+
 	// Note: Standard library (write_stdout) is initialized on-demand when
 	// print/print_float is called - see codegen_mir_expr.cpp
+
+	// Note: _ManagedString is an OPAQUE POINTER type (just 'ptr' in the type system)
+	// The internal types __unsized_array_byte and __ManagedStringData are created
+	// on-demand when strings are actually used - see codegen_mir_expr.cpp
 
 	// First pass: Forward-declare all struct types (to handle circular/forward references)
 	logDetail("Pass 1a: Forward-declaring struct types (" + std::to_string(program->structs.size()) + " structs)");
@@ -432,13 +479,14 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	}
 
 	// Second pass: Fill in struct fields now that all types are declared
+	// Use getTypeFromStringNoMark to avoid marking field types as used prematurely
 	logDetail("Pass 1b: Filling in struct fields");
 	for (const auto &structDef : program->structs) {
 		std::vector<mir::MIRType *> fieldTypes;
 		std::vector<std::pair<std::string, std::string>> fields;
 
 		for (const auto &field : structDef->fields) {
-			fieldTypes.push_back(getTypeFromString(field.type));
+			fieldTypes.push_back(getTypeFromStringNoMark(field.type));
 			fields.push_back({field.name, field.type});
 		}
 
@@ -456,19 +504,9 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	logDetail("Pass 2: Creating function declarations");
 
 	// Helper lambda to declare a function/method
+	// Uses no-mark variants - types are marked when actually used in code generation
 	auto declareFunction = [&](FunctionAST *func, const std::string &namespaceName) {
-		mir::MIRType *returnType = getTypeFromString(func->returnType);
-
-		std::vector<mir::MIRType *> paramTypes;
-		for (const auto &param : func->parameters) {
-			paramTypes.push_back(getParamTypeFromString(param.type));
-			// Add hidden length parameter for arrays
-			if (isArrayParam(param.type)) {
-				paramTypes.push_back(mir::MIRType::getInt32());
-			}
-		}
-
-		// Build function name: for methods use "ReceiverType.name", otherwise "namespace.name" or just "name"
+		// Build function name
 		std::string functionName;
 		if (!func->receiverType.empty()) {
 			// This is a method
@@ -477,6 +515,17 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 			functionName = namespaceName + "." + func->name;
 		} else {
 			functionName = func->name;
+		}
+
+		mir::MIRType *returnType = getTypeFromStringNoMark(func->returnType);
+
+		std::vector<mir::MIRType *> paramTypes;
+		for (const auto &param : func->parameters) {
+			paramTypes.push_back(getParamTypeFromString(param.type));
+			// Add hidden length parameter for arrays
+			if (isArrayParam(param.type)) {
+				paramTypes.push_back(mir::MIRType::getInt32());
+			}
 		}
 
 		logTrace("Declaring function: " + functionName + " -> " + func->returnType);

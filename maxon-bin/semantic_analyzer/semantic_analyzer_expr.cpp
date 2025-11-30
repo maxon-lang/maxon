@@ -361,6 +361,87 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return arrType.substr(2); // Skip "[]"
 		}
 
+		// Handle string intrinsics (__string_* functions)
+		// These are compiler-internal functions for accessing _ManagedString opaque type
+		if (callExpr->callee.rfind("__string_", 0) == 0) {
+			const std::string &name = callExpr->callee;
+
+			// Validate and return appropriate type based on intrinsic
+			if (name == "__string_len") {
+				if (callExpr->args.size() != 1) {
+					addError("__string_len requires exactly 1 argument", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				return "int";
+			}
+			if (name == "__string_buffer") {
+				if (callExpr->args.size() != 1) {
+					addError("__string_buffer requires exactly 1 argument", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				return "ptr"; // Returns raw pointer to buffer bytes
+			}
+			if (name == "__string_byte_at") {
+				if (callExpr->args.size() != 2) {
+					addError("__string_byte_at requires exactly 2 arguments", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				analyzeExpression(callExpr->args[1].get());
+				return "byte";
+			}
+			if (name == "__string_iter_pos") {
+				if (callExpr->args.size() != 1) {
+					addError("__string_iter_pos requires exactly 1 argument", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				return "int";
+			}
+			if (name == "__string_with_iter_pos") {
+				if (callExpr->args.size() != 2) {
+					addError("__string_with_iter_pos requires exactly 2 arguments", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				analyzeExpression(callExpr->args[1].get());
+				return "_ManagedString";
+			}
+			if (name == "__string_slice") {
+				if (callExpr->args.size() != 3) {
+					addError("__string_slice requires exactly 3 arguments", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				analyzeExpression(callExpr->args[1].get());
+				analyzeExpression(callExpr->args[2].get());
+				return "_ManagedString";
+			}
+			if (name == "__string_concat") {
+				if (callExpr->args.size() != 2) {
+					addError("__string_concat requires exactly 2 arguments", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				analyzeExpression(callExpr->args[1].get());
+				return "_ManagedString";
+			}
+			if (name == "__string_to_lower" || name == "__string_to_upper") {
+				if (callExpr->args.size() != 1) {
+					addError(name + " requires exactly 1 argument", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				return "_ManagedString";
+			}
+
+			// Unknown string intrinsic
+			addError("Unknown string intrinsic: " + name, expr->line, expr->column);
+			return "error";
+		}
+
 		// Try to find the function - first exact match, then unqualified lookup
 		// First, if we're inside a method, check for a sibling method call
 		// This handles the case where find(needle) inside string.contains() should resolve to string.find

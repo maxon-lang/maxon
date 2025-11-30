@@ -6,58 +6,48 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 29
+; Instructions: 32
 
 %__unsized_array_byte = type { ptr, i32 }
-%string = type { %__unsized_array_byte, i32, i32, i32 }
-%ByteView = type { %string, i32 }
-%UTF16View = type { %string, i32, i32 }
+%string = type { ptr }
+%__ManagedStringData = type { %__unsized_array_byte, i32, i32, i32 }
 
 @.str.0 = constant [6 x i8] c"hello\00"
 
 define i32 @main() {
 entry0:
   %0 = alloca %string
-  %1 = getelementptr %string, ptr %0, i32 0, i32 0
-  %2 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 0
-  store ptr @.str.0, ptr %2
-  %3 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 1
-  store i32 5, ptr %3
-  %4 = getelementptr %string, ptr %0, i32 0, i32 1
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.0, ptr %3
+  %4 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 1
   store i32 5, ptr %4
-  %5 = getelementptr %string, ptr %0, i32 0, i32 2
-  store i32 0, ptr %5
-  %6 = getelementptr %string, ptr %0, i32 0, i32 3
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i32 5, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
   store i32 0, ptr %6
-  %7 = getelementptr %string, ptr %0, i32 0, i32 0
-  %8 = getelementptr %__unsized_array_byte, ptr %7, i32 0, i32 0
-  %9 = load ptr, ptr %8
-  %10 = getelementptr %string, ptr %0, i32 0, i32 1
-  %11 = load i32, ptr %10
-  %12 = call i32 @write_stdout(ptr %9, i32 %11)
-  %13 = icmp sge i32 %12, 0
-  br i1 %13, label %print_newline1, label %print_cont2
+  %7 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 3
+  store i32 0, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %8
+  %11 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %12 = getelementptr %__unsized_array_byte, ptr %11, i32 0, i32 0
+  %13 = load ptr, ptr %12
+  %14 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  %15 = load i32, ptr %14
+  %16 = call i32 @write_stdout(ptr %13, i32 %15)
+  %17 = icmp sge i32 %16, 0
+  br i1 %17, label %print_newline1, label %print_cont2
 print_newline1:
-  %14 = alloca [1 x i8]
-  %15 = getelementptr i8, ptr %14, i64 0, i64 0
-  store i8 10, ptr %15
-  %16 = call i32 @write_stdout(ptr %14, i32 1)
+  %18 = alloca [1 x i8]
+  %19 = getelementptr i8, ptr %18, i64 0, i64 0
+  store i8 10, ptr %19
+  %20 = call i32 @write_stdout(ptr %18, i32 1)
   br label %print_cont2
 print_cont2:
   ret i32 0
 }
-
-declare ptr @malloc(i64 %arg0)
-
-declare void @free(ptr %arg0)
-
-declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
-
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
-declare i32 @refcount_inc(ptr %arg0)
-
-declare i32 @refcount_dec(ptr %arg0)
 
 declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 
@@ -72,58 +62,50 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 29
+; Instructions: 34
 
 %__unsized_array_byte = type { ptr, i32 }
-%string = type { %__unsized_array_byte, i32, i32, i32 }
-%ByteView = type { %string, i32 }
-%UTF16View = type { %string, i32, i32 }
+%string = type { ptr }
+%__ManagedStringData = type { %__unsized_array_byte, i32, i32, i32 }
 
 @.str.0 = constant [6 x i8] c"hello\00"
 
 define i32 @main() {
 entry0:
   %0 = alloca %string
-  %1 = getelementptr %string, ptr %0, i32 0, i32 0
-  %2 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 0
-  store ptr @.str.0, ptr %2
-  %3 = getelementptr %__unsized_array_byte, ptr %1, i32 0, i32 1
-  store i32 5, ptr %3
-  %4 = getelementptr %string, ptr %0, i32 0, i32 1
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.0, ptr %3
+  %4 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 1
   store i32 5, ptr %4
-  %5 = getelementptr %string, ptr %0, i32 0, i32 2
-  store i32 0, ptr %5
-  %6 = getelementptr %string, ptr %0, i32 0, i32 3
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i32 5, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
   store i32 0, ptr %6
-  %7 = getelementptr %string, ptr %0, i32 0, i32 0
-  %8 = getelementptr %__unsized_array_byte, ptr %7, i32 0, i32 0
-  %9 = load ptr, ptr %8
-  %10 = getelementptr %string, ptr %0, i32 0, i32 1
-  %11 = load i32, ptr %10
-  %12 = call i32 @write_stdout(ptr %9, i32 %11)
-  %13 = icmp sge i32 %12, 0
-  br i1 %13, label %print_newline1, label %print_cont2
+  %7 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 3
+  store i32 0, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %8
+  %9 = getelementptr %string, ptr %0, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 0
+  %12 = getelementptr %__unsized_array_byte, ptr %11, i32 0, i32 0
+  %13 = load ptr, ptr %12
+  %14 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 1
+  %15 = load i32, ptr %14
+  %16 = call i32 @write_stdout(ptr %13, i32 %15)
+  %17 = icmp sge i32 %16, 0
+  br i1 %17, label %print_newline1, label %print_cont2
 print_newline1:
-  %14 = alloca [1 x i8]
-  %15 = getelementptr i8, ptr %14, i64 0, i64 0
-  store i8 10, ptr %15
-  %16 = call i32 @write_stdout(ptr %14, i32 1)
+  %18 = alloca [1 x i8]
+  %19 = getelementptr i8, ptr %18, i64 0, i64 0
+  store i8 10, ptr %19
+  %20 = call i32 @write_stdout(ptr %18, i32 1)
   br label %print_cont2
 print_cont2:
   ret i32 0
 }
-
-declare ptr @malloc(i64 %arg0)
-
-declare void @free(ptr %arg0)
-
-declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
-
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
-declare i32 @refcount_inc(ptr %arg0)
-
-declare i32 @refcount_dec(ptr %arg0)
 
 declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 

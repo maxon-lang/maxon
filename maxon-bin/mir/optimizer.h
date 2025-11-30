@@ -208,12 +208,12 @@ class Mem2RegPass : public OptimizationPass {
 
 	// Insert PHI nodes for a variable
 	void insertPhiNodes(MIRFunction &func, MIRInstruction *alloca,
-	                    const std::set<MIRBasicBlock *> &defBlocks);
+						const std::set<MIRBasicBlock *> &defBlocks);
 
 	// Rename variables (SSA construction)
 	void renameVariables(MIRFunction &func, MIRInstruction *alloca,
-	                     MIRBasicBlock *block, MIRValue *incoming,
-	                     std::unordered_map<MIRBasicBlock *, MIRValue *> &currentDef);
+						 MIRBasicBlock *block, MIRValue *incoming,
+						 std::unordered_map<MIRBasicBlock *, MIRValue *> &currentDef);
 };
 
 //==============================================================================
@@ -292,6 +292,7 @@ class DeadCodeEliminationPass : public OptimizationPass {
   private:
 	bool runOnFunction(MIRFunction &func);
 	bool eliminateUnusedFunctions(MIRModule &module);
+	void recalculateUsedTypes(MIRModule &module);
 
 	// Compute the set of values that are used
 	std::unordered_set<MIRValue *> computeUsedValues(MIRFunction &func);

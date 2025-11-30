@@ -108,8 +108,10 @@ class MIRCodeGenerator {
 
 	// Type conversion helpers
 	mir::MIRType *getTypeFromString(const std::string &typeStr);
+	mir::MIRType *getTypeFromStringNoMark(const std::string &typeStr); // For struct field definitions
 	mir::MIRType *getParamTypeFromString(const std::string &typeStr);
 	std::string getMaxonTypeFromMIRType(mir::MIRType *type);
+	void markFieldTypesUsed(mir::MIRType *type);
 	bool isArrayParam(const std::string &typeStr);
 	bool isStructParameter(const std::string &varName);
 	bool isStringConcatExpr(BinaryExprAST *binExpr);
@@ -133,6 +135,10 @@ class MIRCodeGenerator {
 
 	// Array intrinsic generation (push, pop)
 	mir::MIRValue *generateArrayIntrinsic(CallExprAST *callExpr);
+
+	// String intrinsic generation (__string_* functions)
+	mir::MIRValue *generateStringIntrinsic(CallExprAST *callExpr);
+	bool isStringIntrinsic(const std::string &name);
 
 	// String literal generation
 	mir::MIRValue *generateStringLiteral(StringLiteralExprAST *strExpr);

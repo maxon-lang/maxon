@@ -606,14 +606,14 @@ entry:
 }
 
 ;==============================================================================
-; string_alloc - allocate string buffer with refcount header
+; _managed_string_alloc - allocate string buffer with refcount header
 ; Allocates capacity + 8 bytes (4 for refcount, 4 for capacity)
 ; Initializes refcount to 1, stores capacity
 ; Returns pointer to data area (after 8-byte header)
-; ptr string_alloc(i64 capacity, ptr tag)
+; ptr _managed_string_alloc(i64 capacity, ptr tag)
 ; tag is optional (can be null) - describes what this allocation is for
 ;==============================================================================
-define ptr @string_alloc(i64 %capacity, ptr %tag) {
+define ptr @_managed_string_alloc(i64 %capacity, ptr %tag) {
 entry:
     ; Allocate capacity + 8 bytes for header (refcount + capacity)
     %total = add i64 %capacity, 8
@@ -652,25 +652,12 @@ return_null:
 }
 
 ;==============================================================================
-; string_retain - increment refcount for heap string
-; Call this when copying a heap-allocated string (capacity > 0)
-; void string_retain(ptr data)
-;==============================================================================
-define void @string_retain(ptr %data) {
-entry:
-    ; Get header pointer (data - 8)
-    %header = getelementptr i8, ptr %data, i64 -8
-    %new_count = call i32 @refcount_inc(ptr %header)
-    ret void
-}
-
-;==============================================================================
-; string_release - decrement refcount, free if zero
+; _managed_string_release - decrement refcount, free if zero
 ; Call this when a heap string goes out of scope or is overwritten
-; void string_release(ptr data, ptr tag)
+; void _managed_string_release(ptr data, ptr tag)
 ; tag is optional (can be null) - describes what this release is for
 ;==============================================================================
-define void @string_release(ptr %data, ptr %tag) {
+define void @_managed_string_release(ptr %data, ptr %tag) {
 entry:
     ; Get header pointer (data - 8)
     %header = getelementptr i8, ptr %data, i64 -8
@@ -703,11 +690,24 @@ done:
 }
 
 ;==============================================================================
-; string_get_refcount - get current refcount for heap string
-; Useful for debugging and testing COW behavior
-; i32 string_get_refcount(ptr data)
+; _managed_string_retain - increment refcount for heap string (COW copy)
+; Call this when copying a heap-allocated string
+; void _managed_string_retain(ptr data)
 ;==============================================================================
-define i32 @string_get_refcount(ptr %data) {
+define void @_managed_string_retain(ptr %data) {
+entry:
+    ; Get header pointer (data - 8)
+    %header = getelementptr i8, ptr %data, i64 -8
+    %new_count = call i32 @refcount_inc(ptr %header)
+    ret void
+}
+
+;==============================================================================
+; _managed_string_get_refcount - get current refcount for heap string
+; Returns refcount (useful for COW decisions)
+; i32 _managed_string_get_refcount(ptr data)
+;==============================================================================
+define i32 @_managed_string_get_refcount(ptr %data) {
 entry:
     %header = getelementptr i8, ptr %data, i64 -8
     %count = load i32, ptr %header
@@ -715,14 +715,35 @@ entry:
 }
 
 ;==============================================================================
-; string_get_capacity - get capacity from heap string header
-; i32 string_get_capacity(ptr data)
+; _managed_string_make_unique - ensure exclusive ownership for COW
+; If refcount > 1, allocate new buffer and copy data, decrement original
+; Returns new buffer pointer (may be same as input if already unique)
+; ptr _managed_string_make_unique(ptr data, i32 len, ptr tag)
 ;==============================================================================
-define i32 @string_get_capacity(ptr %data) {
+define ptr @_managed_string_make_unique(ptr %data, i32 %len, ptr %tag) {
 entry:
-    %cap_ptr = getelementptr i8, ptr %data, i64 -4
-    %cap = load i32, ptr %cap_ptr
-    ret i32 %cap
+    ; Get current refcount
+    %header = getelementptr i8, ptr %data, i64 -8
+    %refcount = load i32, ptr %header
+    %is_unique = icmp eq i32 %refcount, 1
+    br i1 %is_unique, label %return_same, label %do_copy
+
+return_same:
+    ; Already unique, return same buffer
+    ret ptr %data
+
+do_copy:
+    ; Decrement refcount of original (we're detaching)
+    %new_count = call i32 @refcount_dec(ptr %header)
+
+    ; Allocate new buffer with length as capacity
+    %len_i64 = zext i32 %len to i64
+    %new_buffer = call ptr @_managed_string_alloc(i64 %len_i64, ptr %tag)
+
+    ; Copy data from old buffer to new
+    call void @memcpy(ptr %new_buffer, ptr %data, i64 %len_i64)
+
+    ret ptr %new_buffer
 }
 
 ;==============================================================================

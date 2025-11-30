@@ -673,12 +673,21 @@ end 'main'
 <!-- test: heap-string-data-access -->
 ```maxon
 function main() int
-    // Verify heap-allocated string data is accessible
+    // Verify heap-allocated string data is accessible via bytes()
     var s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    var first = s.data[0] as int
-    var last = s.data[25] as int
-    print(first)  // 'A' = 65
-    print(last)   // 'Z' = 90
+    var bytes = s.bytes()
+    // Read first byte ('A' = 65)
+    var first = bytes.getCurrent()
+    print(first)
+    // Skip 24 bytes to get to 'Z' (advance to position 25)
+    var i = 0
+    while i < 25 'skip'
+        bytes = bytes.next()
+        i = i + 1
+    end 'skip'
+    // Read last byte ('Z' = 90)
+    var last = bytes.getCurrent()
+    print(last)
     return 0
 end 'main'
 ```
@@ -777,7 +786,7 @@ function main() int
     // Exactly 15 bytes - should use SSO (constant data)
     var sso = "123456789012345"
     print(sso.count())
-    
+
     // 16 bytes - should use heap
     var heap = "1234567890123456"
     print(heap.count())

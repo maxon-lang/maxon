@@ -13,12 +13,12 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 189
+; Instructions: 196
 
 %__unsized_array_byte = type { ptr, i32 }
-%string = type { %__unsized_array_byte, i32, i32, i32 }
+%string = type { ptr }
 %ByteView = type { %string, i32 }
-%UTF16View = type { %string, i32, i32 }
+%__ManagedStringData = type { %__unsized_array_byte, i32, i32, i32 }
 
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.0 = constant [19 x i8] c"ABCDEFGHIJKLMNOPQR\00"
@@ -41,10 +41,12 @@ entry0:
   %2 = getelementptr %ByteView, ptr %self, i32 0, i32 1
   %3 = load i32, ptr %2
   %5 = getelementptr %ByteView, ptr %self, i32 0, i32 0
-  %6 = getelementptr %string, ptr %5, i32 0, i32 1
-  %7 = load i32, ptr %6
-  %8 = icmp slt i32 %3, %7
-  br i1 %8, label %then1, label %ifcont2
+  %6 = getelementptr %string, ptr %5, i32 0, i32 0
+  %7 = load ptr, ptr %6
+  %8 = getelementptr %__ManagedStringData, ptr %7, i32 0, i32 1
+  %9 = load i32, ptr %8
+  %10 = icmp slt i32 %3, %9
+  br i1 %10, label %then1, label %ifcont2
 then1:
   ret i32 1
 ifcont2:
@@ -70,58 +72,63 @@ entry0:
 define i32 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @string_alloc(i64 18, ptr @.__tag.str.lit)
+  %1 = call ptr @_managed_string_alloc(i64 18, ptr @.__tag.str.lit)
   %2 = call ptr @memcpy(ptr %1, ptr @.str.0, i64 18)
   %3 = alloca ptr
   store ptr %1, ptr %3
-  %4 = getelementptr %string, ptr %0, i32 0, i32 0
-  %5 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 0
-  store ptr %1, ptr %5
-  %6 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 1
-  store i32 18, ptr %6
-  %7 = getelementptr %string, ptr %0, i32 0, i32 1
+  %4 = alloca %__ManagedStringData
+  %5 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 0
+  %6 = getelementptr %__unsized_array_byte, ptr %5, i32 0, i32 0
+  store ptr %1, ptr %6
+  %7 = getelementptr %__unsized_array_byte, ptr %5, i32 0, i32 1
   store i32 18, ptr %7
-  %8 = getelementptr %string, ptr %0, i32 0, i32 2
+  %8 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 1
   store i32 18, ptr %8
-  %9 = getelementptr %string, ptr %0, i32 0, i32 3
-  store i32 0, ptr %9
-  %10 = alloca i32
+  %9 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 2
+  store i32 18, ptr %9
+  %10 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 3
   store i32 0, ptr %10
-  %11 = call %ByteView @string.bytes(ptr %0)
-  %12 = alloca %ByteView
-  store %ByteView %11, ptr %12
+  %11 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %4, ptr %11
+  %12 = alloca i32
+  store i32 0, ptr %12
+  %13 = call %ByteView @string.bytes(ptr %0)
+  %14 = alloca %ByteView
+  store %ByteView %13, ptr %14
   br label %forcond1
 forcond1:
-  %13 = call i32 @ByteView.hasNext(ptr %12)
-  %14 = icmp eq i32 %13, 1
-  br i1 %14, label %forloop2, label %afterfor4
+  %15 = call i32 @ByteView.hasNext(ptr %14)
+  %16 = icmp eq i32 %15, 1
+  br i1 %16, label %forloop2, label %afterfor4
 forloop2:
-  %25 = getelementptr %ByteView, ptr %12, i32 0, i32 1
-  %26 = load i32, ptr %25
-  %27 = getelementptr %ByteView, ptr %12, i32 0, i32 0
+  %27 = getelementptr %ByteView, ptr %14, i32 0, i32 0
   %28 = getelementptr %string, ptr %27, i32 0, i32 0
-  %29 = getelementptr %__unsized_array_byte, ptr %28, i32 0, i32 0
-  %30 = load ptr, ptr %29
-  %31 = sext i32 %26 to i64
-  %32 = getelementptr i8, ptr %30, i64 0, i64 %31
-  %33 = load i8, ptr %32
-  %34 = zext i8 %33 to i32
-  %18 = icmp sgt i32 %34, 0
-  br i1 %18, label %then5, label %ifcont6
+  %29 = load ptr, ptr %28
+  %30 = getelementptr %ByteView, ptr %14, i32 0, i32 1
+  %31 = load i32, ptr %30
+  %32 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 0
+  %33 = getelementptr %__unsized_array_byte, ptr %32, i32 0, i32 0
+  %34 = load ptr, ptr %33
+  %35 = sext i32 %31 to i64
+  %36 = getelementptr i8, ptr %34, i64 0, i64 %35
+  %37 = load i8, ptr %36
+  %38 = zext i8 %37 to i32
+  %20 = icmp sgt i32 %38, 0
+  br i1 %20, label %then5, label %ifcont6
 forincrement3:
-  %21 = call %ByteView @ByteView.next(ptr %12)
-  store %ByteView %21, ptr %12
+  %23 = call %ByteView @ByteView.next(ptr %14)
+  store %ByteView %23, ptr %14
   br label %forcond1
 afterfor4:
-  %22 = load i32, ptr %10
-  %23 = call i32 @sys.print(i32 %22)
-  %24 = load ptr, ptr %3
-  call void @string_release(ptr %24, ptr @.__tag.free.str.heap)
+  %24 = load i32, ptr %12
+  %25 = call i32 @sys.print(i32 %24)
+  %26 = load ptr, ptr %3
+  call void @_managed_string_release(ptr %26, ptr @.__tag.free.str.heap)
   ret i32 0
 then5:
-  %19 = load i32, ptr %10
-  %20 = add i32 %19, 1
-  store i32 %20, ptr %10
+  %21 = load i32, ptr %12
+  %22 = add i32 %21, 1
+  store i32 %22, ptr %12
   br label %ifcont6
 ifcont6:
   br label %forincrement3
@@ -256,23 +263,15 @@ afterloop12:
   ret i32 %65
 }
 
-declare ptr @malloc(i64 %arg0)
-
-declare void @free(ptr %arg0)
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
-declare i32 @refcount_inc(ptr %arg0)
-
-declare i32 @refcount_dec(ptr %arg0)
-
-declare ptr @string_alloc(i64 %arg0, ptr %arg1)
+declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 
-declare void @string_release(ptr %arg0, ptr %arg1)
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -285,12 +284,12 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 233
+; Instructions: 240
 
 %__unsized_array_byte = type { ptr, i32 }
-%string = type { %__unsized_array_byte, i32, i32, i32 }
+%string = type { ptr }
 %ByteView = type { %string, i32 }
-%UTF16View = type { %string, i32, i32 }
+%__ManagedStringData = type { %__unsized_array_byte, i32, i32, i32 }
 
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.0 = constant [19 x i8] c"ABCDEFGHIJKLMNOPQR\00"
@@ -320,10 +319,12 @@ entry0:
   %3 = load i32, ptr %2
   %4 = load ptr, ptr %0
   %5 = getelementptr %ByteView, ptr %4, i32 0, i32 0
-  %6 = getelementptr %string, ptr %5, i32 0, i32 1
-  %7 = load i32, ptr %6
-  %8 = icmp slt i32 %3, %7
-  br i1 %8, label %then1, label %ifcont2
+  %6 = getelementptr %string, ptr %5, i32 0, i32 0
+  %7 = load ptr, ptr %6
+  %8 = getelementptr %__ManagedStringData, ptr %7, i32 0, i32 1
+  %9 = load i32, ptr %8
+  %10 = icmp slt i32 %3, %9
+  br i1 %10, label %then1, label %ifcont2
 then1:
   ret i32 1
 ifcont2:
@@ -335,18 +336,20 @@ entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
   %1 = load ptr, ptr %0
-  %2 = getelementptr %ByteView, ptr %1, i32 0, i32 1
-  %3 = load i32, ptr %2
-  %4 = load ptr, ptr %0
-  %5 = getelementptr %ByteView, ptr %4, i32 0, i32 0
-  %6 = getelementptr %string, ptr %5, i32 0, i32 0
-  %7 = getelementptr %__unsized_array_byte, ptr %6, i32 0, i32 0
-  %8 = load ptr, ptr %7
-  %9 = sext i32 %3 to i64
-  %10 = getelementptr i8, ptr %8, i64 0, i64 %9
-  %11 = load i8, ptr %10
-  %12 = zext i8 %11 to i32
-  ret i32 %12
+  %2 = getelementptr %ByteView, ptr %1, i32 0, i32 0
+  %3 = getelementptr %string, ptr %2, i32 0, i32 0
+  %4 = load ptr, ptr %3
+  %5 = load ptr, ptr %0
+  %6 = getelementptr %ByteView, ptr %5, i32 0, i32 1
+  %7 = load i32, ptr %6
+  %8 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 0
+  %9 = getelementptr %__unsized_array_byte, ptr %8, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = sext i32 %7 to i64
+  %12 = getelementptr i8, ptr %10, i64 0, i64 %11
+  %13 = load i8, ptr %12
+  %14 = zext i8 %13 to i32
+  ret i32 %14
 }
 
 define %ByteView @ByteView.next(ptr %self) {
@@ -372,52 +375,55 @@ entry0:
 define i32 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @string_alloc(i64 18, ptr @.__tag.str.lit)
+  %1 = call ptr @_managed_string_alloc(i64 18, ptr @.__tag.str.lit)
   %2 = call ptr @memcpy(ptr %1, ptr @.str.0, i64 18)
   %3 = alloca ptr
   store ptr %1, ptr %3
-  %4 = getelementptr %string, ptr %0, i32 0, i32 0
-  %5 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 0
-  store ptr %1, ptr %5
-  %6 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 1
-  store i32 18, ptr %6
-  %7 = getelementptr %string, ptr %0, i32 0, i32 1
+  %4 = alloca %__ManagedStringData
+  %5 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 0
+  %6 = getelementptr %__unsized_array_byte, ptr %5, i32 0, i32 0
+  store ptr %1, ptr %6
+  %7 = getelementptr %__unsized_array_byte, ptr %5, i32 0, i32 1
   store i32 18, ptr %7
-  %8 = getelementptr %string, ptr %0, i32 0, i32 2
+  %8 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 1
   store i32 18, ptr %8
-  %9 = getelementptr %string, ptr %0, i32 0, i32 3
-  store i32 0, ptr %9
-  %10 = alloca i32
+  %9 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 2
+  store i32 18, ptr %9
+  %10 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 3
   store i32 0, ptr %10
-  %11 = call %ByteView @string.bytes(ptr %0)
-  %12 = alloca %ByteView
-  store %ByteView %11, ptr %12
+  %11 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %4, ptr %11
+  %12 = alloca i32
+  store i32 0, ptr %12
+  %13 = call %ByteView @string.bytes(ptr %0)
+  %14 = alloca %ByteView
+  store %ByteView %13, ptr %14
   br label %forcond1
 forcond1:
-  %13 = call i32 @ByteView.hasNext(ptr %12)
-  %14 = icmp eq i32 %13, 1
-  br i1 %14, label %forloop2, label %afterfor4
+  %15 = call i32 @ByteView.hasNext(ptr %14)
+  %16 = icmp eq i32 %15, 1
+  br i1 %16, label %forloop2, label %afterfor4
 forloop2:
-  %15 = call i32 @ByteView.getCurrent(ptr %12)
-  %16 = alloca i32
-  store i32 %15, ptr %16
-  %17 = load i32, ptr %16
-  %18 = icmp sgt i32 %17, 0
-  br i1 %18, label %then5, label %ifcont6
+  %17 = call i32 @ByteView.getCurrent(ptr %14)
+  %18 = alloca i32
+  store i32 %17, ptr %18
+  %19 = load i32, ptr %18
+  %20 = icmp sgt i32 %19, 0
+  br i1 %20, label %then5, label %ifcont6
 forincrement3:
-  %21 = call %ByteView @ByteView.next(ptr %12)
-  store %ByteView %21, ptr %12
+  %23 = call %ByteView @ByteView.next(ptr %14)
+  store %ByteView %23, ptr %14
   br label %forcond1
 afterfor4:
-  %22 = load i32, ptr %10
-  %23 = call i32 @sys.print(i32 %22)
-  %24 = load ptr, ptr %3
-  call void @string_release(ptr %24, ptr @.__tag.free.str.heap)
+  %24 = load i32, ptr %12
+  %25 = call i32 @sys.print(i32 %24)
+  %26 = load ptr, ptr %3
+  call void @_managed_string_release(ptr %26, ptr @.__tag.free.str.heap)
   ret i32 0
 then5:
-  %19 = load i32, ptr %10
-  %20 = add i32 %19, 1
-  store i32 %20, ptr %10
+  %21 = load i32, ptr %12
+  %22 = add i32 %21, 1
+  store i32 %22, ptr %12
   br label %ifcont6
 ifcont6:
   br label %forincrement3
@@ -576,23 +582,15 @@ afterloop12:
   ret i32 %65
 }
 
-declare ptr @malloc(i64 %arg0)
-
-declare void @free(ptr %arg0)
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
-declare i32 @refcount_inc(ptr %arg0)
-
-declare i32 @refcount_dec(ptr %arg0)
-
-declare ptr @string_alloc(i64 %arg0, ptr %arg1)
+declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 
-declare void @string_release(ptr %arg0, ptr %arg1)
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

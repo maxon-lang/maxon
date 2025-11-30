@@ -497,6 +497,9 @@ bool DeadCodeEliminationPass::run(MIRModule &module) {
 	// First, eliminate unused functions (function-level DCE)
 	changed |= eliminateUnusedFunctions(module);
 
+	// Recalculate which types are actually used by remaining functions
+	recalculateUsedTypes(module);
+
 	// Then, eliminate dead instructions within remaining functions
 	for (auto &func : module.functions) {
 		if (!func->isExternal) {
@@ -504,6 +507,65 @@ bool DeadCodeEliminationPass::run(MIRModule &module) {
 		}
 	}
 	return changed;
+}
+
+void DeadCodeEliminationPass::recalculateUsedTypes(MIRModule &module) {
+	// Reset all struct type used flags
+	for (auto &[name, type] : module.structTypes) {
+		type->used = false;
+	}
+
+	// Helper to mark a type and its dependencies as used
+	std::function<void(MIRType *)> markTypeUsed = [&](MIRType *type) {
+		if (!type)
+			return;
+		if (type->kind == MIRTypeKind::Struct) {
+			if (type->used)
+				return; // Already marked
+			type->used = true;
+			// Mark field types recursively
+			for (MIRType *fieldType : type->fieldTypes) {
+				markTypeUsed(fieldType);
+			}
+		} else if (type->kind == MIRTypeKind::Array) {
+			markTypeUsed(type->elementType);
+		}
+	};
+
+	// Scan all remaining functions for type usage
+	for (auto &func : module.functions) {
+		// Check return type
+		markTypeUsed(func->returnType);
+
+		// Check parameter types
+		for (auto &param : func->parameters) {
+			markTypeUsed(param->type);
+		}
+
+		// Scan instructions for type usage
+		for (auto &block : func->basicBlocks) {
+			for (auto &inst : block->instructions) {
+				// Check result type
+				if (inst->result) {
+					markTypeUsed(inst->result->type);
+				}
+				// Check operand types
+				for (auto &operand : inst->operands) {
+					if (operand) {
+						markTypeUsed(operand->type);
+					}
+				}
+				// Check allocatedType for Alloca instructions
+				if (inst->opcode == MIROpcode::Alloca && inst->allocatedType) {
+					markTypeUsed(inst->allocatedType);
+				}
+				// Check elementType for GEP instructions
+				if (inst->opcode == MIROpcode::GetElementPtr && inst->elementType) {
+					markTypeUsed(inst->elementType);
+				}
+			}
+		}
+	}
 }
 
 bool DeadCodeEliminationPass::eliminateUnusedFunctions(MIRModule &module) {
@@ -556,13 +618,13 @@ bool DeadCodeEliminationPass::eliminateUnusedFunctions(MIRModule &module) {
 		}
 	}
 
-	// Remove unreachable functions
+	// Remove unreachable functions (including unused external declarations)
 	size_t originalSize = module.functions.size();
 	module.functions.erase(
 		std::remove_if(module.functions.begin(), module.functions.end(),
 					   [&](const std::unique_ptr<MIRFunction> &func) {
-						   // Keep external functions and reachable functions
-						   return !func->isExternal && reachable.find(func->name) == reachable.end();
+						   // Remove if not reachable from entry points
+						   return reachable.find(func->name) == reachable.end();
 					   }),
 		module.functions.end());
 
@@ -1777,7 +1839,8 @@ DominanceInfo::DominanceInfo(MIRFunction &func) {
 }
 
 void DominanceInfo::computeDominators(MIRFunction &func) {
-	if (func.basicBlocks.empty()) return;
+	if (func.basicBlocks.empty())
+		return;
 
 	MIRBasicBlock *entry = func.basicBlocks[0].get();
 
@@ -1799,7 +1862,8 @@ void DominanceInfo::computeDominators(MIRFunction &func) {
 	while (changed) {
 		changed = false;
 		for (auto &block : func.basicBlocks) {
-			if (block.get() == entry) continue;
+			if (block.get() == entry)
+				continue;
 
 			// dom(n) = {n} ∪ (∩ dom(p) for all predecessors p)
 			std::set<MIRBasicBlock *> newDom;
@@ -1808,15 +1872,15 @@ void DominanceInfo::computeDominators(MIRFunction &func) {
 			if (!block->predecessors.empty()) {
 				// Start with first predecessor's dominators
 				newDom.insert(dom[block->predecessors[0]].begin(),
-				              dom[block->predecessors[0]].end());
+							  dom[block->predecessors[0]].end());
 
 				// Intersect with other predecessors
 				for (size_t i = 1; i < block->predecessors.size(); ++i) {
 					std::set<MIRBasicBlock *> intersection;
 					std::set_intersection(newDom.begin(), newDom.end(),
-					                      dom[block->predecessors[i]].begin(),
-					                      dom[block->predecessors[i]].end(),
-					                      std::inserter(intersection, intersection.begin()));
+										  dom[block->predecessors[i]].begin(),
+										  dom[block->predecessors[i]].end(),
+										  std::inserter(intersection, intersection.begin()));
 					newDom = intersection;
 					newDom.insert(block.get());
 				}
@@ -1876,7 +1940,8 @@ void DominanceInfo::computeDominanceFrontiers(MIRFunction &func) {
 
 bool DominanceInfo::dominates(MIRBasicBlock *a, MIRBasicBlock *b) const {
 	auto it = dominators_.find(b);
-	if (it == dominators_.end()) return false;
+	if (it == dominators_.end())
+		return false;
 	return it->second.find(a) != it->second.end();
 }
 
@@ -1921,8 +1986,8 @@ bool LoopIVOptimizationPass::runOnFunction(MIRFunction &func) {
 	for (auto &block : func.basicBlocks) {
 		for (auto &inst : block->instructions) {
 			if (inst->opcode == MIROpcode::Alloca &&
-			    inst->allocatedType &&
-			    inst->allocatedType->kind == MIRTypeKind::Int32) {
+				inst->allocatedType &&
+				inst->allocatedType->kind == MIRTypeKind::Int32) {
 
 				// Check each loop header
 				for (auto *loopHeader : loopHeaders) {
@@ -1969,8 +2034,8 @@ bool LoopIVOptimizationPass::isLoopIV(MIRFunction &func, MIRInstruction *alloca,
 
 	for (auto &inst : loopHeader->instructions) {
 		if (inst->opcode == MIROpcode::Load &&
-		    inst->operands.size() >= 1 &&
-		    inst->operands[0] == allocaPtr) {
+			inst->operands.size() >= 1 &&
+			inst->operands[0] == allocaPtr) {
 			hasLoadInHeader = true;
 		}
 	}
@@ -1980,8 +2045,8 @@ bool LoopIVOptimizationPass::isLoopIV(MIRFunction &func, MIRInstruction *alloca,
 		if (pred != loopHeader) { // Not the initial entry
 			for (auto &inst : pred->instructions) {
 				if (inst->opcode == MIROpcode::Store &&
-				    inst->operands.size() >= 2 &&
-				    inst->operands[1] == allocaPtr) {
+					inst->operands.size() >= 2 &&
+					inst->operands[1] == allocaPtr) {
 					hasStoreInLoop = true;
 					break;
 				}
@@ -2007,7 +2072,8 @@ bool LoopIVOptimizationPass::convertIVToPhi(MIRFunction &func, MIRInstruction *a
 				// Check if pred comes after header (simple back-edge check)
 				bool found = false;
 				for (auto &b : func.basicBlocks) {
-					if (b.get() == loopHeader) found = true;
+					if (b.get() == loopHeader)
+						found = true;
 					if (found && b.get() == pred) {
 						isBackEdge = true;
 						break;
@@ -2021,15 +2087,16 @@ bool LoopIVOptimizationPass::convertIVToPhi(MIRFunction &func, MIRInstruction *a
 			// Find initial store
 			for (auto &inst : pred->instructions) {
 				if (inst->opcode == MIROpcode::Store &&
-				    inst->operands.size() >= 2 &&
-				    inst->operands[1] == allocaPtr) {
+					inst->operands.size() >= 2 &&
+					inst->operands[1] == allocaPtr) {
 					initialValue = inst->operands[0];
 				}
 			}
 		}
 	}
 
-	if (!initialValue || !preheader) return false;
+	if (!initialValue || !preheader)
+		return false;
 
 	// Create PHI node at start of loop header
 	auto phi = std::make_unique<MIRInstruction>(MIROpcode::Phi);
@@ -2051,8 +2118,8 @@ bool LoopIVOptimizationPass::convertIVToPhi(MIRFunction &func, MIRInstruction *a
 	for (auto &block : func.basicBlocks) {
 		for (auto &inst : block->instructions) {
 			if (inst->opcode == MIROpcode::Load &&
-			    inst->operands.size() >= 1 &&
-			    inst->operands[0] == allocaPtr) {
+				inst->operands.size() >= 1 &&
+				inst->operands[0] == allocaPtr) {
 				opt_utils::replaceAllUsesWith(func, inst->result, phiResult);
 			}
 		}
@@ -2063,8 +2130,8 @@ bool LoopIVOptimizationPass::convertIVToPhi(MIRFunction &func, MIRInstruction *a
 		if (pred != preheader) {
 			for (auto &inst : pred->instructions) {
 				if (inst->opcode == MIROpcode::Store &&
-				    inst->operands.size() >= 2 &&
-				    inst->operands[1] == allocaPtr) {
+					inst->operands.size() >= 2 &&
+					inst->operands[1] == allocaPtr) {
 					// Update PHI incoming value directly
 					for (auto &incoming : phi->phiIncoming) {
 						if (incoming.second == pred && incoming.first == nullptr) {
@@ -2084,14 +2151,14 @@ bool LoopIVOptimizationPass::convertIVToPhi(MIRFunction &func, MIRInstruction *a
 		auto &insts = block->instructions;
 		insts.erase(
 			std::remove_if(insts.begin(), insts.end(),
-			               [allocaPtr](const auto &inst) {
-				               return (inst->opcode == MIROpcode::Load &&
-				                       inst->operands.size() >= 1 &&
-				                       inst->operands[0] == allocaPtr) ||
-				                      (inst->opcode == MIROpcode::Store &&
-				                       inst->operands.size() >= 2 &&
-				                       inst->operands[1] == allocaPtr);
-			               }),
+						   [allocaPtr](const auto &inst) {
+							   return (inst->opcode == MIROpcode::Load &&
+									   inst->operands.size() >= 1 &&
+									   inst->operands[0] == allocaPtr) ||
+									  (inst->opcode == MIROpcode::Store &&
+									   inst->operands.size() >= 2 &&
+									   inst->operands[1] == allocaPtr);
+						   }),
 			insts.end());
 	}
 
@@ -2100,7 +2167,7 @@ bool LoopIVOptimizationPass::convertIVToPhi(MIRFunction &func, MIRInstruction *a
 		auto &insts = block->instructions;
 		insts.erase(
 			std::remove_if(insts.begin(), insts.end(),
-			               [alloca](const auto &inst) { return inst.get() == alloca; }),
+						   [alloca](const auto &inst) { return inst.get() == alloca; }),
 			insts.end());
 	}
 
@@ -2136,7 +2203,7 @@ bool Mem2RegPass::runOnFunction(MIRFunction &func) {
 
 	if (verboseLevel_ >= 2) {
 		std::cout << "[Mem2Reg] Found " << promotableAllocas.size()
-		          << " promotable allocas in function " << func.name << std::endl;
+				  << " promotable allocas in function " << func.name << std::endl;
 	}
 
 	// Promote each alloca
@@ -2152,13 +2219,14 @@ bool Mem2RegPass::runOnFunction(MIRFunction &func) {
 bool Mem2RegPass::isAllocaPromotable(MIRFunction &func, MIRInstruction *alloca) {
 	// Must be an alloca of a scalar type (not array or struct)
 	if (alloca->allocatedType->kind == MIRTypeKind::Array ||
-	    alloca->allocatedType->kind == MIRTypeKind::Struct) {
+		alloca->allocatedType->kind == MIRTypeKind::Struct) {
 		return false;
 	}
 
 	// Check all uses: must only be loads and stores (no address taken)
 	MIRValue *allocaVal = alloca->result;
-	if (!allocaVal) return false;
+	if (!allocaVal)
+		return false;
 
 	// Scan all blocks in this function for uses of this alloca
 	for (auto &block : func.basicBlocks) {
@@ -2196,13 +2264,13 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 	for (auto &block : func.basicBlocks) {
 		for (auto &inst : block->instructions) {
 			if (inst->opcode == MIROpcode::Store &&
-			    inst->operands.size() >= 2 &&
-			    inst->operands[1] == allocaPtr) {
+				inst->operands.size() >= 2 &&
+				inst->operands[1] == allocaPtr) {
 				defBlocks.insert(block.get());
 				storesToRemove.push_back(inst.get());
 			} else if (inst->opcode == MIROpcode::Load &&
-			           inst->operands.size() >= 1 &&
-			           inst->operands[0] == allocaPtr) {
+					   inst->operands.size() >= 1 &&
+					   inst->operands[0] == allocaPtr) {
 				loadsToReplace.push_back(inst.get());
 			}
 		}
@@ -2221,14 +2289,14 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 			for (auto &inst : block->instructions) {
 				// Track stores in order
 				if (inst->opcode == MIROpcode::Store &&
-				    inst->operands.size() >= 2 &&
-				    inst->operands[1] == allocaPtr) {
+					inst->operands.size() >= 2 &&
+					inst->operands[1] == allocaPtr) {
 					currentValue = inst->operands[0];
 				}
 				// Record loads to replace
 				else if (inst->opcode == MIROpcode::Load &&
-				         inst->operands.size() >= 1 &&
-				         inst->operands[0] == allocaPtr) {
+						 inst->operands.size() >= 1 &&
+						 inst->operands[0] == allocaPtr) {
 					if (currentValue != nullptr) {
 						loadReplacements[inst->result] = currentValue;
 					} else {
@@ -2238,7 +2306,8 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 					}
 				}
 			}
-			if (!canPromote) break;
+			if (!canPromote)
+				break;
 		}
 
 		if (!canPromote) {
@@ -2262,7 +2331,7 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 			auto &insts = block->instructions;
 			insts.erase(
 				std::remove_if(insts.begin(), insts.end(),
-				               [store](const auto &p) { return p.get() == store; }),
+							   [store](const auto &p) { return p.get() == store; }),
 				insts.end());
 		}
 	}
@@ -2272,11 +2341,11 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 		auto &insts = block->instructions;
 		insts.erase(
 			std::remove_if(insts.begin(), insts.end(),
-			               [allocaPtr](const auto &inst) {
-				               return inst->opcode == MIROpcode::Load &&
-				                      inst->operands.size() >= 1 &&
-				                      inst->operands[0] == allocaPtr;
-			               }),
+						   [allocaPtr](const auto &inst) {
+							   return inst->opcode == MIROpcode::Load &&
+									  inst->operands.size() >= 1 &&
+									  inst->operands[0] == allocaPtr;
+						   }),
 			insts.end());
 	}
 
@@ -2285,7 +2354,7 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 		auto &insts = block->instructions;
 		insts.erase(
 			std::remove_if(insts.begin(), insts.end(),
-			               [alloca](const auto &p) { return p.get() == alloca; }),
+						   [alloca](const auto &p) { return p.get() == alloca; }),
 			insts.end());
 	}
 
@@ -2293,7 +2362,7 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 }
 
 void Mem2RegPass::insertPhiNodes(MIRFunction &func, MIRInstruction *alloca,
-                                  const std::set<MIRBasicBlock *> &defBlocks) {
+								 const std::set<MIRBasicBlock *> &defBlocks) {
 	// Use iterated dominance frontier algorithm
 	DominanceInfo domInfo(func);
 
@@ -2340,8 +2409,8 @@ void Mem2RegPass::insertPhiNodes(MIRFunction &func, MIRInstruction *alloca,
 }
 
 void Mem2RegPass::renameVariables(MIRFunction &func, MIRInstruction *alloca,
-                                   MIRBasicBlock *block, MIRValue *incoming,
-                                   std::unordered_map<MIRBasicBlock *, MIRValue *> &currentDef) {
+								  MIRBasicBlock *block, MIRValue *incoming,
+								  std::unordered_map<MIRBasicBlock *, MIRValue *> &currentDef) {
 	MIRValue *allocaPtr = alloca->result;
 	MIRValue *currentValue = incoming;
 
@@ -2349,15 +2418,15 @@ void Mem2RegPass::renameVariables(MIRFunction &func, MIRInstruction *alloca,
 	for (auto &inst : block->instructions) {
 		// Handle stores: update current definition
 		if (inst->opcode == MIROpcode::Store &&
-		    inst->operands.size() >= 2 &&
-		    inst->operands[1] == allocaPtr) {
+			inst->operands.size() >= 2 &&
+			inst->operands[1] == allocaPtr) {
 			currentValue = inst->operands[0];
 			currentDef[block] = currentValue;
 		}
 		// Handle loads: replace with current definition
 		else if (inst->opcode == MIROpcode::Load &&
-		         inst->operands.size() >= 1 &&
-		         inst->operands[0] == allocaPtr) {
+				 inst->operands.size() >= 1 &&
+				 inst->operands[0] == allocaPtr) {
 			if (currentValue) {
 				opt_utils::replaceAllUsesWith(func, inst->result, currentValue);
 			}

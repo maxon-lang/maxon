@@ -196,6 +196,9 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			if (!structType) {
 				throw std::runtime_error("Unknown struct type: " + structInitExpr->structName);
 			}
+			// Mark struct type as used for lazy type emission
+			structType->used = true;
+			markFieldTypesUsed(structType);
 
 			mir::MIRValue *structAlloca = builder->createAlloca(structType, varDecl->name);
 			namedValues[varDecl->name] = structAlloca;
@@ -544,6 +547,22 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			namedValues[letDecl->name] = stringPtr;
 			variableTypes[letDecl->name] = "string";
 			return;
+		}
+
+		// Handle string concatenation (string + string produces a string struct)
+		// The expression returns an alloca pointer - use it directly like string literals
+		// This also handles chained concatenation like a + b + c
+		if (auto *binExpr = dynamic_cast<BinaryExprAST *>(letDecl->initializer.get())) {
+			if (isStringConcatExpr(binExpr)) {
+				mir::MIRValue *stringAlloca = generateExpr(letDecl->initializer.get());
+
+				// Use the alloca from concat directly
+				stringAlloca->name = letDecl->name;
+
+				namedValues[letDecl->name] = stringAlloca;
+				variableTypes[letDecl->name] = "string";
+				return;
+			}
 		}
 
 		// Non-array variable
