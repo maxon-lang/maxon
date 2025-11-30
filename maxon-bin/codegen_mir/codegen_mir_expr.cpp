@@ -278,7 +278,7 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 }
 
 // Generate a string literal as a []byte slice (fat pointer: {ptr, len})
-// Used by ExpressibleByStringLiteral to pass raw bytes to initFromStringLiteral
+// Used by ExpressibleByStringLiteral to pass raw bytes to init
 mir::MIRValue *MIRCodeGenerator::generateStringLiteralAsSlice(StringLiteralExprAST *strExpr) {
 	// Get the string content
 	const std::string &str = strExpr->value;
@@ -345,7 +345,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 	if (auto *castExpr = dynamic_cast<CastExprAST *>(expr)) {
 		// Check for ExpressibleByStringLiteral: "literal" as Type
-		// Transform to: Type.initFromStringLiteral(managed)
+		// Transform to: Type.init(managed)
 		// where managed is a _ManagedString struct
 		if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(castExpr->expr.get())) {
 			// Check if target type conforms to ExpressibleByStringLiteral
@@ -410,13 +410,13 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					mir::MIRValue *iterPosFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 3, "managed._iterPos");
 					builder->createStore(builder->getInt32(0), iterPosFieldPtr);
 
-					// Call Type.initFromStringLiteral(self, managed)
+					// Call Type.init(self, managed)
 					// Note: self is null since this is a factory method that creates a new instance
-					std::string methodName = castExpr->targetType + ".initFromStringLiteral";
+					std::string methodName = castExpr->targetType + ".init";
 					mir::MIRFunction *initFunc = module->getFunction(methodName);
 					if (!initFunc) {
 						throw std::runtime_error("Type '" + castExpr->targetType +
-												 "' conforms to ExpressibleByStringLiteral but has no initFromStringLiteral method");
+												 "' conforms to ExpressibleByStringLiteral but has no init method");
 					}
 
 					// Pass null for self (factory method doesn't use it)

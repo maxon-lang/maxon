@@ -109,7 +109,7 @@ else
 endif
 
 # Force reconfigure
-configure: 
+configure:
 	@rm -f $(BUILD_DIR)/build.ninja
 	@$(MAKE) $(BUILD_DIR)/build.ninja
 
@@ -192,8 +192,9 @@ backend-test-build: compiler backend-tests/runner/build/build.ninja
 	@cd backend-tests/runner/build && cmake --build .
 
 # Run backend tests
-backend-test: backend-test-build
+backend-test: backend-test-build ffi-test-lib
 	@echo Running backend tests...
+	@cp language-tests/ffi-test-lib/ffi_test_lib.dll backend-tests/ 2>/dev/null || cp language-tests/ffi-test-lib/libffi_test_lib.so backend-tests/ 2>/dev/null || true
 	@./backend-tests/runner/build/backend-test-runner$(EXE_EXT) -v
 
 # Generate documentation from spec files

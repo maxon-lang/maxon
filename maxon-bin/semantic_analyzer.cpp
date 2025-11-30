@@ -559,7 +559,7 @@ void SemanticAnalyzer::checkUnusedVariables() {
 
 		if (!varInfo.isUsed) {
 			// Skip unused 'self' parameters - they're auto-injected and may not be used
-			// in static factory methods like initFromStringLiteral
+			// in static factory methods like init
 			if (varInfo.isParameter && varInfo.name == "self") {
 				continue;
 			}
