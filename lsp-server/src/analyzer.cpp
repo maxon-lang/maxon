@@ -785,6 +785,24 @@ std::optional<lsp::Location> Analyzer::getDefinition(std::shared_ptr<Document> d
 		}
 	}
 
+	// Check stdlib interfaces
+	auto stdlibIfaceIt = stdlibInterfaces.find(word);
+	if (stdlibIfaceIt != stdlibInterfaces.end()) {
+		const StdlibInterface &ifaceInfo = stdlibIfaceIt->second;
+		if (!ifaceInfo.filePath.empty() && ifaceInfo.line > 0) {
+			lsp::Location loc;
+			// Convert file path to URI format
+			loc.uri = "file:///" + ifaceInfo.filePath;
+			// Replace backslashes with forward slashes for URI
+			std::replace(loc.uri.begin(), loc.uri.end(), '\\', '/');
+			loc.range.start.line = ifaceInfo.line - 1;
+			loc.range.start.character = ifaceInfo.column > 0 ? ifaceInfo.column - 1 : 0;
+			loc.range.end.line = loc.range.start.line;
+			loc.range.end.character = loc.range.start.character + ifaceInfo.name.length();
+			return loc;
+		}
+	}
+
 	// Fallback: tokenize and search for declaration (for cases not in semantic cache)
 	try {
 		std::vector<Token> tokens = tokenize(doc->text);
@@ -1100,6 +1118,16 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 				stdlibStruct.line = structDef->line;
 				stdlibStruct.column = structDef->column;
 				stdlibStructs[structDef->name] = stdlibStruct;
+			}
+
+			// Extract interface definitions for go-to-definition
+			for (const auto &ifaceDef : program->interfaces) {
+				StdlibInterface stdlibInterface;
+				stdlibInterface.name = ifaceDef->name;
+				stdlibInterface.filePath = filePath;
+				stdlibInterface.line = ifaceDef->line;
+				stdlibInterface.column = ifaceDef->column;
+				stdlibInterfaces[ifaceDef->name] = stdlibInterface;
 			}
 		}
 

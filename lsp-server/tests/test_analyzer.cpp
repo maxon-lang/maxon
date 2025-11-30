@@ -982,3 +982,49 @@ TEST_CASE("go_to_definition_struct_method", "[analyzer]") {
 	INFO("Got line: " << location->range.start.line);
 	REQUIRE(location->range.start.line == 266);
 }
+
+TEST_CASE("go_to_definition_stdlib_interface", "[analyzer]") {
+	// Test that go-to-definition on a stdlib interface like 'Iterable'
+	// navigates to the stdlib file where the interface is defined
+
+	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
+
+	// A struct that implements Iterable - similar to string.maxon
+	auto doc = createTestDocument(
+		"export struct MyIterator is Iterable with int\n"
+		"    _pos int\n"
+		"    export function Iterable.hasNext() int\n"
+		"        return 0\n"
+		"    end 'hasNext'\n"
+		"    export function Iterable.getCurrent() int\n"
+		"        return 0\n"
+		"    end 'getCurrent'\n"
+		"    export function Iterable.next() MyIterator\n"
+		"        return self\n"
+		"    end 'next'\n"
+		"end 'MyIterator'\n"
+		"function main() int\n"
+		"    return 0\n"
+		"end 'main'");
+
+	// Analyze the document first to populate semantic cache
+	analyzer.analyze(doc);
+
+	// Go to definition on 'Iterable' at line 0 (in "is Iterable with int")
+	// "export struct MyIterator is Iterable with int" - Iterable starts at column 28
+	lsp::Position pos{0, 28};
+	auto location = analyzer.getDefinition(doc, pos);
+
+	// Should find definition
+	REQUIRE(location.has_value());
+
+	// Should point to stdlib interfaces file, not current document
+	INFO("Got URI: " << location->uri);
+	REQUIRE(location->uri != doc->uri);
+	REQUIRE(location->uri.find("interfaces.maxon") != std::string::npos);
+
+	// Iterable is defined at line 28 in interfaces.maxon (0-indexed = 27)
+	INFO("Got line: " << location->range.start.line);
+	REQUIRE(location->range.start.line == 27);
+}

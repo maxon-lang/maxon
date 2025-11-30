@@ -47,6 +47,14 @@ struct StdlibStruct {
 	int column;							 // 1-based column number
 };
 
+// Information about a stdlib interface (for go-to-definition)
+struct StdlibInterface {
+	std::string name;	  // Interface name
+	std::string filePath; // Absolute file path for go-to-definition
+	int line;			  // 1-based line number
+	int column;			  // 1-based column number
+};
+
 // Information about a type method or property
 struct TypeMember {
 	std::string name;		   // Method/property name
@@ -104,6 +112,7 @@ class Analyzer {
 	std::map<std::string, StdlibFunction> stdlibFunctions;		// Key: unqualified name
 	std::vector<StdlibStructMethod> stdlibStructMethods;		// Struct methods from stdlib
 	std::map<std::string, StdlibStruct> stdlibStructs;			// Key: struct name, for semantic analysis registration
+	std::map<std::string, StdlibInterface> stdlibInterfaces;	// Key: interface name, for go-to-definition
 	std::map<std::string, std::vector<TypeMember>> typeMembers; // Key: type name (e.g., "string", "[]")
 	NamespaceNode namespaceRoot;								// Root of namespace hierarchy ("stdlib")
 
