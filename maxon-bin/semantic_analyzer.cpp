@@ -229,7 +229,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 							 std::string("\n  Note: Each method name must be unique within its struct"),
 						 method->line, method->column);
 			} else {
-				functions.emplace(methodKey, FunctionInfo(methodKey, method->returnType, method->parameters, method->implementsInterface));
+				functions.emplace(methodKey, FunctionInfo(methodKey, method->returnType, method->parameters, method->implementsInterface, method->line, method->column));
 				functionIndices[methodKey] = nextFunctionId++;
 			}
 		}
@@ -255,14 +255,14 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 						 std::string("\n  Note: Each function name must be unique in the program"),
 					 func->line, func->column);
 		} else {
-			functions.emplace(functionKey, FunctionInfo(functionKey, func->returnType, func->parameters));
+			functions.emplace(functionKey, FunctionInfo(functionKey, func->returnType, func->parameters, "", func->line, func->column));
 			functionIndices[functionKey] = nextFunctionId++;
 		}
 
 		// Also register the simple name if in global namespace (for backward compatibility)
 		// But NOT for methods - they should only be accessible via Type.method
 		if (!func->isMethod() && func->namespaceName.empty() && functions.find(func->name) == functions.end()) {
-			functions.emplace(func->name, FunctionInfo(func->name, func->returnType, func->parameters));
+			functions.emplace(func->name, FunctionInfo(func->name, func->returnType, func->parameters, "", func->line, func->column));
 			functionIndices[func->name] = functionIndices[functionKey]; // Same ID for both names
 		}
 	}

@@ -45,9 +45,11 @@ struct FunctionInfo {
 	std::string returnType;
 	std::vector<FunctionParameter> parameters;
 	std::string implementsInterface; // For interface methods: which interface this method implements
+	int line;
+	int column;
 
-	FunctionInfo(const std::string &n, const std::string &ret, std::vector<FunctionParameter> params, const std::string &implInterface = "")
-		: name(n), returnType(ret), parameters(std::move(params)), implementsInterface(implInterface) {}
+	FunctionInfo(const std::string &n, const std::string &ret, std::vector<FunctionParameter> params, const std::string &implInterface = "", int l = 0, int c = 0)
+		: name(n), returnType(ret), parameters(std::move(params)), implementsInterface(implInterface), line(l), column(c) {}
 };
 
 // Struct field information
