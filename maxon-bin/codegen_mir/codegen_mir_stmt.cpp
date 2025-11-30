@@ -628,19 +628,71 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 	}
 
 	if (auto *assign = dynamic_cast<AssignStmtAST *>(stmt)) {
-		mir::MIRValue *val = generateExpr(assign->value.get());
-		if (!val) {
-			throw std::runtime_error("Failed to generate assignment value");
-		}
-
 		mir::MIRValue *alloca = namedValues[assign->name];
 		if (!alloca) {
 			throw std::runtime_error("Unknown variable name: " + assign->name);
 		}
 
+		std::string varType = variableTypes[assign->name];
+
+		// COW: For string reassignment, save the old data pointer BEFORE evaluating RHS
+		// This is critical for self-assignment like: s = s + "x"
+		// We need to release the old buffer after the new value is computed
+		mir::MIRValue *oldDataPtr = nullptr;
+		mir::MIRValue *oldCapacity = nullptr;
+		if (varType == "string") {
+			mir::MIRType *stringType = structTypes["string"];
+			mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
+			mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+
+			if (stringType && managedStringType && unsizedArrayType) {
+				// Load the _managed pointer from the string struct
+				mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, alloca, 0, assign->name + ".old._managed.ptr");
+				mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, assign->name + ".old._managed");
+
+				// Load capacity to check if heap-allocated (_capacity > 0)
+				mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, assign->name + ".old._capacity.ptr");
+				oldCapacity = builder->createLoad(mir::MIRType::getInt32(), capPtr, assign->name + ".old._capacity");
+
+				// Load the data pointer from _buffer.ptr
+				mir::MIRValue *bufferPtr = builder->createStructGEP(managedStringType, managedPtr, 0, assign->name + ".old._buffer");
+				mir::MIRValue *dataPtrPtr = builder->createStructGEP(unsizedArrayType, bufferPtr, 0, assign->name + ".old.data.ptr.ptr");
+				oldDataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrPtr, assign->name + ".old.data.ptr");
+			}
+		}
+
+		// Now evaluate the RHS expression
+		mir::MIRValue *val = generateExpr(assign->value.get());
+		if (!val) {
+			throw std::runtime_error("Failed to generate assignment value");
+		}
+
+		// COW: Release the old string buffer if it was heap-allocated
+		if (varType == "string" && oldDataPtr && oldCapacity) {
+			// Check if capacity > 0 (heap-allocated)
+			mir::MIRValue *isHeap = builder->createICmpSGT(oldCapacity, builder->getInt32(0), assign->name + ".old.isHeap");
+
+			mir::MIRBasicBlock *releaseBlock = builder->createBasicBlock(assign->name + ".release");
+			mir::MIRBasicBlock *assignBlock = builder->createBasicBlock(assign->name + ".assign");
+
+			builder->createCondBr(isHeap, releaseBlock, assignBlock);
+
+			// Release block: call _managed_string_release on old data
+			builder->setInsertPoint(releaseBlock);
+			mir::MIRValue *tag = module->createGlobalString(".__tag.reassign." + assign->name, "string reassign");
+			mir::MIRFunction *stringReleaseFunc = getOrDeclareFunction(
+				"_managed_string_release",
+				mir::MIRType::getVoid(),
+				{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+			builder->createCall(stringReleaseFunc, {oldDataPtr, tag});
+			builder->createBr(assignBlock);
+
+			// Continue to assignment
+			builder->setInsertPoint(assignBlock);
+		}
+
 		// Check if this is a struct assignment
 		// For structs, val is a pointer to the source struct, so we need memcpy
-		std::string varType = variableTypes[assign->name];
 		mir::MIRType *structType = structTypes.count(varType) ? structTypes[varType] : nullptr;
 
 		if (structType && val->type->kind == mir::MIRTypeKind::Ptr) {

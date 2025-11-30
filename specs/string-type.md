@@ -937,8 +937,6 @@ Leaked:    0 bytes
 <!-- test: memory-tracking-loop-concat -->
 <!-- TrackAllocs: true -->
 ```maxon
-// Note: Loop reassignment currently leaks intermediate strings.
-// This will be fixed when we implement release-before-reassign.
 function main() int
     var s = ""
     var i = 0
@@ -956,18 +954,16 @@ end 'main'
 ```stdout
 ALLOC #1: 9 bytes (string concat)
 ALLOC #2: 10 bytes (string concat)
+FREE #1: 9 bytes (string reassign)
 ALLOC #3: 11 bytes (string concat)
+FREE #2: 10 bytes (string reassign)
 3
 FREE #3: 11 bytes (string concat)
 
-=== LEAKS ===
-LEAK #1: 9 bytes (string concat)
-LEAK #2: 10 bytes (string concat)
-
 === ALLOC STATS ===
 Allocated: 30 bytes
-Freed:     11 bytes
-Leaked:    19 bytes
+Freed:     30 bytes
+Leaked:    0 bytes
 ```
 
 <!-- test: memory-tracking-no-leak-scope-exit -->
