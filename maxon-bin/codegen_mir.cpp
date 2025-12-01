@@ -616,10 +616,6 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		functionReturnTypes = *functionReturnTypesIn;
 	}
 
-	// Declare runtime functions used by stdlib
-	getOrDeclareFunction("write_stdout", mir::MIRType::getInt32(),
-						 {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-
 	// First pass: Forward-declare all struct types (to handle circular/forward references)
 	logDetail("Pass 1a: Forward-declaring struct types (" + std::to_string(program->structs.size()) + " structs)");
 	for (const auto &structDef : program->structs) {
