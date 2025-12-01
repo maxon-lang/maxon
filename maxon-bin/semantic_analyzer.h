@@ -209,6 +209,7 @@ class SemanticAnalyzer {
 	// Type checking
 	std::string getExpressionType(ExprAST *expr);
 	bool typesMatch(const std::string &type1, const std::string &type2);
+	bool isIterableType(const std::string &type, ExprAST *iterableExpr);
 
 	// Helper methods
 	void addError(const std::string &message, int line = 0, int column = 0, const std::string &errCode = "");

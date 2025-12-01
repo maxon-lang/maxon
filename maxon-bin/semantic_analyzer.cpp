@@ -189,7 +189,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 						std::string defaultType = analyzeExpression(field.defaultValue.get());
 						if (!typesMatch(fieldType, defaultType)) {
 							addError("Default value type '" + defaultType +
-									 "' does not match field type '" + fieldType + "' for field '" + field.name + "'",
+										 "' does not match field type '" + fieldType + "' for field '" + field.name + "'",
 									 field.line, field.column);
 						}
 					}
@@ -570,6 +570,46 @@ bool SemanticAnalyzer::typesMatch(const std::string &type1, const std::string &t
 	}
 
 	return type1 == type2;
+}
+
+bool SemanticAnalyzer::isIterableType(const std::string &type, ExprAST *iterableExpr) {
+	// Error type is always iterable (avoid cascading errors)
+	if (type == "error") {
+		return true;
+	}
+
+	// Array types are iterable: [N]T (fixed-size) or []T (dynamic/slice)
+	if (type.size() > 2 && type[0] == '[') {
+		return true;
+	}
+
+	// String type is iterable (iterates over characters)
+	if (type == "string") {
+		return true;
+	}
+
+	// Check for range() call - returns Iterator which is iterable
+	// The Iterator struct from stdlib is iterable
+	if (type == "Iterator") {
+		return true;
+	}
+
+	// Check if this is a struct that conforms to Sequence interface
+	auto structIt = structs.find(type);
+	if (structIt != structs.end()) {
+		for (const auto &iface : structIt->second.conformsTo) {
+			if (iface == "Iterable") {
+				return true;
+			}
+		}
+		// Structs with an Element associated type are considered iterable
+		if (structIt->second.typeAssignments.find("Element") != structIt->second.typeAssignments.end()) {
+			return true;
+		}
+	}
+
+	// Non-iterable types: int, float, bool, char, byte, void, pointers, etc.
+	return false;
 }
 
 void SemanticAnalyzer::addError(const std::string &message, int line, int column, const std::string &errCode) {

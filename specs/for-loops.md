@@ -309,3 +309,63 @@ Cannot assign to loop variable 'i'
     |           ^
 ```
 
+
+<!-- test: error.iterate-over-int -->
+```maxon
+function main() int
+    var sum = 0
+    let count = 5
+    for i in count 'loop'
+        sum = sum + i
+    end 'loop'
+    return sum
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 4, column 14
+Cannot iterate over type 'int'
+  For-loops require an iterable type: array, string, range()
+
+  4 |     for i in count 'loop'
+    |              ^
+```
+
+<!-- test: error.iterate-over-bool -->
+```maxon
+function main() int
+    var sum = 0
+    let flag = true
+    for i in flag 'loop'
+        sum = sum + 1
+    end 'loop'
+    return sum
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 4, column 14
+Cannot iterate over type 'bool'
+  For-loops require an iterable type: array, string, range()
+
+  4 |     for i in flag 'loop'
+    |              ^
+```
+
+<!-- test: error.iterate-over-float -->
+```maxon
+function main() int
+    var sum = 0
+    let val = 3.14
+    for i in val 'loop'
+        sum = sum + 1
+    end 'loop'
+    return sum
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 4, column 14
+Cannot iterate over type 'float'
+  For-loops require an iterable type: array, string, range()
+
+  4 |     for i in val 'loop'
+    |              ^
+```

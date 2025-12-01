@@ -232,15 +232,15 @@ var exists = symbols.contains("foo")
 ```
 
 **Implementation needed:**
-- Generic HashMap<K, V>
 - Hash function for common types
 - Collision handling (chaining or open addressing)
 - Resizing logic
+- special interface for map types in the compiler for initialization
 
 **Compiler component to rewrite:** Symbol table
 - Maps identifier names to variable info
 - Core data structure for semantic analysis
-- Validates HashMap implementation
+- Validates map implementation
 
 **Deliverable:** Symbol table module in Maxon
 

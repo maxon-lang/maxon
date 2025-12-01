@@ -474,9 +474,12 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		// Analyze iterable expression first (before entering loop scope)
 		std::string iterableType = analyzeExpression(forStmt->iterable.get());
 
-		// For now, we accept function calls (like range()) or arrays
-		// The iterable type will be validated during codegen
-		// TODO: Add more strict type checking when we have better type system
+		// Validate that the iterable expression is actually iterable
+		if (!isIterableType(iterableType, forStmt->iterable.get())) {
+			addError("Cannot iterate over type '" + iterableType + "'" +
+						 std::string("\n  For-loops require an iterable type: array, string, range()"),
+					 forStmt->iterable->line, forStmt->iterable->column);
+		}
 
 		// Check for duplicate block identifiers at this scope level
 		declareBlockId(forStmt->blockId, stmt->line, stmt->column);
