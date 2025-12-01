@@ -138,6 +138,10 @@ declare i1 @ReleaseSemaphore(ptr, i32, ptr)
 
 ; Command line and environment
 declare ptr @GetCommandLineA()
+declare ptr @GetCommandLineW()
+declare ptr @CommandLineToArgvW(ptr, ptr)
+declare i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)
+declare ptr @LocalFree(ptr)
 declare i32 @GetEnvironmentVariableA(ptr, ptr, i32)
 declare i1 @SetEnvironmentVariableA(ptr, ptr)
 
@@ -1232,4 +1236,203 @@ entry:
     %status_ptr = getelementptr i8, ptr %shared_mem, i64 12
     store i32 2, ptr %status_ptr
     ret void
+}
+
+;==============================================================================
+; Command Line Argument Handling for Maxon
+;==============================================================================
+
+; Global storage for command line args result
+; This is a struct { ptr data, i32 length } representing []string
+@__cmdline_args_result = global [16 x i8] zeroinitializer
+
+;==============================================================================
+; __get_command_args - Get command line arguments as []string
+; Returns a pointer to a struct { ptr data, i32 length } where data points to
+; an array of string structs.
+;
+; Maxon string struct layout: { ptr _managed, i32 _iterPos }
+; The _managed field points to a __ManagedStringData which is:
+;   { { ptr data, i32 len }, i32 refcount, i32 capacity }
+; For static/literal strings, capacity = 0 indicates no heap ownership.
+;
+; ptr __get_command_args()
+;==============================================================================
+define ptr @__get_command_args() {
+entry:
+    ; Allocate space for argc (will be filled by CommandLineToArgvW)
+    %argc_ptr = alloca i32
+    store i32 0, ptr %argc_ptr
+
+    ; Get wide command line
+    %cmdline_w = call ptr @GetCommandLineW()
+
+    ; Parse into argv (wide strings)
+    %argv_w = call ptr @CommandLineToArgvW(ptr %cmdline_w, ptr %argc_ptr)
+
+    ; Check for failure
+    %argv_null = icmp eq ptr %argv_w, null
+    br i1 %argv_null, label %return_empty, label %parse_args
+
+parse_args:
+    ; Load argc
+    %argc = load i32, ptr %argc_ptr
+
+    ; Check for zero args (shouldn't happen, but handle it)
+    %argc_zero = icmp eq i32 %argc, 0
+    br i1 %argc_zero, label %cleanup_argv, label %alloc_arrays
+
+alloc_arrays:
+    ; Allocate array of string structs (each string is 16 bytes: ptr + i32 + padding)
+    ; string struct: { ptr _managed (8 bytes), i32 _iterPos (4 bytes), padding (4 bytes) } = 16 bytes
+    %argc_i64 = sext i32 %argc to i64
+    %strings_size = mul i64 %argc_i64, 16
+    %strings_array = call ptr @malloc(i64 %strings_size)
+
+    ; Check allocation
+    %strings_null = icmp eq ptr %strings_array, null
+    br i1 %strings_null, label %cleanup_argv, label %convert_loop_init
+
+convert_loop_init:
+    ; Initialize loop counter
+    br label %convert_loop
+
+convert_loop:
+    ; Loop variable: current index
+    %i = phi i32 [ 0, %convert_loop_init ], [ %i_next, %convert_next ]
+
+    ; Check if done
+    %done = icmp sge i32 %i, %argc
+    br i1 %done, label %build_result, label %convert_one
+
+convert_one:
+    ; Get pointer to argv[i] (each ptr is 8 bytes)
+    %i_i64 = sext i32 %i to i64
+    %argv_slot = getelementptr ptr, ptr %argv_w, i64 %i_i64
+    %wstr = load ptr, ptr %argv_slot
+
+    ; Get required buffer size for UTF-8 conversion
+    ; WideCharToMultiByte(CP_UTF8=65001, 0, wstr, -1, null, 0, null, null)
+    ; -1 means null-terminated wide string, returns required buffer size including null
+    %utf8_size = call i32 @WideCharToMultiByte(i32 65001, i32 0, ptr %wstr, i32 -1, ptr null, i32 0, ptr null, ptr null)
+
+    ; Check for error
+    %size_zero = icmp eq i32 %utf8_size, 0
+    br i1 %size_zero, label %convert_skip, label %alloc_managed
+
+alloc_managed:
+    ; Allocate __ManagedStringData struct (24 bytes: {ptr, i32} + i32 + i32)
+    ; Layout: { { ptr data, i32 len }, i32 refcount, i32 capacity }
+    ; For command line args, we allocate heap memory but set capacity=0 to indicate
+    ; the strings are "static" and won't be freed by normal string cleanup.
+    ; This is a simplification - the args live for the program's lifetime.
+    %managed_ptr = call ptr @malloc(i64 24)
+    %managed_null = icmp eq ptr %managed_ptr, null
+    br i1 %managed_null, label %convert_skip, label %alloc_buffer
+
+alloc_buffer:
+    ; Allocate UTF-8 buffer (utf8_size includes null terminator)
+    %utf8_size_i64 = sext i32 %utf8_size to i64
+    %utf8_buf = call ptr @malloc(i64 %utf8_size_i64)
+    %buf_null = icmp eq ptr %utf8_buf, null
+    br i1 %buf_null, label %free_managed, label %do_convert
+
+do_convert:
+    ; Convert wide string to UTF-8
+    %converted = call i32 @WideCharToMultiByte(i32 65001, i32 0, ptr %wstr, i32 -1, ptr %utf8_buf, i32 %utf8_size, ptr null, ptr null)
+
+    ; Check for error
+    %convert_failed = icmp eq i32 %converted, 0
+    br i1 %convert_failed, label %free_buffer, label %setup_managed
+
+setup_managed:
+    ; Calculate string length (excluding null terminator)
+    %str_len = sub i32 %utf8_size, 1
+
+    ; Setup __ManagedStringData:
+    ; Layout: { { ptr data, i32 len }, i32 len_copy, i32 capacity }
+    ; __unsized_array_byte is { ptr, i32 } = 16 bytes (with padding to alignment 8)
+    ; IMPORTANT: The string intrinsics read length from field 1 (offset 16), not
+    ; from the nested __unsized_array_byte. So we must store length in BOTH places.
+    ; So the offsets are:
+    ;   Offset 0: data pointer (ptr)
+    ;   Offset 8: length (i32) - inside __unsized_array_byte
+    ;   Offset 16: length (i32) - field 1, what intrinsics actually read!
+    ;   Offset 20: capacity (i32)
+
+    ; Field 0.0: data pointer (ptr at offset 0)
+    store ptr %utf8_buf, ptr %managed_ptr
+
+    ; Field 0.1: length (i32 at offset 8) - inside __unsized_array_byte
+    %len_ptr0 = getelementptr i8, ptr %managed_ptr, i64 8
+    store i32 %str_len, ptr %len_ptr0
+
+    ; Field 1: length (i32 at offset 16) - this is what intrinsics read
+    %len_ptr1 = getelementptr i8, ptr %managed_ptr, i64 16
+    store i32 %str_len, ptr %len_ptr1
+
+    ; Field 2: capacity (i32 at offset 20) - set to 0 to indicate "static"
+    ; This prevents the normal string cleanup from freeing these buffers
+    %capacity_ptr = getelementptr i8, ptr %managed_ptr, i64 20
+    store i32 0, ptr %capacity_ptr
+
+    ; Setup string struct in array:
+    ; Field 0: _managed pointer (ptr at offset 0)
+    %string_slot = getelementptr i8, ptr %strings_array, i64 %i_i64
+    %string_slot_scaled = getelementptr [16 x i8], ptr %strings_array, i64 %i_i64
+    store ptr %managed_ptr, ptr %string_slot_scaled
+
+    ; Field 1: _iterPos (i32 at offset 8) - set to 0
+    %iterpos_ptr = getelementptr i8, ptr %string_slot_scaled, i64 8
+    store i32 0, ptr %iterpos_ptr
+
+    br label %convert_next
+
+free_buffer:
+    call void @free(ptr %utf8_buf)
+    br label %free_managed
+
+free_managed:
+    call void @free(ptr %managed_ptr)
+    br label %convert_skip
+
+convert_skip:
+    ; On error, store null for this string's _managed pointer
+    %string_slot_err = getelementptr [16 x i8], ptr %strings_array, i64 %i_i64
+    store ptr null, ptr %string_slot_err
+    %iterpos_ptr_err = getelementptr i8, ptr %string_slot_err, i64 8
+    store i32 0, ptr %iterpos_ptr_err
+    br label %convert_next
+
+convert_next:
+    %i_next = add i32 %i, 1
+    br label %convert_loop
+
+build_result:
+    ; Free the wide argv array (we've converted everything)
+    call ptr @LocalFree(ptr %argv_w)
+
+    ; Store result in global struct
+    ; Field 0: data pointer (ptr at offset 0)
+    %result_ptr = getelementptr [16 x i8], ptr @__cmdline_args_result, i64 0, i64 0
+    store ptr %strings_array, ptr %result_ptr
+
+    ; Field 1: length (i32 at offset 8)
+    %result_len_ptr = getelementptr i8, ptr %result_ptr, i64 8
+    store i32 %argc, ptr %result_len_ptr
+
+    ret ptr %result_ptr
+
+cleanup_argv:
+    ; Free wide argv on error path
+    call ptr @LocalFree(ptr %argv_w)
+    br label %return_empty
+
+return_empty:
+    ; Return empty array (null pointer, zero length)
+    %empty_ptr = getelementptr [16 x i8], ptr @__cmdline_args_result, i64 0, i64 0
+    store ptr null, ptr %empty_ptr
+    %empty_len_ptr = getelementptr i8, ptr %empty_ptr, i64 8
+    store i32 0, ptr %empty_len_ptr
+    ret ptr %empty_ptr
 }

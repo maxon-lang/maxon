@@ -159,10 +159,6 @@ void MIRCodeGenerator::generateFFIInitFunction() {
 	mir::MIRValue *one = builder->getInt32(1);
 	builder->createStore(one, initAddr);
 
-	// Generate unique names for IPC resources based on process ID
-	// For now, use fixed names (will be made unique later)
-	// TODO: Use GetCurrentProcessId to make names unique
-
 	// Create shared memory
 	// ptr handle = ffi_create_shared_memory(4096, "MaxonFFI_SHM")
 	mir::MIRFunction *createShmFunc = module->getFunction("ffi_create_shared_memory");
@@ -170,9 +166,6 @@ void MIRCodeGenerator::generateFFIInitFunction() {
 		createShmFunc = getOrDeclareFunction("ffi_create_shared_memory", mir::MIRType::getPtr(),
 											 {mir::MIRType::getInt32(), mir::MIRType::getPtr()});
 	}
-
-	// For now, just mark as initialized
-	// Full IPC setup will be implemented when the worker loop is ready
 
 	builder->createRetVoid();
 }
@@ -397,12 +390,6 @@ void MIRCodeGenerator::generateFFICleanup() {
 
 	mir::MIRBasicBlock *entry = cleanupFunc->createBasicBlock("entry");
 	builder->setInsertPoint(entry);
-
-	// TODO: Implement cleanup:
-	// 1. Signal shutdown to worker
-	// 2. Wait for worker to exit (with timeout)
-	// 3. Close handles
-	// 4. Unmap shared memory
 
 	builder->createRetVoid();
 }

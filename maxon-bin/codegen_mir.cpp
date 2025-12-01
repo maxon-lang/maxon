@@ -568,10 +568,34 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 		builder->createCall(trackEnableFunc, {});
 	}
 
-	if (mainTakesArgs && isWindows) {
-		// TODO: Implement Windows command line argument handling
-		// For now, call main without arguments
-		mainRetVal = builder->createCall(mainFunc, {});
+	if (mainTakesArgs) {
+		if (isWindows) {
+			// Windows command line argument handling
+			// Call __get_command_args() which returns a pointer to { ptr data, i32 length }
+			mir::MIRFunction *getArgsFunc = getOrDeclareFunction(
+				"__get_command_args", mir::MIRType::getPtr(), {});
+			mir::MIRValue *argsStructPtr = builder->createCall(getArgsFunc, {});
+
+			// Load the data pointer (offset 0)
+			mir::MIRValue *argsDataPtr = builder->createLoad(
+				mir::MIRType::getPtr(), argsStructPtr, "args.data");
+
+			// Load the length (offset 8)
+			// Use byte-level GEP to get to offset 8
+			mir::MIRValue *argsLenPtr = builder->createGEP(
+				mir::MIRType::getInt8(), argsStructPtr,
+				{builder->getInt64(8)}, "args.len.ptr");
+			mir::MIRValue *argsLen = builder->createLoad(
+				mir::MIRType::getInt32(), argsLenPtr, "args.len");
+
+			// Call main with args (ptr, i32)
+			mainRetVal = builder->createCall(mainFunc, {argsDataPtr, argsLen});
+		} else {
+			// Linux: TODO - for now call with empty args
+			mir::MIRValue *nullPtr = mir::MIRValue::createConstantNull();
+			mir::MIRValue *zero = builder->getInt32(0);
+			mainRetVal = builder->createCall(mainFunc, {nullPtr, zero});
+		}
 	} else {
 		// Call main without arguments
 		mainRetVal = builder->createCall(mainFunc, {});

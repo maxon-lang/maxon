@@ -296,6 +296,7 @@ int extractSpecFragments(int verboseLevel) {
 		int docExampleCount = 0;			 // Counter for unnamed doc examples
 		std::string expectedOutputBlockType; // Track what type of output block is expected
 		bool currentTrackAllocs = false;	 // Track --track-allocs flag for current test
+		std::string currentArgs;			 // Track command line args for current test
 
 		while (std::getline(specFile, line)) {
 			// Check if we're entering the Documentation or Tests section
@@ -341,6 +342,13 @@ int extractSpecFragments(int verboseLevel) {
 			if (std::regex_search(line, match, trackAllocsRegex)) {
 				std::string val = match[1].str();
 				currentTrackAllocs = (val == "true" || val == "yes" || val == "1");
+				continue;
+			}
+
+			// Check for Args comment (must follow test marker)
+			std::regex argsRegex(R"(<!--\s*Args:\s*(.+?)\s*-->)");
+			if (std::regex_search(line, match, argsRegex)) {
+				currentArgs = match[1].str();
 				continue;
 			}
 
@@ -480,6 +488,10 @@ int extractSpecFragments(int verboseLevel) {
 							if (currentTrackAllocs) {
 								finalMetadata = "TrackAllocs: true\n" + finalMetadata;
 							}
+							// Prepend Args if set
+							if (!currentArgs.empty()) {
+								finalMetadata = "Args: " + currentArgs + "\n" + finalMetadata;
+							}
 
 							int index = testNameCounts[currentTestName];
 							std::string fragmentName = currentTestName + "." + std::to_string(index);
@@ -494,6 +506,7 @@ int extractSpecFragments(int verboseLevel) {
 						expectedOutputBlockType.clear();
 						inMetadataBlock = false;
 						currentTrackAllocs = false;
+						currentArgs.clear();
 					}
 				}
 			}
@@ -524,6 +537,10 @@ int extractSpecFragments(int verboseLevel) {
 			// Prepend TrackAllocs if set
 			if (currentTrackAllocs) {
 				finalMetadata = "TrackAllocs: true\n" + finalMetadata;
+			}
+			// Prepend Args if set
+			if (!currentArgs.empty()) {
+				finalMetadata = "Args: " + currentArgs + "\n" + finalMetadata;
 			}
 
 			int index = testNameCounts[currentTestName];

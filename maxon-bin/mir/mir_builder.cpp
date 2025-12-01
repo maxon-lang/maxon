@@ -361,6 +361,15 @@ MIRValue *MIRBuilder::createArrayGEP(MIRType *elemType, MIRValue *arrayPtr, MIRV
 			index64 = createSExt(index, MIRType::getInt64(), "idx.ext");
 		}
 	}
+
+	// For struct/complex element types accessed via raw pointer (unsized arrays),
+	// use a single index. For simple types (int, char, etc.) via array types,
+	// use two indices {0, idx} for LLVM-style array GEP.
+	// The single-index form is: getelementptr %T, ptr %p, i64 <idx>
+	// which computes: %p + idx * sizeof(%T)
+	if (elemType->isStruct()) {
+		return createGEP(elemType, arrayPtr, {index64}, name);
+	}
 	return createGEP(elemType, arrayPtr, {getInt64(0), index64}, name);
 }
 

@@ -47,6 +47,9 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
         let key: Key
         var value: Value
     }	
+- have a command line options stdlib that supplies all the common CLI features (flags, parameters, validation)
+  and you just get a struct back with everything filled in
+- precompile stdlib and link it
 
 
 - how to have the language prevent users doing this

@@ -470,6 +470,8 @@ int main(int argc, char *argv[]) {
 			options.trackAllocs = true;
 		} else if (arg == "--stats") {
 			options.showStats = true;
+		} else if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+			options.outputFile = argv[++i];
 		} else if (arg == "-vvv") {
 			options.verboseLevel = 3;
 		} else if (arg == "-vv") {

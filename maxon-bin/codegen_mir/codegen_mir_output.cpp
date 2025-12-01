@@ -507,8 +507,14 @@ static const std::pair<const char *, const char *> WINDOWS_IMPORTS[] = {
 	{"kernel32.dll", "GetLastError"},
 	{"kernel32.dll", "SetErrorMode"},
 	{"kernel32.dll", "GetCommandLineA"},
+	{"kernel32.dll", "GetCommandLineW"},
 	{"kernel32.dll", "GetEnvironmentVariableA"},
 	{"kernel32.dll", "SetEnvironmentVariableA"},
+	{"kernel32.dll", "WideCharToMultiByte"},
+	{"kernel32.dll", "LocalFree"},
+
+	// Command line argument parsing
+	{"shell32.dll", "CommandLineToArgvW"},
 
 	// Dynamic library loading
 	{"kernel32.dll", "LoadLibraryA"},
