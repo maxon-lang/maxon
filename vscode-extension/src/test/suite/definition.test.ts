@@ -144,8 +144,8 @@ suite('Go to Definition Test Suite', () => {
 	test('Go to definition for struct type', async function () {
 		const content = [
 			"struct Point",
-			"    x int",
-			"    y int",
+			"    var x int",
+			"    var y int",
 			"end 'Point'",
 			"",
 			"function test() int",
@@ -167,8 +167,8 @@ suite('Go to Definition Test Suite', () => {
 	test('Go to definition for struct field', async function () {
 		const content = [
 			"struct Point",
-			"    x int",
-			"    y int",
+			"    var x int",
+			"    var y int",
 			"end 'Point'",
 			"",
 			"function test() int",
@@ -191,8 +191,8 @@ suite('Go to Definition Test Suite', () => {
 	test('Go to definition for struct field in return', async function () {
 		const content = [
 			"struct Point",
-			"    x int",
-			"    y int",
+			"    var x int",
+			"    var y int",
 			"end 'Point'",
 			"",
 			"function getX(p Point) int",
@@ -213,11 +213,11 @@ suite('Go to Definition Test Suite', () => {
 	test('Go to definition for interface type', async function () {
 		const content = [
 			"interface Printable",
-			"    function print() void",
+			"    function print_int() void",
 			"end 'Printable'",
 			"",
 			"struct Message is Printable",
-			"    text string",
+			"    var text string",
 			"end 'Message'"
 		].join('\n');
 
@@ -288,7 +288,7 @@ suite('Go to Definition Test Suite', () => {
 	test('Go to definition for stdlib function', async function () {
 		const content = [
 			"function main() int",
-			"    print(42)",
+			"    print_int(42)",
 			"    return 0",
 			"end 'main'"
 		].join('\n');
@@ -331,9 +331,9 @@ suite('Go to Definition Test Suite', () => {
 	test('Go to definition jumps to correct field in struct with multiple fields', async function () {
 		const content = [
 			"struct Rectangle",
-			"    width int",
-			"    height int",
-			"    area int",
+			"    var width int",
+			"    var height int",
+			"    var area int",
 			"end 'Rectangle'",
 			"",
 			"function test() int",
@@ -384,8 +384,8 @@ suite('Go to Definition Test Suite', () => {
 	test('Go to definition for struct in return type', async function () {
 		const content = [
 			"struct Point",
-			"    x int",
-			"    y int",
+			"    var x int",
+			"    var y int",
 			"end 'Point'",
 			"",
 			"function createPoint() Point",
@@ -406,8 +406,8 @@ suite('Go to Definition Test Suite', () => {
 	test('Go to definition for struct literal type', async function () {
 		const content = [
 			"struct Point",
-			"    x int",
-			"    y int",
+			"    var x int",
+			"    var y int",
 			"end 'Point'",
 			"",
 			"function test() Point",

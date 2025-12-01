@@ -1,6 +1,7 @@
 #include "../lexer.h"
 #include "../semantic_analyzer.h"
 #include "../type_members.h"
+#include "../intrinsics.h"
 #include <algorithm>
 
 // Expression analysis implementation
@@ -361,202 +362,33 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return arrType.substr(2); // Skip "[]"
 		}
 
-		// Handle string intrinsics (__string_* functions)
-		// These are compiler-internal functions for accessing _ManagedString opaque type
-		if (callExpr->callee.rfind("__string_", 0) == 0) {
-			const std::string &name = callExpr->callee;
-
-			// Validate and return appropriate type based on intrinsic
-			if (name == "__string_len") {
-				if (callExpr->args.size() != 1) {
-					addError("__string_len requires exactly 1 argument", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				return "int";
-			}
-			if (name == "__string_byte_at") {
-				if (callExpr->args.size() != 2) {
-					addError("__string_byte_at requires exactly 2 arguments", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				analyzeExpression(callExpr->args[1].get());
-				return "byte";
-			}
-			if (name == "__string_slice") {
-				if (callExpr->args.size() != 3) {
-					addError("__string_slice requires exactly 3 arguments", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				analyzeExpression(callExpr->args[1].get());
-				analyzeExpression(callExpr->args[2].get());
-				return "substring"; // Returns substring view, not copied string
-			}
-			if (name == "__string_concat") {
-				if (callExpr->args.size() != 2) {
-					addError("__string_concat requires exactly 2 arguments", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				analyzeExpression(callExpr->args[1].get());
-				return "_ManagedString";
-			}
-			// __string_make_unique(managed) - ensure exclusive ownership for COW
-			// Returns the same or new _ManagedString pointer
-			if (name == "__string_make_unique") {
-				if (callExpr->args.size() != 1) {
-					addError("__string_make_unique requires exactly 1 argument", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				return "_ManagedString";
-			}
-			// __string_set_byte(managed, index, value) - set byte at index (low-level mutation)
-			// Returns void, used after make_unique to perform actual mutation
-			if (name == "__string_set_byte") {
-				if (callExpr->args.size() != 3) {
-					addError("__string_set_byte requires exactly 3 arguments", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				analyzeExpression(callExpr->args[1].get());
-				analyzeExpression(callExpr->args[2].get());
-				return "void";
-			}
-			// __string_get_refcount(managed) - get current refcount (for testing/debugging)
-			if (name == "__string_get_refcount") {
-				if (callExpr->args.size() != 1) {
-					addError("__string_get_refcount requires exactly 1 argument", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				return "int";
-			}
-			// __string_to_cstring(managed) - create cstring from managed string data
-			// Increments refcount and returns zero-copy reference
-			if (name == "__string_to_cstring") {
-				if (callExpr->args.size() != 1) {
-					addError("__string_to_cstring requires exactly 1 argument", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				return "cstring";
-			}
-			// __string_from_chars(buffer, length) - create new string from char buffer
-			// Copies bytes and creates new heap-allocated string
-			// Returns _ManagedString (opaque pointer to __ManagedStringData)
-			if (name == "__string_from_chars") {
-				if (callExpr->args.size() != 2) {
-					addError("__string_from_chars requires exactly 2 arguments", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				analyzeExpression(callExpr->args[1].get());
-				return "_ManagedString";
+		// Handle compiler intrinsics using the registry
+		const IntrinsicInfo* intrinsic = IntrinsicRegistry::instance().lookup(callExpr->callee);
+		if (intrinsic) {
+			// Validate argument count
+			if (callExpr->args.size() != intrinsic->params.size()) {
+				addError(intrinsic->name + " requires exactly " + std::to_string(intrinsic->params.size()) +
+						 " argument(s)", expr->line, expr->column);
+				return "error";
 			}
 
-			// Unknown string intrinsic
-			addError("Unknown string intrinsic: " + name, expr->line, expr->column);
-			return "error";
+			// Validate each argument type
+			for (size_t i = 0; i < intrinsic->params.size(); ++i) {
+				std::string argType = analyzeExpression(callExpr->args[i].get());
+				std::string error = IntrinsicRegistry::instance().validateArgType(intrinsic->params[i], argType);
+				if (!error.empty()) {
+					addError(intrinsic->name + " argument " + std::to_string(i + 1) + ": " + error,
+							 expr->line, expr->column);
+					return "error";
+				}
+			}
+
+			return intrinsic->returnType;
 		}
 
-		// Handle cstring intrinsics (__cstring_* functions)
-		// These are compiler-internal functions for working with cstring type
-		if (callExpr->callee.rfind("__cstring_", 0) == 0) {
-			const std::string &name = callExpr->callee;
-
-			// __cstring_len(cs) - get byte length
-			if (name == "__cstring_len") {
-				if (callExpr->args.size() != 1) {
-					addError("__cstring_len requires exactly 1 argument", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				return "int";
-			}
-			// __cstring_ptr(cs) - get data pointer for FFI
-			if (name == "__cstring_ptr") {
-				if (callExpr->args.size() != 1) {
-					addError("__cstring_ptr requires exactly 1 argument", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				return "ptr";
-			}
-
-			// Unknown cstring intrinsic
-			addError("Unknown cstring intrinsic: " + name, expr->line, expr->column);
-			return "error";
-		}
-
-		// Handle substring intrinsics (__substring_* functions)
-		// These are compiler-internal functions for accessing substring struct fields
-		if (callExpr->callee.rfind("__substring_", 0) == 0) {
-			const std::string &name = callExpr->callee;
-
-			// __substring_len(sub) - get byte length
-			if (name == "__substring_len") {
-				if (callExpr->args.size() != 1) {
-					addError("__substring_len requires exactly 1 argument", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				return "int";
-			}
-			// __substring_byte_at(sub, index) - get byte at index
-			if (name == "__substring_byte_at") {
-				if (callExpr->args.size() != 2) {
-					addError("__substring_byte_at requires exactly 2 arguments", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				analyzeExpression(callExpr->args[1].get());
-				return "byte";
-			}
-			// __substring_iter_pos(sub) - get current iteration position
-			if (name == "__substring_iter_pos") {
-				if (callExpr->args.size() != 1) {
-					addError("__substring_iter_pos requires exactly 1 argument", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				return "int";
-			}
-			// __substring_with_iter_pos(sub, pos) - create copy with new iter position
-			if (name == "__substring_with_iter_pos") {
-				if (callExpr->args.size() != 2) {
-					addError("__substring_with_iter_pos requires exactly 2 arguments", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				analyzeExpression(callExpr->args[1].get());
-				return "substring";
-			}
-			// __substring_to_string(sub) - create owned string copy
-			if (name == "__substring_to_string") {
-				if (callExpr->args.size() != 1) {
-					addError("__substring_to_string requires exactly 1 argument", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				return "_ManagedString";
-			}
-			// __substring_slice(sub, start, end) - create sub-slice
-			if (name == "__substring_slice") {
-				if (callExpr->args.size() != 3) {
-					addError("__substring_slice requires exactly 3 arguments", expr->line, expr->column);
-					return "error";
-				}
-				analyzeExpression(callExpr->args[0].get());
-				analyzeExpression(callExpr->args[1].get());
-				analyzeExpression(callExpr->args[2].get());
-				return "substring";
-			}
-
-			// Unknown substring intrinsic
-			addError("Unknown substring intrinsic: " + name, expr->line, expr->column);
+		// Check for unknown intrinsics (functions starting with __)
+		if (callExpr->callee.rfind("__", 0) == 0) {
+			addError("Unknown intrinsic: " + callExpr->callee, expr->line, expr->column);
 			return "error";
 		}
 

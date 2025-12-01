@@ -13,7 +13,7 @@ TEST_CASE("format_function_with_tabs", "[formatter]") {
 	// Code with inconsistent indentation and spacing
 	std::string source =
 		"function main() int\n"
-		"  print(42)\n"
+		"  print_int(42)\n"
 		"    return 0\n"
 		"end 'main'";
 
@@ -31,7 +31,7 @@ TEST_CASE("format_function_with_spaces", "[formatter]") {
 
 	std::string source =
 		"function main() int\n"
-		"  print(42)\n"
+		"  print_int(42)\n"
 		"    return 0\n"
 		"end 'main'";
 
@@ -49,15 +49,15 @@ TEST_CASE("format_if_statement_with_tabs", "[formatter]") {
 
 	std::string source =
 		"if x > 0 'check'\n"
-		"  print(x)\n"
+		"  print_int(x)\n"
 		"end 'check'";
 
 	auto edits = formatter.formatDocument(source, false, 4);
 	REQUIRE(edits.size() == 1);
 
 	// If statement body should be indented with one tab
-	// "if x > 0 'check'\n\tprint(x)\nend 'check'\n"
-	REQUIRE(edits[0].newText.find("\tprint(x)") != std::string::npos);
+	// "if x > 0 'check'\n\tprint_int(x)\nend 'check'\n"
+	REQUIRE(edits[0].newText.find("\tprint_int(x)") != std::string::npos);
 }
 
 TEST_CASE("format_nested_blocks", "[formatter]") {
@@ -66,7 +66,7 @@ TEST_CASE("format_nested_blocks", "[formatter]") {
 	std::string source =
 		"function outer() int\n"
 		"if x > 0 'check'\n"
-		"print(x)\n"
+		"print_int(x)\n"
 		"end 'check'\n"
 		"return 0\n"
 		"end 'outer'";
@@ -78,12 +78,12 @@ TEST_CASE("format_nested_blocks", "[formatter]") {
 	// Check indentation levels
 	// function outer
 	// \tif x > 0
-	// \t\tprint(x)
+	// \t\tprint_int(x)
 	// \tend
 	// \treturn 0
 	// end
 
-	REQUIRE(edits[0].newText.find("\t\tprint(x)") != std::string::npos);
+	REQUIRE(edits[0].newText.find("\t\tprint_int(x)") != std::string::npos);
 }
 
 TEST_CASE("format_removes_trailing_whitespace", "[formatter]") {
@@ -114,7 +114,7 @@ TEST_CASE("format_empty_lines_unchanged", "[formatter]") {
 	std::string source =
 		"function main() int\n"
 		"\n"
-		"\tprint(42)\n"
+		"\tprint_int(42)\n"
 		"\n"
 		"\treturn 0\n"
 		"end 'main'";
@@ -123,7 +123,7 @@ TEST_CASE("format_empty_lines_unchanged", "[formatter]") {
 	REQUIRE(edits.size() == 1);
 
 	// Check that blank lines are preserved (as empty lines)
-	// "function main() int\n\n\tprint(42)\n\n\treturn 0\nend 'main'\n"
+	// "function main() int\n\n\tprint_int(42)\n\n\treturn 0\nend 'main'\n"
 	REQUIRE(edits[0].newText.find("\n\n") != std::string::npos);
 }
 
@@ -132,7 +132,7 @@ TEST_CASE("format_while_loop", "[formatter]") {
 
 	std::string source =
 		"while i < 10 'loop'\n"
-		"  print(i)\n"
+		"  print_int(i)\n"
 		"  i = i + 1\n"
 		"end 'loop'";
 
@@ -140,7 +140,7 @@ TEST_CASE("format_while_loop", "[formatter]") {
 	REQUIRE(edits.size() == 1);
 
 	// Loop body should be indented
-	REQUIRE(edits[0].newText.find("\tprint(i)") != std::string::npos);
+	REQUIRE(edits[0].newText.find("\tprint_int(i)") != std::string::npos);
 	REQUIRE(edits[0].newText.find("\ti = i + 1") != std::string::npos);
 }
 
@@ -149,7 +149,7 @@ TEST_CASE("format_tab_size_respected", "[formatter]") {
 
 	std::string source =
 		"function main() int\n"
-		"print(42)\n"
+		"print_int(42)\n"
 		"return 0\n"
 		"end 'main'";
 
@@ -158,7 +158,7 @@ TEST_CASE("format_tab_size_respected", "[formatter]") {
 	REQUIRE(edits.size() == 1);
 
 	// Check for 2-space indentation
-	REQUIRE(edits[0].newText.find("  print(42)") != std::string::npos);
+	REQUIRE(edits[0].newText.find("  print_int(42)") != std::string::npos);
 }
 
 TEST_CASE("format_range_formatting", "[formatter]") {
@@ -166,7 +166,7 @@ TEST_CASE("format_range_formatting", "[formatter]") {
 
 	std::string source =
 		"function main() int\n"
-		"  print(42)\n"
+		"  print_int(42)\n"
 		"  return 0\n"
 		"end 'main'";
 
@@ -189,7 +189,7 @@ TEST_CASE("format_windows_line_endings", "[formatter]") {
 		"\tvar x = 5\r\n"
 		"\r\n"
 		"\tif x > 0 'check'\r\n"
-		"\t\tprint(x)\r\n"
+		"\t\tprint_int(x)\r\n"
 		"\tend 'check'\r\n"
 		"\treturn 0\r\n"
 		"end 'main'";
@@ -213,7 +213,7 @@ TEST_CASE("format_multiple_blank_lines", "[formatter]") {
 		"  \n" // Blank line with spaces
 		"\t\n" // Blank line with tab
 		"\tif x > 0 'check'\n"
-		"\t\tprint(x)\n"
+		"\t\tprint_int(x)\n"
 		"\tend 'check'\n"
 		"\treturn 0\n"
 		"end 'main'";
@@ -238,7 +238,7 @@ TEST_CASE("format_blank_line_with_whitespace", "[formatter]") {
 		"\tvar x = 5\n"
 		"\t\t\n" // Blank line with 2 tabs
 		"\tif x > 0 'check'\n"
-		"\t\tprint(x)\n"
+		"\t\tprint_int(x)\n"
 		"\tend 'check'\n"
 		"end 'main'";
 

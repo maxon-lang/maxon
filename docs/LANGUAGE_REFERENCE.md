@@ -134,6 +134,7 @@ false
 |------|------|-------------|
 | `string` | 16-byte | UTF-8 string (owned, copy-on-write) |
 | `substring` | 24-byte | String view (reference to string data) |
+| `cstring` | 24-byte | FFI-friendly null-terminated string reference |
 
 **String Characteristics:**
 - UTF-8 encoded
@@ -145,7 +146,7 @@ false
 ```maxon
 var s = "hello"              // Small string (SSO)
 var greeting = s + " world"  // Concatenation
-print(s)                     // Print string to stdout
+print(s)                     // Print string to stdout with newline
 ```
 
 **String Properties:**
@@ -167,7 +168,14 @@ var sub3 = s[..5]            // "hello" (from start to index)
 - Lightweight view into another string's data
 - Does not own the data (keeps parent string alive)
 - Immutable
-- Automatically converts to `string` when needed (with copy)
+- Created via `s.slice(start, end)` method
+- Use `toString()` to create an owned copy
+
+**CString Type:**
+- FFI-friendly null-terminated string for interop with C APIs
+- Created via `s.cstr()` method on strings
+- Holds a reference to the parent string's buffer
+- Automatically released when out of scope
 
 ### Array Types
 
@@ -229,12 +237,12 @@ var i4 = ceil(f)   // 4 (up)
 ## Structs
 
 ### Declaration
-Structs are user-defined composite types containing named fields:
+Structs are user-defined composite types containing named fields. Use `var` for mutable fields and `let` for immutable fields:
 
 ```maxon
 struct Point
-    x int
-    y int
+    var x int
+    var y int
 end 'Point'
 ```
 
@@ -261,8 +269,8 @@ Methods are defined **inside the struct body** with an explicit `self` parameter
 
 ```maxon
 struct Point
-    x int
-    y int
+    var x int
+    var y int
 
     function add(self Point, other Point) Point
         return Point{x: self.x + other.x, y: self.y + other.y}
@@ -305,8 +313,8 @@ Structs declare conformance using the `is` keyword:
 
 ```maxon
 struct Point is Hashable
-    x int
-    y int
+    var x int
+    var y int
 
     function hash(self Point) int
         return self.x + self.y * 31
@@ -645,8 +653,9 @@ var result = format_int(42)   // Finds stdlib.fmt.format_int
 
 **I/O Functions**
 ```maxon
-print(value int)                // Print integer to stdout
-print_float(value float)        // Print float to stdout
+print(value string)                     // Print string to stdout with newline
+print_int(value int)                    // Print integer to stdout with newline
+print_float(value float, precision int) // Print float with specified decimal places
 ```
 
 **Math Functions**
@@ -757,7 +766,7 @@ while true 'forever'
     if i >= 10 'done'
         break
     end 'done'
-    print(i)
+    print_int(i)
     i = i + 1
 end 'forever'
 ```
@@ -766,7 +775,7 @@ end 'forever'
 ```maxon
 var numbers = [1, 2, 3, 4, 5]
 for i in range(0, numbers.length) 'iter'
-    print(numbers[i])
+    print_int(numbers[i])
 end 'iter'
 ```
 
@@ -782,7 +791,7 @@ end 'factorial'
 
 function main() int
     var result = factorial(5)
-    print(result)  // 120
+    print_int(result)  // 120
     return 0
 end 'main'
 ```
@@ -844,7 +853,7 @@ functon test()          // ERROR: Unknown keyword 'functon'
 **Mismatched Block Identifiers**
 ```maxon
 if x > 0 'check'
-    print(x)
+    print_int(x)
 end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 ```
 

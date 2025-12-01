@@ -324,8 +324,8 @@ suite('Syntax Highlighting Test Suite', () => {
 	test('Struct keyword should be recognized', async () => {
 		const testContent = [
 			"struct Point",
-			"    x int",
-			"    y int",
+			"    var x int",
+			"    var y int",
 			"end 'Point'",
 			"",
 			"function test() int",
@@ -349,7 +349,7 @@ suite('Syntax Highlighting Test Suite', () => {
 			"extern function external_func() int",
 			"namespace test 'test'",
 			"struct Data",
-			"    value int",
+			"    var value int",
 			"end 'Data'",
 			"function test(x int) int",
 			"    var count = 0",

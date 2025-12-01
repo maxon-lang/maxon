@@ -19,7 +19,7 @@
   ```markdown
   ```maxon
   function main() int
-      print(42)
+      print_int(42)
       return 0
   end 'main'
   ```

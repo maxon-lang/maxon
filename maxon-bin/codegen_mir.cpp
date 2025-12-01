@@ -462,7 +462,6 @@ mir::MIRFunction *MIRCodeGenerator::getOrDeclareFunction(const std::string &name
 	return builder->declareFunction(name, returnType, paramTypes);
 }
 
-
 void MIRCodeGenerator::initHeapManagement() {
 	// Declare malloc
 	getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
@@ -611,17 +610,9 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	// Clear function ID map for new generation
 	functionIdToMIR.clear();
 
-	// Note: Dead code elimination (unused function removal) is handled by the
-	// optimizer pass after codegen, not here. This ensures all functions are
-	// available during codegen (e.g., for interface method lookups in for-loops).
-
 	// Declare runtime functions used by stdlib
 	getOrDeclareFunction("write_stdout", mir::MIRType::getInt32(),
 						 {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-
-	// Note: _ManagedString is an OPAQUE POINTER type (just 'ptr' in the type system)
-	// The internal types __unsized_array_byte and __ManagedStringData are created
-	// on-demand when strings are actually used - see codegen_mir_expr.cpp
 
 	// First pass: Forward-declare all struct types (to handle circular/forward references)
 	logDetail("Pass 1a: Forward-declaring struct types (" + std::to_string(program->structs.size()) + " structs)");

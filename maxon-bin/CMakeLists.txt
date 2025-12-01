@@ -65,6 +65,8 @@ set(SOURCES
     codegen_mir/codegen_mir_function.cpp
     codegen_mir/codegen_mir_output.cpp
     codegen_mir/codegen_mir_safeffi.cpp
+    codegen_mir/intrinsic_codegen.cpp
+    codegen_mir/codegen_mir_intrinsics.cpp
     # MIR infrastructure
     mir/mir.cpp
     mir/mir_builder.cpp
@@ -84,6 +86,7 @@ set(SOURCES
     semantic_analyzer.cpp
     semantic_analyzer/semantic_analyzer_expr.cpp
     semantic_analyzer/semantic_analyzer_stmt.cpp
+    intrinsics.cpp
     error_formatter.cpp
     # Vendor libraries
     vendor/md4c.c

@@ -50,7 +50,7 @@ value as targetType
 function main() int
     var pi = 3.14159
     var approximate = trunc(pi)
-    print(approximate)
+    print_int(approximate)
     return 0
 end 'main'
 ```

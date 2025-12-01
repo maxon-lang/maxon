@@ -94,10 +94,7 @@ void SemanticAnalyzer::registerExternalStruct(const std::string &name, const std
 }
 
 void SemanticAnalyzer::registerBuiltinFunctions() {
-	// Register runtime functions
-	// write_stdout takes a raw pointer and length (used via cstring intrinsics)
-	registerExternalFunction("write_stdout", "int",
-							 {FunctionParameter("buf", "ptr", 0, 0), FunctionParameter("count", "int", 0, 0)});
+	// Runtime functions are now accessed via intrinsics only
 }
 
 std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {

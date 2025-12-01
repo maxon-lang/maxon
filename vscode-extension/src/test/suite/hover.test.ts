@@ -191,8 +191,8 @@ suite('Hover Test Suite', () => {
 	test('Hover should show struct definition', async function () {
 		const content = [
 			"struct Point",
-			"    x int",
-			"    y int",
+			"    var x int",
+			"    var y int",
 			"end 'Point'",
 			"",
 			"function test() int",
@@ -322,7 +322,7 @@ suite('Hover Test Suite', () => {
 	test('Hover on struct keyword should be recognized', async function () {
 		const content = [
 			"struct MyStruct",
-			"    value int",
+			"    var value int",
 			"end 'MyStruct'"
 		].join('\n');
 

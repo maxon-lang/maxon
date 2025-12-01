@@ -9,7 +9,7 @@ category: stdlib
 
 ## Developer Notes
 
-The `print()` function is a stdlib function that outputs integer values to stdout.
+The `print_int()` function is a stdlib function that outputs integer values to stdout.
 
 Implementation:
 - Defined in `stdlib/sys/print.maxon`
@@ -24,12 +24,12 @@ The function is linked automatically when used. No explicit import needed - the 
 
 ## Documentation
 
-The `print()` function outputs integer values to standard output (console).
+The `print_int()` function outputs integer values to standard output (console).
 
 ### Syntax
 
 ```maxon
-print(value)
+print_int(value)
 ```
 Where `value` is an `int` expression.
 
@@ -38,9 +38,9 @@ Where `value` is an `int` expression.
 ```maxon
 function main() int
     var x = 42
-    print(x)        // Prints: 42
-    print(10 + 5)   // Prints: 15
-    print(100)      // Prints: 100
+    print_int(x)        // Prints: 42
+    print_int(10 + 5)   // Prints: 15
+    print_int(100)      // Prints: 100
     return 0
 end 'main'
 ```
@@ -54,7 +54,7 @@ end 'main'
 ```
 
 
-Each call to `print()` outputs the value followed by a newline.
+Each call to `print_int()` outputs the value followed by a newline.
 
 ## Tests
 
@@ -62,7 +62,7 @@ Each call to `print()` outputs the value followed by a newline.
 ```maxon
 function main() int
     var x = 42
-    print(x)
+    print_int(x)
     return 0
 end 'main'
 ```
@@ -77,7 +77,7 @@ end 'main'
 <!-- test: expression -->
 ```maxon
 function main() int
-    print(10 + 5)
+    print_int(10 + 5)
     return 0
 end 'main'
 ```
@@ -93,9 +93,9 @@ end 'main'
 ```maxon
 function main() int
     var x = 42
-    print(x)
-    print(10 + 5)
-    print(100)
+    print_int(x)
+    print_int(10 + 5)
+    print_int(100)
     return 0
 end 'main'
 ```

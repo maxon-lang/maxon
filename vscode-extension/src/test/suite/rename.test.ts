@@ -175,8 +175,8 @@ suite('Rename Test Suite', () => {
 	test('Rename struct block identifiers', async function () {
 		const content = [
 			"struct Point",
-			"    x int",
-			"    y int",
+			"    var x int",
+			"    var y int",
 			"end 'Point'"
 		].join('\n');
 
@@ -335,8 +335,8 @@ suite('Rename Test Suite', () => {
 	test('Rename struct name should correctly update block identifier', async function () {
 		const content = [
 			"struct Point",
-			"    x int",
-			"    y int",
+			"    var x int",
+			"    var y int",
 			"end 'Point'",
 			"",
 			"function test() Point",
@@ -388,8 +388,8 @@ suite('Rename Test Suite', () => {
 	test('Linked editing for struct name with block identifier', async function () {
 		const content = [
 			"struct Point",
-			"    x int",
-			"    y int",
+			"    var x int",
+			"    var y int",
 			"end 'Point'",
 			"",
 			"function test() Point",

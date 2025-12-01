@@ -926,7 +926,7 @@ TEST_CASE("go_to_definition_stdlib_function", "[analyzer]") {
 
 	auto doc = createTestDocument(
 		"function main() int\n"
-		"    print(42)\n"
+		"    print_int(42)\n"
 		"    return 0\n"
 		"end 'main'");
 
@@ -944,8 +944,8 @@ TEST_CASE("go_to_definition_stdlib_function", "[analyzer]") {
 	REQUIRE(location->uri != doc->uri);
 	REQUIRE(location->uri.find("print.maxon") != std::string::npos);
 
-	// Should point to the correct line (line 8 in print.maxon, 0-indexed = 7)
-	REQUIRE(location->range.start.line == 7);
+	// Should point to the correct line (line 18 in print.maxon, 0-indexed = 17)
+	REQUIRE(location->range.start.line == 17);
 }
 
 TEST_CASE("go_to_definition_struct_method", "[analyzer]") {
@@ -978,9 +978,9 @@ TEST_CASE("go_to_definition_struct_method", "[analyzer]") {
 	REQUIRE(location->uri != doc->uri);
 	REQUIRE(location->uri.find("string.maxon") != std::string::npos);
 
-	// toLower is defined at line 267 in string.maxon (0-indexed = 266)
+	// toLower is defined at line 274 in string.maxon (0-indexed = 273)
 	INFO("Got line: " << location->range.start.line);
-	REQUIRE(location->range.start.line == 266);
+	REQUIRE(location->range.start.line == 273);
 }
 
 TEST_CASE("go_to_definition_stdlib_interface", "[analyzer]") {

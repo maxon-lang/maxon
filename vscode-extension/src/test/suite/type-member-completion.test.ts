@@ -286,8 +286,8 @@ end 'main'`;
 
 	test('Should provide struct field completions after dot', async function () {
 		const validContent = `struct Point
-    x int
-    y int
+    var x int
+    var y int
 end 'Point'
 
 function main() int
@@ -296,8 +296,8 @@ function main() int
 end 'main'`;
 
 		const incompleteContent = `struct Point
-    x int
-    y int
+    var x int
+    var y int
 end 'Point'
 
 function main() int
@@ -324,8 +324,8 @@ end 'main'`;
 
 	test('Struct field completions should have Field kind', async function () {
 		const validContent = `struct Point
-    x int
-    y int
+    var x int
+    var y int
 end 'Point'
 
 function main() int
@@ -334,8 +334,8 @@ function main() int
 end 'main'`;
 
 		const incompleteContent = `struct Point
-    x int
-    y int
+    var x int
+    var y int
 end 'Point'
 
 function main() int
@@ -369,14 +369,21 @@ end 'main'`;
     return 0
 end 'main'`;
 
-		const completions = await getCompletionsAfterDot(
-			validContent,
-			incompleteContent,
-			new vscode.Position(2, 6)
-		);
+		// Poll for completions until we get string methods (toUpper may take time to appear)
+		let toUpperItem: vscode.CompletionItem | undefined;
+		for (let attempt = 0; attempt < 5; attempt++) {
+			const completions = await getCompletionsAfterDot(
+				validContent,
+				incompleteContent,
+				new vscode.Position(2, 6)
+			);
+			toUpperItem = completions.items.find(item => item.label === 'toUpper');
+			if (toUpperItem) {
+				break;
+			}
+		}
 
 		// Check that methods have insertText with parentheses
-		const toUpperItem = completions.items.find(item => item.label === 'toUpper');
 		assert.ok(toUpperItem, 'toUpper should be in completions');
 		assert.ok(toUpperItem.insertText, 'toUpper should have insertText');
 		const insertText = typeof toUpperItem.insertText === 'string'

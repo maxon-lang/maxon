@@ -1,7 +1,5 @@
 # Maxon Compiler Development
 
-> **Agent Skill**: See .claude/skills/maxon-compiler/ for detailed build, debugging, and development guidance.
-
 ## Project Overview
 
 Maxon is a statically-typed programming language with a custom native x86-64 backend:

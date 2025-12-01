@@ -23,7 +23,12 @@ class CompilerStats;
  * code generator. MIR is then lowered to x86-64 machine code using the custom
  * backend in maxon-bin/backend/.
  */
+// Forward declaration for friend class
+class IntrinsicCodegenRegistry;
+
 class MIRCodeGenerator {
+	friend class IntrinsicCodegenRegistry;
+
   private:
 	std::unique_ptr<mir::MIRModule> module;
 	std::unique_ptr<mir::MIRBuilder> builder;
@@ -153,6 +158,37 @@ class MIRCodeGenerator {
 	// Cstring intrinsic generation (__cstring_* functions)
 	mir::MIRValue *generateCstringIntrinsic(CallExprAST *callExpr);
 	bool isCstringIntrinsic(const std::string &name);
+
+	// Individual intrinsic codegen methods (registered in IntrinsicCodegenRegistry)
+	// String intrinsics
+	mir::MIRValue *intrinsic_string_len(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_string_byte_at(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_string_slice(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_string_concat(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_string_make_unique(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_string_set_byte(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_string_get_refcount(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_string_to_cstring(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_string_from_chars(CallExprAST *callExpr);
+	// Cstring intrinsics
+	mir::MIRValue *intrinsic_cstring_len(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_cstring_write_stdout(CallExprAST *callExpr);
+	// Substring intrinsics
+	mir::MIRValue *intrinsic_substring_len(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_substring_byte_at(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_substring_iter_pos(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_substring_with_iter_pos(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_substring_to_string(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_substring_slice(CallExprAST *callExpr);
+
+	// Helper methods for intrinsic codegen
+	mir::MIRValue *getManagedStringPtr(ExprAST *arg);
+	mir::MIRValue *getCstringPtr(ExprAST *arg);
+	mir::MIRValue *getSubstringPtr(ExprAST *arg);
+	mir::MIRType *getOrCreateManagedStringType();
+	mir::MIRType *getOrCreateUnsizedArrayType();
+	mir::MIRType *getOrCreateCstringType();
+	mir::MIRType *getOrCreateSubstringType();
 
 	// String literal generation
 	mir::MIRValue *generateStringLiteral(StringLiteralExprAST *strExpr);

@@ -202,7 +202,7 @@ end 'Point'
 function main() int
     var p = Point{x: 10, y: 20}
     var h = p.hash()
-    print(h)
+    print_int(h)
     return 0
 end 'main'
 ```

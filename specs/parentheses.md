@@ -35,7 +35,7 @@ Parentheses group expressions and control evaluation order.
 function main() int
     var a = 2 + 3 * 4      // 14 (multiply first)
     var b = (2 + 3) * 4    // 20 (add first)
-    print(a)
+    print_int(a)
     return b
 end 'main'
 ```
