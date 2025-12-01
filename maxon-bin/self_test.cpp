@@ -338,6 +338,13 @@ bool testFragmentTestRunner(int verboseLevel) {
 	int passedChecks = 0;
 	int failedChecks = 0;
 
+	// Get maxon executable path relative to our location
+	std::string execDir = getExecutableDirectory();
+	std::filesystem::path maxonPath = std::filesystem::path(execDir) / "maxon";
+#ifdef _WIN32
+	maxonPath += ".exe";
+#endif
+
 	for (const auto &testCase : testCases) {
 		std::string testFile = "temp_meta_test_" + testCase.name + ".test";
 		// Remove spaces from filename
@@ -350,8 +357,14 @@ bool testFragmentTestRunner(int verboseLevel) {
 			continue;
 		}
 
-		// Run the test using the test runner
-		std::string command = "maxon test-fragments-subset temp_meta_output.txt \"" + testFile + "\"";
+		// Run the test using the test runner with absolute path to maxon
+		// On Windows, cmd.exe /c requires the entire command to be wrapped in quotes
+		// when individual arguments also contain quotes
+#ifdef _WIN32
+		std::string command = "\"\"" + maxonPath.string() + "\" test-fragments-subset temp_meta_output.txt \"" + testFile + "\"\"";
+#else
+		std::string command = "\"" + maxonPath.string() + "\" test-fragments-subset temp_meta_output.txt \"" + testFile + "\"";
+#endif
 
 		system(command.c_str()); // Read the result file
 		std::ifstream resultFile("temp_meta_output.txt");

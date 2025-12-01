@@ -15,7 +15,7 @@ suite('LSP Client Integration Tests', () => {
         // This ensures the LSP server is notified of file changes
         const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
         assert.ok(ext);
-        
+
         // Verify extension is active
         if (ext.isActive) {
             assert.ok(true, 'Extension is active and file watcher is configured');
@@ -26,10 +26,10 @@ suite('LSP Client Integration Tests', () => {
         // The extension should resolve the path to the LSP server executable
         const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
         assert.ok(ext);
-        
-        // The path should point to ../build/maxon-lsp-server.exe relative to extension
-        const expectedPath = path.join(ext.extensionPath, '..', 'build', 'maxon-lsp-server.exe');
-        assert.ok(expectedPath.includes('build'), 'Server path should include build directory');
+
+        // The path should point to ../bin/maxon-lsp-server.exe relative to extension
+        const expectedPath = path.join(ext.extensionPath, '..', 'bin', 'maxon-lsp-server.exe');
+        assert.ok(expectedPath.includes('bin'), 'Server path should include bin directory');
     });
 });
 
@@ -38,7 +38,7 @@ suite('Error Handling Tests', () => {
         // The extension should not crash if the LSP server binary is not found
         const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
         assert.ok(ext);
-        
+
         // Extension should still be present even if server is missing
         assert.strictEqual(ext.id, 'maxon.maxon-lsp-client');
     });
@@ -47,7 +47,7 @@ suite('Error Handling Tests', () => {
         // Test that deactivate can be called multiple times without errors
         const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
         assert.ok(ext);
-        
+
         // This should not throw an error
         assert.doesNotThrow(() => {
             // The actual deactivate is called by VS Code lifecycle
@@ -66,7 +66,7 @@ suite('Language Features Tests', () => {
         // Language client should be configured to handle file:// URIs
         const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
         assert.ok(ext);
-        
+
         const packageJSON = ext.packageJSON;
         assert.ok(packageJSON, 'Package.json should be available');
     });
@@ -78,7 +78,7 @@ suite('Transport Configuration Tests', () => {
         // This is the standard way for LSP clients to communicate with servers
         const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
         assert.ok(ext);
-        
+
         // Verify extension is properly loaded
         assert.ok(ext.packageJSON);
     });
@@ -87,7 +87,7 @@ suite('Transport Configuration Tests', () => {
         // Server options should specify the command to run the LSP server
         const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
         assert.ok(ext);
-        
+
         // The extension should be configured with proper server options
         assert.ok(ext.isActive !== undefined);
     });

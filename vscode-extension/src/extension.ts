@@ -69,8 +69,8 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	log('Maxon extension activating...');
 
 	// Path to the compiled LSP server executable
-	// Since bin/ is in PATH, we can just use the executable name
-	serverExecutable = 'maxon-lsp-server.exe';
+	// Use absolute path relative to extension location (extension is in vscode-extension/)
+	serverExecutable = path.join(ctx.extensionPath, '..', 'bin', 'maxon-lsp-server.exe');
 
 	// Server options - use simple command form for stdio communication
 	const serverOptions: ServerOptions = {

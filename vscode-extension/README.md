@@ -14,7 +14,7 @@ Note: LSP features are provided by the Maxon Language Server. This extension act
 ## Requirements
 - Visual Studio Code 1.75.0 or later
 - Node.js and npm for development tools (TypeScript compilation and testing)
-- The Maxon language server executable (`maxon-lsp-server` or `maxon-lsp-server.exe`) built and placed in the repository `build` folder so the client can launch it. See the repository `Makefile` for build targets.
+- The Maxon language server executable (`maxon-lsp-server` or `maxon-lsp-server.exe`) built and placed in the repository `bin` folder so the client can launch it. See the repository `Makefile` for build targets.
 
 ## Installation
 

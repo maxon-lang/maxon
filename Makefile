@@ -151,8 +151,8 @@ extension-watch:
 	@echo Starting watch mode for VS Code extension...
 	@cd vscode-extension && npm run watch
 
-# Run VS Code extension tests
-extension-test:
+# Run VS Code extension tests (depends on lsp-server; npm pretest handles extension compilation)
+extension-test: lsp-server
 	@echo Running VS Code extension tests...
 	@cd vscode-extension && npm run test
 	@echo Cleaning up temporary test files...
