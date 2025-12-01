@@ -8,7 +8,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 98
+; Instructions: 62
 
 define i32 @main() {
 entry0:
@@ -23,114 +23,78 @@ ifcont2:
 
 define f64 @math.log10(f64 %x) {
 entry0:
-  %0 = alloca f64
-  store f64 %x, ptr %0
   %2 = fcmp ole f64 %x, 0
   br i1 %2, label %then1, label %ifcont2
 then1:
   ret f64 0
 ifcont2:
-  %3 = load f64, ptr %0
-  %4 = fcmp oeq f64 %3, 1
+  %4 = fcmp oeq f64 %x, 1
   br i1 %4, label %then3, label %ifcont4
 then3:
   ret f64 0
 ifcont4:
-  %5 = load f64, ptr %0
-  %6 = call f64 @math.log(f64 %5)
+  %6 = call f64 @math.log(f64 %x)
   %11 = fdiv f64 %6, 2.30259
   ret f64 %11
 }
 
 define f64 @math.log(f64 %x) {
 entry0:
-  %0 = alloca f64
-  store f64 %x, ptr %0
   %2 = fcmp ole f64 %x, 0
   br i1 %2, label %then1, label %ifcont2
 then1:
   ret f64 0
 ifcont2:
-  %3 = load f64, ptr %0
-  %4 = fcmp oeq f64 %3, 1
+  %4 = fcmp oeq f64 %x, 1
   br i1 %4, label %then3, label %ifcont4
 then3:
   ret f64 0
 ifcont4:
-  %5 = alloca i32
-  store i32 0, ptr %5
-  %6 = load f64, ptr %0
-  %7 = alloca f64
-  store f64 %6, ptr %7
   br label %whilecond5
 whilecond5:
-  %8 = load f64, ptr %7
-  %9 = fcmp oge f64 %8, 1
+  %73 = phi f64 [ %x, %ifcont4 ], [ %11, %loop6 ]
+  %71 = phi i32 [ 0, %ifcont4 ], [ %13, %loop6 ]
+  %9 = fcmp oge f64 %73, 1
   br i1 %9, label %loop6, label %afterloop7
 loop6:
-  %10 = load f64, ptr %7
-  %11 = fdiv f64 %10, 2
-  store f64 %11, ptr %7
-  %12 = load i32, ptr %5
-  %13 = add i32 %12, 1
-  store i32 %13, ptr %5
+  %11 = fdiv f64 %73, 2
+  %13 = add i32 %71, 1
   br label %whilecond5
 afterloop7:
   br label %whilecond8
 whilecond8:
-  %14 = load f64, ptr %7
-  %15 = fcmp olt f64 %14, 0.5
+  %74 = phi f64 [ %73, %afterloop7 ], [ %17, %loop9 ]
+  %72 = phi i32 [ %71, %afterloop7 ], [ %19, %loop9 ]
+  %15 = fcmp olt f64 %74, 0.5
   br i1 %15, label %loop9, label %afterloop10
 loop9:
-  %16 = load f64, ptr %7
-  %17 = fmul f64 %16, 2
-  store f64 %17, ptr %7
-  %18 = load i32, ptr %5
-  %19 = sub i32 %18, 1
-  store i32 %19, ptr %5
+  %17 = fmul f64 %74, 2
+  %19 = sub i32 %72, 1
   br label %whilecond8
 afterloop10:
-  %20 = load f64, ptr %7
-  %21 = fsub f64 %20, 1
-  %23 = load f64, ptr %7
-  %24 = fadd f64 %23, 1
+  %21 = fsub f64 %74, 1
+  %24 = fadd f64 %74, 1
   %28 = fdiv f64 %21, %24
   %32 = fmul f64 %28, %28
-  %33 = alloca f64
-  store f64 %32, ptr %33
-  %35 = alloca f64
-  store f64 %28, ptr %35
-  %37 = alloca f64
-  store f64 %28, ptr %37
-  %38 = alloca i32
-  store i32 1, ptr %38
   br label %whilecond11
 whilecond11:
-  %39 = load i32, ptr %38
-  %40 = icmp slt i32 %39, 20
+  %77 = phi i32 [ 1, %afterloop10 ], [ %57, %loop12 ]
+  %76 = phi f64 [ %28, %afterloop10 ], [ %55, %loop12 ]
+  %75 = phi f64 [ %28, %afterloop10 ], [ %43, %loop12 ]
+  %40 = icmp slt i32 %77, 20
   br i1 %40, label %loop12, label %afterloop13
 loop12:
-  %41 = load f64, ptr %35
-  %42 = load f64, ptr %33
-  %43 = fmul f64 %41, %42
-  store f64 %43, ptr %35
-  %44 = load i32, ptr %38
-  %45 = shl i32 %44, 1
+  %43 = fmul f64 %75, %32
+  %45 = shl i32 %77, 1
   %46 = add i32 %45, 1
   %49 = sitofp i32 %46 to f64
-  %51 = load f64, ptr %37
   %54 = fdiv f64 %43, %49
-  %55 = fadd f64 %51, %54
-  store f64 %55, ptr %37
-  %56 = load i32, ptr %38
-  %57 = add i32 %56, 1
-  store i32 %57, ptr %38
+  %55 = fadd f64 %76, %54
+  %57 = add i32 %77, 1
   br label %whilecond11
 afterloop13:
-  %58 = load f64, ptr %37
-  %59 = fmul f64 2, %58
-  %62 = load i32, ptr %5
-  %63 = sitofp i32 %62 to f64
+  %59 = fmul f64 2, %76
+  %63 = sitofp i32 %72 to f64
   %68 = fmul f64 %63, 0.693147
   %69 = fadd f64 %59, %68
   ret f64 %69

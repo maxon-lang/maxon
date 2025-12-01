@@ -10,7 +10,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 203
+; Instructions: 166
 
 %__unsized_array_byte = type { ptr, i32 }
 %string = type { ptr, i32 }
@@ -135,107 +135,70 @@ entry0:
 
 define i32 @fmt.format_int_array(i32 %value, ptr %buffer, i32 %buffer.__length) {
 entry0:
-  %0 = alloca i32
-  store i32 %value, ptr %0
-  %1 = alloca ptr
-  store ptr %buffer, ptr %1
   %4 = icmp eq i32 %value, 0
   br i1 %4, label %then1, label %ifcont2
 then1:
-  %5 = load ptr, ptr %1
-  %6 = getelementptr i8, ptr %5, i64 0, i64 0
+  %6 = getelementptr i8, ptr %buffer, i64 0, i64 0
   store i8 48, ptr %6
   ret i32 1
 ifcont2:
   %7 = alloca [12 x i8]
   %9 = call ptr @memset(ptr %7, i32 0, i64 12)
-  %10 = alloca i32
-  store i32 11, ptr %10
-  %11 = alloca i32
-  store i32 0, ptr %11
-  %12 = load i32, ptr %0
-  %13 = alloca i32
-  store i32 %12, ptr %13
-  %14 = load i32, ptr %0
-  %15 = icmp slt i32 %14, 0
+  %15 = icmp slt i32 %value, 0
   br i1 %15, label %then3, label %ifcont4
 then3:
-  store i32 1, ptr %11
-  %16 = load i32, ptr %0
-  %17 = sub i32 0, %16
-  store i32 %17, ptr %13
+  %17 = sub i32 0, %value
   br label %ifcont4
 ifcont4:
+  %69 = phi i32 [ %value, %ifcont2 ], [ %17, %then3 ]
+  %68 = phi i32 [ 0, %ifcont2 ], [ 1, %then3 ]
   br label %whilecond5
 whilecond5:
-  %18 = load i32, ptr %13
-  %19 = icmp sgt i32 %18, 0
+  %70 = phi i32 [ %69, %ifcont4 ], [ %35, %loop6 ]
+  %66 = phi i32 [ 11, %ifcont4 ], [ %33, %loop6 ]
+  %19 = icmp sgt i32 %70, 0
   br i1 %19, label %loop6, label %afterloop7
 loop6:
-  %20 = load i32, ptr %13
-  %21 = srem i32 %20, 10
+  %21 = srem i32 %70, 10
   %23 = zext i8 48 to i32
   %25 = add i32 %23, %21
-  %27 = load i32, ptr %10
-  %28 = sext i32 %27 to i64
+  %28 = sext i32 %66 to i64
   %29 = getelementptr i8, ptr %7, i64 0, i64 %28
   %31 = trunc i32 %25 to i8
   store i8 %31, ptr %29
-  %32 = load i32, ptr %10
-  %33 = sub i32 %32, 1
-  store i32 %33, ptr %10
-  %34 = load i32, ptr %13
-  %35 = sdiv i32 %34, 10
-  store i32 %35, ptr %13
+  %33 = sub i32 %66, 1
+  %35 = sdiv i32 %70, 10
   br label %whilecond5
 afterloop7:
-  %36 = load i32, ptr %11
-  %37 = icmp eq i32 %36, 1
+  %37 = icmp eq i32 %68, 1
   br i1 %37, label %then8, label %ifcont9
 then8:
-  %38 = load i32, ptr %10
-  %39 = sext i32 %38 to i64
+  %39 = sext i32 %66 to i64
   %40 = getelementptr i8, ptr %7, i64 0, i64 %39
   store i8 45, ptr %40
-  %41 = load i32, ptr %10
-  %42 = sub i32 %41, 1
-  store i32 %42, ptr %10
+  %42 = sub i32 %66, 1
   br label %ifcont9
 ifcont9:
-  %43 = load i32, ptr %10
-  %44 = add i32 %43, 1
-  %45 = alloca i32
-  store i32 %44, ptr %45
+  %67 = phi i32 [ %66, %afterloop7 ], [ %42, %then8 ]
+  %44 = add i32 %67, 1
   %47 = sub i32 12, %44
-  %48 = alloca i32
-  store i32 %47, ptr %48
-  %49 = alloca i32
-  store i32 0, ptr %49
   br label %whilecond10
 whilecond10:
-  %50 = load i32, ptr %49
-  %51 = load i32, ptr %48
-  %52 = icmp slt i32 %50, %51
+  %73 = phi i32 [ 0, %ifcont9 ], [ %64, %loop11 ]
+  %52 = icmp slt i32 %73, %47
   br i1 %52, label %loop11, label %afterloop12
 loop11:
-  %53 = load i32, ptr %49
-  %54 = load ptr, ptr %1
-  %55 = sext i32 %53 to i64
-  %56 = getelementptr i8, ptr %54, i64 0, i64 %55
-  %57 = load i32, ptr %45
-  %58 = load i32, ptr %49
-  %59 = add i32 %57, %58
+  %55 = sext i32 %73 to i64
+  %56 = getelementptr i8, ptr %buffer, i64 0, i64 %55
+  %59 = add i32 %44, %73
   %60 = sext i32 %59 to i64
   %61 = getelementptr i8, ptr %7, i64 0, i64 %60
   %62 = load i8, ptr %61
   store i8 %62, ptr %56
-  %63 = load i32, ptr %49
-  %64 = add i32 %63, 1
-  store i32 %64, ptr %49
+  %64 = add i32 %73, 1
   br label %whilecond10
 afterloop12:
-  %65 = load i32, ptr %48
-  ret i32 %65
+  ret i32 %47
 }
 
 define %string @string.string_from_chars(ptr %buffer, i32 %buffer.__length, i32 %length) {

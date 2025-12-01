@@ -241,7 +241,47 @@ Propagates copy instructions to eliminate unnecessary moves:
 
 **Location:** [maxon-bin/mir/optimizer.h:294-318](maxon-bin/mir/optimizer.h#L294-L318)
 
-#### 10. PHI Elimination
+#### 10. Mem2Reg (Memory to Register Promotion)
+
+Promotes stack-allocated variables (allocas) to SSA virtual registers with proper PHI node placement. This is the most critical optimization for performance.
+
+**Algorithm:**
+1. **Dominance Analysis** — Computes reachable blocks, dominators, immediate dominators, dominator tree, and dominance frontiers
+2. **PHI Placement** — Uses iterated dominance frontier algorithm to determine where PHI nodes are needed
+3. **SSA Renaming** — Traverses dominator tree with a definition stack to rename all uses to reaching definitions
+
+**Example:**
+```llvm
+; Before Mem2Reg:
+entry:
+  %x = alloca i32
+  store i32 0, ptr %x
+  br %loop
+loop:
+  %val = load i32, ptr %x
+  %inc = add i32 %val, 1
+  store i32 %inc, ptr %x
+  condbr %cond, %loop, %exit
+exit:
+  %result = load i32, ptr %x
+  ret i32 %result
+
+; After Mem2Reg:
+entry:
+  br %loop
+loop:
+  %val = phi i32 [0, %entry], [%inc, %loop]
+  %inc = add i32 %val, 1
+  condbr %cond, %loop, %exit
+exit:
+  ret i32 %inc
+```
+
+**Determinism:** PHI blocks and dominator tree children are sorted by block ID to ensure consistent virtual register numbering across compilation runs.
+
+**Location:** [maxon-bin/mir/optimizer.cpp:2385-2640](maxon-bin/mir/optimizer.cpp#L2385-L2640)
+
+#### 11. PHI Elimination
 Converts SSA form to a form suitable for register allocation by eliminating PHI nodes. For each PHI node, this pass inserts copy instructions at the end of predecessor blocks (before terminators) that copy the incoming value to the PHI result.
 
 Critical edges are handled by splitting edges when a predecessor has multiple successors and a successor has multiple predecessors, inserting an intermediate block between them.
@@ -280,6 +320,7 @@ optimizer.addPass(std::make_unique<CopyPropagationPass>());
 optimizer.addPass(std::make_unique<StrengthReductionPass>());
 // RedundantLoadStoreEliminationPass is currently disabled
 optimizer.addPass(std::make_unique<UnreachableBlockEliminationPass>());
+optimizer.addPass(std::make_unique<Mem2RegPass>());        // Promote allocas to SSA with PHI nodes
 optimizer.addPass(std::make_unique<PhiEliminationPass>());  // Must run before register allocation
 optimizer.runAllPasses(module);  // Runs until convergence
 ```
@@ -855,11 +896,25 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 
 ---
 
-**Last Updated:** 2025-11-27
-**Version:** Winchester 1.2
+**Last Updated:** 2025-12-01
+**Version:** Winchester 1.3
 **Maintainer:** Maxon Compiler Team
 
 ## Recent Changes
+
+### Winchester 1.3 (2025-12-01)
+
+**Full SSA Construction with PHI Placement:**
+- Completed Mem2Reg pass with full SSA construction for multi-definition variables
+- Implemented DominanceInfo class with:
+  - Reachable block computation (handles dead code)
+  - Dominator set computation (iterative dataflow)
+  - Immediate dominator and dominator tree construction
+  - Dominance frontier calculation
+- PHI placement using iterated dominance frontier algorithm
+- SSA renaming via dominator tree traversal with definition stack
+- Fixed non-deterministic IR generation by sorting dominator tree children and PHI blocks by block ID
+- Removed legacy `insertPhiNodes()` and `renameVariables()` stub functions
 
 ### Winchester 1.2 (2025-11-27)
 

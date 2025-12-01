@@ -8,7 +8,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 580
+; Instructions: 489
 
 %__unsized_array_byte = type { ptr, i32 }
 %string = type { ptr, i32 }
@@ -66,8 +66,6 @@ entry0:
 
 define i32 @UTF16View.hasNext(ptr %self) {
 entry0:
-  %0 = alloca ptr
-  store ptr %self, ptr %0
   %2 = getelementptr %UTF16View, ptr %self, i32 0, i32 2
   %3 = load i32, ptr %2
   %4 = icmp ne i32 %3, 0
@@ -75,11 +73,9 @@ entry0:
 then1:
   ret i32 1
 ifcont2:
-  %5 = load ptr, ptr %0
-  %6 = getelementptr %UTF16View, ptr %5, i32 0, i32 1
+  %6 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %7 = load i32, ptr %6
-  %8 = load ptr, ptr %0
-  %9 = getelementptr %UTF16View, ptr %8, i32 0, i32 0
+  %9 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %10 = getelementptr %string, ptr %9, i32 0, i32 0
   %11 = load ptr, ptr %10
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 1
@@ -94,26 +90,21 @@ ifcont4:
 
 define i32 @UTF16View.getCurrent(ptr %self) {
 entry0:
-  %0 = alloca ptr
-  store ptr %self, ptr %0
   %2 = getelementptr %UTF16View, ptr %self, i32 0, i32 2
   %3 = load i32, ptr %2
   %4 = icmp ne i32 %3, 0
   br i1 %4, label %then1, label %ifcont2
 then1:
-  %5 = load ptr, ptr %0
-  %6 = getelementptr %UTF16View, ptr %5, i32 0, i32 2
+  %6 = getelementptr %UTF16View, ptr %self, i32 0, i32 2
   %7 = load i32, ptr %6
   %10 = srem i32 %7, 1024
   %11 = add i32 56320, %10
   ret i32 %11
 ifcont2:
-  %14 = load ptr, ptr %0
-  %15 = getelementptr %UTF16View, ptr %14, i32 0, i32 0
+  %15 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %16 = getelementptr %string, ptr %15, i32 0, i32 0
   %17 = load ptr, ptr %16
-  %18 = load ptr, ptr %0
-  %19 = getelementptr %UTF16View, ptr %18, i32 0, i32 1
+  %19 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %20 = load i32, ptr %19
   %21 = getelementptr %__ManagedStringData, ptr %17, i32 0, i32 0
   %22 = getelementptr %__unsized_array_byte, ptr %21, i32 0, i32 0
@@ -122,24 +113,18 @@ ifcont2:
   %25 = getelementptr i8, ptr %23, i64 0, i64 %24
   %26 = load i8, ptr %25
   %27 = zext i8 %26 to i32
-  %28 = alloca i32
-  store i32 %27, ptr %28
   %30 = icmp slt i32 %27, 128
   br i1 %30, label %then3, label %ifcont4
 then3:
-  %31 = load i32, ptr %28
-  ret i32 %31
+  ret i32 %27
 ifcont4:
-  %32 = load i32, ptr %28
-  %33 = icmp slt i32 %32, 224
+  %33 = icmp slt i32 %27, 224
   br i1 %33, label %then5, label %ifcont6
 then5:
-  %34 = load ptr, ptr %0
-  %35 = getelementptr %UTF16View, ptr %34, i32 0, i32 0
+  %35 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %36 = getelementptr %string, ptr %35, i32 0, i32 0
   %37 = load ptr, ptr %36
-  %38 = load ptr, ptr %0
-  %39 = getelementptr %UTF16View, ptr %38, i32 0, i32 1
+  %39 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %40 = load i32, ptr %39
   %41 = add i32 %40, 1
   %42 = getelementptr %__ManagedStringData, ptr %37, i32 0, i32 0
@@ -149,23 +134,19 @@ then5:
   %46 = getelementptr i8, ptr %44, i64 0, i64 %45
   %47 = load i8, ptr %46
   %48 = zext i8 %47 to i32
-  %50 = load i32, ptr %28
-  %51 = srem i32 %50, 32
+  %51 = srem i32 %27, 32
   %52 = shl i32 %51, 6
   %54 = srem i32 %48, 64
   %55 = add i32 %52, %54
   ret i32 %55
 ifcont6:
-  %56 = load i32, ptr %28
-  %57 = icmp slt i32 %56, 240
+  %57 = icmp slt i32 %27, 240
   br i1 %57, label %then7, label %ifcont8
 then7:
-  %58 = load ptr, ptr %0
-  %59 = getelementptr %UTF16View, ptr %58, i32 0, i32 0
+  %59 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %60 = getelementptr %string, ptr %59, i32 0, i32 0
   %61 = load ptr, ptr %60
-  %62 = load ptr, ptr %0
-  %63 = getelementptr %UTF16View, ptr %62, i32 0, i32 1
+  %63 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %64 = load i32, ptr %63
   %65 = add i32 %64, 1
   %66 = getelementptr %__ManagedStringData, ptr %61, i32 0, i32 0
@@ -175,12 +156,10 @@ then7:
   %70 = getelementptr i8, ptr %68, i64 0, i64 %69
   %71 = load i8, ptr %70
   %72 = zext i8 %71 to i32
-  %74 = load ptr, ptr %0
-  %75 = getelementptr %UTF16View, ptr %74, i32 0, i32 0
+  %75 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %76 = getelementptr %string, ptr %75, i32 0, i32 0
   %77 = load ptr, ptr %76
-  %78 = load ptr, ptr %0
-  %79 = getelementptr %UTF16View, ptr %78, i32 0, i32 1
+  %79 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %80 = load i32, ptr %79
   %81 = add i32 %80, 2
   %82 = getelementptr %__ManagedStringData, ptr %77, i32 0, i32 0
@@ -190,8 +169,7 @@ then7:
   %86 = getelementptr i8, ptr %84, i64 0, i64 %85
   %87 = load i8, ptr %86
   %88 = zext i8 %87 to i32
-  %90 = load i32, ptr %28
-  %91 = srem i32 %90, 16
+  %91 = srem i32 %27, 16
   %92 = shl i32 %91, 12
   %94 = srem i32 %72, 64
   %95 = shl i32 %94, 6
@@ -200,12 +178,10 @@ then7:
   %99 = add i32 %96, %98
   ret i32 %99
 ifcont8:
-  %100 = load ptr, ptr %0
-  %101 = getelementptr %UTF16View, ptr %100, i32 0, i32 0
+  %101 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %102 = getelementptr %string, ptr %101, i32 0, i32 0
   %103 = load ptr, ptr %102
-  %104 = load ptr, ptr %0
-  %105 = getelementptr %UTF16View, ptr %104, i32 0, i32 1
+  %105 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %106 = load i32, ptr %105
   %107 = add i32 %106, 1
   %108 = getelementptr %__ManagedStringData, ptr %103, i32 0, i32 0
@@ -215,12 +191,10 @@ ifcont8:
   %112 = getelementptr i8, ptr %110, i64 0, i64 %111
   %113 = load i8, ptr %112
   %114 = zext i8 %113 to i32
-  %116 = load ptr, ptr %0
-  %117 = getelementptr %UTF16View, ptr %116, i32 0, i32 0
+  %117 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %118 = getelementptr %string, ptr %117, i32 0, i32 0
   %119 = load ptr, ptr %118
-  %120 = load ptr, ptr %0
-  %121 = getelementptr %UTF16View, ptr %120, i32 0, i32 1
+  %121 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %122 = load i32, ptr %121
   %123 = add i32 %122, 2
   %124 = getelementptr %__ManagedStringData, ptr %119, i32 0, i32 0
@@ -230,12 +204,10 @@ ifcont8:
   %128 = getelementptr i8, ptr %126, i64 0, i64 %127
   %129 = load i8, ptr %128
   %130 = zext i8 %129 to i32
-  %132 = load ptr, ptr %0
-  %133 = getelementptr %UTF16View, ptr %132, i32 0, i32 0
+  %133 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %134 = getelementptr %string, ptr %133, i32 0, i32 0
   %135 = load ptr, ptr %134
-  %136 = load ptr, ptr %0
-  %137 = getelementptr %UTF16View, ptr %136, i32 0, i32 1
+  %137 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %138 = load i32, ptr %137
   %139 = add i32 %138, 3
   %140 = getelementptr %__ManagedStringData, ptr %135, i32 0, i32 0
@@ -245,8 +217,7 @@ ifcont8:
   %144 = getelementptr i8, ptr %142, i64 0, i64 %143
   %145 = load i8, ptr %144
   %146 = zext i8 %145 to i32
-  %148 = load i32, ptr %28
-  %149 = srem i32 %148, 8
+  %149 = srem i32 %27, 8
   %150 = shl i32 %149, 18
   %152 = srem i32 %114, 64
   %153 = shl i32 %152, 12
@@ -264,21 +235,17 @@ ifcont8:
 
 define %UTF16View @UTF16View.next(ptr %self) {
 entry0:
-  %0 = alloca ptr
-  store ptr %self, ptr %0
   %2 = getelementptr %UTF16View, ptr %self, i32 0, i32 2
   %3 = load i32, ptr %2
   %4 = icmp ne i32 %3, 0
   br i1 %4, label %then1, label %ifcont2
 then1:
   %5 = alloca %UTF16View
-  %6 = load ptr, ptr %0
-  %7 = getelementptr %UTF16View, ptr %6, i32 0, i32 0
+  %7 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %8 = load %string, ptr %7
   %9 = getelementptr %UTF16View, ptr %5, i32 0, i32 0
   store %string %8, ptr %9
-  %10 = load ptr, ptr %0
-  %11 = getelementptr %UTF16View, ptr %10, i32 0, i32 1
+  %11 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %12 = load i32, ptr %11
   %13 = add i32 %12, 4
   %14 = getelementptr %UTF16View, ptr %5, i32 0, i32 1
@@ -288,12 +255,10 @@ then1:
   %16 = load %UTF16View, ptr %5
   ret %UTF16View %16
 ifcont2:
-  %17 = load ptr, ptr %0
-  %18 = getelementptr %UTF16View, ptr %17, i32 0, i32 0
+  %18 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %19 = getelementptr %string, ptr %18, i32 0, i32 0
   %20 = load ptr, ptr %19
-  %21 = load ptr, ptr %0
-  %22 = getelementptr %UTF16View, ptr %21, i32 0, i32 1
+  %22 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %23 = load i32, ptr %22
   %24 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 0
   %25 = getelementptr %__unsized_array_byte, ptr %24, i32 0, i32 0
@@ -302,19 +267,15 @@ ifcont2:
   %28 = getelementptr i8, ptr %26, i64 0, i64 %27
   %29 = load i8, ptr %28
   %30 = zext i8 %29 to i32
-  %31 = alloca i32
-  store i32 %30, ptr %31
   %33 = icmp slt i32 %30, 128
   br i1 %33, label %then3, label %ifcont4
 then3:
   %34 = alloca %UTF16View
-  %35 = load ptr, ptr %0
-  %36 = getelementptr %UTF16View, ptr %35, i32 0, i32 0
+  %36 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %37 = load %string, ptr %36
   %38 = getelementptr %UTF16View, ptr %34, i32 0, i32 0
   store %string %37, ptr %38
-  %39 = load ptr, ptr %0
-  %40 = getelementptr %UTF16View, ptr %39, i32 0, i32 1
+  %40 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %41 = load i32, ptr %40
   %42 = add i32 %41, 1
   %43 = getelementptr %UTF16View, ptr %34, i32 0, i32 1
@@ -324,18 +285,15 @@ then3:
   %45 = load %UTF16View, ptr %34
   ret %UTF16View %45
 ifcont4:
-  %46 = load i32, ptr %31
-  %47 = icmp slt i32 %46, 224
+  %47 = icmp slt i32 %30, 224
   br i1 %47, label %then5, label %ifcont6
 then5:
   %48 = alloca %UTF16View
-  %49 = load ptr, ptr %0
-  %50 = getelementptr %UTF16View, ptr %49, i32 0, i32 0
+  %50 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %51 = load %string, ptr %50
   %52 = getelementptr %UTF16View, ptr %48, i32 0, i32 0
   store %string %51, ptr %52
-  %53 = load ptr, ptr %0
-  %54 = getelementptr %UTF16View, ptr %53, i32 0, i32 1
+  %54 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %55 = load i32, ptr %54
   %56 = add i32 %55, 2
   %57 = getelementptr %UTF16View, ptr %48, i32 0, i32 1
@@ -345,18 +303,15 @@ then5:
   %59 = load %UTF16View, ptr %48
   ret %UTF16View %59
 ifcont6:
-  %60 = load i32, ptr %31
-  %61 = icmp slt i32 %60, 240
+  %61 = icmp slt i32 %30, 240
   br i1 %61, label %then7, label %ifcont8
 then7:
   %62 = alloca %UTF16View
-  %63 = load ptr, ptr %0
-  %64 = getelementptr %UTF16View, ptr %63, i32 0, i32 0
+  %64 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %65 = load %string, ptr %64
   %66 = getelementptr %UTF16View, ptr %62, i32 0, i32 0
   store %string %65, ptr %66
-  %67 = load ptr, ptr %0
-  %68 = getelementptr %UTF16View, ptr %67, i32 0, i32 1
+  %68 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %69 = load i32, ptr %68
   %70 = add i32 %69, 3
   %71 = getelementptr %UTF16View, ptr %62, i32 0, i32 1
@@ -366,12 +321,10 @@ then7:
   %73 = load %UTF16View, ptr %62
   ret %UTF16View %73
 ifcont8:
-  %74 = load ptr, ptr %0
-  %75 = getelementptr %UTF16View, ptr %74, i32 0, i32 0
+  %75 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %76 = getelementptr %string, ptr %75, i32 0, i32 0
   %77 = load ptr, ptr %76
-  %78 = load ptr, ptr %0
-  %79 = getelementptr %UTF16View, ptr %78, i32 0, i32 1
+  %79 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %80 = load i32, ptr %79
   %81 = add i32 %80, 1
   %82 = getelementptr %__ManagedStringData, ptr %77, i32 0, i32 0
@@ -381,12 +334,10 @@ ifcont8:
   %86 = getelementptr i8, ptr %84, i64 0, i64 %85
   %87 = load i8, ptr %86
   %88 = zext i8 %87 to i32
-  %90 = load ptr, ptr %0
-  %91 = getelementptr %UTF16View, ptr %90, i32 0, i32 0
+  %91 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %92 = getelementptr %string, ptr %91, i32 0, i32 0
   %93 = load ptr, ptr %92
-  %94 = load ptr, ptr %0
-  %95 = getelementptr %UTF16View, ptr %94, i32 0, i32 1
+  %95 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %96 = load i32, ptr %95
   %97 = add i32 %96, 2
   %98 = getelementptr %__ManagedStringData, ptr %93, i32 0, i32 0
@@ -396,12 +347,10 @@ ifcont8:
   %102 = getelementptr i8, ptr %100, i64 0, i64 %101
   %103 = load i8, ptr %102
   %104 = zext i8 %103 to i32
-  %106 = load ptr, ptr %0
-  %107 = getelementptr %UTF16View, ptr %106, i32 0, i32 0
+  %107 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %108 = getelementptr %string, ptr %107, i32 0, i32 0
   %109 = load ptr, ptr %108
-  %110 = load ptr, ptr %0
-  %111 = getelementptr %UTF16View, ptr %110, i32 0, i32 1
+  %111 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %112 = load i32, ptr %111
   %113 = add i32 %112, 3
   %114 = getelementptr %__ManagedStringData, ptr %109, i32 0, i32 0
@@ -411,8 +360,7 @@ ifcont8:
   %118 = getelementptr i8, ptr %116, i64 0, i64 %117
   %119 = load i8, ptr %118
   %120 = zext i8 %119 to i32
-  %122 = load i32, ptr %31
-  %123 = srem i32 %122, 8
+  %123 = srem i32 %30, 8
   %124 = shl i32 %123, 18
   %126 = srem i32 %88, 64
   %127 = shl i32 %126, 12
@@ -424,13 +372,11 @@ ifcont8:
   %135 = add i32 %132, %134
   %138 = sub i32 %135, 65536
   %140 = alloca %UTF16View
-  %141 = load ptr, ptr %0
-  %142 = getelementptr %UTF16View, ptr %141, i32 0, i32 0
+  %142 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %143 = load %string, ptr %142
   %144 = getelementptr %UTF16View, ptr %140, i32 0, i32 0
   store %string %143, ptr %144
-  %145 = load ptr, ptr %0
-  %146 = getelementptr %UTF16View, ptr %145, i32 0, i32 1
+  %146 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %147 = load i32, ptr %146
   %148 = getelementptr %UTF16View, ptr %140, i32 0, i32 1
   store i32 %147, ptr %148
@@ -578,107 +524,70 @@ entry0:
 
 define i32 @fmt.format_int_array(i32 %value, ptr %buffer, i32 %buffer.__length) {
 entry0:
-  %0 = alloca i32
-  store i32 %value, ptr %0
-  %1 = alloca ptr
-  store ptr %buffer, ptr %1
   %4 = icmp eq i32 %value, 0
   br i1 %4, label %then1, label %ifcont2
 then1:
-  %5 = load ptr, ptr %1
-  %6 = getelementptr i8, ptr %5, i64 0, i64 0
+  %6 = getelementptr i8, ptr %buffer, i64 0, i64 0
   store i8 48, ptr %6
   ret i32 1
 ifcont2:
   %7 = alloca [12 x i8]
   %9 = call ptr @memset(ptr %7, i32 0, i64 12)
-  %10 = alloca i32
-  store i32 11, ptr %10
-  %11 = alloca i32
-  store i32 0, ptr %11
-  %12 = load i32, ptr %0
-  %13 = alloca i32
-  store i32 %12, ptr %13
-  %14 = load i32, ptr %0
-  %15 = icmp slt i32 %14, 0
+  %15 = icmp slt i32 %value, 0
   br i1 %15, label %then3, label %ifcont4
 then3:
-  store i32 1, ptr %11
-  %16 = load i32, ptr %0
-  %17 = sub i32 0, %16
-  store i32 %17, ptr %13
+  %17 = sub i32 0, %value
   br label %ifcont4
 ifcont4:
+  %69 = phi i32 [ %value, %ifcont2 ], [ %17, %then3 ]
+  %68 = phi i32 [ 0, %ifcont2 ], [ 1, %then3 ]
   br label %whilecond5
 whilecond5:
-  %18 = load i32, ptr %13
-  %19 = icmp sgt i32 %18, 0
+  %70 = phi i32 [ %69, %ifcont4 ], [ %35, %loop6 ]
+  %66 = phi i32 [ 11, %ifcont4 ], [ %33, %loop6 ]
+  %19 = icmp sgt i32 %70, 0
   br i1 %19, label %loop6, label %afterloop7
 loop6:
-  %20 = load i32, ptr %13
-  %21 = srem i32 %20, 10
+  %21 = srem i32 %70, 10
   %23 = zext i8 48 to i32
   %25 = add i32 %23, %21
-  %27 = load i32, ptr %10
-  %28 = sext i32 %27 to i64
+  %28 = sext i32 %66 to i64
   %29 = getelementptr i8, ptr %7, i64 0, i64 %28
   %31 = trunc i32 %25 to i8
   store i8 %31, ptr %29
-  %32 = load i32, ptr %10
-  %33 = sub i32 %32, 1
-  store i32 %33, ptr %10
-  %34 = load i32, ptr %13
-  %35 = sdiv i32 %34, 10
-  store i32 %35, ptr %13
+  %33 = sub i32 %66, 1
+  %35 = sdiv i32 %70, 10
   br label %whilecond5
 afterloop7:
-  %36 = load i32, ptr %11
-  %37 = icmp eq i32 %36, 1
+  %37 = icmp eq i32 %68, 1
   br i1 %37, label %then8, label %ifcont9
 then8:
-  %38 = load i32, ptr %10
-  %39 = sext i32 %38 to i64
+  %39 = sext i32 %66 to i64
   %40 = getelementptr i8, ptr %7, i64 0, i64 %39
   store i8 45, ptr %40
-  %41 = load i32, ptr %10
-  %42 = sub i32 %41, 1
-  store i32 %42, ptr %10
+  %42 = sub i32 %66, 1
   br label %ifcont9
 ifcont9:
-  %43 = load i32, ptr %10
-  %44 = add i32 %43, 1
-  %45 = alloca i32
-  store i32 %44, ptr %45
+  %67 = phi i32 [ %66, %afterloop7 ], [ %42, %then8 ]
+  %44 = add i32 %67, 1
   %47 = sub i32 12, %44
-  %48 = alloca i32
-  store i32 %47, ptr %48
-  %49 = alloca i32
-  store i32 0, ptr %49
   br label %whilecond10
 whilecond10:
-  %50 = load i32, ptr %49
-  %51 = load i32, ptr %48
-  %52 = icmp slt i32 %50, %51
+  %73 = phi i32 [ 0, %ifcont9 ], [ %64, %loop11 ]
+  %52 = icmp slt i32 %73, %47
   br i1 %52, label %loop11, label %afterloop12
 loop11:
-  %53 = load i32, ptr %49
-  %54 = load ptr, ptr %1
-  %55 = sext i32 %53 to i64
-  %56 = getelementptr i8, ptr %54, i64 0, i64 %55
-  %57 = load i32, ptr %45
-  %58 = load i32, ptr %49
-  %59 = add i32 %57, %58
+  %55 = sext i32 %73 to i64
+  %56 = getelementptr i8, ptr %buffer, i64 0, i64 %55
+  %59 = add i32 %44, %73
   %60 = sext i32 %59 to i64
   %61 = getelementptr i8, ptr %7, i64 0, i64 %60
   %62 = load i8, ptr %61
   store i8 %62, ptr %56
-  %63 = load i32, ptr %49
-  %64 = add i32 %63, 1
-  store i32 %64, ptr %49
+  %64 = add i32 %73, 1
   br label %whilecond10
 afterloop12:
-  %65 = load i32, ptr %48
-  ret i32 %65
+  ret i32 %47
 }
 
 declare void @_managed_string_retain(ptr %arg0)

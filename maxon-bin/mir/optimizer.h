@@ -157,9 +157,11 @@ class DominanceInfo {
 	const std::vector<MIRBasicBlock *> &getDominatedBlocks(MIRBasicBlock *block) const;
 
   private:
+	void computeReachableBlocks(MIRFunction &func);
 	void computeDominators(MIRFunction &func);
 	void computeDominanceFrontiers(MIRFunction &func);
 
+	std::unordered_set<MIRBasicBlock *> reachable_;
 	std::unordered_map<MIRBasicBlock *, MIRBasicBlock *> idom_;
 	std::unordered_map<MIRBasicBlock *, std::set<MIRBasicBlock *>> domFrontier_;
 	std::unordered_map<MIRBasicBlock *, std::vector<MIRBasicBlock *>> domTree_;
@@ -217,17 +219,9 @@ class Mem2RegPass : public OptimizationPass {
 	// Check if an alloca is promotable (only used by loads/stores)
 	bool isAllocaPromotable(MIRFunction &func, MIRInstruction *alloca);
 
-	// Promote a single alloca to registers
+	// Promote a single alloca to registers using full SSA construction
+	// (includes PHI placement via iterated dominance frontier and SSA renaming)
 	bool promoteAlloca(MIRFunction &func, MIRInstruction *alloca);
-
-	// Insert PHI nodes for a variable
-	void insertPhiNodes(MIRFunction &func, MIRInstruction *alloca,
-						const std::set<MIRBasicBlock *> &defBlocks);
-
-	// Rename variables (SSA construction)
-	void renameVariables(MIRFunction &func, MIRInstruction *alloca,
-						 MIRBasicBlock *block, MIRValue *incoming,
-						 std::unordered_map<MIRBasicBlock *, MIRValue *> &currentDef);
 };
 
 //==============================================================================

@@ -6,7 +6,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 185
+; Instructions: 165
 
 %__unsized_array_byte = type { ptr, i32 }
 %string = type { ptr, i32 }
@@ -50,8 +50,6 @@ cstring.continue2:
 
 define %string @string.toLower(ptr %self) {
 entry0:
-  %0 = alloca ptr
-  store ptr %self, ptr %0
   %2 = getelementptr %string, ptr %self, i32 0, i32 0
   %3 = load ptr, ptr %2
   %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 1
@@ -85,67 +83,49 @@ make_unique.const2:
   store i32 %23, ptr %6
   br label %make_unique.merge3
 make_unique.merge3:
-  %24 = alloca ptr
-  store ptr %3, ptr %24
-  %25 = load ptr, ptr %0
-  %26 = getelementptr %string, ptr %25, i32 0, i32 0
+  %26 = getelementptr %string, ptr %self, i32 0, i32 0
   %27 = load ptr, ptr %26
   %28 = getelementptr %__ManagedStringData, ptr %27, i32 0, i32 1
   %29 = load i32, ptr %28
-  %30 = alloca i32
-  store i32 %29, ptr %30
-  %31 = alloca i32
-  store i32 0, ptr %31
   br label %whilecond4
 whilecond4:
-  %32 = load i32, ptr %31
-  %33 = load i32, ptr %30
-  %34 = icmp slt i32 %32, %33
+  %69 = phi i32 [ 0, %make_unique.merge3 ], [ %63, %ifcont8 ]
+  %34 = icmp slt i32 %69, %29
   br i1 %34, label %loop5, label %afterloop6
 loop5:
-  %35 = load ptr, ptr %0
-  %36 = getelementptr %string, ptr %35, i32 0, i32 0
+  %36 = getelementptr %string, ptr %self, i32 0, i32 0
   %37 = load ptr, ptr %36
-  %38 = load i32, ptr %31
   %39 = getelementptr %__ManagedStringData, ptr %37, i32 0, i32 0
   %40 = getelementptr %__unsized_array_byte, ptr %39, i32 0, i32 0
   %41 = load ptr, ptr %40
-  %42 = sext i32 %38 to i64
+  %42 = sext i32 %69 to i64
   %43 = getelementptr i8, ptr %41, i64 0, i64 %42
   %44 = load i8, ptr %43
   %45 = zext i8 %44 to i32
-  %46 = alloca i32
-  store i32 %45, ptr %46
   %48 = icmp sge i32 %45, 65
   %50 = icmp sle i32 %45, 90
   %51 = and i1 %48, %50
   br i1 %51, label %then7, label %ifcont8
 afterloop6:
   %64 = alloca %string
-  %65 = load ptr, ptr %24
   %66 = getelementptr %string, ptr %64, i32 0, i32 0
-  store ptr %65, ptr %66
+  store ptr %3, ptr %66
   %67 = getelementptr %string, ptr %64, i32 0, i32 1
   store i32 0, ptr %67
   %68 = load %string, ptr %64
   ret %string %68
 then7:
-  %52 = load ptr, ptr %24
-  %53 = load i32, ptr %31
-  %54 = load i32, ptr %46
-  %55 = add i32 %54, 32
+  %55 = add i32 %45, 32
   %56 = trunc i32 %55 to i8
-  %57 = getelementptr %__ManagedStringData, ptr %52, i32 0, i32 0
+  %57 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
   %58 = getelementptr %__unsized_array_byte, ptr %57, i32 0, i32 0
   %59 = load ptr, ptr %58
-  %60 = sext i32 %53 to i64
+  %60 = sext i32 %69 to i64
   %61 = getelementptr i8, ptr %59, i64 0, i64 %60
   store i8 %56, ptr %61
   br label %ifcont8
 ifcont8:
-  %62 = load i32, ptr %31
-  %63 = add i32 %62, 1
-  store i32 %63, ptr %31
+  %63 = add i32 %69, 1
   br label %whilecond4
 }
 

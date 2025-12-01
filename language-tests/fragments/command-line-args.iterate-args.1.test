@@ -9,7 +9,7 @@ function main(args []string) int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 103
+; Instructions: 92
 
 %__unsized_array_byte = type { ptr, i32 }
 %string = type { ptr, i32 }
@@ -51,27 +51,16 @@ cstring.continue2:
 
 define i32 @main(ptr %args, i32 %args.__length) {
 entry0:
-  %0 = alloca ptr
-  store ptr %args, ptr %0
-  %1 = alloca i32
-  store i32 %args.__length, ptr %1
-  %2 = alloca i32
-  store i32 1, ptr %2
   br label %whilecond1
 whilecond1:
-  %3 = load i32, ptr %2
-  %5 = load i32, ptr %1
-  %6 = icmp slt i32 %3, %5
+  %14 = phi i32 [ 1, %entry0 ], [ %13, %loop2 ]
+  %6 = icmp slt i32 %14, %args.__length
   br i1 %6, label %loop2, label %afterloop3
 loop2:
-  %7 = load i32, ptr %2
-  %8 = load ptr, ptr %0
-  %9 = sext i32 %7 to i64
-  %10 = getelementptr %string, ptr %8, i64 %9
+  %9 = sext i32 %14 to i64
+  %10 = getelementptr %string, ptr %args, i64 %9
   %11 = call i32 @sys.print(ptr %10)
-  %12 = load i32, ptr %2
-  %13 = add i32 %12, 1
-  store i32 %13, ptr %2
+  %13 = add i32 %14, 1
   br label %whilecond1
 afterloop3:
   ret i32 0

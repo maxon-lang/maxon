@@ -1,7 +1,7 @@
 # Maxon Compiler Architecture
 
-**Version:** 1.2  
-**Last Updated:** 2025-11-27  
+**Version:** 1.3  
+**Last Updated:** 2025-12-01  
 **Status:** Production-ready
 
 ## Overview
@@ -139,7 +139,8 @@ The optimizer runs multiple passes over MIR until no more changes occur (fixed-p
 6. **Algebraic Simplification** — Apply `x + 0` → `x`, `x * 1` → `x`
 7. **Function Inlining** — Inline small functions (≤20 instructions)
 8. **Copy Propagation** — Eliminate unnecessary copies
-9. **PHI Elimination** — Convert SSA form for register allocation
+9. **Mem2Reg (SSA Promotion)** — Promote stack allocas to SSA registers with PHI nodes
+10. **PHI Elimination** — Convert SSA form for register allocation
 
 **Components:**
 - `mir/optimizer.h/cpp` — Optimization framework and passes
