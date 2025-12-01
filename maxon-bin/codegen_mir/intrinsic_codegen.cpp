@@ -1,5 +1,6 @@
 #include "intrinsic_codegen.h"
 #include "../codegen_mir.h"
+#include "../intrinsics.h"
 
 IntrinsicCodegenRegistry& IntrinsicCodegenRegistry::instance() {
 	static IntrinsicCodegenRegistry registry;
@@ -7,28 +8,42 @@ IntrinsicCodegenRegistry& IntrinsicCodegenRegistry::instance() {
 }
 
 IntrinsicCodegenRegistry::IntrinsicCodegenRegistry() {
-	// String intrinsics
-	methods_["__string_len"] = &MIRCodeGenerator::intrinsic_string_len;
-	methods_["__string_byte_at"] = &MIRCodeGenerator::intrinsic_string_byte_at;
-	methods_["__string_slice"] = &MIRCodeGenerator::intrinsic_string_slice;
-	methods_["__string_concat"] = &MIRCodeGenerator::intrinsic_string_concat;
-	methods_["__string_make_unique"] = &MIRCodeGenerator::intrinsic_string_make_unique;
-	methods_["__string_set_byte"] = &MIRCodeGenerator::intrinsic_string_set_byte;
-	methods_["__string_get_refcount"] = &MIRCodeGenerator::intrinsic_string_get_refcount;
-	methods_["__string_to_cstring"] = &MIRCodeGenerator::intrinsic_string_to_cstring;
-	methods_["__string_from_chars"] = &MIRCodeGenerator::intrinsic_string_from_chars;
+	// Map method names to their implementations
+	std::map<std::string, IntrinsicCodegenMethod> methodsByName = {
+		// String intrinsics
+		{"intrinsic_string_len", &MIRCodeGenerator::intrinsic_string_len},
+		{"intrinsic_string_byte_at", &MIRCodeGenerator::intrinsic_string_byte_at},
+		{"intrinsic_string_slice", &MIRCodeGenerator::intrinsic_string_slice},
+		{"intrinsic_string_concat", &MIRCodeGenerator::intrinsic_string_concat},
+		{"intrinsic_string_make_unique", &MIRCodeGenerator::intrinsic_string_make_unique},
+		{"intrinsic_string_set_byte", &MIRCodeGenerator::intrinsic_string_set_byte},
+		{"intrinsic_string_get_refcount", &MIRCodeGenerator::intrinsic_string_get_refcount},
+		{"intrinsic_string_to_cstring", &MIRCodeGenerator::intrinsic_string_to_cstring},
+		{"intrinsic_string_from_chars", &MIRCodeGenerator::intrinsic_string_from_chars},
 
-	// Cstring intrinsics
-	methods_["__cstring_len"] = &MIRCodeGenerator::intrinsic_cstring_len;
-	methods_["__cstring_write_stdout"] = &MIRCodeGenerator::intrinsic_cstring_write_stdout;
+		// Cstring intrinsics
+		{"intrinsic_cstring_len", &MIRCodeGenerator::intrinsic_cstring_len},
+		{"intrinsic_cstring_write_stdout", &MIRCodeGenerator::intrinsic_cstring_write_stdout},
 
-	// Substring intrinsics
-	methods_["__substring_len"] = &MIRCodeGenerator::intrinsic_substring_len;
-	methods_["__substring_byte_at"] = &MIRCodeGenerator::intrinsic_substring_byte_at;
-	methods_["__substring_iter_pos"] = &MIRCodeGenerator::intrinsic_substring_iter_pos;
-	methods_["__substring_with_iter_pos"] = &MIRCodeGenerator::intrinsic_substring_with_iter_pos;
-	methods_["__substring_to_string"] = &MIRCodeGenerator::intrinsic_substring_to_string;
-	methods_["__substring_slice"] = &MIRCodeGenerator::intrinsic_substring_slice;
+		// Substring intrinsics
+		{"intrinsic_substring_len", &MIRCodeGenerator::intrinsic_substring_len},
+		{"intrinsic_substring_byte_at", &MIRCodeGenerator::intrinsic_substring_byte_at},
+		{"intrinsic_substring_iter_pos", &MIRCodeGenerator::intrinsic_substring_iter_pos},
+		{"intrinsic_substring_with_iter_pos", &MIRCodeGenerator::intrinsic_substring_with_iter_pos},
+		{"intrinsic_substring_to_string", &MIRCodeGenerator::intrinsic_substring_to_string},
+		{"intrinsic_substring_slice", &MIRCodeGenerator::intrinsic_substring_slice},
+	};
+
+	// Populate methods_ by looking up codegen method names from IntrinsicRegistry
+	for (const auto& [intrinsicName, info] : IntrinsicRegistry::instance().getAll()) {
+		const char* methodName = IntrinsicRegistry::instance().getCodegenMethodName(intrinsicName);
+		if (methodName) {
+			auto it = methodsByName.find(methodName);
+			if (it != methodsByName.end()) {
+				methods_[intrinsicName] = it->second;
+			}
+		}
+	}
 }
 
 IntrinsicCodegenMethod IntrinsicCodegenRegistry::getMethod(const std::string& name) const {

@@ -1,4 +1,5 @@
 #include "intrinsics.h"
+#include "intrinsics_defs.h"
 
 IntrinsicRegistry& IntrinsicRegistry::instance() {
 	static IntrinsicRegistry registry;
@@ -6,33 +7,27 @@ IntrinsicRegistry& IntrinsicRegistry::instance() {
 }
 
 IntrinsicRegistry::IntrinsicRegistry() {
-	// String intrinsics (__string_*)
-	registerIntrinsic("__string_len", "int", {{"_ManagedString"}});
-	registerIntrinsic("__string_byte_at", "byte", {{"_ManagedString"}, {"int"}});
-	registerIntrinsic("__string_slice", "substring", {{"_ManagedString"}, {"int"}, {"int"}});
-	registerIntrinsic("__string_concat", "_ManagedString", {{"_ManagedString"}, {"_ManagedString"}});
-	registerIntrinsic("__string_make_unique", "_ManagedString", {{"_ManagedString"}});
-	registerIntrinsic("__string_set_byte", "void", {{"_ManagedString"}, {"int"}, IntrinsicParam::anyOf({"byte", "char"})});
-	registerIntrinsic("__string_get_refcount", "int", {{"_ManagedString"}});
-	registerIntrinsic("__string_to_cstring", "cstring", {{"_ManagedString"}});
-	registerIntrinsic("__string_from_chars", "_ManagedString", {IntrinsicParam::arrayOf({"char", "byte"}), {"int"}});
+	for (const auto& def : getIntrinsicDefinitions()) {
+		// Convert IntrinsicParamDef to IntrinsicParam
+		std::vector<IntrinsicParam> params;
+		for (const auto& p : def.params) {
+			if (!p.allowedTypes.empty()) {
+				if (p.isArrayType) {
+					params.push_back(IntrinsicParam::arrayOf(p.allowedTypes));
+				} else {
+					params.push_back(IntrinsicParam::anyOf(p.allowedTypes));
+				}
+			} else {
+				params.push_back(IntrinsicParam(p.type));
+			}
+		}
 
-	// CString intrinsics (__cstring_*)
-	registerIntrinsic("__cstring_len", "int", {{"cstring"}});
-	registerIntrinsic("__cstring_write_stdout", "int", {{"cstring"}});
+		intrinsics_[def.name] = IntrinsicInfo(def.name, def.returnType, std::move(params));
 
-	// Substring intrinsics (__substring_*)
-	registerIntrinsic("__substring_len", "int", {{"substring"}});
-	registerIntrinsic("__substring_byte_at", "byte", {{"substring"}, {"int"}});
-	registerIntrinsic("__substring_iter_pos", "int", {{"substring"}});
-	registerIntrinsic("__substring_with_iter_pos", "substring", {{"substring"}, {"int"}});
-	registerIntrinsic("__substring_to_string", "_ManagedString", {{"substring"}});
-	registerIntrinsic("__substring_slice", "substring", {{"substring"}, {"int"}, {"int"}});
-}
-
-void IntrinsicRegistry::registerIntrinsic(const std::string& name, const std::string& returnType,
-										  std::vector<IntrinsicParam> params) {
-	intrinsics_[name] = IntrinsicInfo(name, returnType, std::move(params));
+		if (def.codegenMethodName) {
+			codegenMethodNames_[def.name] = def.codegenMethodName;
+		}
+	}
 }
 
 const IntrinsicInfo* IntrinsicRegistry::lookup(const std::string& name) const {
@@ -90,4 +85,12 @@ std::string IntrinsicRegistry::validateArgType(const IntrinsicParam& param, cons
 		return "expected " + param.type + ", got " + actualType;
 	}
 	return ""; // Valid
+}
+
+const char* IntrinsicRegistry::getCodegenMethodName(const std::string& name) const {
+	auto it = codegenMethodNames_.find(name);
+	if (it != codegenMethodNames_.end()) {
+		return it->second;
+	}
+	return nullptr;
 }

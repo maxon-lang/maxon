@@ -1,4 +1,5 @@
 #include "analyzer.h"
+#include "intrinsics.h"
 #include "semantic_analyzer.h"
 #include "type_members.h"
 #include <algorithm>
@@ -681,7 +682,35 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
 		}
 		hover.contents = "**" + word + "** (" + categoryName + ")\n\n" + meta.description;
 	} else {
-		hover.contents = "**" + word + "**\n\nIdentifier";
+		// Check if it's a compiler intrinsic
+		const IntrinsicInfo *intrinsic = IntrinsicRegistry::instance().lookup(word);
+		if (intrinsic) {
+			std::string sig = "function " + intrinsic->name + "(";
+			for (size_t i = 0; i < intrinsic->params.size(); i++) {
+				if (i > 0)
+					sig += ", ";
+				const auto &param = intrinsic->params[i];
+				if (!param.allowedTypes.empty()) {
+					// Show allowed types for polymorphic parameters
+					if (param.isArrayType) {
+						sig += "[]" + param.allowedTypes[0];
+					} else if (param.allowedTypes.size() == 1) {
+						sig += param.allowedTypes[0];
+					} else {
+						sig += param.allowedTypes[0];
+						for (size_t j = 1; j < param.allowedTypes.size(); j++) {
+							sig += "|" + param.allowedTypes[j];
+						}
+					}
+				} else {
+					sig += param.type;
+				}
+			}
+			sig += ") " + intrinsic->returnType;
+			hover.contents = "```maxon\n" + sig + "\n```\n\n(compiler intrinsic)";
+		} else {
+			hover.contents = "**" + word + "**\n\nIdentifier";
+		}
 	}
 
 	return hover;

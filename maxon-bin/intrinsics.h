@@ -58,12 +58,14 @@ public:
 	// Returns empty string if valid, error message if invalid
 	std::string validateArgType(const IntrinsicParam& param, const std::string& actualType) const;
 
+	// Get the codegen method name for an intrinsic, returns nullptr if not found
+	const char* getCodegenMethodName(const std::string& name) const;
+
 private:
 	IntrinsicRegistry();
-	void registerIntrinsic(const std::string& name, const std::string& returnType,
-						   std::vector<IntrinsicParam> params);
 
 	std::map<std::string, IntrinsicInfo> intrinsics_;
+	std::map<std::string, const char*> codegenMethodNames_;
 };
 
 #endif // INTRINSICS_H
