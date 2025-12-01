@@ -736,12 +736,17 @@ do_copy:
     ; Decrement refcount of original (we're detaching)
     %new_count = call i32 @refcount_dec(ptr %header)
 
-    ; Allocate new buffer with length as capacity
+    ; Allocate new buffer with length + 1 for null terminator
     %len_i64 = zext i32 %len to i64
-    %new_buffer = call ptr @_managed_string_alloc(i64 %len_i64, ptr %tag)
+    %len_plus1 = add i64 %len_i64, 1
+    %new_buffer = call ptr @_managed_string_alloc(i64 %len_plus1, ptr %tag)
 
     ; Copy data from old buffer to new
     call void @memcpy(ptr %new_buffer, ptr %data, i64 %len_i64)
+
+    ; Write null terminator
+    %null_term_ptr = getelementptr i8, ptr %new_buffer, i64 %len_i64
+    store i8 0, ptr %null_term_ptr
 
     ret ptr %new_buffer
 }

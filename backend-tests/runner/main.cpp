@@ -51,6 +51,9 @@ const char *CYAN = "\033[36m";
 const char *RESET = "\033[0m";
 const char *BOLD = "\033[1m";
 
+// Global compiler path (set in main based on test directory)
+std::string g_compilerPath;
+
 struct TestExpectation {
 	int exitCode = 0;
 	std::string expectedStdout;
@@ -461,7 +464,7 @@ bool runMIRExecutionTest(const fs::path &mirFile, bool verbose) {
 	fs::path exePath = tempDir / (testName + ".exe");
 
 	// Compile MIR to executable using compile-mir command
-	std::string compileCmd = "maxon compile-mir \"" + mirFile.string() + "\" -o \"" + exePath.string() + "\"";
+	std::string compileCmd = "\"" + g_compilerPath + "\" compile-mir \"" + mirFile.string() + "\" -o \"" + exePath.string() + "\"";
 	auto compileResult = runCommand(compileCmd);
 
 	bool testPassed = false;
@@ -618,7 +621,7 @@ std::vector<std::string> generateDiagnostics(const fs::path &testFile, const fs:
 	std::string debugExe = (artifactsDir / (basename + ".debug.exe")).string();
 
 	// Compile optimized with verbose and IR
-	std::string cmdOpt = "maxon compile \"" + optSource.string() + "\" -O --emit-ir -vvv";
+	std::string cmdOpt = "\"" + g_compilerPath + "\" compile \"" + optSource.string() + "\" -O --emit-ir -vvv";
 	auto resultOpt = runCommand(cmdOpt);
 
 	// Save verbose output
@@ -636,7 +639,7 @@ std::vector<std::string> generateDiagnostics(const fs::path &testFile, const fs:
 	artifacts.push_back(basename + ".compile-error.txt");
 
 	// Compile debug with verbose and IR
-	std::string cmdDebug = "maxon compile \"" + debugSource.string() + "\" --emit-ir -vvv";
+	std::string cmdDebug = "\"" + g_compilerPath + "\" compile \"" + debugSource.string() + "\" --emit-ir -vvv";
 	auto resultDebug = runCommand(cmdDebug);
 
 	{
@@ -728,7 +731,7 @@ TestResult runTest(const fs::path &testFile, const fs::path &testDir, bool verbo
 	std::string debugExe = (artifactsDir / (basename + ".debug.exe")).string();
 
 	// Compile optimized
-	std::string cmdOpt = "maxon compile \"" + optSource.string() + "\" -O";
+	std::string cmdOpt = "\"" + g_compilerPath + "\" compile \"" + optSource.string() + "\" -O";
 	auto compileOpt = runCommand(cmdOpt);
 	if (compileOpt.exitCode != 0) {
 		result.errorMessage = "Optimized compilation failed:\n" + compileOpt.output;
@@ -736,7 +739,7 @@ TestResult runTest(const fs::path &testFile, const fs::path &testDir, bool verbo
 	}
 
 	// Compile debug
-	std::string cmdDebug = "maxon compile \"" + debugSource.string() + "\"";
+	std::string cmdDebug = "\"" + g_compilerPath + "\" compile \"" + debugSource.string() + "\"";
 	auto compileDebug = runCommand(cmdDebug);
 	if (compileDebug.exitCode != 0) {
 		result.errorMessage = "Debug compilation failed:\n" + compileDebug.output;
@@ -851,6 +854,17 @@ int main(int argc, char *argv[]) {
 
 	if (testDir.empty()) {
 		std::cerr << RED << "Error: Could not find backend-tests directory" << RESET << "\n";
+		return 1;
+	}
+
+	// Set compiler path relative to test directory (testDir is backend-tests/, compiler is in ../bin/)
+#ifdef _WIN32
+	g_compilerPath = (testDir.parent_path() / "bin" / "maxon.exe").string();
+#else
+	g_compilerPath = (testDir.parent_path() / "bin" / "maxon").string();
+#endif
+	if (!fs::exists(g_compilerPath)) {
+		std::cerr << RED << "Error: Compiler not found at " << g_compilerPath << RESET << "\n";
 		return 1;
 	}
 

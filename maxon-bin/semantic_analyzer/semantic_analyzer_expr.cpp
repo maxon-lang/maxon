@@ -434,9 +434,60 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				analyzeExpression(callExpr->args[0].get());
 				return "int";
 			}
+			// __string_to_cstring(managed) - create cstring from managed string data
+			// Increments refcount and returns zero-copy reference
+			if (name == "__string_to_cstring") {
+				if (callExpr->args.size() != 1) {
+					addError("__string_to_cstring requires exactly 1 argument", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				return "cstring";
+			}
+			// __string_from_chars(buffer, length) - create new string from char buffer
+			// Copies bytes and creates new heap-allocated string
+			// Returns _ManagedString (opaque pointer to __ManagedStringData)
+			if (name == "__string_from_chars") {
+				if (callExpr->args.size() != 2) {
+					addError("__string_from_chars requires exactly 2 arguments", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				analyzeExpression(callExpr->args[1].get());
+				return "_ManagedString";
+			}
 
 			// Unknown string intrinsic
 			addError("Unknown string intrinsic: " + name, expr->line, expr->column);
+			return "error";
+		}
+
+		// Handle cstring intrinsics (__cstring_* functions)
+		// These are compiler-internal functions for working with cstring type
+		if (callExpr->callee.rfind("__cstring_", 0) == 0) {
+			const std::string &name = callExpr->callee;
+
+			// __cstring_len(cs) - get byte length
+			if (name == "__cstring_len") {
+				if (callExpr->args.size() != 1) {
+					addError("__cstring_len requires exactly 1 argument", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				return "int";
+			}
+			// __cstring_ptr(cs) - get data pointer for FFI
+			if (name == "__cstring_ptr") {
+				if (callExpr->args.size() != 1) {
+					addError("__cstring_ptr requires exactly 1 argument", expr->line, expr->column);
+					return "error";
+				}
+				analyzeExpression(callExpr->args[0].get());
+				return "ptr";
+			}
+
+			// Unknown cstring intrinsic
+			addError("Unknown cstring intrinsic: " + name, expr->line, expr->column);
 			return "error";
 		}
 
@@ -740,11 +791,6 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			// Allow implicit int-to-float conversion
 			bool isValidType = typesMatch(expectedType, argType) ||
 							   (expectedType == "float" && argType == "int");
-
-			// Special case: print() accepts strings as well as ints (polymorphic built-in)
-			if (!isValidType && callExpr->callee == "print" && argType == "string") {
-				isValidType = true;
-			}
 
 			if (!isValidType) {
 				addError("Function '" + callExpr->callee + "' argument type mismatch" +

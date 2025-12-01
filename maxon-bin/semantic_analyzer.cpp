@@ -95,8 +95,9 @@ void SemanticAnalyzer::registerExternalStruct(const std::string &name, const std
 
 void SemanticAnalyzer::registerBuiltinFunctions() {
 	// Register runtime functions
+	// write_stdout takes a raw pointer and length (used via cstring intrinsics)
 	registerExternalFunction("write_stdout", "int",
-							 {FunctionParameter("buf", "[]char", 0, 0), FunctionParameter("count", "int", 0, 0)});
+							 {FunctionParameter("buf", "ptr", 0, 0), FunctionParameter("count", "int", 0, 0)});
 }
 
 std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
@@ -370,7 +371,8 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 	// Validate return type - track undefined struct types for auto-import
 	if (func->returnType != "void" && func->returnType != "int" &&
 		func->returnType != "float" && func->returnType != "bool" &&
-		func->returnType != "string" && func->returnType != "char" &&
+		func->returnType != "string" && func->returnType != "cstring" &&
+		func->returnType != "char" &&
 		func->returnType[0] != '[') { // Not an array type
 		// Could be a struct type - check if it exists
 		if (lookupStruct(func->returnType) == nullptr) {
@@ -390,7 +392,8 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 		}
 		if (paramType != "void" && paramType != "int" &&
 			paramType != "float" && paramType != "bool" &&
-			paramType != "string" && paramType != "char") {
+			paramType != "string" && paramType != "cstring" &&
+			paramType != "char") {
 			// Could be a struct type - check if it exists
 			if (lookupStruct(paramType) == nullptr) {
 				undefinedStructs.insert(paramType);

@@ -399,6 +399,11 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		if (finalType == "substring" && !scopeStack.empty()) {
 			scopeStack.back().substringAllocas.push_back({varDecl->name, alloca});
 		}
+		// Track cstring variables for cleanup at scope exit
+		// Cstrings hold a reference to the underlying managed string
+		if (finalType == "cstring" && !scopeStack.empty()) {
+			scopeStack.back().cstringAllocas.push_back({varDecl->name, alloca});
+		}
 		return;
 	}
 
@@ -637,6 +642,11 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		std::string finalType = variableTypes[letDecl->name];
 		if (finalType == "substring" && !scopeStack.empty()) {
 			scopeStack.back().substringAllocas.push_back({letDecl->name, alloca});
+		}
+		// Track cstring variables for cleanup at scope exit
+		// Cstrings hold a reference to the underlying managed string
+		if (finalType == "cstring" && !scopeStack.empty()) {
+			scopeStack.back().cstringAllocas.push_back({letDecl->name, alloca});
 		}
 		return;
 	}

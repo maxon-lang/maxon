@@ -2,25 +2,17 @@
 // Integer printing function
 // Namespace: stdlib.sys
 
-/// Print an integer to stdout with a newline
-/// Returns 0 on success
+/// Print an integer to stdout (no newline)
+/// Returns the number of bytes written, or negative on error
 
-export function print(value int) int
-// Allocate buffer for integer formatting (12 bytes max for -2147483648)
-var buffer = [12]char
+export function print_int(value int) int
+    // Allocate buffer for integer formatting (12 bytes max for -2147483648)
+    var buffer = [12]char
 
-// Format the integer into the buffer
-var length = format_int_array(value, buffer)
+    // Format the integer into the buffer
+    var length = format_int_array(value, buffer)
 
-// Write the formatted integer to stdout
-var result = write_stdout(buffer, length)
-
-// Write newline (only if first write succeeded)
-if result >= 0 'write_newline'
-    var newline = [1]char
-    newline[0] = 10 as char
-    result = write_stdout(newline, 1)
-end 'write_newline'
-
-return result
-end 'print'
+    // Create string from buffer and print it
+    var s = string_from_chars(buffer, length)
+    return print(s)
+end 'print_int'

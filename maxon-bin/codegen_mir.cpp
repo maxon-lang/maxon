@@ -125,6 +125,17 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return mir::MIRType::getInt8();
 	} else if (typeStr == "byte") {
 		return mir::MIRType::getInt8(); // byte is 8-bit unsigned
+	} else if (typeStr == "cstring") {
+		// cstring is a zero-copy reference to a string's buffer
+		// Layout: { ptr data, i32 len, ptr managed } - managed ptr for refcount
+		mir::MIRType *cstringType = structTypes["cstring"];
+		if (!cstringType) {
+			cstringType = module->getOrCreateStructType(
+				"cstring",
+				{mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getPtr()});
+			structTypes["cstring"] = cstringType;
+		}
+		return cstringType;
 	} else if (typeStr == "ptr") {
 		return mir::MIRType::getPtr();
 	} else if (typeStr == "void") {
@@ -194,6 +205,8 @@ std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
 		// Handle built-in string type
 		if (type->structName == "__string")
 			return "string";
+		if (type->structName == "cstring")
+			return "cstring";
 		return type->structName;
 	case mir::MIRTypeKind::Array:
 		// Format: [size]elementType
@@ -354,6 +367,69 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 
 		builder->setInsertPoint(continueBlock);
 	}
+
+	// Release cstring references in this scope
+	// Cstrings hold a reference to the underlying managed string
+	for (const auto &[name, cstringAlloca] : scopeStack.back().cstringAllocas) {
+		// Get or create cstring type
+		mir::MIRType *cstringType = structTypes["cstring"];
+		if (!cstringType) {
+			cstringType = module->getOrCreateStructType(
+				"cstring",
+				{mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getPtr()});
+			structTypes["cstring"] = cstringType;
+		}
+
+		// Get __ManagedStringData type
+		mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
+		if (!managedStringType) {
+			mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+			if (!unsizedArrayType) {
+				unsizedArrayType = module->getOrCreateStructType(
+					"__unsized_array_byte",
+					{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+				structTypes["__unsized_array_byte"] = unsizedArrayType;
+			}
+			managedStringType = module->getOrCreateStructType(
+				"__ManagedStringData",
+				{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+			structTypes["__ManagedStringData"] = managedStringType;
+		}
+		mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+
+		// Load managed pointer from cstring field 2
+		mir::MIRValue *managedPtrPtr = builder->createStructGEP(cstringType, cstringAlloca, 2, name + ".managed.ptr");
+		mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedPtrPtr, name + ".managed");
+
+		// Check if the underlying string is heap-allocated (capacity > 0)
+		mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, name + "._capacity.ptr");
+		mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtr, name + "._capacity");
+		mir::MIRValue *isHeap = builder->createICmpSGT(cap, builder->getInt32(0), name + ".isHeap");
+
+		// Conditional release: only release if string was heap-allocated
+		mir::MIRBasicBlock *releaseBlock = builder->createBasicBlock(name + ".cstring.release");
+		mir::MIRBasicBlock *continueBlock = builder->createBasicBlock(name + ".cstring.continue");
+		builder->createCondBr(isHeap, releaseBlock, continueBlock);
+
+		builder->setInsertPoint(releaseBlock);
+		// Get the buffer pointer from managed string's _buffer field
+		mir::MIRValue *bufferPtr = builder->createStructGEP(managedStringType, managedPtr, 0, name + "._buffer");
+		mir::MIRValue *dataPtrPtr = builder->createStructGEP(unsizedArrayType, bufferPtr, 0, name + ".data.ptr.ptr");
+		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrPtr, name + ".data.ptr");
+
+		// Create tag for tracking
+		mir::MIRValue *tag = module->createGlobalString(".__tag.free." + name, "cstring release");
+
+		// Call _managed_string_release on the data pointer
+		mir::MIRFunction *stringReleaseFunc = getOrDeclareFunction(
+			"_managed_string_release",
+			mir::MIRType::getVoid(),
+			{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+		builder->createCall(stringReleaseFunc, {dataPtr, tag});
+		builder->createBr(continueBlock);
+
+		builder->setInsertPoint(continueBlock);
+	}
 }
 
 //==============================================================================
@@ -386,12 +462,6 @@ mir::MIRFunction *MIRCodeGenerator::getOrDeclareFunction(const std::string &name
 	return builder->declareFunction(name, returnType, paramTypes);
 }
 
-void MIRCodeGenerator::initStandardLibrary() {
-	// Declare write_stdout function (used by print) - returns bytes written or error code
-	getOrDeclareFunction("write_stdout",
-						 mir::MIRType::getInt32(),
-						 {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-}
 
 void MIRCodeGenerator::initHeapManagement() {
 	// Declare malloc
@@ -545,8 +615,9 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	// optimizer pass after codegen, not here. This ensures all functions are
 	// available during codegen (e.g., for interface method lookups in for-loops).
 
-	// Note: Standard library (write_stdout) is initialized on-demand when
-	// print/print_float is called - see codegen_mir_expr.cpp
+	// Declare runtime functions used by stdlib
+	getOrDeclareFunction("write_stdout", mir::MIRType::getInt32(),
+						 {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
 
 	// Note: _ManagedString is an OPAQUE POINTER type (just 'ptr' in the type system)
 	// The internal types __unsized_array_byte and __ManagedStringData are created

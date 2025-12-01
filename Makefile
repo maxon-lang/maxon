@@ -44,10 +44,18 @@ else
     RUNTIME_MIR = $(RUNTIME_MIR_LINUX)
 endif
 
+# Git branch detection - only install extension on main branch
+GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
+ifeq ($(GIT_BRANCH),main)
+    EXTENSION_TARGET := extension-install
+else
+    EXTENSION_TARGET :=
+endif
+
 .PHONY: all clean clean-all compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test-build debugger-test ffi-test-lib
 
 # Default target - build everything
-all: compiler lsp-server extension-install debugger-test-build
+all: compiler lsp-server $(EXTENSION_TARGET) debugger-test-build
 	@echo All components built successfully.
 
 help:
@@ -120,7 +128,7 @@ compiler: $(BUILD_DIR)/build.ninja runtime
 	@if [ bin/grammar_generator$(EXE_EXT) -nt vscode-extension/syntaxes/maxon.tmLanguage.json ]; then echo "Generating TextMate grammar..."; ./bin/grammar_generator$(EXE_EXT) vscode-extension/syntaxes/maxon.tmLanguage.json; fi
 
 # Build both LSP server and extension
-lsp: lsp-server extension-install
+lsp: lsp-server $(EXTENSION_TARGET)
 
 # Build the C++ LSP server (depends on compiler sources)
 lsp-server: compiler

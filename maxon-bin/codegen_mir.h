@@ -99,6 +99,7 @@ class MIRCodeGenerator {
 		std::vector<std::pair<std::string, mir::MIRValue *>> heapAllocatedArrays;
 		std::vector<std::pair<std::string, mir::MIRValue *>> heapAllocatedStrings; // Data pointer for heap strings
 		std::vector<std::pair<std::string, mir::MIRValue *>> substringAllocas;	   // Substring struct allocas (need parent release)
+		std::vector<std::pair<std::string, mir::MIRValue *>> cstringAllocas;	   // Cstring struct allocas (need managed release)
 	};
 	std::vector<ScopeInfo> scopeStack;
 
@@ -132,8 +133,7 @@ class MIRCodeGenerator {
 										   mir::MIRType *returnType,
 										   const std::vector<mir::MIRType *> &paramTypes);
 
-	// Standard library initialization
-	void initStandardLibrary();
+	// Heap management initialization
 	void initHeapManagement();
 
 	// Math intrinsic generation
@@ -149,6 +149,10 @@ class MIRCodeGenerator {
 	// Substring intrinsic generation (__substring_* functions)
 	mir::MIRValue *generateSubstringIntrinsic(CallExprAST *callExpr);
 	bool isSubstringIntrinsic(const std::string &name);
+
+	// Cstring intrinsic generation (__cstring_* functions)
+	mir::MIRValue *generateCstringIntrinsic(CallExprAST *callExpr);
+	bool isCstringIntrinsic(const std::string &name);
 
 	// String literal generation
 	mir::MIRValue *generateStringLiteral(StringLiteralExprAST *strExpr);

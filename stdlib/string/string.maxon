@@ -51,6 +51,13 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 		return __string_len(_managed) == 0
 	end 'isEmpty'
 
+	// Get a zero-copy cstring reference for FFI
+	// The returned cstring holds a reference to the underlying buffer
+	// and will release it when it goes out of scope
+	export function cstr() cstring
+		return __string_to_cstring(_managed)
+	end 'cstr'
+
 	// ============================================
 	// Iterable conformance - character iteration
 	// ============================================
@@ -862,3 +869,13 @@ export struct substring is Hashable, Equatable, Iterable with int
 		return find(needle) >= 0
 	end 'contains'
 end 'substring'
+
+// ============================================
+// String construction utilities
+// ============================================
+
+// Create a new string from a char buffer
+// Copies the bytes and creates a new heap-allocated string
+export function string_from_chars(buffer []char, length int) string
+	return string{_managed: __string_from_chars(buffer, length), _iterPos: 0}
+end 'string_from_chars'
