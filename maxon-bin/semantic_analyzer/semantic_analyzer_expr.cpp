@@ -943,11 +943,15 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			}
 		}
 
-		// Check for missing fields
+		// Check for missing fields - fields with defaults are optional
 		for (const auto &structField : structInfo.fields) {
 			if (initializedFields.find(structField.name) == initializedFields.end()) {
-				addError("Missing initialization for field '" + structField.name + "' in struct '" + structInitExpr->structName + "'",
-						 expr->line, expr->column);
+				if (!structField.hasDefault) {
+					addError("Missing initialization for required field '" + structField.name + "' in struct '" + structInitExpr->structName + "'" +
+								 "\n  Note: Fields without default values must be initialized",
+							 expr->line, expr->column);
+				}
+				// Fields with defaults are OK to omit - codegen will use the default
 			}
 		}
 

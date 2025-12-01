@@ -49,8 +49,8 @@ Structs declare conformance to interfaces using the `is` keyword:
 
 ```maxon
 struct Point is Hashable
-    x int
-    y int
+    var x int
+    var y int
 end 'Point'
 ```
 
@@ -58,8 +58,8 @@ A struct can conform to multiple interfaces:
 
 ```maxon
 struct Point is Hashable, Equatable
-    x int
-    y int
+    var x int
+    var y int
 end 'Point'
 ```
 
@@ -69,8 +69,8 @@ Methods implementing interface requirements are defined **inside the struct body
 
 ```maxon
 struct Point is Hashable
-    x int
-    y int
+    var x int
+    var y int
 
     function Hashable.hash() int
         return x + y * 31
@@ -88,8 +88,8 @@ Non-interface methods (methods that don't implement any interface) use simple `f
 
 ```maxon
 struct Point
-    x int
-    y int
+    var x int
+    var y int
 
     export function getX() int
         return x
@@ -118,8 +118,8 @@ interface Cloneable
 end 'Cloneable'
 
 struct Point is Cloneable
-    x int
-    y int
+    var x int
+    var y int
 
     function Cloneable.clone() Point
         return Point{x: x, y: y}
@@ -137,7 +137,7 @@ interface Container uses Element
 end 'Container'
 
 struct IntArray is Container with int
-    data [10]int
+    var data [10]int
     
     function Container.get(index int) int
         return data[index]
@@ -191,8 +191,8 @@ interface Hashable
 end 'Hashable'
 
 struct Point is Hashable
-    x int
-    y int
+    var x int
+    var y int
 
     function Hashable.hash() int
         return x + y * 31
@@ -221,8 +221,8 @@ interface Hashable
 end 'Hashable'
 
 struct Point is Hashable
-    x int
-    y int
+    var x int
+    var y int
 
     function Hashable.hash() int
         return x + y * 31
@@ -247,7 +247,7 @@ interface Describable
 end 'Describable'
 
 struct Counter is Describable
-    count int
+    var count int
 
     function Describable.describe() int
         return 100 + count
@@ -275,7 +275,7 @@ interface Calculator
 end 'Calculator'
 
 struct Accumulator is Calculator
-    total int
+    var total int
 
     function Calculator.add(n int) int
         return total + n
@@ -303,8 +303,8 @@ interface Equatable
 end 'Equatable'
 
 struct Point is Hashable, Equatable
-    x int
-    y int
+    var x int
+    var y int
 
     function Hashable.hash() int
         return x + y
@@ -334,8 +334,8 @@ interface Movable
 end 'Movable'
 
 struct Point is Movable
-    x int
-    y int
+    var x int
+    var y int
 
     function Movable.move(dx int, dy int) Point
         return Point{x: x + dx, y: y + dy}
@@ -360,7 +360,7 @@ interface Incrementable
 end 'Incrementable'
 
 struct Value is Incrementable
-    n int
+    var n int
 
     function Incrementable.inc() int
         return n + 1
@@ -386,7 +386,7 @@ interface ThreeMethods
 end 'ThreeMethods'
 
 struct Incomplete is ThreeMethods
-    value int
+    var value int
 
     function ThreeMethods.one() int
         return 1
@@ -411,7 +411,7 @@ Partial interface implementation: struct 'Incomplete' is missing 2 method(s):
 <!-- test: non-interface-method -->
 ```maxon
 struct Calculator
-    value int
+    var value int
 
     function double() int
         return value * 2

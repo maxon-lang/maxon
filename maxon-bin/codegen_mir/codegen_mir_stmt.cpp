@@ -204,29 +204,43 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			namedValues[varDecl->name] = structAlloca;
 			variableTypes[varDecl->name] = structInitExpr->structName;
 
-			// Initialize fields
+			// Initialize fields - iterate over all struct fields and use provided value or default
 			const auto &fields = structFields[structInitExpr->structName];
+			const auto &defaults = structFieldDefaults[structInitExpr->structName];
+
+			// Build a map of provided field values for quick lookup
+			std::map<std::string, const StructInitField *> providedFields;
 			for (const auto &initField : structInitExpr->fields) {
-				int fieldIndex = -1;
-				std::string fieldTypeStr;
-				for (size_t j = 0; j < fields.size(); j++) {
-					if (fields[j].first == initField.name) {
-						fieldIndex = static_cast<int>(j);
-						fieldTypeStr = fields[j].second;
-						break;
+				providedFields[initField.name] = &initField;
+			}
+
+			for (size_t fieldIndex = 0; fieldIndex < fields.size(); fieldIndex++) {
+				const std::string &fieldName = fields[fieldIndex].first;
+				const std::string &fieldTypeStr = fields[fieldIndex].second;
+
+				mir::MIRValue *fieldPtr = builder->createStructGEP(structType, structAlloca,
+																   static_cast<int>(fieldIndex), fieldName);
+
+				// Get the value expression - either from provided init or from default
+				ExprAST *valueExpr = nullptr;
+				auto providedIt = providedFields.find(fieldName);
+				if (providedIt != providedFields.end()) {
+					valueExpr = providedIt->second->value.get();
+				} else {
+					// Use default value
+					auto defaultIt = defaults.find(fieldName);
+					if (defaultIt != defaults.end()) {
+						valueExpr = defaultIt->second;
 					}
 				}
 
-				if (fieldIndex < 0) {
-					throw std::runtime_error("Unknown field '" + initField.name +
+				if (valueExpr == nullptr) {
+					throw std::runtime_error("No value for field '" + fieldName +
 											 "' in struct '" + structInitExpr->structName + "'");
 				}
 
-				mir::MIRValue *fieldPtr = builder->createStructGEP(structType, structAlloca,
-																   fieldIndex, initField.name);
-
 				// Handle array field initialization
-				if (auto *arrayLit = dynamic_cast<ArrayLiteralExprAST *>(initField.value.get())) {
+				if (auto *arrayLit = dynamic_cast<ArrayLiteralExprAST *>(valueExpr)) {
 					// Array literal for struct field - initialize in place
 					if (!arrayLit->values.empty()) {
 						// Value-initialized array [1, 2, 3]
@@ -234,7 +248,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 							mir::MIRValue *elemValue = generateExpr(arrayLit->values[i].get());
 							mir::MIRValue *elemPtr = builder->createArrayGEP(elemValue->type, fieldPtr,
 																			 mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), i),
-																			 initField.name + ".elem");
+																			 fieldName + ".elem");
 							builder->createStore(elemValue, elemPtr);
 						}
 					} else {
@@ -256,7 +270,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 						structTypes[unsizedArrayTypeName] = unsizedArrayType;
 					}
 
-					auto *varExpr = dynamic_cast<VariableExprAST *>(initField.value.get());
+					auto *varExpr = dynamic_cast<VariableExprAST *>(valueExpr);
 					if (varExpr) {
 						std::string varType = variableTypes[varExpr->name];
 						// Check if this is a variable-sized array (type starts with [])
@@ -273,26 +287,26 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 								mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "length");
 
 								// Store into the fat pointer field
-								mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, fieldPtr, 0, initField.name + ".ptr");
+								mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, fieldPtr, 0, fieldName + ".ptr");
 								builder->createStore(dataPtr, dataPtrField);
-								mir::MIRValue *lenField = builder->createStructGEP(unsizedArrayType, fieldPtr, 1, initField.name + ".len");
+								mir::MIRValue *lenField = builder->createStructGEP(unsizedArrayType, fieldPtr, 1, fieldName + ".len");
 								builder->createStore(length, lenField);
 							} else {
 								throw std::runtime_error("Unknown variable in struct field init: " + varExpr->name);
 							}
 						} else {
 							// Not a variable-sized array - use regular field value
-							mir::MIRValue *fieldValue = generateExpr(initField.value.get());
+							mir::MIRValue *fieldValue = generateExpr(valueExpr);
 							builder->createStore(fieldValue, fieldPtr);
 						}
 					} else {
 						// Not a variable reference - use regular field value
-						mir::MIRValue *fieldValue = generateExpr(initField.value.get());
+						mir::MIRValue *fieldValue = generateExpr(valueExpr);
 						builder->createStore(fieldValue, fieldPtr);
 					}
 				} else {
 					// Regular field value
-					mir::MIRValue *fieldValue = generateExpr(initField.value.get());
+					mir::MIRValue *fieldValue = generateExpr(valueExpr);
 					builder->createStore(fieldValue, fieldPtr);
 				}
 			}
@@ -750,24 +764,38 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 				throw std::runtime_error("Unknown struct type: " + structInit->structName);
 			}
 
+			const auto &fieldList = structFields[structInit->structName];
+			const auto &defaults = structFieldDefaults[structInit->structName];
+
+			// Build a map of provided field values
+			std::map<std::string, const StructInitField *> providedFields;
 			for (const auto &field : structInit->fields) {
-				const auto &fieldList = structFields[structInit->structName];
-				int fieldIndex = -1;
-				for (size_t j = 0; j < fieldList.size(); j++) {
-					if (fieldList[j].first == field.name) {
-						fieldIndex = static_cast<int>(j);
-						break;
+				providedFields[field.name] = &field;
+			}
+
+			for (size_t fieldIndex = 0; fieldIndex < fieldList.size(); fieldIndex++) {
+				const std::string &fieldName = fieldList[fieldIndex].first;
+
+				// Get the value expression - either from provided init or from default
+				ExprAST *valueExpr = nullptr;
+				auto providedIt = providedFields.find(fieldName);
+				if (providedIt != providedFields.end()) {
+					valueExpr = providedIt->second->value.get();
+				} else {
+					auto defaultIt = defaults.find(fieldName);
+					if (defaultIt != defaults.end()) {
+						valueExpr = defaultIt->second;
 					}
 				}
 
-				if (fieldIndex < 0) {
-					throw std::runtime_error("Unknown field '" + field.name +
+				if (valueExpr == nullptr) {
+					throw std::runtime_error("No value for field '" + fieldName +
 											 "' in struct '" + structInit->structName + "'");
 				}
 
 				mir::MIRValue *fieldPtr = builder->createStructGEP(structType, elementPtr,
-																   fieldIndex, field.name);
-				mir::MIRValue *fieldVal = generateExpr(field.value.get());
+																   static_cast<int>(fieldIndex), fieldName);
+				mir::MIRValue *fieldVal = generateExpr(valueExpr);
 				builder->createStore(fieldVal, fieldPtr);
 			}
 		} else {
@@ -1443,34 +1471,47 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			// Create temporary alloca for the struct
 			mir::MIRValue *structAlloca = builder->createAlloca(structType, "ret.tmp");
 
-			// Initialize fields
+			// Initialize fields - iterate over all struct fields and use provided value or default
 			const auto &fields = structFields[structInitExpr->structName];
+			const auto &defaults = structFieldDefaults[structInitExpr->structName];
+
+			// Build a map of provided field values for quick lookup
+			std::map<std::string, const StructInitField *> providedFields;
 			for (const auto &initField : structInitExpr->fields) {
-				int fieldIndex = -1;
-				std::string fieldType;
-				for (size_t j = 0; j < fields.size(); j++) {
-					if (fields[j].first == initField.name) {
-						fieldIndex = static_cast<int>(j);
-						fieldType = fields[j].second;
-						break;
+				providedFields[initField.name] = &initField;
+			}
+
+			for (size_t fieldIndex = 0; fieldIndex < fields.size(); fieldIndex++) {
+				const std::string &fieldName = fields[fieldIndex].first;
+				const std::string &fieldType = fields[fieldIndex].second;
+
+				// Get the value expression - either from provided init or from default
+				ExprAST *valueExpr = nullptr;
+				auto providedIt = providedFields.find(fieldName);
+				if (providedIt != providedFields.end()) {
+					valueExpr = providedIt->second->value.get();
+				} else {
+					auto defaultIt = defaults.find(fieldName);
+					if (defaultIt != defaults.end()) {
+						valueExpr = defaultIt->second;
 					}
 				}
 
-				if (fieldIndex < 0) {
-					throw std::runtime_error("Unknown field '" + initField.name +
+				if (valueExpr == nullptr) {
+					throw std::runtime_error("No value for field '" + fieldName +
 											 "' in struct '" + structInitExpr->structName + "'");
 				}
 
-				mir::MIRValue *fieldValue = generateExpr(initField.value.get());
+				mir::MIRValue *fieldValue = generateExpr(valueExpr);
 				mir::MIRValue *fieldPtr = builder->createStructGEP(structType, structAlloca,
-																   fieldIndex, initField.name);
+																   static_cast<int>(fieldIndex), fieldName);
 
 				// If the field is an unsized array type (like []byte), we need to handle
 				// the conversion from either a fat pointer, static array, or variable-sized array
 				if (fieldType.size() >= 2 && fieldType[0] == '[' && fieldType[1] == ']') {
 					// Get the value's type if it's a variable
 					std::string valueType;
-					auto *varExpr = dynamic_cast<VariableExprAST *>(initField.value.get());
+					auto *varExpr = dynamic_cast<VariableExprAST *>(valueExpr);
 					if (varExpr) {
 						auto it = variableTypes.find(varExpr->name);
 						if (it != variableTypes.end()) {
@@ -1515,10 +1556,10 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 							// Store into the fat pointer field
 							mir::MIRValue *fatPtrDataPtr = builder->createStructGEP(fatPtrType, fieldPtr, 0,
-																					initField.name + ".ptr");
+																					fieldName + ".ptr");
 							builder->createStore(dataPtr, fatPtrDataPtr);
 							mir::MIRValue *fatPtrLenPtr = builder->createStructGEP(fatPtrType, fieldPtr, 1,
-																				   initField.name + ".len");
+																				   fieldName + ".len");
 							builder->createStore(length, fatPtrLenPtr);
 						} else {
 							throw std::runtime_error("Unknown variable in return struct field init: " + varExpr->name);
@@ -1530,7 +1571,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 						// Store the data pointer (field 0 of the fat pointer)
 						mir::MIRValue *fatPtrDataPtr = builder->createStructGEP(fatPtrType, fieldPtr, 0,
-																				initField.name + ".ptr");
+																				fieldName + ".ptr");
 						builder->createStore(fieldValue, fatPtrDataPtr);
 
 						// Store the length (field 1 of the fat pointer)
@@ -1558,7 +1599,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 													mir::MIRValue *selfLenVal = builder->createLoad(
 														mir::MIRType::getInt32(), selfLenPtr, "self._len.val");
 													mir::MIRValue *fatPtrLenPtr = builder->createStructGEP(
-														fatPtrType, fieldPtr, 1, initField.name + ".len");
+														fatPtrType, fieldPtr, 1, fieldName + ".len");
 													builder->createStore(selfLenVal, fatPtrLenPtr);
 													goto done_len_store;
 												}
@@ -1572,13 +1613,13 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 						{
 							// Fallback: use static array size
 							mir::MIRValue *fatPtrLenPtr = builder->createStructGEP(fatPtrType, fieldPtr, 1,
-																				   initField.name + ".len");
+																				   fieldName + ".len");
 							builder->createStore(builder->getInt32(strLen), fatPtrLenPtr);
 						}
 					done_len_store:;
 					} else {
 						// Unsized array - load the fat pointer struct and store it
-						mir::MIRValue *fatPtrValue = builder->createLoad(fatPtrType, fieldValue, initField.name + ".fatptr");
+						mir::MIRValue *fatPtrValue = builder->createLoad(fatPtrType, fieldValue, fieldName + ".fatptr");
 						builder->createStore(fatPtrValue, fieldPtr);
 					}
 				} else {

@@ -371,6 +371,12 @@ static int getNumericLiteralType(const std::string &text, lsp::Position pos) {
 		return 0;
 	}
 
+	// First check if the character at the cursor is even a digit
+	char cursorChar = line[pos.character];
+	if (!std::isdigit(cursorChar)) {
+		return 0;
+	}
+
 	// Find the word boundaries at cursor position
 	int start = pos.character;
 	int end = pos.character;
@@ -382,6 +388,15 @@ static int getNumericLiteralType(const std::string &text, lsp::Position pos) {
 
 	while (end < (int)line.length() && (std::isdigit(line[end]) || line[end] == '.' || line[end] == 'b')) {
 		end++;
+	}
+
+	// Check if this digit is part of an identifier (e.g., "c2", "var2name")
+	// An identifier can have letters/underscores before or after
+	if (start > 0 && (std::isalpha(line[start - 1]) || line[start - 1] == '_')) {
+		return 0; // It's part of an identifier, not a numeric literal
+	}
+	if (end < (int)line.length() && (std::isalpha(line[end]) || line[end] == '_')) {
+		return 0; // It's part of an identifier, not a numeric literal
 	}
 
 	if (start >= end) {
@@ -446,8 +461,76 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
 
 	lsp::Hover hover;
 
-	// Check if this is a member access (e.g., hovering over "capacity" in "arr.capacity")
+	// Check if this is a field name in a struct literal (e.g., "value" in "Counter{value: 10}")
+	// Pattern: StructName{..., fieldName: ...}
 	std::string textBeforeCursor = getTextBeforePosition(doc->text, pos);
+
+	// Check if we're inside a struct literal by looking for pattern: Identifier{...fieldName
+	// where fieldName is followed by a colon
+	std::string fullLine;
+	{
+		std::istringstream stream(doc->text);
+		std::string line;
+		int currentLine = 0;
+		while (std::getline(stream, line) && currentLine < pos.line) {
+			currentLine++;
+		}
+		if (currentLine == pos.line) {
+			fullLine = line;
+		}
+	}
+
+	// Check if word is followed by a colon (indicating it's a field name in struct literal)
+	size_t wordEnd = pos.character;
+	while (wordEnd < fullLine.length() && (std::isalnum(fullLine[wordEnd]) || fullLine[wordEnd] == '_')) {
+		wordEnd++;
+	}
+	// Skip whitespace after the word
+	size_t colonPos = wordEnd;
+	while (colonPos < fullLine.length() && std::isspace(fullLine[colonPos])) {
+		colonPos++;
+	}
+
+	if (colonPos < fullLine.length() && fullLine[colonPos] == ':') {
+		// This word is followed by a colon - likely a field name in struct literal
+		// Now find the struct name by looking backwards for "StructName{"
+		// Find the last '{' before the cursor
+		size_t bracePos = textBeforeCursor.find_last_of('{');
+		if (bracePos != std::string::npos && bracePos > 0) {
+			// Extract struct name before the brace
+			size_t structEnd = bracePos;
+			size_t structStart = structEnd - 1;
+			while (structStart > 0 && (std::isalnum(textBeforeCursor[structStart - 1]) || textBeforeCursor[structStart - 1] == '_')) {
+				structStart--;
+			}
+			std::string structName = textBeforeCursor.substr(structStart, structEnd - structStart);
+
+			if (!structName.empty()) {
+				// Look up the struct in semantic cache
+				auto cacheIt = semanticCache.find(doc->uri);
+				if (cacheIt != semanticCache.end()) {
+					const SemanticInfo &semInfo = cacheIt->second;
+					auto structIt = semInfo.structs.find(structName);
+					if (structIt != semInfo.structs.end()) {
+						// Find the field
+						for (const auto &field : structIt->second.fields) {
+							if (field.name == word) {
+								std::string mutability = field.isImmutable ? "let" : "var";
+								std::string fieldDisplay = mutability + " " + field.name + ": " + field.type;
+								if (field.isImmutable && !field.defaultValue.empty()) {
+									fieldDisplay += " = " + field.defaultValue;
+								}
+								hover.contents = "```maxon\n(field) " + fieldDisplay + "\n```\n\nField of struct `" + structName + "`";
+								return hover;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Check if this is a member access (e.g., hovering over "capacity" in "arr.capacity")
 	size_t lastDot = textBeforeCursor.find_last_of('.');
 
 	if (lastDot != std::string::npos) {
@@ -480,7 +563,12 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
 						// Find the field
 						for (const auto &field : structIt->second.fields) {
 							if (field.name == word) {
-								hover.contents = "```maxon\n(field) " + field.name + ": " + field.type + "\n```\n\nField of struct `" + typeName + "`";
+								std::string mutability = field.isImmutable ? "let" : "var";
+								std::string fieldDisplay = mutability + " " + field.name + ": " + field.type;
+								if (field.isImmutable && !field.defaultValue.empty()) {
+									fieldDisplay += " = " + field.defaultValue;
+								}
+								hover.contents = "```maxon\n(field) " + fieldDisplay + "\n```\n\nField of struct `" + typeName + "`";
 								return hover;
 							}
 						}
@@ -1111,7 +1199,8 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 				StdlibStruct stdlibStruct;
 				stdlibStruct.name = structDef->name;
 				for (const auto &field : structDef->fields) {
-					stdlibStruct.fields.push_back(StructFieldInfo(field.name, field.type, field.line, field.column));
+					stdlibStruct.fields.push_back(StructFieldInfo(field.name, field.type, field.isImmutable,
+																  field.defaultValue != nullptr, "", field.line, field.column));
 				}
 				stdlibStruct.conformsTo = structDef->conformsTo;
 				stdlibStruct.filePath = filePath;

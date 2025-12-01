@@ -49,6 +49,7 @@ class MIRCodeGenerator {
 	// Struct type definitions
 	std::map<std::string, mir::MIRType *> structTypes;
 	std::map<std::string, std::vector<std::pair<std::string, std::string>>> structFields;
+	std::map<std::string, std::map<std::string, ExprAST *>> structFieldDefaults; // Field default value expressions
 	std::map<std::string, std::vector<std::string>> structConformsTo;				 // Track interface conformance
 	std::map<std::string, std::map<std::string, std::string>> structTypeAssignments; // Associated type assignments
 
@@ -115,6 +116,7 @@ class MIRCodeGenerator {
 	mir::MIRType *getTypeFromStringNoMark(const std::string &typeStr); // For struct field definitions
 	mir::MIRType *getParamTypeFromString(const std::string &typeStr);
 	std::string getMaxonTypeFromMIRType(mir::MIRType *type);
+	std::string inferExprType(ExprAST *expr); // For struct field type inference
 	void markFieldTypesUsed(mir::MIRType *type);
 	bool isArrayParam(const std::string &typeStr);
 	bool isStructParameter(const std::string &varName);

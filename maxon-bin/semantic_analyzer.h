@@ -56,11 +56,15 @@ struct FunctionInfo {
 struct StructFieldInfo {
 	std::string name;
 	std::string type;
+	bool isImmutable;		  // true for 'let', false for 'var'
+	bool hasDefault;		  // true if field has a default value
+	std::string defaultValue; // string representation of default value (for hover display)
 	int line;
 	int column;
 
-	StructFieldInfo(const std::string &n, const std::string &t, int l = 0, int c = 0)
-		: name(n), type(t), line(l), column(c) {}
+	StructFieldInfo(const std::string &n, const std::string &t, bool immutable = false,
+					bool hasDef = false, const std::string &defVal = "", int l = 0, int c = 0)
+		: name(n), type(t), isImmutable(immutable), hasDefault(hasDef), defaultValue(defVal), line(l), column(c) {}
 };
 
 // Struct information

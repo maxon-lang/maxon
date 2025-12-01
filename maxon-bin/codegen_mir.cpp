@@ -47,6 +47,27 @@ void MIRCodeGenerator::logTrace(const std::string &msg) {
 // Type Conversion Helpers
 //==============================================================================
 
+// Infer the type of an expression (for struct field default values with type inference)
+std::string MIRCodeGenerator::inferExprType(ExprAST *expr) {
+	if (dynamic_cast<NumberExprAST *>(expr)) {
+		return "int";
+	}
+	if (dynamic_cast<FloatExprAST *>(expr)) {
+		return "float";
+	}
+	if (dynamic_cast<BooleanExprAST *>(expr)) {
+		return "bool";
+	}
+	if (dynamic_cast<CharacterExprAST *>(expr)) {
+		return "char";
+	}
+	if (dynamic_cast<StringLiteralExprAST *>(expr)) {
+		return "string";
+	}
+	// For more complex expressions, default to int (semantic analyzer should have caught errors)
+	return "int";
+}
+
 // Mark a struct type and all its field types as used (for lazy type emission)
 void MIRCodeGenerator::markFieldTypesUsed(mir::MIRType *type) {
 	if (!type || type->kind != mir::MIRTypeKind::Struct)
@@ -547,10 +568,22 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	for (const auto &structDef : program->structs) {
 		std::vector<mir::MIRType *> fieldTypes;
 		std::vector<std::pair<std::string, std::string>> fields;
+		std::map<std::string, ExprAST *> defaults;
 
 		for (const auto &field : structDef->fields) {
-			fieldTypes.push_back(getTypeFromStringNoMark(field.type));
-			fields.push_back({field.name, field.type});
+			std::string fieldType = field.type;
+
+			// Type inference from default value (mirrors semantic analyzer logic)
+			if (fieldType.empty() && field.defaultValue != nullptr) {
+				fieldType = inferExprType(field.defaultValue.get());
+			}
+
+			fieldTypes.push_back(getTypeFromStringNoMark(fieldType));
+			fields.push_back({field.name, fieldType});
+			// Store pointer to default value expression (if any)
+			if (field.defaultValue != nullptr) {
+				defaults[field.name] = field.defaultValue.get();
+			}
 		}
 
 		logTrace("Defining struct type: " + structDef->name + " (" + std::to_string(fieldTypes.size()) + " fields)");
@@ -560,6 +593,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		structType->fieldTypes = fieldTypes;
 		structType->recomputeSize();
 		structFields[structDef->name] = fields;
+		structFieldDefaults[structDef->name] = defaults;
 	}
 
 	// Second pass: Create all function declarations and register extern functions

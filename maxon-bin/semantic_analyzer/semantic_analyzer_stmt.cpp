@@ -186,18 +186,28 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 					std::string elementType = arrayType.substr(closeBracket + 1);
 
 					if (lookupStruct(elementType) != nullptr) {
-						// Verify member exists
+						// Verify member exists and check immutability
 						const auto &structInfo = structs.at(elementType);
 						bool memberFound = false;
+						bool fieldIsImmutable = false;
+						int fieldLine = 0;
 						for (const auto &field : structInfo.fields) {
 							if (field.name == arrayMemberAssign->memberName) {
 								memberFound = true;
+								fieldIsImmutable = field.isImmutable;
+								fieldLine = field.line;
 								break;
 							}
 						}
 
 						if (!memberFound) {
 							addError("Struct '" + elementType + "' has no field named '" + arrayMemberAssign->memberName + "'",
+									 stmt->line, stmt->column);
+						} else if (fieldIsImmutable) {
+							addError("Cannot assign to immutable field '" + arrayMemberAssign->memberName +
+										 "' of struct '" + elementType + "'" +
+										 "\n  Field declared with 'let' at line " + std::to_string(fieldLine) +
+										 "\n  Note: Fields declared with 'let' are immutable. Use 'var' for mutable fields",
 									 stmt->line, stmt->column);
 						}
 					} else {
@@ -241,10 +251,14 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 				// Verify member exists
 				bool memberFound = false;
 				std::string memberType;
+				bool fieldIsImmutable = false;
+				int fieldLine = 0;
 				for (const auto &field : structInfo->fields) {
 					if (field.name == memberAssign->memberName) {
 						memberFound = true;
 						memberType = field.type;
+						fieldIsImmutable = field.isImmutable;
+						fieldLine = field.line;
 						break;
 					}
 				}
@@ -253,6 +267,15 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 					addError("Struct '" + structType + "' has no field named '" + memberAssign->memberName + "'",
 							 stmt->line, stmt->column);
 				} else {
+					// Check if the field itself is immutable (declared with 'let')
+					if (fieldIsImmutable) {
+						addError("Cannot assign to immutable field '" + memberAssign->memberName +
+									 "' of struct '" + structType + "'" +
+									 "\n  Field declared with 'let' at line " + std::to_string(fieldLine) +
+									 "\n  Note: Fields declared with 'let' are immutable. Use 'var' for mutable fields",
+								 stmt->line, stmt->column);
+					}
+
 					// Check type compatibility
 					std::string valueType = analyzeExpression(memberAssign->value.get());
 					if (!typesMatch(memberType, valueType)) {
@@ -288,10 +311,14 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 				// Find the array field
 				bool memberFound = false;
 				std::string memberType;
+				bool fieldIsImmutable = false;
+				int fieldLine = 0;
 				for (const auto &field : structInfo->fields) {
 					if (field.name == memberArrayAssign->memberName) {
 						memberFound = true;
 						memberType = field.type;
+						fieldIsImmutable = field.isImmutable;
+						fieldLine = field.line;
 						break;
 					}
 				}
@@ -300,6 +327,15 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 					addError("Struct '" + structType + "' has no field named '" + memberArrayAssign->memberName + "'",
 							 stmt->line, stmt->column);
 				} else {
+					// Check if the field itself is immutable (declared with 'let')
+					if (fieldIsImmutable) {
+						addError("Cannot assign to immutable field '" + memberArrayAssign->memberName +
+									 "' of struct '" + structType + "'" +
+									 "\n  Field declared with 'let' at line " + std::to_string(fieldLine) +
+									 "\n  Note: Fields declared with 'let' are immutable. Use 'var' for mutable fields",
+								 stmt->line, stmt->column);
+					}
+
 					// Verify it's an array type
 					if (memberType.empty() || memberType[0] != '[') {
 						addError("Field '" + memberArrayAssign->memberName + "' is not an array type",

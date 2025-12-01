@@ -447,10 +447,25 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 									 ", column " + std::to_string(currentColumn()));
 		}
 
-		// Parse field: name type
-		Token fieldNameToken = expect(TokenType::IDENTIFIER, "Expected field name or 'function' keyword");
+		// Parse field: (let|var) name [type] [= defaultValue]
+		bool isImmutable;
+		if (checkKeyword("let")) {
+			advance();
+			isImmutable = true;
+		} else if (checkKeyword("var")) {
+			advance();
+			isImmutable = false;
+		} else {
+			throw std::runtime_error("Expected 'let' or 'var' for struct field declaration at line " +
+									 std::to_string(currentLine()) + ", column " +
+									 std::to_string(currentColumn()) +
+									 "\n  Note: Struct fields must be declared with 'let' (immutable) or 'var' (mutable)");
+		}
+
+		Token fieldNameToken = expect(TokenType::IDENTIFIER, "Expected field name after 'let' or 'var'");
 		std::string fieldName = fieldNameToken.value;
 
+		// Parse optional type - type is required unless we have a default value
 		std::string fieldType;
 		// Check for array type: [size]type or []type
 		if (check(TokenType::LBRACKET)) {
@@ -484,15 +499,28 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 		} else if (Lexer::isTypeToken(currentToken())) {
 			fieldType = std::string(currentValue());
 			advance();
-		} else if (check(TokenType::IDENTIFIER)) {
+		} else if (check(TokenType::IDENTIFIER) && !check(TokenType::ASSIGN)) {
+			// It's a type (struct name), not an assignment
 			fieldType = parseQualifiedName("struct field type");
-		} else {
-			throw std::runtime_error("Expected type after field name in struct field at line " +
-									 std::to_string(currentLine()) + ", column " +
-									 std::to_string(currentColumn()));
+		}
+		// else: no type, must have default value for type inference
+
+		// Parse optional default value
+		std::unique_ptr<ExprAST> defaultValue = nullptr;
+		if (check(TokenType::ASSIGN)) {
+			advance(); // consume '='
+			defaultValue = parseLogicalOr();
 		}
 
-		fields.push_back(StructField(fieldName, fieldType, fieldNameToken.line, fieldNameToken.column));
+		// Validate: must have either type or default value (or both)
+		if (fieldType.empty() && defaultValue == nullptr) {
+			throw std::runtime_error("Field '" + fieldName + "' must have a type annotation or default value at line " +
+									 std::to_string(fieldNameToken.line) + ", column " +
+									 std::to_string(fieldNameToken.column));
+		}
+
+		fields.push_back(StructField(fieldName, fieldType, isImmutable, std::move(defaultValue),
+									 fieldNameToken.line, fieldNameToken.column));
 	}
 
 	expectKeywordAdvance("end", "Expected 'end' to close struct");

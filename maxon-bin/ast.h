@@ -426,12 +426,15 @@ class InterfaceDefAST : public ASTNode {
 // Struct field definition
 struct StructField {
 	std::string name;
-	std::string type;
+	std::string type;					   // Can be "" if type is inferred from defaultValue
+	bool isImmutable;					   // true for 'let', false for 'var'
+	std::unique_ptr<ExprAST> defaultValue; // Optional default value expression
 	int line;
 	int column;
 
-	StructField(const std::string &n, const std::string &t, int l = 0, int c = 0)
-		: name(n), type(t), line(l), column(c) {}
+	StructField(const std::string &n, const std::string &t, bool immutable,
+				std::unique_ptr<ExprAST> defVal = nullptr, int l = 0, int c = 0)
+		: name(n), type(t), isImmutable(immutable), defaultValue(std::move(defVal)), line(l), column(c) {}
 };
 
 // Struct initialization field (name: value pair)

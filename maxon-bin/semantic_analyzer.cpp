@@ -1,6 +1,36 @@
 #include "semantic_analyzer.h"
 #include "lexer.h"
 #include <algorithm>
+#include <sstream>
+
+// Helper to convert simple literal expressions to string for display
+static std::string exprToString(ExprAST *expr) {
+	if (!expr)
+		return "";
+
+	if (auto *num = dynamic_cast<NumberExprAST *>(expr)) {
+		return std::to_string(num->value);
+	}
+	if (auto *flt = dynamic_cast<FloatExprAST *>(expr)) {
+		std::ostringstream ss;
+		ss << flt->value;
+		return ss.str();
+	}
+	if (auto *boolExpr = dynamic_cast<BooleanExprAST *>(expr)) {
+		return boolExpr->value ? "true" : "false";
+	}
+	if (auto *ch = dynamic_cast<CharacterExprAST *>(expr)) {
+		return std::string("'") + ch->value + "'";
+	}
+	if (auto *str = dynamic_cast<StringLiteralExprAST *>(expr)) {
+		return "\"" + str->value + "\"";
+	}
+	if (auto *byteExpr = dynamic_cast<ByteExprAST *>(expr)) {
+		return std::to_string(byteExpr->value) + "b";
+	}
+	// For complex expressions, just indicate there's a default
+	return "<expr>";
+}
 
 SemanticAnalyzer::SemanticAnalyzer() : loopDepth(0) {}
 
@@ -142,7 +172,35 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 							 field.line, field.column);
 				} else {
 					fieldNames.insert(field.name);
-					fields.push_back(StructFieldInfo(field.name, field.type, field.line, field.column));
+
+					std::string fieldType = field.type;
+					bool hasDefault = (field.defaultValue != nullptr);
+
+					// Type inference from default value
+					if (fieldType.empty() && hasDefault) {
+						fieldType = analyzeExpression(field.defaultValue.get());
+						if (fieldType == "error") {
+							addError("Cannot infer type for field '" + field.name + "' from default value",
+									 field.line, field.column);
+							fieldType = "error";
+						}
+					}
+
+					// Type check: default value must match declared type
+					if (!fieldType.empty() && hasDefault && fieldType != "error") {
+						std::string defaultType = analyzeExpression(field.defaultValue.get());
+						if (!typesMatch(fieldType, defaultType)) {
+							addError("Default value type '" + defaultType +
+									 "' does not match field type '" + fieldType + "' for field '" + field.name + "'",
+									 field.line, field.column);
+						}
+					}
+
+					// Get string representation of default value for display
+					std::string defaultValueStr = hasDefault ? exprToString(field.defaultValue.get()) : "";
+
+					fields.push_back(StructFieldInfo(field.name, fieldType, field.isImmutable,
+													 hasDefault, defaultValueStr, field.line, field.column));
 				}
 			}
 

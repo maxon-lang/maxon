@@ -24,7 +24,7 @@ end 'Container'
 **Struct conformance with type binding:**
 ```maxon
 struct IntArray is Container with int
-    data [100]int
+    var data [100]int
     
     function Container.get(index int) int
         return data[index]
@@ -88,8 +88,8 @@ Methods have an implicit `self` parameter. Inside method bodies, bare identifier
 
 ```maxon
 struct Counter
-    count int
-    
+    var count int
+
     function increment() Counter
         return Counter{count: count + 1}  // 'count' resolves to 'self.count'
     end 'increment'
@@ -100,8 +100,8 @@ Parameters shadow fields - use explicit `self.fieldName` to access shadowed fiel
 
 ```maxon
 struct Box
-    value int
-    
+    var value int
+
     function setValue(value int) Box
         return Box{value: value}  // parameter 'value', not field
     end 'setValue'
@@ -134,8 +134,8 @@ Structs bind concrete types to associated types using `with` after the interface
 
 ```maxon
 struct IntArray is Container with int
-    data [100]int
-    len int
+    var data [100]int
+    var len int
 
     function Container.get(index int) int
         return data[index]
@@ -161,9 +161,9 @@ interface Pair uses First, Second
 end 'Pair'
 
 struct IntFloat is Pair with int, float
-    a int
-    b float
-    
+    var a int
+    var b float
+
     function Pair.getFirst() int
         return a
     end 'getFirst'
@@ -227,8 +227,8 @@ interface Summable uses Element
 end 'Summable'
 
 struct IntPair is Summable with int
-    a int
-    b int
+    var a int
+    var b int
 
     function Summable.sum() int
         return a + b
@@ -263,7 +263,7 @@ interface HasElement uses Element
 end 'HasElement'
 
 struct Broken is HasElement
-    value int
+    var value int
 
     function HasElement.get() int
         return value
@@ -299,7 +299,7 @@ interface TwoMethods uses Element
 end 'TwoMethods'
 
 struct Partial is TwoMethods with int
-    value int
+    var value int
 
     function TwoMethods.first() int
         return value
@@ -329,7 +329,7 @@ interface Producer uses Output
 end 'Producer'
 
 struct WrongReturn is Producer with float
-    value int
+    var value int
 
     function Producer.produce() int
         return value
@@ -358,7 +358,7 @@ interface Wrapper uses Inner
 end 'Wrapper'
 
 struct IntBox is Wrapper with int
-    value int
+    var value int
 
     function Wrapper.unwrap() int
         return value
@@ -383,7 +383,7 @@ interface Accumulator uses Item
 end 'Accumulator'
 
 struct IntSum is Accumulator with int
-    sum int
+    var sum int
 
     function Accumulator.add(item int) IntSum
         return IntSum{sum: sum + item}
@@ -414,8 +414,8 @@ interface Pair uses First, Second
 end 'Pair'
 
 struct IntFloat is Pair with int, float
-    a int
-    b float
+    var a int
+    var b float
 
     function Pair.getFirst() int
         return a
@@ -445,7 +445,7 @@ interface CharSource uses Element
 end 'CharSource'
 
 struct SingleChar is CharSource with char
-    ch char
+    var ch char
 
     function CharSource.getChar() char
         return ch
@@ -470,7 +470,7 @@ interface ByteSource uses Element
 end 'ByteSource'
 
 struct SingleByte is ByteSource with byte
-    b byte
+    var b byte
 
     function ByteSource.getByte() byte
         return b
@@ -495,7 +495,7 @@ interface NeedsElement uses Element
 end 'NeedsElement'
 
 struct Missing is NeedsElement
-    value int
+    var value int
 
     function NeedsElement.get() int
         return value
@@ -529,7 +529,7 @@ interface TwoMethods uses Element
 end 'TwoMethods'
 
 struct Partial is TwoMethods with int
-    value int
+    var value int
 
     function TwoMethods.first() int
         return value
@@ -557,7 +557,7 @@ interface Typed uses Output
 end 'Typed'
 
 struct WrongType is Typed with float
-    value int
+    var value int
 
     function Typed.make() int
         return value
@@ -584,7 +584,7 @@ interface Acceptor uses Input
 end 'Acceptor'
 
 struct WrongParam is Acceptor with float
-    value int
+    var value int
 
     function Acceptor.accept(val int) int
         return value + val
@@ -611,7 +611,7 @@ interface Countable
 end 'Countable'
 
 struct Counter is Countable
-    count int
+    var count int
 
     function Countable.getCount() int
         return count
@@ -635,7 +635,7 @@ interface Addable
 end 'Addable'
 
 struct Number is Addable
-    value int
+    var value int
 
     function Addable.addOne() int
         return value + 1

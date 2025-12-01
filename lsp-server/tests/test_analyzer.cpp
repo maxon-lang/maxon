@@ -722,9 +722,9 @@ TEST_CASE("struct_field_completions_via_dot", "[analyzer]") {
 	analyzer.initializeStdlib("../../../stdlib");
 
 	// Correct Maxon syntax: var p = Point { x: 0, y: 0 }
-	auto doc = createTestDocument("struct Point\n    x int\n    y int\nend 'Point'\n\nfunction main() int\n    var p = Point { x: 0, y: 0 }\n    return p.x\nend 'main'");
+	auto doc = createTestDocument("struct Point\n    var x int\n    var y int\nend 'Point'\n\nfunction main() int\n    var p = Point { x: 0, y: 0 }\n    return p.x\nend 'main'");
 	analyzer.analyze(doc);
-	doc->text = "struct Point\n    x int\n    y int\nend 'Point'\n\nfunction main() int\n    var p = Point { x: 0, y: 0 }\n    return p.\nend 'main'";
+	doc->text = "struct Point\n    var x int\n    var y int\nend 'Point'\n\nfunction main() int\n    var p = Point { x: 0, y: 0 }\n    return p.\nend 'main'";
 
 	lsp::Position pos{7, 13}; // After "return p."
 	auto completions = analyzer.getCompletions(doc, pos);
