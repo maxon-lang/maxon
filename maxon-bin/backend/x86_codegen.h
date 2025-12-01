@@ -57,6 +57,10 @@ struct RegAllocInfo {
 	// to non-volatile registers in prologue. Each entry is {arrivalReg, destReg}
 	std::vector<std::pair<X86Reg, X86Reg>> intParamSaves;
 
+	// Float parameters that need to be spilled to stack (when XMM6-15 exhausted)
+	// Each entry is {arrivalXMM, stackOffset} where stackOffset is relative to RBP
+	std::vector<std::pair<X86Reg, int32_t>> floatParamSpills;
+
 	// Space reserved for outgoing stack arguments (beyond register args)
 	// On Win64, this is for args beyond the 4th; on SysV, beyond the 6th
 	uint32_t outgoingStackArgsSize = 0;

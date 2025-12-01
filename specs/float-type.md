@@ -114,3 +114,47 @@ end 'main'
 7
 ```
 
+
+<!-- test: many-float-params -->
+```maxon
+// Test function with 12 float parameters
+// On Windows x64: first 4 arrive in XMM0-3, rest on caller's stack
+// This tests both register and stack-passed float parameters
+function sumFloats(a float, b float, c float, d float, e float, f float, g float, h float, i float, j float, k float, l float) float
+    return a + b + c + d + e + f + g + h + i + j + k + l
+end 'sumFloats'
+
+function main() int
+    var result = sumFloats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0)
+    return trunc(result)
+end 'main'
+```
+```exitcode
+78
+```
+
+
+<!-- test: float-params-with-call -->
+```maxon
+// Test float parameters that must survive across a function call
+// The float params are live across the call to identity(), requiring callee-saved XMMs
+function identity(x float) float
+    return x
+end 'identity'
+
+function useFloats(a float, b float, c float, d float) float
+    // The call to identity() may clobber XMM0-3
+    // So a, b, c, d must be saved to callee-saved XMM6-9 or stack
+    var temp = identity(1.0)
+    return a + b + c + d + temp
+end 'useFloats'
+
+function main() int
+    var result = useFloats(10.0, 20.0, 30.0, 40.0)
+    return trunc(result)
+end 'main'
+```
+```exitcode
+101
+```
+

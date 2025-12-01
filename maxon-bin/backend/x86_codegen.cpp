@@ -134,6 +134,12 @@ void X86CodeGen::generatePrologue() {
 		encoder.movsdRR(save.second, save.first);
 	}
 
+	// Spill overflow float parameters to stack (when XMM6-15 are exhausted)
+	// These arrive in volatile XMM0-3 and must be saved before any calls
+	for (const auto &spill : regAlloc.floatParamSpills) {
+		encoder.movsdMR(X86Mem(X86Reg::RBP, spill.second), spill.first);
+	}
+
 	// Windows x64: Allocate shadow space if needed
 	if (callingConv == CallingConv::Win64) {
 		// Shadow space is handled in frameSize calculation
@@ -640,7 +646,8 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 						// No more XMM registers available, spill to stack
 						stackOffset -= 8;
 						regAlloc.stackSlots[key] = stackOffset;
-						// TODO: Add support for saving float params to stack
+						// Record that this float param needs to be saved from volatile XMM to stack
+						regAlloc.floatParamSpills.push_back({floatParamRegs[regIndex], stackOffset});
 					}
 				} else {
 					// Integer param arrives in volatile RCX/RDX/R8/R9
@@ -921,6 +928,12 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		for (auto &save : regAlloc.shiftedParamSaves) {
 			if (save.second < 0) {
 				save.second += adjustment;
+			}
+		}
+		// Adjust floatParamSpills offsets for spilled float parameters
+		for (auto &spill : regAlloc.floatParamSpills) {
+			if (spill.second < 0) {
+				spill.second += adjustment;
 			}
 		}
 	}

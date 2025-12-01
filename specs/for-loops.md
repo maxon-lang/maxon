@@ -322,11 +322,11 @@ function main() int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 14
+Semantic Error: line 5, column 14
 Cannot iterate over type 'int'
   For-loops require an iterable type: array, string, range()
 
-  4 |     for i in count 'loop'
+  5 |     for i in count 'loop'
     |              ^
 ```
 
@@ -342,12 +342,18 @@ function main() int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 14
+Semantic Error: line 5, column 14
 Cannot iterate over type 'bool'
   For-loops require an iterable type: array, string, range()
 
-  4 |     for i in flag 'loop'
+  5 |     for i in flag 'loop'
     |              ^
+
+Semantic Error: line 5, column 5
+The variable 'i' is assigned but its value is never used
+
+  5 |     for i in flag 'loop'
+    |     ^
 ```
 
 <!-- test: error.iterate-over-float -->
@@ -362,10 +368,16 @@ function main() int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 14
+Semantic Error: line 5, column 14
 Cannot iterate over type 'float'
   For-loops require an iterable type: array, string, range()
 
-  4 |     for i in val 'loop'
+  5 |     for i in val 'loop'
     |              ^
+
+Semantic Error: line 5, column 5
+The variable 'i' is assigned but its value is never used
+
+  5 |     for i in val 'loop'
+    |     ^
 ```
