@@ -604,11 +604,17 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 //==============================================================================
 
 void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
-								const std::map<std::string, size_t> *functionIndices) {
+								const std::map<std::string, size_t> *functionIndices,
+								const std::map<std::string, std::string> *functionReturnTypesIn) {
 	logProgress("Starting MIR generation");
 
 	// Clear function ID map for new generation
 	functionIdToMIR.clear();
+
+	// Copy function return types from semantic analyzer if provided
+	if (functionReturnTypesIn) {
+		functionReturnTypes = *functionReturnTypesIn;
+	}
 
 	// Declare runtime functions used by stdlib
 	getOrDeclareFunction("write_stdout", mir::MIRType::getInt32(),

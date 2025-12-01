@@ -329,7 +329,8 @@ std::string compileProgram(const CompilationOptions &options) {
 
 	int iteration = 0;
 	const int maxIterations = 10;
-	std::map<std::string, size_t> functionIndices; // Store function indices from semantic analysis
+	std::map<std::string, size_t> functionIndices;			// Store function indices from semantic analysis
+	std::map<std::string, std::string> functionReturnTypes; // Store function return types from semantic analysis
 	bool discoveredNewFiles = false;
 	std::unique_ptr<ProgramAST> mergedProgram; // Declare outside loop to preserve function IDs
 
@@ -368,6 +369,12 @@ std::string compileProgram(const CompilationOptions &options) {
 
 		// Store function indices for codegen optimization
 		functionIndices = analyzer.getFunctionIndices();
+
+		// Store function return types for codegen type inference
+		functionReturnTypes.clear();
+		for (const auto &[name, info] : analyzer.getFunctions()) {
+			functionReturnTypes[name] = info.returnType;
+		}
 
 		// Collect all undefined items and their corresponding stdlib files
 		std::set<std::string> filesToImport;
@@ -544,7 +551,7 @@ std::string compileProgram(const CompilationOptions &options) {
 	if (stats)
 		stats->startPhase("MIR Generation");
 	auto codegenStart = logger.startTimer();
-	codegen.generate(mergedProgram.get(), !options.compileOnly, &functionIndices);
+	codegen.generate(mergedProgram.get(), !options.compileOnly, &functionIndices, &functionReturnTypes);
 	logger.logElapsed(LogPhase::MIR, "MIR generation time", codegenStart);
 	if (stats) {
 		stats->endPhase("MIR Generation");

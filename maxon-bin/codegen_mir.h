@@ -45,6 +45,9 @@ class MIRCodeGenerator {
 	// Function ID to MIR function mapping (for fast lookups during codegen)
 	std::map<size_t, mir::MIRFunction *> functionIdToMIR;
 
+	// Function return types from semantic analyzer (name -> return type)
+	std::map<std::string, std::string> functionReturnTypes;
+
 	// Track which variables are struct parameters (passed by pointer)
 	std::set<std::string> structParameters;
 
@@ -54,7 +57,7 @@ class MIRCodeGenerator {
 	// Struct type definitions
 	std::map<std::string, mir::MIRType *> structTypes;
 	std::map<std::string, std::vector<std::pair<std::string, std::string>>> structFields;
-	std::map<std::string, std::map<std::string, ExprAST *>> structFieldDefaults; // Field default value expressions
+	std::map<std::string, std::map<std::string, ExprAST *>> structFieldDefaults;	 // Field default value expressions
 	std::map<std::string, std::vector<std::string>> structConformsTo;				 // Track interface conformance
 	std::map<std::string, std::map<std::string, std::string>> structTypeAssignments; // Associated type assignments
 
@@ -236,7 +239,11 @@ class MIRCodeGenerator {
 
 	// Main generation entry point
 	void generate(ProgramAST *program, bool needsEntryPoint = true,
-				  const std::map<std::string, size_t> *functionIndices = nullptr);
+				  const std::map<std::string, size_t> *functionIndices = nullptr,
+				  const std::map<std::string, std::string> *functionReturnTypesIn = nullptr);
+
+	// Get Maxon type of an expression (used for type-aware codegen)
+	std::string getExpressionMaxonType(ExprAST *expr);
 
 	// Optimization
 	void optimize(CompilerStats *stats = nullptr);

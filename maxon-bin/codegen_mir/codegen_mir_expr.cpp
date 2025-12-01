@@ -15,14 +15,10 @@
 // String Literal Generation
 //==============================================================================
 
-// Helper function to get Maxon type from an AST expression
+// Get Maxon type from an AST expression
 // This is used for type-aware code generation (e.g., Equatable comparison)
-// currentReceiverType is used for implicit field access resolution
-static std::string getExpressionMaxonType(ExprAST *expr,
-										  const std::map<std::string, std::string> &variableTypes,
-										  const std::map<std::string, mir::MIRType *> &structTypes,
-										  const std::map<std::string, std::vector<std::pair<std::string, std::string>>> &structFields,
-										  const std::string &currentReceiverType = "") {
+// Uses class member variables: variableTypes, structTypes, structFields, currentReceiverType, functionReturnTypes
+std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
 		auto it = variableTypes.find(varExpr->name);
 		if (it != variableTypes.end()) {
@@ -65,7 +61,7 @@ static std::string getExpressionMaxonType(ExprAST *expr,
 		std::string objectType;
 		if (memberAccess->object) {
 			// Recursive case: complex expression (e.g., a.b in a.b.c)
-			objectType = getExpressionMaxonType(memberAccess->object.get(), variableTypes, structTypes, structFields, currentReceiverType);
+			objectType = getExpressionMaxonType(memberAccess->object.get());
 		} else {
 			// Base case: simple variable access (e.g., self in self.field)
 			auto it = variableTypes.find(memberAccess->objectName);
@@ -102,8 +98,8 @@ static std::string getExpressionMaxonType(ExprAST *expr,
 	// Handle binary expressions - recursively determine result type
 	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
 		if (binExpr->op == '+') {
-			std::string leftType = getExpressionMaxonType(binExpr->left.get(), variableTypes, structTypes, structFields, currentReceiverType);
-			std::string rightType = getExpressionMaxonType(binExpr->right.get(), variableTypes, structTypes, structFields, currentReceiverType);
+			std::string leftType = getExpressionMaxonType(binExpr->left.get());
+			std::string rightType = getExpressionMaxonType(binExpr->right.get());
 			if (leftType == "string" && rightType == "string") {
 				return "string";
 			}
@@ -111,31 +107,29 @@ static std::string getExpressionMaxonType(ExprAST *expr,
 		// For other binary ops, return empty (will use default numeric behavior)
 		return "";
 	}
-	// Handle call expressions - check for known string-returning methods
+	// Handle call expressions - look up return type from function registry
 	if (auto *callExpr = dynamic_cast<CallExprAST *>(expr)) {
-		// Check if callee is a string method that returns string
 		const std::string &callee = callExpr->callee;
-		// Common string methods that return string
-		// The callee can be either unqualified "toLower" (method call syntax s.toLower())
-		// or qualified "string.toLower" (direct call syntax string.toLower(s))
-		if (callee == "string.toLower" || callee == "string.toUpper" ||
-			callee == "string.concat" || callee == "string.trimWhitespace" ||
-			callee == "string.slice" ||
-			callee == "toLower" || callee == "toUpper" ||
-			callee == "concat" || callee == "trimWhitespace" ||
-			callee == "slice") {
-			// For unqualified method calls, check if first arg is a string
-			if (!callExpr->args.empty()) {
-				std::string firstArgType = getExpressionMaxonType(callExpr->args[0].get(), variableTypes, structTypes, structFields, currentReceiverType);
-				if (firstArgType == "string") {
-					return "string";
+
+		// Look up the function return type from the semantic analyzer's registry
+		auto it = functionReturnTypes.find(callee);
+		if (it != functionReturnTypes.end()) {
+			return it->second;
+		}
+
+		// For method calls on a known type (e.g., s.toLower() becomes string.toLower),
+		// try looking up as Type.method if the first arg has a known type
+		if (!callExpr->args.empty()) {
+			std::string firstArgType = getExpressionMaxonType(callExpr->args[0].get());
+			if (!firstArgType.empty()) {
+				std::string qualifiedName = firstArgType + "." + callee;
+				auto qualIt = functionReturnTypes.find(qualifiedName);
+				if (qualIt != functionReturnTypes.end()) {
+					return qualIt->second;
 				}
 			}
-			// For qualified calls, return string directly
-			if (callee.find("string.") == 0) {
-				return "string";
-			}
 		}
+
 		// For other calls, return empty (will use default behavior)
 		return "";
 	}
@@ -671,7 +665,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			} else {
 				// Other complex expression
 				mir::MIRValue *objectValue = generateExpr(memberAccessExpr->object.get());
-				varType = getExpressionMaxonType(memberAccessExpr->object.get(), variableTypes, structTypes, structFields, currentReceiverType);
+				varType = getExpressionMaxonType(memberAccessExpr->object.get());
 				objectPtr = objectValue;
 			}
 		} else {
@@ -837,7 +831,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			bool isUnsizedArray = false;
 
 			// Get the array field type using getExpressionMaxonType for nested member access
-			std::string arrayFieldType = getExpressionMaxonType(arrayIndexExpr->arrayExpr.get(), variableTypes, structTypes, structFields, currentReceiverType);
+			std::string arrayFieldType = getExpressionMaxonType(arrayIndexExpr->arrayExpr.get());
 			logTrace("ArrayIndex in '" + currentReceiverType + "': arrayFieldType = '" + arrayFieldType + "'");
 			if (arrayFieldType.size() > 2 && arrayFieldType[0] == '[') {
 				size_t closeBracket = arrayFieldType.find(']');
@@ -963,7 +957,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
 		// For == and != on Equatable struct types, route to equals method
 		if (binExpr->op == 'E' || binExpr->op == 'N') {
-			std::string leftType = getExpressionMaxonType(binExpr->left.get(), variableTypes, structTypes, structFields, currentReceiverType);
+			std::string leftType = getExpressionMaxonType(binExpr->left.get());
 
 			// Check if this is an Equatable struct type
 			auto structIt = structTypes.find(leftType);
@@ -1027,8 +1021,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 		// Special handling for string + string -> call concat and heap-allocate result
 		if (binExpr->op == '+') {
-			std::string leftType = getExpressionMaxonType(binExpr->left.get(), variableTypes, structTypes, structFields, currentReceiverType);
-			std::string rightType = getExpressionMaxonType(binExpr->right.get(), variableTypes, structTypes, structFields, currentReceiverType);
+			std::string leftType = getExpressionMaxonType(binExpr->left.get());
+			std::string rightType = getExpressionMaxonType(binExpr->right.get());
 
 			if (leftType == "string" && rightType == "string") {
 				// Initialize heap management for _managed_string_alloc
