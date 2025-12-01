@@ -288,3 +288,24 @@ end 'main'
 15
 ```
 
+<!-- test: error.loop-var-assign -->
+```maxon
+function main() int
+    var sum = 0
+    for i in range(1, 5) 'loop'
+        i = 10
+        sum = sum + i
+    end 'loop'
+    return sum
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 5, column 11
+Cannot assign to loop variable 'i'
+  Loop variable declared at line 4, column 5
+  Note: Loop iteration variables are immutable and cannot be reassigned
+
+  5 |         i = 10
+    |           ^
+```
+

@@ -26,17 +26,18 @@ struct SemanticError {
 struct VariableInfo {
 	std::string name;
 	std::string type;
-	bool isImmutable; // true for 'let' variables
-	bool isUsed;	  // true if variable is read/referenced
-	bool isParameter; // true if this is a function parameter
+	bool isImmutable;    // true for 'let' variables
+	bool isUsed;         // true if variable is read/referenced
+	bool isParameter;    // true if this is a function parameter
+	bool isLoopVariable; // true if this is a for-loop iteration variable
 	int line;
 	int column;
 	std::string initialValue; // For immutable variables, stores the literal value if available
 
-	VariableInfo() : isImmutable(false), isUsed(false), isParameter(false), line(0), column(0) {}
+	VariableInfo() : isImmutable(false), isUsed(false), isParameter(false), isLoopVariable(false), line(0), column(0) {}
 
-	VariableInfo(const std::string &n, const std::string &t, bool immutable, int l = 0, int c = 0, bool param = false, const std::string &initVal = "")
-		: name(n), type(t), isImmutable(immutable), isUsed(false), isParameter(param), line(l), column(c), initialValue(initVal) {}
+	VariableInfo(const std::string &n, const std::string &t, bool immutable, int l = 0, int c = 0, bool param = false, const std::string &initVal = "", bool loopVar = false)
+		: name(n), type(t), isImmutable(immutable), isUsed(false), isParameter(param), isLoopVariable(loopVar), line(l), column(c), initialValue(initVal) {}
 };
 
 // Function information
@@ -202,7 +203,7 @@ class SemanticAnalyzer {
 	void enterScope();
 	void exitScope();
 	void declareBlockId(const std::string &blockId, int line = 0, int column = 0); // Register a block identifier
-	void declareVariable(const std::string &name, const std::string &type, bool isImmutable, int line = 0, int column = 0, bool isParameter = false, const std::string &initialValue = "");
+	void declareVariable(const std::string &name, const std::string &type, bool isImmutable, int line = 0, int column = 0, bool isParameter = false, const std::string &initialValue = "", bool isLoopVariable = false);
 	std::optional<VariableInfo> lookupVariable(const std::string &name);
 
 	// Type checking

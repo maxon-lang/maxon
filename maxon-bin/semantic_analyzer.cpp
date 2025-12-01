@@ -503,8 +503,8 @@ void SemanticAnalyzer::declareBlockId(const std::string &blockId, int line, int 
 	}
 }
 
-void SemanticAnalyzer::declareVariable(const std::string &name, const std::string &type, bool isImmutable, int line, int column, bool isParameter, const std::string &initialValue) {
-	VariableInfo varInfo(name, type, isImmutable, line, column, isParameter, initialValue);
+void SemanticAnalyzer::declareVariable(const std::string &name, const std::string &type, bool isImmutable, int line, int column, bool isParameter, const std::string &initialValue, bool isLoopVariable) {
+	VariableInfo varInfo(name, type, isImmutable, line, column, isParameter, initialValue, isLoopVariable);
 	variables[name] = varInfo;
 	// Also store in persistent symbol table for LSP
 	allDeclaredVariables[name] = varInfo;

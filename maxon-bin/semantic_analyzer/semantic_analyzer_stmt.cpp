@@ -102,11 +102,19 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		} else {
 			// Check if variable is immutable
 			if (varInfo->isImmutable) {
-				addError("Cannot assign to read-only variable '" + assign->name + "'" +
-							 std::string("\n  Variable declared with 'let' at line ") + std::to_string(varInfo->line) +
-							 ", column " + std::to_string(varInfo->column) +
-							 "\n  Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable variables",
-						 stmt->line, stmt->column);
+				if (varInfo->isLoopVariable) {
+					addError("Cannot assign to loop variable '" + assign->name + "'" +
+								 std::string("\n  Loop variable declared at line ") + std::to_string(varInfo->line) +
+								 ", column " + std::to_string(varInfo->column) +
+								 "\n  Note: Loop iteration variables are immutable and cannot be reassigned",
+							 stmt->line, stmt->column);
+				} else {
+					addError("Cannot assign to read-only variable '" + assign->name + "'" +
+								 std::string("\n  Variable declared with 'let' at line ") + std::to_string(varInfo->line) +
+								 ", column " + std::to_string(varInfo->column) +
+								 "\n  Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable variables",
+							 stmt->line, stmt->column);
+				}
 			}
 
 			// Check type compatibility
@@ -501,7 +509,7 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			}
 		}
 		declareVariable(forStmt->loopVar, loopVarType, true,
-						forStmt->line, forStmt->column, false, "");
+						forStmt->line, forStmt->column, false, "", true);
 
 		// Analyze loop body
 		for (const auto &s : forStmt->body) {

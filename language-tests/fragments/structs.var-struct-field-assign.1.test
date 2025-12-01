@@ -1,0 +1,69 @@
+// Test: structs.var-struct-field-assign.1
+struct Point
+    var x int
+    var y int
+end 'Point'
+
+function main() int
+    var p = Point{x: 10, y: 20}
+    p.x = 30
+    return p.x
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 11
+
+%Point = type { i32, i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Point
+  %2 = getelementptr %Point, ptr %0, i32 0, i32 1
+  store i32 20, ptr %2
+  %3 = getelementptr %Point, ptr %0, i32 0, i32 0
+  store i32 30, ptr %3
+  %4 = getelementptr %Point, ptr %0, i32 0, i32 0
+  %5 = load i32, ptr %4
+  ret i32 %5
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 13
+
+%Point = type { i32, i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Point
+  %1 = getelementptr %Point, ptr %0, i32 0, i32 0
+  store i32 10, ptr %1
+  %2 = getelementptr %Point, ptr %0, i32 0, i32 1
+  store i32 20, ptr %2
+  %3 = getelementptr %Point, ptr %0, i32 0, i32 0
+  store i32 30, ptr %3
+  %4 = getelementptr %Point, ptr %0, i32 0, i32 0
+  %5 = load i32, ptr %4
+  ret i32 %5
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 30
