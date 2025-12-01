@@ -12,6 +12,9 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Enable Link-Time Optimization for smaller binaries
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+
 # Enable parallel compilation and optimization flags
 if(MSVC)
 	add_compile_options(/W3)
@@ -92,8 +95,8 @@ set(SOURCES
 add_executable(maxon ${SOURCES})
 
 # Create grammar generator executable
-add_executable(grammar_generator 
-    grammar_generator.cpp 
+add_executable(grammar_generator
+    grammar_generator.cpp
     lexer.cpp
     parser.cpp
     parser/parser_utils.cpp
