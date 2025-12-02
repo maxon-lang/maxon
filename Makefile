@@ -128,7 +128,7 @@ compiler: $(BUILD_DIR)/build.ninja runtime
 	@if [ bin/grammar_generator$(EXE_EXT) -nt vscode-extension/syntaxes/maxon.tmLanguage.json ]; then echo "Generating TextMate grammar..."; ./bin/grammar_generator$(EXE_EXT) vscode-extension/syntaxes/maxon.tmLanguage.json; fi
 
 # Build both LSP server and extension
-lsp: lsp-server $(EXTENSION_TARGET)
+lsp: lsp-server extension-build
 
 # Build the C++ LSP server (depends on compiler sources)
 lsp-server: compiler
@@ -140,11 +140,18 @@ extension: lsp-server
 	@cd vscode-extension && npm install && npm run compile
 	@echo VS Code extension built successfully.
 
-# Compile the VS Code extension
-extension-build:
+# Extension source files for dependency tracking
+EXTENSION_SOURCES := $(shell find vscode-extension/src -name '*.ts' 2>/dev/null)
+
+# Compile the VS Code extension only if sources changed
+vscode-extension/out/.build-stamp: $(EXTENSION_SOURCES) vscode-extension/package.json vscode-extension/tsconfig.json
 	@echo Compiling VS Code extension...
-	@cd vscode-extension && npm install && npm run compile
+	@cd vscode-extension && npm install --silent && npm run compile
+	@touch vscode-extension/out/.build-stamp
 	@echo Extension compiled.
+
+# Compile the VS Code extension
+extension-build: vscode-extension/out/.build-stamp
 
 # Watch mode for VS Code extension development
 extension-watch:
@@ -202,7 +209,6 @@ backend-test-build: compiler backend-tests/runner/build/build.ninja
 # Run backend tests
 backend-test: backend-test-build ffi-test-lib
 	@echo Running backend tests...
-	@cp language-tests/ffi-test-lib/ffi_test_lib.dll backend-tests/ 2>/dev/null || cp language-tests/ffi-test-lib/libffi_test_lib.so backend-tests/ 2>/dev/null || true
 	@./backend-tests/runner/build/backend-test-runner$(EXE_EXT) -v
 
 # Generate documentation from spec files
@@ -222,6 +228,7 @@ else
 endif
 	@mkdir -p temp
 	@cp language-tests/ffi-test-lib/ffi_test_lib.dll temp/ 2>/dev/null || cp language-tests/ffi-test-lib/libffi_test_lib.so temp/ 2>/dev/null || true
+	@cp language-tests/ffi-test-lib/ffi_test_lib.dll backend-tests/ 2>/dev/null || cp language-tests/ffi-test-lib/libffi_test_lib.so backend-tests/ 2>/dev/null || true
 	@echo FFI test library ready.
 
 # Validate that all fragments are defined in spec files

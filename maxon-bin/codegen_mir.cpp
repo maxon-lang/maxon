@@ -82,6 +82,22 @@ void MIRCodeGenerator::markFieldTypesUsed(mir::MIRType *type) {
 
 // Get type without marking it as used (for struct field definitions)
 mir::MIRType *MIRCodeGenerator::getTypeFromStringNoMark(const std::string &typeStr) {
+	// Check for generic type parameter substitution first
+	if (!currentTypeBindings.empty()) {
+		auto bindingIt = currentTypeBindings.find(typeStr);
+		if (bindingIt != currentTypeBindings.end()) {
+			return getTypeFromStringNoMark(bindingIt->second);
+		}
+		// Handle array types with generic element type: []KeyType -> []string
+		if (typeStr.size() > 2 && typeStr[0] == '[' && typeStr[1] == ']') {
+			std::string elemType = typeStr.substr(2);
+			auto elemBindingIt = currentTypeBindings.find(elemType);
+			if (elemBindingIt != currentTypeBindings.end()) {
+				return getTypeFromStringNoMark("[]" + elemBindingIt->second);
+			}
+		}
+	}
+
 	// _ManagedString is an opaque pointer type - not a struct
 	if (typeStr == "_ManagedString") {
 		return mir::MIRType::getPtr();
@@ -98,6 +114,22 @@ mir::MIRType *MIRCodeGenerator::getTypeFromStringNoMark(const std::string &typeS
 }
 
 mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
+	// Check for generic type parameter substitution
+	if (!currentTypeBindings.empty()) {
+		auto bindingIt = currentTypeBindings.find(typeStr);
+		if (bindingIt != currentTypeBindings.end()) {
+			return getTypeFromString(bindingIt->second);
+		}
+		// Handle array types with generic element type: []KeyType -> []string
+		if (typeStr.size() > 2 && typeStr[0] == '[' && typeStr[1] == ']') {
+			std::string elemType = typeStr.substr(2);
+			auto elemBindingIt = currentTypeBindings.find(elemType);
+			if (elemBindingIt != currentTypeBindings.end()) {
+				return getTypeFromString("[]" + elemBindingIt->second);
+			}
+		}
+	}
+
 	// _ManagedString is an opaque pointer type - not a struct
 	if (typeStr == "_ManagedString") {
 		return mir::MIRType::getPtr();
@@ -169,18 +201,35 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 }
 
 mir::MIRType *MIRCodeGenerator::getParamTypeFromString(const std::string &typeStr) {
+	// Check for generic type parameter substitution first
+	std::string resolvedType = typeStr;
+	if (!currentTypeBindings.empty()) {
+		auto bindingIt = currentTypeBindings.find(typeStr);
+		if (bindingIt != currentTypeBindings.end()) {
+			resolvedType = bindingIt->second;
+		}
+		// Handle array types with generic element type: []KeyType -> []string
+		else if (typeStr.size() > 2 && typeStr[0] == '[' && typeStr[1] == ']') {
+			std::string elemType = typeStr.substr(2);
+			auto elemBindingIt = currentTypeBindings.find(elemType);
+			if (elemBindingIt != currentTypeBindings.end()) {
+				resolvedType = "[]" + elemBindingIt->second;
+			}
+		}
+	}
+
 	// Array parameters are passed as pointers
-	if (isArrayParam(typeStr)) {
+	if (isArrayParam(resolvedType)) {
 		return mir::MIRType::getPtr();
 	}
 
 	// Struct parameters are passed by pointer
-	if (structTypes.find(typeStr) != structTypes.end()) {
+	if (structTypes.find(resolvedType) != structTypes.end()) {
 		return mir::MIRType::getPtr();
 	}
 
 	// Use no-mark variant - types are marked when actually used in code generation
-	return getTypeFromStringNoMark(typeStr);
+	return getTypeFromStringNoMark(resolvedType);
 }
 
 std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
@@ -624,6 +673,118 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 }
 
 //==============================================================================
+// Generic Struct Instantiation
+//==============================================================================
+
+std::string MIRCodeGenerator::instantiateGenericStruct(const std::string &templateName,
+													   const std::map<std::string, std::string> &typeBindings) {
+	// Build specialized name: map<string,int>
+	std::string specializedName = templateName + "<";
+	bool first = true;
+	for (const auto &[param, concreteType] : typeBindings) {
+		if (!first)
+			specializedName += ",";
+		specializedName += concreteType;
+		first = false;
+	}
+	specializedName += ">";
+
+	// Check if already instantiated
+	if (instantiatedGenericStructs.count(specializedName) > 0) {
+		return specializedName;
+	}
+
+	// Look up the template
+	auto defIt = structDefinitions.find(templateName);
+	if (defIt == structDefinitions.end()) {
+		throw std::runtime_error("Generic struct template not found: " + templateName);
+	}
+	StructDefAST *templateDef = defIt->second;
+
+	logDetail("Instantiating generic struct: " + specializedName);
+
+	// Helper to substitute type parameters
+	auto substituteType = [&](const std::string &type) -> std::string {
+		auto it = typeBindings.find(type);
+		if (it != typeBindings.end()) {
+			return it->second;
+		}
+		// Handle array types: []KeyType -> []string
+		if (type.length() > 2 && type[0] == '[' && type[1] == ']') {
+			std::string elemType = type.substr(2);
+			auto elemIt = typeBindings.find(elemType);
+			if (elemIt != typeBindings.end()) {
+				return "[]" + elemIt->second;
+			}
+		}
+		return type;
+	};
+
+	// Create field types with substitution
+	std::vector<mir::MIRType *> fieldTypes;
+	std::vector<std::pair<std::string, std::string>> fields;
+
+	for (const auto &field : templateDef->fields) {
+		std::string substitutedType = substituteType(field.type);
+		fieldTypes.push_back(getTypeFromStringNoMark(substitutedType));
+		fields.push_back({field.name, substitutedType});
+	}
+
+	// Create the specialized struct type
+	mir::MIRType *structType = module->getOrCreateStructType(specializedName, fieldTypes);
+	structTypes[specializedName] = structType;
+	structFields[specializedName] = fields;
+	structConformsTo[specializedName] = templateDef->conformsTo;
+	structTypeAssignments[specializedName] = typeBindings;
+
+	// Mark as instantiated
+	instantiatedGenericStructs.insert(specializedName);
+
+	// Now instantiate methods
+	for (const auto &method : templateDef->methods) {
+		// Build specialized method name: map<string,int>.insert
+		std::string specializedMethodName = specializedName + "." + method->name;
+
+		// Skip if already declared (shouldn't happen, but be safe)
+		if (module->getFunction(specializedMethodName) != nullptr) {
+			continue;
+		}
+
+		// Substitute types in parameters
+		std::vector<FunctionParameter> substitutedParams;
+		for (const auto &param : method->parameters) {
+			std::string substitutedType = substituteType(param.type);
+			substitutedParams.push_back(FunctionParameter(param.name, substitutedType, param.line, param.column));
+		}
+
+		// Substitute return type
+		std::string substitutedReturnType = substituteType(method->returnType);
+
+		// Create MIR function declaration
+		mir::MIRType *retType = getTypeFromStringNoMark(substitutedReturnType);
+		mir::MIRFunction *mirFunc = module->createFunction(specializedMethodName, retType);
+
+		// Add parameters - first is always self (pointer to struct)
+		mirFunc->addParameter(mir::MIRType::getPtr(), "self");
+		for (const auto &param : substitutedParams) {
+			if (param.name == "self")
+				continue; // Skip self, already added
+			mir::MIRType *paramType = getParamTypeFromString(param.type);
+			mirFunc->addParameter(paramType, param.name);
+		}
+
+		logTrace("Declared specialized method: " + specializedMethodName);
+	}
+
+	// Generate method bodies
+	for (const auto &method : templateDef->methods) {
+		generateFunctionWithTypeBindings(method.get(), templateDef->namespaceName, typeBindings, specializedName);
+	}
+
+	return specializedName;
+}
+
+//==============================================================================
 // Main Generation
 //==============================================================================
 
@@ -643,6 +804,15 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	// First pass: Forward-declare all struct types (to handle circular/forward references)
 	logDetail("Pass 1a: Forward-declaring struct types (" + std::to_string(program->structs.size()) + " structs)");
 	for (const auto &structDef : program->structs) {
+		// Store AST pointer for generic instantiation
+		structDefinitions[structDef->name] = structDef.get();
+
+		// Skip generic template structs - they'll be instantiated on demand
+		if (!structDef->associatedTypeParams.empty()) {
+			logTrace("Skipping generic template struct: " + structDef->name);
+			continue;
+		}
+
 		// Create struct with empty fields first
 		mir::MIRType *structType = module->getOrCreateStructType(structDef->name, {});
 		structTypes[structDef->name] = structType;
@@ -654,6 +824,11 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	// Use getTypeFromStringNoMark to avoid marking field types as used prematurely
 	logDetail("Pass 1b: Filling in struct fields");
 	for (const auto &structDef : program->structs) {
+		// Skip generic template structs - they'll be instantiated on demand
+		if (!structDef->associatedTypeParams.empty()) {
+			continue;
+		}
+
 		std::vector<mir::MIRType *> fieldTypes;
 		std::vector<std::pair<std::string, std::string>> fields;
 		std::map<std::string, ExprAST *> defaults;
@@ -745,7 +920,11 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	};
 
 	// First, declare methods from struct definitions
+	// Skip generic template structs - their methods will be instantiated on demand
 	for (auto &structDef : program->structs) {
+		if (!structDef->associatedTypeParams.empty()) {
+			continue;
+		}
 		for (auto &method : structDef->methods) {
 			declareFunction(method.get(), structDef->namespaceName);
 		}
@@ -770,7 +949,11 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	logDetail("Pass 3: Generating function bodies");
 
 	// First, generate method bodies from structs
+	// Skip generic template structs - their methods will be instantiated on demand
 	for (auto &structDef : program->structs) {
+		if (!structDef->associatedTypeParams.empty()) {
+			continue;
+		}
 		for (auto &method : structDef->methods) {
 			generateFunction(method.get(), structDef->namespaceName);
 		}

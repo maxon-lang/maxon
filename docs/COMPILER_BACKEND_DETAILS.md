@@ -75,6 +75,42 @@ enum class MIRTypeKind {
 
 **Design Note:** MIR intentionally lacks Int16 as Maxon doesn't expose 16-bit integers in its type system. This simplifies code generation.
 
+### Generic Type Support
+
+MIR handles monomorphized generic types through specialized struct definitions. When the frontend instantiates a generic type like `map from string to int`, the MIR code generator:
+
+1. **Creates a unique struct type:** `map<string,int>` with concrete field types
+2. **Maintains type bindings:** A map of type parameter → concrete type (e.g., `KeyType → string`)
+3. **Resolves method calls dynamically:** Uses type bindings to dispatch to correct implementations
+
+**Type Binding System:**
+
+During MIR code generation, the `currentTypeBindings` map tracks active type substitutions:
+
+```cpp
+// When compiling map<string,int>.get(key):
+currentTypeBindings = {{"KeyType", "string"}, {"ValueType", "int"}};
+
+// key.hash() resolves to string.hash() via:
+// 1. Look up 'key' type → KeyType (from function signature)
+// 2. Substitute via bindings → string
+// 3. Generate call to string.hash()
+```
+
+**Primitive Type Method Codegen:**
+
+For primitive types (int, byte, char), hash and equals methods are generated inline:
+
+```cpp
+// int.hash() generates:
+%hash = mul i64 %value, 2654435761   // FNV-1a prime multiplication
+
+// int.equals(other) generates:
+%result = icmp_eq i64 %self, %other
+```
+
+**Location:** [maxon-bin/codegen_mir/codegen_mir_expr.cpp](maxon-bin/codegen_mir/codegen_mir_expr.cpp)
+
 ### Instruction Set
 
 MIR provides approximately 50 instructions organized into categories:
@@ -902,7 +938,7 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 
 ## Recent Changes
 
-### Winchester 1.3 (2025-12-01)
+### Winchester 1.4 (2025-12-01)
 
 **Full SSA Construction with PHI Placement:**
 - Completed Mem2Reg pass with full SSA construction for multi-definition variables
@@ -915,6 +951,26 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 - SSA renaming via dominator tree traversal with definition stack
 - Fixed non-deterministic IR generation by sorting dominator tree children and PHI blocks by block ID
 - Removed legacy `insertPhiNodes()` and `renameVariables()` stub functions
+### Winchester 1.3 (2025-01-xx)
+
+**Generic Type Monomorphization:**
+- Added Swift-style monomorphization for generic struct types
+- New `currentTypeBindings` map in codegen tracks type parameter substitutions
+- Dynamic method resolution resolves calls like `key.hash()` to concrete implementations
+- Support for specializing `map from K to V` with any key/value types
+
+**Primitive Type Methods:**
+- Implemented inline codegen for `int.hash()`, `int.equals(other int)`
+- Implemented inline codegen for `byte.hash()`, `byte.equals(other byte)`
+- Implemented inline codegen for `char.hash()`, `char.equals(other char)`
+- Methods registered in semantic analyzer as built-in functions
+
+**Collections Library:**
+- Added `map from KeyType to ValueType` generic hash map
+- Open addressing with linear probing collision resolution
+- Automatic resizing (grow) at 75% load factor
+- Methods: `insert()`, `get()`, `has()`, `remove()`, `count()`, `clear()`
+- Location: `stdlib/collections/map.maxon`
 
 ### Winchester 1.2 (2025-11-27)
 

@@ -69,8 +69,23 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	log('Maxon extension activating...');
 
 	// Path to the compiled LSP server executable
-	// Use absolute path relative to extension location (extension is in vscode-extension/)
+	// When running from the workspace (development), use ../bin relative to extension folder
+	// When installed, check workspace folders for the bin directory
 	serverExecutable = path.join(ctx.extensionPath, '..', 'bin', 'maxon-lsp-server.exe');
+
+	// If running from installed extension (not from workspace), try to find the server
+	// in the first workspace folder's bin directory
+	const fs = require('fs');
+	if (!fs.existsSync(serverExecutable) && vscode.workspace.workspaceFolders?.length) {
+		const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+		const workspaceBin = path.join(workspaceRoot, 'bin', 'maxon-lsp-server.exe');
+		if (fs.existsSync(workspaceBin)) {
+			serverExecutable = workspaceBin;
+			log(`Using LSP server from workspace: ${serverExecutable}`);
+		}
+	}
+
+	log(`LSP server path: ${serverExecutable}`);
 
 	// Server options - use simple command form for stdio communication
 	const serverOptions: ServerOptions = {

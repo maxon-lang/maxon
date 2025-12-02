@@ -57,6 +57,49 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		return std::make_unique<StringLiteralExprAST>(value, line, column);
 	}
 
+	// Dictionary type pattern: TypeName from KeyType to ValueType
+	// Works with any type that conforms to the Dictionary interface (e.g., map, HashMap, OrderedMap)
+	if (check(TokenType::IDENTIFIER) && checkKeyword("from", 1)) {
+		int line = currentLine();
+		int column = currentColumn();
+		std::string dictTypeName = std::string(currentValue());
+		advance(); // consume type name (e.g., 'map')
+
+		expectKeywordAdvance("from", "Expected 'from' after dictionary type name");
+
+		// Parse key type
+		std::string keyType;
+		auto kd = currentKeywordData();
+		if (kd && kd->category == KeywordCategory::Type) {
+			keyType = std::string(currentValue());
+			advance();
+		} else if (check(TokenType::IDENTIFIER)) {
+			keyType = parseQualifiedName("map key type");
+		} else {
+			throw std::runtime_error("Expected key type after 'from' in map declaration\n  Location: line " +
+									 std::to_string(currentLine()) + ", column " +
+									 std::to_string(currentColumn()));
+		}
+
+		expectKeywordAdvance("to", "Expected 'to' after key type in map declaration");
+
+		// Parse value type
+		std::string valueType;
+		kd = currentKeywordData();
+		if (kd && kd->category == KeywordCategory::Type) {
+			valueType = std::string(currentValue());
+			advance();
+		} else if (check(TokenType::IDENTIFIER)) {
+			valueType = parseQualifiedName("map value type");
+		} else {
+			throw std::runtime_error("Expected value type after 'to' in map declaration\n  Location: line " +
+									 std::to_string(currentLine()) + ", column " +
+									 std::to_string(currentColumn()));
+		}
+
+		return std::make_unique<MapLiteralExprAST>(dictTypeName, keyType, valueType, line, column);
+	}
+
 	// Array literal: [5]int, [_len]byte, or [1,2,3]
 	if (check(TokenType::LBRACKET)) {
 		int line = currentLine();
@@ -338,10 +381,32 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 			expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
 			auto arrayExpr = std::make_unique<ArrayIndexExprAST>(name, std::move(firstExpr), line, column);
 
-			// Check for member access on array element (e.g., arr[0].field)
+			// Check for member access on array element (e.g., arr[0].field or arr[0].method())
 			if (check(TokenType::DOT)) {
 				advance(); // consume '.'
 				Token member = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
+
+				// Check if this is a method call: arr[i].method(args)
+				if (check(TokenType::LPAREN)) {
+					advance(); // consume '('
+					std::vector<std::unique_ptr<ExprAST>> args;
+
+					// First argument is the array element (implicit self)
+					args.push_back(std::move(arrayExpr));
+
+					// Parse remaining arguments
+					if (!check(TokenType::RPAREN)) {
+						args.push_back(parseLogicalOr());
+
+						while (match(TokenType::COMMA)) {
+							args.push_back(parseLogicalOr());
+						}
+					}
+
+					expectAdvance(TokenType::RPAREN, "Expected ')' after method arguments");
+					return std::make_unique<CallExprAST>(member.value, std::move(args), line, column);
+				}
+
 				// Create a member access expression with the array index as the object
 				return std::make_unique<MemberAccessExprAST>(std::move(arrayExpr), member.value, line, column);
 			}

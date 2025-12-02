@@ -370,3 +370,65 @@ TEST_CASE("hover on string_intrinsic", "[hover]") {
 	REQUIRE(hover->contents.find("int") != std::string::npos);
 	REQUIRE(hover->contents.find("compiler intrinsic") != std::string::npos);
 }
+
+TEST_CASE("hover on struct field in method", "[hover]") {
+	Analyzer analyzer;
+	// Use a simple struct with methods that only read fields (no assignment)
+	auto doc = createTestDocument(
+		"struct Counter\n"
+		"    var _count int\n"
+		"    var _capacity int\n"
+		"\n"
+		"    function getCount() int\n"
+		"        return _count\n"
+		"    end 'getCount'\n"
+		"\n"
+		"    function getCapacity() int\n"
+		"        return _capacity\n"
+		"    end 'getCapacity'\n"
+		"end 'Counter'");
+
+	analyzer.analyze(doc);
+
+	// Hover over '_count' in return _count
+	// Line 5 is: "        return _count"
+	// _count starts at column 15
+	lsp::Position pos{5, 15}; // Line 5, char 15 (on '_count')
+	auto hover = analyzer.getHover(doc, pos);
+
+	REQUIRE(hover.has_value());
+	REQUIRE(hover->contents.find("field") != std::string::npos);
+	REQUIRE(hover->contents.find("_count") != std::string::npos);
+	REQUIRE(hover->contents.find("int") != std::string::npos);
+	REQUIRE(hover->contents.find("Counter") != std::string::npos);
+}
+
+TEST_CASE("hover on map method", "[hover]") {
+	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
+
+	auto doc = createTestDocument(
+		"function main() int\n"
+		"    var m = map from int to int\n"
+		"    m.insert(1, 10)\n"
+		"    return 0\n"
+		"end 'main'");
+
+	analyzer.analyze(doc);
+
+	// Hover over 'insert' in m.insert(1, 10)
+	// Line 2 is: "    m.insert(1, 10)"
+	// 'insert' starts at column 6
+	lsp::Position pos{2, 8}; // Line 2, char 8 (on 'insert')
+	auto hover = analyzer.getHover(doc, pos);
+
+	REQUIRE(hover.has_value());
+	// Should show method info, not just "Identifier"
+	INFO("Hover contents: " << hover->contents);
+	REQUIRE(hover->contents.find("Identifier") == std::string::npos);
+	// Should show it's a function/method
+	REQUIRE((hover->contents.find("function") != std::string::npos ||
+			 hover->contents.find("method") != std::string::npos ||
+			 hover->contents.find("Method") != std::string::npos));
+	REQUIRE(hover->contents.find("insert") != std::string::npos);
+}

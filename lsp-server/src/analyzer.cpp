@@ -74,10 +74,12 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
 			}
 
 			// Register stdlib struct methods with the semantic analyzer
+			// Use qualified names (StructName.methodName) for proper method resolution
 			for (const auto &method : stdlibStructMethods) {
+				std::string qualifiedName = method.structName + "." + method.methodName;
 				// Only register if NOT defined in current document
-				if (currentDocFunctions.find(method.methodName) == currentDocFunctions.end()) {
-					semanticAnalyzer.registerExternalFunction(method.methodName, method.returnType, method.parameters);
+				if (currentDocFunctions.find(qualifiedName) == currentDocFunctions.end()) {
+					semanticAnalyzer.registerExternalFunction(qualifiedName, method.returnType, method.parameters);
 				}
 			}
 
@@ -585,6 +587,55 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
 							return hover;
 						}
 					}
+
+					// Check for methods on the type (including parameterized types like map<int,int>)
+					// First check typeMembers registry for stdlib types
+					auto typeIt = typeMembers.find(typeName);
+					if (typeIt != typeMembers.end()) {
+						for (const auto &member : typeIt->second) {
+							if (member.name == word && member.isMethod) {
+								hover.contents = "```maxon\n(method) " + word + member.signature + " " + member.returnType + "\n```\n\n" + member.documentation;
+								return hover;
+							}
+						}
+					}
+
+					// For parameterized types like map<K,V>, check the base type (e.g., "map")
+					size_t anglePos = typeName.find('<');
+					if (anglePos != std::string::npos) {
+						std::string baseType = typeName.substr(0, anglePos);
+						auto baseTypeIt = typeMembers.find(baseType);
+						if (baseTypeIt != typeMembers.end()) {
+							for (const auto &member : baseTypeIt->second) {
+								if (member.name == word && member.isMethod) {
+									hover.contents = "```maxon\n(method) " + word + member.signature + " " + member.returnType + "\n```\n\n" + member.documentation;
+									return hover;
+								}
+							}
+						}
+					}
+
+					// Check registered functions with pattern TypeName.methodName
+					std::string qualifiedMethod = typeName + "." + word;
+					auto funcIt = semInfo.functions.find(qualifiedMethod);
+					if (funcIt != semInfo.functions.end()) {
+						const FunctionInfo &funcInfo = funcIt->second;
+						std::string sig = "function " + word + "(";
+						bool first = true;
+						for (size_t i = 0; i < funcInfo.parameters.size(); i++) {
+							// Skip implicit 'self' parameter for methods
+							if (funcInfo.parameters[i].name == "self") {
+								continue;
+							}
+							if (!first)
+								sig += ", ";
+							sig += funcInfo.parameters[i].name + " " + funcInfo.parameters[i].type;
+							first = false;
+						}
+						sig += ") " + funcInfo.returnType;
+						hover.contents = "```maxon\n" + sig + "\n```\n\nMethod of `" + typeName + "`";
+						return hover;
+					}
 				}
 			}
 		}
@@ -609,6 +660,26 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
 				hover.contents += "\n\nFunction parameter";
 			}
 			return hover;
+		}
+
+		// Check if we're inside a struct method and word is a field (implicit self access)
+		// Look for struct context by scanning the source text
+		std::string containingStruct = findContainingStruct(doc->text, pos);
+		if (!containingStruct.empty()) {
+			auto structIt = semInfo.structs.find(containingStruct);
+			if (structIt != semInfo.structs.end()) {
+				for (const auto &field : structIt->second.fields) {
+					if (field.name == word) {
+						std::string mutability = field.isImmutable ? "let" : "var";
+						std::string fieldDisplay = mutability + " " + field.name + ": " + field.type;
+						if (field.isImmutable && !field.defaultValue.empty()) {
+							fieldDisplay += " = " + field.defaultValue;
+						}
+						hover.contents = "```maxon\n(field) " + fieldDisplay + "\n```\n\nField of struct `" + containingStruct + "`";
+						return hover;
+					}
+				}
+			}
 		}
 
 		// Check for function (user-defined)
@@ -1006,6 +1077,71 @@ std::string Analyzer::getWordAtPosition(const std::string &text, lsp::Position p
 	}
 
 	return line.substr(start, end - start);
+}
+
+std::string Analyzer::findContainingStruct(const std::string &text, lsp::Position pos) {
+	// Parse the text line by line to track struct/function scopes
+	// We need to find if the cursor position is inside a method of a struct
+	std::istringstream stream(text);
+	std::string line;
+	int currentLine = 0;
+
+	std::string currentStruct;
+	int structDepth = 0;
+	bool inFunction = false;
+	int functionDepth = 0;
+
+	while (std::getline(stream, line) && currentLine <= pos.line) {
+		// Trim leading whitespace
+		size_t firstNonSpace = line.find_first_not_of(" \t");
+		if (firstNonSpace == std::string::npos) {
+			currentLine++;
+			continue;
+		}
+		std::string trimmedLine = line.substr(firstNonSpace);
+
+		// Check for struct declaration
+		if (trimmedLine.find("struct ") == 0) {
+			// Extract struct name - it's the word after "struct "
+			size_t nameStart = 7; // length of "struct "
+			size_t nameEnd = nameStart;
+			while (nameEnd < trimmedLine.length() &&
+				   (std::isalnum(trimmedLine[nameEnd]) || trimmedLine[nameEnd] == '_')) {
+				nameEnd++;
+			}
+			currentStruct = trimmedLine.substr(nameStart, nameEnd - nameStart);
+			structDepth = 1;
+		}
+		// Check for function inside struct
+		else if (structDepth > 0 &&
+				 (trimmedLine.find("function ") == 0 || trimmedLine.find("export function ") == 0)) {
+			inFunction = true;
+			functionDepth = 1;
+		}
+		// Check for end - could end function or struct
+		else if (trimmedLine.find("end ") == 0 || trimmedLine == "end") {
+			if (inFunction && functionDepth > 0) {
+				functionDepth--;
+				if (functionDepth == 0) {
+					inFunction = false;
+				}
+			} else if (structDepth > 0) {
+				structDepth--;
+				if (structDepth == 0) {
+					currentStruct.clear();
+				}
+			}
+		}
+
+		currentLine++;
+	}
+
+	// If we're inside a struct and inside a function, return the struct name
+	if (structDepth > 0 && inFunction) {
+		return currentStruct;
+	}
+
+	return "";
 }
 
 bool Analyzer::isKeyword(const std::string &word) const {

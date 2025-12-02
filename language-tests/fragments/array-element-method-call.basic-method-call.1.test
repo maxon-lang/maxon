@@ -1,0 +1,94 @@
+// Test: array-element-method-call.basic-method-call.1
+struct Counter
+    var value int
+    
+    function get() int
+        return value
+    end 'get'
+end 'Counter'
+
+function main() int
+    var items = [3]Counter
+    items[0] = Counter{value: 42}
+    items[1] = Counter{value: 100}
+    return items[0].get()
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 15
+
+%Counter = type { i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca [3 x %Counter]
+  %2 = call ptr @memset(ptr %0, i32 0, i64 12)
+  %3 = getelementptr %Counter, ptr %0, i64 0
+  %4 = getelementptr %Counter, ptr %3, i32 0, i32 0
+  store i32 42, ptr %4
+  %5 = getelementptr %Counter, ptr %0, i64 1
+  %6 = getelementptr %Counter, ptr %5, i32 0, i32 0
+  store i32 100, ptr %6
+  %7 = getelementptr %Counter, ptr %0, i64 0
+  %9 = getelementptr %Counter, ptr %7, i32 0, i32 0
+  %10 = load i32, ptr %9
+  ret i32 %10
+}
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 22
+
+%Counter = type { i32 }
+
+define i32 @Counter.get(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Counter, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  ret i32 %3
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca [3 x %Counter]
+  %1 = alloca i32
+  store i32 3, ptr %1
+  %2 = call ptr @memset(ptr %0, i32 0, i64 12)
+  %3 = getelementptr %Counter, ptr %0, i64 0
+  %4 = getelementptr %Counter, ptr %3, i32 0, i32 0
+  store i32 42, ptr %4
+  %5 = getelementptr %Counter, ptr %0, i64 1
+  %6 = getelementptr %Counter, ptr %5, i32 0, i32 0
+  store i32 100, ptr %6
+  %7 = getelementptr %Counter, ptr %0, i64 0
+  %8 = call i32 @Counter.get(ptr %7)
+  ret i32 %8
+}
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 42

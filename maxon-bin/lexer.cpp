@@ -19,67 +19,6 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
-#include <unordered_map>
-
-// ============================================================================
-// Keyword Data
-// ============================================================================
-
-static const std::unordered_map<std::string, KeywordData> keywords = {
-	// Types
-	{"int", {KeywordCategory::Type, "Integer type"}},
-	{"float", {KeywordCategory::Type, "Floating-point type"}},
-	{"char", {KeywordCategory::Type, "Extended Grapheme Cluster (user-perceived character)"}},
-	{"byte", {KeywordCategory::Type, "8-bit unsigned integer"}},
-	{"bool", {KeywordCategory::Type, "Boolean type"}},
-	{"string", {KeywordCategory::Type, "UTF-8 encoded string type"}},
-
-	// Control flow
-	{"if", {KeywordCategory::ControlFlow, "Conditional statement"}},
-	{"then", {KeywordCategory::ControlFlow, "Single-line if body"}},
-	{"else", {KeywordCategory::ControlFlow, "Alternative branch"}},
-	{"while", {KeywordCategory::ControlFlow, "Loop statement"}},
-	{"for", {KeywordCategory::ControlFlow, "For loop statement"}},
-	{"in", {KeywordCategory::ControlFlow, "Iterator in for loop"}},
-	{"end", {KeywordCategory::ControlFlow, "Block terminator"}},
-	{"return", {KeywordCategory::ControlFlow, "Return from function"}},
-	{"break", {KeywordCategory::ControlFlow, "Exit loop"}},
-	{"continue", {KeywordCategory::ControlFlow, "Skip to next iteration"}},
-
-	// Declarations
-	{"function", {KeywordCategory::Declaration, "Function declaration"}},
-	{"var", {KeywordCategory::Declaration, "Mutable variable"}},
-	{"let", {KeywordCategory::Declaration, "Immutable variable"}},
-	{"struct", {KeywordCategory::Declaration, "Structure type"}},
-	{"interface", {KeywordCategory::Declaration, "Interface declaration"}},
-	{"type", {KeywordCategory::Declaration, "Associated type declaration"}},
-	{"uses", {KeywordCategory::Declaration, "Interface associated type declaration"}},
-	{"with", {KeywordCategory::Declaration, "Struct associated type binding"}},
-	{"export", {KeywordCategory::Declaration, "Export declaration"}},
-	{"extern", {KeywordCategory::Declaration, "External declaration"}},
-
-	// Math intrinsics (built into codegen)
-	{"sqrt", {KeywordCategory::MathIntrinsic, "Square root", {{MathIntrinsicKind::Intrinsic, "", "float"}}}},
-	{"abs", {KeywordCategory::MathIntrinsic, "Absolute value", {{MathIntrinsicKind::Intrinsic, "", "float"}}}},
-	{"floor", {KeywordCategory::MathIntrinsic, "Floor function", {{MathIntrinsicKind::Intrinsic, "", "int"}}}},
-	{"ceil", {KeywordCategory::MathIntrinsic, "Ceiling function", {{MathIntrinsicKind::Intrinsic, "", "int"}}}},
-	{"round", {KeywordCategory::MathIntrinsic, "Round to nearest", {{MathIntrinsicKind::Intrinsic, "", "int"}}}},
-	{"trunc", {KeywordCategory::MathIntrinsic, "Truncate to integer", {{MathIntrinsicKind::DirectCast, "", "int"}}}},
-	{"sin", {KeywordCategory::MathIntrinsic, "Sine function", {{MathIntrinsicKind::RuntimeFunction, "sin", "float"}}}},
-	{"cos", {KeywordCategory::MathIntrinsic, "Cosine function", {{MathIntrinsicKind::RuntimeFunction, "cos", "float"}}}},
-	{"tan", {KeywordCategory::MathIntrinsic, "Tangent function", {{MathIntrinsicKind::RuntimeFunction, "tan", "float"}}}},
-
-	// Literals
-	{"true", {KeywordCategory::Literal, "Boolean true"}},
-	{"false", {KeywordCategory::Literal, "Boolean false"}},
-
-	// Operators
-	{"as", {KeywordCategory::Operator, "Type cast operator"}},
-	{"and", {KeywordCategory::Operator, "Logical and"}},
-	{"or", {KeywordCategory::Operator, "Logical or"}},
-	{"not", {KeywordCategory::Operator, "Logical not"}},
-	{"mod", {KeywordCategory::Operator, "Modulo operator"}},
-	{"is", {KeywordCategory::Operator, "Interface conformance"}}};
 
 // ============================================================================
 // Static Initialization
@@ -341,10 +280,14 @@ Token Lexer::readIdentifier() {
 
 		KeywordData kd;
 		kd.category = entry.category;
-		kd.description = "";
+		kd.description = entry.description;
 
 		if (entry.has_math_info) {
-			kd.mathInfo = entry.math_info;
+			// Convert from KeywordMathInfo to MathIntrinsicInfo
+			kd.mathInfo = MathIntrinsicInfo{
+				entry.math_info.kind,
+				entry.math_info.runtimeFunctionName,
+				entry.math_info.returnType};
 		}
 
 		tok.keywordData = kd;
@@ -590,48 +533,63 @@ Token Lexer::readOperatorOrDelimiter(int startLine, int startColumn) {
 
 std::vector<std::string> Lexer::getKeywords() {
 	std::vector<std::string> keywordList;
-	keywordList.reserve(keywords.size());
-	for (const auto &pair : keywords) {
-		keywordList.push_back(pair.first);
-	}
+	keywordList.reserve(KeywordMatcher::keyword_count());
+	KeywordMatcher::for_each_keyword([&keywordList](const KeywordEntry &entry) {
+		keywordList.push_back(entry.keyword);
+	});
 	return keywordList;
 }
 
 std::vector<Lexer::KeywordInfo> Lexer::getKeywordInfo() {
 	std::vector<KeywordInfo> info;
-	for (const auto &pair : keywords) {
-		const KeywordData &data = pair.second;
-		info.push_back({pair.first, data.category, data.description});
-	}
+	info.reserve(KeywordMatcher::keyword_count());
+	KeywordMatcher::for_each_keyword([&info](const KeywordEntry &entry) {
+		info.push_back({entry.keyword, entry.category, entry.description});
+	});
 	return info;
 }
 
 std::vector<std::string> Lexer::getKeywordsByCategory(KeywordCategory category) {
 	std::vector<std::string> result;
-	for (const auto &pair : keywords) {
-		if (pair.second.category == category) {
-			result.push_back(pair.first);
+	KeywordMatcher::for_each_keyword([&result, category](const KeywordEntry &entry) {
+		if (entry.category == category) {
+			result.push_back(entry.keyword);
 		}
-	}
+	});
 	return result;
 }
 
 bool Lexer::isMathIntrinsic(const std::string &name) {
-	auto it = keywords.find(name);
-	return it != keywords.end() && it->second.category == KeywordCategory::MathIntrinsic;
+	KeywordEntry entry;
+	if (KeywordMatcher::match(name.data(), name.size(), entry)) {
+		return entry.category == KeywordCategory::MathIntrinsic;
+	}
+	return false;
 }
 
+// Static storage for math intrinsic info returned by getMathIntrinsicInfo
+static thread_local MathIntrinsicInfo cached_math_info;
+
 const MathIntrinsicInfo *Lexer::getMathIntrinsicInfo(const std::string &name) {
-	auto it = keywords.find(name);
-	if (it != keywords.end() && it->second.category == KeywordCategory::MathIntrinsic) {
-		return it->second.mathInfo.has_value() ? &it->second.mathInfo.value() : nullptr;
+	KeywordEntry entry;
+	if (KeywordMatcher::match(name.data(), name.size(), entry)) {
+		if (entry.category == KeywordCategory::MathIntrinsic && entry.has_math_info) {
+			// Convert from KeywordMathInfo (const char*) to MathIntrinsicInfo (std::string)
+			cached_math_info.kind = entry.math_info.kind;
+			cached_math_info.runtimeFunctionName = entry.math_info.runtimeFunctionName;
+			cached_math_info.returnType = entry.math_info.returnType;
+			return &cached_math_info;
+		}
 	}
 	return nullptr;
 }
 
 bool Lexer::isTypeString(const std::string &name) {
-	auto it = keywords.find(name);
-	return it != keywords.end() && it->second.category == KeywordCategory::Type;
+	KeywordEntry entry;
+	if (KeywordMatcher::match(name.data(), name.size(), entry)) {
+		return entry.category == KeywordCategory::Type;
+	}
+	return false;
 }
 
 bool Lexer::isControlFlowToken(const Token &token) {

@@ -1,0 +1,99 @@
+// Test: array-element-method-call.method-with-args.1
+struct Adder
+    var base int
+    
+    function add(x int) int
+        return base + x
+    end 'add'
+end 'Adder'
+
+function main() int
+    var adders = [2]Adder
+    adders[0] = Adder{base: 10}
+    adders[1] = Adder{base: 20}
+    return adders[1].add(5)
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 16
+
+%Adder = type { i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca [2 x %Adder]
+  %2 = call ptr @memset(ptr %0, i32 0, i64 8)
+  %3 = getelementptr %Adder, ptr %0, i64 0
+  %4 = getelementptr %Adder, ptr %3, i32 0, i32 0
+  store i32 10, ptr %4
+  %5 = getelementptr %Adder, ptr %0, i64 1
+  %6 = getelementptr %Adder, ptr %5, i32 0, i32 0
+  store i32 20, ptr %6
+  %7 = getelementptr %Adder, ptr %0, i64 1
+  %9 = getelementptr %Adder, ptr %7, i32 0, i32 0
+  %10 = load i32, ptr %9
+  %11 = add i32 %10, 5
+  ret i32 %11
+}
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 26
+
+%Adder = type { i32 }
+
+define i32 @Adder.add(ptr %self, i32 %x) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 %x, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %Adder, ptr %2, i32 0, i32 0
+  %4 = load i32, ptr %3
+  %5 = load i32, ptr %1
+  %6 = add i32 %4, %5
+  ret i32 %6
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca [2 x %Adder]
+  %1 = alloca i32
+  store i32 2, ptr %1
+  %2 = call ptr @memset(ptr %0, i32 0, i64 8)
+  %3 = getelementptr %Adder, ptr %0, i64 0
+  %4 = getelementptr %Adder, ptr %3, i32 0, i32 0
+  store i32 10, ptr %4
+  %5 = getelementptr %Adder, ptr %0, i64 1
+  %6 = getelementptr %Adder, ptr %5, i32 0, i32 0
+  store i32 20, ptr %6
+  %7 = getelementptr %Adder, ptr %0, i64 1
+  %8 = call i32 @Adder.add(ptr %7, i32 5)
+  ret i32 %8
+}
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 25

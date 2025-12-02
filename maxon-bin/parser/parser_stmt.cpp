@@ -33,7 +33,17 @@ std::unique_ptr<AssignStmtAST> Parser::parseAssignment(const std::string &name) 
 
 std::unique_ptr<ReturnStmtAST> Parser::parseReturn() {
 	Token returnToken = expectKeyword("return", "Expected 'return'");
-	auto value = parseLogicalOr();
+
+	// Check if this is a bare return (for void functions)
+	// A bare return is followed by 'end', another statement keyword, or EOF
+	std::unique_ptr<ExprAST> value = nullptr;
+	if (!checkKeyword("end") && !checkKeyword("if") && !checkKeyword("while") &&
+		!checkKeyword("for") && !checkKeyword("var") && !checkKeyword("let") &&
+		!checkKeyword("return") && !checkKeyword("break") && !checkKeyword("continue") &&
+		!check(TokenType::END_OF_FILE)) {
+		value = parseLogicalOr();
+	}
+
 	return std::make_unique<ReturnStmtAST>(std::move(value), returnToken.line, returnToken.column);
 }
 

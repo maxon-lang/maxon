@@ -1,0 +1,239 @@
+// stdlib/collections/map.maxon
+// Hash map implementation using open addressing with linear probing
+//
+// **Design Philosophy**:
+// - Open addressing for cache-friendly access
+// - Linear probing for simplicity
+// - Automatic resize at 75% load factor
+// - Keys must implement Hashable interface
+//
+// **Slot States**:
+// - 0 = EMPTY (never used)
+// - 1 = OCCUPIED (has valid key-value pair)
+// - 2 = DELETED (tombstone for probing continuity)
+//
+// **Usage**:
+// ```maxon
+// var m = map from string to int
+// m.insert("foo", 42)
+// if m.contains("foo") 'check'
+//     var val = m.get("foo")
+// end 'check'
+// ```
+
+// Internal map struct - used by compiler for map<K,V> types
+// The compiler generates specialized versions for each key/value type pair
+// Conforms to Dictionary interface with KeyType and ValueType as associated types
+export struct map uses KeyType, ValueType is Dictionary with KeyType, ValueType
+	var _keys []KeyType      // Key storage
+	var _values []ValueType  // Value storage
+	var _states []byte       // Slot states: 0=empty, 1=occupied, 2=deleted
+	var _count int           // Number of occupied entries
+	var _capacity int        // Total slots
+
+	// Insert or update a key-value pair
+	export function Dictionary.insert(key KeyType, value ValueType)
+		// Check load factor and grow if needed (75% threshold)
+		var loadLimit = (_capacity * 3) / 4
+		if _count >= loadLimit 'grow'
+			grow()
+		end 'grow'
+
+		var hash = key.hash()
+		var index = hash mod _capacity
+		if index < 0 'fix_negative'
+			index = index + _capacity
+		end 'fix_negative'
+
+		var firstDeleted = 0 - 1
+		var probes = 0
+
+		while probes < _capacity 'probe'
+			var state = _states[index] as int
+
+			if state == 0 'empty'
+				// Empty slot - insert here or at first deleted
+				var insertIndex = index
+				if firstDeleted >= 0 'use_deleted'
+					insertIndex = firstDeleted
+				end 'use_deleted'
+
+				_keys[insertIndex] = key
+				_values[insertIndex] = value
+				_states[insertIndex] = 1b
+				_count = _count + 1
+				return
+			end 'empty'
+
+			if state == 2 and firstDeleted < 0 'mark_deleted'
+				firstDeleted = index
+			end 'mark_deleted'
+
+			if state == 1 and _keys[index].equals(key) 'update'
+				// Key exists - update value
+				_values[index] = value
+				return
+			end 'update'
+
+			// Linear probing
+			index = (index + 1) mod _capacity
+			probes = probes + 1
+		end 'probe'
+
+		// Should never reach here if load factor is maintained
+		// But if we do, insert at first deleted slot
+		if firstDeleted >= 0 'fallback'
+			_keys[firstDeleted] = key
+			_values[firstDeleted] = value
+			_states[firstDeleted] = 1b
+			_count = _count + 1
+		end 'fallback'
+	end 'insert'
+
+	// Get value for key, returns the value (use contains() to check existence first)
+	export function Dictionary.get(key KeyType) ValueType
+		var hash = key.hash()
+		var index = hash mod _capacity
+		if index < 0 'fix_negative'
+			index = index + _capacity
+		end 'fix_negative'
+
+		var probes = 0
+		while probes < _capacity 'probe'
+			var state = _states[index] as int
+
+			if state == 0 'empty'
+				// Empty slot - key not found, return default
+				return _values[0]
+			end 'empty'
+
+			if state == 1 and _keys[index].equals(key) 'found'
+				return _values[index]
+			end 'found'
+
+			// Continue probing (skip deleted slots)
+			index = (index + 1) mod _capacity
+			probes = probes + 1
+		end 'probe'
+
+		// Not found - return default value at index 0
+		return _values[0]
+	end 'get'
+
+	// Check if key exists in the map
+	export function Dictionary.contains(key KeyType) bool
+		var hash = key.hash()
+		var index = hash mod _capacity
+		if index < 0 'fix_negative'
+			index = index + _capacity
+		end 'fix_negative'
+
+		var probes = 0
+		while probes < _capacity 'probe'
+			var state = _states[index] as int
+
+			if state == 0 'empty'
+				return false
+			end 'empty'
+
+			if state == 1 and _keys[index].equals(key) 'found'
+				return true
+			end 'found'
+
+			index = (index + 1) mod _capacity
+			probes = probes + 1
+		end 'probe'
+
+		return false
+	end 'contains'
+
+	// Remove key from map, returns true if key was present
+	export function Dictionary.remove(key KeyType) bool
+		var hash = key.hash()
+		var index = hash mod _capacity
+		if index < 0 'fix_negative'
+			index = index + _capacity
+		end 'fix_negative'
+
+		var probes = 0
+		while probes < _capacity 'probe'
+			var state = _states[index] as int
+
+			if state == 0 'empty'
+				return false
+			end 'empty'
+
+			if state == 1 and _keys[index].equals(key) 'found'
+				_states[index] = 2b
+				_count = _count - 1
+				return true
+			end 'found'
+
+			index = (index + 1) mod _capacity
+			probes = probes + 1
+		end 'probe'
+
+		return false
+	end 'remove'
+
+	// Get number of entries in the map
+	export function Dictionary.count() int
+		return _count
+	end 'count'
+
+	// Get current capacity
+	export function capacity() int
+		return _capacity
+	end 'capacity'
+
+	// Internal: grow the table when load factor exceeds threshold
+	function grow()
+		var oldCapacity = _capacity
+		var newCapacity = oldCapacity * 2
+
+		// Save references to old arrays
+		var oldKeys = _keys
+		var oldValues = _values
+		var oldStates = _states
+
+		// Allocate new arrays
+		var newKeys = [newCapacity]KeyType
+		var newValues = [newCapacity]ValueType
+		var newStates = [newCapacity]byte
+
+		// Update struct to use new arrays
+		_keys = newKeys
+		_values = newValues
+		_states = newStates
+		_capacity = newCapacity
+		_count = 0
+
+		// Rehash all occupied entries from old arrays
+		var i = 0
+		while i < oldCapacity 'rehash'
+			var state = oldStates[i] as int
+			if state == 1 'occupied'
+				// Re-insert into new arrays using insert logic
+				var key = oldKeys[i]
+				var value = oldValues[i]
+
+				var hash = key.hash()
+				var index = hash mod newCapacity
+				if index < 0 'fix_negative'
+					index = index + newCapacity
+				end 'fix_negative'
+
+				// Find empty slot (no deleted slots in fresh array)
+				while _states[index] as int != 0 'find_slot'
+					index = (index + 1) mod newCapacity
+				end 'find_slot'
+
+				_keys[index] = key
+				_values[index] = value
+				_states[index] = 1b
+				_count = _count + 1
+			end 'occupied'
+			i = i + 1
+		end 'rehash'
+	end 'grow'
+end 'map'

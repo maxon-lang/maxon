@@ -94,7 +94,23 @@ void SemanticAnalyzer::registerExternalStruct(const std::string &name, const std
 }
 
 void SemanticAnalyzer::registerBuiltinFunctions() {
-	// Runtime functions are now accessed via intrinsics only
+	// Register hash and equals methods for primitive hashable types
+	// These are implemented as intrinsics in codegen
+
+	// int.hash() -> int (multiplicative hash)
+	functions.emplace("int.hash", FunctionInfo("int.hash", "int", {FunctionParameter("self", "int")}));
+	// int.equals(other) -> bool
+	functions.emplace("int.equals", FunctionInfo("int.equals", "bool", {FunctionParameter("self", "int"), FunctionParameter("other", "int")}));
+
+	// byte.hash() -> int
+	functions.emplace("byte.hash", FunctionInfo("byte.hash", "int", {FunctionParameter("self", "byte")}));
+	// byte.equals(other) -> bool
+	functions.emplace("byte.equals", FunctionInfo("byte.equals", "bool", {FunctionParameter("self", "byte"), FunctionParameter("other", "byte")}));
+
+	// char.hash() -> int
+	functions.emplace("char.hash", FunctionInfo("char.hash", "int", {FunctionParameter("self", "char")}));
+	// char.equals(other) -> bool
+	functions.emplace("char.equals", FunctionInfo("char.equals", "bool", {FunctionParameter("self", "char"), FunctionParameter("other", "char")}));
 }
 
 std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
@@ -324,8 +340,13 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	}
 
 	// Pass 2b: Check interface conformance for all structs
+	// Skip generic templates - conformance will be checked when instantiated
 	logTrace("Pass 2b: Checking interface conformance");
 	for (const auto &structDef : program->structs) {
+		if (!structDef->associatedTypeParams.empty()) {
+			logTrace("Skipping interface conformance check for generic template: " + structDef->name);
+			continue;
+		}
 		if (!structDef->conformsTo.empty()) {
 			checkInterfaceConformance(structDef->name, structDef->conformsTo, structDef->line, structDef->column);
 		}
@@ -335,7 +356,12 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	logTrace("Pass 3: Analyzing function bodies");
 
 	// Analyze methods inside structs first
+	// Skip generic template structs (those with associatedTypeParams) - they'll be analyzed when instantiated
 	for (const auto &structDef : program->structs) {
+		if (!structDef->associatedTypeParams.empty()) {
+			logTrace("Skipping generic template struct methods: " + structDef->name);
+			continue;
+		}
 		for (const auto &method : structDef->methods) {
 			analyzeFunction(method.get());
 		}
@@ -824,4 +850,32 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 					 std::to_string(missingMethods.size()) + " method(s):\n" + missingList,
 				 line, column);
 	}
+}
+
+void SemanticAnalyzer::registerMapMethods(const std::string &mapType, const std::string &keyType, const std::string &valueType) {
+	// Only register methods once per map type
+	// Use qualified method names: mapType.methodName (e.g., "map<int,int>.insert")
+	std::string insertMethodName = mapType + ".insert";
+	if (functions.find(insertMethodName) != functions.end()) {
+		return; // Already registered for this map type
+	}
+
+	// Register map methods with qualified names for proper method resolution
+	// insert(map, key, value) -> void
+	functions.emplace(mapType + ".insert", FunctionInfo(mapType + ".insert", "void", {FunctionParameter("self", mapType), FunctionParameter("key", keyType), FunctionParameter("value", valueType)}));
+
+	// get(map, key) -> valueType
+	functions.emplace(mapType + ".get", FunctionInfo(mapType + ".get", valueType, {FunctionParameter("self", mapType), FunctionParameter("key", keyType)}));
+
+	// contains(map, key) -> bool
+	functions.emplace(mapType + ".contains", FunctionInfo(mapType + ".contains", "bool", {FunctionParameter("self", mapType), FunctionParameter("key", keyType)}));
+
+	// remove(map, key) -> bool
+	functions.emplace(mapType + ".remove", FunctionInfo(mapType + ".remove", "bool", {FunctionParameter("self", mapType), FunctionParameter("key", keyType)}));
+
+	// count(map) -> int
+	functions.emplace(mapType + ".count", FunctionInfo(mapType + ".count", "int", {FunctionParameter("self", mapType)}));
+
+	// capacity(map) -> int
+	functions.emplace(mapType + ".capacity", FunctionInfo(mapType + ".capacity", "int", {FunctionParameter("self", mapType)}));
 }

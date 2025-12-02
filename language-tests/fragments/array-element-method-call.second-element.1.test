@@ -1,0 +1,103 @@
+// Test: array-element-method-call.second-element.1
+struct Value
+    var n int
+    
+    function doubled() int
+        return n * 2
+    end 'doubled'
+end 'Value'
+
+function main() int
+    var vals = [3]Value
+    vals[0] = Value{n: 5}
+    vals[1] = Value{n: 10}
+    vals[2] = Value{n: 15}
+    return vals[2].doubled()
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 19
+
+%Value = type { i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca [3 x %Value]
+  %2 = call ptr @memset(ptr %0, i32 0, i64 12)
+  %3 = getelementptr %Value, ptr %0, i64 0
+  %4 = getelementptr %Value, ptr %3, i32 0, i32 0
+  store i32 5, ptr %4
+  %5 = getelementptr %Value, ptr %0, i64 1
+  %6 = getelementptr %Value, ptr %5, i32 0, i32 0
+  store i32 10, ptr %6
+  %7 = getelementptr %Value, ptr %0, i64 2
+  %8 = getelementptr %Value, ptr %7, i32 0, i32 0
+  store i32 15, ptr %8
+  %9 = getelementptr %Value, ptr %0, i64 2
+  %11 = getelementptr %Value, ptr %9, i32 0, i32 0
+  %12 = load i32, ptr %11
+  %13 = shl i32 %12, 1
+  ret i32 %13
+}
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 26
+
+%Value = type { i32 }
+
+define i32 @Value.doubled(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Value, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  %4 = mul i32 %3, 2
+  ret i32 %4
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca [3 x %Value]
+  %1 = alloca i32
+  store i32 3, ptr %1
+  %2 = call ptr @memset(ptr %0, i32 0, i64 12)
+  %3 = getelementptr %Value, ptr %0, i64 0
+  %4 = getelementptr %Value, ptr %3, i32 0, i32 0
+  store i32 5, ptr %4
+  %5 = getelementptr %Value, ptr %0, i64 1
+  %6 = getelementptr %Value, ptr %5, i32 0, i32 0
+  store i32 10, ptr %6
+  %7 = getelementptr %Value, ptr %0, i64 2
+  %8 = getelementptr %Value, ptr %7, i32 0, i32 0
+  store i32 15, ptr %8
+  %9 = getelementptr %Value, ptr %0, i64 2
+  %10 = call i32 @Value.doubled(ptr %9)
+  ret i32 %10
+}
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 30

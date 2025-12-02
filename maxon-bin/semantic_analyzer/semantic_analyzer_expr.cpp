@@ -1,7 +1,7 @@
+#include "../intrinsics.h"
 #include "../lexer.h"
 #include "../semantic_analyzer.h"
 #include "../type_members.h"
-#include "../intrinsics.h"
 #include <algorithm>
 
 // Expression analysis implementation
@@ -67,6 +67,71 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 			return "[" + std::to_string(arrayLiteral->values.size()) + "]" + elemType;
 		}
+
+	} else if (auto mapLiteral = dynamic_cast<MapLiteralExprAST *>(expr)) {
+		// Map literal: map from K to V
+		// Validate key type implements Hashable
+		const std::string &keyType = mapLiteral->keyType;
+		bool isBuiltinHashable = (keyType == "int" || keyType == "string" ||
+								  keyType == "char" || keyType == "byte");
+		bool isBuiltinNonHashable = (keyType == "float" || keyType == "bool");
+
+		if (isBuiltinNonHashable) {
+			// Built-in types that are not hashable
+			addError("Map key type '" + keyType + "' must implement Hashable interface" +
+						 std::string("\n  Hashable types: int, string, char, byte") +
+						 "\n  Note: Only types that can be hashed can be used as map keys",
+					 expr->line, expr->column);
+			return "error";
+		} else if (!isBuiltinHashable) {
+			// Check if it's a struct that conforms to Hashable
+			auto structInfo = lookupStruct(keyType);
+			if (structInfo == nullptr) {
+				// Track as undefined for auto-import
+				undefinedStructs.insert(keyType);
+			} else {
+				bool conformsToHashable = false;
+				for (const auto &iface : structInfo->conformsTo) {
+					if (iface == "Hashable") {
+						conformsToHashable = true;
+						break;
+					}
+				}
+				if (!conformsToHashable) {
+					addError("Map key type '" + keyType + "' must implement Hashable interface" +
+								 std::string("\n  Hashable types: int, string, char, byte") +
+								 "\n  Or declare: struct " + keyType + " is Hashable",
+							 expr->line, expr->column);
+					return "error";
+				}
+			}
+		}
+
+		// Validate value type exists
+		const std::string &valueType = mapLiteral->valueType;
+		bool isBuiltinValueType = (valueType == "int" || valueType == "float" ||
+								   valueType == "bool" || valueType == "char" ||
+								   valueType == "byte" || valueType == "string" ||
+								   valueType.substr(0, 1) == "["); // Array types
+
+		if (!isBuiltinValueType && structs.find(valueType) == structs.end()) {
+			// Track for auto-import
+			undefinedStructs.insert(valueType);
+		}
+
+		// Register map methods for this specific key/value type pair
+		// Use the dictionary type name from the AST (e.g., "map", "HashMap", etc.)
+		std::string mapType = mapLiteral->dictType + "<" + keyType + "," + valueType + ">";
+		registerMapMethods(mapType, keyType, valueType);
+
+		// Track the base dictionary struct (e.g., "map") as undefined for auto-import
+		// This triggers loading map.maxon so the generic template is available for monomorphization
+		if (structs.find(mapLiteral->dictType) == structs.end()) {
+			undefinedStructs.insert(mapLiteral->dictType);
+		}
+
+		// Return the dictionary type string: dictType<keyType,valueType>
+		return mapType;
 
 	} else if (auto castExpr = dynamic_cast<CastExprAST *>(expr)) {
 		// Analyze the expression being cast
@@ -363,12 +428,13 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		}
 
 		// Handle compiler intrinsics using the registry
-		const IntrinsicInfo* intrinsic = IntrinsicRegistry::instance().lookup(callExpr->callee);
+		const IntrinsicInfo *intrinsic = IntrinsicRegistry::instance().lookup(callExpr->callee);
 		if (intrinsic) {
 			// Validate argument count
 			if (callExpr->args.size() != intrinsic->params.size()) {
 				addError(intrinsic->name + " requires exactly " + std::to_string(intrinsic->params.size()) +
-						 " argument(s)", expr->line, expr->column);
+							 " argument(s)",
+						 expr->line, expr->column);
 				return "error";
 			}
 
@@ -528,6 +594,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 					// Found exactly one match based on receiver type
 					funcIt = functions.find(resolvedMatch);
 					auto idIt = functionIndices.find(resolvedMatch);
+					callExpr->resolvedCallee = resolvedMatch; // Store resolved name for codegen
 					if (idIt != functionIndices.end()) {
 						callExpr->functionId = idIt->second;
 					}
@@ -551,6 +618,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				// Note: We found the function, so it's not undefined
 				funcIt = functions.find(matches[0]);
 				// Store the resolved function ID in the AST for fast codegen lookup
+				callExpr->resolvedCallee = matches[0]; // Store resolved name for codegen
 				auto idIt = functionIndices.find(matches[0]);
 				if (idIt != functionIndices.end()) {
 					callExpr->functionId = idIt->second;

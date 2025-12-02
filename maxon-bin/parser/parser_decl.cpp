@@ -338,8 +338,18 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 	Token nameToken = expect(TokenType::IDENTIFIER, "Expected struct name after 'struct'");
 	std::string structName = nameToken.value;
 
+	// Parse associated type parameters: struct Name uses TypeParam1, TypeParam2
+	std::vector<std::string> associatedTypeParams;
+	if (checkKeyword("uses")) {
+		advance(); // consume 'uses'
+		do {
+			Token typeParamToken = expect(TokenType::IDENTIFIER, "Expected associated type parameter name after 'uses'");
+			associatedTypeParams.push_back(typeParamToken.value);
+		} while (check(TokenType::COMMA) && (advance(), true));
+	}
+
 	// Parse interface conformance with associated type bindings:
-	// Syntax: struct Name is Interface1 with Type1, Type2, Interface2 with Type3
+	// Syntax: struct Name uses TypeParams is Interface1 with Type1, Type2, Interface2 with Type3
 	// - 'with' clause can have multiple types separated by commas
 	// - After types, a comma followed by an identifier that's not a built-in type starts a new interface
 	std::vector<std::string> conformsTo;
@@ -401,6 +411,16 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 						// Peek at the token after the comma to decide
 						Token nextTok = peekToken(1);
 						bool isAnotherType = Lexer::isTypeToken(nextTok) || nextTok.type == TokenType::LBRACKET;
+						// Also check if it's one of the generic type parameters from 'uses' clause
+						if (!isAnotherType && nextTok.type == TokenType::IDENTIFIER) {
+							std::string nextIdent = nextTok.value;
+							for (const auto &typeParam : associatedTypeParams) {
+								if (typeParam == nextIdent) {
+									isAnotherType = true;
+									break;
+								}
+							}
+						}
 						if (isAnotherType) {
 							advance(); // consume comma, continue parsing types
 						} else {
@@ -535,7 +555,7 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 								 std::string(", column ") + std::to_string(blockIdToken.column));
 	}
 
-	return std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo), std::move(methods), std::move(typeAssignments), std::move(interfaceTypeBindings));
+	return std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo), std::move(methods), std::move(typeAssignments), std::move(interfaceTypeBindings), std::move(associatedTypeParams));
 }
 
 std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &structName) {

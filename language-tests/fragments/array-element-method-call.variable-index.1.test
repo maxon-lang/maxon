@@ -1,0 +1,107 @@
+// Test: array-element-method-call.variable-index.1
+struct Item
+    var id int
+    
+    function getId() int
+        return id
+    end 'getId'
+end 'Item'
+
+function main() int
+    var items = [3]Item
+    items[0] = Item{id: 100}
+    items[1] = Item{id: 200}
+    items[2] = Item{id: 300}
+    var idx = 1
+    return items[idx].getId()
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 19
+
+%Item = type { i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca [3 x %Item]
+  %2 = call ptr @memset(ptr %0, i32 0, i64 12)
+  %3 = getelementptr %Item, ptr %0, i64 0
+  %4 = getelementptr %Item, ptr %3, i32 0, i32 0
+  store i32 100, ptr %4
+  %5 = getelementptr %Item, ptr %0, i64 1
+  %6 = getelementptr %Item, ptr %5, i32 0, i32 0
+  store i32 200, ptr %6
+  %7 = getelementptr %Item, ptr %0, i64 2
+  %8 = getelementptr %Item, ptr %7, i32 0, i32 0
+  store i32 300, ptr %8
+  %11 = sext i32 1 to i64
+  %12 = getelementptr %Item, ptr %0, i64 %11
+  %14 = getelementptr %Item, ptr %12, i32 0, i32 0
+  %15 = load i32, ptr %14
+  ret i32 %15
+}
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 29
+
+%Item = type { i32 }
+
+define i32 @Item.getId(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Item, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  ret i32 %3
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca [3 x %Item]
+  %1 = alloca i32
+  store i32 3, ptr %1
+  %2 = call ptr @memset(ptr %0, i32 0, i64 12)
+  %3 = getelementptr %Item, ptr %0, i64 0
+  %4 = getelementptr %Item, ptr %3, i32 0, i32 0
+  store i32 100, ptr %4
+  %5 = getelementptr %Item, ptr %0, i64 1
+  %6 = getelementptr %Item, ptr %5, i32 0, i32 0
+  store i32 200, ptr %6
+  %7 = getelementptr %Item, ptr %0, i64 2
+  %8 = getelementptr %Item, ptr %7, i32 0, i32 0
+  store i32 300, ptr %8
+  %9 = alloca i32
+  store i32 1, ptr %9
+  %10 = load i32, ptr %9
+  %11 = sext i32 %10 to i64
+  %12 = getelementptr %Item, ptr %0, i64 %11
+  %13 = call i32 @Item.getId(ptr %12)
+  ret i32 %13
+}
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 200

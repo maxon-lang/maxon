@@ -1028,3 +1028,77 @@ TEST_CASE("go_to_definition_stdlib_interface", "[analyzer]") {
 	INFO("Got line: " << location->range.start.line);
 	REQUIRE(location->range.start.line == 27);
 }
+
+TEST_CASE("map_method_call_accepts_parameterized_type", "[analyzer]") {
+	// Test that calling methods on a parameterized map type works correctly
+	// Bug: insert() expected 'map' but found 'map<int,int>' - type mismatch error
+	// The method should accept the concrete parameterized map type
+
+	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
+
+	auto doc = createTestDocument(
+		"function main() int\n"
+		"    var m = map from int to int\n"
+		"    m.insert(1, 10)\n"
+		"    return 0\n"
+		"end 'main'");
+
+	auto diagnostics = analyzer.analyze(doc);
+
+	// Debug: print all diagnostics
+	for (const auto &diag : diagnostics) {
+		std::cout << "    Severity " << diag.severity << ": " << diag.message << std::endl;
+	}
+
+	// Should NOT have type mismatch error for insert
+	bool hasTypeMismatch = false;
+	std::string errorMessage;
+	for (const auto &diag : diagnostics) {
+		if (diag.message.find("type mismatch") != std::string::npos &&
+			diag.message.find("insert") != std::string::npos) {
+			hasTypeMismatch = true;
+			errorMessage = diag.message;
+			INFO("Unexpected type mismatch error: " << diag.message);
+		}
+	}
+	REQUIRE_FALSE(hasTypeMismatch);
+}
+
+TEST_CASE("map_all_methods_accept_parameterized_type", "[analyzer]") {
+	// Test that all map methods (insert, get, contains, remove, count, capacity)
+	// work correctly with parameterized map types
+
+	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
+
+	auto doc = createTestDocument(
+		"function main() int\n"
+		"    var m = map from int to int\n"
+		"    m.insert(1, 10)\n"
+		"    var val = m.get(1)\n"
+		"    var exists = m.contains(1)\n"
+		"    var removed = m.remove(1)\n"
+		"    var cnt = m.count()\n"
+		"    var cap = m.capacity()\n"
+		"    return 0\n"
+		"end 'main'");
+
+	auto diagnostics = analyzer.analyze(doc);
+
+	// Should NOT have any type mismatch errors for map methods
+	bool hasTypeMismatch = false;
+	for (const auto &diag : diagnostics) {
+		if (diag.message.find("type mismatch") != std::string::npos &&
+			(diag.message.find("insert") != std::string::npos ||
+			 diag.message.find("get") != std::string::npos ||
+			 diag.message.find("contains") != std::string::npos ||
+			 diag.message.find("remove") != std::string::npos ||
+			 diag.message.find("count") != std::string::npos ||
+			 diag.message.find("capacity") != std::string::npos)) {
+			hasTypeMismatch = true;
+			INFO("Unexpected type mismatch error: " << diag.message);
+		}
+	}
+	REQUIRE_FALSE(hasTypeMismatch);
+}

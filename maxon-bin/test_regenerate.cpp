@@ -50,7 +50,7 @@ static void writeTestFragment(const std::string &outputDir, const std::string &f
 							  bool isDocExample = false) {
 	std::string testFileName = outputDir + "/" + fragmentName + ".test";
 
-	std::ofstream testFile(testFileName);
+	std::ofstream testFile(testFileName, std::ios::binary);
 	testFile << "// Test: " << fragmentName << "\n";
 	testFile << code;
 	testFile << "---\nN/A\n---\nN/A\n---\n";
@@ -553,7 +553,7 @@ int extractSpecFragments(int verboseLevel) {
 	}
 
 	// Write manifest file
-	std::ofstream manifestFile(manifestPath);
+	std::ofstream manifestFile(manifestPath, std::ios::binary);
 	if (manifestFile) {
 		manifestFile << "{\n";
 		manifestFile << "  \"version\": \"1.0\",\n";
@@ -722,7 +722,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 			}
 
 			// Expected compilation failure - write N/A for IR sections, preserve metadata from spec
-			std::ofstream outFile(testPath);
+			std::ofstream outFile(testPath, std::ios::binary);
 			outFile << sourceCode << "---\nN/A\n---\nN/A\n---\n";
 			// Write preserved metadata as-is (from spec file)
 			outFile << metadata;
@@ -757,7 +757,7 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		}
 
 		// Write fragment file with regenerated IR and preserved spec metadata
-		std::ofstream testFile(testPath);
+		std::ofstream testFile(testPath, std::ios::binary);
 		testFile << sourceCode;
 		testFile << "---\n"
 				 << optIR;

@@ -60,6 +60,10 @@ class MIRCodeGenerator {
 	std::map<std::string, std::map<std::string, ExprAST *>> structFieldDefaults;	 // Field default value expressions
 	std::map<std::string, std::vector<std::string>> structConformsTo;				 // Track interface conformance
 	std::map<std::string, std::map<std::string, std::string>> structTypeAssignments; // Associated type assignments
+	std::map<std::string, StructDefAST *> structDefinitions;						 // AST definitions for generic instantiation
+
+	// Generic struct instantiation tracking
+	std::set<std::string> instantiatedGenericStructs; // Track which generic structs have been instantiated
 
 	// Safe FFI: Track extern functions for subprocess isolation
 	struct ExternFuncInfo {
@@ -89,6 +93,9 @@ class MIRCodeGenerator {
 	// Current method context for implicit self field access
 	std::string currentReceiverType; // Set when generating a method, empty for free functions
 
+	// Current type bindings for generic method instantiation
+	std::map<std::string, std::string> currentTypeBindings; // e.g., {"KeyType": "string", "ValueType": "int"}
+
 	// Logging helpers
 	void logProgress(const std::string &msg);
 	void logDetail(const std::string &msg);
@@ -115,10 +122,19 @@ class MIRCodeGenerator {
 	void popScope(mir::MIRFunction *function);
 	void generateScopeCleanup(mir::MIRFunction *function);
 
+	// Generic struct instantiation
+	// Creates a specialized version of a generic struct template with concrete types
+	// Returns the specialized struct type name (e.g., "map<string,int>")
+	std::string instantiateGenericStruct(const std::string &templateName,
+										 const std::map<std::string, std::string> &typeBindings);
+
 	// Code generation methods
 	mir::MIRValue *generateExpr(ExprAST *expr);
 	void generateStmt(StmtAST *stmt, mir::MIRFunction *function);
 	void generateFunction(FunctionAST *func, const std::string &namespaceName = "");
+	void generateFunctionWithTypeBindings(FunctionAST *func, const std::string &namespaceName,
+										  const std::map<std::string, std::string> &typeBindings,
+										  const std::string &specializedReceiverType);
 
 	// Type conversion helpers
 	mir::MIRType *getTypeFromString(const std::string &typeStr);
@@ -149,6 +165,24 @@ class MIRCodeGenerator {
 
 	// Array intrinsic generation (push, pop)
 	mir::MIRValue *generateArrayIntrinsic(CallExprAST *callExpr);
+
+	// Map method generation (insert, get, contains, remove, count, capacity)
+	bool isMapMethodCall(const std::string &callee);
+	mir::MIRValue *generateMapMethod(CallExprAST *callExpr);
+	mir::MIRValue *generateMapContains(mir::MIRValue *mapAlloca, mir::MIRValue *key,
+									   mir::MIRType *keyType, mir::MIRType *valueType,
+									   const std::string &keyTypeStr, mir::MIRType *mapStructType);
+	mir::MIRValue *generateMapGet(mir::MIRValue *mapAlloca, mir::MIRValue *key,
+								  mir::MIRType *keyType, mir::MIRType *valueType,
+								  const std::string &keyTypeStr, mir::MIRType *mapStructType);
+	mir::MIRValue *generateMapInsert(mir::MIRValue *mapAlloca, mir::MIRValue *key,
+									 mir::MIRValue *value, mir::MIRType *keyType,
+									 mir::MIRType *valueType, const std::string &keyTypeStr,
+									 const std::string &valueTypeStr, mir::MIRType *mapStructType);
+	mir::MIRValue *generateMapRemove(mir::MIRValue *mapAlloca, mir::MIRValue *key,
+									 mir::MIRType *keyType, mir::MIRType *valueType,
+									 const std::string &keyTypeStr, mir::MIRType *mapStructType);
+	mir::MIRValue *generateHashForKey(mir::MIRValue *key, const std::string &keyTypeStr);
 
 	// String intrinsic generation (__string_* functions)
 	mir::MIRValue *generateStringIntrinsic(CallExprAST *callExpr);

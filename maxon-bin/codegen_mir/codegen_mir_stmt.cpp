@@ -190,6 +190,136 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			return;
 		}
 
+		// Handle map literal initialization: map from K to V
+		if (auto *mapLiteral = dynamic_cast<MapLiteralExprAST *>(varDecl->initializer.get())) {
+			const std::string &keyType = mapLiteral->keyType;
+			const std::string &valueType = mapLiteral->valueType;
+
+			// Build the specialized type name
+			std::string specializedName = "map<" + keyType + "," + valueType + ">";
+
+			// Instantiate the generic struct if not already done
+			if (instantiatedGenericStructs.find(specializedName) == instantiatedGenericStructs.end()) {
+				// Check if the map template struct exists
+				if (structDefinitions.find("map") != structDefinitions.end()) {
+					std::map<std::string, std::string> typeBindings = {
+						{"KeyType", keyType},
+						{"ValueType", valueType}};
+					instantiateGenericStruct("map", typeBindings);
+				} else {
+					throw std::runtime_error("Generic struct 'map' not found - ensure stdlib/collections/map.maxon is compiled");
+				}
+			}
+
+			// Get the specialized struct type
+			mir::MIRType *mapStructType = structTypes[specializedName];
+			if (!mapStructType) {
+				throw std::runtime_error("Failed to instantiate map type: " + specializedName);
+			}
+
+			// Map is implemented as a map struct with arrays for keys, values, and states
+			// Initial capacity is 16 buckets
+			const int initialCapacity = 16;
+
+			// Get MIR types for key and value
+			mir::MIRType *keyMirType = getTypeFromString(keyType);
+			mir::MIRType *valueMirType = getTypeFromString(valueType);
+
+			// Mark struct type as used
+			mapStructType->used = true;
+
+			// Allocate the map struct on the stack
+			mir::MIRValue *mapAlloca = builder->createAlloca(mapStructType, varDecl->name);
+			namedValues[varDecl->name] = mapAlloca;
+			variableTypes[varDecl->name] = specializedName;
+
+			// Initialize the map with default capacity
+			initHeapManagement();
+			mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+
+			// Allocate keys array with header: [length:i32][capacity:i32][...data...]
+			uint64_t keySize = keyMirType->sizeInBytes;
+			mir::MIRValue *keysDataSize = builder->getInt64(initialCapacity * keySize + 8);
+			mir::MIRValue *keysBase = builder->createCall(mallocFunc, {keysDataSize}, varDecl->name + ".keys.base");
+
+			// Store length and capacity in keys header
+			mir::MIRValue *keysLenPtr = keysBase;
+			builder->createStore(builder->getInt32(initialCapacity), keysLenPtr);
+			mir::MIRValue *keysCapPtr = builder->createGEP(mir::MIRType::getInt8(), keysBase, {builder->getInt64(4)}, "keys.cap.ptr");
+			builder->createStore(builder->getInt32(initialCapacity), keysCapPtr);
+
+			// Data pointer for keys
+			mir::MIRValue *keysData = builder->createGEP(mir::MIRType::getInt8(), keysBase, {builder->getInt64(8)}, varDecl->name + ".keys.data");
+
+			// Zero-initialize keys
+			mir::MIRFunction *memsetFunc = module->getFunction("memset");
+			builder->createCall(memsetFunc, {keysData, builder->getInt32(0), builder->getInt64(initialCapacity * keySize)});
+
+			// Allocate values array with header
+			uint64_t valueSize = valueMirType->sizeInBytes;
+			mir::MIRValue *valuesDataSize = builder->getInt64(initialCapacity * valueSize + 8);
+			mir::MIRValue *valuesBase = builder->createCall(mallocFunc, {valuesDataSize}, varDecl->name + ".values.base");
+
+			// Store length and capacity in values header
+			builder->createStore(builder->getInt32(initialCapacity), valuesBase);
+			mir::MIRValue *valuesCapPtr = builder->createGEP(mir::MIRType::getInt8(), valuesBase, {builder->getInt64(4)}, "values.cap.ptr");
+			builder->createStore(builder->getInt32(initialCapacity), valuesCapPtr);
+
+			// Data pointer for values
+			mir::MIRValue *valuesData = builder->createGEP(mir::MIRType::getInt8(), valuesBase, {builder->getInt64(8)}, varDecl->name + ".values.data");
+
+			// Zero-initialize values
+			builder->createCall(memsetFunc, {valuesData, builder->getInt32(0), builder->getInt64(initialCapacity * valueSize)});
+
+			// Allocate states array with header (byte array)
+			mir::MIRValue *statesDataSize = builder->getInt64(initialCapacity + 8);
+			mir::MIRValue *statesBase = builder->createCall(mallocFunc, {statesDataSize}, varDecl->name + ".states.base");
+
+			// Store length and capacity in states header
+			builder->createStore(builder->getInt32(initialCapacity), statesBase);
+			mir::MIRValue *statesCapPtr = builder->createGEP(mir::MIRType::getInt8(), statesBase, {builder->getInt64(4)}, "states.cap.ptr");
+			builder->createStore(builder->getInt32(initialCapacity), statesCapPtr);
+
+			// Data pointer for states
+			mir::MIRValue *statesData = builder->createGEP(mir::MIRType::getInt8(), statesBase, {builder->getInt64(8)}, varDecl->name + ".states.data");
+
+			// Zero-initialize states (all EMPTY = 0)
+			builder->createCall(memsetFunc, {statesData, builder->getInt32(0), builder->getInt64(initialCapacity)});
+
+			// Store pointers in the HashMap struct
+			mir::MIRValue *keysFieldPtr = builder->createStructGEP(mapStructType, mapAlloca, 0, "_keys");
+			builder->createStore(keysData, keysFieldPtr);
+
+			mir::MIRValue *valuesFieldPtr = builder->createStructGEP(mapStructType, mapAlloca, 1, "_values");
+			builder->createStore(valuesData, valuesFieldPtr);
+
+			mir::MIRValue *statesFieldPtr = builder->createStructGEP(mapStructType, mapAlloca, 2, "_states");
+			builder->createStore(statesData, statesFieldPtr);
+
+			mir::MIRValue *countFieldPtr = builder->createStructGEP(mapStructType, mapAlloca, 3, "_count");
+			builder->createStore(builder->getInt32(0), countFieldPtr);
+
+			mir::MIRValue *capacityFieldPtr = builder->createStructGEP(mapStructType, mapAlloca, 4, "_capacity");
+			builder->createStore(builder->getInt32(initialCapacity), capacityFieldPtr);
+
+			// Track base pointers for cleanup
+			if (!scopeStack.empty()) {
+				mir::MIRValue *keysBaseAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__keys_base");
+				builder->createStore(keysBase, keysBaseAlloca);
+				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._keys", keysBaseAlloca});
+
+				mir::MIRValue *valuesBaseAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__values_base");
+				builder->createStore(valuesBase, valuesBaseAlloca);
+				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._values", valuesBaseAlloca});
+
+				mir::MIRValue *statesBaseAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__states_base");
+				builder->createStore(statesBase, statesBaseAlloca);
+				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._states", statesBaseAlloca});
+			}
+
+			return;
+		}
+
 		// Handle struct initialization
 		if (auto *structInitExpr = dynamic_cast<StructInitExprAST *>(varDecl->initializer.get())) {
 			mir::MIRType *structType = structTypes[structInitExpr->structName];
@@ -653,11 +783,37 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 	if (auto *assign = dynamic_cast<AssignStmtAST *>(stmt)) {
 		mir::MIRValue *alloca = namedValues[assign->name];
+		std::string varType;
+
+		// Check for implicit self field access (when name is a field of the receiver type)
+		if (!alloca && !currentReceiverType.empty()) {
+			auto fieldsIt = structFields.find(currentReceiverType);
+			if (fieldsIt != structFields.end()) {
+				const auto &fields = fieldsIt->second;
+				for (size_t i = 0; i < fields.size(); i++) {
+					if (fields[i].first == assign->name) {
+						// Found the field - get pointer through self
+						mir::MIRValue *selfAlloca = namedValues["self"];
+						if (selfAlloca) {
+							mir::MIRType *selfStructType = structTypes[currentReceiverType];
+							mir::MIRValue *selfPtr = builder->createLoad(mir::MIRType::getPtr(), selfAlloca, "self.load");
+							mir::MIRValue *fieldPtr = builder->createStructGEP(selfStructType, selfPtr, static_cast<int>(i), assign->name);
+							alloca = fieldPtr; // Use field pointer
+							varType = fields[i].second;
+						}
+						break;
+					}
+				}
+			}
+		}
+
 		if (!alloca) {
 			throw std::runtime_error("Unknown variable name: " + assign->name);
 		}
 
-		std::string varType = variableTypes[assign->name];
+		if (varType.empty()) {
+			varType = variableTypes[assign->name];
+		}
 
 		// COW: For string reassignment, save the old data pointer BEFORE evaluating RHS
 		// This is critical for self-assignment like: s = s + "x"
@@ -743,12 +899,38 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		}
 
 		mir::MIRValue *alloca = namedValues[arrayAssign->arrayName];
+		std::string varType;
+
+		// Check for implicit self field access (when arrayName is a field of the receiver type)
+		if (!alloca && !currentReceiverType.empty()) {
+			auto fieldsIt = structFields.find(currentReceiverType);
+			if (fieldsIt != structFields.end()) {
+				const auto &fields = fieldsIt->second;
+				for (size_t i = 0; i < fields.size(); i++) {
+					if (fields[i].first == arrayAssign->arrayName) {
+						// Found the field - load from self
+						mir::MIRValue *selfAlloca = namedValues["self"];
+						if (selfAlloca) {
+							mir::MIRType *selfStructType = structTypes[currentReceiverType];
+							mir::MIRValue *selfPtr = builder->createLoad(mir::MIRType::getPtr(), selfAlloca, "self.load");
+							mir::MIRValue *fieldPtr = builder->createStructGEP(selfStructType, selfPtr, static_cast<int>(i), arrayAssign->arrayName);
+							alloca = fieldPtr; // Use field pointer instead of a separate alloca
+							varType = fields[i].second;
+						}
+						break;
+					}
+				}
+			}
+		}
+
 		if (!alloca) {
 			throw std::runtime_error("Unknown array name: " + arrayAssign->arrayName);
 		}
 
 		// Determine element type
-		std::string varType = variableTypes[arrayAssign->arrayName];
+		if (varType.empty()) {
+			varType = variableTypes[arrayAssign->arrayName];
+		}
 		std::string elementTypeStr = "int";
 		if (varType.size() > 2 && varType[0] == '[') {
 			size_t closeBracket = varType.find(']');
@@ -1639,12 +1821,13 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 			// Load the struct for return
 			retVal = builder->createLoad(structType, structAlloca, "ret.val");
-		} else {
+		} else if (retStmt->value) {
 			retVal = generateExpr(retStmt->value.get());
 			if (!retVal) {
 				throw std::runtime_error("Failed to generate return value");
 			}
 		}
+		// else retVal stays nullptr for void return
 
 		// Clean up all scopes before returning
 		while (!scopeStack.empty()) {
@@ -1652,7 +1835,11 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			scopeStack.pop_back();
 		}
 
-		builder->createRet(retVal);
+		if (retVal) {
+			builder->createRet(retVal);
+		} else {
+			builder->createRetVoid();
+		}
 		return;
 	}
 

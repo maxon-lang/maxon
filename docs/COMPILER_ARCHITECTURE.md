@@ -95,11 +95,60 @@ The semantic analyzer validates the AST and performs type checking. It catches e
 - Unused variable/parameter warnings
 - Error and warning diagnostics
 - Symbol resolution optimization (builds function index map for O(1) codegen lookups)
+- Generic type instantiation and monomorphization (see below)
 
 **Components:**
 - `semantic_analyzer.h/cpp` — Main analyzer
 - `semantic_analyzer/semantic_analyzer_expr.cpp` — Expression analysis
 - `semantic_analyzer/semantic_analyzer_stmt.cpp` — Statement analysis
+
+### Generic Type Instantiation (Monomorphization)
+
+Maxon uses **monomorphization** (Swift-style) for generic types like `map from K to V`. Instead of runtime polymorphism, the compiler generates specialized versions of generic types for each concrete type combination used.
+
+**How it works:**
+
+1. **Declaration:** Generic types are declared with type parameters:
+   ```maxon
+   struct map from KeyType to ValueType
+       _keys [16]KeyType
+       _values [16]ValueType
+       ...
+   end 'map'
+   ```
+
+2. **Instantiation:** When used with concrete types, a specialized struct is created:
+   ```maxon
+   var ages = map from string to int  ' Creates map<string,int>
+   var scores = map from int to float ' Creates map<int,float>
+   ```
+
+3. **Specialization:** The compiler generates unique struct types with concrete fields:
+   - `map<string,int>` has `_keys [16]string` and `_values [16]int`
+   - `map<int,float>` has `_keys [16]int` and `_values [16]float`
+
+**Method Resolution:**
+
+Generic methods use a **type binding system** during code generation:
+
+1. When compiling `ages.get(name)`, the compiler knows `ages` is `map<string,int>`
+2. The `currentTypeBindings` map holds `{KeyType → string, ValueType → int}`
+3. Method calls like `key.hash()` resolve to `string.hash()` via the bindings
+4. Primitive type methods (int.hash, int.equals, etc.) are inlined directly
+
+**Primitive Type Methods:**
+
+Built-in types have compiler-implemented methods for generic compatibility:
+- `int.hash()`, `int.equals(other int)` — For using int as map keys
+- `byte.hash()`, `byte.equals(other byte)` — For using byte as map keys
+- `char.hash()`, `char.equals(other char)` — For using char as map keys
+- `string.hash()`, `string.equals(other string)` — String methods (implemented in stdlib)
+
+**Benefits:**
+- Zero runtime overhead (no vtables or type erasure)
+- Type-safe at compile time
+- Optimized code for each type combination
+- Dead code elimination removes unused specializations
 
 ## Backend (Winchester)
 
@@ -211,8 +260,20 @@ The compiler includes a minimal runtime written in MIR (not C). This eliminates 
 Maxon includes a standard library written in Maxon itself:
 
 - `stdlib/fmt/` — String formatting (`format_int`, `format_float`, etc.)
+- `stdlib/collections/` — Collection types (`map from K to V`)
 - `stdlib/io/` — File I/O (planned)
 - `stdlib/math/` — Additional math functions
+
+### Collections Library
+
+The collections library provides generic data structures:
+
+**Map (Hash Map):**
+- Generic hash map: `map from KeyType to ValueType`
+- Open addressing with linear probing
+- Automatic resizing at 75% load factor
+- Supports any key type with `hash()` and `equals()` methods
+- Location: `stdlib/collections/map.maxon`
 
 ## Safe FFI
 

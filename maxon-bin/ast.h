@@ -121,6 +121,7 @@ class UnaryExprAST : public ExprAST {
 class CallExprAST : public ExprAST {
   public:
 	std::string callee;
+	std::string resolvedCallee; // Resolved name (e.g., "map<int,int>.count" instead of just "count")
 	std::vector<std::unique_ptr<ExprAST>> args;
 	size_t functionId = SIZE_MAX;	  // Resolved during semantic analysis (SIZE_MAX = unresolved)
 	bool isSiblingMethodCall = false; // True when calling another method of the same type from within a method
@@ -190,6 +191,19 @@ class ArrayLiteralExprAST : public ExprAST {
 
 	// Helper to check if this is a variable-sized array
 	bool hasVariableSize() const { return sizeExpr != nullptr; }
+};
+
+// Dictionary type expression (e.g., "map from string to int", "HashMap from int to float")
+// Creates an empty dictionary with the specified key and value types
+// Works with any type that conforms to the Dictionary interface
+class MapLiteralExprAST : public ExprAST {
+  public:
+	std::string dictType;  // Dictionary type name (e.g., "map", "HashMap", "OrderedMap")
+	std::string keyType;   // Key type (must implement Hashable)
+	std::string valueType; // Value type
+
+	MapLiteralExprAST(const std::string &dType, const std::string &kType, const std::string &vType, int l = 0, int c = 0)
+		: ExprAST(l, c), dictType(dType), keyType(kType), valueType(vType) {}
 };
 
 // Member access expression (e.g., "array.length")
@@ -455,6 +469,7 @@ class StructDefAST : public ASTNode {
 	std::string namespaceName; // Namespace this struct belongs to (derived from file path)
 	std::vector<StructField> fields;
 	std::vector<std::unique_ptr<FunctionAST>> methods;					   // Methods declared inside the struct
+	std::vector<std::string> associatedTypeParams;						   // Associated type parameter names from 'uses' clause
 	std::vector<std::string> conformsTo;								   // Interface names this struct conforms to (via 'is')
 	std::map<std::string, std::string> typeAssignments;					   // Associated type assignments (e.g., "Element" -> "char")
 	std::map<std::string, std::vector<std::string>> interfaceTypeBindings; // Per-interface 'with' types (resolved to typeAssignments in semantic analyzer)
@@ -467,8 +482,10 @@ class StructDefAST : public ASTNode {
 				 std::vector<std::string> interfaces = {},
 				 std::vector<std::unique_ptr<FunctionAST>> m = {},
 				 std::map<std::string, std::string> typeAssigns = {},
-				 std::map<std::string, std::vector<std::string>> ifaceBindings = {})
+				 std::map<std::string, std::vector<std::string>> ifaceBindings = {},
+				 std::vector<std::string> assocTypeParams = {})
 		: name(n), namespaceName(ns), fields(std::move(f)), methods(std::move(m)),
+		  associatedTypeParams(std::move(assocTypeParams)),
 		  conformsTo(std::move(interfaces)), typeAssignments(std::move(typeAssigns)),
 		  interfaceTypeBindings(std::move(ifaceBindings)),
 		  isExported(exp), line(l), column(c) {}

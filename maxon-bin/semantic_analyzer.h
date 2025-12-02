@@ -218,6 +218,7 @@ class SemanticAnalyzer {
 	void markVariableAsUsed(const std::string &name);
 	void checkUnusedVariables();
 	void checkInterfaceConformance(const std::string &structName, const std::vector<std::string> &conformsTo, int line, int column);
+	void registerMapMethods(const std::string &mapType, const std::string &keyType, const std::string &valueType);
 };
 
 #endif // SEMANTIC_ANALYZER_H

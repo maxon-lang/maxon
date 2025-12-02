@@ -1,0 +1,115 @@
+// Test: array-element-method-call.computed-index.1
+struct Data
+    var x int
+    
+    function getX() int
+        return x
+    end 'getX'
+end 'Data'
+
+function main() int
+    var arr = [4]Data
+    arr[0] = Data{x: 1}
+    arr[1] = Data{x: 2}
+    arr[2] = Data{x: 3}
+    arr[3] = Data{x: 4}
+    var base = 1
+    return arr[base + 1].getX()
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 22
+
+%Data = type { i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca [4 x %Data]
+  %2 = call ptr @memset(ptr %0, i32 0, i64 16)
+  %3 = getelementptr %Data, ptr %0, i64 0
+  %4 = getelementptr %Data, ptr %3, i32 0, i32 0
+  store i32 1, ptr %4
+  %5 = getelementptr %Data, ptr %0, i64 1
+  %6 = getelementptr %Data, ptr %5, i32 0, i32 0
+  store i32 2, ptr %6
+  %7 = getelementptr %Data, ptr %0, i64 2
+  %8 = getelementptr %Data, ptr %7, i32 0, i32 0
+  store i32 3, ptr %8
+  %9 = getelementptr %Data, ptr %0, i64 3
+  %10 = getelementptr %Data, ptr %9, i32 0, i32 0
+  store i32 4, ptr %10
+  %14 = sext i32 2 to i64
+  %15 = getelementptr %Data, ptr %0, i64 %14
+  %17 = getelementptr %Data, ptr %15, i32 0, i32 0
+  %18 = load i32, ptr %17
+  ret i32 %18
+}
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 33
+
+%Data = type { i32 }
+
+define i32 @Data.getX(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Data, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  ret i32 %3
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca [4 x %Data]
+  %1 = alloca i32
+  store i32 4, ptr %1
+  %2 = call ptr @memset(ptr %0, i32 0, i64 16)
+  %3 = getelementptr %Data, ptr %0, i64 0
+  %4 = getelementptr %Data, ptr %3, i32 0, i32 0
+  store i32 1, ptr %4
+  %5 = getelementptr %Data, ptr %0, i64 1
+  %6 = getelementptr %Data, ptr %5, i32 0, i32 0
+  store i32 2, ptr %6
+  %7 = getelementptr %Data, ptr %0, i64 2
+  %8 = getelementptr %Data, ptr %7, i32 0, i32 0
+  store i32 3, ptr %8
+  %9 = getelementptr %Data, ptr %0, i64 3
+  %10 = getelementptr %Data, ptr %9, i32 0, i32 0
+  store i32 4, ptr %10
+  %11 = alloca i32
+  store i32 1, ptr %11
+  %12 = load i32, ptr %11
+  %13 = add i32 %12, 1
+  %14 = sext i32 %13 to i64
+  %15 = getelementptr %Data, ptr %0, i64 %14
+  %16 = call i32 @Data.getX(ptr %15)
+  ret i32 %16
+}
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 3

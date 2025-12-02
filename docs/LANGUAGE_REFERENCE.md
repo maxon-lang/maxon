@@ -198,6 +198,91 @@ end 'process'
 - Heap-allocated with automatic scope-based cleanup
 - No bounds checking (undefined behavior for out-of-bounds access)
 
+### Map Type
+
+Maps are hash-based key-value collections with O(1) average lookup time.
+
+**Declaration**
+```maxon
+var m = map from KeyType to ValueType
+```
+
+**Examples**
+```maxon
+var scores = map from int to int
+var names = map from string to string
+```
+
+**Key Type Restrictions**
+Map keys must implement the `Hashable` interface. Supported key types:
+- `int`
+- `string`
+- `char`
+- `byte`
+
+Non-hashable types (like `float`) cannot be used as map keys and will produce a compile-time error.
+
+**Map Methods**
+
+| Method | Description | Return Type |
+|--------|-------------|-------------|
+| `m.insert(key, value)` | Insert or update a key-value pair | void |
+| `m.get(key)` | Get value for key (returns zero value if not found) | ValueType |
+| `m.contains(key)` | Check if key exists in map | bool |
+| `m.remove(key)` | Remove key-value pair from map | void |
+| `m.count()` | Return number of key-value pairs | int |
+| `m.capacity()` | Return current capacity of map | int |
+
+**Usage Examples**
+```maxon
+var m = map from int to int
+
+// Insert key-value pairs
+m.insert(1, 100)
+m.insert(2, 200)
+m.insert(3, 300)
+
+// Get values
+var val = m.get(2)           // 200
+var missing = m.get(99)      // 0 (zero value for int)
+
+// Check existence
+if m.contains(1) 'found'
+    print("Key exists")
+end 'found'
+
+// Update existing key
+m.insert(1, 999)             // Updates value for key 1
+var updated = m.get(1)       // 999
+
+// Remove entries
+m.remove(1)
+var count = m.count()        // 2
+
+// Get capacity
+var cap = m.capacity()       // 16 (default initial capacity)
+```
+
+**Implementation Details**
+- Uses open addressing with linear probing for collision resolution
+- Default initial capacity of 16 buckets
+- Automatic resizing at 75% load factor (doubles capacity)
+- Heap-allocated with automatic cleanup at end of scope
+- `get()` returns the zero value of the value type if key is not found
+
+**Automatic Resizing**
+Maps automatically grow when the load factor exceeds 75%:
+```maxon
+var m = map from int to int
+// Initial capacity: 16, grows at 12 entries
+var i = 0
+while i < 20 'insert'
+    m.insert(i, i * 10)  // Triggers resize around i=12
+    i = i + 1
+end 'insert'
+// Capacity is now 32
+```
+
 ### Type Conversions
 
 **Implicit Conversions**

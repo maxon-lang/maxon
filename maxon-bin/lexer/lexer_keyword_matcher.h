@@ -14,14 +14,24 @@
 #include <string_view>
 
 /**
+ * Math intrinsic info stored in keyword entry (uses const char* for static init safety)
+ */
+struct KeywordMathInfo {
+	MathIntrinsicKind kind;
+	const char *runtimeFunctionName; // For RuntimeFunction kind
+	const char *returnType;			 // "int" or "float"
+};
+
+/**
  * Keyword entry in the hash table
  */
 struct KeywordEntry {
-	const char *keyword;		 // The keyword string (null-terminated)
-	uint8_t length;				 // Length of the keyword
-	KeywordCategory category;	 // Keyword category
-	bool has_math_info;			 // Whether this keyword has math intrinsic info
-	MathIntrinsicInfo math_info; // Math intrinsic info (only valid if has_math_info)
+	const char *keyword;	   // The keyword string (null-terminated)
+	const char *description;   // Human-readable description
+	uint8_t length;			   // Length of the keyword
+	KeywordCategory category;  // Keyword category
+	bool has_math_info;		   // Whether this keyword has math intrinsic info
+	KeywordMathInfo math_info; // Math intrinsic info (only valid if has_math_info)
 };
 
 /**
@@ -52,63 +62,70 @@ class KeywordMatcher {
 		}
 
 		// Add all keywords to the hash table
-		add_keyword("int", KeywordCategory::Type);
-		add_keyword("float", KeywordCategory::Type);
-		add_keyword("char", KeywordCategory::Type);
-		add_keyword("byte", KeywordCategory::Type);
-		add_keyword("bool", KeywordCategory::Type);
+		// Types
+		add_keyword("int", KeywordCategory::Type, "Integer type");
+		add_keyword("float", KeywordCategory::Type, "Floating-point type");
+		add_keyword("char", KeywordCategory::Type, "Extended Grapheme Cluster (user-perceived character)");
+		add_keyword("byte", KeywordCategory::Type, "8-bit unsigned integer");
+		add_keyword("bool", KeywordCategory::Type, "Boolean type");
 
-		add_keyword("if", KeywordCategory::ControlFlow);
-		add_keyword("then", KeywordCategory::ControlFlow);
-		add_keyword("else", KeywordCategory::ControlFlow);
-		add_keyword("while", KeywordCategory::ControlFlow);
-		add_keyword("for", KeywordCategory::ControlFlow);
-		add_keyword("in", KeywordCategory::ControlFlow);
-		add_keyword("end", KeywordCategory::ControlFlow);
-		add_keyword("return", KeywordCategory::ControlFlow);
-		add_keyword("break", KeywordCategory::ControlFlow);
-		add_keyword("continue", KeywordCategory::ControlFlow);
+		// Control flow
+		add_keyword("if", KeywordCategory::ControlFlow, "Conditional statement");
+		add_keyword("then", KeywordCategory::ControlFlow, "Single-line if body");
+		add_keyword("else", KeywordCategory::ControlFlow, "Alternative branch");
+		add_keyword("while", KeywordCategory::ControlFlow, "Loop statement");
+		add_keyword("for", KeywordCategory::ControlFlow, "For loop statement");
+		add_keyword("in", KeywordCategory::ControlFlow, "Iterator in for loop");
+		add_keyword("end", KeywordCategory::ControlFlow, "Block terminator");
+		add_keyword("return", KeywordCategory::ControlFlow, "Return from function");
+		add_keyword("break", KeywordCategory::ControlFlow, "Exit loop");
+		add_keyword("continue", KeywordCategory::ControlFlow, "Skip to next iteration");
 
-		add_keyword("function", KeywordCategory::Declaration);
-		add_keyword("var", KeywordCategory::Declaration);
-		add_keyword("let", KeywordCategory::Declaration);
-		add_keyword("struct", KeywordCategory::Declaration);
-		add_keyword("interface", KeywordCategory::Declaration);
-		add_keyword("type", KeywordCategory::Declaration);
-		add_keyword("uses", KeywordCategory::Declaration);
-		add_keyword("with", KeywordCategory::Declaration);
-		add_keyword("export", KeywordCategory::Declaration);
-		add_keyword("extern", KeywordCategory::Declaration);
+		// Declarations
+		add_keyword("function", KeywordCategory::Declaration, "Function declaration");
+		add_keyword("var", KeywordCategory::Declaration, "Mutable variable");
+		add_keyword("let", KeywordCategory::Declaration, "Immutable variable");
+		add_keyword("struct", KeywordCategory::Declaration, "Structure type");
+		add_keyword("interface", KeywordCategory::Declaration, "Interface declaration");
+		add_keyword("type", KeywordCategory::Declaration, "Associated type declaration");
+		add_keyword("uses", KeywordCategory::Declaration, "Interface associated type declaration");
+		add_keyword("with", KeywordCategory::Declaration, "Struct associated type binding");
+		add_keyword("export", KeywordCategory::Declaration, "Export declaration");
+		add_keyword("extern", KeywordCategory::Declaration, "External declaration");
+		add_keyword("from", KeywordCategory::Declaration, "Map key type specifier");
+		add_keyword("to", KeywordCategory::Declaration, "Map value type specifier");
 
 		// Math intrinsics
-		add_math_keyword("sqrt", KeywordCategory::MathIntrinsic,
+		add_math_keyword("sqrt", KeywordCategory::MathIntrinsic, "Square root",
 						 {MathIntrinsicKind::Intrinsic, "", "float"});
-		add_math_keyword("abs", KeywordCategory::MathIntrinsic,
+		add_math_keyword("abs", KeywordCategory::MathIntrinsic, "Absolute value",
 						 {MathIntrinsicKind::Intrinsic, "", "float"});
-		add_math_keyword("floor", KeywordCategory::MathIntrinsic,
+		add_math_keyword("floor", KeywordCategory::MathIntrinsic, "Floor function",
 						 {MathIntrinsicKind::Intrinsic, "", "int"});
-		add_math_keyword("ceil", KeywordCategory::MathIntrinsic,
+		add_math_keyword("ceil", KeywordCategory::MathIntrinsic, "Ceiling function",
 						 {MathIntrinsicKind::Intrinsic, "", "int"});
-		add_math_keyword("round", KeywordCategory::MathIntrinsic,
+		add_math_keyword("round", KeywordCategory::MathIntrinsic, "Round to nearest",
 						 {MathIntrinsicKind::Intrinsic, "", "int"});
-		add_math_keyword("trunc", KeywordCategory::MathIntrinsic,
+		add_math_keyword("trunc", KeywordCategory::MathIntrinsic, "Truncate to integer",
 						 {MathIntrinsicKind::DirectCast, "", "int"});
-		add_math_keyword("sin", KeywordCategory::MathIntrinsic,
+		add_math_keyword("sin", KeywordCategory::MathIntrinsic, "Sine function",
 						 {MathIntrinsicKind::RuntimeFunction, "sin", "float"});
-		add_math_keyword("cos", KeywordCategory::MathIntrinsic,
+		add_math_keyword("cos", KeywordCategory::MathIntrinsic, "Cosine function",
 						 {MathIntrinsicKind::RuntimeFunction, "cos", "float"});
-		add_math_keyword("tan", KeywordCategory::MathIntrinsic,
+		add_math_keyword("tan", KeywordCategory::MathIntrinsic, "Tangent function",
 						 {MathIntrinsicKind::RuntimeFunction, "tan", "float"});
 
-		add_keyword("true", KeywordCategory::Literal);
-		add_keyword("false", KeywordCategory::Literal);
+		// Literals
+		add_keyword("true", KeywordCategory::Literal, "Boolean true");
+		add_keyword("false", KeywordCategory::Literal, "Boolean false");
 
-		add_keyword("as", KeywordCategory::Operator);
-		add_keyword("and", KeywordCategory::Operator);
-		add_keyword("or", KeywordCategory::Operator);
-		add_keyword("not", KeywordCategory::Operator);
-		add_keyword("mod", KeywordCategory::Operator);
-		add_keyword("is", KeywordCategory::Operator);
+		// Operators
+		add_keyword("as", KeywordCategory::Operator, "Type cast operator");
+		add_keyword("and", KeywordCategory::Operator, "Logical and");
+		add_keyword("or", KeywordCategory::Operator, "Logical or");
+		add_keyword("not", KeywordCategory::Operator, "Logical not");
+		add_keyword("mod", KeywordCategory::Operator, "Modulo operator");
+		add_keyword("is", KeywordCategory::Operator, "Interface conformance");
 
 		initialized_ = true;
 	}
@@ -178,6 +195,36 @@ class KeywordMatcher {
 		return KeywordCategory::Literal; // Invalid/not found
 	}
 
+	/**
+	 * Get the number of registered keywords
+	 */
+	static size_t keyword_count() {
+		if (!initialized_)
+			initialize();
+		return keyword_count_;
+	}
+
+	/**
+	 * Get a keyword entry by index (for iteration)
+	 */
+	static const KeywordEntry &get_keyword(size_t index) {
+		if (!initialized_)
+			initialize();
+		return keywords_[index];
+	}
+
+	/**
+	 * Iterate over all keywords with a callback
+	 */
+	template <typename Func>
+	static void for_each_keyword(Func &&func) {
+		if (!initialized_)
+			initialize();
+		for (size_t i = 0; i < keyword_count_; ++i) {
+			func(keywords_[i]);
+		}
+	}
+
   private:
 	// Storage for keyword entries
 	static inline std::array<KeywordEntry, 64> keywords_;
@@ -211,13 +258,13 @@ class KeywordMatcher {
 	/**
 	 * Add a keyword to the hash table
 	 */
-	static void add_keyword(const char *keyword, KeywordCategory category) {
+	static void add_keyword(const char *keyword, KeywordCategory category, const char *description) {
 		size_t len = strlen(keyword);
 		uint32_t hash = compute_hash(keyword, len);
 
 		// Store in keywords array
 		size_t idx = keyword_count_++;
-		keywords_[idx] = {keyword, static_cast<uint8_t>(len), category, false, {}};
+		keywords_[idx] = {keyword, description, static_cast<uint8_t>(len), category, false, {}};
 
 		// Insert into hash table (with linear probing for collisions)
 		while (hash_table_[hash] != EMPTY_SLOT) {
@@ -229,13 +276,13 @@ class KeywordMatcher {
 	/**
 	 * Add a math keyword with intrinsic info
 	 */
-	static void add_math_keyword(const char *keyword, KeywordCategory category,
-								 const MathIntrinsicInfo &math_info) {
+	static void add_math_keyword(const char *keyword, KeywordCategory category, const char *description,
+								 const KeywordMathInfo &math_info) {
 		size_t len = strlen(keyword);
 		uint32_t hash = compute_hash(keyword, len);
 
 		size_t idx = keyword_count_++;
-		keywords_[idx] = {keyword, static_cast<uint8_t>(len), category, true, math_info};
+		keywords_[idx] = {keyword, description, static_cast<uint8_t>(len), category, true, math_info};
 
 		while (hash_table_[hash] != EMPTY_SLOT) {
 			hash = (hash + 1) & (TABLE_SIZE - 1);

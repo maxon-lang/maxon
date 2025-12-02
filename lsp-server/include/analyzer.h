@@ -128,6 +128,7 @@ class Analyzer {
 	// Helper functions
 	std::string getWordAtPosition(const std::string &text, lsp::Position pos);
 	std::string getTextBeforePosition(const std::string &text, lsp::Position pos);
+	std::string findContainingStruct(const std::string &text, lsp::Position pos);
 	bool isKeyword(const std::string &word) const;
 	lsp::Range tokenToRange(const Token &token);
 	void loadStdlibFile(const std::string &filePath, const std::string &namespaceName);
