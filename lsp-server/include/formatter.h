@@ -35,7 +35,7 @@ class Formatter {
 	// Helper methods
 	std::string getIndent(int indentLevel, bool insertSpaces, int tabSize);
 	int calculateIndentLevel(const std::string &line);
-	bool shouldIncreaseIndentForKeyword(const std::string &line);
+	bool shouldIncreaseIndentForKeyword(const std::string &line, bool insideInterface = false);
 	bool shouldDecreaseIndentForEnd(const std::string &line);
 	bool shouldDecreaseIndentForElse(const std::string &line);
 	bool endsWithElseBlockId(const std::string &line);

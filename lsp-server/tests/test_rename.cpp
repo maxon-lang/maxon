@@ -453,9 +453,117 @@ TEST_CASE("linked_editing_block_id_only", "[rename]") {
 
 }
 
+TEST_CASE("linked_editing_interface_method", "[rename]") {
+    Analyzer analyzer;
+    auto doc = createTestDocument(
+        "interface Accumulator uses Item\n"
+        "    function add(self Self, item Item) Self\n"
+        "    function total(self Self) int\n"
+        "end 'Accumulator'\n"
+        "\n"
+        "struct IntSum is Accumulator with int\n"
+        "    var sum int\n"
+        "\n"
+        "    function Accumulator.add(self IntSum, item int) IntSum\n"
+        "        return IntSum{sum: self.sum + item}\n"
+        "    end 'add'\n"
+        "\n"
+        "    function Accumulator.total(self IntSum) int\n"
+        "        return self.sum\n"
+        "    end 'total'\n"
+        "end 'IntSum'"
+    );
+
+    // Position on 'total' in the interface declaration (line 2, col 13)
+    lsp::Position pos{2, 13};
+
+    auto ranges = analyzer.getLinkedEditingRanges(doc, pos);
+
+    REQUIRE(ranges.has_value());
+    auto& rangeList = ranges.value();
+
+    std::cout << "  Number of ranges for interface method: " << rangeList.size() << std::endl;
+    for (size_t i = 0; i < rangeList.size(); i++) {
+        std::cout << "  Range " << i << ": line " << rangeList[i].start.line
+                  << ", col " << rangeList[i].start.character
+                  << " to " << rangeList[i].end.character << std::endl;
+    }
+
+    // Should include:
+    // 1. function total in interface (line 2)
+    // 2. function Accumulator.total in implementation (line 12)
+    // 3. end 'total' (line 14)
+    REQUIRE(rangeList.size() == 3);
+
+    // Verify the ranges
+    bool hasInterfaceDecl = false;
+    bool hasImplementation = false;
+    bool hasBlockId = false;
+
+    for (const auto& range : rangeList) {
+        // Interface declaration: function total (line 2, after "function ")
+        if (range.start.line == 2 && range.start.character == 13) hasInterfaceDecl = true;
+        // Implementation: Accumulator.total (line 12, after the dot)
+        if (range.start.line == 12 && range.start.character == 25) hasImplementation = true;
+        // Block ID: 'total' (line 14)
+        if (range.start.line == 14 && range.start.character == 9) hasBlockId = true;
+    }
+
+    REQUIRE(hasInterfaceDecl);
+    REQUIRE(hasImplementation);
+    REQUIRE(hasBlockId);
+}
+
+TEST_CASE("linked_editing_interface_method_from_implementation", "[rename]") {
+    Analyzer analyzer;
+    auto doc = createTestDocument(
+        "interface Accumulator uses Item\n"
+        "    function add(self Self, item Item) Self\n"
+        "    function total(self Self) int\n"
+        "end 'Accumulator'\n"
+        "\n"
+        "struct IntSum is Accumulator with int\n"
+        "    var sum int\n"
+        "\n"
+        "    function Accumulator.add(self IntSum, item int) IntSum\n"
+        "        return IntSum{sum: self.sum + item}\n"
+        "    end 'add'\n"
+        "\n"
+        "    function Accumulator.total(self IntSum) int\n"
+        "        return self.sum\n"
+        "    end 'total'\n"
+        "end 'IntSum'"
+    );
+
+    // Position on 'total' in the qualified implementation (line 12, col 25)
+    lsp::Position pos{12, 25};
+
+    auto ranges = analyzer.getLinkedEditingRanges(doc, pos);
+
+    REQUIRE(ranges.has_value());
+    auto& rangeList = ranges.value();
+
+    // Should include the same 3 ranges as clicking on the interface declaration
+    REQUIRE(rangeList.size() == 3);
+
+    bool hasInterfaceDecl = false;
+    bool hasImplementation = false;
+    bool hasBlockId = false;
+
+    for (const auto& range : rangeList) {
+        if (range.start.line == 2 && range.start.character == 13) hasInterfaceDecl = true;
+        if (range.start.line == 12 && range.start.character == 25) hasImplementation = true;
+        if (range.start.line == 14 && range.start.character == 9) hasBlockId = true;
+    }
+
+    REQUIRE(hasInterfaceDecl);
+    REQUIRE(hasImplementation);
+    REQUIRE(hasBlockId);
+}
+
 TEST_CASE("linked_editing_ranges_exclude_quotes", "[rename]") {
 
-    
+
     Analyzer analyzer;
     auto doc = createTestDocument(
         "struct Point\n"
@@ -468,10 +576,10 @@ TEST_CASE("linked_editing_ranges_exclude_quotes", "[rename]") {
         "    return Point{x: 1, y: 2}\n"
         "end 'test'"
     );
-    
+
     // Position on the struct name at declaration (line 0, col 7)
     lsp::Position pos{0, 7};
-    
+
     auto ranges = analyzer.getLinkedEditingRanges(doc, pos);
     
     REQUIRE(ranges.has_value());

@@ -1870,7 +1870,7 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
 				for (size_t i = 0; i < tokens.size(); i++) {
 					const auto &token = tokens[i];
 
-					// Function name at declaration
+					// Function name at declaration (unqualified: "function foo")
 					if (token.type == TokenType::IDENTIFIER && token.value == functionName &&
 						i > 0 && tokens[i - 1].value == "function") {
 						lsp::Range range;
@@ -1880,7 +1880,67 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
 						range.end.character = token.column - 1 + token.value.length();
 						ranges.push_back(range);
 					}
+					// Qualified function name (e.g., "Interface.method" in implementations)
+					// Pattern: function <identifier> DOT <functionName>
+					else if (token.type == TokenType::IDENTIFIER && token.value == functionName &&
+							 i >= 2 &&
+							 tokens[i - 1].type == TokenType::DOT &&
+							 tokens[i - 2].type == TokenType::IDENTIFIER &&
+							 i >= 3 && tokens[i - 3].value == "function") {
+						lsp::Range range;
+						range.start.line = token.line - 1;
+						range.start.character = token.column - 1;
+						range.end.line = token.line - 1;
+						range.end.character = token.column - 1 + token.value.length();
+						ranges.push_back(range);
+					}
 					// Block identifier matching the function name (in quotes at 'end')
+					else if (token.type == TokenType::BLOCK_ID && token.value == functionName) {
+						lsp::Range range;
+						range.start.line = token.line - 1;
+						range.start.character = token.column; // Skip opening quote
+						range.end.line = token.line - 1;
+						range.end.character = token.column + token.value.length(); // Before closing quote
+						ranges.push_back(range);
+					}
+				}
+			}
+			// Handle qualified function name (when clicking after the dot)
+			// Pattern: function <identifier> DOT <targetToken>
+			else if (targetIndex >= 2 &&
+					 tokens[targetIndex - 1].type == TokenType::DOT &&
+					 tokens[targetIndex - 2].type == TokenType::IDENTIFIER &&
+					 targetIndex >= 3 && tokens[targetIndex - 3].value == "function") {
+				std::string functionName = targetToken->value;
+
+				// Find all occurrences of this function name
+				for (size_t i = 0; i < tokens.size(); i++) {
+					const auto &token = tokens[i];
+
+					// Function name at declaration (unqualified: "function foo")
+					if (token.type == TokenType::IDENTIFIER && token.value == functionName &&
+						i > 0 && tokens[i - 1].value == "function") {
+						lsp::Range range;
+						range.start.line = token.line - 1;
+						range.start.character = token.column - 1;
+						range.end.line = token.line - 1;
+						range.end.character = token.column - 1 + token.value.length();
+						ranges.push_back(range);
+					}
+					// Qualified function name (e.g., "Interface.method" in implementations)
+					else if (token.type == TokenType::IDENTIFIER && token.value == functionName &&
+							 i >= 2 &&
+							 tokens[i - 1].type == TokenType::DOT &&
+							 tokens[i - 2].type == TokenType::IDENTIFIER &&
+							 i >= 3 && tokens[i - 3].value == "function") {
+						lsp::Range range;
+						range.start.line = token.line - 1;
+						range.start.character = token.column - 1;
+						range.end.line = token.line - 1;
+						range.end.character = token.column - 1 + token.value.length();
+						ranges.push_back(range);
+					}
+					// Block identifier matching the function name
 					else if (token.type == TokenType::BLOCK_ID && token.value == functionName) {
 						lsp::Range range;
 						range.start.line = token.line - 1;

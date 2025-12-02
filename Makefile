@@ -187,7 +187,7 @@ else
 	@cd lsp-server/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
 endif
 
-lsp-test: lsp-server/tests/build/build.ninja
+lsp-test: lsp-server lsp-server/tests/build/build.ninja
 	@echo Building and running LSP tests...
 	@cd lsp-server/tests/build && cmake --build .
 	@echo Running LSP tests...

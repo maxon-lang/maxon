@@ -808,3 +808,113 @@ TEST_CASE("format_single_line_if_multiline_else", "[formatter]") {
 	// Level 1: end fallback
 	REQUIRE(result.find("\tend 'fallback'") != std::string::npos);
 }
+
+// ============================================
+// Interface formatting tests
+// ============================================
+
+TEST_CASE("format_interface_declaration", "[formatter]") {
+	Formatter formatter;
+
+	// Basic interface with method declarations
+	std::string source =
+		"interface Accumulator uses Item\n"
+		"function add(self Self, item Item) Self\n"
+		"function total(self Self) int\n"
+		"end 'Accumulator'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Interface declaration:\n"
+			  << result << std::endl;
+
+	// Interface at level 0
+	REQUIRE(result.find("interface Accumulator uses Item") != std::string::npos);
+	// Method declarations at level 1
+	REQUIRE(result.find("\tfunction add(self Self, item Item) Self") != std::string::npos);
+	REQUIRE(result.find("\tfunction total(self Self) int") != std::string::npos);
+	// End at level 0
+	REQUIRE(result.find("end 'Accumulator'") != std::string::npos);
+	REQUIRE(result.find("\tend 'Accumulator'") == std::string::npos);
+}
+
+TEST_CASE("format_interface_with_struct_implementation", "[formatter]") {
+	Formatter formatter;
+
+	// Interface with implementing struct
+	std::string source =
+		"interface Accumulator uses Item\n"
+		"function add(self Self, item Item) Self\n"
+		"function total(self Self) int\n"
+		"end 'Accumulator'\n"
+		"\n"
+		"struct IntSum is Accumulator with int\n"
+		"var sum int\n"
+		"\n"
+		"function Accumulator.add(self IntSum, item int) IntSum\n"
+		"return IntSum{sum: self.sum + item}\n"
+		"end 'add'\n"
+		"\n"
+		"function Accumulator.total(self IntSum) int\n"
+		"return self.sum\n"
+		"end 'total'\n"
+		"end 'IntSum'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Interface with struct implementation:\n"
+			  << result << std::endl;
+
+	// Interface at level 0
+	REQUIRE(result.find("interface Accumulator uses Item") != std::string::npos);
+	REQUIRE(result.find("\tfunction add(self Self, item Item) Self") != std::string::npos);
+	REQUIRE(result.find("\tfunction total(self Self) int") != std::string::npos);
+	REQUIRE(result.find("end 'Accumulator'") != std::string::npos);
+
+	// Struct at level 0
+	REQUIRE(result.find("struct IntSum is Accumulator with int") != std::string::npos);
+	REQUIRE(result.find("\tvar sum int") != std::string::npos);
+
+	// Functions inside struct at level 1
+	REQUIRE(result.find("\tfunction Accumulator.add(self IntSum, item int) IntSum") != std::string::npos);
+	REQUIRE(result.find("\t\treturn IntSum{sum: self.sum + item}") != std::string::npos);
+	REQUIRE(result.find("\tend 'add'") != std::string::npos);
+
+	REQUIRE(result.find("\tfunction Accumulator.total(self IntSum) int") != std::string::npos);
+	REQUIRE(result.find("\t\treturn self.sum") != std::string::npos);
+	REQUIRE(result.find("\tend 'total'") != std::string::npos);
+
+	// Struct end at level 0
+	REQUIRE(result.find("end 'IntSum'") != std::string::npos);
+	REQUIRE(result.find("\tend 'IntSum'") == std::string::npos);
+}
+
+TEST_CASE("format_exported_interface", "[formatter]") {
+	Formatter formatter;
+
+	// Exported interface
+	std::string source =
+		"export interface Iterator\n"
+		"function hasNext(self Self) bool\n"
+		"function next(self Self) int\n"
+		"end 'Iterator'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Exported interface:\n"
+			  << result << std::endl;
+
+	// Export interface at level 0
+	REQUIRE(result.find("export interface Iterator") != std::string::npos);
+	// Method declarations at level 1
+	REQUIRE(result.find("\tfunction hasNext(self Self) bool") != std::string::npos);
+	REQUIRE(result.find("\tfunction next(self Self) int") != std::string::npos);
+	// End at level 0
+	REQUIRE(result.find("end 'Iterator'") != std::string::npos);
+}

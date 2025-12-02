@@ -15,6 +15,7 @@ std::vector<TextEdit> Formatter::formatDocument(
 	int currentIndentLevel = 0;
 	int braceDepth = 0; // Track struct literal brace depth separately
 	int consecutiveBlankCount = 0;
+	bool insideInterface = false; // Track if we're inside an interface block
 
 	std::string formattedText;
 
@@ -53,6 +54,10 @@ std::vector<TextEdit> Formatter::formatDocument(
 		// Decrease indent for 'end' statements (control flow)
 		if (shouldDecreaseIndentForEnd(trimmedLine)) {
 			currentIndentLevel = std::max(0, currentIndentLevel - 1);
+			// Check if we're ending an interface block
+			if (insideInterface) {
+				insideInterface = false;
+			}
 		}
 
 		// Decrease indent for 'else' statements (should be at same level as 'if')
@@ -81,9 +86,13 @@ std::vector<TextEdit> Formatter::formatDocument(
 		if (endsWithOpenBrace) {
 			braceDepth++;
 			currentIndentLevel++;
-		} else if (shouldIncreaseIndentForKeyword(trimmedLine)) {
+		} else if (shouldIncreaseIndentForKeyword(trimmedLine, insideInterface)) {
 			// Increase indent for control flow keywords (function, if, while, etc.)
 			currentIndentLevel++;
+			// Check if we're entering an interface block
+			if (trimmedLine.find("interface ") == 0 || trimmedLine.find("export interface ") == 0) {
+				insideInterface = true;
+			}
 		}
 	}
 
@@ -135,10 +144,16 @@ int Formatter::calculateIndentLevel(const std::string &line) {
 	return level;
 }
 
-bool Formatter::shouldIncreaseIndentForKeyword(const std::string &line) {
+bool Formatter::shouldIncreaseIndentForKeyword(const std::string &line, bool insideInterface) {
 	// Remove leading whitespace for checking
 	std::string trimmed = line;
 	trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+
+	// Inside an interface, function declarations don't increase indent
+	// (they're just signatures, not block-opening definitions)
+	if (insideInterface && trimmed.find("function ") == 0) {
+		return false;
+	}
 
 	// Check for single-line if with 'then' but NO block identifier
 	// e.g., "if x > 5 then return 1" is complete on one line (no else/end needed)
@@ -201,7 +216,7 @@ bool Formatter::shouldIncreaseIndentForKeyword(const std::string &line) {
 	}
 
 	// Check if line starts with block-opening keywords (or export + keyword)
-	const char *openingKeywords[] = {"function", "if", "else", "while", "for", "struct", "export function", "export struct"};
+	const char *openingKeywords[] = {"function", "if", "else", "while", "for", "struct", "interface", "export function", "export struct", "export interface"};
 	for (const auto &keyword : openingKeywords) {
 		if (trimmed.find(keyword) == 0) {
 			// Make sure it's a complete keyword (followed by space or non-alphanumeric)
