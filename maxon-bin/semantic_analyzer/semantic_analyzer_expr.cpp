@@ -231,14 +231,17 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Comparison operators: <, >, L (<=), G (>=), E (==), N (!=)
 		if (binExpr->op == '<' || binExpr->op == '>' || binExpr->op == 'L' ||
 			binExpr->op == 'G' || binExpr->op == 'E' || binExpr->op == 'N') {
-			// Allow comparison between int and float (implicit promotion)
-			if ((leftType == "int" || leftType == "float") &&
-				(rightType == "int" || rightType == "float")) {
+			// Exact type matching for int and float (no implicit promotion)
+			if (leftType == "int" && rightType == "int") {
+				return "bool";
+			}
+			if (leftType == "float" && rightType == "float") {
 				return "bool";
 			}
 
-			// Contextual literal typing: if one operand is byte and the other is an int literal,
-			// treat the literal as byte type
+			// Contextual literal typing for byte ↔ int:
+			// - int literal (0-255) compared to byte variable: treat literal as byte
+			// - byte literal compared to int variable: treat literal as int
 			if (leftType == "byte" && rightType == "int") {
 				if (auto *numExpr = dynamic_cast<NumberExprAST *>(binExpr->right.get())) {
 					if (numExpr->value >= 0 && numExpr->value <= 255) {
@@ -251,6 +254,17 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 					if (numExpr->value >= 0 && numExpr->value <= 255) {
 						return "bool";
 					}
+				}
+			}
+			// byte literal compared to int variable
+			if (leftType == "int" && rightType == "byte") {
+				if (dynamic_cast<ByteExprAST *>(binExpr->right.get())) {
+					return "bool";
+				}
+			}
+			if (leftType == "byte" && rightType == "int") {
+				if (dynamic_cast<ByteExprAST *>(binExpr->left.get())) {
+					return "bool";
 				}
 			}
 
@@ -397,12 +411,11 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				return "float";
 			}
 
-			// Analyze arguments
+			// Analyze arguments - allow int, byte, or float (int/byte are implicitly promoted)
 			for (auto &arg : callExpr->args) {
 				std::string argType = analyzeExpression(arg.get());
-				// Allow both int and float (int will be promoted)
-				if (argType != "int" && argType != "float" && argType != "error") {
-					addError("Math function '" + callExpr->callee + "' expects numeric argument, got " + argType,
+				if (argType != "int" && argType != "byte" && argType != "float" && argType != "error") {
+					addError("Function '" + callExpr->callee + "' requires numeric argument, got " + argType,
 							 expr->line, expr->column);
 				}
 			}
@@ -715,9 +728,12 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			std::string argType = analyzeExpression(callExpr->args[i].get());
 			std::string expectedType = funcInfo.parameters[i + paramOffset].type;
 
-			// Allow implicit int-to-float conversion
-			bool isValidType = typesMatch(expectedType, argType) ||
-							   (expectedType == "float" && argType == "int");
+			// Type matching with int/byte → float promotion (no data loss)
+			bool isValidType = typesMatch(expectedType, argType);
+			// Allow int or byte to promote to float
+			if (!isValidType && expectedType == "float" && (argType == "int" || argType == "byte")) {
+				isValidType = true;
+			}
 
 			if (!isValidType) {
 				addError("Function '" + callExpr->callee + "' argument type mismatch" +

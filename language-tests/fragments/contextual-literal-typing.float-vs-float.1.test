@@ -1,0 +1,62 @@
+// Test: contextual-literal-typing.float-vs-float.1
+function main() int
+    var a = 3.14
+    var b = 3.14
+    if a == b 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 6
+
+define i32 @main() {
+entry0:
+  br i1 1, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  ret i32 0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 13
+
+define i32 @main() {
+entry0:
+  %0 = alloca f64
+  store f64 3.14, ptr %0
+  %1 = alloca f64
+  store f64 3.14, ptr %1
+  %2 = load f64, ptr %0
+  %3 = load f64, ptr %1
+  %4 = fcmp oeq f64 %2, %3
+  br i1 %4, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  ret i32 0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 1

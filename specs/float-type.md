@@ -18,8 +18,9 @@ Key implementation:
 - Supports arithmetic: `+`, `-`, `*`, `/` (no modulo)
 - Supports comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
 - Cannot be cast to `int`; use `trunc()` for truncation toward zero
-- Math intrinsics operate on floats: `sin`, `cos`, `tan`, `sqrt`, `abs`, `floor`, `ceil`, `round`, `trunc`
-- Integer values are promoted to float in mixed operations
+- Math intrinsics require float arguments: `sin`, `cos`, `tan`, `sqrt`, `abs`, `floor`, `ceil`, `round`, `trunc`
+- Arithmetic operations support mixed int/float (int promoted to float)
+- Comparisons require exact type match (no implicit promotion between int and float)
 
 Used extensively for mathematical computations and scientific calculations.
 

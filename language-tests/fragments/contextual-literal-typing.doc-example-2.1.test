@@ -1,0 +1,61 @@
+// Test: contextual-literal-typing.doc-example-2.1
+function main() int
+    var x = 200
+    if x == 200b 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 8
+
+define i32 @main() {
+entry0:
+  %2 = zext i8 -56 to i32
+  %3 = icmp eq i32 200, %2
+  br i1 %3, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  ret i32 0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 11
+
+define i32 @main() {
+entry0:
+  %0 = alloca i32
+  store i32 200, ptr %0
+  %1 = load i32, ptr %0
+  %2 = zext i8 -56 to i32
+  %3 = icmp eq i32 %1, %2
+  br i1 %3, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  ret i32 0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 1

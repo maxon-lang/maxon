@@ -527,8 +527,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		}
 
 		throw std::runtime_error("Unsupported cast from " +
-			(sourceType->structName.empty() ? getMaxonTypeFromMIRType(sourceType) : sourceType->structName) +
-			" to " + castExpr->targetType);
+								 (sourceType->structName.empty() ? getMaxonTypeFromMIRType(sourceType) : sourceType->structName) +
+								 " to " + castExpr->targetType);
 	}
 
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
@@ -1314,6 +1314,17 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			}
 		}
 
+		// Normalize byte to int for comparisons (zero-extend to preserve unsigned semantics)
+		if (!needsFloatOp && left->type->isInteger() && right->type->isInteger()) {
+			uint64_t leftBits = left->type->sizeInBytes * 8;
+			uint64_t rightBits = right->type->sizeInBytes * 8;
+			if (leftBits < rightBits) {
+				left = builder->createZExt(left, right->type, "zexttmp");
+			} else if (rightBits < leftBits) {
+				right = builder->createZExt(right, left->type, "zexttmp");
+			}
+		}
+
 		switch (binExpr->op) {
 		case '+':
 			return needsFloatOp ? builder->createFAdd(left, right, "faddtmp")
@@ -1637,9 +1648,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				argVal = tempAlloca;
 			}
 
-			// Type promotion if needed
+			// Promote int/byte to float if parameter expects float
 			if (paramType->isFloat() && argVal->type->isInteger()) {
-				argVal = builder->createSIToFP(argVal, mir::MIRType::getFloat64(), "inttofp");
+				argVal = builder->createSIToFP(argVal, mir::MIRType::getFloat64(), "promotetmp");
 			}
 
 			argsV.push_back(argVal);
@@ -1684,7 +1695,7 @@ mir::MIRValue *MIRCodeGenerator::generateMathIntrinsic(CallExprAST *callExpr) {
 		throw std::runtime_error("Unknown math intrinsic: " + name);
 	}
 
-	// Generate arguments
+	// Generate arguments with int-to-float promotion
 	std::vector<mir::MIRValue *> args;
 	for (auto &arg : callExpr->args) {
 		mir::MIRValue *argVal = generateExpr(arg.get());
