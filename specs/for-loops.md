@@ -20,7 +20,7 @@ For loops in Maxon use an iterator-based approach where the compiler provides sy
 
 **Standard Library Responsibility:**
 - Define `Iterator` struct contract
-- Implement `hasNext()`, `getCurrent()`, `next()` functions  
+- Implement `next()` function that returns `Element or nil`
 - Provide concrete iterators (range, array, etc.)
 - Implement map/filter/reduce using iterator interface
 
@@ -45,13 +45,16 @@ For loops in Maxon use an iterator-based approach where the compiler provides sy
 - Desugars to:
   ```llvm
   var __iter = <iterable>
-  while hasNext(&__iter) = 1
-      let <loopVar> = getCurrent(&__iter)
-      <body>
-      __iter = next(&__iter)
-  end
+  while 1 = 1 'loop'
+      var __opt = next(__iter)
+      if let <loopVar> = __opt 'check'
+          <body>
+      else 'check'
+          break 'loop'
+      end 'check'
+  end 'loop'
   ```
-- Uses suffix matching to find `hasNext`, `getCurrent`, `next`
+- Uses suffix matching to find `next` method
 - Structs passed by pointer (Maxon calling convention)
 - Loop variable scope managed via namedValues map
 
@@ -65,11 +68,9 @@ For loops in Maxon use an iterator-based approach where the compiler provides sy
 The iterator interface is a contract defined by the standard library in `stdlib/iter/iterator.maxon`:
 
 - `Iterator` struct with fields: `current`, `limit`, `step`
-- `hasNext(Iterator) int` - Returns 1 if more elements exist, 0 otherwise
-- `getCurrent(Iterator) int` - Returns current element value
-- `next(Iterator) Iterator` - Returns new iterator advanced by step
+- `next(Iterator) int or nil` - Returns the next element value, or nil if no more elements exist
 
-Any type that implements these three functions can be used with for loops.
+Any type that implements the `next()` function returning `Element or nil` can be used with for loops.
 
 ## Documentation
 
@@ -174,18 +175,19 @@ Becomes:
 
 ```text
 var __iter = range(0, 3)
-while hasNext(__iter) = 1 'loop'
-    let i = getCurrent(__iter)
-    print(i)
-    __iter = next(__iter)
+while 1 = 1 'loop'
+    var __opt = __iter.next()
+    if let i = __opt 'check'
+        print(i)
+    else 'check'
+        break 'loop'
+    end 'check'
 end 'loop'
 ```
 
 The standard library (automatically available) provides:
 - `Iterator` struct definition (exported from `stdlib/iter/iterator.maxon`)
-- `hasNext(Iterator) int` - Check if more elements exist
-- `getCurrent(Iterator) int` - Get current element
-- `next(Iterator) Iterator` - Advance to next element
+- `next(Iterator) int or nil` - Returns next element or nil if exhausted
 - `range(int, int) Iterator` - Create range iterator (from `stdlib/iter/range.maxon`)
 
 This design separates concerns:
@@ -194,12 +196,10 @@ This design separates concerns:
 
 ### Iterator Interface
 
-The iterator interface is a contract defined by the standard library. Any type that implements the three required functions can be used with for loops:
+The iterator interface is a contract defined by the standard library. Any type that implements the `next()` function can be used with for loops:
 
 - `Iterator` struct with fields: `current`, `limit`, `step`
-- `hasNext(Iterator) int` - Returns 1 if more elements exist, 0 otherwise
-- `getCurrent(Iterator) int` - Returns current element value
-- `next(Iterator) Iterator` - Returns new iterator advanced by step
+- `next(Iterator) int or nil` - Returns the next element value, or nil if no more elements exist
 
 The `Iterator` struct is exported from `stdlib/iter/iterator.maxon` and can be used in any file with the qualified name `Iterator`.
 

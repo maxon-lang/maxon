@@ -730,19 +730,20 @@ end 'main'
 function main() int
     // Verify heap-allocated string data is accessible via bytes()
     var s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    var bytes = s.bytes()
     // Read first byte ('A' = 65)
-    var first = bytes.getCurrent()
-    print_int(first as int)
-    // Skip 24 bytes to get to 'Z' (advance to position 25)
-    var i = 0
-    while i < 25 'skip'
-        bytes = bytes.next()
-        i = i + 1
-    end 'skip'
+    var first_printed = false
+    for b in s.bytes() 'read_first'
+        if not first_printed 'print_first'
+            print_int(b as int)
+            first_printed = true
+        end 'print_first'
+    end 'read_first'
     // Read last byte ('Z' = 90)
-    var last = bytes.getCurrent()
-    print_int(last as int)
+    var last_byte = 0 as byte
+    for b in s.bytes() 'read_all'
+        last_byte = b
+    end 'read_all'
+    print_int(last_byte as int)
     return 0
 end 'main'
 ```
@@ -801,7 +802,9 @@ function main() int
     var sum = 0
     for c in s 'loop'
         var cps = c.codepoints()
-        sum = sum + cps.getCurrent()  // char is a grapheme cluster struct
+        if let cp = cps.next() 'get_cp'
+            sum = sum + cp
+        end 'get_cp'
     end 'loop'
     print_int(sum)  // 65+66+...+80 = 1160
     return 0

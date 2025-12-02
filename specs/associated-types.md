@@ -180,18 +180,17 @@ The standard library `Iterable` interface uses associated types:
 
 ```maxon
 interface Iterable uses Element
-    function hasNext() int
-    function getCurrent() Element
-    function next() Self
+    function next() Element or nil
 end 'Iterable'
 ```
 
 Different iterators define different element types:
 
 - `Iterator` (for `range()`): `is Iterable with int`
-- `string`: `is Iterable with int` (Unicode codepoint)
-- `ByteView`: `is Iterable with int` (byte value)
+- `string`: `is Iterable with char` (grapheme cluster)
+- `ByteView`: `is Iterable with byte` (byte value)
 - `UTF16View`: `is Iterable with int` (UTF-16 code unit)
+- `CodepointView`: `is Iterable with int` (Unicode codepoint)
 
 ### For-Loop Type Inference
 
@@ -201,8 +200,11 @@ When iterating with `for`, the loop variable's type is inferred from the iterato
 function main() int
     var s = "Hi"
     for ch in s 'chars'
-        // ch has type 'int' (inferred from string's Element type - Unicode codepoint)
-        print(ch)
+        // ch has type 'char' (inferred from string's Element type - grapheme cluster)
+        var cps = ch.codepoints()
+        if let cp = cps.next() 'get_cp'
+            print_int(cp)
+        end 'get_cp'
     end 'chars'
     return 0
 end 'main'
@@ -456,8 +458,10 @@ end 'SingleChar'
 function main() int
     var s = SingleChar{ch: 'A'}
     var c = s.getChar()
-    var cps = c.codepoints()
-    return cps.getCurrent()
+    for cp in c.codepoints() 'loop'
+        return cp
+    end 'loop'
+    return 0
 end 'main'
 ```
 ```exitcode

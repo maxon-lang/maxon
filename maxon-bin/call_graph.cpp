@@ -168,15 +168,11 @@ void CallGraphBuilder::extractCallsFromStmt(StmtAST *stmt, std::set<std::string>
 		if (forStmt->iterable) {
 			extractCallsFromExpr(forStmt->iterable.get(), calls);
 		}
-		// For-loops implicitly call iterator methods (hasNext, getCurrent, next)
-		// These are method calls on the iterable object that we can't resolve statically
-		// So we add the generic iterator method names to ensure they're not pruned
-		calls.insert("hasNext");
-		calls.insert("getCurrent");
+		// For-loops implicitly call iterator next() method
+		// This is a method call on the iterable object that we can't resolve statically
+		// So we add the generic iterator method name to ensure it's not pruned
 		calls.insert("next");
-		// Also add Iterable interface versions
-		calls.insert("Iterable.hasNext");
-		calls.insert("Iterable.getCurrent");
+		// Also add Iterable interface version
 		calls.insert("Iterable.next");
 		for (const auto &s : forStmt->body) {
 			extractCallsFromStmt(s.get(), calls);

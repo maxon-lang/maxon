@@ -177,9 +177,7 @@ The standard library (`stdlib/interfaces.maxon`) defines commonly used interface
 - **Cloneable** - Types that can be copied: `function clone() Self`
 - **Iterable** - Types that can be iterated over (used by for-in loops):
   - Uses `Element` associated type
-  - `function hasNext() int`
-  - `function getCurrent() Element`
-  - `function next() Self`
+  - `function next() Element or nil`
 
 The `Iterator` struct in `stdlib/iter/iterator.maxon` conforms to `Iterable` and is used by `for` loops with `range()`.
 

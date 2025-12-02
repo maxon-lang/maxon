@@ -66,30 +66,22 @@ export struct string is Hashable, Equatable, Iterable with char, ExpressibleBySt
 	// ============================================
 	// Returns char values (Extended Grapheme Clusters)
 
-	export function Iterable.hasNext() int
+	export function Iterable.next() char or nil
 		if _iterPos < __string_len(_managed) 'check'
-			return 1
+			// Find the end of the current grapheme cluster using UAX #29 algorithm
+			var len = __string_len(_managed)
+			var end_pos = _findGraphemeEnd(_iterPos, len)
+
+			// Create a char from the bytes in the range [_iterPos, end_pos)
+			var grapheme_len = end_pos - _iterPos
+			let grapheme = _makeCharFromBytes(_iterPos, grapheme_len)
+
+			// Advance iterator position
+			_iterPos = end_pos
+
+			return grapheme
 		end 'check'
-		return 0
-	end 'hasNext'
-
-	export function Iterable.getCurrent() char
-		// Find the end of the current grapheme cluster using UAX #29 algorithm
-		var len = __string_len(_managed)
-		var end_pos = _findGraphemeEnd(_iterPos, len)
-
-		// Create a char from the bytes in the range [_iterPos, end_pos)
-		var grapheme_len = end_pos - _iterPos
-		return _makeCharFromBytes(_iterPos, grapheme_len)
-	end 'getCurrent'
-
-	export function Iterable.next() string
-		// Find the end of the current grapheme cluster
-		var len = __string_len(_managed)
-		var end_pos = _findGraphemeEnd(_iterPos, len)
-
-		// Return copy with updated iterator position
-		return string{_managed: _managed, _iterPos: end_pos}
+		return nil
 	end 'next'
 
 	// Internal: Find end position of grapheme cluster starting at start_pos
@@ -283,19 +275,13 @@ export struct ByteView is Iterable with byte
 	var _managed _ManagedString
 	var _pos int
 
-	export function Iterable.hasNext() int
+	export function Iterable.next() byte or nil
 		if _pos < __string_len(_managed) 'check'
-			return 1
+			let b = __string_byte_at(_managed, _pos)
+			_pos = _pos + 1
+			return b
 		end 'check'
-		return 0
-	end 'hasNext'
-
-	export function Iterable.getCurrent() byte
-		return __string_byte_at(_managed, _pos)
-	end 'getCurrent'
-
-	export function Iterable.next() ByteView
-		return ByteView{_managed: _managed, _pos: _pos + 1}
+		return nil
 	end 'next'
 
 	export function count() int
@@ -359,20 +345,14 @@ export struct CharCollection is Iterable with char, Collection with char
 	end 'set'
 
 	// Iterable conformance
-	export function Iterable.hasNext() int
+	export function Iterable.next() char or nil
 		if _pos < __string_len(_str._managed) 'check'
-			return 1
+			let ch = _makeCharAt(_pos)
+			var advance = _utf8_byte_length_at(_str._managed, _pos)
+			_pos = _pos + advance
+			return ch
 		end 'check'
-		return 0
-	end 'hasNext'
-
-	export function Iterable.getCurrent() char
-		return _makeCharAt(_pos)
-	end 'getCurrent'
-
-	export function Iterable.next() CharCollection
-		var advance = _utf8_byte_length_at(_str._managed, _pos)
-		return CharCollection{_str: _str, _pos: _pos + advance}
+		return nil
 	end 'next'
 
 	// Internal: create char from codepoint at byte position
@@ -396,47 +376,35 @@ export struct UTF16View is Iterable with int
 	var _bytePos int
 	var _highSurrogate int
 
-	export function Iterable.hasNext() int
-		if _highSurrogate != 0 'has_surrogate'
-			return 1
-		end 'has_surrogate'
-		if _bytePos < __string_len(_managed) 'check'
-			return 1
-		end 'check'
-		return 0
-	end 'hasNext'
-
-	export function Iterable.getCurrent() int
+	export function Iterable.next() int or nil
+		// If we have a pending low surrogate from previous call
 		if _highSurrogate != 0 'return_low'
 			var offset = _highSurrogate
 			var lowSurrogate = 56320 + (offset mod 1024)
+			_bytePos = _bytePos + 4
+			_highSurrogate = 0
 			return lowSurrogate
 		end 'return_low'
 
-		var cp = _utf8_decode_at(_managed, _bytePos)
-		// BMP codepoints (< 0x10000) return directly
-		if cp < 65536 'bmp'
-			return cp
-		end 'bmp'
-		// Non-BMP: return high surrogate
-		var offset = cp - 65536
-		var highSurrogate = 55296 + (offset / 1024)
-		return highSurrogate
-	end 'getCurrent'
-
-	export function Iterable.next() UTF16View
-		if _highSurrogate != 0 'consume_surrogate'
-			return UTF16View{_managed: _managed, _bytePos: _bytePos + 4, _highSurrogate: 0}
-		end 'consume_surrogate'
-
-		var byteLen = _utf8_byte_length_at(_managed, _bytePos)
-		// For 4-byte sequences (non-BMP), need to emit surrogate pair
-		if byteLen == 4 'four_byte'
+		// Check if we have more bytes to read
+		if _bytePos < __string_len(_managed) 'check'
 			var cp = _utf8_decode_at(_managed, _bytePos)
+			var byteLen = _utf8_byte_length_at(_managed, _bytePos)
+
+			// BMP codepoints (< 0x10000) return directly
+			if cp < 65536 'bmp'
+				_bytePos = _bytePos + byteLen
+				return cp
+			end 'bmp'
+
+			// Non-BMP: return high surrogate and save offset for low surrogate
 			var offset = cp - 65536
-			return UTF16View{_managed: _managed, _bytePos: _bytePos, _highSurrogate: offset}
-		end 'four_byte'
-		return UTF16View{_managed: _managed, _bytePos: _bytePos + byteLen, _highSurrogate: 0}
+			var highSurrogate = 55296 + (offset / 1024)
+			_highSurrogate = offset
+			return highSurrogate
+		end 'check'
+
+		return nil
 	end 'next'
 
 	export function length() int
@@ -464,20 +432,14 @@ export struct CodepointView is Iterable with int
 	var _managed _ManagedString
 	var _pos int
 
-	export function Iterable.hasNext() int
+	export function Iterable.next() int or nil
 		if _pos < __string_len(_managed) 'check'
-			return 1
+			let cp = _utf8_decode_at(_managed, _pos)
+			var advance = _utf8_byte_length_at(_managed, _pos)
+			_pos = _pos + advance
+			return cp
 		end 'check'
-		return 0
-	end 'hasNext'
-
-	export function Iterable.getCurrent() int
-		return _utf8_decode_at(_managed, _pos)
-	end 'getCurrent'
-
-	export function Iterable.next() CodepointView
-		var advance = _utf8_byte_length_at(_managed, _pos)
-		return CodepointView{_managed: _managed, _pos: _pos + advance}
+		return nil
 	end 'next'
 
 	export function count() int
@@ -530,30 +492,22 @@ export struct substring is Hashable, Equatable, Iterable with char
 	// ============================================
 	// Returns char values (Extended Grapheme Clusters)
 
-	export function Iterable.hasNext() int
+	export function Iterable.next() char or nil
 		if __substring_iter_pos(self) < __substring_len(self) 'check'
-			return 1
+			// Find the end of the current grapheme cluster
+			var len = __substring_len(self)
+			var end_pos = _findGraphemeEnd(_iterPos, len)
+
+			// Create a char from the bytes in the range [_iterPos, end_pos)
+			var grapheme_len = end_pos - _iterPos
+			let grapheme = _makeCharFromBytes(_iterPos, grapheme_len)
+
+			// Advance iterator position
+			_iterPos = end_pos
+
+			return grapheme
 		end 'check'
-		return 0
-	end 'hasNext'
-
-	export function Iterable.getCurrent() char
-		// Find the end of the current grapheme cluster
-		var len = __substring_len(self)
-		var end_pos = _findGraphemeEnd(_iterPos, len)
-
-		// Create a char from the bytes in the range [_iterPos, end_pos)
-		var grapheme_len = end_pos - _iterPos
-		return _makeCharFromBytes(_iterPos, grapheme_len)
-	end 'getCurrent'
-
-	export function Iterable.next() substring
-		// Find the end of the current grapheme cluster
-		var len = __substring_len(self)
-		var end_pos = _findGraphemeEnd(_iterPos, len)
-
-		// Return copy with updated iterator position
-		return __substring_with_iter_pos(self, end_pos)
+		return nil
 	end 'next'
 
 	// ============================================

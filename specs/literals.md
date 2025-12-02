@@ -80,20 +80,6 @@ end 'main'
 ```
 
 
-<!-- test: character -->
-```maxon
-// char is a grapheme cluster struct, use codepoints() to access codepoint values
-function main() int
-    var ch = 'X'
-    var cps = ch.codepoints()
-    return cps.getCurrent()
-end 'main'
-```
-```exitcode
-88
-```
-
-
 <!-- test: boolean -->
 ```maxon
 function main() int

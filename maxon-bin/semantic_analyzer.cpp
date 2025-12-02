@@ -755,6 +755,27 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 		if (type == "Self") {
 			return structName;
 		}
+
+		// Handle optional types (e.g., "Element or nil" -> "int or nil")
+		size_t orNilPos = type.find(" or nil");
+		if (orNilPos != std::string::npos) {
+			std::string baseType = type.substr(0, orNilPos);
+			// Recursively resolve the base type
+			std::string resolvedBase = [&]() -> std::string {
+				if (baseType == "Self") {
+					return structName;
+				}
+				if (typeAssignments) {
+					auto assignIt = typeAssignments->find(baseType);
+					if (assignIt != typeAssignments->end()) {
+						return assignIt->second;
+					}
+				}
+				return baseType;
+			}();
+			return resolvedBase + " or nil";
+		}
+
 		// Check if this type name is an associated type
 		if (typeAssignments) {
 			auto assignIt = typeAssignments->find(type);

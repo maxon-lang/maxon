@@ -29,34 +29,21 @@ export struct RangeIterator is Iterable with int
 	var limit int
 	var step int
 
-	// Check if iterator has more elements
-	// Returns: 1 if more elements available, 0 if done
-	export function Iterable.hasNext() int
+	// Get next element and advance iterator, or nil if exhausted
+	export function Iterable.next() int or nil
 		if step > 0 'forward'
 			if current < limit 'check'
-				return 1
+				let value = current
+				current = current + step
+				return value
 			end 'check'
-			return 0
+		else 'forward'
+			if current > limit 'backward_check'
+				let value = current
+				current = current + step
+				return value
+			end 'backward_check'
 		end 'forward'
-
-		if current > limit 'backward_check'
-			return 1
-		end 'backward_check'
-		return 0
-	end 'hasNext'
-
-	// Get current value from iterator
-	export function Iterable.getCurrent() int
-		return current
-	end 'getCurrent'
-
-	// Advance iterator to next element
-	export function Iterable.next() RangeIterator
-		var result = RangeIterator{
-			current: current + step,
-			limit: limit,
-			step: step
-		}
-		return result
+		return nil
 	end 'next'
 end 'RangeIterator'

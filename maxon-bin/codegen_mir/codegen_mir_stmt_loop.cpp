@@ -307,76 +307,79 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 
 	mir::MIRBasicBlock *condBB = builder->createBasicBlock("forcond");
 	mir::MIRBasicBlock *loopBB = builder->createBasicBlock("forloop");
-	mir::MIRBasicBlock *incrementBB = builder->createBasicBlock("forincrement");
 	mir::MIRBasicBlock *afterBB = builder->createBasicBlock("afterfor");
 
-	loopStack.push_back({forStmt->blockId, incrementBB, afterBB});
+	loopStack.push_back({forStmt->blockId, condBB, afterBB});
 
 	builder->createBr(condBB);
 
-	// Condition block
+	// Condition block - call next() and check if result is nil
 	builder->setInsertPoint(condBB);
 
-	// Look up TypeName.hasNext first, then fall back to suffix matching
-	mir::MIRFunction *hasNextFunc = nullptr;
+	// Look up TypeName.next first, then fall back to suffix matching
+	mir::MIRFunction *nextFunc = nullptr;
 	if (!iterTypeName.empty()) {
-		hasNextFunc = module->getFunction(iterTypeName + ".hasNext");
+		nextFunc = module->getFunction(iterTypeName + ".next");
 	}
-	if (!hasNextFunc) {
-		hasNextFunc = module->getFunction("hasNext");
+	if (!nextFunc) {
+		nextFunc = module->getFunction("next");
 	}
-	if (!hasNextFunc) {
-		// Try suffix matching as last resort
+	if (!nextFunc) {
 		for (auto &func : module->functions) {
-			if (func->name.size() > 8 &&
-				func->name.substr(func->name.size() - 8) == ".hasNext") {
-				hasNextFunc = func.get();
+			if (func->name.size() > 5 &&
+				func->name.substr(func->name.size() - 5) == ".next") {
+				nextFunc = func.get();
 				break;
 			}
 		}
 	}
-	if (!hasNextFunc) {
-		throw std::runtime_error("For-loop requires 'hasNext' function from stdlib");
+	if (!nextFunc) {
+		throw std::runtime_error("For-loop requires 'next' function from stdlib");
 	}
 
-	mir::MIRValue *hasNextResult = builder->createCall(hasNextFunc, {iteratorAlloca}, "hasNext.result");
-	mir::MIRValue *one = builder->getInt32(1);
-	mir::MIRValue *condVal = builder->createICmpEq(hasNextResult, one, "forcond");
+	// Call next() to get optional result
+	mir::MIRValue *optionalResult = builder->createCall(nextFunc, {iteratorAlloca}, "__iter.next");
 
-	builder->createCondBr(condVal, loopBB, afterBB);
+	// next() returns "Element or nil" which is an optional type with layout:
+	// { i8 tag, [padding], Element value }
+	// Tag = 0 for nil, 1 for has value
+	mir::MIRType *optionalType = nextFunc->returnType;
+	if (optionalType->kind != mir::MIRTypeKind::Optional) {
+		throw std::runtime_error("For-loop next() must return optional type (Element or nil)");
+	}
+
+	// Store optional result
+	mir::MIRValue *optionalAlloca = builder->createAlloca(optionalType, "__opt");
+	builder->createStore(optionalResult, optionalAlloca);
+
+	// Extract tag (field 0) to check if we have a value
+	mir::MIRValue *tagPtr = builder->createStructGEP(mir::MIRType::getInt8(), optionalAlloca, 0, "tag.ptr");
+	mir::MIRValue *tag = builder->createLoad(mir::MIRType::getInt8(), tagPtr, "tag");
+
+	// Check if tag == 1 (has value)
+	mir::MIRValue *one = builder->getInt8(1);
+	mir::MIRValue *hasValue = builder->createICmpEq(tag, one, "has.value");
+
+	builder->createCondBr(hasValue, loopBB, afterBB);
 
 	// Loop body
 	builder->setInsertPoint(loopBB);
 
-	// Look up TypeName.getCurrent first, then fall back to suffix matching
-	mir::MIRFunction *getCurrentFunc = nullptr;
-	if (!iterTypeName.empty()) {
-		getCurrentFunc = module->getFunction(iterTypeName + ".getCurrent");
-	}
-	if (!getCurrentFunc) {
-		getCurrentFunc = module->getFunction("getCurrent");
-	}
-	if (!getCurrentFunc) {
-		for (auto &func : module->functions) {
-			if (func->name.size() > 11 &&
-				func->name.substr(func->name.size() - 11) == ".getCurrent") {
-				getCurrentFunc = func.get();
-				break;
-			}
-		}
-	}
-	if (!getCurrentFunc) {
-		throw std::runtime_error("For-loop requires 'getCurrent' function from stdlib");
+	// Extract the wrapped value from field 1 of the optional
+	// The wrapped type is the element type (what the iterator yields)
+	mir::MIRType *wrappedType = optionalType->wrappedType;
+	if (!wrappedType) {
+		throw std::runtime_error("For-loop optional type must have wrappedType");
 	}
 
-	mir::MIRValue *currentVal = builder->createCall(getCurrentFunc, {iteratorAlloca}, forStmt->loopVar);
+	mir::MIRValue *valuePtr = builder->createStructGEP(wrappedType, optionalAlloca, 1, "value.ptr");
+	mir::MIRValue *currentVal = builder->createLoad(wrappedType, valuePtr, forStmt->loopVar);
 
-	// Determine loop variable type from getCurrent's actual return type
-	// This ensures we match the struct type correctly (e.g., char struct vs i8)
-	mir::MIRType *loopVarType = getCurrentFunc->returnType;
+	// Determine loop variable type
+	mir::MIRType *loopVarType = wrappedType;
 	std::string loopVarTypeStr = "int"; // Default for variableTypes map
 
-	// Get the type string from the return type for variableTypes tracking
+	// Get the type string from the wrapped type for variableTypes tracking
 	if (loopVarType->isStruct()) {
 		loopVarTypeStr = loopVarType->structName;
 	} else if (loopVarType == mir::MIRType::getInt32()) {
@@ -405,37 +408,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 	}
 
 	if (!builder->getInsertBlock()->hasTerminator()) {
-		builder->createBr(incrementBB);
+		builder->createBr(condBB);
 	}
-
-	// Increment block
-	builder->setInsertPoint(incrementBB);
-
-	// Look up TypeName.next first, then fall back to suffix matching
-	mir::MIRFunction *nextFunc = nullptr;
-	if (!iterTypeName.empty()) {
-		nextFunc = module->getFunction(iterTypeName + ".next");
-	}
-	if (!nextFunc) {
-		nextFunc = module->getFunction("next");
-	}
-	if (!nextFunc) {
-		for (auto &func : module->functions) {
-			if (func->name.size() > 5 &&
-				func->name.substr(func->name.size() - 5) == ".next") {
-				nextFunc = func.get();
-				break;
-			}
-		}
-	}
-	if (!nextFunc) {
-		throw std::runtime_error("For-loop requires 'next' function from stdlib");
-	}
-
-	mir::MIRValue *nextResult = builder->createCall(nextFunc, {iteratorAlloca}, "__iter.next");
-	builder->createStore(nextResult, iteratorAlloca);
-
-	builder->createBr(condBB);
 
 	namedValues.erase(forStmt->loopVar);
 	loopStack.pop_back();
