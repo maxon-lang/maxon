@@ -170,6 +170,10 @@ mir::MIRValue* MIRCodeGenerator::getSubstringPtr(ExprAST* arg) {
 		}
 		auto it = namedValues.find(varExpr->name);
 		if (it != namedValues.end()) {
+			// Struct parameters are passed by pointer - load the pointer first
+			if (isStructParameter(varExpr->name)) {
+				return builder->createLoad(mir::MIRType::getPtr(), it->second, varExpr->name + ".ptr");
+			}
 			return it->second;
 		}
 	}
@@ -249,6 +253,41 @@ mir::MIRValue* MIRCodeGenerator::intrinsic_string_slice(CallExprAST* callExpr) {
 
 	builder->setInsertPoint(continueBlock);
 	return builder->createLoad(substringType, newSub, "slice.result");
+}
+
+mir::MIRValue* MIRCodeGenerator::intrinsic_substring_parent_managed(CallExprAST* callExpr) {
+	mir::MIRType* substringType = getOrCreateSubstringType();
+	mir::MIRValue* subPtr = getSubstringPtr(callExpr->args[0].get());
+
+	// Get _parentManaged field (field 0)
+	mir::MIRValue* parentPtr = builder->createStructGEP(substringType, subPtr, 0, "sub._parentManaged");
+	return builder->createLoad(mir::MIRType::getPtr(), parentPtr, "parent.managed");
+}
+
+mir::MIRValue* MIRCodeGenerator::intrinsic_substring_byte_offset(CallExprAST* callExpr) {
+	mir::MIRType* substringType = getOrCreateSubstringType();
+	mir::MIRType* managedStringType = getOrCreateManagedStringType();
+	mir::MIRType* unsizedArrayType = getOrCreateUnsizedArrayType();
+	mir::MIRValue* subPtr = getSubstringPtr(callExpr->args[0].get());
+
+	// Get _parentManaged field (field 0)
+	mir::MIRValue* parentManagedPtr = builder->createStructGEP(substringType, subPtr, 0, "sub._parentManaged");
+	mir::MIRValue* parentManaged = builder->createLoad(mir::MIRType::getPtr(), parentManagedPtr, "parent.managed");
+
+	// Get parent's data pointer from _buffer field (field 0)
+	mir::MIRValue* parentBufPtr = builder->createStructGEP(managedStringType, parentManaged, 0, "parent._buffer");
+	mir::MIRValue* parentDataPtrPtr = builder->createStructGEP(unsizedArrayType, parentBufPtr, 0, "parent.ptr.ptr");
+	mir::MIRValue* parentDataPtr = builder->createLoad(mir::MIRType::getPtr(), parentDataPtrPtr, "parent.data.ptr");
+
+	// Get substring's _ptr field (field 1)
+	mir::MIRValue* subDataPtrPtr = builder->createStructGEP(substringType, subPtr, 1, "sub._ptr");
+	mir::MIRValue* subDataPtr = builder->createLoad(mir::MIRType::getPtr(), subDataPtrPtr, "sub.data.ptr");
+
+	// Calculate byte offset: subDataPtr - parentDataPtr
+	mir::MIRValue* parentInt = builder->createPtrToInt(parentDataPtr, mir::MIRType::getInt64(), "parent.int");
+	mir::MIRValue* subInt = builder->createPtrToInt(subDataPtr, mir::MIRType::getInt64(), "sub.int");
+	mir::MIRValue* offset64 = builder->createSub(subInt, parentInt, "offset64");
+	return builder->createTrunc(offset64, mir::MIRType::getInt32(), "offset");
 }
 
 mir::MIRValue* MIRCodeGenerator::intrinsic_string_concat(CallExprAST* callExpr) {

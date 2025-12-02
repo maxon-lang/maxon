@@ -111,9 +111,9 @@ $(RUNTIME_MIR_LINUX): maxon-runtime/runtime.mir maxon-runtime/runtime_linux.mir
 $(BUILD_DIR)/build.ninja: CMakeLists.txt
 	@mkdir -p $(BUILD_DIR)
 ifeq ($(PLATFORM),windows)
-	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Release -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS) >/dev/null 2>&1
+	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1
 else
-	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Release -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS) >/dev/null 2>&1
+	@cd $(BUILD_DIR) && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1
 endif
 
 # Force reconfigure

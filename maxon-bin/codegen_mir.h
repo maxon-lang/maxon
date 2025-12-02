@@ -231,6 +231,8 @@ class MIRCodeGenerator {
 	mir::MIRValue *intrinsic_substring_with_iter_pos(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_to_string(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_slice(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_substring_parent_managed(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_substring_byte_offset(CallExprAST *callExpr);
 
 	// Helper methods for intrinsic codegen
 	mir::MIRValue *getManagedStringPtr(ExprAST *arg);

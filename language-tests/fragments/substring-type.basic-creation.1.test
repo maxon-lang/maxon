@@ -94,33 +94,50 @@ slice.continue10:
   ret %substring %55
 }
 
-define i32 @substring.count(ptr %self) {
+define i32 @main() {
 entry0:
-  %4 = getelementptr %substring, ptr %self, i32 0, i32 2
-  %5 = load i32, ptr %4
-  br label %whilecond1
-whilecond1:
-  %18 = phi i32 [ 0, %entry0 ], [ %13, %loop2 ]
-  %17 = phi i32 [ 0, %entry0 ], [ %15, %loop2 ]
-  %9 = icmp slt i32 %18, %5
-  br i1 %9, label %loop2, label %afterloop3
-loop2:
-  %13 = call i32 @substring._findGraphemeEnd(ptr %self, i32 %18, i32 %5)
-  %15 = add i32 %17, 1
-  br label %whilecond1
-afterloop3:
-  ret i32 %17
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.0, ptr %3
+  %4 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 1
+  store i32 13, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i32 13, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i32 0, ptr %6
+  %7 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %7
+  %8 = call %substring @string.slice(ptr %0, i32 0, i32 5)
+  %9 = alloca %substring
+  store %substring %8, ptr %9
+  %19 = call i32 @string._count_graphemes_substring(ptr %9)
+  %11 = getelementptr %substring, ptr %9, i32 0, i32 0
+  %12 = load ptr, ptr %11
+  %13 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 2
+  %14 = load i32, ptr %13
+  %15 = icmp sgt i32 %14, 0
+  br i1 %15, label %sub.release1, label %sub.continue2
+sub.release1:
+  %16 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
+  %17 = getelementptr %__unsized_array_byte, ptr %16, i32 0, i32 0
+  %18 = load ptr, ptr %17
+  call void @_managed_string_release(ptr %18, ptr @.__tag.free.sub)
+  br label %sub.continue2
+sub.continue2:
+  ret i32 %19
 }
 
-define i32 @substring._findGraphemeEnd(ptr %self, i32 %start_pos, i32 %len) {
+define i32 @string._find_grapheme_end_substring(ptr %sub, i32 %start_pos, i32 %len) {
 entry0:
   %5 = icmp sge i32 %start_pos, %len
   br i1 %5, label %then1, label %ifcont2
 then1:
   ret i32 %start_pos
 ifcont2:
-  %11 = call i32 @substring._decodeCodepointAt(ptr %self, i32 %start_pos)
-  %15 = call i32 @substring._codepointBytes(ptr %self, i32 %start_pos)
+  %11 = call i32 @string._utf8_decode_at_substring(ptr %sub, i32 %start_pos)
+  %15 = call i32 @string._utf8_byte_length_at_substring(ptr %sub, i32 %start_pos)
   %19 = add i32 %start_pos, %15
   %21 = call i32 @unicode.grapheme_break_property(i32 %11)
   %23 = call %GraphemeState @unicode.grapheme_state_init()
@@ -136,7 +153,7 @@ whilecond3:
   %30 = icmp slt i32 %57, %len
   br i1 %30, label %loop4, label %afterloop5
 loop4:
-  %33 = call i32 @substring._decodeCodepointAt(ptr %self, i32 %57)
+  %33 = call i32 @string._utf8_decode_at_substring(ptr %sub, i32 %57)
   %36 = call i32 @unicode.grapheme_break_property(i32 %33)
   %42 = call i1 @unicode.is_grapheme_break(i32 %59, i32 %36, i32 %58, i32 %33, ptr %24)
   br i1 %42, label %then6, label %ifcont7
@@ -147,14 +164,32 @@ then6:
 ifcont7:
   %46 = call %GraphemeState @unicode.grapheme_state_update(ptr %24, i32 %36, i32 %33)
   store %GraphemeState %46, ptr %24
-  %51 = call i32 @substring._codepointBytes(ptr %self, i32 %57)
+  %51 = call i32 @string._utf8_byte_length_at_substring(ptr %sub, i32 %57)
   %55 = add i32 %57, %51
   br label %whilecond3
 }
 
-define i32 @substring._codepointBytes(ptr %self, i32 %pos) {
+define i32 @string._count_graphemes_substring(ptr %sub) {
 entry0:
-  %4 = getelementptr %substring, ptr %self, i32 0, i32 1
+  %4 = getelementptr %substring, ptr %sub, i32 0, i32 2
+  %5 = load i32, ptr %4
+  br label %whilecond1
+whilecond1:
+  %18 = phi i32 [ 0, %entry0 ], [ %13, %loop2 ]
+  %17 = phi i32 [ 0, %entry0 ], [ %15, %loop2 ]
+  %9 = icmp slt i32 %18, %5
+  br i1 %9, label %loop2, label %afterloop3
+loop2:
+  %13 = call i32 @string._find_grapheme_end_substring(ptr %sub, i32 %18, i32 %5)
+  %15 = add i32 %17, 1
+  br label %whilecond1
+afterloop3:
+  ret i32 %17
+}
+
+define i32 @string._utf8_byte_length_at_substring(ptr %sub, i32 %pos) {
+entry0:
+  %4 = getelementptr %substring, ptr %sub, i32 0, i32 1
   %5 = load ptr, ptr %4
   %6 = sext i32 %pos to i64
   %7 = getelementptr i8, ptr %5, i64 0, i64 %6
@@ -178,9 +213,9 @@ ifcont6:
   ret i32 4
 }
 
-define i32 @substring._decodeCodepointAt(ptr %self, i32 %pos) {
+define i32 @string._utf8_decode_at_substring(ptr %sub, i32 %pos) {
 entry0:
-  %4 = getelementptr %substring, ptr %self, i32 0, i32 1
+  %4 = getelementptr %substring, ptr %sub, i32 0, i32 1
   %5 = load ptr, ptr %4
   %6 = sext i32 %pos to i64
   %7 = getelementptr i8, ptr %5, i64 0, i64 %6
@@ -195,7 +230,7 @@ ifcont2:
   br i1 %15, label %then3, label %ifcont4
 then3:
   %18 = add i32 %pos, 1
-  %19 = getelementptr %substring, ptr %self, i32 0, i32 1
+  %19 = getelementptr %substring, ptr %sub, i32 0, i32 1
   %20 = load ptr, ptr %19
   %21 = sext i32 %18 to i64
   %22 = getelementptr i8, ptr %20, i64 0, i64 %21
@@ -211,14 +246,14 @@ ifcont4:
   br i1 %33, label %then5, label %ifcont6
 then5:
   %36 = add i32 %pos, 1
-  %37 = getelementptr %substring, ptr %self, i32 0, i32 1
+  %37 = getelementptr %substring, ptr %sub, i32 0, i32 1
   %38 = load ptr, ptr %37
   %39 = sext i32 %36 to i64
   %40 = getelementptr i8, ptr %38, i64 0, i64 %39
   %41 = load i8, ptr %40
   %42 = zext i8 %41 to i32
   %46 = add i32 %pos, 2
-  %47 = getelementptr %substring, ptr %self, i32 0, i32 1
+  %47 = getelementptr %substring, ptr %sub, i32 0, i32 1
   %48 = load ptr, ptr %47
   %49 = sext i32 %46 to i64
   %50 = getelementptr i8, ptr %48, i64 0, i64 %49
@@ -234,21 +269,21 @@ then5:
   ret i32 %63
 ifcont6:
   %66 = add i32 %pos, 1
-  %67 = getelementptr %substring, ptr %self, i32 0, i32 1
+  %67 = getelementptr %substring, ptr %sub, i32 0, i32 1
   %68 = load ptr, ptr %67
   %69 = sext i32 %66 to i64
   %70 = getelementptr i8, ptr %68, i64 0, i64 %69
   %71 = load i8, ptr %70
   %72 = zext i8 %71 to i32
   %76 = add i32 %pos, 2
-  %77 = getelementptr %substring, ptr %self, i32 0, i32 1
+  %77 = getelementptr %substring, ptr %sub, i32 0, i32 1
   %78 = load ptr, ptr %77
   %79 = sext i32 %76 to i64
   %80 = getelementptr i8, ptr %78, i64 0, i64 %79
   %81 = load i8, ptr %80
   %82 = zext i8 %81 to i32
   %86 = add i32 %pos, 3
-  %87 = getelementptr %substring, ptr %self, i32 0, i32 1
+  %87 = getelementptr %substring, ptr %sub, i32 0, i32 1
   %88 = load ptr, ptr %87
   %89 = sext i32 %86 to i64
   %90 = getelementptr i8, ptr %88, i64 0, i64 %89
@@ -265,41 +300,6 @@ ifcont6:
   %106 = srem i32 %92, 64
   %107 = add i32 %104, %106
   ret i32 %107
-}
-
-define i32 @main() {
-entry0:
-  %0 = alloca %string
-  %1 = alloca %__ManagedStringData
-  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
-  %3 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 0
-  store ptr @.str.0, ptr %3
-  %4 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 1
-  store i32 13, ptr %4
-  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
-  store i32 13, ptr %5
-  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
-  store i32 0, ptr %6
-  %7 = getelementptr %string, ptr %0, i32 0, i32 0
-  store ptr %1, ptr %7
-  %8 = call %substring @string.slice(ptr %0, i32 0, i32 5)
-  %9 = alloca %substring
-  store %substring %8, ptr %9
-  %10 = call i32 @substring.count(ptr %9)
-  %11 = getelementptr %substring, ptr %9, i32 0, i32 0
-  %12 = load ptr, ptr %11
-  %13 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 2
-  %14 = load i32, ptr %13
-  %15 = icmp sgt i32 %14, 0
-  br i1 %15, label %sub.release1, label %sub.continue2
-sub.release1:
-  %16 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
-  %17 = getelementptr %__unsized_array_byte, ptr %16, i32 0, i32 0
-  %18 = load ptr, ptr %17
-  call void @_managed_string_release(ptr %18, ptr @.__tag.free.sub)
-  br label %sub.continue2
-sub.continue2:
-  ret i32 %10
 }
 
 define i32 @unicode.grapheme_break_property(i32 %cp) {
@@ -654,7 +654,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 715
+; Instructions: 720
 
 %substring = type { ptr, ptr, i32, i32 }
 %string = type { ptr, i32 }
@@ -766,40 +766,50 @@ define i32 @substring.count(ptr %self) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
-  %1 = alloca i32
-  store i32 0, ptr %1
-  %2 = alloca i32
-  store i32 0, ptr %2
-  %3 = load ptr, ptr %0
-  %4 = getelementptr %substring, ptr %3, i32 0, i32 2
-  %5 = load i32, ptr %4
-  %6 = alloca i32
-  store i32 %5, ptr %6
-  br label %whilecond1
-whilecond1:
-  %7 = load i32, ptr %2
-  %8 = load i32, ptr %6
-  %9 = icmp slt i32 %7, %8
-  br i1 %9, label %loop2, label %afterloop3
-loop2:
-  %10 = load ptr, ptr %0
-  %11 = load i32, ptr %2
-  %12 = load i32, ptr %6
-  %13 = call i32 @substring._findGraphemeEnd(ptr %10, i32 %11, i32 %12)
-  store i32 %13, ptr %2
-  %14 = load i32, ptr %1
-  %15 = add i32 %14, 1
-  store i32 %15, ptr %1
-  br label %whilecond1
-afterloop3:
-  %16 = load i32, ptr %1
-  ret i32 %16
+  %1 = load ptr, ptr %0
+  %2 = call i32 @string._count_graphemes_substring(ptr %1)
+  ret i32 %2
 }
 
-define i32 @substring._findGraphemeEnd(ptr %self, i32 %start_pos, i32 %len) {
+define i32 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.0, ptr %3
+  %4 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 1
+  store i32 13, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i32 13, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i32 0, ptr %6
+  %7 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %7
+  %8 = call %substring @string.slice(ptr %0, i32 0, i32 5)
+  %9 = alloca %substring
+  store %substring %8, ptr %9
+  %10 = call i32 @substring.count(ptr %9)
+  %11 = getelementptr %substring, ptr %9, i32 0, i32 0
+  %12 = load ptr, ptr %11
+  %13 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 2
+  %14 = load i32, ptr %13
+  %15 = icmp sgt i32 %14, 0
+  br i1 %15, label %sub.release1, label %sub.continue2
+sub.release1:
+  %16 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
+  %17 = getelementptr %__unsized_array_byte, ptr %16, i32 0, i32 0
+  %18 = load ptr, ptr %17
+  call void @_managed_string_release(ptr %18, ptr @.__tag.free.sub)
+  br label %sub.continue2
+sub.continue2:
+  ret i32 %10
+}
+
+define i32 @string._find_grapheme_end_substring(ptr %sub, i32 %start_pos, i32 %len) {
 entry0:
   %0 = alloca ptr
-  store ptr %self, ptr %0
+  store ptr %sub, ptr %0
   %1 = alloca i32
   store i32 %start_pos, ptr %1
   %2 = alloca i32
@@ -817,12 +827,12 @@ ifcont2:
   store i32 %7, ptr %8
   %9 = load ptr, ptr %0
   %10 = load i32, ptr %8
-  %11 = call i32 @substring._decodeCodepointAt(ptr %9, i32 %10)
+  %11 = call i32 @string._utf8_decode_at_substring(ptr %9, i32 %10)
   %12 = alloca i32
   store i32 %11, ptr %12
   %13 = load ptr, ptr %0
   %14 = load i32, ptr %8
-  %15 = call i32 @substring._codepointBytes(ptr %13, i32 %14)
+  %15 = call i32 @string._utf8_byte_length_at_substring(ptr %13, i32 %14)
   %16 = alloca i32
   store i32 %15, ptr %16
   %17 = load i32, ptr %8
@@ -849,7 +859,7 @@ whilecond3:
 loop4:
   %31 = load ptr, ptr %0
   %32 = load i32, ptr %8
-  %33 = call i32 @substring._decodeCodepointAt(ptr %31, i32 %32)
+  %33 = call i32 @string._utf8_decode_at_substring(ptr %31, i32 %32)
   %34 = alloca i32
   store i32 %33, ptr %34
   %35 = load i32, ptr %34
@@ -879,7 +889,7 @@ ifcont7:
   store i32 %48, ptr %12
   %49 = load ptr, ptr %0
   %50 = load i32, ptr %8
-  %51 = call i32 @substring._codepointBytes(ptr %49, i32 %50)
+  %51 = call i32 @string._utf8_byte_length_at_substring(ptr %49, i32 %50)
   %52 = alloca i32
   store i32 %51, ptr %52
   %53 = load i32, ptr %8
@@ -889,10 +899,44 @@ ifcont7:
   br label %whilecond3
 }
 
-define i32 @substring._codepointBytes(ptr %self, i32 %pos) {
+define i32 @string._count_graphemes_substring(ptr %sub) {
 entry0:
   %0 = alloca ptr
-  store ptr %self, ptr %0
+  store ptr %sub, ptr %0
+  %1 = alloca i32
+  store i32 0, ptr %1
+  %2 = alloca i32
+  store i32 0, ptr %2
+  %3 = load ptr, ptr %0
+  %4 = getelementptr %substring, ptr %3, i32 0, i32 2
+  %5 = load i32, ptr %4
+  %6 = alloca i32
+  store i32 %5, ptr %6
+  br label %whilecond1
+whilecond1:
+  %7 = load i32, ptr %2
+  %8 = load i32, ptr %6
+  %9 = icmp slt i32 %7, %8
+  br i1 %9, label %loop2, label %afterloop3
+loop2:
+  %10 = load ptr, ptr %0
+  %11 = load i32, ptr %2
+  %12 = load i32, ptr %6
+  %13 = call i32 @string._find_grapheme_end_substring(ptr %10, i32 %11, i32 %12)
+  store i32 %13, ptr %2
+  %14 = load i32, ptr %1
+  %15 = add i32 %14, 1
+  store i32 %15, ptr %1
+  br label %whilecond1
+afterloop3:
+  %16 = load i32, ptr %1
+  ret i32 %16
+}
+
+define i32 @string._utf8_byte_length_at_substring(ptr %sub, i32 %pos) {
+entry0:
+  %0 = alloca ptr
+  store ptr %sub, ptr %0
   %1 = alloca i32
   store i32 %pos, ptr %1
   %2 = load ptr, ptr %0
@@ -926,10 +970,10 @@ ifcont6:
   ret i32 4
 }
 
-define i32 @substring._decodeCodepointAt(ptr %self, i32 %pos) {
+define i32 @string._utf8_decode_at_substring(ptr %sub, i32 %pos) {
 entry0:
   %0 = alloca ptr
-  store ptr %self, ptr %0
+  store ptr %sub, ptr %0
   %1 = alloca i32
   store i32 %pos, ptr %1
   %2 = load ptr, ptr %0
@@ -1058,41 +1102,6 @@ ifcont6:
   %106 = srem i32 %105, 64
   %107 = add i32 %104, %106
   ret i32 %107
-}
-
-define i32 @main() {
-entry0:
-  %0 = alloca %string
-  %1 = alloca %__ManagedStringData
-  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
-  %3 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 0
-  store ptr @.str.0, ptr %3
-  %4 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 1
-  store i32 13, ptr %4
-  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
-  store i32 13, ptr %5
-  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
-  store i32 0, ptr %6
-  %7 = getelementptr %string, ptr %0, i32 0, i32 0
-  store ptr %1, ptr %7
-  %8 = call %substring @string.slice(ptr %0, i32 0, i32 5)
-  %9 = alloca %substring
-  store %substring %8, ptr %9
-  %10 = call i32 @substring.count(ptr %9)
-  %11 = getelementptr %substring, ptr %9, i32 0, i32 0
-  %12 = load ptr, ptr %11
-  %13 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 2
-  %14 = load i32, ptr %13
-  %15 = icmp sgt i32 %14, 0
-  br i1 %15, label %sub.release1, label %sub.continue2
-sub.release1:
-  %16 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
-  %17 = getelementptr %__unsized_array_byte, ptr %16, i32 0, i32 0
-  %18 = load ptr, ptr %17
-  call void @_managed_string_release(ptr %18, ptr @.__tag.free.sub)
-  br label %sub.continue2
-sub.continue2:
-  ret i32 %10
 }
 
 define i32 @unicode.grapheme_break_property(i32 %cp) {

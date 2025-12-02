@@ -46,14 +46,7 @@ export struct string is Hashable, Equatable, Iterable with char, ExpressibleBySt
 
 	// Get grapheme cluster count (number of user-perceived characters)
 	export function count() int
-		var grapheme_count = 0
-		var pos = 0
-		var len = __string_len(_managed)
-		while pos < len 'count_loop'
-			pos = _findGraphemeEnd(pos, len)
-			grapheme_count = grapheme_count + 1
-		end 'count_loop'
-		return grapheme_count
+		return _count_graphemes_managed(_managed)
 	end 'count'
 
 	// Check if the string is empty
@@ -101,40 +94,7 @@ export struct string is Hashable, Equatable, Iterable with char, ExpressibleBySt
 
 	// Internal: Find end position of grapheme cluster starting at start_pos
 	function _findGraphemeEnd(start_pos int, len int) int
-		if start_pos >= len 'at_end'
-			return start_pos
-		end 'at_end'
-
-		// Decode first codepoint at start_pos
-		var pos = start_pos
-		var prev_cp = _decodeCodepointAt(pos)
-		var prev_bytes = _codepointBytes(pos)
-		pos = pos + prev_bytes
-
-		// Get grapheme break property for first codepoint
-		var prev_gbp = grapheme_break_property(prev_cp)
-		var state = grapheme_state_init()
-		state = grapheme_state_update(state, prev_gbp, prev_cp)
-
-		// Scan forward until we find a grapheme break
-		while pos < len 'scan'
-			var curr_cp = _decodeCodepointAt(pos)
-			var curr_gbp = grapheme_break_property(curr_cp)
-
-			// Check if there's a break before current codepoint
-			if is_grapheme_break(prev_gbp, curr_gbp, prev_cp, curr_cp, state) 'break_found'
-				return pos
-			end 'break_found'
-
-			// Update state and advance to next codepoint
-			state = grapheme_state_update(state, curr_gbp, curr_cp)
-			prev_gbp = curr_gbp
-			prev_cp = curr_cp
-			var curr_bytes = _codepointBytes(pos)
-			pos = pos + curr_bytes
-		end 'scan'
-
-		return pos
+		return _find_grapheme_end_managed(_managed, start_pos, len)
 	end '_findGraphemeEnd'
 
 	// Internal: Get number of bytes for codepoint at position
@@ -160,15 +120,7 @@ export struct string is Hashable, Equatable, Iterable with char, ExpressibleBySt
 	// ============================================
 
 	export function Hashable.hash() int
-		var h = 5381
-		var i = 0
-		var len = __string_len(_managed)
-		while i < len 'hash_loop'
-			var b = __string_byte_at(_managed, i)
-			h = h * 33 + (b as int)
-			i = i + 1
-		end 'hash_loop'
-		return h
+		return _hash_managed_string(_managed)
 	end 'hash'
 
 	// ============================================
@@ -176,19 +128,7 @@ export struct string is Hashable, Equatable, Iterable with char, ExpressibleBySt
 	// ============================================
 
 	export function Equatable.equals(other string) bool
-		var len = __string_len(_managed)
-		if len != __string_len(other._managed) 'length_check'
-			return false
-		end 'length_check'
-
-		var i = 0
-		while i < len 'compare_loop'
-			if __string_byte_at(_managed, i) != __string_byte_at(other._managed, i) 'byte_check'
-				return false
-			end 'byte_check'
-			i = i + 1
-		end 'compare_loop'
-		return true
+		return _equals_managed_string(_managed, other._managed)
 	end 'equals'
 
 	// ============================================
@@ -225,74 +165,17 @@ export struct string is Hashable, Equatable, Iterable with char, ExpressibleBySt
 
 	// startsWith - check if string starts with prefix
 	export function startsWith(prefix string) bool
-		var len = __string_len(_managed)
-		var prefixLen = __string_len(prefix._managed)
-
-		if prefixLen > len 'length_check'
-			return false
-		end 'length_check'
-
-		var i = 0
-		while i < prefixLen 'compare_loop'
-			if __string_byte_at(_managed, i) != __string_byte_at(prefix._managed, i) 'byte_check'
-				return false
-			end 'byte_check'
-			i = i + 1
-		end 'compare_loop'
-		return true
+		return _starts_with_managed(_managed, prefix._managed)
 	end 'startsWith'
 
 	// endsWith - check if string ends with suffix
 	export function endsWith(suffix string) bool
-		var len = __string_len(_managed)
-		var suffixLen = __string_len(suffix._managed)
-
-		if suffixLen > len 'length_check'
-			return false
-		end 'length_check'
-
-		var start = len - suffixLen
-		var i = 0
-		while i < suffixLen 'compare_loop'
-			if __string_byte_at(_managed, start + i) != __string_byte_at(suffix._managed, i) 'byte_check'
-				return false
-			end 'byte_check'
-			i = i + 1
-		end 'compare_loop'
-		return true
+		return _ends_with_managed(_managed, suffix._managed)
 	end 'endsWith'
 
 	// find - find first occurrence of needle, return byte index or -1
 	export function find(needle string) int
-		var len = __string_len(_managed)
-		var needleLen = __string_len(needle._managed)
-
-		if needleLen == 0 'empty_needle'
-			return 0
-		end 'empty_needle'
-
-		if needleLen > len 'too_long'
-			return 0 - 1
-		end 'too_long'
-
-		var i = 0
-		while i <= len - needleLen 'search_loop'
-			var found = true
-			var j = 0
-			while j < needleLen 'compare_loop'
-				if __string_byte_at(_managed, i + j) != __string_byte_at(needle._managed, j) 'byte_check'
-					found = false
-					break 'compare_loop'
-				end 'byte_check'
-				j = j + 1
-			end 'compare_loop'
-
-			if found 'found_check'
-				return i
-			end 'found_check'
-			i = i + 1
-		end 'search_loop'
-		return 0 - 1
+		return _find_managed(_managed, needle._managed)
 	end 'find'
 
 	// contains - check if string contains needle
@@ -634,14 +517,7 @@ export struct substring is Hashable, Equatable, Iterable with char
 
 	// Get grapheme cluster count (number of user-perceived characters)
 	export function count() int
-		var grapheme_count = 0
-		var pos = 0
-		var len = __substring_len(self)
-		while pos < len 'count_loop'
-			pos = _findGraphemeEnd(pos, len)
-			grapheme_count = grapheme_count + 1
-		end 'count_loop'
-		return grapheme_count
+		return _count_graphemes_substring(self)
 	end 'count'
 
 	// Check if the substring is empty
@@ -686,76 +562,17 @@ export struct substring is Hashable, Equatable, Iterable with char
 
 	// Internal: Find end position of grapheme cluster starting at start_pos
 	function _findGraphemeEnd(start_pos int, len int) int
-		if start_pos >= len 'at_end'
-			return start_pos
-		end 'at_end'
-
-		// Decode first codepoint at start_pos
-		var pos = start_pos
-		var prev_cp = _decodeCodepointAt(pos)
-		var prev_bytes = _codepointBytes(pos)
-		pos = pos + prev_bytes
-
-		// Get grapheme break property for first codepoint
-		var prev_gbp = grapheme_break_property(prev_cp)
-		var state = grapheme_state_init()
-		state = grapheme_state_update(state, prev_gbp, prev_cp)
-
-		// Scan forward until we find a grapheme break
-		while pos < len 'scan'
-			var curr_cp = _decodeCodepointAt(pos)
-			var curr_gbp = grapheme_break_property(curr_cp)
-
-			// Check if there's a break before current codepoint
-			if is_grapheme_break(prev_gbp, curr_gbp, prev_cp, curr_cp, state) 'break_found'
-				return pos
-			end 'break_found'
-
-			// Update state and advance to next codepoint
-			state = grapheme_state_update(state, curr_gbp, curr_cp)
-			prev_gbp = curr_gbp
-			prev_cp = curr_cp
-			var curr_bytes = _codepointBytes(pos)
-			pos = pos + curr_bytes
-		end 'scan'
-
-		return pos
+		return _find_grapheme_end_substring(self, start_pos, len)
 	end '_findGraphemeEnd'
 
 	// Internal: Get number of bytes for codepoint at position
 	function _codepointBytes(pos int) int
-		var b0 = __substring_byte_at(self, pos) as int
-		if b0 < 128 'ascii'
-			return 1
-		end 'ascii'
-		if b0 < 224 'two'
-			return 2
-		end 'two'
-		if b0 < 240 'three'
-			return 3
-		end 'three'
-		return 4
+		return _utf8_byte_length_at_substring(self, pos)
 	end '_codepointBytes'
 
 	// Internal: Decode codepoint at byte position
 	function _decodeCodepointAt(pos int) int
-		var b0 = __substring_byte_at(self, pos) as int
-		if b0 < 128 'ascii'
-			return b0
-		end 'ascii'
-		if b0 < 224 'two'
-			var b1 = __substring_byte_at(self, pos + 1) as int
-			return ((b0 mod 32) * 64) + (b1 mod 64)
-		end 'two'
-		if b0 < 240 'three'
-			var b1 = __substring_byte_at(self, pos + 1) as int
-			var b2 = __substring_byte_at(self, pos + 2) as int
-			return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
-		end 'three'
-		var b1 = __substring_byte_at(self, pos + 1) as int
-		var b2 = __substring_byte_at(self, pos + 2) as int
-		var b3 = __substring_byte_at(self, pos + 3) as int
-		return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+		return _utf8_decode_at_substring(self, pos)
 	end '_decodeCodepointAt'
 
 	// Internal: Create a char from bytes at [start, start+byte_len)
@@ -770,15 +587,7 @@ export struct substring is Hashable, Equatable, Iterable with char
 	// ============================================
 
 	export function Hashable.hash() int
-		var h = 5381
-		var i = 0
-		var len = __substring_len(self)
-		while i < len 'hash_loop'
-			var b = __substring_byte_at(self, i)
-			h = h * 33 + (b as int)
-			i = i + 1
-		end 'hash_loop'
-		return h
+		return _hash_substring(self)
 	end 'hash'
 
 	// ============================================
@@ -786,19 +595,7 @@ export struct substring is Hashable, Equatable, Iterable with char
 	// ============================================
 
 	export function Equatable.equals(other substring) bool
-		var len = __substring_len(self)
-		if len != __substring_len(other) 'length_check'
-			return false
-		end 'length_check'
-
-		var i = 0
-		while i < len 'compare_loop'
-			if __substring_byte_at(self, i) != __substring_byte_at(other, i) 'byte_check'
-				return false
-			end 'byte_check'
-			i = i + 1
-		end 'compare_loop'
-		return true
+		return _equals_substring(self, other)
 	end 'equals'
 
 	// ============================================
@@ -840,74 +637,17 @@ export struct substring is Hashable, Equatable, Iterable with char
 
 	// startsWith - check if substring starts with prefix
 	export function startsWith(prefix string) bool
-		var len = __substring_len(self)
-		var prefixLen = __string_len(prefix._managed)
-
-		if prefixLen > len 'length_check'
-			return false
-		end 'length_check'
-
-		var i = 0
-		while i < prefixLen 'compare_loop'
-			if __substring_byte_at(self, i) != __string_byte_at(prefix._managed, i) 'byte_check'
-				return false
-			end 'byte_check'
-			i = i + 1
-		end 'compare_loop'
-		return true
+		return _starts_with_substring(self, prefix._managed)
 	end 'startsWith'
 
 	// endsWith - check if substring ends with suffix
 	export function endsWith(suffix string) bool
-		var len = __substring_len(self)
-		var suffixLen = __string_len(suffix._managed)
-
-		if suffixLen > len 'length_check'
-			return false
-		end 'length_check'
-
-		var start = len - suffixLen
-		var i = 0
-		while i < suffixLen 'compare_loop'
-			if __substring_byte_at(self, start + i) != __string_byte_at(suffix._managed, i) 'byte_check'
-				return false
-			end 'byte_check'
-			i = i + 1
-		end 'compare_loop'
-		return true
+		return _ends_with_substring(self, suffix._managed)
 	end 'endsWith'
 
 	// find - find first occurrence of needle, return byte index or -1
 	export function find(needle string) int
-		var len = __substring_len(self)
-		var needleLen = __string_len(needle._managed)
-
-		if needleLen == 0 'empty_needle'
-			return 0
-		end 'empty_needle'
-
-		if needleLen > len 'too_long'
-			return 0 - 1
-		end 'too_long'
-
-		var i = 0
-		while i <= len - needleLen 'search_loop'
-			var found = true
-			var j = 0
-			while j < needleLen 'compare_loop'
-				if __substring_byte_at(self, i + j) != __string_byte_at(needle._managed, j) 'byte_check'
-					found = false
-					break 'compare_loop'
-				end 'byte_check'
-				j = j + 1
-			end 'compare_loop'
-
-			if found 'found_check'
-				return i
-			end 'found_check'
-			i = i + 1
-		end 'search_loop'
-		return 0 - 1
+		return _find_substring(self, needle._managed)
 	end 'find'
 
 	// contains - check if substring contains needle

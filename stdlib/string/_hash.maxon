@@ -1,0 +1,80 @@
+// stdlib/string/_hash.maxon
+// Internal hash and equality helpers for string types
+//
+// Purpose: Centralize hash and equality algorithms to avoid duplication
+//          across string, substring, and char types.
+//
+// Convention: Provides two implementations per algorithm:
+//   - _*_managed_string() - for types using _ManagedString (string, char)
+//   - _*_substring() - for substring type
+//
+// Maintenance: Keep implementations in sync - they should use identical
+//              algorithms, differing only in intrinsic calls.
+
+// ============================================
+// Hash helpers (djb2 algorithm)
+// ============================================
+
+// _hash_managed_string - Hash a _ManagedString using djb2 algorithm
+export function _hash_managed_string(managed _ManagedString) int
+	var h = 5381
+	var i = 0
+	var len = __string_len(managed)
+	while i < len 'hash_loop'
+		var b = __string_byte_at(managed, i)
+		h = h * 33 + (b as int)
+		i = i + 1
+	end 'hash_loop'
+	return h
+end '_hash_managed_string'
+
+// _hash_substring - Hash a substring using djb2 algorithm
+export function _hash_substring(sub substring) int
+	var h = 5381
+	var i = 0
+	var len = __substring_len(sub)
+	while i < len 'hash_loop'
+		var b = __substring_byte_at(sub, i)
+		h = h * 33 + (b as int)
+		i = i + 1
+	end 'hash_loop'
+	return h
+end '_hash_substring'
+
+// ============================================
+// Equality helpers (byte-by-byte comparison)
+// ============================================
+
+// _equals_managed_string - Compare two _ManagedStrings for equality
+export function _equals_managed_string(a _ManagedString, b _ManagedString) bool
+	var len = __string_len(a)
+	if len != __string_len(b) 'length_check'
+		return false
+	end 'length_check'
+
+	var i = 0
+	while i < len 'compare_loop'
+		if __string_byte_at(a, i) != __string_byte_at(b, i) 'byte_check'
+			return false
+		end 'byte_check'
+		i = i + 1
+	end 'compare_loop'
+	return true
+end '_equals_managed_string'
+
+// _equals_substring - Compare two substrings for equality
+export function _equals_substring(a substring, b substring) bool
+	var len = __substring_len(a)
+	if len != __substring_len(b) 'length_check'
+		return false
+	end 'length_check'
+
+	var i = 0
+	while i < len 'compare_loop'
+		if __substring_byte_at(a, i) != __substring_byte_at(b, i) 'byte_check'
+			return false
+		end 'byte_check'
+		i = i + 1
+	end 'compare_loop'
+	return true
+end '_equals_substring'

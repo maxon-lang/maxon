@@ -62,6 +62,8 @@ inline std::vector<IntrinsicDef> getIntrinsicDefinitions() {
 		{"__substring_with_iter_pos", "substring", {{"substring"}, {"int"}}, "intrinsic_substring_with_iter_pos"},
 		{"__substring_to_string", "_ManagedString", {{"substring"}}, "intrinsic_substring_to_string"},
 		{"__substring_slice", "substring", {{"substring"}, {"int"}, {"int"}}, "intrinsic_substring_slice"},
+		{"__substring_parent_managed", "_ManagedString", {{"substring"}}, "intrinsic_substring_parent_managed"},
+		{"__substring_byte_offset", "int", {{"substring"}}, "intrinsic_substring_byte_offset"},
 	};
 }
 

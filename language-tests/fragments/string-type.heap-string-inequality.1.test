@@ -11,7 +11,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 240
+; Instructions: 236
 
 %string = type { ptr, i32 }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
@@ -54,54 +54,6 @@ cstring.continue2:
   ret %cstring %16
 }
 
-define i1 @string.equals(ptr %self, ptr %other) {
-entry0:
-  %3 = getelementptr %string, ptr %self, i32 0, i32 0
-  %4 = load ptr, ptr %3
-  %5 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 1
-  %6 = load i32, ptr %5
-  %10 = getelementptr %string, ptr %other, i32 0, i32 0
-  %11 = load ptr, ptr %10
-  %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 1
-  %13 = load i32, ptr %12
-  %14 = icmp ne i32 %6, %13
-  br i1 %14, label %then1, label %ifcont2
-then1:
-  ret i1 0
-ifcont2:
-  br label %whilecond3
-whilecond3:
-  %42 = phi i32 [ 0, %ifcont2 ], [ %41, %ifcont7 ]
-  %18 = icmp slt i32 %42, %6
-  br i1 %18, label %loop4, label %afterloop5
-loop4:
-  %20 = getelementptr %string, ptr %self, i32 0, i32 0
-  %21 = load ptr, ptr %20
-  %23 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 0
-  %24 = getelementptr %__unsized_array_byte, ptr %23, i32 0, i32 0
-  %25 = load ptr, ptr %24
-  %26 = sext i32 %42 to i64
-  %27 = getelementptr i8, ptr %25, i64 0, i64 %26
-  %28 = load i8, ptr %27
-  %30 = getelementptr %string, ptr %other, i32 0, i32 0
-  %31 = load ptr, ptr %30
-  %33 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 0
-  %34 = getelementptr %__unsized_array_byte, ptr %33, i32 0, i32 0
-  %35 = load ptr, ptr %34
-  %36 = sext i32 %42 to i64
-  %37 = getelementptr i8, ptr %35, i64 0, i64 %36
-  %38 = load i8, ptr %37
-  %39 = icmp ne i8 %28, %38
-  br i1 %39, label %then6, label %ifcont7
-afterloop5:
-  ret i1 1
-then6:
-  ret i1 0
-ifcont7:
-  %41 = add i32 %42, 1
-  br label %whilecond3
-}
-
 define i32 @main() {
 entry0:
   %0 = alloca %string
@@ -134,8 +86,12 @@ entry0:
   store i32 51, ptr %20
   %21 = getelementptr %string, ptr %11, i32 0, i32 0
   store ptr %15, ptr %21
-  %22 = call i1 @string.equals(ptr %0, ptr %11)
-  %23 = icmp eq i1 %22, 0
+  %28 = getelementptr %string, ptr %0, i32 0, i32 0
+  %29 = load ptr, ptr %28
+  %30 = getelementptr %string, ptr %11, i32 0, i32 0
+  %31 = load ptr, ptr %30
+  %32 = call i1 @string._equals_managed_string(ptr %29, ptr %31)
+  %23 = icmp eq i1 %32, 0
   br i1 %23, label %then1, label %else3
 then1:
   %24 = call i32 @sys.print_int(i32 1)
@@ -319,6 +275,46 @@ afterloop12:
   ret i32 %48
 }
 
+define i1 @string._equals_managed_string(ptr %a, ptr %b) {
+entry0:
+  %3 = getelementptr %__ManagedStringData, ptr %a, i32 0, i32 1
+  %4 = load i32, ptr %3
+  %8 = getelementptr %__ManagedStringData, ptr %b, i32 0, i32 1
+  %9 = load i32, ptr %8
+  %10 = icmp ne i32 %4, %9
+  br i1 %10, label %then1, label %ifcont2
+then1:
+  ret i1 0
+ifcont2:
+  br label %whilecond3
+whilecond3:
+  %34 = phi i32 [ 0, %ifcont2 ], [ %33, %ifcont7 ]
+  %14 = icmp slt i32 %34, %4
+  br i1 %14, label %loop4, label %afterloop5
+loop4:
+  %17 = getelementptr %__ManagedStringData, ptr %a, i32 0, i32 0
+  %18 = getelementptr %__unsized_array_byte, ptr %17, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  %20 = sext i32 %34 to i64
+  %21 = getelementptr i8, ptr %19, i64 0, i64 %20
+  %22 = load i8, ptr %21
+  %25 = getelementptr %__ManagedStringData, ptr %b, i32 0, i32 0
+  %26 = getelementptr %__unsized_array_byte, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  %28 = sext i32 %34 to i64
+  %29 = getelementptr i8, ptr %27, i64 0, i64 %28
+  %30 = load i8, ptr %29
+  %31 = icmp ne i8 %22, %30
+  br i1 %31, label %then6, label %ifcont7
+afterloop5:
+  ret i1 1
+then6:
+  ret i1 0
+ifcont7:
+  %33 = add i32 %34, 1
+  br label %whilecond3
+}
+
 declare void @_managed_string_retain(ptr %arg0)
 
 declare ptr @malloc(i64 %arg0)
@@ -344,7 +340,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 340
+; Instructions: 344
 
 %string = type { ptr, i32 }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
@@ -399,61 +395,11 @@ entry0:
   %2 = load ptr, ptr %0
   %3 = getelementptr %string, ptr %2, i32 0, i32 0
   %4 = load ptr, ptr %3
-  %5 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 1
-  %6 = load i32, ptr %5
-  %7 = alloca i32
-  store i32 %6, ptr %7
-  %8 = load i32, ptr %7
-  %9 = load ptr, ptr %1
-  %10 = getelementptr %string, ptr %9, i32 0, i32 0
-  %11 = load ptr, ptr %10
-  %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 1
-  %13 = load i32, ptr %12
-  %14 = icmp ne i32 %8, %13
-  br i1 %14, label %then1, label %ifcont2
-then1:
-  ret i1 0
-ifcont2:
-  %15 = alloca i32
-  store i32 0, ptr %15
-  br label %whilecond3
-whilecond3:
-  %16 = load i32, ptr %15
-  %17 = load i32, ptr %7
-  %18 = icmp slt i32 %16, %17
-  br i1 %18, label %loop4, label %afterloop5
-loop4:
-  %19 = load ptr, ptr %0
-  %20 = getelementptr %string, ptr %19, i32 0, i32 0
-  %21 = load ptr, ptr %20
-  %22 = load i32, ptr %15
-  %23 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 0
-  %24 = getelementptr %__unsized_array_byte, ptr %23, i32 0, i32 0
-  %25 = load ptr, ptr %24
-  %26 = sext i32 %22 to i64
-  %27 = getelementptr i8, ptr %25, i64 0, i64 %26
-  %28 = load i8, ptr %27
-  %29 = load ptr, ptr %1
-  %30 = getelementptr %string, ptr %29, i32 0, i32 0
-  %31 = load ptr, ptr %30
-  %32 = load i32, ptr %15
-  %33 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 0
-  %34 = getelementptr %__unsized_array_byte, ptr %33, i32 0, i32 0
-  %35 = load ptr, ptr %34
-  %36 = sext i32 %32 to i64
-  %37 = getelementptr i8, ptr %35, i64 0, i64 %36
-  %38 = load i8, ptr %37
-  %39 = icmp ne i8 %28, %38
-  br i1 %39, label %then6, label %ifcont7
-afterloop5:
-  ret i1 1
-then6:
-  ret i1 0
-ifcont7:
-  %40 = load i32, ptr %15
-  %41 = add i32 %40, 1
-  store i32 %41, ptr %15
-  br label %whilecond3
+  %5 = load ptr, ptr %1
+  %6 = getelementptr %string, ptr %5, i32 0, i32 0
+  %7 = load ptr, ptr %6
+  %8 = call i1 @string._equals_managed_string(ptr %4, ptr %7)
+  ret i1 %8
 }
 
 define i32 @main() {
@@ -750,6 +696,64 @@ loop11:
 afterloop12:
   %66 = load i32, ptr %49
   ret i32 %66
+}
+
+define i1 @string._equals_managed_string(ptr %a, ptr %b) {
+entry0:
+  %0 = alloca ptr
+  store ptr %a, ptr %0
+  %1 = alloca ptr
+  store ptr %b, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %__ManagedStringData, ptr %2, i32 0, i32 1
+  %4 = load i32, ptr %3
+  %5 = alloca i32
+  store i32 %4, ptr %5
+  %6 = load i32, ptr %5
+  %7 = load ptr, ptr %1
+  %8 = getelementptr %__ManagedStringData, ptr %7, i32 0, i32 1
+  %9 = load i32, ptr %8
+  %10 = icmp ne i32 %6, %9
+  br i1 %10, label %then1, label %ifcont2
+then1:
+  ret i1 0
+ifcont2:
+  %11 = alloca i32
+  store i32 0, ptr %11
+  br label %whilecond3
+whilecond3:
+  %12 = load i32, ptr %11
+  %13 = load i32, ptr %5
+  %14 = icmp slt i32 %12, %13
+  br i1 %14, label %loop4, label %afterloop5
+loop4:
+  %15 = load ptr, ptr %0
+  %16 = load i32, ptr %11
+  %17 = getelementptr %__ManagedStringData, ptr %15, i32 0, i32 0
+  %18 = getelementptr %__unsized_array_byte, ptr %17, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  %20 = sext i32 %16 to i64
+  %21 = getelementptr i8, ptr %19, i64 0, i64 %20
+  %22 = load i8, ptr %21
+  %23 = load ptr, ptr %1
+  %24 = load i32, ptr %11
+  %25 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 0
+  %26 = getelementptr %__unsized_array_byte, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  %28 = sext i32 %24 to i64
+  %29 = getelementptr i8, ptr %27, i64 0, i64 %28
+  %30 = load i8, ptr %29
+  %31 = icmp ne i8 %22, %30
+  br i1 %31, label %then6, label %ifcont7
+afterloop5:
+  ret i1 1
+then6:
+  ret i1 0
+ifcont7:
+  %32 = load i32, ptr %11
+  %33 = add i32 %32, 1
+  store i32 %33, ptr %11
+  br label %whilecond3
 }
 
 declare void @_managed_string_retain(ptr %arg0)
