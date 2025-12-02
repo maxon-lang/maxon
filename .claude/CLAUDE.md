@@ -22,6 +22,19 @@ Maxon is a statically-typed programming language with a custom native x86-64 bac
 | Compile and run | `./bin/maxon file.maxon` |
 | Compile with MIR output | `./bin/maxon compile file.maxon --emit-ir` |
 
+## Maxon Language Overview
+
+Maxon is a statically-typed language with labeled blocks and explicit `end` statements:
+
+- **Types**: `int`, `float`, `bool`, `byte`, `char`, `string`, arrays (`[10]int`), structs, maps
+- **Variables**: `var` (mutable), `let` (immutable), ie `let x = 5`
+- **Functions**: `function fname(param type) returnType ... end 'fname'`
+- **Control flow**: `if`/`else`, `while`, `for`/`in` with range() - all require block labels
+- **Operators**: Arithmetic, comparison, logical (`and`, `or`, `not`), `mod`, `as` (cast)
+- **Structs**: `struct SName ... end 'SName'` with methods using explicit `self` parameter
+
+See `docs/LANGUAGE_REFERENCE.md` for complete syntax and semantics.
+
 ## Documentation
 
 - **`docs/LANGUAGE_REFERENCE.md`** - Complete Maxon language syntax and semantics
@@ -97,6 +110,7 @@ See `docs/COMPILER_DEBUGGING.md` for detailed workflow.
 - **Absolute paths** - Always use absolute paths for file operations
 - **LF line endings** - All source files use Unix-style line endings
 - Don't create new documentation files unless instructed
+- Do not edit test fragments (in /language-tests/fragments). These are generated from the spec files, edit the spec file.
 
 ## Development Notes
 - Build system uses CMake with Ninja generator

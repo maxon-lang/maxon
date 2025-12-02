@@ -82,7 +82,6 @@ end 'outer'
 - Exits the innermost `while` or `for` loop
 - Control flow continues after the loop's `end` statement
 - Must be inside a loop (compile error otherwise)
-- Can be used in single-line if: `if condition break`
 - Label must match an enclosing loop's label
 - `continue 'label'` jumps to the next iteration of the labeled loop
 
@@ -105,13 +104,15 @@ end 'main'
 5
 ```
 
-<!-- test: break.with-single-line-if -->
+<!-- test: break.with-if -->
 ```maxon
 function main() int
     var x = 0
     while true 'loop'
         x = x + 1
-        if x == 10 then break
+        if x == 10 'check'
+            break
+        end 'check'
     end 'loop'
     return x
 end 'main'

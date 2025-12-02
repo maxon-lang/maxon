@@ -624,24 +624,14 @@ array[index] = value
 
 ### If Statement
 
-**Single-Line If**
-```maxon
-if condition then statement
-```
-
-**Single-Line If-Else**
-```maxon
-if condition then statement else statement
-```
-
-**Multi-Line**
+**Syntax**
 ```maxon
 if condition 'label'
     statements
 end 'label'
 ```
 
-**Multi-Line With Else**
+**With Else**
 ```maxon
 if condition 'label'
     statements
@@ -651,12 +641,10 @@ end 'label'
 ```
 
 **Notes:**
-- Single-line if requires `then` keyword before the statement
-- Single-line else does NOT use `then`
-- Block identifier required for multiline if statements
+- Block identifier required after `if` condition
+- Block identifier must match on `else` and `end` keywords
 - Condition must be `bool` type
 - Can nest arbitrarily
-- Can mix single-line if with multi-line else
 
 ### While Loop
 ```maxon

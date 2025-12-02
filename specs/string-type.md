@@ -337,8 +337,12 @@ end 'main'
 ```maxon
 function main() int
     var s = "hello world"
-    if s.startsWith("hello") then print_int(1)
-    if s.startsWith("world") then print_int(0)
+    if s.startsWith("hello") 'c1'
+        print_int(1)
+    end 'c1'
+    if s.startsWith("world") 'c2'
+        print_int(0)
+    end 'c2'
     return 0
 end 'main'
 ```
@@ -353,8 +357,12 @@ end 'main'
 ```maxon
 function main() int
     var s = "hello world"
-    if s.endsWith("world") then print_int(1)
-    if s.endsWith("hello") then print_int(0)
+    if s.endsWith("world") 'c1'
+        print_int(1)
+    end 'c1'
+    if s.endsWith("hello") 'c2'
+        print_int(0)
+    end 'c2'
     return 0
 end 'main'
 ```
@@ -369,8 +377,12 @@ end 'main'
 ```maxon
 function main() int
     var s = "hello world"
-    if s.contains("lo wo") then print_int(1)
-    if s.contains("xyz") then print_int(0)
+    if s.contains("lo wo") 'c1'
+        print_int(1)
+    end 'c1'
+    if s.contains("xyz") 'c2'
+        print_int(0)
+    end 'c2'
     return 0
 end 'main'
 ```
@@ -532,9 +544,15 @@ end 'main'
 ```maxon
 function main() int
     // 0xD83D = 55357 (high surrogate for 😀)
-    if utf16_is_lead_surrogate(55357) then print_int(1)
-    if utf16_is_lead_surrogate(56832) then print_int(0)
-    if utf16_is_lead_surrogate(65) then print_int(0)
+    if utf16_is_lead_surrogate(55357) 'c1'
+        print_int(1)
+    end 'c1'
+    if utf16_is_lead_surrogate(56832) 'c2'
+        print_int(0)
+    end 'c2'
+    if utf16_is_lead_surrogate(65) 'c3'
+        print_int(0)
+    end 'c3'
     return 0
 end 'main'
 ```
@@ -549,9 +567,15 @@ end 'main'
 ```maxon
 function main() int
     // 0xDE00 = 56832 (low surrogate for 😀)
-    if utf16_is_trail_surrogate(56832) then print_int(1)
-    if utf16_is_trail_surrogate(55357) then print_int(0)
-    if utf16_is_trail_surrogate(65) then print_int(0)
+    if utf16_is_trail_surrogate(56832) 'c4'
+        print_int(1)
+    end 'c4'
+    if utf16_is_trail_surrogate(55357) 'c5'
+        print_int(0)
+    end 'c5'
+    if utf16_is_trail_surrogate(65) 'c6'
+        print_int(0)
+    end 'c6'
     return 0
 end 'main'
 ```
@@ -565,9 +589,15 @@ end 'main'
 <!-- test: utf16-is-surrogate -->
 ```maxon
 function main() int
-    if utf16_is_surrogate(55357) then print_int(1)
-    if utf16_is_surrogate(56832) then print_int(2)
-    if utf16_is_surrogate(65) then print_int(0)
+    if utf16_is_surrogate(55357) 'c7'
+        print_int(1)
+    end 'c7'
+    if utf16_is_surrogate(56832) 'c8'
+        print_int(2)
+    end 'c8'
+    if utf16_is_surrogate(65) 'c9'
+        print_int(0)
+    end 'c9'
     return 0
 end 'main'
 ```
@@ -633,10 +663,18 @@ end 'main'
 <!-- test: utf16-is-bmp -->
 ```maxon
 function main() int
-    if utf16_is_bmp(65) then print_int(1)       // ASCII
-    if utf16_is_bmp(945) then print_int(2)      // Greek α
-    if utf16_is_bmp(65535) then print_int(3)    // U+FFFF (last BMP)
-    if utf16_is_bmp(128512) then print_int(0)   // 😀 (not BMP)
+    if utf16_is_bmp(65) 'c10'
+        print_int(1)       // ASCII
+    end 'c10'
+    if utf16_is_bmp(945) 'c11'
+        print_int(2)      // Greek α
+    end 'c11'
+    if utf16_is_bmp(65535) 'c12'
+        print_int(3)    // U+FFFF (last BMP)
+    end 'c12'
+    if utf16_is_bmp(128512) 'c13'
+        print_int(0)   // 😀 (not BMP)
+    end 'c13'
     return 0
 end 'main'
 ```
@@ -652,9 +690,15 @@ end 'main'
 <!-- test: utf16-valid-surrogate-pair -->
 ```maxon
 function main() int
-    if utf16_is_valid_surrogate_pair(55357, 56832) then print_int(1)  // valid pair
-    if utf16_is_valid_surrogate_pair(56832, 55357) then print_int(0)  // reversed
-    if utf16_is_valid_surrogate_pair(65, 66) then print_int(0)        // not surrogates
+    if utf16_is_valid_surrogate_pair(55357, 56832) 'c14'
+        print_int(1)  // valid pair
+    end 'c14'
+    if utf16_is_valid_surrogate_pair(56832, 55357) 'c15'
+        print_int(0)  // reversed
+    end 'c15'
+    if utf16_is_valid_surrogate_pair(65, 66) 'c16'
+        print_int(0)        // not surrogates
+    end 'c16'
     return 0
 end 'main'
 ```
@@ -817,8 +861,12 @@ end 'main'
 ```maxon
 function main() int
     var s = "This is a very long string that is heap allocated"
-    if s.startsWith("This is") then print_int(1)
-    if s.startsWith("That is") then print_int(0)
+    if s.startsWith("This is") 'c17'
+        print_int(1)
+    end 'c17'
+    if s.startsWith("That is") 'c18'
+        print_int(0)
+    end 'c18'
     return 0
 end 'main'
 ```
@@ -833,8 +881,12 @@ end 'main'
 ```maxon
 function main() int
     var s = "This is a very long string that is heap allocated"
-    if s.endsWith("heap allocated") then print_int(1)
-    if s.endsWith("stack allocated") then print_int(0)
+    if s.endsWith("heap allocated") 'c19'
+        print_int(1)
+    end 'c19'
+    if s.endsWith("stack allocated") 'c20'
+        print_int(0)
+    end 'c20'
     return 0
 end 'main'
 ```
@@ -849,8 +901,12 @@ end 'main'
 ```maxon
 function main() int
     var s = "This is a very long string that is heap allocated"
-    if s.contains("long string") then print_int(1)
-    if s.contains("short string") then print_int(0)
+    if s.contains("long string") 'c21'
+        print_int(1)
+    end 'c21'
+    if s.contains("short string") 'c22'
+        print_int(0)
+    end 'c22'
     return 0
 end 'main'
 ```

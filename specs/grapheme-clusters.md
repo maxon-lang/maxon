@@ -393,8 +393,12 @@ end 'main'
 
 ```maxon
 function main() int
-    if is_extended_pictographic(128512) then print_int(1)  // 😀
-    if is_extended_pictographic(65) then print_int(0)      // 'A'
+    if is_extended_pictographic(128512) 'c1'
+        print_int(1)  // 😀
+    end 'c1'
+    if is_extended_pictographic(65) 'c2'
+        print_int(0)      // 'A'
+    end 'c2'
     return 0
 end 'main'
 ```

@@ -1,7 +1,7 @@
 ---
 feature: if-statements
 status: stable
-keywords: if, else, conditional, branching, control flow, then
+keywords: if, else, conditional, branching, control flow
 category: control-flow
 ---
 
@@ -10,47 +10,22 @@ category: control-flow
 If statements provide conditional execution in Maxon.
 
 **Implementation Details:**
-- Keywords: `if`, `else`, `then` (lexer.cpp)
+- Keywords: `if`, `else` (lexer.cpp)
 - Parser: `parseIf()` in parser.cpp
 - AST node: `IfAST` (ast.h)
-- Supports both single-line and multi-line syntax
-- Multi-line requires block identifiers
-- Single-line if uses `then` keyword
+- Requires block identifiers for all if/else statements
+- Enforces explicit block structure with `end` keyword
 
-**Syntax Variants:**
+**Syntax:**
 
-**Single-line if:**
-```
-if <condition> then <statement>
-```
-
-**Single-line if-else (all on one line):**
-```
-if <condition> then <statement> else <statement>
-```
-
-**Single-line if with multi-line else:**
-```
-if <condition> then <statement> else 'identifier'
-    <statements>
-end 'identifier'
-```
-
-**Multi-line if:**
+**If statement:**
 ```
 if <condition> 'identifier'
     <statements>
 end 'identifier'
 ```
 
-**Multi-line if with single-line else:**
-```
-if <condition> 'identifier'
-    <statements>
-else 'identifier' <statement>
-```
-
-**Multi-line if with multi-line else:**
+**If-else statement:**
 ```
 if <condition> 'identifier'
     <statements>
@@ -70,19 +45,15 @@ end 'identifier'
 
 Execute code conditionally based on a boolean expression.
 
-**Single-Line Syntax:**
+**Syntax:**
 
 ```maxon
-if <condition> then <statement>
+if <condition> 'identifier'
+    <statements>
+end 'identifier'
 ```
 
-**Single-Line If-Else:**
-
-```maxon
-if <condition> then <statement> else <statement>
-```
-
-**Multi-Line Syntax:**
+**With Else:**
 
 ```maxon
 if <condition> 'identifier'
@@ -92,12 +63,14 @@ else 'identifier'
 end 'identifier'
 ```
 
-**Example (single-line):**
+**Example (simple if):**
 
 ```maxon
 function main() int
     var x = 10
-    if x > 5 then return 1
+    if x > 5 'check'
+        return 1
+    end 'check'
     return 0
 end 'main'
 ```
@@ -106,12 +79,16 @@ end 'main'
 ```
 
 
-**Example (single-line if-else):**
+**Example (if-else):**
 
 ```maxon
 function main() int
     var x = 3
-    if x > 5 then return 1 else return 0
+    if x > 5 'check'
+        return 1
+    else 'check'
+        return 0
+    end 'check'
 end 'main'
 ```
 ```exitcode
@@ -119,7 +96,7 @@ end 'main'
 ```
 
 
-**Example (multi-line with else):**
+**Example (nested if):**
 
 ```maxon
 function main() int
@@ -137,14 +114,27 @@ end 'main'
 
 
 **Notes:**
-- Single-line if/else uses `then` keyword
-- Multi-line if/else uses block identifier (no `then` on `if` line)
-- The if and else can independently be single-line or multi-line
+- Block identifier required after `if` condition
+- Block identifier must match on `else` and `end` keywords
 - Block identifier must be a string literal
 - Conditions can be any boolean expression
 - Else clause is optional
 
 ## Tests
+
+<!-- test: if-statements.simple -->
+```maxon
+function main() int
+    var x = 10
+    if x > 5 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
 
 <!-- test: if-statements.else -->
 ```maxon
@@ -161,7 +151,7 @@ end 'main'
 1
 ```
 
-<!-- test: if-statements.elseif -->
+<!-- test: if-statements.nested -->
 ```maxon
 function main() int
     var x = 3
@@ -178,67 +168,4 @@ end 'main'
 ```
 ```exitcode
 3
-```
-
-<!-- test: if-statements.simple -->
-```maxon
-function main() int
-    var x = 10
-    if x > 5 'check'
-        return 1
-    end 'check'
-    return 0
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: if-statements.single-line -->
-```maxon
-function main() int
-    var x = 0
-    if 5 > 3 then x = 1
-    return x
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: if-statements.single-line-else -->
-```maxon
-function main() int
-    var x = 3
-    if x > 5 then return 1 else return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: if-statements.single-if-multi-else -->
-```maxon
-function main() int
-    var x = 3
-    if x > 5 then return 1 else 'check'
-        return 0
-    end 'check'
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: if-statements.multi-if-single-else -->
-```maxon
-function main() int
-    var x = 10
-    if x > 5 'check'
-        return 1
-    else 'check' return 0
-end 'main'
-```
-```exitcode
-1
 ```

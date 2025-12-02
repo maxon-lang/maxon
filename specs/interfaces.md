@@ -311,7 +311,9 @@ struct Point is Hashable, Equatable
     end 'hash'
 
     function Equatable.equals(other Point) int
-        if x == other.x and y == other.y then return 1
+        if x == other.x and y == other.y 'c1'
+            return 1
+        end 'c1'
         return 0
     end 'equals'
 end 'Point'
