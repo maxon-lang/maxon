@@ -18,6 +18,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 	} else if (dynamic_cast<BooleanExprAST *>(expr)) {
 		return "bool";
 
+	} else if (dynamic_cast<NilExprAST *>(expr)) {
+		return "nil";
+
 	} else if (dynamic_cast<CharacterExprAST *>(expr)) {
 		// Character literals require the stdlib 'char' struct (grapheme cluster)
 		// Track as undefined so it gets auto-discovered
@@ -180,6 +183,20 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 	} else if (auto binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
 		std::string leftType = analyzeExpression(binExpr->left.get());
 		std::string rightType = analyzeExpression(binExpr->right.get());
+
+		// Prevent using optional types without unwrapping
+		if (isOptionalType(leftType)) {
+			addError("Cannot use optional type '" + leftType + "' without unwrapping" +
+						 std::string("\n  Note: Use 'if let' to safely unwrap optional values before using them"),
+					 binExpr->left->line, binExpr->left->column);
+			return "error";
+		}
+		if (isOptionalType(rightType)) {
+			addError("Cannot use optional type '" + rightType + "' without unwrapping" +
+						 std::string("\n  Note: Use 'if let' to safely unwrap optional values before using them"),
+					 binExpr->right->line, binExpr->right->column);
+			return "error";
+		}
 
 		// Arithmetic operators: +, -, *, /, %
 		if (binExpr->op == '+' || binExpr->op == '-' || binExpr->op == '*' ||

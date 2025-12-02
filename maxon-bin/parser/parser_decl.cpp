@@ -139,6 +139,26 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	if ((retKd && retKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
 		returnType = std::string(currentValue());
 		advance();
+
+		// Check for "or nil" suffix for optional return types
+		if (checkKeyword("or")) {
+			advance(); // consume 'or'
+			if (!checkKeyword("nil")) {
+				throw std::runtime_error("Expected 'nil' after 'or' in return type\n  Location: line " +
+										 std::to_string(currentLine()) + ", column " +
+										 std::to_string(currentColumn()));
+			}
+			advance(); // consume 'nil'
+
+			// Reject nested optionals
+			if (returnType.find(" or nil") != std::string::npos) {
+				throw std::runtime_error("Cannot make optional type '" + returnType + "' optional again\n  Location: line " +
+										 std::to_string(currentLine()) + ", column " +
+										 std::to_string(currentColumn()));
+			}
+
+			returnType = returnType + " or nil";
+		}
 	}
 
 	std::vector<std::unique_ptr<StmtAST>> body;
@@ -292,6 +312,26 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 	if ((retKd && retKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
 		returnType = std::string(currentValue());
 		advance();
+
+		// Check for "or nil" suffix for optional return types
+		if (checkKeyword("or")) {
+			advance(); // consume 'or'
+			if (!checkKeyword("nil")) {
+				throw std::runtime_error("Expected 'nil' after 'or' in return type\n  Location: line " +
+										 std::to_string(currentLine()) + ", column " +
+										 std::to_string(currentColumn()));
+			}
+			advance(); // consume 'nil'
+
+			// Reject nested optionals
+			if (returnType.find(" or nil") != std::string::npos) {
+				throw std::runtime_error("Cannot make optional type '" + returnType + "' optional again\n  Location: line " +
+										 std::to_string(currentLine()) + ", column " +
+										 std::to_string(currentColumn()));
+			}
+
+			returnType = returnType + " or nil";
+		}
 	}
 
 	std::vector<std::unique_ptr<StmtAST>> body;
@@ -703,6 +743,26 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 				returnType = std::string(currentValue());
 				advance();
 			}
+		}
+
+		// Check for "or nil" suffix for optional return types
+		if (checkKeyword("or")) {
+			advance(); // consume 'or'
+			if (!checkKeyword("nil")) {
+				throw std::runtime_error("Expected 'nil' after 'or' in return type\n  Location: line " +
+										 std::to_string(currentLine()) + ", column " +
+										 std::to_string(currentColumn()));
+			}
+			advance(); // consume 'nil'
+
+			// Reject nested optionals
+			if (returnType.find(" or nil") != std::string::npos) {
+				throw std::runtime_error("Cannot make optional type '" + returnType + "' optional again\n  Location: line " +
+										 std::to_string(currentLine()) + ", column " +
+										 std::to_string(currentColumn()));
+			}
+
+			returnType = returnType + " or nil";
 		}
 
 		methods.push_back(InterfaceMethodSignature(methodName, std::move(parameters), returnType,

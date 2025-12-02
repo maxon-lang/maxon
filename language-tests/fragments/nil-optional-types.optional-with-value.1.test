@@ -1,0 +1,105 @@
+// Test: nil-optional-types.optional-with-value.1
+function returnsValue() int or nil
+	return 42
+end 'returnsValue'
+
+function main() int
+	var x = returnsValue()
+	if let val = x 'check'
+		return val
+	else 'check'
+		return 0
+	end 'check'
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 21
+
+define Optional<i32> @returnsValue() {
+entry0:
+  %0 = alloca Optional<i32>
+  %1 = getelementptr i8, ptr %0, i32 0, i32 0
+  store i8 1, ptr %1
+  %2 = getelementptr i32, ptr %0, i32 0, i32 1
+  store i32 42, ptr %2
+  %3 = load Optional<i32>, ptr %0
+  ret Optional<i32> %3
+}
+
+define i32 @main() {
+entry0:
+  %0 = call Optional<i32> @returnsValue()
+  %3 = alloca Optional<i32>
+  store Optional<i32> %0, ptr %3
+  %4 = getelementptr i8, ptr %3, i32 0, i32 0
+  %5 = load i8, ptr %4
+  %6 = icmp eq i8 %5, 1
+  br i1 %6, label %iflet.then1, label %iflet.else3
+iflet.then1:
+  %7 = getelementptr i32, ptr %3, i32 0, i32 1
+  %8 = load i32, ptr %7
+  ret i32 %8
+iflet.else3:
+  ret i32 0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 28
+
+define Optional<i32> @returnsValue() {
+entry0:
+  %0 = alloca Optional<i32>
+  %1 = getelementptr i8, ptr %0, i32 0, i32 0
+  store i8 1, ptr %1
+  %2 = getelementptr i32, ptr %0, i32 0, i32 1
+  store i32 42, ptr %2
+  %3 = load Optional<i32>, ptr %0
+  ret Optional<i32> %3
+}
+
+define i32 @main() {
+entry0:
+  %0 = call Optional<i32> @returnsValue()
+  %1 = alloca Optional<i32>
+  store Optional<i32> %0, ptr %1
+  %2 = load Optional<i32>, ptr %1
+  %3 = alloca Optional<i32>
+  store Optional<i32> %2, ptr %3
+  %4 = getelementptr i8, ptr %3, i32 0, i32 0
+  %5 = load i8, ptr %4
+  %6 = icmp eq i8 %5, 1
+  br i1 %6, label %iflet.then1, label %iflet.else3
+iflet.then1:
+  %7 = getelementptr i32, ptr %3, i32 0, i32 1
+  %8 = load i32, ptr %7
+  %9 = alloca i32
+  store i32 %8, ptr %9
+  %10 = load i32, ptr %9
+  ret i32 %10
+iflet.after2:
+  ret i32 0
+iflet.else3:
+  ret i32 0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 42

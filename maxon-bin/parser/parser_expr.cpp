@@ -41,6 +41,13 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		return std::make_unique<BooleanExprAST>(false, line, column);
 	}
 
+	if (checkKeyword("nil")) {
+		int line = currentLine();
+		int column = currentColumn();
+		advance();
+		return std::make_unique<NilExprAST>(line, column);
+	}
+
 	if (check(TokenType::CHARACTER)) {
 		std::string value = std::string(currentValue());  // Get full grapheme cluster
 		int line = currentLine();

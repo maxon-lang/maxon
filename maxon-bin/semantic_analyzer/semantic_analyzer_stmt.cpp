@@ -428,6 +428,103 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			exitScope();
 		}
 
+	} else if (auto ifLet = dynamic_cast<IfLetStmtAST *>(stmt)) {
+		// Analyze optional expression
+		std::string optionalType = analyzeExpression(ifLet->optionalExpr.get());
+
+		if (!isOptionalType(optionalType)) {
+			addError("'if let' requires optional type, got '" + optionalType + "'" +
+						 std::string("\n  Note: Use 'if let' only with optional types (T or nil)"),
+					 stmt->line, stmt->column);
+		}
+
+		std::string unwrappedType = unwrapOptionalType(optionalType);
+
+		// Check for duplicate block identifiers at this scope level
+		declareBlockId(ifLet->blockId, stmt->line, stmt->column);
+
+		// Analyze then body with binding in scope
+		enterScope();
+		blockIdStack.push_back(std::set<std::string>());
+
+		// Declare the unwrapped variable (immutable like 'let')
+		declareVariable(ifLet->bindingName, unwrappedType, true, stmt->line, stmt->column);
+
+		for (const auto &s : ifLet->thenBody) {
+			analyzeStatement(s.get(), currentFunctionReturnType);
+		}
+
+		blockIdStack.pop_back();
+		checkUnusedVariables();
+		exitScope();
+
+		// Analyze else body (binding NOT in scope)
+		if (!ifLet->elseBody.empty()) {
+			enterScope();
+			blockIdStack.push_back(std::set<std::string>());
+
+			for (const auto &s : ifLet->elseBody) {
+				analyzeStatement(s.get(), currentFunctionReturnType);
+			}
+
+			blockIdStack.pop_back();
+			checkUnusedVariables();
+			exitScope();
+		}
+
+	} else if (auto elseUnwrap = dynamic_cast<ElseUnwrapStmtAST *>(stmt)) {
+		// Analyze the optional expression
+		std::string optionalType = analyzeExpression(elseUnwrap->optionalExpr.get());
+
+		// Verify it's optional
+		if (!isOptionalType(optionalType)) {
+			addError("'else' unwrapping requires an optional type, got '" + optionalType + "'" +
+						 std::string("\n  Note: Use 'var x = expr else ...' only with optional types (T or nil)"),
+					 stmt->line, stmt->column);
+			return;
+		}
+
+		std::string unwrappedType = unwrapOptionalType(optionalType);
+
+		// If explicit type provided, verify it matches
+		if (!elseUnwrap->declaredType.empty() &&
+			!typesMatch(elseUnwrap->declaredType, unwrappedType)) {
+			addError("Type mismatch: declared type '" + elseUnwrap->declaredType +
+						 "' does not match unwrapped type '" + unwrappedType + "'",
+					 stmt->line, stmt->column);
+			return;
+		}
+
+		// PRE-DECLARE the variable in scope (mutable, initialized on both paths)
+		// This allows the else block to assign to it
+		declareVariable(elseUnwrap->name, unwrappedType, false, stmt->line, stmt->column);
+
+		// Track that this variable needs initialization in else block
+		std::string savedVarName = elseUnwrap->name;
+
+		// Analyze else body
+		enterScope();
+		bool assignmentFound = false;
+
+		for (const auto &s : elseUnwrap->elseBody) {
+			// Check if this statement assigns to the variable
+			if (auto assignStmt = dynamic_cast<AssignStmtAST *>(s.get())) {
+				if (assignStmt->name == savedVarName) {
+					assignmentFound = true;
+				}
+			}
+			analyzeStatement(s.get(), currentFunctionReturnType);
+		}
+		exitScope();
+
+		// CRITICAL CHECK: Verify the variable was assigned in else block
+		if (!assignmentFound) {
+			addError("Variable '" + savedVarName + "' must be assigned a value in the else block" +
+						 std::string("\n  The else block is only executed when the optional is nil") +
+						 "\n  Note: You must provide a default value by assigning to '" + savedVarName + "' in the else block",
+					 stmt->line, stmt->column);
+		}
+
 	} else if (auto whileStmt = dynamic_cast<WhileStmtAST *>(stmt)) {
 		// Analyze condition
 		std::string condType = analyzeExpression(whileStmt->condition.get());
@@ -582,6 +679,31 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		// Analyze return value
 		if (returnStmt->value) {
 			std::string returnType = analyzeExpression(returnStmt->value.get());
+
+			// Returning nil
+			if (returnType == "nil") {
+				if (!isOptionalType(currentFunctionReturnType)) {
+					addError("Cannot return 'nil' from non-optional return type" +
+								 std::string("\n  Function return type: ") + currentFunctionReturnType +
+								 "\n  Note: To return nil, change the function return type to '" +
+								 currentFunctionReturnType + " or nil'",
+							 stmt->line, stmt->column);
+				}
+				// nil can be returned to any optional type
+				return;
+			}
+
+			// Returning value to optional type (implicit wrap)
+			if (isOptionalType(currentFunctionReturnType)) {
+				std::string unwrapped = unwrapOptionalType(currentFunctionReturnType);
+				if (typesMatch(unwrapped, returnType)) {
+					// Allow implicit wrapping of non-nil value to optional
+					return;
+				}
+				// Fall through to normal type checking for mismatch error
+			}
+
+			// Standard type checking
 			if (!typesMatch(currentFunctionReturnType, returnType)) {
 				addError("Return type mismatch" +
 							 std::string("\n  Expected: ") + currentFunctionReturnType +

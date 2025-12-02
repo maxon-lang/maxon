@@ -38,6 +38,13 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		return builder->getInt1(boolExpr->value);
 	}
 
+	if (dynamic_cast<NilExprAST *>(expr)) {
+		// Nil literal - type will be determined by context (where it's used)
+		// For now, return a nullptr marker that will be wrapped in createNilOptional
+		// by the caller (e.g., return statement)
+		return nullptr;
+	}
+
 	if (auto *charExpr = dynamic_cast<CharacterExprAST *>(expr)) {
 		// Character literals are now grapheme clusters (char struct, same layout as string)
 		return generateCharLiteral(charExpr);

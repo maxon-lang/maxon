@@ -86,6 +86,12 @@ class StringLiteralExprAST : public ExprAST {
 		: ExprAST(l, c), value(val) {}
 };
 
+// Nil literal (represents absence in optional types)
+class NilExprAST : public ExprAST {
+  public:
+	NilExprAST(int l = 0, int c = 0) : ExprAST(l, c) {}
+};
+
 // Type cast expression (e.g., "value as ptr")
 class CastExprAST : public ExprAST {
   public:
@@ -326,6 +332,48 @@ class IfStmtAST : public StmtAST {
 		: StmtAST(l, c), condition(std::move(cond)),
 		  thenBody(std::move(thenB)),
 		  elseBody(std::move(elseB)),
+		  blockId(bid) {}
+};
+
+// If-let statement (optional unwrapping)
+// Syntax: if let name = optionalExpr 'label' ... else 'label' ... end 'label'
+class IfLetStmtAST : public StmtAST {
+  public:
+	std::string bindingName;
+	std::unique_ptr<ExprAST> optionalExpr;
+	std::vector<std::unique_ptr<StmtAST>> thenBody;
+	std::vector<std::unique_ptr<StmtAST>> elseBody;
+	std::string blockId;
+
+	IfLetStmtAST(const std::string &name,
+				 std::unique_ptr<ExprAST> expr,
+				 std::vector<std::unique_ptr<StmtAST>> thenB,
+				 std::vector<std::unique_ptr<StmtAST>> elseB,
+				 int l = 0, int c = 0,
+				 const std::string &bid = "")
+		: StmtAST(l, c), bindingName(name), optionalExpr(std::move(expr)),
+		  thenBody(std::move(thenB)), elseBody(std::move(elseB)), blockId(bid) {}
+};
+
+// Else-unwrap statement (optional unwrapping with default value)
+// Syntax: var name = optionalExpr else 'label' ... end 'label'
+// The else block MUST assign a value to 'name' before exiting
+class ElseUnwrapStmtAST : public StmtAST {
+  public:
+	std::string name;
+	std::string declaredType; // Optional: explicit type annotation
+	std::unique_ptr<ExprAST> optionalExpr;
+	std::vector<std::unique_ptr<StmtAST>> elseBody;
+	std::string blockId;
+
+	ElseUnwrapStmtAST(const std::string &n,
+					  const std::string &type,
+					  std::unique_ptr<ExprAST> expr,
+					  std::vector<std::unique_ptr<StmtAST>> elseB,
+					  int l = 0, int c = 0,
+					  const std::string &bid = "")
+		: StmtAST(l, c), name(n), declaredType(type),
+		  optionalExpr(std::move(expr)), elseBody(std::move(elseB)),
 		  blockId(bid) {}
 };
 

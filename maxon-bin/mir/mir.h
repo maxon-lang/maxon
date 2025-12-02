@@ -28,6 +28,7 @@ enum class MIRTypeKind {
 	Ptr,	 // pointer (opaque, 64-bit on x64)
 	Array,	 // fixed-size array
 	Struct,	 // user-defined struct
+	Optional, // discriminated union with tag (T or nil)
 };
 
 class MIRType {
@@ -41,6 +42,9 @@ class MIRType {
 	// For structs: name and field types
 	std::string structName;
 	std::vector<MIRType *> fieldTypes;
+
+	// For optionals: wrapped type
+	MIRType *wrappedType = nullptr;
 
 	// Size in bytes (computed lazily)
 	uint64_t sizeInBytes = 0;
@@ -60,6 +64,7 @@ class MIRType {
 	static MIRType *getPtr();
 	static MIRType *getArray(MIRType *elem, uint64_t size);
 	static MIRType *getStruct(const std::string &name, const std::vector<MIRType *> &fields);
+	static MIRType *getOptional(MIRType *wrapped);
 
 	bool isInteger() const { return kind == MIRTypeKind::Int1 || kind == MIRTypeKind::Int8 ||
 									kind == MIRTypeKind::Int32 || kind == MIRTypeKind::Int64; }
@@ -68,6 +73,7 @@ class MIRType {
 	bool isVoid() const { return kind == MIRTypeKind::Void; }
 	bool isArray() const { return kind == MIRTypeKind::Array; }
 	bool isStruct() const { return kind == MIRTypeKind::Struct; }
+	bool isOptional() const { return kind == MIRTypeKind::Optional; }
 
 	std::string toString() const;
 

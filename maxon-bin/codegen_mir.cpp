@@ -103,6 +103,14 @@ mir::MIRType *MIRCodeGenerator::getTypeFromStringNoMark(const std::string &typeS
 		return mir::MIRType::getPtr();
 	}
 
+	// Check for optional type: T or nil
+	size_t orNilPos = typeStr.find(" or nil");
+	if (orNilPos != std::string::npos) {
+		std::string wrappedTypeStr = typeStr.substr(0, orNilPos);
+		mir::MIRType *wrappedType = getTypeFromStringNoMark(wrappedTypeStr);
+		return mir::MIRType::getOptional(wrappedType);
+	}
+
 	// Check for user-defined struct types first
 	auto it = structTypes.find(typeStr);
 	if (it != structTypes.end()) {
@@ -174,6 +182,14 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return mir::MIRType::getVoid();
 	} else if (typeStr.empty()) {
 		return mir::MIRType::getInt32(); // Default type
+	}
+
+	// Check for optional type: T or nil
+	size_t orNilPos = typeStr.find(" or nil");
+	if (orNilPos != std::string::npos) {
+		std::string wrappedTypeStr = typeStr.substr(0, orNilPos);
+		mir::MIRType *wrappedType = getTypeFromString(wrappedTypeStr);
+		return mir::MIRType::getOptional(wrappedType);
 	}
 
 	// Check for array type: [size]elementType or []elementType (unsized)
@@ -261,6 +277,9 @@ std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
 		// Format: [size]elementType
 		return "[" + std::to_string(type->arraySize) + "]" +
 			   getMaxonTypeFromMIRType(type->elementType);
+	case mir::MIRTypeKind::Optional:
+		// Format: T or nil
+		return getMaxonTypeFromMIRType(type->wrappedType) + " or nil";
 	}
 	return "int";
 }

@@ -246,6 +246,12 @@ class MIRCodeGenerator {
 	mir::MIRValue *generateStringLiteralAsSlice(StringLiteralExprAST *strExpr);
 	mir::MIRValue *generateCharLiteral(CharacterExprAST *charExpr);
 
+	// Optional type helpers
+	mir::MIRValue *createNilOptional(mir::MIRType *optionalType);
+	mir::MIRValue *createSomeOptional(mir::MIRType *optionalType, mir::MIRValue *value);
+	void generateIfLet(IfLetStmtAST *ifLet, mir::MIRFunction *function);
+	void generateElseUnwrap(ElseUnwrapStmtAST *elseUnwrap, mir::MIRFunction *function);
+
 	// Safe FFI generation
 	void registerExternFunction(FunctionAST *func);
 	safeffi::TypeTag getTypeTagFromString(const std::string &typeStr);

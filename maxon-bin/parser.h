@@ -61,11 +61,15 @@ class Parser {
 	std::unique_ptr<ExprAST> parsePrimary();
 
 	std::unique_ptr<StmtAST> parseStatement();
-	std::unique_ptr<VarDeclStmtAST> parseVarDecl();
+	std::unique_ptr<StmtAST> parseVarDecl();
 	std::unique_ptr<LetDeclStmtAST> parseLetDecl();
 	std::tuple<Token, std::string, std::unique_ptr<ExprAST>> parseVariableDeclarationComponents();
 	std::unique_ptr<AssignStmtAST> parseAssignment(const std::string &name);
-	std::unique_ptr<IfStmtAST> parseIf();
+	std::unique_ptr<StmtAST> parseIf();
+	std::unique_ptr<IfLetStmtAST> parseIfLet(Token ifToken);
+	std::unique_ptr<ElseUnwrapStmtAST> parseElseUnwrap(Token varToken, Token nameToken,
+														 const std::string &explicitType,
+														 std::unique_ptr<ExprAST> optionalExpr);
 	std::unique_ptr<WhileStmtAST> parseWhile();
 	std::unique_ptr<ForStmtAST> parseFor();
 	std::unique_ptr<ReturnStmtAST> parseReturn();

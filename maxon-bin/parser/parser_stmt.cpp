@@ -1,9 +1,21 @@
 #include "../parser.h"
 #include <stdexcept>
 
-std::unique_ptr<VarDeclStmtAST> Parser::parseVarDecl() {
+std::unique_ptr<StmtAST> Parser::parseVarDecl() {
 	Token varToken = expectKeyword("var", "Expected 'var'");
-	auto [name, type, initializer] = parseVariableDeclarationComponents();
+	Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
+
+	// Type is always inferred from initializer
+	std::string type = "";
+
+	expectAdvance(TokenType::ASSIGN, "Expected '='");
+	auto initializer = parseLogicalOr();
+
+	// Check for else-unwrap
+	if (checkKeyword("else")) {
+		return parseElseUnwrap(varToken, name, type, std::move(initializer));
+	}
+
 	return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer), type, varToken.line, varToken.column);
 }
 
@@ -73,8 +85,14 @@ std::unique_ptr<ContinueStmtAST> Parser::parseContinue() {
 	return std::make_unique<ContinueStmtAST>(continueToken.line, continueToken.column, label);
 }
 
-std::unique_ptr<IfStmtAST> Parser::parseIf() {
+std::unique_ptr<StmtAST> Parser::parseIf() {
 	Token ifToken = expectKeyword("if", "Expected 'if'");
+
+	// Check for "if let" pattern
+	if (checkKeyword("let")) {
+		return parseIfLet(ifToken);
+	}
+
 	auto condition = parseLogicalOr();
 
 	// Require block identifier (no more 'then' keyword support)
@@ -127,6 +145,88 @@ std::unique_ptr<IfStmtAST> Parser::parseIf() {
 									   std::move(elseBody),
 									   ifToken.line, ifToken.column, blockId);
 }
+
+std::unique_ptr<IfLetStmtAST> Parser::parseIfLet(Token ifToken) {
+	expectKeywordAdvance("let", "Expected 'let'");
+
+	Token bindingName = expect(TokenType::IDENTIFIER, "Expected variable name after 'if let'");
+	expectAdvance(TokenType::ASSIGN, "Expected '=' after variable name in 'if let'");
+
+	auto optionalExpr = parseLogicalOr();
+
+	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'if let' expression");
+	std::string blockId = blockIdToken.value;
+
+	std::vector<std::unique_ptr<StmtAST>> thenBody;
+	std::vector<std::unique_ptr<StmtAST>> elseBody;
+
+	// Parse then body (value is present)
+	while (!checkKeyword("else") && !checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+		thenBody.push_back(parseStatement());
+	}
+
+	// Parse optional else (nil case)
+	if (checkKeyword("else")) {
+		advance(); // consume "else"
+		Token elseBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else'");
+		if (elseBlockIdToken.value != blockId) {
+			throw std::runtime_error("Block identifier mismatch in if-let statement" +
+									 std::string("\n  Expected: '") + blockId + "'" +
+									 "\n  Found: '" + elseBlockIdToken.value + "'" +
+									 "\n  Location: line " + std::to_string(elseBlockIdToken.line) +
+									 ", column " + std::to_string(elseBlockIdToken.column));
+		}
+
+		while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+			elseBody.push_back(parseStatement());
+		}
+	}
+
+	expectKeywordAdvance("end", "Expected 'end' to close if-let block");
+	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end'");
+	if (endBlockIdToken.value != blockId) {
+		throw std::runtime_error("Block identifier mismatch in if-let statement" +
+								 std::string("\n  Expected: '") + blockId + "'" +
+								 "\n  Found: '" + endBlockIdToken.value + "'" +
+								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
+								 ", column " + std::to_string(endBlockIdToken.column));
+	}
+
+	return std::make_unique<IfLetStmtAST>(bindingName.value, std::move(optionalExpr),
+										   std::move(thenBody), std::move(elseBody),
+										   ifToken.line, ifToken.column, blockId);
+}
+
+std::unique_ptr<ElseUnwrapStmtAST> Parser::parseElseUnwrap(Token varToken, Token nameToken,
+															 const std::string &explicitType,
+															 std::unique_ptr<ExprAST> optionalExpr) {
+	expectKeywordAdvance("else", "Expected 'else'");
+	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else'");
+	std::string blockId = blockIdToken.value;
+
+	// Parse else body
+	std::vector<std::unique_ptr<StmtAST>> elseBody;
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+		elseBody.push_back(parseStatement());
+	}
+
+	expectKeywordAdvance("end", "Expected 'end' to close else block");
+	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end'");
+	if (endBlockIdToken.value != blockId) {
+		throw std::runtime_error("Block identifier mismatch in else-unwrap statement" +
+								 std::string("\n  Expected: '") + blockId + "'" +
+								 "\n  Found: '" + endBlockIdToken.value + "'" +
+								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
+								 ", column " + std::to_string(endBlockIdToken.column));
+	}
+
+	return std::make_unique<ElseUnwrapStmtAST>(nameToken.value, explicitType,
+												 std::move(optionalExpr),
+												 std::move(elseBody),
+												 varToken.line, varToken.column,
+												 blockId);
+}
+
 std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
 	Token whileToken = expectKeyword("while", "Expected 'while'");
 	auto condition = parseLogicalOr();

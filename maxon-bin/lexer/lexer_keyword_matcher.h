@@ -118,6 +118,7 @@ class KeywordMatcher {
 		// Literals
 		add_keyword("true", KeywordCategory::Literal, "Boolean true");
 		add_keyword("false", KeywordCategory::Literal, "Boolean false");
+		add_keyword("nil", KeywordCategory::Literal, "Null/absent value");
 
 		// Operators
 		add_keyword("as", KeywordCategory::Operator, "Type cast operator");

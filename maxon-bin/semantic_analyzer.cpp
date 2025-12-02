@@ -484,6 +484,17 @@ bool SemanticAnalyzer::hasReturnInPath(const std::vector<std::unique_ptr<StmtAST
 				}
 			}
 		}
+
+		// If-let statement with return in both branches
+		if (auto ifLet = dynamic_cast<IfLetStmtAST *>(stmt.get())) {
+			if (!ifLet->elseBody.empty()) {
+				bool thenHasReturn = hasReturnInPath(ifLet->thenBody);
+				bool elseHasReturn = hasReturnInPath(ifLet->elseBody);
+				if (thenHasReturn && elseHasReturn) {
+					return true;
+				}
+			}
+		}
 	}
 
 	return false;
@@ -595,6 +606,25 @@ bool SemanticAnalyzer::typesMatch(const std::string &type1, const std::string &t
 	}
 
 	return type1 == type2;
+}
+
+bool SemanticAnalyzer::isOptionalType(const std::string &type) {
+	return type.find(" or nil") != std::string::npos;
+}
+
+std::string SemanticAnalyzer::unwrapOptionalType(const std::string &type) {
+	size_t pos = type.find(" or nil");
+	if (pos == std::string::npos) {
+		return type; // Not optional
+	}
+	return type.substr(0, pos);
+}
+
+std::string SemanticAnalyzer::makeOptionalType(const std::string &type) {
+	if (isOptionalType(type)) {
+		return type; // Already optional
+	}
+	return type + " or nil";
 }
 
 bool SemanticAnalyzer::isIterableType(const std::string &type, ExprAST *iterableExpr) {

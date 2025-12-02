@@ -212,6 +212,11 @@ class SemanticAnalyzer {
 	bool typesMatch(const std::string &type1, const std::string &type2);
 	bool isIterableType(const std::string &type, ExprAST *iterableExpr);
 
+	// Optional type helpers
+	bool isOptionalType(const std::string &type);
+	std::string unwrapOptionalType(const std::string &type);
+	std::string makeOptionalType(const std::string &type);
+
 	// Helper methods
 	void addError(const std::string &message, int line = 0, int column = 0, const std::string &errCode = "");
 	void addWarning(const std::string &message, int line = 0, int column = 0, const std::string &errCode = "");

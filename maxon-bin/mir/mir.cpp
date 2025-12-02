@@ -63,6 +63,22 @@ MIRType *MIRType::getStruct(const std::string &name, const std::vector<MIRType *
 	return ptr;
 }
 
+MIRType *MIRType::getOptional(MIRType *wrapped) {
+	// Cache optional types to avoid duplicates
+	static std::unordered_map<MIRType *, MIRType *> optionalCache;
+	if (optionalCache.count(wrapped)) {
+		return optionalCache[wrapped];
+	}
+
+	auto type = std::make_unique<MIRType>(MIRTypeKind::Optional);
+	type->wrappedType = wrapped;
+	type->computeSize();
+	MIRType *ptr = type.get();
+	arrayTypeCache.push_back(std::move(type)); // Reuse cache
+	optionalCache[wrapped] = ptr;
+	return ptr;
+}
+
 void MIRType::computeSize() {
 	switch (kind) {
 	case MIRTypeKind::Void:
@@ -99,7 +115,7 @@ void MIRType::computeSize() {
 			alignmentInBytes = elementType->alignmentInBytes;
 		}
 		break;
-	case MIRTypeKind::Struct:
+	case MIRTypeKind::Struct: {
 		// Compute struct size with proper alignment
 		sizeInBytes = 0;
 		alignmentInBytes = 1;
@@ -114,6 +130,23 @@ void MIRType::computeSize() {
 		// Final padding to alignment
 		uint64_t finalPad = (alignmentInBytes - (sizeInBytes % alignmentInBytes)) % alignmentInBytes;
 		sizeInBytes += finalPad;
+		break;
+	}
+	case MIRTypeKind::Optional:
+		// Discriminated union: 1 byte tag + wrapped value
+		// Layout: [tag: i8][padding][value: T]
+		if (wrappedType) {
+			sizeInBytes = 1 + wrappedType->sizeInBytes;
+			alignmentInBytes = wrappedType->alignmentInBytes;
+			// Add padding between tag and value for alignment
+			if (alignmentInBytes > 1) {
+				uint64_t padding = (alignmentInBytes - 1) % alignmentInBytes;
+				sizeInBytes += padding;
+			}
+		} else {
+			sizeInBytes = 1;
+			alignmentInBytes = 1;
+		}
 		break;
 	}
 }
@@ -138,6 +171,8 @@ std::string MIRType::toString() const {
 		return "[" + std::to_string(arraySize) + " x " + elementType->toString() + "]";
 	case MIRTypeKind::Struct:
 		return "%" + structName;
+	case MIRTypeKind::Optional:
+		return "Optional<" + (wrappedType ? wrappedType->toString() : "unknown") + ">";
 	}
 	return "unknown";
 }

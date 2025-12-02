@@ -58,6 +58,16 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		return;
 	}
 
+	if (auto *ifLet = dynamic_cast<IfLetStmtAST *>(stmt)) {
+		generateIfLet(ifLet, function);
+		return;
+	}
+
+	if (auto *elseUnwrap = dynamic_cast<ElseUnwrapStmtAST *>(stmt)) {
+		generateElseUnwrap(elseUnwrap, function);
+		return;
+	}
+
 	if (auto *whileStmt = dynamic_cast<WhileStmtAST *>(stmt)) {
 		generateWhile(whileStmt, function);
 		return;
@@ -251,8 +261,27 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			retVal = builder->createLoad(structType, structAlloca, "ret.val");
 		} else if (retStmt->value) {
 			retVal = generateExpr(retStmt->value.get());
+
+			// Handle nil literal (generateExpr returns nullptr for nil)
 			if (!retVal) {
-				throw std::runtime_error("Failed to generate return value");
+				// Get function return type
+				std::string returnTypeStr = functionReturnTypes[function->name];
+				mir::MIRType *returnType = getTypeFromString(returnTypeStr);
+
+				// Create nil optional
+				retVal = createNilOptional(returnType);
+			}
+			// Handle implicit wrapping for optional return types
+			else {
+				std::string returnTypeStr = functionReturnTypes[function->name];
+
+				// Check if return type is optional
+				if (returnTypeStr.find(" or nil") != std::string::npos) {
+					mir::MIRType *returnType = getTypeFromString(returnTypeStr);
+
+					// Wrap the value in an optional
+					retVal = createSomeOptional(returnType, retVal);
+				}
 			}
 		}
 		// else retVal stays nullptr for void return
