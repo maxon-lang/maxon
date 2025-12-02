@@ -237,6 +237,28 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				return "bool";
 			}
 
+			// Contextual literal typing: if one operand is byte and the other is an int literal,
+			// treat the literal as byte type
+			if (leftType == "byte" && rightType == "int") {
+				if (auto *numExpr = dynamic_cast<NumberExprAST *>(binExpr->right.get())) {
+					if (numExpr->value >= 0 && numExpr->value <= 255) {
+						return "bool";
+					}
+				}
+			}
+			if (leftType == "int" && rightType == "byte") {
+				if (auto *numExpr = dynamic_cast<NumberExprAST *>(binExpr->left.get())) {
+					if (numExpr->value >= 0 && numExpr->value <= 255) {
+						return "bool";
+					}
+				}
+			}
+
+			// byte == byte is always valid
+			if (leftType == "byte" && rightType == "byte") {
+				return "bool";
+			}
+
 			// For == and != on struct types, check Equatable conformance
 			if (binExpr->op == 'E' || binExpr->op == 'N') {
 				const StructInfo *leftStruct = lookupStruct(leftType);

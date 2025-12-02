@@ -1140,8 +1140,8 @@ TEST_CASE("string_and_char_init_methods_no_conflict", "[analyzer]") {
 		"function main() int\n"
 		"    var s = \"Hello\"\n"
 		"    var c = 'A'\n"
-		"    print_int(s.byteCount())\n"
-		"    print_int(c.byteCount())\n"
+		"    print_int(s.bytes().count())\n"
+		"    print_int(c.bytes().count())\n"
 		"    return 0\n"
 		"end 'main'");
 
@@ -1232,12 +1232,13 @@ TEST_CASE("substring_iteration_returns_char", "[analyzer]") {
 	analyzer.initializeStdlib(stdlibPath);
 
 	// Code that iterates a substring and calls a char method
+	// Using codepoints() which is a valid method on char
 	std::string code = R"(
 function main() int
     var s = "hello"
     var sub = s.slice(0, 3)
     for c in sub 'loop'
-        var x = c.firstCodepoint()
+        var x = c.codepoints()
     end 'loop'
     return 0
 end 'main'
@@ -1252,12 +1253,12 @@ end 'main'
 		std::cout << "    Line " << diag.range.start.line << ": " << diag.message << std::endl;
 	}
 
-	// Should NOT have "Type 'int' has no method 'firstCodepoint'" error
+	// Should NOT have "Type 'int' has no method 'codepoints'" error
 	// If the LSP thinks iteration returns int, it will show this error
 	bool hasTypeError = false;
 	for (const auto &diag : diagnostics) {
 		if (diag.message.find("int") != std::string::npos &&
-		    diag.message.find("firstCodepoint") != std::string::npos) {
+			diag.message.find("codepoints") != std::string::npos) {
 			hasTypeError = true;
 			INFO("Loop variable incorrectly typed as int: " << diag.message);
 		}
@@ -1273,11 +1274,12 @@ TEST_CASE("string_iteration_returns_char", "[analyzer]") {
 	analyzer.initializeStdlib(stdlibPath);
 
 	// Code that iterates a string and calls a char method
+	// Using codepoints() which is a valid method on char
 	std::string code = R"(
 function main() int
     var s = "hello"
     for c in s 'loop'
-        var x = c.firstCodepoint()
+        var x = c.codepoints()
     end 'loop'
     return 0
 end 'main'
@@ -1292,11 +1294,11 @@ end 'main'
 		std::cout << "    Line " << diag.range.start.line << ": " << diag.message << std::endl;
 	}
 
-	// Should NOT have type error for calling firstCodepoint on loop variable
+	// Should NOT have type error for calling codepoints on loop variable
 	bool hasTypeError = false;
 	for (const auto &diag : diagnostics) {
 		if (diag.message.find("int") != std::string::npos &&
-		    diag.message.find("firstCodepoint") != std::string::npos) {
+			diag.message.find("codepoints") != std::string::npos) {
 			hasTypeError = true;
 			INFO("Loop variable incorrectly typed as int: " << diag.message);
 		}

@@ -422,7 +422,7 @@ c
 function main() int
     var s = "abc"
     for b in s.bytes() 'loop'
-        print_int(b)
+        print_int(b as int)
     end 'loop'
     return 0
 end 'main'
@@ -689,7 +689,7 @@ function main() int
     var bytes = s.bytes()
     // Read first byte ('A' = 65)
     var first = bytes.getCurrent()
-    print_int(first)
+    print_int(first as int)
     // Skip 24 bytes to get to 'Z' (advance to position 25)
     var i = 0
     while i < 25 'skip'
@@ -698,7 +698,7 @@ function main() int
     end 'skip'
     // Read last byte ('Z' = 90)
     var last = bytes.getCurrent()
-    print_int(last)
+    print_int(last as int)
     return 0
 end 'main'
 ```

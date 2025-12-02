@@ -29,6 +29,8 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		} else {
 			// Type inference from initializer
 			actualType = initType;
+			// Store inferred type back into AST for codegen
+			varDecl->type = actualType;
 		}
 
 		// For var arrays, convert static array type [N]type to dynamic []type
@@ -84,6 +86,8 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		} else {
 			// Type inference from initializer
 			actualType = initType;
+			// Store inferred type back into AST for codegen
+			letDecl->type = actualType;
 		}
 
 		// Extract literal value for immutable variables (for LSP hover)
