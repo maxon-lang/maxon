@@ -12,6 +12,13 @@ This reference provides complete syntax and semantics for the Maxon programming 
 1. [Program Structure](#program-structure)
 2. [Lexical Elements](#lexical-elements)
 3. [Types](#types)
+   - [Primitive Types](#primitive-types)
+   - [Character Type](#character-type)
+   - [String Types](#string-types)
+   - [Array Types](#array-types)
+   - [Map Type](#map-type)
+   - [Optional Types](#optional-types)
+   - [Type Conversions](#type-conversions)
 4. [Structs](#structs)
 5. [Variables](#variables)
 6. [Functions](#functions)
@@ -60,7 +67,7 @@ Single-line comments only:
 ### Keywords
 ```
 and, as, bool, break, continue, else, end, export, extern,
-false, float, for, function, if, in, int, interface, is, let, not, or,
+false, float, for, function, if, in, int, interface, is, let, nil, not, or,
 return, struct, then, true, var, while
 ```
 
@@ -117,6 +124,11 @@ Escape sequences: `\n` `\t` `\\` `\"`
 ```maxon
 true
 false
+```
+
+**Nil Literal**
+```maxon
+nil  // Represents absence of a value (for optional types)
 ```
 
 ---
@@ -308,6 +320,121 @@ while i < 20 'insert'
 end 'insert'
 // Capacity is now 32
 ```
+
+### Optional Types
+
+Optional types represent values that may or may not be present. Use `T or nil` to declare an optional type, where `T` is any type.
+
+**Syntax**
+```maxon
+function safeDivide(a int, b int) int or nil
+    if b == 0 'check'
+        return nil
+    end 'check'
+    return a / b
+end 'safeDivide'
+```
+
+**Key Features**
+- **Type Safety**: Cannot use optional values without unwrapping
+- **Nil Literal**: Use `nil` to represent absence of value
+- **If-Let Unwrapping**: Safe pattern matching to extract values
+- **Else-Unwrap**: Provide default value when optional is nil
+- **Implicit Wrapping**: Non-nil values automatically wrapped when needed
+
+**Usage Contexts**
+
+Optional types can be used in:
+- Function return types: `function foo() int or nil`
+- Function parameters: `function bar(x int or nil)`
+- Struct fields: `struct Person { var age int or nil }`
+- Local variables: `var result int or nil`
+
+**If-Let Unwrapping**
+
+Safely unwrap optional values with `if let`:
+
+```maxon
+var result = safeDivide(10, 2)
+
+if let val = result 'check'
+    // val is unwrapped int here
+    print_int(val + 5)  // 10
+else 'check'
+    // result was nil
+    print("Cannot divide by zero")
+end 'check'
+```
+
+**Else-Unwrap with Default**
+
+Provide a default value when the optional is nil:
+
+```maxon
+var result = safeDivide(10, 0) else 'default'
+    result = 1  // Must assign default value
+end 'default'
+
+// result is guaranteed to be int (non-optional) here
+print_int(result)  // 1
+```
+
+**Type Safety**
+
+The compiler prevents using optional values without unwrapping:
+
+```maxon
+var x = safeDivide(10, 2)
+return x + 5  // ERROR: Cannot use optional without unwrapping
+```
+
+**Optional Parameters**
+
+Functions can accept optional parameters:
+
+```maxon
+function greet(name string or nil) void
+    if let n = name 'check'
+        print("Hello, " + n)
+    else 'check'
+        print("Hello, stranger")
+    end 'check'
+end 'greet'
+
+greet("Alice")  // Implicitly wraps "Alice" as Some
+greet(nil)      // Passes nil
+```
+
+**Optional Struct Fields**
+
+Structs can have optional fields:
+
+```maxon
+struct Person
+    var name string
+    var age int or nil  // Optional age
+end 'Person'
+
+var p1 = Person{name: "Bob", age: nil}
+var p2 = Person{name: "Alice", age: 30}  // Implicitly wraps 30
+
+if let age = p2.age 'check'
+    print_int(age)  // 30
+end 'check'
+```
+
+**Memory Layout**
+
+Optional types use a discriminated union with an 8-bit tag:
+- Tag = 0: nil (value space unused)
+- Tag = 1: has value
+- Size: 1 byte (tag) + sizeof(T) + padding for alignment
+- Stack-allocated, no heap allocation or garbage collection
+
+Examples:
+- `int or nil`: 9 bytes (1 tag + 8 int)
+- `bool or nil`: 2 bytes (1 tag + 1 bool)
+- `ptr or nil`: 9 bytes (1 tag + 8 pointer)
 
 ### Type Conversions
 
@@ -645,6 +772,71 @@ end 'label'
 - Block identifier must match on `else` and `end` keywords
 - Condition must be `bool` type
 - Can nest arbitrarily
+
+### If-Let Statement
+
+The `if let` statement safely unwraps optional values with pattern matching.
+
+**Syntax**
+```maxon
+if let binding = optional_expression 'label'
+    // binding is unwrapped value (non-optional) here
+    statements
+else 'label'
+    // optional was nil
+    statements
+end 'label'
+```
+
+**Example**
+```maxon
+function safeDivide(a int, b int) int or nil
+    if b == 0 'check'
+        return nil
+    end 'check'
+    return a / b
+end 'safeDivide'
+
+var result = safeDivide(10, 2)
+if let val = result 'unwrap'
+    print_int(val + 5)  // val is unwrapped int
+else 'unwrap'
+    print("Division by zero")
+end 'unwrap'
+```
+
+**Notes:**
+- `binding` is only in scope within the then-block
+- Optional expression must have type `T or nil`
+- The `else` block is optional
+- Block identifier required and must match on all keywords
+
+### Else-Unwrap Statement
+
+The else-unwrap statement unwraps an optional value or provides a default.
+
+**Syntax**
+```maxon
+var name = optional_expression else 'label'
+    name = default_value  // Must assign default value
+end 'label'
+// name is guaranteed to be non-optional here
+```
+
+**Example**
+```maxon
+var result = safeDivide(10, 0) else 'default'
+    result = 1  // Provide default when nil
+end 'default'
+
+print_int(result)  // result is int, not int or nil
+```
+
+**Notes:**
+- Variable must be assigned within the else block
+- The else block only executes when the optional is nil
+- After the else block, the variable has the unwrapped type (non-optional)
+- Block identifier required and must match
 
 ### While Loop
 ```maxon
