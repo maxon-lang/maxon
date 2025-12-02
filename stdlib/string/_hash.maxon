@@ -4,46 +4,57 @@
 // Purpose: Centralize hash and equality algorithms to avoid duplication
 //          across string, substring, and char types.
 //
-// Convention: Provides two implementations per algorithm:
-//   - _*_managed_string() - for types using _ManagedString (string, char)
-//   - _*_substring() - for substring type
+// Unified Implementation: Uses __substring_parent_managed() and
+//   __substring_byte_offset() intrinsics to allow substring to reuse
+//   the managed string implementation with offset adjustment.
 //
-// Maintenance: Keep implementations in sync - they should use identical
-//              algorithms, differing only in intrinsic calls.
+// Maintenance: Single algorithm implementation - substring wrapper delegates
+//              to managed version with parent string and offset.
 
 // ============================================
 // Hash helpers (djb2 algorithm)
 // ============================================
 
-// _hash_managed_string - Hash a _ManagedString using djb2 algorithm
-export function _hash_managed_string(managed _ManagedString) int
+// _hash_managed_string_range - Hash a range in _ManagedString using djb2
+function _hash_managed_string_range(managed _ManagedString, offset int, len int) int
 	var h = 5381
 	var i = 0
-	var len = __string_len(managed)
 	while i < len 'hash_loop'
-		var b = __string_byte_at(managed, i)
+		var b = __string_byte_at(managed, offset + i)
 		h = h * 33 + (b as int)
 		i = i + 1
 	end 'hash_loop'
 	return h
+end '_hash_managed_string_range'
+
+// _hash_managed_string - Hash a _ManagedString using djb2 algorithm
+export function _hash_managed_string(managed _ManagedString) int
+	return _hash_managed_string_range(managed, 0, __string_len(managed))
 end '_hash_managed_string'
 
 // _hash_substring - Hash a substring using djb2 algorithm
 export function _hash_substring(sub substring) int
-	var h = 5381
-	var i = 0
+	var parent = __substring_parent_managed(sub)
+	var offset = __substring_byte_offset(sub)
 	var len = __substring_len(sub)
-	while i < len 'hash_loop'
-		var b = __substring_byte_at(sub, i)
-		h = h * 33 + (b as int)
-		i = i + 1
-	end 'hash_loop'
-	return h
+	return _hash_managed_string_range(parent, offset, len)
 end '_hash_substring'
 
 // ============================================
 // Equality helpers (byte-by-byte comparison)
 // ============================================
+
+// _equals_managed_string_range - Compare two ranges in _ManagedStrings
+function _equals_managed_string_range(a _ManagedString, a_offset int, b _ManagedString, b_offset int, len int) bool
+	var i = 0
+	while i < len 'compare_loop'
+		if __string_byte_at(a, a_offset + i) != __string_byte_at(b, b_offset + i) 'byte_check'
+			return false
+		end 'byte_check'
+		i = i + 1
+	end 'compare_loop'
+	return true
+end '_equals_managed_string_range'
 
 // _equals_managed_string - Compare two _ManagedStrings for equality
 export function _equals_managed_string(a _ManagedString, b _ManagedString) bool
@@ -51,15 +62,7 @@ export function _equals_managed_string(a _ManagedString, b _ManagedString) bool
 	if len != __string_len(b) 'length_check'
 		return false
 	end 'length_check'
-
-	var i = 0
-	while i < len 'compare_loop'
-		if __string_byte_at(a, i) != __string_byte_at(b, i) 'byte_check'
-			return false
-		end 'byte_check'
-		i = i + 1
-	end 'compare_loop'
-	return true
+	return _equals_managed_string_range(a, 0, b, 0, len)
 end '_equals_managed_string'
 
 // _equals_substring - Compare two substrings for equality
@@ -69,12 +72,10 @@ export function _equals_substring(a substring, b substring) bool
 		return false
 	end 'length_check'
 
-	var i = 0
-	while i < len 'compare_loop'
-		if __substring_byte_at(a, i) != __substring_byte_at(b, i) 'byte_check'
-			return false
-		end 'byte_check'
-		i = i + 1
-	end 'compare_loop'
-	return true
+	var a_parent = __substring_parent_managed(a)
+	var a_offset = __substring_byte_offset(a)
+	var b_parent = __substring_parent_managed(b)
+	var b_offset = __substring_byte_offset(b)
+
+	return _equals_managed_string_range(a_parent, a_offset, b_parent, b_offset, len)
 end '_equals_substring'

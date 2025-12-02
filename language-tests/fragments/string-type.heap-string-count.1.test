@@ -7,7 +7,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 559
+; Instructions: 561
 
 %string = type { ptr, i32 }
 %GraphemeState = type { i32, i1 }
@@ -69,8 +69,10 @@ entry0:
   store ptr %4, ptr %10
   %14 = getelementptr %string, ptr %0, i32 0, i32 0
   %15 = load ptr, ptr %14
-  %16 = call i32 @string._count_graphemes_managed(ptr %15)
-  %12 = call i32 @sys.print_int(i32 %16)
+  %16 = getelementptr %__ManagedStringData, ptr %15, i32 0, i32 1
+  %17 = load i32, ptr %16
+  %18 = call i32 @string._count_graphemes_managed_range(ptr %15, i32 0, i32 %17)
+  %12 = call i32 @sys.print_int(i32 %18)
   call void @_managed_string_release(ptr %1, ptr @.__tag.free.str.heap)
   ret i32 0
 }
@@ -245,62 +247,399 @@ afterloop12:
   ret i32 %48
 }
 
-define i32 @string._find_grapheme_end_managed(ptr %managed, i32 %start_pos, i32 %len) {
+define i32 @string._find_grapheme_end_managed_range(ptr %managed, i32 %offset, i32 %start_pos, i32 %len) {
 entry0:
-  %5 = icmp sge i32 %start_pos, %len
-  br i1 %5, label %then1, label %ifcont2
+  %6 = icmp sge i32 %start_pos, %len
+  br i1 %6, label %then1, label %ifcont2
 then1:
   ret i32 %start_pos
 ifcont2:
-  %11 = call i32 @string._utf8_decode_at(ptr %managed, i32 %start_pos)
-  %15 = call i32 @string._utf8_byte_length_at(ptr %managed, i32 %start_pos)
-  %19 = add i32 %start_pos, %15
-  %21 = call i32 @unicode.grapheme_break_property(i32 %11)
-  %23 = call %GraphemeState @unicode.grapheme_state_init()
-  %24 = alloca %GraphemeState
-  store %GraphemeState %23, ptr %24
-  %27 = call %GraphemeState @unicode.grapheme_state_update(ptr %24, i32 %21, i32 %11)
-  store %GraphemeState %27, ptr %24
+  %12 = add i32 %offset, %start_pos
+  %16 = call i32 @string._utf8_decode_at(ptr %managed, i32 %12)
+  %20 = call i32 @string._utf8_byte_length_at(ptr %managed, i32 %12)
+  %24 = add i32 %start_pos, %20
+  %26 = call i32 @string.grapheme_break_property(i32 %16)
+  %28 = call %GraphemeState @string.grapheme_state_init()
+  %29 = alloca %GraphemeState
+  store %GraphemeState %28, ptr %29
+  %32 = call %GraphemeState @string.grapheme_state_update(ptr %29, i32 %26, i32 %16)
+  store %GraphemeState %32, ptr %29
   br label %whilecond3
 whilecond3:
-  %59 = phi i32 [ %21, %ifcont2 ], [ %36, %ifcont7 ]
-  %58 = phi i32 [ %11, %ifcont2 ], [ %33, %ifcont7 ]
-  %57 = phi i32 [ %19, %ifcont2 ], [ %55, %ifcont7 ]
-  %30 = icmp slt i32 %57, %len
-  br i1 %30, label %loop4, label %afterloop5
+  %68 = phi i32 [ %26, %ifcont2 ], [ %44, %ifcont7 ]
+  %67 = phi i32 [ %16, %ifcont2 ], [ %41, %ifcont7 ]
+  %65 = phi i32 [ %24, %ifcont2 ], [ %63, %ifcont7 ]
+  %35 = icmp slt i32 %65, %len
+  br i1 %35, label %loop4, label %afterloop5
 loop4:
-  %33 = call i32 @string._utf8_decode_at(ptr %managed, i32 %57)
-  %36 = call i32 @unicode.grapheme_break_property(i32 %33)
-  %42 = call i1 @unicode.is_grapheme_break(i32 %59, i32 %36, i32 %58, i32 %33, ptr %24)
-  br i1 %42, label %then6, label %ifcont7
+  %38 = add i32 %offset, %65
+  %41 = call i32 @string._utf8_decode_at(ptr %managed, i32 %38)
+  %44 = call i32 @string.grapheme_break_property(i32 %41)
+  %50 = call i1 @string.is_grapheme_break(i32 %68, i32 %44, i32 %67, i32 %41, ptr %29)
+  br i1 %50, label %then6, label %ifcont7
 afterloop5:
-  ret i32 %57
+  ret i32 %65
 then6:
-  ret i32 %57
+  ret i32 %65
 ifcont7:
-  %46 = call %GraphemeState @unicode.grapheme_state_update(ptr %24, i32 %36, i32 %33)
-  store %GraphemeState %46, ptr %24
-  %51 = call i32 @string._utf8_byte_length_at(ptr %managed, i32 %57)
-  %55 = add i32 %57, %51
+  %54 = call %GraphemeState @string.grapheme_state_update(ptr %29, i32 %44, i32 %41)
+  store %GraphemeState %54, ptr %29
+  %59 = call i32 @string._utf8_byte_length_at(ptr %managed, i32 %38)
+  %63 = add i32 %65, %59
   br label %whilecond3
 }
 
-define i32 @string._count_graphemes_managed(ptr %managed) {
+define i32 @string._count_graphemes_managed_range(ptr %managed, i32 %offset, i32 %len) {
 entry0:
-  %4 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 1
-  %5 = load i32, ptr %4
   br label %whilecond1
 whilecond1:
-  %18 = phi i32 [ 0, %entry0 ], [ %13, %loop2 ]
-  %17 = phi i32 [ 0, %entry0 ], [ %15, %loop2 ]
-  %9 = icmp slt i32 %18, %5
-  br i1 %9, label %loop2, label %afterloop3
+  %17 = phi i32 [ 0, %entry0 ], [ %12, %loop2 ]
+  %16 = phi i32 [ 0, %entry0 ], [ %14, %loop2 ]
+  %7 = icmp slt i32 %17, %len
+  br i1 %7, label %loop2, label %afterloop3
 loop2:
-  %13 = call i32 @string._find_grapheme_end_managed(ptr %managed, i32 %18, i32 %5)
-  %15 = add i32 %17, 1
+  %12 = call i32 @string._find_grapheme_end_managed_range(ptr %managed, i32 %offset, i32 %17, i32 %len)
+  %14 = add i32 %16, 1
   br label %whilecond1
 afterloop3:
-  ret i32 %17
+  ret i32 %16
+}
+
+define i32 @string.grapheme_break_property(i32 %cp) {
+entry0:
+  %2 = icmp eq i32 %cp, 13
+  br i1 %2, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  %4 = icmp eq i32 %cp, 10
+  br i1 %4, label %then3, label %ifcont4
+then3:
+  ret i32 2
+ifcont4:
+  %6 = icmp slt i32 %cp, 32
+  %8 = icmp sge i32 %cp, 127
+  %10 = icmp slt i32 %cp, 160
+  %11 = and i1 %8, %10
+  %12 = or i1 %6, %11
+  br i1 %12, label %then5, label %ifcont6
+then5:
+  ret i32 3
+ifcont6:
+  %14 = icmp eq i32 %cp, 8205
+  br i1 %14, label %then7, label %ifcont8
+then7:
+  ret i32 5
+ifcont8:
+  %16 = icmp sge i32 %cp, 127462
+  %18 = icmp sle i32 %cp, 127487
+  %19 = and i1 %16, %18
+  br i1 %19, label %then9, label %ifcont10
+then9:
+  ret i32 6
+ifcont10:
+  %21 = icmp sge i32 %cp, 44032
+  %23 = icmp sle i32 %cp, 55203
+  %24 = and i1 %21, %23
+  br i1 %24, label %then11, label %ifcont12
+then11:
+  %26 = sub i32 %cp, 44032
+  %29 = srem i32 %26, 28
+  %30 = icmp eq i32 %29, 0
+  br i1 %30, label %then13, label %else15
+ifcont12:
+  %32 = icmp sge i32 %cp, 4352
+  %34 = icmp sle i32 %cp, 4447
+  %35 = and i1 %32, %34
+  br i1 %35, label %then16, label %ifcont17
+then13:
+  ret i32 12
+else15:
+  ret i32 13
+then16:
+  ret i32 9
+ifcont17:
+  %37 = icmp sge i32 %cp, 4448
+  %39 = icmp sle i32 %cp, 4519
+  %40 = and i1 %37, %39
+  br i1 %40, label %then18, label %ifcont19
+then18:
+  ret i32 10
+ifcont19:
+  %42 = icmp sge i32 %cp, 4520
+  %44 = icmp sle i32 %cp, 4607
+  %45 = and i1 %42, %44
+  br i1 %45, label %then20, label %ifcont21
+then20:
+  ret i32 11
+ifcont21:
+  %47 = icmp sge i32 %cp, 127995
+  %49 = icmp sle i32 %cp, 127999
+  %50 = and i1 %47, %49
+  br i1 %50, label %then22, label %ifcont23
+then22:
+  ret i32 4
+ifcont23:
+  %52 = icmp sge i32 %cp, 65024
+  %54 = icmp sle i32 %cp, 65039
+  %55 = and i1 %52, %54
+  br i1 %55, label %then24, label %ifcont25
+then24:
+  ret i32 4
+ifcont25:
+  %57 = icmp sge i32 %cp, 768
+  %59 = icmp sle i32 %cp, 879
+  %60 = and i1 %57, %59
+  br i1 %60, label %then26, label %ifcont27
+then26:
+  ret i32 4
+ifcont27:
+  %62 = icmp eq i32 %cp, 8203
+  %64 = icmp sge i32 %cp, 8206
+  %66 = icmp sle i32 %cp, 8207
+  %67 = and i1 %64, %66
+  %68 = or i1 %62, %67
+  %70 = icmp sge i32 %cp, 8232
+  %72 = icmp sle i32 %cp, 8238
+  %73 = and i1 %70, %72
+  %74 = or i1 %68, %73
+  br i1 %74, label %then28, label %ifcont29
+then28:
+  ret i32 3
+ifcont29:
+  %76 = icmp eq i32 %cp, 8204
+  br i1 %76, label %then30, label %ifcont31
+then30:
+  ret i32 4
+ifcont31:
+  ret i32 0
+}
+
+define i1 @string.is_extended_pictographic(i32 %cp) {
+entry0:
+  %2 = icmp sge i32 %cp, 128512
+  %4 = icmp sle i32 %cp, 128591
+  %5 = and i1 %2, %4
+  br i1 %5, label %then1, label %ifcont2
+then1:
+  ret i1 1
+ifcont2:
+  %7 = icmp sge i32 %cp, 127744
+  %9 = icmp sle i32 %cp, 128511
+  %10 = and i1 %7, %9
+  br i1 %10, label %then3, label %ifcont4
+then3:
+  ret i1 1
+ifcont4:
+  %12 = icmp sge i32 %cp, 128640
+  %14 = icmp sle i32 %cp, 128767
+  %15 = and i1 %12, %14
+  br i1 %15, label %then5, label %ifcont6
+then5:
+  ret i1 1
+ifcont6:
+  %17 = icmp sge i32 %cp, 129280
+  %19 = icmp sle i32 %cp, 129535
+  %20 = and i1 %17, %19
+  br i1 %20, label %then7, label %ifcont8
+then7:
+  ret i1 1
+ifcont8:
+  %22 = icmp sge i32 %cp, 129536
+  %24 = icmp sle i32 %cp, 130047
+  %25 = and i1 %22, %24
+  br i1 %25, label %then9, label %ifcont10
+then9:
+  ret i1 1
+ifcont10:
+  %27 = icmp sge i32 %cp, 9728
+  %29 = icmp sle i32 %cp, 9983
+  %30 = and i1 %27, %29
+  br i1 %30, label %then11, label %ifcont12
+then11:
+  ret i1 1
+ifcont12:
+  %32 = icmp sge i32 %cp, 9984
+  %34 = icmp sle i32 %cp, 10175
+  %35 = and i1 %32, %34
+  br i1 %35, label %then13, label %ifcont14
+then13:
+  ret i1 1
+ifcont14:
+  ret i1 0
+}
+
+define %GraphemeState @string.grapheme_state_init() {
+entry0:
+  %0 = alloca %GraphemeState
+  %1 = getelementptr %GraphemeState, ptr %0, i32 0, i32 0
+  store i32 0, ptr %1
+  %2 = getelementptr %GraphemeState, ptr %0, i32 0, i32 1
+  store i1 0, ptr %2
+  %3 = load %GraphemeState, ptr %0
+  ret %GraphemeState %3
+}
+
+define i1 @string.is_grapheme_break(i32 %prev_gbp, i32 %curr_gbp, i32 %prev_cp, i32 %curr_cp, ptr %state) {
+entry0:
+  %9 = icmp eq i32 %prev_gbp, 1
+  %11 = icmp eq i32 %curr_gbp, 2
+  %12 = and i1 %9, %11
+  br i1 %12, label %then1, label %ifcont2
+then1:
+  ret i1 0
+ifcont2:
+  %14 = icmp eq i32 %prev_gbp, 3
+  %16 = icmp eq i32 %prev_gbp, 1
+  %17 = or i1 %14, %16
+  %19 = icmp eq i32 %prev_gbp, 2
+  %20 = or i1 %17, %19
+  br i1 %20, label %then3, label %ifcont4
+then3:
+  ret i1 1
+ifcont4:
+  %22 = icmp eq i32 %curr_gbp, 3
+  %24 = icmp eq i32 %curr_gbp, 1
+  %25 = or i1 %22, %24
+  %27 = icmp eq i32 %curr_gbp, 2
+  %28 = or i1 %25, %27
+  br i1 %28, label %then5, label %ifcont6
+then5:
+  ret i1 1
+ifcont6:
+  %30 = icmp eq i32 %prev_gbp, 9
+  br i1 %30, label %then7, label %ifcont8
+then7:
+  %32 = icmp eq i32 %curr_gbp, 9
+  %34 = icmp eq i32 %curr_gbp, 10
+  %35 = or i1 %32, %34
+  %37 = icmp eq i32 %curr_gbp, 12
+  %38 = or i1 %35, %37
+  %40 = icmp eq i32 %curr_gbp, 13
+  %41 = or i1 %38, %40
+  br i1 %41, label %then9, label %ifcont10
+ifcont8:
+  %43 = icmp eq i32 %prev_gbp, 12
+  %45 = icmp eq i32 %prev_gbp, 10
+  %46 = or i1 %43, %45
+  br i1 %46, label %then11, label %ifcont12
+then9:
+  ret i1 0
+ifcont10:
+  br label %ifcont8
+then11:
+  %48 = icmp eq i32 %curr_gbp, 10
+  %50 = icmp eq i32 %curr_gbp, 11
+  %51 = or i1 %48, %50
+  br i1 %51, label %then13, label %ifcont14
+ifcont12:
+  %53 = icmp eq i32 %prev_gbp, 13
+  %55 = icmp eq i32 %prev_gbp, 11
+  %56 = or i1 %53, %55
+  br i1 %56, label %then15, label %ifcont16
+then13:
+  ret i1 0
+ifcont14:
+  br label %ifcont12
+then15:
+  %58 = icmp eq i32 %curr_gbp, 11
+  br i1 %58, label %then17, label %ifcont18
+ifcont16:
+  %60 = icmp eq i32 %curr_gbp, 4
+  %62 = icmp eq i32 %curr_gbp, 5
+  %63 = or i1 %60, %62
+  br i1 %63, label %then19, label %ifcont20
+then17:
+  ret i1 0
+ifcont18:
+  br label %ifcont16
+then19:
+  ret i1 0
+ifcont20:
+  %65 = icmp eq i32 %curr_gbp, 8
+  br i1 %65, label %then21, label %ifcont22
+then21:
+  ret i1 0
+ifcont22:
+  %67 = icmp eq i32 %prev_gbp, 7
+  br i1 %67, label %then23, label %ifcont24
+then23:
+  ret i1 0
+ifcont24:
+  %69 = icmp eq i32 %prev_gbp, 5
+  %71 = call i1 @string.is_extended_pictographic(i32 %curr_cp)
+  %72 = and i1 %69, %71
+  br i1 %72, label %then25, label %ifcont26
+then25:
+  %74 = getelementptr %GraphemeState, ptr %state, i32 0, i32 1
+  %75 = load i1, ptr %74
+  br i1 %75, label %then27, label %ifcont28
+ifcont26:
+  %77 = icmp eq i32 %prev_gbp, 6
+  %79 = icmp eq i32 %curr_gbp, 6
+  %80 = and i1 %77, %79
+  br i1 %80, label %then29, label %ifcont30
+then27:
+  ret i1 0
+ifcont28:
+  br label %ifcont26
+then29:
+  %82 = getelementptr %GraphemeState, ptr %state, i32 0, i32 0
+  %83 = load i32, ptr %82
+  %84 = srem i32 %83, 2
+  %85 = icmp eq i32 %84, 1
+  br i1 %85, label %then31, label %ifcont32
+ifcont30:
+  ret i1 1
+then31:
+  ret i1 0
+ifcont32:
+  br label %ifcont30
+}
+
+define %GraphemeState @string.grapheme_state_update(ptr %state, i32 %gbp, i32 %cp) {
+entry0:
+  %3 = alloca %GraphemeState
+  %4 = getelementptr %GraphemeState, ptr %3, i32 0, i32 0
+  store i32 0, ptr %4
+  %5 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
+  store i1 0, ptr %5
+  %7 = icmp eq i32 %gbp, 6
+  br i1 %7, label %then1, label %ifcont2
+then1:
+  %8 = getelementptr %GraphemeState, ptr %3, i32 0, i32 0
+  %10 = getelementptr %GraphemeState, ptr %state, i32 0, i32 0
+  %11 = load i32, ptr %10
+  %12 = add i32 %11, 1
+  store i32 %12, ptr %8
+  br label %ifcont2
+ifcont2:
+  %14 = call i1 @string.is_extended_pictographic(i32 %cp)
+  br i1 %14, label %then3, label %else5
+then3:
+  %15 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
+  store i1 1, ptr %15
+  br label %ifcont4
+ifcont4:
+  %25 = load %GraphemeState, ptr %3
+  ret %GraphemeState %25
+else5:
+  %17 = getelementptr %GraphemeState, ptr %state, i32 0, i32 1
+  %18 = load i1, ptr %17
+  br i1 %18, label %then6, label %ifcont7
+then6:
+  %20 = icmp eq i32 %gbp, 4
+  %22 = icmp eq i32 %gbp, 5
+  %23 = or i1 %20, %22
+  br i1 %23, label %then8, label %ifcont9
+ifcont7:
+  br label %ifcont4
+then8:
+  %24 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
+  store i1 1, ptr %24
+  br label %ifcont9
+ifcont9:
+  br label %ifcont7
 }
 
 define i32 @string._utf8_byte_length_at(ptr %managed, i32 %pos) {
@@ -426,343 +765,6 @@ ifcont6:
   ret i32 %114
 }
 
-define i32 @unicode.grapheme_break_property(i32 %cp) {
-entry0:
-  %2 = icmp eq i32 %cp, 13
-  br i1 %2, label %then1, label %ifcont2
-then1:
-  ret i32 1
-ifcont2:
-  %4 = icmp eq i32 %cp, 10
-  br i1 %4, label %then3, label %ifcont4
-then3:
-  ret i32 2
-ifcont4:
-  %6 = icmp slt i32 %cp, 32
-  %8 = icmp sge i32 %cp, 127
-  %10 = icmp slt i32 %cp, 160
-  %11 = and i1 %8, %10
-  %12 = or i1 %6, %11
-  br i1 %12, label %then5, label %ifcont6
-then5:
-  ret i32 3
-ifcont6:
-  %14 = icmp eq i32 %cp, 8205
-  br i1 %14, label %then7, label %ifcont8
-then7:
-  ret i32 5
-ifcont8:
-  %16 = icmp sge i32 %cp, 127462
-  %18 = icmp sle i32 %cp, 127487
-  %19 = and i1 %16, %18
-  br i1 %19, label %then9, label %ifcont10
-then9:
-  ret i32 6
-ifcont10:
-  %21 = icmp sge i32 %cp, 44032
-  %23 = icmp sle i32 %cp, 55203
-  %24 = and i1 %21, %23
-  br i1 %24, label %then11, label %ifcont12
-then11:
-  %26 = sub i32 %cp, 44032
-  %29 = srem i32 %26, 28
-  %30 = icmp eq i32 %29, 0
-  br i1 %30, label %then13, label %else15
-ifcont12:
-  %32 = icmp sge i32 %cp, 4352
-  %34 = icmp sle i32 %cp, 4447
-  %35 = and i1 %32, %34
-  br i1 %35, label %then16, label %ifcont17
-then13:
-  ret i32 12
-else15:
-  ret i32 13
-then16:
-  ret i32 9
-ifcont17:
-  %37 = icmp sge i32 %cp, 4448
-  %39 = icmp sle i32 %cp, 4519
-  %40 = and i1 %37, %39
-  br i1 %40, label %then18, label %ifcont19
-then18:
-  ret i32 10
-ifcont19:
-  %42 = icmp sge i32 %cp, 4520
-  %44 = icmp sle i32 %cp, 4607
-  %45 = and i1 %42, %44
-  br i1 %45, label %then20, label %ifcont21
-then20:
-  ret i32 11
-ifcont21:
-  %47 = icmp sge i32 %cp, 127995
-  %49 = icmp sle i32 %cp, 127999
-  %50 = and i1 %47, %49
-  br i1 %50, label %then22, label %ifcont23
-then22:
-  ret i32 4
-ifcont23:
-  %52 = icmp sge i32 %cp, 65024
-  %54 = icmp sle i32 %cp, 65039
-  %55 = and i1 %52, %54
-  br i1 %55, label %then24, label %ifcont25
-then24:
-  ret i32 4
-ifcont25:
-  %57 = icmp sge i32 %cp, 768
-  %59 = icmp sle i32 %cp, 879
-  %60 = and i1 %57, %59
-  br i1 %60, label %then26, label %ifcont27
-then26:
-  ret i32 4
-ifcont27:
-  %62 = icmp eq i32 %cp, 8203
-  %64 = icmp sge i32 %cp, 8206
-  %66 = icmp sle i32 %cp, 8207
-  %67 = and i1 %64, %66
-  %68 = or i1 %62, %67
-  %70 = icmp sge i32 %cp, 8232
-  %72 = icmp sle i32 %cp, 8238
-  %73 = and i1 %70, %72
-  %74 = or i1 %68, %73
-  br i1 %74, label %then28, label %ifcont29
-then28:
-  ret i32 3
-ifcont29:
-  %76 = icmp eq i32 %cp, 8204
-  br i1 %76, label %then30, label %ifcont31
-then30:
-  ret i32 4
-ifcont31:
-  ret i32 0
-}
-
-define i1 @unicode.is_extended_pictographic(i32 %cp) {
-entry0:
-  %2 = icmp sge i32 %cp, 128512
-  %4 = icmp sle i32 %cp, 128591
-  %5 = and i1 %2, %4
-  br i1 %5, label %then1, label %ifcont2
-then1:
-  ret i1 1
-ifcont2:
-  %7 = icmp sge i32 %cp, 127744
-  %9 = icmp sle i32 %cp, 128511
-  %10 = and i1 %7, %9
-  br i1 %10, label %then3, label %ifcont4
-then3:
-  ret i1 1
-ifcont4:
-  %12 = icmp sge i32 %cp, 128640
-  %14 = icmp sle i32 %cp, 128767
-  %15 = and i1 %12, %14
-  br i1 %15, label %then5, label %ifcont6
-then5:
-  ret i1 1
-ifcont6:
-  %17 = icmp sge i32 %cp, 129280
-  %19 = icmp sle i32 %cp, 129535
-  %20 = and i1 %17, %19
-  br i1 %20, label %then7, label %ifcont8
-then7:
-  ret i1 1
-ifcont8:
-  %22 = icmp sge i32 %cp, 129536
-  %24 = icmp sle i32 %cp, 130047
-  %25 = and i1 %22, %24
-  br i1 %25, label %then9, label %ifcont10
-then9:
-  ret i1 1
-ifcont10:
-  %27 = icmp sge i32 %cp, 9728
-  %29 = icmp sle i32 %cp, 9983
-  %30 = and i1 %27, %29
-  br i1 %30, label %then11, label %ifcont12
-then11:
-  ret i1 1
-ifcont12:
-  %32 = icmp sge i32 %cp, 9984
-  %34 = icmp sle i32 %cp, 10175
-  %35 = and i1 %32, %34
-  br i1 %35, label %then13, label %ifcont14
-then13:
-  ret i1 1
-ifcont14:
-  ret i1 0
-}
-
-define %GraphemeState @unicode.grapheme_state_init() {
-entry0:
-  %0 = alloca %GraphemeState
-  %1 = getelementptr %GraphemeState, ptr %0, i32 0, i32 0
-  store i32 0, ptr %1
-  %2 = getelementptr %GraphemeState, ptr %0, i32 0, i32 1
-  store i1 0, ptr %2
-  %3 = load %GraphemeState, ptr %0
-  ret %GraphemeState %3
-}
-
-define i1 @unicode.is_grapheme_break(i32 %prev_gbp, i32 %curr_gbp, i32 %prev_cp, i32 %curr_cp, ptr %state) {
-entry0:
-  %9 = icmp eq i32 %prev_gbp, 1
-  %11 = icmp eq i32 %curr_gbp, 2
-  %12 = and i1 %9, %11
-  br i1 %12, label %then1, label %ifcont2
-then1:
-  ret i1 0
-ifcont2:
-  %14 = icmp eq i32 %prev_gbp, 3
-  %16 = icmp eq i32 %prev_gbp, 1
-  %17 = or i1 %14, %16
-  %19 = icmp eq i32 %prev_gbp, 2
-  %20 = or i1 %17, %19
-  br i1 %20, label %then3, label %ifcont4
-then3:
-  ret i1 1
-ifcont4:
-  %22 = icmp eq i32 %curr_gbp, 3
-  %24 = icmp eq i32 %curr_gbp, 1
-  %25 = or i1 %22, %24
-  %27 = icmp eq i32 %curr_gbp, 2
-  %28 = or i1 %25, %27
-  br i1 %28, label %then5, label %ifcont6
-then5:
-  ret i1 1
-ifcont6:
-  %30 = icmp eq i32 %prev_gbp, 9
-  br i1 %30, label %then7, label %ifcont8
-then7:
-  %32 = icmp eq i32 %curr_gbp, 9
-  %34 = icmp eq i32 %curr_gbp, 10
-  %35 = or i1 %32, %34
-  %37 = icmp eq i32 %curr_gbp, 12
-  %38 = or i1 %35, %37
-  %40 = icmp eq i32 %curr_gbp, 13
-  %41 = or i1 %38, %40
-  br i1 %41, label %then9, label %ifcont10
-ifcont8:
-  %43 = icmp eq i32 %prev_gbp, 12
-  %45 = icmp eq i32 %prev_gbp, 10
-  %46 = or i1 %43, %45
-  br i1 %46, label %then11, label %ifcont12
-then9:
-  ret i1 0
-ifcont10:
-  br label %ifcont8
-then11:
-  %48 = icmp eq i32 %curr_gbp, 10
-  %50 = icmp eq i32 %curr_gbp, 11
-  %51 = or i1 %48, %50
-  br i1 %51, label %then13, label %ifcont14
-ifcont12:
-  %53 = icmp eq i32 %prev_gbp, 13
-  %55 = icmp eq i32 %prev_gbp, 11
-  %56 = or i1 %53, %55
-  br i1 %56, label %then15, label %ifcont16
-then13:
-  ret i1 0
-ifcont14:
-  br label %ifcont12
-then15:
-  %58 = icmp eq i32 %curr_gbp, 11
-  br i1 %58, label %then17, label %ifcont18
-ifcont16:
-  %60 = icmp eq i32 %curr_gbp, 4
-  %62 = icmp eq i32 %curr_gbp, 5
-  %63 = or i1 %60, %62
-  br i1 %63, label %then19, label %ifcont20
-then17:
-  ret i1 0
-ifcont18:
-  br label %ifcont16
-then19:
-  ret i1 0
-ifcont20:
-  %65 = icmp eq i32 %curr_gbp, 8
-  br i1 %65, label %then21, label %ifcont22
-then21:
-  ret i1 0
-ifcont22:
-  %67 = icmp eq i32 %prev_gbp, 7
-  br i1 %67, label %then23, label %ifcont24
-then23:
-  ret i1 0
-ifcont24:
-  %69 = icmp eq i32 %prev_gbp, 5
-  %71 = call i1 @unicode.is_extended_pictographic(i32 %curr_cp)
-  %72 = and i1 %69, %71
-  br i1 %72, label %then25, label %ifcont26
-then25:
-  %74 = getelementptr %GraphemeState, ptr %state, i32 0, i32 1
-  %75 = load i1, ptr %74
-  br i1 %75, label %then27, label %ifcont28
-ifcont26:
-  %77 = icmp eq i32 %prev_gbp, 6
-  %79 = icmp eq i32 %curr_gbp, 6
-  %80 = and i1 %77, %79
-  br i1 %80, label %then29, label %ifcont30
-then27:
-  ret i1 0
-ifcont28:
-  br label %ifcont26
-then29:
-  %82 = getelementptr %GraphemeState, ptr %state, i32 0, i32 0
-  %83 = load i32, ptr %82
-  %84 = srem i32 %83, 2
-  %85 = icmp eq i32 %84, 1
-  br i1 %85, label %then31, label %ifcont32
-ifcont30:
-  ret i1 1
-then31:
-  ret i1 0
-ifcont32:
-  br label %ifcont30
-}
-
-define %GraphemeState @unicode.grapheme_state_update(ptr %state, i32 %gbp, i32 %cp) {
-entry0:
-  %3 = alloca %GraphemeState
-  %4 = getelementptr %GraphemeState, ptr %3, i32 0, i32 0
-  store i32 0, ptr %4
-  %5 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
-  store i1 0, ptr %5
-  %7 = icmp eq i32 %gbp, 6
-  br i1 %7, label %then1, label %ifcont2
-then1:
-  %8 = getelementptr %GraphemeState, ptr %3, i32 0, i32 0
-  %10 = getelementptr %GraphemeState, ptr %state, i32 0, i32 0
-  %11 = load i32, ptr %10
-  %12 = add i32 %11, 1
-  store i32 %12, ptr %8
-  br label %ifcont2
-ifcont2:
-  %14 = call i1 @unicode.is_extended_pictographic(i32 %cp)
-  br i1 %14, label %then3, label %else5
-then3:
-  %15 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
-  store i1 1, ptr %15
-  br label %ifcont4
-ifcont4:
-  %25 = load %GraphemeState, ptr %3
-  ret %GraphemeState %25
-else5:
-  %17 = getelementptr %GraphemeState, ptr %state, i32 0, i32 1
-  %18 = load i1, ptr %17
-  br i1 %18, label %then6, label %ifcont7
-then6:
-  %20 = icmp eq i32 %gbp, 4
-  %22 = icmp eq i32 %gbp, 5
-  %23 = or i1 %20, %22
-  br i1 %23, label %then8, label %ifcont9
-ifcont7:
-  br label %ifcont4
-then8:
-  %24 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
-  store i1 1, ptr %24
-  br label %ifcont9
-ifcont9:
-  br label %ifcont7
-}
-
 declare void @_managed_string_retain(ptr %arg0)
 
 declare ptr @malloc(i64 %arg0)
@@ -788,7 +790,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 876
+; Instructions: 895
 
 %string = type { ptr, i32 }
 %GraphemeState = type { i32, i1 }
@@ -1114,131 +1116,600 @@ afterloop12:
   ret i32 %66
 }
 
-define i32 @string._find_grapheme_end_managed(ptr %managed, i32 %start_pos, i32 %len) {
+define i32 @string._find_grapheme_end_managed_range(ptr %managed, i32 %offset, i32 %start_pos, i32 %len) {
 entry0:
   %0 = alloca ptr
   store ptr %managed, ptr %0
   %1 = alloca i32
-  store i32 %start_pos, ptr %1
+  store i32 %offset, ptr %1
   %2 = alloca i32
-  store i32 %len, ptr %2
-  %3 = load i32, ptr %1
+  store i32 %start_pos, ptr %2
+  %3 = alloca i32
+  store i32 %len, ptr %3
   %4 = load i32, ptr %2
-  %5 = icmp sge i32 %3, %4
-  br i1 %5, label %then1, label %ifcont2
+  %5 = load i32, ptr %3
+  %6 = icmp sge i32 %4, %5
+  br i1 %6, label %then1, label %ifcont2
 then1:
-  %6 = load i32, ptr %1
-  ret i32 %6
+  %7 = load i32, ptr %2
+  ret i32 %7
 ifcont2:
-  %7 = load i32, ptr %1
-  %8 = alloca i32
-  store i32 %7, ptr %8
-  %9 = load ptr, ptr %0
-  %10 = load i32, ptr %8
-  %11 = call i32 @string._utf8_decode_at(ptr %9, i32 %10)
-  %12 = alloca i32
-  store i32 %11, ptr %12
-  %13 = load ptr, ptr %0
-  %14 = load i32, ptr %8
-  %15 = call i32 @string._utf8_byte_length_at(ptr %13, i32 %14)
-  %16 = alloca i32
-  store i32 %15, ptr %16
-  %17 = load i32, ptr %8
-  %18 = load i32, ptr %16
-  %19 = add i32 %17, %18
-  store i32 %19, ptr %8
-  %20 = load i32, ptr %12
-  %21 = call i32 @unicode.grapheme_break_property(i32 %20)
-  %22 = alloca i32
-  store i32 %21, ptr %22
-  %23 = call %GraphemeState @unicode.grapheme_state_init()
-  %24 = alloca %GraphemeState
-  store %GraphemeState %23, ptr %24
-  %25 = load i32, ptr %22
-  %26 = load i32, ptr %12
-  %27 = call %GraphemeState @unicode.grapheme_state_update(ptr %24, i32 %25, i32 %26)
-  store %GraphemeState %27, ptr %24
+  %8 = load i32, ptr %2
+  %9 = alloca i32
+  store i32 %8, ptr %9
+  %10 = load i32, ptr %1
+  %11 = load i32, ptr %9
+  %12 = add i32 %10, %11
+  %13 = alloca i32
+  store i32 %12, ptr %13
+  %14 = load ptr, ptr %0
+  %15 = load i32, ptr %13
+  %16 = call i32 @string._utf8_decode_at(ptr %14, i32 %15)
+  %17 = alloca i32
+  store i32 %16, ptr %17
+  %18 = load ptr, ptr %0
+  %19 = load i32, ptr %13
+  %20 = call i32 @string._utf8_byte_length_at(ptr %18, i32 %19)
+  %21 = alloca i32
+  store i32 %20, ptr %21
+  %22 = load i32, ptr %9
+  %23 = load i32, ptr %21
+  %24 = add i32 %22, %23
+  store i32 %24, ptr %9
+  %25 = load i32, ptr %17
+  %26 = call i32 @string.grapheme_break_property(i32 %25)
+  %27 = alloca i32
+  store i32 %26, ptr %27
+  %28 = call %GraphemeState @string.grapheme_state_init()
+  %29 = alloca %GraphemeState
+  store %GraphemeState %28, ptr %29
+  %30 = load i32, ptr %27
+  %31 = load i32, ptr %17
+  %32 = call %GraphemeState @string.grapheme_state_update(ptr %29, i32 %30, i32 %31)
+  store %GraphemeState %32, ptr %29
   br label %whilecond3
 whilecond3:
-  %28 = load i32, ptr %8
-  %29 = load i32, ptr %2
-  %30 = icmp slt i32 %28, %29
-  br i1 %30, label %loop4, label %afterloop5
+  %33 = load i32, ptr %9
+  %34 = load i32, ptr %3
+  %35 = icmp slt i32 %33, %34
+  br i1 %35, label %loop4, label %afterloop5
 loop4:
-  %31 = load ptr, ptr %0
-  %32 = load i32, ptr %8
-  %33 = call i32 @string._utf8_decode_at(ptr %31, i32 %32)
-  %34 = alloca i32
-  store i32 %33, ptr %34
-  %35 = load i32, ptr %34
-  %36 = call i32 @unicode.grapheme_break_property(i32 %35)
-  %37 = alloca i32
-  store i32 %36, ptr %37
-  %38 = load i32, ptr %22
-  %39 = load i32, ptr %37
-  %40 = load i32, ptr %12
-  %41 = load i32, ptr %34
-  %42 = call i1 @unicode.is_grapheme_break(i32 %38, i32 %39, i32 %40, i32 %41, ptr %24)
-  br i1 %42, label %then6, label %ifcont7
+  %36 = load i32, ptr %1
+  %37 = load i32, ptr %9
+  %38 = add i32 %36, %37
+  store i32 %38, ptr %13
+  %39 = load ptr, ptr %0
+  %40 = load i32, ptr %13
+  %41 = call i32 @string._utf8_decode_at(ptr %39, i32 %40)
+  %42 = alloca i32
+  store i32 %41, ptr %42
+  %43 = load i32, ptr %42
+  %44 = call i32 @string.grapheme_break_property(i32 %43)
+  %45 = alloca i32
+  store i32 %44, ptr %45
+  %46 = load i32, ptr %27
+  %47 = load i32, ptr %45
+  %48 = load i32, ptr %17
+  %49 = load i32, ptr %42
+  %50 = call i1 @string.is_grapheme_break(i32 %46, i32 %47, i32 %48, i32 %49, ptr %29)
+  br i1 %50, label %then6, label %ifcont7
 afterloop5:
-  %56 = load i32, ptr %8
-  ret i32 %56
+  %64 = load i32, ptr %9
+  ret i32 %64
 then6:
-  %43 = load i32, ptr %8
-  ret i32 %43
+  %51 = load i32, ptr %9
+  ret i32 %51
 ifcont7:
-  %44 = load i32, ptr %37
-  %45 = load i32, ptr %34
-  %46 = call %GraphemeState @unicode.grapheme_state_update(ptr %24, i32 %44, i32 %45)
-  store %GraphemeState %46, ptr %24
-  %47 = load i32, ptr %37
-  store i32 %47, ptr %22
-  %48 = load i32, ptr %34
-  store i32 %48, ptr %12
-  %49 = load ptr, ptr %0
-  %50 = load i32, ptr %8
-  %51 = call i32 @string._utf8_byte_length_at(ptr %49, i32 %50)
-  %52 = alloca i32
-  store i32 %51, ptr %52
-  %53 = load i32, ptr %8
-  %54 = load i32, ptr %52
-  %55 = add i32 %53, %54
-  store i32 %55, ptr %8
+  %52 = load i32, ptr %45
+  %53 = load i32, ptr %42
+  %54 = call %GraphemeState @string.grapheme_state_update(ptr %29, i32 %52, i32 %53)
+  store %GraphemeState %54, ptr %29
+  %55 = load i32, ptr %45
+  store i32 %55, ptr %27
+  %56 = load i32, ptr %42
+  store i32 %56, ptr %17
+  %57 = load ptr, ptr %0
+  %58 = load i32, ptr %13
+  %59 = call i32 @string._utf8_byte_length_at(ptr %57, i32 %58)
+  %60 = alloca i32
+  store i32 %59, ptr %60
+  %61 = load i32, ptr %9
+  %62 = load i32, ptr %60
+  %63 = add i32 %61, %62
+  store i32 %63, ptr %9
   br label %whilecond3
+}
+
+define i32 @string._count_graphemes_managed_range(ptr %managed, i32 %offset, i32 %len) {
+entry0:
+  %0 = alloca ptr
+  store ptr %managed, ptr %0
+  %1 = alloca i32
+  store i32 %offset, ptr %1
+  %2 = alloca i32
+  store i32 %len, ptr %2
+  %3 = alloca i32
+  store i32 0, ptr %3
+  %4 = alloca i32
+  store i32 0, ptr %4
+  br label %whilecond1
+whilecond1:
+  %5 = load i32, ptr %4
+  %6 = load i32, ptr %2
+  %7 = icmp slt i32 %5, %6
+  br i1 %7, label %loop2, label %afterloop3
+loop2:
+  %8 = load ptr, ptr %0
+  %9 = load i32, ptr %1
+  %10 = load i32, ptr %4
+  %11 = load i32, ptr %2
+  %12 = call i32 @string._find_grapheme_end_managed_range(ptr %8, i32 %9, i32 %10, i32 %11)
+  store i32 %12, ptr %4
+  %13 = load i32, ptr %3
+  %14 = add i32 %13, 1
+  store i32 %14, ptr %3
+  br label %whilecond1
+afterloop3:
+  %15 = load i32, ptr %3
+  ret i32 %15
 }
 
 define i32 @string._count_graphemes_managed(ptr %managed) {
 entry0:
   %0 = alloca ptr
   store ptr %managed, ptr %0
-  %1 = alloca i32
+  %1 = load ptr, ptr %0
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %__ManagedStringData, ptr %2, i32 0, i32 1
+  %4 = load i32, ptr %3
+  %5 = call i32 @string._count_graphemes_managed_range(ptr %1, i32 0, i32 %4)
+  ret i32 %5
+}
+
+define i32 @string.grapheme_break_property(i32 %cp) {
+entry0:
+  %0 = alloca i32
+  store i32 %cp, ptr %0
+  %1 = load i32, ptr %0
+  %2 = icmp eq i32 %1, 13
+  br i1 %2, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  %3 = load i32, ptr %0
+  %4 = icmp eq i32 %3, 10
+  br i1 %4, label %then3, label %ifcont4
+then3:
+  ret i32 2
+ifcont4:
+  %5 = load i32, ptr %0
+  %6 = icmp slt i32 %5, 32
+  %7 = load i32, ptr %0
+  %8 = icmp sge i32 %7, 127
+  %9 = load i32, ptr %0
+  %10 = icmp slt i32 %9, 160
+  %11 = and i1 %8, %10
+  %12 = or i1 %6, %11
+  br i1 %12, label %then5, label %ifcont6
+then5:
+  ret i32 3
+ifcont6:
+  %13 = load i32, ptr %0
+  %14 = icmp eq i32 %13, 8205
+  br i1 %14, label %then7, label %ifcont8
+then7:
+  ret i32 5
+ifcont8:
+  %15 = load i32, ptr %0
+  %16 = icmp sge i32 %15, 127462
+  %17 = load i32, ptr %0
+  %18 = icmp sle i32 %17, 127487
+  %19 = and i1 %16, %18
+  br i1 %19, label %then9, label %ifcont10
+then9:
+  ret i32 6
+ifcont10:
+  %20 = load i32, ptr %0
+  %21 = icmp sge i32 %20, 44032
+  %22 = load i32, ptr %0
+  %23 = icmp sle i32 %22, 55203
+  %24 = and i1 %21, %23
+  br i1 %24, label %then11, label %ifcont12
+then11:
+  %25 = load i32, ptr %0
+  %26 = sub i32 %25, 44032
+  %27 = alloca i32
+  store i32 %26, ptr %27
+  %28 = load i32, ptr %27
+  %29 = srem i32 %28, 28
+  %30 = icmp eq i32 %29, 0
+  br i1 %30, label %then13, label %else15
+ifcont12:
+  %31 = load i32, ptr %0
+  %32 = icmp sge i32 %31, 4352
+  %33 = load i32, ptr %0
+  %34 = icmp sle i32 %33, 4447
+  %35 = and i1 %32, %34
+  br i1 %35, label %then16, label %ifcont17
+then13:
+  ret i32 12
+ifcont14:
+  br label %ifcont12
+else15:
+  ret i32 13
+then16:
+  ret i32 9
+ifcont17:
+  %36 = load i32, ptr %0
+  %37 = icmp sge i32 %36, 4448
+  %38 = load i32, ptr %0
+  %39 = icmp sle i32 %38, 4519
+  %40 = and i1 %37, %39
+  br i1 %40, label %then18, label %ifcont19
+then18:
+  ret i32 10
+ifcont19:
+  %41 = load i32, ptr %0
+  %42 = icmp sge i32 %41, 4520
+  %43 = load i32, ptr %0
+  %44 = icmp sle i32 %43, 4607
+  %45 = and i1 %42, %44
+  br i1 %45, label %then20, label %ifcont21
+then20:
+  ret i32 11
+ifcont21:
+  %46 = load i32, ptr %0
+  %47 = icmp sge i32 %46, 127995
+  %48 = load i32, ptr %0
+  %49 = icmp sle i32 %48, 127999
+  %50 = and i1 %47, %49
+  br i1 %50, label %then22, label %ifcont23
+then22:
+  ret i32 4
+ifcont23:
+  %51 = load i32, ptr %0
+  %52 = icmp sge i32 %51, 65024
+  %53 = load i32, ptr %0
+  %54 = icmp sle i32 %53, 65039
+  %55 = and i1 %52, %54
+  br i1 %55, label %then24, label %ifcont25
+then24:
+  ret i32 4
+ifcont25:
+  %56 = load i32, ptr %0
+  %57 = icmp sge i32 %56, 768
+  %58 = load i32, ptr %0
+  %59 = icmp sle i32 %58, 879
+  %60 = and i1 %57, %59
+  br i1 %60, label %then26, label %ifcont27
+then26:
+  ret i32 4
+ifcont27:
+  %61 = load i32, ptr %0
+  %62 = icmp eq i32 %61, 8203
+  %63 = load i32, ptr %0
+  %64 = icmp sge i32 %63, 8206
+  %65 = load i32, ptr %0
+  %66 = icmp sle i32 %65, 8207
+  %67 = and i1 %64, %66
+  %68 = or i1 %62, %67
+  %69 = load i32, ptr %0
+  %70 = icmp sge i32 %69, 8232
+  %71 = load i32, ptr %0
+  %72 = icmp sle i32 %71, 8238
+  %73 = and i1 %70, %72
+  %74 = or i1 %68, %73
+  br i1 %74, label %then28, label %ifcont29
+then28:
+  ret i32 3
+ifcont29:
+  %75 = load i32, ptr %0
+  %76 = icmp eq i32 %75, 8204
+  br i1 %76, label %then30, label %ifcont31
+then30:
+  ret i32 4
+ifcont31:
+  ret i32 0
+}
+
+define i1 @string.is_extended_pictographic(i32 %cp) {
+entry0:
+  %0 = alloca i32
+  store i32 %cp, ptr %0
+  %1 = load i32, ptr %0
+  %2 = icmp sge i32 %1, 128512
+  %3 = load i32, ptr %0
+  %4 = icmp sle i32 %3, 128591
+  %5 = and i1 %2, %4
+  br i1 %5, label %then1, label %ifcont2
+then1:
+  ret i1 1
+ifcont2:
+  %6 = load i32, ptr %0
+  %7 = icmp sge i32 %6, 127744
+  %8 = load i32, ptr %0
+  %9 = icmp sle i32 %8, 128511
+  %10 = and i1 %7, %9
+  br i1 %10, label %then3, label %ifcont4
+then3:
+  ret i1 1
+ifcont4:
+  %11 = load i32, ptr %0
+  %12 = icmp sge i32 %11, 128640
+  %13 = load i32, ptr %0
+  %14 = icmp sle i32 %13, 128767
+  %15 = and i1 %12, %14
+  br i1 %15, label %then5, label %ifcont6
+then5:
+  ret i1 1
+ifcont6:
+  %16 = load i32, ptr %0
+  %17 = icmp sge i32 %16, 129280
+  %18 = load i32, ptr %0
+  %19 = icmp sle i32 %18, 129535
+  %20 = and i1 %17, %19
+  br i1 %20, label %then7, label %ifcont8
+then7:
+  ret i1 1
+ifcont8:
+  %21 = load i32, ptr %0
+  %22 = icmp sge i32 %21, 129536
+  %23 = load i32, ptr %0
+  %24 = icmp sle i32 %23, 130047
+  %25 = and i1 %22, %24
+  br i1 %25, label %then9, label %ifcont10
+then9:
+  ret i1 1
+ifcont10:
+  %26 = load i32, ptr %0
+  %27 = icmp sge i32 %26, 9728
+  %28 = load i32, ptr %0
+  %29 = icmp sle i32 %28, 9983
+  %30 = and i1 %27, %29
+  br i1 %30, label %then11, label %ifcont12
+then11:
+  ret i1 1
+ifcont12:
+  %31 = load i32, ptr %0
+  %32 = icmp sge i32 %31, 9984
+  %33 = load i32, ptr %0
+  %34 = icmp sle i32 %33, 10175
+  %35 = and i1 %32, %34
+  br i1 %35, label %then13, label %ifcont14
+then13:
+  ret i1 1
+ifcont14:
+  ret i1 0
+}
+
+define %GraphemeState @string.grapheme_state_init() {
+entry0:
+  %0 = alloca %GraphemeState
+  %1 = getelementptr %GraphemeState, ptr %0, i32 0, i32 0
   store i32 0, ptr %1
+  %2 = getelementptr %GraphemeState, ptr %0, i32 0, i32 1
+  store i1 0, ptr %2
+  %3 = load %GraphemeState, ptr %0
+  ret %GraphemeState %3
+}
+
+define i1 @string.is_grapheme_break(i32 %prev_gbp, i32 %curr_gbp, i32 %prev_cp, i32 %curr_cp, ptr %state) {
+entry0:
+  %0 = alloca i32
+  store i32 %prev_gbp, ptr %0
+  %1 = alloca i32
+  store i32 %curr_gbp, ptr %1
   %2 = alloca i32
-  store i32 0, ptr %2
-  %3 = load ptr, ptr %0
-  %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 1
-  %5 = load i32, ptr %4
+  store i32 %prev_cp, ptr %2
+  %3 = alloca i32
+  store i32 %curr_cp, ptr %3
+  %4 = alloca ptr
+  store ptr %state, ptr %4
+  %5 = load i32, ptr %2
   %6 = alloca i32
   store i32 %5, ptr %6
-  br label %whilecond1
-whilecond1:
-  %7 = load i32, ptr %2
-  %8 = load i32, ptr %6
-  %9 = icmp slt i32 %7, %8
-  br i1 %9, label %loop2, label %afterloop3
-loop2:
-  %10 = load ptr, ptr %0
-  %11 = load i32, ptr %2
-  %12 = load i32, ptr %6
-  %13 = call i32 @string._find_grapheme_end_managed(ptr %10, i32 %11, i32 %12)
-  store i32 %13, ptr %2
-  %14 = load i32, ptr %1
-  %15 = add i32 %14, 1
-  store i32 %15, ptr %1
-  br label %whilecond1
-afterloop3:
-  %16 = load i32, ptr %1
-  ret i32 %16
+  %7 = load i32, ptr %6
+  store i32 %7, ptr %6
+  %8 = load i32, ptr %0
+  %9 = icmp eq i32 %8, 1
+  %10 = load i32, ptr %1
+  %11 = icmp eq i32 %10, 2
+  %12 = and i1 %9, %11
+  br i1 %12, label %then1, label %ifcont2
+then1:
+  ret i1 0
+ifcont2:
+  %13 = load i32, ptr %0
+  %14 = icmp eq i32 %13, 3
+  %15 = load i32, ptr %0
+  %16 = icmp eq i32 %15, 1
+  %17 = or i1 %14, %16
+  %18 = load i32, ptr %0
+  %19 = icmp eq i32 %18, 2
+  %20 = or i1 %17, %19
+  br i1 %20, label %then3, label %ifcont4
+then3:
+  ret i1 1
+ifcont4:
+  %21 = load i32, ptr %1
+  %22 = icmp eq i32 %21, 3
+  %23 = load i32, ptr %1
+  %24 = icmp eq i32 %23, 1
+  %25 = or i1 %22, %24
+  %26 = load i32, ptr %1
+  %27 = icmp eq i32 %26, 2
+  %28 = or i1 %25, %27
+  br i1 %28, label %then5, label %ifcont6
+then5:
+  ret i1 1
+ifcont6:
+  %29 = load i32, ptr %0
+  %30 = icmp eq i32 %29, 9
+  br i1 %30, label %then7, label %ifcont8
+then7:
+  %31 = load i32, ptr %1
+  %32 = icmp eq i32 %31, 9
+  %33 = load i32, ptr %1
+  %34 = icmp eq i32 %33, 10
+  %35 = or i1 %32, %34
+  %36 = load i32, ptr %1
+  %37 = icmp eq i32 %36, 12
+  %38 = or i1 %35, %37
+  %39 = load i32, ptr %1
+  %40 = icmp eq i32 %39, 13
+  %41 = or i1 %38, %40
+  br i1 %41, label %then9, label %ifcont10
+ifcont8:
+  %42 = load i32, ptr %0
+  %43 = icmp eq i32 %42, 12
+  %44 = load i32, ptr %0
+  %45 = icmp eq i32 %44, 10
+  %46 = or i1 %43, %45
+  br i1 %46, label %then11, label %ifcont12
+then9:
+  ret i1 0
+ifcont10:
+  br label %ifcont8
+then11:
+  %47 = load i32, ptr %1
+  %48 = icmp eq i32 %47, 10
+  %49 = load i32, ptr %1
+  %50 = icmp eq i32 %49, 11
+  %51 = or i1 %48, %50
+  br i1 %51, label %then13, label %ifcont14
+ifcont12:
+  %52 = load i32, ptr %0
+  %53 = icmp eq i32 %52, 13
+  %54 = load i32, ptr %0
+  %55 = icmp eq i32 %54, 11
+  %56 = or i1 %53, %55
+  br i1 %56, label %then15, label %ifcont16
+then13:
+  ret i1 0
+ifcont14:
+  br label %ifcont12
+then15:
+  %57 = load i32, ptr %1
+  %58 = icmp eq i32 %57, 11
+  br i1 %58, label %then17, label %ifcont18
+ifcont16:
+  %59 = load i32, ptr %1
+  %60 = icmp eq i32 %59, 4
+  %61 = load i32, ptr %1
+  %62 = icmp eq i32 %61, 5
+  %63 = or i1 %60, %62
+  br i1 %63, label %then19, label %ifcont20
+then17:
+  ret i1 0
+ifcont18:
+  br label %ifcont16
+then19:
+  ret i1 0
+ifcont20:
+  %64 = load i32, ptr %1
+  %65 = icmp eq i32 %64, 8
+  br i1 %65, label %then21, label %ifcont22
+then21:
+  ret i1 0
+ifcont22:
+  %66 = load i32, ptr %0
+  %67 = icmp eq i32 %66, 7
+  br i1 %67, label %then23, label %ifcont24
+then23:
+  ret i1 0
+ifcont24:
+  %68 = load i32, ptr %0
+  %69 = icmp eq i32 %68, 5
+  %70 = load i32, ptr %3
+  %71 = call i1 @string.is_extended_pictographic(i32 %70)
+  %72 = and i1 %69, %71
+  br i1 %72, label %then25, label %ifcont26
+then25:
+  %73 = load ptr, ptr %4
+  %74 = getelementptr %GraphemeState, ptr %73, i32 0, i32 1
+  %75 = load i1, ptr %74
+  br i1 %75, label %then27, label %ifcont28
+ifcont26:
+  %76 = load i32, ptr %0
+  %77 = icmp eq i32 %76, 6
+  %78 = load i32, ptr %1
+  %79 = icmp eq i32 %78, 6
+  %80 = and i1 %77, %79
+  br i1 %80, label %then29, label %ifcont30
+then27:
+  ret i1 0
+ifcont28:
+  br label %ifcont26
+then29:
+  %81 = load ptr, ptr %4
+  %82 = getelementptr %GraphemeState, ptr %81, i32 0, i32 0
+  %83 = load i32, ptr %82
+  %84 = srem i32 %83, 2
+  %85 = icmp eq i32 %84, 1
+  br i1 %85, label %then31, label %ifcont32
+ifcont30:
+  ret i1 1
+then31:
+  ret i1 0
+ifcont32:
+  br label %ifcont30
+}
+
+define %GraphemeState @string.grapheme_state_update(ptr %state, i32 %gbp, i32 %cp) {
+entry0:
+  %0 = alloca ptr
+  store ptr %state, ptr %0
+  %1 = alloca i32
+  store i32 %gbp, ptr %1
+  %2 = alloca i32
+  store i32 %cp, ptr %2
+  %3 = alloca %GraphemeState
+  %4 = getelementptr %GraphemeState, ptr %3, i32 0, i32 0
+  store i32 0, ptr %4
+  %5 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
+  store i1 0, ptr %5
+  %6 = load i32, ptr %1
+  %7 = icmp eq i32 %6, 6
+  br i1 %7, label %then1, label %ifcont2
+then1:
+  %8 = getelementptr %GraphemeState, ptr %3, i32 0, i32 0
+  %9 = load ptr, ptr %0
+  %10 = getelementptr %GraphemeState, ptr %9, i32 0, i32 0
+  %11 = load i32, ptr %10
+  %12 = add i32 %11, 1
+  store i32 %12, ptr %8
+  br label %ifcont2
+ifcont2:
+  %13 = load i32, ptr %2
+  %14 = call i1 @string.is_extended_pictographic(i32 %13)
+  br i1 %14, label %then3, label %else5
+then3:
+  %15 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
+  store i1 1, ptr %15
+  br label %ifcont4
+ifcont4:
+  %25 = load %GraphemeState, ptr %3
+  ret %GraphemeState %25
+else5:
+  %16 = load ptr, ptr %0
+  %17 = getelementptr %GraphemeState, ptr %16, i32 0, i32 1
+  %18 = load i1, ptr %17
+  br i1 %18, label %then6, label %ifcont7
+then6:
+  %19 = load i32, ptr %1
+  %20 = icmp eq i32 %19, 4
+  %21 = load i32, ptr %1
+  %22 = icmp eq i32 %21, 5
+  %23 = or i1 %20, %22
+  br i1 %23, label %then8, label %ifcont9
+ifcont7:
+  br label %ifcont4
+then8:
+  %24 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
+  store i1 1, ptr %24
+  br label %ifcont9
+ifcont9:
+  br label %ifcont7
 }
 
 define i32 @string._utf8_byte_length_at(ptr %managed, i32 %pos) {
@@ -1418,452 +1889,6 @@ ifcont6:
   %113 = srem i32 %112, 64
   %114 = add i32 %111, %113
   ret i32 %114
-}
-
-define i32 @unicode.grapheme_break_property(i32 %cp) {
-entry0:
-  %0 = alloca i32
-  store i32 %cp, ptr %0
-  %1 = load i32, ptr %0
-  %2 = icmp eq i32 %1, 13
-  br i1 %2, label %then1, label %ifcont2
-then1:
-  ret i32 1
-ifcont2:
-  %3 = load i32, ptr %0
-  %4 = icmp eq i32 %3, 10
-  br i1 %4, label %then3, label %ifcont4
-then3:
-  ret i32 2
-ifcont4:
-  %5 = load i32, ptr %0
-  %6 = icmp slt i32 %5, 32
-  %7 = load i32, ptr %0
-  %8 = icmp sge i32 %7, 127
-  %9 = load i32, ptr %0
-  %10 = icmp slt i32 %9, 160
-  %11 = and i1 %8, %10
-  %12 = or i1 %6, %11
-  br i1 %12, label %then5, label %ifcont6
-then5:
-  ret i32 3
-ifcont6:
-  %13 = load i32, ptr %0
-  %14 = icmp eq i32 %13, 8205
-  br i1 %14, label %then7, label %ifcont8
-then7:
-  ret i32 5
-ifcont8:
-  %15 = load i32, ptr %0
-  %16 = icmp sge i32 %15, 127462
-  %17 = load i32, ptr %0
-  %18 = icmp sle i32 %17, 127487
-  %19 = and i1 %16, %18
-  br i1 %19, label %then9, label %ifcont10
-then9:
-  ret i32 6
-ifcont10:
-  %20 = load i32, ptr %0
-  %21 = icmp sge i32 %20, 44032
-  %22 = load i32, ptr %0
-  %23 = icmp sle i32 %22, 55203
-  %24 = and i1 %21, %23
-  br i1 %24, label %then11, label %ifcont12
-then11:
-  %25 = load i32, ptr %0
-  %26 = sub i32 %25, 44032
-  %27 = alloca i32
-  store i32 %26, ptr %27
-  %28 = load i32, ptr %27
-  %29 = srem i32 %28, 28
-  %30 = icmp eq i32 %29, 0
-  br i1 %30, label %then13, label %else15
-ifcont12:
-  %31 = load i32, ptr %0
-  %32 = icmp sge i32 %31, 4352
-  %33 = load i32, ptr %0
-  %34 = icmp sle i32 %33, 4447
-  %35 = and i1 %32, %34
-  br i1 %35, label %then16, label %ifcont17
-then13:
-  ret i32 12
-ifcont14:
-  br label %ifcont12
-else15:
-  ret i32 13
-then16:
-  ret i32 9
-ifcont17:
-  %36 = load i32, ptr %0
-  %37 = icmp sge i32 %36, 4448
-  %38 = load i32, ptr %0
-  %39 = icmp sle i32 %38, 4519
-  %40 = and i1 %37, %39
-  br i1 %40, label %then18, label %ifcont19
-then18:
-  ret i32 10
-ifcont19:
-  %41 = load i32, ptr %0
-  %42 = icmp sge i32 %41, 4520
-  %43 = load i32, ptr %0
-  %44 = icmp sle i32 %43, 4607
-  %45 = and i1 %42, %44
-  br i1 %45, label %then20, label %ifcont21
-then20:
-  ret i32 11
-ifcont21:
-  %46 = load i32, ptr %0
-  %47 = icmp sge i32 %46, 127995
-  %48 = load i32, ptr %0
-  %49 = icmp sle i32 %48, 127999
-  %50 = and i1 %47, %49
-  br i1 %50, label %then22, label %ifcont23
-then22:
-  ret i32 4
-ifcont23:
-  %51 = load i32, ptr %0
-  %52 = icmp sge i32 %51, 65024
-  %53 = load i32, ptr %0
-  %54 = icmp sle i32 %53, 65039
-  %55 = and i1 %52, %54
-  br i1 %55, label %then24, label %ifcont25
-then24:
-  ret i32 4
-ifcont25:
-  %56 = load i32, ptr %0
-  %57 = icmp sge i32 %56, 768
-  %58 = load i32, ptr %0
-  %59 = icmp sle i32 %58, 879
-  %60 = and i1 %57, %59
-  br i1 %60, label %then26, label %ifcont27
-then26:
-  ret i32 4
-ifcont27:
-  %61 = load i32, ptr %0
-  %62 = icmp eq i32 %61, 8203
-  %63 = load i32, ptr %0
-  %64 = icmp sge i32 %63, 8206
-  %65 = load i32, ptr %0
-  %66 = icmp sle i32 %65, 8207
-  %67 = and i1 %64, %66
-  %68 = or i1 %62, %67
-  %69 = load i32, ptr %0
-  %70 = icmp sge i32 %69, 8232
-  %71 = load i32, ptr %0
-  %72 = icmp sle i32 %71, 8238
-  %73 = and i1 %70, %72
-  %74 = or i1 %68, %73
-  br i1 %74, label %then28, label %ifcont29
-then28:
-  ret i32 3
-ifcont29:
-  %75 = load i32, ptr %0
-  %76 = icmp eq i32 %75, 8204
-  br i1 %76, label %then30, label %ifcont31
-then30:
-  ret i32 4
-ifcont31:
-  ret i32 0
-}
-
-define i1 @unicode.is_extended_pictographic(i32 %cp) {
-entry0:
-  %0 = alloca i32
-  store i32 %cp, ptr %0
-  %1 = load i32, ptr %0
-  %2 = icmp sge i32 %1, 128512
-  %3 = load i32, ptr %0
-  %4 = icmp sle i32 %3, 128591
-  %5 = and i1 %2, %4
-  br i1 %5, label %then1, label %ifcont2
-then1:
-  ret i1 1
-ifcont2:
-  %6 = load i32, ptr %0
-  %7 = icmp sge i32 %6, 127744
-  %8 = load i32, ptr %0
-  %9 = icmp sle i32 %8, 128511
-  %10 = and i1 %7, %9
-  br i1 %10, label %then3, label %ifcont4
-then3:
-  ret i1 1
-ifcont4:
-  %11 = load i32, ptr %0
-  %12 = icmp sge i32 %11, 128640
-  %13 = load i32, ptr %0
-  %14 = icmp sle i32 %13, 128767
-  %15 = and i1 %12, %14
-  br i1 %15, label %then5, label %ifcont6
-then5:
-  ret i1 1
-ifcont6:
-  %16 = load i32, ptr %0
-  %17 = icmp sge i32 %16, 129280
-  %18 = load i32, ptr %0
-  %19 = icmp sle i32 %18, 129535
-  %20 = and i1 %17, %19
-  br i1 %20, label %then7, label %ifcont8
-then7:
-  ret i1 1
-ifcont8:
-  %21 = load i32, ptr %0
-  %22 = icmp sge i32 %21, 129536
-  %23 = load i32, ptr %0
-  %24 = icmp sle i32 %23, 130047
-  %25 = and i1 %22, %24
-  br i1 %25, label %then9, label %ifcont10
-then9:
-  ret i1 1
-ifcont10:
-  %26 = load i32, ptr %0
-  %27 = icmp sge i32 %26, 9728
-  %28 = load i32, ptr %0
-  %29 = icmp sle i32 %28, 9983
-  %30 = and i1 %27, %29
-  br i1 %30, label %then11, label %ifcont12
-then11:
-  ret i1 1
-ifcont12:
-  %31 = load i32, ptr %0
-  %32 = icmp sge i32 %31, 9984
-  %33 = load i32, ptr %0
-  %34 = icmp sle i32 %33, 10175
-  %35 = and i1 %32, %34
-  br i1 %35, label %then13, label %ifcont14
-then13:
-  ret i1 1
-ifcont14:
-  ret i1 0
-}
-
-define %GraphemeState @unicode.grapheme_state_init() {
-entry0:
-  %0 = alloca %GraphemeState
-  %1 = getelementptr %GraphemeState, ptr %0, i32 0, i32 0
-  store i32 0, ptr %1
-  %2 = getelementptr %GraphemeState, ptr %0, i32 0, i32 1
-  store i1 0, ptr %2
-  %3 = load %GraphemeState, ptr %0
-  ret %GraphemeState %3
-}
-
-define i1 @unicode.is_grapheme_break(i32 %prev_gbp, i32 %curr_gbp, i32 %prev_cp, i32 %curr_cp, ptr %state) {
-entry0:
-  %0 = alloca i32
-  store i32 %prev_gbp, ptr %0
-  %1 = alloca i32
-  store i32 %curr_gbp, ptr %1
-  %2 = alloca i32
-  store i32 %prev_cp, ptr %2
-  %3 = alloca i32
-  store i32 %curr_cp, ptr %3
-  %4 = alloca ptr
-  store ptr %state, ptr %4
-  %5 = load i32, ptr %2
-  %6 = alloca i32
-  store i32 %5, ptr %6
-  %7 = load i32, ptr %6
-  store i32 %7, ptr %6
-  %8 = load i32, ptr %0
-  %9 = icmp eq i32 %8, 1
-  %10 = load i32, ptr %1
-  %11 = icmp eq i32 %10, 2
-  %12 = and i1 %9, %11
-  br i1 %12, label %then1, label %ifcont2
-then1:
-  ret i1 0
-ifcont2:
-  %13 = load i32, ptr %0
-  %14 = icmp eq i32 %13, 3
-  %15 = load i32, ptr %0
-  %16 = icmp eq i32 %15, 1
-  %17 = or i1 %14, %16
-  %18 = load i32, ptr %0
-  %19 = icmp eq i32 %18, 2
-  %20 = or i1 %17, %19
-  br i1 %20, label %then3, label %ifcont4
-then3:
-  ret i1 1
-ifcont4:
-  %21 = load i32, ptr %1
-  %22 = icmp eq i32 %21, 3
-  %23 = load i32, ptr %1
-  %24 = icmp eq i32 %23, 1
-  %25 = or i1 %22, %24
-  %26 = load i32, ptr %1
-  %27 = icmp eq i32 %26, 2
-  %28 = or i1 %25, %27
-  br i1 %28, label %then5, label %ifcont6
-then5:
-  ret i1 1
-ifcont6:
-  %29 = load i32, ptr %0
-  %30 = icmp eq i32 %29, 9
-  br i1 %30, label %then7, label %ifcont8
-then7:
-  %31 = load i32, ptr %1
-  %32 = icmp eq i32 %31, 9
-  %33 = load i32, ptr %1
-  %34 = icmp eq i32 %33, 10
-  %35 = or i1 %32, %34
-  %36 = load i32, ptr %1
-  %37 = icmp eq i32 %36, 12
-  %38 = or i1 %35, %37
-  %39 = load i32, ptr %1
-  %40 = icmp eq i32 %39, 13
-  %41 = or i1 %38, %40
-  br i1 %41, label %then9, label %ifcont10
-ifcont8:
-  %42 = load i32, ptr %0
-  %43 = icmp eq i32 %42, 12
-  %44 = load i32, ptr %0
-  %45 = icmp eq i32 %44, 10
-  %46 = or i1 %43, %45
-  br i1 %46, label %then11, label %ifcont12
-then9:
-  ret i1 0
-ifcont10:
-  br label %ifcont8
-then11:
-  %47 = load i32, ptr %1
-  %48 = icmp eq i32 %47, 10
-  %49 = load i32, ptr %1
-  %50 = icmp eq i32 %49, 11
-  %51 = or i1 %48, %50
-  br i1 %51, label %then13, label %ifcont14
-ifcont12:
-  %52 = load i32, ptr %0
-  %53 = icmp eq i32 %52, 13
-  %54 = load i32, ptr %0
-  %55 = icmp eq i32 %54, 11
-  %56 = or i1 %53, %55
-  br i1 %56, label %then15, label %ifcont16
-then13:
-  ret i1 0
-ifcont14:
-  br label %ifcont12
-then15:
-  %57 = load i32, ptr %1
-  %58 = icmp eq i32 %57, 11
-  br i1 %58, label %then17, label %ifcont18
-ifcont16:
-  %59 = load i32, ptr %1
-  %60 = icmp eq i32 %59, 4
-  %61 = load i32, ptr %1
-  %62 = icmp eq i32 %61, 5
-  %63 = or i1 %60, %62
-  br i1 %63, label %then19, label %ifcont20
-then17:
-  ret i1 0
-ifcont18:
-  br label %ifcont16
-then19:
-  ret i1 0
-ifcont20:
-  %64 = load i32, ptr %1
-  %65 = icmp eq i32 %64, 8
-  br i1 %65, label %then21, label %ifcont22
-then21:
-  ret i1 0
-ifcont22:
-  %66 = load i32, ptr %0
-  %67 = icmp eq i32 %66, 7
-  br i1 %67, label %then23, label %ifcont24
-then23:
-  ret i1 0
-ifcont24:
-  %68 = load i32, ptr %0
-  %69 = icmp eq i32 %68, 5
-  %70 = load i32, ptr %3
-  %71 = call i1 @unicode.is_extended_pictographic(i32 %70)
-  %72 = and i1 %69, %71
-  br i1 %72, label %then25, label %ifcont26
-then25:
-  %73 = load ptr, ptr %4
-  %74 = getelementptr %GraphemeState, ptr %73, i32 0, i32 1
-  %75 = load i1, ptr %74
-  br i1 %75, label %then27, label %ifcont28
-ifcont26:
-  %76 = load i32, ptr %0
-  %77 = icmp eq i32 %76, 6
-  %78 = load i32, ptr %1
-  %79 = icmp eq i32 %78, 6
-  %80 = and i1 %77, %79
-  br i1 %80, label %then29, label %ifcont30
-then27:
-  ret i1 0
-ifcont28:
-  br label %ifcont26
-then29:
-  %81 = load ptr, ptr %4
-  %82 = getelementptr %GraphemeState, ptr %81, i32 0, i32 0
-  %83 = load i32, ptr %82
-  %84 = srem i32 %83, 2
-  %85 = icmp eq i32 %84, 1
-  br i1 %85, label %then31, label %ifcont32
-ifcont30:
-  ret i1 1
-then31:
-  ret i1 0
-ifcont32:
-  br label %ifcont30
-}
-
-define %GraphemeState @unicode.grapheme_state_update(ptr %state, i32 %gbp, i32 %cp) {
-entry0:
-  %0 = alloca ptr
-  store ptr %state, ptr %0
-  %1 = alloca i32
-  store i32 %gbp, ptr %1
-  %2 = alloca i32
-  store i32 %cp, ptr %2
-  %3 = alloca %GraphemeState
-  %4 = getelementptr %GraphemeState, ptr %3, i32 0, i32 0
-  store i32 0, ptr %4
-  %5 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
-  store i1 0, ptr %5
-  %6 = load i32, ptr %1
-  %7 = icmp eq i32 %6, 6
-  br i1 %7, label %then1, label %ifcont2
-then1:
-  %8 = getelementptr %GraphemeState, ptr %3, i32 0, i32 0
-  %9 = load ptr, ptr %0
-  %10 = getelementptr %GraphemeState, ptr %9, i32 0, i32 0
-  %11 = load i32, ptr %10
-  %12 = add i32 %11, 1
-  store i32 %12, ptr %8
-  br label %ifcont2
-ifcont2:
-  %13 = load i32, ptr %2
-  %14 = call i1 @unicode.is_extended_pictographic(i32 %13)
-  br i1 %14, label %then3, label %else5
-then3:
-  %15 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
-  store i1 1, ptr %15
-  br label %ifcont4
-ifcont4:
-  %25 = load %GraphemeState, ptr %3
-  ret %GraphemeState %25
-else5:
-  %16 = load ptr, ptr %0
-  %17 = getelementptr %GraphemeState, ptr %16, i32 0, i32 1
-  %18 = load i1, ptr %17
-  br i1 %18, label %then6, label %ifcont7
-then6:
-  %19 = load i32, ptr %1
-  %20 = icmp eq i32 %19, 4
-  %21 = load i32, ptr %1
-  %22 = icmp eq i32 %21, 5
-  %23 = or i1 %20, %22
-  br i1 %23, label %then8, label %ifcont9
-ifcont7:
-  br label %ifcont4
-then8:
-  %24 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
-  store i1 1, ptr %24
-  br label %ifcont9
-ifcont9:
-  br label %ifcont7
 }
 
 declare void @_managed_string_retain(ptr %arg0)
