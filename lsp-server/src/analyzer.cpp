@@ -749,9 +749,16 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
 		case KeywordCategory::Declaration:
 			categoryName = "declaration";
 			break;
-		case KeywordCategory::MathIntrinsic:
+		case KeywordCategory::MathIntrinsic: {
+			const MathIntrinsicInfo *mathInfo = Lexer::getMathIntrinsicInfo(word);
+			if (mathInfo) {
+				std::string sig = "function " + word + "(x float) " + mathInfo->returnType;
+				hover.contents = "```maxon\n" + sig + "\n```\n\n(math intrinsic) " + meta.description;
+				return hover;
+			}
 			categoryName = "math intrinsic";
 			break;
+		}
 		case KeywordCategory::Literal:
 			categoryName = "literal";
 			break;

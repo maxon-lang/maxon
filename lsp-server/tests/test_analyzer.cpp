@@ -105,6 +105,20 @@ TEST_CASE("hover_on_keyword", "[analyzer]") {
 	REQUIRE(!hover->contents.empty());
 }
 
+TEST_CASE("hover_on_math_intrinsic", "[analyzer]") {
+
+	Analyzer analyzer;
+	auto doc = createTestDocument("var x = trunc(5.5)");
+
+	lsp::Position pos{0, 10}; // Position in "trunc"
+	auto hover = analyzer.getHover(doc, pos);
+
+	// Should return hover information with function signature
+	REQUIRE(hover.has_value());
+	REQUIRE(hover->contents.find("function trunc(x float) int") != std::string::npos);
+	REQUIRE(hover->contents.find("math intrinsic") != std::string::npos);
+}
+
 TEST_CASE("document_symbols", "[analyzer]") {
 
 	Analyzer analyzer;
