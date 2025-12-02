@@ -23,6 +23,13 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 	// Debug: track which function is being generated
 	logTrace("Generating function body: " + functionName);
 
+	// Store parameter types for this function (used for optional parameter wrapping)
+	std::vector<std::string> paramTypes;
+	for (const auto &param : func->parameters) {
+		paramTypes.push_back(param.type);
+	}
+	functionParameterTypes[functionName] = paramTypes;
+
 	// Track receiver type for implicit self field access
 	currentReceiverType = func->receiverType;
 
@@ -181,6 +188,13 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 	}
 
 	logTrace("Generating specialized function body: " + functionName);
+
+	// Store parameter types for this function with type substitution
+	std::vector<std::string> paramTypes;
+	for (const auto &param : func->parameters) {
+		paramTypes.push_back(substituteType(param.type));
+	}
+	functionParameterTypes[functionName] = paramTypes;
 
 	// Set current function and create entry block
 	builder->setFunction(function);

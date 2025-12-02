@@ -11,8 +11,67 @@ function main() int
     return x
 end 'main'
 ---
-N/A
+; Module: test.maxon
+; Instructions: 11
+
+define i32 @main() {
+entry0:
+  br i1 0, label %then1, label %else3
+then1:
+  br label %ifcont2
+ifcont2:
+  %2 = phi i32 [ 1, %then1 ], [ %3, %ifcont5 ]
+  ret i32 %2
+else3:
+  br i1 1, label %then4, label %ifcont5
+then4:
+  br label %ifcont5
+ifcont5:
+  %3 = phi i32 [ 0, %else3 ], [ 2, %then4 ]
+  br label %ifcont2
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
-N/A
+; Module: test.maxon
+; Instructions: 14
+
+define i32 @main() {
+entry0:
+  %0 = alloca i32
+  store i32 0, ptr %0
+  br i1 0, label %then1, label %else3
+then1:
+  store i32 1, ptr %0
+  br label %ifcont2
+ifcont2:
+  %1 = load i32, ptr %0
+  ret i32 %1
+else3:
+  br i1 1, label %then4, label %ifcont5
+then4:
+  store i32 2, ptr %0
+  br label %ifcont5
+ifcont5:
+  br label %ifcont2
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
 ---
 ExitCode: 2

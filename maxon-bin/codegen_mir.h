@@ -48,6 +48,9 @@ class MIRCodeGenerator {
 	// Function return types from semantic analyzer (name -> return type)
 	std::map<std::string, std::string> functionReturnTypes;
 
+	// Function parameter types from semantic analyzer (function name -> vector of param types)
+	std::map<std::string, std::vector<std::string>> functionParameterTypes;
+
 	// Track which variables are struct parameters (passed by pointer)
 	std::set<std::string> structParameters;
 

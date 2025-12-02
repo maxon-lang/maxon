@@ -1294,21 +1294,60 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 			// Normal argument
 			mir::MIRValue *argVal = generateExpr(arg.get());
-			if (!argVal) {
+
+			// Check if argument is nil (generateExpr returns nullptr for nil)
+			bool isNilArg = (!argVal && dynamic_cast<NilExprAST *>(arg.get()));
+			if (!argVal && !isNilArg) {
 				throw std::runtime_error("Failed to generate function argument");
 			}
 
 			// If the argument is a struct value but the parameter expects a pointer,
 			// store the value into a temporary alloca and pass the pointer
-			if (argVal->type->isStruct() && paramType->isPointer()) {
+			if (argVal && argVal->type->isStruct() && paramType->isPointer()) {
 				mir::MIRValue *tempAlloca = builder->createAlloca(argVal->type, "struct.tmp");
 				builder->createStore(argVal, tempAlloca);
 				argVal = tempAlloca;
 			}
 
 			// Promote int/byte to float if parameter expects float
-			if (paramType->isFloat() && argVal->type->isInteger()) {
+			if (argVal && paramType->isFloat() && argVal->type->isInteger()) {
 				argVal = builder->createSIToFP(argVal, mir::MIRType::getFloat64(), "promotetmp");
+			}
+
+			// Handle optional parameter wrapping
+			// If parameter type is optional and argument is non-optional, wrap it
+			// Look up the Maxon type string for the parameter
+			auto paramTypesIt = functionParameterTypes.find(effectiveCallee);
+			if (paramTypesIt != functionParameterTypes.end()) {
+				// Account for sibling method calls (parameter index offset)
+				size_t actualParamIdx = i + (callExpr->isSiblingMethodCall ? 1 : 0);
+				if (actualParamIdx < paramTypesIt->second.size()) {
+					std::string paramMaxonType = paramTypesIt->second[actualParamIdx];
+
+					// Check if parameter is optional ("T or nil")
+					if (paramMaxonType.find(" or nil") != std::string::npos) {
+						// Case 1: Argument is nil - create nil optional
+						if (isNilArg) {
+							argVal = createNilOptional(paramType);
+						}
+						// Case 2: Argument has a value
+						else if (argVal) {
+							// Get argument type
+							std::string argMaxonType = getExpressionMaxonType(arg.get());
+
+							// Argument is unwrapped type - wrap in Some optional
+							if (argMaxonType.find(" or nil") == std::string::npos) {
+								argVal = createSomeOptional(paramType, argVal);
+							}
+							// Case 3: Argument is already optional - use as-is (already handled)
+						}
+					}
+				}
+			}
+
+			// If still nullptr at this point, something went wrong
+			if (!argVal) {
+				throw std::runtime_error("Failed to generate optional argument value");
 			}
 
 			argsV.push_back(argVal);

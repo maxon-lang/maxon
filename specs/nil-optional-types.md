@@ -9,7 +9,13 @@ category: types
 
 ## Developer Notes
 
-Optional types allow functions to return either a value or `nil`, representing the absence of a value. Implementation details:
+Optional types allow functions to return either a value or `nil`, representing the absence of a value. Optionals can be used in:
+- Function return types: `function foo() int or nil`
+- Function parameters: `function bar(x int or nil)`
+- Struct fields: `struct Person { var age int or nil }`
+- Local variables: `var result int or nil`
+
+Implementation details:
 
 - **Type Syntax**: `T or nil` (e.g., `int or nil`, `string or nil`)
 - **Memory Layout**: Discriminated union `[tag: i8][padding][value: T]`
@@ -18,7 +24,10 @@ Optional types allow functions to return either a value or `nil`, representing t
   - Stack-allocated, no heap allocation or GC
 - **Nil Literal**: `nil` keyword (lexer: `KeywordCategory::Literal`)
 - **Type Safety**: Cannot use optional values without unwrapping
-- **Implicit Wrapping**: Non-nil values automatically wrapped when returning to optional type
+- **Implicit Wrapping**: Non-nil values automatically wrapped when:
+  - Returning to optional return type
+  - Passing to optional parameter
+  - Assigning to optional struct field
 
 ### AST Nodes
 
@@ -40,13 +49,20 @@ Optional types allow functions to return either a value or `nil`, representing t
 - Prevents nested optionals (`int or nil or nil` is rejected)
 - Requires unwrapping before arithmetic/comparison operations
 - Validates return path analysis for if-let statements
+- **Optional Parameters**: Function call analysis accepts nil, unwrapped, or optional values
+- **Optional Struct Fields**: Struct initialization analysis handles implicit wrapping
 
 ### Code Generation
 
 Files:
-- `codegen_mir_optional.cpp`: Optional type generation
-- `codegen_mir_stmt.cpp`: Statement dispatchers
-- `semantic_analyzer_stmt.cpp`: Type checking
+- `parser_decl.cpp`: Parsing of optional return types, parameters, and struct fields
+- `codegen_mir_optional.cpp`: Optional type generation (if-let, else-unwrap, wrapping)
+- `codegen_mir_stmt.cpp`: Statement dispatchers for optional statements
+- `codegen_mir_expr.cpp`: Optional parameter wrapping in function calls
+- `codegen_mir_stmt_decl.cpp`: Optional field wrapping in struct initialization
+- `codegen_mir_function.cpp`: Tracks parameter types for wrapping
+- `semantic_analyzer_stmt.cpp`: Type checking for optionals
+- `semantic_analyzer_expr.cpp`: Parameter and field type validation
 
 ## Documentation
 
@@ -300,8 +316,12 @@ function main() int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 7, column 9
-Cannot use optional type 'int or nil' without unwrapping. Use 'if let' to unwrap first
+Semantic Error: line 8, column 9
+Cannot use optional type 'int or nil' without unwrapping
+  Note: Use 'if let' to safely unwrap optional values before using them
+
+  8 | 	return x + 5
+    |         ^
 ```
 
 <!-- test: error.return-nil-to-non-optional -->
@@ -311,10 +331,13 @@ function main() int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 2, column 2
+Semantic Error: line 3, column 2
 Cannot return 'nil' from non-optional return type
   Function return type: int
   Note: To return nil, change the function return type to 'int or nil'
+
+  3 | 	return nil
+    |  ^
 ```
 
 <!-- test: error.iflet-non-optional -->
@@ -328,9 +351,12 @@ function main() int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 3, column 2
+Semantic Error: line 4, column 2
 'if let' requires optional type, got 'int'
   Note: Use 'if let' only with optional types (T or nil)
+
+  4 | 	if let val = x 'check'
+    |  ^
 ```
 
 <!-- test: error.else-unwrap-non-optional -->
@@ -344,9 +370,19 @@ function main() int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 3, column 2
+Semantic Error: line 4, column 2
 'else' unwrapping requires an optional type, got 'int'
   Note: Use 'var x = expr else ...' only with optional types (T or nil)
+
+  4 | 	var result = x else 'default'
+    |  ^
+
+Semantic Error: line 7, column 9
+Undefined variable: 'result'
+  Note: Variable must be declared with 'var' or 'let' before use
+
+  7 | 	return result
+    |         ^
 ```
 
 <!-- test: error.else-unwrap-missing-assignment -->
@@ -364,10 +400,13 @@ function main() int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 7, column 2
+Semantic Error: line 8, column 2
 Variable 'result' must be assigned a value in the else block
   The else block is only executed when the optional is nil
   Note: You must provide a default value by assigning to 'result' in the else block
+
+  8 | 	var result = opt else 'default'
+    |  ^
 ```
 
 <!-- test: error.nested-optional -->
@@ -377,5 +416,120 @@ function main() int or nil or nil
 end 'main'
 ```
 ```maxoncstderr
-Parse error: Unexpected token: 'or'
+In file 'temp/temp_fragment.maxon':
+Unexpected token: 'or'
+  Location: line 2, column 28
+  Note: Expected a statement (var, let, if, while, return, break, continue, or assignment)
+```
+
+<!-- test: optional-param-nil -->
+```maxon
+function checkValue(x int or nil) int
+	if let val = x 'check'
+		return val
+	else 'check'
+		return 99
+	end 'check'
+end 'checkValue'
+
+function main() int
+	return checkValue(nil)
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: optional-param-value -->
+```maxon
+function checkValue(x int or nil) int
+	if let val = x 'check'
+		return val
+	else 'check'
+		return 99
+	end 'check'
+end 'checkValue'
+
+function main() int
+	return checkValue(42)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: optional-param-implicit-wrap -->
+```maxon
+function add(a int, b int or nil) int
+	var result = b else 'default'
+		result = 0
+	end 'default'
+	return a + result
+end 'add'
+
+function main() int
+	return add(5, 10)
+end 'main'
+```
+```exitcode
+15
+```
+
+<!-- test: optional-struct-field-nil -->
+```maxon
+struct Person
+	var name string
+	var age int or nil
+end 'Person'
+
+function main() int
+	var p = Person{name: "Bob", age: nil}
+	if let a = p.age 'check'
+		return a
+	else 'check'
+		return 99
+	end 'check'
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: optional-struct-field-value -->
+```maxon
+struct Person
+	var name string
+	var age int or nil
+end 'Person'
+
+function main() int
+	var p = Person{name: "Alice", age: 30}
+	if let a = p.age 'check'
+		return a
+	else 'check'
+		return 0
+	end 'check'
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: optional-struct-field-implicit-wrap -->
+```maxon
+struct Point
+	var x int
+	var y int or nil
+end 'Point'
+
+function main() int
+	var p = Point{x: 10, y: 20}
+	var result = p.y else 'default'
+		result = 0
+	end 'default'
+	return p.x + result
+end 'main'
+```
+```exitcode
+30
 ```

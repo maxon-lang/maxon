@@ -437,16 +437,39 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 				// Regular field value
 				mir::MIRValue *fieldValue = generateExpr(valueExpr);
 
+				// Get the MIR type for this field
+				mir::MIRType *fieldType = getTypeFromString(fieldTypeStr);
+
+				// Handle optional field wrapping
+				// If field type is optional and value is nil or unwrapped, wrap it
+				if (fieldTypeStr.find(" or nil") != std::string::npos) {
+					// Get the value type
+					std::string valueTypeStr = getExpressionMaxonType(valueExpr);
+
+					// Check if value is nil (generateExpr returns nullptr for nil)
+					bool isNilValue = (!fieldValue && dynamic_cast<NilExprAST *>(valueExpr));
+
+					if (isNilValue) {
+						// Create nil optional
+						fieldValue = createNilOptional(fieldType);
+					} else if (fieldValue && valueTypeStr.find(" or nil") == std::string::npos) {
+						// Value is unwrapped type - wrap in Some optional
+						fieldValue = createSomeOptional(fieldType, fieldValue);
+					}
+					// else: value is already optional, use as-is
+				}
+
 				// Check if this is a struct field (char, string, etc.)
 				// For struct types, generateExpr returns a pointer to an alloca
 				// We need to load the struct value and store it (not store the pointer)
-				mir::MIRType *fieldType = getTypeFromString(fieldTypeStr);
-				if (fieldType->isStruct() && fieldValue->type == mir::MIRType::getPtr()) {
+				if (fieldValue && fieldType->isStruct() && fieldValue->type == mir::MIRType::getPtr()) {
 					// Load the struct value from the alloca
 					mir::MIRValue *loadedValue = builder->createLoad(fieldType, fieldValue, fieldName + ".load");
 					builder->createStore(loadedValue, fieldPtr);
-				} else {
+				} else if (fieldValue) {
 					builder->createStore(fieldValue, fieldPtr);
+				} else {
+					throw std::runtime_error("Failed to generate value for field '" + fieldName + "'");
 				}
 			}
 		}

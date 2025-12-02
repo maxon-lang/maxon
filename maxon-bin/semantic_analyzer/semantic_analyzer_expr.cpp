@@ -752,6 +752,22 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				isValidType = true;
 			}
 
+			// Handle optional parameter types: if parameter is "T or nil"
+			// Accept: (1) nil, (2) T, (3) T or nil
+			if (!isValidType && isOptionalType(expectedType)) {
+				std::string unwrappedExpected = unwrapOptionalType(expectedType);
+
+				// Case 1: Passing nil to optional parameter
+				if (argType == "nil") {
+					isValidType = true;
+				}
+				// Case 2: Passing unwrapped type T to optional parameter T or nil (implicit wrap)
+				else if (typesMatch(unwrappedExpected, argType)) {
+					isValidType = true;
+				}
+				// Case 3: Already checked by typesMatch above (T or nil → T or nil)
+			}
+
 			if (!isValidType) {
 				addError("Function '" + callExpr->callee + "' argument type mismatch" +
 							 std::string("\n  Parameter ") + std::to_string(i + 1) + " ('" +
@@ -942,7 +958,25 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			} else {
 				// Type check the initializer value
 				std::string valueType = analyzeExpression(initField.value.get());
-				if (!typesMatch(expectedType, valueType)) {
+				bool typesOk = typesMatch(expectedType, valueType);
+
+				// Handle optional field types: if field is "T or nil"
+				// Accept: (1) nil, (2) T, (3) T or nil
+				if (!typesOk && isOptionalType(expectedType)) {
+					std::string unwrappedExpected = unwrapOptionalType(expectedType);
+
+					// Case 1: Assigning nil to optional field
+					if (valueType == "nil") {
+						typesOk = true;
+					}
+					// Case 2: Assigning unwrapped type T to optional field T or nil (implicit wrap)
+					else if (typesMatch(unwrappedExpected, valueType)) {
+						typesOk = true;
+					}
+					// Case 3: Already checked by typesMatch above (T or nil → T or nil)
+				}
+
+				if (!typesOk) {
 					addError("Type mismatch for field '" + initField.name + "': expected '" + expectedType + "', got '" + valueType + "'",
 							 initField.line, initField.column);
 				}

@@ -79,12 +79,27 @@ std::vector<TextEdit> Formatter::formatDocument(
 
 		formattedText += normalizedLine + "\n";
 
+		// Check for else-unwrap syntax: var x = expr else 'blockid'
+		// This pattern increases indent for the else block body
+		bool isElseUnwrap = false;
+		if (trimmedLine.find(" else '") != std::string::npos) {
+			// Verify this is an else-unwrap (not a standalone else statement)
+			// It should have content before the 'else' keyword
+			size_t elsePos = trimmedLine.find(" else '");
+			if (elsePos > 0) {
+				isElseUnwrap = true;
+			}
+		}
+
 		// Check for opening brace at end of line (struct literal start)
 		size_t lastNonWhitespace = trimmedLine.find_last_not_of(" \t");
 		bool endsWithOpenBrace = lastNonWhitespace != std::string::npos && trimmedLine[lastNonWhitespace] == '{';
 
 		if (endsWithOpenBrace) {
 			braceDepth++;
+			currentIndentLevel++;
+		} else if (isElseUnwrap) {
+			// Increase indent for else-unwrap block body
 			currentIndentLevel++;
 		} else if (shouldIncreaseIndentForKeyword(trimmedLine, insideInterface)) {
 			// Increase indent for control flow keywords (function, if, while, etc.)
@@ -213,6 +228,12 @@ bool Formatter::shouldIncreaseIndentForKeyword(const std::string &line, bool ins
 				}
 			}
 		}
+	}
+
+	// Check for if-let syntax: "if let varname = expr 'blockid'"
+	// This should always increase indent (it's a multi-line construct)
+	if (trimmed.find("if let ") == 0) {
+		return true;
 	}
 
 	// Check if line starts with block-opening keywords (or export + keyword)

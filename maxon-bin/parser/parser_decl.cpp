@@ -127,6 +127,26 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 				}
 			}
 
+			// Check for "or nil" suffix for optional parameters
+			if (checkKeyword("or")) {
+				advance(); // consume 'or'
+				if (!checkKeyword("nil")) {
+					throw std::runtime_error("Expected 'nil' after 'or' in parameter type\n  Location: line " +
+											 std::to_string(currentLine()) + ", column " +
+											 std::to_string(currentColumn()));
+				}
+				advance(); // consume 'nil'
+
+				// Reject nested optionals
+				if (paramType.find(" or nil") != std::string::npos) {
+					throw std::runtime_error("Cannot make optional type '" + paramType + "' optional again\n  Location: line " +
+											 std::to_string(currentLine()) + ", column " +
+											 std::to_string(currentColumn()));
+				}
+
+				paramType = paramType + " or nil";
+			}
+
 			parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
 		} while (match(TokenType::COMMA));
 	}
@@ -298,6 +318,26 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 											 std::to_string(currentLine()) + ", column " +
 											 std::to_string(currentColumn()));
 				}
+			}
+
+			// Check for "or nil" suffix for optional parameters
+			if (checkKeyword("or")) {
+				advance(); // consume 'or'
+				if (!checkKeyword("nil")) {
+					throw std::runtime_error("Expected 'nil' after 'or' in parameter type\n  Location: line " +
+											 std::to_string(currentLine()) + ", column " +
+											 std::to_string(currentColumn()));
+				}
+				advance(); // consume 'nil'
+
+				// Reject nested optionals
+				if (paramType.find(" or nil") != std::string::npos) {
+					throw std::runtime_error("Cannot make optional type '" + paramType + "' optional again\n  Location: line " +
+											 std::to_string(currentLine()) + ", column " +
+											 std::to_string(currentColumn()));
+				}
+
+				paramType = paramType + " or nil";
 			}
 
 			parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
@@ -564,6 +604,26 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 			fieldType = parseQualifiedName("struct field type");
 		}
 		// else: no type, must have default value for type inference
+
+		// Check for "or nil" suffix for optional struct fields
+		if (!fieldType.empty() && checkKeyword("or")) {
+			advance(); // consume 'or'
+			if (!checkKeyword("nil")) {
+				throw std::runtime_error("Expected 'nil' after 'or' in field type\n  Location: line " +
+										 std::to_string(currentLine()) + ", column " +
+										 std::to_string(currentColumn()));
+			}
+			advance(); // consume 'nil'
+
+			// Reject nested optionals
+			if (fieldType.find(" or nil") != std::string::npos) {
+				throw std::runtime_error("Cannot make optional type '" + fieldType + "' optional again\n  Location: line " +
+										 std::to_string(currentLine()) + ", column " +
+										 std::to_string(currentColumn()));
+			}
+
+			fieldType = fieldType + " or nil";
+		}
 
 		// Parse optional default value
 		std::unique_ptr<ExprAST> defaultValue = nullptr;
