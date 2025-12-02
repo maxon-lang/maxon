@@ -32,6 +32,8 @@ IntrinsicCodegenRegistry::IntrinsicCodegenRegistry() {
 		{"intrinsic_substring_with_iter_pos", &MIRCodeGenerator::intrinsic_substring_with_iter_pos},
 		{"intrinsic_substring_to_string", &MIRCodeGenerator::intrinsic_substring_to_string},
 		{"intrinsic_substring_slice", &MIRCodeGenerator::intrinsic_substring_slice},
+		{"intrinsic_substring_parent_managed", &MIRCodeGenerator::intrinsic_substring_parent_managed},
+		{"intrinsic_substring_byte_offset", &MIRCodeGenerator::intrinsic_substring_byte_offset},
 	};
 
 	// Populate methods_ by looking up codegen method names from IntrinsicRegistry

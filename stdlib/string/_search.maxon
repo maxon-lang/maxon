@@ -1,0 +1,135 @@
+// stdlib/string/_search.maxon
+// Internal search helpers for string types
+//
+// Purpose: Centralize string search algorithms to avoid duplication
+//          across string and substring types.
+//
+// Unified Implementation: Uses __substring_parent_managed() and
+//   __substring_byte_offset() intrinsics to allow substring to reuse
+//   the managed string implementation with offset adjustment.
+//
+// Note: All search methods take string (not substring) as the needle parameter,
+//       which simplifies implementation - we only need _ManagedString for needle.
+//
+// Maintenance: Single algorithm implementation - substring wrapper delegates
+//              to managed version with parent string and offset.
+
+// ============================================
+// startsWith helpers
+// ============================================
+
+// _starts_with_managed_range - Check if range in managed string starts with prefix
+function _starts_with_managed_range(haystack _ManagedString, offset int, len int, needle _ManagedString) bool
+	var prefixLen = __string_len(needle)
+
+	if prefixLen > len 'length_check'
+		return false
+	end 'length_check'
+
+	var i = 0
+	while i < prefixLen 'compare_loop'
+		if __string_byte_at(haystack, offset + i) != __string_byte_at(needle, i) 'byte_check'
+			return false
+		end 'byte_check'
+		i = i + 1
+	end 'compare_loop'
+	return true
+end '_starts_with_managed_range'
+
+// _starts_with_managed - Check if string starts with prefix
+export function _starts_with_managed(haystack _ManagedString, needle _ManagedString) bool
+	return _starts_with_managed_range(haystack, 0, __string_len(haystack), needle)
+end '_starts_with_managed'
+
+// _starts_with_substring - Check if substring starts with prefix
+export function _starts_with_substring(haystack substring, needle _ManagedString) bool
+	var parent = __substring_parent_managed(haystack)
+	var offset = __substring_byte_offset(haystack)
+	var len = __substring_len(haystack)
+	return _starts_with_managed_range(parent, offset, len, needle)
+end '_starts_with_substring'
+
+// ============================================
+// endsWith helpers
+// ============================================
+
+// _ends_with_managed_range - Check if range in managed string ends with suffix
+function _ends_with_managed_range(haystack _ManagedString, offset int, len int, needle _ManagedString) bool
+	var suffixLen = __string_len(needle)
+
+	if suffixLen > len 'length_check'
+		return false
+	end 'length_check'
+
+	var start = offset + (len - suffixLen)
+	var i = 0
+	while i < suffixLen 'compare_loop'
+		if __string_byte_at(haystack, start + i) != __string_byte_at(needle, i) 'byte_check'
+			return false
+		end 'byte_check'
+		i = i + 1
+	end 'compare_loop'
+	return true
+end '_ends_with_managed_range'
+
+// _ends_with_managed - Check if string ends with suffix
+export function _ends_with_managed(haystack _ManagedString, needle _ManagedString) bool
+	return _ends_with_managed_range(haystack, 0, __string_len(haystack), needle)
+end '_ends_with_managed'
+
+// _ends_with_substring - Check if substring ends with suffix
+export function _ends_with_substring(haystack substring, needle _ManagedString) bool
+	var parent = __substring_parent_managed(haystack)
+	var offset = __substring_byte_offset(haystack)
+	var len = __substring_len(haystack)
+	return _ends_with_managed_range(parent, offset, len, needle)
+end '_ends_with_substring'
+
+// ============================================
+// find helpers (naive string search)
+// ============================================
+
+// _find_managed_range - Find first occurrence of needle in range, return relative index or -1
+function _find_managed_range(haystack _ManagedString, offset int, len int, needle _ManagedString) int
+	var needleLen = __string_len(needle)
+
+	if needleLen == 0 'empty_needle'
+		return 0
+	end 'empty_needle'
+
+	if needleLen > len 'too_long'
+		return 0 - 1
+	end 'too_long'
+
+	var i = 0
+	while i <= len - needleLen 'search_loop'
+		var found = true
+		var j = 0
+		while j < needleLen 'compare_loop'
+			if __string_byte_at(haystack, offset + i + j) != __string_byte_at(needle, j) 'byte_check'
+				found = false
+				break 'compare_loop'
+			end 'byte_check'
+			j = j + 1
+		end 'compare_loop'
+
+		if found 'found_check'
+			return i
+		end 'found_check'
+		i = i + 1
+	end 'search_loop'
+	return 0 - 1
+end '_find_managed_range'
+
+// _find_managed - Find first occurrence of needle in string, return byte index or -1
+export function _find_managed(haystack _ManagedString, needle _ManagedString) int
+	return _find_managed_range(haystack, 0, __string_len(haystack), needle)
+end '_find_managed'
+
+// _find_substring - Find first occurrence of needle in substring, return byte index or -1
+export function _find_substring(haystack substring, needle _ManagedString) int
+	var parent = __substring_parent_managed(haystack)
+	var offset = __substring_byte_offset(haystack)
+	var len = __substring_len(haystack)
+	return _find_managed_range(parent, offset, len, needle)
+end '_find_substring'
