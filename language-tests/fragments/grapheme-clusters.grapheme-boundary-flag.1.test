@@ -7,7 +7,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 589
+; Instructions: 581
 
 %string = type { ptr, i32 }
 %ByteView = type { ptr, i32 }
@@ -113,139 +113,16 @@ define i32 @string._codepointBytes(ptr %self, i32 %pos) {
 entry0:
   %3 = getelementptr %string, ptr %self, i32 0, i32 0
   %4 = load ptr, ptr %3
-  %6 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 0
-  %7 = getelementptr %__unsized_array_byte, ptr %6, i32 0, i32 0
-  %8 = load ptr, ptr %7
-  %9 = sext i32 %pos to i64
-  %10 = getelementptr i8, ptr %8, i64 0, i64 %9
-  %11 = load i8, ptr %10
-  %12 = zext i8 %11 to i32
-  %15 = icmp slt i32 %12, 128
-  br i1 %15, label %then1, label %ifcont2
-then1:
-  ret i32 1
-ifcont2:
-  %17 = icmp slt i32 %12, 224
-  br i1 %17, label %then3, label %ifcont4
-then3:
-  ret i32 2
-ifcont4:
-  %19 = icmp slt i32 %12, 240
-  br i1 %19, label %then5, label %ifcont6
-then5:
-  ret i32 3
-ifcont6:
-  ret i32 4
+  %6 = call i32 @string._utf8_byte_length_at(ptr %4, i32 %pos)
+  ret i32 %6
 }
 
 define i32 @string._decodeCodepointAt(ptr %self, i32 %pos) {
 entry0:
   %3 = getelementptr %string, ptr %self, i32 0, i32 0
   %4 = load ptr, ptr %3
-  %6 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 0
-  %7 = getelementptr %__unsized_array_byte, ptr %6, i32 0, i32 0
-  %8 = load ptr, ptr %7
-  %9 = sext i32 %pos to i64
-  %10 = getelementptr i8, ptr %8, i64 0, i64 %9
-  %11 = load i8, ptr %10
-  %12 = zext i8 %11 to i32
-  %15 = icmp slt i32 %12, 128
-  br i1 %15, label %then1, label %ifcont2
-then1:
-  ret i32 %12
-ifcont2:
-  %18 = icmp slt i32 %12, 224
-  br i1 %18, label %then3, label %ifcont4
-then3:
-  %20 = getelementptr %string, ptr %self, i32 0, i32 0
-  %21 = load ptr, ptr %20
-  %23 = add i32 %pos, 1
-  %24 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 0
-  %25 = getelementptr %__unsized_array_byte, ptr %24, i32 0, i32 0
-  %26 = load ptr, ptr %25
-  %27 = sext i32 %23 to i64
-  %28 = getelementptr i8, ptr %26, i64 0, i64 %27
-  %29 = load i8, ptr %28
-  %30 = zext i8 %29 to i32
-  %33 = srem i32 %12, 32
-  %34 = shl i32 %33, 6
-  %36 = srem i32 %30, 64
-  %37 = add i32 %34, %36
-  ret i32 %37
-ifcont4:
-  %39 = icmp slt i32 %12, 240
-  br i1 %39, label %then5, label %ifcont6
-then5:
-  %41 = getelementptr %string, ptr %self, i32 0, i32 0
-  %42 = load ptr, ptr %41
-  %44 = add i32 %pos, 1
-  %45 = getelementptr %__ManagedStringData, ptr %42, i32 0, i32 0
-  %46 = getelementptr %__unsized_array_byte, ptr %45, i32 0, i32 0
-  %47 = load ptr, ptr %46
-  %48 = sext i32 %44 to i64
-  %49 = getelementptr i8, ptr %47, i64 0, i64 %48
-  %50 = load i8, ptr %49
-  %51 = zext i8 %50 to i32
-  %54 = getelementptr %string, ptr %self, i32 0, i32 0
-  %55 = load ptr, ptr %54
-  %57 = add i32 %pos, 2
-  %58 = getelementptr %__ManagedStringData, ptr %55, i32 0, i32 0
-  %59 = getelementptr %__unsized_array_byte, ptr %58, i32 0, i32 0
-  %60 = load ptr, ptr %59
-  %61 = sext i32 %57 to i64
-  %62 = getelementptr i8, ptr %60, i64 0, i64 %61
-  %63 = load i8, ptr %62
-  %64 = zext i8 %63 to i32
-  %67 = srem i32 %12, 16
-  %68 = shl i32 %67, 12
-  %70 = srem i32 %51, 64
-  %71 = shl i32 %70, 6
-  %72 = add i32 %68, %71
-  %74 = srem i32 %64, 64
-  %75 = add i32 %72, %74
-  ret i32 %75
-ifcont6:
-  %77 = getelementptr %string, ptr %self, i32 0, i32 0
-  %78 = load ptr, ptr %77
-  %80 = add i32 %pos, 1
-  %81 = getelementptr %__ManagedStringData, ptr %78, i32 0, i32 0
-  %82 = getelementptr %__unsized_array_byte, ptr %81, i32 0, i32 0
-  %83 = load ptr, ptr %82
-  %84 = sext i32 %80 to i64
-  %85 = getelementptr i8, ptr %83, i64 0, i64 %84
-  %86 = load i8, ptr %85
-  %87 = zext i8 %86 to i32
-  %90 = getelementptr %string, ptr %self, i32 0, i32 0
-  %91 = load ptr, ptr %90
-  %93 = add i32 %pos, 2
-  %94 = getelementptr %__ManagedStringData, ptr %91, i32 0, i32 0
-  %95 = getelementptr %__unsized_array_byte, ptr %94, i32 0, i32 0
-  %96 = load ptr, ptr %95
-  %97 = sext i32 %93 to i64
-  %98 = getelementptr i8, ptr %96, i64 0, i64 %97
-  %99 = load i8, ptr %98
-  %100 = zext i8 %99 to i32
-  %103 = getelementptr %string, ptr %self, i32 0, i32 0
-  %104 = load ptr, ptr %103
-  %106 = add i32 %pos, 3
-  %107 = getelementptr %__ManagedStringData, ptr %104, i32 0, i32 0
-  %108 = getelementptr %__unsized_array_byte, ptr %107, i32 0, i32 0
-  %109 = load ptr, ptr %108
-  %110 = sext i32 %106 to i64
-  %111 = getelementptr i8, ptr %109, i64 0, i64 %110
-  %112 = load i8, ptr %111
-  %113 = zext i8 %112 to i32
-  %116 = srem i32 %12, 8
-  %117 = shl i32 %116, 18
-  %119 = srem i32 %87, 64
-  %120 = shl i32 %119, 12
-  %121 = add i32 %117, %120
-  %123 = srem i32 %100, 64
-  %124 = shl i32 %123, 6
-  %125 = add i32 %121, %124
-  %127 = srem i32 %113, 64
-  %128 = add i32 %125, %127
-  ret i32 %128
+  %6 = call i32 @string._utf8_decode_at(ptr %4, i32 %pos)
+  ret i32 %6
 }
 
 define %ByteView @string.bytes(ptr %self) {
@@ -457,6 +334,129 @@ loop11:
   br label %whilecond10
 afterloop12:
   ret i32 %48
+}
+
+define i32 @string._utf8_byte_length_at(ptr %managed, i32 %pos) {
+entry0:
+  %4 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
+  %5 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 0
+  %6 = load ptr, ptr %5
+  %7 = sext i32 %pos to i64
+  %8 = getelementptr i8, ptr %6, i64 0, i64 %7
+  %9 = load i8, ptr %8
+  %10 = zext i8 %9 to i32
+  %13 = icmp slt i32 %10, 128
+  br i1 %13, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  %15 = icmp slt i32 %10, 224
+  br i1 %15, label %then3, label %ifcont4
+then3:
+  ret i32 2
+ifcont4:
+  %17 = icmp slt i32 %10, 240
+  br i1 %17, label %then5, label %ifcont6
+then5:
+  ret i32 3
+ifcont6:
+  ret i32 4
+}
+
+define i32 @string._utf8_decode_at(ptr %managed, i32 %pos) {
+entry0:
+  %4 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
+  %5 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 0
+  %6 = load ptr, ptr %5
+  %7 = sext i32 %pos to i64
+  %8 = getelementptr i8, ptr %6, i64 0, i64 %7
+  %9 = load i8, ptr %8
+  %10 = zext i8 %9 to i32
+  %13 = icmp slt i32 %10, 128
+  br i1 %13, label %then1, label %ifcont2
+then1:
+  ret i32 %10
+ifcont2:
+  %16 = icmp slt i32 %10, 224
+  br i1 %16, label %then3, label %ifcont4
+then3:
+  %19 = add i32 %pos, 1
+  %20 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
+  %21 = getelementptr %__unsized_array_byte, ptr %20, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = sext i32 %19 to i64
+  %24 = getelementptr i8, ptr %22, i64 0, i64 %23
+  %25 = load i8, ptr %24
+  %26 = zext i8 %25 to i32
+  %29 = srem i32 %10, 32
+  %30 = shl i32 %29, 6
+  %32 = srem i32 %26, 64
+  %33 = add i32 %30, %32
+  ret i32 %33
+ifcont4:
+  %35 = icmp slt i32 %10, 240
+  br i1 %35, label %then5, label %ifcont6
+then5:
+  %38 = add i32 %pos, 1
+  %39 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
+  %40 = getelementptr %__unsized_array_byte, ptr %39, i32 0, i32 0
+  %41 = load ptr, ptr %40
+  %42 = sext i32 %38 to i64
+  %43 = getelementptr i8, ptr %41, i64 0, i64 %42
+  %44 = load i8, ptr %43
+  %45 = zext i8 %44 to i32
+  %49 = add i32 %pos, 2
+  %50 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
+  %51 = getelementptr %__unsized_array_byte, ptr %50, i32 0, i32 0
+  %52 = load ptr, ptr %51
+  %53 = sext i32 %49 to i64
+  %54 = getelementptr i8, ptr %52, i64 0, i64 %53
+  %55 = load i8, ptr %54
+  %56 = zext i8 %55 to i32
+  %59 = srem i32 %10, 16
+  %60 = shl i32 %59, 12
+  %62 = srem i32 %45, 64
+  %63 = shl i32 %62, 6
+  %64 = add i32 %60, %63
+  %66 = srem i32 %56, 64
+  %67 = add i32 %64, %66
+  ret i32 %67
+ifcont6:
+  %70 = add i32 %pos, 1
+  %71 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
+  %72 = getelementptr %__unsized_array_byte, ptr %71, i32 0, i32 0
+  %73 = load ptr, ptr %72
+  %74 = sext i32 %70 to i64
+  %75 = getelementptr i8, ptr %73, i64 0, i64 %74
+  %76 = load i8, ptr %75
+  %77 = zext i8 %76 to i32
+  %81 = add i32 %pos, 2
+  %82 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
+  %83 = getelementptr %__unsized_array_byte, ptr %82, i32 0, i32 0
+  %84 = load ptr, ptr %83
+  %85 = sext i32 %81 to i64
+  %86 = getelementptr i8, ptr %84, i64 0, i64 %85
+  %87 = load i8, ptr %86
+  %88 = zext i8 %87 to i32
+  %92 = add i32 %pos, 3
+  %93 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
+  %94 = getelementptr %__unsized_array_byte, ptr %93, i32 0, i32 0
+  %95 = load ptr, ptr %94
+  %96 = sext i32 %92 to i64
+  %97 = getelementptr i8, ptr %95, i64 0, i64 %96
+  %98 = load i8, ptr %97
+  %99 = zext i8 %98 to i32
+  %102 = srem i32 %10, 8
+  %103 = shl i32 %102, 18
+  %105 = srem i32 %77, 64
+  %106 = shl i32 %105, 12
+  %107 = add i32 %103, %106
+  %109 = srem i32 %88, 64
+  %110 = shl i32 %109, 6
+  %111 = add i32 %107, %110
+  %113 = srem i32 %99, 64
+  %114 = add i32 %111, %113
+  ret i32 %114
 }
 
 define i32 @unicode.grapheme_break_property(i32 %cp) {
@@ -819,7 +819,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 906
+; Instructions: 910
 
 %string = type { ptr, i32 }
 %ByteView = type { ptr, i32 }
@@ -1003,34 +1003,8 @@ entry0:
   %3 = getelementptr %string, ptr %2, i32 0, i32 0
   %4 = load ptr, ptr %3
   %5 = load i32, ptr %1
-  %6 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 0
-  %7 = getelementptr %__unsized_array_byte, ptr %6, i32 0, i32 0
-  %8 = load ptr, ptr %7
-  %9 = sext i32 %5 to i64
-  %10 = getelementptr i8, ptr %8, i64 0, i64 %9
-  %11 = load i8, ptr %10
-  %12 = zext i8 %11 to i32
-  %13 = alloca i32
-  store i32 %12, ptr %13
-  %14 = load i32, ptr %13
-  %15 = icmp slt i32 %14, 128
-  br i1 %15, label %then1, label %ifcont2
-then1:
-  ret i32 1
-ifcont2:
-  %16 = load i32, ptr %13
-  %17 = icmp slt i32 %16, 224
-  br i1 %17, label %then3, label %ifcont4
-then3:
-  ret i32 2
-ifcont4:
-  %18 = load i32, ptr %13
-  %19 = icmp slt i32 %18, 240
-  br i1 %19, label %then5, label %ifcont6
-then5:
-  ret i32 3
-ifcont6:
-  ret i32 4
+  %6 = call i32 @string._utf8_byte_length_at(ptr %4, i32 %5)
+  ret i32 %6
 }
 
 define i32 @string._decodeCodepointAt(ptr %self, i32 %pos) {
@@ -1043,149 +1017,8 @@ entry0:
   %3 = getelementptr %string, ptr %2, i32 0, i32 0
   %4 = load ptr, ptr %3
   %5 = load i32, ptr %1
-  %6 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 0
-  %7 = getelementptr %__unsized_array_byte, ptr %6, i32 0, i32 0
-  %8 = load ptr, ptr %7
-  %9 = sext i32 %5 to i64
-  %10 = getelementptr i8, ptr %8, i64 0, i64 %9
-  %11 = load i8, ptr %10
-  %12 = zext i8 %11 to i32
-  %13 = alloca i32
-  store i32 %12, ptr %13
-  %14 = load i32, ptr %13
-  %15 = icmp slt i32 %14, 128
-  br i1 %15, label %then1, label %ifcont2
-then1:
-  %16 = load i32, ptr %13
-  ret i32 %16
-ifcont2:
-  %17 = load i32, ptr %13
-  %18 = icmp slt i32 %17, 224
-  br i1 %18, label %then3, label %ifcont4
-then3:
-  %19 = load ptr, ptr %0
-  %20 = getelementptr %string, ptr %19, i32 0, i32 0
-  %21 = load ptr, ptr %20
-  %22 = load i32, ptr %1
-  %23 = add i32 %22, 1
-  %24 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 0
-  %25 = getelementptr %__unsized_array_byte, ptr %24, i32 0, i32 0
-  %26 = load ptr, ptr %25
-  %27 = sext i32 %23 to i64
-  %28 = getelementptr i8, ptr %26, i64 0, i64 %27
-  %29 = load i8, ptr %28
-  %30 = zext i8 %29 to i32
-  %31 = alloca i32
-  store i32 %30, ptr %31
-  %32 = load i32, ptr %13
-  %33 = srem i32 %32, 32
-  %34 = mul i32 %33, 64
-  %35 = load i32, ptr %31
-  %36 = srem i32 %35, 64
-  %37 = add i32 %34, %36
-  ret i32 %37
-ifcont4:
-  %38 = load i32, ptr %13
-  %39 = icmp slt i32 %38, 240
-  br i1 %39, label %then5, label %ifcont6
-then5:
-  %40 = load ptr, ptr %0
-  %41 = getelementptr %string, ptr %40, i32 0, i32 0
-  %42 = load ptr, ptr %41
-  %43 = load i32, ptr %1
-  %44 = add i32 %43, 1
-  %45 = getelementptr %__ManagedStringData, ptr %42, i32 0, i32 0
-  %46 = getelementptr %__unsized_array_byte, ptr %45, i32 0, i32 0
-  %47 = load ptr, ptr %46
-  %48 = sext i32 %44 to i64
-  %49 = getelementptr i8, ptr %47, i64 0, i64 %48
-  %50 = load i8, ptr %49
-  %51 = zext i8 %50 to i32
-  %52 = alloca i32
-  store i32 %51, ptr %52
-  %53 = load ptr, ptr %0
-  %54 = getelementptr %string, ptr %53, i32 0, i32 0
-  %55 = load ptr, ptr %54
-  %56 = load i32, ptr %1
-  %57 = add i32 %56, 2
-  %58 = getelementptr %__ManagedStringData, ptr %55, i32 0, i32 0
-  %59 = getelementptr %__unsized_array_byte, ptr %58, i32 0, i32 0
-  %60 = load ptr, ptr %59
-  %61 = sext i32 %57 to i64
-  %62 = getelementptr i8, ptr %60, i64 0, i64 %61
-  %63 = load i8, ptr %62
-  %64 = zext i8 %63 to i32
-  %65 = alloca i32
-  store i32 %64, ptr %65
-  %66 = load i32, ptr %13
-  %67 = srem i32 %66, 16
-  %68 = mul i32 %67, 4096
-  %69 = load i32, ptr %52
-  %70 = srem i32 %69, 64
-  %71 = mul i32 %70, 64
-  %72 = add i32 %68, %71
-  %73 = load i32, ptr %65
-  %74 = srem i32 %73, 64
-  %75 = add i32 %72, %74
-  ret i32 %75
-ifcont6:
-  %76 = load ptr, ptr %0
-  %77 = getelementptr %string, ptr %76, i32 0, i32 0
-  %78 = load ptr, ptr %77
-  %79 = load i32, ptr %1
-  %80 = add i32 %79, 1
-  %81 = getelementptr %__ManagedStringData, ptr %78, i32 0, i32 0
-  %82 = getelementptr %__unsized_array_byte, ptr %81, i32 0, i32 0
-  %83 = load ptr, ptr %82
-  %84 = sext i32 %80 to i64
-  %85 = getelementptr i8, ptr %83, i64 0, i64 %84
-  %86 = load i8, ptr %85
-  %87 = zext i8 %86 to i32
-  %88 = alloca i32
-  store i32 %87, ptr %88
-  %89 = load ptr, ptr %0
-  %90 = getelementptr %string, ptr %89, i32 0, i32 0
-  %91 = load ptr, ptr %90
-  %92 = load i32, ptr %1
-  %93 = add i32 %92, 2
-  %94 = getelementptr %__ManagedStringData, ptr %91, i32 0, i32 0
-  %95 = getelementptr %__unsized_array_byte, ptr %94, i32 0, i32 0
-  %96 = load ptr, ptr %95
-  %97 = sext i32 %93 to i64
-  %98 = getelementptr i8, ptr %96, i64 0, i64 %97
-  %99 = load i8, ptr %98
-  %100 = zext i8 %99 to i32
-  %101 = alloca i32
-  store i32 %100, ptr %101
-  %102 = load ptr, ptr %0
-  %103 = getelementptr %string, ptr %102, i32 0, i32 0
-  %104 = load ptr, ptr %103
-  %105 = load i32, ptr %1
-  %106 = add i32 %105, 3
-  %107 = getelementptr %__ManagedStringData, ptr %104, i32 0, i32 0
-  %108 = getelementptr %__unsized_array_byte, ptr %107, i32 0, i32 0
-  %109 = load ptr, ptr %108
-  %110 = sext i32 %106 to i64
-  %111 = getelementptr i8, ptr %109, i64 0, i64 %110
-  %112 = load i8, ptr %111
-  %113 = zext i8 %112 to i32
-  %114 = alloca i32
-  store i32 %113, ptr %114
-  %115 = load i32, ptr %13
-  %116 = srem i32 %115, 8
-  %117 = mul i32 %116, 262144
-  %118 = load i32, ptr %88
-  %119 = srem i32 %118, 64
-  %120 = mul i32 %119, 4096
-  %121 = add i32 %117, %120
-  %122 = load i32, ptr %101
-  %123 = srem i32 %122, 64
-  %124 = mul i32 %123, 64
-  %125 = add i32 %121, %124
-  %126 = load i32, ptr %114
-  %127 = srem i32 %126, 64
-  %128 = add i32 %125, %127
-  ret i32 %128
+  %6 = call i32 @string._utf8_decode_at(ptr %4, i32 %5)
+  ret i32 %6
 }
 
 define %ByteView @string.bytes(ptr %self) {
@@ -1482,6 +1315,185 @@ loop11:
 afterloop12:
   %66 = load i32, ptr %49
   ret i32 %66
+}
+
+define i32 @string._utf8_byte_length_at(ptr %managed, i32 %pos) {
+entry0:
+  %0 = alloca ptr
+  store ptr %managed, ptr %0
+  %1 = alloca i32
+  store i32 %pos, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = load i32, ptr %1
+  %4 = getelementptr %__ManagedStringData, ptr %2, i32 0, i32 0
+  %5 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 0
+  %6 = load ptr, ptr %5
+  %7 = sext i32 %3 to i64
+  %8 = getelementptr i8, ptr %6, i64 0, i64 %7
+  %9 = load i8, ptr %8
+  %10 = zext i8 %9 to i32
+  %11 = alloca i32
+  store i32 %10, ptr %11
+  %12 = load i32, ptr %11
+  %13 = icmp slt i32 %12, 128
+  br i1 %13, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  %14 = load i32, ptr %11
+  %15 = icmp slt i32 %14, 224
+  br i1 %15, label %then3, label %ifcont4
+then3:
+  ret i32 2
+ifcont4:
+  %16 = load i32, ptr %11
+  %17 = icmp slt i32 %16, 240
+  br i1 %17, label %then5, label %ifcont6
+then5:
+  ret i32 3
+ifcont6:
+  ret i32 4
+}
+
+define i32 @string._utf8_decode_at(ptr %managed, i32 %pos) {
+entry0:
+  %0 = alloca ptr
+  store ptr %managed, ptr %0
+  %1 = alloca i32
+  store i32 %pos, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = load i32, ptr %1
+  %4 = getelementptr %__ManagedStringData, ptr %2, i32 0, i32 0
+  %5 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 0
+  %6 = load ptr, ptr %5
+  %7 = sext i32 %3 to i64
+  %8 = getelementptr i8, ptr %6, i64 0, i64 %7
+  %9 = load i8, ptr %8
+  %10 = zext i8 %9 to i32
+  %11 = alloca i32
+  store i32 %10, ptr %11
+  %12 = load i32, ptr %11
+  %13 = icmp slt i32 %12, 128
+  br i1 %13, label %then1, label %ifcont2
+then1:
+  %14 = load i32, ptr %11
+  ret i32 %14
+ifcont2:
+  %15 = load i32, ptr %11
+  %16 = icmp slt i32 %15, 224
+  br i1 %16, label %then3, label %ifcont4
+then3:
+  %17 = load ptr, ptr %0
+  %18 = load i32, ptr %1
+  %19 = add i32 %18, 1
+  %20 = getelementptr %__ManagedStringData, ptr %17, i32 0, i32 0
+  %21 = getelementptr %__unsized_array_byte, ptr %20, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = sext i32 %19 to i64
+  %24 = getelementptr i8, ptr %22, i64 0, i64 %23
+  %25 = load i8, ptr %24
+  %26 = zext i8 %25 to i32
+  %27 = alloca i32
+  store i32 %26, ptr %27
+  %28 = load i32, ptr %11
+  %29 = srem i32 %28, 32
+  %30 = mul i32 %29, 64
+  %31 = load i32, ptr %27
+  %32 = srem i32 %31, 64
+  %33 = add i32 %30, %32
+  ret i32 %33
+ifcont4:
+  %34 = load i32, ptr %11
+  %35 = icmp slt i32 %34, 240
+  br i1 %35, label %then5, label %ifcont6
+then5:
+  %36 = load ptr, ptr %0
+  %37 = load i32, ptr %1
+  %38 = add i32 %37, 1
+  %39 = getelementptr %__ManagedStringData, ptr %36, i32 0, i32 0
+  %40 = getelementptr %__unsized_array_byte, ptr %39, i32 0, i32 0
+  %41 = load ptr, ptr %40
+  %42 = sext i32 %38 to i64
+  %43 = getelementptr i8, ptr %41, i64 0, i64 %42
+  %44 = load i8, ptr %43
+  %45 = zext i8 %44 to i32
+  %46 = alloca i32
+  store i32 %45, ptr %46
+  %47 = load ptr, ptr %0
+  %48 = load i32, ptr %1
+  %49 = add i32 %48, 2
+  %50 = getelementptr %__ManagedStringData, ptr %47, i32 0, i32 0
+  %51 = getelementptr %__unsized_array_byte, ptr %50, i32 0, i32 0
+  %52 = load ptr, ptr %51
+  %53 = sext i32 %49 to i64
+  %54 = getelementptr i8, ptr %52, i64 0, i64 %53
+  %55 = load i8, ptr %54
+  %56 = zext i8 %55 to i32
+  %57 = alloca i32
+  store i32 %56, ptr %57
+  %58 = load i32, ptr %11
+  %59 = srem i32 %58, 16
+  %60 = mul i32 %59, 4096
+  %61 = load i32, ptr %46
+  %62 = srem i32 %61, 64
+  %63 = mul i32 %62, 64
+  %64 = add i32 %60, %63
+  %65 = load i32, ptr %57
+  %66 = srem i32 %65, 64
+  %67 = add i32 %64, %66
+  ret i32 %67
+ifcont6:
+  %68 = load ptr, ptr %0
+  %69 = load i32, ptr %1
+  %70 = add i32 %69, 1
+  %71 = getelementptr %__ManagedStringData, ptr %68, i32 0, i32 0
+  %72 = getelementptr %__unsized_array_byte, ptr %71, i32 0, i32 0
+  %73 = load ptr, ptr %72
+  %74 = sext i32 %70 to i64
+  %75 = getelementptr i8, ptr %73, i64 0, i64 %74
+  %76 = load i8, ptr %75
+  %77 = zext i8 %76 to i32
+  %78 = alloca i32
+  store i32 %77, ptr %78
+  %79 = load ptr, ptr %0
+  %80 = load i32, ptr %1
+  %81 = add i32 %80, 2
+  %82 = getelementptr %__ManagedStringData, ptr %79, i32 0, i32 0
+  %83 = getelementptr %__unsized_array_byte, ptr %82, i32 0, i32 0
+  %84 = load ptr, ptr %83
+  %85 = sext i32 %81 to i64
+  %86 = getelementptr i8, ptr %84, i64 0, i64 %85
+  %87 = load i8, ptr %86
+  %88 = zext i8 %87 to i32
+  %89 = alloca i32
+  store i32 %88, ptr %89
+  %90 = load ptr, ptr %0
+  %91 = load i32, ptr %1
+  %92 = add i32 %91, 3
+  %93 = getelementptr %__ManagedStringData, ptr %90, i32 0, i32 0
+  %94 = getelementptr %__unsized_array_byte, ptr %93, i32 0, i32 0
+  %95 = load ptr, ptr %94
+  %96 = sext i32 %92 to i64
+  %97 = getelementptr i8, ptr %95, i64 0, i64 %96
+  %98 = load i8, ptr %97
+  %99 = zext i8 %98 to i32
+  %100 = alloca i32
+  store i32 %99, ptr %100
+  %101 = load i32, ptr %11
+  %102 = srem i32 %101, 8
+  %103 = mul i32 %102, 262144
+  %104 = load i32, ptr %78
+  %105 = srem i32 %104, 64
+  %106 = mul i32 %105, 4096
+  %107 = add i32 %103, %106
+  %108 = load i32, ptr %89
+  %109 = srem i32 %108, 64
+  %110 = mul i32 %109, 64
+  %111 = add i32 %107, %110
+  %112 = load i32, ptr %100
+  %113 = srem i32 %112, 64
+  %114 = add i32 %111, %113
+  ret i32 %114
 }
 
 define i32 @unicode.grapheme_break_property(i32 %cp) {

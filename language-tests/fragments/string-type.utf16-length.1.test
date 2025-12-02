@@ -7,7 +7,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 239
+; Instructions: 232
 
 %string = type { ptr, i32 }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
@@ -71,58 +71,28 @@ entry0:
   %7 = load i32, ptr %6
   br label %whilecond1
 whilecond1:
-  %51 = phi i32 [ 0, %entry0 ], [ %52, %ifcont5 ]
-  %47 = phi i32 [ 0, %entry0 ], [ %48, %ifcont5 ]
-  %11 = icmp slt i32 %51, %7
+  %30 = phi i32 [ 0, %entry0 ], [ %26, %ifcont5 ]
+  %28 = phi i32 [ 0, %entry0 ], [ %29, %ifcont5 ]
+  %11 = icmp slt i32 %30, %7
   br i1 %11, label %loop2, label %afterloop3
 loop2:
   %13 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
   %14 = load ptr, ptr %13
-  %16 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 0
-  %17 = getelementptr %__unsized_array_byte, ptr %16, i32 0, i32 0
-  %18 = load ptr, ptr %17
-  %19 = sext i32 %51 to i64
-  %20 = getelementptr i8, ptr %18, i64 0, i64 %19
-  %21 = load i8, ptr %20
-  %22 = zext i8 %21 to i32
-  %25 = icmp slt i32 %22, 128
-  br i1 %25, label %then4, label %else6
+  %16 = call i32 @string._utf8_byte_length_at(ptr %14, i32 %30)
+  %19 = icmp eq i32 %16, 4
+  br i1 %19, label %then4, label %else6
 afterloop3:
-  ret i32 %47
+  ret i32 %28
 then4:
-  %27 = add i32 %47, 1
-  %29 = add i32 %51, 1
+  %21 = add i32 %28, 2
   br label %ifcont5
 ifcont5:
-  %52 = phi i32 [ %29, %then4 ], [ %53, %ifcont8 ]
-  %48 = phi i32 [ %27, %then4 ], [ %49, %ifcont8 ]
+  %29 = phi i32 [ %21, %then4 ], [ %23, %else6 ]
+  %26 = add i32 %30, %16
   br label %whilecond1
 else6:
-  %31 = icmp slt i32 %22, 224
-  br i1 %31, label %then7, label %else9
-then7:
-  %33 = add i32 %47, 1
-  %35 = add i32 %51, 2
-  br label %ifcont8
-ifcont8:
-  %53 = phi i32 [ %35, %then7 ], [ %54, %ifcont11 ]
-  %49 = phi i32 [ %33, %then7 ], [ %50, %ifcont11 ]
+  %23 = add i32 %28, 1
   br label %ifcont5
-else9:
-  %37 = icmp slt i32 %22, 240
-  br i1 %37, label %then10, label %else12
-then10:
-  %39 = add i32 %47, 1
-  %41 = add i32 %51, 3
-  br label %ifcont11
-ifcont11:
-  %54 = phi i32 [ %41, %then10 ], [ %45, %else12 ]
-  %50 = phi i32 [ %39, %then10 ], [ %43, %else12 ]
-  br label %ifcont8
-else12:
-  %43 = add i32 %47, 2
-  %45 = add i32 %51, 4
-  br label %ifcont11
 }
 
 define i32 @main() {
@@ -318,6 +288,33 @@ afterloop12:
   ret i32 %48
 }
 
+define i32 @string._utf8_byte_length_at(ptr %managed, i32 %pos) {
+entry0:
+  %4 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
+  %5 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 0
+  %6 = load ptr, ptr %5
+  %7 = sext i32 %pos to i64
+  %8 = getelementptr i8, ptr %6, i64 0, i64 %7
+  %9 = load i8, ptr %8
+  %10 = zext i8 %9 to i32
+  %13 = icmp slt i32 %10, 128
+  br i1 %13, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  %15 = icmp slt i32 %10, 224
+  br i1 %15, label %then3, label %ifcont4
+then3:
+  ret i32 2
+ifcont4:
+  %17 = icmp slt i32 %10, 240
+  br i1 %17, label %then5, label %ifcont6
+then5:
+  ret i32 3
+ifcont6:
+  ret i32 4
+}
+
 declare void @_managed_string_retain(ptr %arg0)
 
 declare ptr @malloc(i64 %arg0)
@@ -341,7 +338,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 345
+; Instructions: 343
 
 %string = type { ptr, i32 }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
@@ -429,67 +426,31 @@ loop2:
   %13 = getelementptr %UTF16View, ptr %12, i32 0, i32 0
   %14 = load ptr, ptr %13
   %15 = load i32, ptr %2
-  %16 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 0
-  %17 = getelementptr %__unsized_array_byte, ptr %16, i32 0, i32 0
-  %18 = load ptr, ptr %17
-  %19 = sext i32 %15 to i64
-  %20 = getelementptr i8, ptr %18, i64 0, i64 %19
-  %21 = load i8, ptr %20
-  %22 = zext i8 %21 to i32
-  %23 = alloca i32
-  store i32 %22, ptr %23
-  %24 = load i32, ptr %23
-  %25 = icmp slt i32 %24, 128
-  br i1 %25, label %then4, label %else6
+  %16 = call i32 @string._utf8_byte_length_at(ptr %14, i32 %15)
+  %17 = alloca i32
+  store i32 %16, ptr %17
+  %18 = load i32, ptr %17
+  %19 = icmp eq i32 %18, 4
+  br i1 %19, label %then4, label %else6
 afterloop3:
-  %46 = load i32, ptr %1
-  ret i32 %46
+  %27 = load i32, ptr %1
+  ret i32 %27
 then4:
-  %26 = load i32, ptr %1
-  %27 = add i32 %26, 1
-  store i32 %27, ptr %1
-  %28 = load i32, ptr %2
-  %29 = add i32 %28, 1
-  store i32 %29, ptr %2
+  %20 = load i32, ptr %1
+  %21 = add i32 %20, 2
+  store i32 %21, ptr %1
   br label %ifcont5
 ifcont5:
+  %24 = load i32, ptr %2
+  %25 = load i32, ptr %17
+  %26 = add i32 %24, %25
+  store i32 %26, ptr %2
   br label %whilecond1
 else6:
-  %30 = load i32, ptr %23
-  %31 = icmp slt i32 %30, 224
-  br i1 %31, label %then7, label %else9
-then7:
-  %32 = load i32, ptr %1
-  %33 = add i32 %32, 1
-  store i32 %33, ptr %1
-  %34 = load i32, ptr %2
-  %35 = add i32 %34, 2
-  store i32 %35, ptr %2
-  br label %ifcont8
-ifcont8:
+  %22 = load i32, ptr %1
+  %23 = add i32 %22, 1
+  store i32 %23, ptr %1
   br label %ifcont5
-else9:
-  %36 = load i32, ptr %23
-  %37 = icmp slt i32 %36, 240
-  br i1 %37, label %then10, label %else12
-then10:
-  %38 = load i32, ptr %1
-  %39 = add i32 %38, 1
-  store i32 %39, ptr %1
-  %40 = load i32, ptr %2
-  %41 = add i32 %40, 3
-  store i32 %41, ptr %2
-  br label %ifcont11
-ifcont11:
-  br label %ifcont8
-else12:
-  %42 = load i32, ptr %1
-  %43 = add i32 %42, 2
-  store i32 %43, ptr %1
-  %44 = load i32, ptr %2
-  %45 = add i32 %44, 4
-  store i32 %45, ptr %2
-  br label %ifcont11
 }
 
 define i32 @main() {
@@ -756,6 +717,44 @@ loop11:
 afterloop12:
   %66 = load i32, ptr %49
   ret i32 %66
+}
+
+define i32 @string._utf8_byte_length_at(ptr %managed, i32 %pos) {
+entry0:
+  %0 = alloca ptr
+  store ptr %managed, ptr %0
+  %1 = alloca i32
+  store i32 %pos, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = load i32, ptr %1
+  %4 = getelementptr %__ManagedStringData, ptr %2, i32 0, i32 0
+  %5 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 0
+  %6 = load ptr, ptr %5
+  %7 = sext i32 %3 to i64
+  %8 = getelementptr i8, ptr %6, i64 0, i64 %7
+  %9 = load i8, ptr %8
+  %10 = zext i8 %9 to i32
+  %11 = alloca i32
+  store i32 %10, ptr %11
+  %12 = load i32, ptr %11
+  %13 = icmp slt i32 %12, 128
+  br i1 %13, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  %14 = load i32, ptr %11
+  %15 = icmp slt i32 %14, 224
+  br i1 %15, label %then3, label %ifcont4
+then3:
+  ret i32 2
+ifcont4:
+  %16 = load i32, ptr %11
+  %17 = icmp slt i32 %16, 240
+  br i1 %17, label %then5, label %ifcont6
+then5:
+  ret i32 3
+ifcont6:
+  ret i32 4
 }
 
 declare void @_managed_string_retain(ptr %arg0)
