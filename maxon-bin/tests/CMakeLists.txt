@@ -26,6 +26,20 @@ set(BACKEND_SOURCES
     ../mir/mir_builder.cpp
     ../mir/mir_parser.cpp
     ../mir/optimizer.cpp
+    ../mir/optimizer_utils.cpp
+    ../mir/dominance.cpp
+    ../mir/opt_constant_folding.cpp
+    ../mir/opt_constant_propagation.cpp
+    ../mir/opt_dead_code_elim.cpp
+    ../mir/opt_unreachable_block_elim.cpp
+    ../mir/opt_strength_reduction.cpp
+    ../mir/opt_algebraic_simplification.cpp
+    ../mir/opt_function_inlining.cpp
+    ../mir/opt_redundant_load_store.cpp
+    ../mir/opt_copy_propagation.cpp
+    ../mir/opt_phi_elimination.cpp
+    ../mir/opt_mem2reg.cpp
+    ../mir/memory_ssa.cpp
     ../backend/x86_encoding.cpp
     ../backend/x86_codegen.cpp
     ../backend/regalloc.cpp
@@ -47,7 +61,13 @@ set(FRONTEND_SOURCES
     ../semantic_analyzer/semantic_analyzer_stmt.cpp
     ../codegen_mir.cpp
     ../codegen_mir/codegen_mir_expr.cpp
+    ../codegen_mir/codegen_mir_expr_string.cpp
+    ../codegen_mir/codegen_mir_expr_array.cpp
+    ../codegen_mir/codegen_mir_expr_map.cpp
     ../codegen_mir/codegen_mir_stmt.cpp
+    ../codegen_mir/codegen_mir_stmt_decl.cpp
+    ../codegen_mir/codegen_mir_stmt_assign.cpp
+    ../codegen_mir/codegen_mir_stmt_loop.cpp
     ../codegen_mir/codegen_mir_function.cpp
     ../codegen_mir/codegen_mir_output.cpp
 )

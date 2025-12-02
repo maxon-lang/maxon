@@ -132,6 +132,20 @@ class MIRCodeGenerator {
 	mir::MIRValue *generateExpr(ExprAST *expr);
 	void generateStmt(StmtAST *stmt, mir::MIRFunction *function);
 	void generateFunction(FunctionAST *func, const std::string &namespaceName = "");
+
+	// Statement generation helpers (in separate files)
+	void generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction *function);
+	void generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction *function);
+	void generateAssign(AssignStmtAST *assign, mir::MIRFunction *function);
+	void generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir::MIRFunction *function);
+	void generateArrayMemberAssign(ArrayMemberAssignStmtAST *arrayMemberAssign, mir::MIRFunction *function);
+	void generateMemberAssign(MemberAssignStmtAST *memberAssign, mir::MIRFunction *function);
+	void generateMemberArrayAssign(MemberArrayAssignStmtAST *memberArrayAssign, mir::MIRFunction *function);
+	void generateIf(IfStmtAST *ifStmt, mir::MIRFunction *function);
+	void generateWhile(WhileStmtAST *whileStmt, mir::MIRFunction *function);
+	void generateFor(ForStmtAST *forStmt, mir::MIRFunction *function);
+	void generateBreak(BreakStmtAST *breakStmt, mir::MIRFunction *function);
+	void generateContinue(ContinueStmtAST *continueStmt, mir::MIRFunction *function);
 	void generateFunctionWithTypeBindings(FunctionAST *func, const std::string &namespaceName,
 										  const std::map<std::string, std::string> &typeBindings,
 										  const std::string &specializedReceiverType);
