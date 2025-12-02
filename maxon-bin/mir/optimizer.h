@@ -225,61 +225,6 @@ class Mem2RegPass : public OptimizationPass {
 };
 
 //==============================================================================
-// Loop Induction Variable Optimization
-//==============================================================================
-
-/**
- * Optimizes loop induction variables by converting to PHI nodes.
- *
- * Identifies simple loop counters (alloca + load/store pattern in loops)
- * and converts them to PHI-based SSA form specifically for loops.
- *
- * Example:
- *   entry:
- *     %i = alloca i32
- *     store i32 0, ptr %i
- *     br loop_header
- *   loop_header:
- *     %val = load i32, ptr %i
- *     %cmp = icmp slt %val, 10
- *     br i1 %cmp, loop_body, exit
- *   loop_body:
- *     ...
- *     %next = add i32 %val, 1
- *     store i32 %next, ptr %i
- *     br loop_header
- *
- * Becomes:
- *   entry:
- *     br loop_header
- *   loop_header:
- *     %i.phi = phi i32 [0, %entry], [%next, %loop_body]
- *     %cmp = icmp slt %i.phi, 10
- *     br i1 %cmp, loop_body, exit
- *   loop_body:
- *     ...
- *     %next = add i32 %i.phi, 1
- *     br loop_header
- */
-class LoopIVOptimizationPass : public OptimizationPass {
-  public:
-	const char *getName() const override { return "loop-iv-opt"; }
-	bool run(MIRModule &module) override;
-
-  private:
-	bool runOnFunction(MIRFunction &func);
-
-	// Detect loop headers (blocks with back-edges)
-	std::set<MIRBasicBlock *> detectLoopHeaders(MIRFunction &func);
-
-	// Check if an alloca is a simple loop IV
-	bool isLoopIV(MIRFunction &func, MIRInstruction *alloca, MIRBasicBlock *loopHeader);
-
-	// Convert loop IV to PHI
-	bool convertIVToPhi(MIRFunction &func, MIRInstruction *alloca, MIRBasicBlock *loopHeader);
-};
-
-//==============================================================================
 // Dead Code Elimination Pass
 //==============================================================================
 
