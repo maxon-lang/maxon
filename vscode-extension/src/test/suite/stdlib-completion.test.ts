@@ -109,8 +109,8 @@ suite('Stdlib Completion Tests', () => {
 		const detail = formatIntArray.detail as string;
 		assert.ok(detail.includes('value int'), 'Detail should include parameter "value int"');
 		assert.ok(detail.includes('buffer'), 'Detail should include parameter "buffer"');
-		// Array type may be represented as []char or [N]char
-		assert.ok(detail.includes('char'), 'Detail should include char array type');
+		// Array type is []byte (char is now a grapheme cluster struct, not a byte alias)
+		assert.ok(detail.includes('byte'), 'Detail should include byte array type');
 	});
 
 	test('Stdlib function completion should have documentation', async function () {

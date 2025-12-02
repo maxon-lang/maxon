@@ -301,6 +301,7 @@ Token Lexer::readString() {
 	int startLine = line_;
 	int startColumn = column_;
 	std::string str;
+	bool hasEscape = false;
 
 	advance();
 
@@ -310,8 +311,45 @@ Token Lexer::readString() {
 									 std::to_string(startLine) + ", column " + std::to_string(startColumn) +
 									 ": string started with ' but missing closing '");
 		}
-		str += source_[position_];
-		advance();
+
+		// Handle escape sequences
+		if (source_[position_] == '\\') {
+			hasEscape = true;
+			advance();
+			if (position_ >= length_) {
+				throw std::runtime_error("Unterminated escape sequence at line " +
+										 std::to_string(startLine) + ", column " + std::to_string(startColumn));
+			}
+
+			switch (source_[position_]) {
+			case 'n':
+				str += '\n';
+				break;
+			case 't':
+				str += '\t';
+				break;
+			case 'r':
+				str += '\r';
+				break;
+			case '\\':
+				str += '\\';
+				break;
+			case '\'':
+				str += '\'';
+				break;
+			case '0':
+				str += '\0';
+				break;
+			default:
+				throw std::runtime_error("Unknown escape sequence '\\" +
+										 std::string(1, source_[position_]) + "' at line " +
+										 std::to_string(line_) + ", column " + std::to_string(column_));
+			}
+			advance();
+		} else {
+			str += source_[position_];
+			advance();
+		}
 	}
 
 	if (position_ >= length_) {
@@ -322,11 +360,41 @@ Token Lexer::readString() {
 
 	advance();
 
-	if (str.length() == 1) {
+	// Determine if this is a CHARACTER literal or a BLOCK_ID
+	// - If it contains escape sequences, it's a CHARACTER (e.g., '\n')
+	// - If it looks like an ASCII identifier, it's a BLOCK_ID (e.g., 'loop')
+	// - Otherwise, it's a CHARACTER (grapheme cluster like 'A', 'é', '🎉', '👨‍👩‍👧')
+
+	if (hasEscape) {
+		// Escape sequences are always character literals
 		return Token(TokenType::CHARACTER, str, startLine, startColumn);
 	}
 
-	return Token(TokenType::BLOCK_ID, str, startLine, startColumn);
+	// Check if it looks like a valid ASCII identifier (block ID)
+	// Block IDs: start with letter/underscore, contain only alphanumeric/underscore
+	bool isBlockId = false;
+	if (!str.empty()) {
+		char first = str[0];
+		if ((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+			isBlockId = true;
+			for (size_t i = 1; i < str.length(); i++) {
+				char c = str[i];
+				if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+					  (c >= '0' && c <= '9') || c == '_')) {
+					isBlockId = false;
+					break;
+				}
+			}
+		}
+	}
+
+	if (isBlockId && str.length() > 1) {
+		// Multi-character ASCII identifiers are block IDs
+		return Token(TokenType::BLOCK_ID, str, startLine, startColumn);
+	}
+
+	// Everything else is a character literal (grapheme cluster)
+	return Token(TokenType::CHARACTER, str, startLine, startColumn);
 }
 
 Token Lexer::readStringLiteral() {

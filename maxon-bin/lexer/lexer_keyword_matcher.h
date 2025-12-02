@@ -63,9 +63,9 @@ class KeywordMatcher {
 
 		// Add all keywords to the hash table
 		// Types
+		// Note: 'char' and 'string' are NOT keywords - they are stdlib struct types
 		add_keyword("int", KeywordCategory::Type, "Integer type");
 		add_keyword("float", KeywordCategory::Type, "Floating-point type");
-		add_keyword("char", KeywordCategory::Type, "Extended Grapheme Cluster (user-perceived character)");
 		add_keyword("byte", KeywordCategory::Type, "8-bit unsigned integer");
 		add_keyword("bool", KeywordCategory::Type, "Boolean type");
 

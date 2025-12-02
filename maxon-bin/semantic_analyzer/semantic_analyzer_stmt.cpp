@@ -612,7 +612,7 @@ static std::string extractLiteralValue(ExprAST *expr) {
 	} else if (auto strExpr = dynamic_cast<StringLiteralExprAST *>(expr)) {
 		return "\"" + strExpr->value + "\"";
 	} else if (auto charExpr = dynamic_cast<CharacterExprAST *>(expr)) {
-		return "'" + std::string(1, charExpr->value) + "'";
+		return "'" + charExpr->value + "'";
 	}
 
 	return ""; // Not a simple literal

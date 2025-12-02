@@ -59,7 +59,8 @@ var longer = "this is a longer string"  // Heap allocated
 
 ```maxon
 var s = "hello"
-var len = s.count()        // Returns 5 (byte count)
+var len = s.count()        // Returns 5 (grapheme count)
+var bytes = s.byteCount()  // Returns 5 (byte count)
 var empty = s.isEmpty()    // Returns false
 ```
 
@@ -83,24 +84,34 @@ var message = greeting + ", " + name + "!"  // "Hello, World!"
 
 ### Character Iteration
 
-Iterate over Unicode codepoints in a string:
+Iterate over grapheme clusters (user-perceived characters) in a string:
 
 ```maxon
-var s = "abc"
+var s = "café"
 for c in s 'loop'
-    print_int(c)  // Prints 97, 98, 99 (ASCII values)
+    print(c.toString())  // Prints c, a, f, é (4 chars, not 5 bytes)
 end 'loop'
 ```
+
+Each iteration yields a `char` value representing an Extended Grapheme Cluster (EGC).
 
 ### String Views
 
 Strings provide multiple views for different iteration granularities:
 
-**Default iteration** - Unicode codepoints (same as above):
+**Default iteration** - Grapheme clusters (char):
 ```maxon
-for c in "αβγ" 'chars'
-    print_int(c)  // 945, 946, 947 (Greek letter codepoints)
+for c in "café" 'chars'
+    // c is a char (grapheme cluster)
+    print(c.toString())
 end 'chars'
+```
+
+**Codepoint view** - Unicode codepoints (int):
+```maxon
+for cp in s.codepoints() 'codepoints'
+    print_int(cp)  // Unicode codepoint values
+end 'codepoints'
 ```
 
 **Byte view** - Raw UTF-8 bytes:
@@ -392,7 +403,7 @@ end 'main'
 function main() int
     var s = "abc"
     for c in s 'loop'
-        print_int(c)
+        print(c.toString())
     end 'loop'
     return 0
 end 'main'
@@ -401,9 +412,9 @@ end 'main'
 0
 ```
 ```stdout
-97
-98
-99
+a
+b
+c
 ```
 
 <!-- test: byteview-iteration -->
@@ -745,7 +756,7 @@ function main() int
     var s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
     var sum = 0
     for c in s 'loop'
-        sum = sum + c
+        sum = sum + c.firstCodepoint()  // char is a grapheme cluster struct
     end 'loop'
     print_int(sum)  // 65+66+...+80 = 1160
     return 0
@@ -1004,4 +1015,155 @@ end 'main'
 ```
 ```stdout
 hello
+```
+
+<!-- test: byteCount-method -->
+### byteCount Method
+```maxon
+function main() int
+    var s = "hello"
+    print_int(s.byteCount())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```
+
+<!-- test: byteCount-multibyte -->
+### byteCount with Multi-byte Characters
+```maxon
+function main() int
+    var s = "café"
+    print_int(s.byteCount())  // 5 bytes (c=1, a=1, f=1, é=2)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```
+
+<!-- test: count-graphemes -->
+### count Returns Grapheme Count
+```maxon
+function main() int
+    var s = "café"
+    print_int(s.count())  // 4 graphemes
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
+<!-- test: count-vs-byteCount -->
+### count vs byteCount
+```maxon
+function main() int
+    var s = "🇺🇸"  // Flag emoji (1 grapheme, 8 bytes)
+    print_int(s.count())
+    print_int(s.byteCount())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+8
+```
+
+<!-- test: grapheme-iteration-emoji -->
+### Grapheme Iteration with Emoji
+```maxon
+function main() int
+    var s = "a🎉b"
+    var count = 0
+    for c in s 'loop'
+        var _unused = c.byteCount()  // Use c to avoid unused warning
+        _unused = _unused
+        count = count + 1
+    end 'loop'
+    print_int(count)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: grapheme-iteration-flag -->
+### Grapheme Iteration with Flag Emoji
+```maxon
+function main() int
+    var s = "🇺🇸🇬🇧"  // Two flag emojis
+    var count = 0
+    for c in s 'loop'
+        var _unused = c.byteCount()  // Use c to avoid unused warning
+        _unused = _unused
+        count = count + 1
+    end 'loop'
+    print_int(count)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
+<!-- test: grapheme-iteration-zwj -->
+### Grapheme Iteration with ZWJ Sequence
+```maxon
+function main() int
+    var s = "👨‍👩‍👧"  // Family emoji (1 grapheme)
+    var count = 0
+    for c in s 'loop'
+        var _unused = c.byteCount()  // Use c to avoid unused warning
+        _unused = _unused
+        count = count + 1
+    end 'loop'
+    print_int(count)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: codepoints-view -->
+### Codepoints View
+```maxon
+function main() int
+    var s = "Aé"  // A (1 codepoint) + é (1 codepoint if precomposed)
+    for cp in s.codepoints() 'loop'
+        print_int(cp)
+    end 'loop'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+65
+233
 ```

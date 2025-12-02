@@ -11,6 +11,24 @@ std::shared_ptr<Document> createTestDocument(const std::string &text) {
 	return std::make_shared<Document>("file:///test.maxon", text, 0);
 }
 
+// Helper to find the 0-indexed line number of a pattern in a file
+// Returns -1 if not found
+int findLineInFile(const std::string &filePath, const std::string &pattern) {
+	std::ifstream file(filePath);
+	if (!file.is_open()) {
+		return -1;
+	}
+	std::string line;
+	int lineNum = 0;
+	while (std::getline(file, line)) {
+		if (line.find(pattern) != std::string::npos) {
+			return lineNum;
+		}
+		lineNum++;
+	}
+	return -1;
+}
+
 TEST_CASE("analyze_valid_code", "[analyzer]") {
 
 	Analyzer analyzer;
@@ -944,8 +962,11 @@ TEST_CASE("go_to_definition_stdlib_function", "[analyzer]") {
 	REQUIRE(location->uri != doc->uri);
 	REQUIRE(location->uri.find("print.maxon") != std::string::npos);
 
-	// Should point to the correct line (line 18 in print.maxon, 0-indexed = 17)
-	REQUIRE(location->range.start.line == 17);
+	// Dynamically find the expected line number
+	int expectedLine = findLineInFile("../../../stdlib/sys/print.maxon", "export function print_int(");
+	REQUIRE(expectedLine >= 0);
+	INFO("Expected line: " << expectedLine << ", Got line: " << location->range.start.line);
+	REQUIRE(location->range.start.line == expectedLine);
 }
 
 TEST_CASE("go_to_definition_struct_method", "[analyzer]") {
@@ -978,9 +999,11 @@ TEST_CASE("go_to_definition_struct_method", "[analyzer]") {
 	REQUIRE(location->uri != doc->uri);
 	REQUIRE(location->uri.find("string.maxon") != std::string::npos);
 
-	// toLower is defined at line 274 in string.maxon (0-indexed = 273)
-	INFO("Got line: " << location->range.start.line);
-	REQUIRE(location->range.start.line == 273);
+	// Dynamically find the expected line number
+	int expectedLine = findLineInFile("../../../stdlib/string/string.maxon", "export function toLower()");
+	REQUIRE(expectedLine >= 0);
+	INFO("Expected line: " << expectedLine << ", Got line: " << location->range.start.line);
+	REQUIRE(location->range.start.line == expectedLine);
 }
 
 TEST_CASE("go_to_definition_stdlib_interface", "[analyzer]") {
@@ -1024,9 +1047,11 @@ TEST_CASE("go_to_definition_stdlib_interface", "[analyzer]") {
 	REQUIRE(location->uri != doc->uri);
 	REQUIRE(location->uri.find("interfaces.maxon") != std::string::npos);
 
-	// Iterable is defined at line 28 in interfaces.maxon (0-indexed = 27)
-	INFO("Got line: " << location->range.start.line);
-	REQUIRE(location->range.start.line == 27);
+	// Dynamically find the expected line number
+	int expectedLine = findLineInFile("../../../stdlib/interfaces.maxon", "export interface Iterable");
+	REQUIRE(expectedLine >= 0);
+	INFO("Expected line: " << expectedLine << ", Got line: " << location->range.start.line);
+	REQUIRE(location->range.start.line == expectedLine);
 }
 
 TEST_CASE("map_method_call_accepts_parameterized_type", "[analyzer]") {
@@ -1101,4 +1126,180 @@ TEST_CASE("map_all_methods_accept_parameterized_type", "[analyzer]") {
 		}
 	}
 	REQUIRE_FALSE(hasTypeMismatch);
+}
+
+TEST_CASE("string_and_char_init_methods_no_conflict", "[analyzer]") {
+	// Test that string and char init methods (from ExpressibleByStringLiteral
+	// and ExpressibleByCharLiteral interfaces) don't conflict with each other.
+	// Both have methods named "init" but they're on different structs.
+
+	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
+
+	auto doc = createTestDocument(
+		"function main() int\n"
+		"    var s = \"Hello\"\n"
+		"    var c = 'A'\n"
+		"    print_int(s.byteCount())\n"
+		"    print_int(c.byteCount())\n"
+		"    return 0\n"
+		"end 'main'");
+
+	auto diagnostics = analyzer.analyze(doc);
+
+	// Should NOT have "already defined" errors for init methods
+	bool hasAlreadyDefinedError = false;
+	for (const auto &diag : diagnostics) {
+		if (diag.message.find("already defined") != std::string::npos &&
+			diag.message.find("init") != std::string::npos) {
+			hasAlreadyDefinedError = true;
+			INFO("Unexpected 'already defined' error: " << diag.message);
+		}
+	}
+	REQUIRE_FALSE(hasAlreadyDefinedError);
+}
+
+TEST_CASE("stdlib_string_file_no_duplicate_method_errors", "[analyzer]") {
+	// Test that analyzing code that uses string doesn't produce
+	// duplicate method definition errors in stdlib files
+
+	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
+
+	auto doc = createTestDocument(
+		"function main() int\n"
+		"    var s = \"Hello\"\n"
+		"    var count = s.count()\n"
+		"    return count\n"
+		"end 'main'");
+
+	auto diagnostics = analyzer.analyze(doc);
+
+	// Should NOT have any "already defined" errors
+	bool hasAlreadyDefinedError = false;
+	std::string errorMessage;
+	for (const auto &diag : diagnostics) {
+		if (diag.message.find("already defined") != std::string::npos) {
+			hasAlreadyDefinedError = true;
+			errorMessage = diag.message;
+			INFO("Unexpected 'already defined' error: " << diag.message);
+		}
+	}
+	REQUIRE_FALSE(hasAlreadyDefinedError);
+}
+
+TEST_CASE("stdlib_string_maxon_direct_analysis", "[analyzer]") {
+	// Test that directly analyzing stdlib/string/string.maxon doesn't produce errors
+	// This simulates what happens when the LSP opens the file in VSCode
+
+	Analyzer analyzer;
+	analyzer.initializeStdlib("../../../stdlib");
+
+	// Read the actual string.maxon file
+	std::ifstream file("../../../stdlib/string/string.maxon");
+	REQUIRE(file.is_open());
+	std::stringstream buffer;
+	buffer << file.rdbuf();
+	std::string content = buffer.str();
+
+	auto doc = std::make_shared<Document>("file:///../../../stdlib/string/string.maxon", content, 0);
+
+	auto diagnostics = analyzer.analyze(doc);
+
+	// Print all diagnostics for debugging
+	std::cout << "  Diagnostics for string.maxon:" << std::endl;
+	for (const auto &diag : diagnostics) {
+		std::cout << "    Line " << diag.range.start.line << ": " << diag.message << std::endl;
+	}
+
+	// Should NOT have any "already defined" errors
+	bool hasAlreadyDefinedError = false;
+	for (const auto &diag : diagnostics) {
+		if (diag.message.find("already defined") != std::string::npos) {
+			hasAlreadyDefinedError = true;
+			INFO("Unexpected 'already defined' error at line " << diag.range.start.line << ": " << diag.message);
+		}
+	}
+	REQUIRE_FALSE(hasAlreadyDefinedError);
+}
+
+TEST_CASE("substring_iteration_returns_char", "[analyzer]") {
+	// Test that iterating a substring returns char, not int
+	// This tests that the LSP correctly resolves the Element associated type
+
+	Analyzer analyzer;
+	std::string stdlibPath = "../../../stdlib";
+	analyzer.initializeStdlib(stdlibPath);
+
+	// Code that iterates a substring and calls a char method
+	std::string code = R"(
+function main() int
+    var s = "hello"
+    var sub = s.slice(0, 3)
+    for c in sub 'loop'
+        var x = c.firstCodepoint()
+    end 'loop'
+    return 0
+end 'main'
+)";
+
+	auto doc = createTestDocument(code);
+	auto diagnostics = analyzer.analyze(doc);
+
+	// Print diagnostics for debugging
+	std::cout << "  Diagnostics for substring iteration test:" << std::endl;
+	for (const auto &diag : diagnostics) {
+		std::cout << "    Line " << diag.range.start.line << ": " << diag.message << std::endl;
+	}
+
+	// Should NOT have "Type 'int' has no method 'firstCodepoint'" error
+	// If the LSP thinks iteration returns int, it will show this error
+	bool hasTypeError = false;
+	for (const auto &diag : diagnostics) {
+		if (diag.message.find("int") != std::string::npos &&
+		    diag.message.find("firstCodepoint") != std::string::npos) {
+			hasTypeError = true;
+			INFO("Loop variable incorrectly typed as int: " << diag.message);
+		}
+	}
+	REQUIRE_FALSE(hasTypeError);
+}
+
+TEST_CASE("string_iteration_returns_char", "[analyzer]") {
+	// Test that iterating a string returns char, not int
+
+	Analyzer analyzer;
+	std::string stdlibPath = "../../../stdlib";
+	analyzer.initializeStdlib(stdlibPath);
+
+	// Code that iterates a string and calls a char method
+	std::string code = R"(
+function main() int
+    var s = "hello"
+    for c in s 'loop'
+        var x = c.firstCodepoint()
+    end 'loop'
+    return 0
+end 'main'
+)";
+
+	auto doc = createTestDocument(code);
+	auto diagnostics = analyzer.analyze(doc);
+
+	// Print diagnostics for debugging
+	std::cout << "  Diagnostics for string iteration test:" << std::endl;
+	for (const auto &diag : diagnostics) {
+		std::cout << "    Line " << diag.range.start.line << ": " << diag.message << std::endl;
+	}
+
+	// Should NOT have type error for calling firstCodepoint on loop variable
+	bool hasTypeError = false;
+	for (const auto &diag : diagnostics) {
+		if (diag.message.find("int") != std::string::npos &&
+		    diag.message.find("firstCodepoint") != std::string::npos) {
+			hasTypeError = true;
+			INFO("Loop variable incorrectly typed as int: " << diag.message);
+		}
+	}
+	REQUIRE_FALSE(hasTypeError);
 }

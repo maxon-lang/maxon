@@ -6,6 +6,7 @@
 // - Copy-on-write (COW) semantics for efficient copying
 // - Strings are NOT indexable with [] - use chars() for character access
 // - UTF-8 encoded internally
+// - Iteration yields grapheme clusters (char), not bytes or codepoints
 //
 // **_ManagedString** is a compiler-internal opaque type.
 // User code cannot access its fields directly.
@@ -22,10 +23,12 @@
 // - The compiler generates _managed_string_release() on scope exit/reassignment
 // - The compiler generates _managed_string_make_unique() before mutation (COW)
 // - User code never calls these functions directly
+//
+// Dependencies: string/char, unicode/grapheme (auto-imported by compiler)
 
-export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStringLiteral
+export struct string is Hashable, Equatable, Iterable with char, ExpressibleByStringLiteral
 	var _managed _ManagedString  // Compiler-managed opaque string storage
-	var _iterPos int             // Current iteration position (for Iterable)
+	var _iterPos int             // Current iteration position (byte offset for grapheme iteration)
 
 	// ============================================
 	// ExpressibleByStringLiteral conformance
@@ -41,10 +44,22 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 	// Basic properties (using intrinsics)
 	// ============================================
 
-	// Get byte count (length of UTF-8 data)
+	// Get grapheme cluster count (number of user-perceived characters)
 	export function count() int
-		return __string_len(_managed)
+		var grapheme_count = 0
+		var pos = 0
+		var len = __string_len(_managed)
+		while pos < len 'count_loop'
+			pos = _findGraphemeEnd(pos, len)
+			grapheme_count = grapheme_count + 1
+		end 'count_loop'
+		return grapheme_count
 	end 'count'
+
+	// Get byte count (length of UTF-8 data)
+	export function byteCount() int
+		return __string_len(_managed)
+	end 'byteCount'
 
 	// Check if the string is empty
 	export function isEmpty() bool
@@ -59,9 +74,9 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 	end 'cstr'
 
 	// ============================================
-	// Iterable conformance - character iteration
+	// Iterable conformance - grapheme cluster iteration
 	// ============================================
-	// Returns Unicode codepoints as int values
+	// Returns char values (Extended Grapheme Clusters)
 
 	export function Iterable.hasNext() int
 		if _iterPos < __string_len(_managed) 'check'
@@ -70,56 +85,106 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 		return 0
 	end 'hasNext'
 
-	export function Iterable.getCurrent() int
-		var b0 = __string_byte_at(_managed, _iterPos) as int
+	export function Iterable.getCurrent() char
+		// Find the end of the current grapheme cluster using UAX #29 algorithm
+		var len = __string_len(_managed)
+		var end_pos = _findGraphemeEnd(_iterPos, len)
 
-		// ASCII (1 byte)
-		if b0 < 128 'ascii'
-			return b0
-		end 'ascii'
-
-		// 2-byte sequence (110xxxxx 10xxxxxx)
-		if b0 < 224 'two_byte'
-			var b1 = __string_byte_at(_managed, _iterPos + 1) as int
-			var cp = ((b0 mod 32) * 64) + (b1 mod 64)
-			return cp
-		end 'two_byte'
-
-		// 3-byte sequence (1110xxxx 10xxxxxx 10xxxxxx)
-		if b0 < 240 'three_byte'
-			var b1 = __string_byte_at(_managed, _iterPos + 1) as int
-			var b2 = __string_byte_at(_managed, _iterPos + 2) as int
-			var cp = ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
-			return cp
-		end 'three_byte'
-
-		// 4-byte sequence (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
-		var b1 = __string_byte_at(_managed, _iterPos + 1) as int
-		var b2 = __string_byte_at(_managed, _iterPos + 2) as int
-		var b3 = __string_byte_at(_managed, _iterPos + 3) as int
-		var cp = ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
-		return cp
+		// Create a char from the bytes in the range [_iterPos, end_pos)
+		var grapheme_len = end_pos - _iterPos
+		return _makeCharFromBytes(_iterPos, grapheme_len)
 	end 'getCurrent'
 
 	export function Iterable.next() string
-		var b0 = __string_byte_at(_managed, _iterPos) as int
-		var advance = 1
-
-		if b0 >= 240 'four_byte'
-			advance = 4
-		else 'four_byte'
-			if b0 >= 224 'three_byte'
-				advance = 3
-			else 'three_byte'
-				if b0 >= 192 'two_byte'
-					advance = 2
-				end 'two_byte'
-			end 'three_byte'
-		end 'four_byte'
+		// Find the end of the current grapheme cluster
+		var len = __string_len(_managed)
+		var end_pos = _findGraphemeEnd(_iterPos, len)
 
 		// Return copy with updated iterator position
-		return string{_managed: _managed, _iterPos: _iterPos + advance}
+		return string{_managed: _managed, _iterPos: end_pos}
 	end 'next'
+
+	// Internal: Find end position of grapheme cluster starting at start_pos
+	function _findGraphemeEnd(start_pos int, len int) int
+		if start_pos >= len 'at_end'
+			return start_pos
+		end 'at_end'
+
+		// Decode first codepoint at start_pos
+		var pos = start_pos
+		var prev_cp = _decodeCodepointAt(pos)
+		var prev_bytes = _codepointBytes(pos)
+		pos = pos + prev_bytes
+
+		// Get grapheme break property for first codepoint
+		var prev_gbp = grapheme_break_property(prev_cp)
+		var state = grapheme_state_init()
+		state = grapheme_state_update(state, prev_gbp, prev_cp)
+
+		// Scan forward until we find a grapheme break
+		while pos < len 'scan'
+			var curr_cp = _decodeCodepointAt(pos)
+			var curr_gbp = grapheme_break_property(curr_cp)
+
+			// Check if there's a break before current codepoint
+			if is_grapheme_break(prev_gbp, curr_gbp, prev_cp, curr_cp, state) 'break_found'
+				return pos
+			end 'break_found'
+
+			// Update state and advance to next codepoint
+			state = grapheme_state_update(state, curr_gbp, curr_cp)
+			prev_gbp = curr_gbp
+			prev_cp = curr_cp
+			var curr_bytes = _codepointBytes(pos)
+			pos = pos + curr_bytes
+		end 'scan'
+
+		return pos
+	end '_findGraphemeEnd'
+
+	// Internal: Get number of bytes for codepoint at position
+	function _codepointBytes(pos int) int
+		var b0 = __string_byte_at(_managed, pos) as int
+		if b0 < 128 'ascii'
+			return 1
+		end 'ascii'
+		if b0 < 224 'two'
+			return 2
+		end 'two'
+		if b0 < 240 'three'
+			return 3
+		end 'three'
+		return 4
+	end '_codepointBytes'
+
+	// Internal: Decode codepoint at byte position
+	function _decodeCodepointAt(pos int) int
+		var b0 = __string_byte_at(_managed, pos) as int
+		if b0 < 128 'ascii'
+			return b0
+		end 'ascii'
+		if b0 < 224 'two'
+			var b1 = __string_byte_at(_managed, pos + 1) as int
+			return ((b0 mod 32) * 64) + (b1 mod 64)
+		end 'two'
+		if b0 < 240 'three'
+			var b1 = __string_byte_at(_managed, pos + 1) as int
+			var b2 = __string_byte_at(_managed, pos + 2) as int
+			return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
+		end 'three'
+		var b1 = __string_byte_at(_managed, pos + 1) as int
+		var b2 = __string_byte_at(_managed, pos + 2) as int
+		var b3 = __string_byte_at(_managed, pos + 3) as int
+		return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+	end '_decodeCodepointAt'
+
+	// Internal: Create a char from bytes in string at [start, start+len)
+	function _makeCharFromBytes(start int, byte_len int) char
+		// Create substring slice, then convert to _ManagedString for char
+		var sub = __string_slice(_managed, start, start + byte_len)
+		var managed = __substring_to_string(sub)
+		return char{_managed: managed}
+	end '_makeCharFromBytes'
 
 	// ============================================
 	// Hashable conformance
@@ -343,6 +408,12 @@ export struct string is Hashable, Equatable, Iterable with int, ExpressibleByStr
 	export function chars() CharCollection
 		return CharCollection{_str: self, _pos: 0}
 	end 'chars'
+
+	// codepoints - create a CodepointView for iterating over Unicode codepoints
+	// This provides explicit codepoint iteration (same as current default for-in behavior)
+	export function codepoints() CodepointView
+		return CodepointView{_str: self, _pos: 0}
+	end 'codepoints'
 
 	// utf16 - create a UTF16View for iterating over UTF-16 code units
 	export function utf16() UTF16View
@@ -621,86 +692,49 @@ export struct UTF16View is Iterable with int
 	end 'length'
 end 'UTF16View'
 
-// ============================================
-// Substring - immutable view into a string
-// ============================================
-// Substrings are always immutable and share storage with parent string.
-// The parent string's refcount is retained while substring exists.
-// Use .toString() to create an owned copy if mutation is needed.
-//
-// **Intrinsics used**:
-//   __substring_len(sub)           - get byte length
-//   __substring_byte_at(sub, i)    - get byte at index
-//   __substring_iter_pos(sub)      - get current iteration position
-//   __substring_with_iter_pos(sub, pos) - create copy with new iter position
-
-export struct substring is Hashable, Equatable, Iterable with int
-	var _parentManaged _ManagedString  // Parent string's managed data (for refcount)
-	var _ptr ptr                        // Pointer into parent's buffer
-	var _len int                        // Byte length of this substring
-	var _iterPos int                    // Current iteration position
-
-	// ============================================
-	// Basic properties
-	// ============================================
-
-	// Get byte count
-	export function count() int
-		return __substring_len(self)
-	end 'count'
-
-	// Check if the substring is empty
-	export function isEmpty() bool
-		return __substring_len(self) == 0
-	end 'isEmpty'
-
-	// ============================================
-	// Iterable conformance - character iteration
-	// ============================================
-	// Returns Unicode codepoints as int values
+// CodepointView - iterate over Unicode codepoints (int values)
+// Provides explicit codepoint iteration for when you need codepoints, not graphemes
+export struct CodepointView is Iterable with int
+	var _str string
+	var _pos int
 
 	export function Iterable.hasNext() int
-		if __substring_iter_pos(self) < __substring_len(self) 'check'
+		if _pos < __string_len(_str._managed) 'check'
 			return 1
 		end 'check'
 		return 0
 	end 'hasNext'
 
 	export function Iterable.getCurrent() int
-		var pos = __substring_iter_pos(self)
-		var b0 = __substring_byte_at(self, pos) as int
+		var b0 = __string_byte_at(_str._managed, _pos) as int
 
 		// ASCII (1 byte)
 		if b0 < 128 'ascii'
 			return b0
 		end 'ascii'
 
-		// 2-byte sequence (110xxxxx 10xxxxxx)
+		// 2-byte sequence
 		if b0 < 224 'two_byte'
-			var b1 = __substring_byte_at(self, pos + 1) as int
-			var cp = ((b0 mod 32) * 64) + (b1 mod 64)
-			return cp
+			var b1 = __string_byte_at(_str._managed, _pos + 1) as int
+			return ((b0 mod 32) * 64) + (b1 mod 64)
 		end 'two_byte'
 
-		// 3-byte sequence (1110xxxx 10xxxxxx 10xxxxxx)
+		// 3-byte sequence
 		if b0 < 240 'three_byte'
-			var b1 = __substring_byte_at(self, pos + 1) as int
-			var b2 = __substring_byte_at(self, pos + 2) as int
-			var cp = ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
-			return cp
+			var b1 = __string_byte_at(_str._managed, _pos + 1) as int
+			var b2 = __string_byte_at(_str._managed, _pos + 2) as int
+			return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
 		end 'three_byte'
 
-		// 4-byte sequence (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
-		var b1 = __substring_byte_at(self, pos + 1) as int
-		var b2 = __substring_byte_at(self, pos + 2) as int
-		var b3 = __substring_byte_at(self, pos + 3) as int
-		var cp = ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
-		return cp
+		// 4-byte sequence
+		var b1 = __string_byte_at(_str._managed, _pos + 1) as int
+		var b2 = __string_byte_at(_str._managed, _pos + 2) as int
+		var b3 = __string_byte_at(_str._managed, _pos + 3) as int
+		return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
 	end 'getCurrent'
 
-	export function Iterable.next() substring
-		var pos = __substring_iter_pos(self)
-		var b0 = __substring_byte_at(self, pos) as int
+	export function Iterable.next() CodepointView
+		var b0 = __string_byte_at(_str._managed, _pos) as int
 		var advance = 1
 
 		if b0 >= 240 'four_byte'
@@ -715,9 +749,194 @@ export struct substring is Hashable, Equatable, Iterable with int
 			end 'three_byte'
 		end 'four_byte'
 
-		// Return copy with updated iterator position
-		return __substring_with_iter_pos(self, pos + advance)
+		return CodepointView{_str: _str, _pos: _pos + advance}
 	end 'next'
+
+	export function count() int
+		var cpCount = 0
+		var pos = 0
+		var len = __string_len(_str._managed)
+		while pos < len 'count_loop'
+			var b0 = __string_byte_at(_str._managed, pos) as int
+			if b0 < 128 'ascii'
+				pos = pos + 1
+			else 'ascii'
+				if b0 < 224 'two_byte'
+					pos = pos + 2
+				else 'two_byte'
+					if b0 < 240 'three_byte'
+						pos = pos + 3
+					else 'three_byte'
+						pos = pos + 4
+					end 'three_byte'
+				end 'two_byte'
+			end 'ascii'
+			cpCount = cpCount + 1
+		end 'count_loop'
+		return cpCount
+	end 'count'
+end 'CodepointView'
+
+// ============================================
+// Substring - immutable view into a string
+// ============================================
+// Substrings are always immutable and share storage with parent string.
+// The parent string's refcount is retained while substring exists.
+// Use .toString() to create an owned copy if mutation is needed.
+//
+// **Intrinsics used**:
+//   __substring_len(sub)           - get byte length
+//   __substring_byte_at(sub, i)    - get byte at index
+//   __substring_iter_pos(sub)      - get current iteration position
+//   __substring_with_iter_pos(sub, pos) - create copy with new iter position
+
+export struct substring is Hashable, Equatable, Iterable with char
+	var _parentManaged _ManagedString  // Parent string's managed data (for refcount)
+	var _ptr ptr                        // Pointer into parent's buffer
+	var _len int                        // Byte length of this substring
+	var _iterPos int                    // Current iteration position
+
+	// ============================================
+	// Basic properties
+	// ============================================
+
+	// Get grapheme cluster count (number of user-perceived characters)
+	export function count() int
+		var grapheme_count = 0
+		var pos = 0
+		var len = __substring_len(self)
+		while pos < len 'count_loop'
+			pos = _findGraphemeEnd(pos, len)
+			grapheme_count = grapheme_count + 1
+		end 'count_loop'
+		return grapheme_count
+	end 'count'
+
+	// Get byte count (length of UTF-8 data)
+	export function byteCount() int
+		return __substring_len(self)
+	end 'byteCount'
+
+	// Check if the substring is empty
+	export function isEmpty() bool
+		return __substring_len(self) == 0
+	end 'isEmpty'
+
+	// ============================================
+	// Iterable conformance - grapheme cluster iteration
+	// ============================================
+	// Returns char values (Extended Grapheme Clusters)
+
+	export function Iterable.hasNext() int
+		if __substring_iter_pos(self) < __substring_len(self) 'check'
+			return 1
+		end 'check'
+		return 0
+	end 'hasNext'
+
+	export function Iterable.getCurrent() char
+		// Find the end of the current grapheme cluster
+		var len = __substring_len(self)
+		var end_pos = _findGraphemeEnd(_iterPos, len)
+
+		// Create a char from the bytes in the range [_iterPos, end_pos)
+		var grapheme_len = end_pos - _iterPos
+		return _makeCharFromBytes(_iterPos, grapheme_len)
+	end 'getCurrent'
+
+	export function Iterable.next() substring
+		// Find the end of the current grapheme cluster
+		var len = __substring_len(self)
+		var end_pos = _findGraphemeEnd(_iterPos, len)
+
+		// Return copy with updated iterator position
+		return __substring_with_iter_pos(self, end_pos)
+	end 'next'
+
+	// ============================================
+	// Internal helpers for grapheme iteration
+	// ============================================
+
+	// Internal: Find end position of grapheme cluster starting at start_pos
+	function _findGraphemeEnd(start_pos int, len int) int
+		if start_pos >= len 'at_end'
+			return start_pos
+		end 'at_end'
+
+		// Decode first codepoint at start_pos
+		var pos = start_pos
+		var prev_cp = _decodeCodepointAt(pos)
+		var prev_bytes = _codepointBytes(pos)
+		pos = pos + prev_bytes
+
+		// Get grapheme break property for first codepoint
+		var prev_gbp = grapheme_break_property(prev_cp)
+		var state = grapheme_state_init()
+		state = grapheme_state_update(state, prev_gbp, prev_cp)
+
+		// Scan forward until we find a grapheme break
+		while pos < len 'scan'
+			var curr_cp = _decodeCodepointAt(pos)
+			var curr_gbp = grapheme_break_property(curr_cp)
+
+			// Check if there's a break before current codepoint
+			if is_grapheme_break(prev_gbp, curr_gbp, prev_cp, curr_cp, state) 'break_found'
+				return pos
+			end 'break_found'
+
+			// Update state and advance to next codepoint
+			state = grapheme_state_update(state, curr_gbp, curr_cp)
+			prev_gbp = curr_gbp
+			prev_cp = curr_cp
+			var curr_bytes = _codepointBytes(pos)
+			pos = pos + curr_bytes
+		end 'scan'
+
+		return pos
+	end '_findGraphemeEnd'
+
+	// Internal: Get number of bytes for codepoint at position
+	function _codepointBytes(pos int) int
+		var b0 = __substring_byte_at(self, pos) as int
+		if b0 < 128 'ascii'
+			return 1
+		end 'ascii'
+		if b0 < 224 'two'
+			return 2
+		end 'two'
+		if b0 < 240 'three'
+			return 3
+		end 'three'
+		return 4
+	end '_codepointBytes'
+
+	// Internal: Decode codepoint at byte position
+	function _decodeCodepointAt(pos int) int
+		var b0 = __substring_byte_at(self, pos) as int
+		if b0 < 128 'ascii'
+			return b0
+		end 'ascii'
+		if b0 < 224 'two'
+			var b1 = __substring_byte_at(self, pos + 1) as int
+			return ((b0 mod 32) * 64) + (b1 mod 64)
+		end 'two'
+		if b0 < 240 'three'
+			var b1 = __substring_byte_at(self, pos + 1) as int
+			var b2 = __substring_byte_at(self, pos + 2) as int
+			return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
+		end 'three'
+		var b1 = __substring_byte_at(self, pos + 1) as int
+		var b2 = __substring_byte_at(self, pos + 2) as int
+		var b3 = __substring_byte_at(self, pos + 3) as int
+		return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+	end '_decodeCodepointAt'
+
+	// Internal: Create a char from bytes at [start, start+byte_len)
+	function _makeCharFromBytes(start int, byte_len int) char
+		var sub = __substring_slice(self, start, start + byte_len)
+		var managed = __substring_to_string(sub)
+		return char{_managed: managed}
+	end '_makeCharFromBytes'
 
 	// ============================================
 	// Hashable conformance
@@ -874,8 +1093,9 @@ end 'substring'
 // String construction utilities
 // ============================================
 
-// Create a new string from a char buffer
+// Create a new string from a byte buffer
 // Copies the bytes and creates a new heap-allocated string
-export function string_from_chars(buffer []char, length int) string
+// Note: Uses []byte not []char since char is now a grapheme cluster struct
+export function string_from_chars(buffer []byte, length int) string
 	return string{_managed: __string_from_chars(buffer, length), _iterPos: 0}
 end 'string_from_chars'

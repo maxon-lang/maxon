@@ -19,6 +19,11 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		return "bool";
 
 	} else if (dynamic_cast<CharacterExprAST *>(expr)) {
+		// Character literals require the stdlib 'char' struct (grapheme cluster)
+		// Track as undefined so it gets auto-discovered
+		if (lookupStruct("char") == nullptr) {
+			undefinedStructs.insert("char");
+		}
 		return "char";
 
 	} else if (dynamic_cast<StringLiteralExprAST *>(expr)) {

@@ -68,12 +68,12 @@ class BooleanExprAST : public ExprAST {
 	BooleanExprAST(bool val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
 };
 
-// Character literal
+// Character literal (grapheme cluster - may contain multiple bytes/codepoints)
 class CharacterExprAST : public ExprAST {
   public:
-	char value;
+	std::string value;  // UTF-8 encoded grapheme cluster
 
-	CharacterExprAST(char val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
+	CharacterExprAST(const std::string &val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
 };
 
 // String literal

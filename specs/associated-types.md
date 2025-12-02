@@ -440,6 +440,7 @@ end 'main'
 
 <!-- test: char-element-type -->
 ```maxon
+// char is a grapheme cluster struct, use firstCodepoint() for codepoint value
 interface CharSource uses Element
     function getChar() Element
 end 'CharSource'
@@ -455,7 +456,7 @@ end 'SingleChar'
 function main() int
     var s = SingleChar{ch: 'A'}
     var c = s.getChar()
-    return c as int
+    return c.firstCodepoint()
 end 'main'
 ```
 ```exitcode

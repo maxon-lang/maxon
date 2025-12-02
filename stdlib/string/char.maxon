@@ -1,0 +1,284 @@
+// stdlib/string/char.maxon
+// Char Type - Extended Grapheme Cluster (EGC) representing a user-perceived character
+//
+// A char represents what a user perceives as a single character, which may be
+// composed of multiple Unicode codepoints (e.g., emoji sequences, combining marks).
+//
+// Memory Layout (16 bytes, identical to string):
+// - Small Char (MSB of byte 15 = 0): UTF-8 data inline in bytes 0-14
+// - Large Char (MSB of byte 15 = 1): Heap-allocated for sequences > 15 bytes
+//
+// The char type is NOT an alias for byte. UTF-8 characters can span multiple bytes:
+// - 'A' = 1 byte (ASCII)
+// - 'é' = 2 bytes (Latin Extended)
+// - '中' = 3 bytes (CJK)
+// - '🎉' = 4 bytes (Emoji)
+// - '👨‍👩‍👧‍👦' = 25 bytes (Family emoji with ZWJ sequences)
+
+// char struct - represents an Extended Grapheme Cluster
+// Uses the same internal representation as string (_ManagedString)
+export struct char is Equatable, Hashable, ExpressibleByCharLiteral
+    var _managed _ManagedString  // Compiler-managed storage (same layout as string)
+
+    // ============================================
+    // ExpressibleByCharLiteral conformance
+    // ============================================
+
+    // Initialize char from compiler-constructed _ManagedString
+    export function ExpressibleByCharLiteral.init(managed _ManagedString) char
+        return char{_managed: managed}
+    end 'init'
+
+    // ============================================
+    // Basic properties
+    // ============================================
+
+    // byteCount - get the number of UTF-8 bytes in this character
+    export function byteCount() int
+        return __string_len(_managed)
+    end 'byteCount'
+
+    // isEmpty - check if char is empty (should never be true for valid char)
+    export function isEmpty() bool
+        return __string_len(_managed) == 0
+    end 'isEmpty'
+
+    // ============================================
+    // Conversion
+    // ============================================
+
+    // toString - convert char to string
+    export function toString() string
+        // Create a new string from the char's data
+        return string{_managed: _managed, _iterPos: 0}
+    end 'toString'
+
+    // ============================================
+    // Equatable conformance
+    // ============================================
+
+    export function Equatable.equals(other char) bool
+        var len = __string_len(_managed)
+        if len != __string_len(other._managed) 'length_check'
+            return false
+        end 'length_check'
+
+        var i = 0
+        while i < len 'compare_loop'
+            if __string_byte_at(_managed, i) != __string_byte_at(other._managed, i) 'byte_check'
+                return false
+            end 'byte_check'
+            i = i + 1
+        end 'compare_loop'
+        return true
+    end 'equals'
+
+    // ============================================
+    // Hashable conformance
+    // ============================================
+
+    export function Hashable.hash() int
+        var h = 5381
+        var i = 0
+        var len = __string_len(_managed)
+        while i < len 'hash_loop'
+            var b = __string_byte_at(_managed, i)
+            h = h * 33 + (b as int)
+            i = i + 1
+        end 'hash_loop'
+        return h
+    end 'hash'
+
+    // ============================================
+    // Codepoint access
+    // ============================================
+
+    // codepointCount - get number of Unicode codepoints in this grapheme
+    export function codepointCount() int
+        var count = 0
+        var pos = 0
+        var len = __string_len(_managed)
+        while pos < len 'count_loop'
+            var b = __string_byte_at(_managed, pos) as int
+            // Count lead bytes only
+            if b < 128 or b >= 192 'is_lead'
+                count = count + 1
+            end 'is_lead'
+            pos = pos + 1
+        end 'count_loop'
+        return count
+    end 'codepointCount'
+
+    // firstCodepoint - get the first Unicode codepoint of this grapheme
+    export function firstCodepoint() int
+        if __string_len(_managed) == 0 'empty'
+            return 0
+        end 'empty'
+
+        var b0 = __string_byte_at(_managed, 0) as int
+
+        // ASCII (1 byte)
+        if b0 < 128 'ascii'
+            return b0
+        end 'ascii'
+
+        // 2-byte sequence
+        if b0 < 224 'two_byte'
+            var b1 = __string_byte_at(_managed, 1) as int
+            return ((b0 mod 32) * 64) + (b1 mod 64)
+        end 'two_byte'
+
+        // 3-byte sequence
+        if b0 < 240 'three_byte'
+            var b1 = __string_byte_at(_managed, 1) as int
+            var b2 = __string_byte_at(_managed, 2) as int
+            return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
+        end 'three_byte'
+
+        // 4-byte sequence
+        var b1 = __string_byte_at(_managed, 1) as int
+        var b2 = __string_byte_at(_managed, 2) as int
+        var b3 = __string_byte_at(_managed, 3) as int
+        return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+    end 'firstCodepoint'
+
+    // codepoints - iterate over codepoints in this grapheme
+    export function codepoints() CharCodepointView
+        return CharCodepointView{_char: self, _pos: 0}
+    end 'codepoints'
+
+    // ============================================
+    // Byte access
+    // ============================================
+
+    // bytes - iterate over raw UTF-8 bytes
+    export function bytes() CharByteView
+        return CharByteView{_char: self, _pos: 0}
+    end 'bytes'
+
+    // byteAt - get byte at index (for low-level access)
+    export function byteAt(index int) byte
+        return __string_byte_at(_managed, index)
+    end 'byteAt'
+
+    // ============================================
+    // Comparison (for ordering)
+    // ============================================
+
+    // Compare chars lexicographically by their UTF-8 bytes
+    export function compareTo(other char) int
+        var len1 = __string_len(_managed)
+        var len2 = __string_len(other._managed)
+        var minLen = len1
+        if len2 < minLen 'min'
+            minLen = len2
+        end 'min'
+
+        var i = 0
+        while i < minLen 'compare_loop'
+            var b1 = __string_byte_at(_managed, i) as int
+            var b2 = __string_byte_at(other._managed, i) as int
+            if b1 < b2 'less'
+                return 0 - 1
+            end 'less'
+            if b1 > b2 'greater'
+                return 1
+            end 'greater'
+            i = i + 1
+        end 'compare_loop'
+
+        // Equal prefix - shorter is less
+        if len1 < len2 'len_less'
+            return 0 - 1
+        end 'len_less'
+        if len1 > len2 'len_greater'
+            return 1
+        end 'len_greater'
+        return 0
+    end 'compareTo'
+end 'char'
+
+// ============================================
+// Char Views
+// ============================================
+
+// CharByteView - iterate over raw UTF-8 bytes of a char
+export struct CharByteView is Iterable with int
+    var _char char
+    var _pos int
+
+    export function Iterable.hasNext() int
+        if _pos < __string_len(_char._managed) 'check'
+            return 1
+        end 'check'
+        return 0
+    end 'hasNext'
+
+    export function Iterable.getCurrent() int
+        return __string_byte_at(_char._managed, _pos) as int
+    end 'getCurrent'
+
+    export function Iterable.next() CharByteView
+        return CharByteView{_char: _char, _pos: _pos + 1}
+    end 'next'
+end 'CharByteView'
+
+// CharCodepointView - iterate over Unicode codepoints of a char
+export struct CharCodepointView is Iterable with int
+    var _char char
+    var _pos int
+
+    export function Iterable.hasNext() int
+        if _pos < __string_len(_char._managed) 'check'
+            return 1
+        end 'check'
+        return 0
+    end 'hasNext'
+
+    export function Iterable.getCurrent() int
+        var b0 = __string_byte_at(_char._managed, _pos) as int
+
+        // ASCII (1 byte)
+        if b0 < 128 'ascii'
+            return b0
+        end 'ascii'
+
+        // 2-byte sequence
+        if b0 < 224 'two_byte'
+            var b1 = __string_byte_at(_char._managed, _pos + 1) as int
+            return ((b0 mod 32) * 64) + (b1 mod 64)
+        end 'two_byte'
+
+        // 3-byte sequence
+        if b0 < 240 'three_byte'
+            var b1 = __string_byte_at(_char._managed, _pos + 1) as int
+            var b2 = __string_byte_at(_char._managed, _pos + 2) as int
+            return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
+        end 'three_byte'
+
+        // 4-byte sequence
+        var b1 = __string_byte_at(_char._managed, _pos + 1) as int
+        var b2 = __string_byte_at(_char._managed, _pos + 2) as int
+        var b3 = __string_byte_at(_char._managed, _pos + 3) as int
+        return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+    end 'getCurrent'
+
+    export function Iterable.next() CharCodepointView
+        var b0 = __string_byte_at(_char._managed, _pos) as int
+        var advance = 1
+
+        if b0 >= 240 'four_byte'
+            advance = 4
+        else 'four_byte'
+            if b0 >= 224 'three_byte'
+                advance = 3
+            else 'three_byte'
+                if b0 >= 192 'two_byte'
+                    advance = 2
+                end 'two_byte'
+            end 'three_byte'
+        end 'four_byte'
+
+        return CharCodepointView{_char: _char, _pos: _pos + advance}
+    end 'next'
+end 'CharCodepointView'

@@ -59,7 +59,7 @@ Single-line comments only:
 
 ### Keywords
 ```
-and, as, bool, break, char, continue, else, end, export, extern,
+and, as, bool, break, continue, else, end, export, extern,
 false, float, for, function, if, in, int, interface, is, let, not, or,
 return, struct, then, true, var, while
 ```
@@ -88,15 +88,20 @@ return, struct, then, true, var, while
 1.0
 ```
 
-**Character Literals** (single character in single quotes)
+**Character Literals** (grapheme clusters in single quotes)
 ```maxon
-'A'
-'z'
-'\n'
-'\t'
-'\\'
-'\''
+'A'           // ASCII character (1 byte)
+'é'           // Latin with accent (2 bytes)
+'中'          // CJK character (3 bytes)
+'🎉'          // Emoji (4 bytes)
+'\n'          // Escape sequence (newline)
+'\t'          // Escape sequence (tab)
+'\\'          // Escape sequence (backslash)
+'\''          // Escape sequence (single quote)
 ```
+
+Character literals create a `char` struct value, which represents an Extended Grapheme Cluster (EGC).
+The `char` type may contain multiple UTF-8 bytes.
 
 **String Literals** (double-quoted, null-terminated)
 ```maxon
@@ -120,13 +125,34 @@ false
 
 ### Primitive Types
 
-| Type | Size | Description | LLVM Type |
-|------|------|-------------|-----------|
+| Type | Size | Description | MIR Type |
+|------|------|-------------|----------|
 | `int` | 32-bit | Signed integer | `i32` |
-| `float` | 64-bit | IEEE 754 double | `double` |
+| `float` | 64-bit | IEEE 754 double | `f64` |
 | `bool` | 1-bit | Boolean (true/false) | `i1` |
 | `byte` | 8-bit | Unsigned byte | `i8` |
-| `char` | 8-bit | Unicode scalar (alias for byte) | `i8` |
+
+### Character Type
+
+| Type | Size | Description |
+|------|------|-------------|
+| `char` | 16-byte | Extended Grapheme Cluster (EGC) |
+
+The `char` type represents a user-perceived character, which may consist of multiple Unicode codepoints:
+- `'A'` - ASCII character (1 byte)
+- `'é'` - Latin with combining accent (2-3 bytes)
+- `'🎉'` - Emoji (4 bytes)
+- `'👨‍👩‍👧'` - Family emoji with ZWJ (up to 25 bytes)
+
+**Char Methods:**
+```maxon
+var c = 'A'
+c.byteCount()       // Number of UTF-8 bytes (1 for ASCII)
+c.codepointCount()  // Number of Unicode codepoints
+c.firstCodepoint()  // First codepoint as int
+c.equals(other)     // Equality comparison
+c.toString()        // Convert to string
+```
 
 ### String Types
 

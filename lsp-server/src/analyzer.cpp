@@ -57,9 +57,17 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
 			semanticAnalyzer.registerBuiltinFunctions();
 
 			// Get the set of function names defined in the current document
+			// Include both top-level functions and struct methods (qualified as StructName.methodName)
 			std::set<std::string> currentDocFunctions;
 			for (const auto &func : program->functions) {
 				currentDocFunctions.insert(func->name);
+			}
+			// Also collect struct methods from the current document
+			for (const auto &structDef : program->structs) {
+				for (const auto &method : structDef->methods) {
+					std::string qualifiedName = structDef->name + "." + method->name;
+					currentDocFunctions.insert(qualifiedName);
+				}
 			}
 
 			// Register stdlib functions with the semantic analyzer,
@@ -95,7 +103,7 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
 				const StdlibStruct &structInfo = pair.second;
 				// Only register as external if NOT defined in current document
 				if (currentDocStructs.find(structInfo.name) == currentDocStructs.end()) {
-					semanticAnalyzer.registerExternalStruct(structInfo.name, structInfo.fields, structInfo.conformsTo);
+					semanticAnalyzer.registerExternalStruct(structInfo.name, structInfo.fields, structInfo.conformsTo, structInfo.typeAssignments);
 				}
 			}
 
@@ -1177,6 +1185,28 @@ void Analyzer::initializeStdlib(const std::string &stdlibPath) {
 
 		loadStdlibFile(filePath, namespaceName);
 	}
+
+	// After loading all files, resolve interfaceTypeBindings to typeAssignments for structs
+	// This requires interface definitions to be loaded first
+	for (auto &pair : stdlibStructs) {
+		StdlibStruct &structInfo = pair.second;
+		for (const auto &binding : structInfo.interfaceTypeBindings) {
+			const std::string &interfaceName = binding.first;
+			const std::vector<std::string> &withTypes = binding.second;
+
+			// Look up the interface
+			auto ifaceIt = stdlibInterfaces.find(interfaceName);
+			if (ifaceIt != stdlibInterfaces.end()) {
+				const StdlibInterface &iface = ifaceIt->second;
+				// Map positionally: withTypes[i] -> associatedTypes[i]
+				for (size_t i = 0; i < withTypes.size() && i < iface.associatedTypes.size(); i++) {
+					const std::string &assocTypeName = iface.associatedTypes[i];
+					const std::string &concreteType = withTypes[i];
+					structInfo.typeAssignments[assocTypeName] = concreteType;
+				}
+			}
+		}
+	}
 }
 
 std::vector<std::string> Analyzer::findStdlibFiles(const std::string &stdlibPath) {
@@ -1368,6 +1398,7 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 																  field.defaultValue != nullptr, "", field.line, field.column));
 				}
 				stdlibStruct.conformsTo = structDef->conformsTo;
+				stdlibStruct.interfaceTypeBindings = structDef->interfaceTypeBindings;
 				stdlibStruct.filePath = filePath;
 				stdlibStruct.line = structDef->line;
 				stdlibStruct.column = structDef->column;
@@ -1378,6 +1409,7 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 			for (const auto &ifaceDef : program->interfaces) {
 				StdlibInterface stdlibInterface;
 				stdlibInterface.name = ifaceDef->name;
+				stdlibInterface.associatedTypes = ifaceDef->associatedTypes;
 				stdlibInterface.filePath = filePath;
 				stdlibInterface.line = ifaceDef->line;
 				stdlibInterface.column = ifaceDef->column;

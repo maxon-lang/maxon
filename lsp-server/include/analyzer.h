@@ -39,20 +39,23 @@ struct StdlibStructMethod {
 
 // Information about a stdlib struct (for semantic analysis registration)
 struct StdlibStruct {
-	std::string name;					 // Struct name
-	std::vector<StructFieldInfo> fields; // Fields of the struct
-	std::vector<std::string> conformsTo; // Interfaces this struct conforms to
-	std::string filePath;				 // Absolute file path for go-to-definition
-	int line;							 // 1-based line number
-	int column;							 // 1-based column number
+	std::string name;									// Struct name
+	std::vector<StructFieldInfo> fields;				// Fields of the struct
+	std::vector<std::string> conformsTo;				// Interfaces this struct conforms to
+	std::map<std::string, std::string> typeAssignments; // Associated type assignments (e.g., "Element" -> "char")
+	std::map<std::string, std::vector<std::string>> interfaceTypeBindings; // Raw bindings before resolution
+	std::string filePath;								// Absolute file path for go-to-definition
+	int line;											// 1-based line number
+	int column;											// 1-based column number
 };
 
 // Information about a stdlib interface (for go-to-definition)
 struct StdlibInterface {
-	std::string name;	  // Interface name
-	std::string filePath; // Absolute file path for go-to-definition
-	int line;			  // 1-based line number
-	int column;			  // 1-based column number
+	std::string name;						  // Interface name
+	std::vector<std::string> associatedTypes; // Associated type declarations (e.g., "Element")
+	std::string filePath;					  // Absolute file path for go-to-definition
+	int line;								  // 1-based line number
+	int column;								  // 1-based column number
 };
 
 // Information about a type method or property

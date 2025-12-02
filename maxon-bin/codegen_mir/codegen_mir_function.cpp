@@ -20,6 +20,8 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 	} else {
 		functionName = func->name;
 	}
+	// Debug: track which function is being generated
+	logTrace("Generating function body: " + functionName);
 
 	// Track receiver type for implicit self field access
 	currentReceiverType = func->receiverType;
@@ -85,13 +87,17 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 	}
 
 	// Generate function body
-	for (auto &stmt : func->body) {
-		generateStmt(stmt.get(), function);
-		// Stop generating after a terminator (return, break, continue)
-		// Any subsequent code is unreachable
-		if (builder->getInsertBlock()->hasTerminator()) {
-			break;
+	try {
+		for (auto &stmt : func->body) {
+			generateStmt(stmt.get(), function);
+			// Stop generating after a terminator (return, break, continue)
+			// Any subsequent code is unreachable
+			if (builder->getInsertBlock()->hasTerminator()) {
+				break;
+			}
 		}
+	} catch (const std::exception &e) {
+		throw std::runtime_error("Error in function '" + functionName + "': " + e.what());
 	}
 
 	// If function doesn't have a terminator (return), clean up and add one

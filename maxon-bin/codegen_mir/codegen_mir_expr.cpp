@@ -303,6 +303,73 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteralAsSlice(StringLiteralExprA
 	return sliceAlloca;
 }
 
+// Generate a char literal (grapheme cluster)
+// char has the same internal layout as string (uses _ManagedString)
+mir::MIRValue *MIRCodeGenerator::generateCharLiteral(CharacterExprAST *charExpr) {
+	// Get the char struct type (defined by stdlib, same layout as string)
+	// char = { _managed ptr } where _managed points to __ManagedStringData
+	mir::MIRType *charType = getTypeFromString("char");
+
+	// Get or create __ManagedStringData type (internal layout at the pointer)
+	mir::MIRType *managedDataType = structTypes["__ManagedStringData"];
+	if (!managedDataType) {
+		mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+		if (!unsizedArrayType) {
+			unsizedArrayType = module->getOrCreateStructType(
+				"__unsized_array_byte",
+				{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+			structTypes["__unsized_array_byte"] = unsizedArrayType;
+		}
+		managedDataType = module->getOrCreateStructType(
+			"__ManagedStringData",
+			{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+		structTypes["__ManagedStringData"] = managedDataType;
+	}
+	mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+
+	// Create alloca for the char struct
+	mir::MIRValue *charAlloca = builder->createAlloca(charType, "char.literal");
+
+	// Get the char content (UTF-8 encoded grapheme cluster)
+	const std::string &str = charExpr->value;
+	size_t len = str.length();
+
+	// Char literals always use constant data (no heap allocation needed)
+	// since they're typically small (even complex emoji are < 25 bytes)
+	std::string globalName = ".chr." + std::to_string(stringLiteralCounter++);
+	mir::MIRValue *dataPtr = module->createGlobalString(globalName, str);
+
+	// Allocate the __ManagedStringData struct on the stack
+	mir::MIRValue *managedDataAlloca = builder->createAlloca(managedDataType, "char.managed.data");
+
+	// Populate the __ManagedStringData fields
+	// Field 0: _buffer []byte (fat pointer: {ptr, i32})
+	mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedDataType, managedDataAlloca, 0, "char.managed._buffer");
+
+	// Store the data pointer (field 0 of the fat pointer)
+	mir::MIRValue *bufferPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, "char.buffer.ptr");
+	builder->createStore(dataPtr, bufferPtrPtr);
+
+	// Store the length in the fat pointer (field 1 of the fat pointer)
+	mir::MIRValue *bufferLenPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 1, "char.buffer.len");
+	builder->createStore(builder->getInt32(static_cast<int>(len)), bufferLenPtr);
+
+	// Field 1: _len int
+	mir::MIRValue *lenFieldPtr = builder->createStructGEP(managedDataType, managedDataAlloca, 1, "char.managed._len");
+	builder->createStore(builder->getInt32(static_cast<int>(len)), lenFieldPtr);
+
+	// Field 2: _capacity int (0 = constant data, no refcount)
+	mir::MIRValue *capacityFieldPtr = builder->createStructGEP(managedDataType, managedDataAlloca, 2, "char.managed._capacity");
+	builder->createStore(builder->getInt32(0), capacityFieldPtr);
+
+	// Store the POINTER to the managed data in the char struct's _managed field
+	mir::MIRValue *managedFieldPtr = builder->createStructGEP(charType, charAlloca, 0, "char._managed");
+	builder->createStore(managedDataAlloca, managedFieldPtr);
+
+	// Return the alloca pointer
+	return charAlloca;
+}
+
 mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	if (auto *numExpr = dynamic_cast<NumberExprAST *>(expr)) {
 		return builder->getInt32(numExpr->value);
@@ -321,7 +388,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	}
 
 	if (auto *charExpr = dynamic_cast<CharacterExprAST *>(expr)) {
-		return builder->getInt8(static_cast<int8_t>(charExpr->value));
+		// Character literals are now grapheme clusters (char struct, same layout as string)
+		return generateCharLiteral(charExpr);
 	}
 
 	if (auto *strExpr = dynamic_cast<StringLiteralExprAST *>(expr)) {
@@ -458,7 +526,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			return builder->createPtrToInt(value, targetType, "ptr2inttmp");
 		}
 
-		throw std::runtime_error("Unsupported cast");
+		throw std::runtime_error("Unsupported cast from " +
+			(sourceType->structName.empty() ? getMaxonTypeFromMIRType(sourceType) : sourceType->structName) +
+			" to " + castExpr->targetType);
 	}
 
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
@@ -1015,6 +1085,77 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 							return result;
 						}
 					}
+				}
+			}
+		}
+
+		// For <, >, <=, >= on char type, compare by first codepoint value
+		// This provides lexicographic ordering for single-codepoint chars
+		if (binExpr->op == '<' || binExpr->op == '>' || binExpr->op == 'L' || binExpr->op == 'G') {
+			std::string leftType = getExpressionMaxonType(binExpr->left.get());
+
+			if (leftType == "char") {
+				// Get pointers to both char structs
+				mir::MIRValue *leftPtr = nullptr;
+				if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->left.get())) {
+					leftPtr = namedValues[varExpr->name];
+				} else if (auto *charLit = dynamic_cast<CharacterExprAST *>(binExpr->left.get())) {
+					leftPtr = generateCharLiteral(charLit);
+				} else {
+					leftPtr = generateExpr(binExpr->left.get());
+				}
+
+				mir::MIRValue *rightPtr = nullptr;
+				if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->right.get())) {
+					rightPtr = namedValues[varExpr->name];
+				} else if (auto *charLit = dynamic_cast<CharacterExprAST *>(binExpr->right.get())) {
+					rightPtr = generateCharLiteral(charLit);
+				} else {
+					rightPtr = generateExpr(binExpr->right.get());
+				}
+
+				if (!leftPtr || !rightPtr) {
+					throw std::runtime_error("Failed to generate char comparison operands");
+				}
+
+				// Extract first byte from each char to compare (for ASCII/simple chars)
+				// char = { _managed ptr } where _managed points to __ManagedStringData
+				mir::MIRType *charType = structTypes["char"];
+				mir::MIRType *managedDataType = structTypes["__ManagedStringData"];
+				mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+
+				if (!managedDataType || !unsizedArrayType) {
+					throw std::runtime_error("char comparison requires __ManagedStringData type");
+				}
+
+				// Get first byte from left char
+				mir::MIRValue *leftManagedPtr = builder->createStructGEP(charType, leftPtr, 0, "left.managed.ptr");
+				mir::MIRValue *leftManaged = builder->createLoad(mir::MIRType::getPtr(), leftManagedPtr, "left.managed");
+				mir::MIRValue *leftBufferPtr = builder->createStructGEP(managedDataType, leftManaged, 0, "left.buffer");
+				mir::MIRValue *leftDataPtrPtr = builder->createStructGEP(unsizedArrayType, leftBufferPtr, 0, "left.data.ptr.ptr");
+				mir::MIRValue *leftDataPtr = builder->createLoad(mir::MIRType::getPtr(), leftDataPtrPtr, "left.data.ptr");
+				mir::MIRValue *leftByte = builder->createLoad(mir::MIRType::getInt8(), leftDataPtr, "left.byte");
+				mir::MIRValue *leftVal = builder->createZExt(leftByte, mir::MIRType::getInt32(), "left.val");
+
+				// Get first byte from right char
+				mir::MIRValue *rightManagedPtr = builder->createStructGEP(charType, rightPtr, 0, "right.managed.ptr");
+				mir::MIRValue *rightManaged = builder->createLoad(mir::MIRType::getPtr(), rightManagedPtr, "right.managed");
+				mir::MIRValue *rightBufferPtr = builder->createStructGEP(managedDataType, rightManaged, 0, "right.buffer");
+				mir::MIRValue *rightDataPtrPtr = builder->createStructGEP(unsizedArrayType, rightBufferPtr, 0, "right.data.ptr.ptr");
+				mir::MIRValue *rightDataPtr = builder->createLoad(mir::MIRType::getPtr(), rightDataPtrPtr, "right.data.ptr");
+				mir::MIRValue *rightByte = builder->createLoad(mir::MIRType::getInt8(), rightDataPtr, "right.byte");
+				mir::MIRValue *rightVal = builder->createZExt(rightByte, mir::MIRType::getInt32(), "right.val");
+
+				// Compare the byte values
+				switch (binExpr->op) {
+				case '<':
+					return builder->createICmpSLT(leftVal, rightVal, "lttmp");
+				case '>':
+					return builder->createICmpSGT(leftVal, rightVal, "gttmp");
+				case 'L': // <=
+					return builder->createICmpSLE(leftVal, rightVal, "letmp");
+				case 'G': // >=
+					return builder->createICmpSGE(leftVal, rightVal, "getmp");
 				}
 			}
 		}

@@ -42,7 +42,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 	}
 
 	if (check(TokenType::CHARACTER)) {
-		char value = currentValue()[0]; // Get first character
+		std::string value = std::string(currentValue());  // Get full grapheme cluster
 		int line = currentLine();
 		int column = currentColumn();
 		advance();

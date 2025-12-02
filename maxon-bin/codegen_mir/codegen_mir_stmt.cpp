@@ -437,7 +437,18 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 				} else {
 					// Regular field value
 					mir::MIRValue *fieldValue = generateExpr(valueExpr);
-					builder->createStore(fieldValue, fieldPtr);
+
+					// Check if this is a struct field (char, string, etc.)
+					// For struct types, generateExpr returns a pointer to an alloca
+					// We need to load the struct value and store it (not store the pointer)
+					mir::MIRType *fieldType = getTypeFromString(fieldTypeStr);
+					if (fieldType->isStruct() && fieldValue->type == mir::MIRType::getPtr()) {
+						// Load the struct value from the alloca
+						mir::MIRValue *loadedValue = builder->createLoad(fieldType, fieldValue, fieldName + ".load");
+						builder->createStore(loadedValue, fieldPtr);
+					} else {
+						builder->createStore(fieldValue, fieldPtr);
+					}
 				}
 			}
 
@@ -456,6 +467,21 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 			namedValues[varDecl->name] = stringAlloca;
 			variableTypes[varDecl->name] = "string";
+			return;
+		}
+
+		// Handle char literal initialization
+		// generateCharLiteral creates an alloca, initializes it, and returns the pointer
+		// We use that alloca directly (don't create a second one)
+		if (auto *charLiteral = dynamic_cast<CharacterExprAST *>(varDecl->initializer.get())) {
+			mir::MIRValue *charAlloca = generateCharLiteral(charLiteral);
+
+			// Use the alloca from generateCharLiteral directly
+			// Rename it to match the variable name
+			charAlloca->name = varDecl->name;
+
+			namedValues[varDecl->name] = charAlloca;
+			variableTypes[varDecl->name] = "char";
 			return;
 		}
 
@@ -1524,16 +1550,24 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 		mir::MIRValue *currentVal = builder->createCall(getCurrentFunc, {iteratorAlloca}, forStmt->loopVar);
 
-		// Determine loop variable type from iterator's Element associated type
-		mir::MIRType *loopVarType = mir::MIRType::getInt32(); // Default
-		std::string loopVarTypeStr = "int";
-		auto typeAssignIt = structTypeAssignments.find(iterTypeName);
-		if (typeAssignIt != structTypeAssignments.end()) {
-			auto elementIt = typeAssignIt->second.find("Element");
-			if (elementIt != typeAssignIt->second.end()) {
-				loopVarTypeStr = elementIt->second;
-				loopVarType = getTypeFromString(loopVarTypeStr);
-			}
+		// Determine loop variable type from getCurrent's actual return type
+		// This ensures we match the struct type correctly (e.g., char struct vs i8)
+		mir::MIRType *loopVarType = getCurrentFunc->returnType;
+		std::string loopVarTypeStr = "int"; // Default for variableTypes map
+
+		// Get the type string from the return type for variableTypes tracking
+		if (loopVarType->isStruct()) {
+			loopVarTypeStr = loopVarType->structName;
+		} else if (loopVarType == mir::MIRType::getInt32()) {
+			loopVarTypeStr = "int";
+		} else if (loopVarType == mir::MIRType::getInt8()) {
+			loopVarTypeStr = "byte";
+		} else if (loopVarType == mir::MIRType::getFloat64()) {
+			loopVarTypeStr = "float";
+		} else if (loopVarType == mir::MIRType::getInt1()) {
+			loopVarTypeStr = "bool";
+		} else if (loopVarType == mir::MIRType::getPtr()) {
+			loopVarTypeStr = "ptr";
 		}
 
 		mir::MIRValue *loopVarAlloca = builder->createAlloca(loopVarType, forStmt->loopVar);

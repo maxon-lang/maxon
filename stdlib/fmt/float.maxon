@@ -2,18 +2,19 @@
 // Float formatting functions
 // Namespace: stdlib.fmt (automatically inferred from file path)
 
-/// Format a float to ASCII in a buffer (passed as array)
+/// Format a float to ASCII in a buffer (passed as array of bytes)
 /// Returns the number of bytes written
 /// Buffer must be at least 32 bytes
 /// precision = number of decimal places (0-15)
-export function format_float_array(value float, buffer []char, precision int) int
+/// Note: Uses byte not char since we're working with ASCII bytes, not grapheme clusters
+export function format_float_array(value float, buffer []byte, precision int) int
 // Handle zero special case
 if value == 0.0 'zero_case'
-    buffer[0] = '0' as char
-    buffer[1] = '.' as char
+    buffer[0] = 48 as byte  // '0' = 48
+    buffer[1] = 46 as byte  // '.' = 46
     var i = 0
     while i < precision 'zero_decimals'
-        buffer[2 + i] = '0' as char
+        buffer[2 + i] = 48 as byte  // '0' = 48
         i = i + 1
     end 'zero_decimals'
     return 2 + precision
@@ -24,7 +25,7 @@ var pos = 0
 // Handle negative numbers
 var work_value = value
 if value < 0.0 'negative_check'
-    buffer[pos] = '-' as char
+    buffer[pos] = 45 as byte  // '-' = 45
     pos = pos + 1
     work_value = -value
 end 'negative_check'
@@ -38,19 +39,19 @@ var int_part = trunc(work_value)
 var frac_part = work_value - int_part
 
 // Format integer part (similar to format_int_array)
-var temp = [20]char
+var temp = [20]byte
 var temp_pos = 19
 var abs_int = int_part
 
 if int_part == 0 'int_zero'
-    temp[temp_pos] = '0' as char
+    temp[temp_pos] = 48 as byte  // '0' = 48
     temp_pos = temp_pos - 1
 end 'int_zero'
 
 while abs_int > 0 'convert_int'
     var digit = abs_int mod 10
-    var digit_char = ('0' as int) + digit
-    temp[temp_pos] = digit_char as char
+    var digit_byte = 48 + digit  // '0' = 48
+    temp[temp_pos] = digit_byte as byte
     temp_pos = temp_pos - 1
     abs_int = abs_int / 10
 end 'convert_int'
@@ -66,7 +67,7 @@ end 'copy_int'
 pos = pos + length
 
 // Add decimal point
-buffer[pos] = '.' as char
+buffer[pos] = 46 as byte  // '.' = 46
 pos = pos + 1
 
 // Convert fractional digits one by one
@@ -74,8 +75,8 @@ var j = 0
 while j < precision 'convert_frac'
     frac_part = frac_part * 10.0
     var digit = trunc(frac_part)
-    var digit_char = ('0' as int) + digit
-    buffer[pos + j] = digit_char as char
+    var digit_byte = 48 + digit  // '0' = 48
+    buffer[pos + j] = digit_byte as byte
     frac_part = frac_part - (digit as float)
     j = j + 1
 end 'convert_frac'

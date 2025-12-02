@@ -85,10 +85,11 @@ void SemanticAnalyzer::registerExternalFunction(const std::string &name, const s
 }
 
 void SemanticAnalyzer::registerExternalStruct(const std::string &name, const std::vector<StructFieldInfo> &fields,
-											  const std::vector<std::string> &conformsTo) {
+											  const std::vector<std::string> &conformsTo,
+											  const std::map<std::string, std::string> &typeAssignments) {
 	// Only register if not already defined
 	if (structs.find(name) == structs.end()) {
-		structs.emplace(name, StructInfo(name, fields, 0, 0, conformsTo));
+		structs.emplace(name, StructInfo(name, fields, 0, 0, conformsTo, typeAssignments));
 		logTrace("Registered external struct: " + name);
 	}
 }
@@ -107,10 +108,8 @@ void SemanticAnalyzer::registerBuiltinFunctions() {
 	// byte.equals(other) -> bool
 	functions.emplace("byte.equals", FunctionInfo("byte.equals", "bool", {FunctionParameter("self", "byte"), FunctionParameter("other", "byte")}));
 
-	// char.hash() -> int
-	functions.emplace("char.hash", FunctionInfo("char.hash", "int", {FunctionParameter("self", "char")}));
-	// char.equals(other) -> bool
-	functions.emplace("char.equals", FunctionInfo("char.equals", "bool", {FunctionParameter("self", "char"), FunctionParameter("other", "char")}));
+	// Note: char.hash() and char.equals() are now defined in stdlib/string/char.maxon
+	// since char is a stdlib struct type (grapheme cluster), not a primitive
 }
 
 std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {

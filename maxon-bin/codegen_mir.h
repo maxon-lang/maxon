@@ -227,9 +227,10 @@ class MIRCodeGenerator {
 	mir::MIRType *getOrCreateCstringType();
 	mir::MIRType *getOrCreateSubstringType();
 
-	// String literal generation
+	// String and char literal generation
 	mir::MIRValue *generateStringLiteral(StringLiteralExprAST *strExpr);
 	mir::MIRValue *generateStringLiteralAsSlice(StringLiteralExprAST *strExpr);
+	mir::MIRValue *generateCharLiteral(CharacterExprAST *charExpr);
 
 	// Safe FFI generation
 	void registerExternFunction(FunctionAST *func);

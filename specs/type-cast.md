@@ -80,9 +80,10 @@ end 'main'
 
 <!-- test: char-to-int -->
 ```maxon
+// char is a grapheme cluster struct, use firstCodepoint() to get codepoint value
 function main() int
     var x = 'A'
-    return x as int
+    return x.firstCodepoint()
 end 'main'
 ```
 ```exitcode

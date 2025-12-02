@@ -65,7 +65,7 @@ If a stdlib function depends on other stdlib functions, they're also discovered 
 <!-- test: basic-autodiscovery -->
 ```maxon
 function main() int
-    var buffer = [12]char
+    var buffer = [12]byte
     return format_int_array(42, buffer)
 end 'main'
 ```
@@ -105,7 +105,7 @@ end 'main'
 <!-- test: qualified-call -->
 ```maxon
 function main() int
-    var buffer = [12]char
+    var buffer = [12]byte
     return format_int_array(42, buffer)
 end 'main'
 ```

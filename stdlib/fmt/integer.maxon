@@ -2,18 +2,19 @@
 // Integer formatting functions
 // Namespace: stdlib.fmt (automatically inferred from file path)
 
-/// Format an integer to ASCII in a buffer (passed as array)
+/// Format an integer to ASCII in a buffer (passed as array of bytes)
 /// Returns the number of bytes written
 /// Buffer must be at least 12 bytes (enough for -2147483648\0)
-export function format_int_array(value int, buffer []char) int
+/// Note: Uses byte not char since we're working with ASCII bytes, not grapheme clusters
+export function format_int_array(value int, buffer []byte) int
 // Handle zero special case
 if value == 0 'zero_case'
-    buffer[0] = '0' as char
+    buffer[0] = 48 as byte  // '0' = 48
     return 1
 end 'zero_case'
 
 // Temporary buffer for digit reversal
-var temp = [12]char
+var temp = [12]byte
 var pos = 11
 
 // Handle negative numbers
@@ -27,15 +28,15 @@ end 'negative_check'
 // Convert digits (right to left)
 while abs_value > 0 'convert'
     var digit = abs_value mod 10
-    var digit_char = ('0' as int) + digit
-    temp[pos] = digit_char as char
+    var digit_byte = 48 + digit  // '0' = 48
+    temp[pos] = digit_byte as byte
     pos = pos - 1
     abs_value = abs_value / 10
 end 'convert'
 
 // Add negative sign if needed
 if negative == 1 'add_sign'
-    temp[pos] = '-' as char
+    temp[pos] = 45 as byte  // '-' = 45
     pos = pos - 1
 end 'add_sign'
 

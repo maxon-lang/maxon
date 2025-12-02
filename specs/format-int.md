@@ -13,7 +13,7 @@ The `format_int_array()` function converts an integer to a string representation
 
 Implementation:
 - Defined in `stdlib/fmt/integer.maxon`
-- Signature: `format_int_array(value int, buffer []char) int`
+- Signature: `format_int_array(value int, buffer []byte) int`
 - Returns the number of characters written
 - Handles negative numbers, zero, and positive values
 - Uses modulo and division to extract digits
@@ -46,7 +46,7 @@ Returns the number of characters written to the buffer.
 
 ```maxon
 function main() int
-    var buffer = [12]char
+    var buffer = [12]byte
     var len = format_int_array(42, buffer)
     // buffer now contains "42"
     return len  // Returns 2
@@ -68,7 +68,7 @@ end 'main'
 <!-- test: basic -->
 ```maxon
 function main() int
-    var buffer = [12]char
+    var buffer = [12]byte
     var len = format_int_array(42, buffer)
     return len
 end 'main'
@@ -81,7 +81,7 @@ end 'main'
 <!-- test: zero -->
 ```maxon
 function main() int
-    var buffer = [12]char
+    var buffer = [12]byte
     var len = format_int_array(0, buffer)
     return len
 end 'main'
@@ -94,7 +94,7 @@ end 'main'
 <!-- test: negative -->
 ```maxon
 function main() int
-    var buffer = [12]char
+    var buffer = [12]byte
     var len = format_int_array(-123, buffer)
     return len
 end 'main'
@@ -107,7 +107,7 @@ end 'main'
 <!-- test: large-value -->
 ```maxon
 function main() int
-    var buffer = [12]char
+    var buffer = [12]byte
     var len = format_int_array(123456, buffer)
     return len
 end 'main'
@@ -120,7 +120,7 @@ end 'main'
 <!-- test: single-digit -->
 ```maxon
 function main() int
-    var buffer = [12]char
+    var buffer = [12]byte
     var len = format_int_array(7, buffer)
     return len
 end 'main'

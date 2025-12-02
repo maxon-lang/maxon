@@ -81,6 +81,14 @@ for c in s 'chars'
 end 'chars'
 ```
 
+### Char Methods
+
+```maxon
+var c = 'é'
+c.byteCount()    // Returns byte length of UTF-8 encoding (2 for é)
+c.toString()     // Converts to string
+```
+
 ## Tests
 
 <!-- test: basic-char -->
@@ -130,5 +138,222 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: multibyte-char-2byte -->
+### Multi-byte Char (2-byte UTF-8)
+
+```maxon
+function main() int
+    var c = 'é'
+    print_int(c.byteCount())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
+<!-- test: multibyte-char-3byte -->
+### Multi-byte Char (3-byte UTF-8)
+
+```maxon
+function main() int
+    var c = '中'
+    print_int(c.byteCount())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: multibyte-char-4byte -->
+### Multi-byte Char (4-byte Emoji)
+
+```maxon
+function main() int
+    var c = '🎉'
+    print_int(c.byteCount())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
+<!-- test: char-to-string -->
+### Char to String Conversion
+
+```maxon
+function main() int
+    var c = 'A'
+    var s = c.toString()
+    print(s)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+A
+```
+
+<!-- test: multibyte-char-to-string -->
+### Multi-byte Char to String
+
+```maxon
+function main() int
+    var c = '中'
+    var s = c.toString()
+    print(s)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+中
+```
+
+<!-- test: char-equality-multibyte -->
+### Multi-byte Char Equality
+
+```maxon
+function main() int
+    var a = 'é'
+    var b = 'é'
+    if a == b 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: char-inequality-multibyte -->
+### Multi-byte Char Inequality
+
+```maxon
+function main() int
+    var a = 'é'
+    var b = 'è'
+    if a != b 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: emoji-char -->
+### Emoji Char
+
+```maxon
+function main() int
+    var emoji = '🎉'
+    print(emoji.toString())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+🎉
+```
+
+<!-- test: flag-emoji-char -->
+### Flag Emoji (Regional Indicator Pair)
+
+```maxon
+function main() int
+    var flag = '🇺🇸'
+    print_int(flag.byteCount())
+    print(flag.toString())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8
+🇺🇸
+```
+
+<!-- test: family-emoji-char -->
+### Family Emoji (ZWJ Sequence)
+
+```maxon
+function main() int
+    var family = '👨‍👩‍👧'
+    print_int(family.byteCount())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18
+```
+
+<!-- test: skin-tone-emoji -->
+### Skin Tone Modifier Emoji
+
+```maxon
+function main() int
+    var wave = '👋🏽'
+    print_int(wave.byteCount())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8
+```
+
+<!-- test: escape-sequences -->
+### Escape Sequences in Char
+
+```maxon
+function main() int
+    var newline = '\n'
+    var tab = '\t'
+    var backslash = '\\'
+    var quote = '\''
+    print_int(newline.byteCount())
+    print_int(tab.byteCount())
+    print_int(backslash.byteCount())
+    print_int(quote.byteCount())
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+1
+1
+1
 ```
 

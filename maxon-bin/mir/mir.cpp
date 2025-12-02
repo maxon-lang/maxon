@@ -1,8 +1,23 @@
 #include "mir.h"
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 
 namespace mir {
+
+// Helper function to escape string for LLVM IR output
+static std::string escapeStringForLLVM(const std::string &str) {
+	std::ostringstream ss;
+	for (unsigned char c : str) {
+		// Escape non-printable characters and special characters
+		if (c < 32 || c > 126 || c == '\\' || c == '"') {
+			ss << '\\' << std::hex << std::uppercase << std::setw(2) << std::setfill('0') << (int)c;
+		} else {
+			ss << c;
+		}
+	}
+	return ss.str();
+}
 
 //==============================================================================
 // MIRType Implementation
@@ -551,7 +566,7 @@ std::string MIRGlobal::toString() const {
 	}
 	ss << type->toString();
 	if (isStringConstant) {
-		ss << " c\"" << stringValue << "\\00\"";
+		ss << " c\"" << escapeStringForLLVM(stringValue) << "\\00\"";
 	} else if (hasInitializer) {
 		ss << " zeroinitializer"; // Simplified
 	}
