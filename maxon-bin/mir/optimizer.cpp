@@ -502,6 +502,9 @@ bool DeadCodeEliminationPass::run(MIRModule &module) {
 	// First, eliminate unused functions (function-level DCE)
 	changed |= eliminateUnusedFunctions(module);
 
+	// Eliminate unused globals (global-level DCE)
+	changed |= eliminateUnusedGlobals(module);
+
 	// Recalculate which types are actually used by remaining functions
 	recalculateUsedTypes(module);
 
@@ -638,6 +641,54 @@ bool DeadCodeEliminationPass::eliminateUnusedFunctions(MIRModule &module) {
 		size_t eliminated = originalSize - module.functions.size();
 		std::cout << "  Dead Code Elimination: removed " << eliminated
 				  << " unused function(s)" << std::endl;
+	}
+
+	return changed;
+}
+
+bool DeadCodeEliminationPass::eliminateUnusedGlobals(MIRModule &module) {
+	// Collect all global names that are referenced by remaining functions
+	std::unordered_set<std::string> usedGlobals;
+
+	// Helper to check if a value is a global reference
+	auto isGlobalReference = [](MIRValue *v) {
+		return v && !v->name.empty() &&
+			   (v->isGlobalRef || v->kind == MIRValueKind::Global);
+	};
+
+	for (auto &func : module.functions) {
+		for (auto &block : func->basicBlocks) {
+			for (auto &inst : block->instructions) {
+				// Check operands for global references
+				for (auto *operand : inst->operands) {
+					if (isGlobalReference(operand)) {
+						usedGlobals.insert(operand->name);
+					}
+				}
+				// Check phi incoming values
+				for (auto &incoming : inst->phiIncoming) {
+					if (isGlobalReference(incoming.first)) {
+						usedGlobals.insert(incoming.first->name);
+					}
+				}
+			}
+		}
+	}
+
+	// Remove unused globals
+	size_t originalSize = module.globals.size();
+	module.globals.erase(
+		std::remove_if(module.globals.begin(), module.globals.end(),
+					   [&](const std::unique_ptr<MIRGlobal> &global) {
+						   return usedGlobals.find(global->name) == usedGlobals.end();
+					   }),
+		module.globals.end());
+
+	bool changed = (module.globals.size() < originalSize);
+	if (changed && verboseLevel_ >= 2) {
+		size_t eliminated = originalSize - module.globals.size();
+		std::cout << "  Dead Code Elimination: removed " << eliminated
+				  << " unused global(s)" << std::endl;
 	}
 
 	return changed;

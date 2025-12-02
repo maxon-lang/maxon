@@ -56,11 +56,6 @@ export struct string is Hashable, Equatable, Iterable with char, ExpressibleBySt
 		return grapheme_count
 	end 'count'
 
-	// Get byte count (length of UTF-8 data)
-	export function byteCount() int
-		return __string_len(_managed)
-	end 'byteCount'
-
 	// Check if the string is empty
 	export function isEmpty() bool
 		return __string_len(_managed) == 0
@@ -426,7 +421,7 @@ end 'string'
 // ============================================
 
 // ByteView - iterate over raw UTF-8 bytes
-export struct ByteView is Iterable with int
+export struct ByteView is Iterable with byte
 	var _str string
 	var _pos int
 
@@ -437,22 +432,22 @@ export struct ByteView is Iterable with int
 		return 0
 	end 'hasNext'
 
-	export function Iterable.getCurrent() int
-		return __string_byte_at(_str._managed, _pos) as int
+	export function Iterable.getCurrent() byte
+		return __string_byte_at(_str._managed, _pos)
 	end 'getCurrent'
 
 	export function Iterable.next() ByteView
 		return ByteView{_str: _str, _pos: _pos + 1}
 	end 'next'
 
-	export function length() int
+	export function count() int
 		return __string_len(_str._managed)
-	end 'length'
+	end 'count'
 end 'ByteView'
 
 // CharCollection - indexed access to Unicode characters
 // Implements Collection interface for get/set operations
-export struct CharCollection is Iterable with int, Collection with int
+export struct CharCollection is Iterable with char, Collection with char
 	var _str string
 	var _pos int
 
@@ -482,7 +477,7 @@ export struct CharCollection is Iterable with int, Collection with int
 	end 'count'
 
 	// Collection.get - get character at index
-	export function Collection.get(index int) int
+	export function Collection.get(index int) char
 		var charCount = 0
 		var bytePos = 0
 		var len = __string_len(_str._managed)
@@ -504,34 +499,15 @@ export struct CharCollection is Iterable with int, Collection with int
 			charCount = charCount + 1
 		end 'navigate'
 
-		if bytePos >= len 'out_of_bounds'
-			return 0 - 1
-		end 'out_of_bounds'
-
-		var b0 = __string_byte_at(_str._managed, bytePos) as int
-		if b0 < 128 'ascii'
-			return b0
-		end 'ascii'
-		if b0 < 224 'two_byte'
-			var b1 = __string_byte_at(_str._managed, bytePos + 1) as int
-			return ((b0 mod 32) * 64) + (b1 mod 64)
-		end 'two_byte'
-		if b0 < 240 'three_byte'
-			var b1 = __string_byte_at(_str._managed, bytePos + 1) as int
-			var b2 = __string_byte_at(_str._managed, bytePos + 2) as int
-			return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
-		end 'three_byte'
-		var b1 = __string_byte_at(_str._managed, bytePos + 1) as int
-		var b2 = __string_byte_at(_str._managed, bytePos + 2) as int
-		var b3 = __string_byte_at(_str._managed, bytePos + 3) as int
-		return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+		// Return char from current position
+		return _makeCharAt(bytePos)
 	end 'get'
 
 	// Collection.set - set character at index (triggers COW)
 	// Ensures exclusive ownership before mutation via _managed_string_make_unique
 	// Note: This only works correctly for ASCII characters (single-byte)
 	// UTF-8 multi-byte character replacement would require more complex logic
-	export function Collection.set(index int, value int) CharCollection
+	export function Collection.set(index int, value char) CharCollection
 		// Validate index
 		var len = __string_len(_str._managed)
 		if index < 0 or index >= len 'bounds_check'
@@ -542,8 +518,10 @@ export struct CharCollection is Iterable with int, Collection with int
 		// This will copy the buffer if refcount > 1
 		__string_make_unique(_str._managed)
 
-		// Now safe to mutate - set the byte
-		__string_set_byte(_str._managed, index, value as byte)
+		// Now safe to mutate - set the byte (only works for single-byte chars)
+		// Access first byte of char directly via its _managed field
+		var b = __string_byte_at(value._managed, 0)
+		__string_set_byte(_str._managed, index, b)
 
 		return self
 	end 'set'
@@ -556,24 +534,8 @@ export struct CharCollection is Iterable with int, Collection with int
 		return 0
 	end 'hasNext'
 
-	export function Iterable.getCurrent() int
-		var b0 = __string_byte_at(_str._managed, _pos) as int
-		if b0 < 128 'ascii'
-			return b0
-		end 'ascii'
-		if b0 < 224 'two_byte'
-			var b1 = __string_byte_at(_str._managed, _pos + 1) as int
-			return ((b0 mod 32) * 64) + (b1 mod 64)
-		end 'two_byte'
-		if b0 < 240 'three_byte'
-			var b1 = __string_byte_at(_str._managed, _pos + 1) as int
-			var b2 = __string_byte_at(_str._managed, _pos + 2) as int
-			return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
-		end 'three_byte'
-		var b1 = __string_byte_at(_str._managed, _pos + 1) as int
-		var b2 = __string_byte_at(_str._managed, _pos + 2) as int
-		var b3 = __string_byte_at(_str._managed, _pos + 3) as int
-		return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+	export function Iterable.getCurrent() char
+		return _makeCharAt(_pos)
 	end 'getCurrent'
 
 	export function Iterable.next() CharCollection
@@ -592,6 +554,31 @@ export struct CharCollection is Iterable with int, Collection with int
 		end 'four_byte'
 		return CharCollection{_str: _str, _pos: _pos + advance}
 	end 'next'
+
+	// Internal: create char from codepoint at byte position
+	function _makeCharAt(bytePos int) char
+		var len = __string_len(_str._managed)
+		var charLen = 0
+		if bytePos < len 'in_bounds'
+			var b0 = __string_byte_at(_str._managed, bytePos) as int
+			charLen = 1
+			if b0 >= 240 'four_byte'
+				charLen = 4
+			else 'four_byte'
+				if b0 >= 224 'three_byte'
+					charLen = 3
+				else 'three_byte'
+					if b0 >= 192 'two_byte'
+						charLen = 2
+					end 'two_byte'
+				end 'three_byte'
+			end 'four_byte'
+		end 'in_bounds'
+
+		var sub = __string_slice(_str._managed, bytePos, bytePos + charLen)
+		var managed = __substring_to_string(sub)
+		return char{_managed: managed}
+	end '_makeCharAt'
 end 'CharCollection'
 
 // UTF16View - iterate over UTF-16 code units

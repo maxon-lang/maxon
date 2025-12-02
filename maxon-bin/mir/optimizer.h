@@ -246,6 +246,7 @@ class DeadCodeEliminationPass : public OptimizationPass {
   private:
 	bool runOnFunction(MIRFunction &func);
 	bool eliminateUnusedFunctions(MIRModule &module);
+	bool eliminateUnusedGlobals(MIRModule &module);
 	void recalculateUsedTypes(MIRModule &module);
 
 	// Compute the set of values that are used

@@ -147,11 +147,10 @@ The `char` type represents a user-perceived character, which may consist of mult
 **Char Methods:**
 ```maxon
 var c = 'A'
-c.byteCount()       // Number of UTF-8 bytes (1 for ASCII)
-c.codepointCount()  // Number of Unicode codepoints
-c.firstCodepoint()  // First codepoint as int
-c.equals(other)     // Equality comparison
-c.toString()        // Convert to string
+c.bytes().count()      // Number of UTF-8 bytes (1 for ASCII)
+c.codepoints().count() // Number of Unicode codepoints
+c.equals(other)        // Equality comparison
+c.toString()           // Convert to string
 ```
 
 ### String Types
@@ -178,8 +177,9 @@ print(s)                     // Print string to stdout with newline
 **String Properties:**
 ```maxon
 var s = "hello"
-var len = s.count            // Codepoint count (UTF-8 aware): 5
-var empty = s.isEmpty        // Check if empty: false
+var len = s.count()           // Grapheme count (UTF-8 aware): 5
+var bytes = s.bytes().count() // Byte count: 5
+var empty = s.isEmpty()       // Check if empty: false
 ```
 
 **String Slicing:**
@@ -796,9 +796,10 @@ format_float(value float) string // Format float as string
 
 **String Functions**
 ```maxon
-// Properties (accessed as s.property)
-s.count                         // Codepoint count (UTF-8 aware)
-s.isEmpty                       // Returns bool
+// Methods
+s.count()                       // Grapheme count (UTF-8 aware)
+s.bytes().count()               // Byte count
+s.isEmpty()                     // Returns bool
 
 // Slicing (accessed as s[start..end])
 s[start..end]                   // Substring from start to end (exclusive)

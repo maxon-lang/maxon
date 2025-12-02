@@ -85,8 +85,11 @@ end 'chars'
 
 ```maxon
 var c = 'é'
-c.byteCount()    // Returns byte length of UTF-8 encoding (2 for é)
-c.toString()     // Converts to string
+var b = c.bytes()
+b.count()              // Returns byte length of UTF-8 encoding (2 for é)
+var cp = c.codepoints()
+cp.count()             // Returns number of Unicode codepoints
+c.toString()           // Converts to string
 ```
 
 ## Tests
@@ -146,7 +149,7 @@ end 'main'
 ```maxon
 function main() int
     var c = 'é'
-    print_int(c.byteCount())
+    print_int(c.bytes().count())
     return 0
 end 'main'
 ```
@@ -163,7 +166,7 @@ end 'main'
 ```maxon
 function main() int
     var c = '中'
-    print_int(c.byteCount())
+    print_int(c.bytes().count())
     return 0
 end 'main'
 ```
@@ -180,7 +183,7 @@ end 'main'
 ```maxon
 function main() int
     var c = '🎉'
-    print_int(c.byteCount())
+    print_int(c.bytes().count())
     return 0
 end 'main'
 ```
@@ -284,7 +287,7 @@ end 'main'
 ```maxon
 function main() int
     var flag = '🇺🇸'
-    print_int(flag.byteCount())
+    print_int(flag.bytes().count())
     print(flag.toString())
     return 0
 end 'main'
@@ -303,7 +306,7 @@ end 'main'
 ```maxon
 function main() int
     var family = '👨‍👩‍👧'
-    print_int(family.byteCount())
+    print_int(family.bytes().count())
     return 0
 end 'main'
 ```
@@ -320,7 +323,7 @@ end 'main'
 ```maxon
 function main() int
     var wave = '👋🏽'
-    print_int(wave.byteCount())
+    print_int(wave.bytes().count())
     return 0
 end 'main'
 ```
@@ -340,10 +343,10 @@ function main() int
     var tab = '\t'
     var backslash = '\\'
     var quote = '\''
-    print_int(newline.byteCount())
-    print_int(tab.byteCount())
-    print_int(backslash.byteCount())
-    print_int(quote.byteCount())
+    print_int(newline.bytes().count())
+    print_int(tab.bytes().count())
+    print_int(backslash.bytes().count())
+    print_int(quote.bytes().count())
     return 0
 end 'main'
 ```

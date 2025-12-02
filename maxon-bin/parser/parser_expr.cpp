@@ -459,7 +459,57 @@ std::unique_ptr<ExprAST> Parser::parseUnary() {
 		return std::make_unique<UnaryExprAST>('!', std::move(operand), line, column);
 	}
 
-	return parsePrimary();
+	return parsePostfix();
+}
+
+std::unique_ptr<ExprAST> Parser::parsePostfix() {
+	auto expr = parsePrimary();
+
+	// Handle postfix operators: method calls, member access, array indexing
+	while (true) {
+		if (check(TokenType::DOT)) {
+			advance(); // consume '.'
+			Token member = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
+			int line = currentLine();
+			int column = currentColumn();
+
+			// Check if this is a method call: expr.method(args)
+			if (check(TokenType::LPAREN)) {
+				advance(); // consume '('
+				std::vector<std::unique_ptr<ExprAST>> args;
+
+				// First argument is the expression itself (implicit self)
+				args.push_back(std::move(expr));
+
+				// Parse remaining arguments
+				if (!check(TokenType::RPAREN)) {
+					args.push_back(parseLogicalOr());
+
+					while (match(TokenType::COMMA)) {
+						args.push_back(parseLogicalOr());
+					}
+				}
+
+				expectAdvance(TokenType::RPAREN, "Expected ')' after method arguments");
+				expr = std::make_unique<CallExprAST>(member.value, std::move(args), line, column);
+			} else {
+				// Pure member access: expr.field
+				expr = std::make_unique<MemberAccessExprAST>(std::move(expr), member.value, line, column);
+			}
+		} else if (check(TokenType::LBRACKET)) {
+			// Array indexing on expression result: expr[index]
+			int line = currentLine();
+			int column = currentColumn();
+			advance(); // consume '['
+			auto index = parseLogicalOr();
+			expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
+			expr = std::make_unique<ArrayIndexExprAST>(std::move(expr), std::move(index), line, column);
+		} else {
+			break;
+		}
+	}
+
+	return expr;
 }
 
 std::unique_ptr<ExprAST> Parser::parseFactor() {

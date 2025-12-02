@@ -536,7 +536,7 @@ bool runMIRVerifierTest(const fs::path &mirFile, bool verbose) {
 	std::string testName = mirFile.stem().string();
 
 	// Run maxon verify-mir
-	std::string cmd = "maxon verify-mir \"" + mirFile.string() + "\"";
+	std::string cmd = "\"" + g_compilerPath + "\" verify-mir \"" + mirFile.string() + "\"";
 	auto result = runCommand(cmd);
 
 	bool testPassed = false;

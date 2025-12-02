@@ -33,11 +33,6 @@ export struct char is Equatable, Hashable, ExpressibleByCharLiteral
     // Basic properties
     // ============================================
 
-    // byteCount - get the number of UTF-8 bytes in this character
-    export function byteCount() int
-        return __string_len(_managed)
-    end 'byteCount'
-
     // isEmpty - check if char is empty (should never be true for valid char)
     export function isEmpty() bool
         return __string_len(_managed) == 0
@@ -90,76 +85,18 @@ export struct char is Equatable, Hashable, ExpressibleByCharLiteral
     end 'hash'
 
     // ============================================
-    // Codepoint access
+    // View accessors
     // ============================================
-
-    // codepointCount - get number of Unicode codepoints in this grapheme
-    export function codepointCount() int
-        var count = 0
-        var pos = 0
-        var len = __string_len(_managed)
-        while pos < len 'count_loop'
-            var b = __string_byte_at(_managed, pos) as int
-            // Count lead bytes only
-            if b < 128 or b >= 192 'is_lead'
-                count = count + 1
-            end 'is_lead'
-            pos = pos + 1
-        end 'count_loop'
-        return count
-    end 'codepointCount'
-
-    // firstCodepoint - get the first Unicode codepoint of this grapheme
-    export function firstCodepoint() int
-        if __string_len(_managed) == 0 'empty'
-            return 0
-        end 'empty'
-
-        var b0 = __string_byte_at(_managed, 0) as int
-
-        // ASCII (1 byte)
-        if b0 < 128 'ascii'
-            return b0
-        end 'ascii'
-
-        // 2-byte sequence
-        if b0 < 224 'two_byte'
-            var b1 = __string_byte_at(_managed, 1) as int
-            return ((b0 mod 32) * 64) + (b1 mod 64)
-        end 'two_byte'
-
-        // 3-byte sequence
-        if b0 < 240 'three_byte'
-            var b1 = __string_byte_at(_managed, 1) as int
-            var b2 = __string_byte_at(_managed, 2) as int
-            return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
-        end 'three_byte'
-
-        // 4-byte sequence
-        var b1 = __string_byte_at(_managed, 1) as int
-        var b2 = __string_byte_at(_managed, 2) as int
-        var b3 = __string_byte_at(_managed, 3) as int
-        return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
-    end 'firstCodepoint'
 
     // codepoints - iterate over codepoints in this grapheme
     export function codepoints() CharCodepointView
         return CharCodepointView{_char: self, _pos: 0}
     end 'codepoints'
 
-    // ============================================
-    // Byte access
-    // ============================================
-
     // bytes - iterate over raw UTF-8 bytes
     export function bytes() CharByteView
         return CharByteView{_char: self, _pos: 0}
     end 'bytes'
-
-    // byteAt - get byte at index (for low-level access)
-    export function byteAt(index int) byte
-        return __string_byte_at(_managed, index)
-    end 'byteAt'
 
     // ============================================
     // Comparison (for ordering)
@@ -203,7 +140,7 @@ end 'char'
 // ============================================
 
 // CharByteView - iterate over raw UTF-8 bytes of a char
-export struct CharByteView is Iterable with int
+export struct CharByteView is Iterable with byte
     var _char char
     var _pos int
 
@@ -214,13 +151,17 @@ export struct CharByteView is Iterable with int
         return 0
     end 'hasNext'
 
-    export function Iterable.getCurrent() int
-        return __string_byte_at(_char._managed, _pos) as int
+    export function Iterable.getCurrent() byte
+        return __string_byte_at(_char._managed, _pos)
     end 'getCurrent'
 
     export function Iterable.next() CharByteView
         return CharByteView{_char: _char, _pos: _pos + 1}
     end 'next'
+
+    export function count() int
+        return __string_len(_char._managed)
+    end 'count'
 end 'CharByteView'
 
 // CharCodepointView - iterate over Unicode codepoints of a char
@@ -281,4 +222,19 @@ export struct CharCodepointView is Iterable with int
 
         return CharCodepointView{_char: _char, _pos: _pos + advance}
     end 'next'
+
+    export function count() int
+        var cpCount = 0
+        var pos = 0
+        var len = __string_len(_char._managed)
+        while pos < len 'count_loop'
+            var b = __string_byte_at(_char._managed, pos) as int
+            // Count lead bytes only
+            if b < 128 or b >= 192 'is_lead'
+                cpCount = cpCount + 1
+            end 'is_lead'
+            pos = pos + 1
+        end 'count_loop'
+        return cpCount
+    end 'count'
 end 'CharCodepointView'

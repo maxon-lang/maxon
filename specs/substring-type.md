@@ -136,7 +136,8 @@ function main() int
     var sub = s.slice(1, 4)
     var sum = 0
     for c in sub 'loop'
-        sum = sum + c.firstCodepoint()  // char is a grapheme cluster struct
+        var cps = c.codepoints()
+        sum = sum + cps.getCurrent()  // char is a grapheme cluster struct
     end 'loop'
     // 98 + 99 + 100 = 297 (b, c, d)
     return sum - 294

@@ -59,9 +59,9 @@ var longer = "this is a longer string"  // Heap allocated
 
 ```maxon
 var s = "hello"
-var len = s.count()        // Returns 5 (grapheme count)
-var bytes = s.byteCount()  // Returns 5 (byte count)
-var empty = s.isEmpty()    // Returns false
+var len = s.count()           // Returns 5 (grapheme count)
+var bytes = s.bytes().count() // Returns 5 (byte count)
+var empty = s.isEmpty()       // Returns false
 ```
 
 ### Search Methods
@@ -756,7 +756,8 @@ function main() int
     var s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
     var sum = 0
     for c in s 'loop'
-        sum = sum + c.firstCodepoint()  // char is a grapheme cluster struct
+        var cps = c.codepoints()
+        sum = sum + cps.getCurrent()  // char is a grapheme cluster struct
     end 'loop'
     print_int(sum)  // 65+66+...+80 = 1160
     return 0
@@ -1017,12 +1018,12 @@ end 'main'
 hello
 ```
 
-<!-- test: byteCount-method -->
-### byteCount Method
+<!-- test: bytes-count-method -->
+### bytes().count() Method
 ```maxon
 function main() int
     var s = "hello"
-    print_int(s.byteCount())
+    print_int(s.bytes().count())
     return 0
 end 'main'
 ```
@@ -1033,12 +1034,12 @@ end 'main'
 5
 ```
 
-<!-- test: byteCount-multibyte -->
-### byteCount with Multi-byte Characters
+<!-- test: bytes-count-multibyte -->
+### bytes().count() with Multi-byte Characters
 ```maxon
 function main() int
     var s = "café"
-    print_int(s.byteCount())  // 5 bytes (c=1, a=1, f=1, é=2)
+    print_int(s.bytes().count())  // 5 bytes (c=1, a=1, f=1, é=2)
     return 0
 end 'main'
 ```
@@ -1065,13 +1066,13 @@ end 'main'
 4
 ```
 
-<!-- test: count-vs-byteCount -->
-### count vs byteCount
+<!-- test: count-vs-bytes-count -->
+### count vs bytes().count()
 ```maxon
 function main() int
     var s = "🇺🇸"  // Flag emoji (1 grapheme, 8 bytes)
     print_int(s.count())
-    print_int(s.byteCount())
+    print_int(s.bytes().count())
     return 0
 end 'main'
 ```
@@ -1090,7 +1091,7 @@ function main() int
     var s = "a🎉b"
     var count = 0
     for c in s 'loop'
-        var _unused = c.byteCount()  // Use c to avoid unused warning
+        var _unused = c.bytes().count()  // Use c to avoid unused warning
         _unused = _unused
         count = count + 1
     end 'loop'
@@ -1112,7 +1113,7 @@ function main() int
     var s = "🇺🇸🇬🇧"  // Two flag emojis
     var count = 0
     for c in s 'loop'
-        var _unused = c.byteCount()  // Use c to avoid unused warning
+        var _unused = c.bytes().count()  // Use c to avoid unused warning
         _unused = _unused
         count = count + 1
     end 'loop'
@@ -1134,7 +1135,7 @@ function main() int
     var s = "👨‍👩‍👧"  // Family emoji (1 grapheme)
     var count = 0
     for c in s 'loop'
-        var _unused = c.byteCount()  // Use c to avoid unused warning
+        var _unused = c.bytes().count()  // Use c to avoid unused warning
         _unused = _unused
         count = count + 1
     end 'loop'

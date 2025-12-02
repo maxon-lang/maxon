@@ -610,6 +610,13 @@ MIRGlobal *MIRModule::getGlobal(const std::string &globalName) {
 }
 
 MIRValue *MIRModule::createGlobalString(const std::string &globalName, const std::string &value) {
+	// Check if a global with this name already exists
+	if (getGlobal(globalName)) {
+		MIRValue *globalRef = new MIRValue(MIRType::getPtr(), globalName);
+		globalRef->isGlobalRef = true;
+		return globalRef;
+	}
+
 	// Create array type for the string data [N+1 x i8] (including null terminator)
 	size_t len = value.length() + 1; // Include null terminator
 	MIRType *charType = MIRType::getInt8();

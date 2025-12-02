@@ -99,8 +99,8 @@ Strings automatically use grapheme clusters for iteration:
 
 ```maxon
 var s = "👨‍👩‍👧"  // Family emoji - 1 grapheme, 18 bytes, 5 codepoints
-print_int(s.count())      // 1 (grapheme count)
-print_int(s.byteCount())  // 18 (byte count)
+print_int(s.count())         // 1 (grapheme count)
+print_int(s.bytes().count()) // 18 (byte count)
 
 for c in s 'loop'
     // Iterates once, c is the family emoji
@@ -175,7 +175,7 @@ Flag emoji (pairs of regional indicators) are single graphemes:
 function main() int
     var s = "🇺🇸"  // US flag (2 regional indicators = 1 grapheme)
     print_int(s.count())
-    print_int(s.byteCount())
+    print_int(s.bytes().count())
     return 0
 end 'main'
 ```
@@ -215,7 +215,7 @@ Emoji with skin tone modifiers are single graphemes:
 function main() int
     var s = "👋🏽"  // Wave + medium skin tone
     print_int(s.count())
-    print_int(s.byteCount())
+    print_int(s.bytes().count())
     return 0
 end 'main'
 ```
