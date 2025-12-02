@@ -13,10 +13,10 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 241
+; Instructions: 240
 
 %string = type { ptr, i32 }
-%ByteView = type { %string, i32 }
+%ByteView = type { ptr, i32 }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
 %cstring = type { ptr, i32, ptr }
 %__unsized_array_byte = type { ptr, i32 }
@@ -59,13 +59,14 @@ cstring.continue2:
 define %ByteView @string.bytes(ptr %self) {
 entry0:
   %1 = alloca %ByteView
-  %3 = load %string, ptr %self
-  %4 = getelementptr %ByteView, ptr %1, i32 0, i32 0
-  store %string %3, ptr %4
-  %5 = getelementptr %ByteView, ptr %1, i32 0, i32 1
-  store i32 0, ptr %5
-  %6 = load %ByteView, ptr %1
-  ret %ByteView %6
+  %3 = getelementptr %string, ptr %self, i32 0, i32 0
+  %4 = load ptr, ptr %3
+  %5 = getelementptr %ByteView, ptr %1, i32 0, i32 0
+  store ptr %4, ptr %5
+  %6 = getelementptr %ByteView, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = load %ByteView, ptr %1
+  ret %ByteView %7
 }
 
 define i32 @ByteView.hasNext(ptr %self) {
@@ -73,12 +74,11 @@ entry0:
   %2 = getelementptr %ByteView, ptr %self, i32 0, i32 1
   %3 = load i32, ptr %2
   %5 = getelementptr %ByteView, ptr %self, i32 0, i32 0
-  %6 = getelementptr %string, ptr %5, i32 0, i32 0
-  %7 = load ptr, ptr %6
-  %8 = getelementptr %__ManagedStringData, ptr %7, i32 0, i32 1
-  %9 = load i32, ptr %8
-  %10 = icmp slt i32 %3, %9
-  br i1 %10, label %then1, label %ifcont2
+  %6 = load ptr, ptr %5
+  %7 = getelementptr %__ManagedStringData, ptr %6, i32 0, i32 1
+  %8 = load i32, ptr %7
+  %9 = icmp slt i32 %3, %8
+  br i1 %9, label %then1, label %ifcont2
 then1:
   ret i32 1
 ifcont2:
@@ -89,9 +89,9 @@ define %ByteView @ByteView.next(ptr %self) {
 entry0:
   %1 = alloca %ByteView
   %3 = getelementptr %ByteView, ptr %self, i32 0, i32 0
-  %4 = load %string, ptr %3
+  %4 = load ptr, ptr %3
   %5 = getelementptr %ByteView, ptr %1, i32 0, i32 0
-  store %string %4, ptr %5
+  store ptr %4, ptr %5
   %7 = getelementptr %ByteView, ptr %self, i32 0, i32 1
   %8 = load i32, ptr %7
   %9 = add i32 %8, 1
@@ -129,17 +129,16 @@ forcond1:
   br i1 %15, label %forloop2, label %afterfor4
 forloop2:
   %30 = getelementptr %ByteView, ptr %13, i32 0, i32 0
-  %31 = getelementptr %string, ptr %30, i32 0, i32 0
-  %32 = load ptr, ptr %31
-  %33 = getelementptr %ByteView, ptr %13, i32 0, i32 1
-  %34 = load i32, ptr %33
-  %35 = getelementptr %__ManagedStringData, ptr %32, i32 0, i32 0
-  %36 = getelementptr %__unsized_array_byte, ptr %35, i32 0, i32 0
-  %37 = load ptr, ptr %36
-  %38 = sext i32 %34 to i64
-  %39 = getelementptr i8, ptr %37, i64 0, i64 %38
-  %40 = load i8, ptr %39
-  %19 = zext i8 %40 to i32
+  %31 = load ptr, ptr %30
+  %32 = getelementptr %ByteView, ptr %13, i32 0, i32 1
+  %33 = load i32, ptr %32
+  %34 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 0
+  %35 = getelementptr %__unsized_array_byte, ptr %34, i32 0, i32 0
+  %36 = load ptr, ptr %35
+  %37 = sext i32 %33 to i64
+  %38 = getelementptr i8, ptr %36, i64 0, i64 %37
+  %39 = load i8, ptr %38
+  %19 = zext i8 %39 to i32
   %20 = icmp sgt i32 %19, 0
   br i1 %20, label %then5, label %ifcont6
 forincrement3:
@@ -353,10 +352,10 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 343
+; Instructions: 342
 
 %string = type { ptr, i32 }
-%ByteView = type { %string, i32 }
+%ByteView = type { ptr, i32 }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
 %cstring = type { ptr, i32, ptr }
 %__unsized_array_byte = type { ptr, i32 }
@@ -405,13 +404,14 @@ entry0:
   store ptr %self, ptr %0
   %1 = alloca %ByteView
   %2 = load ptr, ptr %0
-  %3 = load %string, ptr %2
-  %4 = getelementptr %ByteView, ptr %1, i32 0, i32 0
-  store %string %3, ptr %4
-  %5 = getelementptr %ByteView, ptr %1, i32 0, i32 1
-  store i32 0, ptr %5
-  %6 = load %ByteView, ptr %1
-  ret %ByteView %6
+  %3 = getelementptr %string, ptr %2, i32 0, i32 0
+  %4 = load ptr, ptr %3
+  %5 = getelementptr %ByteView, ptr %1, i32 0, i32 0
+  store ptr %4, ptr %5
+  %6 = getelementptr %ByteView, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = load %ByteView, ptr %1
+  ret %ByteView %7
 }
 
 define i32 @ByteView.hasNext(ptr %self) {
@@ -423,12 +423,11 @@ entry0:
   %3 = load i32, ptr %2
   %4 = load ptr, ptr %0
   %5 = getelementptr %ByteView, ptr %4, i32 0, i32 0
-  %6 = getelementptr %string, ptr %5, i32 0, i32 0
-  %7 = load ptr, ptr %6
-  %8 = getelementptr %__ManagedStringData, ptr %7, i32 0, i32 1
-  %9 = load i32, ptr %8
-  %10 = icmp slt i32 %3, %9
-  br i1 %10, label %then1, label %ifcont2
+  %6 = load ptr, ptr %5
+  %7 = getelementptr %__ManagedStringData, ptr %6, i32 0, i32 1
+  %8 = load i32, ptr %7
+  %9 = icmp slt i32 %3, %8
+  br i1 %9, label %then1, label %ifcont2
 then1:
   ret i32 1
 ifcont2:
@@ -441,18 +440,17 @@ entry0:
   store ptr %self, ptr %0
   %1 = load ptr, ptr %0
   %2 = getelementptr %ByteView, ptr %1, i32 0, i32 0
-  %3 = getelementptr %string, ptr %2, i32 0, i32 0
-  %4 = load ptr, ptr %3
-  %5 = load ptr, ptr %0
-  %6 = getelementptr %ByteView, ptr %5, i32 0, i32 1
-  %7 = load i32, ptr %6
-  %8 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 0
-  %9 = getelementptr %__unsized_array_byte, ptr %8, i32 0, i32 0
-  %10 = load ptr, ptr %9
-  %11 = sext i32 %7 to i64
-  %12 = getelementptr i8, ptr %10, i64 0, i64 %11
-  %13 = load i8, ptr %12
-  ret i8 %13
+  %3 = load ptr, ptr %2
+  %4 = load ptr, ptr %0
+  %5 = getelementptr %ByteView, ptr %4, i32 0, i32 1
+  %6 = load i32, ptr %5
+  %7 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
+  %8 = getelementptr %__unsized_array_byte, ptr %7, i32 0, i32 0
+  %9 = load ptr, ptr %8
+  %10 = sext i32 %6 to i64
+  %11 = getelementptr i8, ptr %9, i64 0, i64 %10
+  %12 = load i8, ptr %11
+  ret i8 %12
 }
 
 define %ByteView @ByteView.next(ptr %self) {
@@ -462,9 +460,9 @@ entry0:
   %1 = alloca %ByteView
   %2 = load ptr, ptr %0
   %3 = getelementptr %ByteView, ptr %2, i32 0, i32 0
-  %4 = load %string, ptr %3
+  %4 = load ptr, ptr %3
   %5 = getelementptr %ByteView, ptr %1, i32 0, i32 0
-  store %string %4, ptr %5
+  store ptr %4, ptr %5
   %6 = load ptr, ptr %0
   %7 = getelementptr %ByteView, ptr %6, i32 0, i32 1
   %8 = load i32, ptr %7

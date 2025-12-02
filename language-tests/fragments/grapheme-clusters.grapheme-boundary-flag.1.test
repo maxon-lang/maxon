@@ -10,9 +10,9 @@ end 'main'
 ; Instructions: 589
 
 %string = type { ptr, i32 }
-%ByteView = type { %string, i32 }
-%__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
+%ByteView = type { ptr, i32 }
 %GraphemeState = type { i32, i1 }
+%__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
 %cstring = type { ptr, i32, ptr }
 %__unsized_array_byte = type { ptr, i32 }
 
@@ -251,13 +251,14 @@ ifcont6:
 define %ByteView @string.bytes(ptr %self) {
 entry0:
   %1 = alloca %ByteView
-  %3 = load %string, ptr %self
-  %4 = getelementptr %ByteView, ptr %1, i32 0, i32 0
-  store %string %3, ptr %4
-  %5 = getelementptr %ByteView, ptr %1, i32 0, i32 1
-  store i32 0, ptr %5
-  %6 = load %ByteView, ptr %1
-  ret %ByteView %6
+  %3 = getelementptr %string, ptr %self, i32 0, i32 0
+  %4 = load ptr, ptr %3
+  %5 = getelementptr %ByteView, ptr %1, i32 0, i32 0
+  store ptr %4, ptr %5
+  %6 = getelementptr %ByteView, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = load %ByteView, ptr %1
+  ret %ByteView %7
 }
 
 define i32 @main() {
@@ -281,11 +282,10 @@ entry0:
   %11 = alloca %ByteView
   store %ByteView %10, ptr %11
   %14 = getelementptr %ByteView, ptr %11, i32 0, i32 0
-  %15 = getelementptr %string, ptr %14, i32 0, i32 0
-  %16 = load ptr, ptr %15
-  %17 = getelementptr %__ManagedStringData, ptr %16, i32 0, i32 1
-  %18 = load i32, ptr %17
-  %13 = call i32 @sys.print_int(i32 %18)
+  %15 = load ptr, ptr %14
+  %16 = getelementptr %__ManagedStringData, ptr %15, i32 0, i32 1
+  %17 = load i32, ptr %16
+  %13 = call i32 @sys.print_int(i32 %17)
   ret i32 0
 }
 
@@ -822,9 +822,9 @@ entry0:
 ; Instructions: 906
 
 %string = type { ptr, i32 }
-%ByteView = type { %string, i32 }
-%__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
+%ByteView = type { ptr, i32 }
 %GraphemeState = type { i32, i1 }
+%__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
 %cstring = type { ptr, i32, ptr }
 %__unsized_array_byte = type { ptr, i32 }
 
@@ -1194,13 +1194,14 @@ entry0:
   store ptr %self, ptr %0
   %1 = alloca %ByteView
   %2 = load ptr, ptr %0
-  %3 = load %string, ptr %2
-  %4 = getelementptr %ByteView, ptr %1, i32 0, i32 0
-  store %string %3, ptr %4
-  %5 = getelementptr %ByteView, ptr %1, i32 0, i32 1
-  store i32 0, ptr %5
-  %6 = load %ByteView, ptr %1
-  ret %ByteView %6
+  %3 = getelementptr %string, ptr %2, i32 0, i32 0
+  %4 = load ptr, ptr %3
+  %5 = getelementptr %ByteView, ptr %1, i32 0, i32 0
+  store ptr %4, ptr %5
+  %6 = getelementptr %ByteView, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = load %ByteView, ptr %1
+  ret %ByteView %7
 }
 
 define i32 @ByteView.count(ptr %self) {
@@ -1209,11 +1210,10 @@ entry0:
   store ptr %self, ptr %0
   %1 = load ptr, ptr %0
   %2 = getelementptr %ByteView, ptr %1, i32 0, i32 0
-  %3 = getelementptr %string, ptr %2, i32 0, i32 0
-  %4 = load ptr, ptr %3
-  %5 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 1
-  %6 = load i32, ptr %5
-  ret i32 %6
+  %3 = load ptr, ptr %2
+  %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 1
+  %5 = load i32, ptr %4
+  ret i32 %5
 }
 
 define i32 @main() {

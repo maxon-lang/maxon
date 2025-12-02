@@ -396,7 +396,7 @@ export struct string is Hashable, Equatable, Iterable with char, ExpressibleBySt
 
 	// bytes - create a ByteView for iterating over raw UTF-8 bytes
 	export function bytes() ByteView
-		return ByteView{_str: self, _pos: 0}
+		return ByteView{_managed: _managed, _pos: 0}
 	end 'bytes'
 
 	// chars - create a CharCollection for indexed character access
@@ -407,12 +407,12 @@ export struct string is Hashable, Equatable, Iterable with char, ExpressibleBySt
 	// codepoints - create a CodepointView for iterating over Unicode codepoints
 	// This provides explicit codepoint iteration (same as current default for-in behavior)
 	export function codepoints() CodepointView
-		return CodepointView{_str: self, _pos: 0}
+		return CodepointView{_managed: _managed, _pos: 0}
 	end 'codepoints'
 
 	// utf16 - create a UTF16View for iterating over UTF-16 code units
 	export function utf16() UTF16View
-		return UTF16View{_str: self, _bytePos: 0, _highSurrogate: 0}
+		return UTF16View{_managed: _managed, _bytePos: 0, _highSurrogate: 0}
 	end 'utf16'
 end 'string'
 
@@ -421,27 +421,28 @@ end 'string'
 // ============================================
 
 // ByteView - iterate over raw UTF-8 bytes
+// Used by both string.bytes() and char.bytes()
 export struct ByteView is Iterable with byte
-	var _str string
+	var _managed _ManagedString
 	var _pos int
 
 	export function Iterable.hasNext() int
-		if _pos < __string_len(_str._managed) 'check'
+		if _pos < __string_len(_managed) 'check'
 			return 1
 		end 'check'
 		return 0
 	end 'hasNext'
 
 	export function Iterable.getCurrent() byte
-		return __string_byte_at(_str._managed, _pos)
+		return __string_byte_at(_managed, _pos)
 	end 'getCurrent'
 
 	export function Iterable.next() ByteView
-		return ByteView{_str: _str, _pos: _pos + 1}
+		return ByteView{_managed: _managed, _pos: _pos + 1}
 	end 'next'
 
 	export function count() int
-		return __string_len(_str._managed)
+		return __string_len(_managed)
 	end 'count'
 end 'ByteView'
 
@@ -582,8 +583,9 @@ export struct CharCollection is Iterable with char, Collection with char
 end 'CharCollection'
 
 // UTF16View - iterate over UTF-16 code units
+// Used by both string.utf16() and char.utf16()
 export struct UTF16View is Iterable with int
-	var _str string
+	var _managed _ManagedString
 	var _bytePos int
 	var _highSurrogate int
 
@@ -591,7 +593,7 @@ export struct UTF16View is Iterable with int
 		if _highSurrogate != 0 'has_surrogate'
 			return 1
 		end 'has_surrogate'
-		if _bytePos < __string_len(_str._managed) 'check'
+		if _bytePos < __string_len(_managed) 'check'
 			return 1
 		end 'check'
 		return 0
@@ -604,23 +606,23 @@ export struct UTF16View is Iterable with int
 			return lowSurrogate
 		end 'return_low'
 
-		var b0 = __string_byte_at(_str._managed, _bytePos) as int
+		var b0 = __string_byte_at(_managed, _bytePos) as int
 		if b0 < 128 'ascii'
 			return b0
 		end 'ascii'
 		if b0 < 224 'two_byte'
-			var b1 = __string_byte_at(_str._managed, _bytePos + 1) as int
+			var b1 = __string_byte_at(_managed, _bytePos + 1) as int
 			return ((b0 mod 32) * 64) + (b1 mod 64)
 		end 'two_byte'
 		if b0 < 240 'three_byte'
-			var b1 = __string_byte_at(_str._managed, _bytePos + 1) as int
-			var b2 = __string_byte_at(_str._managed, _bytePos + 2) as int
+			var b1 = __string_byte_at(_managed, _bytePos + 1) as int
+			var b2 = __string_byte_at(_managed, _bytePos + 2) as int
 			return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
 		end 'three_byte'
 
-		var b1 = __string_byte_at(_str._managed, _bytePos + 1) as int
-		var b2 = __string_byte_at(_str._managed, _bytePos + 2) as int
-		var b3 = __string_byte_at(_str._managed, _bytePos + 3) as int
+		var b1 = __string_byte_at(_managed, _bytePos + 1) as int
+		var b2 = __string_byte_at(_managed, _bytePos + 2) as int
+		var b3 = __string_byte_at(_managed, _bytePos + 3) as int
 		var cp = ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
 		var offset = cp - 65536
 		var highSurrogate = 55296 + (offset / 1024)
@@ -629,34 +631,34 @@ export struct UTF16View is Iterable with int
 
 	export function Iterable.next() UTF16View
 		if _highSurrogate != 0 'consume_surrogate'
-			return UTF16View{_str: _str, _bytePos: _bytePos + 4, _highSurrogate: 0}
+			return UTF16View{_managed: _managed, _bytePos: _bytePos + 4, _highSurrogate: 0}
 		end 'consume_surrogate'
 
-		var b0 = __string_byte_at(_str._managed, _bytePos) as int
+		var b0 = __string_byte_at(_managed, _bytePos) as int
 		if b0 < 128 'ascii'
-			return UTF16View{_str: _str, _bytePos: _bytePos + 1, _highSurrogate: 0}
+			return UTF16View{_managed: _managed, _bytePos: _bytePos + 1, _highSurrogate: 0}
 		end 'ascii'
 		if b0 < 224 'two_byte'
-			return UTF16View{_str: _str, _bytePos: _bytePos + 2, _highSurrogate: 0}
+			return UTF16View{_managed: _managed, _bytePos: _bytePos + 2, _highSurrogate: 0}
 		end 'two_byte'
 		if b0 < 240 'three_byte'
-			return UTF16View{_str: _str, _bytePos: _bytePos + 3, _highSurrogate: 0}
+			return UTF16View{_managed: _managed, _bytePos: _bytePos + 3, _highSurrogate: 0}
 		end 'three_byte'
 
-		var b1 = __string_byte_at(_str._managed, _bytePos + 1) as int
-		var b2 = __string_byte_at(_str._managed, _bytePos + 2) as int
-		var b3 = __string_byte_at(_str._managed, _bytePos + 3) as int
+		var b1 = __string_byte_at(_managed, _bytePos + 1) as int
+		var b2 = __string_byte_at(_managed, _bytePos + 2) as int
+		var b3 = __string_byte_at(_managed, _bytePos + 3) as int
 		var cp = ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
 		var offset = cp - 65536
-		return UTF16View{_str: _str, _bytePos: _bytePos, _highSurrogate: offset}
+		return UTF16View{_managed: _managed, _bytePos: _bytePos, _highSurrogate: offset}
 	end 'next'
 
 	export function length() int
 		var count = 0
 		var pos = 0
-		var len = __string_len(_str._managed)
+		var len = __string_len(_managed)
 		while pos < len 'count_loop'
-			var b0 = __string_byte_at(_str._managed, pos) as int
+			var b0 = __string_byte_at(_managed, pos) as int
 			if b0 < 128 'ascii'
 				count = count + 1
 				pos = pos + 1
@@ -681,19 +683,20 @@ end 'UTF16View'
 
 // CodepointView - iterate over Unicode codepoints (int values)
 // Provides explicit codepoint iteration for when you need codepoints, not graphemes
+// Used by both string.codepoints() and char.codepoints()
 export struct CodepointView is Iterable with int
-	var _str string
+	var _managed _ManagedString
 	var _pos int
 
 	export function Iterable.hasNext() int
-		if _pos < __string_len(_str._managed) 'check'
+		if _pos < __string_len(_managed) 'check'
 			return 1
 		end 'check'
 		return 0
 	end 'hasNext'
 
 	export function Iterable.getCurrent() int
-		var b0 = __string_byte_at(_str._managed, _pos) as int
+		var b0 = __string_byte_at(_managed, _pos) as int
 
 		// ASCII (1 byte)
 		if b0 < 128 'ascii'
@@ -702,26 +705,26 @@ export struct CodepointView is Iterable with int
 
 		// 2-byte sequence
 		if b0 < 224 'two_byte'
-			var b1 = __string_byte_at(_str._managed, _pos + 1) as int
+			var b1 = __string_byte_at(_managed, _pos + 1) as int
 			return ((b0 mod 32) * 64) + (b1 mod 64)
 		end 'two_byte'
 
 		// 3-byte sequence
 		if b0 < 240 'three_byte'
-			var b1 = __string_byte_at(_str._managed, _pos + 1) as int
-			var b2 = __string_byte_at(_str._managed, _pos + 2) as int
+			var b1 = __string_byte_at(_managed, _pos + 1) as int
+			var b2 = __string_byte_at(_managed, _pos + 2) as int
 			return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
 		end 'three_byte'
 
 		// 4-byte sequence
-		var b1 = __string_byte_at(_str._managed, _pos + 1) as int
-		var b2 = __string_byte_at(_str._managed, _pos + 2) as int
-		var b3 = __string_byte_at(_str._managed, _pos + 3) as int
+		var b1 = __string_byte_at(_managed, _pos + 1) as int
+		var b2 = __string_byte_at(_managed, _pos + 2) as int
+		var b3 = __string_byte_at(_managed, _pos + 3) as int
 		return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
 	end 'getCurrent'
 
 	export function Iterable.next() CodepointView
-		var b0 = __string_byte_at(_str._managed, _pos) as int
+		var b0 = __string_byte_at(_managed, _pos) as int
 		var advance = 1
 
 		if b0 >= 240 'four_byte'
@@ -736,15 +739,15 @@ export struct CodepointView is Iterable with int
 			end 'three_byte'
 		end 'four_byte'
 
-		return CodepointView{_str: _str, _pos: _pos + advance}
+		return CodepointView{_managed: _managed, _pos: _pos + advance}
 	end 'next'
 
 	export function count() int
 		var cpCount = 0
 		var pos = 0
-		var len = __string_len(_str._managed)
+		var len = __string_len(_managed)
 		while pos < len 'count_loop'
-			var b0 = __string_byte_at(_str._managed, pos) as int
+			var b0 = __string_byte_at(_managed, pos) as int
 			if b0 < 128 'ascii'
 				pos = pos + 1
 			else 'ascii'

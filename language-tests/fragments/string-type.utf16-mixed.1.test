@@ -8,11 +8,11 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 490
+; Instructions: 479
 
 %string = type { ptr, i32 }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
-%UTF16View = type { %string, i32, i32 }
+%UTF16View = type { ptr, i32, i32 }
 %cstring = type { ptr, i32, ptr }
 %__unsized_array_byte = type { ptr, i32 }
 
@@ -52,15 +52,16 @@ cstring.continue2:
 define %UTF16View @string.utf16(ptr %self) {
 entry0:
   %1 = alloca %UTF16View
-  %3 = load %string, ptr %self
-  %4 = getelementptr %UTF16View, ptr %1, i32 0, i32 0
-  store %string %3, ptr %4
-  %5 = getelementptr %UTF16View, ptr %1, i32 0, i32 1
-  store i32 0, ptr %5
-  %6 = getelementptr %UTF16View, ptr %1, i32 0, i32 2
+  %3 = getelementptr %string, ptr %self, i32 0, i32 0
+  %4 = load ptr, ptr %3
+  %5 = getelementptr %UTF16View, ptr %1, i32 0, i32 0
+  store ptr %4, ptr %5
+  %6 = getelementptr %UTF16View, ptr %1, i32 0, i32 1
   store i32 0, ptr %6
-  %7 = load %UTF16View, ptr %1
-  ret %UTF16View %7
+  %7 = getelementptr %UTF16View, ptr %1, i32 0, i32 2
+  store i32 0, ptr %7
+  %8 = load %UTF16View, ptr %1
+  ret %UTF16View %8
 }
 
 define i32 @UTF16View.hasNext(ptr %self) {
@@ -75,12 +76,11 @@ ifcont2:
   %6 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %7 = load i32, ptr %6
   %9 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %10 = getelementptr %string, ptr %9, i32 0, i32 0
-  %11 = load ptr, ptr %10
-  %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 1
-  %13 = load i32, ptr %12
-  %14 = icmp slt i32 %7, %13
-  br i1 %14, label %then3, label %ifcont4
+  %10 = load ptr, ptr %9
+  %11 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 1
+  %12 = load i32, ptr %11
+  %13 = icmp slt i32 %7, %12
+  br i1 %13, label %then3, label %ifcont4
 then3:
   ret i32 1
 ifcont4:
@@ -101,135 +101,128 @@ then1:
   ret i32 %11
 ifcont2:
   %15 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %16 = getelementptr %string, ptr %15, i32 0, i32 0
-  %17 = load ptr, ptr %16
-  %19 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %20 = load i32, ptr %19
-  %21 = getelementptr %__ManagedStringData, ptr %17, i32 0, i32 0
-  %22 = getelementptr %__unsized_array_byte, ptr %21, i32 0, i32 0
-  %23 = load ptr, ptr %22
-  %24 = sext i32 %20 to i64
-  %25 = getelementptr i8, ptr %23, i64 0, i64 %24
-  %26 = load i8, ptr %25
-  %27 = zext i8 %26 to i32
-  %30 = icmp slt i32 %27, 128
-  br i1 %30, label %then3, label %ifcont4
+  %16 = load ptr, ptr %15
+  %18 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %19 = load i32, ptr %18
+  %20 = getelementptr %__ManagedStringData, ptr %16, i32 0, i32 0
+  %21 = getelementptr %__unsized_array_byte, ptr %20, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = sext i32 %19 to i64
+  %24 = getelementptr i8, ptr %22, i64 0, i64 %23
+  %25 = load i8, ptr %24
+  %26 = zext i8 %25 to i32
+  %29 = icmp slt i32 %26, 128
+  br i1 %29, label %then3, label %ifcont4
 then3:
-  ret i32 %27
+  ret i32 %26
 ifcont4:
-  %33 = icmp slt i32 %27, 224
-  br i1 %33, label %then5, label %ifcont6
+  %32 = icmp slt i32 %26, 224
+  br i1 %32, label %then5, label %ifcont6
 then5:
-  %35 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %36 = getelementptr %string, ptr %35, i32 0, i32 0
-  %37 = load ptr, ptr %36
-  %39 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %40 = load i32, ptr %39
-  %41 = add i32 %40, 1
-  %42 = getelementptr %__ManagedStringData, ptr %37, i32 0, i32 0
-  %43 = getelementptr %__unsized_array_byte, ptr %42, i32 0, i32 0
-  %44 = load ptr, ptr %43
-  %45 = sext i32 %41 to i64
-  %46 = getelementptr i8, ptr %44, i64 0, i64 %45
-  %47 = load i8, ptr %46
-  %48 = zext i8 %47 to i32
-  %51 = srem i32 %27, 32
-  %52 = shl i32 %51, 6
-  %54 = srem i32 %48, 64
-  %55 = add i32 %52, %54
-  ret i32 %55
+  %34 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %35 = load ptr, ptr %34
+  %37 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %38 = load i32, ptr %37
+  %39 = add i32 %38, 1
+  %40 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 0
+  %41 = getelementptr %__unsized_array_byte, ptr %40, i32 0, i32 0
+  %42 = load ptr, ptr %41
+  %43 = sext i32 %39 to i64
+  %44 = getelementptr i8, ptr %42, i64 0, i64 %43
+  %45 = load i8, ptr %44
+  %46 = zext i8 %45 to i32
+  %49 = srem i32 %26, 32
+  %50 = shl i32 %49, 6
+  %52 = srem i32 %46, 64
+  %53 = add i32 %50, %52
+  ret i32 %53
 ifcont6:
-  %57 = icmp slt i32 %27, 240
-  br i1 %57, label %then7, label %ifcont8
+  %55 = icmp slt i32 %26, 240
+  br i1 %55, label %then7, label %ifcont8
 then7:
-  %59 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %60 = getelementptr %string, ptr %59, i32 0, i32 0
-  %61 = load ptr, ptr %60
-  %63 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %64 = load i32, ptr %63
-  %65 = add i32 %64, 1
-  %66 = getelementptr %__ManagedStringData, ptr %61, i32 0, i32 0
-  %67 = getelementptr %__unsized_array_byte, ptr %66, i32 0, i32 0
-  %68 = load ptr, ptr %67
-  %69 = sext i32 %65 to i64
-  %70 = getelementptr i8, ptr %68, i64 0, i64 %69
-  %71 = load i8, ptr %70
-  %72 = zext i8 %71 to i32
-  %75 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %76 = getelementptr %string, ptr %75, i32 0, i32 0
-  %77 = load ptr, ptr %76
-  %79 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %80 = load i32, ptr %79
-  %81 = add i32 %80, 2
-  %82 = getelementptr %__ManagedStringData, ptr %77, i32 0, i32 0
-  %83 = getelementptr %__unsized_array_byte, ptr %82, i32 0, i32 0
-  %84 = load ptr, ptr %83
-  %85 = sext i32 %81 to i64
-  %86 = getelementptr i8, ptr %84, i64 0, i64 %85
-  %87 = load i8, ptr %86
-  %88 = zext i8 %87 to i32
-  %91 = srem i32 %27, 16
-  %92 = shl i32 %91, 12
-  %94 = srem i32 %72, 64
-  %95 = shl i32 %94, 6
-  %96 = add i32 %92, %95
-  %98 = srem i32 %88, 64
-  %99 = add i32 %96, %98
-  ret i32 %99
+  %57 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %58 = load ptr, ptr %57
+  %60 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %61 = load i32, ptr %60
+  %62 = add i32 %61, 1
+  %63 = getelementptr %__ManagedStringData, ptr %58, i32 0, i32 0
+  %64 = getelementptr %__unsized_array_byte, ptr %63, i32 0, i32 0
+  %65 = load ptr, ptr %64
+  %66 = sext i32 %62 to i64
+  %67 = getelementptr i8, ptr %65, i64 0, i64 %66
+  %68 = load i8, ptr %67
+  %69 = zext i8 %68 to i32
+  %72 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %73 = load ptr, ptr %72
+  %75 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %76 = load i32, ptr %75
+  %77 = add i32 %76, 2
+  %78 = getelementptr %__ManagedStringData, ptr %73, i32 0, i32 0
+  %79 = getelementptr %__unsized_array_byte, ptr %78, i32 0, i32 0
+  %80 = load ptr, ptr %79
+  %81 = sext i32 %77 to i64
+  %82 = getelementptr i8, ptr %80, i64 0, i64 %81
+  %83 = load i8, ptr %82
+  %84 = zext i8 %83 to i32
+  %87 = srem i32 %26, 16
+  %88 = shl i32 %87, 12
+  %90 = srem i32 %69, 64
+  %91 = shl i32 %90, 6
+  %92 = add i32 %88, %91
+  %94 = srem i32 %84, 64
+  %95 = add i32 %92, %94
+  ret i32 %95
 ifcont8:
-  %101 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %102 = getelementptr %string, ptr %101, i32 0, i32 0
-  %103 = load ptr, ptr %102
-  %105 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %106 = load i32, ptr %105
-  %107 = add i32 %106, 1
-  %108 = getelementptr %__ManagedStringData, ptr %103, i32 0, i32 0
-  %109 = getelementptr %__unsized_array_byte, ptr %108, i32 0, i32 0
-  %110 = load ptr, ptr %109
-  %111 = sext i32 %107 to i64
-  %112 = getelementptr i8, ptr %110, i64 0, i64 %111
-  %113 = load i8, ptr %112
-  %114 = zext i8 %113 to i32
-  %117 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %118 = getelementptr %string, ptr %117, i32 0, i32 0
-  %119 = load ptr, ptr %118
-  %121 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %122 = load i32, ptr %121
-  %123 = add i32 %122, 2
-  %124 = getelementptr %__ManagedStringData, ptr %119, i32 0, i32 0
-  %125 = getelementptr %__unsized_array_byte, ptr %124, i32 0, i32 0
-  %126 = load ptr, ptr %125
-  %127 = sext i32 %123 to i64
-  %128 = getelementptr i8, ptr %126, i64 0, i64 %127
-  %129 = load i8, ptr %128
-  %130 = zext i8 %129 to i32
-  %133 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %134 = getelementptr %string, ptr %133, i32 0, i32 0
+  %97 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %98 = load ptr, ptr %97
+  %100 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %101 = load i32, ptr %100
+  %102 = add i32 %101, 1
+  %103 = getelementptr %__ManagedStringData, ptr %98, i32 0, i32 0
+  %104 = getelementptr %__unsized_array_byte, ptr %103, i32 0, i32 0
+  %105 = load ptr, ptr %104
+  %106 = sext i32 %102 to i64
+  %107 = getelementptr i8, ptr %105, i64 0, i64 %106
+  %108 = load i8, ptr %107
+  %109 = zext i8 %108 to i32
+  %112 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %113 = load ptr, ptr %112
+  %115 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %116 = load i32, ptr %115
+  %117 = add i32 %116, 2
+  %118 = getelementptr %__ManagedStringData, ptr %113, i32 0, i32 0
+  %119 = getelementptr %__unsized_array_byte, ptr %118, i32 0, i32 0
+  %120 = load ptr, ptr %119
+  %121 = sext i32 %117 to i64
+  %122 = getelementptr i8, ptr %120, i64 0, i64 %121
+  %123 = load i8, ptr %122
+  %124 = zext i8 %123 to i32
+  %127 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %128 = load ptr, ptr %127
+  %130 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %131 = load i32, ptr %130
+  %132 = add i32 %131, 3
+  %133 = getelementptr %__ManagedStringData, ptr %128, i32 0, i32 0
+  %134 = getelementptr %__unsized_array_byte, ptr %133, i32 0, i32 0
   %135 = load ptr, ptr %134
-  %137 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %138 = load i32, ptr %137
-  %139 = add i32 %138, 3
-  %140 = getelementptr %__ManagedStringData, ptr %135, i32 0, i32 0
-  %141 = getelementptr %__unsized_array_byte, ptr %140, i32 0, i32 0
-  %142 = load ptr, ptr %141
-  %143 = sext i32 %139 to i64
-  %144 = getelementptr i8, ptr %142, i64 0, i64 %143
-  %145 = load i8, ptr %144
-  %146 = zext i8 %145 to i32
-  %149 = srem i32 %27, 8
-  %150 = shl i32 %149, 18
-  %152 = srem i32 %114, 64
-  %153 = shl i32 %152, 12
-  %154 = add i32 %150, %153
-  %156 = srem i32 %130, 64
-  %157 = shl i32 %156, 6
-  %158 = add i32 %154, %157
-  %160 = srem i32 %146, 64
-  %161 = add i32 %158, %160
-  %164 = sub i32 %161, 65536
-  %167 = sdiv i32 %164, 1024
-  %168 = add i32 55296, %167
-  ret i32 %168
+  %136 = sext i32 %132 to i64
+  %137 = getelementptr i8, ptr %135, i64 0, i64 %136
+  %138 = load i8, ptr %137
+  %139 = zext i8 %138 to i32
+  %142 = srem i32 %26, 8
+  %143 = shl i32 %142, 18
+  %145 = srem i32 %109, 64
+  %146 = shl i32 %145, 12
+  %147 = add i32 %143, %146
+  %149 = srem i32 %124, 64
+  %150 = shl i32 %149, 6
+  %151 = add i32 %147, %150
+  %153 = srem i32 %139, 64
+  %154 = add i32 %151, %153
+  %157 = sub i32 %154, 65536
+  %160 = sdiv i32 %157, 1024
+  %161 = add i32 55296, %160
+  ret i32 %161
 }
 
 define %UTF16View @UTF16View.next(ptr %self) {
@@ -241,9 +234,9 @@ entry0:
 then1:
   %5 = alloca %UTF16View
   %7 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %8 = load %string, ptr %7
+  %8 = load ptr, ptr %7
   %9 = getelementptr %UTF16View, ptr %5, i32 0, i32 0
-  store %string %8, ptr %9
+  store ptr %8, ptr %9
   %11 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
   %12 = load i32, ptr %11
   %13 = add i32 %12, 4
@@ -255,134 +248,130 @@ then1:
   ret %UTF16View %16
 ifcont2:
   %18 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %19 = getelementptr %string, ptr %18, i32 0, i32 0
-  %20 = load ptr, ptr %19
-  %22 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %23 = load i32, ptr %22
-  %24 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 0
-  %25 = getelementptr %__unsized_array_byte, ptr %24, i32 0, i32 0
-  %26 = load ptr, ptr %25
-  %27 = sext i32 %23 to i64
-  %28 = getelementptr i8, ptr %26, i64 0, i64 %27
-  %29 = load i8, ptr %28
-  %30 = zext i8 %29 to i32
-  %33 = icmp slt i32 %30, 128
-  br i1 %33, label %then3, label %ifcont4
+  %19 = load ptr, ptr %18
+  %21 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %22 = load i32, ptr %21
+  %23 = getelementptr %__ManagedStringData, ptr %19, i32 0, i32 0
+  %24 = getelementptr %__unsized_array_byte, ptr %23, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = sext i32 %22 to i64
+  %27 = getelementptr i8, ptr %25, i64 0, i64 %26
+  %28 = load i8, ptr %27
+  %29 = zext i8 %28 to i32
+  %32 = icmp slt i32 %29, 128
+  br i1 %32, label %then3, label %ifcont4
 then3:
-  %34 = alloca %UTF16View
-  %36 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %37 = load %string, ptr %36
-  %38 = getelementptr %UTF16View, ptr %34, i32 0, i32 0
-  store %string %37, ptr %38
-  %40 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %41 = load i32, ptr %40
-  %42 = add i32 %41, 1
-  %43 = getelementptr %UTF16View, ptr %34, i32 0, i32 1
-  store i32 %42, ptr %43
-  %44 = getelementptr %UTF16View, ptr %34, i32 0, i32 2
-  store i32 0, ptr %44
-  %45 = load %UTF16View, ptr %34
-  ret %UTF16View %45
+  %33 = alloca %UTF16View
+  %35 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %36 = load ptr, ptr %35
+  %37 = getelementptr %UTF16View, ptr %33, i32 0, i32 0
+  store ptr %36, ptr %37
+  %39 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %40 = load i32, ptr %39
+  %41 = add i32 %40, 1
+  %42 = getelementptr %UTF16View, ptr %33, i32 0, i32 1
+  store i32 %41, ptr %42
+  %43 = getelementptr %UTF16View, ptr %33, i32 0, i32 2
+  store i32 0, ptr %43
+  %44 = load %UTF16View, ptr %33
+  ret %UTF16View %44
 ifcont4:
-  %47 = icmp slt i32 %30, 224
-  br i1 %47, label %then5, label %ifcont6
+  %46 = icmp slt i32 %29, 224
+  br i1 %46, label %then5, label %ifcont6
 then5:
-  %48 = alloca %UTF16View
-  %50 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %51 = load %string, ptr %50
-  %52 = getelementptr %UTF16View, ptr %48, i32 0, i32 0
-  store %string %51, ptr %52
-  %54 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %55 = load i32, ptr %54
-  %56 = add i32 %55, 2
-  %57 = getelementptr %UTF16View, ptr %48, i32 0, i32 1
-  store i32 %56, ptr %57
-  %58 = getelementptr %UTF16View, ptr %48, i32 0, i32 2
-  store i32 0, ptr %58
-  %59 = load %UTF16View, ptr %48
-  ret %UTF16View %59
+  %47 = alloca %UTF16View
+  %49 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %50 = load ptr, ptr %49
+  %51 = getelementptr %UTF16View, ptr %47, i32 0, i32 0
+  store ptr %50, ptr %51
+  %53 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %54 = load i32, ptr %53
+  %55 = add i32 %54, 2
+  %56 = getelementptr %UTF16View, ptr %47, i32 0, i32 1
+  store i32 %55, ptr %56
+  %57 = getelementptr %UTF16View, ptr %47, i32 0, i32 2
+  store i32 0, ptr %57
+  %58 = load %UTF16View, ptr %47
+  ret %UTF16View %58
 ifcont6:
-  %61 = icmp slt i32 %30, 240
-  br i1 %61, label %then7, label %ifcont8
+  %60 = icmp slt i32 %29, 240
+  br i1 %60, label %then7, label %ifcont8
 then7:
-  %62 = alloca %UTF16View
-  %64 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %65 = load %string, ptr %64
-  %66 = getelementptr %UTF16View, ptr %62, i32 0, i32 0
-  store %string %65, ptr %66
-  %68 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %69 = load i32, ptr %68
-  %70 = add i32 %69, 3
-  %71 = getelementptr %UTF16View, ptr %62, i32 0, i32 1
-  store i32 %70, ptr %71
-  %72 = getelementptr %UTF16View, ptr %62, i32 0, i32 2
-  store i32 0, ptr %72
-  %73 = load %UTF16View, ptr %62
-  ret %UTF16View %73
+  %61 = alloca %UTF16View
+  %63 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %64 = load ptr, ptr %63
+  %65 = getelementptr %UTF16View, ptr %61, i32 0, i32 0
+  store ptr %64, ptr %65
+  %67 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %68 = load i32, ptr %67
+  %69 = add i32 %68, 3
+  %70 = getelementptr %UTF16View, ptr %61, i32 0, i32 1
+  store i32 %69, ptr %70
+  %71 = getelementptr %UTF16View, ptr %61, i32 0, i32 2
+  store i32 0, ptr %71
+  %72 = load %UTF16View, ptr %61
+  ret %UTF16View %72
 ifcont8:
-  %75 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %76 = getelementptr %string, ptr %75, i32 0, i32 0
-  %77 = load ptr, ptr %76
-  %79 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %80 = load i32, ptr %79
-  %81 = add i32 %80, 1
-  %82 = getelementptr %__ManagedStringData, ptr %77, i32 0, i32 0
-  %83 = getelementptr %__unsized_array_byte, ptr %82, i32 0, i32 0
-  %84 = load ptr, ptr %83
-  %85 = sext i32 %81 to i64
-  %86 = getelementptr i8, ptr %84, i64 0, i64 %85
-  %87 = load i8, ptr %86
-  %88 = zext i8 %87 to i32
-  %91 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %92 = getelementptr %string, ptr %91, i32 0, i32 0
-  %93 = load ptr, ptr %92
-  %95 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %96 = load i32, ptr %95
-  %97 = add i32 %96, 2
-  %98 = getelementptr %__ManagedStringData, ptr %93, i32 0, i32 0
-  %99 = getelementptr %__unsized_array_byte, ptr %98, i32 0, i32 0
-  %100 = load ptr, ptr %99
-  %101 = sext i32 %97 to i64
-  %102 = getelementptr i8, ptr %100, i64 0, i64 %101
-  %103 = load i8, ptr %102
-  %104 = zext i8 %103 to i32
-  %107 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %108 = getelementptr %string, ptr %107, i32 0, i32 0
-  %109 = load ptr, ptr %108
-  %111 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %112 = load i32, ptr %111
-  %113 = add i32 %112, 3
-  %114 = getelementptr %__ManagedStringData, ptr %109, i32 0, i32 0
-  %115 = getelementptr %__unsized_array_byte, ptr %114, i32 0, i32 0
-  %116 = load ptr, ptr %115
-  %117 = sext i32 %113 to i64
-  %118 = getelementptr i8, ptr %116, i64 0, i64 %117
-  %119 = load i8, ptr %118
-  %120 = zext i8 %119 to i32
-  %123 = srem i32 %30, 8
-  %124 = shl i32 %123, 18
-  %126 = srem i32 %88, 64
-  %127 = shl i32 %126, 12
+  %74 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %75 = load ptr, ptr %74
+  %77 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %78 = load i32, ptr %77
+  %79 = add i32 %78, 1
+  %80 = getelementptr %__ManagedStringData, ptr %75, i32 0, i32 0
+  %81 = getelementptr %__unsized_array_byte, ptr %80, i32 0, i32 0
+  %82 = load ptr, ptr %81
+  %83 = sext i32 %79 to i64
+  %84 = getelementptr i8, ptr %82, i64 0, i64 %83
+  %85 = load i8, ptr %84
+  %86 = zext i8 %85 to i32
+  %89 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %90 = load ptr, ptr %89
+  %92 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %93 = load i32, ptr %92
+  %94 = add i32 %93, 2
+  %95 = getelementptr %__ManagedStringData, ptr %90, i32 0, i32 0
+  %96 = getelementptr %__unsized_array_byte, ptr %95, i32 0, i32 0
+  %97 = load ptr, ptr %96
+  %98 = sext i32 %94 to i64
+  %99 = getelementptr i8, ptr %97, i64 0, i64 %98
+  %100 = load i8, ptr %99
+  %101 = zext i8 %100 to i32
+  %104 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %105 = load ptr, ptr %104
+  %107 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %108 = load i32, ptr %107
+  %109 = add i32 %108, 3
+  %110 = getelementptr %__ManagedStringData, ptr %105, i32 0, i32 0
+  %111 = getelementptr %__unsized_array_byte, ptr %110, i32 0, i32 0
+  %112 = load ptr, ptr %111
+  %113 = sext i32 %109 to i64
+  %114 = getelementptr i8, ptr %112, i64 0, i64 %113
+  %115 = load i8, ptr %114
+  %116 = zext i8 %115 to i32
+  %119 = srem i32 %29, 8
+  %120 = shl i32 %119, 18
+  %122 = srem i32 %86, 64
+  %123 = shl i32 %122, 12
+  %124 = add i32 %120, %123
+  %126 = srem i32 %101, 64
+  %127 = shl i32 %126, 6
   %128 = add i32 %124, %127
-  %130 = srem i32 %104, 64
-  %131 = shl i32 %130, 6
-  %132 = add i32 %128, %131
-  %134 = srem i32 %120, 64
-  %135 = add i32 %132, %134
-  %138 = sub i32 %135, 65536
-  %140 = alloca %UTF16View
-  %142 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
-  %143 = load %string, ptr %142
-  %144 = getelementptr %UTF16View, ptr %140, i32 0, i32 0
-  store %string %143, ptr %144
-  %146 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
-  %147 = load i32, ptr %146
-  %148 = getelementptr %UTF16View, ptr %140, i32 0, i32 1
-  store i32 %147, ptr %148
-  %150 = getelementptr %UTF16View, ptr %140, i32 0, i32 2
-  store i32 %138, ptr %150
-  %151 = load %UTF16View, ptr %140
-  ret %UTF16View %151
+  %130 = srem i32 %116, 64
+  %131 = add i32 %128, %130
+  %134 = sub i32 %131, 65536
+  %136 = alloca %UTF16View
+  %138 = getelementptr %UTF16View, ptr %self, i32 0, i32 0
+  %139 = load ptr, ptr %138
+  %140 = getelementptr %UTF16View, ptr %136, i32 0, i32 0
+  store ptr %139, ptr %140
+  %142 = getelementptr %UTF16View, ptr %self, i32 0, i32 1
+  %143 = load i32, ptr %142
+  %144 = getelementptr %UTF16View, ptr %136, i32 0, i32 1
+  store i32 %143, ptr %144
+  %146 = getelementptr %UTF16View, ptr %136, i32 0, i32 2
+  store i32 %134, ptr %146
+  %147 = load %UTF16View, ptr %136
+  ret %UTF16View %147
 }
 
 define i32 @main() {
@@ -613,11 +602,11 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 679
+; Instructions: 668
 
 %string = type { ptr, i32 }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
-%UTF16View = type { %string, i32, i32 }
+%UTF16View = type { ptr, i32, i32 }
 %cstring = type { ptr, i32, ptr }
 %__unsized_array_byte = type { ptr, i32 }
 
@@ -663,15 +652,16 @@ entry0:
   store ptr %self, ptr %0
   %1 = alloca %UTF16View
   %2 = load ptr, ptr %0
-  %3 = load %string, ptr %2
-  %4 = getelementptr %UTF16View, ptr %1, i32 0, i32 0
-  store %string %3, ptr %4
-  %5 = getelementptr %UTF16View, ptr %1, i32 0, i32 1
-  store i32 0, ptr %5
-  %6 = getelementptr %UTF16View, ptr %1, i32 0, i32 2
+  %3 = getelementptr %string, ptr %2, i32 0, i32 0
+  %4 = load ptr, ptr %3
+  %5 = getelementptr %UTF16View, ptr %1, i32 0, i32 0
+  store ptr %4, ptr %5
+  %6 = getelementptr %UTF16View, ptr %1, i32 0, i32 1
   store i32 0, ptr %6
-  %7 = load %UTF16View, ptr %1
-  ret %UTF16View %7
+  %7 = getelementptr %UTF16View, ptr %1, i32 0, i32 2
+  store i32 0, ptr %7
+  %8 = load %UTF16View, ptr %1
+  ret %UTF16View %8
 }
 
 define i32 @UTF16View.hasNext(ptr %self) {
@@ -691,12 +681,11 @@ ifcont2:
   %7 = load i32, ptr %6
   %8 = load ptr, ptr %0
   %9 = getelementptr %UTF16View, ptr %8, i32 0, i32 0
-  %10 = getelementptr %string, ptr %9, i32 0, i32 0
-  %11 = load ptr, ptr %10
-  %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 1
-  %13 = load i32, ptr %12
-  %14 = icmp slt i32 %7, %13
-  br i1 %14, label %then3, label %ifcont4
+  %10 = load ptr, ptr %9
+  %11 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 1
+  %12 = load i32, ptr %11
+  %13 = icmp slt i32 %7, %12
+  br i1 %13, label %then3, label %ifcont4
 then3:
   ret i32 1
 ifcont4:
@@ -728,184 +717,177 @@ then1:
 ifcont2:
   %14 = load ptr, ptr %0
   %15 = getelementptr %UTF16View, ptr %14, i32 0, i32 0
-  %16 = getelementptr %string, ptr %15, i32 0, i32 0
-  %17 = load ptr, ptr %16
-  %18 = load ptr, ptr %0
-  %19 = getelementptr %UTF16View, ptr %18, i32 0, i32 1
-  %20 = load i32, ptr %19
-  %21 = getelementptr %__ManagedStringData, ptr %17, i32 0, i32 0
-  %22 = getelementptr %__unsized_array_byte, ptr %21, i32 0, i32 0
-  %23 = load ptr, ptr %22
-  %24 = sext i32 %20 to i64
-  %25 = getelementptr i8, ptr %23, i64 0, i64 %24
-  %26 = load i8, ptr %25
-  %27 = zext i8 %26 to i32
-  %28 = alloca i32
-  store i32 %27, ptr %28
-  %29 = load i32, ptr %28
-  %30 = icmp slt i32 %29, 128
-  br i1 %30, label %then3, label %ifcont4
+  %16 = load ptr, ptr %15
+  %17 = load ptr, ptr %0
+  %18 = getelementptr %UTF16View, ptr %17, i32 0, i32 1
+  %19 = load i32, ptr %18
+  %20 = getelementptr %__ManagedStringData, ptr %16, i32 0, i32 0
+  %21 = getelementptr %__unsized_array_byte, ptr %20, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = sext i32 %19 to i64
+  %24 = getelementptr i8, ptr %22, i64 0, i64 %23
+  %25 = load i8, ptr %24
+  %26 = zext i8 %25 to i32
+  %27 = alloca i32
+  store i32 %26, ptr %27
+  %28 = load i32, ptr %27
+  %29 = icmp slt i32 %28, 128
+  br i1 %29, label %then3, label %ifcont4
 then3:
-  %31 = load i32, ptr %28
-  ret i32 %31
+  %30 = load i32, ptr %27
+  ret i32 %30
 ifcont4:
-  %32 = load i32, ptr %28
-  %33 = icmp slt i32 %32, 224
-  br i1 %33, label %then5, label %ifcont6
+  %31 = load i32, ptr %27
+  %32 = icmp slt i32 %31, 224
+  br i1 %32, label %then5, label %ifcont6
 then5:
-  %34 = load ptr, ptr %0
-  %35 = getelementptr %UTF16View, ptr %34, i32 0, i32 0
-  %36 = getelementptr %string, ptr %35, i32 0, i32 0
-  %37 = load ptr, ptr %36
-  %38 = load ptr, ptr %0
-  %39 = getelementptr %UTF16View, ptr %38, i32 0, i32 1
-  %40 = load i32, ptr %39
-  %41 = add i32 %40, 1
-  %42 = getelementptr %__ManagedStringData, ptr %37, i32 0, i32 0
-  %43 = getelementptr %__unsized_array_byte, ptr %42, i32 0, i32 0
-  %44 = load ptr, ptr %43
-  %45 = sext i32 %41 to i64
-  %46 = getelementptr i8, ptr %44, i64 0, i64 %45
-  %47 = load i8, ptr %46
-  %48 = zext i8 %47 to i32
-  %49 = alloca i32
-  store i32 %48, ptr %49
-  %50 = load i32, ptr %28
-  %51 = srem i32 %50, 32
-  %52 = mul i32 %51, 64
-  %53 = load i32, ptr %49
-  %54 = srem i32 %53, 64
-  %55 = add i32 %52, %54
-  ret i32 %55
+  %33 = load ptr, ptr %0
+  %34 = getelementptr %UTF16View, ptr %33, i32 0, i32 0
+  %35 = load ptr, ptr %34
+  %36 = load ptr, ptr %0
+  %37 = getelementptr %UTF16View, ptr %36, i32 0, i32 1
+  %38 = load i32, ptr %37
+  %39 = add i32 %38, 1
+  %40 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 0
+  %41 = getelementptr %__unsized_array_byte, ptr %40, i32 0, i32 0
+  %42 = load ptr, ptr %41
+  %43 = sext i32 %39 to i64
+  %44 = getelementptr i8, ptr %42, i64 0, i64 %43
+  %45 = load i8, ptr %44
+  %46 = zext i8 %45 to i32
+  %47 = alloca i32
+  store i32 %46, ptr %47
+  %48 = load i32, ptr %27
+  %49 = srem i32 %48, 32
+  %50 = mul i32 %49, 64
+  %51 = load i32, ptr %47
+  %52 = srem i32 %51, 64
+  %53 = add i32 %50, %52
+  ret i32 %53
 ifcont6:
-  %56 = load i32, ptr %28
-  %57 = icmp slt i32 %56, 240
-  br i1 %57, label %then7, label %ifcont8
+  %54 = load i32, ptr %27
+  %55 = icmp slt i32 %54, 240
+  br i1 %55, label %then7, label %ifcont8
 then7:
-  %58 = load ptr, ptr %0
-  %59 = getelementptr %UTF16View, ptr %58, i32 0, i32 0
-  %60 = getelementptr %string, ptr %59, i32 0, i32 0
-  %61 = load ptr, ptr %60
-  %62 = load ptr, ptr %0
-  %63 = getelementptr %UTF16View, ptr %62, i32 0, i32 1
-  %64 = load i32, ptr %63
-  %65 = add i32 %64, 1
-  %66 = getelementptr %__ManagedStringData, ptr %61, i32 0, i32 0
-  %67 = getelementptr %__unsized_array_byte, ptr %66, i32 0, i32 0
-  %68 = load ptr, ptr %67
-  %69 = sext i32 %65 to i64
-  %70 = getelementptr i8, ptr %68, i64 0, i64 %69
-  %71 = load i8, ptr %70
-  %72 = zext i8 %71 to i32
-  %73 = alloca i32
-  store i32 %72, ptr %73
+  %56 = load ptr, ptr %0
+  %57 = getelementptr %UTF16View, ptr %56, i32 0, i32 0
+  %58 = load ptr, ptr %57
+  %59 = load ptr, ptr %0
+  %60 = getelementptr %UTF16View, ptr %59, i32 0, i32 1
+  %61 = load i32, ptr %60
+  %62 = add i32 %61, 1
+  %63 = getelementptr %__ManagedStringData, ptr %58, i32 0, i32 0
+  %64 = getelementptr %__unsized_array_byte, ptr %63, i32 0, i32 0
+  %65 = load ptr, ptr %64
+  %66 = sext i32 %62 to i64
+  %67 = getelementptr i8, ptr %65, i64 0, i64 %66
+  %68 = load i8, ptr %67
+  %69 = zext i8 %68 to i32
+  %70 = alloca i32
+  store i32 %69, ptr %70
+  %71 = load ptr, ptr %0
+  %72 = getelementptr %UTF16View, ptr %71, i32 0, i32 0
+  %73 = load ptr, ptr %72
   %74 = load ptr, ptr %0
-  %75 = getelementptr %UTF16View, ptr %74, i32 0, i32 0
-  %76 = getelementptr %string, ptr %75, i32 0, i32 0
-  %77 = load ptr, ptr %76
-  %78 = load ptr, ptr %0
-  %79 = getelementptr %UTF16View, ptr %78, i32 0, i32 1
-  %80 = load i32, ptr %79
-  %81 = add i32 %80, 2
-  %82 = getelementptr %__ManagedStringData, ptr %77, i32 0, i32 0
-  %83 = getelementptr %__unsized_array_byte, ptr %82, i32 0, i32 0
-  %84 = load ptr, ptr %83
-  %85 = sext i32 %81 to i64
-  %86 = getelementptr i8, ptr %84, i64 0, i64 %85
-  %87 = load i8, ptr %86
-  %88 = zext i8 %87 to i32
-  %89 = alloca i32
-  store i32 %88, ptr %89
-  %90 = load i32, ptr %28
-  %91 = srem i32 %90, 16
-  %92 = mul i32 %91, 4096
-  %93 = load i32, ptr %73
+  %75 = getelementptr %UTF16View, ptr %74, i32 0, i32 1
+  %76 = load i32, ptr %75
+  %77 = add i32 %76, 2
+  %78 = getelementptr %__ManagedStringData, ptr %73, i32 0, i32 0
+  %79 = getelementptr %__unsized_array_byte, ptr %78, i32 0, i32 0
+  %80 = load ptr, ptr %79
+  %81 = sext i32 %77 to i64
+  %82 = getelementptr i8, ptr %80, i64 0, i64 %81
+  %83 = load i8, ptr %82
+  %84 = zext i8 %83 to i32
+  %85 = alloca i32
+  store i32 %84, ptr %85
+  %86 = load i32, ptr %27
+  %87 = srem i32 %86, 16
+  %88 = mul i32 %87, 4096
+  %89 = load i32, ptr %70
+  %90 = srem i32 %89, 64
+  %91 = mul i32 %90, 64
+  %92 = add i32 %88, %91
+  %93 = load i32, ptr %85
   %94 = srem i32 %93, 64
-  %95 = mul i32 %94, 64
-  %96 = add i32 %92, %95
-  %97 = load i32, ptr %89
-  %98 = srem i32 %97, 64
-  %99 = add i32 %96, %98
-  ret i32 %99
+  %95 = add i32 %92, %94
+  ret i32 %95
 ifcont8:
-  %100 = load ptr, ptr %0
-  %101 = getelementptr %UTF16View, ptr %100, i32 0, i32 0
-  %102 = getelementptr %string, ptr %101, i32 0, i32 0
-  %103 = load ptr, ptr %102
-  %104 = load ptr, ptr %0
-  %105 = getelementptr %UTF16View, ptr %104, i32 0, i32 1
-  %106 = load i32, ptr %105
-  %107 = add i32 %106, 1
-  %108 = getelementptr %__ManagedStringData, ptr %103, i32 0, i32 0
-  %109 = getelementptr %__unsized_array_byte, ptr %108, i32 0, i32 0
-  %110 = load ptr, ptr %109
-  %111 = sext i32 %107 to i64
-  %112 = getelementptr i8, ptr %110, i64 0, i64 %111
-  %113 = load i8, ptr %112
-  %114 = zext i8 %113 to i32
-  %115 = alloca i32
-  store i32 %114, ptr %115
-  %116 = load ptr, ptr %0
-  %117 = getelementptr %UTF16View, ptr %116, i32 0, i32 0
-  %118 = getelementptr %string, ptr %117, i32 0, i32 0
-  %119 = load ptr, ptr %118
-  %120 = load ptr, ptr %0
-  %121 = getelementptr %UTF16View, ptr %120, i32 0, i32 1
-  %122 = load i32, ptr %121
-  %123 = add i32 %122, 2
-  %124 = getelementptr %__ManagedStringData, ptr %119, i32 0, i32 0
-  %125 = getelementptr %__unsized_array_byte, ptr %124, i32 0, i32 0
-  %126 = load ptr, ptr %125
-  %127 = sext i32 %123 to i64
-  %128 = getelementptr i8, ptr %126, i64 0, i64 %127
-  %129 = load i8, ptr %128
-  %130 = zext i8 %129 to i32
-  %131 = alloca i32
-  store i32 %130, ptr %131
-  %132 = load ptr, ptr %0
-  %133 = getelementptr %UTF16View, ptr %132, i32 0, i32 0
-  %134 = getelementptr %string, ptr %133, i32 0, i32 0
+  %96 = load ptr, ptr %0
+  %97 = getelementptr %UTF16View, ptr %96, i32 0, i32 0
+  %98 = load ptr, ptr %97
+  %99 = load ptr, ptr %0
+  %100 = getelementptr %UTF16View, ptr %99, i32 0, i32 1
+  %101 = load i32, ptr %100
+  %102 = add i32 %101, 1
+  %103 = getelementptr %__ManagedStringData, ptr %98, i32 0, i32 0
+  %104 = getelementptr %__unsized_array_byte, ptr %103, i32 0, i32 0
+  %105 = load ptr, ptr %104
+  %106 = sext i32 %102 to i64
+  %107 = getelementptr i8, ptr %105, i64 0, i64 %106
+  %108 = load i8, ptr %107
+  %109 = zext i8 %108 to i32
+  %110 = alloca i32
+  store i32 %109, ptr %110
+  %111 = load ptr, ptr %0
+  %112 = getelementptr %UTF16View, ptr %111, i32 0, i32 0
+  %113 = load ptr, ptr %112
+  %114 = load ptr, ptr %0
+  %115 = getelementptr %UTF16View, ptr %114, i32 0, i32 1
+  %116 = load i32, ptr %115
+  %117 = add i32 %116, 2
+  %118 = getelementptr %__ManagedStringData, ptr %113, i32 0, i32 0
+  %119 = getelementptr %__unsized_array_byte, ptr %118, i32 0, i32 0
+  %120 = load ptr, ptr %119
+  %121 = sext i32 %117 to i64
+  %122 = getelementptr i8, ptr %120, i64 0, i64 %121
+  %123 = load i8, ptr %122
+  %124 = zext i8 %123 to i32
+  %125 = alloca i32
+  store i32 %124, ptr %125
+  %126 = load ptr, ptr %0
+  %127 = getelementptr %UTF16View, ptr %126, i32 0, i32 0
+  %128 = load ptr, ptr %127
+  %129 = load ptr, ptr %0
+  %130 = getelementptr %UTF16View, ptr %129, i32 0, i32 1
+  %131 = load i32, ptr %130
+  %132 = add i32 %131, 3
+  %133 = getelementptr %__ManagedStringData, ptr %128, i32 0, i32 0
+  %134 = getelementptr %__unsized_array_byte, ptr %133, i32 0, i32 0
   %135 = load ptr, ptr %134
-  %136 = load ptr, ptr %0
-  %137 = getelementptr %UTF16View, ptr %136, i32 0, i32 1
-  %138 = load i32, ptr %137
-  %139 = add i32 %138, 3
-  %140 = getelementptr %__ManagedStringData, ptr %135, i32 0, i32 0
-  %141 = getelementptr %__unsized_array_byte, ptr %140, i32 0, i32 0
-  %142 = load ptr, ptr %141
-  %143 = sext i32 %139 to i64
-  %144 = getelementptr i8, ptr %142, i64 0, i64 %143
-  %145 = load i8, ptr %144
-  %146 = zext i8 %145 to i32
-  %147 = alloca i32
-  store i32 %146, ptr %147
-  %148 = load i32, ptr %28
-  %149 = srem i32 %148, 8
-  %150 = mul i32 %149, 262144
-  %151 = load i32, ptr %115
-  %152 = srem i32 %151, 64
-  %153 = mul i32 %152, 4096
-  %154 = add i32 %150, %153
-  %155 = load i32, ptr %131
-  %156 = srem i32 %155, 64
-  %157 = mul i32 %156, 64
-  %158 = add i32 %154, %157
-  %159 = load i32, ptr %147
-  %160 = srem i32 %159, 64
-  %161 = add i32 %158, %160
+  %136 = sext i32 %132 to i64
+  %137 = getelementptr i8, ptr %135, i64 0, i64 %136
+  %138 = load i8, ptr %137
+  %139 = zext i8 %138 to i32
+  %140 = alloca i32
+  store i32 %139, ptr %140
+  %141 = load i32, ptr %27
+  %142 = srem i32 %141, 8
+  %143 = mul i32 %142, 262144
+  %144 = load i32, ptr %110
+  %145 = srem i32 %144, 64
+  %146 = mul i32 %145, 4096
+  %147 = add i32 %143, %146
+  %148 = load i32, ptr %125
+  %149 = srem i32 %148, 64
+  %150 = mul i32 %149, 64
+  %151 = add i32 %147, %150
+  %152 = load i32, ptr %140
+  %153 = srem i32 %152, 64
+  %154 = add i32 %151, %153
+  %155 = alloca i32
+  store i32 %154, ptr %155
+  %156 = load i32, ptr %155
+  %157 = sub i32 %156, 65536
+  %158 = alloca i32
+  store i32 %157, ptr %158
+  %159 = load i32, ptr %158
+  %160 = sdiv i32 %159, 1024
+  %161 = add i32 55296, %160
   %162 = alloca i32
   store i32 %161, ptr %162
   %163 = load i32, ptr %162
-  %164 = sub i32 %163, 65536
-  %165 = alloca i32
-  store i32 %164, ptr %165
-  %166 = load i32, ptr %165
-  %167 = sdiv i32 %166, 1024
-  %168 = add i32 55296, %167
-  %169 = alloca i32
-  store i32 %168, ptr %169
-  %170 = load i32, ptr %169
-  ret i32 %170
+  ret i32 %163
 }
 
 define %UTF16View @UTF16View.next(ptr %self) {
@@ -921,9 +903,9 @@ then1:
   %5 = alloca %UTF16View
   %6 = load ptr, ptr %0
   %7 = getelementptr %UTF16View, ptr %6, i32 0, i32 0
-  %8 = load %string, ptr %7
+  %8 = load ptr, ptr %7
   %9 = getelementptr %UTF16View, ptr %5, i32 0, i32 0
-  store %string %8, ptr %9
+  store ptr %8, ptr %9
   %10 = load ptr, ptr %0
   %11 = getelementptr %UTF16View, ptr %10, i32 0, i32 1
   %12 = load i32, ptr %11
@@ -937,170 +919,166 @@ then1:
 ifcont2:
   %17 = load ptr, ptr %0
   %18 = getelementptr %UTF16View, ptr %17, i32 0, i32 0
-  %19 = getelementptr %string, ptr %18, i32 0, i32 0
-  %20 = load ptr, ptr %19
-  %21 = load ptr, ptr %0
-  %22 = getelementptr %UTF16View, ptr %21, i32 0, i32 1
-  %23 = load i32, ptr %22
-  %24 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 0
-  %25 = getelementptr %__unsized_array_byte, ptr %24, i32 0, i32 0
-  %26 = load ptr, ptr %25
-  %27 = sext i32 %23 to i64
-  %28 = getelementptr i8, ptr %26, i64 0, i64 %27
-  %29 = load i8, ptr %28
-  %30 = zext i8 %29 to i32
-  %31 = alloca i32
-  store i32 %30, ptr %31
-  %32 = load i32, ptr %31
-  %33 = icmp slt i32 %32, 128
-  br i1 %33, label %then3, label %ifcont4
+  %19 = load ptr, ptr %18
+  %20 = load ptr, ptr %0
+  %21 = getelementptr %UTF16View, ptr %20, i32 0, i32 1
+  %22 = load i32, ptr %21
+  %23 = getelementptr %__ManagedStringData, ptr %19, i32 0, i32 0
+  %24 = getelementptr %__unsized_array_byte, ptr %23, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = sext i32 %22 to i64
+  %27 = getelementptr i8, ptr %25, i64 0, i64 %26
+  %28 = load i8, ptr %27
+  %29 = zext i8 %28 to i32
+  %30 = alloca i32
+  store i32 %29, ptr %30
+  %31 = load i32, ptr %30
+  %32 = icmp slt i32 %31, 128
+  br i1 %32, label %then3, label %ifcont4
 then3:
-  %34 = alloca %UTF16View
-  %35 = load ptr, ptr %0
-  %36 = getelementptr %UTF16View, ptr %35, i32 0, i32 0
-  %37 = load %string, ptr %36
-  %38 = getelementptr %UTF16View, ptr %34, i32 0, i32 0
-  store %string %37, ptr %38
-  %39 = load ptr, ptr %0
-  %40 = getelementptr %UTF16View, ptr %39, i32 0, i32 1
-  %41 = load i32, ptr %40
-  %42 = add i32 %41, 1
-  %43 = getelementptr %UTF16View, ptr %34, i32 0, i32 1
-  store i32 %42, ptr %43
-  %44 = getelementptr %UTF16View, ptr %34, i32 0, i32 2
-  store i32 0, ptr %44
-  %45 = load %UTF16View, ptr %34
-  ret %UTF16View %45
+  %33 = alloca %UTF16View
+  %34 = load ptr, ptr %0
+  %35 = getelementptr %UTF16View, ptr %34, i32 0, i32 0
+  %36 = load ptr, ptr %35
+  %37 = getelementptr %UTF16View, ptr %33, i32 0, i32 0
+  store ptr %36, ptr %37
+  %38 = load ptr, ptr %0
+  %39 = getelementptr %UTF16View, ptr %38, i32 0, i32 1
+  %40 = load i32, ptr %39
+  %41 = add i32 %40, 1
+  %42 = getelementptr %UTF16View, ptr %33, i32 0, i32 1
+  store i32 %41, ptr %42
+  %43 = getelementptr %UTF16View, ptr %33, i32 0, i32 2
+  store i32 0, ptr %43
+  %44 = load %UTF16View, ptr %33
+  ret %UTF16View %44
 ifcont4:
-  %46 = load i32, ptr %31
-  %47 = icmp slt i32 %46, 224
-  br i1 %47, label %then5, label %ifcont6
+  %45 = load i32, ptr %30
+  %46 = icmp slt i32 %45, 224
+  br i1 %46, label %then5, label %ifcont6
 then5:
-  %48 = alloca %UTF16View
-  %49 = load ptr, ptr %0
-  %50 = getelementptr %UTF16View, ptr %49, i32 0, i32 0
-  %51 = load %string, ptr %50
-  %52 = getelementptr %UTF16View, ptr %48, i32 0, i32 0
-  store %string %51, ptr %52
-  %53 = load ptr, ptr %0
-  %54 = getelementptr %UTF16View, ptr %53, i32 0, i32 1
-  %55 = load i32, ptr %54
-  %56 = add i32 %55, 2
-  %57 = getelementptr %UTF16View, ptr %48, i32 0, i32 1
-  store i32 %56, ptr %57
-  %58 = getelementptr %UTF16View, ptr %48, i32 0, i32 2
-  store i32 0, ptr %58
-  %59 = load %UTF16View, ptr %48
-  ret %UTF16View %59
+  %47 = alloca %UTF16View
+  %48 = load ptr, ptr %0
+  %49 = getelementptr %UTF16View, ptr %48, i32 0, i32 0
+  %50 = load ptr, ptr %49
+  %51 = getelementptr %UTF16View, ptr %47, i32 0, i32 0
+  store ptr %50, ptr %51
+  %52 = load ptr, ptr %0
+  %53 = getelementptr %UTF16View, ptr %52, i32 0, i32 1
+  %54 = load i32, ptr %53
+  %55 = add i32 %54, 2
+  %56 = getelementptr %UTF16View, ptr %47, i32 0, i32 1
+  store i32 %55, ptr %56
+  %57 = getelementptr %UTF16View, ptr %47, i32 0, i32 2
+  store i32 0, ptr %57
+  %58 = load %UTF16View, ptr %47
+  ret %UTF16View %58
 ifcont6:
-  %60 = load i32, ptr %31
-  %61 = icmp slt i32 %60, 240
-  br i1 %61, label %then7, label %ifcont8
+  %59 = load i32, ptr %30
+  %60 = icmp slt i32 %59, 240
+  br i1 %60, label %then7, label %ifcont8
 then7:
-  %62 = alloca %UTF16View
-  %63 = load ptr, ptr %0
-  %64 = getelementptr %UTF16View, ptr %63, i32 0, i32 0
-  %65 = load %string, ptr %64
-  %66 = getelementptr %UTF16View, ptr %62, i32 0, i32 0
-  store %string %65, ptr %66
-  %67 = load ptr, ptr %0
-  %68 = getelementptr %UTF16View, ptr %67, i32 0, i32 1
-  %69 = load i32, ptr %68
-  %70 = add i32 %69, 3
-  %71 = getelementptr %UTF16View, ptr %62, i32 0, i32 1
-  store i32 %70, ptr %71
-  %72 = getelementptr %UTF16View, ptr %62, i32 0, i32 2
-  store i32 0, ptr %72
-  %73 = load %UTF16View, ptr %62
-  ret %UTF16View %73
+  %61 = alloca %UTF16View
+  %62 = load ptr, ptr %0
+  %63 = getelementptr %UTF16View, ptr %62, i32 0, i32 0
+  %64 = load ptr, ptr %63
+  %65 = getelementptr %UTF16View, ptr %61, i32 0, i32 0
+  store ptr %64, ptr %65
+  %66 = load ptr, ptr %0
+  %67 = getelementptr %UTF16View, ptr %66, i32 0, i32 1
+  %68 = load i32, ptr %67
+  %69 = add i32 %68, 3
+  %70 = getelementptr %UTF16View, ptr %61, i32 0, i32 1
+  store i32 %69, ptr %70
+  %71 = getelementptr %UTF16View, ptr %61, i32 0, i32 2
+  store i32 0, ptr %71
+  %72 = load %UTF16View, ptr %61
+  ret %UTF16View %72
 ifcont8:
-  %74 = load ptr, ptr %0
-  %75 = getelementptr %UTF16View, ptr %74, i32 0, i32 0
-  %76 = getelementptr %string, ptr %75, i32 0, i32 0
-  %77 = load ptr, ptr %76
-  %78 = load ptr, ptr %0
-  %79 = getelementptr %UTF16View, ptr %78, i32 0, i32 1
-  %80 = load i32, ptr %79
-  %81 = add i32 %80, 1
-  %82 = getelementptr %__ManagedStringData, ptr %77, i32 0, i32 0
-  %83 = getelementptr %__unsized_array_byte, ptr %82, i32 0, i32 0
-  %84 = load ptr, ptr %83
-  %85 = sext i32 %81 to i64
-  %86 = getelementptr i8, ptr %84, i64 0, i64 %85
-  %87 = load i8, ptr %86
-  %88 = zext i8 %87 to i32
-  %89 = alloca i32
-  store i32 %88, ptr %89
-  %90 = load ptr, ptr %0
-  %91 = getelementptr %UTF16View, ptr %90, i32 0, i32 0
-  %92 = getelementptr %string, ptr %91, i32 0, i32 0
-  %93 = load ptr, ptr %92
-  %94 = load ptr, ptr %0
-  %95 = getelementptr %UTF16View, ptr %94, i32 0, i32 1
-  %96 = load i32, ptr %95
-  %97 = add i32 %96, 2
-  %98 = getelementptr %__ManagedStringData, ptr %93, i32 0, i32 0
-  %99 = getelementptr %__unsized_array_byte, ptr %98, i32 0, i32 0
-  %100 = load ptr, ptr %99
-  %101 = sext i32 %97 to i64
-  %102 = getelementptr i8, ptr %100, i64 0, i64 %101
-  %103 = load i8, ptr %102
-  %104 = zext i8 %103 to i32
-  %105 = alloca i32
-  store i32 %104, ptr %105
+  %73 = load ptr, ptr %0
+  %74 = getelementptr %UTF16View, ptr %73, i32 0, i32 0
+  %75 = load ptr, ptr %74
+  %76 = load ptr, ptr %0
+  %77 = getelementptr %UTF16View, ptr %76, i32 0, i32 1
+  %78 = load i32, ptr %77
+  %79 = add i32 %78, 1
+  %80 = getelementptr %__ManagedStringData, ptr %75, i32 0, i32 0
+  %81 = getelementptr %__unsized_array_byte, ptr %80, i32 0, i32 0
+  %82 = load ptr, ptr %81
+  %83 = sext i32 %79 to i64
+  %84 = getelementptr i8, ptr %82, i64 0, i64 %83
+  %85 = load i8, ptr %84
+  %86 = zext i8 %85 to i32
+  %87 = alloca i32
+  store i32 %86, ptr %87
+  %88 = load ptr, ptr %0
+  %89 = getelementptr %UTF16View, ptr %88, i32 0, i32 0
+  %90 = load ptr, ptr %89
+  %91 = load ptr, ptr %0
+  %92 = getelementptr %UTF16View, ptr %91, i32 0, i32 1
+  %93 = load i32, ptr %92
+  %94 = add i32 %93, 2
+  %95 = getelementptr %__ManagedStringData, ptr %90, i32 0, i32 0
+  %96 = getelementptr %__unsized_array_byte, ptr %95, i32 0, i32 0
+  %97 = load ptr, ptr %96
+  %98 = sext i32 %94 to i64
+  %99 = getelementptr i8, ptr %97, i64 0, i64 %98
+  %100 = load i8, ptr %99
+  %101 = zext i8 %100 to i32
+  %102 = alloca i32
+  store i32 %101, ptr %102
+  %103 = load ptr, ptr %0
+  %104 = getelementptr %UTF16View, ptr %103, i32 0, i32 0
+  %105 = load ptr, ptr %104
   %106 = load ptr, ptr %0
-  %107 = getelementptr %UTF16View, ptr %106, i32 0, i32 0
-  %108 = getelementptr %string, ptr %107, i32 0, i32 0
-  %109 = load ptr, ptr %108
-  %110 = load ptr, ptr %0
-  %111 = getelementptr %UTF16View, ptr %110, i32 0, i32 1
-  %112 = load i32, ptr %111
-  %113 = add i32 %112, 3
-  %114 = getelementptr %__ManagedStringData, ptr %109, i32 0, i32 0
-  %115 = getelementptr %__unsized_array_byte, ptr %114, i32 0, i32 0
-  %116 = load ptr, ptr %115
-  %117 = sext i32 %113 to i64
-  %118 = getelementptr i8, ptr %116, i64 0, i64 %117
-  %119 = load i8, ptr %118
-  %120 = zext i8 %119 to i32
-  %121 = alloca i32
-  store i32 %120, ptr %121
-  %122 = load i32, ptr %31
-  %123 = srem i32 %122, 8
-  %124 = mul i32 %123, 262144
-  %125 = load i32, ptr %89
+  %107 = getelementptr %UTF16View, ptr %106, i32 0, i32 1
+  %108 = load i32, ptr %107
+  %109 = add i32 %108, 3
+  %110 = getelementptr %__ManagedStringData, ptr %105, i32 0, i32 0
+  %111 = getelementptr %__unsized_array_byte, ptr %110, i32 0, i32 0
+  %112 = load ptr, ptr %111
+  %113 = sext i32 %109 to i64
+  %114 = getelementptr i8, ptr %112, i64 0, i64 %113
+  %115 = load i8, ptr %114
+  %116 = zext i8 %115 to i32
+  %117 = alloca i32
+  store i32 %116, ptr %117
+  %118 = load i32, ptr %30
+  %119 = srem i32 %118, 8
+  %120 = mul i32 %119, 262144
+  %121 = load i32, ptr %87
+  %122 = srem i32 %121, 64
+  %123 = mul i32 %122, 4096
+  %124 = add i32 %120, %123
+  %125 = load i32, ptr %102
   %126 = srem i32 %125, 64
-  %127 = mul i32 %126, 4096
+  %127 = mul i32 %126, 64
   %128 = add i32 %124, %127
-  %129 = load i32, ptr %105
+  %129 = load i32, ptr %117
   %130 = srem i32 %129, 64
-  %131 = mul i32 %130, 64
-  %132 = add i32 %128, %131
-  %133 = load i32, ptr %121
-  %134 = srem i32 %133, 64
-  %135 = add i32 %132, %134
-  %136 = alloca i32
-  store i32 %135, ptr %136
-  %137 = load i32, ptr %136
-  %138 = sub i32 %137, 65536
-  %139 = alloca i32
-  store i32 %138, ptr %139
-  %140 = alloca %UTF16View
+  %131 = add i32 %128, %130
+  %132 = alloca i32
+  store i32 %131, ptr %132
+  %133 = load i32, ptr %132
+  %134 = sub i32 %133, 65536
+  %135 = alloca i32
+  store i32 %134, ptr %135
+  %136 = alloca %UTF16View
+  %137 = load ptr, ptr %0
+  %138 = getelementptr %UTF16View, ptr %137, i32 0, i32 0
+  %139 = load ptr, ptr %138
+  %140 = getelementptr %UTF16View, ptr %136, i32 0, i32 0
+  store ptr %139, ptr %140
   %141 = load ptr, ptr %0
-  %142 = getelementptr %UTF16View, ptr %141, i32 0, i32 0
-  %143 = load %string, ptr %142
-  %144 = getelementptr %UTF16View, ptr %140, i32 0, i32 0
-  store %string %143, ptr %144
-  %145 = load ptr, ptr %0
-  %146 = getelementptr %UTF16View, ptr %145, i32 0, i32 1
-  %147 = load i32, ptr %146
-  %148 = getelementptr %UTF16View, ptr %140, i32 0, i32 1
-  store i32 %147, ptr %148
-  %149 = load i32, ptr %139
-  %150 = getelementptr %UTF16View, ptr %140, i32 0, i32 2
-  store i32 %149, ptr %150
-  %151 = load %UTF16View, ptr %140
-  ret %UTF16View %151
+  %142 = getelementptr %UTF16View, ptr %141, i32 0, i32 1
+  %143 = load i32, ptr %142
+  %144 = getelementptr %UTF16View, ptr %136, i32 0, i32 1
+  store i32 %143, ptr %144
+  %145 = load i32, ptr %135
+  %146 = getelementptr %UTF16View, ptr %136, i32 0, i32 2
+  store i32 %145, ptr %146
+  %147 = load %UTF16View, ptr %136
+  ret %UTF16View %147
 }
 
 define i32 @main() {
