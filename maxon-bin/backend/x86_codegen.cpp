@@ -870,8 +870,10 @@ void X86CodeGen::genAlloca(mir::MIRInstruction *inst) {
 void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 	mir::MIRType *loadType = inst->result->type;
 
-	// Handle large struct loads specially
-	if (loadType->isStruct() && loadType->sizeInBytes > 8) {
+	// Handle large struct/optional loads specially
+	bool isLargeAggregate = loadType->sizeInBytes > 8 &&
+		(loadType->isStruct() || loadType->kind == mir::MIRTypeKind::Optional);
+	if (isLargeAggregate) {
 		// For large structs, we can't load into a register
 		// Instead, copy from source to result's stack slot
 		X86Reg srcPtr = loadValue(inst->operands[0], X86Reg::RSI);
@@ -883,14 +885,23 @@ void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 		// Copy the struct
 		uint64_t structSize = loadType->sizeInBytes;
 		uint64_t offset = 0;
-		for (; offset + 8 <= structSize; offset += 8) {
+		// Copy 8 bytes at a time
+		while (offset + 8 <= structSize) {
 			encoder.movRM64(X86Reg::RAX, X86Mem(srcPtr, static_cast<int32_t>(offset)));
 			encoder.movMR64(X86Mem(X86Reg::RDI, static_cast<int32_t>(offset)), X86Reg::RAX);
+			offset += 8;
 		}
+		// Copy remaining 4 bytes if any
 		if (offset + 4 <= structSize) {
 			encoder.movRM32(X86Reg::EAX, X86Mem(srcPtr, static_cast<int32_t>(offset)));
 			encoder.movMR32(X86Mem(X86Reg::RDI, static_cast<int32_t>(offset)), X86Reg::EAX);
 			offset += 4;
+		}
+		// Copy remaining bytes one at a time
+		while (offset < structSize) {
+			encoder.movRM8(X86Reg::AL, X86Mem(srcPtr, static_cast<int32_t>(offset)));
+			encoder.movMR8(X86Mem(X86Reg::RDI, static_cast<int32_t>(offset)), X86Reg::AL);
+			offset += 1;
 		}
 		// Result is already in its stack slot, nothing more to do
 		return;
@@ -932,8 +943,9 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 		X86Reg ptrReg = loadValue(ptr, X86Reg::RCX);
 		X86Mem mem(ptrReg);
 		encoder.movsdMR(mem, valReg);
-	} else if (value->type->kind == mir::MIRTypeKind::Struct) {
-		// Check if this is a large struct from a call (Windows x64 ABI hidden pointer case)
+	} else if (value->type->kind == mir::MIRTypeKind::Struct ||
+			   value->type->kind == mir::MIRTypeKind::Optional) {
+		// Check if this is a large struct/optional from a call (Windows x64 ABI hidden pointer case)
 		// AND the destination is the same as the call result's stack slot
 		bool canSkipCopy = false;
 		if (value->type->sizeInBytes > 8 &&
@@ -1055,7 +1067,27 @@ void X86CodeGen::genGEP(mir::MIRInstruction *inst) {
 
 	int64_t offset = 0;
 
-	if (inst->elementType->kind == mir::MIRTypeKind::Struct && inst->operands.size() >= 3) {
+	if (inst->elementType->kind == mir::MIRTypeKind::Optional && inst->operands.size() >= 3) {
+		// Optional field access: getelementptr Optional<%T>, ptr %base, i32 0, i32 <field_idx>
+		// Layout: { i8 tag, [padding], T value }
+		// Field 0 = tag (offset 0)
+		// Field 1 = value (offset = alignment of wrapped type for proper padding)
+		mir::MIRValue *fieldIdx = inst->operands[2];
+
+		if (fieldIdx->kind == mir::MIRValueKind::ConstantInt) {
+			int fieldIndex = static_cast<int>(fieldIdx->intValue);
+			if (fieldIndex == 0) {
+				// Tag is at offset 0
+				offset = 0;
+			} else if (fieldIndex == 1 && inst->elementType->wrappedType) {
+				// Value is at offset = alignment of wrapped type (after 1-byte tag + padding)
+				offset = inst->elementType->wrappedType->alignmentInBytes;
+			}
+			encoder.lea64(X86Reg::RAX, X86Mem(base, static_cast<int32_t>(offset)));
+		} else {
+			throw std::runtime_error("Dynamic field index not supported for Optional types");
+		}
+	} else if (inst->elementType->kind == mir::MIRTypeKind::Struct && inst->operands.size() >= 3) {
 		// Struct field access: getelementptr %Struct, ptr %base, i32 0, i32 <field_idx>
 		// The second index is the field index within the struct
 		mir::MIRValue *fieldIdx = inst->operands[2];
@@ -1283,8 +1315,10 @@ void X86CodeGen::genCondBr(mir::MIRInstruction *inst) {
 void X86CodeGen::genRet(mir::MIRInstruction *inst) {
 	mir::MIRValue *retVal = inst->operands[0];
 
-	// Check if returning a struct larger than 8 bytes
-	if (retVal->type->isStruct() && retVal->type->sizeInBytes > 8) {
+	// Check if returning a large type (struct or Optional > 8 bytes)
+	bool isLargeReturn = retVal->type->sizeInBytes > 8 &&
+		(retVal->type->isStruct() || retVal->type->kind == mir::MIRTypeKind::Optional);
+	if (isLargeReturn) {
 		// Windows x64 ABI: Large structs are returned via hidden pointer
 		// The hidden pointer was saved to stack in prologue (from RCX)
 		// We need to copy the struct to that location and return the pointer in RAX
@@ -1355,9 +1389,11 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 		argRegs = {X86Reg::RDI, X86Reg::RSI, X86Reg::RDX, X86Reg::RCX, X86Reg::R8, X86Reg::R9};
 	}
 
-	// Check if this function returns a large struct (> 8 bytes)
+	// Check if this function returns a large type (struct or Optional > 8 bytes)
 	bool hasHiddenRetPtr = false;
-	if (inst->result && inst->result->type->isStruct() && inst->result->type->sizeInBytes > 8) {
+	bool isLargeReturn = inst->result && inst->result->type->sizeInBytes > 8 &&
+		(inst->result->type->isStruct() || inst->result->type->kind == mir::MIRTypeKind::Optional);
+	if (isLargeReturn) {
 		// Windows x64 ABI: Caller allocates space and passes pointer as first arg
 		hasHiddenRetPtr = true;
 

@@ -132,7 +132,8 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 	return "";
 }
 
-// String layout: struct string { data []byte, _len int, _capacity int }
+// String layout: struct string { _managed ptr, _iterPos int }
+// The _managed pointer points to __ManagedStringData { _buffer []byte, _len int, _capacity int }
 // where []byte is a fat pointer { ptr, i32 }
 // SSO threshold: strings <= 15 bytes use constant data; > 15 bytes use heap allocation
 // Heap strings use _managed_string_alloc which prepends a refcount header for COW
@@ -248,6 +249,12 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 	// string._managed is of type ptr (opaque pointer)
 	mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, stringAlloca, 0, "str._managed");
 	builder->createStore(managedDataAlloca, managedFieldPtr);
+
+	// Initialize _iterPos field to 0 (field 1 of string struct)
+	// This is required for the Iterable.next() implementation
+	// FIX: Initialize _iterPos for iteration support
+	mir::MIRValue *iterPosFieldPtr = builder->createStructGEP(stringType, stringAlloca, 1, "str._iterPos.FIXED");
+	builder->createStore(builder->getInt32(0), iterPosFieldPtr);
 
 	// Return the alloca pointer
 	return stringAlloca;

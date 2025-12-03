@@ -7,7 +7,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 505
+; Instructions: 507
 
 %substring = type { ptr, ptr, i32, i32 }
 %string = type { ptr, i32 }
@@ -15,6 +15,7 @@ end 'main'
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
 %__unsized_array_byte = type { ptr, i32 }
 
+@.__tag.tostring = constant [19 x i8] c"substring.toString\00"
 @.str.0 = constant [14 x i8] c"Hello, World!\00"
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
 
@@ -104,7 +105,7 @@ entry0:
   %6 = load i32, ptr %5
   %7 = add i32 %6, 1
   %8 = sext i32 %7 to i64
-  %9 = call ptr @malloc(i64 %8)
+  %9 = call ptr @_managed_string_alloc(i64 %8, ptr @.__tag.tostring)
   %10 = sext i32 %6 to i64
   %11 = call ptr @memcpy(ptr %9, ptr %4, i64 %10)
   %12 = getelementptr i8, ptr %9, i64 %10
@@ -118,7 +119,7 @@ entry0:
   %17 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 1
   store i32 %6, ptr %17
   %18 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 2
-  store i32 %6, ptr %18
+  store i32 %7, ptr %18
   %19 = getelementptr %string, ptr %1, i32 0, i32 0
   store ptr %13, ptr %19
   %20 = getelementptr %string, ptr %1, i32 0, i32 1
@@ -142,31 +143,33 @@ entry0:
   store i32 0, ptr %6
   %7 = getelementptr %string, ptr %0, i32 0, i32 0
   store ptr %1, ptr %7
-  %8 = call %substring @string.slice(ptr %0, i32 0, i32 5)
-  %9 = alloca %substring
-  store %substring %8, ptr %9
-  %10 = call %string @substring.toString(ptr %9)
-  %11 = alloca %string
-  store %string %10, ptr %11
-  %21 = getelementptr %string, ptr %11, i32 0, i32 0
-  %22 = load ptr, ptr %21
-  %23 = getelementptr %__ManagedStringData, ptr %22, i32 0, i32 1
-  %24 = load i32, ptr %23
-  %25 = call i32 @string._count_graphemes_managed_range(ptr %22, i32 0, i32 %24)
-  %13 = getelementptr %substring, ptr %9, i32 0, i32 0
-  %14 = load ptr, ptr %13
-  %15 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 2
-  %16 = load i32, ptr %15
-  %17 = icmp sgt i32 %16, 0
-  br i1 %17, label %sub.release1, label %sub.continue2
+  %8 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i32 0, ptr %8
+  %9 = call %substring @string.slice(ptr %0, i32 0, i32 5)
+  %10 = alloca %substring
+  store %substring %9, ptr %10
+  %11 = call %string @substring.toString(ptr %10)
+  %12 = alloca %string
+  store %string %11, ptr %12
+  %22 = getelementptr %string, ptr %12, i32 0, i32 0
+  %23 = load ptr, ptr %22
+  %24 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 1
+  %25 = load i32, ptr %24
+  %26 = call i32 @string._count_graphemes_managed_range(ptr %23, i32 0, i32 %25)
+  %14 = getelementptr %substring, ptr %10, i32 0, i32 0
+  %15 = load ptr, ptr %14
+  %16 = getelementptr %__ManagedStringData, ptr %15, i32 0, i32 2
+  %17 = load i32, ptr %16
+  %18 = icmp sgt i32 %17, 0
+  br i1 %18, label %sub.release1, label %sub.continue2
 sub.release1:
-  %18 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 0
-  %19 = getelementptr %__unsized_array_byte, ptr %18, i32 0, i32 0
-  %20 = load ptr, ptr %19
-  call void @_managed_string_release(ptr %20, ptr @.__tag.free.sub)
+  %19 = getelementptr %__ManagedStringData, ptr %15, i32 0, i32 0
+  %20 = getelementptr %__unsized_array_byte, ptr %19, i32 0, i32 0
+  %21 = load ptr, ptr %20
+  call void @_managed_string_release(ptr %21, ptr @.__tag.free.sub)
   br label %sub.continue2
 sub.continue2:
-  ret i32 %25
+  ret i32 %26
 }
 
 define i32 @string._find_grapheme_end_managed_range(ptr %managed, i32 %offset, i32 %start_pos, i32 %len) {
@@ -693,6 +696,8 @@ declare ptr @malloc(i64 %arg0)
 
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
+declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
+
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
@@ -706,7 +711,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 783
+; Instructions: 785
 
 %substring = type { ptr, ptr, i32, i32 }
 %string = type { ptr, i32 }
@@ -714,6 +719,7 @@ entry0:
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
 %__unsized_array_byte = type { ptr, i32 }
 
+@.__tag.tostring = constant [19 x i8] c"substring.toString\00"
 @.str.0 = constant [14 x i8] c"Hello, World!\00"
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
 
@@ -837,7 +843,7 @@ entry0:
   %6 = load i32, ptr %5
   %7 = add i32 %6, 1
   %8 = sext i32 %7 to i64
-  %9 = call ptr @malloc(i64 %8)
+  %9 = call ptr @_managed_string_alloc(i64 %8, ptr @.__tag.tostring)
   %10 = sext i32 %6 to i64
   %11 = call ptr @memcpy(ptr %9, ptr %4, i64 %10)
   %12 = getelementptr i8, ptr %9, i64 %10
@@ -851,7 +857,7 @@ entry0:
   %17 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 1
   store i32 %6, ptr %17
   %18 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 2
-  store i32 %6, ptr %18
+  store i32 %7, ptr %18
   %19 = getelementptr %string, ptr %1, i32 0, i32 0
   store ptr %13, ptr %19
   %20 = getelementptr %string, ptr %1, i32 0, i32 1
@@ -875,27 +881,29 @@ entry0:
   store i32 0, ptr %6
   %7 = getelementptr %string, ptr %0, i32 0, i32 0
   store ptr %1, ptr %7
-  %8 = call %substring @string.slice(ptr %0, i32 0, i32 5)
-  %9 = alloca %substring
-  store %substring %8, ptr %9
-  %10 = call %string @substring.toString(ptr %9)
-  %11 = alloca %string
-  store %string %10, ptr %11
-  %12 = call i32 @string.count(ptr %11)
-  %13 = getelementptr %substring, ptr %9, i32 0, i32 0
-  %14 = load ptr, ptr %13
-  %15 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 2
-  %16 = load i32, ptr %15
-  %17 = icmp sgt i32 %16, 0
-  br i1 %17, label %sub.release1, label %sub.continue2
+  %8 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i32 0, ptr %8
+  %9 = call %substring @string.slice(ptr %0, i32 0, i32 5)
+  %10 = alloca %substring
+  store %substring %9, ptr %10
+  %11 = call %string @substring.toString(ptr %10)
+  %12 = alloca %string
+  store %string %11, ptr %12
+  %13 = call i32 @string.count(ptr %12)
+  %14 = getelementptr %substring, ptr %10, i32 0, i32 0
+  %15 = load ptr, ptr %14
+  %16 = getelementptr %__ManagedStringData, ptr %15, i32 0, i32 2
+  %17 = load i32, ptr %16
+  %18 = icmp sgt i32 %17, 0
+  br i1 %18, label %sub.release1, label %sub.continue2
 sub.release1:
-  %18 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 0
-  %19 = getelementptr %__unsized_array_byte, ptr %18, i32 0, i32 0
-  %20 = load ptr, ptr %19
-  call void @_managed_string_release(ptr %20, ptr @.__tag.free.sub)
+  %19 = getelementptr %__ManagedStringData, ptr %15, i32 0, i32 0
+  %20 = getelementptr %__unsized_array_byte, ptr %19, i32 0, i32 0
+  %21 = load ptr, ptr %20
+  call void @_managed_string_release(ptr %21, ptr @.__tag.free.sub)
   br label %sub.continue2
 sub.continue2:
-  ret i32 %12
+  ret i32 %13
 }
 
 define i32 @string._find_grapheme_end_managed_range(ptr %managed, i32 %offset, i32 %start_pos, i32 %len) {
@@ -1678,6 +1686,8 @@ declare void @_managed_string_retain(ptr %arg0)
 declare ptr @malloc(i64 %arg0)
 
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 

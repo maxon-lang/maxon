@@ -18,8 +18,8 @@ mir::MIRValue *MIRCodeGenerator::createNilOptional(mir::MIRType *optionalType) {
 	// Allocate optional on stack
 	mir::MIRValue *optionalAlloca = builder->createAlloca(optionalType, "nil.optional");
 
-	// Get pointer to tag (first byte)
-	mir::MIRValue *tagPtr = builder->createStructGEP(mir::MIRType::getInt8(), optionalAlloca, 0, "tag.ptr");
+	// Get pointer to tag (first byte) - use optionalType for correct offset calculation
+	mir::MIRValue *tagPtr = builder->createStructGEP(optionalType, optionalAlloca, 0, "tag.ptr");
 
 	// Store tag = 0 (nil)
 	builder->createStore(builder->getInt8(0), tagPtr);
@@ -36,15 +36,14 @@ mir::MIRValue *MIRCodeGenerator::createSomeOptional(mir::MIRType *optionalType, 
 	// Allocate optional on stack
 	mir::MIRValue *optionalAlloca = builder->createAlloca(optionalType, "some.optional");
 
-	// Get pointer to tag (first byte)
-	mir::MIRValue *tagPtr = builder->createStructGEP(mir::MIRType::getInt8(), optionalAlloca, 0, "tag.ptr");
+	// Get pointer to tag (first byte) - use optionalType for correct offset calculation
+	mir::MIRValue *tagPtr = builder->createStructGEP(optionalType, optionalAlloca, 0, "tag.ptr");
 
 	// Store tag = 1 (some/has value)
 	builder->createStore(builder->getInt8(1), tagPtr);
 
-	// Get pointer to value (field 1, after tag and padding)
-	mir::MIRType *wrappedType = optionalType->wrappedType;
-	mir::MIRValue *valuePtr = builder->createStructGEP(wrappedType, optionalAlloca, 1, "value.ptr");
+	// Get pointer to value (field 1, after tag and padding) - use optionalType for correct offset
+	mir::MIRValue *valuePtr = builder->createStructGEP(optionalType, optionalAlloca, 1, "value.ptr");
 
 	// Store the value
 	builder->createStore(value, valuePtr);
@@ -74,8 +73,8 @@ void MIRCodeGenerator::generateIfLet(IfLetStmtAST *ifLet, mir::MIRFunction *func
 	mir::MIRValue *optionalAlloca = builder->createAlloca(optionalType, "iflet.optional");
 	builder->createStore(optionalValue, optionalAlloca);
 
-	// Load tag (first byte)
-	mir::MIRValue *tagPtr = builder->createStructGEP(mir::MIRType::getInt8(), optionalAlloca, 0, "tag.ptr");
+	// Load tag (first byte) - use optionalType for correct offset calculation
+	mir::MIRValue *tagPtr = builder->createStructGEP(optionalType, optionalAlloca, 0, "tag.ptr");
 	mir::MIRValue *tag = builder->createLoad(mir::MIRType::getInt8(), tagPtr, "tag");
 
 	// Compare tag == 1 (has value)
@@ -96,8 +95,8 @@ void MIRCodeGenerator::generateIfLet(IfLetStmtAST *ifLet, mir::MIRFunction *func
 	// Then block: extract value and bind to variable
 	builder->setInsertPoint(thenBlock);
 
-	// Extract value from optional (field 1, after tag)
-	mir::MIRValue *valuePtr = builder->createStructGEP(unwrappedType, optionalAlloca, 1, "value.ptr");
+	// Extract value from optional (field 1, after tag) - use optionalType for correct offset
+	mir::MIRValue *valuePtr = builder->createStructGEP(optionalType, optionalAlloca, 1, "value.ptr");
 	mir::MIRValue *unwrappedValue = builder->createLoad(unwrappedType, valuePtr, "unwrapped.val");
 
 	// Create alloca for the bound variable
@@ -173,8 +172,8 @@ void MIRCodeGenerator::generateElseUnwrap(ElseUnwrapStmtAST *elseUnwrap, mir::MI
 	mir::MIRValue *optionalAlloca = builder->createAlloca(optionalType, "unwrap.optional");
 	builder->createStore(optionalValue, optionalAlloca);
 
-	// Load tag (first byte)
-	mir::MIRValue *tagPtr = builder->createStructGEP(mir::MIRType::getInt8(), optionalAlloca, 0, "tag.ptr");
+	// Load tag (first byte) - use optionalType for correct offset calculation
+	mir::MIRValue *tagPtr = builder->createStructGEP(optionalType, optionalAlloca, 0, "tag.ptr");
 	mir::MIRValue *tag = builder->createLoad(mir::MIRType::getInt8(), tagPtr, "tag");
 
 	// Compare tag == 1 (has value)
@@ -189,7 +188,8 @@ void MIRCodeGenerator::generateElseUnwrap(ElseUnwrapStmtAST *elseUnwrap, mir::MI
 
 	// Has-value block: extract and store to result variable
 	builder->setInsertPoint(hasValueBlock);
-	mir::MIRValue *valuePtr = builder->createStructGEP(unwrappedType, optionalAlloca, 1, "value.ptr");
+	// Extract value from optional (field 1, after tag) - use optionalType for correct offset
+	mir::MIRValue *valuePtr = builder->createStructGEP(optionalType, optionalAlloca, 1, "value.ptr");
 	mir::MIRValue *unwrappedValue = builder->createLoad(unwrappedType, valuePtr, "unwrapped.val");
 	builder->createStore(unwrappedValue, resultAlloca);
 	builder->createBr(afterBlock);

@@ -68,12 +68,13 @@ static bool isCalleeSavedXMM(X86Reg reg, CallingConv conv) {
 void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	regAlloc = RegAllocInfo();
 
-	// Check if this function returns a large struct (> 8 bytes)
-	// Windows x64 ABI: Large structs are returned via hidden pointer in RCX
+	// Check if this function returns a large struct or Optional (> 8 bytes)
+	// Windows x64 ABI: Large structs/optionals are returned via hidden pointer in RCX
 	// This shifts all other parameters right by one register
-	bool hasLargeStructReturn = func->returnType->isStruct() &&
-								func->returnType->sizeInBytes > 8;
-	regAlloc.hasHiddenRetPtr = hasLargeStructReturn;
+	bool hasLargeReturn = (func->returnType->isStruct() ||
+						   func->returnType->kind == mir::MIRTypeKind::Optional) &&
+						  func->returnType->sizeInBytes > 8;
+	regAlloc.hasHiddenRetPtr = hasLargeReturn;
 
 	// =========================================================================
 	// Liveness analysis: find values that are live across call instructions
@@ -241,7 +242,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 
 	// Reserve stack slot for hidden return pointer if needed
 	// This must be done before allocating other stack slots
-	if (hasLargeStructReturn) {
+	if (hasLargeReturn) {
 		stackOffset -= 8; // 8 bytes for the pointer
 		regAlloc.hiddenRetPtrOffset = stackOffset;
 	}
@@ -270,9 +271,9 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 		uint64_t key = makeAllocKey(param);
 
 		// Shift parameter index if hidden return pointer takes RCX
-		size_t regIndex = hasLargeStructReturn ? i + 1 : i;
+		size_t regIndex = hasLargeReturn ? i + 1 : i;
 		if (regIndex < paramRegs.size()) {
-			if (hasLargeStructReturn) {
+			if (hasLargeReturn) {
 				// Shifted params must be saved to stack (volatile regs may be clobbered)
 				stackOffset -= 8;
 				regAlloc.stackSlots[key] = stackOffset;
@@ -387,8 +388,9 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 				if (regAlloc.regMap.find(key) == regAlloc.regMap.end() &&
 					regAlloc.stackSlots.find(key) == regAlloc.stackSlots.end()) {
 
-					// Force large structs to stack (for Windows x64 ABI compatibility)
-					bool forceStack = inst->result->type->isStruct() &&
+					// Force large structs/optionals to stack (for Windows x64 ABI compatibility)
+					bool forceStack = (inst->result->type->isStruct() ||
+									   inst->result->type->kind == mir::MIRTypeKind::Optional) &&
 									  inst->result->type->sizeInBytes > 8;
 
 					// Check if this value is live across a call

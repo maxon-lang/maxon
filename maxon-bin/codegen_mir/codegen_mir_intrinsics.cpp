@@ -661,22 +661,38 @@ mir::MIRValue* MIRCodeGenerator::intrinsic_substring_to_string(CallExprAST* call
 	mir::MIRValue* lenPtr = builder->createStructGEP(substringType, subPtr, 2, "src._len");
 	mir::MIRValue* len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
 
+	// Use _managed_string_alloc to properly allocate buffer with refcount header
 	mir::MIRValue* lenPlus1 = builder->createAdd(len, builder->getInt32(1), "len.plus1");
 	mir::MIRValue* lenPlus1_64 = builder->createSExt(lenPlus1, mir::MIRType::getInt64(), "len64");
-	mir::MIRFunction* mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
-	mir::MIRValue* newBuffer = builder->createCall(mallocFunc, {lenPlus1_64}, "tostring.buffer");
 
+	// Create allocation tag for debugging
+	mir::MIRValue* tag = module->createGlobalString(".__tag.tostring", "substring.toString");
+
+	// Use _managed_string_alloc which sets up refcount header properly
+	mir::MIRFunction* stringAllocFunc = module->getFunction("_managed_string_alloc");
+	if (!stringAllocFunc) {
+		stringAllocFunc = builder->declareFunction("_managed_string_alloc",
+			mir::MIRType::getPtr(),
+			{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
+	}
+	mir::MIRValue* newBuffer = builder->createCall(stringAllocFunc, {lenPlus1_64, tag}, "tostring.buffer");
+
+	// Copy data from substring to new buffer
 	mir::MIRFunction* memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
 		{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 	mir::MIRValue* len_64 = builder->createSExt(len, mir::MIRType::getInt64(), "len_64");
 	builder->createCall(memcpyFunc, {newBuffer, srcPtr, len_64});
 
+	// Add null terminator
 	mir::MIRValue* nullTermPtr = builder->createGEP(mir::MIRType::getInt8(), newBuffer, {len_64}, "null_term_ptr");
 	builder->createStore(builder->getInt8(0), nullTermPtr);
 
+	// Allocate ManagedStringData struct
+	mir::MIRFunction* mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
 	mir::MIRValue* managedSize = builder->getInt64(32);
 	mir::MIRValue* newManaged = builder->createCall(mallocFunc, {managedSize}, "tostring.managed");
 
+	// Set up ManagedStringData fields
 	mir::MIRValue* dstBufferPtr = builder->createStructGEP(managedStringType, newManaged, 0, "dst._buffer");
 	mir::MIRValue* dstPtrPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 0, "dst.ptr.ptr");
 	builder->createStore(newBuffer, dstPtrPtr);
@@ -686,8 +702,9 @@ mir::MIRValue* MIRCodeGenerator::intrinsic_substring_to_string(CallExprAST* call
 	mir::MIRValue* dstLenPtr = builder->createStructGEP(managedStringType, newManaged, 1, "dst._len");
 	builder->createStore(len, dstLenPtr);
 
+	// Set capacity > 0 to indicate heap allocation (enables proper refcounting)
 	mir::MIRValue* dstCapPtr = builder->createStructGEP(managedStringType, newManaged, 2, "dst._capacity");
-	builder->createStore(len, dstCapPtr);
+	builder->createStore(lenPlus1, dstCapPtr);
 
 	return newManaged;
 }

@@ -352,8 +352,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 	mir::MIRValue *optionalAlloca = builder->createAlloca(optionalType, "__opt");
 	builder->createStore(optionalResult, optionalAlloca);
 
-	// Extract tag (field 0) to check if we have a value
-	mir::MIRValue *tagPtr = builder->createStructGEP(mir::MIRType::getInt8(), optionalAlloca, 0, "tag.ptr");
+	// Extract tag (field 0) to check if we have a value - use optionalType for correct offset
+	mir::MIRValue *tagPtr = builder->createStructGEP(optionalType, optionalAlloca, 0, "tag.ptr");
 	mir::MIRValue *tag = builder->createLoad(mir::MIRType::getInt8(), tagPtr, "tag");
 
 	// Check if tag == 1 (has value)
@@ -372,7 +372,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 		throw std::runtime_error("For-loop optional type must have wrappedType");
 	}
 
-	mir::MIRValue *valuePtr = builder->createStructGEP(wrappedType, optionalAlloca, 1, "value.ptr");
+	// Use optionalType for GEP since we're indexing into the Optional struct, not the wrapped type
+	mir::MIRValue *valuePtr = builder->createStructGEP(optionalType, optionalAlloca, 1, "value.ptr");
 	mir::MIRValue *currentVal = builder->createLoad(wrappedType, valuePtr, forStmt->loopVar);
 
 	// Determine loop variable type
