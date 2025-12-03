@@ -712,7 +712,67 @@ TEST_CASE("linked_editing_while_loop_with_quotes", "[rename]") {
     REQUIRE(hasWhileBlockId);
     REQUIRE(hasEndBlockId);
 
-    
 
+
+}
+
+TEST_CASE("linked_editing_struct_methods_same_name", "[rename]") {
+    // Two structs with methods having the same name should NOT be linked
+    Analyzer analyzer;
+    auto doc = createTestDocument(
+        "struct Counter\n"                        // line 0
+        "    var value int\n"                     // line 1
+        "\n"                                      // line 2
+        "    function increment(self Counter) Counter\n"  // line 3
+        "        return Counter{value: self.value + 1}\n" // line 4
+        "    end 'increment'\n"                   // line 5
+        "end 'Counter'\n"                         // line 6
+        "\n"                                      // line 7
+        "struct Timer\n"                          // line 8
+        "    var ticks int\n"                     // line 9
+        "\n"                                      // line 10
+        "    function increment(self Timer) Timer\n"      // line 11
+        "        return Timer{ticks: self.ticks + 1}\n"   // line 12
+        "    end 'increment'\n"                   // line 13
+        "end 'Timer'"                             // line 14
+    );
+
+    // Position on 'increment' in Counter struct (line 3, col 13)
+    lsp::Position pos{3, 13};
+
+    auto ranges = analyzer.getLinkedEditingRanges(doc, pos);
+
+    REQUIRE(ranges.has_value());
+    auto& rangeList = ranges.value();
+
+    std::cout << "  Number of ranges for struct method: " << rangeList.size() << std::endl;
+    for (size_t i = 0; i < rangeList.size(); i++) {
+        std::cout << "  Range " << i << ": line " << rangeList[i].start.line
+                  << ", col " << rangeList[i].start.character
+                  << " to " << rangeList[i].end.character << std::endl;
+    }
+
+    // Should include ONLY:
+    // 1. function increment in Counter (line 3)
+    // 2. end 'increment' in Counter (line 5)
+    // Should NOT include Timer's increment (lines 11, 13)
+    REQUIRE(rangeList.size() == 2);
+
+    bool hasCounterFunc = false;
+    bool hasCounterBlockId = false;
+    bool hasTimerFunc = false;
+    bool hasTimerBlockId = false;
+
+    for (const auto& range : rangeList) {
+        if (range.start.line == 3) hasCounterFunc = true;
+        if (range.start.line == 5) hasCounterBlockId = true;
+        if (range.start.line == 11) hasTimerFunc = true;
+        if (range.start.line == 13) hasTimerBlockId = true;
+    }
+
+    REQUIRE(hasCounterFunc);
+    REQUIRE(hasCounterBlockId);
+    REQUIRE_FALSE(hasTimerFunc);
+    REQUIRE_FALSE(hasTimerBlockId);
 }
 

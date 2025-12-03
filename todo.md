@@ -14,8 +14,6 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 
 ## Priorities
 - refactor lsp semantic analyzer with compiler
-- let and var in structs
-- map
 - debugging (speed up the dev process)
 - memory safety (generational references)
 - string formatting
@@ -29,11 +27,10 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - extensive math function tests
 - centralize help text from the lsp server analyzer
 - cross compiling
-- command line arguments for main
 - enums
-- remove ptr
 - remove redundant backend tests (test fragments are faster)
 - DeadCodeEliminationPass::isPureFunction has hardcoded list of pure functions. Can analyzer determine if its pure?
+- Extra Inhabitants to optimize memory layout
 
 ## Ideas
 - reorganize structs to improve cache locality

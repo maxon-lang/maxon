@@ -1866,8 +1866,62 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
 			if (tokens[targetIndex - 1].value == "function") {
 				std::string functionName = targetToken->value;
 
+				// Determine if this function is inside a struct by scanning backwards
+				// to find struct boundaries
+				size_t structStartIndex = 0;
+				size_t structEndIndex = tokens.size();
+				bool isInsideStruct = false;
+				int depth = 0;
+
+				// Scan backwards from targetIndex to find containing struct
+				for (size_t i = targetIndex; i > 0; i--) {
+					const auto &tok = tokens[i - 1];
+					if (tok.value == "end") {
+						depth++;
+					} else if (tok.value == "struct") {
+						if (depth == 0) {
+							// Found containing struct
+							isInsideStruct = true;
+							structStartIndex = i - 1;
+							break;
+						}
+						depth--;
+					}
+				}
+
+				// If inside a struct, find where it ends
+				// Need to track all block-creating keywords (struct, interface, function, if, while, for)
+				if (isInsideStruct) {
+					depth = 1; // We're inside the struct
+					for (size_t i = structStartIndex + 1; i < tokens.size(); i++) {
+						const auto &tok = tokens[i];
+						if (tok.value == "struct" || tok.value == "interface" ||
+							tok.value == "function" || tok.value == "if" ||
+							tok.value == "while" || tok.value == "for") {
+							depth++;
+						} else if (tok.value == "end") {
+							depth--;
+							if (depth == 0) {
+								// Include tokens after 'end' that are part of the block (like block ID)
+								// The struct end is: end 'StructName', so include up to and including the block ID
+								structEndIndex = i + 2; // +1 for 'end', +1 for block ID
+								if (structEndIndex > tokens.size()) {
+									structEndIndex = tokens.size();
+								}
+								break;
+							}
+						}
+					}
+				}
+
 				// Find the function name declaration and its matching block identifier
+				// but only within the struct boundaries if inside a struct
 				for (size_t i = 0; i < tokens.size(); i++) {
+					// Skip tokens outside struct boundaries for struct methods
+					if (isInsideStruct && (i < structStartIndex || i >= structEndIndex)) {
+						continue;
+					}
+
 					const auto &token = tokens[i];
 
 					// Function name at declaration (unqualified: "function foo")
@@ -1913,8 +1967,53 @@ std::optional<std::vector<lsp::Range>> Analyzer::getLinkedEditingRanges(std::sha
 					 targetIndex >= 3 && tokens[targetIndex - 3].value == "function") {
 				std::string functionName = targetToken->value;
 
-				// Find all occurrences of this function name
+				// Determine if this function is inside a struct by scanning backwards
+				size_t structStartIndex = 0;
+				size_t structEndIndex = tokens.size();
+				bool isInsideStruct = false;
+				int depth = 0;
+
+				for (size_t i = targetIndex; i > 0; i--) {
+					const auto &tok = tokens[i - 1];
+					if (tok.value == "end") {
+						depth++;
+					} else if (tok.value == "struct") {
+						if (depth == 0) {
+							isInsideStruct = true;
+							structStartIndex = i - 1;
+							break;
+						}
+						depth--;
+					}
+				}
+
+				if (isInsideStruct) {
+					depth = 1;
+					for (size_t i = structStartIndex + 1; i < tokens.size(); i++) {
+						const auto &tok = tokens[i];
+						if (tok.value == "struct" || tok.value == "interface" ||
+							tok.value == "function" || tok.value == "if" ||
+							tok.value == "while" || tok.value == "for") {
+							depth++;
+						} else if (tok.value == "end") {
+							depth--;
+							if (depth == 0) {
+								structEndIndex = i + 2;
+								if (structEndIndex > tokens.size()) {
+									structEndIndex = tokens.size();
+								}
+								break;
+							}
+						}
+					}
+				}
+
+				// Find all occurrences of this function name within scope
 				for (size_t i = 0; i < tokens.size(); i++) {
+					if (isInsideStruct && (i < structStartIndex || i >= structEndIndex)) {
+						continue;
+					}
+
 					const auto &token = tokens[i];
 
 					// Function name at declaration (unqualified: "function foo")
