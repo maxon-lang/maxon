@@ -44,6 +44,13 @@ void Parser::logDetail(const std::string &msg) {
 	}
 }
 
+// Error reporting helper - throws runtime_error with location info
+void Parser::reportError(const std::string &message, int line, int column) {
+	throw std::runtime_error(message + "\n  Location: line " +
+							 std::to_string(line) + ", column " +
+							 std::to_string(column));
+}
+
 std::unique_ptr<ProgramAST> Parser::parse() {
 	std::vector<std::unique_ptr<FunctionAST>> functions;
 	std::vector<std::unique_ptr<StructDefAST>> structs;
@@ -84,17 +91,15 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 				logTrace("Parsing exported function definition");
 				functions.push_back(parseFunction());
 			} else {
-				throw std::runtime_error("Expected 'struct', 'interface', 'extern function', or 'function' after 'export'\n  Location: line " +
-										 std::to_string(currentLine()) + ", column " +
-										 std::to_string(currentColumn()));
+				reportError("Expected 'struct', 'interface', 'extern function', or 'function' after 'export'",
+							currentLine(), currentColumn());
 			}
 		} else if (checkKeyword("extern") || checkKeyword("function")) {
 			logTrace("Parsing function definition");
 			functions.push_back(parseFunction());
 		} else {
-			throw std::runtime_error("Expected 'struct', 'interface', 'export', 'function', or 'extern function' at top level\n  Location: line " +
-									 std::to_string(currentLine()) + ", column " +
-									 std::to_string(currentColumn()));
+			reportError("Expected 'struct', 'interface', 'export', 'function', or 'extern function' at top level",
+						currentLine(), currentColumn());
 		}
 	}
 

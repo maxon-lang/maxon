@@ -51,23 +51,27 @@ mir::MIRValue *MIRCodeGenerator::generateMapMethod(CallExprAST *callExpr) {
 	std::string mapStructName = "__map_" + keyTypeStr + "_" + valueTypeStr;
 	mir::MIRType *mapStructType = structTypes[mapStructName];
 	if (!mapStructType) {
-		throw std::runtime_error("Map struct type not found: " + mapStructName);
+		reportError("Map struct type not found: " + mapStructName,
+					callExpr->line, callExpr->column);
 	}
 
 	// Get the map struct pointer from the first argument
 	if (callExpr->args.empty()) {
-		throw std::runtime_error("Map method requires at least the map argument (self)");
+		reportError("Map method requires at least the map argument (self)",
+					callExpr->line, callExpr->column);
 	}
 
 	auto *mapVar = dynamic_cast<VariableExprAST *>(callExpr->args[0].get());
 	if (!mapVar) {
-		throw std::runtime_error("Map method first argument must be a map variable");
+		reportError("Map method first argument must be a map variable",
+					callExpr->line, callExpr->column);
 	}
 
 	std::string mapVarName = mapVar->name;
 	mir::MIRValue *mapAlloca = namedValues[mapVarName];
 	if (!mapAlloca) {
-		throw std::runtime_error("Map variable not found: " + mapVarName);
+		reportError("Map variable not found: " + mapVarName,
+					callExpr->line, callExpr->column);
 	}
 
 	// Map struct layout (from codegen_mir_stmt.cpp):
@@ -91,7 +95,8 @@ mir::MIRValue *MIRCodeGenerator::generateMapMethod(CallExprAST *callExpr) {
 
 	if (methodName == "contains") {
 		if (callExpr->args.size() < 2) {
-			throw std::runtime_error("contains() requires key argument");
+			reportError("contains() requires key argument",
+						callExpr->line, callExpr->column);
 		}
 		mir::MIRValue *key = generateExpr(callExpr->args[1].get());
 		return generateMapContains(mapAlloca, key, keyType, valueType, keyTypeStr, mapStructType);
@@ -99,7 +104,8 @@ mir::MIRValue *MIRCodeGenerator::generateMapMethod(CallExprAST *callExpr) {
 
 	if (methodName == "get") {
 		if (callExpr->args.size() < 2) {
-			throw std::runtime_error("get() requires key argument");
+			reportError("get() requires key argument",
+						callExpr->line, callExpr->column);
 		}
 		mir::MIRValue *key = generateExpr(callExpr->args[1].get());
 		return generateMapGet(mapAlloca, key, keyType, valueType, keyTypeStr, mapStructType);
@@ -107,7 +113,8 @@ mir::MIRValue *MIRCodeGenerator::generateMapMethod(CallExprAST *callExpr) {
 
 	if (methodName == "insert") {
 		if (callExpr->args.size() < 3) {
-			throw std::runtime_error("insert() requires key and value arguments");
+			reportError("insert() requires key and value arguments",
+						callExpr->line, callExpr->column);
 		}
 		mir::MIRValue *key = generateExpr(callExpr->args[1].get());
 		mir::MIRValue *value = generateExpr(callExpr->args[2].get());
@@ -116,13 +123,15 @@ mir::MIRValue *MIRCodeGenerator::generateMapMethod(CallExprAST *callExpr) {
 
 	if (methodName == "remove") {
 		if (callExpr->args.size() < 2) {
-			throw std::runtime_error("remove() requires key argument");
+			reportError("remove() requires key argument",
+						callExpr->line, callExpr->column);
 		}
 		mir::MIRValue *key = generateExpr(callExpr->args[1].get());
 		return generateMapRemove(mapAlloca, key, keyType, valueType, keyTypeStr, mapStructType);
 	}
 
-	throw std::runtime_error("Unknown map method: " + methodName);
+	reportError("Unknown map method: " + methodName,
+				callExpr->line, callExpr->column);
 }
 
 //==============================================================================

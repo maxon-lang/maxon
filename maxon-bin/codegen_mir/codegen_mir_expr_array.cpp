@@ -25,13 +25,15 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 		//   4. Increment length
 
 		if (callExpr->args.size() != 2) {
-			throw std::runtime_error("push() requires exactly 2 arguments: array and value");
+			reportError("push() requires exactly 2 arguments: array and value",
+						callExpr->line, callExpr->column);
 		}
 
 		// First arg must be an array variable
 		auto *arrVar = dynamic_cast<VariableExprAST *>(callExpr->args[0].get());
 		if (!arrVar) {
-			throw std::runtime_error("push() first argument must be an array variable");
+			reportError("push() first argument must be an array variable",
+						callExpr->line, callExpr->column);
 		}
 
 		std::string arrName = arrVar->name;
@@ -40,7 +42,8 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 		// Check it's a dynamic array (has capacity)
 		mir::MIRValue *capacityAlloca = namedValues[arrName + ".__capacity"];
 		if (!capacityAlloca) {
-			throw std::runtime_error("push() can only be used on dynamic (var) arrays, not static (let) arrays");
+			reportError("push() can only be used on dynamic (var) arrays, not static (let) arrays",
+						callExpr->line, callExpr->column);
 		}
 
 		// Get array's internal allocas
@@ -48,13 +51,15 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 		mir::MIRValue *lengthAlloca = namedValues[arrName + ".__length"];
 
 		if (!arrAlloca || !lengthAlloca) {
-			throw std::runtime_error("Array variable not found: " + arrName);
+			reportError("Array variable not found: " + arrName,
+						callExpr->line, callExpr->column);
 		}
 
 		// Generate the value to push
 		mir::MIRValue *value = generateExpr(callExpr->args[1].get());
 		if (!value) {
-			throw std::runtime_error("Failed to generate value for push()");
+			reportError("Failed to generate value for push()",
+						callExpr->line, callExpr->column);
 		}
 
 		// Determine element type and size
@@ -155,13 +160,15 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 		//   2. Load and return value at arr[new_length]
 
 		if (callExpr->args.size() != 1) {
-			throw std::runtime_error("pop() requires exactly 1 argument: array");
+			reportError("pop() requires exactly 1 argument: array",
+						callExpr->line, callExpr->column);
 		}
 
 		// First arg must be an array variable
 		auto *arrVar = dynamic_cast<VariableExprAST *>(callExpr->args[0].get());
 		if (!arrVar) {
-			throw std::runtime_error("pop() argument must be an array variable");
+			reportError("pop() argument must be an array variable",
+						callExpr->line, callExpr->column);
 		}
 
 		std::string arrName = arrVar->name;
@@ -170,7 +177,8 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 		// Check it's a dynamic array
 		mir::MIRValue *capacityAlloca = namedValues[arrName + ".__capacity"];
 		if (!capacityAlloca) {
-			throw std::runtime_error("pop() can only be used on dynamic (var) arrays, not static (let) arrays");
+			reportError("pop() can only be used on dynamic (var) arrays, not static (let) arrays",
+						callExpr->line, callExpr->column);
 		}
 
 		// Get array's internal allocas
@@ -178,7 +186,8 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 		mir::MIRValue *lengthAlloca = namedValues[arrName + ".__length"];
 
 		if (!arrAlloca || !lengthAlloca) {
-			throw std::runtime_error("Array variable not found: " + arrName);
+			reportError("Array variable not found: " + arrName,
+						callExpr->line, callExpr->column);
 		}
 
 		// Determine element type
@@ -206,5 +215,6 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 		return builder->createLoad(elemType, elemPtr, "pop.result");
 	}
 
-	throw std::runtime_error("Unknown array intrinsic: " + callExpr->callee);
+	reportError("Unknown array intrinsic: " + callExpr->callee,
+				callExpr->line, callExpr->column);
 }

@@ -43,6 +43,11 @@ void MIRCodeGenerator::logTrace(const std::string &msg) {
 	logger_.trace(LogPhase::MIR, msg);
 }
 
+void MIRCodeGenerator::reportError(const std::string &message, int line, int column) {
+	throw std::runtime_error(message + " at line " + std::to_string(line) +
+							 ", column " + std::to_string(column));
+}
+
 //==============================================================================
 // Type Conversion Helpers
 //==============================================================================

@@ -113,12 +113,10 @@ std::unique_ptr<StmtAST> Parser::parseIf() {
 		// Require same block identifier after else
 		Token elseBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else' (must match the 'if' block identifier)");
 		if (elseBlockIdToken.value != blockId) {
-			throw std::runtime_error("Block identifier mismatch in if-else statement" +
-									 std::string("\n  Expected: '") + blockId + "'" +
-									 "\n  Found: '" + elseBlockIdToken.value + "'" +
-									 "\n  Location: line " + std::to_string(elseBlockIdToken.line) +
-									 ", column " + std::to_string(elseBlockIdToken.column) +
-									 "\n  Note: The 'else' block identifier must match the 'if' block identifier");
+			reportError("Block identifier mismatch in if-else statement\n  Expected: '" + blockId +
+						"'\n  Found: '" + elseBlockIdToken.value +
+						"'\n  Note: The 'else' block identifier must match the 'if' block identifier",
+						elseBlockIdToken.line, elseBlockIdToken.column);
 		}
 
 		// Parse else body
@@ -132,12 +130,10 @@ std::unique_ptr<StmtAST> Parser::parseIf() {
 	// Require matching block identifier after end
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
 	if (endBlockIdToken.value != blockId) {
-		throw std::runtime_error("Block identifier mismatch in if statement" +
-								 std::string("\n  Expected: '") + blockId + "'" +
-								 "\n  Found: '" + endBlockIdToken.value + "'" +
-								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
-								 ", column " + std::to_string(endBlockIdToken.column) +
-								 "\n  Note: The 'end' block identifier must match the opening 'if' block identifier");
+		reportError("Block identifier mismatch in if statement\n  Expected: '" + blockId +
+					"'\n  Found: '" + endBlockIdToken.value +
+					"'\n  Note: The 'end' block identifier must match the opening 'if' block identifier",
+					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
 	return std::make_unique<IfStmtAST>(std::move(condition),
@@ -170,11 +166,9 @@ std::unique_ptr<IfLetStmtAST> Parser::parseIfLet(Token ifToken) {
 		advance(); // consume "else"
 		Token elseBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else'");
 		if (elseBlockIdToken.value != blockId) {
-			throw std::runtime_error("Block identifier mismatch in if-let statement" +
-									 std::string("\n  Expected: '") + blockId + "'" +
-									 "\n  Found: '" + elseBlockIdToken.value + "'" +
-									 "\n  Location: line " + std::to_string(elseBlockIdToken.line) +
-									 ", column " + std::to_string(elseBlockIdToken.column));
+			reportError("Block identifier mismatch in if-let statement\n  Expected: '" + blockId +
+						"'\n  Found: '" + elseBlockIdToken.value + "'",
+						elseBlockIdToken.line, elseBlockIdToken.column);
 		}
 
 		while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
@@ -185,11 +179,9 @@ std::unique_ptr<IfLetStmtAST> Parser::parseIfLet(Token ifToken) {
 	expectKeywordAdvance("end", "Expected 'end' to close if-let block");
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end'");
 	if (endBlockIdToken.value != blockId) {
-		throw std::runtime_error("Block identifier mismatch in if-let statement" +
-								 std::string("\n  Expected: '") + blockId + "'" +
-								 "\n  Found: '" + endBlockIdToken.value + "'" +
-								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
-								 ", column " + std::to_string(endBlockIdToken.column));
+		reportError("Block identifier mismatch in if-let statement\n  Expected: '" + blockId +
+					"'\n  Found: '" + endBlockIdToken.value + "'",
+					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
 	return std::make_unique<IfLetStmtAST>(bindingName.value, std::move(optionalExpr),
@@ -213,11 +205,9 @@ std::unique_ptr<ElseUnwrapStmtAST> Parser::parseElseUnwrap(Token varToken, Token
 	expectKeywordAdvance("end", "Expected 'end' to close else block");
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end'");
 	if (endBlockIdToken.value != blockId) {
-		throw std::runtime_error("Block identifier mismatch in else-unwrap statement" +
-								 std::string("\n  Expected: '") + blockId + "'" +
-								 "\n  Found: '" + endBlockIdToken.value + "'" +
-								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
-								 ", column " + std::to_string(endBlockIdToken.column));
+		reportError("Block identifier mismatch in else-unwrap statement\n  Expected: '" + blockId +
+					"'\n  Found: '" + endBlockIdToken.value + "'",
+					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
 	return std::make_unique<ElseUnwrapStmtAST>(nameToken.value, explicitType,
@@ -247,12 +237,10 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
 	// Require matching block identifier after end
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
 	if (endBlockIdToken.value != blockId) {
-		throw std::runtime_error("Block identifier mismatch in while loop" +
-								 std::string("\n  Expected: '") + blockId + "'" +
-								 "\n  Found: '" + endBlockIdToken.value + "'" +
-								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
-								 ", column " + std::to_string(endBlockIdToken.column) +
-								 "\n  Note: The 'end' block identifier must match the 'while' block identifier");
+		reportError("Block identifier mismatch in while loop\n  Expected: '" + blockId +
+					"'\n  Found: '" + endBlockIdToken.value +
+					"'\n  Note: The 'end' block identifier must match the 'while' block identifier",
+					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
 	return std::make_unique<WhileStmtAST>(std::move(condition), std::move(body), whileToken.line, whileToken.column, blockId);
@@ -287,12 +275,10 @@ std::unique_ptr<ForStmtAST> Parser::parseFor() {
 	// Require matching block identifier after end
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
 	if (endBlockIdToken.value != blockId) {
-		throw std::runtime_error("Block identifier mismatch in for loop" +
-								 std::string("\n  Expected: '") + blockId + "'" +
-								 "\n  Found: '" + endBlockIdToken.value + "'" +
-								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
-								 ", column " + std::to_string(endBlockIdToken.column) +
-								 "\n  Note: The 'end' block identifier must match the 'for' block identifier");
+		reportError("Block identifier mismatch in for loop\n  Expected: '" + blockId +
+					"'\n  Found: '" + endBlockIdToken.value +
+					"'\n  Note: The 'end' block identifier must match the 'for' block identifier",
+					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
 	return std::make_unique<ForStmtAST>(loopVar, std::move(iterable), std::move(body), forToken.line, forToken.column, blockId);
@@ -429,10 +415,9 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 			return std::make_unique<ExprStmtAST>(std::move(callExpr), idLine, idColumn);
 		}
 
-		throw std::runtime_error("Unexpected identifier '" + name + "'" +
-								 std::string("\n  Location: line ") + std::to_string(idLine) +
-								 ", column " + std::to_string(idColumn) +
-								 "\n  Note: Did you forget an assignment (=), function call (), or keyword?");
+		reportError("Unexpected identifier '" + name +
+					"'\n  Note: Did you forget an assignment (=), function call (), or keyword?",
+					idLine, idColumn);
 	}
 
 	std::string foundStr;
@@ -442,8 +427,7 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 		foundStr = "'" + std::string(currentValue()) + "'";
 	}
 
-	throw std::runtime_error("Unexpected token: " + foundStr +
-							 "\n  Location: line " + std::to_string(currentLine()) +
-							 ", column " + std::to_string(currentColumn()) +
-							 "\n  Note: Expected a statement (var, let, if, while, return, break, continue, or assignment)");
+	reportError("Unexpected token: " + foundStr +
+				"\n  Note: Expected a statement (var, let, if, while, return, break, continue, or assignment)",
+				currentLine(), currentColumn());
 }

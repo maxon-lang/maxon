@@ -59,12 +59,9 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	// Reject external method syntax: function Type.method(...)
 	// Methods must be declared inside struct bodies
 	if (check(TokenType::DOT)) {
-		throw std::runtime_error("Methods must be declared inside struct bodies, not using 'function Type.method()' syntax\n"
-								 "  Move this method inside the '" +
-								 name.value + "' struct definition\n"
-											  "  Location: line " +
-								 std::to_string(funcToken.line) +
-								 ", column " + std::to_string(funcToken.column));
+		reportError("Methods must be declared inside struct bodies, not using 'function Type.method()' syntax\n"
+					"  Move this method inside the '" + name.value + "' struct definition",
+					funcToken.line, funcToken.column);
 	}
 
 	std::string functionName = name.value;
@@ -89,9 +86,8 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 				// Array parameters must be unsized - reject [N]type syntax
 				if (check(TokenType::NUMBER)) {
-					throw std::runtime_error("Array parameters must be unsized: use []type, not [" + std::string(currentValue()) + "]type\n  Location: line " +
-											 std::to_string(currentLine()) + ", column " +
-											 std::to_string(currentColumn()));
+					reportError("Array parameters must be unsized: use []type, not [" + std::string(currentValue()) + "]type",
+								currentLine(), currentColumn());
 				}
 
 				expectAdvance(TokenType::RBRACKET, "Expected ']' after '['");
@@ -105,9 +101,8 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 				} else if (check(TokenType::IDENTIFIER)) {
 					elementType = parseQualifiedName("array element type");
 				} else {
-					throw std::runtime_error("Expected array element type (int, float, ptr, char, string, bool, or struct name)\n  Location: line " +
-											 std::to_string(currentLine()) + ", column " +
-											 std::to_string(currentColumn()));
+					reportError("Expected array element type (int, float, ptr, char, string, bool, or struct name)",
+								currentLine(), currentColumn());
 				}
 
 				// All array parameters are unsized
@@ -121,9 +116,8 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 				} else if (check(TokenType::IDENTIFIER)) {
 					paramType = parseQualifiedName("parameter type");
 				} else {
-					throw std::runtime_error("Expected parameter type (int, float, ptr, char, string, bool, struct name, or [size]type)\n  Location: line " +
-											 std::to_string(currentLine()) + ", column " +
-											 std::to_string(currentColumn()));
+					reportError("Expected parameter type (int, float, ptr, char, string, bool, struct name, or [size]type)",
+								currentLine(), currentColumn());
 				}
 			}
 
@@ -131,17 +125,15 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 			if (checkKeyword("or")) {
 				advance(); // consume 'or'
 				if (!checkKeyword("nil")) {
-					throw std::runtime_error("Expected 'nil' after 'or' in parameter type\n  Location: line " +
-											 std::to_string(currentLine()) + ", column " +
-											 std::to_string(currentColumn()));
+					reportError("Expected 'nil' after 'or' in parameter type",
+								currentLine(), currentColumn());
 				}
 				advance(); // consume 'nil'
 
 				// Reject nested optionals
 				if (paramType.find(" or nil") != std::string::npos) {
-					throw std::runtime_error("Cannot make optional type '" + paramType + "' optional again\n  Location: line " +
-											 std::to_string(currentLine()) + ", column " +
-											 std::to_string(currentColumn()));
+					reportError("Cannot make optional type '" + paramType + "' optional again",
+								currentLine(), currentColumn());
 				}
 
 				paramType = paramType + " or nil";
@@ -164,17 +156,15 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 		if (checkKeyword("or")) {
 			advance(); // consume 'or'
 			if (!checkKeyword("nil")) {
-				throw std::runtime_error("Expected 'nil' after 'or' in return type\n  Location: line " +
-										 std::to_string(currentLine()) + ", column " +
-										 std::to_string(currentColumn()));
+				reportError("Expected 'nil' after 'or' in return type",
+							currentLine(), currentColumn());
 			}
 			advance(); // consume 'nil'
 
 			// Reject nested optionals
 			if (returnType.find(" or nil") != std::string::npos) {
-				throw std::runtime_error("Cannot make optional type '" + returnType + "' optional again\n  Location: line " +
-										 std::to_string(currentLine()) + ", column " +
-										 std::to_string(currentColumn()));
+				reportError("Cannot make optional type '" + returnType + "' optional again",
+							currentLine(), currentColumn());
 			}
 
 			returnType = returnType + " or nil";
@@ -187,9 +177,8 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	if (isExtern) {
 		// Parse required library name for extern functions
 		if (!check(TokenType::STRING)) {
-			throw std::runtime_error("Expected library name as string after return type for extern function\n  Example: extern function foo(x int) int \"mydll\"\n  Location: line " +
-									 std::to_string(currentLine()) + ", column " +
-									 std::to_string(currentColumn()));
+			reportError("Expected library name as string after return type for extern function\n  Example: extern function foo(x int) int \"mydll\"",
+						currentLine(), currentColumn());
 		}
 		std::string libName = std::string(currentValue());
 		advance();
@@ -218,12 +207,10 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	// Require matching block identifier after end
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected function name as block identifier after 'end'");
 	if (endBlockIdToken.value != functionName) {
-		throw std::runtime_error("Block identifier mismatch in function definition" +
-								 std::string("\n  Expected: '") + functionName + "'" +
-								 "\n  Found: '" + endBlockIdToken.value + "'" +
-								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
-								 ", column " + std::to_string(endBlockIdToken.column) +
-								 "\n  Note: The 'end' block identifier must match the function name");
+		reportError("Block identifier mismatch in function definition\n  Expected: '" + functionName +
+					"'\n  Found: '" + endBlockIdToken.value +
+					"'\n  Note: The 'end' block identifier must match the function name",
+					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
 	logTrace(std::string("Function '") + functionName + "' -> " + returnType + " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
@@ -282,9 +269,8 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 
 				// Array parameters must be unsized - reject [N]type syntax
 				if (check(TokenType::NUMBER)) {
-					throw std::runtime_error("Array parameters must be unsized: use []type, not [" + std::string(currentValue()) + "]type\n  Location: line " +
-											 std::to_string(currentLine()) + ", column " +
-											 std::to_string(currentColumn()));
+					reportError("Array parameters must be unsized: use []type, not [" + std::string(currentValue()) + "]type",
+								currentLine(), currentColumn());
 				}
 
 				expectAdvance(TokenType::RBRACKET, "Expected ']' after '['");
@@ -298,9 +284,8 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 				} else if (check(TokenType::IDENTIFIER)) {
 					elementType = parseQualifiedName("array element type");
 				} else {
-					throw std::runtime_error("Expected array element type (int, float, ptr, char, string, bool, or struct name)\n  Location: line " +
-											 std::to_string(currentLine()) + ", column " +
-											 std::to_string(currentColumn()));
+					reportError("Expected array element type (int, float, ptr, char, string, bool, or struct name)",
+								currentLine(), currentColumn());
 				}
 
 				// All array parameters are unsized
@@ -314,9 +299,8 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 				} else if (check(TokenType::IDENTIFIER)) {
 					paramType = parseQualifiedName("parameter type");
 				} else {
-					throw std::runtime_error("Expected parameter type (int, float, ptr, char, string, bool, struct name, or [size]type)\n  Location: line " +
-											 std::to_string(currentLine()) + ", column " +
-											 std::to_string(currentColumn()));
+					reportError("Expected parameter type (int, float, ptr, char, string, bool, struct name, or [size]type)",
+								currentLine(), currentColumn());
 				}
 			}
 
@@ -324,17 +308,15 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 			if (checkKeyword("or")) {
 				advance(); // consume 'or'
 				if (!checkKeyword("nil")) {
-					throw std::runtime_error("Expected 'nil' after 'or' in parameter type\n  Location: line " +
-											 std::to_string(currentLine()) + ", column " +
-											 std::to_string(currentColumn()));
+					reportError("Expected 'nil' after 'or' in parameter type",
+								currentLine(), currentColumn());
 				}
 				advance(); // consume 'nil'
 
 				// Reject nested optionals
 				if (paramType.find(" or nil") != std::string::npos) {
-					throw std::runtime_error("Cannot make optional type '" + paramType + "' optional again\n  Location: line " +
-											 std::to_string(currentLine()) + ", column " +
-											 std::to_string(currentColumn()));
+					reportError("Cannot make optional type '" + paramType + "' optional again",
+								currentLine(), currentColumn());
 				}
 
 				paramType = paramType + " or nil";
@@ -357,17 +339,15 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 		if (checkKeyword("or")) {
 			advance(); // consume 'or'
 			if (!checkKeyword("nil")) {
-				throw std::runtime_error("Expected 'nil' after 'or' in return type\n  Location: line " +
-										 std::to_string(currentLine()) + ", column " +
-										 std::to_string(currentColumn()));
+				reportError("Expected 'nil' after 'or' in return type",
+							currentLine(), currentColumn());
 			}
 			advance(); // consume 'nil'
 
 			// Reject nested optionals
 			if (returnType.find(" or nil") != std::string::npos) {
-				throw std::runtime_error("Cannot make optional type '" + returnType + "' optional again\n  Location: line " +
-										 std::to_string(currentLine()) + ", column " +
-										 std::to_string(currentColumn()));
+				reportError("Cannot make optional type '" + returnType + "' optional again",
+							currentLine(), currentColumn());
 			}
 
 			returnType = returnType + " or nil";
@@ -387,12 +367,10 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 	// Require matching block identifier after end
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected method name as block identifier after 'end'");
 	if (endBlockIdToken.value != methodName) {
-		throw std::runtime_error("Block identifier mismatch in method definition" +
-								 std::string("\n  Expected: '") + methodName + "'" +
-								 "\n  Found: '" + endBlockIdToken.value + "'" +
-								 "\n  Location: line " + std::to_string(endBlockIdToken.line) +
-								 ", column " + std::to_string(endBlockIdToken.column) +
-								 "\n  Note: The 'end' block identifier must match the method name");
+		reportError("Block identifier mismatch in method definition\n  Expected: '" + methodName +
+					"'\n  Found: '" + endBlockIdToken.value +
+					"'\n  Note: The 'end' block identifier must match the method name",
+					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
 	logTrace(std::string("Method '") + structName + "." + methodName + "' -> " + returnType +
@@ -469,9 +447,8 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 						} else if (check(TokenType::IDENTIFIER)) {
 							elementType = parseQualifiedName("array element type");
 						} else {
-							throw std::runtime_error("Expected array element type after ']' at line " +
-													 std::to_string(currentLine()) + ", column " +
-													 std::to_string(currentColumn()));
+							reportError("Expected array element type after ']'",
+										currentLine(), currentColumn());
 						}
 						concreteType = "[" + sizeStr + "]" + elementType;
 					} else if (Lexer::isTypeToken(currentToken())) {
@@ -480,9 +457,8 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 					} else if (check(TokenType::IDENTIFIER)) {
 						concreteType = parseQualifiedName("concrete type");
 					} else {
-						throw std::runtime_error("Expected type in 'with' clause at line " +
-												 std::to_string(currentLine()) + ", column " +
-												 std::to_string(currentColumn()));
+						reportError("Expected type in 'with' clause",
+									currentLine(), currentColumn());
 					}
 					withTypes.push_back(concreteType);
 
@@ -541,10 +517,8 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 
 		// If we're past fields section and see something that's not a method, error
 		if (!parsingFields) {
-			throw std::runtime_error("Fields must be declared before methods in struct '" + structName + "'\n"
-																										 "  Location: line " +
-									 std::to_string(currentLine()) +
-									 ", column " + std::to_string(currentColumn()));
+			reportError("Fields must be declared before methods in struct '" + structName + "'",
+						currentLine(), currentColumn());
 		}
 
 		// Parse field: (let|var) name [type] [= defaultValue]
@@ -556,10 +530,8 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 			advance();
 			isImmutable = false;
 		} else {
-			throw std::runtime_error("Expected 'let' or 'var' for struct field declaration at line " +
-									 std::to_string(currentLine()) + ", column " +
-									 std::to_string(currentColumn()) +
-									 "\n  Note: Struct fields must be declared with 'let' (immutable) or 'var' (mutable)");
+			reportError("Expected 'let' or 'var' for struct field declaration\n  Note: Struct fields must be declared with 'let' (immutable) or 'var' (mutable)",
+						currentLine(), currentColumn());
 		}
 
 		Token fieldNameToken = expect(TokenType::IDENTIFIER, "Expected field name after 'let' or 'var'");
@@ -589,9 +561,8 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 			} else if (check(TokenType::IDENTIFIER)) {
 				elementType = parseQualifiedName("array element type");
 			} else {
-				throw std::runtime_error("Expected array element type after ']' at line " +
-										 std::to_string(currentLine()) + ", column " +
-										 std::to_string(currentColumn()));
+				reportError("Expected array element type after ']'",
+							currentLine(), currentColumn());
 			}
 
 			// Build array type string
@@ -609,17 +580,15 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 		if (!fieldType.empty() && checkKeyword("or")) {
 			advance(); // consume 'or'
 			if (!checkKeyword("nil")) {
-				throw std::runtime_error("Expected 'nil' after 'or' in field type\n  Location: line " +
-										 std::to_string(currentLine()) + ", column " +
-										 std::to_string(currentColumn()));
+				reportError("Expected 'nil' after 'or' in field type",
+							currentLine(), currentColumn());
 			}
 			advance(); // consume 'nil'
 
 			// Reject nested optionals
 			if (fieldType.find(" or nil") != std::string::npos) {
-				throw std::runtime_error("Cannot make optional type '" + fieldType + "' optional again\n  Location: line " +
-										 std::to_string(currentLine()) + ", column " +
-										 std::to_string(currentColumn()));
+				reportError("Cannot make optional type '" + fieldType + "' optional again",
+							currentLine(), currentColumn());
 			}
 
 			fieldType = fieldType + " or nil";
@@ -634,9 +603,8 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 
 		// Validate: must have either type or default value (or both)
 		if (fieldType.empty() && defaultValue == nullptr) {
-			throw std::runtime_error("Field '" + fieldName + "' must have a type annotation or default value at line " +
-									 std::to_string(fieldNameToken.line) + ", column " +
-									 std::to_string(fieldNameToken.column));
+			reportError("Field '" + fieldName + "' must have a type annotation or default value",
+						fieldNameToken.line, fieldNameToken.column);
 		}
 
 		fields.push_back(StructField(fieldName, fieldType, isImmutable, std::move(defaultValue),
@@ -648,11 +616,9 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 	// Require matching block identifier
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match struct name)");
 	if (blockIdToken.value != structName) {
-		throw std::runtime_error("Block identifier mismatch in struct definition" +
-								 std::string("\n  Expected: '") + structName + "'" +
-								 std::string("\n  Got: '") + blockIdToken.value + "'" +
-								 std::string("\n  at line ") + std::to_string(blockIdToken.line) +
-								 std::string(", column ") + std::to_string(blockIdToken.column));
+		reportError("Block identifier mismatch in struct definition\n  Expected: '" + structName +
+					"'\n  Got: '" + blockIdToken.value + "'",
+					blockIdToken.line, blockIdToken.column);
 	}
 
 	return std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo), std::move(methods), std::move(typeAssignments), std::move(interfaceTypeBindings), std::move(associatedTypeParams));
@@ -682,9 +648,8 @@ std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &st
 		if (check(TokenType::COMMA)) {
 			advance();
 		} else if (!check(TokenType::RBRACE)) {
-			throw std::runtime_error("Expected ',' or '}' in struct initialization at line " +
-									 std::to_string(currentLine()) + ", column " +
-									 std::to_string(currentColumn()));
+			reportError("Expected ',' or '}' in struct initialization",
+						currentLine(), currentColumn());
 		}
 	}
 
@@ -768,9 +733,8 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 					} else if (check(TokenType::IDENTIFIER)) {
 						elementType = parseQualifiedName("array element type");
 					} else {
-						throw std::runtime_error("Expected array element type after ']' in interface method signature\n  Location: line " +
-												 std::to_string(currentLine()) + ", column " +
-												 std::to_string(currentColumn()));
+						reportError("Expected array element type after ']' in interface method signature",
+									currentLine(), currentColumn());
 					}
 
 					// Build array type string
@@ -781,9 +745,8 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 				} else if (check(TokenType::IDENTIFIER)) {
 					paramType = parseQualifiedName("parameter type");
 				} else {
-					throw std::runtime_error("Expected parameter type in interface method signature\n  Location: line " +
-											 std::to_string(currentLine()) + ", column " +
-											 std::to_string(currentColumn()));
+					reportError("Expected parameter type in interface method signature",
+								currentLine(), currentColumn());
 				}
 
 				parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
@@ -809,17 +772,15 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 		if (checkKeyword("or")) {
 			advance(); // consume 'or'
 			if (!checkKeyword("nil")) {
-				throw std::runtime_error("Expected 'nil' after 'or' in return type\n  Location: line " +
-										 std::to_string(currentLine()) + ", column " +
-										 std::to_string(currentColumn()));
+				reportError("Expected 'nil' after 'or' in return type",
+							currentLine(), currentColumn());
 			}
 			advance(); // consume 'nil'
 
 			// Reject nested optionals
 			if (returnType.find(" or nil") != std::string::npos) {
-				throw std::runtime_error("Cannot make optional type '" + returnType + "' optional again\n  Location: line " +
-										 std::to_string(currentLine()) + ", column " +
-										 std::to_string(currentColumn()));
+				reportError("Cannot make optional type '" + returnType + "' optional again",
+							currentLine(), currentColumn());
 			}
 
 			returnType = returnType + " or nil";
@@ -836,11 +797,9 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 	// Require matching block identifier
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match interface name)");
 	if (blockIdToken.value != interfaceName) {
-		throw std::runtime_error("Block identifier mismatch in interface definition" +
-								 std::string("\n  Expected: '") + interfaceName + "'" +
-								 std::string("\n  Got: '") + blockIdToken.value + "'" +
-								 std::string("\n  at line ") + std::to_string(blockIdToken.line) +
-								 std::string(", column ") + std::to_string(blockIdToken.column));
+		reportError("Block identifier mismatch in interface definition\n  Expected: '" + interfaceName +
+					"'\n  Got: '" + blockIdToken.value + "'",
+					blockIdToken.line, blockIdToken.column);
 	}
 
 	logTrace("Interface '" + interfaceName + "' with " + std::to_string(methods.size()) + " methods" +

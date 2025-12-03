@@ -11,7 +11,8 @@
 void MIRCodeGenerator::generateIf(IfStmtAST *ifStmt, mir::MIRFunction *function) {
 	mir::MIRValue *condVal = generateExpr(ifStmt->condition.get());
 	if (!condVal) {
-		throw std::runtime_error("Failed to generate if condition");
+		reportError("Failed to generate if condition",
+					ifStmt->line, ifStmt->column);
 	}
 
 	// Convert to bool if needed
@@ -84,7 +85,8 @@ void MIRCodeGenerator::generateWhile(WhileStmtAST *whileStmt, mir::MIRFunction *
 	builder->setInsertPoint(condBB);
 	mir::MIRValue *condVal = generateExpr(whileStmt->condition.get());
 	if (!condVal) {
-		throw std::runtime_error("Failed to generate while condition");
+		reportError("Failed to generate while condition",
+					whileStmt->line, whileStmt->column);
 	}
 
 	if (condVal->type->kind != mir::MIRTypeKind::Int1) {
@@ -146,13 +148,15 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 
 		mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
 		if (!arrayAlloca) {
-			throw std::runtime_error("Unknown array variable: " + arrayVarName);
+			reportError("Unknown array variable: " + arrayVarName,
+						forStmt->line, forStmt->column);
 		}
 
 		// Get array length
 		mir::MIRValue *lengthAlloca = namedValues[arrayVarName + ".__length"];
 		if (!lengthAlloca) {
-			throw std::runtime_error("Array length not found for: " + arrayVarName);
+			reportError("Array length not found for: " + arrayVarName,
+						forStmt->line, forStmt->column);
 		}
 		mir::MIRValue *arrayLength = builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "arrlen");
 
@@ -233,7 +237,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 			mir::MIRValue *endVal = generateExpr(callExpr->args[1].get());
 
 			if (!startVal || !endVal) {
-				throw std::runtime_error("Failed to generate range bounds");
+				reportError("Failed to generate range bounds",
+							forStmt->line, forStmt->column);
 			}
 
 			// Create loop variable alloca and initialize with start value
@@ -295,7 +300,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 	// Non-array iteration (range, etc.): use iterator interface
 	mir::MIRValue *iteratorVal = generateExpr(forStmt->iterable.get());
 	if (!iteratorVal) {
-		throw std::runtime_error("Failed to generate for-loop iterable expression");
+		reportError("Failed to generate for-loop iterable expression",
+					forStmt->line, forStmt->column);
 	}
 
 	// Create alloca for iterator
@@ -334,7 +340,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 		}
 	}
 	if (!nextFunc) {
-		throw std::runtime_error("For-loop requires 'next' function from stdlib");
+		reportError("For-loop requires 'next' function from stdlib",
+					forStmt->line, forStmt->column);
 	}
 
 	// Call next() to get optional result
@@ -345,7 +352,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 	// Tag = 0 for nil, 1 for has value
 	mir::MIRType *optionalType = nextFunc->returnType;
 	if (optionalType->kind != mir::MIRTypeKind::Optional) {
-		throw std::runtime_error("For-loop next() must return optional type (Element or nil)");
+		reportError("For-loop next() must return optional type (Element or nil)",
+					forStmt->line, forStmt->column);
 	}
 
 	// Store optional result
@@ -369,7 +377,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 	// The wrapped type is the element type (what the iterator yields)
 	mir::MIRType *wrappedType = optionalType->wrappedType;
 	if (!wrappedType) {
-		throw std::runtime_error("For-loop optional type must have wrappedType");
+		reportError("For-loop optional type must have wrappedType",
+					forStmt->line, forStmt->column);
 	}
 
 	// Use optionalType for GEP since we're indexing into the Optional struct, not the wrapped type
@@ -420,7 +429,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 
 void MIRCodeGenerator::generateBreak(BreakStmtAST *breakStmt, mir::MIRFunction *function) {
 	if (loopStack.empty()) {
-		throw std::runtime_error("Break statement outside of loop");
+		reportError("Break statement outside of loop",
+					breakStmt->line, breakStmt->column);
 	}
 
 	mir::MIRBasicBlock *targetBlock = nullptr;
@@ -436,8 +446,9 @@ void MIRCodeGenerator::generateBreak(BreakStmtAST *breakStmt, mir::MIRFunction *
 		}
 
 		if (!targetBlock) {
-			throw std::runtime_error("Break target label '" + breakStmt->targetLabel +
-									 "' not found in enclosing loops");
+			reportError("Break target label '" + breakStmt->targetLabel +
+						"' not found in enclosing loops",
+						breakStmt->line, breakStmt->column);
 		}
 	}
 
@@ -450,7 +461,8 @@ void MIRCodeGenerator::generateBreak(BreakStmtAST *breakStmt, mir::MIRFunction *
 
 void MIRCodeGenerator::generateContinue(ContinueStmtAST *continueStmt, mir::MIRFunction *function) {
 	if (loopStack.empty()) {
-		throw std::runtime_error("Continue statement outside of loop");
+		reportError("Continue statement outside of loop",
+					continueStmt->line, continueStmt->column);
 	}
 
 	mir::MIRBasicBlock *targetBlock = nullptr;
@@ -466,8 +478,9 @@ void MIRCodeGenerator::generateContinue(ContinueStmtAST *continueStmt, mir::MIRF
 		}
 
 		if (!targetBlock) {
-			throw std::runtime_error("Continue target label '" + continueStmt->targetLabel +
-									 "' not found in enclosing loops");
+			reportError("Continue target label '" + continueStmt->targetLabel +
+						"' not found in enclosing loops",
+						continueStmt->line, continueStmt->column);
 		}
 	}
 

@@ -195,10 +195,8 @@ Token Parser::expect(TokenType type, const std::string &message) {
 			foundStr = "'" + std::string(currentValue()) + "'";
 		}
 
-		throw std::runtime_error(message + "\n  Expected: " + typeStr +
-								 "\n  Found: " + foundStr +
-								 "\n  Location: line " + std::to_string(currentLine()) +
-								 ", column " + std::to_string(currentColumn()));
+		reportError(message + "\n  Expected: " + typeStr + "\n  Found: " + foundStr,
+					currentLine(), currentColumn());
 	}
 	Token tok = currentToken();
 	advance();
@@ -207,8 +205,7 @@ Token Parser::expect(TokenType type, const std::string &message) {
 
 Token Parser::expectKeyword(const std::string &keyword, const std::string &message) {
 	if (!checkKeyword(keyword)) {
-		throw std::runtime_error(message + " at line " + std::to_string(currentLine()) +
-								 ", column " + std::to_string(currentColumn()));
+		reportError(message, currentLine(), currentColumn());
 	}
 	Token tok = currentToken();
 	advance();
@@ -273,18 +270,15 @@ void Parser::expectAdvance(TokenType type, const std::string &message) {
 			foundStr = "'" + std::string(currentValue()) + "'";
 		}
 
-		throw std::runtime_error(message + "\n  Expected: " + typeStr +
-								 "\n  Found: " + foundStr +
-								 "\n  Location: line " + std::to_string(currentLine()) +
-								 ", column " + std::to_string(currentColumn()));
+		reportError(message + "\n  Expected: " + typeStr + "\n  Found: " + foundStr,
+					currentLine(), currentColumn());
 	}
 	advance();
 }
 
 void Parser::expectKeywordAdvance(const std::string &keyword, const std::string &message) {
 	if (!checkKeyword(keyword)) {
-		throw std::runtime_error(message + " at line " + std::to_string(currentLine()) +
-								 ", column " + std::to_string(currentColumn()));
+		reportError(message, currentLine(), currentColumn());
 	}
 	advance();
 }

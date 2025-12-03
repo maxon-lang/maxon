@@ -104,6 +104,9 @@ class MIRCodeGenerator {
 	void logDetail(const std::string &msg);
 	void logTrace(const std::string &msg);
 
+	// Error reporting helper - throws runtime_error with location info
+	[[noreturn]] void reportError(const std::string &message, int line, int column);
+
 	// Loop context for break/continue
 	struct LoopContext {
 		std::string label;

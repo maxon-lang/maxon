@@ -142,6 +142,22 @@ TokenStream Lexer::tokenize_stream() {
 }
 
 // ============================================================================
+// Error Reporting
+// ============================================================================
+
+void Lexer::reportError(const std::string &message) {
+	throw std::runtime_error(message + "\n  Location: line " +
+							 std::to_string(line_) + ", column " +
+							 std::to_string(column_));
+}
+
+void Lexer::reportError(const std::string &message, int line, int column) {
+	throw std::runtime_error(message + "\n  Location: line " +
+							 std::to_string(line) + ", column " +
+							 std::to_string(column));
+}
+
+// ============================================================================
 // Private Helper Methods
 // ============================================================================
 
@@ -215,8 +231,7 @@ void Lexer::skipBlockComment() {
 		position_ = star_pos;
 
 		if (position_ >= length_) {
-			throw std::runtime_error("Unterminated block comment starting at line " +
-									 std::to_string(startLine) + ", column " + std::to_string(startColumn));
+			reportError("Unterminated block comment", startLine, startColumn);
 		}
 
 		if (source_[position_] == '*' && position_ + 1 < length_ && source_[position_ + 1] == '/') {
@@ -228,8 +243,7 @@ void Lexer::skipBlockComment() {
 		advance();
 	}
 
-	throw std::runtime_error("Unterminated block comment starting at line " +
-							 std::to_string(startLine) + ", column " + std::to_string(startColumn));
+	reportError("Unterminated block comment", startLine, startColumn);
 }
 
 Token Lexer::readNextToken() {
@@ -307,9 +321,8 @@ Token Lexer::readString() {
 
 	while (position_ < length_ && source_[position_] != '\'') {
 		if (source_[position_] == '\n') {
-			throw std::runtime_error("Unterminated string literal at line " +
-									 std::to_string(startLine) + ", column " + std::to_string(startColumn) +
-									 ": string started with ' but missing closing '");
+			reportError("Unterminated string literal: string started with ' but missing closing '",
+						startLine, startColumn);
 		}
 
 		// Handle escape sequences
@@ -317,8 +330,7 @@ Token Lexer::readString() {
 			hasEscape = true;
 			advance();
 			if (position_ >= length_) {
-				throw std::runtime_error("Unterminated escape sequence at line " +
-										 std::to_string(startLine) + ", column " + std::to_string(startColumn));
+				reportError("Unterminated escape sequence", startLine, startColumn);
 			}
 
 			switch (source_[position_]) {
@@ -341,9 +353,8 @@ Token Lexer::readString() {
 				str += '\0';
 				break;
 			default:
-				throw std::runtime_error("Unknown escape sequence '\\" +
-										 std::string(1, source_[position_]) + "' at line " +
-										 std::to_string(line_) + ", column " + std::to_string(column_));
+				reportError("Unknown escape sequence '\\" + std::string(1, source_[position_]) + "'",
+							line_, column_);
 			}
 			advance();
 		} else {
@@ -353,9 +364,8 @@ Token Lexer::readString() {
 	}
 
 	if (position_ >= length_) {
-		throw std::runtime_error("Unterminated string literal at line " +
-								 std::to_string(startLine) + ", column " + std::to_string(startColumn) +
-								 ": reached end of file without finding closing '");
+		reportError("Unterminated string literal: reached end of file without finding closing '",
+					startLine, startColumn);
 	}
 
 	advance();
@@ -408,9 +418,8 @@ Token Lexer::readStringLiteral() {
 		if (source_[position_] == '\\') {
 			advance();
 			if (position_ >= length_) {
-				throw std::runtime_error("Unterminated string literal at line " +
-										 std::to_string(startLine) + ", column " + std::to_string(startColumn) +
-										 ": reached end of file in escape sequence");
+				reportError("Unterminated string literal: reached end of file in escape sequence",
+							startLine, startColumn);
 			}
 
 			switch (source_[position_]) {
@@ -433,9 +442,8 @@ Token Lexer::readStringLiteral() {
 				str += '\0';
 				break;
 			default:
-				throw std::runtime_error("Unknown escape sequence '\\" +
-										 std::string(1, source_[position_]) + "' at line " +
-										 std::to_string(line_) + ", column " + std::to_string(column_));
+				reportError("Unknown escape sequence '\\" + std::string(1, source_[position_]) + "'",
+							line_, column_);
 			}
 			advance();
 		} else {
@@ -445,9 +453,8 @@ Token Lexer::readStringLiteral() {
 	}
 
 	if (position_ >= length_) {
-		throw std::runtime_error("Unterminated string literal at line " +
-								 std::to_string(startLine) + ", column " + std::to_string(startColumn) +
-								 ": reached end of file without finding closing \"");
+		reportError("Unterminated string literal: reached end of file without finding closing \"",
+					startLine, startColumn);
 	}
 
 	advance();
@@ -489,9 +496,8 @@ Token Lexer::readOperatorOrDelimiter(int startLine, int startColumn) {
 			advance();
 			return Token(TokenType::NOT_EQUAL, "!=", startLine, startColumn);
 		}
-		throw std::runtime_error("Unexpected character '!' at line " +
-								 std::to_string(startLine) + ", column " + std::to_string(startColumn) +
-								 ": did you mean '!=' (not equal)?");
+		reportError("Unexpected character '!': did you mean '!=' (not equal)?",
+					startLine, startColumn);
 
 	case '&':
 		advance();
@@ -568,10 +574,9 @@ Token Lexer::readOperatorOrDelimiter(int startLine, int startColumn) {
 			return Token(TokenType::DOT_DOT, "..", startLine, startColumn);
 		}
 		if (CharClassifier::is_digit(peek(1))) {
-			throw std::runtime_error("Invalid float literal at line " +
-									 std::to_string(startLine) + ", column " + std::to_string(startColumn) +
-									 ": float literals must have a leading zero (use 0." +
-									 std::string(1, peek(1)) + " instead of ." + std::string(1, peek(1)) + ")");
+			reportError("Invalid float literal: float literals must have a leading zero (use 0." +
+						std::string(1, peek(1)) + " instead of ." + std::string(1, peek(1)) + ")",
+						startLine, startColumn);
 		}
 		advance();
 		return Token(TokenType::DOT, ".", startLine, startColumn);
@@ -589,8 +594,7 @@ Token Lexer::readOperatorOrDelimiter(int startLine, int startColumn) {
 			suggestion = "\n  Note: Maxon doesn't use semicolons at the end of statements";
 		}
 
-		throw std::runtime_error("Unexpected character " + charDesc + " at line " +
-								 std::to_string(startLine) + ", column " + std::to_string(startColumn) + suggestion);
+		reportError("Unexpected character " + charDesc + suggestion, startLine, startColumn);
 	}
 	}
 }

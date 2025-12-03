@@ -56,9 +56,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		return generateStringLiteral(strExpr);
 	}
 
-	if (dynamic_cast<ArrayLiteralExprAST *>(expr)) {
+	if (auto *arrayLitExpr = dynamic_cast<ArrayLiteralExprAST *>(expr)) {
 		// Array literals should only appear as initializers
-		throw std::runtime_error("Array literal can only be used as an initializer in variable declarations");
+		reportError("Array literal can only be used as an initializer in variable declarations",
+					arrayLitExpr->line, arrayLitExpr->column);
 	}
 
 	if (auto *castExpr = dynamic_cast<CastExprAST *>(expr)) {
@@ -129,8 +130,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					std::string methodName = castExpr->targetType + ".init";
 					mir::MIRFunction *initFunc = module->getFunction(methodName);
 					if (!initFunc) {
-						throw std::runtime_error("Type '" + castExpr->targetType +
-												 "' conforms to ExpressibleByStringLiteral but has no init method");
+						reportError("Type '" + castExpr->targetType +
+									"' conforms to ExpressibleByStringLiteral but has no init method",
+									castExpr->line, castExpr->column);
 					}
 
 					// Pass null for self (factory method doesn't use it)
@@ -142,7 +144,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 		mir::MIRValue *value = generateExpr(castExpr->expr.get());
 		if (!value) {
-			throw std::runtime_error("Failed to generate expression for cast");
+			reportError("Failed to generate expression for cast",
+						castExpr->line, castExpr->column);
 		}
 
 		mir::MIRType *targetType = getTypeFromString(castExpr->targetType);
@@ -185,9 +188,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			return builder->createPtrToInt(value, targetType, "ptr2inttmp");
 		}
 
-		throw std::runtime_error("Unsupported cast from " +
-								 (sourceType->structName.empty() ? getMaxonTypeFromMIRType(sourceType) : sourceType->structName) +
-								 " to " + castExpr->targetType);
+		reportError("Unsupported cast from " +
+					(sourceType->structName.empty() ? getMaxonTypeFromMIRType(sourceType) : sourceType->structName) +
+					" to " + castExpr->targetType,
+					castExpr->line, castExpr->column);
 	}
 
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
@@ -238,7 +242,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					}
 				}
 			}
-			throw std::runtime_error("Unknown variable name: " + varExpr->name);
+			reportError("Unknown variable name: " + varExpr->name,
+						varExpr->line, varExpr->column);
 		}
 
 		// Determine the type to load
@@ -267,8 +272,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		return builder->createLoad(loadType, alloca, varExpr->name);
 	}
 
-	if (dynamic_cast<StructInitExprAST *>(expr)) {
-		throw std::runtime_error("Struct literal can only be used as an initializer in variable declarations");
+	if (auto *structInitExpr = dynamic_cast<StructInitExprAST *>(expr)) {
+		reportError("Struct literal can only be used as an initializer in variable declarations",
+					structInitExpr->line, structInitExpr->column);
 	}
 
 	if (auto *memberAccessExpr = dynamic_cast<MemberAccessExprAST *>(expr)) {
@@ -340,7 +346,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 								}
 							}
 							if (!basePtr) {
-								throw std::runtime_error("Unknown variable: " + ma->objectName);
+								reportError("Unknown variable: " + ma->objectName,
+											ma->line, ma->column);
 							}
 						} else {
 							if (isStructParameter(ma->objectName)) {
@@ -363,7 +370,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				for (auto *ma : chain) {
 					// Get the struct type
 					if (structTypes.find(currentType) == structTypes.end()) {
-						throw std::runtime_error("Expected struct type for member access: " + currentType);
+						reportError("Expected struct type for member access: " + currentType,
+									ma->line, ma->column);
 					}
 					mir::MIRType *structType = structTypes[currentType];
 					const auto &fields = structFields[currentType];
@@ -380,7 +388,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					}
 
 					if (fieldIndex < 0) {
-						throw std::runtime_error("Unknown field '" + ma->memberName + "' in struct '" + currentType + "'");
+						reportError("Unknown field '" + ma->memberName + "' in struct '" + currentType + "'",
+									ma->line, ma->column);
 					}
 
 					// GEP to get pointer to the field
@@ -432,7 +441,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 						}
 					}
 				}
-				throw std::runtime_error("Unknown variable: " + memberAccessExpr->objectName);
+				reportError("Unknown variable: " + memberAccessExpr->objectName,
+							memberAccessExpr->line, memberAccessExpr->column);
 			}
 
 			// Check if this is a pointer to struct or struct directly
@@ -464,8 +474,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			}
 
 			if (fieldIndex < 0) {
-				throw std::runtime_error("Unknown field '" + memberAccessExpr->memberName +
-										 "' in struct '" + varType + "'");
+				reportError("Unknown field '" + memberAccessExpr->memberName +
+							"' in struct '" + varType + "'",
+							memberAccessExpr->line, memberAccessExpr->column);
 			}
 
 			// GEP to get field pointer
@@ -505,7 +516,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 															  {builder->getInt64(-8)}, "length.ptr");
 				return builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "length");
 			}
-			throw std::runtime_error("Variable is not an array: " + memberAccessExpr->objectName);
+			reportError("Variable is not an array: " + memberAccessExpr->objectName,
+						memberAccessExpr->line, memberAccessExpr->column);
 		}
 
 		// Handle array.capacity (dynamic arrays only)
@@ -534,16 +546,19 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			if (lengthAlloca) {
 				return builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "capacity");
 			}
-			throw std::runtime_error("Variable is not an array: " + memberAccessExpr->objectName);
+			reportError("Variable is not an array: " + memberAccessExpr->objectName,
+						memberAccessExpr->line, memberAccessExpr->column);
 		}
 
-		throw std::runtime_error("Unknown member: " + memberAccessExpr->memberName);
+		reportError("Unknown member: " + memberAccessExpr->memberName,
+					memberAccessExpr->line, memberAccessExpr->column);
 	}
 
 	if (auto *arrayIndexExpr = dynamic_cast<ArrayIndexExprAST *>(expr)) {
 		mir::MIRValue *indexVal = generateExpr(arrayIndexExpr->index.get());
 		if (!indexVal) {
-			throw std::runtime_error("Failed to generate array index");
+			reportError("Failed to generate array index",
+						arrayIndexExpr->line, arrayIndexExpr->column);
 		}
 
 		// Handle complex array access (e.g., struct.field[i])
@@ -551,7 +566,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			// Generate the array expression (e.g., struct.field)
 			mir::MIRValue *arrayVal = generateExpr(arrayIndexExpr->arrayExpr.get());
 			if (!arrayVal) {
-				throw std::runtime_error("Failed to generate array expression");
+				reportError("Failed to generate array expression",
+							arrayIndexExpr->line, arrayIndexExpr->column);
 			}
 
 			// For member access on struct, the result is a pointer to the array field
@@ -649,7 +665,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					}
 				}
 			}
-			throw std::runtime_error("Unknown array name: " + arrayIndexExpr->arrayName);
+			reportError("Unknown array name: " + arrayIndexExpr->arrayName,
+						arrayIndexExpr->line, arrayIndexExpr->column);
 		}
 
 		// Determine element type
@@ -729,7 +746,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 							}
 
 							if (!leftPtr || !rightPtr) {
-								throw std::runtime_error("Failed to generate Equatable comparison operands");
+								reportError("Failed to generate Equatable comparison operands",
+											binExpr->line, binExpr->column);
 							}
 
 							std::vector<mir::MIRValue *> args = {leftPtr, rightPtr};
@@ -774,7 +792,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				}
 
 				if (!leftPtr || !rightPtr) {
-					throw std::runtime_error("Failed to generate character comparison operands");
+					reportError("Failed to generate character comparison operands",
+								binExpr->line, binExpr->column);
 				}
 
 				// Extract first byte from each character to compare (for ASCII/simple chars)
@@ -784,7 +803,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
 
 				if (!managedDataType || !unsizedArrayType) {
-					throw std::runtime_error("character comparison requires __ManagedStringData type");
+					reportError("character comparison requires __ManagedStringData type",
+								binExpr->line, binExpr->column);
 				}
 
 				// Get first byte from left char
@@ -956,7 +976,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		mir::MIRValue *right = generateExpr(binExpr->right.get());
 
 		if (!left || !right) {
-			throw std::runtime_error("Failed to generate binary expression operands");
+			reportError("Failed to generate binary expression operands",
+						binExpr->line, binExpr->column);
 		}
 
 		bool leftIsFloat = left->type->isFloat();
@@ -1038,14 +1059,16 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			// Result is 1 if either is non-zero, 0 otherwise
 			return builder->createOr(left, right, "ortmp");
 		default:
-			throw std::runtime_error("Unknown binary operator");
+			reportError("Unknown binary operator",
+						binExpr->line, binExpr->column);
 		}
 	}
 
 	if (auto *unaryExpr = dynamic_cast<UnaryExprAST *>(expr)) {
 		mir::MIRValue *operand = generateExpr(unaryExpr->operand.get());
 		if (!operand) {
-			throw std::runtime_error("Failed to generate unary expression operand");
+			reportError("Failed to generate unary expression operand",
+						unaryExpr->line, unaryExpr->column);
 		}
 
 		bool isFloat = operand->type->isFloat();
@@ -1064,7 +1087,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			return builder->createICmpEq(operand,
 										 mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), 0), "nottmp");
 		default:
-			throw std::runtime_error("Unknown unary operator");
+			reportError("Unknown unary operator",
+						unaryExpr->line, unaryExpr->column);
 		}
 	}
 
@@ -1159,7 +1183,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			// Multiplicative hash using Knuth's golden ratio constant
 			// hash = value * 2654435769 (which is 0x9E3779B9)
 			if (callExpr->args.empty()) {
-				throw std::runtime_error("hash() requires self argument");
+				reportError("hash() requires self argument",
+							callExpr->line, callExpr->column);
 			}
 			mir::MIRValue *value = generateExpr(callExpr->args[0].get());
 			// Extend byte/character to int if needed
@@ -1173,7 +1198,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		if (effectiveCallee == "int.equals" || effectiveCallee == "byte.equals" || effectiveCallee == "character.equals") {
 			// Simple equality comparison
 			if (callExpr->args.size() < 2) {
-				throw std::runtime_error("equals() requires self and other arguments");
+				reportError("equals() requires self and other arguments",
+							callExpr->line, callExpr->column);
 			}
 			mir::MIRValue *self = generateExpr(callExpr->args[0].get());
 			mir::MIRValue *other = generateExpr(callExpr->args[1].get());
@@ -1217,7 +1243,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		}
 
 		if (!calleeF) {
-			throw std::runtime_error("Unknown function referenced: " + effectiveCallee);
+			reportError("Unknown function referenced: " + effectiveCallee,
+						callExpr->line, callExpr->column);
 		}
 
 		// Generate arguments
@@ -1302,7 +1329,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			// Check if argument is nil (generateExpr returns nullptr for nil)
 			bool isNilArg = (!argVal && dynamic_cast<NilExprAST *>(arg.get()));
 			if (!argVal && !isNilArg) {
-				throw std::runtime_error("Failed to generate function argument");
+				reportError("Failed to generate function argument",
+							callExpr->line, callExpr->column);
 			}
 
 			// If the argument is a struct value but the parameter expects a pointer,
@@ -1352,7 +1380,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 			// If still nullptr at this point, something went wrong
 			if (!argVal) {
-				throw std::runtime_error("Failed to generate optional argument value");
+				reportError("Failed to generate optional argument value",
+							callExpr->line, callExpr->column);
 			}
 
 			argsV.push_back(argVal);
@@ -1367,7 +1396,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		return builder->createCall(calleeF, argsV);
 	}
 
-	throw std::runtime_error("Unknown expression type");
+	reportError("Unknown expression type", expr->line, expr->column);
 }
 
 //==============================================================================
@@ -1394,7 +1423,8 @@ mir::MIRValue *MIRCodeGenerator::generateMathIntrinsic(CallExprAST *callExpr) {
 		mathFunc = getOrDeclareFunction(name, mir::MIRType::getFloat64(),
 										{mir::MIRType::getFloat64(), mir::MIRType::getFloat64()});
 	} else {
-		throw std::runtime_error("Unknown math intrinsic: " + name);
+		reportError("Unknown math intrinsic: " + name,
+					callExpr->line, callExpr->column);
 	}
 
 	// Generate arguments with int-to-float promotion

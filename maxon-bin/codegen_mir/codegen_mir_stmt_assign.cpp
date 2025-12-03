@@ -34,7 +34,8 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 	}
 
 	if (!alloca) {
-		throw std::runtime_error("Unknown variable name: " + assign->name);
+		reportError("Unknown variable name: " + assign->name,
+					assign->line, assign->column);
 	}
 
 	if (varType.empty()) {
@@ -70,7 +71,8 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 	// Now evaluate the RHS expression
 	mir::MIRValue *val = generateExpr(assign->value.get());
 	if (!val) {
-		throw std::runtime_error("Failed to generate assignment value");
+		reportError("Failed to generate assignment value",
+					assign->line, assign->column);
 	}
 
 	// COW: Release the old string buffer if it was heap-allocated
@@ -120,7 +122,8 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir::MIRFunction *function) {
 	mir::MIRValue *indexVal = generateExpr(arrayAssign->index.get());
 	if (!indexVal) {
-		throw std::runtime_error("Failed to generate array index");
+		reportError("Failed to generate array index",
+					arrayAssign->line, arrayAssign->column);
 	}
 
 	mir::MIRValue *alloca = namedValues[arrayAssign->arrayName];
@@ -149,7 +152,8 @@ void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir:
 	}
 
 	if (!alloca) {
-		throw std::runtime_error("Unknown array name: " + arrayAssign->arrayName);
+		reportError("Unknown array name: " + arrayAssign->arrayName,
+					arrayAssign->line, arrayAssign->column);
 	}
 
 	// Determine element type
@@ -178,7 +182,8 @@ void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir:
 	if (auto *structInit = dynamic_cast<StructInitExprAST *>(arrayAssign->value.get())) {
 		mir::MIRType *structType = structTypes[structInit->structName];
 		if (!structType) {
-			throw std::runtime_error("Unknown struct type: " + structInit->structName);
+			reportError("Unknown struct type: " + structInit->structName,
+						structInit->line, structInit->column);
 		}
 
 		const auto &fieldList = structFields[structInit->structName];
@@ -206,8 +211,9 @@ void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir:
 			}
 
 			if (valueExpr == nullptr) {
-				throw std::runtime_error("No value for field '" + fieldName +
-										 "' in struct '" + structInit->structName + "'");
+				reportError("No value for field '" + fieldName +
+							"' in struct '" + structInit->structName + "'",
+							structInit->line, structInit->column);
 			}
 
 			mir::MIRValue *fieldPtr = builder->createStructGEP(structType, elementPtr,
@@ -218,7 +224,8 @@ void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir:
 	} else {
 		mir::MIRValue *val = generateExpr(arrayAssign->value.get());
 		if (!val) {
-			throw std::runtime_error("Failed to generate array assignment value");
+			reportError("Failed to generate array assignment value",
+						arrayAssign->line, arrayAssign->column);
 		}
 		builder->createStore(val, elementPtr);
 	}
@@ -227,12 +234,14 @@ void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir:
 void MIRCodeGenerator::generateArrayMemberAssign(ArrayMemberAssignStmtAST *arrayMemberAssign, mir::MIRFunction *function) {
 	mir::MIRValue *indexVal = generateExpr(arrayMemberAssign->index.get());
 	if (!indexVal) {
-		throw std::runtime_error("Failed to generate array index");
+		reportError("Failed to generate array index",
+					arrayMemberAssign->line, arrayMemberAssign->column);
 	}
 
 	mir::MIRValue *alloca = namedValues[arrayMemberAssign->arrayName];
 	if (!alloca) {
-		throw std::runtime_error("Unknown array name: " + arrayMemberAssign->arrayName);
+		reportError("Unknown array name: " + arrayMemberAssign->arrayName,
+					arrayMemberAssign->line, arrayMemberAssign->column);
 	}
 
 	// Determine element type
@@ -247,7 +256,8 @@ void MIRCodeGenerator::generateArrayMemberAssign(ArrayMemberAssignStmtAST *array
 
 	mir::MIRType *structType = structTypes[elementTypeStr];
 	if (!structType) {
-		throw std::runtime_error("Element type is not a struct: " + elementTypeStr);
+		reportError("Element type is not a struct: " + elementTypeStr,
+					arrayMemberAssign->line, arrayMemberAssign->column);
 	}
 
 	// Get pointer to array element
@@ -265,8 +275,9 @@ void MIRCodeGenerator::generateArrayMemberAssign(ArrayMemberAssignStmtAST *array
 	}
 
 	if (fieldIndex < 0) {
-		throw std::runtime_error("Unknown field '" + arrayMemberAssign->memberName +
-								 "' in struct '" + elementTypeStr + "'");
+		reportError("Unknown field '" + arrayMemberAssign->memberName +
+					"' in struct '" + elementTypeStr + "'",
+					arrayMemberAssign->line, arrayMemberAssign->column);
 	}
 
 	mir::MIRValue *fieldPtr = builder->createStructGEP(structType, elementPtr,
@@ -279,14 +290,16 @@ void MIRCodeGenerator::generateMemberAssign(MemberAssignStmtAST *memberAssign, m
 	// Struct member assignment: obj.field = value
 	mir::MIRValue *alloca = namedValues[memberAssign->objectName];
 	if (!alloca) {
-		throw std::runtime_error("Unknown variable: " + memberAssign->objectName);
+		reportError("Unknown variable: " + memberAssign->objectName,
+					memberAssign->line, memberAssign->column);
 	}
 
 	// Get the struct type
 	std::string structTypeName = variableTypes[memberAssign->objectName];
 	mir::MIRType *structType = structTypes[structTypeName];
 	if (!structType) {
-		throw std::runtime_error("Variable '" + memberAssign->objectName + "' is not a struct type");
+		reportError("Variable '" + memberAssign->objectName + "' is not a struct type",
+					memberAssign->line, memberAssign->column);
 	}
 
 	// Find field index
@@ -300,8 +313,9 @@ void MIRCodeGenerator::generateMemberAssign(MemberAssignStmtAST *memberAssign, m
 	}
 
 	if (fieldIndex < 0) {
-		throw std::runtime_error("Unknown field '" + memberAssign->memberName +
-								 "' in struct '" + structTypeName + "'");
+		reportError("Unknown field '" + memberAssign->memberName +
+					"' in struct '" + structTypeName + "'",
+					memberAssign->line, memberAssign->column);
 	}
 
 	// Get pointer to the field
@@ -317,14 +331,16 @@ void MIRCodeGenerator::generateMemberArrayAssign(MemberArrayAssignStmtAST *membe
 	// Struct member array element assignment: obj.arrayField[i] = value
 	mir::MIRValue *alloca = namedValues[memberArrayAssign->objectName];
 	if (!alloca) {
-		throw std::runtime_error("Unknown variable: " + memberArrayAssign->objectName);
+		reportError("Unknown variable: " + memberArrayAssign->objectName,
+					memberArrayAssign->line, memberArrayAssign->column);
 	}
 
 	// Get the struct type
 	std::string structTypeName = variableTypes[memberArrayAssign->objectName];
 	mir::MIRType *structType = structTypes[structTypeName];
 	if (!structType) {
-		throw std::runtime_error("Variable '" + memberArrayAssign->objectName + "' is not a struct type");
+		reportError("Variable '" + memberArrayAssign->objectName + "' is not a struct type",
+					memberArrayAssign->line, memberArrayAssign->column);
 	}
 
 	// Find field index and type
@@ -340,8 +356,9 @@ void MIRCodeGenerator::generateMemberArrayAssign(MemberArrayAssignStmtAST *membe
 	}
 
 	if (fieldIndex < 0) {
-		throw std::runtime_error("Unknown field '" + memberArrayAssign->memberName +
-								 "' in struct '" + structTypeName + "'");
+		reportError("Unknown field '" + memberArrayAssign->memberName +
+					"' in struct '" + structTypeName + "'",
+					memberArrayAssign->line, memberArrayAssign->column);
 	}
 
 	// Get pointer to the array field

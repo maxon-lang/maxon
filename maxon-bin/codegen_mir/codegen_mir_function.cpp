@@ -36,7 +36,8 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 	// Get the function that was already declared
 	mir::MIRFunction *function = module->getFunction(functionName);
 	if (!function) {
-		throw std::runtime_error("Function declaration not found: " + functionName);
+		reportError("Function declaration not found: " + functionName,
+					func->line, func->column);
 	}
 
 	// If this is an extern function, don't generate a body
@@ -184,7 +185,8 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 	// Get the function that was already declared
 	mir::MIRFunction *function = module->getFunction(functionName);
 	if (!function) {
-		throw std::runtime_error("Specialized function declaration not found: " + functionName);
+		reportError("Specialized function declaration not found: " + functionName,
+					func->line, func->column);
 	}
 
 	logTrace("Generating specialized function body: " + functionName);

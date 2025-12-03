@@ -83,9 +83,8 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		} else if (check(TokenType::IDENTIFIER)) {
 			keyType = parseQualifiedName("map key type");
 		} else {
-			throw std::runtime_error("Expected key type after 'from' in map declaration\n  Location: line " +
-									 std::to_string(currentLine()) + ", column " +
-									 std::to_string(currentColumn()));
+			reportError("Expected key type after 'from' in map declaration",
+						currentLine(), currentColumn());
 		}
 
 		expectKeywordAdvance("to", "Expected 'to' after key type in map declaration");
@@ -99,9 +98,8 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		} else if (check(TokenType::IDENTIFIER)) {
 			valueType = parseQualifiedName("map value type");
 		} else {
-			throw std::runtime_error("Expected value type after 'to' in map declaration\n  Location: line " +
-									 std::to_string(currentLine()) + ", column " +
-									 std::to_string(currentColumn()));
+			reportError("Expected value type after 'to' in map declaration",
+						currentLine(), currentColumn());
 		}
 
 		return std::make_unique<MapLiteralExprAST>(dictTypeName, keyType, valueType, line, column);
@@ -134,8 +132,8 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 			} else if (check(TokenType::IDENTIFIER)) {
 				elementType = parseQualifiedName("array element type");
 			} else {
-				throw std::runtime_error("Expected array element type (int, float, ptr, char, string, or struct name) at line " +
-										 std::to_string(currentLine()));
+				reportError("Expected array element type (int, float, ptr, char, string, or struct name)",
+							currentLine(), currentColumn());
 			}
 
 			return std::make_unique<ArrayLiteralExprAST>(size, elementType, line, column);
@@ -438,10 +436,9 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		foundStr = "'" + std::string(currentValue()) + "'";
 	}
 
-	throw std::runtime_error("Expected expression\n  Found: " + foundStr +
-							 "\n  Location: line " + std::to_string(currentLine()) +
-							 ", column " + std::to_string(currentColumn()) +
-							 "\n  Note: An expression can be a number, variable, function call, or arithmetic/comparison operation");
+	reportError("Expected expression\n  Found: " + foundStr +
+				"\n  Note: An expression can be a number, variable, function call, or arithmetic/comparison operation",
+				currentLine(), currentColumn());
 }
 
 std::unique_ptr<ExprAST> Parser::parseUnary() {
@@ -538,9 +535,8 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
 			// Allow struct type names for ExpressibleByStringLiteral etc.
 			targetType = parseQualifiedName("cast target type");
 		} else {
-			throw std::runtime_error("Expected type after 'as' keyword (int, float, ptr, char, string, bool, or struct name)\n  Location: line " +
-									 std::to_string(currentLine()) + ", column " +
-									 std::to_string(currentColumn()));
+			reportError("Expected type after 'as' keyword (int, float, ptr, char, string, bool, or struct name)",
+						currentLine(), currentColumn());
 		}
 		expr = std::make_unique<CastExprAST>(std::move(expr), targetType, line, column);
 	}

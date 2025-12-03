@@ -85,6 +85,9 @@ int main(int argc, char *argv[]) {
 				verboseLevel = std::max(verboseLevel, 2);
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
+			} else {
+				std::cerr << "Error: Unknown option '" << arg << "'" << std::endl;
+				return 1;
 			}
 		}
 		return runSelfTest(verboseLevel);
@@ -99,6 +102,9 @@ int main(int argc, char *argv[]) {
 				verboseLevel = std::max(verboseLevel, 2);
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
+			} else {
+				std::cerr << "Error: Unknown option '" << arg << "'" << std::endl;
+				return 1;
 			}
 		}
 		return extractSpecFragments(verboseLevel);
@@ -124,6 +130,9 @@ int main(int argc, char *argv[]) {
 				iterations = std::stoi(argv[++i]);
 			} else if (arg == "--pipeline" || arg == "-p") {
 				pipelineMode = true;
+			} else {
+				std::cerr << "Error: Unknown option '" << arg << "'" << std::endl;
+				return 1;
 			}
 		}
 
@@ -183,6 +192,9 @@ int main(int argc, char *argv[]) {
 				verboseLevel = std::max(verboseLevel, 2);
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
+			} else {
+				std::cerr << "Error: Unknown option '" << arg << "'" << std::endl;
+				return 1;
 			}
 		}
 
@@ -308,6 +320,9 @@ int main(int argc, char *argv[]) {
 				verboseLevel = std::max(verboseLevel, 2);
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
+			} else {
+				std::cerr << "Error: Unknown option '" << arg << "'" << std::endl;
+				return 1;
 			}
 		}
 		return regenerateFragments(verboseLevel);
@@ -348,6 +363,9 @@ int main(int argc, char *argv[]) {
 				verboseLevel = std::max(verboseLevel, 2);
 			} else if (arg == "-v" || arg == "--verbose") {
 				verboseLevel = std::max(verboseLevel, 1);
+			} else {
+				std::cerr << "Error: Unknown option '" << arg << "'" << std::endl;
+				return 1;
 			}
 		}
 		return runTestFragments(verboseLevel);
@@ -373,6 +391,9 @@ int main(int argc, char *argv[]) {
 				verboseLevel = std::max(verboseLevel, 1);
 			} else if (arg == "--update" || arg == "-u") {
 				update = true;
+			} else {
+				std::cerr << "Error: Unknown option '" << arg << "'" << std::endl;
+				return 1;
 			}
 		}
 
@@ -429,6 +450,9 @@ int main(int argc, char *argv[]) {
 					inputFile = arg;
 					isValidShortcut = true;
 				}
+			} else {
+				std::cerr << "Error: Unknown option '" << arg << "'" << std::endl;
+				return 1;
 			}
 		}
 
@@ -480,6 +504,9 @@ int main(int argc, char *argv[]) {
 			options.verboseLevel = std::max(options.verboseLevel, 1);
 		} else if (!arg.empty() && arg[0] != '-') {
 			options.inputFiles.push_back(arg);
+		} else {
+			std::cerr << "Error: Unknown option '" << arg << "'" << std::endl;
+			return 1;
 		}
 	}
 

@@ -35,7 +35,8 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			for (auto &valExpr : arrayLiteral->values) {
 				mir::MIRValue *val = generateExpr(valExpr.get());
 				if (!val) {
-					throw std::runtime_error("Failed to generate array element value");
+					reportError("Failed to generate array element value",
+								varDecl->line, varDecl->column);
 				}
 				initValues.push_back(val);
 			}
@@ -51,7 +52,8 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			} else if (elementType->kind == mir::MIRTypeKind::Ptr) {
 				elementTypeName = "ptr";
 			} else {
-				throw std::runtime_error("Unsupported array element type");
+				reportError("Unsupported array element type",
+								varDecl->line, varDecl->column);
 			}
 		}
 
@@ -207,14 +209,16 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 					{"ValueType", valueType}};
 				instantiateGenericStruct("map", typeBindings);
 			} else {
-				throw std::runtime_error("Generic struct 'map' not found - ensure stdlib/collections/map.maxon is compiled");
+				reportError("Generic struct 'map' not found - ensure stdlib/collections/map.maxon is compiled",
+							varDecl->line, varDecl->column);
 			}
 		}
 
 		// Get the specialized struct type
 		mir::MIRType *mapStructType = structTypes[specializedName];
 		if (!mapStructType) {
-			throw std::runtime_error("Failed to instantiate map type: " + specializedName);
+			reportError("Failed to instantiate map type: " + specializedName,
+						varDecl->line, varDecl->column);
 		}
 
 		// Map is implemented as a map struct with arrays for keys, values, and states
@@ -324,7 +328,8 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 	if (auto *structInitExpr = dynamic_cast<StructInitExprAST *>(varDecl->initializer.get())) {
 		mir::MIRType *structType = structTypes[structInitExpr->structName];
 		if (!structType) {
-			throw std::runtime_error("Unknown struct type: " + structInitExpr->structName);
+			reportError("Unknown struct type: " + structInitExpr->structName,
+						structInitExpr->line, structInitExpr->column);
 		}
 		// Mark struct type as used for lazy type emission
 		structType->used = true;
@@ -365,8 +370,9 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			}
 
 			if (valueExpr == nullptr) {
-				throw std::runtime_error("No value for field '" + fieldName +
-										 "' in struct '" + structInitExpr->structName + "'");
+				reportError("No value for field '" + fieldName +
+							"' in struct '" + structInitExpr->structName + "'",
+							structInitExpr->line, structInitExpr->column);
 			}
 
 			// Handle array field initialization
@@ -422,7 +428,8 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 							mir::MIRValue *lenField = builder->createStructGEP(unsizedArrayType, fieldPtr, 1, fieldName + ".len");
 							builder->createStore(length, lenField);
 						} else {
-							throw std::runtime_error("Unknown variable in struct field init: " + varExpr->name);
+							reportError("Unknown variable in struct field init: " + varExpr->name,
+										varExpr->line, varExpr->column);
 						}
 					} else {
 						// Not a variable-sized array - use regular field value
@@ -470,7 +477,8 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 				} else if (fieldValue) {
 					builder->createStore(fieldValue, fieldPtr);
 				} else {
-					throw std::runtime_error("Failed to generate value for field '" + fieldName + "'");
+					reportError("Failed to generate value for field '" + fieldName + "'",
+								structInitExpr->line, structInitExpr->column);
 				}
 			}
 		}
@@ -529,7 +537,8 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 	if (varDecl->initializer) {
 		initVal = generateExpr(varDecl->initializer.get());
 		if (!initVal) {
-			throw std::runtime_error("Failed to generate variable initializer for '" + varDecl->name + "'");
+			reportError("Failed to generate variable initializer for '" + varDecl->name + "'",
+						varDecl->line, varDecl->column);
 		}
 	}
 
@@ -606,7 +615,8 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 			for (auto &valExpr : arrayLiteral->values) {
 				mir::MIRValue *val = generateExpr(valExpr.get());
 				if (!val) {
-					throw std::runtime_error("Failed to generate array element value");
+					reportError("Failed to generate array element value",
+								letDecl->line, letDecl->column);
 				}
 				initValues.push_back(val);
 			}
@@ -622,7 +632,8 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 			} else if (elementType->kind == mir::MIRTypeKind::Ptr) {
 				elementTypeName = "ptr";
 			} else {
-				throw std::runtime_error("Unsupported array element type");
+				reportError("Unsupported array element type",
+								letDecl->line, letDecl->column);
 			}
 		}
 
@@ -774,7 +785,8 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 	if (letDecl->initializer) {
 		initVal = generateExpr(letDecl->initializer.get());
 		if (!initVal) {
-			throw std::runtime_error("Failed to generate let initializer");
+			reportError("Failed to generate let initializer",
+						letDecl->line, letDecl->column);
 		}
 	}
 

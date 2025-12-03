@@ -96,7 +96,8 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		if (auto *structInitExpr = dynamic_cast<StructInitExprAST *>(retStmt->value.get())) {
 			mir::MIRType *structType = structTypes[structInitExpr->structName];
 			if (!structType) {
-				throw std::runtime_error("Unknown struct type: " + structInitExpr->structName);
+				reportError("Unknown struct type: " + structInitExpr->structName,
+							structInitExpr->line, structInitExpr->column);
 			}
 
 			// Create temporary alloca for the struct
@@ -129,8 +130,9 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 				}
 
 				if (valueExpr == nullptr) {
-					throw std::runtime_error("No value for field '" + fieldName +
-											 "' in struct '" + structInitExpr->structName + "'");
+					reportError("No value for field '" + fieldName +
+								"' in struct '" + structInitExpr->structName + "'",
+								structInitExpr->line, structInitExpr->column);
 				}
 
 				mir::MIRValue *fieldValue = generateExpr(valueExpr);
@@ -193,7 +195,8 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 																				   fieldName + ".len");
 							builder->createStore(length, fatPtrLenPtr);
 						} else {
-							throw std::runtime_error("Unknown variable in return struct field init: " + varExpr->name);
+							reportError("Unknown variable in return struct field init: " + varExpr->name,
+										varExpr->line, varExpr->column);
 						}
 					} else if (isStaticArray) {
 						// Convert static array to fat pointer:
@@ -301,5 +304,5 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		return;
 	}
 
-	throw std::runtime_error("Unknown statement type");
+	reportError("Unknown statement type", stmt->line, stmt->column);
 }

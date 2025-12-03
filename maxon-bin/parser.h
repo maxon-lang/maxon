@@ -86,6 +86,9 @@ class Parser {
 	void logTrace(const std::string &msg);
 	void logDetail(const std::string &msg);
 
+	// Error reporting helper - throws runtime_error with location info
+	[[noreturn]] void reportError(const std::string &message, int line, int column);
+
   public:
 	// Primary constructor: accepts TokenStream directly
 	explicit Parser(TokenStream &&stream);

@@ -38,6 +38,14 @@ struct ParsedNumber {
  * SIMD Number Parser
  */
 class NumberParser {
+  private:
+	// Error reporting helper - throws runtime_error with location info
+	[[noreturn]] static void reportError(const std::string &message, int line, int column) {
+		throw std::runtime_error(message + "\n  Location: line " +
+								 std::to_string(line) + ", column " +
+								 std::to_string(column));
+	}
+
   public:
 	/**
 	 * Parse a number starting at position
@@ -68,10 +76,8 @@ class NumberParser {
 
 				// Range check: byte must be 0-255
 				if (int_part > 255) {
-					throw std::runtime_error("Byte literal out of range (0-255): " +
-											 std::to_string(int_part) +
-											 " at line " + std::to_string(line) +
-											 ", column " + std::to_string(column));
+					reportError("Byte literal out of range (0-255): " + std::to_string(int_part),
+								line, column);
 				}
 
 				result.type = ParsedNumber::Type::Byte;
@@ -129,9 +135,7 @@ class NumberParser {
 
 			// Parse exponent
 			if (pos >= len || !CharClassifier::is_digit(src[pos])) {
-				throw std::runtime_error("Invalid scientific notation at line " +
-										 std::to_string(line) + ", column " +
-										 std::to_string(column));
+				reportError("Invalid scientific notation", line, column);
 			}
 
 			uint64_t exp_value = 0;

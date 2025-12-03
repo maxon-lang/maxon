@@ -207,6 +207,10 @@ class Lexer {
 	Token readString();
 	Token readStringLiteral();
 	Token readOperatorOrDelimiter(int startLine, int startColumn);
+
+	// Error reporting helper - throws runtime_error with location info
+	[[noreturn]] void reportError(const std::string &message);
+	[[noreturn]] void reportError(const std::string &message, int line, int column);
 };
 
 // ============================================================================
