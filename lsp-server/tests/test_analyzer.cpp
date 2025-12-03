@@ -11,6 +11,18 @@ std::shared_ptr<Document> createTestDocument(const std::string &text) {
 	return std::make_shared<Document>("file:///test.maxon", text, 0);
 }
 
+// Shared analyzer with stdlib initialized once for all tests that need it
+// This avoids re-parsing 19 stdlib files for each test case
+Analyzer &getSharedStdlibAnalyzer() {
+	static Analyzer analyzer;
+	static bool initialized = false;
+	if (!initialized) {
+		analyzer.initializeStdlib("../../../stdlib");
+		initialized = true;
+	}
+	return analyzer;
+}
+
 // Helper to find the 0-indexed line number of a pattern in a file
 // Returns -1 if not found
 int findLineInFile(const std::string &filePath, const std::string &pattern) {
@@ -155,10 +167,7 @@ TEST_CASE("empty_document", "[analyzer]") {
 
 TEST_CASE("stdlib_initialization", "[analyzer]") {
 
-	Analyzer analyzer;
-
-	// Initialize with stdlib directory (relative to test build directory)
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Get completions - should include stdlib functions
 	auto doc = createTestDocument("function main() int\nend 'main'");
@@ -180,8 +189,7 @@ TEST_CASE("stdlib_initialization", "[analyzer]") {
 
 TEST_CASE("stdlib_hover", "[analyzer]") {
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	auto doc = createTestDocument("format_int_array");
 	lsp::Position pos{0, 5}; // Position in "format_int_array"
@@ -196,8 +204,7 @@ TEST_CASE("stdlib_hover", "[analyzer]") {
 
 TEST_CASE("stdlib_completion_details", "[analyzer]") {
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	auto doc = createTestDocument("");
 	lsp::Position pos{0, 0};
@@ -240,8 +247,7 @@ TEST_CASE("stdlib_nonexistent_directory", "[analyzer]") {
 
 TEST_CASE("qualified_name_stdlib_root", "[analyzer]") {
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Create document with "std" - should suggest "stdlib"
 	auto doc = createTestDocument("std");
@@ -262,8 +268,7 @@ TEST_CASE("qualified_name_stdlib_root", "[analyzer]") {
 
 TEST_CASE("qualified_name_after_stdlib_dot", "[analyzer]") {
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Create document with "stdlib." - should suggest "fmt", "fs", "sys"
 	auto doc = createTestDocument("stdlib.");
@@ -285,8 +290,7 @@ TEST_CASE("qualified_name_after_stdlib_dot", "[analyzer]") {
 
 TEST_CASE("qualified_name_after_stdlib_fmt_dot", "[analyzer]") {
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Create document with "stdlib.fmt." - should suggest modules like "integer"
 	auto doc = createTestDocument("stdlib.fmt.");
@@ -308,8 +312,7 @@ TEST_CASE("qualified_name_after_stdlib_fmt_dot", "[analyzer]") {
 
 TEST_CASE("qualified_name_after_module_dot", "[analyzer]") {
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Create document with "stdlib.fmt.integer." - should suggest functions like "format_int_array"
 	auto doc = createTestDocument("stdlib.fmt.integer.");
@@ -332,8 +335,7 @@ TEST_CASE("qualified_name_after_module_dot", "[analyzer]") {
 
 TEST_CASE("qualified_name_multiline", "[analyzer]") {
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Create document with qualified name on second line
 	auto doc = createTestDocument("function main() int\n    stdlib.fmt.");
@@ -353,8 +355,7 @@ TEST_CASE("qualified_name_multiline", "[analyzer]") {
 
 TEST_CASE("qualified_name_with_whitespace", "[analyzer]") {
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Create document with whitespace before qualified name
 	auto doc = createTestDocument("    stdlib.");
@@ -374,8 +375,7 @@ TEST_CASE("qualified_name_with_whitespace", "[analyzer]") {
 
 TEST_CASE("qualified_name_incomplete_prefix", "[analyzer]") {
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Create document with "stdlib.f" - cursor after "f"
 	auto doc = createTestDocument("stdlib.f");
@@ -513,8 +513,7 @@ end 'main'
 
 TEST_CASE("stdlib_function_no_error", "[analyzer]") {
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	auto doc = createTestDocument(R"(
 function main() int
@@ -538,8 +537,7 @@ end 'main'
 
 TEST_CASE("stdlib_function_wrong_args", "[analyzer]") {
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	auto doc = createTestDocument(R"(
 function main() int
@@ -602,8 +600,7 @@ end 'main'
 // Type member completion tests via public API
 
 TEST_CASE("string_member_completions_via_dot", "[analyzer]") {
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Create valid document with string variable, then request completion after a dot
 	// We'll use two calls: first analyze valid code to populate cache, then
@@ -638,8 +635,7 @@ TEST_CASE("string_member_completions_via_dot", "[analyzer]") {
 }
 
 TEST_CASE("string_method_completions_via_dot", "[analyzer]") {
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Analyze valid code to populate cache
 	auto doc = createTestDocument("function main() int\n    var s = \"hello\"\n    return s.count\nend 'main'");
@@ -701,8 +697,7 @@ TEST_CASE("string_method_completions_via_dot", "[analyzer]") {
 }
 
 TEST_CASE("string_method_has_insertText", "[analyzer]") {
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	auto doc = createTestDocument("function main() int\n    var s = \"hello\"\n    return s.count\nend 'main'");
 	analyzer.analyze(doc);
@@ -725,8 +720,7 @@ TEST_CASE("string_method_has_insertText", "[analyzer]") {
 }
 
 TEST_CASE("array_member_completions_via_dot", "[analyzer]") {
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Correct Maxon syntax: var arr = [5]int
 	auto doc = createTestDocument("function main() int\n    var arr = [5]int\n    return arr.length\nend 'main'");
@@ -750,8 +744,7 @@ TEST_CASE("array_member_completions_via_dot", "[analyzer]") {
 }
 
 TEST_CASE("struct_field_completions_via_dot", "[analyzer]") {
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Correct Maxon syntax: var p = Point { x: 0, y: 0 }
 	auto doc = createTestDocument("struct Point\n    var x int\n    var y int\nend 'Point'\n\nfunction main() int\n    var p = Point { x: 0, y: 0 }\n    return p.x\nend 'main'");
@@ -781,8 +774,7 @@ TEST_CASE("struct_field_completions_via_dot", "[analyzer]") {
 }
 
 TEST_CASE("builtin_method_calls_no_errors", "[analyzer]") {
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Test that method calls like s.toLower() don't produce "undefined function" errors
 	// The parser transforms s.toLower() -> toLower(s), and the semantic analyzer must recognize
@@ -810,8 +802,7 @@ TEST_CASE("builtin_method_calls_no_errors", "[analyzer]") {
 }
 
 TEST_CASE("builtin_string_search_methods_no_errors", "[analyzer]") {
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Test string search methods from stdlib
 	auto doc = createTestDocument(
@@ -921,9 +912,7 @@ TEST_CASE("stdlib_string_file_sibling_method_call", "[analyzer]") {
 	std::string content = buffer.str();
 	file.close();
 
-	// Create analyzer and initialize stdlib (for other types like ByteView)
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Create document from the file content
 	auto doc = std::make_shared<Document>("file:///stdlib/string/string.maxon", content, 0);
@@ -953,8 +942,7 @@ TEST_CASE("go_to_definition_stdlib_function", "[analyzer]") {
 	// Test that go-to-definition on a stdlib function like 'print'
 	// navigates to the stdlib file, not the current document
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	auto doc = createTestDocument(
 		"function main() int\n"
@@ -987,8 +975,7 @@ TEST_CASE("go_to_definition_struct_method", "[analyzer]") {
 	// Test that go-to-definition on a struct method like 'toLower'
 	// navigates to the stdlib file where the method is defined
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	auto doc = createTestDocument(
 		"function main() int\n"
@@ -1024,8 +1011,7 @@ TEST_CASE("go_to_definition_stdlib_interface", "[analyzer]") {
 	// Test that go-to-definition on a stdlib interface like 'Iterable'
 	// navigates to the stdlib file where the interface is defined
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// A struct that implements Iterable - similar to string.maxon
 	auto doc = createTestDocument(
@@ -1073,8 +1059,7 @@ TEST_CASE("map_method_call_accepts_parameterized_type", "[analyzer]") {
 	// Bug: insert() expected 'map' but found 'map<int,int>' - type mismatch error
 	// The method should accept the concrete parameterized map type
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	auto doc = createTestDocument(
 		"function main() int\n"
@@ -1108,8 +1093,7 @@ TEST_CASE("map_all_methods_accept_parameterized_type", "[analyzer]") {
 	// Test that all map methods (insert, get, contains, remove, count, capacity)
 	// work correctly with parameterized map types
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	auto doc = createTestDocument(
 		"function main() int\n"
@@ -1147,8 +1131,7 @@ TEST_CASE("string_and_char_init_methods_no_conflict", "[analyzer]") {
 	// and ExpressibleByCharLiteral interfaces) don't conflict with each other.
 	// Both have methods named "init" but they're on different structs.
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	auto doc = createTestDocument(
 		"function main() int\n"
@@ -1177,8 +1160,7 @@ TEST_CASE("stdlib_string_file_no_duplicate_method_errors", "[analyzer]") {
 	// Test that analyzing code that uses string doesn't produce
 	// duplicate method definition errors in stdlib files
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	auto doc = createTestDocument(
 		"function main() int\n"
@@ -1206,8 +1188,7 @@ TEST_CASE("stdlib_string_maxon_direct_analysis", "[analyzer]") {
 	// Test that directly analyzing stdlib/string/string.maxon doesn't produce errors
 	// This simulates what happens when the LSP opens the file in VSCode
 
-	Analyzer analyzer;
-	analyzer.initializeStdlib("../../../stdlib");
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Read the actual string.maxon file
 	std::ifstream file("../../../stdlib/string/string.maxon");
@@ -1241,9 +1222,7 @@ TEST_CASE("substring_iteration_returns_character", "[analyzer]") {
 	// Test that iterating a substring returns character, not int
 	// This tests that the LSP correctly resolves the Element associated type
 
-	Analyzer analyzer;
-	std::string stdlibPath = "../../../stdlib";
-	analyzer.initializeStdlib(stdlibPath);
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Code that iterates a substring and calls a character method
 	// Using codepoints() which is a valid method on character
@@ -1283,9 +1262,7 @@ end 'main'
 TEST_CASE("string_iteration_returns_character", "[analyzer]") {
 	// Test that iterating a string returns character, not int
 
-	Analyzer analyzer;
-	std::string stdlibPath = "../../../stdlib";
-	analyzer.initializeStdlib(stdlibPath);
+	Analyzer &analyzer = getSharedStdlibAnalyzer();
 
 	// Code that iterates a string and calls a character method
 	// Using codepoints() which is a valid method on character
