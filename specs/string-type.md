@@ -1227,3 +1227,29 @@ end 'main'
 65
 233
 ```
+
+<!-- test: string-reassignment -->
+```maxon
+function main() int
+    var s = "hello"
+    print_int(s.count())
+
+    var u = "abc"
+    u = "testing"
+    print_int(u.count())
+
+    var v = ""
+    v = "world"
+    print_int(v.count())
+
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+7
+5
+```

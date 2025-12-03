@@ -27,7 +27,6 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - extensive math function tests
 - centralize help text from the lsp server analyzer
 - cross compiling
-- enums
 - remove redundant backend tests (test fragments are faster)
 - DeadCodeEliminationPass::isPureFunction has hardcoded list of pure functions. Can analyzer determine if its pure?
 - Extra Inhabitants to optimize memory layout

@@ -121,3 +121,25 @@ end 'main'
 ```exitcode
 10
 ```
+
+<!-- test: nested-control -->
+```maxon
+function main() int
+    var result = 0
+    var i = 0
+    while i < 3 'outer'
+        var j = 0
+        while j < 3 'inner'
+            if (i + j) mod 2 == 0 'even'
+                result = result + 1
+            end 'even'
+            j = j + 1
+        end 'inner'
+        i = i + 1
+    end 'outer'
+    return result
+end 'main'
+```
+```exitcode
+5
+```

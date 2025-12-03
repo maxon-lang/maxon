@@ -1,0 +1,100 @@
+// Test: structs.struct-return.1
+struct Pair
+    var first int
+    var second int
+end 'Pair'
+
+function makePair(a int, b int) Pair
+    return Pair { first: a, second: b }
+end 'makePair'
+
+function main() int
+    var p = makePair(5, 7)
+    return p.first + p.second
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 19
+
+%Pair = type { i32, i32 }
+
+define %Pair @makePair(i32 %a, i32 %b) {
+entry0:
+  %2 = alloca %Pair
+  %4 = getelementptr %Pair, ptr %2, i32 0, i32 0
+  store i32 %a, ptr %4
+  %6 = getelementptr %Pair, ptr %2, i32 0, i32 1
+  store i32 %b, ptr %6
+  %7 = load %Pair, ptr %2
+  ret %Pair %7
+}
+
+define i32 @main() {
+entry0:
+  %0 = call %Pair @makePair(i32 5, i32 7)
+  %1 = alloca %Pair
+  store %Pair %0, ptr %1
+  %2 = getelementptr %Pair, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  %4 = getelementptr %Pair, ptr %1, i32 0, i32 1
+  %5 = load i32, ptr %4
+  %6 = add i32 %3, %5
+  ret i32 %6
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 25
+
+%Pair = type { i32, i32 }
+
+define %Pair @makePair(i32 %a, i32 %b) {
+entry0:
+  %0 = alloca i32
+  store i32 %a, ptr %0
+  %1 = alloca i32
+  store i32 %b, ptr %1
+  %2 = alloca %Pair
+  %3 = load i32, ptr %0
+  %4 = getelementptr %Pair, ptr %2, i32 0, i32 0
+  store i32 %3, ptr %4
+  %5 = load i32, ptr %1
+  %6 = getelementptr %Pair, ptr %2, i32 0, i32 1
+  store i32 %5, ptr %6
+  %7 = load %Pair, ptr %2
+  ret %Pair %7
+}
+
+define i32 @main() {
+entry0:
+  %0 = call %Pair @makePair(i32 5, i32 7)
+  %1 = alloca %Pair
+  store %Pair %0, ptr %1
+  %2 = getelementptr %Pair, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  %4 = getelementptr %Pair, ptr %1, i32 0, i32 1
+  %5 = load i32, ptr %4
+  %6 = add i32 %3, %5
+  ret i32 %6
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 12

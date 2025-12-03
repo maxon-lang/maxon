@@ -164,3 +164,110 @@ Cannot assign to immutable field 'version' of struct 'Config'
     |     ^
 ```
 
+<!-- test: simple-struct -->
+```maxon
+struct Point
+    var x int
+    var y int
+end 'Point'
+
+function main() int
+    var p = Point { x: 3, y: 4 }
+    return p.x + p.y
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: struct-field-access -->
+```maxon
+struct Rect
+    var width int
+    var height int
+end 'Rect'
+
+function main() int
+    var r = Rect { width: 5, height: 10 }
+    return r.width * r.height
+end 'main'
+```
+```exitcode
+50
+```
+
+<!-- test: struct-param -->
+```maxon
+struct Vec2
+    var x int
+    var y int
+end 'Vec2'
+
+function dot(a Vec2, b Vec2) int
+    return a.x * b.x + a.y * b.y
+end 'dot'
+
+function main() int
+    var v1 = Vec2 { x: 3, y: 4 }
+    var v2 = Vec2 { x: 2, y: 1 }
+    return dot(v1, v2)
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: struct-return -->
+```maxon
+struct Pair
+    var first int
+    var second int
+end 'Pair'
+
+function makePair(a int, b int) Pair
+    return Pair { first: a, second: b }
+end 'makePair'
+
+function main() int
+    var p = makePair(5, 7)
+    return p.first + p.second
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: struct-field-default -->
+```maxon
+struct Counter
+	var value int = 0
+	var step int = 1
+end 'Counter'
+
+function main() int
+	var c1 = Counter{}
+	var c2 = Counter{value: 40}
+	var c3 = Counter{value: 10, step: 2}
+	return c1.value + c2.value + c3.step
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: struct-field-inferred-type -->
+```maxon
+struct Settings
+	let maxRetries = 5
+	var timeout = 50.0
+end 'Settings'
+
+function main() int
+	var s = Settings{}
+	return s.maxRetries + trunc(s.timeout)
+end 'main'
+```
+```exitcode
+55
+```
+
