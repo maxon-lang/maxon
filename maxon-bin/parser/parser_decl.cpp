@@ -658,6 +658,219 @@ std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &st
 	return std::make_unique<StructInitExprAST>(structName, std::move(fields), line, column);
 }
 
+std::unique_ptr<EnumDefAST> Parser::parseEnum() {
+	// Check for export keyword
+	bool isExported = false;
+	if (checkKeyword("export")) {
+		isExported = true;
+		advance(); // consume 'export'
+	}
+
+	Token enumToken = expectKeyword("enum", "Expected 'enum'");
+	int line = enumToken.line;
+	int column = enumToken.column;
+
+	Token nameToken = expect(TokenType::IDENTIFIER, "Expected enum name after 'enum'");
+	std::string enumName = nameToken.value;
+
+	logTrace("Parsing enum '" + enumName + "'" +
+			 (isExported ? " (exported)" : "") +
+			 " at line " + std::to_string(line));
+
+	// Check for optional raw value type (int or string)
+	std::string rawValueType;
+	if (checkKeyword("int")) {
+		rawValueType = "int";
+		advance();
+		logTrace("  Raw value type: int");
+	} else if (check(TokenType::IDENTIFIER) && std::string(currentValue()) == "string") {
+		rawValueType = "string";
+		advance();
+		logTrace("  Raw value type: string");
+	}
+
+	std::vector<EnumCaseAST> cases;
+	std::vector<std::unique_ptr<FunctionAST>> methods;
+
+	// Parse cases and methods until we hit 'end'
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+		// Check for method: 'function' or 'export function'
+		if (checkKeyword("function") || (checkKeyword("export") && checkKeyword("function", 1))) {
+			methods.push_back(parseEnumMethod(enumName));
+			continue;
+		}
+
+		// Parse case: case caseName or case caseName = value or case caseName(args)
+		expectKeywordAdvance("case", "Expected 'case' or 'function' in enum");
+
+		Token caseNameToken = expect(TokenType::IDENTIFIER, "Expected case name after 'case'");
+		std::string caseName = caseNameToken.value;
+
+		std::vector<EnumAssocValue> associatedValues;
+		std::unique_ptr<ExprAST> rawValue = nullptr;
+
+		// Check for associated values: case name(field1 Type1, field2 Type2)
+		if (check(TokenType::LPAREN)) {
+			advance(); // consume '('
+
+			if (!check(TokenType::RPAREN)) {
+				do {
+					Token fieldNameToken = expect(TokenType::IDENTIFIER, "Expected associated value name");
+					std::string fieldName = fieldNameToken.value;
+
+					// Parse type
+					std::string fieldType;
+					auto kd = currentKeywordData();
+					if (kd && kd->category == KeywordCategory::Type) {
+						fieldType = std::string(currentValue());
+						advance();
+					} else if (check(TokenType::IDENTIFIER)) {
+						fieldType = parseQualifiedName("associated value type");
+					} else {
+						reportError("Expected type for associated value '" + fieldName + "'",
+									currentLine(), currentColumn());
+					}
+
+					associatedValues.push_back(EnumAssocValue(fieldName, fieldType,
+															  fieldNameToken.line, fieldNameToken.column));
+				} while (match(TokenType::COMMA));
+			}
+
+			expectAdvance(TokenType::RPAREN, "Expected ')' after associated values");
+		}
+
+		// Check for raw value assignment: case name = value
+		if (check(TokenType::ASSIGN)) {
+			advance(); // consume '='
+			rawValue = parseExpression();
+		}
+
+		cases.push_back(EnumCaseAST(caseName, caseNameToken.line, caseNameToken.column,
+									std::move(associatedValues), std::move(rawValue)));
+		logTrace("  Case '" + caseName + "'");
+	}
+
+	expectKeywordAdvance("end", "Expected 'end' to close enum");
+
+	// Require matching block identifier
+	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match enum name)");
+	if (blockIdToken.value != enumName) {
+		reportError("Block identifier mismatch in enum definition\n  Expected: '" + enumName +
+					"'\n  Got: '" + blockIdToken.value + "'",
+					blockIdToken.line, blockIdToken.column);
+	}
+
+	logTrace("Enum '" + enumName + "' with " + std::to_string(cases.size()) + " cases" +
+			 (methods.empty() ? "" : ", " + std::to_string(methods.size()) + " method(s)"));
+
+	return std::make_unique<EnumDefAST>(enumName, std::move(cases), line, column,
+										defaultNamespace, isExported, rawValueType, std::move(methods));
+}
+
+// Parse a method declaration inside an enum body
+// Same as struct methods but with enum as receiver type
+std::unique_ptr<FunctionAST> Parser::parseEnumMethod(const std::string &enumName) {
+	// Check for export keyword
+	bool isExported = false;
+	if (checkKeyword("export")) {
+		isExported = true;
+		advance(); // consume 'export'
+	}
+
+	Token funcToken = expectKeyword("function", "Expected 'function'");
+	Token methodNameToken = expect(TokenType::IDENTIFIER, "Expected method name");
+	std::string methodName = methodNameToken.value;
+
+	logTrace(std::string("Parsing enum method '") + enumName + "." + methodName + "'" +
+			 (isExported ? " (exported)" : "") +
+			 " at line " + std::to_string(funcToken.line));
+
+	expectAdvance(TokenType::LPAREN, "Expected '('");
+
+	// Auto-inject implicit 'self' parameter as first parameter
+	std::vector<FunctionParameter> parameters;
+	parameters.push_back(FunctionParameter("self", enumName, funcToken.line, funcToken.column));
+
+	// Parse explicit method parameters (after implicit self)
+	if (!check(TokenType::RPAREN)) {
+		do {
+			Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
+
+			// Parse parameter type
+			std::string paramType;
+			auto kd = currentKeywordData();
+			if (kd && kd->category == KeywordCategory::Type) {
+				paramType = std::string(currentValue());
+				advance();
+			} else if (check(TokenType::IDENTIFIER)) {
+				paramType = parseQualifiedName("parameter type");
+			} else {
+				reportError("Expected parameter type",
+							currentLine(), currentColumn());
+			}
+
+			// Check for "or nil" suffix for optional parameters
+			if (checkKeyword("or")) {
+				advance(); // consume 'or'
+				if (!checkKeyword("nil")) {
+					reportError("Expected 'nil' after 'or' in parameter type",
+								currentLine(), currentColumn());
+				}
+				advance(); // consume 'nil'
+				paramType = paramType + " or nil";
+			}
+
+			parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
+		} while (match(TokenType::COMMA));
+	}
+
+	expectAdvance(TokenType::RPAREN, "Expected ')'");
+
+	// Parse return type (optional - defaults to void)
+	std::string returnType = "void";
+	auto retKd = currentKeywordData();
+	if ((retKd && retKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+		returnType = std::string(currentValue());
+		advance();
+
+		// Check for "or nil" suffix for optional return types
+		if (checkKeyword("or")) {
+			advance(); // consume 'or'
+			if (!checkKeyword("nil")) {
+				reportError("Expected 'nil' after 'or' in return type",
+							currentLine(), currentColumn());
+			}
+			advance(); // consume 'nil'
+			returnType = returnType + " or nil";
+		}
+	}
+
+	std::vector<std::unique_ptr<StmtAST>> body;
+
+	// Parse method body
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+		body.push_back(parseStatement());
+	}
+
+	expectKeywordAdvance("end", "Expected 'end' to close method body");
+
+	// Require matching block identifier after end
+	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected method name as block identifier after 'end'");
+	if (endBlockIdToken.value != methodName) {
+		reportError("Block identifier mismatch in method definition\n  Expected: '" + methodName +
+					"'\n  Found: '" + endBlockIdToken.value + "'",
+					endBlockIdToken.line, endBlockIdToken.column);
+	}
+
+	logTrace(std::string("Enum method '") + enumName + "." + methodName + "' -> " + returnType +
+			 " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
+
+	// receiverType is set to enumName
+	return std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body),
+										 false, funcToken.line, funcToken.column, defaultNamespace, isExported,
+										 "", false, "", enumName, "");
+}
+
 std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 	// Check for export keyword
 	bool isExported = false;

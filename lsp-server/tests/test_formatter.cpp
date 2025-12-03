@@ -918,3 +918,168 @@ TEST_CASE("format_exported_interface", "[formatter]") {
 	// End at level 0
 	REQUIRE(result.find("end 'Iterator'") != std::string::npos);
 }
+
+// ============================================
+// Enum formatting tests
+// ============================================
+
+TEST_CASE("format_simple_enum", "[formatter]") {
+	Formatter formatter;
+
+	// Simple enum with cases at column 0
+	std::string source =
+		"enum Direction\n"
+		"case north\n"
+		"case south\n"
+		"case east\n"
+		"case west\n"
+		"end 'Direction'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Simple enum:\n"
+			  << result << std::endl;
+
+	// Enum at level 0
+	REQUIRE(result.find("enum Direction") != std::string::npos);
+	// Cases at level 1
+	REQUIRE(result.find("\tcase north") != std::string::npos);
+	REQUIRE(result.find("\tcase south") != std::string::npos);
+	REQUIRE(result.find("\tcase east") != std::string::npos);
+	REQUIRE(result.find("\tcase west") != std::string::npos);
+	// End at level 0
+	REQUIRE(result.find("end 'Direction'") != std::string::npos);
+	REQUIRE(result.find("\tend 'Direction'") == std::string::npos);
+}
+
+TEST_CASE("format_enum_with_raw_values", "[formatter]") {
+	Formatter formatter;
+
+	// Enum with raw values
+	std::string source =
+		"enum HttpStatus int\n"
+		"case ok = 200\n"
+		"case notFound = 404\n"
+		"case serverError = 500\n"
+		"end 'HttpStatus'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Enum with raw values:\n"
+			  << result << std::endl;
+
+	// Enum at level 0
+	REQUIRE(result.find("enum HttpStatus int") != std::string::npos);
+	// Cases at level 1
+	REQUIRE(result.find("\tcase ok = 200") != std::string::npos);
+	REQUIRE(result.find("\tcase notFound = 404") != std::string::npos);
+	REQUIRE(result.find("\tcase serverError = 500") != std::string::npos);
+	// End at level 0
+	REQUIRE(result.find("end 'HttpStatus'") != std::string::npos);
+}
+
+TEST_CASE("format_enum_with_methods", "[formatter]") {
+	Formatter formatter;
+
+	// Enum with method
+	std::string source =
+		"enum Toggle\n"
+		"case on\n"
+		"case off\n"
+		"\n"
+		"function flip() Toggle\n"
+		"if self == Toggle.on 'check'\n"
+		"return Toggle.off\n"
+		"end 'check'\n"
+		"return Toggle.on\n"
+		"end 'flip'\n"
+		"end 'Toggle'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Enum with method:\n"
+			  << result << std::endl;
+
+	// Enum at level 0
+	REQUIRE(result.find("enum Toggle") != std::string::npos);
+	// Cases at level 1
+	REQUIRE(result.find("\tcase on") != std::string::npos);
+	REQUIRE(result.find("\tcase off") != std::string::npos);
+	// Function at level 1
+	REQUIRE(result.find("\tfunction flip() Toggle") != std::string::npos);
+	// Function body at level 2
+	REQUIRE(result.find("\t\tif self == Toggle.on 'check'") != std::string::npos);
+	// If body at level 3
+	REQUIRE(result.find("\t\t\treturn Toggle.off") != std::string::npos);
+	// End check at level 2
+	REQUIRE(result.find("\t\tend 'check'") != std::string::npos);
+	// Return at level 2
+	REQUIRE(result.find("\t\treturn Toggle.on") != std::string::npos);
+	// End flip at level 1
+	REQUIRE(result.find("\tend 'flip'") != std::string::npos);
+	// End enum at level 0
+	REQUIRE(result.find("end 'Toggle'") != std::string::npos);
+	REQUIRE(result.find("\tend 'Toggle'") == std::string::npos);
+}
+
+TEST_CASE("format_exported_enum", "[formatter]") {
+	Formatter formatter;
+
+	// Exported enum
+	std::string source =
+		"export enum Color\n"
+		"case red\n"
+		"case green\n"
+		"case blue\n"
+		"end 'Color'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Exported enum:\n"
+			  << result << std::endl;
+
+	// Export enum at level 0
+	REQUIRE(result.find("export enum Color") != std::string::npos);
+	// Cases at level 1
+	REQUIRE(result.find("\tcase red") != std::string::npos);
+	REQUIRE(result.find("\tcase green") != std::string::npos);
+	REQUIRE(result.find("\tcase blue") != std::string::npos);
+	// End at level 0
+	REQUIRE(result.find("end 'Color'") != std::string::npos);
+}
+
+TEST_CASE("format_enum_with_associated_values", "[formatter]") {
+	Formatter formatter;
+
+	// Enum with associated values
+	std::string source =
+		"enum Result\n"
+		"case success(value int)\n"
+		"case failure(code int, message string)\n"
+		"case pending\n"
+		"end 'Result'";
+
+	auto edits = formatter.formatDocument(source, false, 4);
+	REQUIRE(edits.size() == 1);
+
+	std::string result = edits[0].newText;
+	std::cerr << "Enum with associated values:\n"
+			  << result << std::endl;
+
+	// Enum at level 0
+	REQUIRE(result.find("enum Result") != std::string::npos);
+	// Cases at level 1
+	REQUIRE(result.find("\tcase success(value int)") != std::string::npos);
+	REQUIRE(result.find("\tcase failure(code int, message string)") != std::string::npos);
+	REQUIRE(result.find("\tcase pending") != std::string::npos);
+	// End at level 0
+	REQUIRE(result.find("end 'Result'") != std::string::npos);
+}

@@ -86,6 +86,7 @@ class KeywordMatcher {
 		add_keyword("var", KeywordCategory::Declaration, "Mutable variable");
 		add_keyword("let", KeywordCategory::Declaration, "Immutable variable");
 		add_keyword("struct", KeywordCategory::Declaration, "Structure type");
+		add_keyword("enum", KeywordCategory::Declaration, "Enumeration type");
 		add_keyword("interface", KeywordCategory::Declaration, "Interface declaration");
 		add_keyword("type", KeywordCategory::Declaration, "Associated type declaration");
 		add_keyword("uses", KeywordCategory::Declaration, "Interface associated type declaration");
@@ -94,6 +95,7 @@ class KeywordMatcher {
 		add_keyword("extern", KeywordCategory::Declaration, "External declaration");
 		add_keyword("from", KeywordCategory::Declaration, "Map key type specifier");
 		add_keyword("to", KeywordCategory::Declaration, "Map value type specifier");
+		add_keyword("case", KeywordCategory::Declaration, "Enum case declaration");
 
 		// Math intrinsics
 		add_math_keyword("sqrt", KeywordCategory::MathIntrinsic, "Square root",

@@ -116,6 +116,89 @@ std::vector<lsp::Diagnostic> Analyzer::analyze(std::shared_ptr<Document> doc) {
 			semInfo.structs = semanticAnalyzer.getStructs();
 			semInfo.interfaces = semanticAnalyzer.getInterfaces();
 
+			// Cache enum definitions from the current document
+			for (const auto &enumDef : program->enums) {
+				StdlibEnum enumInfo;
+				enumInfo.name = enumDef->name;
+				enumInfo.rawValueType = enumDef->rawValueType;
+				enumInfo.filePath = doc->uri;
+				enumInfo.line = enumDef->line;
+				enumInfo.column = enumDef->column;
+
+				for (const auto &caseDef : enumDef->cases) {
+					LspEnumCaseInfo caseInfo;
+					caseInfo.name = caseDef.name;
+					caseInfo.hasRawValue = caseDef.rawValue != nullptr;
+					caseInfo.line = caseDef.line;
+					caseInfo.column = caseDef.column;
+					for (const auto &av : caseDef.associatedValues) {
+						caseInfo.associatedValues.push_back({av.name, av.type});
+					}
+					enumInfo.cases.push_back(caseInfo);
+				}
+
+				semInfo.enums[enumDef->name] = enumInfo;
+
+				// Also register enum cases as type members for dot-completion
+				std::vector<TypeMember> enumMembers;
+				for (const auto &caseDef : enumDef->cases) {
+					TypeMember member;
+					member.name = caseDef.name;
+					member.isMethod = !caseDef.associatedValues.empty();
+					member.returnType = enumDef->name;
+					if (!caseDef.associatedValues.empty()) {
+						std::string sig = "(";
+						bool first = true;
+						for (const auto &av : caseDef.associatedValues) {
+							if (!first)
+								sig += ", ";
+							sig += av.name + " " + av.type;
+							first = false;
+						}
+						sig += ")";
+						member.signature = sig;
+					}
+					member.documentation = "Case of enum " + enumDef->name;
+					enumMembers.push_back(member);
+				}
+
+				// Add rawValue property for raw value enums
+				if (!enumDef->rawValueType.empty()) {
+					TypeMember rawValueMember;
+					rawValueMember.name = "rawValue";
+					rawValueMember.isMethod = false;
+					rawValueMember.returnType = enumDef->rawValueType;
+					rawValueMember.documentation = "Raw value of the enum case";
+					enumMembers.push_back(rawValueMember);
+				}
+
+				// Add methods
+				for (const auto &method : enumDef->methods) {
+					TypeMember member;
+					member.name = method->name;
+					member.isMethod = true;
+					member.returnType = method->returnType;
+					std::string sig = "(";
+					bool first = true;
+					for (const auto &param : method->parameters) {
+						if (param.name == "self")
+							continue;
+						if (!first)
+							sig += ", ";
+						sig += param.name + " " + param.type;
+						first = false;
+					}
+					sig += ")";
+					member.signature = sig;
+					member.documentation = "Method of enum " + enumDef->name;
+					enumMembers.push_back(member);
+				}
+
+				if (!enumMembers.empty()) {
+					typeMembers[enumDef->name] = enumMembers;
+				}
+			}
+
 			// Convert semantic errors to LSP diagnostics
 			for (const auto &error : semanticErrors) {
 				lsp::Diagnostic diag;
@@ -225,9 +308,26 @@ std::vector<lsp::CompletionItem> Analyzer::getCompletions(std::shared_ptr<Docume
 				// Get member completions for this type (handles arrays, structs, etc.)
 				return getMemberCompletions(varInfo.type, semInfo);
 			}
+
+			// Check if it's an enum type name (e.g., "Direction." should show cases)
+			auto enumIt = semInfo.enums.find(identifierName);
+			if (enumIt != semInfo.enums.end()) {
+				// Return enum case completions
+				return getMemberCompletions(identifierName, semInfo);
+			}
 		}
 
-		// Not a known variable, try qualified name completions (stdlib.fmt, etc.)
+		// Check stdlib enums (e.g., enums defined in stdlib files)
+		auto stdlibEnumIt = stdlibEnums.find(identifierName);
+		if (stdlibEnumIt != stdlibEnums.end()) {
+			// Return enum case completions from stdlib
+			auto cacheIt2 = semanticCache.find(doc->uri);
+			if (cacheIt2 != semanticCache.end()) {
+				return getMemberCompletions(identifierName, cacheIt2->second);
+			}
+		}
+
+		// Not a known variable or enum, try qualified name completions (stdlib.fmt, etc.)
 		return getQualifiedNameCompletions(prefix);
 	}
 
@@ -723,6 +823,35 @@ std::optional<lsp::Hover> Analyzer::getHover(std::shared_ptr<Document> doc, lsp:
 			hover.contents = "```maxon\n" + structDef + "\n```";
 			return hover;
 		}
+
+		// Check for enum
+		auto enumIt = semInfo.enums.find(word);
+		if (enumIt != semInfo.enums.end()) {
+			const StdlibEnum &enumInfo = enumIt->second;
+			std::string enumDef = "enum " + enumInfo.name;
+			if (!enumInfo.rawValueType.empty()) {
+				enumDef += " " + enumInfo.rawValueType;
+			}
+			enumDef += "\n";
+			for (const auto &caseInfo : enumInfo.cases) {
+				enumDef += "    case " + caseInfo.name;
+				if (!caseInfo.associatedValues.empty()) {
+					enumDef += "(";
+					bool first = true;
+					for (const auto &av : caseInfo.associatedValues) {
+						if (!first)
+							enumDef += ", ";
+						enumDef += av.first + " " + av.second;
+						first = false;
+					}
+					enumDef += ")";
+				}
+				enumDef += "\n";
+			}
+			enumDef += "end";
+			hover.contents = "```maxon\n" + enumDef + "\n```";
+			return hover;
+		}
 	}
 
 	// Check if it's a stdlib function
@@ -868,6 +997,23 @@ std::optional<lsp::Location> Analyzer::getDefinition(std::shared_ptr<Document> d
 						}
 					}
 				}
+
+				// Check if objectName is an enum type and word is a case
+				auto enumIt = semInfo.enums.find(objectName);
+				if (enumIt != semInfo.enums.end()) {
+					const StdlibEnum &enumInfo = enumIt->second;
+					for (const auto &caseInfo : enumInfo.cases) {
+						if (caseInfo.name == word) {
+							lsp::Location loc;
+							loc.uri = doc->uri;
+							loc.range.start.line = caseInfo.line > 0 ? caseInfo.line - 1 : 0;
+							loc.range.start.character = caseInfo.column > 0 ? caseInfo.column - 1 : 0;
+							loc.range.end.line = loc.range.start.line;
+							loc.range.end.character = loc.range.start.character + caseInfo.name.length();
+							return loc;
+						}
+					}
+				}
 			}
 		}
 	}
@@ -950,6 +1096,19 @@ std::optional<lsp::Location> Analyzer::getDefinition(std::shared_ptr<Document> d
 			loc.range.end.character = loc.range.start.character + ifaceInfo.name.length();
 			return loc;
 		}
+
+		// Check for enum type
+		auto enumIt = semInfo.enums.find(word);
+		if (enumIt != semInfo.enums.end()) {
+			const StdlibEnum &enumInfo = enumIt->second;
+			lsp::Location loc;
+			loc.uri = doc->uri;
+			loc.range.start.line = enumInfo.line > 0 ? enumInfo.line - 1 : 0;
+			loc.range.start.character = enumInfo.column > 0 ? enumInfo.column - 1 : 0;
+			loc.range.end.line = loc.range.start.line;
+			loc.range.end.character = loc.range.start.character + enumInfo.name.length();
+			return loc;
+		}
 	}
 
 	// Check stdlib functions
@@ -1002,6 +1161,24 @@ std::optional<lsp::Location> Analyzer::getDefinition(std::shared_ptr<Document> d
 			loc.range.start.character = ifaceInfo.column > 0 ? ifaceInfo.column - 1 : 0;
 			loc.range.end.line = loc.range.start.line;
 			loc.range.end.character = loc.range.start.character + ifaceInfo.name.length();
+			return loc;
+		}
+	}
+
+	// Check stdlib enums
+	auto stdlibEnumIt = stdlibEnums.find(word);
+	if (stdlibEnumIt != stdlibEnums.end()) {
+		const StdlibEnum &enumInfo = stdlibEnumIt->second;
+		if (!enumInfo.filePath.empty() && enumInfo.line > 0) {
+			lsp::Location loc;
+			// Convert file path to URI format
+			loc.uri = "file:///" + enumInfo.filePath;
+			// Replace backslashes with forward slashes for URI
+			std::replace(loc.uri.begin(), loc.uri.end(), '\\', '/');
+			loc.range.start.line = enumInfo.line - 1;
+			loc.range.start.character = enumInfo.column > 0 ? enumInfo.column - 1 : 0;
+			loc.range.end.line = loc.range.start.line;
+			loc.range.end.character = loc.range.start.character + enumInfo.name.length();
 			return loc;
 		}
 	}
@@ -1428,6 +1605,91 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 				stdlibInterface.line = ifaceDef->line;
 				stdlibInterface.column = ifaceDef->column;
 				stdlibInterfaces[ifaceDef->name] = stdlibInterface;
+			}
+
+			// Extract enum definitions for completions and go-to-definition
+			for (const auto &enumDef : program->enums) {
+				StdlibEnum stdlibEnum;
+				stdlibEnum.name = enumDef->name;
+				stdlibEnum.rawValueType = enumDef->rawValueType;
+				stdlibEnum.filePath = filePath;
+				stdlibEnum.line = enumDef->line;
+				stdlibEnum.column = enumDef->column;
+
+				// Add cases
+				for (const auto &caseDef : enumDef->cases) {
+					LspEnumCaseInfo caseInfo;
+					caseInfo.name = caseDef.name;
+					caseInfo.hasRawValue = caseDef.rawValue != nullptr;
+					caseInfo.line = caseDef.line;
+					caseInfo.column = caseDef.column;
+					// Add associated values
+					for (const auto &av : caseDef.associatedValues) {
+						caseInfo.associatedValues.push_back({av.name, av.type});
+					}
+					stdlibEnum.cases.push_back(caseInfo);
+				}
+
+				stdlibEnums[enumDef->name] = stdlibEnum;
+
+				// Also add enum cases as type members for dot-completion
+				std::vector<TypeMember> enumMembers;
+				for (const auto &caseDef : enumDef->cases) {
+					TypeMember member;
+					member.name = caseDef.name;
+					member.isMethod = !caseDef.associatedValues.empty(); // Cases with associated values need parens
+					member.returnType = enumDef->name;
+					if (!caseDef.associatedValues.empty()) {
+						std::string sig = "(";
+						bool first = true;
+						for (const auto &av : caseDef.associatedValues) {
+							if (!first)
+								sig += ", ";
+							sig += av.name + " " + av.type;
+							first = false;
+						}
+						sig += ")";
+						member.signature = sig;
+					}
+					member.documentation = "Case of enum " + enumDef->name;
+					enumMembers.push_back(member);
+				}
+
+				// Add rawValue property for raw value enums
+				if (!enumDef->rawValueType.empty()) {
+					TypeMember rawValueMember;
+					rawValueMember.name = "rawValue";
+					rawValueMember.isMethod = false;
+					rawValueMember.returnType = enumDef->rawValueType;
+					rawValueMember.documentation = "Raw value of the enum case";
+					enumMembers.push_back(rawValueMember);
+				}
+
+				// Add methods
+				for (const auto &method : enumDef->methods) {
+					TypeMember member;
+					member.name = method->name;
+					member.isMethod = true;
+					member.returnType = method->returnType;
+					std::string sig = "(";
+					bool first = true;
+					for (const auto &param : method->parameters) {
+						if (param.name == "self")
+							continue;
+						if (!first)
+							sig += ", ";
+						sig += param.name + " " + param.type;
+						first = false;
+					}
+					sig += ")";
+					member.signature = sig;
+					member.documentation = "Method of enum " + enumDef->name;
+					enumMembers.push_back(member);
+				}
+
+				if (!enumMembers.empty()) {
+					typeMembers[enumDef->name] = enumMembers;
+				}
 			}
 		}
 

@@ -20,13 +20,14 @@ This reference provides complete syntax and semantics for the Maxon programming 
    - [Optional Types](#optional-types)
    - [Type Conversions](#type-conversions)
 4. [Structs](#structs)
-5. [Variables](#variables)
-6. [Functions](#functions)
-7. [Expressions](#expressions)
-8. [Statements](#statements)
-9. [Namespaces](#namespaces)
-10. [Standard Library](#standard-library)
-11. [Memory Model](#memory-model)
+5. [Enums](#enums)
+6. [Variables](#variables)
+7. [Functions](#functions)
+8. [Expressions](#expressions)
+9. [Statements](#statements)
+10. [Namespaces](#namespaces)
+11. [Standard Library](#standard-library)
+12. [Memory Model](#memory-model)
 
 ---
 
@@ -66,7 +67,7 @@ Single-line comments only:
 
 ### Keywords
 ```
-and, as, bool, break, continue, else, end, export, extern,
+and, as, bool, break, case, continue, else, end, enum, export, extern,
 false, float, for, function, if, in, int, interface, is, let, nil, not, or,
 return, struct, then, true, var, while
 ```
@@ -564,6 +565,150 @@ end 'Point'
 - `Self` in interface signatures refers to the conforming type
 - A struct can conform to multiple interfaces: `struct Foo is A, B`
 - Methods implementing interface requirements follow the same syntax as regular methods
+
+---
+
+## Enums
+
+Enums define a type with a fixed set of named variants called cases. Maxon supports three kinds of enums: simple enums, raw value enums, and enums with associated values.
+
+### Simple Enums
+
+The simplest form of enum defines named cases with no additional data:
+
+```maxon
+enum Direction
+    case north
+    case south
+    case east
+    case west
+end 'Direction'
+```
+
+Create enum values using dot notation:
+
+```maxon
+var dir = Direction.north
+```
+
+### Raw Value Enums
+
+Enums can have an underlying raw value type (`int` or `string`):
+
+```maxon
+enum HttpStatus int
+    case ok = 200
+    case notFound = 404
+    case serverError = 500
+end 'HttpStatus'
+
+enum Planet string
+    case earth = "Earth"
+    case mars = "Mars"
+end 'Planet'
+```
+
+Access the raw value with `.rawValue`:
+
+```maxon
+var status = HttpStatus.ok
+var code = status.rawValue    // 200
+```
+
+### Associated Values
+
+Cases can carry additional data called associated values:
+
+```maxon
+enum Result
+    case success(value int)
+    case failure(code int, message string)
+    case pending
+end 'Result'
+```
+
+Construct cases with associated values:
+
+```maxon
+var r1 = Result.success(42)
+var r2 = Result.failure(404, "Not found")
+var r3 = Result.pending
+```
+
+Extract associated values using `if case`:
+
+```maxon
+if case success(v) = result 'check'
+    print_int(v)
+end 'check'
+
+if case failure(code, msg) = result 'error'
+    print(msg)
+end 'error'
+```
+
+### Comparing Enum Values
+
+Enum values can be compared for equality using `==` and `!=`:
+
+```maxon
+var dir = Direction.north
+if dir == Direction.north 'check'
+    print("Going north!")
+end 'check'
+```
+
+For enums with associated values, `==` compares both the case and the associated values.
+
+### Enum Methods
+
+Enums can have methods, similar to structs:
+
+```maxon
+enum Direction
+    case north
+    case south
+
+    function opposite(self Direction) Direction
+        if self == Direction.north 'check'
+            return Direction.south
+        end 'check'
+        return Direction.north
+    end 'opposite'
+end 'Direction'
+```
+
+Call methods using type-qualified syntax:
+
+```maxon
+var dir = Direction.north
+var opp = Direction.opposite(dir)  // Direction.south
+```
+
+### Enum as Function Parameter
+
+Enums can be used as function parameters and return types:
+
+```maxon
+enum Status
+    case on
+    case off
+end 'Status'
+
+function isOn(s Status) bool
+    if s == Status.on 'check'
+        return true
+    end 'check'
+    return false
+end 'isOn'
+
+function toggle(s Status) Status
+    if s == Status.on 'check'
+        return Status.off
+    end 'check'
+    return Status.on
+end 'toggle'
+```
 
 ---
 

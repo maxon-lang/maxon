@@ -21,6 +21,7 @@ Maxon is a statically-typed programming language with a custom native x86-64 bac
 | Run backend tests | `make backend-test` |
 | Compile and run | `./bin/maxon file.maxon` |
 | Compile with MIR output | `./bin/maxon compile file.maxon --emit-ir` |
+| Compile and run lsp tests | `make lsp-test` |
 
 ## Maxon Language Overview
 

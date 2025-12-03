@@ -76,6 +76,33 @@ const StructInfo *SemanticAnalyzer::lookupStruct(const std::string &name) const 
 	return nullptr;
 }
 
+const EnumInfo *SemanticAnalyzer::lookupEnum(const std::string &name) const {
+	// First try exact match
+	auto it = enums.find(name);
+	if (it != enums.end()) {
+		return &it->second;
+	}
+
+	// If not found and name contains a dot, it's already qualified
+	if (name.find('.') != std::string::npos) {
+		return nullptr;
+	}
+
+	// For unqualified names, also try qualified lookups with all known namespaces
+	// This allows unqualified access to exported enums
+	for (const auto &pair : enums) {
+		const std::string &enumName = pair.first;
+		// Check if this is a qualified name ending with the requested name
+		if (enumName.size() > name.size() + 1 &&
+			enumName.substr(enumName.size() - name.size()) == name &&
+			enumName[enumName.size() - name.size() - 1] == '.') {
+			return &pair.second;
+		}
+	}
+
+	return nullptr;
+}
+
 void SemanticAnalyzer::registerExternalFunction(const std::string &name, const std::string &returnType,
 												const std::vector<FunctionParameter> &parameters) {
 	functions.emplace(name, FunctionInfo(name, returnType, parameters));
@@ -162,8 +189,109 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 		}
 	}
 
+	// First pass: collect all enum definitions
+	logTrace("Pass 1b: Collecting enum definitions");
+	for (const auto &enumDef : program->enums) {
+		std::string enumKey = (enumDef->isExported && !enumDef->namespaceName.empty())
+								  ? enumDef->namespaceName + "." + enumDef->name
+								  : enumDef->name;
+
+		logTrace("Registering enum: " + enumKey);
+		if (enums.find(enumKey) != enums.end()) {
+			addError("Enum '" + enumKey + "' is already defined",
+					 enumDef->line, enumDef->column);
+		} else {
+			EnumInfo enumInfo(enumDef->name, enumDef->line, enumDef->column, enumDef->rawValueType);
+
+			std::set<std::string> caseNames;
+			std::set<int64_t> rawIntValues;
+			std::set<std::string> rawStringValues;
+			int tagValue = 0;
+
+			for (const auto &caseDef : enumDef->cases) {
+				// Check for duplicate case names
+				if (caseNames.find(caseDef.name) != caseNames.end()) {
+					addError("Duplicate enum case '" + caseDef.name + "' in enum '" + enumDef->name + "'",
+							 caseDef.line, caseDef.column);
+					continue;
+				}
+				caseNames.insert(caseDef.name);
+
+				EnumCaseInfo caseInfo(caseDef.name, tagValue++, caseDef.line, caseDef.column);
+
+				// Handle associated values
+				for (const auto &assoc : caseDef.associatedValues) {
+					caseInfo.associatedValues.push_back(
+						EnumAssocValueInfo(assoc.name, assoc.type, assoc.line, assoc.column));
+					enumInfo.hasAssociatedValues = true;
+				}
+
+				// Handle raw value
+				if (caseDef.rawValue) {
+					if (enumDef->rawValueType.empty()) {
+						addError("Raw value specified for case '" + caseDef.name +
+									 "' but enum '" + enumDef->name + "' has no raw value type\n"
+									 "  Declare the enum with a raw value type: enum " + enumDef->name + " int",
+								 caseDef.line, caseDef.column);
+					} else {
+						// Analyze raw value expression
+						std::string rawValueType = analyzeExpression(caseDef.rawValue.get());
+						if (!typesMatch(enumDef->rawValueType, rawValueType)) {
+							addError("Raw value type '" + rawValueType +
+										 "' does not match enum raw value type '" + enumDef->rawValueType + "'",
+									 caseDef.rawValue->line, caseDef.rawValue->column);
+						} else {
+							caseInfo.hasRawValue = true;
+							// Extract raw value for codegen
+							if (enumDef->rawValueType == "int") {
+								if (auto *numExpr = dynamic_cast<NumberExprAST *>(caseDef.rawValue.get())) {
+									caseInfo.rawIntValue = numExpr->value;
+									// Check for duplicate raw values
+									if (rawIntValues.find(caseInfo.rawIntValue) != rawIntValues.end()) {
+										addError("Duplicate raw value " + std::to_string(caseInfo.rawIntValue) +
+													 " in enum '" + enumDef->name + "'",
+												 caseDef.line, caseDef.column);
+									}
+									rawIntValues.insert(caseInfo.rawIntValue);
+								}
+							} else if (enumDef->rawValueType == "string") {
+								if (auto *strExpr = dynamic_cast<StringLiteralExprAST *>(caseDef.rawValue.get())) {
+									caseInfo.rawStringValue = strExpr->value;
+									// Check for duplicate raw values
+									if (rawStringValues.find(caseInfo.rawStringValue) != rawStringValues.end()) {
+										addError("Duplicate raw value \"" + caseInfo.rawStringValue +
+													 "\" in enum '" + enumDef->name + "'",
+												 caseDef.line, caseDef.column);
+									}
+									rawStringValues.insert(caseInfo.rawStringValue);
+								}
+							}
+						}
+					}
+				} else if (!enumDef->rawValueType.empty()) {
+					// Raw value type declared but no value specified - error
+					addError("Raw value required for case '" + caseDef.name +
+								 "' in enum '" + enumDef->name + "' with raw value type '" + enumDef->rawValueType + "'",
+							 caseDef.line, caseDef.column);
+				}
+
+				enumInfo.cases.push_back(std::move(caseInfo));
+			}
+
+			enums.emplace(enumKey, std::move(enumInfo));
+
+			// Also register simple name
+			if (enums.find(enumDef->name) == enums.end()) {
+				EnumInfo enumInfoSimple(enumDef->name, enumDef->line, enumDef->column, enumDef->rawValueType);
+				enumInfoSimple.cases = enums[enumKey].cases;
+				enumInfoSimple.hasAssociatedValues = enums[enumKey].hasAssociatedValues;
+				enums.emplace(enumDef->name, std::move(enumInfoSimple));
+			}
+		}
+	}
+
 	// First pass: collect all struct definitions
-	logTrace("Pass 1b: Collecting struct definitions");
+	logTrace("Pass 1c: Collecting struct definitions");
 	for (const auto &structDef : program->structs) {
 		// Build the qualified name if the struct has a namespace and is exported
 		std::string structKey = (structDef->isExported && !structDef->namespaceName.empty())
@@ -307,6 +435,25 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 		}
 	}
 
+	// Register methods from enum definitions
+	for (const auto &enumDef : program->enums) {
+		for (const auto &method : enumDef->methods) {
+			// Method key is EnumName.methodName
+			std::string methodKey = enumDef->name + "." + method->name;
+
+			logTrace("Registering enum method: " + methodKey + " -> " + method->returnType);
+
+			if (functions.find(methodKey) != functions.end()) {
+				addError("Method '" + methodKey + "' is already defined" +
+							 std::string("\n  Note: Each method name must be unique within its enum"),
+						 method->line, method->column);
+			} else {
+				functions.emplace(methodKey, FunctionInfo(methodKey, method->returnType, method->parameters, "", method->line, method->column));
+				functionIndices[methodKey] = nextFunctionId++;
+			}
+		}
+	}
+
 	// Then register top-level functions
 	for (const auto &func : program->functions) {
 		// Build the function key: for methods use ReceiverType.methodName, otherwise use namespace.name
@@ -367,12 +514,20 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 		}
 	}
 
+	// Analyze methods inside enums
+	for (const auto &enumDef : program->enums) {
+		for (const auto &method : enumDef->methods) {
+			analyzeFunction(method.get());
+		}
+	}
+
 	// Then analyze top-level functions
 	for (const auto &func : program->functions) {
 		analyzeFunction(func.get());
 	}
 
 	logDetail("Analysis complete: " + std::to_string(structs.size()) + " structs, " +
+			  std::to_string(enums.size()) + " enums, " +
 			  std::to_string(functions.size()) + " functions, " +
 			  std::to_string(errors.size()) + " error(s)");
 

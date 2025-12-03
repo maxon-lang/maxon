@@ -78,9 +78,12 @@ class Parser {
 
 	std::unique_ptr<FunctionAST> parseFunction();
 	std::unique_ptr<FunctionAST> parseMethod(const std::string &structName); // Parse method inside struct
+	std::unique_ptr<FunctionAST> parseEnumMethod(const std::string &enumName); // Parse method inside enum
 	std::unique_ptr<StructDefAST> parseStruct();
+	std::unique_ptr<EnumDefAST> parseEnum();
 	std::unique_ptr<InterfaceDefAST> parseInterface();
 	std::unique_ptr<StructInitExprAST> parseStructInit(const std::string &structName);
+	std::unique_ptr<IfCaseStmtAST> parseIfCase(Token ifToken); // Parse if case statement
 
 	// Logging helpers
 	void logTrace(const std::string &msg);

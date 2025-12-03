@@ -132,6 +132,13 @@ class CallExprAST : public ExprAST {
 	size_t functionId = SIZE_MAX;	  // Resolved during semantic analysis (SIZE_MAX = unresolved)
 	bool isSiblingMethodCall = false; // True when calling another method of the same type from within a method
 
+	// For enum case construction with associated values (e.g., Result.success(42))
+	mutable std::string resolvedEnumName;	  // Set during semantic analysis if this is an enum case construction
+	mutable std::string resolvedEnumCaseName; // The case name being constructed
+
+	// Helper to check if this call is an enum case construction
+	bool isEnumCaseConstruction() const { return !resolvedEnumName.empty(); }
+
 	CallExprAST(const std::string &c, std::vector<std::unique_ptr<ExprAST>> a, int l = 0, int col = 0)
 		: ExprAST(l, col), callee(c), args(std::move(a)) {}
 };
@@ -219,6 +226,10 @@ class MemberAccessExprAST : public ExprAST {
 	std::string objectName;			 // Keep for backward compatibility (when object is simple variable)
 	std::string memberName;
 
+	// Resolved enum info (set by semantic analyzer when this is an enum case expression)
+	mutable std::string resolvedEnumName;	  // Non-empty if this is EnumName.caseName
+	mutable std::string resolvedEnumCaseName; // The case name (e.g., "north" for Direction.north)
+
 	// Constructor for simple variable.member access
 	MemberAccessExprAST(const std::string &obj, const std::string &member, int l = 0, int c = 0)
 		: ExprAST(l, c), object(nullptr), objectName(obj), memberName(member) {}
@@ -226,6 +237,9 @@ class MemberAccessExprAST : public ExprAST {
 	// Constructor for complex expression.member access (e.g., arr[0].member)
 	MemberAccessExprAST(std::unique_ptr<ExprAST> obj, const std::string &member, int l = 0, int c = 0)
 		: ExprAST(l, c), object(std::move(obj)), objectName(""), memberName(member) {}
+
+	// Check if this is a resolved enum case expression
+	bool isEnumCase() const { return !resolvedEnumName.empty(); }
 };
 
 // Statement nodes
@@ -549,6 +563,96 @@ class StructInitExprAST : public ExprAST {
 		: ExprAST(l, c), structName(name), fields(std::move(f)) {}
 };
 
+// Enum associated value field (for associated value enums)
+struct EnumAssocValue {
+	std::string name;
+	std::string type;
+	int line;
+	int column;
+
+	EnumAssocValue(const std::string &n, const std::string &t, int l = 0, int c = 0)
+		: name(n), type(t), line(l), column(c) {}
+};
+
+// Enum case definition
+struct EnumCaseAST {
+	std::string name;
+	std::vector<EnumAssocValue> associatedValues; // Empty for simple cases
+	std::unique_ptr<ExprAST> rawValue;			  // For raw value enums (optional)
+	int line;
+	int column;
+
+	EnumCaseAST(const std::string &n, int l = 0, int c = 0,
+				std::vector<EnumAssocValue> assoc = {},
+				std::unique_ptr<ExprAST> raw = nullptr)
+		: name(n), associatedValues(std::move(assoc)), rawValue(std::move(raw)), line(l), column(c) {}
+};
+
+// Enum definition
+class EnumDefAST : public ASTNode {
+  public:
+	std::string name;
+	std::string namespaceName;							// Namespace this enum belongs to
+	std::string rawValueType;							// "int" or "string", empty if none
+	std::vector<EnumCaseAST> cases;						// Enum cases
+	std::vector<std::unique_ptr<FunctionAST>> methods;	// Methods declared inside the enum
+	bool isExported;
+	int line;
+	int column;
+
+	EnumDefAST(const std::string &n, std::vector<EnumCaseAST> c, int l = 0, int col = 0,
+			   const std::string &ns = "", bool exp = false,
+			   const std::string &rawType = "",
+			   std::vector<std::unique_ptr<FunctionAST>> m = {})
+		: name(n), namespaceName(ns), rawValueType(rawType), cases(std::move(c)),
+		  methods(std::move(m)), isExported(exp), line(l), column(col) {}
+
+	// Check if this enum has associated values (any case has them)
+	bool hasAssociatedValues() const {
+		for (const auto &c : cases) {
+			if (!c.associatedValues.empty())
+				return true;
+		}
+		return false;
+	}
+
+	// Check if this is a raw value enum
+	bool hasRawValueType() const { return !rawValueType.empty(); }
+};
+
+// Enum case reference expression (e.g., Direction.north or Result.success(42))
+class EnumCaseExprAST : public ExprAST {
+  public:
+	std::string enumName;
+	std::string caseName;
+	std::vector<std::unique_ptr<ExprAST>> arguments; // For associated values
+
+	EnumCaseExprAST(const std::string &eName, const std::string &cName, int l = 0, int c = 0,
+					std::vector<std::unique_ptr<ExprAST>> args = {})
+		: ExprAST(l, c), enumName(eName), caseName(cName), arguments(std::move(args)) {}
+};
+
+// If-case statement for enum pattern matching
+// Syntax: if case caseName(binding1, binding2) = expr 'label' ... end 'label'
+class IfCaseStmtAST : public StmtAST {
+  public:
+	std::string caseName;						  // The case to match (e.g., "success")
+	std::vector<std::string> bindings;			  // Variable names to bind associated values
+	std::unique_ptr<ExprAST> enumExpr;			  // The enum expression being matched
+	std::vector<std::unique_ptr<StmtAST>> thenBody;
+	std::vector<std::unique_ptr<StmtAST>> elseBody;
+	std::string blockId;
+
+	IfCaseStmtAST(const std::string &cname, std::vector<std::string> binds,
+				  std::unique_ptr<ExprAST> expr,
+				  std::vector<std::unique_ptr<StmtAST>> thenB,
+				  std::vector<std::unique_ptr<StmtAST>> elseB,
+				  int l = 0, int c = 0, const std::string &bid = "")
+		: StmtAST(l, c), caseName(cname), bindings(std::move(binds)),
+		  enumExpr(std::move(expr)), thenBody(std::move(thenB)),
+		  elseBody(std::move(elseB)), blockId(bid) {}
+};
+
 // Function declaration
 class FunctionAST : public ASTNode {
   public:
@@ -587,19 +691,21 @@ class FunctionAST : public ASTNode {
 		  isExtern(ext), isExported(exp), dllName(dll), isStaticLib(staticLib), libPath(libFilePath), line(l), column(c) {}
 };
 
-// Program (collection of functions, structs, and interfaces)
+// Program (collection of functions, structs, enums, and interfaces)
 class ProgramAST : public ASTNode {
   public:
 	std::vector<std::unique_ptr<FunctionAST>> functions;
 	std::vector<std::unique_ptr<StructDefAST>> structs;
+	std::vector<std::unique_ptr<EnumDefAST>> enums;
 	std::vector<std::unique_ptr<InterfaceDefAST>> interfaces;
 
 	ProgramAST() = default;
 
 	ProgramAST(std::vector<std::unique_ptr<FunctionAST>> funcs,
 			   std::vector<std::unique_ptr<StructDefAST>> st = {},
-			   std::vector<std::unique_ptr<InterfaceDefAST>> protos = {})
-		: functions(std::move(funcs)), structs(std::move(st)), interfaces(std::move(protos)) {}
+			   std::vector<std::unique_ptr<InterfaceDefAST>> protos = {},
+			   std::vector<std::unique_ptr<EnumDefAST>> en = {})
+		: functions(std::move(funcs)), structs(std::move(st)), enums(std::move(en)), interfaces(std::move(protos)) {}
 };
 
 #endif // AST_H

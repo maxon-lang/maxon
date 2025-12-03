@@ -297,8 +297,26 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				return "bool";
 			}
 
-			// For == and != on struct types, check Equatable conformance
+			// For == and != on struct/enum types
 			if (binExpr->op == 'E' || binExpr->op == 'N') {
+				// Check if comparing enum types
+				const EnumInfo *leftEnum = lookupEnum(leftType);
+				const EnumInfo *rightEnum = lookupEnum(rightType);
+
+				if (leftEnum != nullptr || rightEnum != nullptr) {
+					// At least one operand is an enum type
+					if (leftType != rightType) {
+						addError("Cannot compare different enum types with == or !=" +
+									 std::string("\n  Left operand type: ") + leftType +
+									 "\n  Right operand type: " + rightType,
+								 expr->line, expr->column);
+						return "error";
+					}
+					// Same enum type - comparison is valid
+					return "bool";
+				}
+
+				// Check if comparing struct types
 				const StructInfo *leftStruct = lookupStruct(leftType);
 				const StructInfo *rightStruct = lookupStruct(rightType);
 
@@ -520,6 +538,53 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		if (callExpr->callee.rfind("__", 0) == 0) {
 			addError("Unknown intrinsic: " + callExpr->callee, expr->line, expr->column);
 			return "error";
+		}
+
+		// Check if this is an enum case construction with associated values (e.g., Result.success(42))
+		size_t dotPos = callExpr->callee.find(".");
+		if (dotPos != std::string::npos) {
+			std::string potentialEnumName = callExpr->callee.substr(0, dotPos);
+			std::string potentialCaseName = callExpr->callee.substr(dotPos + 1);
+
+			const EnumInfo *enumInfo = lookupEnum(potentialEnumName);
+			if (enumInfo != nullptr) {
+				const EnumCaseInfo *caseInfo = enumInfo->findCase(potentialCaseName);
+				if (caseInfo != nullptr) {
+					// This is an enum case construction
+					// Validate associated value arguments
+					if (callExpr->args.size() != caseInfo->associatedValues.size()) {
+						if (caseInfo->associatedValues.empty()) {
+							addError("Enum case '" + potentialCaseName + "' does not have associated values\n"
+									 "  Use: " + potentialEnumName + "." + potentialCaseName,
+									 expr->line, expr->column);
+						} else {
+							addError("Wrong number of associated values for case '" + potentialCaseName + "': expected " +
+									 std::to_string(caseInfo->associatedValues.size()) + ", got " +
+									 std::to_string(callExpr->args.size()),
+									 expr->line, expr->column);
+						}
+						return potentialEnumName; // Still return the enum type
+					}
+
+					// Type check each associated value argument
+					for (size_t i = 0; i < callExpr->args.size(); i++) {
+						std::string argType = analyzeExpression(callExpr->args[i].get());
+						const std::string &expectedType = caseInfo->associatedValues[i].type;
+
+						if (!typesMatch(expectedType, argType)) {
+							addError("Type mismatch for associated value '" + caseInfo->associatedValues[i].name +
+									 "': expected '" + expectedType + "', got '" + argType + "'",
+									 callExpr->args[i]->line, callExpr->args[i]->column);
+						}
+					}
+
+					// Store resolved enum info in the AST for codegen
+					callExpr->resolvedEnumName = potentialEnumName;
+					callExpr->resolvedEnumCaseName = potentialCaseName;
+
+					return potentialEnumName;
+				}
+			}
 		}
 
 		// Try to find the function - first exact match, then unqualified lookup
@@ -876,7 +941,40 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			// Complex expression (e.g., arr[0].field)
 			objectType = analyzeExpression(memberAccessExpr->object.get());
 		} else {
-			// Simple variable access (e.g., obj.field)
+			// First check if objectName is an enum type (for enum case expressions like Direction.north)
+			const EnumInfo *enumInfo = lookupEnum(memberAccessExpr->objectName);
+			if (enumInfo != nullptr) {
+				// This is an enum case expression
+				const EnumCaseInfo *caseInfo = enumInfo->findCase(memberAccessExpr->memberName);
+				if (caseInfo == nullptr) {
+					std::string availableCases;
+					for (size_t i = 0; i < enumInfo->cases.size(); i++) {
+						if (i > 0)
+							availableCases += ", ";
+						availableCases += enumInfo->cases[i].name;
+					}
+					addError("Unknown case '" + memberAccessExpr->memberName + "' for enum '" + memberAccessExpr->objectName + "'\n"
+							 "  Available cases: " + availableCases,
+							 expr->line, expr->column);
+					return "error";
+				}
+
+				// Check if this case requires associated values
+				if (!caseInfo->associatedValues.empty()) {
+					addError("Enum case '" + memberAccessExpr->memberName + "' requires associated values\n"
+							 "  Use: " + memberAccessExpr->objectName + "." + memberAccessExpr->memberName + "(...)",
+							 expr->line, expr->column);
+					return memberAccessExpr->objectName; // Still return enum type
+				}
+
+				// Store the resolved enum info in the AST for codegen
+				memberAccessExpr->resolvedEnumName = memberAccessExpr->objectName;
+				memberAccessExpr->resolvedEnumCaseName = memberAccessExpr->memberName;
+
+				return memberAccessExpr->objectName;
+			}
+
+			// Check if objectName is an enum type for .rawValue access
 			auto varInfo = lookupVariable(memberAccessExpr->objectName);
 			if (!varInfo.has_value()) {
 				addError("Undefined variable: '" + memberAccessExpr->objectName + "'",
@@ -887,6 +985,32 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			// Mark object variable as used when its member is accessed
 			markVariableAsUsed(memberAccessExpr->objectName);
 			objectType = varInfo->type;
+		}
+
+		// Check if it's an enum type (for .rawValue access)
+		const EnumInfo *varEnumInfo = lookupEnum(objectType);
+		if (varEnumInfo != nullptr) {
+			// Handle .rawValue access
+			if (memberAccessExpr->memberName == "rawValue") {
+				if (varEnumInfo->rawValueType.empty()) {
+					addError("Cannot access 'rawValue' on enum '" + objectType + "' which has no raw value type\n"
+							 "  Declare the enum with a raw value type: enum " + objectType + " int",
+							 expr->line, expr->column);
+					return "error";
+				}
+				return varEnumInfo->rawValueType;
+			}
+
+			// Check if it's a method call
+			std::string methodName = objectType + "." + memberAccessExpr->memberName;
+			auto methodIt = functions.find(methodName);
+			if (methodIt != functions.end()) {
+				return methodIt->second.returnType;
+			}
+
+			addError("Enum '" + objectType + "' has no property or method named '" + memberAccessExpr->memberName + "'",
+					 expr->line, expr->column);
+			return "error";
 		}
 
 		// Check if it's a struct type
@@ -1003,6 +1127,62 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		}
 
 		return structInitExpr->structName;
+	} else if (auto enumCaseExpr = dynamic_cast<EnumCaseExprAST *>(expr)) {
+		// Check if enum type exists
+		const EnumInfo *enumInfo = lookupEnum(enumCaseExpr->enumName);
+		if (enumInfo == nullptr) {
+			addError("Undefined enum type: '" + enumCaseExpr->enumName + "'",
+					 expr->line, expr->column);
+			return "error";
+		}
+
+		// Check if case exists in the enum
+		const EnumCaseInfo *caseInfo = enumInfo->findCase(enumCaseExpr->caseName);
+		if (caseInfo == nullptr) {
+			std::string availableCases;
+			for (size_t i = 0; i < enumInfo->cases.size(); i++) {
+				if (i > 0)
+					availableCases += ", ";
+				availableCases += enumInfo->cases[i].name;
+			}
+			addError("Unknown case '" + enumCaseExpr->caseName + "' for enum '" + enumCaseExpr->enumName + "'\n"
+					 "  Available cases: " + availableCases,
+					 expr->line, expr->column);
+			return "error";
+		}
+
+		// Check associated value arguments
+		if (enumCaseExpr->arguments.size() != caseInfo->associatedValues.size()) {
+			if (caseInfo->associatedValues.empty()) {
+				addError("Enum case '" + enumCaseExpr->caseName + "' does not have associated values\n"
+						 "  Use: " + enumCaseExpr->enumName + "." + enumCaseExpr->caseName,
+						 expr->line, expr->column);
+			} else {
+				addError("Wrong number of associated values for case '" + enumCaseExpr->caseName + "': expected " +
+						 std::to_string(caseInfo->associatedValues.size()) + ", got " +
+						 std::to_string(enumCaseExpr->arguments.size()),
+						 expr->line, expr->column);
+			}
+			return enumCaseExpr->enumName; // Still return the enum type
+		}
+
+		// Type check each associated value argument
+		for (size_t i = 0; i < enumCaseExpr->arguments.size(); i++) {
+			std::string argType = analyzeExpression(enumCaseExpr->arguments[i].get());
+			const std::string &expectedType = caseInfo->associatedValues[i].type;
+
+			if (!typesMatch(expectedType, argType)) {
+				addError("Type mismatch for associated value '" + caseInfo->associatedValues[i].name +
+						 "': expected '" + expectedType + "', got '" + argType + "'",
+						 enumCaseExpr->arguments[i]->line, enumCaseExpr->arguments[i]->column);
+			}
+		}
+
+		return enumCaseExpr->enumName;
+	} else if (dynamic_cast<IfCaseStmtAST *>(expr)) {
+		// Note: IfCaseStmtAST is a statement, not an expression, so this shouldn't be hit
+		// But handle it gracefully if it does appear as an expression
+		return "void";
 	}
 
 	return "error";

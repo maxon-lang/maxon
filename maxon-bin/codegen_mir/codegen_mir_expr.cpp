@@ -278,6 +278,115 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	}
 
 	if (auto *memberAccessExpr = dynamic_cast<MemberAccessExprAST *>(expr)) {
+		// Check if this is an enum case expression (e.g., Direction.north)
+		if (memberAccessExpr->isEnumCase()) {
+			const std::string &enumName = memberAccessExpr->resolvedEnumName;
+			const std::string &caseName = memberAccessExpr->resolvedEnumCaseName;
+
+			auto enumIt = enumTypes.find(enumName);
+			if (enumIt == enumTypes.end()) {
+				reportError("Unknown enum type: " + enumName,
+							memberAccessExpr->line, memberAccessExpr->column);
+			}
+
+			const EnumCodegenInfo &enumInfo = enumIt->second;
+			auto tagIt = enumInfo.caseTags.find(caseName);
+			if (tagIt == enumInfo.caseTags.end()) {
+				reportError("Unknown enum case: " + enumName + "." + caseName,
+							memberAccessExpr->line, memberAccessExpr->column);
+			}
+
+			int tagValue = tagIt->second;
+
+			// Simple enum (no associated values): just return the tag value
+			if (!enumInfo.hasAssociatedValues) {
+				return builder->getInt8(static_cast<int8_t>(tagValue));
+			}
+
+			// Enum with associated values but this case has none: create struct with tag
+			mir::MIRValue *enumAlloca = builder->createAlloca(enumInfo.mirType, enumName + "." + caseName);
+			// Set tag field (field 0)
+			mir::MIRValue *tagPtr = builder->createStructGEP(enumInfo.mirType, enumAlloca, 0, "enum.tag");
+			builder->createStore(builder->getInt8(static_cast<int8_t>(tagValue)), tagPtr);
+			return enumAlloca;
+		}
+
+		// Check for .rawValue access on enum variable
+		if (memberAccessExpr->memberName == "rawValue" && !memberAccessExpr->object) {
+			std::string varType = variableTypes[memberAccessExpr->objectName];
+			auto enumIt = enumTypes.find(varType);
+			if (enumIt != enumTypes.end()) {
+				const EnumCodegenInfo &enumInfo = enumIt->second;
+				if (enumInfo.rawValueType.empty()) {
+					reportError("Enum " + varType + " does not have raw values",
+								memberAccessExpr->line, memberAccessExpr->column);
+				}
+
+				// Load the enum tag value
+				mir::MIRValue *enumAlloca = namedValues[memberAccessExpr->objectName];
+				if (!enumAlloca) {
+					reportError("Unknown variable: " + memberAccessExpr->objectName,
+								memberAccessExpr->line, memberAccessExpr->column);
+				}
+
+				mir::MIRValue *tagVal;
+				if (enumInfo.hasAssociatedValues) {
+					mir::MIRValue *tagPtr = builder->createStructGEP(enumInfo.mirType, enumAlloca, 0, "enum.tag.ptr");
+					tagVal = builder->createLoad(mir::MIRType::getInt8(), tagPtr, "enum.tag");
+				} else {
+					tagVal = builder->createLoad(mir::MIRType::getInt8(), enumAlloca, "enum.tag");
+				}
+
+				// For int raw values, use a chain of comparisons with phi-like merging
+				if (enumInfo.rawValueType == "int") {
+					// Create alloca to store the result
+					mir::MIRValue *resultAlloca = builder->createAlloca(mir::MIRType::getInt32(), "rawValue.alloca");
+					builder->createStore(builder->getInt32(0), resultAlloca); // Default value
+
+					// Generate conditional branches for each case
+					mir::MIRBasicBlock *endBlock = builder->createBasicBlock("rawValue.end");
+
+					for (size_t i = 0; i < enumInfo.caseNames.size(); i++) {
+						const auto &caseName = enumInfo.caseNames[i];
+						auto rawIt = enumInfo.caseRawIntValues.find(caseName);
+						int64_t rawValue = 0;
+						if (rawIt != enumInfo.caseRawIntValues.end()) {
+							rawValue = rawIt->second;
+						} else {
+							// Auto-generated raw value
+							rawValue = enumInfo.caseTags.at(caseName);
+						}
+
+						int tagIdx = enumInfo.caseTags.at(caseName);
+						mir::MIRValue *tagConst = builder->getInt8(static_cast<int8_t>(tagIdx));
+						mir::MIRValue *isMatch = builder->createICmpEq(tagVal, tagConst, "tag.match." + caseName);
+
+						mir::MIRBasicBlock *matchBlock = builder->createBasicBlock("rawValue.case." + caseName);
+						mir::MIRBasicBlock *nextBlock = (i + 1 < enumInfo.caseNames.size())
+							? builder->createBasicBlock("rawValue.next." + std::to_string(i))
+							: endBlock;
+
+						builder->createCondBr(isMatch, matchBlock, nextBlock);
+
+						builder->setInsertPoint(matchBlock);
+						builder->createStore(builder->getInt32(static_cast<int>(rawValue)), resultAlloca);
+						builder->createBr(endBlock);
+
+						if (nextBlock != endBlock) {
+							builder->setInsertPoint(nextBlock);
+						}
+					}
+
+					builder->setInsertPoint(endBlock);
+					return builder->createLoad(mir::MIRType::getInt32(), resultAlloca, "rawValue");
+				} else if (enumInfo.rawValueType == "string") {
+					// For string raw values, similar approach but returns string pointers
+					reportError("String raw values not yet implemented",
+								memberAccessExpr->line, memberAccessExpr->column);
+				}
+			}
+		}
+
 		std::string varType;
 		mir::MIRValue *objectPtr = nullptr;
 
@@ -701,9 +810,41 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	}
 
 	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
-		// For == and != on Equatable struct types, route to equals method
+		// For == and != on enum types, compare tag values
 		if (binExpr->op == 'E' || binExpr->op == 'N') {
 			std::string leftType = getExpressionMaxonType(binExpr->left.get());
+
+			// Check if this is an enum type
+			auto enumIt = enumTypes.find(leftType);
+			if (enumIt != enumTypes.end()) {
+				const EnumCodegenInfo &enumInfo = enumIt->second;
+
+				// Generate left and right operands
+				mir::MIRValue *leftVal = generateExpr(binExpr->left.get());
+				mir::MIRValue *rightVal = generateExpr(binExpr->right.get());
+
+				// For simple enums (no associated values), compare the i8 values directly
+				if (!enumInfo.hasAssociatedValues) {
+					mir::MIRValue *result = (binExpr->op == 'E')
+						? builder->createICmpEq(leftVal, rightVal, "enum.eq")
+						: builder->createICmpNe(leftVal, rightVal, "enum.ne");
+					return result;
+				}
+
+				// For enums with associated values, compare tags only
+				// Get tag from left (field 0)
+				mir::MIRValue *leftTagPtr = builder->createStructGEP(enumInfo.mirType, leftVal, 0, "left.tag.ptr");
+				mir::MIRValue *leftTag = builder->createLoad(mir::MIRType::getInt8(), leftTagPtr, "left.tag");
+
+				// Get tag from right (field 0)
+				mir::MIRValue *rightTagPtr = builder->createStructGEP(enumInfo.mirType, rightVal, 0, "right.tag.ptr");
+				mir::MIRValue *rightTag = builder->createLoad(mir::MIRType::getInt8(), rightTagPtr, "right.tag");
+
+				mir::MIRValue *result = (binExpr->op == 'E')
+					? builder->createICmpEq(leftTag, rightTag, "enum.eq")
+					: builder->createICmpNe(leftTag, rightTag, "enum.ne");
+				return result;
+			}
 
 			// Check if this is an Equatable struct type
 			auto structIt = structTypes.find(leftType);
@@ -1093,6 +1234,72 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	}
 
 	if (auto *callExpr = dynamic_cast<CallExprAST *>(expr)) {
+		// Handle enum case construction with associated values (e.g., Result.success(42))
+		if (callExpr->isEnumCaseConstruction()) {
+			const std::string &enumName = callExpr->resolvedEnumName;
+			const std::string &caseName = callExpr->resolvedEnumCaseName;
+
+			auto enumIt = enumTypes.find(enumName);
+			if (enumIt == enumTypes.end()) {
+				reportError("Unknown enum type: " + enumName,
+							callExpr->line, callExpr->column);
+			}
+
+			const EnumCodegenInfo &enumInfo = enumIt->second;
+			auto tagIt = enumInfo.caseTags.find(caseName);
+			if (tagIt == enumInfo.caseTags.end()) {
+				reportError("Unknown enum case: " + enumName + "." + caseName,
+							callExpr->line, callExpr->column);
+			}
+
+			int tagValue = tagIt->second;
+
+			// Allocate space for the enum
+			mir::MIRValue *enumAlloca = builder->createAlloca(enumInfo.mirType, enumName + "." + caseName);
+
+			// Set tag field (field 0)
+			mir::MIRValue *tagPtr = builder->createStructGEP(enumInfo.mirType, enumAlloca, 0, "enum.tag");
+			builder->createStore(builder->getInt8(static_cast<int8_t>(tagValue)), tagPtr);
+
+			// Store associated values in the payload
+			auto assocIt = enumInfo.caseAssocValues.find(caseName);
+			if (assocIt != enumInfo.caseAssocValues.end() && !assocIt->second.empty()) {
+				const auto &assocValues = assocIt->second;
+				if (callExpr->args.size() != assocValues.size()) {
+					reportError("Wrong number of arguments for enum case " + enumName + "." + caseName +
+								": expected " + std::to_string(assocValues.size()) + ", got " +
+								std::to_string(callExpr->args.size()),
+								callExpr->line, callExpr->column);
+				}
+
+				// Get pointer to payload (field 1)
+				mir::MIRValue *payloadPtr = builder->createStructGEP(enumInfo.mirType, enumAlloca, 1, "enum.payload");
+
+				// Store each associated value
+				size_t offset = 0;
+				for (size_t i = 0; i < assocValues.size(); i++) {
+					mir::MIRValue *argValue = generateExpr(callExpr->args[i].get());
+					if (!argValue) {
+						reportError("Failed to generate argument for enum case construction",
+									callExpr->line, callExpr->column);
+					}
+
+					mir::MIRType *argType = getTypeFromString(assocValues[i].second);
+
+					// Store at offset within payload
+					mir::MIRValue *fieldPtr = builder->createGEP(mir::MIRType::getInt8(), payloadPtr,
+																 {builder->getInt64(static_cast<int64_t>(offset))},
+																 "enum.payload." + assocValues[i].first);
+					// Cast to appropriate pointer type and store
+					builder->createStore(argValue, fieldPtr);
+
+					offset += argType->sizeInBytes;
+				}
+			}
+
+			return enumAlloca;
+		}
+
 		// Handle math intrinsics
 		if (Lexer::isMathIntrinsic(callExpr->callee)) {
 			return generateMathIntrinsic(callExpr);

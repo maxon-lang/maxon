@@ -350,6 +350,9 @@ std::string compileProgram(const CompilationOptions &options) {
 			for (auto &interfaceDef : prog->interfaces) {
 				mergedProgram->interfaces.push_back(std::move(interfaceDef));
 			}
+			for (auto &enumDef : prog->enums) {
+				mergedProgram->enums.push_back(std::move(enumDef));
+			}
 		}
 
 		programs.clear();

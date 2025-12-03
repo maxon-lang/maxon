@@ -122,6 +122,12 @@ mir::MIRType *MIRCodeGenerator::getTypeFromStringNoMark(const std::string &typeS
 		return it->second;
 	}
 
+	// Check for enum types
+	auto enumIt = enumTypes.find(typeStr);
+	if (enumIt != enumTypes.end()) {
+		return enumIt->second.mirType;
+	}
+
 	// For primitive types, delegate to regular getTypeFromString (they don't have used flag)
 	return getTypeFromString(typeStr);
 }
@@ -156,6 +162,12 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		// Also mark field types as used (for transitive dependencies)
 		markFieldTypesUsed(it->second);
 		return it->second;
+	}
+
+	// Check for enum types
+	auto enumIt = enumTypes.find(typeStr);
+	if (enumIt != enumTypes.end()) {
+		return enumIt->second.mirType;
 	}
 
 	if (typeStr == "int") {
@@ -883,6 +895,70 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		structFieldDefaults[structDef->name] = defaults;
 	}
 
+	// Pass 1c: Register enum types
+	logDetail("Pass 1c: Registering enum types (" + std::to_string(program->enums.size()) + " enums)");
+	for (const auto &enumDef : program->enums) {
+		EnumCodegenInfo enumInfo;
+		enumInfo.name = enumDef->name;
+		enumInfo.rawValueType = enumDef->rawValueType;
+		enumInfo.hasAssociatedValues = enumDef->hasAssociatedValues();
+
+		// Calculate the size needed for the largest associated value payload
+		size_t maxPayloadSize = 0;
+		std::vector<mir::MIRType *> allPayloadTypes;
+
+		for (size_t i = 0; i < enumDef->cases.size(); i++) {
+			const auto &enumCase = enumDef->cases[i];
+			enumInfo.caseNames.push_back(enumCase.name);
+			enumInfo.caseTags[enumCase.name] = static_cast<int>(i);
+
+			// Store associated values
+			if (!enumCase.associatedValues.empty()) {
+				std::vector<std::pair<std::string, std::string>> assocValues;
+				size_t payloadSize = 0;
+				for (const auto &av : enumCase.associatedValues) {
+					assocValues.push_back({av.name, av.type});
+					mir::MIRType *avType = getTypeFromStringNoMark(av.type);
+					payloadSize += avType->sizeInBytes;
+					allPayloadTypes.push_back(avType);
+				}
+				enumInfo.caseAssocValues[enumCase.name] = assocValues;
+				maxPayloadSize = std::max(maxPayloadSize, payloadSize);
+			}
+
+			// Store raw values
+			if (enumCase.rawValue) {
+				if (auto *numExpr = dynamic_cast<NumberExprAST *>(enumCase.rawValue.get())) {
+					enumInfo.caseRawIntValues[enumCase.name] = numExpr->value;
+				} else if (auto *strExpr = dynamic_cast<StringLiteralExprAST *>(enumCase.rawValue.get())) {
+					enumInfo.caseRawStrValues[enumCase.name] = strExpr->value;
+				}
+			}
+		}
+
+		// Create MIR type for the enum
+		// Simple enums: just an i8 tag
+		// Enums with associated values: struct { i8 tag, [payload] }
+		if (enumInfo.hasAssociatedValues) {
+			// Tagged union: tag byte + padding + max payload
+			// For simplicity, use a struct with tag and an array of bytes for payload
+			std::vector<mir::MIRType *> fieldTypes;
+			fieldTypes.push_back(mir::MIRType::getInt8()); // tag
+			if (maxPayloadSize > 0) {
+				// Add payload as array of bytes
+				mir::MIRType *payloadType = mir::MIRType::getArray(mir::MIRType::getInt8(), static_cast<int>(maxPayloadSize));
+				fieldTypes.push_back(payloadType);
+			}
+			enumInfo.mirType = module->getOrCreateStructType("__enum_" + enumDef->name, fieldTypes);
+		} else {
+			// Simple enum: just i8 for tag
+			enumInfo.mirType = mir::MIRType::getInt8();
+		}
+
+		enumTypes[enumDef->name] = enumInfo;
+		logTrace("Registered enum: " + enumDef->name + " (" + std::to_string(enumDef->cases.size()) + " cases)");
+	}
+
 	// Second pass: Create all function declarations and register extern functions
 	// This includes both top-level functions and methods declared inside structs
 	logDetail("Pass 2: Creating function declarations");
@@ -954,6 +1030,13 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		}
 	}
 
+	// Declare methods from enum definitions
+	for (auto &enumDef : program->enums) {
+		for (auto &method : enumDef->methods) {
+			declareFunction(method.get(), enumDef->namespaceName);
+		}
+	}
+
 	// Then declare top-level functions
 	for (auto &func : program->functions) {
 		declareFunction(func.get(), func->namespaceName);
@@ -980,6 +1063,13 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		}
 		for (auto &method : structDef->methods) {
 			generateFunction(method.get(), structDef->namespaceName);
+		}
+	}
+
+	// Generate method bodies from enum definitions
+	for (auto &enumDef : program->enums) {
+		for (auto &method : enumDef->methods) {
+			generateFunction(method.get(), enumDef->namespaceName);
 		}
 	}
 

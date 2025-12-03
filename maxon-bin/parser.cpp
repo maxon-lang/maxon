@@ -54,6 +54,7 @@ void Parser::reportError(const std::string &message, int line, int column) {
 std::unique_ptr<ProgramAST> Parser::parse() {
 	std::vector<std::unique_ptr<FunctionAST>> functions;
 	std::vector<std::unique_ptr<StructDefAST>> structs;
+	std::vector<std::unique_ptr<EnumDefAST>> enums;
 	std::vector<std::unique_ptr<InterfaceDefAST>> interfaces;
 
 	logDetail("Starting parse...");
@@ -63,10 +64,13 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 			break;
 		}
 
-		// Check for struct, interface, export, extern, or function keyword
+		// Check for struct, enum, interface, export, extern, or function keyword
 		if (checkKeyword("struct")) {
 			logTrace("Parsing struct definition");
 			structs.push_back(parseStruct());
+		} else if (checkKeyword("enum")) {
+			logTrace("Parsing enum definition");
+			enums.push_back(parseEnum());
 		} else if (checkKeyword("interface")) {
 			logTrace("Parsing interface definition");
 			interfaces.push_back(parseInterface());
@@ -80,6 +84,11 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 				cache_.set_position(savedPos);
 				logTrace("Parsing exported struct definition");
 				structs.push_back(parseStruct());
+			} else if (checkKeyword("enum")) {
+				position = savedPos; // restore position
+				cache_.set_position(savedPos);
+				logTrace("Parsing exported enum definition");
+				enums.push_back(parseEnum());
 			} else if (checkKeyword("interface")) {
 				position = savedPos; // restore position
 				cache_.set_position(savedPos);
@@ -91,21 +100,22 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 				logTrace("Parsing exported function definition");
 				functions.push_back(parseFunction());
 			} else {
-				reportError("Expected 'struct', 'interface', 'extern function', or 'function' after 'export'",
+				reportError("Expected 'struct', 'enum', 'interface', 'extern function', or 'function' after 'export'",
 							currentLine(), currentColumn());
 			}
 		} else if (checkKeyword("extern") || checkKeyword("function")) {
 			logTrace("Parsing function definition");
 			functions.push_back(parseFunction());
 		} else {
-			reportError("Expected 'struct', 'interface', 'export', 'function', or 'extern function' at top level",
+			reportError("Expected 'struct', 'enum', 'interface', 'export', 'function', or 'extern function' at top level",
 						currentLine(), currentColumn());
 		}
 	}
 
 	logDetail("Parse complete: " + std::to_string(functions.size()) + " functions, " +
 			  std::to_string(structs.size()) + " structs, " +
+			  std::to_string(enums.size()) + " enums, " +
 			  std::to_string(interfaces.size()) + " interfaces");
 
-	return std::make_unique<ProgramAST>(std::move(functions), std::move(structs), std::move(interfaces));
+	return std::make_unique<ProgramAST>(std::move(functions), std::move(structs), std::move(interfaces), std::move(enums));
 }

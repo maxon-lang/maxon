@@ -68,6 +68,20 @@ class MIRCodeGenerator {
 	// Generic struct instantiation tracking
 	std::set<std::string> instantiatedGenericStructs; // Track which generic structs have been instantiated
 
+	// Enum type definitions
+	struct EnumCodegenInfo {
+		std::string name;
+		std::string rawValueType;			  // "int", "string", or "" for simple enums
+		bool hasAssociatedValues;			  // True if any case has associated values
+		std::vector<std::string> caseNames;	  // Ordered list of case names
+		std::map<std::string, int> caseTags;  // Case name -> tag value
+		std::map<std::string, std::vector<std::pair<std::string, std::string>>> caseAssocValues; // Case -> [(name, type)]
+		std::map<std::string, int64_t> caseRawIntValues;	// Case -> raw int value
+		std::map<std::string, std::string> caseRawStrValues; // Case -> raw string value
+		mir::MIRType *mirType = nullptr;	  // The MIR type for this enum
+	};
+	std::map<std::string, EnumCodegenInfo> enumTypes;
+
 	// Safe FFI: Track extern functions for subprocess isolation
 	struct ExternFuncInfo {
 		uint32_t id;							  // Function ID in extern table

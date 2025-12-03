@@ -52,6 +52,11 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 		return "bool";
 	}
 	if (auto *memberAccess = dynamic_cast<MemberAccessExprAST *>(expr)) {
+		// Check if this is an enum case expression
+		if (memberAccess->isEnumCase()) {
+			return memberAccess->resolvedEnumName;
+		}
+
 		// Determine the type of the object being accessed
 		std::string objectType;
 		if (memberAccess->object) {
@@ -104,6 +109,11 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 	}
 	// Handle call expressions - look up return type from function registry
 	if (auto *callExpr = dynamic_cast<CallExprAST *>(expr)) {
+		// Check if this is an enum case construction
+		if (callExpr->isEnumCaseConstruction()) {
+			return callExpr->resolvedEnumName;
+		}
+
 		const std::string &callee = callExpr->callee;
 
 		// Look up the function return type from the semantic analyzer's registry

@@ -58,6 +58,25 @@ struct StdlibInterface {
 	int column;								  // 1-based column number
 };
 
+// Information about an enum case (for LSP features)
+struct LspEnumCaseInfo {
+	std::string name;									   // Case name
+	std::vector<std::pair<std::string, std::string>> associatedValues; // (name, type) pairs for associated values
+	bool hasRawValue;									   // Whether this case has a raw value
+	int line;											   // 1-based line number
+	int column;											   // 1-based column number
+};
+
+// Information about a stdlib enum (for completions and go-to-definition)
+struct StdlibEnum {
+	std::string name;					   // Enum name
+	std::string rawValueType;			   // Raw value type ("int", "string", or empty for simple enum)
+	std::vector<LspEnumCaseInfo> cases;	   // Enum cases
+	std::string filePath;				   // Absolute file path for go-to-definition
+	int line;							   // 1-based line number
+	int column;							   // 1-based column number
+};
+
 // Information about a type method or property
 struct TypeMember {
 	std::string name;		   // Method/property name
@@ -116,6 +135,7 @@ class Analyzer {
 	std::vector<StdlibStructMethod> stdlibStructMethods;		// Struct methods from stdlib
 	std::map<std::string, StdlibStruct> stdlibStructs;			// Key: struct name, for semantic analysis registration
 	std::map<std::string, StdlibInterface> stdlibInterfaces;	// Key: interface name, for go-to-definition
+	std::map<std::string, StdlibEnum> stdlibEnums;				// Key: enum name, for completions and go-to-definition
 	std::map<std::string, std::vector<TypeMember>> typeMembers; // Key: type name (e.g., "string", "[]")
 	NamespaceNode namespaceRoot;								// Root of namespace hierarchy ("stdlib")
 
@@ -125,6 +145,7 @@ class Analyzer {
 		std::map<std::string, FunctionInfo> functions;
 		std::map<std::string, StructInfo> structs;
 		std::map<std::string, InterfaceInfo> interfaces;
+		std::map<std::string, StdlibEnum> enums;
 	};
 	std::map<std::string, SemanticInfo> semanticCache;
 

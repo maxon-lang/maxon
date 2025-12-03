@@ -237,7 +237,7 @@ bool Formatter::shouldIncreaseIndentForKeyword(const std::string &line, bool ins
 	}
 
 	// Check if line starts with block-opening keywords (or export + keyword)
-	const char *openingKeywords[] = {"function", "if", "else", "while", "for", "struct", "interface", "export function", "export struct", "export interface"};
+	const char *openingKeywords[] = {"function", "if", "else", "while", "for", "struct", "interface", "enum", "export function", "export struct", "export interface", "export enum"};
 	for (const auto &keyword : openingKeywords) {
 		if (trimmed.find(keyword) == 0) {
 			// Make sure it's a complete keyword (followed by space or non-alphanumeric)

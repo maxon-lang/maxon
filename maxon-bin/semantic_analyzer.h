@@ -107,6 +107,56 @@ struct InterfaceInfo {
 		: name(n), associatedTypes(std::move(assocTypes)), line(l), column(c) {}
 };
 
+// Enum case associated value information
+struct EnumAssocValueInfo {
+	std::string name;
+	std::string type;
+	int line;
+	int column;
+
+	EnumAssocValueInfo(const std::string &n, const std::string &t, int l = 0, int c = 0)
+		: name(n), type(t), line(l), column(c) {}
+};
+
+// Enum case information
+struct EnumCaseInfo {
+	std::string name;
+	std::vector<EnumAssocValueInfo> associatedValues;
+	int tagValue;		// Runtime tag value (0, 1, 2, ...)
+	bool hasRawValue;	// True if this case has a raw value
+	int64_t rawIntValue;	   // Raw value if rawValueType is int
+	std::string rawStringValue; // Raw value if rawValueType is string
+	int line;
+	int column;
+
+	EnumCaseInfo(const std::string &n, int tag, int l = 0, int c = 0)
+		: name(n), tagValue(tag), hasRawValue(false), rawIntValue(0), line(l), column(c) {}
+};
+
+// Enum information
+struct EnumInfo {
+	std::string name;
+	std::string rawValueType;				 // "int", "string", or "" for simple enums
+	std::vector<EnumCaseInfo> cases;
+	bool hasAssociatedValues;				 // True if any case has associated values
+	int line;
+	int column;
+
+	EnumInfo() : hasAssociatedValues(false), line(0), column(0) {}
+
+	EnumInfo(const std::string &n, int l = 0, int c = 0, const std::string &rawType = "")
+		: name(n), rawValueType(rawType), hasAssociatedValues(false), line(l), column(c) {}
+
+	// Find a case by name, returns nullptr if not found
+	const EnumCaseInfo *findCase(const std::string &caseName) const {
+		for (const auto &c : cases) {
+			if (c.name == caseName)
+				return &c;
+		}
+		return nullptr;
+	}
+};
+
 class SemanticAnalyzer {
   public:
 	SemanticAnalyzer();
@@ -161,16 +211,21 @@ class SemanticAnalyzer {
 	// Get all interfaces
 	const std::map<std::string, InterfaceInfo> &getInterfaces() const { return interfaces; }
 
+	// Get all enums
+	const std::map<std::string, EnumInfo> &getEnums() const { return enums; }
+
 	// Get persistent symbol table (all variables ever declared, for LSP)
 	const std::map<std::string, VariableInfo> &getAllDeclaredVariables() const { return allDeclaredVariables; }
 
   private:
 	Logger *logger_ = nullptr; // Optional logger for detailed tracing
 	const StructInfo *lookupStruct(const std::string &name) const;
+	const EnumInfo *lookupEnum(const std::string &name) const;
 	std::vector<SemanticError> errors;
 	std::map<std::string, FunctionInfo> functions;
 	std::map<std::string, size_t> functionIndices;				 // Map function name to index for O(1) codegen lookup
 	std::map<std::string, StructInfo> structs;					 // Struct definitions
+	std::map<std::string, EnumInfo> enums;						 // Enum definitions
 	std::map<std::string, InterfaceInfo> interfaces;			 // Interface definitions
 	std::map<std::string, VariableInfo> variables;				 // Current scope variables
 	std::vector<std::map<std::string, VariableInfo>> scopeStack; // Stack of variable scopes
