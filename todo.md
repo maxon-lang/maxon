@@ -190,3 +190,7 @@ SLP Vectorizer (Superword-Level Parallelism):
 Value: Vectors straight-line code. If you manually write x1 = a[0] + b[0]; x2 = a[1] + b[1];, SLP packs these into a single vector instruction.
 
 
+## Potential optimizations
+- xor eax,eax to zero register. Done
+- use LEA for adds. Planned
+
