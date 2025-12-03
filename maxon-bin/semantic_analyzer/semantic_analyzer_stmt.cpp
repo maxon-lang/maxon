@@ -676,6 +676,121 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			}
 		}
 
+	} else if (auto matchStmt = dynamic_cast<MatchStmtAST *>(stmt)) {
+		// Analyze scrutinee expression
+		std::string scrutineeType = analyzeExpression(matchStmt->scrutinee.get());
+
+		// Check for duplicate block identifiers at this scope level
+		declareBlockId(matchStmt->blockId, stmt->line, stmt->column);
+
+		// Track patterns for duplicate detection
+		std::set<std::string> seenPatterns;
+		bool hasDefault = false;
+		bool defaultNotLast = false;
+
+		// Check for exhaustiveness if matching on enum type
+		const EnumInfo *enumInfo = lookupEnum(scrutineeType);
+		std::set<std::string> coveredCases;
+
+		for (size_t i = 0; i < matchStmt->cases.size(); i++) {
+			const auto &matchCase = matchStmt->cases[i];
+
+			// Check default case constraints
+			if (matchCase.isDefault) {
+				if (hasDefault) {
+					addError("Duplicate 'default' case in match statement",
+							 matchCase.line, matchCase.column);
+				}
+				hasDefault = true;
+				if (i != matchStmt->cases.size() - 1) {
+					defaultNotLast = true;
+				}
+			} else {
+				// Analyze each pattern
+				for (const auto &pattern : matchCase.patterns) {
+					std::string patternType = analyzeExpression(pattern.get());
+
+					// Check pattern type matches scrutinee type
+					if (!typesMatch(scrutineeType, patternType)) {
+						addError("Pattern type '" + patternType + "' does not match scrutinee type '" + scrutineeType + "'",
+								 pattern->line, pattern->column);
+					}
+
+					// Check for duplicate patterns (convert to string for comparison)
+					std::string patternStr;
+					if (auto numExpr = dynamic_cast<NumberExprAST *>(pattern.get())) {
+						patternStr = std::to_string(numExpr->value);
+					} else if (auto strExpr = dynamic_cast<StringLiteralExprAST *>(pattern.get())) {
+						patternStr = "\"" + strExpr->value + "\"";
+					} else if (auto memberExpr = dynamic_cast<MemberAccessExprAST *>(pattern.get())) {
+						if (memberExpr->isEnumCase()) {
+							patternStr = memberExpr->resolvedEnumName + "." + memberExpr->resolvedEnumCaseName;
+							coveredCases.insert(memberExpr->resolvedEnumCaseName);
+						} else {
+							patternStr = memberExpr->objectName + "." + memberExpr->memberName;
+							coveredCases.insert(memberExpr->memberName);
+						}
+					}
+
+					if (!patternStr.empty() && seenPatterns.find(patternStr) != seenPatterns.end()) {
+						addError("Duplicate pattern '" + patternStr + "' in match",
+								 pattern->line, pattern->column);
+					}
+					seenPatterns.insert(patternStr);
+				}
+			}
+
+			// Check fallthrough constraints
+			if (matchCase.hasFallthrough) {
+				// Check if statement is a return (not allowed with fallthrough)
+				if (dynamic_cast<ReturnStmtAST *>(matchCase.statement.get())) {
+					addError("Cannot combine 'fallthrough' with 'return' statement",
+							 matchCase.line, matchCase.column);
+				}
+			}
+
+			// Analyze the case statement
+			enterScope();
+			blockIdStack.push_back(std::set<std::string>());
+			analyzeStatement(matchCase.statement.get(), currentFunctionReturnType);
+			blockIdStack.pop_back();
+			checkUnusedVariables();
+			exitScope();
+		}
+
+		// Report default-not-last error
+		if (defaultNotLast) {
+			addError("'default' case must be the last case in match",
+					 stmt->line, stmt->column);
+		}
+
+		// Exhaustiveness check for enum types
+		if (enumInfo != nullptr && !hasDefault) {
+			std::vector<std::string> missingCases;
+			for (const auto &enumCase : enumInfo->cases) {
+				if (coveredCases.find(enumCase.name) == coveredCases.end()) {
+					missingCases.push_back(enumCase.name);
+				}
+			}
+			if (!missingCases.empty()) {
+				std::string missingList;
+				for (size_t i = 0; i < missingCases.size(); i++) {
+					if (i > 0) missingList += ", ";
+					missingList += missingCases[i];
+				}
+				addError("Match on enum '" + scrutineeType + "' is not exhaustive\n  Missing cases: " + missingList,
+						 stmt->line, stmt->column);
+			} else {
+				// All enum cases are covered - mark as exhaustive for return path validation
+				matchStmt->isExhaustive = true;
+			}
+		}
+
+		// If there's a default case, the match is also exhaustive
+		if (hasDefault) {
+			matchStmt->isExhaustive = true;
+		}
+
 	} else if (auto returnStmt = dynamic_cast<ReturnStmtAST *>(stmt)) {
 		// Analyze return value
 		if (returnStmt->value) {

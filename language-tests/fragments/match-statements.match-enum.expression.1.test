@@ -1,0 +1,110 @@
+// Test: match-statements.match-enum.expression.1
+enum Status
+    case pending
+    case approved
+    case rejected
+end 'Status'
+
+function main() int
+    var s = Status.approved
+    let code = match s 'eval'
+        Status.pending gives 0
+        Status.approved gives 1
+        Status.rejected gives 2
+    end 'eval'
+    return code
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 14
+
+define i32 @main() {
+entry0:
+  br label %matchexpr.check.05
+matchexpr.merge1:
+  %13 = phi i32 [ 0, %matchexpr.check.29 ], [ 0, %matchexpr.case.02 ], [ 1, %matchexpr.case.13 ], [ 2, %matchexpr.case.24 ]
+  ret i32 %13
+matchexpr.case.02:
+  br label %matchexpr.merge1
+matchexpr.case.13:
+  br label %matchexpr.merge1
+matchexpr.case.24:
+  br label %matchexpr.merge1
+matchexpr.check.05:
+  br i1 0, label %matchexpr.case.02, label %matchexpr.check.16
+  br label %matchexpr.check.17
+matchexpr.check.16:
+matchexpr.check.17:
+  br i1 1, label %matchexpr.case.13, label %matchexpr.check.28
+  br label %matchexpr.check.29
+matchexpr.check.28:
+matchexpr.check.29:
+  br i1 0, label %matchexpr.case.24, label %matchexpr.merge1
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 32
+
+define i32 @main() {
+entry0:
+  %0 = alloca i8
+  store i8 1, ptr %0
+  %1 = load i8, ptr %0
+  %2 = alloca i8
+  store i8 %1, ptr %2
+  %3 = alloca i32
+  br label %matchexpr.check.05
+matchexpr.merge1:
+  %10 = load i32, ptr %3
+  %11 = alloca i32
+  store i32 %10, ptr %11
+  %12 = load i32, ptr %11
+  ret i32 %12
+matchexpr.case.02:
+  store i32 0, ptr %3
+  br label %matchexpr.merge1
+matchexpr.case.13:
+  store i32 1, ptr %3
+  br label %matchexpr.merge1
+matchexpr.case.24:
+  store i32 2, ptr %3
+  br label %matchexpr.merge1
+matchexpr.check.05:
+  %4 = load i8, ptr %2
+  %5 = icmp eq i8 %4, 0
+  br i1 %5, label %matchexpr.case.02, label %matchexpr.check.16
+  br label %matchexpr.check.17
+matchexpr.check.16:
+matchexpr.check.17:
+  %6 = load i8, ptr %2
+  %7 = icmp eq i8 %6, 1
+  br i1 %7, label %matchexpr.case.13, label %matchexpr.check.28
+  br label %matchexpr.check.29
+matchexpr.check.28:
+matchexpr.check.29:
+  %8 = load i8, ptr %2
+  %9 = icmp eq i8 %8, 2
+  br i1 %9, label %matchexpr.case.24, label %matchexpr.merge1
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 1

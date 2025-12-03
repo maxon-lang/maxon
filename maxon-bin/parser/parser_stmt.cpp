@@ -317,6 +317,10 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 		return parseContinue();
 	}
 
+	if (checkKeyword("match")) {
+		return parseMatch();
+	}
+
 	if (check(TokenType::IDENTIFIER)) {
 		std::string name = std::string(currentValue());
 		int idLine = currentLine();
@@ -428,6 +432,277 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 	}
 
 	reportError("Unexpected token: " + foundStr +
-				"\n  Note: Expected a statement (var, let, if, while, return, break, continue, or assignment)",
+				"\n  Note: Expected a statement (var, let, if, while, return, break, continue, match, or assignment)",
 				currentLine(), currentColumn());
+}
+
+std::unique_ptr<MatchStmtAST> Parser::parseMatch() {
+	Token matchToken = expectKeyword("match", "Expected 'match'");
+
+	// Parse scrutinee expression
+	auto scrutinee = parseLogicalOr();
+
+	// Require block identifier
+	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after match expression");
+	std::string blockId = blockIdToken.value;
+
+	std::vector<MatchCaseAST> cases;
+
+	// Parse cases until 'end'
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+		int caseLine = currentLine();
+		int caseColumn = currentColumn();
+
+		std::vector<std::unique_ptr<ExprAST>> patterns;
+		bool isDefault = false;
+
+		// Check for 'default' case
+		if (checkKeyword("default")) {
+			advance(); // consume 'default'
+			isDefault = true;
+		} else {
+			// Parse first pattern (use parseLogicalAnd to stop before 'or' keyword)
+			patterns.push_back(parseLogicalAnd());
+
+			// Parse additional patterns joined by 'or'
+			while (checkKeyword("or")) {
+				advance(); // consume 'or'
+				patterns.push_back(parseLogicalAnd());
+			}
+		}
+
+		// Expect 'then' keyword
+		expectKeywordAdvance("then", "Expected 'then' after pattern");
+
+		// Parse single statement (use special parser that stops before 'and fallthrough')
+		auto stmt = parseMatchCaseStatement();
+
+		// Check for 'and fallthrough'
+		bool hasFallthrough = false;
+		if (checkKeyword("and")) {
+			advance(); // consume 'and'
+			expectKeywordAdvance("fallthrough", "Expected 'fallthrough' after 'and'");
+			hasFallthrough = true;
+		}
+
+		cases.push_back(MatchCaseAST(
+			std::move(patterns),
+			std::move(stmt),
+			nullptr, // no result expression for match statement
+			isDefault,
+			hasFallthrough,
+			caseLine,
+			caseColumn));
+	}
+
+	expectKeywordAdvance("end", "Expected 'end' to close match statement");
+
+	// Require matching block identifier after end
+	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end'");
+	if (endBlockIdToken.value != blockId) {
+		reportError("Block identifier mismatch in match statement\n  Expected: '" + blockId +
+					"'\n  Found: '" + endBlockIdToken.value + "'",
+					endBlockIdToken.line, endBlockIdToken.column);
+	}
+
+	return std::make_unique<MatchStmtAST>(std::move(scrutinee), std::move(cases),
+										   matchToken.line, matchToken.column, blockId);
+}
+
+std::unique_ptr<MatchExprAST> Parser::parseMatchExpr() {
+	Token matchToken = expectKeyword("match", "Expected 'match'");
+
+	// Parse scrutinee expression
+	auto scrutinee = parseLogicalOr();
+
+	// Require block identifier
+	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after match expression");
+	std::string blockId = blockIdToken.value;
+
+	std::vector<MatchCaseAST> cases;
+
+	// Parse cases until 'end'
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+		int caseLine = currentLine();
+		int caseColumn = currentColumn();
+
+		std::vector<std::unique_ptr<ExprAST>> patterns;
+		bool isDefault = false;
+
+		// Check for 'default' case
+		if (checkKeyword("default")) {
+			advance(); // consume 'default'
+			isDefault = true;
+		} else {
+			// Parse first pattern (use parseLogicalAnd to stop before 'or' keyword)
+			patterns.push_back(parseLogicalAnd());
+
+			// Parse additional patterns joined by 'or'
+			while (checkKeyword("or")) {
+				advance(); // consume 'or'
+				patterns.push_back(parseLogicalAnd());
+			}
+		}
+
+		// Expect 'gives' keyword
+		expectKeywordAdvance("gives", "Expected 'gives' after pattern");
+
+		// Parse result expression
+		auto resultExpr = parseLogicalOr();
+
+		cases.push_back(MatchCaseAST(
+			std::move(patterns),
+			nullptr, // no statement for match expression
+			std::move(resultExpr),
+			isDefault,
+			false, // fallthrough not allowed in match expressions
+			caseLine,
+			caseColumn));
+	}
+
+	expectKeywordAdvance("end", "Expected 'end' to close match expression");
+
+	// Require matching block identifier after end
+	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end'");
+	if (endBlockIdToken.value != blockId) {
+		reportError("Block identifier mismatch in match expression\n  Expected: '" + blockId +
+					"'\n  Found: '" + endBlockIdToken.value + "'",
+					endBlockIdToken.line, endBlockIdToken.column);
+	}
+
+	return std::make_unique<MatchExprAST>(std::move(scrutinee), std::move(cases),
+										   matchToken.line, matchToken.column, blockId);
+}
+
+std::unique_ptr<StmtAST> Parser::parseMatchCaseStatement() {
+	// Parse match case statement which can be:
+	// - return expr
+	// - var/let decl
+	// - assignment (identifier = expr)
+	// - function call
+	// The key difference from parseStatement is that we stop expression parsing
+	// before 'and' (to support "stmt and fallthrough" syntax)
+	// We use parseBitwiseOr() which is one level below parseLogicalAnd()
+
+	if (checkKeyword("return")) {
+		// Return statements need special handling to stop before 'and fallthrough'
+		Token returnToken = expectKeyword("return", "Expected 'return'");
+
+		// Check if this is a bare return (for void functions)
+		std::unique_ptr<ExprAST> value = nullptr;
+		if (!checkKeyword("end") && !checkKeyword("and") && !check(TokenType::END_OF_FILE)) {
+			// Use parseBitwiseOr to stop before 'and fallthrough'
+			value = parseBitwiseOr();
+		}
+
+		return std::make_unique<ReturnStmtAST>(std::move(value), returnToken.line, returnToken.column);
+	}
+
+	if (checkKeyword("var")) {
+		// Var decl needs special handling to stop before 'and fallthrough'
+		Token varToken = expectKeyword("var", "Expected 'var'");
+		Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
+		std::string type = "";
+		expectAdvance(TokenType::ASSIGN, "Expected '='");
+		auto initializer = parseBitwiseOr(); // Stop before 'and fallthrough'
+		return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer), type, varToken.line, varToken.column);
+	}
+
+	if (checkKeyword("let")) {
+		// Let decl needs special handling to stop before 'and fallthrough'
+		Token letToken = expectKeyword("let", "Expected 'let'");
+		Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
+		std::string type = "";
+		expectAdvance(TokenType::ASSIGN, "Expected '='");
+		auto initializer = parseBitwiseOr(); // Stop before 'and fallthrough'
+		return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer), type, letToken.line, letToken.column);
+	}
+
+	// For identifier-based statements (assignments, function calls), we need to
+	// parse expressions using parseBitwiseOr to stop before 'and' keyword
+	if (check(TokenType::IDENTIFIER)) {
+		std::string name = std::string(currentValue());
+		int idLine = currentLine();
+		int idColumn = currentColumn();
+		advance();
+
+		// Check for assignment
+		if (check(TokenType::ASSIGN)) {
+			Token assignToken = expect(TokenType::ASSIGN, "Expected '='");
+			// Parse RHS using parseBitwiseOr to stop before 'and fallthrough'
+			auto value = parseBitwiseOr();
+			return std::make_unique<AssignStmtAST>(name, std::move(value), assignToken.line, assignToken.column);
+		}
+
+		// Check for member access (struct.field = value)
+		if (check(TokenType::DOT)) {
+			advance(); // consume '.'
+			Token memberName = expect(TokenType::IDENTIFIER, "Expected identifier after '.'");
+
+			// Check for array index on member
+			if (check(TokenType::LBRACKET)) {
+				advance(); // consume '['
+				auto index = parseBitwiseOr();
+				expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
+
+				if (check(TokenType::ASSIGN)) {
+					advance(); // consume '='
+					auto value = parseBitwiseOr();
+					return std::make_unique<MemberArrayAssignStmtAST>(
+						name, memberName.value, std::move(index), std::move(value),
+						idLine, idColumn);
+				}
+			}
+
+			// Check for member assignment
+			if (check(TokenType::ASSIGN)) {
+				advance(); // consume '='
+				auto value = parseBitwiseOr();
+				return std::make_unique<MemberAssignStmtAST>(
+					name, memberName.value, std::move(value),
+					idLine, idColumn);
+			}
+		}
+
+		// Check for array index assignment
+		if (check(TokenType::LBRACKET)) {
+			advance(); // consume '['
+			auto index = parseBitwiseOr();
+			expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
+
+			if (check(TokenType::ASSIGN)) {
+				advance(); // consume '='
+				auto value = parseBitwiseOr();
+				return std::make_unique<ArrayAssignStmtAST>(
+					name, std::move(index), std::move(value),
+					idLine, idColumn);
+			}
+		}
+
+		// Function call - create variable expression and wrap in expression statement
+		// (not common in match cases but support it for completeness)
+		auto varExpr = std::make_unique<VariableExprAST>(name, idLine, idColumn);
+		if (check(TokenType::LPAREN)) {
+			// It's a function call - need to handle this
+			advance(); // consume '('
+			std::vector<std::unique_ptr<ExprAST>> args;
+			if (!check(TokenType::RPAREN)) {
+				args.push_back(parseBitwiseOr());
+				while (check(TokenType::COMMA)) {
+					advance();
+					args.push_back(parseBitwiseOr());
+				}
+			}
+			expectAdvance(TokenType::RPAREN, "Expected ')' after function arguments");
+			auto callExpr = std::make_unique<CallExprAST>(name, std::move(args), idLine, idColumn);
+			return std::make_unique<ExprStmtAST>(std::move(callExpr), idLine, idColumn);
+		}
+
+		// Just a bare expression statement
+		return std::make_unique<ExprStmtAST>(std::move(varExpr), idLine, idColumn);
+	}
+
+	// Fallback to generic expression statement
+	auto expr = parseBitwiseOr();
+	return std::make_unique<ExprStmtAST>(std::move(expr), expr->line, expr->column);
 }

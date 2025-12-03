@@ -1,0 +1,82 @@
+// Test: match-statements.match-statements.first-case.1
+function main() int
+    var x = 1
+    match x 'check'
+        1 then return 10
+        2 then return 20
+        default then return 0
+    end 'check'
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 10
+
+define i32 @main() {
+entry0:
+  br label %match.check.05
+match.case.02:
+  ret i32 10
+match.case.13:
+  ret i32 20
+match.case.24:
+  ret i32 0
+match.check.05:
+  br i1 1, label %match.case.02, label %match.check.16
+  br label %match.check.17
+match.check.16:
+match.check.17:
+  br i1 0, label %match.case.13, label %match.case.24
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 20
+
+define i32 @main() {
+entry0:
+  %0 = alloca i32
+  store i32 1, ptr %0
+  %1 = load i32, ptr %0
+  %2 = alloca i32
+  store i32 %1, ptr %2
+  br label %match.check.05
+match.merge1:
+  ret i32 0
+match.case.02:
+  ret i32 10
+match.case.13:
+  ret i32 20
+match.case.24:
+  ret i32 0
+match.check.05:
+  %3 = load i32, ptr %2
+  %4 = icmp eq i32 %3, 1
+  br i1 %4, label %match.case.02, label %match.check.16
+  br label %match.check.17
+match.check.16:
+match.check.17:
+  %5 = load i32, ptr %2
+  %6 = icmp eq i32 %5, 2
+  br i1 %6, label %match.case.13, label %match.case.24
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 10

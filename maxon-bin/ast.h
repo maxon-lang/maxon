@@ -632,6 +632,67 @@ class EnumCaseExprAST : public ExprAST {
 		: ExprAST(l, c), enumName(eName), caseName(cName), arguments(std::move(args)) {}
 };
 
+// Match case for match statement/expression
+// Each case contains one or more patterns (via 'or'), and either:
+// - A single statement (for match statements) with optional fallthrough
+// - A single expression (for match expressions) that returns a value
+struct MatchCaseAST {
+	std::vector<std::unique_ptr<ExprAST>> patterns; // One or more patterns (via 'or')
+	std::unique_ptr<StmtAST> statement;				// Single statement (for match statement, null for expression)
+	std::unique_ptr<ExprAST> resultExpr;			// Result expression (for match expression, null for statement)
+	bool isDefault;									// true for 'default' case
+	bool hasFallthrough;							// true if case ends with 'and fallthrough'
+	int line;
+	int column;
+
+	MatchCaseAST(std::vector<std::unique_ptr<ExprAST>> pats,
+				 std::unique_ptr<StmtAST> stmt,
+				 std::unique_ptr<ExprAST> expr,
+				 bool isDef, bool fallthrough,
+				 int l = 0, int c = 0)
+		: patterns(std::move(pats)), statement(std::move(stmt)),
+		  resultExpr(std::move(expr)), isDefault(isDef),
+		  hasFallthrough(fallthrough), line(l), column(c) {}
+};
+
+// Match statement
+// Syntax: match expr 'label' ... end 'label'
+// Each case: pattern then statement [and fallthrough]
+// Or: default then statement
+class MatchStmtAST : public StmtAST {
+  public:
+	std::unique_ptr<ExprAST> scrutinee;		// The expression being matched
+	std::vector<MatchCaseAST> cases;		// Match cases
+	std::string blockId;					// Block identifier
+	bool isExhaustive = false;				// Set by semantic analyzer for exhaustive enum matches
+
+	MatchStmtAST(std::unique_ptr<ExprAST> scrut,
+				 std::vector<MatchCaseAST> cs,
+				 int l = 0, int c = 0,
+				 const std::string &bid = "")
+		: StmtAST(l, c), scrutinee(std::move(scrut)),
+		  cases(std::move(cs)), blockId(bid) {}
+};
+
+// Match expression
+// Syntax: match expr 'label' ... end 'label'
+// Each case: pattern gives expr
+// Or: default gives expr
+// Used as an expression (returns a value)
+class MatchExprAST : public ExprAST {
+  public:
+	std::unique_ptr<ExprAST> scrutinee;		// The expression being matched
+	std::vector<MatchCaseAST> cases;		// Match cases
+	std::string blockId;					// Block identifier
+
+	MatchExprAST(std::unique_ptr<ExprAST> scrut,
+				 std::vector<MatchCaseAST> cs,
+				 int l = 0, int c = 0,
+				 const std::string &bid = "")
+		: ExprAST(l, c), scrutinee(std::move(scrut)),
+		  cases(std::move(cs)), blockId(bid) {}
+};
+
 // If-case statement for enum pattern matching
 // Syntax: if case caseName(binding1, binding2) = expr 'label' ... end 'label'
 class IfCaseStmtAST : public StmtAST {

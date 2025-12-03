@@ -489,3 +489,255 @@ void MIRCodeGenerator::generateContinue(ContinueStmtAST *continueStmt, mir::MIRF
 	mir::MIRBasicBlock *deadBB = builder->createBasicBlock("aftercontinue");
 	builder->setInsertPoint(deadBB);
 }
+
+void MIRCodeGenerator::generateMatch(MatchStmtAST *matchStmt, mir::MIRFunction *function) {
+	// Evaluate scrutinee once and store
+	mir::MIRValue *scrutineeVal = generateExpr(matchStmt->scrutinee.get());
+	if (!scrutineeVal) {
+		reportError("Failed to generate match scrutinee",
+					matchStmt->line, matchStmt->column);
+	}
+
+	mir::MIRValue *scrutineeAlloca = builder->createAlloca(scrutineeVal->type, "match.scrutinee");
+	builder->createStore(scrutineeVal, scrutineeAlloca);
+
+	// Create merge block (where all cases join)
+	mir::MIRBasicBlock *mergeBB = builder->createBasicBlock("match.merge");
+
+	// Create blocks for each case body
+	std::vector<mir::MIRBasicBlock *> caseBodyBlocks;
+	for (size_t i = 0; i < matchStmt->cases.size(); i++) {
+		caseBodyBlocks.push_back(builder->createBasicBlock("match.case." + std::to_string(i)));
+	}
+
+	// Find default case index (if any)
+	int defaultIndex = -1;
+	for (size_t i = 0; i < matchStmt->cases.size(); i++) {
+		if (matchStmt->cases[i].isDefault) {
+			defaultIndex = static_cast<int>(i);
+			break;
+		}
+	}
+
+	// The fallback block is either default case or merge block
+	mir::MIRBasicBlock *fallbackBB = (defaultIndex >= 0) ? caseBodyBlocks[defaultIndex] : mergeBB;
+
+	// Generate pattern checks (chain of comparisons)
+	for (size_t i = 0; i < matchStmt->cases.size(); i++) {
+		const auto &matchCase = matchStmt->cases[i];
+
+		// Skip default case in pattern check phase - it's the fallback
+		if (matchCase.isDefault) {
+			continue;
+		}
+
+		// Create check block for this case
+		mir::MIRBasicBlock *checkBB = builder->createBasicBlock("match.check." + std::to_string(i));
+		builder->createBr(checkBB);
+		builder->setInsertPoint(checkBB);
+
+		// Reload scrutinee
+		mir::MIRValue *scrutinee = builder->createLoad(scrutineeVal->type, scrutineeAlloca, "scrutinee");
+
+		// Generate OR'd comparison for all patterns in this case
+		mir::MIRValue *cmpResult = nullptr;
+		for (const auto &pattern : matchCase.patterns) {
+			mir::MIRValue *patternVal = generateExpr(pattern.get());
+			if (!patternVal) {
+				reportError("Failed to generate match pattern",
+							pattern->line, pattern->column);
+			}
+
+			// Generate comparison based on type
+			mir::MIRValue *cmp = nullptr;
+			if (scrutinee->type == mir::MIRType::getInt32() ||
+				scrutinee->type == mir::MIRType::getInt8() ||
+				scrutinee->type == mir::MIRType::getInt1()) {
+				cmp = builder->createICmpEq(scrutinee, patternVal, "match.cmp");
+			} else if (scrutinee->type->isStruct() && scrutinee->type->structName == "string") {
+				// String comparison - call string.equals from stdlib
+				mir::MIRFunction *strEquals = module->getFunction("string.equals");
+				if (!strEquals) {
+					reportError("string.equals function not found - ensure stdlib is imported",
+						matchStmt->line, matchStmt->column);
+				}
+				cmp = builder->createCall(strEquals, {scrutineeAlloca, patternVal}, "match.strcmp");
+			} else {
+				// Default to integer comparison
+				cmp = builder->createICmpEq(scrutinee, patternVal, "match.cmp");
+			}
+
+			if (cmpResult == nullptr) {
+				cmpResult = cmp;
+			} else {
+				cmpResult = builder->createOr(cmpResult, cmp, "match.orcmp");
+			}
+		}
+
+		// Determine next check block
+		mir::MIRBasicBlock *nextCheckBB = fallbackBB;
+		for (size_t j = i + 1; j < matchStmt->cases.size(); j++) {
+			if (!matchStmt->cases[j].isDefault) {
+				nextCheckBB = builder->createBasicBlock("match.check." + std::to_string(j));
+				break;
+			}
+		}
+
+		builder->createCondBr(cmpResult, caseBodyBlocks[i], nextCheckBB);
+	}
+
+	// Generate case bodies
+	for (size_t i = 0; i < matchStmt->cases.size(); i++) {
+		const auto &matchCase = matchStmt->cases[i];
+
+		builder->setInsertPoint(caseBodyBlocks[i]);
+
+		// Generate case statement
+		if (matchCase.statement) {
+			generateStmt(matchCase.statement.get(), function);
+		}
+
+		// Check if we need to branch (no terminator yet)
+		if (!builder->getInsertBlock()->hasTerminator()) {
+			if (matchCase.hasFallthrough && i + 1 < matchStmt->cases.size()) {
+				// Fallthrough: branch to next case body
+				builder->createBr(caseBodyBlocks[i + 1]);
+			} else {
+				// Normal case: branch to merge
+				builder->createBr(mergeBB);
+			}
+		}
+	}
+
+	// Set insert point to merge block
+	builder->setInsertPoint(mergeBB);
+}
+
+mir::MIRValue *MIRCodeGenerator::generateMatchExpr(MatchExprAST *matchExpr) {
+	// Evaluate scrutinee once and store
+	mir::MIRValue *scrutineeVal = generateExpr(matchExpr->scrutinee.get());
+	if (!scrutineeVal) {
+		reportError("Failed to generate match expression scrutinee",
+					matchExpr->line, matchExpr->column);
+	}
+
+	mir::MIRValue *scrutineeAlloca = builder->createAlloca(scrutineeVal->type, "matchexpr.scrutinee");
+	builder->createStore(scrutineeVal, scrutineeAlloca);
+
+	// Determine result type from first case
+	mir::MIRType *resultType = nullptr;
+	if (!matchExpr->cases.empty() && matchExpr->cases[0].resultExpr) {
+		mir::MIRValue *firstResult = generateExpr(matchExpr->cases[0].resultExpr.get());
+		resultType = firstResult->type;
+	}
+	if (!resultType) {
+		reportError("Match expression must have at least one case with result",
+					matchExpr->line, matchExpr->column);
+	}
+
+	// Create result alloca
+	mir::MIRValue *resultAlloca = builder->createAlloca(resultType, "matchexpr.result");
+
+	// Create merge block
+	mir::MIRBasicBlock *mergeBB = builder->createBasicBlock("matchexpr.merge");
+
+	// Create blocks for each case body
+	std::vector<mir::MIRBasicBlock *> caseBodyBlocks;
+	for (size_t i = 0; i < matchExpr->cases.size(); i++) {
+		caseBodyBlocks.push_back(builder->createBasicBlock("matchexpr.case." + std::to_string(i)));
+	}
+
+	// Find default case index (if any)
+	int defaultIndex = -1;
+	for (size_t i = 0; i < matchExpr->cases.size(); i++) {
+		if (matchExpr->cases[i].isDefault) {
+			defaultIndex = static_cast<int>(i);
+			break;
+		}
+	}
+
+	// The fallback block is either default case or merge block
+	mir::MIRBasicBlock *fallbackBB = (defaultIndex >= 0) ? caseBodyBlocks[defaultIndex] : mergeBB;
+
+	// Generate pattern checks (chain of comparisons)
+	for (size_t i = 0; i < matchExpr->cases.size(); i++) {
+		const auto &matchCase = matchExpr->cases[i];
+
+		// Skip default case in pattern check phase
+		if (matchCase.isDefault) {
+			continue;
+		}
+
+		// Create check block for this case
+		mir::MIRBasicBlock *checkBB = builder->createBasicBlock("matchexpr.check." + std::to_string(i));
+		builder->createBr(checkBB);
+		builder->setInsertPoint(checkBB);
+
+		// Reload scrutinee
+		mir::MIRValue *scrutinee = builder->createLoad(scrutineeVal->type, scrutineeAlloca, "scrutinee");
+
+		// Generate OR'd comparison for all patterns in this case
+		mir::MIRValue *cmpResult = nullptr;
+		for (const auto &pattern : matchCase.patterns) {
+			mir::MIRValue *patternVal = generateExpr(pattern.get());
+			if (!patternVal) {
+				reportError("Failed to generate match pattern",
+							pattern->line, pattern->column);
+			}
+
+			// Generate comparison based on type
+			mir::MIRValue *cmp = nullptr;
+			if (scrutinee->type == mir::MIRType::getInt32() ||
+				scrutinee->type == mir::MIRType::getInt8() ||
+				scrutinee->type == mir::MIRType::getInt1()) {
+				cmp = builder->createICmpEq(scrutinee, patternVal, "matchexpr.cmp");
+			} else if (scrutinee->type->isStruct() && scrutinee->type->structName == "string") {
+				// String comparison - call string.equals from stdlib
+				mir::MIRFunction *strEquals = module->getFunction("string.equals");
+				if (!strEquals) {
+					reportError("string.equals function not found - ensure stdlib is imported",
+						matchExpr->line, matchExpr->column);
+				}
+				cmp = builder->createCall(strEquals, {scrutineeAlloca, patternVal}, "matchexpr.strcmp");
+			} else {
+				cmp = builder->createICmpEq(scrutinee, patternVal, "matchexpr.cmp");
+			}
+
+			if (cmpResult == nullptr) {
+				cmpResult = cmp;
+			} else {
+				cmpResult = builder->createOr(cmpResult, cmp, "matchexpr.orcmp");
+			}
+		}
+
+		// Determine next check block
+		mir::MIRBasicBlock *nextCheckBB = fallbackBB;
+		for (size_t j = i + 1; j < matchExpr->cases.size(); j++) {
+			if (!matchExpr->cases[j].isDefault) {
+				nextCheckBB = builder->createBasicBlock("matchexpr.check." + std::to_string(j));
+				break;
+			}
+		}
+
+		builder->createCondBr(cmpResult, caseBodyBlocks[i], nextCheckBB);
+	}
+
+	// Generate case bodies
+	for (size_t i = 0; i < matchExpr->cases.size(); i++) {
+		const auto &matchCase = matchExpr->cases[i];
+
+		builder->setInsertPoint(caseBodyBlocks[i]);
+
+		// Generate result expression and store
+		if (matchCase.resultExpr) {
+			mir::MIRValue *caseResult = generateExpr(matchCase.resultExpr.get());
+			builder->createStore(caseResult, resultAlloca);
+		}
+
+		builder->createBr(mergeBB);
+	}
+
+	// Set insert point to merge block and load result
+	builder->setInsertPoint(mergeBB);
+	return builder->createLoad(resultType, resultAlloca, "matchexpr.result");
+}

@@ -89,6 +89,11 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		return;
 	}
 
+	if (auto *matchStmt = dynamic_cast<MatchStmtAST *>(stmt)) {
+		generateMatch(matchStmt, function);
+		return;
+	}
+
 	if (auto *retStmt = dynamic_cast<ReturnStmtAST *>(stmt)) {
 		mir::MIRValue *retVal = nullptr;
 

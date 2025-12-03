@@ -67,9 +67,9 @@ Single-line comments only:
 
 ### Keywords
 ```
-and, as, bool, break, case, continue, else, end, enum, export, extern,
-false, float, for, function, if, in, int, interface, is, let, nil, not, or,
-return, struct, then, true, var, while
+and, as, bool, break, case, continue, default, else, end, enum, export, extern,
+fallthrough, false, float, for, function, gives, if, in, int, interface, is, let, match,
+nil, not, or, return, struct, then, true, var, while
 ```
 
 ### Literals
@@ -1018,6 +1018,80 @@ end 'loop'
 - Currently supports ranges (`start..end`)
 - Desugars to while loop with iterator interface
 
+### Match Statement
+
+Match statements provide pattern matching on values, executing different code based on the matched pattern. Each case is a single line with exactly one statement.
+
+**Syntax**
+```maxon
+match expression 'label'
+    pattern then statement
+    pattern1 or pattern2 then statement
+    pattern then statement and fallthrough
+    default then statement
+end 'label'
+```
+
+**Example:**
+```maxon
+var x = 2
+match x 'check'
+    1 then return 10
+    2 or 3 then return 20
+    default then return 0
+end 'check'
+```
+
+**With Fallthrough:**
+```maxon
+var result = 0
+match x 'cascade'
+    1 then result = result + 10 and fallthrough
+    2 then result = result + 20
+    default then result = 100
+end 'cascade'
+```
+
+When `x = 1`, the first case matches, adds 10, then falls through to case 2 (adds 20), giving a total of 30.
+
+**Notes:**
+- Block identifier required after `match expression` and on `end`
+- Each case is a single line with one statement
+- Multiple patterns can be combined with `or`
+- `and fallthrough` continues to the next case (skipping its pattern check)
+- `and fallthrough` cannot be combined with `return`
+- For enums, all cases must be covered unless `default` is present
+- `default` must be the last case if present
+
+### Match Expression
+
+Match expressions return a value and can be assigned to variables. Use `gives` instead of `then`:
+
+**Syntax**
+```maxon
+let result = match expression 'label'
+    pattern1 gives value1
+    pattern2 or pattern3 gives value2
+    default gives defaultValue
+end 'label'
+```
+
+**Example:**
+```maxon
+var grade = "B"
+let points = match grade 'convert'
+    "A" gives 4
+    "B" gives 3
+    "C" gives 2
+    default gives 0
+end 'convert'
+```
+
+**Notes:**
+- All cases must return the same type
+- `and fallthrough` is NOT allowed in match expressions
+- Block identifier required
+
 ### Break Statement
 ```maxon
 break           // Break from innermost loop
@@ -1382,6 +1456,8 @@ if condition 'id' statements end 'id'
 if condition 'id' statements else 'id' statements end 'id'
 while condition 'id' statements end 'id'
 for var in iterable 'id' statements end 'id'
+match expr 'id' pattern then statement default then statement end 'id'
+var x = match expr 'id' pattern gives value default gives value end 'id'
 break
 continue
 

@@ -1,0 +1,93 @@
+// Test: match-statements.match-statements.assignment.1
+function main() int
+    var x = 2
+    var result = 0
+    match x 'process'
+        1 then result = 100
+        2 then result = 200
+        default then result = 0
+    end 'process'
+    return result
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 12
+
+define i32 @main() {
+entry0:
+  br label %match.check.05
+match.merge1:
+  %9 = phi i32 [ 100, %match.case.02 ], [ 200, %match.case.13 ], [ 0, %match.case.24 ]
+  ret i32 %9
+match.case.02:
+  br label %match.merge1
+match.case.13:
+  br label %match.merge1
+match.case.24:
+  br label %match.merge1
+match.check.05:
+  br i1 0, label %match.case.02, label %match.check.16
+  br label %match.check.17
+match.check.16:
+match.check.17:
+  br i1 1, label %match.case.13, label %match.case.24
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 26
+
+define i32 @main() {
+entry0:
+  %0 = alloca i32
+  store i32 2, ptr %0
+  %1 = alloca i32
+  store i32 0, ptr %1
+  %2 = load i32, ptr %0
+  %3 = alloca i32
+  store i32 %2, ptr %3
+  br label %match.check.05
+match.merge1:
+  %8 = load i32, ptr %1
+  ret i32 %8
+match.case.02:
+  store i32 100, ptr %1
+  br label %match.merge1
+match.case.13:
+  store i32 200, ptr %1
+  br label %match.merge1
+match.case.24:
+  store i32 0, ptr %1
+  br label %match.merge1
+match.check.05:
+  %4 = load i32, ptr %3
+  %5 = icmp eq i32 %4, 1
+  br i1 %5, label %match.case.02, label %match.check.16
+  br label %match.check.17
+match.check.16:
+match.check.17:
+  %6 = load i32, ptr %3
+  %7 = icmp eq i32 %6, 2
+  br i1 %7, label %match.case.13, label %match.case.24
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 200

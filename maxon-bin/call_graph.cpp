@@ -185,6 +185,25 @@ void CallGraphBuilder::extractCallsFromStmt(StmtAST *stmt, std::set<std::string>
 		if (exprStmt->expression) {
 			extractCallsFromExpr(exprStmt->expression.get(), calls);
 		}
+	} else if (auto *matchStmt = dynamic_cast<MatchStmtAST *>(stmt)) {
+		// Extract calls from scrutinee expression
+		if (matchStmt->scrutinee) {
+			extractCallsFromExpr(matchStmt->scrutinee.get(), calls);
+		}
+		// Match on strings implicitly calls string.equals
+		calls.insert("equals");
+		calls.insert("string.equals");
+		// Process each match case
+		for (const auto &matchCase : matchStmt->cases) {
+			// Extract calls from patterns
+			for (const auto &pattern : matchCase.patterns) {
+				extractCallsFromExpr(pattern.get(), calls);
+			}
+			// Extract calls from case statement
+			if (matchCase.statement) {
+				extractCallsFromStmt(matchCase.statement.get(), calls);
+			}
+		}
 	}
 	// BreakStmtAST and ContinueStmtAST don't contain expressions
 }
@@ -248,6 +267,25 @@ void CallGraphBuilder::extractCallsFromExpr(ExprAST *expr, std::set<std::string>
 		}
 		if (slice->end) {
 			extractCallsFromExpr(slice->end.get(), calls);
+		}
+	} else if (auto *matchExpr = dynamic_cast<MatchExprAST *>(expr)) {
+		// Extract calls from scrutinee expression
+		if (matchExpr->scrutinee) {
+			extractCallsFromExpr(matchExpr->scrutinee.get(), calls);
+		}
+		// Match on strings implicitly calls string.equals
+		calls.insert("equals");
+		calls.insert("string.equals");
+		// Process each match case
+		for (const auto &matchCase : matchExpr->cases) {
+			// Extract calls from patterns
+			for (const auto &pattern : matchCase.patterns) {
+				extractCallsFromExpr(pattern.get(), calls);
+			}
+			// Extract calls from result expression
+			if (matchCase.resultExpr) {
+				extractCallsFromExpr(matchCase.resultExpr.get(), calls);
+			}
 		}
 	}
 	// NumberExprAST, FloatExprAST, VariableExprAST, BooleanExprAST,

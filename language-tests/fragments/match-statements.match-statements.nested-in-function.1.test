@@ -1,0 +1,115 @@
+// Test: match-statements.match-statements.nested-in-function.1
+function categorize(n int) int
+    match n 'cat'
+        1 or 2 or 3 then return 1
+        4 or 5 or 6 then return 2
+        default then return 0
+    end 'cat'
+end 'categorize'
+
+function main() int
+    return categorize(5)
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 22
+
+define i32 @categorize(i32 %n) {
+entry0:
+  br label %match.check.05
+match.case.02:
+  ret i32 1
+match.case.13:
+  ret i32 2
+match.case.24:
+  ret i32 0
+match.check.05:
+  %4 = icmp eq i32 %n, 1
+  %5 = icmp eq i32 %n, 2
+  %6 = or i1 %4, %5
+  %7 = icmp eq i32 %n, 3
+  %8 = or i1 %6, %7
+  br i1 %8, label %match.case.02, label %match.check.16
+  br label %match.check.17
+match.check.16:
+match.check.17:
+  %10 = icmp eq i32 %n, 4
+  %11 = icmp eq i32 %n, 5
+  %12 = or i1 %10, %11
+  %13 = icmp eq i32 %n, 6
+  %14 = or i1 %12, %13
+  br i1 %14, label %match.case.13, label %match.case.24
+}
+
+define i32 @main() {
+entry0:
+  %0 = call i32 @categorize(i32 5)
+  ret i32 %0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 30
+
+define i32 @categorize(i32 %n) {
+entry0:
+  %0 = alloca i32
+  store i32 %n, ptr %0
+  %1 = load i32, ptr %0
+  %2 = alloca i32
+  store i32 %1, ptr %2
+  br label %match.check.05
+match.merge1:
+  ret i32 0
+match.case.02:
+  ret i32 1
+match.case.13:
+  ret i32 2
+match.case.24:
+  ret i32 0
+match.check.05:
+  %3 = load i32, ptr %2
+  %4 = icmp eq i32 %3, 1
+  %5 = icmp eq i32 %3, 2
+  %6 = or i1 %4, %5
+  %7 = icmp eq i32 %3, 3
+  %8 = or i1 %6, %7
+  br i1 %8, label %match.case.02, label %match.check.16
+  br label %match.check.17
+match.check.16:
+match.check.17:
+  %9 = load i32, ptr %2
+  %10 = icmp eq i32 %9, 4
+  %11 = icmp eq i32 %9, 5
+  %12 = or i1 %10, %11
+  %13 = icmp eq i32 %9, 6
+  %14 = or i1 %12, %13
+  br i1 %14, label %match.case.13, label %match.case.24
+}
+
+define i32 @main() {
+entry0:
+  %0 = call i32 @categorize(i32 5)
+  ret i32 %0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 2

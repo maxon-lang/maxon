@@ -1183,6 +1183,118 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Note: IfCaseStmtAST is a statement, not an expression, so this shouldn't be hit
 		// But handle it gracefully if it does appear as an expression
 		return "void";
+	} else if (auto matchExpr = dynamic_cast<MatchExprAST *>(expr)) {
+		// Analyze scrutinee expression
+		std::string scrutineeType = analyzeExpression(matchExpr->scrutinee.get());
+
+		// Track patterns for duplicate detection
+		std::set<std::string> seenPatterns;
+		bool hasDefault = false;
+		bool defaultNotLast = false;
+
+		// Check for exhaustiveness if matching on enum type
+		const EnumInfo *enumInfo = lookupEnum(scrutineeType);
+		std::set<std::string> coveredCases;
+
+		// Track result type for type consistency
+		std::string resultType;
+		bool firstCase = true;
+
+		for (size_t i = 0; i < matchExpr->cases.size(); i++) {
+			const auto &matchCase = matchExpr->cases[i];
+
+			// Check default case constraints
+			if (matchCase.isDefault) {
+				if (hasDefault) {
+					addError("Duplicate 'default' case in match expression",
+							 matchCase.line, matchCase.column);
+				}
+				hasDefault = true;
+				if (i != matchExpr->cases.size() - 1) {
+					defaultNotLast = true;
+				}
+			} else {
+				// Analyze each pattern
+				for (const auto &pattern : matchCase.patterns) {
+					std::string patternType = analyzeExpression(pattern.get());
+
+					// Check pattern type matches scrutinee type
+					if (!typesMatch(scrutineeType, patternType)) {
+						addError("Pattern type '" + patternType + "' does not match scrutinee type '" + scrutineeType + "'",
+								 pattern->line, pattern->column);
+					}
+
+					// Check for duplicate patterns (convert to string for comparison)
+					std::string patternStr;
+					if (auto numExpr = dynamic_cast<NumberExprAST *>(pattern.get())) {
+						patternStr = std::to_string(numExpr->value);
+					} else if (auto strExpr = dynamic_cast<StringLiteralExprAST *>(pattern.get())) {
+						patternStr = "\"" + strExpr->value + "\"";
+					} else if (auto memberExpr = dynamic_cast<MemberAccessExprAST *>(pattern.get())) {
+						if (memberExpr->isEnumCase()) {
+							patternStr = memberExpr->resolvedEnumName + "." + memberExpr->resolvedEnumCaseName;
+							coveredCases.insert(memberExpr->resolvedEnumCaseName);
+						} else {
+							patternStr = memberExpr->objectName + "." + memberExpr->memberName;
+							coveredCases.insert(memberExpr->memberName);
+						}
+					}
+
+					if (!patternStr.empty() && seenPatterns.find(patternStr) != seenPatterns.end()) {
+						addError("Duplicate pattern '" + patternStr + "' in match",
+								 pattern->line, pattern->column);
+					}
+					seenPatterns.insert(patternStr);
+				}
+			}
+
+			// Match expressions don't support fallthrough
+			if (matchCase.hasFallthrough) {
+				addError("'fallthrough' is not allowed in match expressions",
+						 matchCase.line, matchCase.column);
+			}
+
+			// Analyze the result expression
+			if (matchCase.resultExpr) {
+				std::string caseType = analyzeExpression(matchCase.resultExpr.get());
+
+				if (firstCase) {
+					resultType = caseType;
+					firstCase = false;
+				} else if (!typesMatch(resultType, caseType)) {
+					addError("Match expression case types must be consistent\n  First case type: " +
+							 resultType + "\n  This case type: " + caseType,
+							 matchCase.line, matchCase.column);
+				}
+			}
+		}
+
+		// Report default-not-last error
+		if (defaultNotLast) {
+			addError("'default' case must be the last case in match",
+					 expr->line, expr->column);
+		}
+
+		// Exhaustiveness check for enum types
+		if (enumInfo != nullptr && !hasDefault) {
+			std::vector<std::string> missingCases;
+			for (const auto &enumCase : enumInfo->cases) {
+				if (coveredCases.find(enumCase.name) == coveredCases.end()) {
+					missingCases.push_back(enumCase.name);
+				}
+			}
+			if (!missingCases.empty()) {
+				std::string missingList;
+				for (size_t i = 0; i < missingCases.size(); i++) {
+					if (i > 0) missingList += ", ";
+					missingList += missingCases[i];
+				}
+				addError("Match on enum '" + scrutineeType + "' is not exhaustive\n  Missing cases: " + missingList,
+						 expr->line, expr->column);
+			}
+		}
+
+		return resultType.empty() ? "error" : resultType;
 	}
 
 	return "error";

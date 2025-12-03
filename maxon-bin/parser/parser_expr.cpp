@@ -48,6 +48,11 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		return std::make_unique<NilExprAST>(line, column);
 	}
 
+	// Match expression (used in expression context, e.g., let x = match y 'id' ...)
+	if (checkKeyword("match")) {
+		return parseMatchExpr();
+	}
+
 	if (check(TokenType::CHARACTER)) {
 		std::string value = std::string(currentValue());  // Get full grapheme cluster
 		int line = currentLine();

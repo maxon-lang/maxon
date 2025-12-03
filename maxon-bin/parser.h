@@ -75,6 +75,9 @@ class Parser {
 	std::unique_ptr<ReturnStmtAST> parseReturn();
 	std::unique_ptr<BreakStmtAST> parseBreak();
 	std::unique_ptr<ContinueStmtAST> parseContinue();
+	std::unique_ptr<MatchStmtAST> parseMatch();
+	std::unique_ptr<MatchExprAST> parseMatchExpr();
+	std::unique_ptr<StmtAST> parseMatchCaseStatement(); // Parse statement in match case (stops before 'and fallthrough')
 
 	std::unique_ptr<FunctionAST> parseFunction();
 	std::unique_ptr<FunctionAST> parseMethod(const std::string &structName); // Parse method inside struct

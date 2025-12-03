@@ -651,6 +651,27 @@ bool SemanticAnalyzer::hasReturnInPath(const std::vector<std::unique_ptr<StmtAST
 				}
 			}
 		}
+
+		// Match statement with return in all cases
+		if (auto matchStmt = dynamic_cast<MatchStmtAST *>(stmt.get())) {
+			bool allCasesReturn = true;
+
+			for (const auto &matchCase : matchStmt->cases) {
+				// Check if this case returns
+				if (matchCase.statement) {
+					if (!dynamic_cast<ReturnStmtAST *>(matchCase.statement.get())) {
+						allCasesReturn = false;
+					}
+				} else {
+					allCasesReturn = false;
+				}
+			}
+
+			// If the match is exhaustive (has default OR covers all enum cases) and all cases return
+			if (matchStmt->isExhaustive && allCasesReturn) {
+				return true;
+			}
+		}
 	}
 
 	return false;

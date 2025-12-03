@@ -1,0 +1,119 @@
+// Test: match-statements.match-statements.fallthrough-chain.1
+function main() int
+    var x = 1
+    var result = 0
+    match x 'cascade'
+        1 then result = result + 10 and fallthrough
+        2 then result = result + 20 and fallthrough
+        3 then result = result + 30
+        default then result = 100
+    end 'cascade'
+    return result
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 19
+
+define i32 @main() {
+entry0:
+  br label %match.check.06
+match.merge1:
+  %17 = phi i32 [ %15, %match.case.24 ], [ 100, %match.case.35 ]
+  ret i32 %17
+match.case.02:
+  br label %match.case.13
+match.case.13:
+  %18 = phi i32 [ 0, %match.check.18 ], [ 10, %match.case.02 ]
+  %13 = add i32 %18, 20
+  br label %match.case.24
+match.case.24:
+  %19 = phi i32 [ 0, %match.check.210 ], [ %13, %match.case.13 ]
+  %15 = add i32 %19, 30
+  br label %match.merge1
+match.case.35:
+  br label %match.merge1
+match.check.06:
+  br i1 1, label %match.case.02, label %match.check.17
+  br label %match.check.18
+match.check.17:
+match.check.18:
+  br i1 0, label %match.case.13, label %match.check.29
+  br label %match.check.210
+match.check.29:
+match.check.210:
+  br i1 0, label %match.case.24, label %match.case.35
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 38
+
+define i32 @main() {
+entry0:
+  %0 = alloca i32
+  store i32 1, ptr %0
+  %1 = alloca i32
+  store i32 0, ptr %1
+  %2 = load i32, ptr %0
+  %3 = alloca i32
+  store i32 %2, ptr %3
+  br label %match.check.06
+match.merge1:
+  %16 = load i32, ptr %1
+  ret i32 %16
+match.case.02:
+  %10 = load i32, ptr %1
+  %11 = add i32 %10, 10
+  store i32 %11, ptr %1
+  br label %match.case.13
+match.case.13:
+  %12 = load i32, ptr %1
+  %13 = add i32 %12, 20
+  store i32 %13, ptr %1
+  br label %match.case.24
+match.case.24:
+  %14 = load i32, ptr %1
+  %15 = add i32 %14, 30
+  store i32 %15, ptr %1
+  br label %match.merge1
+match.case.35:
+  store i32 100, ptr %1
+  br label %match.merge1
+match.check.06:
+  %4 = load i32, ptr %3
+  %5 = icmp eq i32 %4, 1
+  br i1 %5, label %match.case.02, label %match.check.17
+  br label %match.check.18
+match.check.17:
+match.check.18:
+  %6 = load i32, ptr %3
+  %7 = icmp eq i32 %6, 2
+  br i1 %7, label %match.case.13, label %match.check.29
+  br label %match.check.210
+match.check.29:
+match.check.210:
+  %8 = load i32, ptr %3
+  %9 = icmp eq i32 %8, 3
+  br i1 %9, label %match.case.24, label %match.case.35
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 60

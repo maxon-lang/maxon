@@ -80,6 +80,10 @@ class KeywordMatcher {
 		add_keyword("return", KeywordCategory::ControlFlow, "Return from function");
 		add_keyword("break", KeywordCategory::ControlFlow, "Exit loop");
 		add_keyword("continue", KeywordCategory::ControlFlow, "Skip to next iteration");
+		add_keyword("match", KeywordCategory::ControlFlow, "Pattern matching statement");
+		add_keyword("default", KeywordCategory::ControlFlow, "Default match case");
+		add_keyword("fallthrough", KeywordCategory::ControlFlow, "Continue to next case");
+		add_keyword("gives", KeywordCategory::ControlFlow, "Match expression value");
 
 		// Declarations
 		add_keyword("function", KeywordCategory::Declaration, "Function declaration");
@@ -340,15 +344,15 @@ class KeywordPrefixMatcher {
 	 * Returns true if the string CANNOT be a keyword based on first char
 	 */
 	static bool not_keyword_prefix(char first) {
-		// Maxon keywords start with: a,b,c,e,f,i,l,m,n,o,r,s,t,u,v,w
+		// Maxon keywords start with: a,b,c,d,e,f,g,i,l,m,n,o,r,s,t,u,v,w
 		// Characters that CANNOT start a keyword:
-		// d, g, h, j, k, p, q, x, y, z
+		// h, j, k, p, q, x, y, z
 		// Also uppercase letters and digits
 
 		// Quick lookup table
 		static constexpr uint32_t not_keyword_chars[] = {
-			// Lowercase d,g,h,j,k,p,q,x,y,z
-			(1u << ('d' - 'a')) | (1u << ('g' - 'a')) | (1u << ('h' - 'a')) |
+			// Lowercase h,j,k,p,q,x,y,z
+			(1u << ('h' - 'a')) |
 			(1u << ('j' - 'a')) | (1u << ('k' - 'a')) | (1u << ('p' - 'a')) |
 			(1u << ('q' - 'a')) | (1u << ('x' - 'a')) |
 			(1u << ('y' - 'a')) | (1u << ('z' - 'a'))};

@@ -166,6 +166,8 @@ class MIRCodeGenerator {
 	void generateFor(ForStmtAST *forStmt, mir::MIRFunction *function);
 	void generateBreak(BreakStmtAST *breakStmt, mir::MIRFunction *function);
 	void generateContinue(ContinueStmtAST *continueStmt, mir::MIRFunction *function);
+	void generateMatch(MatchStmtAST *matchStmt, mir::MIRFunction *function);
+	mir::MIRValue *generateMatchExpr(MatchExprAST *matchExpr);
 	void generateFunctionWithTypeBindings(FunctionAST *func, const std::string &namespaceName,
 										  const std::map<std::string, std::string> &typeBindings,
 										  const std::string &specializedReceiverType);

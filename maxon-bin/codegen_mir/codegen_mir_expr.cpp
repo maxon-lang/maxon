@@ -1603,6 +1603,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		return builder->createCall(calleeF, argsV);
 	}
 
+	if (auto *matchExpr = dynamic_cast<MatchExprAST *>(expr)) {
+		return generateMatchExpr(matchExpr);
+	}
+
 	reportError("Unknown expression type", expr->line, expr->column);
 }
 
