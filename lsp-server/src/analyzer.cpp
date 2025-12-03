@@ -1233,7 +1233,6 @@ std::vector<std::string> Analyzer::findStdlibFiles(const std::string &stdlibPath
 }
 
 void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &namespaceName) {
-
 	try {
 		std::ifstream file(filePath);
 		if (!file.is_open()) {
@@ -1249,6 +1248,14 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 
 		Parser parser(tokens);
 		auto program = parser.parse();
+
+		// Split content into lines once for efficient documentation extraction
+		std::vector<std::string> contentLines;
+		std::istringstream lineStream(content);
+		std::string lineStr;
+		while (std::getline(lineStream, lineStr)) {
+			contentLines.push_back(lineStr);
+		}
 
 		// Extract module name from file path (e.g., "integer" from "stdlib/fmt/integer.maxon")
 		fs::path path(filePath);
@@ -1320,7 +1327,7 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 				stdlibFunc.signature = sig;
 
 				// Extract documentation from comments before the function declaration
-				stdlibFunc.documentation = extractDocumentation(content, func->name, func->line);
+				stdlibFunc.documentation = extractDocumentation(contentLines, func->line);
 				if (stdlibFunc.documentation.empty()) {
 					stdlibFunc.documentation = "Standard library function from " + namespaceName;
 				}
@@ -1372,7 +1379,7 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 					member.signature = sig;
 
 					// Extract documentation
-					member.documentation = extractDocumentation(content, method->name, method->line);
+					member.documentation = extractDocumentation(contentLines, method->line);
 					if (member.documentation.empty()) {
 						member.documentation = "Method of " + structDef->name;
 					}
@@ -1429,16 +1436,8 @@ void Analyzer::loadStdlibFile(const std::string &filePath, const std::string &na
 	}
 }
 
-std::string Analyzer::extractDocumentation(const std::string &sourceText, const std::string &functionName, int functionLine) {
+std::string Analyzer::extractDocumentation(const std::vector<std::string> &lines, int functionLine) {
 	// Extract comments before the function declaration (lines leading up to functionLine)
-	// Split source into lines
-	std::vector<std::string> lines;
-	std::istringstream stream(sourceText);
-	std::string line;
-	while (std::getline(stream, line)) {
-		lines.push_back(line);
-	}
-
 	if (functionLine <= 0 || functionLine > static_cast<int>(lines.size())) {
 		return "";
 	}

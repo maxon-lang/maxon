@@ -136,7 +136,7 @@ class Analyzer {
 	lsp::Range tokenToRange(const Token &token);
 	void loadStdlibFile(const std::string &filePath, const std::string &namespaceName);
 	std::vector<std::string> findStdlibFiles(const std::string &stdlibPath);
-	std::string extractDocumentation(const std::string &sourceText, const std::string &functionName, int functionLine);
+	std::string extractDocumentation(const std::vector<std::string> &lines, int functionLine);
 	std::vector<lsp::CompletionItem> getQualifiedNameCompletions(const std::string &prefix);
 	std::vector<lsp::CompletionItem> getMemberCompletions(const std::string &typeName, const SemanticInfo &semInfo);
 	void initializeTypeMembers();
