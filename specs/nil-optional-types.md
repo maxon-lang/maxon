@@ -418,8 +418,8 @@ end 'main'
 ```maxoncstderr
 In file 'temp/temp_fragment.maxon':
 Unexpected token: 'or'
-  Location: line 2, column 28
   Note: Expected a statement (var, let, if, while, return, break, continue, or assignment)
+  Location: line 2, column 28
 ```
 
 <!-- test: optional-param-nil -->

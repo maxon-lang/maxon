@@ -42,8 +42,8 @@ end 'main'
 ```maxoncstderr
 In file 'temp/temp_fragment.maxon':
 Unexpected identifier 'foo'
-  Location: line 4, column 5
   Note: Did you forget an assignment (=), function call (), or keyword?
+  Location: line 4, column 5
 ```
 
 
@@ -69,8 +69,8 @@ end 'main'
 ```maxoncstderr
 In file 'temp/temp_fragment.maxon':
 Unexpected identifier 'foo'
-  Location: line 4, column 5
   Note: Did you forget an assignment (=), function call (), or keyword?
+  Location: line 4, column 5
 ```
 
 <!-- test: typo-keyword -->
@@ -83,8 +83,8 @@ end 'main'
 ```maxoncstderr
 In file 'temp/temp_fragment.maxon':
 Unexpected identifier 'retur'
-  Location: line 4, column 5
   Note: Did you forget an assignment (=), function call (), or keyword?
+  Location: line 4, column 5
 ```
 
 <!-- test: missing-call-parens -->
@@ -101,6 +101,6 @@ end 'main'
 ```maxoncstderr
 In file 'temp/temp_fragment.maxon':
 Unexpected identifier 'test'
-  Location: line 7, column 5
   Note: Did you forget an assignment (=), function call (), or keyword?
+  Location: line 7, column 5
 ```
