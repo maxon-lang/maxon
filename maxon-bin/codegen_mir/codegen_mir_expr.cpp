@@ -6,6 +6,7 @@
 
 #include "../codegen_mir.h"
 #include "../lexer.h"
+#include "../types/type_conversion.h"
 #include "intrinsic_codegen.h"
 #include <cmath>
 #include <cstring>
@@ -960,7 +961,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 		bool leftIsFloat = left->type->isFloat();
 		bool rightIsFloat = right->type->isFloat();
-		bool needsFloatOp = leftIsFloat || rightIsFloat || (binExpr->op == '/');
+		// Use centralized type conversion rules to determine if float promotion is needed
+		std::string leftTypeStr = leftIsFloat ? "float" : "int";
+		std::string rightTypeStr = rightIsFloat ? "float" : "int";
+		bool needsFloatOp = maxon::TypeConversion::needsFloatPromotion(leftTypeStr, rightTypeStr, binExpr->op);
 
 		// Promote int to float if mixed types
 		if (needsFloatOp) {
@@ -1309,8 +1313,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				argVal = tempAlloca;
 			}
 
-			// Promote int/byte to float if parameter expects float
+			// Promote int/byte to float if parameter expects float (uses centralized type rules)
 			if (argVal && paramType->isFloat() && argVal->type->isInteger()) {
+				// This is an implicit conversion from int/byte to float (widening, no data loss)
 				argVal = builder->createSIToFP(argVal, mir::MIRType::getFloat64(), "promotetmp");
 			}
 
@@ -1324,8 +1329,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				if (actualParamIdx < paramTypesIt->second.size()) {
 					std::string paramMaxonType = paramTypesIt->second[actualParamIdx];
 
-					// Check if parameter is optional ("T or nil")
-					if (paramMaxonType.find(" or nil") != std::string::npos) {
+					// Check if parameter is optional ("T or nil") using centralized type conversion
+					if (maxon::TypeConversion::isOptionalType(paramMaxonType)) {
 						// Case 1: Argument is nil - create nil optional
 						if (isNilArg) {
 							argVal = createNilOptional(paramType);
@@ -1336,7 +1341,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 							std::string argMaxonType = getExpressionMaxonType(arg.get());
 
 							// Argument is unwrapped type - wrap in Some optional
-							if (argMaxonType.find(" or nil") == std::string::npos) {
+							if (!maxon::TypeConversion::isOptionalType(argMaxonType)) {
 								argVal = createSomeOptional(paramType, argVal);
 							}
 							// Case 3: Argument is already optional - use as-is (already handled)

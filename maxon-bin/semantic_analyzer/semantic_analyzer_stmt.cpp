@@ -1,5 +1,6 @@
 #include "../lexer.h"
 #include "../semantic_analyzer.h"
+#include "../types/type_conversion.h"
 #include <algorithm>
 
 // Forward declaration of helper function

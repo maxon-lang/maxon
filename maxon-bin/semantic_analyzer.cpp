@@ -1,5 +1,6 @@
 #include "semantic_analyzer.h"
 #include "lexer.h"
+#include "types/type_conversion.h"
 #include <algorithm>
 #include <sstream>
 
@@ -584,47 +585,20 @@ std::optional<VariableInfo> SemanticAnalyzer::lookupVariable(const std::string &
 }
 
 bool SemanticAnalyzer::typesMatch(const std::string &type1, const std::string &type2) {
-	// Error type matches anything (to avoid cascading errors)
-	if (type1 == "error" || type2 == "error") {
-		return true;
-	}
-
-	// Check if both are array types and extract element types
-	if (type1[0] == '[' && type2[0] == '[') {
-		// Extract element types (everything after the last ']')
-		size_t bracket1 = type1.find(']');
-		size_t bracket2 = type2.find(']');
-
-		if (bracket1 != std::string::npos && bracket2 != std::string::npos) {
-			std::string elem1 = type1.substr(bracket1 + 1);
-			std::string elem2 = type2.substr(bracket2 + 1);
-
-			// Array types match if element types match, regardless of size
-			// Use recursive call
-			return typesMatch(elem1, elem2);
-		}
-	}
-
-	return type1 == type2;
+	// Delegate to centralized type conversion module
+	return maxon::TypeConversion::typesMatch(type1, type2);
 }
 
 bool SemanticAnalyzer::isOptionalType(const std::string &type) {
-	return type.find(" or nil") != std::string::npos;
+	return maxon::TypeConversion::isOptionalType(type);
 }
 
 std::string SemanticAnalyzer::unwrapOptionalType(const std::string &type) {
-	size_t pos = type.find(" or nil");
-	if (pos == std::string::npos) {
-		return type; // Not optional
-	}
-	return type.substr(0, pos);
+	return maxon::TypeConversion::unwrapOptionalType(type);
 }
 
 std::string SemanticAnalyzer::makeOptionalType(const std::string &type) {
-	if (isOptionalType(type)) {
-		return type; // Already optional
-	}
-	return type + " or nil";
+	return maxon::TypeConversion::makeOptionalType(type);
 }
 
 bool SemanticAnalyzer::isIterableType(const std::string &type, ExprAST *iterableExpr) {
@@ -757,9 +731,8 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 		}
 
 		// Handle optional types (e.g., "Element or nil" -> "int or nil")
-		size_t orNilPos = type.find(" or nil");
-		if (orNilPos != std::string::npos) {
-			std::string baseType = type.substr(0, orNilPos);
+		if (maxon::TypeConversion::isOptionalType(type)) {
+			std::string baseType = maxon::TypeConversion::unwrapOptionalType(type);
 			// Recursively resolve the base type
 			std::string resolvedBase = [&]() -> std::string {
 				if (baseType == "Self") {
@@ -773,7 +746,7 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 				}
 				return baseType;
 			}();
-			return resolvedBase + " or nil";
+			return maxon::TypeConversion::makeOptionalType(resolvedBase);
 		}
 
 		// Check if this type name is an associated type

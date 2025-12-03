@@ -5,6 +5,7 @@
  */
 
 #include "../codegen_mir.h"
+#include "../types/type_conversion.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -442,7 +443,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 
 				// Handle optional field wrapping
 				// If field type is optional and value is nil or unwrapped, wrap it
-				if (fieldTypeStr.find(" or nil") != std::string::npos) {
+				if (maxon::TypeConversion::isOptionalType(fieldTypeStr)) {
 					// Get the value type
 					std::string valueTypeStr = getExpressionMaxonType(valueExpr);
 
@@ -452,7 +453,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 					if (isNilValue) {
 						// Create nil optional
 						fieldValue = createNilOptional(fieldType);
-					} else if (fieldValue && valueTypeStr.find(" or nil") == std::string::npos) {
+					} else if (fieldValue && !maxon::TypeConversion::isOptionalType(valueTypeStr)) {
 						// Value is unwrapped type - wrap in Some optional
 						fieldValue = createSomeOptional(fieldType, fieldValue);
 					}

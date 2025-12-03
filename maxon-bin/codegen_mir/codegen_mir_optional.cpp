@@ -5,6 +5,7 @@
  */
 
 #include "../codegen_mir.h"
+#include "../types/type_conversion.h"
 
 //==============================================================================
 // Optional Type Helpers
@@ -64,9 +65,8 @@ void MIRCodeGenerator::generateIfLet(IfLetStmtAST *ifLet, mir::MIRFunction *func
 	std::string optionalTypeStr = getExpressionMaxonType(ifLet->optionalExpr.get());
 	mir::MIRType *optionalType = getTypeFromString(optionalTypeStr);
 
-	// Get the unwrapped type
-	size_t orNilPos = optionalTypeStr.find(" or nil");
-	std::string unwrappedTypeStr = optionalTypeStr.substr(0, orNilPos);
+	// Get the unwrapped type using centralized type conversion
+	std::string unwrappedTypeStr = maxon::TypeConversion::unwrapOptionalType(optionalTypeStr);
 	mir::MIRType *unwrappedType = getTypeFromString(unwrappedTypeStr);
 
 	// Store optional to stack
@@ -156,9 +156,8 @@ void MIRCodeGenerator::generateElseUnwrap(ElseUnwrapStmtAST *elseUnwrap, mir::MI
 	std::string optionalTypeStr = getExpressionMaxonType(elseUnwrap->optionalExpr.get());
 	mir::MIRType *optionalType = getTypeFromString(optionalTypeStr);
 
-	// Get the unwrapped type
-	size_t orNilPos = optionalTypeStr.find(" or nil");
-	std::string unwrappedTypeStr = optionalTypeStr.substr(0, orNilPos);
+	// Get the unwrapped type using centralized type conversion
+	std::string unwrappedTypeStr = maxon::TypeConversion::unwrapOptionalType(optionalTypeStr);
 	mir::MIRType *unwrappedType = getTypeFromString(unwrappedTypeStr);
 
 	// Allocate the result variable (unwrapped type)

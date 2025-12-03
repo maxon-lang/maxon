@@ -110,6 +110,8 @@ set(SOURCES
     semantic_analyzer/semantic_analyzer_stmt.cpp
     intrinsics.cpp
     error_formatter.cpp
+    # Type system
+    types/type_conversion.cpp
     # Vendor libraries
     vendor/md4c.c
     vendor/md4c-html.c

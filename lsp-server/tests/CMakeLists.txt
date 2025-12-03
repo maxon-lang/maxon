@@ -31,6 +31,7 @@ set(MAXON_SOURCES
     ../../maxon-bin/semantic_analyzer.cpp
     ../../maxon-bin/semantic_analyzer/semantic_analyzer_expr.cpp
     ../../maxon-bin/semantic_analyzer/semantic_analyzer_stmt.cpp
+    ../../maxon-bin/types/type_conversion.cpp
     ../../maxon-bin/file_utils.cpp
     ../../maxon-bin/intrinsics.cpp
 )

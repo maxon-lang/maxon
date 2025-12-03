@@ -2,6 +2,7 @@
 #include "../lexer.h"
 #include "../semantic_analyzer.h"
 #include "../type_members.h"
+#include "../types/type_conversion.h"
 #include <algorithm>
 
 // Expression analysis implementation
@@ -145,9 +146,10 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Analyze the expression being cast
 		std::string sourceType = analyzeExpression(castExpr->expr.get());
 
-		// Validate that float to int casts are not allowed
-		if (sourceType == "float" && castExpr->targetType == "int") {
-			addError("Cannot cast float to int; use trunc(), round(), floor(), or ceil() instead" +
+		// Use centralized type conversion rules to validate cast
+		auto convKind = maxon::TypeConversion::getConversionKind(sourceType, castExpr->targetType);
+		if (convKind == maxon::ConversionKind::Prohibited) {
+			addError("Cannot cast " + sourceType + " to " + castExpr->targetType + "; use trunc(), round(), floor(), or ceil() instead" +
 						 std::string("\n  Hint: trunc() truncates toward zero (equivalent to the old 'as int' behavior)"),
 					 expr->line, expr->column);
 			return "error";
@@ -750,11 +752,11 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			std::string argType = analyzeExpression(callExpr->args[i].get());
 			std::string expectedType = funcInfo.parameters[i + paramOffset].type;
 
-			// Type matching with int/byte → float promotion (no data loss)
+			// Use centralized type conversion rules for validation
 			bool isValidType = typesMatch(expectedType, argType);
-			// Allow int or byte to promote to float
-			if (!isValidType && expectedType == "float" && (argType == "int" || argType == "byte")) {
-				isValidType = true;
+			// Check implicit conversion (e.g., int/byte -> float)
+			if (!isValidType) {
+				isValidType = maxon::TypeConversion::canConvertImplicitly(argType, expectedType);
 			}
 
 			// Handle optional parameter types: if parameter is "T or nil"

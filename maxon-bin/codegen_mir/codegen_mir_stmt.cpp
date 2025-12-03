@@ -9,6 +9,7 @@
  */
 
 #include "../codegen_mir.h"
+#include "../types/type_conversion.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -276,7 +277,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 				std::string returnTypeStr = functionReturnTypes[function->name];
 
 				// Check if return type is optional
-				if (returnTypeStr.find(" or nil") != std::string::npos) {
+				if (maxon::TypeConversion::isOptionalType(returnTypeStr)) {
 					mir::MIRType *returnType = getTypeFromString(returnTypeStr);
 
 					// Wrap the value in an optional
