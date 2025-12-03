@@ -179,7 +179,7 @@ end 'main'
 
 	test('Should not report error for stdlib function call', async function () {
 		const content = `function main() int
-    var buffer [12]char = 0
+    var buffer [12]character = 0
     var length = format_int_array(42, buffer)
     return length
 end 'main'
@@ -208,7 +208,7 @@ end 'main'
 
 	test('Should report error for stdlib function with wrong argument count', async function () {
 		const content = `function main() int
-    var buffer = [12]char
+    var buffer = [12]character
     var length = format_int_array(42)
     return length
 end 'main'

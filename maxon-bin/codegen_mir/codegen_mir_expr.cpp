@@ -747,12 +747,12 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			}
 		}
 
-		// For <, >, <=, >= on char type, compare by first codepoint value
+		// For <, >, <=, >= on character type, compare by first codepoint value
 		// This provides lexicographic ordering for single-codepoint chars
 		if (binExpr->op == '<' || binExpr->op == '>' || binExpr->op == 'L' || binExpr->op == 'G') {
 			std::string leftType = getExpressionMaxonType(binExpr->left.get());
 
-			if (leftType == "char") {
+			if (leftType == "character") {
 				// Get pointers to both char structs
 				mir::MIRValue *leftPtr = nullptr;
 				if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->left.get())) {
@@ -773,17 +773,17 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				}
 
 				if (!leftPtr || !rightPtr) {
-					throw std::runtime_error("Failed to generate char comparison operands");
+					throw std::runtime_error("Failed to generate character comparison operands");
 				}
 
-				// Extract first byte from each char to compare (for ASCII/simple chars)
-				// char = { _managed ptr } where _managed points to __ManagedStringData
-				mir::MIRType *charType = structTypes["char"];
+				// Extract first byte from each character to compare (for ASCII/simple chars)
+				// character = { _managed ptr } where _managed points to __ManagedStringData
+				mir::MIRType *charType = structTypes["character"];
 				mir::MIRType *managedDataType = structTypes["__ManagedStringData"];
 				mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
 
 				if (!managedDataType || !unsizedArrayType) {
-					throw std::runtime_error("char comparison requires __ManagedStringData type");
+					throw std::runtime_error("character comparison requires __ManagedStringData type");
 				}
 
 				// Get first byte from left char
@@ -1140,7 +1140,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			}
 
 			// Check if it's a primitive type that has hash/equals
-			if (argType == "int" || argType == "byte" || argType == "char") {
+			if (argType == "int" || argType == "byte" || argType == "character") {
 				effectiveCallee = argType + "." + effectiveCallee;
 			}
 		}
@@ -1151,14 +1151,14 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		}
 
 		// Handle primitive type methods (int.hash, int.equals, etc.)
-		if (effectiveCallee == "int.hash" || effectiveCallee == "byte.hash" || effectiveCallee == "char.hash") {
+		if (effectiveCallee == "int.hash" || effectiveCallee == "byte.hash" || effectiveCallee == "character.hash") {
 			// Multiplicative hash using Knuth's golden ratio constant
 			// hash = value * 2654435769 (which is 0x9E3779B9)
 			if (callExpr->args.empty()) {
 				throw std::runtime_error("hash() requires self argument");
 			}
 			mir::MIRValue *value = generateExpr(callExpr->args[0].get());
-			// Extend byte/char to int if needed
+			// Extend byte/character to int if needed
 			if (effectiveCallee != "int.hash") {
 				value = builder->createZExt(value, mir::MIRType::getInt32(), "hash.extend");
 			}
@@ -1166,7 +1166,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			return builder->createMul(value, multiplier, "hash");
 		}
 
-		if (effectiveCallee == "int.equals" || effectiveCallee == "byte.equals" || effectiveCallee == "char.equals") {
+		if (effectiveCallee == "int.equals" || effectiveCallee == "byte.equals" || effectiveCallee == "character.equals") {
 			// Simple equality comparison
 			if (callExpr->args.size() < 2) {
 				throw std::runtime_error("equals() requires self and other arguments");

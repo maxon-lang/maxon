@@ -26,9 +26,9 @@ struct SemanticError {
 struct VariableInfo {
 	std::string name;
 	std::string type;
-	bool isImmutable;    // true for 'let' variables
-	bool isUsed;         // true if variable is read/referenced
-	bool isParameter;    // true if this is a function parameter
+	bool isImmutable;	 // true for 'let' variables
+	bool isUsed;		 // true if variable is read/referenced
+	bool isParameter;	 // true if this is a function parameter
 	bool isLoopVariable; // true if this is a for-loop iteration variable
 	int line;
 	int column;
@@ -73,7 +73,7 @@ struct StructInfo {
 	std::string name;
 	std::vector<StructFieldInfo> fields;
 	std::vector<std::string> conformsTo;				// Interfaces this struct conforms to
-	std::map<std::string, std::string> typeAssignments; // Associated type assignments (e.g., "Element" -> "char")
+	std::map<std::string, std::string> typeAssignments; // Associated type assignments (e.g., "Element" -> "character")
 	int line;
 	int column;
 

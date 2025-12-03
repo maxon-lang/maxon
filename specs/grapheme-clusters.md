@@ -73,7 +73,7 @@ Required for GB11 (emoji ZWJ sequences). Characters with this property can form 
 
 ## Documentation
 
-Maxon provides grapheme cluster support through the `char` type and string iteration.
+Maxon provides grapheme cluster support through the `character` type and string iteration.
 
 ### Grapheme Boundary Detection
 

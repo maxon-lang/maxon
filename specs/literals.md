@@ -1,7 +1,7 @@
 ---
 feature: literals
 status: stable
-keywords: [literal, constant, int, float, char, string, bool]
+keywords: [literal, constant, int, float, character, string, bool]
 category: expressions
 ---
 

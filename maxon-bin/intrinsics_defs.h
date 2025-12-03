@@ -11,7 +11,7 @@ struct IntrinsicParamDef {
 	std::vector<std::string> allowedTypes;
 
 	// Single type parameter
-	IntrinsicParamDef(const std::string& t) : type(t) {}
+	IntrinsicParamDef(const std::string &t) : type(t) {}
 
 	// Multiple allowed types
 	static IntrinsicParamDef anyOf(std::vector<std::string> types) {
@@ -31,10 +31,10 @@ struct IntrinsicParamDef {
 
 // Complete intrinsic definition
 struct IntrinsicDef {
-	const char* name;
-	const char* returnType;
+	const char *name;
+	const char *returnType;
 	std::vector<IntrinsicParamDef> params;
-	const char* codegenMethodName;  // Name of MIRCodeGenerator method
+	const char *codegenMethodName; // Name of MIRCodeGenerator method
 };
 
 // Single source of truth for all intrinsic definitions
@@ -46,10 +46,10 @@ inline std::vector<IntrinsicDef> getIntrinsicDefinitions() {
 		{"__string_slice", "substring", {{"_ManagedString"}, {"int"}, {"int"}}, "intrinsic_string_slice"},
 		{"__string_concat", "_ManagedString", {{"_ManagedString"}, {"_ManagedString"}}, "intrinsic_string_concat"},
 		{"__string_make_unique", "_ManagedString", {{"_ManagedString"}}, "intrinsic_string_make_unique"},
-		{"__string_set_byte", "void", {{"_ManagedString"}, {"int"}, IntrinsicParamDef::anyOf({"byte", "char"})}, "intrinsic_string_set_byte"},
+		{"__string_set_byte", "void", {{"_ManagedString"}, {"int"}, IntrinsicParamDef::anyOf({"byte", "character"})}, "intrinsic_string_set_byte"},
 		{"__string_get_refcount", "int", {{"_ManagedString"}}, "intrinsic_string_get_refcount"},
 		{"__string_to_cstring", "cstring", {{"_ManagedString"}}, "intrinsic_string_to_cstring"},
-		{"__string_from_chars", "_ManagedString", {IntrinsicParamDef::arrayOf({"char", "byte"}), {"int"}}, "intrinsic_string_from_chars"},
+		{"__string_from_characters", "_ManagedString", {IntrinsicParamDef::arrayOf({"character", "byte"}), {"int"}}, "intrinsic_string_from_chars"},
 
 		// CString intrinsics (__cstring_*)
 		{"__cstring_len", "int", {{"cstring"}}, "intrinsic_cstring_len"},

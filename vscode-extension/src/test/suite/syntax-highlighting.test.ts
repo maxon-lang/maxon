@@ -36,7 +36,7 @@ suite('Syntax Highlighting Test Suite', () => {
 
 	test('Type keywords are present and can be highlighted', async () => {
 		const testContent = [
-			"function test(a int, b float, c bool, d char) int",
+			"function test(a int, b float, c bool, d character) int",
 			"    var str string = \"hello\"",
 			"    return a",
 			"end 'test'"
@@ -50,7 +50,7 @@ suite('Syntax Highlighting Test Suite', () => {
 		assert.strictEqual(doc.languageId, 'maxon');
 
 		const content = doc.getText();
-		const types = ['int', 'float', 'bool', 'char', 'string'];
+		const types = ['int', 'float', 'bool', 'character', 'string'];
 		for (const type of types) {
 			assert.ok(content.includes(type), `Should contain type: ${type}`);
 		}
@@ -454,7 +454,7 @@ suite('Syntax Highlighting Test Suite', () => {
 		const testContent = [
 			"function test() int",
 			"    var message = \"This is a regular string\"",
-			"    var char = 'A'",
+			"    var ch = 'A'",
 			"    return 0",
 			"end 'test'"
 		].join('\n');

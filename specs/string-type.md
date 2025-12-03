@@ -93,16 +93,16 @@ for c in s 'loop'
 end 'loop'
 ```
 
-Each iteration yields a `char` value representing an Extended Grapheme Cluster (EGC).
+Each iteration yields a `character` value representing an Extended Grapheme Cluster (EGC).
 
 ### String Views
 
 Strings provide multiple views for different iteration granularities:
 
-**Default iteration** - Grapheme clusters (char):
+**Default iteration** - Grapheme clusters (character):
 ```maxon
 for c in "café" 'chars'
-    // c is a char (grapheme cluster)
+    // c is a character (grapheme cluster)
     print(c.toString())
 end 'chars'
 ```

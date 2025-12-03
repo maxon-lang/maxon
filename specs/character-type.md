@@ -1,27 +1,27 @@
 ---
-feature: char-type
+feature: character-type
 status: experimental
-keywords: [char, character, grapheme, egc, utf8]
+keywords: [character, grapheme, egc, utf8]
 category: types
 ---
 
-# Char Type
+# Character Type
 
 ## Developer Notes
 
-Swift-style `char` type representing an Extended Grapheme Cluster (EGC) — a user-perceived character.
+Swift-style `character` type representing an Extended Grapheme Cluster (EGC) — a user-perceived character.
 
 ### Memory Layout
 
-**Char Type (16 bytes):**
+**Character Type (16 bytes):**
 
 Uses identical SSO layout as `string`:
 
-Small Char (MSB of byte 15 = 0):
+Small Character (MSB of byte 15 = 0):
 - bytes 0-14: UTF-8 data (inline)
 - byte 15: remaining capacity (15 - length)
 
-Large Char (MSB of byte 15 = 1):
+Large Character (MSB of byte 15 = 1):
 - bytes 0-7: pointer to heap buffer
 - bytes 8-11: count (length in bytes)
 - bytes 12-15: capacity | 0x80000000
@@ -33,13 +33,13 @@ Large Char (MSB of byte 15 = 1):
 - Most characters fit in SSO (15 bytes covers vast majority of grapheme clusters)
 - Complex emoji sequences may require heap allocation
 - Lexer handles escape sequences in `readCharLiteral()`
-- Used for string iteration (iterating a `string` yields `char` values)
+- Used for string iteration (iterating a `string` yields `character` values)
 
 Common escape sequences: `\n` (newline), `\t` (tab), `\\` (backslash), `\'` (single quote).
 
-### Char vs Byte
+### Character vs Byte
 
-The `char` type is NOT an alias for `byte`. UTF-8 characters can span multiple bytes:
+The `character` type is NOT an alias for `byte`. UTF-8 characters can span multiple bytes:
 - `'A'` = 1 byte (ASCII)
 - `'é'` = 2 bytes (Latin Extended)
 - `'中'` = 3 bytes (CJK)
@@ -50,7 +50,7 @@ Use `byte` for raw byte access when working with binary data or UTF-8 code units
 
 ## Documentation
 
-The `char` type represents an Extended Grapheme Cluster (EGC) — what users perceive as a single character.
+The `character` type represents an Extended Grapheme Cluster (EGC) — what users perceive as a single character.
 
 ### Syntax
 
@@ -72,7 +72,7 @@ var flag = '🇺🇸'          // Flag (regional indicator pair)
 
 ### String Iteration
 
-Iterating over a string yields `char` values (EGCs):
+Iterating over a string yields `character` values (EGCs):
 
 ```maxon
 var s = "café"
@@ -81,7 +81,7 @@ for c in s 'chars'
 end 'chars'
 ```
 
-### Char Methods
+### Character Methods
 
 ```maxon
 var c = 'é'
@@ -94,8 +94,8 @@ c.toString()           // Converts to string
 
 ## Tests
 
-<!-- test: basic-char -->
-### Basic Char
+<!-- test: basic-character -->
+### Basic Character
 
 ```maxon
 function main() int
@@ -110,8 +110,8 @@ end 'main'
 0
 ```
 
-<!-- test: char-comparison -->
-### Char Comparison
+<!-- test: character-comparison -->
+### Character Comparison
 
 ```maxon
 function main() int
@@ -127,8 +127,8 @@ end 'main'
 1
 ```
 
-<!-- test: char-in-variable -->
-### Char in Variable
+<!-- test: character-in-variable -->
+### Character in Variable
 
 ```maxon
 function main() int
@@ -143,8 +143,8 @@ end 'main'
 0
 ```
 
-<!-- test: multibyte-char-2byte -->
-### Multi-byte Char (2-byte UTF-8)
+<!-- test: multibyte-character-2byte -->
+### Multi-byte Character (2-byte UTF-8)
 
 ```maxon
 function main() int
@@ -160,8 +160,8 @@ end 'main'
 2
 ```
 
-<!-- test: multibyte-char-3byte -->
-### Multi-byte Char (3-byte UTF-8)
+<!-- test: multibyte-character-3byte -->
+### Multi-byte Character (3-byte UTF-8)
 
 ```maxon
 function main() int
@@ -177,8 +177,8 @@ end 'main'
 3
 ```
 
-<!-- test: multibyte-char-4byte -->
-### Multi-byte Char (4-byte Emoji)
+<!-- test: multibyte-character-4byte -->
+### Multi-byte Character (4-byte Emoji)
 
 ```maxon
 function main() int
@@ -194,8 +194,8 @@ end 'main'
 4
 ```
 
-<!-- test: char-to-string -->
-### Char to String Conversion
+<!-- test: character-to-string -->
+### Character to String Conversion
 
 ```maxon
 function main() int
@@ -212,8 +212,8 @@ end 'main'
 A
 ```
 
-<!-- test: multibyte-char-to-string -->
-### Multi-byte Char to String
+<!-- test: multibyte-character-to-string -->
+### Multi-byte Character to String
 
 ```maxon
 function main() int
@@ -230,8 +230,8 @@ end 'main'
 中
 ```
 
-<!-- test: char-equality-multibyte -->
-### Multi-byte Char Equality
+<!-- test: character-equality-multibyte -->
+### Multi-byte Character Equality
 
 ```maxon
 function main() int
@@ -247,8 +247,8 @@ end 'main'
 0
 ```
 
-<!-- test: char-inequality-multibyte -->
-### Multi-byte Char Inequality
+<!-- test: character-inequality-multibyte -->
+### Multi-byte Character Inequality
 
 ```maxon
 function main() int
@@ -264,8 +264,8 @@ end 'main'
 0
 ```
 
-<!-- test: emoji-char -->
-### Emoji Char
+<!-- test: emoji-character -->
+### Emoji Character
 
 ```maxon
 function main() int
@@ -281,7 +281,7 @@ end 'main'
 🎉
 ```
 
-<!-- test: flag-emoji-char -->
+<!-- test: flag-emoji-character -->
 ### Flag Emoji (Regional Indicator Pair)
 
 ```maxon
@@ -300,7 +300,7 @@ end 'main'
 🇺🇸
 ```
 
-<!-- test: family-emoji-char -->
+<!-- test: family-emoji-character -->
 ### Family Emoji (ZWJ Sequence)
 
 ```maxon
@@ -335,7 +335,7 @@ end 'main'
 ```
 
 <!-- test: escape-sequences -->
-### Escape Sequences in Char
+### Escape Sequences in Character
 
 ```maxon
 function main() int

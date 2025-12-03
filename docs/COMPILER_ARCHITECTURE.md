@@ -141,7 +141,7 @@ Generic methods use a **type binding system** during code generation:
 Built-in types have compiler-implemented methods for generic compatibility:
 - `int.hash()`, `int.equals(other int)` — For using int as map keys
 - `byte.hash()`, `byte.equals(other byte)` — For using byte as map keys
-- `char.hash()`, `char.equals(other char)` — For using char as map keys
+- `character.hash()`, `character.equals(other character)` — For using character as map keys
 - `string.hash()`, `string.equals(other string)` — String methods (implemented in stdlib)
 
 **Benefits:**

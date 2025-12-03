@@ -17,8 +17,8 @@ Implementation:
 - Code generation depends on source/target types:
   - `int` to `float`: `sitofp` (signed int to float)
   - `int` to `bool`: `icmp ne i32 %val, 0` (non-zero = true)
-  - `int` to `char`: `trunc i32 %val to i8`
-  - `char` to `int`: `sext i8 %val to i32`
+  - `int` to `character`: `trunc i32 %val to i8`
+  - `character` to `int`: `sext i8 %val to i32`
 
 Type checker validates that the conversion is legal and rejects unsafe conversions.
 
@@ -40,9 +40,9 @@ value as targetType
 ### Supported Conversions
 
 - `int` → `float` (int to float only; float to int requires `trunc()`, `round()`, `floor()`, or `ceil()`)
-- `int` ↔ `char`
+- `int` ↔ `character`
 - `int` ↔ `bool`
-- `char` ↔ `int`
+- `character` ↔ `int`
 
 ### Example
 

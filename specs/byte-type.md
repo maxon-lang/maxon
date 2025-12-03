@@ -41,13 +41,15 @@ var zero = 0b              // Zero byte
 
 The `b` suffix is range-checked at compile time - values outside 0-255 produce an error.
 
-### Character Type
+### Character Literals
 
-The `char` type is an alias for `byte`, representing a single ASCII character or UTF-8 code unit:
+Single-quoted character literals produce `character` type values (Extended Grapheme Clusters):
 
 ```maxon
-var c = 'A'                // Single character (char literal)
+var c = 'A'                // Creates a character value
 ```
+
+Note: The `character` type is NOT the same as `byte`. See the character-type spec for details.
 
 ## Tests
 

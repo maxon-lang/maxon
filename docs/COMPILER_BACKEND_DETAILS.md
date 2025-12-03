@@ -99,7 +99,7 @@ currentTypeBindings = {{"KeyType", "string"}, {"ValueType", "int"}};
 
 **Primitive Type Method Codegen:**
 
-For primitive types (int, byte, char), hash and equals methods are generated inline:
+For primitive types (int, byte, character), hash and equals methods are generated inline:
 
 ```cpp
 // int.hash() generates:
@@ -695,7 +695,7 @@ enum class TypeTag : uint8_t {
     Float64 = 0x02,
     Bool = 0x03,
     Ptr = 0x04,      // Opaque 8-byte handle
-    Char = 0x05
+    Character = 0x05
 };
 ```
 
@@ -962,7 +962,7 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 **Primitive Type Methods:**
 - Implemented inline codegen for `int.hash()`, `int.equals(other int)`
 - Implemented inline codegen for `byte.hash()`, `byte.equals(other byte)`
-- Implemented inline codegen for `char.hash()`, `char.equals(other char)`
+- Implemented inline codegen for `character.hash()`, `character.equals(other character)`
 - Methods registered in semantic analyzer as built-in functions
 
 **Collections Library:**

@@ -84,8 +84,8 @@ suite('TextMate Grammar Validation', () => {
 		const typePattern = typesRepo.patterns.find((p: any) => p.name === 'storage.type.maxon');
 		assert.ok(typePattern, 'Type keyword pattern should exist');
 
-		// Note: 'string', 'char', and 'map' are stdlib types, not built-in keywords, so they're not in this list
-		// 'char' is now a grapheme cluster struct defined in stdlib/string/char.maxon
+		// Note: 'string', 'character', and 'map' are stdlib types, not built-in keywords, so they're not in this list
+		// 'character' is now a grapheme cluster struct defined in stdlib/string/character.maxon
 		const types = ['int', 'bool', 'float', 'byte'];
 		for (const type of types) {
 			assert.ok(typePattern.match.includes(type), `Type pattern should include ${type}`);

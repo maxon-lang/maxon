@@ -59,7 +59,7 @@ std::string MIRCodeGenerator::inferExprType(ExprAST *expr) {
 		return "bool";
 	}
 	if (dynamic_cast<CharacterExprAST *>(expr)) {
-		return "char";
+		return "character";
 	}
 	if (dynamic_cast<StringLiteralExprAST *>(expr)) {
 		return "string";
@@ -159,8 +159,8 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return mir::MIRType::getFloat64();
 	} else if (typeStr == "bool") {
 		return mir::MIRType::getInt1();
-	} else if (typeStr == "char") {
-		// Char type: 8-bit signed integer (for compatibility with existing stdlib)
+	} else if (typeStr == "character") {
+		// Character type: 8-bit signed integer (for compatibility with existing stdlib)
 		// Note: Future EGC (Extended Grapheme Cluster) iteration will use a different approach
 		return mir::MIRType::getInt8();
 	} else if (typeStr == "byte") {
@@ -259,7 +259,7 @@ std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
 	case mir::MIRTypeKind::Int1:
 		return "bool";
 	case mir::MIRTypeKind::Int8:
-		return "char"; // Could also be byte, but char is the common case
+		return "character"; // Could also be byte, but character is the common case
 	case mir::MIRTypeKind::Int64:
 		return "int"; // Map i64 to int for now
 	case mir::MIRTypeKind::Ptr:

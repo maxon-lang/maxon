@@ -1,39 +1,39 @@
-// stdlib/string/char.maxon
-// Char Type - Extended Grapheme Cluster (EGC) representing a user-perceived character
+// stdlib/string/character.maxon
+// Character Type - Extended Grapheme Cluster (EGC) representing a user-perceived character
 //
-// A char represents what a user perceives as a single character, which may be
+// A character represents what a user perceives as a single character, which may be
 // composed of multiple Unicode codepoints (e.g., emoji sequences, combining marks).
 //
 // Memory Layout (16 bytes, identical to string):
-// - Small Char (MSB of byte 15 = 0): UTF-8 data inline in bytes 0-14
-// - Large Char (MSB of byte 15 = 1): Heap-allocated for sequences > 15 bytes
+// - Small Character (MSB of byte 15 = 0): UTF-8 data inline in bytes 0-14
+// - Large Character (MSB of byte 15 = 1): Heap-allocated for sequences > 15 bytes
 //
-// The char type is NOT an alias for byte. UTF-8 characters can span multiple bytes:
+// The character type is NOT an alias for byte. UTF-8 characters can span multiple bytes:
 // - 'A' = 1 byte (ASCII)
 // - 'é' = 2 bytes (Latin Extended)
 // - '中' = 3 bytes (CJK)
 // - '🎉' = 4 bytes (Emoji)
 // - '👨‍👩‍👧‍👦' = 25 bytes (Family emoji with ZWJ sequences)
 
-// char struct - represents an Extended Grapheme Cluster
+// character struct - represents an Extended Grapheme Cluster
 // Uses the same internal representation as string (_ManagedString)
-export struct char is Equatable, Hashable, ExpressibleByCharLiteral
+export struct character is Equatable, Hashable, ExpressibleByCharLiteral
 	var _managed _ManagedString  // Compiler-managed storage (same layout as string)
 
 	// ============================================
 	// ExpressibleByCharLiteral conformance
 	// ============================================
 
-	// Initialize char from compiler-constructed _ManagedString
-	export function ExpressibleByCharLiteral.init(managed _ManagedString) char
-		return char{_managed: managed}
+	// Initialize character from compiler-constructed _ManagedString
+	export function ExpressibleByCharLiteral.init(managed _ManagedString) character
+		return character{_managed: managed}
 	end 'init'
 
 	// ============================================
 	// Basic properties
 	// ============================================
 
-	// isEmpty - check if char is empty (should never be true for valid char)
+	// isEmpty - check if character is empty (should never be true for valid character)
 	export function isEmpty() bool
 		return __string_len(_managed) == 0
 	end 'isEmpty'
@@ -42,9 +42,9 @@ export struct char is Equatable, Hashable, ExpressibleByCharLiteral
 	// Conversion
 	// ============================================
 
-	// toString - convert char to string
+	// toString - convert character to string
 	export function toString() string
-		// Create a new string from the char's data
+		// Create a new string from the character's data
 		return string{_managed: _managed, _iterPos: 0}
 	end 'toString'
 
@@ -52,7 +52,7 @@ export struct char is Equatable, Hashable, ExpressibleByCharLiteral
 	// Equatable conformance
 	// ============================================
 
-	export function Equatable.equals(other char) bool
+	export function Equatable.equals(other character) bool
 		return _equals_managed_string(_managed, other._managed)
 	end 'equals'
 
@@ -87,8 +87,8 @@ export struct char is Equatable, Hashable, ExpressibleByCharLiteral
 	// Comparison (for ordering)
 	// ============================================
 
-	// Compare chars lexicographically by their UTF-8 bytes
-	export function compareTo(other char) int
+	// Compare characters lexicographically by their UTF-8 bytes
+	export function compareTo(other character) int
 		var len1 = __string_len(_managed)
 		var len2 = __string_len(other._managed)
 		var minLen = len1
@@ -118,8 +118,8 @@ export struct char is Equatable, Hashable, ExpressibleByCharLiteral
 		end 'len_greater'
 		return 0
 	end 'compareTo'
-end 'char'
+end 'character'
 
 // ============================================
-// Char Views
+// Character Views
 // ============================================

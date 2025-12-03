@@ -16,13 +16,13 @@ end 'main'
 ; Module: test.maxon
 ; Instructions: 652
 
+%__unsized_array_byte = type { ptr, i32 }
+%character = type { ptr }
 %substring = type { ptr, ptr, i32, i32 }
 %string = type { ptr, i32 }
 %GraphemeState = type { i32, i1 }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
 %CodepointView = type { ptr, i32 }
-%char = type { ptr }
-%__unsized_array_byte = type { ptr, i32 }
 
 @.__tag.tostring = constant [19 x i8] c"substring.toString\00"
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
@@ -146,7 +146,7 @@ ifcont2:
   ret Optional<i32> %40
 }
 
-define Optional<%char> @substring.next(ptr %self) {
+define Optional<%character> @substring.next(ptr %self) {
 entry0:
   %2 = getelementptr %substring, ptr %self, i32 0, i32 3
   %3 = load i32, ptr %2
@@ -178,27 +178,27 @@ then1:
   %23 = sub i32 %57, %22
   %27 = getelementptr %substring, ptr %self, i32 0, i32 3
   %28 = load i32, ptr %27
-  %30 = call %char @substring._makeCharFromBytes(ptr %self, i32 %28, i32 %23)
-  %31 = alloca %char
-  store %char %30, ptr %31
+  %30 = call %character @substring._makeCharFromBytes(ptr %self, i32 %28, i32 %23)
+  %31 = alloca %character
+  store %character %30, ptr %31
   %33 = getelementptr %substring, ptr %self, i32 0, i32 3
   store i32 %57, ptr %33
-  %36 = alloca Optional<%char>
-  %37 = getelementptr Optional<%char>, ptr %36, i32 0, i32 0
+  %36 = alloca Optional<%character>
+  %37 = getelementptr Optional<%character>, ptr %36, i32 0, i32 0
   store i8 1, ptr %37
-  %38 = getelementptr Optional<%char>, ptr %36, i32 0, i32 1
-  store %char %30, ptr %38
-  %39 = load Optional<%char>, ptr %36
-  ret Optional<%char> %39
+  %38 = getelementptr Optional<%character>, ptr %36, i32 0, i32 1
+  store %character %30, ptr %38
+  %39 = load Optional<%character>, ptr %36
+  ret Optional<%character> %39
 ifcont2:
-  %40 = alloca Optional<%char>
-  %41 = getelementptr Optional<%char>, ptr %40, i32 0, i32 0
+  %40 = alloca Optional<%character>
+  %41 = getelementptr Optional<%character>, ptr %40, i32 0, i32 0
   store i8 0, ptr %41
-  %42 = load Optional<%char>, ptr %40
-  ret Optional<%char> %42
+  %42 = load Optional<%character>, ptr %40
+  ret Optional<%character> %42
 }
 
-define %char @substring._makeCharFromBytes(ptr %self, i32 %start, i32 %byte_len) {
+define %character @substring._makeCharFromBytes(ptr %self, i32 %start, i32 %byte_len) {
 entry0:
   %7 = add i32 %start, %byte_len
   %8 = sub i32 %7, %start
@@ -252,10 +252,10 @@ slice.continue2:
   store i32 %31, ptr %42
   %43 = getelementptr %__ManagedStringData, ptr %38, i32 0, i32 2
   store i32 %32, ptr %43
-  %45 = alloca %char
-  %47 = getelementptr %char, ptr %45, i32 0, i32 0
+  %45 = alloca %character
+  %47 = getelementptr %character, ptr %45, i32 0, i32 0
   store ptr %38, ptr %47
-  %48 = load %char, ptr %45
+  %48 = load %character, ptr %45
   %49 = getelementptr %substring, ptr %27, i32 0, i32 0
   %50 = load ptr, ptr %49
   %51 = getelementptr %__ManagedStringData, ptr %50, i32 0, i32 2
@@ -269,13 +269,13 @@ sub.release3:
   call void @_managed_string_release(ptr %56, ptr @.__tag.free.sub)
   br label %sub.continue4
 sub.continue4:
-  ret %char %48
+  ret %character %48
 }
 
-define %CodepointView @char.codepoints(ptr %self) {
+define %CodepointView @character.codepoints(ptr %self) {
 entry0:
   %1 = alloca %CodepointView
-  %3 = getelementptr %char, ptr %self, i32 0, i32 0
+  %3 = getelementptr %character, ptr %self, i32 0, i32 0
   %4 = load ptr, ptr %3
   %5 = getelementptr %CodepointView, ptr %1, i32 0, i32 0
   store ptr %4, ptr %5
@@ -311,19 +311,19 @@ entry0:
 forcond1:
   %47 = phi i32 [ 0, %entry0 ], [ %48, %iflet.after5 ]
   %45 = phi i32 [ 0, %entry0 ], [ %46, %iflet.after5 ]
-  %14 = call Optional<%char> @substring.next(ptr %13)
-  %15 = alloca Optional<%char>
-  store Optional<%char> %14, ptr %15
-  %16 = getelementptr Optional<%char>, ptr %15, i32 0, i32 0
+  %14 = call Optional<%character> @substring.next(ptr %13)
+  %15 = alloca Optional<%character>
+  store Optional<%character> %14, ptr %15
+  %16 = getelementptr Optional<%character>, ptr %15, i32 0, i32 0
   %17 = load i8, ptr %16
   %18 = icmp eq i8 %17, 1
   br i1 %18, label %forloop2, label %afterfor3
 forloop2:
-  %19 = getelementptr Optional<%char>, ptr %15, i32 0, i32 1
-  %20 = load %char, ptr %19
-  %21 = alloca %char
-  store %char %20, ptr %21
-  %22 = call %CodepointView @char.codepoints(ptr %21)
+  %19 = getelementptr Optional<%character>, ptr %15, i32 0, i32 1
+  %20 = load %character, ptr %19
+  %21 = alloca %character
+  store %character %20, ptr %21
+  %22 = call %CodepointView @character.codepoints(ptr %21)
   %23 = alloca %CodepointView
   store %CodepointView %22, ptr %23
   %24 = call Optional<i32> @CodepointView.next(ptr %23)
@@ -885,13 +885,13 @@ entry0:
 ; Module: test.maxon
 ; Instructions: 986
 
+%__unsized_array_byte = type { ptr, i32 }
+%character = type { ptr }
 %substring = type { ptr, ptr, i32, i32 }
 %string = type { ptr, i32 }
 %GraphemeState = type { i32, i1 }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
 %CodepointView = type { ptr, i32 }
-%char = type { ptr }
-%__unsized_array_byte = type { ptr, i32 }
 
 @.__tag.tostring = constant [19 x i8] c"substring.toString\00"
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
@@ -1051,7 +1051,7 @@ ifcont2:
   ret Optional<i32> %40
 }
 
-define Optional<%char> @substring.next(ptr %self) {
+define Optional<%character> @substring.next(ptr %self) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
@@ -1089,27 +1089,27 @@ then1:
   %27 = getelementptr %substring, ptr %26, i32 0, i32 3
   %28 = load i32, ptr %27
   %29 = load i32, ptr %24
-  %30 = call %char @substring._makeCharFromBytes(ptr %25, i32 %28, i32 %29)
-  %31 = alloca %char
-  store %char %30, ptr %31
+  %30 = call %character @substring._makeCharFromBytes(ptr %25, i32 %28, i32 %29)
+  %31 = alloca %character
+  store %character %30, ptr %31
   %32 = load ptr, ptr %0
   %33 = getelementptr %substring, ptr %32, i32 0, i32 3
   %34 = load i32, ptr %18
   store i32 %34, ptr %33
-  %35 = load %char, ptr %31
-  %36 = alloca Optional<%char>
-  %37 = getelementptr Optional<%char>, ptr %36, i32 0, i32 0
+  %35 = load %character, ptr %31
+  %36 = alloca Optional<%character>
+  %37 = getelementptr Optional<%character>, ptr %36, i32 0, i32 0
   store i8 1, ptr %37
-  %38 = getelementptr Optional<%char>, ptr %36, i32 0, i32 1
-  store %char %35, ptr %38
-  %39 = load Optional<%char>, ptr %36
-  ret Optional<%char> %39
+  %38 = getelementptr Optional<%character>, ptr %36, i32 0, i32 1
+  store %character %35, ptr %38
+  %39 = load Optional<%character>, ptr %36
+  ret Optional<%character> %39
 ifcont2:
-  %40 = alloca Optional<%char>
-  %41 = getelementptr Optional<%char>, ptr %40, i32 0, i32 0
+  %40 = alloca Optional<%character>
+  %41 = getelementptr Optional<%character>, ptr %40, i32 0, i32 0
   store i8 0, ptr %41
-  %42 = load Optional<%char>, ptr %40
-  ret Optional<%char> %42
+  %42 = load Optional<%character>, ptr %40
+  ret Optional<%character> %42
 }
 
 define i32 @substring._findGraphemeEnd(ptr %self, i32 %start_pos, i32 %len) {
@@ -1127,7 +1127,7 @@ entry0:
   ret i32 %6
 }
 
-define %char @substring._makeCharFromBytes(ptr %self, i32 %start, i32 %byte_len) {
+define %character @substring._makeCharFromBytes(ptr %self, i32 %start, i32 %byte_len) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
@@ -1193,11 +1193,11 @@ slice.continue2:
   store i32 %32, ptr %43
   %44 = alloca ptr
   store ptr %38, ptr %44
-  %45 = alloca %char
+  %45 = alloca %character
   %46 = load ptr, ptr %44
-  %47 = getelementptr %char, ptr %45, i32 0, i32 0
+  %47 = getelementptr %character, ptr %45, i32 0, i32 0
   store ptr %46, ptr %47
-  %48 = load %char, ptr %45
+  %48 = load %character, ptr %45
   %49 = getelementptr %substring, ptr %27, i32 0, i32 0
   %50 = load ptr, ptr %49
   %51 = getelementptr %__ManagedStringData, ptr %50, i32 0, i32 2
@@ -1211,16 +1211,16 @@ sub.release3:
   call void @_managed_string_release(ptr %56, ptr @.__tag.free.sub)
   br label %sub.continue4
 sub.continue4:
-  ret %char %48
+  ret %character %48
 }
 
-define %CodepointView @char.codepoints(ptr %self) {
+define %CodepointView @character.codepoints(ptr %self) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
   %1 = alloca %CodepointView
   %2 = load ptr, ptr %0
-  %3 = getelementptr %char, ptr %2, i32 0, i32 0
+  %3 = getelementptr %character, ptr %2, i32 0, i32 0
   %4 = load ptr, ptr %3
   %5 = getelementptr %CodepointView, ptr %1, i32 0, i32 0
   store ptr %4, ptr %5
@@ -1257,19 +1257,19 @@ entry0:
   store %substring %12, ptr %13
   br label %forcond1
 forcond1:
-  %14 = call Optional<%char> @substring.next(ptr %13)
-  %15 = alloca Optional<%char>
-  store Optional<%char> %14, ptr %15
-  %16 = getelementptr Optional<%char>, ptr %15, i32 0, i32 0
+  %14 = call Optional<%character> @substring.next(ptr %13)
+  %15 = alloca Optional<%character>
+  store Optional<%character> %14, ptr %15
+  %16 = getelementptr Optional<%character>, ptr %15, i32 0, i32 0
   %17 = load i8, ptr %16
   %18 = icmp eq i8 %17, 1
   br i1 %18, label %forloop2, label %afterfor3
 forloop2:
-  %19 = getelementptr Optional<%char>, ptr %15, i32 0, i32 1
-  %20 = load %char, ptr %19
-  %21 = alloca %char
-  store %char %20, ptr %21
-  %22 = call %CodepointView @char.codepoints(ptr %21)
+  %19 = getelementptr Optional<%character>, ptr %15, i32 0, i32 1
+  %20 = load %character, ptr %19
+  %21 = alloca %character
+  store %character %20, ptr %21
+  %22 = call %CodepointView @character.codepoints(ptr %21)
   %23 = alloca %CodepointView
   store %CodepointView %22, ptr %23
   %24 = call Optional<i32> @CodepointView.next(ptr %23)

@@ -78,8 +78,8 @@ During conformance checking, both `Self` and associated types are substituted:
 
 ```text
 Interface signature:  function getCurrent() Element
-Struct (string):      function getCurrent() char
-Resolution:           Self -> string, Element -> char (implicit self)
+Struct (string):      function getCurrent() character
+Resolution:           Self -> string, Element -> character (implicit self)
 ```
 
 ### Implicit `self` and Field Access
@@ -187,7 +187,7 @@ end 'Iterable'
 Different iterators define different element types:
 
 - `Iterator` (for `range()`): `is Iterable with int`
-- `string`: `is Iterable with char` (grapheme cluster)
+- `string`: `is Iterable with character` (grapheme cluster)
 - `ByteView`: `is Iterable with byte` (byte value)
 - `UTF16View`: `is Iterable with int` (UTF-16 code unit)
 - `CodepointView`: `is Iterable with int` (Unicode codepoint)
@@ -200,7 +200,7 @@ When iterating with `for`, the loop variable's type is inferred from the iterato
 function main() int
     var s = "Hi"
     for ch in s 'chars'
-        // ch has type 'char' (inferred from string's Element type - grapheme cluster)
+        // ch has type 'character' (inferred from string's Element type - grapheme cluster)
         var cps = ch.codepoints()
         if let cp = cps.next() 'get_cp'
             print_int(cp)
@@ -440,17 +440,17 @@ end 'main'
 ```
 
 
-<!-- test: char-element-type -->
+<!-- test: character-element-type -->
 ```maxon
-// char is a grapheme cluster struct, use codepoints() to access codepoint values
+// character is a grapheme cluster struct, use codepoints() to access codepoint values
 interface CharSource uses Element
     function getChar() Element
 end 'CharSource'
 
-struct SingleChar is CharSource with char
-    var ch char
+struct SingleChar is CharSource with character
+    var ch character
 
-    function CharSource.getChar() char
+    function CharSource.getChar() character
         return ch
     end 'getChar'
 end 'SingleChar'

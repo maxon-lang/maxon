@@ -46,7 +46,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			} else if (elementType->kind == mir::MIRTypeKind::Float64) {
 				elementTypeName = "float";
 			} else if (elementType->kind == mir::MIRTypeKind::Int8) {
-				elementTypeName = "char";
+				elementTypeName = "character";
 			} else if (elementType->kind == mir::MIRTypeKind::Ptr) {
 				elementTypeName = "ptr";
 			} else {
@@ -503,7 +503,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 		charAlloca->name = varDecl->name;
 
 		namedValues[varDecl->name] = charAlloca;
-		variableTypes[varDecl->name] = "char";
+		variableTypes[varDecl->name] = "character";
 		return;
 	}
 
@@ -617,7 +617,7 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 			} else if (elementType->kind == mir::MIRTypeKind::Float64) {
 				elementTypeName = "float";
 			} else if (elementType->kind == mir::MIRTypeKind::Int8) {
-				elementTypeName = "char";
+				elementTypeName = "character";
 			} else if (elementType->kind == mir::MIRTypeKind::Ptr) {
 				elementTypeName = "ptr";
 			} else {

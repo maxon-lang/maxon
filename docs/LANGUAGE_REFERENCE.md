@@ -107,8 +107,8 @@ return, struct, then, true, var, while
 '\''          // Escape sequence (single quote)
 ```
 
-Character literals create a `char` struct value, which represents an Extended Grapheme Cluster (EGC).
-The `char` type may contain multiple UTF-8 bytes.
+Character literals create a `character` struct value, which represents an Extended Grapheme Cluster (EGC).
+The `character` type may contain multiple UTF-8 bytes.
 
 **String Literals** (double-quoted, null-terminated)
 ```maxon
@@ -148,15 +148,15 @@ nil  // Represents absence of a value (for optional types)
 
 | Type | Size | Description |
 |------|------|-------------|
-| `char` | 16-byte | Extended Grapheme Cluster (EGC) |
+| `character` | 16-byte | Extended Grapheme Cluster (EGC) |
 
-The `char` type represents a user-perceived character, which may consist of multiple Unicode codepoints:
+The `character` type represents a user-perceived character, which may consist of multiple Unicode codepoints:
 - `'A'` - ASCII character (1 byte)
 - `'é'` - Latin with combining accent (2-3 bytes)
 - `'🎉'` - Emoji (4 bytes)
 - `'👨‍👩‍👧'` - Family emoji with ZWJ (up to 25 bytes)
 
-**Char Methods:**
+**Character Methods:**
 ```maxon
 var c = 'A'
 c.bytes().count()      // Number of UTF-8 bytes (1 for ASCII)
@@ -255,7 +255,7 @@ var names = map from string to string
 Map keys must implement the `Hashable` interface. Supported key types:
 - `int`
 - `string`
-- `char`
+- `character`
 - `byte`
 
 Non-hashable types (like `float`) cannot be used as map keys and will produce a compile-time error.
@@ -443,16 +443,16 @@ Examples:
 
 **Explicit Conversions** (using `as` operator)
 ```maxon
-var i = 65 as char         // 'A'
+var i = 65 as character         // 'A'
 var b = 1 as bool          // true
 var f = 5 as float         // 5.0
 ```
 
 Supported casts:
 - `int` → `float` (int to float only)
-- `int` ↔ `char`
+- `int` ↔ `character`
 - `int` ↔ `bool`
-- `char` ↔ `int`
+- `character` ↔ `int`
 
 **Converting floats to integers:**
 The `float → int` cast is not supported. Use explicit functions instead to make your intent clear:
@@ -1015,7 +1015,7 @@ Located in `stdlib/` directory:
 - No null checks
 
 ### Calling Convention
-- Simple types (int, float, bool, char) passed by value
+- Simple types (int, float, bool, character) passed by value
 - Arrays passed as pointer
 - Return values passed by value (in register or stack)
 
@@ -1247,7 +1247,7 @@ var elem = arr[0]
 var size = arr.length
 
 // Types
-int float bool char
+int float bool character
 [N]type    // fixed-size array
 []type     // unsized array (parameters)
 
@@ -1260,7 +1260,7 @@ as                           // type cast
 // Literals
 42                           // int
 3.14                         // float
-'A'                          // char
+'A'                          // character
 "text"                       // string
 true false                   // bool
 ```

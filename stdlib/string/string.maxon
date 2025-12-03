@@ -6,7 +6,7 @@
 // - Copy-on-write (COW) semantics for efficient copying
 // - Strings are NOT indexable with [] - use chars() for character access
 // - UTF-8 encoded internally
-// - Iteration yields grapheme clusters (char), not bytes or codepoints
+// - Iteration yields grapheme clusters (character), not bytes or codepoints
 //
 // **_ManagedString** is a compiler-internal opaque type.
 // User code cannot access its fields directly.
@@ -24,9 +24,9 @@
 // - The compiler generates _managed_string_make_unique() before mutation (COW)
 // - User code never calls these functions directly
 //
-// Dependencies: string/char, unicode/grapheme (auto-imported by compiler)
+// Dependencies: string/character, unicode/grapheme (auto-imported by compiler)
 
-export struct string is Hashable, Equatable, Iterable with char, ExpressibleByStringLiteral
+export struct string is Hashable, Equatable, Iterable with character, ExpressibleByStringLiteral
 	var _managed _ManagedString  // Compiler-managed opaque string storage
 	var _iterPos int             // Current iteration position (byte offset for grapheme iteration)
 
@@ -64,15 +64,15 @@ export struct string is Hashable, Equatable, Iterable with char, ExpressibleBySt
 	// ============================================
 	// Iterable conformance - grapheme cluster iteration
 	// ============================================
-	// Returns char values (Extended Grapheme Clusters)
+	// Returns character values (Extended Grapheme Clusters)
 
-	export function Iterable.next() char or nil
+	export function Iterable.next() character or nil
 		if _iterPos < __string_len(_managed) 'check'
 			// Find the end of the current grapheme cluster using UAX #29 algorithm
 			var len = __string_len(_managed)
 			var end_pos = _findGraphemeEnd(_iterPos, len)
 
-			// Create a char from the bytes in the range [_iterPos, end_pos)
+			// Create a character from the bytes in the range [_iterPos, end_pos)
 			var grapheme_len = end_pos - _iterPos
 			let grapheme = _makeCharFromBytes(_iterPos, grapheme_len)
 
@@ -99,12 +99,12 @@ export struct string is Hashable, Equatable, Iterable with char, ExpressibleBySt
 		return _utf8_decode_at(_managed, pos)
 	end '_decodeCodepointAt'
 
-	// Internal: Create a char from bytes in string at [start, start+len)
-	function _makeCharFromBytes(start int, byte_len int) char
-		// Create substring slice, then convert to _ManagedString for char
+	// Internal: Create a character from bytes in string at [start, start+len)
+	function _makeCharFromBytes(start int, byte_len int) character
+		// Create substring slice, then convert to _ManagedString for character
 		var sub = __string_slice(_managed, start, start + byte_len)
 		var managed = __substring_to_string(sub)
-		return char{_managed: managed}
+		return character{_managed: managed}
 	end '_makeCharFromBytes'
 
 	// ============================================
@@ -270,7 +270,7 @@ end 'string'
 // ============================================
 
 // ByteView - iterate over raw UTF-8 bytes
-// Used by both string.bytes() and char.bytes()
+// Used by both string.bytes() and character.bytes()
 export struct ByteView is Iterable with byte
 	var _managed _ManagedString
 	var _pos int
@@ -291,7 +291,7 @@ end 'ByteView'
 
 // CharCollection - indexed access to Unicode characters
 // Implements Collection interface for get/set operations
-export struct CharCollection is Iterable with char, Collection with char
+export struct CharCollection is Iterable with character, Collection with character
 	var _str string
 	var _pos int
 
@@ -308,7 +308,7 @@ export struct CharCollection is Iterable with char, Collection with char
 	end 'count'
 
 	// Collection.get - get character at index
-	export function Collection.get(index int) char
+	export function Collection.get(index int) character
 		var charCount = 0
 		var bytePos = 0
 		var len = __string_len(_str._managed)
@@ -317,7 +317,7 @@ export struct CharCollection is Iterable with char, Collection with char
 			charCount = charCount + 1
 		end 'navigate'
 
-		// Return char from current position
+		// Return character from current position
 		return _makeCharAt(bytePos)
 	end 'get'
 
@@ -325,7 +325,7 @@ export struct CharCollection is Iterable with char, Collection with char
 	// Ensures exclusive ownership before mutation via _managed_string_make_unique
 	// Note: This only works correctly for ASCII characters (single-byte)
 	// UTF-8 multi-byte character replacement would require more complex logic
-	export function Collection.set(index int, value char) CharCollection
+	export function Collection.set(index int, value character) CharCollection
 		// Validate index
 		var len = __string_len(_str._managed)
 		if index < 0 or index >= len 'bounds_check'
@@ -337,7 +337,7 @@ export struct CharCollection is Iterable with char, Collection with char
 		__string_make_unique(_str._managed)
 
 		// Now safe to mutate - set the byte (only works for single-byte chars)
-		// Access first byte of char directly via its _managed field
+		// Access first byte of character directly via its _managed field
 		var b = __string_byte_at(value._managed, 0)
 		__string_set_byte(_str._managed, index, b)
 
@@ -345,7 +345,7 @@ export struct CharCollection is Iterable with char, Collection with char
 	end 'set'
 
 	// Iterable conformance
-	export function Iterable.next() char or nil
+	export function Iterable.next() character or nil
 		if _pos < __string_len(_str._managed) 'check'
 			let ch = _makeCharAt(_pos)
 			var advance = _utf8_byte_length_at(_str._managed, _pos)
@@ -355,8 +355,8 @@ export struct CharCollection is Iterable with char, Collection with char
 		return nil
 	end 'next'
 
-	// Internal: create char from codepoint at byte position
-	function _makeCharAt(bytePos int) char
+	// Internal: create character from codepoint at byte position
+	function _makeCharAt(bytePos int) character
 		var len = __string_len(_str._managed)
 		var charLen = 0
 		if bytePos < len 'in_bounds'
@@ -365,12 +365,12 @@ export struct CharCollection is Iterable with char, Collection with char
 
 		var sub = __string_slice(_str._managed, bytePos, bytePos + charLen)
 		var managed = __substring_to_string(sub)
-		return char{_managed: managed}
+		return character{_managed: managed}
 	end '_makeCharAt'
 end 'CharCollection'
 
 // UTF16View - iterate over UTF-16 code units
-// Used by both string.utf16() and char.utf16()
+// Used by both string.utf16() and character.utf16()
 export struct UTF16View is Iterable with int
 	var _managed _ManagedString
 	var _bytePos int
@@ -427,7 +427,7 @@ end 'UTF16View'
 
 // CodepointView - iterate over Unicode codepoints (int values)
 // Provides explicit codepoint iteration for when you need codepoints, not graphemes
-// Used by both string.codepoints() and char.codepoints()
+// Used by both string.codepoints() and character.codepoints()
 export struct CodepointView is Iterable with int
 	var _managed _ManagedString
 	var _pos int
@@ -467,7 +467,7 @@ end 'CodepointView'
 //   __substring_iter_pos(sub)      - get current iteration position
 //   __substring_with_iter_pos(sub, pos) - create copy with new iter position
 
-export struct substring is Hashable, Equatable, Iterable with char
+export struct substring is Hashable, Equatable, Iterable with character
 	var _parentManaged _ManagedString  // Parent string's managed data (for refcount)
 	var _ptr ptr                        // Pointer into parent's buffer
 	var _len int                        // Byte length of this substring
@@ -490,15 +490,15 @@ export struct substring is Hashable, Equatable, Iterable with char
 	// ============================================
 	// Iterable conformance - grapheme cluster iteration
 	// ============================================
-	// Returns char values (Extended Grapheme Clusters)
+	// Returns character values (Extended Grapheme Clusters)
 
-	export function Iterable.next() char or nil
+	export function Iterable.next() character or nil
 		if __substring_iter_pos(self) < __substring_len(self) 'check'
 			// Find the end of the current grapheme cluster
 			var len = __substring_len(self)
 			var end_pos = _findGraphemeEnd(_iterPos, len)
 
-			// Create a char from the bytes in the range [_iterPos, end_pos)
+			// Create a character from the bytes in the range [_iterPos, end_pos)
 			var grapheme_len = end_pos - _iterPos
 			let grapheme = _makeCharFromBytes(_iterPos, grapheme_len)
 
@@ -529,11 +529,11 @@ export struct substring is Hashable, Equatable, Iterable with char
 		return _utf8_decode_at_substring(self, pos)
 	end '_decodeCodepointAt'
 
-	// Internal: Create a char from bytes at [start, start+byte_len)
-	function _makeCharFromBytes(start int, byte_len int) char
+	// Internal: Create a character from bytes at [start, start+byte_len)
+	function _makeCharFromBytes(start int, byte_len int) character
 		var sub = __substring_slice(self, start, start + byte_len)
 		var managed = __substring_to_string(sub)
-		return char{_managed: managed}
+		return character{_managed: managed}
 	end '_makeCharFromBytes'
 
 	// ============================================
@@ -616,7 +616,7 @@ end 'substring'
 
 // Create a new string from a byte buffer
 // Copies the bytes and creates a new heap-allocated string
-// Note: Uses []byte not []char since char is now a grapheme cluster struct
-export function string_from_chars(buffer []byte, length int) string
-	return string{_managed: __string_from_chars(buffer, length), _iterPos: 0}
-end 'string_from_chars'
+// Note: Uses []byte not []character since character is now a grapheme cluster struct
+export function string_from_characters(buffer []byte, length int) string
+	return string{_managed: __string_from_characters(buffer, length), _iterPos: 0}
+end 'string_from_characters'

@@ -146,7 +146,7 @@ EXTENSION_SOURCES := $(shell find vscode-extension/src -name '*.ts' 2>/dev/null)
 # Compile the VS Code extension only if sources changed
 vscode-extension/out/.build-stamp: $(EXTENSION_SOURCES) vscode-extension/package.json vscode-extension/tsconfig.json
 	@echo Compiling VS Code extension...
-	@cd vscode-extension && npm install --silent && npm run compile
+	@cd vscode-extension && npm install --silent && npm run compile && npm run bundle
 	@touch vscode-extension/out/.build-stamp
 	@echo Extension compiled.
 

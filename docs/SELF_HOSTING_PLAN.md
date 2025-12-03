@@ -25,7 +25,7 @@ MIR Optimization → Register Allocation → x86-64 Code Generation → PE/ELF B
 ### Implemented Language Features
 
 #### Type System
-- Primitive types: `int` (32-bit), `float` (64-bit), `bool`, `char`, `ptr`
+- Primitive types: `int` (32-bit), `float` (64-bit), `bool`, `character`, `ptr`
 - Fixed-size arrays: `[N]type` with `.length` property
 - Structs: User-defined types with field access and nested structs
 - Type conversions: Explicit casting with `as` operator

@@ -22,8 +22,8 @@ safeffi::TypeTag MIRCodeGenerator::getTypeTagFromString(const std::string &typeS
 		return safeffi::TypeTag::Bool;
 	} else if (typeStr == "ptr") {
 		return safeffi::TypeTag::Ptr;
-	} else if (typeStr == "char") {
-		return safeffi::TypeTag::Char;
+	} else if (typeStr == "character") {
+		return safeffi::TypeTag::Char; // FFI uses 'Char' tag for ABI compatibility
 	} else if (typeStr == "void" || typeStr.empty()) {
 		return safeffi::TypeTag::Void;
 	}

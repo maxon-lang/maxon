@@ -71,7 +71,7 @@ class BooleanExprAST : public ExprAST {
 // Character literal (grapheme cluster - may contain multiple bytes/codepoints)
 class CharacterExprAST : public ExprAST {
   public:
-	std::string value;  // UTF-8 encoded grapheme cluster
+	std::string value; // UTF-8 encoded grapheme cluster
 
 	CharacterExprAST(const std::string &val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
 };
@@ -96,7 +96,7 @@ class NilExprAST : public ExprAST {
 class CastExprAST : public ExprAST {
   public:
 	std::unique_ptr<ExprAST> expr;
-	std::string targetType; // "int", "float", "char", "bool"
+	std::string targetType; // "int", "float", "character", "bool"
 
 	CastExprAST(std::unique_ptr<ExprAST> e, const std::string &type, int l = 0, int c = 0)
 		: ExprAST(l, c), expr(std::move(e)), targetType(type) {}
@@ -242,7 +242,7 @@ class StmtAST : public ASTNode {
 class VarDeclStmtAST : public StmtAST {
   public:
 	std::string name;
-	std::string type; // "int", "ptr", "char", or "" for inferred
+	std::string type; // "int", "ptr", "character", or "" for inferred
 	std::unique_ptr<ExprAST> initializer;
 
 	VarDeclStmtAST(const std::string &n, std::unique_ptr<ExprAST> init, const std::string &t = "", int l = 0, int c = 0)
@@ -253,7 +253,7 @@ class VarDeclStmtAST : public StmtAST {
 class LetDeclStmtAST : public StmtAST {
   public:
 	std::string name;
-	std::string type; // "int", "ptr", "char", or "" for inferred
+	std::string type; // "int", "ptr", "character", or "" for inferred
 	std::unique_ptr<ExprAST> initializer;
 
 	LetDeclStmtAST(const std::string &n, std::unique_ptr<ExprAST> init, const std::string &t = "", int l = 0, int c = 0)
@@ -519,7 +519,7 @@ class StructDefAST : public ASTNode {
 	std::vector<std::unique_ptr<FunctionAST>> methods;					   // Methods declared inside the struct
 	std::vector<std::string> associatedTypeParams;						   // Associated type parameter names from 'uses' clause
 	std::vector<std::string> conformsTo;								   // Interface names this struct conforms to (via 'is')
-	std::map<std::string, std::string> typeAssignments;					   // Associated type assignments (e.g., "Element" -> "char")
+	std::map<std::string, std::string> typeAssignments;					   // Associated type assignments (e.g., "Element" -> "character")
 	std::map<std::string, std::vector<std::string>> interfaceTypeBindings; // Per-interface 'with' types (resolved to typeAssignments in semantic analyzer)
 	bool isExported;													   // true if this struct is exported (visible outside this file)
 	int line;

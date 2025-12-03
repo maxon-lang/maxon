@@ -12,7 +12,7 @@ Hash maps provide O(1) average-case lookup, insertion, and deletion of key-value
 **Declaration:**
 - Syntax: `map from K to V` where K is the key type and V is the value type
 - Example: `var m = map from int to int`
-- Keys must implement the `Hashable` interface (int, byte, char, string)
+- Keys must implement the `Hashable` interface (int, byte, character, string)
 
 **Implementation:**
 - Open addressing with linear probing
@@ -72,7 +72,7 @@ var names = map from int to string  // Map from int keys to string values
 Keys must implement the `Hashable` interface:
 - `int` - Integer keys
 - `byte` - Byte keys
-- `char` - Character keys
+- `character` - Character keys
 - `string` - String keys
 
 ## Methods
@@ -452,7 +452,7 @@ end 'main'
 ```maxoncstderr
 Semantic Error: line 3, column 13
 Map key type 'float' must implement Hashable interface
-  Hashable types: int, string, char, byte
+  Hashable types: int, string, character, byte
   Note: Only types that can be hashed can be used as map keys
 
   3 |     var m = map from float to int

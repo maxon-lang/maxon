@@ -211,7 +211,7 @@ TEST_CASE("stdlib_completion_details", "[analyzer]") {
 				std::cerr << "  Warning: item.detail is empty" << std::endl;
 			} else {
 				std::cout << "  Detail: " << item.detail << std::endl;
-				// Note: [12]char may be represented differently
+				// Note: [12]character may be represented differently
 				bool hasExpectedInfo = item.detail.find("value int") != std::string::npos &&
 									   item.detail.find("buffer") != std::string::npos;
 				if (hasExpectedInfo) {
@@ -518,7 +518,7 @@ TEST_CASE("stdlib_function_no_error", "[analyzer]") {
 
 	auto doc = createTestDocument(R"(
 function main() int
-    var buffer [12]char = 0
+    var buffer [12]character = 0
     var length = format_int_array(42, buffer)
     return length
 end 'main'
@@ -543,7 +543,7 @@ TEST_CASE("stdlib_function_wrong_args", "[analyzer]") {
 
 	auto doc = createTestDocument(R"(
 function main() int
-    var buffer = [12]char
+    var buffer = [12]character
     var length = format_int_array(42)
     return length
 end 'main'
@@ -578,7 +578,7 @@ TEST_CASE("stdlib_not_initialized_shows_error", "[analyzer]") {
 
 	auto doc = createTestDocument(R"(
 function main() int
-    var buffer = [12]char
+    var buffer = [12]character
     var length = format_int_array(42, buffer)
     return length
 end 'main'
@@ -1143,7 +1143,7 @@ TEST_CASE("map_all_methods_accept_parameterized_type", "[analyzer]") {
 }
 
 TEST_CASE("string_and_char_init_methods_no_conflict", "[analyzer]") {
-	// Test that string and char init methods (from ExpressibleByStringLiteral
+	// Test that string and character init methods (from ExpressibleByStringLiteral
 	// and ExpressibleByCharLiteral interfaces) don't conflict with each other.
 	// Both have methods named "init" but they're on different structs.
 
@@ -1237,16 +1237,16 @@ TEST_CASE("stdlib_string_maxon_direct_analysis", "[analyzer]") {
 	REQUIRE_FALSE(hasAlreadyDefinedError);
 }
 
-TEST_CASE("substring_iteration_returns_char", "[analyzer]") {
-	// Test that iterating a substring returns char, not int
+TEST_CASE("substring_iteration_returns_character", "[analyzer]") {
+	// Test that iterating a substring returns character, not int
 	// This tests that the LSP correctly resolves the Element associated type
 
 	Analyzer analyzer;
 	std::string stdlibPath = "../../../stdlib";
 	analyzer.initializeStdlib(stdlibPath);
 
-	// Code that iterates a substring and calls a char method
-	// Using codepoints() which is a valid method on char
+	// Code that iterates a substring and calls a character method
+	// Using codepoints() which is a valid method on character
 	std::string code = R"(
 function main() int
     var s = "hello"
@@ -1280,15 +1280,15 @@ end 'main'
 	REQUIRE_FALSE(hasTypeError);
 }
 
-TEST_CASE("string_iteration_returns_char", "[analyzer]") {
-	// Test that iterating a string returns char, not int
+TEST_CASE("string_iteration_returns_character", "[analyzer]") {
+	// Test that iterating a string returns character, not int
 
 	Analyzer analyzer;
 	std::string stdlibPath = "../../../stdlib";
 	analyzer.initializeStdlib(stdlibPath);
 
-	// Code that iterates a string and calls a char method
-	// Using codepoints() which is a valid method on char
+	// Code that iterates a string and calls a character method
+	// Using codepoints() which is a valid method on character
 	std::string code = R"(
 function main() int
     var s = "hello"

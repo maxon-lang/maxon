@@ -138,7 +138,7 @@ mir::MIRValue *MIRCodeGenerator::generateHashForKey(mir::MIRValue *key, const st
 		// Use signed constant to avoid overflow warning
 		mir::MIRValue *prime = builder->getInt32(static_cast<int32_t>(0x9E3779B1));
 		return builder->createMul(key, prime, "hash");
-	} else if (keyTypeStr == "byte" || keyTypeStr == "char") {
+	} else if (keyTypeStr == "byte" || keyTypeStr == "character") {
 		// Extend to int32 and hash
 		mir::MIRValue *extended = builder->createSExt(key, mir::MIRType::getInt32(), "key.ext");
 		mir::MIRValue *prime = builder->getInt32(static_cast<int32_t>(0x9E3779B1));
@@ -260,7 +260,7 @@ mir::MIRValue *MIRCodeGenerator::generateMapContains(mir::MIRValue *mapAlloca, m
 
 	// Generate key comparison based on type
 	mir::MIRValue *keysEqual;
-	if (keyTypeStr == "int" || keyTypeStr == "byte" || keyTypeStr == "char") {
+	if (keyTypeStr == "int" || keyTypeStr == "byte" || keyTypeStr == "character") {
 		keysEqual = builder->createICmpEq(storedKey, key, "keys.equal");
 	} else if (keyTypeStr == "string") {
 		// For strings, need to compare contents - simplified for now

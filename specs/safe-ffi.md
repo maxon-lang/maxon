@@ -59,7 +59,7 @@ Offset  Size    Description
 - `float` (f64): tag=2, 8 bytes IEEE 754
 - `bool`: tag=3, 1 byte (0 or 1)
 - `ptr`: tag=4, 8 bytes (passed as opaque handle, not dereferenceable in subprocess)
-- `char`: tag=5, 1 byte
+- `character`: tag=5, 1 byte
 
 **Worker Lifecycle:**
 1. NOT spawned if program has no extern function calls
@@ -180,7 +180,7 @@ var x = crash_now()  ' Program exits with FFI error, not segfault
 | `int` | `int32_t` | 4 bytes |
 | `float` | `double` | 8 bytes |
 | `bool` | `int8_t` | 1 byte |
-| `char` | `char` | 1 byte |
+| `character` | `character` | 1 byte |
 | `ptr` | `void*` | Opaque handle |
 
 ## Limitations

@@ -1,6 +1,6 @@
-// Test: char-type.multibyte-char-to-string.1
+// Test: character-type.character-to-string.1
 function main() int
-    var c = '中'
+    var c = 'A'
     var s = c.toString()
     print(s)
     return 0
@@ -9,21 +9,21 @@ end 'main'
 ; Module: test.maxon
 ; Instructions: 107
 
-%char = type { ptr }
 %string = type { ptr, i32 }
+%__unsized_array_byte = type { ptr, i32 }
+%character = type { ptr }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
 %cstring = type { ptr, i32, ptr }
-%__unsized_array_byte = type { ptr, i32 }
 
-@.chr.0 = constant [4 x i8] c"\E4\B8\AD\00"
+@.chr.0 = constant [2 x i8] c"A\00"
 @.str.1 = constant [2 x i8] c"\0A\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
-define %string @char.toString(ptr %self) {
+define %string @character.toString(ptr %self) {
 entry0:
   %1 = alloca %string
-  %3 = getelementptr %char, ptr %self, i32 0, i32 0
+  %3 = getelementptr %character, ptr %self, i32 0, i32 0
   %4 = load ptr, ptr %3
   %5 = getelementptr %string, ptr %1, i32 0, i32 0
   store ptr %4, ptr %5
@@ -63,20 +63,20 @@ cstring.continue2:
 
 define i32 @main() {
 entry0:
-  %0 = alloca %char
+  %0 = alloca %character
   %1 = alloca %__ManagedStringData
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 0
   store ptr @.chr.0, ptr %3
   %4 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 1
-  store i32 3, ptr %4
+  store i32 1, ptr %4
   %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
-  store i32 3, ptr %5
+  store i32 1, ptr %5
   %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
   store i32 0, ptr %6
-  %7 = getelementptr %char, ptr %0, i32 0, i32 0
+  %7 = getelementptr %character, ptr %0, i32 0, i32 0
   store ptr %1, ptr %7
-  %8 = call %string @char.toString(ptr %0)
+  %8 = call %string @character.toString(ptr %0)
   %9 = alloca %string
   store %string %8, ptr %9
   %10 = call i32 @sys.print(ptr %9)
@@ -165,24 +165,24 @@ entry0:
 ; Module: test.maxon
 ; Instructions: 119
 
-%char = type { ptr }
 %string = type { ptr, i32 }
+%__unsized_array_byte = type { ptr, i32 }
+%character = type { ptr }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
 %cstring = type { ptr, i32, ptr }
-%__unsized_array_byte = type { ptr, i32 }
 
-@.chr.0 = constant [4 x i8] c"\E4\B8\AD\00"
+@.chr.0 = constant [2 x i8] c"A\00"
 @.str.1 = constant [2 x i8] c"\0A\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
-define %string @char.toString(ptr %self) {
+define %string @character.toString(ptr %self) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
   %1 = alloca %string
   %2 = load ptr, ptr %0
-  %3 = getelementptr %char, ptr %2, i32 0, i32 0
+  %3 = getelementptr %character, ptr %2, i32 0, i32 0
   %4 = load ptr, ptr %3
   %5 = getelementptr %string, ptr %1, i32 0, i32 0
   store ptr %4, ptr %5
@@ -225,20 +225,20 @@ cstring.continue2:
 
 define i32 @main() {
 entry0:
-  %0 = alloca %char
+  %0 = alloca %character
   %1 = alloca %__ManagedStringData
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 0
   store ptr @.chr.0, ptr %3
   %4 = getelementptr %__unsized_array_byte, ptr %2, i32 0, i32 1
-  store i32 3, ptr %4
+  store i32 1, ptr %4
   %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
-  store i32 3, ptr %5
+  store i32 1, ptr %5
   %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
   store i32 0, ptr %6
-  %7 = getelementptr %char, ptr %0, i32 0, i32 0
+  %7 = getelementptr %character, ptr %0, i32 0, i32 0
   store ptr %1, ptr %7
-  %8 = call %string @char.toString(ptr %0)
+  %8 = call %string @character.toString(ptr %0)
   %9 = alloca %string
   store %string %8, ptr %9
   %10 = call i32 @sys.print(ptr %9)
@@ -331,4 +331,4 @@ entry0:
 
 ---
 ExitCode: 0
-Stdout: 中
+Stdout: A

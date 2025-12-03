@@ -6,81 +6,81 @@
 /// Returns the number of bytes written
 /// Buffer must be at least 32 bytes
 /// precision = number of decimal places (0-15)
-/// Note: Uses byte not char since we're working with ASCII bytes, not grapheme clusters
+/// Note: Uses byte not character since we're working with ASCII bytes, not grapheme clusters
 export function format_float_array(value float, buffer []byte, precision int) int
-// Handle zero special case
-if value == 0.0 'zero_case'
-    buffer[0] = 48 as byte  // '0' = 48
-    buffer[1] = 46 as byte  // '.' = 46
-    var i = 0
-    while i < precision 'zero_decimals'
-        buffer[2 + i] = 48 as byte  // '0' = 48
-        i = i + 1
-    end 'zero_decimals'
-    return 2 + precision
-end 'zero_case'
+	// Handle zero special case
+	if value == 0.0 'zero_case'
+		buffer[0] = 48 as byte  // '0' = 48
+		buffer[1] = 46 as byte  // '.' = 46
+		var i = 0
+		while i < precision 'zero_decimals'
+			buffer[2 + i] = 48 as byte  // '0' = 48
+			i = i + 1
+		end 'zero_decimals'
+		return 2 + precision
+	end 'zero_case'
 
-var pos = 0
+	var pos = 0
 
-// Handle negative numbers
-var work_value = value
-if value < 0.0 'negative_check'
-    buffer[pos] = 45 as byte  // '-' = 45
-    pos = pos + 1
-    work_value = -value
-end 'negative_check'
+	// Handle negative numbers
+	var work_value = value
+	if value < 0.0 'negative_check'
+		buffer[pos] = 45 as byte  // '-' = 45
+		pos = pos + 1
+		work_value = -value
+	end 'negative_check'
 
-// Rounding: add 0.5 * 10^-precision
-var rounding = 0.5 * pow(10.0, -(precision as float))
-work_value = work_value + rounding
+	// Rounding: add 0.5 * 10^-precision
+	var rounding = 0.5 * pow(10.0, -(precision as float))
+	work_value = work_value + rounding
 
-// Extract integer part
-var int_part = trunc(work_value)
-var frac_part = work_value - int_part
+	// Extract integer part
+	var int_part = trunc(work_value)
+	var frac_part = work_value - int_part
 
-// Format integer part (similar to format_int_array)
-var temp = [20]byte
-var temp_pos = 19
-var abs_int = int_part
+	// Format integer part (similar to format_int_array)
+	var temp = [20]byte
+	var temp_pos = 19
+	var abs_int = int_part
 
-if int_part == 0 'int_zero'
-    temp[temp_pos] = 48 as byte  // '0' = 48
-    temp_pos = temp_pos - 1
-end 'int_zero'
+	if int_part == 0 'int_zero'
+		temp[temp_pos] = 48 as byte  // '0' = 48
+		temp_pos = temp_pos - 1
+	end 'int_zero'
 
-while abs_int > 0 'convert_int'
-    var digit = abs_int mod 10
-    var digit_byte = 48 + digit  // '0' = 48
-    temp[temp_pos] = digit_byte as byte
-    temp_pos = temp_pos - 1
-    abs_int = trunc(abs_int / 10)
-end 'convert_int'
+	while abs_int > 0 'convert_int'
+		var digit = abs_int mod 10
+		var digit_byte = 48 + digit  // '0' = 48
+		temp[temp_pos] = digit_byte as byte
+		temp_pos = temp_pos - 1
+		abs_int = trunc(abs_int / 10)
+	end 'convert_int'
 
-// Copy integer part to buffer
-var start = temp_pos + 1
-var length = 20 - start
-var i = 0
-while i < length 'copy_int'
-    buffer[pos + i] = temp[start + i]
-    i = i + 1
-end 'copy_int'
-pos = pos + length
+	// Copy integer part to buffer
+	var start = temp_pos + 1
+	var length = 20 - start
+	var i = 0
+	while i < length 'copy_int'
+		buffer[pos + i] = temp[start + i]
+		i = i + 1
+	end 'copy_int'
+	pos = pos + length
 
-// Add decimal point
-buffer[pos] = 46 as byte  // '.' = 46
-pos = pos + 1
+	// Add decimal point
+	buffer[pos] = 46 as byte  // '.' = 46
+	pos = pos + 1
 
-// Convert fractional digits one by one
-var j = 0
-while j < precision 'convert_frac'
-    frac_part = frac_part * 10.0
-    var digit = trunc(frac_part)
-    var digit_byte = 48 + digit  // '0' = 48
-    buffer[pos + j] = digit_byte as byte
-    frac_part = frac_part - (digit as float)
-    j = j + 1
-end 'convert_frac'
+	// Convert fractional digits one by one
+	var j = 0
+	while j < precision 'convert_frac'
+		frac_part = frac_part * 10.0
+		var digit = trunc(frac_part)
+		var digit_byte = 48 + digit  // '0' = 48
+		buffer[pos + j] = digit_byte as byte
+		frac_part = frac_part - (digit as float)
+		j = j + 1
+	end 'convert_frac'
 
-pos = pos + precision
-return pos
+	pos = pos + precision
+	return pos
 end 'format_float_array'

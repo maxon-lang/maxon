@@ -394,7 +394,7 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 	if (func->returnType != "void" && func->returnType != "int" &&
 		func->returnType != "float" && func->returnType != "bool" &&
 		func->returnType != "string" && func->returnType != "cstring" &&
-		func->returnType != "char" &&
+		func->returnType != "character" &&
 		func->returnType[0] != '[') { // Not an array type
 		// Could be a struct type - check if it exists
 		if (lookupStruct(func->returnType) == nullptr) {
@@ -415,7 +415,7 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 		if (paramType != "void" && paramType != "int" &&
 			paramType != "float" && paramType != "bool" &&
 			paramType != "string" && paramType != "cstring" &&
-			paramType != "char") {
+			paramType != "character") {
 			// Could be a struct type - check if it exists
 			if (lookupStruct(paramType) == nullptr) {
 				undefinedStructs.insert(paramType);

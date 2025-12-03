@@ -109,7 +109,7 @@ suite('Stdlib Completion Tests', () => {
 		const detail = formatIntArray.detail as string;
 		assert.ok(detail.includes('value int'), 'Detail should include parameter "value int"');
 		assert.ok(detail.includes('buffer'), 'Detail should include parameter "buffer"');
-		// Array type is []byte (char is now a grapheme cluster struct, not a byte alias)
+		// Array type is []byte (character is now a grapheme cluster struct, not a byte alias)
 		assert.ok(detail.includes('byte'), 'Detail should include byte array type');
 	});
 

@@ -295,12 +295,12 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteralAsSlice(StringLiteralExprA
 	return sliceAlloca;
 }
 
-// Generate a char literal (grapheme cluster)
-// char has the same internal layout as string (uses _ManagedString)
+// Generate a character literal (grapheme cluster)
+// character has the same internal layout as string (uses _ManagedString)
 mir::MIRValue *MIRCodeGenerator::generateCharLiteral(CharacterExprAST *charExpr) {
-	// Get the char struct type (defined by stdlib, same layout as string)
-	// char = { _managed ptr } where _managed points to __ManagedStringData
-	mir::MIRType *charType = getTypeFromString("char");
+	// Get the character struct type (defined by stdlib, same layout as string)
+	// character = { _managed ptr } where _managed points to __ManagedStringData
+	mir::MIRType *charType = getTypeFromString("character");
 
 	// Get or create __ManagedStringData type (internal layout at the pointer)
 	mir::MIRType *managedDataType = structTypes["__ManagedStringData"];

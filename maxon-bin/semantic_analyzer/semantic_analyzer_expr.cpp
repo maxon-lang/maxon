@@ -22,12 +22,12 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		return "nil";
 
 	} else if (dynamic_cast<CharacterExprAST *>(expr)) {
-		// Character literals require the stdlib 'char' struct (grapheme cluster)
+		// Character literals require the stdlib 'character' struct (grapheme cluster)
 		// Track as undefined so it gets auto-discovered
-		if (lookupStruct("char") == nullptr) {
-			undefinedStructs.insert("char");
+		if (lookupStruct("character") == nullptr) {
+			undefinedStructs.insert("character");
 		}
-		return "char";
+		return "character";
 
 	} else if (dynamic_cast<StringLiteralExprAST *>(expr)) {
 		// String literals require the stdlib 'string' struct
@@ -81,13 +81,13 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Validate key type implements Hashable
 		const std::string &keyType = mapLiteral->keyType;
 		bool isBuiltinHashable = (keyType == "int" || keyType == "string" ||
-								  keyType == "char" || keyType == "byte");
+								  keyType == "character" || keyType == "byte");
 		bool isBuiltinNonHashable = (keyType == "float" || keyType == "bool");
 
 		if (isBuiltinNonHashable) {
 			// Built-in types that are not hashable
 			addError("Map key type '" + keyType + "' must implement Hashable interface" +
-						 std::string("\n  Hashable types: int, string, char, byte") +
+						 std::string("\n  Hashable types: int, string, character, byte") +
 						 "\n  Note: Only types that can be hashed can be used as map keys",
 					 expr->line, expr->column);
 			return "error";
@@ -107,7 +107,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				}
 				if (!conformsToHashable) {
 					addError("Map key type '" + keyType + "' must implement Hashable interface" +
-								 std::string("\n  Hashable types: int, string, char, byte") +
+								 std::string("\n  Hashable types: int, string, character, byte") +
 								 "\n  Or declare: struct " + keyType + " is Hashable",
 							 expr->line, expr->column);
 					return "error";
@@ -118,7 +118,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Validate value type exists
 		const std::string &valueType = mapLiteral->valueType;
 		bool isBuiltinValueType = (valueType == "int" || valueType == "float" ||
-								   valueType == "bool" || valueType == "char" ||
+								   valueType == "bool" || valueType == "character" ||
 								   valueType == "byte" || valueType == "string" ||
 								   valueType.substr(0, 1) == "["); // Array types
 
@@ -156,7 +156,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Check if target type is a struct - if so, track as undefined for auto-import
 		const std::string &targetType = castExpr->targetType;
 		bool isBuiltinType = (targetType == "int" || targetType == "float" ||
-							  targetType == "bool" || targetType == "char" ||
+							  targetType == "bool" || targetType == "character" ||
 							  targetType == "string" || targetType == "void" ||
 							  targetType.substr(0, 1) == "["); // Array types
 

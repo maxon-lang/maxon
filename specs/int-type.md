@@ -16,7 +16,7 @@ Key implementation details:
 - Default numeric type for integer literals
 - Supports arithmetic operators: `+`, `-`, `*`, `/`, `mod`
 - Supports comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=`
-- Can be cast to `float`, `bool`, `char`, and pointer types
+- Can be cast to `float`, `bool`, `character`, and pointer types
 - Integer literals are parsed in `Lexer::readNumber()`
 - Overflow behavior follows LLVM semantics (wraps around)
 

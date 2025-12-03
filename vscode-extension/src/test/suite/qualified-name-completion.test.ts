@@ -234,7 +234,7 @@ suite('Qualified Name Completion Tests', () => {
 			editBuilder.replace(entireRange,
 				'function main() int\n' +
 				'    var x int = 42\n' +
-				'    var buffer [12]char = 0\n' +
+				'    var buffer [12]character = 0\n' +
 				'    stdlib.fmt.\n' +
 				'end \'main\''
 			);
