@@ -74,7 +74,7 @@ end 'main'
 <!-- test: complex-expression -->
 ```maxon
 function main() int
-    var result = (10 + (2 * 3)) / (4 - 2)
+    var result = trunc((10 + (2 * 3)) / (4 - 2))
     return result
 end 'main'
 ```

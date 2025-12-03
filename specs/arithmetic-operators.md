@@ -33,7 +33,7 @@ Maxon supports standard arithmetic operations on numeric types.
 - `+` - Addition
 - `-` - Subtraction
 - `*` - Multiplication
-- `/` - Division (integer division truncates)
+- `/` - Division (always returns float; use `trunc(a/b)` for integer division)
 - `mod` - Modulo (remainder after division, integers only)
 
 ### Precedence
@@ -48,19 +48,21 @@ Multiplication, division, and modulo have higher precedence than addition and su
 function main() int
     var a = 10
     var b = 3
-    var sum = a + b      // 13
-    var diff = a - b     // 7
-    var prod = a * b     // 30
-    var quot = a / b     // 3
-    var rem = a mod b      // 1
-    
+    var sum = a + b          // 13
+    var diff = a - b         // 7
+    var prod = a * b         // 30
+    var div = a / b          // 3.333... (float)
+    var quot = trunc(a / b)  // 3 (integer division)
+    var rem = a mod b        // 1
+
     // Use the values
     print_int(sum)
     print_int(diff)
     print_int(prod)
+    print_float(div, 6)
     print_int(quot)
     print_int(rem)
-    
+
     return 0
 end 'main'
 ```
@@ -71,6 +73,7 @@ end 'main'
 13
 7
 30
+3.333333
 3
 1
 ```
@@ -111,14 +114,51 @@ end 'main'
 ```
 
 
-<!-- test: division -->
+<!-- test: division-returns-float -->
 ```maxon
 function main() int
-    return 20 / 3
+    var result = 20 / 3      // 6.666...
+    return trunc(result * 10.0)  // 66.666... * 10 = 66.666..., trunc = 66
+end 'main'
+```
+```exitcode
+66
+```
+
+
+<!-- test: trunc-division-optimizes -->
+```maxon
+function main() int
+    return trunc(20 / 3)     // Optimized to sdiv, returns 6
 end 'main'
 ```
 ```exitcode
 6
+```
+
+
+<!-- test: variable-division-optimizes -->
+```maxon
+function main() int
+    var a = 7
+    var b = 2
+    return trunc(a / b)      // Should optimize to sdiv after Mem2Reg
+end 'main'
+```
+```exitcode
+3
+```
+
+
+<!-- test: negative-division -->
+```maxon
+function main() int
+    var neg = 0 - 7
+    return trunc(neg / 2)    // -7/2 = -3.5, trunc = -3 (toward zero)
+end 'main'
+```
+```exitcode
+-3
 ```
 
 
@@ -138,7 +178,7 @@ end 'main'
 function main() int
     var a = 10
     var b = 3
-    var result = (a + b) * 2 - a / b
+    var result = (a + b) * 2 - trunc(a / b)
     return result
 end 'main'
 ```

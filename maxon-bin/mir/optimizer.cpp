@@ -151,6 +151,7 @@ MIROptimizer MIROptimizer::createStandardPipeline(int verboseLevel) {
 	optimizer.addPass(std::make_unique<StrengthReductionPass>());
 	optimizer.addPass(std::make_unique<CopyPropagationPass>());
 	optimizer.addPass(std::make_unique<RedundantLoadStoreEliminationPass>());
+	optimizer.addPass(std::make_unique<IntegerDivisionOptimizationPass>());
 	optimizer.addPass(std::make_unique<DeadCodeEliminationPass>());
 	optimizer.addPass(std::make_unique<UnreachableBlockEliminationPass>());
 	optimizer.addPass(std::make_unique<SimpleFunctionInliningPass>());

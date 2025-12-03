@@ -88,6 +88,7 @@ set(SOURCES
     mir/opt_strength_reduction.cpp
     mir/opt_algebraic_simplification.cpp
     mir/opt_function_inlining.cpp
+    mir/opt_integer_division.cpp
     mir/opt_redundant_load_store.cpp
     mir/opt_copy_propagation.cpp
     mir/opt_phi_elimination.cpp

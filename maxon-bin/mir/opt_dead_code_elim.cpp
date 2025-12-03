@@ -1,6 +1,7 @@
 #include "optimizer.h"
 #include <algorithm>
 #include <functional>
+#include <unordered_set>
 
 namespace mir {
 
@@ -268,16 +269,33 @@ std::unordered_set<MIRValue *> DeadCodeEliminationPass::computeUsedValues(MIRFun
 bool DeadCodeEliminationPass::hasSideEffects(MIRInstruction *inst) {
 	switch (inst->opcode) {
 	case MIROpcode::Store:
-	case MIROpcode::Call:
 	case MIROpcode::CallIndirect:
 	case MIROpcode::Br:
 	case MIROpcode::CondBr:
 	case MIROpcode::Ret:
 	case MIROpcode::RetVoid:
 		return true;
+	case MIROpcode::Call:
+		// Calls to pure/readonly math functions can be eliminated if unused
+		// These functions have no side effects and their result depends only on inputs
+		return !isPureFunction(inst->calleeName);
 	default:
 		return false;
 	}
+}
+
+bool DeadCodeEliminationPass::isPureFunction(const std::string &name) {
+	// List of known pure functions from stdlib that can be safely eliminated
+	// These are mathematical functions with no side effects
+	static const std::unordered_set<std::string> pureFunctions = {
+		"trunc", "floor", "ceil", "round",
+		"sqrt", "pow", "exp", "log", "log2", "log10",
+		"sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+		"abs", "fabs",
+		"min", "max",
+		"fmod", "fmin", "fmax"
+	};
+	return pureFunctions.find(name) != pureFunctions.end();
 }
 
 } // namespace mir

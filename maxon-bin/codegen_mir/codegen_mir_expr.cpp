@@ -960,7 +960,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 		bool leftIsFloat = left->type->isFloat();
 		bool rightIsFloat = right->type->isFloat();
-		bool needsFloatOp = leftIsFloat || rightIsFloat;
+		bool needsFloatOp = leftIsFloat || rightIsFloat || (binExpr->op == '/');
 
 		// Promote int to float if mixed types
 		if (needsFloatOp) {

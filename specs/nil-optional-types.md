@@ -161,7 +161,7 @@ function safeDivide(a int, b int) int or nil
 	if b == 0 'check'
 		return nil
 	end 'check'
-	return a / b
+	return trunc(a / b)
 end 'safeDivide'
 
 function main() int
@@ -183,7 +183,7 @@ function safeDivide(a int, b int) int or nil
 	if b == 0 'check'
 		return nil
 	end 'check'
-	return a / b
+	return trunc(a / b)
 end 'safeDivide'
 
 function main() int

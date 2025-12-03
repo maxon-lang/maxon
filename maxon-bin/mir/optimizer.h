@@ -254,6 +254,9 @@ class DeadCodeEliminationPass : public OptimizationPass {
 
 	// Check if an instruction has side effects
 	bool hasSideEffects(MIRInstruction *inst);
+
+	// Check if a function is pure (can be eliminated if unused)
+	bool isPureFunction(const std::string &name);
 };
 
 //==============================================================================
@@ -338,6 +341,33 @@ class AlgebraicSimplificationPass : public OptimizationPass {
 	// Try to simplify an instruction using algebraic identities
 	// Returns the simplified value, or nullptr if no simplification
 	MIRValue *trySimplify(MIRInstruction *inst);
+};
+
+//==============================================================================
+// Integer Division Optimization Pass
+//==============================================================================
+
+/**
+ * Optimize integer division that was naively lowered through floating-point.
+ *
+ * Pattern-matches:
+ *   fptosi(fdiv(sitofp(a), sitofp(b))) -> sdiv(a, b)
+ *
+ * This pattern arises when integer division is lowered by converting to float,
+ * dividing, and converting back. We can replace this with a direct integer
+ * division, which is more efficient.
+ */
+class IntegerDivisionOptimizationPass : public OptimizationPass {
+  public:
+	const char *getName() const override { return "integer-division-optimization"; }
+	bool run(MIRModule &module) override;
+	std::pair<int, const char *> getPassSpecificStats() const override {
+		return {lastRunStats_, "integer divisions optimized"};
+	}
+
+  private:
+	bool runOnFunction(MIRFunction &func);
+	bool runOnBasicBlock(MIRBasicBlock &block);
 };
 
 //==============================================================================

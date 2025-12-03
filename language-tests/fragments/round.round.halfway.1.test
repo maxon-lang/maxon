@@ -147,55 +147,55 @@ then3:
   %18 = sub i32 0, %value
   br label %ifcont4
 ifcont4:
-  %70 = phi i32 [ %value, %ifcont2 ], [ %18, %then3 ]
-  %69 = phi i32 [ 0, %ifcont2 ], [ 1, %then3 ]
+  %74 = phi i32 [ %value, %ifcont2 ], [ %18, %then3 ]
+  %73 = phi i32 [ 0, %ifcont2 ], [ 1, %then3 ]
   br label %whilecond5
 whilecond5:
-  %71 = phi i32 [ %70, %ifcont4 ], [ %35, %loop6 ]
-  %67 = phi i32 [ 11, %ifcont4 ], [ %33, %loop6 ]
-  %20 = icmp sgt i32 %71, 0
+  %75 = phi i32 [ %74, %ifcont4 ], [ %39, %loop6 ]
+  %71 = phi i32 [ 11, %ifcont4 ], [ %33, %loop6 ]
+  %20 = icmp sgt i32 %75, 0
   br i1 %20, label %loop6, label %afterloop7
 loop6:
-  %22 = srem i32 %71, 10
+  %22 = srem i32 %75, 10
   %25 = add i32 48, %22
-  %28 = sext i32 %67 to i64
+  %28 = sext i32 %71 to i64
   %29 = getelementptr i8, ptr %8, i64 0, i64 %28
   %31 = trunc i32 %25 to i8
   store i8 %31, ptr %29
-  %33 = sub i32 %67, 1
-  %35 = sdiv i32 %71, 10
+  %33 = sub i32 %71, 1
+  %39 = sdiv i32 %75, 10
   br label %whilecond5
 afterloop7:
-  %37 = icmp eq i32 %69, 1
-  br i1 %37, label %then8, label %ifcont9
+  %41 = icmp eq i32 %73, 1
+  br i1 %41, label %then8, label %ifcont9
 then8:
-  %39 = sext i32 %67 to i64
-  %40 = getelementptr i8, ptr %8, i64 0, i64 %39
-  %41 = trunc i32 45 to i8
-  store i8 %41, ptr %40
-  %43 = sub i32 %67, 1
+  %43 = sext i32 %71 to i64
+  %44 = getelementptr i8, ptr %8, i64 0, i64 %43
+  %45 = trunc i32 45 to i8
+  store i8 %45, ptr %44
+  %47 = sub i32 %71, 1
   br label %ifcont9
 ifcont9:
-  %68 = phi i32 [ %67, %afterloop7 ], [ %43, %then8 ]
-  %45 = add i32 %68, 1
-  %48 = sub i32 12, %45
+  %72 = phi i32 [ %71, %afterloop7 ], [ %47, %then8 ]
+  %49 = add i32 %72, 1
+  %52 = sub i32 12, %49
   br label %whilecond10
 whilecond10:
-  %74 = phi i32 [ 0, %ifcont9 ], [ %65, %loop11 ]
-  %53 = icmp slt i32 %74, %48
-  br i1 %53, label %loop11, label %afterloop12
+  %78 = phi i32 [ 0, %ifcont9 ], [ %69, %loop11 ]
+  %57 = icmp slt i32 %78, %52
+  br i1 %57, label %loop11, label %afterloop12
 loop11:
-  %56 = sext i32 %74 to i64
-  %57 = getelementptr i8, ptr %buffer, i64 0, i64 %56
-  %60 = add i32 %45, %74
-  %61 = sext i32 %60 to i64
-  %62 = getelementptr i8, ptr %8, i64 0, i64 %61
-  %63 = load i8, ptr %62
-  store i8 %63, ptr %57
-  %65 = add i32 %74, 1
+  %60 = sext i32 %78 to i64
+  %61 = getelementptr i8, ptr %buffer, i64 0, i64 %60
+  %64 = add i32 %49, %78
+  %65 = sext i32 %64 to i64
+  %66 = getelementptr i8, ptr %8, i64 0, i64 %65
+  %67 = load i8, ptr %66
+  store i8 %67, ptr %61
+  %69 = add i32 %78, 1
   br label %whilecond10
 afterloop12:
-  ret i32 %48
+  ret i32 %52
 }
 
 define %string @string.string_from_chars(ptr %buffer, i32 %buffer.__length, i32 %length) {
@@ -251,7 +251,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 251
+; Instructions: 255
 
 %string = type { ptr, i32 }
 %__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
@@ -461,59 +461,63 @@ loop6:
   %33 = sub i32 %32, 1
   store i32 %33, ptr %11
   %34 = load i32, ptr %14
-  %35 = sdiv i32 %34, 10
-  store i32 %35, ptr %14
+  %35 = sitofp i32 %34 to f64
+  %36 = sitofp i32 10 to f64
+  %37 = fdiv f64 %35, %36
+  %38 = call f64 @trunc(f64 %37)
+  %39 = fptosi f64 %38 to i32
+  store i32 %39, ptr %14
   br label %whilecond5
 afterloop7:
-  %36 = load i32, ptr %12
-  %37 = icmp eq i32 %36, 1
-  br i1 %37, label %then8, label %ifcont9
+  %40 = load i32, ptr %12
+  %41 = icmp eq i32 %40, 1
+  br i1 %41, label %then8, label %ifcont9
 then8:
-  %38 = load i32, ptr %11
-  %39 = sext i32 %38 to i64
-  %40 = getelementptr i8, ptr %8, i64 0, i64 %39
-  %41 = trunc i32 45 to i8
-  store i8 %41, ptr %40
   %42 = load i32, ptr %11
-  %43 = sub i32 %42, 1
-  store i32 %43, ptr %11
+  %43 = sext i32 %42 to i64
+  %44 = getelementptr i8, ptr %8, i64 0, i64 %43
+  %45 = trunc i32 45 to i8
+  store i8 %45, ptr %44
+  %46 = load i32, ptr %11
+  %47 = sub i32 %46, 1
+  store i32 %47, ptr %11
   br label %ifcont9
 ifcont9:
-  %44 = load i32, ptr %11
-  %45 = add i32 %44, 1
-  %46 = alloca i32
-  store i32 %45, ptr %46
-  %47 = load i32, ptr %46
-  %48 = sub i32 12, %47
-  %49 = alloca i32
-  store i32 %48, ptr %49
+  %48 = load i32, ptr %11
+  %49 = add i32 %48, 1
   %50 = alloca i32
-  store i32 0, ptr %50
+  store i32 %49, ptr %50
+  %51 = load i32, ptr %50
+  %52 = sub i32 12, %51
+  %53 = alloca i32
+  store i32 %52, ptr %53
+  %54 = alloca i32
+  store i32 0, ptr %54
   br label %whilecond10
 whilecond10:
-  %51 = load i32, ptr %50
-  %52 = load i32, ptr %49
-  %53 = icmp slt i32 %51, %52
-  br i1 %53, label %loop11, label %afterloop12
+  %55 = load i32, ptr %54
+  %56 = load i32, ptr %53
+  %57 = icmp slt i32 %55, %56
+  br i1 %57, label %loop11, label %afterloop12
 loop11:
-  %54 = load i32, ptr %50
-  %55 = load ptr, ptr %1
-  %56 = sext i32 %54 to i64
-  %57 = getelementptr i8, ptr %55, i64 0, i64 %56
-  %58 = load i32, ptr %46
-  %59 = load i32, ptr %50
-  %60 = add i32 %58, %59
-  %61 = sext i32 %60 to i64
-  %62 = getelementptr i8, ptr %8, i64 0, i64 %61
-  %63 = load i8, ptr %62
-  store i8 %63, ptr %57
-  %64 = load i32, ptr %50
-  %65 = add i32 %64, 1
-  store i32 %65, ptr %50
+  %58 = load i32, ptr %54
+  %59 = load ptr, ptr %1
+  %60 = sext i32 %58 to i64
+  %61 = getelementptr i8, ptr %59, i64 0, i64 %60
+  %62 = load i32, ptr %50
+  %63 = load i32, ptr %54
+  %64 = add i32 %62, %63
+  %65 = sext i32 %64 to i64
+  %66 = getelementptr i8, ptr %8, i64 0, i64 %65
+  %67 = load i8, ptr %66
+  store i8 %67, ptr %61
+  %68 = load i32, ptr %54
+  %69 = add i32 %68, 1
+  store i32 %69, ptr %54
   br label %whilecond10
 afterloop12:
-  %66 = load i32, ptr %49
-  ret i32 %66
+  %70 = load i32, ptr %53
+  ret i32 %70
 }
 
 define %string @string.string_from_chars(ptr %buffer, i32 %buffer.__length, i32 %length) {
@@ -565,6 +569,8 @@ declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare f64 @trunc(f64 %arg0)
 
 declare void @exit(i32 %arg0)
 

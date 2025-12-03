@@ -33,6 +33,7 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - enums
 - remove ptr
 - remove redundant backend tests (test fragments are faster)
+- DeadCodeEliminationPass::isPureFunction has hardcoded list of pure functions. Can analyzer determine if its pure?
 
 ## Ideas
 - reorganize structs to improve cache locality

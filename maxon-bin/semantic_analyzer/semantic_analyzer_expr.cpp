@@ -222,6 +222,11 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			// Result is float if either operand is float (implicit promotion)
 			if ((leftType == "int" || leftType == "float") &&
 				(rightType == "int" || rightType == "float")) {
+				// Division always returns float (optimization pass handles trunc(int/int))
+				if (binExpr->op == '/') {
+					return "float";
+				}
+				// Other operators: return float if either operand is float
 				if (leftType == "float" || rightType == "float") {
 					return "float";
 				}

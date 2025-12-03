@@ -27,6 +27,16 @@ The `trunc` function is implemented as an **LLVM intrinsic** for type conversion
 - `trunc(3.9)` = 3
 - `trunc(-3.9)` = -3 (toward zero, not down)
 
+### Integer Division Optimization
+
+When `trunc()` is applied to integer division, the compiler optimizes the pattern:
+- Pattern: `trunc(int / int)`
+- MIR: `FPToSI(FDiv(SIToFP(a), SIToFP(b)))` -> `SDiv(a, b)`
+- Backend: Direct IDIV instruction (no float conversion overhead)
+- Implemented in: `IntegerDivisionOptimizationPass`
+
+This allows natural syntax `trunc(a/b)` to compile to efficient integer division.
+
 ## Documentation
 
 # trunc

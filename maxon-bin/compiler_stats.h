@@ -222,10 +222,11 @@ class CompilerStats {
 			// Sort passes by order they were added to pipeline
 			std::vector<std::string> passOrder = {
 				"mem2reg", "constant-folding", "constant-propagation",
-				"dead-code-elimination", "unreachable-block-elimination",
-				"strength-reduction", "algebraic-simplification",
-				"simple-function-inlining", "redundant-load-store-elimination",
-				"copy-propagation", "phi-elimination"};
+				"algebraic-simplification", "strength-reduction",
+				"copy-propagation", "redundant-load-store-elimination",
+				"integer-division-optimization", "dead-code-elimination",
+				"unreachable-block-elimination", "simple-function-inlining",
+				"phi-elimination"};
 
 			for (const auto &passName : passOrder) {
 				auto it = optimizerPasses_.find(passName);
