@@ -143,8 +143,8 @@ int main(int argc, char *argv[]) {
 	json += "    \"scopeName\": \"source.maxon\"\n";
 	json += "}\n";
 
-	// Write to output file
-	std::ofstream outFile(outputFile);
+	// Write to output file (binary mode to preserve LF line endings)
+	std::ofstream outFile(outputFile, std::ios::binary);
 	if (!outFile) {
 		std::cerr << "Error: Cannot open output file " << outputFile << std::endl;
 		return 1;
