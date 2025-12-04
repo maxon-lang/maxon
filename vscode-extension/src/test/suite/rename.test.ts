@@ -476,7 +476,7 @@ suite('Rename Test Suite', () => {
 		));
 		assert.strictEqual(blockId, 'myFunction', 'Block identifier should match function name');
 
-		// The actual linked editing behavior is tested in C++ (lsp-server/tests/test_rename.cpp)
+		// The actual linked editing behavior is tested in C++ (maxon-bin/lsp/tests/test_lsp_server.cpp)
 		// where we verify:
 		// 1. Function name returns linked editing ranges
 		// 2. Ranges include both function name (line 0, cols 9-19)
@@ -517,7 +517,7 @@ suite('Rename Test Suite', () => {
 		));
 		assert.strictEqual(endBlockId, 'loop', 'End block identifier should match');
 
-		// The actual linked editing behavior is tested in C++ (lsp-server/tests/test_rename.cpp)
+		// The actual linked editing behavior is tested in C++ (maxon-bin/lsp/tests/test_lsp_server.cpp)
 		// where we verify:
 		// 1. Block ID inside quotes returns linked editing ranges
 		// 2. Ranges include both 'loop' identifiers (lines 2 and 4)

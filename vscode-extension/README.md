@@ -9,12 +9,12 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
 - **Code formatting**: Format your Maxon code with customizable indentation settings
 
-Note: LSP features are provided by the Maxon Language Server. This extension acts as an LSP client and will only enable advanced language features once the language server binary (`maxon-lsp-server` or `maxon-lsp-server.exe`) is built and accessible.
+Note: LSP features are provided by the embedded Maxon Language Server in the compiler. This extension acts as an LSP client and will only enable advanced language features once the maxon compiler binary (`maxon` or `maxon.exe`) is built and accessible.
 
 ## Requirements
 - Visual Studio Code 1.75.0 or later
 - Node.js and npm for development tools (TypeScript compilation and testing)
-- The Maxon language server executable (`maxon-lsp-server` or `maxon-lsp-server.exe`) built and placed in the repository `bin` folder so the client can launch it. See the repository `Makefile` for build targets.
+- The Maxon compiler executable (`maxon` or `maxon.exe`) built and placed in the repository `bin` folder. The compiler includes an embedded LSP server accessed via the `lsp-server` command. See the repository `Makefile` for build targets.
 
 ## Installation
 
@@ -50,7 +50,7 @@ If/when published, the extension will be installable from the VS Code Marketplac
 - If you only want syntax highlighting, no LSP server is required.
 
 ### Server location
-By default the client attempts to launch the language server at a relative path from the extension runtime. The path was set to `../bin/maxon-lsp-server.exe` in `src/extension.ts`. If you build the LSP server to a different location or platform, adjust the extension source or copy the server executable into the `bin` directory adjacent to the extension before packaging.
+The extension launches the embedded LSP server by running `maxon.exe lsp-server`. The path to the compiler is resolved relative to the extension runtime as `../bin/maxon.exe`. If you build the compiler to a different location or platform, adjust the extension source in `src/extension.ts` or copy the compiler executable into the `bin` directory adjacent to the extension before packaging.
 
 ## Development
 - Use the `watch` script during development to compile TypeScript and auto-emit changes:
@@ -149,9 +149,9 @@ Licensed under either of:
 at your option.
 
 ## Notes and Troubleshooting
-- If the language server fails to start, check that the binary is built and the path in `src/extension.ts` is correct. The extension currently expects the binary to live at `../bin/maxon-lsp-server.exe` relative to the extension path — adjust or copy as needed.
+- If the language server fails to start, check that the compiler binary is built and the path in `src/extension.ts` is correct. The extension currently expects the binary to live at `../bin/maxon.exe` relative to the extension path — adjust or copy as needed.
 - When packaging for non-Windows platforms, make sure the server binary does not have `.exe` and the extension's `src/extension.ts` points at the correct filename.
-- For LSP server issues, consult the top-level `lsp-server/` folder README and the server build instructions.
+- For LSP server issues, the embedded server code is in `maxon-bin/lsp/`.
 
 ---
 If you need help with building or testing the extension, open an issue on the repository with your platform, VS Code version, and steps to reproduce the problem.

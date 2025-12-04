@@ -3,6 +3,8 @@
 #include "compiler.h"
 #include "docs_generator.h"
 #include "lexer.h"
+#include "lsp/lsp_server.h"
+#include "lsp/transport.h"
 #include "mir/mir_parser.h"
 #include "mir/optimizer.h"
 #include "self_test.h"
@@ -37,6 +39,8 @@ void printHelp(const char *programName) {
 	std::cerr << "                 Run all test fragments (shows only failures and summary)" << std::endl;
 	std::cerr << "  test <file.test> [options]" << std::endl;
 	std::cerr << "                 Run a single test file and verify expected output" << std::endl;
+	std::cerr << "  lsp-server [options]" << std::endl;
+	std::cerr << "                 Start language server protocol server (stdio)" << std::endl;
 	std::cerr << "  benchmark <input.maxon> [options]" << std::endl;
 	std::cerr << "                 Benchmark SIMD vs scalar lexer performance" << std::endl;
 	std::cerr << "  <input.maxon|.test>  Compile and run source file (no artifacts left on disk)" << std::endl;
@@ -112,6 +116,13 @@ int main(int argc, char *argv[]) {
 
 	if (command == "generate-docs") {
 		return DocsGenerator::generateDocumentation();
+	}
+
+	if (command == "lsp-server") {
+		// Start the embedded LSP server using stdio transport
+		auto transport = std::make_unique<maxon::lsp::StdioTransport>();
+		maxon_lsp::LSPServer server(std::move(transport));
+		return server.run();
 	}
 
 	if (command == "benchmark") {
@@ -430,7 +441,7 @@ int main(int argc, char *argv[]) {
 	if (command != "compile" && command != "self-test" && command != "extract-specs" &&
 		command != "regen-fragments" && command != "generate-docs" && command != "test-fragments" &&
 		command != "test" && command != "benchmark" && command != "compile-mir" &&
-		command != "validate-specs") {
+		command != "validate-specs" && command != "lsp") {
 		std::string inputFile;
 		bool trackAllocs = false;
 		bool showStats = false;

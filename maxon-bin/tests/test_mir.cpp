@@ -5,9 +5,9 @@
  * basic blocks, functions, and modules.
  */
 
-#include "../../lsp-server/tests/catch_amalgamated.hpp"
 #include "../mir/mir.h"
 #include "../mir/mir_builder.h"
+#include <catch_amalgamated.hpp>
 
 using namespace mir;
 

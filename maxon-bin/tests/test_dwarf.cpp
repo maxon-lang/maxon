@@ -4,8 +4,8 @@
  * Tests the DWARF generator for correct debug info generation.
  */
 
-#include "../../lsp-server/tests/catch_amalgamated.hpp"
 #include "../backend/dwarf.h"
+#include <catch_amalgamated.hpp>
 #include <cstring>
 
 using namespace backend;

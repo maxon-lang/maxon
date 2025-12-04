@@ -6,10 +6,10 @@
  * properly implemented, and function structures are correct.
  */
 
-#include "../../lsp-server/tests/catch_amalgamated.hpp"
 #include "../backend/x86_codegen.h"
 #include "../mir/mir.h"
 #include "../mir/mir_builder.h"
+#include <catch_amalgamated.hpp>
 
 using namespace backend;
 using namespace mir;
@@ -1313,11 +1313,9 @@ TEST_CASE("X86CodeGen: large struct return via hidden pointer", "[x86-codegen][s
 	MIRBuilder builder(&module);
 
 	// Create Iterator struct type: {i32, i32, i32} = 12 bytes
-	auto *iterType = module.getOrCreateStructType("Iterator", {
-		MIRType::getInt32(),
-		MIRType::getInt32(),
-		MIRType::getInt32()
-	});
+	auto *iterType = module.getOrCreateStructType("Iterator", {MIRType::getInt32(),
+															   MIRType::getInt32(),
+															   MIRType::getInt32()});
 
 	// Function that returns large struct
 	auto *getIter = builder.createFunction("get_iterator", iterType, {});
@@ -1368,8 +1366,10 @@ TEST_CASE("X86CodeGen: large struct return via hidden pointer", "[x86-codegen][s
 	bool hasGetIter = false;
 	bool hasMain = false;
 	for (const auto &fc : funcCodes) {
-		if (fc.name == "get_iterator") hasGetIter = true;
-		if (fc.name == "main") hasMain = true;
+		if (fc.name == "get_iterator")
+			hasGetIter = true;
+		if (fc.name == "main")
+			hasMain = true;
 	}
 	REQUIRE(hasGetIter);
 	REQUIRE(hasMain);

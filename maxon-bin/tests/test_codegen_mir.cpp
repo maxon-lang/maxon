@@ -5,12 +5,12 @@
  * expressions, statements, and functions are correctly translated.
  */
 
-#include "../../lsp-server/tests/catch_amalgamated.hpp"
 #include "../ast.h"
 #include "../codegen_mir.h"
 #include "../lexer.h"
 #include "../mir/mir.h"
 #include "../parser.h"
+#include <catch_amalgamated.hpp>
 
 using namespace mir;
 

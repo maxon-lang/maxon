@@ -27,8 +27,8 @@ suite('LSP Client Integration Tests', () => {
         const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
         assert.ok(ext);
 
-        // The path should point to ../bin/maxon-lsp-server.exe relative to extension
-        const expectedPath = path.join(ext.extensionPath, '..', 'bin', 'maxon-lsp-server.exe');
+        // The path should point to ../bin/maxon.exe relative to extension (with 'lsp-server' arg)
+        const expectedPath = path.join(ext.extensionPath, '..', 'bin', 'maxon.exe');
         assert.ok(expectedPath.includes('bin'), 'Server path should include bin directory');
     });
 });

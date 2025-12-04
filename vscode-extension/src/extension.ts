@@ -40,7 +40,7 @@ export async function restartClient(): Promise<void> {
 	// Create new client
 	const serverOptions: ServerOptions = {
 		command: serverExecutable,
-		args: []
+		args: ['lsp-server']
 	};
 
 	client = new LanguageClient(
@@ -68,29 +68,29 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	initLogger(outputChannel);
 	log('Maxon extension activating...');
 
-	// Path to the compiled LSP server executable
+	// Path to the Maxon compiler with embedded LSP server
 	// When running from the workspace (development), use ../bin relative to extension folder
 	// When installed, check workspace folders for the bin directory
-	serverExecutable = path.join(ctx.extensionPath, '..', 'bin', 'maxon-lsp-server.exe');
+	serverExecutable = path.join(ctx.extensionPath, '..', 'bin', 'maxon.exe');
 
-	// If running from installed extension (not from workspace), try to find the server
+	// If running from installed extension (not from workspace), try to find the compiler
 	// in the first workspace folder's bin directory
 	const fs = require('fs');
 	if (!fs.existsSync(serverExecutable) && vscode.workspace.workspaceFolders?.length) {
 		const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-		const workspaceBin = path.join(workspaceRoot, 'bin', 'maxon-lsp-server.exe');
+		const workspaceBin = path.join(workspaceRoot, 'bin', 'maxon.exe');
 		if (fs.existsSync(workspaceBin)) {
 			serverExecutable = workspaceBin;
-			log(`Using LSP server from workspace: ${serverExecutable}`);
+			log(`Using Maxon compiler from workspace: ${serverExecutable}`);
 		}
 	}
 
-	log(`LSP server path: ${serverExecutable}`);
+	log(`Maxon compiler path: ${serverExecutable}`);
 
-	// Server options - use simple command form for stdio communication
+	// Server options - use the embedded LSP server via 'maxon lsp-server' command
 	const serverOptions: ServerOptions = {
 		command: serverExecutable,
-		args: []
+		args: ['lsp-server']
 	};
 
 	clientOptions = {

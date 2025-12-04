@@ -1,11 +1,11 @@
 #include "docs_generator.h"
 #include "file_utils.h"
-#include "vendor/md4c-html.h"
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <md4c/md4c-html.h>
 #include <regex>
 #include <sstream>
 
@@ -673,7 +673,8 @@ std::vector<DocsGenerator::SpecInfo> DocsGenerator::collectSpecs(const std::stri
 
 	// Report validation errors
 	if (!validationErrors.empty()) {
-		std::cerr << "\n" << validationErrors.size() << " validation error(s) found:" << std::endl;
+		std::cerr << "\n"
+				  << validationErrors.size() << " validation error(s) found:" << std::endl;
 		for (const auto &error : validationErrors) {
 			std::cerr << "  " << error << std::endl;
 		}

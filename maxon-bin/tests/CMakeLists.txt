@@ -14,11 +14,11 @@ get_filename_component(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE
 # Include directories
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${PROJECT_ROOT}/lsp-server/tests  # For catch_amalgamated.hpp
+    ${PROJECT_ROOT}/vendor/catch2
 )
 
-# Catch2 source (use from lsp-server/tests)
-set(CATCH_SOURCE ${PROJECT_ROOT}/lsp-server/tests/catch_amalgamated.cpp)
+# Catch2 source
+set(CATCH_SOURCE ${PROJECT_ROOT}/vendor/catch2/catch_amalgamated.cpp)
 
 # Backend source files (MIR infrastructure + x86 backend)
 set(BACKEND_SOURCES

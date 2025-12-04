@@ -10,18 +10,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Option to build components
 option(BUILD_COMPILER "Build the Maxon compiler" ON)
-option(BUILD_LSP "Build the Maxon Language Server" ON)
 
-# Build the Maxon compiler
+# Build the Maxon compiler (includes embedded LSP server)
 if(BUILD_COMPILER)
     message(STATUS "Configuring Maxon compiler...")
     add_subdirectory(maxon-bin)
-endif()
-
-# Build the LSP server
-if(BUILD_LSP AND EXISTS "${CMAKE_SOURCE_DIR}/lsp-server/CMakeLists.txt")
-    message(STATUS "Configuring Maxon Language Server...")
-    add_subdirectory(lsp-server)
 endif()
 
 # Custom targets for convenience
@@ -29,14 +22,11 @@ add_custom_target(lsp-extension
     COMMAND ${CMAKE_COMMAND} -E echo "Building VS Code extension..."
     COMMAND npm install
     COMMAND npm run compile
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/lsp-server/vscode-extension
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/vscode-extension
     COMMENT "Building Maxon VS Code extension"
 )
 
 # Install targets
 if(TARGET maxon)
     install(TARGETS maxon DESTINATION bin)
-endif()
-if(TARGET maxon-lsp-server)
-    install(TARGETS maxon-lsp-server DESTINATION bin)
 endif()

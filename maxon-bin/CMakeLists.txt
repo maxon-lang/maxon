@@ -40,6 +40,9 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
     set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
 endif()
 
+# Include vendor directories
+include_directories(${CMAKE_SOURCE_DIR}/vendor)
+
 # Source files - MIR backend only (no LLVM)
 set(SOURCES
     main.cpp
@@ -115,12 +118,30 @@ set(SOURCES
     error_formatter.cpp
     # Compiler API for LSP
     compiler_api.cpp
+    # Embedded LSP server
+    lsp/json_rpc.cpp
+    lsp/transport.cpp
+    lsp/document_manager.cpp
+    lsp/lsp_server.cpp
+    lsp/lsp_json.cpp
+    # LSP feature providers
+    lsp/features/completion.cpp
+    lsp/features/diagnostics.cpp
+    lsp/features/hover.cpp
+    lsp/features/signature_help.cpp
+    lsp/features/definition.cpp
+    lsp/features/document_symbols.cpp
+    lsp/features/references.cpp
+    lsp/features/rename.cpp
+    lsp/features/code_actions.cpp
+    lsp/features/formatting.cpp
+    lsp/features/folding.cpp
     # Type system
     types/type_conversion.cpp
     # Vendor libraries
-    vendor/md4c.c
-    vendor/md4c-html.c
-    vendor/entity.c
+    ${CMAKE_SOURCE_DIR}/vendor/md4c/md4c.c
+    ${CMAKE_SOURCE_DIR}/vendor/md4c/md4c-html.c
+    ${CMAKE_SOURCE_DIR}/vendor/md4c/entity.c
 )
 
 # Create executable
@@ -142,12 +163,35 @@ add_executable(grammar_generator
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
     target_precompile_headers(maxon PRIVATE pch.h)
     # Exclude C files from PCH
-    set_source_files_properties(vendor/md4c.c vendor/md4c-html.c vendor/entity.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/vendor/md4c/md4c.c
+        ${CMAKE_SOURCE_DIR}/vendor/md4c/md4c-html.c
+        ${CMAKE_SOURCE_DIR}/vendor/md4c/entity.c
+        PROPERTIES SKIP_PRECOMPILE_HEADERS ON
+    )
 endif()
 
 # Set output directory to project root bin for easier access and stdlib resolution
 set_target_properties(maxon PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin
+)
+
+# Handle rebuilding while VS Code has maxon.exe running:
+# PRE_BUILD: Rename existing maxon.exe to maxon.exe.old (allows new build to proceed)
+# POST_BUILD: Kill running process, delete .old file
+set(MAXON_RUNTIME "${CMAKE_SOURCE_DIR}/bin/maxon${CMAKE_EXECUTABLE_SUFFIX}")
+set(MAXON_BACKUP "${MAXON_RUNTIME}.old")
+
+add_custom_command(TARGET maxon PRE_BUILD
+    COMMAND ${CMAKE_COMMAND} -E rm -f "${MAXON_BACKUP}"
+    COMMAND ${CMAKE_COMMAND} -E rename "${MAXON_RUNTIME}" "${MAXON_BACKUP}" || ${CMAKE_COMMAND} -E true
+    COMMENT "Renaming existing maxon binary before rebuild"
+)
+
+add_custom_command(TARGET maxon POST_BUILD
+    COMMAND taskkill /IM maxon.exe /F 2>nul || ${CMAKE_COMMAND} -E true
+    COMMAND ${CMAKE_COMMAND} -E rm -f "${MAXON_BACKUP}"
+    COMMENT "Killing old maxon.exe process and cleaning up"
 )
 
 set_target_properties(grammar_generator PROPERTIES

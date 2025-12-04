@@ -33,8 +33,6 @@ ifeq ($(PLATFORM),windows)
 endif
 
 MAXON = bin/maxon$(EXE_EXT)
-LSP_SERVER_BIN = bin/maxon-lsp-server$(EXE_EXT)
-LSP_SERVER_BACKUP = $(LSP_SERVER_BIN).old
 
 RUNTIME_MIR_WINDOWS = bin/runtime_windows.mir
 RUNTIME_MIR_LINUX = bin/runtime_linux.mir
@@ -52,10 +50,10 @@ else
     EXTENSION_TARGET :=
 endif
 
-.PHONY: all clean clean-all compiler lsp lsp-server extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test-build debugger-test ffi-test-lib
+.PHONY: all clean clean-all compiler extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test-build debugger-test ffi-test-lib
 
 # Default target - build everything
-all: compiler lsp-server $(EXTENSION_TARGET) debugger-test-build
+all: compiler $(EXTENSION_TARGET) debugger-test-build
 	@echo All components built successfully.
 
 help:
@@ -68,8 +66,6 @@ help:
 	@echo "  runtime            Build Maxon runtime library"
 	@echo "  backend-test       Build and run backend tests"
 	@echo ""
-	@echo "  lsp                Build LSP server and install VS Code extension"
-	@echo "  lsp-server         Build the C++ LSP server"
 	@echo "  lsp-test           Build and run LSP unit tests"
 	@echo ""
 	@echo "  extension          Install dependencies and build VS Code extension"
@@ -127,15 +123,8 @@ compiler: $(BUILD_DIR)/build.ninja runtime
 	cmake --build $(BUILD_DIR) --target grammar_generator
 	@if [ bin/grammar_generator$(EXE_EXT) -nt vscode-extension/syntaxes/maxon.tmLanguage.json ]; then echo "Generating TextMate grammar..."; ./bin/grammar_generator$(EXE_EXT) vscode-extension/syntaxes/maxon.tmLanguage.json; fi
 
-# Build both LSP server and extension
-lsp: lsp-server extension-build
-
-# Build the C++ LSP server (depends on compiler sources)
-lsp-server: compiler
-	cmake --build $(BUILD_DIR) --target maxon-lsp-server
-
 # Build the VS Code extension (install + compile)
-extension: lsp-server
+extension: compiler
 	@echo Installing dependencies and building VS Code extension...
 	@cd vscode-extension && npm install && npm run compile
 	@echo VS Code extension built successfully.
@@ -158,8 +147,8 @@ extension-watch:
 	@echo Starting watch mode for VS Code extension...
 	@cd vscode-extension && npm run watch
 
-# Run VS Code extension tests (depends on lsp-server; npm pretest handles extension compilation)
-extension-test: lsp-server
+# Run VS Code extension tests (depends on compiler; npm pretest handles extension compilation)
+extension-test: compiler
 	@echo Running VS Code extension tests...
 	@cd vscode-extension && npm run test
 	@echo Cleaning up temporary test files...
@@ -179,19 +168,19 @@ extension-install: extension-package
 	@echo Extension installed. Reload VS Code to activate.
 
 # Build and run LSP C++ unit tests
-lsp-server/tests/build/build.ninja: lsp-server/tests/CMakeLists.txt
-	@mkdir -p lsp-server/tests/build
+maxon-bin/lsp/tests/build/build.ninja: maxon-bin/lsp/tests/CMakeLists.txt
+	@mkdir -p maxon-bin/lsp/tests/build
 ifeq ($(PLATFORM),windows)
-	@cd lsp-server/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
+	@cd maxon-bin/lsp/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
 else
-	@cd lsp-server/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
+	@cd maxon-bin/lsp/tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
 endif
 
-lsp-test: lsp-server lsp-server/tests/build/build.ninja
+lsp-test: compiler maxon-bin/lsp/tests/build/build.ninja
 	@echo Building and running LSP tests...
-	@cd lsp-server/tests/build && cmake --build .
+	@cd maxon-bin/lsp/tests/build && cmake --build .
 	@echo Running LSP tests...
-	@cd lsp-server/tests/build && ctest --output-on-failure
+	@cd maxon-bin/lsp/tests/build && ctest --output-on-failure
 
 # Build and run backend test runner (standalone executable)
 backend-tests/runner/build/build.ninja: backend-tests/runner/CMakeLists.txt
@@ -249,7 +238,7 @@ fragments: compiler ffi-test-lib
 	@$(MAXON) test-fragments
 
 # Run all test suites
-test: compiler backend-test-build lsp-server extension-build debugger-test ffi-test-lib
+test: compiler backend-test-build extension-build debugger-test ffi-test-lib
 	@bash scripts/run-all-tests.sh
 
 # Build debugger integration tests
@@ -278,7 +267,7 @@ clean:
 	@rm -rf bin
 	@rm -rf vscode-extension/out
 	@rm -rf vscode-extension/node_modules
-	@rm -rf lsp-server/tests/build
+	@rm -rf maxon-bin/lsp/tests/build
 	@rm -rf debugger-tests/build
 	@rm -rf backend-tests/runner/build
 	@rm -f debugger-tests/bin/*$(EXE_EXT)

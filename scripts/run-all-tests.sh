@@ -57,8 +57,8 @@ echo ""
 # Test 4: LSP C++ unit tests
 echo -e "${YELLOW}[4/5] Running LSP C++ unit tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
-mkdir -p lsp-server/tests/build
-pushd lsp-server/tests/build > /dev/null
+mkdir -p maxon-bin/lsp/tests/build
+pushd maxon-bin/lsp/tests/build > /dev/null
 # Only configure if not already configured
 if [ ! -f "CMakeCache.txt" ]; then
 	if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then

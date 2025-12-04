@@ -488,6 +488,13 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 		return result;
 	}
 
+	// Copy parse errors from AST
+	if (result.ast) {
+		for (const auto &err : result.ast->parseErrors) {
+			result.parseErrors.emplace_back(err.message, err.line, err.column);
+		}
+	}
+
 	// Extract symbols from AST
 	if (result.ast) {
 		result.symbols = extractSymbolsFromAST(result.ast.get(), source, false);
@@ -550,6 +557,13 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 
 		result.parseErrors.emplace_back(msg, line, column);
 		return result;
+	}
+
+	// Copy parse errors from AST
+	if (result.ast) {
+		for (const auto &err : result.ast->parseErrors) {
+			result.parseErrors.emplace_back(err.message, err.line, err.column);
+		}
 	}
 
 	// Extract symbols from AST
