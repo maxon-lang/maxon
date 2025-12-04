@@ -13,6 +13,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}/../..
     ${PROJECT_ROOT}
+    ${PROJECT_ROOT}/vendor
     ${PROJECT_ROOT}/vendor/catch2
 )
 
@@ -34,6 +35,7 @@ set(LSP_SOURCES
     ../features/formatting.cpp
     ../features/folding.cpp
     ../features/diagnostics.cpp
+    ../features/linked_editing.cpp
 )
 
 # Maxon compiler source files (needed for analysis)
@@ -72,5 +74,6 @@ target_link_libraries(test_lsp_server lsp_test_lib)
 # Enable testing
 enable_testing()
 
-add_test(NAME LSPServer COMMAND test_lsp_server)
+# Run with --reporter compact to show each test case
+add_test(NAME LSPServer COMMAND test_lsp_server --reporter compact)
 set_tests_properties(LSPServer PROPERTIES TIMEOUT 120)

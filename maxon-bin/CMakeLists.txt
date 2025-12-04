@@ -136,6 +136,7 @@ set(SOURCES
     lsp/features/code_actions.cpp
     lsp/features/formatting.cpp
     lsp/features/folding.cpp
+    lsp/features/linked_editing.cpp
     # Type system
     types/type_conversion.cpp
     # Vendor libraries

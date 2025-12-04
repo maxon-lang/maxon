@@ -197,7 +197,7 @@ std::optional<Hover> HoverProvider::lookupVariable(const std::string& name, cons
     auto it = cache->variables.find(name);
     if (it != cache->variables.end()) {
         const VariableInfo& var = it->second;
-        std::string markdown = formatVariableHover(var.name, var.type, !var.isImmutable);
+        std::string markdown = formatVariableHover(var.name, var.type, !var.isImmutable, var.initialValue);
         return buildHover(markdown, currentTokenRange_);
     }
 
@@ -334,10 +334,14 @@ std::string HoverProvider::formatKeywordHover(const KeywordLSPInfo& keyword) {
 }
 
 std::string HoverProvider::formatVariableHover(const std::string& name, const std::string& type,
-                                               bool isMutable, const std::string& doc) {
+                                               bool isMutable, const std::string& value, const std::string& doc) {
     std::string md = "```maxon\n";
     md += isMutable ? "var " : "let ";
     md += name + " " + type;
+    // Show value for immutable variables (like constants)
+    if (!isMutable && !value.empty()) {
+        md += " = " + value;
+    }
     md += "\n```\n";
 
     if (!doc.empty()) {

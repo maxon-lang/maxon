@@ -129,11 +129,12 @@ private:
      * @param name Variable name
      * @param type Variable type
      * @param isMutable Whether the variable is mutable (var vs let)
+     * @param value The variable's initial value (shown for immutable variables)
      * @param doc Optional documentation
      * @return Markdown formatted string
      */
     std::string formatVariableHover(const std::string& name, const std::string& type,
-                                    bool isMutable, const std::string& doc = "");
+                                    bool isMutable, const std::string& value = "", const std::string& doc = "");
 
     /**
      * Format function hover content from FunctionInfo.

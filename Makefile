@@ -180,7 +180,7 @@ lsp-test: compiler maxon-bin/lsp/tests/build/build.ninja
 	@echo Building and running LSP tests...
 	@cd maxon-bin/lsp/tests/build && cmake --build .
 	@echo Running LSP tests...
-	@cd maxon-bin/lsp/tests/build && ctest --output-on-failure
+	@cd maxon-bin/lsp/tests/build && ./test_lsp_server --reporter Automake
 
 # Build and run backend test runner (standalone executable)
 backend-tests/runner/build/build.ninja: backend-tests/runner/CMakeLists.txt
@@ -245,7 +245,7 @@ test: compiler backend-test-build extension-build debugger-test ffi-test-lib
 debugger-tests/build/build.ninja: debugger-tests/CMakeLists.txt
 	@mkdir -p debugger-tests/build
 ifeq ($(PLATFORM),windows)
-	@cd debugger-tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
+	@cd debugger-tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_RC_COMPILER=$(RC) -DCMAKE_BUILD_TYPE=Debug
 else
 	@cd debugger-tests/build && cmake .. -G $(CMAKE_GENERATOR) -DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX) -DCMAKE_BUILD_TYPE=Debug -DMAXON_LLVM_DIR=$(LLVM_DIR_ABS)
 endif

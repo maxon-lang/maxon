@@ -942,6 +942,52 @@ FoldingRangeParams foldingRangeParamsFromJson(const json &j) {
 }
 
 // =============================================================================
+// Linked Editing Types
+// =============================================================================
+
+json toJson(const LinkedEditingRanges &ranges) {
+	json j;
+	json rangesJson = json::array();
+	for (const auto &r : ranges.ranges) {
+		rangesJson.push_back(toJson(r));
+	}
+	j["ranges"] = rangesJson;
+	if (ranges.wordPattern.has_value()) {
+		j["wordPattern"] = ranges.wordPattern.value();
+	}
+	return j;
+}
+
+LinkedEditingRanges linkedEditingRangesFromJson(const json &j) {
+	LinkedEditingRanges ranges;
+	if (j.contains("ranges")) {
+		for (const auto &r : j["ranges"]) {
+			ranges.ranges.push_back(rangeFromJson(r));
+		}
+	}
+	if (j.contains("wordPattern")) {
+		ranges.wordPattern = j["wordPattern"].get<std::string>();
+	}
+	return ranges;
+}
+
+json toJson(const LinkedEditingRangeParams &params) {
+	return json{
+		{"textDocument", toJson(params.textDocument)},
+		{"position", toJson(params.position)}
+	};
+}
+
+LinkedEditingRangeParams linkedEditingRangeParamsFromJson(const json &j) {
+	LinkedEditingRangeParams params;
+	if (j.contains("textDocument"))
+		params.textDocument = textDocumentIdentifierFromJson(j["textDocument"]);
+	if (j.contains("position"))
+		params.position = positionFromJson(j["position"]);
+	return params;
+}
+
+// =============================================================================
 // Initialization Types
 // =============================================================================
 

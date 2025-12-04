@@ -20,15 +20,10 @@ std::vector<TextEdit> FormattingProvider::formatDocument(
     const AnalysisCache* cache
 ) {
     FormattingConfig config = buildConfig(options);
-    std::string formatted;
 
-    // Try to use cached AST if available and valid
-    if (cache && cache->ast && !cache->hasParseErrors()) {
-        formatted = formatAST(cache->ast.get(), config);
-    } else {
-        // Fall back to line-by-line formatting
-        formatted = formatLineByLine(document.content, config);
-    }
+    // Always use line-by-line formatting to preserve comments, blank lines,
+    // and implicit type declarations. AST-based formatting loses this information.
+    std::string formatted = formatLineByLine(document.content, config);
 
     return generateEdits(document.content, formatted);
 }
@@ -41,14 +36,9 @@ std::vector<TextEdit> FormattingProvider::formatRange(
 ) {
     FormattingConfig config = buildConfig(options);
 
-    // For range formatting, we format the entire document but only return
-    // edits that fall within the specified range
-    std::string formatted;
-    if (cache && cache->ast && !cache->hasParseErrors()) {
-        formatted = formatAST(cache->ast.get(), config);
-    } else {
-        formatted = formatLineByLine(document.content, config);
-    }
+    // Always use line-by-line formatting to preserve comments, blank lines,
+    // and implicit type declarations.
+    std::string formatted = formatLineByLine(document.content, config);
 
     // Generate all edits
     std::vector<TextEdit> allEdits = generateEdits(document.content, formatted);

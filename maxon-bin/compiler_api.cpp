@@ -275,12 +275,14 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 		std::string signature = buildStructSignature(structDef.get());
 		std::string doc = extractDocComment(source, structDef->line);
 
-		symbols.emplace_back(
+		LSPSymbolInfo structSym(
 			structDef->name,
 			"struct",
 			signature,
 			doc,
 			structDef->getSourceRange());
+		structSym.conformsTo = structDef->conformsTo;
+		symbols.push_back(std::move(structSym));
 
 		// Extract fields
 		for (const auto &field : structDef->fields) {
@@ -585,9 +587,9 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 			analyzer.registerExternalFunction(func.name, func.returnType, params);
 		}
 
-		// Register stdlib structs
+		// Register stdlib structs with their interface conformance
 		for (const auto &structSym : stdlib.structs) {
-			analyzer.registerExternalStruct(structSym.name, {});
+			analyzer.registerExternalStruct(structSym.name, {}, structSym.conformsTo);
 		}
 
 		// Register stdlib interfaces

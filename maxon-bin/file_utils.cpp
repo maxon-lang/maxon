@@ -99,7 +99,8 @@ std::string deriveNamespace(const std::string &filePath) {
 	std::filesystem::path dir = p.parent_path();
 	std::string ns = dir.string();
 
-	if (ns.empty() || ns == ".") {
+	// Check for empty or root directory before any processing
+	if (ns.empty() || ns == "." || ns == "/" || ns == "\\") {
 		return "";
 	}
 

@@ -47,6 +47,7 @@ struct LSPSymbolInfo {
 	std::string filePath;					  // Absolute path to the source file
 	std::vector<LSPParameterInfo> parameters; // For functions/methods
 	std::string returnType;					  // For functions/methods
+	std::vector<std::string> conformsTo;	  // For structs: interfaces this struct conforms to
 
 	LSPSymbolInfo() = default;
 

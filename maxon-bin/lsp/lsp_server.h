@@ -126,6 +126,9 @@ class LSPServer {
 	// Handle "textDocument/foldingRange" request
 	maxon::lsp::json handleFoldingRange(const maxon::lsp::json &params);
 
+	// Handle "textDocument/linkedEditingRange" request
+	maxon::lsp::json handleLinkedEditingRange(const maxon::lsp::json &params);
+
 	// =========================================================================
 	// Analysis and diagnostics
 	// =========================================================================

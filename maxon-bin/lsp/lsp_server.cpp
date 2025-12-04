@@ -6,6 +6,7 @@
 #include "features/folding.h"
 #include "features/formatting.h"
 #include "features/hover.h"
+#include "features/linked_editing.h"
 #include "features/references.h"
 #include "features/rename.h"
 #include "features/signature_help.h"
@@ -95,6 +96,9 @@ void LSPServer::registerHandlers() {
 	};
 	requestHandlers_["textDocument/foldingRange"] = [this](const json &params) {
 		return handleFoldingRange(params);
+	};
+	requestHandlers_["textDocument/linkedEditingRange"] = [this](const json &params) {
+		return handleLinkedEditingRange(params);
 	};
 }
 
@@ -427,6 +431,9 @@ lsp::ServerCapabilities LSPServer::buildCapabilities() {
 	// Folding ranges
 	caps.foldingRangeProvider = true;
 
+	// Linked editing (for block labels)
+	caps.linkedEditingRangeProvider = true;
+
 	return caps;
 }
 
@@ -754,6 +761,27 @@ json LSPServer::handleFoldingRange(const json &params) {
 		result.push_back(lsp::toJson(range));
 	}
 	return result;
+}
+
+json LSPServer::handleLinkedEditingRange(const json &params) {
+	auto linkedParams = lsp::linkedEditingRangeParamsFromJson(params);
+	const std::string &uri = linkedParams.textDocument.uri;
+
+	auto docOpt = documentManager_.getDocument(uri);
+	if (!docOpt.has_value()) {
+		return nullptr;
+	}
+
+	Document *doc = docOpt.value();
+	const AnalysisCache *cache = documentManager_.getAnalysis(uri);
+
+	LinkedEditingProvider provider;
+	auto result = provider.getLinkedEditingRanges(*doc, linkedParams.position, cache);
+
+	if (result.has_value()) {
+		return lsp::toJson(result.value());
+	}
+	return nullptr;
 }
 
 } // namespace maxon_lsp
