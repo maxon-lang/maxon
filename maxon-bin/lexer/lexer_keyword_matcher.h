@@ -61,14 +61,14 @@ struct KeywordMathInfo {
  * Keyword entry in the hash table
  */
 struct KeywordEntry {
-	const char *keyword;			   // The keyword string (null-terminated)
-	const char *description;		   // Human-readable description
-	const char *insertText;			   // Text to insert (can include snippet placeholders)
-	uint8_t length;					   // Length of the keyword
-	KeywordCategory category;		   // Keyword category
+	const char *keyword;				  // The keyword string (null-terminated)
+	const char *description;			  // Human-readable description
+	const char *insertText;				  // Text to insert (can include snippet placeholders)
+	uint8_t length;						  // Length of the keyword
+	KeywordCategory category;			  // Keyword category
 	KeywordCompletionKind completionKind; // LSP completion item kind
-	bool has_math_info;				   // Whether this keyword has math intrinsic info
-	KeywordMathInfo math_info;		   // Math intrinsic info (only valid if has_math_info)
+	bool has_math_info;					  // Whether this keyword has math intrinsic info
+	KeywordMathInfo math_info;			  // Math intrinsic info (only valid if has_math_info)
 };
 
 /**
@@ -114,224 +114,224 @@ class KeywordMatcher {
 		// Types
 		// Note: 'char' and 'string' are NOT keywords - they are stdlib struct types
 		add_keyword("int", KeywordCategory::Type,
-			"Signed 64-bit integer type",
-			"int",
-			KeywordCompletionKind::Keyword);
+					"Signed 64-bit integer type",
+					"int",
+					KeywordCompletionKind::Keyword);
 		add_keyword("float", KeywordCategory::Type,
-			"64-bit floating-point type (IEEE 754 double)",
-			"float",
-			KeywordCompletionKind::Keyword);
+					"64-bit floating-point type (IEEE 754 double)",
+					"float",
+					KeywordCompletionKind::Keyword);
 		add_keyword("byte", KeywordCategory::Type,
-			"8-bit unsigned integer type (0-255)",
-			"byte",
-			KeywordCompletionKind::Keyword);
+					"8-bit unsigned integer type (0-255)",
+					"byte",
+					KeywordCompletionKind::Keyword);
 		add_keyword("bool", KeywordCategory::Type,
-			"Boolean type (true or false)",
-			"bool",
-			KeywordCompletionKind::Keyword);
+					"Boolean type (true or false)",
+					"bool",
+					KeywordCompletionKind::Keyword);
 
 		// Control flow
 		add_keyword("if", KeywordCategory::ControlFlow,
-			"Conditional statement - executes code block if condition is true",
-			"if $1\n\t$2\nend 'if'",
-			KeywordCompletionKind::Keyword);
+					"Conditional statement - executes code block if condition is true",
+					"if $1\n\t$2\nend 'if'",
+					KeywordCompletionKind::Keyword);
 		add_keyword("then", KeywordCategory::ControlFlow,
-			"Single-line if body - use after condition for one-line statements",
-			"then",
-			KeywordCompletionKind::Keyword);
+					"Single-line if body - use after condition for one-line statements",
+					"then",
+					KeywordCompletionKind::Keyword);
 		add_keyword("else", KeywordCategory::ControlFlow,
-			"Alternative branch - executed when if condition is false",
-			"else\n\t$1",
-			KeywordCompletionKind::Keyword);
+					"Alternative branch - executed when if condition is false",
+					"else\n\t$1",
+					KeywordCompletionKind::Keyword);
 		add_keyword("while", KeywordCategory::ControlFlow,
-			"Loop statement - repeats while condition is true",
-			"while $1\n\t$2\nend 'while'",
-			KeywordCompletionKind::Keyword);
+					"Loop statement - repeats while condition is true",
+					"while $1\n\t$2\nend 'while'",
+					KeywordCompletionKind::Keyword);
 		add_keyword("for", KeywordCategory::ControlFlow,
-			"For loop - iterates over a range or collection",
-			"for $1 in $2\n\t$3\nend 'for'",
-			KeywordCompletionKind::Keyword);
+					"For loop - iterates over a range or collection",
+					"for $1 in $2\n\t$3\nend 'for'",
+					KeywordCompletionKind::Keyword);
 		add_keyword("in", KeywordCategory::ControlFlow,
-			"Iterator keyword in for loop",
-			"in",
-			KeywordCompletionKind::Keyword);
+					"Iterator keyword in for loop",
+					"in",
+					KeywordCompletionKind::Keyword);
 		add_keyword("end", KeywordCategory::ControlFlow,
-			"Block terminator - ends function, loop, or control flow block",
-			"end '$1'",
-			KeywordCompletionKind::Keyword);
+					"Block terminator - ends function, loop, or control flow block",
+					"end '$1'",
+					KeywordCompletionKind::Keyword);
 		add_keyword("return", KeywordCategory::ControlFlow,
-			"Return from function with optional value",
-			"return $1",
-			KeywordCompletionKind::Keyword);
+					"Return from function with optional value",
+					"return $1",
+					KeywordCompletionKind::Keyword);
 		add_keyword("break", KeywordCategory::ControlFlow,
-			"Exit loop immediately",
-			"break",
-			KeywordCompletionKind::Keyword);
+					"Exit loop immediately",
+					"break",
+					KeywordCompletionKind::Keyword);
 		add_keyword("continue", KeywordCategory::ControlFlow,
-			"Skip to next iteration of loop",
-			"continue",
-			KeywordCompletionKind::Keyword);
+					"Skip to next iteration of loop",
+					"continue",
+					KeywordCompletionKind::Keyword);
 		add_keyword("match", KeywordCategory::ControlFlow,
-			"Pattern matching statement - matches value against cases",
-			"match $1\n\t$2:\n\t\t$3\n\tdefault:\n\t\t$4\nend 'match'",
-			KeywordCompletionKind::Keyword);
+					"Pattern matching statement - matches value against cases",
+					"match $1\n\t$2:\n\t\t$3\n\tdefault:\n\t\t$4\nend 'match'",
+					KeywordCompletionKind::Keyword);
 		add_keyword("default", KeywordCategory::ControlFlow,
-			"Default case in match statement - executed when no other case matches",
-			"default:",
-			KeywordCompletionKind::Keyword);
+					"Default case in match statement - executed when no other case matches",
+					"default:",
+					KeywordCompletionKind::Keyword);
 		add_keyword("fallthrough", KeywordCategory::ControlFlow,
-			"Continue to next case in match statement",
-			"fallthrough",
-			KeywordCompletionKind::Keyword);
+					"Continue to next case in match statement",
+					"fallthrough",
+					KeywordCompletionKind::Keyword);
 		add_keyword("gives", KeywordCategory::ControlFlow,
-			"Yield value from match expression",
-			"gives $1",
-			KeywordCompletionKind::Keyword);
+					"Yield value from match expression",
+					"gives $1",
+					KeywordCompletionKind::Keyword);
 
 		// Declarations
 		add_keyword("function", KeywordCategory::Declaration,
-			"Function declaration - defines a named function",
-			"function $1($2) $3\n\t$4\nend '$1'",
-			KeywordCompletionKind::Keyword);
+					"Function declaration - defines a named function",
+					"function $1($2) $3\n\t$4\nend '$1'",
+					KeywordCompletionKind::Keyword);
 		add_keyword("var", KeywordCategory::Declaration,
-			"Mutable variable declaration",
-			"var $1 = $2",
-			KeywordCompletionKind::Keyword);
+					"Mutable variable declaration",
+					"var $1 = $2",
+					KeywordCompletionKind::Keyword);
 		add_keyword("let", KeywordCategory::Declaration,
-			"Immutable variable declaration",
-			"let $1 = $2",
-			KeywordCompletionKind::Keyword);
+					"Immutable variable declaration",
+					"let $1 = $2",
+					KeywordCompletionKind::Keyword);
 		add_keyword("struct", KeywordCategory::Declaration,
-			"Structure type declaration - defines a composite type",
-			"struct $1\n\t$2\nend '$1'",
-			KeywordCompletionKind::Keyword);
+					"Structure type declaration - defines a composite type",
+					"struct $1\n\t$2\nend '$1'",
+					KeywordCompletionKind::Keyword);
 		add_keyword("enum", KeywordCategory::Declaration,
-			"Enumeration type declaration - defines a type with named values",
-			"enum $1\n\tcase $2\nend '$1'",
-			KeywordCompletionKind::Keyword);
+					"Enumeration type declaration - defines a type with named values",
+					"enum $1\n\tcase $2\nend '$1'",
+					KeywordCompletionKind::Keyword);
 		add_keyword("interface", KeywordCategory::Declaration,
-			"Interface declaration - defines a contract for types",
-			"interface $1\n\t$2\nend '$1'",
-			KeywordCompletionKind::Keyword);
+					"Interface declaration - defines a contract for types",
+					"interface $1\n\t$2\nend '$1'",
+					KeywordCompletionKind::Keyword);
 		add_keyword("type", KeywordCategory::Declaration,
-			"Associated type declaration in interface",
-			"type $1",
-			KeywordCompletionKind::Keyword);
+					"Associated type declaration in interface",
+					"type $1",
+					KeywordCompletionKind::Keyword);
 		add_keyword("uses", KeywordCategory::Declaration,
-			"Interface associated type constraint",
-			"uses $1",
-			KeywordCompletionKind::Keyword);
+					"Interface associated type constraint",
+					"uses $1",
+					KeywordCompletionKind::Keyword);
 		add_keyword("with", KeywordCategory::Declaration,
-			"Struct associated type binding",
-			"with $1 = $2",
-			KeywordCompletionKind::Keyword);
+					"Struct associated type binding",
+					"with $1 = $2",
+					KeywordCompletionKind::Keyword);
 		add_keyword("export", KeywordCategory::Declaration,
-			"Export declaration - makes item visible to other modules",
-			"export",
-			KeywordCompletionKind::Keyword);
+					"Export declaration - makes item visible to other modules",
+					"export",
+					KeywordCompletionKind::Keyword);
 		add_keyword("extern", KeywordCategory::Declaration,
-			"External declaration - declares item implemented elsewhere",
-			"extern",
-			KeywordCompletionKind::Keyword);
+					"External declaration - declares item implemented elsewhere",
+					"extern",
+					KeywordCompletionKind::Keyword);
 		add_keyword("from", KeywordCategory::Declaration,
-			"Map key type specifier",
-			"from",
-			KeywordCompletionKind::Keyword);
+					"Map key type specifier",
+					"from",
+					KeywordCompletionKind::Keyword);
 		add_keyword("to", KeywordCategory::Declaration,
-			"Map value type specifier",
-			"to",
-			KeywordCompletionKind::Keyword);
+					"Map value type specifier",
+					"to",
+					KeywordCompletionKind::Keyword);
 		add_keyword("case", KeywordCategory::Declaration,
-			"Enum case declaration - defines an enumeration value",
-			"case $1",
-			KeywordCompletionKind::Keyword);
+					"Enum case declaration - defines an enumeration value",
+					"case $1",
+					KeywordCompletionKind::Keyword);
 
 		// Math intrinsics
 		add_math_keyword("sqrt", KeywordCategory::MathIntrinsic,
-			"Square root - returns the square root of a float value",
-			"sqrt($1)",
-			KeywordCompletionKind::Function,
-			{MathIntrinsicKind::Intrinsic, "", "float"});
+						 "Square root - returns the square root of a float value",
+						 "sqrt($1)",
+						 KeywordCompletionKind::Function,
+						 {MathIntrinsicKind::Intrinsic, "", "float"});
 		add_math_keyword("abs", KeywordCategory::MathIntrinsic,
-			"Absolute value - returns the non-negative value",
-			"abs($1)",
-			KeywordCompletionKind::Function,
-			{MathIntrinsicKind::Intrinsic, "", "float"});
+						 "Absolute value - returns the non-negative value",
+						 "abs($1)",
+						 KeywordCompletionKind::Function,
+						 {MathIntrinsicKind::Intrinsic, "", "float"});
 		add_math_keyword("floor", KeywordCategory::MathIntrinsic,
-			"Floor function - rounds down to nearest integer",
-			"floor($1)",
-			KeywordCompletionKind::Function,
-			{MathIntrinsicKind::Intrinsic, "", "int"});
+						 "Floor function - rounds down to nearest integer",
+						 "floor($1)",
+						 KeywordCompletionKind::Function,
+						 {MathIntrinsicKind::Intrinsic, "", "int"});
 		add_math_keyword("ceil", KeywordCategory::MathIntrinsic,
-			"Ceiling function - rounds up to nearest integer",
-			"ceil($1)",
-			KeywordCompletionKind::Function,
-			{MathIntrinsicKind::Intrinsic, "", "int"});
+						 "Ceiling function - rounds up to nearest integer",
+						 "ceil($1)",
+						 KeywordCompletionKind::Function,
+						 {MathIntrinsicKind::Intrinsic, "", "int"});
 		add_math_keyword("round", KeywordCategory::MathIntrinsic,
-			"Round to nearest integer",
-			"round($1)",
-			KeywordCompletionKind::Function,
-			{MathIntrinsicKind::Intrinsic, "", "int"});
+						 "Round to nearest integer",
+						 "round($1)",
+						 KeywordCompletionKind::Function,
+						 {MathIntrinsicKind::Intrinsic, "", "int"});
 		add_math_keyword("trunc", KeywordCategory::MathIntrinsic,
-			"Truncate to integer - removes fractional part",
-			"trunc($1)",
-			KeywordCompletionKind::Function,
-			{MathIntrinsicKind::DirectCast, "", "int"});
+						 "Truncate to integer - removes fractional part",
+						 "trunc($1)",
+						 KeywordCompletionKind::Function,
+						 {MathIntrinsicKind::DirectCast, "", "int"});
 		add_math_keyword("sin", KeywordCategory::MathIntrinsic,
-			"Sine function - returns sine of angle in radians",
-			"sin($1)",
-			KeywordCompletionKind::Function,
-			{MathIntrinsicKind::RuntimeFunction, "sin", "float"});
+						 "Sine function - returns sine of angle in radians",
+						 "sin($1)",
+						 KeywordCompletionKind::Function,
+						 {MathIntrinsicKind::RuntimeFunction, "sin", "float"});
 		add_math_keyword("cos", KeywordCategory::MathIntrinsic,
-			"Cosine function - returns cosine of angle in radians",
-			"cos($1)",
-			KeywordCompletionKind::Function,
-			{MathIntrinsicKind::RuntimeFunction, "cos", "float"});
+						 "Cosine function - returns cosine of angle in radians",
+						 "cos($1)",
+						 KeywordCompletionKind::Function,
+						 {MathIntrinsicKind::RuntimeFunction, "cos", "float"});
 		add_math_keyword("tan", KeywordCategory::MathIntrinsic,
-			"Tangent function - returns tangent of angle in radians",
-			"tan($1)",
-			KeywordCompletionKind::Function,
-			{MathIntrinsicKind::RuntimeFunction, "tan", "float"});
+						 "Tangent function - returns tangent of angle in radians",
+						 "tan($1)",
+						 KeywordCompletionKind::Function,
+						 {MathIntrinsicKind::RuntimeFunction, "tan", "float"});
 
 		// Literals
 		add_keyword("true", KeywordCategory::Literal,
-			"Boolean true literal",
-			"true",
-			KeywordCompletionKind::Constant);
+					"Boolean true literal",
+					"true",
+					KeywordCompletionKind::Constant);
 		add_keyword("false", KeywordCategory::Literal,
-			"Boolean false literal",
-			"false",
-			KeywordCompletionKind::Constant);
+					"Boolean false literal",
+					"false",
+					KeywordCompletionKind::Constant);
 		add_keyword("nil", KeywordCategory::Literal,
-			"Null/absent value literal",
-			"nil",
-			KeywordCompletionKind::Constant);
+					"Null/absent value literal",
+					"nil",
+					KeywordCompletionKind::Constant);
 
 		// Operators
 		add_keyword("as", KeywordCategory::Operator,
-			"Type cast operator - converts value to specified type",
-			"as $1",
-			KeywordCompletionKind::Operator);
+					"Type cast operator - converts value to specified type",
+					"as $1",
+					KeywordCompletionKind::Operator);
 		add_keyword("and", KeywordCategory::Operator,
-			"Logical AND operator - returns true if both operands are true",
-			"and",
-			KeywordCompletionKind::Operator);
+					"Logical AND operator - returns true if both operands are true",
+					"and",
+					KeywordCompletionKind::Operator);
 		add_keyword("or", KeywordCategory::Operator,
-			"Logical OR operator - returns true if either operand is true",
-			"or",
-			KeywordCompletionKind::Operator);
+					"Logical OR operator - returns true if either operand is true",
+					"or",
+					KeywordCompletionKind::Operator);
 		add_keyword("not", KeywordCategory::Operator,
-			"Logical NOT operator - negates boolean value",
-			"not",
-			KeywordCompletionKind::Operator);
+					"Logical NOT operator - negates boolean value",
+					"not",
+					KeywordCompletionKind::Operator);
 		add_keyword("mod", KeywordCategory::Operator,
-			"Modulo operator - returns remainder of integer division",
-			"mod",
-			KeywordCompletionKind::Operator);
+					"Modulo operator - returns remainder of integer division",
+					"mod",
+					KeywordCompletionKind::Operator);
 		add_keyword("is", KeywordCategory::Operator,
-			"Interface conformance check - tests if type implements interface",
-			"is $1",
-			KeywordCompletionKind::Operator);
+					"Interface conformance check - tests if type implements interface",
+					"is $1",
+					KeywordCompletionKind::Operator);
 
 		initialized_ = true;
 	}
@@ -444,14 +444,12 @@ class KeywordMatcher {
 
 		for (size_t i = 0; i < keyword_count_; ++i) {
 			const KeywordEntry &entry = keywords_[i];
-			result.push_back({
-				entry.keyword,
-				entry.description,
-				entry.insertText,
-				entry.completionKind,
-				entry.category,
-				entry.has_math_info ? entry.math_info.returnType : ""
-			});
+			result.push_back({entry.keyword,
+							  entry.description,
+							  entry.insertText,
+							  entry.completionKind,
+							  entry.category,
+							  entry.has_math_info ? entry.math_info.returnType : ""});
 		}
 
 		return result;
@@ -474,14 +472,12 @@ class KeywordMatcher {
 			// Check if keyword starts with prefix (case-sensitive)
 			if (prefix.empty() || (keyword.length() >= prefix.length() &&
 								   keyword.substr(0, prefix.length()) == prefix)) {
-				result.push_back({
-					entry.keyword,
-					entry.description,
-					entry.insertText,
-					entry.completionKind,
-					entry.category,
-					entry.has_math_info ? entry.math_info.returnType : ""
-				});
+				result.push_back({entry.keyword,
+								  entry.description,
+								  entry.insertText,
+								  entry.completionKind,
+								  entry.category,
+								  entry.has_math_info ? entry.math_info.returnType : ""});
 			}
 		}
 
@@ -529,9 +525,7 @@ class KeywordMatcher {
 
 		// Store in keywords array
 		size_t idx = keyword_count_++;
-		keywords_[idx] = {keyword, description, insertText,
-						  static_cast<uint8_t>(len), category, completionKind,
-						  false, {}};
+		keywords_[idx] = {keyword, description, insertText, static_cast<uint8_t>(len), category, completionKind, false, {}};
 
 		// Insert into hash table (with linear probing for collisions)
 		while (hash_table_[hash] != EMPTY_SLOT) {

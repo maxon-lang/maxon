@@ -575,7 +575,7 @@ Token Lexer::readOperatorOrDelimiter(int startLine, int startColumn) {
 		}
 		if (CharClassifier::is_digit(peek(1))) {
 			reportError("Invalid float literal: float literals must have a leading zero (use 0." +
-						std::string(1, peek(1)) + " instead of ." + std::string(1, peek(1)) + ")",
+							std::string(1, peek(1)) + " instead of ." + std::string(1, peek(1)) + ")",
 						startLine, startColumn);
 		}
 		advance();

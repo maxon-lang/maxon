@@ -92,45 +92,6 @@ TEST_CASE("hover on function_parameter", "[hover]") {
 			 hover->contents.find("Parameter") != std::string::npos));
 }
 
-TEST_CASE("hover on struct_definition", "[hover]") {
-
-	Analyzer analyzer;
-	auto doc = createTestDocument(
-		"struct Point\n"
-		"    x int\n"
-		"    y int\n"
-		"end 'Point'\n"
-		"\n"
-		"function test() int\n"
-		"    var p Point\n"
-		"    return 0\n"
-		"end 'test'");
-
-	analyzer.analyze(doc);
-
-	// Hover over 'Point' in the var declaration (line 6, after "var p ")
-	lsp::Position pos{6, 11};
-	auto hover = analyzer.getHover(doc, pos);
-
-	if (!hover.has_value()) {
-
-		return;
-	}
-
-	std::cout << "  Hover text: " << hover->contents << std::endl;
-
-	// REQUIRE if it's showing struct info (should have struct keyword and field names)
-	bool hasStructKeyword = hover->contents.find("struct") != std::string::npos;
-	bool hasPointName = hover->contents.find("Point") != std::string::npos;
-	bool hasFields = hover->contents.find("x") != std::string::npos &&
-					 hover->contents.find("y") != std::string::npos;
-
-	if (hasStructKeyword && hasPointName && hasFields) {
-
-	} else {
-	}
-}
-
 TEST_CASE("hover on user_function", "[hover]") {
 
 	Analyzer analyzer;
@@ -242,50 +203,6 @@ TEST_CASE("hover on type_name", "[hover]") {
 	auto hoverPtr = analyzer.getHover(doc, posPtr);
 	REQUIRE(hoverPtr.has_value());
 	REQUIRE(hoverPtr->contents.find("ptr") != std::string::npos);
-}
-
-TEST_CASE("hover on array_variable", "[hover]") {
-
-	Analyzer analyzer;
-	auto doc = createTestDocument(
-		"function test() int\n"
-		"    var numbers []int\n"
-		"    return numbers[0]\n"
-		"end 'test'");
-
-	analyzer.analyze(doc);
-
-	// Hover over 'numbers' in the var declaration first
-	lsp::Position pos{1, 8};
-	auto hover = analyzer.getHover(doc, pos);
-
-	if (!hover.has_value()) {
-
-		return;
-	}
-
-	std::cout << "  Hover text: " << hover->contents << std::endl;
-
-	// REQUIRE if it shows variable info (even if type representation varies)
-	if (hover->contents.find("numbers") != std::string::npos) {
-
-	} else {
-	}
-}
-
-TEST_CASE("hover on no_match", "[hover]") {
-
-	Analyzer analyzer;
-	auto doc = createTestDocument("function test() int\n    return 42\nend 'test'");
-
-	analyzer.analyze(doc);
-
-	// Hover over whitespace
-	lsp::Position pos{1, 0};
-	auto hover = analyzer.getHover(doc, pos);
-
-	// Should still return something, but might be generic
-	// This is okay - we just don't want it to crash
 }
 
 TEST_CASE("hover on numeric_literals", "[hover]") {

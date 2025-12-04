@@ -122,6 +122,29 @@ void SemanticAnalyzer::registerExternalStruct(const std::string &name, const std
 	}
 }
 
+void SemanticAnalyzer::registerExternalInterface(const std::string &name,
+												 const std::vector<InterfaceMethodInfo> &methods,
+												 const std::vector<std::string> &associatedTypes) {
+	// Only register if not already defined
+	if (interfaces.find(name) == interfaces.end()) {
+		InterfaceInfo ifaceInfo(name, 0, 0, associatedTypes);
+		for (const auto &method : methods) {
+			ifaceInfo.methods.push_back(method);
+		}
+		interfaces.emplace(name, std::move(ifaceInfo));
+		logTrace("Registered external interface: " + name);
+	}
+}
+
+void SemanticAnalyzer::registerExternalEnum(const std::string &name, const std::string &rawValueType) {
+	// Only register if not already defined
+	if (enums.find(name) == enums.end()) {
+		EnumInfo enumInfo(name, 0, 0, rawValueType);
+		enums.emplace(name, std::move(enumInfo));
+		logTrace("Registered external enum: " + name);
+	}
+}
+
 void SemanticAnalyzer::registerBuiltinFunctions() {
 	// Register hash and equals methods for primitive hashable types
 	// These are implemented as intrinsics in codegen

@@ -23,20 +23,36 @@ struct ParseError;
 // ============================================================================
 
 /**
+ * Parameter information for function/method symbols
+ */
+struct LSPParameterInfo {
+	std::string name;
+	std::string type;
+
+	LSPParameterInfo() = default;
+
+	LSPParameterInfo(const std::string &n, const std::string &t)
+		: name(n), type(t) {}
+};
+
+/**
  * Symbol information for LSP features (hover, completion, go-to-definition)
  */
 struct LSPSymbolInfo {
-    std::string name;
-    std::string kind;           // "function", "struct", "enum", "interface", "variable", "field", "method"
-    std::string type;           // Type signature as string
-    std::string documentation;  // Doc comment content
-    SourceRange sourceRange;    // Location in source
+	std::string name;
+	std::string kind;						  // "function", "struct", "enum", "interface", "variable", "field", "method"
+	std::string type;						  // Type signature as string
+	std::string documentation;				  // Doc comment content
+	SourceRange sourceRange;				  // Location in source
+	std::string filePath;					  // Absolute path to the source file
+	std::vector<LSPParameterInfo> parameters; // For functions/methods
+	std::string returnType;					  // For functions/methods
 
-    LSPSymbolInfo() = default;
+	LSPSymbolInfo() = default;
 
-    LSPSymbolInfo(const std::string& n, const std::string& k, const std::string& t,
-                  const std::string& doc, const SourceRange& range)
-        : name(n), kind(k), type(t), documentation(doc), sourceRange(range) {}
+	LSPSymbolInfo(const std::string &n, const std::string &k, const std::string &t,
+				  const std::string &doc, const SourceRange &range)
+		: name(n), kind(k), type(t), documentation(doc), sourceRange(range) {}
 };
 
 // ============================================================================
@@ -45,22 +61,28 @@ struct LSPSymbolInfo {
 
 /**
  * Complete analysis result for a source file
- * Contains AST, symbols, and all errors/warnings
+ * Contains AST, symbols, semantic info, and all errors/warnings
  */
 struct LSPAnalysisResult {
-    std::unique_ptr<ProgramAST> ast;
-    std::vector<LSPSymbolInfo> symbols;
-    std::vector<ParseError> parseErrors;
-    std::vector<SemanticError> semanticErrors;
+	std::unique_ptr<ProgramAST> ast;
+	std::vector<LSPSymbolInfo> symbols;
+	std::vector<ParseError> parseErrors;
+	std::vector<SemanticError> semanticErrors;
 
-    // Check if analysis was successful (no parse errors)
-    bool hasParseErrors() const { return !parseErrors.empty(); }
+	// Semantic info from analyzer (for hover/completion)
+	std::map<std::string, VariableInfo> variables;
+	std::map<std::string, FunctionInfo> functions;
+	std::map<std::string, StructInfo> structs;
+	std::map<std::string, InterfaceInfo> interfaces;
 
-    // Check if there are any semantic errors
-    bool hasSemanticErrors() const { return !semanticErrors.empty(); }
+	// Check if analysis was successful (no parse errors)
+	bool hasParseErrors() const { return !parseErrors.empty(); }
 
-    // Check if there are any errors at all
-    bool hasErrors() const { return hasParseErrors() || hasSemanticErrors(); }
+	// Check if there are any semantic errors
+	bool hasSemanticErrors() const { return !semanticErrors.empty(); }
+
+	// Check if there are any errors at all
+	bool hasErrors() const { return hasParseErrors() || hasSemanticErrors(); }
 };
 
 // ============================================================================
@@ -71,18 +93,18 @@ struct LSPAnalysisResult {
  * Aggregated symbols from the standard library
  */
 struct StdlibSymbols {
-    std::vector<LSPSymbolInfo> functions;
-    std::vector<LSPSymbolInfo> structs;
-    std::vector<LSPSymbolInfo> enums;
-    std::vector<LSPSymbolInfo> interfaces;
+	std::vector<LSPSymbolInfo> functions;
+	std::vector<LSPSymbolInfo> structs;
+	std::vector<LSPSymbolInfo> enums;
+	std::vector<LSPSymbolInfo> interfaces;
 
-    // Get total symbol count
-    size_t totalCount() const {
-        return functions.size() + structs.size() + enums.size() + interfaces.size();
-    }
+	// Get total symbol count
+	size_t totalCount() const {
+		return functions.size() + structs.size() + enums.size() + interfaces.size();
+	}
 
-    // Check if stdlib is empty (not loaded or no symbols found)
-    bool empty() const { return totalCount() == 0; }
+	// Check if stdlib is empty (not loaded or no symbols found)
+	bool empty() const { return totalCount() == 0; }
 };
 
 // ============================================================================
@@ -99,7 +121,22 @@ struct StdlibSymbols {
  * @param filename The filename (used for error messages and namespace derivation)
  * @return LSPAnalysisResult containing AST, symbols, and errors
  */
-LSPAnalysisResult analyzeForLSP(const std::string& source, const std::string& filename);
+LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &filename);
+
+/**
+ * Analyze source code for LSP features with stdlib integration
+ *
+ * Parses the source code, runs semantic analysis with stdlib symbols registered,
+ * and extracts all symbols from the AST. This version ensures stdlib functions
+ * are recognized and don't produce "Undefined function" errors.
+ *
+ * @param source The source code to analyze
+ * @param filename The filename (used for error messages and namespace derivation)
+ * @param stdlib The loaded stdlib symbols to register with the semantic analyzer
+ * @return LSPAnalysisResult containing AST, symbols, and errors
+ */
+LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &filename,
+								const StdlibSymbols &stdlib);
 
 /**
  * Load symbols from the standard library
@@ -110,7 +147,7 @@ LSPAnalysisResult analyzeForLSP(const std::string& source, const std::string& fi
  * @param stdlibPath Path to the stdlib directory
  * @return StdlibSymbols containing all exported symbols
  */
-StdlibSymbols loadStdlib(const std::string& stdlibPath);
+StdlibSymbols loadStdlib(const std::string &stdlibPath);
 
 /**
  * Get all keyword information for LSP
@@ -131,7 +168,7 @@ std::vector<KeywordLSPInfo> getKeywordInfo();
  * @param prefix The prefix to match against keyword names
  * @return Vector of KeywordLSPInfo for matching keywords
  */
-std::vector<KeywordLSPInfo> getKeywordsForCompletion(const std::string& prefix);
+std::vector<KeywordLSPInfo> getKeywordsForCompletion(const std::string &prefix);
 
 // ============================================================================
 // Documentation Extraction
@@ -147,7 +184,7 @@ std::vector<KeywordLSPInfo> getKeywordsForCompletion(const std::string& prefix);
  * @param declarationLine The line number of the declaration (1-based)
  * @return The extracted documentation string (empty if no doc comment found)
  */
-std::string extractDocComment(const std::string& source, int declarationLine);
+std::string extractDocComment(const std::string &source, int declarationLine);
 
 // ============================================================================
 // Symbol Extraction Helpers
@@ -164,9 +201,9 @@ std::string extractDocComment(const std::string& source, int declarationLine);
  * @param exportedOnly If true, only extract exported symbols
  * @return Vector of LSPSymbolInfo for all extracted symbols
  */
-std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST* program,
-                                                  const std::string& source,
-                                                  bool exportedOnly = false);
+std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
+												 const std::string &source,
+												 bool exportedOnly = false);
 
 /**
  * Build a function signature string for display
@@ -177,7 +214,7 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST* program,
  * @param func The function AST node
  * @return Formatted function signature string
  */
-std::string buildFunctionSignature(const FunctionAST* func);
+std::string buildFunctionSignature(const FunctionAST *func);
 
 /**
  * Build a struct signature string for display
@@ -188,7 +225,7 @@ std::string buildFunctionSignature(const FunctionAST* func);
  * @param structDef The struct definition AST node
  * @return Formatted struct signature string
  */
-std::string buildStructSignature(const StructDefAST* structDef);
+std::string buildStructSignature(const StructDefAST *structDef);
 
 /**
  * Build an enum signature string for display
@@ -199,7 +236,7 @@ std::string buildStructSignature(const StructDefAST* structDef);
  * @param enumDef The enum definition AST node
  * @return Formatted enum signature string
  */
-std::string buildEnumSignature(const EnumDefAST* enumDef);
+std::string buildEnumSignature(const EnumDefAST *enumDef);
 
 /**
  * Build an interface signature string for display
@@ -210,6 +247,6 @@ std::string buildEnumSignature(const EnumDefAST* enumDef);
  * @param interfaceDef The interface definition AST node
  * @return Formatted interface signature string
  */
-std::string buildInterfaceSignature(const InterfaceDefAST* interfaceDef);
+std::string buildInterfaceSignature(const InterfaceDefAST *interfaceDef);
 
 #endif // COMPILER_API_H

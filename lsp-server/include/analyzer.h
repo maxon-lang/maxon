@@ -25,8 +25,11 @@ struct TypeMember {
 // Structure to track namespace hierarchy for completions
 struct NamespaceNode {
 	std::string name;
-	std::map<std::string, NamespaceNode> children; // subnamespaces or modules
+	std::map<std::string, NamespaceNode> children; // subnamespaces (directories)
 	std::vector<std::string> functions;			   // function names at this level
+	std::vector<std::string> structs;			   // struct names at this level
+	std::vector<std::string> enums;				   // enum names at this level
+	std::vector<std::string> interfaces;		   // interface names at this level
 };
 
 // Document analysis cache for a single document
@@ -35,18 +38,25 @@ struct DocumentCache {
 	std::vector<LSPSymbolInfo> symbols;
 	std::vector<ParseError> parseErrors;
 	std::vector<SemanticError> semanticErrors;
-	int64_t lastAnalysisMs;  // Time taken for last analysis in milliseconds
-	int version;             // Document version
+	int64_t lastAnalysisMs; // Time taken for last analysis in milliseconds
+	int version;			// Document version
+
+	// Semantic info from analyzer (populated from LSPAnalysisResult)
+	std::map<std::string, VariableInfo> variables;
+	std::map<std::string, FunctionInfo> functions;
+	std::map<std::string, StructInfo> structs;
+	std::map<std::string, InterfaceInfo> interfaces;
+	std::map<std::string, EnumInfo> enumDetails; // Uses EnumInfo from semantic_analyzer.h
 
 	DocumentCache() : lastAnalysisMs(0), version(0) {}
 
 	// Move constructor and assignment (needed because of unique_ptr)
-	DocumentCache(DocumentCache&&) = default;
-	DocumentCache& operator=(DocumentCache&&) = default;
+	DocumentCache(DocumentCache &&) = default;
+	DocumentCache &operator=(DocumentCache &&) = default;
 
 	// Delete copy operations
-	DocumentCache(const DocumentCache&) = delete;
-	DocumentCache& operator=(const DocumentCache&) = delete;
+	DocumentCache(const DocumentCache &) = delete;
+	DocumentCache &operator=(const DocumentCache &) = delete;
 
 	bool hasParseErrors() const { return !parseErrors.empty(); }
 	bool hasSemanticErrors() const { return !semanticErrors.empty(); }
@@ -54,30 +64,16 @@ struct DocumentCache {
 };
 
 // Semantic info extracted from analysis (for LSP features)
+// DEPRECATED: This struct is being phased out - use DocumentCache fields instead
 struct SemanticInfo {
 	std::map<std::string, VariableInfo> variables;
 	std::map<std::string, FunctionInfo> functions;
 	std::map<std::string, StructInfo> structs;
 	std::map<std::string, InterfaceInfo> interfaces;
-	std::map<std::string, std::string> enums;  // enum name -> file path
+	std::map<std::string, std::string> enums; // enum name -> file path
 
-	// Store enum info for completions
-	struct EnumInfo {
-		std::string name;
-		std::string rawValueType;
-		std::string filePath;
-		int line;
-		int column;
-		struct CaseInfo {
-			std::string name;
-			std::vector<std::pair<std::string, std::string>> associatedValues;
-			bool hasRawValue;
-			int line;
-			int column;
-		};
-		std::vector<CaseInfo> cases;
-	};
-	std::map<std::string, EnumInfo> enumDetails;
+	// Store enum info for completions (uses EnumInfo from semantic_analyzer.h)
+	std::map<std::string, ::EnumInfo> enumDetails;
 };
 
 class Analyzer {
@@ -124,17 +120,17 @@ class Analyzer {
 	std::optional<std::vector<lsp::Range>> getLinkedEditingRanges(std::shared_ptr<Document> doc, lsp::Position pos);
 
   private:
-	std::string stdlibPath_;  // Stored stdlib path for reloading
+	std::string stdlibPath_; // Stored stdlib path for reloading
 
 	// Compiler API data (single source of truth)
-	StdlibSymbols stdlibSymbols_;  // All stdlib symbols from compiler API
-	std::vector<KeywordLSPInfo> keywordInfo_;  // All keyword info from compiler API
+	StdlibSymbols stdlibSymbols_;			  // All stdlib symbols from compiler API
+	std::vector<KeywordLSPInfo> keywordInfo_; // All keyword info from compiler API
 
 	// Derived data for efficient lookup
-	std::map<std::string, LSPSymbolInfo*> stdlibFunctionsByName_;  // Quick lookup by name
-	std::map<std::string, LSPSymbolInfo*> stdlibStructsByName_;
-	std::map<std::string, LSPSymbolInfo*> stdlibEnumsByName_;
-	std::map<std::string, LSPSymbolInfo*> stdlibInterfacesByName_;
+	std::map<std::string, LSPSymbolInfo *> stdlibFunctionsByName_; // Quick lookup by name
+	std::map<std::string, LSPSymbolInfo *> stdlibStructsByName_;
+	std::map<std::string, LSPSymbolInfo *> stdlibEnumsByName_;
+	std::map<std::string, LSPSymbolInfo *> stdlibInterfacesByName_;
 
 	// Type member info (for dot-completion on types)
 	std::map<std::string, std::vector<TypeMember>> typeMembers_;
@@ -143,11 +139,8 @@ class Analyzer {
 	NamespaceNode namespaceRoot_;
 
 	// Document analysis caches
-	std::map<std::string, DocumentCache> documentCaches_;    // Current analysis per document
-	std::map<std::string, DocumentCache> lastGoodCaches_;    // Last successful analysis (for error resilience)
-
-	// Semantic info cache (extracted from analysis)
-	std::map<std::string, SemanticInfo> semanticCache_;
+	std::map<std::string, DocumentCache> documentCaches_; // Current analysis per document
+	std::map<std::string, DocumentCache> lastGoodCaches_; // Last successful analysis (for error resilience)
 
 	// Throttling state
 	std::map<std::string, std::chrono::steady_clock::time_point> lastAnalysisTime_;
@@ -158,20 +151,28 @@ class Analyzer {
 	std::string findContainingStruct(const std::string &text, lsp::Position pos);
 	bool isKeyword(const std::string &word) const;
 	lsp::Range tokenToRange(const Token &token);
+	std::string pathToUri(const std::string &filePath);
+	std::optional<lsp::Location> findStdlibMethodDefinition(const std::string &typeName, const std::string &methodName);
 
 	// Stdlib loading helpers
 	void buildStdlibLookups();
 	void buildNamespaceHierarchy();
 	void initializeTypeMembers();
+	void buildStdlibTypeMembers();
 
 	// Completion helpers
 	std::vector<lsp::CompletionItem> getQualifiedNameCompletions(const std::string &prefix);
-	std::vector<lsp::CompletionItem> getMemberCompletions(const std::string &typeName, const SemanticInfo &semInfo);
+	std::vector<lsp::CompletionItem> getMemberCompletions(const std::string &typeName, const std::map<std::string, StructInfo> &structs);
 	std::vector<lsp::CompletionItem> getKeywordCompletions(const std::string &prefix);
+
+	// Type inference helper - infers type from variable initialization expression
+	std::string inferTypeFromInit(const std::string &text, const std::string &varName);
+
+	// Normalize type for member lookup (strips parameterization from types like map<int,int>)
+	std::string normalizeTypeForLookup(const std::string &typeName);
 
 	// Analysis helpers
 	bool shouldThrottleAnalysis(const std::string &uri, int64_t lastAnalysisMs);
-	void updateSemanticCache(const std::string &uri, const DocumentCache &cache);
 	bool isInsideErrorRegion(const DocumentCache &cache, int line, int column);
 };
 

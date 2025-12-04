@@ -198,6 +198,16 @@ class SemanticAnalyzer {
 								const std::vector<std::string> &conformsTo = {},
 								const std::map<std::string, std::string> &typeAssignments = {});
 
+	// Register external/stdlib interface types
+	// Call this before analyze() to make external interfaces available for "is Interface" checks
+	void registerExternalInterface(const std::string &name,
+								   const std::vector<InterfaceMethodInfo> &methods = {},
+								   const std::vector<std::string> &associatedTypes = {});
+
+	// Register external/stdlib enum types
+	// Call this before analyze() to make external enums available as valid types
+	void registerExternalEnum(const std::string &name, const std::string &rawValueType = "");
+
 	// Register all built-in functions (string methods, runtime functions, etc.)
 	// Call this before analyze() to make built-ins available
 	void registerBuiltinFunctions();

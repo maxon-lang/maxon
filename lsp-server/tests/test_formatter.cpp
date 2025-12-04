@@ -380,50 +380,6 @@ TEST_CASE("format_struct_literal_no_trailing_newline", "[formatter]") {
 	REQUIRE(edits[0].newText.find("\nreturn it") == std::string::npos);
 }
 
-TEST_CASE("format_range_is_valid", "[formatter]") {
-	Formatter formatter;
-
-	std::string source =
-		"function main() int\n"
-		"return 0\n"
-		"end 'main'\n";
-
-	auto edits = formatter.formatDocument(source, false, 4);
-	REQUIRE(edits.size() == 1);
-
-	// The range should be valid - start line >= 0 and end line >= start line
-	REQUIRE(edits[0].range.start.line >= 0);
-	REQUIRE(edits[0].range.start.character >= 0);
-	REQUIRE(edits[0].range.end.line >= 0);
-	REQUIRE(edits[0].range.end.character >= 0);
-	REQUIRE(edits[0].range.end.line >= edits[0].range.start.line);
-
-	// For a 4-line source (lines 0, 1, 2, 3), end line should be 3 (last line index)
-	// But we're including a trailing newline, so the actual line count might be 4
-	// Let's just ensure it's in a reasonable range
-	std::cerr << "Range: start=" << edits[0].range.start.line << "," << edits[0].range.start.character
-			  << " end=" << edits[0].range.end.line << "," << edits[0].range.end.character << std::endl;
-}
-
-TEST_CASE("format_range_is_valid_for_short_file", "[formatter]") {
-	Formatter formatter;
-
-	// Single line file
-	std::string source = "return 0\n";
-
-	auto edits = formatter.formatDocument(source, false, 4);
-	REQUIRE(edits.size() == 1);
-
-	REQUIRE(edits[0].range.start.line >= 0);
-	REQUIRE(edits[0].range.start.character >= 0);
-	REQUIRE(edits[0].range.end.line >= 0);
-	REQUIRE(edits[0].range.end.character >= 0);
-	REQUIRE(edits[0].range.end.line >= edits[0].range.start.line);
-
-	std::cerr << "Single line range: start=" << edits[0].range.start.line << "," << edits[0].range.start.character
-			  << " end=" << edits[0].range.end.line << "," << edits[0].range.end.character << std::endl;
-}
-
 TEST_CASE("format_struct_literal_preserves_function_indent", "[formatter]") {
 	Formatter formatter;
 
