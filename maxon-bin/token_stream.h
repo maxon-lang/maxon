@@ -10,7 +10,10 @@
 
 #include "lexer.h"
 #include "lexer/lexer_platform.h"
+#include <algorithm>
+#include <cstdint>
 #include <cstring>
+#include <map>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -399,7 +402,191 @@ class TokenStream {
 		return stats;
 	}
 
+	// ========================================================================
+	// Incremental Parsing Support
+	// ========================================================================
+
+	/**
+	 * Build an index mapping line numbers to token indices.
+	 * Call this after initial tokenization and after any splice operation.
+	 * Enables fast line-to-token lookups for incremental updates.
+	 */
+	void buildLineIndex() {
+		line_to_first_token_.clear();
+
+		if (tokens_.empty()) {
+			return;
+		}
+
+		int lastLine = -1;
+		for (size_t i = 0; i < tokens_.size(); ++i) {
+			int line = static_cast<int>(tokens_[i].get_line());
+			if (line != lastLine) {
+				// First token on this line
+				line_to_first_token_[line] = i;
+				lastLine = line;
+			}
+		}
+	}
+
+	/**
+	 * Get the start and end token indices that fall within the given line range.
+	 * Returns (startIdx, endIdx) where endIdx is exclusive (past-the-end).
+	 * If no tokens fall in the range, returns (size(), size()).
+	 *
+	 * @param startLine First line of the range (1-based)
+	 * @param endLine Last line of the range (1-based, inclusive)
+	 * @return Pair of (first token index, past-the-end token index)
+	 */
+	std::pair<size_t, size_t> getTokenIndicesForLineRange(int startLine, int endLine) const {
+		if (tokens_.empty()) {
+			return {0, 0};
+		}
+
+		// Find the first token at or after startLine
+		size_t startIdx = tokens_.size();
+		size_t endIdx = tokens_.size();
+
+		// Try to use the line index for fast lookup
+		if (!line_to_first_token_.empty()) {
+			// Find first token on or after startLine
+			auto it = line_to_first_token_.lower_bound(startLine);
+			if (it != line_to_first_token_.end()) {
+				startIdx = it->second;
+			} else {
+				// No tokens on or after startLine
+				return {tokens_.size(), tokens_.size()};
+			}
+
+			// If there's a token before startLine on a different line, we might
+			// need to back up if our lower_bound found a token after startLine
+			if (it != line_to_first_token_.begin() && it->first > startLine) {
+				// The previous line might have tokens that span into startLine
+				// But since we care about line-based ranges, we use exact matching
+			}
+
+			// Find first token after endLine
+			auto endIt = line_to_first_token_.upper_bound(endLine);
+			if (endIt != line_to_first_token_.end()) {
+				endIdx = endIt->second;
+			}
+			// else endIdx stays at tokens_.size() (include all remaining tokens)
+		} else {
+			// Fall back to linear scan
+			for (size_t i = 0; i < tokens_.size(); ++i) {
+				int line = static_cast<int>(tokens_[i].get_line());
+				if (line >= startLine && startIdx == tokens_.size()) {
+					startIdx = i;
+				}
+				if (line > endLine && endIdx == tokens_.size()) {
+					endIdx = i;
+					break;
+				}
+			}
+		}
+
+		// Handle edge case where startLine is after all tokens
+		if (startIdx == tokens_.size()) {
+			return {tokens_.size(), tokens_.size()};
+		}
+
+		return {startIdx, endIdx};
+	}
+
+	/**
+	 * Splice tokens: remove tokens from [startIdx, endIdx) and insert newTokens.
+	 * Updates math_infos_ indices and rebuilds the line index.
+	 *
+	 * @param startIdx First token to remove (inclusive)
+	 * @param endIdx Past-the-end token to remove (exclusive)
+	 * @param newTokens Tokens to insert at startIdx
+	 */
+	void splice(size_t startIdx, size_t endIdx, const std::vector<Token> &newTokens) {
+		if (startIdx > tokens_.size()) {
+			startIdx = tokens_.size();
+		}
+		if (endIdx > tokens_.size()) {
+			endIdx = tokens_.size();
+		}
+		if (startIdx > endIdx) {
+			startIdx = endIdx;
+		}
+
+		size_t removeCount = endIdx - startIdx;
+		size_t insertCount = newTokens.size();
+
+		// Update math_infos_ token indices
+		// First, remove entries for tokens being removed
+		math_infos_.erase(
+			std::remove_if(math_infos_.begin(), math_infos_.end(),
+				[startIdx, endIdx](const MathInfoEntry &entry) {
+					return entry.token_index >= startIdx && entry.token_index < endIdx;
+				}),
+			math_infos_.end());
+
+		// Adjust indices for tokens after the splice point
+		int64_t indexDelta = static_cast<int64_t>(insertCount) - static_cast<int64_t>(removeCount);
+		for (auto &entry : math_infos_) {
+			if (entry.token_index >= endIdx) {
+				entry.token_index = static_cast<uint32_t>(
+					static_cast<int64_t>(entry.token_index) + indexDelta);
+			}
+		}
+
+		// Remove old tokens and types
+		types_.erase(types_.begin() + static_cast<ptrdiff_t>(startIdx),
+					 types_.begin() + static_cast<ptrdiff_t>(endIdx));
+		tokens_.erase(tokens_.begin() + static_cast<ptrdiff_t>(startIdx),
+					  tokens_.begin() + static_cast<ptrdiff_t>(endIdx));
+
+		// Insert new tokens
+		if (!newTokens.empty()) {
+			std::vector<uint8_t> newTypes;
+			std::vector<CompactToken> newCompactTokens;
+			newTypes.reserve(newTokens.size());
+			newCompactTokens.reserve(newTokens.size());
+
+			for (size_t i = 0; i < newTokens.size(); ++i) {
+				const Token &tok = newTokens[i];
+				uint32_t offset = strings_.intern(tok.value);
+				CompactToken ct(tok.type, offset,
+								static_cast<uint32_t>(tok.line),
+								static_cast<uint32_t>(tok.column));
+
+				if (tok.keywordData.has_value()) {
+					ct.set_keyword_category(tok.keywordData->category);
+					if (tok.keywordData->mathInfo.has_value()) {
+						ct.set_math_info_flag();
+						math_infos_.push_back({
+							static_cast<uint32_t>(startIdx + i),
+							tok.keywordData->mathInfo.value()
+						});
+					}
+				}
+
+				newTypes.push_back(static_cast<uint8_t>(tok.type));
+				newCompactTokens.push_back(ct);
+			}
+
+			types_.insert(types_.begin() + static_cast<ptrdiff_t>(startIdx),
+						  newTypes.begin(), newTypes.end());
+			tokens_.insert(tokens_.begin() + static_cast<ptrdiff_t>(startIdx),
+						   newCompactTokens.begin(), newCompactTokens.end());
+		}
+
+		// Rebuild line index after splice
+		buildLineIndex();
+	}
+
+	/**
+	 * Check if the line index has been built.
+	 */
+	bool hasLineIndex() const {
+		return !line_to_first_token_.empty() || tokens_.empty();
+	}
+
   private:
+	std::map<int, size_t> line_to_first_token_;  // Line number -> first token index on that line
 	std::vector<uint8_t> types_;			// Dense type array for SIMD scanning
 	std::vector<CompactToken> tokens_;		// Full token data
 	std::vector<MathInfoEntry> math_infos_; // Math intrinsic info (sparse)

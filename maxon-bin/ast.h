@@ -10,6 +10,62 @@
 class Visitor;
 class FunctionAST;
 
+// Source range for precise location tracking (used by LSP)
+struct SourceRange {
+	int startLine;
+	int startCol;
+	int endLine;
+	int endCol;
+
+	// Default constructor - all zeros (indicates unset)
+	SourceRange() : startLine(0), startCol(0), endLine(0), endCol(0) {}
+
+	// Constructor with all four values
+	SourceRange(int sLine, int sCol, int eLine, int eCol)
+		: startLine(sLine), startCol(sCol), endLine(eLine), endCol(eCol) {}
+
+	// Returns true if position is within range (inclusive)
+	bool contains(int line, int col) const {
+		// Handle unset range
+		if (startLine == 0 && startCol == 0 && endLine == 0 && endCol == 0) {
+			return false;
+		}
+
+		// Check if before start
+		if (line < startLine || (line == startLine && col < startCol)) {
+			return false;
+		}
+
+		// Check if after end
+		if (line > endLine || (line == endLine && col > endCol)) {
+			return false;
+		}
+
+		return true;
+	}
+
+	// Returns true if ranges overlap
+	bool overlaps(const SourceRange &other) const {
+		// Handle unset ranges
+		if ((startLine == 0 && startCol == 0 && endLine == 0 && endCol == 0) ||
+			(other.startLine == 0 && other.startCol == 0 && other.endLine == 0 && other.endCol == 0)) {
+			return false;
+		}
+
+		// Check if this range ends before other starts
+		if (endLine < other.startLine || (endLine == other.startLine && endCol < other.startCol)) {
+			return false;
+		}
+
+		// Check if this range starts after other ends
+		if (startLine > other.endLine || (startLine == other.endLine && startCol > other.endCol)) {
+			return false;
+		}
+
+		return true;
+	}
+};
+
 // Base AST Node
 class ASTNode {
   public:
@@ -21,9 +77,22 @@ class ExprAST : public ASTNode {
   public:
 	int line;
 	int column;
+	int endLine;   // End position line (0 = unset)
+	int endColumn; // End position column (0 = unset)
 
-	ExprAST(int l = 0, int c = 0) : line(l), column(c) {}
+	ExprAST(int l = 0, int c = 0) : line(l), column(c), endLine(0), endColumn(0) {}
 	virtual ~ExprAST() = default;
+
+	// Helper to get the full source range of this expression
+	SourceRange getSourceRange() const {
+		return SourceRange(line, column, endLine, endColumn);
+	}
+
+	// Helper to set end position
+	void setEndPosition(int eLine, int eCol) {
+		endLine = eLine;
+		endColumn = eCol;
+	}
 };
 
 // Number literal
@@ -247,9 +316,22 @@ class StmtAST : public ASTNode {
   public:
 	int line;
 	int column;
+	int endLine;   // End position line (0 = unset)
+	int endColumn; // End position column (0 = unset)
 
-	StmtAST(int l = 0, int c = 0) : line(l), column(c) {}
+	StmtAST(int l = 0, int c = 0) : line(l), column(c), endLine(0), endColumn(0) {}
 	virtual ~StmtAST() = default;
+
+	// Helper to get the full source range of this statement
+	SourceRange getSourceRange() const {
+		return SourceRange(line, column, endLine, endColumn);
+	}
+
+	// Helper to set end position
+	void setEndPosition(int eLine, int eCol) {
+		endLine = eLine;
+		endColumn = eCol;
+	}
 };
 
 // Variable declaration
@@ -457,6 +539,18 @@ class ExprStmtAST : public StmtAST {
 		: StmtAST(l, c), expression(std::move(expr)) {}
 };
 
+// Error statement - placeholder for parse errors in partial AST
+// Used by error recovery to mark locations where parsing failed
+class ErrorStmtAST : public StmtAST {
+  public:
+	std::string message; // Error description
+
+	ErrorStmtAST(const std::string &msg, int l, int c, int endL, int endC)
+		: StmtAST(l, c), message(msg) {
+		setEndPosition(endL, endC);
+	}
+};
+
 // Function parameter (defined early for use by InterfaceMethodSignature)
 struct FunctionParameter {
 	std::string name;
@@ -491,12 +585,25 @@ class InterfaceDefAST : public ASTNode {
 	bool isExported;
 	int line;
 	int column;
+	int endLine;   // End position line (0 = unset)
+	int endColumn; // End position column (0 = unset)
 
 	InterfaceDefAST(const std::string &n, std::vector<InterfaceMethodSignature> m,
 					int l = 0, int c = 0, const std::string &ns = "", bool exp = false,
 					std::vector<std::string> assocTypes = {})
 		: name(n), namespaceName(ns), methods(std::move(m)), associatedTypes(std::move(assocTypes)),
-		  isExported(exp), line(l), column(c) {}
+		  isExported(exp), line(l), column(c), endLine(0), endColumn(0) {}
+
+	// Helper to get the full source range of this interface
+	SourceRange getSourceRange() const {
+		return SourceRange(line, column, endLine, endColumn);
+	}
+
+	// Helper to set end position
+	void setEndPosition(int eLine, int eCol) {
+		endLine = eLine;
+		endColumn = eCol;
+	}
 };
 
 // Struct field definition
@@ -538,6 +645,8 @@ class StructDefAST : public ASTNode {
 	bool isExported;													   // true if this struct is exported (visible outside this file)
 	int line;
 	int column;
+	int endLine;   // End position line (0 = unset)
+	int endColumn; // End position column (0 = unset)
 
 	StructDefAST(const std::string &n, std::vector<StructField> f, int l = 0, int c = 0,
 				 const std::string &ns = "", bool exp = false,
@@ -550,7 +659,18 @@ class StructDefAST : public ASTNode {
 		  associatedTypeParams(std::move(assocTypeParams)),
 		  conformsTo(std::move(interfaces)), typeAssignments(std::move(typeAssigns)),
 		  interfaceTypeBindings(std::move(ifaceBindings)),
-		  isExported(exp), line(l), column(c) {}
+		  isExported(exp), line(l), column(c), endLine(0), endColumn(0) {}
+
+	// Helper to get the full source range of this struct
+	SourceRange getSourceRange() const {
+		return SourceRange(line, column, endLine, endColumn);
+	}
+
+	// Helper to set end position
+	void setEndPosition(int eLine, int eCol) {
+		endLine = eLine;
+		endColumn = eCol;
+	}
 };
 
 // Struct initialization expression (struct literal)
@@ -599,13 +719,15 @@ class EnumDefAST : public ASTNode {
 	bool isExported;
 	int line;
 	int column;
+	int endLine;   // End position line (0 = unset)
+	int endColumn; // End position column (0 = unset)
 
 	EnumDefAST(const std::string &n, std::vector<EnumCaseAST> c, int l = 0, int col = 0,
 			   const std::string &ns = "", bool exp = false,
 			   const std::string &rawType = "",
 			   std::vector<std::unique_ptr<FunctionAST>> m = {})
 		: name(n), namespaceName(ns), rawValueType(rawType), cases(std::move(c)),
-		  methods(std::move(m)), isExported(exp), line(l), column(col) {}
+		  methods(std::move(m)), isExported(exp), line(l), column(col), endLine(0), endColumn(0) {}
 
 	// Check if this enum has associated values (any case has them)
 	bool hasAssociatedValues() const {
@@ -618,6 +740,17 @@ class EnumDefAST : public ASTNode {
 
 	// Check if this is a raw value enum
 	bool hasRawValueType() const { return !rawValueType.empty(); }
+
+	// Helper to get the full source range of this enum
+	SourceRange getSourceRange() const {
+		return SourceRange(line, column, endLine, endColumn);
+	}
+
+	// Helper to set end position
+	void setEndPosition(int eLine, int eCol) {
+		endLine = eLine;
+		endColumn = eCol;
+	}
 };
 
 // Enum case reference expression (e.g., Direction.north or Result.success(42))
@@ -731,6 +864,8 @@ class FunctionAST : public ASTNode {
 	std::string libPath; // Full path to static library file (if isStaticLib)
 	int line;
 	int column;
+	int endLine;   // End position line (0 = unset)
+	int endColumn; // End position column (0 = unset)
 
 	// Check if this is a method (has a receiver type)
 	bool isMethod() const { return !receiverType.empty(); }
@@ -749,7 +884,28 @@ class FunctionAST : public ASTNode {
 				const std::string &receiver = "",
 				const std::string &implInterface = "")
 		: name(n), namespaceName(ns), receiverType(receiver), implementsInterface(implInterface), parameters(std::move(params)), returnType(ret), body(std::move(b)),
-		  isExtern(ext), isExported(exp), dllName(dll), isStaticLib(staticLib), libPath(libFilePath), line(l), column(c) {}
+		  isExtern(ext), isExported(exp), dllName(dll), isStaticLib(staticLib), libPath(libFilePath), line(l), column(c), endLine(0), endColumn(0) {}
+
+	// Helper to get the full source range of this function
+	SourceRange getSourceRange() const {
+		return SourceRange(line, column, endLine, endColumn);
+	}
+
+	// Helper to set end position
+	void setEndPosition(int eLine, int eCol) {
+		endLine = eLine;
+		endColumn = eCol;
+	}
+};
+
+// Parse error information for error recovery (stored in ProgramAST)
+struct ASTParseError {
+	std::string message;
+	int line;
+	int column;
+
+	ASTParseError(const std::string &msg, int l, int c)
+		: message(msg), line(l), column(c) {}
 };
 
 // Program (collection of functions, structs, enums, and interfaces)
@@ -759,6 +915,7 @@ class ProgramAST : public ASTNode {
 	std::vector<std::unique_ptr<StructDefAST>> structs;
 	std::vector<std::unique_ptr<EnumDefAST>> enums;
 	std::vector<std::unique_ptr<InterfaceDefAST>> interfaces;
+	std::vector<ASTParseError> parseErrors; // Errors encountered during parsing
 
 	ProgramAST() = default;
 
@@ -767,6 +924,9 @@ class ProgramAST : public ASTNode {
 			   std::vector<std::unique_ptr<InterfaceDefAST>> protos = {},
 			   std::vector<std::unique_ptr<EnumDefAST>> en = {})
 		: functions(std::move(funcs)), structs(std::move(st)), enums(std::move(en)), interfaces(std::move(protos)) {}
+
+	// Check if parsing encountered errors
+	bool hasParseErrors() const { return !parseErrors.empty(); }
 };
 
 #endif // AST_H

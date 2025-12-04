@@ -76,6 +76,18 @@ void JsonRpcHandler::sendNotification(const std::string& method, const json& par
     writeMessage(notification);
 }
 
+int JsonRpcHandler::sendRequest(const std::string& method, const json& params) {
+    int id = nextRequestId++;
+    json request = {
+        {"jsonrpc", "2.0"},
+        {"id", id},
+        {"method", method},
+        {"params", params}
+    };
+    writeMessage(request);
+    return id;
+}
+
 void JsonRpcHandler::writeMessage(const json& message) {
     std::string content = message.dump();
     std::string header = "Content-Length: " + std::to_string(content.length()) + "\r\n\r\n";

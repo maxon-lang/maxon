@@ -64,58 +64,88 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 			break;
 		}
 
-		// Check for struct, enum, interface, export, extern, or function keyword
-		if (checkKeyword("struct")) {
-			logTrace("Parsing struct definition");
-			structs.push_back(parseStruct());
-		} else if (checkKeyword("enum")) {
-			logTrace("Parsing enum definition");
-			enums.push_back(parseEnum());
-		} else if (checkKeyword("interface")) {
-			logTrace("Parsing interface definition");
-			interfaces.push_back(parseInterface());
-		} else if (checkKeyword("export")) {
-			// Peek at what comes after export (don't consume - let the parse functions handle export)
-			// We need to look ahead to determine which parser to call
-			size_t savedPos = position;
-			advance(); // temporarily consume 'export' to peek
+		int startLine = currentLine();
+		int startCol = currentColumn();
+
+		try {
+			// Check for struct, enum, interface, export, extern, or function keyword
 			if (checkKeyword("struct")) {
-				position = savedPos; // restore position
-				cache_.set_position(savedPos);
-				logTrace("Parsing exported struct definition");
+				logTrace("Parsing struct definition");
 				structs.push_back(parseStruct());
 			} else if (checkKeyword("enum")) {
-				position = savedPos; // restore position
-				cache_.set_position(savedPos);
-				logTrace("Parsing exported enum definition");
+				logTrace("Parsing enum definition");
 				enums.push_back(parseEnum());
 			} else if (checkKeyword("interface")) {
-				position = savedPos; // restore position
-				cache_.set_position(savedPos);
-				logTrace("Parsing exported interface definition");
+				logTrace("Parsing interface definition");
 				interfaces.push_back(parseInterface());
+			} else if (checkKeyword("export")) {
+				// Peek at what comes after export (don't consume - let the parse functions handle export)
+				// We need to look ahead to determine which parser to call
+				size_t savedPos = position;
+				advance(); // temporarily consume 'export' to peek
+				if (checkKeyword("struct")) {
+					position = savedPos; // restore position
+					cache_.set_position(savedPos);
+					logTrace("Parsing exported struct definition");
+					structs.push_back(parseStruct());
+				} else if (checkKeyword("enum")) {
+					position = savedPos; // restore position
+					cache_.set_position(savedPos);
+					logTrace("Parsing exported enum definition");
+					enums.push_back(parseEnum());
+				} else if (checkKeyword("interface")) {
+					position = savedPos; // restore position
+					cache_.set_position(savedPos);
+					logTrace("Parsing exported interface definition");
+					interfaces.push_back(parseInterface());
+				} else if (checkKeyword("extern") || checkKeyword("function")) {
+					position = savedPos; // restore position
+					cache_.set_position(savedPos);
+					logTrace("Parsing exported function definition");
+					functions.push_back(parseFunction());
+				} else {
+					reportError("Expected 'struct', 'enum', 'interface', 'extern function', or 'function' after 'export'",
+								currentLine(), currentColumn());
+				}
 			} else if (checkKeyword("extern") || checkKeyword("function")) {
-				position = savedPos; // restore position
-				cache_.set_position(savedPos);
-				logTrace("Parsing exported function definition");
+				logTrace("Parsing function definition");
 				functions.push_back(parseFunction());
 			} else {
-				reportError("Expected 'struct', 'enum', 'interface', 'extern function', or 'function' after 'export'",
+				reportError("Expected 'struct', 'enum', 'interface', 'export', 'function', or 'extern function' at top level",
 							currentLine(), currentColumn());
 			}
-		} else if (checkKeyword("extern") || checkKeyword("function")) {
-			logTrace("Parsing function definition");
-			functions.push_back(parseFunction());
-		} else {
-			reportError("Expected 'struct', 'enum', 'interface', 'export', 'function', or 'extern function' at top level",
-						currentLine(), currentColumn());
+		} catch (const std::runtime_error &e) {
+			// Record the error
+			std::string errorMsg = e.what();
+			parseErrors_.push_back(ParseError(errorMsg, startLine, startCol));
+
+			// Track position before sync to detect infinite loop
+			size_t posBeforeSync = position;
+
+			// Synchronize to next top-level declaration
+			synchronize();
+
+			// If we're still at the same position after sync, advance to prevent infinite loop
+			// This can happen when the current token is a sync token but not valid at top-level
+			// (e.g., 'end' keyword from an incomplete struct/function)
+			if (position == posBeforeSync && !check(TokenType::END_OF_FILE)) {
+				advance();
+			}
 		}
 	}
 
 	logDetail("Parse complete: " + std::to_string(functions.size()) + " functions, " +
 			  std::to_string(structs.size()) + " structs, " +
 			  std::to_string(enums.size()) + " enums, " +
-			  std::to_string(interfaces.size()) + " interfaces");
+			  std::to_string(interfaces.size()) + " interfaces" +
+			  (parseErrors_.empty() ? "" : ", " + std::to_string(parseErrors_.size()) + " error(s)"));
 
-	return std::make_unique<ProgramAST>(std::move(functions), std::move(structs), std::move(interfaces), std::move(enums));
+	auto program = std::make_unique<ProgramAST>(std::move(functions), std::move(structs), std::move(interfaces), std::move(enums));
+
+	// Copy parse errors to ProgramAST for access after parsing
+	for (const auto &err : parseErrors_) {
+		program->parseErrors.push_back(ASTParseError(err.message, err.line, err.column));
+	}
+
+	return program;
 }

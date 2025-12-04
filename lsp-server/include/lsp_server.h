@@ -41,10 +41,13 @@ private:
     void handleDidChange(const json& params);
     void handleDidClose(const json& params);
     void handleDidSave(const json& params);
+    void handleDidChangeWatchedFiles(const json& params);
     void handleExit(const json& params);
-    
+
     // Helper methods
     void publishDiagnostics(const std::string& uri, const std::vector<lsp::Diagnostic>& diagnostics);
+    void registerFileWatchers();
+    void reanalyzeAllOpenDocuments();
 };
 
 #endif // LSP_SERVER_H

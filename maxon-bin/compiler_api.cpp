@@ -1,0 +1,510 @@
+/**
+ * Compiler API for LSP Integration
+ *
+ * Implementation of clean API for LSP server to access compiler functionality.
+ * The compiler serves as the single source of truth for all language information.
+ */
+
+#include "compiler_api.h"
+#include "file_utils.h"
+#include "lexer.h"
+#include "parser.h"
+#include "semantic_analyzer.h"
+#include "token_stream.h"
+
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
+// ============================================================================
+// Documentation Extraction
+// ============================================================================
+
+std::string extractDocComment(const std::string& source, int declarationLine) {
+    if (declarationLine <= 1 || source.empty()) {
+        return "";
+    }
+
+    // Split source into lines
+    std::vector<std::string> lines;
+    std::istringstream stream(source);
+    std::string line;
+    while (std::getline(stream, line)) {
+        lines.push_back(line);
+    }
+
+    // declarationLine is 1-based, convert to 0-based index
+    int declIndex = declarationLine - 1;
+    if (declIndex >= static_cast<int>(lines.size())) {
+        return "";
+    }
+
+    // Look backwards from declaration line for /// comments
+    std::vector<std::string> docLines;
+    int currentLine = declIndex - 1;
+
+    while (currentLine >= 0) {
+        const std::string& currentLineStr = lines[currentLine];
+
+        // Find first non-whitespace
+        size_t firstNonSpace = currentLineStr.find_first_not_of(" \t");
+        if (firstNonSpace == std::string::npos) {
+            // Empty line - stop looking
+            break;
+        }
+
+        // Check for /// doc comment
+        if (currentLineStr.length() >= firstNonSpace + 3 &&
+            currentLineStr.substr(firstNonSpace, 3) == "///") {
+            // Extract content after ///
+            std::string content;
+            if (currentLineStr.length() > firstNonSpace + 3) {
+                content = currentLineStr.substr(firstNonSpace + 3);
+                // Strip leading space if present
+                if (!content.empty() && content[0] == ' ') {
+                    content = content.substr(1);
+                }
+            }
+            docLines.insert(docLines.begin(), content);
+            currentLine--;
+        } else {
+            // Not a doc comment line - stop
+            break;
+        }
+    }
+
+    // Join doc lines
+    std::string result;
+    for (size_t i = 0; i < docLines.size(); ++i) {
+        if (i > 0) {
+            result += "\n";
+        }
+        result += docLines[i];
+    }
+
+    return result;
+}
+
+// ============================================================================
+// Signature Building Helpers
+// ============================================================================
+
+std::string buildFunctionSignature(const FunctionAST* func) {
+    if (!func) return "";
+
+    std::ostringstream sig;
+
+    if (func->isMethod()) {
+        sig << "function " << func->receiverType << "." << func->name << "(";
+    } else {
+        sig << "function " << func->name << "(";
+    }
+
+    bool first = true;
+    for (const auto& param : func->parameters) {
+        if (!first) sig << ", ";
+        first = false;
+        sig << param.name << " " << param.type;
+    }
+
+    sig << ")";
+
+    if (!func->returnType.empty() && func->returnType != "void") {
+        sig << " " << func->returnType;
+    }
+
+    return sig.str();
+}
+
+std::string buildStructSignature(const StructDefAST* structDef) {
+    if (!structDef) return "";
+
+    std::ostringstream sig;
+    sig << "struct " << structDef->name;
+
+    if (!structDef->conformsTo.empty()) {
+        sig << " is ";
+        bool first = true;
+        for (const auto& iface : structDef->conformsTo) {
+            if (!first) sig << ", ";
+            first = false;
+            sig << iface;
+        }
+    }
+
+    sig << " { ";
+    bool first = true;
+    for (const auto& field : structDef->fields) {
+        if (!first) sig << ", ";
+        first = false;
+        sig << (field.isImmutable ? "let " : "var ") << field.name << " " << field.type;
+    }
+    sig << " }";
+
+    return sig.str();
+}
+
+std::string buildEnumSignature(const EnumDefAST* enumDef) {
+    if (!enumDef) return "";
+
+    std::ostringstream sig;
+    sig << "enum " << enumDef->name;
+
+    if (!enumDef->rawValueType.empty()) {
+        sig << " : " << enumDef->rawValueType;
+    }
+
+    sig << " { ";
+    bool first = true;
+    for (const auto& c : enumDef->cases) {
+        if (!first) sig << ", ";
+        first = false;
+        sig << "case " << c.name;
+        if (!c.associatedValues.empty()) {
+            sig << "(";
+            bool firstAssoc = true;
+            for (const auto& av : c.associatedValues) {
+                if (!firstAssoc) sig << ", ";
+                firstAssoc = false;
+                sig << av.name << " " << av.type;
+            }
+            sig << ")";
+        }
+    }
+    sig << " }";
+
+    return sig.str();
+}
+
+std::string buildInterfaceSignature(const InterfaceDefAST* interfaceDef) {
+    if (!interfaceDef) return "";
+
+    std::ostringstream sig;
+    sig << "interface " << interfaceDef->name;
+
+    if (!interfaceDef->associatedTypes.empty()) {
+        sig << " uses ";
+        bool first = true;
+        for (const auto& at : interfaceDef->associatedTypes) {
+            if (!first) sig << ", ";
+            first = false;
+            sig << at;
+        }
+    }
+
+    sig << " { ";
+    bool first = true;
+    for (const auto& method : interfaceDef->methods) {
+        if (!first) sig << "; ";
+        first = false;
+        sig << "function " << method.name << "(";
+        bool firstParam = true;
+        for (const auto& param : method.parameters) {
+            if (!firstParam) sig << ", ";
+            firstParam = false;
+            sig << param.name << " " << param.type;
+        }
+        sig << ")";
+        if (!method.returnType.empty() && method.returnType != "void") {
+            sig << " " << method.returnType;
+        }
+    }
+    sig << " }";
+
+    return sig.str();
+}
+
+// ============================================================================
+// Symbol Extraction
+// ============================================================================
+
+std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST* program,
+                                                  const std::string& source,
+                                                  bool exportedOnly) {
+    std::vector<LSPSymbolInfo> symbols;
+
+    if (!program) return symbols;
+
+    // Extract functions
+    for (const auto& func : program->functions) {
+        if (exportedOnly && !func->isExported) continue;
+
+        std::string kind = func->isMethod() ? "method" : "function";
+        std::string signature = buildFunctionSignature(func.get());
+        std::string doc = extractDocComment(source, func->line);
+
+        symbols.emplace_back(
+            func->name,
+            kind,
+            signature,
+            doc,
+            func->getSourceRange()
+        );
+    }
+
+    // Extract structs and their fields/methods
+    for (const auto& structDef : program->structs) {
+        if (exportedOnly && !structDef->isExported) continue;
+
+        std::string signature = buildStructSignature(structDef.get());
+        std::string doc = extractDocComment(source, structDef->line);
+
+        symbols.emplace_back(
+            structDef->name,
+            "struct",
+            signature,
+            doc,
+            structDef->getSourceRange()
+        );
+
+        // Extract fields
+        for (const auto& field : structDef->fields) {
+            std::string fieldSig = (field.isImmutable ? "let " : "var ") +
+                                   field.name + " " + field.type;
+            symbols.emplace_back(
+                field.name,
+                "field",
+                fieldSig,
+                "",  // Fields don't typically have individual doc comments
+                SourceRange(field.line, field.column, field.line, field.column)
+            );
+        }
+
+        // Extract methods defined inside the struct
+        for (const auto& method : structDef->methods) {
+            std::string methodSig = buildFunctionSignature(method.get());
+            std::string methodDoc = extractDocComment(source, method->line);
+
+            symbols.emplace_back(
+                method->name,
+                "method",
+                methodSig,
+                methodDoc,
+                method->getSourceRange()
+            );
+        }
+    }
+
+    // Extract enums and their cases
+    for (const auto& enumDef : program->enums) {
+        if (exportedOnly && !enumDef->isExported) continue;
+
+        std::string signature = buildEnumSignature(enumDef.get());
+        std::string doc = extractDocComment(source, enumDef->line);
+
+        symbols.emplace_back(
+            enumDef->name,
+            "enum",
+            signature,
+            doc,
+            enumDef->getSourceRange()
+        );
+
+        // Extract enum cases
+        for (const auto& c : enumDef->cases) {
+            std::ostringstream caseSig;
+            caseSig << enumDef->name << "." << c.name;
+            if (!c.associatedValues.empty()) {
+                caseSig << "(";
+                bool first = true;
+                for (const auto& av : c.associatedValues) {
+                    if (!first) caseSig << ", ";
+                    first = false;
+                    caseSig << av.name << " " << av.type;
+                }
+                caseSig << ")";
+            }
+
+            symbols.emplace_back(
+                c.name,
+                "enum_case",
+                caseSig.str(),
+                "",
+                SourceRange(c.line, c.column, c.line, c.column)
+            );
+        }
+
+        // Extract methods defined inside the enum
+        for (const auto& method : enumDef->methods) {
+            std::string methodSig = buildFunctionSignature(method.get());
+            std::string methodDoc = extractDocComment(source, method->line);
+
+            symbols.emplace_back(
+                method->name,
+                "method",
+                methodSig,
+                methodDoc,
+                method->getSourceRange()
+            );
+        }
+    }
+
+    // Extract interfaces and their methods
+    for (const auto& interfaceDef : program->interfaces) {
+        if (exportedOnly && !interfaceDef->isExported) continue;
+
+        std::string signature = buildInterfaceSignature(interfaceDef.get());
+        std::string doc = extractDocComment(source, interfaceDef->line);
+
+        symbols.emplace_back(
+            interfaceDef->name,
+            "interface",
+            signature,
+            doc,
+            interfaceDef->getSourceRange()
+        );
+
+        // Extract interface method signatures
+        for (const auto& method : interfaceDef->methods) {
+            std::ostringstream methodSig;
+            methodSig << "function " << method.name << "(";
+            bool firstParam = true;
+            for (const auto& param : method.parameters) {
+                if (!firstParam) methodSig << ", ";
+                firstParam = false;
+                methodSig << param.name << " " << param.type;
+            }
+            methodSig << ")";
+            if (!method.returnType.empty() && method.returnType != "void") {
+                methodSig << " " << method.returnType;
+            }
+
+            symbols.emplace_back(
+                method.name,
+                "method",
+                methodSig.str(),
+                "",
+                SourceRange(method.line, method.column, method.line, method.column)
+            );
+        }
+    }
+
+    return symbols;
+}
+
+// ============================================================================
+// Analysis Functions
+// ============================================================================
+
+LSPAnalysisResult analyzeForLSP(const std::string& source, const std::string& filename) {
+    LSPAnalysisResult result;
+
+    // Try to parse the source
+    try {
+        Lexer lexer(source);
+        TokenStream stream = lexer.tokenize_stream();
+
+        Parser parser(std::move(stream));
+        std::string fileNamespace = deriveNamespace(filename);
+        parser.setDefaultNamespace(fileNamespace);
+
+        result.ast = parser.parse();
+    } catch (const std::runtime_error& e) {
+        // Parse error - extract location info if possible
+        std::string errorMsg = e.what();
+
+        // Try to extract line/column from error message
+        // Format: "message\n  Location: line X, column Y"
+        int line = 1, column = 1;
+        size_t locPos = errorMsg.find("Location: line ");
+        if (locPos != std::string::npos) {
+            size_t lineStart = locPos + 15;  // Skip "Location: line "
+            size_t lineEnd = errorMsg.find(',', lineStart);
+            if (lineEnd != std::string::npos) {
+                line = std::stoi(errorMsg.substr(lineStart, lineEnd - lineStart));
+                size_t colStart = errorMsg.find("column ", lineEnd);
+                if (colStart != std::string::npos) {
+                    colStart += 7;  // Skip "column "
+                    column = std::stoi(errorMsg.substr(colStart));
+                }
+            }
+        }
+
+        // Extract just the error message (first line)
+        size_t newlinePos = errorMsg.find('\n');
+        std::string msg = (newlinePos != std::string::npos)
+            ? errorMsg.substr(0, newlinePos)
+            : errorMsg;
+
+        result.parseErrors.emplace_back(msg, line, column);
+        return result;
+    }
+
+    // Extract symbols from AST
+    if (result.ast) {
+        result.symbols = extractSymbolsFromAST(result.ast.get(), source, false);
+    }
+
+    // Run semantic analysis (collect errors, don't fail)
+    if (result.ast) {
+        SemanticAnalyzer analyzer;
+        analyzer.registerBuiltinFunctions();
+        result.semanticErrors = analyzer.analyze(result.ast.get());
+    }
+
+    return result;
+}
+
+StdlibSymbols loadStdlib(const std::string& stdlibPath) {
+    StdlibSymbols result;
+
+    if (!std::filesystem::exists(stdlibPath)) {
+        return result;
+    }
+
+    // Find all .maxon files in stdlib
+    std::vector<std::string> stdlibFiles = findMaxonFiles(stdlibPath);
+
+    for (const auto& filePath : stdlibFiles) {
+        try {
+            // Read file content
+            std::ifstream file(filePath);
+            if (!file) continue;
+
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            std::string source = buffer.str();
+
+            // Parse the file
+            Lexer lexer(source);
+            TokenStream stream = lexer.tokenize_stream();
+
+            Parser parser(std::move(stream));
+            std::string fileNamespace = deriveNamespace(filePath);
+            parser.setDefaultNamespace(fileNamespace);
+
+            auto program = parser.parse();
+
+            // Extract exported symbols only
+            auto symbols = extractSymbolsFromAST(program.get(), source, true);
+
+            // Categorize symbols
+            for (auto& sym : symbols) {
+                if (sym.kind == "function" || sym.kind == "method") {
+                    result.functions.push_back(std::move(sym));
+                } else if (sym.kind == "struct") {
+                    result.structs.push_back(std::move(sym));
+                } else if (sym.kind == "enum") {
+                    result.enums.push_back(std::move(sym));
+                } else if (sym.kind == "interface") {
+                    result.interfaces.push_back(std::move(sym));
+                }
+            }
+
+        } catch (const std::exception& e) {
+            // Skip files that fail to parse
+            // In a real implementation, you might want to log this
+            continue;
+        }
+    }
+
+    return result;
+}
+
+std::vector<KeywordLSPInfo> getKeywordInfo() {
+    return KeywordMatcher::getLSPKeywordInfo();
+}
+
+std::vector<KeywordLSPInfo> getKeywordsForCompletion(const std::string& prefix) {
+    return KeywordMatcher::getKeywordsForCompletion(prefix);
+}

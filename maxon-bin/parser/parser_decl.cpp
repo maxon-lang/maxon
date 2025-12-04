@@ -198,7 +198,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 	// Parse function body
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		body.push_back(parseStatement());
+		body.push_back(parseStatementWithRecovery());
 	}
 
 	expectKeywordAdvance("end", "Expected 'end' to close function body");
@@ -215,7 +215,10 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 	logTrace(std::string("Function '") + functionName + "' -> " + returnType + " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
 
-	return std::make_unique<FunctionAST>(functionName, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported, "", false, "", "");
+	auto func = std::make_unique<FunctionAST>(functionName, std::move(parameters), returnType, std::move(body), isExtern, funcToken.line, funcToken.column, defaultNamespace, isExported, "", false, "", "");
+	// Set end position to the closing block identifier
+	func->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+	return func;
 }
 
 // Parse a method declaration inside a struct body
@@ -358,7 +361,7 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 
 	// Parse method body
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		body.push_back(parseStatement());
+		body.push_back(parseStatementWithRecovery());
 	}
 
 	expectKeywordAdvance("end", "Expected 'end' to close method body");
@@ -378,7 +381,10 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 			 " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
 
 	// receiverType is set to structName, implementsInterface tracks interface conformance
-	return std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body), false, funcToken.line, funcToken.column, defaultNamespace, isExported, "", false, "", structName, implementsInterface);
+	auto method = std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body), false, funcToken.line, funcToken.column, defaultNamespace, isExported, "", false, "", structName, implementsInterface);
+	// Set end position to the closing block identifier
+	method->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+	return method;
 }
 
 std::unique_ptr<StructDefAST> Parser::parseStruct() {
@@ -621,7 +627,10 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 					blockIdToken.line, blockIdToken.column);
 	}
 
-	return std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo), std::move(methods), std::move(typeAssignments), std::move(interfaceTypeBindings), std::move(associatedTypeParams));
+	auto structDef = std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo), std::move(methods), std::move(typeAssignments), std::move(interfaceTypeBindings), std::move(associatedTypeParams));
+	// Set end position to the closing block identifier
+	structDef->setEndPosition(blockIdToken.line, blockIdToken.column + static_cast<int>(blockIdToken.value.length()) - 1);
+	return structDef;
 }
 
 std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &structName) {
@@ -653,9 +662,14 @@ std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &st
 		}
 	}
 
+	// Capture end position before consuming the closing brace
+	int endLine = currentLine();
+	int endCol = currentColumn();
 	expectAdvance(TokenType::RBRACE, "Expected '}' to close struct initialization");
 
-	return std::make_unique<StructInitExprAST>(structName, std::move(fields), line, column);
+	auto expr = std::make_unique<StructInitExprAST>(structName, std::move(fields), line, column);
+	expr->setEndPosition(endLine, endCol);
+	return expr;
 }
 
 std::unique_ptr<EnumDefAST> Parser::parseEnum() {
@@ -763,8 +777,11 @@ std::unique_ptr<EnumDefAST> Parser::parseEnum() {
 	logTrace("Enum '" + enumName + "' with " + std::to_string(cases.size()) + " cases" +
 			 (methods.empty() ? "" : ", " + std::to_string(methods.size()) + " method(s)"));
 
-	return std::make_unique<EnumDefAST>(enumName, std::move(cases), line, column,
-										defaultNamespace, isExported, rawValueType, std::move(methods));
+	auto enumDef = std::make_unique<EnumDefAST>(enumName, std::move(cases), line, column,
+												defaultNamespace, isExported, rawValueType, std::move(methods));
+	// Set end position to the closing block identifier
+	enumDef->setEndPosition(blockIdToken.line, blockIdToken.column + static_cast<int>(blockIdToken.value.length()) - 1);
+	return enumDef;
 }
 
 // Parse a method declaration inside an enum body
@@ -849,7 +866,7 @@ std::unique_ptr<FunctionAST> Parser::parseEnumMethod(const std::string &enumName
 
 	// Parse method body
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		body.push_back(parseStatement());
+		body.push_back(parseStatementWithRecovery());
 	}
 
 	expectKeywordAdvance("end", "Expected 'end' to close method body");
@@ -866,9 +883,12 @@ std::unique_ptr<FunctionAST> Parser::parseEnumMethod(const std::string &enumName
 			 " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
 
 	// receiverType is set to enumName
-	return std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body),
-										 false, funcToken.line, funcToken.column, defaultNamespace, isExported,
-										 "", false, "", enumName, "");
+	auto method = std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body),
+												false, funcToken.line, funcToken.column, defaultNamespace, isExported,
+												"", false, "", enumName, "");
+	// Set end position to the closing block identifier
+	method->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+	return method;
 }
 
 std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
@@ -1018,5 +1038,8 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 	logTrace("Interface '" + interfaceName + "' with " + std::to_string(methods.size()) + " methods" +
 			 (associatedTypes.empty() ? "" : ", " + std::to_string(associatedTypes.size()) + " associated type(s)"));
 
-	return std::make_unique<InterfaceDefAST>(interfaceName, std::move(methods), line, column, defaultNamespace, isExported, std::move(associatedTypes));
+	auto interfaceDef = std::make_unique<InterfaceDefAST>(interfaceName, std::move(methods), line, column, defaultNamespace, isExported, std::move(associatedTypes));
+	// Set end position to the closing block identifier
+	interfaceDef->setEndPosition(blockIdToken.line, blockIdToken.column + static_cast<int>(blockIdToken.value.length()) - 1);
+	return interfaceDef;
 }

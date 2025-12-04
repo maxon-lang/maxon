@@ -6,16 +6,22 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		int value = std::stoi(std::string(currentValue()));
 		int line = currentLine();
 		int column = currentColumn();
+		int endCol = column + static_cast<int>(currentValue().length()) - 1;
 		advance();
-		return std::make_unique<NumberExprAST>(value, line, column);
+		auto expr = std::make_unique<NumberExprAST>(value, line, column);
+		expr->setEndPosition(line, endCol);
+		return expr;
 	}
 
 	if (check(TokenType::BYTE_LITERAL)) {
 		uint8_t value = static_cast<uint8_t>(std::stoi(std::string(currentValue())));
 		int line = currentLine();
 		int column = currentColumn();
+		int endCol = column + static_cast<int>(currentValue().length()) - 1;
 		advance();
-		return std::make_unique<ByteExprAST>(value, line, column);
+		auto expr = std::make_unique<ByteExprAST>(value, line, column);
+		expr->setEndPosition(line, endCol);
+		return expr;
 	}
 
 	if (check(TokenType::FLOAT_LITERAL)) {
@@ -23,29 +29,38 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		int line = currentLine();
 		int column = currentColumn();
 		std::string literalString = std::string(currentValue());
+		int endCol = column + static_cast<int>(literalString.length()) - 1;
 		advance();
-		return std::make_unique<FloatExprAST>(value, line, column, literalString);
+		auto expr = std::make_unique<FloatExprAST>(value, line, column, literalString);
+		expr->setEndPosition(line, endCol);
+		return expr;
 	}
 
 	if (checkKeyword("true")) {
 		int line = currentLine();
 		int column = currentColumn();
 		advance();
-		return std::make_unique<BooleanExprAST>(true, line, column);
+		auto expr = std::make_unique<BooleanExprAST>(true, line, column);
+		expr->setEndPosition(line, column + 3); // "true" is 4 chars
+		return expr;
 	}
 
 	if (checkKeyword("false")) {
 		int line = currentLine();
 		int column = currentColumn();
 		advance();
-		return std::make_unique<BooleanExprAST>(false, line, column);
+		auto expr = std::make_unique<BooleanExprAST>(false, line, column);
+		expr->setEndPosition(line, column + 4); // "false" is 5 chars
+		return expr;
 	}
 
 	if (checkKeyword("nil")) {
 		int line = currentLine();
 		int column = currentColumn();
 		advance();
-		return std::make_unique<NilExprAST>(line, column);
+		auto expr = std::make_unique<NilExprAST>(line, column);
+		expr->setEndPosition(line, column + 2); // "nil" is 3 chars
+		return expr;
 	}
 
 	// Match expression (used in expression context, e.g., let x = match y 'id' ...)
@@ -57,16 +72,24 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		std::string value = std::string(currentValue());  // Get full grapheme cluster
 		int line = currentLine();
 		int column = currentColumn();
+		// Character literals are 'x', so +2 for the quotes plus content
+		int endCol = column + static_cast<int>(value.length()) + 1;
 		advance();
-		return std::make_unique<CharacterExprAST>(value, line, column);
+		auto expr = std::make_unique<CharacterExprAST>(value, line, column);
+		expr->setEndPosition(line, endCol);
+		return expr;
 	}
 
 	if (check(TokenType::STRING)) {
 		std::string value = std::string(currentValue());
 		int line = currentLine();
 		int column = currentColumn();
+		// String literals are "...", so +2 for the quotes
+		int endCol = column + static_cast<int>(value.length()) + 1;
 		advance();
-		return std::make_unique<StringLiteralExprAST>(value, line, column);
+		auto expr = std::make_unique<StringLiteralExprAST>(value, line, column);
+		expr->setEndPosition(line, endCol);
+		return expr;
 	}
 
 	// Dictionary type pattern: TypeName from KeyType to ValueType
@@ -94,20 +117,27 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 
 		expectKeywordAdvance("to", "Expected 'to' after key type in map declaration");
 
-		// Parse value type
+		// Parse value type - capture end position
 		std::string valueType;
+		int endLine = currentLine();
+		int endCol = currentColumn();
 		kd = currentKeywordData();
 		if (kd && kd->category == KeywordCategory::Type) {
 			valueType = std::string(currentValue());
+			endCol = currentColumn() + static_cast<int>(valueType.length()) - 1;
 			advance();
 		} else if (check(TokenType::IDENTIFIER)) {
 			valueType = parseQualifiedName("map value type");
+			// parseQualifiedName advances, so we need to look back at what was parsed
+			endCol = currentColumn() - 1; // Approximate - after the identifier
 		} else {
 			reportError("Expected value type after 'to' in map declaration",
 						currentLine(), currentColumn());
 		}
 
-		return std::make_unique<MapLiteralExprAST>(dictTypeName, keyType, valueType, line, column);
+		auto expr = std::make_unique<MapLiteralExprAST>(dictTypeName, keyType, valueType, line, column);
+		expr->setEndPosition(endLine, endCol);
+		return expr;
 	}
 
 	// Array literal: [5]int, [_len]byte, or [1,2,3]
@@ -130,18 +160,25 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 
 			// Now expect the element type (primitive or struct)
 			std::string elementType;
+			int endLine = currentLine();
+			int endCol = currentColumn();
 			auto kd = currentKeywordData();
 			if (kd && kd->category == KeywordCategory::Type) {
 				elementType = std::string(currentValue());
+				endCol = currentColumn() + static_cast<int>(elementType.length()) - 1;
 				advance();
 			} else if (check(TokenType::IDENTIFIER)) {
 				elementType = parseQualifiedName("array element type");
+				endLine = currentLine();
+				endCol = currentColumn() - 1;
 			} else {
 				reportError("Expected array element type (int, float, ptr, char, string, or struct name)",
 							currentLine(), currentColumn());
 			}
 
-			return std::make_unique<ArrayLiteralExprAST>(size, elementType, line, column);
+			auto expr = std::make_unique<ArrayLiteralExprAST>(size, elementType, line, column);
+			expr->setEndPosition(endLine, endCol);
+			return expr;
 		}
 
 		// Check for [expr]type form with variable size (e.g., [_len]byte, [n + 1]int)
@@ -149,6 +186,8 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		if (check(TokenType::IDENTIFIER) && peekToken(1).type == TokenType::RBRACKET) {
 			// Parse the size expression
 			auto sizeExpr = parseLogicalOr();
+			int rbracketLine = currentLine();
+			int rbracketCol = currentColumn();
 			expectAdvance(TokenType::RBRACKET, "Expected ']' after array size expression");
 
 			// Check if followed by a type (indicating [expr]type form)
@@ -156,19 +195,28 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 			if ((kd && kd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
 				// [expr]type form - variable-sized array
 				std::string elementType;
+				int endLine = currentLine();
+				int endCol = currentColumn();
 				if (kd && kd->category == KeywordCategory::Type) {
 					elementType = std::string(currentValue());
+					endCol = currentColumn() + static_cast<int>(elementType.length()) - 1;
 					advance();
 				} else {
 					elementType = parseQualifiedName("array element type");
+					endLine = currentLine();
+					endCol = currentColumn() - 1;
 				}
-				return std::make_unique<ArrayLiteralExprAST>(std::move(sizeExpr), elementType, line, column);
+				auto expr = std::make_unique<ArrayLiteralExprAST>(std::move(sizeExpr), elementType, line, column);
+				expr->setEndPosition(endLine, endCol);
+				return expr;
 			} else {
 				// Not followed by type - this is a single-element array literal [val]
 				// Re-wrap the expression as a value array
 				std::vector<std::unique_ptr<ExprAST>> values;
 				values.push_back(std::move(sizeExpr));
-				return std::make_unique<ArrayLiteralExprAST>(std::move(values), line, column);
+				auto expr = std::make_unique<ArrayLiteralExprAST>(std::move(values), line, column);
+				expr->setEndPosition(rbracketLine, rbracketCol);
+				return expr;
 			}
 		}
 
@@ -188,13 +236,20 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 				if ((kd && kd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
 					// [expr]type form - variable-sized array
 					std::string elementType;
+					int endLine = currentLine();
+					int endCol = currentColumn();
 					if (kd && kd->category == KeywordCategory::Type) {
 						elementType = std::string(currentValue());
+						endCol = currentColumn() + static_cast<int>(elementType.length()) - 1;
 						advance();
 					} else {
 						elementType = parseQualifiedName("array element type");
+						endLine = currentLine();
+						endCol = currentColumn() - 1;
 					}
-					return std::make_unique<ArrayLiteralExprAST>(std::move(values[0]), elementType, line, column);
+					auto expr = std::make_unique<ArrayLiteralExprAST>(std::move(values[0]), elementType, line, column);
+					expr->setEndPosition(endLine, endCol);
+					return expr;
 				} else {
 					// Not followed by type - restore and treat as single-element array
 					position = savedPos;
@@ -207,8 +262,12 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 			}
 		}
 
+		int endLine = currentLine();
+		int endCol = currentColumn();
 		expectAdvance(TokenType::RBRACKET, "Expected ']' after array values");
-		return std::make_unique<ArrayLiteralExprAST>(std::move(values), line, column);
+		auto expr = std::make_unique<ArrayLiteralExprAST>(std::move(values), line, column);
+		expr->setEndPosition(endLine, endCol);
+		return expr;
 	}
 
 	// Math intrinsic function keywords (built-in functions)
@@ -221,11 +280,15 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 
 		expectAdvance(TokenType::LPAREN, "Expected '(' after '" + funcName + "'");
 		auto arg = parseLogicalOr();
+		int endLine = currentLine();
+		int endCol = currentColumn();
 		expectAdvance(TokenType::RPAREN, "Expected ')' after argument");
 
 		std::vector<std::unique_ptr<ExprAST>> args;
 		args.push_back(std::move(arg));
-		return std::make_unique<CallExprAST>(funcName, std::move(args), line, column);
+		auto expr = std::make_unique<CallExprAST>(funcName, std::move(args), line, column);
+		expr->setEndPosition(endLine, endCol);
+		return expr;
 	}
 
 	if (check(TokenType::IDENTIFIER)) {
@@ -266,7 +329,9 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 						std::vector<std::unique_ptr<ExprAST>> args;
 
 						// First argument is the object itself
-						args.push_back(std::make_unique<VariableExprAST>(name, line, column));
+						auto varExpr = std::make_unique<VariableExprAST>(name, line, column);
+						varExpr->setEndPosition(line, column + static_cast<int>(name.length()) - 1);
+						args.push_back(std::move(varExpr));
 
 						// Parse remaining arguments
 						if (!check(TokenType::RPAREN)) {
@@ -277,8 +342,12 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 							}
 						}
 
+						int endLine = currentLine();
+						int endCol = currentColumn();
 						expectAdvance(TokenType::RPAREN, "Expected ')' after method arguments");
-						return std::make_unique<CallExprAST>(methodName, std::move(args), line, column);
+						auto callExpr = std::make_unique<CallExprAST>(methodName, std::move(args), line, column);
+						callExpr->setEndPosition(endLine, endCol);
+						return callExpr;
 					}
 				}
 
@@ -304,11 +373,17 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 					}
 				}
 
+				int endLine = currentLine();
+				int endCol = currentColumn();
 				expectAdvance(TokenType::RPAREN, "Expected ')' after function arguments");
-				return std::make_unique<CallExprAST>(qualifiedName, std::move(args), line, column);
+				auto callExpr = std::make_unique<CallExprAST>(qualifiedName, std::move(args), line, column);
+				callExpr->setEndPosition(endLine, endCol);
+				return callExpr;
 			} else {
 				// This is a member access (e.g., struct.field or struct.arrayField)
 				auto memberExpr = std::make_unique<MemberAccessExprAST>(name, member.value, line, column);
+				// Set initial end position to the member token
+				memberExpr->setEndPosition(member.line, member.column + static_cast<int>(member.value.length()) - 1);
 
 				// Handle chained member access (e.g., self.data.length)
 				while (check(TokenType::DOT)) {
@@ -316,14 +391,19 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 					Token nextMember = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
 					// Wrap the current expression in a new MemberAccessExprAST
 					memberExpr = std::make_unique<MemberAccessExprAST>(std::move(memberExpr), nextMember.value, line, column);
+					memberExpr->setEndPosition(nextMember.line, nextMember.column + static_cast<int>(nextMember.value.length()) - 1);
 				}
 
 				// Check for array indexing on the member (e.g., struct.arrayField[i])
 				if (check(TokenType::LBRACKET)) {
 					advance(); // consume '['
 					auto index = parseLogicalOr();
+					int endLine = currentLine();
+					int endCol = currentColumn();
 					expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
-					return std::make_unique<ArrayIndexExprAST>(std::move(memberExpr), std::move(index), line, column);
+					auto arrayExpr = std::make_unique<ArrayIndexExprAST>(std::move(memberExpr), std::move(index), line, column);
+					arrayExpr->setEndPosition(endLine, endCol);
+					return arrayExpr;
 				}
 
 				return memberExpr;
@@ -352,8 +432,12 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 				}
 			}
 
+			int endLine = currentLine();
+			int endCol = currentColumn();
 			expectAdvance(TokenType::RPAREN, "Expected ')' after function arguments");
-			return std::make_unique<CallExprAST>(name, std::move(args), line, column);
+			auto callExpr = std::make_unique<CallExprAST>(name, std::move(args), line, column);
+			callExpr->setEndPosition(endLine, endCol);
+			return callExpr;
 		}
 
 		// Check for array indexing or slicing
@@ -364,8 +448,12 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 			if (check(TokenType::DOT_DOT)) {
 				advance(); // consume '..'
 				auto endExpr = parseLogicalOr();
+				int sliceEndLine = currentLine();
+				int sliceEndCol = currentColumn();
 				expectAdvance(TokenType::RBRACKET, "Expected ']' after slice end");
-				return std::make_unique<SliceExprAST>(name, nullptr, std::move(endExpr), line, column);
+				auto sliceExpr = std::make_unique<SliceExprAST>(name, nullptr, std::move(endExpr), line, column);
+				sliceExpr->setEndPosition(sliceEndLine, sliceEndCol);
+				return sliceExpr;
 			}
 
 			// Parse first expression (could be index or slice start)
@@ -377,19 +465,30 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 
 				// Check for open-ended slice: s[start..]
 				if (check(TokenType::RBRACKET)) {
+					int sliceEndLine = currentLine();
+					int sliceEndCol = currentColumn();
 					advance(); // consume ']'
-					return std::make_unique<SliceExprAST>(name, std::move(firstExpr), nullptr, line, column);
+					auto sliceExpr = std::make_unique<SliceExprAST>(name, std::move(firstExpr), nullptr, line, column);
+					sliceExpr->setEndPosition(sliceEndLine, sliceEndCol);
+					return sliceExpr;
 				}
 
 				// Full slice: s[start..end]
 				auto endExpr = parseLogicalOr();
+				int sliceEndLine = currentLine();
+				int sliceEndCol = currentColumn();
 				expectAdvance(TokenType::RBRACKET, "Expected ']' after slice end");
-				return std::make_unique<SliceExprAST>(name, std::move(firstExpr), std::move(endExpr), line, column);
+				auto sliceExpr = std::make_unique<SliceExprAST>(name, std::move(firstExpr), std::move(endExpr), line, column);
+				sliceExpr->setEndPosition(sliceEndLine, sliceEndCol);
+				return sliceExpr;
 			}
 
 			// Regular array index
+			int rbracketLine = currentLine();
+			int rbracketCol = currentColumn();
 			expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
 			auto arrayExpr = std::make_unique<ArrayIndexExprAST>(name, std::move(firstExpr), line, column);
+			arrayExpr->setEndPosition(rbracketLine, rbracketCol);
 
 			// Check for member access on array element (e.g., arr[0].field or arr[0].method())
 			if (check(TokenType::DOT)) {
@@ -413,24 +512,36 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 						}
 					}
 
+					int callEndLine = currentLine();
+					int callEndCol = currentColumn();
 					expectAdvance(TokenType::RPAREN, "Expected ')' after method arguments");
-					return std::make_unique<CallExprAST>(member.value, std::move(args), line, column);
+					auto callExpr = std::make_unique<CallExprAST>(member.value, std::move(args), line, column);
+					callExpr->setEndPosition(callEndLine, callEndCol);
+					return callExpr;
 				}
 
 				// Create a member access expression with the array index as the object
-				return std::make_unique<MemberAccessExprAST>(std::move(arrayExpr), member.value, line, column);
+				auto memberExpr = std::make_unique<MemberAccessExprAST>(std::move(arrayExpr), member.value, line, column);
+				memberExpr->setEndPosition(member.line, member.column + static_cast<int>(member.value.length()) - 1);
+				return memberExpr;
 			}
 
 			return arrayExpr;
 		}
 
 		// Just a variable reference
-		return std::make_unique<VariableExprAST>(name, line, column);
+		auto varExpr = std::make_unique<VariableExprAST>(name, line, column);
+		varExpr->setEndPosition(line, column + static_cast<int>(name.length()) - 1);
+		return varExpr;
 	}
 
 	if (match(TokenType::LPAREN)) {
 		auto expr = parseLogicalOr();
+		int endLine = currentLine();
+		int endCol = currentColumn();
 		expectAdvance(TokenType::RPAREN, "Expected ')' to close parenthesized expression");
+		// Set the end position to include the closing paren
+		expr->setEndPosition(endLine, endCol);
 		return expr;
 	}
 
@@ -455,7 +566,10 @@ std::unique_ptr<ExprAST> Parser::parseUnary() {
 		advance();
 
 		auto operand = parseUnary(); // Allow chaining: --x, +-x, etc.
-		return std::make_unique<UnaryExprAST>(op, std::move(operand), line, column);
+		auto expr = std::make_unique<UnaryExprAST>(op, std::move(operand), line, column);
+		// End position is the end of the operand
+		expr->setEndPosition(expr->operand->endLine, expr->operand->endColumn);
+		return expr;
 	}
 
 	// Handle 'not' keyword
@@ -465,7 +579,10 @@ std::unique_ptr<ExprAST> Parser::parseUnary() {
 		advance();
 
 		auto operand = parseUnary(); // Allow chaining: not not x
-		return std::make_unique<UnaryExprAST>('!', std::move(operand), line, column);
+		auto expr = std::make_unique<UnaryExprAST>('!', std::move(operand), line, column);
+		// End position is the end of the operand
+		expr->setEndPosition(expr->operand->endLine, expr->operand->endColumn);
+		return expr;
 	}
 
 	return parsePostfix();
@@ -479,8 +596,8 @@ std::unique_ptr<ExprAST> Parser::parsePostfix() {
 		if (check(TokenType::DOT)) {
 			advance(); // consume '.'
 			Token member = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
-			int line = currentLine();
-			int column = currentColumn();
+			int line = expr->line;
+			int column = expr->column;
 
 			// Check if this is a method call: expr.method(args)
 			if (check(TokenType::LPAREN)) {
@@ -499,20 +616,27 @@ std::unique_ptr<ExprAST> Parser::parsePostfix() {
 					}
 				}
 
+				int endLine = currentLine();
+				int endCol = currentColumn();
 				expectAdvance(TokenType::RPAREN, "Expected ')' after method arguments");
 				expr = std::make_unique<CallExprAST>(member.value, std::move(args), line, column);
+				expr->setEndPosition(endLine, endCol);
 			} else {
 				// Pure member access: expr.field
 				expr = std::make_unique<MemberAccessExprAST>(std::move(expr), member.value, line, column);
+				expr->setEndPosition(member.line, member.column + static_cast<int>(member.value.length()) - 1);
 			}
 		} else if (check(TokenType::LBRACKET)) {
 			// Array indexing on expression result: expr[index]
-			int line = currentLine();
-			int column = currentColumn();
+			int line = expr->line;
+			int column = expr->column;
 			advance(); // consume '['
 			auto index = parseLogicalOr();
+			int endLine = currentLine();
+			int endCol = currentColumn();
 			expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
 			expr = std::make_unique<ArrayIndexExprAST>(std::move(expr), std::move(index), line, column);
+			expr->setEndPosition(endLine, endCol);
 		} else {
 			break;
 		}
@@ -526,24 +650,30 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
 
 	// Handle type cast: expr as type
 	if (checkKeyword("as")) {
-		int line = currentLine();
-		int column = currentColumn();
+		int line = expr->line;
+		int column = expr->column;
 		advance(); // consume 'as'
 
 		// Expect a type keyword or struct name (identifier)
 		std::string targetType;
+		int endLine = currentLine();
+		int endCol = currentColumn();
 		auto kd = currentKeywordData();
 		if (kd && kd->category == KeywordCategory::Type) {
 			targetType = std::string(currentValue());
+			endCol = currentColumn() + static_cast<int>(targetType.length()) - 1;
 			advance();
 		} else if (check(TokenType::IDENTIFIER)) {
 			// Allow struct type names for ExpressibleByStringLiteral etc.
 			targetType = parseQualifiedName("cast target type");
+			endLine = currentLine();
+			endCol = currentColumn() - 1;
 		} else {
 			reportError("Expected type after 'as' keyword (int, float, ptr, char, string, bool, or struct name)",
 						currentLine(), currentColumn());
 		}
 		expr = std::make_unique<CastExprAST>(std::move(expr), targetType, line, column);
+		expr->setEndPosition(endLine, endCol);
 	}
 
 	return expr;
@@ -563,7 +693,9 @@ std::unique_ptr<ExprAST> Parser::parseTerm() {
 		int column = currentColumn();
 		advance();
 		auto right = parseFactor();
-		left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
+		auto binExpr = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
+		binExpr->setEndPosition(binExpr->right->endLine, binExpr->right->endColumn);
+		left = std::move(binExpr);
 	}
 
 	return left;
@@ -578,7 +710,9 @@ std::unique_ptr<ExprAST> Parser::parseAdditive() {
 		int column = currentColumn();
 		advance();
 		auto right = parseTerm();
-		left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
+		auto binExpr = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
+		binExpr->setEndPosition(binExpr->right->endLine, binExpr->right->endColumn);
+		left = std::move(binExpr);
 	}
 
 	return left;
@@ -594,7 +728,9 @@ std::unique_ptr<ExprAST> Parser::parseShift() {
 		int column = currentColumn();
 		advance();
 		auto right = parseAdditive();
-		left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
+		auto binExpr = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
+		binExpr->setEndPosition(binExpr->right->endLine, binExpr->right->endColumn);
+		left = std::move(binExpr);
 	}
 
 	return left;
@@ -632,7 +768,9 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 
 		advance();
 		auto right = parseComparison();
-		left = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
+		auto binExpr = std::make_unique<BinaryExprAST>(op, std::move(left), std::move(right), line, column);
+		binExpr->setEndPosition(binExpr->right->endLine, binExpr->right->endColumn);
+		left = std::move(binExpr);
 	}
 
 	return left;
@@ -647,7 +785,9 @@ std::unique_ptr<ExprAST> Parser::parseBitwiseAnd() {
 		int column = currentColumn();
 		advance();
 		auto right = parseExpression();
-		left = std::make_unique<BinaryExprAST>('&', std::move(left), std::move(right), line, column);
+		auto binExpr = std::make_unique<BinaryExprAST>('&', std::move(left), std::move(right), line, column);
+		binExpr->setEndPosition(binExpr->right->endLine, binExpr->right->endColumn);
+		left = std::move(binExpr);
 	}
 
 	return left;
@@ -662,7 +802,9 @@ std::unique_ptr<ExprAST> Parser::parseBitwiseXor() {
 		int column = currentColumn();
 		advance();
 		auto right = parseBitwiseAnd();
-		left = std::make_unique<BinaryExprAST>('^', std::move(left), std::move(right), line, column);
+		auto binExpr = std::make_unique<BinaryExprAST>('^', std::move(left), std::move(right), line, column);
+		binExpr->setEndPosition(binExpr->right->endLine, binExpr->right->endColumn);
+		left = std::move(binExpr);
 	}
 
 	return left;
@@ -677,7 +819,9 @@ std::unique_ptr<ExprAST> Parser::parseBitwiseOr() {
 		int column = currentColumn();
 		advance();
 		auto right = parseBitwiseXor();
-		left = std::make_unique<BinaryExprAST>('|', std::move(left), std::move(right), line, column);
+		auto binExpr = std::make_unique<BinaryExprAST>('|', std::move(left), std::move(right), line, column);
+		binExpr->setEndPosition(binExpr->right->endLine, binExpr->right->endColumn);
+		left = std::move(binExpr);
 	}
 
 	return left;
@@ -692,7 +836,9 @@ std::unique_ptr<ExprAST> Parser::parseLogicalAnd() {
 		int column = currentColumn();
 		advance();
 		auto right = parseBitwiseOr();
-		left = std::make_unique<BinaryExprAST>('A', std::move(left), std::move(right), line, column);
+		auto binExpr = std::make_unique<BinaryExprAST>('A', std::move(left), std::move(right), line, column);
+		binExpr->setEndPosition(binExpr->right->endLine, binExpr->right->endColumn);
+		left = std::move(binExpr);
 	}
 
 	return left;
@@ -707,7 +853,9 @@ std::unique_ptr<ExprAST> Parser::parseLogicalOr() {
 		int column = currentColumn();
 		advance();
 		auto right = parseLogicalAnd();
-		left = std::make_unique<BinaryExprAST>('O', std::move(left), std::move(right), line, column);
+		auto binExpr = std::make_unique<BinaryExprAST>('O', std::move(left), std::move(right), line, column);
+		binExpr->setEndPosition(binExpr->right->endLine, binExpr->right->endColumn);
+		left = std::move(binExpr);
 	}
 
 	return left;

@@ -25,6 +25,7 @@ set(MAXON_SOURCES
     ../maxon-bin/semantic_analyzer/semantic_analyzer_stmt.cpp
     ../maxon-bin/types/type_conversion.cpp
     ../maxon-bin/intrinsics.cpp
+    ../maxon-bin/compiler_api.cpp
 )
 
 set(LSP_SOURCES

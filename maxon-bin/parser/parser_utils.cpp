@@ -297,3 +297,77 @@ std::string Parser::parseQualifiedName(const std::string &context) {
 
 	return qualifiedName;
 }
+
+// ============================================================================
+// Error Recovery Methods
+// ============================================================================
+
+// Check if the current token is a synchronization point
+// Sync tokens are tokens that typically start new statements or declarations
+bool Parser::isSyncToken() const {
+	if (check(TokenType::END_OF_FILE)) {
+		return true;
+	}
+
+	// Check for keywords that start statements or declarations
+	if (check(TokenType::KEYWORD)) {
+		std::string_view kw = currentValue();
+		return kw == "function" || kw == "struct" || kw == "enum" ||
+			   kw == "interface" || kw == "end" || kw == "var" ||
+			   kw == "let" || kw == "if" || kw == "while" ||
+			   kw == "for" || kw == "return" || kw == "break" ||
+			   kw == "continue" || kw == "match" || kw == "export" ||
+			   kw == "extern";
+	}
+
+	return false;
+}
+
+// Advance tokens until we reach a synchronization point
+// This is called after catching an error to find a safe place to resume parsing
+void Parser::synchronize() {
+	inErrorRecovery_ = true;
+
+	// Skip tokens until we find a sync point
+	while (!check(TokenType::END_OF_FILE)) {
+		// Check if current token is a sync point
+		if (isSyncToken()) {
+			inErrorRecovery_ = false;
+			return;
+		}
+		advance();
+	}
+
+	inErrorRecovery_ = false;
+}
+
+// Parse a statement with error recovery
+// On error, creates an ErrorStmtAST and synchronizes to next statement
+std::unique_ptr<StmtAST> Parser::parseStatementWithRecovery() {
+	int startLine = currentLine();
+	int startCol = currentColumn();
+
+	try {
+		return parseStatement();
+	} catch (const std::runtime_error &e) {
+		// Record the error
+		std::string errorMsg = e.what();
+		parseErrors_.push_back(ParseError(errorMsg, startLine, startCol));
+
+		// Track position before synchronization for error range
+		int endLine = currentLine();
+		int endCol = currentColumn();
+
+		// Synchronize to next safe point
+		synchronize();
+
+		// Update end position to where we synchronized
+		if (endLine != currentLine() || endCol != currentColumn()) {
+			endLine = currentLine();
+			endCol = currentColumn();
+		}
+
+		// Return an ErrorStmtAST as placeholder
+		return std::make_unique<ErrorStmtAST>(errorMsg, startLine, startCol, endLine, endCol);
+	}
+}

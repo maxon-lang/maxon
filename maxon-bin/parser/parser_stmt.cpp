@@ -104,7 +104,7 @@ std::unique_ptr<StmtAST> Parser::parseIf() {
 
 	// Parse then body
 	while (!checkKeyword("else") && !checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		thenBody.push_back(parseStatement());
+		thenBody.push_back(parseStatementWithRecovery());
 	}
 
 	// Parse optional else
@@ -121,7 +121,7 @@ std::unique_ptr<StmtAST> Parser::parseIf() {
 
 		// Parse else body
 		while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-			elseBody.push_back(parseStatement());
+			elseBody.push_back(parseStatementWithRecovery());
 		}
 	}
 
@@ -136,10 +136,13 @@ std::unique_ptr<StmtAST> Parser::parseIf() {
 					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
-	return std::make_unique<IfStmtAST>(std::move(condition),
-									   std::move(thenBody),
-									   std::move(elseBody),
-									   ifToken.line, ifToken.column, blockId);
+	auto stmt = std::make_unique<IfStmtAST>(std::move(condition),
+											std::move(thenBody),
+											std::move(elseBody),
+											ifToken.line, ifToken.column, blockId);
+	// Set end position to the closing block identifier
+	stmt->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+	return stmt;
 }
 
 std::unique_ptr<IfLetStmtAST> Parser::parseIfLet(Token ifToken) {
@@ -158,7 +161,7 @@ std::unique_ptr<IfLetStmtAST> Parser::parseIfLet(Token ifToken) {
 
 	// Parse then body (value is present)
 	while (!checkKeyword("else") && !checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		thenBody.push_back(parseStatement());
+		thenBody.push_back(parseStatementWithRecovery());
 	}
 
 	// Parse optional else (nil case)
@@ -172,7 +175,7 @@ std::unique_ptr<IfLetStmtAST> Parser::parseIfLet(Token ifToken) {
 		}
 
 		while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-			elseBody.push_back(parseStatement());
+			elseBody.push_back(parseStatementWithRecovery());
 		}
 	}
 
@@ -184,9 +187,12 @@ std::unique_ptr<IfLetStmtAST> Parser::parseIfLet(Token ifToken) {
 					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
-	return std::make_unique<IfLetStmtAST>(bindingName.value, std::move(optionalExpr),
-										   std::move(thenBody), std::move(elseBody),
-										   ifToken.line, ifToken.column, blockId);
+	auto stmt = std::make_unique<IfLetStmtAST>(bindingName.value, std::move(optionalExpr),
+											   std::move(thenBody), std::move(elseBody),
+											   ifToken.line, ifToken.column, blockId);
+	// Set end position to the closing block identifier
+	stmt->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+	return stmt;
 }
 
 std::unique_ptr<ElseUnwrapStmtAST> Parser::parseElseUnwrap(Token varToken, Token nameToken,
@@ -199,7 +205,7 @@ std::unique_ptr<ElseUnwrapStmtAST> Parser::parseElseUnwrap(Token varToken, Token
 	// Parse else body
 	std::vector<std::unique_ptr<StmtAST>> elseBody;
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		elseBody.push_back(parseStatement());
+		elseBody.push_back(parseStatementWithRecovery());
 	}
 
 	expectKeywordAdvance("end", "Expected 'end' to close else block");
@@ -210,11 +216,14 @@ std::unique_ptr<ElseUnwrapStmtAST> Parser::parseElseUnwrap(Token varToken, Token
 					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
-	return std::make_unique<ElseUnwrapStmtAST>(nameToken.value, explicitType,
-												 std::move(optionalExpr),
-												 std::move(elseBody),
-												 varToken.line, varToken.column,
-												 blockId);
+	auto stmt = std::make_unique<ElseUnwrapStmtAST>(nameToken.value, explicitType,
+												   std::move(optionalExpr),
+												   std::move(elseBody),
+												   varToken.line, varToken.column,
+												   blockId);
+	// Set end position to the closing block identifier
+	stmt->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+	return stmt;
 }
 
 std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
@@ -229,7 +238,7 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
 
 	// Parse body
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		body.push_back(parseStatement());
+		body.push_back(parseStatementWithRecovery());
 	}
 
 	expectKeywordAdvance("end", "Expected 'end' to close while loop");
@@ -243,7 +252,10 @@ std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
 					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
-	return std::make_unique<WhileStmtAST>(std::move(condition), std::move(body), whileToken.line, whileToken.column, blockId);
+	auto stmt = std::make_unique<WhileStmtAST>(std::move(condition), std::move(body), whileToken.line, whileToken.column, blockId);
+	// Set end position to the closing block identifier
+	stmt->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+	return stmt;
 }
 
 std::unique_ptr<ForStmtAST> Parser::parseFor() {
@@ -267,7 +279,7 @@ std::unique_ptr<ForStmtAST> Parser::parseFor() {
 
 	// Parse body
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		body.push_back(parseStatement());
+		body.push_back(parseStatementWithRecovery());
 	}
 
 	expectKeywordAdvance("end", "Expected 'end' to close for loop");
@@ -281,7 +293,10 @@ std::unique_ptr<ForStmtAST> Parser::parseFor() {
 					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
-	return std::make_unique<ForStmtAST>(loopVar, std::move(iterable), std::move(body), forToken.line, forToken.column, blockId);
+	auto stmt = std::make_unique<ForStmtAST>(loopVar, std::move(iterable), std::move(body), forToken.line, forToken.column, blockId);
+	// Set end position to the closing block identifier
+	stmt->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+	return stmt;
 }
 
 std::unique_ptr<StmtAST> Parser::parseStatement() {
@@ -505,8 +520,11 @@ std::unique_ptr<MatchStmtAST> Parser::parseMatch() {
 					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
-	return std::make_unique<MatchStmtAST>(std::move(scrutinee), std::move(cases),
-										   matchToken.line, matchToken.column, blockId);
+	auto stmt = std::make_unique<MatchStmtAST>(std::move(scrutinee), std::move(cases),
+											   matchToken.line, matchToken.column, blockId);
+	// Set end position to the closing block identifier
+	stmt->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+	return stmt;
 }
 
 std::unique_ptr<MatchExprAST> Parser::parseMatchExpr() {
@@ -570,8 +588,11 @@ std::unique_ptr<MatchExprAST> Parser::parseMatchExpr() {
 					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
-	return std::make_unique<MatchExprAST>(std::move(scrutinee), std::move(cases),
-										   matchToken.line, matchToken.column, blockId);
+	auto expr = std::make_unique<MatchExprAST>(std::move(scrutinee), std::move(cases),
+											   matchToken.line, matchToken.column, blockId);
+	// Set end position to the closing block identifier
+	expr->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+	return expr;
 }
 
 std::unique_ptr<StmtAST> Parser::parseMatchCaseStatement() {

@@ -114,6 +114,8 @@ LspServer::LspServer()
 											[this](const json &params) { handleDidSave(params); });
 	rpcHandler->registerNotificationHandler("exit",
 											[this](const json &params) { handleExit(params); });
+	rpcHandler->registerNotificationHandler("workspace/didChangeWatchedFiles",
+											[this](const json &params) { handleDidChangeWatchedFiles(params); });
 }
 
 void LspServer::run() {
@@ -195,7 +197,7 @@ json LspServer::handleInitialize(const json &params) {
 	}
 
 	json capabilities = {
-		{"capabilities", {{"textDocumentSync", 1}, // Full sync
+		{"capabilities", {{"textDocumentSync", {{"openClose", true}, {"change", 2}, {"save", {{"includeText", false}}}}}, // Incremental sync (2)
 						  {"completionProvider", {{"resolveProvider", false}, {"triggerCharacters", json::array({".", ":"})}}},
 						  {"hoverProvider", true},
 						  {"definitionProvider", true},
@@ -318,7 +320,84 @@ json LspServer::handleDocumentSymbol(const json &params) {
 }
 
 void LspServer::handleInitialized(const json &params) {
-	// Server is now initialized
+	// Server is now initialized - register file watchers
+	registerFileWatchers();
+}
+
+void LspServer::registerFileWatchers() {
+	// Register file watchers for stdlib files using dynamic registration
+	// This allows us to be notified when stdlib files change
+
+	json registrations = json::array();
+
+	// Create a file watcher registration for stdlib .maxon files
+	json fileWatcherRegistration = {
+		{"id", "stdlib-watcher"},
+		{"method", "workspace/didChangeWatchedFiles"},
+		{"registerOptions", {
+			{"watchers", json::array({
+				{{"globPattern", "**/stdlib/**/*.maxon"}},
+				{{"globPattern", "**/stdlib/**/*.mx"}}
+			})}
+		}}
+	};
+
+	registrations.push_back(fileWatcherRegistration);
+
+	json registerParams = {
+		{"registrations", registrations}
+	};
+
+	// Send the registration request to the client
+	rpcHandler->sendRequest("client/registerCapability", registerParams);
+}
+
+void LspServer::handleDidChangeWatchedFiles(const json &params) {
+	if (!params.contains("changes") || !params["changes"].is_array()) {
+		return;
+	}
+
+	bool stdlibChanged = false;
+
+	for (const auto &change : params["changes"]) {
+		if (!change.contains("uri")) {
+			continue;
+		}
+
+		std::string uri = change["uri"].get<std::string>();
+		std::string filePath = uriToPath(uri);
+
+		// Check if this is a stdlib file
+		if (analyzer->isStdlibFile(filePath)) {
+			stdlibChanged = true;
+			// Change type: 1 = created, 2 = changed, 3 = deleted
+			int changeType = change.contains("type") ? change["type"].get<int>() : 2;
+			(void)changeType; // Currently we reload the entire stdlib regardless of change type
+		}
+	}
+
+	if (stdlibChanged) {
+		// Reload stdlib and invalidate all document caches
+		analyzer->reloadStdlib();
+		analyzer->invalidateAllDocumentCaches();
+
+		// Re-analyze all open documents
+		reanalyzeAllOpenDocuments();
+	}
+}
+
+void LspServer::reanalyzeAllOpenDocuments() {
+	// Get all open document URIs and re-analyze them
+	// This is called after stdlib changes to update diagnostics with new stdlib symbols
+
+	auto uris = docManager->getAllDocumentUris();
+	for (const auto &uri : uris) {
+		auto doc = docManager->getDocument(uri);
+		if (doc) {
+			auto diagnostics = analyzer->analyze(doc);
+			publishDiagnostics(uri, diagnostics);
+		}
+	}
 }
 
 void LspServer::handleDidOpen(const json &params) {
@@ -342,9 +421,25 @@ void LspServer::handleDidChange(const json &params) {
 
 	if (params.contains("contentChanges") && params["contentChanges"].is_array() &&
 		params["contentChanges"].size() > 0) {
-		std::string text = params["contentChanges"][0]["text"].get<std::string>();
 
-		docManager->updateDocument(uri, text, version);
+		// Process all content changes (could be incremental or full)
+		for (const auto &change : params["contentChanges"]) {
+			std::string text = change["text"].get<std::string>();
+
+			if (change.contains("range")) {
+				// Incremental change - apply the change to the existing document
+				lsp::Range range;
+				range.start.line = change["range"]["start"]["line"].get<int>();
+				range.start.character = change["range"]["start"]["character"].get<int>();
+				range.end.line = change["range"]["end"]["line"].get<int>();
+				range.end.character = change["range"]["end"]["character"].get<int>();
+
+				docManager->applyIncrementalChange(uri, range, text, version);
+			} else {
+				// Full document replacement
+				docManager->updateDocument(uri, text, version);
+			}
+		}
 
 		// Analyze and send diagnostics
 		auto doc = docManager->getDocument(uri);

@@ -9,6 +9,21 @@
 #include <memory>
 #include <vector>
 
+// Parse error information for error recovery and LSP diagnostics
+struct ParseError {
+	std::string message;
+	int line;
+	int column;
+	int endLine;    // End position line (defaults to line if not set)
+	int endColumn;  // End position column (defaults to column if not set)
+	int severity;   // 1 = Error, 2 = Warning, 3 = Info, 4 = Hint
+
+	// Full constructor with all fields
+	ParseError(const std::string &msg, int l, int c, int el = 0, int ec = 0, int sev = 1)
+		: message(msg), line(l), column(c),
+		  endLine(el == 0 ? l : el), endColumn(ec == 0 ? c : ec), severity(sev) {}
+};
+
 class Parser {
   private:
 	// Optimized token storage
@@ -19,6 +34,10 @@ class Parser {
 	size_t position;
 	std::string defaultNamespace; // Namespace derived from file path
 	Logger *logger_ = nullptr;	  // Optional logger for detailed tracing
+
+	// Error recovery state
+	std::vector<ParseError> parseErrors_;  // Collected parse errors
+	bool inErrorRecovery_ = false;		   // True when recovering from an error
 
 	// Token access methods (use SIMD-optimized TokenStream)
 	TokenType currentType() const;
@@ -95,6 +114,11 @@ class Parser {
 	// Error reporting helper - throws runtime_error with location info
 	[[noreturn]] void reportError(const std::string &message, int line, int column);
 
+	// Error recovery methods
+	void synchronize();						   // Advance to next synchronization point
+	bool isSyncToken() const;				   // Check if current token is a sync point
+	std::unique_ptr<StmtAST> parseStatementWithRecovery(); // Statement parsing with error recovery
+
   public:
 	// Primary constructor: accepts TokenStream directly
 	explicit Parser(TokenStream &&stream);
@@ -105,6 +129,11 @@ class Parser {
 	void setDefaultNamespace(const std::string &ns);
 	void setLogger(Logger *logger) { logger_ = logger; }
 	std::unique_ptr<ProgramAST> parse();
+
+	// Error recovery accessors
+	bool isInErrorRecoveryMode() const { return inErrorRecovery_; }
+	const std::vector<ParseError> &getParseErrors() const { return parseErrors_; }
+	bool hasErrors() const { return !parseErrors_.empty(); }
 };
 
 #endif // PARSER_H

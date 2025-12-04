@@ -327,6 +327,18 @@ std::string compileProgram(const CompilationOptions &options) {
 		programs.push_back(parseFile(inputFile, logger, stats.get()));
 	}
 
+	// Check for parse errors before continuing to semantic analysis
+	// Only report the first parse error to avoid cascading error noise
+	for (size_t i = 0; i < programs.size(); i++) {
+		if (programs[i]->hasParseErrors()) {
+			const auto &error = programs[i]->parseErrors[0];
+			// Format matches what parseFile throws: "In file '...': \n<error message>"
+			std::cerr << "In file '" << normalizePathForDisplay(allFiles[i]) << "':\n"
+					  << error.message << std::endl;
+			throw std::runtime_error("");
+		}
+	}
+
 	int iteration = 0;
 	const int maxIterations = 10;
 	std::map<std::string, size_t> functionIndices;			// Store function indices from semantic analysis

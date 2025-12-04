@@ -179,6 +179,129 @@ class BlockBoundaryAnalyzer {
 		return depth;
 	}
 
+	// ========================================================================
+	// Incremental Analysis Support
+	// ========================================================================
+
+	/**
+	 * Invalidate all boundaries that start at or after the given token index.
+	 * After invalidation, reanalyzeFrom() should be called with the updated tokens.
+	 *
+	 * @param tokenIndex The token index from which to invalidate
+	 */
+	void invalidateFrom(size_t tokenIndex) {
+		// Remove boundaries that start at or after tokenIndex
+		boundaries_.erase(
+			std::remove_if(boundaries_.begin(), boundaries_.end(),
+				[tokenIndex](const BlockBoundary &b) {
+					return b.start_index >= tokenIndex;
+				}),
+			boundaries_.end());
+
+		// Also remove boundaries that span across tokenIndex (their end is invalid)
+		boundaries_.erase(
+			std::remove_if(boundaries_.begin(), boundaries_.end(),
+				[tokenIndex](const BlockBoundary &b) {
+					return b.end_index >= tokenIndex;
+				}),
+			boundaries_.end());
+
+		// Rebuild the start_to_boundary_ map
+		start_to_boundary_.clear();
+		for (size_t i = 0; i < boundaries_.size(); ++i) {
+			start_to_boundary_[boundaries_[i].start_index] = i;
+		}
+	}
+
+	/**
+	 * Reanalyze boundaries from the given token index onwards.
+	 * Call this after invalidateFrom() and after splicing new tokens.
+	 *
+	 * @param tokens The updated token stream
+	 * @param fromIndex The token index from which to start reanalysis
+	 */
+	void reanalyzeFrom(const TokenStream &tokens, size_t fromIndex) {
+		// First, find any boundaries that were started before fromIndex but not yet closed
+		// These need to be completed with the new token stream
+		std::stack<BlockBoundary> nesting_stack;
+
+		// Push any incomplete boundaries (those that started before fromIndex)
+		for (const auto &boundary : boundaries_) {
+			if (boundary.start_index < fromIndex && boundary.end_index == 0) {
+				nesting_stack.push(boundary);
+			}
+		}
+
+		// Continue analysis from fromIndex
+		for (size_t i = fromIndex; i < tokens.size(); ++i) {
+			if (tokens.get_type(i) != TokenType::KEYWORD) {
+				continue;
+			}
+
+			std::string_view kw = tokens.get_value(i);
+
+			if (kw == "if" || kw == "while" || kw == "for" || kw == "function" ||
+				kw == "struct" || kw == "enum" || kw == "interface" || kw == "match") {
+				BlockBoundary boundary;
+				boundary.start_index = i;
+				boundary.end_index = 0;
+
+				if (kw == "if")
+					boundary.type = BlockBoundary::Type::If;
+				else if (kw == "while")
+					boundary.type = BlockBoundary::Type::While;
+				else if (kw == "for")
+					boundary.type = BlockBoundary::Type::For;
+				else
+					boundary.type = BlockBoundary::Type::Function;
+
+				boundary.block_id = "";
+				nesting_stack.push(boundary);
+			} else if (kw == "end" && !nesting_stack.empty()) {
+				BlockBoundary completed = nesting_stack.top();
+				nesting_stack.pop();
+				completed.end_index = i;
+
+				boundaries_.push_back(completed);
+				start_to_boundary_[completed.start_index] = boundaries_.size() - 1;
+			}
+		}
+	}
+
+	/**
+	 * Adjust all token indices by a delta.
+	 * Used after splicing to update existing boundary indices.
+	 *
+	 * @param fromIndex Token index from which to apply the delta
+	 * @param delta Amount to add to indices (can be negative for removals)
+	 */
+	void adjustIndices(size_t fromIndex, int64_t delta) {
+		for (auto &boundary : boundaries_) {
+			if (boundary.start_index >= fromIndex) {
+				boundary.start_index = static_cast<size_t>(
+					static_cast<int64_t>(boundary.start_index) + delta);
+			}
+			if (boundary.end_index >= fromIndex) {
+				boundary.end_index = static_cast<size_t>(
+					static_cast<int64_t>(boundary.end_index) + delta);
+			}
+		}
+
+		// Rebuild the start_to_boundary_ map after adjusting indices
+		start_to_boundary_.clear();
+		for (size_t i = 0; i < boundaries_.size(); ++i) {
+			start_to_boundary_[boundaries_[i].start_index] = i;
+		}
+	}
+
+	/**
+	 * Clear all boundaries
+	 */
+	void clear() {
+		boundaries_.clear();
+		start_to_boundary_.clear();
+	}
+
   private:
 	std::vector<BlockBoundary> boundaries_;
 	std::unordered_map<size_t, size_t> start_to_boundary_; // start_index -> index in boundaries_

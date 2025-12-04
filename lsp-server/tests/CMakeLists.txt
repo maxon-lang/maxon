@@ -34,6 +34,7 @@ set(MAXON_SOURCES
     ../../maxon-bin/types/type_conversion.cpp
     ../../maxon-bin/file_utils.cpp
     ../../maxon-bin/intrinsics.cpp
+    ../../maxon-bin/compiler_api.cpp
 )
 
 # Create a library from LSP sources for testing
@@ -83,6 +84,7 @@ add_test(NAME LSPTypes COMMAND test_lsp_types)
 add_test(NAME DocumentManager COMMAND test_document_manager)
 add_test(NAME JsonRpc COMMAND test_json_rpc)
 add_test(NAME Analyzer COMMAND test_analyzer)
+set_tests_properties(Analyzer PROPERTIES TIMEOUT 120)  # 47 tests need more time
 add_test(NAME LSPServer COMMAND test_lsp_server)
 add_test(NAME CodeActions COMMAND test_code_actions)
 add_test(NAME Hover COMMAND test_hover)

@@ -1,0 +1,215 @@
+#ifndef COMPILER_API_H
+#define COMPILER_API_H
+
+/**
+ * Compiler API for LSP Integration
+ *
+ * Provides a clean interface for the LSP server to access compiler functionality.
+ * This makes the compiler the single source of truth for all language information.
+ */
+
+#include "ast.h"
+#include "lexer/lexer_keyword_matcher.h"
+#include "semantic_analyzer.h"
+#include <memory>
+#include <string>
+#include <vector>
+
+// Forward declare ParseError from parser.h
+struct ParseError;
+
+// ============================================================================
+// LSP Symbol Information
+// ============================================================================
+
+/**
+ * Symbol information for LSP features (hover, completion, go-to-definition)
+ */
+struct LSPSymbolInfo {
+    std::string name;
+    std::string kind;           // "function", "struct", "enum", "interface", "variable", "field", "method"
+    std::string type;           // Type signature as string
+    std::string documentation;  // Doc comment content
+    SourceRange sourceRange;    // Location in source
+
+    LSPSymbolInfo() = default;
+
+    LSPSymbolInfo(const std::string& n, const std::string& k, const std::string& t,
+                  const std::string& doc, const SourceRange& range)
+        : name(n), kind(k), type(t), documentation(doc), sourceRange(range) {}
+};
+
+// ============================================================================
+// LSP Analysis Result
+// ============================================================================
+
+/**
+ * Complete analysis result for a source file
+ * Contains AST, symbols, and all errors/warnings
+ */
+struct LSPAnalysisResult {
+    std::unique_ptr<ProgramAST> ast;
+    std::vector<LSPSymbolInfo> symbols;
+    std::vector<ParseError> parseErrors;
+    std::vector<SemanticError> semanticErrors;
+
+    // Check if analysis was successful (no parse errors)
+    bool hasParseErrors() const { return !parseErrors.empty(); }
+
+    // Check if there are any semantic errors
+    bool hasSemanticErrors() const { return !semanticErrors.empty(); }
+
+    // Check if there are any errors at all
+    bool hasErrors() const { return hasParseErrors() || hasSemanticErrors(); }
+};
+
+// ============================================================================
+// Standard Library Symbols
+// ============================================================================
+
+/**
+ * Aggregated symbols from the standard library
+ */
+struct StdlibSymbols {
+    std::vector<LSPSymbolInfo> functions;
+    std::vector<LSPSymbolInfo> structs;
+    std::vector<LSPSymbolInfo> enums;
+    std::vector<LSPSymbolInfo> interfaces;
+
+    // Get total symbol count
+    size_t totalCount() const {
+        return functions.size() + structs.size() + enums.size() + interfaces.size();
+    }
+
+    // Check if stdlib is empty (not loaded or no symbols found)
+    bool empty() const { return totalCount() == 0; }
+};
+
+// ============================================================================
+// Compiler API Functions
+// ============================================================================
+
+/**
+ * Analyze source code for LSP features
+ *
+ * Parses the source code, runs semantic analysis (collecting errors rather than
+ * failing), and extracts all symbols from the AST.
+ *
+ * @param source The source code to analyze
+ * @param filename The filename (used for error messages and namespace derivation)
+ * @return LSPAnalysisResult containing AST, symbols, and errors
+ */
+LSPAnalysisResult analyzeForLSP(const std::string& source, const std::string& filename);
+
+/**
+ * Load symbols from the standard library
+ *
+ * Scans the stdlib directory, parses each .maxon file, and extracts
+ * public (exported) symbols with their documentation.
+ *
+ * @param stdlibPath Path to the stdlib directory
+ * @return StdlibSymbols containing all exported symbols
+ */
+StdlibSymbols loadStdlib(const std::string& stdlibPath);
+
+/**
+ * Get all keyword information for LSP
+ *
+ * Delegates to KeywordMatcher::getLSPKeywordInfo() to provide keyword
+ * completions and hover information.
+ *
+ * @return Vector of KeywordLSPInfo for all Maxon keywords
+ */
+std::vector<KeywordLSPInfo> getKeywordInfo();
+
+/**
+ * Get keywords matching a prefix for completion
+ *
+ * Delegates to KeywordMatcher::getKeywordsForCompletion() to provide
+ * filtered keyword completions.
+ *
+ * @param prefix The prefix to match against keyword names
+ * @return Vector of KeywordLSPInfo for matching keywords
+ */
+std::vector<KeywordLSPInfo> getKeywordsForCompletion(const std::string& prefix);
+
+// ============================================================================
+// Documentation Extraction
+// ============================================================================
+
+/**
+ * Extract documentation comment from source code
+ *
+ * Looks backwards from the declaration line for consecutive /// comment lines
+ * and concatenates them into a single documentation string.
+ *
+ * @param source The source code
+ * @param declarationLine The line number of the declaration (1-based)
+ * @return The extracted documentation string (empty if no doc comment found)
+ */
+std::string extractDocComment(const std::string& source, int declarationLine);
+
+// ============================================================================
+// Symbol Extraction Helpers
+// ============================================================================
+
+/**
+ * Extract symbols from a parsed AST
+ *
+ * Walks the AST and extracts all symbols (functions, structs, enums, interfaces)
+ * with their type information and source ranges.
+ *
+ * @param program The parsed program AST
+ * @param source The original source code (for doc comment extraction)
+ * @param exportedOnly If true, only extract exported symbols
+ * @return Vector of LSPSymbolInfo for all extracted symbols
+ */
+std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST* program,
+                                                  const std::string& source,
+                                                  bool exportedOnly = false);
+
+/**
+ * Build a function signature string for display
+ *
+ * Creates a human-readable signature like:
+ * "function name(param1 int, param2 string) returnType"
+ *
+ * @param func The function AST node
+ * @return Formatted function signature string
+ */
+std::string buildFunctionSignature(const FunctionAST* func);
+
+/**
+ * Build a struct signature string for display
+ *
+ * Creates a human-readable signature showing fields:
+ * "struct Name { field1 int, field2 string }"
+ *
+ * @param structDef The struct definition AST node
+ * @return Formatted struct signature string
+ */
+std::string buildStructSignature(const StructDefAST* structDef);
+
+/**
+ * Build an enum signature string for display
+ *
+ * Creates a human-readable signature showing cases:
+ * "enum Name { case1, case2(value int) }"
+ *
+ * @param enumDef The enum definition AST node
+ * @return Formatted enum signature string
+ */
+std::string buildEnumSignature(const EnumDefAST* enumDef);
+
+/**
+ * Build an interface signature string for display
+ *
+ * Creates a human-readable signature showing methods:
+ * "interface Name { method1(param int) returnType }"
+ *
+ * @param interfaceDef The interface definition AST node
+ * @return Formatted interface signature string
+ */
+std::string buildInterfaceSignature(const InterfaceDefAST* interfaceDef);
+
+#endif // COMPILER_API_H

@@ -157,6 +157,27 @@ struct EnumInfo {
 	}
 };
 
+// Cached semantic analysis result for a single function
+// Used for incremental re-analysis when only part of a document changes
+struct FunctionSemanticResult {
+	std::vector<VariableInfo> localVariables;  // Variables declared in this function
+	std::vector<SemanticError> errors;         // Errors found in this function
+	std::vector<SemanticError> warnings;       // Warnings found in this function
+	bool isValid;                              // Whether the function passed semantic checks
+
+	// Source range of the function for overlap detection
+	SourceRange sourceRange;
+
+	// Dependencies: types and functions this function references
+	std::set<std::string> referencedTypes;     // Struct/enum types used
+	std::set<std::string> referencedFunctions; // Functions called
+
+	// Signature hash for detecting when callers need invalidation
+	std::string signatureHash;
+
+	FunctionSemanticResult() : isValid(false) {}
+};
+
 class SemanticAnalyzer {
   public:
 	SemanticAnalyzer();
@@ -217,6 +238,34 @@ class SemanticAnalyzer {
 	// Get persistent symbol table (all variables ever declared, for LSP)
 	const std::map<std::string, VariableInfo> &getAllDeclaredVariables() const { return allDeclaredVariables; }
 
+	// === Incremental Analysis API ===
+
+	// Mark a specific function as needing re-analysis
+	void markFunctionDirty(const std::string &functionName);
+
+	// Mark all functions that overlap with the given edit range as dirty
+	void markFunctionsInRange(const SourceRange &editRange);
+
+	// Perform incremental analysis, only re-analyzing dirty functions
+	// Uses cached results for clean functions
+	// Returns combined errors from all functions
+	std::vector<SemanticError> analyzeIncremental(ProgramAST *program, const std::set<std::string> &dirtyFunctions);
+
+	// Clear all cached results (call when document is fully re-parsed)
+	void clearCache();
+
+	// Get the current function cache (for inspection/debugging)
+	const std::map<std::string, FunctionSemanticResult> &getFunctionCache() const { return functionCache_; }
+
+	// Check if a function's signature has changed (for caller invalidation)
+	bool hasSignatureChanged(const std::string &functionName, const FunctionInfo &newInfo) const;
+
+	// Invalidate dependents when a type definition changes
+	void invalidateTypeUsers(const std::string &typeName);
+
+	// Invalidate dependents when a function signature changes
+	void invalidateFunctionCallers(const std::string &functionName);
+
   private:
 	Logger *logger_ = nullptr; // Optional logger for detailed tracing
 	const StructInfo *lookupStruct(const std::string &name) const;
@@ -239,6 +288,24 @@ class SemanticAnalyzer {
 
 	// Persistent symbol table for LSP - stores all variables ever declared
 	std::map<std::string, VariableInfo> allDeclaredVariables;
+
+	// === Incremental Analysis Cache ===
+	// Cache of semantic analysis results per function
+	std::map<std::string, FunctionSemanticResult> functionCache_;
+
+	// Set of functions that need re-analysis
+	std::set<std::string> dirtyFunctions_;
+
+	// Map from type name to functions that reference it (for invalidation)
+	std::map<std::string, std::set<std::string>> typeToFunctionDeps_;
+
+	// Map from function name to functions that call it (for caller invalidation)
+	std::map<std::string, std::set<std::string>> functionToCallerDeps_;
+
+	// Track dependencies during function analysis for building dependency maps
+	std::set<std::string> currentFunctionTypeDeps_;
+	std::set<std::string> currentFunctionCallDeps_;
+	std::string currentFunctionName_;
 
 	// Logging helpers
 	void logTrace(const std::string &msg);
@@ -280,6 +347,14 @@ class SemanticAnalyzer {
 	void checkUnusedVariables();
 	void checkInterfaceConformance(const std::string &structName, const std::vector<std::string> &conformsTo, int line, int column);
 	void registerMapMethods(const std::string &mapType, const std::string &keyType, const std::string &valueType);
+
+	// Incremental analysis helpers
+	std::string computeSignatureHash(const FunctionInfo &funcInfo) const;
+	void recordTypeDependency(const std::string &typeName);
+	void recordCallDependency(const std::string &functionName);
+	void updateDependencyMaps(const std::string &functionName);
+	void analyzeFunctionForCache(FunctionAST *func, FunctionSemanticResult &result);
+	std::string getFunctionKey(FunctionAST *func) const;
 };
 
 #endif // SEMANTIC_ANALYZER_H

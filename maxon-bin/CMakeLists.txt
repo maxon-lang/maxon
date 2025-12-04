@@ -58,6 +58,8 @@ set(SOURCES
     parser/parser_expr.cpp
     parser/parser_stmt.cpp
     parser/parser_decl.cpp
+    # Incremental parsing support
+    incremental_parser.cpp
     # MIR-based code generator
     codegen_mir.cpp
     codegen_mir/codegen_mir_expr.cpp
@@ -108,8 +110,11 @@ set(SOURCES
     semantic_analyzer.cpp
     semantic_analyzer/semantic_analyzer_expr.cpp
     semantic_analyzer/semantic_analyzer_stmt.cpp
+    semantic_analyzer/semantic_analyzer_cache.cpp
     intrinsics.cpp
     error_formatter.cpp
+    # Compiler API for LSP
+    compiler_api.cpp
     # Type system
     types/type_conversion.cpp
     # Vendor libraries
