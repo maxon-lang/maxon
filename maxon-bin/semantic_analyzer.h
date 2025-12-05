@@ -122,9 +122,9 @@ struct EnumAssocValueInfo {
 struct EnumCaseInfo {
 	std::string name;
 	std::vector<EnumAssocValueInfo> associatedValues;
-	int tagValue;		// Runtime tag value (0, 1, 2, ...)
-	bool hasRawValue;	// True if this case has a raw value
-	int64_t rawIntValue;	   // Raw value if rawValueType is int
+	int tagValue;				// Runtime tag value (0, 1, 2, ...)
+	bool hasRawValue;			// True if this case has a raw value
+	int64_t rawIntValue;		// Raw value if rawValueType is int
 	std::string rawStringValue; // Raw value if rawValueType is string
 	int line;
 	int column;
@@ -136,9 +136,9 @@ struct EnumCaseInfo {
 // Enum information
 struct EnumInfo {
 	std::string name;
-	std::string rawValueType;				 // "int", "string", or "" for simple enums
+	std::string rawValueType; // "int", "string", or "" for simple enums
 	std::vector<EnumCaseInfo> cases;
-	bool hasAssociatedValues;				 // True if any case has associated values
+	bool hasAssociatedValues; // True if any case has associated values
 	int line;
 	int column;
 
@@ -160,16 +160,16 @@ struct EnumInfo {
 // Cached semantic analysis result for a single function
 // Used for incremental re-analysis when only part of a document changes
 struct FunctionSemanticResult {
-	std::vector<VariableInfo> localVariables;  // Variables declared in this function
-	std::vector<SemanticError> errors;         // Errors found in this function
-	std::vector<SemanticError> warnings;       // Warnings found in this function
-	bool isValid;                              // Whether the function passed semantic checks
+	std::vector<VariableInfo> localVariables; // Variables declared in this function
+	std::vector<SemanticError> errors;		  // Errors found in this function
+	std::vector<SemanticError> warnings;	  // Warnings found in this function
+	bool isValid;							  // Whether the function passed semantic checks
 
 	// Source range of the function for overlap detection
 	SourceRange sourceRange;
 
 	// Dependencies: types and functions this function references
-	std::set<std::string> referencedTypes;     // Struct/enum types used
+	std::set<std::string> referencedTypes;	   // Struct/enum types used
 	std::set<std::string> referencedFunctions; // Functions called
 
 	// Signature hash for detecting when callers need invalidation
@@ -211,6 +211,10 @@ class SemanticAnalyzer {
 	// Register all built-in functions (string methods, runtime functions, etc.)
 	// Call this before analyze() to make built-ins available
 	void registerBuiltinFunctions();
+
+	// Set source context for doc comment checking (call before analyze)
+	// Required for checking that exported stdlib functions have doc comments
+	void setSourceContext(const std::string &source, const std::string &filePath);
 
 	// Get errors from last analysis
 	const std::vector<SemanticError> &getErrors() const { return errors; }
@@ -277,7 +281,9 @@ class SemanticAnalyzer {
 	void invalidateFunctionCallers(const std::string &functionName);
 
   private:
-	Logger *logger_ = nullptr; // Optional logger for detailed tracing
+	Logger *logger_ = nullptr;	  // Optional logger for detailed tracing
+	std::string sourceContent_;	  // Source code for doc comment extraction
+	std::string currentFilePath_; // Current file path for stdlib detection
 	const StructInfo *lookupStruct(const std::string &name) const;
 	const EnumInfo *lookupEnum(const std::string &name) const;
 	std::vector<SemanticError> errors;

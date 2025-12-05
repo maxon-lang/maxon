@@ -30,6 +30,11 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - remove redundant backend tests (test fragments are faster)
 - DeadCodeEliminationPass::isPureFunction has hardcoded list of pure functions. Can analyzer determine if its pure?
 - Extra Inhabitants to optimize memory layout
+- restrict calling compiler intrinsics/builtins to stdlib
+- find a better way to get the list of pure functions than isPureFunction
+- toLower/toUpper need to be unicode aware, maybe other string functions too
+- add "implement interface" code action
+- code actions should be directly linked to the errors that made them needed
 
 ## Ideas
 - reorganize structs to improve cache locality

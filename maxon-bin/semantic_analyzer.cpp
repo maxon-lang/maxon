@@ -1,4 +1,5 @@
 #include "semantic_analyzer.h"
+#include "compiler_api.h"
 #include "lexer.h"
 #include "types/type_conversion.h"
 #include <algorithm>
@@ -163,6 +164,11 @@ void SemanticAnalyzer::registerBuiltinFunctions() {
 	// since char is a stdlib struct type (grapheme cluster), not a primitive
 }
 
+void SemanticAnalyzer::setSourceContext(const std::string &source, const std::string &filePath) {
+	sourceContent_ = source;
+	currentFilePath_ = filePath;
+}
+
 std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	errors.clear();
 	// Note: Don't clear functions or structs here - we want to keep registered external ones
@@ -254,7 +260,8 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 					if (enumDef->rawValueType.empty()) {
 						addError("Raw value specified for case '" + caseDef.name +
 									 "' but enum '" + enumDef->name + "' has no raw value type\n"
-									 "  Declare the enum with a raw value type: enum " + enumDef->name + " int",
+																	  "  Declare the enum with a raw value type: enum " +
+									 enumDef->name + " int",
 								 caseDef.line, caseDef.column);
 					} else {
 						// Analyze raw value expression
@@ -562,6 +569,18 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 	if (func->isExtern) {
 		logTrace("Skipping extern function: " + func->name);
 		return;
+	}
+
+	// Check for missing doc comments on exported functions in stdlib files
+	// Skip internal functions (starting with _) as they are implementation details
+	if (func->isExported && !sourceContent_.empty() &&
+		currentFilePath_.find("stdlib") != std::string::npos &&
+		!func->name.empty() && func->name[0] != '_') {
+		std::string docComment = extractDocComment(sourceContent_, func->line);
+		if (docComment.empty()) {
+			addError("Exported stdlib function '" + func->name + "' is missing a doc comment (///)",
+					 func->line, func->column);
+		}
 	}
 
 	logTrace("Analyzing function body: " + func->name);

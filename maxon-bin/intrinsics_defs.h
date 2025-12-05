@@ -55,6 +55,9 @@ inline std::vector<IntrinsicDef> getIntrinsicDefinitions() {
 		{"__cstring_len", "int", {{"cstring"}}, "intrinsic_cstring_len"},
 		{"__cstring_write_stdout", "int", {{"cstring"}}, "intrinsic_cstring_write_stdout"},
 
+		// Array intrinsics (__array_*)
+		{"__array_len", "int", {IntrinsicParamDef::arrayOf({})}, "intrinsic_array_len"},
+
 		// Substring intrinsics (__substring_*)
 		{"__substring_len", "int", {{"substring"}}, "intrinsic_substring_len"},
 		{"__substring_byte_at", "byte", {{"substring"}, {"int"}}, "intrinsic_substring_byte_at"},

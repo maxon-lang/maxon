@@ -2,7 +2,7 @@
 #include "../codegen_mir.h"
 #include "../intrinsics.h"
 
-IntrinsicCodegenRegistry& IntrinsicCodegenRegistry::instance() {
+IntrinsicCodegenRegistry &IntrinsicCodegenRegistry::instance() {
 	static IntrinsicCodegenRegistry registry;
 	return registry;
 }
@@ -34,11 +34,14 @@ IntrinsicCodegenRegistry::IntrinsicCodegenRegistry() {
 		{"intrinsic_substring_slice", &MIRCodeGenerator::intrinsic_substring_slice},
 		{"intrinsic_substring_parent_managed", &MIRCodeGenerator::intrinsic_substring_parent_managed},
 		{"intrinsic_substring_byte_offset", &MIRCodeGenerator::intrinsic_substring_byte_offset},
+
+		// Array intrinsics
+		{"intrinsic_array_len", &MIRCodeGenerator::intrinsic_array_len},
 	};
 
 	// Populate methods_ by looking up codegen method names from IntrinsicRegistry
-	for (const auto& [intrinsicName, info] : IntrinsicRegistry::instance().getAll()) {
-		const char* methodName = IntrinsicRegistry::instance().getCodegenMethodName(intrinsicName);
+	for (const auto &[intrinsicName, info] : IntrinsicRegistry::instance().getAll()) {
+		const char *methodName = IntrinsicRegistry::instance().getCodegenMethodName(intrinsicName);
 		if (methodName) {
 			auto it = methodsByName.find(methodName);
 			if (it != methodsByName.end()) {
@@ -48,7 +51,7 @@ IntrinsicCodegenRegistry::IntrinsicCodegenRegistry() {
 	}
 }
 
-IntrinsicCodegenMethod IntrinsicCodegenRegistry::getMethod(const std::string& name) const {
+IntrinsicCodegenMethod IntrinsicCodegenRegistry::getMethod(const std::string &name) const {
 	auto it = methods_.find(name);
 	if (it != methods_.end()) {
 		return it->second;
@@ -56,6 +59,6 @@ IntrinsicCodegenMethod IntrinsicCodegenRegistry::getMethod(const std::string& na
 	return nullptr;
 }
 
-bool IntrinsicCodegenRegistry::hasMethod(const std::string& name) const {
+bool IntrinsicCodegenRegistry::hasMethod(const std::string &name) const {
 	return methods_.find(name) != methods_.end();
 }

@@ -591,6 +591,115 @@ end 'main'
 	}
 }
 
+TEST_CASE("LSP completion provides string type members", "[lsp][completion][stdlib]") {
+	LSPTestFixture fixture;
+	// Initialize with real project root so stdlib is loaded
+	fixture.initialize("file:///C:/Users/Eric/Dev/maxon");
+
+	std::string code = R"(function main() int
+	let msg = "hello"
+	msg.
+	return 0
+end 'main')";
+	fixture.openDocument("file:///C:/Users/Eric/Dev/maxon/temp/test.maxon", code);
+
+	// Request completion after 'msg.' at line 2, character 5
+	json completionParams = {
+		{"textDocument", {{"uri", "file:///C:/Users/Eric/Dev/maxon/temp/test.maxon"}}},
+		{"position", {{"line", 2}, {"character", 5}}}};
+	fixture.transport()->queueRequest(3, "textDocument/completion", completionParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(3);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+
+	auto &result = response->result.value();
+	json items;
+	if (result.is_array()) {
+		items = result;
+	} else if (result.is_object() && result.contains("items")) {
+		items = result["items"];
+	}
+
+	REQUIRE(items.is_array());
+
+	// Helper to check if a completion item exists
+	auto hasItem = [&items](const std::string &label) {
+		for (const auto &item : items) {
+			if (item.contains("label") && item["label"] == label) {
+				return true;
+			}
+		}
+		return false;
+	};
+
+	// String should have 'count' method
+	REQUIRE(hasItem("count"));
+
+	// String should have 'isEmpty' method
+	REQUIRE(hasItem("isEmpty"));
+
+	// String should have common methods
+	REQUIRE(hasItem("toUpper"));
+	REQUIRE(hasItem("toLower"));
+	REQUIRE(hasItem("contains"));
+	REQUIRE(hasItem("startsWith"));
+	REQUIRE(hasItem("endsWith"));
+}
+
+TEST_CASE("LSP completion provides array type members", "[lsp][completion]") {
+	LSPTestFixture fixture;
+	fixture.initialize();
+
+	std::string code = R"(function main() int
+	var arr = [5]int
+	arr.
+	return 0
+end 'main')";
+	fixture.openDocument("file:///test.maxon", code);
+
+	// Request completion after 'arr.' at line 2, character 5
+	json completionParams = {
+		{"textDocument", {{"uri", "file:///test.maxon"}}},
+		{"position", {{"line", 2}, {"character", 5}}}};
+	fixture.transport()->queueRequest(3, "textDocument/completion", completionParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(3);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+
+	auto &result = response->result.value();
+	json items;
+	if (result.is_array()) {
+		items = result;
+	} else if (result.is_object() && result.contains("items")) {
+		items = result["items"];
+	}
+
+	REQUIRE(items.is_array());
+
+	// Helper to check if a completion item exists
+	auto hasItem = [&items](const std::string &label) {
+		for (const auto &item : items) {
+			if (item.contains("label") && item["label"] == label) {
+				return true;
+			}
+		}
+		return false;
+	};
+
+	// Array should have 'length' property
+	REQUIRE(hasItem("length"));
+}
+
 // =============================================================================
 // Go to Definition Tests
 // =============================================================================
@@ -1125,4 +1234,56 @@ end 'main')";
 		REQUIRE(ranges.is_array());
 		REQUIRE(ranges.size() == 2);  // One for start label, one for end label
 	}
+}
+
+TEST_CASE("LSP linkedEditingRange returns ranges for function names", "[lsp][linkedEditing]") {
+	LSPTestFixture fixture;
+	fixture.initialize();
+
+	std::string code = R"(function myFunction() int
+	return 42
+end 'myFunction')";
+	fixture.openDocument("file:///test.maxon", code);
+
+	// Request linked editing on the function name "myFunction" at line 0
+	// "function myFunction" - myFunction starts at character 9
+	json linkedEditParams = {
+		{"textDocument", {{"uri", "file:///test.maxon"}}},
+		{"position", {{"line", 0}, {"character", 12}}}};  // position on 'myFunction'
+	fixture.transport()->queueRequest(11, "textDocument/linkedEditingRange", linkedEditParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(11);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+	REQUIRE(!response->result.value().is_null());
+
+	auto &result = response->result.value();
+	auto &ranges = result["ranges"];
+	REQUIRE(ranges.is_array());
+	REQUIRE(ranges.size() == 2);  // Function name and end label
+
+	// Check ranges point to the right locations
+	// Range 0: function name at line 0, characters 9-19 (myFunction)
+	// Range 1: end label at line 2, characters 5-15 (myFunction inside quotes)
+	bool hasDeclaration = false;
+	bool hasEndLabel = false;
+	for (const auto &range : ranges) {
+		int startLine = range["start"]["line"].get<int>();
+		int startChar = range["start"]["character"].get<int>();
+		int endLine = range["end"]["line"].get<int>();
+		int endChar = range["end"]["character"].get<int>();
+
+		if (startLine == 0 && startChar == 9 && endLine == 0 && endChar == 19) {
+			hasDeclaration = true;
+		}
+		if (startLine == 2 && startChar == 5 && endLine == 2 && endChar == 15) {
+			hasEndLabel = true;
+		}
+	}
+	REQUIRE(hasDeclaration);
+	REQUIRE(hasEndLabel);
 }

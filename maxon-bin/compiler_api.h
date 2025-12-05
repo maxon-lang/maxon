@@ -36,6 +36,20 @@ struct LSPParameterInfo {
 };
 
 /**
+ * Field information for struct symbols
+ */
+struct LSPFieldInfo {
+	std::string name;
+	std::string type;
+	bool isImmutable; // true for 'let', false for 'var'
+
+	LSPFieldInfo() = default;
+
+	LSPFieldInfo(const std::string &n, const std::string &t, bool immutable = false)
+		: name(n), type(t), isImmutable(immutable) {}
+};
+
+/**
  * Symbol information for LSP features (hover, completion, go-to-definition)
  */
 struct LSPSymbolInfo {
@@ -48,6 +62,7 @@ struct LSPSymbolInfo {
 	std::vector<LSPParameterInfo> parameters; // For functions/methods
 	std::string returnType;					  // For functions/methods
 	std::vector<std::string> conformsTo;	  // For structs: interfaces this struct conforms to
+	std::vector<LSPFieldInfo> fields;		  // For structs: field definitions
 
 	LSPSymbolInfo() = default;
 

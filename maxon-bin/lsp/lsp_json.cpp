@@ -1164,6 +1164,14 @@ json toJson(const ServerCapabilities &caps) {
 		}
 	}
 
+	// Linked editing range
+	if (caps.linkedEditingRangeProvider.has_value()) {
+		const auto &linked = caps.linkedEditingRangeProvider.value();
+		if (std::holds_alternative<bool>(linked)) {
+			j["linkedEditingRangeProvider"] = std::get<bool>(linked);
+		}
+	}
+
 	return j;
 }
 

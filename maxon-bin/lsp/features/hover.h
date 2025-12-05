@@ -192,14 +192,6 @@ private:
                                  const std::string& type);
 
     /**
-     * Format built-in type hover content.
-     *
-     * @param typeName Name of the built-in type
-     * @return Markdown formatted string
-     */
-    std::string formatBuiltinTypeHover(const std::string& typeName);
-
-    /**
      * Build a Hover object with markdown content.
      *
      * @param markdown The markdown content

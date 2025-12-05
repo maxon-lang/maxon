@@ -316,11 +316,20 @@ void LSPServer::analyzeDocument(const std::string &uri) {
 	// Convert URI to file path for the analyzer
 	std::string filePath = uriToPath(uri);
 
+	// For .test files, truncate content at "---" separator (marks end of Maxon code)
+	std::string content = doc->content;
+	if (filePath.size() >= 5 && filePath.substr(filePath.size() - 5) == ".test") {
+		size_t sepPos = content.find("\n---");
+		if (sepPos != std::string::npos) {
+			content = content.substr(0, sepPos);
+		}
+	}
+
 	// Measure analysis time
 	auto startTime = std::chrono::steady_clock::now();
 
 	// Run analysis with stdlib support
-	LSPAnalysisResult result = analyzeForLSP(doc->content, filePath, stdlib_);
+	LSPAnalysisResult result = analyzeForLSP(content, filePath, stdlib_);
 
 	auto endTime = std::chrono::steady_clock::now();
 	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);

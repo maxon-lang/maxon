@@ -51,6 +51,19 @@ private:
     );
 
     /**
+     * Check if position is on a block keyword name (e.g., function name, struct name)
+     * and return the name and its range.
+     *
+     * @param document The document
+     * @param position The cursor position
+     * @return Pair of name string and range, or nullopt if not on a block keyword name
+     */
+    std::optional<std::pair<std::string, Range>> getBlockNameAtPosition(
+        const Document& document,
+        const Position& position
+    );
+
+    /**
      * Find matching block label pairs in the document.
      * Returns ranges for both occurrences of a label if found.
      *

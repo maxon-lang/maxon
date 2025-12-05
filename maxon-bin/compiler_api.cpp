@@ -282,9 +282,15 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 			doc,
 			structDef->getSourceRange());
 		structSym.conformsTo = structDef->conformsTo;
+
+		// Populate struct fields for semantic analysis registration
+		for (const auto &field : structDef->fields) {
+			structSym.fields.emplace_back(field.name, field.type, field.isImmutable);
+		}
+
 		symbols.push_back(std::move(structSym));
 
-		// Extract fields
+		// Also extract fields as separate symbols for document symbols view
 		for (const auto &field : structDef->fields) {
 			std::string fieldSig = (field.isImmutable ? "let " : "var ") +
 								   field.name + " " + field.type;
@@ -301,8 +307,11 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 			std::string methodSig = buildFunctionSignature(method.get());
 			std::string methodDoc = extractDocComment(source, method->line);
 
+			// Qualify method name with struct name for completion lookup
+			std::string qualifiedName = structDef->name + "." + method->name;
+
 			LSPSymbolInfo methodSym(
-				method->name,
+				qualifiedName,
 				"method",
 				methodSig,
 				methodDoc,
@@ -366,8 +375,11 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 			std::string methodSig = buildFunctionSignature(method.get());
 			std::string methodDoc = extractDocComment(source, method->line);
 
+			// Qualify method name with enum name for completion lookup
+			std::string qualifiedName = enumDef->name + "." + method->name;
+
 			LSPSymbolInfo methodSym(
-				method->name,
+				qualifiedName,
 				"method",
 				methodSig,
 				methodDoc,
@@ -387,7 +399,9 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 		}
 	}
 
-	// Extract interfaces and their methods
+	// Extract interfaces (but NOT their method signatures as standalone functions)
+	// Interface methods are abstract signatures, not callable functions.
+	// They get registered in the interfaces map, not the functions map.
 	for (const auto &interfaceDef : program->interfaces) {
 		if (exportedOnly && !interfaceDef->isExported)
 			continue;
@@ -401,42 +415,6 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 			signature,
 			doc,
 			interfaceDef->getSourceRange());
-
-		// Extract interface method signatures
-		for (const auto &method : interfaceDef->methods) {
-			std::ostringstream methodSig;
-			methodSig << "function " << method.name << "(";
-			bool firstParam = true;
-			for (const auto &param : method.parameters) {
-				if (!firstParam)
-					methodSig << ", ";
-				firstParam = false;
-				methodSig << param.name << " " << param.type;
-			}
-			methodSig << ")";
-			if (!method.returnType.empty() && method.returnType != "void") {
-				methodSig << " " << method.returnType;
-			}
-
-			LSPSymbolInfo methodSym(
-				method.name,
-				"method",
-				methodSig.str(),
-				"",
-				SourceRange(method.line, method.column, method.line, method.column));
-
-			// Populate parameters (skip "self" for interface methods)
-			for (const auto &param : method.parameters) {
-				if (param.name == "self")
-					continue;
-				methodSym.parameters.emplace_back(param.name, param.type);
-			}
-
-			// Populate return type
-			methodSym.returnType = method.returnType;
-
-			symbols.push_back(std::move(methodSym));
-		}
 	}
 
 	return symbols;
@@ -522,6 +500,15 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 								const StdlibSymbols &stdlib) {
 	LSPAnalysisResult result;
 
+	// Get the absolute path of the current file for comparison
+	// This is used to skip stdlib symbols from the current file to avoid duplicate registration
+	std::string currentFilePath;
+	try {
+		currentFilePath = std::filesystem::absolute(filename).string();
+	} catch (...) {
+		currentFilePath = filename;
+	}
+
 	// Try to parse the source
 	try {
 		Lexer lexer(source);
@@ -579,7 +566,11 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 		analyzer.registerBuiltinFunctions();
 
 		// Register stdlib functions with full signatures
+		// Skip symbols from the current file to avoid duplicate registration
 		for (const auto &func : stdlib.functions) {
+			if (func.filePath == currentFilePath) {
+				continue; // Skip symbols from current file
+			}
 			std::vector<FunctionParameter> params;
 			for (const auto &p : func.parameters) {
 				params.push_back({p.name, p.type});
@@ -587,20 +578,37 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 			analyzer.registerExternalFunction(func.name, func.returnType, params);
 		}
 
-		// Register stdlib structs with their interface conformance
+		// Register stdlib structs with their fields and interface conformance
 		for (const auto &structSym : stdlib.structs) {
-			analyzer.registerExternalStruct(structSym.name, {}, structSym.conformsTo);
+			if (structSym.filePath == currentFilePath) {
+				continue; // Skip symbols from current file
+			}
+			// Convert LSPFieldInfo to StructFieldInfo
+			std::vector<StructFieldInfo> fields;
+			for (const auto &f : structSym.fields) {
+				fields.emplace_back(f.name, f.type, f.isImmutable);
+			}
+			analyzer.registerExternalStruct(structSym.name, fields, structSym.conformsTo);
 		}
 
 		// Register stdlib interfaces
 		for (const auto &ifaceSym : stdlib.interfaces) {
+			if (ifaceSym.filePath == currentFilePath) {
+				continue; // Skip symbols from current file
+			}
 			analyzer.registerExternalInterface(ifaceSym.name);
 		}
 
 		// Register stdlib enums
 		for (const auto &enumSym : stdlib.enums) {
+			if (enumSym.filePath == currentFilePath) {
+				continue; // Skip symbols from current file
+			}
 			analyzer.registerExternalEnum(enumSym.name);
 		}
+
+		// Set source context for doc comment checking
+		analyzer.setSourceContext(source, filename);
 
 		result.semanticErrors = analyzer.analyze(result.ast.get());
 

@@ -71,14 +71,14 @@ class MIRCodeGenerator {
 	// Enum type definitions
 	struct EnumCodegenInfo {
 		std::string name;
-		std::string rawValueType;			  // "int", "string", or "" for simple enums
-		bool hasAssociatedValues;			  // True if any case has associated values
-		std::vector<std::string> caseNames;	  // Ordered list of case names
-		std::map<std::string, int> caseTags;  // Case name -> tag value
+		std::string rawValueType;																 // "int", "string", or "" for simple enums
+		bool hasAssociatedValues;																 // True if any case has associated values
+		std::vector<std::string> caseNames;														 // Ordered list of case names
+		std::map<std::string, int> caseTags;													 // Case name -> tag value
 		std::map<std::string, std::vector<std::pair<std::string, std::string>>> caseAssocValues; // Case -> [(name, type)]
-		std::map<std::string, int64_t> caseRawIntValues;	// Case -> raw int value
-		std::map<std::string, std::string> caseRawStrValues; // Case -> raw string value
-		mir::MIRType *mirType = nullptr;	  // The MIR type for this enum
+		std::map<std::string, int64_t> caseRawIntValues;										 // Case -> raw int value
+		std::map<std::string, std::string> caseRawStrValues;									 // Case -> raw string value
+		mir::MIRType *mirType = nullptr;														 // The MIR type for this enum
 	};
 	std::map<std::string, EnumCodegenInfo> enumTypes;
 
@@ -250,6 +250,8 @@ class MIRCodeGenerator {
 	mir::MIRValue *intrinsic_substring_len(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_byte_at(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_iter_pos(CallExprAST *callExpr);
+	// Array intrinsics
+	mir::MIRValue *intrinsic_array_len(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_with_iter_pos(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_to_string(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_slice(CallExprAST *callExpr);

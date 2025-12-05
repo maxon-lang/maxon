@@ -20,14 +20,6 @@ int main(int argc, char *argv[]) {
 	auto mathIntrinsicKeywords = Lexer::getKeywordsByCategory(KeywordCategory::MathIntrinsic);
 	auto typeKeywords = Lexer::getKeywordsByCategory(KeywordCategory::Type);
 
-	// Remove unimplemented keywords
-	mathIntrinsicKeywords.erase(
-		std::remove_if(mathIntrinsicKeywords.begin(), mathIntrinsicKeywords.end(),
-					   [](const std::string &kw) {
-						   return kw == "pow" || kw == "tan" || kw == "log" || kw == "exp";
-					   }),
-		mathIntrinsicKeywords.end());
-
 	// Combine control flow and declaration keywords for block identifiers
 	std::vector<std::string> blockKeywords;
 	blockKeywords.insert(blockKeywords.end(), controlFlowKeywords.begin(), controlFlowKeywords.end());

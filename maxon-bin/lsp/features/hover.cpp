@@ -226,10 +226,11 @@ std::optional<Hover> HoverProvider::lookupFunction(const std::string& name, cons
 }
 
 std::optional<Hover> HoverProvider::lookupType(const std::string& name, const AnalysisCache* cache, const StdlibSymbols& stdlib) {
-    // Check built-in types first
-    if (name == "int" || name == "float" || name == "bool" ||
-        name == "byte" || name == "char" || name == "string") {
-        std::string markdown = formatBuiltinTypeHover(name);
+    // Check built-in types from keyword matcher
+    KeywordEntry entry;
+    if (KeywordMatcher::match(name.data(), name.size(), entry) &&
+        entry.category == KeywordCategory::Type) {
+        std::string markdown = "```maxon\n" + name + "\n```\n\n" + entry.description + "\n";
         return buildHover(markdown, currentTokenRange_);
     }
 
@@ -533,29 +534,6 @@ std::string HoverProvider::formatFieldHover(const std::string& structName, const
     std::string md = "```maxon\n";
     md += "(field) " + structName + "." + fieldName + " " + type;
     md += "\n```\n";
-    return md;
-}
-
-std::string HoverProvider::formatBuiltinTypeHover(const std::string& typeName) {
-    std::string md = "```maxon\n";
-    md += typeName;
-    md += "\n```\n\n";
-
-    // Add documentation for built-in types
-    if (typeName == "int") {
-        md += "64-bit signed integer\n";
-    } else if (typeName == "float") {
-        md += "64-bit floating-point number\n";
-    } else if (typeName == "bool") {
-        md += "Boolean value (true or false)\n";
-    } else if (typeName == "byte") {
-        md += "8-bit unsigned integer\n";
-    } else if (typeName == "char") {
-        md += "Unicode character\n";
-    } else if (typeName == "string") {
-        md += "UTF-8 string\n";
-    }
-
     return md;
 }
 
