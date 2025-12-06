@@ -4,8 +4,8 @@
  * Tests the X86Encoder class for correct machine code generation.
  */
 
-#include "../../lsp-server/tests/catch_amalgamated.hpp"
 #include "../backend/x86_encoding.h"
+#include <catch_amalgamated.hpp>
 
 using namespace backend;
 

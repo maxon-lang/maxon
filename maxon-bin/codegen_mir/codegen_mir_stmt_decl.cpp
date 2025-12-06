@@ -768,7 +768,7 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 				builder->createStore(initValues[i], elementPtr);
 			}
 
-			variableTypes[letDecl->name] = "[" + std::to_string(constantArraySize) + "]" + elementTypeName;
+			variableTypes[letDecl->name] = maxon::TypeConversion::makeStaticArrayType(constantArraySize, elementTypeName);
 		}
 
 		return;

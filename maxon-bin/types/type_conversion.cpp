@@ -84,11 +84,8 @@ TypeKind TypeConversion::getTypeKind(const std::string &typeStr) {
 		return TypeKind::Optional;
 	}
 
-	// Array types: _ManagedArray<T>, _StaticArray<N, T>, or legacy [N]T/[]T
+	// Array types: _ManagedArray<T>, _StaticArray<N, T>
 	if (typeStr.rfind("_ManagedArray<", 0) == 0 || typeStr.rfind("_StaticArray<", 0) == 0) {
-		return TypeKind::Array;
-	}
-	if (!typeStr.empty() && typeStr[0] == '[') {
 		return TypeKind::Array;
 	}
 
@@ -344,24 +341,13 @@ std::string TypeConversion::makeOptionalType(const std::string &type) {
 }
 
 bool TypeConversion::isArrayType(const std::string &type) {
-	// Check for new internal format: _ManagedArray<T> or _StaticArray<N, T>
-	if (type.rfind("_ManagedArray<", 0) == 0 || type.rfind("_StaticArray<", 0) == 0) {
-		return true;
-	}
-	// Legacy format: [N]T or []T
-	return !type.empty() && type[0] == '[';
+	// Internal format: _ManagedArray<T> or _StaticArray<N, T>
+	return type.rfind("_ManagedArray<", 0) == 0 || type.rfind("_StaticArray<", 0) == 0;
 }
 
 bool TypeConversion::isManagedArrayType(const std::string &type) {
-	// New format: _ManagedArray<T>
-	if (type.rfind("_ManagedArray<", 0) == 0) {
-		return true;
-	}
-	// Legacy format: []T (unsized array)
-	if (type.size() >= 2 && type[0] == '[' && type[1] == ']') {
-		return true;
-	}
-	return false;
+	// Internal format: _ManagedArray<T>
+	return type.rfind("_ManagedArray<", 0) == 0;
 }
 
 bool TypeConversion::isManagedArrayOpaqueType(const std::string &type) {
@@ -370,20 +356,8 @@ bool TypeConversion::isManagedArrayOpaqueType(const std::string &type) {
 }
 
 bool TypeConversion::isStaticArrayType(const std::string &type) {
-	// New format: _StaticArray<N, T>
-	if (type.rfind("_StaticArray<", 0) == 0) {
-		return true;
-	}
-	// Legacy format: [N]T (sized array with a number)
-	if (type.size() >= 3 && type[0] == '[') {
-		size_t closeBracket = type.find(']');
-		if (closeBracket != std::string::npos && closeBracket > 1) {
-			std::string sizeStr = type.substr(1, closeBracket - 1);
-			// Check if it's a number (not empty, all digits)
-			return !sizeStr.empty() && std::all_of(sizeStr.begin(), sizeStr.end(), ::isdigit);
-		}
-	}
-	return false;
+	// Internal format: _StaticArray<N, T>
+	return type.rfind("_StaticArray<", 0) == 0;
 }
 
 std::string TypeConversion::getArrayElementType(const std::string &arrayType) {
@@ -391,7 +365,7 @@ std::string TypeConversion::getArrayElementType(const std::string &arrayType) {
 		return arrayType;
 	}
 
-	// New format: _ManagedArray<T>
+	// Internal format: _ManagedArray<T>
 	if (arrayType.rfind("_ManagedArray<", 0) == 0) {
 		// Extract T from _ManagedArray<T>
 		size_t start = 14; // length of "_ManagedArray<"
@@ -401,7 +375,7 @@ std::string TypeConversion::getArrayElementType(const std::string &arrayType) {
 		}
 	}
 
-	// New format: _StaticArray<N, T>
+	// Internal format: _StaticArray<N, T>
 	if (arrayType.rfind("_StaticArray<", 0) == 0) {
 		// Extract T from _StaticArray<N, T>
 		size_t commaPos = arrayType.find(", ");
@@ -411,34 +385,17 @@ std::string TypeConversion::getArrayElementType(const std::string &arrayType) {
 		}
 	}
 
-	// Legacy format: [N]T or []T
-	size_t closeBracket = arrayType.find(']');
-	if (closeBracket != std::string::npos && closeBracket + 1 < arrayType.size()) {
-		return arrayType.substr(closeBracket + 1);
-	}
-
 	return "int"; // Fallback
 }
 
 int TypeConversion::getStaticArraySize(const std::string &arrayType) {
-	// New format: _StaticArray<N, T>
+	// Internal format: _StaticArray<N, T>
 	if (arrayType.rfind("_StaticArray<", 0) == 0) {
 		size_t start = 13; // length of "_StaticArray<"
 		size_t commaPos = arrayType.find(", ");
 		if (commaPos != std::string::npos && commaPos > start) {
 			std::string sizeStr = arrayType.substr(start, commaPos - start);
 			return std::stoi(sizeStr);
-		}
-	}
-
-	// Legacy format: [N]T
-	if (arrayType.size() >= 3 && arrayType[0] == '[') {
-		size_t closeBracket = arrayType.find(']');
-		if (closeBracket != std::string::npos && closeBracket > 1) {
-			std::string sizeStr = arrayType.substr(1, closeBracket - 1);
-			if (!sizeStr.empty() && std::all_of(sizeStr.begin(), sizeStr.end(), ::isdigit)) {
-				return std::stoi(sizeStr);
-			}
 		}
 	}
 
@@ -458,7 +415,7 @@ std::string TypeConversion::arrayTypeToDisplayString(const std::string &arrayTyp
 		return arrayType;
 	}
 
-	// New format: _ManagedArray<T> -> array of T
+	// Internal format: _ManagedArray<T> -> array of T
 	if (arrayType.rfind("_ManagedArray<", 0) == 0) {
 		std::string elemType = getArrayElementType(arrayType);
 		// Recursively convert nested array types
@@ -466,31 +423,13 @@ std::string TypeConversion::arrayTypeToDisplayString(const std::string &arrayTyp
 		return "array of " + elemDisplay;
 	}
 
-	// New format: _StaticArray<N, T> -> array of N T
+	// Internal format: _StaticArray<N, T> -> array of N T
 	if (arrayType.rfind("_StaticArray<", 0) == 0) {
 		int size = getStaticArraySize(arrayType);
 		std::string elemType = getArrayElementType(arrayType);
 		// Recursively convert nested array types
 		std::string elemDisplay = arrayTypeToDisplayString(elemType);
 		return "array of " + std::to_string(size) + " " + elemDisplay;
-	}
-
-	// Legacy format: []T -> array of T
-	if (arrayType.size() >= 2 && arrayType[0] == '[' && arrayType[1] == ']') {
-		std::string elemType = arrayType.substr(2);
-		std::string elemDisplay = arrayTypeToDisplayString(elemType);
-		return "array of " + elemDisplay;
-	}
-
-	// Legacy format: [N]T -> array of N T
-	if (arrayType.size() >= 3 && arrayType[0] == '[') {
-		size_t closeBracket = arrayType.find(']');
-		if (closeBracket != std::string::npos && closeBracket > 1) {
-			std::string sizeStr = arrayType.substr(1, closeBracket - 1);
-			std::string elemType = arrayType.substr(closeBracket + 1);
-			std::string elemDisplay = arrayTypeToDisplayString(elemType);
-			return "array of " + sizeStr + " " + elemDisplay;
-		}
 	}
 
 	return arrayType;

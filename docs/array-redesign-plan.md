@@ -18,6 +18,7 @@ Replace raw array syntax `[]T` and `[N]T` with the unified `array of T` type bac
   - [x] Update interface method signature parsing
   - [x] Update struct `with` clause type parsing
   - [x] Update cast expression type parsing
+  - [x] Remove legacy `[]T` and `[N]T` type syntax parsing
 - [x] **Phase 3**: Type system changes (already using `_ManagedArray<T>` format)
 - [x] **Phase 4**: Semantic analyzer changes (working correctly)
 - [x] **Phase 5**: Code generation changes (working correctly)
@@ -65,7 +66,6 @@ Replace raw array syntax `[]T` and `[N]T` with the unified `array of T` type bac
 
 ### Type Inference
 - `var arr = [1, 2, 3]` infers `array of int`
-- `var arr array of int = [1, 2, 3]` explicit type annotation
 
 ---
 

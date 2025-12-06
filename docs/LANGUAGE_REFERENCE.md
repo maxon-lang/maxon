@@ -218,15 +218,23 @@ var sub3 = s[..5]            // "hello" (from start to index)
 
 ### Array Types
 
-**Fixed-Size Arrays**
+**Array Type Syntax**
 ```maxon
-var numbers = [10]int        // Array of 10 integers
-var values = [1, 2, 3]       // Value-initialized, size 3
+array of int              // array of integers
+array of float            // array of floats  
+array of array of int     // nested array (2D)
 ```
 
-**Unsized Arrays** (function parameters only)
+**Creating Arrays**
 ```maxon
-function process(data []int, size int) int
+var numbers = [10]int        // Sized array of 10 integers (zero-initialized)
+let values = [1, 2, 3]       // Immutable array from literal
+var items = [1, 2, 3]        // Mutable array from literal
+```
+
+**Function Parameters**
+```maxon
+function process(data array of int) int
     return data[0]
 end 'process'
 ```
@@ -766,10 +774,10 @@ end 'add'
 
 **Array Parameters**
 ```maxon
-function sum(numbers []int, count int) int
+function sum(numbers array of int) int
     var total = 0
-    for i in range(0, count) 'loop'
-        total = total + numbers[i]
+    for num in numbers 'loop'
+        total = total + num
     end 'loop'
     return total
 end 'sum'
@@ -1463,14 +1471,14 @@ continue
 
 // Arrays
 var arr = [10]int
-var vals = [1, 2, 3]
+let vals = [1, 2, 3]
 var elem = arr[0]
-var size = arr.length
+var size = arr.count()
 
 // Types
 int float bool character
-[N]type    // fixed-size array
-[]type     // unsized array (parameters)
+array of T             // array type
+array of array of T    // nested array type
 
 // Operators
 + - * / mod                  // arithmetic

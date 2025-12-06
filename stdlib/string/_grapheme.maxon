@@ -104,7 +104,7 @@ end '_count_graphemes_substring'
 // Returns: 0=Other, 1=CR, 2=LF, 3=Control, 4=Extend, 5=ZWJ,
 //          6=Regional_Indicator, 7=Prepend, 8=SpacingMark,
 //          9=L, 10=V, 11=T, 12=LV, 13=LVT
-export function grapheme_break_property(cp int) int
+function grapheme_break_property(cp int) int
 	// CR (return 1)
 	if cp == 13 'cr'
 		return 1
@@ -186,7 +186,7 @@ export function grapheme_break_property(cp int) int
 end 'grapheme_break_property'
 
 // Check if codepoint has Extended_Pictographic property (emoji base)
-export function is_extended_pictographic(cp int) bool
+function is_extended_pictographic(cp int) bool
 	// Basic emoji range U+1F600..U+1F64F
 	if cp >= 128512 and cp <= 128591 'emoji_faces'
 		return true
@@ -232,7 +232,7 @@ struct GraphemeState
 end 'GraphemeState'
 
 // Create initial grapheme state
-export function grapheme_state_init() GraphemeState
+function grapheme_state_init() GraphemeState
 	return GraphemeState{ri_count: 0, in_emoji_seq: false}
 end 'grapheme_state_init'
 
@@ -244,7 +244,7 @@ end 'grapheme_state_init'
 // state: State for tracking RI counts and emoji sequences
 //
 // Returns true if there should be a break BEFORE the current codepoint
-export function is_grapheme_break(prev_gbp int, curr_gbp int, prev_cp int, curr_cp int, state GraphemeState) bool
+function is_grapheme_break(prev_gbp int, curr_gbp int, prev_cp int, curr_cp int, state GraphemeState) bool
 	// Use prev_cp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)
 	var _unused = prev_cp
 	_unused = _unused
@@ -334,7 +334,7 @@ export function is_grapheme_break(prev_gbp int, curr_gbp int, prev_cp int, curr_
 end 'is_grapheme_break'
 
 // Update grapheme state after processing a codepoint
-export function grapheme_state_update(state GraphemeState, gbp int, cp int) GraphemeState
+function grapheme_state_update(state GraphemeState, gbp int, cp int) GraphemeState
 	var new_state = GraphemeState{ri_count: 0, in_emoji_seq: false}
 
 	// Track Regional Indicator sequences (gbp == 6)
@@ -357,8 +357,8 @@ export function grapheme_state_update(state GraphemeState, gbp int, cp int) Grap
 	return new_state
 end 'grapheme_state_update'
 
-// Find the next grapheme cluster boundary in UTF-8 data
-// Returns the byte offset of the next boundary, or len if at end
+/// Find the next grapheme cluster boundary in UTF-8 data
+/// Returns the byte offset of the next boundary, or len if at end
 export function next_grapheme_boundary(data array of byte, len int, offset int) int
 	if offset >= len 'at_end'
 		return len
@@ -396,7 +396,7 @@ end 'next_grapheme_boundary'
 
 // Find the previous grapheme cluster boundary in UTF-8 data
 // Returns the byte offset of the previous boundary, or 0 if at start
-export function prev_grapheme_boundary(data array of byte, len int, offset int) int
+function prev_grapheme_boundary(data array of byte, len int, offset int) int
 	// Clamp offset to valid range
 	var safe_offset = offset
 	if safe_offset > len 'clamp'
@@ -442,7 +442,7 @@ export function prev_grapheme_boundary(data array of byte, len int, offset int) 
 end 'prev_grapheme_boundary'
 
 // Count grapheme clusters in UTF-8 data
-export function grapheme_count(data array of byte, len int) int
+function grapheme_count(data array of byte, len int) int
 	if len == 0 'empty'
 		return 0
 	end 'empty'

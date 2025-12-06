@@ -91,12 +91,11 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	expectAdvance(TokenType::RPAREN, "Expected ')'");
 
 	// Parse return type (optional - defaults to void)
-	// Type can start with: type keyword, identifier (struct name), or '[' (legacy []T syntax)
+	// Type can start with: type keyword (including 'array') or identifier (struct name)
 	std::string returnType = "void";
 	auto retKd = currentKeywordData();
 	bool hasReturnType = (retKd && retKd->category == KeywordCategory::Type) ||
-						 check(TokenType::IDENTIFIER) ||
-						 check(TokenType::LBRACKET);
+						 check(TokenType::IDENTIFIER);
 	if (hasReturnType) {
 		returnType = parseTypeStringWithOptional("return type");
 	}
@@ -205,12 +204,11 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 	expectAdvance(TokenType::RPAREN, "Expected ')'");
 
 	// Parse return type (optional - defaults to void)
-	// Type can start with: type keyword, identifier (struct name), or '[' (legacy []T syntax)
+	// Type can start with: type keyword (including 'array') or identifier (struct name)
 	std::string returnType = "void";
 	auto retKd = currentKeywordData();
 	bool hasReturnType = (retKd && retKd->category == KeywordCategory::Type) ||
-						 check(TokenType::IDENTIFIER) ||
-						 check(TokenType::LBRACKET);
+						 check(TokenType::IDENTIFIER);
 	if (hasReturnType) {
 		returnType = parseTypeStringWithOptional("return type");
 	}
@@ -257,7 +255,10 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 	int line = structToken.line;
 	int column = structToken.column;
 
-	Token nameToken = expect(TokenType::IDENTIFIER, "Expected struct name after 'struct'");
+	// Allow 'array' keyword as struct name (stdlib collection type)
+	Token nameToken = checkKeyword("array")
+						  ? (advance(), Token(TokenType::IDENTIFIER, "array", currentLine(), currentColumn()))
+						  : expect(TokenType::IDENTIFIER, "Expected struct name after 'struct'");
 	std::string structName = nameToken.value;
 
 	// Parse associated type parameters: struct Name uses TypeParam1, TypeParam2

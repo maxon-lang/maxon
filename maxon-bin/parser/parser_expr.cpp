@@ -291,6 +291,12 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		return expr;
 	}
 
+	// Allow 'array' keyword as struct name in struct literals (stdlib collection type)
+	if (checkKeyword("array") && check(TokenType::LBRACE, 1)) {
+		advance(); // consume 'array'
+		return parseStructInit("array");
+	}
+
 	if (check(TokenType::IDENTIFIER)) {
 		std::string name = std::string(currentValue());
 		int line = currentLine();

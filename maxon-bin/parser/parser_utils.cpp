@@ -303,7 +303,6 @@ std::string Parser::parseQualifiedName(const std::string &context) {
 // - Primitive types: int, float, bool, byte
 // - Struct types: MyStruct, pkg.MyStruct
 // - Array types: array of T, array of N T, array of array of T
-// - Legacy array types: []T, [N]T (for backward compatibility during migration)
 std::string Parser::parseTypeString(const std::string &context) {
 	// Check for 'array' keyword - new array syntax
 	if (checkKeyword("array")) {
@@ -334,29 +333,6 @@ std::string Parser::parseTypeString(const std::string &context) {
 		return maxon::TypeConversion::makeManagedArrayType(elementType);
 	}
 
-	// Check for legacy []T syntax (backward compatibility)
-	if (check(TokenType::LBRACKET)) {
-		advance(); // consume '['
-
-		std::string sizeStr = "";
-		if (check(TokenType::NUMBER)) {
-			sizeStr = std::string(currentValue());
-			advance(); // consume size
-		}
-
-		expectAdvance(TokenType::RBRACKET, "Expected ']' in array type");
-
-		// Parse element type
-		std::string elementType = parseTypeString(context);
-
-		// Convert to internal format
-		if (sizeStr.empty()) {
-			return maxon::TypeConversion::makeManagedArrayType(elementType);
-		} else {
-			return maxon::TypeConversion::makeStaticArrayType(std::stoi(sizeStr), elementType);
-		}
-	}
-
 	// Check for type keywords (int, float, bool, byte, array, of)
 	auto kd = currentKeywordData();
 	if (kd && kd->category == KeywordCategory::Type) {
@@ -375,8 +351,7 @@ std::string Parser::parseTypeString(const std::string &context) {
 		return parseQualifiedName(context);
 	}
 
-	reportError("Expected type (int, float, bool, byte, array of T, or struct name) for " + context,
-				currentLine(), currentColumn());
+	reportError("Expected type for " + context, currentLine(), currentColumn());
 }
 
 // Parse a type string with optional "or nil" suffix

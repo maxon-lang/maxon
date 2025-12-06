@@ -504,7 +504,7 @@ TEST_CASE("MIR codegen: struct initialization", "[codegen_mir][struct]") {
 
 TEST_CASE("MIR codegen: complex program", "[codegen_mir][integration]") {
 	auto codegen = compileToMIR(R"(
-        function sum_array(arr []int) int
+        function sum_array(arr array of int) int
             var total = 0
             var i = 0
             while i < arr.length 'loop'
@@ -1148,7 +1148,7 @@ TEST_CASE("MIR codegen: labeled break and continue", "[codegen_mir][stmt][contro
 
 TEST_CASE("MIR codegen: complex integration - matrix operations", "[codegen_mir][integration]") {
 	auto codegen = compileToMIR(R"(
-        function matrixSum(matrix []int, rows int, cols int) int
+        function matrixSum(matrix array of int, rows int, cols int) int
             var total = 0
             var i = 0
             while i < rows 'rowLoop'

@@ -150,7 +150,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		auto convKind = maxon::TypeConversion::getConversionKind(sourceType, castExpr->targetType);
 		if (convKind == maxon::ConversionKind::Prohibited) {
 			addError("Cannot cast " + sourceType + " to " + castExpr->targetType + "; use trunc(), round(), floor(), or ceil() instead" +
-						 std::string("\n  Hint: trunc() truncates toward zero (equivalent to the old 'as int' behavior)"),
+						 std::string("\n  Hint: trunc() truncates toward zero"),
 					 expr->line, expr->column);
 			return "error";
 		}

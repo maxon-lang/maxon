@@ -8,6 +8,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Use Release configuration
 set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type")
 
+# Enable SIMD optimizations (required for lexer)
+if(MSVC)
+    add_compile_options(/arch:AVX2)
+else()
+    add_compile_options(-mavx2 -msse4.2)
+endif()
+
 # Get project root
 get_filename_component(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 

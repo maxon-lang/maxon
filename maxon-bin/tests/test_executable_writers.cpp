@@ -4,9 +4,9 @@
  * Tests the ELF and PE writers for correct executable format generation.
  */
 
-#include "../../lsp-server/tests/catch_amalgamated.hpp"
 #include "../backend/elf_writer.h"
 #include "../backend/pe_writer.h"
+#include <catch_amalgamated.hpp>
 #include <cstring>
 #include <fstream>
 
