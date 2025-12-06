@@ -61,56 +61,55 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 		mir::MIRValue *arrayPtr;
 
 		if (runtimeSize) {
-			// Variable-sized array: always heap-allocate with header
-			// Layout: [length:i32][capacity:i32][...data...]
-			//              -8          -4           0+
+			// Phase 2: Variable-sized array uses __ManagedArrayData struct layout
+			// Struct: { _buffer ptr, _len i32, _capacity i32 }
 			initHeapManagement();
 			mir::MIRFunction *mallocFunc = module->getFunction("malloc");
 
-			// Calculate total size: 8 (header) + size * elementSize
+			// Calculate data buffer size: size * elementSize
 			mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
 			mir::MIRValue *size64 = builder->createSExt(runtimeSize, mir::MIRType::getInt64(), "size.ext");
 			mir::MIRValue *dataSize = builder->createMul(size64, elemSizeVal, "data.size");
-			mir::MIRValue *headerSize = builder->getInt64(8);
-			mir::MIRValue *totalSize = builder->createAdd(dataSize, headerSize, "total.size");
 
-			// Allocate memory
-			mir::MIRValue *basePtr = builder->createCall(mallocFunc, {totalSize}, varDecl->name + ".base");
+			// Allocate data buffer (no header needed - length/capacity in struct)
+			mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {dataSize}, varDecl->name + ".buffer");
 
-			// Store length at offset 0 (basePtr already points here)
-			builder->createStore(runtimeSize, basePtr);
+			// Create __ManagedArrayData struct alloca
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+			mir::MIRValue *structAlloca = builder->createAlloca(managedArrayType, varDecl->name);
 
-			// Store capacity at offset 4
-			mir::MIRValue *capPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
-													   {builder->getInt64(4)}, "cap.ptr");
-			builder->createStore(runtimeSize, capPtr); // capacity = length initially
+			// Initialize struct fields: { _buffer, _len, _capacity }
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, structAlloca, 0, varDecl->name + "._buffer");
+			builder->createStore(bufferPtr, bufferField);
 
-			// Data pointer is at offset 8
-			arrayPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
-										  {builder->getInt64(8)}, varDecl->name + ".data");
+			mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, structAlloca, 1, varDecl->name + "._len");
+			builder->createStore(runtimeSize, lenField);
 
-			// Create alloca to store the data pointer
-			mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name);
-			builder->createStore(arrayPtr, ptrAlloca);
-			namedValues[varDecl->name] = ptrAlloca;
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, structAlloca, 2, varDecl->name + "._capacity");
+			builder->createStore(runtimeSize, capField); // capacity = length initially
+
+			namedValues[varDecl->name] = structAlloca;
 			variableTypes[varDecl->name] = maxon::TypeConversion::makeManagedArrayType(elementTypeName);
 
-			// Track base pointer for cleanup (we need to free basePtr, not dataPtr)
+			// Track buffer pointer for cleanup
 			if (!scopeStack.empty()) {
-				// Store base pointer in a hidden alloca for cleanup
-				mir::MIRValue *basePtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__base");
-				builder->createStore(basePtr, basePtrAlloca);
-				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, basePtrAlloca});
+				// Store buffer pointer in a hidden alloca for cleanup
+				mir::MIRValue *bufferPtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__buffer");
+				builder->createStore(bufferPtr, bufferPtrAlloca);
+				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, bufferPtrAlloca});
 			}
 
-			// Zero-initialize data using memset
+			// Zero-initialize data buffer using memset
 			mir::MIRFunction *memsetFunc = module->getFunction("memset");
 			if (!memsetFunc) {
 				initHeapManagement();
 				memsetFunc = module->getFunction("memset");
 			}
 			mir::MIRValue *zeroVal = builder->getInt32(0);
-			builder->createCall(memsetFunc, {arrayPtr, zeroVal, dataSize});
+			builder->createCall(memsetFunc, {bufferPtr, zeroVal, dataSize});
+
+			// For array access codegen, set arrayPtr to buffer for element initialization below
+			arrayPtr = bufferPtr;
 
 		} else {
 			// Constant-sized array
@@ -121,56 +120,70 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			bool useHeap = totalSize > STACK_ARRAY_THRESHOLD;
 
 			if (useHeap) {
-				// Large array: heap-allocate with header
-				// Layout: [length:i32][capacity:i32][...data...]
+				// Phase 2: Large array uses __ManagedArrayData struct layout
+				// Struct: { _buffer ptr, _len i32, _capacity i32 }
 				initHeapManagement();
 				mir::MIRFunction *mallocFunc = module->getFunction("malloc");
-				mir::MIRValue *sizeVal = builder->getInt64(8 + totalSize);
-				mir::MIRValue *basePtr = builder->createCall(mallocFunc, {sizeVal}, varDecl->name + ".base");
 
-				// Store length at offset 0 (basePtr already points here)
+				// Allocate data buffer (no header needed)
+				mir::MIRValue *sizeVal = builder->getInt64(totalSize);
+				mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {sizeVal}, varDecl->name + ".buffer");
+
+				// Create __ManagedArrayData struct alloca
+				mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+				mir::MIRValue *structAlloca = builder->createAlloca(managedArrayType, varDecl->name);
+
+				// Initialize struct fields: { _buffer, _len, _capacity }
 				mir::MIRValue *lengthVal = builder->getInt32(constantArraySize);
-				builder->createStore(lengthVal, basePtr);
 
-				// Store capacity at offset 4
-				mir::MIRValue *capPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
-														   {builder->getInt64(4)}, "cap.ptr");
-				builder->createStore(lengthVal, capPtr);
+				mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, structAlloca, 0, varDecl->name + "._buffer");
+				builder->createStore(bufferPtr, bufferField);
 
-				// Data pointer is at offset 8
-				arrayPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
-											  {builder->getInt64(8)}, varDecl->name + ".data");
+				mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, structAlloca, 1, varDecl->name + "._len");
+				builder->createStore(lengthVal, lenField);
 
-				// Create alloca to store the data pointer
-				mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name);
-				builder->createStore(arrayPtr, ptrAlloca);
-				namedValues[varDecl->name] = ptrAlloca;
+				mir::MIRValue *capField = builder->createStructGEP(managedArrayType, structAlloca, 2, varDecl->name + "._capacity");
+				builder->createStore(lengthVal, capField);
+
+				namedValues[varDecl->name] = structAlloca;
 				variableTypes[varDecl->name] = maxon::TypeConversion::makeManagedArrayType(elementTypeName);
+				arrayPtr = bufferPtr;
 
-				// Track base pointer for cleanup
+				// Track buffer pointer for cleanup
 				if (!scopeStack.empty()) {
-					mir::MIRValue *basePtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__base");
-					builder->createStore(basePtr, basePtrAlloca);
-					scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, basePtrAlloca});
+					mir::MIRValue *bufferPtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__buffer");
+					builder->createStore(bufferPtr, bufferPtrAlloca);
+					scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, bufferPtrAlloca});
 				}
 			} else {
 				// Small array: stack-allocate directly (much faster)
+				// Phase 2: Use __ManagedArrayData struct with stack-allocated buffer
 				mir::MIRType *arrayType = mir::MIRType::getArray(elementType, constantArraySize);
-				arrayPtr = builder->createAlloca(arrayType, varDecl->name);
-				namedValues[varDecl->name] = arrayPtr;
-				stackAllocatedArrays.insert(varDecl->name);
-				variableTypes[varDecl->name] = "[" + std::to_string(constantArraySize) + "]" + elementTypeName;
+				mir::MIRValue *stackBuffer = builder->createAlloca(arrayType, varDecl->name + ".stack_buffer");
 
-				// For stack arrays, store length and capacity in hidden allocas for intrinsic access
-				mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt32(), varDecl->name + ".__length");
+				// Create __ManagedArrayData struct alloca
+				mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+				mir::MIRValue *structAlloca = builder->createAlloca(managedArrayType, varDecl->name);
+
+				// Initialize struct fields: { _buffer, _len, _capacity }
 				mir::MIRValue *arraySizeVal = builder->getInt32(constantArraySize);
-				builder->createStore(arraySizeVal, lengthAlloca);
-				namedValues[varDecl->name + ".__length"] = lengthAlloca;
 
-				// Capacity equals length for fixed-size arrays
-				mir::MIRValue *capacityAlloca = builder->createAlloca(mir::MIRType::getInt32(), varDecl->name + ".__capacity");
-				builder->createStore(arraySizeVal, capacityAlloca);
-				namedValues[varDecl->name + ".__capacity"] = capacityAlloca;
+				mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, structAlloca, 0, varDecl->name + "._buffer");
+				builder->createStore(stackBuffer, bufferField);
+
+				mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, structAlloca, 1, varDecl->name + "._len");
+				builder->createStore(arraySizeVal, lenField);
+
+				mir::MIRValue *capField = builder->createStructGEP(managedArrayType, structAlloca, 2, varDecl->name + "._capacity");
+				builder->createStore(arraySizeVal, capField);
+
+				namedValues[varDecl->name] = structAlloca;
+				variableTypes[varDecl->name] = maxon::TypeConversion::makeManagedArrayType(elementTypeName);
+				arrayPtr = stackBuffer;
+
+				// Note: Stack arrays are automatically cleaned up, no need to track for cleanup
+				// Don't add to stackAllocatedArrays - that set is for arrays where the alloca
+				// IS the data (like let arr = [1,2,3]). This uses the managed struct layout.
 			}
 
 			// Initialize array elements
@@ -646,44 +659,44 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 		mir::MIRValue *arrayPtr;
 
 		if (runtimeSize) {
-			// Variable-sized array: always heap-allocate with header
-			// Layout: [length:i32][capacity:i32][...data...]
+			// Phase 2: Variable-sized let array uses __ManagedArrayData struct layout
+			// Struct: { _buffer ptr, _len i32, _capacity i32 }
+			// For let arrays, capacity = 0 indicates immutable (static)
 			initHeapManagement();
 			mir::MIRFunction *mallocFunc = module->getFunction("malloc");
 
-			// Calculate total size: 8 (header) + size * elementSize
+			// Calculate data buffer size: size * elementSize
 			mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
 			mir::MIRValue *size64 = builder->createSExt(runtimeSize, mir::MIRType::getInt64(), "size.ext");
 			mir::MIRValue *dataSize = builder->createMul(size64, elemSizeVal, "data.size");
-			mir::MIRValue *headerSize = builder->getInt64(8);
-			mir::MIRValue *totalSize = builder->createAdd(dataSize, headerSize, "total.size");
 
-			// Allocate memory
-			mir::MIRValue *basePtr = builder->createCall(mallocFunc, {totalSize}, letDecl->name + ".base");
+			// Allocate data buffer (no header needed)
+			mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {dataSize}, letDecl->name + ".buffer");
 
-			// Store length at offset 0 (basePtr already points here)
-			builder->createStore(runtimeSize, basePtr);
+			// Create __ManagedArrayData struct alloca
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+			mir::MIRValue *structAlloca = builder->createAlloca(managedArrayType, letDecl->name);
 
-			// Store capacity at offset 4
-			mir::MIRValue *capPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
-													   {builder->getInt64(4)}, "cap.ptr");
-			builder->createStore(runtimeSize, capPtr);
+			// Initialize struct fields: { _buffer, _len, _capacity }
+			// For let arrays, capacity = 0 to indicate immutable
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, structAlloca, 0, letDecl->name + "._buffer");
+			builder->createStore(bufferPtr, bufferField);
 
-			// Data pointer is at offset 8
-			arrayPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
-										  {builder->getInt64(8)}, letDecl->name + ".data");
+			mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, structAlloca, 1, letDecl->name + "._len");
+			builder->createStore(runtimeSize, lenField);
 
-			// Create alloca to store the data pointer
-			mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name);
-			builder->createStore(arrayPtr, ptrAlloca);
-			namedValues[letDecl->name] = ptrAlloca;
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, structAlloca, 2, letDecl->name + "._capacity");
+			builder->createStore(builder->getInt32(0), capField); // 0 = static/immutable
+
+			namedValues[letDecl->name] = structAlloca;
 			variableTypes[letDecl->name] = maxon::TypeConversion::makeManagedArrayType(elementTypeName);
+			arrayPtr = bufferPtr;
 
-			// Track base pointer for cleanup
+			// Track buffer pointer for cleanup
 			if (!scopeStack.empty()) {
-				mir::MIRValue *basePtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name + ".__base");
-				builder->createStore(basePtr, basePtrAlloca);
-				scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, basePtrAlloca});
+				mir::MIRValue *bufferPtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name + ".__buffer");
+				builder->createStore(bufferPtr, bufferPtrAlloca);
+				scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, bufferPtrAlloca});
 			}
 
 			// Zero-initialize data using memset

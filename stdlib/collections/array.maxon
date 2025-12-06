@@ -30,22 +30,22 @@ export struct array uses Element is Iterable with Element
 
 	// Get the number of elements in the array
 	export function count() int
-		return __array_len(_data)
+		return __managed_array_len(_data)
 	end 'count'
 
 	// Get the current capacity (allocated space)
 	export function capacity() int
-		return __array_capacity(_data)
+		return __managed_array_capacity(_data)
 	end 'capacity'
 
 	// Check if array is empty
 	export function isEmpty() bool
-		return __array_len(_data) == 0
+		return __managed_array_len(_data) == 0
 	end 'isEmpty'
 
 	// Get first element, or nil if empty
 	export function first() Element or nil
-		if __array_len(_data) == 0 'empty'
+		if __managed_array_len(_data) == 0 'empty'
 			return nil
 		end 'empty'
 		return _data[0]
@@ -53,7 +53,7 @@ export struct array uses Element is Iterable with Element
 
 	// Get last element, or nil if empty
 	export function last() Element or nil
-		var len = __array_len(_data)
+		var len = __managed_array_len(_data)
 		if len == 0 'empty'
 			return nil
 		end 'empty'
@@ -66,7 +66,7 @@ export struct array uses Element is Iterable with Element
 
 	// Get element at index, or nil if out of bounds
 	export function get(index int) Element or nil
-		var len = __array_len(_data)
+		var len = __managed_array_len(_data)
 		if index < 0 'bounds'
 			return nil
 		end 'bounds'
@@ -78,10 +78,10 @@ export struct array uses Element is Iterable with Element
 
 	// Set element at index (no-op if index out of bounds)
 	export function set(index int, value Element) Self
-		var len = __array_len(_data)
+		var len = __managed_array_len(_data)
 		if index >= 0 'bounds'
 			if index < len 'bounds'
-				__array_set_at(_data, index, value)
+				__managed_array_set_at(_data, index, value)
 			end 'bounds'
 		end 'bounds'
 		return self
@@ -93,36 +93,36 @@ export struct array uses Element is Iterable with Element
 
 	// Append element to end
 	export function push(value Element) Self
-		var len = __array_len(_data)
-		var cap = __array_capacity(_data)
+		var len = __managed_array_len(_data)
+		var cap = __managed_array_capacity(_data)
 		if len >= cap 'grow'
 			// Double capacity, minimum 4
 			var newCap = cap * 2
 			if newCap < 4 'min'
 				newCap = 4
 			end 'min'
-			__array_grow(_data, newCap)
+			__managed_array_grow(_data, newCap)
 		end 'grow'
-		__array_set_at(_data, len, value)
-		__array_set_length(_data, len + 1)
+		__managed_array_set_at(_data, len, value)
+		__managed_array_set_length(_data, len + 1)
 		return self
 	end 'push'
 
 	// Remove and return last element, or nil if empty
 	export function pop() Element or nil
-		var len = __array_len(_data)
+		var len = __managed_array_len(_data)
 		if len == 0 'empty'
 			return nil
 		end 'empty'
 		var newLen = len - 1
 		var value = _data[newLen]
-		__array_set_length(_data, newLen)
+		__managed_array_set_length(_data, newLen)
 		return value
 	end 'pop'
 
 	// Insert element at index (clamps to [0, count])
 	export function insert(at int, value Element) Self
-		var len = __array_len(_data)
+		var len = __managed_array_len(_data)
 		var index = at
 
 		// Clamp index to valid range
@@ -134,29 +134,29 @@ export struct array uses Element is Iterable with Element
 		end 'clamp'
 
 		// Ensure capacity
-		var cap = __array_capacity(_data)
+		var cap = __managed_array_capacity(_data)
 		if len >= cap 'grow'
 			var newCap = cap * 2
 			if newCap < 4 'min'
 				newCap = 4
 			end 'min'
-			__array_grow(_data, newCap)
+			__managed_array_grow(_data, newCap)
 		end 'grow'
 
 		// Shift elements right to make room
 		if index < len 'shift'
-			__array_shift_right(_data, index, 1)
+			__managed_array_shift_right(_data, index, 1)
 		end 'shift'
 
 		// Insert element and update length
-		__array_set_at(_data, index, value)
-		__array_set_length(_data, len + 1)
+		__managed_array_set_at(_data, index, value)
+		__managed_array_set_length(_data, len + 1)
 		return self
 	end 'insert'
 
 	// Remove and return element at index, or nil if out of bounds
 	export function remove(at int) Element or nil
-		var len = __array_len(_data)
+		var len = __managed_array_len(_data)
 
 		// Check bounds
 		if at < 0 'bounds'
@@ -171,16 +171,16 @@ export struct array uses Element is Iterable with Element
 
 		// Shift elements left to fill gap
 		if at < len - 1 'shift'
-			__array_shift_left(_data, at, 1)
+			__managed_array_shift_left(_data, at, 1)
 		end 'shift'
 
-		__array_set_length(_data, len - 1)
+		__managed_array_set_length(_data, len - 1)
 		return value
 	end 'remove'
 
 	// Remove all elements (keeps capacity)
 	export function clear() Self
-		__array_set_length(_data, 0)
+		__managed_array_set_length(_data, 0)
 		return self
 	end 'clear'
 
@@ -190,9 +190,9 @@ export struct array uses Element is Iterable with Element
 
 	// Pre-allocate capacity for at least minCapacity elements
 	export function reserve(minCapacity int) Self
-		var cap = __array_capacity(_data)
+		var cap = __managed_array_capacity(_data)
 		if minCapacity > cap 'grow'
-			__array_grow(_data, minCapacity)
+			__managed_array_grow(_data, minCapacity)
 		end 'grow'
 		return self
 	end 'reserve'
@@ -203,7 +203,7 @@ export struct array uses Element is Iterable with Element
 
 	// Get next element in iteration, or nil when exhausted
 	export function Iterable.next() Element or nil
-		var len = __array_len(_data)
+		var len = __managed_array_len(_data)
 		if _iterIndex >= len 'done'
 			return nil
 		end 'done'

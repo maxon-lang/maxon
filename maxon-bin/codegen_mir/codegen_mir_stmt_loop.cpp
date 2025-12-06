@@ -150,20 +150,38 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 						forStmt->line, forStmt->column);
 		}
 
-		// Get array length
-		mir::MIRValue *lengthAlloca = namedValues[arrayVarName + ".__length"];
-		if (!lengthAlloca) {
-			reportError("Array length not found for: " + arrayVarName,
-						forStmt->line, forStmt->column);
-		}
-		mir::MIRValue *arrayLength = builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "arrlen");
-
-		// Get array pointer (stack vs heap allocated)
+		// Get array length and pointer
+		mir::MIRValue *arrayLength;
 		mir::MIRValue *arrayPtr;
-		if (stackAllocatedArrays.count(arrayVarName) > 0) {
-			arrayPtr = arrayAlloca;
+		std::string varType = variableTypes[arrayVarName];
+
+		// Phase 2: Handle _ManagedArray<T> struct layout
+		if (maxon::TypeConversion::isManagedArrayType(varType)) {
+			// Managed array: struct layout { _buffer ptr, _len i32, _capacity i32 }
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
+
+			// Load length from field 1
+			mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, arrayAlloca, 1, "arr._len.ptr");
+			arrayLength = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "arrlen");
+
+			// Load buffer pointer from field 0
+			mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, arrayAlloca, 0, "arr._buffer.ptr");
+			arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, "arrptr");
 		} else {
-			arrayPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "arrptr");
+			// Legacy: Check for hidden __length alloca (static sized arrays [N]T)
+			mir::MIRValue *lengthAlloca = namedValues[arrayVarName + ".__length"];
+			if (!lengthAlloca) {
+				reportError("Array length not found for: " + arrayVarName,
+							forStmt->line, forStmt->column);
+			}
+			arrayLength = builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "arrlen");
+
+			// Get array pointer (stack vs heap allocated)
+			if (stackAllocatedArrays.count(arrayVarName) > 0) {
+				arrayPtr = arrayAlloca;
+			} else {
+				arrayPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "arrptr");
+			}
 		}
 
 		// Create index variable (starts at 0)

@@ -48,6 +48,23 @@ mir::MIRType *MIRCodeGenerator::getOrCreateSubstringType() {
 	return substringType;
 }
 
+mir::MIRType *MIRCodeGenerator::getOrCreateManagedArrayDataType(const std::string &elementType) {
+	// Create the internal __ManagedArrayData struct type for the given element type
+	// Layout: { _buffer ptr, _len i32, _capacity i32 }
+	// - _buffer: pointer to the actual array data
+	// - _len: current number of elements
+	// - _capacity: allocated capacity (0 for static arrays)
+	std::string typeName = "__ManagedArrayData_" + elementType;
+	mir::MIRType *dataType = structTypes[typeName];
+	if (!dataType) {
+		dataType = module->getOrCreateStructType(
+			typeName,
+			{mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+		structTypes[typeName] = dataType;
+	}
+	return dataType;
+}
+
 // Helper to get _ManagedString pointer from expression
 mir::MIRValue *MIRCodeGenerator::getManagedStringPtr(ExprAST *arg) {
 	// Ensure type is created for later use

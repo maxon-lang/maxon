@@ -72,6 +72,17 @@ inline std::vector<IntrinsicDef> getIntrinsicDefinitions() {
 		{"__array_shift_right", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, {"int"}}, "intrinsic_array_shift_right"},
 		{"__array_shift_left", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, {"int"}}, "intrinsic_array_shift_left"},
 
+		// Managed array intrinsics (__managed_array_*) - work with _ManagedArray<T> struct layout
+		// These operate on the new { _buffer ptr, _len i32, _capacity i32 } struct
+		{"__managed_array_len", "int", {IntrinsicParamDef::arrayOf({})}, "intrinsic_managed_array_len"},
+		{"__managed_array_capacity", "int", {IntrinsicParamDef::arrayOf({})}, "intrinsic_managed_array_capacity"},
+		{"__managed_array_set_length", "void", {IntrinsicParamDef::arrayOf({}), {"int"}}, "intrinsic_managed_array_set_length"},
+		{"__managed_array_grow", "void", {IntrinsicParamDef::arrayOf({}), {"int"}}, "intrinsic_managed_array_grow"},
+		{"__managed_array_set_at", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, IntrinsicParamDef::any()}, "intrinsic_managed_array_set_at"},
+		{"__managed_array_get_at", "int", {IntrinsicParamDef::arrayOf({}), {"int"}}, "intrinsic_managed_array_get_at"},
+		{"__managed_array_shift_right", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, {"int"}}, "intrinsic_managed_array_shift_right"},
+		{"__managed_array_shift_left", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, {"int"}}, "intrinsic_managed_array_shift_left"},
+
 		// Substring intrinsics (__substring_*)
 		{"__substring_len", "int", {{"substring"}}, "intrinsic_substring_len"},
 		{"__substring_byte_at", "byte", {{"substring"}, {"int"}}, "intrinsic_substring_byte_at"},

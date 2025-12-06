@@ -364,6 +364,11 @@ bool TypeConversion::isManagedArrayType(const std::string &type) {
 	return false;
 }
 
+bool TypeConversion::isManagedArrayOpaqueType(const std::string &type) {
+	// Only the new format: _ManagedArray<T>
+	return type.rfind("_ManagedArray<", 0) == 0;
+}
+
 bool TypeConversion::isStaticArrayType(const std::string &type) {
 	// New format: _StaticArray<N, T>
 	if (type.rfind("_StaticArray<", 0) == 0) {

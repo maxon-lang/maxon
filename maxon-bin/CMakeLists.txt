@@ -78,6 +78,7 @@ set(SOURCES
     codegen_mir/codegen_mir_output.cpp
     codegen_mir/codegen_mir_safeffi.cpp
     codegen_mir/intrinsic_codegen.cpp
+    codegen_mir/codegen_mir_managed_array.cpp
     codegen_mir/codegen_mir_intrinsics.cpp
     # MIR infrastructure
     mir/mir.cpp

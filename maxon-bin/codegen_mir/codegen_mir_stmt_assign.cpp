@@ -167,11 +167,27 @@ void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir:
 	}
 	mir::MIRType *elementType = getTypeFromString(elementTypeStr);
 
-	// Get the array pointer (stack vs heap allocated)
+	// Get the array pointer
 	mir::MIRValue *arrayPtr;
+
 	if (stackAllocatedArrays.count(arrayAssign->arrayName) > 0) {
+		// Static stack array - alloca is directly the array memory
 		arrayPtr = alloca;
+	} else if (arrayParameters.count(arrayAssign->arrayName) > 0) {
+		// Function parameter - alloca holds the data pointer directly (old ABI)
+		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
+	} else if (maxon::TypeConversion::isManagedArrayType(varType)) {
+		// Managed array local var: load buffer pointer from struct field 0
+		std::string managedTypeName = "__ManagedArrayData_" + elementTypeStr;
+		mir::MIRType *managedType = structTypes[managedTypeName];
+		if (!managedType) {
+			reportError("Internal error: managed array type not found: " + managedTypeName,
+						arrayAssign->line, arrayAssign->column);
+		}
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedType, alloca, 0, arrayAssign->arrayName + "._buffer.ptr");
+		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferFieldPtr, arrayAssign->arrayName + "._buffer");
 	} else {
+		// Legacy heap array - alloca holds the data pointer
 		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
 	}
 	mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayPtr, indexVal, "arrayidx");
@@ -256,7 +272,28 @@ void MIRCodeGenerator::generateArrayMemberAssign(ArrayMemberAssignStmtAST *array
 	}
 
 	// Get pointer to array element
-	mir::MIRValue *arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
+	mir::MIRValue *arrayPtr;
+
+	if (stackAllocatedArrays.count(arrayMemberAssign->arrayName) > 0) {
+		// Static stack array - alloca is directly the array memory
+		arrayPtr = alloca;
+	} else if (arrayParameters.count(arrayMemberAssign->arrayName) > 0) {
+		// Function parameter - alloca holds the data pointer directly (old ABI)
+		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
+	} else if (maxon::TypeConversion::isManagedArrayType(varType)) {
+		// Managed array local var: load buffer pointer from struct field 0
+		std::string managedTypeName = "__ManagedArrayData_" + elementTypeStr;
+		mir::MIRType *managedType = structTypes[managedTypeName];
+		if (!managedType) {
+			reportError("Internal error: managed array type not found: " + managedTypeName,
+						arrayMemberAssign->line, arrayMemberAssign->column);
+		}
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedType, alloca, 0, arrayMemberAssign->arrayName + "._buffer.ptr");
+		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferFieldPtr, arrayMemberAssign->arrayName + "._buffer");
+	} else {
+		// Legacy heap array - alloca holds the data pointer
+		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
+	}
 	mir::MIRValue *elementPtr = builder->createArrayGEP(structType, arrayPtr, indexVal, "arrayidx");
 
 	// Find field index
@@ -363,15 +400,30 @@ void MIRCodeGenerator::generateMemberArrayAssign(MemberArrayAssignStmtAST *membe
 	// Generate index
 	mir::MIRValue *indexVal = generateExpr(memberArrayAssign->index.get());
 
-	// Determine element type from field type "_StaticArray<16, byte>" -> "byte"
+	// Determine element type from field type "_ManagedArray<int>" or "_StaticArray<16, byte>" -> element type
 	std::string elemTypeStr = "int";
 	if (maxon::TypeConversion::isArrayType(fieldTypeStr)) {
 		elemTypeStr = maxon::TypeConversion::getArrayElementType(fieldTypeStr);
 	}
 	mir::MIRType *elemType = getTypeFromString(elemTypeStr);
 
-	// Get pointer to the array element
-	mir::MIRValue *elemPtr = builder->createArrayGEP(elemType, fieldPtr, indexVal, "fieldarray.elem");
+	// Get pointer to the array element (handle managed arrays)
+	mir::MIRValue *arrayPtr;
+	if (maxon::TypeConversion::isManagedArrayType(fieldTypeStr)) {
+		// Managed array field: load buffer pointer from struct field 0
+		std::string managedTypeName = "__ManagedArrayData_" + elemTypeStr;
+		mir::MIRType *managedType = structTypes[managedTypeName];
+		if (!managedType) {
+			reportError("Internal error: managed array type not found: " + managedTypeName,
+						memberArrayAssign->line, memberArrayAssign->column);
+		}
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedType, fieldPtr, 0, memberArrayAssign->memberName + "._buffer.ptr");
+		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferFieldPtr, memberArrayAssign->memberName + "._buffer");
+	} else {
+		// Static array or direct pointer
+		arrayPtr = fieldPtr;
+	}
+	mir::MIRValue *elemPtr = builder->createArrayGEP(elemType, arrayPtr, indexVal, "fieldarray.elem");
 
 	// Generate value and store
 	mir::MIRValue *val = generateExpr(memberArrayAssign->value.get());

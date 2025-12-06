@@ -54,6 +54,9 @@ class MIRCodeGenerator {
 	// Track which variables are struct parameters (passed by pointer)
 	std::set<std::string> structParameters;
 
+	// Track which variables are array parameters (uses old ABI with ptr+length)
+	std::set<std::string> arrayParameters;
+
 	// Track which arrays are stack-allocated (direct access, no pointer indirection)
 	std::set<std::string> stackAllocatedArrays;
 
@@ -258,6 +261,15 @@ class MIRCodeGenerator {
 	mir::MIRValue *intrinsic_array_set_at(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_array_shift_right(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_array_shift_left(CallExprAST *callExpr);
+	// Managed array intrinsics (new struct-based layout)
+	mir::MIRValue *intrinsic_managed_array_len(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_managed_array_capacity(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_managed_array_set_length(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_managed_array_grow(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_managed_array_set_at(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_managed_array_get_at(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_managed_array_shift_right(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_managed_array_shift_left(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_with_iter_pos(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_to_string(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_slice(CallExprAST *callExpr);
@@ -272,6 +284,7 @@ class MIRCodeGenerator {
 	mir::MIRType *getOrCreateUnsizedArrayType();
 	mir::MIRType *getOrCreateCstringType();
 	mir::MIRType *getOrCreateSubstringType();
+	mir::MIRType *getOrCreateManagedArrayDataType(const std::string &elementType);
 
 	// Array field info for intrinsics - handles both regular variables and struct fields
 	struct ArrayFieldInfo {
@@ -284,6 +297,7 @@ class MIRCodeGenerator {
 		int fieldIndex;				   // Field index if isStructField is true
 	};
 	ArrayFieldInfo getArrayFieldInfo(ExprAST *arrayArg, int line, int column);
+	ArrayFieldInfo getManagedArrayInfo(ExprAST *arrayArg, int line, int column);
 
 	// String and char literal generation
 	mir::MIRValue *generateStringLiteral(StringLiteralExprAST *strExpr);

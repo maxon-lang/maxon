@@ -55,6 +55,7 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 	namedValues.clear();
 	variableTypes.clear();
 	structParameters.clear();
+	arrayParameters.clear();
 	stackAllocatedArrays.clear();
 
 	// Allocate stack space for parameters
@@ -77,7 +78,9 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 		}
 
 		// If this is an array parameter, also store the hidden length parameter
+		// and track it as an array parameter (uses old ABI)
 		if (isArrayParam(param.type)) {
+			arrayParameters.insert(param.name);
 			std::string lengthVarName = param.name + ".__length";
 			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt32(), lengthVarName);
 			mir::MIRValue *lengthParamVal = function->parameters[argIdx];
@@ -144,6 +147,7 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 	std::map<std::string, mir::MIRValue *> savedNamedValues = namedValues;
 	std::map<std::string, std::string> savedVariableTypes = variableTypes;
 	std::set<std::string> savedStructParameters = structParameters;
+	std::set<std::string> savedArrayParameters = arrayParameters;
 	std::set<std::string> savedStackAllocatedArrays = stackAllocatedArrays;
 	std::string savedReceiverType = currentReceiverType;
 	std::map<std::string, std::string> savedTypeBindings = currentTypeBindings;
@@ -208,6 +212,7 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 	namedValues.clear();
 	variableTypes.clear();
 	structParameters.clear();
+	arrayParameters.clear();
 	stackAllocatedArrays.clear();
 
 	// Allocate stack space for parameters with type substitution
@@ -231,7 +236,9 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 		}
 
 		// If this is an array parameter, also store the hidden length parameter
+		// and track it as an array parameter (uses old ABI)
 		if (isArrayParam(substitutedType)) {
+			arrayParameters.insert(param.name);
 			std::string lengthVarName = param.name + ".__length";
 			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt32(), lengthVarName);
 			mir::MIRValue *lengthParamVal = function->parameters[argIdx];
@@ -282,6 +289,7 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 	namedValues = savedNamedValues;
 	variableTypes = savedVariableTypes;
 	structParameters = savedStructParameters;
+	arrayParameters = savedArrayParameters;
 	stackAllocatedArrays = savedStackAllocatedArrays;
 	currentReceiverType = savedReceiverType;
 	currentTypeBindings = savedTypeBindings;

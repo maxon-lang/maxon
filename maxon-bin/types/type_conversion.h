@@ -146,6 +146,9 @@ class TypeConversion {
 	/// Check if a type is a dynamic/managed array (_ManagedArray<T> or legacy []T)
 	static bool isManagedArrayType(const std::string &type);
 
+	/// Check if a type is the opaque _ManagedArray<T> type (new internal format only)
+	static bool isManagedArrayOpaqueType(const std::string &type);
+
 	/// Check if a type is a static array (_StaticArray<N, T> or legacy [N]T)
 	static bool isStaticArrayType(const std::string &type);
 

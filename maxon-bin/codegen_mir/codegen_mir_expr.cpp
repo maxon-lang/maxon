@@ -601,21 +601,29 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 		// Handle array.length
 		if (memberAccessExpr->memberName == "length" && !memberAccessExpr->object) {
-			// First check for hidden __length alloca (stack-allocated arrays)
-			std::string lengthVar = memberAccessExpr->objectName + ".__length";
-			mir::MIRValue *lengthAlloca = namedValues[lengthVar];
-			if (lengthAlloca) {
-				return builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "length");
-			}
-
-			// For heap-allocated arrays with header layout, read from dataPtr - 8
-			// Layout: [length:i32][capacity:i32][...data...]
-			//              -8          -4           0+
 			mir::MIRValue *arrayAlloca = namedValues[memberAccessExpr->objectName];
 			if (arrayAlloca) {
-				// Load the data pointer
+				std::string arrType = variableTypes[memberAccessExpr->objectName];
+
+				// Check for hidden __length alloca first (function parameters and static sized arrays)
+				// Function parameters use the old ABI with separate ptr + length arguments
+				std::string lengthVar = memberAccessExpr->objectName + ".__length";
+				mir::MIRValue *lengthAlloca = namedValues[lengthVar];
+				if (lengthAlloca) {
+					return builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "length");
+				}
+
+				// Phase 2: Check if this is a _ManagedArray type (uses struct layout for local vars)
+				if (maxon::TypeConversion::isManagedArrayType(arrType)) {
+					std::string elemType = maxon::TypeConversion::getArrayElementType(arrType);
+					mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemType);
+					// GEP to _len field (index 1) and load
+					mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, arrayAlloca, 1, "arr._len.ptr");
+					return builder->createLoad(mir::MIRType::getInt32(), lenPtr, "length");
+				}
+
+				// Legacy fallback: For heap-allocated arrays with header layout
 				mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
-				// Get pointer to length at offset -8 (use GEP with i8 type for byte offsets)
 				mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
 															  {builder->getInt64(-8)}, "length.ptr");
 				return builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "length");
@@ -626,30 +634,33 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 		// Handle array.capacity (dynamic arrays only)
 		if (memberAccessExpr->memberName == "capacity" && !memberAccessExpr->object) {
-			// First check for hidden __capacity alloca (old-style heap arrays)
-			std::string capacityVar = memberAccessExpr->objectName + ".__capacity";
-			mir::MIRValue *capacityAlloca = namedValues[capacityVar];
-			if (capacityAlloca) {
-				return builder->createLoad(mir::MIRType::getInt32(), capacityAlloca, "capacity");
-			}
-
-			// For heap-allocated arrays with header layout, read from dataPtr - 4
 			mir::MIRValue *arrayAlloca = namedValues[memberAccessExpr->objectName];
 			if (arrayAlloca) {
-				// Load the data pointer
+				std::string arrType = variableTypes[memberAccessExpr->objectName];
+
+				// Check for hidden __capacity alloca first (function parameters)
+				std::string capacityVar = memberAccessExpr->objectName + ".__capacity";
+				mir::MIRValue *capacityAlloca = namedValues[capacityVar];
+				if (capacityAlloca) {
+					return builder->createLoad(mir::MIRType::getInt32(), capacityAlloca, "capacity");
+				}
+
+				// Phase 2: Check if this is a _ManagedArray type (uses struct layout for local vars)
+				if (maxon::TypeConversion::isManagedArrayType(arrType)) {
+					std::string elemType = maxon::TypeConversion::getArrayElementType(arrType);
+					mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemType);
+					// GEP to _capacity field (index 2) and load
+					mir::MIRValue *capPtr = builder->createStructGEP(managedArrayType, arrayAlloca, 2, "arr._cap.ptr");
+					return builder->createLoad(mir::MIRType::getInt32(), capPtr, "capacity");
+				}
+
+				// Legacy fallback: For heap-allocated arrays with header layout
 				mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
-				// Get pointer to capacity at offset -4 (use GEP with i8 type for byte offsets)
 				mir::MIRValue *capPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
 														   {builder->getInt64(-4)}, "cap.ptr");
 				return builder->createLoad(mir::MIRType::getInt32(), capPtr, "capacity");
 			}
 
-			// Static arrays don't have capacity - capacity == length
-			std::string lengthVar = memberAccessExpr->objectName + ".__length";
-			mir::MIRValue *lengthAlloca = namedValues[lengthVar];
-			if (lengthAlloca) {
-				return builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "capacity");
-			}
 			reportError("Variable is not an array: " + memberAccessExpr->objectName,
 						memberAccessExpr->line, memberAccessExpr->column);
 		}
@@ -774,14 +785,22 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		mir::MIRType *elementType = getTypeFromString(elementTypeStr);
 		bool isStructElement = structTypes.find(elementTypeStr) != structTypes.end();
 
-		// For stack-allocated arrays, alloca IS the array pointer directly
-		// For heap-allocated arrays, alloca holds a pointer that must be loaded
+		// Get the array data pointer
 		mir::MIRValue *arrayPtr;
+
 		if (stackAllocatedArrays.count(arrayIndexExpr->arrayName) > 0) {
-			// Stack array: alloca is directly the array memory
+			// Static stack array (let arr = [1,2,3]) - alloca is directly the array memory
 			arrayPtr = alloca;
+		} else if (arrayParameters.count(arrayIndexExpr->arrayName) > 0) {
+			// Function parameter - alloca holds the data pointer directly (old ABI)
+			arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
+		} else if (maxon::TypeConversion::isManagedArrayType(varType)) {
+			// Managed array local var - alloca is a __ManagedArrayData struct, load _buffer from field 0
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, alloca, 0, "arr._buffer.ptr");
+			arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferField, "arr.buffer");
 		} else {
-			// Heap array: load the pointer from alloca
+			// Legacy heap array - alloca holds the data pointer
 			arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
 		}
 		mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayPtr, indexVal, "arrayidx");
@@ -1467,11 +1486,19 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				if (alloca && isArrayParam(varType)) {
 					// Pass array pointer and length
 					mir::MIRValue *ptrVal;
-					if (stackAllocatedArrays.count(varExpr->name) > 0) {
-						// Stack-allocated array: alloca IS the array pointer
+
+					// Phase 2: Handle _ManagedArray<T> struct layout
+					if (maxon::TypeConversion::isManagedArrayType(varType)) {
+						// Managed array: struct layout { _buffer ptr, _len i32, _capacity i32 }
+						std::string elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
+						mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
+						mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, alloca, 0, "arr._buffer.ptr");
+						ptrVal = builder->createLoad(mir::MIRType::getPtr(), bufferField, "arr.buffer");
+					} else if (stackAllocatedArrays.count(varExpr->name) > 0) {
+						// Legacy: Stack-allocated array - alloca IS the array pointer
 						ptrVal = alloca;
 					} else {
-						// Heap-allocated array: alloca contains a pointer to the array
+						// Legacy: Heap-allocated array - alloca contains a pointer to the array
 						ptrVal = builder->createLoad(mir::MIRType::getPtr(), alloca, varExpr->name);
 					}
 					argsV.push_back(ptrVal);
@@ -1486,13 +1513,24 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 												   nextParam->name.substr(nextParam->name.size() - 9) == ".__length";
 
 						if (expectsHiddenLength) {
-							std::string lengthVarName = varExpr->name + ".__length";
-							if (namedValues.find(lengthVarName) != namedValues.end()) {
-								mir::MIRValue *lengthAlloca = namedValues[lengthVarName];
-								mir::MIRValue *lengthVal = builder->createLoad(
-									mir::MIRType::getInt32(), lengthAlloca, "length");
+							// Phase 2: For managed arrays, read length from struct field 1
+							if (maxon::TypeConversion::isManagedArrayType(varType)) {
+								std::string elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
+								mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
+								mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, alloca, 1, "arr._len.ptr");
+								mir::MIRValue *lengthVal = builder->createLoad(mir::MIRType::getInt32(), lenField, "length");
 								argsV.push_back(lengthVal);
 								argIdx++;
+							} else {
+								// Legacy: Check for hidden __length alloca
+								std::string lengthVarName = varExpr->name + ".__length";
+								if (namedValues.find(lengthVarName) != namedValues.end()) {
+									mir::MIRValue *lengthAlloca = namedValues[lengthVarName];
+									mir::MIRValue *lengthVal = builder->createLoad(
+										mir::MIRType::getInt32(), lengthAlloca, "length");
+									argsV.push_back(lengthVal);
+									argIdx++;
+								}
 							}
 						}
 					}

@@ -212,10 +212,9 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 
 	// Check for new array type formats: _ManagedArray<T> or _StaticArray<N, T>
 	if (typeStr.rfind("_ManagedArray<", 0) == 0) {
+		// Phase 2: _ManagedArray<T> uses struct layout { _buffer ptr, _len i32, _capacity i32 }
 		std::string elemType = maxon::TypeConversion::getArrayElementType(typeStr);
-		mir::MIRType *ptrType = mir::MIRType::getPtr();
-		mir::MIRType *lengthType = mir::MIRType::getInt32();
-		return module->getOrCreateStructType("_ManagedArray_" + elemType, {ptrType, lengthType});
+		return getOrCreateManagedArrayDataType(elemType);
 	}
 
 	if (typeStr.rfind("_StaticArray<", 0) == 0) {
@@ -232,11 +231,9 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 			std::string sizeStr = typeStr.substr(1, closeBracket - 1);
 			std::string elemType = typeStr.substr(closeBracket + 1);
 
-			// Unsized array []type - represented as struct { ptr, length }
+			// Unsized array []type - Phase 2: use struct layout { _buffer ptr, _len i32, _capacity i32 }
 			if (sizeStr.empty()) {
-				mir::MIRType *ptrType = mir::MIRType::getPtr();
-				mir::MIRType *lengthType = mir::MIRType::getInt32();
-				return module->getOrCreateStructType("_ManagedArray_" + elemType, {ptrType, lengthType});
+				return getOrCreateManagedArrayDataType(elemType);
 			}
 
 			// Sized array [N]type

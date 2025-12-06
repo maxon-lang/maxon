@@ -5,13 +5,24 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 6
+; Instructions: 15
+
+%__ManagedArrayData_int = type { ptr, i32, i32 }
 
 define i32 @main() {
 entry0:
   %0 = alloca [5 x i32]
-  %3 = call ptr @memset(ptr %0, i32 0, i64 20)
-  ret i32 5
+  %1 = alloca %__ManagedArrayData_int
+  %2 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  store ptr %0, ptr %2
+  %3 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  store i32 5, ptr %3
+  %4 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 2
+  store i32 5, ptr %4
+  %5 = call ptr @memset(ptr %0, i32 0, i64 20)
+  %7 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  %8 = load i32, ptr %7
+  ret i32 %8
 }
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
@@ -27,18 +38,24 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 11
+; Instructions: 15
+
+%__ManagedArrayData_int = type { ptr, i32, i32 }
 
 define i32 @main() {
 entry0:
   %0 = alloca [5 x i32]
-  %1 = alloca i32
-  store i32 5, ptr %1
-  %2 = alloca i32
-  store i32 5, ptr %2
-  %3 = call ptr @memset(ptr %0, i32 0, i64 20)
-  %5 = load i32, ptr %1
-  ret i32 %5
+  %1 = alloca %__ManagedArrayData_int
+  %2 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  store ptr %0, ptr %2
+  %3 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  store i32 5, ptr %3
+  %4 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 2
+  store i32 5, ptr %4
+  %5 = call ptr @memset(ptr %0, i32 0, i64 20)
+  %7 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  %8 = load i32, ptr %7
+  ret i32 %8
 }
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)

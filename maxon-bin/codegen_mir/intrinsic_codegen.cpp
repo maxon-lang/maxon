@@ -43,6 +43,16 @@ IntrinsicCodegenRegistry::IntrinsicCodegenRegistry() {
 		{"intrinsic_array_set_at", &MIRCodeGenerator::intrinsic_array_set_at},
 		{"intrinsic_array_shift_right", &MIRCodeGenerator::intrinsic_array_shift_right},
 		{"intrinsic_array_shift_left", &MIRCodeGenerator::intrinsic_array_shift_left},
+
+		// Managed array intrinsics (new struct-based layout)
+		{"intrinsic_managed_array_len", &MIRCodeGenerator::intrinsic_managed_array_len},
+		{"intrinsic_managed_array_capacity", &MIRCodeGenerator::intrinsic_managed_array_capacity},
+		{"intrinsic_managed_array_set_length", &MIRCodeGenerator::intrinsic_managed_array_set_length},
+		{"intrinsic_managed_array_grow", &MIRCodeGenerator::intrinsic_managed_array_grow},
+		{"intrinsic_managed_array_set_at", &MIRCodeGenerator::intrinsic_managed_array_set_at},
+		{"intrinsic_managed_array_get_at", &MIRCodeGenerator::intrinsic_managed_array_get_at},
+		{"intrinsic_managed_array_shift_right", &MIRCodeGenerator::intrinsic_managed_array_shift_right},
+		{"intrinsic_managed_array_shift_left", &MIRCodeGenerator::intrinsic_managed_array_shift_left},
 	};
 
 	// Populate methods_ by looking up codegen method names from IntrinsicRegistry
