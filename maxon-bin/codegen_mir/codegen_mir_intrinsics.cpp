@@ -1012,7 +1012,14 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_at(CallExprAST *callExpr) {
 					callExpr->line, callExpr->column);
 	}
 
-	mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+	mir::MIRValue *dataPtr;
+	if (stackAllocatedArrays.count(arrayVarName) > 0) {
+		// Stack array: arrayAlloca IS the data pointer
+		dataPtr = arrayAlloca;
+	} else {
+		// Heap array: arrayAlloca points to the data pointer
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+	}
 
 	// Calculate element pointer and store
 	mir::MIRValue *index64 = builder->createSExt(index, mir::MIRType::getInt64(), "idx64");
@@ -1069,7 +1076,14 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_right(CallExprAST *callEx
 
 	// Get data pointer
 	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
-	mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+	mir::MIRValue *dataPtr;
+	if (stackAllocatedArrays.count(arrayVarName) > 0) {
+		// Stack array: arrayAlloca IS the data pointer
+		dataPtr = arrayAlloca;
+	} else {
+		// Heap array: arrayAlloca points to the data pointer
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+	}
 
 	// Source pointer: arr + start * elemSize
 	mir::MIRValue *start64 = builder->createSExt(start, mir::MIRType::getInt64(), "start64");
@@ -1138,7 +1152,14 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_left(CallExprAST *callExp
 
 	// Get data pointer
 	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
-	mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+	mir::MIRValue *dataPtr;
+	if (stackAllocatedArrays.count(arrayVarName) > 0) {
+		// Stack array: arrayAlloca IS the data pointer
+		dataPtr = arrayAlloca;
+	} else {
+		// Heap array: arrayAlloca points to the data pointer
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+	}
 
 	// Source pointer: arr + srcIndex * elemSize
 	mir::MIRValue *srcIndex64 = builder->createSExt(srcIndex, mir::MIRType::getInt64(), "srcidx64");

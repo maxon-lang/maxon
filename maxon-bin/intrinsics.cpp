@@ -12,7 +12,10 @@ IntrinsicRegistry::IntrinsicRegistry() {
 		// Convert IntrinsicParamDef to IntrinsicParam
 		std::vector<IntrinsicParam> params;
 		for (const auto &p : def.params) {
-			if (p.isArrayType) {
+			if (p.isAnyType) {
+				// Accept any type
+				params.push_back(IntrinsicParam::any());
+			} else if (p.isArrayType) {
 				// Array type (possibly accepting any element type if allowedTypes is empty)
 				params.push_back(IntrinsicParam::arrayOf(p.allowedTypes));
 			} else if (!p.allowedTypes.empty()) {
@@ -47,6 +50,11 @@ bool IntrinsicRegistry::isIntrinsic(const std::string &name) const {
 }
 
 std::string IntrinsicRegistry::validateArgType(const IntrinsicParam &param, const std::string &actualType) const {
+	// Accept any type
+	if (param.isAnyType) {
+		return ""; // Valid - any type accepted
+	}
+
 	if (param.isArrayType) {
 		// Check if actualType is an array type
 		if (!maxon::TypeConversion::isArrayType(actualType)) {

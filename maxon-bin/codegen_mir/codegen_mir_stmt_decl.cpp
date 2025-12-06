@@ -161,11 +161,16 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 				stackAllocatedArrays.insert(varDecl->name);
 				variableTypes[varDecl->name] = "[" + std::to_string(constantArraySize) + "]" + elementTypeName;
 
-				// For stack arrays, still store length in hidden alloca for .length access
+				// For stack arrays, store length and capacity in hidden allocas for intrinsic access
 				mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt32(), varDecl->name + ".__length");
 				mir::MIRValue *arraySizeVal = builder->getInt32(constantArraySize);
 				builder->createStore(arraySizeVal, lengthAlloca);
 				namedValues[varDecl->name + ".__length"] = lengthAlloca;
+
+				// Capacity equals length for fixed-size arrays
+				mir::MIRValue *capacityAlloca = builder->createAlloca(mir::MIRType::getInt32(), varDecl->name + ".__capacity");
+				builder->createStore(arraySizeVal, capacityAlloca);
+				namedValues[varDecl->name + ".__capacity"] = capacityAlloca;
 			}
 
 			// Initialize array elements

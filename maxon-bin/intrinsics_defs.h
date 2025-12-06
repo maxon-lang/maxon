@@ -8,6 +8,7 @@
 struct IntrinsicParamDef {
 	std::string type;
 	bool isArrayType = false;
+	bool isAnyType = false; // Accept any type (for generic intrinsics)
 	std::vector<std::string> allowedTypes;
 
 	// Single type parameter
@@ -17,6 +18,13 @@ struct IntrinsicParamDef {
 	static IntrinsicParamDef anyOf(std::vector<std::string> types) {
 		IntrinsicParamDef p("");
 		p.allowedTypes = std::move(types);
+		return p;
+	}
+
+	// Accept any type (for generic intrinsics like __array_set_at)
+	static IntrinsicParamDef any() {
+		IntrinsicParamDef p("");
+		p.isAnyType = true;
 		return p;
 	}
 
@@ -60,7 +68,7 @@ inline std::vector<IntrinsicDef> getIntrinsicDefinitions() {
 		{"__array_capacity", "int", {IntrinsicParamDef::arrayOf({})}, "intrinsic_array_capacity"},
 		{"__array_set_length", "void", {IntrinsicParamDef::arrayOf({}), {"int"}}, "intrinsic_array_set_length"},
 		{"__array_grow", "void", {IntrinsicParamDef::arrayOf({}), {"int"}}, "intrinsic_array_grow"},
-		{"__array_set_at", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, IntrinsicParamDef::anyOf({})}, "intrinsic_array_set_at"},
+		{"__array_set_at", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, IntrinsicParamDef::any()}, "intrinsic_array_set_at"},
 		{"__array_shift_right", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, {"int"}}, "intrinsic_array_shift_right"},
 		{"__array_shift_left", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, {"int"}}, "intrinsic_array_shift_left"},
 

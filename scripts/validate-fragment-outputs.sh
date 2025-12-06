@@ -14,7 +14,8 @@ ERRORS=()
 INCREASED_INSTRUCTIONS=()
 
 # Get list of modified .test files in the fragments directory
-MODIFIED_FILES=$(git diff --name-only HEAD -- "$FRAGMENTS_DIR"/*.test 2>/dev/null || true)
+# Use git diff without glob to avoid "Argument list too long" on Windows
+MODIFIED_FILES=$(git diff --name-only HEAD -- "$FRAGMENTS_DIR" 2>/dev/null | grep '\.test$' || true)
 
 if [ -z "$MODIFIED_FILES" ]; then
     echo "No modified test fragments."
