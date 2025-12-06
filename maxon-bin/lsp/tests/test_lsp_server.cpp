@@ -255,6 +255,139 @@ end 'main'
 	REQUIRE(hasUnusedWarning);
 }
 
+TEST_CASE("LSP requires doc comments for exported stdlib functions", "[lsp][diagnostics][stdlib]") {
+	LSPTestFixture fixture;
+	fixture.initialize("file:///stdlib");
+
+	// Exported function without doc comment in stdlib path
+	std::string code = R"(
+export function myPublicFunction() int
+    return 42
+end 'myPublicFunction'
+)";
+	fixture.openDocument("file:///stdlib/test.maxon", code);
+	fixture.shutdown();
+	fixture.run();
+
+	auto notification = fixture.transport()->findNotification("textDocument/publishDiagnostics");
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+	REQUIRE(diagnostics.is_array());
+
+	// Should have an error for missing doc comment
+	bool hasDocCommentError = false;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("missing a doc comment") != std::string::npos) {
+			hasDocCommentError = true;
+			break;
+		}
+	}
+	REQUIRE(hasDocCommentError);
+}
+
+TEST_CASE("LSP does not require doc comments for non-stdlib functions", "[lsp][diagnostics]") {
+	LSPTestFixture fixture;
+	fixture.initialize();
+
+	// Exported function without doc comment in non-stdlib path
+	std::string code = R"(
+export function myPublicFunction() int
+    return 42
+end 'myPublicFunction'
+)";
+	fixture.openDocument("file:///test.maxon", code);
+	fixture.shutdown();
+	fixture.run();
+
+	auto notification = fixture.transport()->findNotification("textDocument/publishDiagnostics");
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+	REQUIRE(diagnostics.is_array());
+
+	// Should NOT have an error for missing doc comment (not in stdlib)
+	bool hasDocCommentError = false;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("missing a doc comment") != std::string::npos) {
+			hasDocCommentError = true;
+			break;
+		}
+	}
+	REQUIRE_FALSE(hasDocCommentError);
+}
+
+TEST_CASE("LSP does not require doc comments for internal stdlib functions", "[lsp][diagnostics][stdlib]") {
+	LSPTestFixture fixture;
+	fixture.initialize("file:///stdlib");
+
+	// Internal function (starts with _) without doc comment in stdlib path
+	std::string code = R"(
+export function _internalFunction() int
+    return 42
+end '_internalFunction'
+)";
+	fixture.openDocument("file:///stdlib/test.maxon", code);
+	fixture.shutdown();
+	fixture.run();
+
+	auto notification = fixture.transport()->findNotification("textDocument/publishDiagnostics");
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+	REQUIRE(diagnostics.is_array());
+
+	// Should NOT have an error for missing doc comment (internal function)
+	bool hasDocCommentError = false;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("missing a doc comment") != std::string::npos) {
+			hasDocCommentError = true;
+			break;
+		}
+	}
+	REQUIRE_FALSE(hasDocCommentError);
+}
+
+TEST_CASE("LSP accepts doc comments for exported stdlib functions", "[lsp][diagnostics][stdlib]") {
+	LSPTestFixture fixture;
+	fixture.initialize("file:///stdlib");
+
+	// Exported function WITH doc comment in stdlib path
+	std::string code = R"(
+/// Returns the answer to life, the universe, and everything.
+export function myPublicFunction() int
+    return 42
+end 'myPublicFunction'
+)";
+	fixture.openDocument("file:///stdlib/test.maxon", code);
+	fixture.shutdown();
+	fixture.run();
+
+	auto notification = fixture.transport()->findNotification("textDocument/publishDiagnostics");
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+	REQUIRE(diagnostics.is_array());
+
+	// Should NOT have an error for missing doc comment (has doc comment)
+	bool hasDocCommentError = false;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("missing a doc comment") != std::string::npos) {
+			hasDocCommentError = true;
+			break;
+		}
+	}
+	REQUIRE_FALSE(hasDocCommentError);
+}
+
 TEST_CASE("LSP no false positive for range() iteration", "[lsp][diagnostics]") {
 	LSPTestFixture fixture;
 	fixture.initialize();

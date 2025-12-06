@@ -167,9 +167,7 @@ void SemanticAnalyzer::registerBuiltinFunctions() {
 void SemanticAnalyzer::setSourceContext(const std::string &source, const std::string &filePath) {
 	sourceContent_ = source;
 	currentFilePath_ = filePath;
-}
-
-std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
+}std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	errors.clear();
 	// Note: Don't clear functions or structs here - we want to keep registered external ones
 	// structs.clear(); // Preserve external structs registered before analysis
@@ -535,8 +533,24 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 	// Analyze methods inside structs first
 	// Skip generic template structs (those with associatedTypeParams) - they'll be analyzed when instantiated
+	// BUT still check for doc comments on exported methods
 	for (const auto &structDef : program->structs) {
-		if (!structDef->associatedTypeParams.empty()) {
+		bool isGenericTemplate = !structDef->associatedTypeParams.empty();
+
+		// Check doc comments on exported methods even for generic templates
+		for (const auto &method : structDef->methods) {
+			if (method->isExported && !sourceContent_.empty() &&
+				currentFilePath_.find("stdlib") != std::string::npos &&
+				!method->name.empty() && method->name[0] != '_') {
+				std::string docComment = extractDocComment(sourceContent_, method->line);
+				if (docComment.empty()) {
+					addError("Exported stdlib function '" + method->name + "' is missing a doc comment (///)",
+							 method->line, method->column);
+				}
+			}
+		}
+
+		if (isGenericTemplate) {
 			logTrace("Skipping generic template struct methods: " + structDef->name);
 			continue;
 		}
@@ -584,9 +598,7 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 		}
 	}
 
-	logTrace("Analyzing function body: " + func->name);
-
-	// Set current receiver type for method field resolution (implicit self)
+	logTrace("Analyzing function body: " + func->name);	// Set current receiver type for method field resolution (implicit self)
 	currentReceiverType = func->receiverType;
 
 	// Validate return type - track undefined struct types for auto-import

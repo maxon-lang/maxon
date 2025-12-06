@@ -33,7 +33,9 @@ export struct set uses Element is ExpressibleByArrayLiteral with Element
 	// This method signature is required for the interface but never called directly
 	// The compiler generates inline code for `set from [array]` syntax
 
-	// Insert an element into the set
+	/// Insert an element into the set
+	/// If the element already exists, this is a no-op
+	/// Automatically resizes the set when load factor exceeds 75%
 	export function insert(element Element)
 		// Check load factor and grow if needed (75% threshold)
 		var loadLimit = trunc((_capacity * 3) / 4)
@@ -89,7 +91,7 @@ export struct set uses Element is ExpressibleByArrayLiteral with Element
 		end 'fallback'
 	end 'insert'
 
-	// Check if element exists in the set
+	/// Check if element exists in the set
 	export function contains(element Element) bool
 		var hash = element.hash()
 		var index = hash mod _capacity
@@ -116,7 +118,7 @@ export struct set uses Element is ExpressibleByArrayLiteral with Element
 		return false
 	end 'contains'
 
-	// Remove element from set, returns true if element was present
+	/// Remove element from set, returns true if element was present
 	export function remove(element Element) bool
 		var hash = element.hash()
 		var index = hash mod _capacity
@@ -145,12 +147,12 @@ export struct set uses Element is ExpressibleByArrayLiteral with Element
 		return false
 	end 'remove'
 
-	// Get number of elements in the set
+	/// Get number of elements in the set
 	export function count() int
 		return _count
 	end 'count'
 
-	// Get current capacity
+	/// Get current capacity (total number of slots)
 	export function capacity() int
 		return _capacity
 	end 'capacity'
