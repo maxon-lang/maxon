@@ -181,6 +181,84 @@ mir::MIRValue *MIRCodeGenerator::getSubstringPtr(ExprAST *arg) {
 	return generateExpr(arg);
 }
 
+// Helper to get array field info - handles both regular variables and implicit struct field access
+// This is needed for array intrinsics like __array_len, __array_set_at, etc. when called from
+// struct methods where the array is a field (e.g., _data in array<T>)
+MIRCodeGenerator::ArrayFieldInfo MIRCodeGenerator::getArrayFieldInfo(ExprAST *arrayArg, int line, int column) {
+	ArrayFieldInfo info = {};
+	info.isStackArray = false;
+	info.isStructField = false;
+	info.fieldIndex = -1;
+
+	std::string arrayVarName;
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
+		arrayVarName = varExpr->name;
+	} else {
+		reportError("Array intrinsic requires a variable argument", line, column);
+		return info;
+	}
+
+	// First, check if this is a regular variable (not a struct field)
+	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
+	if (arrayAlloca) {
+		// Regular variable found - get its type and allocas
+		info.dataPtr = arrayAlloca;
+		info.lengthAlloca = namedValues[arrayVarName + ".__length"];
+		info.capacityAlloca = namedValues[arrayVarName + ".__capacity"];
+		info.isStackArray = (stackAllocatedArrays.count(arrayVarName) > 0);
+
+		std::string arrType = variableTypes[arrayVarName];
+		if (maxon::TypeConversion::isArrayType(arrType)) {
+			info.elementType = maxon::TypeConversion::getArrayElementType(arrType);
+		} else {
+			info.elementType = "int"; // Default fallback
+		}
+		return info;
+	}
+
+	// Not a regular variable - check if it's an implicit struct field access
+	if (!currentReceiverType.empty()) {
+		auto fieldsIt = structFields.find(currentReceiverType);
+		if (fieldsIt != structFields.end()) {
+			for (size_t i = 0; i < fieldsIt->second.size(); i++) {
+				if (fieldsIt->second[i].first == arrayVarName) {
+					// Found the field - it's an array field in the current struct
+					std::string fieldType = fieldsIt->second[i].second;
+
+					// Get pointer to the field via self
+					mir::MIRValue *selfAlloca = namedValues["self"];
+					if (selfAlloca) {
+						mir::MIRValue *selfPtr;
+						if (isStructParameter("self")) {
+							selfPtr = builder->createLoad(mir::MIRType::getPtr(), selfAlloca, "self.ptr");
+						} else {
+							selfPtr = selfAlloca;
+						}
+						mir::MIRType *structType = structTypes[currentReceiverType];
+						mir::MIRValue *fieldPtr = builder->createStructGEP(structType, selfPtr, static_cast<int>(i), arrayVarName + ".ptr");
+
+						info.isStructField = true;
+						info.fieldIndex = static_cast<int>(i);
+						info.dataPtr = fieldPtr; // This is a pointer to the array field (which itself holds a data pointer)
+						info.lengthAlloca = nullptr;  // Struct fields don't have hidden length allocas
+						info.capacityAlloca = nullptr; // Struct fields don't have hidden capacity allocas
+
+						if (maxon::TypeConversion::isArrayType(fieldType)) {
+							info.elementType = maxon::TypeConversion::getArrayElementType(fieldType);
+						} else {
+							info.elementType = "int";
+						}
+						return info;
+					}
+				}
+			}
+		}
+	}
+
+	reportError("Variable is not an array: " + arrayVarName, line, column);
+	return info;
+}
+
 // =============================================================================
 // String Intrinsics
 // =============================================================================
@@ -769,148 +847,115 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_slice(CallExprAST *callExpr
 // =============================================================================
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_len(CallExprAST *callExpr) {
-	// Get the array argument - we need to find its length
 	ExprAST *arrayArg = callExpr->args[0].get();
+	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
-	// Determine the array variable name
-	std::string arrayVarName;
-	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
-		arrayVarName = varExpr->name;
-	} else {
-		reportError("__array_len requires a variable argument",
-					callExpr->line, callExpr->column);
-		return nullptr;
+	// If we have a hidden length alloca (regular variable), use it directly
+	if (info.lengthAlloca) {
+		return builder->createLoad(mir::MIRType::getInt32(), info.lengthAlloca, "array.len");
 	}
 
-	// First check for hidden __length alloca (stack-allocated arrays)
-	std::string lengthVar = arrayVarName + ".__length";
-	mir::MIRValue *lengthAlloca = namedValues[lengthVar];
-	if (lengthAlloca) {
-		return builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "array.len");
-	}
-
-	// For heap-allocated arrays with header layout, read from dataPtr - 8
+	// For struct fields or heap arrays without hidden alloca, read from header at dataPtr - 8
 	// Layout: [length:i32][capacity:i32][...data...]
 	//              -8          -4           0+
-	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
-	if (arrayAlloca) {
-		// Load the data pointer
-		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
-		// Get pointer to length at offset -8 (use GEP with i8 type for byte offsets)
-		mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
-													  {builder->getInt64(-8)}, "length.ptr");
-		return builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "array.len");
+	mir::MIRValue *dataPtr;
+	if (info.isStructField) {
+		// Struct field: info.dataPtr is a pointer to the array field, need to load the data pointer
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
+	} else if (info.isStackArray) {
+		// Stack array: dataPtr IS the array
+		dataPtr = info.dataPtr;
+		// Stack arrays always have hidden length allocas, so we shouldn't reach here
+		reportError("Stack array missing length alloca", callExpr->line, callExpr->column);
+		return nullptr;
+	} else {
+		// Heap array: info.dataPtr is an alloca holding the data pointer
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
 	}
 
-	reportError("Variable is not an array: " + arrayVarName,
-				callExpr->line, callExpr->column);
-	return nullptr;
+	mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+												  {builder->getInt64(-8)}, "length.ptr");
+	return builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "array.len");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_capacity(CallExprAST *callExpr) {
-	// Get the array argument
 	ExprAST *arrayArg = callExpr->args[0].get();
+	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
-	std::string arrayVarName;
-	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
-		arrayVarName = varExpr->name;
-	} else {
-		reportError("__array_capacity requires a variable argument",
-					callExpr->line, callExpr->column);
+	// If we have a hidden capacity alloca (regular variable), use it directly
+	if (info.capacityAlloca) {
+		return builder->createLoad(mir::MIRType::getInt32(), info.capacityAlloca, "array.cap");
 	}
 
-	// Check for hidden __capacity alloca first (dynamic arrays)
-	std::string capacityVar = arrayVarName + ".__capacity";
-	mir::MIRValue *capacityAlloca = namedValues[capacityVar];
-	if (capacityAlloca) {
-		return builder->createLoad(mir::MIRType::getInt32(), capacityAlloca, "array.cap");
-	}
-
-	// For heap-allocated arrays, read from dataPtr - 4
+	// For struct fields or heap arrays without hidden alloca, read from header at dataPtr - 4
 	// Layout: [length:i32][capacity:i32][...data...]
 	//              -8          -4           0+
-	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
-	if (arrayAlloca) {
-		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
-		mir::MIRValue *capacityPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
-														{builder->getInt64(-4)}, "capacity.ptr");
-		return builder->createLoad(mir::MIRType::getInt32(), capacityPtr, "array.cap");
+	mir::MIRValue *dataPtr;
+	if (info.isStructField) {
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
+	} else if (info.isStackArray) {
+		reportError("Stack array does not have capacity", callExpr->line, callExpr->column);
+		return nullptr;
+	} else {
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
 	}
 
-	reportError("Variable is not a dynamic array: " + arrayVarName,
-				callExpr->line, callExpr->column);
-	return nullptr;
+	mir::MIRValue *capacityPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+													{builder->getInt64(-4)}, "capacity.ptr");
+	return builder->createLoad(mir::MIRType::getInt32(), capacityPtr, "array.cap");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_length(CallExprAST *callExpr) {
-	// Get the array argument and new length
 	ExprAST *arrayArg = callExpr->args[0].get();
 	mir::MIRValue *newLen = generateExpr(callExpr->args[1].get());
+	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
-	std::string arrayVarName;
-	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
-		arrayVarName = varExpr->name;
+	// If we have a hidden length alloca (regular variable), use it directly
+	if (info.lengthAlloca) {
+		builder->createStore(newLen, info.lengthAlloca);
+		return builder->getInt32(0);
+	}
+
+	// For struct fields or heap arrays without hidden alloca, write to header at dataPtr - 8
+	mir::MIRValue *dataPtr;
+	if (info.isStructField) {
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
 	} else {
-		reportError("__array_set_length requires a variable argument",
-					callExpr->line, callExpr->column);
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
 	}
 
-	// Check for hidden __length alloca first
-	std::string lengthVar = arrayVarName + ".__length";
-	mir::MIRValue *lengthAlloca = namedValues[lengthVar];
-	if (lengthAlloca) {
-		builder->createStore(newLen, lengthAlloca);
-		return builder->getInt32(0);
-	}
-
-	// For heap-allocated arrays, write to dataPtr - 8
-	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
-	if (arrayAlloca) {
-		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
-		mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
-													  {builder->getInt64(-8)}, "length.ptr");
-		builder->createStore(newLen, lengthPtr);
-		return builder->getInt32(0);
-	}
-
-	reportError("Variable is not an array: " + arrayVarName,
-				callExpr->line, callExpr->column);
-	return nullptr;
+	mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+												  {builder->getInt64(-8)}, "length.ptr");
+	builder->createStore(newLen, lengthPtr);
+	return builder->getInt32(0);
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_grow(CallExprAST *callExpr) {
 	// __array_grow(arr, min_capacity) - grow array if needed
 	ExprAST *arrayArg = callExpr->args[0].get();
 	mir::MIRValue *minCapacity = generateExpr(callExpr->args[1].get());
-
-	std::string arrayVarName;
-	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
-		arrayVarName = varExpr->name;
-	} else {
-		reportError("__array_grow requires a variable argument",
-					callExpr->line, callExpr->column);
-	}
-
-	// Get array's internal allocas
-	mir::MIRValue *arrAlloca = namedValues[arrayVarName];
-	mir::MIRValue *capacityAlloca = namedValues[arrayVarName + ".__capacity"];
-
-	if (!arrAlloca || !capacityAlloca) {
-		reportError("__array_grow can only be used on dynamic arrays: " + arrayVarName,
-					callExpr->line, callExpr->column);
-	}
+	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// Get element type and size
-	std::string arrType = variableTypes[arrayVarName];
-	std::string elemTypeStr = "int";
-	if (maxon::TypeConversion::isArrayType(arrType)) {
-		elemTypeStr = maxon::TypeConversion::getArrayElementType(arrType);
-	}
-	mir::MIRType *elemType = getTypeFromString(elemTypeStr);
+	mir::MIRType *elemType = getTypeFromString(info.elementType);
 	int elemSize = static_cast<int>(elemType->sizeInBytes);
 
+	// For struct fields, we need to work with the heap array header
+	// For regular variables with hidden allocas, use those
+	mir::MIRValue *arrAlloca = info.dataPtr;
+	mir::MIRValue *capacityAlloca = info.capacityAlloca;
+
 	// Load current capacity
-	mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt32(), capacityAlloca, "capacity");
+	mir::MIRValue *capacity;
+	if (capacityAlloca) {
+		capacity = builder->createLoad(mir::MIRType::getInt32(), capacityAlloca, "capacity");
+	} else {
+		// For struct fields, read capacity from heap header at dataPtr - 4
+		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrAlloca, "data.ptr");
+		mir::MIRValue *capacityPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+														{builder->getInt64(-4)}, "capacity.ptr");
+		capacity = builder->createLoad(mir::MIRType::getInt32(), capacityPtr, "capacity");
+	}
 
 	// Check if we need to grow: minCapacity > capacity
 	mir::MIRFunction *currentFunc = builder->getFunction();
@@ -973,9 +1018,18 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_grow(CallExprAST *callExpr) {
 														 {mir::MIRType::getPtr(), mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 	mir::MIRValue *newArrPtr = builder->createCall(reallocFunc, {arrPtr, oldSize, newSize}, "new.arr");
 
-	// Store new pointer and capacity
+	// Store new pointer
 	builder->createStore(newArrPtr, arrAlloca);
-	builder->createStore(newCapacity, capacityAlloca);
+
+	// Store new capacity - either to hidden alloca or to heap header
+	if (capacityAlloca) {
+		builder->createStore(newCapacity, capacityAlloca);
+	} else {
+		// For struct fields, write capacity to heap header at newArrPtr - 4
+		mir::MIRValue *newCapacityPtr = builder->createGEP(mir::MIRType::getInt8(), newArrPtr,
+														   {builder->getInt64(-4)}, "new.capacity.ptr");
+		builder->createStore(newCapacity, newCapacityPtr);
+	}
 	builder->createBr(doneBlock);
 
 	// Done block
@@ -988,37 +1042,22 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_at(CallExprAST *callExpr) {
 	ExprAST *arrayArg = callExpr->args[0].get();
 	mir::MIRValue *index = generateExpr(callExpr->args[1].get());
 	mir::MIRValue *value = generateExpr(callExpr->args[2].get());
-
-	std::string arrayVarName;
-	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
-		arrayVarName = varExpr->name;
-	} else {
-		reportError("__array_set_at requires a variable argument",
-					callExpr->line, callExpr->column);
-	}
+	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// Get element type
-	std::string arrType = variableTypes[arrayVarName];
-	std::string elemTypeStr = "int";
-	if (maxon::TypeConversion::isArrayType(arrType)) {
-		elemTypeStr = maxon::TypeConversion::getArrayElementType(arrType);
-	}
-	mir::MIRType *elemType = getTypeFromString(elemTypeStr);
+	mir::MIRType *elemType = getTypeFromString(info.elementType);
 
 	// Get array data pointer
-	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
-	if (!arrayAlloca) {
-		reportError("Variable is not an array: " + arrayVarName,
-					callExpr->line, callExpr->column);
-	}
-
 	mir::MIRValue *dataPtr;
-	if (stackAllocatedArrays.count(arrayVarName) > 0) {
-		// Stack array: arrayAlloca IS the data pointer
-		dataPtr = arrayAlloca;
+	if (info.isStackArray) {
+		// Stack array: dataPtr IS the array
+		dataPtr = info.dataPtr;
+	} else if (info.isStructField) {
+		// Struct field: need to load the data pointer from the field
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
 	} else {
-		// Heap array: arrayAlloca points to the data pointer
-		dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+		// Heap array: dataPtr is an alloca holding the data pointer
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
 	}
 
 	// Calculate element pointer and store
@@ -1034,34 +1073,28 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_right(CallExprAST *callEx
 	ExprAST *arrayArg = callExpr->args[0].get();
 	mir::MIRValue *start = generateExpr(callExpr->args[1].get());
 	mir::MIRValue *count = generateExpr(callExpr->args[2].get());
-
-	std::string arrayVarName;
-	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
-		arrayVarName = varExpr->name;
-	} else {
-		reportError("__array_shift_right requires a variable argument",
-					callExpr->line, callExpr->column);
-	}
+	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// Get element type and size
-	std::string arrType = variableTypes[arrayVarName];
-	std::string elemTypeStr = "int";
-	if (maxon::TypeConversion::isArrayType(arrType)) {
-		elemTypeStr = maxon::TypeConversion::getArrayElementType(arrType);
-	}
-	mir::MIRType *elemType = getTypeFromString(elemTypeStr);
+	mir::MIRType *elemType = getTypeFromString(info.elementType);
 	int elemSize = static_cast<int>(elemType->sizeInBytes);
 
-	// Get current length
-	std::string lengthVar = arrayVarName + ".__length";
-	mir::MIRValue *lengthAlloca = namedValues[lengthVar];
-	mir::MIRValue *length;
-	if (lengthAlloca) {
-		length = builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "len");
+	// Get data pointer
+	mir::MIRValue *dataPtr;
+	if (info.isStackArray) {
+		dataPtr = info.dataPtr;
+	} else if (info.isStructField) {
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
 	} else {
-		// For heap arrays, read from header
-		mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
-		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
+	}
+
+	// Get current length
+	mir::MIRValue *length;
+	if (info.lengthAlloca) {
+		length = builder->createLoad(mir::MIRType::getInt32(), info.lengthAlloca, "len");
+	} else {
+		// For struct fields or heap arrays, read from header at dataPtr - 8
 		mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
 													  {builder->getInt64(-8)}, "length.ptr");
 		length = builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "len");
@@ -1073,17 +1106,6 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_right(CallExprAST *callEx
 	// Calculate byte size to move
 	mir::MIRValue *elementsToMove64 = builder->createSExt(elementsToMove, mir::MIRType::getInt64(), "elems64");
 	mir::MIRValue *byteSize = builder->createMul(elementsToMove64, builder->getInt64(elemSize), "byte.size");
-
-	// Get data pointer
-	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
-	mir::MIRValue *dataPtr;
-	if (stackAllocatedArrays.count(arrayVarName) > 0) {
-		// Stack array: arrayAlloca IS the data pointer
-		dataPtr = arrayAlloca;
-	} else {
-		// Heap array: arrayAlloca points to the data pointer
-		dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
-	}
 
 	// Source pointer: arr + start * elemSize
 	mir::MIRValue *start64 = builder->createSExt(start, mir::MIRType::getInt64(), "start64");
@@ -1107,34 +1129,28 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_left(CallExprAST *callExp
 	ExprAST *arrayArg = callExpr->args[0].get();
 	mir::MIRValue *start = generateExpr(callExpr->args[1].get());
 	mir::MIRValue *count = generateExpr(callExpr->args[2].get());
-
-	std::string arrayVarName;
-	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
-		arrayVarName = varExpr->name;
-	} else {
-		reportError("__array_shift_left requires a variable argument",
-					callExpr->line, callExpr->column);
-	}
+	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// Get element type and size
-	std::string arrType = variableTypes[arrayVarName];
-	std::string elemTypeStr = "int";
-	if (maxon::TypeConversion::isArrayType(arrType)) {
-		elemTypeStr = maxon::TypeConversion::getArrayElementType(arrType);
-	}
-	mir::MIRType *elemType = getTypeFromString(elemTypeStr);
+	mir::MIRType *elemType = getTypeFromString(info.elementType);
 	int elemSize = static_cast<int>(elemType->sizeInBytes);
 
-	// Get current length
-	std::string lengthVar = arrayVarName + ".__length";
-	mir::MIRValue *lengthAlloca = namedValues[lengthVar];
-	mir::MIRValue *length;
-	if (lengthAlloca) {
-		length = builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "len");
+	// Get data pointer
+	mir::MIRValue *dataPtr;
+	if (info.isStackArray) {
+		dataPtr = info.dataPtr;
+	} else if (info.isStructField) {
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
 	} else {
-		// For heap arrays, read from header
-		mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
-		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
+	}
+
+	// Get current length
+	mir::MIRValue *length;
+	if (info.lengthAlloca) {
+		length = builder->createLoad(mir::MIRType::getInt32(), info.lengthAlloca, "len");
+	} else {
+		// For struct fields or heap arrays, read from header at dataPtr - 8
 		mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
 													  {builder->getInt64(-8)}, "length.ptr");
 		length = builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "len");
@@ -1149,17 +1165,6 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_left(CallExprAST *callExp
 	// Calculate byte size to move
 	mir::MIRValue *elementsToMove64 = builder->createSExt(elementsToMove, mir::MIRType::getInt64(), "elems64");
 	mir::MIRValue *byteSize = builder->createMul(elementsToMove64, builder->getInt64(elemSize), "byte.size");
-
-	// Get data pointer
-	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
-	mir::MIRValue *dataPtr;
-	if (stackAllocatedArrays.count(arrayVarName) > 0) {
-		// Stack array: arrayAlloca IS the data pointer
-		dataPtr = arrayAlloca;
-	} else {
-		// Heap array: arrayAlloca points to the data pointer
-		dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
-	}
 
 	// Source pointer: arr + srcIndex * elemSize
 	mir::MIRValue *srcIndex64 = builder->createSExt(srcIndex, mir::MIRType::getInt64(), "srcidx64");
