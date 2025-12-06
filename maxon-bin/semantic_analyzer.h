@@ -281,9 +281,10 @@ class SemanticAnalyzer {
 	void invalidateFunctionCallers(const std::string &functionName);
 
   private:
-	Logger *logger_ = nullptr;	  // Optional logger for detailed tracing
-	std::string sourceContent_;	  // Source code for doc comment extraction
-	std::string currentFilePath_; // Current file path for stdlib detection
+	Logger *logger_ = nullptr;			  // Optional logger for detailed tracing
+	std::string sourceContent_;			  // Source code for doc comment extraction
+	std::string currentFilePath_;		  // Current file path for stdlib detection
+	ProgramAST *currentProgram = nullptr; // Current program being analyzed (for generic struct lookup)
 	const StructInfo *lookupStruct(const std::string &name) const;
 	const EnumInfo *lookupEnum(const std::string &name) const;
 	std::vector<SemanticError> errors;
@@ -363,6 +364,8 @@ class SemanticAnalyzer {
 	void checkUnusedVariables();
 	void checkInterfaceConformance(const std::string &structName, const std::vector<std::string> &conformsTo, int line, int column);
 	void registerMapMethods(const std::string &mapType, const std::string &keyType, const std::string &valueType);
+	void instantiateGenericStructMethods(const std::string &templateName, const std::string &specializedName,
+										 const std::map<std::string, std::string> &typeBindings);
 
 	// Incremental analysis helpers
 	std::string computeSignatureHash(const FunctionInfo &funcInfo) const;

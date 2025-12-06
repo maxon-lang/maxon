@@ -182,6 +182,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	undefinedStructs.clear();
 	undefinedInterfaces.clear();
 	allDeclaredVariables.clear(); // Clear persistent symbol table
+	currentProgram = program;	  // Store for generic struct method instantiation
 
 	logDetail("Starting semantic analysis");
 	logTrace("Registered external functions: " + std::to_string(functions.size()));
@@ -1116,4 +1117,98 @@ void SemanticAnalyzer::registerMapMethods(const std::string &mapType, const std:
 
 	// capacity(map) -> int
 	functions.emplace(mapType + ".capacity", FunctionInfo(mapType + ".capacity", "int", {FunctionParameter("self", mapType)}));
+}
+
+void SemanticAnalyzer::instantiateGenericStructMethods(const std::string &templateName,
+													   const std::string &specializedName,
+													   const std::map<std::string, std::string> &typeBindings) {
+	logTrace("instantiateGenericStructMethods: " + templateName + " -> " + specializedName);
+
+	// Check if already instantiated
+	std::string checkMethodName = specializedName + ".count"; // Use common method as marker
+	if (functions.find(checkMethodName) != functions.end()) {
+		logTrace("  Already instantiated (found " + checkMethodName + ")");
+		return; // Already registered for this specialized type
+	}
+
+	// Look up the struct info to get its methods
+	auto structIt = structs.find(templateName);
+	if (structIt == structs.end()) {
+		// Template struct not yet loaded - mark as undefined for auto-import
+		logTrace("  Struct '" + templateName + "' not found in structs map, marking as undefined");
+		undefinedStructs.insert(templateName);
+		return;
+	}
+	logTrace("  Found struct '" + templateName + "' in structs map");
+
+	// We need access to the AST methods, which are stored in program->structs
+	// Look up the struct definition in the current program
+	StructDefAST *structDef = nullptr;
+	if (currentProgram) {
+		logTrace("  Searching " + std::to_string(currentProgram->structs.size()) + " structs in currentProgram for '" + templateName + "'");
+		for (const auto &s : currentProgram->structs) {
+			logTrace("    Checking struct: " + s->name);
+			if (s->name == templateName) {
+				structDef = s.get();
+				break;
+			}
+		}
+	}
+
+	if (!structDef) {
+		// Struct definition not found - might be in stdlib not yet loaded
+		logTrace("  StructDefAST for '" + templateName + "' not found in currentProgram->structs");
+		undefinedStructs.insert(templateName);
+		return;
+	}
+
+	logTrace("  Found StructDefAST for '" + templateName + "' with " + std::to_string(structDef->methods.size()) + " methods");
+
+	// Helper to substitute type parameters
+	auto substituteType = [&](const std::string &type) -> std::string {
+		auto it = typeBindings.find(type);
+		if (it != typeBindings.end()) {
+			return it->second;
+		}
+		// Handle array types: array<Element> -> array<int>
+		if (type.length() > 6 && type.substr(0, 6) == "array<") {
+			std::string elemType = type.substr(6, type.length() - 7);
+			auto elemIt = typeBindings.find(elemType);
+			if (elemIt != typeBindings.end()) {
+				return "array<" + elemIt->second + ">";
+			}
+		}
+		return type;
+	};
+
+	// Register each method with substituted types
+	for (const auto &method : structDef->methods) {
+		std::string methodKey = specializedName + "." + method->name;
+
+		// Skip if already registered
+		if (functions.find(methodKey) != functions.end()) {
+			continue;
+		}
+
+		// Substitute return type
+		std::string returnType = substituteType(method->returnType);
+
+		// Substitute parameter types, replacing self's type with the specialized type
+		// The parser already added self as the first parameter, we just need to update its type
+		std::vector<FunctionParameter> params;
+		for (const auto &param : method->parameters) {
+			if (param.name == "self") {
+				// Replace self's type with the specialized type
+				params.emplace_back("self", specializedName, param.line, param.column);
+			} else {
+				params.emplace_back(param.name, substituteType(param.type), param.line, param.column);
+			}
+		}
+
+		// Register the method
+		functions.emplace(methodKey, FunctionInfo(methodKey, returnType, params,
+												  method->implementsInterface, method->line, method->column));
+
+		logTrace("Instantiated generic method: " + methodKey + " -> " + returnType);
+	}
 }

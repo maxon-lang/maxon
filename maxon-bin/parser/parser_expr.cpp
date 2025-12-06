@@ -92,6 +92,27 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		return expr;
 	}
 
+	// Set from array pattern: set from [values] or set from arrayExpr
+	// Must be checked before the generic dictionary pattern
+	if (check(TokenType::IDENTIFIER) && std::string(currentValue()) == "set" && checkKeyword("from", 1)) {
+		int line = currentLine();
+		int column = currentColumn();
+		std::string setTypeName = std::string(currentValue());
+		advance(); // consume 'set'
+
+		expectKeywordAdvance("from", "Expected 'from' after 'set'");
+
+		// Parse the array expression (could be array literal or variable)
+		auto arrayExpr = parsePrimary();
+
+		int endLine = currentLine();
+		int endCol = currentColumn() - 1;
+
+		auto expr = std::make_unique<SetFromExprAST>(setTypeName, std::move(arrayExpr), line, column);
+		expr->setEndPosition(endLine, endCol);
+		return expr;
+	}
+
 	// Dictionary type pattern: TypeName from KeyType to ValueType
 	// Works with any type that conforms to the Dictionary interface (e.g., map, HashMap, OrderedMap)
 	if (check(TokenType::IDENTIFIER) && checkKeyword("from", 1)) {

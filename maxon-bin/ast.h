@@ -287,6 +287,18 @@ class MapLiteralExprAST : public ExprAST {
 		: ExprAST(l, c), dictType(dType), keyType(kType), valueType(vType) {}
 };
 
+// Set from array expression (e.g., "set from [1, 2, 3]")
+// Creates a set initialized with elements from an array literal
+class SetFromExprAST : public ExprAST {
+  public:
+	std::string setType;					 // Set type name (e.g., "set")
+	std::unique_ptr<ExprAST> arrayExpr;		 // The array expression to initialize from
+	mutable std::string inferredElementType; // Element type inferred from array literal
+
+	SetFromExprAST(const std::string &sType, std::unique_ptr<ExprAST> arr, int l = 0, int c = 0)
+		: ExprAST(l, c), setType(sType), arrayExpr(std::move(arr)) {}
+};
+
 // Member access expression (e.g., "array.length")
 class MemberAccessExprAST : public ExprAST {
   public:

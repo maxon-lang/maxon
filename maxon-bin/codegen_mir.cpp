@@ -217,6 +217,12 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return getOrCreateManagedArrayDataType(elemType);
 	}
 
+	// Handle bare _ManagedArray (used in ExpressibleByArrayLiteral interface)
+	// This is an opaque pointer type
+	if (typeStr == "_ManagedArray") {
+		return mir::MIRType::getPtr();
+	}
+
 	if (typeStr.rfind("_StaticArray<", 0) == 0) {
 		int size = maxon::TypeConversion::getStaticArraySize(typeStr);
 		std::string elemType = maxon::TypeConversion::getArrayElementType(typeStr);
@@ -736,6 +742,10 @@ std::string MIRCodeGenerator::instantiateGenericStruct(const std::string &templa
 
 	// Helper to substitute type parameters
 	auto substituteType = [&](const std::string &type) -> std::string {
+		// Handle Self type - substitute with the specialized name
+		if (type == "Self") {
+			return specializedName;
+		}
 		auto it = typeBindings.find(type);
 		if (it != typeBindings.end()) {
 			return it->second;
@@ -772,12 +782,15 @@ std::string MIRCodeGenerator::instantiateGenericStruct(const std::string &templa
 	instantiatedGenericStructs.insert(specializedName);
 
 	// Now instantiate methods
+	logDetail("Instantiating " + std::to_string(templateDef->methods.size()) + " methods for " + specializedName);
 	for (const auto &method : templateDef->methods) {
 		// Build specialized method name: map<string,int>.insert
 		std::string specializedMethodName = specializedName + "." + method->name;
+		logDetail("  Instantiating method: " + specializedMethodName);
 
 		// Skip if already declared (shouldn't happen, but be safe)
 		if (module->getFunction(specializedMethodName) != nullptr) {
+			logDetail("    Already declared, skipping");
 			continue;
 		}
 
@@ -794,6 +807,7 @@ std::string MIRCodeGenerator::instantiateGenericStruct(const std::string &templa
 		// Create MIR function declaration
 		mir::MIRType *retType = getTypeFromStringNoMark(substitutedReturnType);
 		mir::MIRFunction *mirFunc = module->createFunction(specializedMethodName, retType);
+		logDetail("    Created MIR function: " + specializedMethodName);
 
 		// Add parameters - first is always self (pointer to struct)
 		mirFunc->addParameter(mir::MIRType::getPtr(), "self");

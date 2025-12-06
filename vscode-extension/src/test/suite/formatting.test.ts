@@ -330,6 +330,66 @@ end 'main'`;
         await vscode.workspace.fs.delete(testUri);
     });
 
+    test('Should format multiple interfaces at top level', async function () {
+        this.timeout(10000);
+
+        // Interfaces incorrectly nested (each indented more than previous)
+        const badlyFormattedContent = `interface Hashable
+\tfunction hash() int
+\tend 'Hashable'
+
+\tinterface Equatable
+\t\tfunction equals(other Self) bool
+\t\tend 'Equatable'
+
+\t\tinterface Comparable
+\t\t\tfunction compare(other Self) int
+\t\t\tend 'Comparable'`;
+
+        const testUri = await createTestFile(badlyFormattedContent, 'test_format_interfaces.maxon');
+
+        // Request formatting
+        const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
+            'vscode.executeFormatDocumentProvider',
+            testUri,
+            { tabSize: 4, insertSpaces: false }
+        );
+
+        assert.ok(edits, 'Should return formatting edits');
+        assert.ok(edits.length > 0, 'Should have at least one edit');
+
+        // Apply the edits
+        const workspaceEdit = new vscode.WorkspaceEdit();
+        for (const edit of edits) {
+            workspaceEdit.replace(testUri, edit.range, edit.newText);
+        }
+        await vscode.workspace.applyEdit(workspaceEdit);
+
+        const formattedContent = testDocument!.getText();
+
+        // All interfaces should be at top level (no leading tabs on interface keyword)
+        assert.ok(!formattedContent.match(/^\t+interface/m),
+            'No interface should be indented');
+
+        // Method signatures should be indented one level
+        assert.ok(formattedContent.includes('\tfunction hash()'),
+            'Method signatures should be indented');
+        assert.ok(formattedContent.includes('\tfunction equals('),
+            'Method signatures should be indented');
+        assert.ok(formattedContent.includes('\tfunction compare('),
+            'Method signatures should be indented');
+
+        // End statements should be at top level
+        assert.ok(formattedContent.match(/^end 'Hashable'/m),
+            'end Hashable should be at top level');
+        assert.ok(formattedContent.match(/^end 'Equatable'/m),
+            'end Equatable should be at top level');
+        assert.ok(formattedContent.match(/^end 'Comparable'/m),
+            'end Comparable should be at top level');
+
+        await vscode.workspace.fs.delete(testUri);
+    });
+
     test('Formatting provider should be registered', async function () {
         this.timeout(5000);
 

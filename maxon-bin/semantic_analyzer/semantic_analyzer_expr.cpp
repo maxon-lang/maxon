@@ -137,6 +137,78 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Return the dictionary type string: dictType<keyType,valueType>
 		return mapType;
 
+	} else if (auto setFromExpr = dynamic_cast<SetFromExprAST *>(expr)) {
+		// Set from array: set from [1, 2, 3]
+		// Analyze the array expression to get element type
+		std::string arrayType = analyzeExpression(setFromExpr->arrayExpr.get());
+
+		// Extract element type from array type using TypeConversion utility
+		std::string elemType;
+		if (maxon::TypeConversion::isManagedArrayType(arrayType)) {
+			// Managed array type: _ManagedArray<T> or array<T>
+			elemType = maxon::TypeConversion::getArrayElementType(arrayType);
+		} else if (maxon::TypeConversion::isStaticArrayType(arrayType)) {
+			// Static array type: _StaticArray<N, T>
+			elemType = maxon::TypeConversion::getArrayElementType(arrayType);
+		}
+
+		if (elemType.empty()) {
+			addError("Cannot determine element type from array expression in 'set from'" +
+						 std::string("\n  Expected: set from [values] or set from arrayVariable") +
+						 "\n  Got type: " + arrayType,
+					 expr->line, expr->column);
+			return "error";
+		}
+
+		// Store the inferred element type for codegen
+		setFromExpr->inferredElementType = elemType;
+
+		// Validate element type implements Hashable (sets require hashable elements)
+		bool isBuiltinHashable = (elemType == "int" || elemType == "string" ||
+								  elemType == "character" || elemType == "byte");
+		bool isBuiltinNonHashable = (elemType == "float" || elemType == "bool");
+
+		if (isBuiltinNonHashable) {
+			addError("Set element type '" + elemType + "' must implement Hashable interface" +
+						 std::string("\n  Hashable types: int, string, character, byte") +
+						 "\n  Note: Only types that can be hashed can be used in sets",
+					 expr->line, expr->column);
+			return "error";
+		} else if (!isBuiltinHashable) {
+			// Check if it's a struct that conforms to Hashable
+			auto structInfo = lookupStruct(elemType);
+			if (structInfo == nullptr) {
+				undefinedStructs.insert(elemType);
+			} else {
+				bool conformsToHashable = false;
+				for (const auto &iface : structInfo->conformsTo) {
+					if (iface == "Hashable") {
+						conformsToHashable = true;
+						break;
+					}
+				}
+				if (!conformsToHashable) {
+					addError("Set element type '" + elemType + "' must implement Hashable interface" +
+								 std::string("\n  Hashable types: int, string, character, byte") +
+								 "\n  Or declare: struct " + elemType + " is Hashable",
+							 expr->line, expr->column);
+					return "error";
+				}
+			}
+		}
+
+		// Instantiate set methods for this element type using generic mechanism
+		std::string setType = setFromExpr->setType + "<" + elemType + ">";
+		std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
+		instantiateGenericStructMethods(setFromExpr->setType, setType, typeBindings);
+
+		// Track the base set struct for auto-import
+		if (structs.find(setFromExpr->setType) == structs.end()) {
+			undefinedStructs.insert(setFromExpr->setType);
+		}
+
+		return setType;
+
 	} else if (auto castExpr = dynamic_cast<CastExprAST *>(expr)) {
 		// Analyze the expression being cast
 		std::string sourceType = analyzeExpression(castExpr->expr.get());
@@ -695,14 +767,18 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				if (!callExpr->args.empty()) {
 					// Get the type of the first argument
 					std::string firstArgType = analyzeExpression(callExpr->args[0].get());
+					logTrace("Method disambiguation: callee='" + callExpr->callee + "' firstArgType='" + firstArgType + "'");
 
 					// Look for a method with matching qualifier (Type.method where Type == firstArgType)
 					for (const auto &match : matches) {
+						logTrace("  Checking match: " + match);
 						size_t dotPos = match.rfind(".");
 						if (dotPos != std::string::npos) {
 							std::string qualifier = match.substr(0, dotPos);
+							logTrace("    qualifier='" + qualifier + "' vs firstArgType='" + firstArgType + "'");
 							// Check if qualifier matches the first argument's type
 							if (qualifier == firstArgType) {
+								logTrace("    -> MATCHED!");
 								if (resolvedMatch.empty()) {
 									resolvedMatch = match;
 								} else {
@@ -717,7 +793,13 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 				if (!resolvedMatch.empty()) {
 					// Found exactly one match based on receiver type
+					logTrace("Resolved method: " + resolvedMatch);
 					funcIt = functions.find(resolvedMatch);
+					if (funcIt == functions.end()) {
+						logTrace("  ERROR: functions.find failed for " + resolvedMatch);
+					} else {
+						logTrace("  Found with " + std::to_string(funcIt->second.parameters.size()) + " params");
+					}
 					auto idIt = functionIndices.find(resolvedMatch);
 					callExpr->resolvedCallee = resolvedMatch; // Store resolved name for codegen
 					if (idIt != functionIndices.end()) {

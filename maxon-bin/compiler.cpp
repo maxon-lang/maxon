@@ -369,6 +369,7 @@ std::string compileProgram(const CompilationOptions &options) {
 		programs.clear();
 
 		SemanticAnalyzer analyzer;
+		analyzer.setLogger(&logger);
 
 		// Register all built-in functions (runtime functions, string methods, etc.)
 		analyzer.registerBuiltinFunctions();
@@ -409,6 +410,9 @@ std::string compileProgram(const CompilationOptions &options) {
 		std::set<std::string> undefinedStructs = analyzer.getUndefinedStructs();
 		if (!undefinedStructs.empty()) {
 			logger.trace(LogPhase::Semantic, "Undefined structs: ", undefinedStructs.size());
+			for (const auto &s : undefinedStructs) {
+				logger.trace(LogPhase::Semantic, "  - ", s);
+			}
 			std::vector<std::string> stdlibFiles = findStdlibFilesDefiningStructs(undefinedStructs);
 			for (const auto &file : stdlibFiles) {
 				if (processedFiles.find(file) == processedFiles.end()) {
@@ -518,6 +522,11 @@ std::string compileProgram(const CompilationOptions &options) {
 
 		// Filter methods in structs
 		for (auto &structDef : mergedProgram->structs) {
+			// Skip filtering for generic template structs - their methods are instantiated on demand
+			if (!structDef->associatedTypeParams.empty()) {
+				continue;
+			}
+
 			std::vector<std::unique_ptr<FunctionAST>> filteredMethods;
 			for (auto &method : structDef->methods) {
 				std::string methodName = structDef->name + "." + method->name;

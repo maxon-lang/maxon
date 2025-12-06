@@ -1040,6 +1040,63 @@ end 'main')";
 	REQUIRE(newText.find("end 'foo'\n\nfunction main") != std::string::npos);
 }
 
+TEST_CASE("LSP formatting formats multiple interfaces at top level", "[lsp][formatting]") {
+	LSPTestFixture fixture;
+	fixture.initialize();
+
+	// Multiple interfaces with incorrect nesting (each indented more than the previous)
+	// This mimics the bug in stdlib/interfaces.maxon
+	std::string code = R"(interface Hashable
+	function hash() int
+	end 'Hashable'
+
+	interface Equatable
+		function equals(other Self) bool
+		end 'Equatable'
+
+		interface Comparable
+			function compare(other Self) int
+			end 'Comparable')";
+	fixture.openDocument("file:///test.maxon", code);
+
+	json formatParams = {
+		{"textDocument", {{"uri", "file:///test.maxon"}}},
+		{"options", {{"tabSize", 4}, {"insertSpaces", false}}}};
+	fixture.transport()->queueRequest(5, "textDocument/formatting", formatParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(5);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+
+	auto &edits = response->result.value();
+	REQUIRE(edits.size() >= 1);
+	std::string newText = edits[0]["newText"].get<std::string>();
+
+	// All interfaces should be at top level (no leading tabs)
+	// First interface may start at beginning of document or after newline
+	// Check that interfaces are NOT indented (don't have tab before them)
+	REQUIRE((newText.find("interface Hashable") == 0 || newText.find("\ninterface Hashable") != std::string::npos));
+	REQUIRE(newText.find("\ninterface Equatable") != std::string::npos);
+	REQUIRE(newText.find("\ninterface Comparable") != std::string::npos);
+
+	// Verify interfaces are NOT indented (no tab before interface keyword)
+	REQUIRE(newText.find("\tinterface") == std::string::npos);
+
+	// Method signatures should be indented one level
+	REQUIRE(newText.find("\tfunction hash()") != std::string::npos);
+	REQUIRE(newText.find("\tfunction equals(") != std::string::npos);
+	REQUIRE(newText.find("\tfunction compare(") != std::string::npos);
+
+	// End statements should be at top level (no leading tabs)
+	REQUIRE(newText.find("\nend 'Hashable'") != std::string::npos);
+	REQUIRE(newText.find("\nend 'Equatable'") != std::string::npos);
+	REQUIRE(newText.find("\nend 'Comparable'") != std::string::npos);
+}
+
 // =============================================================================
 // Document Symbols Tests
 // =============================================================================

@@ -4,80 +4,79 @@
 // Hashable - types that can be hashed to an integer
 export interface Hashable
 	function hash() int
-	end 'Hashable'
+end 'Hashable'
 
-	// Equatable - types that can be compared for equality
-	export interface Equatable
-		function equals(other Self) bool
-		end 'Equatable'
+// Equatable - types that can be compared for equality
+export interface Equatable
+	function equals(other Self) bool
+end 'Equatable'
 
-		// Comparable - types that can be ordered
-		export interface Comparable
-			function compare(other Self) int
-			end 'Comparable'
+// Comparable - types that can be ordered
+export interface Comparable
+	function compare(other Self) int
+end 'Comparable'
 
-			// Cloneable - types that can be copied
-			export interface Cloneable
-				function clone() Self
-				end 'Cloneable'
+// Cloneable - types that can be copied
+export interface Cloneable
+	function clone() Self
+end 'Cloneable'
 
-				// Iterable - types that can be iterated over (used by for-in loops)
-				// Types conforming to Iterable return the next element or nil when exhausted.
-				// The next() method advances the iterator and returns the element atomically.
-				// Structs provide concrete Element type via 'is Iterable with Type'.
-				export interface Iterable uses Element
-					function next() Element or nil
-					end 'Iterable'
+// Iterable - types that can be iterated over (used by for-in loops)
+// Types conforming to Iterable return the next element or nil when exhausted.
+// The next() method advances the iterator and returns the element atomically.
+// Structs provide concrete Element type via 'is Iterable with Type'.
+export interface Iterable uses Element
+	function next() Element or nil
+end 'Iterable'
 
-					// Stringable - types that can be converted to a string representation
-					export interface Stringable
-						function toString() string
-						end 'Stringable'
+// Stringable - types that can be converted to a string representation
+export interface Stringable
+	function toString() string
+end 'Stringable'
 
-						// Subscriptable - types that support range-based subscripting (slicing)
-						// Used for s[start..end], s[start..], s[..end] syntax
-						export interface Subscriptable
-							function subscript(startIndex int, endIndex int) Self
-							end 'Subscriptable'
+// Subscriptable - types that support range-based subscripting (slicing)
+// Used for s[start..end], s[start..], s[..end] syntax
+export interface Subscriptable
+	function subscript(startIndex int, endIndex int) Self
+end 'Subscriptable'
 
-							// ExpressibleByStringLiteral - types that can be initialized from string literals
-							// The compiler constructs a _ManagedString and passes it to initFromStringLiteral.
-							// _ManagedString is a compiler-internal type with layout: { ptr buffer, i32 len, i32 capacity }
-							// - capacity = 0 for constant data (no heap cleanup needed)
-							// - capacity > 0 for heap-allocated data with refcount header
-							// The compiler detects conformance and transforms: var x MyType = "hello" -> var x = MyType.init(managed)
-							export interface ExpressibleByStringLiteral
-								function init(managed _ManagedString) Self
-								end 'ExpressibleByStringLiteral'
+// ExpressibleByStringLiteral - types that can be initialized from string literals
+// The compiler constructs a _ManagedString and passes it to initFromStringLiteral.
+// _ManagedString is a compiler-internal type with layout: { ptr buffer, i32 len, i32 capacity }
+// - capacity = 0 for constant data (no heap cleanup needed)
+// - capacity > 0 for heap-allocated data with refcount header
+// The compiler detects conformance and transforms: var x MyType = "hello" -> var x = MyType.init(managed)
+export interface ExpressibleByStringLiteral
+	function init(managed _ManagedString) Self
+end 'ExpressibleByStringLiteral'
 
-								// Collection - types that support indexed access (without subscript [] syntax)
-								// Use get(index) and set(index, value) for element access
-								// set() triggers copy-on-write for shared backing storage
-								export interface Collection uses Element
-									function count() int
-										function get(index int) Element
-											function set(index int, value Element) Self
-											end 'Collection'
+// Collection - types that support indexed access (without subscript [] syntax)
+// Use get(index) and set(index, value) for element access
+// set() triggers copy-on-write for shared backing storage
+export interface Collection uses Element
+	function count() int
+	function get(index int) Element
+	function set(index int, value Element) Self
+end 'Collection'
 
-											// Dictionary - types that map keys to values
-											// Keys must implement Hashable and Equatable for lookup
-											// Uses associated types for Key and Value
-											export interface Dictionary uses Key, Value
-												function insert(key Key, value Value)
-													function get(key Key) Value
-														function contains(key Key) bool
-															function remove(key Key) bool
-																function count() int
-																end 'Dictionary'
+// Dictionary - types that map keys to values
+// Keys must implement Hashable and Equatable for lookup
+// Uses associated types for Key and Value
+export interface Dictionary uses Key, Value
+	function insert(key Key, value Value)
+	function get(key Key) Value
+	function contains(key Key) bool
+	function remove(key Key) bool
+	function count() int
+end 'Dictionary'
 
-																// ExpressibleByArrayLiteral - types that can be initialized from array literals
-																// The compiler constructs a _ManagedArray and passes it to init.
-																// _ManagedArray is a compiler-internal opaque type with layout: { ptr buffer, i32 len, i32 capacity }
-																// - capacity = 0 for constant data (no heap cleanup needed, read-only)
-																// - capacity > 0 for heap-allocated data with refcount header
-																// The compiler detects conformance and transforms: var x MyType = [1, 2, 3] -> var x = MyType.init(managed)
-																// The element type is inferred from the interface's generic parameter.
-																export interface ExpressibleByArrayLiteral uses Element
-																	function init(managed _ManagedArray) Self
-																	end 'ExpressibleByArrayLiteral'
-
+// ExpressibleByArrayLiteral - types that can be initialized from array literals
+// The compiler constructs a _ManagedArray and passes it to init.
+// _ManagedArray is a compiler-internal opaque type with layout: { ptr buffer, i32 len, i32 capacity }
+// - capacity = 0 for constant data (no heap cleanup needed, read-only)
+// - capacity > 0 for heap-allocated data with refcount header
+// The compiler detects conformance and transforms: var x MyType = [1, 2, 3] -> var x = MyType.init(managed)
+// The element type is inferred from the interface's generic parameter.
+export interface ExpressibleByArrayLiteral uses Element
+	function init(managed _ManagedArray) Self
+end 'ExpressibleByArrayLiteral'

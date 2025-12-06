@@ -1191,6 +1191,7 @@ std::string FormattingProvider::formatLineByLine(const std::string &content, con
 	std::istringstream in(content);
 	std::string line;
 	int indentLevel = 0;
+	bool insideInterface = false;
 
 	while (std::getline(in, line)) {
 		// Trim leading/trailing whitespace
@@ -1205,9 +1206,15 @@ std::string FormattingProvider::formatLineByLine(const std::string &content, con
 
 		std::string trimmed = line.substr(start, end - start + 1);
 
+		// Check if this line ends an interface (before adjusting indent)
+		bool endsInterface = insideInterface && endsBlock(trimmed);
+
 		// Adjust indent level for end statements
 		if (endsBlock(trimmed)) {
 			indentLevel = std::max(0, indentLevel - 1);
+			if (endsInterface) {
+				insideInterface = false;
+			}
 		}
 
 		// Output the line with proper indentation
@@ -1220,9 +1227,16 @@ std::string FormattingProvider::formatLineByLine(const std::string &content, con
 
 		out << "\n";
 
+		// Check if this line starts an interface
+		bool startsInterface = (trimmed.rfind("interface ", 0) == 0 || trimmed.rfind("export interface ", 0) == 0);
+
 		// Adjust indent level for block starts
-		if (startsBlock(trimmed)) {
+		// Inside an interface, function lines are just signatures, not block starts
+		if (startsBlock(trimmed, insideInterface)) {
 			indentLevel++;
+			if (startsInterface) {
+				insideInterface = true;
+			}
 		}
 	}
 
@@ -1258,7 +1272,7 @@ int FormattingProvider::getLineIndentLevel(const std::string &line, const Format
 	return spaces / config.tabSize;
 }
 
-bool FormattingProvider::startsBlock(const std::string &line) {
+bool FormattingProvider::startsBlock(const std::string &line, bool insideInterface) {
 	// Remove leading/trailing whitespace
 	size_t start = line.find_first_not_of(" \t");
 	if (start == std::string::npos)
@@ -1269,8 +1283,11 @@ bool FormattingProvider::startsBlock(const std::string &line) {
 	// These patterns indicate a new block that requires increased indentation
 
 	// Function declaration (not extern)
+	// Inside an interface, function lines are just method signatures without bodies
 	if (trimmed.rfind("function ", 0) == 0 && trimmed.find("extern") == std::string::npos) {
-		// Check if it's not just a declaration in an interface
+		if (insideInterface) {
+			return false; // Interface method signatures don't start blocks
+		}
 		return true;
 	}
 

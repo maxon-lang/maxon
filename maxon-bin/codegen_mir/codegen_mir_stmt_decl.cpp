@@ -404,11 +404,168 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 		return;
 	}
 
+	// Handle set from array initialization: set from [1, 2, 3]
+	if (auto *setFromExpr = dynamic_cast<SetFromExprAST *>(varDecl->initializer.get())) {
+		const std::string &elemType = setFromExpr->inferredElementType;
+
+		// Build the specialized type name
+		std::string specializedName = "set<" + elemType + ">";
+		logDetail("Processing set from expression: " + specializedName);
+
+		// Instantiate the generic struct if not already done
+		if (instantiatedGenericStructs.find(specializedName) == instantiatedGenericStructs.end()) {
+			logDetail("  Need to instantiate generic struct");
+			if (structDefinitions.find("set") != structDefinitions.end()) {
+				logDetail("  Found 'set' in structDefinitions");
+				std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
+				instantiateGenericStruct("set", typeBindings);
+			} else {
+				logDetail("  ERROR: 'set' NOT found in structDefinitions");
+				logDetail("  Available struct definitions:");
+				for (const auto &pair : structDefinitions) {
+					logDetail("    - " + pair.first);
+				}
+				reportError("Generic struct 'set' not found - ensure stdlib/collections/set.maxon is compiled",
+							varDecl->line, varDecl->column);
+			}
+		}
+
+		// Get the specialized struct type
+		mir::MIRType *setStructType = structTypes[specializedName];
+		if (!setStructType) {
+			reportError("Failed to instantiate set type: " + specializedName,
+						varDecl->line, varDecl->column);
+		}
+
+		// Mark struct type as used
+		setStructType->used = true;
+
+		// Allocate the set struct on the stack
+		mir::MIRValue *setAlloca = builder->createAlloca(setStructType, varDecl->name);
+		namedValues[varDecl->name] = setAlloca;
+		variableTypes[varDecl->name] = specializedName;
+
+		// Get the array literal to extract elements
+		auto *arrayLiteral = dynamic_cast<ArrayLiteralExprAST *>(setFromExpr->arrayExpr.get());
+		if (!arrayLiteral) {
+			reportError("set from expression requires an array literal",
+						varDecl->line, varDecl->column);
+			return;
+		}
+
+		// Calculate initial capacity - at least 16, or next power of 2 above element count * 2
+		int numElements = static_cast<int>(arrayLiteral->values.size());
+		int initialCapacity = 16;
+		while (initialCapacity < numElements * 2) {
+			initialCapacity *= 2;
+		}
+
+		// Get MIR type for element
+		mir::MIRType *elemMirType = getTypeFromString(elemType);
+		uint64_t elemSize = elemMirType->sizeInBytes;
+
+		initHeapManagement();
+		mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+		mir::MIRFunction *memsetFunc = module->getFunction("memset");
+
+		// Allocate elements array with header: [length:i32][capacity:i32][...data...]
+		mir::MIRValue *elemsDataSize = builder->getInt64(initialCapacity * elemSize + 8);
+		mir::MIRValue *elemsBase = builder->createCall(mallocFunc, {elemsDataSize}, varDecl->name + ".elements.base");
+
+		// Store length and capacity in elements header
+		builder->createStore(builder->getInt32(initialCapacity), elemsBase);
+		mir::MIRValue *elemsCapPtr = builder->createGEP(mir::MIRType::getInt8(), elemsBase, {builder->getInt64(4)}, "elems.cap.ptr");
+		builder->createStore(builder->getInt32(initialCapacity), elemsCapPtr);
+
+		// Data pointer for elements
+		mir::MIRValue *elemsData = builder->createGEP(mir::MIRType::getInt8(), elemsBase, {builder->getInt64(8)}, varDecl->name + ".elements.data");
+
+		// Zero-initialize elements
+		builder->createCall(memsetFunc, {elemsData, builder->getInt32(0), builder->getInt64(initialCapacity * elemSize)});
+
+		// Allocate states array with header (byte array)
+		mir::MIRValue *statesDataSize = builder->getInt64(initialCapacity + 8);
+		mir::MIRValue *statesBase = builder->createCall(mallocFunc, {statesDataSize}, varDecl->name + ".states.base");
+
+		// Store length and capacity in states header
+		builder->createStore(builder->getInt32(initialCapacity), statesBase);
+		mir::MIRValue *statesCapPtr = builder->createGEP(mir::MIRType::getInt8(), statesBase, {builder->getInt64(4)}, "states.cap.ptr");
+		builder->createStore(builder->getInt32(initialCapacity), statesCapPtr);
+
+		// Data pointer for states
+		mir::MIRValue *statesData = builder->createGEP(mir::MIRType::getInt8(), statesBase, {builder->getInt64(8)}, varDecl->name + ".states.data");
+
+		// Zero-initialize states (all EMPTY = 0)
+		builder->createCall(memsetFunc, {statesData, builder->getInt32(0), builder->getInt64(initialCapacity)});
+
+		// Store pointers in the set struct
+		mir::MIRValue *elemsFieldPtr = builder->createStructGEP(setStructType, setAlloca, 0, "_elements");
+		builder->createStore(elemsData, elemsFieldPtr);
+
+		mir::MIRValue *statesFieldPtr = builder->createStructGEP(setStructType, setAlloca, 1, "_states");
+		builder->createStore(statesData, statesFieldPtr);
+
+		mir::MIRValue *countFieldPtr = builder->createStructGEP(setStructType, setAlloca, 2, "_count");
+		builder->createStore(builder->getInt32(0), countFieldPtr);
+
+		mir::MIRValue *capacityFieldPtr = builder->createStructGEP(setStructType, setAlloca, 3, "_capacity");
+		builder->createStore(builder->getInt32(initialCapacity), capacityFieldPtr);
+
+		// Insert each element from the array literal
+		std::string insertMethodName = specializedName + ".insert";
+		mir::MIRFunction *insertFunc = module->getFunction(insertMethodName);
+
+		if (!insertFunc) {
+			reportError("set.insert method not found for type: " + specializedName,
+						varDecl->line, varDecl->column);
+			return;
+		}
+
+		for (auto &valExpr : arrayLiteral->values) {
+			mir::MIRValue *elemValue = generateExpr(valExpr.get());
+			if (!elemValue) {
+				reportError("Failed to generate set element value",
+							varDecl->line, varDecl->column);
+				continue;
+			}
+			builder->createCall(insertFunc, {setAlloca, elemValue});
+		}
+
+		// Track base pointers for cleanup
+		if (!scopeStack.empty()) {
+			mir::MIRValue *elemsBaseAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__elements_base");
+			builder->createStore(elemsBase, elemsBaseAlloca);
+			scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._elements", elemsBaseAlloca});
+
+			mir::MIRValue *statesBaseAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__states_base");
+			builder->createStore(statesBase, statesBaseAlloca);
+			scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._states", statesBaseAlloca});
+		}
+
+		return;
+	}
+
 	// Handle struct initialization
 	if (auto *structInitExpr = dynamic_cast<StructInitExprAST *>(varDecl->initializer.get())) {
-		mir::MIRType *structType = structTypes[structInitExpr->structName];
+		// Substitute struct name if we're inside a generic method body
+		// E.g., "set" -> "set<int>" when generating set<int>.init
+		std::string structName = structInitExpr->structName;
+		if (!currentReceiverType.empty() && !currentTypeBindings.empty()) {
+			// Extract base template name from currentReceiverType (e.g., "set<int>" -> "set")
+			std::string baseTemplateName = currentReceiverType;
+			size_t anglePos = currentReceiverType.find('<');
+			if (anglePos != std::string::npos) {
+				baseTemplateName = currentReceiverType.substr(0, anglePos);
+			}
+			// If struct initializer is the base template, use specialized type
+			if (structName == baseTemplateName) {
+				structName = currentReceiverType;
+			}
+		}
+
+		mir::MIRType *structType = structTypes[structName];
 		if (!structType) {
-			reportError("Unknown struct type: " + structInitExpr->structName,
+			reportError("Unknown struct type: " + structName,
 						structInitExpr->line, structInitExpr->column);
 		}
 		// Mark struct type as used for lazy type emission
@@ -417,11 +574,11 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 
 		mir::MIRValue *structAlloca = builder->createAlloca(structType, varDecl->name);
 		namedValues[varDecl->name] = structAlloca;
-		variableTypes[varDecl->name] = structInitExpr->structName;
+		variableTypes[varDecl->name] = structName;
 
 		// Initialize fields - iterate over all struct fields and use provided value or default
-		const auto &fields = structFields[structInitExpr->structName];
-		const auto &defaults = structFieldDefaults[structInitExpr->structName];
+		const auto &fields = structFields[structName];
+		const auto &defaults = structFieldDefaults[structName];
 
 		// Build a map of provided field values for quick lookup
 		std::map<std::string, const StructInitField *> providedFields;

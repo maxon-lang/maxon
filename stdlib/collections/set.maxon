@@ -1,0 +1,204 @@
+// stdlib/collections/set.maxon
+// Hash set implementation using open addressing with linear probing
+//
+// **Design Philosophy**:
+// - Open addressing for cache-friendly access
+// - Linear probing for simplicity
+// - Automatic resize at 75% load factor
+// - Elements must implement Hashable interface
+//
+// **Slot States**:
+// - 0 = EMPTY (never used)
+// - 1 = OCCUPIED (has valid element)
+// - 2 = DELETED (tombstone for probing continuity)
+//
+// **Usage**:
+// ```maxon
+// var s = set from [1, 2, 3]
+// s.insert(4)
+// if s.contains(2) 'check'
+//     print("found 2")
+// end 'check'
+// ```
+
+// Internal set struct - used by compiler for set<T> types
+// The compiler generates specialized versions for each element type
+export struct set uses Element is ExpressibleByArrayLiteral with Element
+	var _elements array of Element   // Element storage
+	var _states array of byte        // Slot states: 0=empty, 1=occupied, 2=deleted
+	var _count int                   // Number of occupied entries
+	var _capacity int                // Total slots
+
+	// ExpressibleByArrayLiteral conformance - initialization is handled inline by the compiler
+	// This method signature is required for the interface but never called directly
+	// The compiler generates inline code for `set from [array]` syntax
+
+	// Insert an element into the set
+	export function insert(element Element)
+		// Check load factor and grow if needed (75% threshold)
+		var loadLimit = trunc((_capacity * 3) / 4)
+		if _count >= loadLimit 'grow'
+			grow()
+		end 'grow'
+
+		var hash = element.hash()
+		var index = hash mod _capacity
+		if index < 0 'fix_negative'
+			index = index + _capacity
+		end 'fix_negative'
+
+		var firstDeleted = 0 - 1
+		var probes = 0
+
+		while probes < _capacity 'probe'
+			var state = _states[index] as int
+
+			if state == 0 'empty'
+				// Empty slot - insert here or at first deleted
+				var insertIndex = index
+				if firstDeleted >= 0 'use_deleted'
+					insertIndex = firstDeleted
+				end 'use_deleted'
+
+				_elements[insertIndex] = element
+				_states[insertIndex] = 1b
+				_count = _count + 1
+				return
+			end 'empty'
+
+			if state == 2 and firstDeleted < 0 'mark_deleted'
+				firstDeleted = index
+			end 'mark_deleted'
+
+			if state == 1 and _elements[index].equals(element) 'exists'
+				// Element already exists - no-op for sets
+				return
+			end 'exists'
+
+			// Linear probing
+			index = (index + 1) mod _capacity
+			probes = probes + 1
+		end 'probe'
+
+		// Should never reach here if load factor is maintained
+		// But if we do, insert at first deleted slot
+		if firstDeleted >= 0 'fallback'
+			_elements[firstDeleted] = element
+			_states[firstDeleted] = 1b
+			_count = _count + 1
+		end 'fallback'
+	end 'insert'
+
+	// Check if element exists in the set
+	export function contains(element Element) bool
+		var hash = element.hash()
+		var index = hash mod _capacity
+		if index < 0 'fix_negative'
+			index = index + _capacity
+		end 'fix_negative'
+
+		var probes = 0
+		while probes < _capacity 'probe'
+			var state = _states[index] as int
+
+			if state == 0 'empty'
+				return false
+			end 'empty'
+
+			if state == 1 and _elements[index].equals(element) 'found'
+				return true
+			end 'found'
+
+			index = (index + 1) mod _capacity
+			probes = probes + 1
+		end 'probe'
+
+		return false
+	end 'contains'
+
+	// Remove element from set, returns true if element was present
+	export function remove(element Element) bool
+		var hash = element.hash()
+		var index = hash mod _capacity
+		if index < 0 'fix_negative'
+			index = index + _capacity
+		end 'fix_negative'
+
+		var probes = 0
+		while probes < _capacity 'probe'
+			var state = _states[index] as int
+
+			if state == 0 'empty'
+				return false
+			end 'empty'
+
+			if state == 1 and _elements[index].equals(element) 'found'
+				_states[index] = 2b
+				_count = _count - 1
+				return true
+			end 'found'
+
+			index = (index + 1) mod _capacity
+			probes = probes + 1
+		end 'probe'
+
+		return false
+	end 'remove'
+
+	// Get number of elements in the set
+	export function count() int
+		return _count
+	end 'count'
+
+	// Get current capacity
+	export function capacity() int
+		return _capacity
+	end 'capacity'
+
+	// Internal: grow the table when load factor exceeds threshold
+	function grow()
+		var oldCapacity = _capacity
+		var newCapacity = oldCapacity * 2
+
+		// Save references to old arrays
+		var oldElements = _elements
+		var oldStates = _states
+
+		// Allocate new arrays
+		var newElements = array of newCapacity Element
+		var newStates = array of newCapacity byte
+
+		// Update struct to use new arrays
+		_elements = newElements
+		_states = newStates
+		_capacity = newCapacity
+		_count = 0
+
+		// Rehash all occupied entries from old arrays
+		var i = 0
+		while i < oldCapacity 'rehash'
+			var state = oldStates[i] as int
+			if state == 1 'occupied'
+				// Re-insert into new arrays using insert logic
+				var element = oldElements[i]
+
+				var hash = element.hash()
+				var index = hash mod newCapacity
+				if index < 0 'fix_negative'
+					index = index + newCapacity
+				end 'fix_negative'
+
+				// Find empty slot (no deleted slots in fresh array)
+				while _states[index] as int != 0 'find_slot'
+					index = (index + 1) mod newCapacity
+				end 'find_slot'
+
+				_elements[index] = element
+				_states[index] = 1b
+				_count = _count + 1
+			end 'occupied'
+			i = i + 1
+		end 'rehash'
+	end 'grow'
+end 'set'
+
