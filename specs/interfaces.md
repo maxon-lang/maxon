@@ -137,7 +137,7 @@ interface Container uses Element
 end 'Container'
 
 struct IntArray is Container with int
-    var data [10]int
+    var data array of 10 int
     
     function Container.get(index int) int
         return data[index]

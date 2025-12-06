@@ -236,12 +236,12 @@ end 'main'`;
 
 	test('Should provide array member completions after dot', async function () {
 		const validContent = `function main() int
-    var arr = [5]int
+    var arr = [1, 2, 3, 4, 5]
     return arr.length
 end 'main'`;
 
 		const incompleteContent = `function main() int
-    var arr = [5]int
+    var arr = [1, 2, 3, 4, 5]
     arr.
     return 0
 end 'main'`;
@@ -261,12 +261,12 @@ end 'main'`;
 
 	test('Array length should have Property kind and int detail', async function () {
 		const validContent = `function main() int
-    var arr = [5]int
+    var arr = [1, 2, 3, 4, 5]
     return arr.length
 end 'main'`;
 
 		const incompleteContent = `function main() int
-    var arr = [5]int
+    var arr = [1, 2, 3, 4, 5]
     arr.
     return 0
 end 'main'`;

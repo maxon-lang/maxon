@@ -432,7 +432,7 @@ TEST_CASE("MIR codegen: mixed type promotion", "[codegen_mir][types]") {
 TEST_CASE("MIR codegen: array declaration", "[codegen_mir][array]") {
 	auto codegen = compileToMIR(R"(
         function main() int
-            let arr = [5]int
+            let arr = [0, 0, 0, 0, 0]
             return 0
         end 'main'
     )");
@@ -443,7 +443,7 @@ TEST_CASE("MIR codegen: array declaration", "[codegen_mir][array]") {
 TEST_CASE("MIR codegen: array access", "[codegen_mir][array]") {
 	auto codegen = compileToMIR(R"(
         function main() int
-            let arr = [5]int
+            var arr = [0, 0, 0, 0, 0]
             arr[0] = 42
             return arr[0]
         end 'main'
@@ -455,7 +455,7 @@ TEST_CASE("MIR codegen: array access", "[codegen_mir][array]") {
 TEST_CASE("MIR codegen: array length", "[codegen_mir][array]") {
 	auto codegen = compileToMIR(R"(
         function main() int
-            let arr = [10]int
+            let arr = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
             return arr.length
         end 'main'
     )");
@@ -1164,16 +1164,7 @@ TEST_CASE("MIR codegen: complex integration - matrix operations", "[codegen_mir]
         end 'matrixSum'
 
         function main() int
-            var m = [9]int
-            m[0] = 1
-            m[1] = 2
-            m[2] = 3
-            m[3] = 4
-            m[4] = 5
-            m[5] = 6
-            m[6] = 7
-            m[7] = 8
-            m[8] = 9
+            var m = [1, 2, 3, 4, 5, 6, 7, 8, 9]
             return matrixSum(m, 3, 3)
         end 'main'
     )");

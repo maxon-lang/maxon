@@ -62,6 +62,12 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					arrayLitExpr->line, arrayLitExpr->column);
 	}
 
+	if (auto *sizedArray = dynamic_cast<SizedArrayExprAST *>(expr)) {
+		// Sized array expressions should only appear as initializers
+		reportError("Sized array expression can only be used as an initializer in variable declarations",
+					sizedArray->line, sizedArray->column);
+	}
+
 	if (auto *castExpr = dynamic_cast<CastExprAST *>(expr)) {
 		// Check for ExpressibleByStringLiteral: "literal" as Type
 		// Transform to: Type.init(managed)

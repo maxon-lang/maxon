@@ -44,7 +44,6 @@ static void countAstExpr(const ExprAST *expr, size_t &exprCount) {
 		countAstExpr(slice->start.get(), exprCount);
 		countAstExpr(slice->end.get(), exprCount);
 	} else if (auto *arrLit = dynamic_cast<const ArrayLiteralExprAST *>(expr)) {
-		countAstExpr(arrLit->sizeExpr.get(), exprCount);
 		for (const auto &val : arrLit->values) {
 			countAstExpr(val.get(), exprCount);
 		}

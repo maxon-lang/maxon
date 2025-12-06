@@ -175,7 +175,7 @@ bool testLinkerSelectiveLinking(int verboseLevel) {
 	// Test 1: Program with arrays (needs memset) but no floats
 	const std::string arrayCode =
 		"function main() int\n"
-		"    var arr = [50]int\n"
+		"    var arr = array of 50 int\n"
 		"    arr[25] = 42\n"
 		"    return arr[25]\n"
 		"end 'main'\n";

@@ -11,14 +11,15 @@ Arrays come in two forms: **static** (stack-allocated, immutable) and **dynamic*
 
 **Static Arrays (let):**
 - Declared with `let` and value literals: `let arr = [1, 2, 3]`
-- Type inferred from values: `[3]int`
+- Type inferred from values: `array of 3 int`
 - Stack-allocated, no heap allocation
 - Immutable: elements cannot be modified after creation
 - No automatic cleanup needed (stack memory)
 - `.length` is a compile-time constant
 
 **Dynamic Arrays (var):**
-- Declared with `var`: `var arr = [5]int` or `var arr = [1, 2, 3]`
+- Declared with `var` using value literals: `var arr = [1, 2, 3]`
+- Or using sized syntax: `var arr = array of 5 int`
 - Heap-allocated with capacity tracking
 - Mutable: elements can be modified
 - Growable via `push()` method
@@ -48,7 +49,6 @@ Arrays come in two forms: **static** (stack-allocated, immutable) and **dynamic*
 **AST nodes:** `ArrayTypeAST`, `ArrayLiteralExprAST`
 
 **Semantic Checks:**
-- `let arr = [5]int` → error (let requires value literal)
 - `arr[i] = val` on let array → error (immutable)
 
 ## Documentation
@@ -78,9 +78,9 @@ let x = arr[0]          // Read element: OK
 Dynamic arrays are declared with `var`. They are heap-allocated, mutable, and can grow.
 
 ```maxon
-var arr = [5]int        // Dynamic array with 5 zeros, capacity 5
-var vals = [10, 20, 30] // Dynamic array with values, capacity 3
-var empty = array of int       // Empty dynamic array, capacity 0
+var arr = array of 5 int  // Dynamic array with 5 zeros, capacity 5
+var vals = [10, 20, 30]   // Dynamic array with values, capacity 3
+var empty = array of int  // Empty dynamic array, capacity 0
 ```
 
 **Properties:**
@@ -103,12 +103,12 @@ arr.reserve(100)        // Preallocate space
 
 **Static array parameters** require the exact size in the type:
 ```maxon
-function process(arr [3]int) int
+function process(arr array of 3 int) int
     return arr[0] + arr[1] + arr[2]
 end 'process'
 
 let data = [10, 20, 30]
-return process(data)    // OK: [3]int matches [3]int
+return process(data)    // OK: array of 3 int matches array of 3 int
 ```
 
 **Dynamic array parameters** use unsized syntax:
@@ -156,7 +156,7 @@ end 'main'
 <!-- test: dynamic.basic -->
 ```maxon
 function main() int
-    var arr = [5]int
+    var arr = array of 5 int
     arr[0] = 10
     arr[1] = 20
     return arr[1]
@@ -181,7 +181,7 @@ end 'main'
 <!-- test: dynamic.length -->
 ```maxon
 function main() int
-    var arr = [5]int
+    var arr = array of 5 int
     return arr.length
 end 'main'
 ```
@@ -192,7 +192,7 @@ end 'main'
 <!-- test: dynamic.float -->
 ```maxon
 function main() int
-    var arr = [3]float
+    var arr = array of 3 float
     arr[0] = 1.5
     arr[1] = 2.5
     arr[2] = 3.5
@@ -207,7 +207,7 @@ end 'main'
 <!-- test: dynamic.heap-allocation -->
 ```maxon
 function main() int
-    var arr = [5]int
+    var arr = array of 5 int
     arr[0] = 10
     arr[1] = 20
     arr[2] = 30
@@ -232,10 +232,7 @@ function sum_array(arr array of int, len int) int
 end 'sum_array'
 
 function main() int
-    var data = [3]int
-    data[0] = 5
-    data[1] = 10
-    data[2] = 15
+    var data = [5, 10, 15]
     return sum_array(data, 3)
 end 'main'
 ```
@@ -250,40 +247,12 @@ function get_first(arr array of int) int
 end 'get_first'
 
 function main() int
-    var nums = [4]int
-    nums[0] = 42
-    nums[1] = 10
-    nums[2] = 20
-    nums[3] = 30
+    var nums = [42, 10, 20, 30]
     return get_first(nums)
 end 'main'
 ```
 ```exitcode
 42
-```
-
-<!-- test: error.let-sized-form -->
-```maxon
-function main() int
-    let arr = [5]int
-    return 0
-end 'main'
-```
-```maxoncstderr
-Semantic Error: line 3, column 5
-Static arrays (declared with 'let') must use value literals
-  Use: let arr = [value1, value2, ...]
-  Not: let arr = [5]int
-  Note: Use 'var' for dynamically-sized arrays, or use [expr]type for runtime-sized immutable arrays
-
-  3 |     let arr = [5]int
-    |     ^
-
-Semantic Error: line 3, column 5
-The variable 'arr' is assigned but its value is never used
-
-  3 |     let arr = [5]int
-    |     ^
 ```
 
 <!-- test: error.static-array-assignment -->

@@ -140,122 +140,104 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		return expr;
 	}
 
-	// Array literal: [5]int, [_len]byte, or [1,2,3]
+	// Sized array expression: array of N T (e.g., array of 5 int, array of int, array of count int)
+	if (checkKeyword("array")) {
+		int line = currentLine();
+		int column = currentColumn();
+		advance(); // consume 'array'
+
+		if (!checkKeyword("of")) {
+			reportError("Expected 'of' after 'array' in array expression\n"
+						"  Use: array of int       (for empty array)\n"
+						"  Or:  array of 5 int     (for sized array)\n"
+						"  Or:  [value1, value2]   (for initialized array)",
+						currentLine(), currentColumn());
+		}
+		advance(); // consume 'of'
+
+		int constSize = 0;
+		std::unique_ptr<ExprAST> sizeExpr = nullptr;
+		int endLine = currentLine();
+		int endCol = currentColumn();
+
+		// Check for sized array: array of N T or array of expr T
+		// Parse a size expression if the current token is a number
+		if (check(TokenType::NUMBER)) {
+			Token sizeToken = currentToken();
+			constSize = std::stoi(sizeToken.value);
+			advance();
+		} else {
+			// Check if we have an identifier followed by a type - this means the identifier is the size
+			// e.g., "array of count int" where count is a variable
+			auto kd = currentKeywordData();
+			if (!kd || kd->category != KeywordCategory::Type) {
+				// Not a type keyword, could be a size variable or struct type
+				if (check(TokenType::IDENTIFIER)) {
+					// Save the identifier
+					std::string potentialSize = std::string(currentValue());
+					int identLine = currentLine();
+					int identCol = currentColumn();
+					advance();
+
+					// Check if followed by a type keyword or another identifier (which would be the type)
+					auto nextKd = currentKeywordData();
+					if ((nextKd && nextKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+						// The first identifier was the size, create a variable reference for it
+						sizeExpr = std::make_unique<VariableExprAST>(potentialSize, identLine, identCol);
+					} else {
+						// The identifier is the type itself, return with constSize=0
+						endLine = currentLine();
+						endCol = currentColumn() - 1;
+						auto expr = std::make_unique<SizedArrayExprAST>(constSize, potentialSize, line, column);
+						expr->setEndPosition(endLine, endCol);
+						return expr;
+					}
+				}
+			}
+		}
+
+		// Parse element type
+		std::string elementType;
+		auto kd = currentKeywordData();
+		if (kd && kd->category == KeywordCategory::Type) {
+			elementType = std::string(currentValue());
+			endLine = currentLine();
+			endCol = currentColumn() + static_cast<int>(elementType.length()) - 1;
+			advance();
+		} else if (check(TokenType::IDENTIFIER)) {
+			elementType = parseQualifiedName("array element type");
+			endLine = currentLine();
+			endCol = currentColumn() - 1;
+		} else {
+			reportError("Expected element type in array expression\n"
+						"  Use: array of int       (for empty array)\n"
+						"  Or:  array of 5 int     (for sized array)",
+						currentLine(), currentColumn());
+		}
+
+		std::unique_ptr<SizedArrayExprAST> expr;
+		if (sizeExpr) {
+			expr = std::make_unique<SizedArrayExprAST>(std::move(sizeExpr), elementType, line, column);
+		} else {
+			expr = std::make_unique<SizedArrayExprAST>(constSize, elementType, line, column);
+		}
+		expr->setEndPosition(endLine, endCol);
+		return expr;
+	}
+
+	// Array literal: [val1, val2, ...] for value-initialized arrays
+	// Note: [size]type and [expr]type syntax is no longer supported
+	// Use 'array of N T' syntax instead (e.g., array of 5 int)
 	if (check(TokenType::LBRACKET)) {
 		int line = currentLine();
 		int column = currentColumn();
 		advance(); // consume '['
 
-		// Look ahead to determine which form:
-		// - [size]type where size is a constant number
-		// - [expr]type where expr is a runtime expression (variable, arithmetic, etc.)
-		// - [val1, val2, ...] value-initialized array
-
-		// Check for [size]type form with constant integer
-		if (check(TokenType::NUMBER) && peekToken(1).type == TokenType::RBRACKET) {
-			// [size]type form with constant size
-			Token sizeToken = expect(TokenType::NUMBER, "Expected array size");
-			int size = std::stoi(sizeToken.value);
-			expectAdvance(TokenType::RBRACKET, "Expected ']' after array size");
-
-			// Now expect the element type (primitive or struct)
-			std::string elementType;
-			int endLine = currentLine();
-			int endCol = currentColumn();
-			auto kd = currentKeywordData();
-			if (kd && kd->category == KeywordCategory::Type) {
-				elementType = std::string(currentValue());
-				endCol = currentColumn() + static_cast<int>(elementType.length()) - 1;
-				advance();
-			} else if (check(TokenType::IDENTIFIER)) {
-				elementType = parseQualifiedName("array element type");
-				endLine = currentLine();
-				endCol = currentColumn() - 1;
-			} else {
-				reportError("Expected array element type (int, float, ptr, char, string, or struct name)",
-							currentLine(), currentColumn());
-			}
-
-			auto expr = std::make_unique<ArrayLiteralExprAST>(size, elementType, line, column);
-			expr->setEndPosition(endLine, endCol);
-			return expr;
-		}
-
-		// Check for [expr]type form with variable size (e.g., [_len]byte, [n + 1]int)
-		// This is an identifier (or expression) followed by ']' then a type
-		if (check(TokenType::IDENTIFIER) && peekToken(1).type == TokenType::RBRACKET) {
-			// Parse the size expression
-			auto sizeExpr = parseLogicalOr();
-			int rbracketLine = currentLine();
-			int rbracketCol = currentColumn();
-			expectAdvance(TokenType::RBRACKET, "Expected ']' after array size expression");
-
-			// Check if followed by a type (indicating [expr]type form)
-			auto kd = currentKeywordData();
-			if ((kd && kd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
-				// [expr]type form - variable-sized array
-				std::string elementType;
-				int endLine = currentLine();
-				int endCol = currentColumn();
-				if (kd && kd->category == KeywordCategory::Type) {
-					elementType = std::string(currentValue());
-					endCol = currentColumn() + static_cast<int>(elementType.length()) - 1;
-					advance();
-				} else {
-					elementType = parseQualifiedName("array element type");
-					endLine = currentLine();
-					endCol = currentColumn() - 1;
-				}
-				auto expr = std::make_unique<ArrayLiteralExprAST>(std::move(sizeExpr), elementType, line, column);
-				expr->setEndPosition(endLine, endCol);
-				return expr;
-			} else {
-				// Not followed by type - this is a single-element array literal [val]
-				// Re-wrap the expression as a value array
-				std::vector<std::unique_ptr<ExprAST>> values;
-				values.push_back(std::move(sizeExpr));
-				auto expr = std::make_unique<ArrayLiteralExprAST>(std::move(values), line, column);
-				expr->setEndPosition(rbracketLine, rbracketCol);
-				return expr;
-			}
-		}
-
-		// [val1, val2, ...] form or more complex [expr]type form
+		// [val1, val2, ...] form - value-initialized array
 		std::vector<std::unique_ptr<ExprAST>> values;
 
 		if (!check(TokenType::RBRACKET)) {
 			values.push_back(parseLogicalOr());
-
-			// Check if this might be [expr]type after parsing first expression
-			if (check(TokenType::RBRACKET)) {
-				size_t savedPos = position;
-				advance(); // consume ']'
-
-				// Check if followed by a type
-				auto kd = currentKeywordData();
-				if ((kd && kd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
-					// [expr]type form - variable-sized array
-					std::string elementType;
-					int endLine = currentLine();
-					int endCol = currentColumn();
-					if (kd && kd->category == KeywordCategory::Type) {
-						elementType = std::string(currentValue());
-						endCol = currentColumn() + static_cast<int>(elementType.length()) - 1;
-						advance();
-					} else {
-						elementType = parseQualifiedName("array element type");
-						endLine = currentLine();
-						endCol = currentColumn() - 1;
-					}
-					auto expr = std::make_unique<ArrayLiteralExprAST>(std::move(values[0]), elementType, line, column);
-					expr->setEndPosition(endLine, endCol);
-					return expr;
-				} else {
-					// Not followed by type - restore and treat as single-element array
-					position = savedPos;
-					cache_.set_position(savedPos);
-				}
-			}
 
 			while (match(TokenType::COMMA)) {
 				values.push_back(parseLogicalOr());
@@ -265,6 +247,14 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		int endLine = currentLine();
 		int endCol = currentColumn();
 		expectAdvance(TokenType::RBRACKET, "Expected ']' after array values");
+
+		if (values.empty()) {
+			reportError("Empty array literal [] is not allowed\n"
+						"  Use: array of T       (for empty array)\n"
+						"  Or:  [value1, value2] (for initialized array)",
+						line, column);
+		}
+
 		auto expr = std::make_unique<ArrayLiteralExprAST>(std::move(values), line, column);
 		expr->setEndPosition(endLine, endCol);
 		return expr;

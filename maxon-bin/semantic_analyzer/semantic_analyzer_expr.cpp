@@ -39,43 +39,38 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		return "string";
 
 	} else if (auto arrayLiteral = dynamic_cast<ArrayLiteralExprAST *>(expr)) {
-		// Array literal: [5]int, [_len]byte, or [1,2,3]
-		if (arrayLiteral->hasVariableSize()) {
-			// [expr]type form - variable-sized array (runtime size)
-			std::string sizeType = analyzeExpression(arrayLiteral->sizeExpr.get());
-			if (sizeType != "int") {
-				addError("Array size expression must be of type 'int', got '" + sizeType + "'",
-						 expr->line, expr->column);
-				return "error";
-			}
-			// Variable-sized arrays have dynamic type (size not known at compile time)
-			return maxon::TypeConversion::makeManagedArrayType(arrayLiteral->elementType);
-		} else if (arrayLiteral->size > 0) {
-			// [size]type form - constant-size zero-initialized array
-			return maxon::TypeConversion::makeStaticArrayType(arrayLiteral->size, arrayLiteral->elementType);
-		} else {
-			// [val1, val2, ...] form - value-initialized array
-			if (arrayLiteral->values.empty()) {
-				addError("Array literal cannot be empty",
-						 expr->line, expr->column);
-				return "error";
-			}
-
-			// Infer element type from first element
-			std::string elemType = analyzeExpression(arrayLiteral->values[0].get());
-
-			// Validate all elements have same type
-			for (size_t i = 1; i < arrayLiteral->values.size(); i++) {
-				std::string valueType = analyzeExpression(arrayLiteral->values[i].get());
-				if (!typesMatch(elemType, valueType)) {
-					addError("Array element type mismatch: expected '" + elemType + "', got '" + valueType + "'" +
-								 std::string("\n  Note: All array elements must have the same type"),
-							 expr->line, expr->column);
-				}
-			}
-
-			return maxon::TypeConversion::makeStaticArrayType(static_cast<int>(arrayLiteral->values.size()), elemType);
+		// Array literal: [val1, val2, ...] form - value-initialized array
+		if (arrayLiteral->values.empty()) {
+			addError("Array literal cannot be empty",
+					 expr->line, expr->column);
+			return "error";
 		}
+
+		// Infer element type from first element
+		std::string elemType = analyzeExpression(arrayLiteral->values[0].get());
+
+		// Validate all elements have same type
+		for (size_t i = 1; i < arrayLiteral->values.size(); i++) {
+			std::string valueType = analyzeExpression(arrayLiteral->values[i].get());
+			if (!typesMatch(elemType, valueType)) {
+				addError("Array element type mismatch: expected '" + elemType + "', got '" + valueType + "'" +
+							 std::string("\n  Note: All array elements must have the same type"),
+						 expr->line, expr->column);
+			}
+		}
+
+		return maxon::TypeConversion::makeStaticArrayType(static_cast<int>(arrayLiteral->values.size()), elemType);
+
+	} else if (auto sizedArray = dynamic_cast<SizedArrayExprAST *>(expr)) {
+		// Sized array: array of N T or array of T or array of expr T
+
+		// If there's a size expression, analyze it to mark variables as used
+		if (sizedArray->hasVariableSize()) {
+			analyzeExpression(sizedArray->sizeExpr.get());
+		}
+
+		// Return managed array type for all cases
+		return maxon::TypeConversion::makeManagedArrayType(sizedArray->elementType);
 
 	} else if (auto mapLiteral = dynamic_cast<MapLiteralExprAST *>(expr)) {
 		// Map literal: map from K to V

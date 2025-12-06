@@ -224,25 +224,6 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return mir::MIRType::getArray(elementType, size);
 	}
 
-	// Legacy array type format: [size]elementType or []elementType (unsized)
-	if (typeStr.size() > 2 && typeStr[0] == '[') {
-		size_t closeBracket = typeStr.find(']');
-		if (closeBracket != std::string::npos) {
-			std::string sizeStr = typeStr.substr(1, closeBracket - 1);
-			std::string elemType = typeStr.substr(closeBracket + 1);
-
-			// Unsized array []type - Phase 2: use struct layout { _buffer ptr, _len i32, _capacity i32 }
-			if (sizeStr.empty()) {
-				return getOrCreateManagedArrayDataType(elemType);
-			}
-
-			// Sized array [N]type
-			int size = std::stoi(sizeStr);
-			mir::MIRType *elementType = getTypeFromString(elemType);
-			return mir::MIRType::getArray(elementType, size);
-		}
-	}
-
 	throw std::runtime_error("Unknown type: " + typeStr);
 }
 

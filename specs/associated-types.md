@@ -24,7 +24,7 @@ end 'Container'
 **Struct conformance with type binding:**
 ```maxon
 struct IntArray is Container with int
-    var data [100]int
+    var data array of 100 int
     
     function Container.get(index int) int
         return data[index]
@@ -134,7 +134,7 @@ Structs bind concrete types to associated types using `with` after the interface
 
 ```maxon
 struct IntArray is Container with int
-    var data [100]int
+    var data array of 100 int
     var len int
 
     function Container.get(index int) int

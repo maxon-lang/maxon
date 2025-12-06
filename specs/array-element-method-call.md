@@ -68,7 +68,7 @@ struct Point
 end 'Point'
 
 function main() int
-    var points = [3]Point
+    var points = array of 3 Point
     points[0] = Point{x: 10, y: 20}
     return points[0].distance()
 end 'main'
@@ -79,7 +79,7 @@ end 'main'
 This is particularly useful when working with elements that conform to an interface:
 
 ```maxon
-var keys = [10]string
+var keys = array of 10 string
 // ... populate keys ...
 if keys[index].equals(searchKey) 'found'
     // Key found at index
@@ -108,7 +108,7 @@ struct Counter
 end 'Counter'
 
 function main() int
-    var items = [3]Counter
+    var items = array of 3 Counter
     items[0] = Counter{value: 42}
     items[1] = Counter{value: 100}
     return items[0].get()
@@ -129,7 +129,7 @@ struct Adder
 end 'Adder'
 
 function main() int
-    var adders = [2]Adder
+    var adders = array of 2 Adder
     adders[0] = Adder{base: 10}
     adders[1] = Adder{base: 20}
     return adders[1].add(5)
@@ -150,7 +150,7 @@ struct Value
 end 'Value'
 
 function main() int
-    var vals = [3]Value
+    var vals = array of 3 Value
     vals[0] = Value{n: 5}
     vals[1] = Value{n: 10}
     vals[2] = Value{n: 15}
@@ -172,7 +172,7 @@ struct Item
 end 'Item'
 
 function main() int
-    var items = [3]Item
+    var items = array of 3 Item
     items[0] = Item{id: 100}
     items[1] = Item{id: 200}
     items[2] = Item{id: 300}
@@ -195,7 +195,7 @@ struct Data
 end 'Data'
 
 function main() int
-    var arr = [4]Data
+    var arr = array of 4 Data
     arr[0] = Data{x: 1}
     arr[1] = Data{x: 2}
     arr[2] = Data{x: 3}

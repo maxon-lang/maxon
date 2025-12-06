@@ -253,9 +253,6 @@ void CallGraphBuilder::extractCallsFromExpr(ExprAST *expr, std::set<std::string>
 			extractCallsFromExpr(field.value.get(), calls);
 		}
 	} else if (auto *arrayLiteral = dynamic_cast<ArrayLiteralExprAST *>(expr)) {
-		if (arrayLiteral->sizeExpr) {
-			extractCallsFromExpr(arrayLiteral->sizeExpr.get(), calls);
-		}
 		for (const auto &val : arrayLiteral->values) {
 			extractCallsFromExpr(val.get(), calls);
 		}

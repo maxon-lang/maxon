@@ -1022,18 +1022,6 @@ void ReferencesProvider::visitExpression(
 	}
 	// Array literal expression
 	else if (auto *arrLit = dynamic_cast<const ArrayLiteralExprAST *>(expr)) {
-		// Check element type for type references
-		if (targetKind == SymbolKind::Type && arrLit->elementType == targetName) {
-			refs.push_back(buildLocation(
-				uri,
-				arrLit->line, arrLit->column,
-				arrLit->line, arrLit->column + static_cast<int>(arrLit->elementType.size())));
-		}
-
-		if (arrLit->sizeExpr) {
-			visitExpression(arrLit->sizeExpr.get(), targetName, targetKind, containingType, refs, uri);
-		}
-
 		for (const auto &value : arrLit->values) {
 			visitExpression(value.get(), targetName, targetKind, containingType, refs, uri);
 		}

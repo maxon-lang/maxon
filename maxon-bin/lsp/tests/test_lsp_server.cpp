@@ -656,7 +656,7 @@ TEST_CASE("LSP completion provides array type members", "[lsp][completion]") {
 	fixture.initialize();
 
 	std::string code = R"(function main() int
-	var arr = [5]int
+	var arr = array of 5 int
 	arr.
 	return 0
 end 'main')";
@@ -1219,7 +1219,7 @@ end 'main')";
 	// Request linked editing on the 'loop' label at line 1
 	json linkedEditParams = {
 		{"textDocument", {{"uri", "file:///test.maxon"}}},
-		{"position", {{"line", 1}, {"character", 24}}}};  // position on 'loop'
+		{"position", {{"line", 1}, {"character", 24}}}}; // position on 'loop'
 	fixture.transport()->queueRequest(11, "textDocument/linkedEditingRange", linkedEditParams);
 
 	fixture.shutdown();
@@ -1232,7 +1232,7 @@ end 'main')";
 	if (response->result.has_value() && !response->result.value().is_null()) {
 		auto &ranges = response->result.value()["ranges"];
 		REQUIRE(ranges.is_array());
-		REQUIRE(ranges.size() == 2);  // One for start label, one for end label
+		REQUIRE(ranges.size() == 2); // One for start label, one for end label
 	}
 }
 
@@ -1249,7 +1249,7 @@ end 'myFunction')";
 	// "function myFunction" - myFunction starts at character 9
 	json linkedEditParams = {
 		{"textDocument", {{"uri", "file:///test.maxon"}}},
-		{"position", {{"line", 0}, {"character", 12}}}};  // position on 'myFunction'
+		{"position", {{"line", 0}, {"character", 12}}}}; // position on 'myFunction'
 	fixture.transport()->queueRequest(11, "textDocument/linkedEditingRange", linkedEditParams);
 
 	fixture.shutdown();
@@ -1264,7 +1264,7 @@ end 'myFunction')";
 	auto &result = response->result.value();
 	auto &ranges = result["ranges"];
 	REQUIRE(ranges.is_array());
-	REQUIRE(ranges.size() == 2);  // Function name and end label
+	REQUIRE(ranges.size() == 2); // Function name and end label
 
 	// Check ranges point to the right locations
 	// Range 0: function name at line 0, characters 9-19 (myFunction)

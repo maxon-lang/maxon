@@ -243,35 +243,34 @@ class SliceExprAST : public ExprAST {
 };
 
 // Array literal expression
-// Three forms:
-//   [5]int           - constant-size zero-initialized array
-//   [_len]byte       - variable-size zero-initialized array (runtime expression)
-//   [1,2,3]          - value-initialized array
+// Only supports value-initialized form: [1,2,3]
+// Use SizedArrayExprAST for 'array of N T' syntax
 class ArrayLiteralExprAST : public ExprAST {
   public:
-	// For [size]type syntax (constant size)
-	int size;				 // Array size (0 if value-init or variable-size)
-	std::string elementType; // Element type (empty if value-init)
-
-	// For [expr]type syntax (variable size at runtime)
-	std::unique_ptr<ExprAST> sizeExpr; // Runtime size expression (nullptr if constant or value-init)
-
 	// For [val1, val2, ...] syntax
-	std::vector<std::unique_ptr<ExprAST>> values; // Element values (empty if size-init)
-
-	// Constructor for [size]type syntax (constant size)
-	ArrayLiteralExprAST(int sz, const std::string &elemType, int l = 0, int c = 0)
-		: ExprAST(l, c), size(sz), elementType(elemType), sizeExpr(nullptr) {}
-
-	// Constructor for [expr]type syntax (variable size)
-	ArrayLiteralExprAST(std::unique_ptr<ExprAST> szExpr, const std::string &elemType, int l = 0, int c = 0)
-		: ExprAST(l, c), size(0), elementType(elemType), sizeExpr(std::move(szExpr)) {}
+	std::vector<std::unique_ptr<ExprAST>> values; // Element values
 
 	// Constructor for [val1, val2, ...] syntax
 	ArrayLiteralExprAST(std::vector<std::unique_ptr<ExprAST>> vals, int l = 0, int c = 0)
-		: ExprAST(l, c), size(0), sizeExpr(nullptr), values(std::move(vals)) {}
+		: ExprAST(l, c), values(std::move(vals)) {}
+};
 
-	// Helper to check if this is a variable-sized array
+// Sized array creation expression (e.g., "array of 5 int", "array of int")
+// Creates a zero-initialized array of the specified size and type
+class SizedArrayExprAST : public ExprAST {
+  public:
+	int size;						   // Array size (-1 if using sizeExpr, 0 for empty array: array of T)
+	std::unique_ptr<ExprAST> sizeExpr; // Expression for size (for variable-sized arrays)
+	std::string elementType;		   // Element type (e.g., "int", "byte", "MyStruct")
+
+	// Constructor for 'array of N T' syntax with constant size
+	SizedArrayExprAST(int sz, const std::string &elemType, int l = 0, int c = 0)
+		: ExprAST(l, c), size(sz), sizeExpr(nullptr), elementType(elemType) {}
+
+	// Constructor for 'array of expr T' syntax with variable size
+	SizedArrayExprAST(std::unique_ptr<ExprAST> szExpr, const std::string &elemType, int l = 0, int c = 0)
+		: ExprAST(l, c), size(-1), sizeExpr(std::move(szExpr)), elementType(elemType) {}
+
 	bool hasVariableSize() const { return sizeExpr != nullptr; }
 };
 
@@ -712,10 +711,10 @@ struct EnumCaseAST {
 class EnumDefAST : public ASTNode {
   public:
 	std::string name;
-	std::string namespaceName;							// Namespace this enum belongs to
-	std::string rawValueType;							// "int" or "string", empty if none
-	std::vector<EnumCaseAST> cases;						// Enum cases
-	std::vector<std::unique_ptr<FunctionAST>> methods;	// Methods declared inside the enum
+	std::string namespaceName;						   // Namespace this enum belongs to
+	std::string rawValueType;						   // "int" or "string", empty if none
+	std::vector<EnumCaseAST> cases;					   // Enum cases
+	std::vector<std::unique_ptr<FunctionAST>> methods; // Methods declared inside the enum
 	bool isExported;
 	int line;
 	int column;
@@ -794,10 +793,10 @@ struct MatchCaseAST {
 // Or: default then statement
 class MatchStmtAST : public StmtAST {
   public:
-	std::unique_ptr<ExprAST> scrutinee;		// The expression being matched
-	std::vector<MatchCaseAST> cases;		// Match cases
-	std::string blockId;					// Block identifier
-	bool isExhaustive = false;				// Set by semantic analyzer for exhaustive enum matches
+	std::unique_ptr<ExprAST> scrutinee; // The expression being matched
+	std::vector<MatchCaseAST> cases;	// Match cases
+	std::string blockId;				// Block identifier
+	bool isExhaustive = false;			// Set by semantic analyzer for exhaustive enum matches
 
 	MatchStmtAST(std::unique_ptr<ExprAST> scrut,
 				 std::vector<MatchCaseAST> cs,
@@ -814,9 +813,9 @@ class MatchStmtAST : public StmtAST {
 // Used as an expression (returns a value)
 class MatchExprAST : public ExprAST {
   public:
-	std::unique_ptr<ExprAST> scrutinee;		// The expression being matched
-	std::vector<MatchCaseAST> cases;		// Match cases
-	std::string blockId;					// Block identifier
+	std::unique_ptr<ExprAST> scrutinee; // The expression being matched
+	std::vector<MatchCaseAST> cases;	// Match cases
+	std::string blockId;				// Block identifier
 
 	MatchExprAST(std::unique_ptr<ExprAST> scrut,
 				 std::vector<MatchCaseAST> cs,
@@ -830,9 +829,9 @@ class MatchExprAST : public ExprAST {
 // Syntax: if case caseName(binding1, binding2) = expr 'label' ... end 'label'
 class IfCaseStmtAST : public StmtAST {
   public:
-	std::string caseName;						  // The case to match (e.g., "success")
-	std::vector<std::string> bindings;			  // Variable names to bind associated values
-	std::unique_ptr<ExprAST> enumExpr;			  // The enum expression being matched
+	std::string caseName;			   // The case to match (e.g., "success")
+	std::vector<std::string> bindings; // Variable names to bind associated values
+	std::unique_ptr<ExprAST> enumExpr; // The enum expression being matched
 	std::vector<std::unique_ptr<StmtAST>> thenBody;
 	std::vector<std::unique_ptr<StmtAST>> elseBody;
 	std::string blockId;
