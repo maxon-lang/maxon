@@ -580,6 +580,75 @@ loop.end:
 }
 
 ;==============================================================================
+; memmove - copy memory with proper handling of overlapping regions
+; ptr memmove(ptr dest, ptr src, i64 count)
+; If dest < src, copies forward (like memcpy)
+; If dest > src, copies backward to avoid overwriting source data
+;==============================================================================
+define ptr @memmove(ptr %dest, ptr %src, i64 %count) {
+entry:
+    ; Check if count is zero
+    %is_zero = icmp eq i64 %count, 0
+    br i1 %is_zero, label %done, label %check_overlap
+
+check_overlap:
+    ; Compare dest and src to determine copy direction
+    %dest_int = ptrtoint ptr %dest to i64
+    %src_int = ptrtoint ptr %src to i64
+    %dest_before_src = icmp ult i64 %dest_int, %src_int
+    br i1 %dest_before_src, label %forward_copy, label %check_same
+
+check_same:
+    ; If dest == src, nothing to do
+    %is_same = icmp eq i64 %dest_int, %src_int
+    br i1 %is_same, label %done, label %backward_copy
+
+forward_copy:
+    ; Copy forward (low to high addresses)
+    %fi = alloca i64
+    store i64 0, ptr %fi
+    br label %forward_cond
+
+forward_cond:
+    %fival = load i64, ptr %fi
+    %fcond = icmp ult i64 %fival, %count
+    br i1 %fcond, label %forward_body, label %done
+
+forward_body:
+    %fsrc_ptr = getelementptr i8, ptr %src, i64 %fival
+    %fbyte = load i8, ptr %fsrc_ptr
+    %fdest_ptr = getelementptr i8, ptr %dest, i64 %fival
+    store i8 %fbyte, ptr %fdest_ptr
+    %finext = add i64 %fival, 1
+    store i64 %finext, ptr %fi
+    br label %forward_cond
+
+backward_copy:
+    ; Copy backward (high to low addresses)
+    %bi = alloca i64
+    store i64 %count, ptr %bi
+    br label %backward_cond
+
+backward_cond:
+    %bival = load i64, ptr %bi
+    %bcond = icmp ugt i64 %bival, 0
+    br i1 %bcond, label %backward_body, label %done
+
+backward_body:
+    ; Decrement index first (we start at count, need to access count-1)
+    %bidx = sub i64 %bival, 1
+    store i64 %bidx, ptr %bi
+    %bsrc_ptr = getelementptr i8, ptr %src, i64 %bidx
+    %bbyte = load i8, ptr %bsrc_ptr
+    %bdest_ptr = getelementptr i8, ptr %dest, i64 %bidx
+    store i8 %bbyte, ptr %bdest_ptr
+    br label %backward_cond
+
+done:
+    ret ptr %dest
+}
+
+;==============================================================================
 ; refcount_inc - increment reference count at pointer (non-atomic)
 ; Reads i32 at ptr, increments it, stores back, returns new value
 ; i32 refcount_inc(ptr counter)

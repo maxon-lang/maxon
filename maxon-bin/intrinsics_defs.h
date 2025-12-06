@@ -57,6 +57,12 @@ inline std::vector<IntrinsicDef> getIntrinsicDefinitions() {
 
 		// Array intrinsics (__array_*)
 		{"__array_len", "int", {IntrinsicParamDef::arrayOf({})}, "intrinsic_array_len"},
+		{"__array_capacity", "int", {IntrinsicParamDef::arrayOf({})}, "intrinsic_array_capacity"},
+		{"__array_set_length", "void", {IntrinsicParamDef::arrayOf({}), {"int"}}, "intrinsic_array_set_length"},
+		{"__array_grow", "void", {IntrinsicParamDef::arrayOf({}), {"int"}}, "intrinsic_array_grow"},
+		{"__array_set_at", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, IntrinsicParamDef::anyOf({})}, "intrinsic_array_set_at"},
+		{"__array_shift_right", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, {"int"}}, "intrinsic_array_shift_right"},
+		{"__array_shift_left", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, {"int"}}, "intrinsic_array_shift_left"},
 
 		// Substring intrinsics (__substring_*)
 		{"__substring_len", "int", {{"substring"}}, "intrinsic_substring_len"},

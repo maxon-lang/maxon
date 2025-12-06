@@ -37,6 +37,12 @@ IntrinsicCodegenRegistry::IntrinsicCodegenRegistry() {
 
 		// Array intrinsics
 		{"intrinsic_array_len", &MIRCodeGenerator::intrinsic_array_len},
+		{"intrinsic_array_capacity", &MIRCodeGenerator::intrinsic_array_capacity},
+		{"intrinsic_array_set_length", &MIRCodeGenerator::intrinsic_array_set_length},
+		{"intrinsic_array_grow", &MIRCodeGenerator::intrinsic_array_grow},
+		{"intrinsic_array_set_at", &MIRCodeGenerator::intrinsic_array_set_at},
+		{"intrinsic_array_shift_right", &MIRCodeGenerator::intrinsic_array_shift_right},
+		{"intrinsic_array_shift_left", &MIRCodeGenerator::intrinsic_array_shift_left},
 	};
 
 	// Populate methods_ by looking up codegen method names from IntrinsicRegistry

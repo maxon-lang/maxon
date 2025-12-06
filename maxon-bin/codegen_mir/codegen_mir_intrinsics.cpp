@@ -1,4 +1,5 @@
 #include "../codegen_mir.h"
+#include "../types/type_conversion.h"
 #include "intrinsic_codegen.h"
 
 // Helper type accessor implementations
@@ -804,4 +805,353 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_len(CallExprAST *callExpr) {
 	reportError("Variable is not an array: " + arrayVarName,
 				callExpr->line, callExpr->column);
 	return nullptr;
+}
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_array_capacity(CallExprAST *callExpr) {
+	// Get the array argument
+	ExprAST *arrayArg = callExpr->args[0].get();
+
+	std::string arrayVarName;
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
+		arrayVarName = varExpr->name;
+	} else {
+		reportError("__array_capacity requires a variable argument",
+					callExpr->line, callExpr->column);
+	}
+
+	// Check for hidden __capacity alloca first (dynamic arrays)
+	std::string capacityVar = arrayVarName + ".__capacity";
+	mir::MIRValue *capacityAlloca = namedValues[capacityVar];
+	if (capacityAlloca) {
+		return builder->createLoad(mir::MIRType::getInt32(), capacityAlloca, "array.cap");
+	}
+
+	// For heap-allocated arrays, read from dataPtr - 4
+	// Layout: [length:i32][capacity:i32][...data...]
+	//              -8          -4           0+
+	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
+	if (arrayAlloca) {
+		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+		mir::MIRValue *capacityPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+														{builder->getInt64(-4)}, "capacity.ptr");
+		return builder->createLoad(mir::MIRType::getInt32(), capacityPtr, "array.cap");
+	}
+
+	reportError("Variable is not a dynamic array: " + arrayVarName,
+				callExpr->line, callExpr->column);
+	return nullptr;
+}
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_length(CallExprAST *callExpr) {
+	// Get the array argument and new length
+	ExprAST *arrayArg = callExpr->args[0].get();
+	mir::MIRValue *newLen = generateExpr(callExpr->args[1].get());
+
+	std::string arrayVarName;
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
+		arrayVarName = varExpr->name;
+	} else {
+		reportError("__array_set_length requires a variable argument",
+					callExpr->line, callExpr->column);
+	}
+
+	// Check for hidden __length alloca first
+	std::string lengthVar = arrayVarName + ".__length";
+	mir::MIRValue *lengthAlloca = namedValues[lengthVar];
+	if (lengthAlloca) {
+		builder->createStore(newLen, lengthAlloca);
+		return builder->getInt32(0);
+	}
+
+	// For heap-allocated arrays, write to dataPtr - 8
+	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
+	if (arrayAlloca) {
+		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+		mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+													  {builder->getInt64(-8)}, "length.ptr");
+		builder->createStore(newLen, lengthPtr);
+		return builder->getInt32(0);
+	}
+
+	reportError("Variable is not an array: " + arrayVarName,
+				callExpr->line, callExpr->column);
+	return nullptr;
+}
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_array_grow(CallExprAST *callExpr) {
+	// __array_grow(arr, min_capacity) - grow array if needed
+	ExprAST *arrayArg = callExpr->args[0].get();
+	mir::MIRValue *minCapacity = generateExpr(callExpr->args[1].get());
+
+	std::string arrayVarName;
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
+		arrayVarName = varExpr->name;
+	} else {
+		reportError("__array_grow requires a variable argument",
+					callExpr->line, callExpr->column);
+	}
+
+	// Get array's internal allocas
+	mir::MIRValue *arrAlloca = namedValues[arrayVarName];
+	mir::MIRValue *capacityAlloca = namedValues[arrayVarName + ".__capacity"];
+
+	if (!arrAlloca || !capacityAlloca) {
+		reportError("__array_grow can only be used on dynamic arrays: " + arrayVarName,
+					callExpr->line, callExpr->column);
+	}
+
+	// Get element type and size
+	std::string arrType = variableTypes[arrayVarName];
+	std::string elemTypeStr = "int";
+	if (maxon::TypeConversion::isArrayType(arrType)) {
+		elemTypeStr = maxon::TypeConversion::getArrayElementType(arrType);
+	}
+	mir::MIRType *elemType = getTypeFromString(elemTypeStr);
+	int elemSize = static_cast<int>(elemType->sizeInBytes);
+
+	// Load current capacity
+	mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt32(), capacityAlloca, "capacity");
+
+	// Check if we need to grow: minCapacity > capacity
+	mir::MIRFunction *currentFunc = builder->getFunction();
+	mir::MIRBasicBlock *growBlock = currentFunc->createBasicBlock("grow.do");
+	mir::MIRBasicBlock *doneBlock = currentFunc->createBasicBlock("grow.done");
+
+	mir::MIRValue *needGrow = builder->createICmpSGT(minCapacity, capacity, "need.grow");
+	builder->createCondBr(needGrow, growBlock, doneBlock);
+
+	// Grow block
+	builder->setInsertPoint(growBlock);
+
+	// Calculate new capacity: max(minCapacity, capacity * 2), minimum 4
+	mir::MIRValue *doubledCap = builder->createMul(capacity, builder->getInt32(2), "doubled.cap");
+
+	// Use minCapacity if larger than doubled
+	mir::MIRBasicBlock *useMinBlock = currentFunc->createBasicBlock("grow.usemin");
+	mir::MIRBasicBlock *useDoubleBlock = currentFunc->createBasicBlock("grow.usedouble");
+	mir::MIRBasicBlock *checkMinBlock = currentFunc->createBasicBlock("grow.checkmin");
+
+	mir::MIRValue *minLarger = builder->createICmpSGT(minCapacity, doubledCap, "min.larger");
+	builder->createCondBr(minLarger, useMinBlock, useDoubleBlock);
+
+	builder->setInsertPoint(useMinBlock);
+	builder->createBr(checkMinBlock);
+
+	builder->setInsertPoint(useDoubleBlock);
+	builder->createBr(checkMinBlock);
+
+	builder->setInsertPoint(checkMinBlock);
+	mir::MIRValue *newCapPhi = builder->createPhi(mir::MIRType::getInt32(), "new.cap.phi");
+	builder->addPhiIncoming(newCapPhi, minCapacity, useMinBlock);
+	builder->addPhiIncoming(newCapPhi, doubledCap, useDoubleBlock);
+
+	// Ensure minimum capacity of 4
+	mir::MIRBasicBlock *useMinFourBlock = currentFunc->createBasicBlock("grow.minfour");
+	mir::MIRBasicBlock *doReallocBlock = currentFunc->createBasicBlock("grow.realloc");
+
+	mir::MIRValue *lessThanFour = builder->createICmpSLT(newCapPhi, builder->getInt32(4), "lt.four");
+	builder->createCondBr(lessThanFour, useMinFourBlock, doReallocBlock);
+
+	builder->setInsertPoint(useMinFourBlock);
+	builder->createBr(doReallocBlock);
+
+	builder->setInsertPoint(doReallocBlock);
+	mir::MIRValue *newCapacity = builder->createPhi(mir::MIRType::getInt32(), "new.capacity");
+	builder->addPhiIncoming(newCapacity, builder->getInt32(4), useMinFourBlock);
+	builder->addPhiIncoming(newCapacity, newCapPhi, checkMinBlock);
+
+	// Calculate old and new sizes in bytes
+	mir::MIRValue *elemSizeVal = builder->getInt64(elemSize);
+	mir::MIRValue *capacity64 = builder->createSExt(capacity, mir::MIRType::getInt64(), "cap64");
+	mir::MIRValue *newCapacity64 = builder->createSExt(newCapacity, mir::MIRType::getInt64(), "newcap64");
+	mir::MIRValue *oldSize = builder->createMul(capacity64, elemSizeVal, "old.size");
+	mir::MIRValue *newSize = builder->createMul(newCapacity64, elemSizeVal, "new.size");
+
+	// Load current array pointer and call realloc
+	mir::MIRValue *arrPtr = builder->createLoad(mir::MIRType::getPtr(), arrAlloca, "arr.ptr");
+	mir::MIRFunction *reallocFunc = getOrDeclareFunction("realloc", mir::MIRType::getPtr(),
+														 {mir::MIRType::getPtr(), mir::MIRType::getInt64(), mir::MIRType::getInt64()});
+	mir::MIRValue *newArrPtr = builder->createCall(reallocFunc, {arrPtr, oldSize, newSize}, "new.arr");
+
+	// Store new pointer and capacity
+	builder->createStore(newArrPtr, arrAlloca);
+	builder->createStore(newCapacity, capacityAlloca);
+	builder->createBr(doneBlock);
+
+	// Done block
+	builder->setInsertPoint(doneBlock);
+	return builder->getInt32(0);
+}
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_at(CallExprAST *callExpr) {
+	// __array_set_at(arr, index, value) - set element at index
+	ExprAST *arrayArg = callExpr->args[0].get();
+	mir::MIRValue *index = generateExpr(callExpr->args[1].get());
+	mir::MIRValue *value = generateExpr(callExpr->args[2].get());
+
+	std::string arrayVarName;
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
+		arrayVarName = varExpr->name;
+	} else {
+		reportError("__array_set_at requires a variable argument",
+					callExpr->line, callExpr->column);
+	}
+
+	// Get element type
+	std::string arrType = variableTypes[arrayVarName];
+	std::string elemTypeStr = "int";
+	if (maxon::TypeConversion::isArrayType(arrType)) {
+		elemTypeStr = maxon::TypeConversion::getArrayElementType(arrType);
+	}
+	mir::MIRType *elemType = getTypeFromString(elemTypeStr);
+
+	// Get array data pointer
+	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
+	if (!arrayAlloca) {
+		reportError("Variable is not an array: " + arrayVarName,
+					callExpr->line, callExpr->column);
+	}
+
+	mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+
+	// Calculate element pointer and store
+	mir::MIRValue *index64 = builder->createSExt(index, mir::MIRType::getInt64(), "idx64");
+	mir::MIRValue *elemPtr = builder->createArrayGEP(elemType, dataPtr, index64, "elem.ptr");
+	builder->createStore(value, elemPtr);
+
+	return builder->getInt32(0);
+}
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_right(CallExprAST *callExpr) {
+	// __array_shift_right(arr, start, count) - shift elements right for insert
+	ExprAST *arrayArg = callExpr->args[0].get();
+	mir::MIRValue *start = generateExpr(callExpr->args[1].get());
+	mir::MIRValue *count = generateExpr(callExpr->args[2].get());
+
+	std::string arrayVarName;
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
+		arrayVarName = varExpr->name;
+	} else {
+		reportError("__array_shift_right requires a variable argument",
+					callExpr->line, callExpr->column);
+	}
+
+	// Get element type and size
+	std::string arrType = variableTypes[arrayVarName];
+	std::string elemTypeStr = "int";
+	if (maxon::TypeConversion::isArrayType(arrType)) {
+		elemTypeStr = maxon::TypeConversion::getArrayElementType(arrType);
+	}
+	mir::MIRType *elemType = getTypeFromString(elemTypeStr);
+	int elemSize = static_cast<int>(elemType->sizeInBytes);
+
+	// Get current length
+	std::string lengthVar = arrayVarName + ".__length";
+	mir::MIRValue *lengthAlloca = namedValues[lengthVar];
+	mir::MIRValue *length;
+	if (lengthAlloca) {
+		length = builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "len");
+	} else {
+		// For heap arrays, read from header
+		mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
+		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+		mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+													  {builder->getInt64(-8)}, "length.ptr");
+		length = builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "len");
+	}
+
+	// Calculate number of elements to move: length - start
+	mir::MIRValue *elementsToMove = builder->createSub(length, start, "elems.to.move");
+
+	// Calculate byte size to move
+	mir::MIRValue *elementsToMove64 = builder->createSExt(elementsToMove, mir::MIRType::getInt64(), "elems64");
+	mir::MIRValue *byteSize = builder->createMul(elementsToMove64, builder->getInt64(elemSize), "byte.size");
+
+	// Get data pointer
+	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
+	mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+
+	// Source pointer: arr + start * elemSize
+	mir::MIRValue *start64 = builder->createSExt(start, mir::MIRType::getInt64(), "start64");
+	mir::MIRValue *srcPtr = builder->createArrayGEP(elemType, dataPtr, start64, "src.ptr");
+
+	// Dest pointer: arr + (start + count) * elemSize
+	mir::MIRValue *destIndex = builder->createAdd(start, count, "dest.idx");
+	mir::MIRValue *destIndex64 = builder->createSExt(destIndex, mir::MIRType::getInt64(), "dest64");
+	mir::MIRValue *destPtr = builder->createArrayGEP(elemType, dataPtr, destIndex64, "dest.ptr");
+
+	// Call memmove (handles overlapping regions)
+	mir::MIRFunction *memmoveFunc = getOrDeclareFunction("memmove", mir::MIRType::getPtr(),
+														 {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+	builder->createCall(memmoveFunc, {destPtr, srcPtr, byteSize}, "");
+
+	return builder->getInt32(0);
+}
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_left(CallExprAST *callExpr) {
+	// __array_shift_left(arr, start, count) - shift elements left for remove
+	ExprAST *arrayArg = callExpr->args[0].get();
+	mir::MIRValue *start = generateExpr(callExpr->args[1].get());
+	mir::MIRValue *count = generateExpr(callExpr->args[2].get());
+
+	std::string arrayVarName;
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(arrayArg)) {
+		arrayVarName = varExpr->name;
+	} else {
+		reportError("__array_shift_left requires a variable argument",
+					callExpr->line, callExpr->column);
+	}
+
+	// Get element type and size
+	std::string arrType = variableTypes[arrayVarName];
+	std::string elemTypeStr = "int";
+	if (maxon::TypeConversion::isArrayType(arrType)) {
+		elemTypeStr = maxon::TypeConversion::getArrayElementType(arrType);
+	}
+	mir::MIRType *elemType = getTypeFromString(elemTypeStr);
+	int elemSize = static_cast<int>(elemType->sizeInBytes);
+
+	// Get current length
+	std::string lengthVar = arrayVarName + ".__length";
+	mir::MIRValue *lengthAlloca = namedValues[lengthVar];
+	mir::MIRValue *length;
+	if (lengthAlloca) {
+		length = builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "len");
+	} else {
+		// For heap arrays, read from header
+		mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
+		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+		mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+													  {builder->getInt64(-8)}, "length.ptr");
+		length = builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "len");
+	}
+
+	// Calculate source index: start + count
+	mir::MIRValue *srcIndex = builder->createAdd(start, count, "src.idx");
+
+	// Calculate number of elements to move: length - srcIndex
+	mir::MIRValue *elementsToMove = builder->createSub(length, srcIndex, "elems.to.move");
+
+	// Calculate byte size to move
+	mir::MIRValue *elementsToMove64 = builder->createSExt(elementsToMove, mir::MIRType::getInt64(), "elems64");
+	mir::MIRValue *byteSize = builder->createMul(elementsToMove64, builder->getInt64(elemSize), "byte.size");
+
+	// Get data pointer
+	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
+	mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+
+	// Source pointer: arr + srcIndex * elemSize
+	mir::MIRValue *srcIndex64 = builder->createSExt(srcIndex, mir::MIRType::getInt64(), "srcidx64");
+	mir::MIRValue *srcPtr = builder->createArrayGEP(elemType, dataPtr, srcIndex64, "src.ptr");
+
+	// Dest pointer: arr + start * elemSize
+	mir::MIRValue *start64 = builder->createSExt(start, mir::MIRType::getInt64(), "start64");
+	mir::MIRValue *destPtr = builder->createArrayGEP(elemType, dataPtr, start64, "dest.ptr");
+
+	// Call memmove (handles overlapping regions)
+	mir::MIRFunction *memmoveFunc = getOrDeclareFunction("memmove", mir::MIRType::getPtr(),
+														 {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+	builder->createCall(memmoveFunc, {destPtr, srcPtr, byteSize}, "");
+
+	return builder->getInt32(0);
 }

@@ -252,6 +252,12 @@ class MIRCodeGenerator {
 	mir::MIRValue *intrinsic_substring_iter_pos(CallExprAST *callExpr);
 	// Array intrinsics
 	mir::MIRValue *intrinsic_array_len(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_array_capacity(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_array_set_length(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_array_grow(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_array_set_at(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_array_shift_right(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_array_shift_left(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_with_iter_pos(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_to_string(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_slice(CallExprAST *callExpr);

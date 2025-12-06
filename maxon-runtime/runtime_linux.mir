@@ -34,13 +34,13 @@ allocate:
     ; Round up to page size (4096 bytes)
     %size_plus = add i64 %size, 4095
     %rounded_size = and i64 %size_plus, -4096
-    
+
     ; Call mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
     ; SYS_mmap = 9
     ; PROT_READ | PROT_WRITE = 3
     ; MAP_PRIVATE | MAP_ANONYMOUS = 34
     %result = call i64 @__syscall6(i64 9, i64 0, i64 %rounded_size, i64 3, i64 34, i64 -1, i64 0)
-    
+
     ; Check for error (mmap returns -1 to -4095 on error)
     %is_negative = icmp slt i64 %result, 0
     %error_threshold = add i64 -4095, 0
@@ -72,6 +72,7 @@ entry:
 ; Note: This is a 3-argument version since mmap doesn't track sizes
 ;==============================================================================
 declare ptr @memcpy(ptr, ptr, i64)
+declare ptr @memmove(ptr, ptr, i64)
 
 define ptr @realloc(ptr %oldptr, i64 %old_size, i64 %new_size) {
 entry:
@@ -217,7 +218,7 @@ entry:
     ; PROT_READ | PROT_WRITE = 3
     ; MAP_SHARED | MAP_ANONYMOUS = 0x21 = 33
     %result = call i64 @__syscall6(i64 9, i64 0, i64 %size, i64 3, i64 33, i64 -1, i64 0)
-    
+
     ; Check for error
     %is_negative = icmp slt i64 %result, 0
     %error_threshold = add i64 -4095, 0
@@ -298,7 +299,7 @@ define i64 @ffi_sem_post(ptr %sem) {
 entry:
     ; Set value to 1
     store i32 1, ptr %sem
-    
+
     ; SYS_futex = 202
     ; FUTEX_WAKE = 1
     %sem_int = ptrtoint ptr %sem to i64
