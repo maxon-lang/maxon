@@ -1,5 +1,6 @@
 #include "hover.h"
 #include "../../lexer/lexer_keyword_matcher.h"
+#include "../../types/type_conversion.h"
 
 namespace maxon_lsp {
 
@@ -395,9 +396,12 @@ std::string HoverProvider::formatKeywordHover(const KeywordLSPInfo &keyword) {
 
 std::string HoverProvider::formatVariableHover(const std::string &name, const std::string &type,
 											   bool isMutable, const std::string &value, bool isParameter, const std::string &doc) {
+	// Convert internal type format to display format (e.g., _ManagedArray<int> -> array of int)
+	std::string displayType = maxon::TypeConversion::arrayTypeToDisplayString(type);
+
 	std::string md = "```maxon\n";
 	md += isMutable ? "var " : "let ";
-	md += name + " " + type;
+	md += name + " " + displayType;
 	// Show value for immutable variables (like constants)
 	if (!isMutable && !value.empty()) {
 		md += " = " + value;
@@ -426,10 +430,12 @@ std::string HoverProvider::formatFunctionHover(const FunctionInfo &func, const s
 			md += ", ";
 		}
 		first = false;
-		md += param.name + " " + param.type;
+		std::string displayType = maxon::TypeConversion::arrayTypeToDisplayString(param.type);
+		md += param.name + " " + displayType;
 	}
 
-	md += ") " + func.returnType;
+	std::string returnDisplayType = maxon::TypeConversion::arrayTypeToDisplayString(func.returnType);
+	md += ") " + returnDisplayType;
 	md += "\n```\n";
 
 	if (!doc.empty()) {
@@ -450,12 +456,14 @@ std::string HoverProvider::formatFunctionHover(const LSPSymbolInfo &symbol) {
 			md += ", ";
 		}
 		first = false;
-		md += param.name + " " + param.type;
+		std::string displayType = maxon::TypeConversion::arrayTypeToDisplayString(param.type);
+		md += param.name + " " + displayType;
 	}
 
 	md += ")";
 	if (!symbol.returnType.empty()) {
-		md += " " + symbol.returnType;
+		std::string returnDisplayType = maxon::TypeConversion::arrayTypeToDisplayString(symbol.returnType);
+		md += " " + returnDisplayType;
 	}
 	md += "\n```\n";
 
@@ -489,7 +497,8 @@ std::string HoverProvider::formatStructHover(const StructInfo &structInfo, const
 	for (const auto &field : structInfo.fields) {
 		md += "    ";
 		md += field.isImmutable ? "let " : "var ";
-		md += field.name + " " + field.type;
+		std::string displayType = maxon::TypeConversion::arrayTypeToDisplayString(field.type);
+		md += field.name + " " + displayType;
 		if (field.hasDefault) {
 			md += " = " + field.defaultValue;
 		}
@@ -576,10 +585,12 @@ std::string HoverProvider::formatInterfaceHover(const InterfaceInfo &iface, cons
 				md += ", ";
 			}
 			first = false;
-			md += param.name + " " + param.type;
+			std::string displayType = maxon::TypeConversion::arrayTypeToDisplayString(param.type);
+			md += param.name + " " + displayType;
 		}
 
-		md += ") " + method.returnType + "\n";
+		std::string returnDisplayType = maxon::TypeConversion::arrayTypeToDisplayString(method.returnType);
+		md += ") " + returnDisplayType + "\n";
 	}
 
 	md += "end '" + iface.name + "'\n";
@@ -594,8 +605,9 @@ std::string HoverProvider::formatInterfaceHover(const InterfaceInfo &iface, cons
 
 std::string HoverProvider::formatFieldHover(const std::string &structName, const std::string &fieldName,
 											const std::string &type) {
+	std::string displayType = maxon::TypeConversion::arrayTypeToDisplayString(type);
 	std::string md = "```maxon\n";
-	md += "(field) " + structName + "." + fieldName + " " + type;
+	md += "(field) " + structName + "." + fieldName + " " + displayType;
 	md += "\n```\n";
 	return md;
 }

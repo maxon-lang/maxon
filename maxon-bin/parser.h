@@ -14,9 +14,9 @@ struct ParseError {
 	std::string message;
 	int line;
 	int column;
-	int endLine;    // End position line (defaults to line if not set)
-	int endColumn;  // End position column (defaults to column if not set)
-	int severity;   // 1 = Error, 2 = Warning, 3 = Info, 4 = Hint
+	int endLine;   // End position line (defaults to line if not set)
+	int endColumn; // End position column (defaults to column if not set)
+	int severity;  // 1 = Error, 2 = Warning, 3 = Info, 4 = Hint
 
 	// Full constructor with all fields
 	ParseError(const std::string &msg, int l, int c, int el = 0, int ec = 0, int sev = 1)
@@ -36,8 +36,8 @@ class Parser {
 	Logger *logger_ = nullptr;	  // Optional logger for detailed tracing
 
 	// Error recovery state
-	std::vector<ParseError> parseErrors_;  // Collected parse errors
-	bool inErrorRecovery_ = false;		   // True when recovering from an error
+	std::vector<ParseError> parseErrors_; // Collected parse errors
+	bool inErrorRecovery_ = false;		  // True when recovering from an error
 
 	// Token access methods (use SIMD-optimized TokenStream)
 	TokenType currentType() const;
@@ -63,6 +63,8 @@ class Parser {
 	void expectAdvance(TokenType type, const std::string &message);
 	void expectKeywordAdvance(const std::string &keyword, const std::string &message);
 	std::string parseQualifiedName(const std::string &context);
+	std::string parseTypeString(const std::string &context);			 // Parse type including 'array of T'
+	std::string parseTypeStringWithOptional(const std::string &context); // Parse type with optional 'or nil'
 
 	std::unique_ptr<ExprAST> parseExpression();
 	std::unique_ptr<ExprAST> parseBitwiseAnd();
@@ -87,8 +89,8 @@ class Parser {
 	std::unique_ptr<StmtAST> parseIf();
 	std::unique_ptr<IfLetStmtAST> parseIfLet(Token ifToken);
 	std::unique_ptr<ElseUnwrapStmtAST> parseElseUnwrap(Token varToken, Token nameToken,
-														 const std::string &explicitType,
-														 std::unique_ptr<ExprAST> optionalExpr);
+													   const std::string &explicitType,
+													   std::unique_ptr<ExprAST> optionalExpr);
 	std::unique_ptr<WhileStmtAST> parseWhile();
 	std::unique_ptr<ForStmtAST> parseFor();
 	std::unique_ptr<ReturnStmtAST> parseReturn();
@@ -99,7 +101,7 @@ class Parser {
 	std::unique_ptr<StmtAST> parseMatchCaseStatement(); // Parse statement in match case (stops before 'and fallthrough')
 
 	std::unique_ptr<FunctionAST> parseFunction();
-	std::unique_ptr<FunctionAST> parseMethod(const std::string &structName); // Parse method inside struct
+	std::unique_ptr<FunctionAST> parseMethod(const std::string &structName);   // Parse method inside struct
 	std::unique_ptr<FunctionAST> parseEnumMethod(const std::string &enumName); // Parse method inside enum
 	std::unique_ptr<StructDefAST> parseStruct();
 	std::unique_ptr<EnumDefAST> parseEnum();
@@ -115,8 +117,8 @@ class Parser {
 	[[noreturn]] void reportError(const std::string &message, int line, int column);
 
 	// Error recovery methods
-	void synchronize();						   // Advance to next synchronization point
-	bool isSyncToken() const;				   // Check if current token is a sync point
+	void synchronize();									   // Advance to next synchronization point
+	bool isSyncToken() const;							   // Check if current token is a sync point
 	std::unique_ptr<StmtAST> parseStatementWithRecovery(); // Statement parsing with error recovery
 
   public:

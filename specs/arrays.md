@@ -26,12 +26,12 @@ Arrays come in two forms: **static** (stack-allocated, immutable) and **dynamic*
 - `.length` and `.capacity` properties
 
 **Type System:**
-- Static: `[N]type` - size is part of the type (e.g., `[3]int`)
-- Dynamic: `[]type` - size not part of type, tracked at runtime
+- Static: `_StaticArray<N,T>` internally, displayed as `array of N T` (e.g., `array of 3 int`)
+- Dynamic: `_ManagedArray<T>` internally, displayed as `array of T`
 - Static and dynamic are incompatible types (no implicit conversion)
 - Function parameters:
-  - `fn(arr [3]int)` - accepts static array of exactly 3 ints (by reference)
-  - `fn(arr []int)` - accepts dynamic array (by reference, ptr+len+cap)
+  - `fn(arr array of 3 int)` - accepts static array of exactly 3 ints (by reference)
+  - `fn(arr array of int)` - accepts dynamic array (by reference, ptr+len+cap)
 
 **Method Syntax:**
 - `arr.push(val)` transforms to `push(arr, val)` at parse time
@@ -62,13 +62,13 @@ Maxon has two types of arrays: **static arrays** (immutable, stack-allocated) an
 Static arrays are declared with `let` using value literals. They are stack-allocated, immutable, and their size is part of the type.
 
 ```maxon
-let arr = [1, 2, 3]     // Static array of type [3]int
+let arr = [1, 2, 3]     // Static array of type array of 3 int
 let x = arr[0]          // Read element: OK
 // arr[0] = 10          // ERROR: static arrays are immutable
 ```
 
 **Properties:**
-- Type is inferred from values: `[1, 2, 3]` has type `[3]int`
+- Type is inferred from values: `[1, 2, 3]` has type `array of 3 int`
 - Elements cannot be modified after creation
 - `.length` is a compile-time constant
 - No heap allocation, very efficient
@@ -80,7 +80,7 @@ Dynamic arrays are declared with `var`. They are heap-allocated, mutable, and ca
 ```maxon
 var arr = [5]int        // Dynamic array with 5 zeros, capacity 5
 var vals = [10, 20, 30] // Dynamic array with values, capacity 3
-var empty = []int       // Empty dynamic array, capacity 0
+var empty = array of int       // Empty dynamic array, capacity 0
 ```
 
 **Properties:**
@@ -113,7 +113,7 @@ return process(data)    // OK: [3]int matches [3]int
 
 **Dynamic array parameters** use unsized syntax:
 ```maxon
-function sum(arr []int) int
+function sum(arr array of int) int
     var total = 0
     var i = 0
     while i < arr.length 'loop'
@@ -127,7 +127,7 @@ var data = [1, 2, 3, 4, 5]
 return sum(data)        // OK: passes ptr+len+cap
 ```
 
-**Note:** Static and dynamic arrays are incompatible types. A static `[3]int` cannot be passed to a function expecting `[]int`.
+**Note:** Static and dynamic arrays are incompatible types. A static `array of 3 int` cannot be passed to a function expecting `array of int`.
 
 ## Tests
 
@@ -221,7 +221,7 @@ end 'main'
 
 <!-- test: dynamic.function-parameter -->
 ```maxon
-function sum_array(arr []int, len int) int
+function sum_array(arr array of int, len int) int
     var total = 0
     var i = 0
     while i < len 'loop'
@@ -245,7 +245,7 @@ end 'main'
 
 <!-- test: dynamic.unsized-parameter -->
 ```maxon
-function get_first(arr []int) int
+function get_first(arr array of int) int
     return arr[0]
 end 'get_first'
 
@@ -314,7 +314,7 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 4, column 5
-push() can only be used on dynamic arrays, not [3]int
+push() can only be used on dynamic arrays, not array of 3 int
 
   4 |     arr.push(4)
     |     ^
@@ -330,7 +330,7 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 4, column 5
-pop() can only be used on dynamic arrays, not [3]int
+pop() can only be used on dynamic arrays, not array of 3 int
 
   4 |     arr.pop()
     |     ^

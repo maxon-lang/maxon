@@ -9,19 +9,19 @@ category: functions
 
 ## Developer Notes
 
-Command line arguments are passed to `main()` as an array of strings when the signature includes `args []string`.
+Command line arguments are passed to `main()` as an array of strings when the signature includes `args array of string`.
 
 ### Main Function Signatures
 
 The `main()` function supports two signatures:
 
 1. `function main() int` - No arguments
-2. `function main(args []string) int` - Receives command line arguments
+2. `function main(args array of string) int` - Receives command line arguments
 
 ### Implementation
 
 **Parser:**
-- `parseMainFunction()` in `parser.cpp` detects the `args []string` parameter
+- `parseMainFunction()` in `parser.cpp` detects the `args array of string` parameter
 - Sets `mainTakesArgs` flag when the signature includes args parameter
 
 **Codegen (codegen_mir.cpp):**
@@ -37,7 +37,7 @@ The `main()` function supports two signatures:
 
 ### Memory Layout
 
-The args array is a `[]string` (dynamic array of strings):
+The args array is a `array of string` (dynamic array of strings):
 - Array struct: `{ ptr data, i32 length, i32 capacity }`
 - Each string element: 16 bytes (SSO format - see string-type.md)
 
@@ -50,12 +50,12 @@ The args array is a `[]string` (dynamic array of strings):
 
 # Command Line Arguments
 
-Access command line arguments in Maxon by adding `args []string` parameter to `main()`.
+Access command line arguments in Maxon by adding `args array of string` parameter to `main()`.
 
 ## Syntax
 
 ```text
-function main(args []string) int
+function main(args array of string) int
     // args[0] is the program name/path
     // args[1..n] are user-provided arguments
     return 0
@@ -71,7 +71,7 @@ end 'main'
 ## Example
 
 ```text
-function main(args []string) int
+function main(args array of string) int
     print("Program: ")
     print(args[0])
     
@@ -93,7 +93,7 @@ First argument: hello
 ## Iterating Over Arguments
 
 ```text
-function main(args []string) int
+function main(args array of string) int
     for arg in args 'loop'
         print(arg)
     end 'loop'
@@ -112,7 +112,7 @@ end 'main'
 
 <!-- test: args-length-no-extra -->
 ```maxon
-function main(args []string) int
+function main(args array of string) int
     // Without extra args, length should be 1 (just program name)
     return args.length
 end 'main'
@@ -124,7 +124,7 @@ end 'main'
 <!-- test: args-with-one-arg -->
 <!-- Args: hello -->
 ```maxon
-function main(args []string) int
+function main(args array of string) int
     return args.length
 end 'main'
 ```
@@ -135,7 +135,7 @@ end 'main'
 <!-- test: args-with-multiple-args -->
 <!-- Args: one two three -->
 ```maxon
-function main(args []string) int
+function main(args array of string) int
     return args.length
 end 'main'
 ```
@@ -146,7 +146,7 @@ end 'main'
 <!-- test: access-first-arg -->
 <!-- Args: hello -->
 ```maxon
-function main(args []string) int
+function main(args array of string) int
     print(args[1])
     return 0
 end 'main'
@@ -161,7 +161,7 @@ hello
 <!-- test: access-multiple-args -->
 <!-- Args: foo bar baz -->
 ```maxon
-function main(args []string) int
+function main(args array of string) int
     print(args[1])
     print(args[2])
     print(args[3])
@@ -180,7 +180,7 @@ baz
 <!-- test: iterate-args -->
 <!-- Args: a b c -->
 ```maxon
-function main(args []string) int
+function main(args array of string) int
     var i = 1
     while i < args.length 'loop'
         print(args[i])
@@ -201,7 +201,7 @@ c
 <!-- test: numeric-args -->
 <!-- Args: 42 -->
 ```maxon
-function main(args []string) int
+function main(args array of string) int
     // Args are strings, just verify we can access them
     if args.length == 2 'check'
         print(args[1])
@@ -220,7 +220,7 @@ end 'main'
 <!-- test: empty-string-arg -->
 <!-- Args: "" -->
 ```maxon
-function main(args []string) int
+function main(args array of string) int
     // Empty quoted arg
     if args[1] == "" 'check'
         return 0
@@ -235,7 +235,7 @@ end 'main'
 <!-- test: arg-with-equals -->
 <!-- Args: --key=value -->
 ```maxon
-function main(args []string) int
+function main(args array of string) int
     print(args[1])
     return 0
 end 'main'

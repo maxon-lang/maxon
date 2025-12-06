@@ -69,7 +69,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 	}
 
 	if (check(TokenType::CHARACTER)) {
-		std::string value = std::string(currentValue());  // Get full grapheme cluster
+		std::string value = std::string(currentValue()); // Get full grapheme cluster
 		int line = currentLine();
 		int column = currentColumn();
 		// Character literals are 'x', so +2 for the quotes plus content
@@ -553,7 +553,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 	}
 
 	reportError("Expected expression\n  Found: " + foundStr +
-				"\n  Note: An expression can be a number, variable, function call, or arithmetic/comparison operation",
+					"\n  Note: An expression can be a number, variable, function call, or arithmetic/comparison operation",
 				currentLine(), currentColumn());
 }
 
@@ -654,24 +654,11 @@ std::unique_ptr<ExprAST> Parser::parseFactor() {
 		int column = expr->column;
 		advance(); // consume 'as'
 
-		// Expect a type keyword or struct name (identifier)
-		std::string targetType;
+		// Parse target type using unified type parser
+		std::string targetType = parseTypeString("cast target type");
 		int endLine = currentLine();
-		int endCol = currentColumn();
-		auto kd = currentKeywordData();
-		if (kd && kd->category == KeywordCategory::Type) {
-			targetType = std::string(currentValue());
-			endCol = currentColumn() + static_cast<int>(targetType.length()) - 1;
-			advance();
-		} else if (check(TokenType::IDENTIFIER)) {
-			// Allow struct type names for ExpressibleByStringLiteral etc.
-			targetType = parseQualifiedName("cast target type");
-			endLine = currentLine();
-			endCol = currentColumn() - 1;
-		} else {
-			reportError("Expected type after 'as' keyword (int, float, ptr, char, string, bool, or struct name)",
-						currentLine(), currentColumn());
-		}
+		int endCol = currentColumn() - 1;
+
 		expr = std::make_unique<CastExprAST>(std::move(expr), targetType, line, column);
 		expr->setEndPosition(endLine, endCol);
 	}

@@ -13,7 +13,7 @@ The `format_float_array()` function converts a float to a string representation 
 
 Implementation:
 - Defined in `stdlib/fmt/format_float.maxon`
-- Signature: `format_float_array(value float, buffer []byte, precision int) int`
+- Signature: `format_float_array(value float, buffer array of byte, precision int) int`
 - Returns the number of characters written
 - Handles negative numbers, zero, and positive values
 - Uses `trunc()` to separate integer and fractional parts

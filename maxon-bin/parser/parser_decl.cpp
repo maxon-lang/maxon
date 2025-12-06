@@ -81,65 +81,8 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 		do {
 			Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
 
-			// Check for array type: []type only (sized arrays not allowed in parameters)
-			std::string paramType;
-			if (check(TokenType::LBRACKET)) {
-				advance(); // consume '['
-
-				// Array parameters must be unsized - reject [N]type syntax
-				if (check(TokenType::NUMBER)) {
-					reportError("Array parameters must be unsized: use []type, not [" + std::string(currentValue()) + "]type",
-								currentLine(), currentColumn());
-				}
-
-				expectAdvance(TokenType::RBRACKET, "Expected ']' after '['");
-
-				// Get element type
-				std::string elementType;
-				auto kd = currentKeywordData();
-				if (kd && kd->category == KeywordCategory::Type) {
-					elementType = std::string(currentValue());
-					advance();
-				} else if (check(TokenType::IDENTIFIER)) {
-					elementType = parseQualifiedName("array element type");
-				} else {
-					reportError("Expected array element type (int, float, ptr, char, string, bool, or struct name)",
-								currentLine(), currentColumn());
-				}
-
-				// All array parameters are unsized (managed arrays)
-				paramType = maxon::TypeConversion::makeManagedArrayType(elementType);
-			} else {
-				// Regular scalar type (or struct)
-				auto kd2 = currentKeywordData();
-				if (kd2 && kd2->category == KeywordCategory::Type) {
-					paramType = std::string(currentValue());
-					advance();
-				} else if (check(TokenType::IDENTIFIER)) {
-					paramType = parseQualifiedName("parameter type");
-				} else {
-					reportError("Expected parameter type (int, float, ptr, char, string, bool, struct name, or [size]type)",
-								currentLine(), currentColumn());
-				}
-			}
-
-			// Check for "or nil" suffix for optional parameters
-			if (checkKeyword("or")) {
-				advance(); // consume 'or'
-				if (!checkKeyword("nil")) {
-					reportError("Expected 'nil' after 'or' in parameter type",
-								currentLine(), currentColumn());
-				}
-				advance(); // consume 'nil'
-
-				// Reject nested optionals
-				if (paramType.find(" or nil") != std::string::npos) {
-					reportError("Cannot make optional type '" + paramType + "' optional again",
-								currentLine(), currentColumn());
-				}
-
-				paramType = paramType + " or nil";
-			}
+			// Parse parameter type using unified type parser (handles arrays and optional)
+			std::string paramType = parseTypeStringWithOptional("parameter type");
 
 			parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
 		} while (match(TokenType::COMMA));
@@ -148,29 +91,14 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	expectAdvance(TokenType::RPAREN, "Expected ')'");
 
 	// Parse return type (optional - defaults to void)
+	// Type can start with: type keyword, identifier (struct name), or '[' (legacy []T syntax)
 	std::string returnType = "void";
 	auto retKd = currentKeywordData();
-	if ((retKd && retKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
-		returnType = std::string(currentValue());
-		advance();
-
-		// Check for "or nil" suffix for optional return types
-		if (checkKeyword("or")) {
-			advance(); // consume 'or'
-			if (!checkKeyword("nil")) {
-				reportError("Expected 'nil' after 'or' in return type",
-							currentLine(), currentColumn());
-			}
-			advance(); // consume 'nil'
-
-			// Reject nested optionals
-			if (returnType.find(" or nil") != std::string::npos) {
-				reportError("Cannot make optional type '" + returnType + "' optional again",
-							currentLine(), currentColumn());
-			}
-
-			returnType = returnType + " or nil";
-		}
+	bool hasReturnType = (retKd && retKd->category == KeywordCategory::Type) ||
+						 check(TokenType::IDENTIFIER) ||
+						 check(TokenType::LBRACKET);
+	if (hasReturnType) {
+		returnType = parseTypeStringWithOptional("return type");
 	}
 
 	std::vector<std::unique_ptr<StmtAST>> body;
@@ -267,65 +195,8 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 		do {
 			Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
 
-			// Check for array type: []type only (sized arrays not allowed in parameters)
-			std::string paramType;
-			if (check(TokenType::LBRACKET)) {
-				advance(); // consume '['
-
-				// Array parameters must be unsized - reject [N]type syntax
-				if (check(TokenType::NUMBER)) {
-					reportError("Array parameters must be unsized: use []type, not [" + std::string(currentValue()) + "]type",
-								currentLine(), currentColumn());
-				}
-
-				expectAdvance(TokenType::RBRACKET, "Expected ']' after '['");
-
-				// Get element type
-				std::string elementType;
-				auto kd = currentKeywordData();
-				if (kd && kd->category == KeywordCategory::Type) {
-					elementType = std::string(currentValue());
-					advance();
-				} else if (check(TokenType::IDENTIFIER)) {
-					elementType = parseQualifiedName("array element type");
-				} else {
-					reportError("Expected array element type (int, float, ptr, char, string, bool, or struct name)",
-								currentLine(), currentColumn());
-				}
-
-				// All array parameters are unsized (managed arrays)
-				paramType = maxon::TypeConversion::makeManagedArrayType(elementType);
-			} else {
-				// Regular scalar type (or struct)
-				auto kd2 = currentKeywordData();
-				if (kd2 && kd2->category == KeywordCategory::Type) {
-					paramType = std::string(currentValue());
-					advance();
-				} else if (check(TokenType::IDENTIFIER)) {
-					paramType = parseQualifiedName("parameter type");
-				} else {
-					reportError("Expected parameter type (int, float, ptr, char, string, bool, struct name, or [size]type)",
-								currentLine(), currentColumn());
-				}
-			}
-
-			// Check for "or nil" suffix for optional parameters
-			if (checkKeyword("or")) {
-				advance(); // consume 'or'
-				if (!checkKeyword("nil")) {
-					reportError("Expected 'nil' after 'or' in parameter type",
-								currentLine(), currentColumn());
-				}
-				advance(); // consume 'nil'
-
-				// Reject nested optionals
-				if (paramType.find(" or nil") != std::string::npos) {
-					reportError("Cannot make optional type '" + paramType + "' optional again",
-								currentLine(), currentColumn());
-				}
-
-				paramType = paramType + " or nil";
-			}
+			// Parse parameter type using unified type parser (handles arrays and optional)
+			std::string paramType = parseTypeStringWithOptional("parameter type");
 
 			parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
 		} while (match(TokenType::COMMA));
@@ -334,29 +205,14 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 	expectAdvance(TokenType::RPAREN, "Expected ')'");
 
 	// Parse return type (optional - defaults to void)
+	// Type can start with: type keyword, identifier (struct name), or '[' (legacy []T syntax)
 	std::string returnType = "void";
 	auto retKd = currentKeywordData();
-	if ((retKd && retKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
-		returnType = std::string(currentValue());
-		advance();
-
-		// Check for "or nil" suffix for optional return types
-		if (checkKeyword("or")) {
-			advance(); // consume 'or'
-			if (!checkKeyword("nil")) {
-				reportError("Expected 'nil' after 'or' in return type",
-							currentLine(), currentColumn());
-			}
-			advance(); // consume 'nil'
-
-			// Reject nested optionals
-			if (returnType.find(" or nil") != std::string::npos) {
-				reportError("Cannot make optional type '" + returnType + "' optional again",
-							currentLine(), currentColumn());
-			}
-
-			returnType = returnType + " or nil";
-		}
+	bool hasReturnType = (retKd && retKd->category == KeywordCategory::Type) ||
+						 check(TokenType::IDENTIFIER) ||
+						 check(TokenType::LBRACKET);
+	if (hasReturnType) {
+		returnType = parseTypeStringWithOptional("return type");
 	}
 
 	std::vector<std::unique_ptr<StmtAST>> body;
@@ -435,44 +291,10 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 				advance(); // consume 'with'
 				std::vector<std::string> withTypes;
 
-				// Parse first type
+				// Parse types in 'with' clause
 				bool parsingTypes = true;
 				while (parsingTypes) {
-					std::string concreteType;
-					if (check(TokenType::LBRACKET)) {
-						// Array type: [size]type or []type
-						advance(); // consume '['
-						std::string sizeStr = "";
-						if (check(TokenType::NUMBER)) {
-							sizeStr = std::string(currentValue());
-							advance();
-						}
-						expectAdvance(TokenType::RBRACKET, "Expected ']' after array size");
-						std::string elementType;
-						if (Lexer::isTypeToken(currentToken())) {
-							elementType = std::string(currentValue());
-							advance();
-						} else if (check(TokenType::IDENTIFIER)) {
-							elementType = parseQualifiedName("array element type");
-						} else {
-							reportError("Expected array element type after ']'",
-										currentLine(), currentColumn());
-						}
-						// Use new internal array type format
-						if (sizeStr.empty()) {
-							concreteType = maxon::TypeConversion::makeManagedArrayType(elementType);
-						} else {
-							concreteType = maxon::TypeConversion::makeStaticArrayType(std::stoi(sizeStr), elementType);
-						}
-					} else if (Lexer::isTypeToken(currentToken())) {
-						concreteType = std::string(currentValue());
-						advance();
-					} else if (check(TokenType::IDENTIFIER)) {
-						concreteType = parseQualifiedName("concrete type");
-					} else {
-						reportError("Expected type in 'with' clause",
-									currentLine(), currentColumn());
-					}
+					std::string concreteType = parseTypeString("concrete type");
 					withTypes.push_back(concreteType);
 
 					// Check if comma followed by another type (continue) or interface (stop)
@@ -551,64 +373,14 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 		std::string fieldName = fieldNameToken.value;
 
 		// Parse optional type - type is required unless we have a default value
+		// Type can start with: type keyword, '[' (legacy), or identifier (struct name)
+		// But identifier must not be followed by '=' (which would be type inference)
 		std::string fieldType;
-		// Check for array type: [size]type or []type
-		if (check(TokenType::LBRACKET)) {
-			advance(); // consume '['
-
-			std::string sizeStr = "";
-			if (check(TokenType::NUMBER)) {
-				// Sized array: [16]byte
-				sizeStr = std::string(currentValue());
-				advance();
-			}
-			// else: unsized array []type
-
-			expectAdvance(TokenType::RBRACKET, "Expected ']' after array size");
-
-			// Get element type
-			std::string elementType;
-			if (Lexer::isTypeToken(currentToken())) {
-				elementType = std::string(currentValue());
-				advance();
-			} else if (check(TokenType::IDENTIFIER)) {
-				elementType = parseQualifiedName("array element type");
-			} else {
-				reportError("Expected array element type after ']'",
-							currentLine(), currentColumn());
-			}
-
-			// Build array type string using new internal format
-			if (sizeStr.empty()) {
-				fieldType = maxon::TypeConversion::makeManagedArrayType(elementType);
-			} else {
-				fieldType = maxon::TypeConversion::makeStaticArrayType(std::stoi(sizeStr), elementType);
-			}
-		} else if (Lexer::isTypeToken(currentToken())) {
-			fieldType = std::string(currentValue());
-			advance();
-		} else if (check(TokenType::IDENTIFIER) && !check(TokenType::ASSIGN)) {
-			// It's a type (struct name), not an assignment
-			fieldType = parseQualifiedName("struct field type");
-		}
-		// else: no type, must have default value for type inference
-
-		// Check for "or nil" suffix for optional struct fields
-		if (!fieldType.empty() && checkKeyword("or")) {
-			advance(); // consume 'or'
-			if (!checkKeyword("nil")) {
-				reportError("Expected 'nil' after 'or' in field type",
-							currentLine(), currentColumn());
-			}
-			advance(); // consume 'nil'
-
-			// Reject nested optionals
-			if (fieldType.find(" or nil") != std::string::npos) {
-				reportError("Cannot make optional type '" + fieldType + "' optional again",
-							currentLine(), currentColumn());
-			}
-
-			fieldType = fieldType + " or nil";
+		bool hasType = Lexer::isTypeToken(currentToken()) ||
+					   check(TokenType::LBRACKET) ||
+					   (check(TokenType::IDENTIFIER) && !check(TokenType::ASSIGN, 1));
+		if (hasType) {
+			fieldType = parseTypeStringWithOptional("field type");
 		}
 
 		// Parse optional default value
@@ -950,51 +722,13 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 			do {
 				Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
 
-				// Handle Self type specially
+				// Handle Self type specially, otherwise use unified type parser
 				std::string paramType;
 				if (check(TokenType::IDENTIFIER) && std::string(currentValue()) == "Self") {
 					paramType = "Self";
 					advance();
-				} else if (check(TokenType::LBRACKET)) {
-					// Array type: [size]type or []type
-					advance(); // consume '['
-
-					std::string sizeStr = "";
-					if (check(TokenType::NUMBER)) {
-						// Sized array: [16]byte
-						sizeStr = std::string(currentValue());
-						advance();
-					}
-					// else: unsized array []type
-
-					expectAdvance(TokenType::RBRACKET, "Expected ']' after array size");
-
-					// Get element type
-					std::string elementType;
-					if (Lexer::isTypeToken(currentToken())) {
-						elementType = std::string(currentValue());
-						advance();
-					} else if (check(TokenType::IDENTIFIER)) {
-						elementType = parseQualifiedName("array element type");
-					} else {
-						reportError("Expected array element type after ']' in interface method signature",
-									currentLine(), currentColumn());
-					}
-
-					// Build array type string using new internal format
-					if (sizeStr.empty()) {
-						paramType = maxon::TypeConversion::makeManagedArrayType(elementType);
-					} else {
-						paramType = maxon::TypeConversion::makeStaticArrayType(std::stoi(sizeStr), elementType);
-					}
-				} else if (Lexer::isTypeToken(currentToken())) {
-					paramType = std::string(currentValue());
-					advance();
-				} else if (check(TokenType::IDENTIFIER)) {
-					paramType = parseQualifiedName("parameter type");
 				} else {
-					reportError("Expected parameter type in interface method signature",
-								currentLine(), currentColumn());
+					paramType = parseTypeString("parameter type");
 				}
 
 				parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
@@ -1004,34 +738,19 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 		expectAdvance(TokenType::RPAREN, "Expected ')' after method parameters");
 
 		// Parse return type (optional - defaults to void)
+		// Handle Self type specially
 		std::string returnType = "void";
 		if (check(TokenType::IDENTIFIER) && std::string(currentValue()) == "Self") {
 			returnType = "Self";
 			advance();
 		} else {
 			auto retKd = currentKeywordData();
-			if ((retKd && retKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
-				returnType = std::string(currentValue());
-				advance();
+			bool hasReturnType = (retKd && retKd->category == KeywordCategory::Type) ||
+								 check(TokenType::IDENTIFIER) ||
+								 check(TokenType::LBRACKET);
+			if (hasReturnType) {
+				returnType = parseTypeStringWithOptional("return type");
 			}
-		}
-
-		// Check for "or nil" suffix for optional return types
-		if (checkKeyword("or")) {
-			advance(); // consume 'or'
-			if (!checkKeyword("nil")) {
-				reportError("Expected 'nil' after 'or' in return type",
-							currentLine(), currentColumn());
-			}
-			advance(); // consume 'nil'
-
-			// Reject nested optionals
-			if (returnType.find(" or nil") != std::string::npos) {
-				reportError("Cannot make optional type '" + returnType + "' optional again",
-							currentLine(), currentColumn());
-			}
-
-			returnType = returnType + " or nil";
 		}
 
 		methods.push_back(InterfaceMethodSignature(methodName, std::move(parameters), returnType,

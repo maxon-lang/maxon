@@ -21,9 +21,9 @@ Hash maps provide O(1) average-case lookup, insertion, and deletion of key-value
 - Load factor threshold: 75% (TODO: automatic resizing)
 
 **Memory Layout (struct):**
-- `_keys []K` - Key storage array
-- `_values []V` - Value storage array
-- `_states []byte` - Slot state array
+- `_keys array of K` - Key storage array
+- `_values array of V` - Value storage array
+- `_states array of byte` - Slot state array
 - `_count int` - Number of occupied entries
 - `_capacity int` - Total slots
 

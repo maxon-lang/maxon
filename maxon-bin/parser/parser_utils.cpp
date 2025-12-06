@@ -1,4 +1,5 @@
 #include "../parser.h"
+#include "../types/type_conversion.h"
 #include <stdexcept>
 
 // ============================================================================
@@ -296,6 +297,111 @@ std::string Parser::parseQualifiedName(const std::string &context) {
 	}
 
 	return qualifiedName;
+}
+
+// Parse a type string, handling:
+// - Primitive types: int, float, bool, byte
+// - Struct types: MyStruct, pkg.MyStruct
+// - Array types: array of T, array of N T, array of array of T
+// - Legacy array types: []T, [N]T (for backward compatibility during migration)
+std::string Parser::parseTypeString(const std::string &context) {
+	// Check for 'array' keyword - new array syntax
+	if (checkKeyword("array")) {
+		advance(); // consume 'array'
+
+		if (!checkKeyword("of")) {
+			reportError("Expected 'of' after 'array' in type declaration\n"
+						"  Use: array of int, array of 5 byte, etc.",
+						currentLine(), currentColumn());
+		}
+		advance(); // consume 'of'
+
+		// Check for sized array: array of N T
+		if (check(TokenType::NUMBER)) {
+			Token sizeToken = currentToken();
+			int size = std::stoi(sizeToken.value);
+			advance(); // consume the number
+
+			// Now parse the element type (recursive for nested arrays)
+			std::string elementType = parseTypeString(context);
+
+			// Return internal representation: _StaticArray<N, T>
+			return maxon::TypeConversion::makeStaticArrayType(size, elementType);
+		}
+
+		// Unsized array: array of T (recursive for nested arrays)
+		std::string elementType = parseTypeString(context);
+		return maxon::TypeConversion::makeManagedArrayType(elementType);
+	}
+
+	// Check for legacy []T syntax (backward compatibility)
+	if (check(TokenType::LBRACKET)) {
+		advance(); // consume '['
+
+		std::string sizeStr = "";
+		if (check(TokenType::NUMBER)) {
+			sizeStr = std::string(currentValue());
+			advance(); // consume size
+		}
+
+		expectAdvance(TokenType::RBRACKET, "Expected ']' in array type");
+
+		// Parse element type
+		std::string elementType = parseTypeString(context);
+
+		// Convert to internal format
+		if (sizeStr.empty()) {
+			return maxon::TypeConversion::makeManagedArrayType(elementType);
+		} else {
+			return maxon::TypeConversion::makeStaticArrayType(std::stoi(sizeStr), elementType);
+		}
+	}
+
+	// Check for type keywords (int, float, bool, byte, array, of)
+	auto kd = currentKeywordData();
+	if (kd && kd->category == KeywordCategory::Type) {
+		std::string typeName = std::string(currentValue());
+		// Skip 'of' keyword as it's only valid after 'array'
+		if (typeName == "of") {
+			reportError("Unexpected 'of' keyword - use 'array of T' syntax",
+						currentLine(), currentColumn());
+		}
+		advance();
+		return typeName;
+	}
+
+	// Must be a struct/identifier type
+	if (check(TokenType::IDENTIFIER)) {
+		return parseQualifiedName(context);
+	}
+
+	reportError("Expected type (int, float, bool, byte, array of T, or struct name) for " + context,
+				currentLine(), currentColumn());
+}
+
+// Parse a type string with optional "or nil" suffix
+std::string Parser::parseTypeStringWithOptional(const std::string &context) {
+	std::string baseType = parseTypeString(context);
+
+	// Check for "or nil" suffix for optional types
+	if (checkKeyword("or")) {
+		advance(); // consume 'or'
+		if (!checkKeyword("nil")) {
+			reportError("Expected 'nil' after 'or' in type",
+						currentLine(), currentColumn());
+		}
+		advance(); // consume 'nil'
+
+		// Reject nested optionals
+		if (baseType.find(" or nil") != std::string::npos) {
+			reportError("Cannot make optional type '" + baseType + "' optional again",
+						currentLine(), currentColumn());
+		}
+
+		return baseType + " or nil";
+	}
+
+	return baseType;
 }
 
 // ============================================================================

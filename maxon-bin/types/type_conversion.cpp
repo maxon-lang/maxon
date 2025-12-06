@@ -458,18 +458,41 @@ std::string TypeConversion::arrayTypeToDisplayString(const std::string &arrayTyp
 		return arrayType;
 	}
 
-	// New format: _ManagedArray<T> -> []T
+	// New format: _ManagedArray<T> -> array of T
 	if (arrayType.rfind("_ManagedArray<", 0) == 0) {
-		return "[]" + getArrayElementType(arrayType);
+		std::string elemType = getArrayElementType(arrayType);
+		// Recursively convert nested array types
+		std::string elemDisplay = arrayTypeToDisplayString(elemType);
+		return "array of " + elemDisplay;
 	}
 
-	// New format: _StaticArray<N, T> -> [N]T
+	// New format: _StaticArray<N, T> -> array of N T
 	if (arrayType.rfind("_StaticArray<", 0) == 0) {
 		int size = getStaticArraySize(arrayType);
-		return "[" + std::to_string(size) + "]" + getArrayElementType(arrayType);
+		std::string elemType = getArrayElementType(arrayType);
+		// Recursively convert nested array types
+		std::string elemDisplay = arrayTypeToDisplayString(elemType);
+		return "array of " + std::to_string(size) + " " + elemDisplay;
 	}
 
-	// Already in legacy format
+	// Legacy format: []T -> array of T
+	if (arrayType.size() >= 2 && arrayType[0] == '[' && arrayType[1] == ']') {
+		std::string elemType = arrayType.substr(2);
+		std::string elemDisplay = arrayTypeToDisplayString(elemType);
+		return "array of " + elemDisplay;
+	}
+
+	// Legacy format: [N]T -> array of N T
+	if (arrayType.size() >= 3 && arrayType[0] == '[') {
+		size_t closeBracket = arrayType.find(']');
+		if (closeBracket != std::string::npos && closeBracket > 1) {
+			std::string sizeStr = arrayType.substr(1, closeBracket - 1);
+			std::string elemType = arrayType.substr(closeBracket + 1);
+			std::string elemDisplay = arrayTypeToDisplayString(elemType);
+			return "array of " + sizeStr + " " + elemDisplay;
+		}
+	}
+
 	return arrayType;
 }
 

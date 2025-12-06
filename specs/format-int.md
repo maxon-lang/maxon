@@ -13,7 +13,7 @@ The `format_int_array()` function converts an integer to a string representation
 
 Implementation:
 - Defined in `stdlib/fmt/integer.maxon`
-- Signature: `format_int_array(value int, buffer []byte) int`
+- Signature: `format_int_array(value int, buffer array of byte) int`
 - Returns the number of characters written
 - Handles negative numbers, zero, and positive values
 - Uses modulo and division to extract digits

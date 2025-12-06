@@ -137,7 +137,7 @@ class KeywordMatcher {
 					"Conditional statement - executes code block if condition is true",
 					"if $1\n\t$2\nend 'if'",
 					KeywordCompletionKind::Keyword,
-					true, false);  // isBlockKeyword=true, isNamedBlock=false (uses 'if' as label)
+					true, false); // isBlockKeyword=true, isNamedBlock=false (uses 'if' as label)
 		add_keyword("then", KeywordCategory::ControlFlow,
 					"Single-line if body - use after condition for one-line statements",
 					"then",
@@ -150,12 +150,12 @@ class KeywordMatcher {
 					"Loop statement - repeats while condition is true",
 					"while $1\n\t$2\nend 'while'",
 					KeywordCompletionKind::Keyword,
-					true, false);  // isBlockKeyword=true, isNamedBlock=false
+					true, false); // isBlockKeyword=true, isNamedBlock=false
 		add_keyword("for", KeywordCategory::ControlFlow,
 					"For loop - iterates over a range or collection",
 					"for $1 in $2\n\t$3\nend 'for'",
 					KeywordCompletionKind::Keyword,
-					true, false);  // isBlockKeyword=true, isNamedBlock=false
+					true, false); // isBlockKeyword=true, isNamedBlock=false
 		add_keyword("in", KeywordCategory::ControlFlow,
 					"Iterator keyword in for loop",
 					"in",
@@ -180,7 +180,7 @@ class KeywordMatcher {
 					"Pattern matching statement - matches value against cases",
 					"match $1\n\t$2:\n\t\t$3\n\tdefault:\n\t\t$4\nend 'match'",
 					KeywordCompletionKind::Keyword,
-					true, false);  // isBlockKeyword=true, isNamedBlock=false
+					true, false); // isBlockKeyword=true, isNamedBlock=false
 		add_keyword("default", KeywordCategory::ControlFlow,
 					"Default case in match statement - executed when no other case matches",
 					"default:",
@@ -199,7 +199,7 @@ class KeywordMatcher {
 					"Function declaration - defines a named function",
 					"function $1($2) $3\n\t$4\nend '$1'",
 					KeywordCompletionKind::Keyword,
-					true, true);  // isBlockKeyword=true, isNamedBlock=true (uses function name as label)
+					true, true); // isBlockKeyword=true, isNamedBlock=true (uses function name as label)
 		add_keyword("var", KeywordCategory::Declaration,
 					"Mutable variable declaration",
 					"var $1 = $2",
@@ -212,17 +212,17 @@ class KeywordMatcher {
 					"Structure type declaration - defines a composite type",
 					"struct $1\n\t$2\nend '$1'",
 					KeywordCompletionKind::Keyword,
-					true, true);  // isBlockKeyword=true, isNamedBlock=true
+					true, true); // isBlockKeyword=true, isNamedBlock=true
 		add_keyword("enum", KeywordCategory::Declaration,
 					"Enumeration type declaration - defines a type with named values",
 					"enum $1\n\tcase $2\nend '$1'",
 					KeywordCompletionKind::Keyword,
-					true, true);  // isBlockKeyword=true, isNamedBlock=true
+					true, true); // isBlockKeyword=true, isNamedBlock=true
 		add_keyword("interface", KeywordCategory::Declaration,
 					"Interface declaration - defines a contract for types",
 					"interface $1\n\t$2\nend '$1'",
 					KeywordCompletionKind::Keyword,
-					true, true);  // isBlockKeyword=true, isNamedBlock=true
+					true, true); // isBlockKeyword=true, isNamedBlock=true
 		add_keyword("type", KeywordCategory::Declaration,
 					"Associated type declaration in interface",
 					"type $1",
@@ -254,6 +254,14 @@ class KeywordMatcher {
 		add_keyword("case", KeywordCategory::Declaration,
 					"Enum case declaration - defines an enumeration value",
 					"case $1",
+					KeywordCompletionKind::Keyword);
+		add_keyword("array", KeywordCategory::Type,
+					"Array type - use 'array of T' for collections",
+					"array of $1",
+					KeywordCompletionKind::Keyword);
+		add_keyword("of", KeywordCategory::Type,
+					"Type constructor keyword - used with 'array of T'",
+					"of",
 					KeywordCompletionKind::Keyword);
 
 		// Math intrinsics
@@ -570,8 +578,7 @@ class KeywordMatcher {
 
 		// Store in keywords array
 		size_t idx = keyword_count_++;
-		keywords_[idx] = {keyword, description, insertText, static_cast<uint8_t>(len),
-						  category, completionKind, false, {}, isBlockKeyword, isNamedBlock};
+		keywords_[idx] = {keyword, description, insertText, static_cast<uint8_t>(len), category, completionKind, false, {}, isBlockKeyword, isNamedBlock};
 
 		// Insert into hash table (with linear probing for collisions)
 		while (hash_table_[hash] != EMPTY_SLOT) {
