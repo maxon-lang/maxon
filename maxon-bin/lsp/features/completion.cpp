@@ -25,7 +25,17 @@ CompletionList CompletionProvider::getCompletions(
 
 	switch (context) {
 	case CompletionContext::AfterDot: {
-		// Member access completion
+		// First check for qualified name completions (stdlib.fmt.integer. etc)
+		std::string qualifiedPath = getQualifiedPathBeforeDot(document, position);
+		if (!qualifiedPath.empty() && qualifiedPath.find("stdlib") == 0) {
+			auto qualifiedItems = getQualifiedNameCompletions(qualifiedPath, prefix, stdlib);
+			if (!qualifiedItems.empty()) {
+				items.insert(items.end(), qualifiedItems.begin(), qualifiedItems.end());
+				break;
+			}
+		}
+
+		// Otherwise, member access completion
 		std::string typeName = getTypeBeforeDot(document, position, cache);
 		if (!typeName.empty()) {
 			auto memberItems = getMemberCompletions(typeName, prefix, cache, stdlib);
@@ -62,6 +72,17 @@ CompletionList CompletionProvider::getCompletions(
 
 		auto typeItems = getTypeCompletions(prefix, cache, stdlib);
 		items.insert(items.end(), typeItems.begin(), typeItems.end());
+
+		// Add "stdlib" for qualified name access
+		if (prefix.empty() || matchesPrefix("stdlib", prefix)) {
+			CompletionItem stdlibItem;
+			stdlibItem.label = "stdlib";
+			stdlibItem.kind = CompletionItemKind::Module;
+			stdlibItem.detail = "Maxon standard library";
+			stdlibItem.documentation = "Access standard library modules via qualified names (stdlib.fmt.integer.format_int_array)";
+			stdlibItem.insertText = "stdlib";
+			items.push_back(std::move(stdlibItem));
+		}
 		break;
 	}
 
@@ -76,6 +97,17 @@ CompletionList CompletionProvider::getCompletions(
 
 		auto typeItems = getTypeCompletions(prefix, cache, stdlib);
 		items.insert(items.end(), typeItems.begin(), typeItems.end());
+
+		// Add "stdlib" for qualified name access
+		if (prefix.empty() || matchesPrefix("stdlib", prefix)) {
+			CompletionItem stdlibItem;
+			stdlibItem.label = "stdlib";
+			stdlibItem.kind = CompletionItemKind::Module;
+			stdlibItem.detail = "Maxon standard library";
+			stdlibItem.documentation = "Access standard library modules via qualified names (stdlib.fmt.integer.format_int_array)";
+			stdlibItem.insertText = "stdlib";
+			items.push_back(std::move(stdlibItem));
+		}
 		break;
 	}
 	}
@@ -311,6 +343,227 @@ std::string CompletionProvider::getTypeBeforeDot(
 	return identifier;
 }
 
+std::string CompletionProvider::getQualifiedPathBeforeDot(
+	const Document &document,
+	const Position &position) {
+	if (position.line < 0 || position.line >= document.getLineCount()) {
+		return "";
+	}
+
+	std::string line = document.getLine(position.line);
+	int charPos = position.character;
+
+	if (charPos > static_cast<int>(line.length())) {
+		charPos = static_cast<int>(line.length());
+	}
+
+	// Find the start of the qualified path by scanning backwards
+	// Accept identifiers and dots
+	int pathEnd = charPos;
+
+	// Skip any trailing dot or partial identifier after dot
+	while (pathEnd > 0 && line[pathEnd - 1] == '.') {
+		pathEnd--;
+	}
+
+	// Now scan backwards to find the full qualified path
+	int pathStart = pathEnd;
+	bool expectingIdentifier = true;
+
+	while (pathStart > 0) {
+		char c = line[pathStart - 1];
+		if (expectingIdentifier) {
+			if (std::isalnum(c) || c == '_') {
+				pathStart--;
+			} else if (c == '.') {
+				expectingIdentifier = false;
+				pathStart--;
+			} else {
+				break;
+			}
+		} else {
+			// Expecting identifier part after a dot
+			if (std::isalnum(c) || c == '_') {
+				expectingIdentifier = true;
+				pathStart--;
+			} else {
+				// Found a dot not followed by an identifier, remove it
+				pathStart++;
+				break;
+			}
+		}
+	}
+
+	if (pathStart >= pathEnd) {
+		return "";
+	}
+
+	return line.substr(pathStart, pathEnd - pathStart);
+}
+
+std::vector<CompletionItem> CompletionProvider::getQualifiedNameCompletions(
+	const std::string &qualifiedPath,
+	const std::string &prefix,
+	const StdlibSymbols &stdlib) {
+	std::vector<CompletionItem> items;
+
+	// Parse the qualified path into components
+	std::vector<std::string> pathComponents;
+	std::string current;
+	for (char c : qualifiedPath) {
+		if (c == '.') {
+			if (!current.empty()) {
+				pathComponents.push_back(current);
+				current.clear();
+			}
+		} else {
+			current += c;
+		}
+	}
+	if (!current.empty()) {
+		pathComponents.push_back(current);
+	}
+
+	if (pathComponents.empty()) {
+		return items;
+	}
+
+	// Check if this is a stdlib path
+	if (pathComponents[0] != "stdlib") {
+		return items;
+	}
+
+	// Handle different depths of stdlib path
+	if (pathComponents.size() == 1) {
+		// "stdlib." - return top-level modules (fmt, sys, collections, math, string, iter)
+		static const std::vector<std::string> topModules = {"fmt", "sys", "collections", "math", "string", "iter"};
+		for (const auto &mod : topModules) {
+			if (prefix.empty() || matchesPrefix(mod, prefix)) {
+				CompletionItem item;
+				item.label = mod;
+				item.kind = CompletionItemKind::Module;
+				item.detail = "stdlib." + mod;
+				item.documentation = "Maxon standard library module";
+				item.insertText = mod;
+				items.push_back(std::move(item));
+			}
+		}
+	} else if (pathComponents.size() == 2) {
+		// "stdlib.fmt." - return sub-modules within fmt
+		const std::string &module = pathComponents[1];
+
+		// Define sub-modules for each top-level module
+		std::vector<std::string> subModules;
+		if (module == "fmt") {
+			subModules = {"integer", "float"};
+		}
+		// Add more modules as needed
+
+		for (const auto &subMod : subModules) {
+			if (prefix.empty() || matchesPrefix(subMod, prefix)) {
+				CompletionItem item;
+				item.label = subMod;
+				item.kind = CompletionItemKind::Module;
+				item.detail = "stdlib." + module + "." + subMod;
+				item.documentation = "Maxon standard library module";
+				item.insertText = subMod;
+				items.push_back(std::move(item));
+			}
+		}
+
+		// Also check for functions/types directly in this module
+		// The namespace in stdlib symbols is just the path after stdlib (e.g., "fmt")
+		for (const auto &func : stdlib.functions) {
+			// Check if function is in this module (namespace matches module)
+			// Functions have a filePath that contains the module path
+			if (func.filePath.find("stdlib") != std::string::npos) {
+				// Extract the module from the file path
+				size_t stdlibPos = func.filePath.find("stdlib");
+				std::string afterStdlib = func.filePath.substr(stdlibPos + 7); // Skip "stdlib/"
+				// Check if the file is directly in the module folder (not a subfolder)
+				size_t firstSep = afterStdlib.find_first_of("/\\");
+				if (firstSep != std::string::npos) {
+					std::string fileModule = afterStdlib.substr(0, firstSep);
+					// Check if file is directly in this module (not in a subfolder)
+					std::string rest = afterStdlib.substr(firstSep + 1);
+					if (fileModule == module && rest.find_first_of("/\\") == std::string::npos) {
+						// File is directly in the module, so it's a top-level function
+						if (prefix.empty() || matchesPrefix(func.name, prefix)) {
+							CompletionItem item;
+							item.label = func.name;
+							item.kind = CompletionItemKind::Function;
+							item.detail = func.type;
+							item.documentation = func.documentation;
+							item.insertText = func.name;
+							items.push_back(std::move(item));
+						}
+					}
+				}
+			}
+		}
+	} else if (pathComponents.size() >= 3) {
+		// "stdlib.fmt.integer." - return functions/types in this sub-module
+		std::string fullModulePath;
+		for (size_t i = 1; i < pathComponents.size(); ++i) {
+			if (i > 1)
+				fullModulePath += "/";
+			fullModulePath += pathComponents[i];
+		}
+
+		// Look for functions whose filePath matches this module path
+		for (const auto &func : stdlib.functions) {
+			if (func.filePath.find("stdlib") != std::string::npos) {
+				// Check if the file path contains our module path
+				// e.g., "stdlib/fmt/integer.maxon" for "stdlib.fmt.integer"
+				std::string expectedPath = "stdlib/" + fullModulePath + ".maxon";
+				std::string expectedPathBackslash = "stdlib\\" + fullModulePath + ".maxon";
+
+				// Normalize the module path to use backslashes for comparison on Windows
+				std::string normalizedModulePath = fullModulePath;
+				std::replace(normalizedModulePath.begin(), normalizedModulePath.end(), '/', '\\');
+				std::string expectedPathWin = "stdlib\\" + normalizedModulePath + ".maxon";
+
+				bool pathMatches = (func.filePath.find(expectedPath) != std::string::npos) ||
+								   (func.filePath.find(expectedPathBackslash) != std::string::npos) ||
+								   (func.filePath.find(expectedPathWin) != std::string::npos);
+
+				if (pathMatches) {
+					if (prefix.empty() || matchesPrefix(func.name, prefix)) {
+						CompletionItem item;
+						item.label = func.name;
+						item.kind = CompletionItemKind::Function;
+						item.detail = func.type;
+						item.documentation = func.documentation;
+						item.insertText = func.name;
+						items.push_back(std::move(item));
+					}
+				}
+			}
+		}
+
+		// Also look for types (structs, enums, interfaces)
+		for (const auto &structSym : stdlib.structs) {
+			if (structSym.filePath.find("stdlib") != std::string::npos) {
+				std::string expectedPath = "stdlib/" + fullModulePath + ".maxon";
+				std::string normalizedModulePath = fullModulePath;
+				std::replace(normalizedModulePath.begin(), normalizedModulePath.end(), '/', '\\');
+				std::string expectedPathWin = "stdlib\\" + normalizedModulePath + ".maxon";
+
+				bool pathMatches = (structSym.filePath.find(expectedPath) != std::string::npos) ||
+								   (structSym.filePath.find(expectedPathWin) != std::string::npos);
+
+				if (pathMatches) {
+					if (prefix.empty() || matchesPrefix(structSym.name, prefix)) {
+						items.push_back(buildStructItem(structSym));
+					}
+				}
+			}
+		}
+	}
+
+	return items;
+}
+
 std::vector<CompletionItem> CompletionProvider::getKeywordCompletions(const std::string &prefix) {
 	std::vector<CompletionItem> items;
 
@@ -415,16 +668,26 @@ std::vector<CompletionItem> CompletionProvider::getFunctionCompletions(
 	const StdlibSymbols &stdlib) {
 	std::vector<CompletionItem> items;
 
-	// Functions from cache
+	// Build a set of stdlib function names to avoid duplicates
+	// (stdlib symbols have documentation, cache symbols don't)
+	std::set<std::string> stdlibFuncNames;
+	for (const auto &symbol : stdlib.functions) {
+		stdlibFuncNames.insert(symbol.name);
+	}
+
+	// Functions from cache (skip those that are in stdlib)
 	if (cache) {
 		for (const auto &[name, funcInfo] : cache->functions) {
+			if (stdlibFuncNames.count(name) > 0) {
+				continue; // Skip - will be added from stdlib with documentation
+			}
 			if (prefix.empty() || matchesPrefix(name, prefix)) {
 				items.push_back(buildFunctionItem(funcInfo));
 			}
 		}
 	}
 
-	// Stdlib functions
+	// Stdlib functions (these have documentation)
 	for (const auto &symbol : stdlib.functions) {
 		if (prefix.empty() || matchesPrefix(symbol.name, prefix)) {
 			items.push_back(buildFunctionItem(symbol));
@@ -440,6 +703,134 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 	const AnalysisCache *cache,
 	const StdlibSymbols &stdlib) {
 	std::vector<CompletionItem> items;
+
+	// Check if this is an enum type - provide enum cases, rawValue, and methods
+	if (cache && cache->ast) {
+		for (const auto &enumDef : cache->ast->enums) {
+			if (enumDef->name == typeName) {
+				// Add enum cases
+				for (const auto &enumCase : enumDef->cases) {
+					if (prefix.empty() || matchesPrefix(enumCase.name, prefix)) {
+						CompletionItem item;
+						item.label = enumCase.name;
+						item.kind = CompletionItemKind::EnumMember;
+						item.detail = typeName + "." + enumCase.name;
+						item.insertText = enumCase.name;
+						items.push_back(std::move(item));
+					}
+				}
+
+				// If it's a raw value enum, add rawValue property
+				if (!enumDef->rawValueType.empty()) {
+					if (prefix.empty() || matchesPrefix("rawValue", prefix)) {
+						CompletionItem item;
+						item.label = "rawValue";
+						item.kind = CompletionItemKind::Property;
+						item.detail = enumDef->rawValueType;
+						item.documentation = "The raw value of this enum case";
+						item.insertText = "rawValue";
+						items.push_back(std::move(item));
+					}
+				}
+
+				// Add enum methods
+				for (const auto &method : enumDef->methods) {
+					if (prefix.empty() || matchesPrefix(method->name, prefix)) {
+						CompletionItem item;
+						item.label = method->name;
+						item.kind = CompletionItemKind::Method;
+						item.detail = method->returnType;
+						item.documentation = "";
+
+						// Build insert text with parameter placeholders
+						std::string insertText = method->name + "(";
+						int placeholderIndex = 1;
+						bool first = true;
+						for (const auto &param : method->parameters) {
+							// Skip 'self' parameter
+							if (param.name == "self") {
+								continue;
+							}
+							if (!first) {
+								insertText += ", ";
+							}
+							first = false;
+							insertText += "${" + std::to_string(placeholderIndex++) + ":" + param.name + "}";
+						}
+						insertText += ")";
+
+						item.insertText = insertText;
+						item.insertTextFormat = InsertTextFormat::Snippet;
+						items.push_back(std::move(item));
+					}
+				}
+
+				return items;
+			}
+		}
+	}
+
+	// Also check for enum types where variable is an instance of the enum
+	// (e.g., var s = Status.ok; s. should show rawValue if Status has raw values)
+	if (cache) {
+		auto varIt = cache->variables.find(typeName);
+		if (varIt != cache->variables.end()) {
+			std::string varType = varIt->second.type;
+			// Check if varType is an enum
+			if (cache->ast) {
+				for (const auto &enumDef : cache->ast->enums) {
+					if (enumDef->name == varType) {
+						// Add rawValue for raw value enums
+						if (!enumDef->rawValueType.empty()) {
+							if (prefix.empty() || matchesPrefix("rawValue", prefix)) {
+								CompletionItem item;
+								item.label = "rawValue";
+								item.kind = CompletionItemKind::Property;
+								item.detail = enumDef->rawValueType;
+								item.documentation = "The raw value of this enum case";
+								item.insertText = "rawValue";
+								items.push_back(std::move(item));
+							}
+						}
+
+						// Add enum methods
+						for (const auto &method : enumDef->methods) {
+							if (prefix.empty() || matchesPrefix(method->name, prefix)) {
+								CompletionItem item;
+								item.label = method->name;
+								item.kind = CompletionItemKind::Method;
+								item.detail = method->returnType;
+								item.documentation = "";
+
+								// Build insert text with parameter placeholders
+								std::string insertText = method->name + "(";
+								int placeholderIndex = 1;
+								bool first = true;
+								for (const auto &param : method->parameters) {
+									// Skip 'self' parameter
+									if (param.name == "self") {
+										continue;
+									}
+									if (!first) {
+										insertText += ", ";
+									}
+									first = false;
+									insertText += "${" + std::to_string(placeholderIndex++) + ":" + param.name + "}";
+								}
+								insertText += ")";
+
+								item.insertText = insertText;
+								item.insertTextFormat = InsertTextFormat::Snippet;
+								items.push_back(std::move(item));
+							}
+						}
+
+						return items;
+					}
+				}
+			}
+		}
+	}
 
 	// Check if this is an array type (starts with '[')
 	if (!typeName.empty() && typeName[0] == '[') {
@@ -662,7 +1053,9 @@ CompletionItem CompletionProvider::buildFunctionItem(const LSPSymbolInfo &symbol
 	item.label = symbol.name;
 	item.kind = CompletionItemKind::Function;
 	item.detail = symbol.type;
-	item.documentation = symbol.documentation;
+	if (!symbol.documentation.empty()) {
+		item.documentation = symbol.documentation;
+	}
 
 	// Build insert text with placeholders from parameters
 	std::string insertText = symbol.name + "(";

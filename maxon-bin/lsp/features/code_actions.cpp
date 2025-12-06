@@ -117,6 +117,7 @@ std::vector<CodeAction> CodeActionsProvider::getQuickFixes(
 			std::string varName = extractIdentifierFromDiagnostic(diag);
 			if (!varName.empty()) {
 				fixes.push_back(createUnusedVariableFix(document, diag, varName));
+				fixes.push_back(createRemoveUnusedVariableFix(document, diag, varName));
 			}
 		}
 
@@ -318,6 +319,31 @@ CodeAction CodeActionsProvider::createUnusedVariableFix(
 			TextEdit edit = createTextEdit(replaceRange, "_" + varName);
 			action.edit = createWorkspaceEdit(document.uri, {edit});
 		}
+	}
+
+	return action;
+}
+
+CodeAction CodeActionsProvider::createRemoveUnusedVariableFix(
+	const Document &document,
+	const Diagnostic &diag,
+	const std::string &varName) {
+	CodeAction action;
+	action.title = "Remove unused variable '" + varName + "'";
+	action.kind = CodeActionKind::QuickFix;
+	action.diagnostics = std::vector<Diagnostic>{diag};
+
+	// Delete the entire line containing the unused variable
+	int line = diag.range.start.line;
+	std::string lineText = getLineText(document, line);
+
+	// Make sure it's a variable declaration line
+	if (lineText.find("var ") != std::string::npos ||
+		lineText.find("let ") != std::string::npos) {
+		// Delete from start of line to start of next line
+		Range deleteRange(line, 0, line + 1, 0);
+		TextEdit edit = createTextEdit(deleteRange, "");
+		action.edit = createWorkspaceEdit(document.uri, {edit});
 	}
 
 	return action;

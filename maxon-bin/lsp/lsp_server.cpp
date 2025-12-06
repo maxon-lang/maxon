@@ -9,6 +9,7 @@
 #include "features/linked_editing.h"
 #include "features/references.h"
 #include "features/rename.h"
+#include "features/semantic_tokens.h"
 #include "features/signature_help.h"
 #include "json_rpc.h"
 #include <chrono>
@@ -99,6 +100,9 @@ void LSPServer::registerHandlers() {
 	};
 	requestHandlers_["textDocument/linkedEditingRange"] = [this](const json &params) {
 		return handleLinkedEditingRange(params);
+	};
+	requestHandlers_["textDocument/semanticTokens/full"] = [this](const json &params) {
+		return handleSemanticTokensFull(params);
 	};
 }
 
@@ -443,6 +447,13 @@ lsp::ServerCapabilities LSPServer::buildCapabilities() {
 	// Linked editing (for block labels)
 	caps.linkedEditingRangeProvider = true;
 
+	// Semantic tokens (for block identifier colorization)
+	lsp::SemanticTokensOptions semanticTokensOptions;
+	semanticTokensOptions.legend = SemanticTokensProvider::getLegend();
+	semanticTokensOptions.full = true;	 // Support full document tokens
+	semanticTokensOptions.range = false; // Don't support range queries
+	caps.semanticTokensProvider = semanticTokensOptions;
+
 	return caps;
 }
 
@@ -786,6 +797,27 @@ json LSPServer::handleLinkedEditingRange(const json &params) {
 
 	LinkedEditingProvider provider;
 	auto result = provider.getLinkedEditingRanges(*doc, linkedParams.position, cache);
+
+	if (result.has_value()) {
+		return lsp::toJson(result.value());
+	}
+	return nullptr;
+}
+
+json LSPServer::handleSemanticTokensFull(const json &params) {
+	auto semanticParams = lsp::semanticTokensParamsFromJson(params);
+	const std::string &uri = semanticParams.textDocument.uri;
+
+	auto docOpt = documentManager_.getDocument(uri);
+	if (!docOpt.has_value()) {
+		return nullptr;
+	}
+
+	Document *doc = docOpt.value();
+	const AnalysisCache *cache = documentManager_.getAnalysis(uri);
+
+	SemanticTokensProvider provider;
+	auto result = provider.getSemanticTokens(*doc, cache);
 
 	if (result.has_value()) {
 		return lsp::toJson(result.value());

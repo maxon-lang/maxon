@@ -974,8 +974,7 @@ LinkedEditingRanges linkedEditingRangesFromJson(const json &j) {
 json toJson(const LinkedEditingRangeParams &params) {
 	return json{
 		{"textDocument", toJson(params.textDocument)},
-		{"position", toJson(params.position)}
-	};
+		{"position", toJson(params.position)}};
 }
 
 LinkedEditingRangeParams linkedEditingRangeParamsFromJson(const json &j) {
@@ -985,6 +984,163 @@ LinkedEditingRangeParams linkedEditingRangeParamsFromJson(const json &j) {
 	if (j.contains("position"))
 		params.position = positionFromJson(j["position"]);
 	return params;
+}
+
+// =============================================================================
+// Semantic Tokens Types
+// =============================================================================
+
+json toJson(const SemanticTokensLegend &legend) {
+	return json{
+		{"tokenTypes", legend.tokenTypes},
+		{"tokenModifiers", legend.tokenModifiers}};
+}
+
+SemanticTokensLegend semanticTokensLegendFromJson(const json &j) {
+	SemanticTokensLegend legend;
+	if (j.contains("tokenTypes")) {
+		legend.tokenTypes = j["tokenTypes"].get<std::vector<std::string>>();
+	}
+	if (j.contains("tokenModifiers")) {
+		legend.tokenModifiers = j["tokenModifiers"].get<std::vector<std::string>>();
+	}
+	return legend;
+}
+
+json toJson(const SemanticTokens &tokens) {
+	json j;
+	if (tokens.resultId.has_value()) {
+		j["resultId"] = tokens.resultId.value();
+	}
+	j["data"] = tokens.data;
+	return j;
+}
+
+SemanticTokens semanticTokensFromJson(const json &j) {
+	SemanticTokens tokens;
+	if (j.contains("resultId") && !j["resultId"].is_null()) {
+		tokens.resultId = j["resultId"].get<std::string>();
+	}
+	if (j.contains("data")) {
+		tokens.data = j["data"].get<std::vector<int>>();
+	}
+	return tokens;
+}
+
+json toJson(const SemanticTokensEdit &edit) {
+	json j{
+		{"start", edit.start},
+		{"deleteCount", edit.deleteCount}};
+	if (edit.data.has_value()) {
+		j["data"] = edit.data.value();
+	}
+	return j;
+}
+
+SemanticTokensEdit semanticTokensEditFromJson(const json &j) {
+	SemanticTokensEdit edit;
+	edit.start = j.value("start", 0);
+	edit.deleteCount = j.value("deleteCount", 0);
+	if (j.contains("data") && !j["data"].is_null()) {
+		edit.data = j["data"].get<std::vector<int>>();
+	}
+	return edit;
+}
+
+json toJson(const SemanticTokensDelta &delta) {
+	json j;
+	if (delta.resultId.has_value()) {
+		j["resultId"] = delta.resultId.value();
+	}
+	json edits = json::array();
+	for (const auto &edit : delta.edits) {
+		edits.push_back(toJson(edit));
+	}
+	j["edits"] = edits;
+	return j;
+}
+
+SemanticTokensDelta semanticTokensDeltaFromJson(const json &j) {
+	SemanticTokensDelta delta;
+	if (j.contains("resultId") && !j["resultId"].is_null()) {
+		delta.resultId = j["resultId"].get<std::string>();
+	}
+	if (j.contains("edits")) {
+		for (const auto &edit : j["edits"]) {
+			delta.edits.push_back(semanticTokensEditFromJson(edit));
+		}
+	}
+	return delta;
+}
+
+json toJson(const SemanticTokensParams &params) {
+	return json{
+		{"textDocument", toJson(params.textDocument)}};
+}
+
+SemanticTokensParams semanticTokensParamsFromJson(const json &j) {
+	SemanticTokensParams params;
+	if (j.contains("textDocument")) {
+		params.textDocument = textDocumentIdentifierFromJson(j["textDocument"]);
+	}
+	return params;
+}
+
+json toJson(const SemanticTokensRangeParams &params) {
+	return json{
+		{"textDocument", toJson(params.textDocument)},
+		{"range", toJson(params.range)}};
+}
+
+SemanticTokensRangeParams semanticTokensRangeParamsFromJson(const json &j) {
+	SemanticTokensRangeParams params;
+	if (j.contains("textDocument")) {
+		params.textDocument = textDocumentIdentifierFromJson(j["textDocument"]);
+	}
+	if (j.contains("range")) {
+		params.range = rangeFromJson(j["range"]);
+	}
+	return params;
+}
+
+json toJson(const SemanticTokensDeltaParams &params) {
+	return json{
+		{"textDocument", toJson(params.textDocument)},
+		{"previousResultId", params.previousResultId}};
+}
+
+SemanticTokensDeltaParams semanticTokensDeltaParamsFromJson(const json &j) {
+	SemanticTokensDeltaParams params;
+	if (j.contains("textDocument")) {
+		params.textDocument = textDocumentIdentifierFromJson(j["textDocument"]);
+	}
+	params.previousResultId = j.value("previousResultId", "");
+	return params;
+}
+
+json toJson(const SemanticTokensOptions &options) {
+	json j;
+	j["legend"] = toJson(options.legend);
+	if (options.range.has_value()) {
+		j["range"] = options.range.value();
+	}
+	if (options.full.has_value()) {
+		const auto &full = options.full.value();
+		if (std::holds_alternative<bool>(full)) {
+			j["full"] = std::get<bool>(full);
+		} else {
+			const auto &fullOpts = std::get<SemanticTokensOptions::FullOptions>(full);
+			json fullJson;
+			if (fullOpts.delta.has_value()) {
+				fullJson["delta"] = fullOpts.delta.value();
+			}
+			j["full"] = fullJson;
+		}
+	}
+	if (options.workDoneProgress.has_value()) {
+		j["workDoneProgress"] = options.workDoneProgress.value();
+	}
+	return j;
 }
 
 // =============================================================================
@@ -1170,6 +1326,11 @@ json toJson(const ServerCapabilities &caps) {
 		if (std::holds_alternative<bool>(linked)) {
 			j["linkedEditingRangeProvider"] = std::get<bool>(linked);
 		}
+	}
+
+	// Semantic tokens
+	if (caps.semanticTokensProvider.has_value()) {
+		j["semanticTokensProvider"] = toJson(caps.semanticTokensProvider.value());
 	}
 
 	return j;

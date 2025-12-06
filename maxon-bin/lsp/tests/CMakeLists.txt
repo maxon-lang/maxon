@@ -36,6 +36,7 @@ set(LSP_SOURCES
     ../features/folding.cpp
     ../features/diagnostics.cpp
     ../features/linked_editing.cpp
+    ../features/semantic_tokens.cpp
 )
 
 # Maxon compiler source files (needed for analysis)

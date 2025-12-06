@@ -529,7 +529,7 @@ end 'main'
 function main() int
     var s = "A😀B"
     var view = s.utf16()
-    print_int(view.length())
+    print_int(view.count())
     return 0
 end 'main'
 ```

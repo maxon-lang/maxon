@@ -72,6 +72,17 @@ class CompletionProvider {
 		const Position &position,
 		const AnalysisCache *cache);
 
+	// Get the full qualified path before the dot (e.g., "stdlib.fmt" from "stdlib.fmt.")
+	std::string getQualifiedPathBeforeDot(
+		const Document &document,
+		const Position &position);
+
+	// Get qualified name completions (for stdlib.fmt.integer. etc)
+	std::vector<CompletionItem> getQualifiedNameCompletions(
+		const std::string &qualifiedPath,
+		const std::string &prefix,
+		const StdlibSymbols &stdlib);
+
 	// Completion providers for different contexts
 	std::vector<CompletionItem> getKeywordCompletions(const std::string &prefix);
 	std::vector<CompletionItem> getTypeCompletions(

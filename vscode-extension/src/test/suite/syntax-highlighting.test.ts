@@ -376,7 +376,6 @@ suite('Syntax Highlighting Test Suite', () => {
 		// Check all keywords are present
 		const content = doc.getText();
 		assert.ok(content.includes("extern"), 'Should contain extern keyword');
-		assert.ok(content.includes("namespace"), 'Should contain namespace keyword');
 		assert.ok(content.includes("struct"), 'Should contain struct keyword');
 		assert.ok(content.includes("function"), 'Should contain function keyword');
 		assert.ok(content.includes("var"), 'Should contain var keyword');

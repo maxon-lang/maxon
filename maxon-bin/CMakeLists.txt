@@ -137,6 +137,7 @@ set(SOURCES
     lsp/features/formatting.cpp
     lsp/features/folding.cpp
     lsp/features/linked_editing.cpp
+    lsp/features/semantic_tokens.cpp
     # Type system
     types/type_conversion.cpp
     # Vendor libraries

@@ -1,9 +1,9 @@
 #ifndef MAXON_LSP_CODE_ACTIONS_H
 #define MAXON_LSP_CODE_ACTIONS_H
 
-#include "../lsp_types.h"
-#include "../document_manager.h"
 #include "../../compiler_api.h"
+#include "../document_manager.h"
+#include "../lsp_types.h"
 #include <vector>
 
 namespace maxon_lsp {
@@ -26,259 +26,250 @@ using WorkspaceEdit = maxon::lsp::WorkspaceEdit;
  * - Source actions (organize imports, fix all)
  */
 class CodeActionsProvider {
-public:
-    /**
-     * Get code actions for a range in a document.
-     *
-     * @param document The document to get actions for
-     * @param range The selected range (usually from a diagnostic)
-     * @param context The code action context containing diagnostics and filters
-     * @param cache Analysis cache containing symbols and type info
-     * @return Vector of available code actions
-     */
-    std::vector<CodeAction> getCodeActions(
-        const Document& document,
-        const Range& range,
-        const CodeActionContext& context,
-        const AnalysisCache* cache
-    );
+  public:
+	/**
+	 * Get code actions for a range in a document.
+	 *
+	 * @param document The document to get actions for
+	 * @param range The selected range (usually from a diagnostic)
+	 * @param context The code action context containing diagnostics and filters
+	 * @param cache Analysis cache containing symbols and type info
+	 * @return Vector of available code actions
+	 */
+	std::vector<CodeAction> getCodeActions(
+		const Document &document,
+		const Range &range,
+		const CodeActionContext &context,
+		const AnalysisCache *cache);
 
-private:
-    // =========================================================================
-    // Category methods - generate actions by type
-    // =========================================================================
+  private:
+	// =========================================================================
+	// Category methods - generate actions by type
+	// =========================================================================
 
-    /**
-     * Get quick fix actions based on diagnostics.
-     *
-     * @param document The document containing the diagnostics
-     * @param diagnostics The diagnostics to generate fixes for
-     * @param cache Analysis cache for context
-     * @return Vector of quick fix code actions
-     */
-    std::vector<CodeAction> getQuickFixes(
-        const Document& document,
-        const std::vector<Diagnostic>& diagnostics,
-        const AnalysisCache* cache
-    );
+	/**
+	 * Get quick fix actions based on diagnostics.
+	 *
+	 * @param document The document containing the diagnostics
+	 * @param diagnostics The diagnostics to generate fixes for
+	 * @param cache Analysis cache for context
+	 * @return Vector of quick fix code actions
+	 */
+	std::vector<CodeAction> getQuickFixes(
+		const Document &document,
+		const std::vector<Diagnostic> &diagnostics,
+		const AnalysisCache *cache);
 
-    /**
-     * Get refactoring actions based on the current selection.
-     *
-     * @param document The document containing the selection
-     * @param range The selected range
-     * @param cache Analysis cache for context
-     * @return Vector of refactoring code actions
-     */
-    std::vector<CodeAction> getRefactorings(
-        const Document& document,
-        const Range& range,
-        const AnalysisCache* cache
-    );
+	/**
+	 * Get refactoring actions based on the current selection.
+	 *
+	 * @param document The document containing the selection
+	 * @param range The selected range
+	 * @param cache Analysis cache for context
+	 * @return Vector of refactoring code actions
+	 */
+	std::vector<CodeAction> getRefactorings(
+		const Document &document,
+		const Range &range,
+		const AnalysisCache *cache);
 
-    /**
-     * Get source-level actions (fix all, organize, etc.).
-     *
-     * @param document The document to generate actions for
-     * @param cache Analysis cache for context
-     * @return Vector of source code actions
-     */
-    std::vector<CodeAction> getSourceActions(
-        const Document& document,
-        const AnalysisCache* cache
-    );
+	/**
+	 * Get source-level actions (fix all, organize, etc.).
+	 *
+	 * @param document The document to generate actions for
+	 * @param cache Analysis cache for context
+	 * @return Vector of source code actions
+	 */
+	std::vector<CodeAction> getSourceActions(
+		const Document &document,
+		const AnalysisCache *cache);
 
-    // =========================================================================
-    // Quick fix generators - create fixes for specific error types
-    // =========================================================================
+	// =========================================================================
+	// Quick fix generators - create fixes for specific error types
+	// =========================================================================
 
-    /**
-     * Create a fix for undefined variable errors.
-     * Suggests declaring the variable with var or let.
-     */
-    CodeAction createUndefinedVariableFix(
-        const Document& document,
-        const Diagnostic& diag,
-        const std::string& varName
-    );
+	/**
+	 * Create a fix for undefined variable errors.
+	 * Suggests declaring the variable with var or let.
+	 */
+	CodeAction createUndefinedVariableFix(
+		const Document &document,
+		const Diagnostic &diag,
+		const std::string &varName);
 
-    /**
-     * Create a fix for type mismatch errors.
-     * Suggests adding an explicit cast with 'as'.
-     */
-    CodeAction createTypeMismatchFix(
-        const Document& document,
-        const Diagnostic& diag,
-        const std::string& fromType,
-        const std::string& toType
-    );
+	/**
+	 * Create a fix for type mismatch errors.
+	 * Suggests adding an explicit cast with 'as'.
+	 */
+	CodeAction createTypeMismatchFix(
+		const Document &document,
+		const Diagnostic &diag,
+		const std::string &fromType,
+		const std::string &toType);
 
-    /**
-     * Create a fix for unused variable warnings.
-     * Offers to remove the declaration or prefix with _.
-     */
-    CodeAction createUnusedVariableFix(
-        const Document& document,
-        const Diagnostic& diag,
-        const std::string& varName
-    );
+	/**
+	 * Create a fix for unused variable warnings.
+	 * Offers to remove the declaration or prefix with _.
+	 */
+	CodeAction createUnusedVariableFix(
+		const Document &document,
+		const Diagnostic &diag,
+		const std::string &varName);
 
-    /**
-     * Create a fix for missing end label errors.
-     * Inserts the appropriate end 'label' statement.
-     */
-    CodeAction createMissingEndLabelFix(
-        const Document& document,
-        const Diagnostic& diag,
-        const std::string& labelName
-    );
+	/**
+	 * Create a fix to remove unused variable declarations.
+	 * Deletes the entire line containing the declaration.
+	 */
+	CodeAction createRemoveUnusedVariableFix(
+		const Document &document,
+		const Diagnostic &diag,
+		const std::string &varName);
 
-    /**
-     * Create a fix for missing return statement errors.
-     * Inserts a return statement with a default value.
-     */
-    CodeAction createMissingReturnFix(
-        const Document& document,
-        const Diagnostic& diag,
-        const std::string& returnType
-    );
+	/**
+	 * Create a fix for missing end label errors.
+	 * Inserts the appropriate end 'label' statement.
+	 */
+	CodeAction createMissingEndLabelFix(
+		const Document &document,
+		const Diagnostic &diag,
+		const std::string &labelName);
 
-    /**
-     * Create a fix for spelling/typo errors.
-     * Replaces with the suggested correct spelling.
-     */
-    CodeAction createSpellingFix(
-        const Document& document,
-        const Diagnostic& diag,
-        const std::string& suggested
-    );
+	/**
+	 * Create a fix for missing return statement errors.
+	 * Inserts a return statement with a default value.
+	 */
+	CodeAction createMissingReturnFix(
+		const Document &document,
+		const Diagnostic &diag,
+		const std::string &returnType);
 
-    // =========================================================================
-    // Refactoring generators - create refactoring actions
-    // =========================================================================
+	/**
+	 * Create a fix for spelling/typo errors.
+	 * Replaces with the suggested correct spelling.
+	 */
+	CodeAction createSpellingFix(
+		const Document &document,
+		const Diagnostic &diag,
+		const std::string &suggested);
 
-    /**
-     * Create an extract variable refactoring.
-     * Extracts the selected expression into a new variable.
-     */
-    CodeAction createExtractVariableRefactoring(
-        const Document& document,
-        const Range& range
-    );
+	// =========================================================================
+	// Refactoring generators - create refactoring actions
+	// =========================================================================
 
-    /**
-     * Create an inline variable refactoring.
-     * Replaces variable references with the variable's value.
-     */
-    CodeAction createInlineVariableRefactoring(
-        const Document& document,
-        const Range& range,
-        const AnalysisCache* cache
-    );
+	/**
+	 * Create an extract variable refactoring.
+	 * Extracts the selected expression into a new variable.
+	 */
+	CodeAction createExtractVariableRefactoring(
+		const Document &document,
+		const Range &range);
 
-    /**
-     * Create an add type annotation refactoring.
-     * Adds explicit type annotation to a variable declaration.
-     */
-    CodeAction createAddTypeAnnotationRefactoring(
-        const Document& document,
-        const Range& range,
-        const AnalysisCache* cache
-    );
+	/**
+	 * Create an inline variable refactoring.
+	 * Replaces variable references with the variable's value.
+	 */
+	CodeAction createInlineVariableRefactoring(
+		const Document &document,
+		const Range &range,
+		const AnalysisCache *cache);
 
-    /**
-     * Create a convert var to let refactoring.
-     * Changes a var declaration to let if the variable is never reassigned.
-     */
-    CodeAction createConvertVarToLetRefactoring(
-        const Document& document,
-        const Range& range
-    );
+	/**
+	 * Create an add type annotation refactoring.
+	 * Adds explicit type annotation to a variable declaration.
+	 */
+	CodeAction createAddTypeAnnotationRefactoring(
+		const Document &document,
+		const Range &range,
+		const AnalysisCache *cache);
 
-    // =========================================================================
-    // Helper methods
-    // =========================================================================
+	/**
+	 * Create a convert var to let refactoring.
+	 * Changes a var declaration to let if the variable is never reassigned.
+	 */
+	CodeAction createConvertVarToLetRefactoring(
+		const Document &document,
+		const Range &range);
 
-    /**
-     * Extract an identifier name from a diagnostic message.
-     * Parses error messages to find the relevant identifier.
-     */
-    std::string extractIdentifierFromDiagnostic(const Diagnostic& diag);
+	// =========================================================================
+	// Helper methods
+	// =========================================================================
 
-    /**
-     * Extract source and target types from a type mismatch diagnostic.
-     *
-     * @param diag The diagnostic to parse
-     * @param fromType Output: the source type
-     * @param toType Output: the target type
-     * @return true if types were successfully extracted
-     */
-    bool extractTypesFromDiagnostic(
-        const Diagnostic& diag,
-        std::string& fromType,
-        std::string& toType
-    );
+	/**
+	 * Extract an identifier name from a diagnostic message.
+	 * Parses error messages to find the relevant identifier.
+	 */
+	std::string extractIdentifierFromDiagnostic(const Diagnostic &diag);
 
-    /**
-     * Create a TextEdit for a given range and replacement text.
-     */
-    TextEdit createTextEdit(const Range& range, const std::string& newText);
+	/**
+	 * Extract source and target types from a type mismatch diagnostic.
+	 *
+	 * @param diag The diagnostic to parse
+	 * @param fromType Output: the source type
+	 * @param toType Output: the target type
+	 * @return true if types were successfully extracted
+	 */
+	bool extractTypesFromDiagnostic(
+		const Diagnostic &diag,
+		std::string &fromType,
+		std::string &toType);
 
-    /**
-     * Create a WorkspaceEdit with edits for a single document.
-     */
-    WorkspaceEdit createWorkspaceEdit(
-        const std::string& uri,
-        const std::vector<TextEdit>& edits
-    );
+	/**
+	 * Create a TextEdit for a given range and replacement text.
+	 */
+	TextEdit createTextEdit(const Range &range, const std::string &newText);
 
-    /**
-     * Find identifiers similar to the given name.
-     * Used for did-you-mean suggestions.
-     *
-     * @param name The misspelled name
-     * @param cache Analysis cache containing known symbols
-     * @return Vector of similar identifier names
-     */
-    std::vector<std::string> findSimilarIdentifiers(
-        const std::string& name,
-        const AnalysisCache* cache
-    );
+	/**
+	 * Create a WorkspaceEdit with edits for a single document.
+	 */
+	WorkspaceEdit createWorkspaceEdit(
+		const std::string &uri,
+		const std::vector<TextEdit> &edits);
 
-    /**
-     * Calculate the Levenshtein (edit) distance between two strings.
-     * Used for finding similar identifiers.
-     */
-    int levenshteinDistance(const std::string& a, const std::string& b);
+	/**
+	 * Find identifiers similar to the given name.
+	 * Used for did-you-mean suggestions.
+	 *
+	 * @param name The misspelled name
+	 * @param cache Analysis cache containing known symbols
+	 * @return Vector of similar identifier names
+	 */
+	std::vector<std::string> findSimilarIdentifiers(
+		const std::string &name,
+		const AnalysisCache *cache);
 
-    /**
-     * Check if a code action kind matches the requested filter.
-     * Handles hierarchical kind matching (e.g., "quickfix" matches "quickfix.foo").
-     */
-    bool matchesKindFilter(
-        const std::string& kind,
-        const std::vector<std::string>& filter
-    );
+	/**
+	 * Calculate the Levenshtein (edit) distance between two strings.
+	 * Used for finding similar identifiers.
+	 */
+	int levenshteinDistance(const std::string &a, const std::string &b);
 
-    /**
-     * Get the text at a specific line in the document.
-     */
-    std::string getLineText(const Document& document, int line);
+	/**
+	 * Check if a code action kind matches the requested filter.
+	 * Handles hierarchical kind matching (e.g., "quickfix" matches "quickfix.foo").
+	 */
+	bool matchesKindFilter(
+		const std::string &kind,
+		const std::vector<std::string> &filter);
 
-    /**
-     * Get the text within a range in the document.
-     */
-    std::string getRangeText(const Document& document, const Range& range);
+	/**
+	 * Get the text at a specific line in the document.
+	 */
+	std::string getLineText(const Document &document, int line);
 
-    /**
-     * Find the indentation at a given line.
-     */
-    std::string getIndentation(const Document& document, int line);
+	/**
+	 * Get the text within a range in the document.
+	 */
+	std::string getRangeText(const Document &document, const Range &range);
 
-    /**
-     * Get a default value for a given type (for return statement fixes).
-     */
-    std::string getDefaultValueForType(const std::string& type);
+	/**
+	 * Find the indentation at a given line.
+	 */
+	std::string getIndentation(const Document &document, int line);
+
+	/**
+	 * Get a default value for a given type (for return statement fixes).
+	 */
+	std::string getDefaultValueForType(const std::string &type);
 };
 
 } // namespace maxon_lsp

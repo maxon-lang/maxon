@@ -129,6 +129,9 @@ class LSPServer {
 	// Handle "textDocument/linkedEditingRange" request
 	maxon::lsp::json handleLinkedEditingRange(const maxon::lsp::json &params);
 
+	// Handle "textDocument/semanticTokens/full" request
+	maxon::lsp::json handleSemanticTokensFull(const maxon::lsp::json &params);
+
 	// =========================================================================
 	// Analysis and diagnostics
 	// =========================================================================

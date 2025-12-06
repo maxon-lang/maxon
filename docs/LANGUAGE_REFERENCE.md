@@ -805,7 +805,7 @@ extern function ExitProcess(uExitCode int) int
 2. **Unary**: `-` (negation), `not` (logical not)
 3. **Multiplicative**: `*` `/` `mod`
 4. **Additive**: `+` `-`
-5. **Comparison**: `=` `!=` `<` `>` `<=` `>=`
+5. **Comparison**: `==` `!=` `<` `>` `<=` `>=`
 6. **Logical AND**: `and`
 7. **Logical OR**: `or`
 

@@ -114,7 +114,8 @@ suite('Stdlib Completion Tests', () => {
 	});
 
 	test('Stdlib function completion should have documentation', async function () {
-		const position = new vscode.Position(1, 4);
+		// Use position (1, 0) to get unfiltered completions
+		const position = new vscode.Position(1, 0);
 		const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
 			'vscode.executeCompletionItemProvider',
 			document.uri,
@@ -168,7 +169,8 @@ suite('Stdlib Completion Tests', () => {
 	});
 
 	test('Should include keyword completions alongside stdlib', async function () {
-		const position = new vscode.Position(1, 4);
+		// Use position (1, 0) to get unfiltered completions
+		const position = new vscode.Position(1, 0);
 		const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
 			'vscode.executeCompletionItemProvider',
 			document.uri,

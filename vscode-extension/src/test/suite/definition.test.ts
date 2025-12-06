@@ -235,7 +235,7 @@ suite('Go to Definition Test Suite', () => {
 		const content = [
 			"function test() int",
 			"    var outer = 1",
-			"    if outer = 1 'check'",
+			"    if outer == 1 'check'",
 			"        var inner = 2",
 			"        return inner + outer",
 			"    end 'check'",
