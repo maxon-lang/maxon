@@ -1,5 +1,6 @@
 #include "intrinsics.h"
 #include "intrinsics_defs.h"
+#include "types/type_conversion.h"
 
 IntrinsicRegistry &IntrinsicRegistry::instance() {
 	static IntrinsicRegistry registry;
@@ -47,8 +48,8 @@ bool IntrinsicRegistry::isIntrinsic(const std::string &name) const {
 
 std::string IntrinsicRegistry::validateArgType(const IntrinsicParam &param, const std::string &actualType) const {
 	if (param.isArrayType) {
-		// Check if actualType is an array type (starts with '[')
-		if (actualType.empty() || actualType[0] != '[') {
+		// Check if actualType is an array type
+		if (!maxon::TypeConversion::isArrayType(actualType)) {
 			return "expected array type, got " + actualType;
 		}
 		// If allowedTypes is empty, accept any array element type
@@ -56,9 +57,9 @@ std::string IntrinsicRegistry::validateArgType(const IntrinsicParam &param, cons
 			return ""; // Valid - any array type accepted
 		}
 		// Check if actualType is an array with one of the allowed element types
-		// Array types look like "[N]char" or "[12]byte"
+		std::string elementType = maxon::TypeConversion::getArrayElementType(actualType);
 		for (const auto &elemType : param.allowedTypes) {
-			if (actualType.find("]" + elemType) != std::string::npos) {
+			if (elementType == elemType) {
 				return ""; // Valid
 			}
 		}

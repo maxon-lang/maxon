@@ -158,6 +158,7 @@ add_executable(grammar_generator
     parser/parser_expr.cpp
     parser/parser_stmt.cpp
     parser/parser_decl.cpp
+    types/type_conversion.cpp
     file_utils.cpp
 )
 

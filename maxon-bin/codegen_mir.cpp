@@ -7,6 +7,7 @@
 
 #include "codegen_mir.h"
 #include "lexer.h"
+#include "types/type_conversion.h"
 #include <stdexcept>
 
 MIRCodeGenerator::MIRCodeGenerator(const std::string &moduleName, bool debugInfo, int verboseLevel,
@@ -93,12 +94,12 @@ mir::MIRType *MIRCodeGenerator::getTypeFromStringNoMark(const std::string &typeS
 		if (bindingIt != currentTypeBindings.end()) {
 			return getTypeFromStringNoMark(bindingIt->second);
 		}
-		// Handle array types with generic element type: []KeyType -> []string
-		if (typeStr.size() > 2 && typeStr[0] == '[' && typeStr[1] == ']') {
-			std::string elemType = typeStr.substr(2);
+		// Handle array types with generic element type: _ManagedArray<KeyType> -> _ManagedArray<string>
+		if (maxon::TypeConversion::isManagedArrayType(typeStr)) {
+			std::string elemType = maxon::TypeConversion::getArrayElementType(typeStr);
 			auto elemBindingIt = currentTypeBindings.find(elemType);
 			if (elemBindingIt != currentTypeBindings.end()) {
-				return getTypeFromStringNoMark("[]" + elemBindingIt->second);
+				return getTypeFromStringNoMark(maxon::TypeConversion::makeManagedArrayType(elemBindingIt->second));
 			}
 		}
 	}
@@ -139,12 +140,12 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		if (bindingIt != currentTypeBindings.end()) {
 			return getTypeFromString(bindingIt->second);
 		}
-		// Handle array types with generic element type: []KeyType -> []string
-		if (typeStr.size() > 2 && typeStr[0] == '[' && typeStr[1] == ']') {
-			std::string elemType = typeStr.substr(2);
+		// Handle array types with generic element type: _ManagedArray<KeyType> -> _ManagedArray<string>
+		if (maxon::TypeConversion::isManagedArrayType(typeStr)) {
+			std::string elemType = maxon::TypeConversion::getArrayElementType(typeStr);
 			auto elemBindingIt = currentTypeBindings.find(elemType);
 			if (elemBindingIt != currentTypeBindings.end()) {
-				return getTypeFromString("[]" + elemBindingIt->second);
+				return getTypeFromString(maxon::TypeConversion::makeManagedArrayType(elemBindingIt->second));
 			}
 		}
 	}
@@ -209,7 +210,22 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return mir::MIRType::getOptional(wrappedType);
 	}
 
-	// Check for array type: [size]elementType or []elementType (unsized)
+	// Check for new array type formats: _ManagedArray<T> or _StaticArray<N, T>
+	if (typeStr.rfind("_ManagedArray<", 0) == 0) {
+		std::string elemType = maxon::TypeConversion::getArrayElementType(typeStr);
+		mir::MIRType *ptrType = mir::MIRType::getPtr();
+		mir::MIRType *lengthType = mir::MIRType::getInt32();
+		return module->getOrCreateStructType("_ManagedArray_" + elemType, {ptrType, lengthType});
+	}
+
+	if (typeStr.rfind("_StaticArray<", 0) == 0) {
+		int size = maxon::TypeConversion::getStaticArraySize(typeStr);
+		std::string elemType = maxon::TypeConversion::getArrayElementType(typeStr);
+		mir::MIRType *elementType = getTypeFromString(elemType);
+		return mir::MIRType::getArray(elementType, size);
+	}
+
+	// Legacy array type format: [size]elementType or []elementType (unsized)
 	if (typeStr.size() > 2 && typeStr[0] == '[') {
 		size_t closeBracket = typeStr.find(']');
 		if (closeBracket != std::string::npos) {
@@ -220,7 +236,7 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 			if (sizeStr.empty()) {
 				mir::MIRType *ptrType = mir::MIRType::getPtr();
 				mir::MIRType *lengthType = mir::MIRType::getInt32();
-				return module->getOrCreateStructType("__unsized_array_" + elemType, {ptrType, lengthType});
+				return module->getOrCreateStructType("_ManagedArray_" + elemType, {ptrType, lengthType});
 			}
 
 			// Sized array [N]type
@@ -241,12 +257,12 @@ mir::MIRType *MIRCodeGenerator::getParamTypeFromString(const std::string &typeSt
 		if (bindingIt != currentTypeBindings.end()) {
 			resolvedType = bindingIt->second;
 		}
-		// Handle array types with generic element type: []KeyType -> []string
-		else if (typeStr.size() > 2 && typeStr[0] == '[' && typeStr[1] == ']') {
-			std::string elemType = typeStr.substr(2);
+		// Handle array types with generic element type: _ManagedArray<KeyType> -> _ManagedArray<string>
+		else if (maxon::TypeConversion::isManagedArrayType(typeStr)) {
+			std::string elemType = maxon::TypeConversion::getArrayElementType(typeStr);
 			auto elemBindingIt = currentTypeBindings.find(elemType);
 			if (elemBindingIt != currentTypeBindings.end()) {
-				resolvedType = "[]" + elemBindingIt->second;
+				resolvedType = maxon::TypeConversion::makeManagedArrayType(elemBindingIt->second);
 			}
 		}
 	}
@@ -291,9 +307,10 @@ std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
 			return "cstring";
 		return type->structName;
 	case mir::MIRTypeKind::Array:
-		// Format: [size]elementType
-		return "[" + std::to_string(type->arraySize) + "]" +
-			   getMaxonTypeFromMIRType(type->elementType);
+		// Format: _StaticArray<size, elementType>
+		return maxon::TypeConversion::makeStaticArrayType(
+			type->arraySize,
+			getMaxonTypeFromMIRType(type->elementType));
 	case mir::MIRTypeKind::Optional:
 		// Format: T or nil
 		return getMaxonTypeFromMIRType(type->wrappedType) + " or nil";
@@ -302,8 +319,8 @@ std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
 }
 
 bool MIRCodeGenerator::isArrayParam(const std::string &typeStr) {
-	// Check for []type (dynamic array parameter) or [size]type
-	return typeStr.size() > 2 && typeStr[0] == '[';
+	// Check for array types (both new and legacy formats)
+	return maxon::TypeConversion::isArrayType(typeStr);
 }
 
 bool MIRCodeGenerator::isStructParameter(const std::string &varName) {
@@ -405,19 +422,19 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		// Get __ManagedStringData type
 		mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
 		if (!managedStringType) {
-			mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+			mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 			if (!unsizedArrayType) {
 				unsizedArrayType = module->getOrCreateStructType(
-					"__unsized_array_byte",
+					"_ManagedArray_byte",
 					{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-				structTypes["__unsized_array_byte"] = unsizedArrayType;
+				structTypes["_ManagedArray_byte"] = unsizedArrayType;
 			}
 			managedStringType = module->getOrCreateStructType(
 				"__ManagedStringData",
 				{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
 			structTypes["__ManagedStringData"] = managedStringType;
 		}
-		mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 
 		// Load _parentManaged pointer from substring
 		mir::MIRValue *parentPtrPtr = builder->createStructGEP(substringType, substringAlloca, 0, name + "._parentManaged.ptr");
@@ -468,19 +485,19 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		// Get __ManagedStringData type
 		mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
 		if (!managedStringType) {
-			mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+			mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 			if (!unsizedArrayType) {
 				unsizedArrayType = module->getOrCreateStructType(
-					"__unsized_array_byte",
+					"_ManagedArray_byte",
 					{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-				structTypes["__unsized_array_byte"] = unsizedArrayType;
+				structTypes["_ManagedArray_byte"] = unsizedArrayType;
 			}
 			managedStringType = module->getOrCreateStructType(
 				"__ManagedStringData",
 				{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
 			structTypes["__ManagedStringData"] = managedStringType;
 		}
-		mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 
 		// Load managed pointer from cstring field 2
 		mir::MIRValue *managedPtrPtr = builder->createStructGEP(cstringType, cstringAlloca, 2, name + ".managed.ptr");
@@ -745,12 +762,12 @@ std::string MIRCodeGenerator::instantiateGenericStruct(const std::string &templa
 		if (it != typeBindings.end()) {
 			return it->second;
 		}
-		// Handle array types: []KeyType -> []string
-		if (type.length() > 2 && type[0] == '[' && type[1] == ']') {
-			std::string elemType = type.substr(2);
+		// Handle array types: _ManagedArray<KeyType> -> _ManagedArray<string>
+		if (maxon::TypeConversion::isManagedArrayType(type)) {
+			std::string elemType = maxon::TypeConversion::getArrayElementType(type);
 			auto elemIt = typeBindings.find(elemType);
 			if (elemIt != typeBindings.end()) {
-				return "[]" + elemIt->second;
+				return maxon::TypeConversion::makeManagedArrayType(elemIt->second);
 			}
 		}
 		return type;

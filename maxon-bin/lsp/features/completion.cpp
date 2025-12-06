@@ -1,6 +1,7 @@
 #include "completion.h"
 #include "../../lexer/lexer_keyword_matcher.h"
 #include "../../type_members.h"
+#include "../../types/type_conversion.h"
 #include <algorithm>
 #include <cctype>
 #include <set>
@@ -832,8 +833,8 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 		}
 	}
 
-	// Check if this is an array type (starts with '[')
-	if (!typeName.empty() && typeName[0] == '[') {
+	// Check if this is an array type
+	if (maxon::TypeConversion::isArrayType(typeName)) {
 		// Get built-in array members
 		auto arrayMembers = getArrayTypeMembers();
 		for (const auto &member : arrayMembers) {

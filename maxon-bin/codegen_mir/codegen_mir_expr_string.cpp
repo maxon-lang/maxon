@@ -162,19 +162,19 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 	// Get or create __ManagedStringData type (internal layout at the pointer)
 	mir::MIRType *managedDataType = structTypes["__ManagedStringData"];
 	if (!managedDataType) {
-		mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 		if (!unsizedArrayType) {
 			unsizedArrayType = module->getOrCreateStructType(
-				"__unsized_array_byte",
+				"_ManagedArray_byte",
 				{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-			structTypes["__unsized_array_byte"] = unsizedArrayType;
+			structTypes["_ManagedArray_byte"] = unsizedArrayType;
 		}
 		managedDataType = module->getOrCreateStructType(
 			"__ManagedStringData",
 			{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
 		structTypes["__ManagedStringData"] = managedDataType;
 	}
-	mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+	mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 
 	// Create alloca for the string struct
 	mir::MIRValue *stringAlloca = builder->createAlloca(stringType, "str.literal");
@@ -282,12 +282,12 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteralAsSlice(StringLiteralExprA
 	mir::MIRValue *dataPtr = module->createGlobalString(globalName, str);
 
 	// Get or create the unsized array type for []byte
-	mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+	mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 	if (!unsizedArrayType) {
 		unsizedArrayType = module->getOrCreateStructType(
-			"__unsized_array_byte",
+			"_ManagedArray_byte",
 			{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-		structTypes["__unsized_array_byte"] = unsizedArrayType;
+		structTypes["_ManagedArray_byte"] = unsizedArrayType;
 	}
 
 	// Create alloca for the fat pointer struct
@@ -315,19 +315,19 @@ mir::MIRValue *MIRCodeGenerator::generateCharLiteral(CharacterExprAST *charExpr)
 	// Get or create __ManagedStringData type (internal layout at the pointer)
 	mir::MIRType *managedDataType = structTypes["__ManagedStringData"];
 	if (!managedDataType) {
-		mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 		if (!unsizedArrayType) {
 			unsizedArrayType = module->getOrCreateStructType(
-				"__unsized_array_byte",
+				"_ManagedArray_byte",
 				{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-			structTypes["__unsized_array_byte"] = unsizedArrayType;
+			structTypes["_ManagedArray_byte"] = unsizedArrayType;
 		}
 		managedDataType = module->getOrCreateStructType(
 			"__ManagedStringData",
 			{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
 		structTypes["__ManagedStringData"] = managedDataType;
 	}
-	mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+	mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 
 	// Create alloca for the char struct
 	mir::MIRValue *charAlloca = builder->createAlloca(charType, "char.literal");

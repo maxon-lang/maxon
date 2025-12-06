@@ -6,6 +6,7 @@
  */
 
 #include "../codegen_mir.h"
+#include "../types/type_conversion.h"
 #include <stdexcept>
 
 void MIRCodeGenerator::generateIf(IfStmtAST *ifStmt, mir::MIRFunction *function) {
@@ -130,14 +131,11 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 		auto it = variableTypes.find(arrayVarName);
 		if (it != variableTypes.end()) {
 			const std::string &varType = it->second;
-			// Check if it's an array type like "[4]int"
-			if (varType.size() > 2 && varType[0] == '[') {
+			// Check if it's an array type like "_StaticArray<4, int>" or "_ManagedArray<int>"
+			if (maxon::TypeConversion::isArrayType(varType)) {
 				isArrayIteration = true;
-				size_t closeBracket = varType.find(']');
-				if (closeBracket != std::string::npos && closeBracket + 1 < varType.size()) {
-					elementTypeStr = varType.substr(closeBracket + 1);
-					elementType = getTypeFromString(elementTypeStr);
-				}
+				elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
+				elementType = getTypeFromString(elementTypeStr);
 			}
 		}
 	}
@@ -447,7 +445,7 @@ void MIRCodeGenerator::generateBreak(BreakStmtAST *breakStmt, mir::MIRFunction *
 
 		if (!targetBlock) {
 			reportError("Break target label '" + breakStmt->targetLabel +
-						"' not found in enclosing loops",
+							"' not found in enclosing loops",
 						breakStmt->line, breakStmt->column);
 		}
 	}
@@ -479,7 +477,7 @@ void MIRCodeGenerator::generateContinue(ContinueStmtAST *continueStmt, mir::MIRF
 
 		if (!targetBlock) {
 			reportError("Continue target label '" + continueStmt->targetLabel +
-						"' not found in enclosing loops",
+							"' not found in enclosing loops",
 						continueStmt->line, continueStmt->column);
 		}
 	}
@@ -559,7 +557,7 @@ void MIRCodeGenerator::generateMatch(MatchStmtAST *matchStmt, mir::MIRFunction *
 				mir::MIRFunction *strEquals = module->getFunction("string.equals");
 				if (!strEquals) {
 					reportError("string.equals function not found - ensure stdlib is imported",
-						matchStmt->line, matchStmt->column);
+								matchStmt->line, matchStmt->column);
 				}
 				cmp = builder->createCall(strEquals, {scrutineeAlloca, patternVal}, "match.strcmp");
 			} else {
@@ -696,7 +694,7 @@ mir::MIRValue *MIRCodeGenerator::generateMatchExpr(MatchExprAST *matchExpr) {
 				mir::MIRFunction *strEquals = module->getFunction("string.equals");
 				if (!strEquals) {
 					reportError("string.equals function not found - ensure stdlib is imported",
-						matchExpr->line, matchExpr->column);
+								matchExpr->line, matchExpr->column);
 				}
 				cmp = builder->createCall(strEquals, {scrutineeAlloca, patternVal}, "matchexpr.strcmp");
 			} else {

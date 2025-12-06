@@ -53,7 +53,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 				elementTypeName = "ptr";
 			} else {
 				reportError("Unsupported array element type",
-								varDecl->line, varDecl->column);
+							varDecl->line, varDecl->column);
 			}
 		}
 
@@ -93,7 +93,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name);
 			builder->createStore(arrayPtr, ptrAlloca);
 			namedValues[varDecl->name] = ptrAlloca;
-			variableTypes[varDecl->name] = "[]" + elementTypeName;
+			variableTypes[varDecl->name] = maxon::TypeConversion::makeManagedArrayType(elementTypeName);
 
 			// Track base pointer for cleanup (we need to free basePtr, not dataPtr)
 			if (!scopeStack.empty()) {
@@ -145,7 +145,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 				mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name);
 				builder->createStore(arrayPtr, ptrAlloca);
 				namedValues[varDecl->name] = ptrAlloca;
-				variableTypes[varDecl->name] = "[]" + elementTypeName;
+				variableTypes[varDecl->name] = maxon::TypeConversion::makeManagedArrayType(elementTypeName);
 
 				// Track base pointer for cleanup
 				if (!scopeStack.empty()) {
@@ -371,7 +371,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 
 			if (valueExpr == nullptr) {
 				reportError("No value for field '" + fieldName +
-							"' in struct '" + structInitExpr->structName + "'",
+								"' in struct '" + structInitExpr->structName + "'",
 							structInitExpr->line, structInitExpr->column);
 			}
 
@@ -391,11 +391,11 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 					// Zero-initialized array [16]byte - already zero from alloca
 					// Nothing extra needed
 				}
-			} else if (fieldTypeStr.size() > 2 && fieldTypeStr[0] == '[' && fieldTypeStr[1] == ']') {
+			} else if (maxon::TypeConversion::isManagedArrayType(fieldTypeStr)) {
 				// Slice field ([]T) - need to create fat pointer {ptr, len}
 				// Check if the value is a variable reference to a variable-sized array
-				std::string elementTypeStr = fieldTypeStr.substr(2);
-				std::string unsizedArrayTypeName = "__unsized_array_" + elementTypeStr;
+				std::string elementTypeStr = maxon::TypeConversion::getArrayElementType(fieldTypeStr);
+				std::string unsizedArrayTypeName = "_ManagedArray_" + elementTypeStr;
 
 				// Get or create the unsized array struct type
 				mir::MIRType *unsizedArrayType = structTypes[unsizedArrayTypeName];
@@ -410,7 +410,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 				if (varExpr) {
 					std::string varType = variableTypes[varExpr->name];
 					// Check if this is a variable-sized array (type starts with [])
-					if (varType.size() > 2 && varType[0] == '[' && varType[1] == ']') {
+					if (maxon::TypeConversion::isManagedArrayType(varType)) {
 						// Variable-sized array - load data pointer and length from header
 						mir::MIRValue *arrayAlloca = namedValues[varExpr->name];
 						if (arrayAlloca) {
@@ -633,7 +633,7 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 				elementTypeName = "ptr";
 			} else {
 				reportError("Unsupported array element type",
-								letDecl->line, letDecl->column);
+							letDecl->line, letDecl->column);
 			}
 		}
 
@@ -672,7 +672,7 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 			mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name);
 			builder->createStore(arrayPtr, ptrAlloca);
 			namedValues[letDecl->name] = ptrAlloca;
-			variableTypes[letDecl->name] = "[]" + elementTypeName;
+			variableTypes[letDecl->name] = maxon::TypeConversion::makeManagedArrayType(elementTypeName);
 
 			// Track base pointer for cleanup
 			if (!scopeStack.empty()) {

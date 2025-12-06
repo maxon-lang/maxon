@@ -1,5 +1,6 @@
 #include "../file_utils.h"
 #include "../parser.h"
+#include "../types/type_conversion.h"
 #include <filesystem>
 #include <stdexcept>
 
@@ -60,7 +61,8 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	// Methods must be declared inside struct bodies
 	if (check(TokenType::DOT)) {
 		reportError("Methods must be declared inside struct bodies, not using 'function Type.method()' syntax\n"
-					"  Move this method inside the '" + name.value + "' struct definition",
+					"  Move this method inside the '" +
+						name.value + "' struct definition",
 					funcToken.line, funcToken.column);
 	}
 
@@ -105,8 +107,8 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 								currentLine(), currentColumn());
 				}
 
-				// All array parameters are unsized
-				paramType = "[]" + elementType;
+				// All array parameters are unsized (managed arrays)
+				paramType = maxon::TypeConversion::makeManagedArrayType(elementType);
 			} else {
 				// Regular scalar type (or struct)
 				auto kd2 = currentKeywordData();
@@ -208,8 +210,8 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected function name as block identifier after 'end'");
 	if (endBlockIdToken.value != functionName) {
 		reportError("Block identifier mismatch in function definition\n  Expected: '" + functionName +
-					"'\n  Found: '" + endBlockIdToken.value +
-					"'\n  Note: The 'end' block identifier must match the function name",
+						"'\n  Found: '" + endBlockIdToken.value +
+						"'\n  Note: The 'end' block identifier must match the function name",
 					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
@@ -291,8 +293,8 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 								currentLine(), currentColumn());
 				}
 
-				// All array parameters are unsized
-				paramType = "[]" + elementType;
+				// All array parameters are unsized (managed arrays)
+				paramType = maxon::TypeConversion::makeManagedArrayType(elementType);
 			} else {
 				// Regular scalar type (or struct)
 				auto kd2 = currentKeywordData();
@@ -371,8 +373,8 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected method name as block identifier after 'end'");
 	if (endBlockIdToken.value != methodName) {
 		reportError("Block identifier mismatch in method definition\n  Expected: '" + methodName +
-					"'\n  Found: '" + endBlockIdToken.value +
-					"'\n  Note: The 'end' block identifier must match the method name",
+						"'\n  Found: '" + endBlockIdToken.value +
+						"'\n  Note: The 'end' block identifier must match the method name",
 					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
@@ -456,7 +458,12 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 							reportError("Expected array element type after ']'",
 										currentLine(), currentColumn());
 						}
-						concreteType = "[" + sizeStr + "]" + elementType;
+						// Use new internal array type format
+						if (sizeStr.empty()) {
+							concreteType = maxon::TypeConversion::makeManagedArrayType(elementType);
+						} else {
+							concreteType = maxon::TypeConversion::makeStaticArrayType(std::stoi(sizeStr), elementType);
+						}
 					} else if (Lexer::isTypeToken(currentToken())) {
 						concreteType = std::string(currentValue());
 						advance();
@@ -571,8 +578,12 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 							currentLine(), currentColumn());
 			}
 
-			// Build array type string
-			fieldType = "[" + sizeStr + "]" + elementType;
+			// Build array type string using new internal format
+			if (sizeStr.empty()) {
+				fieldType = maxon::TypeConversion::makeManagedArrayType(elementType);
+			} else {
+				fieldType = maxon::TypeConversion::makeStaticArrayType(std::stoi(sizeStr), elementType);
+			}
 		} else if (Lexer::isTypeToken(currentToken())) {
 			fieldType = std::string(currentValue());
 			advance();
@@ -623,7 +634,7 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match struct name)");
 	if (blockIdToken.value != structName) {
 		reportError("Block identifier mismatch in struct definition\n  Expected: '" + structName +
-					"'\n  Got: '" + blockIdToken.value + "'",
+						"'\n  Got: '" + blockIdToken.value + "'",
 					blockIdToken.line, blockIdToken.column);
 	}
 
@@ -770,7 +781,7 @@ std::unique_ptr<EnumDefAST> Parser::parseEnum() {
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match enum name)");
 	if (blockIdToken.value != enumName) {
 		reportError("Block identifier mismatch in enum definition\n  Expected: '" + enumName +
-					"'\n  Got: '" + blockIdToken.value + "'",
+						"'\n  Got: '" + blockIdToken.value + "'",
 					blockIdToken.line, blockIdToken.column);
 	}
 
@@ -875,7 +886,7 @@ std::unique_ptr<FunctionAST> Parser::parseEnumMethod(const std::string &enumName
 	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected method name as block identifier after 'end'");
 	if (endBlockIdToken.value != methodName) {
 		reportError("Block identifier mismatch in method definition\n  Expected: '" + methodName +
-					"'\n  Found: '" + endBlockIdToken.value + "'",
+						"'\n  Found: '" + endBlockIdToken.value + "'",
 					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
@@ -970,8 +981,12 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 									currentLine(), currentColumn());
 					}
 
-					// Build array type string
-					paramType = "[" + sizeStr + "]" + elementType;
+					// Build array type string using new internal format
+					if (sizeStr.empty()) {
+						paramType = maxon::TypeConversion::makeManagedArrayType(elementType);
+					} else {
+						paramType = maxon::TypeConversion::makeStaticArrayType(std::stoi(sizeStr), elementType);
+					}
 				} else if (Lexer::isTypeToken(currentToken())) {
 					paramType = std::string(currentValue());
 					advance();
@@ -1031,7 +1046,7 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match interface name)");
 	if (blockIdToken.value != interfaceName) {
 		reportError("Block identifier mismatch in interface definition\n  Expected: '" + interfaceName +
-					"'\n  Got: '" + blockIdToken.value + "'",
+						"'\n  Got: '" + blockIdToken.value + "'",
 					blockIdToken.line, blockIdToken.column);
 	}
 

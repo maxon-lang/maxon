@@ -136,7 +136,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 				if (valueExpr == nullptr) {
 					reportError("No value for field '" + fieldName +
-								"' in struct '" + structInitExpr->structName + "'",
+									"' in struct '" + structInitExpr->structName + "'",
 								structInitExpr->line, structInitExpr->column);
 				}
 
@@ -146,7 +146,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 				// If the field is an unsized array type (like []byte), we need to handle
 				// the conversion from either a fat pointer, static array, or variable-sized array
-				if (fieldType.size() >= 2 && fieldType[0] == '[' && fieldType[1] == ']') {
+				if (maxon::TypeConversion::isManagedArrayType(fieldType)) {
 					// Get the value's type if it's a variable
 					std::string valueType;
 					auto *varExpr = dynamic_cast<VariableExprAST *>(valueExpr);
@@ -157,25 +157,16 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 						}
 					}
 
-					// Check if the value is a static array (format: [size]type where size is digits)
-					bool isStaticArray = false;
-					bool isVariableSizedArray = false;
+					// Check if the value is a static array or variable-sized (managed) array
+					bool isStaticArray = maxon::TypeConversion::isStaticArrayType(valueType);
+					bool isVariableSizedArray = maxon::TypeConversion::isManagedArrayType(valueType);
 					int staticArraySize = 0;
 					std::string elemType;
-					if (valueType.size() >= 3 && valueType[0] == '[') {
-						size_t closeBracket = valueType.find(']');
-						if (closeBracket != std::string::npos && closeBracket > 1) {
-							std::string sizeStr = valueType.substr(1, closeBracket - 1);
-							if (!sizeStr.empty() && std::all_of(sizeStr.begin(), sizeStr.end(), ::isdigit)) {
-								isStaticArray = true;
-								staticArraySize = std::stoi(sizeStr);
-								elemType = valueType.substr(closeBracket + 1);
-							}
-						} else if (closeBracket == 1) {
-							// []type - variable-sized array
-							isVariableSizedArray = true;
-							elemType = valueType.substr(2);
-						}
+					if (isStaticArray) {
+						staticArraySize = maxon::TypeConversion::getStaticArraySize(valueType);
+						elemType = maxon::TypeConversion::getArrayElementType(valueType);
+					} else if (isVariableSizedArray) {
+						elemType = maxon::TypeConversion::getArrayElementType(valueType);
 					}
 
 					mir::MIRType *fatPtrType = structType->fieldTypes[fieldIndex];

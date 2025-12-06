@@ -48,11 +48,11 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 						 expr->line, expr->column);
 				return "error";
 			}
-			// Variable-sized arrays have dynamic type []type (size not known at compile time)
-			return "[]" + arrayLiteral->elementType;
+			// Variable-sized arrays have dynamic type (size not known at compile time)
+			return maxon::TypeConversion::makeManagedArrayType(arrayLiteral->elementType);
 		} else if (arrayLiteral->size > 0) {
 			// [size]type form - constant-size zero-initialized array
-			return "[" + std::to_string(arrayLiteral->size) + "]" + arrayLiteral->elementType;
+			return maxon::TypeConversion::makeStaticArrayType(arrayLiteral->size, arrayLiteral->elementType);
 		} else {
 			// [val1, val2, ...] form - value-initialized array
 			if (arrayLiteral->values.empty()) {
@@ -74,7 +74,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				}
 			}
 
-			return "[" + std::to_string(arrayLiteral->values.size()) + "]" + elemType;
+			return maxon::TypeConversion::makeStaticArrayType(static_cast<int>(arrayLiteral->values.size()), elemType);
 		}
 
 	} else if (auto mapLiteral = dynamic_cast<MapLiteralExprAST *>(expr)) {
@@ -477,13 +477,13 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			}
 			// First arg should be a dynamic array
 			std::string arrType = analyzeExpression(callExpr->args[0].get());
-			if (arrType.size() < 2 || arrType[0] != '[' || arrType[1] != ']') {
-				addError("push() can only be used on dynamic arrays, not " + arrType,
+			if (!maxon::TypeConversion::isManagedArrayType(arrType)) {
+				addError("push() can only be used on dynamic arrays, not " + maxon::TypeConversion::arrayTypeToDisplayString(arrType),
 						 expr->line, expr->column);
 				return "void";
 			}
 			// Second arg should match element type
-			std::string elemType = arrType.substr(2); // Skip "[]"
+			std::string elemType = maxon::TypeConversion::getArrayElementType(arrType);
 			std::string valType = analyzeExpression(callExpr->args[1].get());
 			if (valType != elemType && valType != "error") {
 				addError("push() value type " + valType + " doesn't match array element type " + elemType,
@@ -500,13 +500,13 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			}
 			// Arg should be a dynamic array
 			std::string arrType = analyzeExpression(callExpr->args[0].get());
-			if (arrType.size() < 2 || arrType[0] != '[' || arrType[1] != ']') {
-				addError("pop() can only be used on dynamic arrays, not " + arrType,
+			if (!maxon::TypeConversion::isManagedArrayType(arrType)) {
+				addError("pop() can only be used on dynamic arrays, not " + maxon::TypeConversion::arrayTypeToDisplayString(arrType),
 						 expr->line, expr->column);
 				return "error";
 			}
 			// Return element type
-			return arrType.substr(2); // Skip "[]"
+			return maxon::TypeConversion::getArrayElementType(arrType);
 		}
 
 		// Handle compiler intrinsics using the registry
@@ -555,12 +555,13 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 					if (callExpr->args.size() != caseInfo->associatedValues.size()) {
 						if (caseInfo->associatedValues.empty()) {
 							addError("Enum case '" + potentialCaseName + "' does not have associated values\n"
-									 "  Use: " + potentialEnumName + "." + potentialCaseName,
+																		 "  Use: " +
+										 potentialEnumName + "." + potentialCaseName,
 									 expr->line, expr->column);
 						} else {
 							addError("Wrong number of associated values for case '" + potentialCaseName + "': expected " +
-									 std::to_string(caseInfo->associatedValues.size()) + ", got " +
-									 std::to_string(callExpr->args.size()),
+										 std::to_string(caseInfo->associatedValues.size()) + ", got " +
+										 std::to_string(callExpr->args.size()),
 									 expr->line, expr->column);
 						}
 						return potentialEnumName; // Still return the enum type
@@ -573,7 +574,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 						if (!typesMatch(expectedType, argType)) {
 							addError("Type mismatch for associated value '" + caseInfo->associatedValues[i].name +
-									 "': expected '" + expectedType + "', got '" + argType + "'",
+										 "': expected '" + expectedType + "', got '" + argType + "'",
 									 callExpr->args[i]->line, callExpr->args[i]->column);
 						}
 					}
@@ -922,13 +923,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			arrayType = varInfo->type;
 		}
 
-		// Extract element type from array type (e.g., "[]string" -> "string", "[5]int" -> "int", "[16]byte" -> "byte")
-		if (arrayType.size() > 2 && arrayType[0] == '[') {
-			// Find the closing bracket
-			size_t closeBracket = arrayType.find(']');
-			if (closeBracket != std::string::npos && closeBracket + 1 < arrayType.size()) {
-				return arrayType.substr(closeBracket + 1);
-			}
+		// Extract element type from array type
+		if (maxon::TypeConversion::isArrayType(arrayType)) {
+			return maxon::TypeConversion::getArrayElementType(arrayType);
 		}
 		// Fallback if type parsing fails
 		return "int";
@@ -954,7 +951,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 						availableCases += enumInfo->cases[i].name;
 					}
 					addError("Unknown case '" + memberAccessExpr->memberName + "' for enum '" + memberAccessExpr->objectName + "'\n"
-							 "  Available cases: " + availableCases,
+																															   "  Available cases: " +
+								 availableCases,
 							 expr->line, expr->column);
 					return "error";
 				}
@@ -962,7 +960,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				// Check if this case requires associated values
 				if (!caseInfo->associatedValues.empty()) {
 					addError("Enum case '" + memberAccessExpr->memberName + "' requires associated values\n"
-							 "  Use: " + memberAccessExpr->objectName + "." + memberAccessExpr->memberName + "(...)",
+																			"  Use: " +
+								 memberAccessExpr->objectName + "." + memberAccessExpr->memberName + "(...)",
 							 expr->line, expr->column);
 					return memberAccessExpr->objectName; // Still return enum type
 				}
@@ -994,7 +993,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			if (memberAccessExpr->memberName == "rawValue") {
 				if (varEnumInfo->rawValueType.empty()) {
 					addError("Cannot access 'rawValue' on enum '" + objectType + "' which has no raw value type\n"
-							 "  Declare the enum with a raw value type: enum " + objectType + " int",
+																				 "  Declare the enum with a raw value type: enum " +
+								 objectType + " int",
 							 expr->line, expr->column);
 					return "error";
 				}
@@ -1038,7 +1038,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		}
 
 		// Support array member access using shared type registry
-		if (objectType.length() > 0 && objectType[0] == '[') {
+		if (maxon::TypeConversion::isArrayType(objectType)) {
 			std::string memberType = getArrayMemberType(memberAccessExpr->memberName);
 			if (!memberType.empty()) {
 				return memberType;
@@ -1052,7 +1052,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return methodIt->second.returnType;
 		}
 
-		addError("Unknown member: " + memberAccessExpr->memberName + " on type " + objectType,
+		addError("Unknown member: " + memberAccessExpr->memberName + " on type " + maxon::TypeConversion::arrayTypeToDisplayString(objectType),
 				 expr->line, expr->column);
 		return "error";
 	} else if (auto structInitExpr = dynamic_cast<StructInitExprAST *>(expr)) {
@@ -1146,7 +1146,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				availableCases += enumInfo->cases[i].name;
 			}
 			addError("Unknown case '" + enumCaseExpr->caseName + "' for enum '" + enumCaseExpr->enumName + "'\n"
-					 "  Available cases: " + availableCases,
+																										   "  Available cases: " +
+						 availableCases,
 					 expr->line, expr->column);
 			return "error";
 		}
@@ -1155,12 +1156,13 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		if (enumCaseExpr->arguments.size() != caseInfo->associatedValues.size()) {
 			if (caseInfo->associatedValues.empty()) {
 				addError("Enum case '" + enumCaseExpr->caseName + "' does not have associated values\n"
-						 "  Use: " + enumCaseExpr->enumName + "." + enumCaseExpr->caseName,
+																  "  Use: " +
+							 enumCaseExpr->enumName + "." + enumCaseExpr->caseName,
 						 expr->line, expr->column);
 			} else {
 				addError("Wrong number of associated values for case '" + enumCaseExpr->caseName + "': expected " +
-						 std::to_string(caseInfo->associatedValues.size()) + ", got " +
-						 std::to_string(enumCaseExpr->arguments.size()),
+							 std::to_string(caseInfo->associatedValues.size()) + ", got " +
+							 std::to_string(enumCaseExpr->arguments.size()),
 						 expr->line, expr->column);
 			}
 			return enumCaseExpr->enumName; // Still return the enum type
@@ -1173,7 +1175,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 			if (!typesMatch(expectedType, argType)) {
 				addError("Type mismatch for associated value '" + caseInfo->associatedValues[i].name +
-						 "': expected '" + expectedType + "', got '" + argType + "'",
+							 "': expected '" + expectedType + "', got '" + argType + "'",
 						 enumCaseExpr->arguments[i]->line, enumCaseExpr->arguments[i]->column);
 			}
 		}
@@ -1263,7 +1265,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 					firstCase = false;
 				} else if (!typesMatch(resultType, caseType)) {
 					addError("Match expression case types must be consistent\n  First case type: " +
-							 resultType + "\n  This case type: " + caseType,
+								 resultType + "\n  This case type: " + caseType,
 							 matchCase.line, matchCase.column);
 				}
 			}
@@ -1286,7 +1288,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			if (!missingCases.empty()) {
 				std::string missingList;
 				for (size_t i = 0; i < missingCases.size(); i++) {
-					if (i > 0) missingList += ", ";
+					if (i > 0)
+						missingList += ", ";
 					missingList += missingCases[i];
 				}
 				addError("Match on enum '" + scrutineeType + "' is not exhaustive\n  Missing cases: " + missingList,

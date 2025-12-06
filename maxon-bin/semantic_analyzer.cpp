@@ -593,7 +593,7 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 		func->returnType != "float" && func->returnType != "bool" &&
 		func->returnType != "string" && func->returnType != "cstring" &&
 		func->returnType != "character" &&
-		func->returnType[0] != '[') { // Not an array type
+		!maxon::TypeConversion::isArrayType(func->returnType)) { // Not an array type
 		// Could be a struct type - check if it exists
 		if (lookupStruct(func->returnType) == nullptr) {
 			undefinedStructs.insert(func->returnType);
@@ -603,12 +603,9 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 	// Validate parameter types - track undefined struct types for auto-import
 	for (const auto &param : func->parameters) {
 		std::string paramType = param.type;
-		// Strip array brackets if present
-		if (paramType.size() > 2 && paramType[0] == '[') {
-			size_t closeBracket = paramType.find(']');
-			if (closeBracket != std::string::npos && closeBracket + 1 < paramType.size()) {
-				paramType = paramType.substr(closeBracket + 1);
-			}
+		// Strip array type if present - get element type
+		if (maxon::TypeConversion::isArrayType(paramType)) {
+			paramType = maxon::TypeConversion::getArrayElementType(paramType);
 		}
 		if (paramType != "void" && paramType != "int" &&
 			paramType != "float" && paramType != "bool" &&
@@ -825,8 +822,8 @@ bool SemanticAnalyzer::isIterableType(const std::string &type, ExprAST *iterable
 		return true;
 	}
 
-	// Array types are iterable: [N]T (fixed-size) or []T (dynamic/slice)
-	if (type.size() > 2 && type[0] == '[') {
+	// Array types are iterable: _ManagedArray<T> or _StaticArray<N, T>
+	if (maxon::TypeConversion::isArrayType(type)) {
 		return true;
 	}
 

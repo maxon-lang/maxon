@@ -5,6 +5,7 @@
  */
 
 #include "../codegen_mir.h"
+#include "../types/type_conversion.h"
 #include <stdexcept>
 
 void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *function) {
@@ -50,7 +51,7 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 	if (varType == "string") {
 		mir::MIRType *stringType = structTypes["string"];
 		mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
-		mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 
 		if (stringType && managedStringType && unsizedArrayType) {
 			// Load the _managed pointer from the string struct
@@ -161,11 +162,8 @@ void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir:
 		varType = variableTypes[arrayAssign->arrayName];
 	}
 	std::string elementTypeStr = "int";
-	if (varType.size() > 2 && varType[0] == '[') {
-		size_t closeBracket = varType.find(']');
-		if (closeBracket != std::string::npos && closeBracket + 1 < varType.size()) {
-			elementTypeStr = varType.substr(closeBracket + 1);
-		}
+	if (maxon::TypeConversion::isArrayType(varType)) {
+		elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
 	}
 	mir::MIRType *elementType = getTypeFromString(elementTypeStr);
 
@@ -212,7 +210,7 @@ void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir:
 
 			if (valueExpr == nullptr) {
 				reportError("No value for field '" + fieldName +
-							"' in struct '" + structInit->structName + "'",
+								"' in struct '" + structInit->structName + "'",
 							structInit->line, structInit->column);
 			}
 
@@ -247,11 +245,8 @@ void MIRCodeGenerator::generateArrayMemberAssign(ArrayMemberAssignStmtAST *array
 	// Determine element type
 	std::string varType = variableTypes[arrayMemberAssign->arrayName];
 	std::string elementTypeStr;
-	if (varType.size() > 2 && varType[0] == '[') {
-		size_t closeBracket = varType.find(']');
-		if (closeBracket != std::string::npos && closeBracket + 1 < varType.size()) {
-			elementTypeStr = varType.substr(closeBracket + 1);
-		}
+	if (maxon::TypeConversion::isArrayType(varType)) {
+		elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
 	}
 
 	mir::MIRType *structType = structTypes[elementTypeStr];
@@ -276,7 +271,7 @@ void MIRCodeGenerator::generateArrayMemberAssign(ArrayMemberAssignStmtAST *array
 
 	if (fieldIndex < 0) {
 		reportError("Unknown field '" + arrayMemberAssign->memberName +
-					"' in struct '" + elementTypeStr + "'",
+						"' in struct '" + elementTypeStr + "'",
 					arrayMemberAssign->line, arrayMemberAssign->column);
 	}
 
@@ -314,7 +309,7 @@ void MIRCodeGenerator::generateMemberAssign(MemberAssignStmtAST *memberAssign, m
 
 	if (fieldIndex < 0) {
 		reportError("Unknown field '" + memberAssign->memberName +
-					"' in struct '" + structTypeName + "'",
+						"' in struct '" + structTypeName + "'",
 					memberAssign->line, memberAssign->column);
 	}
 
@@ -357,7 +352,7 @@ void MIRCodeGenerator::generateMemberArrayAssign(MemberArrayAssignStmtAST *membe
 
 	if (fieldIndex < 0) {
 		reportError("Unknown field '" + memberArrayAssign->memberName +
-					"' in struct '" + structTypeName + "'",
+						"' in struct '" + structTypeName + "'",
 					memberArrayAssign->line, memberArrayAssign->column);
 	}
 
@@ -368,13 +363,10 @@ void MIRCodeGenerator::generateMemberArrayAssign(MemberArrayAssignStmtAST *membe
 	// Generate index
 	mir::MIRValue *indexVal = generateExpr(memberArrayAssign->index.get());
 
-	// Determine element type from field type "[16]byte" -> "byte"
+	// Determine element type from field type "_StaticArray<16, byte>" -> "byte"
 	std::string elemTypeStr = "int";
-	if (fieldTypeStr.size() > 2 && fieldTypeStr[0] == '[') {
-		size_t closeBracket = fieldTypeStr.find(']');
-		if (closeBracket != std::string::npos && closeBracket + 1 < fieldTypeStr.size()) {
-			elemTypeStr = fieldTypeStr.substr(closeBracket + 1);
-		}
+	if (maxon::TypeConversion::isArrayType(fieldTypeStr)) {
+		elemTypeStr = maxon::TypeConversion::getArrayElementType(fieldTypeStr);
 	}
 	mir::MIRType *elemType = getTypeFromString(elemTypeStr);
 

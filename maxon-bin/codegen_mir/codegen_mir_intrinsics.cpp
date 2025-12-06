@@ -15,12 +15,12 @@ mir::MIRType *MIRCodeGenerator::getOrCreateManagedStringType() {
 }
 
 mir::MIRType *MIRCodeGenerator::getOrCreateUnsizedArrayType() {
-	mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+	mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 	if (!unsizedArrayType) {
 		unsizedArrayType = module->getOrCreateStructType(
-			"__unsized_array_byte",
+			"_ManagedArray_byte",
 			{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-		structTypes["__unsized_array_byte"] = unsizedArrayType;
+		structTypes["_ManagedArray_byte"] = unsizedArrayType;
 	}
 	return unsizedArrayType;
 }

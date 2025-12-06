@@ -34,20 +34,12 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			varDecl->type = actualType;
 		}
 
-		// For var arrays, convert static array type [N]type to dynamic []type
+		// For var arrays, convert static array type to dynamic managed array type
 		// var arrays are always dynamic (mutable, growable)
-		if (actualType.size() > 2 && actualType[0] == '[') {
-			size_t closeBracket = actualType.find(']');
-			if (closeBracket != std::string::npos && closeBracket > 1) {
-				// Check if this is a static array type [N]type (has a number)
-				std::string sizeStr = actualType.substr(1, closeBracket - 1);
-				bool isStaticArray = !sizeStr.empty() && std::all_of(sizeStr.begin(), sizeStr.end(), ::isdigit);
-				if (isStaticArray) {
-					// Convert [N]type to []type for var arrays
-					std::string elemType = actualType.substr(closeBracket + 1);
-					actualType = "[]" + elemType;
-				}
-			}
+		if (maxon::TypeConversion::isStaticArrayType(actualType)) {
+			// Convert _StaticArray<N, T> to _ManagedArray<T> for var arrays
+			std::string elemType = maxon::TypeConversion::getArrayElementType(actualType);
+			actualType = maxon::TypeConversion::makeManagedArrayType(elemType);
 		}
 
 		// Declare variable
@@ -193,47 +185,43 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 
 			// Get element type and verify it's a struct
 			std::string arrayType = varInfo->type;
-			if (arrayType.size() > 2 && arrayType[0] == '[') {
-				size_t closeBracket = arrayType.find(']');
-				if (closeBracket != std::string::npos && closeBracket + 1 < arrayType.size()) {
-					std::string elementType = arrayType.substr(closeBracket + 1);
+			if (maxon::TypeConversion::isArrayType(arrayType)) {
+				std::string elementType = maxon::TypeConversion::getArrayElementType(arrayType);
 
-					if (lookupStruct(elementType) != nullptr) {
-						// Verify member exists and check immutability
-						const auto &structInfo = structs.at(elementType);
-						bool memberFound = false;
-						bool fieldIsImmutable = false;
-						int fieldLine = 0;
-						for (const auto &field : structInfo.fields) {
-							if (field.name == arrayMemberAssign->memberName) {
-								memberFound = true;
-								fieldIsImmutable = field.isImmutable;
-								fieldLine = field.line;
-								break;
-							}
+				if (lookupStruct(elementType) != nullptr) {
+					// Verify member exists and check immutability
+					const auto &structInfo = structs.at(elementType);
+					bool memberFound = false;
+					bool fieldIsImmutable = false;
+					int fieldLine = 0;
+					for (const auto &field : structInfo.fields) {
+						if (field.name == arrayMemberAssign->memberName) {
+							memberFound = true;
+							fieldIsImmutable = field.isImmutable;
+							fieldLine = field.line;
+							break;
 						}
+					}
 
-						if (!memberFound) {
-							addError("Struct '" + elementType + "' has no field named '" + arrayMemberAssign->memberName + "'",
-									 stmt->line, stmt->column);
-						} else if (fieldIsImmutable) {
-							addError("Cannot assign to immutable field '" + arrayMemberAssign->memberName +
-										 "' of struct '" + elementType + "'" +
-										 "\n  Field declared with 'let' at line " + std::to_string(fieldLine) +
-										 "\n  Note: Fields declared with 'let' are immutable. Use 'var' for mutable fields",
-									 stmt->line, stmt->column);
-						}
-					} else {
-						addError("Cannot access member '" + arrayMemberAssign->memberName + "' on non-struct array element type '" + elementType + "'",
+					if (!memberFound) {
+						addError("Struct '" + elementType + "' has no field named '" + arrayMemberAssign->memberName + "'",
+								 stmt->line, stmt->column);
+					} else if (fieldIsImmutable) {
+						addError("Cannot assign to immutable field '" + arrayMemberAssign->memberName +
+									 "' of struct '" + elementType + "'" +
+									 "\n  Field declared with 'let' at line " + std::to_string(fieldLine) +
+									 "\n  Note: Fields declared with 'let' are immutable. Use 'var' for mutable fields",
 								 stmt->line, stmt->column);
 					}
+				} else {
+					addError("Cannot access member '" + arrayMemberAssign->memberName + "' on non-struct array element type '" + elementType + "'",
+							 stmt->line, stmt->column);
 				}
 			}
-
-			// Analyze value expression
-			analyzeExpression(arrayMemberAssign->value.get());
 		}
 
+		// Analyze value expression
+		analyzeExpression(arrayMemberAssign->value.get());
 	} else if (auto memberAssign = dynamic_cast<MemberAssignStmtAST *>(stmt)) {
 		// Struct member assignment: obj.field = value
 		auto varInfo = lookupVariable(memberAssign->objectName);
@@ -299,7 +287,6 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 				}
 			}
 		}
-
 	} else if (auto memberArrayAssign = dynamic_cast<MemberArrayAssignStmtAST *>(stmt)) {
 		// Struct member array element assignment: obj.arrayField[i] = value
 		auto varInfo = lookupVariable(memberArrayAssign->objectName);
@@ -375,11 +362,9 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 				}
 			}
 		}
-
 	} else if (auto exprStmt = dynamic_cast<ExprStmtAST *>(stmt)) {
 		// Analyze the expression (e.g., function call)
 		analyzeExpression(exprStmt->expression.get());
-
 	} else if (auto ifStmt = dynamic_cast<IfStmtAST *>(stmt)) {
 		// Analyze condition
 		std::string condType = analyzeExpression(ifStmt->condition.get());
@@ -428,7 +413,6 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			checkUnusedVariables();
 			exitScope();
 		}
-
 	} else if (auto ifLet = dynamic_cast<IfLetStmtAST *>(stmt)) {
 		// Analyze optional expression
 		std::string optionalType = analyzeExpression(ifLet->optionalExpr.get());
@@ -472,7 +456,6 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			checkUnusedVariables();
 			exitScope();
 		}
-
 	} else if (auto elseUnwrap = dynamic_cast<ElseUnwrapStmtAST *>(stmt)) {
 		// Analyze the optional expression
 		std::string optionalType = analyzeExpression(elseUnwrap->optionalExpr.get());
@@ -525,7 +508,6 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 						 "\n  Note: You must provide a default value by assigning to '" + savedVarName + "' in the else block",
 					 stmt->line, stmt->column);
 		}
-
 	} else if (auto whileStmt = dynamic_cast<WhileStmtAST *>(stmt)) {
 		// Analyze condition
 		std::string condType = analyzeExpression(whileStmt->condition.get());
@@ -562,7 +544,6 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		exitScope();
 		loopDepth--;
 		loopLabelStack.pop_back();
-
 	} else if (auto forStmt = dynamic_cast<ForStmtAST *>(stmt)) {
 		// For-loops require iterator next() method from stdlib (Iterable interface)
 		// The method returns Element or nil
@@ -597,12 +578,9 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		// Declare loop variable (immutable, like 'let')
 		// Infer type from iterable: array element type, or Element associated type for Iterable structs
 		std::string loopVarType = "int"; // Default for range() iteration
-		if (iterableType.size() > 2 && iterableType[0] == '[') {
-			// Array type like "[5]float" - extract element type after ']'
-			size_t closeBracket = iterableType.find(']');
-			if (closeBracket != std::string::npos && closeBracket + 1 < iterableType.size()) {
-				loopVarType = iterableType.substr(closeBracket + 1);
-			}
+		if (maxon::TypeConversion::isArrayType(iterableType)) {
+			// Array type - extract element type
+			loopVarType = maxon::TypeConversion::getArrayElementType(iterableType);
 		} else {
 			// Check if this is a struct type with an Element associated type
 			auto structIt = structs.find(iterableType);
@@ -631,7 +609,6 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		exitScope();
 		loopDepth--;
 		loopLabelStack.pop_back();
-
 	} else if (auto breakStmt = dynamic_cast<BreakStmtAST *>(stmt)) {
 		// Validate break is inside a loop
 		if (loopDepth == 0) {
@@ -653,7 +630,6 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 						 stmt->line, stmt->column);
 			}
 		}
-
 	} else if (auto continueStmt = dynamic_cast<ContinueStmtAST *>(stmt)) {
 		// Validate continue is inside a loop
 		if (loopDepth == 0) {
@@ -675,7 +651,6 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 						 stmt->line, stmt->column);
 			}
 		}
-
 	} else if (auto matchStmt = dynamic_cast<MatchStmtAST *>(stmt)) {
 		// Analyze scrutinee expression
 		std::string scrutineeType = analyzeExpression(matchStmt->scrutinee.get());
@@ -775,7 +750,8 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			if (!missingCases.empty()) {
 				std::string missingList;
 				for (size_t i = 0; i < missingCases.size(); i++) {
-					if (i > 0) missingList += ", ";
+					if (i > 0)
+						missingList += ", ";
 					missingList += missingCases[i];
 				}
 				addError("Match on enum '" + scrutineeType + "' is not exhaustive\n  Missing cases: " + missingList,
@@ -790,7 +766,6 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		if (hasDefault) {
 			matchStmt->isExhaustive = true;
 		}
-
 	} else if (auto returnStmt = dynamic_cast<ReturnStmtAST *>(stmt)) {
 		// Analyze return value
 		if (returnStmt->value) {

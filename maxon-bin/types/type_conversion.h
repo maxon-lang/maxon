@@ -140,11 +140,30 @@ class TypeConversion {
 	/// Make a type optional (e.g., "int" -> "int or nil")
 	static std::string makeOptionalType(const std::string &type);
 
-	/// Check if a type is an array type (starts with '[')
+	/// Check if a type is an array type (_ManagedArray<T>, _StaticArray<N, T>, or legacy [N]T/[]T)
 	static bool isArrayType(const std::string &type);
 
-	/// Extract element type from array (e.g., "[5]int" -> "int", "[]byte" -> "byte")
+	/// Check if a type is a dynamic/managed array (_ManagedArray<T> or legacy []T)
+	static bool isManagedArrayType(const std::string &type);
+
+	/// Check if a type is a static array (_StaticArray<N, T> or legacy [N]T)
+	static bool isStaticArrayType(const std::string &type);
+
+	/// Extract element type from array (e.g., "_ManagedArray<int>" -> "int", "_StaticArray<5, byte>" -> "byte")
 	static std::string getArrayElementType(const std::string &arrayType);
+
+	/// Get size from static array type (returns 0 for managed arrays)
+	static int getStaticArraySize(const std::string &arrayType);
+
+	/// Create a managed array type string from element type
+	static std::string makeManagedArrayType(const std::string &elementType);
+
+	/// Create a static array type string from size and element type
+	static std::string makeStaticArrayType(int size, const std::string &elementType);
+
+	/// Convert array type to user-friendly display format (for error messages)
+	/// _ManagedArray<int> -> []int, _StaticArray<5, byte> -> [5]byte
+	static std::string arrayTypeToDisplayString(const std::string &arrayType);
 
   private:
 	/// The conversion table: [source][target] -> ConversionKind

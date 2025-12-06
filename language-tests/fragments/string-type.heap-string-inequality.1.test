@@ -13,10 +13,10 @@ end 'main'
 ; Module: test.maxon
 ; Instructions: 246
 
-%__unsized_array_byte = type { ptr, i32 }
 %string = type { ptr, i32 }
-%__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
+%__ManagedStringData = type { %_ManagedArray_byte, i32, i32 }
 %cstring = type { ptr, i32, ptr }
+%_ManagedArray_byte = type { ptr, i32 }
 
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.0 = constant [52 x i8] c"This string is definitely longer than fifteen bytes\00"
@@ -31,7 +31,7 @@ entry0:
   %2 = getelementptr %string, ptr %self, i32 0, i32 0
   %3 = load ptr, ptr %2
   %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
-  %5 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 0
+  %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
   %6 = load ptr, ptr %5
   %7 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 1
   %8 = load i32, ptr %7
@@ -61,9 +61,9 @@ entry0:
   %2 = call ptr @memcpy(ptr %1, ptr @.str.0, i64 51)
   %4 = alloca %__ManagedStringData
   %5 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 0
-  %6 = getelementptr %__unsized_array_byte, ptr %5, i32 0, i32 0
+  %6 = getelementptr %_ManagedArray_byte, ptr %5, i32 0, i32 0
   store ptr %1, ptr %6
-  %7 = getelementptr %__unsized_array_byte, ptr %5, i32 0, i32 1
+  %7 = getelementptr %_ManagedArray_byte, ptr %5, i32 0, i32 1
   store i32 51, ptr %7
   %8 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 1
   store i32 51, ptr %8
@@ -78,9 +78,9 @@ entry0:
   %14 = call ptr @memcpy(ptr %13, ptr @.str.1, i64 51)
   %16 = alloca %__ManagedStringData
   %17 = getelementptr %__ManagedStringData, ptr %16, i32 0, i32 0
-  %18 = getelementptr %__unsized_array_byte, ptr %17, i32 0, i32 0
+  %18 = getelementptr %_ManagedArray_byte, ptr %17, i32 0, i32 0
   store ptr %13, ptr %18
-  %19 = getelementptr %__unsized_array_byte, ptr %17, i32 0, i32 1
+  %19 = getelementptr %_ManagedArray_byte, ptr %17, i32 0, i32 1
   store i32 51, ptr %19
   %20 = getelementptr %__ManagedStringData, ptr %16, i32 0, i32 1
   store i32 51, ptr %20
@@ -121,9 +121,9 @@ entry0:
   store i8 0, ptr %11
   %12 = call ptr @malloc(i64 32)
   %13 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
-  %14 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 0
+  %14 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 0
   store ptr %8, ptr %14
-  %15 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 1
+  %15 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 1
   store i32 %length, ptr %15
   %16 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 1
   store i32 %length, ptr %16
@@ -150,9 +150,9 @@ entry0:
   %10 = alloca %string
   %11 = alloca %__ManagedStringData
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
-  %13 = getelementptr %__unsized_array_byte, ptr %12, i32 0, i32 0
+  %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
   store ptr @.str.2, ptr %13
-  %14 = getelementptr %__unsized_array_byte, ptr %12, i32 0, i32 1
+  %14 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 1
   store i32 1, ptr %14
   %15 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 1
   store i32 1, ptr %15
@@ -179,7 +179,7 @@ entry0:
   br i1 %32, label %cs.cstring.release1, label %cs.cstring.continue2
 cs.cstring.release1:
   %33 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 0
-  %34 = getelementptr %__unsized_array_byte, ptr %33, i32 0, i32 0
+  %34 = getelementptr %_ManagedArray_byte, ptr %33, i32 0, i32 0
   %35 = load ptr, ptr %34
   call void @_managed_string_release(ptr %35, ptr @.__tag.free.cs)
   br label %cs.cstring.continue2
@@ -192,7 +192,7 @@ cs.cstring.continue2:
   br i1 %40, label %newline_cs.cstring.release3, label %newline_cs.cstring.continue4
 newline_cs.cstring.release3:
   %41 = getelementptr %__ManagedStringData, ptr %37, i32 0, i32 0
-  %42 = getelementptr %__unsized_array_byte, ptr %41, i32 0, i32 0
+  %42 = getelementptr %_ManagedArray_byte, ptr %41, i32 0, i32 0
   %43 = load ptr, ptr %42
   call void @_managed_string_release(ptr %43, ptr @.__tag.free.newline_cs)
   br label %newline_cs.cstring.continue4
@@ -291,14 +291,14 @@ whilecond1:
 loop2:
   %12 = add i32 %a_offset, %32
   %13 = getelementptr %__ManagedStringData, ptr %a, i32 0, i32 0
-  %14 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 0
+  %14 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 0
   %15 = load ptr, ptr %14
   %16 = sext i32 %12 to i64
   %17 = getelementptr i8, ptr %15, i64 0, i64 %16
   %18 = load i8, ptr %17
   %22 = add i32 %b_offset, %32
   %23 = getelementptr %__ManagedStringData, ptr %b, i32 0, i32 0
-  %24 = getelementptr %__unsized_array_byte, ptr %23, i32 0, i32 0
+  %24 = getelementptr %_ManagedArray_byte, ptr %23, i32 0, i32 0
   %25 = load ptr, ptr %24
   %26 = sext i32 %22 to i64
   %27 = getelementptr i8, ptr %25, i64 0, i64 %26
@@ -356,10 +356,10 @@ entry0:
 ; Module: test.maxon
 ; Instructions: 373
 
-%__unsized_array_byte = type { ptr, i32 }
 %string = type { ptr, i32 }
-%__ManagedStringData = type { %__unsized_array_byte, i32, i32 }
+%__ManagedStringData = type { %_ManagedArray_byte, i32, i32 }
 %cstring = type { ptr, i32, ptr }
+%_ManagedArray_byte = type { ptr, i32 }
 
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.0 = constant [52 x i8] c"This string is definitely longer than fifteen bytes\00"
@@ -377,7 +377,7 @@ entry0:
   %2 = getelementptr %string, ptr %1, i32 0, i32 0
   %3 = load ptr, ptr %2
   %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
-  %5 = getelementptr %__unsized_array_byte, ptr %4, i32 0, i32 0
+  %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
   %6 = load ptr, ptr %5
   %7 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 1
   %8 = load i32, ptr %7
@@ -425,9 +425,9 @@ entry0:
   store ptr %1, ptr %3
   %4 = alloca %__ManagedStringData
   %5 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 0
-  %6 = getelementptr %__unsized_array_byte, ptr %5, i32 0, i32 0
+  %6 = getelementptr %_ManagedArray_byte, ptr %5, i32 0, i32 0
   store ptr %1, ptr %6
-  %7 = getelementptr %__unsized_array_byte, ptr %5, i32 0, i32 1
+  %7 = getelementptr %_ManagedArray_byte, ptr %5, i32 0, i32 1
   store i32 51, ptr %7
   %8 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 1
   store i32 51, ptr %8
@@ -444,9 +444,9 @@ entry0:
   store ptr %13, ptr %15
   %16 = alloca %__ManagedStringData
   %17 = getelementptr %__ManagedStringData, ptr %16, i32 0, i32 0
-  %18 = getelementptr %__unsized_array_byte, ptr %17, i32 0, i32 0
+  %18 = getelementptr %_ManagedArray_byte, ptr %17, i32 0, i32 0
   store ptr %13, ptr %18
-  %19 = getelementptr %__unsized_array_byte, ptr %17, i32 0, i32 1
+  %19 = getelementptr %_ManagedArray_byte, ptr %17, i32 0, i32 1
   store i32 51, ptr %19
   %20 = getelementptr %__ManagedStringData, ptr %16, i32 0, i32 1
   store i32 51, ptr %20
@@ -493,9 +493,9 @@ entry0:
   store i8 0, ptr %11
   %12 = call ptr @malloc(i64 32)
   %13 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
-  %14 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 0
+  %14 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 0
   store ptr %8, ptr %14
-  %15 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 1
+  %15 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 1
   store i32 %5, ptr %15
   %16 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 1
   store i32 %5, ptr %16
@@ -527,9 +527,9 @@ entry0:
   %10 = alloca %string
   %11 = alloca %__ManagedStringData
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
-  %13 = getelementptr %__unsized_array_byte, ptr %12, i32 0, i32 0
+  %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
   store ptr @.str.2, ptr %13
-  %14 = getelementptr %__unsized_array_byte, ptr %12, i32 0, i32 1
+  %14 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 1
   store i32 1, ptr %14
   %15 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 1
   store i32 1, ptr %15
@@ -557,7 +557,7 @@ entry0:
   br i1 %32, label %cs.cstring.release1, label %cs.cstring.continue2
 cs.cstring.release1:
   %33 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 0
-  %34 = getelementptr %__unsized_array_byte, ptr %33, i32 0, i32 0
+  %34 = getelementptr %_ManagedArray_byte, ptr %33, i32 0, i32 0
   %35 = load ptr, ptr %34
   call void @_managed_string_release(ptr %35, ptr @.__tag.free.cs)
   br label %cs.cstring.continue2
@@ -570,7 +570,7 @@ cs.cstring.continue2:
   br i1 %40, label %newline_cs.cstring.release3, label %newline_cs.cstring.continue4
 newline_cs.cstring.release3:
   %41 = getelementptr %__ManagedStringData, ptr %37, i32 0, i32 0
-  %42 = getelementptr %__unsized_array_byte, ptr %41, i32 0, i32 0
+  %42 = getelementptr %_ManagedArray_byte, ptr %41, i32 0, i32 0
   %43 = load ptr, ptr %42
   call void @_managed_string_release(ptr %43, ptr @.__tag.free.newline_cs)
   br label %newline_cs.cstring.continue4
@@ -748,7 +748,7 @@ loop2:
   %11 = load i32, ptr %5
   %12 = add i32 %10, %11
   %13 = getelementptr %__ManagedStringData, ptr %9, i32 0, i32 0
-  %14 = getelementptr %__unsized_array_byte, ptr %13, i32 0, i32 0
+  %14 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 0
   %15 = load ptr, ptr %14
   %16 = sext i32 %12 to i64
   %17 = getelementptr i8, ptr %15, i64 0, i64 %16
@@ -758,7 +758,7 @@ loop2:
   %21 = load i32, ptr %5
   %22 = add i32 %20, %21
   %23 = getelementptr %__ManagedStringData, ptr %19, i32 0, i32 0
-  %24 = getelementptr %__unsized_array_byte, ptr %23, i32 0, i32 0
+  %24 = getelementptr %_ManagedArray_byte, ptr %23, i32 0, i32 0
   %25 = load ptr, ptr %24
   %26 = sext i32 %22 to i64
   %27 = getelementptr i8, ptr %25, i64 0, i64 %26

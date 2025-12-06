@@ -84,7 +84,10 @@ TypeKind TypeConversion::getTypeKind(const std::string &typeStr) {
 		return TypeKind::Optional;
 	}
 
-	// Array types: [N]T or []T
+	// Array types: _ManagedArray<T>, _StaticArray<N, T>, or legacy [N]T/[]T
+	if (typeStr.rfind("_ManagedArray<", 0) == 0 || typeStr.rfind("_StaticArray<", 0) == 0) {
+		return TypeKind::Array;
+	}
 	if (!typeStr.empty() && typeStr[0] == '[') {
 		return TypeKind::Array;
 	}
@@ -341,7 +344,41 @@ std::string TypeConversion::makeOptionalType(const std::string &type) {
 }
 
 bool TypeConversion::isArrayType(const std::string &type) {
+	// Check for new internal format: _ManagedArray<T> or _StaticArray<N, T>
+	if (type.rfind("_ManagedArray<", 0) == 0 || type.rfind("_StaticArray<", 0) == 0) {
+		return true;
+	}
+	// Legacy format: [N]T or []T
 	return !type.empty() && type[0] == '[';
+}
+
+bool TypeConversion::isManagedArrayType(const std::string &type) {
+	// New format: _ManagedArray<T>
+	if (type.rfind("_ManagedArray<", 0) == 0) {
+		return true;
+	}
+	// Legacy format: []T (unsized array)
+	if (type.size() >= 2 && type[0] == '[' && type[1] == ']') {
+		return true;
+	}
+	return false;
+}
+
+bool TypeConversion::isStaticArrayType(const std::string &type) {
+	// New format: _StaticArray<N, T>
+	if (type.rfind("_StaticArray<", 0) == 0) {
+		return true;
+	}
+	// Legacy format: [N]T (sized array with a number)
+	if (type.size() >= 3 && type[0] == '[') {
+		size_t closeBracket = type.find(']');
+		if (closeBracket != std::string::npos && closeBracket > 1) {
+			std::string sizeStr = type.substr(1, closeBracket - 1);
+			// Check if it's a number (not empty, all digits)
+			return !sizeStr.empty() && std::all_of(sizeStr.begin(), sizeStr.end(), ::isdigit);
+		}
+	}
+	return false;
 }
 
 std::string TypeConversion::getArrayElementType(const std::string &arrayType) {
@@ -349,12 +386,86 @@ std::string TypeConversion::getArrayElementType(const std::string &arrayType) {
 		return arrayType;
 	}
 
+	// New format: _ManagedArray<T>
+	if (arrayType.rfind("_ManagedArray<", 0) == 0) {
+		// Extract T from _ManagedArray<T>
+		size_t start = 14; // length of "_ManagedArray<"
+		size_t end = arrayType.rfind('>');
+		if (end != std::string::npos && end > start) {
+			return arrayType.substr(start, end - start);
+		}
+	}
+
+	// New format: _StaticArray<N, T>
+	if (arrayType.rfind("_StaticArray<", 0) == 0) {
+		// Extract T from _StaticArray<N, T>
+		size_t commaPos = arrayType.find(", ");
+		size_t end = arrayType.rfind('>');
+		if (commaPos != std::string::npos && end != std::string::npos && end > commaPos + 2) {
+			return arrayType.substr(commaPos + 2, end - commaPos - 2);
+		}
+	}
+
+	// Legacy format: [N]T or []T
 	size_t closeBracket = arrayType.find(']');
 	if (closeBracket != std::string::npos && closeBracket + 1 < arrayType.size()) {
 		return arrayType.substr(closeBracket + 1);
 	}
 
 	return "int"; // Fallback
+}
+
+int TypeConversion::getStaticArraySize(const std::string &arrayType) {
+	// New format: _StaticArray<N, T>
+	if (arrayType.rfind("_StaticArray<", 0) == 0) {
+		size_t start = 13; // length of "_StaticArray<"
+		size_t commaPos = arrayType.find(", ");
+		if (commaPos != std::string::npos && commaPos > start) {
+			std::string sizeStr = arrayType.substr(start, commaPos - start);
+			return std::stoi(sizeStr);
+		}
+	}
+
+	// Legacy format: [N]T
+	if (arrayType.size() >= 3 && arrayType[0] == '[') {
+		size_t closeBracket = arrayType.find(']');
+		if (closeBracket != std::string::npos && closeBracket > 1) {
+			std::string sizeStr = arrayType.substr(1, closeBracket - 1);
+			if (!sizeStr.empty() && std::all_of(sizeStr.begin(), sizeStr.end(), ::isdigit)) {
+				return std::stoi(sizeStr);
+			}
+		}
+	}
+
+	return 0; // Not a static array or no size
+}
+
+std::string TypeConversion::makeManagedArrayType(const std::string &elementType) {
+	return "_ManagedArray<" + elementType + ">";
+}
+
+std::string TypeConversion::makeStaticArrayType(int size, const std::string &elementType) {
+	return "_StaticArray<" + std::to_string(size) + ", " + elementType + ">";
+}
+
+std::string TypeConversion::arrayTypeToDisplayString(const std::string &arrayType) {
+	if (!isArrayType(arrayType)) {
+		return arrayType;
+	}
+
+	// New format: _ManagedArray<T> -> []T
+	if (arrayType.rfind("_ManagedArray<", 0) == 0) {
+		return "[]" + getArrayElementType(arrayType);
+	}
+
+	// New format: _StaticArray<N, T> -> [N]T
+	if (arrayType.rfind("_StaticArray<", 0) == 0) {
+		int size = getStaticArraySize(arrayType);
+		return "[" + std::to_string(size) + "]" + getArrayElementType(arrayType);
+	}
+
+	// Already in legacy format
+	return arrayType;
 }
 
 } // namespace maxon

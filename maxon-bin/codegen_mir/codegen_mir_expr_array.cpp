@@ -5,6 +5,7 @@
  */
 
 #include "../codegen_mir.h"
+#include "../types/type_conversion.h"
 #include <stdexcept>
 
 //==============================================================================
@@ -64,11 +65,8 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 
 		// Determine element type and size
 		std::string elemTypeStr = "int";
-		if (arrType.size() > 2 && arrType[0] == '[') {
-			size_t closeBracket = arrType.find(']');
-			if (closeBracket != std::string::npos && closeBracket + 1 < arrType.size()) {
-				elemTypeStr = arrType.substr(closeBracket + 1);
-			}
+		if (maxon::TypeConversion::isArrayType(arrType)) {
+			elemTypeStr = maxon::TypeConversion::getArrayElementType(arrType);
 		}
 
 		mir::MIRType *elemType = getTypeFromString(elemTypeStr);
@@ -192,11 +190,8 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 
 		// Determine element type
 		std::string elemTypeStr = "int";
-		if (arrType.size() > 2 && arrType[0] == '[') {
-			size_t closeBracket = arrType.find(']');
-			if (closeBracket != std::string::npos && closeBracket + 1 < arrType.size()) {
-				elemTypeStr = arrType.substr(closeBracket + 1);
-			}
+		if (maxon::TypeConversion::isArrayType(arrType)) {
+			elemTypeStr = maxon::TypeConversion::getArrayElementType(arrType);
 		}
 
 		mir::MIRType *elemType = getTypeFromString(elemTypeStr);

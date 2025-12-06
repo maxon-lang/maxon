@@ -5,6 +5,7 @@
  */
 
 #include "../codegen_mir.h"
+#include "../types/type_conversion.h"
 #include <stdexcept>
 
 void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &namespaceName) {
@@ -171,12 +172,12 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 		if (it != typeBindings.end()) {
 			return it->second;
 		}
-		// Handle array types: []KeyType -> []string
-		if (type.length() > 2 && type[0] == '[' && type[1] == ']') {
-			std::string elemType = type.substr(2);
+		// Handle array types: _ManagedArray<KeyType> -> _ManagedArray<string>
+		if (maxon::TypeConversion::isManagedArrayType(type)) {
+			std::string elemType = maxon::TypeConversion::getArrayElementType(type);
 			auto elemIt = typeBindings.find(elemType);
 			if (elemIt != typeBindings.end()) {
-				return "[]" + elemIt->second;
+				return maxon::TypeConversion::makeManagedArrayType(elemIt->second);
 			}
 		}
 		return type;

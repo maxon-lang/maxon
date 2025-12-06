@@ -83,12 +83,12 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					mir::MIRType *managedStringType = structTypes["_ManagedString"];
 					if (!managedStringType) {
 						// _ManagedString should be defined in stdlib, but create fallback
-						mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+						mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 						if (!unsizedArrayType) {
 							unsizedArrayType = module->getOrCreateStructType(
-								"__unsized_array_byte",
+								"_ManagedArray_byte",
 								{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-							structTypes["__unsized_array_byte"] = unsizedArrayType;
+							structTypes["_ManagedArray_byte"] = unsizedArrayType;
 						}
 						managedStringType = module->getOrCreateStructType(
 							"_ManagedString",
@@ -108,7 +108,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					mir::MIRValue *dataPtr = module->createGlobalString(globalName, str);
 
 					// Get the unsized array type for []byte (the _buffer field)
-					mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+					mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 
 					// Field 0: _buffer []byte (fat pointer: {ptr, i32})
 					mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 0, "managed._buffer");
@@ -131,7 +131,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					mir::MIRFunction *initFunc = module->getFunction(methodName);
 					if (!initFunc) {
 						reportError("Type '" + castExpr->targetType +
-									"' conforms to ExpressibleByStringLiteral but has no init method",
+										"' conforms to ExpressibleByStringLiteral but has no init method",
 									castExpr->line, castExpr->column);
 					}
 
@@ -189,8 +189,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		}
 
 		reportError("Unsupported cast from " +
-					(sourceType->structName.empty() ? getMaxonTypeFromMIRType(sourceType) : sourceType->structName) +
-					" to " + castExpr->targetType,
+						(sourceType->structName.empty() ? getMaxonTypeFromMIRType(sourceType) : sourceType->structName) +
+						" to " + castExpr->targetType,
 					castExpr->line, castExpr->column);
 	}
 
@@ -231,11 +231,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 							mir::MIRValue *fieldPtr = builder->createStructGEP(structType, selfPtr, fieldIndex, varExpr->name + ".ptr");
 
 							// For array/unsized array fields, return pointer (for subsequent indexing or struct init)
-							if (fieldType.size() > 2 && fieldType[0] == '[') {
+							if (maxon::TypeConversion::isArrayType(fieldType)) {
 								return fieldPtr;
-							}
-
-							// Load the field value for non-array fields
+							} // Load the field value for non-array fields
 							mir::MIRType *fieldMIRType = getTypeFromString(fieldType);
 							return builder->createLoad(fieldMIRType, fieldPtr, varExpr->name);
 						}
@@ -363,8 +361,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 						mir::MIRBasicBlock *matchBlock = builder->createBasicBlock("rawValue.case." + caseName);
 						mir::MIRBasicBlock *nextBlock = (i + 1 < enumInfo.caseNames.size())
-							? builder->createBasicBlock("rawValue.next." + std::to_string(i))
-							: endBlock;
+															? builder->createBasicBlock("rawValue.next." + std::to_string(i))
+															: endBlock;
 
 						builder->createCondBr(isMatch, matchBlock, nextBlock);
 
@@ -396,11 +394,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				// Array index expression (e.g., arr[0].field)
 				mir::MIRValue *objectValue = generateExpr(memberAccessExpr->object.get());
 				std::string arrayType = variableTypes[arrayIndexExpr->arrayName];
-				if (arrayType.size() > 2 && arrayType[0] == '[') {
-					size_t closeBracket = arrayType.find(']');
-					if (closeBracket != std::string::npos && closeBracket + 1 < arrayType.size()) {
-						varType = arrayType.substr(closeBracket + 1);
-					}
+				if (maxon::TypeConversion::isArrayType(arrayType)) {
+					varType = maxon::TypeConversion::getArrayElementType(arrayType);
 				}
 				objectPtr = objectValue;
 			} else if (auto *nestedMemberExpr = dynamic_cast<MemberAccessExprAST *>(memberAccessExpr->object.get())) {
@@ -584,7 +579,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 			if (fieldIndex < 0) {
 				reportError("Unknown field '" + memberAccessExpr->memberName +
-							"' in struct '" + varType + "'",
+								"' in struct '" + varType + "'",
 							memberAccessExpr->line, memberAccessExpr->column);
 			}
 
@@ -594,7 +589,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 			// Check if the field is an array type - return pointer instead of loading
 			std::string fieldTypeStr = fields[fieldIndex].second;
-			if (fieldTypeStr.size() > 2 && fieldTypeStr[0] == '[') {
+			if (maxon::TypeConversion::isArrayType(fieldTypeStr)) {
 				// Array field - return pointer to the array (for subsequent indexing)
 				return fieldPtr;
 			}
@@ -687,15 +682,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			// Get the array field type using getExpressionMaxonType for nested member access
 			std::string arrayFieldType = getExpressionMaxonType(arrayIndexExpr->arrayExpr.get());
 			logTrace("ArrayIndex in '" + currentReceiverType + "': arrayFieldType = '" + arrayFieldType + "'");
-			if (arrayFieldType.size() > 2 && arrayFieldType[0] == '[') {
-				size_t closeBracket = arrayFieldType.find(']');
-				if (closeBracket != std::string::npos && closeBracket + 1 < arrayFieldType.size()) {
-					std::string sizeStr = arrayFieldType.substr(1, closeBracket - 1);
-					elementTypeStr = arrayFieldType.substr(closeBracket + 1);
-					// Check for unsized array: []type (empty size)
-					isUnsizedArray = sizeStr.empty();
-					logTrace("ArrayIndex in '" + currentReceiverType + "': elementTypeStr = '" + elementTypeStr + "', isUnsizedArray = " + (isUnsizedArray ? "true" : "false"));
-				}
+			if (maxon::TypeConversion::isArrayType(arrayFieldType)) {
+				elementTypeStr = maxon::TypeConversion::getArrayElementType(arrayFieldType);
+				isUnsizedArray = maxon::TypeConversion::isManagedArrayType(arrayFieldType);
+				logTrace("ArrayIndex in '" + currentReceiverType + "': elementTypeStr = '" + elementTypeStr + "', isUnsizedArray = " + (isUnsizedArray ? "true" : "false"));
 			}
 
 			mir::MIRType *elementType = getTypeFromString(elementTypeStr);
@@ -706,7 +696,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			if (isUnsizedArray) {
 				// Get the unsized array struct type
 				mir::MIRType *unsizedArrayType = module->getOrCreateStructType(
-					"__unsized_array_" + elementTypeStr,
+					"_ManagedArray_" + elementTypeStr,
 					{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
 				// Get pointer to the data pointer field (field 0)
 				mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, arrayVal, 0, "unsized.data.ptr");
@@ -736,7 +726,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 						}
 					}
 
-					if (fieldIndex >= 0 && fieldType.size() > 2 && fieldType[0] == '[') {
+					if (fieldIndex >= 0 && maxon::TypeConversion::isArrayType(fieldType)) {
 						// Found array field - generate access through implicit 'self' parameter
 						mir::MIRValue *selfAlloca = namedValues["self"];
 						if (selfAlloca) {
@@ -752,22 +742,19 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 							mir::MIRValue *fieldPtr = builder->createStructGEP(structType, selfPtr, fieldIndex, arrayIndexExpr->arrayName + ".ptr");
 
 							// Determine element type
-							size_t closeBracket = fieldType.find(']');
-							std::string elementTypeStr = fieldType.substr(closeBracket + 1);
-							std::string sizeStr = fieldType.substr(1, closeBracket - 1);
-							bool isUnsizedArray = sizeStr.empty();
+							std::string elementTypeStr = maxon::TypeConversion::getArrayElementType(fieldType);
+							bool isUnsizedArray = maxon::TypeConversion::isManagedArrayType(fieldType);
 							mir::MIRType *elementType = getTypeFromString(elementTypeStr);
 
 							// For unsized arrays, load the data pointer from fat pointer
 							mir::MIRValue *dataPtr = fieldPtr;
 							if (isUnsizedArray) {
 								mir::MIRType *unsizedArrayType = module->getOrCreateStructType(
-									"__unsized_array_" + elementTypeStr,
+									"_ManagedArray_" + elementTypeStr,
 									{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
 								mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, fieldPtr, 0, "unsized.data.ptr");
 								dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrField, "unsized.data");
 							}
-
 							mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, dataPtr, indexVal, "implicitfield.array.idx");
 							return builder->createLoad(elementType, elementPtr, "implicitfield.array.elem");
 						}
@@ -781,11 +768,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		// Determine element type
 		std::string elementTypeStr = "int";
 		std::string varType = variableTypes[arrayIndexExpr->arrayName];
-		if (varType.size() > 2 && varType[0] == '[') {
-			size_t closeBracket = varType.find(']');
-			if (closeBracket != std::string::npos && closeBracket + 1 < varType.size()) {
-				elementTypeStr = varType.substr(closeBracket + 1);
-			}
+		if (maxon::TypeConversion::isArrayType(varType)) {
+			elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
 		}
 		mir::MIRType *elementType = getTypeFromString(elementTypeStr);
 		bool isStructElement = structTypes.find(elementTypeStr) != structTypes.end();
@@ -826,8 +810,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				// For simple enums (no associated values), compare the i8 values directly
 				if (!enumInfo.hasAssociatedValues) {
 					mir::MIRValue *result = (binExpr->op == 'E')
-						? builder->createICmpEq(leftVal, rightVal, "enum.eq")
-						: builder->createICmpNe(leftVal, rightVal, "enum.ne");
+												? builder->createICmpEq(leftVal, rightVal, "enum.eq")
+												: builder->createICmpNe(leftVal, rightVal, "enum.ne");
 					return result;
 				}
 
@@ -841,8 +825,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				mir::MIRValue *rightTag = builder->createLoad(mir::MIRType::getInt8(), rightTagPtr, "right.tag");
 
 				mir::MIRValue *result = (binExpr->op == 'E')
-					? builder->createICmpEq(leftTag, rightTag, "enum.eq")
-					: builder->createICmpNe(leftTag, rightTag, "enum.ne");
+											? builder->createICmpEq(leftTag, rightTag, "enum.eq")
+											: builder->createICmpNe(leftTag, rightTag, "enum.ne");
 				return result;
 			}
 
@@ -941,7 +925,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				// character = { _managed ptr } where _managed points to __ManagedStringData
 				mir::MIRType *charType = structTypes["character"];
 				mir::MIRType *managedDataType = structTypes["__ManagedStringData"];
-				mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+				mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 
 				if (!managedDataType || !unsizedArrayType) {
 					reportError("character comparison requires __ManagedStringData type",
@@ -1012,7 +996,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				}
 
 				mir::MIRType *stringType = structTypes["string"];
-				mir::MIRType *unsizedArrayType = structTypes["__unsized_array_byte"];
+				mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 				mir::MIRType *managedStringDataType = structTypes["__ManagedStringData"];
 				if (!managedStringDataType) {
 					managedStringDataType = module->getOrCreateStructType(
@@ -1267,8 +1251,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				const auto &assocValues = assocIt->second;
 				if (callExpr->args.size() != assocValues.size()) {
 					reportError("Wrong number of arguments for enum case " + enumName + "." + caseName +
-								": expected " + std::to_string(assocValues.size()) + ", got " +
-								std::to_string(callExpr->args.size()),
+									": expected " + std::to_string(assocValues.size()) + ", got " +
+									std::to_string(callExpr->args.size()),
 								callExpr->line, callExpr->column);
 				}
 
@@ -1361,9 +1345,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 				if (!arrayName.empty()) {
 					std::string arrayType = lookupVarType(arrayName);
-					// Extract element type from array type like "[]int" or "[]KeyType"
-					if (arrayType.size() > 2 && arrayType.substr(0, 2) == "[]") {
-						argType = arrayType.substr(2);
+					// Extract element type from array type like "_ManagedArray<int>" or "_ManagedArray<KeyType>"
+					if (maxon::TypeConversion::isManagedArrayType(arrayType)) {
+						argType = maxon::TypeConversion::getArrayElementType(arrayType);
 					}
 				}
 			}
