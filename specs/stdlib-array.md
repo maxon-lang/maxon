@@ -146,12 +146,11 @@ end 'iter'
 
 ## Tests
 
-Tests are commented out until generic struct instantiation syntax is implemented.
+**Note:** Tests are disabled until generic struct instantiation syntax (`array<int>()`) is implemented in the parser.
 
-<!--
-The following tests will be enabled once `array<T>()` syntax is supported:
+<!-- TODO: Enable tests once generic struct instantiation is supported
 
-test: push-pop-basic
+<!-- test: push-pop-basic -->
 ```maxon
 function main() int
     var arr = array<int>()
@@ -172,9 +171,11 @@ function main() int
     return sum
 end 'main'
 ```
-Expected: exitcode 60
+```exitcode
+60
+```
 
-test: count-and-isEmpty
+<!-- test: count-and-isEmpty -->
 ```maxon
 function main() int
     var arr = array<int>()
@@ -192,9 +193,11 @@ function main() int
     return result
 end 'main'
 ```
-Expected: exitcode 111
+```exitcode
+111
+```
 
-test: first-last
+<!-- test: first-last -->
 ```maxon
 function main() int
     var arr = array<int>()
@@ -212,9 +215,34 @@ function main() int
     return result
 end 'main'
 ```
-Expected: exitcode 40
+```exitcode
+40
+```
 
-test: get-bounds
+<!-- test: first-last-empty -->
+```maxon
+function main() int
+    var arr = array<int>()
+    
+    var result = 0
+    if let f = arr.first() 'f'
+        result = result + 1
+    else 'f'
+        result = result + 10
+    end 'f'
+    if let l = arr.last() 'l'
+        result = result + 1
+    else 'l'
+        result = result + 100
+    end 'l'
+    return result
+end 'main'
+```
+```exitcode
+110
+```
+
+<!-- test: get-bounds -->
 ```maxon
 function main() int
     var arr = array<int>()
@@ -235,9 +263,36 @@ function main() int
     return sum
 end 'main'
 ```
-Expected: exitcode 45
+```exitcode
+45
+```
 
-test: insert-middle
+<!-- test: get-out-of-bounds -->
+```maxon
+function main() int
+    var arr = array<int>()
+    arr.push(1)
+    arr.push(2)
+    
+    var result = 0
+    if let v = arr.get(5) 'g'
+        result = result + 1
+    else 'g'
+        result = result + 10
+    end 'g'
+    if let v = arr.get(-1) 'g'
+        result = result + 1
+    else 'g'
+        result = result + 100
+    end 'g'
+    return result
+end 'main'
+```
+```exitcode
+110
+```
+
+<!-- test: insert-middle -->
 ```maxon
 function main() int
     var arr = array<int>()
@@ -267,9 +322,92 @@ function main() int
     return result
 end 'main'
 ```
-Expected: exitcode 1111
+```exitcode
+1111
+```
 
-test: remove-middle
+<!-- test: insert-at-start -->
+```maxon
+function main() int
+    var arr = array<int>()
+    arr.push(2)
+    arr.push(3)
+    arr.insert(0, 1)
+    
+    var result = 0
+    if let v = arr.get(0) 'g'
+        if v == 1 'c'
+            result = result + 1
+        end 'c'
+    end 'g'
+    if let v = arr.get(1) 'g'
+        if v == 2 'c'
+            result = result + 10
+        end 'c'
+    end 'g'
+    if let v = arr.get(2) 'g'
+        if v == 3 'c'
+            result = result + 100
+        end 'c'
+    end 'g'
+    return result
+end 'main'
+```
+```exitcode
+111
+```
+
+<!-- test: insert-clamp-negative -->
+```maxon
+function main() int
+    var arr = array<int>()
+    arr.push(2)
+    arr.insert(-5, 1)
+    
+    var result = 0
+    if let v = arr.get(0) 'g'
+        if v == 1 'c'
+            result = result + 1
+        end 'c'
+    end 'g'
+    if let v = arr.get(1) 'g'
+        if v == 2 'c'
+            result = result + 10
+        end 'c'
+    end 'g'
+    return result
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: insert-clamp-beyond-end -->
+```maxon
+function main() int
+    var arr = array<int>()
+    arr.push(1)
+    arr.insert(100, 2)
+    
+    var result = 0
+    if let v = arr.get(0) 'g'
+        if v == 1 'c'
+            result = result + 1
+        end 'c'
+    end 'g'
+    if let v = arr.get(1) 'g'
+        if v == 2 'c'
+            result = result + 10
+        end 'c'
+    end 'g'
+    return result
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: remove-middle -->
 ```maxon
 function main() int
     var arr = array<int>()
@@ -289,9 +427,83 @@ function main() int
     return result
 end 'main'
 ```
-Expected: exitcode 102
+```exitcode
+102
+```
 
-test: clear
+<!-- test: remove-first -->
+```maxon
+function main() int
+    var arr = array<int>()
+    arr.push(10)
+    arr.push(20)
+    arr.push(30)
+    
+    var result = 0
+    if let removed = arr.remove(0) 'r'
+        result = removed
+    end 'r'
+    
+    if let first = arr.get(0) 'g'
+        result = result + first
+    end 'g'
+    
+    return result
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: remove-last -->
+```maxon
+function main() int
+    var arr = array<int>()
+    arr.push(10)
+    arr.push(20)
+    arr.push(30)
+    
+    var result = 0
+    if let removed = arr.remove(2) 'r'
+        result = removed
+    end 'r'
+    
+    if arr.count() == 2 'c'
+        result = result + 1
+    end 'c'
+    
+    return result
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: remove-out-of-bounds -->
+```maxon
+function main() int
+    var arr = array<int>()
+    arr.push(1)
+    
+    var result = 0
+    if let v = arr.remove(5) 'r'
+        result = result + 1
+    else 'r'
+        result = result + 10
+    end 'r'
+    if let v = arr.remove(-1) 'r'
+        result = result + 1
+    else 'r'
+        result = result + 100
+    end 'r'
+    return result
+end 'main'
+```
+```exitcode
+110
+```
+
+<!-- test: clear -->
 ```maxon
 function main() int
     var arr = array<int>()
@@ -310,9 +522,31 @@ function main() int
     return result
 end 'main'
 ```
-Expected: exitcode 11
+```exitcode
+11
+```
 
-test: iteration
+<!-- test: reserve-capacity -->
+```maxon
+function main() int
+    var arr = array<int>()
+    arr.reserve(100)
+    
+    var result = 0
+    if arr.capacity() >= 100 'cap'
+        result = result + 1
+    end 'cap'
+    if arr.count() == 0 'cnt'
+        result = result + 10
+    end 'cnt'
+    return result
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: iteration -->
 ```maxon
 function main() int
     var arr = array<int>()
@@ -327,5 +561,70 @@ function main() int
     return sum
 end 'main'
 ```
-Expected: exitcode 60
--->
+```exitcode
+60
+```
+
+<!-- test: pop-empty -->
+```maxon
+function main() int
+    var arr = array<int>()
+    
+    var result = 0
+    if let v = arr.pop() 'p'
+        result = result + 1
+    else 'p'
+        result = result + 10
+    end 'p'
+    return result
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: set-element -->
+```maxon
+function main() int
+    var arr = array<int>()
+    arr.push(1)
+    arr.push(2)
+    arr.push(3)
+    arr.set(1, 99)
+    
+    var result = 0
+    if let v = arr.get(1) 'g'
+        result = v
+    end 'g'
+    return result
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: grow-capacity -->
+```maxon
+function main() int
+    var arr = array<int>()
+    var i = 0
+    while i < 20 'push'
+        arr.push(i)
+        i = i + 1
+    end 'push'
+    
+    var result = 0
+    if arr.count() == 20 'cnt'
+        result = result + 1
+    end 'cnt'
+    if arr.capacity() >= 20 'cap'
+        result = result + 10
+    end 'cap'
+    return result
+end 'main'
+```
+```exitcode
+11
+```
+
+End of disabled tests -->

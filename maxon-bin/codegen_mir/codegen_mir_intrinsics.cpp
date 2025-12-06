@@ -239,8 +239,8 @@ MIRCodeGenerator::ArrayFieldInfo MIRCodeGenerator::getArrayFieldInfo(ExprAST *ar
 
 						info.isStructField = true;
 						info.fieldIndex = static_cast<int>(i);
-						info.dataPtr = fieldPtr; // This is a pointer to the array field (which itself holds a data pointer)
-						info.lengthAlloca = nullptr;  // Struct fields don't have hidden length allocas
+						info.dataPtr = fieldPtr;	   // This is a pointer to the array field (which itself holds a data pointer)
+						info.lengthAlloca = nullptr;   // Struct fields don't have hidden length allocas
 						info.capacityAlloca = nullptr; // Struct fields don't have hidden capacity allocas
 
 						if (maxon::TypeConversion::isArrayType(fieldType)) {

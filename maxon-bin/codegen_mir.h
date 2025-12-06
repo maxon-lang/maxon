@@ -275,13 +275,13 @@ class MIRCodeGenerator {
 
 	// Array field info for intrinsics - handles both regular variables and struct fields
 	struct ArrayFieldInfo {
-		mir::MIRValue *dataPtr;       // Pointer to array data (or alloca for heap arrays)
-		mir::MIRValue *lengthAlloca;  // Hidden length alloca (may be null for struct fields)
+		mir::MIRValue *dataPtr;		   // Pointer to array data (or alloca for heap arrays)
+		mir::MIRValue *lengthAlloca;   // Hidden length alloca (may be null for struct fields)
 		mir::MIRValue *capacityAlloca; // Hidden capacity alloca (may be null for struct fields)
-		std::string elementType;      // Element type string (e.g., "int", "string")
-		bool isStackArray;            // True if stack-allocated array
-		bool isStructField;           // True if this is a struct field access
-		int fieldIndex;               // Field index if isStructField is true
+		std::string elementType;	   // Element type string (e.g., "int", "string")
+		bool isStackArray;			   // True if stack-allocated array
+		bool isStructField;			   // True if this is a struct field access
+		int fieldIndex;				   // Field index if isStructField is true
 	};
 	ArrayFieldInfo getArrayFieldInfo(ExprAST *arrayArg, int line, int column);
 
