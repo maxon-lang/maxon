@@ -436,8 +436,37 @@ std::vector<CompletionItem> CompletionProvider::getQualifiedNameCompletions(
 
 	// Handle different depths of stdlib path
 	if (pathComponents.size() == 1) {
-		// "stdlib." - return top-level modules (fmt, sys, collections, math, string, iter)
-		static const std::vector<std::string> topModules = {"fmt", "sys", "collections", "math", "string", "iter"};
+		// "stdlib." - return top-level modules derived from stdlib symbols
+		std::set<std::string> topModules;
+
+		// Extract top-level module names from symbol file paths
+		auto extractTopModule = [&topModules](const std::string &filePath) {
+			size_t stdlibPos = filePath.find("stdlib");
+			if (stdlibPos == std::string::npos)
+				return;
+			std::string afterStdlib = filePath.substr(stdlibPos + 7); // Skip "stdlib/" or "stdlib\"
+			// Find the first path separator
+			size_t firstSep = afterStdlib.find_first_of("/\\");
+			if (firstSep != std::string::npos) {
+				// Has subdirectory - extract module name
+				topModules.insert(afterStdlib.substr(0, firstSep));
+			}
+			// Files directly in stdlib (like interfaces.maxon) are not modules
+		};
+
+		for (const auto &func : stdlib.functions) {
+			extractTopModule(func.filePath);
+		}
+		for (const auto &structSym : stdlib.structs) {
+			extractTopModule(structSym.filePath);
+		}
+		for (const auto &enumSym : stdlib.enums) {
+			extractTopModule(enumSym.filePath);
+		}
+		for (const auto &ifaceSym : stdlib.interfaces) {
+			extractTopModule(ifaceSym.filePath);
+		}
+
 		for (const auto &mod : topModules) {
 			if (prefix.empty() || matchesPrefix(mod, prefix)) {
 				CompletionItem item;
@@ -450,15 +479,44 @@ std::vector<CompletionItem> CompletionProvider::getQualifiedNameCompletions(
 			}
 		}
 	} else if (pathComponents.size() == 2) {
-		// "stdlib.fmt." - return sub-modules within fmt
+		// "stdlib.fmt." - return sub-modules within the specified module
 		const std::string &module = pathComponents[1];
 
-		// Define sub-modules for each top-level module
-		std::vector<std::string> subModules;
-		if (module == "fmt") {
-			subModules = {"integer", "float"};
+		// Derive sub-modules from stdlib symbols by checking for files in subdirectories
+		std::set<std::string> subModules;
+
+		auto extractSubModule = [&subModules, &module](const std::string &filePath) {
+			size_t stdlibPos = filePath.find("stdlib");
+			if (stdlibPos == std::string::npos)
+				return;
+			std::string afterStdlib = filePath.substr(stdlibPos + 7); // Skip "stdlib/" or "stdlib\"
+			size_t firstSep = afterStdlib.find_first_of("/\\");
+			if (firstSep == std::string::npos)
+				return;
+			std::string fileModule = afterStdlib.substr(0, firstSep);
+			if (fileModule != module)
+				return;
+			// Check if there's a subdirectory
+			std::string rest = afterStdlib.substr(firstSep + 1);
+			size_t secondSep = rest.find_first_of("/\\");
+			if (secondSep != std::string::npos) {
+				// Has subdirectory - extract sub-module name
+				subModules.insert(rest.substr(0, secondSep));
+			}
+		};
+
+		for (const auto &func : stdlib.functions) {
+			extractSubModule(func.filePath);
 		}
-		// Add more modules as needed
+		for (const auto &structSym : stdlib.structs) {
+			extractSubModule(structSym.filePath);
+		}
+		for (const auto &enumSym : stdlib.enums) {
+			extractSubModule(enumSym.filePath);
+		}
+		for (const auto &ifaceSym : stdlib.interfaces) {
+			extractSubModule(ifaceSym.filePath);
+		}
 
 		for (const auto &subMod : subModules) {
 			if (prefix.empty() || matchesPrefix(subMod, prefix)) {
