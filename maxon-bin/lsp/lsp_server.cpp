@@ -930,7 +930,7 @@ json LSPServer::handleSemanticTokensFull(const json &params) {
 	const AnalysisCache *cache = documentManager_.getAnalysis(uri);
 
 	SemanticTokensProvider provider;
-	auto result = provider.getSemanticTokens(*doc, cache);
+	auto result = provider.getSemanticTokens(*doc, cache, stdlib_);
 
 	if (result.has_value()) {
 		return lsp::toJson(result.value());
