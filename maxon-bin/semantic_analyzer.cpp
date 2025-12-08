@@ -984,27 +984,30 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 	}
 
 	// Helper lambda to resolve associated types in a type string
-	auto resolveType = [&](const std::string &type) -> std::string {
+	std::function<std::string(const std::string &)> resolveType = [&](const std::string &type) -> std::string {
 		if (type == "Self") {
 			return structName;
+		}
+
+		// Handle function types (e.g., "fn(Element)->Element" -> "fn(int)->int")
+		if (type.rfind("fn(", 0) == 0) {
+			// Parse function type: fn(ParamType)->ReturnType
+			size_t arrowPos = type.find(")->");
+			if (arrowPos != std::string::npos) {
+				std::string paramPart = type.substr(3, arrowPos - 3); // extract between "fn(" and ")->"
+				std::string returnType = type.substr(arrowPos + 3);	  // extract after ")->"
+				// Resolve the param and return types
+				std::string resolvedParam = resolveType(paramPart);
+				std::string resolvedReturn = resolveType(returnType);
+				return "fn(" + resolvedParam + ")->" + resolvedReturn;
+			}
 		}
 
 		// Handle optional types (e.g., "Element or nil" -> "int or nil")
 		if (maxon::TypeConversion::isOptionalType(type)) {
 			std::string baseType = maxon::TypeConversion::unwrapOptionalType(type);
 			// Recursively resolve the base type
-			std::string resolvedBase = [&]() -> std::string {
-				if (baseType == "Self") {
-					return structName;
-				}
-				if (typeAssignments) {
-					auto assignIt = typeAssignments->find(baseType);
-					if (assignIt != typeAssignments->end()) {
-						return assignIt->second;
-					}
-				}
-				return baseType;
-			}();
+			std::string resolvedBase = resolveType(baseType);
 			return maxon::TypeConversion::makeOptionalType(resolvedBase);
 		}
 
@@ -1194,6 +1197,32 @@ void SemanticAnalyzer::registerMapMethods(const std::string &mapType, const std:
 
 	// capacity(map) -> int
 	functions.emplace(mapType + ".capacity", FunctionInfo(mapType + ".capacity", "int", {FunctionParameter("self", mapType)}));
+}
+
+void SemanticAnalyzer::registerArrayMethods(const std::string &arrayType, const std::string &elemType) {
+	// Only register methods once per array type
+	// Use qualified method names: arrayType.methodName (e.g., "array<int>.count")
+	std::string countMethodName = arrayType + ".count";
+	if (functions.find(countMethodName) != functions.end()) {
+		return; // Already registered for this array type
+	}
+
+	std::string optionalElemType = maxon::TypeConversion::makeOptionalType(elemType);
+
+	// Register array methods with qualified names for proper method resolution
+	// Collection interface methods:
+	// count() -> int
+	functions.emplace(arrayType + ".count", FunctionInfo(arrayType + ".count", "int", {FunctionParameter("self", arrayType)}));
+
+	// get(index) -> Element or nil
+	functions.emplace(arrayType + ".get", FunctionInfo(arrayType + ".get", optionalElemType, {FunctionParameter("self", arrayType), FunctionParameter("index", "int")}));
+
+	// set(index, value) -> Self (returns array type for chaining)
+	functions.emplace(arrayType + ".set", FunctionInfo(arrayType + ".set", arrayType, {FunctionParameter("self", arrayType), FunctionParameter("index", "int"), FunctionParameter("value", elemType)}));
+
+	// map(transform) -> Self - handled as intrinsic, but register for type checking
+	std::string funcType = "fn(" + elemType + ")->" + elemType;
+	functions.emplace(arrayType + ".map", FunctionInfo(arrayType + ".map", arrayType, {FunctionParameter("self", arrayType), FunctionParameter("transform", funcType)}));
 }
 
 void SemanticAnalyzer::instantiateGenericStructMethods(const std::string &templateName,

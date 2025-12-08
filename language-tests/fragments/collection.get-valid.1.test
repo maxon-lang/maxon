@@ -1,0 +1,238 @@
+// Test: collection.get-valid.1
+function main() int
+    var arr = [10, 20, 30]
+    var sum = 0
+    if let val = arr.get(0) 'get0'
+        sum = sum + val
+    end 'get0'
+    if let val = arr.get(2) 'get2'
+        sum = sum + val
+    end 'get2'
+    return sum
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 79
+
+%__ManagedArrayData_int = type { ptr, i32, i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca [3 x i32]
+  %1 = alloca %__ManagedArrayData_int
+  %2 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  store ptr %0, ptr %2
+  %3 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  store i32 3, ptr %3
+  %4 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 2
+  store i32 3, ptr %4
+  %5 = getelementptr i32, ptr %0, i64 0, i64 0
+  store i32 10, ptr %5
+  %6 = getelementptr i32, ptr %0, i64 0, i64 1
+  store i32 20, ptr %6
+  %7 = getelementptr i32, ptr %0, i64 0, i64 2
+  store i32 30, ptr %7
+  %9 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  %10 = load i32, ptr %9
+  %11 = alloca Optional<i32>
+  %13 = icmp slt i32 0, %10
+  %14 = and i1 1, %13
+  br i1 %14, label %get.inbounds1, label %get.oob2
+get.inbounds1:
+  %15 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  %16 = load ptr, ptr %15
+  %17 = sext i32 0 to i64
+  %18 = getelementptr i32, ptr %16, i64 0, i64 %17
+  %19 = load i32, ptr %18
+  %20 = getelementptr Optional<i32>, ptr %11, i32 0, i32 0
+  store i1 1, ptr %20
+  %21 = getelementptr Optional<i32>, ptr %11, i32 0, i32 1
+  store i32 %19, ptr %21
+  br label %get.merge3
+get.oob2:
+  %22 = getelementptr Optional<i32>, ptr %11, i32 0, i32 0
+  store i1 0, ptr %22
+  br label %get.merge3
+get.merge3:
+  %23 = load Optional<i32>, ptr %11
+  %24 = alloca Optional<i32>
+  store Optional<i32> %23, ptr %24
+  %25 = getelementptr Optional<i32>, ptr %24, i32 0, i32 0
+  %26 = load i8, ptr %25
+  %27 = icmp eq i8 %26, 1
+  br i1 %27, label %iflet.then4, label %iflet.after5
+iflet.then4:
+  %28 = getelementptr Optional<i32>, ptr %24, i32 0, i32 1
+  %29 = load i32, ptr %28
+  br label %iflet.after5
+iflet.after5:
+  %60 = phi i32 [ 0, %get.merge3 ], [ %29, %iflet.then4 ]
+  %34 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  %35 = load i32, ptr %34
+  %36 = alloca Optional<i32>
+  %38 = icmp slt i32 2, %35
+  %39 = and i1 1, %38
+  br i1 %39, label %get.inbounds6, label %get.oob7
+get.inbounds6:
+  %40 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  %41 = load ptr, ptr %40
+  %42 = sext i32 2 to i64
+  %43 = getelementptr i32, ptr %41, i64 0, i64 %42
+  %44 = load i32, ptr %43
+  %45 = getelementptr Optional<i32>, ptr %36, i32 0, i32 0
+  store i1 1, ptr %45
+  %46 = getelementptr Optional<i32>, ptr %36, i32 0, i32 1
+  store i32 %44, ptr %46
+  br label %get.merge8
+get.oob7:
+  %47 = getelementptr Optional<i32>, ptr %36, i32 0, i32 0
+  store i1 0, ptr %47
+  br label %get.merge8
+get.merge8:
+  %48 = load Optional<i32>, ptr %36
+  %49 = alloca Optional<i32>
+  store Optional<i32> %48, ptr %49
+  %50 = getelementptr Optional<i32>, ptr %49, i32 0, i32 0
+  %51 = load i8, ptr %50
+  %52 = icmp eq i8 %51, 1
+  br i1 %52, label %iflet.then9, label %iflet.after10
+iflet.then9:
+  %53 = getelementptr Optional<i32>, ptr %49, i32 0, i32 1
+  %54 = load i32, ptr %53
+  %58 = add i32 %60, %54
+  br label %iflet.after10
+iflet.after10:
+  %61 = phi i32 [ %60, %get.merge8 ], [ %58, %iflet.then9 ]
+  ret i32 %61
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 93
+
+%__ManagedArrayData_int = type { ptr, i32, i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca [3 x i32]
+  %1 = alloca %__ManagedArrayData_int
+  %2 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  store ptr %0, ptr %2
+  %3 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  store i32 3, ptr %3
+  %4 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 2
+  store i32 3, ptr %4
+  %5 = getelementptr i32, ptr %0, i64 0, i64 0
+  store i32 10, ptr %5
+  %6 = getelementptr i32, ptr %0, i64 0, i64 1
+  store i32 20, ptr %6
+  %7 = getelementptr i32, ptr %0, i64 0, i64 2
+  store i32 30, ptr %7
+  %8 = alloca i32
+  store i32 0, ptr %8
+  %9 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  %10 = load i32, ptr %9
+  %11 = alloca Optional<i32>
+  %12 = icmp sge i32 0, 0
+  %13 = icmp slt i32 0, %10
+  %14 = and i1 %12, %13
+  br i1 %14, label %get.inbounds1, label %get.oob2
+get.inbounds1:
+  %15 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  %16 = load ptr, ptr %15
+  %17 = sext i32 0 to i64
+  %18 = getelementptr i32, ptr %16, i64 0, i64 %17
+  %19 = load i32, ptr %18
+  %20 = getelementptr Optional<i32>, ptr %11, i32 0, i32 0
+  store i1 1, ptr %20
+  %21 = getelementptr Optional<i32>, ptr %11, i32 0, i32 1
+  store i32 %19, ptr %21
+  br label %get.merge3
+get.oob2:
+  %22 = getelementptr Optional<i32>, ptr %11, i32 0, i32 0
+  store i1 0, ptr %22
+  br label %get.merge3
+get.merge3:
+  %23 = load Optional<i32>, ptr %11
+  %24 = alloca Optional<i32>
+  store Optional<i32> %23, ptr %24
+  %25 = getelementptr Optional<i32>, ptr %24, i32 0, i32 0
+  %26 = load i8, ptr %25
+  %27 = icmp eq i8 %26, 1
+  br i1 %27, label %iflet.then4, label %iflet.after5
+iflet.then4:
+  %28 = getelementptr Optional<i32>, ptr %24, i32 0, i32 1
+  %29 = load i32, ptr %28
+  %30 = alloca i32
+  store i32 %29, ptr %30
+  %31 = load i32, ptr %8
+  %32 = load i32, ptr %30
+  %33 = add i32 %31, %32
+  store i32 %33, ptr %8
+  br label %iflet.after5
+iflet.after5:
+  %34 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  %35 = load i32, ptr %34
+  %36 = alloca Optional<i32>
+  %37 = icmp sge i32 2, 0
+  %38 = icmp slt i32 2, %35
+  %39 = and i1 %37, %38
+  br i1 %39, label %get.inbounds6, label %get.oob7
+get.inbounds6:
+  %40 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  %41 = load ptr, ptr %40
+  %42 = sext i32 2 to i64
+  %43 = getelementptr i32, ptr %41, i64 0, i64 %42
+  %44 = load i32, ptr %43
+  %45 = getelementptr Optional<i32>, ptr %36, i32 0, i32 0
+  store i1 1, ptr %45
+  %46 = getelementptr Optional<i32>, ptr %36, i32 0, i32 1
+  store i32 %44, ptr %46
+  br label %get.merge8
+get.oob7:
+  %47 = getelementptr Optional<i32>, ptr %36, i32 0, i32 0
+  store i1 0, ptr %47
+  br label %get.merge8
+get.merge8:
+  %48 = load Optional<i32>, ptr %36
+  %49 = alloca Optional<i32>
+  store Optional<i32> %48, ptr %49
+  %50 = getelementptr Optional<i32>, ptr %49, i32 0, i32 0
+  %51 = load i8, ptr %50
+  %52 = icmp eq i8 %51, 1
+  br i1 %52, label %iflet.then9, label %iflet.after10
+iflet.then9:
+  %53 = getelementptr Optional<i32>, ptr %49, i32 0, i32 1
+  %54 = load i32, ptr %53
+  %55 = alloca i32
+  store i32 %54, ptr %55
+  %56 = load i32, ptr %8
+  %57 = load i32, ptr %55
+  %58 = add i32 %56, %57
+  store i32 %58, ptr %8
+  br label %iflet.after10
+iflet.after10:
+  %59 = load i32, ptr %8
+  ret i32 %59
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 40

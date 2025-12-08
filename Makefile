@@ -238,7 +238,7 @@ fragments: compiler ffi-test-lib
 	@$(MAXON) test-fragments
 
 # Run all test suites
-test: compiler backend-test-build extension-build debugger-test ffi-test-lib
+test: compiler backend-test-build extension-build debugger-test-build ffi-test-lib
 	@bash scripts/run-all-tests.sh
 
 # Build debugger integration tests
@@ -258,7 +258,7 @@ debugger-test-build: compiler debugger-tests/build/build.ninja
 # Run debugger integration tests
 debugger-test: debugger-test-build
 	@echo Running debugger integration tests...
-	cd debugger-tests/bin && ./debugger-test-runner$(EXE_EXT); \
+	cd debugger-tests/bin && ./debugger-test-runner$(EXE_EXT)
 
 # Clean build artifacts
 clean:

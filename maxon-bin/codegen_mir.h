@@ -210,6 +210,9 @@ class MIRCodeGenerator {
 	mir::MIRValue *lastMapResultLength = nullptr;	 // Length of last map() result
 	mir::MIRValue *lastMapResultCapacity = nullptr; // Capacity of last map() result
 
+	// Array Collection methods: count, get, set, map
+	mir::MIRValue *generateArrayCollectionMethod(CallExprAST *callExpr, const std::string &methodName);
+
 	// Map method generation (insert, get, contains, remove, count, capacity)
 	bool isMapMethodCall(const std::string &callee);
 	mir::MIRValue *generateMapMethod(CallExprAST *callExpr);

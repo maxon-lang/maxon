@@ -178,5 +178,5 @@ int main(int argc, char *argv[]) {
 	// Print summary
 	runner.printSummary();
 
-	return 0;
+	return runner.getFailedCount() > 0 ? 1 : 0;
 }

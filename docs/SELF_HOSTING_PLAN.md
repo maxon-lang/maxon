@@ -46,7 +46,7 @@ MIR Optimization → Register Allocation → x86-64 Code Generation → PE/ELF B
 
 #### Standard Library
 - Math functions: sqrt, abs, sin, cos, tan, exp, log, pow, floor, ceil, round, trunc
-- I/O: print, print_float
+- I/O: print, printFloat
 - Formatting: format_int, format_float
 - **Missing:** File I/O, string manipulation, dynamic collections
 

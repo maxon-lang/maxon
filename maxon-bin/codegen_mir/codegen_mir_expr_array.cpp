@@ -370,3 +370,134 @@ mir::MIRValue *MIRCodeGenerator::generateMapIntrinsic(CallExprAST *callExpr) {
 
 	return resultArray;
 }
+
+//==============================================================================
+// Array Collection Methods: count, get, set, map
+//==============================================================================
+
+mir::MIRValue *MIRCodeGenerator::generateArrayCollectionMethod(CallExprAST *callExpr, const std::string &methodName) {
+	// All Collection methods take the array as the first argument (self)
+	if (callExpr->args.empty()) {
+		reportError("Collection method '" + methodName + "' requires array argument",
+					callExpr->line, callExpr->column);
+	}
+
+	// Get the array variable
+	auto *arrVar = dynamic_cast<VariableExprAST *>(callExpr->args[0].get());
+	if (!arrVar) {
+		reportError("Collection method '" + methodName + "' requires a variable as first argument",
+					callExpr->line, callExpr->column);
+	}
+
+	std::string varName = arrVar->name;
+	mir::MIRValue *arrAlloca = namedValues[varName];
+	if (!arrAlloca) {
+		reportError("Array variable '" + varName + "' not found",
+					callExpr->line, callExpr->column);
+	}
+
+	// Get element type from array type
+	std::string arrType = inferExprType(callExpr->args[0].get());
+	std::string elemType = maxon::TypeConversion::getArrayElementType(arrType);
+	mir::MIRType *elemMIRType = getTypeFromString(elemType);
+	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemType);
+
+	if (methodName == "count") {
+		// count() -> int: return the length field
+		mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, arrAlloca, 1, varName + "._len");
+		return builder->createLoad(mir::MIRType::getInt32(), lenField, "count");
+
+	} else if (methodName == "get") {
+		// get(index) -> Element or nil: bounds-checked access
+		if (callExpr->args.size() != 2) {
+			reportError("get() requires index argument", callExpr->line, callExpr->column);
+		}
+
+		mir::MIRValue *index = generateExpr(callExpr->args[1].get());
+		mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, arrAlloca, 1, varName + "._len");
+		mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt32(), lenField, "length");
+
+		// Create the result optional struct type: { hasValue i1, value Element }
+		mir::MIRType *optionalType = mir::MIRType::getOptional(elemMIRType);
+		mir::MIRValue *resultAlloca = builder->createAlloca(optionalType, "get.result");
+
+		// Create bounds check: index >= 0 && index < length
+		mir::MIRFunction *currentFunc = builder->getFunction();
+		mir::MIRBasicBlock *inBoundsBlock = currentFunc->createBasicBlock("get.inbounds");
+		mir::MIRBasicBlock *outOfBoundsBlock = currentFunc->createBasicBlock("get.oob");
+		mir::MIRBasicBlock *mergeBlock = currentFunc->createBasicBlock("get.merge");
+
+		mir::MIRValue *zero = builder->getInt32(0);
+		mir::MIRValue *geZero = builder->createICmpSGE(index, zero, "ge.zero");
+		mir::MIRValue *ltLen = builder->createICmpSLT(index, length, "lt.len");
+		mir::MIRValue *inBounds = builder->createAnd(geZero, ltLen, "inbounds");
+		builder->createCondBr(inBounds, inBoundsBlock, outOfBoundsBlock);
+
+		// In bounds: load and return value
+		builder->setInsertPoint(inBoundsBlock);
+		mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, arrAlloca, 0, varName + "._buffer");
+		mir::MIRValue *bufferPtr = builder->createLoad(mir::MIRType::getPtr(), bufferField, "buffer");
+		mir::MIRValue *idx64 = builder->createSExt(index, mir::MIRType::getInt64(), "idx64");
+		mir::MIRValue *elemPtr = builder->createArrayGEP(elemMIRType, bufferPtr, idx64, "elem.ptr");
+		mir::MIRValue *elemValue = builder->createLoad(elemMIRType, elemPtr, "elem");
+
+		// Store hasValue = true and value
+		mir::MIRValue *hasValueField = builder->createStructGEP(optionalType, resultAlloca, 0, "hasValue.ptr");
+		builder->createStore(builder->getInt1(true), hasValueField);
+		mir::MIRValue *valueField = builder->createStructGEP(optionalType, resultAlloca, 1, "value.ptr");
+		builder->createStore(elemValue, valueField);
+		builder->createBr(mergeBlock);
+
+		// Out of bounds: return nil
+		builder->setInsertPoint(outOfBoundsBlock);
+		mir::MIRValue *hasValueFieldOob = builder->createStructGEP(optionalType, resultAlloca, 0, "hasValue.ptr.oob");
+		builder->createStore(builder->getInt1(false), hasValueFieldOob);
+		builder->createBr(mergeBlock);
+
+		// Merge and return
+		builder->setInsertPoint(mergeBlock);
+		return builder->createLoad(optionalType, resultAlloca, "get.optional");
+
+	} else if (methodName == "set") {
+		// set(index, value) -> Self: bounds-checked set
+		if (callExpr->args.size() != 3) {
+			reportError("set() requires index and value arguments", callExpr->line, callExpr->column);
+		}
+
+		mir::MIRValue *index = generateExpr(callExpr->args[1].get());
+		mir::MIRValue *value = generateExpr(callExpr->args[2].get());
+		mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, arrAlloca, 1, varName + "._len");
+		mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt32(), lenField, "length");
+
+		// Create bounds check
+		mir::MIRFunction *currentFunc = builder->getFunction();
+		mir::MIRBasicBlock *inBoundsBlock = currentFunc->createBasicBlock("set.inbounds");
+		mir::MIRBasicBlock *mergeBlock = currentFunc->createBasicBlock("set.merge");
+
+		mir::MIRValue *zero = builder->getInt32(0);
+		mir::MIRValue *geZero = builder->createICmpSGE(index, zero, "ge.zero");
+		mir::MIRValue *ltLen = builder->createICmpSLT(index, length, "lt.len");
+		mir::MIRValue *inBounds = builder->createAnd(geZero, ltLen, "inbounds");
+		builder->createCondBr(inBounds, inBoundsBlock, mergeBlock);
+
+		// In bounds: store value
+		builder->setInsertPoint(inBoundsBlock);
+		mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, arrAlloca, 0, varName + "._buffer");
+		mir::MIRValue *bufferPtr = builder->createLoad(mir::MIRType::getPtr(), bufferField, "buffer");
+		mir::MIRValue *idx64 = builder->createSExt(index, mir::MIRType::getInt64(), "idx64");
+		mir::MIRValue *elemPtr = builder->createArrayGEP(elemMIRType, bufferPtr, idx64, "elem.ptr");
+		builder->createStore(value, elemPtr);
+		builder->createBr(mergeBlock);
+
+		// Merge and return self (the array)
+		builder->setInsertPoint(mergeBlock);
+		return builder->createLoad(managedArrayType, arrAlloca, "set.self");
+
+	} else if (methodName == "map") {
+		// map(transform) -> Self: delegate to existing map intrinsic
+		return generateMapIntrinsic(callExpr);
+	}
+
+	reportError("Unknown array Collection method: " + methodName, callExpr->line, callExpr->column);
+	return nullptr;
+}

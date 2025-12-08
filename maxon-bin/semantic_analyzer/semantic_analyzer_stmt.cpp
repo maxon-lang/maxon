@@ -42,6 +42,13 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			actualType = maxon::TypeConversion::makeManagedArrayType(elemType);
 		}
 
+		// For managed arrays, register array methods with the element type
+		if (maxon::TypeConversion::isManagedArrayType(actualType)) {
+			std::string elemType = maxon::TypeConversion::getArrayElementType(actualType);
+			// Register methods for the actual internal type (_ManagedArray<T>)
+			registerArrayMethods(actualType, elemType);
+		}
+
 		// Declare variable
 		declareVariable(varDecl->name, actualType, false, stmt->line, stmt->column);
 

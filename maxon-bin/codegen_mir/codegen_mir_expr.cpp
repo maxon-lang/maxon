@@ -1351,6 +1351,17 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		// Map method calls are now handled through monomorphization - use resolvedCallee if available
 		std::string effectiveCallee = callExpr->resolvedCallee.empty() ? callExpr->callee : callExpr->resolvedCallee;
 
+		// Handle array Collection methods: _ManagedArray<T>.count, .get, .set, .map
+		if (effectiveCallee.find("_ManagedArray<") == 0) {
+			size_t dotPos = effectiveCallee.rfind(".");
+			if (dotPos != std::string::npos) {
+				std::string methodName = effectiveCallee.substr(dotPos + 1);
+				if (methodName == "count" || methodName == "get" || methodName == "set" || methodName == "map") {
+					return generateArrayCollectionMethod(callExpr, methodName);
+				}
+			}
+		}
+
 		// Resolve primitive type methods when called on typed arguments
 		// This handles cases like `key.hash()` where key is a type parameter bound to int
 		// Also handles `_keys[index].equals(key)` where _keys is []KeyType

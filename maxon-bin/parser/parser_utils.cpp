@@ -303,9 +303,9 @@ std::string Parser::parseQualifiedName(const std::string &context) {
 // - Primitive types: int, float, bool, byte
 // - Struct types: MyStruct, pkg.MyStruct
 // - Array types: array of T, array of N T, array of array of T
-// - Function types: (T1, T2) -> R
+// - Function types: (T1, T2) R
 std::string Parser::parseTypeString(const std::string &context) {
-	// Check for function type: (T1, T2, ...) -> R
+	// Check for function type: (T1, T2, ...) R
 	if (check(TokenType::LPAREN)) {
 		advance(); // consume '('
 
@@ -317,8 +317,7 @@ std::string Parser::parseTypeString(const std::string &context) {
 		}
 		expectAdvance(TokenType::RPAREN, "Expected ')' in function type");
 
-		expectAdvance(TokenType::ARROW, "Expected '->' in function type");
-
+		// Return type follows directly after closing paren (like function declarations)
 		std::string returnType = parseTypeString("function return type");
 
 		// Build function type string: fn(T1,T2)->R

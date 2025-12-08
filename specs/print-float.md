@@ -12,7 +12,7 @@ category: stdlib
 The `printFloat()` function outputs float values to stdout with specified precision.
 
 Implementation:
-- Defined in `stdlib/sys/print_float.maxon`
+- Defined in `stdlib/sys/printFloat.maxon`
 - Signature: `printFloat(value float, precision int) int`
 - Uses `formatFloatArray()` from `stdlib/fmt/float.maxon` to convert float to string
 - Writes to stdout using `write_stdout()` from `maxon-runtime`

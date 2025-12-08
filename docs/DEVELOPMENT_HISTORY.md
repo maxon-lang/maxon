@@ -76,7 +76,7 @@ Key commits:
 Building out testing infrastructure and runtime capabilities:
 
 - **Runtime library** - memset and __chkstk implementations
-- **print_float function** - Floating-point output
+- **printFloat function** - Floating-point output
 - **Parallel test execution** - Faster test runs
 - **Dual IR generation** - Test fragment improvements
 - **Modern LLVM optimization** - Updated optimization passes
@@ -95,7 +95,7 @@ Introduction of composite types and LSP enhancements:
 - **N-body example** - Physics simulation benchmark
 - **Hover support** - Type information on hover
 - **Linked editing** - Synchronized renaming
-- **print_float precision** - Formatted float output
+- **printFloat precision** - Formatted float output
 - **Dead code elimination** - Optimization pass
 - **Namespace separator** - Syntax refinement (:: separator)
 
@@ -250,7 +250,7 @@ Key commits:
 | Date | Feature | Commit |
 |------|---------|--------|
 | Nov 11 | print() | `56e00ab` |
-| Nov 18 | print_float() | `ceeb7dc` |
+| Nov 18 | printFloat() | `ceeb7dc` |
 | Nov 19 | Math functions | `82b4680` |
 | Nov 20 | Trigonometry (sin, cos, tan) | Various |
 | Nov 21 | log2() | `e0659c5` |

@@ -32,21 +32,28 @@ echo -e "${CYAN}============================================================${NC
 echo ""
 
 # Test 1: Compiler self-tests
-echo -e "${YELLOW}[1/5] Running compiler self-tests...${NC}"
+echo -e "${YELLOW}[1/6] Running compiler self-tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 $MAXON self-test
 results[self-tests]=$?
 echo ""
 
 # Test 2: Backend MIR tests
-echo -e "${YELLOW}[2/5] Running backend MIR tests...${NC}"
+echo -e "${YELLOW}[2/6] Running backend MIR tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 ./backend-tests/runner/build/backend-test-runner${EXE_EXT} -v
 results[backend-tests]=$?
 echo ""
 
-# Test 3: Language fragment tests
-echo -e "${YELLOW}[3/5] Running language fragment tests...${NC}"
+# Test 3: Debugger integration tests
+echo -e "${YELLOW}[3/6] Running debugger integration tests...${NC}"
+echo -e "${YELLOW}------------------------------------------------------------${NC}"
+./debugger-tests/bin/debugger-test-runner${EXE_EXT}
+results[debugger-tests]=$?
+echo ""
+
+# Test 4: Language fragment tests
+echo -e "${YELLOW}[4/6] Running language fragment tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 $MAXON extract-specs >/dev/null
 $MAXON regen-fragments >/dev/null
@@ -54,8 +61,8 @@ $MAXON test-fragments
 results[fragment-tests]=$?
 echo ""
 
-# Test 4: LSP C++ unit tests
-echo -e "${YELLOW}[4/5] Running LSP C++ unit tests...${NC}"
+# Test 5: LSP C++ unit tests
+echo -e "${YELLOW}[5/6] Running LSP C++ unit tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 mkdir -p maxon-bin/lsp/tests/build
 pushd maxon-bin/lsp/tests/build > /dev/null
@@ -73,8 +80,8 @@ results[lsp-tests]=$?
 popd > /dev/null
 echo ""
 
-# Test 5: VS Code extension tests
-echo -e "${YELLOW}[5/5] Running VS Code extension tests...${NC}"
+# Test 6: VS Code extension tests
+echo -e "${YELLOW}[6/6] Running VS Code extension tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 pushd vscode-extension > /dev/null
 npm run test
@@ -100,6 +107,13 @@ if [ "${results[backend-tests]}" -ne 0 ]; then
     ((failed++))
 else
     echo -e "${GREEN}[PASSED] Backend MIR tests${NC}"
+fi
+
+if [ "${results[debugger-tests]}" -ne 0 ]; then
+    echo -e "${RED}[FAILED] Debugger integration tests${NC}"
+    ((failed++))
+else
+    echo -e "${GREEN}[PASSED] Debugger integration tests${NC}"
 fi
 
 if [ "${results[fragment-tests]}" -ne 0 ]; then

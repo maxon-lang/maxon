@@ -366,6 +366,7 @@ class SemanticAnalyzer {
 	void checkUnusedVariables();
 	void checkInterfaceConformance(const std::string &structName, const std::vector<std::string> &conformsTo, int line, int column);
 	void registerMapMethods(const std::string &mapType, const std::string &keyType, const std::string &valueType);
+	void registerArrayMethods(const std::string &arrayType, const std::string &elemType);
 	void instantiateGenericStructMethods(const std::string &templateName, const std::string &specializedName,
 										 const std::map<std::string, std::string> &typeBindings);
 

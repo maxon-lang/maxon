@@ -77,8 +77,8 @@ suite('Stdlib Cross-File Diagnostics', () => {
 		const consumerPath = path.join(workspaceFolder.uri.fsPath, 'temp', 'stdlib-cross-file-test.maxon');
 		consumerFileUri = vscode.Uri.file(consumerPath);
 
-		// Set up the stdlib file path (we'll use _grapheme.maxon which has findGraphemeEndManaged)
-		const stdlibPath = path.join(workspaceFolder.uri.fsPath, 'stdlib', 'string', '_grapheme.maxon');
+		// Set up the stdlib file path (we'll use grapheme.maxon which has findGraphemeEndManaged)
+		const stdlibPath = path.join(workspaceFolder.uri.fsPath, 'stdlib', 'string', 'grapheme.maxon');
 		stdlibFileUri = vscode.Uri.file(stdlibPath);
 
 		// Read and store the original stdlib content

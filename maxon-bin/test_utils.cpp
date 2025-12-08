@@ -1,7 +1,9 @@
 #include "test_utils.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <regex>
 #include <sstream>
 #include <vector>
@@ -147,6 +149,32 @@ std::string normalizeIR(const std::string &ir) {
 			line = std::regex_replace(line, attrRef, "");
 		}
 		result += line + "\n";
+	}
+
+	// Normalize closure names: __closure_N -> __closure_0, __closure_1, etc.
+	// based on order of first appearance
+	std::map<std::string, std::string> closureMap;
+	int closureCounter = 0;
+	std::regex closurePattern("@__closure_([0-9]+)");
+	std::smatch match;
+	std::string::const_iterator searchStart = result.cbegin();
+	while (std::regex_search(searchStart, result.cend(), match, closurePattern)) {
+		std::string originalName = match[0].str();
+		if (closureMap.find(originalName) == closureMap.end()) {
+			closureMap[originalName] = "@__closure_" + std::to_string(closureCounter++);
+		}
+		searchStart = match.suffix().first;
+	}
+	// Replace all closures with normalized names (replace longer names first to avoid partial matches)
+	std::vector<std::pair<std::string, std::string>> sortedClosures(closureMap.begin(), closureMap.end());
+	std::sort(sortedClosures.begin(), sortedClosures.end(),
+		[](const auto &a, const auto &b) { return a.first.length() > b.first.length(); });
+	for (const auto &[original, normalized_name] : sortedClosures) {
+		size_t pos = 0;
+		while ((pos = result.find(original, pos)) != std::string::npos) {
+			result.replace(pos, original.length(), normalized_name);
+			pos += normalized_name.length();
+		}
 	}
 
 	// Remove trailing newline if original didn't have one

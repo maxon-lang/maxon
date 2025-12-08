@@ -368,6 +368,21 @@ export struct CharCollection is Iterable with character, Collection with charact
 		var managed = __substring_to_string(sub)
 		return character{_managed: managed}
 	end '_makeCharAt'
+
+	/// map over characters - transforms each character using the provided function
+	function Collection.map(transform (character) character) CharCollection
+		// Build a new string by transforming each character
+		var result = ""
+		var bytePos = 0
+		var len = __string_len(_str._managed)
+		while bytePos < len 'map_loop'
+			var ch = _makeCharAt(bytePos)
+			var transformed = transform(ch)
+			result = result + transformed.toString()
+			bytePos = bytePos + utf8ByteLengthAt(_str._managed, bytePos)
+		end 'map_loop'
+		return CharCollection{_str: result, _pos: 0}
+	end 'map'
 end 'CharCollection'
 
 // UTF16View - iterate over UTF-16 code units

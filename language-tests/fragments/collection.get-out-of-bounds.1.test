@@ -1,0 +1,154 @@
+// Test: collection.get-out-of-bounds.1
+function main() int
+    var arr = [1, 2, 3]
+    if let val = arr.get(10) 'get'
+        return val
+    else 'get'
+        return -1
+    end 'get'
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 47
+
+%__ManagedArrayData_int = type { ptr, i32, i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca [3 x i32]
+  %1 = alloca %__ManagedArrayData_int
+  %2 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  store ptr %0, ptr %2
+  %3 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  store i32 3, ptr %3
+  %4 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 2
+  store i32 3, ptr %4
+  %5 = getelementptr i32, ptr %0, i64 0, i64 0
+  store i32 1, ptr %5
+  %6 = getelementptr i32, ptr %0, i64 0, i64 1
+  store i32 2, ptr %6
+  %7 = getelementptr i32, ptr %0, i64 0, i64 2
+  store i32 3, ptr %7
+  %8 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  %9 = load i32, ptr %8
+  %10 = alloca Optional<i32>
+  %12 = icmp slt i32 10, %9
+  %13 = and i1 1, %12
+  br i1 %13, label %get.inbounds1, label %get.oob2
+get.inbounds1:
+  %14 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  %15 = load ptr, ptr %14
+  %16 = sext i32 10 to i64
+  %17 = getelementptr i32, ptr %15, i64 0, i64 %16
+  %18 = load i32, ptr %17
+  %19 = getelementptr Optional<i32>, ptr %10, i32 0, i32 0
+  store i1 1, ptr %19
+  %20 = getelementptr Optional<i32>, ptr %10, i32 0, i32 1
+  store i32 %18, ptr %20
+  br label %get.merge3
+get.oob2:
+  %21 = getelementptr Optional<i32>, ptr %10, i32 0, i32 0
+  store i1 0, ptr %21
+  br label %get.merge3
+get.merge3:
+  %22 = load Optional<i32>, ptr %10
+  %23 = alloca Optional<i32>
+  store Optional<i32> %22, ptr %23
+  %24 = getelementptr Optional<i32>, ptr %23, i32 0, i32 0
+  %25 = load i8, ptr %24
+  %26 = icmp eq i8 %25, 1
+  br i1 %26, label %iflet.then4, label %iflet.else6
+iflet.then4:
+  %27 = getelementptr Optional<i32>, ptr %23, i32 0, i32 1
+  %28 = load i32, ptr %27
+  ret i32 %28
+iflet.else6:
+  ret i32 -1
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 53
+
+%__ManagedArrayData_int = type { ptr, i32, i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca [3 x i32]
+  %1 = alloca %__ManagedArrayData_int
+  %2 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  store ptr %0, ptr %2
+  %3 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  store i32 3, ptr %3
+  %4 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 2
+  store i32 3, ptr %4
+  %5 = getelementptr i32, ptr %0, i64 0, i64 0
+  store i32 1, ptr %5
+  %6 = getelementptr i32, ptr %0, i64 0, i64 1
+  store i32 2, ptr %6
+  %7 = getelementptr i32, ptr %0, i64 0, i64 2
+  store i32 3, ptr %7
+  %8 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  %9 = load i32, ptr %8
+  %10 = alloca Optional<i32>
+  %11 = icmp sge i32 10, 0
+  %12 = icmp slt i32 10, %9
+  %13 = and i1 %11, %12
+  br i1 %13, label %get.inbounds1, label %get.oob2
+get.inbounds1:
+  %14 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  %15 = load ptr, ptr %14
+  %16 = sext i32 10 to i64
+  %17 = getelementptr i32, ptr %15, i64 0, i64 %16
+  %18 = load i32, ptr %17
+  %19 = getelementptr Optional<i32>, ptr %10, i32 0, i32 0
+  store i1 1, ptr %19
+  %20 = getelementptr Optional<i32>, ptr %10, i32 0, i32 1
+  store i32 %18, ptr %20
+  br label %get.merge3
+get.oob2:
+  %21 = getelementptr Optional<i32>, ptr %10, i32 0, i32 0
+  store i1 0, ptr %21
+  br label %get.merge3
+get.merge3:
+  %22 = load Optional<i32>, ptr %10
+  %23 = alloca Optional<i32>
+  store Optional<i32> %22, ptr %23
+  %24 = getelementptr Optional<i32>, ptr %23, i32 0, i32 0
+  %25 = load i8, ptr %24
+  %26 = icmp eq i8 %25, 1
+  br i1 %26, label %iflet.then4, label %iflet.else6
+iflet.then4:
+  %27 = getelementptr Optional<i32>, ptr %23, i32 0, i32 1
+  %28 = load i32, ptr %27
+  %29 = alloca i32
+  store i32 %28, ptr %29
+  %30 = load i32, ptr %29
+  ret i32 %30
+iflet.after5:
+  ret i32 0
+iflet.else6:
+  %31 = neg i32 1
+  ret i32 %31
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: -1

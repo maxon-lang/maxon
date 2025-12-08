@@ -46,6 +46,9 @@ class DebuggerTestRunner {
 	void setVerbose(int level) { verboseLevel_ = level; }
 	int getVerbose() const { return verboseLevel_; }
 
+	// Get the number of failed tests
+	int getFailedCount() const { return testsFailed; }
+
   private:
 	int testsRun = 0;
 	int testsPassed = 0;

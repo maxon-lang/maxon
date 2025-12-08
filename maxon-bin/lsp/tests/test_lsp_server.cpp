@@ -618,11 +618,6 @@ TEST_CASE("LSP stdlib RangeIterator is iterable with real stdlib", "[lsp][diagno
 	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
 	std::string stdlibPath = (projectRoot / "stdlib").string();
 
-	// Skip test if stdlib doesn't exist
-	if (!std::filesystem::exists(stdlibPath)) {
-		SKIP("stdlib directory not found at " << stdlibPath);
-	}
-
 	LSPTestFixture fixture;
 	std::string rootUri = "file://" + projectRoot.string();
 	fixture.initialize(rootUri);
@@ -766,11 +761,6 @@ TEST_CASE("LSP hover shows method signature for method call", "[lsp][hover]") {
 	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
 	std::string stdlibPath = (projectRoot / "stdlib").string();
 
-	// Skip test if stdlib doesn't exist
-	if (!std::filesystem::exists(stdlibPath)) {
-		SKIP("stdlib directory not found at " << stdlibPath);
-	}
-
 	LSPTestFixture fixture;
 	std::string rootUri = "file://" + projectRoot.string();
 	fixture.initialize(rootUri);
@@ -847,11 +837,6 @@ TEST_CASE("LSP hover shows correct type for stdlib function parameter", "[lsp][h
 	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
 	std::string stdlibPath = (projectRoot / "stdlib").string();
 
-	// Skip test if stdlib doesn't exist
-	if (!std::filesystem::exists(stdlibPath)) {
-		SKIP("stdlib directory not found at " << stdlibPath);
-	}
-
 	LSPTestFixture fixture;
 	std::string rootUri = "file://" + projectRoot.string();
 	fixture.initialize(rootUri);
@@ -863,15 +848,15 @@ TEST_CASE("LSP hover shows correct type for stdlib function parameter", "[lsp][h
     return 0
 end 'print'
 
-export function print_int(value int) int
+export function printInt(value int) int
     var x = value
     return 0
-end 'print_int'
+end 'printInt'
 
-export function print_float(value float, precision int) int
+export function printFloat(value float, precision int) int
     var y = value
     return 0
-end 'print_float')";
+end 'printFloat')";
 	std::string docUri = "file://" + (projectRoot / "stdlib" / "sys" / "test_print.maxon").string();
 	fixture.openDocument(docUri, code);
 
@@ -944,11 +929,6 @@ TEST_CASE("LSP completion provides string type members", "[lsp][completion][stdl
 	std::filesystem::path testDir = std::filesystem::current_path();
 	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
 	std::string stdlibPath = (projectRoot / "stdlib").string();
-
-	// Skip test if stdlib doesn't exist
-	if (!std::filesystem::exists(stdlibPath)) {
-		SKIP("stdlib directory not found at " << stdlibPath);
-	}
 
 	LSPTestFixture fixture;
 	std::string rootUri = "file://" + projectRoot.string();
@@ -1714,11 +1694,6 @@ TEST_CASE("LSP publishes diagnostics for all stdlib files on initialization", "[
 	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
 	std::string stdlibPath = (projectRoot / "stdlib").string();
 
-	// Skip test if stdlib doesn't exist
-	if (!std::filesystem::exists(stdlibPath)) {
-		SKIP("stdlib directory not found at " << stdlibPath);
-	}
-
 	// Count stdlib files
 	std::vector<std::string> stdlibFiles;
 	for (const auto &entry : std::filesystem::recursive_directory_iterator(stdlibPath)) {
@@ -1768,11 +1743,6 @@ TEST_CASE("LSP reports undefined function when calling non-existent stdlib funct
 	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
 	std::string stdlibPath = (projectRoot / "stdlib").string();
 
-	// Skip test if stdlib doesn't exist
-	if (!std::filesystem::exists(stdlibPath)) {
-		SKIP("stdlib directory not found at " << stdlibPath);
-	}
-
 	LSPTestFixture fixture;
 	std::string rootUri = "file://" + projectRoot.string();
 	fixture.initialize(rootUri);
@@ -1821,11 +1791,6 @@ TEST_CASE("LSP reports undefined function when stdlib file is modified", "[lsp][
 	std::filesystem::path testDir = std::filesystem::current_path();
 	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
 	std::string stdlibPath = (projectRoot / "stdlib").string();
-
-	// Skip test if stdlib doesn't exist
-	if (!std::filesystem::exists(stdlibPath)) {
-		SKIP("stdlib directory not found at " << stdlibPath);
-	}
 
 	LSPTestFixture fixture;
 	std::string rootUri = "file://" + projectRoot.string();
@@ -1879,11 +1844,6 @@ TEST_CASE("LSP reports undefined function when file calls renamed stdlib functio
 	std::filesystem::path testDir = std::filesystem::current_path();
 	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
 	std::string stdlibPath = (projectRoot / "stdlib").string();
-
-	// Skip test if stdlib doesn't exist
-	if (!std::filesystem::exists(stdlibPath)) {
-		SKIP("stdlib directory not found at " << stdlibPath);
-	}
 
 	// First, start a server with the real stdlib
 	LSPTestFixture fixture;
@@ -1940,17 +1900,7 @@ TEST_CASE("LSP reloads stdlib when stdlib file is changed in memory", "[lsp][dia
 	std::filesystem::path testDir = std::filesystem::current_path();
 	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
 	std::string stdlibPath = (projectRoot / "stdlib").string();
-
-	// Skip test if stdlib doesn't exist
-	if (!std::filesystem::exists(stdlibPath)) {
-		SKIP("stdlib directory not found at " << stdlibPath);
-	}
-
-	// Check that the specific stdlib file we need exists
-	std::filesystem::path graphemePath = projectRoot / "stdlib" / "string" / "_grapheme.maxon";
-	if (!std::filesystem::exists(graphemePath)) {
-		SKIP("_grapheme.maxon not found at " << graphemePath.string());
-	}
+	std::filesystem::path graphemePath = projectRoot / "stdlib" / "string" / "grapheme.maxon";
 
 	LSPTestFixture fixture;
 	std::string rootUri = pathToUri(projectRoot.string());
@@ -1964,7 +1914,7 @@ end 'test')";
 	std::string consumerUri = pathToUri((projectRoot / "examples" / "consumer.maxon").string());
 	fixture.openDocument(consumerUri, consumerCode);
 
-	// Step 2: Read the actual _grapheme.maxon content
+	// Step 2: Read the actual grapheme.maxon content
 	std::ifstream graphemeFile(graphemePath);
 	std::stringstream buffer;
 	buffer << graphemeFile.rdbuf();

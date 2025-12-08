@@ -368,7 +368,7 @@ var result = safeDivide(10, 2)
 
 if let val = result 'check'
     // val is unwrapped int here
-    print_int(val + 5)  // 10
+    printInt(val + 5)  // 10
 else 'check'
     // result was nil
     print("Cannot divide by zero")
@@ -385,7 +385,7 @@ var result = safeDivide(10, 0) else 'default'
 end 'default'
 
 // result is guaranteed to be int (non-optional) here
-print_int(result)  // 1
+printInt(result)  // 1
 ```
 
 **Type Safety**
@@ -428,7 +428,7 @@ var p1 = Person{name: "Bob", age: nil}
 var p2 = Person{name: "Alice", age: 30}  // Implicitly wraps 30
 
 if let age = p2.age 'check'
-    print_int(age)  // 30
+    printInt(age)  // 30
 end 'check'
 ```
 
@@ -647,7 +647,7 @@ Extract associated values using `if case`:
 
 ```maxon
 if case success(v) = result 'check'
-    print_int(v)
+    printInt(v)
 end 'check'
 
 if case failure(code, msg) = result 'error'
@@ -952,7 +952,7 @@ end 'safeDivide'
 
 var result = safeDivide(10, 2)
 if let val = result 'unwrap'
-    print_int(val + 5)  // val is unwrapped int
+    printInt(val + 5)  // val is unwrapped int
 else 'unwrap'
     print("Division by zero")
 end 'unwrap'
@@ -982,7 +982,7 @@ var result = safeDivide(10, 0) else 'default'
     result = 1  // Provide default when nil
 end 'default'
 
-print_int(result)  // result is int, not int or nil
+printInt(result)  // result is int, not int or nil
 ```
 
 **Notes:**
@@ -1172,8 +1172,8 @@ var result = format_int(42)   // Finds stdlib.fmt.format_int
 **I/O Functions**
 ```maxon
 print(value string)                     // Print string to stdout with newline
-print_int(value int)                    // Print integer to stdout with newline
-print_float(value float, precision int) // Print float with specified decimal places
+printInt(value int)                    // Print integer to stdout with newline
+printFloat(value float, precision int) // Print float with specified decimal places
 ```
 
 **Math Functions**
@@ -1285,7 +1285,7 @@ while true 'forever'
     if i >= 10 'done'
         break
     end 'done'
-    print_int(i)
+    printInt(i)
     i = i + 1
 end 'forever'
 ```
@@ -1294,7 +1294,7 @@ end 'forever'
 ```maxon
 var numbers = [1, 2, 3, 4, 5]
 for i in range(0, numbers.length) 'iter'
-    print_int(numbers[i])
+    printInt(numbers[i])
 end 'iter'
 ```
 
@@ -1310,7 +1310,7 @@ end 'factorial'
 
 function main() int
     var result = factorial(5)
-    print_int(result)  // 120
+    printInt(result)  // 120
     return 0
 end 'main'
 ```
@@ -1372,7 +1372,7 @@ functon test()          // ERROR: Unknown keyword 'functon'
 **Mismatched Block Identifiers**
 ```maxon
 if x > 0 'check'
-    print_int(x)
+    printInt(x)
 end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 ```
 

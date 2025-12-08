@@ -246,7 +246,6 @@ The compiler includes a minimal runtime written in MIR (not C). This eliminates 
 **Runtime functions:**
 - `_start` — Program entry point
 - `exit` — Process termination
-- `print`, `print_int`, `print_float` — Console output
 - `malloc`, `free` — Heap allocation
 - Math functions: `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `pow`, etc.
 
