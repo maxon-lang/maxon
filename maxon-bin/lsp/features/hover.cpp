@@ -18,7 +18,7 @@ std::optional<Hover> HoverProvider::getHover(
 	// Get the range for highlighting (stored in member variable)
 	(void)getTokenRange(document, position);
 
-	// Check for dot-separated field access (e.g., "point.x")
+	// Check for dot-separated field access (e.g., "point.x") or method call (e.g., "s.cstr")
 	size_t dotPos = token.find('.');
 	if (dotPos != std::string::npos) {
 		std::string prefix = token.substr(0, dotPos);
@@ -30,15 +30,71 @@ std::optional<Hover> HoverProvider::getHover(
 			return hover;
 		}
 
-		// If prefix is a variable, get its type and look up field on that type
+		// If prefix is a variable, get its type and look up field or method on that type
 		if (cache) {
-			auto varIt = cache->variables.find(prefix);
-			if (varIt != cache->variables.end()) {
-				auto fieldHover = lookupField(varIt->second.type, suffix, cache, stdlib);
+			// Find the variable using qualified lookup
+			std::string varType;
+
+			// Find enclosing function to build qualified key
+			std::string enclosingFunction;
+			if (cache->ast) {
+				for (const auto &func : cache->ast->functions) {
+					if (position.line >= func->line - 1 && position.line <= func->endLine - 1) {
+						if (!func->namespaceName.empty()) {
+							enclosingFunction = func->namespaceName + "." + func->name;
+						} else {
+							enclosingFunction = func->name;
+						}
+						break;
+					}
+				}
+				for (const auto &structDef : cache->ast->structs) {
+					for (const auto &method : structDef->methods) {
+						if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
+							enclosingFunction = structDef->name + "." + method->name;
+							break;
+						}
+					}
+				}
+			}
+
+			// Try qualified lookup first
+			if (!enclosingFunction.empty()) {
+				std::string qualifiedKey = enclosingFunction + "::" + prefix;
+				auto varIt = cache->variables.find(qualifiedKey);
+				if (varIt != cache->variables.end()) {
+					varType = varIt->second.type;
+				}
+			}
+
+			// Fall back to unqualified lookup
+			if (varType.empty()) {
+				auto varIt = cache->variables.find(prefix);
+				if (varIt != cache->variables.end()) {
+					varType = varIt->second.type;
+				}
+			}
+
+			if (!varType.empty()) {
+				// Try field lookup first
+				auto fieldHover = lookupField(varType, suffix, cache, stdlib);
 				if (fieldHover) {
 					return fieldHover;
 				}
+
+				// Try method lookup: look for Type.method in stdlib functions
+				std::string qualifiedMethodName = varType + "." + suffix;
+				auto methodHover = lookupFunction(qualifiedMethodName, cache, stdlib);
+				if (methodHover) {
+					return methodHover;
+				}
 			}
+		}
+
+		// Try to look up as Type.method directly (prefix is already a type name)
+		auto methodHover = lookupFunction(token, cache, stdlib);
+		if (methodHover) {
+			return methodHover;
 		}
 
 		// Try to look up the prefix as a type (e.g., enum name in EnumName.case)
@@ -124,19 +180,6 @@ std::string HoverProvider::getTokenAtPosition(const Document &document, const Po
 
 	std::string token = line.substr(start, end - start);
 
-	// Check if there's a dot following the token (field access)
-	if (end < static_cast<int>(line.size()) && line[end] == '.') {
-		// Get the field name after the dot
-		int fieldStart = end + 1;
-		int fieldEnd = fieldStart;
-		while (fieldEnd < static_cast<int>(line.size()) && isIdentChar(line[fieldEnd])) {
-			fieldEnd++;
-		}
-		if (fieldEnd > fieldStart) {
-			token += "." + line.substr(fieldStart, fieldEnd - fieldStart);
-		}
-	}
-
 	// Check if cursor is on the field part (after a dot)
 	if (start > 0 && line[start - 1] == '.') {
 		// Find the struct/variable name before the dot
@@ -199,7 +242,46 @@ std::optional<Hover> HoverProvider::lookupVariable(const std::string &name, cons
 		return std::nullopt;
 	}
 
-	// Search in the variables map
+	// Find which function the cursor is in to use the correct qualified variable name
+	// The key must match getFunctionKey() format: namespace.funcName for namespaced functions,
+	// StructName.methodName for methods, or just funcName for standalone functions
+	std::string enclosingFunction;
+	if (cache->ast) {
+		for (const auto &func : cache->ast->functions) {
+			// Check if position is within this function's range
+			if (position.line >= func->line - 1 && position.line <= func->endLine - 1) {
+				// Use namespace-qualified name if function is in a namespace
+				if (!func->namespaceName.empty()) {
+					enclosingFunction = func->namespaceName + "." + func->name;
+				} else {
+					enclosingFunction = func->name;
+				}
+				break;
+			}
+		}
+		// Also check struct methods
+		for (const auto &structDef : cache->ast->structs) {
+			for (const auto &method : structDef->methods) {
+				if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
+					enclosingFunction = structDef->name + "." + method->name;
+					break;
+				}
+			}
+		}
+	}
+
+	// Try function-qualified lookup first
+	if (!enclosingFunction.empty()) {
+		std::string qualifiedKey = enclosingFunction + "::" + name;
+		auto it = cache->variables.find(qualifiedKey);
+		if (it != cache->variables.end()) {
+			const VariableInfo &var = it->second;
+			std::string markdown = formatVariableHover(var.name, var.type, !var.isImmutable, var.initialValue, var.isParameter);
+			return buildHover(markdown, currentTokenRange_);
+		}
+	}
+
+	// Fall back to unqualified lookup (for global variables or if function not found)
 	auto it = cache->variables.find(name);
 	if (it != cache->variables.end()) {
 		const VariableInfo &var = it->second;

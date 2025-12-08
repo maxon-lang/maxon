@@ -27,7 +27,7 @@ std::optional<PrepareRenameResult> RenameProvider::prepareRename(
 	}
 
 	// Check if this symbol can be renamed
-	if (!canRename(symbol, cache)) {
+	if (!canRename(symbol, cache, position.line)) {
 		return std::nullopt;
 	}
 
@@ -86,7 +86,7 @@ std::optional<WorkspaceEdit> RenameProvider::rename(
 	}
 
 	// Check if this symbol can be renamed (not keyword, not stdlib)
-	if (!canRename(symbol, cache)) {
+	if (!canRename(symbol, cache, position.line)) {
 		return std::nullopt;
 	}
 
@@ -131,7 +131,7 @@ std::optional<WorkspaceEdit> RenameProvider::rename(
 	return buildWorkspaceEdit(refs, newName, &document);
 }
 
-bool RenameProvider::canRename(const std::string &symbolName, const AnalysisCache *cache) {
+bool RenameProvider::canRename(const std::string &symbolName, const AnalysisCache *cache, int line) {
 	// Cannot rename keywords or built-in types
 	if (isKeywordOrBuiltin(symbolName)) {
 		return false;
@@ -139,8 +139,8 @@ bool RenameProvider::canRename(const std::string &symbolName, const AnalysisCach
 
 	// Check if symbol exists in cache (must be a known symbol)
 	if (cache) {
-		// Check if it's a variable
-		if (cache->variables.find(symbolName) != cache->variables.end()) {
+		// Check if it's a variable (use findVariable with optional line for qualified lookup)
+		if (cache->findVariable(symbolName, line)) {
 			return true;
 		}
 
@@ -223,8 +223,8 @@ bool RenameProvider::hasNamingConflict(
 		return false;
 	}
 
-	// Check if the new name already exists as a variable
-	if (cache->variables.find(newName) != cache->variables.end()) {
+	// Check if the new name already exists as a variable (any variable with this name in any scope)
+	if (cache->findVariable(newName)) {
 		return true;
 	}
 
@@ -619,8 +619,8 @@ std::string RenameProvider::getSymbolKind(const std::string &symbolName, const A
 		}
 	}
 
-	// Check if it's a variable
-	if (cache->variables.find(symbolName) != cache->variables.end()) {
+	// Check if it's a variable (any variable with this name)
+	if (cache->findVariable(symbolName)) {
 		return "variable";
 	}
 

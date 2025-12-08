@@ -551,10 +551,19 @@ end 'main')";
 }
 
 TEST_CASE("LSP stdlib RangeIterator is iterable with real stdlib", "[lsp][diagnostics][stdlib]") {
+	// Tests run from maxon-bin/lsp/tests/build, so go up 4 levels to project root
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string stdlibPath = (projectRoot / "stdlib").string();
+
+	// Skip test if stdlib doesn't exist
+	if (!std::filesystem::exists(stdlibPath)) {
+		SKIP("stdlib directory not found at " << stdlibPath);
+	}
+
 	LSPTestFixture fixture;
-	// Initialize with the real project root so stdlib is loaded
-	// The test runs from maxon-bin/lsp/tests/build, so project root is ../../../..
-	fixture.initialize("file:///C:/Users/Eric/Dev/maxon");
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
 
 	// Simple code that uses range() from the real stdlib
 	std::string code = R"(function main() int
@@ -563,7 +572,8 @@ TEST_CASE("LSP stdlib RangeIterator is iterable with real stdlib", "[lsp][diagno
 	end 'loop'
 	return 0
 end 'main')";
-	fixture.openDocument("file:///C:/Users/Eric/Dev/maxon/examples/test.maxon", code);
+	std::string docUri = "file://" + (projectRoot / "examples" / "test.maxon").string();
+	fixture.openDocument(docUri, code);
 	fixture.shutdown();
 	fixture.run();
 
@@ -685,6 +695,147 @@ end 'main')";
 	REQUIRE(content.find("a int") != std::string::npos);
 }
 
+TEST_CASE("LSP hover shows method signature for method call", "[lsp][hover]") {
+	// Test hover on a method call like value.cstr()
+	// The method is defined in stdlib as string.cstr
+
+	// Tests run from maxon-bin/lsp/tests/build, so go up 4 levels to project root
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string stdlibPath = (projectRoot / "stdlib").string();
+
+	// Skip test if stdlib doesn't exist
+	if (!std::filesystem::exists(stdlibPath)) {
+		SKIP("stdlib directory not found at " << stdlibPath);
+	}
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	std::string code = R"(function main() int
+    var s = "hello"
+    var cs = s.cstr()
+    return 0
+end 'main')";
+	std::string docUri = "file://" + (projectRoot / "examples" / "test.maxon").string();
+	fixture.openDocument(docUri, code);
+
+	// Request hover on 'cstr' at line 2
+	// Line 2: "    var cs = s.cstr()" - 'cstr' starts at position 15
+	json hoverParams = {
+		{"textDocument", {{"uri", docUri}}},
+		{"position", {{"line", 2}, {"character", 17}}}};
+	fixture.transport()->queueRequest(2, "textDocument/hover", hoverParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(2);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+	REQUIRE(!response->result.value().is_null());
+
+	// The hover should show the method signature
+	std::string content = response->result.value()["contents"]["value"].get<std::string>();
+	// Should show string.cstr or at least cstr with return type cstring
+	REQUIRE((content.find("cstr") != std::string::npos || content.find("cstring") != std::string::npos));
+}
+
+TEST_CASE("LSP hover shows correct type for function parameter", "[lsp][hover]") {
+	// Test hover on a function parameter to verify it shows the correct type
+	LSPTestFixture fixture;
+	fixture.initialize();
+
+	std::string code = R"(function greet(name string) int
+    var x = name
+    return 0
+end 'greet')";
+	fixture.openDocument("file:///test.maxon", code);
+
+	// Request hover on 'name' at line 1
+	// Line 1: "    var x = name" - 'name' starts at position 12
+	json hoverParams = {
+		{"textDocument", {{"uri", "file:///test.maxon"}}},
+		{"position", {{"line", 1}, {"character", 13}}}};
+	fixture.transport()->queueRequest(2, "textDocument/hover", hoverParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(2);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+	REQUIRE(!response->result.value().is_null());
+
+	// The hover should show the parameter type as string, not float
+	std::string content = response->result.value()["contents"]["value"].get<std::string>();
+	INFO("Hover content: " << content);
+	REQUIRE(content.find("string") != std::string::npos);
+	REQUIRE(content.find("float") == std::string::npos);
+}
+
+TEST_CASE("LSP hover shows correct type for stdlib function parameter", "[lsp][hover][stdlib]") {
+	// Test that hovering over 'value' in print() shows string type, not float
+	// This tests the case where multiple functions have same-named parameters
+	// Tests run from maxon-bin/lsp/tests/build, so go up 4 levels to project root
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string stdlibPath = (projectRoot / "stdlib").string();
+
+	// Skip test if stdlib doesn't exist
+	if (!std::filesystem::exists(stdlibPath)) {
+		SKIP("stdlib directory not found at " << stdlibPath);
+	}
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Code with multiple functions that have same-named parameter 'value' with different types
+	// This mirrors stdlib/sys/print.maxon structure
+	std::string code = R"(export function print(value string) int
+    var cs = value
+    return 0
+end 'print'
+
+export function print_int(value int) int
+    var x = value
+    return 0
+end 'print_int'
+
+export function print_float(value float, precision int) int
+    var y = value
+    return 0
+end 'print_float')";
+	std::string docUri = "file://" + (projectRoot / "stdlib" / "sys" / "test_print.maxon").string();
+	fixture.openDocument(docUri, code);
+
+	// Request hover on 'value' at line 1 (inside print function)
+	// Line 1: "    var cs = value" - 'value' starts at position 13
+	json hoverParams = {
+		{"textDocument", {{"uri", docUri}}},
+		{"position", {{"line", 1}, {"character", 14}}}};
+	fixture.transport()->queueRequest(2, "textDocument/hover", hoverParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(2);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+	REQUIRE(!response->result.value().is_null());
+
+	// The hover should show the parameter type as string (from print function), not float
+	std::string content = response->result.value()["contents"]["value"].get<std::string>();
+	INFO("Hover content: " << content);
+	REQUIRE(content.find("string") != std::string::npos);
+	REQUIRE(content.find("float") == std::string::npos);
+}
+
 // =============================================================================
 // Completion Tests
 // =============================================================================
@@ -727,20 +878,31 @@ end 'main'
 }
 
 TEST_CASE("LSP completion provides string type members", "[lsp][completion][stdlib]") {
+	// Tests run from maxon-bin/lsp/tests/build, so go up 4 levels to project root
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string stdlibPath = (projectRoot / "stdlib").string();
+
+	// Skip test if stdlib doesn't exist
+	if (!std::filesystem::exists(stdlibPath)) {
+		SKIP("stdlib directory not found at " << stdlibPath);
+	}
+
 	LSPTestFixture fixture;
-	// Initialize with real project root so stdlib is loaded
-	fixture.initialize("file:///C:/Users/Eric/Dev/maxon");
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
 
 	std::string code = R"(function main() int
 	let msg = "hello"
 	msg.
 	return 0
 end 'main')";
-	fixture.openDocument("file:///C:/Users/Eric/Dev/maxon/temp/test.maxon", code);
+	std::string docUri = "file://" + (projectRoot / "temp" / "test.maxon").string();
+	fixture.openDocument(docUri, code);
 
 	// Request completion after 'msg.' at line 2, character 5
 	json completionParams = {
-		{"textDocument", {{"uri", "file:///C:/Users/Eric/Dev/maxon/temp/test.maxon"}}},
+		{"textDocument", {{"uri", docUri}}},
 		{"position", {{"line", 2}, {"character", 5}}}};
 	fixture.transport()->queueRequest(3, "textDocument/completion", completionParams);
 

@@ -332,7 +332,41 @@ std::string CompletionProvider::getTypeBeforeDot(
 
 	// Look up the type of this identifier in the cache
 	if (cache) {
-		// Check variables
+		// Find which function the cursor is in to use the correct qualified variable name
+		// Variables are stored with qualified keys like "funcName::varName" or "namespace.funcName::varName"
+		std::string enclosingFunction;
+		if (cache->ast) {
+			for (const auto &func : cache->ast->functions) {
+				if (position.line >= func->line - 1 && position.line <= func->endLine - 1) {
+					if (!func->namespaceName.empty()) {
+						enclosingFunction = func->namespaceName + "." + func->name;
+					} else {
+						enclosingFunction = func->name;
+					}
+					break;
+				}
+			}
+			// Also check struct methods
+			for (const auto &structDef : cache->ast->structs) {
+				for (const auto &method : structDef->methods) {
+					if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
+						enclosingFunction = structDef->name + "." + method->name;
+						break;
+					}
+				}
+			}
+		}
+
+		// Try function-qualified lookup first
+		if (!enclosingFunction.empty()) {
+			std::string qualifiedKey = enclosingFunction + "::" + identifier;
+			auto varIt = cache->variables.find(qualifiedKey);
+			if (varIt != cache->variables.end()) {
+				return varIt->second.type;
+			}
+		}
+
+		// Fall back to unqualified lookup (for global variables)
 		auto varIt = cache->variables.find(identifier);
 		if (varIt != cache->variables.end()) {
 			return varIt->second.type;
@@ -842,10 +876,11 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 
 	// Also check for enum types where variable is an instance of the enum
 	// (e.g., var s = Status.ok; s. should show rawValue if Status has raw values)
+	// Note: This is a fallback when typeName wasn't fully resolved - use findVariable without position
 	if (cache) {
-		auto varIt = cache->variables.find(typeName);
-		if (varIt != cache->variables.end()) {
-			std::string varType = varIt->second.type;
+		auto varPtr = cache->findVariable(typeName);
+		if (varPtr) {
+			std::string varType = varPtr->type;
 			// Check if varType is an enum
 			if (cache->ast) {
 				for (const auto &enumDef : cache->ast->enums) {

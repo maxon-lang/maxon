@@ -254,10 +254,8 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 			doc,
 			func->getSourceRange());
 
-		// Populate parameters (skip "self" for methods)
+		// Populate parameters (include "self" for methods - needed for semantic analysis)
 		for (const auto &param : func->parameters) {
-			if (param.name == "self")
-				continue;
 			sym.parameters.emplace_back(param.name, param.type);
 		}
 
@@ -317,10 +315,8 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 				methodDoc,
 				method->getSourceRange());
 
-			// Populate parameters (skip "self" for methods)
+			// Populate parameters (include "self" for methods - needed for semantic analysis)
 			for (const auto &param : method->parameters) {
-				if (param.name == "self")
-					continue;
 				methodSym.parameters.emplace_back(param.name, param.type);
 			}
 
@@ -385,10 +381,8 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 				methodDoc,
 				method->getSourceRange());
 
-			// Populate parameters (skip "self" for methods)
+			// Populate parameters (include "self" for methods - needed for semantic analysis)
 			for (const auto &param : method->parameters) {
-				if (param.name == "self")
-					continue;
 				methodSym.parameters.emplace_back(param.name, param.type);
 			}
 

@@ -85,11 +85,13 @@ class DefinitionProvider {
 	 * @param name Variable name to look up
 	 * @param cache Analysis cache containing variable info
 	 * @param document The current document (for URI)
+	 * @param position The cursor position (for scoped lookup)
 	 * @return Location of variable definition if found
 	 */
 	std::optional<Location> lookupVariable(const std::string &name,
 										   const AnalysisCache *cache,
-										   const Document &document);
+										   const Document &document,
+										   const Position &position);
 
 	/**
 	 * Look up a function definition.

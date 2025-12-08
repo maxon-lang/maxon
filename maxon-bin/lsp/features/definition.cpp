@@ -21,15 +21,15 @@ std::optional<DefinitionProvider::DefinitionResult> DefinitionProvider::getDefin
 	if (isMemberAccess(document, position, objectName, memberName, cursorOnObject)) {
 		// Try to resolve the object's type and look up the field
 		if (cache) {
-			// Check if objectName is a variable
-			auto varIt = cache->variables.find(objectName);
-			if (varIt != cache->variables.end()) {
+			// Check if objectName is a variable (use qualified lookup with position)
+			auto varPtr = cache->findVariable(objectName, position.line);
+			if (varPtr) {
 				if (cursorOnObject) {
 					// Cursor is on the variable name, return variable definition
-					return buildLocation(document.uri, varIt->second.line, varIt->second.column);
+					return buildLocation(document.uri, varPtr->line, varPtr->column);
 				}
 				// Look up field on the variable's type
-				auto fieldLoc = lookupField(varIt->second.type, memberName, cache, stdlib, workspaceRoot, document.uri);
+				auto fieldLoc = lookupField(varPtr->type, memberName, cache, stdlib, workspaceRoot, document.uri);
 				if (fieldLoc) {
 					return *fieldLoc;
 				}
@@ -120,7 +120,7 @@ std::optional<DefinitionProvider::DefinitionResult> DefinitionProvider::getDefin
 	}
 
 	// 2. Try variable lookup (local variables)
-	auto varLoc = lookupVariable(symbol, cache, document);
+	auto varLoc = lookupVariable(symbol, cache, document, position);
 	if (varLoc) {
 		return *varLoc;
 	}
@@ -282,23 +282,22 @@ bool DefinitionProvider::isMemberAccess(const Document &document, const Position
 
 std::optional<Location> DefinitionProvider::lookupVariable(const std::string &name,
 														   const AnalysisCache *cache,
-														   const Document &document) {
+														   const Document &document,
+														   const Position &position) {
 	if (!cache) {
 		return std::nullopt;
 	}
 
-	auto it = cache->variables.find(name);
-	if (it != cache->variables.end()) {
-		const VariableInfo &var = it->second;
-
+	auto varPtr = cache->findVariable(name, position.line);
+	if (varPtr) {
 		// Skip parameters - they are handled by lookupParameter
-		if (var.isParameter) {
+		if (varPtr->isParameter) {
 			return std::nullopt;
 		}
 
 		// Build location in the current document
 		// Compiler uses 1-based line/column, LSP uses 0-based
-		return buildLocation(document.uri, var.line, var.column);
+		return buildLocation(document.uri, varPtr->line, varPtr->column);
 	}
 
 	return std::nullopt;
@@ -498,22 +497,18 @@ std::optional<Location> DefinitionProvider::lookupParameter(const std::string &n
 															const AnalysisCache *cache,
 															const Document &document,
 															const Position &position) {
-	(void)position; // Position could be used to determine the containing function scope
-
 	if (!cache) {
 		return std::nullopt;
 	}
 
-	// Check if this name is a parameter in the variables map
-	auto varIt = cache->variables.find(name);
-	if (varIt == cache->variables.end() || !varIt->second.isParameter) {
+	// Check if this name is a parameter in the variables map (use qualified lookup)
+	auto varPtr = cache->findVariable(name, position.line);
+	if (!varPtr || !varPtr->isParameter) {
 		return std::nullopt;
 	}
 
-	const VariableInfo &param = varIt->second;
-
 	// The parameter's line/column points to its definition in the function signature
-	return buildLocation(document.uri, param.line, param.column);
+	return buildLocation(document.uri, varPtr->line, varPtr->column);
 }
 
 Location DefinitionProvider::buildLocation(const std::string &uri, int line, int column,

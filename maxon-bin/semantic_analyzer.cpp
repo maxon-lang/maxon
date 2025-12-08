@@ -167,7 +167,8 @@ void SemanticAnalyzer::registerBuiltinFunctions() {
 void SemanticAnalyzer::setSourceContext(const std::string &source, const std::string &filePath) {
 	sourceContent_ = source;
 	currentFilePath_ = filePath;
-}std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
+}
+std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	errors.clear();
 	// Note: Don't clear functions or structs here - we want to keep registered external ones
 	// structs.clear(); // Preserve external structs registered before analysis
@@ -555,20 +556,31 @@ void SemanticAnalyzer::setSourceContext(const std::string &source, const std::st
 			continue;
 		}
 		for (const auto &method : structDef->methods) {
+			currentFunctionName_ = structDef->name + "." + method->name;
 			analyzeFunction(method.get());
+			currentFunctionName_.clear();
 		}
 	}
 
 	// Analyze methods inside enums
 	for (const auto &enumDef : program->enums) {
 		for (const auto &method : enumDef->methods) {
+			currentFunctionName_ = enumDef->name + "." + method->name;
 			analyzeFunction(method.get());
+			currentFunctionName_.clear();
 		}
 	}
 
 	// Then analyze top-level functions
 	for (const auto &func : program->functions) {
+		// Build function key: namespace.name or just name
+		if (!func->namespaceName.empty()) {
+			currentFunctionName_ = func->namespaceName + "." + func->name;
+		} else {
+			currentFunctionName_ = func->name;
+		}
 		analyzeFunction(func.get());
+		currentFunctionName_.clear();
 	}
 
 	logDetail("Analysis complete: " + std::to_string(structs.size()) + " structs, " +
@@ -598,7 +610,7 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 		}
 	}
 
-	logTrace("Analyzing function body: " + func->name);	// Set current receiver type for method field resolution (implicit self)
+	logTrace("Analyzing function body: " + func->name); // Set current receiver type for method field resolution (implicit self)
 	currentReceiverType = func->receiverType;
 
 	// Validate return type - track undefined struct types for auto-import
@@ -771,8 +783,10 @@ void SemanticAnalyzer::declareBlockId(const std::string &blockId, int line, int 
 void SemanticAnalyzer::declareVariable(const std::string &name, const std::string &type, bool isImmutable, int line, int column, bool isParameter, const std::string &initialValue, bool isLoopVariable) {
 	VariableInfo varInfo(name, type, isImmutable, line, column, isParameter, initialValue, isLoopVariable);
 	variables[name] = varInfo;
-	// Also store in persistent symbol table for LSP
-	allDeclaredVariables[name] = varInfo;
+	// Also store in persistent symbol table for LSP with function-qualified key
+	// This prevents collisions when same variable name appears in different functions
+	std::string qualifiedKey = currentFunctionName_.empty() ? name : currentFunctionName_ + "::" + name;
+	allDeclaredVariables[qualifiedKey] = varInfo;
 }
 
 // Helper function to extract literal value from an expression for display

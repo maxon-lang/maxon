@@ -411,4 +411,77 @@ void DocumentManager::setAnalysis(const std::string &uri, AnalysisCache cache) {
 	analysisCache_[uri] = std::move(cache);
 }
 
+// ============================================================================
+// AnalysisCache Variable Lookup Helpers
+// ============================================================================
+
+std::string AnalysisCache::findEnclosingFunction(int line) const {
+	if (!ast) {
+		return "";
+	}
+
+	// Check regular functions
+	for (const auto &func : ast->functions) {
+		if (line >= func->line - 1 && line <= func->endLine - 1) {
+			if (!func->namespaceName.empty()) {
+				return func->namespaceName + "." + func->name;
+			}
+			return func->name;
+		}
+	}
+
+	// Check struct methods
+	for (const auto &structDef : ast->structs) {
+		for (const auto &method : structDef->methods) {
+			if (line >= method->line - 1 && line <= method->endLine - 1) {
+				return structDef->name + "." + method->name;
+			}
+		}
+	}
+
+	// Check enum methods
+	for (const auto &enumDef : ast->enums) {
+		for (const auto &method : enumDef->methods) {
+			if (line >= method->line - 1 && line <= method->endLine - 1) {
+				return enumDef->name + "." + method->name;
+			}
+		}
+	}
+
+	return "";
+}
+
+const VariableInfo *AnalysisCache::findVariable(const std::string &name, int line) const {
+	// If we have position info, try qualified lookup first
+	if (line >= 0) {
+		std::string enclosingFunc = findEnclosingFunction(line);
+		if (!enclosingFunc.empty()) {
+			std::string qualifiedKey = enclosingFunc + "::" + name;
+			auto it = variables.find(qualifiedKey);
+			if (it != variables.end()) {
+				return &it->second;
+			}
+		}
+	}
+
+	// Fall back: search for any variable with the given name
+	// This handles cases where we don't have position info
+	// Look for exact match first (global variables stored without qualification)
+	auto it = variables.find(name);
+	if (it != variables.end()) {
+		return &it->second;
+	}
+
+	// Look for any qualified key ending with ::name
+	std::string suffix = "::" + name;
+	for (const auto &[key, var] : variables) {
+		if (key.size() >= suffix.size() &&
+			key.compare(key.size() - suffix.size(), suffix.size(), suffix) == 0) {
+			return &var;
+		}
+	}
+
+	return nullptr;
+}
+
 } // namespace maxon_lsp

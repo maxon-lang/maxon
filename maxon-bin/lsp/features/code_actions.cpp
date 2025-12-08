@@ -213,8 +213,8 @@ std::vector<CodeAction> CodeActionsProvider::getRefactorings(
 		potentialVar.erase(0, potentialVar.find_first_not_of(" \t\n\r"));
 		potentialVar.erase(potentialVar.find_last_not_of(" \t\n\r") + 1);
 
-		auto varIt = cache->variables.find(potentialVar);
-		if (varIt != cache->variables.end()) {
+		auto varPtr = cache->findVariable(potentialVar, range.start.line);
+		if (varPtr) {
 			refactorings.push_back(createInlineVariableRefactoring(document, range, cache));
 		}
 

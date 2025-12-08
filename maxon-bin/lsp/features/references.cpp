@@ -122,12 +122,12 @@ std::optional<ReferencesProvider::SymbolInfo> ReferencesProvider::getSymbolInfo(
 		if (objStart < objEnd) {
 			std::string objectName = line.substr(objStart, objEnd - objStart);
 
-			// Try to find the type of the object
+			// Try to find the type of the object (use qualified lookup with position)
 			if (cache) {
-				auto varIt = cache->variables.find(objectName);
-				if (varIt != cache->variables.end()) {
+				auto varPtr = cache->findVariable(objectName, position.line);
+				if (varPtr) {
 					// It's a variable - get its type
-					std::string varType = varIt->second.type;
+					std::string varType = varPtr->type;
 
 					// Check if the type is a known struct
 					auto structIt = cache->structs.find(varType);
@@ -182,18 +182,17 @@ std::optional<ReferencesProvider::SymbolInfo> ReferencesProvider::getSymbolInfo(
 		}
 	}
 
-	// Check if it's a variable
+	// Check if it's a variable (use qualified lookup with position)
 	if (cache) {
-		auto varIt = cache->variables.find(identifier);
-		if (varIt != cache->variables.end()) {
-			const VariableInfo &var = varIt->second;
-			info.kind = var.isParameter ? SymbolKind::Parameter : SymbolKind::Variable;
+		auto varPtr = cache->findVariable(identifier, position.line);
+		if (varPtr) {
+			info.kind = varPtr->isParameter ? SymbolKind::Parameter : SymbolKind::Variable;
 			info.declarationRange = SourceRange(
-				var.line, var.column,
-				var.line, var.column + static_cast<int>(var.name.size()));
+				varPtr->line, varPtr->column,
+				varPtr->line, varPtr->column + static_cast<int>(varPtr->name.size()));
 
 			// Find the containing function for parameters
-			if (var.isParameter && cache->ast) {
+			if (varPtr->isParameter && cache->ast) {
 				// Find which function contains this position
 				// Convert 0-based LSP position to 1-based
 				int lineNum = position.line + 1;

@@ -78,9 +78,10 @@ class RenameProvider {
 	 *
 	 * @param symbolName Name of the symbol
 	 * @param cache Analysis cache with semantic info
+	 * @param line Optional line number for scoped variable lookup (-1 to search all)
 	 * @return true if the symbol can be renamed
 	 */
-	bool canRename(const std::string &symbolName, const AnalysisCache *cache);
+	bool canRename(const std::string &symbolName, const AnalysisCache *cache, int line = -1);
 
 	/**
 	 * Check if new name is a valid identifier.
