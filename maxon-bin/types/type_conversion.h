@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 /**
  * Type Conversion Rules - Single Source of Truth
@@ -167,6 +168,15 @@ class TypeConversion {
 	/// Convert array type to user-friendly display format (for error messages)
 	/// _ManagedArray<int> -> []int, _StaticArray<5, byte> -> [5]byte
 	static std::string arrayTypeToDisplayString(const std::string &arrayType);
+
+	/// Check if a type is a function type (starts with "fn(")
+	static bool isFunctionType(const std::string &type);
+
+	/// Parse a function type string into parameter types and return type
+	/// Returns true on success, false if type is not a valid function type
+	static bool parseFunctionType(const std::string &funcType,
+								  std::vector<std::string> &paramTypes,
+								  std::string &returnType);
 
   private:
 	/// The conversion table: [source][target] -> ConversionKind

@@ -138,6 +138,27 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 		// For other calls, return empty (will use default behavior)
 		return "";
 	}
+	// Handle closure expressions - return the function type string
+	if (auto *closureExpr = dynamic_cast<ClosureExprAST *>(expr)) {
+		// Build function type string: fn(T1,T2)->R
+		std::string funcType = "fn(";
+		for (size_t i = 0; i < closureExpr->parameters.size(); i++) {
+			if (i > 0) funcType += ",";
+			funcType += closureExpr->parameters[i].type;
+		}
+		funcType += ")->";
+
+		// Determine return type
+		if (!closureExpr->returnType.empty()) {
+			funcType += closureExpr->returnType;
+		} else if (closureExpr->isSingleExpression && closureExpr->singleExpr) {
+			std::string inferredType = getExpressionMaxonType(closureExpr->singleExpr.get());
+			funcType += inferredType.empty() ? "int" : inferredType;
+		} else {
+			funcType += "void";
+		}
+		return funcType;
+	}
 	// For other expression types, return empty (will use default behavior)
 	return "";
 }

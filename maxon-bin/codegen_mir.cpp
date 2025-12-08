@@ -70,6 +70,73 @@ std::string MIRCodeGenerator::inferExprType(ExprAST *expr) {
 	if (dynamic_cast<StringLiteralExprAST *>(expr)) {
 		return "string";
 	}
+	// Handle closure expressions - build the function type string
+	if (auto *closure = dynamic_cast<ClosureExprAST *>(expr)) {
+		std::string funcType = "fn(";
+		for (size_t i = 0; i < closure->parameters.size(); i++) {
+			if (i > 0) funcType += ",";
+			funcType += closure->parameters[i].type;
+		}
+		funcType += ")->";
+		// Infer return type from body
+		if (closure->isSingleExpression && closure->singleExpr) {
+			// For closures, we need parameter types in scope to infer expression type
+			// Since semantic analyzer already validated types, we can use parameter type
+			// for arithmetic ops like x * 2 where x is the parameter
+			if (!closure->parameters.empty()) {
+				// For simple closures, return type is usually the first parameter type
+				// when doing arithmetic operations
+				funcType += closure->parameters[0].type;
+			} else {
+				funcType += inferExprType(closure->singleExpr.get());
+			}
+		} else if (!closure->returnType.empty()) {
+			funcType += closure->returnType;
+		} else {
+			funcType += "void";
+		}
+		return funcType;
+	}
+	// Handle variable expressions - look up their type
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
+		// Check if this is a function reference
+		if (varExpr->isFunctionReference && !varExpr->resolvedFunctionName.empty()) {
+			// Look up function info to build function type
+			mir::MIRFunction *func = module->getFunction(varExpr->resolvedFunctionName);
+			if (func) {
+				std::string funcType = "fn(";
+				for (size_t i = 0; i < func->parameters.size(); i++) {
+					if (i > 0) funcType += ",";
+					mir::MIRType *paramType = func->parameters[i]->type;
+					if (paramType->isInteger())
+						funcType += "int";
+					else if (paramType->isFloat())
+						funcType += "float";
+					else if (paramType->isPointer())
+						funcType += "ptr";
+					else
+						funcType += "unknown";
+				}
+				funcType += ")->";
+				mir::MIRType *retType = func->returnType;
+				if (retType->isInteger())
+					funcType += "int";
+				else if (retType->isFloat())
+					funcType += "float";
+				else if (retType->isVoid())
+					funcType += "void";
+				else if (retType->isPointer())
+					funcType += "ptr";
+				else
+					funcType += "unknown";
+				return funcType;
+			}
+		}
+		auto it = variableTypes.find(varExpr->name);
+		if (it != variableTypes.end()) {
+			return it->second;
+		}
+	}
 	// For more complex expressions, default to int (semantic analyzer should have caught errors)
 	return "int";
 }
@@ -228,6 +295,12 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		std::string elemType = maxon::TypeConversion::getArrayElementType(typeStr);
 		mir::MIRType *elementType = getTypeFromString(elemType);
 		return mir::MIRType::getArray(elementType, size);
+	}
+
+	// Function pointer types: fn(T1,T2)->R
+	// At the MIR level, these are just opaque pointers
+	if (typeStr.rfind("fn(", 0) == 0) {
+		return mir::MIRType::getPtr();
 	}
 
 	throw std::runtime_error("Unknown type: " + typeStr);

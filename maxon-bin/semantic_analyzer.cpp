@@ -3,6 +3,7 @@
 #include "lexer.h"
 #include "types/type_conversion.h"
 #include <algorithm>
+#include <functional>
 #include <sstream>
 
 // Helper to convert simple literal expressions to string for display
@@ -200,7 +201,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 					 interfaceDef->line, interfaceDef->column);
 		} else {
 			InterfaceInfo protoInfo(interfaceDef->name, interfaceDef->line, interfaceDef->column,
-									interfaceDef->associatedTypes);
+									interfaceDef->associatedTypes, interfaceDef->extendsInterface);
 			for (const auto &method : interfaceDef->methods) {
 				protoInfo.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters));
 			}
@@ -209,11 +210,22 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 			// Also register simple name
 			if (interfaces.find(interfaceDef->name) == interfaces.end()) {
 				InterfaceInfo protoInfoSimple(interfaceDef->name, interfaceDef->line, interfaceDef->column,
-											  interfaceDef->associatedTypes);
+											  interfaceDef->associatedTypes, interfaceDef->extendsInterface);
 				for (const auto &method : interfaceDef->methods) {
 					protoInfoSimple.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters));
 				}
 				interfaces.emplace(interfaceDef->name, std::move(protoInfoSimple));
+			}
+		}
+	}
+
+	// Validate that extended interfaces exist
+	for (const auto &interfaceDef : program->interfaces) {
+		if (!interfaceDef->extendsInterface.empty()) {
+			if (interfaces.find(interfaceDef->extendsInterface) == interfaces.end()) {
+				addError("Interface '" + interfaceDef->name + "' extends unknown interface '" +
+							 interfaceDef->extendsInterface + "'",
+						 interfaceDef->line, interfaceDef->column);
 			}
 		}
 	}
@@ -618,7 +630,8 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 		func->returnType != "float" && func->returnType != "bool" &&
 		func->returnType != "string" && func->returnType != "cstring" &&
 		func->returnType != "character" &&
-		!maxon::TypeConversion::isArrayType(func->returnType)) { // Not an array type
+		!maxon::TypeConversion::isArrayType(func->returnType) &&
+		!maxon::TypeConversion::isFunctionType(func->returnType)) { // Not an array or function type
 		// Could be a struct type - check if it exists
 		if (lookupStruct(func->returnType) == nullptr) {
 			undefinedStructs.insert(func->returnType);
@@ -636,6 +649,10 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 			paramType != "float" && paramType != "bool" &&
 			paramType != "string" && paramType != "cstring" &&
 			paramType != "character") {
+			// Function types are valid parameter types
+			if (maxon::TypeConversion::isFunctionType(paramType)) {
+				continue;
+			}
 			// Could be a struct type - check if it exists
 			if (lookupStruct(paramType) == nullptr) {
 				undefinedStructs.insert(paramType);
@@ -1014,11 +1031,41 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 			continue;
 		}
 
-		const InterfaceInfo &interface = protoIt->second;
 		logTrace("Checking conformance of " + structName + " to " + interfaceName);
 
-		// First, check that all associated types are defined
-		for (const auto &assocType : interface.associatedTypes) {
+		// Collect all methods to check (including from base interfaces)
+		// Each entry is (method, source interface name)
+		std::vector<std::pair<InterfaceMethodInfo, std::string>> allMethods;
+		std::vector<std::string> allAssociatedTypes;
+
+		// Helper to collect methods and associated types recursively
+		std::function<void(const std::string &)> collectFromInterface = [&](const std::string &ifaceName) {
+			auto it = interfaces.find(ifaceName);
+			if (it == interfaces.end())
+				return;
+
+			const InterfaceInfo &iface = it->second;
+
+			// First add base interface methods and associated types (if any)
+			if (!iface.extendsInterface.empty()) {
+				collectFromInterface(iface.extendsInterface);
+			}
+
+			// Then add this interface's associated types
+			for (const auto &assocType : iface.associatedTypes) {
+				allAssociatedTypes.push_back(assocType);
+			}
+
+			// Then add this interface's methods with source interface name
+			for (const auto &method : iface.methods) {
+				allMethods.push_back({method, ifaceName});
+			}
+		};
+
+		collectFromInterface(interfaceName);
+
+		// Check that all associated types are defined (including from base interfaces)
+		for (const auto &assocType : allAssociatedTypes) {
 			if (!typeAssignments || typeAssignments->find(assocType) == typeAssignments->end()) {
 				addError("Struct '" + structName + "' does not define required associated type '" + assocType +
 							 "' from interface '" + interfaceName + "'",
@@ -1026,8 +1073,11 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 			}
 		}
 
-		// Check each method in the interface
-		for (const auto &protoMethod : interface.methods) {
+		// Check each method in the interface (including inherited ones)
+		for (const auto &methodPair : allMethods) {
+			const InterfaceMethodInfo &protoMethod = methodPair.first;
+			const std::string &sourceInterface = methodPair.second;
+
 			// Build expected method name: StructName.methodName
 			std::string expectedMethodName = structName + "." + protoMethod.name;
 
@@ -1048,10 +1098,11 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 			}
 
 			// Check that the method has the required interface prefix
+			// Methods should be tagged with the interface they were originally declared in
 			const FunctionInfo &implFunc = funcIt->second;
-			if (implFunc.implementsInterface != interfaceName) {
-				addError("Method '" + protoMethod.name + "' implements interface '" + interfaceName +
-							 "' but is missing the required prefix\n  Use: function " + interfaceName + "." +
+			if (implFunc.implementsInterface != sourceInterface) {
+				addError("Method '" + protoMethod.name + "' implements interface '" + sourceInterface +
+							 "' but is missing the required prefix\n  Use: function " + sourceInterface + "." +
 							 protoMethod.name + "(...) instead of: function " + protoMethod.name + "(...)",
 						 line, column);
 			}

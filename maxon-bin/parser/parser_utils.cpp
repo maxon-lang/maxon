@@ -303,7 +303,34 @@ std::string Parser::parseQualifiedName(const std::string &context) {
 // - Primitive types: int, float, bool, byte
 // - Struct types: MyStruct, pkg.MyStruct
 // - Array types: array of T, array of N T, array of array of T
+// - Function types: (T1, T2) -> R
 std::string Parser::parseTypeString(const std::string &context) {
+	// Check for function type: (T1, T2, ...) -> R
+	if (check(TokenType::LPAREN)) {
+		advance(); // consume '('
+
+		std::vector<std::string> paramTypes;
+		if (!check(TokenType::RPAREN)) {
+			do {
+				paramTypes.push_back(parseTypeString("function parameter type"));
+			} while (match(TokenType::COMMA));
+		}
+		expectAdvance(TokenType::RPAREN, "Expected ')' in function type");
+
+		expectAdvance(TokenType::ARROW, "Expected '->' in function type");
+
+		std::string returnType = parseTypeString("function return type");
+
+		// Build function type string: fn(T1,T2)->R
+		std::string funcType = "fn(";
+		for (size_t i = 0; i < paramTypes.size(); i++) {
+			if (i > 0) funcType += ",";
+			funcType += paramTypes[i];
+		}
+		funcType += ")->" + returnType;
+		return funcType;
+	}
+
 	// Check for 'array' keyword - new array syntax
 	if (checkKeyword("array")) {
 		advance(); // consume 'array'

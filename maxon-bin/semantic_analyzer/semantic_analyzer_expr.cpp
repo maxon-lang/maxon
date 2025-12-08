@@ -240,6 +240,38 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 	} else if (auto varExpr = dynamic_cast<VariableExprAST *>(expr)) {
 		auto varInfo = lookupVariable(varExpr->name);
 		if (!varInfo.has_value()) {
+			// Check if this is a function reference (function name used as value)
+			auto funcIt = functions.find(varExpr->name);
+			if (funcIt == functions.end()) {
+				// Try suffix matching for unqualified function names
+				std::string searchSuffix = "." + varExpr->name;
+				for (const auto &pair : functions) {
+					const std::string &funcName = pair.first;
+					if (funcName.size() > searchSuffix.size() &&
+						funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
+						funcIt = functions.find(funcName);
+						break;
+					}
+				}
+			}
+
+			if (funcIt != functions.end()) {
+				// This is a function reference - build the function type
+				const FunctionInfo &funcInfo = funcIt->second;
+				std::string funcType = "fn(";
+				for (size_t i = 0; i < funcInfo.parameters.size(); i++) {
+					if (i > 0) funcType += ",";
+					funcType += funcInfo.parameters[i].type;
+				}
+				funcType += ")->" + funcInfo.returnType;
+
+				// Mark this variable expression as a function reference
+				varExpr->isFunctionReference = true;
+				varExpr->resolvedFunctionName = funcIt->first;
+
+				return funcType;
+			}
+
 			addError("Undefined variable: '" + varExpr->name + "'" +
 						 std::string("\n  Note: Variable must be declared with 'var' or 'let' before use"),
 					 expr->line, expr->column);
@@ -576,6 +608,54 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return maxon::TypeConversion::getArrayElementType(arrType);
 		}
 
+		// Check for map(arr, transform) intrinsic
+		// Transforms each element using the closure and returns a new array
+		if (callExpr->callee == "map") {
+			if (callExpr->args.size() != 2) {
+				addError("map() requires exactly 2 arguments: array and transform function",
+						 expr->line, expr->column);
+				return "error";
+			}
+			// First arg should be an array
+			std::string arrType = analyzeExpression(callExpr->args[0].get());
+			if (!maxon::TypeConversion::isArrayType(arrType)) {
+				addError("map() first argument must be an array, not " + arrType,
+						 expr->line, expr->column);
+				return "error";
+			}
+			std::string elemType = maxon::TypeConversion::getArrayElementType(arrType);
+
+			// Second arg should be a function type: fn(ElemType)->RetType
+			std::string funcType = analyzeExpression(callExpr->args[1].get());
+			if (funcType.rfind("fn(", 0) != 0) {
+				addError("map() second argument must be a function, not " + funcType,
+						 expr->line, expr->column);
+				return "error";
+			}
+
+			// Parse function type: fn(ParamType)->ReturnType
+			// Find the parameter and return types
+			size_t arrowPos = funcType.find(")->");
+			if (arrowPos == std::string::npos) {
+				addError("Invalid function type for map(): " + funcType,
+						 expr->line, expr->column);
+				return "error";
+			}
+			std::string paramPart = funcType.substr(3, arrowPos - 3); // extract between "fn(" and ")->"
+			std::string returnType = funcType.substr(arrowPos + 3);	  // extract after ")->"
+
+			// Check that function takes one parameter of the element type
+			if (paramPart != elemType) {
+				addError("map() transform function parameter type '" + paramPart +
+							 "' doesn't match array element type '" + elemType + "'",
+						 expr->line, expr->column);
+				return "error";
+			}
+
+			// Return a dynamic array of the function's return type
+			return maxon::TypeConversion::makeManagedArrayType(returnType);
+		}
+
 		// Handle compiler intrinsics using the registry
 		const IntrinsicInfo *intrinsic = IntrinsicRegistry::instance().lookup(callExpr->callee);
 		if (intrinsic) {
@@ -747,6 +827,57 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			}
 
 			if (matches.empty()) {
+				// Check if callee is a variable with a function type
+				auto varInfo = lookupVariable(callExpr->callee);
+				if (varInfo.has_value() && maxon::TypeConversion::isFunctionType(varInfo->type)) {
+					// Mark variable as used
+					markVariableAsUsed(callExpr->callee);
+
+					// Parse the function type to get parameter types and return type
+					std::vector<std::string> expectedParamTypes;
+					std::string returnType;
+					if (!maxon::TypeConversion::parseFunctionType(varInfo->type, expectedParamTypes, returnType)) {
+						addError("Invalid function type: '" + varInfo->type + "'",
+								 expr->line, expr->column);
+						return "error";
+					}
+
+					// Check argument count
+					if (callExpr->args.size() != expectedParamTypes.size()) {
+						addError("Function variable '" + callExpr->callee + "' argument count mismatch" +
+									 std::string("\n  Expected: ") + std::to_string(expectedParamTypes.size()) + " argument" +
+									 (expectedParamTypes.size() == 1 ? "" : "s") +
+									 "\n  Found: " + std::to_string(callExpr->args.size()) + " argument" +
+									 (callExpr->args.size() == 1 ? "" : "s"),
+								 expr->line, expr->column);
+						return returnType;
+					}
+
+					// Check argument types
+					for (size_t i = 0; i < callExpr->args.size(); i++) {
+						std::string argType = analyzeExpression(callExpr->args[i].get());
+						std::string expectedType = expectedParamTypes[i];
+
+						bool isValidType = typesMatch(expectedType, argType);
+						if (!isValidType) {
+							isValidType = maxon::TypeConversion::canConvertImplicitly(argType, expectedType);
+						}
+
+						if (!isValidType) {
+							addError("Function variable '" + callExpr->callee + "' argument type mismatch" +
+										 std::string("\n  Parameter ") + std::to_string(i + 1) +
+										 "\n  Expected type: " + expectedType +
+										 "\n  Found type: " + argType,
+									 expr->line, expr->column);
+						}
+					}
+
+					// Mark this as a function variable call for codegen
+					callExpr->isFunctionVariableCall = true;
+
+					return returnType;
+				}
+
 				// Track this as an undefined function for potential auto-discovery
 				undefinedFunctions.insert(callExpr->callee);
 
@@ -1375,6 +1506,51 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		}
 
 		return resultType.empty() ? "error" : resultType;
+
+	} else if (auto closureExpr = dynamic_cast<ClosureExprAST *>(expr)) {
+		// Analyze closure expression
+
+		// Enter a new scope for the closure
+		enterScope();
+
+		// Declare parameters as local variables
+		std::vector<std::string> paramTypes;
+		for (const auto &param : closureExpr->parameters) {
+			std::string paramType = param.type;
+			if (paramType.empty()) {
+				// Type needs to be inferred from context (for now, error)
+				addError("Closure parameter '" + param.name + "' requires explicit type annotation",
+						 param.line, param.column);
+				paramType = "error";
+			}
+			declareVariable(param.name, paramType, false, param.line, param.column, true);
+			paramTypes.push_back(paramType);
+		}
+
+		// Analyze body
+		std::string returnType;
+		if (closureExpr->isSingleExpression && closureExpr->singleExpr) {
+			// Single expression closure - return type is expression type
+			returnType = analyzeExpression(closureExpr->singleExpr.get());
+		} else {
+			// Multi-statement closure - need to analyze statements and find return type
+			returnType = closureExpr->returnType.empty() ? "void" : closureExpr->returnType;
+			for (const auto &stmt : closureExpr->body) {
+				analyzeStatement(stmt.get(), returnType);
+			}
+		}
+
+		exitScope();
+
+		// Build function type string: fn(T1,T2)->R
+		std::string funcType = "fn(";
+		for (size_t i = 0; i < paramTypes.size(); i++) {
+			if (i > 0) funcType += ",";
+			funcType += paramTypes[i];
+		}
+		funcType += ")->" + returnType;
+
+		return funcType;
 	}
 
 	return "error";

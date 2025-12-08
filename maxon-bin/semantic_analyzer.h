@@ -97,14 +97,16 @@ struct InterfaceMethodInfo {
 // Interface information
 struct InterfaceInfo {
 	std::string name;
+	std::string extendsInterface; // Base interface this extends (empty if none)
 	std::vector<InterfaceMethodInfo> methods;
 	std::vector<std::string> associatedTypes; // Associated type declarations (e.g., "Element")
 	int line;
 	int column;
 
 	InterfaceInfo(const std::string &n, int l = 0, int c = 0,
-				  std::vector<std::string> assocTypes = {})
-		: name(n), associatedTypes(std::move(assocTypes)), line(l), column(c) {}
+				  std::vector<std::string> assocTypes = {},
+				  const std::string &extends = "")
+		: name(n), extendsInterface(extends), associatedTypes(std::move(assocTypes)), line(l), column(c) {}
 };
 
 // Enum case associated value information

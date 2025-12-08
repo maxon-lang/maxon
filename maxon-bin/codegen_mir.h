@@ -205,6 +205,11 @@ class MIRCodeGenerator {
 	// Array intrinsic generation (push, pop)
 	mir::MIRValue *generateArrayIntrinsic(CallExprAST *callExpr);
 
+	// Map intrinsic for arrays: map(arr, transform)
+	mir::MIRValue *generateMapIntrinsic(CallExprAST *callExpr);
+	mir::MIRValue *lastMapResultLength = nullptr;	 // Length of last map() result
+	mir::MIRValue *lastMapResultCapacity = nullptr; // Capacity of last map() result
+
 	// Map method generation (insert, get, contains, remove, count, capacity)
 	bool isMapMethodCall(const std::string &callee);
 	mir::MIRValue *generateMapMethod(CallExprAST *callExpr);

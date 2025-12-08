@@ -125,14 +125,24 @@ bool DeadCodeEliminationPass::eliminateUnusedFunctions(MIRModule &module) {
 
 		MIRFunction *currentFunc = it->second;
 
-		// Scan all instructions for function calls
+		// Scan all instructions for function calls and function references
 		for (auto &block : currentFunc->basicBlocks) {
 			for (auto &inst : block->instructions) {
+				// Check for direct function calls
 				if (inst->opcode == MIROpcode::Call && !inst->calleeName.empty()) {
 					// The function being called is stored in calleeName
 					if (reachable.find(inst->calleeName) == reachable.end()) {
 						reachable.insert(inst->calleeName);
 						worklist.push_back(inst->calleeName);
+					}
+				}
+				// Check operands for function references (function pointers)
+				for (auto *operand : inst->operands) {
+					if (operand && operand->kind == MIRValueKind::FunctionRef && !operand->name.empty()) {
+						if (reachable.find(operand->name) == reachable.end()) {
+							reachable.insert(operand->name);
+							worklist.push_back(operand->name);
+						}
 					}
 				}
 			}

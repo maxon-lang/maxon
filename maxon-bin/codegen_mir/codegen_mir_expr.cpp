@@ -246,6 +246,28 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					}
 				}
 			}
+			// Check if this is a function reference (function pointer)
+			if (varExpr->isFunctionReference && !varExpr->resolvedFunctionName.empty()) {
+				// Get the function from the module
+				mir::MIRFunction *func = module->getFunction(varExpr->resolvedFunctionName);
+				if (!func) {
+					// Try suffix matching for namespaced functions
+					std::string searchSuffix = "." + varExpr->resolvedFunctionName;
+					for (auto &f : module->functions) {
+						if (f->name == varExpr->resolvedFunctionName ||
+							(f->name.size() > searchSuffix.size() &&
+							 f->name.substr(f->name.size() - searchSuffix.size()) == searchSuffix)) {
+							func = f.get();
+							break;
+						}
+					}
+				}
+				if (func) {
+					// Create a function reference (function pointer)
+					return mir::MIRValue::createFunctionRef(func->name);
+				}
+			}
+
 			reportError("Unknown variable name: " + varExpr->name,
 						varExpr->line, varExpr->column);
 		}
@@ -1319,6 +1341,11 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			return generateArrayIntrinsic(callExpr);
 		}
 
+		// Handle map intrinsic: map(arr, transform)
+		if (callExpr->callee == "map") {
+			return generateMapIntrinsic(callExpr);
+		}
+
 		// Map method calls are now handled through monomorphization
 		// The specialized methods (e.g., map<string,int>.insert) are generated as regular functions
 		// Map method calls are now handled through monomorphization - use resolvedCallee if available
@@ -1420,6 +1447,39 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			mir::MIRValue *self = generateExpr(callExpr->args[0].get());
 			mir::MIRValue *other = generateExpr(callExpr->args[1].get());
 			return builder->createICmpEq(self, other, "equals");
+		}
+
+		// Handle function variable calls (calling a function pointer stored in a variable)
+		if (callExpr->isFunctionVariableCall) {
+			// Load the function pointer from the variable
+			auto it = namedValues.find(effectiveCallee);
+			if (it == namedValues.end()) {
+				reportError("Unknown function variable: " + effectiveCallee,
+							callExpr->line, callExpr->column);
+			}
+			mir::MIRValue *funcPtrAlloca = it->second;
+			mir::MIRValue *funcPtr = builder->createLoad(mir::MIRType::getPtr(), funcPtrAlloca, "funcptr");
+
+			// Generate arguments
+			std::vector<mir::MIRValue *> argsV;
+			for (size_t i = 0; i < callExpr->args.size(); i++) {
+				mir::MIRValue *argVal = generateExpr(callExpr->args[i].get());
+				argsV.push_back(argVal);
+			}
+
+			// Create indirect call through function pointer
+			// Parse the function type to determine return type
+			std::string varType = variableTypes[effectiveCallee];
+			std::vector<std::string> paramTypes;
+			std::string returnTypeStr;
+			maxon::TypeConversion::parseFunctionType(varType, paramTypes, returnTypeStr);
+
+			mir::MIRType *returnType = getTypeFromString(returnTypeStr);
+			std::vector<mir::MIRType *> mirParamTypes;
+			for (const auto &pt : paramTypes) {
+				mirParamTypes.push_back(getTypeFromString(pt));
+			}
+			return builder->createCallIndirect(funcPtr, returnType, mirParamTypes, argsV, "fncall");
 		}
 
 		// Check if this is an extern function that should go through Safe FFI
@@ -1633,6 +1693,151 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 	if (auto *matchExpr = dynamic_cast<MatchExprAST *>(expr)) {
 		return generateMatchExpr(matchExpr);
+	}
+
+	if (auto *closureExpr = dynamic_cast<ClosureExprAST *>(expr)) {
+		// Generate an anonymous function for the closure (non-capturing only for MVP)
+		// The closure becomes a function pointer that can be passed to other functions
+
+		// Generate unique name for the closure function
+		static int closureCounter = 0;
+		std::string closureName = "__closure_" + std::to_string(closureCounter++);
+
+		// Build parameter types for the closure function
+		std::vector<std::pair<mir::MIRType *, std::string>> closureParams;
+		for (const auto &param : closureExpr->parameters) {
+			mir::MIRType *paramType = getParamTypeFromString(param.type);
+			closureParams.push_back({paramType, param.name});
+
+			// Handle array parameters with hidden length
+			if (isArrayParam(param.type)) {
+				closureParams.push_back({mir::MIRType::getInt32(), param.name + ".__length"});
+			}
+		}
+
+		// Determine return type
+		mir::MIRType *returnType;
+		if (!closureExpr->returnType.empty()) {
+			returnType = getTypeFromString(closureExpr->returnType);
+		} else if (closureExpr->isSingleExpression && closureExpr->singleExpr) {
+			// Infer return type from the expression
+			std::string inferredType = inferExprType(closureExpr->singleExpr.get());
+			returnType = getTypeFromString(inferredType.empty() ? "int" : inferredType);
+		} else {
+			returnType = mir::MIRType::getVoid();
+		}
+
+		// Save current builder state to restore after generating the closure
+		mir::MIRFunction *savedFunction = builder->getFunction();
+		mir::MIRBasicBlock *savedBlock = builder->getInsertBlock();
+		std::map<std::string, mir::MIRValue *> savedNamedValues = namedValues;
+		std::map<std::string, std::string> savedVariableTypes = variableTypes;
+		std::set<std::string> savedStructParameters = structParameters;
+		std::set<std::string> savedArrayParameters = arrayParameters;
+		std::set<std::string> savedStackAllocatedArrays = stackAllocatedArrays;
+		std::string savedReceiverType = currentReceiverType;
+
+		// Create the closure function
+		mir::MIRFunction *closureFunc = builder->createFunction(closureName, returnType, closureParams);
+
+		// Set up the closure function context
+		builder->setFunction(closureFunc);
+		mir::MIRBasicBlock *entry = closureFunc->createBasicBlock("entry");
+		builder->setInsertPoint(entry);
+
+		// Clear context for the closure function
+		namedValues.clear();
+		variableTypes.clear();
+		structParameters.clear();
+		arrayParameters.clear();
+		stackAllocatedArrays.clear();
+		currentReceiverType.clear();
+
+		// Allocate stack space for parameters
+		size_t argIdx = 0;
+		for (const auto &param : closureExpr->parameters) {
+			mir::MIRType *paramType = getParamTypeFromString(param.type);
+			mir::MIRValue *alloca = builder->createAlloca(paramType, param.name);
+
+			// Store the parameter value
+			mir::MIRValue *paramVal = closureFunc->parameters[argIdx];
+			builder->createStore(paramVal, alloca);
+			namedValues[param.name] = alloca;
+			variableTypes[param.name] = param.type;
+			argIdx++;
+
+			// Track struct parameters
+			if (structTypes.find(param.type) != structTypes.end()) {
+				structParameters.insert(param.name);
+			}
+
+			// Handle array parameters with hidden length
+			if (isArrayParam(param.type)) {
+				arrayParameters.insert(param.name);
+				std::string lengthVarName = param.name + ".__length";
+				mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt32(), lengthVarName);
+				mir::MIRValue *lengthParamVal = closureFunc->parameters[argIdx];
+				builder->createStore(lengthParamVal, lengthAlloca);
+				namedValues[lengthVarName] = lengthAlloca;
+				argIdx++;
+			}
+		}
+
+		// Push a scope for the closure body
+		pushScope();
+
+		// Generate the closure body
+		if (closureExpr->isSingleExpression && closureExpr->singleExpr) {
+			// Single expression closure - evaluate and return
+			mir::MIRValue *result = generateExpr(closureExpr->singleExpr.get());
+			popScope(closureFunc);
+			if (result && !returnType->isVoid()) {
+				builder->createRet(result);
+			} else {
+				builder->createRetVoid();
+			}
+		} else {
+			// Multi-statement closure
+			for (auto &stmt : closureExpr->body) {
+				generateStmt(stmt.get(), closureFunc);
+				if (builder->getInsertBlock()->hasTerminator()) {
+					break;
+				}
+			}
+
+			// Add default return if no terminator
+			mir::MIRBasicBlock *currentBlock = builder->getInsertBlock();
+			if (currentBlock && !currentBlock->hasTerminator()) {
+				popScope(closureFunc);
+				if (returnType->isVoid()) {
+					builder->createRetVoid();
+				} else if (returnType->isInteger()) {
+					builder->createRet(builder->getInt32(0));
+				} else if (returnType->isFloat()) {
+					builder->createRet(builder->getFloat64(0.0));
+				} else if (returnType->isPointer()) {
+					builder->createRet(builder->getNull());
+				} else {
+					builder->createRetVoid();
+				}
+			}
+		}
+
+		// Restore the previous builder state
+		namedValues = savedNamedValues;
+		variableTypes = savedVariableTypes;
+		structParameters = savedStructParameters;
+		arrayParameters = savedArrayParameters;
+		stackAllocatedArrays = savedStackAllocatedArrays;
+		currentReceiverType = savedReceiverType;
+
+		if (savedFunction && savedBlock) {
+			builder->setFunction(savedFunction);
+			builder->setInsertPoint(savedBlock);
+		}
+
+		// Return a reference to the closure function as a function pointer
+		return mir::MIRValue::createFunctionRef(closureName);
 	}
 
 	reportError("Unknown expression type", expr->line, expr->column);

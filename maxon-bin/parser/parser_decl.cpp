@@ -707,6 +707,15 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 		} while (match(TokenType::COMMA));
 	}
 
+	// Parse extends clause: interface Name uses Type extends OtherInterface
+	std::string extendsInterface;
+	if (checkKeyword("extends")) {
+		advance(); // consume 'extends'
+		Token baseToken = expect(TokenType::IDENTIFIER, "Expected interface name after 'extends'");
+		extendsInterface = baseToken.value;
+		logTrace("  Extends interface '" + extendsInterface + "'");
+	}
+
 	// Parse method signatures until we hit 'end'
 	// Methods have implicit self parameter - not declared in signature
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
@@ -771,9 +780,10 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 	}
 
 	logTrace("Interface '" + interfaceName + "' with " + std::to_string(methods.size()) + " methods" +
-			 (associatedTypes.empty() ? "" : ", " + std::to_string(associatedTypes.size()) + " associated type(s)"));
+			 (associatedTypes.empty() ? "" : ", " + std::to_string(associatedTypes.size()) + " associated type(s)") +
+			 (extendsInterface.empty() ? "" : ", extends '" + extendsInterface + "'"));
 
-	auto interfaceDef = std::make_unique<InterfaceDefAST>(interfaceName, std::move(methods), line, column, defaultNamespace, isExported, std::move(associatedTypes));
+	auto interfaceDef = std::make_unique<InterfaceDefAST>(interfaceName, std::move(methods), line, column, defaultNamespace, isExported, std::move(associatedTypes), extendsInterface);
 	// Set end position to the closing block identifier
 	interfaceDef->setEndPosition(blockIdToken.line, blockIdToken.column + static_cast<int>(blockIdToken.value.length()) - 1);
 	return interfaceDef;

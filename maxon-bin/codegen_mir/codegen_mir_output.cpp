@@ -402,8 +402,12 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 		const auto &reloc = adj.reloc;
 
 		if (verboseLevel >= 3) {
-			std::cout << "[RELOC] " << (reloc.type == backend::Relocation::Type::FunctionCall ? "FunctionCall" : reloc.type == backend::Relocation::Type::ImportCall ? "ImportCall"
-																																									 : "Other")
+			const char *typeName = "Other";
+			if (reloc.type == backend::Relocation::Type::FunctionCall) typeName = "FunctionCall";
+			else if (reloc.type == backend::Relocation::Type::ImportCall) typeName = "ImportCall";
+			else if (reloc.type == backend::Relocation::Type::FunctionAddress) typeName = "FunctionAddress";
+			else if (reloc.type == backend::Relocation::Type::GlobalRef) typeName = "GlobalRef";
+			std::cout << "[RELOC] " << typeName
 					  << " " << reloc.symbolName << " at offset " << (adj.funcBaseOffset + reloc.offset)
 					  << " (in " << adj.funcName << ")" << std::endl;
 		}
@@ -427,6 +431,23 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 			// Indirect call through IAT - collect for later patching by PE writer
 			size_t patchOffset = adj.funcBaseOffset + reloc.offset;
 			importRelocations.push_back({patchOffset, reloc.symbolName});
+		} else if (reloc.type == backend::Relocation::Type::FunctionAddress) {
+			// RIP-relative reference to a function's code address (function pointer)
+			auto targetIt = functionOffsets.find(reloc.symbolName);
+			if (targetIt != functionOffsets.end()) {
+				// Patch the RIP-relative offset to point to the function
+				size_t patchOffset = adj.funcBaseOffset + reloc.offset;
+				size_t instrEnd = patchOffset + 4; // After the rel32
+				int32_t rel = static_cast<int32_t>(targetIt->second - instrEnd);
+
+				// Patch the 4-byte relative offset
+				codeBuffer[patchOffset + 0] = static_cast<uint8_t>(rel & 0xFF);
+				codeBuffer[patchOffset + 1] = static_cast<uint8_t>((rel >> 8) & 0xFF);
+				codeBuffer[patchOffset + 2] = static_cast<uint8_t>((rel >> 16) & 0xFF);
+				codeBuffer[patchOffset + 3] = static_cast<uint8_t>((rel >> 24) & 0xFF);
+			} else if (verboseLevel >= 1) {
+				std::cerr << "Warning: FunctionAddress to unknown function '" << reloc.symbolName << "'" << std::endl;
+			}
 		} else if (reloc.type == backend::Relocation::Type::GlobalRef) {
 			// RIP-relative reference to data section (e.g., float constants or named globals)
 			size_t patchOffset = adj.funcBaseOffset + reloc.offset;

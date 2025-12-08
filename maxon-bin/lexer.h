@@ -48,6 +48,7 @@ enum class TokenType {
 	CARET,		 // ^ (bitwise XOR)
 	LSHIFT,		 // << (left shift)
 	RSHIFT,		 // >> (right shift)
+	ARROW,		 // -> (function type / closure syntax)
 
 	// Delimiters
 	LPAREN,	  // (

@@ -94,6 +94,7 @@ enum class MIRValueKind {
 	ConstantFloat, // Floating-point constant
 	ConstantNull,  // Null pointer
 	Global,		   // Global variable reference
+	FunctionRef,   // Function address reference (function pointer)
 	Parameter,	   // Function parameter
 	BasicBlockRef, // Reference to a basic block (for branches)
 };
@@ -132,6 +133,7 @@ class MIRValue {
 	static MIRValue *createConstantFloat(double value);
 	static MIRValue *createConstantNull();
 	static MIRValue *createGlobal(MIRType *type, const std::string &name);
+	static MIRValue *createFunctionRef(const std::string &funcName);
 	static MIRValue *createParameter(MIRType *type, const std::string &name, uint32_t index);
 	static MIRValue *createBlockRef(MIRBasicBlock *block);
 

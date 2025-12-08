@@ -235,6 +235,10 @@ class KeywordMatcher {
 					"Struct associated type binding",
 					"with $1 = $2",
 					KeywordCompletionKind::Keyword);
+		add_keyword("extends", KeywordCategory::Declaration,
+					"Interface inheritance - extends another interface",
+					"extends $1",
+					KeywordCompletionKind::Keyword);
 		add_keyword("export", KeywordCategory::Declaration,
 					"Export declaration - makes item visible to other modules",
 					"export",

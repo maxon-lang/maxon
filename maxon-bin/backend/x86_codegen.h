@@ -72,11 +72,12 @@ struct RegAllocInfo {
 
 struct Relocation {
 	enum class Type {
-		Rel32,		  // 32-bit relative (for jumps/calls within module)
-		Abs64,		  // 64-bit absolute (for data references)
-		FunctionCall, // Direct call to another function (within module)
-		ImportCall,	  // Indirect call to imported function (via IAT)
-		GlobalRef,	  // Reference to global variable
+		Rel32,			 // 32-bit relative (for jumps/calls within module)
+		Abs64,			 // 64-bit absolute (for data references)
+		FunctionCall,	 // Direct call to another function (within module)
+		ImportCall,		 // Indirect call to imported function (via IAT)
+		GlobalRef,		 // Reference to global variable
+		FunctionAddress, // Address of a function (function pointer)
 	};
 
 	Type type;

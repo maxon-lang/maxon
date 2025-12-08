@@ -1,5 +1,6 @@
 #include "type_conversion.h"
 #include <algorithm>
+#include <vector>
 
 namespace maxon {
 
@@ -212,6 +213,28 @@ bool TypeConversion::typesMatch(const std::string &type1, const std::string &typ
 	if (isOptionalType(type1) && isOptionalType(type2)) {
 		// Both optional: base types must match
 		return typesMatch(unwrapOptionalType(type1), unwrapOptionalType(type2));
+	}
+
+	// Check function types
+	if (isFunctionType(type1) && isFunctionType(type2)) {
+		std::vector<std::string> params1, params2;
+		std::string ret1, ret2;
+		if (!parseFunctionType(type1, params1, ret1) ||
+			!parseFunctionType(type2, params2, ret2)) {
+			return false;
+		}
+		// Parameter count must match
+		if (params1.size() != params2.size()) {
+			return false;
+		}
+		// All parameter types must match
+		for (size_t i = 0; i < params1.size(); i++) {
+			if (!typesMatch(params1[i], params2[i])) {
+				return false;
+			}
+		}
+		// Return types must match
+		return typesMatch(ret1, ret2);
 	}
 
 	// Exact match
@@ -433,6 +456,56 @@ std::string TypeConversion::arrayTypeToDisplayString(const std::string &arrayTyp
 	}
 
 	return arrayType;
+}
+
+bool TypeConversion::isFunctionType(const std::string &type) {
+	return type.rfind("fn(", 0) == 0;
+}
+
+bool TypeConversion::parseFunctionType(const std::string &funcType,
+									   std::vector<std::string> &paramTypes,
+									   std::string &returnType) {
+	// Function type format: fn(T1,T2,...)->R
+	if (!isFunctionType(funcType)) {
+		return false;
+	}
+
+	// Find the closing paren and arrow
+	size_t parenStart = 3; // After "fn("
+	size_t parenEnd = funcType.find(")->");
+	if (parenEnd == std::string::npos) {
+		return false;
+	}
+
+	// Extract parameter types (comma-separated, handling nested types)
+	paramTypes.clear();
+	std::string paramStr = funcType.substr(parenStart, parenEnd - parenStart);
+
+	if (!paramStr.empty()) {
+		size_t start = 0;
+		int parenDepth = 0;
+		for (size_t i = 0; i <= paramStr.size(); i++) {
+			if (i == paramStr.size() || (paramStr[i] == ',' && parenDepth == 0)) {
+				std::string param = paramStr.substr(start, i - start);
+				// Trim whitespace
+				size_t first = param.find_first_not_of(' ');
+				size_t last = param.find_last_not_of(' ');
+				if (first != std::string::npos) {
+					paramTypes.push_back(param.substr(first, last - first + 1));
+				}
+				start = i + 1;
+			} else if (paramStr[i] == '(' || paramStr[i] == '<') {
+				parenDepth++;
+			} else if (paramStr[i] == ')' || paramStr[i] == '>') {
+				parenDepth--;
+			}
+		}
+	}
+
+	// Extract return type
+	returnType = funcType.substr(parenEnd + 3); // After ")->"
+
+	return true;
 }
 
 } // namespace maxon

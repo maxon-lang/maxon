@@ -416,6 +416,14 @@ X86Reg X86CodeGen::loadValue(mir::MIRValue *value, X86Reg hint) {
 							   value->name});
 		return hint;
 	}
+	case mir::MIRValueKind::FunctionRef: {
+		// Load address of function (function pointer)
+		encoder.lea64(hint, X86Mem::RipRel(0));
+		relocations.push_back({Relocation::Type::FunctionAddress,
+							   encoder.getOffset() - 4,
+							   value->name});
+		return hint;
+	}
 	default:
 		throw std::runtime_error("Cannot load value type");
 	}

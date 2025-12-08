@@ -285,6 +285,14 @@ void CallGraphBuilder::extractCallsFromExpr(ExprAST *expr, std::set<std::string>
 			}
 		}
 	}
-	// NumberExprAST, FloatExprAST, VariableExprAST, BooleanExprAST,
+	// NumberExprAST, FloatExprAST, BooleanExprAST,
 	// CharacterExprAST, StringLiteralExprAST, ByteExprAST don't contain calls
+
+	// VariableExprAST may be a function reference (function passed as argument)
+	// If isFunctionReference is set, add the resolved function name to calls
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
+		if (varExpr->isFunctionReference && !varExpr->resolvedFunctionName.empty()) {
+			calls.insert(varExpr->resolvedFunctionName);
+		}
+	}
 }

@@ -308,6 +308,149 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		return parseStructInit("array");
 	}
 
+	// Closure/lambda expression with new syntax:
+	// Single expression: x gives x * 2
+	//
+	// Detection: IDENTIFIER followed by 'gives' keyword indicates closure
+	// Note: We only support 'gives' for single-parameter closures with inferred type.
+	// For multi-statement closures, use parenthesized form: (x int) 'label' ... end 'label'
+	// Must check BEFORE general identifier handling
+	if (check(TokenType::IDENTIFIER) && checkKeyword("gives", 1)) {
+		int line = currentLine();
+		int column = currentColumn();
+
+		// Parse single parameter (type inferred)
+		Token paramName = currentToken();
+		advance(); // consume parameter name
+		std::vector<FunctionParameter> params;
+		params.push_back(FunctionParameter(paramName.value, "", paramName.line, paramName.column));
+
+		// Single expression form: x gives expr
+		advance(); // consume 'gives'
+		auto bodyExpr = parseLogicalOr();
+
+		int endLine = bodyExpr->endLine;
+		int endCol = bodyExpr->endColumn;
+
+		auto closureExpr = std::make_unique<ClosureExprAST>(
+			std::move(params),
+			"", // return type inferred
+			std::vector<std::unique_ptr<StmtAST>>{},
+			std::move(bodyExpr),
+			true, // isSingleExpression
+			line, column
+		);
+		closureExpr->setEndPosition(endLine, endCol);
+		return closureExpr;
+	}
+
+	// Parenthesized closure parameters: (x int) gives expr or (x int, y int) 'label' ... end 'label'
+	// Detection: ( followed by IDENTIFIER and then a type (keyword or identifier)
+	// Need to distinguish from regular parenthesized expression
+	// Must check BEFORE general parenthesized expression handling
+	if (check(TokenType::LPAREN)) {
+		// Look ahead to detect closure parameter list
+		// Pattern: ( IDENTIFIER TYPE ... ) followed by 'gives' or BLOCK_ID
+		// vs regular expression: ( expr )
+		bool isClosure = false;
+		int lookahead = 1;
+
+		if (check(TokenType::IDENTIFIER, 1)) {
+			// Check if followed by a type (closure param) or operator (expression)
+			auto kd2 = peekToken(2);
+			// Type keywords or identifiers followed by comma/rparen indicate closure params
+			if (kd2.type == TokenType::KEYWORD || kd2.type == TokenType::IDENTIFIER) {
+				// Scan to find matching ')' and check what follows
+				int parenDepth = 1;
+				lookahead = 1;
+				while (parenDepth > 0 && lookahead < 50) { // safety limit
+					Token tok = peekToken(lookahead);
+					if (tok.type == TokenType::LPAREN) parenDepth++;
+					else if (tok.type == TokenType::RPAREN) parenDepth--;
+					else if (tok.type == TokenType::END_OF_FILE) break;
+					lookahead++;
+				}
+				// lookahead now points past the closing ')'
+				// Check if followed by 'gives' keyword or BLOCK_ID
+				Token afterParen = peekToken(lookahead);
+				if (afterParen.type == TokenType::BLOCK_ID) {
+					isClosure = true;
+				} else if (afterParen.type == TokenType::KEYWORD && afterParen.value == "gives") {
+					isClosure = true;
+				}
+			}
+		}
+
+		if (isClosure) {
+			int line = currentLine();
+			int column = currentColumn();
+			advance(); // consume '('
+
+			std::vector<FunctionParameter> params;
+			if (!check(TokenType::RPAREN)) {
+				do {
+					Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name in closure");
+					std::string paramType = parseTypeString("closure parameter type");
+					params.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
+				} while (match(TokenType::COMMA));
+			}
+
+			expectAdvance(TokenType::RPAREN, "Expected ')' after closure parameters");
+
+			if (checkKeyword("gives")) {
+				// Single expression form: (x int) gives expr
+				advance(); // consume 'gives'
+				auto bodyExpr = parseLogicalOr();
+
+				int endLine = bodyExpr->endLine;
+				int endCol = bodyExpr->endColumn;
+
+				auto closureExpr = std::make_unique<ClosureExprAST>(
+					std::move(params),
+					"", // return type inferred
+					std::vector<std::unique_ptr<StmtAST>>{},
+					std::move(bodyExpr),
+					true, // isSingleExpression
+					line, column
+				);
+				closureExpr->setEndPosition(endLine, endCol);
+				return closureExpr;
+			} else {
+				// Multi-statement form: (x int, y int) 'label' ... end 'label'
+				Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier or 'gives' after closure parameters");
+				std::string blockId = blockIdToken.value;
+
+				std::vector<std::unique_ptr<StmtAST>> body;
+				while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+					body.push_back(parseStatementWithRecovery());
+				}
+
+				expectKeywordAdvance("end", "Expected 'end' to close closure block");
+				Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end'");
+				if (endBlockIdToken.value != blockId) {
+					reportError("Block identifier mismatch in closure\n  Expected: '" + blockId +
+								"'\n  Found: '" + endBlockIdToken.value + "'",
+								endBlockIdToken.line, endBlockIdToken.column);
+				}
+
+				int endLine = endBlockIdToken.line;
+				int endCol = endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1;
+
+				auto closureExpr = std::make_unique<ClosureExprAST>(
+					std::move(params),
+					"", // return type inferred
+					std::move(body),
+					nullptr, // no single expression
+					false,   // not single expression
+					line, column,
+					blockId
+				);
+				closureExpr->setEndPosition(endLine, endCol);
+				return closureExpr;
+			}
+		}
+	}
+
 	if (check(TokenType::IDENTIFIER)) {
 		std::string name = std::string(currentValue());
 		int line = currentLine();

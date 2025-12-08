@@ -213,3 +213,160 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 	reportError("Unknown array intrinsic: " + callExpr->callee,
 				callExpr->line, callExpr->column);
 }
+
+//==============================================================================
+// Map Intrinsic: map(arr, transform) -> []ReturnType
+//==============================================================================
+
+mir::MIRValue *MIRCodeGenerator::generateMapIntrinsic(CallExprAST *callExpr) {
+	// map(arr, transform) - creates a new array by applying transform to each element
+	// Returns a new dynamic array with the transformed elements
+	//
+	// Inline implementation:
+	//   1. Get source array length
+	//   2. Allocate new array with same length
+	//   3. Loop over elements, call transform, store in new array
+	//   4. Return new array
+
+	if (callExpr->args.size() != 2) {
+		reportError("map() requires exactly 2 arguments: array and transform function",
+					callExpr->line, callExpr->column);
+	}
+
+	// Get source array info
+	mir::MIRValue *srcArray = generateExpr(callExpr->args[0].get());
+	if (!srcArray) {
+		reportError("Failed to generate source array for map()",
+					callExpr->line, callExpr->column);
+	}
+
+	// Get source array type and element type
+	std::string srcArrType = inferExprType(callExpr->args[0].get());
+	std::string srcElemType = maxon::TypeConversion::getArrayElementType(srcArrType);
+	mir::MIRType *srcElemMIRType = getTypeFromString(srcElemType);
+
+	// Get transform function
+	mir::MIRValue *transformFunc = generateExpr(callExpr->args[1].get());
+	if (!transformFunc) {
+		reportError("Failed to generate transform function for map()",
+					callExpr->line, callExpr->column);
+	}
+
+	// Determine result element type from transform function
+	std::string funcType = inferExprType(callExpr->args[1].get());
+	size_t arrowPos = funcType.find(")->");
+	if (arrowPos == std::string::npos) {
+		reportError("Invalid function type for map(): " + funcType,
+					callExpr->line, callExpr->column);
+	}
+	std::string resultElemType = funcType.substr(arrowPos + 3);
+	mir::MIRType *resultElemMIRType = getTypeFromString(resultElemType);
+	int resultElemSize = static_cast<int>(resultElemMIRType->sizeInBytes);
+
+	// Get source array length
+	mir::MIRValue *srcLength = nullptr;
+	auto *srcVar = dynamic_cast<VariableExprAST *>(callExpr->args[0].get());
+	if (srcVar) {
+		std::string varName = srcVar->name;
+		// First check for hidden .__length alloca (used by static arrays and function params)
+		mir::MIRValue *lengthAlloca = namedValues[varName + ".__length"];
+		if (lengthAlloca) {
+			srcLength = builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "src.length");
+		} else {
+			// For managed arrays, length is in the _len field of __ManagedArrayData struct
+			mir::MIRValue *arrAlloca = namedValues[varName];
+			if (arrAlloca && maxon::TypeConversion::isManagedArrayType(srcArrType)) {
+				// Get the _len field (index 1) from the struct
+				mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(srcElemType);
+				mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, arrAlloca, 1, varName + "._len");
+				srcLength = builder->createLoad(mir::MIRType::getInt32(), lenField, "src.length");
+			}
+		}
+	}
+
+	if (!srcLength) {
+		// Try to get length from static array type
+		if (maxon::TypeConversion::isStaticArrayType(srcArrType)) {
+			int staticLen = maxon::TypeConversion::getStaticArraySize(srcArrType);
+			srcLength = builder->getInt32(staticLen);
+		} else {
+			reportError("Cannot determine array length for map()",
+						callExpr->line, callExpr->column);
+		}
+	}
+
+	mir::MIRFunction *currentFunc = builder->getFunction();
+
+	// Allocate new array: malloc(length * element_size)
+	mir::MIRValue *length64 = builder->createSExt(srcLength, mir::MIRType::getInt64(), "len64");
+	mir::MIRValue *elemSizeVal = builder->getInt64(resultElemSize);
+	mir::MIRValue *totalSize = builder->createMul(length64, elemSizeVal, "alloc.size");
+
+	mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(),
+														{mir::MIRType::getInt64()});
+	mir::MIRValue *resultArray = builder->createCall(mallocFunc, {totalSize}, "result.arr");
+
+	// Create loop to transform elements
+	// Loop header: check i < length
+	mir::MIRBasicBlock *loopHeader = currentFunc->createBasicBlock("map.header");
+	mir::MIRBasicBlock *loopBody = currentFunc->createBasicBlock("map.body");
+	mir::MIRBasicBlock *loopExit = currentFunc->createBasicBlock("map.exit");
+
+	// Allocate loop counter
+	mir::MIRValue *counterAlloca = builder->createAlloca(mir::MIRType::getInt32(), "map.counter");
+	builder->createStore(builder->getInt32(0), counterAlloca);
+	builder->createBr(loopHeader);
+
+	// Loop header
+	builder->setInsertPoint(loopHeader);
+	mir::MIRValue *counter = builder->createLoad(mir::MIRType::getInt32(), counterAlloca, "i");
+	mir::MIRValue *loopCond = builder->createICmpSLT(counter, srcLength, "map.cond");
+	builder->createCondBr(loopCond, loopBody, loopExit);
+
+	// Loop body
+	builder->setInsertPoint(loopBody);
+
+	// Get source pointer (buffer pointer for managed arrays)
+	mir::MIRValue *srcPtr = srcArray;
+	if (srcVar) {
+		mir::MIRValue *srcAlloca = namedValues[srcVar->name];
+		if (srcAlloca && maxon::TypeConversion::isManagedArrayType(srcArrType)) {
+			// Get the _buffer field (index 0) from the __ManagedArrayData struct
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(srcElemType);
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, srcAlloca, 0, srcVar->name + "._buffer");
+			srcPtr = builder->createLoad(mir::MIRType::getPtr(), bufferField, "src.ptr");
+		} else if (srcAlloca) {
+			srcPtr = builder->createLoad(mir::MIRType::getPtr(), srcAlloca, "src.ptr");
+		}
+	}
+
+	// Load element from source: src[i]
+	mir::MIRValue *idx64 = builder->createSExt(counter, mir::MIRType::getInt64(), "idx64");
+	mir::MIRValue *srcElemPtr = builder->createArrayGEP(srcElemMIRType, srcPtr, idx64, "src.elem.ptr");
+	mir::MIRValue *srcElem = builder->createLoad(srcElemMIRType, srcElemPtr, "src.elem");
+
+	// Call transform function with the element
+	mir::MIRValue *transformedElem = builder->createCallIndirect(
+		transformFunc, resultElemMIRType, {srcElemMIRType}, {srcElem}, "transformed");
+
+	// Store result in destination array: result[i] = transformed
+	mir::MIRValue *destElemPtr = builder->createArrayGEP(resultElemMIRType, resultArray, idx64, "dest.elem.ptr");
+	builder->createStore(transformedElem, destElemPtr);
+
+	// Increment counter
+	mir::MIRValue *nextCounter = builder->createAdd(counter, builder->getInt32(1), "next.i");
+	builder->createStore(nextCounter, counterAlloca);
+	builder->createBr(loopHeader);
+
+	// Loop exit - return the result array
+	builder->setInsertPoint(loopExit);
+
+	// Store the result array info for the caller
+	// The caller needs: ptr, length, capacity
+	// We'll need to store these in the result struct or use a different approach
+	// For now, store them as the last generated map result
+	lastMapResultLength = srcLength;
+	lastMapResultCapacity = srcLength; // capacity equals length for new arrays
+
+	return resultArray;
+}

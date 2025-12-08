@@ -505,7 +505,11 @@ int main(int argc, char *argv[]) {
 			options.trackAllocs = true;
 		} else if (arg == "--stats") {
 			options.showStats = true;
-		} else if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+		} else if (arg == "-o" || arg == "--output") {
+			if (i + 1 >= argc) {
+				std::cerr << "Error: " << arg << " requires an argument" << std::endl;
+				return 1;
+			}
 			options.outputFile = argv[++i];
 		} else if (arg == "-vvv") {
 			options.verboseLevel = 3;

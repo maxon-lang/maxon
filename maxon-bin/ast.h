@@ -125,6 +125,8 @@ class FloatExprAST : public ExprAST {
 class VariableExprAST : public ExprAST {
   public:
 	std::string name;
+	bool isFunctionReference = false;		 // True when name refers to a function (function as value)
+	mutable std::string resolvedFunctionName; // Fully qualified function name if isFunctionReference
 
 	VariableExprAST(const std::string &n, int l = 0, int c = 0) : ExprAST(l, c), name(n) {}
 };
@@ -200,6 +202,7 @@ class CallExprAST : public ExprAST {
 	std::vector<std::unique_ptr<ExprAST>> args;
 	size_t functionId = SIZE_MAX;	  // Resolved during semantic analysis (SIZE_MAX = unresolved)
 	bool isSiblingMethodCall = false; // True when calling another method of the same type from within a method
+	bool isFunctionVariableCall = false; // True when calling via a function-typed variable (e.g., callback(x))
 
 	// For enum case construction with associated values (e.g., Result.success(42))
 	mutable std::string resolvedEnumName;	  // Set during semantic analysis if this is an enum case construction
@@ -590,7 +593,8 @@ struct InterfaceMethodSignature {
 class InterfaceDefAST : public ASTNode {
   public:
 	std::string name;
-	std::string namespaceName; // Namespace this interface belongs to
+	std::string namespaceName;	  // Namespace this interface belongs to
+	std::string extendsInterface; // Base interface this extends (empty if none)
 	std::vector<InterfaceMethodSignature> methods;
 	std::vector<std::string> associatedTypes; // Associated type declarations (e.g., "Element")
 	bool isExported;
@@ -601,9 +605,10 @@ class InterfaceDefAST : public ASTNode {
 
 	InterfaceDefAST(const std::string &n, std::vector<InterfaceMethodSignature> m,
 					int l = 0, int c = 0, const std::string &ns = "", bool exp = false,
-					std::vector<std::string> assocTypes = {})
-		: name(n), namespaceName(ns), methods(std::move(m)), associatedTypes(std::move(assocTypes)),
-		  isExported(exp), line(l), column(c), endLine(0), endColumn(0) {}
+					std::vector<std::string> assocTypes = {}, const std::string &extends = "")
+		: name(n), namespaceName(ns), extendsInterface(extends), methods(std::move(m)),
+		  associatedTypes(std::move(assocTypes)), isExported(exp), line(l), column(c),
+		  endLine(0), endColumn(0) {}
 
 	// Helper to get the full source range of this interface
 	SourceRange getSourceRange() const {
@@ -835,6 +840,31 @@ class MatchExprAST : public ExprAST {
 				 const std::string &bid = "")
 		: ExprAST(l, c), scrutinee(std::move(scrut)),
 		  cases(std::move(cs)), blockId(bid) {}
+};
+
+// Closure/lambda expression
+// Supports both single-expression closures (e.g., x gives x * 2) and
+// multi-statement closures with block labels (e.g., x 'label' ... end 'label')
+class ClosureExprAST : public ExprAST {
+  public:
+	std::vector<FunctionParameter> parameters;		 // Closure parameters
+	std::string returnType;							 // Return type (may be empty if inferred)
+	std::vector<std::unique_ptr<StmtAST>> body;		 // Statements in closure body (for multi-statement closures)
+	std::unique_ptr<ExprAST> singleExpr;			 // For single-expression closures like x gives x * 2
+	bool isSingleExpression;						 // True if closure is just an expression, false if has statements
+	std::string blockId;							 // Block identifier for multi-statement closures
+
+	ClosureExprAST(std::vector<FunctionParameter> params,
+				   std::string retType,
+				   std::vector<std::unique_ptr<StmtAST>> bodyStmts,
+				   std::unique_ptr<ExprAST> expr,
+				   bool singleExpr,
+				   int line, int col,
+				   std::string bid = "")
+		: ExprAST(line, col), parameters(std::move(params)),
+		  returnType(std::move(retType)), body(std::move(bodyStmts)),
+		  singleExpr(std::move(expr)), isSingleExpression(singleExpr),
+		  blockId(std::move(bid)) {}
 };
 
 // If-case statement for enum pattern matching

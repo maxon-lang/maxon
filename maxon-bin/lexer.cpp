@@ -472,6 +472,10 @@ Token Lexer::readOperatorOrDelimiter(int startLine, int startColumn) {
 
 	case '-':
 		advance();
+		if (currentChar() == '>') {
+			advance();
+			return Token(TokenType::ARROW, "->", startLine, startColumn);
+		}
 		return Token(TokenType::MINUS, "-", startLine, startColumn);
 
 	case '*':

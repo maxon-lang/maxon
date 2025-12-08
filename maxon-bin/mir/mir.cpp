@@ -223,6 +223,14 @@ MIRValue *MIRValue::createGlobal(MIRType *type, const std::string &name) {
 	return ptr;
 }
 
+MIRValue *MIRValue::createFunctionRef(const std::string &funcName) {
+	auto val = std::make_unique<MIRValue>(MIRValueKind::FunctionRef, MIRType::getPtr());
+	val->name = funcName;
+	MIRValue *ptr = val.get();
+	valueCache.push_back(std::move(val));
+	return ptr;
+}
+
 MIRValue *MIRValue::createParameter(MIRType *type, const std::string &name, uint32_t index) {
 	auto val = std::make_unique<MIRValue>(MIRValueKind::Parameter, type);
 	val->name = name;
@@ -256,6 +264,9 @@ std::string MIRValue::toString() const {
 		ss << "null";
 		break;
 	case MIRValueKind::Global:
+		ss << "@" << name;
+		break;
+	case MIRValueKind::FunctionRef:
 		ss << "@" << name;
 		break;
 	case MIRValueKind::Parameter:
