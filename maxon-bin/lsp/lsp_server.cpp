@@ -14,6 +14,8 @@
 #include "json_rpc.h"
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 namespace maxon_lsp {
 
@@ -231,8 +233,14 @@ json LSPServer::handleInitialize(const json &params) {
 }
 
 void LSPServer::handleInitialized(const json & /*params*/) {
-	// The client has acknowledged initialization
-	// We could register dynamic capabilities here if needed
+	// Analyze all stdlib files and publish diagnostics for them
+	// This allows users to see errors in stdlib files without opening them
+	if (!workspaceRoot_.empty()) {
+		std::filesystem::path stdlibPath = std::filesystem::path(workspaceRoot_) / "stdlib";
+		if (std::filesystem::exists(stdlibPath)) {
+			analyzeStdlibFiles(stdlibPath.string());
+		}
+	}
 }
 
 json LSPServer::handleShutdown(const json & /*params*/) {
@@ -382,6 +390,38 @@ void LSPServer::publishDiagnostics(const std::string &uri,
 	}
 
 	sendNotification("textDocument/publishDiagnostics", lsp::toJson(params));
+}
+
+void LSPServer::analyzeStdlibFiles(const std::string &stdlibPath) {
+	// Find all .maxon files in the stdlib directory
+	std::vector<std::string> stdlibFiles;
+	for (const auto &entry : std::filesystem::recursive_directory_iterator(stdlibPath)) {
+		if (entry.is_regular_file() && entry.path().extension() == ".maxon") {
+			stdlibFiles.push_back(entry.path().string());
+		}
+	}
+
+	// Analyze each stdlib file and publish diagnostics
+	for (const auto &filePath : stdlibFiles) {
+		// Read the file content
+		std::ifstream file(filePath);
+		if (!file) {
+			continue;
+		}
+
+		std::stringstream buffer;
+		buffer << file.rdbuf();
+		std::string content = buffer.str();
+
+		// Convert file path to URI
+		std::string uri = pathToUri(filePath);
+
+		// Open the document in the document manager (so analyzeDocument can find it)
+		documentManager_.openDocument(uri, "maxon", 0, content);
+
+		// Analyze the document
+		analyzeDocument(uri);
+	}
 }
 
 // ============================================================================

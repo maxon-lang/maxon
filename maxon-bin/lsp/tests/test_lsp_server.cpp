@@ -1,8 +1,10 @@
 #include "../lsp_server.h"
 #include "../transport.h"
 #include <catch_amalgamated.hpp>
+#include <filesystem>
 #include <mutex>
 #include <queue>
+#include <set>
 
 using json = maxon::lsp::json;
 using JsonRpcMessage = maxon::lsp::JsonRpcMessage;
@@ -1476,4 +1478,53 @@ end 'myFunction')";
 	}
 	REQUIRE(hasDeclaration);
 	REQUIRE(hasEndLabel);
+}
+
+// =============================================================================
+// Stdlib Diagnostics on Initialization Tests
+// =============================================================================
+
+TEST_CASE("LSP publishes diagnostics for all stdlib files on initialization", "[lsp][diagnostics][stdlib]") {
+	// Tests run from maxon-bin/lsp/tests/build, so go up 4 levels to project root
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string stdlibPath = (projectRoot / "stdlib").string();
+
+	// Skip test if stdlib doesn't exist
+	if (!std::filesystem::exists(stdlibPath)) {
+		SKIP("stdlib directory not found at " << stdlibPath);
+	}
+
+	// Count stdlib files
+	std::vector<std::string> stdlibFiles;
+	for (const auto &entry : std::filesystem::recursive_directory_iterator(stdlibPath)) {
+		if (entry.is_regular_file() && entry.path().extension() == ".maxon") {
+			stdlibFiles.push_back(entry.path().string());
+		}
+	}
+	REQUIRE(stdlibFiles.size() > 0);
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+	fixture.shutdown();
+	fixture.run();
+
+	// Collect all publishDiagnostics notifications
+	auto outgoing = fixture.transport()->getOutgoing();
+	std::set<std::string> filesWithDiagnostics;
+	for (const auto &msg : outgoing) {
+		if (msg.method == "textDocument/publishDiagnostics" && msg.params.has_value()) {
+			auto &params = msg.params.value();
+			if (params.contains("uri")) {
+				std::string uri = params["uri"].get<std::string>();
+				if (uri.find("stdlib") != std::string::npos) {
+					filesWithDiagnostics.insert(uri);
+				}
+			}
+		}
+	}
+
+	// All stdlib files should have diagnostics published
+	REQUIRE(filesWithDiagnostics.size() == stdlibFiles.size());
 }

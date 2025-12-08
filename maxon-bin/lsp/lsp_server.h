@@ -139,6 +139,9 @@ class LSPServer {
 	// Analyze a document and update the cache
 	void analyzeDocument(const std::string &uri);
 
+	// Analyze all stdlib files and publish diagnostics for them
+	void analyzeStdlibFiles(const std::string &stdlibPath);
+
 	// Publish diagnostics to the client
 	void publishDiagnostics(const std::string &uri,
 							const std::vector<maxon::lsp::Diagnostic> &diagnostics);

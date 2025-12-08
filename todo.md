@@ -13,7 +13,6 @@ StringProtocol: Extends BidirectionalCollection. This is the specific protocol t
 Why do this? By making String a Collection, you get hundreds of algorithms for free: .map, .filter, .reduce, .dropFirst, .split. The Swift team didn't have to write these specifically for Strings; they just inherited them from the Collection protocol logic.
 
 ## Priorities
-- diagnostics on all stdlib files when extension loads
 - implement Collection, use interface as parameter type ie function foo(x Collection) int
 - investigate maxon-bin/tests
 - debugging (speed up the dev process)
@@ -29,11 +28,9 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - extensive math function tests
 - centralize help text from the lsp server analyzer
 - cross compiling
-- remove redundant backend tests (test fragments are faster)
-- DeadCodeEliminationPass::isPureFunction has hardcoded list of pure functions. Can analyzer determine if its pure?
+- DeadCodeEliminationPass::isPureFunction has hardcoded list of pure functions. Can analyzer determine if its pure? isPureFunction
 - Extra Inhabitants to optimize memory layout
 - restrict calling compiler intrinsics/builtins to stdlib
-- find a better way to get the list of pure functions than isPureFunction
 - toLower/toUpper need to be unicode aware, maybe other string functions too
 - add "implement interface" code action
 - code actions should be directly linked to the errors that made them needed
