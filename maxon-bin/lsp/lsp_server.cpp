@@ -15,6 +15,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 
 namespace maxon_lsp {
@@ -274,14 +275,25 @@ void LSPServer::handleDidOpen(const json &params) {
 
 void LSPServer::handleDidChange(const json &params) {
 	lsp::DidChangeTextDocumentParams changeParams = lsp::didChangeTextDocumentParamsFromJson(params);
+	const std::string &uri = changeParams.textDocument.uri;
 
 	documentManager_.updateDocument(
-		changeParams.textDocument.uri,
+		uri,
 		changeParams.textDocument.version,
 		changeParams.contentChanges);
 
-	// Trigger analysis
-	analyzeDocument(changeParams.textDocument.uri);
+	// Check if this is a stdlib file - if so, reload stdlib and re-analyze dependents
+	bool isStdlib = isStdlibFile(uri);
+	if (isStdlib) {
+		reloadStdlib();
+		// Re-analyze the changed stdlib file first
+		analyzeDocument(uri);
+		// Then re-analyze all non-stdlib documents that might depend on it
+		reanalyzeNonStdlibDocuments();
+	} else {
+		// Regular file - just analyze it
+		analyzeDocument(uri);
+	}
 }
 
 void LSPServer::handleDidClose(const json &params) {
@@ -295,21 +307,31 @@ void LSPServer::handleDidClose(const json &params) {
 
 void LSPServer::handleDidSave(const json &params) {
 	lsp::DidSaveTextDocumentParams saveParams = lsp::didSaveTextDocumentParamsFromJson(params);
+	const std::string &uri = saveParams.textDocument.uri;
 
 	// If the client included the text, update the document
 	if (saveParams.text.has_value()) {
-		auto docOpt = documentManager_.getDocument(saveParams.textDocument.uri);
+		auto docOpt = documentManager_.getDocument(uri);
 		if (docOpt.has_value()) {
 			Document *doc = docOpt.value();
 			documentManager_.replaceDocument(
-				saveParams.textDocument.uri,
+				uri,
 				doc->version,
 				saveParams.text.value());
 		}
 	}
 
-	// Re-analyze on save
-	analyzeDocument(saveParams.textDocument.uri);
+	// Check if this is a stdlib file - if so, reload stdlib and re-analyze dependents
+	if (isStdlibFile(uri)) {
+		reloadStdlib();
+		// Re-analyze the saved stdlib file first
+		analyzeDocument(uri);
+		// Then re-analyze all non-stdlib documents that might depend on it
+		reanalyzeNonStdlibDocuments();
+	} else {
+		// Regular file - just analyze it
+		analyzeDocument(uri);
+	}
 }
 
 // ============================================================================
@@ -421,6 +443,57 @@ void LSPServer::analyzeStdlibFiles(const std::string &stdlibPath) {
 
 		// Analyze the document
 		analyzeDocument(uri);
+	}
+}
+
+bool LSPServer::isStdlibFile(const std::string &uri) const {
+	if (workspaceRoot_.empty()) {
+		return false;
+	}
+	std::string filePath = uriToPath(uri);
+	std::filesystem::path stdlibPath = std::filesystem::path(workspaceRoot_) / "stdlib";
+	try {
+		// Check if the file path starts with the stdlib path
+		std::filesystem::path absFilePath = std::filesystem::absolute(filePath);
+		std::filesystem::path absStdlibPath = std::filesystem::absolute(stdlibPath);
+		// Use lexically_relative to check if file is under stdlib
+		auto relative = absFilePath.lexically_relative(absStdlibPath);
+		// If the relative path starts with "..", the file is not under stdlib
+		return !relative.empty() && relative.native()[0] != '.';
+	} catch (...) {
+		return false;
+	}
+}
+
+void LSPServer::reloadStdlib() {
+	if (workspaceRoot_.empty()) {
+		return;
+	}
+	std::filesystem::path stdlibPath = std::filesystem::path(workspaceRoot_) / "stdlib";
+	if (std::filesystem::exists(stdlibPath)) {
+		// Use content provider that checks document manager for open files
+		stdlib_ = loadStdlibWithContentProvider(stdlibPath.string(),
+												[this](const std::string &filePath) -> std::optional<std::string> {
+													// Convert file path to URI and check if document is open
+													std::string uri = pathToUri(filePath);
+													auto docOpt = documentManager_.getDocument(uri);
+													if (docOpt.has_value()) {
+														// Return in-memory content
+														return docOpt.value()->content;
+													}
+													// Return nullopt to indicate file should be read from disk
+													return std::nullopt;
+												});
+	}
+}
+
+void LSPServer::reanalyzeNonStdlibDocuments() {
+	// Get all open document URIs and re-analyze non-stdlib ones
+	auto openDocuments = documentManager_.getOpenDocumentUris();
+	for (const auto &uri : openDocuments) {
+		if (!isStdlibFile(uri)) {
+			analyzeDocument(uri);
+		}
 	}
 }
 

@@ -19,6 +19,11 @@ namespace lsp = maxon::lsp;
 std::string uriToPath(const std::string &uri);
 std::string pathToUri(const std::string &path);
 
+// Normalize a URI to canonical form for consistent comparison
+// Handles differences between VS Code's format (lowercase drive, encoded colon)
+// and pathToUri format (uppercase drive, unencoded colon)
+std::string normalizeUri(const std::string &uri);
+
 // URL encoding/decoding for special characters
 std::string urlEncode(const std::string &str);
 std::string urlDecode(const std::string &str);

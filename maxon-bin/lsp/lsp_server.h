@@ -142,6 +142,15 @@ class LSPServer {
 	// Analyze all stdlib files and publish diagnostics for them
 	void analyzeStdlibFiles(const std::string &stdlibPath);
 
+	// Reload stdlib symbols and re-analyze dependent documents
+	void reloadStdlib();
+
+	// Check if a URI is in the stdlib directory
+	bool isStdlibFile(const std::string &uri) const;
+
+	// Re-analyze all open non-stdlib documents
+	void reanalyzeNonStdlibDocuments();
+
 	// Publish diagnostics to the client
 	void publishDiagnostics(const std::string &uri,
 							const std::vector<maxon::lsp::Diagnostic> &diagnostics);

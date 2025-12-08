@@ -11,7 +11,9 @@
 #include "ast.h"
 #include "lexer/lexer_keyword_matcher.h"
 #include "semantic_analyzer.h"
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -164,6 +166,21 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
  * @return StdlibSymbols containing all exported symbols
  */
 StdlibSymbols loadStdlib(const std::string &stdlibPath);
+
+/**
+ * Load symbols from the standard library with a content provider
+ *
+ * Like loadStdlib, but uses a content provider callback to get file contents.
+ * This allows the LSP to provide in-memory content for open documents.
+ *
+ * @param stdlibPath Path to the stdlib directory
+ * @param contentProvider Callback that takes a file path and returns optional content.
+ *                        If nullopt, the file is read from disk.
+ * @return StdlibSymbols containing all exported symbols
+ */
+StdlibSymbols loadStdlibWithContentProvider(
+	const std::string &stdlibPath,
+	std::function<std::optional<std::string>(const std::string &)> contentProvider);
 
 /**
  * Get all keyword information for LSP

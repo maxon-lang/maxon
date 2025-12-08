@@ -12,9 +12,33 @@
 #include "semantic_analyzer.h"
 #include "token_stream.h"
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+
+// ============================================================================
+// Path Normalization Helper
+// ============================================================================
+
+// Normalizes a file path for consistent comparison across different sources
+// (filesystem iteration vs URI conversion). Converts to lowercase on Windows,
+// normalizes slashes, and ensures consistent absolute path format.
+static std::string normalizeFilePath(const std::string &path) {
+	std::string result = path;
+
+#ifdef _WIN32
+	// Convert to lowercase for case-insensitive comparison on Windows
+	std::transform(result.begin(), result.end(), result.begin(),
+				   [](unsigned char c) { return std::tolower(c); });
+
+	// Normalize slashes to backslashes
+	std::replace(result.begin(), result.end(), '/', '\\');
+#endif
+
+	return result;
+}
 
 // ============================================================================
 // Documentation Extraction
@@ -496,11 +520,12 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 
 	// Get the absolute path of the current file for comparison
 	// This is used to skip stdlib symbols from the current file to avoid duplicate registration
+	// Normalize the path for consistent comparison across different sources
 	std::string currentFilePath;
 	try {
-		currentFilePath = std::filesystem::absolute(filename).string();
+		currentFilePath = normalizeFilePath(std::filesystem::absolute(filename).string());
 	} catch (...) {
-		currentFilePath = filename;
+		currentFilePath = normalizeFilePath(filename);
 	}
 
 	// Try to parse the source
@@ -562,7 +587,7 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 		// Register stdlib functions with full signatures
 		// Skip symbols from the current file to avoid duplicate registration
 		for (const auto &func : stdlib.functions) {
-			if (func.filePath == currentFilePath) {
+			if (normalizeFilePath(func.filePath) == currentFilePath) {
 				continue; // Skip symbols from current file
 			}
 			std::vector<FunctionParameter> params;
@@ -574,7 +599,7 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 
 		// Register stdlib structs with their fields and interface conformance
 		for (const auto &structSym : stdlib.structs) {
-			if (structSym.filePath == currentFilePath) {
+			if (normalizeFilePath(structSym.filePath) == currentFilePath) {
 				continue; // Skip symbols from current file
 			}
 			// Convert LSPFieldInfo to StructFieldInfo
@@ -587,7 +612,7 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 
 		// Register stdlib interfaces
 		for (const auto &ifaceSym : stdlib.interfaces) {
-			if (ifaceSym.filePath == currentFilePath) {
+			if (normalizeFilePath(ifaceSym.filePath) == currentFilePath) {
 				continue; // Skip symbols from current file
 			}
 			analyzer.registerExternalInterface(ifaceSym.name);
@@ -595,7 +620,7 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 
 		// Register stdlib enums
 		for (const auto &enumSym : stdlib.enums) {
-			if (enumSym.filePath == currentFilePath) {
+			if (normalizeFilePath(enumSym.filePath) == currentFilePath) {
 				continue; // Skip symbols from current file
 			}
 			analyzer.registerExternalEnum(enumSym.name);
@@ -617,6 +642,13 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 }
 
 StdlibSymbols loadStdlib(const std::string &stdlibPath) {
+	// Use the content provider version with a null provider (always reads from disk)
+	return loadStdlibWithContentProvider(stdlibPath, nullptr);
+}
+
+StdlibSymbols loadStdlibWithContentProvider(
+	const std::string &stdlibPath,
+	std::function<std::optional<std::string>(const std::string &)> contentProvider) {
 	StdlibSymbols result;
 
 	if (!std::filesystem::exists(stdlibPath)) {
@@ -628,14 +660,27 @@ StdlibSymbols loadStdlib(const std::string &stdlibPath) {
 
 	for (const auto &filePath : stdlibFiles) {
 		try {
-			// Read file content
-			std::ifstream file(filePath);
-			if (!file)
-				continue;
+			std::string source;
+			std::string absolutePath = std::filesystem::absolute(filePath).string();
 
-			std::stringstream buffer;
-			buffer << file.rdbuf();
-			std::string source = buffer.str();
+			// Try content provider first, fall back to disk
+			std::optional<std::string> providedContent;
+			if (contentProvider) {
+				providedContent = contentProvider(absolutePath);
+			}
+
+			if (providedContent.has_value()) {
+				source = providedContent.value();
+			} else {
+				// Read file content from disk
+				std::ifstream file(filePath);
+				if (!file)
+					continue;
+
+				std::stringstream buffer;
+				buffer << file.rdbuf();
+				source = buffer.str();
+			}
 
 			// Parse the file
 			Lexer lexer(source);
@@ -649,9 +694,6 @@ StdlibSymbols loadStdlib(const std::string &stdlibPath) {
 
 			// Extract exported symbols only
 			auto symbols = extractSymbolsFromAST(program.get(), source, true);
-
-			// Get the absolute file path for go-to-definition support
-			std::string absolutePath = std::filesystem::absolute(filePath).string();
 
 			// Categorize symbols and set file path
 			for (auto &sym : symbols) {

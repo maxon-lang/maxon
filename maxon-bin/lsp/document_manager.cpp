@@ -27,6 +27,45 @@ static char intToHexChar(int value) {
 	return static_cast<char>('A' + value - 10);
 }
 
+// Normalize a URI to a canonical form for consistent comparison
+// This handles differences between VS Code's URI format and our pathToUri format:
+// - VS Code: file:///c%3A/Users/... (lowercase drive, encoded colon)
+// - pathToUri: file:///C:/Users/... (uppercase drive, unencoded colon)
+std::string normalizeUri(const std::string &uri) {
+	std::string result = uri;
+
+	// First URL decode to normalize encoded characters
+	std::string decoded;
+	decoded.reserve(result.size());
+	for (size_t i = 0; i < result.size(); ++i) {
+		if (result[i] == '%' && i + 2 < result.size()) {
+			int high = hexCharToInt(result[i + 1]);
+			int low = hexCharToInt(result[i + 2]);
+			if (high >= 0 && low >= 0) {
+				decoded += static_cast<char>((high << 4) | low);
+				i += 2;
+				continue;
+			}
+		}
+		decoded += result[i];
+	}
+	result = decoded;
+
+#ifdef _WIN32
+	// On Windows, normalize drive letter to uppercase
+	// file:///c:/... -> file:///C:/...
+	const std::string prefix = "file:///";
+	if (result.size() > prefix.size() + 2 &&
+		result.substr(0, prefix.size()) == prefix &&
+		std::isalpha(static_cast<unsigned char>(result[prefix.size()])) &&
+		result[prefix.size() + 1] == ':') {
+		result[prefix.size()] = std::toupper(static_cast<unsigned char>(result[prefix.size()]));
+	}
+#endif
+
+	return result;
+}
+
 std::string urlDecode(const std::string &str) {
 	std::string result;
 	result.reserve(str.size());
@@ -236,20 +275,23 @@ std::string Document::getLine(int lineIndex) const {
 
 void DocumentManager::openDocument(const std::string &uri, const std::string &languageId,
 								   int version, const std::string &content) {
-	documents_.emplace(uri, Document(uri, languageId, version, content));
+	std::string normalizedUri = normalizeUri(uri);
+	documents_.emplace(normalizedUri, Document(normalizedUri, languageId, version, content));
 	// Invalidate any existing analysis cache
-	analysisCache_.erase(uri);
+	analysisCache_.erase(normalizedUri);
 }
 
 void DocumentManager::closeDocument(const std::string &uri) {
-	documents_.erase(uri);
-	analysisCache_.erase(uri);
-	lastGoodCache_.erase(uri);
+	std::string normalizedUri = normalizeUri(uri);
+	documents_.erase(normalizedUri);
+	analysisCache_.erase(normalizedUri);
+	lastGoodCache_.erase(normalizedUri);
 }
 
 void DocumentManager::updateDocument(const std::string &uri, int version,
 									 const std::vector<lsp::TextDocumentContentChangeEvent> &changes) {
-	auto it = documents_.find(uri);
+	std::string normalizedUri = normalizeUri(uri);
+	auto it = documents_.find(normalizedUri);
 	if (it == documents_.end()) {
 		return;
 	}
@@ -349,7 +391,8 @@ void DocumentManager::applyChange(Document &doc, const lsp::TextDocumentContentC
 }
 
 std::optional<Document *> DocumentManager::getDocument(const std::string &uri) {
-	auto it = documents_.find(uri);
+	std::string normalizedUri = normalizeUri(uri);
+	auto it = documents_.find(normalizedUri);
 	if (it == documents_.end()) {
 		return std::nullopt;
 	}
@@ -357,7 +400,8 @@ std::optional<Document *> DocumentManager::getDocument(const std::string &uri) {
 }
 
 bool DocumentManager::hasDocument(const std::string &uri) const {
-	return documents_.find(uri) != documents_.end();
+	std::string normalizedUri = normalizeUri(uri);
+	return documents_.find(normalizedUri) != documents_.end();
 }
 
 std::vector<std::string> DocumentManager::getOpenDocumentUris() const {
@@ -370,7 +414,8 @@ std::vector<std::string> DocumentManager::getOpenDocumentUris() const {
 }
 
 AnalysisCache *DocumentManager::getAnalysis(const std::string &uri) {
-	auto it = analysisCache_.find(uri);
+	std::string normalizedUri = normalizeUri(uri);
+	auto it = analysisCache_.find(normalizedUri);
 	if (it == analysisCache_.end()) {
 		return nullptr;
 	}
@@ -378,7 +423,8 @@ AnalysisCache *DocumentManager::getAnalysis(const std::string &uri) {
 }
 
 AnalysisCache *DocumentManager::getLastGoodAnalysis(const std::string &uri) {
-	auto it = lastGoodCache_.find(uri);
+	std::string normalizedUri = normalizeUri(uri);
+	auto it = lastGoodCache_.find(normalizedUri);
 	if (it == lastGoodCache_.end()) {
 		return nullptr;
 	}
@@ -386,10 +432,12 @@ AnalysisCache *DocumentManager::getLastGoodAnalysis(const std::string &uri) {
 }
 
 void DocumentManager::invalidateAnalysis(const std::string &uri) {
-	analysisCache_.erase(uri);
+	std::string normalizedUri = normalizeUri(uri);
+	analysisCache_.erase(normalizedUri);
 }
 
 void DocumentManager::setAnalysis(const std::string &uri, AnalysisCache cache) {
+	std::string normalizedUri = normalizeUri(uri);
 	// If analysis was successful (no parse errors), update last good cache
 	if (!cache.hasParseErrors()) {
 		// Move a copy to last good cache
@@ -405,10 +453,10 @@ void DocumentManager::setAnalysis(const std::string &uri, AnalysisCache cache) {
 		lastGood.interfaces = cache.interfaces;
 		// Note: we don't copy the AST to avoid double ownership issues
 
-		lastGoodCache_[uri] = std::move(lastGood);
+		lastGoodCache_[normalizedUri] = std::move(lastGood);
 	}
 
-	analysisCache_[uri] = std::move(cache);
+	analysisCache_[normalizedUri] = std::move(cache);
 }
 
 // ============================================================================

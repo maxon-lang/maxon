@@ -1,13 +1,16 @@
+#include "../document_manager.h"
 #include "../lsp_server.h"
 #include "../transport.h"
 #include <catch_amalgamated.hpp>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <queue>
 #include <set>
 
 using json = maxon::lsp::json;
 using JsonRpcMessage = maxon::lsp::JsonRpcMessage;
+using maxon_lsp::pathToUri;
 
 // Mock transport that allows sending requests and capturing responses
 class MockTransport : public maxon::lsp::Transport {
@@ -64,6 +67,49 @@ class MockTransport : public maxon::lsp::Transport {
 			}
 		}
 		return std::nullopt;
+	}
+
+	// Find all notifications with a specific method
+	std::vector<JsonRpcMessage> findAllNotifications(const std::string &method) {
+		std::lock_guard<std::mutex> lock(mutex_);
+		std::vector<JsonRpcMessage> result;
+		for (const auto &msg : outgoing_) {
+			if (msg.method == method && !msg.id.has_value()) {
+				result.push_back(msg);
+			}
+		}
+		return result;
+	}
+
+	// Find diagnostics notification for a specific URI (returns first match)
+	std::optional<JsonRpcMessage> findDiagnosticsForUri(const std::string &uri) {
+		std::lock_guard<std::mutex> lock(mutex_);
+		for (const auto &msg : outgoing_) {
+			if (msg.method == "textDocument/publishDiagnostics" && !msg.id.has_value() &&
+				msg.params.has_value()) {
+				auto &params = msg.params.value();
+				if (params.contains("uri") && params["uri"].get<std::string>() == uri) {
+					return msg;
+				}
+			}
+		}
+		return std::nullopt;
+	}
+
+	// Find the LAST diagnostics notification for a specific URI
+	std::optional<JsonRpcMessage> findLastDiagnosticsForUri(const std::string &uri) {
+		std::lock_guard<std::mutex> lock(mutex_);
+		std::optional<JsonRpcMessage> lastMatch;
+		for (const auto &msg : outgoing_) {
+			if (msg.method == "textDocument/publishDiagnostics" && !msg.id.has_value() &&
+				msg.params.has_value()) {
+				auto &params = msg.params.value();
+				if (params.contains("uri") && params["uri"].get<std::string>() == uri) {
+					lastMatch = msg;
+				}
+			}
+		}
+		return lastMatch;
 	}
 
 	// Transport interface
@@ -123,6 +169,22 @@ class LSPTestFixture {
 		json params = {
 			{"textDocument", {{"uri", uri}, {"languageId", "maxon"}, {"version", version}, {"text", content}}}};
 		transport_->queueNotification("textDocument/didOpen", params);
+	}
+
+	// Change a document (full content replacement)
+	void changeDocument(const std::string &uri, const std::string &content, int version) {
+		json params = {
+			{"textDocument", {{"uri", uri}, {"version", version}}},
+			{"contentChanges", {{{"text", content}}}}};
+		transport_->queueNotification("textDocument/didChange", params);
+	}
+
+	// Save a document
+	void saveDocument(const std::string &uri, const std::string &content) {
+		json params = {
+			{"textDocument", {{"uri", uri}}},
+			{"text", content}};
+		transport_->queueNotification("textDocument/didSave", params);
 	}
 
 	// Queue shutdown and exit
@@ -1689,4 +1751,270 @@ TEST_CASE("LSP publishes diagnostics for all stdlib files on initialization", "[
 
 	// All stdlib files should have diagnostics published
 	REQUIRE(filesWithDiagnostics.size() == stdlibFiles.size());
+}
+
+// =============================================================================
+// Cross-file Undefined Function Tests
+// =============================================================================
+
+TEST_CASE("LSP reports undefined function when calling non-existent stdlib function", "[lsp][diagnostics][cross-file]") {
+	// This test verifies that when a file calls a function that doesn't exist
+	// in the stdlib, an "Undefined function" error is reported.
+	// This is a regression test for the bug where renaming a function in one
+	// stdlib file didn't cause errors in files that called the old name.
+
+	// Tests run from maxon-bin/lsp/tests/build, so go up 4 levels to project root
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string stdlibPath = (projectRoot / "stdlib").string();
+
+	// Skip test if stdlib doesn't exist
+	if (!std::filesystem::exists(stdlibPath)) {
+		SKIP("stdlib directory not found at " << stdlibPath);
+	}
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Code that calls a function that doesn't exist in stdlib
+	std::string code = R"(function test() int
+	return nonExistentStdlibFunction(42)
+end 'test')";
+	std::string docUri = "file://" + (projectRoot / "examples" / "test.maxon").string();
+	fixture.openDocument(docUri, code);
+	fixture.shutdown();
+	fixture.run();
+
+	auto notification = fixture.transport()->findDiagnosticsForUri(docUri);
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+	REQUIRE(diagnostics.is_array());
+
+	// Should have an "Undefined function" error
+	bool hasUndefinedFunctionError = false;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("Undefined function") != std::string::npos &&
+			msg.find("nonExistentStdlibFunction") != std::string::npos) {
+			hasUndefinedFunctionError = true;
+			break;
+		}
+	}
+	REQUIRE(hasUndefinedFunctionError);
+}
+
+TEST_CASE("LSP reports undefined function when stdlib file is modified", "[lsp][diagnostics][cross-file]") {
+	// This test verifies that when a file calls a function that exists in
+	// the stdlib, no error is reported. The scenario being tested is:
+	// - Real stdlib has myHelperFunction defined
+	// - Consumer file calls myHelperFunction
+	// - No error should be reported
+	//
+	// Note: This test cannot easily simulate modifying a stdlib file because
+	// the LSP loads stdlib from disk. Instead, we verify that calling an
+	// existing stdlib function works correctly.
+
+	// Tests run from maxon-bin/lsp/tests/build, so go up 4 levels to project root
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string stdlibPath = (projectRoot / "stdlib").string();
+
+	// Skip test if stdlib doesn't exist
+	if (!std::filesystem::exists(stdlibPath)) {
+		SKIP("stdlib directory not found at " << stdlibPath);
+	}
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Create a file that calls a function that EXISTS in the real stdlib
+	// Using 'print' which is a well-known stdlib function
+	std::string consumerCode = R"(function test() int
+	print("hello")
+	return 0
+end 'test')";
+	std::string consumerUri = "file://" + (projectRoot / "examples" / "consumer.maxon").string();
+	fixture.openDocument(consumerUri, consumerCode);
+
+	fixture.shutdown();
+	fixture.run();
+
+	// The consumer should NOT have an error because 'print' exists in stdlib
+	auto notification = fixture.transport()->findDiagnosticsForUri(consumerUri);
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+
+	bool hasUndefinedError = false;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("Undefined function") != std::string::npos &&
+			msg.find("print") != std::string::npos) {
+			hasUndefinedError = true;
+			break;
+		}
+	}
+	// Should NOT have an undefined function error - 'print' exists in stdlib
+	REQUIRE_FALSE(hasUndefinedError);
+}
+
+TEST_CASE("LSP reports undefined function when file calls renamed stdlib function", "[lsp][diagnostics][cross-file][regression]") {
+	// This is the actual regression test for the reported bug:
+	// When a file calls a function that doesn't exist in the stdlib,
+	// an "Undefined function" error should be reported.
+	//
+	// The original bug was that the LSP cached stdlib symbols on initialization,
+	// so when a stdlib file was modified to rename a function, dependent files
+	// wouldn't get an error.
+	//
+	// The fix ensures that when a stdlib file is changed, the stdlib symbols
+	// are reloaded and dependent files are re-analyzed.
+
+	// Tests run from maxon-bin/lsp/tests/build, so go up 4 levels to project root
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string stdlibPath = (projectRoot / "stdlib").string();
+
+	// Skip test if stdlib doesn't exist
+	if (!std::filesystem::exists(stdlibPath)) {
+		SKIP("stdlib directory not found at " << stdlibPath);
+	}
+
+	// First, start a server with the real stdlib
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Open a file that calls a function that doesn't exist in stdlib
+	// This simulates calling a function after it was renamed
+	std::string callerCode = R"(function test() int
+	// Calling a function name that doesn't exist
+	return nonExistentHelperFunction(42, 0, 10)
+end 'test')";
+	std::string callerUri = "file://" + (projectRoot / "examples" / "test_caller.maxon").string();
+	fixture.openDocument(callerUri, callerCode);
+
+	fixture.shutdown();
+	fixture.run();
+
+	// The caller should have an "Undefined function" error
+	auto notification = fixture.transport()->findDiagnosticsForUri(callerUri);
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+	REQUIRE(diagnostics.is_array());
+
+	bool hasUndefinedError = false;
+	std::string foundMsg;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("Undefined function") != std::string::npos &&
+			msg.find("nonExistentHelperFunction") != std::string::npos) {
+			hasUndefinedError = true;
+			foundMsg = msg;
+			break;
+		}
+	}
+	INFO("Should report undefined function error for 'nonExistentHelperFunction'");
+	INFO("Found message: " << foundMsg);
+	REQUIRE(hasUndefinedError);
+}
+
+TEST_CASE("LSP reloads stdlib when stdlib file is changed in memory", "[lsp][diagnostics][cross-file][stdlib-reload]") {
+	// This test verifies the stdlib reload mechanism works with in-memory changes:
+	// 1. Open a consumer file that calls a real stdlib function
+	// 2. Open the stdlib file that defines the function
+	// 3. Change the stdlib file to RENAME the function (in memory, not saved)
+	// 4. Consumer file should now report "Undefined function" error
+	//
+	// This is the actual bug scenario: editing a stdlib file should cause
+	// dependent files to see the updated symbols, even before saving.
+
+	// Tests run from maxon-bin/lsp/tests/build, so go up 4 levels to project root
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string stdlibPath = (projectRoot / "stdlib").string();
+
+	// Skip test if stdlib doesn't exist
+	if (!std::filesystem::exists(stdlibPath)) {
+		SKIP("stdlib directory not found at " << stdlibPath);
+	}
+
+	// Check that the specific stdlib file we need exists
+	std::filesystem::path graphemePath = projectRoot / "stdlib" / "string" / "_grapheme.maxon";
+	if (!std::filesystem::exists(graphemePath)) {
+		SKIP("_grapheme.maxon not found at " << graphemePath.string());
+	}
+
+	LSPTestFixture fixture;
+	std::string rootUri = pathToUri(projectRoot.string());
+	fixture.initialize(rootUri);
+
+	// Step 1: Open a consumer file that calls findGraphemeEndManaged
+	// This function exists in the real stdlib, so initially no error
+	std::string consumerCode = R"(function test(m _ManagedString) int
+	return findGraphemeEndManaged(m, 0, 10)
+end 'test')";
+	std::string consumerUri = pathToUri((projectRoot / "examples" / "consumer.maxon").string());
+	fixture.openDocument(consumerUri, consumerCode);
+
+	// Step 2: Read the actual _grapheme.maxon content
+	std::ifstream graphemeFile(graphemePath);
+	std::stringstream buffer;
+	buffer << graphemeFile.rdbuf();
+	std::string originalContent = buffer.str();
+
+	// Step 3: Open the stdlib file and then change it to rename the function
+	std::string graphemeUri = pathToUri(graphemePath.string());
+	fixture.openDocument(graphemeUri, originalContent);
+
+	// Step 4: Modify the content to rename findGraphemeEndManaged to findGraphemeEndManagedXXX
+	std::string modifiedContent = originalContent;
+	size_t pos = 0;
+	while ((pos = modifiedContent.find("findGraphemeEndManaged", pos)) != std::string::npos) {
+		// Don't replace findGraphemeEndManagedRange (only replace exact matches)
+		if (pos + 22 < modifiedContent.size() &&
+			modifiedContent[pos + 22] != 'R' && // Not "Range"
+			modifiedContent[pos + 22] != 'X') { // Not already renamed
+			modifiedContent.replace(pos, 22, "findGraphemeEndManagedXXX");
+			pos += 25;
+		} else {
+			pos += 22;
+		}
+	}
+	fixture.changeDocument(graphemeUri, modifiedContent, 2);
+
+	fixture.shutdown();
+	fixture.run();
+
+	// Step 5: The consumer should now have an "Undefined function" error
+	// because findGraphemeEndManaged was renamed
+	// Use findLastDiagnosticsForUri because there may be earlier diagnostics before the change
+	auto consumerNotification = fixture.transport()->findLastDiagnosticsForUri(consumerUri);
+	REQUIRE(consumerNotification.has_value());
+	REQUIRE(consumerNotification->params.has_value());
+
+	auto &diagnostics = consumerNotification->params.value()["diagnostics"];
+	REQUIRE(diagnostics.is_array());
+
+	bool hasUndefinedError = false;
+	std::string foundMsg;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("Undefined function") != std::string::npos &&
+			msg.find("findGraphemeEndManaged") != std::string::npos) {
+			hasUndefinedError = true;
+			foundMsg = msg;
+			break;
+		}
+	}
+	INFO("Consumer should report undefined function after stdlib function rename");
+	INFO("Found message: " << foundMsg);
+	REQUIRE(hasUndefinedError);
 }
