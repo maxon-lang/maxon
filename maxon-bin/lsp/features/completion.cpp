@@ -482,7 +482,8 @@ std::vector<CompletionItem> CompletionProvider::getQualifiedNameCompletions(
 		// "stdlib.fmt." - return sub-modules within the specified module
 		const std::string &module = pathComponents[1];
 
-		// Derive sub-modules from stdlib symbols by checking for files in subdirectories
+		// Derive sub-modules from stdlib symbols by checking for files in the module directory
+		// Files like stdlib/fmt/integer.maxon become sub-modules "integer"
 		std::set<std::string> subModules;
 
 		auto extractSubModule = [&subModules, &module](const std::string &filePath) {
@@ -496,12 +497,22 @@ std::vector<CompletionItem> CompletionProvider::getQualifiedNameCompletions(
 			std::string fileModule = afterStdlib.substr(0, firstSep);
 			if (fileModule != module)
 				return;
-			// Check if there's a subdirectory
+			// Get the rest after the module directory
 			std::string rest = afterStdlib.substr(firstSep + 1);
 			size_t secondSep = rest.find_first_of("/\\");
 			if (secondSep != std::string::npos) {
-				// Has subdirectory - extract sub-module name
+				// Has subdirectory - extract sub-module name from directory
 				subModules.insert(rest.substr(0, secondSep));
+			} else {
+				// File directly in module directory - extract sub-module name from filename
+				// e.g., "integer.maxon" -> "integer"
+				size_t dotPos = rest.rfind('.');
+				if (dotPos != std::string::npos) {
+					std::string fileName = rest.substr(0, dotPos);
+					if (!fileName.empty()) {
+						subModules.insert(fileName);
+					}
+				}
 			}
 		};
 
