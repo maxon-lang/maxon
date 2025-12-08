@@ -7,8 +7,8 @@
 //   3-byte:          1110xxxx 10xxxxxx 10xxxxxx (0x800-0xFFFF)
 //   4-byte:          11110xxx 10xxxxxx 10xxxxxx 10xxxxxx (0x10000-0x10FFFF)
 
-// utf8_byte_length - Get the number of bytes in a UTF-8 sequence from its lead byte
-// Returns 1-4 for valid lead bytes
+/// Get the number of bytes in a UTF-8 sequence from its lead byte
+/// Returns 1-4 for valid lead bytes
 export function utf8_byte_length(leadByte byte) int
 	var b = leadByte as int
 
@@ -36,26 +36,26 @@ export function utf8_byte_length(leadByte byte) int
 	return 4
 end 'utf8_byte_length'
 
-// utf8_is_continuation - Check if a byte is a UTF-8 continuation byte (10xxxxxx)
+/// Check if a byte is a UTF-8 continuation byte (10xxxxxx)
 export function utf8_is_continuation(b byte) bool
 	var val = b as int
 	return val >= 128 and val < 192
 end 'utf8_is_continuation'
 
-// utf8_is_lead - Check if a byte is a valid UTF-8 lead byte
+/// Check if a byte is a valid UTF-8 lead byte
 export function utf8_is_lead(b byte) bool
 	var val = b as int
 	// Lead byte is either ASCII (< 128) or starts with 11xxxxxx (>= 192)
 	return val < 128 or val >= 192
 end 'utf8_is_lead'
 
-// utf8_is_ascii - Check if a byte is ASCII (0-127)
+/// Check if a byte is ASCII (0-127)
 export function utf8_is_ascii(b byte) bool
 	return (b as int) < 128
 end 'utf8_is_ascii'
 
-// utf8_codepoint_count - Count the number of UTF-8 codepoints in a byte array
-// This counts lead bytes only (skips continuation bytes)
+/// Count the number of UTF-8 codepoints in a byte array
+/// This counts lead bytes only (skips continuation bytes)
 export function utf8_codepoint_count(data array of byte, len int) int
 	var count = 0
 	var i = 0
@@ -74,9 +74,9 @@ export function utf8_codepoint_count(data array of byte, len int) int
 	return count
 end 'utf8_codepoint_count'
 
-// utf8_decode - Decode a UTF-8 codepoint from a byte array at the given offset
-// Returns the codepoint value as an integer
-// Assumes valid UTF-8 encoding at the offset
+/// Decode a UTF-8 codepoint from a byte array at the given offset
+/// Returns the codepoint value as an integer
+/// Assumes valid UTF-8 encoding at the offset
 export function utf8_decode(data array of byte, offset int) int
 	var b0 = data[offset] as int
 
@@ -108,7 +108,7 @@ export function utf8_decode(data array of byte, offset int) int
 	return cp
 end 'utf8_decode'
 
-// utf8_encode_length - Get the number of bytes needed to encode a codepoint
+/// Get the number of bytes needed to encode a codepoint in UTF-8
 export function utf8_encode_length(codepoint int) int
 	if codepoint < 128 'ascii'
 		return 1
@@ -125,7 +125,8 @@ export function utf8_encode_length(codepoint int) int
 	return 4
 end 'utf8_encode_length'
 
-// utf8_is_valid_codepoint - Check if an integer is a valid Unicode codepoint
+/// Check if an integer is a valid Unicode codepoint
+/// Returns false for negative values, values > 0x10FFFF, and surrogate pairs (0xD800-0xDFFF)
 export function utf8_is_valid_codepoint(cp int) bool
 	// Valid range: 0x0000-0x10FFFF, excluding surrogate pairs (0xD800-0xDFFF)
 	if cp < 0 or cp > 1114111 'range_check'
@@ -144,7 +145,7 @@ end 'utf8_is_valid_codepoint'
 // _ManagedString helpers (for internal use by string views)
 // ============================================
 
-// _utf8_byte_length_at - Get UTF-8 sequence length from lead byte in _ManagedString
+/// Get the UTF-8 sequence length from the lead byte in a _ManagedString
 export function _utf8_byte_length_at(managed _ManagedString, pos int) int
 	var b0 = __string_byte_at(managed, pos) as int
 	if b0 < 128 'ascii'
@@ -159,7 +160,7 @@ export function _utf8_byte_length_at(managed _ManagedString, pos int) int
 	return 4
 end '_utf8_byte_length_at'
 
-// _utf8_decode_at - Decode UTF-8 codepoint at position in _ManagedString
+/// Decode a UTF-8 codepoint from a _ManagedString at the given position
 export function _utf8_decode_at(managed _ManagedString, pos int) int
 	var b0 = __string_byte_at(managed, pos) as int
 	if b0 < 128 'ascii'
@@ -184,7 +185,7 @@ end '_utf8_decode_at'
 // Substring helpers (for internal use by substring type)
 // ============================================
 
-// _utf8_byte_length_at_substring - Get UTF-8 sequence length from lead byte in substring
+/// Get the UTF-8 sequence length from the lead byte in a substring
 export function _utf8_byte_length_at_substring(sub substring, pos int) int
 	var b0 = __substring_byte_at(sub, pos) as int
 	if b0 < 128 'ascii'
@@ -199,7 +200,7 @@ export function _utf8_byte_length_at_substring(sub substring, pos int) int
 	return 4
 end '_utf8_byte_length_at_substring'
 
-// _utf8_decode_at_substring - Decode UTF-8 codepoint at position in substring
+/// Decode a UTF-8 codepoint from a substring at the given position
 export function _utf8_decode_at_substring(sub substring, pos int) int
 	var b0 = __substring_byte_at(sub, pos) as int
 	if b0 < 128 'ascii'

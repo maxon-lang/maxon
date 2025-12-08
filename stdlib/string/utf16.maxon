@@ -9,8 +9,8 @@
 //   High (lead) surrogate:  0xD800 to 0xDBFF
 //   Low (trail) surrogate:  0xDC00 to 0xDFFF
 
-// utf16_width - Get the number of UTF-16 code units needed to encode a codepoint
-// Returns 1 for BMP characters, 2 for supplementary characters
+/// Get the number of UTF-16 code units needed to encode a codepoint
+/// Returns 1 for BMP characters, 2 for supplementary characters
 export function utf16_width(codepoint int) int
 	if codepoint < 65536 'bmp'
 		return 1
@@ -18,60 +18,60 @@ export function utf16_width(codepoint int) int
 	return 2
 end 'utf16_width'
 
-// utf16_is_lead_surrogate - Check if a code unit is a high (lead) surrogate
-// High surrogates are in the range 0xD800 to 0xDBFF
+/// Check if a code unit is a high (lead) surrogate
+/// High surrogates are in the range 0xD800 to 0xDBFF
 export function utf16_is_lead_surrogate(codeUnit int) bool
 	return codeUnit >= 55296 and codeUnit <= 56319
 end 'utf16_is_lead_surrogate'
 
-// utf16_is_trail_surrogate - Check if a code unit is a low (trail) surrogate
-// Low surrogates are in the range 0xDC00 to 0xDFFF
+/// Check if a code unit is a low (trail) surrogate
+/// Low surrogates are in the range 0xDC00 to 0xDFFF
 export function utf16_is_trail_surrogate(codeUnit int) bool
 	return codeUnit >= 56320 and codeUnit <= 57343
 end 'utf16_is_trail_surrogate'
 
-// utf16_is_surrogate - Check if a code unit is any type of surrogate
+/// Check if a code unit is any type of surrogate
 export function utf16_is_surrogate(codeUnit int) bool
 	return codeUnit >= 55296 and codeUnit <= 57343
 end 'utf16_is_surrogate'
 
-// utf16_is_bmp - Check if a codepoint is in the Basic Multilingual Plane
-// BMP codepoints can be encoded as a single UTF-16 code unit
+/// Check if a codepoint is in the Basic Multilingual Plane
+/// BMP codepoints can be encoded as a single UTF-16 code unit
 export function utf16_is_bmp(codepoint int) bool
 	return codepoint >= 0 and codepoint < 65536
 end 'utf16_is_bmp'
 
-// utf16_lead_surrogate - Get the high (lead) surrogate for a codepoint
-// Only valid for codepoints >= 0x10000 (supplementary characters)
-// Formula: 0xD800 + ((codepoint - 0x10000) >> 10)
+/// Get the high (lead) surrogate for a codepoint
+/// Only valid for codepoints >= 0x10000 (supplementary characters)
+/// Formula: 0xD800 + ((codepoint - 0x10000) >> 10)
 export function utf16_lead_surrogate(codepoint int) int
 	var offset = codepoint - 65536  // codepoint - 0x10000
 	return 55296 + trunc(offset / 1024)  // 0xD800 + high 10 bits
 end 'utf16_lead_surrogate'
 
-// utf16_trail_surrogate - Get the low (trail) surrogate for a codepoint
-// Only valid for codepoints >= 0x10000 (supplementary characters)
-// Formula: 0xDC00 + ((codepoint - 0x10000) & 0x3FF)
+/// Get the low (trail) surrogate for a codepoint
+/// Only valid for codepoints >= 0x10000 (supplementary characters)
+/// Formula: 0xDC00 + ((codepoint - 0x10000) & 0x3FF)
 export function utf16_trail_surrogate(codepoint int) int
 	var offset = codepoint - 65536  // codepoint - 0x10000
 	return 56320 + (offset mod 1024)  // 0xDC00 + low 10 bits
 end 'utf16_trail_surrogate'
 
-// utf16_decode_surrogates - Decode a surrogate pair to a codepoint
-// Formula: 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00)
+/// Decode a surrogate pair to a codepoint
+/// Formula: 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00)
 export function utf16_decode_surrogates(high int, low int) int
 	var highOffset = high - 55296  // high - 0xD800
 	var lowOffset = low - 56320    // low - 0xDC00
 	return 65536 + (highOffset * 1024) + lowOffset  // 0x10000 + combined
 end 'utf16_decode_surrogates'
 
-// utf16_is_valid_surrogate_pair - Check if high and low form a valid surrogate pair
+/// Check if high and low form a valid surrogate pair
 export function utf16_is_valid_surrogate_pair(high int, low int) bool
 	return utf16_is_lead_surrogate(high) and utf16_is_trail_surrogate(low)
 end 'utf16_is_valid_surrogate_pair'
 
-// utf16_codepoint_count - Count codepoints in a UTF-16 code unit array
-// Surrogate pairs count as one codepoint
+/// Count codepoints in a UTF-16 code unit array
+/// Surrogate pairs count as one codepoint
 export function utf16_codepoint_count(data array of int, len int) int
 	var count = 0
 	var i = 0
