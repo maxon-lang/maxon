@@ -228,7 +228,10 @@ std::vector<SemanticError> SemanticAnalyzer::analyzeIncremental(
 			InterfaceInfo protoInfo(interfaceDef->name, interfaceDef->line, interfaceDef->column,
 									interfaceDef->associatedTypes);
 			for (const auto &method : interfaceDef->methods) {
-				protoInfo.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters));
+				const std::vector<std::unique_ptr<StmtAST>> *bodyPtr =
+					method.hasDefaultImplementation ? &method.defaultBody : nullptr;
+				protoInfo.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters,
+																method.hasDefaultImplementation, bodyPtr));
 			}
 			interfaces.emplace(interfaceKey, std::move(protoInfo));
 
@@ -236,7 +239,10 @@ std::vector<SemanticError> SemanticAnalyzer::analyzeIncremental(
 				InterfaceInfo protoInfoSimple(interfaceDef->name, interfaceDef->line, interfaceDef->column,
 											  interfaceDef->associatedTypes);
 				for (const auto &method : interfaceDef->methods) {
-					protoInfoSimple.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters));
+					const std::vector<std::unique_ptr<StmtAST>> *bodyPtr =
+						method.hasDefaultImplementation ? &method.defaultBody : nullptr;
+					protoInfoSimple.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters,
+																		  method.hasDefaultImplementation, bodyPtr));
 				}
 				interfaces.emplace(interfaceDef->name, std::move(protoInfoSimple));
 			}

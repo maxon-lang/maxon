@@ -1124,6 +1124,24 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		declareFunction(func.get(), func->namespaceName);
 	}
 
+	// Declare synthesized default methods from interfaces
+	for (const auto &funcInfo : synthesizedMethods) {
+		logTrace("Declaring synthesized method: " + funcInfo.name);
+		mir::MIRType *returnType = getTypeFromString(funcInfo.returnType);
+		mir::MIRFunction *mirFunc = module->createFunction(funcInfo.name, returnType);
+		mirFunc->isExternal = false;
+
+		// Add parameters
+		for (const auto &param : funcInfo.parameters) {
+			mir::MIRType *paramType = getParamTypeFromString(param.type);
+			mirFunc->addParameter(paramType, param.name);
+
+			if (isArrayParam(param.type)) {
+				mirFunc->addParameter(mir::MIRType::getInt32(), param.name + ".__length");
+			}
+		}
+	}
+
 	// Generate Safe FFI infrastructure (only if there are extern functions)
 	if (!externFunctions.empty()) {
 		logDetail("Generating Safe FFI infrastructure for " + std::to_string(externFunctions.size()) + " extern functions");
@@ -1160,6 +1178,11 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		if (!func->isExtern) {
 			generateFunction(func.get(), func->namespaceName);
 		}
+	}
+
+	// Generate synthesized default method bodies
+	for (const auto &funcInfo : synthesizedMethods) {
+		generateSynthesizedMethod(funcInfo);
 	}
 
 	// Create entry point if needed

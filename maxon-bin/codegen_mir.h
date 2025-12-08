@@ -6,6 +6,7 @@
 #include "mir/mir.h"
 #include "mir/mir_builder.h"
 #include "safe_ffi.h"
+#include "semantic_analyzer.h"
 #include <map>
 #include <memory>
 #include <set>
@@ -50,6 +51,9 @@ class MIRCodeGenerator {
 
 	// Function parameter types from semantic analyzer (function name -> vector of param types)
 	std::map<std::string, std::vector<std::string>> functionParameterTypes;
+
+	// Synthesized default methods from interface default implementations
+	std::vector<FunctionInfo> synthesizedMethods;
 
 	// Track which variables are struct parameters (passed by pointer)
 	std::set<std::string> structParameters;
@@ -155,6 +159,7 @@ class MIRCodeGenerator {
 	mir::MIRValue *generateExpr(ExprAST *expr);
 	void generateStmt(StmtAST *stmt, mir::MIRFunction *function);
 	void generateFunction(FunctionAST *func, const std::string &namespaceName = "");
+	void generateSynthesizedMethod(const FunctionInfo &funcInfo);
 
 	// Statement generation helpers (in separate files)
 	void generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction *function);
@@ -362,6 +367,11 @@ class MIRCodeGenerator {
 	void generate(ProgramAST *program, bool needsEntryPoint = true,
 				  const std::map<std::string, size_t> *functionIndices = nullptr,
 				  const std::map<std::string, std::string> *functionReturnTypesIn = nullptr);
+
+	// Set synthesized methods from interface default implementations
+	void setSynthesizedMethods(const std::vector<FunctionInfo> &methods) {
+		synthesizedMethods = methods;
+	}
 
 	// Get Maxon type of an expression (used for type-aware codegen)
 	std::string getExpressionMaxonType(ExprAST *expr);

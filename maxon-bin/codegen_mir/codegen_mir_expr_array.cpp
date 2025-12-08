@@ -16,6 +16,10 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 	// Array intrinsics: push(arr, value), pop(arr)
 	// These are generated from method syntax: arr.push(value), arr.pop()
 	// The operations are inlined directly rather than calling runtime functions.
+	//
+	// Supports two array storage layouts:
+	// 1. _ManagedArray<T>: struct { _buffer ptr, _len i32, _capacity i32 }
+	// 2. Legacy separate allocas: arrName, arrName.__length, arrName.__capacity
 
 	if (callExpr->callee == "push") {
 		// push(arr, value) - requires arr to be a dynamic (var) array
@@ -39,27 +43,10 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 
 		std::string arrName = arrVar->name;
 		std::string arrType = variableTypes[arrName];
-
-		// Check it's a dynamic array (has capacity)
-		mir::MIRValue *capacityAlloca = namedValues[arrName + ".__capacity"];
-		if (!capacityAlloca) {
-			reportError("push() can only be used on dynamic (var) arrays, not static (let) arrays",
-						callExpr->line, callExpr->column);
-		}
-
-		// Get array's internal allocas
 		mir::MIRValue *arrAlloca = namedValues[arrName];
-		mir::MIRValue *lengthAlloca = namedValues[arrName + ".__length"];
 
-		if (!arrAlloca || !lengthAlloca) {
+		if (!arrAlloca) {
 			reportError("Array variable not found: " + arrName,
-						callExpr->line, callExpr->column);
-		}
-
-		// Generate the value to push
-		mir::MIRValue *value = generateExpr(callExpr->args[1].get());
-		if (!value) {
-			reportError("Failed to generate value for push()",
 						callExpr->line, callExpr->column);
 		}
 
@@ -72,30 +59,61 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 		mir::MIRType *elemType = getTypeFromString(elemTypeStr);
 		int elemSize = static_cast<int>(elemType->sizeInBytes);
 
+		// Generate the value to push
+		mir::MIRValue *value = generateExpr(callExpr->args[1].get());
+		if (!value) {
+			reportError("Failed to generate value for push()",
+						callExpr->line, callExpr->column);
+		}
+
+		// Determine storage layout and get pointers
+		mir::MIRValue *bufferFieldPtr = nullptr;  // Pointer to the field storing buffer ptr
+		mir::MIRValue *lengthFieldPtr = nullptr;  // Pointer to the field storing length
+		mir::MIRValue *capacityFieldPtr = nullptr; // Pointer to the field storing capacity
+
+		if (maxon::TypeConversion::isManagedArrayType(arrType)) {
+			// _ManagedArray<T>: struct layout { _buffer ptr, _len i32, _capacity i32 }
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemTypeStr);
+			bufferFieldPtr = builder->createStructGEP(managedArrayType, arrAlloca, 0, arrName + "._buffer.ptr");
+			lengthFieldPtr = builder->createStructGEP(managedArrayType, arrAlloca, 1, arrName + "._len.ptr");
+			capacityFieldPtr = builder->createStructGEP(managedArrayType, arrAlloca, 2, arrName + "._capacity.ptr");
+		} else {
+			// Legacy: separate allocas
+			mir::MIRValue *capacityAlloca = namedValues[arrName + ".__capacity"];
+			mir::MIRValue *lengthAlloca = namedValues[arrName + ".__length"];
+			if (!capacityAlloca || !lengthAlloca) {
+				reportError("push() can only be used on dynamic (var) arrays, not static (let) arrays",
+							callExpr->line, callExpr->column);
+			}
+			bufferFieldPtr = arrAlloca;
+			lengthFieldPtr = lengthAlloca;
+			capacityFieldPtr = capacityAlloca;
+		}
+
 		// Load current values
-		mir::MIRValue *arrPtr = builder->createLoad(mir::MIRType::getPtr(), arrAlloca, "arr.ptr");
-		mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "length");
-		mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt32(), capacityAlloca, "capacity");
+		mir::MIRValue *arrPtr = builder->createLoad(mir::MIRType::getPtr(), bufferFieldPtr, "arr.ptr");
+		mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt32(), lengthFieldPtr, "length");
+		mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt32(), capacityFieldPtr, "capacity");
 
 		// Create basic blocks for the growth check
 		mir::MIRFunction *currentFunc = builder->getFunction();
 		mir::MIRBasicBlock *growBlock = currentFunc->createBasicBlock("push.grow");
 		mir::MIRBasicBlock *storeBlock = currentFunc->createBasicBlock("push.store");
 
-		// Check if we need to grow: length >= capacity
-		mir::MIRValue *needGrow = builder->createICmpSGE(length, capacity, "need.grow");
+		// Check if we need to grow: capacity == 0 (stack-allocated) OR length >= capacity
+		// Stack-allocated arrays have capacity = 0, need malloc on first push
+		mir::MIRValue *isStackAlloc = builder->createICmpEq(capacity, builder->getInt32(0), "is.stack");
+		mir::MIRValue *needMoreSpace = builder->createICmpSGE(length, capacity, "need.more");
+		mir::MIRValue *needGrow = builder->createOr(isStackAlloc, needMoreSpace, "need.grow");
 		builder->createCondBr(needGrow, growBlock, storeBlock);
 
 		// Grow block: double capacity and realloc
 		builder->setInsertPoint(growBlock);
 
 		// Calculate new capacity: capacity * 2, but at least 4
-		// We need to handle zero capacity specially
 		mir::MIRValue *doubledCap = builder->createMul(capacity, builder->getInt32(2), "doubled.cap");
 
 		// If capacity is 0, use 4 instead
-		// We do this with: newCap = doubled + 4, then if doubled > 0, newCap = doubled
-		// Simpler: branch on isZero
 		mir::MIRBasicBlock *initCapBlock = currentFunc->createBasicBlock("push.initcap");
 		mir::MIRBasicBlock *doubleCapBlock = currentFunc->createBasicBlock("push.doublecap");
 		mir::MIRBasicBlock *doReallocBlock = currentFunc->createBasicBlock("push.dorealloc");
@@ -124,20 +142,53 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 		mir::MIRValue *oldSize = builder->createMul(capacity64, elemSizeVal, "old.size");
 		mir::MIRValue *newSize = builder->createMul(newCapacity64, elemSizeVal, "new.size");
 
-		// Call realloc(ptr, old_size, new_size)
+		// Call realloc or malloc depending on whether this is first growth
+		// For stack-allocated arrays, oldSize will be 0 when capacity is 0, so we use malloc
+		// For already-heap-allocated arrays, we use realloc
 		mir::MIRFunction *reallocFunc = getOrDeclareFunction("realloc", mir::MIRType::getPtr(),
 															 {mir::MIRType::getPtr(), mir::MIRType::getInt64(), mir::MIRType::getInt64()});
-		mir::MIRValue *newArrPtr = builder->createCall(reallocFunc, {arrPtr, oldSize, newSize}, "new.arr");
+		mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(),
+															{mir::MIRType::getInt64()});
+		mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
+															{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+
+		// Branch based on whether old capacity is 0 (stack-allocated) or not (heap-allocated)
+		mir::MIRBasicBlock *stackToHeapBlock = currentFunc->createBasicBlock("push.stack2heap");
+		mir::MIRBasicBlock *reallocBlock = currentFunc->createBasicBlock("push.realloc");
+		mir::MIRBasicBlock *afterGrowBlock = currentFunc->createBasicBlock("push.aftergrow");
+
+		mir::MIRValue *wasStackAllocated = builder->createICmpEq(capacity, builder->getInt32(0), "was.stack");
+		builder->createCondBr(wasStackAllocated, stackToHeapBlock, reallocBlock);
+
+		// Stack-to-heap transition: malloc new buffer and copy existing data
+		builder->setInsertPoint(stackToHeapBlock);
+		mir::MIRValue *heapBuffer = builder->createCall(mallocFunc, {newSize}, "heap.buffer");
+		// Copy existing elements from stack to heap
+		mir::MIRValue *length64Copy = builder->createSExt(length, mir::MIRType::getInt64(), "len64.copy");
+		mir::MIRValue *copySize = builder->createMul(length64Copy, elemSizeVal, "copy.size");
+		builder->createCall(memcpyFunc, {heapBuffer, arrPtr, copySize}, "");
+		builder->createBr(afterGrowBlock);
+
+		// Normal realloc for already-heap-allocated arrays
+		builder->setInsertPoint(reallocBlock);
+		mir::MIRValue *reallocResult = builder->createCall(reallocFunc, {arrPtr, oldSize, newSize}, "realloc.arr");
+		builder->createBr(afterGrowBlock);
+
+		// Merge the two paths with phi
+		builder->setInsertPoint(afterGrowBlock);
+		mir::MIRValue *newArrPtr = builder->createPhi(mir::MIRType::getPtr(), "new.arr");
+		builder->addPhiIncoming(newArrPtr, heapBuffer, stackToHeapBlock);
+		builder->addPhiIncoming(newArrPtr, reallocResult, reallocBlock);
 
 		// Store new pointer and capacity
-		builder->createStore(newArrPtr, arrAlloca);
-		builder->createStore(newCapacity, capacityAlloca);
+		builder->createStore(newArrPtr, bufferFieldPtr);
+		builder->createStore(newCapacity, capacityFieldPtr);
 		builder->createBr(storeBlock);
 
 		// Store block: store value at arr[length]
-		// Reload array pointer from alloca (may have been updated by realloc)
+		// Reload array pointer from field (may have been updated by realloc)
 		builder->setInsertPoint(storeBlock);
-		mir::MIRValue *finalArrPtr = builder->createLoad(mir::MIRType::getPtr(), arrAlloca, "arr.final");
+		mir::MIRValue *finalArrPtr = builder->createLoad(mir::MIRType::getPtr(), bufferFieldPtr, "arr.final");
 
 		// Calculate element pointer and store
 		mir::MIRValue *length64 = builder->createSExt(length, mir::MIRType::getInt64(), "len64");
@@ -146,7 +197,7 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 
 		// Increment length
 		mir::MIRValue *newLength = builder->createAdd(length, builder->getInt32(1), "new.length");
-		builder->createStore(newLength, lengthAlloca);
+		builder->createStore(newLength, lengthFieldPtr);
 
 		// push returns void, but we return a dummy value
 		return builder->getInt32(0);
@@ -171,19 +222,9 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 
 		std::string arrName = arrVar->name;
 		std::string arrType = variableTypes[arrName];
-
-		// Check it's a dynamic array
-		mir::MIRValue *capacityAlloca = namedValues[arrName + ".__capacity"];
-		if (!capacityAlloca) {
-			reportError("pop() can only be used on dynamic (var) arrays, not static (let) arrays",
-						callExpr->line, callExpr->column);
-		}
-
-		// Get array's internal allocas
 		mir::MIRValue *arrAlloca = namedValues[arrName];
-		mir::MIRValue *lengthAlloca = namedValues[arrName + ".__length"];
 
-		if (!arrAlloca || !lengthAlloca) {
+		if (!arrAlloca) {
 			reportError("Array variable not found: " + arrName,
 						callExpr->line, callExpr->column);
 		}
@@ -196,13 +237,34 @@ mir::MIRValue *MIRCodeGenerator::generateArrayIntrinsic(CallExprAST *callExpr) {
 
 		mir::MIRType *elemType = getTypeFromString(elemTypeStr);
 
+		// Determine storage layout and get pointers
+		mir::MIRValue *bufferFieldPtr = nullptr;
+		mir::MIRValue *lengthFieldPtr = nullptr;
+
+		if (maxon::TypeConversion::isManagedArrayType(arrType)) {
+			// _ManagedArray<T>: struct layout { _buffer ptr, _len i32, _capacity i32 }
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemTypeStr);
+			bufferFieldPtr = builder->createStructGEP(managedArrayType, arrAlloca, 0, arrName + "._buffer.ptr");
+			lengthFieldPtr = builder->createStructGEP(managedArrayType, arrAlloca, 1, arrName + "._len.ptr");
+		} else {
+			// Legacy: separate allocas
+			mir::MIRValue *capacityAlloca = namedValues[arrName + ".__capacity"];
+			mir::MIRValue *lengthAlloca = namedValues[arrName + ".__length"];
+			if (!capacityAlloca || !lengthAlloca) {
+				reportError("pop() can only be used on dynamic (var) arrays, not static (let) arrays",
+							callExpr->line, callExpr->column);
+			}
+			bufferFieldPtr = arrAlloca;
+			lengthFieldPtr = lengthAlloca;
+		}
+
 		// Load current length and decrement
-		mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "length");
+		mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt32(), lengthFieldPtr, "length");
 		mir::MIRValue *newLength = builder->createSub(length, builder->getInt32(1), "new.length");
-		builder->createStore(newLength, lengthAlloca);
+		builder->createStore(newLength, lengthFieldPtr);
 
 		// Load array pointer and get element at new_length
-		mir::MIRValue *arrPtr = builder->createLoad(mir::MIRType::getPtr(), arrAlloca, "arr.ptr");
+		mir::MIRValue *arrPtr = builder->createLoad(mir::MIRType::getPtr(), bufferFieldPtr, "arr.ptr");
 		mir::MIRValue *newLength64 = builder->createSExt(newLength, mir::MIRType::getInt64(), "newlen64");
 		mir::MIRValue *elemPtr = builder->createArrayGEP(elemType, arrPtr, newLength64, "elem.ptr");
 

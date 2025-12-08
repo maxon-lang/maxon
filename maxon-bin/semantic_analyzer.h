@@ -46,11 +46,18 @@ struct FunctionInfo {
 	std::string returnType;
 	std::vector<FunctionParameter> parameters;
 	std::string implementsInterface; // For interface methods: which interface this method implements
+	bool isSynthesizedDefault = false; // True if synthesized from interface default implementation
+	const std::vector<std::unique_ptr<StmtAST>> *defaultBody = nullptr; // Non-owning ptr to default impl body
+	std::string selfType; // For synthesized methods: concrete struct type to substitute for Self
+	std::map<std::string, std::string> typeSubstitutions; // For synthesized methods: associated type substitutions
 	int line;
 	int column;
 
 	FunctionInfo(const std::string &n, const std::string &ret, std::vector<FunctionParameter> params, const std::string &implInterface = "", int l = 0, int c = 0)
 		: name(n), returnType(ret), parameters(std::move(params)), implementsInterface(implInterface), line(l), column(c) {}
+
+	// Check if this is a synthesized default method that needs code generation
+	bool needsCodeGeneration() const { return isSynthesizedDefault && defaultBody != nullptr; }
 };
 
 // Struct field information
@@ -89,9 +96,13 @@ struct InterfaceMethodInfo {
 	std::string name;
 	std::string returnType;
 	std::vector<FunctionParameter> parameters;
+	bool hasDefaultImplementation = false;
+	const std::vector<std::unique_ptr<StmtAST>> *defaultBody = nullptr; // Non-owning ptr to AST body
 
-	InterfaceMethodInfo(const std::string &n, const std::string &ret, std::vector<FunctionParameter> params)
-		: name(n), returnType(ret), parameters(std::move(params)) {}
+	InterfaceMethodInfo(const std::string &n, const std::string &ret, std::vector<FunctionParameter> params,
+						bool hasDefault = false, const std::vector<std::unique_ptr<StmtAST>> *defBody = nullptr)
+		: name(n), returnType(ret), parameters(std::move(params)),
+		  hasDefaultImplementation(hasDefault), defaultBody(defBody) {}
 };
 
 // Interface information
@@ -238,6 +249,17 @@ class SemanticAnalyzer {
 
 	// Get all functions
 	const std::map<std::string, FunctionInfo> &getFunctions() const { return functions; }
+
+	// Get synthesized default methods (methods generated from interface default implementations)
+	std::vector<const FunctionInfo *> getSynthesizedMethods() const {
+		std::vector<const FunctionInfo *> result;
+		for (const auto &[name, info] : functions) {
+			if (info.needsCodeGeneration()) {
+				result.push_back(&info);
+			}
+		}
+		return result;
+	}
 
 	// Get function indices for codegen optimization
 	const std::map<std::string, size_t> &getFunctionIndices() const { return functionIndices; }

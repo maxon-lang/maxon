@@ -178,6 +178,36 @@ end 'main'
 100
 ```
 
+<!-- test: dynamic.push-pop -->
+```maxon
+function main() int
+    var arr = [1, 2, 3]
+    arr.push(4)
+    arr.push(5)
+    var count_after_push = arr.count()
+    var popped = arr.pop()
+    var count_after_pop = arr.count()
+    return count_after_push * 100 + popped * 10 + count_after_pop
+end 'main'
+```
+```exitcode
+554
+```
+
+<!-- test: dynamic.push-to-empty -->
+```maxon
+function main() int
+    var arr = array of int
+    arr.push(10)
+    arr.push(20)
+    arr.push(30)
+    return arr.count()
+end 'main'
+```
+```exitcode
+3
+```
+
 <!-- test: dynamic.length -->
 ```maxon
 function main() int

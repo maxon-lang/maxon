@@ -203,7 +203,10 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 			InterfaceInfo protoInfo(interfaceDef->name, interfaceDef->line, interfaceDef->column,
 									interfaceDef->associatedTypes, interfaceDef->extendsInterface);
 			for (const auto &method : interfaceDef->methods) {
-				protoInfo.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters));
+				const std::vector<std::unique_ptr<StmtAST>> *bodyPtr =
+					method.hasDefaultImplementation ? &method.defaultBody : nullptr;
+				protoInfo.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters,
+																method.hasDefaultImplementation, bodyPtr));
 			}
 			interfaces.emplace(interfaceKey, std::move(protoInfo));
 
@@ -212,7 +215,10 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 				InterfaceInfo protoInfoSimple(interfaceDef->name, interfaceDef->line, interfaceDef->column,
 											  interfaceDef->associatedTypes, interfaceDef->extendsInterface);
 				for (const auto &method : interfaceDef->methods) {
-					protoInfoSimple.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters));
+					const std::vector<std::unique_ptr<StmtAST>> *bodyPtr =
+						method.hasDefaultImplementation ? &method.defaultBody : nullptr;
+					protoInfoSimple.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters,
+																		  method.hasDefaultImplementation, bodyPtr));
 				}
 				interfaces.emplace(interfaceDef->name, std::move(protoInfoSimple));
 			}
@@ -1086,6 +1092,36 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 
 			auto funcIt = functions.find(expectedMethodName);
 			if (funcIt == functions.end()) {
+				// Check if interface provides a default implementation
+				if (protoMethod.hasDefaultImplementation && protoMethod.defaultBody != nullptr) {
+					// Synthesize method from default implementation
+					// Build parameter list with implicit self
+					std::vector<FunctionParameter> params;
+					params.push_back(FunctionParameter("self", structName));
+
+					for (const auto &param : protoMethod.parameters) {
+						std::string resolvedType = resolveType(param.type);
+						params.push_back(FunctionParameter(param.name, resolvedType));
+					}
+
+					std::string resolvedReturnType = resolveType(protoMethod.returnType);
+
+					// Register as function with synthesized default flag
+					FunctionInfo funcInfo(expectedMethodName, resolvedReturnType, std::move(params), sourceInterface);
+					funcInfo.isSynthesizedDefault = true;
+					funcInfo.defaultBody = protoMethod.defaultBody;
+					funcInfo.selfType = structName;
+					// Copy type assignments for resolving associated types in codegen
+					if (typeAssignments) {
+						funcInfo.typeSubstitutions = *typeAssignments;
+					}
+					funcInfo.typeSubstitutions["Self"] = structName;
+					functions.emplace(expectedMethodName, std::move(funcInfo));
+
+					logTrace("Synthesized default method: " + expectedMethodName + " from " + sourceInterface);
+					continue; // Don't report as missing
+				}
+
 				// Build parameter string for error message (without implicit self)
 				std::string paramStr;
 				for (size_t i = 0; i < protoMethod.parameters.size(); i++) {

@@ -763,10 +763,32 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 			}
 		}
 
-		methods.push_back(InterfaceMethodSignature(methodName, std::move(parameters), returnType,
-												   methodNameToken.line, methodNameToken.column));
+		// Check if this method has a default implementation body
+		// If next token is not 'function' or 'end', it must be the start of a body
+		std::vector<std::unique_ptr<StmtAST>> defaultBody;
+		bool hasDefaultImpl = !checkKeyword("function") && !checkKeyword("end") && !check(TokenType::END_OF_FILE);
 
-		logTrace("  Method '" + methodName + "' -> " + returnType);
+		if (hasDefaultImpl) {
+			while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+				defaultBody.push_back(parseStatementWithRecovery());
+			}
+
+			expectKeywordAdvance("end", "Expected 'end' to close default implementation");
+
+			// Require matching block identifier after 'end'
+			Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected method name as block identifier after 'end'");
+			if (endBlockIdToken.value != methodName) {
+				reportError("Block identifier mismatch in default implementation\n  Expected: '" + methodName +
+								"'\n  Found: '" + endBlockIdToken.value + "'",
+							endBlockIdToken.line, endBlockIdToken.column);
+			}
+		}
+
+		methods.push_back(InterfaceMethodSignature(methodName, std::move(parameters), returnType,
+												   methodNameToken.line, methodNameToken.column,
+												   hasDefaultImpl, std::move(defaultBody)));
+
+		logTrace("  Method '" + methodName + "' -> " + returnType + (hasDefaultImpl ? " (default)" : ""));
 	}
 
 	expectKeywordAdvance("end", "Expected 'end' to close interface");

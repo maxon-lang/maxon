@@ -581,12 +581,18 @@ struct InterfaceMethodSignature {
 	std::string name;
 	std::vector<FunctionParameter> parameters; // First param is 'self' with type 'Self'
 	std::string returnType;
+	bool hasDefaultImplementation = false;				   // True if this method has a default impl
+	std::vector<std::unique_ptr<StmtAST>> defaultBody;	   // Body of default impl (empty if none)
 	int line;
 	int column;
 
 	InterfaceMethodSignature(const std::string &n, std::vector<FunctionParameter> params,
-							 const std::string &ret, int l = 0, int c = 0)
-		: name(n), parameters(std::move(params)), returnType(ret), line(l), column(c) {}
+							 const std::string &ret, int l = 0, int c = 0,
+							 bool hasDefault = false,
+							 std::vector<std::unique_ptr<StmtAST>> defBody = {})
+		: name(n), parameters(std::move(params)), returnType(ret),
+		  hasDefaultImplementation(hasDefault), defaultBody(std::move(defBody)),
+		  line(l), column(c) {}
 };
 
 // Interface definition

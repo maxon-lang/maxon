@@ -342,6 +342,7 @@ std::string compileProgram(const CompilationOptions &options) {
 	const int maxIterations = 10;
 	std::map<std::string, size_t> functionIndices;			// Store function indices from semantic analysis
 	std::map<std::string, std::string> functionReturnTypes; // Store function return types from semantic analysis
+	std::vector<FunctionInfo> synthesizedMethods;			// Store synthesized default methods (copied)
 	bool discoveredNewFiles = false;
 	std::unique_ptr<ProgramAST> mergedProgram; // Declare outside loop to preserve function IDs
 
@@ -387,8 +388,13 @@ std::string compileProgram(const CompilationOptions &options) {
 
 		// Store function return types for codegen type inference
 		functionReturnTypes.clear();
+		synthesizedMethods.clear();
 		for (const auto &[name, info] : analyzer.getFunctions()) {
 			functionReturnTypes[name] = info.returnType;
+			// Collect synthesized default methods
+			if (info.needsCodeGeneration()) {
+				synthesizedMethods.push_back(info);
+			}
 		}
 
 		// Collect all undefined items and their corresponding stdlib files
@@ -570,6 +576,7 @@ std::string compileProgram(const CompilationOptions &options) {
 	logger.progress(LogPhase::MIR, "Generating MIR...");
 
 	MIRCodeGenerator codegen(moduleName, options.debugInfo, options.verboseLevel, options.trackAllocs);
+	codegen.setSynthesizedMethods(synthesizedMethods);
 
 	if (stats)
 		stats->startPhase("MIR Generation");

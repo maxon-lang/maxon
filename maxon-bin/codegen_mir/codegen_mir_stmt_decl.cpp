@@ -96,7 +96,10 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			mir::MIRValue *structAlloca = builder->createAlloca(managedArrayType, varDecl->name);
 
 			// Initialize struct fields: { _buffer, _len, _capacity }
+			// NOTE: capacity = 0 signals stack-allocated buffer to push() intrinsic
+			// When push needs to grow, it will malloc a new heap buffer instead of realloc
 			mir::MIRValue *arraySizeVal = builder->getInt32(constantArraySize);
+			mir::MIRValue *zeroCapacity = builder->getInt32(0);
 
 			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, structAlloca, 0, varDecl->name + "._buffer");
 			builder->createStore(stackBuffer, bufferField);
@@ -105,7 +108,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			builder->createStore(arraySizeVal, lenField);
 
 			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, structAlloca, 2, varDecl->name + "._capacity");
-			builder->createStore(arraySizeVal, capField);
+			builder->createStore(zeroCapacity, capField);
 
 			namedValues[varDecl->name] = structAlloca;
 			variableTypes[varDecl->name] = maxon::TypeConversion::makeManagedArrayType(elementTypeName);
