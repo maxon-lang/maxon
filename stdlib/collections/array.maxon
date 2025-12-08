@@ -44,8 +44,8 @@
 // - User code never calls these functions directly
 
 export struct array uses Element is Iterable with Element, ExpressibleByArrayLiteral with Element
-	var _managed _ManagedArray  // Compiler-managed opaque array storage
-	var _iterIndex int          // Current iteration position
+	var managed _ManagedArray  // Compiler-managed opaque array storage
+	var iterIndex int          // Current iteration position
 
 	// =========================================================================
 	// ExpressibleByArrayLiteral conformance
@@ -54,67 +54,67 @@ export struct array uses Element is Iterable with Element, ExpressibleByArrayLit
 	// Initialize array from compiler-constructed _ManagedArray
 	// The compiler passes an opaque _ManagedArray value
 	function ExpressibleByArrayLiteral.init(managed _ManagedArray) Self
-		return Self{_managed: managed, _iterIndex: 0}
+		return Self{managed: managed, iterIndex: 0}
 	end 'init'
 
 	// =========================================================================
 	// Properties
 	// =========================================================================
 
-	// Get the number of elements in the array
+	/// Get the number of elements in the array
 	export function count() int
-		return __managed_array_len(_managed)
+		return __managed_array_len(managed)
 	end 'count'
 
-	// Get the current capacity (allocated space)
+	/// Get the current capacity (allocated space)
 	export function capacity() int
-		return __managed_array_capacity(_managed)
+		return __managed_array_capacity(managed)
 	end 'capacity'
 
-	// Check if array is empty
+	/// Check if array is empty
 	export function isEmpty() bool
-		return __managed_array_len(_managed) == 0
+		return __managed_array_len(managed) == 0
 	end 'isEmpty'
 
-	// Get first element, or nil if empty
+	/// Get first element, or nil if empty
 	export function first() Element or nil
-		if __managed_array_len(_managed) == 0 'empty'
+		if __managed_array_len(managed) == 0 'empty'
 			return nil
 		end 'empty'
-		return _managed[0]
+		return managed[0]
 	end 'first'
 
-	// Get last element, or nil if empty
+	/// Get last element, or nil if empty
 	export function last() Element or nil
-		var len = __managed_array_len(_managed)
+		var len = __managed_array_len(managed)
 		if len == 0 'empty'
 			return nil
 		end 'empty'
-		return _managed[len - 1]
+		return managed[len - 1]
 	end 'last'
 
 	// =========================================================================
 	// Element Access
 	// =========================================================================
 
-	// Get element at index, or nil if out of bounds
+	/// Get element at index, or nil if out of bounds
 	export function get(index int) Element or nil
-		var len = __managed_array_len(_managed)
+		var len = __managed_array_len(managed)
 		if index < 0 'bounds'
 			return nil
 		end 'bounds'
 		if index >= len 'bounds'
 			return nil
 		end 'bounds'
-		return _managed[index]
+		return managed[index]
 	end 'get'
 
-	// Set element at index (no-op if index out of bounds)
+	/// Set element at index (no-op if index out of bounds)
 	export function set(index int, value Element) Self
-		var len = __managed_array_len(_managed)
+		var len = __managed_array_len(managed)
 		if index >= 0 'bounds'
 			if index < len 'bounds'
-				__managed_array_set_at(_managed, index, value)
+				__managed_array_set_at(managed, index, value)
 			end 'bounds'
 		end 'bounds'
 		return self
@@ -124,38 +124,38 @@ export struct array uses Element is Iterable with Element, ExpressibleByArrayLit
 	// Mutating Operations
 	// =========================================================================
 
-	// Append element to end
+	/// Append element to end
 	export function push(value Element) Self
-		var len = __managed_array_len(_managed)
-		var cap = __managed_array_capacity(_managed)
+		var len = __managed_array_len(managed)
+		var cap = __managed_array_capacity(managed)
 		if len >= cap 'grow'
 			// Double capacity, minimum 4
 			var newCap = cap * 2
 			if newCap < 4 'min'
 				newCap = 4
 			end 'min'
-			__managed_array_grow(_managed, newCap)
+			__managed_array_grow(managed, newCap)
 		end 'grow'
-		__managed_array_set_at(_managed, len, value)
-		__managed_array_set_length(_managed, len + 1)
+		__managed_array_set_at(managed, len, value)
+		__managed_array_set_length(managed, len + 1)
 		return self
 	end 'push'
 
-	// Remove and return last element, or nil if empty
+	/// Remove and return last element, or nil if empty
 	export function pop() Element or nil
-		var len = __managed_array_len(_managed)
+		var len = __managed_array_len(managed)
 		if len == 0 'empty'
 			return nil
 		end 'empty'
 		var newLen = len - 1
-		var value = _managed[newLen]
-		__managed_array_set_length(_managed, newLen)
+		var value = managed[newLen]
+		__managed_array_set_length(managed, newLen)
 		return value
 	end 'pop'
 
-	// Insert element at index (clamps to [0, count])
+	/// Insert element at index, shifting elements to the right (clamps index to [0, count])
 	export function insert(at int, value Element) Self
-		var len = __managed_array_len(_managed)
+		var len = __managed_array_len(managed)
 		var index = at
 
 		// Clamp index to valid range
@@ -167,29 +167,29 @@ export struct array uses Element is Iterable with Element, ExpressibleByArrayLit
 		end 'clamp'
 
 		// Ensure capacity
-		var cap = __managed_array_capacity(_managed)
+		var cap = __managed_array_capacity(managed)
 		if len >= cap 'grow'
 			var newCap = cap * 2
 			if newCap < 4 'min'
 				newCap = 4
 			end 'min'
-			__managed_array_grow(_managed, newCap)
+			__managed_array_grow(managed, newCap)
 		end 'grow'
 
 		// Shift elements right to make room
 		if index < len 'shift'
-			__managed_array_shift_right(_managed, index, 1)
+			__managed_array_shift_right(managed, index, 1)
 		end 'shift'
 
 		// Insert element and update length
-		__managed_array_set_at(_managed, index, value)
-		__managed_array_set_length(_managed, len + 1)
+		__managed_array_set_at(managed, index, value)
+		__managed_array_set_length(managed, len + 1)
 		return self
 	end 'insert'
 
-	// Remove and return element at index, or nil if out of bounds
+	/// Remove and return element at index, shifting elements to the left (returns nil if out of bounds)
 	export function remove(at int) Element or nil
-		var len = __managed_array_len(_managed)
+		var len = __managed_array_len(managed)
 
 		// Check bounds
 		if at < 0 'bounds'
@@ -200,20 +200,20 @@ export struct array uses Element is Iterable with Element, ExpressibleByArrayLit
 		end 'bounds'
 
 		// Save element before shifting
-		var value = _managed[at]
+		var value = managed[at]
 
 		// Shift elements left to fill gap
 		if at < len - 1 'shift'
-			__managed_array_shift_left(_managed, at, 1)
+			__managed_array_shift_left(managed, at, 1)
 		end 'shift'
 
-		__managed_array_set_length(_managed, len - 1)
+		__managed_array_set_length(managed, len - 1)
 		return value
 	end 'remove'
 
-	// Remove all elements (keeps capacity)
+	/// Remove all elements from the array (keeps capacity)
 	export function clear() Self
-		__managed_array_set_length(_managed, 0)
+		__managed_array_set_length(managed, 0)
 		return self
 	end 'clear'
 
@@ -221,11 +221,11 @@ export struct array uses Element is Iterable with Element, ExpressibleByArrayLit
 	// Capacity Management
 	// =========================================================================
 
-	// Pre-allocate capacity for at least minCapacity elements
+	/// Reserve space by ensuring array has at least minCapacity slots
 	export function reserve(minCapacity int) Self
-		var cap = __managed_array_capacity(_managed)
+		var cap = __managed_array_capacity(managed)
 		if minCapacity > cap 'grow'
-			__managed_array_grow(_managed, minCapacity)
+			__managed_array_grow(managed, minCapacity)
 		end 'grow'
 		return self
 	end 'reserve'
@@ -236,12 +236,12 @@ export struct array uses Element is Iterable with Element, ExpressibleByArrayLit
 
 	// Get next element in iteration, or nil when exhausted
 	function Iterable.next() Element or nil
-		var len = __managed_array_len(_managed)
-		if _iterIndex >= len 'done'
+		var len = __managed_array_len(managed)
+		if iterIndex >= len 'done'
 			return nil
 		end 'done'
-		var value = _managed[_iterIndex]
-		_iterIndex = _iterIndex + 1
+		var value = managed[iterIndex]
+		iterIndex = iterIndex + 1
 		return value
 	end 'next'
 end 'array'

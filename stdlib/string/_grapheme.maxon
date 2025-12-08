@@ -15,8 +15,8 @@
 // Find grapheme end helpers (UAX #29)
 // ============================================
 
-// _find_grapheme_end_managed_range - Find end of grapheme cluster in range
-function _find_grapheme_end_managed_range(managed _ManagedString, offset int, start_pos int, len int) int
+// find_grapheme_end_managed_range - Find end of grapheme cluster in range
+function find_grapheme_end_managed_range(managed _ManagedString, offset int, start_pos int, len int) int
 	if start_pos >= len 'at_end'
 		return start_pos
 	end 'at_end'
@@ -24,8 +24,8 @@ function _find_grapheme_end_managed_range(managed _ManagedString, offset int, st
 	// Decode first codepoint at start_pos (with offset)
 	var pos = start_pos
 	var abs_pos = offset + pos
-	var prev_cp = _utf8_decode_at(managed, abs_pos)
-	var prev_bytes = _utf8_byte_length_at(managed, abs_pos)
+	var prev_cp = utf8_decode_at(managed, abs_pos)
+	var prev_bytes = utf8_byte_length_at(managed, abs_pos)
 	pos = pos + prev_bytes
 
 	// Get grapheme break property for first codepoint
@@ -36,7 +36,7 @@ function _find_grapheme_end_managed_range(managed _ManagedString, offset int, st
 	// Scan forward until we find a grapheme break
 	while pos < len 'scan'
 		abs_pos = offset + pos
-		var curr_cp = _utf8_decode_at(managed, abs_pos)
+		var curr_cp = utf8_decode_at(managed, abs_pos)
 		var curr_gbp = grapheme_break_property(curr_cp)
 
 		// Check if there's a break before current codepoint
@@ -48,54 +48,54 @@ function _find_grapheme_end_managed_range(managed _ManagedString, offset int, st
 		state = grapheme_state_update(state, curr_gbp, curr_cp)
 		prev_gbp = curr_gbp
 		prev_cp = curr_cp
-		var curr_bytes = _utf8_byte_length_at(managed, abs_pos)
+		var curr_bytes = utf8_byte_length_at(managed, abs_pos)
 		pos = pos + curr_bytes
 	end 'scan'
 
 	return pos
-end '_find_grapheme_end_managed_range'
+end 'find_grapheme_end_managed_range'
 
 /// Find the end of the grapheme cluster in a _ManagedString starting at start_pos
 /// Returns the byte offset of the end of the grapheme cluster
-export function _find_grapheme_end_managed(managed _ManagedString, start_pos int, len int) int
-	return _find_grapheme_end_managed_range(managed, 0, start_pos, len)
-end '_find_grapheme_end_managed'
+export function find_grapheme_end_managed(managed _ManagedString, start_pos int, len int) int
+	return find_grapheme_end_managed_range(managed, 0, start_pos, len)
+end 'find_grapheme_end_managed'
 
 /// Find the end of the grapheme cluster in a substring starting at start_pos
 /// Returns the byte offset of the end of the grapheme cluster
-export function _find_grapheme_end_substring(sub substring, start_pos int, len int) int
+export function find_grapheme_end_substring(sub substring, start_pos int, len int) int
 	var parent = __substring_parent_managed(sub)
 	var offset = __substring_byte_offset(sub)
-	return _find_grapheme_end_managed_range(parent, offset, start_pos, len)
-end '_find_grapheme_end_substring'
+	return find_grapheme_end_managed_range(parent, offset, start_pos, len)
+end 'find_grapheme_end_substring'
 
 // ============================================
 // Count grapheme helpers
 // ============================================
 
-// _count_graphemes_managed_range - Count grapheme clusters in range
-function _count_graphemes_managed_range(managed _ManagedString, offset int, len int) int
+// count_graphemes_managed_range - Count grapheme clusters in range
+function count_graphemes_managed_range(managed _ManagedString, offset int, len int) int
 	var grapheme_count = 0
 	var pos = 0
 	while pos < len 'count_loop'
-		pos = _find_grapheme_end_managed_range(managed, offset, pos, len)
+		pos = find_grapheme_end_managed_range(managed, offset, pos, len)
 		grapheme_count = grapheme_count + 1
 	end 'count_loop'
 	return grapheme_count
-end '_count_graphemes_managed_range'
+end 'count_graphemes_managed_range'
 
 /// Count the total number of grapheme clusters in a _ManagedString
-export function _count_graphemes_managed(managed _ManagedString) int
-	return _count_graphemes_managed_range(managed, 0, __string_len(managed))
-end '_count_graphemes_managed'
+export function count_graphemes_managed(managed _ManagedString) int
+	return count_graphemes_managed_range(managed, 0, __string_len(managed))
+end 'count_graphemes_managed'
 
 /// Count the total number of grapheme clusters in a substring
-export function _count_graphemes_substring(sub substring) int
+export function count_graphemes_substring(sub substring) int
 	var parent = __substring_parent_managed(sub)
 	var offset = __substring_byte_offset(sub)
 	var len = __substring_len(sub)
-	return _count_graphemes_managed_range(parent, offset, len)
-end '_count_graphemes_substring'
+	return count_graphemes_managed_range(parent, offset, len)
+end 'count_graphemes_substring'
 
 // Grapheme_Cluster_Break property values (used as return values):
 //   0 = Other, 1 = CR, 2 = LF, 3 = Control, 4 = Extend, 5 = ZWJ,
@@ -248,8 +248,8 @@ end 'grapheme_state_init'
 // Returns true if there should be a break BEFORE the current codepoint
 function is_grapheme_break(prev_gbp int, curr_gbp int, prev_cp int, curr_cp int, state GraphemeState) bool
 	// Use prev_cp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)
-	var _unused = prev_cp
-	_unused = _unused
+	var unused = prev_cp
+	unused = unused
 
 	// GB3: Do not break between CR and LF (CR × LF)
 	// prev_gbp == 1 (CR) and curr_gbp == 2 (LF)

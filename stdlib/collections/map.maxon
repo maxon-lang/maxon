@@ -25,31 +25,31 @@
 // The compiler generates specialized versions for each key/value type pair
 // Conforms to Dictionary interface with KeyType and ValueType as associated types
 export struct map uses KeyType, ValueType is Dictionary with KeyType, ValueType
-	var _keys array of KeyType      // Key storage
-	var _values array of ValueType  // Value storage
-	var _states array of byte       // Slot states: 0=empty, 1=occupied, 2=deleted
-	var _count int           // Number of occupied entries
-	var _capacity int        // Total slots
+	var keys array of KeyType      // Key storage
+	var values array of ValueType  // Value storage
+	var states array of byte       // Slot states: 0=empty, 1=occupied, 2=deleted
+	var count int           // Number of occupied entries
+	var capacity int        // Total slots
 
 	// Insert or update a key-value pair
 	function Dictionary.insert(key KeyType, value ValueType)
 		// Check load factor and grow if needed (75% threshold)
-		var loadLimit = trunc((_capacity * 3) / 4)
-		if _count >= loadLimit 'grow'
+		var loadLimit = trunc((capacity * 3) / 4)
+		if count >= loadLimit 'grow'
 			grow()
 		end 'grow'
 
 		var hash = key.hash()
-		var index = hash mod _capacity
+		var index = hash mod capacity
 		if index < 0 'fix_negative'
-			index = index + _capacity
+			index = index + capacity
 		end 'fix_negative'
 
 		var firstDeleted = 0 - 1
 		var probes = 0
 
-		while probes < _capacity 'probe'
-			var state = _states[index] as int
+		while probes < capacity 'probe'
+			var state = states[index] as int
 
 			if state == 0 'empty'
 				// Empty slot - insert here or at first deleted
@@ -58,10 +58,10 @@ export struct map uses KeyType, ValueType is Dictionary with KeyType, ValueType
 					insertIndex = firstDeleted
 				end 'use_deleted'
 
-				_keys[insertIndex] = key
-				_values[insertIndex] = value
-				_states[insertIndex] = 1b
-				_count = _count + 1
+				keys[insertIndex] = key
+				values[insertIndex] = value
+				states[insertIndex] = 1b
+				count = count + 1
 				return
 			end 'empty'
 
@@ -69,78 +69,78 @@ export struct map uses KeyType, ValueType is Dictionary with KeyType, ValueType
 				firstDeleted = index
 			end 'mark_deleted'
 
-			if state == 1 and _keys[index].equals(key) 'update'
+			if state == 1 and keys[index].equals(key) 'update'
 				// Key exists - update value
-				_values[index] = value
+				values[index] = value
 				return
 			end 'update'
 
 			// Linear probing
-			index = (index + 1) mod _capacity
+			index = (index + 1) mod capacity
 			probes = probes + 1
 		end 'probe'
 
 		// Should never reach here if load factor is maintained
 		// But if we do, insert at first deleted slot
 		if firstDeleted >= 0 'fallback'
-			_keys[firstDeleted] = key
-			_values[firstDeleted] = value
-			_states[firstDeleted] = 1b
-			_count = _count + 1
+			keys[firstDeleted] = key
+			values[firstDeleted] = value
+			states[firstDeleted] = 1b
+			count = count + 1
 		end 'fallback'
 	end 'insert'
 
 	// Get value for key, returns the value (use contains() to check existence first)
 	function Dictionary.get(key KeyType) ValueType
 		var hash = key.hash()
-		var index = hash mod _capacity
+		var index = hash mod capacity
 		if index < 0 'fix_negative'
-			index = index + _capacity
+			index = index + capacity
 		end 'fix_negative'
 
 		var probes = 0
-		while probes < _capacity 'probe'
-			var state = _states[index] as int
+		while probes < capacity 'probe'
+			var state = states[index] as int
 
 			if state == 0 'empty'
 				// Empty slot - key not found, return default
-				return _values[0]
+				return values[0]
 			end 'empty'
 
-			if state == 1 and _keys[index].equals(key) 'found'
-				return _values[index]
+			if state == 1 and keys[index].equals(key) 'found'
+				return values[index]
 			end 'found'
 
 			// Continue probing (skip deleted slots)
-			index = (index + 1) mod _capacity
+			index = (index + 1) mod capacity
 			probes = probes + 1
 		end 'probe'
 
 		// Not found - return default value at index 0
-		return _values[0]
+		return values[0]
 	end 'get'
 
 	// Check if key exists in the map
 	function Dictionary.contains(key KeyType) bool
 		var hash = key.hash()
-		var index = hash mod _capacity
+		var index = hash mod capacity
 		if index < 0 'fix_negative'
-			index = index + _capacity
+			index = index + capacity
 		end 'fix_negative'
 
 		var probes = 0
-		while probes < _capacity 'probe'
-			var state = _states[index] as int
+		while probes < capacity 'probe'
+			var state = states[index] as int
 
 			if state == 0 'empty'
 				return false
 			end 'empty'
 
-			if state == 1 and _keys[index].equals(key) 'found'
+			if state == 1 and keys[index].equals(key) 'found'
 				return true
 			end 'found'
 
-			index = (index + 1) mod _capacity
+			index = (index + 1) mod capacity
 			probes = probes + 1
 		end 'probe'
 
@@ -150,26 +150,26 @@ export struct map uses KeyType, ValueType is Dictionary with KeyType, ValueType
 	// Remove key from map, returns true if key was present
 	function Dictionary.remove(key KeyType) bool
 		var hash = key.hash()
-		var index = hash mod _capacity
+		var index = hash mod capacity
 		if index < 0 'fix_negative'
-			index = index + _capacity
+			index = index + capacity
 		end 'fix_negative'
 
 		var probes = 0
-		while probes < _capacity 'probe'
-			var state = _states[index] as int
+		while probes < capacity 'probe'
+			var state = states[index] as int
 
 			if state == 0 'empty'
 				return false
 			end 'empty'
 
-			if state == 1 and _keys[index].equals(key) 'found'
-				_states[index] = 2b
-				_count = _count - 1
+			if state == 1 and keys[index].equals(key) 'found'
+				states[index] = 2b
+				count = count - 1
 				return true
 			end 'found'
 
-			index = (index + 1) mod _capacity
+			index = (index + 1) mod capacity
 			probes = probes + 1
 		end 'probe'
 
@@ -178,23 +178,23 @@ export struct map uses KeyType, ValueType is Dictionary with KeyType, ValueType
 
 	// Get number of entries in the map
 	function Dictionary.count() int
-		return _count
+		return count
 	end 'count'
 
-	// Get current capacity
+	/// Get current capacity (total number of slots)
 	export function capacity() int
-		return _capacity
+		return capacity
 	end 'capacity'
 
 	// Internal: grow the table when load factor exceeds threshold
 	function grow()
-		var oldCapacity = _capacity
+		var oldCapacity = capacity
 		var newCapacity = oldCapacity * 2
 
 		// Save references to old arrays
-		var oldKeys = _keys
-		var oldValues = _values
-		var oldStates = _states
+		var oldKeys = keys
+		var oldValues = values
+		var oldStates = states
 
 		// Allocate new arrays
 		var newKeys = array of newCapacity KeyType
@@ -202,11 +202,11 @@ export struct map uses KeyType, ValueType is Dictionary with KeyType, ValueType
 		var newStates = array of newCapacity byte
 
 		// Update struct to use new arrays
-		_keys = newKeys
-		_values = newValues
-		_states = newStates
-		_capacity = newCapacity
-		_count = 0
+		keys = newKeys
+		values = newValues
+		states = newStates
+		capacity = newCapacity
+		count = 0
 
 		// Rehash all occupied entries from old arrays
 		var i = 0
@@ -224,14 +224,14 @@ export struct map uses KeyType, ValueType is Dictionary with KeyType, ValueType
 				end 'fix_negative'
 
 				// Find empty slot (no deleted slots in fresh array)
-				while _states[index] as int != 0 'find_slot'
+				while states[index] as int != 0 'find_slot'
 					index = (index + 1) mod newCapacity
 				end 'find_slot'
 
-				_keys[index] = key
-				_values[index] = value
-				_states[index] = 1b
-				_count = _count + 1
+				keys[index] = key
+				values[index] = value
+				states[index] = 1b
+				count = count + 1
 			end 'occupied'
 			i = i + 1
 		end 'rehash'
