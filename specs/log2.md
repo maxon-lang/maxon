@@ -95,14 +95,14 @@ function main() int
     var r_quarter = log2(0.25) // 2^(-2) = 0.25
     
     // Print results
-    print_float(r1, 1)
-    print_float(r2, 1)
-    print_float(r4, 1)
-    print_float(r8, 1)
-    print_float(r16, 1)
-    print_float(r1024, 1)
-    print_float(r_half, 1)
-    print_float(r_quarter, 1)
+    printFloat(r1, 1)
+    printFloat(r2, 1)
+    printFloat(r4, 1)
+    printFloat(r8, 1)
+    printFloat(r16, 1)
+    printFloat(r1024, 1)
+    printFloat(r_half, 1)
+    printFloat(r_quarter, 1)
     
     return 0
 end 'main'
@@ -130,10 +130,10 @@ function main() int
     var r6 = log2(6.0)
     var r1000000 = log2(1000000.0)
     
-    print_float(r3, 15)
-    print_float(r5, 15)
-    print_float(r6, 10)
-    print_float(r1000000, 6)
+    printFloat(r3, 15)
+    printFloat(r5, 15)
+    printFloat(r6, 10)
+    printFloat(r1000000, 6)
     
     return 0
 end 'main'
@@ -155,10 +155,10 @@ function main() int
     // Test integer promotion
     var int_val = 32
     var r_int = log2(int_val)  // Should promote 32 to 32.0
-    print_float(r_int, 1)
+    printFloat(r_int, 1)
     
     var r_literal = log2(64)   // Integer literal promotion
-    print_float(r_literal, 1)
+    printFloat(r_literal, 1)
     
     // Verify relationship: log2(x) = log(x) / log(2)
     var test_val = 100.0
@@ -173,14 +173,14 @@ function main() int
     end 'abs'
     
     if abs_diff < 0.000001 'pass'
-        print_float(r_int, 1)    // Print again to show test passed
+        printFloat(r_int, 1)    // Print again to show test passed
     end 'pass'
     
     // Test relationship: log2(2^x) = x
     var exponent = 7.0
     var power_val = pow(2.0, exponent)
     var r_pow = log2(power_val)
-    print_float(r_pow, 1)
+    printFloat(r_pow, 1)
     
     return 0
 end 'main'
@@ -202,15 +202,15 @@ function main() int
     // log2(e) should equal 1/ln(2) ≈ 1.442695
     var e = 2.71828182845904523536
     var r_e = log2(e)
-    print_float(r_e, 6)
+    printFloat(r_e, 6)
     
     // Test with 10
     var r_10 = log2(10.0)
-    print_float(r_10, 6)
+    printFloat(r_10, 6)
     
     // Test value exactly between powers of 2
     var r_between = log2(12.0)  // Between 2^3 and 2^4
-    print_float(r_between, 6)
+    printFloat(r_between, 6)
     
     return 0
 end 'main'

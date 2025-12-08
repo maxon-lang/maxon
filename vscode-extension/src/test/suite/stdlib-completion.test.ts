@@ -62,12 +62,12 @@ suite('Stdlib Completion Tests', () => {
 		// Check if completions are available
 		const labels = completions.items.map(item => item.label).slice(0, 20);
 
-		// Check if format_int_array is in the completions
+		// Check if formatIntArray is in the completions
 		const hasFormatIntArray = completions.items.some(
-			item => item.label === 'format_int_array'
+			item => item.label === 'formatIntArray'
 		);
 
-		assert.ok(hasFormatIntArray, 'Should include format_int_array from stdlib');
+		assert.ok(hasFormatIntArray, 'Should include formatIntArray from stdlib');
 	});
 
 	test('Stdlib function completion should have correct kind', async function () {
@@ -79,14 +79,14 @@ suite('Stdlib Completion Tests', () => {
 		);
 
 		const formatIntArray = completions.items.find(
-			item => item.label === 'format_int_array'
+			item => item.label === 'formatIntArray'
 		);
 
-		assert.ok(formatIntArray, 'format_int_array should be found');
+		assert.ok(formatIntArray, 'formatIntArray should be found');
 		assert.strictEqual(
 			formatIntArray.kind,
 			vscode.CompletionItemKind.Function,
-			'format_int_array should be a Function'
+			'formatIntArray should be a Function'
 		);
 	});
 
@@ -99,10 +99,10 @@ suite('Stdlib Completion Tests', () => {
 		);
 
 		const formatIntArray = completions.items.find(
-			item => item.label === 'format_int_array'
+			item => item.label === 'formatIntArray'
 		);
 
-		assert.ok(formatIntArray, 'format_int_array should be found');
+		assert.ok(formatIntArray, 'formatIntArray should be found');
 		assert.ok(formatIntArray.detail, 'Should have detail field');
 
 		// Check that signature contains expected elements
@@ -123,21 +123,21 @@ suite('Stdlib Completion Tests', () => {
 		);
 
 		const formatIntArray = completions.items.find(
-			item => item.label === 'format_int_array'
+			item => item.label === 'formatIntArray'
 		);
 
-		assert.ok(formatIntArray, 'format_int_array should be found');
+		assert.ok(formatIntArray, 'formatIntArray should be found');
 		assert.ok(formatIntArray.documentation, 'Should have documentation');
 	});
 
 	test('Should provide hover information for stdlib functions', async function () {
 		// Add stdlib function call to document
 		const edit = new vscode.WorkspaceEdit();
-		edit.insert(document.uri, new vscode.Position(1, 4), 'format_int_array');
+		edit.insert(document.uri, new vscode.Position(1, 4), 'formatIntArray');
 		await vscode.workspace.applyEdit(edit);
 		await document.save();
 
-		const position = new vscode.Position(1, 10); // Middle of "format_int_array"
+		const position = new vscode.Position(1, 10); // Middle of "formatIntArray"
 
 		// Wait for hover information to be available
 		let hovers: vscode.Hover[] | undefined;
@@ -163,7 +163,7 @@ suite('Stdlib Completion Tests', () => {
 		// Stdlib functions may not show qualified names when not properly used in context
 		// Just verify we get some hover information
 		assert.ok(
-			hoverText.includes('format_int_array') || hoverText.includes('Identifier'),
+			hoverText.includes('formatIntArray') || hoverText.includes('Identifier'),
 			'Hover should show function name or identifier'
 		);
 	});
@@ -179,7 +179,7 @@ suite('Stdlib Completion Tests', () => {
 
 		// Should have both stdlib functions and keywords
 		const hasStdlibFunc = completions.items.some(
-			item => item.label === 'format_int_array'
+			item => item.label === 'formatIntArray'
 		);
 		const hasKeyword = completions.items.some(
 			item => item.label === 'var' || item.label === 'let'

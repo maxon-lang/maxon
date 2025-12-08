@@ -180,26 +180,26 @@ end 'main'
 	test('Should not report error for stdlib function call', async function () {
 		const content = `function main() int
     var buffer [12]character = 0
-    var length = format_int_array(42, buffer)
+    var length = formatIntArray(42, buffer)
     return length
 end 'main'
 `;
 
 		await setupTestFile(content, false);
 		const diagnostics = await waitForDiagnostics(20, (diags) => {
-			// Wait for analysis to complete (should have no errors about format_int_array)
+			// Wait for analysis to complete (should have no errors about formatIntArray)
 			return !diags.some(d =>
-				d.message.includes('format_int_array') &&
+				d.message.includes('formatIntArray') &&
 				d.message.includes('Undefined')
 			);
 		});
 
 		logDiagnostics(diagnostics);
 
-		// Should NOT have "Undefined function" error for format_int_array
+		// Should NOT have "Undefined function" error for formatIntArray
 		const undefinedFunctionError = diagnostics.find(d =>
 			d.message.includes('Undefined function') &&
-			d.message.includes('format_int_array')
+			d.message.includes('formatIntArray')
 		);
 
 		assert.strictEqual(undefinedFunctionError, undefined,
@@ -209,7 +209,7 @@ end 'main'
 	test('Should report error for stdlib function with wrong argument count', async function () {
 		const content = `function main() int
     var buffer = [12]character
-    var length = format_int_array(42)
+    var length = formatIntArray(42)
     return length
 end 'main'
 `;

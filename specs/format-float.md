@@ -9,11 +9,11 @@ category: stdlib
 
 ## Developer Notes
 
-The `format_float_array()` function converts a float to a string representation with specified precision, storing it in a character array buffer.
+The `formatFloatArray()` function converts a float to a string representation with specified precision, storing it in a character array buffer.
 
 Implementation:
 - Defined in `stdlib/fmt/format_float.maxon`
-- Signature: `format_float_array(value float, buffer array of byte, precision int) int`
+- Signature: `formatFloatArray(value float, buffer array of byte, precision int) int`
 - Returns the number of characters written
 - Handles negative numbers, zero, and positive values
 - Uses `trunc()` to separate integer and fractional parts
@@ -29,12 +29,12 @@ Algorithm:
 
 ## Documentation
 
-The `format_float_array()` function converts a float to a string with specified decimal precision.
+The `formatFloatArray()` function converts a float to a string with specified decimal precision.
 
 ### Syntax
 
 ```maxon
-format_float_array(value, buffer, precision)
+formatFloatArray(value, buffer, precision)
 ```
 Parameters:
 - `value` - The float to convert
@@ -48,7 +48,7 @@ Returns the number of characters written to the buffer.
 ```maxon
 function main() int
     var buffer = array of 50 byte
-    var len = format_float_array(3.14159, buffer, 2)
+    var len = formatFloatArray(3.14159, buffer, 2)
     // buffer now contains "3.14"
     return len  // Returns 4
 end 'main'
@@ -64,7 +64,7 @@ end 'main'
 ```maxon
 function main() int
     var buffer = array of 50 byte
-    var len = format_float_array(3.14, buffer, 2)
+    var len = formatFloatArray(3.14, buffer, 2)
     return len
 end 'main'
 ```
@@ -77,7 +77,7 @@ end 'main'
 ```maxon
 function main() int
     var buffer = array of 50 byte
-    var len = format_float_array(0.0, buffer, 6)
+    var len = formatFloatArray(0.0, buffer, 6)
     return len
 end 'main'
 ```
@@ -90,7 +90,7 @@ end 'main'
 ```maxon
 function main() int
     var buffer = array of 50 byte
-    var len = format_float_array(-2.5, buffer, 1)
+    var len = formatFloatArray(-2.5, buffer, 1)
     return len
 end 'main'
 ```
@@ -103,7 +103,7 @@ end 'main'
 ```maxon
 function main() int
     var buffer = array of 50 byte
-    var len = format_float_array(3.14159, buffer, 5)
+    var len = formatFloatArray(3.14159, buffer, 5)
     return len
 end 'main'
 ```

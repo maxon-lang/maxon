@@ -15,87 +15,87 @@
 // Find grapheme end helpers (UAX #29)
 // ============================================
 
-// find_grapheme_end_managed_range - Find end of grapheme cluster in range
-function find_grapheme_end_managed_range(managed _ManagedString, offset int, start_pos int, len int) int
-	if start_pos >= len 'at_end'
-		return start_pos
-	end 'at_end'
+// findGraphemeEndManagedRange - Find end of grapheme cluster in range
+function findGraphemeEndManagedRange(managed _ManagedString, offset int, startPos int, len int) int
+	if startPos >= len 'atEnd'
+		return startPos
+	end 'atEnd'
 
-	// Decode first codepoint at start_pos (with offset)
-	var pos = start_pos
-	var abs_pos = offset + pos
-	var prev_cp = utf8_decode_at(managed, abs_pos)
-	var prev_bytes = utf8_byte_length_at(managed, abs_pos)
-	pos = pos + prev_bytes
+	// Decode first codepoint at startPos (with offset)
+	var pos = startPos
+	var absPos = offset + pos
+	var prevCp = utf8DecodeAt(managed, absPos)
+	var prevBytes = utf8ByteLengthAt(managed, absPos)
+	pos = pos + prevBytes
 
 	// Get grapheme break property for first codepoint
-	var prev_gbp = grapheme_break_property(prev_cp)
-	var state = grapheme_state_init()
-	state = grapheme_state_update(state, prev_gbp, prev_cp)
+	var prevGbp = graphemeBreakProperty(prevCp)
+	var state = graphemeStateInit()
+	state = graphemeStateUpdate(state, prevGbp, prevCp)
 
 	// Scan forward until we find a grapheme break
 	while pos < len 'scan'
-		abs_pos = offset + pos
-		var curr_cp = utf8_decode_at(managed, abs_pos)
-		var curr_gbp = grapheme_break_property(curr_cp)
+		absPos = offset + pos
+		var currCp = utf8DecodeAt(managed, absPos)
+		var currGbp = graphemeBreakProperty(currCp)
 
 		// Check if there's a break before current codepoint
-		if is_grapheme_break(prev_gbp, curr_gbp, prev_cp, curr_cp, state) 'break_found'
+		if isGraphemeBreak(prevGbp, currGbp, prevCp, currCp, state) 'breakFound'
 			return pos
-		end 'break_found'
+		end 'breakFound'
 
 		// Update state and advance to next codepoint
-		state = grapheme_state_update(state, curr_gbp, curr_cp)
-		prev_gbp = curr_gbp
-		prev_cp = curr_cp
-		var curr_bytes = utf8_byte_length_at(managed, abs_pos)
-		pos = pos + curr_bytes
+		state = graphemeStateUpdate(state, currGbp, currCp)
+		prevGbp = currGbp
+		prevCp = currCp
+		var currBytes = utf8ByteLengthAt(managed, absPos)
+		pos = pos + currBytes
 	end 'scan'
 
 	return pos
-end 'find_grapheme_end_managed_range'
+end 'findGraphemeEndManagedRange'
 
-/// Find the end of the grapheme cluster in a _ManagedString starting at start_pos
+/// Find the end of the grapheme cluster in a _ManagedString starting at startPos
 /// Returns the byte offset of the end of the grapheme cluster
-export function find_grapheme_end_managed(managed _ManagedString, start_pos int, len int) int
-	return find_grapheme_end_managed_range(managed, 0, start_pos, len)
-end 'find_grapheme_end_managed'
+export function findGraphemeEndManaged(managed _ManagedString, startPos int, len int) int
+	return findGraphemeEndManagedRange(managed, 0, startPos, len)
+end 'findGraphemeEndManaged'
 
-/// Find the end of the grapheme cluster in a substring starting at start_pos
+/// Find the end of the grapheme cluster in a substring starting at startPos
 /// Returns the byte offset of the end of the grapheme cluster
-export function find_grapheme_end_substring(sub substring, start_pos int, len int) int
+export function findGraphemeEndSubstring(sub substring, startPos int, len int) int
 	var parent = __substring_parent_managed(sub)
 	var offset = __substring_byte_offset(sub)
-	return find_grapheme_end_managed_range(parent, offset, start_pos, len)
-end 'find_grapheme_end_substring'
+	return findGraphemeEndManagedRange(parent, offset, startPos, len)
+end 'findGraphemeEndSubstring'
 
 // ============================================
 // Count grapheme helpers
 // ============================================
 
-// count_graphemes_managed_range - Count grapheme clusters in range
-function count_graphemes_managed_range(managed _ManagedString, offset int, len int) int
-	var grapheme_count = 0
+// countGraphemesManagedRange - Count grapheme clusters in range
+function countGraphemesManagedRange(managed _ManagedString, offset int, len int) int
+	var graphemeCount = 0
 	var pos = 0
-	while pos < len 'count_loop'
-		pos = find_grapheme_end_managed_range(managed, offset, pos, len)
-		grapheme_count = grapheme_count + 1
-	end 'count_loop'
-	return grapheme_count
-end 'count_graphemes_managed_range'
+	while pos < len 'countLoop'
+		pos = findGraphemeEndManagedRange(managed, offset, pos, len)
+		graphemeCount = graphemeCount + 1
+	end 'countLoop'
+	return graphemeCount
+end 'countGraphemesManagedRange'
 
 /// Count the total number of grapheme clusters in a _ManagedString
-export function count_graphemes_managed(managed _ManagedString) int
-	return count_graphemes_managed_range(managed, 0, __string_len(managed))
-end 'count_graphemes_managed'
+export function countGraphemesManaged(managed _ManagedString) int
+	return countGraphemesManagedRange(managed, 0, __string_len(managed))
+end 'countGraphemesManaged'
 
 /// Count the total number of grapheme clusters in a substring
-export function count_graphemes_substring(sub substring) int
+export function countGraphemesSubstring(sub substring) int
 	var parent = __substring_parent_managed(sub)
 	var offset = __substring_byte_offset(sub)
 	var len = __substring_len(sub)
-	return count_graphemes_managed_range(parent, offset, len)
-end 'count_graphemes_substring'
+	return countGraphemesManagedRange(parent, offset, len)
+end 'countGraphemesSubstring'
 
 // Grapheme_Cluster_Break property values (used as return values):
 //   0 = Other, 1 = CR, 2 = LF, 3 = Control, 4 = Extend, 5 = ZWJ,
@@ -106,7 +106,7 @@ end 'count_graphemes_substring'
 // Returns: 0=Other, 1=CR, 2=LF, 3=Control, 4=Extend, 5=ZWJ,
 //          6=Regional_Indicator, 7=Prepend, 8=SpacingMark,
 //          9=L, 10=V, 11=T, 12=LV, 13=LVT
-function grapheme_break_property(cp int) int
+function graphemeBreakProperty(cp int) int
 	// CR (return 1)
 	if cp == 13 'cr'
 		return 1
@@ -185,10 +185,10 @@ function grapheme_break_property(cp int) int
 
 	// Other (return 0)
 	return 0
-end 'grapheme_break_property'
+end 'graphemeBreakProperty'
 
 // Check if codepoint has Extended_Pictographic property (emoji base)
-function is_extended_pictographic(cp int) bool
+function isExtendedPictographic(cp int) bool
 	// Basic emoji range U+1F600..U+1F64F
 	if cp >= 128512 and cp <= 128591 'emoji_faces'
 		return true
@@ -225,254 +225,254 @@ function is_extended_pictographic(cp int) bool
 	end 'dingbats'
 
 	return false
-end 'is_extended_pictographic'
+end 'isExtendedPictographic'
 
 // State for tracking complex grapheme sequences
 struct GraphemeState
-	var ri_count int           // Count of consecutive Regional Indicators (for GB12-13)
-	var in_emoji_seq bool      // Inside Extended_Pictographic...ZWJ sequence (for GB11)
+	var riCount int           // Count of consecutive Regional Indicators (for GB12-13)
+	var inEmojiSeq bool      // Inside Extended_Pictographic...ZWJ sequence (for GB11)
 end 'GraphemeState'
 
 // Create initial grapheme state
-function grapheme_state_init() GraphemeState
-	return GraphemeState{ri_count: 0, in_emoji_seq: false}
-end 'grapheme_state_init'
+function graphemeStateInit() GraphemeState
+	return GraphemeState{riCount: 0, inEmojiSeq: false}
+end 'graphemeStateInit'
 
 // Check if there should be a grapheme break between two codepoints
-// prev_gbp: Grapheme_Cluster_Break property of previous codepoint
-// curr_gbp: Grapheme_Cluster_Break property of current codepoint
-// prev_cp: Previous codepoint value (needed for Extended_Pictographic check)
-// curr_cp: Current codepoint value (needed for Extended_Pictographic check)
+// prevGbp: Grapheme_Cluster_Break property of previous codepoint
+// currGbp: Grapheme_Cluster_Break property of current codepoint
+// prevCp: Previous codepoint value (needed for Extended_Pictographic check)
+// currCp: Current codepoint value (needed for Extended_Pictographic check)
 // state: State for tracking RI counts and emoji sequences
 //
 // Returns true if there should be a break BEFORE the current codepoint
-function is_grapheme_break(prev_gbp int, curr_gbp int, prev_cp int, curr_cp int, state GraphemeState) bool
-	// Use prev_cp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)
-	var unused = prev_cp
+function isGraphemeBreak(prevGbp int, currGbp int, prevCp int, currCp int, state GraphemeState) bool
+	// Use prevCp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)
+	var unused = prevCp
 	unused = unused
 
 	// GB3: Do not break between CR and LF (CR × LF)
-	// prev_gbp == 1 (CR) and curr_gbp == 2 (LF)
-	if prev_gbp == 1 and curr_gbp == 2 'gb3'
+	// prevGbp == 1 (CR) and currGbp == 2 (LF)
+	if prevGbp == 1 and currGbp == 2 'gb3'
 		return false
 	end 'gb3'
 
 	// GB4: Break after Control, CR, or LF
-	// prev_gbp == 3 (Control) or prev_gbp == 1 (CR) or prev_gbp == 2 (LF)
-	if prev_gbp == 3 or prev_gbp == 1 or prev_gbp == 2 'gb4'
+	// prevGbp == 3 (Control) or prevGbp == 1 (CR) or prevGbp == 2 (LF)
+	if prevGbp == 3 or prevGbp == 1 or prevGbp == 2 'gb4'
 		return true
 	end 'gb4'
 
 	// GB5: Break before Control, CR, or LF
-	if curr_gbp == 3 or curr_gbp == 1 or curr_gbp == 2 'gb5'
+	if currGbp == 3 or currGbp == 1 or currGbp == 2 'gb5'
 		return true
 	end 'gb5'
 
 	// GB6: Do not break Hangul syllable sequences (L × L/V/LV/LVT)
-	// prev_gbp == 9 (L)
-	if prev_gbp == 9 'gb6'
-		// curr_gbp == 9 (L), 10 (V), 12 (LV), or 13 (LVT)
-		if curr_gbp == 9 or curr_gbp == 10 or curr_gbp == 12 or curr_gbp == 13 'gb6_inner'
+	// prevGbp == 9 (L)
+	if prevGbp == 9 'gb6'
+		// currGbp == 9 (L), 10 (V), 12 (LV), or 13 (LVT)
+		if currGbp == 9 or currGbp == 10 or currGbp == 12 or currGbp == 13 'gb6_inner'
 			return false
 		end 'gb6_inner'
 	end 'gb6'
 
 	// GB7: Do not break Hangul syllable sequences (LV/V × V/T)
-	// prev_gbp == 12 (LV) or 10 (V)
-	if prev_gbp == 12 or prev_gbp == 10 'gb7'
-		// curr_gbp == 10 (V) or 11 (T)
-		if curr_gbp == 10 or curr_gbp == 11 'gb7_inner'
+	// prevGbp == 12 (LV) or 10 (V)
+	if prevGbp == 12 or prevGbp == 10 'gb7'
+		// currGbp == 10 (V) or 11 (T)
+		if currGbp == 10 or currGbp == 11 'gb7_inner'
 			return false
 		end 'gb7_inner'
 	end 'gb7'
 
 	// GB8: Do not break Hangul syllable sequences (LVT/T × T)
-	// prev_gbp == 13 (LVT) or 11 (T)
-	if prev_gbp == 13 or prev_gbp == 11 'gb8'
-		// curr_gbp == 11 (T)
-		if curr_gbp == 11 'gb8_inner'
+	// prevGbp == 13 (LVT) or 11 (T)
+	if prevGbp == 13 or prevGbp == 11 'gb8'
+		// currGbp == 11 (T)
+		if currGbp == 11 'gb8_inner'
 			return false
 		end 'gb8_inner'
 	end 'gb8'
 
 	// GB9: Do not break before Extend or ZWJ (× Extend/ZWJ)
-	// curr_gbp == 4 (Extend) or 5 (ZWJ)
-	if curr_gbp == 4 or curr_gbp == 5 'gb9'
+	// currGbp == 4 (Extend) or 5 (ZWJ)
+	if currGbp == 4 or currGbp == 5 'gb9'
 		return false
 	end 'gb9'
 
 	// GB9a: Do not break before SpacingMark (× SpacingMark)
-	// curr_gbp == 8 (SpacingMark)
-	if curr_gbp == 8 'gb9a'
+	// currGbp == 8 (SpacingMark)
+	if currGbp == 8 'gb9a'
 		return false
 	end 'gb9a'
 
 	// GB9b: Do not break after Prepend (Prepend ×)
-	// prev_gbp == 7 (Prepend)
-	if prev_gbp == 7 'gb9b'
+	// prevGbp == 7 (Prepend)
+	if prevGbp == 7 'gb9b'
 		return false
 	end 'gb9b'
 
 	// GB11: Do not break within emoji ZWJ sequences
 	// \p{Extended_Pictographic} Extend* ZWJ × \p{Extended_Pictographic}
-	// prev_gbp == 5 (ZWJ)
-	if prev_gbp == 5 and is_extended_pictographic(curr_cp) 'gb11'
-		if state.in_emoji_seq 'gb11_check'
+	// prevGbp == 5 (ZWJ)
+	if prevGbp == 5 and isExtendedPictographic(currCp) 'gb11'
+		if state.inEmojiSeq 'gb11_check'
 			return false
 		end 'gb11_check'
 	end 'gb11'
 
 	// GB12-13: Do not break within emoji flag sequences
 	// Only pair up RIs; odd-numbered RIs break before next RI
-	// prev_gbp == 6 (Regional_Indicator) and curr_gbp == 6
-	if prev_gbp == 6 and curr_gbp == 6 'gb12'
-		if state.ri_count mod 2 == 1 'gb12_odd'
+	// prevGbp == 6 (Regional_Indicator) and currGbp == 6
+	if prevGbp == 6 and currGbp == 6 'gb12'
+		if state.riCount mod 2 == 1 'gb12_odd'
 			return false
 		end 'gb12_odd'
 	end 'gb12'
 
 	// GB999: Otherwise, break everywhere
 	return true
-end 'is_grapheme_break'
+end 'isGraphemeBreak'
 
 // Update grapheme state after processing a codepoint
-function grapheme_state_update(state GraphemeState, gbp int, cp int) GraphemeState
-	var new_state = GraphemeState{ri_count: 0, in_emoji_seq: false}
+function graphemeStateUpdate(state GraphemeState, gbp int, cp int) GraphemeState
+	var new_state = GraphemeState{riCount: 0, inEmojiSeq: false}
 
 	// Track Regional Indicator sequences (gbp == 6)
 	if gbp == 6 'ri_update'
-		new_state.ri_count = state.ri_count + 1
+		new_state.riCount = state.riCount + 1
 	end 'ri_update'
 
 	// Track emoji sequences for GB11
-	if is_extended_pictographic(cp) 'emoji_base'
-		new_state.in_emoji_seq = true
+	if isExtendedPictographic(cp) 'emoji_base'
+		new_state.inEmojiSeq = true
 		else 'emoji_base'
-		if state.in_emoji_seq 'emoji_continue'
+		if state.inEmojiSeq 'emoji_continue'
 			// gbp == 4 (Extend) or 5 (ZWJ)
 			if gbp == 4 or gbp == 5 'emoji_extend'
-				new_state.in_emoji_seq = true
+				new_state.inEmojiSeq = true
 			end 'emoji_extend'
 		end 'emoji_continue'
 	end 'emoji_base'
 
 	return new_state
-end 'grapheme_state_update'
+end 'graphemeStateUpdate'
 
 /// Find the next grapheme cluster boundary in UTF-8 data
 /// Returns the byte offset of the next boundary, or len if at end
-export function next_grapheme_boundary(data array of byte, len int, offset int) int
+export function nextGraphemeBoundary(data array of byte, len int, offset int) int
 	if offset >= len 'at_end'
 		return len
 	end 'at_end'
 
 	// Decode first codepoint
 	var pos = offset
-	var prev_cp = utf8_decode(data, pos)
-	var prev_gbp = grapheme_break_property(prev_cp)
-	var prev_len = utf8_byte_length(data[pos])
-	pos = pos + prev_len
+	var prevCp = utf8Decode(data, pos)
+	var prevGbp = graphemeBreakProperty(prevCp)
+	var prevLen = utf8ByteLength(data[pos])
+	pos = pos + prevLen
 
 	// Initialize state
-	var state = grapheme_state_init()
-	state = grapheme_state_update(state, prev_gbp, prev_cp)
+	var state = graphemeStateInit()
+	state = graphemeStateUpdate(state, prevGbp, prevCp)
 
 	// Scan forward looking for a break
 	while pos < len 'scan'
-		var curr_cp = utf8_decode(data, pos)
-		var curr_gbp = grapheme_break_property(curr_cp)
+		var currCp = utf8Decode(data, pos)
+		var currGbp = graphemeBreakProperty(currCp)
 
-		if is_grapheme_break(prev_gbp, curr_gbp, prev_cp, curr_cp, state) 'found_break'
+		if isGraphemeBreak(prevGbp, currGbp, prevCp, currCp, state) 'found_break'
 			return pos
 		end 'found_break'
 
-		state = grapheme_state_update(state, curr_gbp, curr_cp)
-		prev_cp = curr_cp
-		prev_gbp = curr_gbp
-		var curr_len = utf8_byte_length(data[pos])
-		pos = pos + curr_len
+		state = graphemeStateUpdate(state, currGbp, currCp)
+		prevCp = currCp
+		prevGbp = currGbp
+		var currLen = utf8ByteLength(data[pos])
+		pos = pos + currLen
 	end 'scan'
 
 	return len
-end 'next_grapheme_boundary'
+end 'nextGraphemeBoundary'
 
 // Find the previous grapheme cluster boundary in UTF-8 data
 // Returns the byte offset of the previous boundary, or 0 if at start
-function prev_grapheme_boundary(data array of byte, len int, offset int) int
+function prevGraphemeBoundary(data array of byte, len int, offset int) int
 	// Clamp offset to valid range
-	var safe_offset = offset
-	if safe_offset > len 'clamp'
-		safe_offset = len
+	var safeOffset = offset
+	if safeOffset > len 'clamp'
+		safeOffset = len
 	end 'clamp'
-	if safe_offset <= 0 'at_start'
+	if safeOffset <= 0 'at_start'
 		return 0
 	end 'at_start'
 
 	// Find start of current codepoint (back up past continuation bytes)
-	var pos = safe_offset - 1
-	while pos > 0 and utf8_is_continuation(data[pos]) 'find_start'
+	var pos = safeOffset - 1
+	while pos > 0 and utf8IsContinuation(data[pos]) 'find_start'
 		pos = pos - 1
 	end 'find_start'
 
 	// Scan from beginning up to pos to find boundaries
 	var boundary = 0
-	var scan_pos = 0
-	var state = grapheme_state_init()
-	var prev_cp = 0
-	var prev_gbp = 0  // GBP_Other
+	var scanPos = 0
+	var state = graphemeStateInit()
+	var prevCp = 0
+	var prevGbp = 0  // GBP_Other
 	var first = true
 
-	while scan_pos < pos 'scan_back'
-		var curr_cp = utf8_decode(data, scan_pos)
-		var curr_gbp = grapheme_break_property(curr_cp)
-		var curr_len = utf8_byte_length(data[scan_pos])
+	while scanPos < pos 'scan_back'
+		var currCp = utf8Decode(data, scanPos)
+		var currGbp = graphemeBreakProperty(currCp)
+		var currLen = utf8ByteLength(data[scanPos])
 
 		if not first 'check_break'
-			if is_grapheme_break(prev_gbp, curr_gbp, prev_cp, curr_cp, state) 'found_prev'
-				boundary = scan_pos
+			if isGraphemeBreak(prevGbp, currGbp, prevCp, currCp, state) 'found_prev'
+				boundary = scanPos
 			end 'found_prev'
 		end 'check_break'
 
-		state = grapheme_state_update(state, curr_gbp, curr_cp)
-		prev_cp = curr_cp
-		prev_gbp = curr_gbp
-		scan_pos = scan_pos + curr_len
+		state = graphemeStateUpdate(state, currGbp, currCp)
+		prevCp = currCp
+		prevGbp = currGbp
+		scanPos = scanPos + currLen
 		first = false
 	end 'scan_back'
 
 	return boundary
-end 'prev_grapheme_boundary'
+end 'prevGraphemeBoundary'
 
 // Count grapheme clusters in UTF-8 data
-function grapheme_count(data array of byte, len int) int
+function graphemeCount(data array of byte, len int) int
 	if len == 0 'empty'
 		return 0
 	end 'empty'
 
 	var count = 1  // Start with 1 (first grapheme)
 	var pos = 0
-	var state = grapheme_state_init()
-	var prev_cp = utf8_decode(data, pos)
-	var prev_gbp = grapheme_break_property(prev_cp)
-	var prev_len = utf8_byte_length(data[pos])
-	pos = pos + prev_len
-	state = grapheme_state_update(state, prev_gbp, prev_cp)
+	var state = graphemeStateInit()
+	var prevCp = utf8Decode(data, pos)
+	var prevGbp = graphemeBreakProperty(prevCp)
+	var prevLen = utf8ByteLength(data[pos])
+	pos = pos + prevLen
+	state = graphemeStateUpdate(state, prevGbp, prevCp)
 
 	while pos < len 'count_loop'
-		var curr_cp = utf8_decode(data, pos)
-		var curr_gbp = grapheme_break_property(curr_cp)
+		var currCp = utf8Decode(data, pos)
+		var currGbp = graphemeBreakProperty(currCp)
 
-		if is_grapheme_break(prev_gbp, curr_gbp, prev_cp, curr_cp, state) 'break_found'
+		if isGraphemeBreak(prevGbp, currGbp, prevCp, currCp, state) 'break_found'
 			count = count + 1
 		end 'break_found'
 
-		state = grapheme_state_update(state, curr_gbp, curr_cp)
-		prev_cp = curr_cp
-		prev_gbp = curr_gbp
-		var curr_len = utf8_byte_length(data[pos])
-		pos = pos + curr_len
+		state = graphemeStateUpdate(state, currGbp, currCp)
+		prevCp = currCp
+		prevGbp = currGbp
+		var currLen = utf8ByteLength(data[pos])
+		pos = pos + currLen
 	end 'count_loop'
 
 	return count
-end 'grapheme_count'
+end 'graphemeCount'
 

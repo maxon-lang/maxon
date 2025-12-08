@@ -15,8 +15,8 @@
 // Hash helpers (djb2 algorithm)
 // ============================================
 
-// hash_managed_string_range - Hash a range in _ManagedString using djb2
-function hash_managed_string_range(managed _ManagedString, offset int, len int) int
+// hashManagedStringRange - Hash a range in _ManagedString using djb2
+function hashManagedStringRange(managed _ManagedString, offset int, len int) int
 	var h = 5381
 	var i = 0
 	while i < len 'hash_loop'
@@ -25,60 +25,60 @@ function hash_managed_string_range(managed _ManagedString, offset int, len int) 
 		i = i + 1
 	end 'hash_loop'
 	return h
-end 'hash_managed_string_range'
+end 'hashManagedStringRange'
 
 /// Hash a _ManagedString using the djb2 algorithm
 /// Returns a 32-bit hash value
-export function hash_managed_string(managed _ManagedString) int
-	return hash_managed_string_range(managed, 0, __string_len(managed))
-end 'hash_managed_string'
+export function hashManagedString(managed _ManagedString) int
+	return hashManagedStringRange(managed, 0, __string_len(managed))
+end 'hashManagedString'
 
 /// Hash a substring using the djb2 algorithm
 /// Returns a 32-bit hash value
-export function hash_substring(sub substring) int
+export function hashSubstring(sub substring) int
 	var parent = __substring_parent_managed(sub)
 	var offset = __substring_byte_offset(sub)
 	var len = __substring_len(sub)
-	return hash_managed_string_range(parent, offset, len)
-end 'hash_substring'
+	return hashManagedStringRange(parent, offset, len)
+end 'hashSubstring'
 
 // ============================================
 // Equality helpers (byte-by-byte comparison)
 // ============================================
 
-// equals_managed_string_range - Compare two ranges in _ManagedStrings
-function equals_managed_string_range(a _ManagedString, a_offset int, b _ManagedString, b_offset int, len int) bool
+// equalsManagedStringRange - Compare two ranges in _ManagedStrings
+function equalsManagedStringRange(a _ManagedString, aOffset int, b _ManagedString, bOffset int, len int) bool
 	var i = 0
 	while i < len 'compare_loop'
-		if __string_byte_at(a, a_offset + i) != __string_byte_at(b, b_offset + i) 'byte_check'
+		if __string_byte_at(a, aOffset + i) != __string_byte_at(b, bOffset + i) 'byte_check'
 			return false
 		end 'byte_check'
 		i = i + 1
 	end 'compare_loop'
 	return true
-end 'equals_managed_string_range'
+end 'equalsManagedStringRange'
 
 /// Compare two _ManagedStrings for byte-by-byte equality
-export function equals_managed_string(a _ManagedString, b _ManagedString) bool
+export function equalsManagedString(a _ManagedString, b _ManagedString) bool
 	var len = __string_len(a)
 	if len != __string_len(b) 'length_check'
 		return false
 	end 'length_check'
-	return equals_managed_string_range(a, 0, b, 0, len)
-end 'equals_managed_string'
+	return equalsManagedStringRange(a, 0, b, 0, len)
+end 'equalsManagedString'
 
 /// Compare two substrings for byte-by-byte equality
-export function equals_substring(a substring, b substring) bool
+export function equalsSubstring(a substring, b substring) bool
 	var len = __substring_len(a)
 	if len != __substring_len(b) 'length_check'
 		return false
 	end 'length_check'
 
-	var a_parent = __substring_parent_managed(a)
-	var a_offset = __substring_byte_offset(a)
-	var b_parent = __substring_parent_managed(b)
-	var b_offset = __substring_byte_offset(b)
+	var aParent = __substring_parent_managed(a)
+	var aOffset = __substring_byte_offset(a)
+	var bParent = __substring_parent_managed(b)
+	var bOffset = __substring_byte_offset(b)
 
-	return equals_managed_string_range(a_parent, a_offset, b_parent, b_offset, len)
-end 'equals_substring'
+	return equalsManagedStringRange(aParent, aOffset, bParent, bOffset, len)
+end 'equalsSubstring'
 

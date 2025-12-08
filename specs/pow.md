@@ -105,7 +105,7 @@ end 'main'
 ```maxon
 function main() int
     var result = pow(4.0, 0.5)  // Square root
-    print_float(result, 1)
+    printFloat(result, 1)
     return 0
 end 'main'
 ```

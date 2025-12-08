@@ -203,7 +203,7 @@ function main() int
         // ch has type 'character' (inferred from string's Element type - grapheme cluster)
         var cps = ch.codepoints()
         if let cp = cps.next() 'get_cp'
-            print_int(cp)
+            printInt(cp)
         end 'get_cp'
     end 'chars'
     return 0

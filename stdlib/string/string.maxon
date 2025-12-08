@@ -46,7 +46,7 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 
 	/// Get grapheme cluster count (number of user-perceived characters)
 	export function count() int
-		return count_graphemes_managed(_managed)
+		return countGraphemesManaged(_managed)
 	end 'count'
 
 	/// Check if the string is empty
@@ -70,39 +70,39 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 		if _iterPos < __string_len(_managed) 'check'
 			// Find the end of the current grapheme cluster using UAX #29 algorithm
 			var len = __string_len(_managed)
-			var end_pos = _findGraphemeEnd(_iterPos, len)
+			var endPos = _findGraphemeEnd(_iterPos, len)
 
-			// Create a character from the bytes in the range [_iterPos, end_pos)
-			var grapheme_len = end_pos - _iterPos
-			let grapheme = _makeCharFromBytes(_iterPos, grapheme_len)
+			// Create a character from the bytes in the range [_iterPos, endPos)
+			var graphemeLen = endPos - _iterPos
+			let grapheme = _makeCharFromBytes(_iterPos, graphemeLen)
 
 			// Advance iterator position
-			_iterPos = end_pos
+			_iterPos = endPos
 
 			return grapheme
 		end 'check'
 		return nil
 	end 'next'
 
-	// Internal: Find end position of grapheme cluster starting at start_pos
-	function _findGraphemeEnd(start_pos int, len int) int
-		return find_grapheme_end_managed(_managed, start_pos, len)
+	// Internal: Find end position of grapheme cluster starting at startPos
+	function _findGraphemeEnd(startPos int, len int) int
+		return findGraphemeEndManaged(_managed, startPos, len)
 	end '_findGraphemeEnd'
 
 	// Internal: Get number of bytes for codepoint at position
 	function _codepointBytes(pos int) int
-		return utf8_byte_length_at(_managed, pos)
+		return utf8ByteLengthAt(_managed, pos)
 	end '_codepointBytes'
 
 	// Internal: Decode codepoint at byte position
 	function _decodeCodepointAt(pos int) int
-		return utf8_decode_at(_managed, pos)
+		return utf8DecodeAt(_managed, pos)
 	end '_decodeCodepointAt'
 
 	// Internal: Create a character from bytes in string at [start, start+len)
-	function _makeCharFromBytes(start int, byte_len int) character
+	function _makeCharFromBytes(start int, byteLen int) character
 		// Create substring slice, then convert to _ManagedString for character
-		var sub = __string_slice(_managed, start, start + byte_len)
+		var sub = __string_slice(_managed, start, start + byteLen)
 		var managed = __substring_to_string(sub)
 		return character{_managed: managed}
 	end '_makeCharFromBytes'
@@ -112,7 +112,7 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	// ============================================
 
 	function Hashable.hash() int
-		return hash_managed_string(_managed)
+		return hashManagedString(_managed)
 	end 'hash'
 
 	// ============================================
@@ -120,7 +120,7 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	// ============================================
 
 	function Equatable.equals(other string) bool
-		return equals_managed_string(_managed, other._managed)
+		return equalsManagedString(_managed, other._managed)
 	end 'equals'
 
 	// ============================================
@@ -157,17 +157,17 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 
 	/// Check if string starts with prefix
 	export function startsWith(prefix string) bool
-		return starts_with_managed(_managed, prefix._managed)
+		return startsWithManaged(_managed, prefix._managed)
 	end 'startsWith'
 
 	/// Check if string ends with suffix
 	export function endsWith(suffix string) bool
-		return ends_with_managed(_managed, suffix._managed)
+		return endsWithManaged(_managed, suffix._managed)
 	end 'endsWith'
 
 	/// Find first occurrence of needle, return byte index or -1 if not found
 	export function find(needle string) int
-		return find_managed(_managed, needle._managed)
+		return findManaged(_managed, needle._managed)
 	end 'find'
 
 	/// Check if string contains the given needle
@@ -302,7 +302,7 @@ export struct CharCollection is Iterable with character, Collection with charact
 		var bytePos = 0
 		var len = __string_len(_str._managed)
 		while bytePos < len 'count_loop'
-			bytePos = bytePos + utf8_byte_length_at(_str._managed, bytePos)
+			bytePos = bytePos + utf8ByteLengthAt(_str._managed, bytePos)
 			charCount = charCount + 1
 		end 'count_loop'
 		return charCount
@@ -314,7 +314,7 @@ export struct CharCollection is Iterable with character, Collection with charact
 		var bytePos = 0
 		var len = __string_len(_str._managed)
 		while bytePos < len and charCount < index 'navigate'
-			bytePos = bytePos + utf8_byte_length_at(_str._managed, bytePos)
+			bytePos = bytePos + utf8ByteLengthAt(_str._managed, bytePos)
 			charCount = charCount + 1
 		end 'navigate'
 
@@ -349,7 +349,7 @@ export struct CharCollection is Iterable with character, Collection with charact
 	function Iterable.next() character or nil
 		if _pos < __string_len(_str._managed) 'check'
 			let ch = _makeCharAt(_pos)
-			var advance = utf8_byte_length_at(_str._managed, _pos)
+			var advance = utf8ByteLengthAt(_str._managed, _pos)
 			_pos = _pos + advance
 			return ch
 		end 'check'
@@ -361,7 +361,7 @@ export struct CharCollection is Iterable with character, Collection with charact
 		var len = __string_len(_str._managed)
 		var charLen = 0
 		if bytePos < len 'in_bounds'
-			charLen = utf8_byte_length_at(_str._managed, bytePos)
+			charLen = utf8ByteLengthAt(_str._managed, bytePos)
 		end 'in_bounds'
 
 		var sub = __string_slice(_str._managed, bytePos, bytePos + charLen)
@@ -389,8 +389,8 @@ export struct UTF16View is Iterable with int
 
 		// Check if we have more bytes to read
 		if _bytePos < __string_len(_managed) 'check'
-			var cp = utf8_decode_at(_managed, _bytePos)
-			var byteLen = utf8_byte_length_at(_managed, _bytePos)
+			var cp = utf8DecodeAt(_managed, _bytePos)
+			var byteLen = utf8ByteLengthAt(_managed, _bytePos)
 
 			// BMP codepoints (< 0x10000) return directly
 			if cp < 65536 'bmp'
@@ -414,7 +414,7 @@ export struct UTF16View is Iterable with int
 		var pos = 0
 		var len = __string_len(_managed)
 		while pos < len 'count_loop'
-			var byteLen = utf8_byte_length_at(_managed, pos)
+			var byteLen = utf8ByteLengthAt(_managed, pos)
 			// 4-byte sequences produce 2 UTF-16 code units (surrogate pair)
 			if byteLen == 4 'four_byte'
 				count = count + 2
@@ -436,8 +436,8 @@ export struct CodepointView is Iterable with int
 
 	function Iterable.next() int or nil
 		if _pos < __string_len(_managed) 'check'
-			let cp = utf8_decode_at(_managed, _pos)
-			var advance = utf8_byte_length_at(_managed, _pos)
+			let cp = utf8DecodeAt(_managed, _pos)
+			var advance = utf8ByteLengthAt(_managed, _pos)
 			_pos = _pos + advance
 			return cp
 		end 'check'
@@ -450,7 +450,7 @@ export struct CodepointView is Iterable with int
 		var pos = 0
 		var len = __string_len(_managed)
 		while pos < len 'count_loop'
-			pos = pos + utf8_byte_length_at(_managed, pos)
+			pos = pos + utf8ByteLengthAt(_managed, pos)
 			cpCount = cpCount + 1
 		end 'count_loop'
 		return cpCount
@@ -482,7 +482,7 @@ export struct substring is Hashable, Equatable, Iterable with character
 
 	/// Get grapheme cluster count (number of user-perceived characters)
 	export function count() int
-		return count_graphemes_substring(self)
+		return countGraphemesSubstring(self)
 	end 'count'
 
 	/// Check if the substring is empty
@@ -499,14 +499,14 @@ export struct substring is Hashable, Equatable, Iterable with character
 		if __substring_iter_pos(self) < __substring_len(self) 'check'
 			// Find the end of the current grapheme cluster
 			var len = __substring_len(self)
-			var end_pos = _findGraphemeEnd(_iterPos, len)
+			var endPos = _findGraphemeEnd(_iterPos, len)
 
-			// Create a character from the bytes in the range [_iterPos, end_pos)
-			var grapheme_len = end_pos - _iterPos
-			let grapheme = _makeCharFromBytes(_iterPos, grapheme_len)
+			// Create a character from the bytes in the range [_iterPos, endPos)
+			var graphemeLen = endPos - _iterPos
+			let grapheme = _makeCharFromBytes(_iterPos, graphemeLen)
 
 			// Advance iterator position
-			_iterPos = end_pos
+			_iterPos = endPos
 
 			return grapheme
 		end 'check'
@@ -517,24 +517,24 @@ export struct substring is Hashable, Equatable, Iterable with character
 	// Internal helpers for grapheme iteration
 	// ============================================
 
-	// Internal: Find end position of grapheme cluster starting at start_pos
-	function _findGraphemeEnd(start_pos int, len int) int
-		return find_grapheme_end_substring(self, start_pos, len)
+	// Internal: Find end position of grapheme cluster starting at startPos
+	function _findGraphemeEnd(startPos int, len int) int
+		return findGraphemeEndSubstring(self, startPos, len)
 	end '_findGraphemeEnd'
 
 	// Internal: Get number of bytes for codepoint at position
 	function _codepointBytes(pos int) int
-		return utf8_byte_length_at_substring(self, pos)
+		return utf8ByteLengthAtSubstring(self, pos)
 	end '_codepointBytes'
 
 	// Internal: Decode codepoint at byte position
 	function _decodeCodepointAt(pos int) int
-		return utf8_decode_at_substring(self, pos)
+		return utf8DecodeAtSubstring(self, pos)
 	end '_decodeCodepointAt'
 
-	// Internal: Create a character from bytes at [start, start+byte_len)
-	function _makeCharFromBytes(start int, byte_len int) character
-		var sub = __substring_slice(self, start, start + byte_len)
+	// Internal: Create a character from bytes at [start, start+byteLen)
+	function _makeCharFromBytes(start int, byteLen int) character
+		var sub = __substring_slice(self, start, start + byteLen)
 		var managed = __substring_to_string(sub)
 		return character{_managed: managed}
 	end '_makeCharFromBytes'
@@ -544,7 +544,7 @@ export struct substring is Hashable, Equatable, Iterable with character
 	// ============================================
 
 	function Hashable.hash() int
-		return hash_substring(self)
+		return hashSubstring(self)
 	end 'hash'
 
 	// ============================================
@@ -552,7 +552,7 @@ export struct substring is Hashable, Equatable, Iterable with character
 	// ============================================
 
 	function Equatable.equals(other substring) bool
-		return equals_substring(self, other)
+		return equalsSubstring(self, other)
 	end 'equals'
 
 	// ============================================
@@ -594,17 +594,17 @@ export struct substring is Hashable, Equatable, Iterable with character
 
 	/// check if substring starts with prefix
 	export function startsWith(prefix string) bool
-		return starts_with_substring(self, prefix._managed)
+		return startsWithSubstring(self, prefix._managed)
 	end 'startsWith'
 
 	/// check if substring ends with suffix
 	export function endsWith(suffix string) bool
-		return ends_with_substring(self, suffix._managed)
+		return endsWithSubstring(self, suffix._managed)
 	end 'endsWith'
 
 	/// find first occurrence of needle, return byte index or -1
 	export function find(needle string) int
-		return find_substring(self, needle._managed)
+		return findSubstring(self, needle._managed)
 	end 'find'
 
 	/// Check if substring contains the given needle
@@ -620,6 +620,6 @@ end 'substring'
 /// Create a new string from a byte buffer
 /// Copies the bytes and creates a new heap-allocated string
 /// Note: Uses array of byte not array of character since character is now a grapheme cluster struct
-export function string_from_characters(buffer array of byte, length int) string
+export function stringFromCharacters(buffer array of byte, length int) string
 	return string{_managed: __string_from_characters(buffer, length), _iterPos: 0}
-end 'string_from_characters'
+end 'stringFromCharacters'

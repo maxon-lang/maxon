@@ -75,7 +75,7 @@ end 'main'
 ```maxon
 function main() int
     var x = sqrt(2.0)
-    print_float(x, 15)
+    printFloat(x, 15)
     return 0
 end 'main'
 ```

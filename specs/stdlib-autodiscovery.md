@@ -66,7 +66,7 @@ If a stdlib function depends on other stdlib functions, they're also discovered 
 ```maxon
 function main() int
     var buffer = array of 12 byte
-    return format_int_array(42, buffer)
+    return formatIntArray(42, buffer)
 end 'main'
 ```
 ```exitcode
@@ -106,7 +106,7 @@ end 'main'
 ```maxon
 function main() int
     var buffer = array of 12 byte
-    return format_int_array(42, buffer)
+    return formatIntArray(42, buffer)
 end 'main'
 ```
 ```exitcode
@@ -117,16 +117,16 @@ end 'main'
 <!-- test: wrong-arg-count -->
 ```maxon
 function main() int
-    return format_int_array(42)
+    return formatIntArray(42)
 end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 3, column 12
-Function 'format_int_array' argument count mismatch
+Function 'formatIntArray' argument count mismatch
   Expected: 2 arguments
   Found: 1 argument
 
-  3 |     return format_int_array(42)
+  3 |     return formatIntArray(42)
     |            ^
 ```
 

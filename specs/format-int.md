@@ -9,11 +9,11 @@ category: stdlib
 
 ## Developer Notes
 
-The `format_int_array()` function converts an integer to a string representation, storing it in a character array buffer.
+The `formatIntArray()` function converts an integer to a string representation, storing it in a character array buffer.
 
 Implementation:
 - Defined in `stdlib/fmt/integer.maxon`
-- Signature: `format_int_array(value int, buffer array of byte) int`
+- Signature: `formatIntArray(value int, buffer array of byte) int`
 - Returns the number of characters written
 - Handles negative numbers, zero, and positive values
 - Uses modulo and division to extract digits
@@ -29,12 +29,12 @@ Algorithm:
 
 ## Documentation
 
-The `format_int_array()` function converts an integer to a string representation.
+The `formatIntArray()` function converts an integer to a string representation.
 
 ### Syntax
 
 ```maxon
-format_int_array(value, buffer)
+formatIntArray(value, buffer)
 ```
 Parameters:
 - `value` - The integer to convert
@@ -47,7 +47,7 @@ Returns the number of characters written to the buffer.
 ```maxon
 function main() int
     var buffer = array of 12 byte
-    var len = format_int_array(42, buffer)
+    var len = formatIntArray(42, buffer)
     // buffer now contains "42"
     return len  // Returns 2
 end 'main'
@@ -69,7 +69,7 @@ end 'main'
 ```maxon
 function main() int
     var buffer = array of 12 byte
-    var len = format_int_array(42, buffer)
+    var len = formatIntArray(42, buffer)
     return len
 end 'main'
 ```
@@ -82,7 +82,7 @@ end 'main'
 ```maxon
 function main() int
     var buffer = array of 12 byte
-    var len = format_int_array(0, buffer)
+    var len = formatIntArray(0, buffer)
     return len
 end 'main'
 ```
@@ -95,7 +95,7 @@ end 'main'
 ```maxon
 function main() int
     var buffer = array of 12 byte
-    var len = format_int_array(-123, buffer)
+    var len = formatIntArray(-123, buffer)
     return len
 end 'main'
 ```
@@ -108,7 +108,7 @@ end 'main'
 ```maxon
 function main() int
     var buffer = array of 12 byte
-    var len = format_int_array(123456, buffer)
+    var len = formatIntArray(123456, buffer)
     return len
 end 'main'
 ```
@@ -121,7 +121,7 @@ end 'main'
 ```maxon
 function main() int
     var buffer = array of 12 byte
-    var len = format_int_array(7, buffer)
+    var len = formatIntArray(7, buffer)
     return len
 end 'main'
 ```

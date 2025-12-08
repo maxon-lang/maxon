@@ -83,14 +83,14 @@ The `stdlib/unicode/grapheme` module provides functions for grapheme segmentatio
 import unicode/grapheme
 
 // Get grapheme break property for a codepoint
-var prop = grapheme_break_property(0x1F600)  // Returns GBP_Extended_Pictographic info
+var prop = graphemeBreakProperty(0x1F600)  // Returns GBP_Extended_Pictographic info
 
 // Check if there's a boundary between two positions
 var boundary = is_grapheme_boundary(data, len, pos)
 
 // Find next/previous grapheme boundary
-var next = next_grapheme_boundary(data, len, offset)
-var prev = prev_grapheme_boundary(data, len, offset)
+var next = nextGraphemeBoundary(data, len, offset)
+var prev = prevGraphemeBoundary(data, len, offset)
 ```
 
 ### String Integration
@@ -99,8 +99,8 @@ Strings automatically use grapheme clusters for iteration:
 
 ```maxon
 var s = "👨‍👩‍👧"  // Family emoji - 1 grapheme, 18 bytes, 5 codepoints
-print_int(s.count())         // 1 (grapheme count)
-print_int(s.bytes().count()) // 18 (byte count)
+printInt(s.count())         // 1 (grapheme count)
+printInt(s.bytes().count()) // 18 (byte count)
 
 for c in s 'loop'
     // Iterates once, c is the family emoji
@@ -117,7 +117,7 @@ Each ASCII character is its own grapheme:
 ```maxon
 function main() int
     var s = "abc"
-    print_int(s.count())
+    printInt(s.count())
     return 0
 end 'main'
 ```
@@ -136,7 +136,7 @@ Multi-byte characters are single graphemes:
 ```maxon
 function main() int
     var s = "中文"  // 2 CJK characters
-    print_int(s.count())
+    printInt(s.count())
     return 0
 end 'main'
 ```
@@ -155,7 +155,7 @@ Basic emoji are single graphemes:
 ```maxon
 function main() int
     var s = "🎉🎊🎁"  // 3 emoji
-    print_int(s.count())
+    printInt(s.count())
     return 0
 end 'main'
 ```
@@ -174,8 +174,8 @@ Flag emoji (pairs of regional indicators) are single graphemes:
 ```maxon
 function main() int
     var s = "🇺🇸"  // US flag (2 regional indicators = 1 grapheme)
-    print_int(s.count())
-    print_int(s.bytes().count())
+    printInt(s.count())
+    printInt(s.bytes().count())
     return 0
 end 'main'
 ```
@@ -195,7 +195,7 @@ Multiple flags are separate graphemes:
 ```maxon
 function main() int
     var s = "🇺🇸🇬🇧🇫🇷"  // 3 flags
-    print_int(s.count())
+    printInt(s.count())
     return 0
 end 'main'
 ```
@@ -214,8 +214,8 @@ Emoji with skin tone modifiers are single graphemes:
 ```maxon
 function main() int
     var s = "👋🏽"  // Wave + medium skin tone
-    print_int(s.count())
-    print_int(s.bytes().count())
+    printInt(s.count())
+    printInt(s.bytes().count())
     return 0
 end 'main'
 ```
@@ -235,7 +235,7 @@ Family emoji (ZWJ sequences) are single graphemes:
 ```maxon
 function main() int
     var s = "👨‍👩‍👧"  // Man + ZWJ + Woman + ZWJ + Girl
-    print_int(s.count())
+    printInt(s.count())
     return 0
 end 'main'
 ```
@@ -254,7 +254,7 @@ Professional emoji (ZWJ sequences) are single graphemes:
 ```maxon
 function main() int
     var s = "👨‍💻"  // Man + ZWJ + Computer = Man Technologist
-    print_int(s.count())
+    printInt(s.count())
     return 0
 end 'main'
 ```
@@ -273,7 +273,7 @@ CR+LF is a single grapheme (GB3):
 ```maxon
 function main() int
     var s = "\r\n"
-    print_int(s.count())
+    printInt(s.count())
     return 0
 end 'main'
 ```
@@ -292,7 +292,7 @@ Mixed ASCII, emoji, and CJK:
 ```maxon
 function main() int
     var s = "Hi🎉中"  // H, i, party, 中 = 4 graphemes
-    print_int(s.count())
+    printInt(s.count())
     return 0
 end 'main'
 ```
@@ -308,8 +308,8 @@ end 'main'
 
 ```maxon
 function main() int
-    var prop = grapheme_break_property(65)  // 'A'
-    print_int(prop)  // GBP_Other = 0
+    var prop = graphemeBreakProperty(65)  // 'A'
+    printInt(prop)  // GBP_Other = 0
     return 0
 end 'main'
 ```
@@ -325,8 +325,8 @@ end 'main'
 
 ```maxon
 function main() int
-    var prop = grapheme_break_property(13)  // CR
-    print_int(prop)  // GBP_CR = 1
+    var prop = graphemeBreakProperty(13)  // CR
+    printInt(prop)  // GBP_CR = 1
     return 0
 end 'main'
 ```
@@ -342,8 +342,8 @@ end 'main'
 
 ```maxon
 function main() int
-    var prop = grapheme_break_property(10)  // LF
-    print_int(prop)  // GBP_LF = 2
+    var prop = graphemeBreakProperty(10)  // LF
+    printInt(prop)  // GBP_LF = 2
     return 0
 end 'main'
 ```
@@ -359,8 +359,8 @@ end 'main'
 
 ```maxon
 function main() int
-    var prop = grapheme_break_property(8205)  // ZWJ U+200D
-    print_int(prop)  // GBP_ZWJ = 5
+    var prop = graphemeBreakProperty(8205)  // ZWJ U+200D
+    printInt(prop)  // GBP_ZWJ = 5
     return 0
 end 'main'
 ```
@@ -376,8 +376,8 @@ end 'main'
 
 ```maxon
 function main() int
-    var prop = grapheme_break_property(127482)  // Regional Indicator U
-    print_int(prop)  // GBP_Regional_Indicator = 6
+    var prop = graphemeBreakProperty(127482)  // Regional Indicator U
+    printInt(prop)  // GBP_Regional_Indicator = 6
     return 0
 end 'main'
 ```
@@ -393,11 +393,11 @@ end 'main'
 
 ```maxon
 function main() int
-    if is_extended_pictographic(128512) 'c1'
-        print_int(1)  // 😀
+    if isExtendedPictographic(128512) 'c1'
+        printInt(1)  // 😀
     end 'c1'
-    if is_extended_pictographic(65) 'c2'
-        print_int(0)      // 'A'
+    if isExtendedPictographic(65) 'c2'
+        printInt(0)      // 'A'
     end 'c2'
     return 0
 end 'main'

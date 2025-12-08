@@ -213,7 +213,7 @@ suite('Go to Definition Test Suite', () => {
 	test('Go to definition for interface type', async function () {
 		const content = [
 			"interface Printable",
-			"    function print_int() void",
+			"    function printInt() void",
 			"end 'Printable'",
 			"",
 			"struct Message is Printable",
@@ -288,7 +288,7 @@ suite('Go to Definition Test Suite', () => {
 	test('Go to definition for stdlib function', async function () {
 		const content = [
 			"function main() int",
-			"    print_int(42)",
+			"    printInt(42)",
 			"    return 0",
 			"end 'main'"
 		].join('\n');

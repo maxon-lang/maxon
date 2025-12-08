@@ -77,10 +77,10 @@ function main() int
     var x2 = tan(0.5)
     var x3 = tan(1.0)
     var x4 = tan(0.7854)
-    print_float(x1, 6)
-    print_float(x2, 6)
-    print_float(x3, 6)
-    print_float(x4, 6)
+    printFloat(x1, 6)
+    printFloat(x2, 6)
+    printFloat(x3, 6)
+    printFloat(x4, 6)
     return 0
 end 'main'
 ```

@@ -73,7 +73,7 @@ end 'main'
 function main() int
     var neg = 0.0 - 2.3
     var y = round(neg)
-    print_int(y)
+    printInt(y)
     return 0
 end 'main'
 ```
@@ -89,7 +89,7 @@ end 'main'
 function main() int
     var x = 2.5
     var y = round(x)
-    print_int(y)
+    printInt(y)
     return 0
 end 'main'
 ```

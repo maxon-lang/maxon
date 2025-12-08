@@ -171,9 +171,9 @@ suite('Qualified Name Completion Tests', () => {
 			typeof item.label === 'string' ? item.label : item.label.label
 		);
 
-		const hasFormatIntArray = labels.includes('format_int_array');
+		const hasFormatIntArray = labels.includes('formatIntArray');
 
-		assert.ok(hasFormatIntArray, 'Should suggest "format_int_array" after "stdlib.fmt.integer."');
+		assert.ok(hasFormatIntArray, 'Should suggest "formatIntArray" after "stdlib.fmt.integer."');
 	});
 
 	test('Should provide function details in qualified name completion', async function () {
@@ -201,7 +201,7 @@ suite('Qualified Name Completion Tests', () => {
 
 		const formatIntArrayItem = completions.items.find(item => {
 			const label = typeof item.label === 'string' ? item.label : item.label.label;
-			return label === 'format_int_array';
+			return label === 'formatIntArray';
 		});
 
 		if (formatIntArrayItem) {
@@ -218,7 +218,7 @@ suite('Qualified Name Completion Tests', () => {
 			// Check that it's marked as a function
 			assert.strictEqual(formatIntArrayItem.kind, vscode.CompletionItemKind.Function);
 		} else {
-			assert.fail('format_int_array not found in completions');
+			assert.fail('formatIntArray not found in completions');
 		}
 	});
 
