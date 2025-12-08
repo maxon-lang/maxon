@@ -416,7 +416,7 @@ struct Calculator
     function double() int
         return value * 2
     end 'double'
-    
+
     function triple() int
         return value * 3
     end 'triple'
@@ -429,6 +429,40 @@ end 'main'
 ```
 ```exitcode
 35
+```
+
+
+<!-- test: transitive-interface-missing-method-error -->
+// Test that generic templates implementing Collection require Iterable.next() since Collection extends Iterable
+```maxon
+struct IncompleteCollection uses Element is Collection with Element
+    var data Element
+
+    function Collection.count() int
+        return 1
+    end 'count'
+
+    function Collection.get(index int) Element or nil
+        return data
+    end 'get'
+
+    function Collection.set(index int, value Element) Self
+        data = value
+        return self
+    end 'set'
+end 'IncompleteCollection'
+
+function main() int
+    return 0
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 2, column 1
+Partial interface implementation: struct 'IncompleteCollection' is missing 1 method(s):
+  - next() Element or nil
+
+  2 | struct IncompleteCollection uses Element is Collection with Element
+    | ^
 ```
 
 

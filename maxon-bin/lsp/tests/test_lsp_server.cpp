@@ -1684,6 +1684,66 @@ end 'myFunction')";
 	REQUIRE(hasEndLabel);
 }
 
+TEST_CASE("LSP linkedEditingRange returns ranges for interface method names", "[lsp][linkedEditing]") {
+	LSPTestFixture fixture;
+	fixture.initialize();
+
+	// Struct with interface method implementation
+	// The method name after the dot should be linked with the end label
+	std::string code = R"(interface Countable
+	function count() int
+end 'Countable'
+
+struct MyStruct is Countable
+	function Countable.count() int
+		return 0
+	end 'count'
+end 'MyStruct')";
+	fixture.openDocument("file:///test.maxon", code);
+
+	// Request linked editing on the method name "count" at line 5
+	// "function Countable.count()" - count starts at character 20
+	json linkedEditParams = {
+		{"textDocument", {{"uri", "file:///test.maxon"}}},
+		{"position", {{"line", 5}, {"character", 21}}}}; // position on 'count'
+	fixture.transport()->queueRequest(11, "textDocument/linkedEditingRange", linkedEditParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(11);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+	REQUIRE(!response->result.value().is_null());
+
+	auto &result = response->result.value();
+	auto &ranges = result["ranges"];
+	REQUIRE(ranges.is_array());
+	REQUIRE(ranges.size() == 2); // Method name and end label
+
+	// Check ranges point to the right locations
+	// Range 0: method name at line 5, characters 20-25 (count)
+	// Range 1: end label at line 7, characters 6-11 (count inside quotes)
+	bool hasMethodName = false;
+	bool hasEndLabel = false;
+	for (const auto &range : ranges) {
+		int startLine = range["start"]["line"].get<int>();
+		int startChar = range["start"]["character"].get<int>();
+		int endLine = range["end"]["line"].get<int>();
+		int endChar = range["end"]["character"].get<int>();
+
+		if (startLine == 5 && startChar == 20 && endLine == 5 && endChar == 25) {
+			hasMethodName = true;
+		}
+		if (startLine == 7 && startChar == 6 && endLine == 7 && endChar == 11) {
+			hasEndLabel = true;
+		}
+	}
+	REQUIRE(hasMethodName);
+	REQUIRE(hasEndLabel);
+}
+
 // =============================================================================
 // Stdlib Diagnostics on Initialization Tests
 // =============================================================================
@@ -1967,4 +2027,207 @@ end 'test')";
 	INFO("Consumer should report undefined function after stdlib function rename");
 	INFO("Found message: " << foundMsg);
 	REQUIRE(hasUndefinedError);
+}
+
+TEST_CASE("LSP transitive interface conformance allows parent interface methods",
+		  "[lsp][diagnostics][interface]") {
+	// Test that a struct implementing "Collection with Element" (which extends Iterable)
+	// can have Iterable.next() method without error.
+	// This tests that type parameters like "Collection with Element" are properly
+	// stripped to find the base interface name "Collection" for lookup.
+	LSPTestFixture fixture;
+
+	// Use real stdlib path so we test against the actual Collection/Iterable interfaces
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Test code that mirrors stdlib/collections/array.maxon structure:
+	// - Generic struct with "uses Element"
+	// - Conforms to "Collection with Element" (not just "Collection")
+	// - Has Iterable.next() method (Iterable is parent of Collection)
+	std::string code = R"(
+struct MyArray uses Element is Collection with Element
+	var data int
+	var iterIndex int
+
+	function Collection.count() int
+		return 0
+	end 'count'
+
+	function Collection.get(index int) Element or nil
+		return nil
+	end 'get'
+
+	function Collection.set(index int, value Element) Self
+		return self
+	end 'set'
+
+	function Iterable.next() Element or nil
+		return nil
+	end 'next'
+end 'MyArray'
+
+function main() int
+	return 0
+end 'main')";
+	std::string docUri = "file://" + (projectRoot / "test.maxon").string();
+	fixture.openDocument(docUri, code);
+	fixture.shutdown();
+	fixture.run();
+
+	auto notification = fixture.transport()->findLastDiagnosticsForUri(docUri);
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+	REQUIRE(diagnostics.is_array());
+
+	// Should NOT have error about Iterable.next() not conforming
+	// The bug was: "Method 'next' declares implementation of interface 'Iterable'
+	// but struct 'MyArray' does not conform to this interface"
+	bool hasConformanceError = false;
+	std::string errorMsg;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("does not conform to this interface") != std::string::npos &&
+			msg.find("Iterable") != std::string::npos) {
+			hasConformanceError = true;
+			errorMsg = msg;
+			break;
+		}
+	}
+	INFO("Error message: " << errorMsg);
+	REQUIRE(!hasConformanceError);
+}
+
+TEST_CASE("LSP detects missing interface method from transitive interface",
+		  "[lsp][diagnostics][interface]") {
+	// Test that a struct implementing "Collection with Element" (which extends Iterable)
+	// gets an error if it's missing the next() method required by Iterable.
+	LSPTestFixture fixture;
+
+	// Use real stdlib path so we test against the actual Collection/Iterable interfaces
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Test code that is MISSING the Iterable.next() method
+	// This should produce an error about missing method
+	std::string code = R"(
+struct MyArray uses Element is Collection with Element
+	var data int
+	var iterIndex int
+
+	function Collection.count() int
+		return 0
+	end 'count'
+
+	function Collection.get(index int) Element or nil
+		return nil
+	end 'get'
+
+	function Collection.set(index int, value Element) Self
+		return self
+	end 'set'
+
+	// NOTE: Missing Iterable.next() method!
+end 'MyArray'
+
+function main() int
+	return 0
+end 'main')";
+	std::string docUri = "file://" + (projectRoot / "test.maxon").string();
+	fixture.openDocument(docUri, code);
+	fixture.shutdown();
+	fixture.run();
+
+	auto notification = fixture.transport()->findLastDiagnosticsForUri(docUri);
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+	REQUIRE(diagnostics.is_array());
+
+	// SHOULD have error about missing 'next' method from Iterable
+	bool hasMissingMethodError = false;
+	std::string errorMsg;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("missing") != std::string::npos && msg.find("next") != std::string::npos) {
+			hasMissingMethodError = true;
+			errorMsg = msg;
+			break;
+		}
+	}
+	INFO("Error message: " << errorMsg);
+	REQUIRE(hasMissingMethodError);
+}
+
+TEST_CASE("LSP does not report missing method when interface has default implementation",
+		  "[lsp][diagnostics][interface]") {
+	// Test that a struct implementing "Collection with Element" does NOT get an error
+	// for the map() method because Collection provides a default implementation.
+	LSPTestFixture fixture;
+
+	// Use real stdlib path so we test against the actual Collection/Iterable interfaces
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Test code that implements all required methods but NOT map()
+	// map() has a default implementation in Collection so this should NOT error
+	std::string code = R"(
+struct MyArray uses Element is Collection with Element
+	var data int
+	var iterIndex int
+
+	function Collection.count() int
+		return 0
+	end 'count'
+
+	function Collection.get(index int) Element or nil
+		return nil
+	end 'get'
+
+	function Collection.set(index int, value Element) Self
+		return self
+	end 'set'
+
+	function Iterable.next() Element or nil
+		return nil
+	end 'next'
+end 'MyArray'
+
+function main() int
+	return 0
+end 'main')";
+	std::string docUri = "file://" + (projectRoot / "test.maxon").string();
+	fixture.openDocument(docUri, code);
+	fixture.shutdown();
+	fixture.run();
+
+	auto notification = fixture.transport()->findLastDiagnosticsForUri(docUri);
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+	REQUIRE(diagnostics.is_array());
+
+	// Should NOT have error about missing 'map' method (it has a default implementation)
+	bool hasMissingMapError = false;
+	std::string errorMsg;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("missing") != std::string::npos && msg.find("map") != std::string::npos) {
+			hasMissingMapError = true;
+			errorMsg = msg;
+			break;
+		}
+	}
+	INFO("Error message (should be empty): " << errorMsg);
+	REQUIRE(!hasMissingMapError);
 }

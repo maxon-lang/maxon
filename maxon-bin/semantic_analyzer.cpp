@@ -126,15 +126,17 @@ void SemanticAnalyzer::registerExternalStruct(const std::string &name, const std
 
 void SemanticAnalyzer::registerExternalInterface(const std::string &name,
 												 const std::vector<InterfaceMethodInfo> &methods,
-												 const std::vector<std::string> &associatedTypes) {
+												 const std::vector<std::string> &associatedTypes,
+												 const std::string &extendsInterface) {
 	// Only register if not already defined
 	if (interfaces.find(name) == interfaces.end()) {
-		InterfaceInfo ifaceInfo(name, 0, 0, associatedTypes);
+		InterfaceInfo ifaceInfo(name, 0, 0, associatedTypes, extendsInterface);
 		for (const auto &method : methods) {
 			ifaceInfo.methods.push_back(method);
 		}
 		interfaces.emplace(name, std::move(ifaceInfo));
-		logTrace("Registered external interface: " + name);
+		logTrace("Registered external interface: " + name +
+				 (extendsInterface.empty() ? "" : " extends " + extendsInterface));
 	}
 }
 
@@ -171,9 +173,9 @@ void SemanticAnalyzer::setSourceContext(const std::string &source, const std::st
 }
 std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	errors.clear();
-	// Note: Don't clear functions or structs here - we want to keep registered external ones
+	// Note: Don't clear functions, structs, or interfaces here - we want to keep registered external ones
 	// structs.clear(); // Preserve external structs registered before analysis
-	interfaces.clear();
+	// interfaces.clear(); // Preserve external interfaces registered before analysis
 	variables.clear();
 	scopeStack.clear();
 	loopDepth = 0;
@@ -455,10 +457,33 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 			// Validate implementsInterface if specified
 			if (!method->implementsInterface.empty()) {
-				// Check that the struct declares conformance to this interface
+				// Check that the struct declares conformance to this interface (directly or transitively)
 				bool conformsToInterface = false;
+
+				// Helper to extract base interface name (strip " with ..." type parameters)
+				auto getBaseInterfaceName = [](const std::string &ifaceName) -> std::string {
+					size_t withPos = ifaceName.find(" with ");
+					if (withPos != std::string::npos) {
+						return ifaceName.substr(0, withPos);
+					}
+					return ifaceName;
+				};
+
+				// Helper to check if an interface extends the target interface (recursive)
+				std::function<bool(const std::string &)> checkExtendsInterface = [&](const std::string &ifaceName) -> bool {
+					std::string baseName = getBaseInterfaceName(ifaceName);
+					if (baseName == method->implementsInterface) {
+						return true;
+					}
+					auto it = interfaces.find(baseName);
+					if (it != interfaces.end() && !it->second.extendsInterface.empty()) {
+						return checkExtendsInterface(it->second.extendsInterface);
+					}
+					return false;
+				};
+
 				for (const auto &iface : structDef->conformsTo) {
-					if (iface == method->implementsInterface) {
+					if (checkExtendsInterface(iface)) {
 						conformsToInterface = true;
 						break;
 					}
@@ -535,15 +560,12 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	}
 
 	// Pass 2b: Check interface conformance for all structs
-	// Skip generic templates - conformance will be checked when instantiated
+	// Generic templates are also checked to ensure all required methods are defined
 	logTrace("Pass 2b: Checking interface conformance");
 	for (const auto &structDef : program->structs) {
-		if (!structDef->associatedTypeParams.empty()) {
-			logTrace("Skipping interface conformance check for generic template: " + structDef->name);
-			continue;
-		}
 		if (!structDef->conformsTo.empty()) {
-			checkInterfaceConformance(structDef->name, structDef->conformsTo, structDef->line, structDef->column);
+			bool isGenericTemplate = !structDef->associatedTypeParams.empty();
+			checkInterfaceConformance(structDef->name, structDef->conformsTo, structDef->line, structDef->column, isGenericTemplate);
 		}
 	}
 
@@ -974,7 +996,7 @@ std::map<std::string, VariableInfo> SemanticAnalyzer::getAllVariables() const {
 
 void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 												 const std::vector<std::string> &conformsTo,
-												 int line, int column) {
+												 int line, int column, bool isGenericTemplate) {
 	// Skip conformance checking for 'string' - its methods are compiler-intrinsic
 	// The compiler generates calls to runtime functions (__string_count, __string_print, etc.)
 	if (structName == "string") {
@@ -990,7 +1012,13 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 	}
 
 	// Helper lambda to resolve associated types in a type string
+	// For generic templates, we don't resolve types - just check structural conformance
 	std::function<std::string(const std::string &)> resolveType = [&](const std::string &type) -> std::string {
+		// For generic templates, don't resolve Self or associated types
+		if (isGenericTemplate) {
+			return type;
+		}
+
 		if (type == "Self") {
 			return structName;
 		}
@@ -1093,33 +1121,38 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 			auto funcIt = functions.find(expectedMethodName);
 			if (funcIt == functions.end()) {
 				// Check if interface provides a default implementation
-				if (protoMethod.hasDefaultImplementation && protoMethod.defaultBody != nullptr) {
-					// Synthesize method from default implementation
-					// Build parameter list with implicit self
-					std::vector<FunctionParameter> params;
-					params.push_back(FunctionParameter("self", structName));
+				if (protoMethod.hasDefaultImplementation) {
+					// If we have the body, synthesize the method
+					if (protoMethod.defaultBody != nullptr) {
+						// Synthesize method from default implementation
+						// Build parameter list with implicit self
+						std::vector<FunctionParameter> params;
+						params.push_back(FunctionParameter("self", structName));
 
-					for (const auto &param : protoMethod.parameters) {
-						std::string resolvedType = resolveType(param.type);
-						params.push_back(FunctionParameter(param.name, resolvedType));
+						for (const auto &param : protoMethod.parameters) {
+							std::string resolvedType = resolveType(param.type);
+							params.push_back(FunctionParameter(param.name, resolvedType));
+						}
+
+						std::string resolvedReturnType = resolveType(protoMethod.returnType);
+
+						// Register as function with synthesized default flag
+						FunctionInfo funcInfo(expectedMethodName, resolvedReturnType, std::move(params), sourceInterface);
+						funcInfo.isSynthesizedDefault = true;
+						funcInfo.defaultBody = protoMethod.defaultBody;
+						funcInfo.selfType = structName;
+						// Copy type assignments for resolving associated types in codegen
+						if (typeAssignments) {
+							funcInfo.typeSubstitutions = *typeAssignments;
+						}
+						funcInfo.typeSubstitutions["Self"] = structName;
+						functions.emplace(expectedMethodName, std::move(funcInfo));
+
+						logTrace("Synthesized default method: " + expectedMethodName + " from " + sourceInterface);
 					}
-
-					std::string resolvedReturnType = resolveType(protoMethod.returnType);
-
-					// Register as function with synthesized default flag
-					FunctionInfo funcInfo(expectedMethodName, resolvedReturnType, std::move(params), sourceInterface);
-					funcInfo.isSynthesizedDefault = true;
-					funcInfo.defaultBody = protoMethod.defaultBody;
-					funcInfo.selfType = structName;
-					// Copy type assignments for resolving associated types in codegen
-					if (typeAssignments) {
-						funcInfo.typeSubstitutions = *typeAssignments;
-					}
-					funcInfo.typeSubstitutions["Self"] = structName;
-					functions.emplace(expectedMethodName, std::move(funcInfo));
-
-					logTrace("Synthesized default method: " + expectedMethodName + " from " + sourceInterface);
-					continue; // Don't report as missing
+					// Either way, don't report as missing - it has a default implementation
+					// (even if we can't synthesize it here because the body is in another module)
+					continue;
 				}
 
 				// Build parameter string for error message (without implicit self)

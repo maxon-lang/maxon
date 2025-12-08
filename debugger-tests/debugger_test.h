@@ -46,6 +46,9 @@ class DebuggerTestRunner {
 	void setVerbose(int level) { verboseLevel_ = level; }
 	int getVerbose() const { return verboseLevel_; }
 
+	// Set the path to the maxon compiler
+	void setCompilerPath(const std::string &path) { compilerPath_ = path; }
+
 	// Get the number of failed tests
 	int getFailedCount() const { return testsFailed; }
 
@@ -53,7 +56,8 @@ class DebuggerTestRunner {
 	int testsRun = 0;
 	int testsPassed = 0;
 	int testsFailed = 0;
-	int verboseLevel_ = 0; // Default to quiet
+	int verboseLevel_ = 0;				 // Default to quiet
+	std::string compilerPath_ = "maxon"; // Default to PATH lookup
 
 	bool compileTestProgram(const std::string &sourceFile, const std::string &outputExe);
 };

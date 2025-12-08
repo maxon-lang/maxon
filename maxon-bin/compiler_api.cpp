@@ -427,12 +427,28 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 		std::string signature = buildInterfaceSignature(interfaceDef.get());
 		std::string doc = extractDocComment(source, interfaceDef->line);
 
-		symbols.emplace_back(
+		LSPSymbolInfo ifaceSym(
 			interfaceDef->name,
 			"interface",
 			signature,
 			doc,
 			interfaceDef->getSourceRange());
+		ifaceSym.extendsInterface = interfaceDef->extendsInterface;
+		ifaceSym.associatedTypes = interfaceDef->associatedTypes;
+
+		// Extract interface method signatures
+		for (const auto &method : interfaceDef->methods) {
+			LSPInterfaceMethodInfo methodInfo;
+			methodInfo.name = method.name;
+			methodInfo.returnType = method.returnType;
+			methodInfo.hasDefaultImplementation = method.hasDefaultImplementation;
+			for (const auto &param : method.parameters) {
+				methodInfo.parameters.emplace_back(param.name, param.type);
+			}
+			ifaceSym.interfaceMethods.push_back(std::move(methodInfo));
+		}
+
+		symbols.push_back(std::move(ifaceSym));
 	}
 
 	return symbols;
@@ -615,7 +631,16 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 			if (normalizeFilePath(ifaceSym.filePath) == currentFilePath) {
 				continue; // Skip symbols from current file
 			}
-			analyzer.registerExternalInterface(ifaceSym.name);
+			// Convert LSPInterfaceMethodInfo to InterfaceMethodInfo
+			std::vector<InterfaceMethodInfo> methods;
+			for (const auto &m : ifaceSym.interfaceMethods) {
+				std::vector<FunctionParameter> params;
+				for (const auto &p : m.parameters) {
+					params.emplace_back(p.name, p.type, 0, 0);
+				}
+				methods.emplace_back(m.name, m.returnType, std::move(params), m.hasDefaultImplementation);
+			}
+			analyzer.registerExternalInterface(ifaceSym.name, methods, ifaceSym.associatedTypes, ifaceSym.extendsInterface);
 		}
 
 		// Register stdlib enums

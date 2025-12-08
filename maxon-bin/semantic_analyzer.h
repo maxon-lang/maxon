@@ -215,7 +215,8 @@ class SemanticAnalyzer {
 	// Call this before analyze() to make external interfaces available for "is Interface" checks
 	void registerExternalInterface(const std::string &name,
 								   const std::vector<InterfaceMethodInfo> &methods = {},
-								   const std::vector<std::string> &associatedTypes = {});
+								   const std::vector<std::string> &associatedTypes = {},
+								   const std::string &extendsInterface = "");
 
 	// Register external/stdlib enum types
 	// Call this before analyze() to make external enums available as valid types
@@ -386,7 +387,7 @@ class SemanticAnalyzer {
 	bool hasReturnInPath(const std::vector<std::unique_ptr<StmtAST>> &statements);
 	void markVariableAsUsed(const std::string &name);
 	void checkUnusedVariables();
-	void checkInterfaceConformance(const std::string &structName, const std::vector<std::string> &conformsTo, int line, int column);
+	void checkInterfaceConformance(const std::string &structName, const std::vector<std::string> &conformsTo, int line, int column, bool isGenericTemplate = false);
 	void registerMapMethods(const std::string &mapType, const std::string &keyType, const std::string &valueType);
 	void registerArrayMethods(const std::string &arrayType, const std::string &elemType);
 	void instantiateGenericStructMethods(const std::string &templateName, const std::string &specializedName,

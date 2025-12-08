@@ -44,11 +44,22 @@ int main(int argc, char *argv[]) {
 	fs::path debuggerTestsDir = binDir.parent_path();
 	fs::path testProgramsDir = debuggerTestsDir / "test-programs";
 
+	// Find maxon compiler - it's in the project's bin/ directory (sibling to debugger-tests/)
+	fs::path projectDir = debuggerTestsDir.parent_path();
+	fs::path compilerPath = projectDir / "bin" / "maxon.exe";
+
+	if (!fs::exists(compilerPath)) {
+		std::cerr << "ERROR: Maxon compiler not found at: " << compilerPath << std::endl;
+		std::cerr << "Please build the compiler first with 'make compiler'" << std::endl;
+		return 1;
+	}
+
 	// Create bin directory if it doesn't exist
 	fs::create_directories(binDir);
 
 	DebuggerTestRunner runner;
 	runner.setVerbose(verboseLevel);
+	runner.setCompilerPath(compilerPath.string());
 
 	// Test 1: Simple Variables Test
 	{

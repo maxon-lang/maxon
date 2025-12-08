@@ -29,9 +29,29 @@ export struct set uses Element is ExpressibleByArrayLiteral with Element
 	var count int                   // Number of occupied entries
 	var capacity int                // Total slots
 
-	// ExpressibleByArrayLiteral conformance - initialization is handled inline by the compiler
-	// This method signature is required for the interface but never called directly
-	// The compiler generates inline code for `set from [array]` syntax
+	// ExpressibleByArrayLiteral conformance
+	// Initialize set from compiler-constructed _ManagedArray
+	function ExpressibleByArrayLiteral.init(managed _ManagedArray) Self
+		// Create empty set with default capacity
+		var elems = array of 16 Element
+		var sts = array of 16 byte
+		// Initialize states to empty (0) - already zero-initialized
+		var result = set{
+			elements: elems,
+			states: sts,
+			count: 0,
+			capacity: 16
+		}
+		// Insert each element from the managed array
+		var len = __managed_array_len(managed)
+		var idx = 0
+		while idx < len 'insert_loop'
+			var elem = managed[idx] as Element
+			result.insert(elem)
+			idx = idx + 1
+		end 'insert_loop'
+		return result
+	end 'init'
 
 	/// Insert an element into the set
 	/// If the element already exists, this is a no-op

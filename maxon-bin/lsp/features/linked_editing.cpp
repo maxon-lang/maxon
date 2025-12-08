@@ -163,15 +163,39 @@ std::optional<std::pair<std::string, Range>> LinkedEditingProvider::getBlockName
         // The name should start with a letter or underscore
         if (!std::isalpha(line[nameStart]) && line[nameStart] != '_') continue;
 
-        // Find the end of the name
+        // Find the end of the full name (may include InterfaceName.methodName)
         size_t nameEnd = nameStart;
-        while (nameEnd < line.size() && (std::isalnum(line[nameEnd]) || line[nameEnd] == '_')) {
+        while (nameEnd < line.size() && (std::isalnum(line[nameEnd]) || line[nameEnd] == '_' || line[nameEnd] == '.')) {
             nameEnd++;
         }
 
-        // Check if position is within the name
+        std::string fullName = line.substr(nameStart, nameEnd - nameStart);
+
+        // Check for interface method pattern: InterfaceName.methodName
+        // The end label uses just the method name (after the dot)
+        size_t dotPos = fullName.find('.');
+        if (dotPos != std::string::npos) {
+            // This is an interface method like "Countable.count"
+            std::string methodName = fullName.substr(dotPos + 1);
+            size_t methodStart = nameStart + dotPos + 1;
+            size_t methodEnd = nameEnd;
+
+            // Check if position is within the method name (after the dot)
+            if (col >= static_cast<int>(methodStart) && col < static_cast<int>(methodEnd)) {
+                Range range;
+                range.start.line = position.line;
+                range.start.character = static_cast<int>(methodStart);
+                range.end.line = position.line;
+                range.end.character = static_cast<int>(methodEnd);
+
+                return std::make_pair(methodName, range);
+            }
+        }
+
+        // Check if position is within the regular name (no dot, or before the dot)
         if (col >= static_cast<int>(nameStart) && col < static_cast<int>(nameEnd)) {
-            std::string name = line.substr(nameStart, nameEnd - nameStart);
+            // For interface methods, use the method name for the end label
+            std::string name = (dotPos != std::string::npos) ? fullName.substr(dotPos + 1) : fullName;
 
             Range range;
             range.start.line = position.line;

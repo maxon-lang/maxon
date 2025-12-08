@@ -32,7 +32,15 @@ bool DebuggerTestRunner::compileTestProgram(const std::string &sourceFile, [[may
 		return false;
 	}
 
-	std::string cmd = "maxon compile \"" + sourcePath.string() + "\" -g 2>&1";
+	// Build the inner command
+	std::string innerCmd = "\"" + compilerPath_ + "\" compile \"" + sourcePath.string() + "\" -g";
+
+#ifdef _WIN32
+	// On Windows, wrap with cmd /c to properly execute the command
+	std::string cmd = "cmd /c \"" + innerCmd + "\"";
+#else
+	std::string cmd = innerCmd + " 2>&1";
+#endif
 
 	if (verboseLevel_ >= 2) {
 		std::cout << "  Compiling: " << cmd << std::endl;

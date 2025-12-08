@@ -52,6 +52,22 @@ struct LSPFieldInfo {
 };
 
 /**
+ * Interface method signature for external interface registration
+ */
+struct LSPInterfaceMethodInfo {
+	std::string name;
+	std::string returnType;
+	std::vector<LSPParameterInfo> parameters;
+	bool hasDefaultImplementation;
+
+	LSPInterfaceMethodInfo() : hasDefaultImplementation(false) {}
+
+	LSPInterfaceMethodInfo(const std::string &n, const std::string &ret,
+						   std::vector<LSPParameterInfo> params = {}, bool hasDefault = false)
+		: name(n), returnType(ret), parameters(std::move(params)), hasDefaultImplementation(hasDefault) {}
+};
+
+/**
  * Symbol information for LSP features (hover, completion, go-to-definition)
  */
 struct LSPSymbolInfo {
@@ -65,6 +81,9 @@ struct LSPSymbolInfo {
 	std::string returnType;					  // For functions/methods
 	std::vector<std::string> conformsTo;	  // For structs: interfaces this struct conforms to
 	std::vector<LSPFieldInfo> fields;		  // For structs: field definitions
+	std::string extendsInterface;			  // For interfaces: base interface name
+	std::vector<std::string> associatedTypes; // For interfaces: associated type parameters (e.g., "Element")
+	std::vector<LSPInterfaceMethodInfo> interfaceMethods; // For interfaces: method signatures
 
 	LSPSymbolInfo() = default;
 

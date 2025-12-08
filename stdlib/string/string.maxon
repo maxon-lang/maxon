@@ -248,9 +248,19 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 		return ByteView{_managed: _managed, _pos: 0}
 	end 'bytes'
 
-	/// create a CharCollection for indexed character access
-	export function chars() CharCollection
-		return CharCollection{_str: self, _pos: 0}
+	/// create an array of characters for indexed character access
+	export function chars() array of character
+		var result = array of character
+		var bytePos = 0
+		var len = __string_len(_managed)
+		while bytePos < len 'char_loop'
+			var charLen = utf8ByteLengthAt(_managed, bytePos)
+			var sub = __string_slice(_managed, bytePos, bytePos + charLen)
+			var managed = __substring_to_string(sub)
+			result.push(character{_managed: managed})
+			bytePos = bytePos + charLen
+		end 'char_loop'
+		return result
 	end 'chars'
 
 	/// create a CodepointView for iterating over Unicode codepoints
@@ -289,101 +299,6 @@ export struct ByteView is Iterable with byte
 		return __string_len(_managed)
 	end 'count'
 end 'ByteView'
-
-// CharCollection - indexed access to Unicode characters
-// Implements Collection interface for get/set operations
-export struct CharCollection is Iterable with character, Collection with character
-	var _str string
-	var _pos int
-
-	/// count Unicode codepoints
-	function Collection.count() int
-		var charCount = 0
-		var bytePos = 0
-		var len = __string_len(_str._managed)
-		while bytePos < len 'count_loop'
-			bytePos = bytePos + utf8ByteLengthAt(_str._managed, bytePos)
-			charCount = charCount + 1
-		end 'count_loop'
-		return charCount
-	end 'count'
-
-	/// get character at index
-	function Collection.get(index int) character
-		var charCount = 0
-		var bytePos = 0
-		var len = __string_len(_str._managed)
-		while bytePos < len and charCount < index 'navigate'
-			bytePos = bytePos + utf8ByteLengthAt(_str._managed, bytePos)
-			charCount = charCount + 1
-		end 'navigate'
-
-		// Return character from current position
-		return _makeCharAt(bytePos)
-	end 'get'
-
-	/// set character at index (triggers COW)
-	/// Ensures exclusive ownership before mutation via _managed_string_make_unique
-	/// Note: This only works correctly for ASCII characters (single-byte)
-	/// UTF-8 multi-byte character replacement would require more complex logic
-	function Collection.set(index int, value character) CharCollection
-		// Validate index
-		var len = __string_len(_str._managed)
-		if index < 0 or index >= len 'bounds_check'
-			return self  // Out of bounds - return unchanged
-		end 'bounds_check'
-
-		// Ensure exclusive ownership (COW) before mutation
-		// This will copy the buffer if refcount > 1
-		__string_make_unique(_str._managed)
-
-		// Now safe to mutate - set the byte (only works for single-byte chars)
-		// Access first byte of character directly via its _managed field
-		var b = __string_byte_at(value._managed, 0)
-		__string_set_byte(_str._managed, index, b)
-
-		return self
-	end 'set'
-
-	// Iterable conformance
-	function Iterable.next() character or nil
-		if _pos < __string_len(_str._managed) 'check'
-			let ch = _makeCharAt(_pos)
-			var advance = utf8ByteLengthAt(_str._managed, _pos)
-			_pos = _pos + advance
-			return ch
-		end 'check'
-		return nil
-	end 'next'
-
-	// Internal: create character from codepoint at byte position
-	function _makeCharAt(bytePos int) character
-		var len = __string_len(_str._managed)
-		var charLen = 0
-		if bytePos < len 'in_bounds'
-			charLen = utf8ByteLengthAt(_str._managed, bytePos)
-		end 'in_bounds'
-
-		var sub = __string_slice(_str._managed, bytePos, bytePos + charLen)
-		var managed = __substring_to_string(sub)
-		return character{_managed: managed}
-	end '_makeCharAt'
-
-	/// map over characters - transforms each character using the provided function
-	function Collection.map(transform (character) character) CharCollection
-		// Build a new string by transforming each character
-		var result = ""
-		var bytePos = 0
-		var len = __string_len(_str._managed)
-		while bytePos < len 'map_loop'
-			var ch = _makeCharAt(bytePos)
-			var transformed = transform(ch)
-			result = result + transformed.toString()
-			bytePos = bytePos + utf8ByteLengthAt(_str._managed, bytePos)
-		end 'map_loop'
-		return CharCollection{_str: result, _pos: 0}
-	end 'map'
-end 'CharCollection'
 
 // UTF16View - iterate over UTF-16 code units
 // Used by both string.utf16() and character.utf16()

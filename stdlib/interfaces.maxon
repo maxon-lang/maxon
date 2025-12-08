@@ -57,7 +57,7 @@ end 'ExpressibleByStringLiteral'
 // map() transforms elements using a closure
 export interface Collection uses Element extends Iterable
 	function count() int
-	function get(index int) Element
+	function get(index int) Element or nil
 	function set(index int, value Element) Self
 
 	// Default implementation of map - transforms elements in place
@@ -65,8 +65,10 @@ export interface Collection uses Element extends Iterable
 	function map(transform (Element) Element) Self
 		var i = 0
 		while i < self.count() 'loop'
-			var transformed = transform(self.get(i))
-			self = self.set(i, transformed)
+			if let elem = self.get(i) 'get'
+				var transformed = transform(elem)
+				self = self.set(i, transformed)
+			end 'get'
 			i = i + 1
 		end 'loop'
 		return self
