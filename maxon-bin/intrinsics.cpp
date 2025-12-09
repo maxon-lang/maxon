@@ -56,10 +56,11 @@ std::string IntrinsicRegistry::validateArgType(const IntrinsicParam &param, cons
 	}
 
 	if (param.isArrayType) {
-		// Check if actualType is an array type (internal or array<T> struct)
+		// Check if actualType is an array type (internal, array<T> struct, or _ManagedArray<T>)
 		bool isInternalArrayType = maxon::TypeConversion::isArrayType(actualType);
 		bool isArrayStructType = maxon::TypeConversion::isArrayStructType(actualType);
-		if (!isInternalArrayType && !isArrayStructType) {
+		bool isManagedArrayType = maxon::TypeConversion::isManagedArrayType(actualType);
+		if (!isInternalArrayType && !isArrayStructType && !isManagedArrayType) {
 			return "expected array type, got " + actualType;
 		}
 		// If allowedTypes is empty, accept any array element type

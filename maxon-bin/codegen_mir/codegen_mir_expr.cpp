@@ -1374,18 +1374,18 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			return generateMathIntrinsic(callExpr);
 		}
 
-		// Array methods (push, pop, map, count, get, set, etc.) are now handled through
-		// stdlib monomorphization. The semantic analyzer sets resolvedCallee to the
-		// appropriate array<T>.method name which routes through normal function lookup.
-
-		// Map method calls are now handled through monomorphization
-		// The specialized methods (e.g., map<string,int>.insert) are generated as regular functions
 		std::string effectiveCallee = callExpr->resolvedCallee.empty() ? callExpr->callee : callExpr->resolvedCallee;
 
 		// Resolve primitive type methods when called on typed arguments
 		// This handles cases like `key.hash()` where key is a type parameter bound to int
 		// Also handles `_keys[index].equals(key)` where _keys is []KeyType
-		if ((effectiveCallee == "hash" || effectiveCallee == "equals") && !callExpr->args.empty()) {
+		// Also extract bare method name from qualified callee like "Element.hash" -> "hash"
+		std::string bareMethodName = effectiveCallee;
+		size_t dotPos = bareMethodName.rfind('.');
+		if (dotPos != std::string::npos) {
+			bareMethodName = bareMethodName.substr(dotPos + 1);
+		}
+		if ((bareMethodName == "hash" || bareMethodName == "equals") && !callExpr->args.empty()) {
 			// Get the type of the first argument (the receiver in method call syntax)
 			std::string argType;
 
@@ -1445,7 +1445,20 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 			// Check if it's a primitive type that has hash/equals
 			if (argType == "int" || argType == "byte" || argType == "character") {
-				effectiveCallee = argType + "." + effectiveCallee;
+				effectiveCallee = argType + "." + bareMethodName;
+			}
+			// Check if it's a struct type that implements Hashable/Equatable
+			else if (!argType.empty()) {
+				// For struct types like string, always transform hash/equals calls
+				// Function names are argType.methodName (not argType.InterfaceName.methodName)
+				std::string structMethod = argType + "." + bareMethodName;
+				effectiveCallee = structMethod;
+
+				// Ensure the function is declared - it may not have been added to reachable set
+				// because the call graph analysis happens before generic instantiation
+				if (!module->getFunction(structMethod)) {
+					ensureStructMethodDeclared(argType, bareMethodName);
+				}
 			}
 		}
 
@@ -1876,8 +1889,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			variableTypes[param.name] = param.type;
 			argIdx++;
 
-			// Track struct parameters
-			if (structTypes.find(param.type) != structTypes.end()) {
+			// Track struct parameters (including array struct types and _ManagedArray types)
+			if (structTypes.find(param.type) != structTypes.end() ||
+				maxon::TypeConversion::isArrayStructType(param.type) ||
+				maxon::TypeConversion::isManagedArrayType(param.type)) {
 				structParameters.insert(param.name);
 			}
 

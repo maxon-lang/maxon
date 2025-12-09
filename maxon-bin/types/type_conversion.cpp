@@ -369,8 +369,8 @@ bool TypeConversion::isArrayType(const std::string &type) {
 }
 
 bool TypeConversion::isManagedArrayType(const std::string &type) {
-	// Internal format: _ManagedArray<T>
-	return type.rfind("_ManagedArray<", 0) == 0;
+	// Internal format: _ManagedArray<T> or bare _ManagedArray (before type substitution)
+	return type.rfind("_ManagedArray<", 0) == 0 || type == "_ManagedArray";
 }
 
 bool TypeConversion::isManagedArrayOpaqueType(const std::string &type) {

@@ -483,71 +483,10 @@ std::string compileProgram(const CompilationOptions &options) {
 
 	// mergedProgram now contains the AST with function IDs set from semantic analysis
 
-	// Build call graph and filter AST to only include reachable functions
-	// This is an early DCE pass that reduces work for MIR generation
-	{
-		CallGraphBuilder callGraph;
-		callGraph.buildFromProgram(mergedProgram.get());
-
-		// Entry points for reachability analysis
-		std::set<std::string> entryPoints = {"main", "_start", "__ffi_dispatch"};
-
-		// Also add all extern functions as entry points (they may be called from outside)
-		for (const auto &func : mergedProgram->functions) {
-			if (func->isExtern) {
-				entryPoints.insert(func->name);
-			}
-		}
-
-		std::set<std::string> reachable = callGraph.getReachableFunctions(entryPoints);
-
-		// Filter functions to only include reachable ones
-		size_t originalCount = mergedProgram->functions.size();
-		std::vector<std::unique_ptr<FunctionAST>> filteredFunctions;
-		for (auto &func : mergedProgram->functions) {
-			// Build the function name as it appears in the call graph
-			std::string funcName;
-			if (!func->receiverType.empty()) {
-				funcName = func->receiverType + "." + func->name;
-			} else if (!func->namespaceName.empty()) {
-				funcName = func->namespaceName + "." + func->name;
-			} else {
-				funcName = func->name;
-			}
-
-			// Also check unqualified name (for functions called without namespace prefix)
-			std::string unqualifiedName = func->name;
-
-			// Keep function if it's reachable (by qualified or unqualified name) or if it's an extern declaration
-			bool isReachable = reachable.count(funcName) > 0 || reachable.count(unqualifiedName) > 0;
-			if (isReachable || func->isExtern) {
-				filteredFunctions.push_back(std::move(func));
-			}
-		}
-		mergedProgram->functions = std::move(filteredFunctions);
-
-		// Filter methods in structs
-		for (auto &structDef : mergedProgram->structs) {
-			// Skip filtering for generic template structs - their methods are instantiated on demand
-			if (!structDef->associatedTypeParams.empty()) {
-				continue;
-			}
-
-			std::vector<std::unique_ptr<FunctionAST>> filteredMethods;
-			for (auto &method : structDef->methods) {
-				std::string methodName = structDef->name + "." + method->name;
-				if (reachable.count(methodName) > 0) {
-					filteredMethods.push_back(std::move(method));
-				}
-			}
-			structDef->methods = std::move(filteredMethods);
-		}
-
-		size_t filteredCount = mergedProgram->functions.size();
-		if (filteredCount < originalCount) {
-			logger.progress(LogPhase::Semantic, "AST pruning: ", originalCount, " -> ", filteredCount, " function(s)");
-		}
-	}
+	// NOTE: AST-level DCE is disabled because generic code (e.g., map<string,int>) may call
+	// interface methods (e.g., string.hash) that aren't visible to the call graph since
+	// type parameters aren't bound at AST level. The MIR-level DCE pass handles this properly
+	// after generic instantiation when all concrete method calls are known.
 
 	std::string moduleName = options.inputFiles.size() == 1 ? options.inputFiles[0] : "merged";
 	// For temp files (in temp/ directory), use just the filename without path to keep IR clean

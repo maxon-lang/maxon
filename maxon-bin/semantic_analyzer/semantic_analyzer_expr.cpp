@@ -143,6 +143,10 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Use the dictionary type name from the AST (e.g., "map", "HashMap", etc.)
 		std::string mapType = mapLiteral->dictType + "<" + keyType + "," + valueType + ">";
 
+		// Instantiate map methods for this key/value type using generic mechanism
+		std::map<std::string, std::string> typeBindings = {{"Key", keyType}, {"Value", valueType}};
+		instantiateGenericStructMethods(mapLiteral->dictType, mapType, typeBindings);
+
 		// Track the base dictionary struct (e.g., "map") as undefined for auto-import
 		// This triggers loading map.maxon so the generic template is available for monomorphization
 		if (structs.find(mapLiteral->dictType) == structs.end()) {
@@ -150,6 +154,96 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		}
 
 		// Return the dictionary type string: dictType<keyType,valueType>
+		return mapType;
+
+	} else if (auto mapWithEntries = dynamic_cast<MapLiteralWithEntriesExprAST *>(expr)) {
+		// Map literal with entries: ["key1": val1, "key2": val2]
+		if (mapWithEntries->entries.empty()) {
+			addError("Map literal cannot be empty\n"
+					 "  Use: map from K to V  (for empty map)",
+					 expr->line, expr->column);
+			return "error";
+		}
+
+		// Analyze all key and value expressions to determine types
+		std::string keyType;
+		std::string valueType;
+
+		for (const auto &entry : mapWithEntries->entries) {
+			std::string entryKeyType = analyzeExpression(entry.key.get());
+			std::string entryValueType = analyzeExpression(entry.value.get());
+
+			if (keyType.empty()) {
+				keyType = entryKeyType;
+				valueType = entryValueType;
+			} else {
+				// Ensure consistent types
+				if (entryKeyType != keyType) {
+					addError("Inconsistent key types in map literal\n"
+							 "  First key type: " + keyType + "\n"
+							 "  This key type: " + entryKeyType,
+							 entry.key->line, entry.key->column);
+					return "error";
+				}
+				if (entryValueType != valueType) {
+					addError("Inconsistent value types in map literal\n"
+							 "  First value type: " + valueType + "\n"
+							 "  This value type: " + entryValueType,
+							 entry.value->line, entry.value->column);
+					return "error";
+				}
+			}
+		}
+
+		// Store inferred types for codegen
+		mapWithEntries->inferredKeyType = keyType;
+		mapWithEntries->inferredValueType = valueType;
+
+		// Validate key type implements Hashable
+		bool isBuiltinHashable = (keyType == "int" || keyType == "string" ||
+								  keyType == "character" || keyType == "byte");
+		bool isBuiltinNonHashable = (keyType == "float" || keyType == "bool");
+
+		if (isBuiltinNonHashable) {
+			addError("Map key type '" + keyType + "' must implement Hashable interface" +
+						 std::string("\n  Hashable types: int, string, character, byte") +
+						 "\n  Note: Only types that can be hashed can be used as map keys",
+					 expr->line, expr->column);
+			return "error";
+		} else if (!isBuiltinHashable) {
+			// Check if it's a struct that conforms to Hashable
+			auto structInfo = lookupStruct(keyType);
+			if (structInfo == nullptr) {
+				undefinedStructs.insert(keyType);
+			} else {
+				bool conformsToHashable = false;
+				for (const auto &iface : structInfo->conformsTo) {
+					if (iface == "Hashable") {
+						conformsToHashable = true;
+						break;
+					}
+				}
+				if (!conformsToHashable) {
+					addError("Map key type '" + keyType + "' must implement Hashable interface" +
+								 std::string("\n  Hashable types: int, string, character, byte") +
+								 "\n  Or declare: struct " + keyType + " is Hashable",
+							 expr->line, expr->column);
+					return "error";
+				}
+			}
+		}
+
+		// Instantiate map methods for this key/value type using generic mechanism
+		std::string mapType = "map<" + keyType + "," + valueType + ">";
+		std::map<std::string, std::string> typeBindings = {{"Key", keyType}, {"Value", valueType}};
+		instantiateGenericStructMethods("map", mapType, typeBindings);
+
+		// Track map struct as undefined for auto-import
+		if (structs.find("map") == structs.end()) {
+			undefinedStructs.insert("map");
+		}
+
+		// Return the map type string: map<keyType,valueType>
 		return mapType;
 
 	} else if (auto setFromExpr = dynamic_cast<SetFromExprAST *>(expr)) {

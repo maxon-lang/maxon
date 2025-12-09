@@ -35,6 +35,10 @@ bool Mem2RegPass::runOnFunction(MIRFunction &func) {
 	if (verboseLevel_ >= 2) {
 		std::cout << "[Mem2Reg] Found " << promotableAllocas.size()
 				  << " promotable allocas in function " << func.name << std::endl;
+		for (auto *a : promotableAllocas) {
+			std::cout << "  Promotable alloca: %" << a->result->regId
+					  << " type=" << a->allocatedType->toString() << std::endl;
+		}
 	}
 
 	// Promote each alloca
@@ -158,8 +162,14 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 	// Stack of reaching definitions - push when we see a def, pop when leaving scope
 	std::vector<MIRValue *> defStack;
 
-	// Create an "undef" value (zero) for uses before any definition
-	MIRValue *undefValue = MIRValue::createConstantInt(alloca->allocatedType, 0);
+	// Create an "undef" value for uses before any definition
+	// Use ConstantNull for pointer types, ConstantInt(0) for integer types
+	MIRValue *undefValue;
+	if (alloca->allocatedType->isPointer()) {
+		undefValue = MIRValue::createConstantNull();
+	} else {
+		undefValue = MIRValue::createConstantInt(alloca->allocatedType, 0);
+	}
 
 	// Map to collect load replacements (defer replacements to avoid iterator invalidation)
 	std::unordered_map<MIRValue *, MIRValue *> loadReplacements;

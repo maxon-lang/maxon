@@ -73,9 +73,10 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 		argIdx++;
 
 		// Track if this is a struct parameter (passed by pointer)
-		// Also check for array<T> struct types which are passed by pointer
+		// Also check for array<T> struct types and _ManagedArray<T> types which are passed by pointer
 		if (structTypes.find(param.type) != structTypes.end() ||
-			maxon::TypeConversion::isArrayStructType(param.type)) {
+			maxon::TypeConversion::isArrayStructType(param.type) ||
+			maxon::TypeConversion::isManagedArrayType(param.type)) {
 			structParameters.insert(param.name);
 		}
 
@@ -199,11 +200,21 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 
 		// Handle opaque _ManagedArray type (without angle brackets)
 		// When the array struct is instantiated, _ManagedArray becomes _ManagedArray<Element>
+		// For ExpressibleByArrayLiteral, use "Element" type parameter
+		// For ExpressibleByMapLiteral, use "Key" or "Value" based on context
 		if (type == "_ManagedArray") {
+			// Try Element first (for ExpressibleByArrayLiteral)
 			auto elemIt = typeBindings.find("Element");
 			if (elemIt != typeBindings.end()) {
 				return maxon::TypeConversion::makeManagedArrayType(elemIt->second);
 			}
+			// For ExpressibleByMapLiteral with two _ManagedArray params,
+			// we can't determine the type without parameter context.
+			// If there's only one type parameter available, use it.
+			if (typeBindings.size() == 1) {
+				return maxon::TypeConversion::makeManagedArrayType(typeBindings.begin()->second);
+			}
+			// Return as-is; will be handled by parameter-specific substitution
 		}
 
 		// Handle array types: _ManagedArray<KeyType> -> _ManagedArray<string>
@@ -274,6 +285,27 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 	for (size_t paramIdx = 0; paramIdx < func->parameters.size(); paramIdx++) {
 		const auto &param = func->parameters[paramIdx];
 		std::string substitutedType = substituteType(param.type);
+
+		// Special handling for _ManagedArray parameters in ExpressibleByMapLiteral:
+		// Infer element type from parameter name ("keys" -> Key, "values" -> Value)
+		// Also handle "managedKeys" and "managedValues" naming convention
+		if (substitutedType == "_ManagedArray" && typeBindings.size() > 1) {
+			std::string paramNameLower = param.name;
+			if (paramNameLower.find("keys") != std::string::npos ||
+				paramNameLower.find("Keys") != std::string::npos) {
+				auto keyIt = typeBindings.find("Key");
+				if (keyIt != typeBindings.end()) {
+					substitutedType = maxon::TypeConversion::makeManagedArrayType(keyIt->second);
+				}
+			} else if (paramNameLower.find("values") != std::string::npos ||
+					   paramNameLower.find("Values") != std::string::npos) {
+				auto valueIt = typeBindings.find("Value");
+				if (valueIt != typeBindings.end()) {
+					substitutedType = maxon::TypeConversion::makeManagedArrayType(valueIt->second);
+				}
+			}
+		}
+
 		mir::MIRType *paramType = getParamTypeFromString(substitutedType);
 		mir::MIRValue *alloca = builder->createAlloca(paramType, param.name);
 
@@ -285,9 +317,10 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 		argIdx++;
 
 		// Track if this is a struct parameter (passed by pointer)
-		// Also check for array<T> struct types which are passed by pointer
+		// Also check for array<T> struct types and _ManagedArray<T> types which are passed by pointer
 		if (structTypes.find(substitutedType) != structTypes.end() ||
-			maxon::TypeConversion::isArrayStructType(substitutedType)) {
+			maxon::TypeConversion::isArrayStructType(substitutedType) ||
+			maxon::TypeConversion::isManagedArrayType(substitutedType)) {
 			structParameters.insert(param.name);
 		}
 
@@ -425,9 +458,10 @@ void MIRCodeGenerator::generateSynthesizedMethod(const FunctionInfo &funcInfo) {
 		argIdx++;
 
 		// Track if this is a struct parameter (passed by pointer)
-		// Also check for array<T> struct types which are passed by pointer
+		// Also check for array<T> struct types and _ManagedArray<T> types which are passed by pointer
 		if (structTypes.find(param.type) != structTypes.end() ||
-			maxon::TypeConversion::isArrayStructType(param.type)) {
+			maxon::TypeConversion::isArrayStructType(param.type) ||
+			maxon::TypeConversion::isManagedArrayType(param.type)) {
 			structParameters.insert(param.name);
 		}
 

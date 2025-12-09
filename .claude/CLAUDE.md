@@ -4,7 +4,7 @@
 
 Maxon is a statically-typed programming language with a custom native x86-64 backend (no LLVM dependency for code generation):
 
-- **Compiler** (`maxon-bin/`) - C++ compiler generating native x86-64 via MIR
+- **Compiler** (`maxon-bin/`) - C++ compiler generating native x86-64 via IR
 - **Language Server** (`lsp-server/`) - C++ LSP for IDE integration
 - **VS Code Extension** (`vscode-extension/`) - Syntax highlighting, debugging
 - **Runtime Library** (`maxon-runtime/`) - Platform-specific runtime (no C runtime)
@@ -20,7 +20,7 @@ Maxon is a statically-typed programming language with a custom native x86-64 bac
 | Run all tests | `make test` |
 | Run backend tests | `make backend-test` |
 | Compile and run | `./bin/maxon file.maxon` |
-| Compile with MIR output | `./bin/maxon compile file.maxon --emit-ir` |
+| Compile with IR output | `./bin/maxon compile file.maxon --emit-ir` |
 | Compile and run lsp tests | `make lsp-test` |
 
 ## Maxon Language Overview
@@ -48,11 +48,11 @@ See `docs/LANGUAGE_REFERENCE.md` for complete syntax and semantics.
 maxon/
 ├── maxon-bin/           # Compiler source (C++)
 │   ├── backend/         # x86-64 native code generator
-│   ├── codegen_mir/     # MIR code generation from AST
-│   ├── mir/             # MIR infrastructure & optimizer passes
+│   ├── codegen_mir/     # IR code generation from AST
+│   ├── mir/             # IR infrastructure & optimizer passes
 │   ├── parser/          # Parser implementation
 │   └── semantic_analyzer/
-├── maxon-runtime/       # Runtime library (handwritten MIR)
+├── maxon-runtime/       # Runtime library (handwritten IR)
 ├── stdlib/              # Standard library (Maxon source)
 ├── lsp-server/          # Language server (C++)
 ├── vscode-extension/    # VS Code extension (TypeScript)
@@ -67,9 +67,9 @@ maxon/
 - `lexer.cpp/h` - Tokenization with SIMD optimizations
 - `parser.cpp` + `parser/` - Recursive descent parser
 - `semantic_analyzer.cpp` - Type checking, name resolution
-- `codegen_mir.cpp` + `codegen_mir/` - AST to MIR translation
+- `codegen_mir.cpp` + `codegen_mir/` - AST to IR translation
 - `mir/optimizer.cpp` + `mir/opt_*.cpp` - Optimization passes
-- `backend/x86_codegen.cpp` - MIR to x86-64 machine code
+- `backend/x86_codegen.cpp` - IR to x86-64 machine code
 - `backend/pe_writer.cpp` - Windows PE executable writer
 - `backend/elf_writer.cpp` - Linux ELF executable writer
 

@@ -33,6 +33,14 @@ void CallGraphBuilder::buildFromProgram(ProgramAST *program) {
 
 			// Register just method name as alias
 			nameAliases[method->name].insert(methodName);
+
+			// For interface methods like "Hashable.hash", also register the bare method name "hash"
+			// This ensures that calls to element.hash() in generic code resolve to string.hash, etc.
+			size_t dotPos = method->name.find('.');
+			if (dotPos != std::string::npos) {
+				std::string bareMethodName = method->name.substr(dotPos + 1);
+				nameAliases[bareMethodName].insert(methodName);
+			}
 		}
 	}
 }
@@ -283,6 +291,25 @@ void CallGraphBuilder::extractCallsFromExpr(ExprAST *expr, std::set<std::string>
 			if (matchCase.resultExpr) {
 				extractCallsFromExpr(matchCase.resultExpr.get(), calls);
 			}
+		}
+	} else if (auto *setFrom = dynamic_cast<SetFromExprAST *>(expr)) {
+		// Set from array literal calls set.init and set.insert
+		// Also calls element.hash() for hashing elements
+		calls.insert("init");
+		calls.insert("insert");
+		calls.insert("hash"); // Hashable.hash on elements
+		if (setFrom->arrayExpr) {
+			extractCallsFromExpr(setFrom->arrayExpr.get(), calls);
+		}
+	} else if (auto *mapLiteral = dynamic_cast<MapLiteralWithEntriesExprAST *>(expr)) {
+		// Map literal calls map.init and map.insert
+		// Also calls key.hash() for hashing keys
+		calls.insert("init");
+		calls.insert("insert");
+		calls.insert("hash"); // Hashable.hash on keys
+		for (const auto &entry : mapLiteral->entries) {
+			extractCallsFromExpr(entry.key.get(), calls);
+			extractCallsFromExpr(entry.value.get(), calls);
 		}
 	}
 	// NumberExprAST, FloatExprAST, BooleanExprAST,

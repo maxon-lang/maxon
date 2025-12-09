@@ -290,6 +290,24 @@ class MapLiteralExprAST : public ExprAST {
 		: ExprAST(l, c), dictType(dType), keyType(kType), valueType(vType) {}
 };
 
+// Map literal with key-value pairs (e.g., ["apple": 1, "banana": 2])
+// Creates a map initialized with the specified key-value entries
+class MapLiteralWithEntriesExprAST : public ExprAST {
+  public:
+	// Key-value entry pair
+	struct Entry {
+		std::unique_ptr<ExprAST> key;
+		std::unique_ptr<ExprAST> value;
+	};
+
+	std::vector<Entry> entries;			   // Key-value pairs
+	mutable std::string inferredKeyType;   // Key type inferred from entries
+	mutable std::string inferredValueType; // Value type inferred from entries
+
+	MapLiteralWithEntriesExprAST(std::vector<Entry> ents, int l = 0, int c = 0)
+		: ExprAST(l, c), entries(std::move(ents)) {}
+};
+
 // Set from array expression (e.g., "set from [1, 2, 3]")
 // Creates a set initialized with elements from an array literal
 class SetFromExprAST : public ExprAST {

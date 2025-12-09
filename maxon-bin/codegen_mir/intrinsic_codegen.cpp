@@ -48,6 +48,7 @@ IntrinsicCodegenRegistry::IntrinsicCodegenRegistry() {
 		{"intrinsic_managed_array_len", &MIRCodeGenerator::intrinsic_managed_array_len},
 		{"intrinsic_managed_array_capacity", &MIRCodeGenerator::intrinsic_managed_array_capacity},
 		{"intrinsic_managed_array_set_length", &MIRCodeGenerator::intrinsic_managed_array_set_length},
+		{"intrinsic_managed_array_set_capacity", &MIRCodeGenerator::intrinsic_managed_array_set_capacity},
 		{"intrinsic_managed_array_grow", &MIRCodeGenerator::intrinsic_managed_array_grow},
 		{"intrinsic_managed_array_set_at", &MIRCodeGenerator::intrinsic_managed_array_set_at},
 		{"intrinsic_managed_array_get_at", &MIRCodeGenerator::intrinsic_managed_array_get_at},

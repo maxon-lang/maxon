@@ -1101,11 +1101,24 @@ void X86CodeGen::genGEP(mir::MIRInstruction *inst) {
 		mir::MIRValue *fieldIdx = inst->operands[2];
 
 		if (fieldIdx->kind == mir::MIRValueKind::ConstantInt) {
-			// Calculate byte offset to the field
+			// Calculate byte offset to the field, accounting for alignment padding
 			int fieldIndex = static_cast<int>(fieldIdx->intValue);
+			uint64_t currentOffset = 0;
 			for (int i = 0; i < fieldIndex && i < (int)inst->elementType->fieldTypes.size(); ++i) {
-				offset += inst->elementType->fieldTypes[i]->sizeInBytes;
+				mir::MIRType *field = inst->elementType->fieldTypes[i];
+				// Add padding for this field's alignment if needed
+				uint64_t fieldAlign = field->alignmentInBytes;
+				uint64_t padding = (fieldAlign - (currentOffset % fieldAlign)) % fieldAlign;
+				currentOffset += padding + field->sizeInBytes;
 			}
+			// Also apply alignment for the target field itself
+			if (fieldIndex < (int)inst->elementType->fieldTypes.size()) {
+				mir::MIRType *targetField = inst->elementType->fieldTypes[fieldIndex];
+				uint64_t fieldAlign = targetField->alignmentInBytes;
+				uint64_t padding = (fieldAlign - (currentOffset % fieldAlign)) % fieldAlign;
+				currentOffset += padding;
+			}
+			offset = static_cast<int64_t>(currentOffset);
 			encoder.lea64(X86Reg::RAX, X86Mem(base, static_cast<int32_t>(offset)));
 		} else {
 			// Dynamic field index - not commonly used, fall back to 4-byte fields

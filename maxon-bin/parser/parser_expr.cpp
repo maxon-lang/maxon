@@ -247,6 +247,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 	}
 
 	// Array literal: [val1, val2, ...] for value-initialized arrays
+	// Map literal: [key1: val1, key2: val2, ...] for key-value maps
 	// Note: [size]type and [expr]type syntax is no longer supported
 	// Use 'array of N T' syntax instead (e.g., array of 5 int)
 	if (check(TokenType::LBRACKET)) {
@@ -254,27 +255,65 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		int column = currentColumn();
 		advance(); // consume '['
 
-		// [val1, val2, ...] form - value-initialized array
-		std::vector<std::unique_ptr<ExprAST>> values;
+		// Check for empty literal
+		if (check(TokenType::RBRACKET)) {
+			advance(); // consume ']'
+			reportError("Empty array literal [] is not allowed\n"
+						"  Use: array of T       (for empty array)\n"
+						"  Or:  [value1, value2] (for initialized array)\n"
+						"  Or:  map from K to V  (for empty map)",
+						line, column);
+			// Return a placeholder to continue parsing
+			return std::make_unique<ArrayLiteralExprAST>(std::vector<std::unique_ptr<ExprAST>>{}, line, column);
+		}
 
-		if (!check(TokenType::RBRACKET)) {
-			values.push_back(parseLogicalOr());
+		// Parse the first expression
+		auto firstExpr = parseLogicalOr();
 
+		// Check if this is a map literal (has ':' after first expression)
+		if (check(TokenType::COLON)) {
+			// This is a map literal: [key: value, ...]
+			advance(); // consume ':'
+			auto firstValue = parseLogicalOr();
+
+			std::vector<MapLiteralWithEntriesExprAST::Entry> entries;
+			MapLiteralWithEntriesExprAST::Entry firstEntry;
+			firstEntry.key = std::move(firstExpr);
+			firstEntry.value = std::move(firstValue);
+			entries.push_back(std::move(firstEntry));
+
+			// Parse remaining key-value pairs
 			while (match(TokenType::COMMA)) {
-				values.push_back(parseLogicalOr());
+				auto key = parseLogicalOr();
+				expectAdvance(TokenType::COLON, "Expected ':' after map key");
+				auto value = parseLogicalOr();
+
+				MapLiteralWithEntriesExprAST::Entry entry;
+				entry.key = std::move(key);
+				entry.value = std::move(value);
+				entries.push_back(std::move(entry));
 			}
+
+			int endLine = currentLine();
+			int endCol = currentColumn();
+			expectAdvance(TokenType::RBRACKET, "Expected ']' after map entries");
+
+			auto expr = std::make_unique<MapLiteralWithEntriesExprAST>(std::move(entries), line, column);
+			expr->setEndPosition(endLine, endCol);
+			return expr;
+		}
+
+		// This is an array literal: [val1, val2, ...]
+		std::vector<std::unique_ptr<ExprAST>> values;
+		values.push_back(std::move(firstExpr));
+
+		while (match(TokenType::COMMA)) {
+			values.push_back(parseLogicalOr());
 		}
 
 		int endLine = currentLine();
 		int endCol = currentColumn();
 		expectAdvance(TokenType::RBRACKET, "Expected ']' after array values");
-
-		if (values.empty()) {
-			reportError("Empty array literal [] is not allowed\n"
-						"  Use: array of T       (for empty array)\n"
-						"  Or:  [value1, value2] (for initialized array)",
-						line, column);
-		}
 
 		auto expr = std::make_unique<ArrayLiteralExprAST>(std::move(values), line, column);
 		expr->setEndPosition(endLine, endCol);

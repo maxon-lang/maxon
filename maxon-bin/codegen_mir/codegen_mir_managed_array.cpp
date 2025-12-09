@@ -42,16 +42,34 @@ MIRCodeGenerator::ArrayFieldInfo MIRCodeGenerator::getManagedArrayInfo(ExprAST *
 	mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
 	if (arrayAlloca) {
 		// Regular variable found - it's a pointer to __ManagedArrayData struct
-		info.dataPtr = arrayAlloca;
+		// For struct parameters (passed by pointer), we need to load the pointer first
+		mir::MIRValue *dataPtr = arrayAlloca;
+		if (isStructParameter(arrayVarName)) {
+			dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, arrayVarName + ".ptr");
+		}
 		info.lengthAlloca = nullptr;   // New layout uses struct fields, not separate allocas
 		info.capacityAlloca = nullptr; // New layout uses struct fields, not separate allocas
 		info.isStackArray = (stackAllocatedArrays.count(arrayVarName) > 0);
 
 		std::string arrType = variableTypes[arrayVarName];
-		if (maxon::TypeConversion::isArrayType(arrType)) {
+		if (maxon::TypeConversion::isArrayStructType(arrType)) {
+			// array<T> struct: { __ManagedArrayData<T> _data, i32 _iter_pos }
+			// Need to GEP to field 0 to get the __ManagedArrayData part
+			info.elementType = maxon::TypeConversion::getArrayStructElementType(arrType);
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType(info.elementType);
+			mir::MIRValue *managedDataPtr = builder->createStructGEP(arrayStructType, dataPtr, 0, arrayVarName + ".managed");
+			info.dataPtr = managedDataPtr;
+		} else if (maxon::TypeConversion::isManagedArrayType(arrType)) {
+			// _ManagedArray<T>: directly the __ManagedArrayData struct
 			info.elementType = maxon::TypeConversion::getArrayElementType(arrType);
+			info.dataPtr = dataPtr;
+		} else if (maxon::TypeConversion::isArrayType(arrType)) {
+			// Legacy array type
+			info.elementType = maxon::TypeConversion::getArrayElementType(arrType);
+			info.dataPtr = dataPtr;
 		} else {
 			info.elementType = "int"; // Default fallback
+			info.dataPtr = dataPtr;
 		}
 		return info;
 	}
@@ -162,6 +180,25 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_length(CallExprAST 
 	// GEP to _len field (index 1) and store
 	mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, structPtr, 1, "arr._len.ptr");
 	builder->createStore(newLen, lenPtr);
+	return builder->getInt32(0);
+}
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_capacity(CallExprAST *callExpr) {
+	// __managed_array_set_capacity(arr, newCap) - set capacity in struct field 2
+	// Used to "transfer ownership" - setting capacity to 0 prevents cleanup
+	ExprAST *arrayArg = callExpr->args[0].get();
+	mir::MIRValue *newCap = generateExpr(callExpr->args[1].get());
+	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
+
+	// Get the __ManagedArrayData struct type
+	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);
+
+	// Get pointer to the struct
+	mir::MIRValue *structPtr = info.dataPtr;
+
+	// GEP to _capacity field (index 2) and store
+	mir::MIRValue *capPtr = builder->createStructGEP(managedArrayType, structPtr, 2, "arr._cap.ptr");
+	builder->createStore(newCap, capPtr);
 	return builder->getInt32(0);
 }
 

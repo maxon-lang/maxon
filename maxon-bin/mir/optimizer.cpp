@@ -172,16 +172,16 @@ MIROptimizer MIROptimizer::createStandardPipeline(int verboseLevel) {
 
 	// Order matters: run mem2reg first, then cleanup passes
 	optimizer.addPass(std::make_unique<Mem2RegPass>());
-	optimizer.addPass(std::make_unique<ConstantFoldingPass>());
-	optimizer.addPass(std::make_unique<ConstantPropagationPass>());
-	optimizer.addPass(std::make_unique<AlgebraicSimplificationPass>());
-	optimizer.addPass(std::make_unique<StrengthReductionPass>());
-	optimizer.addPass(std::make_unique<CopyPropagationPass>());
-	optimizer.addPass(std::make_unique<RedundantLoadStoreEliminationPass>());
-	optimizer.addPass(std::make_unique<IntegerDivisionOptimizationPass>());
-	optimizer.addPass(std::make_unique<DeadCodeEliminationPass>());
-	optimizer.addPass(std::make_unique<UnreachableBlockEliminationPass>());
-	optimizer.addPass(std::make_unique<SimpleFunctionInliningPass>());
+	// optimizer.addPass(std::make_unique<ConstantFoldingPass>());
+	// optimizer.addPass(std::make_unique<ConstantPropagationPass>());
+	// optimizer.addPass(std::make_unique<AlgebraicSimplificationPass>());
+	// optimizer.addPass(std::make_unique<StrengthReductionPass>());
+	// optimizer.addPass(std::make_unique<CopyPropagationPass>());
+	// optimizer.addPass(std::make_unique<RedundantLoadStoreEliminationPass>());
+	// optimizer.addPass(std::make_unique<IntegerDivisionOptimizationPass>());
+	// optimizer.addPass(std::make_unique<DeadCodeEliminationPass>());
+	// optimizer.addPass(std::make_unique<UnreachableBlockEliminationPass>());
+	// optimizer.addPass(std::make_unique<SimpleFunctionInliningPass>());
 
 	return optimizer;
 }

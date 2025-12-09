@@ -75,6 +75,9 @@ class MIRCodeGenerator {
 	// Generic struct instantiation tracking
 	std::set<std::string> instantiatedGenericStructs; // Track which generic structs have been instantiated
 
+	// Current program being compiled (for method lookup during codegen)
+	ProgramAST *currentProgram = nullptr;
+
 	// Enum type definitions
 	struct EnumCodegenInfo {
 		std::string name;
@@ -209,29 +212,14 @@ class MIRCodeGenerator {
 										   mir::MIRType *returnType,
 										   const std::vector<mir::MIRType *> &paramTypes);
 
+	// Ensure struct method is declared (for hash/equals calls from generic code)
+	void ensureStructMethodDeclared(const std::string &structType, const std::string &methodName);
+
 	// Heap management initialization
 	void initHeapManagement();
 
 	// Math intrinsic generation
 	mir::MIRValue *generateMathIntrinsic(CallExprAST *callExpr);
-
-	// Map method generation (insert, get, contains, remove, count, capacity)
-	bool isMapMethodCall(const std::string &callee);
-	mir::MIRValue *generateMapMethod(CallExprAST *callExpr);
-	mir::MIRValue *generateMapContains(mir::MIRValue *mapAlloca, mir::MIRValue *key,
-									   mir::MIRType *keyType, mir::MIRType *valueType,
-									   const std::string &keyTypeStr, mir::MIRType *mapStructType);
-	mir::MIRValue *generateMapGet(mir::MIRValue *mapAlloca, mir::MIRValue *key,
-								  mir::MIRType *keyType, mir::MIRType *valueType,
-								  const std::string &keyTypeStr, mir::MIRType *mapStructType);
-	mir::MIRValue *generateMapInsert(mir::MIRValue *mapAlloca, mir::MIRValue *key,
-									 mir::MIRValue *value, mir::MIRType *keyType,
-									 mir::MIRType *valueType, const std::string &keyTypeStr,
-									 const std::string &valueTypeStr, mir::MIRType *mapStructType);
-	mir::MIRValue *generateMapRemove(mir::MIRValue *mapAlloca, mir::MIRValue *key,
-									 mir::MIRType *keyType, mir::MIRType *valueType,
-									 const std::string &keyTypeStr, mir::MIRType *mapStructType);
-	mir::MIRValue *generateHashForKey(mir::MIRValue *key, const std::string &keyTypeStr);
 
 	// String intrinsic generation (__string_* functions)
 	mir::MIRValue *generateStringIntrinsic(CallExprAST *callExpr);
@@ -275,6 +263,7 @@ class MIRCodeGenerator {
 	mir::MIRValue *intrinsic_managed_array_len(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_managed_array_capacity(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_managed_array_set_length(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_managed_array_set_capacity(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_managed_array_grow(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_managed_array_set_at(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_managed_array_get_at(CallExprAST *callExpr);

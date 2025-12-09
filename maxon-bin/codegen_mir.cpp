@@ -339,6 +339,14 @@ mir::MIRType *MIRCodeGenerator::getParamTypeFromString(const std::string &typeSt
 		return mir::MIRType::getPtr();
 	}
 
+	// _ManagedArray<T> parameters are passed as pointers (no hidden length)
+	// The struct is __ManagedArrayData<T> = { ptr, i32, i32 }
+	if (maxon::TypeConversion::isManagedArrayType(resolvedType)) {
+		std::string elemType = maxon::TypeConversion::getArrayElementType(resolvedType);
+		getOrCreateManagedArrayDataType(elemType);
+		return mir::MIRType::getPtr();
+	}
+
 	// Handle array<T> struct types - ensure they're instantiated
 	if (maxon::TypeConversion::isArrayStructType(resolvedType)) {
 		std::string elemType = maxon::TypeConversion::getArrayStructElementType(resolvedType);
@@ -395,6 +403,10 @@ std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
 bool MIRCodeGenerator::isArrayParam(const std::string &typeStr) {
 	// Check for old-style array types that use hidden length parameter
 	// Note: array<T> struct types do NOT use hidden length - they store length in the struct
+	// Note: _ManagedArray<T> is an opaque struct type (like _ManagedString), not legacy arrays
+	if (maxon::TypeConversion::isManagedArrayType(typeStr)) {
+		return false;
+	}
 	return maxon::TypeConversion::isArrayType(typeStr);
 }
 
@@ -1025,6 +1037,153 @@ std::string MIRCodeGenerator::instantiateGenericStruct(const std::string &templa
 	return specializedName;
 }
 
+void MIRCodeGenerator::ensureStructMethodDeclared(const std::string &structType, const std::string &methodName) {
+	// Build the full method name
+	std::string fullMethodName = structType + "." + methodName;
+
+	// If already declared, nothing to do
+	if (module->getFunction(fullMethodName)) {
+		return;
+	}
+
+	logDetail("Ensuring method is declared: " + fullMethodName);
+
+	// Search through ALL struct definitions to find the method
+	// The method might be in a different struct definition than structDefinitions[structType]
+	// because partial structs are created during incremental imports
+	for (const auto &pair : structDefinitions) {
+		StructDefAST *structDef = pair.second;
+
+		// Only search in structs with matching name
+		if (structDef->name != structType) {
+			continue;
+		}
+
+		// Find the method in this struct
+		// Method names in the AST may include interface prefix (e.g., "Hashable.hash")
+		// Strip prefix if present when comparing
+		for (const auto &method : structDef->methods) {
+			std::string bareMethodName = method->name;
+			size_t dotPos = bareMethodName.find('.');
+			if (dotPos != std::string::npos) {
+				bareMethodName = bareMethodName.substr(dotPos + 1);
+			}
+			if (bareMethodName == methodName) {
+				// Declare the function
+				mir::MIRType *returnType = getTypeFromStringNoMark(method->returnType);
+				mir::MIRFunction *mirFunc = module->createFunction(fullMethodName, returnType);
+				mirFunc->isExternal = false;
+
+				// Add parameters - first is always self (pointer to struct)
+				mirFunc->addParameter(mir::MIRType::getPtr(), "self");
+				for (const auto &param : method->parameters) {
+					if (param.name == "self")
+						continue;
+					mir::MIRType *paramType = getParamTypeFromString(param.type);
+					mirFunc->addParameter(paramType, param.name);
+					if (isArrayParam(param.type)) {
+						mirFunc->addParameter(mir::MIRType::getInt32(), param.name + ".__length");
+					}
+				}
+
+				logDetail("  Declared method: " + fullMethodName);
+
+				// Also generate the method body
+				generateFunction(method.get(), structDef->namespaceName);
+				logDetail("  Generated method body: " + fullMethodName);
+				return;
+			}
+		}
+	}
+
+	// Method not found in structDefinitions - try searching in program->structs directly
+	// (the struct might not have been stored in structDefinitions yet)
+	if (currentProgram) {
+		logDetail("  Searching in currentProgram->structs (" + std::to_string(currentProgram->structs.size()) + " structs)");
+		for (const auto &structDef : currentProgram->structs) {
+			if (structDef->name != structType) {
+				continue;
+			}
+			logDetail("  Found struct " + structDef->name + " with " + std::to_string(structDef->methods.size()) + " methods");
+
+			for (const auto &method : structDef->methods) {
+				std::string bareMethodName = method->name;
+				size_t dotPos = bareMethodName.find('.');
+				if (dotPos != std::string::npos) {
+					bareMethodName = bareMethodName.substr(dotPos + 1);
+				}
+				if (bareMethodName == methodName) {
+					// Declare the function
+					mir::MIRType *returnType = getTypeFromStringNoMark(method->returnType);
+					mir::MIRFunction *mirFunc = module->createFunction(fullMethodName, returnType);
+					mirFunc->isExternal = false;
+
+					// Add parameters - first is always self (pointer to struct)
+					mirFunc->addParameter(mir::MIRType::getPtr(), "self");
+					for (const auto &param : method->parameters) {
+						if (param.name == "self")
+							continue;
+						mir::MIRType *paramType = getParamTypeFromString(param.type);
+						mirFunc->addParameter(paramType, param.name);
+						if (isArrayParam(param.type)) {
+							mirFunc->addParameter(mir::MIRType::getInt32(), param.name + ".__length");
+						}
+					}
+
+					logDetail("  Declared method from program: " + fullMethodName);
+
+					// Also generate the method body
+					generateFunction(method.get(), structDef->namespaceName);
+					logDetail("  Generated method body: " + fullMethodName);
+					return;
+				}
+			}
+		}
+	}
+
+	// Try searching in program->functions for the method
+	// (some methods are registered as top-level functions with receiver type set)
+	if (currentProgram) {
+		logDetail("  Searching in currentProgram->functions (" + std::to_string(currentProgram->functions.size()) + " functions)");
+		for (const auto &func : currentProgram->functions) {
+			if (func->receiverType == structType) {
+				std::string bareMethodName = func->name;
+				size_t dotPos = bareMethodName.find('.');
+				if (dotPos != std::string::npos) {
+					bareMethodName = bareMethodName.substr(dotPos + 1);
+				}
+				if (bareMethodName == methodName) {
+					// Declare the function
+					mir::MIRType *returnType = getTypeFromStringNoMark(func->returnType);
+					mir::MIRFunction *mirFunc = module->createFunction(fullMethodName, returnType);
+					mirFunc->isExternal = false;
+
+					// Add parameters - first is always self (pointer to struct)
+					mirFunc->addParameter(mir::MIRType::getPtr(), "self");
+					for (const auto &param : func->parameters) {
+						if (param.name == "self")
+							continue;
+						mir::MIRType *paramType = getParamTypeFromString(param.type);
+						mirFunc->addParameter(paramType, param.name);
+						if (isArrayParam(param.type)) {
+							mirFunc->addParameter(mir::MIRType::getInt32(), param.name + ".__length");
+						}
+					}
+
+					logDetail("  Declared method from functions: " + fullMethodName);
+
+					// Also generate the method body
+					generateFunction(func.get(), func->namespaceName);
+					logDetail("  Generated method body: " + fullMethodName);
+					return;
+				}
+			}
+		}
+	}
+
+	logDetail("  Method not found: " + methodName + " in struct " + structType);
+}
+
 //==============================================================================
 // Main Generation
 //==============================================================================
@@ -1033,6 +1192,9 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 								const std::map<std::string, size_t> *functionIndices,
 								const std::map<std::string, std::string> *functionReturnTypesIn) {
 	logProgress("Starting MIR generation");
+
+	// Store program pointer for method lookup during codegen
+	currentProgram = program;
 
 	// Clear function ID map for new generation
 	functionIdToMIR.clear();
@@ -1047,6 +1209,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	for (const auto &structDef : program->structs) {
 		// Store AST pointer for generic instantiation
 		structDefinitions[structDef->name] = structDef.get();
+		logTrace("  Storing structDefinitions['" + structDef->name + "'] with " + std::to_string(structDef->methods.size()) + " methods");
 
 		// Skip generic template structs - they'll be instantiated on demand
 		if (!structDef->associatedTypeParams.empty()) {

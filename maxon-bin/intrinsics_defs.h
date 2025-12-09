@@ -77,6 +77,7 @@ inline std::vector<IntrinsicDef> getIntrinsicDefinitions() {
 		{"__managed_array_len", "int", {IntrinsicParamDef::arrayOf({})}, "intrinsic_managed_array_len"},
 		{"__managed_array_capacity", "int", {IntrinsicParamDef::arrayOf({})}, "intrinsic_managed_array_capacity"},
 		{"__managed_array_set_length", "void", {IntrinsicParamDef::arrayOf({}), {"int"}}, "intrinsic_managed_array_set_length"},
+		{"__managed_array_set_capacity", "void", {IntrinsicParamDef::arrayOf({}), {"int"}}, "intrinsic_managed_array_set_capacity"},
 		{"__managed_array_grow", "void", {IntrinsicParamDef::arrayOf({}), {"int"}}, "intrinsic_managed_array_grow"},
 		{"__managed_array_set_at", "void", {IntrinsicParamDef::arrayOf({}), {"int"}, IntrinsicParamDef::any()}, "intrinsic_managed_array_set_at"},
 		{"__managed_array_get_at", "int", {IntrinsicParamDef::arrayOf({}), {"int"}}, "intrinsic_managed_array_get_at"},
