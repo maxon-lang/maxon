@@ -6,6 +6,7 @@ import {
 	ServerOptions
 } from 'vscode-languageclient/node';
 import { log, initLogger, getOutputChannel } from './logger';
+import { CompilerExplorerPanel } from './compilerExplorerPanel';
 
 let client: LanguageClient;
 let context: vscode.ExtensionContext;
@@ -164,9 +165,50 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
 	context.subscriptions.push(restartCommand);
 
+	// Register compiler explorer command
+	const compilerExplorerCommand = vscode.commands.registerCommand(
+		'maxon.openCompilerExplorer',
+		() => {
+			log('Opening Compiler Explorer');
+			if (!client) {
+				vscode.window.showErrorMessage('Language server not started. Please wait for activation.');
+				return;
+			}
+			CompilerExplorerPanel.createOrShow(ctx.extensionUri, client);
+		}
+	);
+
+	context.subscriptions.push(compilerExplorerCommand);
+
+	// Register commands for testing - these allow tests to call LSP methods via VS Code commands
+	const generateIRCommand = vscode.commands.registerCommand(
+		'maxon.generateIR',
+		async (params: { source: string; filename: string; optimize: boolean; }) => {
+			if (!client) {
+				throw new Error('Language server not started');
+			}
+			return client.sendRequest('maxon/generateIR', params);
+		}
+	);
+	context.subscriptions.push(generateIRCommand);
+
+	const generateAsmCommand = vscode.commands.registerCommand(
+		'maxon.generateAsm',
+		async (params: { source: string; filename: string; optimize: boolean; }) => {
+			if (!client) {
+				throw new Error('Language server not started');
+			}
+			return client.sendRequest('maxon/generateAsm', params);
+		}
+	);
+	context.subscriptions.push(generateAsmCommand);
+
 	// Add client to subscriptions for cleanup
 	context.subscriptions.push(client);
 	log('Maxon extension activated successfully');
+
+	// Export the client for testing
+	return { client, getClient };
 }
 
 export function deactivate(): Thenable<void> | undefined {

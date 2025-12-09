@@ -133,6 +133,16 @@ class LSPServer {
 	maxon::lsp::json handleSemanticTokensFull(const maxon::lsp::json &params);
 
 	// =========================================================================
+	// Custom Maxon requests
+	// =========================================================================
+
+	// Handle "maxon/generateIR" request - generate MIR for compiler explorer
+	maxon::lsp::json handleGenerateIR(const maxon::lsp::json &params);
+
+	// Handle "maxon/generateAsm" request - generate x86-64 assembly for compiler explorer
+	maxon::lsp::json handleGenerateAsm(const maxon::lsp::json &params);
+
+	// =========================================================================
 	// Analysis and diagnostics
 	// =========================================================================
 

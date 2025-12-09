@@ -212,7 +212,7 @@ class MIRCodeGenerator {
 
 	// Map intrinsic for arrays: map(arr, transform)
 	mir::MIRValue *generateMapIntrinsic(CallExprAST *callExpr);
-	mir::MIRValue *lastMapResultLength = nullptr;	 // Length of last map() result
+	mir::MIRValue *lastMapResultLength = nullptr;	// Length of last map() result
 	mir::MIRValue *lastMapResultCapacity = nullptr; // Capacity of last map() result
 
 	// Array Collection methods: count, get, set, map
@@ -378,6 +378,7 @@ class MIRCodeGenerator {
 
 	// Optimization
 	void optimize(CompilerStats *stats = nullptr);
+	void optimizeForExplorer(); // Skips DCE to preserve all user functions
 	void runDeadCodeElimination();
 
 	// Get instruction count (for stats)
@@ -386,6 +387,7 @@ class MIRCodeGenerator {
 	// Output methods
 	void printIR();
 	void writeIRToFile(const std::string &filename);
+	void writeAsmToFile(const std::string &filename);
 	void writeObjectFile(const std::string &filename);
 	void writeExecutable(const std::string &exeFile);
 

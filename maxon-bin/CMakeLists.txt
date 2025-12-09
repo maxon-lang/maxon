@@ -43,6 +43,11 @@ endif()
 # Include vendor directories
 include_directories(${CMAKE_SOURCE_DIR}/vendor)
 
+# Add Zydis disassembler library
+option(ZYDIS_BUILD_TOOLS "" OFF)
+option(ZYDIS_BUILD_EXAMPLES "" OFF)
+add_subdirectory(${CMAKE_SOURCE_DIR}/vendor/zydis zydis EXCLUDE_FROM_ALL)
+
 # Source files - MIR backend only (no LLVM)
 set(SOURCES
     main.cpp
@@ -105,6 +110,7 @@ set(SOURCES
     backend/x86_codegen.cpp
     backend/x86_reg_alloc.cpp
     backend/x86_encoding.cpp
+    backend/x86_disassembler.cpp
     backend/regalloc.cpp
     backend/pe_writer.cpp
     backend/elf_writer.cpp
@@ -149,6 +155,13 @@ set(SOURCES
 
 # Create executable
 add_executable(maxon ${SOURCES})
+
+# Link Zydis disassembler library
+target_link_libraries(maxon PRIVATE Zydis)
+
+# Define MAXON_HAS_CODEGEN for the main compiler build
+# This enables IR generation features in compiler_api.cpp
+target_compile_definitions(maxon PRIVATE MAXON_HAS_CODEGEN)
 
 # Create grammar generator executable
 add_executable(grammar_generator

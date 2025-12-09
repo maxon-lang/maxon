@@ -107,6 +107,14 @@ void LSPServer::registerHandlers() {
 	requestHandlers_["textDocument/semanticTokens/full"] = [this](const json &params) {
 		return handleSemanticTokensFull(params);
 	};
+
+	// Custom Maxon requests
+	requestHandlers_["maxon/generateIR"] = [this](const json &params) {
+		return handleGenerateIR(params);
+	};
+	requestHandlers_["maxon/generateAsm"] = [this](const json &params) {
+		return handleGenerateAsm(params);
+	};
 }
 
 // ============================================================================
@@ -936,6 +944,146 @@ json LSPServer::handleSemanticTokensFull(const json &params) {
 		return lsp::toJson(result.value());
 	}
 	return nullptr;
+}
+
+// ============================================================================
+// Custom Maxon Request Handlers
+// ============================================================================
+
+json LSPServer::handleGenerateIR(const json &params) {
+	// Extract parameters
+	// Can accept either a URI to an open document or inline source text
+	std::string source;
+	std::string filename = "compiler_explorer.maxon";
+	bool optimize = false;
+
+	if (params.contains("textDocument") && params["textDocument"].contains("uri")) {
+		// Use content from an open document
+		std::string uri = params["textDocument"]["uri"].get<std::string>();
+		auto docOpt = documentManager_.getDocument(uri);
+		if (!docOpt.has_value()) {
+			json error;
+			error["ir"] = "";
+			error["errors"] = json::array();
+			error["errors"].push_back({{"message", "Document not found: " + uri},
+									   {"line", 1},
+									   {"column", 1}});
+			return error;
+		}
+		source = docOpt.value()->content;
+		filename = uriToPath(uri);
+	} else if (params.contains("source")) {
+		// Use inline source text
+		source = params["source"].get<std::string>();
+		if (params.contains("filename")) {
+			filename = params["filename"].get<std::string>();
+		}
+	} else {
+		json error;
+		error["ir"] = "";
+		error["errors"] = json::array();
+		error["errors"].push_back({{"message", "Either textDocument.uri or source must be provided"},
+								   {"line", 1},
+								   {"column", 1}});
+		return error;
+	}
+
+	if (params.contains("optimize")) {
+		optimize = params["optimize"].get<bool>();
+	}
+
+	// Generate IR using the compiler API
+	IRGenerationResult irResult = generateIRForLSP(source, filename, optimize, stdlib_);
+
+	// Build response
+	json response;
+	response["ir"] = irResult.ir;
+	response["errors"] = json::array();
+
+	// Add parse errors
+	for (const auto &err : irResult.parseErrors) {
+		response["errors"].push_back({{"message", err.message},
+									  {"line", err.line},
+									  {"column", err.column},
+									  {"type", "parse"}});
+	}
+
+	// Add semantic errors
+	for (const auto &err : irResult.semanticErrors) {
+		response["errors"].push_back({{"message", err.message},
+									  {"line", err.line},
+									  {"column", err.column},
+									  {"type", "semantic"}});
+	}
+
+	return response;
+}
+
+json LSPServer::handleGenerateAsm(const json &params) {
+	std::string source;
+	std::string filename = "compiler_explorer.maxon";
+	bool optimize = false;
+
+	// Accept either a document URI or inline source text
+	if (params.contains("textDocument") && params["textDocument"].contains("uri")) {
+		std::string uri = params["textDocument"]["uri"].get<std::string>();
+		auto docOpt = documentManager_.getDocument(uri);
+		if (!docOpt.has_value()) {
+			json error;
+			error["assembly"] = "";
+			error["errors"] = json::array();
+			error["errors"].push_back({{"message", "Document not found: " + uri},
+									   {"line", 1},
+									   {"column", 1}});
+			return error;
+		}
+		source = docOpt.value()->content;
+		filename = uriToPath(uri);
+	} else if (params.contains("source")) {
+		// Use inline source text
+		source = params["source"].get<std::string>();
+		if (params.contains("filename")) {
+			filename = params["filename"].get<std::string>();
+		}
+	} else {
+		json error;
+		error["assembly"] = "";
+		error["errors"] = json::array();
+		error["errors"].push_back({{"message", "Either textDocument.uri or source must be provided"},
+								   {"line", 1},
+								   {"column", 1}});
+		return error;
+	}
+
+	if (params.contains("optimize")) {
+		optimize = params["optimize"].get<bool>();
+	}
+
+	// Generate assembly using the compiler API
+	AsmGenerationResult asmResult = generateAsmForLSP(source, filename, optimize, stdlib_);
+
+	// Build response
+	json response;
+	response["assembly"] = asmResult.assembly;
+	response["errors"] = json::array();
+
+	// Add parse errors
+	for (const auto &err : asmResult.parseErrors) {
+		response["errors"].push_back({{"message", err.message},
+									  {"line", err.line},
+									  {"column", err.column},
+									  {"type", "parse"}});
+	}
+
+	// Add semantic errors
+	for (const auto &err : asmResult.semanticErrors) {
+		response["errors"].push_back({{"message", err.message},
+									  {"line", err.line},
+									  {"column", err.column},
+									  {"type", "semantic"}});
+	}
+
+	return response;
 }
 
 } // namespace maxon_lsp

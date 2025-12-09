@@ -12,6 +12,14 @@
 #include "semantic_analyzer.h"
 #include "token_stream.h"
 
+// IR generation requires the full code generator (not available in LSP-only builds)
+#ifdef MAXON_HAS_CODEGEN
+#include "backend/x86_codegen.h"
+#include "backend/x86_disassembler.h"
+#include "codegen_mir.h"
+#include "mir/optimizer.h"
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -727,3 +735,293 @@ std::vector<KeywordLSPInfo> getKeywordInfo() {
 std::vector<KeywordLSPInfo> getKeywordsForCompletion(const std::string &prefix) {
 	return KeywordMatcher::getKeywordsForCompletion(prefix);
 }
+
+// ============================================================================
+// IR Generation for Compiler Explorer
+// ============================================================================
+
+#ifdef MAXON_HAS_CODEGEN
+
+IRGenerationResult generateIRForLSP(const std::string &source, const std::string &filename,
+									bool optimize, const StdlibSymbols &stdlib) {
+	IRGenerationResult result;
+
+	// Parse the source
+	std::unique_ptr<ProgramAST> ast;
+	try {
+		Lexer lexer(source);
+		TokenStream stream = lexer.tokenize_stream();
+
+		Parser parser(std::move(stream));
+		std::string fileNamespace = deriveNamespace(filename);
+		parser.setDefaultNamespace(fileNamespace);
+
+		ast = parser.parse();
+	} catch (const std::runtime_error &e) {
+		// Parse error - extract location info
+		std::string errorMsg = e.what();
+		int line = 1, column = 1;
+		size_t locPos = errorMsg.find("Location: line ");
+		if (locPos != std::string::npos) {
+			size_t lineStart = locPos + 15;
+			size_t lineEnd = errorMsg.find(',', lineStart);
+			if (lineEnd != std::string::npos) {
+				line = std::stoi(errorMsg.substr(lineStart, lineEnd - lineStart));
+				size_t colStart = errorMsg.find("column ", lineEnd);
+				if (colStart != std::string::npos) {
+					colStart += 7;
+					column = std::stoi(errorMsg.substr(colStart));
+				}
+			}
+		}
+
+		size_t newlinePos = errorMsg.find('\n');
+		std::string msg = (newlinePos != std::string::npos)
+							  ? errorMsg.substr(0, newlinePos)
+							  : errorMsg;
+
+		result.parseErrors.emplace_back(msg, line, column);
+		return result;
+	}
+
+	// Copy parse errors from AST
+	if (ast) {
+		for (const auto &err : ast->parseErrors) {
+			result.parseErrors.emplace_back(err.message, err.line, err.column);
+		}
+	}
+
+	// If there are parse errors, return early
+	if (!result.parseErrors.empty()) {
+		return result;
+	}
+
+	// Run semantic analysis with stdlib symbols registered
+	SemanticAnalyzer analyzer;
+	analyzer.registerBuiltinFunctions();
+
+	// Register stdlib functions with full signatures
+	for (const auto &func : stdlib.functions) {
+		std::vector<FunctionParameter> params;
+		for (const auto &p : func.parameters) {
+			params.push_back({p.name, p.type});
+		}
+		analyzer.registerExternalFunction(func.name, func.returnType, params);
+	}
+
+	// Register stdlib structs with their fields and interface conformance
+	for (const auto &structSym : stdlib.structs) {
+		std::vector<StructFieldInfo> fields;
+		for (const auto &f : structSym.fields) {
+			fields.emplace_back(f.name, f.type, f.isImmutable);
+		}
+		analyzer.registerExternalStruct(structSym.name, fields, structSym.conformsTo);
+	}
+
+	// Register stdlib interfaces
+	for (const auto &ifaceSym : stdlib.interfaces) {
+		analyzer.registerExternalInterface(ifaceSym.name);
+	}
+
+	// Register stdlib enums
+	for (const auto &enumSym : stdlib.enums) {
+		analyzer.registerExternalEnum(enumSym.name);
+	}
+
+	result.semanticErrors = analyzer.analyze(ast.get());
+
+	// If there are semantic errors, return early
+	if (!result.semanticErrors.empty()) {
+		return result;
+	}
+
+	// Generate MIR
+	try {
+		std::string moduleName = "compiler_explorer";
+		MIRCodeGenerator codegen(moduleName, false, 0, false);
+
+		// Get function indices and return types from analyzer
+		auto functionIndices = analyzer.getFunctionIndices();
+		std::map<std::string, std::string> functionReturnTypes;
+		for (const auto &[name, info] : analyzer.getFunctions()) {
+			functionReturnTypes[name] = info.returnType;
+		}
+
+		// Generate code (no entry point needed for explorer view)
+		codegen.generate(ast.get(), false, &functionIndices, &functionReturnTypes);
+
+		// Note: We intentionally skip dead code elimination for the compiler explorer
+		// because we want to show IR for all user-defined functions, even if they
+		// aren't reachable from main (which may not even exist in explorer snippets)
+
+		// Optionally run optimization passes (using explorer pipeline which skips DCE)
+		if (optimize) {
+			codegen.optimizeForExplorer();
+		}
+
+		// Get IR as string
+		result.ir = codegen.getModule()->toString();
+
+	} catch (const std::exception &e) {
+		// Code generation error
+		result.semanticErrors.emplace_back(std::string("Code generation error: ") + e.what(), 1, 1);
+	}
+
+	return result;
+}
+
+AsmGenerationResult generateAsmForLSP(const std::string &source, const std::string &filename,
+									  bool optimize, const StdlibSymbols &stdlib) {
+	AsmGenerationResult result;
+
+	// Parse the source
+	std::unique_ptr<ProgramAST> ast;
+	try {
+		Lexer lexer(source);
+		TokenStream stream = lexer.tokenize_stream();
+
+		Parser parser(std::move(stream));
+		std::string fileNamespace = deriveNamespace(filename);
+		parser.setDefaultNamespace(fileNamespace);
+
+		ast = parser.parse();
+	} catch (const std::runtime_error &e) {
+		// Parse error - extract location info
+		std::string errorMsg = e.what();
+		int line = 1, column = 1;
+		size_t locPos = errorMsg.find("Location: line ");
+		if (locPos != std::string::npos) {
+			size_t lineStart = locPos + 15;
+			size_t lineEnd = errorMsg.find(',', lineStart);
+			if (lineEnd != std::string::npos) {
+				line = std::stoi(errorMsg.substr(lineStart, lineEnd - lineStart));
+				size_t colStart = errorMsg.find("column ", lineEnd);
+				if (colStart != std::string::npos) {
+					colStart += 7;
+					column = std::stoi(errorMsg.substr(colStart));
+				}
+			}
+		}
+
+		size_t newlinePos = errorMsg.find('\n');
+		std::string msg = (newlinePos != std::string::npos)
+							  ? errorMsg.substr(0, newlinePos)
+							  : errorMsg;
+
+		result.parseErrors.emplace_back(msg, line, column);
+		return result;
+	}
+
+	// Copy parse errors from AST
+	if (ast) {
+		for (const auto &err : ast->parseErrors) {
+			result.parseErrors.emplace_back(err.message, err.line, err.column);
+		}
+	}
+
+	// If there are parse errors, return early
+	if (!result.parseErrors.empty()) {
+		return result;
+	}
+
+	// Run semantic analysis with stdlib symbols registered
+	SemanticAnalyzer analyzer;
+	analyzer.registerBuiltinFunctions();
+
+	// Register stdlib functions with full signatures
+	for (const auto &func : stdlib.functions) {
+		std::vector<FunctionParameter> params;
+		for (const auto &p : func.parameters) {
+			params.push_back({p.name, p.type});
+		}
+		analyzer.registerExternalFunction(func.name, func.returnType, params);
+	}
+
+	// Register stdlib structs with their fields and interface conformance
+	for (const auto &structSym : stdlib.structs) {
+		std::vector<StructFieldInfo> fields;
+		for (const auto &f : structSym.fields) {
+			fields.emplace_back(f.name, f.type, f.isImmutable);
+		}
+		analyzer.registerExternalStruct(structSym.name, fields, structSym.conformsTo);
+	}
+
+	// Register stdlib interfaces
+	for (const auto &ifaceSym : stdlib.interfaces) {
+		analyzer.registerExternalInterface(ifaceSym.name);
+	}
+
+	// Register stdlib enums
+	for (const auto &enumSym : stdlib.enums) {
+		analyzer.registerExternalEnum(enumSym.name);
+	}
+
+	result.semanticErrors = analyzer.analyze(ast.get());
+
+	// If there are semantic errors, return early
+	if (!result.semanticErrors.empty()) {
+		return result;
+	}
+
+	// Generate MIR
+	try {
+		std::string moduleName = "compiler_explorer";
+		MIRCodeGenerator codegen(moduleName, false, 0, false);
+
+		// Get function indices and return types from analyzer
+		auto functionIndices = analyzer.getFunctionIndices();
+		std::map<std::string, std::string> functionReturnTypes;
+		for (const auto &[name, info] : analyzer.getFunctions()) {
+			functionReturnTypes[name] = info.returnType;
+		}
+
+		// Generate code (no entry point needed for explorer view)
+		codegen.generate(ast.get(), false, &functionIndices, &functionReturnTypes);
+
+		// Optionally run optimization passes on MIR (using explorer pipeline which skips DCE)
+		if (optimize) {
+			codegen.optimizeForExplorer();
+		}
+
+		// Run PHI elimination (required before x86 codegen)
+		mir::PhiEliminationPass phiElim;
+		phiElim.run(*codegen.getModule());
+
+		// Generate x86-64 machine code
+#ifdef _WIN32
+		backend::X86CodeGen x86gen(backend::CallingConv::Win64);
+#else
+		backend::X86CodeGen x86gen(backend::CallingConv::SysV64);
+#endif
+		x86gen.generate(codegen.getModule());
+
+		// Disassemble to Intel syntax assembly
+		backend::X86Disassembler disasm;
+		result.assembly = disasm.disassembleWithSymbols(x86gen.getFunctionCodes());
+
+	} catch (const std::exception &e) {
+		// Code generation error
+		result.semanticErrors.emplace_back(std::string("Code generation error: ") + e.what(), 1, 1);
+	}
+
+	return result;
+}
+
+#else
+
+// Stub implementation when code generator is not available (e.g., LSP test builds)
+IRGenerationResult generateIRForLSP(const std::string &source, const std::string &filename,
+									bool optimize, const StdlibSymbols &stdlib) {
+	IRGenerationResult result;
+	result.semanticErrors.emplace_back("IR generation not available in this build", 1, 1);
+	return result;
+}
+
+AsmGenerationResult generateAsmForLSP(const std::string &source, const std::string &filename,
+									  bool optimize, const StdlibSymbols &stdlib) {
+	AsmGenerationResult result;
+	result.semanticErrors.emplace_back("Assembly generation not available in this build", 1, 1);
+	return result;
+}
+
+#endif // MAXON_HAS_CODEGEN

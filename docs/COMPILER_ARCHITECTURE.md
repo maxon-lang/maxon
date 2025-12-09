@@ -312,6 +312,8 @@ A VS Code extension provides IDE support using the LSP server.
 - Syntax highlighting (TextMate grammar + semantic tokens)
 - All LSP features (completions, hover, go-to-definition, etc.)
 - Block identifier matching (visual highlighting)
+- Code formatting with customizable indentation
+- Compiler Explorer panel (MIR and x86-64 assembly views with optimization toggle)
 - Integrated debugging (planned)
 
 **Components:**
