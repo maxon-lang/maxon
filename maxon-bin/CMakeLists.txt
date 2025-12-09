@@ -72,7 +72,6 @@ set(SOURCES
     codegen_mir.cpp
     codegen_mir/codegen_mir_expr.cpp
     codegen_mir/codegen_mir_expr_string.cpp
-    codegen_mir/codegen_mir_expr_map.cpp
     codegen_mir/codegen_mir_optional.cpp
     codegen_mir/codegen_mir_stmt.cpp
     codegen_mir/codegen_mir_stmt_decl.cpp

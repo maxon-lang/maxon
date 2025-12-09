@@ -5,7 +5,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 825
+; Instructions: 803
 
 %string = type { ptr, i32 }
 %__ManagedArrayData_byte = type { ptr, i32, i32 }
@@ -26,8 +26,7 @@ define i32 @string.hash(ptr %self) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
-  %1 = load ptr, ptr %0
-  %2 = getelementptr %string, ptr %1, i32 0, i32 0
+  %2 = getelementptr %string, ptr %self, i32 0, i32 0
   %3 = load ptr, ptr %2
   %4 = call i32 @string.hashManagedString(ptr %3)
   ret i32 %4
@@ -39,8 +38,7 @@ entry0:
   store ptr %self, ptr %0
   %1 = alloca ptr
   store ptr %other, ptr %1
-  %2 = load ptr, ptr %0
-  %3 = getelementptr %string, ptr %2, i32 0, i32 0
+  %3 = getelementptr %string, ptr %self, i32 0, i32 0
   %4 = load ptr, ptr %3
   %5 = load ptr, ptr %1
   %6 = getelementptr %string, ptr %5, i32 0, i32 0
@@ -186,11 +184,9 @@ define i32 @string.hashManagedString(ptr %managed) {
 entry0:
   %0 = alloca ptr
   store ptr %managed, ptr %0
-  %1 = load ptr, ptr %0
-  %2 = load ptr, ptr %0
-  %3 = getelementptr %__ManagedStringData, ptr %2, i32 0, i32 1
+  %3 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 1
   %4 = load i32, ptr %3
-  %5 = call i32 @string.hashManagedStringRange(ptr %1, i32 0, i32 %4)
+  %5 = call i32 @string.hashManagedStringRange(ptr %managed, i32 0, i32 %4)
   ret i32 %5
 }
 
@@ -254,8 +250,7 @@ entry0:
   store ptr %a, ptr %0
   %1 = alloca ptr
   store ptr %b, ptr %1
-  %2 = load ptr, ptr %0
-  %3 = getelementptr %__ManagedStringData, ptr %2, i32 0, i32 1
+  %3 = getelementptr %__ManagedStringData, ptr %a, i32 0, i32 1
   %4 = load i32, ptr %3
   %5 = alloca i32
   store i32 %4, ptr %5
@@ -279,8 +274,6 @@ declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
-declare f64 @trunc(f64 %arg0)
-
 define %map<string,int> @map<string,int>.init(ptr %self, ptr %managedKeys, ptr %managedValues) {
 entry0:
   %0 = alloca ptr
@@ -289,8 +282,7 @@ entry0:
   store ptr %managedKeys, ptr %1
   %2 = alloca ptr
   store ptr %managedValues, ptr %2
-  %3 = load ptr, ptr %1
-  %4 = getelementptr %__ManagedArrayData_string, ptr %3, i32 0, i32 1
+  %4 = getelementptr %__ManagedArrayData_string, ptr %managedKeys, i32 0, i32 1
   %5 = load i32, ptr %4
   %6 = alloca i32
   store i32 %5, ptr %6
@@ -300,18 +292,18 @@ entry0:
 whilecond1:
   %8 = load i32, ptr %7
   %9 = load i32, ptr %6
-  %10 = mul i32 %9, 2
+  %10 = shl i32 %9, 1
   %11 = icmp slt i32 %8, %10
   br i1 %11, label %loop2, label %afterloop3
 loop2:
   %12 = load i32, ptr %7
-  %13 = mul i32 %12, 2
+  %13 = shl i32 %12, 1
   store i32 %13, ptr %7
   br label %whilecond1
 afterloop3:
   %14 = load i32, ptr %7
   %15 = sext i32 %14 to i64
-  %16 = mul i64 %15, 16
+  %16 = shl i64 %15, 4
   %17 = call ptr @malloc(i64 %16)
   %18 = alloca %array<string>
   %19 = getelementptr %array<string>, ptr %18, i32 0, i32 0
@@ -326,7 +318,7 @@ afterloop3:
   %24 = call ptr @memset(ptr %17, i32 0, i64 %16)
   %25 = load i32, ptr %7
   %26 = sext i32 %25 to i64
-  %27 = mul i64 %26, 4
+  %27 = shl i64 %26, 2
   %28 = call ptr @malloc(i64 %27)
   %29 = alloca %array<int>
   %30 = getelementptr %array<int>, ptr %29, i32 0, i32 0
@@ -341,8 +333,7 @@ afterloop3:
   %35 = call ptr @memset(ptr %28, i32 0, i64 %27)
   %36 = load i32, ptr %7
   %37 = sext i32 %36 to i64
-  %38 = mul i64 %37, 1
-  %39 = call ptr @malloc(i64 %38)
+  %39 = call ptr @malloc(i64 %37)
   %40 = alloca %array<byte>
   %41 = getelementptr %array<byte>, ptr %40, i32 0, i32 0
   %42 = getelementptr %__ManagedArrayData_byte, ptr %41, i32 0, i32 0
@@ -353,7 +344,7 @@ afterloop3:
   store i32 %36, ptr %44
   %45 = getelementptr %array<byte>, ptr %40, i32 0, i32 1
   store i32 0, ptr %45
-  %46 = call ptr @memset(ptr %39, i32 0, i64 %38)
+  %46 = call ptr @memset(ptr %39, i32 0, i64 %37)
   %47 = alloca %map<string,int>
   %48 = getelementptr %map<string,int>, ptr %47, i32 0, i32 0
   %49 = load %array<string>, ptr %18
@@ -457,15 +448,10 @@ entry0:
   store ptr %key, ptr %1
   %2 = alloca i32
   store i32 %value, ptr %2
-  %3 = load ptr, ptr %0
-  %4 = getelementptr %map<string,int>, ptr %3, i32 0, i32 4
+  %4 = getelementptr %map<string,int>, ptr %self, i32 0, i32 4
   %5 = load i32, ptr %4
   %6 = mul i32 %5, 3
-  %7 = sitofp i32 %6 to f64
-  %8 = sitofp i32 4 to f64
-  %9 = fdiv f64 %7, %8
-  %10 = call f64 @trunc(f64 %9)
-  %11 = fptosi f64 %10 to i32
+  %11 = sdiv i32 %6, 4
   %12 = alloca i32
   store i32 %11, ptr %12
   %13 = load ptr, ptr %0
@@ -483,15 +469,13 @@ ifcont2:
   %20 = call i32 @string.hash(ptr %19)
   %21 = alloca i32
   store i32 %20, ptr %21
-  %22 = load i32, ptr %21
   %23 = load ptr, ptr %0
   %24 = getelementptr %map<string,int>, ptr %23, i32 0, i32 4
   %25 = load i32, ptr %24
-  %26 = srem i32 %22, %25
+  %26 = srem i32 %20, %25
   %27 = alloca i32
   store i32 %26, ptr %27
-  %28 = load i32, ptr %27
-  %29 = icmp slt i32 %28, 0
+  %29 = icmp slt i32 %26, 0
   br i1 %29, label %then3, label %ifcont4
 then3:
   %30 = load i32, ptr %27
@@ -502,9 +486,8 @@ then3:
   store i32 %34, ptr %27
   br label %ifcont4
 ifcont4:
-  %35 = sub i32 0, 1
   %36 = alloca i32
-  store i32 %35, ptr %36
+  store i32 -1, ptr %36
   %37 = alloca i32
   store i32 0, ptr %37
   br label %whilecond5
@@ -528,8 +511,7 @@ loop6:
   %52 = zext i8 %51 to i32
   %53 = alloca i32
   store i32 %52, ptr %53
-  %54 = load i32, ptr %53
-  %55 = icmp eq i32 %54, 0
+  %55 = icmp eq i32 %52, 0
   br i1 %55, label %then8, label %ifcont9
 afterloop7:
   %132 = load i32, ptr %36
@@ -685,8 +667,7 @@ define i32 @map<string,int>.count(ptr %self) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
-  %1 = load ptr, ptr %0
-  %2 = getelementptr %map<string,int>, ptr %1, i32 0, i32 3
+  %2 = getelementptr %map<string,int>, ptr %self, i32 0, i32 3
   %3 = load i32, ptr %2
   ret i32 %3
 }
@@ -695,13 +676,12 @@ define void @map<string,int>.grow(ptr %self) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
-  %1 = load ptr, ptr %0
-  %2 = getelementptr %map<string,int>, ptr %1, i32 0, i32 4
+  %2 = getelementptr %map<string,int>, ptr %self, i32 0, i32 4
   %3 = load i32, ptr %2
   %4 = alloca i32
   store i32 %3, ptr %4
   %5 = load i32, ptr %4
-  %6 = mul i32 %5, 2
+  %6 = shl i32 %5, 1
   %7 = alloca i32
   store i32 %6, ptr %7
   %8 = load ptr, ptr %0
@@ -721,7 +701,7 @@ entry0:
   store %array<byte> %18, ptr %19
   %20 = load i32, ptr %7
   %21 = sext i32 %20 to i64
-  %22 = mul i64 %21, 16
+  %22 = shl i64 %21, 4
   %23 = call ptr @malloc(i64 %22)
   %24 = alloca %array<string>
   %25 = getelementptr %array<string>, ptr %24, i32 0, i32 0
@@ -736,7 +716,7 @@ entry0:
   %30 = call ptr @memset(ptr %23, i32 0, i64 %22)
   %31 = load i32, ptr %7
   %32 = sext i32 %31 to i64
-  %33 = mul i64 %32, 4
+  %33 = shl i64 %32, 2
   %34 = call ptr @malloc(i64 %33)
   %35 = alloca %array<int>
   %36 = getelementptr %array<int>, ptr %35, i32 0, i32 0
@@ -751,8 +731,7 @@ entry0:
   %41 = call ptr @memset(ptr %34, i32 0, i64 %33)
   %42 = load i32, ptr %7
   %43 = sext i32 %42 to i64
-  %44 = mul i64 %43, 1
-  %45 = call ptr @malloc(i64 %44)
+  %45 = call ptr @malloc(i64 %43)
   %46 = alloca %array<byte>
   %47 = getelementptr %array<byte>, ptr %46, i32 0, i32 0
   %48 = getelementptr %__ManagedArrayData_byte, ptr %47, i32 0, i32 0
@@ -763,7 +742,7 @@ entry0:
   store i32 %42, ptr %50
   %51 = getelementptr %array<byte>, ptr %46, i32 0, i32 1
   store i32 0, ptr %51
-  %52 = call ptr @memset(ptr %45, i32 0, i64 %44)
+  %52 = call ptr @memset(ptr %45, i32 0, i64 %43)
   %53 = load ptr, ptr %0
   %54 = getelementptr %map<string,int>, ptr %53, i32 0, i32 0
   %55 = load %array<string>, ptr %24
@@ -811,8 +790,7 @@ loop2:
   %84 = zext i8 %83 to i32
   %85 = alloca i32
   store i32 %84, ptr %85
-  %86 = load i32, ptr %85
-  %87 = icmp eq i32 %86, 1
+  %87 = icmp eq i32 %84, 1
   br i1 %87, label %then4, label %ifcont5
 afterloop3:
   %163 = getelementptr %array<string>, ptr %24, i32 0, i32 0
@@ -843,13 +821,11 @@ then4:
   %103 = call i32 @string.hash(ptr %94)
   %104 = alloca i32
   store i32 %103, ptr %104
-  %105 = load i32, ptr %104
   %106 = load i32, ptr %7
-  %107 = srem i32 %105, %106
+  %107 = srem i32 %103, %106
   %108 = alloca i32
   store i32 %107, ptr %108
-  %109 = load i32, ptr %108
-  %110 = icmp slt i32 %109, 0
+  %110 = icmp slt i32 %107, 0
   br i1 %110, label %then6, label %ifcont7
 ifcont5:
   %161 = load i32, ptr %73

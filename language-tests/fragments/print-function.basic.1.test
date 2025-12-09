@@ -6,7 +6,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 287
+; Instructions: 274
 
 %string = type { ptr, i32 }
 %cstring = type { ptr, i32, ptr }
@@ -23,8 +23,7 @@ define %cstring @string.cstr(ptr %self) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
-  %1 = load ptr, ptr %0
-  %2 = getelementptr %string, ptr %1, i32 0, i32 0
+  %2 = getelementptr %string, ptr %self, i32 0, i32 0
   %3 = load ptr, ptr %2
   %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
   %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
@@ -67,8 +66,7 @@ define i32 @sys.print(ptr %value) {
 entry0:
   %0 = alloca ptr
   store ptr %value, ptr %0
-  %1 = load ptr, ptr %0
-  %2 = call %cstring @string.cstr(ptr %1)
+  %2 = call %cstring @string.cstr(ptr %value)
   %3 = alloca %cstring
   store %cstring %2, ptr %3
   %4 = getelementptr %cstring, ptr %3, i32 0, i32 0
@@ -152,8 +150,7 @@ entry0:
   %10 = call i32 @fmt.formatIntArray(i32 %9, ptr %2)
   %11 = alloca i32
   store i32 %10, ptr %11
-  %12 = load i32, ptr %11
-  %13 = call %string @string.stringFromCharacters(ptr %2, i32 %12)
+  %13 = call %string @string.stringFromCharacters(ptr %2, i32 %10)
   %14 = alloca %string
   store %string %13, ptr %14
   %15 = call i32 @sys.print(ptr %14)
@@ -177,8 +174,7 @@ entry0:
   store i32 %value, ptr %0
   %1 = alloca ptr
   store ptr %buffer, ptr %1
-  %2 = load i32, ptr %0
-  %3 = icmp eq i32 %2, 0
+  %3 = icmp eq i32 %value, 0
   br i1 %3, label %then1, label %ifcont2
 then1:
   %4 = load ptr, ptr %1
@@ -229,8 +225,7 @@ loop6:
   %29 = srem i32 %28, 10
   %30 = alloca i32
   store i32 %29, ptr %30
-  %31 = load i32, ptr %30
-  %32 = add i32 48, %31
+  %32 = add i32 48, %29
   %33 = alloca i32
   store i32 %32, ptr %33
   %34 = load i32, ptr %18
@@ -239,18 +234,13 @@ loop6:
   %37 = load ptr, ptr %36
   %38 = sext i32 %34 to i64
   %39 = getelementptr i8, ptr %37, i64 %38
-  %40 = load i32, ptr %33
-  %41 = trunc i32 %40 to i8
+  %41 = trunc i32 %32 to i8
   store i8 %41, ptr %39
   %42 = load i32, ptr %18
   %43 = sub i32 %42, 1
   store i32 %43, ptr %18
   %44 = load i32, ptr %21
-  %45 = sitofp i32 %44 to f64
-  %46 = sitofp i32 10 to f64
-  %47 = fdiv f64 %45, %46
-  %48 = call f64 @trunc(f64 %47)
-  %49 = fptosi f64 %48 to i32
+  %49 = sdiv i32 %44, 10
   store i32 %49, ptr %21
   br label %whilecond5
 afterloop7:
@@ -275,8 +265,7 @@ ifcont9:
   %62 = add i32 %61, 1
   %63 = alloca i32
   store i32 %62, ptr %63
-  %64 = load i32, ptr %63
-  %65 = sub i32 12, %64
+  %65 = sub i32 12, %62
   %66 = alloca i32
   store i32 %65, ptr %66
   %67 = alloca i32
@@ -321,15 +310,13 @@ entry0:
   %1 = alloca i32
   store i32 %length, ptr %1
   %2 = alloca %string
-  %3 = load i32, ptr %1
-  %4 = load ptr, ptr %0
-  %5 = getelementptr %array<byte>, ptr %4, i32 0, i32 0
+  %5 = getelementptr %array<byte>, ptr %buffer, i32 0, i32 0
   %6 = getelementptr %__ManagedArrayData_byte, ptr %5, i32 0, i32 0
   %7 = load ptr, ptr %6
-  %8 = add i32 %3, 1
+  %8 = add i32 %length, 1
   %9 = sext i32 %8 to i64
   %10 = call ptr @malloc(i64 %9)
-  %11 = sext i32 %3 to i64
+  %11 = sext i32 %length to i64
   %12 = call ptr @memcpy(ptr %10, ptr %7, i64 %11)
   %13 = getelementptr i8, ptr %10, i64 %11
   store i8 0, ptr %13
@@ -338,11 +325,11 @@ entry0:
   %16 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 0
   store ptr %10, ptr %16
   %17 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 1
-  store i32 %3, ptr %17
+  store i32 %length, ptr %17
   %18 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 1
-  store i32 %3, ptr %18
+  store i32 %length, ptr %18
   %19 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 2
-  store i32 %3, ptr %19
+  store i32 %length, ptr %19
   %20 = getelementptr %string, ptr %2, i32 0, i32 0
   store ptr %14, ptr %20
   %21 = getelementptr %string, ptr %2, i32 0, i32 1
@@ -358,8 +345,6 @@ declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
-
-declare f64 @trunc(f64 %arg0)
 
 declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 

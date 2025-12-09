@@ -566,11 +566,7 @@ class MIROptimizer {
 	size_t getPassCount() const { return passes.size(); }
 
 	// Create a standard optimization pipeline
-	static MIROptimizer createStandardPipeline(int verboseLevel = 0);
-
-	// Create an optimization pipeline for the compiler explorer
-	// Skips DCE and inlining to preserve all user-defined functions
-	static MIROptimizer createExplorerPipeline(int verboseLevel = 0);
+	static MIROptimizer createOptimizerPipeline(int verboseLevel, bool skipForExplorer);
 
   private:
 	std::vector<std::unique_ptr<OptimizationPass>> passes;

@@ -50,7 +50,7 @@ void MIRCodeGenerator::optimize(CompilerStats *stats) {
 	logProgress("Running optimization passes...");
 
 	// Create standard optimization pipeline with verbosity
-	mir::MIROptimizer optimizer = mir::MIROptimizer::createStandardPipeline(verboseLevel);
+	mir::MIROptimizer optimizer = mir::MIROptimizer::createOptimizerPipeline(verboseLevel, false);
 
 	// Run passes until convergence, collecting stats if requested
 	optimizer.runPasses(*module, 10, stats);
@@ -62,7 +62,7 @@ void MIRCodeGenerator::optimizeForExplorer() {
 	logProgress("Running explorer optimization passes...");
 
 	// Create explorer pipeline (skips DCE to preserve all user functions)
-	mir::MIROptimizer optimizer = mir::MIROptimizer::createExplorerPipeline(verboseLevel);
+	mir::MIROptimizer optimizer = mir::MIROptimizer::createOptimizerPipeline(verboseLevel, true);
 
 	// Run passes until convergence
 	optimizer.runPasses(*module, 10, nullptr);

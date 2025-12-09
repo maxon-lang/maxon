@@ -953,7 +953,7 @@ TEST_CASE("MIR Optimizer pass manager", "[optimizer][manager]") {
 	builder.setInsertPoint(entry);
 
 	SECTION("standard pipeline creation") {
-		auto optimizer = MIROptimizer::createStandardPipeline();
+		auto optimizer = MIROptimizer::createOptimizerPipeline(0, false);
 		REQUIRE(optimizer.getPassCount() > 0);
 	}
 
@@ -963,7 +963,7 @@ TEST_CASE("MIR Optimizer pass manager", "[optimizer][manager]") {
 		auto *sum = builder.createAdd(c3, c4);
 		builder.createRet(sum);
 
-		auto optimizer = MIROptimizer::createStandardPipeline();
+		auto optimizer = MIROptimizer::createOptimizerPipeline(0, false);
 		int changes = optimizer.runAllPasses(module);
 
 		// Should have at least constant folding
@@ -1097,7 +1097,7 @@ TEST_CASE("Optimization integration - full pipeline", "[optimizer][integration]"
 
 	size_t before = countInstructions(*func);
 
-	auto optimizer = MIROptimizer::createStandardPipeline();
+	auto optimizer = MIROptimizer::createOptimizerPipeline(0, false);
 	optimizer.runPasses(module, 10);
 
 	size_t after = countInstructions(*func);

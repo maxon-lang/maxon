@@ -8,7 +8,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 121
+; Instructions: 118
 
 %__ManagedArrayData_int = type { ptr, i32, i32 }
 %array<int> = type { %__ManagedArrayData_int, i32 }
@@ -54,8 +54,7 @@ define i32 @array<int>.count(ptr %self) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
-  %1 = load ptr, ptr %0
-  %2 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %2 = getelementptr %array<int>, ptr %self, i32 0, i32 0
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
   %4 = load i32, ptr %3
   ret i32 %4
@@ -67,8 +66,7 @@ entry0:
   store ptr %self, ptr %0
   %1 = alloca i32
   store i32 %value, ptr %1
-  %2 = load ptr, ptr %0
-  %3 = getelementptr %array<int>, ptr %2, i32 0, i32 0
+  %3 = getelementptr %array<int>, ptr %self, i32 0, i32 0
   %4 = getelementptr %__ManagedArrayData_int, ptr %3, i32 0, i32 1
   %5 = load i32, ptr %4
   %6 = alloca i32
@@ -85,11 +83,10 @@ entry0:
   br i1 %14, label %then1, label %ifcont2
 then1:
   %15 = load i32, ptr %11
-  %16 = mul i32 %15, 2
+  %16 = shl i32 %15, 1
   %17 = alloca i32
   store i32 %16, ptr %17
-  %18 = load i32, ptr %17
-  %19 = icmp slt i32 %18, 4
+  %19 = icmp slt i32 %16, 4
   br i1 %19, label %then3, label %ifcont4
 ifcont2:
   %46 = load i32, ptr %6
@@ -122,7 +119,7 @@ ifcont4:
   %25 = icmp sgt i32 %20, %24
   br i1 %25, label %grow.do5, label %grow.done6
 grow.do5:
-  %26 = mul i32 %24, 2
+  %26 = shl i32 %24, 1
   %27 = icmp sgt i32 %20, %26
   br i1 %27, label %grow.usemin7, label %grow.usedouble8
 grow.done6:
@@ -140,7 +137,7 @@ grow.minfour10:
 grow.realloc11:
   %30 = phi i32 [ 4, %grow.minfour10 ], [ %28, %grow.checkmin9 ]
   %31 = sext i32 %30 to i64
-  %32 = mul i64 %31, 4
+  %32 = shl i64 %31, 2
   %33 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 0
   %34 = load ptr, ptr %33
   %35 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 1
@@ -150,12 +147,12 @@ grow.realloc11:
 grow.stack12:
   %38 = call ptr @malloc(i64 %32)
   %39 = sext i32 %36 to i64
-  %40 = mul i64 %39, 4
+  %40 = shl i64 %39, 2
   %41 = call ptr @memcpy(ptr %38, ptr %34, i64 %40)
   br label %grow.afteralloc14
 grow.heap13:
   %42 = sext i32 %24 to i64
-  %43 = mul i64 %42, 4
+  %43 = shl i64 %42, 2
   %44 = call ptr @realloc(ptr %34, i64 %43, i64 %32)
   br label %grow.afteralloc14
 grow.afteralloc14:

@@ -166,34 +166,13 @@ void MIROptimizer::clearPasses() {
 	passes.clear();
 }
 
-MIROptimizer MIROptimizer::createStandardPipeline(int verboseLevel) {
+MIROptimizer MIROptimizer::createOptimizerPipeline(int verboseLevel, bool skipForExplorer) {
 	MIROptimizer optimizer;
 	optimizer.setVerboseLevel(verboseLevel);
 
 	// Order matters: run mem2reg first, then cleanup passes
 	// TODO: mem2reg has a bug with complex PHI patterns - disabled for now
 	// optimizer.addPass(std::make_unique<Mem2RegPass>());
-	// optimizer.addPass(std::make_unique<ConstantFoldingPass>());
-	// optimizer.addPass(std::make_unique<ConstantPropagationPass>());
-	// optimizer.addPass(std::make_unique<AlgebraicSimplificationPass>());
-	// optimizer.addPass(std::make_unique<StrengthReductionPass>());
-	// optimizer.addPass(std::make_unique<CopyPropagationPass>());
-	// optimizer.addPass(std::make_unique<RedundantLoadStoreEliminationPass>());
-	// optimizer.addPass(std::make_unique<IntegerDivisionOptimizationPass>());
-	// optimizer.addPass(std::make_unique<DeadCodeEliminationPass>());
-	// optimizer.addPass(std::make_unique<UnreachableBlockEliminationPass>());
-	// optimizer.addPass(std::make_unique<SimpleFunctionInliningPass>());
-
-	return optimizer;
-}
-
-MIROptimizer MIROptimizer::createExplorerPipeline(int verboseLevel) {
-	MIROptimizer optimizer;
-	optimizer.setVerboseLevel(verboseLevel);
-
-	// Same as standard pipeline but WITHOUT DCE and inlining
-	// This preserves all user-defined functions even if not called from main
-	optimizer.addPass(std::make_unique<Mem2RegPass>());
 	optimizer.addPass(std::make_unique<ConstantFoldingPass>());
 	optimizer.addPass(std::make_unique<ConstantPropagationPass>());
 	optimizer.addPass(std::make_unique<AlgebraicSimplificationPass>());
@@ -201,10 +180,13 @@ MIROptimizer MIROptimizer::createExplorerPipeline(int verboseLevel) {
 	optimizer.addPass(std::make_unique<CopyPropagationPass>());
 	optimizer.addPass(std::make_unique<RedundantLoadStoreEliminationPass>());
 	optimizer.addPass(std::make_unique<IntegerDivisionOptimizationPass>());
-	// Skip DeadCodeEliminationPass - we want to keep all user functions
+	if (!skipForExplorer) {
+		optimizer.addPass(std::make_unique<DeadCodeEliminationPass>());
+	}
 	optimizer.addPass(std::make_unique<UnreachableBlockEliminationPass>());
-	// Skip SimpleFunctionInliningPass - may eliminate functions
-
+	if (!skipForExplorer) {
+		optimizer.addPass(std::make_unique<SimpleFunctionInliningPass>());
+	}
 	return optimizer;
 }
 
