@@ -15,10 +15,15 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 13
+; Instructions: 24
 
 define i32 @main() {
 entry0:
+  %0 = alloca i8
+  store i8 1, ptr %0
+  %1 = load i8, ptr %0
+  %2 = alloca i8
+  store i8 %1, ptr %2
   br label %match.check.05
 match.merge1:
   ret i32 0
@@ -29,15 +34,21 @@ match.case.13:
 match.case.24:
   ret i32 3
 match.check.05:
-  br i1 0, label %match.case.02, label %match.check.16
+  %3 = load i8, ptr %2
+  %4 = icmp eq i8 %3, 0
+  br i1 %4, label %match.case.02, label %match.check.16
   br label %match.check.17
 match.check.16:
 match.check.17:
-  br i1 1, label %match.case.13, label %match.check.28
+  %5 = load i8, ptr %2
+  %6 = icmp eq i8 %5, 1
+  br i1 %6, label %match.case.13, label %match.check.28
   br label %match.check.29
 match.check.28:
 match.check.29:
-  br i1 0, label %match.case.24, label %match.merge1
+  %7 = load i8, ptr %2
+  %8 = icmp eq i8 %7, 2
+  br i1 %8, label %match.case.24, label %match.merge1
 }
 
 declare void @exit(i32 %arg0)

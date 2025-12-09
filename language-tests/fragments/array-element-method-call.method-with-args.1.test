@@ -15,11 +15,25 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 44
+; Instructions: 52
 
 %Adder = type { i32 }
 %__ManagedArrayData_Adder = type { ptr, i32, i32 }
 %array<Adder> = type { %__ManagedArrayData_Adder, i32 }
+
+define i32 @Adder.add(ptr %self, i32 %x) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 %x, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %Adder, ptr %2, i32 0, i32 0
+  %4 = load i32, ptr %3
+  %5 = load i32, ptr %1
+  %6 = add i32 %4, %5
+  ret i32 %6
+}
 
 define i32 @main() {
 entry0:
@@ -51,9 +65,7 @@ entry0:
   %19 = getelementptr %__ManagedArrayData_Adder, ptr %18, i32 0, i32 0
   %20 = load ptr, ptr %19
   %21 = getelementptr %Adder, ptr %20, i64 1
-  %29 = getelementptr %Adder, ptr %21, i32 0, i32 0
-  %30 = load i32, ptr %29
-  %31 = add i32 %30, 5
+  %22 = call i32 @Adder.add(ptr %21, i32 5)
   %23 = getelementptr %array<Adder>, ptr %1, i32 0, i32 0
   %24 = getelementptr %__ManagedArrayData_Adder, ptr %23, i32 0, i32 0
   %25 = load ptr, ptr %24
@@ -65,7 +77,7 @@ adders.free1:
   call void @free(ptr %25)
   br label %adders.skip2
 adders.skip2:
-  ret i32 %31
+  ret i32 %22
 }
 
 declare void @free(ptr %arg0)

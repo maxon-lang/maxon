@@ -9,11 +9,18 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 10
+; Instructions: 24
 
 define i32 @main() {
 entry0:
+  %0 = alloca i32
+  store i32 1, ptr %0
+  %1 = load i32, ptr %0
+  %2 = alloca i32
+  store i32 %1, ptr %2
   br label %match.check.05
+match.merge1:
+  ret i32 0
 match.case.02:
   ret i32 10
 match.case.13:
@@ -21,11 +28,19 @@ match.case.13:
 match.case.24:
   ret i32 0
 match.check.05:
-  br i1 1, label %match.case.02, label %match.check.16
+  %3 = load i32, ptr %2
+  %4 = icmp eq i32 %3, 1
+  %5 = icmp eq i32 %3, 2
+  %6 = or i1 %4, %5
+  br i1 %6, label %match.case.02, label %match.check.16
   br label %match.check.17
 match.check.16:
 match.check.17:
-  br i1 0, label %match.case.13, label %match.case.24
+  %7 = load i32, ptr %2
+  %8 = icmp eq i32 %7, 3
+  %9 = icmp eq i32 %7, 4
+  %10 = or i1 %8, %9
+  br i1 %10, label %match.case.13, label %match.case.24
 }
 
 declare void @exit(i32 %arg0)

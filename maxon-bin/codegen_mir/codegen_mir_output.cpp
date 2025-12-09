@@ -258,7 +258,25 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 		std::cout << "  Running PHI elimination pass..." << std::endl;
 	}
 	mir::PhiEliminationPass phiElim;
+	phiElim.setVerboseLevel(verboseLevel);
 	phiElim.run(*module);
+
+	// Debug: Dump IR after phi elimination at high verbosity
+	if (verboseLevel >= 3) {
+		std::cout << "\n=== IR after PHI elimination ===" << std::endl;
+		for (auto &func : module->functions) {
+			if (func->name.find("set<int>") != std::string::npos) {
+				std::cout << "Function: " << func->name << std::endl;
+				for (auto &block : func->basicBlocks) {
+					std::cout << "  Block: " << block->name << std::endl;
+					for (auto &inst : block->instructions) {
+						std::cout << "    " << inst->toString() << std::endl;
+					}
+				}
+			}
+		}
+		std::cout << "=== End IR dump ===" << std::endl;
+	}
 
 	// Step 2: Generate x86-64 code from MIR
 	backend::CallingConv cc = isWindows ? backend::CallingConv::Win64 : backend::CallingConv::SysV64;

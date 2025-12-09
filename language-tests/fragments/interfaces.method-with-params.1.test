@@ -17,19 +17,31 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 10
+; Instructions: 18
 
 %Accumulator = type { i32 }
+
+define i32 @Accumulator.add(ptr %self, i32 %n) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 %n, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %Accumulator, ptr %2, i32 0, i32 0
+  %4 = load i32, ptr %3
+  %5 = load i32, ptr %1
+  %6 = add i32 %4, %5
+  ret i32 %6
+}
 
 define i32 @main() {
 entry0:
   %0 = alloca %Accumulator
   %1 = getelementptr %Accumulator, ptr %0, i32 0, i32 0
   store i32 10, ptr %1
-  %3 = getelementptr %Accumulator, ptr %0, i32 0, i32 0
-  %4 = load i32, ptr %3
-  %5 = add i32 %4, 5
-  ret i32 %5
+  %2 = call i32 @Accumulator.add(ptr %0, i32 5)
+  ret i32 %2
 }
 
 declare void @exit(i32 %arg0)

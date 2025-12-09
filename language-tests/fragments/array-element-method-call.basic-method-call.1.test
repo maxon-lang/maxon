@@ -15,11 +15,21 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 43
+; Instructions: 48
 
 %Counter = type { i32 }
 %__ManagedArrayData_Counter = type { ptr, i32, i32 }
 %array<Counter> = type { %__ManagedArrayData_Counter, i32 }
+
+define i32 @Counter.get(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Counter, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  ret i32 %3
+}
 
 define i32 @main() {
 entry0:
@@ -51,8 +61,7 @@ entry0:
   %19 = getelementptr %__ManagedArrayData_Counter, ptr %18, i32 0, i32 0
   %20 = load ptr, ptr %19
   %21 = getelementptr %Counter, ptr %20, i64 0
-  %29 = getelementptr %Counter, ptr %21, i32 0, i32 0
-  %30 = load i32, ptr %29
+  %22 = call i32 @Counter.get(ptr %21)
   %23 = getelementptr %array<Counter>, ptr %1, i32 0, i32 0
   %24 = getelementptr %__ManagedArrayData_Counter, ptr %23, i32 0, i32 0
   %25 = load ptr, ptr %24
@@ -64,7 +73,7 @@ items.free1:
   call void @free(ptr %25)
   br label %items.skip2
 items.skip2:
-  ret i32 %30
+  ret i32 %22
 }
 
 declare void @free(ptr %arg0)

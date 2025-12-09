@@ -66,11 +66,15 @@ bool PhiEliminationPass::runOnFunction(MIRFunction &func) {
 		MIRBasicBlock *phiBlock = pair.first;
 		std::vector<MIRInstruction *> &phis = pair.second;
 
+		logTrace("Processing " + std::to_string(phis.size()) + " PHIs in block " + phiBlock->name);
+
 		// For each predecessor, we need to insert copies for all PHIs
 		// Group by predecessor to handle the lost copy problem
 		std::unordered_map<MIRBasicBlock *, std::vector<std::pair<MIRValue *, MIRValue *>>> predCopies;
 
 		for (auto *phi : phis) {
+			logTrace("  PHI %" + std::to_string(phi->result->regId) + " has " +
+					 std::to_string(phi->phiIncoming.size()) + " incoming values");
 			for (auto &incoming : phi->phiIncoming) {
 				MIRValue *src = incoming.first;
 				MIRValue *dest = phi->result;
@@ -138,6 +142,21 @@ bool PhiEliminationPass::runOnFunction(MIRFunction &func) {
 					}
 				}
 				insertCopyBeforeTerminator(insertBlock, copy.first, src);
+
+				// Debug logging
+				if (verboseLevel_ >= 3) {
+					std::string srcStr = "?";
+					if (src) {
+						if (src->kind == MIRValueKind::VirtualReg) {
+							srcStr = "%" + std::to_string(src->regId);
+						} else if (src->kind == MIRValueKind::ConstantInt) {
+							srcStr = std::to_string(src->intValue);
+						}
+					}
+					std::string destStr = copy.first ? "%" + std::to_string(copy.first->regId) : "?";
+					logTrace("Copy in " + insertBlock->name + ": " + destStr + " = " + srcStr +
+							 " (for PHI in " + phiBlock->name + ")");
+				}
 			}
 
 			changed = true;

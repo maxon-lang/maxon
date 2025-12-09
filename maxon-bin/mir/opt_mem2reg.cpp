@@ -92,6 +92,8 @@ bool Mem2RegPass::isAllocaPromotable(MIRFunction &func, MIRInstruction *alloca) 
 bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 	MIRValue *allocaPtr = alloca->result;
 
+	logDetail("Promoting alloca %" + std::to_string(allocaPtr->regId) + " in function " + func.name);
+
 	// Find all blocks that store to this alloca (definition blocks)
 	std::set<MIRBasicBlock *> defBlocks;
 
@@ -156,6 +158,10 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 		MIRInstruction *phiPtr = phi.get();
 		block->instructions.insert(block->instructions.begin(), std::move(phi));
 		blockToPhiMap[block] = phiPtr;
+
+		logTrace("Inserted PHI %" + std::to_string(phiPtr->result->regId) +
+				 " in block " + block->name + " with " +
+				 std::to_string(block->predecessors.size()) + " predecessors");
 	}
 
 	// SSA Renaming using dominator tree traversal with a definition stack
@@ -234,6 +240,30 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 	// Start renaming from the entry block
 	if (!func.basicBlocks.empty()) {
 		renameBlock(func.basicBlocks[0].get());
+	}
+
+	// Debug: dump PHI nodes after renaming
+	if (verboseLevel_ >= 3) {
+		for (auto &pair : blockToPhiMap) {
+			MIRInstruction *phi = pair.second;
+			std::string msg = "PHI %" + std::to_string(phi->result->regId) + " in " + pair.first->name + ": ";
+			for (auto &incoming : phi->phiIncoming) {
+				msg += "[";
+				if (incoming.first) {
+					if (incoming.first->kind == MIRValueKind::VirtualReg) {
+						msg += "%" + std::to_string(incoming.first->regId);
+					} else if (incoming.first->kind == MIRValueKind::ConstantInt) {
+						msg += std::to_string(incoming.first->intValue);
+					} else {
+						msg += "?";
+					}
+				} else {
+					msg += "null";
+				}
+				msg += " from " + incoming.second->name + "] ";
+			}
+			logTrace(msg);
+		}
 	}
 
 	// Apply all load replacements

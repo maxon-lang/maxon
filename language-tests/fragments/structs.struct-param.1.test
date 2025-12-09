@@ -15,9 +15,33 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 25
+; Instructions: 35
 
 %Vec2 = type { i32, i32 }
+
+define i32 @dot(ptr %a, ptr %b) {
+entry0:
+  %0 = alloca ptr
+  store ptr %a, ptr %0
+  %1 = alloca ptr
+  store ptr %b, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %Vec2, ptr %2, i32 0, i32 0
+  %4 = load i32, ptr %3
+  %5 = load ptr, ptr %1
+  %6 = getelementptr %Vec2, ptr %5, i32 0, i32 0
+  %7 = load i32, ptr %6
+  %8 = mul i32 %4, %7
+  %9 = load ptr, ptr %0
+  %10 = getelementptr %Vec2, ptr %9, i32 0, i32 1
+  %11 = load i32, ptr %10
+  %12 = load ptr, ptr %1
+  %13 = getelementptr %Vec2, ptr %12, i32 0, i32 1
+  %14 = load i32, ptr %13
+  %15 = mul i32 %11, %14
+  %16 = add i32 %8, %15
+  ret i32 %16
+}
 
 define i32 @main() {
 entry0:
@@ -31,18 +55,8 @@ entry0:
   store i32 2, ptr %4
   %5 = getelementptr %Vec2, ptr %3, i32 0, i32 1
   store i32 1, ptr %5
-  %7 = getelementptr %Vec2, ptr %0, i32 0, i32 0
-  %8 = load i32, ptr %7
-  %9 = getelementptr %Vec2, ptr %3, i32 0, i32 0
-  %10 = load i32, ptr %9
-  %11 = mul i32 %8, %10
-  %12 = getelementptr %Vec2, ptr %0, i32 0, i32 1
-  %13 = load i32, ptr %12
-  %14 = getelementptr %Vec2, ptr %3, i32 0, i32 1
-  %15 = load i32, ptr %14
-  %16 = mul i32 %13, %15
-  %17 = add i32 %11, %16
-  ret i32 %17
+  %6 = call i32 @dot(ptr %0, ptr %3)
+  ret i32 %6
 }
 
 declare void @exit(i32 %arg0)

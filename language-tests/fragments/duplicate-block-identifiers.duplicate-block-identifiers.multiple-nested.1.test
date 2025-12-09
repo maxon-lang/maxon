@@ -12,23 +12,28 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 11
+; Instructions: 15
 
 define i32 @main() {
 entry0:
+  %0 = alloca i32
+  store i32 0, ptr %0
   br i1 1, label %then1, label %ifcont2
 then1:
+  store i32 1, ptr %0
   br label %whilecond3
 ifcont2:
-  %2 = phi i32 [ 0, %entry0 ], [ %3, %afterloop5 ]
-  ret i32 %2
+  %1 = load i32, ptr %0
+  ret i32 %1
 whilecond3:
   br i1 1, label %loop4, label %afterloop5
 loop4:
+  store i32 2, ptr %0
   br label %afterloop5
 afterloop5:
-  %3 = phi i32 [ 1, %whilecond3 ], [ 2, %loop4 ]
   br label %ifcont2
+afterbreak6:
+  br label %whilecond3
 }
 
 declare void @exit(i32 %arg0)

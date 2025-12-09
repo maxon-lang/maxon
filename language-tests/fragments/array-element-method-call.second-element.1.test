@@ -16,11 +16,22 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 50
+; Instructions: 55
 
 %Value = type { i32 }
 %__ManagedArrayData_Value = type { ptr, i32, i32 }
 %array<Value> = type { %__ManagedArrayData_Value, i32 }
+
+define i32 @Value.doubled(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Value, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  %4 = mul i32 %3, 2
+  ret i32 %4
+}
 
 define i32 @main() {
 entry0:
@@ -58,9 +69,7 @@ entry0:
   %24 = getelementptr %__ManagedArrayData_Value, ptr %23, i32 0, i32 0
   %25 = load ptr, ptr %24
   %26 = getelementptr %Value, ptr %25, i64 2
-  %34 = getelementptr %Value, ptr %26, i32 0, i32 0
-  %35 = load i32, ptr %34
-  %36 = shl i32 %35, 1
+  %27 = call i32 @Value.doubled(ptr %26)
   %28 = getelementptr %array<Value>, ptr %1, i32 0, i32 0
   %29 = getelementptr %__ManagedArrayData_Value, ptr %28, i32 0, i32 0
   %30 = load ptr, ptr %29
@@ -72,7 +81,7 @@ vals.free1:
   call void @free(ptr %30)
   br label %vals.skip2
 vals.skip2:
-  ret i32 %36
+  ret i32 %27
 }
 
 declare void @free(ptr %arg0)

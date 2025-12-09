@@ -12,13 +12,14 @@ rm -f temp/unoptimized.ir temp/unoptimized.exe temp/optimized.ir temp/optimized.
 SOURCE="$1"
 
 # Compile unoptimized with IR
-./bin/maxon compile "$SOURCE" --emit-ir -o "temp/unoptimized.exe"
+./bin/maxon compile "$SOURCE" --emit-ir -vvv -o "temp/unoptimized.exe" > temp/unoptimized.compiler.log 2>&1
 if [ $? -ne 0 ]; then
 	echo "unopt Compilation failed"
 	exit 1
 fi
 echo "wrote temp/unoptimized.ir"
 echo "wrote temp/unoptimized.exe"
+echo "wrote temp/unoptimized.compiler.log"
 
 # Run unoptimized
 echo "Running unoptimized:"
@@ -27,13 +28,14 @@ echo "unoptimized exit code: $?"
 
 echo ""
 # Compile optimized with IR
-./bin/maxon compile "$SOURCE" --emit-ir -O -o "temp/optimized.exe"
+./bin/maxon compile "$SOURCE" --emit-ir -O -vvv -o "temp/optimized.exe" > temp/optimized.compiler.log 2>&1
 if [ $? -ne 0 ]; then
 	echo "optimized Compilation failed"
 	exit 1
 fi
 echo "wrote temp/optimized.ir"
 echo "wrote temp/optimized.exe"
+echo "wrote temp/optimized.compiler.log"
 
 # Run optimized
 echo "Running optimized:"

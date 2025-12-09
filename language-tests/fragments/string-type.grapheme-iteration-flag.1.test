@@ -12,984 +12,6 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 731
-
-%character = type { ptr }
-%substring = type { ptr, ptr, i32, i32 }
-%string = type { ptr, i32 }
-%ByteView = type { ptr, i32 }
-%cstring = type { ptr, i32, ptr }
-%GraphemeState = type { i32, i1 }
-%__ManagedArrayData_byte = type { ptr, i32, i32 }
-%array<byte> = type { %__ManagedArrayData_byte, i32 }
-%_ManagedArray_byte = type { ptr, i32 }
-%__ManagedStringData = type { %_ManagedArray_byte, i32, i32 }
-
-@.__tag.tostring = constant [19 x i8] c"substring.toString\00"
-@.__tag.free.sub = constant [17 x i8] c"substring parent\00"
-@.__tag.str.lit = constant [15 x i8] c"string literal\00"
-@.str.0 = constant [17 x i8] c"\F0\9F\87\BA\F0\9F\87\B8\F0\9F\87\AC\F0\9F\87\A7\00"
-@.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
-@.str.1 = constant [2 x i8] c"\0A\00"
-@.__tag.free.cs = constant [16 x i8] c"cstring release\00"
-@.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
-
-define %cstring @string.cstr(ptr %self) {
-entry0:
-  %2 = getelementptr %string, ptr %self, i32 0, i32 0
-  %3 = load ptr, ptr %2
-  %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
-  %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
-  %6 = load ptr, ptr %5
-  %7 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 1
-  %8 = load i32, ptr %7
-  %9 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 2
-  %10 = load i32, ptr %9
-  %11 = icmp sgt i32 %10, 0
-  br i1 %11, label %cstring.retain1, label %cstring.continue2
-cstring.retain1:
-  call void @_managed_string_retain(ptr %6)
-  br label %cstring.continue2
-cstring.continue2:
-  %12 = alloca %cstring
-  %13 = getelementptr %cstring, ptr %12, i32 0, i32 0
-  store ptr %6, ptr %13
-  %14 = getelementptr %cstring, ptr %12, i32 0, i32 1
-  store i32 %8, ptr %14
-  %15 = getelementptr %cstring, ptr %12, i32 0, i32 2
-  store ptr %3, ptr %15
-  %16 = load %cstring, ptr %12
-  ret %cstring %16
-}
-
-define Optional<%character> @string.next(ptr %self) {
-entry0:
-  %2 = getelementptr %string, ptr %self, i32 0, i32 1
-  %3 = load i32, ptr %2
-  %5 = getelementptr %string, ptr %self, i32 0, i32 0
-  %6 = load ptr, ptr %5
-  %7 = getelementptr %__ManagedStringData, ptr %6, i32 0, i32 1
-  %8 = load i32, ptr %7
-  %9 = icmp slt i32 %3, %8
-  br i1 %9, label %then1, label %ifcont2
-then1:
-  %11 = getelementptr %string, ptr %self, i32 0, i32 0
-  %12 = load ptr, ptr %11
-  %13 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 1
-  %14 = load i32, ptr %13
-  %18 = getelementptr %string, ptr %self, i32 0, i32 1
-  %19 = load i32, ptr %18
-  %47 = getelementptr %string, ptr %self, i32 0, i32 0
-  %48 = load ptr, ptr %47
-  %50 = call i32 @string.findGraphemeEndManagedRange(ptr %48, i32 0, i32 %19, i32 %14)
-  %25 = getelementptr %string, ptr %self, i32 0, i32 1
-  %26 = load i32, ptr %25
-  %27 = sub i32 %50, %26
-  %31 = getelementptr %string, ptr %self, i32 0, i32 1
-  %32 = load i32, ptr %31
-  %34 = call %character @string._makeCharFromBytes(ptr %self, i32 %32, i32 %27)
-  %35 = alloca %character
-  store %character %34, ptr %35
-  %37 = getelementptr %string, ptr %self, i32 0, i32 1
-  store i32 %50, ptr %37
-  %40 = alloca Optional<%character>
-  %41 = getelementptr Optional<%character>, ptr %40, i32 0, i32 0
-  store i8 1, ptr %41
-  %42 = getelementptr Optional<%character>, ptr %40, i32 0, i32 1
-  store %character %34, ptr %42
-  %43 = load Optional<%character>, ptr %40
-  ret Optional<%character> %43
-ifcont2:
-  %44 = alloca Optional<%character>
-  %45 = getelementptr Optional<%character>, ptr %44, i32 0, i32 0
-  store i8 0, ptr %45
-  %46 = load Optional<%character>, ptr %44
-  ret Optional<%character> %46
-}
-
-define %character @string._makeCharFromBytes(ptr %self, i32 %start, i32 %byteLen) {
-entry0:
-  %4 = getelementptr %string, ptr %self, i32 0, i32 0
-  %5 = load ptr, ptr %4
-  %9 = add i32 %start, %byteLen
-  %10 = sub i32 %9, %start
-  %11 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 0
-  %12 = getelementptr %_ManagedArray_byte, ptr %11, i32 0, i32 0
-  %13 = load ptr, ptr %12
-  %14 = sext i32 %start to i64
-  %15 = getelementptr i8, ptr %13, i64 0, i64 %14
-  %16 = alloca %substring
-  %17 = getelementptr %substring, ptr %16, i32 0, i32 0
-  store ptr %5, ptr %17
-  %18 = getelementptr %substring, ptr %16, i32 0, i32 1
-  store ptr %15, ptr %18
-  %19 = getelementptr %substring, ptr %16, i32 0, i32 2
-  store i32 %10, ptr %19
-  %20 = getelementptr %substring, ptr %16, i32 0, i32 3
-  store i32 0, ptr %20
-  %21 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 2
-  %22 = load i32, ptr %21
-  %23 = icmp sgt i32 %22, 0
-  br i1 %23, label %slice.retain1, label %slice.continue2
-slice.retain1:
-  call void @_managed_string_retain(ptr %13)
-  br label %slice.continue2
-slice.continue2:
-  %24 = load %substring, ptr %16
-  %25 = alloca %substring
-  store %substring %24, ptr %25
-  %26 = getelementptr %substring, ptr %25, i32 0, i32 1
-  %27 = load ptr, ptr %26
-  %28 = getelementptr %substring, ptr %25, i32 0, i32 2
-  %29 = load i32, ptr %28
-  %30 = add i32 %29, 1
-  %31 = sext i32 %30 to i64
-  %32 = call ptr @_managed_string_alloc(i64 %31, ptr @.__tag.tostring)
-  %33 = sext i32 %29 to i64
-  %34 = call ptr @memcpy(ptr %32, ptr %27, i64 %33)
-  %35 = getelementptr i8, ptr %32, i64 %33
-  store i8 0, ptr %35
-  %36 = call ptr @malloc(i64 32)
-  %37 = getelementptr %__ManagedStringData, ptr %36, i32 0, i32 0
-  %38 = getelementptr %_ManagedArray_byte, ptr %37, i32 0, i32 0
-  store ptr %32, ptr %38
-  %39 = getelementptr %_ManagedArray_byte, ptr %37, i32 0, i32 1
-  store i32 %29, ptr %39
-  %40 = getelementptr %__ManagedStringData, ptr %36, i32 0, i32 1
-  store i32 %29, ptr %40
-  %41 = getelementptr %__ManagedStringData, ptr %36, i32 0, i32 2
-  store i32 %30, ptr %41
-  %43 = alloca %character
-  %45 = getelementptr %character, ptr %43, i32 0, i32 0
-  store ptr %36, ptr %45
-  %46 = load %character, ptr %43
-  %47 = getelementptr %substring, ptr %25, i32 0, i32 0
-  %48 = load ptr, ptr %47
-  %49 = getelementptr %__ManagedStringData, ptr %48, i32 0, i32 2
-  %50 = load i32, ptr %49
-  %51 = icmp sgt i32 %50, 0
-  br i1 %51, label %sub.release3, label %sub.continue4
-sub.release3:
-  %52 = getelementptr %__ManagedStringData, ptr %48, i32 0, i32 0
-  %53 = getelementptr %_ManagedArray_byte, ptr %52, i32 0, i32 0
-  %54 = load ptr, ptr %53
-  call void @_managed_string_release(ptr %54, ptr @.__tag.free.sub)
-  br label %sub.continue4
-sub.continue4:
-  ret %character %46
-}
-
-define %ByteView @character.bytes(ptr %self) {
-entry0:
-  %1 = alloca %ByteView
-  %3 = getelementptr %character, ptr %self, i32 0, i32 0
-  %4 = load ptr, ptr %3
-  %5 = getelementptr %ByteView, ptr %1, i32 0, i32 0
-  store ptr %4, ptr %5
-  %6 = getelementptr %ByteView, ptr %1, i32 0, i32 1
-  store i32 0, ptr %6
-  %7 = load %ByteView, ptr %1
-  ret %ByteView %7
-}
-
-define i32 @main() {
-entry0:
-  %0 = alloca %string
-  %1 = call ptr @_managed_string_alloc(i64 16, ptr @.__tag.str.lit)
-  %2 = call ptr @memcpy(ptr %1, ptr @.str.0, i64 16)
-  %4 = alloca %__ManagedStringData
-  %5 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 0
-  %6 = getelementptr %_ManagedArray_byte, ptr %5, i32 0, i32 0
-  store ptr %1, ptr %6
-  %7 = getelementptr %_ManagedArray_byte, ptr %5, i32 0, i32 1
-  store i32 16, ptr %7
-  %8 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 1
-  store i32 16, ptr %8
-  %9 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 2
-  store i32 16, ptr %9
-  %10 = getelementptr %string, ptr %0, i32 0, i32 0
-  store ptr %4, ptr %10
-  %11 = getelementptr %string, ptr %0, i32 0, i32 1
-  store i32 0, ptr %11
-  %13 = load %string, ptr %0
-  %14 = alloca %string
-  store %string %13, ptr %14
-  br label %forcond1
-forcond1:
-  %33 = phi i32 [ 0, %entry0 ], [ %29, %forloop2 ]
-  %15 = call Optional<%character> @string.next(ptr %14)
-  %16 = alloca Optional<%character>
-  store Optional<%character> %15, ptr %16
-  %17 = getelementptr Optional<%character>, ptr %16, i32 0, i32 0
-  %18 = load i8, ptr %17
-  %19 = icmp eq i8 %18, 1
-  br i1 %19, label %forloop2, label %afterfor3
-forloop2:
-  %20 = getelementptr Optional<%character>, ptr %16, i32 0, i32 1
-  %21 = load %character, ptr %20
-  %22 = alloca %character
-  store %character %21, ptr %22
-  %23 = call %ByteView @character.bytes(ptr %22)
-  %24 = alloca %ByteView
-  store %ByteView %23, ptr %24
-  %29 = add i32 %33, 1
-  br label %forcond1
-afterfor3:
-  %31 = call i32 @sys.printInt(i32 %33)
-  call void @_managed_string_release(ptr %1, ptr @.__tag.free.str.heap)
-  ret i32 0
-}
-
-declare ptr @malloc(i64 %arg0)
-
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
-define %string @string.stringFromCharacters(ptr %buffer, i32 %length) {
-entry0:
-  %2 = alloca %string
-  %5 = getelementptr %array<byte>, ptr %buffer, i32 0, i32 0
-  %6 = getelementptr %__ManagedArrayData_byte, ptr %5, i32 0, i32 0
-  %7 = load ptr, ptr %6
-  %8 = add i32 %length, 1
-  %9 = sext i32 %8 to i64
-  %10 = call ptr @malloc(i64 %9)
-  %11 = sext i32 %length to i64
-  %12 = call ptr @memcpy(ptr %10, ptr %7, i64 %11)
-  %13 = getelementptr i8, ptr %10, i64 %11
-  store i8 0, ptr %13
-  %14 = call ptr @malloc(i64 32)
-  %15 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 0
-  %16 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 0
-  store ptr %10, ptr %16
-  %17 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 1
-  store i32 %length, ptr %17
-  %18 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 1
-  store i32 %length, ptr %18
-  %19 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 2
-  store i32 %length, ptr %19
-  %20 = getelementptr %string, ptr %2, i32 0, i32 0
-  store ptr %14, ptr %20
-  %21 = getelementptr %string, ptr %2, i32 0, i32 1
-  store i32 0, ptr %21
-  %22 = load %string, ptr %2
-  ret %string %22
-}
-
-define i32 @sys.print(ptr %value) {
-entry0:
-  %2 = call %cstring @string.cstr(ptr %value)
-  %3 = alloca %cstring
-  store %cstring %2, ptr %3
-  %4 = getelementptr %cstring, ptr %3, i32 0, i32 0
-  %5 = load ptr, ptr %4
-  %6 = getelementptr %cstring, ptr %3, i32 0, i32 1
-  %7 = load i32, ptr %6
-  %8 = call i32 @write_stdout(ptr %5, i32 %7)
-  %10 = alloca %string
-  %11 = alloca %__ManagedStringData
-  %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
-  %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
-  store ptr @.str.1, ptr %13
-  %14 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 1
-  store i32 1, ptr %14
-  %15 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 1
-  store i32 1, ptr %15
-  %16 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 2
-  store i32 0, ptr %16
-  %17 = getelementptr %string, ptr %10, i32 0, i32 0
-  store ptr %11, ptr %17
-  %18 = getelementptr %string, ptr %10, i32 0, i32 1
-  store i32 0, ptr %18
-  %19 = call %cstring @string.cstr(ptr %10)
-  %20 = alloca %cstring
-  store %cstring %19, ptr %20
-  %21 = getelementptr %cstring, ptr %20, i32 0, i32 0
-  %22 = load ptr, ptr %21
-  %23 = getelementptr %cstring, ptr %20, i32 0, i32 1
-  %24 = load i32, ptr %23
-  %25 = call i32 @write_stdout(ptr %22, i32 %24)
-  %27 = add i32 %8, 1
-  %28 = getelementptr %cstring, ptr %3, i32 0, i32 2
-  %29 = load ptr, ptr %28
-  %30 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 2
-  %31 = load i32, ptr %30
-  %32 = icmp sgt i32 %31, 0
-  br i1 %32, label %cs.cstring.release1, label %cs.cstring.continue2
-cs.cstring.release1:
-  %33 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 0
-  %34 = getelementptr %_ManagedArray_byte, ptr %33, i32 0, i32 0
-  %35 = load ptr, ptr %34
-  call void @_managed_string_release(ptr %35, ptr @.__tag.free.cs)
-  br label %cs.cstring.continue2
-cs.cstring.continue2:
-  %36 = getelementptr %cstring, ptr %20, i32 0, i32 2
-  %37 = load ptr, ptr %36
-  %38 = getelementptr %__ManagedStringData, ptr %37, i32 0, i32 2
-  %39 = load i32, ptr %38
-  %40 = icmp sgt i32 %39, 0
-  br i1 %40, label %newline_cs.cstring.release3, label %newline_cs.cstring.continue4
-newline_cs.cstring.release3:
-  %41 = getelementptr %__ManagedStringData, ptr %37, i32 0, i32 0
-  %42 = getelementptr %_ManagedArray_byte, ptr %41, i32 0, i32 0
-  %43 = load ptr, ptr %42
-  call void @_managed_string_release(ptr %43, ptr @.__tag.free.newline_cs)
-  br label %newline_cs.cstring.continue4
-newline_cs.cstring.continue4:
-  ret i32 %27
-}
-
-define i32 @sys.printInt(i32 %value) {
-entry0:
-  %1 = alloca [12 x i8]
-  %2 = alloca %array<byte>
-  %3 = getelementptr %array<byte>, ptr %2, i32 0, i32 0
-  %4 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 0
-  store ptr %1, ptr %4
-  %5 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 1
-  store i32 12, ptr %5
-  %6 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 2
-  store i32 0, ptr %6
-  %7 = getelementptr %array<byte>, ptr %2, i32 0, i32 1
-  store i32 0, ptr %7
-  %8 = call ptr @memset(ptr %1, i32 0, i64 12)
-  %10 = call i32 @fmt.formatIntArray(i32 %value, ptr %2)
-  %13 = call %string @string.stringFromCharacters(ptr %2, i32 %10)
-  %14 = alloca %string
-  store %string %13, ptr %14
-  %15 = call i32 @sys.print(ptr %14)
-  %16 = getelementptr %array<byte>, ptr %2, i32 0, i32 0
-  %17 = getelementptr %__ManagedArrayData_byte, ptr %16, i32 0, i32 0
-  %18 = load ptr, ptr %17
-  %19 = getelementptr %__ManagedArrayData_byte, ptr %16, i32 0, i32 2
-  %20 = load i32, ptr %19
-  %21 = icmp sgt i32 %20, 0
-  br i1 %21, label %buffer.free1, label %buffer.skip2
-buffer.free1:
-  call void @free(ptr %18)
-  br label %buffer.skip2
-buffer.skip2:
-  ret i32 %15
-}
-
-define i32 @fmt.formatIntArray(i32 %value, ptr %buffer) {
-entry0:
-  %3 = icmp eq i32 %value, 0
-  br i1 %3, label %then1, label %ifcont2
-then1:
-  %5 = getelementptr %array<byte>, ptr %buffer, i32 0, i32 0
-  %6 = getelementptr %__ManagedArrayData_byte, ptr %5, i32 0, i32 0
-  %7 = load ptr, ptr %6
-  %8 = getelementptr i8, ptr %7, i64 0, i64 0
-  %9 = trunc i32 48 to i8
-  store i8 %9, ptr %8
-  ret i32 1
-ifcont2:
-  %10 = alloca [12 x i8]
-  %11 = alloca %array<byte>
-  %12 = getelementptr %array<byte>, ptr %11, i32 0, i32 0
-  %13 = getelementptr %__ManagedArrayData_byte, ptr %12, i32 0, i32 0
-  store ptr %10, ptr %13
-  %14 = getelementptr %__ManagedArrayData_byte, ptr %12, i32 0, i32 1
-  store i32 12, ptr %14
-  %15 = getelementptr %__ManagedArrayData_byte, ptr %12, i32 0, i32 2
-  store i32 0, ptr %15
-  %16 = getelementptr %array<byte>, ptr %11, i32 0, i32 1
-  store i32 0, ptr %16
-  %17 = call ptr @memset(ptr %10, i32 0, i64 12)
-  %23 = icmp slt i32 %value, 0
-  br i1 %23, label %then3, label %ifcont4
-then3:
-  %25 = sub i32 0, %value
-  br label %ifcont4
-ifcont4:
-  %93 = phi i32 [ %value, %ifcont2 ], [ %25, %then3 ]
-  %92 = phi i32 [ 0, %ifcont2 ], [ 1, %then3 ]
-  br label %whilecond5
-whilecond5:
-  %94 = phi i32 [ %93, %ifcont4 ], [ %49, %loop6 ]
-  %90 = phi i32 [ 11, %ifcont4 ], [ %43, %loop6 ]
-  %27 = icmp sgt i32 %94, 0
-  br i1 %27, label %loop6, label %afterloop7
-loop6:
-  %29 = srem i32 %94, 10
-  %32 = add i32 48, %29
-  %35 = getelementptr %array<byte>, ptr %11, i32 0, i32 0
-  %36 = getelementptr %__ManagedArrayData_byte, ptr %35, i32 0, i32 0
-  %37 = load ptr, ptr %36
-  %38 = sext i32 %90 to i64
-  %39 = getelementptr i8, ptr %37, i64 0, i64 %38
-  %41 = trunc i32 %32 to i8
-  store i8 %41, ptr %39
-  %43 = sub i32 %90, 1
-  %49 = sdiv i32 %94, 10
-  br label %whilecond5
-afterloop7:
-  %51 = icmp eq i32 %92, 1
-  br i1 %51, label %then8, label %ifcont9
-then8:
-  %53 = getelementptr %array<byte>, ptr %11, i32 0, i32 0
-  %54 = getelementptr %__ManagedArrayData_byte, ptr %53, i32 0, i32 0
-  %55 = load ptr, ptr %54
-  %56 = sext i32 %90 to i64
-  %57 = getelementptr i8, ptr %55, i64 0, i64 %56
-  %58 = trunc i32 45 to i8
-  store i8 %58, ptr %57
-  %60 = sub i32 %90, 1
-  br label %ifcont9
-ifcont9:
-  %91 = phi i32 [ %90, %afterloop7 ], [ %60, %then8 ]
-  %62 = add i32 %91, 1
-  %65 = sub i32 12, %62
-  br label %whilecond10
-whilecond10:
-  %97 = phi i32 [ 0, %ifcont9 ], [ %88, %loop11 ]
-  %70 = icmp slt i32 %97, %65
-  br i1 %70, label %loop11, label %afterloop12
-loop11:
-  %73 = getelementptr %array<byte>, ptr %buffer, i32 0, i32 0
-  %74 = getelementptr %__ManagedArrayData_byte, ptr %73, i32 0, i32 0
-  %75 = load ptr, ptr %74
-  %76 = sext i32 %97 to i64
-  %77 = getelementptr i8, ptr %75, i64 0, i64 %76
-  %80 = add i32 %62, %97
-  %81 = getelementptr %array<byte>, ptr %11, i32 0, i32 0
-  %82 = getelementptr %__ManagedArrayData_byte, ptr %81, i32 0, i32 0
-  %83 = load ptr, ptr %82
-  %84 = sext i32 %80 to i64
-  %85 = getelementptr i8, ptr %83, i64 0, i64 %84
-  %86 = load i8, ptr %85
-  store i8 %86, ptr %77
-  %88 = add i32 %97, 1
-  br label %whilecond10
-afterloop12:
-  ret i32 %65
-}
-
-define i32 @string.findGraphemeEndManagedRange(ptr %managed, i32 %offset, i32 %startPos, i32 %len) {
-entry0:
-  %6 = icmp sge i32 %startPos, %len
-  br i1 %6, label %then1, label %ifcont2
-then1:
-  ret i32 %startPos
-ifcont2:
-  %12 = add i32 %offset, %startPos
-  %16 = call i32 @string.utf8DecodeAt(ptr %managed, i32 %12)
-  %20 = call i32 @string.utf8ByteLengthAt(ptr %managed, i32 %12)
-  %24 = add i32 %startPos, %20
-  %26 = call i32 @string.graphemeBreakProperty(i32 %16)
-  %28 = call %GraphemeState @string.graphemeStateInit()
-  %29 = alloca %GraphemeState
-  store %GraphemeState %28, ptr %29
-  %32 = call %GraphemeState @string.graphemeStateUpdate(ptr %29, i32 %26, i32 %16)
-  store %GraphemeState %32, ptr %29
-  br label %whilecond3
-whilecond3:
-  %68 = phi i32 [ %26, %ifcont2 ], [ %44, %ifcont7 ]
-  %67 = phi i32 [ %16, %ifcont2 ], [ %41, %ifcont7 ]
-  %65 = phi i32 [ %24, %ifcont2 ], [ %63, %ifcont7 ]
-  %35 = icmp slt i32 %65, %len
-  br i1 %35, label %loop4, label %afterloop5
-loop4:
-  %38 = add i32 %offset, %65
-  %41 = call i32 @string.utf8DecodeAt(ptr %managed, i32 %38)
-  %44 = call i32 @string.graphemeBreakProperty(i32 %41)
-  %50 = call i1 @string.isGraphemeBreak(i32 %68, i32 %44, i32 %67, i32 %41, ptr %29)
-  br i1 %50, label %then6, label %ifcont7
-afterloop5:
-  ret i32 %65
-then6:
-  ret i32 %65
-ifcont7:
-  %54 = call %GraphemeState @string.graphemeStateUpdate(ptr %29, i32 %44, i32 %41)
-  store %GraphemeState %54, ptr %29
-  %59 = call i32 @string.utf8ByteLengthAt(ptr %managed, i32 %38)
-  %63 = add i32 %65, %59
-  br label %whilecond3
-}
-
-define i32 @string.graphemeBreakProperty(i32 %cp) {
-entry0:
-  %2 = icmp eq i32 %cp, 13
-  br i1 %2, label %then1, label %ifcont2
-then1:
-  ret i32 1
-ifcont2:
-  %4 = icmp eq i32 %cp, 10
-  br i1 %4, label %then3, label %ifcont4
-then3:
-  ret i32 2
-ifcont4:
-  %6 = icmp slt i32 %cp, 32
-  %8 = icmp sge i32 %cp, 127
-  %10 = icmp slt i32 %cp, 160
-  %11 = and i1 %8, %10
-  %12 = or i1 %6, %11
-  br i1 %12, label %then5, label %ifcont6
-then5:
-  ret i32 3
-ifcont6:
-  %14 = icmp eq i32 %cp, 8205
-  br i1 %14, label %then7, label %ifcont8
-then7:
-  ret i32 5
-ifcont8:
-  %16 = icmp sge i32 %cp, 127462
-  %18 = icmp sle i32 %cp, 127487
-  %19 = and i1 %16, %18
-  br i1 %19, label %then9, label %ifcont10
-then9:
-  ret i32 6
-ifcont10:
-  %21 = icmp sge i32 %cp, 44032
-  %23 = icmp sle i32 %cp, 55203
-  %24 = and i1 %21, %23
-  br i1 %24, label %then11, label %ifcont12
-then11:
-  %26 = sub i32 %cp, 44032
-  %29 = srem i32 %26, 28
-  %30 = icmp eq i32 %29, 0
-  br i1 %30, label %then13, label %else15
-ifcont12:
-  %32 = icmp sge i32 %cp, 4352
-  %34 = icmp sle i32 %cp, 4447
-  %35 = and i1 %32, %34
-  br i1 %35, label %then16, label %ifcont17
-then13:
-  ret i32 12
-else15:
-  ret i32 13
-then16:
-  ret i32 9
-ifcont17:
-  %37 = icmp sge i32 %cp, 4448
-  %39 = icmp sle i32 %cp, 4519
-  %40 = and i1 %37, %39
-  br i1 %40, label %then18, label %ifcont19
-then18:
-  ret i32 10
-ifcont19:
-  %42 = icmp sge i32 %cp, 4520
-  %44 = icmp sle i32 %cp, 4607
-  %45 = and i1 %42, %44
-  br i1 %45, label %then20, label %ifcont21
-then20:
-  ret i32 11
-ifcont21:
-  %47 = icmp sge i32 %cp, 127995
-  %49 = icmp sle i32 %cp, 127999
-  %50 = and i1 %47, %49
-  br i1 %50, label %then22, label %ifcont23
-then22:
-  ret i32 4
-ifcont23:
-  %52 = icmp sge i32 %cp, 65024
-  %54 = icmp sle i32 %cp, 65039
-  %55 = and i1 %52, %54
-  br i1 %55, label %then24, label %ifcont25
-then24:
-  ret i32 4
-ifcont25:
-  %57 = icmp sge i32 %cp, 768
-  %59 = icmp sle i32 %cp, 879
-  %60 = and i1 %57, %59
-  br i1 %60, label %then26, label %ifcont27
-then26:
-  ret i32 4
-ifcont27:
-  %62 = icmp eq i32 %cp, 8203
-  %64 = icmp sge i32 %cp, 8206
-  %66 = icmp sle i32 %cp, 8207
-  %67 = and i1 %64, %66
-  %68 = or i1 %62, %67
-  %70 = icmp sge i32 %cp, 8232
-  %72 = icmp sle i32 %cp, 8238
-  %73 = and i1 %70, %72
-  %74 = or i1 %68, %73
-  br i1 %74, label %then28, label %ifcont29
-then28:
-  ret i32 3
-ifcont29:
-  %76 = icmp eq i32 %cp, 8204
-  br i1 %76, label %then30, label %ifcont31
-then30:
-  ret i32 4
-ifcont31:
-  ret i32 0
-}
-
-define i1 @string.isExtendedPictographic(i32 %cp) {
-entry0:
-  %2 = icmp sge i32 %cp, 128512
-  %4 = icmp sle i32 %cp, 128591
-  %5 = and i1 %2, %4
-  br i1 %5, label %then1, label %ifcont2
-then1:
-  ret i1 1
-ifcont2:
-  %7 = icmp sge i32 %cp, 127744
-  %9 = icmp sle i32 %cp, 128511
-  %10 = and i1 %7, %9
-  br i1 %10, label %then3, label %ifcont4
-then3:
-  ret i1 1
-ifcont4:
-  %12 = icmp sge i32 %cp, 128640
-  %14 = icmp sle i32 %cp, 128767
-  %15 = and i1 %12, %14
-  br i1 %15, label %then5, label %ifcont6
-then5:
-  ret i1 1
-ifcont6:
-  %17 = icmp sge i32 %cp, 129280
-  %19 = icmp sle i32 %cp, 129535
-  %20 = and i1 %17, %19
-  br i1 %20, label %then7, label %ifcont8
-then7:
-  ret i1 1
-ifcont8:
-  %22 = icmp sge i32 %cp, 129536
-  %24 = icmp sle i32 %cp, 130047
-  %25 = and i1 %22, %24
-  br i1 %25, label %then9, label %ifcont10
-then9:
-  ret i1 1
-ifcont10:
-  %27 = icmp sge i32 %cp, 9728
-  %29 = icmp sle i32 %cp, 9983
-  %30 = and i1 %27, %29
-  br i1 %30, label %then11, label %ifcont12
-then11:
-  ret i1 1
-ifcont12:
-  %32 = icmp sge i32 %cp, 9984
-  %34 = icmp sle i32 %cp, 10175
-  %35 = and i1 %32, %34
-  br i1 %35, label %then13, label %ifcont14
-then13:
-  ret i1 1
-ifcont14:
-  ret i1 0
-}
-
-define %GraphemeState @string.graphemeStateInit() {
-entry0:
-  %0 = alloca %GraphemeState
-  %1 = getelementptr %GraphemeState, ptr %0, i32 0, i32 0
-  store i32 0, ptr %1
-  %2 = getelementptr %GraphemeState, ptr %0, i32 0, i32 1
-  store i1 0, ptr %2
-  %3 = load %GraphemeState, ptr %0
-  ret %GraphemeState %3
-}
-
-define i1 @string.isGraphemeBreak(i32 %prevGbp, i32 %currGbp, i32 %prevCp, i32 %currCp, ptr %state) {
-entry0:
-  %9 = icmp eq i32 %prevGbp, 1
-  %11 = icmp eq i32 %currGbp, 2
-  %12 = and i1 %9, %11
-  br i1 %12, label %then1, label %ifcont2
-then1:
-  ret i1 0
-ifcont2:
-  %14 = icmp eq i32 %prevGbp, 3
-  %16 = icmp eq i32 %prevGbp, 1
-  %17 = or i1 %14, %16
-  %19 = icmp eq i32 %prevGbp, 2
-  %20 = or i1 %17, %19
-  br i1 %20, label %then3, label %ifcont4
-then3:
-  ret i1 1
-ifcont4:
-  %22 = icmp eq i32 %currGbp, 3
-  %24 = icmp eq i32 %currGbp, 1
-  %25 = or i1 %22, %24
-  %27 = icmp eq i32 %currGbp, 2
-  %28 = or i1 %25, %27
-  br i1 %28, label %then5, label %ifcont6
-then5:
-  ret i1 1
-ifcont6:
-  %30 = icmp eq i32 %prevGbp, 9
-  br i1 %30, label %then7, label %ifcont8
-then7:
-  %32 = icmp eq i32 %currGbp, 9
-  %34 = icmp eq i32 %currGbp, 10
-  %35 = or i1 %32, %34
-  %37 = icmp eq i32 %currGbp, 12
-  %38 = or i1 %35, %37
-  %40 = icmp eq i32 %currGbp, 13
-  %41 = or i1 %38, %40
-  br i1 %41, label %then9, label %ifcont10
-ifcont8:
-  %43 = icmp eq i32 %prevGbp, 12
-  %45 = icmp eq i32 %prevGbp, 10
-  %46 = or i1 %43, %45
-  br i1 %46, label %then11, label %ifcont12
-then9:
-  ret i1 0
-ifcont10:
-  br label %ifcont8
-then11:
-  %48 = icmp eq i32 %currGbp, 10
-  %50 = icmp eq i32 %currGbp, 11
-  %51 = or i1 %48, %50
-  br i1 %51, label %then13, label %ifcont14
-ifcont12:
-  %53 = icmp eq i32 %prevGbp, 13
-  %55 = icmp eq i32 %prevGbp, 11
-  %56 = or i1 %53, %55
-  br i1 %56, label %then15, label %ifcont16
-then13:
-  ret i1 0
-ifcont14:
-  br label %ifcont12
-then15:
-  %58 = icmp eq i32 %currGbp, 11
-  br i1 %58, label %then17, label %ifcont18
-ifcont16:
-  %60 = icmp eq i32 %currGbp, 4
-  %62 = icmp eq i32 %currGbp, 5
-  %63 = or i1 %60, %62
-  br i1 %63, label %then19, label %ifcont20
-then17:
-  ret i1 0
-ifcont18:
-  br label %ifcont16
-then19:
-  ret i1 0
-ifcont20:
-  %65 = icmp eq i32 %currGbp, 8
-  br i1 %65, label %then21, label %ifcont22
-then21:
-  ret i1 0
-ifcont22:
-  %67 = icmp eq i32 %prevGbp, 7
-  br i1 %67, label %then23, label %ifcont24
-then23:
-  ret i1 0
-ifcont24:
-  %69 = icmp eq i32 %prevGbp, 5
-  %71 = call i1 @string.isExtendedPictographic(i32 %currCp)
-  %72 = and i1 %69, %71
-  br i1 %72, label %then25, label %ifcont26
-then25:
-  %74 = getelementptr %GraphemeState, ptr %state, i32 0, i32 1
-  %75 = load i1, ptr %74
-  br i1 %75, label %then27, label %ifcont28
-ifcont26:
-  %77 = icmp eq i32 %prevGbp, 6
-  %79 = icmp eq i32 %currGbp, 6
-  %80 = and i1 %77, %79
-  br i1 %80, label %then29, label %ifcont30
-then27:
-  ret i1 0
-ifcont28:
-  br label %ifcont26
-then29:
-  %82 = getelementptr %GraphemeState, ptr %state, i32 0, i32 0
-  %83 = load i32, ptr %82
-  %84 = srem i32 %83, 2
-  %85 = icmp eq i32 %84, 1
-  br i1 %85, label %then31, label %ifcont32
-ifcont30:
-  ret i1 1
-then31:
-  ret i1 0
-ifcont32:
-  br label %ifcont30
-}
-
-define %GraphemeState @string.graphemeStateUpdate(ptr %state, i32 %gbp, i32 %cp) {
-entry0:
-  %3 = alloca %GraphemeState
-  %4 = getelementptr %GraphemeState, ptr %3, i32 0, i32 0
-  store i32 0, ptr %4
-  %5 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
-  store i1 0, ptr %5
-  %7 = icmp eq i32 %gbp, 6
-  br i1 %7, label %then1, label %ifcont2
-then1:
-  %8 = getelementptr %GraphemeState, ptr %3, i32 0, i32 0
-  %10 = getelementptr %GraphemeState, ptr %state, i32 0, i32 0
-  %11 = load i32, ptr %10
-  %12 = add i32 %11, 1
-  store i32 %12, ptr %8
-  br label %ifcont2
-ifcont2:
-  %14 = call i1 @string.isExtendedPictographic(i32 %cp)
-  br i1 %14, label %then3, label %else5
-then3:
-  %15 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
-  store i1 1, ptr %15
-  br label %ifcont4
-ifcont4:
-  %25 = load %GraphemeState, ptr %3
-  ret %GraphemeState %25
-else5:
-  %17 = getelementptr %GraphemeState, ptr %state, i32 0, i32 1
-  %18 = load i1, ptr %17
-  br i1 %18, label %then6, label %ifcont7
-then6:
-  %20 = icmp eq i32 %gbp, 4
-  %22 = icmp eq i32 %gbp, 5
-  %23 = or i1 %20, %22
-  br i1 %23, label %then8, label %ifcont9
-ifcont7:
-  br label %ifcont4
-then8:
-  %24 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
-  store i1 1, ptr %24
-  br label %ifcont9
-ifcont9:
-  br label %ifcont7
-}
-
-define i32 @string.utf8ByteLengthAt(ptr %managed, i32 %pos) {
-entry0:
-  %4 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
-  %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
-  %6 = load ptr, ptr %5
-  %7 = sext i32 %pos to i64
-  %8 = getelementptr i8, ptr %6, i64 0, i64 %7
-  %9 = load i8, ptr %8
-  %10 = zext i8 %9 to i32
-  %13 = icmp slt i32 %10, 128
-  br i1 %13, label %then1, label %ifcont2
-then1:
-  ret i32 1
-ifcont2:
-  %15 = icmp slt i32 %10, 224
-  br i1 %15, label %then3, label %ifcont4
-then3:
-  ret i32 2
-ifcont4:
-  %17 = icmp slt i32 %10, 240
-  br i1 %17, label %then5, label %ifcont6
-then5:
-  ret i32 3
-ifcont6:
-  ret i32 4
-}
-
-define i32 @string.utf8DecodeAt(ptr %managed, i32 %pos) {
-entry0:
-  %4 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
-  %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
-  %6 = load ptr, ptr %5
-  %7 = sext i32 %pos to i64
-  %8 = getelementptr i8, ptr %6, i64 0, i64 %7
-  %9 = load i8, ptr %8
-  %10 = zext i8 %9 to i32
-  %13 = icmp slt i32 %10, 128
-  br i1 %13, label %then1, label %ifcont2
-then1:
-  ret i32 %10
-ifcont2:
-  %16 = icmp slt i32 %10, 224
-  br i1 %16, label %then3, label %ifcont4
-then3:
-  %19 = add i32 %pos, 1
-  %20 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
-  %21 = getelementptr %_ManagedArray_byte, ptr %20, i32 0, i32 0
-  %22 = load ptr, ptr %21
-  %23 = sext i32 %19 to i64
-  %24 = getelementptr i8, ptr %22, i64 0, i64 %23
-  %25 = load i8, ptr %24
-  %26 = zext i8 %25 to i32
-  %29 = srem i32 %10, 32
-  %30 = shl i32 %29, 6
-  %32 = srem i32 %26, 64
-  %33 = add i32 %30, %32
-  ret i32 %33
-ifcont4:
-  %35 = icmp slt i32 %10, 240
-  br i1 %35, label %then5, label %ifcont6
-then5:
-  %38 = add i32 %pos, 1
-  %39 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
-  %40 = getelementptr %_ManagedArray_byte, ptr %39, i32 0, i32 0
-  %41 = load ptr, ptr %40
-  %42 = sext i32 %38 to i64
-  %43 = getelementptr i8, ptr %41, i64 0, i64 %42
-  %44 = load i8, ptr %43
-  %45 = zext i8 %44 to i32
-  %49 = add i32 %pos, 2
-  %50 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
-  %51 = getelementptr %_ManagedArray_byte, ptr %50, i32 0, i32 0
-  %52 = load ptr, ptr %51
-  %53 = sext i32 %49 to i64
-  %54 = getelementptr i8, ptr %52, i64 0, i64 %53
-  %55 = load i8, ptr %54
-  %56 = zext i8 %55 to i32
-  %59 = srem i32 %10, 16
-  %60 = shl i32 %59, 12
-  %62 = srem i32 %45, 64
-  %63 = shl i32 %62, 6
-  %64 = add i32 %60, %63
-  %66 = srem i32 %56, 64
-  %67 = add i32 %64, %66
-  ret i32 %67
-ifcont6:
-  %70 = add i32 %pos, 1
-  %71 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
-  %72 = getelementptr %_ManagedArray_byte, ptr %71, i32 0, i32 0
-  %73 = load ptr, ptr %72
-  %74 = sext i32 %70 to i64
-  %75 = getelementptr i8, ptr %73, i64 0, i64 %74
-  %76 = load i8, ptr %75
-  %77 = zext i8 %76 to i32
-  %81 = add i32 %pos, 2
-  %82 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
-  %83 = getelementptr %_ManagedArray_byte, ptr %82, i32 0, i32 0
-  %84 = load ptr, ptr %83
-  %85 = sext i32 %81 to i64
-  %86 = getelementptr i8, ptr %84, i64 0, i64 %85
-  %87 = load i8, ptr %86
-  %88 = zext i8 %87 to i32
-  %92 = add i32 %pos, 3
-  %93 = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
-  %94 = getelementptr %_ManagedArray_byte, ptr %93, i32 0, i32 0
-  %95 = load ptr, ptr %94
-  %96 = sext i32 %92 to i64
-  %97 = getelementptr i8, ptr %95, i64 0, i64 %96
-  %98 = load i8, ptr %97
-  %99 = zext i8 %98 to i32
-  %102 = srem i32 %10, 8
-  %103 = shl i32 %102, 18
-  %105 = srem i32 %77, 64
-  %106 = shl i32 %105, 12
-  %107 = add i32 %103, %106
-  %109 = srem i32 %88, 64
-  %110 = shl i32 %109, 6
-  %111 = add i32 %107, %110
-  %113 = srem i32 %99, 64
-  %114 = add i32 %111, %113
-  ret i32 %114
-}
-
-declare void @_managed_string_retain(ptr %arg0)
-
-declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
-
-declare void @_managed_string_release(ptr %arg0, ptr %arg1)
-
-declare void @free(ptr %arg0)
-
-declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
-
-declare i32 @write_stdout(ptr %arg0, i32 %arg1)
-
-declare void @exit(i32 %arg0)
-
-define void @_start() {
-entry0:
-  %0 = call i32 @main()
-  call void @exit(i32 %0)
-  ret void
-}
-
----
-; Module: test.maxon
 ; Instructions: 1107
 
 %character = type { ptr }
@@ -1145,7 +167,7 @@ entry0:
   %12 = getelementptr %_ManagedArray_byte, ptr %11, i32 0, i32 0
   %13 = load ptr, ptr %12
   %14 = sext i32 %6 to i64
-  %15 = getelementptr i8, ptr %13, i64 0, i64 %14
+  %15 = getelementptr i8, ptr %13, i64 %14
   %16 = alloca %substring
   %17 = getelementptr %substring, ptr %16, i32 0, i32 0
   store ptr %5, ptr %17
@@ -1209,6 +231,10 @@ sub.release3:
 sub.continue4:
   ret %character %46
 }
+
+declare ptr @malloc(i64 %arg0)
+
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 define i32 @ByteView.count(ptr %self) {
 entry0:
@@ -1297,10 +323,6 @@ afterfor3:
   call void @_managed_string_release(ptr %32, ptr @.__tag.free.str.heap)
   ret i32 0
 }
-
-declare ptr @malloc(i64 %arg0)
-
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 define %string @string.stringFromCharacters(ptr %buffer, i32 %length) {
 entry0:
@@ -1461,7 +483,7 @@ then1:
   %5 = getelementptr %array<byte>, ptr %4, i32 0, i32 0
   %6 = getelementptr %__ManagedArrayData_byte, ptr %5, i32 0, i32 0
   %7 = load ptr, ptr %6
-  %8 = getelementptr i8, ptr %7, i64 0, i64 0
+  %8 = getelementptr i8, ptr %7, i64 0
   %9 = trunc i32 48 to i8
   store i8 %9, ptr %8
   ret i32 1
@@ -1514,7 +536,7 @@ loop6:
   %36 = getelementptr %__ManagedArrayData_byte, ptr %35, i32 0, i32 0
   %37 = load ptr, ptr %36
   %38 = sext i32 %34 to i64
-  %39 = getelementptr i8, ptr %37, i64 0, i64 %38
+  %39 = getelementptr i8, ptr %37, i64 %38
   %40 = load i32, ptr %33
   %41 = trunc i32 %40 to i8
   store i8 %41, ptr %39
@@ -1539,7 +561,7 @@ then8:
   %54 = getelementptr %__ManagedArrayData_byte, ptr %53, i32 0, i32 0
   %55 = load ptr, ptr %54
   %56 = sext i32 %52 to i64
-  %57 = getelementptr i8, ptr %55, i64 0, i64 %56
+  %57 = getelementptr i8, ptr %55, i64 %56
   %58 = trunc i32 45 to i8
   store i8 %58, ptr %57
   %59 = load i32, ptr %18
@@ -1570,7 +592,7 @@ loop11:
   %74 = getelementptr %__ManagedArrayData_byte, ptr %73, i32 0, i32 0
   %75 = load ptr, ptr %74
   %76 = sext i32 %71 to i64
-  %77 = getelementptr i8, ptr %75, i64 0, i64 %76
+  %77 = getelementptr i8, ptr %75, i64 %76
   %78 = load i32, ptr %63
   %79 = load i32, ptr %67
   %80 = add i32 %78, %79
@@ -1578,7 +600,7 @@ loop11:
   %82 = getelementptr %__ManagedArrayData_byte, ptr %81, i32 0, i32 0
   %83 = load ptr, ptr %82
   %84 = sext i32 %80 to i64
-  %85 = getelementptr i8, ptr %83, i64 0, i64 %84
+  %85 = getelementptr i8, ptr %83, i64 %84
   %86 = load i8, ptr %85
   store i8 %86, ptr %77
   %87 = load i32, ptr %67
@@ -2167,7 +1189,7 @@ entry0:
   %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
   %6 = load ptr, ptr %5
   %7 = sext i32 %3 to i64
-  %8 = getelementptr i8, ptr %6, i64 0, i64 %7
+  %8 = getelementptr i8, ptr %6, i64 %7
   %9 = load i8, ptr %8
   %10 = zext i8 %9 to i32
   %11 = alloca i32
@@ -2205,7 +1227,7 @@ entry0:
   %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
   %6 = load ptr, ptr %5
   %7 = sext i32 %3 to i64
-  %8 = getelementptr i8, ptr %6, i64 0, i64 %7
+  %8 = getelementptr i8, ptr %6, i64 %7
   %9 = load i8, ptr %8
   %10 = zext i8 %9 to i32
   %11 = alloca i32
@@ -2228,7 +1250,7 @@ then3:
   %21 = getelementptr %_ManagedArray_byte, ptr %20, i32 0, i32 0
   %22 = load ptr, ptr %21
   %23 = sext i32 %19 to i64
-  %24 = getelementptr i8, ptr %22, i64 0, i64 %23
+  %24 = getelementptr i8, ptr %22, i64 %23
   %25 = load i8, ptr %24
   %26 = zext i8 %25 to i32
   %27 = alloca i32
@@ -2252,7 +1274,7 @@ then5:
   %40 = getelementptr %_ManagedArray_byte, ptr %39, i32 0, i32 0
   %41 = load ptr, ptr %40
   %42 = sext i32 %38 to i64
-  %43 = getelementptr i8, ptr %41, i64 0, i64 %42
+  %43 = getelementptr i8, ptr %41, i64 %42
   %44 = load i8, ptr %43
   %45 = zext i8 %44 to i32
   %46 = alloca i32
@@ -2264,7 +1286,7 @@ then5:
   %51 = getelementptr %_ManagedArray_byte, ptr %50, i32 0, i32 0
   %52 = load ptr, ptr %51
   %53 = sext i32 %49 to i64
-  %54 = getelementptr i8, ptr %52, i64 0, i64 %53
+  %54 = getelementptr i8, ptr %52, i64 %53
   %55 = load i8, ptr %54
   %56 = zext i8 %55 to i32
   %57 = alloca i32
@@ -2288,7 +1310,7 @@ ifcont6:
   %72 = getelementptr %_ManagedArray_byte, ptr %71, i32 0, i32 0
   %73 = load ptr, ptr %72
   %74 = sext i32 %70 to i64
-  %75 = getelementptr i8, ptr %73, i64 0, i64 %74
+  %75 = getelementptr i8, ptr %73, i64 %74
   %76 = load i8, ptr %75
   %77 = zext i8 %76 to i32
   %78 = alloca i32
@@ -2300,7 +1322,7 @@ ifcont6:
   %83 = getelementptr %_ManagedArray_byte, ptr %82, i32 0, i32 0
   %84 = load ptr, ptr %83
   %85 = sext i32 %81 to i64
-  %86 = getelementptr i8, ptr %84, i64 0, i64 %85
+  %86 = getelementptr i8, ptr %84, i64 %85
   %87 = load i8, ptr %86
   %88 = zext i8 %87 to i32
   %89 = alloca i32
@@ -2312,7 +1334,7 @@ ifcont6:
   %94 = getelementptr %_ManagedArray_byte, ptr %93, i32 0, i32 0
   %95 = load ptr, ptr %94
   %96 = sext i32 %92 to i64
-  %97 = getelementptr i8, ptr %95, i64 0, i64 %96
+  %97 = getelementptr i8, ptr %95, i64 %96
   %98 = load i8, ptr %97
   %99 = zext i8 %98 to i32
   %100 = alloca i32
@@ -2340,11 +1362,1380 @@ declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
+declare void @free(ptr %arg0)
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
 declare f64 @trunc(f64 %arg0)
+
+declare i32 @write_stdout(ptr %arg0, i32 %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 1107
+
+%character = type { ptr }
+%substring = type { ptr, ptr, i32, i32 }
+%string = type { ptr, i32 }
+%ByteView = type { ptr, i32 }
+%cstring = type { ptr, i32, ptr }
+%GraphemeState = type { i32, i1 }
+%__ManagedArrayData_byte = type { ptr, i32, i32 }
+%array<byte> = type { %__ManagedArrayData_byte, i32 }
+%_ManagedArray_byte = type { ptr, i32 }
+%__ManagedStringData = type { %_ManagedArray_byte, i32, i32 }
+
+@.__tag.tostring = constant [19 x i8] c"substring.toString\00"
+@.__tag.free.sub = constant [17 x i8] c"substring parent\00"
+@.__tag.str.lit = constant [15 x i8] c"string literal\00"
+@.str.0 = constant [17 x i8] c"\F0\9F\87\BA\F0\9F\87\B8\F0\9F\87\AC\F0\9F\87\A7\00"
+@.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
+@.str.1 = constant [2 x i8] c"\0A\00"
+@.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
+
+define %cstring @string.cstr(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %string, ptr %1, i32 0, i32 0
+  %3 = load ptr, ptr %2
+  %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
+  %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
+  %6 = load ptr, ptr %5
+  %7 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 1
+  %8 = load i32, ptr %7
+  %9 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 2
+  %10 = load i32, ptr %9
+  %11 = icmp sgt i32 %10, 0
+  br i1 %11, label %cstring.retain1, label %cstring.continue2
+cstring.retain1:
+  call void @_managed_string_retain(ptr %6)
+  br label %cstring.continue2
+cstring.continue2:
+  %12 = alloca %cstring
+  %13 = getelementptr %cstring, ptr %12, i32 0, i32 0
+  store ptr %6, ptr %13
+  %14 = getelementptr %cstring, ptr %12, i32 0, i32 1
+  store i32 %8, ptr %14
+  %15 = getelementptr %cstring, ptr %12, i32 0, i32 2
+  store ptr %3, ptr %15
+  %16 = load %cstring, ptr %12
+  ret %cstring %16
+}
+
+define Optional<%character> @string.next(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %string, ptr %1, i32 0, i32 1
+  %3 = load i32, ptr %2
+  %4 = load ptr, ptr %0
+  %5 = getelementptr %string, ptr %4, i32 0, i32 0
+  %6 = load ptr, ptr %5
+  %7 = getelementptr %__ManagedStringData, ptr %6, i32 0, i32 1
+  %8 = load i32, ptr %7
+  %9 = icmp slt i32 %3, %8
+  br i1 %9, label %then1, label %ifcont2
+then1:
+  %10 = load ptr, ptr %0
+  %11 = getelementptr %string, ptr %10, i32 0, i32 0
+  %12 = load ptr, ptr %11
+  %13 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 1
+  %14 = load i32, ptr %13
+  %15 = alloca i32
+  store i32 %14, ptr %15
+  %16 = load ptr, ptr %0
+  %17 = load ptr, ptr %0
+  %18 = getelementptr %string, ptr %17, i32 0, i32 1
+  %19 = load i32, ptr %18
+  %20 = load i32, ptr %15
+  %21 = call i32 @string._findGraphemeEnd(ptr %16, i32 %19, i32 %20)
+  %22 = alloca i32
+  store i32 %21, ptr %22
+  %23 = load i32, ptr %22
+  %24 = load ptr, ptr %0
+  %25 = getelementptr %string, ptr %24, i32 0, i32 1
+  %26 = load i32, ptr %25
+  %27 = sub i32 %23, %26
+  %28 = alloca i32
+  store i32 %27, ptr %28
+  %29 = load ptr, ptr %0
+  %30 = load ptr, ptr %0
+  %31 = getelementptr %string, ptr %30, i32 0, i32 1
+  %32 = load i32, ptr %31
+  %33 = load i32, ptr %28
+  %34 = call %character @string._makeCharFromBytes(ptr %29, i32 %32, i32 %33)
+  %35 = alloca %character
+  store %character %34, ptr %35
+  %36 = load ptr, ptr %0
+  %37 = getelementptr %string, ptr %36, i32 0, i32 1
+  %38 = load i32, ptr %22
+  store i32 %38, ptr %37
+  %39 = load %character, ptr %35
+  %40 = alloca Optional<%character>
+  %41 = getelementptr Optional<%character>, ptr %40, i32 0, i32 0
+  store i8 1, ptr %41
+  %42 = getelementptr Optional<%character>, ptr %40, i32 0, i32 1
+  store %character %39, ptr %42
+  %43 = load Optional<%character>, ptr %40
+  ret Optional<%character> %43
+ifcont2:
+  %44 = alloca Optional<%character>
+  %45 = getelementptr Optional<%character>, ptr %44, i32 0, i32 0
+  store i8 0, ptr %45
+  %46 = load Optional<%character>, ptr %44
+  ret Optional<%character> %46
+}
+
+define i32 @string._findGraphemeEnd(ptr %self, i32 %startPos, i32 %len) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 %startPos, ptr %1
+  %2 = alloca i32
+  store i32 %len, ptr %2
+  %3 = load ptr, ptr %0
+  %4 = getelementptr %string, ptr %3, i32 0, i32 0
+  %5 = load ptr, ptr %4
+  %6 = load i32, ptr %1
+  %7 = load i32, ptr %2
+  %8 = call i32 @string.findGraphemeEndManaged(ptr %5, i32 %6, i32 %7)
+  ret i32 %8
+}
+
+define %character @string._makeCharFromBytes(ptr %self, i32 %start, i32 %byteLen) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 %start, ptr %1
+  %2 = alloca i32
+  store i32 %byteLen, ptr %2
+  %3 = load ptr, ptr %0
+  %4 = getelementptr %string, ptr %3, i32 0, i32 0
+  %5 = load ptr, ptr %4
+  %6 = load i32, ptr %1
+  %7 = load i32, ptr %1
+  %8 = load i32, ptr %2
+  %9 = add i32 %7, %8
+  %10 = sub i32 %9, %6
+  %11 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 0
+  %12 = getelementptr %_ManagedArray_byte, ptr %11, i32 0, i32 0
+  %13 = load ptr, ptr %12
+  %14 = sext i32 %6 to i64
+  %15 = getelementptr i8, ptr %13, i64 %14
+  %16 = alloca %substring
+  %17 = getelementptr %substring, ptr %16, i32 0, i32 0
+  store ptr %5, ptr %17
+  %18 = getelementptr %substring, ptr %16, i32 0, i32 1
+  store ptr %15, ptr %18
+  %19 = getelementptr %substring, ptr %16, i32 0, i32 2
+  store i32 %10, ptr %19
+  %20 = getelementptr %substring, ptr %16, i32 0, i32 3
+  store i32 0, ptr %20
+  %21 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 2
+  %22 = load i32, ptr %21
+  %23 = icmp sgt i32 %22, 0
+  br i1 %23, label %slice.retain1, label %slice.continue2
+slice.retain1:
+  call void @_managed_string_retain(ptr %13)
+  br label %slice.continue2
+slice.continue2:
+  %24 = load %substring, ptr %16
+  %25 = alloca %substring
+  store %substring %24, ptr %25
+  %26 = getelementptr %substring, ptr %25, i32 0, i32 1
+  %27 = load ptr, ptr %26
+  %28 = getelementptr %substring, ptr %25, i32 0, i32 2
+  %29 = load i32, ptr %28
+  %30 = add i32 %29, 1
+  %31 = sext i32 %30 to i64
+  %32 = call ptr @_managed_string_alloc(i64 %31, ptr @.__tag.tostring)
+  %33 = sext i32 %29 to i64
+  %34 = call ptr @memcpy(ptr %32, ptr %27, i64 %33)
+  %35 = getelementptr i8, ptr %32, i64 %33
+  store i8 0, ptr %35
+  %36 = call ptr @malloc(i64 32)
+  %37 = getelementptr %__ManagedStringData, ptr %36, i32 0, i32 0
+  %38 = getelementptr %_ManagedArray_byte, ptr %37, i32 0, i32 0
+  store ptr %32, ptr %38
+  %39 = getelementptr %_ManagedArray_byte, ptr %37, i32 0, i32 1
+  store i32 %29, ptr %39
+  %40 = getelementptr %__ManagedStringData, ptr %36, i32 0, i32 1
+  store i32 %29, ptr %40
+  %41 = getelementptr %__ManagedStringData, ptr %36, i32 0, i32 2
+  store i32 %30, ptr %41
+  %42 = alloca ptr
+  store ptr %36, ptr %42
+  %43 = alloca %character
+  %44 = load ptr, ptr %42
+  %45 = getelementptr %character, ptr %43, i32 0, i32 0
+  store ptr %44, ptr %45
+  %46 = load %character, ptr %43
+  %47 = getelementptr %substring, ptr %25, i32 0, i32 0
+  %48 = load ptr, ptr %47
+  %49 = getelementptr %__ManagedStringData, ptr %48, i32 0, i32 2
+  %50 = load i32, ptr %49
+  %51 = icmp sgt i32 %50, 0
+  br i1 %51, label %sub.release3, label %sub.continue4
+sub.release3:
+  %52 = getelementptr %__ManagedStringData, ptr %48, i32 0, i32 0
+  %53 = getelementptr %_ManagedArray_byte, ptr %52, i32 0, i32 0
+  %54 = load ptr, ptr %53
+  call void @_managed_string_release(ptr %54, ptr @.__tag.free.sub)
+  br label %sub.continue4
+sub.continue4:
+  ret %character %46
+}
+
+declare ptr @malloc(i64 %arg0)
+
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+define i32 @ByteView.count(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %ByteView, ptr %1, i32 0, i32 0
+  %3 = load ptr, ptr %2
+  %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 1
+  %5 = load i32, ptr %4
+  ret i32 %5
+}
+
+define %ByteView @character.bytes(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca %ByteView
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %character, ptr %2, i32 0, i32 0
+  %4 = load ptr, ptr %3
+  %5 = getelementptr %ByteView, ptr %1, i32 0, i32 0
+  store ptr %4, ptr %5
+  %6 = getelementptr %ByteView, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = load %ByteView, ptr %1
+  ret %ByteView %7
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = call ptr @_managed_string_alloc(i64 16, ptr @.__tag.str.lit)
+  %2 = call ptr @memcpy(ptr %1, ptr @.str.0, i64 16)
+  %3 = alloca ptr
+  store ptr %1, ptr %3
+  %4 = alloca %__ManagedStringData
+  %5 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 0
+  %6 = getelementptr %_ManagedArray_byte, ptr %5, i32 0, i32 0
+  store ptr %1, ptr %6
+  %7 = getelementptr %_ManagedArray_byte, ptr %5, i32 0, i32 1
+  store i32 16, ptr %7
+  %8 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 1
+  store i32 16, ptr %8
+  %9 = getelementptr %__ManagedStringData, ptr %4, i32 0, i32 2
+  store i32 16, ptr %9
+  %10 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %4, ptr %10
+  %11 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i32 0, ptr %11
+  %12 = alloca i32
+  store i32 0, ptr %12
+  %13 = load %string, ptr %0
+  %14 = alloca %string
+  store %string %13, ptr %14
+  br label %forcond1
+forcond1:
+  %15 = call Optional<%character> @string.next(ptr %14)
+  %16 = alloca Optional<%character>
+  store Optional<%character> %15, ptr %16
+  %17 = getelementptr Optional<%character>, ptr %16, i32 0, i32 0
+  %18 = load i8, ptr %17
+  %19 = icmp eq i8 %18, 1
+  br i1 %19, label %forloop2, label %afterfor3
+forloop2:
+  %20 = getelementptr Optional<%character>, ptr %16, i32 0, i32 1
+  %21 = load %character, ptr %20
+  %22 = alloca %character
+  store %character %21, ptr %22
+  %23 = call %ByteView @character.bytes(ptr %22)
+  %24 = alloca %ByteView
+  store %ByteView %23, ptr %24
+  %25 = call i32 @ByteView.count(ptr %24)
+  %26 = alloca i32
+  store i32 %25, ptr %26
+  %27 = load i32, ptr %26
+  store i32 %27, ptr %26
+  %28 = load i32, ptr %12
+  %29 = add i32 %28, 1
+  store i32 %29, ptr %12
+  br label %forcond1
+afterfor3:
+  %30 = load i32, ptr %12
+  %31 = call i32 @sys.printInt(i32 %30)
+  %32 = load ptr, ptr %3
+  call void @_managed_string_release(ptr %32, ptr @.__tag.free.str.heap)
+  ret i32 0
+}
+
+define %string @string.stringFromCharacters(ptr %buffer, i32 %length) {
+entry0:
+  %0 = alloca ptr
+  store ptr %buffer, ptr %0
+  %1 = alloca i32
+  store i32 %length, ptr %1
+  %2 = alloca %string
+  %3 = load i32, ptr %1
+  %4 = load ptr, ptr %0
+  %5 = getelementptr %array<byte>, ptr %4, i32 0, i32 0
+  %6 = getelementptr %__ManagedArrayData_byte, ptr %5, i32 0, i32 0
+  %7 = load ptr, ptr %6
+  %8 = add i32 %3, 1
+  %9 = sext i32 %8 to i64
+  %10 = call ptr @malloc(i64 %9)
+  %11 = sext i32 %3 to i64
+  %12 = call ptr @memcpy(ptr %10, ptr %7, i64 %11)
+  %13 = getelementptr i8, ptr %10, i64 %11
+  store i8 0, ptr %13
+  %14 = call ptr @malloc(i64 32)
+  %15 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 0
+  %16 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 0
+  store ptr %10, ptr %16
+  %17 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 1
+  store i32 %3, ptr %17
+  %18 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 1
+  store i32 %3, ptr %18
+  %19 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 2
+  store i32 %3, ptr %19
+  %20 = getelementptr %string, ptr %2, i32 0, i32 0
+  store ptr %14, ptr %20
+  %21 = getelementptr %string, ptr %2, i32 0, i32 1
+  store i32 0, ptr %21
+  %22 = load %string, ptr %2
+  ret %string %22
+}
+
+define i32 @sys.print(ptr %value) {
+entry0:
+  %0 = alloca ptr
+  store ptr %value, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = call %cstring @string.cstr(ptr %1)
+  %3 = alloca %cstring
+  store %cstring %2, ptr %3
+  %4 = getelementptr %cstring, ptr %3, i32 0, i32 0
+  %5 = load ptr, ptr %4
+  %6 = getelementptr %cstring, ptr %3, i32 0, i32 1
+  %7 = load i32, ptr %6
+  %8 = call i32 @write_stdout(ptr %5, i32 %7)
+  %9 = alloca i32
+  store i32 %8, ptr %9
+  %10 = alloca %string
+  %11 = alloca %__ManagedStringData
+  %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
+  %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
+  store ptr @.str.1, ptr %13
+  %14 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 1
+  store i32 1, ptr %14
+  %15 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 1
+  store i32 1, ptr %15
+  %16 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 2
+  store i32 0, ptr %16
+  %17 = getelementptr %string, ptr %10, i32 0, i32 0
+  store ptr %11, ptr %17
+  %18 = getelementptr %string, ptr %10, i32 0, i32 1
+  store i32 0, ptr %18
+  %19 = call %cstring @string.cstr(ptr %10)
+  %20 = alloca %cstring
+  store %cstring %19, ptr %20
+  %21 = getelementptr %cstring, ptr %20, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = getelementptr %cstring, ptr %20, i32 0, i32 1
+  %24 = load i32, ptr %23
+  %25 = call i32 @write_stdout(ptr %22, i32 %24)
+  %26 = load i32, ptr %9
+  %27 = add i32 %26, 1
+  %28 = getelementptr %cstring, ptr %3, i32 0, i32 2
+  %29 = load ptr, ptr %28
+  %30 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 2
+  %31 = load i32, ptr %30
+  %32 = icmp sgt i32 %31, 0
+  br i1 %32, label %cs.cstring.release1, label %cs.cstring.continue2
+cs.cstring.release1:
+  %33 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 0
+  %34 = getelementptr %_ManagedArray_byte, ptr %33, i32 0, i32 0
+  %35 = load ptr, ptr %34
+  call void @_managed_string_release(ptr %35, ptr @.__tag.free.cs)
+  br label %cs.cstring.continue2
+cs.cstring.continue2:
+  %36 = getelementptr %cstring, ptr %20, i32 0, i32 2
+  %37 = load ptr, ptr %36
+  %38 = getelementptr %__ManagedStringData, ptr %37, i32 0, i32 2
+  %39 = load i32, ptr %38
+  %40 = icmp sgt i32 %39, 0
+  br i1 %40, label %newline_cs.cstring.release3, label %newline_cs.cstring.continue4
+newline_cs.cstring.release3:
+  %41 = getelementptr %__ManagedStringData, ptr %37, i32 0, i32 0
+  %42 = getelementptr %_ManagedArray_byte, ptr %41, i32 0, i32 0
+  %43 = load ptr, ptr %42
+  call void @_managed_string_release(ptr %43, ptr @.__tag.free.newline_cs)
+  br label %newline_cs.cstring.continue4
+newline_cs.cstring.continue4:
+  ret i32 %27
+}
+
+define i32 @sys.printInt(i32 %value) {
+entry0:
+  %0 = alloca i32
+  store i32 %value, ptr %0
+  %1 = alloca [12 x i8]
+  %2 = alloca %array<byte>
+  %3 = getelementptr %array<byte>, ptr %2, i32 0, i32 0
+  %4 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 0
+  store ptr %1, ptr %4
+  %5 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 1
+  store i32 12, ptr %5
+  %6 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 2
+  store i32 0, ptr %6
+  %7 = getelementptr %array<byte>, ptr %2, i32 0, i32 1
+  store i32 0, ptr %7
+  %8 = call ptr @memset(ptr %1, i32 0, i64 12)
+  %9 = load i32, ptr %0
+  %10 = call i32 @fmt.formatIntArray(i32 %9, ptr %2)
+  %11 = alloca i32
+  store i32 %10, ptr %11
+  %12 = load i32, ptr %11
+  %13 = call %string @string.stringFromCharacters(ptr %2, i32 %12)
+  %14 = alloca %string
+  store %string %13, ptr %14
+  %15 = call i32 @sys.print(ptr %14)
+  %16 = getelementptr %array<byte>, ptr %2, i32 0, i32 0
+  %17 = getelementptr %__ManagedArrayData_byte, ptr %16, i32 0, i32 0
+  %18 = load ptr, ptr %17
+  %19 = getelementptr %__ManagedArrayData_byte, ptr %16, i32 0, i32 2
+  %20 = load i32, ptr %19
+  %21 = icmp sgt i32 %20, 0
+  br i1 %21, label %buffer.free1, label %buffer.skip2
+buffer.free1:
+  call void @free(ptr %18)
+  br label %buffer.skip2
+buffer.skip2:
+  ret i32 %15
+}
+
+define i32 @fmt.formatIntArray(i32 %value, ptr %buffer) {
+entry0:
+  %0 = alloca i32
+  store i32 %value, ptr %0
+  %1 = alloca ptr
+  store ptr %buffer, ptr %1
+  %2 = load i32, ptr %0
+  %3 = icmp eq i32 %2, 0
+  br i1 %3, label %then1, label %ifcont2
+then1:
+  %4 = load ptr, ptr %1
+  %5 = getelementptr %array<byte>, ptr %4, i32 0, i32 0
+  %6 = getelementptr %__ManagedArrayData_byte, ptr %5, i32 0, i32 0
+  %7 = load ptr, ptr %6
+  %8 = getelementptr i8, ptr %7, i64 0
+  %9 = trunc i32 48 to i8
+  store i8 %9, ptr %8
+  ret i32 1
+ifcont2:
+  %10 = alloca [12 x i8]
+  %11 = alloca %array<byte>
+  %12 = getelementptr %array<byte>, ptr %11, i32 0, i32 0
+  %13 = getelementptr %__ManagedArrayData_byte, ptr %12, i32 0, i32 0
+  store ptr %10, ptr %13
+  %14 = getelementptr %__ManagedArrayData_byte, ptr %12, i32 0, i32 1
+  store i32 12, ptr %14
+  %15 = getelementptr %__ManagedArrayData_byte, ptr %12, i32 0, i32 2
+  store i32 0, ptr %15
+  %16 = getelementptr %array<byte>, ptr %11, i32 0, i32 1
+  store i32 0, ptr %16
+  %17 = call ptr @memset(ptr %10, i32 0, i64 12)
+  %18 = alloca i32
+  store i32 11, ptr %18
+  %19 = alloca i32
+  store i32 0, ptr %19
+  %20 = load i32, ptr %0
+  %21 = alloca i32
+  store i32 %20, ptr %21
+  %22 = load i32, ptr %0
+  %23 = icmp slt i32 %22, 0
+  br i1 %23, label %then3, label %ifcont4
+then3:
+  store i32 1, ptr %19
+  %24 = load i32, ptr %0
+  %25 = sub i32 0, %24
+  store i32 %25, ptr %21
+  br label %ifcont4
+ifcont4:
+  br label %whilecond5
+whilecond5:
+  %26 = load i32, ptr %21
+  %27 = icmp sgt i32 %26, 0
+  br i1 %27, label %loop6, label %afterloop7
+loop6:
+  %28 = load i32, ptr %21
+  %29 = srem i32 %28, 10
+  %30 = alloca i32
+  store i32 %29, ptr %30
+  %31 = load i32, ptr %30
+  %32 = add i32 48, %31
+  %33 = alloca i32
+  store i32 %32, ptr %33
+  %34 = load i32, ptr %18
+  %35 = getelementptr %array<byte>, ptr %11, i32 0, i32 0
+  %36 = getelementptr %__ManagedArrayData_byte, ptr %35, i32 0, i32 0
+  %37 = load ptr, ptr %36
+  %38 = sext i32 %34 to i64
+  %39 = getelementptr i8, ptr %37, i64 %38
+  %40 = load i32, ptr %33
+  %41 = trunc i32 %40 to i8
+  store i8 %41, ptr %39
+  %42 = load i32, ptr %18
+  %43 = sub i32 %42, 1
+  store i32 %43, ptr %18
+  %44 = load i32, ptr %21
+  %45 = sitofp i32 %44 to f64
+  %46 = sitofp i32 10 to f64
+  %47 = fdiv f64 %45, %46
+  %48 = call f64 @trunc(f64 %47)
+  %49 = fptosi f64 %48 to i32
+  store i32 %49, ptr %21
+  br label %whilecond5
+afterloop7:
+  %50 = load i32, ptr %19
+  %51 = icmp eq i32 %50, 1
+  br i1 %51, label %then8, label %ifcont9
+then8:
+  %52 = load i32, ptr %18
+  %53 = getelementptr %array<byte>, ptr %11, i32 0, i32 0
+  %54 = getelementptr %__ManagedArrayData_byte, ptr %53, i32 0, i32 0
+  %55 = load ptr, ptr %54
+  %56 = sext i32 %52 to i64
+  %57 = getelementptr i8, ptr %55, i64 %56
+  %58 = trunc i32 45 to i8
+  store i8 %58, ptr %57
+  %59 = load i32, ptr %18
+  %60 = sub i32 %59, 1
+  store i32 %60, ptr %18
+  br label %ifcont9
+ifcont9:
+  %61 = load i32, ptr %18
+  %62 = add i32 %61, 1
+  %63 = alloca i32
+  store i32 %62, ptr %63
+  %64 = load i32, ptr %63
+  %65 = sub i32 12, %64
+  %66 = alloca i32
+  store i32 %65, ptr %66
+  %67 = alloca i32
+  store i32 0, ptr %67
+  br label %whilecond10
+whilecond10:
+  %68 = load i32, ptr %67
+  %69 = load i32, ptr %66
+  %70 = icmp slt i32 %68, %69
+  br i1 %70, label %loop11, label %afterloop12
+loop11:
+  %71 = load i32, ptr %67
+  %72 = load ptr, ptr %1
+  %73 = getelementptr %array<byte>, ptr %72, i32 0, i32 0
+  %74 = getelementptr %__ManagedArrayData_byte, ptr %73, i32 0, i32 0
+  %75 = load ptr, ptr %74
+  %76 = sext i32 %71 to i64
+  %77 = getelementptr i8, ptr %75, i64 %76
+  %78 = load i32, ptr %63
+  %79 = load i32, ptr %67
+  %80 = add i32 %78, %79
+  %81 = getelementptr %array<byte>, ptr %11, i32 0, i32 0
+  %82 = getelementptr %__ManagedArrayData_byte, ptr %81, i32 0, i32 0
+  %83 = load ptr, ptr %82
+  %84 = sext i32 %80 to i64
+  %85 = getelementptr i8, ptr %83, i64 %84
+  %86 = load i8, ptr %85
+  store i8 %86, ptr %77
+  %87 = load i32, ptr %67
+  %88 = add i32 %87, 1
+  store i32 %88, ptr %67
+  br label %whilecond10
+afterloop12:
+  %89 = load i32, ptr %66
+  ret i32 %89
+}
+
+define i32 @string.findGraphemeEndManagedRange(ptr %managed, i32 %offset, i32 %startPos, i32 %len) {
+entry0:
+  %0 = alloca ptr
+  store ptr %managed, ptr %0
+  %1 = alloca i32
+  store i32 %offset, ptr %1
+  %2 = alloca i32
+  store i32 %startPos, ptr %2
+  %3 = alloca i32
+  store i32 %len, ptr %3
+  %4 = load i32, ptr %2
+  %5 = load i32, ptr %3
+  %6 = icmp sge i32 %4, %5
+  br i1 %6, label %then1, label %ifcont2
+then1:
+  %7 = load i32, ptr %2
+  ret i32 %7
+ifcont2:
+  %8 = load i32, ptr %2
+  %9 = alloca i32
+  store i32 %8, ptr %9
+  %10 = load i32, ptr %1
+  %11 = load i32, ptr %9
+  %12 = add i32 %10, %11
+  %13 = alloca i32
+  store i32 %12, ptr %13
+  %14 = load ptr, ptr %0
+  %15 = load i32, ptr %13
+  %16 = call i32 @string.utf8DecodeAt(ptr %14, i32 %15)
+  %17 = alloca i32
+  store i32 %16, ptr %17
+  %18 = load ptr, ptr %0
+  %19 = load i32, ptr %13
+  %20 = call i32 @string.utf8ByteLengthAt(ptr %18, i32 %19)
+  %21 = alloca i32
+  store i32 %20, ptr %21
+  %22 = load i32, ptr %9
+  %23 = load i32, ptr %21
+  %24 = add i32 %22, %23
+  store i32 %24, ptr %9
+  %25 = load i32, ptr %17
+  %26 = call i32 @string.graphemeBreakProperty(i32 %25)
+  %27 = alloca i32
+  store i32 %26, ptr %27
+  %28 = call %GraphemeState @string.graphemeStateInit()
+  %29 = alloca %GraphemeState
+  store %GraphemeState %28, ptr %29
+  %30 = load i32, ptr %27
+  %31 = load i32, ptr %17
+  %32 = call %GraphemeState @string.graphemeStateUpdate(ptr %29, i32 %30, i32 %31)
+  store %GraphemeState %32, ptr %29
+  br label %whilecond3
+whilecond3:
+  %33 = load i32, ptr %9
+  %34 = load i32, ptr %3
+  %35 = icmp slt i32 %33, %34
+  br i1 %35, label %loop4, label %afterloop5
+loop4:
+  %36 = load i32, ptr %1
+  %37 = load i32, ptr %9
+  %38 = add i32 %36, %37
+  store i32 %38, ptr %13
+  %39 = load ptr, ptr %0
+  %40 = load i32, ptr %13
+  %41 = call i32 @string.utf8DecodeAt(ptr %39, i32 %40)
+  %42 = alloca i32
+  store i32 %41, ptr %42
+  %43 = load i32, ptr %42
+  %44 = call i32 @string.graphemeBreakProperty(i32 %43)
+  %45 = alloca i32
+  store i32 %44, ptr %45
+  %46 = load i32, ptr %27
+  %47 = load i32, ptr %45
+  %48 = load i32, ptr %17
+  %49 = load i32, ptr %42
+  %50 = call i1 @string.isGraphemeBreak(i32 %46, i32 %47, i32 %48, i32 %49, ptr %29)
+  br i1 %50, label %then6, label %ifcont7
+afterloop5:
+  %64 = load i32, ptr %9
+  ret i32 %64
+then6:
+  %51 = load i32, ptr %9
+  ret i32 %51
+ifcont7:
+  %52 = load i32, ptr %45
+  %53 = load i32, ptr %42
+  %54 = call %GraphemeState @string.graphemeStateUpdate(ptr %29, i32 %52, i32 %53)
+  store %GraphemeState %54, ptr %29
+  %55 = load i32, ptr %45
+  store i32 %55, ptr %27
+  %56 = load i32, ptr %42
+  store i32 %56, ptr %17
+  %57 = load ptr, ptr %0
+  %58 = load i32, ptr %13
+  %59 = call i32 @string.utf8ByteLengthAt(ptr %57, i32 %58)
+  %60 = alloca i32
+  store i32 %59, ptr %60
+  %61 = load i32, ptr %9
+  %62 = load i32, ptr %60
+  %63 = add i32 %61, %62
+  store i32 %63, ptr %9
+  br label %whilecond3
+}
+
+define i32 @string.findGraphemeEndManaged(ptr %managed, i32 %startPos, i32 %len) {
+entry0:
+  %0 = alloca ptr
+  store ptr %managed, ptr %0
+  %1 = alloca i32
+  store i32 %startPos, ptr %1
+  %2 = alloca i32
+  store i32 %len, ptr %2
+  %3 = load ptr, ptr %0
+  %4 = load i32, ptr %1
+  %5 = load i32, ptr %2
+  %6 = call i32 @string.findGraphemeEndManagedRange(ptr %3, i32 0, i32 %4, i32 %5)
+  ret i32 %6
+}
+
+define i32 @string.graphemeBreakProperty(i32 %cp) {
+entry0:
+  %0 = alloca i32
+  store i32 %cp, ptr %0
+  %1 = load i32, ptr %0
+  %2 = icmp eq i32 %1, 13
+  br i1 %2, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  %3 = load i32, ptr %0
+  %4 = icmp eq i32 %3, 10
+  br i1 %4, label %then3, label %ifcont4
+then3:
+  ret i32 2
+ifcont4:
+  %5 = load i32, ptr %0
+  %6 = icmp slt i32 %5, 32
+  %7 = load i32, ptr %0
+  %8 = icmp sge i32 %7, 127
+  %9 = load i32, ptr %0
+  %10 = icmp slt i32 %9, 160
+  %11 = and i1 %8, %10
+  %12 = or i1 %6, %11
+  br i1 %12, label %then5, label %ifcont6
+then5:
+  ret i32 3
+ifcont6:
+  %13 = load i32, ptr %0
+  %14 = icmp eq i32 %13, 8205
+  br i1 %14, label %then7, label %ifcont8
+then7:
+  ret i32 5
+ifcont8:
+  %15 = load i32, ptr %0
+  %16 = icmp sge i32 %15, 127462
+  %17 = load i32, ptr %0
+  %18 = icmp sle i32 %17, 127487
+  %19 = and i1 %16, %18
+  br i1 %19, label %then9, label %ifcont10
+then9:
+  ret i32 6
+ifcont10:
+  %20 = load i32, ptr %0
+  %21 = icmp sge i32 %20, 44032
+  %22 = load i32, ptr %0
+  %23 = icmp sle i32 %22, 55203
+  %24 = and i1 %21, %23
+  br i1 %24, label %then11, label %ifcont12
+then11:
+  %25 = load i32, ptr %0
+  %26 = sub i32 %25, 44032
+  %27 = alloca i32
+  store i32 %26, ptr %27
+  %28 = load i32, ptr %27
+  %29 = srem i32 %28, 28
+  %30 = icmp eq i32 %29, 0
+  br i1 %30, label %then13, label %else15
+ifcont12:
+  %31 = load i32, ptr %0
+  %32 = icmp sge i32 %31, 4352
+  %33 = load i32, ptr %0
+  %34 = icmp sle i32 %33, 4447
+  %35 = and i1 %32, %34
+  br i1 %35, label %then16, label %ifcont17
+then13:
+  ret i32 12
+ifcont14:
+  br label %ifcont12
+else15:
+  ret i32 13
+then16:
+  ret i32 9
+ifcont17:
+  %36 = load i32, ptr %0
+  %37 = icmp sge i32 %36, 4448
+  %38 = load i32, ptr %0
+  %39 = icmp sle i32 %38, 4519
+  %40 = and i1 %37, %39
+  br i1 %40, label %then18, label %ifcont19
+then18:
+  ret i32 10
+ifcont19:
+  %41 = load i32, ptr %0
+  %42 = icmp sge i32 %41, 4520
+  %43 = load i32, ptr %0
+  %44 = icmp sle i32 %43, 4607
+  %45 = and i1 %42, %44
+  br i1 %45, label %then20, label %ifcont21
+then20:
+  ret i32 11
+ifcont21:
+  %46 = load i32, ptr %0
+  %47 = icmp sge i32 %46, 127995
+  %48 = load i32, ptr %0
+  %49 = icmp sle i32 %48, 127999
+  %50 = and i1 %47, %49
+  br i1 %50, label %then22, label %ifcont23
+then22:
+  ret i32 4
+ifcont23:
+  %51 = load i32, ptr %0
+  %52 = icmp sge i32 %51, 65024
+  %53 = load i32, ptr %0
+  %54 = icmp sle i32 %53, 65039
+  %55 = and i1 %52, %54
+  br i1 %55, label %then24, label %ifcont25
+then24:
+  ret i32 4
+ifcont25:
+  %56 = load i32, ptr %0
+  %57 = icmp sge i32 %56, 768
+  %58 = load i32, ptr %0
+  %59 = icmp sle i32 %58, 879
+  %60 = and i1 %57, %59
+  br i1 %60, label %then26, label %ifcont27
+then26:
+  ret i32 4
+ifcont27:
+  %61 = load i32, ptr %0
+  %62 = icmp eq i32 %61, 8203
+  %63 = load i32, ptr %0
+  %64 = icmp sge i32 %63, 8206
+  %65 = load i32, ptr %0
+  %66 = icmp sle i32 %65, 8207
+  %67 = and i1 %64, %66
+  %68 = or i1 %62, %67
+  %69 = load i32, ptr %0
+  %70 = icmp sge i32 %69, 8232
+  %71 = load i32, ptr %0
+  %72 = icmp sle i32 %71, 8238
+  %73 = and i1 %70, %72
+  %74 = or i1 %68, %73
+  br i1 %74, label %then28, label %ifcont29
+then28:
+  ret i32 3
+ifcont29:
+  %75 = load i32, ptr %0
+  %76 = icmp eq i32 %75, 8204
+  br i1 %76, label %then30, label %ifcont31
+then30:
+  ret i32 4
+ifcont31:
+  ret i32 0
+}
+
+define i1 @string.isExtendedPictographic(i32 %cp) {
+entry0:
+  %0 = alloca i32
+  store i32 %cp, ptr %0
+  %1 = load i32, ptr %0
+  %2 = icmp sge i32 %1, 128512
+  %3 = load i32, ptr %0
+  %4 = icmp sle i32 %3, 128591
+  %5 = and i1 %2, %4
+  br i1 %5, label %then1, label %ifcont2
+then1:
+  ret i1 1
+ifcont2:
+  %6 = load i32, ptr %0
+  %7 = icmp sge i32 %6, 127744
+  %8 = load i32, ptr %0
+  %9 = icmp sle i32 %8, 128511
+  %10 = and i1 %7, %9
+  br i1 %10, label %then3, label %ifcont4
+then3:
+  ret i1 1
+ifcont4:
+  %11 = load i32, ptr %0
+  %12 = icmp sge i32 %11, 128640
+  %13 = load i32, ptr %0
+  %14 = icmp sle i32 %13, 128767
+  %15 = and i1 %12, %14
+  br i1 %15, label %then5, label %ifcont6
+then5:
+  ret i1 1
+ifcont6:
+  %16 = load i32, ptr %0
+  %17 = icmp sge i32 %16, 129280
+  %18 = load i32, ptr %0
+  %19 = icmp sle i32 %18, 129535
+  %20 = and i1 %17, %19
+  br i1 %20, label %then7, label %ifcont8
+then7:
+  ret i1 1
+ifcont8:
+  %21 = load i32, ptr %0
+  %22 = icmp sge i32 %21, 129536
+  %23 = load i32, ptr %0
+  %24 = icmp sle i32 %23, 130047
+  %25 = and i1 %22, %24
+  br i1 %25, label %then9, label %ifcont10
+then9:
+  ret i1 1
+ifcont10:
+  %26 = load i32, ptr %0
+  %27 = icmp sge i32 %26, 9728
+  %28 = load i32, ptr %0
+  %29 = icmp sle i32 %28, 9983
+  %30 = and i1 %27, %29
+  br i1 %30, label %then11, label %ifcont12
+then11:
+  ret i1 1
+ifcont12:
+  %31 = load i32, ptr %0
+  %32 = icmp sge i32 %31, 9984
+  %33 = load i32, ptr %0
+  %34 = icmp sle i32 %33, 10175
+  %35 = and i1 %32, %34
+  br i1 %35, label %then13, label %ifcont14
+then13:
+  ret i1 1
+ifcont14:
+  ret i1 0
+}
+
+define %GraphemeState @string.graphemeStateInit() {
+entry0:
+  %0 = alloca %GraphemeState
+  %1 = getelementptr %GraphemeState, ptr %0, i32 0, i32 0
+  store i32 0, ptr %1
+  %2 = getelementptr %GraphemeState, ptr %0, i32 0, i32 1
+  store i1 0, ptr %2
+  %3 = load %GraphemeState, ptr %0
+  ret %GraphemeState %3
+}
+
+define i1 @string.isGraphemeBreak(i32 %prevGbp, i32 %currGbp, i32 %prevCp, i32 %currCp, ptr %state) {
+entry0:
+  %0 = alloca i32
+  store i32 %prevGbp, ptr %0
+  %1 = alloca i32
+  store i32 %currGbp, ptr %1
+  %2 = alloca i32
+  store i32 %prevCp, ptr %2
+  %3 = alloca i32
+  store i32 %currCp, ptr %3
+  %4 = alloca ptr
+  store ptr %state, ptr %4
+  %5 = load i32, ptr %2
+  %6 = alloca i32
+  store i32 %5, ptr %6
+  %7 = load i32, ptr %6
+  store i32 %7, ptr %6
+  %8 = load i32, ptr %0
+  %9 = icmp eq i32 %8, 1
+  %10 = load i32, ptr %1
+  %11 = icmp eq i32 %10, 2
+  %12 = and i1 %9, %11
+  br i1 %12, label %then1, label %ifcont2
+then1:
+  ret i1 0
+ifcont2:
+  %13 = load i32, ptr %0
+  %14 = icmp eq i32 %13, 3
+  %15 = load i32, ptr %0
+  %16 = icmp eq i32 %15, 1
+  %17 = or i1 %14, %16
+  %18 = load i32, ptr %0
+  %19 = icmp eq i32 %18, 2
+  %20 = or i1 %17, %19
+  br i1 %20, label %then3, label %ifcont4
+then3:
+  ret i1 1
+ifcont4:
+  %21 = load i32, ptr %1
+  %22 = icmp eq i32 %21, 3
+  %23 = load i32, ptr %1
+  %24 = icmp eq i32 %23, 1
+  %25 = or i1 %22, %24
+  %26 = load i32, ptr %1
+  %27 = icmp eq i32 %26, 2
+  %28 = or i1 %25, %27
+  br i1 %28, label %then5, label %ifcont6
+then5:
+  ret i1 1
+ifcont6:
+  %29 = load i32, ptr %0
+  %30 = icmp eq i32 %29, 9
+  br i1 %30, label %then7, label %ifcont8
+then7:
+  %31 = load i32, ptr %1
+  %32 = icmp eq i32 %31, 9
+  %33 = load i32, ptr %1
+  %34 = icmp eq i32 %33, 10
+  %35 = or i1 %32, %34
+  %36 = load i32, ptr %1
+  %37 = icmp eq i32 %36, 12
+  %38 = or i1 %35, %37
+  %39 = load i32, ptr %1
+  %40 = icmp eq i32 %39, 13
+  %41 = or i1 %38, %40
+  br i1 %41, label %then9, label %ifcont10
+ifcont8:
+  %42 = load i32, ptr %0
+  %43 = icmp eq i32 %42, 12
+  %44 = load i32, ptr %0
+  %45 = icmp eq i32 %44, 10
+  %46 = or i1 %43, %45
+  br i1 %46, label %then11, label %ifcont12
+then9:
+  ret i1 0
+ifcont10:
+  br label %ifcont8
+then11:
+  %47 = load i32, ptr %1
+  %48 = icmp eq i32 %47, 10
+  %49 = load i32, ptr %1
+  %50 = icmp eq i32 %49, 11
+  %51 = or i1 %48, %50
+  br i1 %51, label %then13, label %ifcont14
+ifcont12:
+  %52 = load i32, ptr %0
+  %53 = icmp eq i32 %52, 13
+  %54 = load i32, ptr %0
+  %55 = icmp eq i32 %54, 11
+  %56 = or i1 %53, %55
+  br i1 %56, label %then15, label %ifcont16
+then13:
+  ret i1 0
+ifcont14:
+  br label %ifcont12
+then15:
+  %57 = load i32, ptr %1
+  %58 = icmp eq i32 %57, 11
+  br i1 %58, label %then17, label %ifcont18
+ifcont16:
+  %59 = load i32, ptr %1
+  %60 = icmp eq i32 %59, 4
+  %61 = load i32, ptr %1
+  %62 = icmp eq i32 %61, 5
+  %63 = or i1 %60, %62
+  br i1 %63, label %then19, label %ifcont20
+then17:
+  ret i1 0
+ifcont18:
+  br label %ifcont16
+then19:
+  ret i1 0
+ifcont20:
+  %64 = load i32, ptr %1
+  %65 = icmp eq i32 %64, 8
+  br i1 %65, label %then21, label %ifcont22
+then21:
+  ret i1 0
+ifcont22:
+  %66 = load i32, ptr %0
+  %67 = icmp eq i32 %66, 7
+  br i1 %67, label %then23, label %ifcont24
+then23:
+  ret i1 0
+ifcont24:
+  %68 = load i32, ptr %0
+  %69 = icmp eq i32 %68, 5
+  %70 = load i32, ptr %3
+  %71 = call i1 @string.isExtendedPictographic(i32 %70)
+  %72 = and i1 %69, %71
+  br i1 %72, label %then25, label %ifcont26
+then25:
+  %73 = load ptr, ptr %4
+  %74 = getelementptr %GraphemeState, ptr %73, i32 0, i32 1
+  %75 = load i1, ptr %74
+  br i1 %75, label %then27, label %ifcont28
+ifcont26:
+  %76 = load i32, ptr %0
+  %77 = icmp eq i32 %76, 6
+  %78 = load i32, ptr %1
+  %79 = icmp eq i32 %78, 6
+  %80 = and i1 %77, %79
+  br i1 %80, label %then29, label %ifcont30
+then27:
+  ret i1 0
+ifcont28:
+  br label %ifcont26
+then29:
+  %81 = load ptr, ptr %4
+  %82 = getelementptr %GraphemeState, ptr %81, i32 0, i32 0
+  %83 = load i32, ptr %82
+  %84 = srem i32 %83, 2
+  %85 = icmp eq i32 %84, 1
+  br i1 %85, label %then31, label %ifcont32
+ifcont30:
+  ret i1 1
+then31:
+  ret i1 0
+ifcont32:
+  br label %ifcont30
+}
+
+define %GraphemeState @string.graphemeStateUpdate(ptr %state, i32 %gbp, i32 %cp) {
+entry0:
+  %0 = alloca ptr
+  store ptr %state, ptr %0
+  %1 = alloca i32
+  store i32 %gbp, ptr %1
+  %2 = alloca i32
+  store i32 %cp, ptr %2
+  %3 = alloca %GraphemeState
+  %4 = getelementptr %GraphemeState, ptr %3, i32 0, i32 0
+  store i32 0, ptr %4
+  %5 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
+  store i1 0, ptr %5
+  %6 = load i32, ptr %1
+  %7 = icmp eq i32 %6, 6
+  br i1 %7, label %then1, label %ifcont2
+then1:
+  %8 = getelementptr %GraphemeState, ptr %3, i32 0, i32 0
+  %9 = load ptr, ptr %0
+  %10 = getelementptr %GraphemeState, ptr %9, i32 0, i32 0
+  %11 = load i32, ptr %10
+  %12 = add i32 %11, 1
+  store i32 %12, ptr %8
+  br label %ifcont2
+ifcont2:
+  %13 = load i32, ptr %2
+  %14 = call i1 @string.isExtendedPictographic(i32 %13)
+  br i1 %14, label %then3, label %else5
+then3:
+  %15 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
+  store i1 1, ptr %15
+  br label %ifcont4
+ifcont4:
+  %25 = load %GraphemeState, ptr %3
+  ret %GraphemeState %25
+else5:
+  %16 = load ptr, ptr %0
+  %17 = getelementptr %GraphemeState, ptr %16, i32 0, i32 1
+  %18 = load i1, ptr %17
+  br i1 %18, label %then6, label %ifcont7
+then6:
+  %19 = load i32, ptr %1
+  %20 = icmp eq i32 %19, 4
+  %21 = load i32, ptr %1
+  %22 = icmp eq i32 %21, 5
+  %23 = or i1 %20, %22
+  br i1 %23, label %then8, label %ifcont9
+ifcont7:
+  br label %ifcont4
+then8:
+  %24 = getelementptr %GraphemeState, ptr %3, i32 0, i32 1
+  store i1 1, ptr %24
+  br label %ifcont9
+ifcont9:
+  br label %ifcont7
+}
+
+define i32 @string.utf8ByteLengthAt(ptr %managed, i32 %pos) {
+entry0:
+  %0 = alloca ptr
+  store ptr %managed, ptr %0
+  %1 = alloca i32
+  store i32 %pos, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = load i32, ptr %1
+  %4 = getelementptr %__ManagedStringData, ptr %2, i32 0, i32 0
+  %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
+  %6 = load ptr, ptr %5
+  %7 = sext i32 %3 to i64
+  %8 = getelementptr i8, ptr %6, i64 %7
+  %9 = load i8, ptr %8
+  %10 = zext i8 %9 to i32
+  %11 = alloca i32
+  store i32 %10, ptr %11
+  %12 = load i32, ptr %11
+  %13 = icmp slt i32 %12, 128
+  br i1 %13, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  %14 = load i32, ptr %11
+  %15 = icmp slt i32 %14, 224
+  br i1 %15, label %then3, label %ifcont4
+then3:
+  ret i32 2
+ifcont4:
+  %16 = load i32, ptr %11
+  %17 = icmp slt i32 %16, 240
+  br i1 %17, label %then5, label %ifcont6
+then5:
+  ret i32 3
+ifcont6:
+  ret i32 4
+}
+
+define i32 @string.utf8DecodeAt(ptr %managed, i32 %pos) {
+entry0:
+  %0 = alloca ptr
+  store ptr %managed, ptr %0
+  %1 = alloca i32
+  store i32 %pos, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = load i32, ptr %1
+  %4 = getelementptr %__ManagedStringData, ptr %2, i32 0, i32 0
+  %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
+  %6 = load ptr, ptr %5
+  %7 = sext i32 %3 to i64
+  %8 = getelementptr i8, ptr %6, i64 %7
+  %9 = load i8, ptr %8
+  %10 = zext i8 %9 to i32
+  %11 = alloca i32
+  store i32 %10, ptr %11
+  %12 = load i32, ptr %11
+  %13 = icmp slt i32 %12, 128
+  br i1 %13, label %then1, label %ifcont2
+then1:
+  %14 = load i32, ptr %11
+  ret i32 %14
+ifcont2:
+  %15 = load i32, ptr %11
+  %16 = icmp slt i32 %15, 224
+  br i1 %16, label %then3, label %ifcont4
+then3:
+  %17 = load ptr, ptr %0
+  %18 = load i32, ptr %1
+  %19 = add i32 %18, 1
+  %20 = getelementptr %__ManagedStringData, ptr %17, i32 0, i32 0
+  %21 = getelementptr %_ManagedArray_byte, ptr %20, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = sext i32 %19 to i64
+  %24 = getelementptr i8, ptr %22, i64 %23
+  %25 = load i8, ptr %24
+  %26 = zext i8 %25 to i32
+  %27 = alloca i32
+  store i32 %26, ptr %27
+  %28 = load i32, ptr %11
+  %29 = srem i32 %28, 32
+  %30 = mul i32 %29, 64
+  %31 = load i32, ptr %27
+  %32 = srem i32 %31, 64
+  %33 = add i32 %30, %32
+  ret i32 %33
+ifcont4:
+  %34 = load i32, ptr %11
+  %35 = icmp slt i32 %34, 240
+  br i1 %35, label %then5, label %ifcont6
+then5:
+  %36 = load ptr, ptr %0
+  %37 = load i32, ptr %1
+  %38 = add i32 %37, 1
+  %39 = getelementptr %__ManagedStringData, ptr %36, i32 0, i32 0
+  %40 = getelementptr %_ManagedArray_byte, ptr %39, i32 0, i32 0
+  %41 = load ptr, ptr %40
+  %42 = sext i32 %38 to i64
+  %43 = getelementptr i8, ptr %41, i64 %42
+  %44 = load i8, ptr %43
+  %45 = zext i8 %44 to i32
+  %46 = alloca i32
+  store i32 %45, ptr %46
+  %47 = load ptr, ptr %0
+  %48 = load i32, ptr %1
+  %49 = add i32 %48, 2
+  %50 = getelementptr %__ManagedStringData, ptr %47, i32 0, i32 0
+  %51 = getelementptr %_ManagedArray_byte, ptr %50, i32 0, i32 0
+  %52 = load ptr, ptr %51
+  %53 = sext i32 %49 to i64
+  %54 = getelementptr i8, ptr %52, i64 %53
+  %55 = load i8, ptr %54
+  %56 = zext i8 %55 to i32
+  %57 = alloca i32
+  store i32 %56, ptr %57
+  %58 = load i32, ptr %11
+  %59 = srem i32 %58, 16
+  %60 = mul i32 %59, 4096
+  %61 = load i32, ptr %46
+  %62 = srem i32 %61, 64
+  %63 = mul i32 %62, 64
+  %64 = add i32 %60, %63
+  %65 = load i32, ptr %57
+  %66 = srem i32 %65, 64
+  %67 = add i32 %64, %66
+  ret i32 %67
+ifcont6:
+  %68 = load ptr, ptr %0
+  %69 = load i32, ptr %1
+  %70 = add i32 %69, 1
+  %71 = getelementptr %__ManagedStringData, ptr %68, i32 0, i32 0
+  %72 = getelementptr %_ManagedArray_byte, ptr %71, i32 0, i32 0
+  %73 = load ptr, ptr %72
+  %74 = sext i32 %70 to i64
+  %75 = getelementptr i8, ptr %73, i64 %74
+  %76 = load i8, ptr %75
+  %77 = zext i8 %76 to i32
+  %78 = alloca i32
+  store i32 %77, ptr %78
+  %79 = load ptr, ptr %0
+  %80 = load i32, ptr %1
+  %81 = add i32 %80, 2
+  %82 = getelementptr %__ManagedStringData, ptr %79, i32 0, i32 0
+  %83 = getelementptr %_ManagedArray_byte, ptr %82, i32 0, i32 0
+  %84 = load ptr, ptr %83
+  %85 = sext i32 %81 to i64
+  %86 = getelementptr i8, ptr %84, i64 %85
+  %87 = load i8, ptr %86
+  %88 = zext i8 %87 to i32
+  %89 = alloca i32
+  store i32 %88, ptr %89
+  %90 = load ptr, ptr %0
+  %91 = load i32, ptr %1
+  %92 = add i32 %91, 3
+  %93 = getelementptr %__ManagedStringData, ptr %90, i32 0, i32 0
+  %94 = getelementptr %_ManagedArray_byte, ptr %93, i32 0, i32 0
+  %95 = load ptr, ptr %94
+  %96 = sext i32 %92 to i64
+  %97 = getelementptr i8, ptr %95, i64 %96
+  %98 = load i8, ptr %97
+  %99 = zext i8 %98 to i32
+  %100 = alloca i32
+  store i32 %99, ptr %100
+  %101 = load i32, ptr %11
+  %102 = srem i32 %101, 8
+  %103 = mul i32 %102, 262144
+  %104 = load i32, ptr %78
+  %105 = srem i32 %104, 64
+  %106 = mul i32 %105, 4096
+  %107 = add i32 %103, %106
+  %108 = load i32, ptr %89
+  %109 = srem i32 %108, 64
+  %110 = mul i32 %109, 64
+  %111 = add i32 %107, %110
+  %112 = load i32, ptr %100
+  %113 = srem i32 %112, 64
+  %114 = add i32 %111, %113
+  ret i32 %114
+}
+
+declare void @_managed_string_retain(ptr %arg0)
+
+declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare f64 @trunc(f64 %arg0)
 
 declare i32 @write_stdout(ptr %arg0, i32 %arg1)
 

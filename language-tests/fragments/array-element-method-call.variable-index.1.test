@@ -17,11 +17,21 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 50
+; Instructions: 58
 
 %Item = type { i32 }
 %__ManagedArrayData_Item = type { ptr, i32, i32 }
 %array<Item> = type { %__ManagedArrayData_Item, i32 }
+
+define i32 @Item.getId(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Item, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  ret i32 %3
+}
 
 define i32 @main() {
 entry0:
@@ -55,13 +65,15 @@ entry0:
   %21 = getelementptr %Item, ptr %20, i64 2
   %22 = getelementptr %Item, ptr %21, i32 0, i32 0
   store i32 300, ptr %22
+  %23 = alloca i32
+  store i32 1, ptr %23
+  %24 = load i32, ptr %23
   %25 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
   %26 = getelementptr %__ManagedArrayData_Item, ptr %25, i32 0, i32 0
   %27 = load ptr, ptr %26
-  %28 = sext i32 1 to i64
+  %28 = sext i32 %24 to i64
   %29 = getelementptr %Item, ptr %27, i64 %28
-  %37 = getelementptr %Item, ptr %29, i32 0, i32 0
-  %38 = load i32, ptr %37
+  %30 = call i32 @Item.getId(ptr %29)
   %31 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
   %32 = getelementptr %__ManagedArrayData_Item, ptr %31, i32 0, i32 0
   %33 = load ptr, ptr %32
@@ -73,7 +85,7 @@ items.free1:
   call void @free(ptr %33)
   br label %items.skip2
 items.skip2:
-  ret i32 %38
+  ret i32 %30
 }
 
 declare void @free(ptr %arg0)

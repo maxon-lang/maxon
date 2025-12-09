@@ -8,7 +8,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 75
+; Instructions: 116
 
 %string = type { ptr, i32 }
 %_ManagedArray_byte = type { ptr, i32 }
@@ -16,6 +16,22 @@ end 'main'
 
 @.str.0 = constant [6 x i8] c"hello\00"
 @.str.1 = constant [6 x i8] c"world\00"
+
+define i1 @string.equals(ptr %self, ptr %other) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca ptr
+  store ptr %other, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %string, ptr %2, i32 0, i32 0
+  %4 = load ptr, ptr %3
+  %5 = load ptr, ptr %1
+  %6 = getelementptr %string, ptr %5, i32 0, i32 0
+  %7 = load ptr, ptr %6
+  %8 = call i1 @string.equalsManagedString(ptr %4, ptr %7)
+  ret i1 %8
+}
 
 define i32 @main() {
 entry0:
@@ -49,12 +65,8 @@ entry0:
   store ptr %10, ptr %16
   %17 = getelementptr %string, ptr %9, i32 0, i32 1
   store i32 0, ptr %17
-  %20 = getelementptr %string, ptr %0, i32 0, i32 0
-  %21 = load ptr, ptr %20
-  %22 = getelementptr %string, ptr %9, i32 0, i32 0
-  %23 = load ptr, ptr %22
-  %24 = call i1 @string.equalsManagedString(ptr %21, ptr %23)
-  %19 = icmp eq i1 %24, 0
+  %18 = call i1 @string.equals(ptr %0, ptr %9)
+  %19 = icmp eq i1 %18, 0
   br i1 %19, label %then1, label %ifcont2
 then1:
   ret i32 0
@@ -64,25 +76,44 @@ ifcont2:
 
 define i1 @string.equalsManagedStringRange(ptr %a, i32 %aOffset, ptr %b, i32 %bOffset, i32 %len) {
 entry0:
+  %0 = alloca ptr
+  store ptr %a, ptr %0
+  %1 = alloca i32
+  store i32 %aOffset, ptr %1
+  %2 = alloca ptr
+  store ptr %b, ptr %2
+  %3 = alloca i32
+  store i32 %bOffset, ptr %3
+  %4 = alloca i32
+  store i32 %len, ptr %4
+  %5 = alloca i32
+  store i32 0, ptr %5
   br label %whilecond1
 whilecond1:
-  %32 = phi i32 [ 0, %entry0 ], [ %31, %ifcont5 ]
-  %8 = icmp slt i32 %32, %len
+  %6 = load i32, ptr %5
+  %7 = load i32, ptr %4
+  %8 = icmp slt i32 %6, %7
   br i1 %8, label %loop2, label %afterloop3
 loop2:
-  %12 = add i32 %aOffset, %32
-  %13 = getelementptr %__ManagedStringData, ptr %a, i32 0, i32 0
+  %9 = load ptr, ptr %0
+  %10 = load i32, ptr %1
+  %11 = load i32, ptr %5
+  %12 = add i32 %10, %11
+  %13 = getelementptr %__ManagedStringData, ptr %9, i32 0, i32 0
   %14 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 0
   %15 = load ptr, ptr %14
   %16 = sext i32 %12 to i64
-  %17 = getelementptr i8, ptr %15, i64 0, i64 %16
+  %17 = getelementptr i8, ptr %15, i64 %16
   %18 = load i8, ptr %17
-  %22 = add i32 %bOffset, %32
-  %23 = getelementptr %__ManagedStringData, ptr %b, i32 0, i32 0
+  %19 = load ptr, ptr %2
+  %20 = load i32, ptr %3
+  %21 = load i32, ptr %5
+  %22 = add i32 %20, %21
+  %23 = getelementptr %__ManagedStringData, ptr %19, i32 0, i32 0
   %24 = getelementptr %_ManagedArray_byte, ptr %23, i32 0, i32 0
   %25 = load ptr, ptr %24
   %26 = sext i32 %22 to i64
-  %27 = getelementptr i8, ptr %25, i64 0, i64 %26
+  %27 = getelementptr i8, ptr %25, i64 %26
   %28 = load i8, ptr %27
   %29 = icmp ne i8 %18, %28
   br i1 %29, label %then4, label %ifcont5
@@ -91,22 +122,36 @@ afterloop3:
 then4:
   ret i1 0
 ifcont5:
-  %31 = add i32 %32, 1
+  %30 = load i32, ptr %5
+  %31 = add i32 %30, 1
+  store i32 %31, ptr %5
   br label %whilecond1
 }
 
 define i1 @string.equalsManagedString(ptr %a, ptr %b) {
 entry0:
-  %3 = getelementptr %__ManagedStringData, ptr %a, i32 0, i32 1
+  %0 = alloca ptr
+  store ptr %a, ptr %0
+  %1 = alloca ptr
+  store ptr %b, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %__ManagedStringData, ptr %2, i32 0, i32 1
   %4 = load i32, ptr %3
-  %8 = getelementptr %__ManagedStringData, ptr %b, i32 0, i32 1
+  %5 = alloca i32
+  store i32 %4, ptr %5
+  %6 = load i32, ptr %5
+  %7 = load ptr, ptr %1
+  %8 = getelementptr %__ManagedStringData, ptr %7, i32 0, i32 1
   %9 = load i32, ptr %8
-  %10 = icmp ne i32 %4, %9
+  %10 = icmp ne i32 %6, %9
   br i1 %10, label %then1, label %ifcont2
 then1:
   ret i1 0
 ifcont2:
-  %14 = call i1 @string.equalsManagedStringRange(ptr %a, i32 0, ptr %b, i32 0, i32 %4)
+  %11 = load ptr, ptr %0
+  %12 = load ptr, ptr %1
+  %13 = load i32, ptr %5
+  %14 = call i1 @string.equalsManagedStringRange(ptr %11, i32 0, ptr %12, i32 0, i32 %13)
   ret i1 %14
 }
 
@@ -216,7 +261,7 @@ loop2:
   %14 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 0
   %15 = load ptr, ptr %14
   %16 = sext i32 %12 to i64
-  %17 = getelementptr i8, ptr %15, i64 0, i64 %16
+  %17 = getelementptr i8, ptr %15, i64 %16
   %18 = load i8, ptr %17
   %19 = load ptr, ptr %2
   %20 = load i32, ptr %3
@@ -226,7 +271,7 @@ loop2:
   %24 = getelementptr %_ManagedArray_byte, ptr %23, i32 0, i32 0
   %25 = load ptr, ptr %24
   %26 = sext i32 %22 to i64
-  %27 = getelementptr i8, ptr %25, i64 0, i64 %26
+  %27 = getelementptr i8, ptr %25, i64 %26
   %28 = load i8, ptr %27
   %29 = icmp ne i8 %18, %28
   br i1 %29, label %then4, label %ifcont5

@@ -17,19 +17,28 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 10
+; Instructions: 15
 
 %Number = type { i32 }
+
+define i32 @Number.addOne(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Number, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  %4 = add i32 %3, 1
+  ret i32 %4
+}
 
 define i32 @main() {
 entry0:
   %0 = alloca %Number
   %1 = getelementptr %Number, ptr %0, i32 0, i32 0
   store i32 41, ptr %1
-  %3 = getelementptr %Number, ptr %0, i32 0, i32 0
-  %4 = load i32, ptr %3
-  %5 = add i32 %4, 1
-  ret i32 %5
+  %2 = call i32 @Number.addOne(ptr %0)
+  ret i32 %2
 }
 
 declare void @exit(i32 %arg0)

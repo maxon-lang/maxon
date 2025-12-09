@@ -10,23 +10,34 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 12
+; Instructions: 23
 
 define i32 @main() {
 entry0:
+  %0 = alloca i32
+  store i32 0, ptr %0
+  %1 = alloca i32
+  store i32 1, ptr %1
+  %2 = alloca i32
+  store i32 4, ptr %2
   br label %forcond1
 forcond1:
-  %11 = phi i32 [ 1, %entry0 ], [ %8, %forincrement3 ]
-  %10 = phi i32 [ 0, %entry0 ], [ %11, %forincrement3 ]
-  %5 = icmp slt i32 %11, 4
+  %3 = load i32, ptr %1
+  %4 = load i32, ptr %2
+  %5 = icmp slt i32 %3, %4
   br i1 %5, label %forloop2, label %afterfor4
 forloop2:
+  %6 = load i32, ptr %1
+  store i32 %6, ptr %0
   br label %forincrement3
 forincrement3:
-  %8 = add i32 %11, 1
+  %7 = load i32, ptr %1
+  %8 = add i32 %7, 1
+  store i32 %8, ptr %1
   br label %forcond1
 afterfor4:
-  ret i32 %10
+  %9 = load i32, ptr %0
+  ret i32 %9
 }
 
 declare void @exit(i32 %arg0)

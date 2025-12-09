@@ -8,7 +8,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 31
+; Instructions: 36
 
 %string = type { ptr, i32 }
 %_ManagedArray_byte = type { ptr, i32 }
@@ -33,12 +33,14 @@ entry0:
   store ptr %1, ptr %7
   %8 = getelementptr %string, ptr %0, i32 0, i32 1
   store i32 0, ptr %8
-  %11 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  %9 = getelementptr %string, ptr %0, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 2
   %12 = load i32, ptr %11
   %13 = icmp sgt i32 %12, 0
   br i1 %13, label %refcount.heap1, label %refcount.const2
 refcount.heap1:
-  %14 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %14 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 0
   %15 = getelementptr %_ManagedArray_byte, ptr %14, i32 0, i32 0
   %16 = load ptr, ptr %15
   %17 = getelementptr i8, ptr %16, i64 -8
@@ -48,7 +50,10 @@ refcount.const2:
   br label %refcount.merge3
 refcount.merge3:
   %19 = phi i32 [ %18, %refcount.heap1 ], [ -1, %refcount.const2 ]
-  ret i32 %19
+  %20 = alloca i32
+  store i32 %19, ptr %20
+  %21 = load i32, ptr %20
+  ret i32 %21
 }
 
 declare void @exit(i32 %arg0)

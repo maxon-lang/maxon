@@ -18,11 +18,21 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 56
+; Instructions: 65
 
 %Data = type { i32 }
 %__ManagedArrayData_Data = type { ptr, i32, i32 }
 %array<Data> = type { %__ManagedArrayData_Data, i32 }
+
+define i32 @Data.getX(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %Data, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  ret i32 %3
+}
 
 define i32 @main() {
 entry0:
@@ -62,13 +72,16 @@ entry0:
   %26 = getelementptr %Data, ptr %25, i64 3
   %27 = getelementptr %Data, ptr %26, i32 0, i32 0
   store i32 4, ptr %27
+  %28 = alloca i32
+  store i32 1, ptr %28
+  %29 = load i32, ptr %28
+  %30 = add i32 %29, 1
   %31 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
   %32 = getelementptr %__ManagedArrayData_Data, ptr %31, i32 0, i32 0
   %33 = load ptr, ptr %32
-  %34 = sext i32 2 to i64
+  %34 = sext i32 %30 to i64
   %35 = getelementptr %Data, ptr %33, i64 %34
-  %43 = getelementptr %Data, ptr %35, i32 0, i32 0
-  %44 = load i32, ptr %43
+  %36 = call i32 @Data.getX(ptr %35)
   %37 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
   %38 = getelementptr %__ManagedArrayData_Data, ptr %37, i32 0, i32 0
   %39 = load ptr, ptr %38
@@ -80,7 +93,7 @@ arr.free1:
   call void @free(ptr %39)
   br label %arr.skip2
 arr.skip2:
-  ret i32 %44
+  ret i32 %36
 }
 
 declare void @free(ptr %arg0)

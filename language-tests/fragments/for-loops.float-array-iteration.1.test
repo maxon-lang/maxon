@@ -9,38 +9,53 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 29
+; Instructions: 44
 
 define i32 @main() {
 entry0:
   %0 = alloca [5 x f64]
-  %2 = getelementptr f64, ptr %0, i64 0, i64 0
+  %1 = alloca i32
+  store i32 5, ptr %1
+  %2 = getelementptr f64, ptr %0, i64 0
   store f64 1, ptr %2
-  %3 = getelementptr f64, ptr %0, i64 0, i64 1
+  %3 = getelementptr f64, ptr %0, i64 1
   store f64 2, ptr %3
-  %4 = getelementptr f64, ptr %0, i64 0, i64 2
+  %4 = getelementptr f64, ptr %0, i64 2
   store f64 3, ptr %4
-  %5 = getelementptr f64, ptr %0, i64 0, i64 3
+  %5 = getelementptr f64, ptr %0, i64 3
   store f64 4, ptr %5
-  %6 = getelementptr f64, ptr %0, i64 0, i64 4
+  %6 = getelementptr f64, ptr %0, i64 4
   store f64 5, ptr %6
+  %7 = alloca f64
+  store f64 0, ptr %7
+  %8 = load i32, ptr %1
+  %9 = alloca i32
+  store i32 0, ptr %9
   br label %forcond1
 forcond1:
-  %26 = phi i32 [ 0, %entry0 ], [ %21, %forincrement3 ]
-  %25 = phi f64 [ 0, %entry0 ], [ %19, %forincrement3 ]
-  %11 = icmp slt i32 %26, 5
+  %10 = load i32, ptr %9
+  %11 = icmp slt i32 %10, %8
   br i1 %11, label %forloop2, label %afterfor4
 forloop2:
-  %13 = sext i32 %26 to i64
-  %14 = getelementptr f64, ptr %0, i64 0, i64 %13
+  %12 = load i32, ptr %9
+  %13 = sext i32 %12 to i64
+  %14 = getelementptr f64, ptr %0, i64 %13
   %15 = load f64, ptr %14
-  %19 = fadd f64 %25, %15
+  %16 = alloca f64
+  store f64 %15, ptr %16
+  %17 = load f64, ptr %7
+  %18 = load f64, ptr %16
+  %19 = fadd f64 %17, %18
+  store f64 %19, ptr %7
   br label %forincrement3
 forincrement3:
-  %21 = add i32 %26, 1
+  %20 = load i32, ptr %9
+  %21 = add i32 %20, 1
+  store i32 %21, ptr %9
   br label %forcond1
 afterfor4:
-  %23 = call f64 @trunc(f64 %25)
+  %22 = load f64, ptr %7
+  %23 = call f64 @trunc(f64 %22)
   %24 = fptosi f64 %23 to i32
   ret i32 %24
 }
@@ -65,15 +80,15 @@ entry0:
   %0 = alloca [5 x f64]
   %1 = alloca i32
   store i32 5, ptr %1
-  %2 = getelementptr f64, ptr %0, i64 0, i64 0
+  %2 = getelementptr f64, ptr %0, i64 0
   store f64 1, ptr %2
-  %3 = getelementptr f64, ptr %0, i64 0, i64 1
+  %3 = getelementptr f64, ptr %0, i64 1
   store f64 2, ptr %3
-  %4 = getelementptr f64, ptr %0, i64 0, i64 2
+  %4 = getelementptr f64, ptr %0, i64 2
   store f64 3, ptr %4
-  %5 = getelementptr f64, ptr %0, i64 0, i64 3
+  %5 = getelementptr f64, ptr %0, i64 3
   store f64 4, ptr %5
-  %6 = getelementptr f64, ptr %0, i64 0, i64 4
+  %6 = getelementptr f64, ptr %0, i64 4
   store f64 5, ptr %6
   %7 = alloca f64
   store f64 0, ptr %7
@@ -88,7 +103,7 @@ forcond1:
 forloop2:
   %12 = load i32, ptr %9
   %13 = sext i32 %12 to i64
-  %14 = getelementptr f64, ptr %0, i64 0, i64 %13
+  %14 = getelementptr f64, ptr %0, i64 %13
   %15 = load f64, ptr %14
   %16 = alloca f64
   store f64 %15, ptr %16

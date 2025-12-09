@@ -15,32 +15,34 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 21
+; Instructions: 24
 
 define i32 @main() {
 entry0:
+  %0 = alloca i32
+  store i32 0, ptr %0
   br label %whilecond1
 whilecond1:
-  %6 = phi i32 [ 0, %entry0 ], [ %8, %afterloop6 ]
   br i1 1, label %loop2, label %afterloop3
 loop2:
   br label %whilecond4
 afterloop3:
-  %7 = phi i32 [ %6, %whilecond1 ], [ %2, %then10 ]
-  ret i32 %7
+  %5 = load i32, ptr %0
+  ret i32 %5
 whilecond4:
-  %8 = phi i32 [ %6, %loop2 ], [ %9, %afterloop9 ]
   br i1 1, label %loop5, label %afterloop6
 loop5:
   br label %whilecond7
 afterloop6:
   br label %whilecond1
 whilecond7:
-  %9 = phi i32 [ %8, %loop5 ], [ %2, %ifcont11 ]
   br i1 1, label %loop8, label %afterloop9
 loop8:
-  %2 = add i32 %9, 1
-  %4 = icmp eq i32 %2, 5
+  %1 = load i32, ptr %0
+  %2 = add i32 %1, 1
+  store i32 %2, ptr %0
+  %3 = load i32, ptr %0
+  %4 = icmp eq i32 %3, 5
   br i1 %4, label %then10, label %ifcont11
 afterloop9:
   br label %whilecond4
@@ -48,6 +50,8 @@ then10:
   br label %afterloop3
 ifcont11:
   br label %whilecond7
+afterbreak12:
+  br label %ifcont11
 }
 
 declare void @exit(i32 %arg0)
