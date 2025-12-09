@@ -1,6 +1,7 @@
 #include "optimizer.h"
 #include <algorithm>
 #include <functional>
+#include <iostream>
 #include <unordered_set>
 
 namespace mir {
@@ -11,6 +12,31 @@ namespace mir {
 
 bool DeadCodeEliminationPass::run(MIRModule &module) {
 	bool changed = false;
+
+	// Debug: verify MIR integrity before DCE
+	if (verboseLevel_ >= 2) {
+		std::cout << "[DCE] Verifying MIR integrity before DCE..." << std::endl;
+		for (const auto &func : module.functions) {
+			if (func->isExternal)
+				continue;
+			for (const auto &block : func->basicBlocks) {
+				for (size_t i = 0; i < block->instructions.size(); i++) {
+					auto &inst = block->instructions[i];
+					for (size_t j = 0; j < inst->operands.size(); j++) {
+						auto *op = inst->operands[j];
+						if (!op) {
+							std::cout << "[DCE ERROR] Function " << func->name
+									  << " block " << block->name
+									  << " inst " << i << " (opcode=" << static_cast<int>(inst->opcode)
+									  << ") has NULL operand " << j
+									  << " (total operands: " << inst->operands.size() << ")" << std::endl;
+						}
+					}
+				}
+			}
+		}
+		std::cout << "[DCE] Integrity check complete." << std::endl;
+	}
 
 	// First, eliminate unused functions (function-level DCE)
 	changed |= eliminateUnusedFunctions(module);
@@ -138,7 +164,11 @@ bool DeadCodeEliminationPass::eliminateUnusedFunctions(MIRModule &module) {
 				}
 				// Check operands for function references (function pointers)
 				for (auto *operand : inst->operands) {
-					if (operand && operand->kind == MIRValueKind::FunctionRef && !operand->name.empty()) {
+					// Skip null operands - should not happen in valid MIR
+					if (!operand) {
+						continue;
+					}
+					if (operand->kind == MIRValueKind::FunctionRef && !operand->name.empty()) {
 						if (reachable.find(operand->name) == reachable.end()) {
 							reachable.insert(operand->name);
 							worklist.push_back(operand->name);
@@ -160,11 +190,6 @@ bool DeadCodeEliminationPass::eliminateUnusedFunctions(MIRModule &module) {
 		module.functions.end());
 
 	bool changed = (module.functions.size() < originalSize);
-	if (changed && verboseLevel_ >= 2) {
-		size_t eliminated = originalSize - module.functions.size();
-		std::cout << "  Dead Code Elimination: removed " << eliminated
-				  << " unused function(s)" << std::endl;
-	}
 
 	return changed;
 }
@@ -303,8 +328,7 @@ bool DeadCodeEliminationPass::isPureFunction(const std::string &name) {
 		"sin", "cos", "tan", "asin", "acos", "atan", "atan2",
 		"abs", "fabs",
 		"min", "max",
-		"fmod", "fmin", "fmax"
-	};
+		"fmod", "fmin", "fmax"};
 	return pureFunctions.find(name) != pureFunctions.end();
 }
 

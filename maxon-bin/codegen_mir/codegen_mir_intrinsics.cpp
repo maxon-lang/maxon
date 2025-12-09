@@ -67,30 +67,42 @@ mir::MIRType *MIRCodeGenerator::getOrCreateManagedArrayDataType(const std::strin
 
 mir::MIRType *MIRCodeGenerator::getOrCreateArrayStructType(const std::string &elementType) {
 	// Create the array<T> struct type as defined in stdlib/collections/array.maxon
-	// Layout: { managed _ManagedArray (ptr, i32, i32), iterIndex i32 }
-	// - managed: the internal _ManagedArray storage
-	// - iterIndex: current iteration position for for-in loops
+	// Layout: { managed _ManagedArray<T>, iterIndex int }
+	// where _ManagedArray<T> is { _buffer ptr, _len i32, _capacity i32 }
 	std::string typeName = "array<" + elementType + ">";
-	mir::MIRType *arrayStructType = structTypes[typeName];
-	if (!arrayStructType) {
-		// Ensure the _ManagedArrayData type exists (for consistency)
-		(void)getOrCreateManagedArrayDataType(elementType);
 
-		// The array<T> struct contains the managed array struct followed by iterIndex
-		// However, since _ManagedArray is embedded, we need to flatten it:
-		// { ptr, i32, i32, i32 } = { _buffer, _len, _capacity, iterIndex }
-		arrayStructType = module->getOrCreateStructType(
-			typeName,
-			{mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
-		structTypes[typeName] = arrayStructType;
+	// Check if already exists (either created here or by instantiateGenericStruct)
+	auto it = structTypes.find(typeName);
+	if (it != structTypes.end()) {
+		return it->second;
+	}
 
-		// Also instantiate the generic array struct to compile its methods
-		// This is needed so that calls to array<T>.push, array<T>.count, etc. can be resolved
-		if (structDefinitions.find("array") != structDefinitions.end()) {
-			std::map<std::string, std::string> typeBindings = {{"Element", elementType}};
-			instantiateGenericStruct("array", typeBindings);
+	// Ensure the __ManagedArrayData type exists for the intrinsics
+	(void)getOrCreateManagedArrayDataType(elementType);
+
+	// Use the standard generic struct instantiation mechanism
+	// This creates the correct nested layout and populates structFields correctly
+	if (structDefinitions.find("array") != structDefinitions.end()) {
+		std::map<std::string, std::string> typeBindings = {{"Element", elementType}};
+		instantiateGenericStruct("array", typeBindings);
+
+		// Now the type should exist in structTypes
+		it = structTypes.find(typeName);
+		if (it != structTypes.end()) {
+			return it->second;
 		}
 	}
+
+	// Fallback: if stdlib array not available, create the type manually
+	// This maintains backward compatibility for cases where stdlib isn't loaded
+	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementType);
+	mir::MIRType *arrayStructType = module->getOrCreateStructType(
+		typeName,
+		{managedArrayType, mir::MIRType::getInt32()});
+	structTypes[typeName] = arrayStructType;
+	structFields[typeName] = {
+		{"managed", "_ManagedArray<" + elementType + ">"},
+		{"iterIndex", "int"}};
 	return arrayStructType;
 }
 
@@ -670,18 +682,33 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_from_chars(CallExprAST *callEx
 	if (maxon::TypeConversion::isArrayStructType(argType) || maxon::TypeConversion::isManagedArrayType(argType)) {
 		// Get the alloca pointer for the array (don't load the value)
 		mir::MIRValue *arrayPtr = nullptr;
+		std::string varName;
 		if (auto *varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].get())) {
 			arrayPtr = namedValues[varExpr->name];
+			varName = varExpr->name;
 		}
 		if (!arrayPtr) {
 			// Fallback: generate the expression and hope it returns a pointer
 			arrayPtr = generateExpr(callExpr->args[0].get());
 		}
 
-		// Extract buffer pointer (field 0) from the array struct
+		// Extract buffer pointer from the array struct
 		if (maxon::TypeConversion::isArrayStructType(argType)) {
+			// array<T> struct with nested layout:
+			// Field 0: managed (__ManagedArrayData<T>)
+			//   Field 0 of managed: _buffer
+			// Field 1: iterIndex
 			mir::MIRType *arrayStructType = getOrCreateArrayStructType("byte");
-			mir::MIRValue *bufferField = builder->createStructGEP(arrayStructType, arrayPtr, 0, "arr._buffer.ptr");
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType("byte");
+			// For struct parameters, alloca contains a pointer to the struct - need to load it first
+			mir::MIRValue *structBase = arrayPtr;
+			if (!varName.empty() && isStructParameter(varName)) {
+				structBase = builder->createLoad(mir::MIRType::getPtr(), arrayPtr, "arr.structptr");
+			}
+			// First GEP to get managed field (field 0 of array<T>)
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, structBase, 0, "arr.managed");
+			// Second GEP to get _buffer field (field 0 of managed)
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, "arr.managed._buffer.ptr");
 			srcBuffer = builder->createLoad(mir::MIRType::getPtr(), bufferField, "arr.buffer");
 		} else {
 			std::string elemType = maxon::TypeConversion::getArrayElementType(argType);

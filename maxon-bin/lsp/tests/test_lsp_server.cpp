@@ -990,20 +990,26 @@ end 'main')";
 	REQUIRE(hasItem("endsWith"));
 }
 
-TEST_CASE("LSP completion provides array type members", "[lsp][completion]") {
+TEST_CASE("LSP completion provides array type members", "[lsp][completion][stdlib]") {
+	// Tests run from maxon-bin/lsp/tests/build, so go up 4 levels to project root
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+
 	LSPTestFixture fixture;
-	fixture.initialize();
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
 
 	std::string code = R"(function main() int
 	var arr = array of 5 int
 	arr.
 	return 0
 end 'main')";
-	fixture.openDocument("file:///test.maxon", code);
+	std::string docUri = "file://" + (projectRoot / "temp" / "test.maxon").string();
+	fixture.openDocument(docUri, code);
 
 	// Request completion after 'arr.' at line 2, character 5
 	json completionParams = {
-		{"textDocument", {{"uri", "file:///test.maxon"}}},
+		{"textDocument", {{"uri", docUri}}},
 		{"position", {{"line", 2}, {"character", 5}}}};
 	fixture.transport()->queueRequest(3, "textDocument/completion", completionParams);
 

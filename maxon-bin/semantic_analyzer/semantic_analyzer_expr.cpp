@@ -4,6 +4,7 @@
 #include "../type_members.h"
 #include "../types/type_conversion.h"
 #include <algorithm>
+#include <set>
 
 // Expression analysis implementation
 std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
@@ -130,7 +131,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		const std::string &valueType = mapLiteral->valueType;
 		bool isBuiltinValueType = (valueType == "int" || valueType == "float" ||
 								   valueType == "bool" || valueType == "character" ||
-								   valueType == "byte" || valueType == "string" ||
+								   valueType == "byte" ||
 								   valueType.substr(0, 1) == "["); // Array types
 
 		if (!isBuiltinValueType && structs.find(valueType) == structs.end()) {
@@ -141,7 +142,6 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Register map methods for this specific key/value type pair
 		// Use the dictionary type name from the AST (e.g., "map", "HashMap", etc.)
 		std::string mapType = mapLiteral->dictType + "<" + keyType + "," + valueType + ">";
-		registerMapMethods(mapType, keyType, valueType);
 
 		// Track the base dictionary struct (e.g., "map") as undefined for auto-import
 		// This triggers loading map.maxon so the generic template is available for monomorphization
@@ -278,7 +278,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				const FunctionInfo &funcInfo = funcIt->second;
 				std::string funcType = "fn(";
 				for (size_t i = 0; i < funcInfo.parameters.size(); i++) {
-					if (i > 0) funcType += ",";
+					if (i > 0)
+						funcType += ",";
 					funcType += funcInfo.parameters[i].type;
 				}
 				funcType += ")->" + funcInfo.returnType;
@@ -584,102 +585,6 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return info ? info->returnType : "float";
 		}
 
-		// Check for array method calls: push(arr, val), pop(arr)
-		// These are transformed from arr.push(val), arr.pop() by the parser
-		// Now routed to the stdlib array<T> struct methods
-		if (callExpr->callee == "push") {
-			if (callExpr->args.size() != 2) {
-				addError("push() requires exactly 2 arguments: array and value",
-						 expr->line, expr->column);
-				return "error";
-			}
-			// First arg should be an array<T> (dynamic array)
-			std::string arrType = analyzeExpression(callExpr->args[0].get());
-
-			// Check for immutable (let) arrays - they can't be modified with push
-			if (auto *arrVar = dynamic_cast<VariableExprAST *>(callExpr->args[0].get())) {
-				auto varInfo = lookupVariable(arrVar->name);
-				if (varInfo && varInfo->isImmutable) {
-					// Get a user-friendly type representation
-					std::string friendlyType = maxon::TypeConversion::arrayTypeToDisplayString(arrType);
-					addError("push() can only be used on dynamic arrays, not " + friendlyType,
-							 expr->line, expr->column);
-					return "error";
-				}
-			}
-
-			// Check for static arrays (declared with 'let' or fixed-size)
-			if (maxon::TypeConversion::isStaticArrayType(arrType)) {
-				// Convert internal type to user-friendly format
-				// _StaticArray<3, int> -> "array of 3 int"
-				std::string elemType = maxon::TypeConversion::getArrayElementType(arrType);
-				int size = maxon::TypeConversion::getStaticArraySize(arrType);
-				std::string friendlyType = "array of " + std::to_string(size) + " " + elemType;
-				addError("push() can only be used on dynamic arrays, not " + friendlyType,
-						 expr->line, expr->column);
-				return "error";
-			}
-			if (!maxon::TypeConversion::isArrayStructType(arrType)) {
-				addError("push() can only be used on arrays, not " + arrType,
-						 expr->line, expr->column);
-				return "error";
-			}
-			// Second arg should match element type
-			std::string elemType = maxon::TypeConversion::getArrayStructElementType(arrType);
-			std::string valType = analyzeExpression(callExpr->args[1].get());
-			if (!typesMatch(elemType, valType) && valType != "error") {
-				addError("push() value type " + valType + " doesn't match array element type " + elemType,
-						 expr->line, expr->column);
-			}
-			// Set resolvedCallee to route to the array<T>.push method
-			callExpr->resolvedCallee = arrType + ".push";
-			// push() returns Self (the array type) for method chaining
-			return arrType;
-		}
-
-		if (callExpr->callee == "pop") {
-			if (callExpr->args.size() != 1) {
-				addError("pop() requires exactly 1 argument: array",
-						 expr->line, expr->column);
-				return "error";
-			}
-			// Arg should be an array<T> (dynamic array)
-			std::string arrType = analyzeExpression(callExpr->args[0].get());
-
-			// Check for immutable (let) arrays - they can't be modified with pop
-			if (auto *arrVar = dynamic_cast<VariableExprAST *>(callExpr->args[0].get())) {
-				auto varInfo = lookupVariable(arrVar->name);
-				if (varInfo && varInfo->isImmutable) {
-					// Get a user-friendly type representation
-					std::string friendlyType = maxon::TypeConversion::arrayTypeToDisplayString(arrType);
-					addError("pop() can only be used on dynamic arrays, not " + friendlyType,
-							 expr->line, expr->column);
-					return "error";
-				}
-			}
-
-			// Check for static arrays (declared with 'let' or fixed-size)
-			if (maxon::TypeConversion::isStaticArrayType(arrType)) {
-				// Convert internal type to user-friendly format
-				std::string elemType = maxon::TypeConversion::getArrayElementType(arrType);
-				int size = maxon::TypeConversion::getStaticArraySize(arrType);
-				std::string friendlyType = "array of " + std::to_string(size) + " " + elemType;
-				addError("pop() can only be used on dynamic arrays, not " + friendlyType,
-						 expr->line, expr->column);
-				return "error";
-			}
-			if (!maxon::TypeConversion::isArrayStructType(arrType)) {
-				addError("pop() can only be used on arrays, not " + arrType,
-						 expr->line, expr->column);
-				return "error";
-			}
-			std::string elemType = maxon::TypeConversion::getArrayStructElementType(arrType);
-			// Set resolvedCallee to route to the array<T>.pop method
-			callExpr->resolvedCallee = arrType + ".pop";
-			// pop() returns Element or nil
-			return maxon::TypeConversion::makeOptionalType(elemType);
-		}
-
 		// Handle compiler intrinsics using the registry
 		const IntrinsicInfo *intrinsic = IntrinsicRegistry::instance().lookup(callExpr->callee);
 		if (intrinsic) {
@@ -925,25 +830,47 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 					logTrace("Method disambiguation: callee='" + callExpr->callee + "' firstArgType='" + firstArgType + "'");
 
 					// Look for a method with matching qualifier (Type.method where Type == firstArgType)
+					// Prefer exact matches over generic base type matches
+					std::string exactMatch;
+					std::string baseTypeMatch;
+
 					for (const auto &match : matches) {
 						logTrace("  Checking match: " + match);
 						size_t dotPos = match.rfind(".");
 						if (dotPos != std::string::npos) {
 							std::string qualifier = match.substr(0, dotPos);
 							logTrace("    qualifier='" + qualifier + "' vs firstArgType='" + firstArgType + "'");
-							// Check if qualifier matches the first argument's type
+
+							// Check for exact match first
 							if (qualifier == firstArgType) {
-								logTrace("    -> MATCHED!");
-								if (resolvedMatch.empty()) {
-									resolvedMatch = match;
+								logTrace("    -> EXACT MATCH!");
+								if (exactMatch.empty()) {
+									exactMatch = match;
 								} else {
-									// Multiple matches even with type narrowing - still ambiguous
-									resolvedMatch.clear();
+									// Multiple exact matches - ambiguous
+									exactMatch.clear();
 									break;
+								}
+							}
+							// Check if qualifier is the base type of a generic (e.g., "array" matches "array<character>")
+							else {
+								size_t genericPos = firstArgType.find('<');
+								if (genericPos != std::string::npos) {
+									std::string baseType = firstArgType.substr(0, genericPos);
+									if (qualifier == baseType) {
+										logTrace("    -> BASE TYPE MATCH!");
+										if (baseTypeMatch.empty()) {
+											baseTypeMatch = match;
+										}
+										// Don't break for multiple base type matches - we'll prefer exact match anyway
+									}
 								}
 							}
 						}
 					}
+
+					// Prefer exact match, fall back to base type match
+					resolvedMatch = !exactMatch.empty() ? exactMatch : baseTypeMatch;
 				}
 
 				if (!resolvedMatch.empty()) {
@@ -1010,6 +937,38 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			callExpr->functionId = idIt->second;
 		}
 
+		// Check for mutating methods on immutable arrays
+		// Methods like push, pop, insert, remove, clear, reserve modify the array
+		std::string resolvedName = funcIt->first;
+		size_t lastDot = resolvedName.rfind(".");
+		if (lastDot != std::string::npos) {
+			std::string methodName = resolvedName.substr(lastDot + 1);
+			static const std::set<std::string> mutatingMethods = {
+				"push", "pop", "insert", "remove", "clear", "reserve", "set"
+			};
+			if (mutatingMethods.count(methodName) > 0 && !callExpr->args.empty()) {
+				// Check if first argument is an immutable variable
+				if (auto varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].get())) {
+					auto varInfo = lookupVariable(varExpr->name);
+					if (varInfo.has_value() && varInfo->isImmutable) {
+						std::string displayType = maxon::TypeConversion::arrayTypeToDisplayString(varInfo->type);
+						if (displayType == varInfo->type) {
+							displayType = varInfo->type;  // Keep original if no conversion
+						}
+						addError(methodName + "() can only be used on dynamic arrays, not " + displayType +
+									 std::string("\n  '" + varExpr->name + "' is declared with 'let' (immutable)") +
+									 "\n  Hint: Use 'var' instead of 'let' for mutable arrays",
+								 expr->line, expr->column);
+						// Still analyze args to mark variables as used
+						for (auto &arg : callExpr->args) {
+							analyzeExpression(arg.get());
+						}
+						return "error";
+					}
+				}
+			}
+		}
+
 		// Check if this is a sibling method call (calling another method of the same type from within a method)
 		// In this case, the caller passes N args but the method expects N+1 (with implicit self)
 		bool isSiblingMethodCall = false;
@@ -1046,9 +1005,30 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Check argument types
 		// For sibling method calls, args[i] corresponds to funcInfo.parameters[i+1] (skip self)
 		size_t paramOffset = isSiblingMethodCall ? 1 : 0;
+
+		// For generic methods (like array.push), we need to substitute type parameters
+		// Get the first argument type to determine the concrete element type
+		std::string concreteElementType;
+		std::string firstArgTypeCache;
+		if (!callExpr->args.empty()) {
+			firstArgTypeCache = analyzeExpression(callExpr->args[0].get());
+			if (maxon::TypeConversion::isArrayStructType(firstArgTypeCache) ||
+				maxon::TypeConversion::isManagedArrayType(firstArgTypeCache)) {
+				concreteElementType = maxon::TypeConversion::getArrayElementType(firstArgTypeCache);
+			}
+		}
+
 		for (size_t i = 0; i < callExpr->args.size(); i++) {
-			std::string argType = analyzeExpression(callExpr->args[i].get());
+			// Use cached first arg type to avoid re-analyzing
+			std::string argType = (i == 0 && !firstArgTypeCache.empty())
+				? firstArgTypeCache
+				: analyzeExpression(callExpr->args[i].get());
 			std::string expectedType = funcInfo.parameters[i + paramOffset].type;
+
+			// Substitute generic type parameter "Element" with the concrete element type
+			if (!concreteElementType.empty() && expectedType == "Element") {
+				expectedType = concreteElementType;
+			}
 
 			// Use centralized type conversion rules for validation
 			bool isValidType = typesMatch(expectedType, argType);
@@ -1573,7 +1553,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Build function type string: fn(T1,T2)->R
 		std::string funcType = "fn(";
 		for (size_t i = 0; i < paramTypes.size(); i++) {
-			if (i > 0) funcType += ",";
+			if (i > 0)
+				funcType += ",";
 			funcType += paramTypes[i];
 		}
 		funcType += ")->" + returnType;

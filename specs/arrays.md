@@ -316,6 +316,8 @@ end 'main'
 ```maxoncstderr
 Semantic Error: line 4, column 5
 push() can only be used on dynamic arrays, not array of int
+  'arr' is declared with 'let' (immutable)
+  Hint: Use 'var' instead of 'let' for mutable arrays
 
   4 |     arr.push(4)
     |     ^
@@ -332,6 +334,8 @@ end 'main'
 ```maxoncstderr
 Semantic Error: line 4, column 5
 pop() can only be used on dynamic arrays, not array of int
+  'arr' is declared with 'let' (immutable)
+  Hint: Use 'var' instead of 'let' for mutable arrays
 
   4 |     arr.pop()
     |     ^
@@ -347,7 +351,10 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 4, column 5
-push() value type float doesn't match array element type int
+Function 'push' argument type mismatch
+  Parameter 2 ('value')
+  Expected type: int
+  Found type: float
 
   4 |     arr.push(3.14)
     |     ^

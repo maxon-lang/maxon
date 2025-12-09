@@ -16,6 +16,7 @@
 
 #include "../codegen_mir.h"
 #include "../types/type_conversion.h"
+#include <iostream>
 
 // =============================================================================
 // Helper: getManagedArrayInfo
@@ -73,7 +74,12 @@ MIRCodeGenerator::ArrayFieldInfo MIRCodeGenerator::getManagedArrayInfo(ExprAST *
 						} else {
 							selfPtr = selfAlloca;
 						}
-						mir::MIRType *structType = structTypes[currentReceiverType];
+						auto structIt = structTypes.find(currentReceiverType);
+					if (structIt == structTypes.end()) {
+						reportError("struct type not found: " + currentReceiverType, line, column);
+						return info;
+					}
+					mir::MIRType *structType = structIt->second;
 						mir::MIRValue *fieldPtr = builder->createStructGEP(structType, selfPtr, static_cast<int>(i), arrayVarName + ".ptr");
 
 						info.isStructField = true;
@@ -109,6 +115,10 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_len(CallExprAST *callEx
 	ExprAST *arrayArg = callExpr->args[0].get();
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
+	if (!info.dataPtr) {
+		return nullptr;
+	}
+
 	// Get the __ManagedArrayData struct type
 	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);
 
@@ -117,7 +127,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_len(CallExprAST *callEx
 
 	// GEP to _len field (index 1)
 	mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, structPtr, 1, "arr._len.ptr");
-	return builder->createLoad(mir::MIRType::getInt32(), lenPtr, "arr.len");
+	mir::MIRValue *result = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "arr.len");
+	return result;
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_capacity(CallExprAST *callExpr) {
@@ -222,21 +233,56 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_grow(CallExprAST *callE
 	builder->addPhiIncoming(newCapacity, builder->getInt32(4), useMinFourBlock);
 	builder->addPhiIncoming(newCapacity, newCapPhi, checkMinBlock);
 
-	// Calculate old and new sizes in bytes
+	// Calculate new size in bytes
 	mir::MIRValue *elemSizeVal = builder->getInt64(elemSize);
-	mir::MIRValue *capacity64 = builder->createSExt(capacity, mir::MIRType::getInt64(), "cap64");
 	mir::MIRValue *newCapacity64 = builder->createSExt(newCapacity, mir::MIRType::getInt64(), "newcap64");
-	mir::MIRValue *oldSize = builder->createMul(capacity64, elemSizeVal, "old.size");
 	mir::MIRValue *newSize = builder->createMul(newCapacity64, elemSizeVal, "new.size");
 
 	// Load current buffer pointer from field 0
 	mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, structPtr, 0, "arr._buffer.ptr");
 	mir::MIRValue *arrPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, "arr.ptr");
 
-	// Call realloc
+	// Load current length from field 1 (needed for memcpy if stack-to-heap)
+	mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, structPtr, 1, "arr._len.ptr");
+	mir::MIRValue *currentLen = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "current.len");
+
+	// Check if this is a stack-allocated buffer (capacity == 0)
+	// Stack buffers can't be realloc'd - we need to malloc and copy
+	mir::MIRBasicBlock *stackBufferBlock = currentFunc->createBasicBlock("grow.stack");
+	mir::MIRBasicBlock *heapBufferBlock = currentFunc->createBasicBlock("grow.heap");
+	mir::MIRBasicBlock *afterAllocBlock = currentFunc->createBasicBlock("grow.afteralloc");
+
+	mir::MIRValue *isStackBuffer = builder->createICmpEq(capacity, builder->getInt32(0), "is.stack");
+	builder->createCondBr(isStackBuffer, stackBufferBlock, heapBufferBlock);
+
+	// Stack buffer path: malloc new buffer and memcpy existing data
+	builder->setInsertPoint(stackBufferBlock);
+	mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(),
+														{mir::MIRType::getInt64()});
+	mir::MIRValue *newHeapBuffer = builder->createCall(mallocFunc, {newSize}, "new.heap.buffer");
+
+	// Copy existing elements: memcpy(newHeapBuffer, arrPtr, currentLen * elemSize)
+	mir::MIRValue *currentLen64 = builder->createSExt(currentLen, mir::MIRType::getInt64(), "curlen64");
+	mir::MIRValue *copySize = builder->createMul(currentLen64, elemSizeVal, "copy.size");
+	mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
+														{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+	builder->createCall(memcpyFunc, {newHeapBuffer, arrPtr, copySize});
+	builder->createBr(afterAllocBlock);
+
+	// Heap buffer path: use realloc
+	builder->setInsertPoint(heapBufferBlock);
+	mir::MIRValue *capacity64 = builder->createSExt(capacity, mir::MIRType::getInt64(), "cap64");
+	mir::MIRValue *oldSize = builder->createMul(capacity64, elemSizeVal, "old.size");
 	mir::MIRFunction *reallocFunc = getOrDeclareFunction("realloc", mir::MIRType::getPtr(),
 														 {mir::MIRType::getPtr(), mir::MIRType::getInt64(), mir::MIRType::getInt64()});
-	mir::MIRValue *newArrPtr = builder->createCall(reallocFunc, {arrPtr, oldSize, newSize}, "new.arr");
+	mir::MIRValue *reallocedBuffer = builder->createCall(reallocFunc, {arrPtr, oldSize, newSize}, "realloced.buffer");
+	builder->createBr(afterAllocBlock);
+
+	// Merge paths
+	builder->setInsertPoint(afterAllocBlock);
+	mir::MIRValue *newArrPtr = builder->createPhi(mir::MIRType::getPtr(), "new.arr");
+	builder->addPhiIncoming(newArrPtr, newHeapBuffer, stackBufferBlock);
+	builder->addPhiIncoming(newArrPtr, reallocedBuffer, heapBufferBlock);
 
 	// Store new buffer pointer to field 0
 	builder->createStore(newArrPtr, bufferPtr);

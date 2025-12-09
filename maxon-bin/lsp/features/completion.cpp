@@ -957,9 +957,17 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 	}
 
 	// Look for methods in stdlib (methods are named "TypeName.methodName")
-	std::string methodPrefix = typeName + ".";
-	for (const auto &symbol : stdlib.functions) {
-		if (symbol.kind == "method" && symbol.name.substr(0, methodPrefix.length()) == methodPrefix) {
+	// For generic types like "array<int>", also try the base type "array"
+	std::vector<std::string> typesToSearch = {typeName};
+	size_t genericPos = typeName.find('<');
+	if (genericPos != std::string::npos) {
+		typesToSearch.push_back(typeName.substr(0, genericPos));
+	}
+
+	for (const std::string &searchType : typesToSearch) {
+		std::string methodPrefix = searchType + ".";
+		for (const auto &symbol : stdlib.functions) {
+			if (symbol.kind == "method" && symbol.name.substr(0, methodPrefix.length()) == methodPrefix) {
 			// Extract just the method name (after the dot)
 			std::string methodName = symbol.name.substr(methodPrefix.length());
 
@@ -1000,6 +1008,7 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 				item.insertText = insertText;
 				item.insertTextFormat = InsertTextFormat::Snippet;
 				items.push_back(std::move(item));
+			}
 			}
 		}
 	}

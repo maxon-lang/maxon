@@ -74,7 +74,8 @@ std::string MIRCodeGenerator::inferExprType(ExprAST *expr) {
 	if (auto *closure = dynamic_cast<ClosureExprAST *>(expr)) {
 		std::string funcType = "fn(";
 		for (size_t i = 0; i < closure->parameters.size(); i++) {
-			if (i > 0) funcType += ",";
+			if (i > 0)
+				funcType += ",";
 			funcType += closure->parameters[i].type;
 		}
 		funcType += ")->";
@@ -106,7 +107,8 @@ std::string MIRCodeGenerator::inferExprType(ExprAST *expr) {
 			if (func) {
 				std::string funcType = "fn(";
 				for (size_t i = 0; i < func->parameters.size(); i++) {
-					if (i > 0) funcType += ",";
+					if (i > 0)
+						funcType += ",";
 					mir::MIRType *paramType = func->parameters[i]->type;
 					if (paramType->isInteger())
 						funcType += "int";
@@ -311,8 +313,6 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return mir::MIRType::getPtr();
 	}
 
-	// Debug: Show what we're trying to look up
-	std::cerr << "DEBUG getTypeFromString: Unknown type: '" << typeStr << "'" << std::endl;
 	throw std::runtime_error("Unknown type: " + typeStr);
 }
 
@@ -334,8 +334,15 @@ mir::MIRType *MIRCodeGenerator::getParamTypeFromString(const std::string &typeSt
 		}
 	}
 
-	// Array parameters are passed as pointers
+	// Array parameters are passed as pointers (old-style fixed arrays with hidden length)
 	if (isArrayParam(resolvedType)) {
+		return mir::MIRType::getPtr();
+	}
+
+	// Handle array<T> struct types - ensure they're instantiated
+	if (maxon::TypeConversion::isArrayStructType(resolvedType)) {
+		std::string elemType = maxon::TypeConversion::getArrayStructElementType(resolvedType);
+		getOrCreateArrayStructType(elemType);
 		return mir::MIRType::getPtr();
 	}
 
@@ -386,10 +393,9 @@ std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
 }
 
 bool MIRCodeGenerator::isArrayParam(const std::string &typeStr) {
-	// Check for array types (both new and legacy formats)
-	// Also check for array<T> struct type (new stdlib struct)
-	return maxon::TypeConversion::isArrayType(typeStr) ||
-		   maxon::TypeConversion::isArrayStructType(typeStr);
+	// Check for old-style array types that use hidden length parameter
+	// Note: array<T> struct types do NOT use hidden length - they store length in the struct
+	return maxon::TypeConversion::isArrayType(typeStr);
 }
 
 bool MIRCodeGenerator::isStructParameter(const std::string &varName) {
@@ -446,16 +452,49 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 	}
 
 	// Free heap-allocated arrays in this scope
-	for (const auto &[name, allocaVal] : scopeStack.back().heapAllocatedArrays) {
-		// Load the pointer
-		mir::MIRValue *ptr = builder->createLoad(mir::MIRType::getPtr(), allocaVal, name + ".ptr");
+	for (const auto &info : scopeStack.back().heapAllocatedArrays) {
+		mir::MIRValue *ptr = nullptr;
 
-		// Call free
-		mir::MIRFunction *freeFunc = getOrDeclareFunction(
-			"free",
-			mir::MIRType::getVoid(),
-			{mir::MIRType::getPtr()});
-		builder->createCall(freeFunc, {ptr});
+		if (info.isDynamic) {
+			// Dynamic array - read buffer pointer from struct at cleanup time
+			// This handles the case where realloc may have changed the buffer pointer
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType(info.elementType);
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);
+
+			// GEP to managed field (field 0), then buffer field (field 0)
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, info.alloca, 0, info.name + ".managed");
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, info.name + ".buffer.ptr");
+			ptr = builder->createLoad(mir::MIRType::getPtr(), bufferField, info.name + ".buffer");
+
+			// Check capacity - only free if capacity > 0 (heap-allocated)
+			// capacity == 0 means the buffer is still stack-allocated
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, info.name + ".cap.ptr");
+			mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt32(), capField, info.name + ".cap");
+
+			mir::MIRFunction *currentFunc = builder->getFunction();
+			mir::MIRBasicBlock *freeBlock = currentFunc->createBasicBlock(info.name + ".free");
+			mir::MIRBasicBlock *skipBlock = currentFunc->createBasicBlock(info.name + ".skip");
+
+			mir::MIRValue *needsFree = builder->createICmpSGT(capacity, builder->getInt32(0), info.name + ".needs.free");
+			builder->createCondBr(needsFree, freeBlock, skipBlock);
+
+			builder->setInsertPoint(freeBlock);
+			mir::MIRFunction *freeFunc = getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr()});
+			builder->createCall(freeFunc, {ptr});
+			builder->createBr(skipBlock);
+
+			builder->setInsertPoint(skipBlock);
+		} else {
+			// Static allocation - load from tracking alloca
+			ptr = builder->createLoad(mir::MIRType::getPtr(), info.alloca, info.name + ".ptr");
+
+			// Call free unconditionally (these are always heap-allocated)
+			mir::MIRFunction *freeFunc = getOrDeclareFunction(
+				"free",
+				mir::MIRType::getVoid(),
+				{mir::MIRType::getPtr()});
+			builder->createCall(freeFunc, {ptr});
+		}
 	}
 
 	// Free heap-allocated strings in this scope using _managed_string_release
@@ -687,7 +726,9 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 	}
 
 	// Check if main takes arguments
-	bool mainTakesArgs = (mainFunc->parameters.size() == 2);
+	// Old-style: args passed as (ptr, i32) = 2 params
+	// New-style: args passed as ptr to array<string> = 1 param
+	bool mainTakesArgs = (mainFunc->parameters.size() >= 1);
 
 	// Create _start function
 	std::vector<std::pair<mir::MIRType *, std::string>> startParams;
@@ -747,25 +788,63 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 				"__get_command_args", mir::MIRType::getPtr(), {});
 			mir::MIRValue *argsStructPtr = builder->createCall(getArgsFunc, {});
 
-			// Load the data pointer (offset 0)
+			// Load the data pointer (offset 0) - ptr to array of string structs
 			mir::MIRValue *argsDataPtr = builder->createLoad(
 				mir::MIRType::getPtr(), argsStructPtr, "args.data");
 
 			// Load the length (offset 8)
-			// Use byte-level GEP to get to offset 8
 			mir::MIRValue *argsLenPtr = builder->createGEP(
 				mir::MIRType::getInt8(), argsStructPtr,
 				{builder->getInt64(8)}, "args.len.ptr");
 			mir::MIRValue *argsLen = builder->createLoad(
 				mir::MIRType::getInt32(), argsLenPtr, "args.len");
 
-			// Call main with args (ptr, i32)
-			mainRetVal = builder->createCall(mainFunc, {argsDataPtr, argsLen});
+			// Build array<string> struct on stack
+			// Layout: { __ManagedArrayData_string { ptr, i32, i32 }, i32 iterIndex }
+			mir::MIRType *managedArrayDataType = getOrCreateManagedArrayDataType("string");
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType("string");
+			mir::MIRValue *argsAlloca = builder->createAlloca(arrayStructType, "args.struct");
+
+			// Set managed.data (field 0 of field 0)
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, argsAlloca, 0, "args.managed");
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayDataType, managedField, 0, "args.buffer");
+			builder->createStore(argsDataPtr, bufferField);
+
+			// Set managed.length (field 1 of field 0)
+			mir::MIRValue *lenField = builder->createStructGEP(managedArrayDataType, managedField, 1, "args.len.field");
+			builder->createStore(argsLen, lenField);
+
+			// Set managed.capacity (field 2 of field 0) - same as length for read-only args
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayDataType, managedField, 2, "args.cap.field");
+			builder->createStore(argsLen, capField);
+
+			// Set iterIndex (field 1) to 0
+			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, argsAlloca, 1, "args.iter");
+			builder->createStore(builder->getInt32(0), iterField);
+
+			// Call main with pointer to array<string> struct
+			mainRetVal = builder->createCall(mainFunc, {argsAlloca});
 		} else {
 			// Linux: TODO - for now call with empty args
-			mir::MIRValue *nullPtr = mir::MIRValue::createConstantNull();
-			mir::MIRValue *zero = builder->getInt32(0);
-			mainRetVal = builder->createCall(mainFunc, {nullPtr, zero});
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType("string");
+			mir::MIRType *managedArrayDataType = getOrCreateManagedArrayDataType("string");
+			mir::MIRValue *argsAlloca = builder->createAlloca(arrayStructType, "args.struct");
+
+			// Initialize with empty array
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, argsAlloca, 0, "args.managed");
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayDataType, managedField, 0, "args.buffer");
+			builder->createStore(mir::MIRValue::createConstantNull(), bufferField);
+
+			mir::MIRValue *lenField = builder->createStructGEP(managedArrayDataType, managedField, 1, "args.len.field");
+			builder->createStore(builder->getInt32(0), lenField);
+
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayDataType, managedField, 2, "args.cap.field");
+			builder->createStore(builder->getInt32(0), capField);
+
+			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, argsAlloca, 1, "args.iter");
+			builder->createStore(builder->getInt32(0), iterField);
+
+			mainRetVal = builder->createCall(mainFunc, {argsAlloca});
 		}
 	} else {
 		// Call main without arguments
@@ -929,6 +1008,10 @@ std::string MIRCodeGenerator::instantiateGenericStruct(const std::string &templa
 				continue; // Skip self, already added
 			mir::MIRType *paramType = getParamTypeFromString(param.type);
 			mirFunc->addParameter(paramType, param.name);
+			// Add hidden length parameter for array parameters (matches generateFunctionWithTypeBindings)
+			if (isArrayParam(param.type)) {
+				mirFunc->addParameter(mir::MIRType::getInt32(), param.name + ".__length");
+			}
 		}
 
 		logTrace("Declared specialized method: " + specializedMethodName);

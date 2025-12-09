@@ -104,8 +104,14 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 	// For structs, val is a pointer to the source struct, so we need memcpy
 	mir::MIRType *structType = structTypes.count(varType) ? structTypes[varType] : nullptr;
 
+	// Also check for array<T> types which may not be in structTypes yet
+	if (!structType && maxon::TypeConversion::isArrayStructType(varType)) {
+		std::string elemType = maxon::TypeConversion::getArrayStructElementType(varType);
+		structType = getOrCreateArrayStructType(elemType);
+	}
+
 	if (structType && val->type->kind == mir::MIRTypeKind::Ptr) {
-		// Struct assignment - use memcpy to copy the struct contents
+		// Struct assignment where val is a pointer - use memcpy to copy the struct contents
 		mir::MIRFunction *memcpyFunc = module->getFunction("memcpy");
 		if (!memcpyFunc) {
 			// Declare memcpy: ptr memcpy(ptr dest, ptr src, i64 count)
@@ -115,6 +121,11 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 		}
 		mir::MIRValue *sizeVal = builder->getInt64(structType->sizeInBytes);
 		builder->createCall(memcpyFunc, {alloca, val, sizeVal});
+	} else if (structType && isStructParameter(assign->name)) {
+		// Struct parameter reassignment - alloca holds a pointer to the struct
+		// Need to load the pointer and store the struct value there
+		mir::MIRValue *destPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, assign->name + ".ptr");
+		builder->createStore(val, destPtr);
 	} else {
 		builder->createStore(val, alloca);
 	}
@@ -179,9 +190,21 @@ void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir:
 		// Function parameter - alloca holds the data pointer directly (old ABI)
 		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
 	} else if (maxon::TypeConversion::isArrayStructType(varType)) {
-		// array<T> struct local var: load buffer pointer from struct field 0
+		// array<T> struct with nested layout:
+		// Field 0: managed (__ManagedArrayData<T>)
+		//   Field 0 of managed: _buffer
+		// Field 1: iterIndex
 		mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
-		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(arrayStructType, alloca, 0, arrayAssign->arrayName + "._buffer.ptr");
+		mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
+		// For struct parameters, alloca contains a pointer to the struct - need to load it first
+		mir::MIRValue *structBase = alloca;
+		if (isStructParameter(arrayAssign->arrayName)) {
+			structBase = builder->createLoad(mir::MIRType::getPtr(), alloca, arrayAssign->arrayName + ".structptr");
+		}
+		// First GEP to get managed field (field 0 of array<T>)
+		mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, structBase, 0, arrayAssign->arrayName + ".managed");
+		// Second GEP to get _buffer field (field 0 of managed)
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedArrayType, managedField, 0, arrayAssign->arrayName + ".managed._buffer.ptr");
 		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferFieldPtr, arrayAssign->arrayName + "._buffer");
 	} else if (maxon::TypeConversion::isManagedArrayType(varType)) {
 		// Managed array local var: load buffer pointer from struct field 0
@@ -296,9 +319,16 @@ void MIRCodeGenerator::generateArrayMemberAssign(ArrayMemberAssignStmtAST *array
 		// Function parameter - alloca holds the data pointer directly (old ABI)
 		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
 	} else if (maxon::TypeConversion::isArrayStructType(varType)) {
-		// array<T> struct local var: load buffer pointer from struct field 0
+		// array<T> struct local var with nested layout:
+		// Field 0: managed (__ManagedArrayData<T>)
+		//   Field 0 of managed: _buffer
+		// Field 1: iterIndex
 		mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
-		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(arrayStructType, alloca, 0, arrayMemberAssign->arrayName + "._buffer.ptr");
+		mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
+		// First GEP to get managed field (field 0 of array<T>)
+		mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, alloca, 0, arrayMemberAssign->arrayName + ".managed");
+		// Second GEP to get _buffer field (field 0 of managed)
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedArrayType, managedField, 0, arrayMemberAssign->arrayName + ".managed._buffer.ptr");
 		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferFieldPtr, arrayMemberAssign->arrayName + "._buffer");
 	} else if (maxon::TypeConversion::isManagedArrayType(varType)) {
 		// Managed array local var: load buffer pointer from struct field 0
@@ -432,9 +462,16 @@ void MIRCodeGenerator::generateMemberArrayAssign(MemberArrayAssignStmtAST *membe
 	// Get pointer to the array element (handle managed arrays)
 	mir::MIRValue *arrayPtr;
 	if (maxon::TypeConversion::isArrayStructType(fieldTypeStr)) {
-		// array<T> struct field: load buffer pointer from struct field 0
+		// array<T> struct field with nested layout:
+		// Field 0: managed (__ManagedArrayData<T>)
+		//   Field 0 of managed: _buffer
+		// Field 1: iterIndex
 		mir::MIRType *arrayStructType = getOrCreateArrayStructType(elemTypeStr);
-		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(arrayStructType, fieldPtr, 0, memberArrayAssign->memberName + "._buffer.ptr");
+		mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemTypeStr);
+		// First GEP to get managed field (field 0 of array<T>)
+		mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, fieldPtr, 0, memberArrayAssign->memberName + ".managed");
+		// Second GEP to get _buffer field (field 0 of managed)
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedArrayType, managedField, 0, memberArrayAssign->memberName + ".managed._buffer.ptr");
 		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferFieldPtr, memberArrayAssign->memberName + "._buffer");
 	} else if (maxon::TypeConversion::isManagedArrayType(fieldTypeStr)) {
 		// Managed array field: load buffer pointer from struct field 0

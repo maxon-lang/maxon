@@ -28,6 +28,33 @@ void MIROptimizer::addPass(std::unique_ptr<OptimizationPass> pass) {
 }
 
 int MIROptimizer::runAllPasses(MIRModule &module, CompilerStats *stats) {
+	// Debug: dump MIR before optimization to find corruption
+	if (verboseLevel_ >= 3) {
+		std::cout << "[Opt Debug] Dumping MIR before optimization:" << std::endl;
+		for (const auto &func : module.functions) {
+			std::cout << "  Function: " << func->name << std::endl;
+			if (func->isExternal) {
+				std::cout << "    (external)" << std::endl;
+				continue;
+			}
+			for (const auto &block : func->basicBlocks) {
+				std::cout << "    Block: " << block->name << std::endl;
+				for (size_t i = 0; i < block->instructions.size(); i++) {
+					auto &inst = block->instructions[i];
+					std::cout << "      Inst " << i << ": opcode=" << static_cast<int>(inst->opcode)
+							  << " operands=" << inst->operands.size() << std::endl;
+					for (size_t j = 0; j < inst->operands.size(); j++) {
+						auto *op = inst->operands[j];
+						if (op) {
+							std::cout << "        Op " << j << ": kind=" << static_cast<int>(op->kind) << std::endl;
+						} else {
+							std::cout << "        Op " << j << ": NULL" << std::endl;
+						}
+					}
+				}
+			}
+		}
+	}
 	int totalChanges = 0;
 	bool anyChange;
 	int iteration = 0;

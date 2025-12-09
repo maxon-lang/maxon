@@ -9,53 +9,74 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 43
+; Instructions: 59
 
-%array<float> = type { ptr, i32, i32, i32 }
+%__ManagedArrayData_float = type { ptr, i32, i32 }
+%array<float> = type { %__ManagedArrayData_float, i32 }
 
 define i32 @main() {
 entry0:
   %0 = alloca [3 x f64]
   %1 = alloca %array<float>
   %2 = getelementptr %array<float>, ptr %1, i32 0, i32 0
-  store ptr %0, ptr %2
-  %3 = getelementptr %array<float>, ptr %1, i32 0, i32 1
-  store i32 3, ptr %3
-  %4 = getelementptr %array<float>, ptr %1, i32 0, i32 2
+  %3 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 1
   store i32 3, ptr %4
-  %5 = getelementptr %array<float>, ptr %1, i32 0, i32 3
+  %5 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 2
   store i32 0, ptr %5
-  %6 = call ptr @memset(ptr %0, i32 0, i64 24)
-  %7 = getelementptr %array<float>, ptr %1, i32 0, i32 0
-  %8 = load ptr, ptr %7
-  %9 = getelementptr f64, ptr %8, i64 0, i64 0
-  store f64 1.5, ptr %9
-  %10 = getelementptr %array<float>, ptr %1, i32 0, i32 0
-  %11 = load ptr, ptr %10
-  %12 = getelementptr f64, ptr %11, i64 0, i64 1
-  store f64 2.5, ptr %12
-  %13 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %6 = getelementptr %array<float>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i32 0, i64 24)
+  %8 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %9 = getelementptr %__ManagedArrayData_float, ptr %8, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr f64, ptr %10, i64 0, i64 0
+  store f64 1.5, ptr %11
+  %12 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %13 = getelementptr %__ManagedArrayData_float, ptr %12, i32 0, i32 0
   %14 = load ptr, ptr %13
-  %15 = getelementptr f64, ptr %14, i64 0, i64 2
-  store f64 3.5, ptr %15
+  %15 = getelementptr f64, ptr %14, i64 0, i64 1
+  store f64 2.5, ptr %15
   %16 = getelementptr %array<float>, ptr %1, i32 0, i32 0
-  %17 = load ptr, ptr %16
-  %18 = getelementptr f64, ptr %17, i64 0, i64 0
-  %19 = load f64, ptr %18
+  %17 = getelementptr %__ManagedArrayData_float, ptr %16, i32 0, i32 0
+  %18 = load ptr, ptr %17
+  %19 = getelementptr f64, ptr %18, i64 0, i64 2
+  store f64 3.5, ptr %19
   %20 = getelementptr %array<float>, ptr %1, i32 0, i32 0
-  %21 = load ptr, ptr %20
-  %22 = getelementptr f64, ptr %21, i64 0, i64 1
-  %23 = load f64, ptr %22
-  %24 = fadd f64 %19, %23
+  %21 = getelementptr %__ManagedArrayData_float, ptr %20, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = getelementptr f64, ptr %22, i64 0, i64 0
+  %24 = load f64, ptr %23
   %25 = getelementptr %array<float>, ptr %1, i32 0, i32 0
-  %26 = load ptr, ptr %25
-  %27 = getelementptr f64, ptr %26, i64 0, i64 2
-  %28 = load f64, ptr %27
-  %29 = fadd f64 %24, %28
-  %32 = call f64 @trunc(f64 %29)
-  %33 = fptosi f64 %32 to i32
-  ret i32 %33
+  %26 = getelementptr %__ManagedArrayData_float, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  %28 = getelementptr f64, ptr %27, i64 0, i64 1
+  %29 = load f64, ptr %28
+  %30 = fadd f64 %24, %29
+  %31 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %32 = getelementptr %__ManagedArrayData_float, ptr %31, i32 0, i32 0
+  %33 = load ptr, ptr %32
+  %34 = getelementptr f64, ptr %33, i64 0, i64 2
+  %35 = load f64, ptr %34
+  %36 = fadd f64 %30, %35
+  %39 = call f64 @trunc(f64 %36)
+  %40 = fptosi f64 %39 to i32
+  %41 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %42 = getelementptr %__ManagedArrayData_float, ptr %41, i32 0, i32 0
+  %43 = load ptr, ptr %42
+  %44 = getelementptr %__ManagedArrayData_float, ptr %41, i32 0, i32 2
+  %45 = load i32, ptr %44
+  %46 = icmp sgt i32 %45, 0
+  br i1 %46, label %arr.free1, label %arr.skip2
+arr.free1:
+  call void @free(ptr %43)
+  br label %arr.skip2
+arr.skip2:
+  ret i32 %40
 }
+
+declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
@@ -72,56 +93,77 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 46
+; Instructions: 62
 
-%array<float> = type { ptr, i32, i32, i32 }
+%__ManagedArrayData_float = type { ptr, i32, i32 }
+%array<float> = type { %__ManagedArrayData_float, i32 }
 
 define i32 @main() {
 entry0:
   %0 = alloca [3 x f64]
   %1 = alloca %array<float>
   %2 = getelementptr %array<float>, ptr %1, i32 0, i32 0
-  store ptr %0, ptr %2
-  %3 = getelementptr %array<float>, ptr %1, i32 0, i32 1
-  store i32 3, ptr %3
-  %4 = getelementptr %array<float>, ptr %1, i32 0, i32 2
+  %3 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 1
   store i32 3, ptr %4
-  %5 = getelementptr %array<float>, ptr %1, i32 0, i32 3
+  %5 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 2
   store i32 0, ptr %5
-  %6 = call ptr @memset(ptr %0, i32 0, i64 24)
-  %7 = getelementptr %array<float>, ptr %1, i32 0, i32 0
-  %8 = load ptr, ptr %7
-  %9 = getelementptr f64, ptr %8, i64 0, i64 0
-  store f64 1.5, ptr %9
-  %10 = getelementptr %array<float>, ptr %1, i32 0, i32 0
-  %11 = load ptr, ptr %10
-  %12 = getelementptr f64, ptr %11, i64 0, i64 1
-  store f64 2.5, ptr %12
-  %13 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %6 = getelementptr %array<float>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i32 0, i64 24)
+  %8 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %9 = getelementptr %__ManagedArrayData_float, ptr %8, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr f64, ptr %10, i64 0, i64 0
+  store f64 1.5, ptr %11
+  %12 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %13 = getelementptr %__ManagedArrayData_float, ptr %12, i32 0, i32 0
   %14 = load ptr, ptr %13
-  %15 = getelementptr f64, ptr %14, i64 0, i64 2
-  store f64 3.5, ptr %15
+  %15 = getelementptr f64, ptr %14, i64 0, i64 1
+  store f64 2.5, ptr %15
   %16 = getelementptr %array<float>, ptr %1, i32 0, i32 0
-  %17 = load ptr, ptr %16
-  %18 = getelementptr f64, ptr %17, i64 0, i64 0
-  %19 = load f64, ptr %18
+  %17 = getelementptr %__ManagedArrayData_float, ptr %16, i32 0, i32 0
+  %18 = load ptr, ptr %17
+  %19 = getelementptr f64, ptr %18, i64 0, i64 2
+  store f64 3.5, ptr %19
   %20 = getelementptr %array<float>, ptr %1, i32 0, i32 0
-  %21 = load ptr, ptr %20
-  %22 = getelementptr f64, ptr %21, i64 0, i64 1
-  %23 = load f64, ptr %22
-  %24 = fadd f64 %19, %23
+  %21 = getelementptr %__ManagedArrayData_float, ptr %20, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = getelementptr f64, ptr %22, i64 0, i64 0
+  %24 = load f64, ptr %23
   %25 = getelementptr %array<float>, ptr %1, i32 0, i32 0
-  %26 = load ptr, ptr %25
-  %27 = getelementptr f64, ptr %26, i64 0, i64 2
-  %28 = load f64, ptr %27
-  %29 = fadd f64 %24, %28
-  %30 = alloca f64
-  store f64 %29, ptr %30
-  %31 = load f64, ptr %30
-  %32 = call f64 @trunc(f64 %31)
-  %33 = fptosi f64 %32 to i32
-  ret i32 %33
+  %26 = getelementptr %__ManagedArrayData_float, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  %28 = getelementptr f64, ptr %27, i64 0, i64 1
+  %29 = load f64, ptr %28
+  %30 = fadd f64 %24, %29
+  %31 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %32 = getelementptr %__ManagedArrayData_float, ptr %31, i32 0, i32 0
+  %33 = load ptr, ptr %32
+  %34 = getelementptr f64, ptr %33, i64 0, i64 2
+  %35 = load f64, ptr %34
+  %36 = fadd f64 %30, %35
+  %37 = alloca f64
+  store f64 %36, ptr %37
+  %38 = load f64, ptr %37
+  %39 = call f64 @trunc(f64 %38)
+  %40 = fptosi f64 %39 to i32
+  %41 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %42 = getelementptr %__ManagedArrayData_float, ptr %41, i32 0, i32 0
+  %43 = load ptr, ptr %42
+  %44 = getelementptr %__ManagedArrayData_float, ptr %41, i32 0, i32 2
+  %45 = load i32, ptr %44
+  %46 = icmp sgt i32 %45, 0
+  br i1 %46, label %arr.free1, label %arr.skip2
+arr.free1:
+  call void @free(ptr %43)
+  br label %arr.skip2
+arr.skip2:
+  ret i32 %40
 }
+
+declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 

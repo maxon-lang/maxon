@@ -73,7 +73,9 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 		argIdx++;
 
 		// Track if this is a struct parameter (passed by pointer)
-		if (structTypes.find(param.type) != structTypes.end()) {
+		// Also check for array<T> struct types which are passed by pointer
+		if (structTypes.find(param.type) != structTypes.end() ||
+			maxon::TypeConversion::isArrayStructType(param.type)) {
 			structParameters.insert(param.name);
 		}
 
@@ -254,6 +256,21 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 
 	// Allocate stack space for parameters with type substitution
 	size_t argIdx = 0;
+
+	// Handle implicit self parameter first - it's always added as the first parameter
+	// in the MIR function declaration for struct methods, but may not be in func->parameters
+	bool hasExplicitSelf = !func->parameters.empty() && func->parameters[0].name == "self";
+	if (!hasExplicitSelf && !specializedReceiverType.empty()) {
+		// Implicit self - create alloca and store from first MIR parameter
+		mir::MIRValue *selfAlloca = builder->createAlloca(mir::MIRType::getPtr(), "self");
+		mir::MIRValue *selfParamVal = function->parameters[argIdx];
+		builder->createStore(selfParamVal, selfAlloca);
+		namedValues["self"] = selfAlloca;
+		variableTypes["self"] = specializedReceiverType;
+		structParameters.insert("self");
+		argIdx++;
+	}
+
 	for (size_t paramIdx = 0; paramIdx < func->parameters.size(); paramIdx++) {
 		const auto &param = func->parameters[paramIdx];
 		std::string substitutedType = substituteType(param.type);
@@ -268,7 +285,9 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 		argIdx++;
 
 		// Track if this is a struct parameter (passed by pointer)
-		if (structTypes.find(substitutedType) != structTypes.end()) {
+		// Also check for array<T> struct types which are passed by pointer
+		if (structTypes.find(substitutedType) != structTypes.end() ||
+			maxon::TypeConversion::isArrayStructType(substitutedType)) {
 			structParameters.insert(param.name);
 		}
 
@@ -406,7 +425,9 @@ void MIRCodeGenerator::generateSynthesizedMethod(const FunctionInfo &funcInfo) {
 		argIdx++;
 
 		// Track if this is a struct parameter (passed by pointer)
-		if (structTypes.find(param.type) != structTypes.end()) {
+		// Also check for array<T> struct types which are passed by pointer
+		if (structTypes.find(param.type) != structTypes.end() ||
+			maxon::TypeConversion::isArrayStructType(param.type)) {
 			structParameters.insert(param.name);
 		}
 

@@ -37,20 +37,9 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		// For array<T> struct types, register array methods with the element type
 		if (maxon::TypeConversion::isArrayStructType(actualType)) {
 			std::string elemType = maxon::TypeConversion::getArrayStructElementType(actualType);
-			// Register methods for the array<T> struct type
-			registerArrayMethods(actualType, elemType);
-		}
-		// Legacy: For managed arrays, register array methods with the element type
-		else if (maxon::TypeConversion::isManagedArrayType(actualType)) {
-			std::string elemType = maxon::TypeConversion::getArrayElementType(actualType);
-			registerArrayMethods(actualType, elemType);
-		}
-		// Legacy: For var arrays with static array type, convert to dynamic managed array type
-		else if (maxon::TypeConversion::isStaticArrayType(actualType)) {
-			// Convert _StaticArray<N, T> to _ManagedArray<T> for var arrays
-			std::string elemType = maxon::TypeConversion::getArrayElementType(actualType);
-			actualType = maxon::TypeConversion::makeManagedArrayType(elemType);
-			registerArrayMethods(actualType, elemType);
+			// Also instantiate synthesized default methods from interface implementations (e.g., Collection.map)
+			std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
+			instantiateGenericStructMethods("array", actualType, typeBindings);
 		}
 
 		// Declare variable

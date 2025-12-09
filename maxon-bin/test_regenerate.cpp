@@ -900,13 +900,9 @@ int regenerateFragments(int verboseLevel) {
 		}
 
 		// Determine number of worker processes
-		// Use more workers to keep command lines shorter (Windows has ~32KB limit)
-		unsigned int numWorkers = std::thread::hardware_concurrency();
+		unsigned int numWorkers = std::thread::hardware_concurrency() / 2;
 		if (numWorkers == 0)
 			numWorkers = 4;
-		// Don't cap workers - use all available cores to reduce batch sizes
-		// Each worker gets fewer tests = shorter command lines
-
 		if (numWorkers > static_cast<unsigned int>(totalTests)) {
 			numWorkers = totalTests;
 		}

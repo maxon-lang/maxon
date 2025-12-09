@@ -45,11 +45,11 @@ struct FunctionInfo {
 	std::string name;
 	std::string returnType;
 	std::vector<FunctionParameter> parameters;
-	std::string implementsInterface; // For interface methods: which interface this method implements
-	bool isSynthesizedDefault = false; // True if synthesized from interface default implementation
+	std::string implementsInterface;									// For interface methods: which interface this method implements
+	bool isSynthesizedDefault = false;									// True if synthesized from interface default implementation
 	const std::vector<std::unique_ptr<StmtAST>> *defaultBody = nullptr; // Non-owning ptr to default impl body
-	std::string selfType; // For synthesized methods: concrete struct type to substitute for Self
-	std::map<std::string, std::string> typeSubstitutions; // For synthesized methods: associated type substitutions
+	std::string selfType;												// For synthesized methods: concrete struct type to substitute for Self
+	std::map<std::string, std::string> typeSubstitutions;				// For synthesized methods: associated type substitutions
 	int line;
 	int column;
 
@@ -388,8 +388,6 @@ class SemanticAnalyzer {
 	void markVariableAsUsed(const std::string &name);
 	void checkUnusedVariables();
 	void checkInterfaceConformance(const std::string &structName, const std::vector<std::string> &conformsTo, int line, int column, bool isGenericTemplate = false);
-	void registerMapMethods(const std::string &mapType, const std::string &keyType, const std::string &valueType);
-	void registerArrayMethods(const std::string &arrayType, const std::string &elemType);
 	void instantiateGenericStructMethods(const std::string &templateName, const std::string &specializedName,
 										 const std::map<std::string, std::string> &typeBindings);
 

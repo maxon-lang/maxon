@@ -673,10 +673,25 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 		if (maxon::TypeConversion::isArrayType(paramType)) {
 			paramType = maxon::TypeConversion::getArrayElementType(paramType);
 		}
+		// Handle array<T> struct type - need to import 'array' template
+		else if (maxon::TypeConversion::isArrayStructType(paramType)) {
+			// Add 'array' to undefined structs so stdlib/collections/array.maxon is imported
+			if (lookupStruct("array") == nullptr) {
+				undefinedStructs.insert("array");
+			}
+			// Instantiate generic struct methods including synthesized defaults
+			std::string elemType = maxon::TypeConversion::getArrayStructElementType(param.type);
+			std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
+			instantiateGenericStructMethods("array", param.type, typeBindings);
+			// Continue to check the element type
+			paramType = elemType;
+		}
+		// Check if this is a struct type that needs to be imported
+		// Note: 'string' is a stdlib struct, not a primitive type
 		if (paramType != "void" && paramType != "int" &&
 			paramType != "float" && paramType != "bool" &&
-			paramType != "string" && paramType != "cstring" &&
-			paramType != "character") {
+			paramType != "cstring" &&
+			paramType != "character" && paramType != "byte") {
 			// Function types are valid parameter types
 			if (maxon::TypeConversion::isFunctionType(paramType)) {
 				continue;
@@ -699,15 +714,6 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 	for (const auto &param : func->parameters) {
 		logTrace("  Parameter: " + param.name + " : " + param.type);
 		declareVariable(param.name, param.type, false, param.line, param.column, true);
-
-		// Register array methods for array-typed parameters
-		if (maxon::TypeConversion::isArrayStructType(param.type)) {
-			std::string elemType = maxon::TypeConversion::getArrayStructElementType(param.type);
-			registerArrayMethods(param.type, elemType);
-		} else if (maxon::TypeConversion::isManagedArrayType(param.type)) {
-			std::string elemType = maxon::TypeConversion::getArrayElementType(param.type);
-			registerArrayMethods(param.type, elemType);
-		}
 	}
 
 	// Analyze function body
@@ -1254,104 +1260,18 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 	}
 }
 
-void SemanticAnalyzer::registerMapMethods(const std::string &mapType, const std::string &keyType, const std::string &valueType) {
-	// Only register methods once per map type
-	// Use qualified method names: mapType.methodName (e.g., "map<int,int>.insert")
-	std::string insertMethodName = mapType + ".insert";
-	if (functions.find(insertMethodName) != functions.end()) {
-		return; // Already registered for this map type
-	}
-
-	// Register map methods with qualified names for proper method resolution
-	// insert(map, key, value) -> void
-	functions.emplace(mapType + ".insert", FunctionInfo(mapType + ".insert", "void", {FunctionParameter("self", mapType), FunctionParameter("key", keyType), FunctionParameter("value", valueType)}));
-
-	// get(map, key) -> valueType
-	functions.emplace(mapType + ".get", FunctionInfo(mapType + ".get", valueType, {FunctionParameter("self", mapType), FunctionParameter("key", keyType)}));
-
-	// contains(map, key) -> bool
-	functions.emplace(mapType + ".contains", FunctionInfo(mapType + ".contains", "bool", {FunctionParameter("self", mapType), FunctionParameter("key", keyType)}));
-
-	// remove(map, key) -> bool
-	functions.emplace(mapType + ".remove", FunctionInfo(mapType + ".remove", "bool", {FunctionParameter("self", mapType), FunctionParameter("key", keyType)}));
-
-	// count(map) -> int
-	functions.emplace(mapType + ".count", FunctionInfo(mapType + ".count", "int", {FunctionParameter("self", mapType)}));
-
-	// capacity(map) -> int
-	functions.emplace(mapType + ".capacity", FunctionInfo(mapType + ".capacity", "int", {FunctionParameter("self", mapType)}));
-}
-
-void SemanticAnalyzer::registerArrayMethods(const std::string &arrayType, const std::string &elemType) {
-	// Only register methods once per array type
-	// Use qualified method names: arrayType.methodName (e.g., "array<int>.count")
-	std::string countMethodName = arrayType + ".count";
-	if (functions.find(countMethodName) != functions.end()) {
-		return; // Already registered for this array type
-	}
-
-	std::string optionalElemType = maxon::TypeConversion::makeOptionalType(elemType);
-
-	// Register array methods with qualified names for proper method resolution
-	// All methods from stdlib/collections/array.maxon
-
-	// Collection interface methods:
-	// count() -> int
-	functions.emplace(arrayType + ".count", FunctionInfo(arrayType + ".count", "int", {FunctionParameter("self", arrayType)}));
-
-	// get(index) -> Element or nil
-	functions.emplace(arrayType + ".get", FunctionInfo(arrayType + ".get", optionalElemType, {FunctionParameter("self", arrayType), FunctionParameter("index", "int")}));
-
-	// set(index, value) -> Self (returns array type for chaining)
-	functions.emplace(arrayType + ".set", FunctionInfo(arrayType + ".set", arrayType, {FunctionParameter("self", arrayType), FunctionParameter("index", "int"), FunctionParameter("value", elemType)}));
-
-	// Mutating operations:
-	// push(value) -> Self
-	functions.emplace(arrayType + ".push", FunctionInfo(arrayType + ".push", arrayType, {FunctionParameter("self", arrayType), FunctionParameter("value", elemType)}));
-
-	// pop() -> Element or nil
-	functions.emplace(arrayType + ".pop", FunctionInfo(arrayType + ".pop", optionalElemType, {FunctionParameter("self", arrayType)}));
-
-	// insert(at, value) -> Self
-	functions.emplace(arrayType + ".insert", FunctionInfo(arrayType + ".insert", arrayType, {FunctionParameter("self", arrayType), FunctionParameter("at", "int"), FunctionParameter("value", elemType)}));
-
-	// remove(at) -> Element or nil
-	functions.emplace(arrayType + ".remove", FunctionInfo(arrayType + ".remove", optionalElemType, {FunctionParameter("self", arrayType), FunctionParameter("at", "int")}));
-
-	// clear() -> Self
-	functions.emplace(arrayType + ".clear", FunctionInfo(arrayType + ".clear", arrayType, {FunctionParameter("self", arrayType)}));
-
-	// Properties:
-	// capacity() -> int
-	functions.emplace(arrayType + ".capacity", FunctionInfo(arrayType + ".capacity", "int", {FunctionParameter("self", arrayType)}));
-
-	// isEmpty() -> bool
-	functions.emplace(arrayType + ".isEmpty", FunctionInfo(arrayType + ".isEmpty", "bool", {FunctionParameter("self", arrayType)}));
-
-	// first() -> Element or nil
-	functions.emplace(arrayType + ".first", FunctionInfo(arrayType + ".first", optionalElemType, {FunctionParameter("self", arrayType)}));
-
-	// last() -> Element or nil
-	functions.emplace(arrayType + ".last", FunctionInfo(arrayType + ".last", optionalElemType, {FunctionParameter("self", arrayType)}));
-
-	// reserve(minCapacity) -> Self
-	functions.emplace(arrayType + ".reserve", FunctionInfo(arrayType + ".reserve", arrayType, {FunctionParameter("self", arrayType), FunctionParameter("minCapacity", "int")}));
-
-	// map(transform) -> Self - handled as intrinsic, but register for type checking
-	std::string funcType = "fn(" + elemType + ")->" + elemType;
-	functions.emplace(arrayType + ".map", FunctionInfo(arrayType + ".map", arrayType, {FunctionParameter("self", arrayType), FunctionParameter("transform", funcType)}));
-}
-
 void SemanticAnalyzer::instantiateGenericStructMethods(const std::string &templateName,
 													   const std::string &specializedName,
 													   const std::map<std::string, std::string> &typeBindings) {
 	logTrace("instantiateGenericStructMethods: " + templateName + " -> " + specializedName);
 
-	// Check if already instantiated
+	// Check if struct methods already instantiated
 	std::string checkMethodName = specializedName + ".count"; // Use common method as marker
-	if (functions.find(checkMethodName) != functions.end()) {
-		logTrace("  Already instantiated (found " + checkMethodName + ")");
-		return; // Already registered for this specialized type
+	bool structMethodsInstantiated = (functions.find(checkMethodName) != functions.end());
+	if (structMethodsInstantiated) {
+		logTrace("  Struct methods already instantiated (found " + checkMethodName + ")");
+		// Don't return - we still need to check for synthesized default methods
+		// that may have been created after the initial instantiation
 	}
 
 	// Look up the struct info to get its methods
@@ -1378,17 +1298,9 @@ void SemanticAnalyzer::instantiateGenericStructMethods(const std::string &templa
 		}
 	}
 
-	if (!structDef) {
-		// Struct definition not found - might be in stdlib not yet loaded
-		logTrace("  StructDefAST for '" + templateName + "' not found in currentProgram->structs");
-		undefinedStructs.insert(templateName);
-		return;
-	}
-
-	logTrace("  Found StructDefAST for '" + templateName + "' with " + std::to_string(structDef->methods.size()) + " methods");
-
-	// Helper to substitute type parameters
-	auto substituteType = [&](const std::string &type) -> std::string {
+	// Helper to substitute type parameters (declared before use for recursion)
+	std::function<std::string(const std::string &)> substituteType;
+	substituteType = [&](const std::string &type) -> std::string {
 		auto it = typeBindings.find(type);
 		if (it != typeBindings.end()) {
 			return it->second;
@@ -1401,8 +1313,130 @@ void SemanticAnalyzer::instantiateGenericStructMethods(const std::string &templa
 				return "array<" + elemIt->second + ">";
 			}
 		}
+		// Handle function types: (Element) Element -> (int) int or fn(Element)->Element -> fn(int)->int
+		if (type.length() > 2 && type[0] == '(' && type.find(')') != std::string::npos) {
+			// Parse (ParamType) ReturnType format
+			size_t closePos = type.find(')');
+			std::string paramType = type.substr(1, closePos - 1);
+			std::string returnType = type.substr(closePos + 2); // skip ") "
+			std::string resolvedParam = substituteType(paramType);
+			std::string resolvedReturn = substituteType(returnType);
+			return "(" + resolvedParam + ") " + resolvedReturn;
+		}
+		if (type.rfind("fn(", 0) == 0) {
+			// Parse fn(ParamType)->ReturnType format
+			size_t arrowPos = type.find(")->");
+			if (arrowPos != std::string::npos) {
+				std::string paramType = type.substr(3, arrowPos - 3);
+				std::string returnType = type.substr(arrowPos + 3);
+				std::string resolvedParam = substituteType(paramType);
+				std::string resolvedReturn = substituteType(returnType);
+				return "fn(" + resolvedParam + ")->" + resolvedReturn;
+			}
+		}
+		// Handle optional types: "Element or nil" -> "int or nil"
+		if (maxon::TypeConversion::isOptionalType(type)) {
+			std::string baseType = maxon::TypeConversion::unwrapOptionalType(type);
+			std::string resolvedBase = substituteType(baseType);
+			return maxon::TypeConversion::makeOptionalType(resolvedBase);
+		}
 		return type;
 	};
+
+	if (!structDef) {
+		// Struct definition not found in currentProgram - try to instantiate from externally
+		// registered functions (e.g., stdlib methods registered via registerExternalFunction)
+		logTrace("  StructDefAST for '" + templateName + "' not found in currentProgram->structs");
+		logTrace("  Attempting to instantiate from externally registered functions");
+
+		// Look for methods with templateName prefix (e.g., "array.push", "array.count")
+		std::string templatePrefix = templateName + ".";
+		for (const auto &[funcName, funcInfo] : functions) {
+			if (funcName.find(templatePrefix) == 0 && funcName.find('<') == std::string::npos) {
+				// Found a template method like "array.push"
+				std::string methodName = funcName.substr(templatePrefix.length());
+				std::string specializedMethodKey = specializedName + "." + methodName;
+
+				// Skip if already registered
+				if (functions.find(specializedMethodKey) != functions.end()) {
+					continue;
+				}
+
+				// Substitute return type
+				std::string returnType = substituteType(funcInfo.returnType);
+
+				// Substitute parameter types
+				std::vector<FunctionParameter> params;
+				for (const auto &param : funcInfo.parameters) {
+					if (param.name == "self") {
+						// Replace self's type with the specialized type
+						params.emplace_back("self", specializedName, param.line, param.column);
+					} else {
+						params.emplace_back(param.name, substituteType(param.type), param.line, param.column);
+					}
+				}
+
+				// Create the specialized function info
+				FunctionInfo newFuncInfo(specializedMethodKey, returnType, params,
+					funcInfo.implementsInterface, funcInfo.line, funcInfo.column);
+				newFuncInfo.typeSubstitutions = typeBindings;
+
+				// Copy synthesized default info if applicable
+				if (funcInfo.isSynthesizedDefault) {
+					newFuncInfo.isSynthesizedDefault = true;
+					newFuncInfo.defaultBody = funcInfo.defaultBody;
+				}
+
+				// Don't insert directly while iterating - collect first
+				// Note: We'll use a separate vector and insert after the loop
+				logTrace("  Will instantiate from external: " + specializedMethodKey + " -> " + returnType);
+			}
+		}
+
+		// Second pass: actually insert the new methods (can't modify while iterating)
+		std::vector<std::pair<std::string, FunctionInfo>> toAdd;
+		for (const auto &[funcName, funcInfo] : functions) {
+			if (funcName.find(templatePrefix) == 0 && funcName.find('<') == std::string::npos) {
+				std::string methodName = funcName.substr(templatePrefix.length());
+				std::string specializedMethodKey = specializedName + "." + methodName;
+
+				if (functions.find(specializedMethodKey) != functions.end()) {
+					continue;
+				}
+
+				std::string returnType = substituteType(funcInfo.returnType);
+				std::vector<FunctionParameter> params;
+				for (const auto &param : funcInfo.parameters) {
+					if (param.name == "self") {
+						params.emplace_back("self", specializedName, param.line, param.column);
+					} else {
+						params.emplace_back(param.name, substituteType(param.type), param.line, param.column);
+					}
+				}
+
+				FunctionInfo newFuncInfo(specializedMethodKey, returnType, params,
+					funcInfo.implementsInterface, funcInfo.line, funcInfo.column);
+				newFuncInfo.typeSubstitutions = typeBindings;
+
+				if (funcInfo.isSynthesizedDefault) {
+					newFuncInfo.isSynthesizedDefault = true;
+					newFuncInfo.defaultBody = funcInfo.defaultBody;
+				}
+
+				toAdd.emplace_back(specializedMethodKey, std::move(newFuncInfo));
+			}
+		}
+
+		for (auto &[key, info] : toAdd) {
+			functions.emplace(key, std::move(info));
+			logTrace("  Instantiated from external: " + key);
+		}
+
+		// Don't mark as undefined - we've handled it
+		return;
+	}
+
+	logTrace("  Found StructDefAST for '" + templateName + "' with " + std::to_string(structDef->methods.size()) + " methods");
 
 	// Register each method with substituted types
 	for (const auto &method : structDef->methods) {
@@ -1433,5 +1467,77 @@ void SemanticAnalyzer::instantiateGenericStructMethods(const std::string &templa
 												  method->implementsInterface, method->line, method->column));
 
 		logTrace("Instantiated generic method: " + methodKey + " -> " + returnType);
+	}
+
+	// Also instantiate synthesized default methods from interface implementations
+	// These are methods synthesized from interface default implementations (e.g., Collection.map)
+	// that were registered when checking interface conformance for the template
+	std::string templatePrefix = templateName + ".";
+	std::vector<std::pair<std::string, FunctionInfo>> synthesizedToAdd;
+	for (const auto &[funcName, funcInfo] : functions) {
+		// Check if this is a synthesized method from the template
+		if (funcInfo.isSynthesizedDefault && funcName.find(templatePrefix) == 0) {
+			// Extract the method name (e.g., "array.map" -> "map")
+			std::string methodName = funcName.substr(templatePrefix.length());
+			std::string specializedMethodKey = specializedName + "." + methodName;
+
+			// Skip if already registered with proper synthesized default info
+			auto existingIt = functions.find(specializedMethodKey);
+			if (existingIt != functions.end()) {
+				// If existing entry already has synthesized default info, skip
+				if (existingIt->second.isSynthesizedDefault && existingIt->second.defaultBody != nullptr) {
+					continue;
+				}
+				// Otherwise, we need to update it with the synthesized default info
+				logTrace("  Updating existing method with synthesized default info: " + specializedMethodKey);
+			}
+
+			// Substitute return type
+			std::string returnType = substituteType(funcInfo.returnType);
+			if (returnType == "Self") {
+				returnType = specializedName;
+			}
+
+			// Substitute parameter types
+			std::vector<FunctionParameter> params;
+			for (const auto &param : funcInfo.parameters) {
+				std::string paramType;
+				if (param.name == "self") {
+					paramType = specializedName;
+				} else if (param.type == "Self") {
+					paramType = specializedName;
+				} else {
+					paramType = substituteType(param.type);
+				}
+				params.emplace_back(param.name, paramType, param.line, param.column);
+			}
+
+			// Create the instantiated function info with synthesized default info preserved
+			FunctionInfo newFuncInfo(specializedMethodKey, returnType, params,
+									 funcInfo.implementsInterface, funcInfo.line, funcInfo.column);
+			newFuncInfo.isSynthesizedDefault = true;
+			newFuncInfo.defaultBody = funcInfo.defaultBody;
+			newFuncInfo.selfType = specializedName;
+			// Build type substitutions for codegen
+			newFuncInfo.typeSubstitutions = typeBindings;
+			newFuncInfo.typeSubstitutions["Self"] = specializedName;
+
+			synthesizedToAdd.emplace_back(specializedMethodKey, std::move(newFuncInfo));
+			logTrace("Instantiated synthesized default method: " + specializedMethodKey + " -> " + returnType);
+		}
+	}
+
+	// Add or update the synthesized methods after iteration (to avoid modifying map while iterating)
+	for (auto &[key, info] : synthesizedToAdd) {
+		auto it = functions.find(key);
+		if (it != functions.end()) {
+			// Update existing entry with synthesized default info
+			it->second.isSynthesizedDefault = true;
+			it->second.defaultBody = info.defaultBody;
+			it->second.selfType = info.selfType;
+			it->second.typeSubstitutions = info.typeSubstitutions;
+		} else {
+			functions.emplace(key, std::move(info));
+		}
 	}
 }

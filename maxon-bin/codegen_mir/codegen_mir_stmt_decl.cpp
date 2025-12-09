@@ -63,30 +63,36 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
 			mir::MIRValue *structAlloca = builder->createAlloca(arrayStructType, varDecl->name);
 
-			// Initialize struct fields: { _buffer, _len, _capacity, _iterIndex }
+			// Get __ManagedArrayData type for the nested managed field
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+
+			// Initialize nested struct layout: { managed: { _buffer, _len, _capacity }, iterIndex }
 			mir::MIRValue *lengthVal = builder->getInt32(constantArraySize);
 
-			mir::MIRValue *bufferField = builder->createStructGEP(arrayStructType, structAlloca, 0, varDecl->name + "._buffer");
+			// Field 0: managed (nested __ManagedArrayData struct)
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, structAlloca, 0, varDecl->name + ".managed");
+
+			// Initialize the nested __ManagedArrayData fields
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, varDecl->name + ".managed._buffer");
 			builder->createStore(bufferPtr, bufferField);
 
-			mir::MIRValue *lenField = builder->createStructGEP(arrayStructType, structAlloca, 1, varDecl->name + "._len");
+			mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, varDecl->name + ".managed._len");
 			builder->createStore(lengthVal, lenField);
 
-			mir::MIRValue *capField = builder->createStructGEP(arrayStructType, structAlloca, 2, varDecl->name + "._capacity");
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, varDecl->name + ".managed._capacity");
 			builder->createStore(lengthVal, capField);
 
-			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 3, varDecl->name + "._iterIndex");
+			// Field 1: iterIndex
+			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 1, varDecl->name + ".iterIndex");
 			builder->createStore(builder->getInt32(0), iterField);
 
 			namedValues[varDecl->name] = structAlloca;
 			variableTypes[varDecl->name] = maxon::TypeConversion::makeArrayStructType(elementTypeName);
 			arrayPtr = bufferPtr;
 
-			// Track buffer pointer for cleanup
+			// Track array struct for cleanup (dynamic - buffer can be reallocated)
 			if (!scopeStack.empty()) {
-				mir::MIRValue *bufferPtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__buffer");
-				builder->createStore(bufferPtr, bufferPtrAlloca);
-				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, bufferPtrAlloca});
+				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, structAlloca, elementTypeName, true});
 			}
 		} else {
 			// Small array: stack-allocate directly (much faster)
@@ -98,29 +104,41 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
 			mir::MIRValue *structAlloca = builder->createAlloca(arrayStructType, varDecl->name);
 
-			// Initialize struct fields: { _buffer, _len, _capacity, _iterIndex }
+			// Get __ManagedArrayData type for the nested managed field
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+
+			// Initialize nested struct layout: { managed: { _buffer, _len, _capacity }, iterIndex }
 			// NOTE: capacity = 0 signals stack-allocated buffer to push() intrinsic
 			// When push needs to grow, it will malloc a new heap buffer instead of realloc
 			mir::MIRValue *arraySizeVal = builder->getInt32(constantArraySize);
 			mir::MIRValue *zeroCapacity = builder->getInt32(0);
 
-			mir::MIRValue *bufferField = builder->createStructGEP(arrayStructType, structAlloca, 0, varDecl->name + "._buffer");
+			// Field 0: managed (nested __ManagedArrayData struct)
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, structAlloca, 0, varDecl->name + ".managed");
+
+			// Initialize the nested __ManagedArrayData fields
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, varDecl->name + ".managed._buffer");
 			builder->createStore(stackBuffer, bufferField);
 
-			mir::MIRValue *lenField = builder->createStructGEP(arrayStructType, structAlloca, 1, varDecl->name + "._len");
+			mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, varDecl->name + ".managed._len");
 			builder->createStore(arraySizeVal, lenField);
 
-			mir::MIRValue *capField = builder->createStructGEP(arrayStructType, structAlloca, 2, varDecl->name + "._capacity");
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, varDecl->name + ".managed._capacity");
 			builder->createStore(zeroCapacity, capField);
 
-			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 3, varDecl->name + "._iterIndex");
+			// Field 1: iterIndex
+			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 1, varDecl->name + ".iterIndex");
 			builder->createStore(builder->getInt32(0), iterField);
 
 			namedValues[varDecl->name] = structAlloca;
 			variableTypes[varDecl->name] = maxon::TypeConversion::makeArrayStructType(elementTypeName);
 			arrayPtr = stackBuffer;
 
-			// Note: Stack arrays are automatically cleaned up, no need to track for cleanup
+			// Track array struct for cleanup (dynamic - buffer could be promoted to heap by push())
+			// Cleanup will check capacity>0 to know if free is needed
+			if (!scopeStack.empty()) {
+				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, structAlloca, elementTypeName, true});
+			}
 		}
 
 		// Store each value
@@ -168,21 +186,29 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			// Allocate buffer
 			mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {totalSize}, varDecl->name + ".buffer");
 
-			// Create array<T> struct alloca (4 fields: { ptr, i32, i32, i32 })
+			// Create array<T> struct alloca (2 fields: { managed, iterIndex })
 			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
 			mir::MIRValue *structAlloca = builder->createAlloca(arrayStructType, varDecl->name);
 
-			// Initialize struct fields: { _buffer, _len, _capacity, _iterIndex }
-			mir::MIRValue *bufferField = builder->createStructGEP(arrayStructType, structAlloca, 0, varDecl->name + "._buffer");
+			// Get __ManagedArrayData type for the nested managed field
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+
+			// Initialize nested struct layout: { managed: { _buffer, _len, _capacity }, iterIndex }
+			// Field 0: managed (nested __ManagedArrayData struct)
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, structAlloca, 0, varDecl->name + ".managed");
+
+			// Initialize the nested __ManagedArrayData fields
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, varDecl->name + ".managed._buffer");
 			builder->createStore(bufferPtr, bufferField);
 
-			mir::MIRValue *lenField = builder->createStructGEP(arrayStructType, structAlloca, 1, varDecl->name + "._len");
+			mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, varDecl->name + ".managed._len");
 			builder->createStore(sizeVal, lenField);
 
-			mir::MIRValue *capField = builder->createStructGEP(arrayStructType, structAlloca, 2, varDecl->name + "._capacity");
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, varDecl->name + ".managed._capacity");
 			builder->createStore(sizeVal, capField);
 
-			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 3, varDecl->name + "._iterIndex");
+			// Field 1: iterIndex
+			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 1, varDecl->name + ".iterIndex");
 			builder->createStore(builder->getInt32(0), iterField);
 
 			namedValues[varDecl->name] = structAlloca;
@@ -197,11 +223,9 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			mir::MIRValue *zeroVal = builder->getInt32(0);
 			builder->createCall(memsetFunc, {bufferPtr, zeroVal, totalSize});
 
-			// Track buffer pointer for cleanup
+			// Track array struct for cleanup (dynamic - buffer can be reallocated)
 			if (!scopeStack.empty()) {
-				mir::MIRValue *bufferPtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__buffer");
-				builder->createStore(bufferPtr, bufferPtrAlloca);
-				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, bufferPtrAlloca});
+				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, structAlloca, elementTypeName, true});
 			}
 
 			return;
@@ -226,62 +250,82 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			mir::MIRValue *sizeVal = builder->getInt64(allocSize);
 			mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {sizeVal}, varDecl->name + ".buffer");
 
-			// Create array<T> struct alloca (4 fields)
+			// Create array<T> struct alloca (2 fields: { managed, iterIndex })
 			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
 			mir::MIRValue *structAlloca = builder->createAlloca(arrayStructType, varDecl->name);
 
-			// Initialize struct fields: { _buffer, _len, _capacity, _iterIndex }
+			// Get __ManagedArrayData type for the nested managed field
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+
+			// Initialize nested struct layout: { managed: { _buffer, _len, _capacity }, iterIndex }
 			mir::MIRValue *lengthVal = builder->getInt32(arraySize);
 
-			mir::MIRValue *bufferField = builder->createStructGEP(arrayStructType, structAlloca, 0, varDecl->name + "._buffer");
+			// Field 0: managed (nested __ManagedArrayData struct)
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, structAlloca, 0, varDecl->name + ".managed");
+
+			// Initialize the nested __ManagedArrayData fields
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, varDecl->name + ".managed._buffer");
 			builder->createStore(bufferPtr, bufferField);
 
-			mir::MIRValue *lenField = builder->createStructGEP(arrayStructType, structAlloca, 1, varDecl->name + "._len");
+			mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, varDecl->name + ".managed._len");
 			builder->createStore(lengthVal, lenField);
 
-			mir::MIRValue *capField = builder->createStructGEP(arrayStructType, structAlloca, 2, varDecl->name + "._capacity");
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, varDecl->name + ".managed._capacity");
 			builder->createStore(lengthVal, capField);
 
-			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 3, varDecl->name + "._iterIndex");
+			// Field 1: iterIndex
+			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 1, varDecl->name + ".iterIndex");
 			builder->createStore(builder->getInt32(0), iterField);
 
 			namedValues[varDecl->name] = structAlloca;
 			variableTypes[varDecl->name] = maxon::TypeConversion::makeArrayStructType(elementTypeName);
 			arrayPtr = bufferPtr;
 
-			// Track buffer pointer for cleanup
+			// Track array struct for cleanup (dynamic - buffer can be reallocated)
 			if (!scopeStack.empty()) {
-				mir::MIRValue *bufferPtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__buffer");
-				builder->createStore(bufferPtr, bufferPtrAlloca);
-				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, bufferPtrAlloca});
+				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, structAlloca, elementTypeName, true});
 			}
 		} else {
 			// Small array: stack-allocate directly
 			mir::MIRType *mirArrayType = mir::MIRType::getArray(elementType, arraySize);
 			mir::MIRValue *stackBuffer = builder->createAlloca(mirArrayType, varDecl->name + ".stack_buffer");
 
-			// Create array<T> struct alloca (4 fields)
+			// Create array<T> struct alloca (2 fields: { managed, iterIndex })
 			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
 			mir::MIRValue *structAlloca = builder->createAlloca(arrayStructType, varDecl->name);
 
-			// Initialize struct fields: { _buffer, _len, _capacity, _iterIndex }
+			// Get __ManagedArrayData type for the nested managed field
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+
+			// Initialize nested struct layout: { managed: { _buffer, _len, _capacity }, iterIndex }
 			mir::MIRValue *arraySizeVal = builder->getInt32(arraySize);
 
-			mir::MIRValue *bufferField = builder->createStructGEP(arrayStructType, structAlloca, 0, varDecl->name + "._buffer");
+			// Field 0: managed (nested __ManagedArrayData struct)
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, structAlloca, 0, varDecl->name + ".managed");
+
+			// Initialize the nested __ManagedArrayData fields
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, varDecl->name + ".managed._buffer");
 			builder->createStore(stackBuffer, bufferField);
 
-			mir::MIRValue *lenField = builder->createStructGEP(arrayStructType, structAlloca, 1, varDecl->name + "._len");
+			mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, varDecl->name + ".managed._len");
 			builder->createStore(arraySizeVal, lenField);
 
-			mir::MIRValue *capField = builder->createStructGEP(arrayStructType, structAlloca, 2, varDecl->name + "._capacity");
-			builder->createStore(arraySizeVal, capField);
+			// capacity = 0 signals stack-allocated buffer to push() intrinsic
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, varDecl->name + ".managed._capacity");
+			builder->createStore(builder->getInt32(0), capField);
 
-			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 3, varDecl->name + "._iterIndex");
+			// Field 1: iterIndex
+			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 1, varDecl->name + ".iterIndex");
 			builder->createStore(builder->getInt32(0), iterField);
 
 			namedValues[varDecl->name] = structAlloca;
 			variableTypes[varDecl->name] = maxon::TypeConversion::makeArrayStructType(elementTypeName);
 			arrayPtr = stackBuffer;
+
+			// Track array struct for cleanup (dynamic - buffer could be promoted to heap by push())
+			if (!scopeStack.empty()) {
+				scopeStack.back().heapAllocatedArrays.push_back({varDecl->name, structAlloca, elementTypeName, true});
+			}
 		}
 
 		// Zero-initialize using memset
@@ -413,19 +457,19 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 		mir::MIRValue *capacityFieldPtr = builder->createStructGEP(mapStructType, mapAlloca, 4, "_capacity");
 		builder->createStore(builder->getInt32(initialCapacity), capacityFieldPtr);
 
-		// Track base pointers for cleanup
+		// Track base pointers for cleanup (static allocations - not reallocated)
 		if (!scopeStack.empty()) {
 			mir::MIRValue *keysBaseAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__keys_base");
 			builder->createStore(keysBase, keysBaseAlloca);
-			scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._keys", keysBaseAlloca});
+			scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._keys", keysBaseAlloca, "", false});
 
 			mir::MIRValue *valuesBaseAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__values_base");
 			builder->createStore(valuesBase, valuesBaseAlloca);
-			scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._values", valuesBaseAlloca});
+			scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._values", valuesBaseAlloca, "", false});
 
 			mir::MIRValue *statesBaseAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__states_base");
 			builder->createStore(statesBase, statesBaseAlloca);
-			scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._states", statesBaseAlloca});
+			scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._states", statesBaseAlloca, "", false});
 		}
 
 		return;
@@ -509,38 +553,41 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 		// Zero-initialize states (all EMPTY = 0)
 		builder->createCall(memsetFunc, {statesBuffer, builder->getInt32(0), statesBufferSize});
 
-		// Get array<T> struct type for elements: { ptr _buffer, i32 _len, i32 _capacity, i32 _iterIndex }
+		// Get array<T> struct type for elements: { managed: { _buffer, _len, _capacity }, iterIndex }
 		mir::MIRType *elemArrayStructType = getOrCreateArrayStructType(elemType);
 		mir::MIRType *byteArrayStructType = getOrCreateArrayStructType("byte");
+		// Get __ManagedArrayData types for nested fields
+		mir::MIRType *elemManagedType = getOrCreateManagedArrayDataType(elemType);
+		mir::MIRType *byteManagedType = getOrCreateManagedArrayDataType("byte");
 
-		// Initialize elements array struct in field 0
+		// Initialize elements array struct in field 0 of set
 		mir::MIRValue *elemsFieldPtr = builder->createStructGEP(setStructType, setAlloca, 0, "elements.field");
-		// _buffer
-		mir::MIRValue *elemsBufferField = builder->createStructGEP(elemArrayStructType, elemsFieldPtr, 0, "elements._buffer");
+		// Field 0 of array<T>: managed (nested __ManagedArrayData struct)
+		mir::MIRValue *elemsManagedField = builder->createStructGEP(elemArrayStructType, elemsFieldPtr, 0, "elements.managed");
+		// Initialize the nested __ManagedArrayData fields
+		mir::MIRValue *elemsBufferField = builder->createStructGEP(elemManagedType, elemsManagedField, 0, "elements.managed._buffer");
 		builder->createStore(elemsBuffer, elemsBufferField);
-		// _len
-		mir::MIRValue *elemsLenField = builder->createStructGEP(elemArrayStructType, elemsFieldPtr, 1, "elements._len");
+		mir::MIRValue *elemsLenField = builder->createStructGEP(elemManagedType, elemsManagedField, 1, "elements.managed._len");
 		builder->createStore(builder->getInt32(initialCapacity), elemsLenField);
-		// _capacity
-		mir::MIRValue *elemsCapField = builder->createStructGEP(elemArrayStructType, elemsFieldPtr, 2, "elements._capacity");
+		mir::MIRValue *elemsCapField = builder->createStructGEP(elemManagedType, elemsManagedField, 2, "elements.managed._capacity");
 		builder->createStore(builder->getInt32(initialCapacity), elemsCapField);
-		// _iterIndex
-		mir::MIRValue *elemsIterField = builder->createStructGEP(elemArrayStructType, elemsFieldPtr, 3, "elements._iterIndex");
+		// Field 1 of array<T>: iterIndex
+		mir::MIRValue *elemsIterField = builder->createStructGEP(elemArrayStructType, elemsFieldPtr, 1, "elements.iterIndex");
 		builder->createStore(builder->getInt32(0), elemsIterField);
 
-		// Initialize states array struct in field 1
+		// Initialize states array struct in field 1 of set
 		mir::MIRValue *statesFieldPtr = builder->createStructGEP(setStructType, setAlloca, 1, "states.field");
-		// _buffer
-		mir::MIRValue *statesBufferField = builder->createStructGEP(byteArrayStructType, statesFieldPtr, 0, "states._buffer");
+		// Field 0 of array<byte>: managed (nested __ManagedArrayData struct)
+		mir::MIRValue *statesManagedField = builder->createStructGEP(byteArrayStructType, statesFieldPtr, 0, "states.managed");
+		// Initialize the nested __ManagedArrayData fields
+		mir::MIRValue *statesBufferField = builder->createStructGEP(byteManagedType, statesManagedField, 0, "states.managed._buffer");
 		builder->createStore(statesBuffer, statesBufferField);
-		// _len
-		mir::MIRValue *statesLenField = builder->createStructGEP(byteArrayStructType, statesFieldPtr, 1, "states._len");
+		mir::MIRValue *statesLenField = builder->createStructGEP(byteManagedType, statesManagedField, 1, "states.managed._len");
 		builder->createStore(builder->getInt32(initialCapacity), statesLenField);
-		// _capacity
-		mir::MIRValue *statesCapField = builder->createStructGEP(byteArrayStructType, statesFieldPtr, 2, "states._capacity");
+		mir::MIRValue *statesCapField = builder->createStructGEP(byteManagedType, statesManagedField, 2, "states.managed._capacity");
 		builder->createStore(builder->getInt32(initialCapacity), statesCapField);
-		// _iterIndex
-		mir::MIRValue *statesIterField = builder->createStructGEP(byteArrayStructType, statesFieldPtr, 3, "states._iterIndex");
+		// Field 1 of array<byte>: iterIndex
+		mir::MIRValue *statesIterField = builder->createStructGEP(byteArrayStructType, statesFieldPtr, 1, "states.iterIndex");
 		builder->createStore(builder->getInt32(0), statesIterField);
 
 		// Initialize count and capacity fields
@@ -570,15 +617,15 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			builder->createCall(insertFunc, {setAlloca, elemValue});
 		}
 
-		// Track buffer pointers for cleanup
+		// Track buffer pointers for cleanup (static allocations - not reallocated)
 		if (!scopeStack.empty()) {
 			mir::MIRValue *elemsBufferAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__elements_buffer");
 			builder->createStore(elemsBuffer, elemsBufferAlloca);
-			scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._elements", elemsBufferAlloca});
+			scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._elements", elemsBufferAlloca, "", false});
 
 			mir::MIRValue *statesBufferAlloca = builder->createAlloca(mir::MIRType::getPtr(), varDecl->name + ".__states_buffer");
 			builder->createStore(statesBuffer, statesBufferAlloca);
-			scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._states", statesBufferAlloca});
+			scopeStack.back().heapAllocatedArrays.push_back({varDecl->name + "._states", statesBufferAlloca, "", false});
 		}
 
 		return;
@@ -941,11 +988,11 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 			builder->createStore(arrayPtr, ptrAlloca);
 			namedValues[letDecl->name] = ptrAlloca;
 
-			// Track base pointer for cleanup
+			// Track base pointer for cleanup (static - let arrays can't be reallocated)
 			if (!scopeStack.empty()) {
 				mir::MIRValue *basePtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name + ".__base");
 				builder->createStore(basePtr, basePtrAlloca);
-				scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, basePtrAlloca});
+				scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, basePtrAlloca, "", false});
 			}
 		} else {
 			// Small array: stack-allocate directly
@@ -1027,11 +1074,11 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 			mir::MIRValue *zeroVal = builder->getInt32(0);
 			builder->createCall(memsetFunc, {arrayPtr, zeroVal, dataSize});
 
-			// Track base pointer for cleanup
+			// Track base pointer for cleanup (static - let arrays can't be reallocated)
 			if (!scopeStack.empty()) {
 				mir::MIRValue *basePtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name + ".__base");
 				builder->createStore(basePtr, basePtrAlloca);
-				scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, basePtrAlloca});
+				scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, basePtrAlloca, "", false});
 			}
 
 			variableTypes[letDecl->name] = maxon::TypeConversion::makeManagedArrayType(elementTypeName);
@@ -1075,11 +1122,11 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 			builder->createStore(arrayPtr, ptrAlloca);
 			namedValues[letDecl->name] = ptrAlloca;
 
-			// Track base pointer for cleanup
+			// Track base pointer for cleanup (static - let arrays can't be reallocated)
 			if (!scopeStack.empty()) {
 				mir::MIRValue *basePtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name + ".__base");
 				builder->createStore(basePtr, basePtrAlloca);
-				scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, basePtrAlloca});
+				scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, basePtrAlloca, "", false});
 			}
 		} else {
 			// Small array: stack-allocate directly

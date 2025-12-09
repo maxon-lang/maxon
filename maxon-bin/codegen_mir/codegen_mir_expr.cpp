@@ -1,3 +1,4 @@
+#include <iostream>
 /**
  * MIR Code Generator - Expression Generation
  *
@@ -806,9 +807,12 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 								mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, fieldPtr, 0, "unsized.data.ptr");
 								dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrField, "unsized.data");
 							} else if (isArrayStruct) {
-								// array<T> struct: { ptr, i32, i32, i32 } = { _buffer, _len, _capacity, _iterIndex }
+								// array<T> struct: { __ManagedArrayData { ptr, i32, i32 }, i32 iterIndex }
 								mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
-								mir::MIRValue *bufferField = builder->createStructGEP(arrayStructType, fieldPtr, 0, "array._buffer.ptr");
+								mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
+								// GEP to field 0 (managed), then field 0 (buffer)
+								mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, fieldPtr, 0, "array.managed");
+								mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, "array._buffer.ptr");
 								dataPtr = builder->createLoad(mir::MIRType::getPtr(), bufferField, "array.buffer");
 							}
 							mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, dataPtr, indexVal, "implicitfield.array.idx");
@@ -842,9 +846,19 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			// Function parameter - alloca holds the data pointer directly (old ABI)
 			arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
 		} else if (maxon::TypeConversion::isArrayStructType(varType)) {
-			// array<T> struct - alloca is array<T> struct, load _buffer from field 0
+			// array<T> struct layout: { __ManagedArrayData { ptr, i32, i32 }, i32 iterIndex }
+			// We need to: GEP to field 0 (managed), then GEP to field 0 (buffer), then load
 			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
-			mir::MIRValue *bufferField = builder->createStructGEP(arrayStructType, alloca, 0, "arr._buffer.ptr");
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
+			// For struct parameters, alloca contains a pointer to the struct, need to load it first
+			mir::MIRValue *structBase = alloca;
+			if (isStructParameter(arrayIndexExpr->arrayName)) {
+				structBase = builder->createLoad(mir::MIRType::getPtr(), alloca, "arr.structptr");
+			}
+			// GEP to field 0 to get __ManagedArrayData struct
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, structBase, 0, "arr.managed");
+			// GEP to field 0 of __ManagedArrayData to get buffer pointer field
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, "arr._buffer.ptr");
 			arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferField, "arr.buffer");
 		} else if (maxon::TypeConversion::isManagedArrayType(varType)) {
 			// Managed array local var - alloca is a __ManagedArrayData struct, load _buffer from field 0
@@ -1360,35 +1374,13 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			return generateMathIntrinsic(callExpr);
 		}
 
-		// Handle array intrinsics (push, pop)
-		if (callExpr->callee == "push" || callExpr->callee == "pop") {
-			return generateArrayIntrinsic(callExpr);
-		}
-
-		// Handle map intrinsic: map(arr, transform)
-		if (callExpr->callee == "map") {
-			return generateMapIntrinsic(callExpr);
-		}
+		// Array methods (push, pop, map, count, get, set, etc.) are now handled through
+		// stdlib monomorphization. The semantic analyzer sets resolvedCallee to the
+		// appropriate array<T>.method name which routes through normal function lookup.
 
 		// Map method calls are now handled through monomorphization
 		// The specialized methods (e.g., map<string,int>.insert) are generated as regular functions
-		// Map method calls are now handled through monomorphization - use resolvedCallee if available
 		std::string effectiveCallee = callExpr->resolvedCallee.empty() ? callExpr->callee : callExpr->resolvedCallee;
-
-		// Handle array Collection methods: _ManagedArray<T>.count, .get, .set, .map
-		// Also handle array<T>.count, .get, .set, .map (new stdlib struct type)
-		if (effectiveCallee.find("_ManagedArray<") == 0 || effectiveCallee.find("array<") == 0) {
-			size_t dotPos = effectiveCallee.rfind(".");
-			if (dotPos != std::string::npos) {
-				std::string methodName = effectiveCallee.substr(dotPos + 1);
-				if (methodName == "count" || methodName == "get" || methodName == "set" || methodName == "map" ||
-					methodName == "push" || methodName == "pop" || methodName == "capacity" || methodName == "isEmpty" ||
-					methodName == "first" || methodName == "last" || methodName == "reserve" || methodName == "insert" ||
-					methodName == "remove" || methodName == "clear") {
-					return generateArrayCollectionMethod(callExpr, methodName);
-				}
-			}
-		}
 
 		// Resolve primitive type methods when called on typed arguments
 		// This handles cases like `key.hash()` where key is a type parameter bound to int
@@ -1459,7 +1451,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 		// Handle string/substring/cstring intrinsics via registry
 		if (auto method = IntrinsicCodegenRegistry::instance().getMethod(effectiveCallee)) {
-			return (this->*method)(callExpr);
+			mir::MIRValue *result = (this->*method)(callExpr);
+			return result;
 		}
 
 		// Handle primitive type methods (int.hash, int.equals, etc.)
@@ -1541,6 +1534,23 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		if (!calleeF) {
 			calleeF = module->getFunction(effectiveCallee);
 
+			// For synthesized default method bodies, method calls like "count" or "Collection.count"
+			// need to be resolved to the concrete type method like "array<int>.count"
+			if (!calleeF && !currentReceiverType.empty()) {
+				// Extract the bare method name from qualified names like "Collection.count"
+				std::string bareMethodName = effectiveCallee;
+				size_t dotPos = effectiveCallee.find('.');
+				if (dotPos != std::string::npos) {
+					bareMethodName = effectiveCallee.substr(dotPos + 1);
+				}
+				// Try looking up the method on the current receiver type
+				std::string receiverMethod = currentReceiverType + "." + bareMethodName;
+				calleeF = module->getFunction(receiverMethod);
+				if (calleeF) {
+					effectiveCallee = receiverMethod; // Update for later use
+				}
+			}
+
 			// If not found, try suffix matching for namespaced functions
 			if (!calleeF && effectiveCallee.find(".") == std::string::npos) {
 				std::string searchSuffix = "." + effectiveCallee;
@@ -1560,6 +1570,36 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		}
 
 		if (!calleeF) {
+			// Before erroring, check if this is actually a function variable call
+			// that wasn't detected by semantic analysis (e.g., in synthesized default method bodies)
+			auto varTypeIt = variableTypes.find(effectiveCallee);
+			if (varTypeIt != variableTypes.end() && maxon::TypeConversion::isFunctionType(varTypeIt->second)) {
+				// This is a function variable call - handle it as an indirect call
+				auto it = namedValues.find(effectiveCallee);
+				if (it != namedValues.end()) {
+					mir::MIRValue *funcPtrAlloca = it->second;
+					mir::MIRValue *funcPtr = builder->createLoad(mir::MIRType::getPtr(), funcPtrAlloca, "funcptr");
+
+					// Generate arguments
+					std::vector<mir::MIRValue *> argsV;
+					for (size_t i = 0; i < callExpr->args.size(); i++) {
+						mir::MIRValue *argVal = generateExpr(callExpr->args[i].get());
+						argsV.push_back(argVal);
+					}
+
+					// Parse the function type to determine return type
+					std::vector<std::string> paramTypes;
+					std::string returnTypeStr;
+					maxon::TypeConversion::parseFunctionType(varTypeIt->second, paramTypes, returnTypeStr);
+
+					mir::MIRType *returnType = getTypeFromString(returnTypeStr);
+					std::vector<mir::MIRType *> mirParamTypes;
+					for (const auto &pt : paramTypes) {
+						mirParamTypes.push_back(getTypeFromString(pt));
+					}
+					return builder->createCallIndirect(funcPtr, returnType, mirParamTypes, argsV, "fncall");
+				}
+			}
 			reportError("Unknown function referenced: " + effectiveCallee,
 						callExpr->line, callExpr->column);
 		}

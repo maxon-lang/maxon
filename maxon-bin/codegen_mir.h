@@ -136,9 +136,17 @@ class MIRCodeGenerator {
 	};
 	std::vector<LoopContext> loopStack;
 
+	// Info for tracking heap-allocated arrays for cleanup
+	struct HeapArrayInfo {
+		std::string name;
+		mir::MIRValue *alloca;        // Either buffer ptr alloca (static) or struct alloca (dynamic)
+		std::string elementType;      // Element type (for dynamic arrays only)
+		bool isDynamic;               // True if this array can be reallocated (needs struct-based cleanup)
+	};
+
 	// Scope tracking for automatic array/string cleanup
 	struct ScopeInfo {
-		std::vector<std::pair<std::string, mir::MIRValue *>> heapAllocatedArrays;
+		std::vector<HeapArrayInfo> heapAllocatedArrays;
 		std::vector<std::pair<std::string, mir::MIRValue *>> heapAllocatedStrings; // Data pointer for heap strings
 		std::vector<std::pair<std::string, mir::MIRValue *>> substringAllocas;	   // Substring struct allocas (need parent release)
 		std::vector<std::pair<std::string, mir::MIRValue *>> cstringAllocas;	   // Cstring struct allocas (need managed release)
@@ -206,17 +214,6 @@ class MIRCodeGenerator {
 
 	// Math intrinsic generation
 	mir::MIRValue *generateMathIntrinsic(CallExprAST *callExpr);
-
-	// Array intrinsic generation (push, pop)
-	mir::MIRValue *generateArrayIntrinsic(CallExprAST *callExpr);
-
-	// Map intrinsic for arrays: map(arr, transform)
-	mir::MIRValue *generateMapIntrinsic(CallExprAST *callExpr);
-	mir::MIRValue *lastMapResultLength = nullptr;	 // Length of last map() result
-	mir::MIRValue *lastMapResultCapacity = nullptr; // Capacity of last map() result
-
-	// Array Collection methods: count, get, set, map
-	mir::MIRValue *generateArrayCollectionMethod(CallExprAST *callExpr, const std::string &methodName);
 
 	// Map method generation (insert, get, contains, remove, count, capacity)
 	bool isMapMethodCall(const std::string &callee);

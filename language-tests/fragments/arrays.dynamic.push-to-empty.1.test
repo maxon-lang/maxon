@@ -8,163 +8,42 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 130
+; Instructions: 92
 
-%array<int> = type { ptr, i32, i32, i32 }
+%__ManagedArrayData_int = type { ptr, i32, i32 }
+%array<int> = type { %__ManagedArrayData_int, i32 }
 
 define i32 @main() {
 entry0:
   %0 = call ptr @malloc(i64 8)
   %1 = alloca %array<int>
   %2 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  store ptr %0, ptr %2
-  %3 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  store i32 0, ptr %3
-  %4 = getelementptr %array<int>, ptr %1, i32 0, i32 2
+  %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
   store i32 0, ptr %4
-  %5 = getelementptr %array<int>, ptr %1, i32 0, i32 3
+  %5 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 2
   store i32 0, ptr %5
-  %6 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %7 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  %8 = getelementptr %array<int>, ptr %1, i32 0, i32 2
-  %10 = load i32, ptr %7
-  %11 = load i32, ptr %8
-  %12 = icmp eq i32 %11, 0
-  %13 = icmp sge i32 %10, %11
-  %14 = or i1 %12, %13
-  br i1 %14, label %push.grow1, label %push.store2
-push.grow1:
-  %15 = shl i32 %11, 1
-  %16 = icmp eq i32 %11, 0
-  br i1 %16, label %push.initcap3, label %push.doublecap4
-push.store2:
-  %29 = load ptr, ptr %6
-  %30 = sext i32 %10 to i64
-  %31 = getelementptr i32, ptr %29, i64 0, i64 %30
-  store i32 10, ptr %31
-  %32 = add i32 %10, 1
-  store i32 %32, ptr %7
-  %33 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %34 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  %35 = getelementptr %array<int>, ptr %1, i32 0, i32 2
-  %36 = load ptr, ptr %33
-  %37 = load i32, ptr %34
-  %38 = load i32, ptr %35
-  %39 = icmp eq i32 %38, 0
-  %40 = icmp sge i32 %37, %38
-  %41 = or i1 %39, %40
-  br i1 %41, label %push.grow9, label %push.store10
-push.initcap3:
-  br label %push.dorealloc5
-push.doublecap4:
-  br label %push.dorealloc5
-push.dorealloc5:
-  %17 = phi i32 [ 4, %push.initcap3 ], [ %15, %push.doublecap4 ]
-  %18 = sext i32 %11 to i64
-  %19 = sext i32 %17 to i64
-  %20 = shl i64 %18, 2
-  %21 = shl i64 %19, 2
-  %22 = icmp eq i32 %11, 0
-  br i1 %22, label %push.stack2heap6, label %push.realloc7
-push.stack2heap6:
-  %23 = call ptr @malloc(i64 %21)
-  %24 = sext i32 %10 to i64
-  %25 = shl i64 %24, 2
-  %26 = call ptr @memcpy(ptr %23, ptr %0, i64 %25)
-  br label %push.aftergrow8
-push.realloc7:
-  %27 = call ptr @realloc(ptr %0, i64 %20, i64 %21)
-  br label %push.aftergrow8
-push.aftergrow8:
-  %28 = phi ptr [ %23, %push.stack2heap6 ], [ %27, %push.realloc7 ]
-  store ptr %28, ptr %6
-  store i32 %17, ptr %8
-  br label %push.store2
-push.grow9:
-  %42 = shl i32 %38, 1
-  %43 = icmp eq i32 %38, 0
-  br i1 %43, label %push.initcap11, label %push.doublecap12
-push.store10:
-  %56 = load ptr, ptr %33
-  %57 = sext i32 %37 to i64
-  %58 = getelementptr i32, ptr %56, i64 0, i64 %57
-  store i32 20, ptr %58
-  %59 = add i32 %37, 1
-  store i32 %59, ptr %34
-  %60 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %61 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  %62 = getelementptr %array<int>, ptr %1, i32 0, i32 2
-  %63 = load ptr, ptr %60
-  %64 = load i32, ptr %61
-  %65 = load i32, ptr %62
-  %66 = icmp eq i32 %65, 0
-  %67 = icmp sge i32 %64, %65
-  %68 = or i1 %66, %67
-  br i1 %68, label %push.grow17, label %push.store18
-push.initcap11:
-  br label %push.dorealloc13
-push.doublecap12:
-  br label %push.dorealloc13
-push.dorealloc13:
-  %44 = phi i32 [ 4, %push.initcap11 ], [ %42, %push.doublecap12 ]
-  %45 = sext i32 %38 to i64
-  %46 = sext i32 %44 to i64
-  %47 = shl i64 %45, 2
-  %48 = shl i64 %46, 2
-  %49 = icmp eq i32 %38, 0
-  br i1 %49, label %push.stack2heap14, label %push.realloc15
-push.stack2heap14:
-  %50 = call ptr @malloc(i64 %48)
-  %51 = sext i32 %37 to i64
-  %52 = shl i64 %51, 2
-  %53 = call ptr @memcpy(ptr %50, ptr %36, i64 %52)
-  br label %push.aftergrow16
-push.realloc15:
-  %54 = call ptr @realloc(ptr %36, i64 %47, i64 %48)
-  br label %push.aftergrow16
-push.aftergrow16:
-  %55 = phi ptr [ %50, %push.stack2heap14 ], [ %54, %push.realloc15 ]
-  store ptr %55, ptr %33
-  store i32 %44, ptr %35
-  br label %push.store10
-push.grow17:
-  %69 = shl i32 %65, 1
-  %70 = icmp eq i32 %65, 0
-  br i1 %70, label %push.initcap19, label %push.doublecap20
-push.store18:
-  %83 = load ptr, ptr %60
-  %84 = sext i32 %64 to i64
-  %85 = getelementptr i32, ptr %83, i64 0, i64 %84
-  store i32 30, ptr %85
-  %86 = add i32 %64, 1
-  store i32 %86, ptr %61
-  ret i32 %86
-push.initcap19:
-  br label %push.dorealloc21
-push.doublecap20:
-  br label %push.dorealloc21
-push.dorealloc21:
-  %71 = phi i32 [ 4, %push.initcap19 ], [ %69, %push.doublecap20 ]
-  %72 = sext i32 %65 to i64
-  %73 = sext i32 %71 to i64
-  %74 = shl i64 %72, 2
-  %75 = shl i64 %73, 2
-  %76 = icmp eq i32 %65, 0
-  br i1 %76, label %push.stack2heap22, label %push.realloc23
-push.stack2heap22:
-  %77 = call ptr @malloc(i64 %75)
-  %78 = sext i32 %64 to i64
-  %79 = shl i64 %78, 2
-  %80 = call ptr @memcpy(ptr %77, ptr %63, i64 %79)
-  br label %push.aftergrow24
-push.realloc23:
-  %81 = call ptr @realloc(ptr %63, i64 %74, i64 %75)
-  br label %push.aftergrow24
-push.aftergrow24:
-  %82 = phi ptr [ %77, %push.stack2heap22 ], [ %81, %push.realloc23 ]
-  store ptr %82, ptr %60
-  store i32 %71, ptr %62
-  br label %push.store18
+  %6 = getelementptr %array<int>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = call %array<int> @array<int>.push(ptr %1, i32 10)
+  %8 = call %array<int> @array<int>.push(ptr %1, i32 20)
+  %9 = call %array<int> @array<int>.push(ptr %1, i32 30)
+  %17 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %18 = getelementptr %__ManagedArrayData_int, ptr %17, i32 0, i32 1
+  %19 = load i32, ptr %18
+  %11 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %12 = getelementptr %__ManagedArrayData_int, ptr %11, i32 0, i32 0
+  %13 = load ptr, ptr %12
+  %14 = getelementptr %__ManagedArrayData_int, ptr %11, i32 0, i32 2
+  %15 = load i32, ptr %14
+  %16 = icmp sgt i32 %15, 0
+  br i1 %16, label %arr.free1, label %arr.skip2
+arr.free1:
+  call void @free(ptr %13)
+  br label %arr.skip2
+arr.skip2:
+  ret i32 %19
 }
 
 declare ptr @malloc(i64 %arg0)
@@ -172,6 +51,88 @@ declare ptr @malloc(i64 %arg0)
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 declare ptr @realloc(ptr %arg0, i64 %arg1, i64 %arg2)
+
+define %array<int> @array<int>.push(ptr %self, i32 %value) {
+entry0:
+  %3 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %4 = getelementptr %__ManagedArrayData_int, ptr %3, i32 0, i32 1
+  %5 = load i32, ptr %4
+  %8 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %9 = getelementptr %__ManagedArrayData_int, ptr %8, i32 0, i32 2
+  %10 = load i32, ptr %9
+  %14 = icmp sge i32 %5, %10
+  br i1 %14, label %then1, label %ifcont2
+then1:
+  %16 = shl i32 %10, 1
+  %19 = icmp slt i32 %16, 4
+  br i1 %19, label %then3, label %ifcont4
+ifcont2:
+  %49 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %50 = getelementptr %__ManagedArrayData_int, ptr %49, i32 0, i32 0
+  %51 = load ptr, ptr %50
+  %52 = sext i32 %5 to i64
+  %53 = getelementptr i32, ptr %51, i64 0, i64 %52
+  store i32 %value, ptr %53
+  %55 = add i32 %5, 1
+  %57 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %58 = getelementptr %__ManagedArrayData_int, ptr %57, i32 0, i32 1
+  store i32 %55, ptr %58
+  %60 = load %array<int>, ptr %self
+  ret %array<int> %60
+then3:
+  br label %ifcont4
+ifcont4:
+  %62 = phi i32 [ %16, %then1 ], [ 4, %then3 ]
+  %22 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %23 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 2
+  %24 = load i32, ptr %23
+  %25 = icmp sgt i32 %62, %24
+  br i1 %25, label %grow.do5, label %grow.done6
+grow.do5:
+  %26 = shl i32 %24, 1
+  %27 = icmp sgt i32 %62, %26
+  br i1 %27, label %grow.usemin7, label %grow.usedouble8
+grow.done6:
+  br label %ifcont2
+grow.usemin7:
+  br label %grow.checkmin9
+grow.usedouble8:
+  br label %grow.checkmin9
+grow.checkmin9:
+  %28 = phi i32 [ %62, %grow.usemin7 ], [ %26, %grow.usedouble8 ]
+  %29 = icmp slt i32 %28, 4
+  br i1 %29, label %grow.minfour10, label %grow.realloc11
+grow.minfour10:
+  br label %grow.realloc11
+grow.realloc11:
+  %30 = phi i32 [ 4, %grow.minfour10 ], [ %28, %grow.checkmin9 ]
+  %31 = sext i32 %30 to i64
+  %32 = shl i64 %31, 2
+  %33 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 0
+  %34 = load ptr, ptr %33
+  %35 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 1
+  %36 = load i32, ptr %35
+  %37 = icmp eq i32 %24, 0
+  br i1 %37, label %grow.stack12, label %grow.heap13
+grow.stack12:
+  %38 = call ptr @malloc(i64 %32)
+  %39 = sext i32 %36 to i64
+  %40 = shl i64 %39, 2
+  %41 = call ptr @memcpy(ptr %38, ptr %34, i64 %40)
+  br label %grow.afteralloc14
+grow.heap13:
+  %42 = sext i32 %24 to i64
+  %43 = shl i64 %42, 2
+  %44 = call ptr @realloc(ptr %34, i64 %43, i64 %32)
+  br label %grow.afteralloc14
+grow.afteralloc14:
+  %45 = phi ptr [ %38, %grow.stack12 ], [ %44, %grow.heap13 ]
+  store ptr %45, ptr %33
+  store i32 %30, ptr %23
+  br label %grow.done6
+}
+
+declare void @free(ptr %arg0)
 
 declare void @exit(i32 %arg0)
 
@@ -184,166 +145,40 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 133
+; Instructions: 121
 
-%array<int> = type { ptr, i32, i32, i32 }
+%__ManagedArrayData_int = type { ptr, i32, i32 }
+%array<int> = type { %__ManagedArrayData_int, i32 }
 
 define i32 @main() {
 entry0:
   %0 = call ptr @malloc(i64 8)
   %1 = alloca %array<int>
   %2 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  store ptr %0, ptr %2
-  %3 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  store i32 0, ptr %3
-  %4 = getelementptr %array<int>, ptr %1, i32 0, i32 2
+  %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
   store i32 0, ptr %4
-  %5 = getelementptr %array<int>, ptr %1, i32 0, i32 3
+  %5 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 2
   store i32 0, ptr %5
-  %6 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %7 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  %8 = getelementptr %array<int>, ptr %1, i32 0, i32 2
-  %9 = load ptr, ptr %6
-  %10 = load i32, ptr %7
-  %11 = load i32, ptr %8
-  %12 = icmp eq i32 %11, 0
-  %13 = icmp sge i32 %10, %11
-  %14 = or i1 %12, %13
-  br i1 %14, label %push.grow1, label %push.store2
-push.grow1:
-  %15 = mul i32 %11, 2
-  %16 = icmp eq i32 %11, 0
-  br i1 %16, label %push.initcap3, label %push.doublecap4
-push.store2:
-  %29 = load ptr, ptr %6
-  %30 = sext i32 %10 to i64
-  %31 = getelementptr i32, ptr %29, i64 0, i64 %30
-  store i32 10, ptr %31
-  %32 = add i32 %10, 1
-  store i32 %32, ptr %7
-  %33 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %34 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  %35 = getelementptr %array<int>, ptr %1, i32 0, i32 2
-  %36 = load ptr, ptr %33
-  %37 = load i32, ptr %34
-  %38 = load i32, ptr %35
-  %39 = icmp eq i32 %38, 0
-  %40 = icmp sge i32 %37, %38
-  %41 = or i1 %39, %40
-  br i1 %41, label %push.grow9, label %push.store10
-push.initcap3:
-  br label %push.dorealloc5
-push.doublecap4:
-  br label %push.dorealloc5
-push.dorealloc5:
-  %17 = phi i32 [ 4, %push.initcap3 ], [ %15, %push.doublecap4 ]
-  %18 = sext i32 %11 to i64
-  %19 = sext i32 %17 to i64
-  %20 = mul i64 %18, 4
-  %21 = mul i64 %19, 4
-  %22 = icmp eq i32 %11, 0
-  br i1 %22, label %push.stack2heap6, label %push.realloc7
-push.stack2heap6:
-  %23 = call ptr @malloc(i64 %21)
-  %24 = sext i32 %10 to i64
-  %25 = mul i64 %24, 4
-  %26 = call ptr @memcpy(ptr %23, ptr %9, i64 %25)
-  br label %push.aftergrow8
-push.realloc7:
-  %27 = call ptr @realloc(ptr %9, i64 %20, i64 %21)
-  br label %push.aftergrow8
-push.aftergrow8:
-  %28 = phi ptr [ %23, %push.stack2heap6 ], [ %27, %push.realloc7 ]
-  store ptr %28, ptr %6
-  store i32 %17, ptr %8
-  br label %push.store2
-push.grow9:
-  %42 = mul i32 %38, 2
-  %43 = icmp eq i32 %38, 0
-  br i1 %43, label %push.initcap11, label %push.doublecap12
-push.store10:
-  %56 = load ptr, ptr %33
-  %57 = sext i32 %37 to i64
-  %58 = getelementptr i32, ptr %56, i64 0, i64 %57
-  store i32 20, ptr %58
-  %59 = add i32 %37, 1
-  store i32 %59, ptr %34
-  %60 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %61 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  %62 = getelementptr %array<int>, ptr %1, i32 0, i32 2
-  %63 = load ptr, ptr %60
-  %64 = load i32, ptr %61
-  %65 = load i32, ptr %62
-  %66 = icmp eq i32 %65, 0
-  %67 = icmp sge i32 %64, %65
-  %68 = or i1 %66, %67
-  br i1 %68, label %push.grow17, label %push.store18
-push.initcap11:
-  br label %push.dorealloc13
-push.doublecap12:
-  br label %push.dorealloc13
-push.dorealloc13:
-  %44 = phi i32 [ 4, %push.initcap11 ], [ %42, %push.doublecap12 ]
-  %45 = sext i32 %38 to i64
-  %46 = sext i32 %44 to i64
-  %47 = mul i64 %45, 4
-  %48 = mul i64 %46, 4
-  %49 = icmp eq i32 %38, 0
-  br i1 %49, label %push.stack2heap14, label %push.realloc15
-push.stack2heap14:
-  %50 = call ptr @malloc(i64 %48)
-  %51 = sext i32 %37 to i64
-  %52 = mul i64 %51, 4
-  %53 = call ptr @memcpy(ptr %50, ptr %36, i64 %52)
-  br label %push.aftergrow16
-push.realloc15:
-  %54 = call ptr @realloc(ptr %36, i64 %47, i64 %48)
-  br label %push.aftergrow16
-push.aftergrow16:
-  %55 = phi ptr [ %50, %push.stack2heap14 ], [ %54, %push.realloc15 ]
-  store ptr %55, ptr %33
-  store i32 %44, ptr %35
-  br label %push.store10
-push.grow17:
-  %69 = mul i32 %65, 2
-  %70 = icmp eq i32 %65, 0
-  br i1 %70, label %push.initcap19, label %push.doublecap20
-push.store18:
-  %83 = load ptr, ptr %60
-  %84 = sext i32 %64 to i64
-  %85 = getelementptr i32, ptr %83, i64 0, i64 %84
-  store i32 30, ptr %85
-  %86 = add i32 %64, 1
-  store i32 %86, ptr %61
-  %87 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  %88 = load i32, ptr %87
-  ret i32 %88
-push.initcap19:
-  br label %push.dorealloc21
-push.doublecap20:
-  br label %push.dorealloc21
-push.dorealloc21:
-  %71 = phi i32 [ 4, %push.initcap19 ], [ %69, %push.doublecap20 ]
-  %72 = sext i32 %65 to i64
-  %73 = sext i32 %71 to i64
-  %74 = mul i64 %72, 4
-  %75 = mul i64 %73, 4
-  %76 = icmp eq i32 %65, 0
-  br i1 %76, label %push.stack2heap22, label %push.realloc23
-push.stack2heap22:
-  %77 = call ptr @malloc(i64 %75)
-  %78 = sext i32 %64 to i64
-  %79 = mul i64 %78, 4
-  %80 = call ptr @memcpy(ptr %77, ptr %63, i64 %79)
-  br label %push.aftergrow24
-push.realloc23:
-  %81 = call ptr @realloc(ptr %63, i64 %74, i64 %75)
-  br label %push.aftergrow24
-push.aftergrow24:
-  %82 = phi ptr [ %77, %push.stack2heap22 ], [ %81, %push.realloc23 ]
-  store ptr %82, ptr %60
-  store i32 %71, ptr %62
-  br label %push.store18
+  %6 = getelementptr %array<int>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = call %array<int> @array<int>.push(ptr %1, i32 10)
+  %8 = call %array<int> @array<int>.push(ptr %1, i32 20)
+  %9 = call %array<int> @array<int>.push(ptr %1, i32 30)
+  %10 = call i32 @array<int>.count(ptr %1)
+  %11 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %12 = getelementptr %__ManagedArrayData_int, ptr %11, i32 0, i32 0
+  %13 = load ptr, ptr %12
+  %14 = getelementptr %__ManagedArrayData_int, ptr %11, i32 0, i32 2
+  %15 = load i32, ptr %14
+  %16 = icmp sgt i32 %15, 0
+  br i1 %16, label %arr.free1, label %arr.skip2
+arr.free1:
+  call void @free(ptr %13)
+  br label %arr.skip2
+arr.skip2:
+  ret i32 %10
 }
 
 declare ptr @malloc(i64 %arg0)
@@ -351,6 +186,123 @@ declare ptr @malloc(i64 %arg0)
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 declare ptr @realloc(ptr %arg0, i64 %arg1, i64 %arg2)
+
+define i32 @array<int>.count(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
+  %4 = load i32, ptr %3
+  ret i32 %4
+}
+
+define %array<int> @array<int>.push(ptr %self, i32 %value) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 %value, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %array<int>, ptr %2, i32 0, i32 0
+  %4 = getelementptr %__ManagedArrayData_int, ptr %3, i32 0, i32 1
+  %5 = load i32, ptr %4
+  %6 = alloca i32
+  store i32 %5, ptr %6
+  %7 = load ptr, ptr %0
+  %8 = getelementptr %array<int>, ptr %7, i32 0, i32 0
+  %9 = getelementptr %__ManagedArrayData_int, ptr %8, i32 0, i32 2
+  %10 = load i32, ptr %9
+  %11 = alloca i32
+  store i32 %10, ptr %11
+  %12 = load i32, ptr %6
+  %13 = load i32, ptr %11
+  %14 = icmp sge i32 %12, %13
+  br i1 %14, label %then1, label %ifcont2
+then1:
+  %15 = load i32, ptr %11
+  %16 = mul i32 %15, 2
+  %17 = alloca i32
+  store i32 %16, ptr %17
+  %18 = load i32, ptr %17
+  %19 = icmp slt i32 %18, 4
+  br i1 %19, label %then3, label %ifcont4
+ifcont2:
+  %46 = load i32, ptr %6
+  %47 = load i32, ptr %1
+  %48 = load ptr, ptr %0
+  %49 = getelementptr %array<int>, ptr %48, i32 0, i32 0
+  %50 = getelementptr %__ManagedArrayData_int, ptr %49, i32 0, i32 0
+  %51 = load ptr, ptr %50
+  %52 = sext i32 %46 to i64
+  %53 = getelementptr i32, ptr %51, i64 0, i64 %52
+  store i32 %47, ptr %53
+  %54 = load i32, ptr %6
+  %55 = add i32 %54, 1
+  %56 = load ptr, ptr %0
+  %57 = getelementptr %array<int>, ptr %56, i32 0, i32 0
+  %58 = getelementptr %__ManagedArrayData_int, ptr %57, i32 0, i32 1
+  store i32 %55, ptr %58
+  %59 = load ptr, ptr %0
+  %60 = load %array<int>, ptr %59
+  ret %array<int> %60
+then3:
+  store i32 4, ptr %17
+  br label %ifcont4
+ifcont4:
+  %20 = load i32, ptr %17
+  %21 = load ptr, ptr %0
+  %22 = getelementptr %array<int>, ptr %21, i32 0, i32 0
+  %23 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 2
+  %24 = load i32, ptr %23
+  %25 = icmp sgt i32 %20, %24
+  br i1 %25, label %grow.do5, label %grow.done6
+grow.do5:
+  %26 = mul i32 %24, 2
+  %27 = icmp sgt i32 %20, %26
+  br i1 %27, label %grow.usemin7, label %grow.usedouble8
+grow.done6:
+  br label %ifcont2
+grow.usemin7:
+  br label %grow.checkmin9
+grow.usedouble8:
+  br label %grow.checkmin9
+grow.checkmin9:
+  %28 = phi i32 [ %20, %grow.usemin7 ], [ %26, %grow.usedouble8 ]
+  %29 = icmp slt i32 %28, 4
+  br i1 %29, label %grow.minfour10, label %grow.realloc11
+grow.minfour10:
+  br label %grow.realloc11
+grow.realloc11:
+  %30 = phi i32 [ 4, %grow.minfour10 ], [ %28, %grow.checkmin9 ]
+  %31 = sext i32 %30 to i64
+  %32 = mul i64 %31, 4
+  %33 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 0
+  %34 = load ptr, ptr %33
+  %35 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 1
+  %36 = load i32, ptr %35
+  %37 = icmp eq i32 %24, 0
+  br i1 %37, label %grow.stack12, label %grow.heap13
+grow.stack12:
+  %38 = call ptr @malloc(i64 %32)
+  %39 = sext i32 %36 to i64
+  %40 = mul i64 %39, 4
+  %41 = call ptr @memcpy(ptr %38, ptr %34, i64 %40)
+  br label %grow.afteralloc14
+grow.heap13:
+  %42 = sext i32 %24 to i64
+  %43 = mul i64 %42, 4
+  %44 = call ptr @realloc(ptr %34, i64 %43, i64 %32)
+  br label %grow.afteralloc14
+grow.afteralloc14:
+  %45 = phi ptr [ %38, %grow.stack12 ], [ %44, %grow.heap13 ]
+  store ptr %45, ptr %33
+  store i32 %30, ptr %23
+  br label %grow.done6
+}
+
+declare void @free(ptr %arg0)
 
 declare void @exit(i32 %arg0)
 

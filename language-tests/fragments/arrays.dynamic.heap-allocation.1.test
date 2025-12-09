@@ -9,51 +9,72 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 41
+; Instructions: 57
 
-%array<int> = type { ptr, i32, i32, i32 }
+%__ManagedArrayData_int = type { ptr, i32, i32 }
+%array<int> = type { %__ManagedArrayData_int, i32 }
 
 define i32 @main() {
 entry0:
   %0 = alloca [5 x i32]
   %1 = alloca %array<int>
   %2 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  store ptr %0, ptr %2
-  %3 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  store i32 5, ptr %3
-  %4 = getelementptr %array<int>, ptr %1, i32 0, i32 2
+  %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
   store i32 5, ptr %4
-  %5 = getelementptr %array<int>, ptr %1, i32 0, i32 3
+  %5 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 2
   store i32 0, ptr %5
-  %6 = call ptr @memset(ptr %0, i32 0, i64 20)
-  %7 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %8 = load ptr, ptr %7
-  %9 = getelementptr i32, ptr %8, i64 0, i64 0
-  store i32 10, ptr %9
-  %10 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %11 = load ptr, ptr %10
-  %12 = getelementptr i32, ptr %11, i64 0, i64 1
-  store i32 20, ptr %12
-  %13 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %6 = getelementptr %array<int>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i32 0, i64 20)
+  %8 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %9 = getelementptr %__ManagedArrayData_int, ptr %8, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr i32, ptr %10, i64 0, i64 0
+  store i32 10, ptr %11
+  %12 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %13 = getelementptr %__ManagedArrayData_int, ptr %12, i32 0, i32 0
   %14 = load ptr, ptr %13
-  %15 = getelementptr i32, ptr %14, i64 0, i64 2
-  store i32 30, ptr %15
+  %15 = getelementptr i32, ptr %14, i64 0, i64 1
+  store i32 20, ptr %15
   %16 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %17 = load ptr, ptr %16
-  %18 = getelementptr i32, ptr %17, i64 0, i64 0
-  %19 = load i32, ptr %18
+  %17 = getelementptr %__ManagedArrayData_int, ptr %16, i32 0, i32 0
+  %18 = load ptr, ptr %17
+  %19 = getelementptr i32, ptr %18, i64 0, i64 2
+  store i32 30, ptr %19
   %20 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %21 = load ptr, ptr %20
-  %22 = getelementptr i32, ptr %21, i64 0, i64 1
-  %23 = load i32, ptr %22
-  %24 = add i32 %19, %23
+  %21 = getelementptr %__ManagedArrayData_int, ptr %20, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = getelementptr i32, ptr %22, i64 0, i64 0
+  %24 = load i32, ptr %23
   %25 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %26 = load ptr, ptr %25
-  %27 = getelementptr i32, ptr %26, i64 0, i64 2
-  %28 = load i32, ptr %27
-  %29 = add i32 %24, %28
-  ret i32 %29
+  %26 = getelementptr %__ManagedArrayData_int, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  %28 = getelementptr i32, ptr %27, i64 0, i64 1
+  %29 = load i32, ptr %28
+  %30 = add i32 %24, %29
+  %31 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %32 = getelementptr %__ManagedArrayData_int, ptr %31, i32 0, i32 0
+  %33 = load ptr, ptr %32
+  %34 = getelementptr i32, ptr %33, i64 0, i64 2
+  %35 = load i32, ptr %34
+  %36 = add i32 %30, %35
+  %39 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %40 = getelementptr %__ManagedArrayData_int, ptr %39, i32 0, i32 0
+  %41 = load ptr, ptr %40
+  %42 = getelementptr %__ManagedArrayData_int, ptr %39, i32 0, i32 2
+  %43 = load i32, ptr %42
+  %44 = icmp sgt i32 %43, 0
+  br i1 %44, label %arr.free1, label %arr.skip2
+arr.free1:
+  call void @free(ptr %41)
+  br label %arr.skip2
+arr.skip2:
+  ret i32 %36
 }
+
+declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
@@ -68,54 +89,75 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 44
+; Instructions: 60
 
-%array<int> = type { ptr, i32, i32, i32 }
+%__ManagedArrayData_int = type { ptr, i32, i32 }
+%array<int> = type { %__ManagedArrayData_int, i32 }
 
 define i32 @main() {
 entry0:
   %0 = alloca [5 x i32]
   %1 = alloca %array<int>
   %2 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  store ptr %0, ptr %2
-  %3 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  store i32 5, ptr %3
-  %4 = getelementptr %array<int>, ptr %1, i32 0, i32 2
+  %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
   store i32 5, ptr %4
-  %5 = getelementptr %array<int>, ptr %1, i32 0, i32 3
+  %5 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 2
   store i32 0, ptr %5
-  %6 = call ptr @memset(ptr %0, i32 0, i64 20)
-  %7 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %8 = load ptr, ptr %7
-  %9 = getelementptr i32, ptr %8, i64 0, i64 0
-  store i32 10, ptr %9
-  %10 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %11 = load ptr, ptr %10
-  %12 = getelementptr i32, ptr %11, i64 0, i64 1
-  store i32 20, ptr %12
-  %13 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %6 = getelementptr %array<int>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i32 0, i64 20)
+  %8 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %9 = getelementptr %__ManagedArrayData_int, ptr %8, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr i32, ptr %10, i64 0, i64 0
+  store i32 10, ptr %11
+  %12 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %13 = getelementptr %__ManagedArrayData_int, ptr %12, i32 0, i32 0
   %14 = load ptr, ptr %13
-  %15 = getelementptr i32, ptr %14, i64 0, i64 2
-  store i32 30, ptr %15
+  %15 = getelementptr i32, ptr %14, i64 0, i64 1
+  store i32 20, ptr %15
   %16 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %17 = load ptr, ptr %16
-  %18 = getelementptr i32, ptr %17, i64 0, i64 0
-  %19 = load i32, ptr %18
+  %17 = getelementptr %__ManagedArrayData_int, ptr %16, i32 0, i32 0
+  %18 = load ptr, ptr %17
+  %19 = getelementptr i32, ptr %18, i64 0, i64 2
+  store i32 30, ptr %19
   %20 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %21 = load ptr, ptr %20
-  %22 = getelementptr i32, ptr %21, i64 0, i64 1
-  %23 = load i32, ptr %22
-  %24 = add i32 %19, %23
+  %21 = getelementptr %__ManagedArrayData_int, ptr %20, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = getelementptr i32, ptr %22, i64 0, i64 0
+  %24 = load i32, ptr %23
   %25 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %26 = load ptr, ptr %25
-  %27 = getelementptr i32, ptr %26, i64 0, i64 2
-  %28 = load i32, ptr %27
-  %29 = add i32 %24, %28
-  %30 = alloca i32
-  store i32 %29, ptr %30
-  %31 = load i32, ptr %30
-  ret i32 %31
+  %26 = getelementptr %__ManagedArrayData_int, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  %28 = getelementptr i32, ptr %27, i64 0, i64 1
+  %29 = load i32, ptr %28
+  %30 = add i32 %24, %29
+  %31 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %32 = getelementptr %__ManagedArrayData_int, ptr %31, i32 0, i32 0
+  %33 = load ptr, ptr %32
+  %34 = getelementptr i32, ptr %33, i64 0, i64 2
+  %35 = load i32, ptr %34
+  %36 = add i32 %30, %35
+  %37 = alloca i32
+  store i32 %36, ptr %37
+  %38 = load i32, ptr %37
+  %39 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %40 = getelementptr %__ManagedArrayData_int, ptr %39, i32 0, i32 0
+  %41 = load ptr, ptr %40
+  %42 = getelementptr %__ManagedArrayData_int, ptr %39, i32 0, i32 2
+  %43 = load i32, ptr %42
+  %44 = icmp sgt i32 %43, 0
+  br i1 %44, label %arr.free1, label %arr.skip2
+arr.free1:
+  call void @free(ptr %41)
+  br label %arr.skip2
+arr.skip2:
+  ret i32 %38
 }
+
+declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 

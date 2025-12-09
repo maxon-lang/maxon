@@ -216,6 +216,7 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 	// Load the combined platform-specific runtime (includes both platform and common functions)
 	std::string platformRuntimePath = isWindows ? "runtime_windows.mir" : "runtime_linux.mir";
 	std::string platformMirPath = findRuntimeFile(platformRuntimePath);
+
 	if (!platformMirPath.empty()) {
 		if (verboseLevel >= 2) {
 			std::cout << "[MIR] Loading runtime: " << platformMirPath << std::endl;
@@ -403,10 +404,14 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 
 		if (verboseLevel >= 3) {
 			const char *typeName = "Other";
-			if (reloc.type == backend::Relocation::Type::FunctionCall) typeName = "FunctionCall";
-			else if (reloc.type == backend::Relocation::Type::ImportCall) typeName = "ImportCall";
-			else if (reloc.type == backend::Relocation::Type::FunctionAddress) typeName = "FunctionAddress";
-			else if (reloc.type == backend::Relocation::Type::GlobalRef) typeName = "GlobalRef";
+			if (reloc.type == backend::Relocation::Type::FunctionCall)
+				typeName = "FunctionCall";
+			else if (reloc.type == backend::Relocation::Type::ImportCall)
+				typeName = "ImportCall";
+			else if (reloc.type == backend::Relocation::Type::FunctionAddress)
+				typeName = "FunctionAddress";
+			else if (reloc.type == backend::Relocation::Type::GlobalRef)
+				typeName = "GlobalRef";
 			std::cout << "[RELOC] " << typeName
 					  << " " << reloc.symbolName << " at offset " << (adj.funcBaseOffset + reloc.offset)
 					  << " (in " << adj.funcName << ")" << std::endl;

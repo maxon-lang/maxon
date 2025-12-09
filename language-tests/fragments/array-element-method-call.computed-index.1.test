@@ -18,52 +18,72 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 41
+; Instructions: 56
 
 %Data = type { i32 }
-%array<Data> = type { ptr, i32, i32, i32 }
+%__ManagedArrayData_Data = type { ptr, i32, i32 }
+%array<Data> = type { %__ManagedArrayData_Data, i32 }
 
 define i32 @main() {
 entry0:
   %0 = alloca [4 x %Data]
   %1 = alloca %array<Data>
   %2 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
-  store ptr %0, ptr %2
-  %3 = getelementptr %array<Data>, ptr %1, i32 0, i32 1
-  store i32 4, ptr %3
-  %4 = getelementptr %array<Data>, ptr %1, i32 0, i32 2
+  %3 = getelementptr %__ManagedArrayData_Data, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_Data, ptr %2, i32 0, i32 1
   store i32 4, ptr %4
-  %5 = getelementptr %array<Data>, ptr %1, i32 0, i32 3
+  %5 = getelementptr %__ManagedArrayData_Data, ptr %2, i32 0, i32 2
   store i32 0, ptr %5
-  %6 = call ptr @memset(ptr %0, i32 0, i64 16)
-  %7 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
-  %8 = load ptr, ptr %7
-  %9 = getelementptr %Data, ptr %8, i64 0
-  %10 = getelementptr %Data, ptr %9, i32 0, i32 0
-  store i32 1, ptr %10
-  %11 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
-  %12 = load ptr, ptr %11
-  %13 = getelementptr %Data, ptr %12, i64 1
-  %14 = getelementptr %Data, ptr %13, i32 0, i32 0
-  store i32 2, ptr %14
-  %15 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
-  %16 = load ptr, ptr %15
-  %17 = getelementptr %Data, ptr %16, i64 2
-  %18 = getelementptr %Data, ptr %17, i32 0, i32 0
-  store i32 3, ptr %18
-  %19 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %6 = getelementptr %array<Data>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i32 0, i64 16)
+  %8 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %9 = getelementptr %__ManagedArrayData_Data, ptr %8, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr %Data, ptr %10, i64 0
+  %12 = getelementptr %Data, ptr %11, i32 0, i32 0
+  store i32 1, ptr %12
+  %13 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %14 = getelementptr %__ManagedArrayData_Data, ptr %13, i32 0, i32 0
+  %15 = load ptr, ptr %14
+  %16 = getelementptr %Data, ptr %15, i64 1
+  %17 = getelementptr %Data, ptr %16, i32 0, i32 0
+  store i32 2, ptr %17
+  %18 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %19 = getelementptr %__ManagedArrayData_Data, ptr %18, i32 0, i32 0
   %20 = load ptr, ptr %19
-  %21 = getelementptr %Data, ptr %20, i64 3
+  %21 = getelementptr %Data, ptr %20, i64 2
   %22 = getelementptr %Data, ptr %21, i32 0, i32 0
-  store i32 4, ptr %22
-  %26 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
-  %27 = load ptr, ptr %26
-  %28 = sext i32 2 to i64
-  %29 = getelementptr %Data, ptr %27, i64 %28
-  %31 = getelementptr %Data, ptr %29, i32 0, i32 0
-  %32 = load i32, ptr %31
-  ret i32 %32
+  store i32 3, ptr %22
+  %23 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %24 = getelementptr %__ManagedArrayData_Data, ptr %23, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = getelementptr %Data, ptr %25, i64 3
+  %27 = getelementptr %Data, ptr %26, i32 0, i32 0
+  store i32 4, ptr %27
+  %31 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %32 = getelementptr %__ManagedArrayData_Data, ptr %31, i32 0, i32 0
+  %33 = load ptr, ptr %32
+  %34 = sext i32 2 to i64
+  %35 = getelementptr %Data, ptr %33, i64 %34
+  %43 = getelementptr %Data, ptr %35, i32 0, i32 0
+  %44 = load i32, ptr %43
+  %37 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %38 = getelementptr %__ManagedArrayData_Data, ptr %37, i32 0, i32 0
+  %39 = load ptr, ptr %38
+  %40 = getelementptr %__ManagedArrayData_Data, ptr %37, i32 0, i32 2
+  %41 = load i32, ptr %40
+  %42 = icmp sgt i32 %41, 0
+  br i1 %42, label %arr.free1, label %arr.skip2
+arr.free1:
+  call void @free(ptr %39)
+  br label %arr.skip2
+arr.skip2:
+  ret i32 %44
 }
+
+declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
@@ -78,10 +98,11 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 50
+; Instructions: 65
 
 %Data = type { i32 }
-%array<Data> = type { ptr, i32, i32, i32 }
+%__ManagedArrayData_Data = type { ptr, i32, i32 }
+%array<Data> = type { %__ManagedArrayData_Data, i32 }
 
 define i32 @Data.getX(ptr %self) {
 entry0:
@@ -98,45 +119,64 @@ entry0:
   %0 = alloca [4 x %Data]
   %1 = alloca %array<Data>
   %2 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
-  store ptr %0, ptr %2
-  %3 = getelementptr %array<Data>, ptr %1, i32 0, i32 1
-  store i32 4, ptr %3
-  %4 = getelementptr %array<Data>, ptr %1, i32 0, i32 2
+  %3 = getelementptr %__ManagedArrayData_Data, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_Data, ptr %2, i32 0, i32 1
   store i32 4, ptr %4
-  %5 = getelementptr %array<Data>, ptr %1, i32 0, i32 3
+  %5 = getelementptr %__ManagedArrayData_Data, ptr %2, i32 0, i32 2
   store i32 0, ptr %5
-  %6 = call ptr @memset(ptr %0, i32 0, i64 16)
-  %7 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
-  %8 = load ptr, ptr %7
-  %9 = getelementptr %Data, ptr %8, i64 0
-  %10 = getelementptr %Data, ptr %9, i32 0, i32 0
-  store i32 1, ptr %10
-  %11 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
-  %12 = load ptr, ptr %11
-  %13 = getelementptr %Data, ptr %12, i64 1
-  %14 = getelementptr %Data, ptr %13, i32 0, i32 0
-  store i32 2, ptr %14
-  %15 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
-  %16 = load ptr, ptr %15
-  %17 = getelementptr %Data, ptr %16, i64 2
-  %18 = getelementptr %Data, ptr %17, i32 0, i32 0
-  store i32 3, ptr %18
-  %19 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %6 = getelementptr %array<Data>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i32 0, i64 16)
+  %8 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %9 = getelementptr %__ManagedArrayData_Data, ptr %8, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr %Data, ptr %10, i64 0
+  %12 = getelementptr %Data, ptr %11, i32 0, i32 0
+  store i32 1, ptr %12
+  %13 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %14 = getelementptr %__ManagedArrayData_Data, ptr %13, i32 0, i32 0
+  %15 = load ptr, ptr %14
+  %16 = getelementptr %Data, ptr %15, i64 1
+  %17 = getelementptr %Data, ptr %16, i32 0, i32 0
+  store i32 2, ptr %17
+  %18 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %19 = getelementptr %__ManagedArrayData_Data, ptr %18, i32 0, i32 0
   %20 = load ptr, ptr %19
-  %21 = getelementptr %Data, ptr %20, i64 3
+  %21 = getelementptr %Data, ptr %20, i64 2
   %22 = getelementptr %Data, ptr %21, i32 0, i32 0
-  store i32 4, ptr %22
-  %23 = alloca i32
-  store i32 1, ptr %23
-  %24 = load i32, ptr %23
-  %25 = add i32 %24, 1
-  %26 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
-  %27 = load ptr, ptr %26
-  %28 = sext i32 %25 to i64
-  %29 = getelementptr %Data, ptr %27, i64 %28
-  %30 = call i32 @Data.getX(ptr %29)
-  ret i32 %30
+  store i32 3, ptr %22
+  %23 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %24 = getelementptr %__ManagedArrayData_Data, ptr %23, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = getelementptr %Data, ptr %25, i64 3
+  %27 = getelementptr %Data, ptr %26, i32 0, i32 0
+  store i32 4, ptr %27
+  %28 = alloca i32
+  store i32 1, ptr %28
+  %29 = load i32, ptr %28
+  %30 = add i32 %29, 1
+  %31 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %32 = getelementptr %__ManagedArrayData_Data, ptr %31, i32 0, i32 0
+  %33 = load ptr, ptr %32
+  %34 = sext i32 %30 to i64
+  %35 = getelementptr %Data, ptr %33, i64 %34
+  %36 = call i32 @Data.getX(ptr %35)
+  %37 = getelementptr %array<Data>, ptr %1, i32 0, i32 0
+  %38 = getelementptr %__ManagedArrayData_Data, ptr %37, i32 0, i32 0
+  %39 = load ptr, ptr %38
+  %40 = getelementptr %__ManagedArrayData_Data, ptr %37, i32 0, i32 2
+  %41 = load i32, ptr %40
+  %42 = icmp sgt i32 %41, 0
+  br i1 %42, label %arr.free1, label %arr.skip2
+arr.free1:
+  call void @free(ptr %39)
+  br label %arr.skip2
+arr.skip2:
+  ret i32 %36
 }
+
+declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
