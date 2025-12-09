@@ -112,6 +112,7 @@ See `docs/COMPILER_DEBUGGING.md` for detailed workflow.
 - **LF line endings** - All source files use Unix-style line endings
 - Don't create new documentation files unless instructed
 - Do not edit test fragments (in /language-tests/fragments). These are generated from the spec files, edit the spec file.
+- **Do not use git** - Ignore any git history just fix the current tree
 
 ## Development Notes
 - Build system uses CMake with Ninja generator

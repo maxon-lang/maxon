@@ -7,13 +7,13 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 400
+; Instructions: 408
 
 %string = type { ptr, i32 }
 %cstring = type { ptr, i32, ptr }
 %_ManagedArray_byte = type { ptr, i32 }
 %__ManagedStringData = type { %_ManagedArray_byte, i32, i32 }
-%__ManagedArrayData_byte = type { ptr, i32, i32 }
+%array<byte> = type { ptr, i32, i32, i32 }
 
 @.str.0 = constant [2 x i8] c"\0A\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
@@ -138,28 +138,30 @@ newline_cs.cstring.continue4:
 define i32 @sys.printFloat(f64 %value, i32 %precision) {
 entry0:
   %2 = alloca [64 x i8]
-  %3 = alloca %__ManagedArrayData_byte
-  %4 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 0
+  %3 = alloca %array<byte>
+  %4 = getelementptr %array<byte>, ptr %3, i32 0, i32 0
   store ptr %2, ptr %4
-  %5 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 1
+  %5 = getelementptr %array<byte>, ptr %3, i32 0, i32 1
   store i32 64, ptr %5
-  %6 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 2
+  %6 = getelementptr %array<byte>, ptr %3, i32 0, i32 2
   store i32 64, ptr %6
-  %7 = call ptr @memset(ptr %2, i32 0, i64 64)
-  %9 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 0
-  %10 = load ptr, ptr %9
-  %11 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 1
-  %12 = load i32, ptr %11
-  %14 = call i32 @fmt.formatFloatArray(f64 %value, ptr %10, i32 %12, i32 %precision)
-  %16 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 0
-  %17 = load ptr, ptr %16
-  %18 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 1
-  %19 = load i32, ptr %18
-  %21 = call %string @string.stringFromCharacters(ptr %17, i32 %19, i32 %14)
-  %22 = alloca %string
-  store %string %21, ptr %22
-  %23 = call i32 @sys.print(ptr %22)
-  ret i32 %23
+  %7 = getelementptr %array<byte>, ptr %3, i32 0, i32 3
+  store i32 0, ptr %7
+  %8 = call ptr @memset(ptr %2, i32 0, i64 64)
+  %10 = getelementptr %array<byte>, ptr %3, i32 0, i32 0
+  %11 = load ptr, ptr %10
+  %12 = getelementptr %array<byte>, ptr %3, i32 0, i32 1
+  %13 = load i32, ptr %12
+  %15 = call i32 @fmt.formatFloatArray(f64 %value, ptr %11, i32 %13, i32 %precision)
+  %17 = getelementptr %array<byte>, ptr %3, i32 0, i32 0
+  %18 = load ptr, ptr %17
+  %19 = getelementptr %array<byte>, ptr %3, i32 0, i32 1
+  %20 = load i32, ptr %19
+  %22 = call %string @string.stringFromCharacters(ptr %18, i32 %20, i32 %15)
+  %23 = alloca %string
+  store %string %22, ptr %23
+  %24 = call i32 @sys.print(ptr %23)
+  ret i32 %24
 }
 
 define i32 @fmt.formatFloatArray(f64 %value, ptr %buffer, i32 %buffer.__length, i32 %precision) {
@@ -178,16 +180,16 @@ ifcont2:
   %30 = fcmp olt f64 %value, 0
   br i1 %30, label %then6, label %ifcont7
 whilecond3:
-  %167 = phi i32 [ 0, %then1 ], [ %23, %loop4 ]
-  %15 = icmp slt i32 %167, %precision
+  %168 = phi i32 [ 0, %then1 ], [ %23, %loop4 ]
+  %15 = icmp slt i32 %168, %precision
   br i1 %15, label %loop4, label %afterloop5
 loop4:
-  %17 = add i32 2, %167
+  %17 = add i32 2, %168
   %19 = sext i32 %17 to i64
   %20 = getelementptr i8, ptr %buffer, i64 0, i64 %19
   %21 = trunc i32 48 to i8
   store i8 %21, ptr %20
-  %23 = add i32 %167, 1
+  %23 = add i32 %168, 1
   br label %whilecond3
 afterloop5:
   %25 = add i32 2, %precision
@@ -200,107 +202,109 @@ then6:
   %39 = fneg f64 %value
   br label %ifcont7
 ifcont7:
-  %169 = phi f64 [ %value, %ifcont2 ], [ %39, %then6 ]
-  %168 = phi i32 [ 0, %ifcont2 ], [ 1, %then6 ]
+  %170 = phi f64 [ %value, %ifcont2 ], [ %39, %then6 ]
+  %169 = phi i32 [ 0, %ifcont2 ], [ 1, %then6 ]
   %41 = sitofp i32 %precision to f64
   %42 = fneg f64 %41
   %43 = call f64 @math.pow(f64 10, f64 %42)
   %44 = fmul f64 0.5, %43
-  %48 = fadd f64 %169, %44
+  %48 = fadd f64 %170, %44
   %50 = call f64 @trunc(f64 %48)
   %51 = fptosi f64 %50 to i32
   %55 = sitofp i32 %51 to f64
   %56 = fsub f64 %48, %55
   %58 = alloca [20 x i8]
-  %59 = alloca %__ManagedArrayData_byte
-  %60 = getelementptr %__ManagedArrayData_byte, ptr %59, i32 0, i32 0
+  %59 = alloca %array<byte>
+  %60 = getelementptr %array<byte>, ptr %59, i32 0, i32 0
   store ptr %58, ptr %60
-  %61 = getelementptr %__ManagedArrayData_byte, ptr %59, i32 0, i32 1
+  %61 = getelementptr %array<byte>, ptr %59, i32 0, i32 1
   store i32 20, ptr %61
-  %62 = getelementptr %__ManagedArrayData_byte, ptr %59, i32 0, i32 2
+  %62 = getelementptr %array<byte>, ptr %59, i32 0, i32 2
   store i32 20, ptr %62
-  %63 = call ptr @memset(ptr %58, i32 0, i64 20)
-  %68 = icmp eq i32 %51, 0
-  br i1 %68, label %then8, label %ifcont9
+  %63 = getelementptr %array<byte>, ptr %59, i32 0, i32 3
+  store i32 0, ptr %63
+  %64 = call ptr @memset(ptr %58, i32 0, i64 20)
+  %69 = icmp eq i32 %51, 0
+  br i1 %69, label %then8, label %ifcont9
 then8:
-  %70 = getelementptr %__ManagedArrayData_byte, ptr %59, i32 0, i32 0
-  %71 = load ptr, ptr %70
-  %72 = sext i32 19 to i64
-  %73 = getelementptr i8, ptr %71, i64 0, i64 %72
-  %74 = trunc i32 48 to i8
-  store i8 %74, ptr %73
+  %71 = getelementptr %array<byte>, ptr %59, i32 0, i32 0
+  %72 = load ptr, ptr %71
+  %73 = sext i32 19 to i64
+  %74 = getelementptr i8, ptr %72, i64 0, i64 %73
+  %75 = trunc i32 48 to i8
+  store i8 %75, ptr %74
   br label %ifcont9
 ifcont9:
-  %171 = phi i32 [ 19, %ifcont7 ], [ 18, %then8 ]
+  %172 = phi i32 [ 19, %ifcont7 ], [ 18, %then8 ]
   br label %whilecond10
 whilecond10:
-  %173 = phi i32 [ %51, %ifcont9 ], [ %99, %loop11 ]
-  %172 = phi i32 [ %171, %ifcont9 ], [ %93, %loop11 ]
-  %78 = icmp sgt i32 %173, 0
-  br i1 %78, label %loop11, label %afterloop12
+  %174 = phi i32 [ %51, %ifcont9 ], [ %100, %loop11 ]
+  %173 = phi i32 [ %172, %ifcont9 ], [ %94, %loop11 ]
+  %79 = icmp sgt i32 %174, 0
+  br i1 %79, label %loop11, label %afterloop12
 loop11:
-  %80 = srem i32 %173, 10
-  %83 = add i32 48, %80
-  %86 = getelementptr %__ManagedArrayData_byte, ptr %59, i32 0, i32 0
-  %87 = load ptr, ptr %86
-  %88 = sext i32 %172 to i64
-  %89 = getelementptr i8, ptr %87, i64 0, i64 %88
-  %91 = trunc i32 %83 to i8
-  store i8 %91, ptr %89
-  %93 = sub i32 %172, 1
-  %99 = sdiv i32 %173, 10
+  %81 = srem i32 %174, 10
+  %84 = add i32 48, %81
+  %87 = getelementptr %array<byte>, ptr %59, i32 0, i32 0
+  %88 = load ptr, ptr %87
+  %89 = sext i32 %173 to i64
+  %90 = getelementptr i8, ptr %88, i64 0, i64 %89
+  %92 = trunc i32 %84 to i8
+  store i8 %92, ptr %90
+  %94 = sub i32 %173, 1
+  %100 = sdiv i32 %174, 10
   br label %whilecond10
 afterloop12:
-  %101 = add i32 %172, 1
-  %104 = sub i32 20, %101
+  %102 = add i32 %173, 1
+  %105 = sub i32 20, %102
   br label %whilecond13
 whilecond13:
-  %176 = phi i32 [ 0, %afterloop12 ], [ %125, %loop14 ]
-  %109 = icmp slt i32 %176, %104
-  br i1 %109, label %loop14, label %afterloop15
+  %177 = phi i32 [ 0, %afterloop12 ], [ %126, %loop14 ]
+  %110 = icmp slt i32 %177, %105
+  br i1 %110, label %loop14, label %afterloop15
 loop14:
-  %112 = add i32 %168, %176
-  %114 = sext i32 %112 to i64
-  %115 = getelementptr i8, ptr %buffer, i64 0, i64 %114
-  %118 = add i32 %101, %176
-  %119 = getelementptr %__ManagedArrayData_byte, ptr %59, i32 0, i32 0
-  %120 = load ptr, ptr %119
-  %121 = sext i32 %118 to i64
-  %122 = getelementptr i8, ptr %120, i64 0, i64 %121
-  %123 = load i8, ptr %122
-  store i8 %123, ptr %115
-  %125 = add i32 %176, 1
+  %113 = add i32 %169, %177
+  %115 = sext i32 %113 to i64
+  %116 = getelementptr i8, ptr %buffer, i64 0, i64 %115
+  %119 = add i32 %102, %177
+  %120 = getelementptr %array<byte>, ptr %59, i32 0, i32 0
+  %121 = load ptr, ptr %120
+  %122 = sext i32 %119 to i64
+  %123 = getelementptr i8, ptr %121, i64 0, i64 %122
+  %124 = load i8, ptr %123
+  store i8 %124, ptr %116
+  %126 = add i32 %177, 1
   br label %whilecond13
 afterloop15:
-  %128 = add i32 %168, %104
-  %131 = sext i32 %128 to i64
-  %132 = getelementptr i8, ptr %buffer, i64 0, i64 %131
-  %133 = trunc i32 46 to i8
-  store i8 %133, ptr %132
-  %135 = add i32 %128, 1
+  %129 = add i32 %169, %105
+  %132 = sext i32 %129 to i64
+  %133 = getelementptr i8, ptr %buffer, i64 0, i64 %132
+  %134 = trunc i32 46 to i8
+  store i8 %134, ptr %133
+  %136 = add i32 %129, 1
   br label %whilecond16
 whilecond16:
-  %177 = phi i32 [ 0, %afterloop15 ], [ %162, %loop17 ]
-  %170 = phi f64 [ %56, %afterloop15 ], [ %160, %loop17 ]
-  %139 = icmp slt i32 %177, %precision
-  br i1 %139, label %loop17, label %afterloop18
+  %178 = phi i32 [ 0, %afterloop15 ], [ %163, %loop17 ]
+  %171 = phi f64 [ %56, %afterloop15 ], [ %161, %loop17 ]
+  %140 = icmp slt i32 %178, %precision
+  br i1 %140, label %loop17, label %afterloop18
 loop17:
-  %141 = fmul f64 %170, 10
-  %143 = call f64 @trunc(f64 %141)
-  %144 = fptosi f64 %143 to i32
-  %147 = add i32 48, %144
-  %151 = add i32 %135, %177
-  %153 = sext i32 %151 to i64
-  %154 = getelementptr i8, ptr %buffer, i64 0, i64 %153
-  %156 = trunc i32 %147 to i8
-  store i8 %156, ptr %154
-  %159 = sitofp i32 %144 to f64
-  %160 = fsub f64 %141, %159
-  %162 = add i32 %177, 1
+  %142 = fmul f64 %171, 10
+  %144 = call f64 @trunc(f64 %142)
+  %145 = fptosi f64 %144 to i32
+  %148 = add i32 48, %145
+  %152 = add i32 %136, %178
+  %154 = sext i32 %152 to i64
+  %155 = getelementptr i8, ptr %buffer, i64 0, i64 %154
+  %157 = trunc i32 %148 to i8
+  store i8 %157, ptr %155
+  %160 = sitofp i32 %145 to f64
+  %161 = fsub f64 %142, %160
+  %163 = add i32 %178, 1
   br label %whilecond16
 afterloop18:
-  %165 = add i32 %135, %precision
-  ret i32 %165
+  %166 = add i32 %136, %precision
+  ret i32 %166
 }
 
 define f64 @math.log(f64 %x) {
@@ -367,30 +371,34 @@ afterloop13:
 
 define %string @string.stringFromCharacters(ptr %buffer, i32 %buffer.__length, i32 %length) {
 entry0:
+  %0 = alloca ptr
+  store ptr %buffer, ptr %0
   %3 = alloca %string
-  %6 = add i32 %length, 1
-  %7 = sext i32 %6 to i64
-  %8 = call ptr @malloc(i64 %7)
-  %9 = sext i32 %length to i64
-  %10 = call ptr @memcpy(ptr %8, ptr %buffer, i64 %9)
-  %11 = getelementptr i8, ptr %8, i64 %9
-  store i8 0, ptr %11
-  %12 = call ptr @malloc(i64 32)
-  %13 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
-  %14 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 0
-  store ptr %8, ptr %14
-  %15 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 1
-  store i32 %length, ptr %15
-  %16 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 1
+  %5 = getelementptr %array<byte>, ptr %0, i32 0, i32 0
+  %6 = load ptr, ptr %5
+  %7 = add i32 %length, 1
+  %8 = sext i32 %7 to i64
+  %9 = call ptr @malloc(i64 %8)
+  %10 = sext i32 %length to i64
+  %11 = call ptr @memcpy(ptr %9, ptr %6, i64 %10)
+  %12 = getelementptr i8, ptr %9, i64 %10
+  store i8 0, ptr %12
+  %13 = call ptr @malloc(i64 32)
+  %14 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 0
+  %15 = getelementptr %_ManagedArray_byte, ptr %14, i32 0, i32 0
+  store ptr %9, ptr %15
+  %16 = getelementptr %_ManagedArray_byte, ptr %14, i32 0, i32 1
   store i32 %length, ptr %16
-  %17 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 2
+  %17 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 1
   store i32 %length, ptr %17
-  %18 = getelementptr %string, ptr %3, i32 0, i32 0
-  store ptr %12, ptr %18
-  %19 = getelementptr %string, ptr %3, i32 0, i32 1
-  store i32 0, ptr %19
-  %20 = load %string, ptr %3
-  ret %string %20
+  %18 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 2
+  store i32 %length, ptr %18
+  %19 = getelementptr %string, ptr %3, i32 0, i32 0
+  store ptr %13, ptr %19
+  %20 = getelementptr %string, ptr %3, i32 0, i32 1
+  store i32 0, ptr %20
+  %21 = load %string, ptr %3
+  ret %string %21
 }
 
 define f64 @math.pow(f64 %base, f64 %exponent) {
@@ -565,13 +573,13 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 715
+; Instructions: 720
 
 %string = type { ptr, i32 }
 %cstring = type { ptr, i32, ptr }
 %_ManagedArray_byte = type { ptr, i32 }
 %__ManagedStringData = type { %_ManagedArray_byte, i32, i32 }
-%__ManagedArrayData_byte = type { ptr, i32, i32 }
+%array<byte> = type { ptr, i32, i32, i32 }
 
 @.str.0 = constant [2 x i8] c"\0A\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
@@ -729,33 +737,35 @@ entry0:
   %1 = alloca i32
   store i32 %precision, ptr %1
   %2 = alloca [64 x i8]
-  %3 = alloca %__ManagedArrayData_byte
-  %4 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 0
+  %3 = alloca %array<byte>
+  %4 = getelementptr %array<byte>, ptr %3, i32 0, i32 0
   store ptr %2, ptr %4
-  %5 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 1
+  %5 = getelementptr %array<byte>, ptr %3, i32 0, i32 1
   store i32 64, ptr %5
-  %6 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 2
+  %6 = getelementptr %array<byte>, ptr %3, i32 0, i32 2
   store i32 64, ptr %6
-  %7 = call ptr @memset(ptr %2, i32 0, i64 64)
-  %8 = load f64, ptr %0
-  %9 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 0
-  %10 = load ptr, ptr %9
-  %11 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 1
-  %12 = load i32, ptr %11
-  %13 = load i32, ptr %1
-  %14 = call i32 @fmt.formatFloatArray(f64 %8, ptr %10, i32 %12, i32 %13)
-  %15 = alloca i32
-  store i32 %14, ptr %15
-  %16 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 0
-  %17 = load ptr, ptr %16
-  %18 = getelementptr %__ManagedArrayData_byte, ptr %3, i32 0, i32 1
-  %19 = load i32, ptr %18
-  %20 = load i32, ptr %15
-  %21 = call %string @string.stringFromCharacters(ptr %17, i32 %19, i32 %20)
-  %22 = alloca %string
-  store %string %21, ptr %22
-  %23 = call i32 @sys.print(ptr %22)
-  ret i32 %23
+  %7 = getelementptr %array<byte>, ptr %3, i32 0, i32 3
+  store i32 0, ptr %7
+  %8 = call ptr @memset(ptr %2, i32 0, i64 64)
+  %9 = load f64, ptr %0
+  %10 = getelementptr %array<byte>, ptr %3, i32 0, i32 0
+  %11 = load ptr, ptr %10
+  %12 = getelementptr %array<byte>, ptr %3, i32 0, i32 1
+  %13 = load i32, ptr %12
+  %14 = load i32, ptr %1
+  %15 = call i32 @fmt.formatFloatArray(f64 %9, ptr %11, i32 %13, i32 %14)
+  %16 = alloca i32
+  store i32 %15, ptr %16
+  %17 = getelementptr %array<byte>, ptr %3, i32 0, i32 0
+  %18 = load ptr, ptr %17
+  %19 = getelementptr %array<byte>, ptr %3, i32 0, i32 1
+  %20 = load i32, ptr %19
+  %21 = load i32, ptr %16
+  %22 = call %string @string.stringFromCharacters(ptr %18, i32 %20, i32 %21)
+  %23 = alloca %string
+  store %string %22, ptr %23
+  %24 = call i32 @sys.print(ptr %23)
+  ret i32 %24
 }
 
 define i32 @fmt.formatFloatArray(f64 %value, ptr %buffer, i32 %buffer.__length, i32 %precision) {
@@ -851,165 +861,167 @@ ifcont7:
   %57 = alloca f64
   store f64 %56, ptr %57
   %58 = alloca [20 x i8]
-  %59 = alloca %__ManagedArrayData_byte
-  %60 = getelementptr %__ManagedArrayData_byte, ptr %59, i32 0, i32 0
+  %59 = alloca %array<byte>
+  %60 = getelementptr %array<byte>, ptr %59, i32 0, i32 0
   store ptr %58, ptr %60
-  %61 = getelementptr %__ManagedArrayData_byte, ptr %59, i32 0, i32 1
+  %61 = getelementptr %array<byte>, ptr %59, i32 0, i32 1
   store i32 20, ptr %61
-  %62 = getelementptr %__ManagedArrayData_byte, ptr %59, i32 0, i32 2
+  %62 = getelementptr %array<byte>, ptr %59, i32 0, i32 2
   store i32 20, ptr %62
-  %63 = call ptr @memset(ptr %58, i32 0, i64 20)
-  %64 = alloca i32
-  store i32 19, ptr %64
-  %65 = load i32, ptr %52
-  %66 = alloca i32
-  store i32 %65, ptr %66
-  %67 = load i32, ptr %52
-  %68 = icmp eq i32 %67, 0
-  br i1 %68, label %then8, label %ifcont9
+  %63 = getelementptr %array<byte>, ptr %59, i32 0, i32 3
+  store i32 0, ptr %63
+  %64 = call ptr @memset(ptr %58, i32 0, i64 20)
+  %65 = alloca i32
+  store i32 19, ptr %65
+  %66 = load i32, ptr %52
+  %67 = alloca i32
+  store i32 %66, ptr %67
+  %68 = load i32, ptr %52
+  %69 = icmp eq i32 %68, 0
+  br i1 %69, label %then8, label %ifcont9
 then8:
-  %69 = load i32, ptr %64
-  %70 = getelementptr %__ManagedArrayData_byte, ptr %59, i32 0, i32 0
-  %71 = load ptr, ptr %70
-  %72 = sext i32 %69 to i64
-  %73 = getelementptr i8, ptr %71, i64 0, i64 %72
-  %74 = trunc i32 48 to i8
-  store i8 %74, ptr %73
-  %75 = load i32, ptr %64
-  %76 = sub i32 %75, 1
-  store i32 %76, ptr %64
+  %70 = load i32, ptr %65
+  %71 = getelementptr %array<byte>, ptr %59, i32 0, i32 0
+  %72 = load ptr, ptr %71
+  %73 = sext i32 %70 to i64
+  %74 = getelementptr i8, ptr %72, i64 0, i64 %73
+  %75 = trunc i32 48 to i8
+  store i8 %75, ptr %74
+  %76 = load i32, ptr %65
+  %77 = sub i32 %76, 1
+  store i32 %77, ptr %65
   br label %ifcont9
 ifcont9:
   br label %whilecond10
 whilecond10:
-  %77 = load i32, ptr %66
-  %78 = icmp sgt i32 %77, 0
-  br i1 %78, label %loop11, label %afterloop12
+  %78 = load i32, ptr %67
+  %79 = icmp sgt i32 %78, 0
+  br i1 %79, label %loop11, label %afterloop12
 loop11:
-  %79 = load i32, ptr %66
-  %80 = srem i32 %79, 10
-  %81 = alloca i32
-  store i32 %80, ptr %81
-  %82 = load i32, ptr %81
-  %83 = add i32 48, %82
-  %84 = alloca i32
-  store i32 %83, ptr %84
-  %85 = load i32, ptr %64
-  %86 = getelementptr %__ManagedArrayData_byte, ptr %59, i32 0, i32 0
-  %87 = load ptr, ptr %86
-  %88 = sext i32 %85 to i64
-  %89 = getelementptr i8, ptr %87, i64 0, i64 %88
-  %90 = load i32, ptr %84
-  %91 = trunc i32 %90 to i8
-  store i8 %91, ptr %89
-  %92 = load i32, ptr %64
-  %93 = sub i32 %92, 1
-  store i32 %93, ptr %64
-  %94 = load i32, ptr %66
-  %95 = sitofp i32 %94 to f64
-  %96 = sitofp i32 10 to f64
-  %97 = fdiv f64 %95, %96
-  %98 = call f64 @trunc(f64 %97)
-  %99 = fptosi f64 %98 to i32
-  store i32 %99, ptr %66
+  %80 = load i32, ptr %67
+  %81 = srem i32 %80, 10
+  %82 = alloca i32
+  store i32 %81, ptr %82
+  %83 = load i32, ptr %82
+  %84 = add i32 48, %83
+  %85 = alloca i32
+  store i32 %84, ptr %85
+  %86 = load i32, ptr %65
+  %87 = getelementptr %array<byte>, ptr %59, i32 0, i32 0
+  %88 = load ptr, ptr %87
+  %89 = sext i32 %86 to i64
+  %90 = getelementptr i8, ptr %88, i64 0, i64 %89
+  %91 = load i32, ptr %85
+  %92 = trunc i32 %91 to i8
+  store i8 %92, ptr %90
+  %93 = load i32, ptr %65
+  %94 = sub i32 %93, 1
+  store i32 %94, ptr %65
+  %95 = load i32, ptr %67
+  %96 = sitofp i32 %95 to f64
+  %97 = sitofp i32 10 to f64
+  %98 = fdiv f64 %96, %97
+  %99 = call f64 @trunc(f64 %98)
+  %100 = fptosi f64 %99 to i32
+  store i32 %100, ptr %67
   br label %whilecond10
 afterloop12:
-  %100 = load i32, ptr %64
-  %101 = add i32 %100, 1
-  %102 = alloca i32
-  store i32 %101, ptr %102
-  %103 = load i32, ptr %102
-  %104 = sub i32 20, %103
-  %105 = alloca i32
-  store i32 %104, ptr %105
+  %101 = load i32, ptr %65
+  %102 = add i32 %101, 1
+  %103 = alloca i32
+  store i32 %102, ptr %103
+  %104 = load i32, ptr %103
+  %105 = sub i32 20, %104
   %106 = alloca i32
-  store i32 0, ptr %106
+  store i32 %105, ptr %106
+  %107 = alloca i32
+  store i32 0, ptr %107
   br label %whilecond13
 whilecond13:
-  %107 = load i32, ptr %106
-  %108 = load i32, ptr %105
-  %109 = icmp slt i32 %107, %108
-  br i1 %109, label %loop14, label %afterloop15
+  %108 = load i32, ptr %107
+  %109 = load i32, ptr %106
+  %110 = icmp slt i32 %108, %109
+  br i1 %110, label %loop14, label %afterloop15
 loop14:
-  %110 = load i32, ptr %26
-  %111 = load i32, ptr %106
-  %112 = add i32 %110, %111
-  %113 = load ptr, ptr %1
-  %114 = sext i32 %112 to i64
-  %115 = getelementptr i8, ptr %113, i64 0, i64 %114
-  %116 = load i32, ptr %102
-  %117 = load i32, ptr %106
-  %118 = add i32 %116, %117
-  %119 = getelementptr %__ManagedArrayData_byte, ptr %59, i32 0, i32 0
-  %120 = load ptr, ptr %119
-  %121 = sext i32 %118 to i64
-  %122 = getelementptr i8, ptr %120, i64 0, i64 %121
-  %123 = load i8, ptr %122
-  store i8 %123, ptr %115
-  %124 = load i32, ptr %106
-  %125 = add i32 %124, 1
-  store i32 %125, ptr %106
+  %111 = load i32, ptr %26
+  %112 = load i32, ptr %107
+  %113 = add i32 %111, %112
+  %114 = load ptr, ptr %1
+  %115 = sext i32 %113 to i64
+  %116 = getelementptr i8, ptr %114, i64 0, i64 %115
+  %117 = load i32, ptr %103
+  %118 = load i32, ptr %107
+  %119 = add i32 %117, %118
+  %120 = getelementptr %array<byte>, ptr %59, i32 0, i32 0
+  %121 = load ptr, ptr %120
+  %122 = sext i32 %119 to i64
+  %123 = getelementptr i8, ptr %121, i64 0, i64 %122
+  %124 = load i8, ptr %123
+  store i8 %124, ptr %116
+  %125 = load i32, ptr %107
+  %126 = add i32 %125, 1
+  store i32 %126, ptr %107
   br label %whilecond13
 afterloop15:
-  %126 = load i32, ptr %26
-  %127 = load i32, ptr %105
-  %128 = add i32 %126, %127
-  store i32 %128, ptr %26
-  %129 = load i32, ptr %26
-  %130 = load ptr, ptr %1
-  %131 = sext i32 %129 to i64
-  %132 = getelementptr i8, ptr %130, i64 0, i64 %131
-  %133 = trunc i32 46 to i8
-  store i8 %133, ptr %132
-  %134 = load i32, ptr %26
-  %135 = add i32 %134, 1
-  store i32 %135, ptr %26
-  %136 = alloca i32
-  store i32 0, ptr %136
+  %127 = load i32, ptr %26
+  %128 = load i32, ptr %106
+  %129 = add i32 %127, %128
+  store i32 %129, ptr %26
+  %130 = load i32, ptr %26
+  %131 = load ptr, ptr %1
+  %132 = sext i32 %130 to i64
+  %133 = getelementptr i8, ptr %131, i64 0, i64 %132
+  %134 = trunc i32 46 to i8
+  store i8 %134, ptr %133
+  %135 = load i32, ptr %26
+  %136 = add i32 %135, 1
+  store i32 %136, ptr %26
+  %137 = alloca i32
+  store i32 0, ptr %137
   br label %whilecond16
 whilecond16:
-  %137 = load i32, ptr %136
-  %138 = load i32, ptr %3
-  %139 = icmp slt i32 %137, %138
-  br i1 %139, label %loop17, label %afterloop18
+  %138 = load i32, ptr %137
+  %139 = load i32, ptr %3
+  %140 = icmp slt i32 %138, %139
+  br i1 %140, label %loop17, label %afterloop18
 loop17:
-  %140 = load f64, ptr %57
-  %141 = fmul f64 %140, 10
-  store f64 %141, ptr %57
-  %142 = load f64, ptr %57
-  %143 = call f64 @trunc(f64 %142)
-  %144 = fptosi f64 %143 to i32
-  %145 = alloca i32
-  store i32 %144, ptr %145
-  %146 = load i32, ptr %145
-  %147 = add i32 48, %146
-  %148 = alloca i32
-  store i32 %147, ptr %148
-  %149 = load i32, ptr %26
-  %150 = load i32, ptr %136
-  %151 = add i32 %149, %150
-  %152 = load ptr, ptr %1
-  %153 = sext i32 %151 to i64
-  %154 = getelementptr i8, ptr %152, i64 0, i64 %153
-  %155 = load i32, ptr %148
-  %156 = trunc i32 %155 to i8
-  store i8 %156, ptr %154
-  %157 = load f64, ptr %57
-  %158 = load i32, ptr %145
-  %159 = sitofp i32 %158 to f64
-  %160 = fsub f64 %157, %159
-  store f64 %160, ptr %57
-  %161 = load i32, ptr %136
-  %162 = add i32 %161, 1
-  store i32 %162, ptr %136
+  %141 = load f64, ptr %57
+  %142 = fmul f64 %141, 10
+  store f64 %142, ptr %57
+  %143 = load f64, ptr %57
+  %144 = call f64 @trunc(f64 %143)
+  %145 = fptosi f64 %144 to i32
+  %146 = alloca i32
+  store i32 %145, ptr %146
+  %147 = load i32, ptr %146
+  %148 = add i32 48, %147
+  %149 = alloca i32
+  store i32 %148, ptr %149
+  %150 = load i32, ptr %26
+  %151 = load i32, ptr %137
+  %152 = add i32 %150, %151
+  %153 = load ptr, ptr %1
+  %154 = sext i32 %152 to i64
+  %155 = getelementptr i8, ptr %153, i64 0, i64 %154
+  %156 = load i32, ptr %149
+  %157 = trunc i32 %156 to i8
+  store i8 %157, ptr %155
+  %158 = load f64, ptr %57
+  %159 = load i32, ptr %146
+  %160 = sitofp i32 %159 to f64
+  %161 = fsub f64 %158, %160
+  store f64 %161, ptr %57
+  %162 = load i32, ptr %137
+  %163 = add i32 %162, 1
+  store i32 %163, ptr %137
   br label %whilecond16
 afterloop18:
-  %163 = load i32, ptr %26
-  %164 = load i32, ptr %3
-  %165 = add i32 %163, %164
-  store i32 %165, ptr %26
-  %166 = load i32, ptr %26
-  ret i32 %166
+  %164 = load i32, ptr %26
+  %165 = load i32, ptr %3
+  %166 = add i32 %164, %165
+  store i32 %166, ptr %26
+  %167 = load i32, ptr %26
+  ret i32 %167
 }
 
 define f64 @math.log(f64 %x) {
@@ -1146,31 +1158,32 @@ entry0:
   %2 = alloca i32
   store i32 %length, ptr %2
   %3 = alloca %string
-  %4 = load ptr, ptr %0
-  %5 = load i32, ptr %2
-  %6 = add i32 %5, 1
-  %7 = sext i32 %6 to i64
-  %8 = call ptr @malloc(i64 %7)
-  %9 = sext i32 %5 to i64
-  %10 = call ptr @memcpy(ptr %8, ptr %4, i64 %9)
-  %11 = getelementptr i8, ptr %8, i64 %9
-  store i8 0, ptr %11
-  %12 = call ptr @malloc(i64 32)
-  %13 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
-  %14 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 0
-  store ptr %8, ptr %14
-  %15 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 1
-  store i32 %5, ptr %15
-  %16 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 1
-  store i32 %5, ptr %16
-  %17 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 2
-  store i32 %5, ptr %17
-  %18 = getelementptr %string, ptr %3, i32 0, i32 0
-  store ptr %12, ptr %18
-  %19 = getelementptr %string, ptr %3, i32 0, i32 1
-  store i32 0, ptr %19
-  %20 = load %string, ptr %3
-  ret %string %20
+  %4 = load i32, ptr %2
+  %5 = getelementptr %array<byte>, ptr %0, i32 0, i32 0
+  %6 = load ptr, ptr %5
+  %7 = add i32 %4, 1
+  %8 = sext i32 %7 to i64
+  %9 = call ptr @malloc(i64 %8)
+  %10 = sext i32 %4 to i64
+  %11 = call ptr @memcpy(ptr %9, ptr %6, i64 %10)
+  %12 = getelementptr i8, ptr %9, i64 %10
+  store i8 0, ptr %12
+  %13 = call ptr @malloc(i64 32)
+  %14 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 0
+  %15 = getelementptr %_ManagedArray_byte, ptr %14, i32 0, i32 0
+  store ptr %9, ptr %15
+  %16 = getelementptr %_ManagedArray_byte, ptr %14, i32 0, i32 1
+  store i32 %4, ptr %16
+  %17 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 1
+  store i32 %4, ptr %17
+  %18 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 2
+  store i32 %4, ptr %18
+  %19 = getelementptr %string, ptr %3, i32 0, i32 0
+  store ptr %13, ptr %19
+  %20 = getelementptr %string, ptr %3, i32 0, i32 1
+  store i32 0, ptr %20
+  %21 = load %string, ptr %3
+  ret %string %21
 }
 
 define f64 @math.pow(f64 %base, f64 %exponent) {

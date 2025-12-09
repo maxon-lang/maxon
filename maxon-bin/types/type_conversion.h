@@ -165,6 +165,15 @@ class TypeConversion {
 	/// Create a static array type string from size and element type
 	static std::string makeStaticArrayType(int size, const std::string &elementType);
 
+	/// Create an array<T> struct type string from element type (the stdlib array struct)
+	static std::string makeArrayStructType(const std::string &elementType);
+
+	/// Check if a type is the array<T> stdlib struct type
+	static bool isArrayStructType(const std::string &type);
+
+	/// Extract element type from array<T> struct type
+	static std::string getArrayStructElementType(const std::string &type);
+
 	/// Convert array type to user-friendly display format (for error messages)
 	/// _ManagedArray<int> -> []int, _StaticArray<5, byte> -> [5]byte
 	static std::string arrayTypeToDisplayString(const std::string &arrayType);

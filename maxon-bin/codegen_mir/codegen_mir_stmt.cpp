@@ -99,9 +99,15 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 		// Special handling for struct literals in return statements
 		if (auto *structInitExpr = dynamic_cast<StructInitExprAST *>(retStmt->value.get())) {
-			mir::MIRType *structType = structTypes[structInitExpr->structName];
+			// Substitute "Self" with current receiver type
+			std::string structName = structInitExpr->structName;
+			if (structName == "Self" && !currentReceiverType.empty()) {
+				structName = currentReceiverType;
+			}
+
+			mir::MIRType *structType = structTypes[structName];
 			if (!structType) {
-				reportError("Unknown struct type: " + structInitExpr->structName,
+				reportError("Unknown struct type: " + structName,
 							structInitExpr->line, structInitExpr->column);
 			}
 
@@ -109,8 +115,8 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			mir::MIRValue *structAlloca = builder->createAlloca(structType, "ret.tmp");
 
 			// Initialize fields - iterate over all struct fields and use provided value or default
-			const auto &fields = structFields[structInitExpr->structName];
-			const auto &defaults = structFieldDefaults[structInitExpr->structName];
+			const auto &fields = structFields[structName];
+			const auto &defaults = structFieldDefaults[structName];
 
 			// Build a map of provided field values for quick lookup
 			std::map<std::string, const StructInitField *> providedFields;

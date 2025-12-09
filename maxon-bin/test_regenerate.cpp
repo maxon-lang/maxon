@@ -727,7 +727,13 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 			// Write preserved metadata as-is (from spec file)
 			outFile << metadata;
 			outFile.close();
-			statusMsg = "COMPILE ERROR";
+
+			// Include the actual compile error in verbose output for debugging
+			if (!compileError.empty()) {
+				statusMsg = "COMPILE ERROR:\n" + compileError;
+			} else {
+				statusMsg = "COMPILE ERROR";
+			}
 
 			std::filesystem::remove(tempSource);
 			std::filesystem::remove(tempOptLL);
@@ -894,11 +900,12 @@ int regenerateFragments(int verboseLevel) {
 		}
 
 		// Determine number of worker processes
+		// Use more workers to keep command lines shorter (Windows has ~32KB limit)
 		unsigned int numWorkers = std::thread::hardware_concurrency();
 		if (numWorkers == 0)
 			numWorkers = 4;
-		if (numWorkers > 8)
-			numWorkers = numWorkers / 2;
+		// Don't cap workers - use all available cores to reduce batch sizes
+		// Each worker gets fewer tests = shorter command lines
 
 		if (numWorkers > static_cast<unsigned int>(totalTests)) {
 			numWorkers = totalTests;
@@ -962,6 +969,11 @@ int regenerateFragments(int verboseLevel) {
 			std::vector<char> cmdLineBuffer(cmdLine.begin(), cmdLine.end());
 			cmdLineBuffer.push_back('\0');
 
+			// Windows has a 32767 character limit for command lines
+			if (cmdLine.size() > 32000) {
+				std::cerr << "Warning: Command line for worker " << i << " is " << cmdLine.size() << " characters (may be truncated)" << std::endl;
+			}
+
 			// Don't inherit handles (FALSE) to prevent handle contention
 			if (!CreateProcessA(NULL, cmdLineBuffer.data(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &processes[i])) {
 				std::cerr << "Error: Failed to create worker process " << i << std::endl;
@@ -970,11 +982,13 @@ int regenerateFragments(int verboseLevel) {
 			processHandles[i] = processes[i].hProcess;
 		}
 
-		// Wait for all processes to complete
+		// Wait for all processes to complete and collect exit codes
+		std::vector<DWORD> workerExitCodes(numWorkers, 0);
 		for (unsigned int i = 0; i < numWorkers; ++i) {
 			if (testGroups[i].empty())
 				continue;
 			WaitForSingleObject(processHandles[i], INFINITE);
+			GetExitCodeProcess(processHandles[i], &workerExitCodes[i]);
 			CloseHandle(processes[i].hProcess);
 			CloseHandle(processes[i].hThread);
 		}
@@ -1029,6 +1043,7 @@ int regenerateFragments(int verboseLevel) {
 		}
 
 		// Wait for all child processes to complete
+		std::vector<int> workerExitCodes(numWorkers, 0);
 		for (unsigned int i = 0; i < numWorkers; ++i) {
 			if (workerPids[i] == -1)
 				continue;
@@ -1036,8 +1051,14 @@ int regenerateFragments(int verboseLevel) {
 			int status;
 			waitpid(workerPids[i], &status, 0);
 
-			if (WIFEXITED(status) && WEXITSTATUS(status) != 0 && verboseLevel >= 1) {
-				std::cerr << "Warning: Worker " << i << " exited with code " << WEXITSTATUS(status) << std::endl;
+			if (WIFEXITED(status)) {
+				workerExitCodes[i] = WEXITSTATUS(status);
+				if (workerExitCodes[i] != 0 && verboseLevel >= 1) {
+					std::cerr << "Warning: Worker " << i << " exited with code " << workerExitCodes[i] << std::endl;
+				}
+			} else if (WIFSIGNALED(status)) {
+				workerExitCodes[i] = 128 + WTERMSIG(status); // Convention: 128 + signal number
+				std::cerr << "Warning: Worker " << i << " killed by signal " << WTERMSIG(status) << std::endl;
 			}
 		}
 #endif
@@ -1048,35 +1069,79 @@ int regenerateFragments(int verboseLevel) {
 		std::vector<std::pair<std::string, std::string>> failedFragments;
 
 		for (unsigned int i = 0; i < numWorkers; ++i) {
+			// Track which tests were processed by this worker
+			std::set<std::string> processedTests;
+
 			std::ifstream inFile(outputFiles[i]);
-			if (!inFile)
-				continue;
-
-			std::string line;
-			while (std::getline(inFile, line)) {
-				size_t pos = line.find('|');
-				if (pos == std::string::npos)
-					continue;
-
-				std::string testName = line.substr(0, pos);
-				std::string status = line.substr(pos + 1);
-
-				// Convert escaped newlines back
-				std::replace(status.begin(), status.end(), '\t', '\n');
-
+			if (!inFile) {
 				if (verboseLevel >= 1) {
-					std::cout << "  " << testName << "... " << status << std::endl;
+					std::cerr << "Warning: Could not open output file for worker " << i << ": " << outputFiles[i] << std::endl;
+				}
+			} else {
+				std::string line;
+				while (std::getline(inFile, line)) {
+					size_t pos = line.find('|');
+					if (pos == std::string::npos)
+						continue;
+
+					std::string testName = line.substr(0, pos);
+					std::string status = line.substr(pos + 1);
+					processedTests.insert(testName);
+
+					// Convert escaped newlines back
+					std::replace(status.begin(), status.end(), '\t', '\n');
+
+					if (verboseLevel >= 1) {
+						std::cout << "  " << testName << "... " << status << std::endl;
+					}
+
+					if (status == "OK" || status.rfind("COMPILE ERROR", 0) == 0) {
+						successCount++;
+					} else {
+						failCount++;
+						failedFragments.emplace_back(testName, status);
+					}
+				}
+				inFile.close();
+				std::filesystem::remove(outputFiles[i]);
+			}
+
+			// Check for missing tests (worker crashed before completing)
+			size_t expectedCount = testGroups[i].size();
+			size_t actualCount = processedTests.size();
+
+			if (actualCount < expectedCount) {
+				// Find which test caused the crash (first unprocessed test)
+				std::string crashedTest;
+				for (const auto &testFile : testGroups[i]) {
+					std::filesystem::path p(testFile);
+					std::string testName = p.stem().string();
+					if (processedTests.find(testName) == processedTests.end()) {
+						if (crashedTest.empty()) {
+							crashedTest = testName;
+						}
+						// Mark all unprocessed tests as crashed
+						failCount++;
+						std::string crashMsg = "COMPILER CRASH (worker died";
+#ifdef _WIN32
+						crashMsg += ", exit code " + std::to_string(workerExitCodes[i]);
+#else
+						crashMsg += ", exit code " + std::to_string(workerExitCodes[i]);
+#endif
+						crashMsg += ")";
+						failedFragments.emplace_back(testName, crashMsg);
+
+						if (verboseLevel >= 1) {
+							std::cout << "  " << testName << "... " << crashMsg << std::endl;
+						}
+					}
 				}
 
-				if (status == "OK" || status == "COMPILE ERROR") {
-					successCount++;
-				} else {
-					failCount++;
-					failedFragments.emplace_back(testName, status);
-				}
+				std::cerr << "Warning: Worker " << i << " crashed while processing '" << crashedTest
+						  << "' (" << actualCount << "/" << expectedCount << " tests completed)" << std::endl;
+			} else if (verboseLevel >= 2) {
+				std::cerr << "Worker " << i << " produced " << actualCount << " results (expected " << expectedCount << ")" << std::endl;
 			}
-			inFile.close();
-			std::filesystem::remove(outputFiles[i]);
 		}
 
 		// Print failed fragments

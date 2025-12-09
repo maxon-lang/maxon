@@ -161,6 +161,11 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 	// Helper to substitute type parameters
 	// Also substitutes the template receiver type (e.g., "map" -> "map<string,int>")
 	auto substituteType = [&](const std::string &type) -> std::string {
+		// Handle Self type - substitute with the specialized receiver type
+		if (type == "Self") {
+			return specializedReceiverType;
+		}
+
 		// Substitute template receiver type with specialized type
 		// Extract the base template name from specializedReceiverType (e.g., "map<string,int>" -> "map")
 		std::string baseTemplateName = specializedReceiverType;
@@ -176,12 +181,44 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 		if (it != typeBindings.end()) {
 			return it->second;
 		}
+
+		// Handle optional types: "Element or nil" -> "int or nil"
+		if (maxon::TypeConversion::isOptionalType(type)) {
+			std::string baseType = maxon::TypeConversion::unwrapOptionalType(type);
+			auto baseIt = typeBindings.find(baseType);
+			if (baseIt != typeBindings.end()) {
+				return maxon::TypeConversion::makeOptionalType(baseIt->second);
+			}
+			// Check if Self is the base type
+			if (baseType == "Self") {
+				return maxon::TypeConversion::makeOptionalType(specializedReceiverType);
+			}
+		}
+
+		// Handle opaque _ManagedArray type (without angle brackets)
+		// When the array struct is instantiated, _ManagedArray becomes _ManagedArray<Element>
+		if (type == "_ManagedArray") {
+			auto elemIt = typeBindings.find("Element");
+			if (elemIt != typeBindings.end()) {
+				return maxon::TypeConversion::makeManagedArrayType(elemIt->second);
+			}
+		}
+
 		// Handle array types: _ManagedArray<KeyType> -> _ManagedArray<string>
 		if (maxon::TypeConversion::isManagedArrayType(type)) {
 			std::string elemType = maxon::TypeConversion::getArrayElementType(type);
 			auto elemIt = typeBindings.find(elemType);
 			if (elemIt != typeBindings.end()) {
 				return maxon::TypeConversion::makeManagedArrayType(elemIt->second);
+			}
+		}
+
+		// Handle array<T> struct types: array<Element> -> array<int>
+		if (maxon::TypeConversion::isArrayStructType(type)) {
+			std::string elemType = maxon::TypeConversion::getArrayStructElementType(type);
+			auto elemIt = typeBindings.find(elemType);
+			if (elemIt != typeBindings.end()) {
+				return maxon::TypeConversion::makeArrayStructType(elemIt->second);
 			}
 		}
 		return type;

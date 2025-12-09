@@ -433,7 +433,36 @@ std::string TypeConversion::makeStaticArrayType(int size, const std::string &ele
 	return "_StaticArray<" + std::to_string(size) + ", " + elementType + ">";
 }
 
+std::string TypeConversion::makeArrayStructType(const std::string &elementType) {
+	return "array<" + elementType + ">";
+}
+
+bool TypeConversion::isArrayStructType(const std::string &type) {
+	return type.rfind("array<", 0) == 0 && type.back() == '>';
+}
+
+std::string TypeConversion::getArrayStructElementType(const std::string &type) {
+	if (!isArrayStructType(type)) {
+		return type;
+	}
+	// Extract T from array<T>
+	size_t start = 6; // length of "array<"
+	size_t end = type.rfind('>');
+	if (end != std::string::npos && end > start) {
+		return type.substr(start, end - start);
+	}
+	return type;
+}
+
 std::string TypeConversion::arrayTypeToDisplayString(const std::string &arrayType) {
+	// Handle array<T> struct type (stdlib array)
+	if (isArrayStructType(arrayType)) {
+		std::string elemType = getArrayStructElementType(arrayType);
+		// Recursively convert nested array types
+		std::string elemDisplay = arrayTypeToDisplayString(elemType);
+		return "array of " + elemDisplay;
+	}
+
 	if (!isArrayType(arrayType)) {
 		return arrayType;
 	}

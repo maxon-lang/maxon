@@ -237,7 +237,7 @@ end 'main'`;
 	test('Should provide array member completions after dot', async function () {
 		const validContent = `function main() int
     var arr = [1, 2, 3, 4, 5]
-    return arr.length
+    return arr.count()
 end 'main'`;
 
 		const incompleteContent = `function main() int
@@ -255,14 +255,14 @@ end 'main'`;
 		assert.ok(completions, 'Completions should be returned');
 
 		// Check for array properties
-		const hasLength = completions.items.some(item => item.label === 'length');
-		assert.ok(hasLength, 'Should include "length" property for array');
+		const hasCount = completions.items.some(item => item.label === 'count');
+		assert.ok(hasCount, 'Should include "count" method for array');
 	});
 
-	test('Array length should have Property kind and int detail', async function () {
+	test('Array count should have Method kind and int detail', async function () {
 		const validContent = `function main() int
     var arr = [1, 2, 3, 4, 5]
-    return arr.length
+    return arr.count()
 end 'main'`;
 
 		const incompleteContent = `function main() int
@@ -277,11 +277,11 @@ end 'main'`;
 			new vscode.Position(2, 8)
 		);
 
-		const lengthItem = completions.items.find(item => item.label === 'length');
-		assert.ok(lengthItem, 'length should be in completions');
-		assert.strictEqual(lengthItem.kind, vscode.CompletionItemKind.Property, 'length should be Property kind');
-		assert.ok(lengthItem.detail, 'length should have detail');
-		assert.ok((lengthItem.detail as string).includes('int'), 'length detail should include "int"');
+		const countItem = completions.items.find(item => item.label === 'count');
+		assert.ok(countItem, 'count should be in completions');
+		assert.strictEqual(countItem.kind, vscode.CompletionItemKind.Method, 'count should be Method kind');
+		assert.ok(countItem.detail, 'count should have detail');
+		assert.ok((countItem.detail as string).includes('int'), 'count detail should include "int"');
 	});
 
 	test('Should provide struct field completions after dot', async function () {

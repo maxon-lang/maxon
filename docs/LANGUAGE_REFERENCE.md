@@ -241,7 +241,6 @@ end 'process'
 
 **Array Properties**
 - Zero-based indexing: `array[0]`, `array[1]`, ...
-- `.length` property returns array size
 - Heap-allocated with automatic scope-based cleanup
 - No bounds checking (undefined behavior for out-of-bounds access)
 
@@ -867,7 +866,7 @@ Override precedence:
 ```maxon
 var arr = [1, 2, 3, 4, 5]
 var first = arr[0]
-var last = arr[arr.length - 1]
+var last = arr[arr.count() - 1]
 ```
 
 ---
@@ -1293,7 +1292,7 @@ end 'forever'
 ### Array Iteration
 ```maxon
 var numbers = [1, 2, 3, 4, 5]
-for i in range(0, numbers.length) 'iter'
+for i in range(0, numbers.count()) 'iter'
     printInt(numbers[i])
 end 'iter'
 ```
@@ -1431,9 +1430,9 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
    function internal() int      // Private helper
    ```
 
-9. **Check `.length` before array access**:
+9. **Check `.count` before array access**:
    ```maxon
-   if index < arr.length 'safe'
+   if index < arr.count() 'safe'
        var val = arr[index]
    end 'safe'
    ```

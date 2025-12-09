@@ -40,6 +40,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 	} else if (auto arrayLiteral = dynamic_cast<ArrayLiteralExprAST *>(expr)) {
 		// Array literal: [val1, val2, ...] form - value-initialized array
+		// Returns array<T> (the stdlib struct type)
 		if (arrayLiteral->values.empty()) {
 			addError("Array literal cannot be empty",
 					 expr->line, expr->column);
@@ -59,18 +60,32 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			}
 		}
 
-		return maxon::TypeConversion::makeStaticArrayType(static_cast<int>(arrayLiteral->values.size()), elemType);
+		// Track the base array struct as undefined for auto-import
+		// This triggers loading array.maxon so the generic template is available for monomorphization
+		if (structs.find("array") == structs.end()) {
+			undefinedStructs.insert("array");
+		}
+
+		// Return array<T> struct type - methods will be resolved through the stdlib array struct
+		return maxon::TypeConversion::makeArrayStructType(elemType);
 
 	} else if (auto sizedArray = dynamic_cast<SizedArrayExprAST *>(expr)) {
 		// Sized array: array of N T or array of T or array of expr T
+		// Returns array<T> (the stdlib struct type)
 
 		// If there's a size expression, analyze it to mark variables as used
 		if (sizedArray->hasVariableSize()) {
 			analyzeExpression(sizedArray->sizeExpr.get());
 		}
 
-		// Return managed array type for all cases
-		return maxon::TypeConversion::makeManagedArrayType(sizedArray->elementType);
+		// Track the base array struct as undefined for auto-import
+		// This triggers loading array.maxon so the generic template is available for monomorphization
+		if (structs.find("array") == structs.end()) {
+			undefinedStructs.insert("array");
+		}
+
+		// Return array<T> struct type - methods will be resolved through the stdlib array struct
+		return maxon::TypeConversion::makeArrayStructType(sizedArray->elementType);
 
 	} else if (auto mapLiteral = dynamic_cast<MapLiteralExprAST *>(expr)) {
 		// Map literal: map from K to V
@@ -144,8 +159,11 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 		// Extract element type from array type using TypeConversion utility
 		std::string elemType;
-		if (maxon::TypeConversion::isManagedArrayType(arrayType)) {
-			// Managed array type: _ManagedArray<T> or array<T>
+		if (maxon::TypeConversion::isArrayStructType(arrayType)) {
+			// array<T> struct type
+			elemType = maxon::TypeConversion::getArrayStructElementType(arrayType);
+		} else if (maxon::TypeConversion::isManagedArrayType(arrayType)) {
+			// Managed array type: _ManagedArray<T>
 			elemType = maxon::TypeConversion::getArrayElementType(arrayType);
 		} else if (maxon::TypeConversion::isStaticArrayType(arrayType)) {
 			// Static array type: _StaticArray<N, T>
@@ -566,29 +584,57 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			return info ? info->returnType : "float";
 		}
 
-		// Check for array intrinsics: push(arr, val), pop(arr)
+		// Check for array method calls: push(arr, val), pop(arr)
 		// These are transformed from arr.push(val), arr.pop() by the parser
+		// Now routed to the stdlib array<T> struct methods
 		if (callExpr->callee == "push") {
 			if (callExpr->args.size() != 2) {
 				addError("push() requires exactly 2 arguments: array and value",
 						 expr->line, expr->column);
-				return "void";
+				return "error";
 			}
-			// First arg should be a dynamic array
+			// First arg should be an array<T> (dynamic array)
 			std::string arrType = analyzeExpression(callExpr->args[0].get());
-			if (!maxon::TypeConversion::isManagedArrayType(arrType)) {
-				addError("push() can only be used on dynamic arrays, not " + maxon::TypeConversion::arrayTypeToDisplayString(arrType),
+
+			// Check for immutable (let) arrays - they can't be modified with push
+			if (auto *arrVar = dynamic_cast<VariableExprAST *>(callExpr->args[0].get())) {
+				auto varInfo = lookupVariable(arrVar->name);
+				if (varInfo && varInfo->isImmutable) {
+					// Get a user-friendly type representation
+					std::string friendlyType = maxon::TypeConversion::arrayTypeToDisplayString(arrType);
+					addError("push() can only be used on dynamic arrays, not " + friendlyType,
+							 expr->line, expr->column);
+					return "error";
+				}
+			}
+
+			// Check for static arrays (declared with 'let' or fixed-size)
+			if (maxon::TypeConversion::isStaticArrayType(arrType)) {
+				// Convert internal type to user-friendly format
+				// _StaticArray<3, int> -> "array of 3 int"
+				std::string elemType = maxon::TypeConversion::getArrayElementType(arrType);
+				int size = maxon::TypeConversion::getStaticArraySize(arrType);
+				std::string friendlyType = "array of " + std::to_string(size) + " " + elemType;
+				addError("push() can only be used on dynamic arrays, not " + friendlyType,
 						 expr->line, expr->column);
-				return "void";
+				return "error";
+			}
+			if (!maxon::TypeConversion::isArrayStructType(arrType)) {
+				addError("push() can only be used on arrays, not " + arrType,
+						 expr->line, expr->column);
+				return "error";
 			}
 			// Second arg should match element type
-			std::string elemType = maxon::TypeConversion::getArrayElementType(arrType);
+			std::string elemType = maxon::TypeConversion::getArrayStructElementType(arrType);
 			std::string valType = analyzeExpression(callExpr->args[1].get());
-			if (valType != elemType && valType != "error") {
+			if (!typesMatch(elemType, valType) && valType != "error") {
 				addError("push() value type " + valType + " doesn't match array element type " + elemType,
 						 expr->line, expr->column);
 			}
-			return "void";
+			// Set resolvedCallee to route to the array<T>.push method
+			callExpr->resolvedCallee = arrType + ".push";
+			// push() returns Self (the array type) for method chaining
+			return arrType;
 		}
 
 		if (callExpr->callee == "pop") {
@@ -597,63 +643,41 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 						 expr->line, expr->column);
 				return "error";
 			}
-			// Arg should be a dynamic array
+			// Arg should be an array<T> (dynamic array)
 			std::string arrType = analyzeExpression(callExpr->args[0].get());
-			if (!maxon::TypeConversion::isManagedArrayType(arrType)) {
-				addError("pop() can only be used on dynamic arrays, not " + maxon::TypeConversion::arrayTypeToDisplayString(arrType),
-						 expr->line, expr->column);
-				return "error";
-			}
-			// Return element type
-			return maxon::TypeConversion::getArrayElementType(arrType);
-		}
 
-		// Check for map(arr, transform) intrinsic
-		// Transforms each element using the closure and returns a new array
-		if (callExpr->callee == "map") {
-			if (callExpr->args.size() != 2) {
-				addError("map() requires exactly 2 arguments: array and transform function",
-						 expr->line, expr->column);
-				return "error";
-			}
-			// First arg should be an array
-			std::string arrType = analyzeExpression(callExpr->args[0].get());
-			if (!maxon::TypeConversion::isArrayType(arrType)) {
-				addError("map() first argument must be an array, not " + arrType,
-						 expr->line, expr->column);
-				return "error";
-			}
-			std::string elemType = maxon::TypeConversion::getArrayElementType(arrType);
-
-			// Second arg should be a function type: fn(ElemType)->RetType
-			std::string funcType = analyzeExpression(callExpr->args[1].get());
-			if (funcType.rfind("fn(", 0) != 0) {
-				addError("map() second argument must be a function, not " + funcType,
-						 expr->line, expr->column);
-				return "error";
+			// Check for immutable (let) arrays - they can't be modified with pop
+			if (auto *arrVar = dynamic_cast<VariableExprAST *>(callExpr->args[0].get())) {
+				auto varInfo = lookupVariable(arrVar->name);
+				if (varInfo && varInfo->isImmutable) {
+					// Get a user-friendly type representation
+					std::string friendlyType = maxon::TypeConversion::arrayTypeToDisplayString(arrType);
+					addError("pop() can only be used on dynamic arrays, not " + friendlyType,
+							 expr->line, expr->column);
+					return "error";
+				}
 			}
 
-			// Parse function type: fn(ParamType)->ReturnType
-			// Find the parameter and return types
-			size_t arrowPos = funcType.find(")->");
-			if (arrowPos == std::string::npos) {
-				addError("Invalid function type for map(): " + funcType,
+			// Check for static arrays (declared with 'let' or fixed-size)
+			if (maxon::TypeConversion::isStaticArrayType(arrType)) {
+				// Convert internal type to user-friendly format
+				std::string elemType = maxon::TypeConversion::getArrayElementType(arrType);
+				int size = maxon::TypeConversion::getStaticArraySize(arrType);
+				std::string friendlyType = "array of " + std::to_string(size) + " " + elemType;
+				addError("pop() can only be used on dynamic arrays, not " + friendlyType,
 						 expr->line, expr->column);
 				return "error";
 			}
-			std::string paramPart = funcType.substr(3, arrowPos - 3); // extract between "fn(" and ")->"
-			std::string returnType = funcType.substr(arrowPos + 3);	  // extract after ")->"
-
-			// Check that function takes one parameter of the element type
-			if (paramPart != elemType) {
-				addError("map() transform function parameter type '" + paramPart +
-							 "' doesn't match array element type '" + elemType + "'",
+			if (!maxon::TypeConversion::isArrayStructType(arrType)) {
+				addError("pop() can only be used on arrays, not " + arrType,
 						 expr->line, expr->column);
 				return "error";
 			}
-
-			// Return a dynamic array of the function's return type
-			return maxon::TypeConversion::makeManagedArrayType(returnType);
+			std::string elemType = maxon::TypeConversion::getArrayStructElementType(arrType);
+			// Set resolvedCallee to route to the array<T>.pop method
+			callExpr->resolvedCallee = arrType + ".pop";
+			// pop() returns Element or nil
+			return maxon::TypeConversion::makeOptionalType(elemType);
 		}
 
 		// Handle compiler intrinsics using the registry
@@ -1135,6 +1159,10 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		if (maxon::TypeConversion::isArrayType(arrayType)) {
 			return maxon::TypeConversion::getArrayElementType(arrayType);
 		}
+		// Handle array<T> struct type
+		if (maxon::TypeConversion::isArrayStructType(arrayType)) {
+			return maxon::TypeConversion::getArrayStructElementType(arrayType);
+		}
 		// Fallback if type parsing fails
 		return "int";
 
@@ -1246,7 +1274,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		}
 
 		// Support array member access using shared type registry
-		if (maxon::TypeConversion::isArrayType(objectType)) {
+		if (maxon::TypeConversion::isArrayType(objectType) || maxon::TypeConversion::isArrayStructType(objectType)) {
 			std::string memberType = getArrayMemberType(memberAccessExpr->memberName);
 			if (!memberType.empty()) {
 				return memberType;

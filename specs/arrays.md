@@ -15,7 +15,7 @@ Arrays come in two forms: **static** (stack-allocated, immutable) and **dynamic*
 - Stack-allocated, no heap allocation
 - Immutable: elements cannot be modified after creation
 - No automatic cleanup needed (stack memory)
-- `.length` is a compile-time constant
+- `.count()` returns the length (compile-time constant)
 
 **Dynamic Arrays (var):**
 - Declared with `var` using value literals: `var arr = [1, 2, 3]`
@@ -24,7 +24,7 @@ Arrays come in two forms: **static** (stack-allocated, immutable) and **dynamic*
 - Mutable: elements can be modified
 - Growable via `push()` method
 - Automatic deallocation at end of scope
-- `.length` and `.capacity` properties
+- `.count()` and `.capacity()` methods
 
 **Type System:**
 - Static: `_StaticArray<N,T>` internally, displayed as `array of N T` (e.g., `array of 3 int`)
@@ -70,7 +70,7 @@ let x = arr[0]          // Read element: OK
 **Properties:**
 - Type is inferred from values: `[1, 2, 3]` has type `array of 3 int`
 - Elements cannot be modified after creation
-- `.length` is a compile-time constant
+- `.count()` returns the length (compile-time constant)
 - No heap allocation, very efficient
 
 ## Dynamic Arrays
@@ -86,8 +86,8 @@ var empty = array of int  // Empty dynamic array, capacity 0
 **Properties:**
 - Mutable: elements can be read and written
 - Growable: use `.push()` to add elements
-- `.length` returns current number of elements
-- `.capacity` returns allocated capacity
+- `.count()` returns current number of elements
+- `.capacity()` returns allocated capacity
 - Automatic cleanup at end of scope
 
 **Methods (via stdlib):**
@@ -95,7 +95,7 @@ var empty = array of int  // Empty dynamic array, capacity 0
 var arr = [1, 2, 3]
 arr.push(4)             // Add element, grow if needed
 var last = arr.pop()    // Remove and return last element
-var cap = arr.capacity  // Get capacity
+var cap = arr.capacity()  // Get capacity
 arr.reserve(100)        // Preallocate space
 ```
 
@@ -116,7 +116,7 @@ return process(data)    // OK: array of 3 int matches array of 3 int
 function sum(arr array of int) int
     var total = 0
     var i = 0
-    while i < arr.length 'loop'
+    while i < arr.count() 'loop'
         total = total + arr[i]
         i = i + 1
     end 'loop'
@@ -185,7 +185,9 @@ function main() int
     arr.push(4)
     arr.push(5)
     var count_after_push = arr.count()
-    var popped = arr.pop()
+    var popped = arr.pop() else 'unwrap'
+        popped = 0
+    end 'unwrap'
     var count_after_pop = arr.count()
     return count_after_push * 100 + popped * 10 + count_after_pop
 end 'main'
@@ -212,7 +214,7 @@ end 'main'
 ```maxon
 function main() int
     var arr = array of 5 int
-    return arr.length
+    return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -313,7 +315,7 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 4, column 5
-push() can only be used on dynamic arrays, not array of 3 int
+push() can only be used on dynamic arrays, not array of int
 
   4 |     arr.push(4)
     |     ^
@@ -329,7 +331,7 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 4, column 5
-pop() can only be used on dynamic arrays, not array of 3 int
+pop() can only be used on dynamic arrays, not array of int
 
   4 |     arr.pop()
     |     ^

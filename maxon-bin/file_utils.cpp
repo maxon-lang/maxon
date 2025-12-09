@@ -182,7 +182,8 @@ std::vector<std::string> extractStructNames(const std::string &filePath) {
 
 		for (size_t i = 0; i < tokens.size(); ++i) {
 			if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "struct" && i + 1 < tokens.size()) {
-				if (tokens[i + 1].type == TokenType::IDENTIFIER) {
+				// Accept both IDENTIFIER and KEYWORD as struct names (e.g., "array" is a keyword but valid struct name)
+				if (tokens[i + 1].type == TokenType::IDENTIFIER || tokens[i + 1].type == TokenType::KEYWORD) {
 					structNames.push_back(tokens[i + 1].value);
 				}
 			}

@@ -937,25 +937,9 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 		}
 	}
 
-	// Check if this is an array type
-	if (maxon::TypeConversion::isArrayType(typeName)) {
-		// Get built-in array members
-		auto arrayMembers = getArrayTypeMembers();
-		for (const auto &member : arrayMembers) {
-			if (prefix.empty() || matchesPrefix(member.name, prefix)) {
-				CompletionItem item;
-				item.label = member.name;
-				item.kind = member.isMethod ? CompletionItemKind::Method : CompletionItemKind::Property;
-				item.detail = member.returnType;
-				item.documentation = member.documentation;
-				if (member.isMethod) {
-					item.insertText = member.name + "()";
-					item.insertTextFormat = InsertTextFormat::PlainText;
-				}
-				items.push_back(std::move(item));
-			}
-		}
-	}
+	// Check if this is an array type (internal format or display format)
+	// Note: Built-in array members like 'length' were removed - use stdlib methods like count() instead
+	// The isArrayType/isArrayStructType check is kept for potential future use but currently adds no members
 
 	// Look up the struct in cache for user-defined types
 	if (cache) {
@@ -1028,9 +1012,15 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 			if (!funcInfo.parameters.empty()) {
 				const auto &firstParam = funcInfo.parameters[0];
 				if (firstParam.name == "self" && firstParam.type == typeName) {
-					if (prefix.empty() || matchesPrefix(name, prefix)) {
+					// Extract just the method name if the function name is qualified (e.g., "array<int>.count" -> "count")
+					std::string methodName = name;
+					size_t dotPos = name.rfind('.');
+					if (dotPos != std::string::npos) {
+						methodName = name.substr(dotPos + 1);
+					}
+					if (prefix.empty() || matchesPrefix(methodName, prefix)) {
 						std::string sig = buildFunctionSignature(funcInfo);
-						items.push_back(buildMethodItem(name, sig));
+						items.push_back(buildMethodItem(methodName, sig));
 					}
 				}
 			}

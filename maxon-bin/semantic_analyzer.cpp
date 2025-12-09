@@ -699,6 +699,15 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 	for (const auto &param : func->parameters) {
 		logTrace("  Parameter: " + param.name + " : " + param.type);
 		declareVariable(param.name, param.type, false, param.line, param.column, true);
+
+		// Register array methods for array-typed parameters
+		if (maxon::TypeConversion::isArrayStructType(param.type)) {
+			std::string elemType = maxon::TypeConversion::getArrayStructElementType(param.type);
+			registerArrayMethods(param.type, elemType);
+		} else if (maxon::TypeConversion::isManagedArrayType(param.type)) {
+			std::string elemType = maxon::TypeConversion::getArrayElementType(param.type);
+			registerArrayMethods(param.type, elemType);
+		}
 	}
 
 	// Analyze function body
@@ -894,7 +903,12 @@ bool SemanticAnalyzer::isIterableType(const std::string &type, ExprAST *iterable
 		return true;
 	}
 
-	// Array types are iterable: _ManagedArray<T> or _StaticArray<N, T>
+	// array<T> struct type is iterable (implements Iterable interface)
+	if (maxon::TypeConversion::isArrayStructType(type)) {
+		return true;
+	}
+
+	// Internal array types are iterable: _ManagedArray<T> or _StaticArray<N, T>
 	if (maxon::TypeConversion::isArrayType(type)) {
 		return true;
 	}
@@ -1279,6 +1293,8 @@ void SemanticAnalyzer::registerArrayMethods(const std::string &arrayType, const 
 	std::string optionalElemType = maxon::TypeConversion::makeOptionalType(elemType);
 
 	// Register array methods with qualified names for proper method resolution
+	// All methods from stdlib/collections/array.maxon
+
 	// Collection interface methods:
 	// count() -> int
 	functions.emplace(arrayType + ".count", FunctionInfo(arrayType + ".count", "int", {FunctionParameter("self", arrayType)}));
@@ -1288,6 +1304,38 @@ void SemanticAnalyzer::registerArrayMethods(const std::string &arrayType, const 
 
 	// set(index, value) -> Self (returns array type for chaining)
 	functions.emplace(arrayType + ".set", FunctionInfo(arrayType + ".set", arrayType, {FunctionParameter("self", arrayType), FunctionParameter("index", "int"), FunctionParameter("value", elemType)}));
+
+	// Mutating operations:
+	// push(value) -> Self
+	functions.emplace(arrayType + ".push", FunctionInfo(arrayType + ".push", arrayType, {FunctionParameter("self", arrayType), FunctionParameter("value", elemType)}));
+
+	// pop() -> Element or nil
+	functions.emplace(arrayType + ".pop", FunctionInfo(arrayType + ".pop", optionalElemType, {FunctionParameter("self", arrayType)}));
+
+	// insert(at, value) -> Self
+	functions.emplace(arrayType + ".insert", FunctionInfo(arrayType + ".insert", arrayType, {FunctionParameter("self", arrayType), FunctionParameter("at", "int"), FunctionParameter("value", elemType)}));
+
+	// remove(at) -> Element or nil
+	functions.emplace(arrayType + ".remove", FunctionInfo(arrayType + ".remove", optionalElemType, {FunctionParameter("self", arrayType), FunctionParameter("at", "int")}));
+
+	// clear() -> Self
+	functions.emplace(arrayType + ".clear", FunctionInfo(arrayType + ".clear", arrayType, {FunctionParameter("self", arrayType)}));
+
+	// Properties:
+	// capacity() -> int
+	functions.emplace(arrayType + ".capacity", FunctionInfo(arrayType + ".capacity", "int", {FunctionParameter("self", arrayType)}));
+
+	// isEmpty() -> bool
+	functions.emplace(arrayType + ".isEmpty", FunctionInfo(arrayType + ".isEmpty", "bool", {FunctionParameter("self", arrayType)}));
+
+	// first() -> Element or nil
+	functions.emplace(arrayType + ".first", FunctionInfo(arrayType + ".first", optionalElemType, {FunctionParameter("self", arrayType)}));
+
+	// last() -> Element or nil
+	functions.emplace(arrayType + ".last", FunctionInfo(arrayType + ".last", optionalElemType, {FunctionParameter("self", arrayType)}));
+
+	// reserve(minCapacity) -> Self
+	functions.emplace(arrayType + ".reserve", FunctionInfo(arrayType + ".reserve", arrayType, {FunctionParameter("self", arrayType), FunctionParameter("minCapacity", "int")}));
 
 	// map(transform) -> Self - handled as intrinsic, but register for type checking
 	std::string funcType = "fn(" + elemType + ")->" + elemType;

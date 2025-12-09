@@ -34,18 +34,22 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			varDecl->type = actualType;
 		}
 
-		// For var arrays, convert static array type to dynamic managed array type
-		// var arrays are always dynamic (mutable, growable)
-		if (maxon::TypeConversion::isStaticArrayType(actualType)) {
+		// For array<T> struct types, register array methods with the element type
+		if (maxon::TypeConversion::isArrayStructType(actualType)) {
+			std::string elemType = maxon::TypeConversion::getArrayStructElementType(actualType);
+			// Register methods for the array<T> struct type
+			registerArrayMethods(actualType, elemType);
+		}
+		// Legacy: For managed arrays, register array methods with the element type
+		else if (maxon::TypeConversion::isManagedArrayType(actualType)) {
+			std::string elemType = maxon::TypeConversion::getArrayElementType(actualType);
+			registerArrayMethods(actualType, elemType);
+		}
+		// Legacy: For var arrays with static array type, convert to dynamic managed array type
+		else if (maxon::TypeConversion::isStaticArrayType(actualType)) {
 			// Convert _StaticArray<N, T> to _ManagedArray<T> for var arrays
 			std::string elemType = maxon::TypeConversion::getArrayElementType(actualType);
 			actualType = maxon::TypeConversion::makeManagedArrayType(elemType);
-		}
-
-		// For managed arrays, register array methods with the element type
-		if (maxon::TypeConversion::isManagedArrayType(actualType)) {
-			std::string elemType = maxon::TypeConversion::getArrayElementType(actualType);
-			// Register methods for the actual internal type (_ManagedArray<T>)
 			registerArrayMethods(actualType, elemType);
 		}
 
@@ -573,8 +577,11 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		// Declare loop variable (immutable, like 'let')
 		// Infer type from iterable: array element type, or Element associated type for Iterable structs
 		std::string loopVarType = "int"; // Default for range() iteration
-		if (maxon::TypeConversion::isArrayType(iterableType)) {
-			// Array type - extract element type
+		if (maxon::TypeConversion::isArrayStructType(iterableType)) {
+			// array<T> struct type - extract element type
+			loopVarType = maxon::TypeConversion::getArrayStructElementType(iterableType);
+		} else if (maxon::TypeConversion::isArrayType(iterableType)) {
+			// Internal array types (_ManagedArray<T>, _StaticArray<N, T>) - extract element type
 			loopVarType = maxon::TypeConversion::getArrayElementType(iterableType);
 		} else {
 			// Check if this is a struct type with an Element associated type

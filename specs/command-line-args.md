@@ -66,7 +66,7 @@ end 'main'
 
 - `args[0]` - The program name or path (always present)
 - `args[1]`, `args[2]`, etc. - User-provided arguments
-- `args.length` - Total number of arguments (including program name)
+- `args.count()` - Total number of arguments (including program name)
 
 ## Example
 
@@ -75,7 +75,7 @@ function main(args array of string) int
     print("Program: ")
     print(args[0])
     
-    if args.length > 1 'has-args'
+    if args.count() > 1 'has-args'
         print("First argument: ")
         print(args[1])
     end 'has-args'
@@ -113,8 +113,8 @@ end 'main'
 <!-- test: args-length-no-extra -->
 ```maxon
 function main(args array of string) int
-    // Without extra args, length should be 1 (just program name)
-    return args.length
+    // Without extra args, count should be 1 (just program name)
+    return args.count()
 end 'main'
 ```
 ```exitcode
@@ -125,7 +125,7 @@ end 'main'
 <!-- Args: hello -->
 ```maxon
 function main(args array of string) int
-    return args.length
+    return args.count()
 end 'main'
 ```
 ```exitcode
@@ -136,7 +136,7 @@ end 'main'
 <!-- Args: one two three -->
 ```maxon
 function main(args array of string) int
-    return args.length
+    return args.count()
 end 'main'
 ```
 ```exitcode
@@ -182,7 +182,7 @@ baz
 ```maxon
 function main(args array of string) int
     var i = 1
-    while i < args.length 'loop'
+    while i < args.count() 'loop'
         print(args[i])
         i = i + 1
     end 'loop'
@@ -203,7 +203,7 @@ c
 ```maxon
 function main(args array of string) int
     // Args are strings, just verify we can access them
-    if args.length == 2 'check'
+    if args.count() == 2 'check'
         print(args[1])
         return 0
     end 'check'

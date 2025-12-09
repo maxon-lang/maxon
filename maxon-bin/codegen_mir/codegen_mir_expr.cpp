@@ -765,7 +765,11 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 						}
 					}
 
-					if (fieldIndex >= 0 && maxon::TypeConversion::isArrayType(fieldType)) {
+					// Check for both _ManagedArray<T> and array<T> struct types
+					bool isArrayField = maxon::TypeConversion::isArrayType(fieldType) ||
+										maxon::TypeConversion::isArrayStructType(fieldType);
+
+					if (fieldIndex >= 0 && isArrayField) {
 						// Found array field - generate access through implicit 'self' parameter
 						mir::MIRValue *selfAlloca = namedValues["self"];
 						if (selfAlloca) {
@@ -780,12 +784,20 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 							mir::MIRType *structType = structTypes[currentReceiverType];
 							mir::MIRValue *fieldPtr = builder->createStructGEP(structType, selfPtr, fieldIndex, arrayIndexExpr->arrayName + ".ptr");
 
-							// Determine element type
-							std::string elementTypeStr = maxon::TypeConversion::getArrayElementType(fieldType);
+							// Determine element type based on field type format
+							std::string elementTypeStr;
 							bool isUnsizedArray = maxon::TypeConversion::isManagedArrayType(fieldType);
+							bool isArrayStruct = maxon::TypeConversion::isArrayStructType(fieldType);
+
+							if (isArrayStruct) {
+								elementTypeStr = maxon::TypeConversion::getArrayStructElementType(fieldType);
+							} else {
+								elementTypeStr = maxon::TypeConversion::getArrayElementType(fieldType);
+							}
 							mir::MIRType *elementType = getTypeFromString(elementTypeStr);
 
-							// For unsized arrays, load the data pointer from fat pointer
+							// For array<T> struct, load buffer pointer from field 0
+							// For _ManagedArray<T>, also load from field 0
 							mir::MIRValue *dataPtr = fieldPtr;
 							if (isUnsizedArray) {
 								mir::MIRType *unsizedArrayType = module->getOrCreateStructType(
@@ -793,6 +805,11 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 									{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
 								mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, fieldPtr, 0, "unsized.data.ptr");
 								dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrField, "unsized.data");
+							} else if (isArrayStruct) {
+								// array<T> struct: { ptr, i32, i32, i32 } = { _buffer, _len, _capacity, _iterIndex }
+								mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
+								mir::MIRValue *bufferField = builder->createStructGEP(arrayStructType, fieldPtr, 0, "array._buffer.ptr");
+								dataPtr = builder->createLoad(mir::MIRType::getPtr(), bufferField, "array.buffer");
 							}
 							mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, dataPtr, indexVal, "implicitfield.array.idx");
 							return builder->createLoad(elementType, elementPtr, "implicitfield.array.elem");
@@ -807,7 +824,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		// Determine element type
 		std::string elementTypeStr = "int";
 		std::string varType = variableTypes[arrayIndexExpr->arrayName];
-		if (maxon::TypeConversion::isArrayType(varType)) {
+		if (maxon::TypeConversion::isArrayStructType(varType)) {
+			elementTypeStr = maxon::TypeConversion::getArrayStructElementType(varType);
+		} else if (maxon::TypeConversion::isArrayType(varType)) {
 			elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
 		}
 		mir::MIRType *elementType = getTypeFromString(elementTypeStr);
@@ -822,6 +841,11 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		} else if (arrayParameters.count(arrayIndexExpr->arrayName) > 0) {
 			// Function parameter - alloca holds the data pointer directly (old ABI)
 			arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
+		} else if (maxon::TypeConversion::isArrayStructType(varType)) {
+			// array<T> struct - alloca is array<T> struct, load _buffer from field 0
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
+			mir::MIRValue *bufferField = builder->createStructGEP(arrayStructType, alloca, 0, "arr._buffer.ptr");
+			arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferField, "arr.buffer");
 		} else if (maxon::TypeConversion::isManagedArrayType(varType)) {
 			// Managed array local var - alloca is a __ManagedArrayData struct, load _buffer from field 0
 			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
@@ -1352,11 +1376,15 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		std::string effectiveCallee = callExpr->resolvedCallee.empty() ? callExpr->callee : callExpr->resolvedCallee;
 
 		// Handle array Collection methods: _ManagedArray<T>.count, .get, .set, .map
-		if (effectiveCallee.find("_ManagedArray<") == 0) {
+		// Also handle array<T>.count, .get, .set, .map (new stdlib struct type)
+		if (effectiveCallee.find("_ManagedArray<") == 0 || effectiveCallee.find("array<") == 0) {
 			size_t dotPos = effectiveCallee.rfind(".");
 			if (dotPos != std::string::npos) {
 				std::string methodName = effectiveCallee.substr(dotPos + 1);
-				if (methodName == "count" || methodName == "get" || methodName == "set" || methodName == "map") {
+				if (methodName == "count" || methodName == "get" || methodName == "set" || methodName == "map" ||
+					methodName == "push" || methodName == "pop" || methodName == "capacity" || methodName == "isEmpty" ||
+					methodName == "first" || methodName == "last" || methodName == "reserve" || methodName == "insert" ||
+					methodName == "remove" || methodName == "clear") {
 					return generateArrayCollectionMethod(callExpr, methodName);
 				}
 			}
@@ -1394,7 +1422,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			if (auto *varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].get())) {
 				argType = lookupVarType(varExpr->name);
 			}
-			// Check if first arg is an array index (e.g., _keys[index])
+			// Check if first arg is an array index (e.g., _keys[index] or elements[index])
 			else if (auto *arrayIndexExpr = dynamic_cast<ArrayIndexExprAST *>(callExpr->args[0].get())) {
 				std::string arrayName;
 				if (!arrayIndexExpr->arrayName.empty()) {
@@ -1408,9 +1436,11 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 				if (!arrayName.empty()) {
 					std::string arrayType = lookupVarType(arrayName);
-					// Extract element type from array type like "_ManagedArray<int>" or "_ManagedArray<KeyType>"
+					// Extract element type from array type like "_ManagedArray<int>" or "array<int>"
 					if (maxon::TypeConversion::isManagedArrayType(arrayType)) {
 						argType = maxon::TypeConversion::getArrayElementType(arrayType);
+					} else if (maxon::TypeConversion::isArrayStructType(arrayType)) {
+						argType = maxon::TypeConversion::getArrayStructElementType(arrayType);
 					}
 				}
 			}
@@ -1538,8 +1568,23 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		std::vector<mir::MIRValue *> argsV;
 		size_t argIdx = 0;
 
+		// Detect sibling method calls at codegen time for generic struct methods
+		// Generic struct method bodies are not analyzed by semantic analyzer, so isSiblingMethodCall may not be set
+		bool isSiblingCall = callExpr->isSiblingMethodCall;
+		if (!isSiblingCall && !currentReceiverType.empty() && namedValues.find("self") != namedValues.end()) {
+			// Check if this is a method call on the current receiver type
+			// effectiveCallee would be "set<int>.grow" and currentReceiverType would be "set<int>"
+			std::string expectedPrefix = currentReceiverType + ".";
+			if (effectiveCallee.find(expectedPrefix) == 0 && calleeF && !calleeF->parameters.empty()) {
+				// Check if the function expects 'self' as first parameter but we're not passing it
+				if (calleeF->parameters[0]->name == "self" && callExpr->args.size() < calleeF->parameters.size()) {
+					isSiblingCall = true;
+				}
+			}
+		}
+
 		// For sibling method calls, inject 'self' as the first argument
-		if (callExpr->isSiblingMethodCall && !currentReceiverType.empty()) {
+		if (isSiblingCall && !currentReceiverType.empty()) {
 			// Load self pointer from the first parameter (which is always 'self' in methods)
 			if (namedValues.find("self") != namedValues.end()) {
 				mir::MIRValue *selfAlloca = namedValues["self"];
@@ -1564,9 +1609,15 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					// Pass array pointer and length
 					mir::MIRValue *ptrVal;
 
-					// Phase 2: Handle _ManagedArray<T> struct layout
-					if (maxon::TypeConversion::isManagedArrayType(varType)) {
-						// Managed array: struct layout { _buffer ptr, _len i32, _capacity i32 }
+					// Handle array<T> struct layout (stdlib array struct)
+					if (maxon::TypeConversion::isArrayStructType(varType)) {
+						// array<T> struct: { _buffer ptr, _len i32, _capacity i32, _iterIndex i32 }
+						std::string elementTypeStr = maxon::TypeConversion::getArrayStructElementType(varType);
+						mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
+						mir::MIRValue *bufferField = builder->createStructGEP(arrayStructType, alloca, 0, "arr._buffer.ptr");
+						ptrVal = builder->createLoad(mir::MIRType::getPtr(), bufferField, "arr.buffer");
+					} else if (maxon::TypeConversion::isManagedArrayType(varType)) {
+						// _ManagedArray<T>: struct layout { _buffer ptr, _len i32, _capacity i32 }
 						std::string elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
 						mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
 						mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, alloca, 0, "arr._buffer.ptr");
@@ -1590,8 +1641,16 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 												   nextParam->name.substr(nextParam->name.size() - 9) == ".__length";
 
 						if (expectsHiddenLength) {
-							// Phase 2: For managed arrays, read length from struct field 1
-							if (maxon::TypeConversion::isManagedArrayType(varType)) {
+							// For array<T> struct, read length from struct field 1
+							if (maxon::TypeConversion::isArrayStructType(varType)) {
+								std::string elementTypeStr = maxon::TypeConversion::getArrayStructElementType(varType);
+								mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
+								mir::MIRValue *lenField = builder->createStructGEP(arrayStructType, alloca, 1, "arr._len.ptr");
+								mir::MIRValue *lengthVal = builder->createLoad(mir::MIRType::getInt32(), lenField, "length");
+								argsV.push_back(lengthVal);
+								argIdx++;
+							} else if (maxon::TypeConversion::isManagedArrayType(varType)) {
+								// For _ManagedArray<T>, read length from struct field 1
 								std::string elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
 								mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
 								mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, alloca, 1, "arr._len.ptr");

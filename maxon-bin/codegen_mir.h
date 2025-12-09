@@ -298,6 +298,7 @@ class MIRCodeGenerator {
 	mir::MIRType *getOrCreateCstringType();
 	mir::MIRType *getOrCreateSubstringType();
 	mir::MIRType *getOrCreateManagedArrayDataType(const std::string &elementType);
+	mir::MIRType *getOrCreateArrayStructType(const std::string &elementType);
 
 	// Array field info for intrinsics - handles both regular variables and struct fields
 	struct ArrayFieldInfo {

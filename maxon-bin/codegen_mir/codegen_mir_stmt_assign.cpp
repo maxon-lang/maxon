@@ -162,7 +162,9 @@ void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir:
 		varType = variableTypes[arrayAssign->arrayName];
 	}
 	std::string elementTypeStr = "int";
-	if (maxon::TypeConversion::isArrayType(varType)) {
+	if (maxon::TypeConversion::isArrayStructType(varType)) {
+		elementTypeStr = maxon::TypeConversion::getArrayStructElementType(varType);
+	} else if (maxon::TypeConversion::isArrayType(varType)) {
 		elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
 	}
 	mir::MIRType *elementType = getTypeFromString(elementTypeStr);
@@ -176,6 +178,11 @@ void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir:
 	} else if (arrayParameters.count(arrayAssign->arrayName) > 0) {
 		// Function parameter - alloca holds the data pointer directly (old ABI)
 		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
+	} else if (maxon::TypeConversion::isArrayStructType(varType)) {
+		// array<T> struct local var: load buffer pointer from struct field 0
+		mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(arrayStructType, alloca, 0, arrayAssign->arrayName + "._buffer.ptr");
+		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferFieldPtr, arrayAssign->arrayName + "._buffer");
 	} else if (maxon::TypeConversion::isManagedArrayType(varType)) {
 		// Managed array local var: load buffer pointer from struct field 0
 		std::string managedTypeName = "__ManagedArrayData_" + elementTypeStr;
@@ -194,14 +201,20 @@ void MIRCodeGenerator::generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir:
 
 	// Handle struct literal assignment
 	if (auto *structInit = dynamic_cast<StructInitExprAST *>(arrayAssign->value.get())) {
-		mir::MIRType *structType = structTypes[structInit->structName];
+		// Substitute "Self" with current receiver type
+		std::string structName = structInit->structName;
+		if (structName == "Self" && !currentReceiverType.empty()) {
+			structName = currentReceiverType;
+		}
+
+		mir::MIRType *structType = structTypes[structName];
 		if (!structType) {
-			reportError("Unknown struct type: " + structInit->structName,
+			reportError("Unknown struct type: " + structName,
 						structInit->line, structInit->column);
 		}
 
-		const auto &fieldList = structFields[structInit->structName];
-		const auto &defaults = structFieldDefaults[structInit->structName];
+		const auto &fieldList = structFields[structName];
+		const auto &defaults = structFieldDefaults[structName];
 
 		// Build a map of provided field values
 		std::map<std::string, const StructInitField *> providedFields;
@@ -261,7 +274,9 @@ void MIRCodeGenerator::generateArrayMemberAssign(ArrayMemberAssignStmtAST *array
 	// Determine element type
 	std::string varType = variableTypes[arrayMemberAssign->arrayName];
 	std::string elementTypeStr;
-	if (maxon::TypeConversion::isArrayType(varType)) {
+	if (maxon::TypeConversion::isArrayStructType(varType)) {
+		elementTypeStr = maxon::TypeConversion::getArrayStructElementType(varType);
+	} else if (maxon::TypeConversion::isArrayType(varType)) {
 		elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
 	}
 
@@ -280,6 +295,11 @@ void MIRCodeGenerator::generateArrayMemberAssign(ArrayMemberAssignStmtAST *array
 	} else if (arrayParameters.count(arrayMemberAssign->arrayName) > 0) {
 		// Function parameter - alloca holds the data pointer directly (old ABI)
 		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), alloca, "arrayptr");
+	} else if (maxon::TypeConversion::isArrayStructType(varType)) {
+		// array<T> struct local var: load buffer pointer from struct field 0
+		mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(arrayStructType, alloca, 0, arrayMemberAssign->arrayName + "._buffer.ptr");
+		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferFieldPtr, arrayMemberAssign->arrayName + "._buffer");
 	} else if (maxon::TypeConversion::isManagedArrayType(varType)) {
 		// Managed array local var: load buffer pointer from struct field 0
 		std::string managedTypeName = "__ManagedArrayData_" + elementTypeStr;
@@ -400,16 +420,23 @@ void MIRCodeGenerator::generateMemberArrayAssign(MemberArrayAssignStmtAST *membe
 	// Generate index
 	mir::MIRValue *indexVal = generateExpr(memberArrayAssign->index.get());
 
-	// Determine element type from field type "_ManagedArray<int>" or "_StaticArray<16, byte>" -> element type
+	// Determine element type from field type "_ManagedArray<int>", "array<int>", or "_StaticArray<16, byte>" -> element type
 	std::string elemTypeStr = "int";
-	if (maxon::TypeConversion::isArrayType(fieldTypeStr)) {
+	if (maxon::TypeConversion::isArrayStructType(fieldTypeStr)) {
+		elemTypeStr = maxon::TypeConversion::getArrayStructElementType(fieldTypeStr);
+	} else if (maxon::TypeConversion::isArrayType(fieldTypeStr)) {
 		elemTypeStr = maxon::TypeConversion::getArrayElementType(fieldTypeStr);
 	}
 	mir::MIRType *elemType = getTypeFromString(elemTypeStr);
 
 	// Get pointer to the array element (handle managed arrays)
 	mir::MIRValue *arrayPtr;
-	if (maxon::TypeConversion::isManagedArrayType(fieldTypeStr)) {
+	if (maxon::TypeConversion::isArrayStructType(fieldTypeStr)) {
+		// array<T> struct field: load buffer pointer from struct field 0
+		mir::MIRType *arrayStructType = getOrCreateArrayStructType(elemTypeStr);
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(arrayStructType, fieldPtr, 0, memberArrayAssign->memberName + "._buffer.ptr");
+		arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferFieldPtr, memberArrayAssign->memberName + "._buffer");
+	} else if (maxon::TypeConversion::isManagedArrayType(fieldTypeStr)) {
 		// Managed array field: load buffer pointer from struct field 0
 		std::string managedTypeName = "__ManagedArrayData_" + elemTypeStr;
 		mir::MIRType *managedType = structTypes[managedTypeName];

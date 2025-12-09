@@ -56,8 +56,10 @@ std::string IntrinsicRegistry::validateArgType(const IntrinsicParam &param, cons
 	}
 
 	if (param.isArrayType) {
-		// Check if actualType is an array type
-		if (!maxon::TypeConversion::isArrayType(actualType)) {
+		// Check if actualType is an array type (internal or array<T> struct)
+		bool isInternalArrayType = maxon::TypeConversion::isArrayType(actualType);
+		bool isArrayStructType = maxon::TypeConversion::isArrayStructType(actualType);
+		if (!isInternalArrayType && !isArrayStructType) {
 			return "expected array type, got " + actualType;
 		}
 		// If allowedTypes is empty, accept any array element type
@@ -65,7 +67,9 @@ std::string IntrinsicRegistry::validateArgType(const IntrinsicParam &param, cons
 			return ""; // Valid - any array type accepted
 		}
 		// Check if actualType is an array with one of the allowed element types
-		std::string elementType = maxon::TypeConversion::getArrayElementType(actualType);
+		std::string elementType = isArrayStructType
+									  ? maxon::TypeConversion::getArrayStructElementType(actualType)
+									  : maxon::TypeConversion::getArrayElementType(actualType);
 		for (const auto &elemType : param.allowedTypes) {
 			if (elementType == elemType) {
 				return ""; // Valid

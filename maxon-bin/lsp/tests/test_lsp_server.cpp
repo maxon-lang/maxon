@@ -1035,8 +1035,8 @@ end 'main')";
 		return false;
 	};
 
-	// Array should have 'length' property
-	REQUIRE(hasItem("length"));
+	// Array should have 'count' method from stdlib
+	REQUIRE(hasItem("count"));
 }
 
 // =============================================================================

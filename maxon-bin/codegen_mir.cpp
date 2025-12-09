@@ -277,6 +277,14 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return mir::MIRType::getOptional(wrappedType);
 	}
 
+	// Check for array<T> struct type (stdlib array struct)
+	if (maxon::TypeConversion::isArrayStructType(typeStr)) {
+		// array<T> is a struct with fields: { managed _ManagedArray, iterIndex int }
+		// The _ManagedArray is stored as a struct { ptr, i32, i32 }
+		std::string elemType = maxon::TypeConversion::getArrayStructElementType(typeStr);
+		return getOrCreateArrayStructType(elemType);
+	}
+
 	// Check for new array type formats: _ManagedArray<T> or _StaticArray<N, T>
 	if (typeStr.rfind("_ManagedArray<", 0) == 0) {
 		// Phase 2: _ManagedArray<T> uses struct layout { _buffer ptr, _len i32, _capacity i32 }
@@ -303,6 +311,8 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return mir::MIRType::getPtr();
 	}
 
+	// Debug: Show what we're trying to look up
+	std::cerr << "DEBUG getTypeFromString: Unknown type: '" << typeStr << "'" << std::endl;
 	throw std::runtime_error("Unknown type: " + typeStr);
 }
 
@@ -377,7 +387,9 @@ std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
 
 bool MIRCodeGenerator::isArrayParam(const std::string &typeStr) {
 	// Check for array types (both new and legacy formats)
-	return maxon::TypeConversion::isArrayType(typeStr);
+	// Also check for array<T> struct type (new stdlib struct)
+	return maxon::TypeConversion::isArrayType(typeStr) ||
+		   maxon::TypeConversion::isArrayStructType(typeStr);
 }
 
 bool MIRCodeGenerator::isStructParameter(const std::string &varName) {
@@ -823,12 +835,40 @@ std::string MIRCodeGenerator::instantiateGenericStruct(const std::string &templa
 		if (it != typeBindings.end()) {
 			return it->second;
 		}
+		// Handle optional types: "Element or nil" -> "int or nil"
+		if (maxon::TypeConversion::isOptionalType(type)) {
+			std::string baseType = maxon::TypeConversion::unwrapOptionalType(type);
+			auto baseIt = typeBindings.find(baseType);
+			if (baseIt != typeBindings.end()) {
+				return maxon::TypeConversion::makeOptionalType(baseIt->second);
+			}
+			// Check if Self is the base type
+			if (baseType == "Self") {
+				return maxon::TypeConversion::makeOptionalType(specializedName);
+			}
+		}
+		// Handle opaque _ManagedArray type (without angle brackets)
+		// When the array struct is instantiated, _ManagedArray becomes _ManagedArray<Element>
+		if (type == "_ManagedArray") {
+			auto elemIt = typeBindings.find("Element");
+			if (elemIt != typeBindings.end()) {
+				return maxon::TypeConversion::makeManagedArrayType(elemIt->second);
+			}
+		}
 		// Handle array types: _ManagedArray<KeyType> -> _ManagedArray<string>
 		if (maxon::TypeConversion::isManagedArrayType(type)) {
 			std::string elemType = maxon::TypeConversion::getArrayElementType(type);
 			auto elemIt = typeBindings.find(elemType);
 			if (elemIt != typeBindings.end()) {
 				return maxon::TypeConversion::makeManagedArrayType(elemIt->second);
+			}
+		}
+		// Handle array<T> struct types: array<Element> -> array<int>
+		if (maxon::TypeConversion::isArrayStructType(type)) {
+			std::string elemType = maxon::TypeConversion::getArrayStructElementType(type);
+			auto elemIt = typeBindings.find(elemType);
+			if (elemIt != typeBindings.end()) {
+				return maxon::TypeConversion::makeArrayStructType(elemIt->second);
 			}
 		}
 		return type;
@@ -1125,7 +1165,31 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	}
 
 	// Declare synthesized default methods from interfaces
+	// Skip methods that have unresolved type parameters (Self, Element, etc.)
+	// These will be instantiated when a concrete type is used
+	auto hasUnresolvedTypeParams = [](const std::string &type) {
+		return type == "Self" || type == "Element" ||
+			   type.find("Element ") != std::string::npos ||
+			   type.find("(Element)") != std::string::npos;
+	};
 	for (const auto &funcInfo : synthesizedMethods) {
+		// Skip methods with unresolved type parameters
+		if (hasUnresolvedTypeParams(funcInfo.returnType)) {
+			logTrace("Skipping synthesized method with unresolved types: " + funcInfo.name);
+			continue;
+		}
+		bool hasUnresolvedParam = false;
+		for (const auto &param : funcInfo.parameters) {
+			if (hasUnresolvedTypeParams(param.type)) {
+				hasUnresolvedParam = true;
+				break;
+			}
+		}
+		if (hasUnresolvedParam) {
+			logTrace("Skipping synthesized method with unresolved param types: " + funcInfo.name);
+			continue;
+		}
+
 		logTrace("Declaring synthesized method: " + funcInfo.name);
 		mir::MIRType *returnType = getTypeFromString(funcInfo.returnType);
 		mir::MIRFunction *mirFunc = module->createFunction(funcInfo.name, returnType);
@@ -1181,7 +1245,22 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	}
 
 	// Generate synthesized default method bodies
+	// Skip methods with unresolved type parameters (same filter as declaration phase)
 	for (const auto &funcInfo : synthesizedMethods) {
+		// Skip methods with unresolved type parameters
+		if (hasUnresolvedTypeParams(funcInfo.returnType)) {
+			continue;
+		}
+		bool hasUnresolvedParam = false;
+		for (const auto &param : funcInfo.parameters) {
+			if (hasUnresolvedTypeParams(param.type)) {
+				hasUnresolvedParam = true;
+				break;
+			}
+		}
+		if (hasUnresolvedParam) {
+			continue;
+		}
 		generateSynthesizedMethod(funcInfo);
 	}
 

@@ -344,19 +344,20 @@ std::string Parser::parseTypeString(const std::string &context) {
 		// Check for sized array: array of N T
 		if (check(TokenType::NUMBER)) {
 			Token sizeToken = currentToken();
-			int size = std::stoi(sizeToken.value);
+			// int size = std::stoi(sizeToken.value); // Size is now managed internally
 			advance(); // consume the number
 
 			// Now parse the element type (recursive for nested arrays)
 			std::string elementType = parseTypeString(context);
 
-			// Return internal representation: _StaticArray<N, T>
-			return maxon::TypeConversion::makeStaticArrayType(size, elementType);
+			// Return array<T> struct type (stdlib array struct)
+			// Note: sized arrays still create an array<T> type at the language level
+			return maxon::TypeConversion::makeArrayStructType(elementType);
 		}
 
 		// Unsized array: array of T (recursive for nested arrays)
 		std::string elementType = parseTypeString(context);
-		return maxon::TypeConversion::makeManagedArrayType(elementType);
+		return maxon::TypeConversion::makeArrayStructType(elementType);
 	}
 
 	// Check for type keywords (int, float, bool, byte, array, of)

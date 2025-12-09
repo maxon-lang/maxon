@@ -65,6 +65,35 @@ mir::MIRType *MIRCodeGenerator::getOrCreateManagedArrayDataType(const std::strin
 	return dataType;
 }
 
+mir::MIRType *MIRCodeGenerator::getOrCreateArrayStructType(const std::string &elementType) {
+	// Create the array<T> struct type as defined in stdlib/collections/array.maxon
+	// Layout: { managed _ManagedArray (ptr, i32, i32), iterIndex i32 }
+	// - managed: the internal _ManagedArray storage
+	// - iterIndex: current iteration position for for-in loops
+	std::string typeName = "array<" + elementType + ">";
+	mir::MIRType *arrayStructType = structTypes[typeName];
+	if (!arrayStructType) {
+		// Ensure the _ManagedArrayData type exists (for consistency)
+		(void)getOrCreateManagedArrayDataType(elementType);
+
+		// The array<T> struct contains the managed array struct followed by iterIndex
+		// However, since _ManagedArray is embedded, we need to flatten it:
+		// { ptr, i32, i32, i32 } = { _buffer, _len, _capacity, iterIndex }
+		arrayStructType = module->getOrCreateStructType(
+			typeName,
+			{mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+		structTypes[typeName] = arrayStructType;
+
+		// Also instantiate the generic array struct to compile its methods
+		// This is needed so that calls to array<T>.push, array<T>.count, etc. can be resolved
+		if (structDefinitions.find("array") != structDefinitions.end()) {
+			std::map<std::string, std::string> typeBindings = {{"Element", elementType}};
+			instantiateGenericStruct("array", typeBindings);
+		}
+	}
+	return arrayStructType;
+}
+
 // Helper to get _ManagedString pointer from expression
 mir::MIRValue *MIRCodeGenerator::getManagedStringPtr(ExprAST *arg) {
 	// Ensure type is created for later use
@@ -631,8 +660,39 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_from_chars(CallExprAST *callEx
 	mir::MIRType *managedStringType = getOrCreateManagedStringType();
 	mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
 
-	mir::MIRValue *srcBuffer = generateExpr(callExpr->args[0].get());
 	mir::MIRValue *length = generateExpr(callExpr->args[1].get());
+
+	// Extract buffer pointer from array struct
+	// For array<T> or _ManagedArray<T>, we need to get the alloca pointer and extract field 0
+	mir::MIRValue *srcBuffer;
+	std::string argType = inferExprType(callExpr->args[0].get());
+
+	if (maxon::TypeConversion::isArrayStructType(argType) || maxon::TypeConversion::isManagedArrayType(argType)) {
+		// Get the alloca pointer for the array (don't load the value)
+		mir::MIRValue *arrayPtr = nullptr;
+		if (auto *varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].get())) {
+			arrayPtr = namedValues[varExpr->name];
+		}
+		if (!arrayPtr) {
+			// Fallback: generate the expression and hope it returns a pointer
+			arrayPtr = generateExpr(callExpr->args[0].get());
+		}
+
+		// Extract buffer pointer (field 0) from the array struct
+		if (maxon::TypeConversion::isArrayStructType(argType)) {
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType("byte");
+			mir::MIRValue *bufferField = builder->createStructGEP(arrayStructType, arrayPtr, 0, "arr._buffer.ptr");
+			srcBuffer = builder->createLoad(mir::MIRType::getPtr(), bufferField, "arr.buffer");
+		} else {
+			std::string elemType = maxon::TypeConversion::getArrayElementType(argType);
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemType);
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, arrayPtr, 0, "arr._buffer.ptr");
+			srcBuffer = builder->createLoad(mir::MIRType::getPtr(), bufferField, "arr.buffer");
+		}
+	} else {
+		// Raw pointer - generate and use directly
+		srcBuffer = generateExpr(callExpr->args[0].get());
+	}
 
 	mir::MIRValue *lengthPlus1 = builder->createAdd(length, builder->getInt32(1), "len.plus1");
 	mir::MIRValue *lengthPlus1_64 = builder->createSExt(lengthPlus1, mir::MIRType::getInt64(), "len64");
