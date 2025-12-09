@@ -8,6 +8,7 @@
 #include "../backend/pe_writer.h"
 #include "../backend/regalloc.h"
 #include "../backend/x86_codegen.h"
+#include "../backend/x86_disassembler.h"
 #include "../codegen_mir.h"
 #include "../compiler_stats.h"
 #include "../file_utils.h"
@@ -55,6 +56,18 @@ void MIRCodeGenerator::optimize(CompilerStats *stats) {
 	optimizer.runPasses(*module, 10, stats);
 
 	logProgress("Optimization complete");
+}
+
+void MIRCodeGenerator::optimizeForExplorer() {
+	logProgress("Running explorer optimization passes...");
+
+	// Create explorer pipeline (skips DCE to preserve all user functions)
+	mir::MIROptimizer optimizer = mir::MIROptimizer::createExplorerPipeline(verboseLevel);
+
+	// Run passes until convergence
+	optimizer.runPasses(*module, 10, nullptr);
+
+	logProgress("Explorer optimization complete");
 }
 
 void MIRCodeGenerator::runDeadCodeElimination() {
@@ -105,6 +118,40 @@ static std::string findRuntimeFile(const std::string &filename) {
 	}
 
 	return ""; // Not found
+}
+
+//==============================================================================
+// Assembly File Generation
+//==============================================================================
+
+void MIRCodeGenerator::writeAsmToFile(const std::string &filename) {
+	logProgress("Generating assembly file: " + filename);
+
+	// Run PHI elimination (required before x86 codegen)
+	mir::PhiEliminationPass phiElim;
+	phiElim.run(*module);
+
+	// Determine calling convention based on target
+	bool isWindows = (module->targetTriple.find("windows") != std::string::npos);
+	backend::CallingConv cc = isWindows ? backend::CallingConv::Win64 : backend::CallingConv::SysV64;
+
+	// Generate x86-64 code
+	backend::X86CodeGen x86gen(cc);
+	x86gen.generate(module.get());
+
+	// Disassemble to Intel syntax assembly
+	backend::X86Disassembler disasm;
+	std::string assembly = disasm.disassembleWithSymbols(x86gen.getFunctionCodes());
+
+	// Write to file
+	std::ofstream file(filename);
+	if (!file.is_open()) {
+		throw std::runtime_error("Failed to open file for writing: " + filename);
+	}
+	file << assembly;
+	file.close();
+
+	logProgress("Assembly file written");
 }
 
 //==============================================================================

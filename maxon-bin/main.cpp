@@ -50,6 +50,7 @@ void printHelp(const char *programName) {
 	std::cerr << "  -vvv           Level 3 verbosity (trace, deep debugging)" << std::endl;
 	std::cerr << "Options for compile:" << std::endl;
 	std::cerr << "  --emit-ir      Generate .ir file alongside executable" << std::endl;
+	std::cerr << "  --emit-asm     Generate .asm file alongside executable" << std::endl;
 	std::cerr << "  -c             Compile only (generate object file, don't link)" << std::endl;
 	std::cerr << "  -O             Enable optimizations" << std::endl;
 	std::cerr << "  --debug, -g    Generate debug information" << std::endl;
@@ -493,6 +494,8 @@ int main(int argc, char *argv[]) {
 		std::string arg = argv[i];
 		if (arg == "--emit-ir") {
 			options.emitIR = true;
+		} else if (arg == "--emit-asm") {
+			options.emitAsm = true;
 		} else if (arg == "-c") {
 			options.compileOnly = true;
 		} else if (arg == "-O") {

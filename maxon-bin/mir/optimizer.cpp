@@ -187,4 +187,25 @@ MIROptimizer MIROptimizer::createStandardPipeline(int verboseLevel) {
 	return optimizer;
 }
 
+MIROptimizer MIROptimizer::createExplorerPipeline(int verboseLevel) {
+	MIROptimizer optimizer;
+	optimizer.setVerboseLevel(verboseLevel);
+
+	// Same as standard pipeline but WITHOUT DCE and inlining
+	// This preserves all user-defined functions even if not called from main
+	optimizer.addPass(std::make_unique<Mem2RegPass>());
+	optimizer.addPass(std::make_unique<ConstantFoldingPass>());
+	optimizer.addPass(std::make_unique<ConstantPropagationPass>());
+	optimizer.addPass(std::make_unique<AlgebraicSimplificationPass>());
+	optimizer.addPass(std::make_unique<StrengthReductionPass>());
+	optimizer.addPass(std::make_unique<CopyPropagationPass>());
+	optimizer.addPass(std::make_unique<RedundantLoadStoreEliminationPass>());
+	optimizer.addPass(std::make_unique<IntegerDivisionOptimizationPass>());
+	// Skip DeadCodeEliminationPass - we want to keep all user functions
+	optimizer.addPass(std::make_unique<UnreachableBlockEliminationPass>());
+	// Skip SimpleFunctionInliningPass - may eliminate functions
+
+	return optimizer;
+}
+
 } // namespace mir

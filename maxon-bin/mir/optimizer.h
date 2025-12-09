@@ -568,6 +568,10 @@ class MIROptimizer {
 	// Create a standard optimization pipeline
 	static MIROptimizer createStandardPipeline(int verboseLevel = 0);
 
+	// Create an optimization pipeline for the compiler explorer
+	// Skips DCE and inlining to preserve all user-defined functions
+	static MIROptimizer createExplorerPipeline(int verboseLevel = 0);
+
   private:
 	std::vector<std::unique_ptr<OptimizationPass>> passes;
 	int verboseLevel_ = 0;

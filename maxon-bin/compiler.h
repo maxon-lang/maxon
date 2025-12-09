@@ -15,6 +15,7 @@ struct CompilationOptions {
 	std::vector<std::string> inputFiles;
 	std::string outputFile; // Internal use only, not exposed via CLI
 	bool emitIR = false;
+	bool emitAsm = false;
 	bool compileOnly = false;
 	bool optimize = false;
 	bool debugInfo = false;

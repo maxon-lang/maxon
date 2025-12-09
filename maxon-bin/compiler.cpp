@@ -562,6 +562,12 @@ std::string compileProgram(const CompilationOptions &options) {
 		logger.detail(LogPhase::MIR, "MIR written to: ", llOutputFile);
 	}
 
+	if (options.emitAsm) {
+		std::string asmOutputFile = baseFilename + ".asm";
+		codegen.writeAsmToFile(asmOutputFile);
+		logger.detail(LogPhase::x86, "Assembly written to: ", asmOutputFile);
+	}
+
 	std::string outputFile;
 	if (options.compileOnly) {
 		std::string objOutputFile = baseFilename + ".obj";

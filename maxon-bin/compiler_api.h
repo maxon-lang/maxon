@@ -201,6 +201,67 @@ StdlibSymbols loadStdlibWithContentProvider(
 	const std::string &stdlibPath,
 	std::function<std::optional<std::string>(const std::string &)> contentProvider);
 
+// ============================================================================
+// IR Generation for Compiler Explorer
+// ============================================================================
+
+/**
+ * Result of IR generation for the compiler explorer
+ */
+struct IRGenerationResult {
+	std::string ir;							   // Generated MIR as string
+	std::vector<ParseError> parseErrors;	   // Parse errors if any
+	std::vector<SemanticError> semanticErrors; // Semantic errors if any
+
+	bool hasErrors() const { return !parseErrors.empty() || !semanticErrors.empty(); }
+};
+
+/**
+ * Generate MIR from source code for the compiler explorer
+ *
+ * Parses the source, runs semantic analysis, generates MIR, and optionally
+ * runs optimization passes. Returns the IR as a string along with any errors.
+ *
+ * @param source The source code to compile
+ * @param filename The filename (used for error messages)
+ * @param optimize If true, run optimization passes
+ * @param stdlib The loaded stdlib symbols (for resolving stdlib calls)
+ * @return IRGenerationResult containing IR string and any errors
+ */
+IRGenerationResult generateIRForLSP(const std::string &source, const std::string &filename,
+									bool optimize, const StdlibSymbols &stdlib);
+
+// ============================================================================
+// Assembly Generation for Compiler Explorer
+// ============================================================================
+
+/**
+ * Result of assembly generation for the compiler explorer
+ */
+struct AsmGenerationResult {
+	std::string assembly;					   // Generated x86-64 assembly as string (Intel syntax)
+	std::vector<ParseError> parseErrors;	   // Parse errors if any
+	std::vector<SemanticError> semanticErrors; // Semantic errors if any
+
+	bool hasErrors() const { return !parseErrors.empty() || !semanticErrors.empty(); }
+};
+
+/**
+ * Generate x86-64 assembly from source code for the compiler explorer
+ *
+ * Parses the source, runs semantic analysis, generates MIR, optionally
+ * optimizes, then generates x86-64 machine code and disassembles it to
+ * Intel-syntax assembly text.
+ *
+ * @param source The source code to compile
+ * @param filename The filename (used for error messages)
+ * @param optimize If true, run optimization passes on MIR before codegen
+ * @param stdlib The loaded stdlib symbols (for resolving stdlib calls)
+ * @return AsmGenerationResult containing assembly string and any errors
+ */
+AsmGenerationResult generateAsmForLSP(const std::string &source, const std::string &filename,
+									  bool optimize, const StdlibSymbols &stdlib);
+
 /**
  * Get all keyword information for LSP
  *

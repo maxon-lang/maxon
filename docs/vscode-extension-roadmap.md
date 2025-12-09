@@ -2,6 +2,14 @@
 
 This document outlines the plan to implement missing features in the Maxon VS Code extension and Language Server Protocol (LSP) server.
 
+## Completed Features
+
+These features have been implemented and are available in the extension:
+
+- **Compiler Explorer Panel**: View MIR (intermediate representation) and x86-64 assembly output with an optional optimization toggle. Uses custom LSP methods (`maxon/generateIR`, `maxon/generateAsm`) and the `maxon.openCompilerExplorer` command.
+- **Document Formatting**: Format Maxon code with customizable indentation settings.
+- **Semantic Tokens**: Block label highlighting with nesting-depth-based coloring.
+
 ## Priority Levels
 - **P0**: Critical for basic productivity
 - **P1**: High value, frequently used

@@ -142,9 +142,9 @@ class MIRCodeGenerator {
 	// Info for tracking heap-allocated arrays for cleanup
 	struct HeapArrayInfo {
 		std::string name;
-		mir::MIRValue *alloca;        // Either buffer ptr alloca (static) or struct alloca (dynamic)
-		std::string elementType;      // Element type (for dynamic arrays only)
-		bool isDynamic;               // True if this array can be reallocated (needs struct-based cleanup)
+		mir::MIRValue *alloca;	 // Either buffer ptr alloca (static) or struct alloca (dynamic)
+		std::string elementType; // Element type (for dynamic arrays only)
+		bool isDynamic;			 // True if this array can be reallocated (needs struct-based cleanup)
 	};
 
 	// Scope tracking for automatic array/string cleanup
@@ -365,6 +365,7 @@ class MIRCodeGenerator {
 
 	// Optimization
 	void optimize(CompilerStats *stats = nullptr);
+	void optimizeForExplorer(); // Skips DCE to preserve all user functions
 	void runDeadCodeElimination();
 
 	// Get instruction count (for stats)
@@ -373,6 +374,7 @@ class MIRCodeGenerator {
 	// Output methods
 	void printIR();
 	void writeIRToFile(const std::string &filename);
+	void writeAsmToFile(const std::string &filename);
 	void writeObjectFile(const std::string &filename);
 	void writeExecutable(const std::string &exeFile);
 
