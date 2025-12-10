@@ -351,7 +351,7 @@ var file = File.open("source.maxon", FileMode.READ)
 var contents = file.readAll()
 file.close()
 
-var outFile = File.open("output.txt", FileMode.WRITE)
+var outFile = File.open("temp/output.txt", FileMode.WRITE)
 outFile.write("Hello")
 outFile.close()
 ```

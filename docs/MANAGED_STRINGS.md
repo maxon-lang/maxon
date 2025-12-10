@@ -13,6 +13,16 @@ The compiler tracks string allocations and automatically releases them at scope 
 
 ## Memory Layout
 
+### Capacity Semantics
+
+The capacity field determines string ownership:
+
+| Capacity | Meaning |
+|----------|---------|
+| -1 | SSO (small string optimization) - data stored inline |
+| 0 | Constant string - no heap ownership, don't retain/release |
+| > 0 | Heap-allocated with ownership - use retain/release |
+
 ### SSO Strings (capacity = -1)
 
 Small strings store data inline in the `__ManagedStringData` struct:
@@ -27,7 +37,7 @@ __ManagedStringData (SSO mode):
     +---> Points to inline buffer (within the struct)
 ```
 
-### Heap-Allocated Strings (capacity >= 0)
+### Heap-Allocated Strings (capacity > 0)
 
 Larger strings use heap memory with an 8-byte header:
 
@@ -74,13 +84,13 @@ A view into a parent string:
 
 ```
 substring struct:
-+--------+----------+--------+---------+
-| data   | parent   | length | iterPos |
-| (ptr)  | (ptr)    | (i32)  | (i32)   |
-+--------+----------+--------+---------+
-    |        |
-    |        +-- Pointer to parent __ManagedStringData (retained)
-    +---> Points into parent's data buffer
++----------+--------+--------+---------+
+| parent   | data   | length | iterPos |
+| (ptr)    | (ptr)  | (i32)  | (i32)   |
++----------+--------+--------+---------+
+     |         |
+     |         +---> Points into parent's data buffer
+     +-- Pointer to parent __ManagedStringData (retained)
 ```
 
 ## Reference Counting
@@ -188,7 +198,7 @@ void someIntrinsicCodegen(MIRCodeGenerator& gen) {
 - `getDataPtr(managedPtr, name)` - Get data pointer (field 0)
 - `getLength(managedPtr, name)` - Get length (field 1)
 - `getCapacity(managedPtr, name)` - Get capacity (field 2)
-- `isHeapAllocated(managedPtr, name)` - Check if capacity >= 0
+- `isHeapAllocated(managedPtr, name)` - Check if capacity > 0 (heap-owned)
 
 #### Allocation
 
@@ -201,7 +211,7 @@ void someIntrinsicCodegen(MIRCodeGenerator& gen) {
 
 - `populateManagedStruct(ptr, data, len, cap)` - Fill all fields
 - `populateCstringStruct(ptr, data, len, managed)` - Fill cstring fields
-- `populateSubstringStruct(ptr, data, parent, len, iterPos)` - Fill substring fields
+- `populateSubstringStruct(ptr, parent, data, len, iterPos)` - Fill substring fields
 
 #### Reference Counting
 

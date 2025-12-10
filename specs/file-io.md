@@ -80,7 +80,7 @@ Write a string to a text file using UTF-8 encoding.
 
 ```maxon
 function main() int
-    let success = writeTextFile("output.txt", "Hello, World!")
+    let success = writeTextFile("temp/output.txt", "Hello, World!")
     if success 'write_ok'
         print("File written successfully")
         else 'write_ok'
@@ -137,7 +137,7 @@ Content:
 <!-- test: write-text-file -->
 ```maxon
 function main() int
-    let success = writeTextFile("output.txt", "Test content")
+    let success = writeTextFile("temp/output.txt", "Test content")
     return success as int
 end 'main'
 ```
@@ -149,7 +149,7 @@ end 'main'
 ```maxon
 function main() int
     let data = [65b, 66b, 67b]  // "ABC" as bytes
-    let success = writeBinaryFile("binary.bin", data)
+    let success = writeBinaryFile("temp/binary.bin", data)
     return success as int
 end 'main'
 ```

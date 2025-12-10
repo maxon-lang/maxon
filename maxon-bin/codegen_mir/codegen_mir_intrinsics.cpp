@@ -1,6 +1,7 @@
 #include "../codegen_mir.h"
 #include "../types/type_conversion.h"
 #include "intrinsic_codegen.h"
+#include "managed_string_builder.h"
 
 // Helper type accessor implementations
 mir::MIRType *MIRCodeGenerator::getOrCreateManagedStringType() {
@@ -322,31 +323,25 @@ MIRCodeGenerator::ArrayFieldInfo MIRCodeGenerator::getArrayFieldInfo(ExprAST *ar
 // =============================================================================
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_string_len(CallExprAST *callExpr) {
-	mir::MIRType *managedStringType = getOrCreateManagedStringType();
+	ManagedStringBuilder msb(*this);
 	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
-	mir::MIRValue *lenPtr = builder->createStructGEP(managedStringType, managedPtr, 1, "managed._len");
-	return builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
+	return msb.getLength(managedPtr, "len");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_string_byte_at(CallExprAST *callExpr) {
-	mir::MIRType *managedStringType = getOrCreateManagedStringType();
-	mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
+	ManagedStringBuilder msb(*this);
 	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
 	mir::MIRValue *index = generateExpr(callExpr->args[1].get());
 
-	mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "managed._buffer");
-	mir::MIRValue *bufferPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, "buffer.ptr.ptr");
-	mir::MIRValue *bufferPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtrPtr, "buffer.ptr");
-
+	mir::MIRValue *bufferPtr = msb.getDataPtr(managedPtr, "buffer.ptr");
 	mir::MIRValue *index64 = builder->createSExt(index, mir::MIRType::getInt64(), "idx64");
 	mir::MIRValue *bytePtr = builder->createArrayGEP(mir::MIRType::getInt8(), bufferPtr, index64, "byte.ptr");
 	return builder->createLoad(mir::MIRType::getInt8(), bytePtr, "byte");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_string_slice(CallExprAST *callExpr) {
-	mir::MIRType *managedStringType = getOrCreateManagedStringType();
-	mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
-	mir::MIRType *substringType = getOrCreateSubstringType();
+	ManagedStringBuilder msb(*this);
+	mir::MIRType *substringType = msb.getSubstringType();
 
 	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
 	mir::MIRValue *startIdx = generateExpr(callExpr->args[1].get());
@@ -354,41 +349,16 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_slice(CallExprAST *callExpr) {
 
 	mir::MIRValue *newLen = builder->createSub(endIdx, startIdx, "slice.len");
 
-	mir::MIRValue *srcBufferPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "src._buffer");
-	mir::MIRValue *srcPtrPtr = builder->createStructGEP(unsizedArrayType, srcBufferPtr, 0, "src.ptr.ptr");
-	mir::MIRValue *srcPtr = builder->createLoad(mir::MIRType::getPtr(), srcPtrPtr, "src.ptr");
+	mir::MIRValue *srcPtr = msb.getDataPtr(managedPtr, "src.ptr");
 	mir::MIRValue *start64 = builder->createSExt(startIdx, mir::MIRType::getInt64(), "start64");
 	mir::MIRValue *slicePtr = builder->createArrayGEP(mir::MIRType::getInt8(), srcPtr, start64, "slice.ptr");
 
-	mir::MIRValue *newSub = builder->createAlloca(substringType, "slice.substring");
-
-	mir::MIRValue *dstParentPtr = builder->createStructGEP(substringType, newSub, 0, "dst._parentManaged");
-	builder->createStore(managedPtr, dstParentPtr);
-
-	mir::MIRValue *dstPtrPtr = builder->createStructGEP(substringType, newSub, 1, "dst._ptr");
-	builder->createStore(slicePtr, dstPtrPtr);
-
-	mir::MIRValue *dstLenPtr = builder->createStructGEP(substringType, newSub, 2, "dst._len");
-	builder->createStore(newLen, dstLenPtr);
-
-	mir::MIRValue *dstIterPosPtr = builder->createStructGEP(substringType, newSub, 3, "dst._iterPos");
-	builder->createStore(builder->getInt32(0), dstIterPosPtr);
+	mir::MIRValue *newSub = msb.allocateSubstringStruct("slice.substring");
+	msb.populateSubstringStruct(newSub, managedPtr, slicePtr, newLen, builder->getInt32(0));
 
 	// Retain parent if heap-allocated
-	mir::MIRValue *parentCapPtr = builder->createStructGEP(managedStringType, managedPtr, 2, "parent._capacity");
-	mir::MIRValue *parentCap = builder->createLoad(mir::MIRType::getInt32(), parentCapPtr, "parent.cap");
-	mir::MIRValue *isHeap = builder->createICmpSGT(parentCap, builder->getInt32(0), "isHeap");
+	msb.emitRetainIfHeap(managedPtr);
 
-	mir::MIRBasicBlock *retainBlock = builder->createBasicBlock("slice.retain");
-	mir::MIRBasicBlock *continueBlock = builder->createBasicBlock("slice.continue");
-	builder->createCondBr(isHeap, retainBlock, continueBlock);
-
-	builder->setInsertPoint(retainBlock);
-	mir::MIRFunction *retainFunc = getOrDeclareFunction("_managed_string_retain", mir::MIRType::getVoid(), {mir::MIRType::getPtr()});
-	builder->createCall(retainFunc, {srcPtr});
-	builder->createBr(continueBlock);
-
-	builder->setInsertPoint(continueBlock);
 	return builder->createLoad(substringType, newSub, "slice.result");
 }
 
@@ -428,32 +398,23 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_byte_offset(CallExprAST *ca
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_string_concat(CallExprAST *callExpr) {
-	mir::MIRType *managedStringType = getOrCreateManagedStringType();
+	ManagedStringBuilder msb(*this);
+	mir::MIRType *managedStringType = msb.getManagedStringType();
 	mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
 
 	mir::MIRValue *m1Ptr = getManagedStringPtr(callExpr->args[0].get());
 	mir::MIRValue *m2Ptr = getManagedStringPtr(callExpr->args[1].get());
 
-	mir::MIRValue *len1Ptr = builder->createStructGEP(managedStringType, m1Ptr, 1, "m1._len");
-	mir::MIRValue *len1 = builder->createLoad(mir::MIRType::getInt32(), len1Ptr, "len1");
-	mir::MIRValue *len2Ptr = builder->createStructGEP(managedStringType, m2Ptr, 1, "m2._len");
-	mir::MIRValue *len2 = builder->createLoad(mir::MIRType::getInt32(), len2Ptr, "len2");
+	mir::MIRValue *len1 = msb.getLength(m1Ptr, "len1");
+	mir::MIRValue *len2 = msb.getLength(m2Ptr, "len2");
 
 	mir::MIRValue *totalLen = builder->createAdd(len1, len2, "total.len");
 	mir::MIRValue *totalLenPlus1 = builder->createAdd(totalLen, builder->getInt32(1), "total.len.plus1");
-	mir::MIRValue *totalLenPlus1_64 = builder->createSExt(totalLenPlus1, mir::MIRType::getInt64(), "total64");
 
-	mir::MIRValue *buf1Ptr = builder->createStructGEP(managedStringType, m1Ptr, 0, "m1._buffer");
-	mir::MIRValue *ptr1Ptr = builder->createStructGEP(unsizedArrayType, buf1Ptr, 0, "ptr1.ptr");
-	mir::MIRValue *ptr1 = builder->createLoad(mir::MIRType::getPtr(), ptr1Ptr, "ptr1");
+	mir::MIRValue *ptr1 = msb.getDataPtr(m1Ptr, "ptr1");
+	mir::MIRValue *ptr2 = msb.getDataPtr(m2Ptr, "ptr2");
 
-	mir::MIRValue *buf2Ptr = builder->createStructGEP(managedStringType, m2Ptr, 0, "m2._buffer");
-	mir::MIRValue *ptr2Ptr = builder->createStructGEP(unsizedArrayType, buf2Ptr, 0, "ptr2.ptr");
-	mir::MIRValue *ptr2 = builder->createLoad(mir::MIRType::getPtr(), ptr2Ptr, "ptr2");
-
-	mir::MIRFunction *allocFunc = getOrDeclareFunction("_managed_string_alloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
-	mir::MIRValue *tag = module->createGlobalString(".__tag.str.concat", "string concat");
-	mir::MIRValue *newBuffer = builder->createCall(allocFunc, {totalLenPlus1_64, tag}, "concat.buffer");
+	mir::MIRValue *newBuffer = msb.allocateBuffer(totalLenPlus1, "string concat");
 
 	mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
 														{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});

@@ -109,8 +109,8 @@ class ManagedStringBuilder {
 	mir::MIRValue *getCapacity(mir::MIRValue *managedPtr, const std::string &name = "cap");
 
 	/**
-	 * Check if a string is heap-allocated (capacity >= 0).
-	 * SSO strings have capacity = -1.
+	 * Check if a string is heap-allocated (capacity > 0).
+	 * Capacity values: -1 = SSO, 0 = constant string, >0 = heap allocated
 	 * @param managedPtr Pointer to the __ManagedStringData struct
 	 * @param name Optional name for the resulting value
 	 * @return MIRValue representing a boolean (i1) - true if heap allocated
@@ -175,13 +175,14 @@ class ManagedStringBuilder {
 
 	/**
 	 * Populate all fields of a substring struct.
+	 * Substring layout: { _parentManaged ptr, _ptr ptr, _len i32, _iterPos i32 }
 	 * @param structPtr Pointer to the substring struct
-	 * @param dataPtr Data pointer (field 0)
-	 * @param parentManaged Parent managed string pointer (field 1)
+	 * @param parentManaged Parent managed string pointer (field 0)
+	 * @param dataPtr Data pointer into parent's buffer (field 1)
 	 * @param length Length in bytes (field 2)
 	 * @param iterPos Iterator position in grapheme clusters (field 3)
 	 */
-	void populateSubstringStruct(mir::MIRValue *structPtr, mir::MIRValue *dataPtr, mir::MIRValue *parentManaged,
+	void populateSubstringStruct(mir::MIRValue *structPtr, mir::MIRValue *parentManaged, mir::MIRValue *dataPtr,
 								 mir::MIRValue *length, mir::MIRValue *iterPos);
 
 	// ========== Reference Counting ==========

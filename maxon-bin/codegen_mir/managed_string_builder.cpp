@@ -40,9 +40,13 @@ mir::MIRValue *ManagedStringBuilder::getCapacity(mir::MIRValue *managedPtr, cons
 }
 
 mir::MIRValue *ManagedStringBuilder::isHeapAllocated(mir::MIRValue *managedPtr, const std::string &name) {
+	// Capacity values:
+	//   -1 = SSO (inline storage)
+	//    0 = constant string (no heap ownership)
+	//   >0 = heap allocated with ownership
 	mir::MIRValue *cap = getCapacity(managedPtr, "cap.check");
 	mir::MIRValue *zero = gen_.builder->getInt32(0);
-	return gen_.builder->createICmpSGE(cap, zero, name);
+	return gen_.builder->createICmpSGT(cap, zero, name);
 }
 
 // ========== Allocation ==========
@@ -102,16 +106,17 @@ void ManagedStringBuilder::populateCstringStruct(mir::MIRValue *structPtr, mir::
 	gen_.builder->createStore(managedPtr, managedPtrPtr);
 }
 
-void ManagedStringBuilder::populateSubstringStruct(mir::MIRValue *structPtr, mir::MIRValue *dataPtr,
-												   mir::MIRValue *parentManaged, mir::MIRValue *length,
+void ManagedStringBuilder::populateSubstringStruct(mir::MIRValue *structPtr, mir::MIRValue *parentManaged,
+												   mir::MIRValue *dataPtr, mir::MIRValue *length,
 												   mir::MIRValue *iterPos) {
+	// Substring layout: { _parentManaged ptr, _ptr ptr, _len i32, _iterPos i32 }
 	mir::MIRType *substringType = getSubstringType();
 
-	mir::MIRValue *dataPtrPtr = gen_.builder->createStructGEP(substringType, structPtr, 0, "substr.data.ptr");
-	gen_.builder->createStore(dataPtr, dataPtrPtr);
-
-	mir::MIRValue *parentPtr = gen_.builder->createStructGEP(substringType, structPtr, 1, "substr.parent.ptr");
+	mir::MIRValue *parentPtr = gen_.builder->createStructGEP(substringType, structPtr, 0, "substr.parent.ptr");
 	gen_.builder->createStore(parentManaged, parentPtr);
+
+	mir::MIRValue *dataPtrPtr = gen_.builder->createStructGEP(substringType, structPtr, 1, "substr.data.ptr");
+	gen_.builder->createStore(dataPtr, dataPtrPtr);
 
 	mir::MIRValue *lenPtr = gen_.builder->createStructGEP(substringType, structPtr, 2, "substr.len.ptr");
 	gen_.builder->createStore(length, lenPtr);
