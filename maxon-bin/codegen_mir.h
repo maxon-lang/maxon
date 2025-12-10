@@ -191,6 +191,11 @@ class MIRCodeGenerator {
 										  const std::map<std::string, std::string> &typeBindings,
 										  const std::string &specializedReceiverType);
 
+	// Struct literal generation helper - creates and initializes a struct
+	// If targetAlloca is provided, initializes fields in-place; otherwise creates a temp alloca
+	mir::MIRValue *generateStructLiteral(StructInitExprAST *structInit,
+										 mir::MIRValue *targetAlloca = nullptr);
+
 	// Type conversion helpers
 	mir::MIRType *getTypeFromString(const std::string &typeStr);
 	mir::MIRType *getTypeFromStringNoMark(const std::string &typeStr); // For struct field definitions

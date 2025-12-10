@@ -300,8 +300,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	}
 
 	if (auto *structInitExpr = dynamic_cast<StructInitExprAST *>(expr)) {
-		reportError("Struct literal can only be used as an initializer in variable declarations",
-					structInitExpr->line, structInitExpr->column);
+		return generateStructLiteral(structInitExpr);
 	}
 
 	if (auto *memberAccessExpr = dynamic_cast<MemberAccessExprAST *>(expr)) {
@@ -2002,6 +2001,170 @@ mir::MIRValue *MIRCodeGenerator::generateMathIntrinsic(CallExprAST *callExpr) {
 	}
 
 	return result;
+}
+
+//==============================================================================
+// Struct Literal Generation
+//==============================================================================
+
+mir::MIRValue *MIRCodeGenerator::generateStructLiteral(StructInitExprAST *structInit,
+													   mir::MIRValue *targetAlloca) {
+	// Substitute "Self" with current receiver type
+	std::string structName = structInit->structName;
+	if (structName == "Self" && !currentReceiverType.empty()) {
+		structName = currentReceiverType;
+	} else if (!currentTypeBindings.empty() && !currentReceiverType.empty()) {
+		// Extract base template name from currentReceiverType (e.g., "set<int>" -> "set")
+		std::string baseTemplateName = currentReceiverType;
+		size_t anglePos = currentReceiverType.find('<');
+		if (anglePos != std::string::npos) {
+			baseTemplateName = currentReceiverType.substr(0, anglePos);
+		}
+		// If struct initializer is the base template, use specialized type
+		if (structName == baseTemplateName) {
+			structName = currentReceiverType;
+		}
+	}
+
+	mir::MIRType *structType = structTypes[structName];
+	if (!structType) {
+		reportError("Unknown struct type: " + structName,
+					structInit->line, structInit->column);
+	}
+
+	// Mark struct type as used for lazy type emission
+	structType->used = true;
+	markFieldTypesUsed(structType);
+
+	// Create alloca if not provided
+	mir::MIRValue *structAlloca = targetAlloca;
+	if (!structAlloca) {
+		structAlloca = builder->createAlloca(structType, "struct.tmp");
+	}
+
+	// Get field definitions and defaults
+	const auto &fields = structFields[structName];
+	const auto &defaults = structFieldDefaults[structName];
+
+	// Build a map of provided field values for quick lookup
+	std::map<std::string, const StructInitField *> providedFields;
+	for (const auto &initField : structInit->fields) {
+		providedFields[initField.name] = &initField;
+	}
+
+	// Initialize each field
+	for (size_t fieldIndex = 0; fieldIndex < fields.size(); fieldIndex++) {
+		const std::string &fieldName = fields[fieldIndex].first;
+		const std::string &fieldTypeStr = fields[fieldIndex].second;
+
+		mir::MIRValue *fieldPtr = builder->createStructGEP(structType, structAlloca,
+														   static_cast<int>(fieldIndex), fieldName);
+
+		// Get the value expression - either from provided init or from default
+		ExprAST *valueExpr = nullptr;
+		auto providedIt = providedFields.find(fieldName);
+		if (providedIt != providedFields.end()) {
+			valueExpr = providedIt->second->value.get();
+		} else {
+			auto defaultIt = defaults.find(fieldName);
+			if (defaultIt != defaults.end()) {
+				valueExpr = defaultIt->second;
+			}
+		}
+
+		if (valueExpr == nullptr) {
+			reportError("No value for field '" + fieldName +
+							"' in struct '" + structInit->structName + "'",
+						structInit->line, structInit->column);
+		}
+
+		// Handle array field initialization
+		if (auto *arrayLit = dynamic_cast<ArrayLiteralExprAST *>(valueExpr)) {
+			if (!arrayLit->values.empty()) {
+				// Value-initialized array [1, 2, 3]
+				for (size_t i = 0; i < arrayLit->values.size(); i++) {
+					mir::MIRValue *elemValue = generateExpr(arrayLit->values[i].get());
+					mir::MIRValue *elemPtr = builder->createArrayGEP(elemValue->type, fieldPtr,
+																	 mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), i),
+																	 fieldName + ".elem");
+					builder->createStore(elemValue, elemPtr);
+				}
+			}
+			// Zero-initialized array - already zero from alloca, nothing needed
+		} else if (maxon::TypeConversion::isManagedArrayType(fieldTypeStr)) {
+			// Slice field ([]T) - need to create fat pointer {ptr, len}
+			std::string elementTypeStr = maxon::TypeConversion::getArrayElementType(fieldTypeStr);
+			std::string unsizedArrayTypeName = "_ManagedArray_" + elementTypeStr;
+
+			mir::MIRType *unsizedArrayType = structTypes[unsizedArrayTypeName];
+			if (!unsizedArrayType) {
+				unsizedArrayType = module->getOrCreateStructType(
+					unsizedArrayTypeName,
+					{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+				structTypes[unsizedArrayTypeName] = unsizedArrayType;
+			}
+
+			auto *varExpr = dynamic_cast<VariableExprAST *>(valueExpr);
+			if (varExpr) {
+				std::string varType = variableTypes[varExpr->name];
+				if (maxon::TypeConversion::isManagedArrayType(varType)) {
+					// Variable-sized array - load data pointer and length from header
+					mir::MIRValue *arrayAlloca = namedValues[varExpr->name];
+					if (arrayAlloca) {
+						mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
+						mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
+																	  {builder->getInt64(-8)}, "length.ptr");
+						mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "length");
+
+						mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, fieldPtr, 0, fieldName + ".ptr");
+						builder->createStore(dataPtr, dataPtrField);
+						mir::MIRValue *lenField = builder->createStructGEP(unsizedArrayType, fieldPtr, 1, fieldName + ".len");
+						builder->createStore(length, lenField);
+					} else {
+						reportError("Unknown variable in struct field init: " + varExpr->name,
+									varExpr->line, varExpr->column);
+					}
+				} else {
+					mir::MIRValue *fieldValue = generateExpr(valueExpr);
+					builder->createStore(fieldValue, fieldPtr);
+				}
+			} else {
+				mir::MIRValue *fieldValue = generateExpr(valueExpr);
+				builder->createStore(fieldValue, fieldPtr);
+			}
+		} else {
+			// Regular field value
+			mir::MIRValue *fieldValue = generateExpr(valueExpr);
+
+			mir::MIRType *fieldType = getTypeFromString(fieldTypeStr);
+
+			// Handle optional field wrapping
+			if (maxon::TypeConversion::isOptionalType(fieldTypeStr)) {
+				std::string valueTypeStr = getExpressionMaxonType(valueExpr);
+				bool isNilValue = (!fieldValue && dynamic_cast<NilExprAST *>(valueExpr));
+
+				if (isNilValue) {
+					fieldValue = createNilOptional(fieldType);
+				} else if (fieldValue && !maxon::TypeConversion::isOptionalType(valueTypeStr)) {
+					fieldValue = createSomeOptional(fieldType, fieldValue);
+				}
+			}
+
+			// For struct types, generateExpr returns a pointer to an alloca
+			// We need to load the struct value and store it
+			if (fieldValue && fieldType->isStruct() && fieldValue->type == mir::MIRType::getPtr()) {
+				mir::MIRValue *loadedValue = builder->createLoad(fieldType, fieldValue, fieldName + ".load");
+				builder->createStore(loadedValue, fieldPtr);
+			} else if (fieldValue) {
+				builder->createStore(fieldValue, fieldPtr);
+			} else {
+				reportError("Failed to generate value for field '" + fieldName + "'",
+							structInit->line, structInit->column);
+			}
+		}
+	}
+
+	return structAlloca;
 }
 
 //==============================================================================

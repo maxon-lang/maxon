@@ -237,6 +237,25 @@ end 'main'
 12
 ```
 
+<!-- test: struct-literal-as-arg -->
+```maxon
+struct Point
+    var x int
+    var y int
+end 'Point'
+
+function acceptPoint(p Point) int
+    return p.x + p.y
+end 'acceptPoint'
+
+function main() int
+    return acceptPoint(Point{x: 3, y: 4})
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: struct-field-default -->
 ```maxon
 struct Counter
