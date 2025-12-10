@@ -642,7 +642,44 @@ var r2 = Result.failure(404, "Not found")
 var r3 = Result.pending
 ```
 
-Extract associated values using `if case`:
+### Pattern Matching with Value Extraction
+
+Use `match` statements to extract associated values from enum cases. Each binding name becomes a local variable within the case body:
+
+```maxon
+match result 'handle'
+    case success(value) then return value
+    case failure(code, msg) then print(msg)
+    case pending then print("waiting...")
+end 'handle'
+```
+
+Match expressions also support value extraction using `gives`:
+
+```maxon
+var extracted = match container 'get'
+    case empty gives 0
+    case value(n) gives n * 2
+end 'get'
+```
+
+You can mix cases with and without bindings:
+
+```maxon
+match result 'check'
+    case success(v) then return v    // Extracts value
+    case pending then return 0        // No extraction needed
+end 'check'
+```
+
+**Notes:**
+- Binding names must match the number of associated values in the case definition
+- Bindings are only in scope within the case body
+- Cases without associated values don't need parentheses
+
+### If-Case Pattern Matching
+
+For single-case matching, use `if case` syntax:
 
 ```maxon
 if case success(v) = result 'check'
@@ -1061,6 +1098,23 @@ end 'cascade'
 
 When `x = 1`, the first case matches, adds 10, then falls through to case 2 (adds 20), giving a total of 30.
 
+**Enum Case Pattern Matching:**
+
+For enums with associated values, use `case CaseName(bindings)` syntax to extract values:
+
+```maxon
+enum Result
+    case success(value int)
+    case failure(code int)
+end 'Result'
+
+var r = Result.success(42)
+match r 'handle'
+    case success(v) then return v      // v binds to 42
+    case failure(c) then return c
+end 'handle'
+```
+
 **Notes:**
 - Block identifier required after `match expression` and on `end`
 - Each case is a single line with one statement
@@ -1069,6 +1123,7 @@ When `x = 1`, the first case matches, adds 10, then falls through to case 2 (add
 - `and fallthrough` cannot be combined with `return`
 - For enums, all cases must be covered unless `default` is present
 - `default` must be the last case if present
+- Enum case patterns: `case CaseName(binding1, binding2)` extracts associated values
 
 ### Match Expression
 
@@ -1094,10 +1149,25 @@ let points = match grade 'convert'
 end 'convert'
 ```
 
+**Enum Case Extraction:**
+```maxon
+enum Container
+    case empty
+    case value(n int)
+end 'Container'
+
+var c = Container.value(10)
+var result = match c 'get'
+    case empty gives 0
+    case value(n) gives n * 2    // result = 20
+end 'get'
+```
+
 **Notes:**
 - All cases must return the same type
 - `and fallthrough` is NOT allowed in match expressions
 - Block identifier required
+- Enum bindings work the same as in match statements
 
 ### Break Statement
 ```maxon
@@ -1464,6 +1534,7 @@ if condition 'id' statements else 'id' statements end 'id'
 while condition 'id' statements end 'id'
 for var in iterable 'id' statements end 'id'
 match expr 'id' pattern then statement default then statement end 'id'
+match enum 'id' case Name(binding) then statement end 'id'  // enum pattern
 var x = match expr 'id' pattern gives value default gives value end 'id'
 break
 continue

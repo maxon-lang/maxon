@@ -809,6 +809,7 @@ class EnumCaseExprAST : public ExprAST {
 // Each case contains one or more patterns (via 'or'), and either:
 // - A single statement (for match statements) with optional fallthrough
 // - A single expression (for match expressions) that returns a value
+// For enum case patterns with bindings: case success(value) then ...
 struct MatchCaseAST {
 	std::vector<std::unique_ptr<ExprAST>> patterns; // One or more patterns (via 'or')
 	std::unique_ptr<StmtAST> statement;				// Single statement (for match statement, null for expression)
@@ -818,6 +819,12 @@ struct MatchCaseAST {
 	int line;
 	int column;
 
+	// Enum case pattern fields (for pattern matching with value extraction)
+	bool isEnumCasePattern = false;					// true if this is 'case X(bindings)' pattern
+	std::string enumCaseName;						// Case name (e.g., "success")
+	std::vector<std::string> bindings;				// Variable names to bind associated values
+
+	// Constructor for regular patterns
 	MatchCaseAST(std::vector<std::unique_ptr<ExprAST>> pats,
 				 std::unique_ptr<StmtAST> stmt,
 				 std::unique_ptr<ExprAST> expr,
@@ -825,7 +832,21 @@ struct MatchCaseAST {
 				 int l = 0, int c = 0)
 		: patterns(std::move(pats)), statement(std::move(stmt)),
 		  resultExpr(std::move(expr)), isDefault(isDef),
-		  hasFallthrough(fallthrough), line(l), column(c) {}
+		  hasFallthrough(fallthrough), line(l), column(c),
+		  isEnumCasePattern(false) {}
+
+	// Constructor for enum case patterns with bindings
+	MatchCaseAST(const std::string &caseName,
+				 std::vector<std::string> bindingNames,
+				 std::unique_ptr<StmtAST> stmt,
+				 std::unique_ptr<ExprAST> expr,
+				 bool fallthrough,
+				 int l = 0, int c = 0)
+		: patterns(), statement(std::move(stmt)),
+		  resultExpr(std::move(expr)), isDefault(false),
+		  hasFallthrough(fallthrough), line(l), column(c),
+		  isEnumCasePattern(true), enumCaseName(caseName),
+		  bindings(std::move(bindingNames)) {}
 };
 
 // Match statement

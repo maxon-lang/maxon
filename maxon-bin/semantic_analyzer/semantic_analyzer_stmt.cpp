@@ -671,6 +671,71 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 				if (i != matchStmt->cases.size() - 1) {
 					defaultNotLast = true;
 				}
+			} else if (matchCase.isEnumCasePattern) {
+				// Enum case pattern with bindings: case success(value) then ...
+				if (!enumInfo) {
+					addError("Cannot use 'case' pattern on non-enum type '" + scrutineeType + "'",
+							 matchCase.line, matchCase.column);
+				} else {
+					// Find the case in the enum
+					const EnumCaseInfo *caseInfo = nullptr;
+					for (const auto &ec : enumInfo->cases) {
+						if (ec.name == matchCase.enumCaseName) {
+							caseInfo = &ec;
+							break;
+						}
+					}
+
+					if (!caseInfo) {
+						addError("Unknown case '" + matchCase.enumCaseName + "' for enum '" + scrutineeType + "'",
+								 matchCase.line, matchCase.column);
+					} else {
+						// Validate binding count matches associated values
+						if (matchCase.bindings.size() != caseInfo->associatedValues.size()) {
+							addError("Wrong number of bindings for case '" + matchCase.enumCaseName +
+										 "': expected " + std::to_string(caseInfo->associatedValues.size()) +
+										 ", got " + std::to_string(matchCase.bindings.size()),
+									 matchCase.line, matchCase.column);
+						}
+
+						// Track for exhaustiveness
+						coveredCases.insert(matchCase.enumCaseName);
+
+						// Check for duplicate patterns
+						std::string patternStr = scrutineeType + "." + matchCase.enumCaseName;
+						if (seenPatterns.find(patternStr) != seenPatterns.end()) {
+							addError("Duplicate pattern '" + patternStr + "' in match",
+									 matchCase.line, matchCase.column);
+						}
+						seenPatterns.insert(patternStr);
+
+						// Check fallthrough constraints
+						if (matchCase.hasFallthrough) {
+							if (dynamic_cast<ReturnStmtAST *>(matchCase.statement.get())) {
+								addError("Cannot combine 'fallthrough' with 'return' statement",
+										 matchCase.line, matchCase.column);
+							}
+						}
+
+						// Analyze case body with bindings in scope
+						enterScope();
+						blockIdStack.push_back(std::set<std::string>());
+
+						// Declare binding variables with their types from associated values
+						for (size_t j = 0; j < matchCase.bindings.size() && j < caseInfo->associatedValues.size(); j++) {
+							const std::string &bindingName = matchCase.bindings[j];
+							const std::string &bindingType = caseInfo->associatedValues[j].type;
+							declareVariable(bindingName, bindingType, true /* immutable */,
+											matchCase.line, matchCase.column);
+						}
+
+						analyzeStatement(matchCase.statement.get(), currentFunctionReturnType);
+						blockIdStack.pop_back();
+						checkUnusedVariables();
+						exitScope();
+					}
+				}
+				continue; // Skip the regular analysis below
 			} else {
 				// Analyze each pattern
 				for (const auto &pattern : matchCase.patterns) {

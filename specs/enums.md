@@ -189,7 +189,28 @@ var r2 = Result.failure(404, "Not found")
 var r3 = Result.pending
 ```
 
-> **Note:** Pattern matching with `match` statements to extract associated values will be added in a future release.
+### Pattern Matching with Value Extraction
+
+Use `match` statements to extract associated values from enum cases:
+
+```maxon
+match result 'handle'
+    case success(value) then return value
+    case failure(code, msg) then print(msg)
+    case pending then print("waiting...")
+end 'handle'
+```
+
+Each binding name becomes a local variable within the case body, with the type inferred from the enum case definition.
+
+Match expressions also support value extraction using `gives`:
+
+```maxon
+var extracted = match container 'get'
+    case empty gives 0
+    case value(n) gives n
+end 'get'
+```
 
 ### Comparing Enum Values
 
@@ -655,4 +676,138 @@ The variable '_c' is assigned but its value is never used
 
   7 |     let _c = Container.value("hello")
     |     ^
+```
+
+<!-- test: match-enum-binding-simple -->
+```maxon
+enum Container
+    case empty
+    case value(n int)
+end 'Container'
+
+function main() int
+    var c = Container.value(42)
+    match c 'extract'
+        case empty then return 0
+        case value(n) then return n
+    end 'extract'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: match-enum-binding-multiple -->
+```maxon
+enum Result
+    case success(value int)
+    case failure(code int)
+end 'Result'
+
+function main() int
+    var r = Result.failure(404)
+    match r 'handle'
+        case success(v) then return v
+        case failure(c) then return c
+    end 'handle'
+end 'main'
+```
+```exitcode
+404
+```
+
+<!-- test: match-expr-enum-binding -->
+```maxon
+enum Container
+    case empty
+    case value(n int)
+end 'Container'
+
+function main() int
+    var c = Container.value(10)
+    var result = match c 'get'
+        case empty gives 0
+        case value(n) gives n * 2
+    end 'get'
+    return result
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: match-enum-no-binding -->
+```maxon
+enum Container
+    case empty
+    case value(n int)
+end 'Container'
+
+function main() int
+    var c = Container.empty
+    match c 'check'
+        case empty then return 1
+        case value(n) then return n
+    end 'check'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: error.match-enum-wrong-binding-count -->
+```maxon
+enum Container
+    case value(n int)
+end 'Container'
+
+function main() int
+    var c = Container.value(42)
+    match c 'extract'
+        case value(a, b) then return a
+    end 'extract'
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 9, column 9
+Wrong number of bindings for case 'value': expected 1, got 2
+
+  9 |         case value(a, b) then return a
+    |         ^
+```
+
+<!-- test: error.match-enum-unknown-case -->
+```maxon
+enum Container
+    case empty
+    case value(n int)
+end 'Container'
+
+function main() int
+    var c = Container.value(42)
+    match c 'extract'
+        case unknown(x) then return x
+    end 'extract'
+end 'main'
+```
+```maxoncstderr
+Semantic Error: line 10, column 9
+Unknown case 'unknown' for enum 'Container'
+
+  10 |         case unknown(x) then return x
+     |         ^
+
+Semantic Error: line 9, column 5
+Match on enum 'Container' is not exhaustive
+  Missing cases: empty, value
+
+  9 |     match c 'extract'
+    |     ^
+
+Semantic Error: line 7, column 1
+Function 'main' must return a value of type 'int'
+  Note: All execution paths through the function must end with a return statement
+
+  7 | function main() int
+    | ^
 ```

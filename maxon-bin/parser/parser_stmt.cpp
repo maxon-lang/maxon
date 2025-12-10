@@ -475,6 +475,49 @@ std::unique_ptr<MatchStmtAST> Parser::parseMatch() {
 		if (checkKeyword("default")) {
 			advance(); // consume 'default'
 			isDefault = true;
+		} else if (checkKeyword("case")) {
+			// Enum case pattern: case caseName(binding1, binding2) then ...
+			advance(); // consume 'case'
+			Token caseNameToken = expect(TokenType::IDENTIFIER, "Expected case name after 'case'");
+			std::string caseName = caseNameToken.value;
+			std::vector<std::string> bindings;
+
+			// Check for bindings in parentheses
+			if (check(TokenType::LPAREN)) {
+				advance(); // consume '('
+				if (!check(TokenType::RPAREN)) {
+					do {
+						Token bindingToken = expect(TokenType::IDENTIFIER, "Expected binding name");
+						bindings.push_back(bindingToken.value);
+					} while (match(TokenType::COMMA));
+				}
+				expect(TokenType::RPAREN, "Expected ')' after bindings");
+				// Note: expect() already advances past the token
+			}
+
+			// Expect 'then' keyword
+			expectKeywordAdvance("then", "Expected 'then' after case pattern");
+
+			// Parse single statement
+			auto stmt = parseMatchCaseStatement();
+
+			// Check for 'and fallthrough'
+			bool hasFallthrough = false;
+			if (checkKeyword("and")) {
+				advance(); // consume 'and'
+				expectKeywordAdvance("fallthrough", "Expected 'fallthrough' after 'and'");
+				hasFallthrough = true;
+			}
+
+			cases.push_back(MatchCaseAST(
+				caseName,
+				std::move(bindings),
+				std::move(stmt),
+				nullptr, // no result expression for match statement
+				hasFallthrough,
+				caseLine,
+				caseColumn));
+			continue; // Skip the regular case push below
 		} else {
 			// Parse first pattern (use parseLogicalAnd to stop before 'or' keyword)
 			patterns.push_back(parseLogicalAnd());
@@ -551,6 +594,41 @@ std::unique_ptr<MatchExprAST> Parser::parseMatchExpr() {
 		if (checkKeyword("default")) {
 			advance(); // consume 'default'
 			isDefault = true;
+		} else if (checkKeyword("case")) {
+			// Enum case pattern: case caseName(binding1, binding2) gives ...
+			advance(); // consume 'case'
+			Token caseNameToken = expect(TokenType::IDENTIFIER, "Expected case name after 'case'");
+			std::string caseName = caseNameToken.value;
+			std::vector<std::string> bindings;
+
+			// Check for bindings in parentheses
+			if (check(TokenType::LPAREN)) {
+				advance(); // consume '('
+				if (!check(TokenType::RPAREN)) {
+					do {
+						Token bindingToken = expect(TokenType::IDENTIFIER, "Expected binding name");
+						bindings.push_back(bindingToken.value);
+					} while (match(TokenType::COMMA));
+				}
+				expect(TokenType::RPAREN, "Expected ')' after bindings");
+				// Note: expect() already advances past the token
+			}
+
+			// Expect 'gives' keyword
+			expectKeywordAdvance("gives", "Expected 'gives' after case pattern");
+
+			// Parse result expression
+			auto resultExpr = parseLogicalOr();
+
+			cases.push_back(MatchCaseAST(
+				caseName,
+				std::move(bindings),
+				nullptr, // no statement for match expression
+				std::move(resultExpr),
+				false, // fallthrough not allowed in match expressions
+				caseLine,
+				caseColumn));
+			continue; // Skip the regular case push below
 		} else {
 			// Parse first pattern (use parseLogicalAnd to stop before 'or' keyword)
 			patterns.push_back(parseLogicalAnd());

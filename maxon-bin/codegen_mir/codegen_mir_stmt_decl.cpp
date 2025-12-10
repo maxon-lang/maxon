@@ -888,6 +888,48 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 		}
 	}
 
+	// Check if this is an enum case initialization (MemberAccess or CallExpr that produces enum)
+	// Enum cases with associated values return alloca pointers - we need to copy the struct
+	std::string inferredType;
+	if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(varDecl->initializer.get())) {
+		if (memberExpr->isEnumCase() && !memberExpr->resolvedEnumName.empty()) {
+			inferredType = memberExpr->resolvedEnumName;
+			auto enumIt = enumTypes.find(inferredType);
+			if (enumIt != enumTypes.end() && enumIt->second.hasAssociatedValues) {
+				// Generate the enum value (returns alloca pointer)
+				mir::MIRValue *tempAlloca = generateExpr(varDecl->initializer.get());
+
+				// Create our own alloca and copy the struct content
+				mir::MIRValue *varAlloca = builder->createAlloca(enumIt->second.mirType, varDecl->name);
+				mir::MIRValue *loadedVal = builder->createLoad(enumIt->second.mirType, tempAlloca, varDecl->name + ".tmp");
+				builder->createStore(loadedVal, varAlloca);
+
+				namedValues[varDecl->name] = varAlloca;
+				variableTypes[varDecl->name] = inferredType;
+				return;
+			}
+		}
+	}
+	if (auto *callExpr = dynamic_cast<CallExprAST *>(varDecl->initializer.get())) {
+		if (callExpr->isEnumCaseConstruction() && !callExpr->resolvedEnumName.empty()) {
+			inferredType = callExpr->resolvedEnumName;
+			auto enumIt = enumTypes.find(inferredType);
+			if (enumIt != enumTypes.end()) {
+				// Generate the enum value (returns alloca pointer)
+				mir::MIRValue *tempAlloca = generateExpr(varDecl->initializer.get());
+
+				// Create our own alloca and copy the struct content
+				mir::MIRValue *varAlloca = builder->createAlloca(enumIt->second.mirType, varDecl->name);
+				mir::MIRValue *loadedVal = builder->createLoad(enumIt->second.mirType, tempAlloca, varDecl->name + ".tmp");
+				builder->createStore(loadedVal, varAlloca);
+
+				namedValues[varDecl->name] = varAlloca;
+				variableTypes[varDecl->name] = inferredType;
+				return;
+			}
+		}
+	}
+
 	// Non-array, non-struct variable
 	mir::MIRValue *initVal = nullptr;
 	if (varDecl->initializer) {

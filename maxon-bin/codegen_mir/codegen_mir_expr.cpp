@@ -334,6 +334,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			// Set tag field (field 0)
 			mir::MIRValue *tagPtr = builder->createStructGEP(enumInfo.mirType, enumAlloca, 0, "enum.tag");
 			builder->createStore(builder->getInt8(static_cast<int8_t>(tagValue)), tagPtr);
+			// Return the alloca pointer (enum variables hold pointers)
 			return enumAlloca;
 		}
 
@@ -887,25 +888,40 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			if (enumIt != enumTypes.end()) {
 				const EnumCodegenInfo &enumInfo = enumIt->second;
 
-				// Generate left and right operands
-				mir::MIRValue *leftVal = generateExpr(binExpr->left.get());
-				mir::MIRValue *rightVal = generateExpr(binExpr->right.get());
-
-				// For simple enums (no associated values), compare the i8 values directly
+					// For simple enums (no associated values), compare the i8 values directly
 				if (!enumInfo.hasAssociatedValues) {
+					mir::MIRValue *leftVal = generateExpr(binExpr->left.get());
+					mir::MIRValue *rightVal = generateExpr(binExpr->right.get());
 					mir::MIRValue *result = (binExpr->op == 'E')
 												? builder->createICmpEq(leftVal, rightVal, "enum.eq")
 												: builder->createICmpNe(leftVal, rightVal, "enum.ne");
 					return result;
 				}
 
-				// For enums with associated values, compare tags only
+				// For enums with associated values, we need pointers to access the tag field
+				// Get pointer to left operand
+				mir::MIRValue *leftPtr = nullptr;
+				if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->left.get())) {
+					leftPtr = namedValues[varExpr->name];
+				} else {
+					// Other expressions (like enum case construction) return alloca pointers
+					leftPtr = generateExpr(binExpr->left.get());
+				}
+
+				// Get pointer to right operand
+				mir::MIRValue *rightPtr = nullptr;
+				if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->right.get())) {
+					rightPtr = namedValues[varExpr->name];
+				} else {
+					rightPtr = generateExpr(binExpr->right.get());
+				}
+
 				// Get tag from left (field 0)
-				mir::MIRValue *leftTagPtr = builder->createStructGEP(enumInfo.mirType, leftVal, 0, "left.tag.ptr");
+				mir::MIRValue *leftTagPtr = builder->createStructGEP(enumInfo.mirType, leftPtr, 0, "left.tag.ptr");
 				mir::MIRValue *leftTag = builder->createLoad(mir::MIRType::getInt8(), leftTagPtr, "left.tag");
 
 				// Get tag from right (field 0)
-				mir::MIRValue *rightTagPtr = builder->createStructGEP(enumInfo.mirType, rightVal, 0, "right.tag.ptr");
+				mir::MIRValue *rightTagPtr = builder->createStructGEP(enumInfo.mirType, rightPtr, 0, "right.tag.ptr");
 				mir::MIRValue *rightTag = builder->createLoad(mir::MIRType::getInt8(), rightTagPtr, "right.tag");
 
 				mir::MIRValue *result = (binExpr->op == 'E')
@@ -1341,6 +1357,12 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 					mir::MIRType *argType = getTypeFromString(assocValues[i].second);
 
+					// For struct types (like string), generateExpr may return an alloca pointer
+					// We need to load the value before storing into the payload
+					if (argType->isStruct() && argValue->type == mir::MIRType::getPtr()) {
+						argValue = builder->createLoad(argType, argValue, "enum.arg." + assocValues[i].first);
+					}
+
 					// Store at offset within payload
 					mir::MIRValue *fieldPtr = builder->createGEP(mir::MIRType::getInt8(), payloadPtr,
 																 {builder->getInt64(static_cast<int64_t>(offset))},
@@ -1352,6 +1374,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				}
 			}
 
+			// Return the alloca pointer (enum variables hold pointers)
 			return enumAlloca;
 		}
 

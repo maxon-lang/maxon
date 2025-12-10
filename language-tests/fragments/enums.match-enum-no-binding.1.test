@@ -1,0 +1,117 @@
+// Test: enums.match-enum-no-binding.1
+enum Container
+    case empty
+    case value(n int)
+end 'Container'
+
+function main() int
+    var c = Container.empty
+    match c 'check'
+        case empty then return 1
+        case value(n) then return n
+    end 'check'
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 30
+
+%__enum_Container = type { i8, [4 x i8] }
+
+define i32 @main() {
+entry0:
+  %0 = alloca %__enum_Container
+  %1 = getelementptr %__enum_Container, ptr %0, i32 0, i32 0
+  store i8 0, ptr %1
+  %2 = alloca %__enum_Container
+  %3 = load %__enum_Container, ptr %0
+  store %__enum_Container %3, ptr %2
+  %4 = load %__enum_Container, ptr %2
+  %5 = alloca %__enum_Container
+  store %__enum_Container %4, ptr %5
+  br label %match.check.04
+match.merge1:
+  ret i32 0
+match.case.02:
+  ret i32 1
+match.case.13:
+  %12 = getelementptr %__enum_Container, ptr %5, i32 0, i32 1
+  %13 = getelementptr i8, ptr %12, i64 0
+  %14 = load i32, ptr %13
+  %15 = alloca i32
+  store i32 %14, ptr %15
+  %16 = load i32, ptr %15
+  ret i32 %16
+match.check.04:
+  %6 = getelementptr %__enum_Container, ptr %5, i32 0, i32 0
+  %7 = load i8, ptr %6
+  %8 = icmp eq i8 %7, 0
+  br i1 %8, label %match.case.02, label %match.check.15
+match.check.15:
+  %9 = getelementptr %__enum_Container, ptr %5, i32 0, i32 0
+  %10 = load i8, ptr %9
+  %11 = icmp eq i8 %10, 1
+  br i1 %11, label %match.case.13, label %match.merge1
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 30
+
+%__enum_Container = type { i8, [4 x i8] }
+
+define i32 @main() {
+entry0:
+  %0 = alloca %__enum_Container
+  %1 = getelementptr %__enum_Container, ptr %0, i32 0, i32 0
+  store i8 0, ptr %1
+  %2 = alloca %__enum_Container
+  %3 = load %__enum_Container, ptr %0
+  store %__enum_Container %3, ptr %2
+  %4 = load %__enum_Container, ptr %2
+  %5 = alloca %__enum_Container
+  store %__enum_Container %4, ptr %5
+  br label %match.check.04
+match.merge1:
+  ret i32 0
+match.case.02:
+  ret i32 1
+match.case.13:
+  %12 = getelementptr %__enum_Container, ptr %5, i32 0, i32 1
+  %13 = getelementptr i8, ptr %12, i64 0
+  %14 = load i32, ptr %13
+  %15 = alloca i32
+  store i32 %14, ptr %15
+  %16 = load i32, ptr %15
+  ret i32 %16
+match.check.04:
+  %6 = getelementptr %__enum_Container, ptr %5, i32 0, i32 0
+  %7 = load i8, ptr %6
+  %8 = icmp eq i8 %7, 0
+  br i1 %8, label %match.case.02, label %match.check.15
+match.check.15:
+  %9 = getelementptr %__enum_Container, ptr %5, i32 0, i32 0
+  %10 = load i8, ptr %9
+  %11 = icmp eq i8 %10, 1
+  br i1 %11, label %match.case.13, label %match.merge1
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 1

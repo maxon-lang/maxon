@@ -517,6 +517,12 @@ void MIRCodeGenerator::generateMatch(MatchStmtAST *matchStmt, mir::MIRFunction *
 	mir::MIRValue *scrutineeAlloca = builder->createAlloca(scrutineeVal->type, "match.scrutinee");
 	builder->createStore(scrutineeVal, scrutineeAlloca);
 
+	// Check if scrutinee is an enum type
+	std::string scrutineeTypeName = getExpressionMaxonType(matchStmt->scrutinee.get());
+	auto enumIt = enumTypes.find(scrutineeTypeName);
+	bool isEnumScrutinee = (enumIt != enumTypes.end());
+	const EnumCodegenInfo *enumInfo = isEnumScrutinee ? &enumIt->second : nullptr;
+
 	// Create merge block (where all cases join)
 	mir::MIRBasicBlock *mergeBB = builder->createBasicBlock("match.merge");
 
@@ -538,6 +544,24 @@ void MIRCodeGenerator::generateMatch(MatchStmtAST *matchStmt, mir::MIRFunction *
 	// The fallback block is either default case or merge block
 	mir::MIRBasicBlock *fallbackBB = (defaultIndex >= 0) ? caseBodyBlocks[defaultIndex] : mergeBB;
 
+	// Pre-create check blocks for all non-default cases
+	std::vector<mir::MIRBasicBlock *> checkBlocks;
+	for (size_t i = 0; i < matchStmt->cases.size(); i++) {
+		if (matchStmt->cases[i].isDefault) {
+			checkBlocks.push_back(nullptr); // No check block for default
+		} else {
+			checkBlocks.push_back(builder->createBasicBlock("match.check." + std::to_string(i)));
+		}
+	}
+
+	// Branch to first check block from entry
+	for (size_t i = 0; i < matchStmt->cases.size(); i++) {
+		if (!matchStmt->cases[i].isDefault) {
+			builder->createBr(checkBlocks[i]);
+			break;
+		}
+	}
+
 	// Generate pattern checks (chain of comparisons)
 	for (size_t i = 0; i < matchStmt->cases.size(); i++) {
 		const auto &matchCase = matchStmt->cases[i];
@@ -547,59 +571,78 @@ void MIRCodeGenerator::generateMatch(MatchStmtAST *matchStmt, mir::MIRFunction *
 			continue;
 		}
 
-		// Create check block for this case
-		mir::MIRBasicBlock *checkBB = builder->createBasicBlock("match.check." + std::to_string(i));
-		builder->createBr(checkBB);
-		builder->setInsertPoint(checkBB);
+		// Set insert point to this case's check block
+		builder->setInsertPoint(checkBlocks[i]);
 
-		// Reload scrutinee
-		mir::MIRValue *scrutinee = builder->createLoad(scrutineeVal->type, scrutineeAlloca, "scrutinee");
-
-		// Generate OR'd comparison for all patterns in this case
-		mir::MIRValue *cmpResult = nullptr;
-		for (const auto &pattern : matchCase.patterns) {
-			mir::MIRValue *patternVal = generateExpr(pattern.get());
-			if (!patternVal) {
-				reportError("Failed to generate match pattern",
-							pattern->line, pattern->column);
-			}
-
-			// Generate comparison based on type
-			mir::MIRValue *cmp = nullptr;
-			if (scrutinee->type == mir::MIRType::getInt32() ||
-				scrutinee->type == mir::MIRType::getInt8() ||
-				scrutinee->type == mir::MIRType::getInt1()) {
-				cmp = builder->createICmpEq(scrutinee, patternVal, "match.cmp");
-			} else if (scrutinee->type->isStruct() && scrutinee->type->structName == "string") {
-				// String comparison - call string.equals from stdlib
-				mir::MIRFunction *strEquals = module->getFunction("string.equals");
-				if (!strEquals) {
-					reportError("string.equals function not found - ensure stdlib is imported",
-								matchStmt->line, matchStmt->column);
-				}
-				cmp = builder->createCall(strEquals, {scrutineeAlloca, patternVal}, "match.strcmp");
-			} else {
-				// Default to integer comparison
-				cmp = builder->createICmpEq(scrutinee, patternVal, "match.cmp");
-			}
-
-			if (cmpResult == nullptr) {
-				cmpResult = cmp;
-			} else {
-				cmpResult = builder->createOr(cmpResult, cmp, "match.orcmp");
-			}
-		}
-
-		// Determine next check block
+		// Determine next check block (find next non-default case)
 		mir::MIRBasicBlock *nextCheckBB = fallbackBB;
 		for (size_t j = i + 1; j < matchStmt->cases.size(); j++) {
 			if (!matchStmt->cases[j].isDefault) {
-				nextCheckBB = builder->createBasicBlock("match.check." + std::to_string(j));
+				nextCheckBB = checkBlocks[j];
 				break;
 			}
 		}
 
-		builder->createCondBr(cmpResult, caseBodyBlocks[i], nextCheckBB);
+		if (matchCase.isEnumCasePattern && isEnumScrutinee && enumInfo) {
+			// Enum case pattern: compare tag and extract bindings
+			auto tagIt = enumInfo->caseTags.find(matchCase.enumCaseName);
+			if (tagIt == enumInfo->caseTags.end()) {
+				reportError("Unknown enum case: " + matchCase.enumCaseName,
+							matchCase.line, matchCase.column);
+			}
+			int expectedTag = tagIt->second;
+
+			// Extract tag from scrutinee (field 0)
+			mir::MIRValue *tagPtr = builder->createStructGEP(enumInfo->mirType, scrutineeAlloca, 0, "scrutinee.tag");
+			mir::MIRValue *tagVal = builder->createLoad(mir::MIRType::getInt8(), tagPtr, "tag");
+
+			// Compare tags
+			mir::MIRValue *expectedTagVal = builder->getInt8(static_cast<int8_t>(expectedTag));
+			mir::MIRValue *tagMatch = builder->createICmpEq(tagVal, expectedTagVal, "tag.match");
+
+			builder->createCondBr(tagMatch, caseBodyBlocks[i], nextCheckBB);
+		} else {
+			// Regular pattern matching
+			// Reload scrutinee
+			mir::MIRValue *scrutinee = builder->createLoad(scrutineeVal->type, scrutineeAlloca, "scrutinee");
+
+			// Generate OR'd comparison for all patterns in this case
+			mir::MIRValue *cmpResult = nullptr;
+			for (const auto &pattern : matchCase.patterns) {
+				mir::MIRValue *patternVal = generateExpr(pattern.get());
+				if (!patternVal) {
+					reportError("Failed to generate match pattern",
+								pattern->line, pattern->column);
+				}
+
+				// Generate comparison based on type
+				mir::MIRValue *cmp = nullptr;
+				if (scrutinee->type == mir::MIRType::getInt32() ||
+					scrutinee->type == mir::MIRType::getInt8() ||
+					scrutinee->type == mir::MIRType::getInt1()) {
+					cmp = builder->createICmpEq(scrutinee, patternVal, "match.cmp");
+				} else if (scrutinee->type->isStruct() && scrutinee->type->structName == "string") {
+					// String comparison - call string.equals from stdlib
+					mir::MIRFunction *strEquals = module->getFunction("string.equals");
+					if (!strEquals) {
+						reportError("string.equals function not found - ensure stdlib is imported",
+									matchStmt->line, matchStmt->column);
+					}
+					cmp = builder->createCall(strEquals, {scrutineeAlloca, patternVal}, "match.strcmp");
+				} else {
+					// Default to integer comparison
+					cmp = builder->createICmpEq(scrutinee, patternVal, "match.cmp");
+				}
+
+				if (cmpResult == nullptr) {
+					cmpResult = cmp;
+				} else {
+					cmpResult = builder->createOr(cmpResult, cmp, "match.orcmp");
+				}
+			}
+
+			builder->createCondBr(cmpResult, caseBodyBlocks[i], nextCheckBB);
+		}
 	}
 
 	// Generate case bodies
@@ -608,9 +651,54 @@ void MIRCodeGenerator::generateMatch(MatchStmtAST *matchStmt, mir::MIRFunction *
 
 		builder->setInsertPoint(caseBodyBlocks[i]);
 
+		// For enum case patterns, extract bindings before generating body
+		std::vector<std::string> bindingsToCleanup;
+		if (matchCase.isEnumCasePattern && isEnumScrutinee && enumInfo) {
+			auto assocIt = enumInfo->caseAssocValues.find(matchCase.enumCaseName);
+			if (assocIt != enumInfo->caseAssocValues.end() && !assocIt->second.empty()) {
+				const auto &assocValues = assocIt->second;
+
+				// Get pointer to payload (field 1)
+				mir::MIRValue *payloadPtr = builder->createStructGEP(enumInfo->mirType, scrutineeAlloca, 1, "payload");
+
+				// Extract each associated value and bind to variable
+				size_t offset = 0;
+				for (size_t j = 0; j < matchCase.bindings.size() && j < assocValues.size(); j++) {
+					const std::string &bindingName = matchCase.bindings[j];
+					const std::string &bindingTypeName = assocValues[j].second;
+					mir::MIRType *bindingType = getTypeFromString(bindingTypeName);
+
+					// Calculate pointer to this field in payload
+					mir::MIRValue *fieldPtr = builder->createGEP(mir::MIRType::getInt8(), payloadPtr,
+																 {builder->getInt64(static_cast<int64_t>(offset))},
+																 "payload." + bindingName);
+
+					// Load the value
+					mir::MIRValue *fieldVal = builder->createLoad(bindingType, fieldPtr, bindingName + ".val");
+
+					// Create alloca for binding and store
+					mir::MIRValue *bindingAlloca = builder->createAlloca(bindingType, bindingName);
+					builder->createStore(fieldVal, bindingAlloca);
+
+					// Register binding in namedValues and variableTypes
+					namedValues[bindingName] = bindingAlloca;
+					variableTypes[bindingName] = bindingTypeName;
+					bindingsToCleanup.push_back(bindingName);
+
+					offset += bindingType->sizeInBytes;
+				}
+			}
+		}
+
 		// Generate case statement
 		if (matchCase.statement) {
 			generateStmt(matchCase.statement.get(), function);
+		}
+
+		// Clean up bindings
+		for (const auto &binding : bindingsToCleanup) {
+			namedValues.erase(binding);
+			variableTypes.erase(binding);
 		}
 
 		// Check if we need to branch (no terminator yet)
@@ -639,6 +727,12 @@ mir::MIRValue *MIRCodeGenerator::generateMatchExpr(MatchExprAST *matchExpr) {
 
 	mir::MIRValue *scrutineeAlloca = builder->createAlloca(scrutineeVal->type, "matchexpr.scrutinee");
 	builder->createStore(scrutineeVal, scrutineeAlloca);
+
+	// Check if scrutinee is an enum type
+	std::string scrutineeTypeName = getExpressionMaxonType(matchExpr->scrutinee.get());
+	auto enumIt = enumTypes.find(scrutineeTypeName);
+	bool isEnumScrutinee = (enumIt != enumTypes.end());
+	const EnumCodegenInfo *enumInfo = isEnumScrutinee ? &enumIt->second : nullptr;
 
 	// Determine result type from first case
 	mir::MIRType *resultType = nullptr;
@@ -675,6 +769,24 @@ mir::MIRValue *MIRCodeGenerator::generateMatchExpr(MatchExprAST *matchExpr) {
 	// The fallback block is either default case or merge block
 	mir::MIRBasicBlock *fallbackBB = (defaultIndex >= 0) ? caseBodyBlocks[defaultIndex] : mergeBB;
 
+	// Pre-create check blocks for all non-default cases
+	std::vector<mir::MIRBasicBlock *> checkBlocks;
+	for (size_t i = 0; i < matchExpr->cases.size(); i++) {
+		if (matchExpr->cases[i].isDefault) {
+			checkBlocks.push_back(nullptr); // No check block for default
+		} else {
+			checkBlocks.push_back(builder->createBasicBlock("matchexpr.check." + std::to_string(i)));
+		}
+	}
+
+	// Branch to first check block from entry
+	for (size_t i = 0; i < matchExpr->cases.size(); i++) {
+		if (!matchExpr->cases[i].isDefault) {
+			builder->createBr(checkBlocks[i]);
+			break;
+		}
+	}
+
 	// Generate pattern checks (chain of comparisons)
 	for (size_t i = 0; i < matchExpr->cases.size(); i++) {
 		const auto &matchCase = matchExpr->cases[i];
@@ -684,58 +796,77 @@ mir::MIRValue *MIRCodeGenerator::generateMatchExpr(MatchExprAST *matchExpr) {
 			continue;
 		}
 
-		// Create check block for this case
-		mir::MIRBasicBlock *checkBB = builder->createBasicBlock("matchexpr.check." + std::to_string(i));
-		builder->createBr(checkBB);
-		builder->setInsertPoint(checkBB);
+		// Set insert point to this case's check block
+		builder->setInsertPoint(checkBlocks[i]);
 
-		// Reload scrutinee
-		mir::MIRValue *scrutinee = builder->createLoad(scrutineeVal->type, scrutineeAlloca, "scrutinee");
-
-		// Generate OR'd comparison for all patterns in this case
-		mir::MIRValue *cmpResult = nullptr;
-		for (const auto &pattern : matchCase.patterns) {
-			mir::MIRValue *patternVal = generateExpr(pattern.get());
-			if (!patternVal) {
-				reportError("Failed to generate match pattern",
-							pattern->line, pattern->column);
-			}
-
-			// Generate comparison based on type
-			mir::MIRValue *cmp = nullptr;
-			if (scrutinee->type == mir::MIRType::getInt32() ||
-				scrutinee->type == mir::MIRType::getInt8() ||
-				scrutinee->type == mir::MIRType::getInt1()) {
-				cmp = builder->createICmpEq(scrutinee, patternVal, "matchexpr.cmp");
-			} else if (scrutinee->type->isStruct() && scrutinee->type->structName == "string") {
-				// String comparison - call string.equals from stdlib
-				mir::MIRFunction *strEquals = module->getFunction("string.equals");
-				if (!strEquals) {
-					reportError("string.equals function not found - ensure stdlib is imported",
-								matchExpr->line, matchExpr->column);
-				}
-				cmp = builder->createCall(strEquals, {scrutineeAlloca, patternVal}, "matchexpr.strcmp");
-			} else {
-				cmp = builder->createICmpEq(scrutinee, patternVal, "matchexpr.cmp");
-			}
-
-			if (cmpResult == nullptr) {
-				cmpResult = cmp;
-			} else {
-				cmpResult = builder->createOr(cmpResult, cmp, "matchexpr.orcmp");
-			}
-		}
-
-		// Determine next check block
+		// Determine next check block (find next non-default case)
 		mir::MIRBasicBlock *nextCheckBB = fallbackBB;
 		for (size_t j = i + 1; j < matchExpr->cases.size(); j++) {
 			if (!matchExpr->cases[j].isDefault) {
-				nextCheckBB = builder->createBasicBlock("matchexpr.check." + std::to_string(j));
+				nextCheckBB = checkBlocks[j];
 				break;
 			}
 		}
 
-		builder->createCondBr(cmpResult, caseBodyBlocks[i], nextCheckBB);
+		if (matchCase.isEnumCasePattern && isEnumScrutinee && enumInfo) {
+			// Enum case pattern: compare tag
+			auto tagIt = enumInfo->caseTags.find(matchCase.enumCaseName);
+			if (tagIt == enumInfo->caseTags.end()) {
+				reportError("Unknown enum case: " + matchCase.enumCaseName,
+							matchCase.line, matchCase.column);
+			}
+			int expectedTag = tagIt->second;
+
+			// Extract tag from scrutinee (field 0)
+			mir::MIRValue *tagPtr = builder->createStructGEP(enumInfo->mirType, scrutineeAlloca, 0, "scrutinee.tag");
+			mir::MIRValue *tagVal = builder->createLoad(mir::MIRType::getInt8(), tagPtr, "tag");
+
+			// Compare tags
+			mir::MIRValue *expectedTagVal = builder->getInt8(static_cast<int8_t>(expectedTag));
+			mir::MIRValue *tagMatch = builder->createICmpEq(tagVal, expectedTagVal, "tag.match");
+
+			builder->createCondBr(tagMatch, caseBodyBlocks[i], nextCheckBB);
+		} else {
+			// Regular pattern matching
+			// Reload scrutinee
+			mir::MIRValue *scrutinee = builder->createLoad(scrutineeVal->type, scrutineeAlloca, "scrutinee");
+
+			// Generate OR'd comparison for all patterns in this case
+			mir::MIRValue *cmpResult = nullptr;
+			for (const auto &pattern : matchCase.patterns) {
+				mir::MIRValue *patternVal = generateExpr(pattern.get());
+				if (!patternVal) {
+					reportError("Failed to generate match pattern",
+								pattern->line, pattern->column);
+				}
+
+				// Generate comparison based on type
+				mir::MIRValue *cmp = nullptr;
+				if (scrutinee->type == mir::MIRType::getInt32() ||
+					scrutinee->type == mir::MIRType::getInt8() ||
+					scrutinee->type == mir::MIRType::getInt1()) {
+					cmp = builder->createICmpEq(scrutinee, patternVal, "matchexpr.cmp");
+				} else if (scrutinee->type->isStruct() && scrutinee->type->structName == "string") {
+					// String comparison - call string.equals from stdlib
+					mir::MIRFunction *strEquals = module->getFunction("string.equals");
+					if (!strEquals) {
+						reportError("string.equals function not found - ensure stdlib is imported",
+									matchExpr->line, matchExpr->column);
+					}
+					cmp = builder->createCall(strEquals, {scrutineeAlloca, patternVal}, "matchexpr.strcmp");
+				} else {
+					cmp = builder->createICmpEq(scrutinee, patternVal, "matchexpr.cmp");
+				}
+
+				if (cmpResult == nullptr) {
+					cmpResult = cmp;
+				} else {
+					cmpResult = builder->createOr(cmpResult, cmp, "matchexpr.orcmp");
+				}
+			}
+
+			builder->createCondBr(cmpResult, caseBodyBlocks[i], nextCheckBB);
+		}
 	}
 
 	// Generate case bodies
@@ -744,10 +875,55 @@ mir::MIRValue *MIRCodeGenerator::generateMatchExpr(MatchExprAST *matchExpr) {
 
 		builder->setInsertPoint(caseBodyBlocks[i]);
 
+		// For enum case patterns, extract bindings before generating result expression
+		std::vector<std::string> bindingsToCleanup;
+		if (matchCase.isEnumCasePattern && isEnumScrutinee && enumInfo) {
+			auto assocIt = enumInfo->caseAssocValues.find(matchCase.enumCaseName);
+			if (assocIt != enumInfo->caseAssocValues.end() && !assocIt->second.empty()) {
+				const auto &assocValues = assocIt->second;
+
+				// Get pointer to payload (field 1)
+				mir::MIRValue *payloadPtr = builder->createStructGEP(enumInfo->mirType, scrutineeAlloca, 1, "payload");
+
+				// Extract each associated value and bind to variable
+				size_t offset = 0;
+				for (size_t j = 0; j < matchCase.bindings.size() && j < assocValues.size(); j++) {
+					const std::string &bindingName = matchCase.bindings[j];
+					const std::string &bindingTypeName = assocValues[j].second;
+					mir::MIRType *bindingType = getTypeFromString(bindingTypeName);
+
+					// Calculate pointer to this field in payload
+					mir::MIRValue *fieldPtr = builder->createGEP(mir::MIRType::getInt8(), payloadPtr,
+																 {builder->getInt64(static_cast<int64_t>(offset))},
+																 "payload." + bindingName);
+
+					// Load the value
+					mir::MIRValue *fieldVal = builder->createLoad(bindingType, fieldPtr, bindingName + ".val");
+
+					// Create alloca for binding and store
+					mir::MIRValue *bindingAlloca = builder->createAlloca(bindingType, bindingName);
+					builder->createStore(fieldVal, bindingAlloca);
+
+					// Register binding in namedValues and variableTypes
+					namedValues[bindingName] = bindingAlloca;
+					variableTypes[bindingName] = bindingTypeName;
+					bindingsToCleanup.push_back(bindingName);
+
+					offset += bindingType->sizeInBytes;
+				}
+			}
+		}
+
 		// Generate result expression and store
 		if (matchCase.resultExpr) {
 			mir::MIRValue *caseResult = generateExpr(matchCase.resultExpr.get());
 			builder->createStore(caseResult, resultAlloca);
+		}
+
+		// Clean up bindings
+		for (const auto &binding : bindingsToCleanup) {
+			namedValues.erase(binding);
+			variableTypes.erase(binding);
 		}
 
 		builder->createBr(mergeBB);
