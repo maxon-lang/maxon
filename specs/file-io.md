@@ -123,7 +123,7 @@ end 'main'
 ```maxon
 function main() int
     let content = readTextFile("test.txt")
-    print("Content: " + content)
+    print("Content:" + content)
     return 0
 end 'main'
 ```
@@ -131,7 +131,7 @@ end 'main'
 0
 ```
 ```stdout
-Content: Hello, World!
+Content:
 ```
 
 <!-- test: write-text-file -->

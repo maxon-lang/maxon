@@ -108,11 +108,11 @@ declare i32 @ReadFile(ptr, ptr, i32, ptr, ptr)
 
 ;==============================================================================
 ; read_file - read file content into a managed string buffer
-; ptr read_file(ptr path)
-; Returns pointer to __ManagedStringData struct
-; Returns null on error
+; ptr read_file(ptr path, ptr out_len)
+; Returns pointer to buffer on success, null on error
+; Stores length in out_len
 ;==============================================================================
-define ptr @read_file(ptr %path) {
+define ptr @read_file(ptr %path, ptr %out_len) {
 entry:
     ; Open file
     ; CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
@@ -127,13 +127,7 @@ get_size:
     ; Get file size
     %size = call i32 @GetFileSize(ptr %handle, ptr null)
     %is_error = icmp eq i32 %size, -1
-    br i1 %is_error, label %close_error, label %allocate_struct
-
-allocate_struct:
-    ; Allocate __ManagedStringData struct (24 bytes)
-    %managed = call ptr @malloc(i64 24)
-    %managed_null = icmp eq ptr %managed, null
-    br i1 %managed_null, label %close_error, label %allocate_buf
+    br i1 %is_error, label %close_error, label %allocate_buf
 
 allocate_buf:
     ; Allocate buffer using _managed_string_alloc (size + 1 for null terminator)
@@ -142,7 +136,7 @@ allocate_buf:
     %buf = call ptr @_managed_string_alloc(i64 %alloc_size64, ptr null)
 
     %buf_null = icmp eq ptr %buf, null
-    br i1 %buf_null, label %free_managed, label %read
+    br i1 %buf_null, label %close_error, label %read
 
 read:
     ; Read file content
@@ -158,32 +152,15 @@ finish:
     %term_ptr = getelementptr i8, ptr %buf, i64 %size64
     store i8 0, ptr %term_ptr
 
-    ; Setup __ManagedStringData
-    ; Field 0: buffer pointer
-    store ptr %buf, ptr %managed
-
-    ; Field 1: length (inside unsized array) at offset 8
-    %len_ptr0 = getelementptr i8, ptr %managed, i64 8
-    store i32 %size, ptr %len_ptr0
-
-    ; Field 2: length copy at offset 16
-    %len_ptr1 = getelementptr i8, ptr %managed, i64 16
-    store i32 %size, ptr %len_ptr1
-
-    ; Field 3: capacity at offset 20
-    %cap_ptr = getelementptr i8, ptr %managed, i64 20
-    store i32 %size, ptr %cap_ptr
+    ; Store length in output parameter
+    store i32 %size, ptr %out_len
 
     ; Close handle
     call i32 @CloseHandle(ptr %handle)
-    ret ptr %managed
+    ret ptr %buf
 
 free_buf:
     call void @_managed_string_release(ptr %buf, ptr null)
-    br label %free_managed
-
-free_managed:
-    call void @free(ptr %managed)
     br label %close_error
 
 close_error:
@@ -1585,11 +1562,81 @@ return_empty:
 ;==============================================================================
 ; __read_file - alias for read_file
 ; ptr __read_file(ptr path)
+; Returns managed string pointer (never null)
 ;==============================================================================
 define ptr @__read_file(ptr %path) {
 entry:
-    %result = call ptr @read_file(ptr %path)
-    ret ptr %result
+    ; Allocate space for length output
+    %out_len = alloca i32
+
+    ; Call read_file
+    %data = call ptr @read_file(ptr %path, ptr %out_len)
+
+    ; Check if data is null (error)
+    %is_null = icmp eq ptr %data, null
+    br i1 %is_null, label %return_empty, label %success
+
+success:
+    ; Load length
+    %len = load i32, ptr %out_len
+
+    ; Allocate managed string struct (24 bytes)
+    %managed = call ptr @malloc(i64 24)
+    %managed_null = icmp eq ptr %managed, null
+    br i1 %managed_null, label %free_data, label %setup_struct
+
+setup_struct:
+    ; Setup __ManagedStringData
+    ; Field 0: buffer pointer
+    store ptr %data, ptr %managed
+
+    ; Field 1: length (inside unsized array) at offset 8
+    %len_ptr0 = getelementptr i8, ptr %managed, i64 8
+    store i32 %len, ptr %len_ptr0
+
+    ; Field 2: length copy at offset 16
+    %len_ptr1 = getelementptr i8, ptr %managed, i64 16
+    store i32 %len, ptr %len_ptr1
+
+    ; Field 3: capacity at offset 20
+    %cap_ptr = getelementptr i8, ptr %managed, i64 20
+    store i32 %len, ptr %cap_ptr
+
+    ret ptr %managed
+
+free_data:
+    call void @_managed_string_release(ptr %data, ptr null)
+    br label %return_empty
+
+return_empty:
+    ; Return empty string
+    ; Allocate managed string struct (24 bytes)
+    %empty_managed = call ptr @malloc(i64 24)
+    %empty_null = icmp eq ptr %empty_managed, null
+    br i1 %empty_null, label %error, label %setup_empty
+
+setup_empty:
+    ; Setup empty __ManagedStringData
+    ; Field 0: buffer pointer (null)
+    store ptr null, ptr %empty_managed
+
+    ; Field 1: length 0 at offset 8
+    %empty_len_ptr0 = getelementptr i8, ptr %empty_managed, i64 8
+    store i32 0, ptr %empty_len_ptr0
+
+    ; Field 2: length copy at offset 16
+    %empty_len_ptr1 = getelementptr i8, ptr %empty_managed, i64 16
+    store i32 0, ptr %empty_len_ptr1
+
+    ; Field 3: capacity at offset 20
+    %empty_cap_ptr = getelementptr i8, ptr %empty_managed, i64 20
+    store i32 0, ptr %empty_cap_ptr
+
+    ret ptr %empty_managed
+
+error:
+    ; If malloc fails, return null (should not happen in practice)
+    ret ptr null
 }
 
 ;==============================================================================
@@ -1658,6 +1705,42 @@ get_data:
     %len_ptr = getelementptr i8, ptr %cstr, i64 8
     %len = load i32, ptr %len_ptr
 
+    ; Open file for writing (create always)
+    ; CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    ; GENERIC_WRITE = 0x40000000 (1073741824)
+    %handle = call ptr @CreateFileA(ptr %path, i32 1073741824, i32 0, ptr null, i32 2, i32 128, ptr null)
+
+    %invalid_handle = inttoptr i64 -1 to ptr
+    %is_invalid = icmp eq ptr %handle, %invalid_handle
+    br i1 %is_invalid, label %error, label %write
+
+write:
+    %bytesWritten = alloca i32
+    %success = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr %bytesWritten, ptr null)
+
+    %write_failed = icmp eq i32 %success, 0
+    br i1 %write_failed, label %close_error, label %finish
+
+finish:
+    call i32 @CloseHandle(ptr %handle)
+    ret i32 0
+
+close_error:
+    call i32 @CloseHandle(ptr %handle)
+    br label %error
+
+error:
+    ret i32 -1
+}
+
+
+
+;==============================================================================
+; __write_file_binary - write binary data to file
+; i32 __write_file_binary(ptr path, ptr data, i32 len)
+;==============================================================================
+define i32 @__write_file_binary(ptr %path, ptr %data, i32 %len) {
+entry:
     ; Open file for writing (create always)
     ; CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
     ; GENERIC_WRITE = 0x40000000 (1073741824)
