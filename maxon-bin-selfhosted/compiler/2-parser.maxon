@@ -1,0 +1,786 @@
+// Parser for the Maxon language
+// Converts a stream of tokens into an Abstract Syntax Tree
+
+// NOTE: This file assumes features that don't exist yet in Maxon:
+// - String concatenation with +
+// - Dynamic arrays with append()
+// - Result/Error types for error handling
+// These are written as they would ideally work
+
+export struct Parser
+    var tokens array of Token
+    var pos int
+    var hadError bool
+    var errorMessage string
+
+    // Create a new parser for the given tokens
+    export function create(tokens array of Token) Parser
+        return Parser{tokens: tokens, pos: 0, hadError: false, errorMessage: ""}
+    end 'create'
+
+    // Check if we've consumed all tokens
+    export function isAtEnd() bool
+        return pos >= tokens.count() or Parser.peek().kind == TokenType.eof
+    end 'isAtEnd'
+
+    // Get current token without consuming
+    export function peek() Token
+        if pos >= tokens.count() 'bounds'
+            return makeToken(TokenType.eof, "", 0, 0)
+        end 'bounds'
+        return tokens[pos]
+    end 'peek'
+
+    // Get previous token
+    export function previous() Token
+        if pos == 0 'bounds'
+            return makeToken(TokenType.eof, "", 0, 0)
+        end 'bounds'
+        return tokens[pos - 1]
+    end 'previous'
+
+    // Consume current token and advance
+    export function advance() Token
+        if not Parser.isAtEnd() 'check'
+            pos = pos + 1
+        end 'check'
+        return Parser.previous()
+    end 'advance'
+
+    // Check if current token matches expected kind
+    export function check(, kind TokenType) bool
+        if Parser.isAtEnd() 'eof'
+            return false
+        end 'eof'
+        return Parser.peek().kind == kind
+    end 'check'
+
+    // Consume token if it matches, return true if consumed
+    export function match( kind TokenType) bool
+        if Parser.check(kind) 'check'
+            Parser.advance()
+            return true
+        end 'check'
+        return false
+    end 'match'
+
+    // Expect a token of given kind, error if not found
+    export function expect(kind TokenType, message string) Token
+        if Parser.check(kind) 'check'
+            return Parser.advance()
+        end 'check'
+        Parser.error(message)
+        return makeToken(TokenType.error, "", Parser.peek().line, Parser.peek().column)
+    end 'expect'
+
+    // Report an error
+    export function error(message string) void
+        hadError = true
+        var tok = Parser.peek()
+        errorMessage = "Error at line " + tok.line.toString() + ", column " + tok.column.toString() + ": " + message
+    end 'error'
+
+    // Skip newlines
+    export function skipNewlines() void
+        while Parser.match(TokenType.newline) 'skip'
+            // continue
+        end 'skip'
+    end 'skipNewlines'
+
+    //=========================================================================
+    // Type parsing
+    //=========================================================================
+
+    export function parseType() TypeRef
+        // Check for array type: array of T
+        if Parser.match(TokenType.kwArray) 'array'
+            Parser.expect(TokenType.kwOf, "Expected 'of' after 'array'")
+            var elemType = Parser.parseType()
+            return TypeRef.arrayOf(elemType)
+        end 'array'
+
+        // Primitive types
+        if Parser.match(TokenType.kwInt) 'int'
+            return TypeRef.intType()
+        end 'int'
+        if Parser.match(TokenType.kwFloat) 'float'
+            return TypeRef.floatType()
+        end 'float'
+        if Parser.match(TokenType.kwBool) 'bool'
+            return TypeRef.boolType()
+        end 'bool'
+        if Parser.match(TokenType.kwByte) 'byte'
+            return TypeRef.byteType()
+        end 'byte'
+        if Parser.match(TokenType.kwString) 'string'
+            return TypeRef.stringType()
+        end 'string'
+        if Parser.match(TokenType.kwVoid) 'void'
+            return TypeRef.voidType()
+        end 'void'
+
+        // User-defined type (identifier)
+        if Parser.check(TokenType.identifier) 'userType'
+            var name = Parser.advance().lexeme
+            return TypeRef{kind: TypeKind.structType, name: name, elementType: nil, keyType: nil, valueType: nil}
+        end 'userType'
+
+        Parser.error("Expected type")
+        return TypeRef.intType()  // Return something to continue parsing
+    end 'parseType'
+
+    //=========================================================================
+    // Expression parsing (precedence climbing)
+    //=========================================================================
+
+    // Parse primary expression (literals, identifiers, parentheses)
+    export function parsePrimary() Expr
+        var tok = Parser.peek()
+
+        // Integer literal
+        if Parser.match(TokenType.intLiteral) 'int'
+            var value = parseInt(tok.lexeme)
+            return Expr.makeIntLiteral(value, tok.line, tok.column)
+        end 'int'
+
+        // Float literal
+        if Parser.match(TokenType.floatLiteral) 'float'
+            var value = parseFloat(tok.lexeme)
+            return Expr{
+                kind: ExprKind.floatLiteral,
+                line: tok.line,
+                column: tok.column,
+                floatValue: value,
+                intValue: 0,
+                boolValue: false,
+                byteValue: 0b,
+                stringValue: "",
+                name: "",
+                op: BinaryOp.add,
+                left: nil,
+                right: nil,
+                unaryOp: UnaryOp.neg,
+                operand: nil,
+                callee: "",
+                arguments: array of Expr,
+                index: nil,
+                member: "",
+                targetType: TypeRef.floatType()
+            }
+        end 'float'
+
+        // String literal
+        if Parser.match(TokenType.stringLiteral) 'string'
+            return Expr{
+                kind: ExprKind.stringLiteral,
+                line: tok.line,
+                column: tok.column,
+                stringValue: tok.lexeme,
+                intValue: 0,
+                floatValue: 0.0,
+                boolValue: false,
+                byteValue: 0b,
+                name: "",
+                op: BinaryOp.add,
+                left: nil,
+                right: nil,
+                unaryOp: UnaryOp.neg,
+                operand: nil,
+                callee: "",
+                arguments: array of Expr,
+                index: nil,
+                member: "",
+                targetType: TypeRef.stringType()
+            }
+        end 'string'
+
+        // Boolean literals
+        if Parser.match(TokenType.kwTrue) 'true'
+            return Expr{
+                kind: ExprKind.boolLiteral,
+                line: tok.line,
+                column: tok.column,
+                boolValue: true,
+                intValue: 0,
+                floatValue: 0.0,
+                byteValue: 0b,
+                stringValue: "",
+                name: "",
+                op: BinaryOp.add,
+                left: nil,
+                right: nil,
+                unaryOp: UnaryOp.neg,
+                operand: nil,
+                callee: "",
+                arguments: array of Expr,
+                index: nil,
+                member: "",
+                targetType: TypeRef.boolType()
+            }
+        end 'true'
+
+        if Parser.match(TokenType.kwFalse) 'false'
+            return Expr{
+                kind: ExprKind.boolLiteral,
+                line: tok.line,
+                column: tok.column,
+                boolValue: false,
+                intValue: 0,
+                floatValue: 0.0,
+                byteValue: 0b,
+                stringValue: "",
+                name: "",
+                op: BinaryOp.add,
+                left: nil,
+                right: nil,
+                unaryOp: UnaryOp.neg,
+                operand: nil,
+                callee: "",
+                arguments: array of Expr,
+                index: nil,
+                member: "",
+                targetType: TypeRef.boolType()
+            }
+        end 'false'
+
+        // Identifier (variable or function call)
+        if Parser.match(TokenType.identifier) 'ident'
+            var name = tok.lexeme
+
+            // Check for function call
+            if Parser.match(TokenType.lparen) 'call'
+                var args = array of Expr
+
+                if not Parser.check(TokenType.rparen) 'hasArgs'
+                    args.append(Parser.parseExpression())
+                    while Parser.match(TokenType.comma) 'moreArgs'
+                        args.append(Parser.parseExpression())
+                    end 'moreArgs'
+                end 'hasArgs'
+
+                Parser.expect(TokenType.rparen, "Expected ')' after arguments")
+                return Expr.makeCall(name, args, tok.line, tok.column)
+            end 'call'
+
+            return Expr.makeIdentifier(name, tok.line, tok.column)
+        end 'ident'
+
+        // Parenthesized expression
+        if Parser.match(TokenType.lparen) 'paren'
+            var expr = Parser.parseExpression()
+            Parser.expect(TokenType.rparen, "Expected ')' after expression")
+            return expr
+        end 'paren'
+
+        Parser.error("Expected expression")
+        return Expr.makeIntLiteral(0, tok.line, tok.column)
+    end 'parsePrimary'
+
+    // Parse unary expression
+    export function parseUnary() Expr
+        var tok = Parser.peek()
+
+        // Unary minus
+        if Parser.match(TokenType.minus) 'neg'
+            var operand = Parser.parseUnary()
+            return Expr{
+                kind: ExprKind.unary,
+                line: tok.line,
+                column: tok.column,
+                unaryOp: UnaryOp.neg,
+                operand: operand,
+                intValue: 0,
+                floatValue: 0.0,
+                boolValue: false,
+                byteValue: 0b,
+                stringValue: "",
+                name: "",
+                op: BinaryOp.add,
+                left: nil,
+                right: nil,
+                callee: "",
+                arguments: array of Expr,
+                index: nil,
+                member: "",
+                targetType: TypeRef.intType()
+            }
+        end 'neg'
+
+        // Logical not
+        if Parser.match(TokenType.kwNot) 'not'
+            var operand = Parser.parseUnary()
+            return Expr{
+                kind: ExprKind.unary,
+                line: tok.line,
+                column: tok.column,
+                unaryOp: UnaryOp.not,
+                operand: operand,
+                intValue: 0,
+                floatValue: 0.0,
+                boolValue: false,
+                byteValue: 0b,
+                stringValue: "",
+                name: "",
+                op: BinaryOp.add,
+                left: nil,
+                right: nil,
+                callee: "",
+                arguments: array of Expr,
+                index: nil,
+                member: "",
+                targetType: TypeRef.boolType()
+            }
+        end 'not'
+
+        return Parser.parsePrimary()
+    end 'parseUnary'
+
+    // Parse multiplicative: * / mod
+    export function parseMultiplicative() Expr
+        var left = Parser.parseUnary()
+
+        while true 'loop'
+            var tok = Parser.peek()
+            var op BinaryOp
+
+            if Parser.match(TokenType.star) 'mul'
+                op = BinaryOp.mul
+            else 'mul'
+                if Parser.match(TokenType.slash) 'div'
+                    op = BinaryOp.div
+                else 'div'
+                    if Parser.match(TokenType.kwMod) 'mod'
+                        op = BinaryOp.mod
+                    else 'mod'
+                        break 'loop'
+                    end 'mod'
+                end 'div'
+            end 'mul'
+
+            var right = Parser.parseUnary()
+            left = Expr.makeBinary(op, left, right, tok.line, tok.column)
+        end 'loop'
+
+        return left
+    end 'parseMultiplicative'
+
+    // Parse additive: + -
+    export function parseAdditive() Expr
+        var left = Parser.parseMultiplicative()
+
+        while true 'loop'
+            var tok = Parser.peek()
+            var op BinaryOp
+
+            if Parser.match(TokenType.plus) 'add'
+                op = BinaryOp.add
+            else 'add'
+                if Parser.match(TokenType.minus) 'sub'
+                    op = BinaryOp.sub
+                else 'sub'
+                    break 'loop'
+                end 'sub'
+            end 'add'
+
+            var right = Parser.parseMultiplicative()
+            left = Expr.makeBinary(op, left, right, tok.line, tok.column)
+        end 'loop'
+
+        return left
+    end 'parseAdditive'
+
+    // Parse comparison: < > <= >= == !=
+    export function parseComparison() Expr
+        var left = Parser.parseAdditive()
+
+        while true 'loop'
+            var tok = Parser.peek()
+            var op BinaryOp
+
+            if Parser.match(TokenType.eqEq) 'eq'
+                op = BinaryOp.eq
+            else 'eq'
+                if Parser.match(TokenType.notEq) 'ne'
+                    op = BinaryOp.ne
+                else 'ne'
+                    if Parser.match(TokenType.lt) 'lt'
+                        op = BinaryOp.lt
+                    else 'lt'
+                        if Parser.match(TokenType.gt) 'gt'
+                            op = BinaryOp.gt
+                        else 'gt'
+                            if Parser.match(TokenType.ltEq) 'le'
+                                op = BinaryOp.le
+                            else 'le'
+                                if Parser.match(TokenType.gtEq) 'ge'
+                                    op = BinaryOp.ge
+                                else 'ge'
+                                    break 'loop'
+                                end 'ge'
+                            end 'le'
+                        end 'gt'
+                    end 'lt'
+                end 'ne'
+            end 'eq'
+
+            var right = Parser.parseAdditive()
+            left = Expr.makeBinary(op, left, right, tok.line, tok.column)
+        end 'loop'
+
+        return left
+    end 'parseComparison'
+
+    // Parse logical and
+    export function parseLogicalAnd() Expr
+        var left = Parser.parseComparison()
+
+        while Parser.match(TokenType.kwAnd) 'loop'
+            var tok = Parser.previous()
+            var right = Parser.parseComparison()
+            left = Expr.makeBinary(BinaryOp.and, left, right, tok.line, tok.column)
+        end 'loop'
+
+        return left
+    end 'parseLogicalAnd'
+
+    // Parse logical or
+    export function parseLogicalOr() Expr
+        var left = Parser.parseLogicalAnd()
+
+        while Parser.match(TokenType.kwOr) 'loop'
+            var tok = Parser.previous()
+            var right = Parser.parseLogicalAnd()
+            left = Expr.makeBinary(BinaryOp.or, left, right, tok.line, tok.column)
+        end 'loop'
+
+        return left
+    end 'parseLogicalOr'
+
+    // Parse expression (entry point)
+    export function parseExpression() Expr
+        return Parser.parseLogicalOr()
+    end 'parseExpression'
+
+    //=========================================================================
+    // Statement parsing
+    //=========================================================================
+
+    // Parse return statement
+    export function parseReturn() Stmt
+        var tok = Parser.previous()  // 'return' was already consumed
+        Parser.skipNewlines()
+
+        var value Expr or nil = nil
+        if not Parser.check(TokenType.newline) and not Parser.isAtEnd() 'hasValue'
+            value = Parser.parseExpression()
+        end 'hasValue'
+
+        return Stmt.makeReturn(value, tok.line, tok.column)
+    end 'parseReturn'
+
+    // Parse variable declaration
+    export function parseVarDecl(isMutable bool) Stmt
+        var tok = Parser.previous()
+        var name = Parser.expect(TokenType.identifier, "Expected variable name").lexeme
+
+        var varType TypeRef or nil = nil
+        if Parser.check(TokenType.identifier) or Parser.check(TokenType.kwInt) or Parser.check(TokenType.kwFloat) or Parser.check(TokenType.kwBool) or Parser.check(TokenType.kwString) or Parser.check(TokenType.kwArray) 'hasType'
+            varType = Parser.parseType()
+        end 'hasType'
+
+        var init Expr or nil = nil
+        if Parser.match(TokenType.eq) 'hasInit'
+            init = Parser.parseExpression()
+        end 'hasInit'
+
+        if isMutable 'kind'
+            return Stmt.makeVarDecl(name, varType, init, tok.line, tok.column)
+        else 'kind'
+            return Stmt{
+                kind: StmtKind.letDecl,
+                line: tok.line,
+                column: tok.column,
+                expr: nil,
+                varName: name,
+                varType: varType,
+                initializer: init,
+                condition: nil,
+                thenBlock: array of Stmt,
+                elseBlock: nil,
+                blockLabel: "",
+                loopVar: "",
+                iterable: nil
+            }
+        end 'kind'
+    end 'parseVarDecl'
+
+    // Parse block label 'name'
+    export function parseBlockLabel() string
+        var tok = Parser.expect(TokenType.blockLabel, "Expected block label")
+        // Extract label name from 'name' format
+        var label = tok.lexeme.slice(1, tok.lexeme.count() - 1).toString()
+        return label
+    end 'parseBlockLabel'
+
+    // Parse if statement
+    export function parseIf() Stmt
+        var tok = Parser.previous()
+        var condition = Parser.parseExpression()
+        var label = Parser.parseBlockLabel()
+        Parser.skipNewlines()
+
+        var thenBlock = array of Stmt
+        while not Parser.check(TokenType.kwEnd) and not Parser.check(TokenType.kwElse) and not Parser.isAtEnd() 'thenBody'
+            var stmt = Parser.parseStatement()
+            thenBlock.append(stmt)
+            Parser.skipNewlines()
+        end 'thenBody'
+
+        var elseBlock array of Stmt or nil = nil
+        if Parser.match(TokenType.kwElse) 'hasElse'
+            Parser.expect(TokenType.blockLabel, "Expected block label after 'else'")
+            Parser.skipNewlines()
+
+            elseBlock = array of Stmt
+            while not Parser.check(TokenType.kwEnd) and not Parser.isAtEnd() 'elseBody'
+                var stmt = Parser.parseStatement()
+                elseBlock.append(stmt)
+                Parser.skipNewlines()
+            end 'elseBody'
+        end 'hasElse'
+
+        Parser.expect(TokenType.kwEnd, "Expected 'end' to close if block")
+        Parser.expect(TokenType.blockLabel, "Expected block label after 'end'")
+
+        return Stmt.makeIf(condition, thenBlock, elseBlock, label, tok.line, tok.column)
+    end 'parseIf'
+
+    // Parse while statement
+    export function parseWhile() Stmt
+        var tok = Parser.previous()
+        var condition = Parser.parseExpression()
+        var label = Parser.parseBlockLabel()
+        Parser.skipNewlines()
+
+        var body = array of Stmt
+        while not Parser.check(TokenType.kwEnd) and not Parser.isAtEnd() 'body'
+            var stmt = Parser.parseStatement()
+            body.append(stmt)
+            Parser.skipNewlines()
+        end 'body'
+
+        Parser.expect(TokenType.kwEnd, "Expected 'end' to close while block")
+        Parser.expect(TokenType.blockLabel, "Expected block label after 'end'")
+
+        return Stmt.makeWhile(condition, body, label, tok.line, tok.column)
+    end 'parseWhile'
+
+    // Parse a single statement
+    export function parseStatement() Stmt
+        Parser.skipNewlines()
+        var tok = Parser.peek()
+
+        if Parser.match(TokenType.kwReturn) 'return'
+            return Parser.parseReturn()
+        end 'return'
+
+        if Parser.match(TokenType.kwVar) 'var'
+            return Parser.parseVarDecl(true)
+        end 'var'
+
+        if Parser.match(TokenType.kwLet) 'let'
+            return Parser.parseVarDecl(false)
+        end 'let'
+
+        if Parser.match(TokenType.kwIf) 'if'
+            return Parser.parseIf()
+        end 'if'
+
+        if Parser.match(TokenType.kwWhile) 'while'
+            return Parser.parseWhile()
+        end 'while'
+
+        if Parser.match(TokenType.kwBreak) 'break'
+            var label = ""
+            if Parser.check(TokenType.blockLabel) 'hasLabel'
+                label = Parser.parseBlockLabel()
+            end 'hasLabel'
+            return Stmt{
+                kind: StmtKind.break_,
+                line: tok.line,
+                column: tok.column,
+                expr: nil,
+                varName: "",
+                varType: nil,
+                initializer: nil,
+                condition: nil,
+                thenBlock: array of Stmt,
+                elseBlock: nil,
+                blockLabel: label,
+                loopVar: "",
+                iterable: nil
+            }
+        end 'break'
+
+        if Parser.match(TokenType.kwContinue) 'continue'
+            var label = ""
+            if Parser.check(TokenType.blockLabel) 'hasLabel'
+                label = Parser.parseBlockLabel()
+            end 'hasLabel'
+            return Stmt{
+                kind: StmtKind.continue_,
+                line: tok.line,
+                column: tok.column,
+                expr: nil,
+                varName: "",
+                varType: nil,
+                initializer: nil,
+                condition: nil,
+                thenBlock: array of Stmt,
+                elseBlock: nil,
+                blockLabel: label,
+                loopVar: "",
+                iterable: nil
+            }
+        end 'continue'
+
+        // Expression statement or assignment
+        var expr = Parser.parseExpression()
+
+        // Check for assignment
+        if Parser.match(TokenType.eq) 'assign'
+            var value = Parser.parseExpression()
+            return Stmt{
+                kind: StmtKind.assign,
+                line: tok.line,
+                column: tok.column,
+                expr: value,
+                varName: expr.name,  // Assuming simple identifier assignment for now
+                varType: nil,
+                initializer: nil,
+                condition: nil,
+                thenBlock: array of Stmt,
+                elseBlock: nil,
+                blockLabel: "",
+                loopVar: "",
+                iterable: nil
+            }
+        end 'assign'
+
+        // Expression statement
+        return Stmt{
+            kind: StmtKind.expr,
+            line: tok.line,
+            column: tok.column,
+            expr: expr,
+            varName: "",
+            varType: nil,
+            initializer: nil,
+            condition: nil,
+            thenBlock: array of Stmt,
+            elseBlock: nil,
+            blockLabel: "",
+            loopVar: "",
+            iterable: nil
+        }
+    end 'parseStatement'
+
+    //=========================================================================
+    // Function parsing
+    //=========================================================================
+
+    // Parse function parameters
+    export function parseParameters() array of Parameter
+        var params = array of Parameter
+
+        if not Parser.check(TokenType.rparen) 'hasParams'
+            // First parameter
+            var name = Parser.expect(TokenType.identifier, "Expected parameter name").lexeme
+            var paramType = Parser.parseType()
+            params.append(Parameter.create(name, paramType))
+
+            // Additional parameters
+            while Parser.match(TokenType.comma) 'moreParams'
+                name = Parser.expect(TokenType.identifier, "Expected parameter name").lexeme
+                paramType = Parser.parseType()
+                params.append(Parameter.create(name, paramType))
+            end 'moreParams'
+        end 'hasParams'
+
+        return params
+    end 'parseParameters'
+
+    // Parse function declaration
+    export function parseFunction(isExport bool) Function
+        var tok = Parser.previous()
+        var name = Parser.expect(TokenType.identifier, "Expected function name").lexeme
+
+        Parser.expect(TokenType.lparen, "Expected '(' after function name")
+        var params = Parser.parseParameters()
+        Parser.expect(TokenType.rparen, "Expected ')' after parameters")
+
+        var returnType = TypeRef.voidType()
+        if not Parser.check(TokenType.newline) 'hasReturn'
+            returnType = Parser.parseType()
+        end 'hasReturn'
+
+        Parser.skipNewlines()
+
+        var body = array of Stmt
+        while not Parser.check(TokenType.kwEnd) and not Parser.isAtEnd() 'body'
+            var stmt = Parser.parseStatement()
+            body.append(stmt)
+            Parser.skipNewlines()
+        end 'body'
+
+        Parser.expect(TokenType.kwEnd, "Expected 'end' to close function")
+        Parser.expect(TokenType.blockLabel, "Expected function name label after 'end'")
+
+        return Function.create(name, params, returnType, body, isExport, tok.line, tok.column)
+    end 'parseFunction'
+
+    //=========================================================================
+    // Top-level parsing
+    //=========================================================================
+
+    // Parse a complete program
+    export function parseProgram(fileName string) Program
+        var program = Program.create(fileName)
+
+        Parser.skipNewlines()
+
+        while not Parser.isAtEnd() 'topLevel'
+            var isExport = false
+
+            if Parser.match(TokenType.kwExport) 'export'
+                isExport = true
+            end 'export'
+
+            if Parser.match(TokenType.kwFunction) 'function'
+                var func = Parser.parseFunction(isExport)
+                Program.addFunction(program, func)
+            else 'function'
+                if Parser.match(TokenType.kwExtern) 'extern'
+                    Parser.expect(TokenType.kwFunction, "Expected 'function' after 'extern'")
+                    var name = Parser.expect(TokenType.identifier, "Expected function name").lexeme
+                    Parser.expect(TokenType.lparen, "Expected '('")
+                    var params = Parser.parseParameters()
+                    Parser.expect(TokenType.rparen, "Expected ')'")
+                    var returnType = TypeRef.voidType()
+                    if not Parser.check(TokenType.newline) 'hasReturn'
+                        returnType = Parser.parseType()
+                    end 'hasReturn'
+                    var func = Function.createExtern(name, params, returnType, Parser.peek().line, Parser.peek().column)
+                    Program.addFunction(program, func)
+                else 'extern'
+                    Parser.error("Expected function or extern declaration at top level")
+                    Parser.advance()  // Skip token to recover
+                end 'extern'
+            end 'function'
+
+            Parser.skipNewlines()
+        end 'topLevel'
+
+        return program
+    end 'parseProgram'
+end 'Parser'

@@ -1,0 +1,548 @@
+// PE (Portable Executable) Writer for Windows x86-64
+// Creates a minimal Windows executable from generated machine code
+
+// NOTE: This file assumes features that don't exist yet in Maxon:
+// - Byte arrays with direct manipulation
+// - Bitwise operations (&, |, <<, >>)
+// - File I/O for writing binary files
+// These are written as they would ideally work
+
+//=============================================================================
+// PE File Structure Constants
+//=============================================================================
+
+// DOS Header magic
+let DOS_MAGIC = 0x5A4D  // "MZ"
+
+// PE signature
+let PE_SIGNATURE = 0x00004550  // "PE\0\0"
+
+// Machine types
+let MACHINE_AMD64 = 0x8664
+
+// Characteristics
+let EXECUTABLE_IMAGE = 0x0002
+let LARGE_ADDRESS_AWARE = 0x0020
+let RELOCS_STRIPPED = 0x0001
+
+// Subsystem
+let SUBSYSTEM_CONSOLE = 3
+let SUBSYSTEM_GUI = 2
+
+// Optional header magic
+let PE32_PLUS_MAGIC = 0x020B  // PE32+ (64-bit)
+
+// Section characteristics
+let SECTION_CNT_CODE = 0x00000020
+let SECTION_CNT_INITIALIZED_DATA = 0x00000040
+let SECTION_MEM_EXECUTE = 0x20000000
+let SECTION_MEM_READ = 0x40000000
+let SECTION_MEM_WRITE = 0x80000000
+
+// Alignment values
+let FILE_ALIGNMENT = 512
+let SECTION_ALIGNMENT = 4096
+
+// Base addresses
+let IMAGE_BASE = 0x0000000140000000  // Default for 64-bit
+
+//=============================================================================
+// PE Writer
+//=============================================================================
+
+export struct PEWriter
+    var buffer CodeBuffer
+    var codeRVA int
+    var codeSize int
+    var entryPointRVA int
+
+    export function create() PEWriter
+        return PEWriter{
+            buffer: CodeBuffer.create(),
+            codeRVA: 0,
+            codeSize: 0,
+            entryPointRVA: 0
+        }
+    end 'create'
+
+    // Align value up to alignment boundary
+    export function alignUp(value int, alignment int) int
+        if (value mod alignment) == 0 'aligned'
+            return value
+        end 'aligned'
+        return value + (alignment - (value mod alignment))
+    end 'alignUp'
+
+    // Write DOS header (64 bytes)
+    export function writeDOSHeader(peHeaderOffset int) void
+        // DOS magic "MZ"
+        CodeBuffer.emitWord(buffer, DOS_MAGIC)
+
+        // DOS header fields (mostly zeros for minimal executable)
+        for _ in range(29) 'dosFields'
+            CodeBuffer.emitWord(buffer, 0)
+        end 'dosFields'
+
+        // e_lfanew: Offset to PE header (at offset 0x3C)
+        CodeBuffer.emitDword(buffer, peHeaderOffset)
+    end 'writeDOSHeader'
+
+    // Write COFF File Header (20 bytes)
+    export function writeCOFFHeader(numSections int, timestamp int) void
+        CodeBuffer.emitWord(buffer, MACHINE_AMD64)        // Machine
+        CodeBuffer.emitWord(buffer, numSections)          // NumberOfSections
+        CodeBuffer.emitDword(buffer, timestamp)           // TimeDateStamp
+        CodeBuffer.emitDword(buffer, 0)                   // PointerToSymbolTable
+        CodeBuffer.emitDword(buffer, 0)                   // NumberOfSymbols
+        CodeBuffer.emitWord(buffer, 112)                  // SizeOfOptionalHeader (PE32+)
+        var characteristics = EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE
+        CodeBuffer.emitWord(buffer, characteristics)      // Characteristics
+    end 'writeCOFFHeader'
+
+    // Write Optional Header (PE32+ - 112 bytes)
+    export function writeOptionalHeader(entryPoint int, codeSize int, imageSize int, headersSize int) void
+        // Standard fields
+        CodeBuffer.emitWord(buffer, PE32_PLUS_MAGIC)      // Magic (PE32+)
+        CodeBuffer.emitByte(buffer, 14b)                  // MajorLinkerVersion
+        CodeBuffer.emitByte(buffer, 0b)                   // MinorLinkerVersion
+        CodeBuffer.emitDword(buffer, codeSize)            // SizeOfCode
+        CodeBuffer.emitDword(buffer, 0)                   // SizeOfInitializedData
+        CodeBuffer.emitDword(buffer, 0)                   // SizeOfUninitializedData
+        CodeBuffer.emitDword(buffer, entryPoint)          // AddressOfEntryPoint
+        CodeBuffer.emitDword(buffer, SECTION_ALIGNMENT)   // BaseOfCode
+
+        // Windows-specific fields (PE32+)
+        CodeBuffer.emitQword(buffer, IMAGE_BASE)          // ImageBase
+        CodeBuffer.emitDword(buffer, SECTION_ALIGNMENT)   // SectionAlignment
+        CodeBuffer.emitDword(buffer, FILE_ALIGNMENT)      // FileAlignment
+        CodeBuffer.emitWord(buffer, 6)                    // MajorOperatingSystemVersion
+        CodeBuffer.emitWord(buffer, 0)                    // MinorOperatingSystemVersion
+        CodeBuffer.emitWord(buffer, 0)                    // MajorImageVersion
+        CodeBuffer.emitWord(buffer, 0)                    // MinorImageVersion
+        CodeBuffer.emitWord(buffer, 6)                    // MajorSubsystemVersion
+        CodeBuffer.emitWord(buffer, 0)                    // MinorSubsystemVersion
+        CodeBuffer.emitDword(buffer, 0)                   // Win32VersionValue
+        CodeBuffer.emitDword(buffer, imageSize)           // SizeOfImage
+        CodeBuffer.emitDword(buffer, headersSize)         // SizeOfHeaders
+        CodeBuffer.emitDword(buffer, 0)                   // CheckSum
+        CodeBuffer.emitWord(buffer, SUBSYSTEM_CONSOLE)    // Subsystem
+        CodeBuffer.emitWord(buffer, 0)                    // DllCharacteristics
+        CodeBuffer.emitQword(buffer, 0x100000)            // SizeOfStackReserve
+        CodeBuffer.emitQword(buffer, 0x1000)              // SizeOfStackCommit
+        CodeBuffer.emitQword(buffer, 0x100000)            // SizeOfHeapReserve
+        CodeBuffer.emitQword(buffer, 0x1000)              // SizeOfHeapCommit
+        CodeBuffer.emitDword(buffer, 0)                   // LoaderFlags
+        CodeBuffer.emitDword(buffer, 16)                  // NumberOfRvaAndSizes
+
+        // Data directories (16 entries, all zeros for minimal exe)
+        for _ in range(16) 'dataDirs'
+            CodeBuffer.emitDword(buffer, 0)  // VirtualAddress
+            CodeBuffer.emitDword(buffer, 0)  // Size
+        end 'dataDirs'
+    end 'writeOptionalHeader'
+
+    // Write Section Header (40 bytes)
+    export function writeSectionHeader(name string, virtualSize int, virtualAddress int, rawSize int, rawOffset int, characteristics int) void
+        // Name (8 bytes, null-padded)
+        for i in range(8) 'name'
+            if i < name.bytes().count() 'hasChar'
+                CodeBuffer.emitByte(buffer, name.byteAt(i))
+            else 'hasChar'
+                CodeBuffer.emitByte(buffer, 0b)
+            end 'hasChar'
+        end 'name'
+
+        CodeBuffer.emitDword(buffer, virtualSize)         // VirtualSize
+        CodeBuffer.emitDword(buffer, virtualAddress)      // VirtualAddress
+        CodeBuffer.emitDword(buffer, rawSize)             // SizeOfRawData
+        CodeBuffer.emitDword(buffer, rawOffset)           // PointerToRawData
+        CodeBuffer.emitDword(buffer, 0)                   // PointerToRelocations
+        CodeBuffer.emitDword(buffer, 0)                   // PointerToLinenumbers
+        CodeBuffer.emitWord(buffer, 0)                    // NumberOfRelocations
+        CodeBuffer.emitWord(buffer, 0)                    // NumberOfLinenumbers
+        CodeBuffer.emitDword(buffer, characteristics)     // Characteristics
+    end 'writeSectionHeader'
+
+    // Build a minimal PE executable
+    export function buildExecutable(code array of byte, codeSize int) void
+        // Calculate sizes and offsets
+        let peHeaderOffset = 64  // Right after DOS header
+        let numSections = 1
+
+        // Headers: DOS (64) + PE sig (4) + COFF (20) + Optional (112) + Sections (40 each)
+        let headersSize = PEWriter.alignUp(64 + 4 + 20 + 112 + (numSections * 40), FILE_ALIGNMENT)
+
+        // Code section
+        let codeSectionRVA = SECTION_ALIGNMENT  // First section at 0x1000
+        let codeSectionFileOffset = headersSize
+        let codeSectionRawSize = PEWriter.alignUp(codeSize, FILE_ALIGNMENT)
+
+        // Entry point is at start of code section
+        let entryPointRVA = codeSectionRVA
+
+        // Total image size (aligned to section alignment)
+        let imageSize = PEWriter.alignUp(codeSectionRVA + codeSize, SECTION_ALIGNMENT)
+
+        // Write headers
+        PEWriter.writeDOSHeader(peHeaderOffset)
+
+        // PE Signature
+        CodeBuffer.emitDword(buffer, PE_SIGNATURE)
+
+        // COFF Header
+        PEWriter.writeCOFFHeader(numSections, 0)  // timestamp 0 for reproducibility
+
+        // Optional Header
+        PEWriter.writeOptionalHeader(entryPointRVA, codeSize, imageSize, headersSize)
+
+        // Section Headers
+        let codeCharacteristics = SECTION_CNT_CODE | SECTION_MEM_EXECUTE | SECTION_MEM_READ
+        PEWriter.writeSectionHeader(".text", codeSize, codeSectionRVA, codeSectionRawSize, codeSectionFileOffset, codeCharacteristics)
+
+        // Pad to file alignment
+        CodeBuffer.align(buffer, FILE_ALIGNMENT)
+
+        // Write code section
+        for b in code 'writeCode'
+            CodeBuffer.emitByte(buffer, b)
+        end 'writeCode'
+
+        // Pad code section to file alignment
+        CodeBuffer.align(buffer, FILE_ALIGNMENT)
+
+        // Store info for caller
+        codeRVA = codeSectionRVA
+        codeSize = codeSize
+        entryPointRVA = entryPointRVA
+    end 'buildExecutable'
+
+    // Get the complete executable bytes
+    export function getBytes() array of byte
+        return buffer.bytes
+    end 'getBytes'
+
+    export function getSize() int
+        return buffer.size
+    end 'getSize'
+end 'PEWriter'
+
+//=============================================================================
+// Minimal executable builder for basic.maxon
+//
+// For basic.maxon which just returns 42, we need:
+// 1. Set up the return value (mov eax, 42)
+// 2. Call ExitProcess to terminate (or just ret from main and have runtime handle it)
+//
+// For a truly standalone exe, we need to call ExitProcess from kernel32.dll
+// This requires import tables. For simplicity, let's create a minimal exe
+// that assumes a runtime environment or uses int 3 to break.
+//=============================================================================
+
+export struct MinimalExeBuilder
+    var x86gen X86Gen
+    var peWriter PEWriter
+
+    export function create() MinimalExeBuilder
+        return MinimalExeBuilder{
+            x86gen: X86Gen.create(),
+            peWriter: PEWriter.create()
+        }
+    end 'create'
+
+    // Build executable for the given program
+    export function build(program Program) void
+        // Generate x86-64 code
+        X86Gen.generate(x86gen, program)
+
+        // For a truly minimal exe that just returns 42, we can:
+        // 1. Generate: mov eax, 42; ret
+        // This won't work as a standalone exe (needs ExitProcess)
+        //
+        // For a working exe, we'd need to link against kernel32.dll
+        // and call ExitProcess(42). That requires import tables.
+        //
+        // Let's build a more complete version with imports.
+
+        var code = X86Gen.getCode(x86gen)
+        var codeSize = X86Gen.getCodeSize(x86gen)
+
+        PEWriter.buildExecutable(peWriter, code, codeSize)
+    end 'build'
+
+    export function getBytes() array of byte
+        return PEWriter.getBytes(peWriter)
+    end 'getBytes'
+
+    export function getSize() int
+        return PEWriter.getSize(peWriter)
+    end 'getSize'
+end 'MinimalExeBuilder'
+
+//=============================================================================
+// Complete PE Builder with Import Table (for kernel32.dll ExitProcess)
+//=============================================================================
+
+export struct CompleteExeBuilder
+    var buffer CodeBuffer
+
+    export function create() CompleteExeBuilder
+        return CompleteExeBuilder{buffer: CodeBuffer.create()}
+    end 'create'
+
+    // Build a complete working executable for basic.maxon
+    // This hardcodes the structure for simplicity
+    export function buildBasicExe() void
+        // For basic.maxon: function main() int { return 42 }
+        // We need to:
+        // 1. Call ExitProcess(42) from kernel32.dll
+
+        // File layout:
+        // 0x0000 - DOS Header (64 bytes)
+        // 0x0040 - PE Signature (4 bytes)
+        // 0x0044 - COFF Header (20 bytes)
+        // 0x0058 - Optional Header (112 bytes)
+        // 0x00C8 - Section Headers (2 sections x 40 = 80 bytes)
+        // 0x0118 - Padding to 0x200 (file alignment)
+        // 0x0200 - .text section (code)
+        // 0x0400 - .idata section (imports)
+
+        let dosHeaderSize = 64
+        let peSignatureSize = 4
+        let coffHeaderSize = 20
+        let optionalHeaderSize = 112
+        let sectionHeaderSize = 40
+        let numSections = 2
+
+        let headersEndOffset = dosHeaderSize + peSignatureSize + coffHeaderSize + optionalHeaderSize + (sectionHeaderSize * numSections)
+        let headersSize = 512  // Aligned to FILE_ALIGNMENT
+
+        let textSectionFileOffset = 512
+        let textSectionRVA = 4096  // 0x1000
+        let textSectionSize = 512
+
+        let idataSectionFileOffset = 1024
+        let idataSectionRVA = 8192  // 0x2000
+        let idataSectionSize = 512
+
+        let imageSize = 12288  // 0x3000 (3 pages: headers + .text + .idata)
+
+        let entryPointRVA = textSectionRVA
+
+        // Import table RVA
+        let importTableRVA = idataSectionRVA
+        let importTableSize = 40  // One import descriptor + null terminator
+
+        // ========== DOS Header ==========
+        CodeBuffer.emitWord(buffer, 0x5A4D)  // "MZ"
+        for _ in range(29) 'dospad'
+            CodeBuffer.emitWord(buffer, 0)
+        end 'dospad'
+        CodeBuffer.emitDword(buffer, 64)  // e_lfanew
+
+        // ========== PE Signature ==========
+        CodeBuffer.emitDword(buffer, 0x00004550)  // "PE\0\0"
+
+        // ========== COFF Header ==========
+        CodeBuffer.emitWord(buffer, 0x8664)  // Machine: AMD64
+        CodeBuffer.emitWord(buffer, numSections)
+        CodeBuffer.emitDword(buffer, 0)  // TimeDateStamp
+        CodeBuffer.emitDword(buffer, 0)  // PointerToSymbolTable
+        CodeBuffer.emitDword(buffer, 0)  // NumberOfSymbols
+        CodeBuffer.emitWord(buffer, 112)  // SizeOfOptionalHeader
+        CodeBuffer.emitWord(buffer, 0x0022)  // Characteristics
+
+        // ========== Optional Header (PE32+) ==========
+        CodeBuffer.emitWord(buffer, 0x020B)  // Magic
+        CodeBuffer.emitByte(buffer, 14b)    // MajorLinkerVersion
+        CodeBuffer.emitByte(buffer, 0b)     // MinorLinkerVersion
+        CodeBuffer.emitDword(buffer, textSectionSize)  // SizeOfCode
+        CodeBuffer.emitDword(buffer, idataSectionSize) // SizeOfInitializedData
+        CodeBuffer.emitDword(buffer, 0)     // SizeOfUninitializedData
+        CodeBuffer.emitDword(buffer, entryPointRVA)  // AddressOfEntryPoint
+        CodeBuffer.emitDword(buffer, textSectionRVA) // BaseOfCode
+        CodeBuffer.emitQword(buffer, 0x0000000140000000)  // ImageBase
+        CodeBuffer.emitDword(buffer, 4096)  // SectionAlignment
+        CodeBuffer.emitDword(buffer, 512)   // FileAlignment
+        CodeBuffer.emitWord(buffer, 6)      // MajorOSVersion
+        CodeBuffer.emitWord(buffer, 0)      // MinorOSVersion
+        CodeBuffer.emitWord(buffer, 0)      // MajorImageVersion
+        CodeBuffer.emitWord(buffer, 0)      // MinorImageVersion
+        CodeBuffer.emitWord(buffer, 6)      // MajorSubsystemVersion
+        CodeBuffer.emitWord(buffer, 0)      // MinorSubsystemVersion
+        CodeBuffer.emitDword(buffer, 0)     // Win32VersionValue
+        CodeBuffer.emitDword(buffer, imageSize)  // SizeOfImage
+        CodeBuffer.emitDword(buffer, headersSize) // SizeOfHeaders
+        CodeBuffer.emitDword(buffer, 0)     // CheckSum
+        CodeBuffer.emitWord(buffer, 3)      // Subsystem (CONSOLE)
+        CodeBuffer.emitWord(buffer, 0)      // DllCharacteristics
+        CodeBuffer.emitQword(buffer, 0x100000)  // SizeOfStackReserve
+        CodeBuffer.emitQword(buffer, 0x1000)    // SizeOfStackCommit
+        CodeBuffer.emitQword(buffer, 0x100000)  // SizeOfHeapReserve
+        CodeBuffer.emitQword(buffer, 0x1000)    // SizeOfHeapCommit
+        CodeBuffer.emitDword(buffer, 0)     // LoaderFlags
+        CodeBuffer.emitDword(buffer, 16)    // NumberOfRvaAndSizes
+
+        // Data directories
+        // 0: Export - not used
+        CodeBuffer.emitDword(buffer, 0)
+        CodeBuffer.emitDword(buffer, 0)
+        // 1: Import
+        CodeBuffer.emitDword(buffer, importTableRVA)
+        CodeBuffer.emitDword(buffer, importTableSize)
+        // 2-15: Not used
+        for _ in range(2, 16) 'datadirs'
+            CodeBuffer.emitDword(buffer, 0)
+            CodeBuffer.emitDword(buffer, 0)
+        end 'datadirs'
+
+        // ========== Section Headers ==========
+
+        // .text section
+        CompleteExeBuilder.writeSectionName(".text")
+        CodeBuffer.emitDword(buffer, textSectionSize)  // VirtualSize
+        CodeBuffer.emitDword(buffer, textSectionRVA)   // VirtualAddress
+        CodeBuffer.emitDword(buffer, textSectionSize)  // SizeOfRawData
+        CodeBuffer.emitDword(buffer, textSectionFileOffset)  // PointerToRawData
+        CodeBuffer.emitDword(buffer, 0)  // PointerToRelocations
+        CodeBuffer.emitDword(buffer, 0)  // PointerToLinenumbers
+        CodeBuffer.emitWord(buffer, 0)   // NumberOfRelocations
+        CodeBuffer.emitWord(buffer, 0)   // NumberOfLinenumbers
+        CodeBuffer.emitDword(buffer, 0x60000020)  // Characteristics (code, exec, read)
+
+        // .idata section
+        CompleteExeBuilder.writeSectionName(".idata")
+        CodeBuffer.emitDword(buffer, idataSectionSize)
+        CodeBuffer.emitDword(buffer, idataSectionRVA)
+        CodeBuffer.emitDword(buffer, idataSectionSize)
+        CodeBuffer.emitDword(buffer, idataSectionFileOffset)
+        CodeBuffer.emitDword(buffer, 0)
+        CodeBuffer.emitDword(buffer, 0)
+        CodeBuffer.emitWord(buffer, 0)
+        CodeBuffer.emitWord(buffer, 0)
+        CodeBuffer.emitDword(buffer, 0xC0000040)  // Characteristics (init data, read, write)
+
+        // Pad headers to file alignment
+        while buffer.size < headersSize 'padHeaders'
+            CodeBuffer.emitByte(buffer, 0b)
+        end 'padHeaders'
+
+        // ========== .text Section (Code) ==========
+        // Entry point code:
+        // mov ecx, 42           ; Exit code
+        // sub rsp, 40           ; Shadow space for Windows x64 ABI
+        // call [ExitProcess]    ; Call ExitProcess(42)
+
+        // Import Address Table will be at .idata + 100 = RVA 0x2064
+        let exitProcessIAT = idataSectionRVA + 100
+
+        // mov ecx, 42  (B9 2A 00 00 00)
+        CodeBuffer.emitByte(buffer, 0xB9 as byte)
+        CodeBuffer.emitDword(buffer, 42)
+
+        // sub rsp, 40  (48 83 EC 28)
+        CodeBuffer.emitByte(buffer, 0x48 as byte)
+        CodeBuffer.emitByte(buffer, 0x83 as byte)
+        CodeBuffer.emitByte(buffer, 0xEC as byte)
+        CodeBuffer.emitByte(buffer, 0x28 as byte)
+
+        // call qword ptr [rip + offset]
+        // FF 15 xx xx xx xx
+        CodeBuffer.emitByte(buffer, 0xFF as byte)
+        CodeBuffer.emitByte(buffer, 0x15 as byte)
+        // RIP-relative offset to IAT entry
+        // Current RIP after this instruction = textSectionRVA + 13
+        // Target = exitProcessIAT
+        let ripAfterCall = textSectionRVA + 13
+        let relOffset = exitProcessIAT - ripAfterCall
+        CodeBuffer.emitDword(buffer, relOffset)
+
+        // Pad .text section
+        while buffer.size < idataSectionFileOffset 'padText'
+            CodeBuffer.emitByte(buffer, 0x90 as byte)  // NOP padding
+        end 'padText'
+
+        // ========== .idata Section (Imports) ==========
+        // Layout within .idata:
+        // 0x00: Import Directory Table (20 bytes per entry + 20 null terminator)
+        // 0x28: Import Lookup Table for kernel32 (8 bytes per entry + 8 null terminator)
+        // 0x38: DLL name "kernel32.dll\0"
+        // 0x48: Hint/Name for ExitProcess
+        // 0x64: Import Address Table (8 bytes per entry + 8 null terminator)
+
+        let importDirOffset = 0
+        let iltOffset = 40      // Import Lookup Table
+        let dllNameOffset = 56  // "kernel32.dll"
+        let hintNameOffset = 72 // Hint/Name for ExitProcess
+        let iatOffset = 100     // Import Address Table
+
+        // Import Directory Entry for kernel32.dll
+        CodeBuffer.emitDword(buffer, idataSectionRVA + iltOffset)  // OriginalFirstThunk (ILT)
+        CodeBuffer.emitDword(buffer, 0)  // TimeDateStamp
+        CodeBuffer.emitDword(buffer, 0)  // ForwarderChain
+        CodeBuffer.emitDword(buffer, idataSectionRVA + dllNameOffset)  // Name
+        CodeBuffer.emitDword(buffer, idataSectionRVA + iatOffset)  // FirstThunk (IAT)
+
+        // Null Import Directory Entry (terminator)
+        CodeBuffer.emitDword(buffer, 0)
+        CodeBuffer.emitDword(buffer, 0)
+        CodeBuffer.emitDword(buffer, 0)
+        CodeBuffer.emitDword(buffer, 0)
+        CodeBuffer.emitDword(buffer, 0)
+
+        // Import Lookup Table (at offset 40)
+        CodeBuffer.emitQword(buffer, idataSectionRVA + hintNameOffset)  // Points to Hint/Name
+        CodeBuffer.emitQword(buffer, 0)  // Null terminator
+
+        // DLL Name (at offset 56): "kernel32.dll\0"
+        CompleteExeBuilder.writeString("kernel32.dll")
+
+        // Pad to offset 72
+        while (buffer.size - idataSectionFileOffset) < hintNameOffset 'padToHint'
+            CodeBuffer.emitByte(buffer, 0b)
+        end 'padToHint'
+
+        // Hint/Name (at offset 72)
+        CodeBuffer.emitWord(buffer, 0)  // Hint (ordinal hint, 0 = search by name)
+        CompleteExeBuilder.writeString("ExitProcess")
+
+        // Pad to offset 100
+        while (buffer.size - idataSectionFileOffset) < iatOffset 'padToIAT'
+            CodeBuffer.emitByte(buffer, 0b)
+        end 'padToIAT'
+
+        // Import Address Table (at offset 100)
+        // This gets overwritten by the loader with actual function addresses
+        CodeBuffer.emitQword(buffer, idataSectionRVA + hintNameOffset)  // Points to Hint/Name
+        CodeBuffer.emitQword(buffer, 0)  // Null terminator
+
+        // Pad .idata section to file alignment
+        while buffer.size < (idataSectionFileOffset + idataSectionSize) 'padIdata'
+            CodeBuffer.emitByte(buffer, 0b)
+        end 'padIdata'
+    end 'buildBasicExe'
+
+    export function writeSectionName(, name string) void
+        for i in range(8) 'chars'
+            if i < name.bytes().count() 'hasChar'
+                CodeBuffer.emitByte(buffer, name.byteAt(i))
+            else 'hasChar'
+                CodeBuffer.emitByte(buffer, 0b)
+            end 'hasChar'
+        end 'chars'
+    end 'writeSectionName'
+
+    export function writeString(, s string) void
+        for b in s.bytes() 'chars'
+            CodeBuffer.emitByte(buffer, b)
+        end 'chars'
+        CodeBuffer.emitByte(buffer, 0b)  // Null terminator
+    end 'writeString'
+
+    export function getBytes() array of byte
+        return buffer.bytes
+    end 'getBytes'
+
+    export function getSize() int
+        return buffer.size
+    end 'getSize'
+end 'CompleteExeBuilder'

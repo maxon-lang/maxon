@@ -1,0 +1,425 @@
+// Code generator for the Maxon self-hosted compiler
+// Generates Maxon IR (MIR) from the AST
+
+// NOTE: This file assumes features that don't exist yet in Maxon:
+// - String concatenation with +
+// - StringBuilder or similar for efficient string building
+// - File I/O for writing output
+// These are written as they would ideally work
+
+export struct CodeGen
+    var output string
+    var indentLevel int
+    var labelCounter int
+    var tempCounter int
+
+    // Create a new code generator
+    export function create() CodeGen
+        return CodeGen{output: "", indentLevel: 0, labelCounter: 0, tempCounter: 0}
+    end 'create'
+
+    // Generate a unique label
+    export function newLabel(prefix string) string
+        var label = prefix + "_" + labelCounter.toString()
+        labelCounter = labelCounter + 1
+        return label
+    end 'newLabel'
+
+    // Generate a unique temporary variable
+    export function newTemp() string
+        var temp = "%t" + tempCounter.toString()
+        tempCounter = tempCounter + 1
+        return temp
+    end 'newTemp'
+
+    // Emit a line of IR code
+    export function emit(code string) void
+        var i = 0
+        while i < indentLevel 'indent'
+            output = output + "    "
+            i = i + 1
+        end 'indent'
+        output = output + code + "\n"
+    end 'emit'
+
+    // Emit raw code without indentation
+    export function emitRaw(code string) void
+        output = output + code
+    end 'emitRaw'
+
+    // Increase indentation
+    export function indent() void
+        indentLevel = indentLevel + 1
+    end 'indent'
+
+    // Decrease indentation
+    export function dedent() void
+        if indentLevel > 0 'check'
+            indentLevel = indentLevel - 1
+        end 'check'
+    end 'dedent'
+
+    //=========================================================================
+    // Type generation
+    //=========================================================================
+
+    export function typeToMIR(typeRef TypeRef) string
+        match typeRef.kind 'convert'
+            TypeKind.void gives "void"
+            TypeKind.intType gives "i32"
+            TypeKind.floatType gives "f64"
+            TypeKind.boolType gives "i1"
+            TypeKind.byteType gives "i8"
+            TypeKind.stringType gives "ptr"
+            TypeKind.charType gives "ptr"
+            TypeKind.arrayType gives "ptr"
+            TypeKind.structType gives "ptr"
+            default gives "i32"
+        end 'convert'
+    end 'typeToMIR'
+
+    //=========================================================================
+    // Expression generation
+    //=========================================================================
+
+    // Generate code for an expression, returns the temp variable holding the result
+    export function genExpr(expr Expr) string
+        match expr.kind 'genExpr'
+            ExprKind.intLiteral gives return CodeGen.genIntLiteral(expr)
+            ExprKind.floatLiteral gives return CodeGen.genFloatLiteral(expr)
+            ExprKind.boolLiteral gives return CodeGen.genBoolLiteral(expr)
+            ExprKind.stringLiteral gives return CodeGen.genStringLiteral(expr)
+            ExprKind.identifier gives return CodeGen.genIdentifier(expr)
+            ExprKind.binary gives return CodeGen.genBinary(expr)
+            ExprKind.unary gives return CodeGen.genUnary(expr)
+            ExprKind.call gives return CodeGen.genCall(expr)
+            default gives return "0"
+        end 'genExpr'
+    end 'genExpr'
+
+    export function genIntLiteral(expr Expr) string
+        var temp = CodeGen.newTemp()
+        CodeGen.emit(temp + " = const i32 " + expr.intValue.toString())
+        return temp
+    end 'genIntLiteral'
+
+    export function genFloatLiteral(expr Expr) string
+        var temp = CodeGen.newTemp()
+        CodeGen.emit(temp + " = const f64 " + expr.floatValue.toString())
+        return temp
+    end 'genFloatLiteral'
+
+    export function genBoolLiteral(expr Expr) string
+        var temp = CodeGen.newTemp()
+        var value = "0"
+        if expr.boolValue 'true'
+            value = "1"
+        end 'true'
+        CodeGen.emit(temp + " = const i1 " + value)
+        return temp
+    end 'genBoolLiteral'
+
+    export function genStringLiteral(expr Expr) string
+        var temp = CodeGen.newTemp()
+        // String literals need special handling - stored as global constants
+        CodeGen.emit(temp + " = string " + expr.stringValue)
+        return temp
+    end 'genStringLiteral'
+
+    export function genIdentifier(expr Expr) string
+        var temp = CodeGen.newTemp()
+        CodeGen.emit(temp + " = load %" + expr.name)
+        return temp
+    end 'genIdentifier'
+
+    export function genBinary(expr Expr) string
+        if let left = expr.left 'hasLeft'
+            if let right = expr.right 'hasRight'
+                var leftTemp = CodeGen.genExpr(left)
+                var rightTemp = CodeGen.genExpr(right)
+                var temp = CodeGen.newTemp()
+
+                var opStr = CodeGen.binaryOpToMIR(expr.op)
+                CodeGen.emit(temp + " = " + opStr + " i32 " + leftTemp + ", " + rightTemp)
+                return temp
+            end 'hasRight'
+        end 'hasLeft'
+        return "0"
+    end 'genBinary'
+
+    export function binaryOpToMIR(op BinaryOp) string
+        match op 'convert'
+            BinaryOp.add gives "add"
+            BinaryOp.sub gives "sub"
+            BinaryOp.mul gives "mul"
+            BinaryOp.div gives "sdiv"
+            BinaryOp.mod gives "srem"
+            BinaryOp.eq gives "icmp eq"
+            BinaryOp.ne gives "icmp ne"
+            BinaryOp.lt gives "icmp slt"
+            BinaryOp.gt gives "icmp sgt"
+            BinaryOp.le gives "icmp sle"
+            BinaryOp.ge gives "icmp sge"
+            BinaryOp.and gives "and"
+            BinaryOp.or gives "or"
+            default gives "add"
+        end 'convert'
+    end 'binaryOpToMIR'
+
+    export function genUnary(expr Expr) string
+        if let operand = expr.operand 'hasOperand'
+            var operandTemp = CodeGen.genExpr(operand)
+            var temp = CodeGen.newTemp()
+
+            match expr.unaryOp 'genOp'
+                UnaryOp.neg then CodeGen.emit(temp + " = sub i32 0, " + operandTemp)
+                UnaryOp.not then CodeGen.emit(temp + " = xor i1 " + operandTemp + ", 1")
+            end 'genOp'
+
+            return temp
+        end 'hasOperand'
+        return "0"
+    end 'genUnary'
+
+    export function genCall(expr Expr) string
+        // Generate arguments
+        var argTemps = array of string
+        var i = 0
+        while i < expr.arguments.count() 'genArgs'
+            var argTemp = CodeGen.genExpr(expr.arguments[i])
+            argTemps.append(argTemp)
+            i = i + 1
+        end 'genArgs'
+
+        // Build argument list
+        var argList = ""
+        i = 0
+        while i < argTemps.count() 'buildArgs'
+            if i > 0 'comma'
+                argList = argList + ", "
+            end 'comma'
+            argList = argList + "i32 " + argTemps[i]
+            i = i + 1
+        end 'buildArgs'
+
+        var temp = CodeGen.newTemp()
+        CodeGen.emit(temp + " = call @" + expr.callee + "(" + argList + ")")
+        return temp
+    end 'genCall'
+
+    //=========================================================================
+    // Statement generation
+    //=========================================================================
+
+    export function genStmt(stmt Stmt) void
+        match stmt.kind 'genStmt'
+            StmtKind.expr then CodeGen.genExprStmt(stmt)
+            StmtKind.return_ then CodeGen.genReturn(stmt)
+            StmtKind.varDecl then CodeGen.genVarDecl(stmt)
+            StmtKind.letDecl then CodeGen.genVarDecl(stmt)
+            StmtKind.assign then CodeGen.genAssign(stmt)
+            StmtKind.if_ then CodeGen.genIf(stmt)
+            StmtKind.while_ then CodeGen.genWhile(stmt)
+            StmtKind.break_ then CodeGen.genBreak(stmt)
+            StmtKind.continue_ then CodeGen.genContinue(stmt)
+        end 'genStmt'
+    end 'genStmt'
+
+    export function genExprStmt(stmt Stmt) void
+        if let expr = stmt.expr 'hasExpr'
+            CodeGen.genExpr(expr)  // Result is discarded
+        end 'hasExpr'
+    end 'genExprStmt'
+
+    export function genReturn(stmt Stmt) void
+        if let expr = stmt.expr 'hasValue'
+            var temp = CodeGen.genExpr(expr)
+            CodeGen.emit("ret i32 " + temp)
+        else 'hasValue'
+            CodeGen.emit("ret void")
+        end 'hasValue'
+    end 'genReturn'
+
+    export function genVarDecl(stmt Stmt) void
+        // Allocate stack space for the variable
+        var typeStr = "i32"  // Default to int
+        if let varType = stmt.varType 'hasType'
+            typeStr = CodeGen.typeToMIR(varType)
+        end 'hasType'
+
+        CodeGen.emit("%" + stmt.varName + " = alloca " + typeStr)
+
+        // Initialize if there's an initializer
+        if let init = stmt.initializer 'hasInit'
+            var temp = CodeGen.genExpr(init)
+            CodeGen.emit("store " + typeStr + " " + temp + ", ptr %" + stmt.varName)
+        end 'hasInit'
+    end 'genVarDecl'
+
+    export function genAssign(stmt Stmt) void
+        if let expr = stmt.expr 'hasExpr'
+            var temp = CodeGen.genExpr(expr)
+            CodeGen.emit("store i32 " + temp + ", ptr %" + stmt.varName)
+        end 'hasExpr'
+    end 'genAssign'
+
+    export function genIf(stmt Stmt) void
+        var thenLabel = CodeGen.newLabel("then")
+        var elseLabel = CodeGen.newLabel("else")
+        var endLabel = CodeGen.newLabel("endif")
+
+        // Generate condition
+        if let cond = stmt.condition 'hasCond'
+            var condTemp = CodeGen.genExpr(cond)
+
+            if stmt.elseBlock != nil 'hasElse'
+                CodeGen.emit("br i1 " + condTemp + ", label %" + thenLabel + ", label %" + elseLabel)
+            else 'hasElse'
+                CodeGen.emit("br i1 " + condTemp + ", label %" + thenLabel + ", label %" + endLabel)
+            end 'hasElse'
+        end 'hasCond'
+
+        // Then block
+        CodeGen.emit(thenLabel + ":")
+        CodeGen.indent()
+        var i = 0
+        while i < stmt.thenBlock.count() 'thenBody'
+            CodeGen.genStmt(stmt.thenBlock[i])
+            i = i + 1
+        end 'thenBody'
+        CodeGen.emit("br label %" + endLabel)
+        CodeGen.dedent()
+        // Else block
+        if let elseBlock = stmt.elseBlock 'hasElse'
+            CodeGen.emit(elseLabel + ":")
+            CodeGen.indent()
+            i = 0
+            while i < elseBlock.count() 'elseBody'
+                CodeGen.genStmt(elseBlock[i])
+                i = i + 1
+            end 'elseBody'
+            CodeGen.emit("br label %" + endLabel)
+            CodeGen.dedent()
+        end 'hasElse'
+
+        CodeGen.emit(endLabel + ":")
+    end 'genIf'
+
+    export function genWhile(stmt Stmt) void
+        var condLabel = CodeGen.newLabel("while_cond")
+        var bodyLabel = CodeGen.newLabel("while_body")
+        var endLabel = CodeGen.newLabel("while_end")
+
+        CodeGen.emit("br label %" + condLabel)
+
+        // Condition
+        CodeGen.emit(condLabel + ":")
+        if let cond = stmt.condition 'hasCond'
+            var condTemp = CodeGen.genExpr(cond)
+            CodeGen.emit("br i1 " + condTemp + ", label %" + bodyLabel + ", label %" + endLabel)
+        end 'hasCond'
+
+        // Body
+        CodeGen.emit(bodyLabel + ":")
+        CodeGen.indent()
+        var i = 0
+        while i < stmt.thenBlock.count() 'body'
+            CodeGen.genStmt(stmt.thenBlock[i])
+            i = i + 1
+        end 'body'
+        CodeGen.emit("br label %" + condLabel)
+        CodeGen.dedent()
+        CodeGen.emit(endLabel + ":")
+    end 'genWhile'
+
+    export function genBreak(stmt Stmt) void
+        // Would need loop context to determine correct label
+        CodeGen.emit("; break " + stmt.blockLabel)
+    end 'genBreak'
+
+    export function genContinue(stmt Stmt) void
+        // Would need loop context to determine correct label
+        CodeGen.emit("; continue " + stmt.blockLabel)
+    end 'genContinue'
+
+    //=========================================================================
+    // Function generation
+    //=========================================================================
+
+    export function genFunction(func Function) void
+        // Generate function signature
+        var returnType = CodeGen.typeToMIR(func.returnType)
+
+        var paramList = ""
+        var i = 0
+        while i < func.params.count() 'params'
+            if i > 0 'comma'
+                paramList = paramList + ", "
+            end 'comma'
+            var param = func.params[i]
+            paramList = paramList + CodeGen.typeToMIR(param.paramType) + " %" + param.name
+            i = i + 1
+        end 'params'
+
+        if func.isExtern 'extern'
+            CodeGen.emit("declare " + returnType + " @" + func.name + "(" + paramList + ")")
+            return
+        end 'extern'
+
+        var exportStr = ""
+        if func.isExport 'export'
+            exportStr = "export "
+        end 'export'
+
+        CodeGen.emit(exportStr + "define " + returnType + " @" + func.name + "(" + paramList + ") {")
+        CodeGen.indent()
+
+        // Entry block
+        CodeGen.emit("entry:")
+        CodeGen.indent()
+
+        // Copy parameters to local variables
+        i = 0
+        while i < func.params.count() 'copyParams'
+            var param = func.params[i]
+            var typeStr = CodeGen.typeToMIR(param.paramType)
+            CodeGen.emit("%" + param.name + ".addr = alloca " + typeStr)
+            CodeGen.emit("store " + typeStr + " %" + param.name + ", ptr %" + param.name + ".addr")
+            i = i + 1
+        end 'copyParams'
+
+        // Generate body
+        i = 0
+        while i < func.body.count() 'body'
+            CodeGen.genStmt(func.body[i])
+            i = i + 1
+        end 'body'
+
+        // Add implicit return if needed
+        if func.returnType.kind == TypeKind.void 'implicitReturn'
+            CodeGen.emit("ret void")
+        end 'implicitReturn'
+
+        CodeGen.dedent()
+        CodeGen.dedent()
+        CodeGen.emit("}")
+        CodeGen.emit("")
+    end 'genFunction'
+
+    //=========================================================================
+    // Program generation
+    //=========================================================================
+
+    export function generate(program Program) void
+        CodeGen.emit("; Maxon IR generated by self-hosted compiler")
+        CodeGen.emit("; Source: " + program.fileName)
+        CodeGen.emit("")
+
+        // Generate all functions
+        var i = 0
+        while i < program.functions.count() 'funcs'
+            CodeGen.genFunction(program.functions[i])
+            i = i + 1
+        end 'funcs'
+    end 'generate'
+end 'CodeGen'

@@ -1,0 +1,483 @@
+// Abstract Syntax Tree types for the Maxon compiler
+// Represents the parsed structure of a Maxon program
+
+// NOTE: This file assumes features that don't exist yet in Maxon:
+// - Sum types / tagged unions for expression and statement variants
+// - Recursive type definitions
+// - Array/list literals for AST node children
+// These are written as they would ideally work
+
+//=============================================================================
+// Type representation
+//=============================================================================
+
+export enum TypeKind int
+    case void = 0
+    case int = 1
+    case float = 2
+    case bool = 3
+    case byte = 4
+    case string = 5
+    case char = 6
+    case array = 7
+    case struct = 8
+    case function = 9
+    case optional = 10
+    case map = 11
+    case error = 255
+end 'TypeKind'
+
+export struct TypeRef
+    var kind TypeKind
+    var name string          // For struct types, the struct name
+    var elementType TypeRef or nil  // For arrays/optionals, the element type
+    var keyType TypeRef or nil      // For maps, the key type
+    var valueType TypeRef or nil    // For maps, the value type
+
+    export function intType() TypeRef
+        return TypeRef{kind: TypeKind.int, name: "int", elementType: nil, keyType: nil, valueType: nil}
+    end 'intType'
+
+    export function floatType() TypeRef
+        return TypeRef{kind: TypeKind.float, name: "float", elementType: nil, keyType: nil, valueType: nil}
+    end 'floatType'
+
+    export function boolType() TypeRef
+        return TypeRef{kind: TypeKind.bool, name: "bool", elementType: nil, keyType: nil, valueType: nil}
+    end 'boolType'
+
+    export function byteType() TypeRef
+        return TypeRef{kind: TypeKind.byte, name: "byte", elementType: nil, keyType: nil, valueType: nil}
+    end 'byteType'
+
+    export function stringType() TypeRef
+        return TypeRef{kind: TypeKind.string, name: "string", elementType: nil, keyType: nil, valueType: nil}
+    end 'stringType'
+
+    export function voidType() TypeRef
+        return TypeRef{kind: TypeKind.void, name: "void", elementType: nil, keyType: nil, valueType: nil}
+    end 'voidType'
+
+    export function arrayOf(elementType TypeRef) TypeRef
+        return TypeRef{kind: TypeKind.array, name: "array", elementType: elementType, keyType: nil, valueType: nil}
+    end 'arrayOf'
+
+    export function toString() string
+        match kind 'fmt'
+            TypeKind.void gives "void"
+            TypeKind.int gives "int"
+            TypeKind.float gives "float"
+            TypeKind.bool gives "bool"
+            TypeKind.byte gives "byte"
+            TypeKind.string gives "string"
+            TypeKind.char gives "char"
+            TypeKind.array gives "array of " + TypeRef.toString(elementType)
+            TypeKind.struct gives name
+            default gives "unknown"
+        end 'fmt'
+    end 'toString'
+end 'TypeRef'
+
+//=============================================================================
+// Expression nodes
+//=============================================================================
+
+export enum ExprKind int
+    case intLiteral = 1
+    case floatLiteral = 2
+    case boolLiteral = 3
+    case byteLiteral = 4
+    case stringLiteral = 5
+    case identifier = 6
+    case binary = 7
+    case unary = 8
+    case call = 9
+    case index = 10
+    case member = 11
+    case cast = 12
+    case structLiteral = 13
+    case arrayLiteral = 14
+end 'ExprKind'
+
+export enum BinaryOp int
+    case add = 1
+    case sub = 2
+    case mul = 3
+    case div = 4
+    case mod = 5
+    case eq = 6
+    case ne = 7
+    case lt = 8
+    case gt = 9
+    case le = 10
+    case ge = 11
+    case and = 12
+    case or = 13
+end 'BinaryOp'
+
+export enum UnaryOp int
+    case neg = 1
+    case not = 2
+end 'UnaryOp'
+
+// Expression node - using tagged union style
+export struct Expr
+    var kind ExprKind
+    var line int
+    var column int
+
+    // Literal values (used when kind is a literal type)
+    var intValue int
+    var floatValue float
+    var boolValue bool
+    var byteValue byte
+    var stringValue string
+
+    // Identifier name (for identifier expressions)
+    var name string
+
+    // Binary expression fields
+    var op BinaryOp
+    var left Expr or nil
+    var right Expr or nil
+
+    // Unary expression fields
+    var unaryOp UnaryOp
+    var operand Expr or nil
+
+    // Call expression fields
+    var callee string
+    var arguments array of Expr
+
+    // Index expression fields (also uses left for the array)
+    var index Expr or nil
+
+    // Member access fields (also uses left for the object)
+    var member string
+
+    // Cast expression fields (also uses operand)
+    var targetType TypeRef
+
+    // Constructors for different expression types
+
+    export function makeIntLiteral(value int, line int, column int) Expr
+        return Expr{
+            kind: ExprKind.intLiteral,
+            line: line,
+            column: column,
+            intValue: value,
+            floatValue: 0.0,
+            boolValue: false,
+            byteValue: 0b,
+            stringValue: "",
+            name: "",
+            op: BinaryOp.add,
+            left: nil,
+            right: nil,
+            unaryOp: UnaryOp.neg,
+            operand: nil,
+            callee: "",
+            arguments: array of Expr,
+            index: nil,
+            member: "",
+            targetType: TypeRef.intType()
+        }
+    end 'makeIntLiteral'
+
+    export function makeIdentifier(name string, line int, column int) Expr
+        return Expr{
+            kind: ExprKind.identifier,
+            line: line,
+            column: column,
+            intValue: 0,
+            floatValue: 0.0,
+            boolValue: false,
+            byteValue: 0b,
+            stringValue: "",
+            name: name,
+            op: BinaryOp.add,
+            left: nil,
+            right: nil,
+            unaryOp: UnaryOp.neg,
+            operand: nil,
+            callee: "",
+            arguments: array of Expr,
+            index: nil,
+            member: "",
+            targetType: TypeRef.intType()
+        }
+    end 'makeIdentifier'
+
+    export function makeBinary(op BinaryOp, left Expr, right Expr, line int, column int) Expr
+        return Expr{
+            kind: ExprKind.binary,
+            line: line,
+            column: column,
+            intValue: 0,
+            floatValue: 0.0,
+            boolValue: false,
+            byteValue: 0b,
+            stringValue: "",
+            name: "",
+            op: op,
+            left: left,
+            right: right,
+            unaryOp: UnaryOp.neg,
+            operand: nil,
+            callee: "",
+            arguments: array of Expr,
+            index: nil,
+            member: "",
+            targetType: TypeRef.intType()
+        }
+    end 'makeBinary'
+
+    export function makeCall(callee string, args array of Expr, line int, column int) Expr
+        return Expr{
+            kind: ExprKind.call,
+            line: line,
+            column: column,
+            intValue: 0,
+            floatValue: 0.0,
+            boolValue: false,
+            byteValue: 0b,
+            stringValue: "",
+            name: "",
+            op: BinaryOp.add,
+            left: nil,
+            right: nil,
+            unaryOp: UnaryOp.neg,
+            operand: nil,
+            callee: callee,
+            arguments: args,
+            index: nil,
+            member: "",
+            targetType: TypeRef.intType()
+        }
+    end 'makeCall'
+end 'Expr'
+
+//=============================================================================
+// Statement nodes
+//=============================================================================
+
+export enum StmtKind int
+    case expr = 1
+    case return_ = 2
+    case varDecl = 3
+    case letDecl = 4
+    case assign = 5
+    case if_ = 6
+    case while_ = 7
+    case for_ = 8
+    case break_ = 9
+    case continue_ = 10
+    case block = 11
+end 'StmtKind'
+
+export struct Stmt
+    var kind StmtKind
+    var line int
+    var column int
+
+    // Expression statement / return value
+    var expr Expr or nil
+
+    // Variable declaration fields
+    var varName string
+    var varType TypeRef or nil
+    var initializer Expr or nil
+
+    // Assignment fields (also uses varName for target, expr for value)
+
+    // If statement fields
+    var condition Expr or nil
+    var thenBlock array of Stmt
+    var elseBlock array of Stmt or nil
+    var blockLabel string
+
+    // While statement fields (uses condition, thenBlock as body, blockLabel)
+
+    // For statement fields
+    var loopVar string
+    var iterable Expr or nil
+    // uses thenBlock as body, blockLabel
+
+    // Break/continue fields (uses blockLabel for target)
+
+    // Block statement (uses thenBlock for statements)
+
+    export function makeReturn(value Expr or nil, line int, column int) Stmt
+        return Stmt{
+            kind: StmtKind.return_,
+            line: line,
+            column: column,
+            expr: value,
+            varName: "",
+            varType: nil,
+            initializer: nil,
+            condition: nil,
+            thenBlock: array of Stmt,
+            elseBlock: nil,
+            blockLabel: "",
+            loopVar: "",
+            iterable: nil
+        }
+    end 'makeReturn'
+
+    export function makeVarDecl(name string, varType TypeRef or nil, init Expr or nil, line int, column int) Stmt
+        return Stmt{
+            kind: StmtKind.varDecl,
+            line: line,
+            column: column,
+            expr: nil,
+            varName: name,
+            varType: varType,
+            initializer: init,
+            condition: nil,
+            thenBlock: array of Stmt,
+            elseBlock: nil,
+            blockLabel: "",
+            loopVar: "",
+            iterable: nil
+        }
+    end 'makeVarDecl'
+
+    export function makeIf(cond Expr, thenBlock array of Stmt, elseBlock array of Stmt or nil, label string, line int, column int) Stmt
+        return Stmt{
+            kind: StmtKind.if_,
+            line: line,
+            column: column,
+            expr: nil,
+            varName: "",
+            varType: nil,
+            initializer: nil,
+            condition: cond,
+            thenBlock: thenBlock,
+            elseBlock: elseBlock,
+            blockLabel: label,
+            loopVar: "",
+            iterable: nil
+        }
+    end 'makeIf'
+
+    export function makeWhile(cond Expr, body array of Stmt, label string, line int, column int) Stmt
+        return Stmt{
+            kind: StmtKind.while_,
+            line: line,
+            column: column,
+            expr: nil,
+            varName: "",
+            varType: nil,
+            initializer: nil,
+            condition: cond,
+            thenBlock: body,
+            elseBlock: nil,
+            blockLabel: label,
+            loopVar: "",
+            iterable: nil
+        }
+    end 'makeWhile'
+end 'Stmt'
+
+//=============================================================================
+// Parameter and Function nodes
+//=============================================================================
+
+export struct Parameter
+    var name string
+    var paramType TypeRef
+
+    export function create(name string, paramType TypeRef) Parameter
+        return Parameter{name: name, paramType: paramType}
+    end 'create'
+end 'Parameter'
+
+export struct Function
+    var name string
+    var params array of Parameter
+    var returnType TypeRef
+    var body array of Stmt
+    var isExport bool
+    var isExtern bool
+    var line int
+    var column int
+
+    export function create(name string, params array of Parameter, returnType TypeRef, body array of Stmt, isExport bool, line int, column int) Function
+        return Function{
+            name: name,
+            params: params,
+            returnType: returnType,
+            body: body,
+            isExport: isExport,
+            isExtern: false,
+            line: line,
+            column: column
+        }
+    end 'create'
+
+    export function createExtern(name string, params array of Parameter, returnType TypeRef, line int, column int) Function
+        return Function{
+            name: name,
+            params: params,
+            returnType: returnType,
+            body: array of Stmt,
+            isExport: false,
+            isExtern: true,
+            line: line,
+            column: column
+        }
+    end 'createExtern'
+end 'Function'
+
+//=============================================================================
+// Struct definition
+//=============================================================================
+
+export struct StructField
+    var name string
+    var fieldType TypeRef
+    var isMutable bool  // var vs let
+
+    export function create(name string, fieldType TypeRef, isMutable bool) StructField
+        return StructField{name: name, fieldType: fieldType, isMutable: isMutable}
+    end 'create'
+end 'StructField'
+
+export struct StructDef
+    var name string
+    var fields array of StructField
+    var methods array of Function
+    var line int
+    var column int
+
+    export function create(name string, fields array of StructField, methods array of Function, line int, column int) StructDef
+        return StructDef{name: name, fields: fields, methods: methods, line: line, column: column}
+    end 'create'
+end 'StructDef'
+
+//=============================================================================
+// Program - top level AST node
+//=============================================================================
+
+export struct Program
+    var functions array of Function
+    var structs array of StructDef
+    var fileName string
+
+    export function create(fileName string) Program
+        return Program{
+            functions: array of Function,
+            structs: array of StructDef,
+            fileName: fileName
+        }
+    end 'create'
+
+    export function addFunction(func Function) void
+        functions.append(func)
+    end 'addFunction'
+
+    export function addStruct(structDef StructDef) void
+        structs.append(structDef)
+    end 'addStruct'
+end 'Program'

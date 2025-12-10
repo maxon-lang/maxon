@@ -1,0 +1,88 @@
+// Maxon Command Line Tool
+// Main entry point for the maxon toolchain
+
+let VERSION = "0.3.0"
+
+function main(args array of string) int
+    if args.count() < 2 'noCommand'
+        printUsage()
+        return 1
+    end 'noCommand'
+
+    var command = args[1]
+
+    return match command 'dispatch'
+        "compile" gives compileCommand(args)
+        "run" gives runCommand(args)
+        "version" gives versionCommand()
+        "help" gives helpCommand()
+        default gives unknownCommand(command)
+    end 'dispatch'
+end 'main'
+
+function compileCommand(args array of string) int
+    if args.count() < 3 'noFile'
+        print("Usage: maxon compile <file.maxon>")
+        return 1
+    end 'noFile'
+    return compile(args[2])
+end 'compileCommand'
+
+function helpCommand() int
+    printUsage()
+    return 0
+end 'helpCommand'
+
+function unknownCommand(command string) int
+    print("Unknown command: " + command)
+    print("")
+    printUsage()
+    return 1
+end 'unknownCommand'
+
+function printUsage() int
+    print("Maxon " + VERSION)
+    print("")
+    print("Usage: maxon <command> [options]")
+    print("")
+    print("Commands:")
+    print("  compile <file.maxon>  Compile a Maxon source file")
+    print("  run <file.maxon>      Compile and run a Maxon program")
+    print("  version               Print version information")
+    print("  help                  Show this help message")
+    print("")
+    print("Examples:")
+    print("  maxon compile basic.maxon")
+    print("  maxon run basic.maxon")
+	return 0
+end 'printUsage'
+
+function versionCommand() int
+    print("Maxon " + VERSION)
+    print("Self-hosted compiler for Windows x86-64")
+    return 0
+end 'versionCommand'
+
+function runCommand(args array of string) int
+    if args.count() < 3 'noFile'
+        print("Usage: maxon run <file.maxon>")
+        return 1
+    end 'noFile'
+
+    var sourceFile = args[2]
+    var result = compile(sourceFile)
+    if result != 0 'compileFailed'
+        return result
+    end 'compileFailed'
+
+    // Run the executable
+    var exeFile = sourceFile.replace(".maxon", ".exe")
+    print("")
+    print("Running " + exeFile + "...")
+    print("----------------------------------------")
+    var exitCode = exec(exeFile)
+    print("----------------------------------------")
+    print("Exit code: " + exitCode.toString())
+
+    return exitCode
+end 'runCommand'

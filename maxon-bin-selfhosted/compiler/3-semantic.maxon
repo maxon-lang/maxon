@@ -1,0 +1,477 @@
+// Semantic Analyzer for the Maxon self-hosted compiler
+// Performs type checking, name resolution, and semantic validation
+
+// NOTE: This file assumes features that don't exist yet in Maxon:
+// - Dynamic arrays with append()
+// - Map data structures
+// - Optional types with ?
+// These are written as they would ideally work
+
+//=============================================================================
+// Semantic Error
+//=============================================================================
+
+export struct SemanticError
+    var message string
+    var line int
+    var column int
+
+    export function create(message string, line int, column int) SemanticError
+        return SemanticError{message: message, line: line, column: column}
+    end 'create'
+
+    export function toString() string
+        return "Error at " + line.toString() + ":" + column.toString() + ": " + message
+    end 'toString'
+end 'SemanticError'
+
+//=============================================================================
+// Symbol representing a declared name
+//=============================================================================
+
+export enum SymbolKind int
+    case variable = 0
+    case function_ = 1
+    case parameter = 2
+    case struct_ = 3
+    case enum_ = 4
+end 'SymbolKind'
+
+export struct Symbol
+    var name string
+    var kind SymbolKind
+    var type_ TypeRef
+    var isMutable bool
+    var line int
+    var column int
+
+    export function create(name string, kind SymbolKind, type_ TypeRef, isMutable bool, line int, column int) Symbol
+        return Symbol{
+            name: name,
+            kind: kind,
+            type_: type_,
+            isMutable: isMutable,
+            line: line,
+            column: column
+        }
+    end 'create'
+end 'Symbol'
+
+//=============================================================================
+// Scope for tracking symbols
+//=============================================================================
+
+export struct Scope
+    var symbols map of string to Symbol
+    var parent Scope?
+
+    export function create(parent Scope?) Scope
+        return Scope{symbols: map of string to Symbol {}, parent: parent}
+    end 'create'
+
+    // Define a new symbol in this scope
+    export function define(sym Symbol) bool
+        if symbols.contains(sym.name) 'exists'
+            return false  // Already defined in this scope
+        end 'exists'
+        symbols.set(sym.name, sym)
+        return true
+    end 'define'
+
+    // Look up a symbol in this scope or parent scopes
+    export function lookup(name string) Symbol?
+        if let sym = symbols.get(name) 'found'
+            return sym
+        end 'found'
+        if let p = parent 'hasParent'
+            return Scope.lookup(p, name)
+        end 'hasParent'
+        return nil
+    end 'lookup'
+
+    // Look up only in the current scope (not parents)
+    export function lookupLocal(name string) Symbol?
+        return symbols.get(name)
+    end 'lookupLocal'
+end 'Scope'
+
+//=============================================================================
+// Semantic Analyzer
+//=============================================================================
+
+export struct SemanticAnalyzer
+    var errors array of SemanticError
+    var warnings array of SemanticError
+    var globalScope Scope
+    var currentScope Scope
+    var currentFunction Function?
+
+    export function create() SemanticAnalyzer
+        var global = Scope.create(nil)
+        return SemanticAnalyzer{
+            errors: array of SemanticError,
+            warnings: array of SemanticError,
+            globalScope: global,
+            currentScope: global,
+            currentFunction: nil
+        }
+    end 'create'
+
+    // Check if analysis succeeded (no errors)
+    export function success() bool
+        return errors.count() == 0
+    end 'success'
+
+    // Add an error
+    export function error(message string, line int, column int) void
+        errors.append(SemanticError.create(message, line, column))
+    end 'error'
+
+    // Add a warning
+    export function warning(message string, line int, column int) void
+        warnings.append(SemanticError.create(message, line, column))
+    end 'warning'
+
+    // Enter a new scope
+    export function enterScope() void
+        currentScope = Scope.create(currentScope)
+    end 'enterScope'
+
+    // Exit the current scope
+    export function exitScope() void
+        if let parent = currentScope.parent 'hasParent'
+            currentScope = parent
+        end 'hasParent'
+    end 'exitScope'
+
+    //=========================================================================
+    // Main analysis entry point
+    //=========================================================================
+
+    export function analyze(program Program) void
+        // First pass: collect all top-level declarations (functions, structs, enums)
+        SemanticAnalyzer.collectDeclarations(program)
+
+        // Second pass: analyze function bodies
+        for func in program.functions 'analyzeFuncs'
+            SemanticAnalyzer.analyzeFunction(func)
+        end 'analyzeFuncs'
+
+        // Verify main() exists
+        if let mainSym = Scope.lookup(globalScope, "main") 'hasMain'
+            if mainSym.kind != SymbolKind.function_ 'notFunc'
+                SemanticAnalyzer.error("'main' must be a function", mainSym.line, mainSym.column)
+            end 'notFunc'
+        else 'hasMain'
+            SemanticAnalyzer.error("No 'main' function found", 1, 1)
+        end 'hasMain'
+    end 'analyze'
+
+    //=========================================================================
+    // Declaration collection (first pass)
+    //=========================================================================
+
+    export function collectDeclarations(program Program) void
+        // Collect functions
+        for func in program.functions 'funcs'
+            var sym = Symbol.create(
+                func.name,
+                SymbolKind.function_,
+                func.returnType,
+                false,
+                func.line,
+                func.column
+            )
+            if not Scope.define(globalScope, sym) 'duplicate'
+                SemanticAnalyzer.error("Duplicate definition of '" + func.name + "'", func.line, func.column)
+            end 'duplicate'
+        end 'funcs'
+
+        // Collect structs
+        for struct_ in program.structs 'structs'
+            var sym = Symbol.create(
+                struct_.name,
+                SymbolKind.struct_,
+                TypeRef{kind: TypeKind.struct_, name: struct_.name},
+                false,
+                struct_.line,
+                struct_.column
+            )
+            if not Scope.define(globalScope, sym) 'duplicate'
+                SemanticAnalyzer.error("Duplicate definition of '" + struct_.name + "'", struct_.line, struct_.column)
+            end 'duplicate'
+        end 'structs'
+
+        // Collect enums
+        for enum_ in program.enums 'enums'
+            var sym = Symbol.create(
+                enum_.name,
+                SymbolKind.enum_,
+                TypeRef{kind: TypeKind.enum_, name: enum_.name},
+                false,
+                enum_.line,
+                enum_.column
+            )
+            if not Scope.define(globalScope, sym) 'duplicate'
+                SemanticAnalyzer.error("Duplicate definition of '" + enum_.name + "'", enum_.line, enum_.column)
+            end 'duplicate'
+        end 'enums'
+    end 'collectDeclarations'
+
+    //=========================================================================
+    // Function analysis
+    //=========================================================================
+
+    export function analyzeFunction(func Function) void
+        currentFunction = func
+        SemanticAnalyzer.enterScope()
+
+        // Add parameters to scope
+        for param in func.parameters 'params'
+            var sym = Symbol.create(
+                param.name,
+                SymbolKind.parameter,
+                param.type_,
+                false,  // Parameters are immutable by default
+                param.line,
+                param.column
+            )
+            if not Scope.define(currentScope, sym) 'duplicate'
+                SemanticAnalyzer.error("Duplicate parameter '" + param.name + "'", param.line, param.column)
+            end 'duplicate'
+        end 'params'
+
+        // Analyze body
+        for stmt in func.body 'body'
+            SemanticAnalyzer.analyzeStmt(stmt)
+        end 'body'
+
+        SemanticAnalyzer.exitScope()
+        currentFunction = nil
+    end 'analyzeFunction'
+
+    //=========================================================================
+    // Statement analysis
+    //=========================================================================
+
+    export function analyzeStmt(stmt Stmt) void
+        match stmt.kind 'analyze'
+            StmtKind.varDecl then SemanticAnalyzer.analyzeVarDecl(stmt, true)
+            StmtKind.letDecl then SemanticAnalyzer.analyzeVarDecl(stmt, false)
+            StmtKind.assign then SemanticAnalyzer.analyzeAssign(stmt)
+            StmtKind.return_ then SemanticAnalyzer.analyzeReturn(stmt)
+            StmtKind.if_ then SemanticAnalyzer.analyzeIf(stmt)
+            StmtKind.while_ then SemanticAnalyzer.analyzeWhile(stmt)
+            StmtKind.for_ then SemanticAnalyzer.analyzeFor(stmt)
+            StmtKind.expr then SemanticAnalyzer.analyzeExprStmt(stmt)
+        end 'analyze'
+    end 'analyzeStmt'
+
+    export function analyzeVarDecl(stmt Stmt, isMutable bool) void
+        // Analyze initializer if present
+        if let init = stmt.initializer 'hasInit'
+            SemanticAnalyzer.analyzeExpr(init)
+        end 'hasInit'
+
+        // Add to scope
+        var sym = Symbol.create(
+            stmt.varName,
+            SymbolKind.variable,
+            stmt.varType,
+            isMutable,
+            stmt.line,
+            stmt.column
+        )
+        if not Scope.define(currentScope, sym) 'duplicate'
+            SemanticAnalyzer.error("Duplicate variable '" + stmt.varName + "'", stmt.line, stmt.column)
+        end 'duplicate'
+    end 'analyzeVarDecl'
+
+    export function analyzeAssign(stmt Stmt) void
+        // Check that variable exists
+        if let sym = Scope.lookup(currentScope, stmt.varName) 'found'
+            // Check that it's mutable
+            if not sym.isMutable 'immutable'
+                SemanticAnalyzer.error("Cannot assign to immutable variable '" + stmt.varName + "'", stmt.line, stmt.column)
+            end 'immutable'
+        else 'found'
+            SemanticAnalyzer.error("Undefined variable '" + stmt.varName + "'", stmt.line, stmt.column)
+        end 'found'
+
+        // Analyze the expression
+        if let expr = stmt.expr 'hasExpr'
+            SemanticAnalyzer.analyzeExpr(expr)
+        end 'hasExpr'
+    end 'analyzeAssign'
+
+    export function analyzeReturn(stmt Stmt) void
+        if let expr = stmt.expr 'hasExpr'
+            SemanticAnalyzer.analyzeExpr(expr)
+        end 'hasExpr'
+    end 'analyzeReturn'
+
+    export function analyzeIf(stmt Stmt) void
+        // Analyze condition
+        if let cond = stmt.condition 'hasCond'
+            SemanticAnalyzer.analyzeExpr(cond)
+        end 'hasCond'
+
+        // Analyze then block
+        SemanticAnalyzer.enterScope()
+        for thenStmt in stmt.thenBlock 'then'
+            SemanticAnalyzer.analyzeStmt(thenStmt)
+        end 'then'
+        SemanticAnalyzer.exitScope()
+
+        // Analyze else block
+        if let elseBlock = stmt.elseBlock 'hasElse'
+            SemanticAnalyzer.enterScope()
+            for elseStmt in elseBlock 'else'
+                SemanticAnalyzer.analyzeStmt(elseStmt)
+            end 'else'
+            SemanticAnalyzer.exitScope()
+        end 'hasElse'
+    end 'analyzeIf'
+
+    export function analyzeWhile(stmt Stmt) void
+        // Analyze condition
+        if let cond = stmt.condition 'hasCond'
+            SemanticAnalyzer.analyzeExpr(cond)
+        end 'hasCond'
+
+        // Analyze body
+        SemanticAnalyzer.enterScope()
+        for bodyStmt in stmt.thenBlock 'body'
+            SemanticAnalyzer.analyzeStmt(bodyStmt)
+        end 'body'
+        SemanticAnalyzer.exitScope()
+    end 'analyzeWhile'
+
+    export function analyzeFor(stmt Stmt) void
+        SemanticAnalyzer.enterScope()
+
+        // Add loop variable to scope
+        var sym = Symbol.create(
+            stmt.varName,
+            SymbolKind.variable,
+            stmt.varType,
+            false,  // Loop variable is immutable
+            stmt.line,
+            stmt.column
+        )
+        Scope.define(currentScope, sym)
+
+        // Analyze iterable
+        if let iter = stmt.iterable 'hasIter'
+            SemanticAnalyzer.analyzeExpr(iter)
+        end 'hasIter'
+
+        // Analyze body
+        for bodyStmt in stmt.thenBlock 'body'
+            SemanticAnalyzer.analyzeStmt(bodyStmt)
+        end 'body'
+
+        SemanticAnalyzer.exitScope()
+    end 'analyzeFor'
+
+    export function analyzeExprStmt(stmt Stmt) void
+        if let expr = stmt.expr 'hasExpr'
+            SemanticAnalyzer.analyzeExpr(expr)
+        end 'hasExpr'
+    end 'analyzeExprStmt'
+
+    //=========================================================================
+    // Expression analysis
+    //=========================================================================
+
+    export function analyzeExpr(expr Expr) void
+        match expr.kind 'analyze'
+            ExprKind.identifier then SemanticAnalyzer.analyzeIdentifier(expr)
+            ExprKind.binary then SemanticAnalyzer.analyzeBinary(expr)
+            ExprKind.unary then SemanticAnalyzer.analyzeUnary(expr)
+            ExprKind.call then SemanticAnalyzer.analyzeCall(expr)
+            ExprKind.fieldAccess then SemanticAnalyzer.analyzeFieldAccess(expr)
+            ExprKind.index then SemanticAnalyzer.analyzeIndex(expr)
+            // Literals don't need analysis
+            ExprKind.intLiteral then return
+            ExprKind.floatLiteral then return
+            ExprKind.boolLiteral then return
+            ExprKind.stringLiteral then return
+            ExprKind.byteLiteral then return
+            ExprKind.nilLiteral then return
+        end 'analyze'
+    end 'analyzeExpr'
+
+    export function analyzeIdentifier(expr Expr) void
+        if let sym = Scope.lookup(currentScope, expr.name) 'found'
+            // Store resolved symbol info in AST node (if we had that field)
+            return
+        else 'found'
+            SemanticAnalyzer.error("Undefined identifier '" + expr.name + "'", expr.line, expr.column)
+        end 'found'
+    end 'analyzeIdentifier'
+
+    export function analyzeBinary(expr Expr) void
+        if let left = expr.left 'hasLeft'
+            SemanticAnalyzer.analyzeExpr(left)
+        end 'hasLeft'
+        if let right = expr.right 'hasRight'
+            SemanticAnalyzer.analyzeExpr(right)
+        end 'hasRight'
+    end 'analyzeBinary'
+
+    export function analyzeUnary(expr Expr) void
+        if let operand = expr.operand 'hasOp'
+            SemanticAnalyzer.analyzeExpr(operand)
+        end 'hasOp'
+    end 'analyzeUnary'
+
+    export function analyzeCall(expr Expr) void
+        // Check that function exists
+        if let sym = Scope.lookup(currentScope, expr.callee) 'found'
+            if sym.kind != SymbolKind.function_ 'notFunc'
+                SemanticAnalyzer.error("'" + expr.callee + "' is not a function", expr.line, expr.column)
+            end 'notFunc'
+        else 'found'
+            // Could be a builtin - don't error for now
+            // SemanticAnalyzer.error("Undefined function '" + expr.callee + "'", expr.line, expr.column)
+        end 'found'
+
+        // Analyze arguments
+        for arg in expr.arguments 'args'
+            SemanticAnalyzer.analyzeExpr(arg)
+        end 'args'
+    end 'analyzeCall'
+
+    export function analyzeFieldAccess(expr Expr) void
+        if let obj = expr.object 'hasObj'
+            SemanticAnalyzer.analyzeExpr(obj)
+        end 'hasObj'
+        // Field validation would require type information
+    end 'analyzeFieldAccess'
+
+    export function analyzeIndex(expr Expr) void
+        if let obj = expr.object 'hasObj'
+            SemanticAnalyzer.analyzeExpr(obj)
+        end 'hasObj'
+        if let idx = expr.index 'hasIdx'
+            SemanticAnalyzer.analyzeExpr(idx)
+        end 'hasIdx'
+    end 'analyzeIndex'
+
+    //=========================================================================
+    // Error reporting
+    //=========================================================================
+
+    export function printErrors() void
+        for err in errors 'errs'
+            print(SemanticError.toString(err))
+        end 'errs'
+    end 'printErrors'
+
+    export function printWarnings() void
+        for warn in warnings 'warns'
+            print("Warning: " + SemanticError.toString(warn))
+        end 'warns'
+    end 'printWarnings'
+end 'SemanticAnalyzer'

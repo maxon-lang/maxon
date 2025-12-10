@@ -1,0 +1,379 @@
+// Lexer for the Maxon language
+// Converts source code into a stream of tokens
+
+// NOTE: This file assumes features that don't exist yet in Maxon:
+// - String concatenation with +
+// - Method chaining like .bytes().count()
+// - int.toString() method
+// - String indexing with []
+// - Map literals and lookups
+// These are written as they would ideally work
+
+// Keywords map - maps keyword strings to their token types
+let keywords = map of string to TokenType {
+    "function": TokenType.kwFunction,
+    "end": TokenType.kwEnd,
+    "return": TokenType.kwReturn,
+    "var": TokenType.kwVar,
+    "let": TokenType.kwLet,
+    "if": TokenType.kwIf,
+    "else": TokenType.kwElse,
+    "while": TokenType.kwWhile,
+    "for": TokenType.kwFor,
+    "in": TokenType.kwIn,
+    "struct": TokenType.kwStruct,
+    "enum": TokenType.kwEnum,
+    "export": TokenType.kwExport,
+    "extern": TokenType.kwExtern,
+    "true": TokenType.kwTrue,
+    "false": TokenType.kwFalse,
+    "and": TokenType.kwAnd,
+    "or": TokenType.kwOr,
+    "not": TokenType.kwNot,
+    "as": TokenType.kwAs,
+    "mod": TokenType.kwMod,
+    "int": TokenType.kwInt,
+    "float": TokenType.kwFloat,
+    "bool": TokenType.kwBool,
+    "byte": TokenType.kwByte,
+    "string": TokenType.kwString,
+    "array": TokenType.kwArray,
+    "of": TokenType.kwOf,
+    "nil": TokenType.kwNil,
+    "case": TokenType.kwCase,
+    "match": TokenType.kwMatch,
+    "default": TokenType.kwDefault,
+    "then": TokenType.kwThen,
+    "gives": TokenType.kwGives,
+    "break": TokenType.kwBreak,
+    "continue": TokenType.kwContinue,
+    "interface": TokenType.kwInterface,
+    "is": TokenType.kwIs,
+    "map": TokenType.kwMap,
+    "from": TokenType.kwFrom,
+    "to": TokenType.kwTo,
+    "void": TokenType.kwVoid
+}
+
+export struct Lexer
+    var source string
+    var pos int
+    var line int
+    var column int
+    var sourceLength int
+
+    // Create a new lexer for the given source code
+    export function create(source string) Lexer
+        var len = source.bytes().count()
+        return Lexer{source: source, pos: 0, line: 1, column: 1, sourceLength: len}
+    end 'create'
+
+    // Check if we've reached the end of input
+    export function isAtEnd() bool
+        return pos >= sourceLength
+    end 'isAtEnd'
+
+    // Get the current character without consuming it
+    export function peek() byte
+        if Lexer.isAtEnd() 'eof'
+            return 0b
+        end 'eof'
+        return source.byteAt(pos)
+    end 'peek'
+
+    // Get the next character without consuming it
+    export function peekNext() byte
+        if pos + 1 >= sourceLength 'eof'
+            return 0b
+        end 'eof'
+        return source.byteAt(pos + 1)
+    end 'peekNext'
+
+    // Consume and return the current character
+    export function advance() byte
+        var c = Lexer.peek()
+        pos = pos + 1
+        if c == 10b 'newline'
+            line = line + 1
+            column = 1
+        else 'newline'
+            column = column + 1
+        end 'newline'
+        return c
+    end 'advance'
+
+    // Skip whitespace and comments (but not newlines)
+    export function skipWhitespace() void
+        while not Lexer.isAtEnd() 'loop'
+            var c = Lexer.peek()
+
+            // Space or tab
+            if c == 32b or c == 9b 'ws'
+                Lexer.advance()
+            else 'ws'
+                // Check for comments
+                if c == 47b and Lexer.peekNext() == 47b 'comment'
+                    // Skip until end of line
+                    while not Lexer.isAtEnd() and Lexer.peek() != 10b 'skipComment'
+                        Lexer.advance()
+                    end 'skipComment'
+                else 'comment'
+                    return
+                end 'comment'
+            end 'ws'
+        end 'loop'
+    end 'skipWhitespace'
+
+    // Check if a byte is a digit (0-9)
+    export function isDigit(c byte) bool
+        return c >= 48b and c <= 57b
+    end 'isDigit'
+
+    // Check if a byte is alphabetic or underscore
+    export function isAlpha(c byte) bool
+        return (c >= 65b and c <= 90b) or (c >= 97b and c <= 122b) or c == 95b
+    end 'isAlpha'
+
+    // Check if a byte is alphanumeric or underscore
+    export function isAlphaNumeric(c byte) bool
+        return Lexer.isDigit(c) or Lexer.isAlpha(c)
+    end 'isAlphaNumeric'
+
+    // Scan an identifier or keyword
+    export function scanIdentifier() Token
+        var startPos = pos
+        var startLine = line
+        var startColumn = column
+
+        while not Lexer.isAtEnd() and Lexer.isAlphaNumeric(Lexer.peek()) 'scan'
+            Lexer.advance()
+        end 'scan'
+
+        var lexeme = source.slice(startPos, pos).toString()
+        var kind = keywords.get(lexeme, TokenType.identifier)
+        return makeToken(kind, lexeme, startLine, startColumn)
+    end 'scanIdentifier'
+
+    // Scan a number literal (int or float)
+    export function scanNumber() Token
+        var startPos = pos
+        var startLine = line
+        var startColumn = column
+
+        // Consume integer part
+        while Lexer.isDigit(Lexer.peek()) 'intPart'
+            Lexer.advance()
+        end 'intPart'
+
+        // Check for float
+        if Lexer.peek() == 46b and Lexer.isDigit(Lexer.peekNext()) 'checkFloat'
+            Lexer.advance()  // consume '.'
+            while Lexer.isDigit(Lexer.peek()) 'fracPart'
+                Lexer.advance()
+            end 'fracPart'
+            var lexeme = source.slice(startPos, pos).toString()
+            return makeToken(TokenType.floatLiteral, lexeme, startLine, startColumn)
+        end 'checkFloat'
+
+        // Check for byte literal suffix 'b'
+        if Lexer.peek() == 98b 'checkByte'
+            Lexer.advance()
+            var lexeme = source.slice(startPos, pos).toString()
+            return makeToken(TokenType.byteLiteral, lexeme, startLine, startColumn)
+        end 'checkByte'
+
+        var lexeme = source.slice(startPos, pos).toString()
+        return makeToken(TokenType.intLiteral, lexeme, startLine, startColumn)
+    end 'scanNumber'
+
+    // Scan a string literal
+    export function scanString() Token
+        var startPos = pos
+        var startLine = line
+        var startColumn = column
+
+        Lexer.advance()  // consume opening '"'
+
+        while not Lexer.isAtEnd() and Lexer.peek() != 34b 'content'
+            if Lexer.peek() == 92b 'escape'  // backslash
+                Lexer.advance()  // skip backslash
+                if not Lexer.isAtEnd() 'skipEscaped'
+                    Lexer.advance()  // skip escaped char
+                end 'skipEscaped'
+            else 'escape'
+                Lexer.advance()
+            end 'escape'
+        end 'content'
+
+        if not Lexer.isAtEnd() 'closeQuote'
+            Lexer.advance()  // consume closing '"'
+        end 'closeQuote'
+
+        var lexeme = source.slice(startPos, pos).toString()
+        return makeToken(TokenType.stringLiteral, lexeme, startLine, startColumn)
+    end 'scanString'
+
+    // Scan a block label 'name'
+    export function scanBlockLabel() Token
+        var startPos = pos
+        var startLine = line
+        var startColumn = column
+
+        Lexer.advance()  // consume opening '\''
+
+        while not Lexer.isAtEnd() and Lexer.peek() != 39b 'content'
+            Lexer.advance()
+        end 'content'
+
+        if not Lexer.isAtEnd() 'closeQuote'
+            Lexer.advance()  // consume closing '\''
+        end 'closeQuote'
+
+        var lexeme = source.slice(startPos, pos).toString()
+        return makeToken(TokenType.blockLabel, lexeme, startLine, startColumn)
+    end 'scanBlockLabel'
+
+    // Scan the next token
+    export function nextToken() Token
+        Lexer.skipWhitespace()
+
+        if Lexer.isAtEnd() 'eof'
+            return makeToken(TokenType.eof, "", line, column)
+        end 'eof'
+
+        var startLine = line
+        var startColumn = column
+        var c = Lexer.advance()
+
+        // Identifiers and keywords
+        if Lexer.isAlpha(c) 'alpha'
+            pos = pos - 1
+            column = column - 1
+            return Lexer.scanIdentifier()
+        end 'alpha'
+
+        // Numbers
+        if Lexer.isDigit(c) 'digit'
+            pos = pos - 1
+            column = column - 1
+            return Lexer.scanNumber()
+        end 'digit'
+
+        // String literals
+        if c == 34b 'string'  // '"'
+            pos = pos - 1
+            column = column - 1
+            return Lexer.scanString()
+        end 'string'
+
+        // Block labels or char literals
+        if c == 39b 'quote'  // '\''
+            pos = pos - 1
+            column = column - 1
+            return Lexer.scanBlockLabel()
+        end 'quote'
+
+        // Single character tokens
+        if c == 40b 'lparen'
+            return makeToken(TokenType.lparen, "(", startLine, startColumn)
+        end 'lparen'
+        if c == 41b 'rparen'
+            return makeToken(TokenType.rparen, ")", startLine, startColumn)
+        end 'rparen'
+        if c == 91b 'lbracket'
+            return makeToken(TokenType.lbracket, "[", startLine, startColumn)
+        end 'lbracket'
+        if c == 93b 'rbracket'
+            return makeToken(TokenType.rbracket, "]", startLine, startColumn)
+        end 'rbracket'
+        if c == 123b 'lbrace'
+            return makeToken(TokenType.lbrace, "{", startLine, startColumn)
+        end 'lbrace'
+        if c == 125b 'rbrace'
+            return makeToken(TokenType.rbrace, "}", startLine, startColumn)
+        end 'rbrace'
+        if c == 44b 'comma'
+            return makeToken(TokenType.comma, ",", startLine, startColumn)
+        end 'comma'
+        if c == 58b 'colon'
+            return makeToken(TokenType.colon, ":", startLine, startColumn)
+        end 'colon'
+        if c == 59b 'semicolon'
+            return makeToken(TokenType.semicolon, ";", startLine, startColumn)
+        end 'semicolon'
+        if c == 43b 'plus'
+            return makeToken(TokenType.plus, "+", startLine, startColumn)
+        end 'plus'
+        if c == 45b 'minus'
+            return makeToken(TokenType.minus, "-", startLine, startColumn)
+        end 'minus'
+        if c == 42b 'star'
+            return makeToken(TokenType.star, "*", startLine, startColumn)
+        end 'star'
+        if c == 47b 'slash'
+            return makeToken(TokenType.slash, "/", startLine, startColumn)
+        end 'slash'
+        if c == 10b 'newline'
+            return makeToken(TokenType.newline, "\\n", startLine, startColumn)
+        end 'newline'
+
+        // Two-character tokens
+        if c == 46b 'dot'  // '.'
+            if Lexer.peek() == 46b 'dotdot'
+                Lexer.advance()
+                return makeToken(TokenType.dotDot, "..", startLine, startColumn)
+            end 'dotdot'
+            return makeToken(TokenType.dot, ".", startLine, startColumn)
+        end 'dot'
+
+        if c == 61b 'eq'  // '='
+            if Lexer.peek() == 61b 'eqeq'
+                Lexer.advance()
+                return makeToken(TokenType.eqEq, "==", startLine, startColumn)
+            end 'eqeq'
+            return makeToken(TokenType.eq, "=", startLine, startColumn)
+        end 'eq'
+
+        if c == 33b 'bang'  // '!'
+            if Lexer.peek() == 61b 'noteq'
+                Lexer.advance()
+                return makeToken(TokenType.notEq, "!=", startLine, startColumn)
+            end 'noteq'
+            return makeToken(TokenType.error, "!", startLine, startColumn)
+        end 'bang'
+
+        if c == 60b 'lt'  // '<'
+            if Lexer.peek() == 61b 'lteq'
+                Lexer.advance()
+                return makeToken(TokenType.ltEq, "<=", startLine, startColumn)
+            end 'lteq'
+            return makeToken(TokenType.lt, "<", startLine, startColumn)
+        end 'lt'
+
+        if c == 62b 'gt'  // '>'
+            if Lexer.peek() == 61b 'gteq'
+                Lexer.advance()
+                return makeToken(TokenType.gtEq, ">=", startLine, startColumn)
+            end 'gteq'
+            return makeToken(TokenType.gt, ">", startLine, startColumn)
+        end 'gt'
+
+        return makeToken(TokenType.error, "?", startLine, startColumn)
+    end 'nextToken'
+
+    // Tokenize entire source into an array of tokens
+    export function tokenize() array of Token
+        var tokens = array of Token
+
+        while true 'loop'
+            var tok = Lexer.nextToken()
+            tokens.append(tok)
+
+            if tok.kind == TokenType.eof 'done'
+                break 'loop'
+            end 'done'
+        end 'loop'
+
+        return tokens
+    end 'tokenize'
+end 'Lexer'
