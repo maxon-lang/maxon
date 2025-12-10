@@ -969,12 +969,14 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 20 bytes (string concat)
-11
+11ALLOC #2: 10 bytes (cstring conversion)
+FREE #2: 10 bytes (cstring release)
+
 FREE #1: 20 bytes (string concat)
 
 === ALLOC STATS ===
-Allocated: 20 bytes
-Freed:     20 bytes
+Allocated: 30 bytes
+Freed:     30 bytes
 Leaked:    0 bytes
 ```
 
@@ -994,14 +996,16 @@ end 'main'
 ALLOC #1: 11 bytes (string concat)
 ALLOC #2: 12 bytes (string concat)
 ALLOC #3: 13 bytes (string concat)
-4
+4ALLOC #4: 10 bytes (cstring conversion)
+FREE #4: 10 bytes (cstring release)
+
 FREE #1: 11 bytes (string concat)
 FREE #2: 12 bytes (string concat)
 FREE #3: 13 bytes (string concat)
 
 === ALLOC STATS ===
-Allocated: 36 bytes
-Freed:     36 bytes
+Allocated: 46 bytes
+Freed:     46 bytes
 Leaked:    0 bytes
 ```
 
@@ -1028,12 +1032,14 @@ ALLOC #2: 11 bytes (string concat)
 FREE #1: 10 bytes (string reassign)
 ALLOC #3: 12 bytes (string concat)
 FREE #2: 11 bytes (string reassign)
-3
+3ALLOC #4: 10 bytes (cstring conversion)
+FREE #4: 10 bytes (cstring release)
+
 FREE #3: 12 bytes (string concat)
 
 === ALLOC STATS ===
-Allocated: 33 bytes
-Freed:     33 bytes
+Allocated: 43 bytes
+Freed:     43 bytes
 Leaked:    0 bytes
 ```
 
@@ -1052,13 +1058,15 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 35 bytes (string literal)
-27
-FREE #1: 35 bytes (string literal)
+ALLOC #1: 36 bytes (string literal)
+27ALLOC #2: 10 bytes (cstring conversion)
+FREE #2: 10 bytes (cstring release)
+
+FREE #1: 36 bytes (string literal)
 
 === ALLOC STATS ===
-Allocated: 35 bytes
-Freed:     35 bytes
+Allocated: 46 bytes
+Freed:     46 bytes
 Leaked:    0 bytes
 ```
 

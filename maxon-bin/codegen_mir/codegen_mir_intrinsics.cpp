@@ -529,19 +529,14 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_make_unique(CallExprAST *callE
 	mir::MIRValue *constPtrPtr = builder->createStructGEP(unsizedArrayType, constBufPtr, 0, "const.ptr.ptr");
 	mir::MIRValue *constDataPtr = builder->createLoad(mir::MIRType::getPtr(), constPtrPtr, "const.data.ptr");
 
-	// Allocate new buffer: len + 1 for null terminator + 8 for refcount header
-	mir::MIRValue *allocSize = builder->createAdd(len, builder->getInt32(9), "alloc.size");
+	// Allocate new buffer with _managed_string_alloc (handles header and refcount)
+	// Request len + 1 bytes (for data + null terminator)
+	mir::MIRValue *allocSize = builder->createAdd(len, builder->getInt32(1), "alloc.size");
 	mir::MIRValue *allocSize64 = builder->createSExt(allocSize, mir::MIRType::getInt64(), "alloc.size64");
+	mir::MIRValue *allocTag = module->createGlobalString(".__tag.str.cow", "string COW const");
 	mir::MIRFunction *allocFunc = getOrDeclareFunction("_managed_string_alloc",
-													   mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
-	mir::MIRValue *newBufPtr = builder->createCall(allocFunc, {allocSize64}, "new.buf");
-
-	// Initialize refcount to 1 (stored at offset 0)
-	builder->createStore(builder->getInt64(1), newBufPtr);
-
-	// Get pointer to data (after 8-byte refcount header)
-	mir::MIRValue *eight = builder->getInt64(8);
-	mir::MIRValue *newDataStart = builder->createArrayGEP(mir::MIRType::getInt8(), newBufPtr, eight, "new.data");
+													   mir::MIRType::getPtr(), {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
+	mir::MIRValue *newDataStart = builder->createCall(allocFunc, {allocSize64, allocTag}, "new.data");
 
 	// Copy constant data to new buffer
 	mir::MIRValue *len64 = builder->createSExt(len, mir::MIRType::getInt64(), "len64");
@@ -680,14 +675,20 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_to_cstring(CallExprAST *callEx
 
 	mir::MIRValue *cstringAlloc = builder->createAlloca(cstringType, "cstring.alloc");
 
+	// Store the final data pointer (SSO-allocated or heap-retained)
 	mir::MIRValue *cstringDataPtr = builder->createStructGEP(cstringType, cstringAlloc, 0, "cstring.data");
-	builder->createStore(dataPtr, cstringDataPtr);
+	builder->createStore(finalDataPtr, cstringDataPtr);
 
 	mir::MIRValue *cstringLenPtr = builder->createStructGEP(cstringType, cstringAlloc, 1, "cstring.len");
 	builder->createStore(len, cstringLenPtr);
 
 	mir::MIRValue *cstringManagedPtr = builder->createStructGEP(cstringType, cstringAlloc, 2, "cstring.managed");
 	builder->createStore(managedPtr, cstringManagedPtr);
+
+	// Track cstring for cleanup at scope exit
+	if (!scopeStack.empty()) {
+		scopeStack.back().cstringAllocas.push_back({"cs", cstringAlloc});
+	}
 
 	return builder->createLoad(cstringType, cstringAlloc, "cstring.result");
 }

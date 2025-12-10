@@ -590,8 +590,11 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		builder->setInsertPoint(continueBlock);
 	}
 
-	// Release cstring references in this scope
-	// Cstrings hold a reference to the underlying managed string
+	// Release cstring data in this scope
+	// Cstrings store their data pointer in field 0, which was either:
+	// - Allocated via _managed_string_alloc (for SSO-to-cstring conversion)
+	// - Retained from parent (for heap-to-cstring conversion)
+	// In both cases, we call _managed_string_release on the data pointer
 	for (const auto &[name, cstringAlloca] : scopeStack.back().cstringAllocas) {
 		// Get or create cstring type
 		mir::MIRType *cstringType = structTypes["cstring"];
@@ -602,55 +605,22 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 			structTypes["cstring"] = cstringType;
 		}
 
-		// Get __ManagedStringData type
-		mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
-		if (!managedStringType) {
-			mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
-			if (!unsizedArrayType) {
-				unsizedArrayType = module->getOrCreateStructType(
-					"_ManagedArray_byte",
-					{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
-				structTypes["_ManagedArray_byte"] = unsizedArrayType;
-			}
-			managedStringType = module->getOrCreateStructType(
-				"__ManagedStringData",
-				{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
-			structTypes["__ManagedStringData"] = managedStringType;
-		}
-		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
-
-		// Load managed pointer from cstring field 2
-		mir::MIRValue *managedPtrPtr = builder->createStructGEP(cstringType, cstringAlloca, 2, name + ".managed.ptr");
-		mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedPtrPtr, name + ".managed");
-
-		// Check if the underlying string is heap-allocated (capacity > 0)
-		mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, name + "._capacity.ptr");
-		mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtr, name + "._capacity");
-		mir::MIRValue *isHeap = builder->createICmpSGT(cap, builder->getInt32(0), name + ".isHeap");
-
-		// Conditional release: only release if string was heap-allocated
-		mir::MIRBasicBlock *releaseBlock = builder->createBasicBlock(name + ".cstring.release");
-		mir::MIRBasicBlock *continueBlock = builder->createBasicBlock(name + ".cstring.continue");
-		builder->createCondBr(isHeap, releaseBlock, continueBlock);
-
-		builder->setInsertPoint(releaseBlock);
-		// Get the buffer pointer from managed string's _buffer field
-		mir::MIRValue *bufferPtr = builder->createStructGEP(managedStringType, managedPtr, 0, name + "._buffer");
-		mir::MIRValue *dataPtrPtr = builder->createStructGEP(unsizedArrayType, bufferPtr, 0, name + ".data.ptr.ptr");
-		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrPtr, name + ".data.ptr");
+		// Load data pointer from cstring field 0
+		mir::MIRValue *dataPtrPtr = builder->createStructGEP(cstringType, cstringAlloca, 0, name + ".data.ptr");
+		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrPtr, name + ".data");
 
 		// Create tag for tracking
 		mir::MIRValue *tag = module->createGlobalString(".__tag.free." + name, "cstring release");
 
 		// Call _managed_string_release on the data pointer
+		// This works for both cases:
+		// - SSO: data was allocated with _managed_string_alloc, will be freed
+		// - Heap: data was retained, refcount will be decremented
 		mir::MIRFunction *stringReleaseFunc = getOrDeclareFunction(
 			"_managed_string_release",
 			mir::MIRType::getVoid(),
 			{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
 		builder->createCall(stringReleaseFunc, {dataPtr, tag});
-		builder->createBr(continueBlock);
-
-		builder->setInsertPoint(continueBlock);
 	}
 }
 

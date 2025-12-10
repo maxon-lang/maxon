@@ -684,19 +684,33 @@ entry:
 ;==============================================================================
 define ptr @_managed_string_alloc(i64 %capacity, ptr %tag) {
 entry:
-    ; Allocate heap memory for string data
-    %size = add i64 %capacity, 1  ; +1 for null terminator
-    %data = call ptr @malloc(i64 %size)
-    
-    ; Track allocation if enabled
+    ; Allocate heap memory: 8-byte header + capacity (includes null terminator if caller adds it)
+    ; Header layout: [refcount:i32][data_size:i32] at offsets 0 and 4
+    ; Data starts at offset 8
+    ; Note: data_size stores the exact capacity passed in, used to compute free size
+    %total_size = add i64 %capacity, 8
+    %raw = call ptr @malloc(i64 %total_size)
+
+    ; Initialize refcount to 1 at offset 0
+    store i32 1, ptr %raw
+
+    ; Store data_size at offset 4 (used to compute total_size on free)
+    %size_ptr = getelementptr i8, ptr %raw, i64 4
+    %size_i32 = trunc i64 %capacity to i32
+    store i32 %size_i32, ptr %size_ptr
+
+    ; Get pointer to data area (after 8-byte header)
+    %data = getelementptr i8, ptr %raw, i64 8
+
+    ; Track allocation if enabled (track total size including header)
     %tracking_enabled = load i32, ptr @__track_enabled
     %do_track = icmp ne i32 %tracking_enabled, 0
     br i1 %do_track, label %track, label %done
-    
+
 track:
-    call void @__track_alloc_with_ptr(ptr %data, i64 %size, ptr %tag)
+    call void @__track_alloc_with_ptr(ptr %data, i64 %total_size, ptr %tag)
     br label %done
-    
+
 done:
     ret ptr %data
 }

@@ -24,11 +24,13 @@ class CompilerStats;
  * code generator. MIR is then lowered to x86-64 machine code using the custom
  * backend in maxon-bin/backend/.
  */
-// Forward declaration for friend class
+// Forward declarations for friend classes
 class IntrinsicCodegenRegistry;
+class ManagedStringBuilder;
 
 class MIRCodeGenerator {
 	friend class IntrinsicCodegenRegistry;
+	friend class ManagedStringBuilder;
 
   private:
 	std::unique_ptr<mir::MIRModule> module;
