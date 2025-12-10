@@ -93,6 +93,11 @@ inline std::vector<IntrinsicDef> getIntrinsicDefinitions() {
 		{"__substring_slice", "substring", {{"substring"}, {"int"}, {"int"}}, "intrinsic_substring_slice"},
 		{"__substring_parent_managed", "_ManagedString", {{"substring"}}, "intrinsic_substring_parent_managed"},
 		{"__substring_byte_offset", "int", {{"substring"}}, "intrinsic_substring_byte_offset"},
+
+		// File I/O intrinsics
+		{"__read_file", "_ManagedString", {{"cstring"}}, "intrinsic_read_file"},
+		{"__write_file", "int", {{"cstring"}, {"cstring"}}, "intrinsic_write_file"},
+		{"__write_file_binary", "int", {{"cstring"}, IntrinsicParamDef::arrayOf({"byte"})}, "intrinsic_write_file_binary"},
 	};
 }
 

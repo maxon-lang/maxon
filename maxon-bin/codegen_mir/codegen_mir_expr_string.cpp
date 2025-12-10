@@ -143,7 +143,8 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 		// Build function type string: fn(T1,T2)->R
 		std::string funcType = "fn(";
 		for (size_t i = 0; i < closureExpr->parameters.size(); i++) {
-			if (i > 0) funcType += ",";
+			if (i > 0)
+				funcType += ",";
 			funcType += closureExpr->parameters[i].type;
 		}
 		funcType += ")->";
@@ -204,15 +205,20 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 	const std::string &str = strExpr->value;
 	size_t len = str.length();
 
-	// SSO threshold: 15 bytes (to match spec's 16-byte inline layout)
-	constexpr size_t SSO_THRESHOLD = 15;
+	// SSO threshold: strings <= 15 bytes use constant data; > 15 bytes use heap allocation
+	const size_t SSO_THRESHOLD = 15;
+	bool useSSO = len <= SSO_THRESHOLD;
 
 	mir::MIRValue *dataPtr;
-	bool isHeapAllocated = (len > SSO_THRESHOLD);
-	int capacity = 0; // 0 = constant/SSO data, >0 = heap with refcount
+	int capacity;
 
-	if (isHeapAllocated) {
-		// Large string: heap-allocate with refcount header using _managed_string_alloc
+	if (useSSO) {
+		// SSO: store data directly in a global constant
+		std::string globalName = ".str.sso." + std::to_string(stringLiteralCounter++);
+		dataPtr = module->createGlobalString(globalName, str);
+		capacity = 0; // 0 indicates SSO/constant
+	} else {
+		// Heap allocation for longer strings
 		initHeapManagement();
 
 		// Declare _managed_string_alloc if not already declared (takes size and tag)
@@ -228,8 +234,8 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 		mir::MIRValue *tag = module->createGlobalString(".__tag.str.lit", "string literal");
 
 		// Allocate heap buffer with refcount header (returns ptr to data area)
-		capacity = static_cast<int>(len);
-		mir::MIRValue *sizeVal = builder->getInt64(len);
+		// Allocate len + 1 to include null terminator for C compatibility
+		mir::MIRValue *sizeVal = builder->getInt64(len + 1);
 		dataPtr = builder->createCall(stringAllocFunc, {sizeVal, tag}, "str.heap.alloc");
 
 		// Create a global constant for the string data (source for copy)
@@ -237,7 +243,11 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 		mir::MIRValue *constDataPtr = module->createGlobalString(globalName, str);
 
 		// Copy from constant data to heap buffer
-		builder->createCall(memcpyFunc, {dataPtr, constDataPtr, sizeVal}, "str.heap.copy");
+		builder->createCall(memcpyFunc, {dataPtr, constDataPtr, builder->getInt64(len)}, "str.heap.copy");
+
+		// Null-terminate the buffer
+		mir::MIRValue *nullPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr, {builder->getInt64(len)}, "null.ptr");
+		builder->createStore(builder->getInt8(0), nullPtr);
 
 		// Track for cleanup at scope exit using _managed_string_release
 		// We need to store the data pointer somewhere we can load it from during cleanup
@@ -246,11 +256,8 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 		if (!scopeStack.empty()) {
 			scopeStack.back().heapAllocatedStrings.push_back({"str.heap", dataPtrAlloca});
 		}
-	} else {
-		// Small string: use constant data in read-only memory (no heap allocation)
-		std::string globalName = ".str." + std::to_string(stringLiteralCounter++);
-		dataPtr = module->createGlobalString(globalName, str);
-		capacity = 0; // Constant data, no refcount
+
+		capacity = static_cast<int>(len + 1);
 	}
 
 	// Allocate the __ManagedStringData struct on the stack

@@ -451,8 +451,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_concat(CallExprAST *callExpr) 
 	mir::MIRValue *ptr2Ptr = builder->createStructGEP(unsizedArrayType, buf2Ptr, 0, "ptr2.ptr");
 	mir::MIRValue *ptr2 = builder->createLoad(mir::MIRType::getPtr(), ptr2Ptr, "ptr2");
 
-	mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
-	mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {totalLenPlus1_64}, "concat.buffer");
+	mir::MIRFunction *allocFunc = getOrDeclareFunction("_managed_string_alloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
+	mir::MIRValue *tag = module->createGlobalString(".__tag.str.concat", "string concat");
+	mir::MIRValue *newBuffer = builder->createCall(allocFunc, {totalLenPlus1_64, tag}, "concat.buffer");
 
 	mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
 														{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
@@ -468,6 +469,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_concat(CallExprAST *callExpr) 
 	builder->createStore(builder->getInt8(0), nullTermPtr);
 
 	mir::MIRValue *managedSize = builder->getInt64(32);
+	mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
 	mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize}, "concat.managed");
 
 	mir::MIRValue *dstBufferPtr = builder->createStructGEP(managedStringType, newManaged, 0, "dst._buffer");
@@ -643,16 +645,38 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_to_cstring(CallExprAST *callEx
 	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtr, "cap");
 	mir::MIRValue *isHeap = builder->createICmpSGT(cap, builder->getInt32(0), "isHeap");
 
-	mir::MIRBasicBlock *retainBlock = builder->createBasicBlock("cstring.retain");
+	// For SSO strings, we need to allocate a null-terminated buffer
+	mir::MIRBasicBlock *ssoBlock = builder->createBasicBlock("cstring.sso");
+	mir::MIRBasicBlock *heapBlock = builder->createBasicBlock("cstring.heap");
 	mir::MIRBasicBlock *continueBlock = builder->createBasicBlock("cstring.continue");
-	builder->createCondBr(isHeap, retainBlock, continueBlock);
+	builder->createCondBr(isHeap, heapBlock, ssoBlock);
 
-	builder->setInsertPoint(retainBlock);
+	// SSO path: allocate null-terminated buffer
+	builder->setInsertPoint(ssoBlock);
+	mir::MIRFunction *allocFunc = getOrDeclareFunction("_managed_string_alloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
+	mir::MIRValue *tag = module->createGlobalString(".__tag.cstr", "cstring conversion");
+	mir::MIRValue *allocSize = builder->createAdd(len, builder->getInt32(1), "alloc.size");
+	mir::MIRValue *allocSize64 = builder->createZExt(allocSize, mir::MIRType::getInt64(), "alloc.size.64");
+	mir::MIRValue *ssoDataPtr = builder->createCall(allocFunc, {allocSize64, tag}, "sso.cstr.alloc");
+
+	// Copy data and null-terminate
+	mir::MIRFunction *memcpyFunc = module->getFunction("memcpy");
+	mir::MIRValue *len64 = builder->createZExt(len, mir::MIRType::getInt64(), "len.64");
+	builder->createCall(memcpyFunc, {ssoDataPtr, dataPtr, len64}, "sso.copy");
+	mir::MIRValue *nullPtr = builder->createGEP(mir::MIRType::getInt8(), ssoDataPtr, {len64}, "null.ptr");
+	builder->createStore(builder->getInt8(0), nullPtr);
+	builder->createBr(continueBlock);
+
+	// Heap path: data is already null-terminated
+	builder->setInsertPoint(heapBlock);
 	mir::MIRFunction *retainFunc = getOrDeclareFunction("_managed_string_retain", mir::MIRType::getVoid(), {mir::MIRType::getPtr()});
 	builder->createCall(retainFunc, {dataPtr});
 	builder->createBr(continueBlock);
 
 	builder->setInsertPoint(continueBlock);
+	mir::MIRValue *finalDataPtr = builder->createPhi(mir::MIRType::getPtr(), "data.phi");
+	builder->addPhiIncoming(finalDataPtr, ssoDataPtr, ssoBlock);
+	builder->addPhiIncoming(finalDataPtr, dataPtr, heapBlock);
 
 	mir::MIRValue *cstringAlloc = builder->createAlloca(cstringType, "cstring.alloc");
 
@@ -776,6 +800,123 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_cstring_write_stdout(CallExprAST *cal
 	mir::MIRFunction *writeStdout = getOrDeclareFunction(
 		"write_stdout", mir::MIRType::getInt32(), {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
 	return builder->createCall(writeStdout, {data, len}, "write.result");
+}
+
+// =============================================================================
+// File I/O Intrinsics
+// =============================================================================
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_read_file(CallExprAST *callExpr) {
+	mir::MIRType *cstringType = getOrCreateCstringType();
+	mir::MIRType *managedStringType = getOrCreateManagedStringType();
+
+	// Get path cstring
+	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].get());
+	mir::MIRValue *pathDataPtr = builder->createStructGEP(cstringType, csPtr, 0, "path.data.ptr");
+	mir::MIRValue *pathData = builder->createLoad(mir::MIRType::getPtr(), pathDataPtr, "path.data");
+
+	// Allocate space for output length
+	mir::MIRValue *outLenPtr = builder->createAlloca(mir::MIRType::getInt32(), "out.len.ptr");
+
+	// Call runtime read_file
+	mir::MIRFunction *readFileFunc = getOrDeclareFunction(
+		"read_file", mir::MIRType::getPtr(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+	mir::MIRValue *dataPtr = builder->createCall(readFileFunc, {pathData, outLenPtr}, "read.result");
+
+	// Check if result is null
+	mir::MIRValue *isNull = builder->createICmpEq(dataPtr, builder->getNull(), "is.null");
+
+	mir::MIRBasicBlock *successBlock = builder->createBasicBlock("read.success");
+	mir::MIRBasicBlock *failBlock = builder->createBasicBlock("read.fail");
+	mir::MIRBasicBlock *mergeBlock = builder->createBasicBlock("read.merge");
+
+	builder->createCondBr(isNull, failBlock, successBlock);
+
+	// Success: construct _ManagedString
+	builder->setInsertPoint(successBlock);
+	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), outLenPtr, "read.len");
+
+	// Create managed string struct
+	mir::MIRValue *managedAlloc = builder->createAlloca(managedStringType, "managed.alloc");
+
+	// Store buffer pointer
+	mir::MIRValue *bufPtrField = builder->createStructGEP(managedStringType, managedAlloc, 0, "managed._buffer");
+	builder->createStore(dataPtr, bufPtrField);
+
+	// Store length
+	mir::MIRValue *lenField = builder->createStructGEP(managedStringType, managedAlloc, 1, "managed._len");
+	builder->createStore(len, lenField);
+
+	// Store capacity
+	mir::MIRValue *capField = builder->createStructGEP(managedStringType, managedAlloc, 2, "managed._capacity");
+	builder->createStore(len, capField);
+
+	mir::MIRValue *successVal = builder->createLoad(managedStringType, managedAlloc, "managed.val");
+	builder->createBr(mergeBlock);
+
+	// Fail: return empty string
+	builder->setInsertPoint(failBlock);
+	mir::MIRValue *emptyAlloc = builder->createAlloca(managedStringType, "empty.alloc");
+	builder->createStore(builder->getNull(), builder->createStructGEP(managedStringType, emptyAlloc, 0));
+	builder->createStore(builder->getInt32(0), builder->createStructGEP(managedStringType, emptyAlloc, 1));
+	builder->createStore(builder->getInt32(0), builder->createStructGEP(managedStringType, emptyAlloc, 2));
+	mir::MIRValue *failVal = builder->createLoad(managedStringType, emptyAlloc, "empty.val");
+	builder->createBr(mergeBlock);
+
+	builder->setInsertPoint(mergeBlock);
+	mir::MIRValue *result = builder->createPhi(managedStringType, "read.result.phi");
+	builder->addPhiIncoming(result, successVal, successBlock);
+	builder->addPhiIncoming(result, failVal, failBlock);
+
+	return result;
+}
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_write_file(CallExprAST *callExpr) {
+	mir::MIRType *cstringType = getOrCreateCstringType();
+
+	// Get path cstring
+	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].get());
+	mir::MIRValue *pathDataPtr = builder->createStructGEP(cstringType, csPtr, 0, "path.data.ptr");
+	mir::MIRValue *pathData = builder->createLoad(mir::MIRType::getPtr(), pathDataPtr, "path.data");
+
+	// Get content cstring
+	mir::MIRValue *contentCsPtr = getCstringPtr(callExpr->args[1].get());
+
+	// Call runtime __write_file
+	mir::MIRFunction *writeFileFunc = getOrDeclareFunction(
+		"__write_file", mir::MIRType::getInt32(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+
+	return builder->createCall(writeFileFunc, {pathData, contentCsPtr}, "write.result");
+}
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_write_file_binary(CallExprAST *callExpr) {
+	mir::MIRType *cstringType = getOrCreateCstringType();
+
+	// Get path cstring
+	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].get());
+	mir::MIRValue *pathDataPtr = builder->createStructGEP(cstringType, csPtr, 0, "path.data.ptr");
+	mir::MIRValue *pathData = builder->createLoad(mir::MIRType::getPtr(), pathDataPtr, "path.data");
+
+	// Get array info
+	ArrayFieldInfo info = getManagedArrayInfo(callExpr->args[1].get(), callExpr->line, callExpr->column);
+	if (!info.dataPtr) {
+		return builder->getInt32(-1);
+	}
+
+	// Get buffer pointer
+	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);
+	mir::MIRValue *bufPtrField = builder->createStructGEP(managedArrayType, info.dataPtr, 0, "arr._buffer");
+	mir::MIRValue *managedDataPtr = builder->createLoad(mir::MIRType::getPtr(), bufPtrField, "arr.managed_data");
+
+	// Get length
+	mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, info.dataPtr, 1, "arr._len");
+	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
+
+	// Call runtime write_file
+	mir::MIRFunction *writeFileFunc = getOrDeclareFunction(
+		"write_file", mir::MIRType::getInt32(), {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+
+	return builder->createCall(writeFileFunc, {pathData, managedDataPtr, len}, "write.result");
 }
 
 // =============================================================================

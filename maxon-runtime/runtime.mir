@@ -684,40 +684,21 @@ entry:
 ;==============================================================================
 define ptr @_managed_string_alloc(i64 %capacity, ptr %tag) {
 entry:
-    ; Allocate capacity + 8 bytes for header (refcount + capacity)
-    %total = add i64 %capacity, 8
-    %raw = call ptr @malloc(i64 %total)
-
-    ; Check for allocation failure
-    %is_null = icmp eq ptr %raw, null
-    br i1 %is_null, label %return_null, label %init_header
-
-init_header:
-    ; Initialize refcount to 1 at offset 0
-    store i32 1, ptr %raw
-
-    ; Store capacity at offset 4
-    %cap_ptr = getelementptr i8, ptr %raw, i64 4
-    %cap_i32 = trunc i64 %capacity to i32
-    store i32 %cap_i32, ptr %cap_ptr
-
-    ; Calculate data pointer (offset 8)
-    %data = getelementptr i8, ptr %raw, i64 8
-
-    ; Track allocation if enabled (pass data pointer for lookup during free)
+    ; Allocate heap memory for string data
+    %size = add i64 %capacity, 1  ; +1 for null terminator
+    %data = call ptr @malloc(i64 %size)
+    
+    ; Track allocation if enabled
     %tracking_enabled = load i32, ptr @__track_enabled
     %do_track = icmp ne i32 %tracking_enabled, 0
-    br i1 %do_track, label %track_alloc, label %return_data
-
-track_alloc:
-    call void @__track_alloc_with_ptr(ptr %data, i64 %total, ptr %tag)
-    br label %return_data
-
-return_data:
+    br i1 %do_track, label %track, label %done
+    
+track:
+    call void @__track_alloc_with_ptr(ptr %data, i64 %size, ptr %tag)
+    br label %done
+    
+done:
     ret ptr %data
-
-return_null:
-    ret ptr null
 }
 
 ;==============================================================================
@@ -728,6 +709,11 @@ return_null:
 ;==============================================================================
 define void @_managed_string_release(ptr %data, ptr %tag) {
 entry:
+    ; Check for null data (SSO strings have null _managed)
+    %is_null = icmp eq ptr %data, null
+    br i1 %is_null, label %done, label %get_header
+
+get_header:
     ; Get header pointer (data - 8)
     %header = getelementptr i8, ptr %data, i64 -8
     %new_count = call i32 @refcount_dec(ptr %header)

@@ -879,6 +879,9 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 
 	// Call exit with main's return value
 	mir::MIRFunction *exitFunc = module->getFunction("exit");
+	if (!mainRetVal) {
+		mainRetVal = builder->getInt32(0);
+	}
 	builder->createCall(exitFunc, {mainRetVal});
 
 	// Return void (exit never returns, but we need a terminator)

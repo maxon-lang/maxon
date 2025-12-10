@@ -566,7 +566,10 @@ static const std::pair<const char *, const char *> WINDOWS_IMPORTS[] = {
 	{"kernel32.dll", "HeapFree"},
 	{"kernel32.dll", "HeapReAlloc"},
 	{"kernel32.dll", "GetStdHandle"},
+	{"kernel32.dll", "CreateFileA"},
+	{"kernel32.dll", "ReadFile"},
 	{"kernel32.dll", "WriteFile"},
+	{"kernel32.dll", "GetFileSize"},
 	{"kernel32.dll", "CloseHandle"},
 
 	// Safe FFI - Process management

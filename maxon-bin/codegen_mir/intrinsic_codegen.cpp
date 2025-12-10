@@ -25,6 +25,11 @@ IntrinsicCodegenRegistry::IntrinsicCodegenRegistry() {
 		{"intrinsic_cstring_len", &MIRCodeGenerator::intrinsic_cstring_len},
 		{"intrinsic_cstring_write_stdout", &MIRCodeGenerator::intrinsic_cstring_write_stdout},
 
+		// File I/O intrinsics
+		{"intrinsic_read_file", &MIRCodeGenerator::intrinsic_read_file},
+		{"intrinsic_write_file", &MIRCodeGenerator::intrinsic_write_file},
+		{"intrinsic_write_file_binary", &MIRCodeGenerator::intrinsic_write_file_binary},
+
 		// Substring intrinsics
 		{"intrinsic_substring_len", &MIRCodeGenerator::intrinsic_substring_len},
 		{"intrinsic_substring_byte_at", &MIRCodeGenerator::intrinsic_substring_byte_at},

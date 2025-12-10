@@ -1,0 +1,28 @@
+// stdlib/sys/file.maxon
+// File I/O functions
+// Namespace: stdlib.sys
+
+/// Read text file content into a string
+/// Returns empty string on error (TODO: better error handling)
+export function readTextFile(path string) string
+	var cs = path.cstr()
+	let managed = __read_file(cs)
+	return string{_managed: managed, _iterPos: 0}
+end 'readTextFile'
+
+/// Write string content to a file
+/// Returns true on success, false on error
+export function writeTextFile(path string, content string) bool
+	var cs = path.cstr()
+	var content_cs = content.cstr()
+	let res = __write_file(cs, content_cs)
+	return res == 0
+end 'writeTextFile'
+
+/// Write binary content to a file
+/// Returns true on success, false on error
+export function writeBinaryFile(path string, content array of byte) bool
+	var cs = path.cstr()
+	let res = __write_file_binary(cs, content)
+	return res == 0
+end 'writeBinaryFile'

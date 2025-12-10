@@ -255,6 +255,10 @@ class MIRCodeGenerator {
 	// Cstring intrinsics
 	mir::MIRValue *intrinsic_cstring_len(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_cstring_write_stdout(CallExprAST *callExpr);
+	// File I/O intrinsics
+	mir::MIRValue *intrinsic_read_file(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_write_file(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_write_file_binary(CallExprAST *callExpr);
 	// Substring intrinsics
 	mir::MIRValue *intrinsic_substring_len(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_byte_at(CallExprAST *callExpr);
