@@ -1,17 +1,5 @@
 // Maxon Compiler
-// A simple compiler for the Maxon language, written in Maxon
-// Compiles Maxon source code all the way to a Windows PE executable
-
-// NOTE: This is an idealized version of a self-hosted compiler.
-// It assumes several features that don't yet exist in Maxon:
-// - File I/O (readFile, writeFile, writeFileBytes)
-// - Command-line argument parsing (args array of string)
-// - String concatenation with +
-// - Method chaining
-// - Dynamic arrays with append()
-// - parseInt/parseFloat functions
-// - Byte arrays and bitwise operations
-// These are written as they would ideally work.
+// Minimal version - just enough to compile basic.maxon
 
 export function compile(sourceFile string) int
     let outputFile = sourceFile.replace(".maxon", ".exe")
@@ -31,55 +19,42 @@ export function compile(sourceFile string) int
     // Phase 1: Lexical Analysis
     //=========================================================================
     print("Phase 1: Lexing...")
-    let lexer = Lexer.create(source)
-    let tokens = Lexer.tokenize(lexer)
+    var lexer = Lexer.create(source)
+    let tokens = lexer.tokenize()
     print("  Found " + tokens.count().toString() + " tokens")
 
     //=========================================================================
     // Phase 2: Parsing
     //=========================================================================
     print("Phase 2: Parsing...")
-    let parser = Parser.create(tokens)
-    let program = Parser.parseProgram(parser, sourceFile)
+    var parser = Parser.create(tokens)
+    let program = parser.parseProgram(sourceFile)
 
     if parser.hadError 'parseError'
         print("Error: " + parser.errorMessage)
         return 1
     end 'parseError'
 
-    print("  Parsed " + program.functions.count().toString() + " function(s)")
-    for func in program.functions 'printFuncs'
-        var exportStr = ""
-        if func.isExport 'isExport'
-            exportStr = " (export)"
-        end 'isExport'
-        print("    - " + func.name + "()" + exportStr)
-    end 'printFuncs'
+    print("  Parsed " + program.declarations.count().toString() + " function(s)")
 
     //=========================================================================
     // Phase 3: Semantic Analysis
     //=========================================================================
     print("Phase 3: Semantic Analysis...")
-    let analyzer = SemanticAnalyzer.create()
-    let success = analyzer.analyze(program)
+    var analyzer = SemanticAnalyzer.create()
+    analyzer.analyze(program)
 
-    if not success 'hasErrors'
+    if not analyzer.success() 'hasErrors'
         analyzer.printErrors()
         return 1
     end 'hasErrors'
-
-    // Print warnings if any
-    if analyzer.warnings.count() > 0 'hasWarnings'
-        analyzer.printWarnings()
-    end 'hasWarnings'
     print("  OK")
 
     //=========================================================================
     // Phase 4: Optimization
     //=========================================================================
     print("Phase 4: Optimization...")
-    let optimizer = createStandardOptimizer()
-    optimizer.verbose = true
+    var optimizer = createStandardOptimizer()
     optimizer.optimize(program)
     print("  Done")
 
@@ -87,11 +62,10 @@ export function compile(sourceFile string) int
     // Phase 5: MIR Code Generation
     //=========================================================================
     print("Phase 5: Code Generation (MIR)...")
-    let codegen = CodeGen.create()
+    var codegen = CodeGen.create()
     codegen.generate(program)
     print("  Generated MIR")
 
-    // Write MIR to file if --emit-ir flag
     let mirFile = sourceFile.replace(".maxon", ".mir")
     writeFile(mirFile, codegen.output)
     print("  Wrote " + mirFile)
@@ -100,7 +74,7 @@ export function compile(sourceFile string) int
     // Phase 6: x86-64 Code Generation
     //=========================================================================
     print("Phase 6: Code Generation (x86-64)...")
-    let x86gen = X86Gen.create()
+    var x86gen = X86Gen.create()
     x86gen.generate(program)
     print("  Generated " + x86gen.getCodeSize().toString() + " bytes of machine code")
 
@@ -108,9 +82,7 @@ export function compile(sourceFile string) int
     // Phase 7: PE Executable Generation
     //=========================================================================
     print("Phase 7: PE Executable Generation...")
-
-    // For basic.maxon, use the complete builder that includes imports
-    let exeBuilder = CompleteExeBuilder.create()
+    var exeBuilder = CompleteExeBuilder.create()
     exeBuilder.buildBasicExe()
     let exeBytes = exeBuilder.getBytes()
     let exeSize = exeBuilder.getSize()
@@ -124,13 +96,8 @@ export function compile(sourceFile string) int
     print("  Done!")
 
     print("")
-    print("========================================")
     print("Compilation successful!")
     print("Output: " + outputFile)
-    print("")
-    print("Run with: ./" + outputFile)
-    print("Expected exit code: 42")
-    print("========================================")
 
     return 0
-end 'main'
+end 'compile'

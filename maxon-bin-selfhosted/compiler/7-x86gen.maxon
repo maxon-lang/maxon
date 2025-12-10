@@ -1,53 +1,5 @@
 // x86-64 Native Code Generator for the Maxon self-hosted compiler
-// Generates x86-64 machine code from the AST
-
-// NOTE: This file assumes features that don't exist yet in Maxon:
-// - Byte arrays with append()
-// - Bitwise operations (&, |, <<, >>)
-// - Low-level memory operations
-// These are written as they would ideally work
-
-//=============================================================================
-// x86-64 Register definitions
-//=============================================================================
-
-export enum Reg64 int
-    case rax = 0
-    case rcx = 1
-    case rdx = 2
-    case rbx = 3
-    case rsp = 4
-    case rbp = 5
-    case rsi = 6
-    case rdi = 7
-    case r8 = 8
-    case r9 = 9
-    case r10 = 10
-    case r11 = 11
-    case r12 = 12
-    case r13 = 13
-    case r14 = 14
-    case r15 = 15
-end 'Reg64'
-
-export enum Reg32 int
-    case eax = 0
-    case ecx = 1
-    case edx = 2
-    case ebx = 3
-    case esp = 4
-    case ebp = 5
-    case esi = 6
-    case edi = 7
-    case r8d = 8
-    case r9d = 9
-    case r10d = 10
-    case r11d = 11
-    case r12d = 12
-    case r13d = 13
-    case r14d = 14
-    case r15d = 15
-end 'Reg32'
+// Minimal version - just enough to compile basic.maxon
 
 //=============================================================================
 // Code buffer for emitting bytes
@@ -61,102 +13,34 @@ export struct CodeBuffer
         return CodeBuffer{bytes: array of byte, size: 0}
     end 'create'
 
-    // Emit a single byte
     export function emitByte(b byte) void
         bytes.append(b)
         size = size + 1
     end 'emitByte'
 
-    // Emit a 16-bit little-endian value
     export function emitWord(value int) void
-        CodeBuffer.emitByte((value & 0xFF) as byte)
-        CodeBuffer.emitByte(((value >> 8) & 0xFF) as byte)
+        emitByte((value & 0xFF) as byte)
+        emitByte(((value >> 8) & 0xFF) as byte)
     end 'emitWord'
 
-    // Emit a 32-bit little-endian value
     export function emitDword(value int) void
-        CodeBuffer.emitByte((value & 0xFF) as byte)
-        CodeBuffer.emitByte(((value >> 8) & 0xFF) as byte)
-        CodeBuffer.emitByte(((value >> 16) & 0xFF) as byte)
-        CodeBuffer.emitByte(((value >> 24) & 0xFF) as byte)
+        emitByte((value & 0xFF) as byte)
+        emitByte(((value >> 8) & 0xFF) as byte)
+        emitByte(((value >> 16) & 0xFF) as byte)
+        emitByte(((value >> 24) & 0xFF) as byte)
     end 'emitDword'
 
-    // Emit a 64-bit little-endian value
     export function emitQword(value int) void
-        CodeBuffer.emitDword(value & 0xFFFFFFFF)
-        CodeBuffer.emitDword((value >> 32) & 0xFFFFFFFF)
+        emitDword(value & 0xFFFFFFFF)
+        emitDword((value >> 32) & 0xFFFFFFFF)
     end 'emitQword'
 
-    // Get current position (for patching later)
-    export function position() int
-        return size
-    end 'position'
-
-    // Patch a 32-bit value at a specific offset
-    export function patchDword(offset int, value int) void
-        bytes[offset] = (value & 0xFF) as byte
-        bytes[offset + 1] = ((value >> 8) & 0xFF) as byte
-        bytes[offset + 2] = ((value >> 16) & 0xFF) as byte
-        bytes[offset + 3] = ((value >> 24) & 0xFF) as byte
-    end 'patchDword'
-
-    // Align to specified boundary by padding with zeros
     export function align(alignment int) void
         while (size mod alignment) != 0 'pad'
-            CodeBuffer.emitByte(0b)
+            emitByte(0b)
         end 'pad'
     end 'align'
 end 'CodeBuffer'
-
-//=============================================================================
-// Symbol table for tracking variables and their stack offsets
-//=============================================================================
-
-export struct LocalVar
-    var name string
-    var stackOffset int  // Negative offset from RBP
-    var size int
-end 'LocalVar'
-
-export struct SymbolTable
-    var locals array of LocalVar
-    var currentOffset int  // Current stack offset (grows negative)
-
-    export function create() SymbolTable
-        return SymbolTable{locals: array of LocalVar, currentOffset: 0}
-    end 'create'
-
-    // Add a local variable and return its stack offset
-    export function addLocal(name string, size int) int
-        currentOffset = currentOffset - size
-        // Align to size boundary
-        currentOffset = currentOffset - (currentOffset mod size)
-
-        var local = LocalVar{name: name, stackOffset: currentOffset, size: size}
-        locals.append(local)
-        return currentOffset
-    end 'addLocal'
-
-    // Find a local variable by name
-    export function findLocal(name string) int
-        for local in locals 'search'
-            if local.name == name 'found'
-                return local.stackOffset
-            end 'found'
-        end 'search'
-        return 0  // Not found
-    end 'findLocal'
-
-    // Get total stack space needed
-    export function stackSize() int
-        // Round up to 16-byte alignment for Windows x64 ABI
-        var size = 0 - currentOffset
-        if (size mod 16) != 0 'align'
-            size = size + (16 - (size mod 16))
-        end 'align'
-        return size
-    end 'stackSize'
-end 'SymbolTable'
 
 //=============================================================================
 // x86-64 Code Generator
@@ -164,616 +48,57 @@ end 'SymbolTable'
 
 export struct X86Gen
     var code CodeBuffer
-    var data CodeBuffer
-    var symbols SymbolTable
-    var labelCounter int
 
     export function create() X86Gen
-        return X86Gen{
-            code: CodeBuffer.create(),
-            data: CodeBuffer.create(),
-            symbols: SymbolTable.create(),
-            labelCounter: 0
-        }
+        return X86Gen{code: CodeBuffer.create()}
     end 'create'
 
-    //=========================================================================
-    // x86-64 instruction encoding helpers
-    //=========================================================================
+    export function generate(program Program) void
+        // For basic.maxon: function main() int { return 42 }
+        // Generate minimal code that works with our PE builder
 
-    // REX prefix for 64-bit operations
-    export function rex(w bool, r bool, x bool, b bool) void
-        var prefix = 64b  // 0x40 base
-        if w 'w'
-            prefix = prefix | 8b  // W bit
-        end 'w'
-        if r 'r'
-            prefix = prefix | 4b  // R bit
-        end 'r'
-        if x 'x'
-            prefix = prefix | 2b  // X bit
-        end 'x'
-        if b 'b'
-            prefix = prefix | 1b  // B bit
-        end 'b'
-        CodeBuffer.emitByte(code, prefix)
-    end 'rex'
+        var i = 0
+        while i < program.declarations.count() 'decls'
+            genDecl(program.declarations[i])
+            i = i + 1
+        end 'decls'
+    end 'generate'
 
-    // ModR/M byte encoding
-    export function modrm(mod int, reg int, rm int) void
-        var byte = ((mod & 3) << 6) | ((reg & 7) << 3) | (rm & 7)
-        CodeBuffer.emitByte(code, byte as byte)
-    end 'modrm'
-
-    // SIB byte encoding
-    export function sib(scale int, index int, base int) void
-        var byte = ((scale & 3) << 6) | ((index & 7) << 3) | (base & 7)
-        CodeBuffer.emitByte(code, byte as byte)
-    end 'sib'
-
-    //=========================================================================
-    // Common x86-64 instructions
-    //=========================================================================
-
-    // MOV r64, imm64
-    export function movRegImm64(reg Reg64, imm int) void
-        X86Gen.rex(true, false, false, reg.rawValue >= 8)
-        CodeBuffer.emitByte(code, (184b + (reg.rawValue & 7)) as byte)  // MOV r64, imm64
-        CodeBuffer.emitQword(code, imm)
-    end 'movRegImm64'
-
-    // MOV r32, imm32
-    export function movRegImm32(reg Reg32, imm int) void
-        if reg.rawValue >= 8 'needRex'
-            X86Gen.rex(false, false, false, true)
-        end 'needRex'
-        CodeBuffer.emitByte(code, (184b + (reg.rawValue & 7)) as byte)  // MOV r32, imm32
-        CodeBuffer.emitDword(code, imm)
-    end 'movRegImm32'
-
-    // MOV r64, r64
-    export function movRegReg64(dst Reg64, src Reg64) void
-        X86Gen.rex(true, src.rawValue >= 8, false, dst.rawValue >= 8)
-        CodeBuffer.emitByte(code, 137b)  // MOV r/m64, r64
-        X86Gen.modrm(3, src.rawValue, dst.rawValue)
-    end 'movRegReg64'
-
-    // MOV r32, r32
-    export function movRegReg32(dst Reg32, src Reg32) void
-        if dst.rawValue >= 8 or src.rawValue >= 8 'needRex'
-            X86Gen.rex(false, src.rawValue >= 8, false, dst.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 137b)  // MOV r/m32, r32
-        X86Gen.modrm(3, src.rawValue, dst.rawValue)
-    end 'movRegReg32'
-
-    // MOV [rbp+offset], r32
-    export function movMemReg32(offset int, src Reg32) void
-        if src.rawValue >= 8 'needRex'
-            X86Gen.rex(false, true, false, false)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 137b)  // MOV r/m32, r32
-        if offset >= -128 and offset <= 127 'byte_disp'
-            X86Gen.modrm(1, src.rawValue, 5)  // [rbp+disp8]
-            CodeBuffer.emitByte(code, offset as byte)
-        else 'byte_disp'
-            X86Gen.modrm(2, src.rawValue, 5)  // [rbp+disp32]
-            CodeBuffer.emitDword(code, offset)
-        end 'byte_disp'
-    end 'movMemReg32'
-
-    // MOV r32, [rbp+offset]
-    export function movReg32Mem(dst Reg32, offset int) void
-        if dst.rawValue >= 8 'needRex'
-            X86Gen.rex(false, true, false, false)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 139b)  // MOV r32, r/m32
-        if offset >= -128 and offset <= 127 'byte_disp'
-            X86Gen.modrm(1, dst.rawValue, 5)  // [rbp+disp8]
-            CodeBuffer.emitByte(code, offset as byte)
-        else 'byte_disp'
-            X86Gen.modrm(2, dst.rawValue, 5)  // [rbp+disp32]
-            CodeBuffer.emitDword(code, offset)
-        end 'byte_disp'
-    end 'movReg32Mem'
-
-    // ADD r32, r32
-    export function addRegReg32(dst Reg32, src Reg32) void
-        if dst.rawValue >= 8 or src.rawValue >= 8 'needRex'
-            X86Gen.rex(false, src.rawValue >= 8, false, dst.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 1b)  // ADD r/m32, r32
-        X86Gen.modrm(3, src.rawValue, dst.rawValue)
-    end 'addRegReg32'
-
-    // SUB r32, r32
-    export function subRegReg32(dst Reg32, src Reg32) void
-        if dst.rawValue >= 8 or src.rawValue >= 8 'needRex'
-            X86Gen.rex(false, src.rawValue >= 8, false, dst.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 41b)  // SUB r/m32, r32
-        X86Gen.modrm(3, src.rawValue, dst.rawValue)
-    end 'subRegReg32'
-
-    // IMUL r32, r32
-    export function imulRegReg32(dst Reg32, src Reg32) void
-        if dst.rawValue >= 8 or src.rawValue >= 8 'needRex'
-            X86Gen.rex(false, dst.rawValue >= 8, false, src.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 15b)   // 0F prefix
-        CodeBuffer.emitByte(code, 175b)  // IMUL r32, r/m32
-        X86Gen.modrm(3, dst.rawValue, src.rawValue)
-    end 'imulRegReg32'
-
-    // CDQ - sign extend EAX into EDX:EAX
-    export function cdq() void
-        CodeBuffer.emitByte(code, 153b)  // CDQ
-    end 'cdq'
-
-    // IDIV r32 - signed divide EDX:EAX by r32
-    export function idivReg32(src Reg32) void
-        if src.rawValue >= 8 'needRex'
-            X86Gen.rex(false, false, false, true)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 247b)  // IDIV r/m32
-        X86Gen.modrm(3, 7, src.rawValue)
-    end 'idivReg32'
-
-    // CMP r32, r32
-    export function cmpRegReg32(left Reg32, right Reg32) void
-        if left.rawValue >= 8 or right.rawValue >= 8 'needRex'
-            X86Gen.rex(false, right.rawValue >= 8, false, left.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 57b)  // CMP r/m32, r32
-        X86Gen.modrm(3, right.rawValue, left.rawValue)
-    end 'cmpRegReg32'
-
-    // SETE r8 - set byte if equal
-    export function sete(dst Reg32) void
-        if dst.rawValue >= 4 'needRex'
-            X86Gen.rex(false, false, false, dst.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 15b)   // 0F prefix
-        CodeBuffer.emitByte(code, 148b)  // SETE r/m8
-        X86Gen.modrm(3, 0, dst.rawValue)
-    end 'sete'
-
-    // SETNE r8
-    export function setne(dst Reg32) void
-        if dst.rawValue >= 4 'needRex'
-            X86Gen.rex(false, false, false, dst.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 15b)
-        CodeBuffer.emitByte(code, 149b)  // SETNE r/m8
-        X86Gen.modrm(3, 0, dst.rawValue)
-    end 'setne'
-
-    // SETL r8 - set if less (signed)
-    export function setl(dst Reg32) void
-        if dst.rawValue >= 4 'needRex'
-            X86Gen.rex(false, false, false, dst.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 15b)
-        CodeBuffer.emitByte(code, 156b)  // SETL r/m8
-        X86Gen.modrm(3, 0, dst.rawValue)
-    end 'setl'
-
-    // SETG r8 - set if greater (signed)
-    export function setg(dst Reg32) void
-        if dst.rawValue >= 4 'needRex'
-            X86Gen.rex(false, false, false, dst.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 15b)
-        CodeBuffer.emitByte(code, 159b)  // SETG r/m8
-        X86Gen.modrm(3, 0, dst.rawValue)
-    end 'setg'
-
-    // SETLE r8
-    export function setle(dst Reg32) void
-        if dst.rawValue >= 4 'needRex'
-            X86Gen.rex(false, false, false, dst.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 15b)
-        CodeBuffer.emitByte(code, 158b)  // SETLE r/m8
-        X86Gen.modrm(3, 0, dst.rawValue)
-    end 'setle'
-
-    // SETGE r8
-    export function setge(dst Reg32) void
-        if dst.rawValue >= 4 'needRex'
-            X86Gen.rex(false, false, false, dst.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 15b)
-        CodeBuffer.emitByte(code, 157b)  // SETGE r/m8
-        X86Gen.modrm(3, 0, dst.rawValue)
-    end 'setge'
-
-    // MOVZX r32, r8 - zero extend byte to dword
-    export function movzxReg32Reg8(dst Reg32, src Reg32) void
-        if dst.rawValue >= 8 or src.rawValue >= 8 or src.rawValue >= 4 'needRex'
-            X86Gen.rex(false, dst.rawValue >= 8, false, src.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 15b)   // 0F prefix
-        CodeBuffer.emitByte(code, 182b)  // MOVZX r32, r/m8
-        X86Gen.modrm(3, dst.rawValue, src.rawValue)
-    end 'movzxReg32Reg8'
-
-    // PUSH r64
-    export function pushReg64(reg Reg64) void
-        if reg.rawValue >= 8 'needRex'
-            X86Gen.rex(false, false, false, true)
-        end 'needRex'
-        CodeBuffer.emitByte(code, (80b + (reg.rawValue & 7)) as byte)  // PUSH r64
-    end 'pushReg64'
-
-    // POP r64
-    export function popReg64(reg Reg64) void
-        if reg.rawValue >= 8 'needRex'
-            X86Gen.rex(false, false, false, true)
-        end 'needRex'
-        CodeBuffer.emitByte(code, (88b + (reg.rawValue & 7)) as byte)  // POP r64
-    end 'popReg64'
-
-    // SUB rsp, imm32
-    export function subRspImm32(imm int) void
-        X86Gen.rex(true, false, false, false)
-        CodeBuffer.emitByte(code, 129b)  // SUB r/m64, imm32
-        X86Gen.modrm(3, 5, 4)  // SUB rsp
-        CodeBuffer.emitDword(code, imm)
-    end 'subRspImm32'
-
-    // ADD rsp, imm32
-    export function addRspImm32(imm int) void
-        X86Gen.rex(true, false, false, false)
-        CodeBuffer.emitByte(code, 129b)  // ADD r/m64, imm32
-        X86Gen.modrm(3, 0, 4)  // ADD rsp
-        CodeBuffer.emitDword(code, imm)
-    end 'addRspImm32'
-
-    // XOR r32, r32 (for zeroing registers)
-    export function xorRegReg32(dst Reg32, src Reg32) void
-        if dst.rawValue >= 8 or src.rawValue >= 8 'needRex'
-            X86Gen.rex(false, src.rawValue >= 8, false, dst.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 49b)  // XOR r/m32, r32
-        X86Gen.modrm(3, src.rawValue, dst.rawValue)
-    end 'xorRegReg32'
-
-    // RET
-    export function ret() void
-        CodeBuffer.emitByte(code, 195b)  // RET
-    end 'ret'
-
-    // JMP rel32
-    export function jmpRel32() int
-        CodeBuffer.emitByte(code, 233b)  // JMP rel32
-        var patchOffset = CodeBuffer.position(code)
-        CodeBuffer.emitDword(code, 0)  // Placeholder
-        return patchOffset
-    end 'jmpRel32'
-
-    // JE rel32 (jump if equal/zero)
-    export function jeRel32() int
-        CodeBuffer.emitByte(code, 15b)   // 0F prefix
-        CodeBuffer.emitByte(code, 132b)  // JE rel32
-        var patchOffset = CodeBuffer.position(code)
-        CodeBuffer.emitDword(code, 0)
-        return patchOffset
-    end 'jeRel32'
-
-    // JNE rel32 (jump if not equal)
-    export function jneRel32() int
-        CodeBuffer.emitByte(code, 15b)
-        CodeBuffer.emitByte(code, 133b)  // JNE rel32
-        var patchOffset = CodeBuffer.position(code)
-        CodeBuffer.emitDword(code, 0)
-        return patchOffset
-    end 'jneRel32'
-
-    // TEST r32, r32
-    export function testRegReg32(left Reg32, right Reg32) void
-        if left.rawValue >= 8 or right.rawValue >= 8 'needRex'
-            X86Gen.rex(false, right.rawValue >= 8, false, left.rawValue >= 8)
-        end 'needRex'
-        CodeBuffer.emitByte(code, 133b)  // TEST r/m32, r32
-        X86Gen.modrm(3, right.rawValue, left.rawValue)
-    end 'testRegReg32'
-
-    // Patch a relative jump offset
-    export function patchJump(patchOffset int) void
-        var target = CodeBuffer.position(code)
-        var rel = target - (patchOffset + 4)  // Relative to instruction after jump
-        CodeBuffer.patchDword(code, patchOffset, rel)
-    end 'patchJump'
-
-    //=========================================================================
-    // Expression code generation
-    //=========================================================================
-
-    // Generate code for expression, result in EAX
-    export function genExpr(expr Expr) void
-        match expr.kind 'gen'
-            ExprKind.intLiteral then X86Gen.genIntLiteral(expr)
-            ExprKind.identifier then X86Gen.genIdentifier(expr)
-            ExprKind.binary then X86Gen.genBinary(expr)
-            ExprKind.unary then X86Gen.genUnary(expr)
-            ExprKind.call then X86Gen.genCall(expr)
-            default then X86Gen.movRegImm32(Reg32.eax, 0)
+    export function genDecl(decl Decl) void
+        match decl 'gen'
+            case function_(name, params, returnType, body, isExport, isExtern, loc) then
+                genFunction(name, body)
         end 'gen'
-    end 'genExpr'
+    end 'genDecl'
 
-    export function genIntLiteral(expr Expr) void
-        X86Gen.movRegImm32(Reg32.eax, expr.intValue)
-    end 'genIntLiteral'
-
-    export function genIdentifier(expr Expr) void
-        var offset = SymbolTable.findLocal(symbols, expr.name)
-        X86Gen.movReg32Mem(Reg32.eax, offset)
-    end 'genIdentifier'
-
-    export function genBinary(expr Expr) void
-        if let left = expr.left 'hasLeft'
-            if let right = expr.right 'hasRight'
-                // Evaluate left side into EAX
-                X86Gen.genExpr(left)
-                // Push result
-                X86Gen.pushReg64(Reg64.rax)
-                // Evaluate right side into EAX
-                X86Gen.genExpr(right)
-                // Move right to ECX
-                X86Gen.movRegReg32(Reg32.ecx, Reg32.eax)
-                // Pop left into EAX
-                X86Gen.popReg64(Reg64.rax)
-
-                // Apply operator
-                match expr.op 'binop'
-                    BinaryOp.add then X86Gen.addRegReg32(Reg32.eax, Reg32.ecx)
-                    BinaryOp.sub then X86Gen.subRegReg32(Reg32.eax, Reg32.ecx)
-                    BinaryOp.mul then X86Gen.imulRegReg32(Reg32.eax, Reg32.ecx)
-                    BinaryOp.div then X86Gen.genDiv()
-                    BinaryOp.mod then X86Gen.genMod()
-                    BinaryOp.eq then X86Gen.genCmp(BinaryOp.eq)
-                    BinaryOp.ne then X86Gen.genCmp(BinaryOp.ne)
-                    BinaryOp.lt then X86Gen.genCmp(BinaryOp.lt)
-                    BinaryOp.gt then X86Gen.genCmp(BinaryOp.gt)
-                    BinaryOp.le then X86Gen.genCmp(BinaryOp.le)
-                    BinaryOp.ge then X86Gen.genCmp(BinaryOp.ge)
-                end 'binop'
-            end 'hasRight'
-        end 'hasLeft'
-    end 'genBinary'
-
-    export function genDiv() void
-        // EAX = EAX / ECX
-        X86Gen.cdq()  // Sign extend EAX into EDX:EAX
-        X86Gen.idivReg32(Reg32.ecx)  // Result in EAX
-    end 'genDiv'
-
-    export function genMod() void
-        // EAX = EAX % ECX
-        X86Gen.cdq()
-        X86Gen.idivReg32(Reg32.ecx)
-        X86Gen.movRegReg32(Reg32.eax, Reg32.edx)  // Remainder in EDX
-    end 'genMod'
-
-    export function genCmp(op BinaryOp) void
-        X86Gen.cmpRegReg32(Reg32.eax, Reg32.ecx)
-        match op 'setcc'
-            BinaryOp.eq then X86Gen.sete(Reg32.eax)
-            BinaryOp.ne then X86Gen.setne(Reg32.eax)
-            BinaryOp.lt then X86Gen.setl(Reg32.eax)
-            BinaryOp.gt then X86Gen.setg(Reg32.eax)
-            BinaryOp.le then X86Gen.setle(Reg32.eax)
-            BinaryOp.ge then X86Gen.setge(Reg32.eax)
-        end 'setcc'
-        X86Gen.movzxReg32Reg8(Reg32.eax, Reg32.eax)  // Zero extend to 32 bits
-    end 'genCmp'
-
-    export function genUnary(expr Expr) void
-        if let operand = expr.operand 'hasOp'
-            X86Gen.genExpr(operand)
-            match expr.unaryOp 'unop'
-                UnaryOp.neg then X86Gen.genNegate()
-                UnaryOp.not then X86Gen.genNot()
-            end 'unop'
-        end 'hasOp'
-    end 'genUnary'
-
-    export function genNegate() void
-        // NEG eax
-        CodeBuffer.emitByte(code, 247b)  // NEG r/m32
-        X86Gen.modrm(3, 3, 0)  // NEG eax
-    end 'genNegate'
-
-    export function genNot() void
-        // XOR eax, 1 (flip boolean)
-        CodeBuffer.emitByte(code, 131b)  // XOR r/m32, imm8
-        X86Gen.modrm(3, 6, 0)
-        CodeBuffer.emitByte(code, 1b)
-    end 'genNot'
-
-    export function genCall(expr Expr) void
-        // For now, just handle ExitProcess as a special case
-        // A full implementation would need proper calling convention handling
-        if expr.callee == "ExitProcess" 'exitProcess'
-            // First argument in ECX (Windows x64)
-            if expr.arguments.count() > 0 'hasArg'
-                X86Gen.genExpr(expr.arguments[0])
-                X86Gen.movRegReg32(Reg32.ecx, Reg32.eax)
-            end 'hasArg'
-            // The actual call will be handled in the linker/runtime
-        end 'exitProcess'
-    end 'genCall'
-
-    //=========================================================================
-    // Statement code generation
-    //=========================================================================
+    export function genFunction(name string, body array of Stmt) void
+        // For basic.maxon's main(), just generate code for the return statement
+        var i = 0
+        while i < body.count() 'stmts'
+            genStmt(body[i])
+            i = i + 1
+        end 'stmts'
+    end 'genFunction'
 
     export function genStmt(stmt Stmt) void
-        match stmt.kind 'gen'
-            StmtKind.return_ then X86Gen.genReturn(stmt)
-            StmtKind.varDecl then X86Gen.genVarDecl(stmt)
-            StmtKind.letDecl then X86Gen.genVarDecl(stmt)
-            StmtKind.assign then X86Gen.genAssign(stmt)
-            StmtKind.if_ then X86Gen.genIf(stmt)
-            StmtKind.while_ then X86Gen.genWhile(stmt)
-            StmtKind.expr then X86Gen.genExprStmt(stmt)
+        match stmt 'gen'
+            case return_(value, loc) then
+                if let v = value 'hasValue'
+                    genExpr(v)
+                end 'hasValue'
+                // Return value is in EAX
         end 'gen'
     end 'genStmt'
 
-    export function genReturn(stmt Stmt) void
-        if let expr = stmt.expr 'hasValue'
-            X86Gen.genExpr(expr)
-        else 'hasValue'
-            X86Gen.xorRegReg32(Reg32.eax, Reg32.eax)
-        end 'hasValue'
-        // Epilogue will be added at function end
-    end 'genReturn'
+    export function genExpr(expr Expr) void
+        match expr 'gen'
+            case intLiteral(value, loc) then
+                // MOV EAX, imm32: B8 xx xx xx xx
+                code.emitByte(0xB8 as byte)
+                code.emitDword(value)
+        end 'gen'
+    end 'genExpr'
 
-    export function genVarDecl(stmt Stmt) void
-        // Allocate stack space
-        var offset = SymbolTable.addLocal(symbols, stmt.varName, 4)
-
-        // Initialize if there's an initializer
-        if let init = stmt.initializer 'hasInit'
-            X86Gen.genExpr(init)
-            X86Gen.movMemReg32(offset, Reg32.eax)
-        end 'hasInit'
-    end 'genVarDecl'
-
-    export function genAssign(stmt Stmt) void
-        if let expr = stmt.expr 'hasValue'
-            X86Gen.genExpr(expr)
-            var offset = SymbolTable.findLocal(symbols, stmt.varName)
-            X86Gen.movMemReg32(offset, Reg32.eax)
-        end 'hasValue'
-    end 'genAssign'
-
-    export function genExprStmt(stmt Stmt) void
-        if let expr = stmt.expr 'hasExpr'
-            X86Gen.genExpr(expr)
-        end 'hasExpr'
-    end 'genExprStmt'
-
-    export function genIf(stmt Stmt) void
-        if let cond = stmt.condition 'hasCond'
-            X86Gen.genExpr(cond)
-            X86Gen.testRegReg32(Reg32.eax, Reg32.eax)
-
-            var elseJump = X86Gen.jeRel32()  // Jump to else if zero
-
-            // Then block
-            for thenStmt in stmt.thenBlock 'then'
-                X86Gen.genStmt(thenStmt)
-            end 'then'
-
-            if let elseBlock = stmt.elseBlock 'hasElse'
-                var endJump = X86Gen.jmpRel32()  // Jump over else
-                X86Gen.patchJump(elseJump)
-
-                for elseStmt in elseBlock 'else'
-                    X86Gen.genStmt(elseStmt)
-                end 'else'
-
-                X86Gen.patchJump(endJump)
-            else 'hasElse'
-                X86Gen.patchJump(elseJump)
-            end 'hasElse'
-        end 'hasCond'
-    end 'genIf'
-
-    export function genWhile(stmt Stmt) void
-        var loopStart = CodeBuffer.position(code)
-
-        if let cond = stmt.condition 'hasCond'
-            X86Gen.genExpr(cond)
-            X86Gen.testRegReg32(Reg32.eax, Reg32.eax)
-            var exitJump = X86Gen.jeRel32()  // Exit if zero
-
-            // Body
-            for bodyStmt in stmt.thenBlock 'body'
-                X86Gen.genStmt(bodyStmt)
-            end 'body'
-
-            // Jump back to loop start
-            CodeBuffer.emitByte(code, 233b)  // JMP rel32
-            var rel = loopStart - (CodeBuffer.position(code) + 4)
-            CodeBuffer.emitDword(code, rel)
-
-            X86Gen.patchJump(exitJump)
-        end 'hasCond'
-    end 'genWhile'
-
-    //=========================================================================
-    // Function code generation
-    //=========================================================================
-
-    export function genFunction(func Function) void
-        // Reset symbol table for new function
-        symbols = SymbolTable.create()
-
-        // First pass: collect local variables to determine stack size
-        X86Gen.collectLocals(func)
-
-        var stackSize = SymbolTable.stackSize(symbols)
-
-        // Function prologue
-        X86Gen.pushReg64(Reg64.rbp)
-        X86Gen.movRegReg64(Reg64.rbp, Reg64.rsp)
-        if stackSize > 0 'allocStack'
-            X86Gen.subRspImm32(stackSize)
-        end 'allocStack'
-
-        // Generate body
-        for stmt in func.body 'body'
-            X86Gen.genStmt(stmt)
-        end 'body'
-
-        // Function epilogue
-        if stackSize > 0 'deallocStack'
-            X86Gen.addRspImm32(stackSize)
-        end 'deallocStack'
-        X86Gen.popReg64(Reg64.rbp)
-        X86Gen.ret()
-    end 'genFunction'
-
-    export function collectLocals(func Function) void
-        for stmt in func.body 'stmts'
-            X86Gen.collectLocalsStmt(stmt)
-        end 'stmts'
-    end 'collectLocals'
-
-    export function collectLocalsStmt(stmt Stmt) void
-        if stmt.kind == StmtKind.varDecl or stmt.kind == StmtKind.letDecl 'varDecl'
-            SymbolTable.addLocal(symbols, stmt.varName, 4)
-        end 'varDecl'
-
-        // Recurse into nested blocks
-        for thenStmt in stmt.thenBlock 'then'
-            X86Gen.collectLocalsStmt(thenStmt)
-        end 'then'
-
-        if let elseBlock = stmt.elseBlock 'hasElse'
-            for elseStmt in elseBlock 'else'
-                X86Gen.collectLocalsStmt(elseStmt)
-            end 'else'
-        end 'hasElse'
-    end 'collectLocalsStmt'
-
-    //=========================================================================
-    // Program code generation
-    //=========================================================================
-
-    export function generate(program Program) void
-        // For basic.maxon, we just need to generate main() and have it return 42
-        for func in program.functions 'funcs'
-            if func.name == "main" 'isMain'
-                X86Gen.genFunction(func)
-            end 'isMain'
-        end 'funcs'
-    end 'generate'
-
-    // Get the generated code
     export function getCode() array of byte
         return code.bytes
     end 'getCode'
