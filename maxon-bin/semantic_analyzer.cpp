@@ -1,4 +1,5 @@
 #include "semantic_analyzer.h"
+#include "call_graph.h"
 #include "compiler_api.h"
 #include "lexer.h"
 #include "types/type_conversion.h"
@@ -37,9 +38,9 @@ static std::string exprToString(ExprAST *expr) {
 
 // Template helper for looking up types (structs, enums) by name with namespace fallback
 // Works with both std::map and std::unordered_map
-template<typename MapType>
+template <typename MapType>
 static auto lookupByName(const MapType &collection, const std::string &name)
-    -> const typename MapType::mapped_type* {
+	-> const typename MapType::mapped_type * {
 	// First try exact match
 	auto it = collection.find(name);
 	if (it != collection.end()) {
@@ -576,7 +577,21 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 		}
 
 		if (isGenericTemplate) {
-			logTrace("Skipping generic template struct methods: " + structDef->name);
+			// Even though we skip full analysis, scan method bodies for function calls
+			// so we can discover stdlib dependencies for auto-importing
+			for (const auto &method : structDef->methods) {
+				std::set<std::string> calls = CallGraphBuilder::extractCallsFromFunction(method.get());
+				for (const auto &callee : calls) {
+					// Only mark as undefined if we don't already know this function
+					// Skip method calls on self (they'll have a dot) and built-in intrinsics
+					if (callee.find('.') == std::string::npos &&
+						functions.find(callee) == functions.end()) {
+						logTrace("  Generic method " + structDef->name + "." + method->name +
+								 " calls undefined function: " + callee);
+						undefinedFunctions.insert(callee);
+					}
+				}
+			}
 			continue;
 		}
 		for (const auto &method : structDef->methods) {
@@ -1407,7 +1422,7 @@ void SemanticAnalyzer::instantiateGenericStructMethods(const std::string &templa
 
 				// Create the specialized function info
 				FunctionInfo newFuncInfo(specializedMethodKey, returnType, params,
-					funcInfo.implementsInterface, funcInfo.line, funcInfo.column);
+										 funcInfo.implementsInterface, funcInfo.line, funcInfo.column);
 				newFuncInfo.typeSubstitutions = typeBindings;
 
 				// Copy synthesized default info if applicable
@@ -1444,7 +1459,7 @@ void SemanticAnalyzer::instantiateGenericStructMethods(const std::string &templa
 				}
 
 				FunctionInfo newFuncInfo(specializedMethodKey, returnType, params,
-					funcInfo.implementsInterface, funcInfo.line, funcInfo.column);
+										 funcInfo.implementsInterface, funcInfo.line, funcInfo.column);
 				newFuncInfo.typeSubstitutions = typeBindings;
 
 				if (funcInfo.isSynthesizedDefault) {
