@@ -22,11 +22,26 @@
 
 namespace fs = std::filesystem;
 
+// Returns the file containing main() function, or empty string if not found
+std::string findMainFile(const std::vector<std::string> &files) {
+	for (const auto &file : files) {
+		std::vector<std::string> functions = extractFunctionNames(file);
+		for (const auto &func : functions) {
+			if (func == "main") {
+				return file;
+			}
+		}
+	}
+	return "";
+}
+
 void printHelp(const char *programName) {
 	std::cerr << "Usage: " << programName << " <command> [options]" << std::endl;
 	std::cerr << "\nCommands:" << std::endl;
 	std::cerr << "  compile <input.maxon> [<input2.maxon> ...] [options]" << std::endl;
 	std::cerr << "                 Compile Maxon source files" << std::endl;
+	std::cerr << "  build [options]" << std::endl;
+	std::cerr << "                 Build project in current directory (finds file with main())" << std::endl;
 	std::cerr << "  self-test [options]" << std::endl;
 	std::cerr << "                 Run compiler self-tests" << std::endl;
 	std::cerr << "  extract-specs [options]" << std::endl;
@@ -117,6 +132,79 @@ int main(int argc, char *argv[]) {
 
 	if (command == "generate-docs") {
 		return DocsGenerator::generateDocumentation();
+	}
+
+	if (command == "build") {
+		CompilationOptions options;
+		for (int i = 2; i < argc; ++i) {
+			std::string arg = argv[i];
+			if (arg == "--emit-ir") {
+				options.emitIR = true;
+			} else if (arg == "--emit-asm") {
+				options.emitAsm = true;
+			} else if (arg == "-c") {
+				options.compileOnly = true;
+			} else if (arg == "-O") {
+				options.optimize = true;
+			} else if (arg == "--debug" || arg == "-g") {
+				options.debugInfo = true;
+			} else if (arg == "--profile") {
+				options.profile = true;
+			} else if (arg == "--track-allocs") {
+				options.trackAllocs = true;
+			} else if (arg == "--stats") {
+				options.showStats = true;
+			} else if (arg == "-o" || arg == "--output") {
+				if (i + 1 >= argc) {
+					std::cerr << "Error: " << arg << " requires an argument" << std::endl;
+					return 1;
+				}
+				options.outputFile = argv[++i];
+			} else if (arg == "-vvv") {
+				options.verboseLevel = 3;
+			} else if (arg == "-vv") {
+				options.verboseLevel = std::max(options.verboseLevel, 2);
+			} else if (arg == "-v" || arg == "--verbose") {
+				options.verboseLevel = std::max(options.verboseLevel, 1);
+			} else {
+				std::cerr << "Error: Unknown option '" << arg << "'" << std::endl;
+				return 1;
+			}
+		}
+
+		// Find all .maxon files in current directory recursively
+		std::vector<std::string> files = findMaxonFiles(".");
+
+		if (files.empty()) {
+			std::cerr << "Error: No .maxon files found in current directory" << std::endl;
+			return 1;
+		}
+
+		// Find file containing main() function
+		std::string mainFile = findMainFile(files);
+		if (mainFile.empty()) {
+			std::cerr << "Error: No main() function found in any .maxon file" << std::endl;
+			return 1;
+		}
+
+		options.inputFiles = files;
+
+		// Create bin/ directory for output
+		std::filesystem::create_directories("bin");
+
+		// Default output name: bin/<main_stem>.exe
+		if (options.outputFile.empty()) {
+			std::filesystem::path mainPath(mainFile);
+			options.outputFile = "bin/" + mainPath.stem().string() + ".exe";
+		}
+
+		try {
+			compileProgram(options);
+		} catch (const std::exception &e) {
+			std::cerr << "Error: " << e.what() << std::endl;
+			return 1;
+		}
+		return 0;
 	}
 
 	if (command == "lsp-server") {
@@ -442,7 +530,7 @@ int main(int argc, char *argv[]) {
 	if (command != "compile" && command != "self-test" && command != "extract-specs" &&
 		command != "regen-fragments" && command != "generate-docs" && command != "test-fragments" &&
 		command != "test" && command != "benchmark" && command != "compile-mir" &&
-		command != "validate-specs" && command != "lsp") {
+		command != "validate-specs" && command != "lsp" && command != "build") {
 		std::string inputFile;
 		bool trackAllocs = false;
 		bool showStats = false;
