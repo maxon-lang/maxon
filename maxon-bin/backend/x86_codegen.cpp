@@ -875,6 +875,28 @@ void X86CodeGen::genAlloca(mir::MIRInstruction *inst) {
 	(void)inst; // Suppress unused parameter warning
 }
 
+void X86CodeGen::emitStructCopy(X86Reg srcReg, X86Reg dstReg, uint64_t structSize, X86Reg tempReg) {
+	uint64_t offset = 0;
+	// Copy 8 bytes at a time
+	while (offset + 8 <= structSize) {
+		encoder.movRM64(tempReg, X86Mem(srcReg, static_cast<int32_t>(offset)));
+		encoder.movMR64(X86Mem(dstReg, static_cast<int32_t>(offset)), tempReg);
+		offset += 8;
+	}
+	// Copy remaining 4 bytes if any
+	if (offset + 4 <= structSize) {
+		encoder.movRM32(tempReg, X86Mem(srcReg, static_cast<int32_t>(offset)));
+		encoder.movMR32(X86Mem(dstReg, static_cast<int32_t>(offset)), tempReg);
+		offset += 4;
+	}
+	// Copy remaining bytes one at a time
+	while (offset < structSize) {
+		encoder.movRM8(tempReg, X86Mem(srcReg, static_cast<int32_t>(offset)));
+		encoder.movMR8(X86Mem(dstReg, static_cast<int32_t>(offset)), tempReg);
+		offset += 1;
+	}
+}
+
 void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 	mir::MIRType *loadType = inst->result->type;
 
@@ -891,26 +913,7 @@ void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 		encoder.lea64(X86Reg::RDI, dstSlot);
 
 		// Copy the struct
-		uint64_t structSize = loadType->sizeInBytes;
-		uint64_t offset = 0;
-		// Copy 8 bytes at a time
-		while (offset + 8 <= structSize) {
-			encoder.movRM64(X86Reg::RAX, X86Mem(srcPtr, static_cast<int32_t>(offset)));
-			encoder.movMR64(X86Mem(X86Reg::RDI, static_cast<int32_t>(offset)), X86Reg::RAX);
-			offset += 8;
-		}
-		// Copy remaining 4 bytes if any
-		if (offset + 4 <= structSize) {
-			encoder.movRM32(X86Reg::EAX, X86Mem(srcPtr, static_cast<int32_t>(offset)));
-			encoder.movMR32(X86Mem(X86Reg::RDI, static_cast<int32_t>(offset)), X86Reg::EAX);
-			offset += 4;
-		}
-		// Copy remaining bytes one at a time
-		while (offset < structSize) {
-			encoder.movRM8(X86Reg::AL, X86Mem(srcPtr, static_cast<int32_t>(offset)));
-			encoder.movMR8(X86Mem(X86Reg::RDI, static_cast<int32_t>(offset)), X86Reg::AL);
-			offset += 1;
-		}
+		emitStructCopy(srcPtr, X86Reg::RDI, loadType->sizeInBytes, X86Reg::RAX);
 		// Result is already in its stack slot, nothing more to do
 		return;
 	}
@@ -1018,27 +1021,7 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 
 		X86Reg dstReg = loadValue(ptr, X86Reg::RCX); // Dest ptr
 
-		size_t structSize = value->type->sizeInBytes;
-		size_t offset = 0;
-
-		// Copy 8 bytes at a time
-		while (offset + 8 <= structSize) {
-			encoder.movRM64(X86Reg::R10, X86Mem(srcReg, static_cast<int32_t>(offset)));
-			encoder.movMR64(X86Mem(dstReg, static_cast<int32_t>(offset)), X86Reg::R10);
-			offset += 8;
-		}
-		// Copy remaining 4 bytes if any
-		if (offset + 4 <= structSize) {
-			encoder.movRM32(X86Reg::R10, X86Mem(srcReg, static_cast<int32_t>(offset)));
-			encoder.movMR32(X86Mem(dstReg, static_cast<int32_t>(offset)), X86Reg::R10);
-			offset += 4;
-		}
-		// Copy remaining bytes one at a time
-		while (offset < structSize) {
-			encoder.movRM8(X86Reg::R10, X86Mem(srcReg, static_cast<int32_t>(offset)));
-			encoder.movMR8(X86Mem(dstReg, static_cast<int32_t>(offset)), X86Reg::R10);
-			offset += 1;
-		}
+		emitStructCopy(srcReg, dstReg, value->type->sizeInBytes, X86Reg::R10);
 	} else if (value->type->kind == mir::MIRTypeKind::Int8 ||
 			   value->type->kind == mir::MIRTypeKind::Int1) {
 		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
@@ -1362,21 +1345,8 @@ void X86CodeGen::genRet(mir::MIRInstruction *inst) {
 			srcReg = loadValue(retVal, X86Reg::RSI);
 		}
 
-		// Copy the struct (use 8-byte moves when possible for efficiency)
-		uint64_t structSize = retVal->type->sizeInBytes;
-		uint64_t offset = 0;
-		// Copy 8 bytes at a time
-		for (; offset + 8 <= structSize; offset += 8) {
-			encoder.movRM64(X86Reg::RAX, X86Mem(srcReg, offset));
-			encoder.movMR64(X86Mem(X86Reg::RDI, offset), X86Reg::RAX);
-		}
-		// Copy remaining 4 bytes if any
-		if (offset + 4 <= structSize) {
-			encoder.movRM32(X86Reg::EAX, X86Mem(srcReg, offset));
-			encoder.movMR32(X86Mem(X86Reg::RDI, offset), X86Reg::EAX);
-			offset += 4;
-		}
-		// Note: Remaining 1-3 bytes would need byte moves, but structs are typically aligned
+		// Copy the struct
+		emitStructCopy(srcReg, X86Reg::RDI, retVal->type->sizeInBytes, X86Reg::RAX);
 
 		// Return the pointer in RAX per ABI
 		encoder.movRR64(X86Reg::RAX, X86Reg::RDI);

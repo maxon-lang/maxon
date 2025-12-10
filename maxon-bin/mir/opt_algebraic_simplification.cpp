@@ -30,14 +30,11 @@ bool AlgebraicSimplificationPass::runOnBasicBlock(MIRBasicBlock &block) {
 	for (auto &inst : block.instructions) {
 		MIRValue *simplified = trySimplify(inst.get());
 		if (simplified != nullptr) {
-			// Replace all uses of the result with the simplified value
-			opt_utils::replaceAllUsesInBlock(block, inst->result, simplified);
+			// Replace all uses of the result with the simplified value across the function
 			if (block.parent != nullptr) {
-				for (auto &otherBlock : block.parent->basicBlocks) {
-					if (otherBlock.get() != &block) {
-						opt_utils::replaceAllUsesInBlock(*otherBlock, inst->result, simplified);
-					}
-				}
+				opt_utils::replaceAllUsesWith(*block.parent, inst->result, simplified);
+			} else {
+				opt_utils::replaceAllUsesInBlock(block, inst->result, simplified);
 			}
 			lastRunStats_++;
 			changed = true;

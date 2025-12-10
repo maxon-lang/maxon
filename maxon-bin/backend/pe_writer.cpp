@@ -16,6 +16,21 @@ static void copySectionName(char (&dest)[8], const char *src) {
 	std::memcpy(dest, src, len);
 }
 
+// Helper to patch a RIP-relative displacement in code
+// instrRva is the RVA where the 4-byte displacement starts
+// targetRva is the RVA of the target address
+// The displacement is relative to the instruction end (instrRva + 4)
+static void patchRipRelativeDisplacement(std::vector<uint8_t> &data, uint32_t offset,
+                                          uint32_t instrRva, uint32_t targetRva) {
+	int32_t disp = static_cast<int32_t>(targetRva - (instrRva + 4));
+	if (offset + 3 < data.size()) {
+		data[offset + 0] = static_cast<uint8_t>(disp & 0xFF);
+		data[offset + 1] = static_cast<uint8_t>((disp >> 8) & 0xFF);
+		data[offset + 2] = static_cast<uint8_t>((disp >> 16) & 0xFF);
+		data[offset + 3] = static_cast<uint8_t>((disp >> 24) & 0xFF);
+	}
+}
+
 PeWriter::PeWriter()
 	: subsystem(IMAGE_SUBSYSTEM_WINDOWS_CUI),
 	  imageBase(0x140000000), // Default for 64-bit Windows executables
@@ -438,23 +453,8 @@ bool PeWriter::write(const std::string &filename) {
 						std::string key = reloc.dllName + "!" + reloc.funcName;
 						auto iatIt = importRvaMap.find(key);
 						if (iatIt != importRvaMap.end()) {
-							// Calculate RIP-relative displacement
-							// The call instruction is at (section RVA + code offset)
-							// The displacement is relative to the end of the instruction
-							// CALL [RIP+disp32] is 6 bytes: FF 15 xx xx xx xx
-							// disp32 is at offset+0, end of instruction is offset+4
-							uint32_t callRva = sec.virtualAddress + reloc.codeOffset;
-							uint32_t callEnd = callRva + 4; // After the disp32
-							uint32_t iatRva = iatIt->second;
-							int32_t disp = static_cast<int32_t>(iatRva - callEnd);
-
-							// Patch the displacement in the code
-							if (reloc.codeOffset + 3 < sec.data.size()) {
-								sec.data[reloc.codeOffset + 0] = static_cast<uint8_t>(disp & 0xFF);
-								sec.data[reloc.codeOffset + 1] = static_cast<uint8_t>((disp >> 8) & 0xFF);
-								sec.data[reloc.codeOffset + 2] = static_cast<uint8_t>((disp >> 16) & 0xFF);
-								sec.data[reloc.codeOffset + 3] = static_cast<uint8_t>((disp >> 24) & 0xFF);
-							}
+							uint32_t instrRva = sec.virtualAddress + reloc.codeOffset;
+							patchRipRelativeDisplacement(sec.data, reloc.codeOffset, instrRva, iatIt->second);
 						}
 					}
 					break;
@@ -477,21 +477,9 @@ bool PeWriter::write(const std::string &filename) {
 
 		if (textSec && dataSec) {
 			for (const auto &reloc : dataRelocs) {
-				// Calculate RIP-relative displacement from code to data
-				// The instruction references [RIP+disp32]
-				// disp32 is relative to the end of the instruction (after the 4-byte disp)
 				uint32_t instrRva = textSec->virtualAddress + reloc.codeOffset;
-				uint32_t instrEnd = instrRva + 4; // After the disp32
 				uint32_t dataRva = dataSec->virtualAddress + reloc.dataOffset;
-				int32_t disp = static_cast<int32_t>(dataRva - instrEnd);
-
-				// Patch the displacement in the code
-				if (reloc.codeOffset + 3 < textSec->data.size()) {
-					textSec->data[reloc.codeOffset + 0] = static_cast<uint8_t>(disp & 0xFF);
-					textSec->data[reloc.codeOffset + 1] = static_cast<uint8_t>((disp >> 8) & 0xFF);
-					textSec->data[reloc.codeOffset + 2] = static_cast<uint8_t>((disp >> 16) & 0xFF);
-					textSec->data[reloc.codeOffset + 3] = static_cast<uint8_t>((disp >> 24) & 0xFF);
-				}
+				patchRipRelativeDisplacement(textSec->data, reloc.codeOffset, instrRva, dataRva);
 			}
 		}
 	}

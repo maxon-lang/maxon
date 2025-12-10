@@ -35,6 +35,36 @@ static std::string exprToString(ExprAST *expr) {
 	return "<expr>";
 }
 
+// Template helper for looking up types (structs, enums) by name with namespace fallback
+// Works with both std::map and std::unordered_map
+template<typename MapType>
+static auto lookupByName(const MapType &collection, const std::string &name)
+    -> const typename MapType::mapped_type* {
+	// First try exact match
+	auto it = collection.find(name);
+	if (it != collection.end()) {
+		return &it->second;
+	}
+
+	// If not found and name contains a dot, it's already qualified
+	if (name.find('.') != std::string::npos) {
+		return nullptr;
+	}
+
+	// For unqualified names, also try qualified lookups with all known namespaces
+	for (const auto &pair : collection) {
+		const std::string &qualifiedName = pair.first;
+		// Check if this is a qualified name ending with the requested name
+		if (qualifiedName.size() > name.size() + 1 &&
+			qualifiedName.substr(qualifiedName.size() - name.size()) == name &&
+			qualifiedName[qualifiedName.size() - name.size() - 1] == '.') {
+			return &pair.second;
+		}
+	}
+
+	return nullptr;
+}
+
 SemanticAnalyzer::SemanticAnalyzer() : loopDepth(0) {}
 
 // Logging helper for trace-level messages (level 3)
@@ -52,57 +82,11 @@ void SemanticAnalyzer::logDetail(const std::string &msg) {
 }
 
 const StructInfo *SemanticAnalyzer::lookupStruct(const std::string &name) const {
-	// First try exact match
-	auto it = structs.find(name);
-	if (it != structs.end()) {
-		return &it->second;
-	}
-
-	// If not found and name contains a dot, it's already qualified
-	if (name.find('.') != std::string::npos) {
-		return nullptr;
-	}
-
-	// For unqualified names, also try qualified lookups with all known namespaces
-	// This allows unqualified access to exported structs
-	for (const auto &pair : structs) {
-		const std::string &structName = pair.first;
-		// Check if this is a qualified name ending with the requested name
-		if (structName.size() > name.size() + 1 &&
-			structName.substr(structName.size() - name.size()) == name &&
-			structName[structName.size() - name.size() - 1] == '.') {
-			return &pair.second;
-		}
-	}
-
-	return nullptr;
+	return lookupByName(structs, name);
 }
 
 const EnumInfo *SemanticAnalyzer::lookupEnum(const std::string &name) const {
-	// First try exact match
-	auto it = enums.find(name);
-	if (it != enums.end()) {
-		return &it->second;
-	}
-
-	// If not found and name contains a dot, it's already qualified
-	if (name.find('.') != std::string::npos) {
-		return nullptr;
-	}
-
-	// For unqualified names, also try qualified lookups with all known namespaces
-	// This allows unqualified access to exported enums
-	for (const auto &pair : enums) {
-		const std::string &enumName = pair.first;
-		// Check if this is a qualified name ending with the requested name
-		if (enumName.size() > name.size() + 1 &&
-			enumName.substr(enumName.size() - name.size()) == name &&
-			enumName[enumName.size() - name.size() - 1] == '.') {
-			return &pair.second;
-		}
-	}
-
-	return nullptr;
+	return lookupByName(enums, name);
 }
 
 void SemanticAnalyzer::registerExternalFunction(const std::string &name, const std::string &returnType,

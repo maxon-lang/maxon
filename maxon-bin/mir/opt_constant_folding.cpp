@@ -31,15 +31,11 @@ bool ConstantFoldingPass::runOnBasicBlock(MIRBasicBlock &block) {
 	for (auto &inst : block.instructions) {
 		MIRValue *foldedValue = tryFold(inst.get());
 		if (foldedValue != nullptr) {
-			// Replace all uses of the result with the folded constant
-			opt_utils::replaceAllUsesInBlock(block, inst->result, foldedValue);
-			// Also replace in the parent function's other blocks
+			// Replace all uses of the result with the folded constant across the function
 			if (block.parent != nullptr) {
-				for (auto &otherBlock : block.parent->basicBlocks) {
-					if (otherBlock.get() != &block) {
-						opt_utils::replaceAllUsesInBlock(*otherBlock, inst->result, foldedValue);
-					}
-				}
+				opt_utils::replaceAllUsesWith(*block.parent, inst->result, foldedValue);
+			} else {
+				opt_utils::replaceAllUsesInBlock(block, inst->result, foldedValue);
 			}
 			changed = true;
 			lastRunStats_++; // Track constants folded

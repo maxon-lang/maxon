@@ -218,6 +218,10 @@ class X86CodeGen {
 	void genStore(mir::MIRInstruction *inst);
 	void genGEP(mir::MIRInstruction *inst);
 
+	// Struct memory copy helper - copies structSize bytes from srcReg to dstReg
+	// using 8-byte, 4-byte, and 1-byte moves for efficiency
+	void emitStructCopy(X86Reg srcReg, X86Reg dstReg, uint64_t structSize, X86Reg tempReg);
+
 	// Conversions
 	void genTrunc(mir::MIRInstruction *inst);
 	void genZExt(mir::MIRInstruction *inst);
