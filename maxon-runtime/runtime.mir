@@ -821,6 +821,124 @@ do_copy:
 }
 
 ;==============================================================================
+; MANAGED ARRAY FUNCTIONS
+; These functions handle reference-counted heap-allocated arrays.
+; Layout matches strings: [refcount:i32][dataSize:i32][...data...]
+;==============================================================================
+
+;==============================================================================
+; _managed_array_alloc - allocate managed array buffer with header
+; Allocates heap memory: 8-byte header + byteSize
+; Initializes refcount to 1, stores byteSize in header
+; Returns pointer to data area (after 8-byte header)
+; ptr _managed_array_alloc(i64 byteSize, ptr tag)
+;==============================================================================
+define ptr @_managed_array_alloc(i64 %byteSize, ptr %tag) {
+entry:
+    ; Allocate heap memory: 8-byte header + byteSize
+    ; Header layout: [refcount:i32][data_size:i32] at offsets 0 and 4
+    %total_size = add i64 %byteSize, 8
+    %raw = call ptr @malloc(i64 %total_size)
+
+    ; Initialize refcount to 1 at offset 0
+    store i32 1, ptr %raw
+
+    ; Store data_size at offset 4 (used to compute total_size on free)
+    %size_ptr = getelementptr i8, ptr %raw, i64 4
+    %size_i32 = trunc i64 %byteSize to i32
+    store i32 %size_i32, ptr %size_ptr
+
+    ; Get pointer to data area (after 8-byte header)
+    %data = getelementptr i8, ptr %raw, i64 8
+
+    ; Track allocation if enabled
+    %tracking_enabled = load i32, ptr @__track_enabled
+    %do_track = icmp ne i32 %tracking_enabled, 0
+    br i1 %do_track, label %track, label %done
+
+track:
+    call void @__track_alloc_with_ptr(ptr %data, i64 %total_size, ptr %tag)
+    br label %done
+
+done:
+    ret ptr %data
+}
+
+;==============================================================================
+; _managed_array_release - decrement refcount, free if zero
+; Call this when a heap array goes out of scope or is overwritten
+; void _managed_array_release(ptr data, ptr tag)
+;==============================================================================
+define void @_managed_array_release(ptr %data, ptr %tag) {
+entry:
+    ; Check for null data (stack arrays have null or invalid pointer)
+    %is_null = icmp eq ptr %data, null
+    br i1 %is_null, label %done, label %get_header
+
+get_header:
+    ; Get header pointer (data - 8)
+    %header = getelementptr i8, ptr %data, i64 -8
+    %new_count = call i32 @refcount_dec(ptr %header)
+    %is_zero = icmp eq i32 %new_count, 0
+    br i1 %is_zero, label %do_free, label %done
+
+do_free:
+    ; Track release if enabled (before freeing)
+    %tracking_enabled = load i32, ptr @__track_enabled
+    %do_track = icmp ne i32 %tracking_enabled, 0
+    br i1 %do_track, label %track_release, label %free_mem
+
+track_release:
+    ; Get data_size from header+4 to calculate total bytes
+    %size_ptr = getelementptr i8, ptr %header, i64 4
+    %size_i32 = load i32, ptr %size_ptr
+    %size_i64 = zext i32 %size_i32 to i64
+    %total = add i64 %size_i64, 8
+    call void @__track_free_with_ptr(ptr %data, i64 %total, ptr %tag)
+    br label %free_mem
+
+free_mem:
+    call void @free(ptr %header)
+    br label %done
+
+done:
+    ret void
+}
+
+;==============================================================================
+; _managed_array_retain - increment refcount for heap array
+; Call this when copying a heap-allocated array reference
+; void _managed_array_retain(ptr data)
+;==============================================================================
+define void @_managed_array_retain(ptr %data) {
+entry:
+    ; Check for null data
+    %is_null = icmp eq ptr %data, null
+    br i1 %is_null, label %done, label %do_retain
+
+do_retain:
+    ; Get header pointer (data - 8)
+    %header = getelementptr i8, ptr %data, i64 -8
+    %new_count = call i32 @refcount_inc(ptr %header)
+    br label %done
+
+done:
+    ret void
+}
+
+;==============================================================================
+; _managed_array_get_refcount - get current refcount for heap array
+; Returns refcount (useful for COW decisions)
+; i32 _managed_array_get_refcount(ptr data)
+;==============================================================================
+define i32 @_managed_array_get_refcount(ptr %data) {
+entry:
+    %header = getelementptr i8, ptr %data, i64 -8
+    %count = load i32, ptr %header
+    ret i32 %count
+}
+
+;==============================================================================
 ; round - round to nearest integer (half away from zero)
 ; double round(double x)
 ;==============================================================================

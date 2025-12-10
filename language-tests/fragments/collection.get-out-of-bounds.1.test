@@ -15,6 +15,8 @@ end 'main'
 %array<int> = type { %__ManagedArrayData_int, i32 }
 %_ManagedArray_int = type { ptr, i32 }
 
+@.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
+
 define i32 @main() {
 entry0:
   %0 = alloca [3 x i32]
@@ -53,11 +55,11 @@ iflet.then1:
   %22 = getelementptr %__ManagedArrayData_int, ptr %19, i32 0, i32 2
   %23 = load i32, ptr %22
   %24 = icmp sgt i32 %23, 0
-  br i1 %24, label %arr.free4, label %arr.skip5
+  br i1 %24, label %arr.release4, label %arr.skip5
 iflet.else3:
   ret i32 -1
-arr.free4:
-  call void @free(ptr %21)
+arr.release4:
+  call void @_managed_array_release(ptr %21, ptr @.__tag.free.arr)
   br label %arr.skip5
 arr.skip5:
   ret i32 %18
@@ -112,7 +114,7 @@ ifcont4:
   ret Optional<i32> %29
 }
 
-declare void @free(ptr %arg0)
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -130,6 +132,8 @@ entry0:
 %__ManagedArrayData_int = type { ptr, i32, i32 }
 %array<int> = type { %__ManagedArrayData_int, i32 }
 %_ManagedArray_int = type { ptr, i32 }
+
+@.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
 
 define i32 @main() {
 entry0:
@@ -169,14 +173,14 @@ iflet.then1:
   %22 = getelementptr %__ManagedArrayData_int, ptr %19, i32 0, i32 2
   %23 = load i32, ptr %22
   %24 = icmp sgt i32 %23, 0
-  br i1 %24, label %arr.free4, label %arr.skip5
+  br i1 %24, label %arr.release4, label %arr.skip5
 iflet.after2:
   ret i32 0
 iflet.else3:
   %25 = neg i32 1
   ret i32 %25
-arr.free4:
-  call void @free(ptr %21)
+arr.release4:
+  call void @_managed_array_release(ptr %21, ptr @.__tag.free.arr)
   br label %arr.skip5
 arr.skip5:
   ret i32 %18
@@ -232,7 +236,7 @@ ifcont4:
   ret Optional<i32> %29
 }
 
-declare void @free(ptr %arg0)
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

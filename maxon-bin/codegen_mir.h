@@ -27,10 +27,12 @@ class CompilerStats;
 // Forward declarations for friend classes
 class IntrinsicCodegenRegistry;
 class ManagedStringBuilder;
+class ManagedArrayBuilder;
 
 class MIRCodeGenerator {
 	friend class IntrinsicCodegenRegistry;
 	friend class ManagedStringBuilder;
+	friend class ManagedArrayBuilder;
 
   private:
 	std::unique_ptr<mir::MIRModule> module;

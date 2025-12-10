@@ -23,6 +23,8 @@ end 'main'
 %__ManagedArrayData_Item = type { ptr, i32, i32 }
 %array<Item> = type { %__ManagedArrayData_Item, i32 }
 
+@.__tag.free.items = constant [14 x i8] c"array cleanup\00"
+
 define i32 @Item.getId(ptr %self) {
 entry0:
   %0 = alloca ptr
@@ -79,15 +81,15 @@ entry0:
   %34 = getelementptr %__ManagedArrayData_Item, ptr %31, i32 0, i32 2
   %35 = load i32, ptr %34
   %36 = icmp sgt i32 %35, 0
-  br i1 %36, label %items.free1, label %items.skip2
-items.free1:
-  call void @free(ptr %33)
+  br i1 %36, label %items.release1, label %items.skip2
+items.release1:
+  call void @_managed_array_release(ptr %33, ptr @.__tag.free.items)
   br label %items.skip2
 items.skip2:
   ret i32 %30
 }
 
-declare void @free(ptr %arg0)
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
@@ -107,6 +109,8 @@ entry0:
 %Item = type { i32 }
 %__ManagedArrayData_Item = type { ptr, i32, i32 }
 %array<Item> = type { %__ManagedArrayData_Item, i32 }
+
+@.__tag.free.items = constant [14 x i8] c"array cleanup\00"
 
 define i32 @Item.getId(ptr %self) {
 entry0:
@@ -165,15 +169,15 @@ entry0:
   %34 = getelementptr %__ManagedArrayData_Item, ptr %31, i32 0, i32 2
   %35 = load i32, ptr %34
   %36 = icmp sgt i32 %35, 0
-  br i1 %36, label %items.free1, label %items.skip2
-items.free1:
-  call void @free(ptr %33)
+  br i1 %36, label %items.release1, label %items.skip2
+items.release1:
+  call void @_managed_array_release(ptr %33, ptr @.__tag.free.items)
   br label %items.skip2
 items.skip2:
   ret i32 %30
 }
 
-declare void @free(ptr %arg0)
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 

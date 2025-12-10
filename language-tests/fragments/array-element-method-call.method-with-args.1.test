@@ -21,6 +21,8 @@ end 'main'
 %__ManagedArrayData_Adder = type { ptr, i32, i32 }
 %array<Adder> = type { %__ManagedArrayData_Adder, i32 }
 
+@.__tag.free.adders = constant [14 x i8] c"array cleanup\00"
+
 define i32 @Adder.add(ptr %self, i32 %x) {
 entry0:
   %0 = alloca ptr
@@ -71,15 +73,15 @@ entry0:
   %26 = getelementptr %__ManagedArrayData_Adder, ptr %23, i32 0, i32 2
   %27 = load i32, ptr %26
   %28 = icmp sgt i32 %27, 0
-  br i1 %28, label %adders.free1, label %adders.skip2
-adders.free1:
-  call void @free(ptr %25)
+  br i1 %28, label %adders.release1, label %adders.skip2
+adders.release1:
+  call void @_managed_array_release(ptr %25, ptr @.__tag.free.adders)
   br label %adders.skip2
 adders.skip2:
   ret i32 %22
 }
 
-declare void @free(ptr %arg0)
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
@@ -99,6 +101,8 @@ entry0:
 %Adder = type { i32 }
 %__ManagedArrayData_Adder = type { ptr, i32, i32 }
 %array<Adder> = type { %__ManagedArrayData_Adder, i32 }
+
+@.__tag.free.adders = constant [14 x i8] c"array cleanup\00"
 
 define i32 @Adder.add(ptr %self, i32 %x) {
 entry0:
@@ -151,15 +155,15 @@ entry0:
   %26 = getelementptr %__ManagedArrayData_Adder, ptr %23, i32 0, i32 2
   %27 = load i32, ptr %26
   %28 = icmp sgt i32 %27, 0
-  br i1 %28, label %adders.free1, label %adders.skip2
-adders.free1:
-  call void @free(ptr %25)
+  br i1 %28, label %adders.release1, label %adders.skip2
+adders.release1:
+  call void @_managed_array_release(ptr %25, ptr @.__tag.free.adders)
   br label %adders.skip2
 adders.skip2:
   ret i32 %22
 }
 
-declare void @free(ptr %arg0)
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 

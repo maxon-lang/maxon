@@ -463,9 +463,19 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		return;
 	}
 
-	// Free heap-allocated arrays in this scope
+	// Free heap-allocated arrays in this scope using _managed_array_release
+	// _managed_array_release handles the refcount header and frees only when refcount reaches 0
 	for (const auto &info : scopeStack.back().heapAllocatedArrays) {
 		mir::MIRValue *ptr = nullptr;
+
+		// Create tag for tracking
+		mir::MIRValue *tag = module->createGlobalString(".__tag.free." + info.name, "array cleanup");
+
+		// Get release function
+		mir::MIRFunction *arrayReleaseFunc = getOrDeclareFunction(
+			"_managed_array_release",
+			mir::MIRType::getVoid(),
+			{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
 
 		if (info.isDynamic) {
 			// Dynamic array - read buffer pointer from struct at cleanup time
@@ -478,21 +488,20 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, info.name + ".buffer.ptr");
 			ptr = builder->createLoad(mir::MIRType::getPtr(), bufferField, info.name + ".buffer");
 
-			// Check capacity - only free if capacity > 0 (heap-allocated)
+			// Check capacity - only release if capacity > 0 (heap-allocated)
 			// capacity == 0 means the buffer is still stack-allocated
 			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, info.name + ".cap.ptr");
 			mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt32(), capField, info.name + ".cap");
 
 			mir::MIRFunction *currentFunc = builder->getFunction();
-			mir::MIRBasicBlock *freeBlock = currentFunc->createBasicBlock(info.name + ".free");
+			mir::MIRBasicBlock *releaseBlock = currentFunc->createBasicBlock(info.name + ".release");
 			mir::MIRBasicBlock *skipBlock = currentFunc->createBasicBlock(info.name + ".skip");
 
-			mir::MIRValue *needsFree = builder->createICmpSGT(capacity, builder->getInt32(0), info.name + ".needs.free");
-			builder->createCondBr(needsFree, freeBlock, skipBlock);
+			mir::MIRValue *needsRelease = builder->createICmpSGT(capacity, builder->getInt32(0), info.name + ".needs.release");
+			builder->createCondBr(needsRelease, releaseBlock, skipBlock);
 
-			builder->setInsertPoint(freeBlock);
-			mir::MIRFunction *freeFunc = getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr()});
-			builder->createCall(freeFunc, {ptr});
+			builder->setInsertPoint(releaseBlock);
+			builder->createCall(arrayReleaseFunc, {ptr, tag});
 			builder->createBr(skipBlock);
 
 			builder->setInsertPoint(skipBlock);
@@ -500,12 +509,8 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 			// Static allocation - load from tracking alloca
 			ptr = builder->createLoad(mir::MIRType::getPtr(), info.alloca, info.name + ".ptr");
 
-			// Call free unconditionally (these are always heap-allocated)
-			mir::MIRFunction *freeFunc = getOrDeclareFunction(
-				"free",
-				mir::MIRType::getVoid(),
-				{mir::MIRType::getPtr()});
-			builder->createCall(freeFunc, {ptr});
+			// Call _managed_array_release unconditionally (these are always heap-allocated)
+			builder->createCall(arrayReleaseFunc, {ptr, tag});
 		}
 	}
 

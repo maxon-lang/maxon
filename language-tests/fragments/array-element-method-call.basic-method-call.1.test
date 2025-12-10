@@ -21,6 +21,8 @@ end 'main'
 %__ManagedArrayData_Counter = type { ptr, i32, i32 }
 %array<Counter> = type { %__ManagedArrayData_Counter, i32 }
 
+@.__tag.free.items = constant [14 x i8] c"array cleanup\00"
+
 define i32 @Counter.get(ptr %self) {
 entry0:
   %0 = alloca ptr
@@ -67,15 +69,15 @@ entry0:
   %26 = getelementptr %__ManagedArrayData_Counter, ptr %23, i32 0, i32 2
   %27 = load i32, ptr %26
   %28 = icmp sgt i32 %27, 0
-  br i1 %28, label %items.free1, label %items.skip2
-items.free1:
-  call void @free(ptr %25)
+  br i1 %28, label %items.release1, label %items.skip2
+items.release1:
+  call void @_managed_array_release(ptr %25, ptr @.__tag.free.items)
   br label %items.skip2
 items.skip2:
   ret i32 %22
 }
 
-declare void @free(ptr %arg0)
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
@@ -95,6 +97,8 @@ entry0:
 %Counter = type { i32 }
 %__ManagedArrayData_Counter = type { ptr, i32, i32 }
 %array<Counter> = type { %__ManagedArrayData_Counter, i32 }
+
+@.__tag.free.items = constant [14 x i8] c"array cleanup\00"
 
 define i32 @Counter.get(ptr %self) {
 entry0:
@@ -143,15 +147,15 @@ entry0:
   %26 = getelementptr %__ManagedArrayData_Counter, ptr %23, i32 0, i32 2
   %27 = load i32, ptr %26
   %28 = icmp sgt i32 %27, 0
-  br i1 %28, label %items.free1, label %items.skip2
-items.free1:
-  call void @free(ptr %25)
+  br i1 %28, label %items.release1, label %items.skip2
+items.release1:
+  call void @_managed_array_release(ptr %25, ptr @.__tag.free.items)
   br label %items.skip2
 items.skip2:
   ret i32 %22
 }
 
-declare void @free(ptr %arg0)
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 

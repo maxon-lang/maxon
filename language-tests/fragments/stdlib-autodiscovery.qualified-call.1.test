@@ -10,6 +10,8 @@ end 'main'
 %__ManagedArrayData_byte = type { ptr, i32, i32 }
 %array<byte> = type { %__ManagedArrayData_byte, i32 }
 
+@.__tag.free.buffer = constant [14 x i8] c"array cleanup\00"
+
 define i32 @main() {
 entry0:
   %0 = alloca [12 x i8]
@@ -31,13 +33,15 @@ entry0:
   %12 = getelementptr %__ManagedArrayData_byte, ptr %9, i32 0, i32 2
   %13 = load i32, ptr %12
   %14 = icmp sgt i32 %13, 0
-  br i1 %14, label %buffer.free1, label %buffer.skip2
-buffer.free1:
-  call void @free(ptr %11)
+  br i1 %14, label %buffer.release1, label %buffer.skip2
+buffer.release1:
+  call void @_managed_array_release(ptr %11, ptr @.__tag.free.buffer)
   br label %buffer.skip2
 buffer.skip2:
   ret i32 %8
 }
+
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 define i32 @fmt.formatIntArray(i32 %value, ptr %buffer) {
 entry0:
@@ -174,8 +178,6 @@ afterloop12:
   ret i32 %89
 }
 
-declare void @free(ptr %arg0)
-
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
 declare void @exit(i32 %arg0)
@@ -193,6 +195,8 @@ entry0:
 
 %__ManagedArrayData_byte = type { ptr, i32, i32 }
 %array<byte> = type { %__ManagedArrayData_byte, i32 }
+
+@.__tag.free.buffer = constant [14 x i8] c"array cleanup\00"
 
 define i32 @main() {
 entry0:
@@ -215,13 +219,15 @@ entry0:
   %12 = getelementptr %__ManagedArrayData_byte, ptr %9, i32 0, i32 2
   %13 = load i32, ptr %12
   %14 = icmp sgt i32 %13, 0
-  br i1 %14, label %buffer.free1, label %buffer.skip2
-buffer.free1:
-  call void @free(ptr %11)
+  br i1 %14, label %buffer.release1, label %buffer.skip2
+buffer.release1:
+  call void @_managed_array_release(ptr %11, ptr @.__tag.free.buffer)
   br label %buffer.skip2
 buffer.skip2:
   ret i32 %8
 }
+
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 define i32 @fmt.formatIntArray(i32 %value, ptr %buffer) {
 entry0:
@@ -365,8 +371,6 @@ afterloop12:
   %89 = load i32, ptr %66
   ret i32 %89
 }
-
-declare void @free(ptr %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 

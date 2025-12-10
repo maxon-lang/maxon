@@ -14,6 +14,8 @@ end 'main'
 %__ManagedArrayData_float = type { ptr, i32, i32 }
 %array<float> = type { %__ManagedArrayData_float, i32 }
 
+@.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
+
 define i32 @main() {
 entry0:
   %0 = alloca [3 x f64]
@@ -70,15 +72,15 @@ entry0:
   %44 = getelementptr %__ManagedArrayData_float, ptr %41, i32 0, i32 2
   %45 = load i32, ptr %44
   %46 = icmp sgt i32 %45, 0
-  br i1 %46, label %arr.free1, label %arr.skip2
-arr.free1:
-  call void @free(ptr %43)
+  br i1 %46, label %arr.release1, label %arr.skip2
+arr.release1:
+  call void @_managed_array_release(ptr %43, ptr @.__tag.free.arr)
   br label %arr.skip2
 arr.skip2:
   ret i32 %40
 }
 
-declare void @free(ptr %arg0)
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
@@ -99,6 +101,8 @@ entry0:
 
 %__ManagedArrayData_float = type { ptr, i32, i32 }
 %array<float> = type { %__ManagedArrayData_float, i32 }
+
+@.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
 
 define i32 @main() {
 entry0:
@@ -157,15 +161,15 @@ entry0:
   %44 = getelementptr %__ManagedArrayData_float, ptr %41, i32 0, i32 2
   %45 = load i32, ptr %44
   %46 = icmp sgt i32 %45, 0
-  br i1 %46, label %arr.free1, label %arr.skip2
-arr.free1:
-  call void @free(ptr %43)
+  br i1 %46, label %arr.release1, label %arr.skip2
+arr.release1:
+  call void @_managed_array_release(ptr %43, ptr @.__tag.free.arr)
   br label %arr.skip2
 arr.skip2:
   ret i32 %40
 }
 
-declare void @free(ptr %arg0)
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 

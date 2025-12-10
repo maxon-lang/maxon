@@ -20,6 +20,7 @@ end 'main'
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.str.sso.0 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
+@.__tag.free.buffer = constant [14 x i8] c"array cleanup\00"
 
 define %cstring @string.cstr(ptr %self) {
 entry0:
@@ -64,9 +65,9 @@ cstring.continue3:
   ret %cstring %23
 }
 
-declare ptr @malloc(i64 %arg0)
-
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 define i32 @main() {
 entry0:
@@ -173,9 +174,9 @@ entry0:
   %19 = getelementptr %__ManagedArrayData_byte, ptr %16, i32 0, i32 2
   %20 = load i32, ptr %19
   %21 = icmp sgt i32 %20, 0
-  br i1 %21, label %buffer.free1, label %buffer.skip2
-buffer.free1:
-  call void @free(ptr %18)
+  br i1 %21, label %buffer.release1, label %buffer.skip2
+buffer.release1:
+  call void @_managed_array_release(ptr %18, ptr @.__tag.free.buffer)
   br label %buffer.skip2
 buffer.skip2:
   ret i32 %15
@@ -357,7 +358,7 @@ declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare void @free(ptr %arg0)
+declare ptr @malloc(i64 %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
@@ -387,6 +388,7 @@ entry0:
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.str.sso.0 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
+@.__tag.free.buffer = constant [14 x i8] c"array cleanup\00"
 
 define %cstring @string.cstr(ptr %self) {
 entry0:
@@ -432,9 +434,9 @@ cstring.continue3:
   ret %cstring %23
 }
 
-declare ptr @malloc(i64 %arg0)
-
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 define i32 @main() {
 entry0:
@@ -548,9 +550,9 @@ entry0:
   %19 = getelementptr %__ManagedArrayData_byte, ptr %16, i32 0, i32 2
   %20 = load i32, ptr %19
   %21 = icmp sgt i32 %20, 0
-  br i1 %21, label %buffer.free1, label %buffer.skip2
-buffer.free1:
-  call void @free(ptr %18)
+  br i1 %21, label %buffer.release1, label %buffer.skip2
+buffer.release1:
+  call void @_managed_array_release(ptr %18, ptr @.__tag.free.buffer)
   br label %buffer.skip2
 buffer.skip2:
   ret i32 %15
@@ -742,7 +744,7 @@ declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare void @free(ptr %arg0)
+declare ptr @malloc(i64 %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 

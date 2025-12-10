@@ -84,6 +84,7 @@ set(SOURCES
     codegen_mir/codegen_mir_managed_array.cpp
     codegen_mir/codegen_mir_intrinsics.cpp
     codegen_mir/managed_string_builder.cpp
+    codegen_mir/managed_array_builder.cpp
     # MIR infrastructure
     mir/mir.cpp
     mir/mir_builder.cpp

@@ -16,6 +16,7 @@
 
 #include "../codegen_mir.h"
 #include "../types/type_conversion.h"
+#include "managed_array_builder.h"
 #include <iostream>
 
 // =============================================================================
@@ -137,16 +138,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_len(CallExprAST *callEx
 		return nullptr;
 	}
 
-	// Get the __ManagedArrayData struct type
-	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);
-
-	// Get pointer to the struct (for local vars, info.dataPtr is the alloca)
-	mir::MIRValue *structPtr = info.dataPtr;
-
-	// GEP to _len field (index 1)
-	mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, structPtr, 1, "arr._len.ptr");
-	mir::MIRValue *result = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "arr.len");
-	return result;
+	ManagedArrayBuilder mab(*this, info.elementType);
+	return mab.getLength(info.dataPtr, "arr.len");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_capacity(CallExprAST *callExpr) {
@@ -154,15 +147,12 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_capacity(CallExprAST *c
 	ExprAST *arrayArg = callExpr->args[0].get();
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
-	// Get the __ManagedArrayData struct type
-	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);
+	if (!info.dataPtr) {
+		return nullptr;
+	}
 
-	// Get pointer to the struct
-	mir::MIRValue *structPtr = info.dataPtr;
-
-	// GEP to _capacity field (index 2)
-	mir::MIRValue *capPtr = builder->createStructGEP(managedArrayType, structPtr, 2, "arr._cap.ptr");
-	return builder->createLoad(mir::MIRType::getInt32(), capPtr, "arr.cap");
+	ManagedArrayBuilder mab(*this, info.elementType);
+	return mab.getCapacity(info.dataPtr, "arr.cap");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_length(CallExprAST *callExpr) {
@@ -171,15 +161,12 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_length(CallExprAST 
 	mir::MIRValue *newLen = generateExpr(callExpr->args[1].get());
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
-	// Get the __ManagedArrayData struct type
-	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);
+	if (!info.dataPtr) {
+		return nullptr;
+	}
 
-	// Get pointer to the struct
-	mir::MIRValue *structPtr = info.dataPtr;
-
-	// GEP to _len field (index 1) and store
-	mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, structPtr, 1, "arr._len.ptr");
-	builder->createStore(newLen, lenPtr);
+	ManagedArrayBuilder mab(*this, info.elementType);
+	mab.setLength(info.dataPtr, newLen);
 	return builder->getInt32(0);
 }
 
@@ -190,37 +177,28 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_capacity(CallExprAS
 	mir::MIRValue *newCap = generateExpr(callExpr->args[1].get());
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
-	// Get the __ManagedArrayData struct type
-	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);
+	if (!info.dataPtr) {
+		return nullptr;
+	}
 
-	// Get pointer to the struct
-	mir::MIRValue *structPtr = info.dataPtr;
-
-	// GEP to _capacity field (index 2) and store
-	mir::MIRValue *capPtr = builder->createStructGEP(managedArrayType, structPtr, 2, "arr._cap.ptr");
-	builder->createStore(newCap, capPtr);
+	ManagedArrayBuilder mab(*this, info.elementType);
+	mab.setCapacity(info.dataPtr, newCap);
 	return builder->getInt32(0);
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_grow(CallExprAST *callExpr) {
 	// __managed_array_grow(arr, minCapacity) - grow array if needed
+	// Uses tracked allocation via _managed_array_alloc/_managed_array_release
 	ExprAST *arrayArg = callExpr->args[0].get();
 	mir::MIRValue *minCapacity = generateExpr(callExpr->args[1].get());
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
-	// Get element type and size
-	mir::MIRType *elemType = getTypeFromString(info.elementType);
-	int elemSize = static_cast<int>(elemType->sizeInBytes);
-
-	// Get the __ManagedArrayData struct type
-	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);
-
-	// Get pointer to the struct
+	ManagedArrayBuilder mab(*this, info.elementType);
+	int elemSize = mab.getElementSize();
 	mir::MIRValue *structPtr = info.dataPtr;
 
 	// Load current capacity from field 2
-	mir::MIRValue *capPtr = builder->createStructGEP(managedArrayType, structPtr, 2, "arr._cap.ptr");
-	mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt32(), capPtr, "capacity");
+	mir::MIRValue *capacity = mab.getCapacity(structPtr, "capacity");
 
 	// Check if we need to grow: minCapacity > capacity
 	mir::MIRFunction *currentFunc = builder->getFunction();
@@ -257,75 +235,52 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_grow(CallExprAST *callE
 
 	// Ensure minimum capacity of 4
 	mir::MIRBasicBlock *useMinFourBlock = currentFunc->createBasicBlock("grow.minfour");
-	mir::MIRBasicBlock *doReallocBlock = currentFunc->createBasicBlock("grow.realloc");
+	mir::MIRBasicBlock *doAllocBlock = currentFunc->createBasicBlock("grow.alloc");
 
 	mir::MIRValue *lessThanFour = builder->createICmpSLT(newCapPhi, builder->getInt32(4), "lt.four");
-	builder->createCondBr(lessThanFour, useMinFourBlock, doReallocBlock);
+	builder->createCondBr(lessThanFour, useMinFourBlock, doAllocBlock);
 
 	builder->setInsertPoint(useMinFourBlock);
-	builder->createBr(doReallocBlock);
+	builder->createBr(doAllocBlock);
 
-	builder->setInsertPoint(doReallocBlock);
+	builder->setInsertPoint(doAllocBlock);
 	mir::MIRValue *newCapacity = builder->createPhi(mir::MIRType::getInt32(), "new.capacity");
 	builder->addPhiIncoming(newCapacity, builder->getInt32(4), useMinFourBlock);
 	builder->addPhiIncoming(newCapacity, newCapPhi, checkMinBlock);
 
-	// Calculate new size in bytes
-	mir::MIRValue *elemSizeVal = builder->getInt64(elemSize);
-	mir::MIRValue *newCapacity64 = builder->createSExt(newCapacity, mir::MIRType::getInt64(), "newcap64");
-	mir::MIRValue *newSize = builder->createMul(newCapacity64, elemSizeVal, "new.size");
+	// Load current buffer pointer and length
+	mir::MIRValue *arrPtr = mab.getDataPtr(structPtr, "arr.ptr");
+	mir::MIRValue *currentLen = mab.getLength(structPtr, "current.len");
 
-	// Load current buffer pointer from field 0
-	mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, structPtr, 0, "arr._buffer.ptr");
-	mir::MIRValue *arrPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, "arr.ptr");
-
-	// Load current length from field 1 (needed for memcpy if stack-to-heap)
-	mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, structPtr, 1, "arr._len.ptr");
-	mir::MIRValue *currentLen = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "current.len");
-
-	// Check if this is a stack-allocated buffer (capacity == 0)
-	// Stack buffers can't be realloc'd - we need to malloc and copy
-	mir::MIRBasicBlock *stackBufferBlock = currentFunc->createBasicBlock("grow.stack");
-	mir::MIRBasicBlock *heapBufferBlock = currentFunc->createBasicBlock("grow.heap");
-	mir::MIRBasicBlock *afterAllocBlock = currentFunc->createBasicBlock("grow.afteralloc");
-
-	mir::MIRValue *isStackBuffer = builder->createICmpEq(capacity, builder->getInt32(0), "is.stack");
-	builder->createCondBr(isStackBuffer, stackBufferBlock, heapBufferBlock);
-
-	// Stack buffer path: malloc new buffer and memcpy existing data
-	builder->setInsertPoint(stackBufferBlock);
-	mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(),
-														{mir::MIRType::getInt64()});
-	mir::MIRValue *newHeapBuffer = builder->createCall(mallocFunc, {newSize}, "new.heap.buffer");
+	// Allocate new buffer using tracked allocation
+	mir::MIRValue *newHeapBuffer = mab.allocateBuffer(newCapacity, "array grow");
 
 	// Copy existing elements: memcpy(newHeapBuffer, arrPtr, currentLen * elemSize)
+	mir::MIRValue *elemSizeVal = builder->getInt64(elemSize);
 	mir::MIRValue *currentLen64 = builder->createSExt(currentLen, mir::MIRType::getInt64(), "curlen64");
 	mir::MIRValue *copySize = builder->createMul(currentLen64, elemSizeVal, "copy.size");
 	mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
 														{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 	builder->createCall(memcpyFunc, {newHeapBuffer, arrPtr, copySize});
-	builder->createBr(afterAllocBlock);
 
-	// Heap buffer path: use realloc
-	builder->setInsertPoint(heapBufferBlock);
-	mir::MIRValue *capacity64 = builder->createSExt(capacity, mir::MIRType::getInt64(), "cap64");
-	mir::MIRValue *oldSize = builder->createMul(capacity64, elemSizeVal, "old.size");
-	mir::MIRFunction *reallocFunc = getOrDeclareFunction("realloc", mir::MIRType::getPtr(),
-														 {mir::MIRType::getPtr(), mir::MIRType::getInt64(), mir::MIRType::getInt64()});
-	mir::MIRValue *reallocedBuffer = builder->createCall(reallocFunc, {arrPtr, oldSize, newSize}, "realloced.buffer");
-	builder->createBr(afterAllocBlock);
+	// Release old buffer if it was heap-allocated (capacity > 0)
+	mir::MIRBasicBlock *releaseOldBlock = currentFunc->createBasicBlock("grow.release.old");
+	mir::MIRBasicBlock *afterReleaseBlock = currentFunc->createBasicBlock("grow.after.release");
 
-	// Merge paths
-	builder->setInsertPoint(afterAllocBlock);
-	mir::MIRValue *newArrPtr = builder->createPhi(mir::MIRType::getPtr(), "new.arr");
-	builder->addPhiIncoming(newArrPtr, newHeapBuffer, stackBufferBlock);
-	builder->addPhiIncoming(newArrPtr, reallocedBuffer, heapBufferBlock);
+	mir::MIRValue *wasHeap = builder->createICmpSGT(capacity, builder->getInt32(0), "was.heap");
+	builder->createCondBr(wasHeap, releaseOldBlock, afterReleaseBlock);
+
+	builder->setInsertPoint(releaseOldBlock);
+	mab.emitRelease(arrPtr, "array grow");
+	builder->createBr(afterReleaseBlock);
+
+	builder->setInsertPoint(afterReleaseBlock);
 
 	// Store new buffer pointer to field 0
-	builder->createStore(newArrPtr, bufferPtr);
+	mab.setDataPtr(structPtr, newHeapBuffer);
 
 	// Store new capacity to field 2
-	builder->createStore(newCapacity, capPtr);
+	mab.setCapacity(structPtr, newCapacity);
 	builder->createBr(doneBlock);
 
 	// Done block
@@ -340,22 +295,13 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_at(CallExprAST *cal
 	mir::MIRValue *value = generateExpr(callExpr->args[2].get());
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
-	// Get element type
-	mir::MIRType *elemType = getTypeFromString(info.elementType);
+	if (!info.dataPtr) {
+		return nullptr;
+	}
 
-	// Get the __ManagedArrayData struct type
-	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);
-
-	// Get pointer to the struct
-	mir::MIRValue *structPtr = info.dataPtr;
-
-	// Load buffer pointer from field 0
-	mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, structPtr, 0, "arr._buffer.ptr");
-	mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, "data.ptr");
-
-	// Calculate element pointer and store
-	mir::MIRValue *index64 = builder->createSExt(index, mir::MIRType::getInt64(), "idx64");
-	mir::MIRValue *elemPtr = builder->createArrayGEP(elemType, dataPtr, index64, "elem.ptr");
+	ManagedArrayBuilder mab(*this, info.elementType);
+	mir::MIRValue *dataPtr = mab.getDataPtr(info.dataPtr, "data.ptr");
+	mir::MIRValue *elemPtr = mab.getElementPtr(dataPtr, index, "elem.ptr");
 	builder->createStore(value, elemPtr);
 
 	return builder->getInt32(0);
@@ -367,22 +313,14 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_get_at(CallExprAST *cal
 	mir::MIRValue *index = generateExpr(callExpr->args[1].get());
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
-	mir::MIRType *elemType = getTypeFromString(info.elementType);
+	if (!info.dataPtr) {
+		return nullptr;
+	}
 
-	// Get the __ManagedArrayData struct type
-	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);
-
-	// Get pointer to the struct
-	mir::MIRValue *structPtr = info.dataPtr;
-
-	// Load buffer pointer from field 0
-	mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, structPtr, 0, "arr._buffer.ptr");
-	mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, "data.ptr");
-
-	// Calculate element pointer and load
-	mir::MIRValue *index64 = builder->createSExt(index, mir::MIRType::getInt64(), "idx64");
-	mir::MIRValue *elemPtr = builder->createArrayGEP(elemType, dataPtr, index64, "elem.ptr");
-	return builder->createLoad(elemType, elemPtr, "elem.val");
+	ManagedArrayBuilder mab(*this, info.elementType);
+	mir::MIRValue *dataPtr = mab.getDataPtr(info.dataPtr, "data.ptr");
+	mir::MIRValue *elemPtr = mab.getElementPtr(dataPtr, index, "elem.ptr");
+	return builder->createLoad(mab.getElementMIRType(), elemPtr, "elem.val");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_shift_right(CallExprAST *callExpr) {
