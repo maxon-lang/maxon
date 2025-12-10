@@ -1,5 +1,9 @@
 #include "call_graph.h"
 
+// Note: Implicit method calls (iterator.next, key.hash, etc.) are handled by
+// MIR-level DCE after generic instantiation when all concrete types are known.
+// See compiler.cpp:486-489 for why AST-level DCE is disabled.
+
 const std::set<std::string> CallGraphBuilder::emptySet;
 
 void CallGraphBuilder::buildFromProgram(ProgramAST *program) {
@@ -176,12 +180,6 @@ void CallGraphBuilder::extractCallsFromStmt(StmtAST *stmt, std::set<std::string>
 		if (forStmt->iterable) {
 			extractCallsFromExpr(forStmt->iterable.get(), calls);
 		}
-		// For-loops implicitly call iterator next() method
-		// This is a method call on the iterable object that we can't resolve statically
-		// So we add the generic iterator method name to ensure it's not pruned
-		calls.insert("next");
-		// Also add Iterable interface version
-		calls.insert("Iterable.next");
 		for (const auto &s : forStmt->body) {
 			extractCallsFromStmt(s.get(), calls);
 		}
@@ -198,9 +196,6 @@ void CallGraphBuilder::extractCallsFromStmt(StmtAST *stmt, std::set<std::string>
 		if (matchStmt->scrutinee) {
 			extractCallsFromExpr(matchStmt->scrutinee.get(), calls);
 		}
-		// Match on strings implicitly calls string.equals
-		calls.insert("equals");
-		calls.insert("string.equals");
 		// Process each match case
 		for (const auto &matchCase : matchStmt->cases) {
 			// Extract calls from patterns
@@ -231,18 +226,6 @@ void CallGraphBuilder::extractCallsFromExpr(ExprAST *expr, std::set<std::string>
 	} else if (auto *binaryExpr = dynamic_cast<BinaryExprAST *>(expr)) {
 		extractCallsFromExpr(binaryExpr->left.get(), calls);
 		extractCallsFromExpr(binaryExpr->right.get(), calls);
-
-		// For == and != operators, we may call Equatable.equals on structs
-		// We can't determine the type statically here, so add the generic equals method
-		if (binaryExpr->op == 'E' || binaryExpr->op == 'N') {
-			calls.insert("equals");
-			calls.insert("Equatable.equals");
-		}
-
-		// For + operator on strings, we call concat
-		if (binaryExpr->op == '+') {
-			calls.insert("concat");
-		}
 	} else if (auto *unaryExpr = dynamic_cast<UnaryExprAST *>(expr)) {
 		extractCallsFromExpr(unaryExpr->operand.get(), calls);
 	} else if (auto *arrayIndex = dynamic_cast<ArrayIndexExprAST *>(expr)) {
@@ -278,9 +261,6 @@ void CallGraphBuilder::extractCallsFromExpr(ExprAST *expr, std::set<std::string>
 		if (matchExpr->scrutinee) {
 			extractCallsFromExpr(matchExpr->scrutinee.get(), calls);
 		}
-		// Match on strings implicitly calls string.equals
-		calls.insert("equals");
-		calls.insert("string.equals");
 		// Process each match case
 		for (const auto &matchCase : matchExpr->cases) {
 			// Extract calls from patterns
@@ -293,20 +273,10 @@ void CallGraphBuilder::extractCallsFromExpr(ExprAST *expr, std::set<std::string>
 			}
 		}
 	} else if (auto *setFrom = dynamic_cast<SetFromExprAST *>(expr)) {
-		// Set from array literal calls set.init and set.insert
-		// Also calls element.hash() for hashing elements
-		calls.insert("init");
-		calls.insert("insert");
-		calls.insert("hash"); // Hashable.hash on elements
 		if (setFrom->arrayExpr) {
 			extractCallsFromExpr(setFrom->arrayExpr.get(), calls);
 		}
 	} else if (auto *mapLiteral = dynamic_cast<MapLiteralWithEntriesExprAST *>(expr)) {
-		// Map literal calls map.init and map.insert
-		// Also calls key.hash() for hashing keys
-		calls.insert("init");
-		calls.insert("insert");
-		calls.insert("hash"); // Hashable.hash on keys
 		for (const auto &entry : mapLiteral->entries) {
 			extractCallsFromExpr(entry.key.get(), calls);
 			extractCallsFromExpr(entry.value.get(), calls);

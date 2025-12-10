@@ -891,16 +891,62 @@ bool SemanticAnalyzer::typesMatch(const std::string &type1, const std::string &t
 	return maxon::TypeConversion::typesMatch(type1, type2);
 }
 
-bool SemanticAnalyzer::isOptionalType(const std::string &type) {
+bool SemanticAnalyzer::isOptionalType(const std::string &type) const {
 	return maxon::TypeConversion::isOptionalType(type);
 }
 
-std::string SemanticAnalyzer::unwrapOptionalType(const std::string &type) {
+std::string SemanticAnalyzer::unwrapOptionalType(const std::string &type) const {
 	return maxon::TypeConversion::unwrapOptionalType(type);
 }
 
-std::string SemanticAnalyzer::makeOptionalType(const std::string &type) {
+std::string SemanticAnalyzer::makeOptionalType(const std::string &type) const {
 	return maxon::TypeConversion::makeOptionalType(type);
+}
+
+bool SemanticAnalyzer::typeHasMethod(const std::string &typeName, const std::string &methodName,
+									 const std::string &returnType,
+									 const std::vector<std::string> &paramTypes) const {
+	// Check if there's a function registered for Type.methodName
+	std::string funcKey = typeName + "." + methodName;
+	auto funcIt = functions.find(funcKey);
+	if (funcIt != functions.end()) {
+		const FunctionInfo &func = funcIt->second;
+		// Check return type matches
+		if (func.returnType != returnType)
+			return false;
+		// Check parameter count (skip self which is first parameter)
+		if (func.parameters.size() - 1 != paramTypes.size())
+			return false;
+		// Check each parameter type
+		for (size_t i = 0; i < paramTypes.size(); i++) {
+			std::string expectedType = paramTypes[i];
+			if (expectedType == "Self")
+				expectedType = typeName;
+			if (func.parameters[i + 1].type != expectedType)
+				return false;
+		}
+		return true;
+	}
+	return false;
+}
+
+bool SemanticAnalyzer::typeIsHashable(const std::string &typeName) const {
+	return typeHasMethod(typeName, "hash", "int", {});
+}
+
+bool SemanticAnalyzer::typeIsEquatable(const std::string &typeName) const {
+	return typeHasMethod(typeName, "equals", "bool", {"Self"});
+}
+
+bool SemanticAnalyzer::typeIsIterable(const std::string &typeName) const {
+	// Check if type has next() method returning an optional type
+	std::string funcKey = typeName + ".next";
+	auto funcIt = functions.find(funcKey);
+	if (funcIt != functions.end()) {
+		// Return type should be "T or nil" (optional type)
+		return isOptionalType(funcIt->second.returnType);
+	}
+	return false;
 }
 
 bool SemanticAnalyzer::isIterableType(const std::string &type, ExprAST *iterableExpr) {
@@ -930,15 +976,14 @@ bool SemanticAnalyzer::isIterableType(const std::string &type, ExprAST *iterable
 		return true;
 	}
 
-	// Check if this is a struct that conforms to Sequence interface
+	// Check if type has next() method returning optional (duck typing for Iterable)
+	if (typeIsIterable(type)) {
+		return true;
+	}
+
+	// Structs with an Element associated type are considered iterable
 	auto structIt = structs.find(type);
 	if (structIt != structs.end()) {
-		for (const auto &iface : structIt->second.conformsTo) {
-			if (iface == "Iterable") {
-				return true;
-			}
-		}
-		// Structs with an Element associated type are considered iterable
 		if (structIt->second.typeAssignments.find("Element") != structIt->second.typeAssignments.end()) {
 			return true;
 		}

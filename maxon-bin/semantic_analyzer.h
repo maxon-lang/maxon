@@ -377,9 +377,17 @@ class SemanticAnalyzer {
 	bool isIterableType(const std::string &type, ExprAST *iterableExpr);
 
 	// Optional type helpers
-	bool isOptionalType(const std::string &type);
-	std::string unwrapOptionalType(const std::string &type);
-	std::string makeOptionalType(const std::string &type);
+	bool isOptionalType(const std::string &type) const;
+	std::string unwrapOptionalType(const std::string &type) const;
+	std::string makeOptionalType(const std::string &type) const;
+
+	// Capability-based interface checks (replaces hardcoded interface name checks)
+	bool typeHasMethod(const std::string &typeName, const std::string &methodName,
+					   const std::string &returnType,
+					   const std::vector<std::string> &paramTypes = {}) const;
+	bool typeIsHashable(const std::string &typeName) const;
+	bool typeIsEquatable(const std::string &typeName) const;
+	bool typeIsIterable(const std::string &typeName) const;
 
 	// Helper methods
 	void addError(const std::string &message, int line = 0, int column = 0, const std::string &errCode = "");

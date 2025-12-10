@@ -92,39 +92,11 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Map literal: map from K to V
 		// Validate key type implements Hashable
 		const std::string &keyType = mapLiteral->keyType;
-		bool isBuiltinHashable = (keyType == "int" || keyType == "string" ||
-								  keyType == "character" || keyType == "byte");
-		bool isBuiltinNonHashable = (keyType == "float" || keyType == "bool");
 
-		if (isBuiltinNonHashable) {
-			// Built-in types that are not hashable
-			addError("Map key type '" + keyType + "' must implement Hashable interface" +
-						 std::string("\n  Hashable types: int, string, character, byte") +
-						 "\n  Note: Only types that can be hashed can be used as map keys",
+		if (!typeIsHashable(keyType)) {
+			addError("Map key type '" + keyType + "' must be Hashable (provide hash() int method)",
 					 expr->line, expr->column);
 			return "error";
-		} else if (!isBuiltinHashable) {
-			// Check if it's a struct that conforms to Hashable
-			auto structInfo = lookupStruct(keyType);
-			if (structInfo == nullptr) {
-				// Track as undefined for auto-import
-				undefinedStructs.insert(keyType);
-			} else {
-				bool conformsToHashable = false;
-				for (const auto &iface : structInfo->conformsTo) {
-					if (iface == "Hashable") {
-						conformsToHashable = true;
-						break;
-					}
-				}
-				if (!conformsToHashable) {
-					addError("Map key type '" + keyType + "' must implement Hashable interface" +
-								 std::string("\n  Hashable types: int, string, character, byte") +
-								 "\n  Or declare: struct " + keyType + " is Hashable",
-							 expr->line, expr->column);
-					return "error";
-				}
-			}
 		}
 
 		// Validate value type exists
@@ -200,37 +172,10 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		mapWithEntries->inferredValueType = valueType;
 
 		// Validate key type implements Hashable
-		bool isBuiltinHashable = (keyType == "int" || keyType == "string" ||
-								  keyType == "character" || keyType == "byte");
-		bool isBuiltinNonHashable = (keyType == "float" || keyType == "bool");
-
-		if (isBuiltinNonHashable) {
-			addError("Map key type '" + keyType + "' must implement Hashable interface" +
-						 std::string("\n  Hashable types: int, string, character, byte") +
-						 "\n  Note: Only types that can be hashed can be used as map keys",
+		if (!typeIsHashable(keyType)) {
+			addError("Map key type '" + keyType + "' must be Hashable (provide hash() int method)",
 					 expr->line, expr->column);
 			return "error";
-		} else if (!isBuiltinHashable) {
-			// Check if it's a struct that conforms to Hashable
-			auto structInfo = lookupStruct(keyType);
-			if (structInfo == nullptr) {
-				undefinedStructs.insert(keyType);
-			} else {
-				bool conformsToHashable = false;
-				for (const auto &iface : structInfo->conformsTo) {
-					if (iface == "Hashable") {
-						conformsToHashable = true;
-						break;
-					}
-				}
-				if (!conformsToHashable) {
-					addError("Map key type '" + keyType + "' must implement Hashable interface" +
-								 std::string("\n  Hashable types: int, string, character, byte") +
-								 "\n  Or declare: struct " + keyType + " is Hashable",
-							 expr->line, expr->column);
-					return "error";
-				}
-			}
 		}
 
 		// Instantiate map methods for this key/value type using generic mechanism
@@ -276,37 +221,10 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		setFromExpr->inferredElementType = elemType;
 
 		// Validate element type implements Hashable (sets require hashable elements)
-		bool isBuiltinHashable = (elemType == "int" || elemType == "string" ||
-								  elemType == "character" || elemType == "byte");
-		bool isBuiltinNonHashable = (elemType == "float" || elemType == "bool");
-
-		if (isBuiltinNonHashable) {
-			addError("Set element type '" + elemType + "' must implement Hashable interface" +
-						 std::string("\n  Hashable types: int, string, character, byte") +
-						 "\n  Note: Only types that can be hashed can be used in sets",
+		if (!typeIsHashable(elemType)) {
+			addError("Set element type '" + elemType + "' must be Hashable (provide hash() int method)",
 					 expr->line, expr->column);
 			return "error";
-		} else if (!isBuiltinHashable) {
-			// Check if it's a struct that conforms to Hashable
-			auto structInfo = lookupStruct(elemType);
-			if (structInfo == nullptr) {
-				undefinedStructs.insert(elemType);
-			} else {
-				bool conformsToHashable = false;
-				for (const auto &iface : structInfo->conformsTo) {
-					if (iface == "Hashable") {
-						conformsToHashable = true;
-						break;
-					}
-				}
-				if (!conformsToHashable) {
-					addError("Set element type '" + elemType + "' must implement Hashable interface" +
-								 std::string("\n  Hashable types: int, string, character, byte") +
-								 "\n  Or declare: struct " + elemType + " is Hashable",
-							 expr->line, expr->column);
-					return "error";
-				}
-			}
 		}
 
 		// Instantiate set methods for this element type using generic mechanism
@@ -543,13 +461,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 					}
 
 					// Both are the same struct type, check Equatable conformance
-					bool conformsToEquatable = false;
-					for (const auto &iface : leftStruct->conformsTo) {
-						if (iface == "Equatable") {
-							conformsToEquatable = true;
-							break;
-						}
-					}
+					bool conformsToEquatable = typeIsEquatable(leftType);
 
 					if (!conformsToEquatable) {
 						addError("Cannot use == or != on struct type '" + leftType +
@@ -1029,38 +941,6 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		auto idIt = functionIndices.find(funcIt->first);
 		if (idIt != functionIndices.end()) {
 			callExpr->functionId = idIt->second;
-		}
-
-		// Check for mutating methods on immutable arrays
-		// Methods like push, pop, insert, remove, clear, reserve modify the array
-		std::string resolvedName = funcIt->first;
-		size_t lastDot = resolvedName.rfind(".");
-		if (lastDot != std::string::npos) {
-			std::string methodName = resolvedName.substr(lastDot + 1);
-			static const std::set<std::string> mutatingMethods = {
-				"push", "pop", "insert", "remove", "clear", "reserve", "set"
-			};
-			if (mutatingMethods.count(methodName) > 0 && !callExpr->args.empty()) {
-				// Check if first argument is an immutable variable
-				if (auto varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].get())) {
-					auto varInfo = lookupVariable(varExpr->name);
-					if (varInfo.has_value() && varInfo->isImmutable) {
-						std::string displayType = maxon::TypeConversion::arrayTypeToDisplayString(varInfo->type);
-						if (displayType == varInfo->type) {
-							displayType = varInfo->type;  // Keep original if no conversion
-						}
-						addError(methodName + "() can only be used on dynamic arrays, not " + displayType +
-									 std::string("\n  '" + varExpr->name + "' is declared with 'let' (immutable)") +
-									 "\n  Hint: Use 'var' instead of 'let' for mutable arrays",
-								 expr->line, expr->column);
-						// Still analyze args to mark variables as used
-						for (auto &arg : callExpr->args) {
-							analyzeExpression(arg.get());
-						}
-						return "error";
-					}
-				}
-			}
 		}
 
 		// Check if this is a sibling method call (calling another method of the same type from within a method)

@@ -915,63 +915,50 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				return result;
 			}
 
-			// Check if this is an Equatable struct type
+			// Check if this is an Equatable struct type (has TypeName.equals function)
 			auto structIt = structTypes.find(leftType);
-			if (structIt != structTypes.end()) {
-				auto conformsIt = structConformsTo.find(leftType);
-				if (conformsIt != structConformsTo.end()) {
-					bool isEquatable = false;
-					for (const auto &iface : conformsIt->second) {
-						if (iface == "Equatable") {
-							isEquatable = true;
-							break;
-						}
+			if (structIt != structTypes.end() && typeIsEquatable(leftType)) {
+				// Generate call to TypeName.equals(left, right)
+				std::string equalsFuncName = leftType + ".equals";
+				mir::MIRFunction *equalsFunc = module->getFunction(equalsFuncName);
+
+				if (equalsFunc) {
+					// For struct types, we need to pass pointers, not loaded values
+					// Get pointer to left operand
+					mir::MIRValue *leftPtr = nullptr;
+					if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->left.get())) {
+						leftPtr = namedValues[varExpr->name];
+					} else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(binExpr->left.get())) {
+						leftPtr = generateStringLiteral(strLit);
+					} else {
+						leftPtr = generateExpr(binExpr->left.get());
 					}
 
-					if (isEquatable) {
-						// Generate call to TypeName.equals(left, right)
-						std::string equalsFuncName = leftType + ".equals";
-						mir::MIRFunction *equalsFunc = module->getFunction(equalsFuncName);
-
-						if (equalsFunc) {
-							// For struct types, we need to pass pointers, not loaded values
-							// Get pointer to left operand
-							mir::MIRValue *leftPtr = nullptr;
-							if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->left.get())) {
-								leftPtr = namedValues[varExpr->name];
-							} else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(binExpr->left.get())) {
-								leftPtr = generateStringLiteral(strLit);
-							} else {
-								leftPtr = generateExpr(binExpr->left.get());
-							}
-
-							// Get pointer to right operand
-							mir::MIRValue *rightPtr = nullptr;
-							if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->right.get())) {
-								rightPtr = namedValues[varExpr->name];
-							} else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(binExpr->right.get())) {
-								rightPtr = generateStringLiteral(strLit);
-							} else {
-								rightPtr = generateExpr(binExpr->right.get());
-							}
-
-							if (!leftPtr || !rightPtr) {
-								reportError("Failed to generate Equatable comparison operands",
-											binExpr->line, binExpr->column);
-							}
-
-							std::vector<mir::MIRValue *> args = {leftPtr, rightPtr};
-							mir::MIRValue *result = builder->createCall(equalsFunc, args, "eqtmp");
-
-							// For !=, negate the result
-							if (binExpr->op == 'N') {
-								result = builder->createICmpEq(result,
-															   mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), 0), "neqtmp");
-							}
-
-							return result;
-						}
+					// Get pointer to right operand
+					mir::MIRValue *rightPtr = nullptr;
+					if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->right.get())) {
+						rightPtr = namedValues[varExpr->name];
+					} else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(binExpr->right.get())) {
+						rightPtr = generateStringLiteral(strLit);
+					} else {
+						rightPtr = generateExpr(binExpr->right.get());
 					}
+
+					if (!leftPtr || !rightPtr) {
+						reportError("Failed to generate Equatable comparison operands",
+									binExpr->line, binExpr->column);
+					}
+
+					std::vector<mir::MIRValue *> args = {leftPtr, rightPtr};
+					mir::MIRValue *result = builder->createCall(equalsFunc, args, "eqtmp");
+
+					// For !=, negate the result
+					if (binExpr->op == 'N') {
+						result = builder->createICmpEq(result,
+													   mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), 0), "neqtmp");
+					}
+
+					return result;
 				}
 			}
 		}
@@ -2015,4 +2002,12 @@ mir::MIRValue *MIRCodeGenerator::generateMathIntrinsic(CallExprAST *callExpr) {
 	}
 
 	return result;
+}
+
+//==============================================================================
+// Type Trait Helpers
+//==============================================================================
+
+bool MIRCodeGenerator::typeIsEquatable(const std::string &typeName) const {
+	return module->getFunction(typeName + ".equals") != nullptr;
 }

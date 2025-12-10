@@ -215,6 +215,9 @@ class MIRCodeGenerator {
 	// Ensure struct method is declared (for hash/equals calls from generic code)
 	void ensureStructMethodDeclared(const std::string &structType, const std::string &methodName);
 
+	// Check if a type implements Equatable (has TypeName.equals function)
+	bool typeIsEquatable(const std::string &typeName) const;
+
 	// Heap management initialization
 	void initHeapManagement();
 
