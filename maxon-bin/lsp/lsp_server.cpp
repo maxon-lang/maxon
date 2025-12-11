@@ -469,22 +469,26 @@ void LSPServer::analyzeDocument(const std::string &uri) {
 	// Measure analysis time
 	auto startTime = std::chrono::steady_clock::now();
 
-	// Load symbols from sibling project files
-	StdlibSymbols projectSymbols = loadProjectSymbols(filePath);
-
-	// Merge stdlib and project symbols
+	// For stdlib files, all sibling symbols are already in stdlib_ - no need to load project symbols
+	// This avoids expensive O(n²) parsing when analyzing stdlib files
 	StdlibSymbols combinedSymbols = stdlib_;
-	for (auto &sym : projectSymbols.functions) {
-		combinedSymbols.functions.push_back(std::move(sym));
-	}
-	for (auto &sym : projectSymbols.structs) {
-		combinedSymbols.structs.push_back(std::move(sym));
-	}
-	for (auto &sym : projectSymbols.enums) {
-		combinedSymbols.enums.push_back(std::move(sym));
-	}
-	for (auto &sym : projectSymbols.interfaces) {
-		combinedSymbols.interfaces.push_back(std::move(sym));
+	if (!isStdlibFile(uri)) {
+		// Load symbols from sibling project files
+		StdlibSymbols projectSymbols = loadProjectSymbols(filePath);
+
+		// Merge project symbols into combined symbols
+		for (auto &sym : projectSymbols.functions) {
+			combinedSymbols.functions.push_back(std::move(sym));
+		}
+		for (auto &sym : projectSymbols.structs) {
+			combinedSymbols.structs.push_back(std::move(sym));
+		}
+		for (auto &sym : projectSymbols.enums) {
+			combinedSymbols.enums.push_back(std::move(sym));
+		}
+		for (auto &sym : projectSymbols.interfaces) {
+			combinedSymbols.interfaces.push_back(std::move(sym));
+		}
 	}
 
 	// Run analysis with combined stdlib + project symbols

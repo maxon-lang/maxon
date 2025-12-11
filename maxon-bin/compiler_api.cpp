@@ -146,50 +146,74 @@ static std::string exprToDisplayString(ExprAST *expr) {
 // Documentation Extraction
 // ============================================================================
 
-std::string extractDocComment(const std::string &source, int declarationLine) {
+// Helper: build a vector of line start offsets for efficient line lookup
+static std::vector<size_t> buildLineOffsets(const std::string &source) {
+	std::vector<size_t> offsets;
+	offsets.push_back(0); // Line 1 starts at offset 0
+	for (size_t i = 0; i < source.size(); ++i) {
+		if (source[i] == '\n') {
+			offsets.push_back(i + 1);
+		}
+	}
+	return offsets;
+}
+
+// Helper: get a line from source using pre-computed offsets (1-based line number)
+static std::string_view getLine(const std::string &source, const std::vector<size_t> &lineOffsets, int lineNum) {
+	if (lineNum < 1 || lineNum > static_cast<int>(lineOffsets.size())) {
+		return {};
+	}
+	size_t start = lineOffsets[lineNum - 1];
+	size_t end;
+	if (lineNum < static_cast<int>(lineOffsets.size())) {
+		end = lineOffsets[lineNum] - 1; // Exclude the newline
+		if (end > start && end < source.size() && source[end - 1] == '\r') {
+			end--; // Handle CRLF
+		}
+	} else {
+		end = source.size();
+	}
+	return std::string_view(source).substr(start, end - start);
+}
+
+// Optimized version that uses pre-computed line offsets
+static std::string extractDocCommentWithOffsets(const std::string &source,
+												const std::vector<size_t> &lineOffsets,
+												int declarationLine) {
 	if (declarationLine <= 1 || source.empty()) {
 		return "";
 	}
 
-	// Split source into lines
-	std::vector<std::string> lines;
-	std::istringstream stream(source);
-	std::string line;
-	while (std::getline(stream, line)) {
-		lines.push_back(line);
-	}
-
-	// declarationLine is 1-based, convert to 0-based index
-	int declIndex = declarationLine - 1;
-	if (declIndex >= static_cast<int>(lines.size())) {
+	if (declarationLine > static_cast<int>(lineOffsets.size())) {
 		return "";
 	}
 
 	// Look backwards from declaration line for /// comments
 	std::vector<std::string> docLines;
-	int currentLine = declIndex - 1;
+	int currentLine = declarationLine - 1;
 
-	while (currentLine >= 0) {
-		const std::string &currentLineStr = lines[currentLine];
+	while (currentLine >= 1) {
+		std::string_view lineView = getLine(source, lineOffsets, currentLine);
 
 		// Find first non-whitespace
-		size_t firstNonSpace = currentLineStr.find_first_not_of(" \t");
-		if (firstNonSpace == std::string::npos) {
+		size_t firstNonSpace = lineView.find_first_not_of(" \t");
+		if (firstNonSpace == std::string_view::npos) {
 			// Empty line - stop looking
 			break;
 		}
 
 		// Check for /// doc comment
-		if (currentLineStr.length() >= firstNonSpace + 3 &&
-			currentLineStr.substr(firstNonSpace, 3) == "///") {
+		if (lineView.length() >= firstNonSpace + 3 &&
+			lineView.substr(firstNonSpace, 3) == "///") {
 			// Extract content after ///
 			std::string content;
-			if (currentLineStr.length() > firstNonSpace + 3) {
-				content = currentLineStr.substr(firstNonSpace + 3);
+			if (lineView.length() > firstNonSpace + 3) {
+				std::string_view contentView = lineView.substr(firstNonSpace + 3);
 				// Strip leading space if present
-				if (!content.empty() && content[0] == ' ') {
-					content = content.substr(1);
+				if (!contentView.empty() && contentView[0] == ' ') {
+					contentView = contentView.substr(1);
 				}
+				content = std::string(contentView);
 			}
 			docLines.insert(docLines.begin(), content);
 			currentLine--;
@@ -209,6 +233,16 @@ std::string extractDocComment(const std::string &source, int declarationLine) {
 	}
 
 	return result;
+}
+
+std::string extractDocComment(const std::string &source, int declarationLine) {
+	if (declarationLine <= 1 || source.empty()) {
+		return "";
+	}
+
+	// Build line offsets for efficient lookup
+	auto lineOffsets = buildLineOffsets(source);
+	return extractDocCommentWithOffsets(source, lineOffsets, declarationLine);
 }
 
 // ============================================================================
@@ -364,6 +398,9 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 	if (!program)
 		return symbols;
 
+	// Pre-compute line offsets once for efficient doc comment extraction
+	auto lineOffsets = buildLineOffsets(source);
+
 	// Extract functions
 	for (const auto &func : program->functions) {
 		if (exportedOnly && !func->isExported)
@@ -371,7 +408,7 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 
 		std::string kind = func->isMethod() ? "method" : "function";
 		std::string signature = buildFunctionSignature(func.get());
-		std::string doc = extractDocComment(source, func->line);
+		std::string doc = extractDocCommentWithOffsets(source, lineOffsets, func->line);
 
 		LSPSymbolInfo sym(
 			func->name,
@@ -397,7 +434,7 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 			continue;
 
 		std::string signature = buildStructSignature(structDef.get());
-		std::string doc = extractDocComment(source, structDef->line);
+		std::string doc = extractDocCommentWithOffsets(source, lineOffsets, structDef->line);
 
 		LSPSymbolInfo structSym(
 			structDef->name,
@@ -429,7 +466,7 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 		// Extract methods defined inside the struct
 		for (const auto &method : structDef->methods) {
 			std::string methodSig = buildFunctionSignature(method.get());
-			std::string methodDoc = extractDocComment(source, method->line);
+			std::string methodDoc = extractDocCommentWithOffsets(source, lineOffsets, method->line);
 
 			// Qualify method name with struct name for completion lookup
 			std::string qualifiedName = structDef->name + "." + method->name;
@@ -459,7 +496,7 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 			continue;
 
 		std::string signature = buildEnumSignature(enumDef.get());
-		std::string doc = extractDocComment(source, enumDef->line);
+		std::string doc = extractDocCommentWithOffsets(source, lineOffsets, enumDef->line);
 
 		symbols.emplace_back(
 			enumDef->name,
@@ -495,7 +532,7 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 		// Extract methods defined inside the enum
 		for (const auto &method : enumDef->methods) {
 			std::string methodSig = buildFunctionSignature(method.get());
-			std::string methodDoc = extractDocComment(source, method->line);
+			std::string methodDoc = extractDocCommentWithOffsets(source, lineOffsets, method->line);
 
 			// Qualify method name with enum name for completion lookup
 			std::string qualifiedName = enumDef->name + "." + method->name;
@@ -527,7 +564,7 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 			continue;
 
 		std::string signature = buildInterfaceSignature(interfaceDef.get());
-		std::string doc = extractDocComment(source, interfaceDef->line);
+		std::string doc = extractDocCommentWithOffsets(source, lineOffsets, interfaceDef->line);
 
 		LSPSymbolInfo ifaceSym(
 			interfaceDef->name,
@@ -812,9 +849,21 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 	return result;
 }
 
+// Static cache for stdlib symbols loaded from disk (no content provider)
+static std::string cachedStdlibPath;
+static StdlibSymbols cachedStdlibSymbols;
+
 StdlibSymbols loadStdlib(const std::string &stdlibPath) {
-	// Use the content provider version with a null provider (always reads from disk)
-	return loadStdlibWithContentProvider(stdlibPath, nullptr);
+	// Check if we have a cached version for this path
+	std::string normalizedPath = std::filesystem::absolute(stdlibPath).string();
+	if (!cachedStdlibPath.empty() && cachedStdlibPath == normalizedPath) {
+		return cachedStdlibSymbols;
+	}
+
+	// Load fresh and cache for future calls
+	cachedStdlibSymbols = loadStdlibWithContentProvider(stdlibPath, nullptr);
+	cachedStdlibPath = normalizedPath;
+	return cachedStdlibSymbols;
 }
 
 StdlibSymbols loadStdlibWithContentProvider(
@@ -883,7 +932,6 @@ StdlibSymbols loadStdlibWithContentProvider(
 
 		} catch (const std::exception &e) {
 			// Skip files that fail to parse
-			// In a real implementation, you might want to log this
 			continue;
 		}
 	}
