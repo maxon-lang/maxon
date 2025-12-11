@@ -38,7 +38,7 @@ Parameters:
 ### Example
 
 ```maxon
-function main() int
+function main() returns int
     var pi = 3.14159
     printFloat(pi, 2)     // Prints: 3.14
     printFloat(pi, 5)     // Prints: 3.14159
@@ -63,7 +63,7 @@ end 'main'
 
 <!-- test: basic -->
 ```maxon
-function main() int
+function main() returns int
     var x = 3.14159
     printFloat(x, 6)
     return 0
@@ -79,7 +79,7 @@ end 'main'
 
 <!-- test: negative -->
 ```maxon
-function main() int
+function main() returns int
     var y = -2.5
     printFloat(y, 6)
     return 0
@@ -95,7 +95,7 @@ end 'main'
 
 <!-- test: zero -->
 ```maxon
-function main() int
+function main() returns int
     var z = 0.0
     printFloat(z, 6)
     return 0
@@ -111,7 +111,7 @@ end 'main'
 
 <!-- test: high-precision -->
 ```maxon
-function main() int
+function main() returns int
     var x = 0.301029995663981
     printFloat(x, 15)
     return 0
@@ -127,7 +127,7 @@ end 'main'
 
 <!-- test: high-precision-ten-digits -->
 ```maxon
-function main() int
+function main() returns int
     var x = 0.301029995663981
     printFloat(x, 10)
     return 0

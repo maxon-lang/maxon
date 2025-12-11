@@ -56,7 +56,7 @@ Note: The `character` type is NOT the same as `byte`. See the character-type spe
 ### Byte Literal
 
 ```maxon
-function main() int
+function main() returns int
     var b = 42b
     return b as int
 end 'main'
@@ -68,7 +68,7 @@ ExitCode: 42
 ### Byte Max Value
 
 ```maxon
-function main() int
+function main() returns int
     var b = 255b
     return b as int
 end 'main'
@@ -80,7 +80,7 @@ ExitCode: 255
 ### Byte Zero
 
 ```maxon
-function main() int
+function main() returns int
     var b = 0b
     return b as int
 end 'main'

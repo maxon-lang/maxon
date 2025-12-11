@@ -25,7 +25,7 @@ export struct character is Equatable, Hashable, ExpressibleByCharLiteral
 	// ============================================
 
 	// Initialize character from compiler-constructed _ManagedString
-	function ExpressibleByCharLiteral.init(managed _ManagedString) character
+	function ExpressibleByCharLiteral.init(managed _ManagedString) returns character
 		return character{_managed: managed}
 	end 'init'
 
@@ -34,7 +34,7 @@ export struct character is Equatable, Hashable, ExpressibleByCharLiteral
 	// ============================================
 
 	/// Check if character is empty (should never be true for valid character)
-	export function isEmpty() bool
+	export function isEmpty() returns bool
 		return __string_len(_managed) == 0
 	end 'isEmpty'
 
@@ -43,7 +43,7 @@ export struct character is Equatable, Hashable, ExpressibleByCharLiteral
 	// ============================================
 
 	/// Convert character to string
-	export function toString() string
+	export function toString() returns string
 		// Create a new string from the character's data
 		return string{_managed: _managed, _iterPos: 0}
 	end 'toString'
@@ -52,7 +52,7 @@ export struct character is Equatable, Hashable, ExpressibleByCharLiteral
 	// Equatable conformance
 	// ============================================
 
-	function Equatable.equals(other character) bool
+	function Equatable.equals(other character) returns bool
 		return equalsManagedString(_managed, other._managed)
 	end 'equals'
 
@@ -60,7 +60,7 @@ export struct character is Equatable, Hashable, ExpressibleByCharLiteral
 	// Hashable conformance
 	// ============================================
 
-	function Hashable.hash() int
+	function Hashable.hash() returns int
 		return hashManagedString(_managed)
 	end 'hash'
 
@@ -69,17 +69,17 @@ export struct character is Equatable, Hashable, ExpressibleByCharLiteral
 	// ============================================
 
 	/// Create a CodepointView for iterating over Unicode codepoints in this grapheme
-	export function codepoints() CodepointView
+	export function codepoints() returns CodepointView
 		return CodepointView{_managed: _managed, _pos: 0}
 	end 'codepoints'
 
 	/// Create a ByteView for iterating over raw UTF-8 bytes
-	export function bytes() ByteView
+	export function bytes() returns ByteView
 		return ByteView{_managed: _managed, _pos: 0}
 	end 'bytes'
 
 	/// Create a UTF16View for iterating over UTF-16 code units
-	export function utf16() UTF16View
+	export function utf16() returns UTF16View
 		return UTF16View{_managed: _managed, _bytePos: 0, _highSurrogate: 0}
 	end 'utf16'
 
@@ -89,7 +89,7 @@ export struct character is Equatable, Hashable, ExpressibleByCharLiteral
 
 	/// Compare characters lexicographically by their UTF-8 bytes
 	/// Returns < 0 if self < other, 0 if equal, > 0 if self > other
-	export function compareTo(other character) int
+	export function compareTo(other character) returns int
 		var len1 = __string_len(_managed)
 		var len2 = __string_len(other._managed)
 		var minLen = len1

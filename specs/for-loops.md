@@ -49,9 +49,9 @@ For loops in Maxon use an iterator-based approach where the compiler provides sy
       var __opt = next(__iter)
       if let <loopVar> = __opt 'check'
           <body>
-      else 'check'
+      end 'check' else 'break'
           break 'loop'
-      end 'check'
+      end 'break'
   end 'loop'
   ```
 - Uses suffix matching to find `next` method
@@ -101,7 +101,7 @@ end 'loop'
 ### Example: Sum of Range
 
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     for i in range(0, 10) 'sum_loop'
         sum = sum + i
@@ -119,7 +119,7 @@ end 'main'
 For loops support `break` and `continue` statements:
 
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     for i in range(0, 10) 'loop'
         if i == 5 'skip'
@@ -146,7 +146,7 @@ The loop variable is:
 - **Fresh each iteration**: Gets new value from iterator each time
 
 ```maxon
-function main() int
+function main() returns int
     var last = 0
     for i in range(1, 4) 'loop'
         last = i  // Can copy value to mutable variable
@@ -179,9 +179,9 @@ while 1 = 1 'loop'
     var __opt = __iter.next()
     if let i = __opt 'check'
         print(i)
-    else 'check'
+    end 'check' else 'break'
         break 'loop'
-    end 'check'
+    end 'break'
 end 'loop'
 ```
 
@@ -207,7 +207,7 @@ The `Iterator` struct is exported from `stdlib/iter/iterator.maxon` and can be u
 
 <!-- test: basic-range -->
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     for i in range(0, 5) 'loop'
         sum = sum + i
@@ -222,7 +222,7 @@ end 'main'
 
 <!-- test: break-in-for-loop -->
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     for i in range(0, 10) 'loop'
         if i == 5 'check'
@@ -240,7 +240,7 @@ end 'main'
 
 <!-- test: continue-in-for-loop -->
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     for i in range(0, 10) 'loop'
         if i == 5 'skip'
@@ -258,7 +258,7 @@ end 'main'
 
 <!-- test: nested-for-loops -->
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     for i in range(0, 3) 'outer'
         for j in range(0, 3) 'inner'
@@ -275,7 +275,7 @@ end 'main'
 
 <!-- test: float-array-iteration -->
 ```maxon
-function main() int
+function main() returns int
     let arr = [1.0, 2.0, 3.0, 4.0, 5.0]
     var sum = 0.0
     for x in arr 'loop'
@@ -290,7 +290,7 @@ end 'main'
 
 <!-- test: error.loop-var-assign -->
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     for i in range(1, 5) 'loop'
         i = 10
@@ -312,7 +312,7 @@ Cannot assign to loop variable 'i'
 
 <!-- test: error.iterate-over-int -->
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     let count = 5
     for i in count 'loop'
@@ -332,7 +332,7 @@ Cannot iterate over type 'int'
 
 <!-- test: error.iterate-over-bool -->
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     let flag = true
     for i in flag 'loop'
@@ -358,7 +358,7 @@ The variable 'i' is assigned but its value is never used
 
 <!-- test: error.iterate-over-float -->
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     let val = 3.14
     for i in val 'loop'

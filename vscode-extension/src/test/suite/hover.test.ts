@@ -46,7 +46,7 @@ suite('Hover Test Suite', () => {
 
 	test('Hover should show type for let variable', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    let x = 42",
 			"    return x",
 			"end 'test'"
@@ -75,7 +75,7 @@ suite('Hover Test Suite', () => {
 
 	test('Hover should show type for var variable', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    var count = 0",
 			"    count = count + 1",
 			"    return count",
@@ -105,7 +105,7 @@ suite('Hover Test Suite', () => {
 
 	test('Hover should show type for float variable', async function () {
 		const content = [
-			"function test() float",
+			"function test() returns float",
 			"    let pi = 3.14159",
 			"    return pi",
 			"end 'test'"
@@ -133,7 +133,7 @@ suite('Hover Test Suite', () => {
 
 	test('Hover should show exact float literal with many decimal places', async function () {
 		const content = [
-			"function test() float",
+			"function test() returns float",
 			"    let SOLAR_MASS = 39.478417604357432",
 			"    return SOLAR_MASS",
 			"end 'test'"
@@ -161,7 +161,7 @@ suite('Hover Test Suite', () => {
 
 	test('Hover should show function parameter info', async function () {
 		const content = [
-			"function add(a int, b int) int",
+			"function add(a int, b int) returns int",
 			"    return a + b",
 			"end 'add'"
 		].join('\n');
@@ -195,7 +195,7 @@ suite('Hover Test Suite', () => {
 			"    var y int",
 			"end 'Point'",
 			"",
-			"function test() int",
+			"function test() returns int",
 			"    var p Point",
 			"    return 0",
 			"end 'test'"
@@ -230,11 +230,11 @@ suite('Hover Test Suite', () => {
 
 	test('Hover should show user function signature', async function () {
 		const content = [
-			"function multiply(x int, y int) int",
+			"function multiply(x int, y int) returns int",
 			"    return x * y",
 			"end 'multiply'",
 			"",
-			"function main() int",
+			"function main() returns int",
 			"    return multiply(3, 4)",
 			"end 'main'"
 		].join('\n');
@@ -263,7 +263,7 @@ suite('Hover Test Suite', () => {
 
 	test('Hover should show keyword info', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    return 42",
 			"end 'test'"
 		].join('\n');
@@ -292,8 +292,8 @@ suite('Hover Test Suite', () => {
 
 	test('Hover should show array type', async function () {
 		const content = [
-			"function test() int",
-			"    var numbers []int",
+			"function test() returns int",
+			"    var numbers = [10]int",
 			"    return numbers[0]",
 			"end 'test'"
 		].join('\n');

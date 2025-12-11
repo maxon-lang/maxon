@@ -41,15 +41,15 @@ When optimization is enabled, functions that aren't called (directly or indirect
 ### Example
 
 ```maxon
-function used() int
+function used() returns int
     return 42
 end 'used'
 
-function unused() int
+function unused() returns int
     return 999  // This function is eliminated
 end 'unused'
 
-function main() int
+function main() returns int
     return used()  // Only this is kept
 end 'main'
 ```
@@ -64,19 +64,19 @@ The `unused()` function won't appear in the optimized output.
 
 <!-- test: eliminates-unused -->
 ```maxon
-function used_function() int
+function used_function() returns int
     return 42
 end 'used_function'
 
-function unused_function() int
+function unused_function() returns int
     return 999
 end 'unused_function'
 
-function another_unused_function() int
+function another_unused_function() returns int
     return 123
 end 'another_unused_function'
 
-function main() int
+function main() returns int
     var result = used_function()
     return result
 end 'main'
@@ -88,19 +88,19 @@ end 'main'
 
 <!-- test: keeps-transitive-calls -->
 ```maxon
-function helper() int
+function helper() returns int
     return 10
 end 'helper'
 
-function used() int
+function used() returns int
     return helper()
 end 'used'
 
-function unused() int
+function unused() returns int
     return 999
 end 'unused'
 
-function main() int
+function main() returns int
     return used()
 end 'main'
 ```

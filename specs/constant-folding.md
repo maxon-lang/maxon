@@ -32,7 +32,7 @@ When all operands in an expression are constants (literals or `let` variables), 
 ### Example
 
 ```maxon
-function main() int
+function main() returns int
     var result = 2 + 3 * 4  // Computed at compile time: 14
     return result
 end 'main'
@@ -46,7 +46,7 @@ end 'main'
 
 Even complex nested expressions are optimized:
 ```maxon
-function main() int
+function main() returns int
     var x = 4
     return (1+2+x)*(x+(1+2))  // Optimized to: 7 * 7 = 49
 end 'main'
@@ -60,7 +60,7 @@ end 'main'
 
 <!-- test: simple-arithmetic -->
 ```maxon
-function main() int
+function main() returns int
     return 10 + 20
 end 'main'
 ```
@@ -71,7 +71,7 @@ end 'main'
 
 <!-- test: with-let -->
 ```maxon
-function main() int
+function main() returns int
     let x = 100
     let y = 25
     return x mod y
@@ -84,7 +84,7 @@ end 'main'
 
 <!-- test: complex-expression -->
 ```maxon
-function main() int
+function main() returns int
     var x = 4
     return (1+2+x)*(x+(1+2))
 end 'main'
@@ -96,7 +96,7 @@ end 'main'
 
 <!-- test: nested-parentheses -->
 ```maxon
-function main() int
+function main() returns int
     return ((10 + 5) * 2) - 5
 end 'main'
 ```

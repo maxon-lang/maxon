@@ -36,7 +36,7 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 
 	// Initialize string from compiler-constructed _ManagedString
 	// The compiler passes an opaque _ManagedString value
-	function ExpressibleByStringLiteral.init(managed _ManagedString) string
+	function ExpressibleByStringLiteral.init(managed _ManagedString) returns string
 		return string{_managed: managed, _iterPos: 0}
 	end 'init'
 
@@ -45,19 +45,19 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	// ============================================
 
 	/// Get grapheme cluster count (number of user-perceived characters)
-	export function count() int
+	export function count() returns int
 		return countGraphemesManaged(_managed)
 	end 'count'
 
 	/// Check if the string is empty
-	export function isEmpty() bool
+	export function isEmpty() returns bool
 		return __string_len(_managed) == 0
 	end 'isEmpty'
 
 	/// Get a zero-copy cstring reference for FFI
 	/// The returned cstring holds a reference to the underlying buffer
 	/// and will release it when it goes out of scope
-	export function cstr() cstring
+	export function cstr() returns cstring
 		return __string_to_cstring(_managed)
 	end 'cstr'
 
@@ -66,7 +66,7 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	// ============================================
 	// Returns character values (Extended Grapheme Clusters)
 
-	function Iterable.next() character or nil
+	function Iterable.next() returns character or nil
 		if _iterPos < __string_len(_managed) 'check'
 			// Find the end of the current grapheme cluster using UAX #29 algorithm
 			var len = __string_len(_managed)
@@ -85,22 +85,22 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	end 'next'
 
 	// Internal: Find end position of grapheme cluster starting at startPos
-	function _findGraphemeEnd(startPos int, len int) int
+	function _findGraphemeEnd(startPos int, len int) returns int
 		return findGraphemeEndManaged(_managed, startPos, len)
 	end '_findGraphemeEnd'
 
 	// Internal: Get number of bytes for codepoint at position
-	function _codepointBytes(pos int) int
+	function _codepointBytes(pos int) returns int
 		return utf8ByteLengthAt(_managed, pos)
 	end '_codepointBytes'
 
 	// Internal: Decode codepoint at byte position
-	function _decodeCodepointAt(pos int) int
+	function _decodeCodepointAt(pos int) returns int
 		return utf8DecodeAt(_managed, pos)
 	end '_decodeCodepointAt'
 
 	// Internal: Create a character from bytes in string at [start, start+len)
-	function _makeCharFromBytes(start int, byteLen int) character
+	function _makeCharFromBytes(start int, byteLen int) returns character
 		// Create substring slice, then convert to _ManagedString for character
 		var sub = __string_slice(_managed, start, start + byteLen)
 		var managed = __substring_to_string(sub)
@@ -111,7 +111,7 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	// Hashable conformance
 	// ============================================
 
-	function Hashable.hash() int
+	function Hashable.hash() returns int
 		return hashManagedString(_managed)
 	end 'hash'
 
@@ -119,7 +119,7 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	// Equatable conformance
 	// ============================================
 
-	function Equatable.equals(other string) bool
+	function Equatable.equals(other string) returns bool
 		return equalsManagedString(_managed, other._managed)
 	end 'equals'
 
@@ -128,7 +128,7 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	// ============================================
 
 	/// extract substring view by byte range (zero-copy)
-	export function slice(startIndex int, endIndex int) substring
+	export function slice(startIndex int, endIndex int) returns substring
 		var len = __string_len(_managed)
 
 		// Validate indices
@@ -151,27 +151,27 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	// ============================================
 
 	/// Concatenate two strings
-	export function concat(other string) string
+	export function concat(other string) returns string
 		return string{_managed: __string_concat(_managed, other._managed), _iterPos: 0}
 	end 'concat'
 
 	/// Check if string starts with prefix
-	export function startsWith(prefix string) bool
+	export function startsWith(prefix string) returns bool
 		return startsWithManaged(_managed, prefix._managed)
 	end 'startsWith'
 
 	/// Check if string ends with suffix
-	export function endsWith(suffix string) bool
+	export function endsWith(suffix string) returns bool
 		return endsWithManaged(_managed, suffix._managed)
 	end 'endsWith'
 
 	/// Find first occurrence of needle, return byte index or -1 if not found
-	export function find(needle string) int
+	export function find(needle string) returns int
 		return findManaged(_managed, needle._managed)
 	end 'find'
 
 	/// Check if string contains the given needle
-	export function contains(needle string) bool
+	export function contains(needle string) returns bool
 		return find(needle) >= 0
 	end 'contains'
 
@@ -180,7 +180,7 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	// ============================================
 
 	/// Convert ASCII letters to lowercase
-	export function toLower() string
+	export function toLower() returns string
 		var result = __string_make_unique(_managed)
 		var len = __string_len(_managed)
 		var i = 0
@@ -196,7 +196,7 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	end 'toLower'
 
 	/// Convert ASCII letters to uppercase
-	export function toUpper() string
+	export function toUpper() returns string
 		var result = __string_make_unique(_managed)
 		var len = __string_len(_managed)
 		var i = 0
@@ -212,7 +212,7 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	end 'toUpper'
 
 	/// Remove leading and trailing whitespace
-	export function trimWhitespace() string
+	export function trimWhitespace() returns string
 		var len = __string_len(_managed)
 
 		// Find first non-whitespace
@@ -244,12 +244,12 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 	// ============================================
 
 	/// create a ByteView for iterating over raw UTF-8 bytes
-	export function bytes() ByteView
+	export function bytes() returns ByteView
 		return ByteView{_managed: _managed, _pos: 0}
 	end 'bytes'
 
 	/// create an array of characters for indexed character access
-	export function chars() array of character
+	export function chars() returns array of character
 		var result = array of character
 		var bytePos = 0
 		var len = __string_len(_managed)
@@ -265,12 +265,12 @@ export struct string is Hashable, Equatable, Iterable with character, Expressibl
 
 	/// create a CodepointView for iterating over Unicode codepoints
 	/// This provides explicit codepoint iteration (same as current default for-in behavior)
-	export function codepoints() CodepointView
+	export function codepoints() returns CodepointView
 		return CodepointView{_managed: _managed, _pos: 0}
 	end 'codepoints'
 
 	/// create a UTF16View for iterating over UTF-16 code units
-	export function utf16() UTF16View
+	export function utf16() returns UTF16View
 		return UTF16View{_managed: _managed, _bytePos: 0, _highSurrogate: 0}
 	end 'utf16'
 end 'string'
@@ -285,7 +285,7 @@ export struct ByteView is Iterable with byte
 	var _managed _ManagedString
 	var _pos int
 
-	function Iterable.next() byte or nil
+	function Iterable.next() returns byte or nil
 		if _pos < __string_len(_managed) 'check'
 			let b = __string_byte_at(_managed, _pos)
 			_pos = _pos + 1
@@ -295,7 +295,7 @@ export struct ByteView is Iterable with byte
 	end 'next'
 
 	/// Return the number of bytes in the view
-	export function count() int
+	export function count() returns int
 		return __string_len(_managed)
 	end 'count'
 end 'ByteView'
@@ -307,7 +307,7 @@ export struct UTF16View is Iterable with int
 	var _bytePos int
 	var _highSurrogate int
 
-	function Iterable.next() int or nil
+	function Iterable.next() returns int or nil
 		// If we have a pending low surrogate from previous call
 		if _highSurrogate != 0 'return_low'
 			var offset = _highSurrogate
@@ -339,7 +339,7 @@ export struct UTF16View is Iterable with int
 	end 'next'
 
 	/// Return the number of UTF-16 code units in the view
-	export function count() int
+	export function count() returns int
 		var count = 0
 		var pos = 0
 		var len = __string_len(_managed)
@@ -348,9 +348,9 @@ export struct UTF16View is Iterable with int
 			// 4-byte sequences produce 2 UTF-16 code units (surrogate pair)
 			if byteLen == 4 'four_byte'
 				count = count + 2
-				else 'four_byte'
+			end 'four_byte' else 'not_four'
 				count = count + 1
-			end 'four_byte'
+			end 'not_four'
 			pos = pos + byteLen
 		end 'count_loop'
 		return count
@@ -364,7 +364,7 @@ export struct CodepointView is Iterable with int
 	var _managed _ManagedString
 	var _pos int
 
-	function Iterable.next() int or nil
+	function Iterable.next() returns int or nil
 		if _pos < __string_len(_managed) 'check'
 			let cp = utf8DecodeAt(_managed, _pos)
 			var advance = utf8ByteLengthAt(_managed, _pos)
@@ -375,7 +375,7 @@ export struct CodepointView is Iterable with int
 	end 'next'
 
 	/// Return the number of Unicode codepoints in the view
-	export function count() int
+	export function count() returns int
 		var cpCount = 0
 		var pos = 0
 		var len = __string_len(_managed)
@@ -411,12 +411,12 @@ export struct substring is Hashable, Equatable, Iterable with character
 	// ============================================
 
 	/// Get grapheme cluster count (number of user-perceived characters)
-	export function count() int
+	export function count() returns int
 		return countGraphemesSubstring(self)
 	end 'count'
 
 	/// Check if the substring is empty
-	export function isEmpty() bool
+	export function isEmpty() returns bool
 		return __substring_len(self) == 0
 	end 'isEmpty'
 
@@ -425,7 +425,7 @@ export struct substring is Hashable, Equatable, Iterable with character
 	// ============================================
 	// Returns character values (Extended Grapheme Clusters)
 
-	function Iterable.next() character or nil
+	function Iterable.next() returns character or nil
 		if __substring_iter_pos(self) < __substring_len(self) 'check'
 			// Find the end of the current grapheme cluster
 			var len = __substring_len(self)
@@ -448,22 +448,22 @@ export struct substring is Hashable, Equatable, Iterable with character
 	// ============================================
 
 	// Internal: Find end position of grapheme cluster starting at startPos
-	function _findGraphemeEnd(startPos int, len int) int
+	function _findGraphemeEnd(startPos int, len int) returns int
 		return findGraphemeEndSubstring(self, startPos, len)
 	end '_findGraphemeEnd'
 
 	// Internal: Get number of bytes for codepoint at position
-	function _codepointBytes(pos int) int
+	function _codepointBytes(pos int) returns int
 		return utf8ByteLengthAtSubstring(self, pos)
 	end '_codepointBytes'
 
 	// Internal: Decode codepoint at byte position
-	function _decodeCodepointAt(pos int) int
+	function _decodeCodepointAt(pos int) returns int
 		return utf8DecodeAtSubstring(self, pos)
 	end '_decodeCodepointAt'
 
 	// Internal: Create a character from bytes at [start, start+byteLen)
-	function _makeCharFromBytes(start int, byteLen int) character
+	function _makeCharFromBytes(start int, byteLen int) returns character
 		var sub = __substring_slice(self, start, start + byteLen)
 		var managed = __substring_to_string(sub)
 		return character{_managed: managed}
@@ -473,7 +473,7 @@ export struct substring is Hashable, Equatable, Iterable with character
 	// Hashable conformance
 	// ============================================
 
-	function Hashable.hash() int
+	function Hashable.hash() returns int
 		return hashSubstring(self)
 	end 'hash'
 
@@ -481,7 +481,7 @@ export struct substring is Hashable, Equatable, Iterable with character
 	// Equatable conformance
 	// ============================================
 
-	function Equatable.equals(other substring) bool
+	function Equatable.equals(other substring) returns bool
 		return equalsSubstring(self, other)
 	end 'equals'
 
@@ -491,7 +491,7 @@ export struct substring is Hashable, Equatable, Iterable with character
 
 	/// create an owned copy as a string
 	/// Use this when you need a mutable string or want to release parent reference
-	export function toString() string
+	export function toString() returns string
 		return string{_managed: __substring_to_string(self), _iterPos: 0}
 	end 'toString'
 
@@ -500,7 +500,7 @@ export struct substring is Hashable, Equatable, Iterable with character
 	// ============================================
 
 	/// extract a sub-range of this substring
-	export function slice(startIndex int, endIndex int) substring
+	export function slice(startIndex int, endIndex int) returns substring
 		var len = __substring_len(self)
 
 		// Validate indices
@@ -523,22 +523,22 @@ export struct substring is Hashable, Equatable, Iterable with character
 	// ============================================
 
 	/// check if substring starts with prefix
-	export function startsWith(prefix string) bool
+	export function startsWith(prefix string) returns bool
 		return startsWithSubstring(self, prefix._managed)
 	end 'startsWith'
 
 	/// check if substring ends with suffix
-	export function endsWith(suffix string) bool
+	export function endsWith(suffix string) returns bool
 		return endsWithSubstring(self, suffix._managed)
 	end 'endsWith'
 
 	/// find first occurrence of needle, return byte index or -1
-	export function find(needle string) int
+	export function find(needle string) returns int
 		return findSubstring(self, needle._managed)
 	end 'find'
 
 	/// Check if substring contains the given needle
-	export function contains(needle string) bool
+	export function contains(needle string) returns bool
 		return find(needle) >= 0
 	end 'contains'
 end 'substring'
@@ -550,6 +550,6 @@ end 'substring'
 /// Create a new string from a byte buffer
 /// Copies the bytes and creates a new heap-allocated string
 /// Note: Uses array of byte not array of character since character is now a grapheme cluster struct
-export function stringFromCharacters(buffer array of byte, length int) string
+export function stringFromCharacters(buffer array of byte, length int) returns string
 	return string{_managed: __string_from_characters(buffer, length), _iterPos: 0}
 end 'stringFromCharacters'

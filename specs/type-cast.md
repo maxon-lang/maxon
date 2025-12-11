@@ -47,7 +47,7 @@ value as targetType
 ### Example
 
 ```maxon
-function main() int
+function main() returns int
     var pi = 3.14159
     var approximate = trunc(pi)
     printInt(approximate)
@@ -66,7 +66,7 @@ end 'main'
 
 <!-- test: int-to-float -->
 ```maxon
-function main() int
+function main() returns int
     var x = 5
     var y = x as float
     var z = y + 2.5

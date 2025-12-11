@@ -45,7 +45,7 @@ Returns the number of characters written to the buffer.
 ### Example
 
 ```maxon
-function main() int
+function main() returns int
     var buffer = array of 12 byte
     var len = formatIntArray(42, buffer)
     // buffer now contains "42"
@@ -67,7 +67,7 @@ end 'main'
 
 <!-- test: basic -->
 ```maxon
-function main() int
+function main() returns int
     var buffer = array of 12 byte
     var len = formatIntArray(42, buffer)
     return len
@@ -80,7 +80,7 @@ end 'main'
 
 <!-- test: zero -->
 ```maxon
-function main() int
+function main() returns int
     var buffer = array of 12 byte
     var len = formatIntArray(0, buffer)
     return len
@@ -93,7 +93,7 @@ end 'main'
 
 <!-- test: negative -->
 ```maxon
-function main() int
+function main() returns int
     var buffer = array of 12 byte
     var len = formatIntArray(-123, buffer)
     return len
@@ -106,7 +106,7 @@ end 'main'
 
 <!-- test: large-value -->
 ```maxon
-function main() int
+function main() returns int
     var buffer = array of 12 byte
     var len = formatIntArray(123456, buffer)
     return len
@@ -119,7 +119,7 @@ end 'main'
 
 <!-- test: single-digit -->
 ```maxon
-function main() int
+function main() returns int
     var buffer = array of 12 byte
     var len = formatIntArray(7, buffer)
     return len

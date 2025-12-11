@@ -61,7 +61,7 @@ x = x + 2               // OK - var is mutable
 
 <!-- test: var-declaration.basic -->
 ```maxon
-function main() int
+function main() returns int
     var x = 42
     var y = 10
     var result = x + y
@@ -74,7 +74,7 @@ end 'main'
 
 <!-- test: var-declaration.reassignment -->
 ```maxon
-function main() int
+function main() returns int
     var x = 3
     x = x + 2
     return x

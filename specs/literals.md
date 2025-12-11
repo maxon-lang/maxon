@@ -59,7 +59,7 @@ false
 
 <!-- test: integer -->
 ```maxon
-function main() int
+function main() returns int
     return 5
 end 'main'
 ```
@@ -70,7 +70,7 @@ end 'main'
 
 <!-- test: float -->
 ```maxon
-function main() int
+function main() returns int
     var x = 3.14
     return trunc(x)
 end 'main'
@@ -82,7 +82,7 @@ end 'main'
 
 <!-- test: boolean -->
 ```maxon
-function main() int
+function main() returns int
     var flag = true
     if flag 'check'
         return 1

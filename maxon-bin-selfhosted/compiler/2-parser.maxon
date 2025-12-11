@@ -11,7 +11,7 @@ export struct Parser
         return Parser{tokens: tokens, pos: 0, hadError: false, errorMessage: ""}
     end 'create'
 
-    export function isAtEnd() bool
+    export function isAtEnd() returns bool
         return pos >= tokens.count() or peek().kind == TokenType.eof
     end 'isAtEnd'
 
@@ -36,14 +36,14 @@ export struct Parser
         return previous()
     end 'advance'
 
-    export function check(kind TokenType) bool
+    export function check(kind TokenType) returns bool
         if isAtEnd() 'eof'
             return false
         end 'eof'
         return peek().kind == kind
     end 'check'
 
-    export function matchToken(kind TokenType) bool
+    export function matchToken(kind TokenType) returns bool
         if check(kind) 'check'
             advance()
             return true
@@ -59,13 +59,13 @@ export struct Parser
         return makeToken(TokenType.error, "", peek().line, peek().column)
     end 'expect'
 
-    export function error(message string) void
+    export returns nothing
         hadError = true
         var tok = peek()
         errorMessage = "Error at line " + tok.line.toString() + ", column " + tok.column.toString() + ": " + message
     end 'error'
 
-    export function skipNewlines() void
+    export returns nothing
         while matchToken(TokenType.newline) 'skip'
         end 'skip'
     end 'skipNewlines'

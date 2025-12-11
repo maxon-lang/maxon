@@ -148,9 +148,9 @@ The compiler searches for `<libname>.lib` in the current directory and standard 
 
 ## Declaring Extern Functions
 
-```text
-extern function add_numbers(a int, b int) int "mylib"
-extern function multiply_floats(x float, y float) float "mathlib"
+```maxon
+extern function add_numbers(a int, b int) returns int "mylib"
+extern function multiply_floats(a float, b float) returns float "mathlib"
 ```
 
 The library name is specified as a string after the return type. If `mylib.lib` exists, static linking is used. Otherwise, `mylib.dll` is loaded at runtime.
@@ -159,7 +159,7 @@ The library name is specified as a string after the return type. If `mylib.lib` 
 
 Extern functions are called like normal functions:
 
-```text
+```maxon
 var sum = add_numbers(10, 20)
 var product = multiply_floats(3.14, 2.0)
 ```
@@ -193,9 +193,9 @@ var x = crash_now()  ' Program exits with FFI error, not segfault
 
 <!-- test: ffi-call-add-numbers -->
 ```maxon
-extern function add_numbers(a int, b int) int "ffi_test_lib"
+extern function add_numbers(a int, b int) returns int "ffi_test_lib"
 
-function main() int
+function main() returns int
     var result = add_numbers(5, 3)
     return result
 end 'main'
@@ -206,9 +206,9 @@ end 'main'
 
 <!-- test: basic-extern-int -->
 ```maxon
-extern function add_numbers(x int, y int) int "ffi_test_lib"
+extern function add_numbers(a int, b int) returns int "ffi_test_lib"
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -218,9 +218,9 @@ end 'main'
 
 <!-- test: extern-no-params -->
 ```maxon
-extern function get_constant() int "ffi_test_lib"
+extern function get_constant() returns int "ffi_test_lib"
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -230,9 +230,9 @@ end 'main'
 
 <!-- test: extern-float-return -->
 ```maxon
-extern function add_floats(x float, y float) float "ffi_test_lib"
+extern function get_pi() returns float "ffi_test_lib"
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -242,9 +242,9 @@ end 'main'
 
 <!-- test: extern-void-return -->
 ```maxon
-extern function do_nothing(x int) void "ffi_test_lib"
+extern function do_nothing() returns nothing "ffi_test_lib"
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -254,9 +254,9 @@ end 'main'
 
 <!-- test: extern-ptr-param -->
 ```maxon
-extern function process_ptr(p ptr) int "ffi_test_lib"
+extern function process_ptr(p ptr) returns int "ffi_test_lib"
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -266,9 +266,9 @@ end 'main'
 
 <!-- test: ffi-error-missing-dll -->
 ```maxon
-extern function some_function(x int) int "nonexistent_dll"
+extern function some_function(x int) returns int "nonexistent_dll"
 
-function main() int
+function main() returns int
     var result = some_function(42)
     return result
 end 'main'
@@ -282,9 +282,9 @@ FFI Error: Failed to load DLL 'nonexistent_dll.dll'
 
 <!-- test: ffi-error-missing-function -->
 ```maxon
-extern function nonexistent_function(a int, b int) int "ffi_test_lib"
+extern function nonexistent_function(a int, b int) returns int "ffi_test_lib"
 
-function main() int
+function main() returns int
     var result = nonexistent_function(5, 3)
     return result
 end 'main'
@@ -298,9 +298,9 @@ FFI Error: Function 'nonexistent_function' not found in 'ffi_test_lib.dll'
 
 <!-- test: ffi-worker-crash-null-deref -->
 ```maxon
-extern function crash_null_deref() int "ffi_test_lib"
+extern function crash_null_deref() returns int "ffi_test_lib"
 
-function main() int
+function main() returns int
     var result = crash_null_deref()
     return result
 end 'main'
@@ -314,9 +314,9 @@ FFI Error: Worker process crashed
 
 <!-- test: ffi-worker-crash-div-zero -->
 ```maxon
-extern function crash_divide_by_zero(n int) int "ffi_test_lib"
+extern function crash_divide_by_zero(x int) returns int "ffi_test_lib"
 
-function main() int
+function main() returns int
     var result = crash_divide_by_zero(42)
     return result
 end 'main'
@@ -330,9 +330,9 @@ FFI Error: Worker process crashed
 
 <!-- test: ffi-worker-terminates-with-parent -->
 ```maxon
-extern function GetCurrentProcessId() int "kernel32"
+extern function GetCurrentProcessId() returns int "kernel32"
 
-function main() int
+function main() returns int
     return GetCurrentProcessId() - GetCurrentProcessId()
 end 'main'
 ```

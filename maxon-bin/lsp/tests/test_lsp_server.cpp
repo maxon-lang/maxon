@@ -239,7 +239,7 @@ TEST_CASE("LSP publishes diagnostics on document open", "[lsp][diagnostics]") {
 	fixture.initialize();
 
 	std::string code = R"(
-function main() int
+function main() returns int
     var unused = 42
     return 0
 end 'main'
@@ -289,7 +289,7 @@ TEST_CASE("LSP reports unused variable warning", "[lsp][diagnostics]") {
 	fixture.initialize();
 
 	std::string code = R"(
-function main() int
+function main() returns int
     var unused = 42
     return 0
 end 'main'
@@ -325,7 +325,7 @@ TEST_CASE("LSP requires doc comments for exported stdlib functions", "[lsp][diag
 
 	// Exported function without doc comment in stdlib path
 	std::string code = R"(
-export function myPublicFunction() int
+export function myPublicFunction() returns int
     return 42
 end 'myPublicFunction'
 )";
@@ -358,7 +358,7 @@ TEST_CASE("LSP does not require doc comments for non-stdlib functions", "[lsp][d
 
 	// Exported function without doc comment in non-stdlib path
 	std::string code = R"(
-export function myPublicFunction() int
+export function myPublicFunction() returns int
     return 42
 end 'myPublicFunction'
 )";
@@ -391,7 +391,7 @@ TEST_CASE("LSP does not require doc comments for internal stdlib functions", "[l
 
 	// Internal function (starts with _) without doc comment in stdlib path
 	std::string code = R"(
-export function _internalFunction() int
+export function _internalFunction() returns int
     return 42
 end '_internalFunction'
 )";
@@ -425,7 +425,7 @@ TEST_CASE("LSP accepts doc comments for exported stdlib functions", "[lsp][diagn
 	// Exported function WITH doc comment in stdlib path
 	std::string code = R"(
 /// Returns the answer to life, the universe, and everything.
-export function myPublicFunction() int
+export function myPublicFunction() returns int
     return 42
 end 'myPublicFunction'
 )";
@@ -457,7 +457,7 @@ TEST_CASE("LSP no false positive for range() iteration", "[lsp][diagnostics]") {
 	fixture.initialize();
 
 	// Valid for-loop using range() - should NOT produce "Cannot iterate over RangeIterator" error
-	std::string code = R"(function main() int
+	std::string code = R"(function main() returns int
 	for i in range(0, 10) 'loop'
 		var x = i
 	end 'loop'
@@ -494,14 +494,14 @@ TEST_CASE("LSP RangeIterator struct is iterable", "[lsp][diagnostics]") {
 	// This simulates what the stdlib provides
 	std::string code = R"(
 interface Iterable
-	function next() int or nil
+	returns int or nil
 end 'Iterable'
 
 struct RangeIterator is Iterable with int
 	var current int
 	var limit int
 
-	function Iterable.next() int or nil
+	function Iterable.next() returns int or nil
 		if current < limit 'check'
 			let value = current
 			current = current + 1
@@ -511,12 +511,12 @@ struct RangeIterator is Iterable with int
 	end 'next'
 end 'RangeIterator'
 
-function range(start int, end_val int) RangeIterator
+function range(start int, end_val int) returns RangeIterator
 	var it = RangeIterator{current: start, limit: end_val}
 	return it
 end 'range'
 
-function main() int
+function main() returns int
 	for i in range(0, 10) 'loop'
 		var x = i
 	end 'loop'
@@ -557,14 +557,14 @@ TEST_CASE("LSP namespaced RangeIterator is iterable", "[lsp][diagnostics]") {
 	// The struct gets a namespace prefix like "iter.RangeIterator"
 	std::string code = R"(
 interface Iterable
-	function next() int or nil
+	returns int or nil
 end 'Iterable'
 
 export struct RangeIterator is Iterable with int
 	var current int
 	var limit int
 
-	export function Iterable.next() int or nil
+	export function Iterable.next() returns int or nil
 		if current < limit 'check'
 			let value = current
 			current = current + 1
@@ -574,12 +574,12 @@ export struct RangeIterator is Iterable with int
 	end 'next'
 end 'RangeIterator'
 
-export function range(start int, end_val int) RangeIterator
+export function range(start int, end_val int) returns RangeIterator
 	var it = RangeIterator{current: start, limit: end_val}
 	return it
 end 'range'
 
-function main() int
+function main() returns int
 	for i in range(0, 10) 'loop'
 		var x = i
 	end 'loop'
@@ -623,7 +623,7 @@ TEST_CASE("LSP stdlib RangeIterator is iterable with real stdlib", "[lsp][diagno
 	fixture.initialize(rootUri);
 
 	// Simple code that uses range() from the real stdlib
-	std::string code = R"(function main() int
+	std::string code = R"(function main() returns int
 	for i in range(0, 10) 'loop'
 		var x = i
 	end 'loop'
@@ -665,7 +665,7 @@ TEST_CASE("LSP hover returns type information", "[lsp][hover]") {
 	fixture.initialize();
 
 	std::string code = R"(
-function main() int
+function main() returns int
     let x = 42
     return x
 end 'main'
@@ -691,7 +691,7 @@ TEST_CASE("LSP hover shows value for immutable variables", "[lsp][hover]") {
 	LSPTestFixture fixture;
 	fixture.initialize();
 
-	std::string code = R"(function main() int
+	std::string code = R"(function main() returns int
 	let PI = 3.14159
 	return 0
 end 'main')";
@@ -718,11 +718,11 @@ end 'main')";
 
 TEST_CASE("LSP hover shows local function signature", "[lsp][hover]") {
 	// Test hover on a user-defined function
-	std::string code = R"(function add(a int, b int) int
+	std::string code = R"(function add(a int, b int) returns int
     return a + b
 end 'add'
 
-function main() int
+function main() returns int
     return add(1, 2)
 end 'main')";
 
@@ -765,7 +765,7 @@ TEST_CASE("LSP hover shows method signature for method call", "[lsp][hover]") {
 	std::string rootUri = "file://" + projectRoot.string();
 	fixture.initialize(rootUri);
 
-	std::string code = R"(function main() int
+	std::string code = R"(function main() returns int
     var s = "hello"
     var cs = s.cstr()
     return 0
@@ -800,7 +800,7 @@ TEST_CASE("LSP hover shows correct type for function parameter", "[lsp][hover]")
 	LSPTestFixture fixture;
 	fixture.initialize();
 
-	std::string code = R"(function greet(name string) int
+	std::string code = R"(function greet(name string) returns int
     var x = name
     return 0
 end 'greet')";
@@ -843,17 +843,17 @@ TEST_CASE("LSP hover shows correct type for stdlib function parameter", "[lsp][h
 
 	// Code with multiple functions that have same-named parameter 'value' with different types
 	// This mirrors stdlib/sys/print.maxon structure
-	std::string code = R"(export function print(value string) int
+	std::string code = R"(export function print(value string) returns int
     var cs = value
     return 0
 end 'print'
 
-export function printInt(value int) int
+export function printInt(value int) returns int
     var x = value
     return 0
 end 'printInt'
 
-export function printFloat(value float, precision int) int
+export function printFloat(value float, precision int) returns int
     var y = value
     return 0
 end 'printFloat')";
@@ -892,7 +892,7 @@ TEST_CASE("LSP completion returns items", "[lsp][completion]") {
 	fixture.initialize();
 
 	std::string code = R"(
-function main() int
+function main() returns int
     let msg = "hello"
     msg.
     return 0
@@ -934,7 +934,7 @@ TEST_CASE("LSP completion provides string type members", "[lsp][completion][stdl
 	std::string rootUri = "file://" + projectRoot.string();
 	fixture.initialize(rootUri);
 
-	std::string code = R"(function main() int
+	std::string code = R"(function main() returns int
 	let msg = "hello"
 	msg.
 	return 0
@@ -999,7 +999,7 @@ TEST_CASE("LSP completion provides array type members", "[lsp][completion][stdli
 	std::string rootUri = "file://" + projectRoot.string();
 	fixture.initialize(rootUri);
 
-	std::string code = R"(function main() int
+	std::string code = R"(function main() returns int
 	var arr = array of 5 int
 	arr.
 	return 0
@@ -1054,11 +1054,11 @@ TEST_CASE("LSP definition returns location", "[lsp][definition]") {
 	fixture.initialize();
 
 	std::string code = R"(
-function helper() int
+function helper() returns int
     return 42
 end 'helper'
 
-function main() int
+function main() returns int
     return helper()
 end 'main'
 )";
@@ -1087,7 +1087,7 @@ TEST_CASE("LSP formatting returns edits", "[lsp][formatting]") {
 	fixture.initialize();
 
 	// Poorly formatted code
-	std::string code = "function main() int\n  return 0\nend 'main'";
+	std::string code = "function main() returns int\n  return 0\nend 'main'";
 	fixture.openDocument("file:///test.maxon", code);
 
 	json formatParams = {
@@ -1112,7 +1112,7 @@ TEST_CASE("LSP formatting indents nested code correctly", "[lsp][formatting]") {
 	fixture.initialize();
 
 	// Code with no indentation - formatter should add proper indentation
-	std::string code = R"(function main() int
+	std::string code = R"(function main() returns int
 var x = 1
 if x > 0 'check'
 var y = 2
@@ -1204,7 +1204,7 @@ TEST_CASE("LSP formatting handles else blocks correctly", "[lsp][formatting]") {
 	fixture.initialize();
 
 	// Code with else block - indentation should be maintained
-	std::string code = R"(function test() int
+	std::string code = R"(function test() returns int
 if true 'check'
 return 1
 else 'check'
@@ -1251,7 +1251,7 @@ TEST_CASE("LSP formatting uses spaces when insertSpaces is true", "[lsp][formatt
 	fixture.initialize();
 
 	// Code with no indentation
-	std::string code = R"(function main() int
+	std::string code = R"(function main() returns int
 var x = 1
 return x
 end 'main')";
@@ -1286,7 +1286,7 @@ TEST_CASE("LSP formatting preserves implicit type declarations", "[lsp][formatti
 	fixture.initialize();
 
 	// Code with type inference - no explicit type annotations
-	std::string code = R"(function main() int
+	std::string code = R"(function main() returns int
 var x = 1
 let y = 2.5
 return x
@@ -1324,7 +1324,7 @@ TEST_CASE("LSP formatting preserves comments", "[lsp][formatting]") {
 	fixture.initialize();
 
 	std::string code = R"(// This is a comment
-function main() int
+function main() returns int
 // Another comment
 var x = 1
 return x
@@ -1356,11 +1356,11 @@ TEST_CASE("LSP formatting preserves blank lines", "[lsp][formatting]") {
 	LSPTestFixture fixture;
 	fixture.initialize();
 
-	std::string code = R"(function foo() int
+	std::string code = R"(function foo() returns int
 return 1
 end 'foo'
 
-function main() int
+function main() returns int
 return 0
 end 'main')";
 	fixture.openDocument("file:///test.maxon", code);
@@ -1392,15 +1392,15 @@ TEST_CASE("LSP formatting formats multiple interfaces at top level", "[lsp][form
 	// Multiple interfaces with incorrect nesting (each indented more than the previous)
 	// This mimics the bug in stdlib/interfaces.maxon
 	std::string code = R"(interface Hashable
-	function hash() int
+	function hash() returns int
 	end 'Hashable'
 
 	interface Equatable
-		function equals(other Self) bool
+		function equals(other Self) returns bool
 		end 'Equatable'
 
 		interface Comparable
-			function compare(other Self) int
+			function compare(other Self) returns int
 			end 'Comparable')";
 	fixture.openDocument("file:///test.maxon", code);
 
@@ -1456,7 +1456,7 @@ struct Point
     var y int
 end 'Point'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 )";
@@ -1488,7 +1488,7 @@ TEST_CASE("LSP prepareRename returns range", "[lsp][rename]") {
 	fixture.initialize();
 
 	std::string code = R"(
-function main() int
+function main() returns int
     let value = 42
     return value
 end 'main'
@@ -1514,7 +1514,7 @@ TEST_CASE("LSP rename returns workspace edit", "[lsp][rename]") {
 	fixture.initialize();
 
 	std::string code = R"(
-function main() int
+function main() returns int
     let value = 42
     return value
 end 'main'
@@ -1545,7 +1545,7 @@ TEST_CASE("LSP codeAction returns actions for diagnostics", "[lsp][codeAction]")
 	fixture.initialize();
 
 	std::string code = R"(
-function main() int
+function main() returns int
     var unused = 42
     return 0
 end 'main'
@@ -1576,7 +1576,7 @@ TEST_CASE("LSP foldingRange returns ranges", "[lsp][folding]") {
 	fixture.initialize();
 
 	std::string code = R"(
-function main() int
+function main() returns int
     if true 'check'
         return 1
     end 'check'
@@ -1610,7 +1610,7 @@ TEST_CASE("LSP linkedEditingRange returns ranges for block labels", "[lsp][linke
 	LSPTestFixture fixture;
 	fixture.initialize();
 
-	std::string code = R"(function main() int
+	std::string code = R"(function main() returns int
 	for i in range(0, 10) 'loop'
 		var x = i
 	end 'loop'
@@ -1642,7 +1642,7 @@ TEST_CASE("LSP linkedEditingRange returns ranges for function names", "[lsp][lin
 	LSPTestFixture fixture;
 	fixture.initialize();
 
-	std::string code = R"(function myFunction() int
+	std::string code = R"(function myFunction() returns int
 	return 42
 end 'myFunction')";
 	fixture.openDocument("file:///test.maxon", code);
@@ -1697,11 +1697,11 @@ TEST_CASE("LSP linkedEditingRange returns ranges for interface method names", "[
 	// Struct with interface method implementation
 	// The method name after the dot should be linked with the end label
 	std::string code = R"(interface Countable
-	function count() int
+	function count() returns int
 end 'Countable'
 
 struct MyStruct is Countable
-	function Countable.count() int
+	function Countable.count() returns int
 		return 0
 	end 'count'
 end 'MyStruct')";
@@ -1814,7 +1814,7 @@ TEST_CASE("LSP reports undefined function when calling non-existent stdlib funct
 	fixture.initialize(rootUri);
 
 	// Code that calls a function that doesn't exist in stdlib
-	std::string code = R"(function test() int
+	std::string code = R"(function test() returns int
 	return nonExistentStdlibFunction(42)
 end 'test')";
 	std::string docUri = "file://" + (projectRoot / "examples" / "test.maxon").string();
@@ -1864,7 +1864,7 @@ TEST_CASE("LSP reports undefined function when stdlib file is modified", "[lsp][
 
 	// Create a file that calls a function that EXISTS in the real stdlib
 	// Using 'print' which is a well-known stdlib function
-	std::string consumerCode = R"(function test() int
+	std::string consumerCode = R"(function test() returns int
 	print("hello")
 	return 0
 end 'test')";
@@ -1918,7 +1918,7 @@ TEST_CASE("LSP reports undefined function when file calls renamed stdlib functio
 
 	// Open a file that calls a function that doesn't exist in stdlib
 	// This simulates calling a function after it was renamed
-	std::string callerCode = R"(function test() int
+	std::string callerCode = R"(function test() returns int
 	// Calling a function name that doesn't exist
 	return nonExistentHelperFunction(42, 0, 10)
 end 'test')";
@@ -1974,7 +1974,7 @@ TEST_CASE("LSP reloads stdlib when stdlib file is changed in memory", "[lsp][dia
 
 	// Step 1: Open a consumer file that calls findGraphemeEndManaged
 	// This function exists in the real stdlib, so initially no error
-	std::string consumerCode = R"(function test(m _ManagedString) int
+	std::string consumerCode = R"(function test(m _ManagedString) returns int
 	return findGraphemeEndManaged(m, 0, 10)
 end 'test')";
 	std::string consumerUri = pathToUri((projectRoot / "examples" / "consumer.maxon").string());
@@ -2058,24 +2058,24 @@ struct MyArray uses Element is Collection with Element
 	var data int
 	var iterIndex int
 
-	function Collection.count() int
+	function Collection.count() returns int
 		return 0
 	end 'count'
 
-	function Collection.get(index int) Element or nil
+	function Collection.get(index int) returns Element or nil
 		return nil
 	end 'get'
 
-	function Collection.set(index int, value Element) Self
+	function Collection.set(index int, value Element) returns Self
 		return self
 	end 'set'
 
-	function Iterable.next() Element or nil
+	function Iterable.next() returns Element or nil
 		return nil
 	end 'next'
 end 'MyArray'
 
-function main() int
+function main() returns int
 	return 0
 end 'main')";
 	std::string docUri = "file://" + (projectRoot / "test.maxon").string();
@@ -2127,22 +2127,22 @@ struct MyArray uses Element is Collection with Element
 	var data int
 	var iterIndex int
 
-	function Collection.count() int
+	function Collection.count() returns int
 		return 0
 	end 'count'
 
-	function Collection.get(index int) Element or nil
+	function Collection.get(index int) returns Element or nil
 		return nil
 	end 'get'
 
-	function Collection.set(index int, value Element) Self
+	function Collection.set(index int, value Element) returns Self
 		return self
 	end 'set'
 
 	// NOTE: Missing Iterable.next() method!
 end 'MyArray'
 
-function main() int
+function main() returns int
 	return 0
 end 'main')";
 	std::string docUri = "file://" + (projectRoot / "test.maxon").string();
@@ -2191,24 +2191,24 @@ struct MyArray uses Element is Collection with Element
 	var data int
 	var iterIndex int
 
-	function Collection.count() int
+	function Collection.count() returns int
 		return 0
 	end 'count'
 
-	function Collection.get(index int) Element or nil
+	function Collection.get(index int) returns Element or nil
 		return nil
 	end 'get'
 
-	function Collection.set(index int, value Element) Self
+	function Collection.set(index int, value Element) returns Self
 		return self
 	end 'set'
 
-	function Iterable.next() Element or nil
+	function Iterable.next() returns Element or nil
 		return nil
 	end 'next'
 end 'MyArray'
 
-function main() int
+function main() returns int
 	return 0
 end 'main')";
 	std::string docUri = "file://" + (projectRoot / "test.maxon").string();

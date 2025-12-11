@@ -1389,7 +1389,7 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 				}
 				std::string returnType = resolveType(protoMethod.returnType);
 
-				missingMethods.push_back(protoMethod.name + "(" + paramStr + ") " + returnType);
+				missingMethods.push_back(protoMethod.name + "(" + paramStr + ") returns " + returnType);
 				continue;
 			}
 

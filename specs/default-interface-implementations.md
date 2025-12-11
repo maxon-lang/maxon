@@ -55,16 +55,18 @@ Interfaces can provide default implementations by including a function body. Met
 
 ```maxon
 interface Collection uses Element extends Iterable
-    function count() int                           // Abstract - must be implemented
-    function get(index int) Element                // Abstract - must be implemented
-    function set(index int, value Element) Self    // Abstract - must be implemented
+    function count() returns int                           // Abstract - must be implemented
+    function get(index int) returns Element or nil         // Abstract - must be implemented
+    function set(index int, value Element) returns Self    // Abstract - must be implemented
 
     // Default implementation - structs inherit this unless they override
-    function map(transform (Element) Element) Self
+    function map(transform (Element) Element) returns Self
         var i = 0
         while i < self.count() 'loop'
-            var transformed = transform(self.get(i))
-            self = self.set(i, transformed)
+            if let elem = self.get(i) 'get'
+                var transformed = transform(elem)
+                self = self.set(i, transformed)
+            end 'get'
             i = i + 1
         end 'loop'
         return self
@@ -83,11 +85,11 @@ When a struct implements an interface with default methods:
 struct IntList is Collection with int
     var data _ManagedArray<int>
 
-    function Collection.count() int
+    function Collection.count() returns int
         return __managed_array_len(self.data)
     end 'count'
 
-    function Collection.get(index int) int
+    function Collection.get(index int) returns int
         return __managed_array_get_at(self.data, index)
     end 'get'
 
@@ -117,11 +119,11 @@ In default implementations:
 
 <!-- test: default-map-on-array -->
 ```maxon
-function double(x int) int
+function double(x int) returns int
     return x * 2
 end 'double'
 
-function main() int
+function main() returns int
     var arr = [1, 2, 3]
     var result = arr.map(double)
     printInt(result[0])
@@ -141,7 +143,7 @@ end 'main'
 
 <!-- test: default-map-with-closure -->
 ```maxon
-function main() int
+function main() returns int
     var arr = [10, 20, 30]
     var squared = arr.map((x int) gives x * x)
     printInt(squared[0])

@@ -445,42 +445,48 @@ class MemberArrayAssignStmtAST : public StmtAST {
 };
 
 // If statement
+// New syntax: if condition 'thenBlockId' ... end 'thenBlockId' else 'elseBlockId' ... end 'elseBlockId'
 class IfStmtAST : public StmtAST {
   public:
 	std::unique_ptr<ExprAST> condition;
 	std::vector<std::unique_ptr<StmtAST>> thenBody;
 	std::vector<std::unique_ptr<StmtAST>> elseBody;
-	std::string blockId; // Block identifier for multi-line if (empty for single-line)
+	std::string blockId;     // Block identifier for the if/then branch
+	std::string elseBlockId; // Block identifier for the else branch (empty if no else)
 
 	IfStmtAST(std::unique_ptr<ExprAST> cond,
 			  std::vector<std::unique_ptr<StmtAST>> thenB,
 			  std::vector<std::unique_ptr<StmtAST>> elseB,
 			  int l = 0, int c = 0,
-			  const std::string &bid = "")
+			  const std::string &bid = "",
+			  const std::string &elseBid = "")
 		: StmtAST(l, c), condition(std::move(cond)),
 		  thenBody(std::move(thenB)),
 		  elseBody(std::move(elseB)),
-		  blockId(bid) {}
+		  blockId(bid), elseBlockId(elseBid) {}
 };
 
 // If-let statement (optional unwrapping)
-// Syntax: if let name = optionalExpr 'label' ... else 'label' ... end 'label'
+// New syntax: if let name = optionalExpr 'thenBlockId' ... end 'thenBlockId' else 'elseBlockId' ... end 'elseBlockId'
 class IfLetStmtAST : public StmtAST {
   public:
 	std::string bindingName;
 	std::unique_ptr<ExprAST> optionalExpr;
 	std::vector<std::unique_ptr<StmtAST>> thenBody;
 	std::vector<std::unique_ptr<StmtAST>> elseBody;
-	std::string blockId;
+	std::string blockId;     // Block identifier for the if-let/then branch
+	std::string elseBlockId; // Block identifier for the else branch (empty if no else)
 
 	IfLetStmtAST(const std::string &name,
 				 std::unique_ptr<ExprAST> expr,
 				 std::vector<std::unique_ptr<StmtAST>> thenB,
 				 std::vector<std::unique_ptr<StmtAST>> elseB,
 				 int l = 0, int c = 0,
-				 const std::string &bid = "")
+				 const std::string &bid = "",
+				 const std::string &elseBid = "")
 		: StmtAST(l, c), bindingName(name), optionalExpr(std::move(expr)),
-		  thenBody(std::move(thenB)), elseBody(std::move(elseB)), blockId(bid) {}
+		  thenBody(std::move(thenB)), elseBody(std::move(elseB)),
+		  blockId(bid), elseBlockId(elseBid) {}
 };
 
 // Else-unwrap statement (optional unwrapping with default value)

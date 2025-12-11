@@ -809,96 +809,41 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 	std::vector<CompletionItem> items;
 
 	// Check if this is an enum type - provide enum cases, rawValue, and methods
-	if (cache && cache->ast) {
-		for (const auto &enumDef : cache->ast->enums) {
-			if (enumDef->name == typeName) {
-				// Add enum cases
-				for (const auto &enumCase : enumDef->cases) {
-					if (prefix.empty() || matchesPrefix(enumCase.name, prefix)) {
-						CompletionItem item;
-						item.label = enumCase.name;
-						item.kind = CompletionItemKind::EnumMember;
-						item.detail = typeName + "." + enumCase.name;
-						item.insertText = enumCase.name;
-						items.push_back(std::move(item));
-					}
-				}
-
-				// If it's a raw value enum, add rawValue property
-				if (!enumDef->rawValueType.empty()) {
-					if (prefix.empty() || matchesPrefix("rawValue", prefix)) {
-						CompletionItem item;
-						item.label = "rawValue";
-						item.kind = CompletionItemKind::Property;
-						item.detail = enumDef->rawValueType;
-						item.documentation = "The raw value of this enum case";
-						item.insertText = "rawValue";
-						items.push_back(std::move(item));
-					}
-				}
-
-				// Add enum methods
-				for (const auto &method : enumDef->methods) {
-					if (prefix.empty() || matchesPrefix(method->name, prefix)) {
-						CompletionItem item;
-						item.label = method->name;
-						item.kind = CompletionItemKind::Method;
-						item.detail = method->returnType;
-						item.documentation = "";
-
-						// Build insert text with parameter placeholders
-						std::string insertText = method->name + "(";
-						int placeholderIndex = 1;
-						bool first = true;
-						for (const auto &param : method->parameters) {
-							// Skip 'self' parameter
-							if (param.name == "self") {
-								continue;
-							}
-							if (!first) {
-								insertText += ", ";
-							}
-							first = false;
-							insertText += "${" + std::to_string(placeholderIndex++) + ":" + param.name + "}";
-						}
-						insertText += ")";
-
-						item.insertText = insertText;
-						item.insertTextFormat = InsertTextFormat::Snippet;
-						items.push_back(std::move(item));
-					}
-				}
-
-				return items;
-			}
-		}
-	}
-
-	// Also check for enum types where variable is an instance of the enum
-	// (e.g., var s = Status.ok; s. should show rawValue if Status has raw values)
-	// Note: This is a fallback when typeName wasn't fully resolved - use findVariable without position
+	// Use cache->enums for type info (survives parse errors), AST for methods
 	if (cache) {
-		auto varPtr = cache->findVariable(typeName);
-		if (varPtr) {
-			std::string varType = varPtr->type;
-			// Check if varType is an enum
+		auto enumIt = cache->enums.find(typeName);
+		if (enumIt != cache->enums.end()) {
+			const EnumInfo &enumInfo = enumIt->second;
+
+			// Add enum cases
+			for (const auto &enumCase : enumInfo.cases) {
+				if (prefix.empty() || matchesPrefix(enumCase.name, prefix)) {
+					CompletionItem item;
+					item.label = enumCase.name;
+					item.kind = CompletionItemKind::EnumMember;
+					item.detail = typeName + "." + enumCase.name;
+					item.insertText = enumCase.name;
+					items.push_back(std::move(item));
+				}
+			}
+
+			// If it's a raw value enum, add rawValue property
+			if (!enumInfo.rawValueType.empty()) {
+				if (prefix.empty() || matchesPrefix("rawValue", prefix)) {
+					CompletionItem item;
+					item.label = "rawValue";
+					item.kind = CompletionItemKind::Property;
+					item.detail = enumInfo.rawValueType;
+					item.documentation = "The raw value of this enum case";
+					item.insertText = "rawValue";
+					items.push_back(std::move(item));
+				}
+			}
+
+			// Add enum methods from AST (if available)
 			if (cache->ast) {
 				for (const auto &enumDef : cache->ast->enums) {
-					if (enumDef->name == varType) {
-						// Add rawValue for raw value enums
-						if (!enumDef->rawValueType.empty()) {
-							if (prefix.empty() || matchesPrefix("rawValue", prefix)) {
-								CompletionItem item;
-								item.label = "rawValue";
-								item.kind = CompletionItemKind::Property;
-								item.detail = enumDef->rawValueType;
-								item.documentation = "The raw value of this enum case";
-								item.insertText = "rawValue";
-								items.push_back(std::move(item));
-							}
-						}
-
-						// Add enum methods
+					if (enumDef->name == typeName) {
 						for (const auto &method : enumDef->methods) {
 							if (prefix.empty() || matchesPrefix(method->name, prefix)) {
 								CompletionItem item;
@@ -929,10 +874,80 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 								items.push_back(std::move(item));
 							}
 						}
-
-						return items;
+						break;
 					}
 				}
+			}
+
+			return items;
+		}
+	}
+
+	// Also check for enum types where variable is an instance of the enum
+	// (e.g., var s = Status.ok; s. should show rawValue if Status has raw values)
+	// Note: This is a fallback when typeName wasn't fully resolved - use findVariable without position
+	if (cache) {
+		auto varPtr = cache->findVariable(typeName);
+		if (varPtr) {
+			std::string varType = varPtr->type;
+			// Check if varType is an enum using cache->enums
+			auto enumIt = cache->enums.find(varType);
+			if (enumIt != cache->enums.end()) {
+				const EnumInfo &enumInfo = enumIt->second;
+
+				// Add rawValue for raw value enums
+				if (!enumInfo.rawValueType.empty()) {
+					if (prefix.empty() || matchesPrefix("rawValue", prefix)) {
+						CompletionItem item;
+						item.label = "rawValue";
+						item.kind = CompletionItemKind::Property;
+						item.detail = enumInfo.rawValueType;
+						item.documentation = "The raw value of this enum case";
+						item.insertText = "rawValue";
+						items.push_back(std::move(item));
+					}
+				}
+
+				// Add enum methods from AST (if available)
+				if (cache->ast) {
+					for (const auto &enumDef : cache->ast->enums) {
+						if (enumDef->name == varType) {
+							for (const auto &method : enumDef->methods) {
+								if (prefix.empty() || matchesPrefix(method->name, prefix)) {
+									CompletionItem item;
+									item.label = method->name;
+									item.kind = CompletionItemKind::Method;
+									item.detail = method->returnType;
+									item.documentation = "";
+
+									// Build insert text with parameter placeholders
+									std::string insertText = method->name + "(";
+									int placeholderIndex = 1;
+									bool first = true;
+									for (const auto &param : method->parameters) {
+										// Skip 'self' parameter
+										if (param.name == "self") {
+											continue;
+										}
+										if (!first) {
+											insertText += ", ";
+										}
+										first = false;
+										insertText += "${" + std::to_string(placeholderIndex++) + ":" + param.name + "}";
+									}
+									insertText += ")";
+
+									item.insertText = insertText;
+									item.insertTextFormat = InsertTextFormat::Snippet;
+									items.push_back(std::move(item));
+								}
+							}
+							break;
+						}
+					}
+				}
+
+				return items;
 			}
 		}
 	}
@@ -968,47 +983,47 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 		std::string methodPrefix = searchType + ".";
 		for (const auto &symbol : stdlib.functions) {
 			if (symbol.kind == "method" && symbol.name.substr(0, methodPrefix.length()) == methodPrefix) {
-			// Extract just the method name (after the dot)
-			std::string methodName = symbol.name.substr(methodPrefix.length());
+				// Extract just the method name (after the dot)
+				std::string methodName = symbol.name.substr(methodPrefix.length());
 
-			// Skip internal methods (starting with underscore)
-			if (!methodName.empty() && methodName[0] == '_') {
-				continue;
-			}
-
-			// Skip interface method implementations (contain another dot like "Iterable.next")
-			if (methodName.find('.') != std::string::npos) {
-				continue;
-			}
-
-			if (prefix.empty() || matchesPrefix(methodName, prefix)) {
-				CompletionItem item;
-				item.label = methodName;
-				item.kind = CompletionItemKind::Method;
-				item.detail = symbol.type;
-				item.documentation = symbol.documentation;
-
-				// Build insert text with parameter placeholders
-				std::string insertText = methodName + "(";
-				int placeholderIndex = 1;
-				bool first = true;
-				for (const auto &param : symbol.parameters) {
-					// Skip 'self' parameter
-					if (param.name == "self") {
-						continue;
-					}
-					if (!first) {
-						insertText += ", ";
-					}
-					first = false;
-					insertText += "${" + std::to_string(placeholderIndex++) + ":" + param.name + "}";
+				// Skip internal methods (starting with underscore)
+				if (!methodName.empty() && methodName[0] == '_') {
+					continue;
 				}
-				insertText += ")";
 
-				item.insertText = insertText;
-				item.insertTextFormat = InsertTextFormat::Snippet;
-				items.push_back(std::move(item));
-			}
+				// Skip interface method implementations (contain another dot like "Iterable.next")
+				if (methodName.find('.') != std::string::npos) {
+					continue;
+				}
+
+				if (prefix.empty() || matchesPrefix(methodName, prefix)) {
+					CompletionItem item;
+					item.label = methodName;
+					item.kind = CompletionItemKind::Method;
+					item.detail = symbol.type;
+					item.documentation = symbol.documentation;
+
+					// Build insert text with parameter placeholders
+					std::string insertText = methodName + "(";
+					int placeholderIndex = 1;
+					bool first = true;
+					for (const auto &param : symbol.parameters) {
+						// Skip 'self' parameter
+						if (param.name == "self") {
+							continue;
+						}
+						if (!first) {
+							insertText += ", ";
+						}
+						first = false;
+						insertText += "${" + std::to_string(placeholderIndex++) + ":" + param.name + "}";
+					}
+					insertText += ")";
+
+					item.insertText = insertText;
+					item.insertTextFormat = InsertTextFormat::Snippet;
+					items.push_back(std::move(item));
+				}
 			}
 		}
 	}

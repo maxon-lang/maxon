@@ -14,7 +14,7 @@ export struct SemanticError
         return SemanticError{message: message, line: line, column: column}
     end 'create'
 
-    export function toString() string
+    export function toString() returns string
         return "Error at " + line.toString() + ":" + column.toString() + ": " + message
     end 'toString'
 end 'SemanticError'
@@ -38,11 +38,11 @@ export struct SemanticAnalyzer
         }
     end 'create'
 
-    export function success() bool
+    export function success() returns bool
         return errors.count() == 0
     end 'success'
 
-    export function addError(message string, loc SourceLoc) void
+    export returns nothing
         errors.append(SemanticError.create(message, loc.line, loc.column))
     end 'addError'
 
@@ -50,7 +50,7 @@ export struct SemanticAnalyzer
     // Main analysis entry point
     //=========================================================================
 
-    export function analyze(program Program) void
+    export returns nothing
         // Check all declarations
         var i = 0
         while i < program.declarations.count() 'decls'
@@ -64,7 +64,7 @@ export struct SemanticAnalyzer
         end 'noMain'
     end 'analyze'
 
-    export function analyzeDecl(decl Decl) void
+    export returns nothing
         match decl 'analyze'
             case function_(name, params, returnType, body, isExport, isExtern, loc) then
                 if name == "main" 'isMain'
@@ -81,7 +81,7 @@ export struct SemanticAnalyzer
         end 'analyze'
     end 'analyzeDecl'
 
-    export function analyzeStmt(stmt Stmt) void
+    export returns nothing
         match stmt 'analyze'
             case return_(value, loc) then
                 if let v = value 'hasValue'
@@ -94,7 +94,7 @@ export struct SemanticAnalyzer
         end 'analyze'
     end 'analyzeStmt'
 
-    export function analyzeExpr(expr Expr) void
+    export returns nothing
         match expr 'analyze'
             case intLiteral(value, loc) then
                 // Nothing to check
@@ -109,7 +109,7 @@ export struct SemanticAnalyzer
     // Error reporting
     //=========================================================================
 
-    export function printErrors() void
+    export returns nothing
         var i = 0
         while i < errors.count() 'errs'
             print(errors[i].toString())
@@ -117,7 +117,7 @@ export struct SemanticAnalyzer
         end 'errs'
     end 'printErrors'
 
-    export function printWarnings() void
+    export returns nothing
         var i = 0
         while i < warnings.count() 'warns'
             print("Warning: " + warnings[i].toString())

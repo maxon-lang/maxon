@@ -70,7 +70,7 @@ var z = trunc(neg)   // -3 (toward zero, removes fractional part)
 
 <!-- test: trunc.basic -->
 ```maxon
-function main() int
+function main() returns int
     var neg = 0.0 - 3.7
     var y = trunc(neg)
     printInt(y)
@@ -86,7 +86,7 @@ end 'main'
 
 <!-- test: trunc.positive -->
 ```maxon
-function main() int
+function main() returns int
     var x = 7.9
     var y = trunc(x)
     return y
@@ -98,7 +98,7 @@ end 'main'
 
 <!-- test: trunc.zero -->
 ```maxon
-function main() int
+function main() returns int
     var x = 0.5
     var y = trunc(x)
     return y

@@ -58,7 +58,7 @@ var z = floor(neg)   // -4 (rounds down toward negative infinity)
 
 <!-- test: floor.positive -->
 ```maxon
-function main() int
+function main() returns int
     var x = 3.9
     var y = floor(x)
     return y
@@ -70,7 +70,7 @@ end 'main'
 
 <!-- test: floor.negative -->
 ```maxon
-function main() int
+function main() returns int
     var neg = 0.0 - 3.2
     var y = floor(neg)
     printInt(y)
@@ -86,7 +86,7 @@ end 'main'
 
 <!-- test: floor.with-ceil -->
 ```maxon
-function main() int
+function main() returns int
     var x = 3.7
     var a = floor(x)
     var b = ceil(x)

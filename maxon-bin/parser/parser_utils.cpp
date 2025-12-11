@@ -323,7 +323,8 @@ std::string Parser::parseTypeString(const std::string &context) {
 		// Build function type string: fn(T1,T2)->R
 		std::string funcType = "fn(";
 		for (size_t i = 0; i < paramTypes.size(); i++) {
-			if (i > 0) funcType += ",";
+			if (i > 0)
+				funcType += ",";
 			funcType += paramTypes[i];
 		}
 		funcType += ")->" + returnType;
@@ -462,12 +463,20 @@ std::unique_ptr<StmtAST> Parser::parseStatementWithRecovery() {
 		std::string errorMsg = e.what();
 		parseErrors_.push_back(ParseError(errorMsg, startLine, startCol));
 
-		// Track position before synchronization for error range
+		// Track position before synchronization for error range and infinite loop detection
+		size_t posBeforeSync = position;
 		int endLine = currentLine();
 		int endCol = currentColumn();
 
 		// Synchronize to next safe point
 		synchronize();
+
+		// If we're still at the same position after sync, advance to prevent infinite loop
+		// This can happen when the current token is a sync token but not valid as a statement
+		// (e.g., 'function' keyword when parsing a statement body)
+		if (position == posBeforeSync && !check(TokenType::END_OF_FILE)) {
+			advance();
+		}
 
 		// Update end position to where we synchronized
 		if (endLine != currentLine() || endCol != currentColumn()) {

@@ -58,7 +58,7 @@ var z = ceil(neg)    // -3 (rounds up toward positive infinity)
 
 <!-- test: ceil.positive -->
 ```maxon
-function main() int
+function main() returns int
     var x = 3.1
     var y = ceil(x)
     return y
@@ -70,7 +70,7 @@ end 'main'
 
 <!-- test: ceil.negative -->
 ```maxon
-function main() int
+function main() returns int
     var neg = 0.0 - 3.9
     var y = ceil(neg)
     printInt(y)
@@ -86,7 +86,7 @@ end 'main'
 
 <!-- test: ceil.exact -->
 ```maxon
-function main() int
+function main() returns int
     var x = 5.0
     var y = ceil(x)
     return y

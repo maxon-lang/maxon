@@ -98,7 +98,7 @@ var b = a >> 2  // 0100 = 4
 
 <!-- test: bitwise-and -->
 ```maxon
-function main() int
+function main() returns int
     var a = 12
     var b = 10
     var c = a & b
@@ -115,7 +115,7 @@ end 'main'
 
 <!-- test: bitwise-or -->
 ```maxon
-function main() int
+function main() returns int
     var a = 12
     var b = 10
     var c = a | b
@@ -132,7 +132,7 @@ end 'main'
 
 <!-- test: bitwise-xor -->
 ```maxon
-function main() int
+function main() returns int
     var a = 12
     var b = 10
     var c = a ^ b
@@ -149,7 +149,7 @@ end 'main'
 
 <!-- test: left-shift -->
 ```maxon
-function main() int
+function main() returns int
     var a = 1
     var b = a << 3
     printInt(b)
@@ -165,7 +165,7 @@ end 'main'
 
 <!-- test: right-shift -->
 ```maxon
-function main() int
+function main() returns int
     var a = 16
     var b = a >> 2
     printInt(b)
@@ -181,7 +181,7 @@ end 'main'
 
 <!-- test: shift-chained -->
 ```maxon
-function main() int
+function main() returns int
     var a = 1
     var b = a << 4 >> 2
     printInt(b)
@@ -197,7 +197,7 @@ end 'main'
 
 <!-- test: bitwise-and-or-precedence -->
 ```maxon
-function main() int
+function main() returns int
     // & has higher precedence than |
     // 12 & 10 = 8, then 8 | 1 = 9
     var result = 12 & 10 | 1
@@ -214,7 +214,7 @@ end 'main'
 
 <!-- test: bitwise-xor-precedence -->
 ```maxon
-function main() int
+function main() returns int
     // & has higher precedence than ^
     // 12 & 10 = 8, then 8 ^ 3 = 11
     var result = 12 & 10 ^ 3
@@ -231,14 +231,14 @@ end 'main'
 
 <!-- test: shift-vs-comparison -->
 ```maxon
-function main() int
+function main() returns int
     // Shift has higher precedence than comparison
     // 1 << 3 = 8, then 8 > 5 = true
     if 1 << 3 > 5 'check'
         printInt(1)
-    else 'check'
+    end 'check' else 'else_check'
         printInt(0)
-    end 'check'
+    end 'else_check'
     return 0
 end 'main'
 ```
@@ -251,7 +251,7 @@ end 'main'
 
 <!-- test: bitwise-with-logical -->
 ```maxon
-function main() int
+function main() returns int
     // Logical operators have lower precedence than bitwise
     var a = 5 & 3        // 1
     var b = 5 | 2        // 7
@@ -270,7 +270,7 @@ end 'main'
 
 <!-- test: bit-masking -->
 ```maxon
-function main() int
+function main() returns int
     var flags = 0
     flags = flags | 1    // Set bit 0
     flags = flags | 4    // Set bit 2
@@ -293,7 +293,7 @@ end 'main'
 
 <!-- test: bit-clear -->
 ```maxon
-function main() int
+function main() returns int
     var flags = 7        // binary 111
     // Clear bit 1 using XOR
     flags = flags ^ 2
@@ -310,7 +310,7 @@ end 'main'
 
 <!-- test: power-of-two -->
 ```maxon
-function main() int
+function main() returns int
     // Calculate 2^n using shift
     var n = 5
     var result = 1 << n
@@ -327,7 +327,7 @@ end 'main'
 
 <!-- test: divide-by-power-of-two -->
 ```maxon
-function main() int
+function main() returns int
     // Divide by 4 using shift
     var value = 100
     var result = value >> 2
@@ -344,7 +344,7 @@ end 'main'
 
 <!-- test: multiply-by-power-of-two -->
 ```maxon
-function main() int
+function main() returns int
     // Multiply by 8 using shift
     var value = 25
     var result = value << 3

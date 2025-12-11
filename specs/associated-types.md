@@ -16,8 +16,8 @@ Associated types allow interfaces to declare abstract type placeholders that con
 **Interface declaration with associated types:**
 ```maxon
 interface Container uses Element
-    function get(index int) Element
-    function set(index int, value Element) Self
+    function get(index int) returns Element
+    function set(index int, value Element) returns Self
 end 'Container'
 ```
 
@@ -26,11 +26,11 @@ end 'Container'
 struct IntArray is Container with int
     var data array of 100 int
     
-    function Container.get(index int) int
+    function Container.get(index int) returns int
         return data[index]
     end 'get'
     
-    function Container.set(index int, value int) IntArray
+    function Container.set(index int, value int) returns IntArray
         data[index] = value
         return IntArray{data: data}
     end 'set'
@@ -77,8 +77,8 @@ end 'IntArray'
 During conformance checking, both `Self` and associated types are substituted:
 
 ```text
-Interface signature:  function getCurrent() Element
-Struct (string):      function getCurrent() character
+Interface signature:  function getCurrent() returns Element
+Struct (string):      function getCurrent() returns character
 Resolution:           Self -> string, Element -> character (implicit self)
 ```
 
@@ -90,7 +90,7 @@ Methods have an implicit `self` parameter. Inside method bodies, bare identifier
 struct Counter
     var count int
 
-    function increment() Counter
+    function increment() returns Counter
         return Counter{count: count + 1}  // 'count' resolves to 'self.count'
     end 'increment'
 end 'Counter'
@@ -102,7 +102,7 @@ Parameters shadow fields - use explicit `self.fieldName` to access shadowed fiel
 struct Box
     var value int
 
-    function setValue(value int) Box
+    function setValue(value int) returns Box
         return Box{value: value}  // parameter 'value', not field
     end 'setValue'
 end 'Box'
@@ -118,8 +118,8 @@ Use the `uses` keyword after the interface name to declare associated types:
 
 ```maxon
 interface Container uses Element
-    function get(index int) Element
-    function set(index int, value Element) Self
+    function get(index int) returns Element
+    function set(index int, value Element) returns Self
 end 'Container'
 ```
 
@@ -137,11 +137,11 @@ struct IntArray is Container with int
     var data array of 100 int
     var len int
 
-    function Container.get(index int) int
+    function Container.get(index int) returns int
         return data[index]
     end 'get'
 
-    function Container.set(index int, value int) IntArray
+    function Container.set(index int, value int) returns IntArray
         data[index] = value
         return IntArray{data: data, len: len}
     end 'set'
@@ -156,19 +156,19 @@ For interfaces with multiple associated types, list them in order:
 
 ```maxon
 interface Pair uses First, Second
-    function getFirst() First
-    function getSecond() Second
+    function getFirst() returns First
+    function getSecond() returns Second
 end 'Pair'
 
 struct IntFloat is Pair with int, float
     var a int
     var b float
 
-    function Pair.getFirst() int
+    function Pair.getFirst() returns int
         return a
     end 'getFirst'
     
-    function Pair.getSecond() float
+    function Pair.getSecond() returns float
         return b
     end 'getSecond'
 end 'IntFloat'
@@ -180,7 +180,7 @@ The standard library `Iterable` interface uses associated types:
 
 ```maxon
 interface Iterable uses Element
-    function next() Element or nil
+    function next() returns Element or nil
 end 'Iterable'
 ```
 
@@ -197,7 +197,7 @@ Different iterators define different element types:
 When iterating with `for`, the loop variable's type is inferred from the iterator's `Element` type:
 
 ```maxon
-function main() int
+function main() returns int
     var s = "Hi"
     for ch in s 'chars'
         // ch has type 'character' (inferred from string's Element type - grapheme cluster)
@@ -225,19 +225,19 @@ A struct conforming to an interface with associated types must:
 
 ```maxon
 interface Summable uses Element
-    function sum() Element
+    function sum() returns Element
 end 'Summable'
 
 struct IntPair is Summable with int
     var a int
     var b int
 
-    function Summable.sum() int
+    function Summable.sum() returns int
         return a + b
     end 'sum'
 end 'IntPair'
 
-function main() int
+function main() returns int
     var p = IntPair{a: 10, b: 32}
     return p.sum()
 end 'main'
@@ -261,18 +261,18 @@ If a struct doesn't bind required associated types:
 
 ```maxon
 interface HasElement uses Element
-    function get() Element
+    function get() returns Element
 end 'HasElement'
 
 struct Broken is HasElement
     var value int
 
-    function HasElement.get() int
+    function HasElement.get() returns int
         return value
     end 'get'
 end 'Broken'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -296,26 +296,26 @@ If a struct doesn't implement all interface methods:
 
 ```maxon
 interface TwoMethods uses Element
-    function first() Element
-    function second() Element
+    function first() returns Element
+    function second() returns Element
 end 'TwoMethods'
 
 struct Partial is TwoMethods with int
     var value int
 
-    function TwoMethods.first() int
+    function TwoMethods.first() returns int
         return value
     end 'first'
 end 'Partial'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 7, column 1
 Partial interface implementation: struct 'Partial' is missing 1 method(s):
-  - second() int
+  - second() returns int
 
   7 | struct Partial is TwoMethods with int
     | ^
@@ -327,18 +327,18 @@ If a method's signature doesn't match the resolved associated type:
 
 ```maxon
 interface Producer uses Output
-    function produce() Output
+    function produce() returns Output
 end 'Producer'
 
 struct WrongReturn is Producer with float
     var value int
 
-    function Producer.produce() int
+    function Producer.produce() returns int
         return value
     end 'produce'
 end 'WrongReturn'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -356,18 +356,18 @@ Method 'WrongReturn.produce' has return type 'int' but interface 'Producer' requ
 <!-- test: basic-associated-type -->
 ```maxon
 interface Wrapper uses Inner
-    function unwrap() Inner
+    function unwrap() returns Inner
 end 'Wrapper'
 
 struct IntBox is Wrapper with int
     var value int
 
-    function Wrapper.unwrap() int
+    function Wrapper.unwrap() returns int
         return value
     end 'unwrap'
 end 'IntBox'
 
-function main() int
+function main() returns int
     var box = IntBox{value: 42}
     return box.unwrap()
 end 'main'
@@ -380,23 +380,23 @@ end 'main'
 <!-- test: associated-type-in-param -->
 ```maxon
 interface Accumulator uses Item
-    function add(item Item) Self
-    function total() int
+    function add(item Item) returns Self
+    function total() returns int
 end 'Accumulator'
 
 struct IntSum is Accumulator with int
     var sum int
 
-    function Accumulator.add(item int) IntSum
+    function Accumulator.add(item int) returns IntSum
         return IntSum{sum: sum + item}
     end 'add'
 
-    function Accumulator.total() int
+    function Accumulator.total() returns int
         return sum
     end 'total'
 end 'IntSum'
 
-function main() int
+function main() returns int
     var acc = IntSum{sum: 0}
     acc = acc.add(10)
     acc = acc.add(32)
@@ -411,24 +411,24 @@ end 'main'
 <!-- test: multiple-associated-types -->
 ```maxon
 interface Pair uses First, Second
-    function getFirst() First
-    function getSecond() Second
+    function getFirst() returns First
+    function getSecond() returns Second
 end 'Pair'
 
 struct IntFloat is Pair with int, float
     var a int
     var b float
 
-    function Pair.getFirst() int
+    function Pair.getFirst() returns int
         return a
     end 'getFirst'
 
-    function Pair.getSecond() float
+    function Pair.getSecond() returns float
         return b
     end 'getSecond'
 end 'IntFloat'
 
-function main() int
+function main() returns int
     var p = IntFloat{a: 40, b: 2.5}
     var x = p.getFirst()
     var y = trunc(p.getSecond())
@@ -444,18 +444,18 @@ end 'main'
 ```maxon
 // character is a grapheme cluster struct, use codepoints() to access codepoint values
 interface CharSource uses Element
-    function getChar() Element
+    function getChar() returns Element
 end 'CharSource'
 
 struct SingleChar is CharSource with character
     var ch character
 
-    function CharSource.getChar() character
+    function CharSource.getChar() returns character
         return ch
     end 'getChar'
 end 'SingleChar'
 
-function main() int
+function main() returns int
     var s = SingleChar{ch: 'A'}
     var c = s.getChar()
     for cp in c.codepoints() 'loop'
@@ -472,18 +472,18 @@ end 'main'
 <!-- test: byte-element-type -->
 ```maxon
 interface ByteSource uses Element
-    function getByte() Element
+    function getByte() returns Element
 end 'ByteSource'
 
 struct SingleByte is ByteSource with byte
     var b byte
 
-    function ByteSource.getByte() byte
+    function ByteSource.getByte() returns byte
         return b
     end 'getByte'
 end 'SingleByte'
 
-function main() int
+function main() returns int
     var s = SingleByte{b: 42 as byte}
     var b = s.getByte()
     return b as int
@@ -497,18 +497,18 @@ end 'main'
 <!-- test: missing-type-binding-error -->
 ```maxon
 interface NeedsElement uses Element
-    function get() Element
+    function get() returns Element
 end 'NeedsElement'
 
 struct Missing is NeedsElement
     var value int
 
-    function NeedsElement.get() int
+    function NeedsElement.get() returns int
         return value
     end 'get'
 end 'Missing'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -530,26 +530,26 @@ Method 'Missing.get' has return type 'int' but interface 'NeedsElement' requires
 <!-- test: partial-implementation-error -->
 ```maxon
 interface TwoMethods uses Element
-    function first() Element
-    function second() Element
+    function first() returns Element
+    function second() returns Element
 end 'TwoMethods'
 
 struct Partial is TwoMethods with int
     var value int
 
-    function TwoMethods.first() int
+    function TwoMethods.first() returns int
         return value
     end 'first'
 end 'Partial'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 7, column 1
 Partial interface implementation: struct 'Partial' is missing 1 method(s):
-  - second() int
+  - second() returns int
 
   7 | struct Partial is TwoMethods with int
     | ^
@@ -559,18 +559,18 @@ Partial interface implementation: struct 'Partial' is missing 1 method(s):
 <!-- test: wrong-return-type-error -->
 ```maxon
 interface Typed uses Output
-    function make() Output
+    function make() returns Output
 end 'Typed'
 
 struct WrongType is Typed with float
     var value int
 
-    function Typed.make() int
+    function Typed.make() returns int
         return value
     end 'make'
 end 'WrongType'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -586,18 +586,18 @@ Method 'WrongType.make' has return type 'int' but interface 'Typed' requires 'fl
 <!-- test: wrong-param-type-error -->
 ```maxon
 interface Acceptor uses Input
-    function accept(val Input) int
+    function accept(val Input) returns int
 end 'Acceptor'
 
 struct WrongParam is Acceptor with float
     var value int
 
-    function Acceptor.accept(val int) int
+    function Acceptor.accept(val int) returns int
         return value + val
     end 'accept'
 end 'WrongParam'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -613,18 +613,18 @@ Method 'WrongParam.accept' parameter 1 has type 'int' but interface 'Acceptor' r
 <!-- test: implicit-self-field-access -->
 ```maxon
 interface Countable
-    function getCount() int
+    function getCount() returns int
 end 'Countable'
 
 struct Counter is Countable
     var count int
 
-    function Countable.getCount() int
+    function Countable.getCount() returns int
         return count
     end 'getCount'
 end 'Counter'
 
-function main() int
+function main() returns int
     var c = Counter{count: 42}
     return c.getCount()
 end 'main'
@@ -637,18 +637,18 @@ end 'main'
 <!-- test: method-call-syntax -->
 ```maxon
 interface Addable
-    function addOne() int
+    function addOne() returns int
 end 'Addable'
 
 struct Number is Addable
     var value int
 
-    function Addable.addOne() int
+    function Addable.addOne() returns int
         return value + 1
     end 'addOne'
 end 'Number'
 
-function main() int
+function main() returns int
     var n = Number{value: 41}
     return n.addOne()
 end 'main'

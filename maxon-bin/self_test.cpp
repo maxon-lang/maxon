@@ -106,19 +106,19 @@ bool testDeadCodeElimination(int verboseLevel) {
 
 	// Create test file with used and unused functions
 	const std::string testCode =
-		"function used_function() int\n"
+		"function used_function() returns int\n"
 		"    return 42\n"
 		"end 'used_function'\n"
 		"\n"
-		"function unused_function() int\n"
+		"function unused_function() returns int\n"
 		"    return 999\n"
 		"end 'unused_function'\n"
 		"\n"
-		"function another_unused() int\n"
+		"function another_unused() returns int\n"
 		"    return 123\n"
 		"end 'another_unused'\n"
 		"\n"
-		"function main() int\n"
+		"function main() returns int\n"
 		"    return used_function()\n"
 		"end 'main'\n";
 
@@ -174,7 +174,7 @@ bool testLinkerSelectiveLinking(int verboseLevel) {
 
 	// Test 1: Program with arrays (needs memset) but no floats
 	const std::string arrayCode =
-		"function main() int\n"
+		"function main() returns int\n"
 		"    var arr = array of 50 int\n"
 		"    arr[25] = 42\n"
 		"    return arr[25]\n"
@@ -182,7 +182,7 @@ bool testLinkerSelectiveLinking(int verboseLevel) {
 
 	// Test 2: Program with minimal code
 	const std::string minimalCode =
-		"function main() int\n"
+		"function main() returns int\n"
 		"    return 42\n"
 		"end 'main'\n";
 
@@ -249,7 +249,7 @@ bool testBasicCompilation(int verboseLevel) {
 	}
 
 	const std::string testCode =
-		"function main() int\n"
+		"function main() returns int\n"
 		"    return 0\n"
 		"end 'main'\n";
 
@@ -292,7 +292,7 @@ bool testFragmentTestRunner(int verboseLevel) {
 	// Test 1: MaxoncStderr mismatch (the one that was missed before)
 	// Use a valid error but with wrong expected message
 	const std::string testMaxoncStderr =
-		"function main() int\n"
+		"function main() returns int\n"
 		"    var x = unknown_function()\n"
 		"    return x\n"
 		"end 'main'\n"
@@ -305,7 +305,7 @@ bool testFragmentTestRunner(int verboseLevel) {
 
 	// Test 2: Optimized IR mismatch
 	const std::string testOptIRMismatch =
-		"function main() int\n"
+		"function main() returns int\n"
 		"    return 42\n"
 		"end 'main'\n"
 		"---\n"

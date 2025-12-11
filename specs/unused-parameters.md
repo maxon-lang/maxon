@@ -28,7 +28,7 @@ Maxon requires all function parameters to be used. Declaring unused parameters c
 ### Example Error
 
 ```maxon
-function add(a int, b int) int
+function add(a int, b int) returns int
     return a  // Error: 'b' is unused
 end 'add'
 ```
@@ -42,7 +42,7 @@ Semantic Error: The parameter 'b' is declared but its value is never used
 Only declare parameters you need:
 
 ```maxon
-function identity(a int) int
+function identity(a int) returns int
     return a  // OK: 'a' is used
 end 'identity'
 ```
@@ -50,11 +50,11 @@ end 'identity'
 
 <!-- test: single-unused -->
 ```maxon
-function add(a int, b int) int
+function add(a int, b int) returns int
     return a
 end 'add'
 
-function main() int
+function main() returns int
     return add(5, 10)
 end 'main'
 ```
@@ -62,17 +62,17 @@ end 'main'
 Semantic Error: line 2, column 21
 The parameter 'b' is declared but its value is never used
 
-  2 | function add(a int, b int) int
+  2 | function add(a int, b int) returns int
     |                     ^
 ```
 
 <!-- test: multiple-unused -->
 ```maxon
-function test(a int, b int, c int) int
+function test(a int, b int, c int) returns int
     return a
 end 'test'
 
-function main() int
+function main() returns int
     return test(1, 2, 3)
 end 'main'
 ```
@@ -80,23 +80,23 @@ end 'main'
 Semantic Error: line 2, column 22
 The parameter 'b' is declared but its value is never used
 
-  2 | function test(a int, b int, c int) int
+  2 | function test(a int, b int, c int) returns int
     |                      ^
 
 Semantic Error: line 2, column 29
 The parameter 'c' is declared but its value is never used
 
-  2 | function test(a int, b int, c int) int
+  2 | function test(a int, b int, c int) returns int
     |                             ^
 ```
 
 <!-- test: all-used-ok -->
 ```maxon
-function add(a int, b int) int
+function add(a int, b int) returns int
     return a + b
 end 'add'
 
-function main() int
+function main() returns int
     return add(5, 10)
 end 'main'
 ```
@@ -107,11 +107,11 @@ end 'main'
 
 <!-- test: none-unused -->
 ```maxon
-function multiply(a int, b int) int
+function multiply(a int, b int) returns int
     return a * b
 end 'multiply'
 
-function main() int
+function main() returns int
     return multiply(7, 6)
 end 'main'
 ```
@@ -122,11 +122,11 @@ end 'main'
 
 <!-- test: void-function-unused -->
 ```maxon
-function doNothing(x int, y int) void
+function doNothing(x int, y int) returns nothing
     var z = 42
 end 'doNothing'
 
-function main() int
+function main() returns int
     doNothing(1, 2)
     return 0
 end 'main'
@@ -135,13 +135,13 @@ end 'main'
 Semantic Error: line 2, column 20
 The parameter 'x' is declared but its value is never used
 
-  2 | function doNothing(x int, y int) void
+  2 | function doNothing(x int, y int) returns nothing
     |                    ^
 
 Semantic Error: line 2, column 27
 The parameter 'y' is declared but its value is never used
 
-  2 | function doNothing(x int, y int) void
+  2 | function doNothing(x int, y int) returns nothing
     |                           ^
 
 Semantic Error: line 3, column 5

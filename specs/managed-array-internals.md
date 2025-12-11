@@ -57,7 +57,7 @@ end 'scope'
 <!-- TrackAllocs: true -->
 Arrays that grow via push() should allocate on heap and free properly.
 ```maxon
-function main() int
+function main() returns int
     var arr = array of int
     arr.push(1)
     arr.push(2)
@@ -86,7 +86,7 @@ Leaked:    0 bytes
 <!-- TrackAllocs: true -->
 Heap arrays in inner scopes should be cleaned up on scope exit.
 ```maxon
-function main() int
+function main() returns int
     if true 'outer'
         var outer_arr = array of int
         outer_arr.push(100)
@@ -128,7 +128,7 @@ Leaked:    0 bytes
 Fixed-size stack arrays should not allocate on heap.
 Note: printInt cstring conversion is tracked.
 ```maxon
-function main() int
+function main() returns int
     var arr = [10, 20, 30]
     printInt(arr[1])
     return 0
@@ -154,7 +154,7 @@ Leaked:    0 bytes
 <!-- TrackAllocs: true -->
 Growing an array in a loop should release old buffers properly.
 ```maxon
-function main() int
+function main() returns int
     var arr = array of int
     var i = 0
     while i < 10 'loop'

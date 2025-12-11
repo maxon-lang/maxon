@@ -52,7 +52,7 @@ Use `` `text `` blocks for examples that don't need to compile or run.
 For code that should compile and run successfully:
 
 ```maxon
-function main() int
+function main() returns int
     var x = 10
     return x
 end 'main'
@@ -64,7 +64,7 @@ end 'main'
 Optionally include stdout output:
 
 ```maxon
-function main() int
+function main() returns int
     printInt(42)
     return 0
 end 'main'
@@ -81,7 +81,7 @@ end 'main'
 For code that demonstrates compile/parse errors:
 
 ```maxon
-function main() int
+function main() returns int
     var x = "not a number"
     return x + 5
 end 'main'
@@ -131,7 +131,7 @@ Code examples in the **Documentation** section can be:
 2. **Executable examples** - With `output` block, extracted as tests
    ```markdown
    ```maxon
-   function main() int
+   function main() returns int
        return 42
    end 'main'
    ```
@@ -153,7 +153,7 @@ Tests in the **Tests** section are always extracted. Each test needs:
 ```markdown
 <!-- test: basic-example -->
 ```maxon
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -194,7 +194,7 @@ var y = abs(x)  // Returns 5.5
 **Example (executable):**
 
 ```maxon
-function main() int
+function main() returns int
     var x = abs(-5.0)
     return trunc(x)
 end 'main'
@@ -207,7 +207,7 @@ end 'main'
 
 <!-- test: abs.float -->
 ```maxon
-function main() int
+function main() returns int
     var x = abs(-5.5)
     return trunc(x)
 end 'main'
@@ -218,7 +218,7 @@ end 'main'
 
 <!-- test: abs.zero -->
 ```maxon
-function main() int
+function main() returns int
     return abs(0.0) as int
 end 'main'
 ```

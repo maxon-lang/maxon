@@ -32,7 +32,7 @@ export struct map uses Key, Value is Dictionary with Key, Value, ExpressibleByMa
 
 	// ExpressibleByMapLiteral conformance - initialize map from map literal
 	// Called by the compiler for `["key": value, ...]` syntax
-	function ExpressibleByMapLiteral.init(managedKeys _ManagedArray, managedValues _ManagedArray) Self
+	function ExpressibleByMapLiteral.init(managedKeys _ManagedArray, managedValues _ManagedArray) returns Self
 		// Get number of entries in the managed arrays
 		var numEntries = __managed_array_len(managedKeys)
 
@@ -71,7 +71,7 @@ export struct map uses Key, Value is Dictionary with Key, Value, ExpressibleByMa
 	/// Insert a key-value pair into the map
 	/// If the key already exists, updates the value
 	/// Automatically resizes the map when load factor exceeds 75%
-	export function Dictionary.insert(key Key, value Value) void
+	export function Dictionary.insert(key Key, value Value) returns nothing
 		// Check load factor and grow if needed (75% threshold)
 		var loadLimit = trunc((capacity * 3) / 4)
 		if count >= loadLimit 'grow'
@@ -130,7 +130,7 @@ export struct map uses Key, Value is Dictionary with Key, Value, ExpressibleByMa
 	end 'insert'
 
 	/// Check if key exists in the map
-	export function Dictionary.contains(key Key) bool
+	export function Dictionary.contains(key Key) returns bool
 		var hash = key.hash()
 		var index = hash mod capacity
 		if index < 0 'fix_negative'
@@ -157,7 +157,7 @@ export struct map uses Key, Value is Dictionary with Key, Value, ExpressibleByMa
 	end 'contains'
 
 	/// Get value for key, returns default value if not found
-	export function Dictionary.get(key Key) Value
+	export function Dictionary.get(key Key) returns Value or nil
 		var hash = key.hash()
 		var index = hash mod capacity
 		if index < 0 'fix_negative'
@@ -186,7 +186,7 @@ export struct map uses Key, Value is Dictionary with Key, Value, ExpressibleByMa
 	end 'get'
 
 	/// Remove key from map, returns true if key was present
-	export function Dictionary.remove(key Key) bool
+	export function Dictionary.remove(key Key) returns bool
 		var hash = key.hash()
 		var index = hash mod capacity
 		if index < 0 'fix_negative'
@@ -215,17 +215,17 @@ export struct map uses Key, Value is Dictionary with Key, Value, ExpressibleByMa
 	end 'remove'
 
 	/// Get number of key-value pairs in the map
-	export function Dictionary.count() int
+	export function Dictionary.count() returns int
 		return count
 	end 'count'
 
 	/// Get current capacity (total number of slots)
-	export function capacity() int
+	export function capacity() returns int
 		return capacity
 	end 'capacity'
 
 	// Internal: grow the table when load factor exceeds threshold
-	function grow() void
+	function grow() returns nothing
 		var oldCapacity = capacity
 		var newCapacity = oldCapacity * 2
 

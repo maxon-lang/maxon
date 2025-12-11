@@ -61,7 +61,7 @@ Tests are defined as `TestCase` structs with:
 ```cpp
 {
     "parser_simple_function",
-    "function add(a int, b int) int\n"
+    "returns int\n"
     "    return a + b\n"
     "end 'add'",
     true,

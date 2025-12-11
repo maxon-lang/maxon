@@ -46,7 +46,7 @@ suite('Rename Test Suite', () => {
 
 	test('Rename function block identifier', async function () {
 		const content = [
-			"function oldName() int",
+			"function oldName() returns int",
 			"    return 42",
 			"end 'oldName'"
 		].join('\n');
@@ -74,7 +74,7 @@ suite('Rename Test Suite', () => {
 
 	test('Rename if statement block identifiers', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    var x = 5",
 			"    if x = 5 'check'",
 			"        return 1",
@@ -114,7 +114,7 @@ suite('Rename Test Suite', () => {
 
 	test('Rename while loop block identifiers', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    var i = 0",
 			"    while i < 10 'loop'",
 			"        i = i + 1",
@@ -173,7 +173,7 @@ suite('Rename Test Suite', () => {
 
 	test('Rename on non-block identifier returns nothing', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    var x = 5",
 			"    return x",
 			"end 'test'"
@@ -204,7 +204,7 @@ suite('Rename Test Suite', () => {
 
 	test('Rename nested block identifiers correctly', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    var x = 0",
 			"    while x < 10 'outer'",
 			"        if x = 5 'inner'",
@@ -244,13 +244,13 @@ suite('Rename Test Suite', () => {
 
 	test('Rename all occurrences when multiple blocks share name', async function () {
 		const content = [
-			"function test1() int",
+			"function test1() returns int",
 			"    if true 'block'",
 			"        return 1",
 			"    end 'block'",
 			"end 'test1'",
 			"",
-			"function test2() int",
+			"function test2() returns int",
 			"    if false 'block'",
 			"        return 0",
 			"    end 'block'",
@@ -279,7 +279,7 @@ suite('Rename Test Suite', () => {
 
 	test('Rename command integration with F2', async function () {
 		const content = [
-			"function myFunc() int",
+			"function myFunc() returns int",
 			"    return 42",
 			"end 'myFunc'"
 		].join('\n');
@@ -312,7 +312,7 @@ suite('Rename Test Suite', () => {
 			"    var y int",
 			"end 'Point'",
 			"",
-			"function test() Point",
+			"function test() returns Point",
 			"    var p = Point{x: 0, y: 0}",
 			"    return Point{x: 1, y: 2}",
 			"end 'test'"
@@ -359,7 +359,7 @@ suite('Rename Test Suite', () => {
 			"    var y int",
 			"end 'Point'",
 			"",
-			"function test() Point",
+			"function test() returns Point",
 			"    var p Point",
 			"    return Point{x: 1, y: 2}",
 			"end 'test'"
@@ -390,25 +390,28 @@ suite('Rename Test Suite', () => {
 
 	test('Linked editing for block identifier only', async function () {
 		const content = [
-			"if 'condition'",
-			"    var x = 1",
-			"else 'condition'",
-			"    var x = 2",
-			"end 'condition'"
+			"function main() returns int",
+			"    if true 'condition'",
+			"        var x = 1",
+			"    else 'condition'",
+			"        var x = 2",
+			"    end 'condition'",
+			"    return 0",
+			"end 'main'"
 		].join('\n');
 
 		testDocument = await createTestFile('test_linked_editing_block.maxon', content);
 
-		// Position on first block identifier (line 0, col 4)
-		const position = new vscode.Position(0, 4);
+		// Position on first block identifier (line 1, col 13 - inside 'condition')
+		const position = new vscode.Position(1, 13);
 
 		const editor = await vscode.window.showTextDocument(testDocument);
 		editor.selection = new vscode.Selection(position, position);
 
 		// Verify position is valid for editing
 		const text = testDocument.getText(new vscode.Range(
-			new vscode.Position(0, 4),
-			new vscode.Position(0, 13)
+			new vscode.Position(1, 13),
+			new vscode.Position(1, 22)
 		));
 		assert.strictEqual(text, 'condition', 'Position should be on block identifier');
 	});
@@ -417,7 +420,7 @@ suite('Rename Test Suite', () => {
 		// Linked editing is fully tested at the LSP C++ level
 		// This test verifies the capability is registered and the extension is working
 		const content = [
-			"function myFunction() int",
+			"function myFunction() returns int",
 			"    return 42",
 			"end 'myFunction'"
 		].join('\n');
@@ -454,7 +457,7 @@ suite('Rename Test Suite', () => {
 		// Linked editing is fully tested at the LSP C++ level
 		// This test verifies the capability is registered and the extension is working
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    var i = 0",
 			"    while i < 10 'loop'",
 			"        i = i + 1",

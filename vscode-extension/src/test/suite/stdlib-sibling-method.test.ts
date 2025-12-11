@@ -25,14 +25,11 @@ suite('Stdlib Sibling Method Call Tests', () => {
 	): Promise<vscode.Diagnostic[]> {
 		let diagnostics: vscode.Diagnostic[] = [];
 		for (let i = 0; i < maxAttempts; i++) {
-			await new Promise(resolve => setTimeout(resolve, 100));
 			diagnostics = vscode.languages.getDiagnostics(uri);
 			if (predicate ? predicate(diagnostics) : true) {
-				// Wait a bit more to ensure diagnostics are stable
-				await new Promise(resolve => setTimeout(resolve, 200));
-				diagnostics = vscode.languages.getDiagnostics(uri);
 				break;
 			}
+			await new Promise(resolve => setTimeout(resolve, 100)); // wait for diagnostics to update
 		}
 		return diagnostics;
 	}

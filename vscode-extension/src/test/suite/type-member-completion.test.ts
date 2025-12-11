@@ -64,7 +64,7 @@ suite('Type Member Completion Tests', () => {
 			if (testCompletions.items.some(item => item.label === 'var')) {
 				break;
 			}
-			await new Promise(resolve => setTimeout(resolve, 50));
+			await new Promise(resolve => setTimeout(resolve, 50)); // wait for lsp analysis
 		}
 
 		// Step 2: Modify document to have incomplete dot access
@@ -85,12 +85,12 @@ suite('Type Member Completion Tests', () => {
 	}
 
 	test('Should provide string property completions after dot', async function () {
-		const validContent = `function main() int
+		const validContent = `function main() returns int
     var s = "hello"
     return s.count
 end 'main'`;
 
-		const incompleteContent = `function main() int
+		const incompleteContent = `function main() returns int
     var s = "hello"
     s.
     return 0
@@ -114,12 +114,12 @@ end 'main'`;
 	});
 
 	test('Should provide string method completions after dot', async function () {
-		const validContent = `function main() int
+		const validContent = `function main() returns int
     var s = "hello"
     return s.count
 end 'main'`;
 
-		const incompleteContent = `function main() int
+		const incompleteContent = `function main() returns int
     var s = "hello"
     s.
     return 0
@@ -142,12 +142,12 @@ end 'main'`;
 	});
 
 	test('String method completions should have correct kind', async function () {
-		const validContent = `function main() int
+		const validContent = `function main() returns int
     var s = "hello"
     return s.count
 end 'main'`;
 
-		const incompleteContent = `function main() int
+		const incompleteContent = `function main() returns int
     var s = "hello"
     s.
     return 0
@@ -171,12 +171,12 @@ end 'main'`;
 	});
 
 	test('String method completions should have detail with return type', async function () {
-		const validContent = `function main() int
+		const validContent = `function main() returns int
     var s = "hello"
     return s.count
 end 'main'`;
 
-		const incompleteContent = `function main() int
+		const incompleteContent = `function main() returns int
     var s = "hello"
     s.
     return 0
@@ -208,12 +208,12 @@ end 'main'`;
 	});
 
 	test('String method completions should have documentation', async function () {
-		const validContent = `function main() int
+		const validContent = `function main() returns int
     var s = "hello"
     return s.count
 end 'main'`;
 
-		const incompleteContent = `function main() int
+		const incompleteContent = `function main() returns int
     var s = "hello"
     s.
     return 0
@@ -235,12 +235,12 @@ end 'main'`;
 	});
 
 	test('Should provide array member completions after dot', async function () {
-		const validContent = `function main() int
+		const validContent = `function main() returns int
     var arr = [1, 2, 3, 4, 5]
     return arr.count()
 end 'main'`;
 
-		const incompleteContent = `function main() int
+		const incompleteContent = `function main() returns int
     var arr = [1, 2, 3, 4, 5]
     arr.
     return 0
@@ -260,12 +260,12 @@ end 'main'`;
 	});
 
 	test('Array count should have Method kind and int detail', async function () {
-		const validContent = `function main() int
+		const validContent = `function main() returns int
     var arr = [1, 2, 3, 4, 5]
     return arr.count()
 end 'main'`;
 
-		const incompleteContent = `function main() int
+		const incompleteContent = `function main() returns int
     var arr = [1, 2, 3, 4, 5]
     arr.
     return 0
@@ -290,7 +290,7 @@ end 'main'`;
     var y int
 end 'Point'
 
-function main() int
+function main() returns int
     var p = Point { x: 0, y: 0 }
     return p.x
 end 'main'`;
@@ -300,7 +300,7 @@ end 'main'`;
     var y int
 end 'Point'
 
-function main() int
+function main() returns int
     var p = Point { x: 0, y: 0 }
     p.
     return 0
@@ -328,7 +328,7 @@ end 'main'`;
     var y int
 end 'Point'
 
-function main() int
+function main() returns int
     var p = Point { x: 0, y: 0 }
     return p.x
 end 'main'`;
@@ -338,7 +338,7 @@ end 'main'`;
     var y int
 end 'Point'
 
-function main() int
+function main() returns int
     var p = Point { x: 0, y: 0 }
     p.
     return 0
@@ -358,12 +358,12 @@ end 'main'`;
 	});
 
 	test('String method with parentheses should have insertText', async function () {
-		const validContent = `function main() int
+		const validContent = `function main() returns int
     var s = "hello"
     return s.count
 end 'main'`;
 
-		const incompleteContent = `function main() int
+		const incompleteContent = `function main() returns int
     var s = "hello"
     s.
     return 0

@@ -45,7 +45,7 @@ The Mem2Reg optimization eliminates stack allocations by promoting local variabl
 When a variable is only assigned in one block, the optimization is straightforward:
 
 ```maxon
-function main() int
+function main() returns int
     var x = 10
     return x + 5
 end 'main'
@@ -59,13 +59,13 @@ end 'main'
 When a variable is assigned in different branches, a PHI node merges the values:
 
 ```maxon
-function main() int
+function main() returns int
     var x = 0
     if 1 > 0 'branch'
         x = 10
-    else 'branch'
+    end 'branch' else 'else_branch'
         x = 20
-    end 'branch'
+    end 'else_branch'
     return x
 end 'main'
 ```
@@ -78,7 +78,7 @@ end 'main'
 Variables modified in loops are correctly promoted with PHI nodes at the loop header:
 
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     var i = 0
     while i < 5 'loop'
@@ -96,13 +96,13 @@ end 'main'
 
 <!-- test: if-else-phi -->
 ```maxon
-function main() int
+function main() returns int
     var x = 0
     if 5 > 3 'check'
         x = 42
-    else 'check'
+    end 'check' else 'else_check'
         x = 100
-    end 'check'
+    end 'else_check'
     return x
 end 'main'
 ```
@@ -112,13 +112,13 @@ end 'main'
 
 <!-- test: if-else-phi-else-path -->
 ```maxon
-function main() int
+function main() returns int
     var x = 0
     if 1 > 5 'check'
         x = 42
-    else 'check'
+    end 'check' else 'else_check'
         x = 100
-    end 'check'
+    end 'else_check'
     return x
 end 'main'
 ```
@@ -128,17 +128,17 @@ end 'main'
 
 <!-- test: nested-if-phi -->
 ```maxon
-function main() int
+function main() returns int
     var result = 0
     if 1 > 0 'outer'
         if 2 > 1 'inner'
             result = 10
-        else 'inner'
+        end 'inner' else 'else_inner'
             result = 20
-        end 'inner'
-    else 'outer'
+        end 'else_inner'
+    end 'outer' else 'else_outer'
         result = 30
-    end 'outer'
+    end 'else_outer'
     return result
 end 'main'
 ```
@@ -148,7 +148,7 @@ end 'main'
 
 <!-- test: loop-phi -->
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     var i = 1
     while i <= 5 'loop'
@@ -164,7 +164,7 @@ end 'main'
 
 <!-- test: nested-loop-phi -->
 ```maxon
-function main() int
+function main() returns int
     var total = 0
     var i = 0
     while i < 3 'outer'
@@ -184,16 +184,16 @@ end 'main'
 
 <!-- test: multiple-vars-phi -->
 ```maxon
-function main() int
+function main() returns int
     var a = 0
     var b = 0
     if 1 > 0 'branch'
         a = 10
         b = 20
-    else 'branch'
+    end 'branch' else 'else_branch'
         a = 100
         b = 200
-    end 'branch'
+    end 'else_branch'
     return a + b
 end 'main'
 ```
@@ -203,13 +203,13 @@ end 'main'
 
 <!-- test: phi-with-computation -->
 ```maxon
-function main() int
+function main() returns int
     var x = 5
     if x > 3 'check'
         x = x * 2
-    else 'check'
+    end 'check' else 'else_check'
         x = x + 10
-    end 'check'
+    end 'else_check'
     return x
 end 'main'
 ```
@@ -219,7 +219,7 @@ end 'main'
 
 <!-- test: loop-counter -->
 ```maxon
-function main() int
+function main() returns int
     var count = 0
     var i = 0
     while i < 10 'loop'

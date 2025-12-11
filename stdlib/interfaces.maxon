@@ -3,22 +3,22 @@
 
 // Hashable - types that can be hashed to an integer
 export interface Hashable
-	function hash() int
+	function hash() returns int
 end 'Hashable'
 
 // Equatable - types that can be compared for equality
 export interface Equatable
-	function equals(other Self) bool
+	function equals(other Self) returns bool
 end 'Equatable'
 
 // Comparable - types that can be ordered
 export interface Comparable
-	function compare(other Self) int
+	function compare(other Self) returns int
 end 'Comparable'
 
 // Cloneable - types that can be copied
 export interface Cloneable
-	function clone() Self
+	function clone() returns Self
 end 'Cloneable'
 
 // Iterable - types that can be iterated over (used by for-in loops)
@@ -26,18 +26,18 @@ end 'Cloneable'
 // The next() method advances the iterator and returns the element atomically.
 // Structs provide concrete Element type via 'is Iterable with Type'.
 export interface Iterable uses Element
-	function next() Element or nil
+	function next() returns Element or nil
 end 'Iterable'
 
 // Stringable - types that can be converted to a string representation
 export interface Stringable
-	function toString() string
+	function toString() returns string
 end 'Stringable'
 
 // Subscriptable - types that support range-based subscripting (slicing)
 // Used for s[start..end], s[start..], s[..end] syntax
 export interface Subscriptable
-	function subscript(startIndex int, endIndex int) Self
+	function subscript(startIndex int, endIndex int) returns Self
 end 'Subscriptable'
 
 // ExpressibleByStringLiteral - types that can be initialized from string literals
@@ -47,7 +47,7 @@ end 'Subscriptable'
 // - capacity > 0 for heap-allocated data with refcount header
 // The compiler detects conformance and transforms: var x MyType = "hello" -> var x = MyType.init(managed)
 export interface ExpressibleByStringLiteral
-	function init(managed _ManagedString) Self
+	function init(managed _ManagedString) returns Self
 end 'ExpressibleByStringLiteral'
 
 // Collection - types that support indexed access and functional operations
@@ -56,34 +56,34 @@ end 'ExpressibleByStringLiteral'
 // set() triggers copy-on-write for shared backing storage
 // map() transforms elements using a closure
 export interface Collection uses Element extends Iterable
-	function count() int
-	function get(index int) Element or nil
-	function set(index int, value Element) Self
+	function count() returns int
+	function get(index int) returns Element or nil
+	function set(index int, value Element) returns Self
 
 	// Default implementation of map - transforms elements in place
 	// Structs can override this with a more efficient implementation
-	function map(transform (Element) Element) Self
-		var i = 0
-		while i < self.count() 'loop'
-			if let elem = self.get(i) 'get'
-				var transformed = transform(elem)
-				self = self.set(i, transformed)
-			end 'get'
-			i = i + 1
-		end 'loop'
-		return self
-	end 'map'
+	function map(transform (Element) Element) returns Self
+	var i = 0
+	while i < self.count() 'loop'
+		if let elem = self.get(i) 'get'
+			var transformed = transform(elem)
+			self = self.set(i, transformed)
+		end 'get'
+		i = i + 1
+	end 'loop'
+	return self
+end 'map'
 end 'Collection'
 
 // Dictionary - types that map keys to values
 // Keys must implement Hashable and Equatable for lookup
 // Uses associated types for Key and Value
 export interface Dictionary uses Key, Value
-	function insert(key Key, value Value) void
-	function get(key Key) Value
-	function contains(key Key) bool
-	function remove(key Key) bool
-	function count() int
+	function insert(key Key, value Value) returns nothing
+	function get(key Key) returns Value or nil
+	function contains(key Key) returns bool
+	function remove(key Key) returns bool
+	function count() returns int
 end 'Dictionary'
 
 // ExpressibleByArrayLiteral - types that can be initialized from array literals
@@ -94,7 +94,7 @@ end 'Dictionary'
 // The compiler detects conformance and transforms: var x MyType = [1, 2, 3] -> var x = MyType.init(managed)
 // The element type is inferred from the interface's generic parameter.
 export interface ExpressibleByArrayLiteral uses Element
-	function init(managed _ManagedArray) Self
+	function init(managed _ManagedArray) returns Self
 end 'ExpressibleByArrayLiteral'
 
 // ExpressibleByMapLiteral - types that can be initialized from map literals
@@ -103,5 +103,6 @@ end 'ExpressibleByArrayLiteral'
 // Both arrays have the same length and corresponding indices represent key-value pairs.
 // The compiler detects conformance and transforms: var x = ["a": 1, "b": 2] -> var x = map.init(keys, values)
 export interface ExpressibleByMapLiteral uses Key, Value
-	function init(keys _ManagedArray, values _ManagedArray) Self
+	function init(keys _ManagedArray, values _ManagedArray) returns Self
 end 'ExpressibleByMapLiteral'
+

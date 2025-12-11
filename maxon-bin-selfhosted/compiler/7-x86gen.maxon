@@ -6,40 +6,40 @@
 //=============================================================================
 
 export struct CodeBuffer
-    var bytes array of byte
-    var size int
+	var bytes array of byte
+	var size int
 
-    export function create() CodeBuffer
-        return CodeBuffer{bytes: array of byte, size: 0}
-    end 'create'
+	export function create() CodeBuffer
+		return CodeBuffer{bytes: array of byte, size: 0}
+	end 'create'
 
-    export function emitByte(b byte) void
-        bytes.append(b)
-        size = size + 1
-    end 'emitByte'
+	export returns nothing
+		bytes.append(b)
+		size = size + 1
+	end 'emitByte'
 
-    export function emitWord(value int) void
-        emitByte((value & 0xFF) as byte)
-        emitByte(((value >> 8) & 0xFF) as byte)
-    end 'emitWord'
+	export returns nothing
+		emitByte((value & 0xFF) as byte)
+		emitByte(((value >> 8) & 0xFF) as byte)
+	end 'emitWord'
 
-    export function emitDword(value int) void
-        emitByte((value & 0xFF) as byte)
-        emitByte(((value >> 8) & 0xFF) as byte)
-        emitByte(((value >> 16) & 0xFF) as byte)
-        emitByte(((value >> 24) & 0xFF) as byte)
-    end 'emitDword'
+	export returns nothing
+		emitByte((value & 0xFF) as byte)
+		emitByte(((value >> 8) & 0xFF) as byte)
+		emitByte(((value >> 16) & 0xFF) as byte)
+		emitByte(((value >> 24) & 0xFF) as byte)
+	end 'emitDword'
 
-    export function emitQword(value int) void
-        emitDword(value & 0xFFFFFFFF)
-        emitDword((value >> 32) & 0xFFFFFFFF)
-    end 'emitQword'
+	export returns nothing
+		emitDword(value & 0xFFFFFFFF)
+		emitDword((value >> 32) & 0xFFFFFFFF)
+	end 'emitQword'
 
-    export function align(alignment int) void
-        while (size mod alignment) != 0 'pad'
-            emitByte(0b)
-        end 'pad'
-    end 'align'
+	export returns nothing
+		while (size mod alignment) != 0 'pad'
+			emitByte(0b)
+		end 'pad'
+	end 'align'
 end 'CodeBuffer'
 
 //=============================================================================
@@ -47,63 +47,64 @@ end 'CodeBuffer'
 //=============================================================================
 
 export struct X86Gen
-    var code CodeBuffer
+	var code CodeBuffer
 
-    export function create() X86Gen
-        return X86Gen{code: CodeBuffer.create()}
-    end 'create'
+	export function create() X86Gen
+		return X86Gen{code: CodeBuffer.create()}
+	end 'create'
 
-    export function generate(program Program) void
-        // For basic.maxon: function main() int { return 42 }
-        // Generate minimal code that works with our PE builder
+	export returns nothing
+		// For basic.maxon: function main() int { return 42 }
+		// Generate minimal code that works with our PE builder
 
-        var i = 0
-        while i < program.declarations.count() 'decls'
-            genDecl(program.declarations[i])
-            i = i + 1
-        end 'decls'
-    end 'generate'
+		var i = 0
+		while i < program.declarations.count() 'decls'
+			genDecl(program.declarations[i])
+			i = i + 1
+		end 'decls'
+	end 'generate'
 
-    export function genDecl(decl Decl) void
-        match decl 'gen'
-            case function_(name, params, returnType, body, isExport, isExtern, loc) then
-                genFunction(name, body)
-        end 'gen'
-    end 'genDecl'
+	export returns nothing
+		match decl 'gen'
+			case function_(name, params, returnType, body, isExport, isExtern, loc) then
+			genFunction(name, body)
+		end 'gen'
+	end 'genDecl'
 
-    export function genFunction(name string, body array of Stmt) void
-        // For basic.maxon's main(), just generate code for the return statement
-        var i = 0
-        while i < body.count() 'stmts'
-            genStmt(body[i])
-            i = i + 1
-        end 'stmts'
-    end 'genFunction'
+	export returns nothing
+		// For basic.maxon's main(), just generate code for the return statement
+		var i = 0
+		while i < body.count() 'stmts'
+			genStmt(body[i])
+			i = i + 1
+		end 'stmts'
+	end 'genFunction'
 
-    export function genStmt(stmt Stmt) void
-        match stmt 'gen'
-            case return_(value, loc) then
-                if let v = value 'hasValue'
-                    genExpr(v)
-                end 'hasValue'
-                // Return value is in EAX
-        end 'gen'
-    end 'genStmt'
+	export returns nothing
+		match stmt 'gen'
+			case return_(value, loc) then
+			if let v = value 'hasValue'
+				genExpr(v)
+			end 'hasValue'
+			// Return value is in EAX
+		end 'gen'
+	end 'genStmt'
 
-    export function genExpr(expr Expr) void
-        match expr 'gen'
-            case intLiteral(value, loc) then
-                // MOV EAX, imm32: B8 xx xx xx xx
-                code.emitByte(0xB8 as byte)
-                code.emitDword(value)
-        end 'gen'
-    end 'genExpr'
+	export returns nothing
+		match expr 'gen'
+			case intLiteral(value, loc) then
+			// MOV EAX, imm32: B8 xx xx xx xx
+			code.emitByte(0xB8 as byte)
+			code.emitDword(value)
+		end 'gen'
+	end 'genExpr'
 
-    export function getCode() array of byte
-        return code.bytes
-    end 'getCode'
+	export function getCode() array of byte
+		return code.bytes
+	end 'getCode'
 
-    export function getCodeSize() int
-        return code.size
-    end 'getCodeSize'
+	export function getCodeSize() returns int
+		return code.size
+	end 'getCodeSize'
 end 'X86Gen'
+

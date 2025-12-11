@@ -417,7 +417,7 @@ struct TypeChecker
     symbols HashMap<String, Type>
     errors Vector<String>
 
-    function checkExpr(this &TypeChecker, expr &ASTNode) Type
+    returns Type
         // Method syntax with 'this' reference
     end 'checkExpr'
 end 'TypeChecker'

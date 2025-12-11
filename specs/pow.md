@@ -43,7 +43,7 @@ Returns base raised to the power of exponent.
 ### Example
 
 ```maxon
-function main() int
+function main() returns int
     var result = pow(2.0, 3.0)  // 2^3 = 8
     return trunc(result)
 end 'main'
@@ -67,7 +67,7 @@ end 'main'
 
 <!-- test: basic -->
 ```maxon
-function main() int
+function main() returns int
     var result = pow(2.0, 3.0)
     return trunc(result)
 end 'main'
@@ -79,7 +79,7 @@ end 'main'
 
 <!-- test: square -->
 ```maxon
-function main() int
+function main() returns int
     var result = pow(5.0, 2.0)
     return trunc(result)
 end 'main'
@@ -91,7 +91,7 @@ end 'main'
 
 <!-- test: zero-exponent -->
 ```maxon
-function main() int
+function main() returns int
     var result = pow(123.0, 0.0)
     return trunc(result)
 end 'main'
@@ -103,7 +103,7 @@ end 'main'
 
 <!-- test: fractional-exponent -->
 ```maxon
-function main() int
+function main() returns int
     var result = pow(4.0, 0.5)  // Square root
     printFloat(result, 1)
     return 0
@@ -119,7 +119,7 @@ end 'main'
 
 <!-- test: int-promotion -->
 ```maxon
-function main() int
+function main() returns int
     var result = pow(3, 2)  // Ints promoted to float
     return trunc(result)
 end 'main'

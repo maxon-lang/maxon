@@ -1,12 +1,15 @@
 // Test: map.empty-map.from-syntax.1
-function main() int
+function main() returns int
     var m = map from int to int
     m.insert(1, 100)
-    return m.get(1)
+    var result = m.get(1) else 'default'
+        result = 0
+    end 'default'
+    return result
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 532
+; Instructions: 561
 
 %__ManagedArrayData_byte = type { ptr, i32, i32 }
 %array<byte> = type { %__ManagedArrayData_byte, i32 }
@@ -45,8 +48,22 @@ entry0:
   %11 = alloca %map<int,int>
   store %map<int,int> %10, ptr %11
   call void @map<int,int>.insert(ptr %11, i32 1, i32 100)
-  %12 = call i32 @map<int,int>.get(ptr %11, i32 1)
-  ret i32 %12
+  %12 = call Optional<i32> @map<int,int>.get(ptr %11, i32 1)
+  %14 = alloca Optional<i32>
+  store Optional<i32> %12, ptr %14
+  %15 = getelementptr Optional<i32>, ptr %14, i32 0, i32 0
+  %16 = load i8, ptr %15
+  %17 = icmp eq i8 %16, 1
+  br i1 %17, label %unwrap.hasvalue1, label %unwrap.else2
+unwrap.hasvalue1:
+  %18 = getelementptr Optional<i32>, ptr %14, i32 0, i32 1
+  %19 = load i32, ptr %18
+  br label %unwrap.after3
+unwrap.else2:
+  br label %unwrap.after3
+unwrap.after3:
+  %21 = phi i32 [ %19, %unwrap.hasvalue1 ], [ 0, %unwrap.else2 ]
+  ret i32 %21
 }
 
 declare ptr @malloc(i64 %arg0)
@@ -340,7 +357,7 @@ ifcont17:
   ret void
 }
 
-define i32 @map<int,int>.get(ptr %self, i32 %key) {
+define Optional<i32> @map<int,int>.get(ptr %self, i32 %key) {
 entry0:
   %3 = mul i32 %key, 2654435769
   %7 = getelementptr %map<int,int>, ptr %self, i32 0, i32 4
@@ -354,34 +371,40 @@ then1:
   %17 = add i32 %9, %16
   br label %ifcont2
 ifcont2:
-  %82 = phi i32 [ %9, %entry0 ], [ %17, %then1 ]
+  %94 = phi i32 [ %9, %entry0 ], [ %17, %then1 ]
   br label %whilecond3
 whilecond3:
-  %84 = phi i32 [ 0, %ifcont2 ], [ %74, %ifcont9 ]
-  %83 = phi i32 [ %82, %ifcont2 ], [ %72, %ifcont9 ]
+  %96 = phi i32 [ 0, %ifcont2 ], [ %82, %ifcont9 ]
+  %95 = phi i32 [ %94, %ifcont2 ], [ %80, %ifcont9 ]
   %21 = getelementptr %map<int,int>, ptr %self, i32 0, i32 4
   %22 = load i32, ptr %21
-  %23 = icmp slt i32 %84, %22
+  %23 = icmp slt i32 %96, %22
   br i1 %23, label %loop4, label %afterloop5
 loop4:
   %26 = getelementptr %map<int,int>, ptr %self, i32 0, i32 2
   %27 = getelementptr %array<byte>, ptr %26, i32 0, i32 0
   %28 = getelementptr %__ManagedArrayData_byte, ptr %27, i32 0, i32 0
   %29 = load ptr, ptr %28
-  %30 = sext i32 %83 to i64
+  %30 = sext i32 %95 to i64
   %31 = getelementptr i8, ptr %29, i64 %30
   %32 = load i8, ptr %31
   %33 = zext i8 %32 to i32
   %36 = icmp eq i32 %33, 0
   br i1 %36, label %then6, label %ifcont7
 afterloop5:
-  %76 = getelementptr %map<int,int>, ptr %self, i32 0, i32 1
-  %77 = getelementptr %array<int>, ptr %76, i32 0, i32 0
-  %78 = getelementptr %__ManagedArrayData_int, ptr %77, i32 0, i32 0
-  %79 = load ptr, ptr %78
-  %80 = getelementptr i32, ptr %79, i64 0
-  %81 = load i32, ptr %80
-  ret i32 %81
+  %84 = getelementptr %map<int,int>, ptr %self, i32 0, i32 1
+  %85 = getelementptr %array<int>, ptr %84, i32 0, i32 0
+  %86 = getelementptr %__ManagedArrayData_int, ptr %85, i32 0, i32 0
+  %87 = load ptr, ptr %86
+  %88 = getelementptr i32, ptr %87, i64 0
+  %89 = load i32, ptr %88
+  %90 = alloca Optional<i32>
+  %91 = getelementptr Optional<i32>, ptr %90, i32 0, i32 0
+  store i8 1, ptr %91
+  %92 = getelementptr Optional<i32>, ptr %90, i32 0, i32 1
+  store i32 %89, ptr %92
+  %93 = load Optional<i32>, ptr %90
+  ret Optional<i32> %93
 then6:
   %38 = getelementptr %map<int,int>, ptr %self, i32 0, i32 1
   %39 = getelementptr %array<int>, ptr %38, i32 0, i32 0
@@ -389,34 +412,46 @@ then6:
   %41 = load ptr, ptr %40
   %42 = getelementptr i32, ptr %41, i64 0
   %43 = load i32, ptr %42
-  ret i32 %43
+  %44 = alloca Optional<i32>
+  %45 = getelementptr Optional<i32>, ptr %44, i32 0, i32 0
+  store i8 1, ptr %45
+  %46 = getelementptr Optional<i32>, ptr %44, i32 0, i32 1
+  store i32 %43, ptr %46
+  %47 = load Optional<i32>, ptr %44
+  ret Optional<i32> %47
 ifcont7:
-  %45 = icmp eq i32 %33, 1
-  %48 = getelementptr %map<int,int>, ptr %self, i32 0, i32 0
-  %49 = getelementptr %array<int>, ptr %48, i32 0, i32 0
-  %50 = getelementptr %__ManagedArrayData_int, ptr %49, i32 0, i32 0
-  %51 = load ptr, ptr %50
-  %52 = sext i32 %83 to i64
-  %53 = getelementptr i32, ptr %51, i64 %52
-  %54 = load i32, ptr %53
-  %56 = icmp eq i32 %54, %key
-  %57 = and i1 %45, %56
-  br i1 %57, label %then8, label %ifcont9
+  %49 = icmp eq i32 %33, 1
+  %52 = getelementptr %map<int,int>, ptr %self, i32 0, i32 0
+  %53 = getelementptr %array<int>, ptr %52, i32 0, i32 0
+  %54 = getelementptr %__ManagedArrayData_int, ptr %53, i32 0, i32 0
+  %55 = load ptr, ptr %54
+  %56 = sext i32 %95 to i64
+  %57 = getelementptr i32, ptr %55, i64 %56
+  %58 = load i32, ptr %57
+  %60 = icmp eq i32 %58, %key
+  %61 = and i1 %49, %60
+  br i1 %61, label %then8, label %ifcont9
 then8:
-  %60 = getelementptr %map<int,int>, ptr %self, i32 0, i32 1
-  %61 = getelementptr %array<int>, ptr %60, i32 0, i32 0
-  %62 = getelementptr %__ManagedArrayData_int, ptr %61, i32 0, i32 0
-  %63 = load ptr, ptr %62
-  %64 = sext i32 %83 to i64
-  %65 = getelementptr i32, ptr %63, i64 %64
-  %66 = load i32, ptr %65
-  ret i32 %66
+  %64 = getelementptr %map<int,int>, ptr %self, i32 0, i32 1
+  %65 = getelementptr %array<int>, ptr %64, i32 0, i32 0
+  %66 = getelementptr %__ManagedArrayData_int, ptr %65, i32 0, i32 0
+  %67 = load ptr, ptr %66
+  %68 = sext i32 %95 to i64
+  %69 = getelementptr i32, ptr %67, i64 %68
+  %70 = load i32, ptr %69
+  %71 = alloca Optional<i32>
+  %72 = getelementptr Optional<i32>, ptr %71, i32 0, i32 0
+  store i8 1, ptr %72
+  %73 = getelementptr Optional<i32>, ptr %71, i32 0, i32 1
+  store i32 %70, ptr %73
+  %74 = load Optional<i32>, ptr %71
+  ret Optional<i32> %74
 ifcont9:
-  %68 = add i32 %83, 1
-  %70 = getelementptr %map<int,int>, ptr %self, i32 0, i32 4
-  %71 = load i32, ptr %70
-  %72 = srem i32 %68, %71
-  %74 = add i32 %84, 1
+  %76 = add i32 %95, 1
+  %78 = getelementptr %map<int,int>, ptr %self, i32 0, i32 4
+  %79 = load i32, ptr %78
+  %80 = srem i32 %76, %79
+  %82 = add i32 %96, 1
   br label %whilecond3
 }
 
@@ -641,7 +676,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 728
+; Instructions: 760
 
 %__ManagedArrayData_byte = type { ptr, i32, i32 }
 %array<byte> = type { %__ManagedArrayData_byte, i32 }
@@ -680,8 +715,25 @@ entry0:
   %11 = alloca %map<int,int>
   store %map<int,int> %10, ptr %11
   call void @map<int,int>.insert(ptr %11, i32 1, i32 100)
-  %12 = call i32 @map<int,int>.get(ptr %11, i32 1)
-  ret i32 %12
+  %12 = call Optional<i32> @map<int,int>.get(ptr %11, i32 1)
+  %13 = alloca i32
+  %14 = alloca Optional<i32>
+  store Optional<i32> %12, ptr %14
+  %15 = getelementptr Optional<i32>, ptr %14, i32 0, i32 0
+  %16 = load i8, ptr %15
+  %17 = icmp eq i8 %16, 1
+  br i1 %17, label %unwrap.hasvalue1, label %unwrap.else2
+unwrap.hasvalue1:
+  %18 = getelementptr Optional<i32>, ptr %14, i32 0, i32 1
+  %19 = load i32, ptr %18
+  store i32 %19, ptr %13
+  br label %unwrap.after3
+unwrap.else2:
+  store i32 0, ptr %13
+  br label %unwrap.after3
+unwrap.after3:
+  %20 = load i32, ptr %13
+  ret i32 %20
 }
 
 declare ptr @malloc(i64 %arg0)
@@ -1087,7 +1139,7 @@ ifcont17:
   ret void
 }
 
-define i32 @map<int,int>.get(ptr %self, i32 %key) {
+define Optional<i32> @map<int,int>.get(ptr %self, i32 %key) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
@@ -1143,14 +1195,20 @@ loop4:
   %36 = icmp eq i32 %35, 0
   br i1 %36, label %then6, label %ifcont7
 afterloop5:
-  %75 = load ptr, ptr %0
-  %76 = getelementptr %map<int,int>, ptr %75, i32 0, i32 1
-  %77 = getelementptr %array<int>, ptr %76, i32 0, i32 0
-  %78 = getelementptr %__ManagedArrayData_int, ptr %77, i32 0, i32 0
-  %79 = load ptr, ptr %78
-  %80 = getelementptr i32, ptr %79, i64 0
-  %81 = load i32, ptr %80
-  ret i32 %81
+  %83 = load ptr, ptr %0
+  %84 = getelementptr %map<int,int>, ptr %83, i32 0, i32 1
+  %85 = getelementptr %array<int>, ptr %84, i32 0, i32 0
+  %86 = getelementptr %__ManagedArrayData_int, ptr %85, i32 0, i32 0
+  %87 = load ptr, ptr %86
+  %88 = getelementptr i32, ptr %87, i64 0
+  %89 = load i32, ptr %88
+  %90 = alloca Optional<i32>
+  %91 = getelementptr Optional<i32>, ptr %90, i32 0, i32 0
+  store i8 1, ptr %91
+  %92 = getelementptr Optional<i32>, ptr %90, i32 0, i32 1
+  store i32 %89, ptr %92
+  %93 = load Optional<i32>, ptr %90
+  ret Optional<i32> %93
 then6:
   %37 = load ptr, ptr %0
   %38 = getelementptr %map<int,int>, ptr %37, i32 0, i32 1
@@ -1159,45 +1217,57 @@ then6:
   %41 = load ptr, ptr %40
   %42 = getelementptr i32, ptr %41, i64 0
   %43 = load i32, ptr %42
-  ret i32 %43
+  %44 = alloca Optional<i32>
+  %45 = getelementptr Optional<i32>, ptr %44, i32 0, i32 0
+  store i8 1, ptr %45
+  %46 = getelementptr Optional<i32>, ptr %44, i32 0, i32 1
+  store i32 %43, ptr %46
+  %47 = load Optional<i32>, ptr %44
+  ret Optional<i32> %47
 ifcont7:
-  %44 = load i32, ptr %34
-  %45 = icmp eq i32 %44, 1
-  %46 = load i32, ptr %10
-  %47 = load ptr, ptr %0
-  %48 = getelementptr %map<int,int>, ptr %47, i32 0, i32 0
-  %49 = getelementptr %array<int>, ptr %48, i32 0, i32 0
-  %50 = getelementptr %__ManagedArrayData_int, ptr %49, i32 0, i32 0
-  %51 = load ptr, ptr %50
-  %52 = sext i32 %46 to i64
-  %53 = getelementptr i32, ptr %51, i64 %52
-  %54 = load i32, ptr %53
-  %55 = load i32, ptr %1
-  %56 = icmp eq i32 %54, %55
-  %57 = and i1 %45, %56
-  br i1 %57, label %then8, label %ifcont9
+  %48 = load i32, ptr %34
+  %49 = icmp eq i32 %48, 1
+  %50 = load i32, ptr %10
+  %51 = load ptr, ptr %0
+  %52 = getelementptr %map<int,int>, ptr %51, i32 0, i32 0
+  %53 = getelementptr %array<int>, ptr %52, i32 0, i32 0
+  %54 = getelementptr %__ManagedArrayData_int, ptr %53, i32 0, i32 0
+  %55 = load ptr, ptr %54
+  %56 = sext i32 %50 to i64
+  %57 = getelementptr i32, ptr %55, i64 %56
+  %58 = load i32, ptr %57
+  %59 = load i32, ptr %1
+  %60 = icmp eq i32 %58, %59
+  %61 = and i1 %49, %60
+  br i1 %61, label %then8, label %ifcont9
 then8:
-  %58 = load i32, ptr %10
-  %59 = load ptr, ptr %0
-  %60 = getelementptr %map<int,int>, ptr %59, i32 0, i32 1
-  %61 = getelementptr %array<int>, ptr %60, i32 0, i32 0
-  %62 = getelementptr %__ManagedArrayData_int, ptr %61, i32 0, i32 0
-  %63 = load ptr, ptr %62
-  %64 = sext i32 %58 to i64
-  %65 = getelementptr i32, ptr %63, i64 %64
-  %66 = load i32, ptr %65
-  ret i32 %66
+  %62 = load i32, ptr %10
+  %63 = load ptr, ptr %0
+  %64 = getelementptr %map<int,int>, ptr %63, i32 0, i32 1
+  %65 = getelementptr %array<int>, ptr %64, i32 0, i32 0
+  %66 = getelementptr %__ManagedArrayData_int, ptr %65, i32 0, i32 0
+  %67 = load ptr, ptr %66
+  %68 = sext i32 %62 to i64
+  %69 = getelementptr i32, ptr %67, i64 %68
+  %70 = load i32, ptr %69
+  %71 = alloca Optional<i32>
+  %72 = getelementptr Optional<i32>, ptr %71, i32 0, i32 0
+  store i8 1, ptr %72
+  %73 = getelementptr Optional<i32>, ptr %71, i32 0, i32 1
+  store i32 %70, ptr %73
+  %74 = load Optional<i32>, ptr %71
+  ret Optional<i32> %74
 ifcont9:
-  %67 = load i32, ptr %10
-  %68 = add i32 %67, 1
-  %69 = load ptr, ptr %0
-  %70 = getelementptr %map<int,int>, ptr %69, i32 0, i32 4
-  %71 = load i32, ptr %70
-  %72 = srem i32 %68, %71
-  store i32 %72, ptr %10
-  %73 = load i32, ptr %18
-  %74 = add i32 %73, 1
-  store i32 %74, ptr %18
+  %75 = load i32, ptr %10
+  %76 = add i32 %75, 1
+  %77 = load ptr, ptr %0
+  %78 = getelementptr %map<int,int>, ptr %77, i32 0, i32 4
+  %79 = load i32, ptr %78
+  %80 = srem i32 %76, %79
+  store i32 %80, ptr %10
+  %81 = load i32, ptr %18
+  %82 = add i32 %81, 1
+  store i32 %82, ptr %18
   br label %whilecond3
 }
 

@@ -67,7 +67,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for var variable', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    var counter = 0",
 			"    counter = counter + 1",
 			"    return counter",
@@ -87,7 +87,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for let variable', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    let value = 42",
 			"    return value",
 			"end 'test'"
@@ -105,11 +105,11 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for function', async function () {
 		const content = [
-			"function helper() int",
+			"function helper() returns int",
 			"    return 42",
 			"end 'helper'",
 			"",
-			"function main() int",
+			"function main() returns int",
 			"    return helper()",
 			"end 'main'"
 		].join('\n');
@@ -126,7 +126,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for function parameter', async function () {
 		const content = [
-			"function add(a int, b int) int",
+			"function add(a int, b int) returns int",
 			"    return a + b",
 			"end 'add'"
 		].join('\n');
@@ -148,7 +148,7 @@ suite('Go to Definition Test Suite', () => {
 			"    var y int",
 			"end 'Point'",
 			"",
-			"function test() int",
+			"function test() returns int",
 			"    var p = Point{x: 0, y: 0}",
 			"    return 0",
 			"end 'test'"
@@ -171,7 +171,7 @@ suite('Go to Definition Test Suite', () => {
 			"    var y int",
 			"end 'Point'",
 			"",
-			"function test() int",
+			"function test() returns int",
 			"    var p = Point{x: 0, y: 0}",
 			"    p.x = 10",
 			"    return p.x",
@@ -195,7 +195,7 @@ suite('Go to Definition Test Suite', () => {
 			"    var y int",
 			"end 'Point'",
 			"",
-			"function getX(p Point) int",
+			"function getX(p Point) returns int",
 			"    return p.x",
 			"end 'getX'"
 		].join('\n');
@@ -213,17 +213,21 @@ suite('Go to Definition Test Suite', () => {
 	test('Go to definition for interface type', async function () {
 		const content = [
 			"interface Printable",
-			"    function printInt() void",
+			"    function print() returns int",
 			"end 'Printable'",
 			"",
 			"struct Message is Printable",
 			"    var text string",
+			"",
+			"    function Printable.print() returns int",
+			"        return 42",
+			"    end 'print'",
 			"end 'Message'"
 		].join('\n');
 
 		testDocument = await createTestFile('test_def_interface.maxon', content);
 
-		// Go to definition on 'Printable' in conformance (line 4, col 18)
+		// Go to definition on 'Printable' in conformance (line 4, col 18 - on 'Printable')
 		const position = new vscode.Position(4, 18);
 		const locations = await getDefinitionLocations(testDocument, position);
 
@@ -233,7 +237,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for variable in nested scope', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    var outer = 1",
 			"    if outer == 1 'check'",
 			"        var inner = 2",
@@ -255,7 +259,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition on keyword returns nothing', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    return 42",
 			"end 'test'"
 		].join('\n');
@@ -271,7 +275,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition on number literal returns nothing', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    return 42",
 			"end 'test'"
 		].join('\n');
@@ -287,7 +291,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for stdlib function', async function () {
 		const content = [
-			"function main() int",
+			"function main() returns int",
 			"    printInt(42)",
 			"    return 0",
 			"end 'main'"
@@ -309,11 +313,11 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for function with multiple params', async function () {
 		const content = [
-			"function sum(a int, b int, c int) int",
+			"function sum(a int, b int, c int) returns int",
 			"    return a + b + c",
 			"end 'sum'",
 			"",
-			"function test() int",
+			"function test() returns int",
 			"    return sum(1, 2, 3)",
 			"end 'test'"
 		].join('\n');
@@ -336,7 +340,7 @@ suite('Go to Definition Test Suite', () => {
 			"    var area int",
 			"end 'Rectangle'",
 			"",
-			"function test() int",
+			"function test() returns int",
 			"    var r = Rectangle{width: 0, height: 0, area: 0}",
 			"    r.width = 10",
 			"    r.height = 20",
@@ -363,7 +367,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for recursive function call', async function () {
 		const content = [
-			"function factorial(n int) int",
+			"function factorial(n int) returns int",
 			"    if n <= 1 'base'",
 			"        return 1",
 			"    end 'base'",
@@ -388,15 +392,15 @@ suite('Go to Definition Test Suite', () => {
 			"    var y int",
 			"end 'Point'",
 			"",
-			"function createPoint() Point",
+			"function createPoint() returns Point",
 			"    return Point{x: 0, y: 0}",
 			"end 'createPoint'"
 		].join('\n');
 
 		testDocument = await createTestFile('test_def_return_type.maxon', content);
 
-		// Go to definition on 'Point' return type (line 5, col 23)
-		const position = new vscode.Position(5, 23);
+		// Go to definition on 'Point' return type (line 5, col 31 - on 'Point')
+		const position = new vscode.Position(5, 31);
 		const locations = await getDefinitionLocations(testDocument, position);
 
 		assert.ok(locations.length > 0, 'Should find definition');
@@ -410,7 +414,7 @@ suite('Go to Definition Test Suite', () => {
 			"    var y int",
 			"end 'Point'",
 			"",
-			"function test() Point",
+			"function test() returns Point",
 			"    return Point{x: 0, y: 0}",
 			"end 'test'"
 		].join('\n');

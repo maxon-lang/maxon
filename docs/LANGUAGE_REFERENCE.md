@@ -37,7 +37,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
 Every Maxon program must have a `main()` function that returns `int`:
 
 ```maxon
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -234,7 +234,7 @@ var items = [1, 2, 3]        // Mutable array from literal
 
 **Function Parameters**
 ```maxon
-function process(data array of int) int
+function process(data array of int) returns int
     return data[0]
 end 'process'
 ```
@@ -335,7 +335,7 @@ Optional types represent values that may or may not be present. Use `T or nil` t
 
 **Syntax**
 ```maxon
-function safeDivide(a int, b int) int or nil
+returns int or nil
     if b == 0 'check'
         return nil
     end 'check'
@@ -353,7 +353,7 @@ end 'safeDivide'
 **Usage Contexts**
 
 Optional types can be used in:
-- Function return types: `function foo() int or nil`
+- Function return types: `returns int or nil`
 - Function parameters: `function bar(x int or nil)`
 - Struct fields: `struct Person { var age int or nil }`
 - Local variables: `var result int or nil`
@@ -401,7 +401,7 @@ return x + 5  // ERROR: Cannot use optional without unwrapping
 Functions can accept optional parameters:
 
 ```maxon
-function greet(name string or nil) void
+returns nothing
     if let n = name 'check'
         print("Hello, " + n)
     else 'check'
@@ -518,11 +518,11 @@ struct Point
     var x int
     var y int
 
-    function add(self Point, other Point) Point
+    returns Point
         return Point{x: self.x + other.x, y: self.y + other.y}
     end 'add'
 
-    export function magnitude(self Point) float
+    export function magnitude(self Point) returns float
         return sqrt((self.x * self.x + self.y * self.y) as float)
     end 'magnitude'
 end 'Point'
@@ -551,7 +551,7 @@ Interfaces define a set of method signatures that structs can implement:
 
 ```maxon
 interface Hashable
-    function hash(self Self) int
+    function hash(self Self) returns int
 end 'Hashable'
 ```
 
@@ -562,7 +562,7 @@ struct Point is Hashable
     var x int
     var y int
 
-    function hash(self Point) int
+    function hash(self Point) returns int
         return self.x + self.y * 31
     end 'hash'
 end 'Point'
@@ -713,7 +713,7 @@ enum Direction
     case north
     case south
 
-    function opposite(self Direction) Direction
+    returns Direction
         if self == Direction.north 'check'
             return Direction.south
         end 'check'
@@ -739,14 +739,14 @@ enum Status
     case off
 end 'Status'
 
-function isOn(s Status) bool
+function isOn(s Status) returns bool
     if s == Status.on 'check'
         return true
     end 'check'
     return false
 end 'isOn'
 
-function toggle(s Status) Status
+returns Status
     if s == Status.on 'check'
         return Status.off
     end 'check'
@@ -784,7 +784,7 @@ let name = "Maxon"
 
 ### Declaration Syntax
 ```maxon
-function name(param1 type1, param2 type2) returnType
+returns returnType
     // statements
     return value
 end 'name'
@@ -798,28 +798,28 @@ end 'name'
 
 **No Parameters**
 ```maxon
-function getAnswer() int
+function getAnswer() returns int
     return 42
 end 'getAnswer'
 ```
 
 **Void Return Type**
 ```maxon
-function greet(name string) void
+returns nothing
     print("Hello, " + name)
 end 'greet'
 ```
 
 **Multiple Parameters**
 ```maxon
-function add(a int, b int) int
+function add(a int, b int) returns int
     return a + b
 end 'add'
 ```
 
 **Array Parameters**
 ```maxon
-function sum(numbers array of int) int
+function sum(numbers array of int) returns int
     var total = 0
     for num in numbers 'loop'
         total = total + num
@@ -838,8 +838,8 @@ var answer = getAnswer()
 
 Declare external functions (Windows API, C libraries):
 ```maxon
-extern function GetStdHandle(nStdHandle int) int
-extern function ExitProcess(uExitCode int) int
+extern function GetStdHandle(nStdHandle int) returns int
+extern function ExitProcess(uExitCode int) returns int
 ```
 
 **Notes:**
@@ -988,7 +988,7 @@ end 'label'
 
 **Example**
 ```maxon
-function safeDivide(a int, b int) int or nil
+returns int or nil
     if b == 0 'check'
         return nil
     end 'check'
@@ -1218,11 +1218,11 @@ Namespaces are derived from file paths:
 Make functions visible outside the file:
 
 ```maxon
-export function public_add(a int, b int) int
+export function public_add(a int, b int) returns int
     return a + b
 end 'public_add'
 
-function private_helper(x int) int
+function private_helper(x int) returns int
     return x * 2
 end 'private_helper'
 ```
@@ -1350,7 +1350,7 @@ Located in `stdlib/` directory:
 
 ### Main Function Template
 ```maxon
-function main() int
+function main() returns int
     // program logic
     return 0
 end 'main'
@@ -1379,14 +1379,14 @@ end 'iter'
 
 ### Factorial Example
 ```maxon
-function factorial(n int) int
+function factorial(n int) returns int
     if n <= 1 'base'
         return 1
     end 'base'
     return n * factorial(n - 1)
 end 'factorial'
 
-function main() int
+function main() returns int
     var result = factorial(5)
     printInt(result)  // 120
     return 0
@@ -1430,7 +1430,7 @@ var x = 5 + "string"    // ERROR: Type mismatch
 
 **Missing Return**
 ```maxon
-function test() int
+function test() returns int
     var x = 5
     // ERROR: Missing return statement
 end 'test'
@@ -1477,7 +1477,7 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 
 4. **Return from all code paths**:
    ```maxon
-   function test(x int) int
+   function test(x int) returns int
        if x > 0 'pos'
            return 1
        end 'pos'
@@ -1505,8 +1505,8 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 
 8. **Export only necessary functions**:
    ```maxon
-   export function api() int    // Public API
-   function internal() int      // Private helper
+   export returns int    // Public API
+   returns int      // Private helper
    ```
 
 9. **Check `.count` before array access**:
@@ -1533,7 +1533,7 @@ var mutable = 42
 let immutable = 100
 
 // Functions
-function name(param type) returnType
+returns returnType
     return value
 end 'name'
 

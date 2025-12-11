@@ -27,7 +27,7 @@ Functions that declare a return type must return a value on all code paths.
 ### Error Example
 
 ```maxon
-function test() int
+function test() returns int
     // Error: No return statement
 end 'test'
 ```
@@ -42,7 +42,7 @@ Note: All execution paths through the function must end with a return statement
 Ensure every path returns:
 
 ```maxon
-function test(x int) int
+function test(x int) returns int
     if x > 0 'check'
         return 1
     end 'check'
@@ -53,7 +53,7 @@ end 'test'
 
 <!-- test: no-return -->
 ```maxon
-function main() int
+function main() returns int
 end 'main'
 ```
 ```maxoncstderr
@@ -61,20 +61,20 @@ Semantic Error: line 2, column 1
 Function 'main' must return a value of type 'int'
   Note: All execution paths through the function must end with a return statement
 
-  2 | function main() int
+  2 | function main() returns int
     | ^
 ```
 
 <!-- test: missing-else-return -->
 ```maxon
-function test(x int) int
+function test(x int) returns int
     if x > 0 'check'
         return 1
     end 'check'
     // Missing return for else path
 end 'test'
 
-function main() int
+function main() returns int
     return test(5)
 end 'main'
 ```
@@ -83,20 +83,20 @@ Semantic Error: line 2, column 1
 Function 'test' must return a value of type 'int'
   Note: All execution paths through the function must end with a return statement
 
-  2 | function test(x int) int
+  2 | function test(x int) returns int
     | ^
 ```
 
 <!-- test: valid-all-paths -->
 ```maxon
-function test(x int) int
+function test(x int) returns int
     if x > 0 'check'
         return 1
     end 'check'
     return 0
 end 'test'
 
-function main() int
+function main() returns int
     return test(5)
 end 'main'
 ```

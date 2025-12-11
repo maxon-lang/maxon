@@ -451,6 +451,7 @@ void DocumentManager::setAnalysis(const std::string &uri, AnalysisCache cache) {
 		lastGood.functions = cache.functions;
 		lastGood.structs = cache.structs;
 		lastGood.interfaces = cache.interfaces;
+		lastGood.enums = cache.enums;
 		// Note: we don't copy the AST to avoid double ownership issues
 
 		lastGoodCache_[normalizedUri] = std::move(lastGood);

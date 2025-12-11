@@ -44,7 +44,7 @@ enum EnumName
     case caseName
     case caseName2
 
-    function methodName() ReturnType
+    function methodName() returns ReturnType
         // method body - use 'self' to access the enum value
     end 'methodName'
 end 'EnumName'
@@ -235,7 +235,7 @@ enum Direction
     case east
     case west
 
-    function opposite() Direction
+    function opposite() returns Direction
         if self == Direction.north 'n'
             return Direction.south
         end 'n'
@@ -248,7 +248,7 @@ enum Direction
         return Direction.east
     end 'opposite'
 
-    function isVertical() bool
+    function isVertical() returns bool
         if self == Direction.north 'check'
             return true
         end 'check'
@@ -279,7 +279,7 @@ enum Direction
     case west
 end 'Direction'
 
-function main() int
+function main() returns int
     var dir = Direction.north
     if dir == Direction.north 'check'
         return 1
@@ -299,7 +299,7 @@ enum Color
     case blue
 end 'Color'
 
-function main() int
+function main() returns int
     var c = Color.red
     c = Color.blue
     if c == Color.blue 'check'
@@ -320,7 +320,7 @@ enum Status
     case done
 end 'Status'
 
-function main() int
+function main() returns int
     var s = Status.pending
     if s != Status.active 'check'
         return 1
@@ -340,7 +340,7 @@ enum Status
     case done
 end 'Status'
 
-function main() int
+function main() returns int
     var s1 = Status.pending
     var s2 = Status.pending
     var s3 = Status.active
@@ -363,14 +363,14 @@ enum Status
     case off
 end 'Status'
 
-function isOn(s Status) bool
+function isOn(s Status) returns bool
     if s == Status.on 'check'
         return true
     end 'check'
     return false
 end 'isOn'
 
-function main() int
+function main() returns int
     var status = Status.on
     if isOn(status) 'test'
         return 1
@@ -389,14 +389,14 @@ enum Result
     case failure
 end 'Result'
 
-function getResult(succeed bool) Result
+function getResult(succeed bool) returns Result
     if succeed 'check'
         return Result.success
     end 'check'
     return Result.failure
 end 'getResult'
 
-function main() int
+function main() returns int
     var r = getResult(true)
     if r == Result.success 'handle'
         return 1
@@ -416,7 +416,7 @@ enum HttpStatus int
     case serverError = 500
 end 'HttpStatus'
 
-function main() int
+function main() returns int
     var status = HttpStatus.ok
     if status.rawValue == 200 'check'
         return 1
@@ -436,7 +436,7 @@ enum Priority int
     case high = 10
 end 'Priority'
 
-function main() int
+function main() returns int
     var p = Priority.high
     if p.rawValue > 5 'check'
         return 1
@@ -456,7 +456,7 @@ enum Container
     case value(n int)
 end 'Container'
 
-function main() int
+function main() returns int
     var c = Container.value(42)
     var e = Container.empty
     // Construction works - verify by checking tags are different
@@ -476,7 +476,7 @@ enum Direction
     case north
     case south
 
-    function isNorth() bool
+    function isNorth() returns bool
         if self == Direction.north 'check'
             return true
         end 'check'
@@ -484,7 +484,7 @@ enum Direction
     end 'isNorth'
 end 'Direction'
 
-function main() int
+function main() returns int
     let d = Direction.north
     if d.isNorth() 'test'
         return 1
@@ -502,7 +502,7 @@ enum Toggle
     case on
     case off
 
-    function flip() Toggle
+    function flip() returns Toggle
         if self == Toggle.on 'check'
             return Toggle.off
         end 'check'
@@ -510,7 +510,7 @@ enum Toggle
     end 'flip'
 end 'Toggle'
 
-function main() int
+function main() returns int
     let t = Toggle.on
     let flipped = t.flip()
     if flipped == Toggle.off 'check'
@@ -530,7 +530,7 @@ enum Color
     case red
 end 'Color'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -549,7 +549,7 @@ enum Color
     case blue
 end 'Color'
 
-function main() int
+function main() returns int
     let _c = Color.green
     return 0
 end 'main'
@@ -576,7 +576,7 @@ enum Status int
     case success = 200
 end 'Status'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -594,7 +594,7 @@ enum Status int
     case ok = "success"
 end 'Status'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
@@ -613,7 +613,7 @@ enum Color
     case blue
 end 'Color'
 
-function main() int
+function main() returns int
     var c = Color.red
     return c.rawValue
 end 'main'
@@ -634,7 +634,7 @@ enum Result
     case failure
 end 'Result'
 
-function main() int
+function main() returns int
     let _r = Result.success(1, 2)
     return 0
 end 'main'
@@ -659,7 +659,7 @@ enum Container
     case value(n int)
 end 'Container'
 
-function main() int
+function main() returns int
     let _c = Container.value("hello")
     return 0
 end 'main'
@@ -685,7 +685,7 @@ enum Container
     case value(n int)
 end 'Container'
 
-function main() int
+function main() returns int
     var c = Container.value(42)
     match c 'extract'
         case empty then return 0
@@ -704,7 +704,7 @@ enum Result
     case failure(code int)
 end 'Result'
 
-function main() int
+function main() returns int
     var r = Result.failure(404)
     match r 'handle'
         case success(v) then return v
@@ -723,7 +723,7 @@ enum Container
     case value(n int)
 end 'Container'
 
-function main() int
+function main() returns int
     var c = Container.value(10)
     var result = match c 'get'
         case empty gives 0
@@ -743,7 +743,7 @@ enum Container
     case value(n int)
 end 'Container'
 
-function main() int
+function main() returns int
     var c = Container.empty
     match c 'check'
         case empty then return 1
@@ -761,7 +761,7 @@ enum Container
     case value(n int)
 end 'Container'
 
-function main() int
+function main() returns int
     var c = Container.value(42)
     match c 'extract'
         case value(a, b) then return a
@@ -783,7 +783,7 @@ enum Container
     case value(n int)
 end 'Container'
 
-function main() int
+function main() returns int
     var c = Container.value(42)
     match c 'extract'
         case unknown(x) then return x
@@ -808,6 +808,6 @@ Semantic Error: line 7, column 1
 Function 'main' must return a value of type 'int'
   Note: All execution paths through the function must end with a return statement
 
-  7 | function main() int
+  7 | function main() returns int
     | ^
 ```

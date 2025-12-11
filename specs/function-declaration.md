@@ -9,7 +9,7 @@ category: functions
 
 ## Developer Notes
 
-Functions are the basic unit of code organization in Maxon. They use the `function` keyword followed by a name, parameter list in parentheses, return type, and end with `end 'function-name'` where the identifier matches the function name.
+Functions are the basic unit of code organization in Maxon. They use the `function` keyword followed by a name, parameter list in parentheses, `returns` keyword with return type, and end with `end 'function-name'` where the identifier matches the function name.
 
 Key implementation details:
 - Functions are parsed in `Parser::parseFunctionDeclaration()`
@@ -17,8 +17,8 @@ Key implementation details:
 - Parameters are parsed as comma-separated list of `name type` pairs
 - The closing identifier must match the function name exactly
 - Functions are generated as LLVM `Function` objects
-- All functions must explicitly specify a return type (use `void` for functions that don't return a value)
-- All non-void functions must explicitly return a value (no implicit returns)
+- All functions must explicitly specify a return type using `returns` keyword (use `returns nothing` for functions that don't return a value)
+- All non-nothing functions must explicitly return a value (no implicit returns)
 
 The `main()` function is special - it's the entry point and must return `int`. The compiler generates a `_start()` wrapper that calls `main()` and passes its return value to `ExitProcess()`.
 
@@ -27,14 +27,14 @@ The `main()` function is special - it's the entry point and must return `int`. T
 Functions in Maxon are declared using the `function` keyword. Each function has:
 - A name (identifier)
 - Zero or more parameters in parentheses
-- A return type
+- The `returns` keyword followed by a return type
 - A body with statements
 - An `end` keyword with the function name as a block identifier
 
 ### Syntax
 
 ```maxon
-function name(param1 type1, param2 type2) returnType
+function name(param1 type1, param2 type2) returns returnType
     // statements
     return value
 end 'name'
@@ -42,11 +42,11 @@ end 'name'
 ### Example
 
 ```maxon
-function add(a int, b int) int
+function add(a int, b int) returns int
     return a + b
 end 'add'
 
-function main() int
+function main() returns int
     return add(3, 4)
 end 'main'
 ```
@@ -59,11 +59,11 @@ end 'main'
 
 <!-- test: simple-function -->
 ```maxon
-function add() int
+function add() returns int
     return 3 + 4
 end 'add'
 
-function main() int
+function main() returns int
     return add()
 end 'main'
 ```
@@ -74,11 +74,11 @@ end 'main'
 
 <!-- test: with-parameters -->
 ```maxon
-function add(a int, b int) int
+function add(a int, b int) returns int
     return a + b
 end 'add'
 
-function main() int
+function main() returns int
     return add(10, 20)
 end 'main'
 ```
@@ -89,15 +89,15 @@ end 'main'
 
 <!-- test: nested-calls -->
 ```maxon
-function double(x int) int
+function double(x int) returns int
     return x * 2
 end 'double'
 
-function quadruple(x int) int
+function quadruple(x int) returns int
     return double(double(x))
 end 'quadruple'
 
-function main() int
+function main() returns int
     return quadruple(3)
 end 'main'
 ```
@@ -106,13 +106,13 @@ end 'main'
 ```
 
 
-<!-- test: void-return-type -->
+<!-- test: nothing-return-type -->
 ```maxon
-function greet() void
+function greet() returns nothing
     print("Hello")
 end 'greet'
 
-function main() int
+function main() returns int
     greet()
     return 0
 end 'main'
@@ -122,17 +122,17 @@ Hello
 ```
 
 
-<!-- test: missing-return-type-error -->
+<!-- test: missing-returns-keyword-error -->
 ```maxon
-function foo()
-    print("test")
+returns int
+    return 0
 end 'foo'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
 ```error
-missing a return type
+missing 'returns' keyword
 ```
 

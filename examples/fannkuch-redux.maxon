@@ -15,7 +15,7 @@
 // Pfannkuchen(12) = 65
 
 // Compute factorial
-function factorial(n int) int
+function factorial(n int) returns int
 	var result = 1
 	for i in range(1, n + 1) 'fact_loop'
 		result = result * i
@@ -24,7 +24,7 @@ function factorial(n int) int
 end 'factorial'
 
 // Copy array from src to dst
-function copyArray(dst []int, src []int, n int) int
+function copyArray(dst []int, src []int, n int) returns int
 	for i in range(0, n) 'copy_loop'
 		dst[i] = src[i]
 	end 'copy_loop'
@@ -32,7 +32,7 @@ function copyArray(dst []int, src []int, n int) int
 end 'copyArray'
 
 // Generate the idx-th permutation of n elements
-function getPermutation(p []int, count []int, fact []int, n int, idx int) int
+function getPermutation(p []int, count []int, fact []int, n int, idx int) returns int
 	// Initialize to identity permutation
 	for i in range(0, n) 'init_loop'
 		p[i] = i
@@ -55,132 +55,133 @@ function getPermutation(p []int, count []int, fact []int, n int, idx int) int
 			if j + d <= i 'check_wrap'
 				p[j] = pp[j + d]
 				else 'check_wrap'
-					p[j] = pp[j + d - i - 1]
-				end 'check_wrap'
-				j = j + 1
-			end 'rotate_loop'
-
-			i = i - 1
-		end 'perm_loop'
-
-		return 0
-	end 'getPermutation'
-
-	// Count the number of flips for a permutation
-	function countFlips(perm []int, n int) int
-		var first = perm[0]
-		if first == 0 'check_sorted'
-			return 0
-		end 'check_sorted'
-
-		// Copy permutation for flipping
-		var pp = [16]int
-		copyArray(pp, perm, n)
-
-		var flips = 1
-		var firstValue = first
-
-		while pp[firstValue] != 0 'flip_loop'
-			var newFirst = pp[firstValue]
-			pp[firstValue] = firstValue
-
-			// Reverse middle elements if firstValue > 2
-			if firstValue > 2 'reverse_middle'
-				var i = 1
-				var j = firstValue - 1
-				while i < j 'reverse_loop'
-					var temp = pp[i]
-					pp[i] = pp[j]
-					pp[j] = temp
-					i = i + 1
-					j = j - 1
-				end 'reverse_loop'
-			end 'reverse_middle'
-
-			firstValue = newFirst
-			flips = flips + 1
-		end 'flip_loop'
-
-		return flips
-	end 'countFlips'
-
-	// Advance to next permutation
-	function nextPermutation(p []int, count []int) int
-		// Swap p[0] and p[1]
-		var firstValue = p[1]
-		p[1] = p[0]
-		p[0] = firstValue
-
-		var i = 1
-		while count[i] >= i 'rotate_loop'
-			count[i] = 0
-			i = i + 1
-
-			var newFirst = p[1]
-			p[0] = newFirst
-
-			// Rotate left
-			for j in range(1, i) 'shift_loop'
-				p[j] = p[j + 1]
-			end 'shift_loop'
-
-			p[i] = firstValue
-			firstValue = newFirst
+				p[j] = pp[j + d - i - 1]
+			end 'check_wrap'
+			j = j + 1
 		end 'rotate_loop'
 
-		count[i] = count[i] + 1
+		i = i - 1
+	end 'perm_loop'
+
+	return 0
+end 'getPermutation'
+
+// Count the number of flips for a permutation
+function countFlips(perm []int, n int) returns int
+	var first = perm[0]
+	if first == 0 'check_sorted'
 		return 0
-	end 'nextPermutation'
+	end 'check_sorted'
 
-	function main() int
-		var n = 11  // Testing optimization impact
+	// Copy permutation for flipping
+	var pp = [16]int
+	copyArray(pp, perm, n)
 
-		// Compute factorials
-		var fact = [17]int
-		for i in range(0, n + 1) 'fact_init'
-			fact[i] = factorial(i)
-		end 'fact_init'
+	var flips = 1
+	var firstValue = first
 
-		var totalPerms = fact[n]
+	while pp[firstValue] != 0 'flip_loop'
+		var newFirst = pp[firstValue]
+		pp[firstValue] = firstValue
 
-		// Working arrays
-		var p = [16]int
-		var count = [16]int
+		// Reverse middle elements if firstValue > 2
+		if firstValue > 2 'reverse_middle'
+			var i = 1
+			var j = firstValue - 1
+			while i < j 'reverse_loop'
+				var temp = pp[i]
+				pp[i] = pp[j]
+				pp[j] = temp
+				i = i + 1
+				j = j - 1
+			end 'reverse_loop'
+		end 'reverse_middle'
 
-		// Initialize to first permutation
-		getPermutation(p, count, fact, n, 0)
+		firstValue = newFirst
+		flips = flips + 1
+	end 'flip_loop'
 
-		var maxFlips = 0
-		var checkSum = 0
-		var idx = 0
+	return flips
+end 'countFlips'
 
-		while idx < totalPerms 'main_loop'
-			// Count flips for current permutation
-			if p[0] != 0 'need_flips'
-				var flips = countFlips(p, n)
+// Advance to next permutation
+function nextPermutation(p []int, count []int) returns int
+	// Swap p[0] and p[1]
+	var firstValue = p[1]
+	p[1] = p[0]
+	p[0] = firstValue
 
-				if flips > maxFlips 'update_max'
-					maxFlips = flips
-				end 'update_max'
+	var i = 1
+	while count[i] >= i 'rotate_loop'
+		count[i] = 0
+		i = i + 1
 
-				// Update checksum (alternating sign based on permutation index)
-				if idx mod 2 == 0 'even_perm'
-					checkSum = checkSum + flips
-					else 'even_perm'
-						checkSum = checkSum - flips
-					end 'even_perm'
-				end 'need_flips'
+		var newFirst = p[1]
+		p[0] = newFirst
 
-				// Advance to next permutation
-				idx = idx + 1
-				if idx < totalPerms 'continue_loop'
-					nextPermutation(p, count)
-				end 'continue_loop'
-			end 'main_loop'
+		// Rotate left
+		for j in range(1, i) 'shift_loop'
+			p[j] = p[j + 1]
+		end 'shift_loop'
 
-			// Results verified for n=10:
-			// - checkSum: 73196 ✓
-			// - maxFlips: 38 ✓
-			// Returning maxFlips as exit code
-			return maxFlips
-		end 'main'
+		p[i] = firstValue
+		firstValue = newFirst
+	end 'rotate_loop'
+
+	count[i] = count[i] + 1
+	return 0
+end 'nextPermutation'
+
+function main() returns int
+	var n = 11  // Testing optimization impact
+
+	// Compute factorials
+	var fact = [17]int
+	for i in range(0, n + 1) 'fact_init'
+		fact[i] = factorial(i)
+	end 'fact_init'
+
+	var totalPerms = fact[n]
+
+	// Working arrays
+	var p = [16]int
+	var count = [16]int
+
+	// Initialize to first permutation
+	getPermutation(p, count, fact, n, 0)
+
+	var maxFlips = 0
+	var checkSum = 0
+	var idx = 0
+
+	while idx < totalPerms 'main_loop'
+		// Count flips for current permutation
+		if p[0] != 0 'need_flips'
+			var flips = countFlips(p, n)
+
+			if flips > maxFlips 'update_max'
+				maxFlips = flips
+			end 'update_max'
+
+			// Update checksum (alternating sign based on permutation index)
+			if idx mod 2 == 0 'even_perm'
+				checkSum = checkSum + flips
+				else 'even_perm'
+				checkSum = checkSum - flips
+			end 'even_perm'
+		end 'need_flips'
+
+		// Advance to next permutation
+		idx = idx + 1
+		if idx < totalPerms 'continue_loop'
+			nextPermutation(p, count)
+		end 'continue_loop'
+	end 'main_loop'
+
+	// Results verified for n=10:
+	// - checkSum: 73196 ✓
+	// - maxFlips: 38 ✓
+	// Returning maxFlips as exit code
+	return maxFlips
+end 'main'
+

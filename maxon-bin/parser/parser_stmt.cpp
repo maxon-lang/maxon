@@ -114,40 +114,23 @@ std::unique_ptr<StmtAST> Parser::parseIf() {
 
 	auto condition = parseLogicalOr();
 
-	// Require block identifier (no more 'then' keyword support)
+	// Require block identifier for the if/then branch
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'if' condition (use 'id' where id is any string)");
 	std::string blockId = blockIdToken.value;
 
 	std::vector<std::unique_ptr<StmtAST>> thenBody;
 	std::vector<std::unique_ptr<StmtAST>> elseBody;
+	std::string elseBlockId;
 
-	// Parse then body
-	while (!checkKeyword("else") && !checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+	// Parse then body until 'end'
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
 		thenBody.push_back(parseStatementWithRecovery());
-	}
-
-	// Parse optional else
-	if (checkKeyword("else")) {
-		match(TokenType::KEYWORD); // consume "else"
-		// Require same block identifier after else
-		Token elseBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else' (must match the 'if' block identifier)");
-		if (elseBlockIdToken.value != blockId) {
-			reportError("Block identifier mismatch in if-else statement\n  Expected: '" + blockId +
-							"'\n  Found: '" + elseBlockIdToken.value +
-							"'\n  Note: The 'else' block identifier must match the 'if' block identifier",
-						elseBlockIdToken.line, elseBlockIdToken.column);
-		}
-
-		// Parse else body
-		while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-			elseBody.push_back(parseStatementWithRecovery());
-		}
 	}
 
 	expectKeywordAdvance("end", "Expected 'end' to close if block");
 
-	// Require matching block identifier after end
-	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the opening block identifier)");
+	// Require matching block identifier after 'end'
+	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the 'if' block identifier)");
 	if (endBlockIdToken.value != blockId) {
 		reportError("Block identifier mismatch in if statement\n  Expected: '" + blockId +
 						"'\n  Found: '" + endBlockIdToken.value +
@@ -155,12 +138,56 @@ std::unique_ptr<StmtAST> Parser::parseIf() {
 					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
+	int endPositionLine = endBlockIdToken.line;
+	int endPositionColumn = endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1;
+
+	// Check for 'else' on the SAME LINE as the end block identifier
+	// New syntax: end 'blockId' else 'elseBlockId' OR end 'blockId' else if ...
+	if (currentLine() == endBlockIdToken.line && checkKeyword("else")) {
+		advance(); // consume 'else'
+
+		// Check for 'else if' (else-if chain)
+		if (checkKeyword("if")) {
+			// Recursively parse the else-if as a nested if statement
+			auto elseIfStmt = parseIf();
+			elseBody.push_back(std::move(elseIfStmt));
+			// Update end position from the nested if
+			if (!elseBody.empty()) {
+				auto &lastStmt = elseBody.back();
+				endPositionLine = lastStmt->endLine;
+				endPositionColumn = lastStmt->endColumn;
+			}
+		} else {
+			// Regular else branch: else 'elseBlockId' ... end 'elseBlockId'
+			Token elseBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else'");
+			elseBlockId = elseBlockIdToken.value;
+
+			// Parse else body until 'end'
+			while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+				elseBody.push_back(parseStatementWithRecovery());
+			}
+
+			expectKeywordAdvance("end", "Expected 'end' to close else block");
+
+			// Require matching block identifier after 'end'
+			Token elseEndBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end' (must match the 'else' block identifier)");
+			if (elseEndBlockIdToken.value != elseBlockId) {
+				reportError("Block identifier mismatch in else block\n  Expected: '" + elseBlockId +
+								"'\n  Found: '" + elseEndBlockIdToken.value +
+								"'\n  Note: The 'end' block identifier must match the 'else' block identifier",
+							elseEndBlockIdToken.line, elseEndBlockIdToken.column);
+			}
+
+			endPositionLine = elseEndBlockIdToken.line;
+			endPositionColumn = elseEndBlockIdToken.column + static_cast<int>(elseEndBlockIdToken.value.length()) - 1;
+		}
+	}
+
 	auto stmt = std::make_unique<IfStmtAST>(std::move(condition),
 											std::move(thenBody),
 											std::move(elseBody),
-											ifToken.line, ifToken.column, blockId);
-	// Set end position to the closing block identifier
-	stmt->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+											ifToken.line, ifToken.column, blockId, elseBlockId);
+	stmt->setEndPosition(endPositionLine, endPositionColumn);
 	return stmt;
 }
 
@@ -177,25 +204,11 @@ std::unique_ptr<IfLetStmtAST> Parser::parseIfLet(Token ifToken) {
 
 	std::vector<std::unique_ptr<StmtAST>> thenBody;
 	std::vector<std::unique_ptr<StmtAST>> elseBody;
+	std::string elseBlockId;
 
-	// Parse then body (value is present)
-	while (!checkKeyword("else") && !checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+	// Parse then body until 'end'
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
 		thenBody.push_back(parseStatementWithRecovery());
-	}
-
-	// Parse optional else (nil case)
-	if (checkKeyword("else")) {
-		advance(); // consume "else"
-		Token elseBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else'");
-		if (elseBlockIdToken.value != blockId) {
-			reportError("Block identifier mismatch in if-let statement\n  Expected: '" + blockId +
-							"'\n  Found: '" + elseBlockIdToken.value + "'",
-						elseBlockIdToken.line, elseBlockIdToken.column);
-		}
-
-		while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-			elseBody.push_back(parseStatementWithRecovery());
-		}
 	}
 
 	expectKeywordAdvance("end", "Expected 'end' to close if-let block");
@@ -206,11 +219,39 @@ std::unique_ptr<IfLetStmtAST> Parser::parseIfLet(Token ifToken) {
 					endBlockIdToken.line, endBlockIdToken.column);
 	}
 
+	int endPositionLine = endBlockIdToken.line;
+	int endPositionColumn = endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1;
+
+	// Check for 'else' on the SAME LINE as the end block identifier
+	// New syntax: end 'blockId' else 'elseBlockId' ... end 'elseBlockId'
+	if (currentLine() == endBlockIdToken.line && checkKeyword("else")) {
+		advance(); // consume 'else'
+
+		Token elseBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'else'");
+		elseBlockId = elseBlockIdToken.value;
+
+		// Parse else body until 'end'
+		while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+			elseBody.push_back(parseStatementWithRecovery());
+		}
+
+		expectKeywordAdvance("end", "Expected 'end' to close else block");
+
+		Token elseEndBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end'");
+		if (elseEndBlockIdToken.value != elseBlockId) {
+			reportError("Block identifier mismatch in if-let else block\n  Expected: '" + elseBlockId +
+							"'\n  Found: '" + elseEndBlockIdToken.value + "'",
+						elseEndBlockIdToken.line, elseEndBlockIdToken.column);
+		}
+
+		endPositionLine = elseEndBlockIdToken.line;
+		endPositionColumn = elseEndBlockIdToken.column + static_cast<int>(elseEndBlockIdToken.value.length()) - 1;
+	}
+
 	auto stmt = std::make_unique<IfLetStmtAST>(bindingName.value, std::move(optionalExpr),
 											   std::move(thenBody), std::move(elseBody),
-											   ifToken.line, ifToken.column, blockId);
-	// Set end position to the closing block identifier
-	stmt->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+											   ifToken.line, ifToken.column, blockId, elseBlockId);
+	stmt->setEndPosition(endPositionLine, endPositionColumn);
 	return stmt;
 }
 

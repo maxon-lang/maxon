@@ -131,9 +131,9 @@ class KeywordMatcher {
 					"Boolean type (true or false)",
 					"bool",
 					KeywordCompletionKind::Keyword);
-		add_keyword("void", KeywordCategory::Type,
-					"Void type - indicates function returns no value",
-					"void",
+		add_keyword("nothing", KeywordCategory::Type,
+					"Nothing type - indicates function returns no value",
+					"nothing",
 					KeywordCompletionKind::Keyword);
 
 		// Control flow
@@ -201,9 +201,13 @@ class KeywordMatcher {
 		// Declarations
 		add_keyword("function", KeywordCategory::Declaration,
 					"Function declaration - defines a named function",
-					"function $1($2) $3\n\t$4\nend '$1'",
+					"function $1($2) returns $3\n\t$4\nend '$1'",
 					KeywordCompletionKind::Keyword,
 					true, true); // isBlockKeyword=true, isNamedBlock=true (uses function name as label)
+		add_keyword("returns", KeywordCategory::Declaration,
+					"Returns keyword - specifies function return type",
+					"returns",
+					KeywordCompletionKind::Keyword);
 		add_keyword("var", KeywordCategory::Declaration,
 					"Mutable variable declaration",
 					"var $1 = $2",

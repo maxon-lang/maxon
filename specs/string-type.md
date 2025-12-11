@@ -162,7 +162,7 @@ utf16DecodeSurrogates(55357, 56832)  // 128512 (U+1F600)
 
 <!-- test: basic-declaration -->
 ```maxon
-function main() int
+function main() returns int
     var s = "hello"
     if s == "hello" 'check'
         return 0
@@ -176,7 +176,7 @@ end 'main'
 
 <!-- test: empty-string -->
 ```maxon
-function main() int
+function main() returns int
     var s = ""
     if s == "" 'check'
         return 0
@@ -190,7 +190,7 @@ end 'main'
 
 <!-- test: long-string -->
 ```maxon
-function main() int
+function main() returns int
     var s = "this string is longer than fifteen bytes"
     if s == "this string is longer than fifteen bytes" 'check'
         return 0
@@ -204,7 +204,7 @@ end 'main'
 
 <!-- test: inequality -->
 ```maxon
-function main() int
+function main() returns int
     var s = "hello"
     if s != "world" 'check'
         return 0
@@ -218,7 +218,7 @@ end 'main'
 
 <!-- test: equality-with-logical-and -->
 ```maxon
-function main() int
+function main() returns int
     var s = "hello"
     var c = 'A'
     if s == "hello" and c == 'A' 'check'
@@ -233,7 +233,7 @@ end 'main'
 
 <!-- test: print-string -->
 ```maxon
-function main() int
+function main() returns int
     var s = "hello"
     print(s)
     return 0
@@ -248,7 +248,7 @@ hello
 
 <!-- test: print-literal -->
 ```maxon
-function main() int
+function main() returns int
     print("Hello, World!")
     return 0
 end 'main'
@@ -262,7 +262,7 @@ Hello, World!
 
 <!-- test: concatenation -->
 ```maxon
-function main() int
+function main() returns int
     var a = "hello"
     var b = " world"
     var c = a + b
@@ -279,7 +279,7 @@ hello world
 
 <!-- test: chained-concat -->
 ```maxon
-function main() int
+function main() returns int
     var greeting = "Hello"
     var name = "Maxon"
     var full = greeting + ", " + name + "!"
@@ -296,7 +296,7 @@ Hello, Maxon!
 
 <!-- test: count-method -->
 ```maxon
-function main() int
+function main() returns int
     var s = "hello"
     printInt(s.count())
     return 0
@@ -311,7 +311,7 @@ end 'main'
 
 <!-- test: isEmpty-method -->
 ```maxon
-function main() int
+function main() returns int
     var empty = ""
     var nonempty = "hello"
     if empty.isEmpty() 'check1'
@@ -319,9 +319,9 @@ function main() int
     end 'check1'
     if nonempty.isEmpty() 'check2'
         printInt(0)
-    else 'check2'
+    end 'check2' else 'not_empty'
         printInt(2)
-    end 'check2'
+    end 'not_empty'
     return 0
 end 'main'
 ```
@@ -335,7 +335,7 @@ end 'main'
 
 <!-- test: startsWith -->
 ```maxon
-function main() int
+function main() returns int
     var s = "hello world"
     if s.startsWith("hello") 'c1'
         printInt(1)
@@ -355,7 +355,7 @@ end 'main'
 
 <!-- test: endsWith -->
 ```maxon
-function main() int
+function main() returns int
     var s = "hello world"
     if s.endsWith("world") 'c1'
         printInt(1)
@@ -375,7 +375,7 @@ end 'main'
 
 <!-- test: contains -->
 ```maxon
-function main() int
+function main() returns int
     var s = "hello world"
     if s.contains("lo wo") 'c1'
         printInt(1)
@@ -395,7 +395,7 @@ end 'main'
 
 <!-- test: find -->
 ```maxon
-function main() int
+function main() returns int
     var s = "hello world"
     printInt(s.find("world"))
     printInt(s.find("xyz"))
@@ -412,7 +412,7 @@ end 'main'
 
 <!-- test: for-in-string -->
 ```maxon
-function main() int
+function main() returns int
     var s = "abc"
     for c in s 'loop'
         print(c.toString())
@@ -431,7 +431,7 @@ c
 
 <!-- test: byteview-iteration -->
 ```maxon
-function main() int
+function main() returns int
     var s = "abc"
     for b in s.bytes() 'loop'
         printInt(b as int)
@@ -450,7 +450,7 @@ end 'main'
 
 <!-- test: utf16-ascii -->
 ```maxon
-function main() int
+function main() returns int
     var s = "ABC"
     for u in s.utf16() 'loop'
         printInt(u)
@@ -469,7 +469,7 @@ end 'main'
 
 <!-- test: utf16-bmp -->
 ```maxon
-function main() int
+function main() returns int
     var s = "αβγ"
     for u in s.utf16() 'loop'
         printInt(u)
@@ -488,7 +488,7 @@ end 'main'
 
 <!-- test: utf16-surrogate-pair -->
 ```maxon
-function main() int
+function main() returns int
     var s = "😀"
     for u in s.utf16() 'loop'
         printInt(u)
@@ -506,7 +506,7 @@ end 'main'
 
 <!-- test: utf16-mixed -->
 ```maxon
-function main() int
+function main() returns int
     var s = "A😀B"
     for u in s.utf16() 'loop'
         printInt(u)
@@ -526,7 +526,7 @@ end 'main'
 
 <!-- test: utf16-length -->
 ```maxon
-function main() int
+function main() returns int
     var s = "A😀B"
     var view = s.utf16()
     printInt(view.count())
@@ -542,7 +542,7 @@ end 'main'
 
 <!-- test: utf16-is-lead-surrogate -->
 ```maxon
-function main() int
+function main() returns int
     // 0xD83D = 55357 (high surrogate for 😀)
     if utf16IsLeadSurrogate(55357) 'c1'
         printInt(1)
@@ -565,7 +565,7 @@ end 'main'
 
 <!-- test: utf16-is-trail-surrogate -->
 ```maxon
-function main() int
+function main() returns int
     // 0xDE00 = 56832 (low surrogate for 😀)
     if utf16IsTrailSurrogate(56832) 'c4'
         printInt(1)
@@ -588,7 +588,7 @@ end 'main'
 
 <!-- test: utf16-is-surrogate -->
 ```maxon
-function main() int
+function main() returns int
     if utf16IsSurrogate(55357) 'c7'
         printInt(1)
     end 'c7'
@@ -611,7 +611,7 @@ end 'main'
 
 <!-- test: utf16-width -->
 ```maxon
-function main() int
+function main() returns int
     printInt(utf16Width(65))      // ASCII 'A' = 1 code unit
     printInt(utf16Width(945))     // Greek α = 1 code unit (BMP)
     printInt(utf16Width(128512))  // 😀 U+1F600 = 2 code units
@@ -629,7 +629,7 @@ end 'main'
 
 <!-- test: utf16-encode-surrogates -->
 ```maxon
-function main() int
+function main() returns int
     // 😀 U+1F600 = 128512
     printInt(utf16LeadSurrogate(128512))   // 55357 (0xD83D)
     printInt(utf16TrailSurrogate(128512))  // 56832 (0xDE00)
@@ -646,7 +646,7 @@ end 'main'
 
 <!-- test: utf16-decode-surrogates -->
 ```maxon
-function main() int
+function main() returns int
     // Decode surrogate pair back to codepoint
     var cp = utf16DecodeSurrogates(55357, 56832)
     printInt(cp)  // 128512 (U+1F600)
@@ -662,7 +662,7 @@ end 'main'
 
 <!-- test: utf16-is-bmp -->
 ```maxon
-function main() int
+function main() returns int
     if utf16IsBmp(65) 'c10'
         printInt(1)       // ASCII
     end 'c10'
@@ -689,7 +689,7 @@ end 'main'
 
 <!-- test: utf16-valid-surrogate-pair -->
 ```maxon
-function main() int
+function main() returns int
     if utf16IsValidSurrogatePair(55357, 56832) 'c14'
         printInt(1)  // valid pair
     end 'c14'
@@ -711,7 +711,7 @@ end 'main'
 
 <!-- test: heap-string-count -->
 ```maxon
-function main() int
+function main() returns int
     // String > 15 bytes triggers heap allocation
     var s = "This is a longer string that exceeds 15 bytes"
     printInt(s.count())
@@ -727,7 +727,7 @@ end 'main'
 
 <!-- test: heap-string-data-access -->
 ```maxon
-function main() int
+function main() returns int
     // Verify heap-allocated string data is accessible via bytes()
     var s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     // Read first byte ('A' = 65)
@@ -757,14 +757,14 @@ end 'main'
 
 <!-- test: heap-string-equality -->
 ```maxon
-function main() int
+function main() returns int
     var a = "This string is definitely longer than fifteen bytes"
     var b = "This string is definitely longer than fifteen bytes"
     if a == b 'check'
         printInt(1)
-    else 'check'
+    end 'check' else 'not_equal'
         printInt(0)
-    end 'check'
+    end 'not_equal'
     return 0
 end 'main'
 ```
@@ -777,14 +777,14 @@ end 'main'
 
 <!-- test: heap-string-inequality -->
 ```maxon
-function main() int
+function main() returns int
     var a = "This string is definitely longer than fifteen bytes"
     var b = "This string is definitely longer than fifteen chars"
     if a != b 'check'
         printInt(1)
-    else 'check'
+    end 'check' else 'are_equal'
         printInt(0)
-    end 'check'
+    end 'are_equal'
     return 0
 end 'main'
 ```
@@ -797,7 +797,7 @@ end 'main'
 
 <!-- test: heap-string-iteration -->
 ```maxon
-function main() int
+function main() returns int
     var s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
     var sum = 0
     for c in s 'loop'
@@ -819,7 +819,7 @@ end 'main'
 
 <!-- test: heap-string-byteview -->
 ```maxon
-function main() int
+function main() returns int
     var s = "ABCDEFGHIJKLMNOPQR"  // 18 bytes, heap allocated
     var count = 0
     for b in s.bytes() 'loop'
@@ -841,7 +841,7 @@ end 'main'
 
 <!-- test: sso-vs-heap-boundary -->
 ```maxon
-function main() int
+function main() returns int
     // Exactly 15 bytes - should use SSO (constant data)
     var sso = "123456789012345"
     printInt(sso.count())
@@ -862,7 +862,7 @@ end 'main'
 
 <!-- test: heap-string-startsWith -->
 ```maxon
-function main() int
+function main() returns int
     var s = "This is a very long string that is heap allocated"
     if s.startsWith("This is") 'c17'
         printInt(1)
@@ -882,7 +882,7 @@ end 'main'
 
 <!-- test: heap-string-endsWith -->
 ```maxon
-function main() int
+function main() returns int
     var s = "This is a very long string that is heap allocated"
     if s.endsWith("heap allocated") 'c19'
         printInt(1)
@@ -902,7 +902,7 @@ end 'main'
 
 <!-- test: heap-string-contains -->
 ```maxon
-function main() int
+function main() returns int
     var s = "This is a very long string that is heap allocated"
     if s.contains("long string") 'c21'
         printInt(1)
@@ -922,7 +922,7 @@ end 'main'
 
 <!-- test: heap-string-find -->
 ```maxon
-function main() int
+function main() returns int
     var s = "This is a very long string that is heap allocated"
     printInt(s.find("very"))
     printInt(s.find("missing"))
@@ -939,7 +939,7 @@ end 'main'
 
 <!-- test: mixed-sso-heap-comparison -->
 ```maxon
-function main() int
+function main() returns int
     var small = "hello"
     var large = "This is a longer string"
     if small != large 'check'
@@ -958,7 +958,7 @@ end 'main'
 <!-- test: memory-tracking-simple-concat -->
 <!-- TrackAllocs: true -->
 ```maxon
-function main() int
+function main() returns int
     var s = "hello" + " world"
     printInt(s.count())
     return 0
@@ -983,7 +983,7 @@ Leaked:    0 bytes
 <!-- test: memory-tracking-chained-concat -->
 <!-- TrackAllocs: true -->
 ```maxon
-function main() int
+function main() returns int
     var s = "a" + "b" + "c" + "d"
     printInt(s.count())
     return 0
@@ -1012,7 +1012,7 @@ Leaked:    0 bytes
 <!-- test: memory-tracking-loop-concat -->
 <!-- TrackAllocs: true -->
 ```maxon
-function main() int
+function main() returns int
     var s = ""
     var i = 0
     while i < 3 'loop'
@@ -1046,7 +1046,7 @@ Leaked:    0 bytes
 <!-- test: memory-tracking-no-leak-scope-exit -->
 <!-- TrackAllocs: true -->
 ```maxon
-function main() int
+function main() returns int
     if true 'scope'
         var temp = "heap allocated string here!"
         printInt(temp.count())
@@ -1072,7 +1072,7 @@ Leaked:    0 bytes
 
 <!-- test: toLower -->
 ```maxon
-function main() int
+function main() returns int
     var s = "HELLO"
     print(s.toLower())
     return 0
@@ -1088,7 +1088,7 @@ hello
 <!-- test: bytes-count-method -->
 ### bytes().count() Method
 ```maxon
-function main() int
+function main() returns int
     var s = "hello"
     printInt(s.bytes().count())
     return 0
@@ -1104,7 +1104,7 @@ end 'main'
 <!-- test: bytes-count-multibyte -->
 ### bytes().count() with Multi-byte Characters
 ```maxon
-function main() int
+function main() returns int
     var s = "café"
     printInt(s.bytes().count())  // 5 bytes (c=1, a=1, f=1, é=2)
     return 0
@@ -1120,7 +1120,7 @@ end 'main'
 <!-- test: count-graphemes -->
 ### count Returns Grapheme Count
 ```maxon
-function main() int
+function main() returns int
     var s = "café"
     printInt(s.count())  // 4 graphemes
     return 0
@@ -1136,7 +1136,7 @@ end 'main'
 <!-- test: count-vs-bytes-count -->
 ### count vs bytes().count()
 ```maxon
-function main() int
+function main() returns int
     var s = "🇺🇸"  // Flag emoji (1 grapheme, 8 bytes)
     printInt(s.count())
     printInt(s.bytes().count())
@@ -1154,7 +1154,7 @@ end 'main'
 <!-- test: grapheme-iteration-emoji -->
 ### Grapheme Iteration with Emoji
 ```maxon
-function main() int
+function main() returns int
     var s = "a🎉b"
     var count = 0
     for c in s 'loop'
@@ -1176,7 +1176,7 @@ end 'main'
 <!-- test: grapheme-iteration-flag -->
 ### Grapheme Iteration with Flag Emoji
 ```maxon
-function main() int
+function main() returns int
     var s = "🇺🇸🇬🇧"  // Two flag emojis
     var count = 0
     for c in s 'loop'
@@ -1198,7 +1198,7 @@ end 'main'
 <!-- test: grapheme-iteration-zwj -->
 ### Grapheme Iteration with ZWJ Sequence
 ```maxon
-function main() int
+function main() returns int
     var s = "👨‍👩‍👧"  // Family emoji (1 grapheme)
     var count = 0
     for c in s 'loop'
@@ -1220,7 +1220,7 @@ end 'main'
 <!-- test: codepoints-view -->
 ### Codepoints View
 ```maxon
-function main() int
+function main() returns int
     var s = "Aé"  // A (1 codepoint) + é (1 codepoint if precomposed)
     for cp in s.codepoints() 'loop'
         printInt(cp)
@@ -1238,7 +1238,7 @@ end 'main'
 
 <!-- test: string-reassignment -->
 ```maxon
-function main() int
+function main() returns int
     var s = "hello"
     printInt(s.count())
 

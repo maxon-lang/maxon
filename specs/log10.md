@@ -76,7 +76,7 @@ var b = log10(a)     // 1.0 (10^1 = 10)
 
 <!-- test: log10.basic -->
 ```maxon
-function main() int
+function main() returns int
     var x = log10(100.0)
     printFloat(x, 1)
     return 0
@@ -91,7 +91,7 @@ end 'main'
 
 <!-- test: log10.one-thousand -->
 ```maxon
-function main() int
+function main() returns int
     var x = log10(1000.0)
     printFloat(x, 1)
     return 0
@@ -106,7 +106,7 @@ end 'main'
 
 <!-- test: log10.ten -->
 ```maxon
-function main() int
+function main() returns int
     var x = log10(10.0)
     printFloat(x, 1)
     return 0
@@ -121,7 +121,7 @@ end 'main'
 
 <!-- test: log10.one -->
 ```maxon
-function main() int
+function main() returns int
     var result = log10(1.0)
     if result == 0.0 'check'
         return 0
@@ -135,7 +135,7 @@ end 'main'
 
 <!-- test: log10.precision -->
 ```maxon
-function main() int
+function main() returns int
     var x = log10(2.0)
     printFloat(x, 15)
     return 0
@@ -150,7 +150,7 @@ end 'main'
 
 <!-- test: log10.with-int-promotion -->
 ```maxon
-function main() int
+function main() returns int
     var x = 100  // int
     var result = log10(x)  // x promoted to 100.0
     printFloat(result, 1)
@@ -166,7 +166,7 @@ end 'main'
 
 <!-- test: log10.large-value -->
 ```maxon
-function main() int
+function main() returns int
     var x = log10(10000.0)
     printFloat(x, 1)
     return 0

@@ -1,18 +1,18 @@
 // Test: float-type.float-params-with-call.1
 // Test float parameters that must survive across a function call
 // The float params are live across the call to identity(), requiring callee-saved XMMs
-function identity(x float) float
+function identity(x float) returns float
     return x
 end 'identity'
 
-function useFloats(a float, b float, c float, d float) float
+function useFloats(a float, b float, c float, d float) returns float
     // The call to identity() may clobber XMM0-3
     // So a, b, c, d must be saved to callee-saved XMM6-9 or stack
     var temp = identity(1.0)
     return a + b + c + d + temp
 end 'useFloats'
 
-function main() int
+function main() returns int
     var result = useFloats(10.0, 20.0, 30.0, 40.0)
     return trunc(result)
 end 'main'

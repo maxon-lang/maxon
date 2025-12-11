@@ -309,7 +309,7 @@ struct RegAllocation {
 
 1. **Reproduce with minimal test case:**
    ```bash
-   echo 'function main() int ... end "main"' > temp/test.maxon
+   echo 'returns int ... end "main"' > temp/test.maxon
    maxon compile temp/test.maxon && ./temp/test.exe
    echo $?  # Check exit code
    ```

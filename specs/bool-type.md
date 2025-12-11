@@ -34,14 +34,14 @@ let condition = false
 ### Example
 
 ```maxon
-function isPositive(x int) bool
+function isPositive(x int) returns bool
     if x > 0 'check'
         return true
     end 'check'
     return false
 end 'isPositive'
 
-function main() int
+function main() returns int
     if isPositive(5) 'test'
         return 1
     end 'test'
@@ -57,14 +57,14 @@ end 'main'
 
 <!-- test: basic-bool -->
 ```maxon
-function main() int
+function main() returns int
     var x = true
 
     if x 'check'
         return 1
-    else 'check'
+    end 'check' else 'else_check'
         return 0
-    end 'check'
+    end 'else_check'
 end 'main'
 ```
 ```exitcode
@@ -74,15 +74,15 @@ end 'main'
 
 <!-- test: bool-parameter -->
 ```maxon
-function test_bool_param(flag bool) int
+function test_bool_param(flag bool) returns int
     if flag 'check'
         return 1
-    else 'check'
+    end 'check' else 'else_check'
         return 0
-    end 'check'
+    end 'else_check'
 end 'test_bool_param'
 
-function main() int
+function main() returns int
     return test_bool_param(true)
 end 'main'
 ```
@@ -93,7 +93,7 @@ end 'main'
 
 <!-- test: bool-from-comparison -->
 ```maxon
-function main() int
+function main() returns int
     var result = 5 > 3
     if result 'check'
         return 42

@@ -10,7 +10,7 @@ category: types
 ## Developer Notes
 
 Optional types allow functions to return either a value or `nil`, representing the absence of a value. Optionals can be used in:
-- Function return types: `function foo() int or nil`
+- Function return types: `returns int or nil`
 - Function parameters: `function bar(x int or nil)`
 - Struct fields: `struct Person { var age int or nil }`
 - Local variables: `var result int or nil`
@@ -71,11 +71,11 @@ Optional types represent values that may or may not be present. Use `T or nil` t
 ### Syntax
 
 ```maxon
-function mayFail() int or nil
+function mayFail() returns int or nil
     return nil
 end 'mayFail'
 
-function maySucceed() int or nil
+function maySucceed() returns int or nil
     return 42
 end 'maySucceed'
 ```
@@ -89,10 +89,10 @@ var result = mayFail()
 if let value = result 'check'
     // value is unwrapped int here
     return value
-else 'check'
+end 'check' else 'nil_case'
     // result was nil
     return 0
-end 'check'
+end 'nil_case'
 ```
 
 ### Else-Unwrap with Default
@@ -119,17 +119,17 @@ return x + 5  // ERROR: Cannot use optional without unwrapping
 
 <!-- test: nil-literal -->
 ```maxon
-function returnsNil() int or nil
+function returnsNil() returns int or nil
 	return nil
 end 'returnsNil'
 
-function main() int
+function main() returns int
 	var x = returnsNil()
 	if let val = x 'check'
 		return val
-	else 'check'
+	end 'check' else 'nil_case'
 		return 99
-	end 'check'
+	end 'nil_case'
 end 'main'
 ```
 ```exitcode
@@ -138,17 +138,17 @@ end 'main'
 
 <!-- test: optional-with-value -->
 ```maxon
-function returnsValue() int or nil
+function returnsValue() returns int or nil
 	return 42
 end 'returnsValue'
 
-function main() int
+function main() returns int
 	var x = returnsValue()
 	if let val = x 'check'
 		return val
-	else 'check'
+	end 'check' else 'nil_case'
 		return 0
-	end 'check'
+	end 'nil_case'
 end 'main'
 ```
 ```exitcode
@@ -157,20 +157,20 @@ end 'main'
 
 <!-- test: iflet-then-branch -->
 ```maxon
-function safeDivide(a int, b int) int or nil
+function safeDivide(a int, b int) returns int or nil
 	if b == 0 'check'
 		return nil
 	end 'check'
 	return trunc(a / b)
 end 'safeDivide'
 
-function main() int
+function main() returns int
 	var opt = safeDivide(10, 2)
 	if let result = opt 'unwrap'
 		return result
-	else 'unwrap'
+	end 'unwrap' else 'nil_case'
 		return 999
-	end 'unwrap'
+	end 'nil_case'
 end 'main'
 ```
 ```exitcode
@@ -179,20 +179,20 @@ end 'main'
 
 <!-- test: iflet-else-branch -->
 ```maxon
-function safeDivide(a int, b int) int or nil
+function safeDivide(a int, b int) returns int or nil
 	if b == 0 'check'
 		return nil
 	end 'check'
 	return trunc(a / b)
 end 'safeDivide'
 
-function main() int
+function main() returns int
 	var opt = safeDivide(10, 0)
 	if let result = opt 'unwrap'
 		return result
-	else 'unwrap'
+	end 'unwrap' else 'nil_case'
 		return 88
-	end 'unwrap'
+	end 'nil_case'
 end 'main'
 ```
 ```exitcode
@@ -201,11 +201,11 @@ end 'main'
 
 <!-- test: else-unwrap-nil -->
 ```maxon
-function returnsNil() int or nil
+function returnsNil() returns int or nil
 	return nil
 end 'returnsNil'
 
-function main() int
+function main() returns int
 	var opt = returnsNil()
 	var result = opt else 'default'
 		result = 7
@@ -219,11 +219,11 @@ end 'main'
 
 <!-- test: else-unwrap-value -->
 ```maxon
-function returnsValue() int or nil
+function returnsValue() returns int or nil
 	return 5
 end 'returnsValue'
 
-function main() int
+function main() returns int
 	var opt = returnsValue()
 	var result = opt else 'default'
 		result = 99
@@ -237,11 +237,11 @@ end 'main'
 
 <!-- test: implicit-wrapping -->
 ```maxon
-function makeOptional(x int) int or nil
+function makeOptional(x int) returns int or nil
 	return x
 end 'makeOptional'
 
-function main() int
+function main() returns int
 	var opt = makeOptional(33)
 	if let val = opt 'check'
 		return val
@@ -255,15 +255,15 @@ end 'main'
 
 <!-- test: multiple-optionals -->
 ```maxon
-function first() int or nil
+function first() returns int or nil
 	return 10
 end 'first'
 
-function second() int or nil
+function second() returns int or nil
 	return nil
 end 'second'
 
-function main() int
+function main() returns int
 	var a = first()
 	var b = second()
 
@@ -285,11 +285,11 @@ end 'main'
 
 <!-- test: nested-iflet -->
 ```maxon
-function makeOpt(n int) int or nil
+function makeOpt(n int) returns int or nil
 	return n
 end 'makeOpt'
 
-function main() int
+function main() returns int
 	var a = makeOpt(5)
 	if let x = a 'checkOuter'
 		var b = makeOpt(3)
@@ -306,11 +306,11 @@ end 'main'
 
 <!-- test: error.use-optional-without-unwrap -->
 ```maxon
-function returnsOptional() int or nil
+function returnsOptional() returns int or nil
 	return 42
 end 'returnsOptional'
 
-function main() int
+function main() returns int
 	var x = returnsOptional()
 	return x + 5
 end 'main'
@@ -326,7 +326,7 @@ Cannot use optional type 'int or nil' without unwrapping
 
 <!-- test: error.return-nil-to-non-optional -->
 ```maxon
-function main() int
+function main() returns int
 	return nil
 end 'main'
 ```
@@ -342,7 +342,7 @@ Cannot return 'nil' from non-optional return type
 
 <!-- test: error.iflet-non-optional -->
 ```maxon
-function main() int
+function main() returns int
 	var x = 42
 	if let val = x 'check'
 		return val
@@ -361,7 +361,7 @@ Semantic Error: line 4, column 2
 
 <!-- test: error.else-unwrap-non-optional -->
 ```maxon
-function main() int
+function main() returns int
 	var x = 42
 	var result = x else 'default'
 		result = 99
@@ -387,11 +387,11 @@ Undefined variable: 'result'
 
 <!-- test: error.else-unwrap-missing-assignment -->
 ```maxon
-function returnsNil() int or nil
+function returnsNil() returns int or nil
 	return nil
 end 'returnsNil'
 
-function main() int
+function main() returns int
 	var opt = returnsNil()
 	var result = opt else 'default'
 		var temp = 7
@@ -411,28 +411,28 @@ Variable 'result' must be assigned a value in the else block
 
 <!-- test: error.nested-optional -->
 ```maxon
-function main() int or nil or nil
+function broken() returns int or nil or nil
 	return nil
-end 'main'
+end 'broken'
 ```
 ```maxoncstderr
 In file 'temp/temp_fragment.maxon':
 Unexpected token: 'or'
   Note: Expected a statement (var, let, if, while, return, break, continue, match, or assignment)
-  Location: line 2, column 28
+  Location: line 2, column 38
 ```
 
 <!-- test: optional-param-nil -->
 ```maxon
-function checkValue(x int or nil) int
+function checkValue(x int or nil) returns int
 	if let val = x 'check'
 		return val
-	else 'check'
+	end 'check' else 'nil_case'
 		return 99
-	end 'check'
+	end 'nil_case'
 end 'checkValue'
 
-function main() int
+function main() returns int
 	return checkValue(nil)
 end 'main'
 ```
@@ -442,15 +442,15 @@ end 'main'
 
 <!-- test: optional-param-value -->
 ```maxon
-function checkValue(x int or nil) int
+function checkValue(x int or nil) returns int
 	if let val = x 'check'
 		return val
-	else 'check'
+	end 'check' else 'nil_case'
 		return 99
-	end 'check'
+	end 'nil_case'
 end 'checkValue'
 
-function main() int
+function main() returns int
 	return checkValue(42)
 end 'main'
 ```
@@ -460,14 +460,14 @@ end 'main'
 
 <!-- test: optional-param-implicit-wrap -->
 ```maxon
-function add(a int, b int or nil) int
+function add(a int, b int or nil) returns int
 	var result = b else 'default'
 		result = 0
 	end 'default'
 	return a + result
 end 'add'
 
-function main() int
+function main() returns int
 	return add(5, 10)
 end 'main'
 ```
@@ -482,13 +482,13 @@ struct Person
 	var age int or nil
 end 'Person'
 
-function main() int
+function main() returns int
 	var p = Person{name: "Bob", age: nil}
 	if let a = p.age 'check'
 		return a
-	else 'check'
+	end 'check' else 'nil_case'
 		return 99
-	end 'check'
+	end 'nil_case'
 end 'main'
 ```
 ```exitcode
@@ -502,13 +502,13 @@ struct Person
 	var age int or nil
 end 'Person'
 
-function main() int
+function main() returns int
 	var p = Person{name: "Alice", age: 30}
 	if let a = p.age 'check'
 		return a
-	else 'check'
+	end 'check' else 'nil_case'
 		return 0
-	end 'check'
+	end 'nil_case'
 end 'main'
 ```
 ```exitcode
@@ -522,7 +522,7 @@ struct Point
 	var y int or nil
 end 'Point'
 
-function main() int
+function main() returns int
 	var p = Point{x: 10, y: 20}
 	var result = p.y else 'default'
 		result = 0

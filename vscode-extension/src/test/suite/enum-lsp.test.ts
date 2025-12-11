@@ -103,7 +103,7 @@ suite('Enum LSP Test Suite', () => {
 			if (testCompletions.items.some(item => item.label === 'var')) {
 				break;
 			}
-			await new Promise(resolve => setTimeout(resolve, 50));
+			await new Promise(resolve => setTimeout(resolve, 50)); // wait before retrying
 		}
 
 		// Modify document to have incomplete dot access
@@ -132,7 +132,7 @@ suite('Enum LSP Test Suite', () => {
 			"    case south",
 			"end 'Direction'",
 			"",
-			"function test() int",
+			"function test() returns int",
 			"    var d = Direction.north",
 			"    return 0",
 			"end 'test'"
@@ -155,7 +155,7 @@ suite('Enum LSP Test Suite', () => {
 			"    case blue",
 			"end 'Color'",
 			"",
-			"function test() int",
+			"function test() returns int",
 			"    var c = Color.red",
 			"    return 0",
 			"end 'test'"
@@ -179,7 +179,7 @@ suite('Enum LSP Test Suite', () => {
 			"    case green",
 			"end 'Color'",
 			"",
-			"function test() int",
+			"function test() returns int",
 			"    var c = Color.blue",
 			"    return 0",
 			"end 'test'"
@@ -205,7 +205,7 @@ suite('Enum LSP Test Suite', () => {
 			"    case failed",
 			"end 'Status'",
 			"",
-			"function test() int",
+			"function test() returns int",
 			"    var s = Status.pending",
 			"    return 0",
 			"end 'test'"
@@ -240,7 +240,7 @@ suite('Enum LSP Test Suite', () => {
 			"    case notFound = 404",
 			"end 'HttpStatus'",
 			"",
-			"function test() int",
+			"function test() returns int",
 			"    var s = HttpStatus.ok",
 			"    return 0",
 			"end 'test'"
@@ -277,7 +277,7 @@ suite('Enum LSP Test Suite', () => {
     case west
 end 'Direction'
 
-function main() int
+function main() returns int
     var d = Direction.north
     return 0
 end 'main'`;
@@ -289,7 +289,7 @@ end 'main'`;
     case west
 end 'Direction'
 
-function main() int
+function main() returns int
     var d = Direction.
     return 0
 end 'main'`;
@@ -317,7 +317,7 @@ end 'main'`;
     case error = 500
 end 'Status'
 
-function main() int
+function main() returns int
     var s = Status.ok
     return s.rawValue
 end 'main'`;
@@ -327,7 +327,7 @@ end 'main'`;
     case error = 500
 end 'Status'
 
-function main() int
+function main() returns int
     var s = Status.ok
     return s.
 end 'main'`;
@@ -351,7 +351,7 @@ end 'main'`;
     case on
     case off
 
-    function flip() Toggle
+    function flip() returns Toggle
         if self == Toggle.on 'check'
             return Toggle.off
         end 'check'
@@ -359,7 +359,7 @@ end 'main'`;
     end 'flip'
 end 'Toggle'
 
-function main() int
+function main() returns int
     var t = Toggle.on
     var flipped = t.flip()
     return 0
@@ -369,7 +369,7 @@ end 'main'`;
     case on
     case off
 
-    function flip() Toggle
+    function flip() returns Toggle
         if self == Toggle.on 'check'
             return Toggle.off
         end 'check'
@@ -377,7 +377,7 @@ end 'main'`;
     end 'flip'
 end 'Toggle'
 
-function main() int
+function main() returns int
     var t = Toggle.on
     var flipped = t.
     return 0
@@ -443,7 +443,7 @@ end 'Direction'`;
 		const badlyFormattedContent = `enum Toggle
 case on
 case off
-function flip() Toggle
+function flip() returns Toggle
 if self == Toggle.on 'check'
 return Toggle.off
 end 'check'

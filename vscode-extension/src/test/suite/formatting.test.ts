@@ -50,7 +50,7 @@ suite('Formatting Test Suite', () => {
         this.timeout(10000);
 
         // Code with incorrect indentation - return at column 0
-        const badlyFormattedContent = `function main() int
+        const badlyFormattedContent = `function main() returns int
     var x = 5
 return x
 end 'main'`;
@@ -133,7 +133,7 @@ end 'createIterator'`;
     test('Should format nested blocks correctly', async function () {
         this.timeout(10000);
 
-        const badlyFormattedContent = `function main() int
+        const badlyFormattedContent = `function main() returns int
 if x > 0 'check'
 print(x)
 end 'check'
@@ -177,7 +177,7 @@ end 'main'`;
     test('Should use tabs when configured', async function () {
         this.timeout(10000);
 
-        const content = `function main() int
+        const content = `function main() returns int
 var x = 5
 return x
 end 'main'`;
@@ -212,7 +212,7 @@ end 'main'`;
     test('Should use spaces when configured', async function () {
         this.timeout(10000);
 
-        const content = `function main() int
+        const content = `function main() returns int
 var x = 5
 return x
 end 'main'`;
@@ -255,7 +255,7 @@ end 'main'`;
     test('Should remove trailing whitespace', async function () {
         this.timeout(10000);
 
-        const content = `function main() int
+        const content = `function main() returns int
     var x = 5
     return x
 end 'main'`;
@@ -299,7 +299,7 @@ end 'main'`;
         this.timeout(10000);
 
         // File without trailing newline
-        const content = `function main() int
+        const content = `function main() returns int
     return 0
 end 'main'`;
 
@@ -335,15 +335,15 @@ end 'main'`;
 
         // Interfaces incorrectly nested (each indented more than previous)
         const badlyFormattedContent = `interface Hashable
-\tfunction hash() int
+\tfunction hash() returns int
 \tend 'Hashable'
 
 \tinterface Equatable
-\t\tfunction equals(other Self) bool
+\t\tfunction equals(other Self) returns bool
 \t\tend 'Equatable'
 
 \t\tinterface Comparable
-\t\t\tfunction compare(other Self) int
+\t\t\tfunction compare(other Self) returns int
 \t\t\tend 'Comparable'`;
 
         const testUri = await createTestFile(badlyFormattedContent, 'test_format_interfaces.maxon');

@@ -41,11 +41,11 @@ Float literals must include a decimal point:
 ### Example
 
 ```maxon
-function circleArea(radius float) float
+function circleArea(radius float) returns float
     return 3.14159 * radius * radius
 end 'circleArea'
 
-function main() int
+function main() returns int
     var area = circleArea(5.0)
     return trunc(area)  // Returns 78
 end 'main'
@@ -59,7 +59,7 @@ end 'main'
 
 <!-- test: basic-float -->
 ```maxon
-function main() int
+function main() returns int
     var x = 3.14
     var y = 2.0
     var z = x + y
@@ -74,7 +74,7 @@ end 'main'
 
 <!-- test: float-comparison -->
 ```maxon
-function main() int
+function main() returns int
     var x = 3.5
     var y = 2.1
     if x > y 'check'
@@ -90,7 +90,7 @@ end 'main'
 
 <!-- test: float-arithmetic -->
 ```maxon
-function main() int
+function main() returns int
     var a = 10.0
     var b = 3.0
     var result = a / b
@@ -104,7 +104,7 @@ end 'main'
 
 <!-- test: float-promotion -->
 ```maxon
-function main() int
+function main() returns int
     var x = 5
     var y = 2.0
     var result = x + y
@@ -121,11 +121,11 @@ end 'main'
 // Test function with 12 float parameters
 // On Windows x64: first 4 arrive in XMM0-3, rest on caller's stack
 // This tests both register and stack-passed float parameters
-function sumFloats(a float, b float, c float, d float, e float, f float, g float, h float, i float, j float, k float, l float) float
+function sumFloats(a float, b float, c float, d float, e float, f float, g float, h float, i float, j float, k float, l float) returns float
     return a + b + c + d + e + f + g + h + i + j + k + l
 end 'sumFloats'
 
-function main() int
+function main() returns int
     var result = sumFloats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0)
     return trunc(result)
 end 'main'
@@ -139,18 +139,18 @@ end 'main'
 ```maxon
 // Test float parameters that must survive across a function call
 // The float params are live across the call to identity(), requiring callee-saved XMMs
-function identity(x float) float
+function identity(x float) returns float
     return x
 end 'identity'
 
-function useFloats(a float, b float, c float, d float) float
+function useFloats(a float, b float, c float, d float) returns float
     // The call to identity() may clobber XMM0-3
     // So a, b, c, d must be saved to callee-saved XMM6-9 or stack
     var temp = identity(1.0)
     return a + b + c + d + temp
 end 'useFloats'
 
-function main() int
+function main() returns int
     var result = useFloats(10.0, 20.0, 30.0, 40.0)
     return trunc(result)
 end 'main'

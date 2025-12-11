@@ -45,7 +45,7 @@ No imports or includes needed!
 ### Example
 
 ```maxon
-function main() int
+function main() returns int
     // pow() is automatically found in stdlib/math/
     var result = pow(2.0, 3.0)
     return trunc(result)
@@ -64,7 +64,7 @@ If a stdlib function depends on other stdlib functions, they're also discovered 
 
 <!-- test: basic-autodiscovery -->
 ```maxon
-function main() int
+function main() returns int
     var buffer = array of 12 byte
     return formatIntArray(42, buffer)
 end 'main'
@@ -77,7 +77,7 @@ end 'main'
 <!-- test: transitive -->
 ```maxon
 // pow -> log, exp
-function main() int
+function main() returns int
     var result = pow(2.0, 3.0)
     if result > 7.5 'check'
         return 8
@@ -92,7 +92,7 @@ end 'main'
 
 <!-- test: unqualified-call -->
 ```maxon
-function main() int
+function main() returns int
     var result = sqrt(16.0)
     return trunc(result)
 end 'main'
@@ -104,7 +104,7 @@ end 'main'
 
 <!-- test: qualified-call -->
 ```maxon
-function main() int
+function main() returns int
     var buffer = array of 12 byte
     return formatIntArray(42, buffer)
 end 'main'
@@ -116,7 +116,7 @@ end 'main'
 
 <!-- test: wrong-arg-count -->
 ```maxon
-function main() int
+function main() returns int
     return formatIntArray(42)
 end 'main'
 ```

@@ -58,7 +58,7 @@ var w = round(z)     // 2
 
 <!-- test: round.basic -->
 ```maxon
-function main() int
+function main() returns int
     var x = 3.7
     var y = round(x)
     return y
@@ -70,7 +70,7 @@ end 'main'
 
 <!-- test: round.negative -->
 ```maxon
-function main() int
+function main() returns int
     var neg = 0.0 - 2.3
     var y = round(neg)
     printInt(y)
@@ -86,7 +86,7 @@ end 'main'
 
 <!-- test: round.halfway -->
 ```maxon
-function main() int
+function main() returns int
     var x = 2.5
     var y = round(x)
     printInt(y)

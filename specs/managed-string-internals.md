@@ -60,7 +60,7 @@ end 'scope'
 <!-- TrackAllocs: true -->
 Heap strings should allocate and free properly.
 ```maxon
-function main() int
+function main() returns int
     var s = "this is a heap allocated string!"
     printInt(s.count())
     return 0
@@ -86,7 +86,7 @@ Leaked:    0 bytes
 <!-- TrackAllocs: true -->
 Reassigning a heap string should release the old value.
 ```maxon
-function main() int
+function main() returns int
     var s = "first heap allocated value!!"
     s = "second heap allocated here!!"
     printInt(s.count())
@@ -117,7 +117,7 @@ Leaked:    0 bytes
 <!-- TrackAllocs: true -->
 Substrings should retain their parent string.
 ```maxon
-function main() int
+function main() returns int
     var s = "hello world from heap!!"
     var sub = s.slice(0, 5)
     printInt(sub.count())
@@ -146,7 +146,7 @@ Leaked:    0 bytes
 <!-- TrackAllocs: true -->
 Converting heap string to cstring retains the parent.
 ```maxon
-function main() int
+function main() returns int
     var s = "heap allocated string here!!"
     print(s)
     return 0
@@ -174,7 +174,7 @@ Leaked:    0 bytes
 <!-- TrackAllocs: true -->
 String accumulation in loop should release intermediate values.
 ```maxon
-function main() int
+function main() returns int
     var s = ""
     var i = 0
     while i < 5 'loop'

@@ -61,7 +61,7 @@ x = 5                   // ERROR: Cannot assign to immutable variable
 
 <!-- test: let-declaration.basic -->
 ```maxon
-function main() int
+function main() returns int
     let x = 42
     let y = 10
     let result = x + y
@@ -74,7 +74,7 @@ end 'main'
 
 <!-- test: let-declaration.immutable-error -->
 ```maxon
-function main() int
+function main() returns int
     let x = 3
     x = 5
     return x

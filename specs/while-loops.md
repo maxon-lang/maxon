@@ -74,7 +74,7 @@ end 'loop'
 
 <!-- test: while-loops.basic -->
 ```maxon
-function main() int
+function main() returns int
 var x = 5
 var i = 3
 while i > 0 'loop'
@@ -93,7 +93,7 @@ end 'main'
 
 <!-- test: while-loops.break -->
 ```maxon
-function main() int
+function main() returns int
     var x = 5
     while true 'loop'
         x = x + 2
@@ -110,7 +110,7 @@ end 'main'
 
 <!-- test: while-loops.zero-iterations -->
 ```maxon
-function main() int
+function main() returns int
     var x = 10
     while x < 5 'loop'
         x = x + 1
@@ -124,7 +124,7 @@ end 'main'
 
 <!-- test: nested-control -->
 ```maxon
-function main() int
+function main() returns int
     var result = 0
     var i = 0
     while i < 3 'outer'

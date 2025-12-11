@@ -503,6 +503,7 @@ void LSPServer::analyzeDocument(const std::string &uri) {
 	cache.functions = std::move(result.functions);
 	cache.structs = std::move(result.structs);
 	cache.interfaces = std::move(result.interfaces);
+	cache.enums = std::move(result.enums);
 	cache.version = doc->version;
 	cache.analysisTimeMs = duration.count();
 
@@ -782,7 +783,27 @@ json LSPServer::handleCompletion(const json &params) {
 	}
 
 	Document *doc = docOpt.value();
-	const AnalysisCache *cache = documentManager_.getAnalysis(uri);
+	AnalysisCache *cache = documentManager_.getAnalysis(uri);
+
+	// If current cache has parse errors, supplement missing type info from last good cache
+	// This allows completions to work while typing incomplete code
+	if (cache && cache->hasParseErrors()) {
+		const AnalysisCache *lastGood = documentManager_.getLastGoodAnalysis(uri);
+		if (lastGood) {
+			// Supplement enums if missing
+			if (cache->enums.empty() && !lastGood->enums.empty()) {
+				cache->enums = lastGood->enums;
+			}
+			// Supplement variables if missing
+			if (cache->variables.empty() && !lastGood->variables.empty()) {
+				cache->variables = lastGood->variables;
+			}
+			// Supplement structs if missing
+			if (cache->structs.empty() && !lastGood->structs.empty()) {
+				cache->structs = lastGood->structs;
+			}
+		}
+	}
 
 	CompletionProvider provider;
 	auto result = provider.getCompletions(*doc, completionParams.position, cache, stdlib_);

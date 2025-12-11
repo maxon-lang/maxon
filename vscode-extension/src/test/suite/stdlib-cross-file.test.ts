@@ -36,11 +36,11 @@ suite('Stdlib Cross-File Diagnostics', () => {
 	): Promise<vscode.Diagnostic[]> {
 		let diagnostics: vscode.Diagnostic[] = [];
 		for (let i = 0; i < maxAttempts; i++) {
-			await new Promise(resolve => setTimeout(resolve, 100));
 			diagnostics = vscode.languages.getDiagnostics(uri);
 			if (predicate ? predicate(diagnostics) : diagnostics.length > 0) {
 				break;
 			}
+			await new Promise(resolve => setTimeout(resolve, 100)); // wait for diagnostics to update
 		}
 		return diagnostics;
 	}
@@ -55,11 +55,11 @@ suite('Stdlib Cross-File Diagnostics', () => {
 	): Promise<vscode.Diagnostic[]> {
 		let diagnostics: vscode.Diagnostic[] = [];
 		for (let i = 0; i < maxAttempts; i++) {
-			await new Promise(resolve => setTimeout(resolve, 100));
 			diagnostics = vscode.languages.getDiagnostics(uri);
 			if (diagnostics.length !== previousCount) {
 				break;
 			}
+			await new Promise(resolve => setTimeout(resolve, 100)); // wait for diagnostics to update
 		}
 		return diagnostics;
 	}
@@ -115,12 +115,8 @@ suite('Stdlib Cross-File Diagnostics', () => {
 	test('Should report error when stdlib function is renamed', async function () {
 		this.timeout(60000);
 
-		console.log('[TEST] Starting test: Should report error when stdlib function is renamed');
-		console.log('[TEST] Consumer file URI:', consumerFileUri.toString());
-		console.log('[TEST] Stdlib file URI:', stdlibFileUri.toString());
-
 		// Step 1: Create a consumer file that calls findGraphemeEndManaged
-		const consumerContent = `function testGrapheme(m _ManagedString) int
+		const consumerContent = `function testGrapheme(m _ManagedString) returns int
 	return findGraphemeEndManaged(m, 0, 10)
 end 'testGrapheme'
 `;
@@ -129,7 +125,6 @@ end 'testGrapheme'
 		// Open the consumer file
 		consumerDocument = await vscode.workspace.openTextDocument(consumerFileUri);
 		await vscode.window.showTextDocument(consumerDocument);
-		console.log('[TEST] Consumer document opened');
 
 		// Wait for initial analysis - should have NO errors since findGraphemeEndManaged exists
 		let diagnostics = await waitForDiagnostics(consumerFileUri, 30, diags => {
@@ -141,7 +136,6 @@ end 'testGrapheme'
 			);
 			return !hasUndefinedError;
 		});
-		console.log('[TEST] Initial diagnostics:', diagnostics.map(d => d.message));
 
 		// Verify no undefined function error initially
 		const initialUndefinedError = diagnostics.find(d =>
@@ -154,7 +148,6 @@ end 'testGrapheme'
 		// Step 2: Open the stdlib file
 		stdlibDocument = await vscode.workspace.openTextDocument(stdlibFileUri);
 		await vscode.window.showTextDocument(stdlibDocument);
-		console.log('[TEST] Stdlib document opened, URI:', stdlibDocument.uri.toString());
 
 		// Step 3: Rename findGraphemeEndManaged to findGraphemeEndManagedXXX in the stdlib file
 		const modifiedContent = originalStdlibContent.replace(
@@ -169,20 +162,17 @@ end 'testGrapheme'
 		);
 		edit.replace(stdlibFileUri, fullRange, modifiedContent);
 		const editApplied = await vscode.workspace.applyEdit(edit);
-		console.log('[TEST] Edit applied:', editApplied);
 
 		// Note: We're NOT saving the file - this tests in-memory changes
 
 		// Step 4: Check that the consumer file now has an error
 		const previousCount = diagnostics.length;
-		console.log('[TEST] Waiting for diagnostics to update...');
 		diagnostics = await waitForDiagnostics(consumerFileUri, 50, diags => {
 			return diags.some(d =>
 				d.message.includes('Undefined function') &&
 				d.message.includes('findGraphemeEndManaged')
 			);
 		});
-		console.log('[TEST] Final diagnostics:', diagnostics.map(d => d.message));
 
 		const undefinedError = diagnostics.find(d =>
 			d.message.includes('Undefined function') &&
@@ -198,7 +188,7 @@ end 'testGrapheme'
 		this.timeout(60000);
 
 		// Step 1: Create consumer file
-		const consumerContent = `function testGrapheme(m _ManagedString) int
+		const consumerContent = `function testGrapheme(m _ManagedString) returns int
 	return findGraphemeEndManaged(m, 0, 10)
 end 'testGrapheme'
 `;

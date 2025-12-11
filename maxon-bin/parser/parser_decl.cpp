@@ -99,27 +99,32 @@ std::vector<std::unique_ptr<StmtAST>> Parser::parseStatementBody() {
 // Return Type Parsing
 // ============================================================================
 
-// Parse return type (required - must be explicit, including void)
+// Parse return type (required - must be explicit, including nothing)
 // Return type must be on the same line as the function signature
+// Syntax: function name(params) returns Type
 // allowSelfType: if true, check for 'Self' identifier before normal type parsing (for interfaces)
 std::string Parser::parseReturnType(int rparenLine, bool allowSelfType, const std::string &functionName) {
-	if (currentLine() == rparenLine) {
+	// Expect 'returns' keyword on the same line as the closing paren
+	if (currentLine() == rparenLine && checkKeyword("returns")) {
+		advance(); // consume 'returns'
+
 		// Handle 'Self' type specially for interface methods
 		if (allowSelfType && check(TokenType::IDENTIFIER) && std::string(currentValue()) == "Self") {
 			advance();
 			return "Self";
 		}
-		auto retKd = currentKeywordData();
-		bool hasReturnType = (retKd && retKd->category == KeywordCategory::Type) ||
-							 check(TokenType::IDENTIFIER);
-		if (hasReturnType) {
-			return parseTypeStringWithOptional("return type");
+
+		// Parse the return type (maps 'nothing' to 'void' internally)
+		std::string returnType = parseTypeStringWithOptional("return type");
+		if (returnType == "nothing") {
+			return "void";
 		}
+		return returnType;
 	}
-	reportError("Function '" + functionName + "' is missing a return type\n"
-											  "  All functions must specify an explicit return type (use 'void' for functions that don't return a value)\n"
-											  "  Example: function " +
-					functionName + "(...) void",
+	reportError("Function '" + functionName + "' is missing 'returns' keyword and return type\n"
+				"  All functions must specify 'returns' followed by a return type\n"
+				"  Example: function " + functionName + "(...) returns int\n"
+				"  For functions that don't return a value, use: returns nothing",
 				currentLine(), currentColumn());
 	return "void"; // Return void to continue parsing after error
 }

@@ -100,7 +100,7 @@ s.insert(3)    // Set now contains {1, 2, 3}
 s.insert(2)    // No change - 2 already exists
 ```
 
-### contains(element) bool
+### contains(element) returns bool
 
 Check if an element exists in the set. Returns `true` if found, `false` otherwise.
 
@@ -110,7 +110,7 @@ s.contains(2)  // true
 s.contains(5)  // false
 ```
 
-### remove(element) bool
+### remove(element) returns bool
 
 Remove an element from the set. Returns `true` if the element was present and removed, `false` if it wasn't in the set.
 
@@ -120,7 +120,7 @@ s.remove(2)    // Returns true, set is now {1, 3}
 s.remove(5)    // Returns false, element wasn't present
 ```
 
-### count() int
+### count() returns int
 
 Get the number of elements in the set.
 
@@ -129,7 +129,7 @@ var s = set from [1, 2, 3]
 s.count()      // 3
 ```
 
-### capacity() int
+### capacity() returns int
 
 Get the current capacity (number of slots) of the internal hash table.
 
@@ -146,7 +146,7 @@ The set automatically grows when the load factor (count/capacity) exceeds 75%. W
 
 <!-- test: basic.creation -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [1, 2, 3]
     return s.count()
 end 'main'
@@ -157,7 +157,7 @@ end 'main'
 
 <!-- test: basic.contains-true -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [10, 20, 30]
     if s.contains(20) 'check'
         return 1
@@ -171,7 +171,7 @@ end 'main'
 
 <!-- test: basic.contains-false -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [10, 20, 30]
     if s.contains(99) 'check'
         return 1
@@ -185,7 +185,7 @@ end 'main'
 
 <!-- test: insert.new-element -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [1, 2, 3]
     s.insert(4)
     return s.count()
@@ -197,7 +197,7 @@ end 'main'
 
 <!-- test: insert.duplicate -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [1, 2, 3]
     s.insert(2)
     return s.count()
@@ -209,7 +209,7 @@ end 'main'
 
 <!-- test: insert.then-contains -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [1, 2, 3]
     s.insert(5)
     if s.contains(5) 'check'
@@ -224,7 +224,7 @@ end 'main'
 
 <!-- test: remove.existing -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [1, 2, 3]
     var removed = s.remove(2)
     if removed 'check'
@@ -239,7 +239,7 @@ end 'main'
 
 <!-- test: remove.nonexistent -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [1, 2, 3]
     var removed = s.remove(99)
     if removed 'check'
@@ -254,7 +254,7 @@ end 'main'
 
 <!-- test: remove.then-contains -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [1, 2, 3]
     s.remove(2)
     if s.contains(2) 'check'
@@ -269,7 +269,7 @@ end 'main'
 
 <!-- test: capacity.initial -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [1, 2, 3]
     return s.capacity()
 end 'main'
@@ -280,7 +280,7 @@ end 'main'
 
 <!-- test: grow.trigger -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     return s.capacity()
 end 'main'
@@ -291,7 +291,7 @@ end 'main'
 
 <!-- test: grow.preserves-elements -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     var allPresent = 1
     var i = 1
@@ -310,7 +310,7 @@ end 'main'
 
 <!-- test: empty.single-element -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [42]
     return s.count()
 end 'main'
@@ -321,7 +321,7 @@ end 'main'
 
 <!-- test: remove-reinsert -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [1, 2, 3]
     s.remove(2)
     s.insert(2)
@@ -337,7 +337,7 @@ end 'main'
 
 <!-- test: negative-values -->
 ```maxon
-function main() int
+function main() returns int
     var s = set from [0 - 5, 0 - 3, 0 - 1, 0, 1, 3, 5]
     if s.contains(0 - 3) 'check'
         return s.count()

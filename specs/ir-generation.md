@@ -52,7 +52,7 @@ The compiler generates LLVM Intermediate Representation (IR) code.
 
 Source code:
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     var i = 0
     while i < 10 'loop'
@@ -80,7 +80,7 @@ Debug IR would preserve the full loop structure with all variables and operation
 
 <!-- test: optimized-loop -->
 ```maxon
-function main() int
+function main() returns int
     var sum = 0
     var i = 0
     while i < 10 'loop'
@@ -97,7 +97,7 @@ end 'main'
 
 <!-- test: optimization-verification -->
 ```maxon
-function compute() int
+function compute() returns int
     var result = 0
     var x = 1
     while x <= 5 'loop'
@@ -107,7 +107,7 @@ function compute() int
     return result
 end 'compute'
 
-function main() int
+function main() returns int
     return compute()
 end 'main'
 ```

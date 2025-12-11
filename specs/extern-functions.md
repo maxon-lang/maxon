@@ -29,17 +29,17 @@ The `extern` keyword declares functions defined outside your Maxon code, such as
 ### Syntax
 
 ```maxon
-extern function name(param1 type1, param2 type2) returnType "library_name"
+extern function functionName(params) returns returnType "library_name"
 ```
 Note: No function body or `end` statement.
 
 ### Example
 
 ```maxon
-extern function TestFunc(x int, y int, c character) int "ffi_test_lib"
+extern function add_numbers(a int, b int) returns int "ffi_test_lib"
 
-function main() int
-    return 0
+function main() returns int
+    return add_numbers(10, 20)
 end 'main'
 ```
 ```exitcode
@@ -51,9 +51,9 @@ end 'main'
 
 <!-- test: basic-extern -->
 ```maxon
-extern function TestFunc(x int, y int, c character) int "ffi_test_lib"
+extern function add_numbers(a int, b int) returns int "ffi_test_lib"
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```

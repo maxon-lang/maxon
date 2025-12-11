@@ -59,7 +59,7 @@ var z = sin(halfPi)  // 1.0 (approximately)
 
 <!-- test: sin.basic -->
 ```maxon
-function main() int
+function main() returns int
     var x1 = sin(0.0)
     var x2 = sin(0.5)
     var x3 = sin(1.0)
@@ -83,7 +83,7 @@ end 'main'
 
 <!-- test: sin.zero -->
 ```maxon
-function main() int
+function main() returns int
     var result = sin(0.0)
     if result == 0.0 'check'
         return 0
@@ -97,7 +97,7 @@ end 'main'
 
 <!-- test: sin.with-int-promotion -->
 ```maxon
-function main() int
+function main() returns int
     var x = 0  // int
     var result = sin(x)  // x promoted to 0.0
     if result == 0.0 'check'

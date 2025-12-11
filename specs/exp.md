@@ -43,7 +43,7 @@ Returns e raised to the power of x, where e ≈ 2.71828 (Euler's number).
 ### Example
 
 ```maxon
-function main() int
+function main() returns int
     var result = exp(0.0)  // e^0 = 1
     return trunc(result)
 end 'main'
@@ -64,7 +64,7 @@ end 'main'
 
 <!-- test: exp-zero -->
 ```maxon
-function main() int
+function main() returns int
     var result = exp(0.0)
     return trunc(result)
 end 'main'
@@ -76,7 +76,7 @@ end 'main'
 
 <!-- test: exp-one -->
 ```maxon
-function main() int
+function main() returns int
     var result = exp(1.0)  // e^1 ≈ 2.71828
     return trunc(result)
 end 'main'
@@ -88,7 +88,7 @@ end 'main'
 
 <!-- test: exp-two -->
 ```maxon
-function main() int
+function main() returns int
     var result = exp(2.0)  // e^2 ≈ 7.389
     return trunc(result)
 end 'main'
@@ -100,7 +100,7 @@ end 'main'
 
 <!-- test: int-promotion -->
 ```maxon
-function main() int
+function main() returns int
     var result = exp(3)  // Int promoted to float
     return trunc(result)
 end 'main'
@@ -112,7 +112,7 @@ end 'main'
 
 <!-- test: negative -->
 ```maxon
-function main() int
+function main() returns int
     var result = exp(-1.0)  // e^-1 ≈ 0.368
     return trunc(result)
 end 'main'

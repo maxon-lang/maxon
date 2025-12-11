@@ -36,7 +36,7 @@ suite('Compiler Explorer LSP Test Suite', () => {
 	suite('IR Generation (maxon/generateIR)', () => {
 
 		test('Should generate IR for a simple function', async function () {
-			const source = `function add(a int, b int) int
+			const source = `function add(a int, b int) returns int
     return a + b
 end 'add'`;
 
@@ -60,7 +60,7 @@ end 'add'`;
 		});
 
 		test('Should generate optimized IR when optimize=true', async function () {
-			const source = `function add(a int, b int) int
+			const source = `function add(a int, b int) returns int
     return a + b
 end 'add'`;
 
@@ -116,7 +116,7 @@ end`;
 		});
 
 		test('Should return semantic errors for type mismatches', async function () {
-			const source = `function test() int
+			const source = `function test() returns int
     return "hello"
 end 'test'`;
 
@@ -149,7 +149,7 @@ end 'test'`;
 
 		test('Should generate IR for function without main', async function () {
 			// Test that we can generate IR for helper functions (not just main)
-			const source = `function helper(x int) int
+			const source = `function helper(x int) returns int
     return x * 2
 end 'helper'`;
 
@@ -174,7 +174,7 @@ end 'helper'`;
 	suite('Assembly Generation (maxon/generateAsm)', () => {
 
 		test('Should generate assembly for a simple function', async function () {
-			const source = `function add(a int, b int) int
+			const source = `function add(a int, b int) returns int
     return a + b
 end 'add'`;
 
@@ -199,7 +199,7 @@ end 'add'`;
 		});
 
 		test('Should generate optimized assembly when optimize=true', async function () {
-			const source = `function add(a int, b int) int
+			const source = `function add(a int, b int) returns int
     return a + b
 end 'add'`;
 
@@ -255,7 +255,7 @@ end`;
 		});
 
 		test('Should return semantic errors for type mismatches', async function () {
-			const source = `function test() int
+			const source = `function test() returns int
     return "hello"
 end 'test'`;
 
@@ -273,7 +273,7 @@ end 'test'`;
 		});
 
 		test('Should use Intel syntax for assembly output', async function () {
-			const source = `function test() int
+			const source = `function test() returns int
     return 42
 end 'test'`;
 
@@ -302,11 +302,11 @@ end 'test'`;
 		});
 
 		test('Should generate assembly for multiple functions', async function () {
-			const source = `function helper(x int) int
+			const source = `function helper(x int) returns int
     return x * 2
 end 'helper'
 
-function main() int
+function main() returns int
     return helper(21)
 end 'main'`;
 
@@ -336,7 +336,7 @@ end 'main'`;
 	suite('Error Response Format', () => {
 
 		test('Error responses should include line and column', async function () {
-			const source = `function test() int
+			const source = `function test() returns int
     return "wrong type"
 end 'test'`;
 

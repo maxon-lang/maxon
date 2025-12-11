@@ -12,10 +12,10 @@ The `Collection` interface provides indexed access and functional operations for
 **Interface Definition** (`stdlib/interfaces.maxon`):
 ```text
 export interface Collection uses Element extends Iterable
-    function count() int
-    function get(index int) Element
-    function set(index int, value Element) Self
-    function map(transform (Element) Element) Self
+    function count() returns int
+    function get(index int) returns Element or nil
+    function set(index int, value Element) returns Self
+    function map(transform (Element) Element) returns Self
 end 'Collection'
 ```
 
@@ -57,10 +57,10 @@ The `Collection` interface provides indexed access and functional operations for
 **Interface:**
 ```text
 interface Collection uses Element extends Iterable
-    function count() int
-    function get(index int) Element
-    function set(index int, value Element) Self
-    function map(transform (Element) Element) Self
+    function count() returns int
+    function get(index int) returns Element or nil
+    function set(index int, value Element) returns Self
+    function map(transform (Element) Element) returns Self
 end 'Collection'
 ```
 
@@ -71,7 +71,7 @@ Arrays automatically implement the Collection interface.
 Returns the number of elements in the collection.
 
 ```maxon
-function main() int
+function main() returns int
     var arr = [1, 2, 3, 4, 5]
     printInt(arr.count())
     return 0
@@ -89,7 +89,7 @@ end 'main'
 Returns the element at the specified index, or nil if out of bounds.
 
 ```maxon
-function main() int
+function main() returns int
     var arr = [10, 20, 30]
     if let val = arr.get(1) 'get'
         return val
@@ -106,7 +106,7 @@ end 'main'
 Sets the element at the specified index. Returns self for method chaining.
 
 ```maxon
-function main() int
+function main() returns int
     var arr = [1, 2, 3]
     arr.set(1, 99)
     printInt(arr[1])
@@ -140,11 +140,11 @@ A new array containing the transformed elements.
 Transform an array using a named function:
 
 ```maxon
-function double(x int) int
+function double(x int) returns int
     return x * 2
 end 'double'
 
-function main() int
+function main() returns int
     var numbers = [1, 2, 3, 4, 5]
     var doubled = numbers.map(double)
     printInt(doubled[2])
@@ -163,7 +163,7 @@ end 'main'
 Transform using an inline closure with `gives`:
 
 ```maxon
-function main() int
+function main() returns int
     var numbers = [1, 2, 3]
     var squared = numbers.map((x int) gives x * x)
     printInt(squared[0])
@@ -185,7 +185,7 @@ end 'main'
 
 <!-- test: count-basic -->
 ```maxon
-function main() int
+function main() returns int
     var arr = [1, 2, 3, 4, 5]
     printInt(arr.count())
     return 0
@@ -200,7 +200,7 @@ end 'main'
 
 <!-- test: count-empty -->
 ```maxon
-function main() int
+function main() returns int
     var arr = array of int
     printInt(arr.count())
     return 0
@@ -215,7 +215,7 @@ end 'main'
 
 <!-- test: get-valid -->
 ```maxon
-function main() int
+function main() returns int
     var arr = [10, 20, 30]
     var sum = 0
     if let val = arr.get(0) 'get0'
@@ -233,13 +233,13 @@ end 'main'
 
 <!-- test: get-out-of-bounds -->
 ```maxon
-function main() int
+function main() returns int
     var arr = [1, 2, 3]
     if let val = arr.get(10) 'get'
         return val
-    else 'get'
+    end 'get' else 'not_found'
         return -1
-    end 'get'
+    end 'not_found'
 end 'main'
 ```
 ```exitcode
@@ -248,7 +248,7 @@ end 'main'
 
 <!-- test: set-basic -->
 ```maxon
-function main() int
+function main() returns int
     var arr = [1, 2, 3]
     arr.set(0, 100)
     arr.set(2, 300)
@@ -269,11 +269,11 @@ end 'main'
 
 <!-- test: map-basic-transform -->
 ```maxon
-function double(x int) int
+function double(x int) returns int
     return x * 2
 end 'double'
 
-function main() int
+function main() returns int
     var arr = [1, 2, 3, 4, 5]
     var result = arr.map(double)
     printInt(result[0])
@@ -297,7 +297,7 @@ end 'main'
 
 <!-- test: map-closure-multiply -->
 ```maxon
-function main() int
+function main() returns int
     var arr = [2, 3, 4]
     var result = arr.map((x int) gives x * 3)
     printInt(result[0])
@@ -317,7 +317,7 @@ end 'main'
 
 <!-- test: map-closure-square -->
 ```maxon
-function main() int
+function main() returns int
     var arr = [1, 2, 3, 4]
     var squared = arr.map((n int) gives n * n)
     printInt(squared[0])
@@ -339,11 +339,11 @@ end 'main'
 
 <!-- test: map-identity-function -->
 ```maxon
-function identity(x int) int
+function identity(x int) returns int
     return x
 end 'identity'
 
-function main() int
+function main() returns int
     var arr = [10, 20, 30]
     var result = arr.map(identity)
     printInt(result[0])
@@ -363,11 +363,11 @@ end 'main'
 
 <!-- test: map-negate -->
 ```maxon
-function negate(x int) int
+function negate(x int) returns int
     return 0 - x
 end 'negate'
 
-function main() int
+function main() returns int
     var arr = [1, 2, 3]
     var result = arr.map(negate)
     printInt(result[0])
@@ -387,7 +387,7 @@ end 'main'
 
 <!-- test: map-single-element -->
 ```maxon
-function main() int
+function main() returns int
     var arr = [42]
     var result = arr.map((x int) gives x + 8)
     printInt(result[0])

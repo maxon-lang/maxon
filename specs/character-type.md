@@ -98,7 +98,7 @@ c.toString()           // Converts to string
 ### Basic Character
 
 ```maxon
-function main() int
+function main() returns int
     var x = 'A'
     if x == 'A' 'check'
         return 0
@@ -114,7 +114,7 @@ end 'main'
 ### Character Comparison
 
 ```maxon
-function main() int
+function main() returns int
     var a = 'A'
     var b = 'B'
     if a < b 'check'
@@ -131,7 +131,7 @@ end 'main'
 ### Character in Variable
 
 ```maxon
-function main() int
+function main() returns int
     var letter = 'Z'
     if letter == 'Z' 'check'
         return 0
@@ -147,7 +147,7 @@ end 'main'
 ### Multi-byte Character (2-byte UTF-8)
 
 ```maxon
-function main() int
+function main() returns int
     var c = 'é'
     printInt(c.bytes().count())
     return 0
@@ -164,7 +164,7 @@ end 'main'
 ### Multi-byte Character (3-byte UTF-8)
 
 ```maxon
-function main() int
+function main() returns int
     var c = '中'
     printInt(c.bytes().count())
     return 0
@@ -181,7 +181,7 @@ end 'main'
 ### Multi-byte Character (4-byte Emoji)
 
 ```maxon
-function main() int
+function main() returns int
     var c = '🎉'
     printInt(c.bytes().count())
     return 0
@@ -198,7 +198,7 @@ end 'main'
 ### Character to String Conversion
 
 ```maxon
-function main() int
+function main() returns int
     var c = 'A'
     var s = c.toString()
     print(s)
@@ -216,7 +216,7 @@ A
 ### Multi-byte Character to String
 
 ```maxon
-function main() int
+function main() returns int
     var c = '中'
     var s = c.toString()
     print(s)
@@ -234,7 +234,7 @@ end 'main'
 ### Multi-byte Character Equality
 
 ```maxon
-function main() int
+function main() returns int
     var a = 'é'
     var b = 'é'
     if a == b 'check'
@@ -251,7 +251,7 @@ end 'main'
 ### Multi-byte Character Inequality
 
 ```maxon
-function main() int
+function main() returns int
     var a = 'é'
     var b = 'è'
     if a != b 'check'
@@ -268,7 +268,7 @@ end 'main'
 ### Emoji Character
 
 ```maxon
-function main() int
+function main() returns int
     var emoji = '🎉'
     print(emoji.toString())
     return 0
@@ -285,7 +285,7 @@ end 'main'
 ### Flag Emoji (Regional Indicator Pair)
 
 ```maxon
-function main() int
+function main() returns int
     var flag = '🇺🇸'
     printInt(flag.bytes().count())
     print(flag.toString())
@@ -304,7 +304,7 @@ end 'main'
 ### Family Emoji (ZWJ Sequence)
 
 ```maxon
-function main() int
+function main() returns int
     var family = '👨‍👩‍👧'
     printInt(family.bytes().count())
     return 0
@@ -321,7 +321,7 @@ end 'main'
 ### Skin Tone Modifier Emoji
 
 ```maxon
-function main() int
+function main() returns int
     var wave = '👋🏽'
     printInt(wave.bytes().count())
     return 0
@@ -338,7 +338,7 @@ end 'main'
 ### Escape Sequences in Character
 
 ```maxon
-function main() int
+function main() returns int
     var newline = '\n'
     var tab = '\t'
     var backslash = '\\'

@@ -53,7 +53,7 @@ export struct array uses Element is Collection with Element, ExpressibleByArrayL
 
 	// Initialize array from compiler-constructed _ManagedArray
 	// The compiler passes an opaque _ManagedArray value
-	function ExpressibleByArrayLiteral.init(managed _ManagedArray) Self
+	function ExpressibleByArrayLiteral.init(managed _ManagedArray) returns Self
 		return Self{managed: managed, iterIndex: 0}
 	end 'init'
 
@@ -62,22 +62,22 @@ export struct array uses Element is Collection with Element, ExpressibleByArrayL
 	// =========================================================================
 
 	/// Get the number of elements in the array
-	export function Collection.count() int
+	export function Collection.count() returns int
 		return __managed_array_len(managed)
 	end 'count'
 
 	/// Get the current capacity (allocated space)
-	export function capacity() int
+	export function capacity() returns int
 		return __managed_array_capacity(managed)
 	end 'capacity'
 
 	/// Check if array is empty
-	export function isEmpty() bool
+	export function isEmpty() returns bool
 		return __managed_array_len(managed) == 0
 	end 'isEmpty'
 
 	/// Get first element, or nil if empty
-	export function first() Element or nil
+	export function first() returns Element or nil
 		if __managed_array_len(managed) == 0 'empty'
 			return nil
 		end 'empty'
@@ -85,7 +85,7 @@ export struct array uses Element is Collection with Element, ExpressibleByArrayL
 	end 'first'
 
 	/// Get last element, or nil if empty
-	export function last() Element or nil
+	export function last() returns Element or nil
 		var len = __managed_array_len(managed)
 		if len == 0 'empty'
 			return nil
@@ -98,7 +98,7 @@ export struct array uses Element is Collection with Element, ExpressibleByArrayL
 	// =========================================================================
 
 	/// Get element at index, or nil if out of bounds
-	export function Collection.get(index int) Element or nil
+	export function Collection.get(index int) returns Element or nil
 		var len = __managed_array_len(managed)
 		if index < 0 'bounds'
 			return nil
@@ -110,7 +110,7 @@ export struct array uses Element is Collection with Element, ExpressibleByArrayL
 	end 'get'
 
 	/// Set element at index (no-op if index out of bounds)
-	export function Collection.set(index int, value Element) Self
+	export function Collection.set(index int, value Element) returns Self
 		var len = __managed_array_len(managed)
 		if index >= 0 'bounds'
 			if index < len 'bounds'
@@ -125,7 +125,7 @@ export struct array uses Element is Collection with Element, ExpressibleByArrayL
 	// =========================================================================
 
 	/// Append element to end
-	export function push(value Element) Self
+	export function push(value Element) returns Self
 		var len = __managed_array_len(managed)
 		var cap = __managed_array_capacity(managed)
 		if len >= cap 'grow'
@@ -142,7 +142,7 @@ export struct array uses Element is Collection with Element, ExpressibleByArrayL
 	end 'push'
 
 	/// Remove and return last element, or nil if empty
-	export function pop() Element or nil
+	export function pop() returns Element or nil
 		var len = __managed_array_len(managed)
 		if len == 0 'empty'
 			return nil
@@ -154,7 +154,7 @@ export struct array uses Element is Collection with Element, ExpressibleByArrayL
 	end 'pop'
 
 	/// Insert element at index, shifting elements to the right (clamps index to [0, count])
-	export function insert(at int, value Element) Self
+	export function insert(at int, value Element) returns Self
 		var len = __managed_array_len(managed)
 		var index = at
 
@@ -188,7 +188,7 @@ export struct array uses Element is Collection with Element, ExpressibleByArrayL
 	end 'insert'
 
 	/// Remove and return element at index, shifting elements to the left (returns nil if out of bounds)
-	export function remove(at int) Element or nil
+	export function remove(at int) returns Element or nil
 		var len = __managed_array_len(managed)
 
 		// Check bounds
@@ -212,7 +212,7 @@ export struct array uses Element is Collection with Element, ExpressibleByArrayL
 	end 'remove'
 
 	/// Remove all elements from the array (keeps capacity)
-	export function clear() Self
+	export function clear() returns Self
 		__managed_array_set_length(managed, 0)
 		return self
 	end 'clear'
@@ -222,7 +222,7 @@ export struct array uses Element is Collection with Element, ExpressibleByArrayL
 	// =========================================================================
 
 	/// Reserve space by ensuring array has at least minCapacity slots
-	export function reserve(minCapacity int) Self
+	export function reserve(minCapacity int) returns Self
 		var cap = __managed_array_capacity(managed)
 		if minCapacity > cap 'grow'
 			__managed_array_grow(managed, minCapacity)
@@ -235,7 +235,7 @@ export struct array uses Element is Collection with Element, ExpressibleByArrayL
 	// =========================================================================
 
 	/// Get next element in iteration, or nil when exhausted
-	function Iterable.next() Element or nil
+	function Iterable.next() returns Element or nil
 		var len = __managed_array_len(managed)
 		if iterIndex >= len 'done'
 			return nil

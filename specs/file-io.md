@@ -57,7 +57,7 @@ Read the entire contents of a text file as a UTF-8 encoded string.
 **Example:**
 
 ```maxon
-function main() int
+function main() returns int
     let content = readTextFile("example.txt")
     print("File content: " + content)
     return 0
@@ -79,13 +79,13 @@ Write a string to a text file using UTF-8 encoding.
 **Example:**
 
 ```maxon
-function main() int
+function main() returns int
     let success = writeTextFile("temp/output.txt", "Hello, World!")
     if success 'write_ok'
         print("File written successfully")
-        else 'write_ok'
+    end 'write_ok' else 'write_fail'
         print("Failed to write file")
-    end 'write_ok'
+    end 'write_fail'
     return 0
 end 'main'
 ```
@@ -105,14 +105,14 @@ Write binary data to a file.
 **Example:**
 
 ```maxon
-function main() int
+function main() returns int
     let data = [72b, 101b, 108b, 108b, 111b]  // "Hello" in bytes
     let success = writeBinaryFile("binary.dat", data)
     if success 'write_ok'
         print("Binary file written successfully")
-        else 'write_ok'
+    end 'write_ok' else 'write_fail'
         print("Failed to write binary file")
-    end 'write_ok'
+    end 'write_fail'
     return 0
 end 'main'
 ```
@@ -121,7 +121,7 @@ end 'main'
 
 <!-- test: read-text-file -->
 ```maxon
-function main() int
+function main() returns int
     let content = readTextFile("test.txt")
     print("Content:" + content)
     return 0
@@ -136,7 +136,7 @@ Content:
 
 <!-- test: write-text-file -->
 ```maxon
-function main() int
+function main() returns int
     let success = writeTextFile("temp/output.txt", "Test content")
     return success as int
 end 'main'
@@ -147,7 +147,7 @@ end 'main'
 
 <!-- test: write-binary-file -->
 ```maxon
-function main() int
+function main() returns int
     let data = [65b, 66b, 67b]  // "ABC" as bytes
     let success = writeBinaryFile("temp/binary.bin", data)
     return success as int
@@ -159,7 +159,7 @@ end 'main'
 
 <!-- test: read-nonexistent-file -->
 ```maxon
-function main() int
+function main() returns int
     let content = readTextFile("nonexistent.txt")
     print("Content: '" + content + "'")
     return 0
@@ -174,7 +174,7 @@ Content: ''
 
 <!-- test: write-to-readonly-path -->
 ```maxon
-function main() int
+function main() returns int
     let success = writeTextFile("C:\\Windows\\test.txt", "Should fail")
     return success as int
 end 'main'

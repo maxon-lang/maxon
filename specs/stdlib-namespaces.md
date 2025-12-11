@@ -40,7 +40,7 @@ The standard library organizes functions into logical namespaces based on file p
 ### Example
 
 ```maxon
-function main() int
+function main() returns int
     // Use standard library function
     printInt(42)
     return 0

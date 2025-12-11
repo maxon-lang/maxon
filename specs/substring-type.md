@@ -82,7 +82,7 @@ end 'loop'
 
 <!-- test: basic-creation -->
 ```maxon
-function main() int
+function main() returns int
     var s = "Hello, World!"
     var sub = s.slice(0, 5)
     return sub.count()
@@ -94,7 +94,7 @@ end 'main'
 
 <!-- test: from-middle -->
 ```maxon
-function main() int
+function main() returns int
     var s = "Hello, World!"
     var sub = s.slice(7, 12)
     return sub.count()
@@ -106,7 +106,7 @@ end 'main'
 
 <!-- test: empty-substring -->
 ```maxon
-function main() int
+function main() returns int
     var s = "Hello"
     var sub = s.slice(2, 2)
     return sub.count()
@@ -118,7 +118,7 @@ end 'main'
 
 <!-- test: to-string -->
 ```maxon
-function main() int
+function main() returns int
     var s = "Hello, World!"
     var sub = s.slice(0, 5)
     var str = sub.toString()
@@ -131,7 +131,7 @@ end 'main'
 
 <!-- test: iteration-count -->
 ```maxon
-function main() int
+function main() returns int
     var s = "abcde"
     var sub = s.slice(1, 4)
     var sum = 0
@@ -151,7 +151,7 @@ end 'main'
 
 <!-- test: isEmpty-true -->
 ```maxon
-function main() int
+function main() returns int
     var s = "Hello"
     var sub = s.slice(0, 0)
     if sub.isEmpty() 'check'
@@ -166,7 +166,7 @@ end 'main'
 
 <!-- test: isEmpty-false -->
 ```maxon
-function main() int
+function main() returns int
     var s = "Hello"
     var sub = s.slice(0, 3)
     if sub.isEmpty() 'check'
@@ -181,7 +181,7 @@ end 'main'
 
 <!-- test: heap-string-retains-parent -->
 ```maxon
-function main() int
+function main() returns int
     // Long string forces heap allocation
     var s = "This is a longer string that exceeds SSO"
     var refBefore = __string_get_refcount(s._managed)
@@ -197,7 +197,7 @@ end 'main'
 
 <!-- test: sso-string-no-refcount -->
 ```maxon
-function main() int
+function main() returns int
     // Short string uses SSO (no heap)
     var s = "Hello"
     var refcount = __string_get_refcount(s._managed)
@@ -211,7 +211,7 @@ end 'main'
 
 <!-- test: chained-slice -->
 ```maxon
-function main() int
+function main() returns int
     var s = "Hello, World!"
     var sub1 = s.slice(0, 12)
     var sub2 = sub1.slice(0, 5)

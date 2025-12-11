@@ -83,7 +83,7 @@ suite('Diagnostics Tests', () => {
 	});
 
 	test('Should report warning for unused variable', async function () {
-		const content = `function main() int
+		const content = `function main() returns int
     var unused = 5
     return 0
 end 'main'
@@ -109,7 +109,7 @@ end 'main'
 	});
 
 	test('Should report multiple unused variables', async function () {
-		const content = `function main() int
+		const content = `function main() returns int
     var unused1 = 5
     var unused2 = 10
     var used = 15
@@ -140,7 +140,7 @@ end 'main'
 	});
 
 	test('Should distinguish warnings from errors', async function () {
-		const content = `function main() int
+		const content = `function main() returns int
     var unused = 5
     print(undefined)
     return 0
@@ -178,8 +178,8 @@ end 'main'
 	});
 
 	test('Should not report error for stdlib function call', async function () {
-		const content = `function main() int
-    var buffer [12]character = 0
+		const content = `function main() returns int
+    var buffer = array of 12 byte
     var length = formatIntArray(42, buffer)
     return length
 end 'main'
@@ -207,8 +207,8 @@ end 'main'
 	});
 
 	test('Should report error for stdlib function with wrong argument count', async function () {
-		const content = `function main() int
-    var buffer = [12]character
+		const content = `function main() returns int
+    var buffer = array of 12 byte
     var length = formatIntArray(42)
     return length
 end 'main'

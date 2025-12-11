@@ -37,11 +37,11 @@ The namespace of a file is determined by its path:
 Use `export` to make functions visible outside the file:
 
 ```maxon
-export function public_add(a int, b int) int
+export function public_add(a int, b int) returns int
     return a + b
 end 'public_add'
 
-function private_helper(x int) int
+function private_helper(x int) returns int
     return x * 2
 end 'private_helper'
 ```
@@ -52,15 +52,15 @@ Only `public_add` can be called from other files. `private_helper` is file-priva
 File: `math/operations.maxon`
 
 ```maxon
-export function add(a int, b int) int
+export function add(a int, b int) returns int
     return a + b
 end 'add'
 
-export function multiply(x int, y int) int
+export function multiply(x int, y int) returns int
     return x * y
 end 'multiply'
 
-function main() int
+function main() returns int
     return add(3, 4)  // Called from within same file
 end 'main'
 ```
@@ -73,11 +73,11 @@ end 'main'
 
 <!-- test: basic-namespace -->
 ```maxon
-export function add(a int, b int) int
+export function add(a int, b int) returns int
     return a + b
 end 'add'
 
-function main() int
+function main() returns int
     return add(10, 20)
 end 'main'
 ```
@@ -88,15 +88,15 @@ end 'main'
 
 <!-- test: multiple-functions -->
 ```maxon
-export function double(x int) int
+export function double(x int) returns int
     return x * 2
 end 'double'
 
-export function triple(x int) int
+export function triple(x int) returns int
     return x * 3
 end 'triple'
 
-function main() int
+function main() returns int
     return double(5) + triple(4)
 end 'main'
 ```
@@ -107,15 +107,15 @@ end 'main'
 
 <!-- test: nested-calls-in-namespace -->
 ```maxon
-function add(a int, b int) int
+function add(a int, b int) returns int
     return a + b
 end 'add'
 
-function sum_three(a int, b int, c int) int
+function sum_three(a int, b int, c int) returns int
     return add(add(a, b), c)
 end 'sum_three'
 
-function main() int
+function main() returns int
     return sum_three(1, 2, 3)
 end 'main'
 ```

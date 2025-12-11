@@ -1,22 +1,28 @@
 // Test: if-statements.doc-example-3.1
-function main() int
-    var x = 5
-    if x == 5 'check'
+function main() returns int
+    var x = 2
+    if x == 1 'case1'
         return 1
-    else 'check'
+    end 'case1' else if x == 2 'case2'
+        return 2
+    end 'case2' else 'default'
         return 0
-    end 'check'
+    end 'default'
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 6
+; Instructions: 8
 
 define i32 @main() {
 entry0:
-  br i1 1, label %then1, label %else3
+  br i1 0, label %then1, label %else3
 then1:
   ret i32 1
 else3:
+  br i1 1, label %then4, label %else6
+then4:
+  ret i32 2
+else6:
   ret i32 0
 }
 
@@ -31,20 +37,28 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 11
+; Instructions: 16
 
 define i32 @main() {
 entry0:
   %0 = alloca i32
-  store i32 5, ptr %0
+  store i32 2, ptr %0
   %1 = load i32, ptr %0
-  %2 = icmp eq i32 %1, 5
+  %2 = icmp eq i32 %1, 1
   br i1 %2, label %then1, label %else3
 then1:
   ret i32 1
 ifcont2:
   ret i32 0
 else3:
+  %3 = load i32, ptr %0
+  %4 = icmp eq i32 %3, 2
+  br i1 %4, label %then4, label %else6
+then4:
+  ret i32 2
+ifcont5:
+  br label %ifcont2
+else6:
   ret i32 0
 }
 
@@ -58,4 +72,4 @@ entry0:
 }
 
 ---
-ExitCode: 1
+ExitCode: 2

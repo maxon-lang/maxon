@@ -29,7 +29,7 @@ Maxon is a statically-typed language with labeled blocks and explicit `end` stat
 
 - **Types**: `int`, `float`, `bool`, `byte`, `char`, `string`, arrays (`[10]int`), structs, maps
 - **Variables**: `var` (mutable), `let` (immutable), ie `let x = 5`
-- **Functions**: `function fname(param type) returnType ... end 'fname'`
+- **Functions**: `returns returnType ... end 'fname'`
 - **Control flow**: `if`/`else`, `while`, `for`/`in` with range() - all require block labels
 - **Operators**: Arithmetic, comparison, logical (`and`, `or`, `not`), `mod`, `as` (cast)
 - **Structs**: `struct SName ... end 'SName'` with methods using explicit `self` parameter

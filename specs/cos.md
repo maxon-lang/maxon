@@ -58,7 +58,7 @@ var z = cos(pi)      // -1.0 (approximately)
 
 <!-- test: cos.basic -->
 ```maxon
-function main() int
+function main() returns int
     var x1 = cos(0.0)
     var x2 = cos(0.5)
     var x3 = cos(1.0)
@@ -83,7 +83,7 @@ end 'main'
 
 <!-- test: cos.zero -->
 ```maxon
-function main() int
+function main() returns int
     var result = cos(0.0)
     if result == 1.0 'check'
         return 0
@@ -97,7 +97,7 @@ end 'main'
 
 <!-- test: cos.with-int-promotion -->
 ```maxon
-function main() int
+function main() returns int
     var x = 0  // int
     var result = cos(x)  // x promoted to 0.0
     if result == 1.0 'check'

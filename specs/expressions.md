@@ -62,7 +62,7 @@ Operands must have compatible types:
 
 <!-- test: compound -->
 ```maxon
-function main() int
+function main() returns int
     return (2 + 3) * 5
 end 'main'
 ```
@@ -73,12 +73,12 @@ end 'main'
 
 <!-- test: with-function-call -->
 ```maxon
-function main() int
+function main() returns int
     var x = 3
     return 5 + add(x, 4)
 end 'main'
 
-function add(a int, b int) int
+function add(a int, b int) returns int
     return a + b
 end 'add'
 ```
@@ -89,7 +89,7 @@ end 'add'
 
 <!-- test: multiple-variables -->
 ```maxon
-function main() int
+function main() returns int
     var x = 42
     var y = 10
     var result = x + y
@@ -103,7 +103,7 @@ end 'main'
 
 <!-- test: mixed-operators -->
 ```maxon
-function main() int
+function main() returns int
     var a = 10
     var b = 3
     return a * 2 + b - 1
@@ -116,7 +116,7 @@ end 'main'
 
 <!-- test: comparison-in-expression -->
 ```maxon
-function main() int
+function main() returns int
     var isGreater = 10 > 5
     if isGreater 'check'
         return 1

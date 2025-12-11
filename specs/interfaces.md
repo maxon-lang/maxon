@@ -37,7 +37,7 @@ Interfaces are declared with the `interface` keyword and contain method signatur
 
 ```maxon
 interface Hashable
-    function hash() int
+    function hash() returns int
 end 'Hashable'
 ```
 
@@ -72,7 +72,7 @@ struct Point is Hashable
     var x int
     var y int
 
-    function Hashable.hash() int
+    function Hashable.hash() returns int
         return x + y * 31
     end 'hash'
 end 'Point'
@@ -91,7 +91,7 @@ struct Point
     var x int
     var y int
 
-    export function getX() int
+    export function getX() returns int
         return x
     end 'getX'
 end 'Point'
@@ -114,14 +114,14 @@ The `Self` type in interface signatures represents the conforming type:
 
 ```maxon
 interface Cloneable
-    function clone() Self
+    function clone() returns Self
 end 'Cloneable'
 
 struct Point is Cloneable
     var x int
     var y int
 
-    function Cloneable.clone() Point
+    function Cloneable.clone() returns Point
         return Point{x: x, y: y}
     end 'clone'
 end 'Point'
@@ -133,13 +133,13 @@ Interfaces can declare associated types with `uses`. Structs bind concrete types
 
 ```maxon
 interface Container uses Element
-    function get(index int) Element
+    function get(index int) returns Element
 end 'Container'
 
 struct IntArray is Container with int
     var data array of 10 int
     
-    function Container.get(index int) int
+    function Container.get(index int) returns int
         return data[index]
     end 'get'
 end 'IntArray'
@@ -153,12 +153,12 @@ A struct must implement **all** methods from interfaces it conforms to. Partial 
 
 ```maxon
 interface TwoMethods
-    function first() int
-    function second() int
+    function first() returns int
+    function second() returns int
 end 'TwoMethods'
 
 struct Incomplete is TwoMethods
-    function TwoMethods.first() int
+    function TwoMethods.first() returns int
         return 1
     end 'first'
     // Missing: TwoMethods.second()
@@ -171,13 +171,13 @@ This produces a compiler error listing all missing methods.
 
 The standard library (`stdlib/interfaces.maxon`) defines commonly used interfaces that are automatically imported when referenced:
 
-- **Hashable** - Types that can be hashed to an integer: `function hash() int`
-- **Equatable** - Types that can be compared for equality: `function equals(other Self) bool`
-- **Comparable** - Types that can be ordered: `function compare(other Self) int`
-- **Cloneable** - Types that can be copied: `function clone() Self`
+- **Hashable** - Types that can be hashed to an integer: `returns int`
+- **Equatable** - Types that can be compared for equality: `returns bool`
+- **Comparable** - Types that can be ordered: `returns int`
+- **Cloneable** - Types that can be copied: `returns Self`
 - **Iterable** - Types that can be iterated over (used by for-in loops):
   - Uses `Element` associated type
-  - `function next() Element or nil`
+  - `returns Element or nil`
 
 The `Iterator` struct in `stdlib/iter/iterator.maxon` conforms to `Iterable` and is used by `for` loops with `range()`.
 
@@ -185,19 +185,19 @@ The `Iterator` struct in `stdlib/iter/iterator.maxon` conforms to `Iterable` and
 
 ```maxon
 interface Hashable
-    function hash() int
+    function hash() returns int
 end 'Hashable'
 
 struct Point is Hashable
     var x int
     var y int
 
-    function Hashable.hash() int
+    function Hashable.hash() returns int
         return x + y * 31
     end 'hash'
 end 'Point'
 
-function main() int
+function main() returns int
     var p = Point{x: 10, y: 20}
     var h = p.hash()
     printInt(h)
@@ -215,19 +215,19 @@ Stdout: 630
 <!-- test: basic-interface -->
 ```maxon
 interface Hashable
-    function hash() int
+    function hash() returns int
 end 'Hashable'
 
 struct Point is Hashable
     var x int
     var y int
 
-    function Hashable.hash() int
+    function Hashable.hash() returns int
         return x + y * 31
     end 'hash'
 end 'Point'
 
-function main() int
+function main() returns int
     var p = Point{x: 10, y: 20}
     return p.hash()
 end 'main'
@@ -240,23 +240,23 @@ end 'main'
 <!-- test: multiple-methods -->
 ```maxon
 interface Describable
-    function describe() int
-    function value() int
+    function describe() returns int
+    function value() returns int
 end 'Describable'
 
 struct Counter is Describable
     var count int
 
-    function Describable.describe() int
+    function Describable.describe() returns int
         return 100 + count
     end 'describe'
 
-    function Describable.value() int
+    function Describable.value() returns int
         return count
     end 'value'
 end 'Counter'
 
-function main() int
+function main() returns int
     var c = Counter{count: 42}
     return c.describe() + c.value()
 end 'main'
@@ -269,18 +269,18 @@ end 'main'
 <!-- test: method-with-params -->
 ```maxon
 interface Calculator
-    function add(n int) int
+    function add(n int) returns int
 end 'Calculator'
 
 struct Accumulator is Calculator
     var total int
 
-    function Calculator.add(n int) int
+    function Calculator.add(n int) returns int
         return total + n
     end 'add'
 end 'Accumulator'
 
-function main() int
+function main() returns int
     var acc = Accumulator{total: 10}
     return acc.add(5)
 end 'main'
@@ -293,22 +293,22 @@ end 'main'
 <!-- test: multiple-interfaces -->
 ```maxon
 interface Hashable
-    function hash() int
+    function hash() returns int
 end 'Hashable'
 
 interface Equatable
-    function equals(other Self) int
+    function equals(other Self) returns int
 end 'Equatable'
 
 struct Point is Hashable, Equatable
     var x int
     var y int
 
-    function Hashable.hash() int
+    function Hashable.hash() returns int
         return x + y
     end 'hash'
 
-    function Equatable.equals(other Point) int
+    function Equatable.equals(other Point) returns int
         if x == other.x and y == other.y 'c1'
             return 1
         end 'c1'
@@ -316,7 +316,7 @@ struct Point is Hashable, Equatable
     end 'equals'
 end 'Point'
 
-function main() int
+function main() returns int
     var p1 = Point{x: 3, y: 4}
     var p2 = Point{x: 3, y: 4}
     return p1.hash() + p1.equals(p2)
@@ -330,19 +330,19 @@ end 'main'
 <!-- test: self-return-type -->
 ```maxon
 interface Movable
-    function move(dx int, dy int) Self
+    function move(dx int, dy int) returns Self
 end 'Movable'
 
 struct Point is Movable
     var x int
     var y int
 
-    function Movable.move(dx int, dy int) Point
+    function Movable.move(dx int, dy int) returns Point
         return Point{x: x + dx, y: y + dy}
     end 'move'
 end 'Point'
 
-function main() int
+function main() returns int
     var p = Point{x: 10, y: 20}
     var p2 = p.move(5, 10)
     return p2.x + p2.y
@@ -356,18 +356,18 @@ end 'main'
 <!-- test: method-call-syntax -->
 ```maxon
 interface Incrementable
-    function inc() int
+    function inc() returns int
 end 'Incrementable'
 
 struct Value is Incrementable
     var n int
 
-    function Incrementable.inc() int
+    function Incrementable.inc() returns int
         return n + 1
     end 'inc'
 end 'Value'
 
-function main() int
+function main() returns int
     var v = Value{n: 41}
     return v.inc()
 end 'main'
@@ -380,28 +380,28 @@ end 'main'
 <!-- test: partial-implementation-error -->
 ```maxon
 interface ThreeMethods
-    function one() int
-    function two() int
-    function three() int
+    function one() returns int
+    function two() returns int
+    function three() returns int
 end 'ThreeMethods'
 
 struct Incomplete is ThreeMethods
     var value int
 
-    function ThreeMethods.one() int
+    function ThreeMethods.one() returns int
         return 1
     end 'one'
 end 'Incomplete'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 8, column 1
 Partial interface implementation: struct 'Incomplete' is missing 2 method(s):
-  - two() int
-  - three() int
+  - two() returns int
+  - three() returns int
 
   8 | struct Incomplete is ThreeMethods
     | ^
@@ -413,16 +413,16 @@ Partial interface implementation: struct 'Incomplete' is missing 2 method(s):
 struct Calculator
     var value int
 
-    function double() int
+    function double() returns int
         return value * 2
     end 'double'
 
-    function triple() int
+    function triple() returns int
         return value * 3
     end 'triple'
 end 'Calculator'
 
-function main() int
+function main() returns int
     var c = Calculator{value: 7}
     return c.double() + c.triple()
 end 'main'
@@ -438,28 +438,28 @@ end 'main'
 struct IncompleteCollection uses Element is Collection with Element
     var data Element
 
-    function Collection.count() int
+    function Collection.count() returns int
         return 1
     end 'count'
 
-    function Collection.get(index int) Element or nil
+    function Collection.get(index int) returns Element or nil
         return data
     end 'get'
 
-    function Collection.set(index int, value Element) Self
+    function Collection.set(index int, value Element) returns Self
         data = value
         return self
     end 'set'
 end 'IncompleteCollection'
 
-function main() int
+function main() returns int
     return 0
 end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 2, column 1
 Partial interface implementation: struct 'IncompleteCollection' is missing 1 method(s):
-  - next() Element or nil
+  - next() returns Element or nil
 
   2 | struct IncompleteCollection uses Element is Collection with Element
     | ^

@@ -22,7 +22,7 @@ A comprehensive guide to writing idiomatic and consistent Maxon code.
 Always use **tabs for indentation**. One tab per indentation level.
 
 ```maxon
-function main() int
+function main() returns int
 	var x = 5
 	if x > 0 'check'
 		print(x)
@@ -38,7 +38,7 @@ Each block increases indentation by one level:
 - `end` statements decrease indentation
 
 ```maxon
-function calculate(value int) int
+function calculate(value int) returns int
 	if value > 0 'positive'
 		while value > 0 'loop'
 			value = value - 1
@@ -69,11 +69,11 @@ All Maxon source files should use **LF (line feed, `\n`)** line endings, not CRL
 Use **camelCase** for function names. Start with a lowercase letter.
 
 ```maxon
-function calculateSum(a int, b int) int
+function calculateSum(a int, b int) returns int
 	return a + b
 end 'calculateSum'
 
-function printGreeting(name string) int
+function printGreeting(name string) returns int
 	print(name)
 	return 0
 end 'printGreeting'
@@ -119,7 +119,7 @@ end 'mainLoop'
 ### Format
 
 ```maxon
-function name(param1 type1, param2 type2) returnType
+returns returnType
 	...
 end 'name'
 ```
@@ -129,7 +129,7 @@ end 'name'
 Parameters should be on the same line. If the line is too long, break after the opening parenthesis:
 
 ```maxon
-function processData(input string, offset int, length int) int
+function processData(input string, offset int, length int) returns int
 	...
 end 'processData'
 ```
@@ -201,7 +201,7 @@ end 'processLoop'
 Use comments to explain **why**, not **what**. The code should be clear about what it does.
 
 ```maxon
-function processItems(count int) int
+function processItems(count int) returns int
 	var result = 0
 	
 	' Sum first N items (skipping zeros for optimization)
@@ -245,7 +245,7 @@ var i = 0  ' Initialize counter for loop iterations
 Use blank lines to separate logical sections within functions:
 
 ```maxon
-function initialize() int
+function initialize() returns int
 	' Setup phase
 	var config = loadConfig()
 	var data = createData()
@@ -265,11 +265,11 @@ end 'initialize'
 Use a single blank line between function definitions:
 
 ```maxon
-function first() int
+function first() returns int
 	return 1
 end 'first'
 
-function second() int
+function second() returns int
 	return 2
 end 'second'
 ```
@@ -292,7 +292,7 @@ Keep lines reasonably short for readability. Aim for under 80 characters when pr
 
 ```maxon
 ' Good: clear and readable
-function calculateDistance(x1 int, y1 int, x2 int, y2 int) int
+function calculateDistance(x1 int, y1 int, x2 int, y2 int) returns int
 	var dx = x2 - x1
 	var dy = y2 - y1
 	return sqrt(dx * dx + dy * dy)
@@ -359,7 +359,7 @@ Here's a complete program following all style guide conventions:
 
 ```maxon
 ' Calculate the sum of integers from 1 to N
-function sum(n int) int
+function sum(n int) returns int
 	var result = 0
 	var i = 1
 	
@@ -372,7 +372,7 @@ function sum(n int) int
 end 'sum'
 
 ' Check if a number is prime
-function isPrime(num int) int
+function isPrime(num int) returns int
 	if num <= 1 'notPrime'
 		return 0
 	end 'notPrime'
@@ -388,7 +388,7 @@ function isPrime(num int) int
 	return 1
 end 'isPrime'
 
-function main() int
+function main() returns int
 	var total = sum(10)
 	print(total)
 	

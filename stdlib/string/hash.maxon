@@ -16,7 +16,7 @@
 // ============================================
 
 // hashManagedStringRange - Hash a range in _ManagedString using djb2
-function hashManagedStringRange(managed _ManagedString, offset int, len int) int
+function hashManagedStringRange(managed _ManagedString, offset int, len int) returns int
 	var h = 5381
 	var i = 0
 	while i < len 'hash_loop'
@@ -29,13 +29,13 @@ end 'hashManagedStringRange'
 
 /// Hash a _ManagedString using the djb2 algorithm
 /// Returns a 32-bit hash value
-export function hashManagedString(managed _ManagedString) int
+export function hashManagedString(managed _ManagedString) returns int
 	return hashManagedStringRange(managed, 0, __string_len(managed))
 end 'hashManagedString'
 
 /// Hash a substring using the djb2 algorithm
 /// Returns a 32-bit hash value
-export function hashSubstring(sub substring) int
+export function hashSubstring(sub substring) returns int
 	var parent = __substring_parent_managed(sub)
 	var offset = __substring_byte_offset(sub)
 	var len = __substring_len(sub)
@@ -47,7 +47,7 @@ end 'hashSubstring'
 // ============================================
 
 // equalsManagedStringRange - Compare two ranges in _ManagedStrings
-function equalsManagedStringRange(a _ManagedString, aOffset int, b _ManagedString, bOffset int, len int) bool
+function equalsManagedStringRange(a _ManagedString, aOffset int, b _ManagedString, bOffset int, len int) returns bool
 	var i = 0
 	while i < len 'compare_loop'
 		if __string_byte_at(a, aOffset + i) != __string_byte_at(b, bOffset + i) 'byte_check'
@@ -59,7 +59,7 @@ function equalsManagedStringRange(a _ManagedString, aOffset int, b _ManagedStrin
 end 'equalsManagedStringRange'
 
 /// Compare two _ManagedStrings for byte-by-byte equality
-export function equalsManagedString(a _ManagedString, b _ManagedString) bool
+export function equalsManagedString(a _ManagedString, b _ManagedString) returns bool
 	var len = __string_len(a)
 	if len != __string_len(b) 'length_check'
 		return false
@@ -68,7 +68,7 @@ export function equalsManagedString(a _ManagedString, b _ManagedString) bool
 end 'equalsManagedString'
 
 /// Compare two substrings for byte-by-byte equality
-export function equalsSubstring(a substring, b substring) bool
+export function equalsSubstring(a substring, b substring) returns bool
 	var len = __substring_len(a)
 	if len != __substring_len(b) 'length_check'
 		return false

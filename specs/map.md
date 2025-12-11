@@ -126,7 +126,7 @@ m.get("apple")     // 5
 m.get("orange")    // 0 (default for int)
 ```
 
-### contains(key) bool
+### contains(key) returns bool
 
 Check if a key exists in the map. Returns `true` if found, `false` otherwise.
 
@@ -136,7 +136,7 @@ m.contains("x")    // true
 m.contains("z")    // false
 ```
 
-### remove(key) bool
+### remove(key) returns bool
 
 Remove a key-value pair from the map. Returns `true` if the key was present and removed, `false` if it wasn't in the map.
 
@@ -146,7 +146,7 @@ m.remove("b")      // Returns true, map is now {"a": 1, "c": 3}
 m.remove("z")      // Returns false, key wasn't present
 ```
 
-### count() int
+### count() returns int
 
 Get the number of key-value pairs in the map.
 
@@ -155,7 +155,7 @@ var m = ["one": 1, "two": 2, "three": 3]
 m.count()          // 3
 ```
 
-### capacity() int
+### capacity() returns int
 
 Get the current capacity (number of slots) of the internal hash table.
 
@@ -172,7 +172,7 @@ The map automatically grows when the load factor (count/capacity) exceeds 75%. W
 
 <!-- test: literal.basic -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["a": 1, "b": 2, "c": 3]
     return m.count()
 end 'main'
@@ -183,9 +183,12 @@ end 'main'
 
 <!-- test: literal.int-keys -->
 ```maxon
-function main() int
+function main() returns int
     var m = [1: 100, 2: 200, 3: 300]
-    return m.get(2)
+    var result = m.get(2) else 'default'
+        result = 0
+    end 'default'
+    return result
 end 'main'
 ```
 ```exitcode
@@ -194,7 +197,7 @@ end 'main'
 
 <!-- test: contains.true -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["x": 10, "y": 20, "z": 30]
     if m.contains("y") 'check'
         return 1
@@ -208,7 +211,7 @@ end 'main'
 
 <!-- test: contains.false -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["x": 10, "y": 20, "z": 30]
     if m.contains("w") 'check'
         return 1
@@ -222,9 +225,12 @@ end 'main'
 
 <!-- test: get.existing -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["one": 1, "two": 2, "three": 3]
-    return m.get("two")
+    var result = m.get("two") else 'default'
+        result = 0
+    end 'default'
+    return result
 end 'main'
 ```
 ```exitcode
@@ -233,9 +239,12 @@ end 'main'
 
 <!-- test: get.missing -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["one": 1, "two": 2]
-    return m.get("zero")
+    var result = m.get("zero") else 'default'
+        result = 0
+    end 'default'
+    return result
 end 'main'
 ```
 ```exitcode
@@ -244,7 +253,7 @@ end 'main'
 
 <!-- test: insert.new -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["a": 1, "b": 2]
     m.insert("c", 3)
     return m.count()
@@ -256,10 +265,13 @@ end 'main'
 
 <!-- test: insert.update -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["a": 1, "b": 2]
     m.insert("a", 100)
-    return m.get("a")
+    var result = m.get("a") else 'default'
+        result = 0
+    end 'default'
+    return result
 end 'main'
 ```
 ```exitcode
@@ -268,7 +280,7 @@ end 'main'
 
 <!-- test: insert.then-contains -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["x": 1]
     m.insert("y", 2)
     if m.contains("y") 'check'
@@ -283,7 +295,7 @@ end 'main'
 
 <!-- test: remove.existing -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["a": 1, "b": 2, "c": 3]
     var removed = m.remove("b")
     if removed 'check'
@@ -298,7 +310,7 @@ end 'main'
 
 <!-- test: remove.nonexistent -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["a": 1, "b": 2]
     var removed = m.remove("z")
     if removed 'check'
@@ -313,7 +325,7 @@ end 'main'
 
 <!-- test: remove.then-contains -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["a": 1, "b": 2, "c": 3]
     m.remove("b")
     if m.contains("b") 'check'
@@ -328,7 +340,7 @@ end 'main'
 
 <!-- test: capacity.initial -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["a": 1, "b": 2]
     return m.capacity()
 end 'main'
@@ -339,10 +351,13 @@ end 'main'
 
 <!-- test: empty-map.from-syntax -->
 ```maxon
-function main() int
+function main() returns int
     var m = map from int to int
     m.insert(1, 100)
-    return m.get(1)
+    var result = m.get(1) else 'default'
+        result = 0
+    end 'default'
+    return result
 end 'main'
 ```
 ```exitcode
@@ -351,9 +366,12 @@ end 'main'
 
 <!-- test: single-entry -->
 ```maxon
-function main() int
+function main() returns int
     var m = [42: 999]
-    return m.get(42)
+    var result = m.get(42) else 'default'
+        result = 0
+    end 'default'
+    return result
 end 'main'
 ```
 ```exitcode
@@ -362,9 +380,12 @@ end 'main'
 
 <!-- test: negative-keys -->
 ```maxon
-function main() int
+function main() returns int
     var m = [0 - 5: 50, 0 - 3: 30, 0 - 1: 10]
-    return m.get(0 - 3)
+    var result = m.get(0 - 3) else 'default'
+        result = 0
+    end 'default'
+    return result
 end 'main'
 ```
 ```exitcode
@@ -373,11 +394,14 @@ end 'main'
 
 <!-- test: remove-reinsert -->
 ```maxon
-function main() int
+function main() returns int
     var m = ["a": 1, "b": 2, "c": 3]
     m.remove("b")
     m.insert("b", 200)
-    return m.get("b")
+    var result = m.get("b") else 'default'
+        result = 0
+    end 'default'
+    return result
 end 'main'
 ```
 ```exitcode

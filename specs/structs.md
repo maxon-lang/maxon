@@ -91,7 +91,7 @@ struct Point
     var y int
 end 'Point'
 
-function main() int
+function main() returns int
     var p = Point{x: 10, y: 20}
     p.x = 30
     return p.x
@@ -108,7 +108,7 @@ struct Config
     var count int
 end 'Config'
 
-function main() int
+function main() returns int
     var c = Config{version: 1, count: 0}
     c.count = 5
     return c.count
@@ -125,7 +125,7 @@ struct Point
     var y int
 end 'Point'
 
-function main() int
+function main() returns int
     let p = Point{x: 10, y: 20}
     p.x = 30
     return p.x
@@ -148,7 +148,7 @@ struct Config
     var count int
 end 'Config'
 
-function main() int
+function main() returns int
     var c = Config{version: 1, count: 0}
     c.version = 2
     return c.version
@@ -171,7 +171,7 @@ struct Point
     var y int
 end 'Point'
 
-function main() int
+function main() returns int
     var p = Point { x: 3, y: 4 }
     return p.x + p.y
 end 'main'
@@ -187,7 +187,7 @@ struct Rect
     var height int
 end 'Rect'
 
-function main() int
+function main() returns int
     var r = Rect { width: 5, height: 10 }
     return r.width * r.height
 end 'main'
@@ -203,11 +203,11 @@ struct Vec2
     var y int
 end 'Vec2'
 
-function dot(a Vec2, b Vec2) int
+function dot(a Vec2, b Vec2) returns int
     return a.x * b.x + a.y * b.y
 end 'dot'
 
-function main() int
+function main() returns int
     var v1 = Vec2 { x: 3, y: 4 }
     var v2 = Vec2 { x: 2, y: 1 }
     return dot(v1, v2)
@@ -224,11 +224,11 @@ struct Pair
     var second int
 end 'Pair'
 
-function makePair(a int, b int) Pair
+function makePair(a int, b int) returns Pair
     return Pair { first: a, second: b }
 end 'makePair'
 
-function main() int
+function main() returns int
     var p = makePair(5, 7)
     return p.first + p.second
 end 'main'
@@ -244,11 +244,11 @@ struct Point
     var y int
 end 'Point'
 
-function acceptPoint(p Point) int
+function acceptPoint(p Point) returns int
     return p.x + p.y
 end 'acceptPoint'
 
-function main() int
+function main() returns int
     return acceptPoint(Point{x: 3, y: 4})
 end 'main'
 ```
@@ -263,7 +263,7 @@ struct Counter
 	var step int = 1
 end 'Counter'
 
-function main() int
+function main() returns int
 	var c1 = Counter{}
 	var c2 = Counter{value: 40}
 	var c3 = Counter{value: 10, step: 2}
@@ -281,7 +281,7 @@ struct Settings
 	var timeout = 50.0
 end 'Settings'
 
-function main() int
+function main() returns int
 	var s = Settings{}
 	return s.maxRetries + trunc(s.timeout)
 end 'main'

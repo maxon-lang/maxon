@@ -627,6 +627,7 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 		result.functions = analyzer.getFunctions();
 		result.structs = analyzer.getStructs();
 		result.interfaces = analyzer.getInterfaces();
+		result.enums = analyzer.getEnums();
 
 		// Add global constants to variables for hover support
 		for (const auto &[name, info] : analyzer.getGlobalConstants()) {
@@ -784,6 +785,7 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 		result.functions = analyzer.getFunctions();
 		result.structs = analyzer.getStructs();
 		result.interfaces = analyzer.getInterfaces();
+		result.enums = analyzer.getEnums();
 
 		// Add global constants to variables for hover support
 		for (const auto &[name, info] : analyzer.getGlobalConstants()) {

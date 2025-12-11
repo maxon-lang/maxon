@@ -41,7 +41,7 @@ Maxon uses contextual literal typing to allow integer and byte literals to adapt
 Integer literals in the range 0-255 can be compared directly with byte values:
 
 ```maxon
-function main() int
+function main() returns int
     var b = 100b
     if b == 50 'check'
         return 1
@@ -56,7 +56,7 @@ end 'main'
 Byte literals can be compared directly with int values:
 
 ```maxon
-function main() int
+function main() returns int
     var x = 200
     if x == 200b 'check'
         return 1
@@ -83,7 +83,7 @@ end 'check'
 To compare, cast explicitly:
 
 ```maxon
-function main() int
+function main() returns int
     var x = 5
     var y = 5.0
     if (x as float) == y 'check'
@@ -101,7 +101,7 @@ end 'main'
 Math intrinsics like `sin`, `cos`, `sqrt`, etc. accept both int and float arguments (int is promoted to float):
 
 ```maxon
-function main() int
+function main() returns int
     var x = sqrt(16.0)
     return trunc(x)
 end 'main'
@@ -114,7 +114,7 @@ end 'main'
 
 <!-- test: int-literal-vs-byte-valid -->
 ```maxon
-function main() int
+function main() returns int
     var b = 42b
     if b == 42 'check'
         return 1
@@ -128,7 +128,7 @@ end 'main'
 
 <!-- test: int-literal-vs-byte-out-of-range -->
 ```maxon
-function main() int
+function main() returns int
     var b = 100b
     if b == 300 'check'
         return 1
@@ -156,7 +156,7 @@ If condition must be a boolean or integer expression
 
 <!-- test: byte-literal-vs-int -->
 ```maxon
-function main() int
+function main() returns int
     var x = 100
     if x == 100b 'check'
         return 1
@@ -170,7 +170,7 @@ end 'main'
 
 <!-- test: int-vs-float-error -->
 ```maxon
-function main() int
+function main() returns int
     var x = 5
     var y = 5.0
     if x == y 'check'
@@ -199,7 +199,7 @@ If condition must be a boolean or integer expression
 
 <!-- test: float-vs-int-error -->
 ```maxon
-function main() int
+function main() returns int
     var x = 5.0
     var y = 5
     if x == y 'check'
@@ -228,7 +228,7 @@ If condition must be a boolean or integer expression
 
 <!-- test: int-literal-vs-float-error -->
 ```maxon
-function main() int
+function main() returns int
     var x = 5.0
     if x == 5 'check'
         return 1
@@ -256,7 +256,7 @@ If condition must be a boolean or integer expression
 
 <!-- test: float-literal-vs-int-error -->
 ```maxon
-function main() int
+function main() returns int
     var x = 5
     if x == 5.0 'check'
         return 1
@@ -284,7 +284,7 @@ If condition must be a boolean or integer expression
 
 <!-- test: explicit-cast-int-to-float -->
 ```maxon
-function main() int
+function main() returns int
     var x = 5
     var y = 5.0
     if (x as float) == y 'check'
@@ -299,7 +299,7 @@ end 'main'
 
 <!-- test: explicit-cast-float-to-int -->
 ```maxon
-function main() int
+function main() returns int
     var x = 5
     var y = 5.0
     if x == trunc(y) 'check'
@@ -314,7 +314,7 @@ end 'main'
 
 <!-- test: math-intrinsic-with-int -->
 ```maxon
-function main() int
+function main() returns int
     var x = 16
     var result = sqrt(x)
     return trunc(result)
@@ -326,7 +326,7 @@ end 'main'
 
 <!-- test: math-intrinsic-with-float-literal -->
 ```maxon
-function main() int
+function main() returns int
     var x = sqrt(16.0)
     return trunc(x)
 end 'main'
@@ -337,7 +337,7 @@ end 'main'
 
 <!-- test: byte-vs-byte -->
 ```maxon
-function main() int
+function main() returns int
     var a = 50b
     var b = 50b
     if a == b 'check'
@@ -352,7 +352,7 @@ end 'main'
 
 <!-- test: int-vs-int -->
 ```maxon
-function main() int
+function main() returns int
     var a = 1000
     var b = 1000
     if a == b 'check'
@@ -367,7 +367,7 @@ end 'main'
 
 <!-- test: float-vs-float -->
 ```maxon
-function main() int
+function main() returns int
     var a = 3.14
     var b = 3.14
     if a == b 'check'

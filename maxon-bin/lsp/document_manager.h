@@ -81,6 +81,7 @@ struct AnalysisCache {
 	std::map<std::string, FunctionInfo> functions;
 	std::map<std::string, StructInfo> structs;
 	std::map<std::string, InterfaceInfo> interfaces;
+	std::map<std::string, EnumInfo> enums;
 
 	AnalysisCache() : version(0), analysisTimeMs(0) {}
 

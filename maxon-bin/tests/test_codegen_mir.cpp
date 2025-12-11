@@ -52,7 +52,7 @@ static std::unique_ptr<MIRCodeGenerator> compileToMIRWithEntry(const std::string
 
 TEST_CASE("MIR codegen: integer literals", "[codegen_mir][expr]") {
 	auto codegen = compileToMIR(R"(
-        function main() int
+        function main() returns int
             return 42
         end 'main'
     )");
@@ -67,7 +67,7 @@ TEST_CASE("MIR codegen: integer literals", "[codegen_mir][expr]") {
 
 TEST_CASE("MIR codegen: float literals", "[codegen_mir][expr]") {
 	auto codegen = compileToMIR(R"(
-        function main() int
+        function main() returns int
             let x = 3.14
             return 0
         end 'main'
@@ -82,7 +82,7 @@ TEST_CASE("MIR codegen: float literals", "[codegen_mir][expr]") {
 
 TEST_CASE("MIR codegen: boolean literals", "[codegen_mir][expr]") {
 	auto codegen = compileToMIR(R"(
-        function main() int
+        function main() returns int
             let t = true
             let f = false
             return 0
@@ -96,7 +96,7 @@ TEST_CASE("MIR codegen: boolean literals", "[codegen_mir][expr]") {
 TEST_CASE("MIR codegen: binary arithmetic", "[codegen_mir][expr]") {
 	SECTION("integer addition") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 return 1 + 2
             end 'main'
         )");
@@ -107,7 +107,7 @@ TEST_CASE("MIR codegen: binary arithmetic", "[codegen_mir][expr]") {
 
 	SECTION("integer subtraction") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 return 5 - 3
             end 'main'
         )");
@@ -117,7 +117,7 @@ TEST_CASE("MIR codegen: binary arithmetic", "[codegen_mir][expr]") {
 
 	SECTION("integer multiplication") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 return 6 * 7
             end 'main'
         )");
@@ -127,7 +127,7 @@ TEST_CASE("MIR codegen: binary arithmetic", "[codegen_mir][expr]") {
 
 	SECTION("integer division") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 return 10 / 2
             end 'main'
         )");
@@ -137,7 +137,7 @@ TEST_CASE("MIR codegen: binary arithmetic", "[codegen_mir][expr]") {
 
 	SECTION("integer modulo") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 return 10 % 3
             end 'main'
         )");
@@ -149,7 +149,7 @@ TEST_CASE("MIR codegen: binary arithmetic", "[codegen_mir][expr]") {
 TEST_CASE("MIR codegen: binary comparisons", "[codegen_mir][expr]") {
 	SECTION("less than") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 if 1 < 2 'cond'
                     return 1
                 end 'cond'
@@ -161,7 +161,7 @@ TEST_CASE("MIR codegen: binary comparisons", "[codegen_mir][expr]") {
 
 	SECTION("greater than") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 if 5 > 3 'cond'
                     return 1
                 end 'cond'
@@ -173,7 +173,7 @@ TEST_CASE("MIR codegen: binary comparisons", "[codegen_mir][expr]") {
 
 	SECTION("equality") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 if 5 = 5 'cond'
                     return 1
                 end 'cond'
@@ -187,7 +187,7 @@ TEST_CASE("MIR codegen: binary comparisons", "[codegen_mir][expr]") {
 TEST_CASE("MIR codegen: unary operators", "[codegen_mir][expr]") {
 	SECTION("unary negation") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 return -42
             end 'main'
         )");
@@ -196,7 +196,7 @@ TEST_CASE("MIR codegen: unary operators", "[codegen_mir][expr]") {
 
 	SECTION("unary plus") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 return +42
             end 'main'
         )");
@@ -211,7 +211,7 @@ TEST_CASE("MIR codegen: unary operators", "[codegen_mir][expr]") {
 TEST_CASE("MIR codegen: variable declarations", "[codegen_mir][stmt]") {
 	SECTION("var with initializer") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var x = 10
                 return x
             end 'main'
@@ -221,7 +221,7 @@ TEST_CASE("MIR codegen: variable declarations", "[codegen_mir][stmt]") {
 
 	SECTION("let (immutable) declaration") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 let x = 10
                 return x
             end 'main'
@@ -232,7 +232,7 @@ TEST_CASE("MIR codegen: variable declarations", "[codegen_mir][stmt]") {
 
 TEST_CASE("MIR codegen: assignment", "[codegen_mir][stmt]") {
 	auto codegen = compileToMIR(R"(
-        function main() int
+        function main() returns int
             var x = 10
             x = 20
             return x
@@ -244,7 +244,7 @@ TEST_CASE("MIR codegen: assignment", "[codegen_mir][stmt]") {
 TEST_CASE("MIR codegen: if statement", "[codegen_mir][stmt]") {
 	SECTION("simple if") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 if 1 < 2 'test'
                     return 1
                 end 'test'
@@ -256,7 +256,7 @@ TEST_CASE("MIR codegen: if statement", "[codegen_mir][stmt]") {
 
 	SECTION("if-else") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 if 1 > 2 'test'
                     return 1
                 else 'test'
@@ -270,7 +270,7 @@ TEST_CASE("MIR codegen: if statement", "[codegen_mir][stmt]") {
 
 TEST_CASE("MIR codegen: while loop", "[codegen_mir][stmt]") {
 	auto codegen = compileToMIR(R"(
-        function main() int
+        function main() returns int
             var i = 0
             while i < 10 'loop'
                 i = i + 1
@@ -284,7 +284,7 @@ TEST_CASE("MIR codegen: while loop", "[codegen_mir][stmt]") {
 TEST_CASE("MIR codegen: break and continue", "[codegen_mir][stmt]") {
 	SECTION("break") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var i = 0
                 while i < 100 'loop'
                     if i = 5 'check'
@@ -300,7 +300,7 @@ TEST_CASE("MIR codegen: break and continue", "[codegen_mir][stmt]") {
 
 	SECTION("continue") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var sum = 0
                 var i = 0
                 while i < 10 'loop'
@@ -323,11 +323,11 @@ TEST_CASE("MIR codegen: break and continue", "[codegen_mir][stmt]") {
 
 TEST_CASE("MIR codegen: function with parameters", "[codegen_mir][func]") {
 	auto codegen = compileToMIR(R"(
-        function add(a int, b int) int
+        function add(a int, b int) returns int
             return a + b
         end 'add'
 
-        function main() int
+        function main() returns int
             return add(3, 4)
         end 'main'
     )");
@@ -343,11 +343,11 @@ TEST_CASE("MIR codegen: function with parameters", "[codegen_mir][func]") {
 
 TEST_CASE("MIR codegen: function calls", "[codegen_mir][func]") {
 	auto codegen = compileToMIR(R"(
-        function double(x int) int
+        function double(x int) returns int
             return x * 2
         end 'double'
 
-        function main() int
+        function main() returns int
             return double(21)
         end 'main'
     )");
@@ -360,14 +360,14 @@ TEST_CASE("MIR codegen: function calls", "[codegen_mir][func]") {
 
 TEST_CASE("MIR codegen: recursive function", "[codegen_mir][func]") {
 	auto codegen = compileToMIR(R"(
-        function factorial(n int) int
+        function factorial(n int) returns int
             if n <= 1 'base'
                 return 1
             end 'base'
             return n * factorial(n - 1)
         end 'factorial'
 
-        function main() int
+        function main() returns int
             return factorial(5)
         end 'main'
     )");
@@ -383,7 +383,7 @@ TEST_CASE("MIR codegen: recursive function", "[codegen_mir][func]") {
 
 TEST_CASE("MIR codegen: entry point generation", "[codegen_mir][entry]") {
 	auto codegen = compileToMIRWithEntry(R"(
-        function main() int
+        function main() returns int
             return 42
         end 'main'
     )");
@@ -403,7 +403,7 @@ TEST_CASE("MIR codegen: entry point generation", "[codegen_mir][entry]") {
 
 TEST_CASE("MIR codegen: float operations", "[codegen_mir][types]") {
 	auto codegen = compileToMIR(R"(
-        function main() int
+        function main() returns int
             let a = 1.5
             let b = 2.5
             let c = a + b
@@ -416,7 +416,7 @@ TEST_CASE("MIR codegen: float operations", "[codegen_mir][types]") {
 
 TEST_CASE("MIR codegen: mixed type promotion", "[codegen_mir][types]") {
 	auto codegen = compileToMIR(R"(
-        function main() int
+        function main() returns int
             let x = 1 + 2.0
             return 0
         end 'main'
@@ -431,7 +431,7 @@ TEST_CASE("MIR codegen: mixed type promotion", "[codegen_mir][types]") {
 
 TEST_CASE("MIR codegen: array declaration", "[codegen_mir][array]") {
 	auto codegen = compileToMIR(R"(
-        function main() int
+        function main() returns int
             let arr = [0, 0, 0, 0, 0]
             return 0
         end 'main'
@@ -442,7 +442,7 @@ TEST_CASE("MIR codegen: array declaration", "[codegen_mir][array]") {
 
 TEST_CASE("MIR codegen: array access", "[codegen_mir][array]") {
 	auto codegen = compileToMIR(R"(
-        function main() int
+        function main() returns int
             var arr = [0, 0, 0, 0, 0]
             arr[0] = 42
             return arr[0]
@@ -454,7 +454,7 @@ TEST_CASE("MIR codegen: array access", "[codegen_mir][array]") {
 
 TEST_CASE("MIR codegen: array length", "[codegen_mir][array]") {
 	auto codegen = compileToMIR(R"(
-        function main() int
+        function main() returns int
             let arr = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
             return arr.length
         end 'main'
@@ -474,7 +474,7 @@ TEST_CASE("MIR codegen: struct definition", "[codegen_mir][struct]") {
             y int
         end 'Point'
 
-        function main() int
+        function main() returns int
             return 0
         end 'main'
     )");
@@ -489,7 +489,7 @@ TEST_CASE("MIR codegen: struct initialization", "[codegen_mir][struct]") {
             y int
         end 'Point'
 
-        function main() int
+        function main() returns int
             var p = Point { x: 10, y: 20 }
             return p.x + p.y
         end 'main'
@@ -504,7 +504,7 @@ TEST_CASE("MIR codegen: struct initialization", "[codegen_mir][struct]") {
 
 TEST_CASE("MIR codegen: complex program", "[codegen_mir][integration]") {
 	auto codegen = compileToMIR(R"(
-        function sum_array(arr array of int) int
+        function sum_array(arr array of int) returns int
             var total = 0
             var i = 0
             while i < arr.length 'loop'
@@ -514,7 +514,7 @@ TEST_CASE("MIR codegen: complex program", "[codegen_mir][integration]") {
             return total
         end 'sum_array'
 
-        function main() int
+        function main() returns int
             let numbers = [1, 2, 3, 4, 5]
             return sum_array(numbers)
         end 'main'
@@ -531,14 +531,14 @@ TEST_CASE("MIR codegen: complex program", "[codegen_mir][integration]") {
 
 TEST_CASE("MIR codegen: fibonacci", "[codegen_mir][integration]") {
 	auto codegen = compileToMIR(R"(
-        function fib(n int) int
+        function fib(n int) returns int
             if n <= 1 'base'
                 return n
             end 'base'
             return fib(n - 1) + fib(n - 2)
         end 'fib'
 
-        function main() int
+        function main() returns int
             return fib(10)
         end 'main'
     )");
@@ -566,7 +566,7 @@ TEST_CASE("MIR codegen: struct return from function - member access", "[codegen_
                 return p
             end 'makePoint'
 
-            function main() int
+            function main() returns int
                 var p = makePoint(10, 20)
                 return p.x + p.y
             end 'main'
@@ -594,7 +594,7 @@ TEST_CASE("MIR codegen: struct return from function - member access", "[codegen_
                 return p
             end 'makePoint'
 
-            function main() int
+            function main() returns int
                 var p = makePoint(10, 20, 30)
                 return p.x + p.y + p.z
             end 'main'
@@ -626,11 +626,11 @@ TEST_CASE("MIR codegen: struct return - variable type tracking", "[codegen_mir][
                 return v
             end 'createVec'
 
-            function useVec(v Vec2) int
+            function useVec(v Vec2) returns int
                 return v.x * v.y
             end 'useVec'
 
-            function main() int
+            function main() returns int
                 var v = createVec(3, 4)
                 return useVec(v)
             end 'main'
@@ -652,7 +652,7 @@ TEST_CASE("MIR codegen: struct return - variable type tracking", "[codegen_mir][
                 return v
             end 'createVec'
 
-            function main() int
+            function main() returns int
                 var v = createVec(3, 4)
                 return v.x + v.y
             end 'main'
@@ -670,7 +670,7 @@ TEST_CASE("MIR codegen: struct return - variable type tracking", "[codegen_mir][
 TEST_CASE("MIR codegen: nested while loops", "[codegen_mir][stmt][loop]") {
 	SECTION("nested loops") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var total = 0
                 var i = 0
                 while i < 5 'outer'
@@ -691,7 +691,7 @@ TEST_CASE("MIR codegen: nested while loops", "[codegen_mir][stmt][loop]") {
 
 	SECTION("loop with early exit") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var sum = 0
                 var i = 0
                 while i < 100 'loop'
@@ -717,7 +717,7 @@ TEST_CASE("MIR codegen: nested while loops", "[codegen_mir][stmt][loop]") {
 TEST_CASE("MIR codegen: string literals", "[codegen_mir][expr][string]") {
 	SECTION("simple string literal") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var s = "Hello"
                 return 0
             end 'main'
@@ -729,7 +729,7 @@ TEST_CASE("MIR codegen: string literals", "[codegen_mir][expr][string]") {
 
 	SECTION("string with escape sequences") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var s = "Line1\nLine2\tTabbed"
                 return 0
             end 'main'
@@ -741,7 +741,7 @@ TEST_CASE("MIR codegen: string literals", "[codegen_mir][expr][string]") {
 
 	SECTION("empty string") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var s = ""
                 return 0
             end 'main'
@@ -759,7 +759,7 @@ TEST_CASE("MIR codegen: string literals", "[codegen_mir][expr][string]") {
 TEST_CASE("MIR codegen: character literals", "[codegen_mir][expr][char]") {
 	SECTION("simple character") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var c = 'A'
                 return c as int
             end 'main'
@@ -771,7 +771,7 @@ TEST_CASE("MIR codegen: character literals", "[codegen_mir][expr][char]") {
 
 	SECTION("digit character") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var zero = '0'
                 var nine = '9'
                 return zero as int
@@ -790,7 +790,7 @@ TEST_CASE("MIR codegen: character literals", "[codegen_mir][expr][char]") {
 TEST_CASE("MIR codegen: type casts", "[codegen_mir][expr][cast]") {
 	SECTION("int to float") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var i = 42
                 var f = i as float
                 return 0
@@ -803,7 +803,7 @@ TEST_CASE("MIR codegen: type casts", "[codegen_mir][expr][cast]") {
 
 	SECTION("int to char") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var i = 65
                 var c = i as char
                 return 0
@@ -816,7 +816,7 @@ TEST_CASE("MIR codegen: type casts", "[codegen_mir][expr][cast]") {
 
 	SECTION("int to bool") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var i = 1
                 var b = i as bool
                 return 0
@@ -829,7 +829,7 @@ TEST_CASE("MIR codegen: type casts", "[codegen_mir][expr][cast]") {
 
 	SECTION("char to int") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var c = 'A'
                 var i = c as int
                 return i
@@ -859,7 +859,7 @@ TEST_CASE("MIR codegen: nested struct access", "[codegen_mir][struct][nested]") 
                 height int
             end 'Rectangle'
 
-            function main() int
+            function main() returns int
                 var p = Point { x: 10, y: 20 }
                 var r = Rectangle { origin: p, width: 100, height: 50 }
                 var o = r.origin
@@ -885,7 +885,7 @@ TEST_CASE("MIR codegen: nested struct access", "[codegen_mir][struct][nested]") 
                 middle Middle
             end 'Outer'
 
-            function main() int
+            function main() returns int
                 var i = Inner { value: 42 }
                 var m = Middle { inner: i }
                 var o = Outer { middle: m }
@@ -912,7 +912,7 @@ TEST_CASE("MIR codegen: array of structs", "[codegen_mir][array][struct]") {
                 y int
             end 'Point'
 
-            function main() int
+            function main() returns int
                 var points = [3]Point
                 points[0] = Point { x: 1, y: 2 }
                 points[1] = Point { x: 3, y: 4 }
@@ -933,7 +933,7 @@ TEST_CASE("MIR codegen: array of structs", "[codegen_mir][array][struct]") {
 TEST_CASE("MIR codegen: all comparison operators", "[codegen_mir][expr][comparison]") {
 	SECTION("less than or equal") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 if 5 <= 5 'check'
                     return 1
                 end 'check'
@@ -947,7 +947,7 @@ TEST_CASE("MIR codegen: all comparison operators", "[codegen_mir][expr][comparis
 
 	SECTION("greater than or equal") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 if 5 >= 5 'check'
                     return 1
                 end 'check'
@@ -961,7 +961,7 @@ TEST_CASE("MIR codegen: all comparison operators", "[codegen_mir][expr][comparis
 
 	SECTION("not equal") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 if 5 != 3 'check'
                     return 1
                 end 'check'
@@ -975,7 +975,7 @@ TEST_CASE("MIR codegen: all comparison operators", "[codegen_mir][expr][comparis
 
 	SECTION("float comparison") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var a = 3.14
                 var b = 2.71
                 if a > b 'check'
@@ -997,7 +997,7 @@ TEST_CASE("MIR codegen: all comparison operators", "[codegen_mir][expr][comparis
 TEST_CASE("MIR codegen: float arithmetic operations", "[codegen_mir][expr][float]") {
 	SECTION("float subtraction") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var a = 5.5
                 var b = 2.5
                 var c = a - b
@@ -1011,7 +1011,7 @@ TEST_CASE("MIR codegen: float arithmetic operations", "[codegen_mir][expr][float
 
 	SECTION("float multiplication") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var a = 2.5
                 var b = 4.0
                 var c = a * b
@@ -1025,7 +1025,7 @@ TEST_CASE("MIR codegen: float arithmetic operations", "[codegen_mir][expr][float
 
 	SECTION("float division") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var a = 10.0
                 var b = 4.0
                 var c = a / b
@@ -1039,7 +1039,7 @@ TEST_CASE("MIR codegen: float arithmetic operations", "[codegen_mir][expr][float
 
 	SECTION("float negation") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var a = 3.14
                 var b = -a
                 return 0
@@ -1058,21 +1058,21 @@ TEST_CASE("MIR codegen: float arithmetic operations", "[codegen_mir][expr][float
 TEST_CASE("MIR codegen: multiple functions", "[codegen_mir][func]") {
 	SECTION("calling multiple functions") {
 		auto codegen = compileToMIR(R"(
-            function add(a int, b int) int
+            function add(a int, b int) returns int
                 return a + b
             end 'add'
 
-            function multiply(a int, b int) int
+            function multiply(a int, b int) returns int
                 return a * b
             end 'multiply'
 
-            function compute(x int) int
+            function compute(x int) returns int
                 var sum = add(x, 10)
                 var prod = multiply(sum, 2)
                 return prod
             end 'compute'
 
-            function main() int
+            function main() returns int
                 return compute(5)
             end 'main'
         )");
@@ -1087,21 +1087,21 @@ TEST_CASE("MIR codegen: multiple functions", "[codegen_mir][func]") {
 
 	SECTION("mutually recursive functions") {
 		auto codegen = compileToMIR(R"(
-            function isEven(n int) bool
+            function isEven(n int) returns bool
                 if n = 0 'base'
                     return true
                 end 'base'
                 return isOdd(n - 1)
             end 'isEven'
 
-            function isOdd(n int) bool
+            function isOdd(n int) returns bool
                 if n = 0 'base'
                     return false
                 end 'base'
                 return isEven(n - 1)
             end 'isOdd'
 
-            function main() int
+            function main() returns int
                 if isEven(10) 'check'
                     return 1
                 end 'check'
@@ -1121,7 +1121,7 @@ TEST_CASE("MIR codegen: multiple functions", "[codegen_mir][func]") {
 TEST_CASE("MIR codegen: labeled break and continue", "[codegen_mir][stmt][control-flow]") {
 	SECTION("labeled break from nested loop") {
 		auto codegen = compileToMIR(R"(
-            function main() int
+            function main() returns int
                 var count = 0
                 while true 'outer'
                     var i = 0
@@ -1148,7 +1148,7 @@ TEST_CASE("MIR codegen: labeled break and continue", "[codegen_mir][stmt][contro
 
 TEST_CASE("MIR codegen: complex integration - matrix operations", "[codegen_mir][integration]") {
 	auto codegen = compileToMIR(R"(
-        function matrixSum(matrix array of int, rows int, cols int) int
+        function matrixSum(matrix array of int, rows int, cols int) returns int
             var total = 0
             var i = 0
             while i < rows 'rowLoop'
@@ -1163,7 +1163,7 @@ TEST_CASE("MIR codegen: complex integration - matrix operations", "[codegen_mir]
             return total
         end 'matrixSum'
 
-        function main() int
+        function main() returns int
             var m = [1, 2, 3, 4, 5, 6, 7, 8, 9]
             return matrixSum(m, 3, 3)
         end 'main'
@@ -1190,11 +1190,11 @@ TEST_CASE("MIR codegen: complex integration - struct with methods pattern", "[co
             return newC
         end 'Counter_increment'
 
-        function Counter_getValue(c Counter) int
+        function Counter_getValue(c Counter) returns int
             return c.value
         end 'Counter_getValue'
 
-        function main() int
+        function main() returns int
             var counter = Counter_new(0, 5)
             counter = Counter_increment(counter)
             counter = Counter_increment(counter)

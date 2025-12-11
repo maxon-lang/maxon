@@ -103,7 +103,7 @@ arr.reserve(100)        // Preallocate space
 
 **Static array parameters** require the exact size in the type:
 ```maxon
-function process(arr array of 3 int) int
+function process(arr array of 3 int) returns int
     return arr[0] + arr[1] + arr[2]
 end 'process'
 
@@ -113,7 +113,7 @@ return process(data)    // OK: array of 3 int matches array of 3 int
 
 **Dynamic array parameters** use unsized syntax:
 ```maxon
-function sum(arr array of int) int
+function sum(arr array of int) returns int
     var total = 0
     var i = 0
     while i < arr.count() 'loop'
@@ -133,7 +133,7 @@ return sum(data)        // OK: passes ptr+len+cap
 
 <!-- test: static.basic -->
 ```maxon
-function main() int
+function main() returns int
     let arr = [10, 20, 30]
     return arr[1]
 end 'main'
@@ -144,7 +144,7 @@ end 'main'
 
 <!-- test: static.length -->
 ```maxon
-function main() int
+function main() returns int
     let arr = [1, 2, 3, 4, 5]
     return arr.length
 end 'main'
@@ -155,7 +155,7 @@ end 'main'
 
 <!-- test: dynamic.basic -->
 ```maxon
-function main() int
+function main() returns int
     var arr = array of 5 int
     arr[0] = 10
     arr[1] = 20
@@ -168,7 +168,7 @@ end 'main'
 
 <!-- test: dynamic.values -->
 ```maxon
-function main() int
+function main() returns int
     var values = [10, 20, 30]
     values[0] = 100
     return values[0]
@@ -180,7 +180,7 @@ end 'main'
 
 <!-- test: dynamic.push-pop -->
 ```maxon
-function main() int
+function main() returns int
     var arr = [1, 2, 3]
     arr.push(4)
     arr.push(5)
@@ -198,7 +198,7 @@ end 'main'
 
 <!-- test: dynamic.push-to-empty -->
 ```maxon
-function main() int
+function main() returns int
     var arr = array of int
     arr.push(10)
     arr.push(20)
@@ -212,7 +212,7 @@ end 'main'
 
 <!-- test: dynamic.length -->
 ```maxon
-function main() int
+function main() returns int
     var arr = array of 5 int
     return arr.count()
 end 'main'
@@ -223,7 +223,7 @@ end 'main'
 
 <!-- test: dynamic.float -->
 ```maxon
-function main() int
+function main() returns int
     var arr = array of 3 float
     arr[0] = 1.5
     arr[1] = 2.5
@@ -238,7 +238,7 @@ end 'main'
 
 <!-- test: dynamic.heap-allocation -->
 ```maxon
-function main() int
+function main() returns int
     var arr = array of 5 int
     arr[0] = 10
     arr[1] = 20
@@ -253,7 +253,7 @@ end 'main'
 
 <!-- test: dynamic.function-parameter -->
 ```maxon
-function sum_array(arr array of int, len int) int
+function sum_array(arr array of int, len int) returns int
     var total = 0
     var i = 0
     while i < len 'loop'
@@ -263,7 +263,7 @@ function sum_array(arr array of int, len int) int
     return total
 end 'sum_array'
 
-function main() int
+function main() returns int
     var data = [5, 10, 15]
     return sum_array(data, 3)
 end 'main'
@@ -274,11 +274,11 @@ end 'main'
 
 <!-- test: dynamic.unsized-parameter -->
 ```maxon
-function get_first(arr array of int) int
+function get_first(arr array of int) returns int
     return arr[0]
 end 'get_first'
 
-function main() int
+function main() returns int
     var nums = [42, 10, 20, 30]
     return get_first(nums)
 end 'main'
@@ -289,7 +289,7 @@ end 'main'
 
 <!-- test: error.static-array-assignment -->
 ```maxon
-function main() int
+function main() returns int
     let arr = [1, 2, 3]
     arr[0] = 10
     return 0
@@ -307,7 +307,7 @@ Cannot assign to read-only array 'arr'
 
 <!-- test: error.push-on-static-array -->
 ```maxon
-function main() int
+function main() returns int
     let arr = [1, 2, 3]
     arr.push(4)
     return 0
@@ -326,7 +326,7 @@ Function 'push' argument type mismatch
 
 <!-- test: error.pop-on-static-array -->
 ```maxon
-function main() int
+function main() returns int
     let arr = [1, 2, 3]
     arr.pop()
     return 0
@@ -338,7 +338,7 @@ Error in function 'main': Unknown function referenced: array.pop at line 4, colu
 
 <!-- test: error.push-type-mismatch -->
 ```maxon
-function main() int
+function main() returns int
     var arr = [1, 2, 3]
     arr.push(3.14)
     return 0
@@ -357,7 +357,7 @@ Function 'push' argument type mismatch
 
 <!-- test: error.non-integer-index -->
 ```maxon
-function main() int
+function main() returns int
     var arr = [1, 2, 3]
     return arr[1.5]
 end 'main'

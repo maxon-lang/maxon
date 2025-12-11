@@ -439,7 +439,7 @@ export class CompilerExplorerPanel {
 				<textarea class="source-editor" id="sourceEditor" placeholder="Enter Maxon code here...
 
 Example:
-function add(a int, b int) int
+function add(a int, b int) returns int
     return a + b
 end 'add'
 

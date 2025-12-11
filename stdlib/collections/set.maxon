@@ -31,7 +31,7 @@ export struct set uses Element is ExpressibleByArrayLiteral with Element
 
 	// ExpressibleByArrayLiteral conformance - initialize set from array literal
 	// Called by the compiler for `set from [1, 2, 3]` syntax
-	function ExpressibleByArrayLiteral.init(managed _ManagedArray) Self
+	function ExpressibleByArrayLiteral.init(managed _ManagedArray) returns Self
 		// Get number of elements in the managed array
 		var numElements = __managed_array_len(managed)
 
@@ -67,7 +67,7 @@ export struct set uses Element is ExpressibleByArrayLiteral with Element
 	/// Insert an element into the set
 	/// If the element already exists, this is a no-op
 	/// Automatically resizes the set when load factor exceeds 75%
-	export function insert(element Element) void
+	export function insert(element Element) returns nothing
 		// Check load factor and grow if needed (75% threshold)
 		var loadLimit = trunc((capacity * 3) / 4)
 		if count >= loadLimit 'grow'
@@ -123,7 +123,7 @@ export struct set uses Element is ExpressibleByArrayLiteral with Element
 	end 'insert'
 
 	/// Check if element exists in the set
-	export function contains(element Element) bool
+	export function contains(element Element) returns bool
 		var hash = element.hash()
 		var index = hash mod capacity
 		if index < 0 'fix_negative'
@@ -150,7 +150,7 @@ export struct set uses Element is ExpressibleByArrayLiteral with Element
 	end 'contains'
 
 	/// Remove element from set, returns true if element was present
-	export function remove(element Element) bool
+	export function remove(element Element) returns bool
 		var hash = element.hash()
 		var index = hash mod capacity
 		if index < 0 'fix_negative'
@@ -179,17 +179,17 @@ export struct set uses Element is ExpressibleByArrayLiteral with Element
 	end 'remove'
 
 	/// Get number of elements in the set
-	export function count() int
+	export function count() returns int
 		return count
 	end 'count'
 
 	/// Get current capacity (total number of slots)
-	export function capacity() int
+	export function capacity() returns int
 		return capacity
 	end 'capacity'
 
 	// Internal: grow the table when load factor exceeds threshold
-	function grow() void
+	function grow() returns nothing
 		var oldCapacity = capacity
 		var newCapacity = oldCapacity * 2
 

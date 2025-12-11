@@ -62,7 +62,7 @@ var w = sqrt(z)      // 1.414213... (√2)
 
 <!-- test: sqrt.basic -->
 ```maxon
-function main() int
+function main() returns int
     var x = sqrt(16.0)
     return trunc(x)
 end 'main'
@@ -73,7 +73,7 @@ end 'main'
 
 <!-- test: sqrt.precision -->
 ```maxon
-function main() int
+function main() returns int
     var x = sqrt(2.0)
     printFloat(x, 15)
     return 0
@@ -88,7 +88,7 @@ end 'main'
 
 <!-- test: sqrt.zero -->
 ```maxon
-function main() int
+function main() returns int
     var result = sqrt(0.0)
     if result == 0.0 'check'
         return 0
@@ -102,7 +102,7 @@ end 'main'
 
 <!-- test: sqrt.with-int-promotion -->
 ```maxon
-function main() int
+function main() returns int
     var x = 16  // int
     var result = sqrt(x)  // x promoted to 16.0
     return trunc(result)

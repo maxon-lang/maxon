@@ -15,7 +15,7 @@
 // ============================================
 
 // findGraphemeEndManagedRange - Find end of grapheme cluster in range
-function findGraphemeEndManagedRange(managed _ManagedString, offset int, startPos int, len int) int
+function findGraphemeEndManagedRange(managed _ManagedString, offset int, startPos int, len int) returns int
 	if startPos >= len 'atEnd'
 		return startPos
 	end 'atEnd'
@@ -56,13 +56,13 @@ end 'findGraphemeEndManagedRange'
 
 /// Find the end of the grapheme cluster in a _ManagedString starting at startPos
 /// Returns the byte offset of the end of the grapheme cluster
-export function findGraphemeEndManaged(managed _ManagedString, startPos int, len int) int
+export function findGraphemeEndManaged(managed _ManagedString, startPos int, len int) returns int
 	return findGraphemeEndManagedRange(managed, 0, startPos, len)
 end 'findGraphemeEndManaged'
 
 /// Find the end of the grapheme cluster in a substring starting at startPos
 /// Returns the byte offset of the end of the grapheme cluster
-export function findGraphemeEndSubstring(sub substring, startPos int, len int) int
+export function findGraphemeEndSubstring(sub substring, startPos int, len int) returns int
 	var parent = __substring_parent_managed(sub)
 	var offset = __substring_byte_offset(sub)
 	return findGraphemeEndManagedRange(parent, offset, startPos, len)
@@ -73,7 +73,7 @@ end 'findGraphemeEndSubstring'
 // ============================================
 
 // countGraphemesManagedRange - Count grapheme clusters in range
-function countGraphemesManagedRange(managed _ManagedString, offset int, len int) int
+function countGraphemesManagedRange(managed _ManagedString, offset int, len int) returns int
 	var graphemeCount = 0
 	var pos = 0
 	while pos < len 'countLoop'
@@ -84,12 +84,12 @@ function countGraphemesManagedRange(managed _ManagedString, offset int, len int)
 end 'countGraphemesManagedRange'
 
 /// Count the total number of grapheme clusters in a _ManagedString
-export function countGraphemesManaged(managed _ManagedString) int
+export function countGraphemesManaged(managed _ManagedString) returns int
 	return countGraphemesManagedRange(managed, 0, __string_len(managed))
 end 'countGraphemesManaged'
 
 /// Count the total number of grapheme clusters in a substring
-export function countGraphemesSubstring(sub substring) int
+export function countGraphemesSubstring(sub substring) returns int
 	var parent = __substring_parent_managed(sub)
 	var offset = __substring_byte_offset(sub)
 	var len = __substring_len(sub)
@@ -105,7 +105,7 @@ end 'countGraphemesSubstring'
 // Returns: 0=Other, 1=CR, 2=LF, 3=Control, 4=Extend, 5=ZWJ,
 //          6=Regional_Indicator, 7=Prepend, 8=SpacingMark,
 //          9=L, 10=V, 11=T, 12=LV, 13=LVT
-function graphemeBreakProperty(cp int) int
+function graphemeBreakProperty(cp int) returns int
 	// CR (return 1)
 	if cp == 13 'cr'
 		return 1
@@ -136,58 +136,58 @@ function graphemeBreakProperty(cp int) int
 		var sindex = cp - 44032
 		if sindex mod 28 == 0 'lv'
 			return 12  // LV
-			else 'lv'
-			return 13  // LVT
-		end 'lv'
-	end 'hangul'
+		end 'lv' else 'lvt'
+		return 13  // LVT
+	end 'lvt'
+end 'hangul'
 
-	// Hangul Jamo L U+1100..U+115F (return 9)
-	if cp >= 4352 and cp <= 4447 'jamo_l'
-		return 9
-	end 'jamo_l'
+// Hangul Jamo L U+1100..U+115F (return 9)
+if cp >= 4352 and cp <= 4447 'jamo_l'
+	return 9
+end 'jamo_l'
 
-	// Hangul Jamo V U+1160..U+11A7 (return 10)
-	if cp >= 4448 and cp <= 4519 'jamo_v'
-		return 10
-	end 'jamo_v'
+// Hangul Jamo V U+1160..U+11A7 (return 10)
+if cp >= 4448 and cp <= 4519 'jamo_v'
+	return 10
+end 'jamo_v'
 
-	// Hangul Jamo T U+11A8..U+11FF (return 11)
-	if cp >= 4520 and cp <= 4607 'jamo_t'
-		return 11
-	end 'jamo_t'
+// Hangul Jamo T U+11A8..U+11FF (return 11)
+if cp >= 4520 and cp <= 4607 'jamo_t'
+	return 11
+end 'jamo_t'
 
-	// Skin tone modifiers U+1F3FB..U+1F3FF (return 4 = Extend)
-	if cp >= 127995 and cp <= 127999 'skin_tone'
-		return 4
-	end 'skin_tone'
+// Skin tone modifiers U+1F3FB..U+1F3FF (return 4 = Extend)
+if cp >= 127995 and cp <= 127999 'skin_tone'
+	return 4
+end 'skin_tone'
 
-	// Variation selectors U+FE00..U+FE0F (return 4 = Extend)
-	if cp >= 65024 and cp <= 65039 'vs'
-		return 4
-	end 'vs'
+// Variation selectors U+FE00..U+FE0F (return 4 = Extend)
+if cp >= 65024 and cp <= 65039 'vs'
+	return 4
+end 'vs'
 
-	// Combining Diacritical Marks U+0300..U+036F (return 4 = Extend)
-	if cp >= 768 and cp <= 879 'combining'
-		return 4
-	end 'combining'
+// Combining Diacritical Marks U+0300..U+036F (return 4 = Extend)
+if cp >= 768 and cp <= 879 'combining'
+	return 4
+end 'combining'
 
-	// Format characters that are Control (return 3)
-	// ZWSP U+200B, LRM/RLM U+200E-200F, Line/Para separators U+2028-202E
-	if cp == 8203 or (cp >= 8206 and cp <= 8207) or (cp >= 8232 and cp <= 8238) 'format_control'
-		return 3
-	end 'format_control'
+// Format characters that are Control (return 3)
+// ZWSP U+200B, LRM/RLM U+200E-200F, Line/Para separators U+2028-202E
+if cp == 8203 or (cp >= 8206 and cp <= 8207) or (cp >= 8232 and cp <= 8238) 'format_control'
+	return 3
+end 'format_control'
 
-	// ZWNJ U+200C (return 4 = Extend)
-	if cp == 8204 'zwnj'
-		return 4
-	end 'zwnj'
+// ZWNJ U+200C (return 4 = Extend)
+if cp == 8204 'zwnj'
+	return 4
+end 'zwnj'
 
-	// Other (return 0)
-	return 0
+// Other (return 0)
+return 0
 end 'graphemeBreakProperty'
 
 // Check if codepoint has Extended_Pictographic property (emoji base)
-function isExtendedPictographic(cp int) bool
+function isExtendedPictographic(cp int) returns bool
 	// Basic emoji range U+1F600..U+1F64F
 	if cp >= 128512 and cp <= 128591 'emoji_faces'
 		return true
@@ -233,7 +233,7 @@ struct GraphemeState
 end 'GraphemeState'
 
 // Create initial grapheme state
-function graphemeStateInit() GraphemeState
+function graphemeStateInit() returns GraphemeState
 	return GraphemeState{riCount: 0, inEmojiSeq: false}
 end 'graphemeStateInit'
 
@@ -245,7 +245,7 @@ end 'graphemeStateInit'
 // state: State for tracking RI counts and emoji sequences
 //
 // Returns true if there should be a break BEFORE the current codepoint
-function isGraphemeBreak(prevGbp int, currGbp int, prevCp int, currCp int, state GraphemeState) bool
+function isGraphemeBreak(prevGbp int, currGbp int, prevCp int, currCp int, state GraphemeState) returns bool
 	// Use prevCp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)
 	var unused = prevCp
 	unused = unused
@@ -335,7 +335,7 @@ function isGraphemeBreak(prevGbp int, currGbp int, prevCp int, currCp int, state
 end 'isGraphemeBreak'
 
 // Update grapheme state after processing a codepoint
-function graphemeStateUpdate(state GraphemeState, gbp int, cp int) GraphemeState
+function graphemeStateUpdate(state GraphemeState, gbp int, cp int) returns GraphemeState
 	var new_state = GraphemeState{riCount: 0, inEmojiSeq: false}
 
 	// Track Regional Indicator sequences (gbp == 6)
@@ -346,21 +346,21 @@ function graphemeStateUpdate(state GraphemeState, gbp int, cp int) GraphemeState
 	// Track emoji sequences for GB11
 	if isExtendedPictographic(cp) 'emoji_base'
 		new_state.inEmojiSeq = true
-		else 'emoji_base'
-		if state.inEmojiSeq 'emoji_continue'
-			// gbp == 4 (Extend) or 5 (ZWJ)
-			if gbp == 4 or gbp == 5 'emoji_extend'
-				new_state.inEmojiSeq = true
-			end 'emoji_extend'
-		end 'emoji_continue'
-	end 'emoji_base'
+	end 'emoji_base' else 'not_emoji_base'
+	if state.inEmojiSeq 'emoji_continue'
+		// gbp == 4 (Extend) or 5 (ZWJ)
+		if gbp == 4 or gbp == 5 'emoji_extend'
+			new_state.inEmojiSeq = true
+		end 'emoji_extend'
+	end 'emoji_continue'
+end 'not_emoji_base'
 
-	return new_state
+return new_state
 end 'graphemeStateUpdate'
 
 /// Find the next grapheme cluster boundary in UTF-8 data
 /// Returns the byte offset of the next boundary, or len if at end
-export function nextGraphemeBoundary(data array of byte, len int, offset int) int
+export function nextGraphemeBoundary(data array of byte, len int, offset int) returns int
 	if offset >= len 'at_end'
 		return len
 	end 'at_end'
@@ -397,7 +397,7 @@ end 'nextGraphemeBoundary'
 
 // Find the previous grapheme cluster boundary in UTF-8 data
 // Returns the byte offset of the previous boundary, or 0 if at start
-function prevGraphemeBoundary(data array of byte, len int, offset int) int
+function prevGraphemeBoundary(data array of byte, len int, offset int) returns int
 	// Clamp offset to valid range
 	var safeOffset = offset
 	if safeOffset > len 'clamp'
@@ -443,7 +443,7 @@ function prevGraphemeBoundary(data array of byte, len int, offset int) int
 end 'prevGraphemeBoundary'
 
 // Count grapheme clusters in UTF-8 data
-function graphemeCount(data array of byte, len int) int
+function graphemeCount(data array of byte, len int) returns int
 	if len == 0 'empty'
 		return 0
 	end 'empty'
@@ -474,4 +474,5 @@ function graphemeCount(data array of byte, len int) int
 
 	return count
 end 'graphemeCount'
+
 

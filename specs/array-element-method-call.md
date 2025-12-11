@@ -62,12 +62,12 @@ struct Point
     var x int
     var y int
     
-    function distance() int
+    function distance() returns int
         return x + y
     end 'distance'
 end 'Point'
 
-function main() int
+function main() returns int
     var points = array of 3 Point
     points[0] = Point{x: 10, y: 20}
     return points[0].distance()
@@ -102,12 +102,12 @@ arr[i].method1().method2()
 struct Counter
     var value int
     
-    function get() int
+    function get() returns int
         return value
     end 'get'
 end 'Counter'
 
-function main() int
+function main() returns int
     var items = array of 3 Counter
     items[0] = Counter{value: 42}
     items[1] = Counter{value: 100}
@@ -123,12 +123,12 @@ end 'main'
 struct Adder
     var base int
     
-    function add(x int) int
+    function add(x int) returns int
         return base + x
     end 'add'
 end 'Adder'
 
-function main() int
+function main() returns int
     var adders = array of 2 Adder
     adders[0] = Adder{base: 10}
     adders[1] = Adder{base: 20}
@@ -144,12 +144,12 @@ end 'main'
 struct Value
     var n int
     
-    function doubled() int
+    function doubled() returns int
         return n * 2
     end 'doubled'
 end 'Value'
 
-function main() int
+function main() returns int
     var vals = array of 3 Value
     vals[0] = Value{n: 5}
     vals[1] = Value{n: 10}
@@ -166,12 +166,12 @@ end 'main'
 struct Item
     var id int
     
-    function getId() int
+    function getId() returns int
         return id
     end 'getId'
 end 'Item'
 
-function main() int
+function main() returns int
     var items = array of 3 Item
     items[0] = Item{id: 100}
     items[1] = Item{id: 200}
@@ -189,12 +189,12 @@ end 'main'
 struct Data
     var x int
     
-    function getX() int
+    function getX() returns int
         return x
     end 'getX'
 end 'Data'
 
-function main() int
+function main() returns int
     var arr = array of 4 Data
     arr[0] = Data{x: 1}
     arr[1] = Data{x: 2}

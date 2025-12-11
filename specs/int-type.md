@@ -35,14 +35,14 @@ let total = 100
 ### Example
 
 ```maxon
-function factorial(n int) int
+function factorial(n int) returns int
     if n <= 1 'base'
         return 1
     end 'base'
     return n * factorial(n - 1)
 end 'factorial'
 
-function main() int
+function main() returns int
     return factorial(5)  // Returns 120
 end 'main'
 ```
@@ -55,7 +55,7 @@ end 'main'
 
 <!-- test: basic-int -->
 ```maxon
-function main() int
+function main() returns int
     var x = 42
     return x
 end 'main'
@@ -67,7 +67,7 @@ end 'main'
 
 <!-- test: int-arithmetic -->
 ```maxon
-function main() int
+function main() returns int
     var a = 10
     var b = 20
     var sum = a + b
@@ -81,7 +81,7 @@ end 'main'
 
 <!-- test: negative-int -->
 ```maxon
-function main() int
+function main() returns int
     var x = -42
     var y = -x
     if y == 42 'check'
@@ -97,7 +97,7 @@ end 'main'
 
 <!-- test: int-expression -->
 ```maxon
-function main() int
+function main() returns int
     return 2 + 3 * 4
 end 'main'
 ```

@@ -45,7 +45,7 @@ Multiplication, division, and modulo have higher precedence than addition and su
 ### Example
 
 ```maxon
-function main() int
+function main() returns int
     var a = 10
     var b = 3
     var sum = a + b          // 13
@@ -83,7 +83,7 @@ end 'main'
 
 <!-- test: addition -->
 ```maxon
-function main() int
+function main() returns int
     return 5 + 3
 end 'main'
 ```
@@ -94,7 +94,7 @@ end 'main'
 
 <!-- test: multiplication -->
 ```maxon
-function main() int
+function main() returns int
     return 6 * 7
 end 'main'
 ```
@@ -105,7 +105,7 @@ end 'main'
 
 <!-- test: precedence -->
 ```maxon
-function main() int
+function main() returns int
     return 2 + 3 * 4
 end 'main'
 ```
@@ -116,7 +116,7 @@ end 'main'
 
 <!-- test: division-returns-float -->
 ```maxon
-function main() int
+function main() returns int
     var result = 20 / 3      // 6.666...
     return trunc(result * 10.0)  // 66.666... * 10 = 66.666..., trunc = 66
 end 'main'
@@ -128,7 +128,7 @@ end 'main'
 
 <!-- test: trunc-division-optimizes -->
 ```maxon
-function main() int
+function main() returns int
     return trunc(20 / 3)     // Optimized to sdiv, returns 6
 end 'main'
 ```
@@ -139,7 +139,7 @@ end 'main'
 
 <!-- test: variable-division-optimizes -->
 ```maxon
-function main() int
+function main() returns int
     var a = 7
     var b = 2
     return trunc(a / b)      // Should optimize to sdiv after Mem2Reg
@@ -152,7 +152,7 @@ end 'main'
 
 <!-- test: negative-division -->
 ```maxon
-function main() int
+function main() returns int
     var neg = 0 - 7
     return trunc(neg / 2)    // -7/2 = -3.5, trunc = -3 (toward zero)
 end 'main'
@@ -164,7 +164,7 @@ end 'main'
 
 <!-- test: modulo -->
 ```maxon
-function main() int
+function main() returns int
     return 17 mod 5
 end 'main'
 ```
@@ -175,7 +175,7 @@ end 'main'
 
 <!-- test: complex-expression -->
 ```maxon
-function main() int
+function main() returns int
     var a = 10
     var b = 3
     var result = (a + b) * 2 - trunc(a / b)

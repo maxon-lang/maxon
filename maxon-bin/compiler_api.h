@@ -72,17 +72,17 @@ struct LSPInterfaceMethodInfo {
  */
 struct LSPSymbolInfo {
 	std::string name;
-	std::string kind;						  // "function", "struct", "enum", "interface", "variable", "field", "method"
-	std::string type;						  // Type signature as string
-	std::string documentation;				  // Doc comment content
-	SourceRange sourceRange;				  // Location in source
-	std::string filePath;					  // Absolute path to the source file
-	std::vector<LSPParameterInfo> parameters; // For functions/methods
-	std::string returnType;					  // For functions/methods
-	std::vector<std::string> conformsTo;	  // For structs: interfaces this struct conforms to
-	std::vector<LSPFieldInfo> fields;		  // For structs: field definitions
-	std::string extendsInterface;			  // For interfaces: base interface name
-	std::vector<std::string> associatedTypes; // For interfaces: associated type parameters (e.g., "Element")
+	std::string kind;									  // "function", "struct", "enum", "interface", "variable", "field", "method"
+	std::string type;									  // Type signature as string
+	std::string documentation;							  // Doc comment content
+	SourceRange sourceRange;							  // Location in source
+	std::string filePath;								  // Absolute path to the source file
+	std::vector<LSPParameterInfo> parameters;			  // For functions/methods
+	std::string returnType;								  // For functions/methods
+	std::vector<std::string> conformsTo;				  // For structs: interfaces this struct conforms to
+	std::vector<LSPFieldInfo> fields;					  // For structs: field definitions
+	std::string extendsInterface;						  // For interfaces: base interface name
+	std::vector<std::string> associatedTypes;			  // For interfaces: associated type parameters (e.g., "Element")
 	std::vector<LSPInterfaceMethodInfo> interfaceMethods; // For interfaces: method signatures
 
 	LSPSymbolInfo() = default;
@@ -111,6 +111,7 @@ struct LSPAnalysisResult {
 	std::map<std::string, FunctionInfo> functions;
 	std::map<std::string, StructInfo> structs;
 	std::map<std::string, InterfaceInfo> interfaces;
+	std::map<std::string, EnumInfo> enums;
 
 	// Check if analysis was successful (no parse errors)
 	bool hasParseErrors() const { return !parseErrors.empty(); }
