@@ -171,8 +171,7 @@ MIROptimizer MIROptimizer::createOptimizerPipeline(int verboseLevel, bool skipFo
 	optimizer.setVerboseLevel(verboseLevel);
 
 	// Order matters: run mem2reg first, then cleanup passes
-	// TODO: mem2reg has a bug with complex PHI patterns - disabled for now
-	// optimizer.addPass(std::make_unique<Mem2RegPass>());
+	optimizer.addPass(std::make_unique<Mem2RegPass>());
 	optimizer.addPass(std::make_unique<ConstantFoldingPass>());
 	optimizer.addPass(std::make_unique<ConstantPropagationPass>());
 	optimizer.addPass(std::make_unique<AlgebraicSimplificationPass>());

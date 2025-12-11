@@ -65,6 +65,7 @@ class Parser {
 	std::string parseQualifiedName(const std::string &context);
 	std::string parseTypeString(const std::string &context);			 // Parse type including 'array of T'
 	std::string parseTypeStringWithOptional(const std::string &context); // Parse type with optional 'or nil'
+	std::string parseOptionalReturnType(int rparenLine);				 // Parse return type if on same line
 
 	std::unique_ptr<ExprAST> parseExpression();
 	std::unique_ptr<ExprAST> parseBitwiseAnd();

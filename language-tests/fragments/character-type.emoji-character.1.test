@@ -6,7 +6,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 112
+; Instructions: 103
 
 %string = type { ptr, i32 }
 %character = type { ptr }
@@ -22,8 +22,6 @@ end 'main'
 
 define %string @character.toString(ptr %self) {
 entry0:
-  %0 = alloca ptr
-  store ptr %self, ptr %0
   %1 = alloca %string
   %3 = getelementptr %character, ptr %self, i32 0, i32 0
   %4 = load ptr, ptr %3
@@ -37,8 +35,6 @@ entry0:
 
 define %cstring @string.cstr(ptr %self) {
 entry0:
-  %0 = alloca ptr
-  store ptr %self, ptr %0
   %2 = getelementptr %string, ptr %self, i32 0, i32 0
   %3 = load ptr, ptr %2
   %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
@@ -104,8 +100,6 @@ entry0:
 
 define i32 @sys.print(ptr %value) {
 entry0:
-  %0 = alloca ptr
-  store ptr %value, ptr %0
   %2 = call %cstring @string.cstr(ptr %value)
   %3 = alloca %cstring
   store %cstring %2, ptr %3
@@ -114,8 +108,6 @@ entry0:
   %6 = getelementptr %cstring, ptr %3, i32 0, i32 1
   %7 = load i32, ptr %6
   %8 = call i32 @write_stdout(ptr %5, i32 %7)
-  %9 = alloca i32
-  store i32 %8, ptr %9
   %10 = alloca %string
   %11 = alloca %__ManagedStringData
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
@@ -139,8 +131,7 @@ entry0:
   %23 = getelementptr %cstring, ptr %20, i32 0, i32 1
   %24 = load i32, ptr %23
   %25 = call i32 @write_stdout(ptr %22, i32 %24)
-  %26 = load i32, ptr %9
-  %27 = add i32 %26, 1
+  %27 = add i32 %8, 1
   %28 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %29 = load ptr, ptr %28
   call void @_managed_string_release(ptr %29, ptr @.__tag.free.cs)

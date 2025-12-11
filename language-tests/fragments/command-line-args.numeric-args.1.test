@@ -9,7 +9,7 @@ function main(args array of string) int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 116
+; Instructions: 102
 
 %string = type { ptr, i32 }
 %cstring = type { ptr, i32, ptr }
@@ -25,8 +25,6 @@ end 'main'
 
 define %cstring @string.cstr(ptr %self) {
 entry0:
-  %0 = alloca ptr
-  store ptr %self, ptr %0
   %2 = getelementptr %string, ptr %self, i32 0, i32 0
   %3 = load ptr, ptr %2
   %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
@@ -68,26 +66,15 @@ cstring.continue3:
 
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
-define i32 @array<string>.count(ptr %self) {
-entry0:
-  %0 = alloca ptr
-  store ptr %self, ptr %0
-  %2 = getelementptr %array<string>, ptr %self, i32 0, i32 0
-  %3 = getelementptr %__ManagedArrayData_string, ptr %2, i32 0, i32 1
-  %4 = load i32, ptr %3
-  ret i32 %4
-}
-
 define i32 @main(ptr %args) {
 entry0:
-  %0 = alloca ptr
-  store ptr %args, ptr %0
-  %2 = call i32 @array<string>.count(ptr %args)
-  %3 = icmp eq i32 %2, 2
+  %10 = getelementptr %array<string>, ptr %args, i32 0, i32 0
+  %11 = getelementptr %__ManagedArrayData_string, ptr %10, i32 0, i32 1
+  %12 = load i32, ptr %11
+  %3 = icmp eq i32 %12, 2
   br i1 %3, label %then1, label %ifcont2
 then1:
-  %4 = load ptr, ptr %0
-  %5 = getelementptr %array<string>, ptr %4, i32 0, i32 0
+  %5 = getelementptr %array<string>, ptr %args, i32 0, i32 0
   %6 = getelementptr %__ManagedArrayData_string, ptr %5, i32 0, i32 0
   %7 = load ptr, ptr %6
   %8 = getelementptr %string, ptr %7, i64 1
@@ -99,8 +86,6 @@ ifcont2:
 
 define i32 @sys.print(ptr %value) {
 entry0:
-  %0 = alloca ptr
-  store ptr %value, ptr %0
   %2 = call %cstring @string.cstr(ptr %value)
   %3 = alloca %cstring
   store %cstring %2, ptr %3
@@ -109,8 +94,6 @@ entry0:
   %6 = getelementptr %cstring, ptr %3, i32 0, i32 1
   %7 = load i32, ptr %6
   %8 = call i32 @write_stdout(ptr %5, i32 %7)
-  %9 = alloca i32
-  store i32 %8, ptr %9
   %10 = alloca %string
   %11 = alloca %__ManagedStringData
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
@@ -134,8 +117,7 @@ entry0:
   %23 = getelementptr %cstring, ptr %20, i32 0, i32 1
   %24 = load i32, ptr %23
   %25 = call i32 @write_stdout(ptr %22, i32 %24)
-  %26 = load i32, ptr %9
-  %27 = add i32 %26, 1
+  %27 = add i32 %8, 1
   %28 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %29 = load ptr, ptr %28
   call void @_managed_string_release(ptr %29, ptr @.__tag.free.cs)

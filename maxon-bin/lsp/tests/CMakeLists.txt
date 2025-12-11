@@ -54,6 +54,7 @@ set(MAXON_SOURCES
     ../../file_utils.cpp
     ../../intrinsics.cpp
     ../../compiler_api.cpp
+    ../../call_graph.cpp
 )
 
 # Create library from sources for testing

@@ -13,7 +13,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 34
+; Instructions: 31
 
 %Point = type { i32, Optional<i32> }
 
@@ -32,7 +32,6 @@ entry0:
   store Optional<i32> %6, ptr %2
   %7 = getelementptr %Point, ptr %0, i32 0, i32 1
   %8 = load Optional<i32>, ptr %7
-  %9 = alloca i32
   %10 = alloca Optional<i32>
   store Optional<i32> %8, ptr %10
   %11 = getelementptr Optional<i32>, ptr %10, i32 0, i32 0
@@ -42,16 +41,14 @@ entry0:
 unwrap.hasvalue1:
   %14 = getelementptr Optional<i32>, ptr %10, i32 0, i32 1
   %15 = load i32, ptr %14
-  store i32 %15, ptr %9
   br label %unwrap.after3
 unwrap.else2:
-  store i32 0, ptr %9
   br label %unwrap.after3
 unwrap.after3:
+  %20 = phi i32 [ %15, %unwrap.hasvalue1 ], [ 0, %unwrap.else2 ]
   %16 = getelementptr %Point, ptr %0, i32 0, i32 0
   %17 = load i32, ptr %16
-  %18 = load i32, ptr %9
-  %19 = add i32 %17, %18
+  %19 = add i32 %17, %20
   ret i32 %19
 }
 

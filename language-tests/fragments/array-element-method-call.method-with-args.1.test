@@ -15,26 +15,13 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 51
+; Instructions: 44
 
 %Adder = type { i32 }
 %__ManagedArrayData_Adder = type { ptr, i32, i32 }
 %array<Adder> = type { %__ManagedArrayData_Adder, i32 }
 
 @.__tag.free.adders = constant [14 x i8] c"array cleanup\00"
-
-define i32 @Adder.add(ptr %self, i32 %x) {
-entry0:
-  %0 = alloca ptr
-  store ptr %self, ptr %0
-  %1 = alloca i32
-  store i32 %x, ptr %1
-  %3 = getelementptr %Adder, ptr %self, i32 0, i32 0
-  %4 = load i32, ptr %3
-  %5 = load i32, ptr %1
-  %6 = add i32 %4, %5
-  ret i32 %6
-}
 
 define i32 @main() {
 entry0:
@@ -66,7 +53,9 @@ entry0:
   %19 = getelementptr %__ManagedArrayData_Adder, ptr %18, i32 0, i32 0
   %20 = load ptr, ptr %19
   %21 = getelementptr %Adder, ptr %20, i64 1
-  %22 = call i32 @Adder.add(ptr %21, i32 5)
+  %29 = getelementptr %Adder, ptr %21, i32 0, i32 0
+  %30 = load i32, ptr %29
+  %31 = add i32 %30, 5
   %23 = getelementptr %array<Adder>, ptr %1, i32 0, i32 0
   %24 = getelementptr %__ManagedArrayData_Adder, ptr %23, i32 0, i32 0
   %25 = load ptr, ptr %24
@@ -78,7 +67,7 @@ adders.release1:
   call void @_managed_array_release(ptr %25, ptr @.__tag.free.adders)
   br label %adders.skip2
 adders.skip2:
-  ret i32 %22
+  ret i32 %31
 }
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)

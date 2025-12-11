@@ -6,7 +6,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 189
+; Instructions: 162
 
 %string = type { ptr, i32 }
 %cstring = type { ptr, i32, ptr }
@@ -22,8 +22,6 @@ end 'main'
 
 define %cstring @string.cstr(ptr %self) {
 entry0:
-  %0 = alloca ptr
-  store ptr %self, ptr %0
   %2 = getelementptr %string, ptr %self, i32 0, i32 0
   %3 = load ptr, ptr %2
   %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
@@ -65,8 +63,6 @@ cstring.continue3:
 
 define %string @string.toLower(ptr %self) {
 entry0:
-  %0 = alloca ptr
-  store ptr %self, ptr %0
   %2 = getelementptr %string, ptr %self, i32 0, i32 0
   %3 = load ptr, ptr %2
   %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 1
@@ -98,66 +94,48 @@ make_unique.const2:
   store i32 %22, ptr %6
   br label %make_unique.merge3
 make_unique.merge3:
-  %23 = alloca ptr
-  store ptr %3, ptr %23
-  %24 = load ptr, ptr %0
-  %25 = getelementptr %string, ptr %24, i32 0, i32 0
+  %25 = getelementptr %string, ptr %self, i32 0, i32 0
   %26 = load ptr, ptr %25
   %27 = getelementptr %__ManagedStringData, ptr %26, i32 0, i32 1
   %28 = load i32, ptr %27
-  %29 = alloca i32
-  store i32 %28, ptr %29
-  %30 = alloca i32
-  store i32 0, ptr %30
   br label %whilecond4
 whilecond4:
-  %31 = load i32, ptr %30
-  %32 = load i32, ptr %29
-  %33 = icmp slt i32 %31, %32
+  %67 = phi i32 [ 0, %make_unique.merge3 ], [ %61, %ifcont8 ]
+  %33 = icmp slt i32 %67, %28
   br i1 %33, label %loop5, label %afterloop6
 loop5:
-  %34 = load ptr, ptr %0
-  %35 = getelementptr %string, ptr %34, i32 0, i32 0
+  %35 = getelementptr %string, ptr %self, i32 0, i32 0
   %36 = load ptr, ptr %35
-  %37 = load i32, ptr %30
   %38 = getelementptr %__ManagedStringData, ptr %36, i32 0, i32 0
   %39 = load ptr, ptr %38
-  %40 = sext i32 %37 to i64
+  %40 = sext i32 %67 to i64
   %41 = getelementptr i8, ptr %39, i64 %40
   %42 = load i8, ptr %41
   %43 = zext i8 %42 to i32
-  %44 = alloca i32
-  store i32 %43, ptr %44
   %46 = icmp sge i32 %43, 65
   %48 = icmp sle i32 %43, 90
   %49 = and i1 %46, %48
   br i1 %49, label %then7, label %ifcont8
 afterloop6:
   %62 = alloca %string
-  %63 = load ptr, ptr %23
   %64 = getelementptr %string, ptr %62, i32 0, i32 0
-  store ptr %63, ptr %64
+  store ptr %3, ptr %64
   %65 = getelementptr %string, ptr %62, i32 0, i32 1
   store i32 0, ptr %65
   %66 = load %string, ptr %62
   ret %string %66
 then7:
-  %50 = load ptr, ptr %23
-  %51 = load i32, ptr %30
-  %52 = load i32, ptr %44
-  %53 = add i32 %52, 32
+  %53 = add i32 %43, 32
   %54 = trunc i32 %53 to i8
-  %55 = getelementptr %__ManagedStringData, ptr %50, i32 0, i32 0
+  %55 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
   %56 = getelementptr %_ManagedArray_byte, ptr %55, i32 0, i32 0
   %57 = load ptr, ptr %56
-  %58 = sext i32 %51 to i64
+  %58 = sext i32 %67 to i64
   %59 = getelementptr i8, ptr %57, i64 %58
   store i8 %54, ptr %59
   br label %ifcont8
 ifcont8:
-  %60 = load i32, ptr %30
-  %61 = add i32 %60, 1
-  store i32 %61, ptr %30
+  %61 = add i32 %67, 1
   br label %whilecond4
 }
 
@@ -189,8 +167,6 @@ entry0:
 
 define i32 @sys.print(ptr %value) {
 entry0:
-  %0 = alloca ptr
-  store ptr %value, ptr %0
   %2 = call %cstring @string.cstr(ptr %value)
   %3 = alloca %cstring
   store %cstring %2, ptr %3
@@ -199,8 +175,6 @@ entry0:
   %6 = getelementptr %cstring, ptr %3, i32 0, i32 1
   %7 = load i32, ptr %6
   %8 = call i32 @write_stdout(ptr %5, i32 %7)
-  %9 = alloca i32
-  store i32 %8, ptr %9
   %10 = alloca %string
   %11 = alloca %__ManagedStringData
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
@@ -224,8 +198,7 @@ entry0:
   %23 = getelementptr %cstring, ptr %20, i32 0, i32 1
   %24 = load i32, ptr %23
   %25 = call i32 @write_stdout(ptr %22, i32 %24)
-  %26 = load i32, ptr %9
-  %27 = add i32 %26, 1
+  %27 = add i32 %8, 1
   %28 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %29 = load ptr, ptr %28
   call void @_managed_string_release(ptr %29, ptr @.__tag.free.cs)

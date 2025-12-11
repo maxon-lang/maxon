@@ -39,6 +39,20 @@ static bool findStaticLibrary(const std::string &libName, std::string &outPath) 
 	return false;
 }
 
+// Parse return type (optional - defaults to void)
+// Return type must be on the same line as the function signature
+std::string Parser::parseOptionalReturnType(int rparenLine) {
+	if (currentLine() == rparenLine) {
+		auto retKd = currentKeywordData();
+		bool hasReturnType = (retKd && retKd->category == KeywordCategory::Type) ||
+							 check(TokenType::IDENTIFIER);
+		if (hasReturnType) {
+			return parseTypeStringWithOptional("return type");
+		}
+	}
+	return "void";
+}
+
 std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	// Check for export keyword
 	bool isExported = false;
@@ -88,17 +102,10 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 		} while (match(TokenType::COMMA));
 	}
 
+	int rparenLine = currentLine(); // Track line of the closing paren before advancing
 	expectAdvance(TokenType::RPAREN, "Expected ')'");
 
-	// Parse return type (optional - defaults to void)
-	// Type can start with: type keyword (including 'array') or identifier (struct name)
-	std::string returnType = "void";
-	auto retKd = currentKeywordData();
-	bool hasReturnType = (retKd && retKd->category == KeywordCategory::Type) ||
-						 check(TokenType::IDENTIFIER);
-	if (hasReturnType) {
-		returnType = parseTypeStringWithOptional("return type");
-	}
+	std::string returnType = parseOptionalReturnType(rparenLine);
 
 	std::vector<std::unique_ptr<StmtAST>> body;
 
@@ -201,17 +208,10 @@ std::unique_ptr<FunctionAST> Parser::parseMethod(const std::string &structName) 
 		} while (match(TokenType::COMMA));
 	}
 
+	int rparenLine = currentLine(); // Track line of the closing paren before advancing
 	expectAdvance(TokenType::RPAREN, "Expected ')'");
 
-	// Parse return type (optional - defaults to void)
-	// Type can start with: type keyword (including 'array') or identifier (struct name)
-	std::string returnType = "void";
-	auto retKd = currentKeywordData();
-	bool hasReturnType = (retKd && retKd->category == KeywordCategory::Type) ||
-						 check(TokenType::IDENTIFIER);
-	if (hasReturnType) {
-		returnType = parseTypeStringWithOptional("return type");
-	}
+	std::string returnType = parseOptionalReturnType(rparenLine);
 
 	std::vector<std::unique_ptr<StmtAST>> body;
 
@@ -597,54 +597,17 @@ std::unique_ptr<FunctionAST> Parser::parseEnumMethod(const std::string &enumName
 		do {
 			Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
 
-			// Parse parameter type
-			std::string paramType;
-			auto kd = currentKeywordData();
-			if (kd && kd->category == KeywordCategory::Type) {
-				paramType = std::string(currentValue());
-				advance();
-			} else if (check(TokenType::IDENTIFIER)) {
-				paramType = parseQualifiedName("parameter type");
-			} else {
-				reportError("Expected parameter type",
-							currentLine(), currentColumn());
-			}
-
-			// Check for "or nil" suffix for optional parameters
-			if (checkKeyword("or")) {
-				advance(); // consume 'or'
-				if (!checkKeyword("nil")) {
-					reportError("Expected 'nil' after 'or' in parameter type",
-								currentLine(), currentColumn());
-				}
-				advance(); // consume 'nil'
-				paramType = paramType + " or nil";
-			}
+			// Parse parameter type using unified type parser (handles arrays and optional)
+			std::string paramType = parseTypeStringWithOptional("parameter type");
 
 			parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
 		} while (match(TokenType::COMMA));
 	}
 
+	int rparenLine = currentLine(); // Track line of the closing paren before advancing
 	expectAdvance(TokenType::RPAREN, "Expected ')'");
 
-	// Parse return type (optional - defaults to void)
-	std::string returnType = "void";
-	auto retKd = currentKeywordData();
-	if ((retKd && retKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
-		returnType = std::string(currentValue());
-		advance();
-
-		// Check for "or nil" suffix for optional return types
-		if (checkKeyword("or")) {
-			advance(); // consume 'or'
-			if (!checkKeyword("nil")) {
-				reportError("Expected 'nil' after 'or' in return type",
-							currentLine(), currentColumn());
-			}
-			advance(); // consume 'nil'
-			returnType = returnType + " or nil";
-		}
-	}
+	std::string returnType = parseOptionalReturnType(rparenLine);
 
 	std::vector<std::unique_ptr<StmtAST>> body;
 

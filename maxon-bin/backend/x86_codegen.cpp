@@ -906,14 +906,15 @@ void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 	if (isLargeAggregate) {
 		// For large structs, we can't load into a register
 		// Instead, copy from source to result's stack slot
-		X86Reg srcPtr = loadValue(inst->operands[0], X86Reg::RSI);
+		// Use scratch registers R10/R11 to avoid clobbering allocated registers
+		X86Reg srcPtr = loadValue(inst->operands[0], X86Reg::R10);
 
 		// Get destination (result's stack slot)
 		X86Mem dstSlot = getStackSlot(inst->result);
-		encoder.lea64(X86Reg::RDI, dstSlot);
+		encoder.lea64(X86Reg::R11, dstSlot);
 
-		// Copy the struct
-		emitStructCopy(srcPtr, X86Reg::RDI, loadType->sizeInBytes, X86Reg::RAX);
+		// Copy the struct (use RAX as temp since it's caller-saved)
+		emitStructCopy(srcPtr, X86Reg::R11, loadType->sizeInBytes, X86Reg::RAX);
 		// Result is already in its stack slot, nothing more to do
 		return;
 	}

@@ -15,7 +15,7 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 61
+; Instructions: 46
 
 %__ManagedArrayData_int = type { ptr, i32, i32 }
 %array<int> = type { %__ManagedArrayData_int, i32 }
@@ -26,39 +26,24 @@ declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 define i32 @sum_array(ptr %arr, i32 %len) {
 entry0:
-  %0 = alloca ptr
-  store ptr %arr, ptr %0
-  %1 = alloca i32
-  store i32 %len, ptr %1
-  %2 = alloca i32
-  store i32 0, ptr %2
-  %3 = alloca i32
-  store i32 0, ptr %3
   br label %whilecond1
 whilecond1:
-  %4 = load i32, ptr %3
-  %5 = load i32, ptr %1
-  %6 = icmp slt i32 %4, %5
+  %21 = phi i32 [ 0, %entry0 ], [ %18, %loop2 ]
+  %20 = phi i32 [ 0, %entry0 ], [ %16, %loop2 ]
+  %6 = icmp slt i32 %21, %len
   br i1 %6, label %loop2, label %afterloop3
 loop2:
-  %7 = load i32, ptr %2
-  %8 = load i32, ptr %3
-  %9 = load ptr, ptr %0
-  %10 = getelementptr %array<int>, ptr %9, i32 0, i32 0
+  %10 = getelementptr %array<int>, ptr %arr, i32 0, i32 0
   %11 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 0
   %12 = load ptr, ptr %11
-  %13 = sext i32 %8 to i64
+  %13 = sext i32 %21 to i64
   %14 = getelementptr i32, ptr %12, i64 %13
   %15 = load i32, ptr %14
-  %16 = add i32 %7, %15
-  store i32 %16, ptr %2
-  %17 = load i32, ptr %3
-  %18 = add i32 %17, 1
-  store i32 %18, ptr %3
+  %16 = add i32 %20, %15
+  %18 = add i32 %21, 1
   br label %whilecond1
 afterloop3:
-  %19 = load i32, ptr %2
-  ret i32 %19
+  ret i32 %20
 }
 
 define i32 @main() {

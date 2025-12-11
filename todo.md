@@ -20,6 +20,7 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - memory safety (generational references)
 - string formatting
 - self hosting features
+- parser needs to be strict about new lines
 
 ## TODO
 - simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")

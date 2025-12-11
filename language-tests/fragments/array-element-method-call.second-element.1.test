@@ -16,23 +16,13 @@ function main() int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 54
+; Instructions: 50
 
 %Value = type { i32 }
 %__ManagedArrayData_Value = type { ptr, i32, i32 }
 %array<Value> = type { %__ManagedArrayData_Value, i32 }
 
 @.__tag.free.vals = constant [14 x i8] c"array cleanup\00"
-
-define i32 @Value.doubled(ptr %self) {
-entry0:
-  %0 = alloca ptr
-  store ptr %self, ptr %0
-  %2 = getelementptr %Value, ptr %self, i32 0, i32 0
-  %3 = load i32, ptr %2
-  %4 = shl i32 %3, 1
-  ret i32 %4
-}
 
 define i32 @main() {
 entry0:
@@ -70,7 +60,9 @@ entry0:
   %24 = getelementptr %__ManagedArrayData_Value, ptr %23, i32 0, i32 0
   %25 = load ptr, ptr %24
   %26 = getelementptr %Value, ptr %25, i64 2
-  %27 = call i32 @Value.doubled(ptr %26)
+  %34 = getelementptr %Value, ptr %26, i32 0, i32 0
+  %35 = load i32, ptr %34
+  %36 = shl i32 %35, 1
   %28 = getelementptr %array<Value>, ptr %1, i32 0, i32 0
   %29 = getelementptr %__ManagedArrayData_Value, ptr %28, i32 0, i32 0
   %30 = load ptr, ptr %29
@@ -82,7 +74,7 @@ vals.release1:
   call void @_managed_array_release(ptr %30, ptr @.__tag.free.vals)
   br label %vals.skip2
 vals.skip2:
-  ret i32 %27
+  ret i32 %36
 }
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)

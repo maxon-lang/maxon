@@ -398,6 +398,8 @@ Winchester uses a **linear-scan register allocator** with liveness analysis, pro
 - RBP (frame pointer)
 - R10, R11 (scratch registers for code generation)
 
+**Important:** Callee-saved registers (RBX, RSI, RDI, R12-R15) are allocatable. Code generation must use only reserved scratch registers (R10, R11) or caller-saved/volatile registers (RAX, RCX, RDX) for internal scratch operations. Using callee-saved registers as implicit scratch will corrupt values held across instructions.
+
 #### Linux x64 (System V ABI)
 
 **General Purpose (Caller-saved):**
@@ -932,11 +934,22 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 
 ---
 
-**Last Updated:** 2025-12-01
-**Version:** Winchester 1.3
+**Last Updated:** 2025-12-10
+**Version:** Winchester 1.5
 **Maintainer:** Maxon Compiler Team
 
 ## Recent Changes
+
+### Winchester 1.5 (2025-12-10)
+
+**Critical Bug Fix: Register Clobbering in Large Struct Operations:**
+- Fixed `genLoad` for large structs (>8 bytes) clobbering allocatable callee-saved registers
+- **Root Cause:** `genLoad` was hardcoding RSI and RDI as scratch registers for struct copy operations, but these registers are callee-saved on Windows x64 and may contain live values assigned by the register allocator
+- **Symptom:** When Mem2Reg promoted stack variables to registers and assigned them to RSI/RDI, subsequent struct loads would overwrite the values, causing crashes or incorrect results in collection types (Set, Map)
+- **Fix:** Changed `genLoad` to use scratch registers R10/R11 instead of RSI/RDI for struct copy source/destination pointers
+- Added documentation noting that code generation must only use reserved scratch registers (R10/R11) or caller-saved registers for internal operations
+
+**Location:** [maxon-bin/backend/x86_codegen.cpp:906-917](maxon-bin/backend/x86_codegen.cpp#L906-L917)
 
 ### Winchester 1.4 (2025-12-01)
 
