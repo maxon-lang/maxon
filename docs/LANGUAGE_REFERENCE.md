@@ -792,6 +792,8 @@ end 'name'
 
 **Block Identifier**: The string after `end` must match the function name.
 
+**Return Type**: All functions must explicitly specify a return type. Use `void` for functions that don't return a value.
+
 ### Examples
 
 **No Parameters**
@@ -799,6 +801,13 @@ end 'name'
 function getAnswer() int
     return 42
 end 'getAnswer'
+```
+
+**Void Return Type**
+```maxon
+function greet(name string) void
+    print("Hello, " + name)
+end 'greet'
 ```
 
 **Multiple Parameters**

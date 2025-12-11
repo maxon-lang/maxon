@@ -459,6 +459,16 @@ std::string compileProgram(const CompilationOptions &options) {
 				programs.push_back(parseFile(file, silentLogger));
 			}
 
+			// Check for parse errors in newly parsed stdlib files
+			for (size_t i = 0; i < programs.size(); i++) {
+				if (programs[i]->hasParseErrors()) {
+					const auto &error = programs[i]->parseErrors[0];
+					std::cerr << "In file '" << normalizePathForDisplay(allFiles[i]) << "':\n"
+							  << error.message << std::endl;
+					throw std::runtime_error("");
+				}
+			}
+
 			continue;
 		}
 

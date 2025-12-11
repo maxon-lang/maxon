@@ -131,6 +131,10 @@ class KeywordMatcher {
 					"Boolean type (true or false)",
 					"bool",
 					KeywordCompletionKind::Keyword);
+		add_keyword("void", KeywordCategory::Type,
+					"Void type - indicates function returns no value",
+					"void",
+					KeywordCompletionKind::Keyword);
 
 		// Control flow
 		add_keyword("if", KeywordCategory::ControlFlow,

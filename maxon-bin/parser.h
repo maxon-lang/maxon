@@ -63,12 +63,12 @@ class Parser {
 	void expectAdvance(TokenType type, const std::string &message);
 	void expectKeywordAdvance(const std::string &keyword, const std::string &message);
 	std::string parseQualifiedName(const std::string &context);
-	std::string parseTypeString(const std::string &context);			 // Parse type including 'array of T'
-	std::string parseTypeStringWithOptional(const std::string &context); // Parse type with optional 'or nil'
-	std::string parseOptionalReturnType(int rparenLine, bool allowSelfType = false); // Parse return type if on same line
+	std::string parseTypeString(const std::string &context);										  // Parse type including 'array of T'
+	std::string parseTypeStringWithOptional(const std::string &context);							  // Parse type with optional 'or nil'
+	std::string parseReturnType(int rparenLine, bool allowSelfType, const std::string &functionName); // Parse required return type
 
 	// Declaration parsing helpers
-	bool parseOptionalExport();													 // Parse optional 'export' keyword
+	bool parseOptionalExport();													  // Parse optional 'export' keyword
 	Token expectMatchingBlockId(const std::string &name, const std::string &ctx); // Validate end block identifier
 	std::vector<FunctionParameter> parseParameterList(const std::string *selfType, int selfLine, int selfColumn);
 	std::vector<std::unique_ptr<StmtAST>> parseStatementBody(); // Parse statements until 'end'

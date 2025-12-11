@@ -17,7 +17,8 @@ Key implementation details:
 - Parameters are parsed as comma-separated list of `name type` pairs
 - The closing identifier must match the function name exactly
 - Functions are generated as LLVM `Function` objects
-- All functions must explicitly return a value (no implicit returns)
+- All functions must explicitly specify a return type (use `void` for functions that don't return a value)
+- All non-void functions must explicitly return a value (no implicit returns)
 
 The `main()` function is special - it's the entry point and must return `int`. The compiler generates a `_start()` wrapper that calls `main()` and passes its return value to `ExitProcess()`.
 
@@ -102,5 +103,36 @@ end 'main'
 ```
 ```exitcode
 12
+```
+
+
+<!-- test: void-return-type -->
+```maxon
+function greet() void
+    print("Hello")
+end 'greet'
+
+function main() int
+    greet()
+    return 0
+end 'main'
+```
+```output
+Hello
+```
+
+
+<!-- test: missing-return-type-error -->
+```maxon
+function foo()
+    print("test")
+end 'foo'
+
+function main() int
+    return 0
+end 'main'
+```
+```error
+missing a return type
 ```
 

@@ -99,10 +99,10 @@ std::vector<std::unique_ptr<StmtAST>> Parser::parseStatementBody() {
 // Return Type Parsing
 // ============================================================================
 
-// Parse return type (optional - defaults to void)
+// Parse return type (required - must be explicit, including void)
 // Return type must be on the same line as the function signature
 // allowSelfType: if true, check for 'Self' identifier before normal type parsing (for interfaces)
-std::string Parser::parseOptionalReturnType(int rparenLine, bool allowSelfType) {
+std::string Parser::parseReturnType(int rparenLine, bool allowSelfType, const std::string &functionName) {
 	if (currentLine() == rparenLine) {
 		// Handle 'Self' type specially for interface methods
 		if (allowSelfType && check(TokenType::IDENTIFIER) && std::string(currentValue()) == "Self") {
@@ -116,7 +116,12 @@ std::string Parser::parseOptionalReturnType(int rparenLine, bool allowSelfType) 
 			return parseTypeStringWithOptional("return type");
 		}
 	}
-	return "void";
+	reportError("Function '" + functionName + "' is missing a return type\n"
+											  "  All functions must specify an explicit return type (use 'void' for functions that don't return a value)\n"
+											  "  Example: function " +
+					functionName + "(...) void",
+				currentLine(), currentColumn());
+	return "void"; // Return void to continue parsing after error
 }
 
 // ============================================================================
@@ -157,7 +162,7 @@ std::unique_ptr<FunctionAST> Parser::parseMethodImpl(const std::string &receiver
 	int rparenLine = currentLine();
 	expectAdvance(TokenType::RPAREN, "Expected ')'");
 
-	std::string returnType = parseOptionalReturnType(rparenLine);
+	std::string returnType = parseReturnType(rparenLine, false, methodName);
 
 	std::vector<std::unique_ptr<StmtAST>> body = parseStatementBody();
 
@@ -221,7 +226,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	int rparenLine = currentLine();
 	expectAdvance(TokenType::RPAREN, "Expected ')'");
 
-	std::string returnType = parseOptionalReturnType(rparenLine);
+	std::string returnType = parseReturnType(rparenLine, false, functionName);
 
 	// External functions don't have bodies
 	if (isExtern) {
@@ -622,23 +627,12 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 			} while (match(TokenType::COMMA));
 		}
 
+		int rparenLine = currentLine();
 		expectAdvance(TokenType::RPAREN, "Expected ')' after method parameters");
 
-		// Parse return type (optional - defaults to void)
+		// Parse return type (required - explicit, including void)
 		// Handle Self type specially
-		std::string returnType = "void";
-		if (check(TokenType::IDENTIFIER) && std::string(currentValue()) == "Self") {
-			returnType = "Self";
-			advance();
-		} else {
-			auto retKd = currentKeywordData();
-			bool hasReturnType = (retKd && retKd->category == KeywordCategory::Type) ||
-								 check(TokenType::IDENTIFIER) ||
-								 check(TokenType::LBRACKET);
-			if (hasReturnType) {
-				returnType = parseTypeStringWithOptional("return type");
-			}
-		}
+		std::string returnType = parseReturnType(rparenLine, true, methodName);
 
 		// Check if this method has a default implementation body
 		// If next token is not 'function' or 'end', it must be the start of a body
