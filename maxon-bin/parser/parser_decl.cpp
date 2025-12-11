@@ -504,10 +504,8 @@ std::unique_ptr<EnumDefAST> Parser::parseEnum() {
 			continue;
 		}
 
-		// Parse case: case caseName or case caseName = value or case caseName(args)
-		expectKeywordAdvance("case", "Expected 'case' or 'function' in enum");
-
-		Token caseNameToken = expect(TokenType::IDENTIFIER, "Expected case name after 'case'");
+		// Parse case: caseName or caseName = value or caseName(args)
+		Token caseNameToken = expect(TokenType::IDENTIFIER, "Expected case name or 'function' in enum");
 		std::string caseName = caseNameToken.value;
 
 		std::vector<EnumAssocValue> associatedValues;

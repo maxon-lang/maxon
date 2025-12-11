@@ -223,7 +223,7 @@ class KeywordMatcher {
 					true, true); // isBlockKeyword=true, isNamedBlock=true
 		add_keyword("enum", KeywordCategory::Declaration,
 					"Enumeration type declaration - defines a type with named values",
-					"enum $1\n\tcase $2\nend '$1'",
+					"enum $1\n\t$2\nend '$1'",
 					KeywordCompletionKind::Keyword,
 					true, true); // isBlockKeyword=true, isNamedBlock=true
 		add_keyword("interface", KeywordCategory::Declaration,
@@ -262,10 +262,6 @@ class KeywordMatcher {
 		add_keyword("to", KeywordCategory::Declaration,
 					"Map value type specifier",
 					"to",
-					KeywordCompletionKind::Keyword);
-		add_keyword("case", KeywordCategory::Declaration,
-					"Enum case declaration - defines an enumeration value",
-					"case $1",
 					KeywordCompletionKind::Keyword);
 		add_keyword("array", KeywordCategory::Type,
 					"Array type - use 'array of T' for collections",

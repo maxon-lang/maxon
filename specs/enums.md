@@ -1,7 +1,7 @@
 ---
 feature: enums
 status: experimental
-keywords: [enum, case, enumeration, associated values, raw values]
+keywords: [enum, enumeration, associated values, raw values]
 category: type-system
 ---
 
@@ -16,33 +16,33 @@ Enums are sum types that define a type with a fixed set of named variants (cases
 **Simple enum:**
 ```
 enum EnumName
-    case caseName
-    case caseName2
+    caseName
+    caseName2
 end 'EnumName'
 ```
 
 **Raw value enum:**
 ```
 enum EnumName int
-    case caseName = 1
-    case caseName2 = 2
+    caseName = 1
+    caseName2 = 2
 end 'EnumName'
 ```
 
 **Enum with associated values:**
 ```
 enum EnumName
-    case caseName(fieldName Type)
-    case caseName2(field1 Type1, field2 Type2)
-    case caseName3
+    caseName(fieldName Type)
+    caseName2(field1 Type1, field2 Type2)
+    caseName3
 end 'EnumName'
 ```
 
 **Enum with methods:**
 ```
 enum EnumName
-    case caseName
-    case caseName2
+    caseName
+    caseName2
 
     function methodName() returns ReturnType
         // method body - use 'self' to access the enum value
@@ -70,13 +70,12 @@ end 'EnumName'
 
 **Lexer:**
 - Add `enum` keyword (Declaration category)
-- `case` keyword already exists
 
 **Parser:**
 - `parseEnumDef()` in parser_decl.cpp
 - Parse optional raw value type after enum name
-- Parse case with optional `= value` for raw values
-- Parse case with optional `(params)` for associated values
+- Parse enum case with optional `= value` for raw values
+- Parse enum case with optional `(params)` for associated values
 - Parse methods inside enum body (same as struct methods)
 
 **AST Nodes:**
@@ -131,10 +130,10 @@ The simplest form of enum defines named cases with no additional data:
 
 ```maxon
 enum Direction
-    case north
-    case south
-    case east
-    case west
+    north
+    south
+    east
+    west
 end 'Direction'
 ```
 
@@ -150,15 +149,15 @@ Enums can have an underlying raw value type (`int` or `string`):
 
 ```maxon
 enum HttpStatus int
-    case ok = 200
-    case notFound = 404
-    case serverError = 500
+    ok = 200
+    notFound = 404
+    serverError = 500
 end 'HttpStatus'
 
 enum Planet string
-    case earth = "Earth"
-    case mars = "Mars"
-    case venus = "Venus"
+    earth = "Earth"
+    mars = "Mars"
+    venus = "Venus"
 end 'Planet'
 ```
 
@@ -175,9 +174,9 @@ Cases can carry additional data called associated values:
 
 ```maxon
 enum Result
-    case success(value int)
-    case failure(code int, message string)
-    case pending
+    success(value int)
+    failure(code int, message string)
+    pending
 end 'Result'
 ```
 
@@ -195,9 +194,9 @@ Use `match` statements to extract associated values from enum cases:
 
 ```maxon
 match result 'handle'
-    case success(value) then return value
-    case failure(code, msg) then print(msg)
-    case pending then print("waiting...")
+    success(value) then return value
+    failure(code, msg) then print(msg)
+    pending then print("waiting...")
 end 'handle'
 ```
 
@@ -207,8 +206,8 @@ Match expressions also support value extraction using `gives`:
 
 ```maxon
 var extracted = match container 'get'
-    case empty gives 0
-    case value(n) gives n
+    empty gives 0
+    value(n) gives n
 end 'get'
 ```
 
@@ -230,10 +229,10 @@ Enums can have methods, similar to structs:
 
 ```maxon
 enum Direction
-    case north
-    case south
-    case east
-    case west
+    north
+    south
+    east
+    west
 
     function opposite() returns Direction
         if self == Direction.north 'n'
@@ -273,10 +272,10 @@ var vert = dir.isVertical() // true
 <!-- test: simple-enum -->
 ```maxon
 enum Direction
-    case north
-    case south
-    case east
-    case west
+    north
+    south
+    east
+    west
 end 'Direction'
 
 function main() returns int
@@ -294,9 +293,9 @@ end 'main'
 <!-- test: enum-assignment -->
 ```maxon
 enum Color
-    case red
-    case green
-    case blue
+    red
+    green
+    blue
 end 'Color'
 
 function main() returns int
@@ -315,9 +314,9 @@ end 'main'
 <!-- test: enum-not-equal -->
 ```maxon
 enum Status
-    case pending
-    case active
-    case done
+    pending
+    active
+    done
 end 'Status'
 
 function main() returns int
@@ -335,9 +334,9 @@ end 'main'
 <!-- test: enum-comparison -->
 ```maxon
 enum Status
-    case pending
-    case active
-    case done
+    pending
+    active
+    done
 end 'Status'
 
 function main() returns int
@@ -359,8 +358,8 @@ end 'main'
 <!-- test: enum-function-param -->
 ```maxon
 enum Status
-    case on
-    case off
+    on
+    off
 end 'Status'
 
 function isOn(s Status) returns bool
@@ -385,8 +384,8 @@ end 'main'
 <!-- test: enum-return-type -->
 ```maxon
 enum Result
-    case success
-    case failure
+    success
+    failure
 end 'Result'
 
 function getResult(succeed bool) returns Result
@@ -411,9 +410,9 @@ end 'main'
 <!-- test: raw-value-int -->
 ```maxon
 enum HttpStatus int
-    case ok = 200
-    case notFound = 404
-    case serverError = 500
+    ok = 200
+    notFound = 404
+    serverError = 500
 end 'HttpStatus'
 
 function main() returns int
@@ -431,9 +430,9 @@ end 'main'
 <!-- test: raw-value-int-comparison -->
 ```maxon
 enum Priority int
-    case low = 1
-    case medium = 5
-    case high = 10
+    low = 1
+    medium = 5
+    high = 10
 end 'Priority'
 
 function main() returns int
@@ -452,8 +451,8 @@ end 'main'
 <!-- test: associated-value-construction -->
 ```maxon
 enum Container
-    case empty
-    case value(n int)
+    empty
+    value(n int)
 end 'Container'
 
 function main() returns int
@@ -473,8 +472,8 @@ end 'main'
 <!-- test: enum-method -->
 ```maxon
 enum Direction
-    case north
-    case south
+    north
+    south
 
     function isNorth() returns bool
         if self == Direction.north 'check'
@@ -499,8 +498,8 @@ end 'main'
 <!-- test: enum-method-returns-enum -->
 ```maxon
 enum Toggle
-    case on
-    case off
+    on
+    off
 
     function flip() returns Toggle
         if self == Toggle.on 'check'
@@ -526,8 +525,8 @@ end 'main'
 <!-- test: error.duplicate-case -->
 ```maxon
 enum Color
-    case red
-    case red
+    red
+    red
 end 'Color'
 
 function main() returns int
@@ -535,18 +534,18 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 10
+Semantic Error: line 4, column 5
 Duplicate enum case 'red' in enum 'Color'
 
-  4 |     case red
-    |          ^
+  4 |     red
+    |     ^
 ```
 
 <!-- test: error.unknown-enum-case -->
 ```maxon
 enum Color
-    case red
-    case blue
+    red
+    blue
 end 'Color'
 
 function main() returns int
@@ -572,8 +571,8 @@ The variable '_c' is assigned but its value is never used
 <!-- test: error.duplicate-raw-value -->
 ```maxon
 enum Status int
-    case ok = 200
-    case success = 200
+    ok = 200
+    success = 200
 end 'Status'
 
 function main() returns int
@@ -581,17 +580,17 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 10
+Semantic Error: line 4, column 5
 Duplicate raw value 200 in enum 'Status'
 
-  4 |     case success = 200
-    |          ^
+  4 |     success = 200
+    |     ^
 ```
 
 <!-- test: error.raw-value-type-mismatch -->
 ```maxon
 enum Status int
-    case ok = "success"
+    ok = "success"
 end 'Status'
 
 function main() returns int
@@ -599,18 +598,18 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 3, column 15
+Semantic Error: line 3, column 10
 Raw value type 'string' does not match enum raw value type 'int'
 
-  3 |     case ok = "success"
-    |               ^
+  3 |     ok = "success"
+    |          ^
 ```
 
 <!-- test: error.rawvalue-on-simple-enum -->
 ```maxon
 enum Color
-    case red
-    case blue
+    red
+    blue
 end 'Color'
 
 function main() returns int
@@ -630,8 +629,8 @@ Cannot access 'rawValue' on enum 'Color' which has no raw value type
 <!-- test: error.associated-value-wrong-count -->
 ```maxon
 enum Result
-    case success(value int)
-    case failure
+    success(value int)
+    failure
 end 'Result'
 
 function main() returns int
@@ -656,7 +655,7 @@ The variable '_r' is assigned but its value is never used
 <!-- test: error.associated-value-type-mismatch -->
 ```maxon
 enum Container
-    case value(n int)
+    value(n int)
 end 'Container'
 
 function main() returns int
@@ -681,15 +680,15 @@ The variable '_c' is assigned but its value is never used
 <!-- test: match-enum-binding-simple -->
 ```maxon
 enum Container
-    case empty
-    case value(n int)
+    empty
+    value(n int)
 end 'Container'
 
 function main() returns int
     var c = Container.value(42)
     match c 'extract'
-        case empty then return 0
-        case value(n) then return n
+        empty then return 0
+        value(n) then return n
     end 'extract'
 end 'main'
 ```
@@ -700,15 +699,15 @@ end 'main'
 <!-- test: match-enum-binding-multiple -->
 ```maxon
 enum Result
-    case success(value int)
-    case failure(code int)
+    success(value int)
+    failure(code int)
 end 'Result'
 
 function main() returns int
     var r = Result.failure(404)
     match r 'handle'
-        case success(v) then return v
-        case failure(c) then return c
+        success(v) then return v
+        failure(c) then return c
     end 'handle'
 end 'main'
 ```
@@ -719,15 +718,15 @@ end 'main'
 <!-- test: match-expr-enum-binding -->
 ```maxon
 enum Container
-    case empty
-    case value(n int)
+    empty
+    value(n int)
 end 'Container'
 
 function main() returns int
     var c = Container.value(10)
     var result = match c 'get'
-        case empty gives 0
-        case value(n) gives n * 2
+        empty gives 0
+        value(n) gives n * 2
     end 'get'
     return result
 end 'main'
@@ -739,15 +738,15 @@ end 'main'
 <!-- test: match-enum-no-binding -->
 ```maxon
 enum Container
-    case empty
-    case value(n int)
+    empty
+    value(n int)
 end 'Container'
 
 function main() returns int
     var c = Container.empty
     match c 'check'
-        case empty then return 1
-        case value(n) then return n
+        empty then return 1
+        value(n) then return n
     end 'check'
 end 'main'
 ```
@@ -758,13 +757,13 @@ end 'main'
 <!-- test: error.match-enum-wrong-binding-count -->
 ```maxon
 enum Container
-    case value(n int)
+    value(n int)
 end 'Container'
 
 function main() returns int
     var c = Container.value(42)
     match c 'extract'
-        case value(a, b) then return a
+        value(a, b) then return a
     end 'extract'
 end 'main'
 ```
@@ -772,21 +771,21 @@ end 'main'
 Semantic Error: line 9, column 9
 Wrong number of bindings for case 'value': expected 1, got 2
 
-  9 |         case value(a, b) then return a
+  9 |         value(a, b) then return a
     |         ^
 ```
 
 <!-- test: error.match-enum-unknown-case -->
 ```maxon
 enum Container
-    case empty
-    case value(n int)
+    empty
+    value(n int)
 end 'Container'
 
 function main() returns int
     var c = Container.value(42)
     match c 'extract'
-        case unknown(x) then return x
+        unknown(x) then return x
     end 'extract'
 end 'main'
 ```
@@ -794,7 +793,7 @@ end 'main'
 Semantic Error: line 10, column 9
 Unknown case 'unknown' for enum 'Container'
 
-  10 |         case unknown(x) then return x
+  10 |         unknown(x) then return x
      |         ^
 
 Semantic Error: line 9, column 5

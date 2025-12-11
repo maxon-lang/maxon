@@ -67,7 +67,7 @@ Single-line comments only:
 
 ### Keywords
 ```
-and, as, bool, break, case, continue, default, else, end, enum, export, extern,
+and, as, bool, break, continue, default, else, end, enum, export, extern,
 fallthrough, false, float, for, function, gives, if, in, int, interface, is, let, match,
 nil, not, or, return, struct, then, true, var, while
 ```
@@ -585,10 +585,10 @@ The simplest form of enum defines named cases with no additional data:
 
 ```maxon
 enum Direction
-    case north
-    case south
-    case east
-    case west
+    north
+    south
+    east
+    west
 end 'Direction'
 ```
 
@@ -604,14 +604,14 @@ Enums can have an underlying raw value type (`int` or `string`):
 
 ```maxon
 enum HttpStatus int
-    case ok = 200
-    case notFound = 404
-    case serverError = 500
+    ok = 200
+    notFound = 404
+    serverError = 500
 end 'HttpStatus'
 
 enum Planet string
-    case earth = "Earth"
-    case mars = "Mars"
+    earth = "Earth"
+    mars = "Mars"
 end 'Planet'
 ```
 
@@ -628,9 +628,9 @@ Cases can carry additional data called associated values:
 
 ```maxon
 enum Result
-    case success(value int)
-    case failure(code int, message string)
-    case pending
+    success(value int)
+    failure(code int, message string)
+    pending
 end 'Result'
 ```
 
@@ -648,9 +648,9 @@ Use `match` statements to extract associated values from enum cases. Each bindin
 
 ```maxon
 match result 'handle'
-    case success(value) then return value
-    case failure(code, msg) then print(msg)
-    case pending then print("waiting...")
+    success(value) then return value
+    failure(code, msg) then print(msg)
+    pending then print("waiting...")
 end 'handle'
 ```
 
@@ -658,8 +658,8 @@ Match expressions also support value extraction using `gives`:
 
 ```maxon
 var extracted = match container 'get'
-    case empty gives 0
-    case value(n) gives n * 2
+    empty gives 0
+    value(n) gives n * 2
 end 'get'
 ```
 
@@ -667,8 +667,8 @@ You can mix cases with and without bindings:
 
 ```maxon
 match result 'check'
-    case success(v) then return v    // Extracts value
-    case pending then return 0        // No extraction needed
+    success(v) then return v    // Extracts value
+    pending then return 0       // No extraction needed
 end 'check'
 ```
 
@@ -710,10 +710,10 @@ Enums can have methods, similar to structs:
 
 ```maxon
 enum Direction
-    case north
-    case south
+    north
+    south
 
-    returns Direction
+    function opposite() returns Direction
         if self == Direction.north 'check'
             return Direction.south
         end 'check'
@@ -735,8 +735,8 @@ Enums can be used as function parameters and return types:
 
 ```maxon
 enum Status
-    case on
-    case off
+    on
+    off
 end 'Status'
 
 function isOn(s Status) returns bool
@@ -746,7 +746,7 @@ function isOn(s Status) returns bool
     return false
 end 'isOn'
 
-returns Status
+function toggle(s Status) returns Status
     if s == Status.on 'check'
         return Status.off
     end 'check'
@@ -1109,18 +1109,18 @@ When `x = 1`, the first case matches, adds 10, then falls through to case 2 (add
 
 **Enum Case Pattern Matching:**
 
-For enums with associated values, use `case CaseName(bindings)` syntax to extract values:
+For enums with associated values, use `CaseName(bindings)` syntax to extract values:
 
 ```maxon
 enum Result
-    case success(value int)
-    case failure(code int)
+    success(value int)
+    failure(code int)
 end 'Result'
 
 var r = Result.success(42)
 match r 'handle'
-    case success(v) then return v      // v binds to 42
-    case failure(c) then return c
+    success(v) then return v      // v binds to 42
+    failure(c) then return c
 end 'handle'
 ```
 
@@ -1132,7 +1132,7 @@ end 'handle'
 - `and fallthrough` cannot be combined with `return`
 - For enums, all cases must be covered unless `default` is present
 - `default` must be the last case if present
-- Enum case patterns: `case CaseName(binding1, binding2)` extracts associated values
+- Enum case patterns: `CaseName(binding1, binding2)` extracts associated values
 
 ### Match Expression
 
@@ -1161,14 +1161,14 @@ end 'convert'
 **Enum Case Extraction:**
 ```maxon
 enum Container
-    case empty
-    case value(n int)
+    empty
+    value(n int)
 end 'Container'
 
 var c = Container.value(10)
 var result = match c 'get'
-    case empty gives 0
-    case value(n) gives n * 2    // result = 20
+    empty gives 0
+    value(n) gives n * 2    // result = 20
 end 'get'
 ```
 
@@ -1543,7 +1543,7 @@ if condition 'id' statements else 'id' statements end 'id'
 while condition 'id' statements end 'id'
 for var in iterable 'id' statements end 'id'
 match expr 'id' pattern then statement default then statement end 'id'
-match enum 'id' case Name(binding) then statement end 'id'  // enum pattern
+match enum 'id' Name(binding) then statement end 'id'  // enum pattern
 var x = match expr 'id' pattern gives value default gives value end 'id'
 break
 continue

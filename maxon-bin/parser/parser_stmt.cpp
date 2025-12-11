@@ -535,10 +535,10 @@ std::unique_ptr<MatchStmtAST> Parser::parseMatch() {
 		if (checkKeyword("default")) {
 			advance(); // consume 'default'
 			isDefault = true;
-		} else if (checkKeyword("case")) {
-			// Enum case pattern: case caseName(binding1, binding2) then ...
-			advance(); // consume 'case'
-			Token caseNameToken = expect(TokenType::IDENTIFIER, "Expected case name after 'case'");
+		} else if (check(TokenType::IDENTIFIER) &&
+				   (check(TokenType::LPAREN, 1) || checkKeyword("then", 1))) {
+			// Enum case pattern: caseName(binding1, binding2) then ... or caseName then ...
+			Token caseNameToken = expect(TokenType::IDENTIFIER, "Expected case name");
 			std::string caseName = caseNameToken.value;
 			std::vector<std::string> bindings;
 
@@ -654,10 +654,10 @@ std::unique_ptr<MatchExprAST> Parser::parseMatchExpr() {
 		if (checkKeyword("default")) {
 			advance(); // consume 'default'
 			isDefault = true;
-		} else if (checkKeyword("case")) {
-			// Enum case pattern: case caseName(binding1, binding2) gives ...
-			advance(); // consume 'case'
-			Token caseNameToken = expect(TokenType::IDENTIFIER, "Expected case name after 'case'");
+		} else if (check(TokenType::IDENTIFIER) &&
+				   (check(TokenType::LPAREN, 1) || checkKeyword("gives", 1))) {
+			// Enum case pattern: caseName(binding1, binding2) gives ... or caseName gives ...
+			Token caseNameToken = expect(TokenType::IDENTIFIER, "Expected case name");
 			std::string caseName = caseNameToken.value;
 			std::vector<std::string> bindings;
 

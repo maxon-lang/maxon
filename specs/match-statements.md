@@ -186,10 +186,10 @@ When matching on enum values without a `default` case, all enum cases must be co
 
 ```maxon
 enum Direction
-    case north
-    case south
-    case east
-    case west
+    north
+    south
+    east
+    west
 end 'Direction'
 
 function main() returns int
@@ -534,9 +534,9 @@ end 'main'
 <!-- test: match-enum.exhaustive -->
 ```maxon
 enum Color
-    case red
-    case green
-    case blue
+    red
+    green
+    blue
 end 'Color'
 
 function main() returns int
@@ -555,9 +555,9 @@ end 'main'
 <!-- test: match-enum.with-default -->
 ```maxon
 enum Color
-    case red
-    case green
-    case blue
+    red
+    green
+    blue
 end 'Color'
 
 function main() returns int
@@ -575,9 +575,9 @@ end 'main'
 <!-- test: match-enum.expression -->
 ```maxon
 enum Status
-    case pending
-    case approved
-    case rejected
+    pending
+    approved
+    rejected
 end 'Status'
 
 function main() returns int
@@ -650,9 +650,9 @@ Cannot combine 'fallthrough' with 'return' statement
 <!-- test: error.match-enum-not-exhaustive -->
 ```maxon
 enum Color
-    case red
-    case green
-    case blue
+    red
+    green
+    blue
 end 'Color'
 
 function main() returns int

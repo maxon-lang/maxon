@@ -38,7 +38,7 @@ export struct CodeGen
 
     export returns nothing
         match decl 'gen'
-            case function_(name, params, returnType, body, isExport, isExtern, loc) then
+            function_(name, params, returnType, body, isExport, isExtern, loc) then
                 genFunction(name, returnType, body)
         end 'gen'
     end 'genDecl'
@@ -68,14 +68,14 @@ export struct CodeGen
 
     export returns nothing
         match stmt 'gen'
-            case return_(value, loc) then
+            return_(value, loc) then
                 if let v = value 'hasValue'
                     var temp = genExpr(v)
                     emit("    ret i32 " + temp)
                 else 'hasValue'
                     emit("    ret void")
                 end 'hasValue'
-            case let_(name, typeAnnotation, value, loc) then
+            let_(name, typeAnnotation, value, loc) then
                 var valueTemp = genExpr(value)
                 var varTemp = newTemp()
                 emit("    " + varTemp + " = copy i32 " + valueTemp)
@@ -85,9 +85,9 @@ export struct CodeGen
 
     export function genExpr(expr Expr) returns string
         match expr 'gen'
-            case intLiteral(value, loc) then
+            intLiteral(value, loc) then
                 return value.toString()
-            case varRef(name, loc) then
+            varRef(name, loc) then
                 return localVars[name]
         end 'gen'
     end 'genExpr'

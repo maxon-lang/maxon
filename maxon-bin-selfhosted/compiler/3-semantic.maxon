@@ -66,7 +66,7 @@ export struct SemanticAnalyzer
 
     export returns nothing
         match decl 'analyze'
-            case function_(name, params, returnType, body, isExport, isExtern, loc) then
+            function_(name, params, returnType, body, isExport, isExtern, loc) then
                 if name == "main" 'isMain'
                     hasMain = true
                 end 'isMain'
@@ -83,11 +83,11 @@ export struct SemanticAnalyzer
 
     export returns nothing
         match stmt 'analyze'
-            case return_(value, loc) then
+            return_(value, loc) then
                 if let v = value 'hasValue'
                     analyzeExpr(v)
                 end 'hasValue'
-            case let_(name, typeAnnotation, value, loc) then
+            let_(name, typeAnnotation, value, loc) then
                 analyzeExpr(value)
                 // For now, assume int type (inferred from literal)
                 localVars[name] = TypeRef.intType()
@@ -96,9 +96,9 @@ export struct SemanticAnalyzer
 
     export returns nothing
         match expr 'analyze'
-            case intLiteral(value, loc) then
+            intLiteral(value, loc) then
                 // Nothing to check
-            case varRef(name, loc) then
+            varRef(name, loc) then
                 if not localVars.has(name) 'undefined'
                     addError("Undefined variable: " + name, loc)
                 end 'undefined'
