@@ -170,6 +170,20 @@ struct EnumInfo {
 	}
 };
 
+// Global constant information (for top-level let declarations)
+struct GlobalConstInfo {
+	std::string name;
+	std::string type;
+	bool isExported;
+	int line;
+	int column;
+
+	GlobalConstInfo() : isExported(false), line(0), column(0) {}
+
+	GlobalConstInfo(const std::string &n, const std::string &t, bool exported, int l = 0, int c = 0)
+		: name(n), type(t), isExported(exported), line(l), column(c) {}
+};
+
 // Cached semantic analysis result for a single function
 // Used for incremental re-analysis when only part of a document changes
 struct FunctionSemanticResult {
@@ -274,6 +288,9 @@ class SemanticAnalyzer {
 	// Get all enums
 	const std::map<std::string, EnumInfo> &getEnums() const { return enums; }
 
+	// Get all global constants
+	const std::map<std::string, GlobalConstInfo> &getGlobalConstants() const { return globalConstants; }
+
 	// Get persistent symbol table (all variables ever declared, for LSP)
 	const std::map<std::string, VariableInfo> &getAllDeclaredVariables() const { return allDeclaredVariables; }
 
@@ -318,6 +335,7 @@ class SemanticAnalyzer {
 	std::map<std::string, StructInfo> structs;					 // Struct definitions
 	std::map<std::string, EnumInfo> enums;						 // Enum definitions
 	std::map<std::string, InterfaceInfo> interfaces;			 // Interface definitions
+	std::map<std::string, GlobalConstInfo> globalConstants;		 // Global constant definitions
 	std::map<std::string, VariableInfo> variables;				 // Current scope variables
 	std::vector<std::map<std::string, VariableInfo>> scopeStack; // Stack of variable scopes
 	int loopDepth;												 // Track nested loop depth

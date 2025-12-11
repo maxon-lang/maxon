@@ -365,6 +365,9 @@ std::string compileProgram(const CompilationOptions &options) {
 			for (auto &enumDef : prog->enums) {
 				mergedProgram->enums.push_back(std::move(enumDef));
 			}
+			for (auto &global : prog->globals) {
+				mergedProgram->globals.push_back(std::move(global));
+			}
 		}
 
 		programs.clear();

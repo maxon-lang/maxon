@@ -125,7 +125,7 @@ class FloatExprAST : public ExprAST {
 class VariableExprAST : public ExprAST {
   public:
 	std::string name;
-	bool isFunctionReference = false;		 // True when name refers to a function (function as value)
+	bool isFunctionReference = false;		  // True when name refers to a function (function as value)
 	mutable std::string resolvedFunctionName; // Fully qualified function name if isFunctionReference
 
 	VariableExprAST(const std::string &n, int l = 0, int c = 0) : ExprAST(l, c), name(n) {}
@@ -200,8 +200,8 @@ class CallExprAST : public ExprAST {
 	std::string callee;
 	std::string resolvedCallee; // Resolved name (e.g., "map<int,int>.count" instead of just "count")
 	std::vector<std::unique_ptr<ExprAST>> args;
-	size_t functionId = SIZE_MAX;	  // Resolved during semantic analysis (SIZE_MAX = unresolved)
-	bool isSiblingMethodCall = false; // True when calling another method of the same type from within a method
+	size_t functionId = SIZE_MAX;		 // Resolved during semantic analysis (SIZE_MAX = unresolved)
+	bool isSiblingMethodCall = false;	 // True when calling another method of the same type from within a method
 	bool isFunctionVariableCall = false; // True when calling via a function-typed variable (e.g., callback(x))
 
 	// For enum case construction with associated values (e.g., Result.success(42))
@@ -599,8 +599,8 @@ struct InterfaceMethodSignature {
 	std::string name;
 	std::vector<FunctionParameter> parameters; // First param is 'self' with type 'Self'
 	std::string returnType;
-	bool hasDefaultImplementation = false;				   // True if this method has a default impl
-	std::vector<std::unique_ptr<StmtAST>> defaultBody;	   // Body of default impl (empty if none)
+	bool hasDefaultImplementation = false;			   // True if this method has a default impl
+	std::vector<std::unique_ptr<StmtAST>> defaultBody; // Body of default impl (empty if none)
 	int line;
 	int column;
 
@@ -820,9 +820,9 @@ struct MatchCaseAST {
 	int column;
 
 	// Enum case pattern fields (for pattern matching with value extraction)
-	bool isEnumCasePattern = false;					// true if this is 'case X(bindings)' pattern
-	std::string enumCaseName;						// Case name (e.g., "success")
-	std::vector<std::string> bindings;				// Variable names to bind associated values
+	bool isEnumCasePattern = false;	   // true if this is 'case X(bindings)' pattern
+	std::string enumCaseName;		   // Case name (e.g., "success")
+	std::vector<std::string> bindings; // Variable names to bind associated values
 
 	// Constructor for regular patterns
 	MatchCaseAST(std::vector<std::unique_ptr<ExprAST>> pats,
@@ -892,12 +892,12 @@ class MatchExprAST : public ExprAST {
 // multi-statement closures with block labels (e.g., x 'label' ... end 'label')
 class ClosureExprAST : public ExprAST {
   public:
-	std::vector<FunctionParameter> parameters;		 // Closure parameters
-	std::string returnType;							 // Return type (may be empty if inferred)
-	std::vector<std::unique_ptr<StmtAST>> body;		 // Statements in closure body (for multi-statement closures)
-	std::unique_ptr<ExprAST> singleExpr;			 // For single-expression closures like x gives x * 2
-	bool isSingleExpression;						 // True if closure is just an expression, false if has statements
-	std::string blockId;							 // Block identifier for multi-statement closures
+	std::vector<FunctionParameter> parameters;	// Closure parameters
+	std::string returnType;						// Return type (may be empty if inferred)
+	std::vector<std::unique_ptr<StmtAST>> body; // Statements in closure body (for multi-statement closures)
+	std::unique_ptr<ExprAST> singleExpr;		// For single-expression closures like x gives x * 2
+	bool isSingleExpression;					// True if closure is just an expression, false if has statements
+	std::string blockId;						// Block identifier for multi-statement closures
 
 	ClosureExprAST(std::vector<FunctionParameter> params,
 				   std::string retType,
@@ -984,6 +984,21 @@ class FunctionAST : public ASTNode {
 	}
 };
 
+// Global let declaration (compile-time constant)
+class GlobalLetDeclAST : public ASTNode {
+  public:
+	std::string name;
+	std::string type; // "int", "float", "bool", "string", or "" for inferred
+	std::unique_ptr<ExprAST> initializer;
+	bool isExported;
+	int line;
+	int column;
+
+	GlobalLetDeclAST(const std::string &n, std::unique_ptr<ExprAST> init, const std::string &t = "",
+					 bool exported = false, int l = 0, int c = 0)
+		: name(n), type(t), initializer(std::move(init)), isExported(exported), line(l), column(c) {}
+};
+
 // Parse error information for error recovery (stored in ProgramAST)
 struct ASTParseError {
 	std::string message;
@@ -994,22 +1009,24 @@ struct ASTParseError {
 		: message(msg), line(l), column(c) {}
 };
 
-// Program (collection of functions, structs, enums, and interfaces)
+// Program (collection of functions, structs, enums, interfaces, and global constants)
 class ProgramAST : public ASTNode {
   public:
 	std::vector<std::unique_ptr<FunctionAST>> functions;
 	std::vector<std::unique_ptr<StructDefAST>> structs;
 	std::vector<std::unique_ptr<EnumDefAST>> enums;
 	std::vector<std::unique_ptr<InterfaceDefAST>> interfaces;
-	std::vector<ASTParseError> parseErrors; // Errors encountered during parsing
+	std::vector<std::unique_ptr<GlobalLetDeclAST>> globals; // Top-level let constants
+	std::vector<ASTParseError> parseErrors;					// Errors encountered during parsing
 
 	ProgramAST() = default;
 
 	ProgramAST(std::vector<std::unique_ptr<FunctionAST>> funcs,
 			   std::vector<std::unique_ptr<StructDefAST>> st = {},
 			   std::vector<std::unique_ptr<InterfaceDefAST>> protos = {},
-			   std::vector<std::unique_ptr<EnumDefAST>> en = {})
-		: functions(std::move(funcs)), structs(std::move(st)), enums(std::move(en)), interfaces(std::move(protos)) {}
+			   std::vector<std::unique_ptr<EnumDefAST>> en = {},
+			   std::vector<std::unique_ptr<GlobalLetDeclAST>> globs = {})
+		: functions(std::move(funcs)), structs(std::move(st)), enums(std::move(en)), interfaces(std::move(protos)), globals(std::move(globs)) {}
 
 	// Check if parsing encountered errors
 	bool hasParseErrors() const { return !parseErrors.empty(); }

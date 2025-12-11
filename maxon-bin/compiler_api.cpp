@@ -49,6 +49,100 @@ static std::string normalizeFilePath(const std::string &path) {
 }
 
 // ============================================================================
+// Expression to String Helper
+// ============================================================================
+
+// Convert a simple expression to a string representation for display
+static std::string exprToDisplayString(ExprAST *expr) {
+	if (!expr)
+		return "";
+
+	if (auto *num = dynamic_cast<NumberExprAST *>(expr)) {
+		return std::to_string(num->value);
+	}
+	if (auto *flt = dynamic_cast<FloatExprAST *>(expr)) {
+		std::ostringstream ss;
+		ss << flt->value;
+		return ss.str();
+	}
+	if (auto *boolExpr = dynamic_cast<BooleanExprAST *>(expr)) {
+		return boolExpr->value ? "true" : "false";
+	}
+	if (auto *ch = dynamic_cast<CharacterExprAST *>(expr)) {
+		return std::string("'") + ch->value + "'";
+	}
+	if (auto *str = dynamic_cast<StringLiteralExprAST *>(expr)) {
+		return "\"" + str->value + "\"";
+	}
+	if (auto *byteExpr = dynamic_cast<ByteExprAST *>(expr)) {
+		return std::to_string(byteExpr->value) + "b";
+	}
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
+		return varExpr->name;
+	}
+	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
+		std::string left = exprToDisplayString(binExpr->left.get());
+		std::string right = exprToDisplayString(binExpr->right.get());
+		std::string op;
+		switch (binExpr->op) {
+		case '+':
+			op = " + ";
+			break;
+		case '-':
+			op = " - ";
+			break;
+		case '*':
+			op = " * ";
+			break;
+		case '/':
+			op = " / ";
+			break;
+		case '%':
+			op = " mod ";
+			break;
+		case '<':
+			op = " < ";
+			break;
+		case '>':
+			op = " > ";
+			break;
+		case 'L':
+			op = " <= ";
+			break;
+		case 'G':
+			op = " >= ";
+			break;
+		case '=':
+			op = " == ";
+			break;
+		case '!':
+			op = " != ";
+			break;
+		case 'A':
+			op = " and ";
+			break;
+		case 'O':
+			op = " or ";
+			break;
+		default:
+			op = " ? ";
+			break;
+		}
+		return left + op + right;
+	}
+	if (auto *unaryExpr = dynamic_cast<UnaryExprAST *>(expr)) {
+		std::string operand = exprToDisplayString(unaryExpr->operand.get());
+		if (unaryExpr->op == '-')
+			return "-" + operand;
+		if (unaryExpr->op == '!')
+			return "not " + operand;
+		return operand;
+	}
+	// For complex expressions, just indicate there's a value
+	return "<expr>";
+}
+
+// ============================================================================
 // Documentation Extraction
 // ============================================================================
 
@@ -533,6 +627,27 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 		result.functions = analyzer.getFunctions();
 		result.structs = analyzer.getStructs();
 		result.interfaces = analyzer.getInterfaces();
+
+		// Add global constants to variables for hover support
+		for (const auto &[name, info] : analyzer.getGlobalConstants()) {
+			VariableInfo varInfo;
+			varInfo.name = name;
+			varInfo.type = info.type;
+			varInfo.isImmutable = true; // Global constants are always immutable
+			varInfo.isParameter = false;
+			varInfo.line = info.line;
+			varInfo.column = info.column;
+
+			// Find initializer value from AST
+			for (const auto &global : result.ast->globals) {
+				if (global->name == name) {
+					varInfo.initialValue = exprToDisplayString(global->initializer.get());
+					break;
+				}
+			}
+
+			result.variables[name] = varInfo;
+		}
 	}
 
 	return result;
@@ -669,6 +784,27 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 		result.functions = analyzer.getFunctions();
 		result.structs = analyzer.getStructs();
 		result.interfaces = analyzer.getInterfaces();
+
+		// Add global constants to variables for hover support
+		for (const auto &[name, info] : analyzer.getGlobalConstants()) {
+			VariableInfo varInfo;
+			varInfo.name = name;
+			varInfo.type = info.type;
+			varInfo.isImmutable = true; // Global constants are always immutable
+			varInfo.isParameter = false;
+			varInfo.line = info.line;
+			varInfo.column = info.column;
+
+			// Find initializer value from AST
+			for (const auto &global : result.ast->globals) {
+				if (global->name == name) {
+					varInfo.initialValue = exprToDisplayString(global->initializer.get());
+					break;
+				}
+			}
+
+			result.variables[name] = varInfo;
+		}
 	}
 
 	return result;

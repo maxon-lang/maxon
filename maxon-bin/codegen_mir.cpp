@@ -6,8 +6,10 @@
  */
 
 #include "codegen_mir.h"
+#include "const_eval.h"
 #include "lexer.h"
 #include "types/type_conversion.h"
+#include <cstring>
 #include <stdexcept>
 
 MIRCodeGenerator::MIRCodeGenerator(const std::string &moduleName, bool debugInfo, int verboseLevel,
@@ -1303,6 +1305,75 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 
 		enumTypes[enumDef->name] = enumInfo;
 		logTrace("Registered enum: " + enumDef->name + " (" + std::to_string(enumDef->cases.size()) + " cases)");
+	}
+
+	// Pass 1d: Generate global constants
+	logDetail("Pass 1d: Generating global constants (" + std::to_string(program->globals.size()) + " globals)");
+	if (!program->globals.empty()) {
+		// Use ConstExprEvaluator to evaluate all global initializers
+		ConstExprEvaluator evaluator;
+
+		// Register all globals
+		for (const auto &global : program->globals) {
+			evaluator.registerGlobal(global->name, global.get());
+		}
+
+		// Evaluate all globals (handles dependency ordering)
+		std::vector<std::string> evalErrors;
+		if (!evaluator.evaluateAll(evalErrors)) {
+			for (const auto &err : evalErrors) {
+				throw std::runtime_error(err);
+			}
+		}
+
+		// Create MIR globals from evaluated values
+		for (const auto &global : program->globals) {
+			auto valueOpt = evaluator.getGlobalValue(global->name);
+			auto typeOpt = evaluator.getGlobalType(global->name);
+
+			if (!valueOpt || !typeOpt) {
+				throw std::runtime_error("Failed to evaluate global constant '" + global->name + "'");
+			}
+
+			const ConstValue &value = *valueOpt;
+			const std::string &type = *typeOpt;
+
+			logTrace("Generating global: " + global->name + " : " + type);
+
+			if (type == "int") {
+				// Create global integer constant
+				mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getInt32());
+				mirGlobal->isConstant = true;
+				int32_t intVal = static_cast<int32_t>(std::get<int64_t>(value));
+				std::vector<uint8_t> data(4);
+				std::memcpy(data.data(), &intVal, 4);
+				mirGlobal->setInitializer(data);
+			} else if (type == "float") {
+				// Create global float constant
+				mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getFloat64());
+				mirGlobal->isConstant = true;
+				double floatVal = std::get<double>(value);
+				std::vector<uint8_t> data(8);
+				std::memcpy(data.data(), &floatVal, 8);
+				mirGlobal->setInitializer(data);
+			} else if (type == "bool") {
+				// Create global bool constant
+				mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getInt8());
+				mirGlobal->isConstant = true;
+				uint8_t boolVal = std::get<bool>(value) ? 1 : 0;
+				std::vector<uint8_t> data(1);
+				data[0] = boolVal;
+				mirGlobal->setInitializer(data);
+			} else if (type == "string") {
+				// Create global string constant (as raw string data)
+				// For strings, we store the data and length separately
+				const std::string &strVal = std::get<std::string>(value);
+				mir::MIRValue *strData = module->createGlobalString(global->name, strVal);
+				// Store reference in namedValues for lookup during codegen
+				// Note: String globals need special handling since they're struct-like
+				(void)strData; // For now, string globals use the existing string literal mechanism
+			}
+		}
 	}
 
 	// Second pass: Create all function declarations and register extern functions

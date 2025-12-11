@@ -115,7 +115,8 @@ class Parser {
 	std::unique_ptr<EnumDefAST> parseEnum();
 	std::unique_ptr<InterfaceDefAST> parseInterface();
 	std::unique_ptr<StructInitExprAST> parseStructInit(const std::string &structName);
-	std::unique_ptr<IfCaseStmtAST> parseIfCase(Token ifToken); // Parse if case statement
+	std::unique_ptr<IfCaseStmtAST> parseIfCase(Token ifToken);					 // Parse if case statement
+	std::unique_ptr<GlobalLetDeclAST> parseTopLevelLet(bool isExported = false); // Parse top-level let constant
 
 	// Logging helpers
 	void logTrace(const std::string &msg);

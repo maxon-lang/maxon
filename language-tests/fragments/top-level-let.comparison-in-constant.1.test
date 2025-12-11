@@ -1,0 +1,63 @@
+// Test: top-level-let.comparison-in-constant.1
+let IS_LARGE = 100 > 50
+
+function main() int
+    if IS_LARGE 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 8
+
+@IS_LARGE = constant i8 zeroinitializer
+
+define i32 @main() {
+entry0:
+  %0 = load i8, ptr @IS_LARGE
+  %1 = icmp ne i8 %0, 0
+  br i1 %1, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  ret i32 0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 8
+
+@IS_LARGE = constant i8 zeroinitializer
+
+define i32 @main() {
+entry0:
+  %0 = load i8, ptr @IS_LARGE
+  %1 = icmp ne i8 %0, 0
+  br i1 %1, label %then1, label %ifcont2
+then1:
+  ret i32 1
+ifcont2:
+  ret i32 0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 1

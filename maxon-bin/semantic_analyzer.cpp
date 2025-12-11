@@ -5,7 +5,28 @@
 #include "types/type_conversion.h"
 #include <algorithm>
 #include <functional>
+#include <queue>
 #include <sstream>
+
+// Helper to collect global constant references from an expression
+static void collectGlobalRefs(ExprAST *expr, const std::map<std::string, GlobalConstInfo> &globals,
+							  std::vector<std::string> &refs) {
+	if (!expr)
+		return;
+
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
+		if (globals.find(varExpr->name) != globals.end()) {
+			refs.push_back(varExpr->name);
+		}
+	} else if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
+		collectGlobalRefs(binExpr->left.get(), globals, refs);
+		collectGlobalRefs(binExpr->right.get(), globals, refs);
+	} else if (auto *unaryExpr = dynamic_cast<UnaryExprAST *>(expr)) {
+		collectGlobalRefs(unaryExpr->operand.get(), globals, refs);
+	} else if (auto *castExpr = dynamic_cast<CastExprAST *>(expr)) {
+		collectGlobalRefs(castExpr->expr.get(), globals, refs);
+	}
+}
 
 // Helper to convert simple literal expressions to string for display
 static std::string exprToString(ExprAST *expr) {
@@ -161,6 +182,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	// Note: Don't clear functions, structs, or interfaces here - we want to keep registered external ones
 	// structs.clear(); // Preserve external structs registered before analysis
 	// interfaces.clear(); // Preserve external interfaces registered before analysis
+	globalConstants.clear(); // Clear global constants for new analysis
 	variables.clear();
 	scopeStack.clear();
 	loopDepth = 0;
@@ -554,6 +576,137 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 		}
 	}
 
+	// Pass 2c: Register all global constants (names only, for forward reference support)
+	logTrace("Pass 2c: Registering global constants");
+	for (const auto &global : program->globals) {
+		std::string globalKey = (global->isExported && !global->name.empty())
+									? global->name // TODO: support namespace prefix for exports
+									: global->name;
+
+		logTrace("Registering global constant: " + globalKey);
+		if (globalConstants.find(globalKey) != globalConstants.end()) {
+			addError("Global constant '" + globalKey + "' is already defined",
+					 global->line, global->column);
+		} else {
+			// Type will be filled in during evaluation
+			globalConstants.emplace(globalKey, GlobalConstInfo(global->name, "", global->isExported, global->line, global->column));
+		}
+	}
+
+	// Pass 2d: Analyze global constant initializers and infer types
+	// We need to evaluate in dependency order to handle forward references
+	logTrace("Pass 2d: Analyzing global constant initializers");
+
+	// Build dependency graph for topological sort
+	std::unordered_map<std::string, std::vector<std::string>> dependencies;
+	std::unordered_map<std::string, int> inDegree;
+	std::unordered_map<std::string, GlobalLetDeclAST *> globalMap;
+
+	for (const auto &global : program->globals) {
+		if (globalConstants.find(global->name) == globalConstants.end()) {
+			continue; // Skip duplicates
+		}
+		globalMap[global->name] = global.get();
+		inDegree[global->name] = 0;
+		dependencies[global->name] = {};
+	}
+
+	// Collect dependencies for each global
+	for (const auto &global : program->globals) {
+		if (globalMap.find(global->name) == globalMap.end())
+			continue;
+
+		std::vector<std::string> refs;
+		collectGlobalRefs(global->initializer.get(), globalConstants, refs);
+		for (const auto &ref : refs) {
+			if (globalMap.find(ref) != globalMap.end() && ref != global->name) {
+				dependencies[ref].push_back(global->name);
+				inDegree[global->name]++;
+			}
+		}
+	}
+
+	// Kahn's algorithm for topological sort
+	std::queue<std::string> ready;
+	for (const auto &[name, degree] : inDegree) {
+		if (degree == 0) {
+			ready.push(name);
+		}
+	}
+
+	std::vector<std::string> sortedGlobals;
+	while (!ready.empty()) {
+		std::string current = ready.front();
+		ready.pop();
+		sortedGlobals.push_back(current);
+
+		for (const auto &dependent : dependencies[current]) {
+			if (--inDegree[dependent] == 0) {
+				ready.push(dependent);
+			}
+		}
+	}
+
+	// Check for circular dependencies
+	if (sortedGlobals.size() != globalMap.size()) {
+		std::vector<std::string> cycle;
+		for (const auto &[name, degree] : inDegree) {
+			if (degree > 0)
+				cycle.push_back(name);
+		}
+		std::string cycleStr;
+		for (size_t i = 0; i < cycle.size(); ++i) {
+			if (i > 0)
+				cycleStr += ", ";
+			cycleStr += cycle[i];
+		}
+		addError("Circular dependency detected among global constants: " + cycleStr,
+				 globalMap.begin()->second->line, globalMap.begin()->second->column);
+	} else {
+		// Analyze globals in dependency order
+		for (const auto &name : sortedGlobals) {
+			auto *global = globalMap[name];
+
+			// Analyze the initializer expression to get its type
+			std::string initType = analyzeExpression(global->initializer.get());
+			if (initType == "error") {
+				addError("Cannot determine type of global constant '" + global->name + "'",
+						 global->line, global->column);
+				continue;
+			}
+
+			// Check that initializer is a constant expression
+			auto *expr = global->initializer.get();
+			bool isConstant = false;
+			if (dynamic_cast<NumberExprAST *>(expr) ||
+				dynamic_cast<FloatExprAST *>(expr) ||
+				dynamic_cast<BooleanExprAST *>(expr) ||
+				dynamic_cast<StringLiteralExprAST *>(expr) ||
+				dynamic_cast<ByteExprAST *>(expr) ||
+				dynamic_cast<CharacterExprAST *>(expr)) {
+				isConstant = true;
+			} else if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
+				if (globalConstants.find(varExpr->name) != globalConstants.end()) {
+					isConstant = true;
+				}
+			} else if (dynamic_cast<BinaryExprAST *>(expr) ||
+					   dynamic_cast<UnaryExprAST *>(expr) ||
+					   dynamic_cast<CastExprAST *>(expr)) {
+				isConstant = true;
+			}
+
+			if (!isConstant) {
+				addError("Global constant '" + global->name + "' initializer must be a constant expression",
+						 global->line, global->column);
+				continue;
+			}
+
+			// Update the type in globalConstants
+			globalConstants[global->name].type = initType;
+			logTrace("  " + global->name + " : " + initType);
+		}
+	}
+
 	// Third pass: analyze each function and method body
 	logTrace("Pass 3: Analyzing function bodies");
 
@@ -880,6 +1033,13 @@ std::optional<VariableInfo> SemanticAnalyzer::lookupVariable(const std::string &
 				}
 			}
 		}
+	}
+
+	// Check global constants
+	auto globalIt = globalConstants.find(name);
+	if (globalIt != globalConstants.end()) {
+		// Global constants are always immutable
+		return VariableInfo(name, globalIt->second.type, true, globalIt->second.line, globalIt->second.column, false);
 	}
 
 	return std::nullopt;

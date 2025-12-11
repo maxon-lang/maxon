@@ -121,6 +121,8 @@ set(SOURCES
     semantic_analyzer/semantic_analyzer_expr.cpp
     semantic_analyzer/semantic_analyzer_stmt.cpp
     semantic_analyzer/semantic_analyzer_cache.cpp
+    # Constant expression evaluator
+    const_eval.cpp
     intrinsics.cpp
     error_formatter.cpp
     # Compiler API for LSP

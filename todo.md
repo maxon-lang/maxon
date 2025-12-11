@@ -13,8 +13,7 @@ StringProtocol: Extends BidirectionalCollection. This is the specific protocol t
 Why do this? By making String a Collection, you get hundreds of algorithms for free: .map, .filter, .reduce, .dropFirst, .split. The Swift team didn't have to write these specifically for Strings; they just inherited them from the Collection protocol logic.
 
 ## Priorities
-- the test command should use the -O option
-- implement Collection, use interface as parameter type ie function foo(x Collection) int
+- projects/build
 - investigate maxon-bin/tests
 - debugging (speed up the dev process)
 - memory safety (generational references)
@@ -200,4 +199,28 @@ Value: Vectors straight-line code. If you manually write x1 = a[0] + b[0]; x2 = 
 ## Potential optimizations
 - xor eax,eax to zero register. Done
 - use LEA for adds. Planned
+
+
+## Revised language syntax
+
+function funcname(a int) returns int
+function methodname(a int) returns nothing
+
+// if you want to only handle the success case or handle it first
+if let x = someFuncThatMightFail 'ok'
+end 'ok' else 'error'
+end 'error'
+
+if a == 42 'case_a'
+end 'case_a' else if a == 69 'case_b'
+end 'case_b' else 'default'
+end 'default'
+
+
+// if you only want to handle the error case
+let x = someFuncThatMightFail or 'errorhandler'
+end 'errorhandler'
+
+require named parameters
+parameter default values
 

@@ -56,6 +56,7 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 	std::vector<std::unique_ptr<StructDefAST>> structs;
 	std::vector<std::unique_ptr<EnumDefAST>> enums;
 	std::vector<std::unique_ptr<InterfaceDefAST>> interfaces;
+	std::vector<std::unique_ptr<GlobalLetDeclAST>> globals;
 
 	logDetail("Starting parse...");
 
@@ -78,6 +79,9 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 			} else if (checkKeyword("interface")) {
 				logTrace("Parsing interface definition");
 				interfaces.push_back(parseInterface());
+			} else if (checkKeyword("let")) {
+				logTrace("Parsing top-level let declaration");
+				globals.push_back(parseTopLevelLet(false));
 			} else if (checkKeyword("export")) {
 				// Peek at what comes after export (don't consume - let the parse functions handle export)
 				// We need to look ahead to determine which parser to call
@@ -98,20 +102,25 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 					cache_.set_position(savedPos);
 					logTrace("Parsing exported interface definition");
 					interfaces.push_back(parseInterface());
+				} else if (checkKeyword("let")) {
+					position = savedPos; // restore position
+					cache_.set_position(savedPos);
+					logTrace("Parsing exported top-level let declaration");
+					globals.push_back(parseTopLevelLet(true));
 				} else if (checkKeyword("extern") || checkKeyword("function")) {
 					position = savedPos; // restore position
 					cache_.set_position(savedPos);
 					logTrace("Parsing exported function definition");
 					functions.push_back(parseFunction());
 				} else {
-					reportError("Expected 'struct', 'enum', 'interface', 'extern function', or 'function' after 'export'",
+					reportError("Expected 'struct', 'enum', 'interface', 'let', 'extern function', or 'function' after 'export'",
 								currentLine(), currentColumn());
 				}
 			} else if (checkKeyword("extern") || checkKeyword("function")) {
 				logTrace("Parsing function definition");
 				functions.push_back(parseFunction());
 			} else {
-				reportError("Expected 'struct', 'enum', 'interface', 'export', 'function', or 'extern function' at top level",
+				reportError("Expected 'struct', 'enum', 'interface', 'let', 'export', 'function', or 'extern function' at top level",
 							currentLine(), currentColumn());
 			}
 		} catch (const std::runtime_error &e) {
@@ -137,10 +146,11 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 	logDetail("Parse complete: " + std::to_string(functions.size()) + " functions, " +
 			  std::to_string(structs.size()) + " structs, " +
 			  std::to_string(enums.size()) + " enums, " +
-			  std::to_string(interfaces.size()) + " interfaces" +
+			  std::to_string(interfaces.size()) + " interfaces, " +
+			  std::to_string(globals.size()) + " globals" +
 			  (parseErrors_.empty() ? "" : ", " + std::to_string(parseErrors_.size()) + " error(s)"));
 
-	auto program = std::make_unique<ProgramAST>(std::move(functions), std::move(structs), std::move(interfaces), std::move(enums));
+	auto program = std::make_unique<ProgramAST>(std::move(functions), std::move(structs), std::move(interfaces), std::move(enums), std::move(globals));
 
 	// Copy parse errors to ProgramAST for access after parsing
 	for (const auto &err : parseErrors_) {

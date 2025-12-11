@@ -1,0 +1,52 @@
+// Test: top-level-let.forward-reference.1
+let TOTAL = FIRST + SECOND
+let FIRST = 30
+let SECOND = 12
+
+function main() int
+    return TOTAL
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 5
+
+@TOTAL = constant i32 zeroinitializer
+
+define i32 @main() {
+entry0:
+  %0 = load i32, ptr @TOTAL
+  ret i32 %0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 5
+
+@TOTAL = constant i32 zeroinitializer
+
+define i32 @main() {
+entry0:
+  %0 = load i32, ptr @TOTAL
+  ret i32 %0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 42

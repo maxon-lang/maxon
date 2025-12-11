@@ -1,0 +1,56 @@
+// Test: top-level-let.constant-in-expression.1
+let OFFSET = 10
+
+function main() int
+    let x = 5
+    return x + OFFSET
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 6
+
+@OFFSET = constant i32 zeroinitializer
+
+define i32 @main() {
+entry0:
+  %2 = load i32, ptr @OFFSET
+  %3 = add i32 5, %2
+  ret i32 %3
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 9
+
+@OFFSET = constant i32 zeroinitializer
+
+define i32 @main() {
+entry0:
+  %0 = alloca i32
+  store i32 5, ptr %0
+  %1 = load i32, ptr %0
+  %2 = load i32, ptr @OFFSET
+  %3 = add i32 %1, %2
+  ret i32 %3
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 15

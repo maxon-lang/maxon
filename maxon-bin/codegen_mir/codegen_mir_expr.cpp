@@ -269,6 +269,13 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				}
 			}
 
+			// Check if this is a global constant
+			mir::MIRGlobal *global = module->getGlobal(varExpr->name);
+			if (global) {
+				// Load the global value
+				return builder->createLoad(global->type, mir::MIRValue::createGlobal(global->type, global->name), varExpr->name);
+			}
+
 			reportError("Unknown variable name: " + varExpr->name,
 						varExpr->line, varExpr->column);
 		}
@@ -888,7 +895,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			if (enumIt != enumTypes.end()) {
 				const EnumCodegenInfo &enumInfo = enumIt->second;
 
-					// For simple enums (no associated values), compare the i8 values directly
+				// For simple enums (no associated values), compare the i8 values directly
 				if (!enumInfo.hasAssociatedValues) {
 					mir::MIRValue *leftVal = generateExpr(binExpr->left.get());
 					mir::MIRValue *rightVal = generateExpr(binExpr->right.get());
