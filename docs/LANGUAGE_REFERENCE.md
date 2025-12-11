@@ -511,38 +511,38 @@ p.x = 15                 // Write field (if var, not let)
 
 ### Methods
 
-Methods are defined **inside the struct body** with an explicit `self` parameter:
+Methods are defined **inside the struct body** and can access fields directly (implicit `self`):
 
 ```maxon
 struct Point
     var x int
     var y int
 
-    returns Point
-        return Point{x: self.x + other.x, y: self.y + other.y}
+    function add(other Point) returns Point
+        return Point{x: x + other.x, y: y + other.y}
     end 'add'
 
-    export function magnitude(self Point) returns float
-        return sqrt((self.x * self.x + self.y * self.y) as float)
+    export function magnitude() returns float
+        return sqrt((x * x + y * y) as float)
     end 'magnitude'
 end 'Point'
 ```
 
 **Method Syntax Rules:**
 - Methods must be declared inside the struct body
-- The first parameter must be named `self` with the struct's type
+- Methods access struct fields directly without explicit `self`
 - Use `export` keyword before `function` to export individual methods
-- Methods are called with `Type.method(instance, args)` syntax
+- Methods are called using dot notation: `instance.method(args)`
 
 ### Calling Methods
 
-Methods are called using explicit type qualification:
+Methods are called using dot notation on instances:
 
 ```maxon
 var p1 = Point{x: 10, y: 20}
 var p2 = Point{x: 5, y: 10}
-var p3 = Point.add(p1, p2)      // p3 = {x: 15, y: 30}
-var mag = Point.magnitude(p1)
+var p3 = p1.add(p2)             // p3 = {x: 15, y: 30}
+var mag = p1.magnitude()
 ```
 
 ### Interfaces
@@ -551,7 +551,7 @@ Interfaces define a set of method signatures that structs can implement:
 
 ```maxon
 interface Hashable
-    function hash(self Self) returns int
+    function hash() returns int
 end 'Hashable'
 ```
 
@@ -562,14 +562,14 @@ struct Point is Hashable
     var x int
     var y int
 
-    function hash(self Point) returns int
-        return self.x + self.y * 31
+    function Hashable.hash() returns int
+        return x + y * 31
     end 'hash'
 end 'Point'
 ```
 
 **Interface Notes:**
-- `Self` in interface signatures refers to the conforming type
+- `Self` in interface method parameters/returns refers to the conforming type
 - A struct can conform to multiple interfaces: `struct Foo is A, B`
 - Methods implementing interface requirements follow the same syntax as regular methods
 
