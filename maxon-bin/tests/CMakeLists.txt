@@ -69,13 +69,21 @@ set(FRONTEND_SOURCES
     ../codegen_mir.cpp
     ../codegen_mir/codegen_mir_expr.cpp
     ../codegen_mir/codegen_mir_expr_string.cpp
-    ../codegen_mir/codegen_mir_expr_array.cpp
+    ../codegen_mir/codegen_mir_managed_array.cpp
+    ../codegen_mir/codegen_mir_optional.cpp
+    ../codegen_mir/codegen_mir_safeffi.cpp
     ../codegen_mir/codegen_mir_stmt.cpp
     ../codegen_mir/codegen_mir_stmt_decl.cpp
     ../codegen_mir/codegen_mir_stmt_assign.cpp
     ../codegen_mir/codegen_mir_stmt_loop.cpp
     ../codegen_mir/codegen_mir_function.cpp
     ../codegen_mir/codegen_mir_output.cpp
+    ../codegen_mir/codegen_mir_intrinsics.cpp
+    ../codegen_mir/intrinsic_codegen.cpp
+    ../codegen_mir/managed_array_builder.cpp
+    ../codegen_mir/managed_string_builder.cpp
+    ../file_utils.cpp
+    ../compiler.cpp
 )
 
 # Create a library from backend sources
@@ -150,6 +158,10 @@ add_executable(test_dwarf test_dwarf.cpp ${CATCH_SOURCE})
 target_link_libraries(test_dwarf backend_lib)
 target_compile_options(test_dwarf PRIVATE ${TEST_COMPILE_OPTIONS})
 
+# Stage 10: Build command (multi-file project compilation via CLI)
+add_executable(test_build test_build.cpp ${CATCH_SOURCE})
+target_compile_options(test_build PRIVATE ${TEST_COMPILE_OPTIONS})
+
 #==============================================================================
 # Combined test runner (all backend tests without frontend dependency)
 #==============================================================================
@@ -185,6 +197,7 @@ add_test(NAME DWARF COMMAND test_dwarf --reporter compact)
 
 # Frontend + backend tests (slower, full pipeline)
 add_test(NAME CodegenMIR COMMAND test_codegen_mir --reporter compact)
+add_test(NAME Build COMMAND test_build --reporter compact)
 
 # Combined runner
 add_test(NAME AllBackendTests COMMAND run_all_backend_tests --reporter compact)
