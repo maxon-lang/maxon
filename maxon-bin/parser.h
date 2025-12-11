@@ -65,7 +65,14 @@ class Parser {
 	std::string parseQualifiedName(const std::string &context);
 	std::string parseTypeString(const std::string &context);			 // Parse type including 'array of T'
 	std::string parseTypeStringWithOptional(const std::string &context); // Parse type with optional 'or nil'
-	std::string parseOptionalReturnType(int rparenLine);				 // Parse return type if on same line
+	std::string parseOptionalReturnType(int rparenLine, bool allowSelfType = false); // Parse return type if on same line
+
+	// Declaration parsing helpers
+	bool parseOptionalExport();													 // Parse optional 'export' keyword
+	Token expectMatchingBlockId(const std::string &name, const std::string &ctx); // Validate end block identifier
+	std::vector<FunctionParameter> parseParameterList(const std::string *selfType, int selfLine, int selfColumn);
+	std::vector<std::unique_ptr<StmtAST>> parseStatementBody(); // Parse statements until 'end'
+	std::unique_ptr<FunctionAST> parseMethodImpl(const std::string &receiverType, bool allowInterfacePrefix);
 
 	std::unique_ptr<ExprAST> parseExpression();
 	std::unique_ptr<ExprAST> parseBitwiseAnd();
