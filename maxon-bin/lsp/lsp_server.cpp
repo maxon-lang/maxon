@@ -1,4 +1,7 @@
 #include "lsp_server.h"
+#include "../file_utils.h"
+#include "../lexer.h"
+#include "../parser.h"
 #include "features/code_actions.h"
 #include "features/completion.h"
 #include "features/definition.h"
@@ -12,6 +15,7 @@
 #include "features/semantic_tokens.h"
 #include "features/signature_help.h"
 #include "json_rpc.h"
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -22,6 +26,17 @@ namespace maxon_lsp {
 
 using json = maxon::lsp::json;
 namespace lsp = maxon::lsp;
+
+// Normalizes a file path for consistent comparison across different sources
+static std::string normalizeFilePath(const std::string &path) {
+	std::string result = path;
+#ifdef _WIN32
+	std::transform(result.begin(), result.end(), result.begin(),
+				   [](unsigned char c) { return std::tolower(c); });
+	std::replace(result.begin(), result.end(), '/', '\\');
+#endif
+	return result;
+}
 
 // ============================================================================
 // Constructor
@@ -346,6 +361,90 @@ void LSPServer::handleDidSave(const json &params) {
 // Analysis and Diagnostics
 // ============================================================================
 
+// Load exported symbols from sibling .maxon files in the same directory
+StdlibSymbols LSPServer::loadProjectSymbols(const std::string &filePath) {
+	StdlibSymbols projectSymbols;
+
+	try {
+		std::filesystem::path currentFile = std::filesystem::absolute(filePath);
+		std::filesystem::path currentDir = currentFile.parent_path();
+		std::string normalizedCurrentPath = normalizeFilePath(currentFile.string());
+
+		// Find all .maxon files in the same directory (non-recursive)
+		for (const auto &entry : std::filesystem::directory_iterator(currentDir)) {
+			if (!entry.is_regular_file())
+				continue;
+			if (entry.path().extension() != ".maxon")
+				continue;
+
+			// Skip the current file
+			std::string siblingPath = std::filesystem::absolute(entry.path()).string();
+			if (normalizeFilePath(siblingPath) == normalizedCurrentPath)
+				continue;
+
+			// Skip stdlib files
+			if (!workspaceRoot_.empty()) {
+				std::filesystem::path stdlibPath = std::filesystem::path(workspaceRoot_) / "stdlib";
+				if (std::filesystem::exists(stdlibPath)) {
+					auto absStdlib = std::filesystem::absolute(stdlibPath);
+					auto relative = std::filesystem::path(siblingPath).lexically_relative(absStdlib);
+					if (!relative.empty() && relative.native()[0] != '.') {
+						continue; // File is in stdlib, skip it
+					}
+				}
+			}
+
+			// Read file content - check document manager first for open files
+			std::string source;
+			std::string siblingUri = pathToUri(siblingPath);
+			auto docOpt = documentManager_.getDocument(siblingUri);
+			if (docOpt.has_value()) {
+				source = docOpt.value()->content;
+			} else {
+				std::ifstream file(siblingPath);
+				if (!file)
+					continue;
+				std::stringstream buffer;
+				buffer << file.rdbuf();
+				source = buffer.str();
+			}
+
+			// Parse and extract exported symbols
+			try {
+				Lexer lexer(source);
+				TokenStream stream = lexer.tokenize_stream();
+				Parser parser(std::move(stream));
+				std::string fileNamespace = deriveNamespace(siblingPath);
+				parser.setDefaultNamespace(fileNamespace);
+				auto program = parser.parse();
+
+				// Extract only exported symbols
+				auto symbols = extractSymbolsFromAST(program.get(), source, true);
+
+				for (auto &sym : symbols) {
+					sym.filePath = siblingPath;
+					if (sym.kind == "function" || sym.kind == "method") {
+						projectSymbols.functions.push_back(std::move(sym));
+					} else if (sym.kind == "struct") {
+						projectSymbols.structs.push_back(std::move(sym));
+					} else if (sym.kind == "enum") {
+						projectSymbols.enums.push_back(std::move(sym));
+					} else if (sym.kind == "interface") {
+						projectSymbols.interfaces.push_back(std::move(sym));
+					}
+				}
+			} catch (...) {
+				// Skip files that fail to parse
+				continue;
+			}
+		}
+	} catch (...) {
+		// Ignore errors during project symbol discovery
+	}
+
+	return projectSymbols;
+}
+
 void LSPServer::analyzeDocument(const std::string &uri) {
 	// Get the document
 	auto docOpt = documentManager_.getDocument(uri);
@@ -370,8 +469,26 @@ void LSPServer::analyzeDocument(const std::string &uri) {
 	// Measure analysis time
 	auto startTime = std::chrono::steady_clock::now();
 
-	// Run analysis with stdlib support
-	LSPAnalysisResult result = analyzeForLSP(content, filePath, stdlib_);
+	// Load symbols from sibling project files
+	StdlibSymbols projectSymbols = loadProjectSymbols(filePath);
+
+	// Merge stdlib and project symbols
+	StdlibSymbols combinedSymbols = stdlib_;
+	for (auto &sym : projectSymbols.functions) {
+		combinedSymbols.functions.push_back(std::move(sym));
+	}
+	for (auto &sym : projectSymbols.structs) {
+		combinedSymbols.structs.push_back(std::move(sym));
+	}
+	for (auto &sym : projectSymbols.enums) {
+		combinedSymbols.enums.push_back(std::move(sym));
+	}
+	for (auto &sym : projectSymbols.interfaces) {
+		combinedSymbols.interfaces.push_back(std::move(sym));
+	}
+
+	// Run analysis with combined stdlib + project symbols
+	LSPAnalysisResult result = analyzeForLSP(content, filePath, combinedSymbols);
 
 	auto endTime = std::chrono::steady_clock::now();
 	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);

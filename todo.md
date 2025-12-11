@@ -207,7 +207,7 @@ function funcname(a int) returns int
 function methodname(a int) returns nothing
 
 // if you want to only handle the success case or handle it first
-if let x = someFuncThatMightFail 'ok'
+if a == 42 'ok'
 end 'ok' else 'error'
 end 'error'
 

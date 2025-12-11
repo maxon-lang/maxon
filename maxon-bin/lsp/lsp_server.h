@@ -146,6 +146,9 @@ class LSPServer {
 	// Analysis and diagnostics
 	// =========================================================================
 
+	// Load exported symbols from sibling .maxon files in the same directory
+	StdlibSymbols loadProjectSymbols(const std::string &filePath);
+
 	// Analyze a document and update the cache
 	void analyzeDocument(const std::string &uri);
 
