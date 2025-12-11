@@ -430,8 +430,11 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				// Array index expression (e.g., arr[0].field)
 				mir::MIRValue *objectValue = generateExpr(memberAccessExpr->object.get());
 				std::string arrayType = variableTypes[arrayIndexExpr->arrayName];
+				// Check both internal array types (_ManagedArray<T>) and struct types (array<T>)
 				if (maxon::TypeConversion::isArrayType(arrayType)) {
 					varType = maxon::TypeConversion::getArrayElementType(arrayType);
+				} else if (maxon::TypeConversion::isArrayStructType(arrayType)) {
+					varType = maxon::TypeConversion::getArrayStructElementType(arrayType);
 				}
 				objectPtr = objectValue;
 			} else if (auto *nestedMemberExpr = dynamic_cast<MemberAccessExprAST *>(memberAccessExpr->object.get())) {

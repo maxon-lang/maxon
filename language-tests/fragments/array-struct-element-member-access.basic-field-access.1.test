@@ -1,0 +1,174 @@
+// Test: array-struct-element-member-access.basic-field-access.1
+struct Point
+    var x int
+    var y int
+end 'Point'
+
+function main() returns int
+    var points = array of 3 Point
+    points[0] = Point{x: 10, y: 20}
+    points[1] = Point{x: 30, y: 40}
+    return points[0].x + points[1].y
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 54
+
+%Point = type { i32, i32 }
+%__ManagedArrayData_Point = type { ptr, i32, i32 }
+%array<Point> = type { %__ManagedArrayData_Point, i32 }
+
+@.__tag.free.points = constant [14 x i8] c"array cleanup\00"
+
+define i32 @main() {
+entry0:
+  %0 = alloca [3 x %Point]
+  %1 = alloca %array<Point>
+  %2 = getelementptr %array<Point>, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__ManagedArrayData_Point, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_Point, ptr %2, i32 0, i32 1
+  store i32 3, ptr %4
+  %5 = getelementptr %__ManagedArrayData_Point, ptr %2, i32 0, i32 2
+  store i32 0, ptr %5
+  %6 = getelementptr %array<Point>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i32 0, i64 24)
+  %8 = getelementptr %array<Point>, ptr %1, i32 0, i32 0
+  %9 = getelementptr %__ManagedArrayData_Point, ptr %8, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr %Point, ptr %10, i64 0
+  %12 = getelementptr %Point, ptr %11, i32 0, i32 0
+  store i32 10, ptr %12
+  %13 = getelementptr %Point, ptr %11, i32 0, i32 1
+  store i32 20, ptr %13
+  %14 = getelementptr %array<Point>, ptr %1, i32 0, i32 0
+  %15 = getelementptr %__ManagedArrayData_Point, ptr %14, i32 0, i32 0
+  %16 = load ptr, ptr %15
+  %17 = getelementptr %Point, ptr %16, i64 1
+  %18 = getelementptr %Point, ptr %17, i32 0, i32 0
+  store i32 30, ptr %18
+  %19 = getelementptr %Point, ptr %17, i32 0, i32 1
+  store i32 40, ptr %19
+  %20 = getelementptr %array<Point>, ptr %1, i32 0, i32 0
+  %21 = getelementptr %__ManagedArrayData_Point, ptr %20, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = getelementptr %Point, ptr %22, i64 0
+  %24 = getelementptr %Point, ptr %23, i32 0, i32 0
+  %25 = load i32, ptr %24
+  %26 = getelementptr %array<Point>, ptr %1, i32 0, i32 0
+  %27 = getelementptr %__ManagedArrayData_Point, ptr %26, i32 0, i32 0
+  %28 = load ptr, ptr %27
+  %29 = getelementptr %Point, ptr %28, i64 1
+  %30 = getelementptr %Point, ptr %29, i32 0, i32 1
+  %31 = load i32, ptr %30
+  %32 = add i32 %25, %31
+  %33 = getelementptr %array<Point>, ptr %1, i32 0, i32 0
+  %34 = getelementptr %__ManagedArrayData_Point, ptr %33, i32 0, i32 0
+  %35 = load ptr, ptr %34
+  %36 = getelementptr %__ManagedArrayData_Point, ptr %33, i32 0, i32 2
+  %37 = load i32, ptr %36
+  %38 = icmp sgt i32 %37, 0
+  br i1 %38, label %points.release1, label %points.skip2
+points.release1:
+  call void @_managed_array_release(ptr %35, ptr @.__tag.free.points)
+  br label %points.skip2
+points.skip2:
+  ret i32 %32
+}
+
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 54
+
+%Point = type { i32, i32 }
+%__ManagedArrayData_Point = type { ptr, i32, i32 }
+%array<Point> = type { %__ManagedArrayData_Point, i32 }
+
+@.__tag.free.points = constant [14 x i8] c"array cleanup\00"
+
+define i32 @main() {
+entry0:
+  %0 = alloca [3 x %Point]
+  %1 = alloca %array<Point>
+  %2 = getelementptr %array<Point>, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__ManagedArrayData_Point, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_Point, ptr %2, i32 0, i32 1
+  store i32 3, ptr %4
+  %5 = getelementptr %__ManagedArrayData_Point, ptr %2, i32 0, i32 2
+  store i32 0, ptr %5
+  %6 = getelementptr %array<Point>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i32 0, i64 24)
+  %8 = getelementptr %array<Point>, ptr %1, i32 0, i32 0
+  %9 = getelementptr %__ManagedArrayData_Point, ptr %8, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr %Point, ptr %10, i64 0
+  %12 = getelementptr %Point, ptr %11, i32 0, i32 0
+  store i32 10, ptr %12
+  %13 = getelementptr %Point, ptr %11, i32 0, i32 1
+  store i32 20, ptr %13
+  %14 = getelementptr %array<Point>, ptr %1, i32 0, i32 0
+  %15 = getelementptr %__ManagedArrayData_Point, ptr %14, i32 0, i32 0
+  %16 = load ptr, ptr %15
+  %17 = getelementptr %Point, ptr %16, i64 1
+  %18 = getelementptr %Point, ptr %17, i32 0, i32 0
+  store i32 30, ptr %18
+  %19 = getelementptr %Point, ptr %17, i32 0, i32 1
+  store i32 40, ptr %19
+  %20 = getelementptr %array<Point>, ptr %1, i32 0, i32 0
+  %21 = getelementptr %__ManagedArrayData_Point, ptr %20, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = getelementptr %Point, ptr %22, i64 0
+  %24 = getelementptr %Point, ptr %23, i32 0, i32 0
+  %25 = load i32, ptr %24
+  %26 = getelementptr %array<Point>, ptr %1, i32 0, i32 0
+  %27 = getelementptr %__ManagedArrayData_Point, ptr %26, i32 0, i32 0
+  %28 = load ptr, ptr %27
+  %29 = getelementptr %Point, ptr %28, i64 1
+  %30 = getelementptr %Point, ptr %29, i32 0, i32 1
+  %31 = load i32, ptr %30
+  %32 = add i32 %25, %31
+  %33 = getelementptr %array<Point>, ptr %1, i32 0, i32 0
+  %34 = getelementptr %__ManagedArrayData_Point, ptr %33, i32 0, i32 0
+  %35 = load ptr, ptr %34
+  %36 = getelementptr %__ManagedArrayData_Point, ptr %33, i32 0, i32 2
+  %37 = load i32, ptr %36
+  %38 = icmp sgt i32 %37, 0
+  br i1 %38, label %points.release1, label %points.skip2
+points.release1:
+  call void @_managed_array_release(ptr %35, ptr @.__tag.free.points)
+  br label %points.skip2
+points.skip2:
+  ret i32 %32
+}
+
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 50

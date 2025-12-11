@@ -137,53 +137,53 @@ function graphemeBreakProperty(cp int) returns int
 		if sindex mod 28 == 0 'lv'
 			return 12  // LV
 		end 'lv' else 'lvt'
-		return 13  // LVT
-	end 'lvt'
-end 'hangul'
+			return 13  // LVT
+		end 'lvt'
+	end 'hangul'
 
-// Hangul Jamo L U+1100..U+115F (return 9)
-if cp >= 4352 and cp <= 4447 'jamo_l'
-	return 9
-end 'jamo_l'
+	// Hangul Jamo L U+1100..U+115F (return 9)
+	if cp >= 4352 and cp <= 4447 'jamo_l'
+		return 9
+	end 'jamo_l'
 
-// Hangul Jamo V U+1160..U+11A7 (return 10)
-if cp >= 4448 and cp <= 4519 'jamo_v'
-	return 10
-end 'jamo_v'
+	// Hangul Jamo V U+1160..U+11A7 (return 10)
+	if cp >= 4448 and cp <= 4519 'jamo_v'
+		return 10
+	end 'jamo_v'
 
-// Hangul Jamo T U+11A8..U+11FF (return 11)
-if cp >= 4520 and cp <= 4607 'jamo_t'
-	return 11
-end 'jamo_t'
+	// Hangul Jamo T U+11A8..U+11FF (return 11)
+	if cp >= 4520 and cp <= 4607 'jamo_t'
+		return 11
+	end 'jamo_t'
 
-// Skin tone modifiers U+1F3FB..U+1F3FF (return 4 = Extend)
-if cp >= 127995 and cp <= 127999 'skin_tone'
-	return 4
-end 'skin_tone'
+	// Skin tone modifiers U+1F3FB..U+1F3FF (return 4 = Extend)
+	if cp >= 127995 and cp <= 127999 'skin_tone'
+		return 4
+	end 'skin_tone'
 
-// Variation selectors U+FE00..U+FE0F (return 4 = Extend)
-if cp >= 65024 and cp <= 65039 'vs'
-	return 4
-end 'vs'
+	// Variation selectors U+FE00..U+FE0F (return 4 = Extend)
+	if cp >= 65024 and cp <= 65039 'vs'
+		return 4
+	end 'vs'
 
-// Combining Diacritical Marks U+0300..U+036F (return 4 = Extend)
-if cp >= 768 and cp <= 879 'combining'
-	return 4
-end 'combining'
+	// Combining Diacritical Marks U+0300..U+036F (return 4 = Extend)
+	if cp >= 768 and cp <= 879 'combining'
+		return 4
+	end 'combining'
 
-// Format characters that are Control (return 3)
-// ZWSP U+200B, LRM/RLM U+200E-200F, Line/Para separators U+2028-202E
-if cp == 8203 or (cp >= 8206 and cp <= 8207) or (cp >= 8232 and cp <= 8238) 'format_control'
-	return 3
-end 'format_control'
+	// Format characters that are Control (return 3)
+	// ZWSP U+200B, LRM/RLM U+200E-200F, Line/Para separators U+2028-202E
+	if cp == 8203 or (cp >= 8206 and cp <= 8207) or (cp >= 8232 and cp <= 8238) 'format_control'
+		return 3
+	end 'format_control'
 
-// ZWNJ U+200C (return 4 = Extend)
-if cp == 8204 'zwnj'
-	return 4
-end 'zwnj'
+	// ZWNJ U+200C (return 4 = Extend)
+	if cp == 8204 'zwnj'
+		return 4
+	end 'zwnj'
 
-// Other (return 0)
-return 0
+	// Other (return 0)
+	return 0
 end 'graphemeBreakProperty'
 
 // Check if codepoint has Extended_Pictographic property (emoji base)
@@ -347,15 +347,15 @@ function graphemeStateUpdate(state GraphemeState, gbp int, cp int) returns Graph
 	if isExtendedPictographic(cp) 'emoji_base'
 		new_state.inEmojiSeq = true
 	end 'emoji_base' else 'not_emoji_base'
-	if state.inEmojiSeq 'emoji_continue'
-		// gbp == 4 (Extend) or 5 (ZWJ)
-		if gbp == 4 or gbp == 5 'emoji_extend'
-			new_state.inEmojiSeq = true
-		end 'emoji_extend'
-	end 'emoji_continue'
-end 'not_emoji_base'
+		if state.inEmojiSeq 'emoji_continue'
+			// gbp == 4 (Extend) or 5 (ZWJ)
+			if gbp == 4 or gbp == 5 'emoji_extend'
+				new_state.inEmojiSeq = true
+			end 'emoji_extend'
+		end 'emoji_continue'
+	end 'not_emoji_base'
 
-return new_state
+	return new_state
 end 'graphemeStateUpdate'
 
 /// Find the next grapheme cluster boundary in UTF-8 data
@@ -474,5 +474,6 @@ function graphemeCount(data array of byte, len int) returns int
 
 	return count
 end 'graphemeCount'
+
 
 

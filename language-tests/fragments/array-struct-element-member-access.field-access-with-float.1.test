@@ -1,0 +1,266 @@
+// Test: array-struct-element-member-access.field-access-with-float.1
+struct Body
+    var x float
+    var vx float
+    var mass float
+end 'Body'
+
+function momentum(bodies array of Body, n int) returns float
+    var px = 0.0
+    for i in range(0, n) 'loop'
+        px = px + bodies[i].vx * bodies[i].mass
+    end 'loop'
+    return px
+end 'momentum'
+
+function main() returns int
+    var bodies = array of 2 Body
+    bodies[0] = Body{x: 0.0, vx: 1.5, mass: 2.0}
+    bodies[1] = Body{x: 0.0, vx: 3.0, mass: 4.0}
+    let p = momentum(bodies, 2)
+    // 1.5 * 2.0 + 3.0 * 4.0 = 3.0 + 12.0 = 15.0
+    return trunc(p)
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 73
+
+%Body = type { f64, f64, f64 }
+%__ManagedArrayData_Body = type { ptr, i32, i32 }
+%array<Body> = type { %__ManagedArrayData_Body, i32 }
+
+@.__tag.free.bodies = constant [14 x i8] c"array cleanup\00"
+
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
+
+define f64 @momentum(ptr %bodies, i32 %n) {
+entry0:
+  br label %forcond1
+forcond1:
+  %34 = phi i32 [ 0, %entry0 ], [ %31, %forincrement3 ]
+  %33 = phi f64 [ 0, %entry0 ], [ %29, %forincrement3 ]
+  %8 = icmp slt i32 %34, %n
+  br i1 %8, label %forloop2, label %afterfor4
+forloop2:
+  %12 = getelementptr %array<Body>, ptr %bodies, i32 0, i32 0
+  %13 = getelementptr %__ManagedArrayData_Body, ptr %12, i32 0, i32 0
+  %14 = load ptr, ptr %13
+  %15 = sext i32 %34 to i64
+  %16 = getelementptr %Body, ptr %14, i64 %15
+  %17 = getelementptr %Body, ptr %16, i32 0, i32 1
+  %18 = load f64, ptr %17
+  %21 = getelementptr %array<Body>, ptr %bodies, i32 0, i32 0
+  %22 = getelementptr %__ManagedArrayData_Body, ptr %21, i32 0, i32 0
+  %23 = load ptr, ptr %22
+  %24 = sext i32 %34 to i64
+  %25 = getelementptr %Body, ptr %23, i64 %24
+  %26 = getelementptr %Body, ptr %25, i32 0, i32 2
+  %27 = load f64, ptr %26
+  %28 = fmul f64 %18, %27
+  %29 = fadd f64 %33, %28
+  br label %forincrement3
+forincrement3:
+  %31 = add i32 %34, 1
+  br label %forcond1
+afterfor4:
+  ret f64 %33
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca [2 x %Body]
+  %1 = alloca %array<Body>
+  %2 = getelementptr %array<Body>, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__ManagedArrayData_Body, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_Body, ptr %2, i32 0, i32 1
+  store i32 2, ptr %4
+  %5 = getelementptr %__ManagedArrayData_Body, ptr %2, i32 0, i32 2
+  store i32 0, ptr %5
+  %6 = getelementptr %array<Body>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i32 0, i64 48)
+  %8 = getelementptr %array<Body>, ptr %1, i32 0, i32 0
+  %9 = getelementptr %__ManagedArrayData_Body, ptr %8, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr %Body, ptr %10, i64 0
+  %12 = getelementptr %Body, ptr %11, i32 0, i32 0
+  store f64 0, ptr %12
+  %13 = getelementptr %Body, ptr %11, i32 0, i32 1
+  store f64 1.5, ptr %13
+  %14 = getelementptr %Body, ptr %11, i32 0, i32 2
+  store f64 2, ptr %14
+  %15 = getelementptr %array<Body>, ptr %1, i32 0, i32 0
+  %16 = getelementptr %__ManagedArrayData_Body, ptr %15, i32 0, i32 0
+  %17 = load ptr, ptr %16
+  %18 = getelementptr %Body, ptr %17, i64 1
+  %19 = getelementptr %Body, ptr %18, i32 0, i32 0
+  store f64 0, ptr %19
+  %20 = getelementptr %Body, ptr %18, i32 0, i32 1
+  store f64 3, ptr %20
+  %21 = getelementptr %Body, ptr %18, i32 0, i32 2
+  store f64 4, ptr %21
+  %22 = call f64 @momentum(ptr %1, i32 2)
+  %25 = call f64 @trunc(f64 %22)
+  %26 = fptosi f64 %25 to i32
+  %27 = getelementptr %array<Body>, ptr %1, i32 0, i32 0
+  %28 = getelementptr %__ManagedArrayData_Body, ptr %27, i32 0, i32 0
+  %29 = load ptr, ptr %28
+  %30 = getelementptr %__ManagedArrayData_Body, ptr %27, i32 0, i32 2
+  %31 = load i32, ptr %30
+  %32 = icmp sgt i32 %31, 0
+  br i1 %32, label %bodies.release1, label %bodies.skip2
+bodies.release1:
+  call void @_managed_array_release(ptr %29, ptr @.__tag.free.bodies)
+  br label %bodies.skip2
+bodies.skip2:
+  ret i32 %26
+}
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare f64 @trunc(f64 %arg0)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 96
+
+%Body = type { f64, f64, f64 }
+%__ManagedArrayData_Body = type { ptr, i32, i32 }
+%array<Body> = type { %__ManagedArrayData_Body, i32 }
+
+@.__tag.free.bodies = constant [14 x i8] c"array cleanup\00"
+
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
+
+define f64 @momentum(ptr %bodies, i32 %n) {
+entry0:
+  %0 = alloca ptr
+  store ptr %bodies, ptr %0
+  %1 = alloca i32
+  store i32 %n, ptr %1
+  %2 = alloca f64
+  store f64 0, ptr %2
+  %3 = load i32, ptr %1
+  %4 = alloca i32
+  store i32 0, ptr %4
+  %5 = alloca i32
+  store i32 %3, ptr %5
+  br label %forcond1
+forcond1:
+  %6 = load i32, ptr %4
+  %7 = load i32, ptr %5
+  %8 = icmp slt i32 %6, %7
+  br i1 %8, label %forloop2, label %afterfor4
+forloop2:
+  %9 = load f64, ptr %2
+  %10 = load i32, ptr %4
+  %11 = load ptr, ptr %0
+  %12 = getelementptr %array<Body>, ptr %11, i32 0, i32 0
+  %13 = getelementptr %__ManagedArrayData_Body, ptr %12, i32 0, i32 0
+  %14 = load ptr, ptr %13
+  %15 = sext i32 %10 to i64
+  %16 = getelementptr %Body, ptr %14, i64 %15
+  %17 = getelementptr %Body, ptr %16, i32 0, i32 1
+  %18 = load f64, ptr %17
+  %19 = load i32, ptr %4
+  %20 = load ptr, ptr %0
+  %21 = getelementptr %array<Body>, ptr %20, i32 0, i32 0
+  %22 = getelementptr %__ManagedArrayData_Body, ptr %21, i32 0, i32 0
+  %23 = load ptr, ptr %22
+  %24 = sext i32 %19 to i64
+  %25 = getelementptr %Body, ptr %23, i64 %24
+  %26 = getelementptr %Body, ptr %25, i32 0, i32 2
+  %27 = load f64, ptr %26
+  %28 = fmul f64 %18, %27
+  %29 = fadd f64 %9, %28
+  store f64 %29, ptr %2
+  br label %forincrement3
+forincrement3:
+  %30 = load i32, ptr %4
+  %31 = add i32 %30, 1
+  store i32 %31, ptr %4
+  br label %forcond1
+afterfor4:
+  %32 = load f64, ptr %2
+  ret f64 %32
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca [2 x %Body]
+  %1 = alloca %array<Body>
+  %2 = getelementptr %array<Body>, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__ManagedArrayData_Body, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_Body, ptr %2, i32 0, i32 1
+  store i32 2, ptr %4
+  %5 = getelementptr %__ManagedArrayData_Body, ptr %2, i32 0, i32 2
+  store i32 0, ptr %5
+  %6 = getelementptr %array<Body>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i32 0, i64 48)
+  %8 = getelementptr %array<Body>, ptr %1, i32 0, i32 0
+  %9 = getelementptr %__ManagedArrayData_Body, ptr %8, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = getelementptr %Body, ptr %10, i64 0
+  %12 = getelementptr %Body, ptr %11, i32 0, i32 0
+  store f64 0, ptr %12
+  %13 = getelementptr %Body, ptr %11, i32 0, i32 1
+  store f64 1.5, ptr %13
+  %14 = getelementptr %Body, ptr %11, i32 0, i32 2
+  store f64 2, ptr %14
+  %15 = getelementptr %array<Body>, ptr %1, i32 0, i32 0
+  %16 = getelementptr %__ManagedArrayData_Body, ptr %15, i32 0, i32 0
+  %17 = load ptr, ptr %16
+  %18 = getelementptr %Body, ptr %17, i64 1
+  %19 = getelementptr %Body, ptr %18, i32 0, i32 0
+  store f64 0, ptr %19
+  %20 = getelementptr %Body, ptr %18, i32 0, i32 1
+  store f64 3, ptr %20
+  %21 = getelementptr %Body, ptr %18, i32 0, i32 2
+  store f64 4, ptr %21
+  %22 = call f64 @momentum(ptr %1, i32 2)
+  %23 = alloca f64
+  store f64 %22, ptr %23
+  %24 = load f64, ptr %23
+  %25 = call f64 @trunc(f64 %24)
+  %26 = fptosi f64 %25 to i32
+  %27 = getelementptr %array<Body>, ptr %1, i32 0, i32 0
+  %28 = getelementptr %__ManagedArrayData_Body, ptr %27, i32 0, i32 0
+  %29 = load ptr, ptr %28
+  %30 = getelementptr %__ManagedArrayData_Body, ptr %27, i32 0, i32 2
+  %31 = load i32, ptr %30
+  %32 = icmp sgt i32 %31, 0
+  br i1 %32, label %bodies.release1, label %bodies.skip2
+bodies.release1:
+  call void @_managed_array_release(ptr %29, ptr @.__tag.free.bodies)
+  br label %bodies.skip2
+bodies.skip2:
+  ret i32 %26
+}
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
+declare f64 @trunc(f64 %arg0)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 15

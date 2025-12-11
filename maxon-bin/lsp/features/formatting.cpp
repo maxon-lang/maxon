@@ -1332,8 +1332,17 @@ bool FormattingProvider::startsBlock(const std::string &line, bool insideInterfa
 		return true;
 	}
 
-	// else 'label' (continues block but doesn't change indent)
-	// We don't count this as starting a block since indent should stay the same
+	// else 'label' - starts a new block after the if's then-block
+	// Check for: else 'label' or end 'label' else 'label'
+	if (trimmed.rfind("else ", 0) == 0 && trimmed.find("'") != std::string::npos) {
+		return true;
+	}
+
+	// end 'label' else 'label' pattern - ends one block and starts another
+	// The end part decrements, so we need to increment for the else part
+	if (trimmed.find("end ") == 0 && trimmed.find(" else ") != std::string::npos) {
+		return true;
+	}
 
 	return false;
 }

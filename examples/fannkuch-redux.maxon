@@ -24,7 +24,7 @@ function factorial(n int) returns int
 end 'factorial'
 
 // Copy array from src to dst
-function copyArray(dst []int, src []int, n int) returns int
+function copyArray(dst array of int, src array of int, n int) returns int
 	for i in range(0, n) 'copy_loop'
 		dst[i] = src[i]
 	end 'copy_loop'
@@ -32,17 +32,17 @@ function copyArray(dst []int, src []int, n int) returns int
 end 'copyArray'
 
 // Generate the idx-th permutation of n elements
-function getPermutation(p []int, count []int, fact []int, n int, idx int) returns int
+function getPermutation(p array of int, count array of int, fact array of int, n int, idx int) returns int
 	// Initialize to identity permutation
 	for i in range(0, n) 'init_loop'
 		p[i] = i
 	end 'init_loop'
 
 	// Generate the idx-th permutation using factorial base
-	var pp = [16]int  // Temporary array for rotation
+	var pp = array of 16 int  // Temporary array for rotation
 	var i = n - 1
 	while i > 0 'perm_loop'
-		var d = idx / fact[i]
+		var d = trunc(idx / fact[i])
 		count[i] = d
 		idx = idx mod fact[i]
 
@@ -52,11 +52,11 @@ function getPermutation(p []int, count []int, fact []int, n int, idx int) return
 		// Rotate: p[j] = pp[j+d] (with wraparound)
 		var j = 0
 		while j <= i 'rotate_loop'
-			if j + d <= i 'check_wrap'
+			if j + d <= i 'in_bounds'
 				p[j] = pp[j + d]
-				else 'check_wrap'
+			end 'in_bounds' else 'out_of_bounds'
 				p[j] = pp[j + d - i - 1]
-			end 'check_wrap'
+			end 'out_of_bounds'
 			j = j + 1
 		end 'rotate_loop'
 
@@ -67,14 +67,14 @@ function getPermutation(p []int, count []int, fact []int, n int, idx int) return
 end 'getPermutation'
 
 // Count the number of flips for a permutation
-function countFlips(perm []int, n int) returns int
+function countFlips(perm array of int, n int) returns int
 	var first = perm[0]
 	if first == 0 'check_sorted'
 		return 0
 	end 'check_sorted'
 
 	// Copy permutation for flipping
-	var pp = [16]int
+	var pp = array of 16 int
 	copyArray(pp, perm, n)
 
 	var flips = 1
@@ -105,7 +105,7 @@ function countFlips(perm []int, n int) returns int
 end 'countFlips'
 
 // Advance to next permutation
-function nextPermutation(p []int, count []int) returns int
+function nextPermutation(p array of int, count array of int) returns int
 	// Swap p[0] and p[1]
 	var firstValue = p[1]
 	p[1] = p[0]
@@ -136,7 +136,7 @@ function main() returns int
 	var n = 11  // Testing optimization impact
 
 	// Compute factorials
-	var fact = [17]int
+	var fact = array of 17 int
 	for i in range(0, n + 1) 'fact_init'
 		fact[i] = factorial(i)
 	end 'fact_init'
@@ -144,8 +144,8 @@ function main() returns int
 	var totalPerms = fact[n]
 
 	// Working arrays
-	var p = [16]int
-	var count = [16]int
+	var p = array of 16 int
+	var count = array of 16 int
 
 	// Initialize to first permutation
 	getPermutation(p, count, fact, n, 0)
@@ -156,7 +156,7 @@ function main() returns int
 
 	while idx < totalPerms 'main_loop'
 		// Count flips for current permutation
-		if p[0] != 0 'need_flips'
+		  if p[0] != 0 'need_flips'
 			var flips = countFlips(p, n)
 
 			if flips > maxFlips 'update_max'
@@ -166,9 +166,9 @@ function main() returns int
 			// Update checksum (alternating sign based on permutation index)
 			if idx mod 2 == 0 'even_perm'
 				checkSum = checkSum + flips
-				else 'even_perm'
+			end 'even_perm' else 'odd_perm'
 				checkSum = checkSum - flips
-			end 'even_perm'
+			end 'odd_perm'
 		end 'need_flips'
 
 		// Advance to next permutation
@@ -184,4 +184,6 @@ function main() returns int
 	// Returning maxFlips as exit code
 	return maxFlips
 end 'main'
+
+
 
