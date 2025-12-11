@@ -293,12 +293,24 @@ std::optional<Hover> HoverProvider::lookupVariable(const std::string &name, cons
 }
 
 std::optional<Hover> HoverProvider::lookupFunction(const std::string &name, const AnalysisCache *cache, const StdlibSymbols &stdlib) {
-	// First check in cache
+	// First check in cache with exact match
 	if (cache) {
 		auto it = cache->functions.find(name);
 		if (it != cache->functions.end()) {
 			std::string markdown = formatFunctionHover(it->second);
 			return buildHover(markdown, currentTokenRange_);
+		}
+
+		// If not found, search for namespaced functions that end with ".name"
+		// This handles the case where user hovers over "getPermutation" but the function
+		// is stored as "examples.getPermutation" due to file namespace
+		std::string suffix = "." + name;
+		for (const auto &[funcName, funcInfo] : cache->functions) {
+			if (funcName.size() > suffix.size() &&
+				funcName.compare(funcName.size() - suffix.size(), suffix.size(), suffix) == 0) {
+				std::string markdown = formatFunctionHover(funcInfo);
+				return buildHover(markdown, currentTokenRange_);
+			}
 		}
 	}
 
@@ -503,7 +515,16 @@ std::string HoverProvider::formatVariableHover(const std::string &name, const st
 
 std::string HoverProvider::formatFunctionHover(const FunctionInfo &func, const std::string &doc) {
 	std::string md = "```maxon\n";
-	md += "function " + func.name + "(";
+
+	// Extract the simple function name (after the last dot, if any)
+	// This handles namespaced functions like "examples.getPermutation" -> "getPermutation"
+	std::string displayName = func.name;
+	size_t lastDot = displayName.rfind('.');
+	if (lastDot != std::string::npos) {
+		displayName = displayName.substr(lastDot + 1);
+	}
+
+	md += "function " + displayName + "(";
 
 	// Add parameters
 	bool first = true;

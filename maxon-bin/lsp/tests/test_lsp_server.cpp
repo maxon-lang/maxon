@@ -752,6 +752,55 @@ end 'main')";
 	REQUIRE(content.find("a int") != std::string::npos);
 }
 
+TEST_CASE("LSP hover shows local function signature in namespaced file", "[lsp][hover]") {
+	// Test hover on a user-defined function when the file is in a subdirectory (has namespace)
+	// This is the case for files like examples/fannkuch-redux.maxon
+	// The function will be registered as "examples.getPermutation" but hover queries just "getPermutation"
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+
+	std::string code = R"(function getPermutation(p array of int, n int) returns int
+    return 0
+end 'getPermutation'
+
+function main() returns int
+    var arr = array of 10 int
+    getPermutation(arr, 10)
+    return 0
+end 'main')";
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Use a path that creates a namespace (examples/)
+	std::string docUri = "file://" + (projectRoot / "examples" / "test_hover.maxon").string();
+	fixture.openDocument(docUri, code);
+
+	// Request hover on 'getPermutation' at the call site (line 6)
+	// Line 6: "    getPermutation(arr, 10)" - 'getPermutation' starts at position 4
+	json hoverParams = {
+		{"textDocument", {{"uri", docUri}}},
+		{"position", {{"line", 6}, {"character", 8}}}};
+	fixture.transport()->queueRequest(2, "textDocument/hover", hoverParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(2);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+	REQUIRE(!response->result.value().is_null());
+
+	// The hover should show the function signature
+	std::string content = response->result.value()["contents"]["value"].get<std::string>();
+	INFO("Hover content: " << content);
+	REQUIRE(content.find("function") != std::string::npos);
+	REQUIRE(content.find("getPermutation") != std::string::npos);
+	REQUIRE(content.find("array of int") != std::string::npos);
+}
+
 TEST_CASE("LSP hover shows method signature for method call", "[lsp][hover]") {
 	// Test hover on a method call like value.cstr()
 	// The method is defined in stdlib as string.cstr
