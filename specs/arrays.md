@@ -27,20 +27,21 @@ Arrays come in two forms: **static** (stack-allocated, immutable) and **dynamic*
 - `.count()` and `.capacity()` methods
 
 **Type System:**
-- Static: `_StaticArray<N,T>` internally, displayed as `array of N T` (e.g., `array of 3 int`)
-- Dynamic: `_ManagedArray<T>` internally, displayed as `array of T`
-- Static and dynamic are incompatible types (no implicit conversion)
+- All arrays use the `array<T>` struct type (stdlib array struct)
+- Internal struct layout: `{ managed: __ManagedArrayData<T>, iterIndex: i32 }`
+- Stack-allocated arrays have capacity = 0
+- Heap-allocated arrays have capacity > 0
 - Function parameters:
-  - `fn(arr array of 3 int)` - accepts static array of exactly 3 ints (by reference)
-  - `fn(arr array of int)` - accepts dynamic array (by reference, ptr+len+cap)
+  - `fn(arr array of int)` - accepts any array (by reference)
 
 **Method Syntax:**
 - `arr.push(val)` transforms to `push(arr, val)` at parse time
-- Methods implemented in stdlib for dynamic arrays only
+- Methods implemented in stdlib via generic struct methods
 
 **Memory Layout:**
-- Static: just the array data on stack
-- Dynamic: pointer to heap data, plus `__length` and `__capacity` on stack
+- All arrays use the same struct layout: `{ ptr, len, cap, iterIndex }`
+- Stack arrays: buffer allocated on stack, cap = 0 (no ownership)
+- Heap arrays: buffer allocated on heap, cap > 0 (has ownership)
 
 **Parser:**
 - `parseArrayType()` and `parseArrayLiteral()` in parser.cpp

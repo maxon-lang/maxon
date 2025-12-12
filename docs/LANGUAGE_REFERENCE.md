@@ -227,9 +227,9 @@ array of array of int     // nested array (2D)
 
 **Creating Arrays**
 ```maxon
-var numbers = [10]int        // Sized array of 10 integers (zero-initialized)
-let values = [1, 2, 3]       // Immutable array from literal
-var items = [1, 2, 3]        // Mutable array from literal
+var numbers = array of 10 int   // Sized array of 10 integers (zero-initialized)
+let values = [1, 2, 3]          // Immutable array from literal (stack buffer)
+var items = [1, 2, 3]           // Mutable array from literal (heap buffer)
 ```
 
 **Function Parameters**
@@ -241,7 +241,8 @@ end 'process'
 
 **Array Properties**
 - Zero-based indexing: `array[0]`, `array[1]`, ...
-- Heap-allocated with automatic scope-based cleanup
+- `let` arrays use stack-allocated buffers (capacity = 0)
+- `var` arrays use heap-allocated buffers with automatic cleanup
 - No bounds checking (undefined behavior for out-of-bounds access)
 
 ### Map Type
@@ -778,7 +779,7 @@ let name = "Maxon"
 - All variables must be initialized at declaration
 - Type can be inferred from initializer or explicitly specified
 - Scope is block-scoped
-- Variables are stack-allocated (except arrays, which are heap-allocated)
+- Primitives are stack-allocated; `var` arrays use heap buffers (with automatic cleanup)
 
 ---
 

@@ -289,7 +289,8 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return getOrCreateArrayStructType(elemType);
 	}
 
-	// Check for new array type formats: _ManagedArray<T> or _StaticArray<N, T>
+	// Check for MIR array type format: _ManagedArray<T> or _StaticArray<N, T>
+	// These are internal type strings used when converting MIR types to Maxon types
 	if (typeStr.rfind("_ManagedArray<", 0) == 0) {
 		// Phase 2: _ManagedArray<T> uses struct layout { _buffer ptr, _len i32, _capacity i32 }
 		std::string elemType = maxon::TypeConversion::getArrayElementType(typeStr);
@@ -391,7 +392,8 @@ std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
 			return "cstring";
 		return type->structName;
 	case mir::MIRTypeKind::Array:
-		// Format: _StaticArray<size, elementType>
+		// MIR array [N x T] -> internal type string _StaticArray<size, elementType>
+		// This string format is used for internal type conversions only
 		return maxon::TypeConversion::makeStaticArrayType(
 			type->arraySize,
 			getMaxonTypeFromMIRType(type->elementType));

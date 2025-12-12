@@ -131,8 +131,12 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 		auto it = variableTypes.find(arrayVarName);
 		if (it != variableTypes.end()) {
 			const std::string &varType = it->second;
-			// Check if it's an array type like "_StaticArray<4, int>" or "_ManagedArray<int>"
-			if (maxon::TypeConversion::isArrayType(varType)) {
+			// Check if it's an array<T> struct or _ManagedArray<T>
+			if (maxon::TypeConversion::isArrayStructType(varType)) {
+				isArrayIteration = true;
+				elementTypeStr = maxon::TypeConversion::getArrayStructElementType(varType);
+				elementType = getTypeFromString(elementTypeStr);
+			} else if (maxon::TypeConversion::isArrayType(varType)) {
 				isArrayIteration = true;
 				elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
 				elementType = getTypeFromString(elementTypeStr);
@@ -155,8 +159,30 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 		mir::MIRValue *arrayPtr;
 		std::string varType = variableTypes[arrayVarName];
 
-		// Phase 2: Handle _ManagedArray<T> struct layout
-		if (maxon::TypeConversion::isManagedArrayType(varType)) {
+		// Handle array<T> struct type (stdlib struct with nested __ManagedArrayData)
+		if (maxon::TypeConversion::isArrayStructType(varType)) {
+			// array<T> struct layout:
+			// Field 0: managed (__ManagedArrayData<T>)
+			//   Field 0 of managed: _buffer ptr
+			//   Field 1 of managed: _len i32
+			//   Field 2 of managed: _capacity i32
+			// Field 1: iterIndex i32
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
+
+			// Get pointer to the managed field (field 0 of array<T>)
+			mir::MIRValue *managedPtr = builder->createStructGEP(arrayStructType, arrayAlloca, 0, "arr.managed.ptr");
+
+			// Load length from field 1 of managed
+			mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, managedPtr, 1, "arr._len.ptr");
+			arrayLength = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "arrlen");
+
+			// Load buffer pointer from field 0 of managed
+			mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, managedPtr, 0, "arr._buffer.ptr");
+			arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, "arrptr");
+		}
+		// Handle _ManagedArray<T> struct layout (internal managed array data type)
+		else if (maxon::TypeConversion::isManagedArrayType(varType)) {
 			// Managed array: struct layout { _buffer ptr, _len i32, _capacity i32 }
 			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
 

@@ -364,7 +364,8 @@ std::string TypeConversion::makeOptionalType(const std::string &type) {
 }
 
 bool TypeConversion::isArrayType(const std::string &type) {
-	// Internal format: _ManagedArray<T> or _StaticArray<N, T>
+	// Internal MIR array types: _ManagedArray<T> or _StaticArray<N, T>
+	// Note: User-visible array type is array<T>, use isArrayStructType for that
 	return type.rfind("_ManagedArray<", 0) == 0 || type.rfind("_StaticArray<", 0) == 0;
 }
 
@@ -379,7 +380,8 @@ bool TypeConversion::isManagedArrayOpaqueType(const std::string &type) {
 }
 
 bool TypeConversion::isStaticArrayType(const std::string &type) {
-	// Internal format: _StaticArray<N, T>
+	// MIR static array type: _StaticArray<N, T>
+	// Used only for internal MIR array type string representation
 	return type.rfind("_StaticArray<", 0) == 0;
 }
 
@@ -412,7 +414,7 @@ std::string TypeConversion::getArrayElementType(const std::string &arrayType) {
 }
 
 int TypeConversion::getStaticArraySize(const std::string &arrayType) {
-	// Internal format: _StaticArray<N, T>
+	// MIR static array type: _StaticArray<N, T>
 	if (arrayType.rfind("_StaticArray<", 0) == 0) {
 		size_t start = 13; // length of "_StaticArray<"
 		size_t commaPos = arrayType.find(", ");
@@ -475,7 +477,7 @@ std::string TypeConversion::arrayTypeToDisplayString(const std::string &arrayTyp
 		return "array of " + elemDisplay;
 	}
 
-	// Internal format: _StaticArray<N, T> -> array of N T
+	// MIR static array type: _StaticArray<N, T> -> array of N T (for error messages)
 	if (arrayType.rfind("_StaticArray<", 0) == 0) {
 		int size = getStaticArraySize(arrayType);
 		std::string elemType = getArrayElementType(arrayType);

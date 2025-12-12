@@ -141,28 +141,34 @@ class TypeConversion {
 	/// Make a type optional (e.g., "int" -> "int or nil")
 	static std::string makeOptionalType(const std::string &type);
 
-	/// Check if a type is an array type (_ManagedArray<T>, _StaticArray<N, T>, or legacy [N]T/[]T)
+	/// Check if a type is an internal array type (_ManagedArray<T> for managed data)
+	/// Note: User-visible array type is array<T>, use isArrayStructType for that
 	static bool isArrayType(const std::string &type);
 
-	/// Check if a type is a dynamic/managed array (_ManagedArray<T> or legacy []T)
+	/// Check if a type is a managed array data type (_ManagedArray<T>)
+	/// This is the internal data struct, not the user-visible array<T> type
 	static bool isManagedArrayType(const std::string &type);
 
 	/// Check if a type is the opaque _ManagedArray<T> type (new internal format only)
 	static bool isManagedArrayOpaqueType(const std::string &type);
 
-	/// Check if a type is a static array (_StaticArray<N, T> or legacy [N]T)
+	/// Check if a type is a MIR static array (_StaticArray<N, T>)
+	/// Used only for internal MIR array type string representation
+	/// Note: User-visible sized arrays use array<T> struct type
 	static bool isStaticArrayType(const std::string &type);
 
-	/// Extract element type from array (e.g., "_ManagedArray<int>" -> "int", "_StaticArray<5, byte>" -> "byte")
+	/// Extract element type from internal array type string
+	/// Works for _ManagedArray<T> and _StaticArray<N, T>
 	static std::string getArrayElementType(const std::string &arrayType);
 
-	/// Get size from static array type (returns 0 for managed arrays)
+	/// Get size from MIR static array type string (returns 0 for managed arrays)
 	static int getStaticArraySize(const std::string &arrayType);
 
-	/// Create a managed array type string from element type
+	/// Create a managed array data type string from element type
 	static std::string makeManagedArrayType(const std::string &elementType);
 
-	/// Create a static array type string from size and element type
+	/// Create a MIR static array type string from size and element type
+	/// Used only for internal MIR array type string representation
 	static std::string makeStaticArrayType(int size, const std::string &elementType);
 
 	/// Create an array<T> struct type string from element type (the stdlib array struct)

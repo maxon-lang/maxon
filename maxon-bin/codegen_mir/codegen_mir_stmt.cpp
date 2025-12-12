@@ -151,7 +151,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 																   static_cast<int>(fieldIndex), fieldName);
 
 				// If the field is an unsized array type (like []byte), we need to handle
-				// the conversion from either a fat pointer, static array, or variable-sized array
+				// the conversion from either a fat pointer or variable-sized array
 				if (maxon::TypeConversion::isManagedArrayType(fieldType)) {
 					// Get the value's type if it's a variable
 					std::string valueType;
@@ -163,17 +163,8 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 						}
 					}
 
-					// Check if the value is a static array or variable-sized (managed) array
-					bool isStaticArray = maxon::TypeConversion::isStaticArrayType(valueType);
+					// Check if the value is a variable-sized (managed) array
 					bool isVariableSizedArray = maxon::TypeConversion::isManagedArrayType(valueType);
-					int staticArraySize = 0;
-					std::string elemType;
-					if (isStaticArray) {
-						staticArraySize = maxon::TypeConversion::getStaticArraySize(valueType);
-						elemType = maxon::TypeConversion::getArrayElementType(valueType);
-					} else if (isVariableSizedArray) {
-						elemType = maxon::TypeConversion::getArrayElementType(valueType);
-					}
 
 					mir::MIRType *fatPtrType = structType->fieldTypes[fieldIndex];
 
@@ -200,59 +191,6 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 							reportError("Unknown variable in return struct field init: " + varExpr->name,
 										varExpr->line, varExpr->column);
 						}
-					} else if (isStaticArray) {
-						// Convert static array to fat pointer:
-						// fieldValue is a pointer to the static array [size x elemType]
-						// We need to store {ptr, len} into the fat pointer field
-
-						// Store the data pointer (field 0 of the fat pointer)
-						mir::MIRValue *fatPtrDataPtr = builder->createStructGEP(fatPtrType, fieldPtr, 0,
-																				fieldName + ".ptr");
-						builder->createStore(fieldValue, fatPtrDataPtr);
-
-						// Store the length (field 1 of the fat pointer)
-						// Use the actual string length from _len field, not the buffer size
-						// But we don't have _len yet - use the static array size as max
-						// Actually, we need to get _len from the struct literal
-						// For now, find the _len field in the struct literal
-						int strLen = staticArraySize; // Default to buffer size
-						for (const auto &otherField : structInitExpr->fields) {
-							if (otherField.name == "_len") {
-								if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(otherField.value.get())) {
-									// _len: _len means copy from self._len
-									// We need to load this from self
-									if (memberExpr->memberName == "_len") {
-										// Get self pointer
-										auto selfIt = namedValues.find("self");
-										if (selfIt != namedValues.end()) {
-											mir::MIRType *selfStructType = structTypes[structInitExpr->structName];
-											// Find _len field index
-											const auto &selfFields = structFields[structInitExpr->structName];
-											for (size_t fi = 0; fi < selfFields.size(); fi++) {
-												if (selfFields[fi].first == "_len") {
-													mir::MIRValue *selfLenPtr = builder->createStructGEP(
-														selfStructType, selfIt->second, static_cast<int>(fi), "self._len.ptr");
-													mir::MIRValue *selfLenVal = builder->createLoad(
-														mir::MIRType::getInt32(), selfLenPtr, "self._len.val");
-													mir::MIRValue *fatPtrLenPtr = builder->createStructGEP(
-														fatPtrType, fieldPtr, 1, fieldName + ".len");
-													builder->createStore(selfLenVal, fatPtrLenPtr);
-													goto done_len_store;
-												}
-											}
-										}
-									}
-								}
-								break;
-							}
-						}
-						{
-							// Fallback: use static array size
-							mir::MIRValue *fatPtrLenPtr = builder->createStructGEP(fatPtrType, fieldPtr, 1,
-																				   fieldName + ".len");
-							builder->createStore(builder->getInt32(strLen), fatPtrLenPtr);
-						}
-					done_len_store:;
 					} else {
 						// Unsized array - load the fat pointer struct and store it
 						mir::MIRValue *fatPtrValue = builder->createLoad(fatPtrType, fieldValue, fieldName + ".fatptr");

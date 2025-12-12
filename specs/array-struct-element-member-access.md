@@ -21,7 +21,7 @@ if (maxon::TypeConversion::isArrayType(arrayType)) {  // Only checks _ManagedArr
 }
 ```
 
-This fails for `array<Planet>` because `isArrayType` only matches `_ManagedArray<T>` or `_StaticArray<N, T>`.
+This fails for `array<Planet>` because `isArrayType` only matches internal types `_ManagedArray<T>`, not the user-visible `array<T>` struct type.
 
 **Fix:**
 Also check `isArrayStructType` and use `getArrayStructElementType`:
@@ -34,9 +34,9 @@ if (maxon::TypeConversion::isArrayType(arrayType)) {
 ```
 
 **Type Formats:**
-- `array<T>` - used by `variableTypes` for local array variables (via `makeArrayStructType`)
-- `_ManagedArray<T>` - internal MIR representation for managed arrays
-- `_StaticArray<N, T>` - internal MIR representation for static arrays
+- `array<T>` - the stdlib array struct type, used for all array variables
+- `_ManagedArray<T>` - internal data struct for managed arrays (ptr, len, cap)
+- Note: `_StaticArray<N, T>` is only used internally for MIR raw array type strings
 
 ## Documentation
 

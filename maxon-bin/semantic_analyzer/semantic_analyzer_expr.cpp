@@ -208,9 +208,6 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		} else if (maxon::TypeConversion::isManagedArrayType(arrayType)) {
 			// Managed array type: _ManagedArray<T>
 			elemType = maxon::TypeConversion::getArrayElementType(arrayType);
-		} else if (maxon::TypeConversion::isStaticArrayType(arrayType)) {
-			// Static array type: _StaticArray<N, T>
-			elemType = maxon::TypeConversion::getArrayElementType(arrayType);
 		}
 
 		if (elemType.empty()) {

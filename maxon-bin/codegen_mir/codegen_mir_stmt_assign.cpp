@@ -450,7 +450,7 @@ void MIRCodeGenerator::generateMemberArrayAssign(MemberArrayAssignStmtAST *membe
 	// Generate index
 	mir::MIRValue *indexVal = generateExpr(memberArrayAssign->index.get());
 
-	// Determine element type from field type "_ManagedArray<int>", "array<int>", or "_StaticArray<16, byte>" -> element type
+	// Determine element type from field type "array<int>" or "_ManagedArray<int>" -> element type
 	std::string elemTypeStr = "int";
 	if (maxon::TypeConversion::isArrayStructType(fieldTypeStr)) {
 		elemTypeStr = maxon::TypeConversion::getArrayStructElementType(fieldTypeStr);

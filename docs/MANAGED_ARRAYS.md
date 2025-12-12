@@ -4,12 +4,25 @@ This document describes the internal implementation of Maxon's managed array sys
 
 ## Overview
 
-Maxon arrays use a hybrid storage strategy:
+All Maxon arrays use the unified `array<T>` struct type from the standard library. Arrays use a hybrid storage strategy based on capacity:
 
-1. **Stack-allocated**: Fixed-size arrays or empty dynamic arrays with capacity 0
-2. **Heap-allocated**: Dynamic arrays that grow via `push()` use heap memory
+1. **Stack-allocated** (capacity = 0): Fixed-size arrays declared with `let arr = array of N T` or `let arr = [1, 2, 3]`
+2. **Heap-allocated** (capacity > 0): Dynamic arrays declared with `var` that can grow via `push()`
 
-The compiler tracks array allocations and automatically releases them at scope exit.
+The compiler tracks array allocations and automatically releases heap-allocated buffers at scope exit.
+
+## Type System
+
+All array variables have type `array<T>` regardless of how they're declared:
+
+| Declaration | Type | Storage |
+|-------------|------|----------|
+| `let arr = [1, 2, 3]` | `array<int>` | Stack buffer, capacity = 0 |
+| `let arr = array of 5 int` | `array<int>` | Stack buffer, capacity = 0 |
+| `var arr = [1, 2, 3]` | `array<int>` | Heap buffer, capacity > 0 |
+| `var arr = array of 5 int` | `array<int>` | Heap buffer, capacity > 0 |
+
+This unified type system means all arrays support the same methods (`.count()`, `.push()`, etc.) though mutating methods like `.push()` require a `var` declaration.
 
 ## Memory Layout
 
@@ -24,7 +37,7 @@ The capacity field determines array ownership:
 
 ### Stack Arrays (capacity = 0)
 
-Fixed-size arrays and empty dynamic arrays store data inline:
+Arrays declared with `let` store their buffer on the stack:
 
 ```
 __ManagedArrayData<T> (stack mode):
@@ -33,12 +46,14 @@ __ManagedArrayData<T> (stack mode):
 | (ptr)  | (i32)  | (i32)  |
 +--------+--------+--------+
     |
-    +---> Points to stack buffer or inline storage
+    +---> Points to stack-allocated buffer [N x T]
 ```
+
+Stack arrays have capacity = 0 to indicate they don't own the buffer (no heap allocation to free).
 
 ### Heap-Allocated Arrays (capacity > 0)
 
-Growing arrays use heap memory with an 8-byte header for reference counting:
+Arrays declared with `var` use heap memory with an 8-byte header for reference counting:
 
 ```
 Heap allocation:
@@ -60,15 +75,26 @@ __ManagedArrayData<T> (heap mode):
 
 ### Array Type Structure
 
-The full `array<T>` type includes an iteration index:
+The full `array<T>` stdlib struct includes an iteration index for for-loop support:
 
 ```
-array<T> struct:
+array<T> struct (stdlib/array.maxon):
 +-------------------+----------+
-| __ManagedArrayData | iterIndex |
-| (embedded)         | (i32)     |
+| managed           | iterIndex |
+| (__ManagedArrayData| (i32)     |
+| embedded struct)  |           |
 +-------------------+----------+
+
+Field 0 (managed):
+  +--------+--------+--------+
+  | _buffer| _len   | _capacity|
+  | (ptr)  | (i32)  | (i32)    |
+  +--------+--------+--------+
+
+Field 1 (iterIndex): i32 - used by iterator protocol
 ```
+
+All array operations access the nested `managed` field to get buffer, length, and capacity.
 
 ## Scope Tracking
 
