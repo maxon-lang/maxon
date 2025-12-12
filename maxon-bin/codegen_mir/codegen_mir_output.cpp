@@ -659,8 +659,7 @@ void MIRCodeGenerator::writeWindowsExecutable(
 		if (mappingIt == importMapping.end()) {
 			throw std::runtime_error(
 				"Internal compiler error: Import symbol '" + symbolName +
-				"' is called but not in WINDOWS_IMPORTS table. "
-				"Add it to codegen_mir_output.cpp");
+				"' is called but cannot be found.");
 		}
 
 		size_t bangPos = mappingIt->second.find('!');

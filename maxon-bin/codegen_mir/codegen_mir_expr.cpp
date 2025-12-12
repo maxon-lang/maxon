@@ -57,6 +57,11 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		return generateStringLiteral(strExpr);
 	}
 
+	if (auto *interpExpr = dynamic_cast<InterpolatedStringExprAST *>(expr)) {
+		// Generate interpolated string: "Hello {name}!"
+		return generateInterpolatedString(interpExpr);
+	}
+
 	if (auto *arrayLitExpr = dynamic_cast<ArrayLiteralExprAST *>(expr)) {
 		// Array literals should only appear as initializers
 		reportError("Array literal can only be used as an initializer in variable declarations",
@@ -1161,160 +1166,6 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				case 'G': // >=
 					return builder->createICmpSGE(leftVal, rightVal, "getmp");
 				}
-			}
-		}
-
-		// Special handling for string + string -> call concat and heap-allocate result
-		if (binExpr->op == '+') {
-			std::string leftType = getExpressionMaxonType(binExpr->left.get());
-			std::string rightType = getExpressionMaxonType(binExpr->right.get());
-
-			if (leftType == "string" && rightType == "string") {
-				// Initialize heap management for _managed_string_alloc
-				initHeapManagement();
-
-				mir::MIRType *stringType = structTypes["string"];
-
-				// Get pointers to both string structs
-				mir::MIRValue *leftPtr = nullptr;
-				mir::MIRValue *rightPtr = nullptr;
-
-				if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->left.get())) {
-					leftPtr = namedValues[varExpr->name];
-					if (isStructParameter(varExpr->name)) {
-						leftPtr = builder->createLoad(mir::MIRType::getPtr(), leftPtr, "left_str");
-					}
-				} else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(binExpr->left.get())) {
-					// String literals return a pointer directly
-					leftPtr = generateStringLiteral(strLit);
-				} else if (auto *nestedBin = dynamic_cast<BinaryExprAST *>(binExpr->left.get())) {
-					// Nested binary expression (chained concat) returns an alloca pointer
-					leftPtr = generateExpr(nestedBin);
-				} else {
-					// Other expressions (like member access) return a loaded value
-					// We need to store it to a temporary alloca to get a pointer
-					mir::MIRValue *leftVal = generateExpr(binExpr->left.get());
-					leftPtr = builder->createAlloca(stringType, "left_str_tmp");
-					builder->createStore(leftVal, leftPtr);
-				}
-
-				if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->right.get())) {
-					rightPtr = namedValues[varExpr->name];
-					if (isStructParameter(varExpr->name)) {
-						rightPtr = builder->createLoad(mir::MIRType::getPtr(), rightPtr, "right_str");
-					}
-				} else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(binExpr->right.get())) {
-					// String literals return a pointer directly
-					rightPtr = generateStringLiteral(strLit);
-				} else if (auto *nestedBin = dynamic_cast<BinaryExprAST *>(binExpr->right.get())) {
-					// Nested binary expression (chained concat) returns an alloca pointer
-					rightPtr = generateExpr(nestedBin);
-				} else {
-					// Other expressions (like member access) return a loaded value
-					// We need to store it to a temporary alloca to get a pointer
-					mir::MIRValue *rightVal = generateExpr(binExpr->right.get());
-					rightPtr = builder->createAlloca(stringType, "right_str_tmp");
-					builder->createStore(rightVal, rightPtr);
-				}
-
-				mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
-				mir::MIRType *managedStringDataType = structTypes["__ManagedStringData"];
-				if (!managedStringDataType) {
-					managedStringDataType = module->getOrCreateStructType(
-						"__ManagedStringData",
-						{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
-					structTypes["__ManagedStringData"] = managedStringDataType;
-				}
-
-				// Get _managed pointers from both strings (field 0 of string is _managed ptr)
-				mir::MIRValue *leftManagedFieldPtr = builder->createStructGEP(stringType, leftPtr, 0, "left_managed_field");
-				mir::MIRValue *leftManagedPtr = builder->createLoad(mir::MIRType::getPtr(), leftManagedFieldPtr, "left_managed_ptr");
-				mir::MIRValue *rightManagedFieldPtr = builder->createStructGEP(stringType, rightPtr, 0, "right_managed_field");
-				mir::MIRValue *rightManagedPtr = builder->createLoad(mir::MIRType::getPtr(), rightManagedFieldPtr, "right_managed_ptr");
-
-				// Get lengths from __ManagedStringData (field 1 = _len)
-				mir::MIRValue *leftLenPtr = builder->createStructGEP(managedStringDataType, leftManagedPtr, 1, "left_len_ptr");
-				mir::MIRValue *leftLen = builder->createLoad(mir::MIRType::getInt32(), leftLenPtr, "left_len");
-				mir::MIRValue *rightLenPtr = builder->createStructGEP(managedStringDataType, rightManagedPtr, 1, "right_len_ptr");
-				mir::MIRValue *rightLen = builder->createLoad(mir::MIRType::getInt32(), rightLenPtr, "right_len");
-
-				// Calculate combined length
-				mir::MIRValue *combinedLen = builder->createAdd(leftLen, rightLen, "combined_len");
-
-				// Allocate heap buffer with refcount header using _managed_string_alloc
-				mir::MIRFunction *stringAllocFunc = module->getFunction("_managed_string_alloc");
-				if (!stringAllocFunc) {
-					stringAllocFunc = builder->declareFunction("_managed_string_alloc",
-															   mir::MIRType::getPtr(),
-															   {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
-				}
-				// Create tag for tracking
-				mir::MIRValue *tag = module->createGlobalString(".__tag.str.concat", "string concat");
-
-				// Allocate combinedLen + 1 for null terminator
-				mir::MIRValue *combinedLenPlus1 = builder->createAdd(combinedLen, builder->getInt32(1), "combined_len_plus1");
-				mir::MIRValue *combinedLenPlus1_64 = builder->createSExt(combinedLenPlus1, mir::MIRType::getInt64(), "combined_len64");
-				mir::MIRValue *newDataPtr = builder->createCall(stringAllocFunc, {combinedLenPlus1_64, tag}, "concat_alloc");
-
-				// Get memcpy function
-				mir::MIRFunction *memcpyFunc = module->getFunction("memcpy");
-
-				// Copy left string data - get buffer ptr from __ManagedStringData
-				mir::MIRValue *leftBufFieldPtr = builder->createStructGEP(managedStringDataType, leftManagedPtr, 0, "left_buf_field");
-				mir::MIRValue *leftDataPtrPtr = builder->createStructGEP(unsizedArrayType, leftBufFieldPtr, 0, "left_data_ptr_ptr");
-				mir::MIRValue *leftDataPtr = builder->createLoad(mir::MIRType::getPtr(), leftDataPtrPtr, "left_data_ptr");
-				mir::MIRValue *leftLen64 = builder->createSExt(leftLen, mir::MIRType::getInt64(), "left_len64");
-				builder->createCall(memcpyFunc, {newDataPtr, leftDataPtr, leftLen64}, "copy_left");
-
-				// Copy right string data (at offset = leftLen)
-				mir::MIRValue *destOffset = builder->createGEP(mir::MIRType::getInt8(), newDataPtr, {leftLen64}, "dest_offset");
-				mir::MIRValue *rightBufFieldPtr = builder->createStructGEP(managedStringDataType, rightManagedPtr, 0, "right_buf_field");
-				mir::MIRValue *rightDataPtrPtr = builder->createStructGEP(unsizedArrayType, rightBufFieldPtr, 0, "right_data_ptr_ptr");
-				mir::MIRValue *rightDataPtr = builder->createLoad(mir::MIRType::getPtr(), rightDataPtrPtr, "right_data_ptr");
-				mir::MIRValue *rightLen64 = builder->createSExt(rightLen, mir::MIRType::getInt64(), "right_len64");
-				builder->createCall(memcpyFunc, {destOffset, rightDataPtr, rightLen64}, "copy_right");
-
-				// Write null terminator at newDataPtr[combinedLen]
-				mir::MIRValue *combinedLen64 = builder->createSExt(combinedLen, mir::MIRType::getInt64(), "combined_len64_for_null");
-				mir::MIRValue *nullTermPtr = builder->createGEP(mir::MIRType::getInt8(), newDataPtr, {combinedLen64}, "null_term_ptr");
-				builder->createStore(builder->getInt8(0), nullTermPtr);
-
-				// Heap-allocate the __ManagedStringData struct for the result
-				mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
-				mir::MIRValue *managedSize = builder->getInt64(24);
-				mir::MIRValue *newManagedPtr = builder->createCall(mallocFunc, {managedSize}, "concat_managed");
-
-				// Set up the __ManagedStringData struct
-				// Field 0: _buffer (fat pointer)
-				mir::MIRValue *newBufFieldPtr = builder->createStructGEP(managedStringDataType, newManagedPtr, 0, "new_buf_field");
-				mir::MIRValue *newBufPtrPtr = builder->createStructGEP(unsizedArrayType, newBufFieldPtr, 0, "new_buf_ptr_ptr");
-				builder->createStore(newDataPtr, newBufPtrPtr);
-				mir::MIRValue *newBufLenPtr = builder->createStructGEP(unsizedArrayType, newBufFieldPtr, 1, "new_buf_len_ptr");
-				builder->createStore(combinedLen, newBufLenPtr);
-
-				// Field 1: _len
-				mir::MIRValue *newLenPtr = builder->createStructGEP(managedStringDataType, newManagedPtr, 1, "new_len_ptr");
-				builder->createStore(combinedLen, newLenPtr);
-
-				// Field 2: _capacity
-				mir::MIRValue *newCapPtr = builder->createStructGEP(managedStringDataType, newManagedPtr, 2, "new_cap_ptr");
-				builder->createStore(combinedLen, newCapPtr);
-
-				// Create the result string struct on stack
-				mir::MIRValue *resultAlloca = builder->createAlloca(stringType, "concat_result");
-
-				// Field 0: _managed (ptr to __ManagedStringData)
-				mir::MIRValue *resultManagedFieldPtr = builder->createStructGEP(stringType, resultAlloca, 0, "result_managed_field");
-				builder->createStore(newManagedPtr, resultManagedFieldPtr);
-
-				// Track for cleanup at scope exit - track both the buffer and the managed struct
-				mir::MIRValue *dataPtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), "concat.heap.ptr");
-				builder->createStore(newDataPtr, dataPtrAlloca);
-				if (!scopeStack.empty()) {
-					scopeStack.back().heapAllocatedStrings.push_back({"concat.heap", dataPtrAlloca});
-				}
-
-				return resultAlloca;
 			}
 		}
 

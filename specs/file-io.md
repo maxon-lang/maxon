@@ -59,12 +59,18 @@ Read the entire contents of a text file as a UTF-8 encoded string.
 ```maxon
 function main() returns int
     let content = readTextFile("example.txt") or 'noFile'
-        print("File content: " + content)
+        print("Could not read file")
         return 0
     end 'noFile'
-    print("Could not read file")
+    print("File content: {content}")
     return 1
 end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Could not read file
 ```
 
 ### writeTextFile
@@ -92,6 +98,12 @@ function main() returns int
     return 0
 end 'main'
 ```
+```exitcode
+0
+```
+```stdout
+File written successfully
+```
 
 ### writeBinaryFile
 
@@ -110,7 +122,7 @@ Write binary data to a file.
 ```maxon
 function main() returns int
     let data = [72 as byte, 101 as byte, 108 as byte, 108 as byte, 111 as byte]  // "Hello" in bytes
-    let success = writeBinaryFile("binary.dat", data)
+    let success = writeBinaryFile("temp/binary.dat", data)
     if success 'write_ok'
         print("Binary file written successfully")
     end 'write_ok' else 'write_fail'
@@ -118,6 +130,12 @@ function main() returns int
     end 'write_fail'
     return 0
 end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Binary file written successfully
 ```
 
 ## Tests
@@ -131,7 +149,7 @@ function main() returns int
         print("File not found")
         return 1
     end 'noFile'
-    print("Content:" + content)
+    print("Content:{content}")
     return 0
 end 'main'
 ```
@@ -170,7 +188,7 @@ end 'main'
 function main() returns int
     var result = readTextFile("nonexistent.txt")
     if let content = result 'hasContent'
-        print("Unexpected: " + content)
+        print("Unexpected: {content}")
         return 1
     end 'hasContent'
     print("File not found")

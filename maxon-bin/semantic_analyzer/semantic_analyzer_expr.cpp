@@ -39,6 +39,47 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		}
 		return "string";
 
+	} else if (auto interpExpr = dynamic_cast<InterpolatedStringExprAST *>(expr)) {
+		// Interpolated string: "Hello {name}!"
+		// Each expression part must be convertible to string (implement Stringable)
+		if (lookupStruct("string") == nullptr) {
+			undefinedStructs.insert("string");
+		}
+
+		for (const auto &part : interpExpr->parts) {
+			if (part.isExpression && part.expr) {
+				std::string exprType = analyzeExpression(part.expr.get());
+				if (exprType == "error") continue;
+
+				// Check if type is Stringable
+				// Built-in types (int, float, bool, byte, character, string) are always Stringable
+				bool isBuiltinStringable = (exprType == "int" || exprType == "float" ||
+				                            exprType == "bool" || exprType == "byte" ||
+				                            exprType == "character" || exprType == "string");
+
+				if (!isBuiltinStringable) {
+					// Check if type implements Stringable interface
+					bool implementsStringable = false;
+					auto it = structs.find(exprType);
+					if (it != structs.end()) {
+						for (const auto &iface : it->second.conformsTo) {
+							if (iface == "Stringable") {
+								implementsStringable = true;
+								break;
+							}
+						}
+					}
+
+					if (!implementsStringable) {
+						addError("Type '" + exprType + "' cannot be interpolated in string\n"
+						         "  The type must implement the Stringable interface with toString(spec string) returns string",
+						         part.expr->line, part.expr->column);
+					}
+				}
+			}
+		}
+		return "string";
+
 	} else if (auto arrayLiteral = dynamic_cast<ArrayLiteralExprAST *>(expr)) {
 		// Array literal: [val1, val2, ...] form - value-initialized array
 		// Returns array<T> (the stdlib struct type)
@@ -413,9 +454,11 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Arithmetic operators: +, -, *, /, %
 		if (binExpr->op == '+' || binExpr->op == '-' || binExpr->op == '*' ||
 			binExpr->op == '/' || binExpr->op == '%') {
-			// Special case: string + string = string concatenation
-			if (binExpr->op == '+' && leftType == "string" && rightType == "string") {
-				return "string";
+			// String concatenation with + is no longer supported - use interpolation instead
+			if (binExpr->op == '+' && (leftType == "string" || rightType == "string")) {
+				addError("String concatenation with '+' is not supported. Use string interpolation instead: \"{expr}\"",
+						 expr->line, expr->column);
+				return "error";
 			}
 
 			// Special handling for modulo: requires both operands to be int

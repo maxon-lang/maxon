@@ -35,6 +35,9 @@ static MIRType ptrType(MIRTypeKind::Ptr);
 // Cache for array types
 static std::vector<std::unique_ptr<MIRType>> arrayTypeCache;
 
+// Cache for named struct types (keyed by name)
+static std::unordered_map<std::string, MIRType *> namedStructCache;
+
 MIRType *MIRType::getVoid() { return &voidType; }
 MIRType *MIRType::getInt1() { return &int1Type; }
 MIRType *MIRType::getInt8() { return &int8Type; }
@@ -54,12 +57,25 @@ MIRType *MIRType::getArray(MIRType *elem, uint64_t size) {
 }
 
 MIRType *MIRType::getStruct(const std::string &name, const std::vector<MIRType *> &fields) {
+	// Check if we already have a struct with this name
+	auto it = namedStructCache.find(name);
+	if (it != namedStructCache.end()) {
+		// Update fields if they're provided and the existing struct has none
+		// This handles forward declarations that are later defined
+		if (!fields.empty() && it->second->fieldTypes.empty()) {
+			it->second->fieldTypes = fields;
+			it->second->computeSize();
+		}
+		return it->second;
+	}
+
 	auto type = std::make_unique<MIRType>(MIRTypeKind::Struct);
 	type->structName = name;
 	type->fieldTypes = fields;
 	type->computeSize();
 	MIRType *ptr = type.get();
-	arrayTypeCache.push_back(std::move(type)); // Reuse cache
+	arrayTypeCache.push_back(std::move(type)); // Reuse cache for memory management
+	namedStructCache[name] = ptr;
 	return ptr;
 }
 

@@ -73,7 +73,7 @@ end 'main'
 function main() returns int
     var neg = 0.0 - 3.9
     var y = ceil(neg)
-    printInt(y)
+    print("{y}")
     return 0
 end 'main'
 ```

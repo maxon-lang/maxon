@@ -218,6 +218,22 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		} else if (retStmt->value) {
 			retVal = generateExpr(retStmt->value.get());
 
+			// For struct types (like string), generateExpr returns an alloca pointer.
+			// We need to load the value to return it by-value.
+			if (retVal && retVal->type == mir::MIRType::getPtr()) {
+				std::string returnTypeStr = functionReturnTypes[function->name];
+				// Strip "or nil" suffix for base type lookup
+				std::string baseType = returnTypeStr;
+				size_t orNilPos = returnTypeStr.find(" or nil");
+				if (orNilPos != std::string::npos) {
+					baseType = returnTypeStr.substr(0, orNilPos);
+				}
+				mir::MIRType *returnType = getTypeFromString(baseType);
+				if (returnType && returnType->isStruct()) {
+					retVal = builder->createLoad(returnType, retVal, "ret.val");
+				}
+			}
+
 			// Handle nil literal (generateExpr returns nullptr for nil)
 			if (!retVal) {
 				// Get function return type

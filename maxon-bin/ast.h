@@ -167,6 +167,23 @@ class StringLiteralExprAST : public ExprAST {
 	ExprAST *clone() const override { return new StringLiteralExprAST(value, line, column); }
 };
 
+// Interpolated string part - either a literal string segment or an expression with optional format specifier
+struct InterpolatedStringPart {
+	bool isExpression;
+	std::string literalValue;         // For literal segments
+	std::unique_ptr<ExprAST> expr;    // For interpolated expressions
+	std::string formatSpec;           // Format specifier (after :), empty if none
+};
+
+// Interpolated string expression (e.g., "Hello {name}!")
+// Contains a sequence of literal segments and interpolated expressions
+class InterpolatedStringExprAST : public ExprAST {
+  public:
+	std::vector<InterpolatedStringPart> parts;
+
+	InterpolatedStringExprAST(int l = 0, int c = 0) : ExprAST(l, c) {}
+};
+
 // Nil literal (represents absence in optional types)
 class NilExprAST : public ExprAST {
   public:

@@ -38,8 +38,8 @@ $MAXON self-test
 results[self-tests]=$?
 echo ""
 
-# Test 2: Backend MIR tests
-echo -e "${YELLOW}[2/6] Running backend MIR tests...${NC}"
+# Test 2: Backend MIR tests (integration tests)
+echo -e "${YELLOW}[2/6] Running backend MIR integration tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 ./backend-tests/runner/build/backend-test-runner${EXE_EXT} -v
 results[backend-tests]=$?

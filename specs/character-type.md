@@ -149,7 +149,7 @@ end 'main'
 ```maxon
 function main() returns int
     var c = 'é'
-    printInt(c.bytes().count())
+    print("{c.bytes().count()}")
     return 0
 end 'main'
 ```
@@ -166,7 +166,7 @@ end 'main'
 ```maxon
 function main() returns int
     var c = '中'
-    printInt(c.bytes().count())
+    print("{c.bytes().count()}")
     return 0
 end 'main'
 ```
@@ -183,7 +183,7 @@ end 'main'
 ```maxon
 function main() returns int
     var c = '🎉'
-    printInt(c.bytes().count())
+    print("{c.bytes().count()}")
     return 0
 end 'main'
 ```
@@ -287,7 +287,7 @@ end 'main'
 ```maxon
 function main() returns int
     var flag = '🇺🇸'
-    printInt(flag.bytes().count())
+    print("{flag.bytes().count()}")
     print(flag.toString())
     return 0
 end 'main'
@@ -306,7 +306,7 @@ end 'main'
 ```maxon
 function main() returns int
     var family = '👨‍👩‍👧'
-    printInt(family.bytes().count())
+    print("{family.bytes().count()}")
     return 0
 end 'main'
 ```
@@ -323,7 +323,7 @@ end 'main'
 ```maxon
 function main() returns int
     var wave = '👋🏽'
-    printInt(wave.bytes().count())
+    print("{wave.bytes().count()}")
     return 0
 end 'main'
 ```
@@ -343,10 +343,10 @@ function main() returns int
     var tab = '\t'
     var backslash = '\\'
     var quote = '\''
-    printInt(newline.bytes().count())
-    printInt(tab.bytes().count())
-    printInt(backslash.bytes().count())
-    printInt(quote.bytes().count())
+    print("{newline.bytes().count()}")
+    print("{tab.bytes().count()}")
+    print("{backslash.bytes().count()}")
+    print("{quote.bytes().count()}")
     return 0
 end 'main'
 ```

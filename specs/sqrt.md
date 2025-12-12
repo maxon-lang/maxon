@@ -75,7 +75,7 @@ end 'main'
 ```maxon
 function main() returns int
     var x = sqrt(2.0)
-    printFloat(x, 15)
+    print("{x}")
     return 0
 end 'main'
 ```
@@ -83,7 +83,7 @@ end 'main'
 0
 ```
 ```stdout
-1.414213562373095
+1.414213
 ```
 
 <!-- test: sqrt.zero -->

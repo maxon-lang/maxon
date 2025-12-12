@@ -62,7 +62,7 @@ Heap strings should allocate and free properly.
 ```maxon
 function main() returns int
     var s = "this is a heap allocated string!"
-    printInt(s.count())
+    print("{s.count()}")
     return 0
 end 'main'
 ```
@@ -71,14 +71,16 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 41 bytes (string literal)
-32ALLOC #2: 10 bytes (cstring conversion)
-FREE #2: 10 bytes (cstring release)
+ALLOC #2: 11 bytes
+32ALLOC #3: 10 bytes (cstring conversion)
+FREE #3: 10 bytes (cstring release)
 
+FREE #2: 11 bytes (cstring release)
 FREE #1: 41 bytes (string literal)
 
 === ALLOC STATS ===
-Allocated: 51 bytes
-Freed:     51 bytes
+Allocated: 62 bytes
+Freed:     62 bytes
 Leaked:    0 bytes
 ```
 
@@ -89,7 +91,7 @@ Reassigning a heap string should release the old value.
 function main() returns int
     var s = "first heap allocated value!!"
     s = "second heap allocated here!!"
-    printInt(s.count())
+    print("{s.count()}")
     return 0
 end 'main'
 ```
@@ -100,14 +102,16 @@ end 'main'
 ALLOC #1: 37 bytes (string literal)
 ALLOC #2: 37 bytes (string literal)
 FREE #1: 37 bytes (string reassign)
-28ALLOC #3: 10 bytes (cstring conversion)
-FREE #3: 10 bytes (cstring release)
+ALLOC #3: 11 bytes
+28ALLOC #4: 10 bytes (cstring conversion)
+FREE #4: 10 bytes (cstring release)
 
+FREE #3: 11 bytes (cstring release)
 FREE #2: 37 bytes (string literal)
 
 === ALLOC STATS ===
-Allocated: 84 bytes
-Freed:     84 bytes
+Allocated: 95 bytes
+Freed:     95 bytes
 Leaked:    0 bytes
 ```
 
@@ -120,7 +124,7 @@ Substrings should retain their parent string.
 function main() returns int
     var s = "hello world from heap!!"
     var sub = s.slice(s.startIndex(), s.indexAdvanced(s.startIndex(), 5))
-    printInt(sub.count())
+    print("{sub.count()}")
     return 0
 end 'main'
 ```
@@ -129,14 +133,16 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 32 bytes (string literal)
-5ALLOC #2: 10 bytes (cstring conversion)
-FREE #2: 10 bytes (cstring release)
+ALLOC #2: 10 bytes
+5ALLOC #3: 10 bytes (cstring conversion)
+FREE #3: 10 bytes (cstring release)
 
-FREE #1: 32 bytes (substring parent)
+FREE #2: 10 bytes (cstring release)
+FREE #1: 32 bytes (string literal)
 
 === ALLOC STATS ===
-Allocated: 42 bytes
-Freed:     42 bytes
+Allocated: 52 bytes
+Freed:     52 bytes
 Leaked:    0 bytes
 ```
 
@@ -170,18 +176,20 @@ Leaked:    0 bytes
 
 ### Loop Concatenation Tests
 
-<!-- test: loop-concat-accumulator -->
+<!-- test: loop-interp-accumulator -->
 <!-- TrackAllocs: true -->
-String accumulation in loop should release intermediate values.
+String accumulation in loop releases intermediate values on reassignment.
+The final value is properly released at scope exit.
 ```maxon
 function main() returns int
     var s = ""
+    var a = "a"
     var i = 0
     while i < 5 'loop'
-        s = s + "a"
+        s = "{s}{a}"
         i = i + 1
     end 'loop'
-    printInt(s.count())
+    print("{s.count()}")
     return 0
 end 'main'
 ```
@@ -198,13 +206,15 @@ ALLOC #4: 13 bytes (string concat)
 FREE #3: 12 bytes (string reassign)
 ALLOC #5: 14 bytes (string concat)
 FREE #4: 13 bytes (string reassign)
-5ALLOC #6: 10 bytes (cstring conversion)
-FREE #6: 10 bytes (cstring release)
+ALLOC #6: 10 bytes
+5ALLOC #7: 10 bytes (cstring conversion)
+FREE #7: 10 bytes (cstring release)
 
-FREE #5: 14 bytes (string concat)
+FREE #6: 10 bytes (cstring release)
+FREE #5: 14 bytes (string literal)
 
 === ALLOC STATS ===
-Allocated: 70 bytes
-Freed:     70 bytes
+Allocated: 80 bytes
+Freed:     80 bytes
 Leaked:    0 bytes
 ```

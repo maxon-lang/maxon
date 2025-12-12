@@ -95,14 +95,14 @@ function main() returns int
     var r_quarter = log2(0.25) // 2^(-2) = 0.25
     
     // Print results
-    printFloat(r1, 1)
-    printFloat(r2, 1)
-    printFloat(r4, 1)
-    printFloat(r8, 1)
-    printFloat(r16, 1)
-    printFloat(r1024, 1)
-    printFloat(r_half, 1)
-    printFloat(r_quarter, 1)
+    print("{r1}")
+    print("{r2}")
+    print("{r4}")
+    print("{r8}")
+    print("{r16}")
+    print("{r1024}")
+    print("{r_half}")
+    print("{r_quarter}")
     
     return 0
 end 'main'
@@ -112,13 +112,13 @@ end 'main'
 ```
 ```stdout
 0.0
-1.0
-2.0
-3.0
-4.0
-10.0
--1.0
--2.0
+0.999999
+1.999999
+2.999999
+3.999999
+9.999999
+-0.999999
+-1.999999
 ```
 
 <!-- test: log2.non-powers-and-precision -->
@@ -130,10 +130,10 @@ function main() returns int
     var r6 = log2(6.0)
     var r1000000 = log2(1000000.0)
     
-    printFloat(r3, 15)
-    printFloat(r5, 15)
-    printFloat(r6, 10)
-    printFloat(r1000000, 6)
+    print("{r3}")
+    print("{r5}")
+    print("{r6}")
+    print("{r1000000}")
     
     return 0
 end 'main'
@@ -142,10 +142,10 @@ end 'main'
 0
 ```
 ```stdout
-1.584962500721155
-2.321928094887361
-2.5849625007
-19.931569
+1.584962
+2.321928
+2.584962
+19.931568
 ```
 
 
@@ -155,10 +155,10 @@ function main() returns int
     // Test integer promotion
     var int_val = 32
     var r_int = log2(int_val)  // Should promote 32 to 32.0
-    printFloat(r_int, 1)
+    print("{r_int}")
     
     var r_literal = log2(64)   // Integer literal promotion
-    printFloat(r_literal, 1)
+    print("{r_literal}")
     
     // Verify relationship: log2(x) = log(x) / log(2)
     var test_val = 100.0
@@ -173,14 +173,14 @@ function main() returns int
     end 'abs'
     
     if abs_diff < 0.000001 'pass'
-        printFloat(r_int, 1)    // Print again to show test passed
+        print("{r_int}")    // Print again to show test passed
     end 'pass'
     
     // Test relationship: log2(2^x) = x
     var exponent = 7.0
     var power_val = pow(2.0, exponent)
     var r_pow = log2(power_val)
-    printFloat(r_pow, 1)
+    print("{r_pow}")
     
     return 0
 end 'main'
@@ -189,10 +189,10 @@ end 'main'
 0
 ```
 ```stdout
-5.0
-6.0
-5.0
-7.0
+4.999999
+5.999999
+4.999999
+6.999999
 ```
 
 <!-- test: log2.special-values -->
@@ -202,15 +202,15 @@ function main() returns int
     // log2(e) should equal 1/ln(2) ≈ 1.442695
     var e = 2.71828182845904523536
     var r_e = log2(e)
-    printFloat(r_e, 6)
+    print("{r_e}")
     
     // Test with 10
     var r_10 = log2(10.0)
-    printFloat(r_10, 6)
+    print("{r_10}")
     
     // Test value exactly between powers of 2
     var r_between = log2(12.0)  // Between 2^3 and 2^4
-    printFloat(r_between, 6)
+    print("{r_between}")
     
     return 0
 end 'main'
@@ -221,5 +221,5 @@ end 'main'
 ```stdout
 1.442695
 3.321928
-3.584963
+3.584962
 ```

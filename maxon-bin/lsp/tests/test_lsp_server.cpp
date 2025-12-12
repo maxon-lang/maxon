@@ -10,8 +10,8 @@
 
 using json = maxon::lsp::json;
 using JsonRpcMessage = maxon::lsp::JsonRpcMessage;
-using maxon_lsp::pathToUri;
 using maxon_lsp::normalizeUri;
+using maxon_lsp::pathToUri;
 
 // Mock transport that allows sending requests and capturing responses
 class MockTransport : public maxon::lsp::Transport {
@@ -894,21 +894,15 @@ TEST_CASE("LSP hover shows correct type for stdlib function parameter", "[lsp][h
 	fixture.initialize(rootUri);
 
 	// Code with multiple functions that have same-named parameter 'value' with different types
-	// This mirrors stdlib/sys/print.maxon structure
 	std::string code = R"(export function print(value string) returns int
     var cs = value
     return 0
 end 'print'
 
-export function printInt(value int) returns int
+export function helper(value int) returns int
     var x = value
     return 0
-end 'printInt'
-
-export function printFloat(value float, precision int) returns int
-    var y = value
-    return 0
-end 'printFloat')";
+end 'helper')";
 	std::string docUri = "file://" + (projectRoot / "stdlib" / "sys" / "test_print.maxon").string();
 	fixture.openDocument(docUri, code);
 
@@ -2645,8 +2639,7 @@ end 'test')";
 	// Request completion after 'hel' at line 1
 	json completionParams = {
 		{"textDocument", {{"uri", docUri}}},
-		{"position", {{"line", 1}, {"character", 11}}}
-	};
+		{"position", {{"line", 1}, {"character", 11}}}};
 	fixture.transport()->queueRequest(3, "textDocument/completion", completionParams);
 
 	fixture.shutdown();
@@ -2699,8 +2692,7 @@ end 'test')";
 	// Request definition on 'helper' at line 1
 	json defParams = {
 		{"textDocument", {{"uri", docUri}}},
-		{"position", {{"line", 1}, {"character", 9}}}
-	};
+		{"position", {{"line", 1}, {"character", 9}}}};
 	fixture.transport()->queueRequest(4, "textDocument/definition", defParams);
 
 	fixture.shutdown();

@@ -63,10 +63,10 @@ function main() returns int
     var x2 = cos(0.5)
     var x3 = cos(1.0)
     var x4 = cos(1.5708)
-    printFloat(x1, 6)
-    printFloat(x2, 6)
-    printFloat(x3, 6)
-    printFloat(x4, 6)
+    print("{x1}")
+    print("{x2}")
+    print("{x3}")
+    print("{x4}")
     return 0
 end 'main'
 ```
@@ -74,10 +74,10 @@ end 'main'
 0
 ```
 ```stdout
-1.000000
-0.877583
+1.0
+0.877582
 0.540302
--0.000004
+-0.000003
 ```
 
 

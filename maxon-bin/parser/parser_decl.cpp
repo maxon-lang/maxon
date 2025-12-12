@@ -651,12 +651,13 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 				std::string name = nameTok.value;
 
 				// Handle Self type specially, otherwise use unified type parser
+				// Support optional types (e.g., "string or nil") for interface method parameters
 				std::string paramType;
 				if (check(TokenType::IDENTIFIER) && currentValue() == "Self") {
 					paramType = "Self";
 					advance();
 				} else {
-					paramType = parseTypeString("parameter type");
+					paramType = parseTypeStringWithOptional("parameter type");
 				}
 
 				parameters.push_back(FunctionParameter(name, paramType, paramLine, paramColumn));

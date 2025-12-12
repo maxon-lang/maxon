@@ -18,7 +18,6 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - string formatting
 - self hosting features
 - hex literals
-- investigate maxon-bin/tests
 - debugging (speed up the dev process)
 - memory safety (generational references)
 - parser needs to be strict about new lines
@@ -41,6 +40,7 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - code actions should be directly linked to the errors that made them needed
 - type aliases
 - lsp is lowercasing paths on windows for comparison which isn't really correct
+- oh god locales
 
 ## Ideas
 - reorganize structs to improve cache locality

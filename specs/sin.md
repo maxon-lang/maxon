@@ -64,10 +64,10 @@ function main() returns int
     var x2 = sin(0.5)
     var x3 = sin(1.0)
     var x4 = sin(1.5708)
-    printFloat(x1, 6)
-    printFloat(x2, 6)
-    printFloat(x3, 6)
-    printFloat(x4, 6)
+    print("{x1}")
+    print("{x2}")
+    print("{x3}")
+    print("{x4}")
     return 0
 end 'main'
 ```
@@ -75,10 +75,10 @@ end 'main'
 0
 ```
 ```stdout
-0.000000
-0.479426
-0.841471
-1.000000
+0.0
+0.479425
+0.84147
+0.999999
 ```
 
 <!-- test: sin.zero -->

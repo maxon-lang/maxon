@@ -65,7 +65,7 @@ Optionally include stdout output:
 
 ```maxon
 function main() returns int
-    printInt(42)
+    print("42")
     return 0
 end 'main'
 ```

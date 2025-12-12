@@ -1,30 +1,90 @@
 // Test: associated-types.doc-example-2.1
-interface TwoMethods uses Element
-    function first() returns Element
-    function second() returns Element
-end 'TwoMethods'
+interface Summable uses Element
+    function sum() returns Element
+end 'Summable'
 
-type Partial is TwoMethods with int
-    var value int
+type IntPair is Summable with int
+    var a int
+    var b int
 
-    function TwoMethods.first() returns int
-        return value
-    end 'first'
-end 'Partial'
+    function Summable.sum() returns int
+        return a + b
+    end 'sum'
+end 'IntPair'
 
 function main() returns int
-    return 0
+    var p = IntPair{a: 10, b: 32}
+    return p.sum()
 end 'main'
 ---
-N/A
----
-N/A
----
-MaxoncStderr: ```
-Semantic Error: line 7, column 1
-Partial interface implementation: type 'Partial' is missing 1 method(s):
-  - second() returns int
+; Module: test.maxon
+; Instructions: 14
 
-  7 | type Partial is TwoMethods with int
-    | ^
-```
+%IntPair = type { i32, i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca %IntPair
+  %1 = getelementptr %IntPair, ptr %0, i32 0, i32 0
+  store i32 10, ptr %1
+  %2 = getelementptr %IntPair, ptr %0, i32 0, i32 1
+  store i32 32, ptr %2
+  %4 = getelementptr %IntPair, ptr %0, i32 0, i32 0
+  %5 = load i32, ptr %4
+  %6 = getelementptr %IntPair, ptr %0, i32 0, i32 1
+  %7 = load i32, ptr %6
+  %8 = add i32 %5, %7
+  ret i32 %8
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 20
+
+%IntPair = type { i32, i32 }
+
+define i32 @IntPair.sum(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %IntPair, ptr %1, i32 0, i32 0
+  %3 = load i32, ptr %2
+  %4 = load ptr, ptr %0
+  %5 = getelementptr %IntPair, ptr %4, i32 0, i32 1
+  %6 = load i32, ptr %5
+  %7 = add i32 %3, %6
+  ret i32 %7
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %IntPair
+  %1 = getelementptr %IntPair, ptr %0, i32 0, i32 0
+  store i32 10, ptr %1
+  %2 = getelementptr %IntPair, ptr %0, i32 0, i32 1
+  store i32 32, ptr %2
+  %3 = call i32 @IntPair.sum(ptr %0)
+  ret i32 %3
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 42

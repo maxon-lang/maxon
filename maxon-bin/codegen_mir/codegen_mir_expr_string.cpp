@@ -98,15 +98,54 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 	}
 	// Handle binary expressions - recursively determine result type
 	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
-		if (binExpr->op == '+') {
-			std::string leftType = getExpressionMaxonType(binExpr->left.get());
-			std::string rightType = getExpressionMaxonType(binExpr->right.get());
-			if (leftType == "string" && rightType == "string") {
-				return "string";
-			}
+		std::string leftType = getExpressionMaxonType(binExpr->left.get());
+		std::string rightType = getExpressionMaxonType(binExpr->right.get());
+
+		// String concatenation (if still supported)
+		if (binExpr->op == '+' && leftType == "string" && rightType == "string") {
+			return "string";
 		}
-		// For other binary ops, return empty (will use default numeric behavior)
-		return "";
+
+		// Comparison operators return bool
+		if (binExpr->op == '<' || binExpr->op == '>' || binExpr->op == 'L' || // <=
+			binExpr->op == 'G' || binExpr->op == 'E' || binExpr->op == 'N' || // >=, ==, !=
+			binExpr->op == '&' || binExpr->op == '|') {						  // and, or
+			return "bool";
+		}
+
+		// Arithmetic operations: promote to float if either operand is float
+		if (leftType == "float" || rightType == "float") {
+			return "float";
+		}
+
+		// Integer arithmetic
+		if (leftType == "int" || rightType == "int") {
+			return "int";
+		}
+
+		// Byte arithmetic
+		if (leftType == "byte" || rightType == "byte") {
+			return "byte";
+		}
+
+		// Fall back to left type if non-empty
+		if (!leftType.empty()) {
+			return leftType;
+		}
+		return rightType;
+	}
+	// Handle unary expressions - type is same as operand
+	if (auto *unaryExpr = dynamic_cast<UnaryExprAST *>(expr)) {
+		std::string operandType = getExpressionMaxonType(unaryExpr->operand.get());
+		// Unary minus/plus doesn't change type
+		if (unaryExpr->op == '-' || unaryExpr->op == '+') {
+			return operandType;
+		}
+		// Unary 'not' returns bool
+		if (unaryExpr->op == '!') {
+			return "bool";
+		}
+		return operandType;
 	}
 	// Handle call expressions - look up return type from function registry
 	if (auto *callExpr = dynamic_cast<CallExprAST *>(expr)) {
@@ -169,6 +208,38 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 			funcType += "void";
 		}
 		return funcType;
+	}
+	// Handle array index expressions - return the element type
+	if (auto *arrayIndex = dynamic_cast<ArrayIndexExprAST *>(expr)) {
+		std::string arrayType;
+		if (arrayIndex->hasArrayExpr()) {
+			arrayType = getExpressionMaxonType(arrayIndex->arrayExpr.get());
+		} else {
+			auto it = variableTypes.find(arrayIndex->arrayName);
+			if (it != variableTypes.end()) {
+				arrayType = it->second;
+			}
+		}
+		// Extract element type from array type (e.g., "array of int" -> "int", "[]int" -> "int", "array<int>" -> "int")
+		if (!arrayType.empty()) {
+			// Handle "array<T>" syntax (most common - used by makeArrayStructType)
+			if (arrayType.rfind("array<", 0) == 0 && arrayType.back() == '>') {
+				return arrayType.substr(6, arrayType.size() - 7); // Extract T from array<T>
+			}
+			// Handle "array of T" syntax
+			if (arrayType.rfind("array of ", 0) == 0) {
+				return arrayType.substr(9); // Skip "array of "
+			}
+			// Handle "[]T" syntax
+			if (arrayType.rfind("[]", 0) == 0) {
+				return arrayType.substr(2); // Skip "[]"
+			}
+			// Handle string indexing - returns character
+			if (arrayType == "string") {
+				return "character";
+			}
+		}
+		return "";
 	}
 	// For other expression types, return empty (will use default behavior)
 	return "";
@@ -408,4 +479,156 @@ mir::MIRValue *MIRCodeGenerator::generateCharLiteral(CharacterExprAST *charExpr)
 
 	// Return the alloca pointer
 	return charAlloca;
+}
+
+// Generate an interpolated string like "Hello {name}!"
+// Converts each expression to string using toString() and concatenates all parts
+mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringExprAST *interpExpr) {
+	// Get the string struct type
+	mir::MIRType *stringType = getTypeFromString("string");
+
+	// If there's only one literal part with no expressions, just generate a regular string
+	if (interpExpr->parts.size() == 1 && !interpExpr->parts[0].isExpression) {
+		// Create a temporary StringLiteralExprAST
+		StringLiteralExprAST tempStrExpr(interpExpr->parts[0].literalValue, interpExpr->line, interpExpr->column);
+		return generateStringLiteral(&tempStrExpr);
+	}
+
+	// Convert each part to a string and store in a vector
+	std::vector<mir::MIRValue *> stringParts;
+
+	for (const auto &part : interpExpr->parts) {
+		if (!part.isExpression) {
+			// Literal string segment - generate as string literal
+			StringLiteralExprAST tempStrExpr(part.literalValue, interpExpr->line, interpExpr->column);
+			mir::MIRValue *litStr = generateStringLiteral(&tempStrExpr);
+			stringParts.push_back(litStr);
+		} else {
+			// Expression - need to convert to string via toString()
+			mir::MIRValue *exprVal = generateExpr(part.expr.get());
+			std::string exprType = getExpressionMaxonType(part.expr.get());
+
+			// Generate the format spec string (empty string for default)
+			mir::MIRValue *formatSpecArg;
+			if (part.formatSpec.empty()) {
+				StringLiteralExprAST emptySpec("", interpExpr->line, interpExpr->column);
+				formatSpecArg = generateStringLiteral(&emptySpec);
+			} else {
+				StringLiteralExprAST specExpr(part.formatSpec, interpExpr->line, interpExpr->column);
+				formatSpecArg = generateStringLiteral(&specExpr);
+			}
+
+			// Call toString on the expression
+			// For built-in types, we call intrinsics; for user types, call Type.toString(spec)
+			mir::MIRValue *strVal = nullptr;
+
+			if (exprType == "string") {
+				// Already a string - exprVal should be a pointer to the string struct
+				// If it's a loaded value, we need to store it in an alloca first
+				if (exprVal->type->isStruct()) {
+					// It's a loaded string value, store it in alloca
+					mir::MIRValue *strAlloca = builder->createAlloca(stringType, "interp.str");
+					builder->createStore(exprVal, strAlloca);
+					strVal = strAlloca;
+				} else {
+					// It's already a pointer
+					strVal = exprVal;
+				}
+			} else if (exprType == "int" || exprType == "float" || exprType == "bool" ||
+					   exprType == "byte" || exprType == "character") {
+				// Built-in types - call intrinsic toString
+				// For now, we'll generate calls to placeholder functions that we'll implement
+				// The intrinsics will be: __int_toString, __float_toString, etc.
+				std::string intrinsicName = "__" + exprType + "_toString";
+
+				// Declare the intrinsic if not already declared
+				mir::MIRFunction *toStringFunc = module->getFunction(intrinsicName);
+				if (!toStringFunc) {
+					toStringFunc = builder->declareFunction(intrinsicName,
+															stringType,
+															{exprVal->type, mir::MIRType::getPtr()});
+				}
+
+				// Call the intrinsic: result = __type_toString(value, spec)
+				strVal = builder->createCall(toStringFunc, {exprVal, formatSpecArg}, "toString.result");
+
+				// For struct returns, we need to store in an alloca
+				mir::MIRValue *strAlloca = builder->createAlloca(stringType, "interp.str");
+				builder->createStore(strVal, strAlloca);
+				strVal = strAlloca;
+			} else {
+				// User type - call Type.toString(spec)
+				std::string methodName = exprType + ".toString";
+				mir::MIRFunction *toStringFunc = module->getFunction(methodName);
+
+				if (!toStringFunc) {
+					// Method should exist (semantic analyzer checked), but declare if needed
+					toStringFunc = builder->declareFunction(methodName,
+															stringType,
+															{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+				}
+
+				// Call: result = Type.toString(self, spec)
+				strVal = builder->createCall(toStringFunc, {exprVal, formatSpecArg}, "toString.result");
+
+				// For struct returns, store in alloca
+				mir::MIRValue *strAlloca = builder->createAlloca(stringType, "interp.str");
+				builder->createStore(strVal, strAlloca);
+				strVal = strAlloca;
+			}
+
+			stringParts.push_back(strVal);
+		}
+	}
+
+	// Now concatenate all parts using string.concat()
+	// Start with the first part and concatenate the rest
+	mir::MIRValue *result = stringParts[0];
+
+	// Get types needed for extracting buffer pointer
+	mir::MIRType *managedStringDataType = structTypes["__ManagedStringData"];
+	if (!managedStringDataType) {
+		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
+		managedStringDataType = module->getOrCreateStructType(
+			"__ManagedStringData",
+			{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+		structTypes["__ManagedStringData"] = managedStringDataType;
+	}
+	mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
+
+	for (size_t i = 1; i < stringParts.size(); i++) {
+		// Call string.concat(self, other)
+		mir::MIRFunction *concatFunc = module->getFunction("string.concat");
+		if (!concatFunc) {
+			concatFunc = builder->declareFunction("string.concat",
+												  stringType,
+												  {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+		}
+
+		mir::MIRValue *concatResult = builder->createCall(concatFunc, {result, stringParts[i]}, "concat.result");
+
+		// Store result in alloca for next iteration
+		mir::MIRValue *resultAlloca = builder->createAlloca(stringType, "interp.tmp");
+		builder->createStore(concatResult, resultAlloca);
+		result = resultAlloca;
+
+		// Track intermediate results for cleanup (except the final one)
+		// The final result will be tracked when assigned to a variable
+		if (i < stringParts.size() - 1 && !scopeStack.empty()) {
+			// Extract the buffer pointer from the string struct for cleanup
+			// string._managed -> __ManagedStringData._buffer.ptr
+			mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, resultAlloca, 0, "interp.managed.field");
+			mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, "interp.managed.ptr");
+			mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringDataType, managedPtr, 0, "interp.buffer.field");
+			mir::MIRValue *bufferPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, "interp.buffer.ptr.ptr");
+			mir::MIRValue *bufferPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtrPtr, "interp.buffer.ptr");
+
+			// Store buffer pointer in alloca for cleanup tracking
+			mir::MIRValue *trackAlloca = builder->createAlloca(mir::MIRType::getPtr(), "interp.track.ptr");
+			builder->createStore(bufferPtr, trackAlloca);
+			scopeStack.back().heapAllocatedStrings.push_back({"interp.intermediate", trackAlloca});
+		}
+	}
+
+	return result;
 }

@@ -102,7 +102,7 @@ function main() returns int
     var a = 12
     var b = 10
     var c = a & b
-    printInt(c)
+    print("{c}")
     return 0
 end 'main'
 ```
@@ -119,7 +119,7 @@ function main() returns int
     var a = 12
     var b = 10
     var c = a | b
-    printInt(c)
+    print("{c}")
     return 0
 end 'main'
 ```
@@ -136,7 +136,7 @@ function main() returns int
     var a = 12
     var b = 10
     var c = a ^ b
-    printInt(c)
+    print("{c}")
     return 0
 end 'main'
 ```
@@ -152,7 +152,7 @@ end 'main'
 function main() returns int
     var a = 1
     var b = a << 3
-    printInt(b)
+    print("{b}")
     return 0
 end 'main'
 ```
@@ -168,7 +168,7 @@ end 'main'
 function main() returns int
     var a = 16
     var b = a >> 2
-    printInt(b)
+    print("{b}")
     return 0
 end 'main'
 ```
@@ -184,7 +184,7 @@ end 'main'
 function main() returns int
     var a = 1
     var b = a << 4 >> 2
-    printInt(b)
+    print("{b}")
     return 0
 end 'main'
 ```
@@ -201,7 +201,7 @@ function main() returns int
     // & has higher precedence than |
     // 12 & 10 = 8, then 8 | 1 = 9
     var result = 12 & 10 | 1
-    printInt(result)
+    print("{result}")
     return 0
 end 'main'
 ```
@@ -218,7 +218,7 @@ function main() returns int
     // & has higher precedence than ^
     // 12 & 10 = 8, then 8 ^ 3 = 11
     var result = 12 & 10 ^ 3
-    printInt(result)
+    print("{result}")
     return 0
 end 'main'
 ```
@@ -235,9 +235,9 @@ function main() returns int
     // Shift has higher precedence than comparison
     // 1 << 3 = 8, then 8 > 5 = true
     if 1 << 3 > 5 'check'
-        printInt(1)
+        print("{1}")
     end 'check' else 'else_check'
-        printInt(0)
+        print("{0}")
     end 'else_check'
     return 0
 end 'main'
@@ -256,7 +256,7 @@ function main() returns int
     var a = 5 & 3        // 1
     var b = 5 | 2        // 7
     if a > 0 and b > 0 'check'
-        printInt(1)
+        print("{1}")
     end 'check'
     return 0
 end 'main'
@@ -274,11 +274,11 @@ function main() returns int
     var flags = 0
     flags = flags | 1    // Set bit 0
     flags = flags | 4    // Set bit 2
-    printInt(flags)         // 5 (binary 101)
+    print("{flags}")         // 5 (binary 101)
     
     // Check if bit 2 is set
     if (flags & 4) > 0 'check'
-        printInt(1)
+        print("{1}")
     end 'check'
     return 0
 end 'main'
@@ -297,7 +297,7 @@ function main() returns int
     var flags = 7        // binary 111
     // Clear bit 1 using XOR
     flags = flags ^ 2
-    printInt(flags)         // 5 (binary 101)
+    print("{flags}")         // 5 (binary 101)
     return 0
 end 'main'
 ```
@@ -314,7 +314,7 @@ function main() returns int
     // Calculate 2^n using shift
     var n = 5
     var result = 1 << n
-    printInt(result)        // 32
+    print("{result}")        // 32
     return 0
 end 'main'
 ```
@@ -331,7 +331,7 @@ function main() returns int
     // Divide by 4 using shift
     var value = 100
     var result = value >> 2
-    printInt(result)        // 25
+    print("{result}")        // 25
     return 0
 end 'main'
 ```
@@ -348,7 +348,7 @@ function main() returns int
     // Multiply by 8 using shift
     var value = 25
     var result = value << 3
-    printInt(result)        // 200
+    print("{result}")        // 200
     return 0
 end 'main'
 ```

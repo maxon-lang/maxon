@@ -9,27 +9,28 @@ category: stdlib
 
 ## Developer Notes
 
-The `printInt()` function is a stdlib function that outputs integer values to stdout.
+The `print()` function is a stdlib function that outputs string values to stdout.
 
 Implementation:
 - Defined in `stdlib/sys/print.maxon`
 - Auto-discovered by compiler when referenced
-- Uses `formatIntArray()` from `stdlib/fmt/integer.maxon` to convert int to string
-- Writes to stdout using `write_stdout()` from `maxon-runtime`
-- `write_stdout()` is platform-specific: POSIX write() on Linux, WriteFile API on Windows
+- Uses `__cstring_write_stdout()` runtime intrinsic to write to stdout
+- Platform-specific: POSIX write() on Linux, WriteFile API on Windows
 - Automatically adds newline after each value
 - Part of the standard library, not a language keyword
+
+To print non-string values, use string interpolation which converts values using compiler intrinsics (`__int_toString`, `__float_toString`, `__bool_toString`).
 
 The function is linked automatically when used. No explicit import needed - the compiler's stdlib autodiscovery system finds it.
 
 ## Documentation
 
-The `printInt()` function outputs integer values to standard output (console).
+The `print("{}")` function outputs integer values to standard output (console).
 
 ### Syntax
 
 ```maxon
-printInt(value)
+print("{value}")
 ```
 Where `value` is an `int` expression.
 
@@ -38,9 +39,9 @@ Where `value` is an `int` expression.
 ```maxon
 function main() returns int
     var x = 42
-    printInt(x)        // Prints: 42
-    printInt(10 + 5)   // Prints: 15
-    printInt(100)      // Prints: 100
+    print("{x}")        // Prints: 42
+    print("{10 + 5}")   // Prints: 15
+    print("{100}")      // Prints: 100
     return 0
 end 'main'
 ```
@@ -54,7 +55,7 @@ end 'main'
 ```
 
 
-Each call to `printInt()` outputs the value followed by a newline.
+Each call to `print("{}")` outputs the value followed by a newline.
 
 ## Tests
 
@@ -62,7 +63,7 @@ Each call to `printInt()` outputs the value followed by a newline.
 ```maxon
 function main() returns int
     var x = 42
-    printInt(x)
+    print("{x}")
     return 0
 end 'main'
 ```
@@ -77,7 +78,7 @@ end 'main'
 <!-- test: expression -->
 ```maxon
 function main() returns int
-    printInt(10 + 5)
+    print("{10 + 5}")
     return 0
 end 'main'
 ```
@@ -93,9 +94,9 @@ end 'main'
 ```maxon
 function main() returns int
     var x = 42
-    printInt(x)
-    printInt(10 + 5)
-    printInt(100)
+    print("{x}")
+    print("{10 + 5}")
+    print("{100}")
     return 0
 end 'main'
 ```

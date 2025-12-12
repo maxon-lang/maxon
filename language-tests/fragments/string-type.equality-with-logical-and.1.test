@@ -9,7 +9,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 104
+; Instructions: 115
 
 %string = type { ptr, i32 }
 %character = type { ptr }
@@ -20,6 +20,7 @@ end 'main'
 @.chr.2 = constant [2 x i8] c"A\00"
 @.str.sso.3 = constant [6 x i8] c"hello\00"
 @.chr.4 = constant [2 x i8] c"A\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 
 define i32 @main() {
 entry0:
@@ -66,11 +67,11 @@ entry0:
   store ptr %18, ptr %24
   %25 = getelementptr %string, ptr %17, i32 0, i32 1
   store i32 0, ptr %25
-  %37 = getelementptr %string, ptr %0, i32 0, i32 0
-  %38 = load ptr, ptr %37
-  %39 = getelementptr %string, ptr %17, i32 0, i32 0
-  %40 = load ptr, ptr %39
-  %41 = call i1 @string.equalsManagedString(ptr %38, ptr %40)
+  %45 = getelementptr %string, ptr %0, i32 0, i32 0
+  %46 = load ptr, ptr %45
+  %47 = getelementptr %string, ptr %17, i32 0, i32 0
+  %48 = load ptr, ptr %47
+  %49 = call i1 @string.equalsManagedString(ptr %46, ptr %48)
   %27 = alloca %character
   %28 = alloca %__ManagedStringData
   %29 = getelementptr %__ManagedStringData, ptr %28, i32 0, i32 0
@@ -84,17 +85,30 @@ entry0:
   store i32 0, ptr %33
   %34 = getelementptr %character, ptr %27, i32 0, i32 0
   store ptr %28, ptr %34
-  %42 = getelementptr %character, ptr %9, i32 0, i32 0
-  %43 = load ptr, ptr %42
-  %44 = getelementptr %character, ptr %27, i32 0, i32 0
-  %45 = load ptr, ptr %44
-  %46 = call i1 @string.equalsManagedString(ptr %43, ptr %45)
-  %36 = and i1 %41, %46
+  %50 = getelementptr %character, ptr %9, i32 0, i32 0
+  %51 = load ptr, ptr %50
+  %52 = getelementptr %character, ptr %27, i32 0, i32 0
+  %53 = load ptr, ptr %52
+  %54 = call i1 @string.equalsManagedString(ptr %51, ptr %53)
+  %36 = and i1 %49, %54
   br i1 %36, label %then1, label %ifcont2
 then1:
-  ret i32 0
+  %37 = getelementptr %string, ptr %0, i32 0, i32 0
+  %38 = load ptr, ptr %37
+  %39 = getelementptr %__ManagedStringData, ptr %38, i32 0, i32 2
+  %40 = load i32, ptr %39
+  %41 = icmp sgt i32 %40, 0
+  br i1 %41, label %s.var.release3, label %s.var.continue4
 ifcont2:
   ret i32 1
+s.var.release3:
+  %42 = getelementptr %__ManagedStringData, ptr %38, i32 0, i32 0
+  %43 = getelementptr %_ManagedArray_byte, ptr %42, i32 0, i32 0
+  %44 = load ptr, ptr %43
+  call void @_managed_string_release(ptr %44, ptr @.__tag.free.s)
+  br label %s.var.continue4
+s.var.continue4:
+  ret i32 0
 }
 
 define i1 @string.equalsManagedStringRange(ptr %a, i32 %aOffset, ptr %b, i32 %bOffset, i32 %len) {
@@ -143,6 +157,8 @@ ifcont2:
   ret i1 %14
 }
 
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
+
 declare void @exit(i32 %arg0)
 
 define void @_start() {
@@ -154,7 +170,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 153
+; Instructions: 164
 
 %string = type { ptr, i32 }
 %character = type { ptr }
@@ -165,6 +181,7 @@ entry0:
 @.chr.2 = constant [2 x i8] c"A\00"
 @.str.sso.3 = constant [6 x i8] c"hello\00"
 @.chr.4 = constant [2 x i8] c"A\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 
 define i1 @character.equals(ptr %self, ptr %other) {
 entry0:
@@ -261,9 +278,22 @@ entry0:
   %36 = and i1 %26, %35
   br i1 %36, label %then1, label %ifcont2
 then1:
-  ret i32 0
+  %37 = getelementptr %string, ptr %0, i32 0, i32 0
+  %38 = load ptr, ptr %37
+  %39 = getelementptr %__ManagedStringData, ptr %38, i32 0, i32 2
+  %40 = load i32, ptr %39
+  %41 = icmp sgt i32 %40, 0
+  br i1 %41, label %s.var.release3, label %s.var.continue4
 ifcont2:
   ret i32 1
+s.var.release3:
+  %42 = getelementptr %__ManagedStringData, ptr %38, i32 0, i32 0
+  %43 = getelementptr %_ManagedArray_byte, ptr %42, i32 0, i32 0
+  %44 = load ptr, ptr %43
+  call void @_managed_string_release(ptr %44, ptr @.__tag.free.s)
+  br label %s.var.continue4
+s.var.continue4:
+  ret i32 0
 }
 
 define i1 @string.equalsManagedStringRange(ptr %a, i32 %aOffset, ptr %b, i32 %bOffset, i32 %len) {
@@ -344,6 +374,8 @@ ifcont2:
   %14 = call i1 @string.equalsManagedStringRange(ptr %11, i32 0, ptr %12, i32 0, i32 %13)
   ret i1 %14
 }
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

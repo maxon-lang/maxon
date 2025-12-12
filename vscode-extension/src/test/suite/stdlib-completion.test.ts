@@ -62,12 +62,12 @@ suite('Stdlib Completion Tests', () => {
 		// Check if completions are available
 		const labels = completions.items.map(item => item.label).slice(0, 20);
 
-		// Check if formatIntArray is in the completions
-		const hasFormatIntArray = completions.items.some(
-			item => item.label === 'formatIntArray'
+		// Check if pow is in the completions
+		const hasPow = completions.items.some(
+			item => item.label === 'pow'
 		);
 
-		assert.ok(hasFormatIntArray, 'Should include formatIntArray from stdlib');
+		assert.ok(hasPow, 'Should include pow from stdlib');
 	});
 
 	test('Stdlib function completion should have correct kind', async function () {
@@ -78,15 +78,15 @@ suite('Stdlib Completion Tests', () => {
 			position
 		);
 
-		const formatIntArray = completions.items.find(
-			item => item.label === 'formatIntArray'
+		const pow = completions.items.find(
+			item => item.label === 'pow'
 		);
 
-		assert.ok(formatIntArray, 'formatIntArray should be found');
+		assert.ok(pow, 'pow should be found');
 		assert.strictEqual(
-			formatIntArray.kind,
+			pow.kind,
 			vscode.CompletionItemKind.Function,
-			'formatIntArray should be a Function'
+			'pow should be a Function'
 		);
 	});
 
@@ -98,19 +98,17 @@ suite('Stdlib Completion Tests', () => {
 			position
 		);
 
-		const formatIntArray = completions.items.find(
-			item => item.label === 'formatIntArray'
+		const pow = completions.items.find(
+			item => item.label === 'pow'
 		);
 
-		assert.ok(formatIntArray, 'formatIntArray should be found');
-		assert.ok(formatIntArray.detail, 'Should have detail field');
+		assert.ok(pow, 'pow should be found');
+		assert.ok(pow.detail, 'Should have detail field');
 
 		// Check that signature contains expected elements
-		const detail = formatIntArray.detail as string;
-		assert.ok(detail.includes('value int'), 'Detail should include parameter "value int"');
-		assert.ok(detail.includes('buffer'), 'Detail should include parameter "buffer"');
-		// Array type is []byte (character is now a grapheme cluster struct, not a byte alias)
-		assert.ok(detail.includes('byte'), 'Detail should include byte array type');
+		const detail = pow.detail as string;
+		assert.ok(detail.includes('base float') || detail.includes('base'), 'Detail should include parameter "base"');
+		assert.ok(detail.includes('exp') || detail.includes('exponent'), 'Detail should include parameter "exp"');
 	});
 
 	test('Stdlib function completion should have documentation', async function () {
@@ -122,22 +120,22 @@ suite('Stdlib Completion Tests', () => {
 			position
 		);
 
-		const formatIntArray = completions.items.find(
-			item => item.label === 'formatIntArray'
+		const pow = completions.items.find(
+			item => item.label === 'pow'
 		);
 
-		assert.ok(formatIntArray, 'formatIntArray should be found');
-		assert.ok(formatIntArray.documentation, 'Should have documentation');
+		assert.ok(pow, 'pow should be found');
+		assert.ok(pow.documentation, 'Should have documentation');
 	});
 
 	test('Should provide hover information for stdlib functions', async function () {
 		// Add stdlib function call to document
 		const edit = new vscode.WorkspaceEdit();
-		edit.insert(document.uri, new vscode.Position(1, 4), 'formatIntArray');
+		edit.insert(document.uri, new vscode.Position(1, 4), 'pow');
 		await vscode.workspace.applyEdit(edit);
 		await document.save();
 
-		const position = new vscode.Position(1, 10); // Middle of "formatIntArray"
+		const position = new vscode.Position(1, 6); // Middle of "pow"
 
 		// Wait for hover information to be available
 		let hovers: vscode.Hover[] | undefined;
@@ -163,7 +161,7 @@ suite('Stdlib Completion Tests', () => {
 		// Stdlib functions may not show qualified names when not properly used in context
 		// Just verify we get some hover information
 		assert.ok(
-			hoverText.includes('formatIntArray') || hoverText.includes('Identifier'),
+			hoverText.includes('pow') || hoverText.includes('Identifier'),
 			'Hover should show function name or identifier'
 		);
 	});
@@ -179,7 +177,7 @@ suite('Stdlib Completion Tests', () => {
 
 		// Should have both stdlib functions and keywords
 		const hasStdlibFunc = completions.items.some(
-			item => item.label === 'formatIntArray'
+			item => item.label === 'pow'
 		);
 		const hasKeyword = completions.items.some(
 			item => item.label === 'var' || item.label === 'let'

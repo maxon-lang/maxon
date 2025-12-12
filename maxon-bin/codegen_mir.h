@@ -157,6 +157,7 @@ class MIRCodeGenerator {
 		std::vector<std::pair<std::string, mir::MIRValue *>> heapAllocatedStrings; // Data pointer for heap strings
 		std::vector<std::pair<std::string, mir::MIRValue *>> substringAllocas;	   // Substring struct allocas (need parent release)
 		std::vector<std::pair<std::string, mir::MIRValue *>> cstringAllocas;	   // Cstring struct allocas (need managed release)
+		std::vector<std::pair<std::string, mir::MIRValue *>> stringVariables;	   // String var allocas (read current buffer at cleanup)
 	};
 	std::vector<ScopeInfo> scopeStack;
 
@@ -324,6 +325,7 @@ class MIRCodeGenerator {
 	mir::MIRValue *generateStringLiteral(StringLiteralExprAST *strExpr);
 	mir::MIRValue *generateStringLiteralAsSlice(StringLiteralExprAST *strExpr);
 	mir::MIRValue *generateCharLiteral(CharacterExprAST *charExpr);
+	mir::MIRValue *generateInterpolatedString(InterpolatedStringExprAST *interpExpr);
 
 	// Optional type helpers
 	mir::MIRValue *createNilOptional(mir::MIRType *optionalType);

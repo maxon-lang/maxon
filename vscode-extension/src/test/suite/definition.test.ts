@@ -292,7 +292,7 @@ suite('Go to Definition Test Suite', () => {
 	test('Go to definition for stdlib function', async function () {
 		const content = [
 			"function main() returns int",
-			"    printInt(42)",
+			"    print(\"42\")",
 			"    return 0",
 			"end 'main'"
 		].join('\n');

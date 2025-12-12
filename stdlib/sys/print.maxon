@@ -1,9 +1,14 @@
 // stdlib/sys/print.maxon
-// Integer printing function
+// Print function for string output
 // Namespace: stdlib.sys
 
-/// Print a string to stdout (no newline)
+/// Print a string to stdout followed by a newline
 /// Returns the number of bytes written, or negative on error
+///
+/// To print other types, use string interpolation:
+///   print("{value}")      // integers, floats, bools
+///   print("{x + y}")      // expressions
+///   print("Sum: {total}") // mixed text and values
 export function print(value string) returns int
 	var cs = value.cstr()
 	let n = __cstring_write_stdout(cs)
@@ -12,31 +17,3 @@ export function print(value string) returns int
 	__cstring_write_stdout(newline_cs) // Add newline after printing
 	return n + 1 // Include newline in byte count
 end 'print'
-
-/// Print an integer to stdout followed by a newline
-/// Returns the number of bytes written, or negative on error
-export function printInt(value int) returns int
-	// Allocate buffer for integer formatting (12 bytes max for -2147483648)
-	var buffer = array of 12 byte
-
-	// Format the integer into the buffer
-	var length = formatIntArray(value, buffer)
-
-	// Create string from buffer and print it with newline
-	var s = stringFromCharacters(buffer, length)
-	return print(s)
-end 'printInt'
-
-/// Print a float to stdout with specified precision followed by a newline
-/// Returns the number of bytes written, or negative on error
-export function printFloat(value float, precision int) returns int
-	// Allocate buffer for float formatting (max size for typical float output)
-	var buffer = array of 64 byte
-
-	// Format the float into the buffer
-	var length = formatFloatArray(value, buffer, precision)
-
-	// Create string from buffer and print it with newline
-	var s = stringFromCharacters(buffer, length)
-	return print(s)
-end 'printFloat'

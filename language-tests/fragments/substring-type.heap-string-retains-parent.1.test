@@ -10,7 +10,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 559
+; Instructions: 570
 
 %StringIndex = type { i32, i32 }
 %substring = type { ptr, ptr, i32, i32 }
@@ -23,6 +23,7 @@ end 'main'
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.1 = constant [41 x i8] c"This is a longer string that exceeds SSO\00"
 @.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 
 define %StringIndex @string.startIndex(ptr %self) {
 entry0:
@@ -236,19 +237,32 @@ refcount.merge6:
   %50 = call i32 @substring.count(ptr %32)
   %51 = sub i32 %49, %50
   call void @_managed_string_release(ptr %1, ptr @.__tag.free.str.heap)
-  %53 = getelementptr %substring, ptr %32, i32 0, i32 0
+  %53 = getelementptr %string, ptr %0, i32 0, i32 0
   %54 = load ptr, ptr %53
   %55 = getelementptr %__ManagedStringData, ptr %54, i32 0, i32 2
   %56 = load i32, ptr %55
   %57 = icmp sgt i32 %56, 0
-  br i1 %57, label %sub.release7, label %sub.continue8
-sub.release7:
+  br i1 %57, label %s.var.release7, label %s.var.continue8
+s.var.release7:
   %58 = getelementptr %__ManagedStringData, ptr %54, i32 0, i32 0
   %59 = getelementptr %_ManagedArray_byte, ptr %58, i32 0, i32 0
   %60 = load ptr, ptr %59
-  call void @_managed_string_release(ptr %60, ptr @.__tag.free.sub)
-  br label %sub.continue8
-sub.continue8:
+  call void @_managed_string_release(ptr %60, ptr @.__tag.free.s)
+  br label %s.var.continue8
+s.var.continue8:
+  %61 = getelementptr %substring, ptr %32, i32 0, i32 0
+  %62 = load ptr, ptr %61
+  %63 = getelementptr %__ManagedStringData, ptr %62, i32 0, i32 2
+  %64 = load i32, ptr %63
+  %65 = icmp sgt i32 %64, 0
+  br i1 %65, label %sub.release9, label %sub.continue10
+sub.release9:
+  %66 = getelementptr %__ManagedStringData, ptr %62, i32 0, i32 0
+  %67 = getelementptr %_ManagedArray_byte, ptr %66, i32 0, i32 0
+  %68 = load ptr, ptr %67
+  call void @_managed_string_release(ptr %68, ptr @.__tag.free.sub)
+  br label %sub.continue10
+sub.continue10:
   ret i32 %51
 }
 
@@ -779,7 +793,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 898
+; Instructions: 909
 
 %StringIndex = type { i32, i32 }
 %substring = type { ptr, ptr, i32, i32 }
@@ -792,6 +806,7 @@ entry0:
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.1 = constant [41 x i8] c"This is a longer string that exceeds SSO\00"
 @.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 
 define i32 @string._findGraphemeEnd(ptr %self, i32 %startPos, i32 %len) {
 entry0:
@@ -1062,19 +1077,32 @@ refcount.merge6:
   %51 = sub i32 %49, %50
   %52 = load ptr, ptr %4
   call void @_managed_string_release(ptr %52, ptr @.__tag.free.str.heap)
-  %53 = getelementptr %substring, ptr %32, i32 0, i32 0
+  %53 = getelementptr %string, ptr %0, i32 0, i32 0
   %54 = load ptr, ptr %53
   %55 = getelementptr %__ManagedStringData, ptr %54, i32 0, i32 2
   %56 = load i32, ptr %55
   %57 = icmp sgt i32 %56, 0
-  br i1 %57, label %sub.release7, label %sub.continue8
-sub.release7:
+  br i1 %57, label %s.var.release7, label %s.var.continue8
+s.var.release7:
   %58 = getelementptr %__ManagedStringData, ptr %54, i32 0, i32 0
   %59 = getelementptr %_ManagedArray_byte, ptr %58, i32 0, i32 0
   %60 = load ptr, ptr %59
-  call void @_managed_string_release(ptr %60, ptr @.__tag.free.sub)
-  br label %sub.continue8
-sub.continue8:
+  call void @_managed_string_release(ptr %60, ptr @.__tag.free.s)
+  br label %s.var.continue8
+s.var.continue8:
+  %61 = getelementptr %substring, ptr %32, i32 0, i32 0
+  %62 = load ptr, ptr %61
+  %63 = getelementptr %__ManagedStringData, ptr %62, i32 0, i32 2
+  %64 = load i32, ptr %63
+  %65 = icmp sgt i32 %64, 0
+  br i1 %65, label %sub.release9, label %sub.continue10
+sub.release9:
+  %66 = getelementptr %__ManagedStringData, ptr %62, i32 0, i32 0
+  %67 = getelementptr %_ManagedArray_byte, ptr %66, i32 0, i32 0
+  %68 = load ptr, ptr %67
+  call void @_managed_string_release(ptr %68, ptr @.__tag.free.sub)
+  br label %sub.continue10
+sub.continue10:
   ret i32 %51
 }
 

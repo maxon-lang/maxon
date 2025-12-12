@@ -14,7 +14,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 690
+; Instructions: 701
 
 %StringIndex = type { i32, i32 }
 %character = type { ptr }
@@ -28,6 +28,7 @@ end 'main'
 @.__tag.tostring = constant [19 x i8] c"substring.toString\00"
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
 @.str.sso.1 = constant [6 x i8] c"abcde\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 
 define %StringIndex @string.startIndex(ptr %self) {
 entry0:
@@ -365,8 +366,8 @@ entry0:
   store %substring %17, ptr %21
   br label %forcond1
 forcond1:
-  %55 = phi i32 [ 0, %entry0 ], [ %56, %iflet.after5 ]
-  %53 = phi i32 [ 0, %entry0 ], [ %54, %iflet.after5 ]
+  %63 = phi i32 [ 0, %entry0 ], [ %64, %iflet.after5 ]
+  %61 = phi i32 [ 0, %entry0 ], [ %62, %iflet.after5 ]
   %22 = call Optional<%character> @substring.next(ptr %21)
   %23 = alloca Optional<%character>
   store Optional<%character> %22, ptr %23
@@ -390,29 +391,42 @@ forloop2:
   %36 = icmp eq i8 %35, 1
   br i1 %36, label %iflet.then4, label %iflet.after5
 afterfor3:
-  %44 = sub i32 %53, 294
-  %45 = getelementptr %substring, ptr %18, i32 0, i32 0
+  %44 = sub i32 %61, 294
+  %45 = getelementptr %string, ptr %0, i32 0, i32 0
   %46 = load ptr, ptr %45
   %47 = getelementptr %__ManagedStringData, ptr %46, i32 0, i32 2
   %48 = load i32, ptr %47
   %49 = icmp sgt i32 %48, 0
-  br i1 %49, label %sub.release6, label %sub.continue7
+  br i1 %49, label %s.var.release6, label %s.var.continue7
 iflet.then4:
   %37 = getelementptr Optional<i32>, ptr %33, i32 0, i32 1
   %38 = load i32, ptr %37
-  %42 = add i32 %53, %38
+  %42 = add i32 %61, %38
   br label %iflet.after5
 iflet.after5:
-  %56 = phi i32 [ %55, %forloop2 ], [ %38, %iflet.then4 ]
-  %54 = phi i32 [ %53, %forloop2 ], [ %42, %iflet.then4 ]
+  %64 = phi i32 [ %63, %forloop2 ], [ %38, %iflet.then4 ]
+  %62 = phi i32 [ %61, %forloop2 ], [ %42, %iflet.then4 ]
   br label %forcond1
-sub.release6:
+s.var.release6:
   %50 = getelementptr %__ManagedStringData, ptr %46, i32 0, i32 0
   %51 = getelementptr %_ManagedArray_byte, ptr %50, i32 0, i32 0
   %52 = load ptr, ptr %51
-  call void @_managed_string_release(ptr %52, ptr @.__tag.free.sub)
-  br label %sub.continue7
-sub.continue7:
+  call void @_managed_string_release(ptr %52, ptr @.__tag.free.s)
+  br label %s.var.continue7
+s.var.continue7:
+  %53 = getelementptr %substring, ptr %18, i32 0, i32 0
+  %54 = load ptr, ptr %53
+  %55 = getelementptr %__ManagedStringData, ptr %54, i32 0, i32 2
+  %56 = load i32, ptr %55
+  %57 = icmp sgt i32 %56, 0
+  br i1 %57, label %sub.release8, label %sub.continue9
+sub.release8:
+  %58 = getelementptr %__ManagedStringData, ptr %54, i32 0, i32 0
+  %59 = getelementptr %_ManagedArray_byte, ptr %58, i32 0, i32 0
+  %60 = load ptr, ptr %59
+  call void @_managed_string_release(ptr %60, ptr @.__tag.free.sub)
+  br label %sub.continue9
+sub.continue9:
   ret i32 %44
 }
 
@@ -929,7 +943,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 1069
+; Instructions: 1080
 
 %StringIndex = type { i32, i32 }
 %character = type { ptr }
@@ -943,6 +957,7 @@ entry0:
 @.__tag.tostring = constant [19 x i8] c"substring.toString\00"
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
 @.str.sso.1 = constant [6 x i8] c"abcde\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 
 define i32 @string._findGraphemeEnd(ptr %self, i32 %startPos, i32 %len) {
 entry0:
@@ -1422,12 +1437,12 @@ forloop2:
 afterfor3:
   %43 = load i32, ptr %19
   %44 = sub i32 %43, 294
-  %45 = getelementptr %substring, ptr %18, i32 0, i32 0
+  %45 = getelementptr %string, ptr %0, i32 0, i32 0
   %46 = load ptr, ptr %45
   %47 = getelementptr %__ManagedStringData, ptr %46, i32 0, i32 2
   %48 = load i32, ptr %47
   %49 = icmp sgt i32 %48, 0
-  br i1 %49, label %sub.release6, label %sub.continue7
+  br i1 %49, label %s.var.release6, label %s.var.continue7
 iflet.then4:
   %37 = getelementptr Optional<i32>, ptr %33, i32 0, i32 1
   %38 = load i32, ptr %37
@@ -1440,13 +1455,26 @@ iflet.then4:
   br label %iflet.after5
 iflet.after5:
   br label %forcond1
-sub.release6:
+s.var.release6:
   %50 = getelementptr %__ManagedStringData, ptr %46, i32 0, i32 0
   %51 = getelementptr %_ManagedArray_byte, ptr %50, i32 0, i32 0
   %52 = load ptr, ptr %51
-  call void @_managed_string_release(ptr %52, ptr @.__tag.free.sub)
-  br label %sub.continue7
-sub.continue7:
+  call void @_managed_string_release(ptr %52, ptr @.__tag.free.s)
+  br label %s.var.continue7
+s.var.continue7:
+  %53 = getelementptr %substring, ptr %18, i32 0, i32 0
+  %54 = load ptr, ptr %53
+  %55 = getelementptr %__ManagedStringData, ptr %54, i32 0, i32 2
+  %56 = load i32, ptr %55
+  %57 = icmp sgt i32 %56, 0
+  br i1 %57, label %sub.release8, label %sub.continue9
+sub.release8:
+  %58 = getelementptr %__ManagedStringData, ptr %54, i32 0, i32 0
+  %59 = getelementptr %_ManagedArray_byte, ptr %58, i32 0, i32 0
+  %60 = load ptr, ptr %59
+  call void @_managed_string_release(ptr %60, ptr @.__tag.free.sub)
+  br label %sub.continue9
+sub.continue9:
   ret i32 %44
 }
 

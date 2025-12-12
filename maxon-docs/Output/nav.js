@@ -1,12 +1,15 @@
 // Navigation data and dynamic sidebar generation
 const categories = {
+    'collections': 'Collections',
     'compilation': 'Compilation',
     'control-flow': 'Control Flow',
+    'core': 'Core',
     'declaration': 'Declarations',
     'diagnostics': 'Diagnostics',
     'error-handling': 'Error Handling',
     'expressions': 'Expressions',
     'functions': 'Functions',
+    'internals': 'Internals',
     'interop': 'Interoperability',
     'literals': 'Literals',
     'math-intrinsic': 'Math Intrinsics',
@@ -16,8 +19,10 @@ const categories = {
     'organization': 'Organization',
     'statements': 'Statements',
     'stdlib': 'Standard Library',
+    'strings': 'Strings',
     'type-system': 'Type System',
-    'types': 'Types'
+    'types': 'Types',
+    'unicode': 'Unicode'
 };
 
 // Build and insert sidebar navigation

@@ -203,15 +203,17 @@ function main() returns int
         // ch has type 'character' (inferred from string's Element type - grapheme cluster)
         var cps = ch.codepoints()
         if let cp = cps.next() 'get_cp'
-            printInt(cp)
+            print("{cp}")
         end 'get_cp'
     end 'chars'
     return 0
 end 'main'
 ```
-```output
-ExitCode: 0
-Stdout: 72
+```exitcode
+0
+```
+```stdout
+72
 105
 ```
 
@@ -242,8 +244,8 @@ function main() returns int
     return p.sum()
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### Calling Methods

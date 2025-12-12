@@ -108,7 +108,38 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		// String literals are "...", so +2 for the quotes
 		int endCol = column + static_cast<int>(value.length()) + 1;
 		advance();
-		auto expr = std::make_unique<StringLiteralExprAST>(value, line, column);
+
+		// Check if string contains interpolation (unescaped {)
+		// Escaped braces are stored as \x01{ and \x01}
+		bool hasInterpolation = false;
+		for (size_t i = 0; i < value.length(); i++) {
+			if (value[i] == '\x01') {
+				// Skip escaped character
+				i++;
+				continue;
+			}
+			if (value[i] == '{') {
+				hasInterpolation = true;
+				break;
+			}
+		}
+
+		if (hasInterpolation) {
+			return parseInterpolatedString(value, line, column);
+		}
+
+		// Convert escaped braces back to regular braces for plain strings
+		std::string cleanValue;
+		for (size_t i = 0; i < value.length(); i++) {
+			if (value[i] == '\x01' && i + 1 < value.length()) {
+				cleanValue += value[i + 1];
+				i++; // Skip the escaped char
+			} else {
+				cleanValue += value[i];
+			}
+		}
+
+		auto expr = std::make_unique<StringLiteralExprAST>(cleanValue, line, column);
 		expr->setEndPosition(line, endCol);
 		return expr;
 	}
@@ -1119,4 +1150,145 @@ std::unique_ptr<ExprAST> Parser::parseNilCoalesce() {
 	}
 
 	return left;
+}
+
+// Parse an interpolated string like "Hello {name}!" or "Value: {x:format}"
+// The string has already been consumed from the token stream
+// str contains the raw string content with interpolation markers
+std::unique_ptr<ExprAST> Parser::parseInterpolatedString(const std::string &str, int line, int column) {
+	auto result = std::make_unique<InterpolatedStringExprAST>(line, column);
+
+	size_t pos = 0;
+	while (pos < str.length()) {
+		// Find next unescaped { (skip \x01{ which is escaped brace)
+		size_t braceStart = std::string::npos;
+		for (size_t i = pos; i < str.length(); i++) {
+			if (str[i] == '\x01') {
+				// Skip escaped character
+				i++;
+				continue;
+			}
+			if (str[i] == '{') {
+				braceStart = i;
+				break;
+			}
+		}
+
+		if (braceStart == std::string::npos) {
+			// No more interpolations - add remaining literal
+			std::string literal;
+			for (size_t i = pos; i < str.length(); i++) {
+				if (str[i] == '\x01' && i + 1 < str.length()) {
+					literal += str[i + 1];
+					i++; // Skip escaped char
+				} else {
+					literal += str[i];
+				}
+			}
+			if (!literal.empty()) {
+				InterpolatedStringPart part;
+				part.isExpression = false;
+				part.literalValue = literal;
+				result->parts.push_back(std::move(part));
+			}
+			break;
+		}
+
+		// Add literal part before the {
+		if (braceStart > pos) {
+			std::string literal;
+			for (size_t i = pos; i < braceStart; i++) {
+				if (str[i] == '\x01' && i + 1 < str.length()) {
+					literal += str[i + 1];
+					i++; // Skip escaped char
+				} else {
+					literal += str[i];
+				}
+			}
+			InterpolatedStringPart part;
+			part.isExpression = false;
+			part.literalValue = literal;
+			result->parts.push_back(std::move(part));
+		}
+
+		// Find matching } while tracking nesting depth
+		size_t braceEnd = std::string::npos;
+		int depth = 1;
+		bool inString = false;
+		size_t formatSpecStart = std::string::npos;
+
+		for (size_t i = braceStart + 1; i < str.length() && depth > 0; i++) {
+			char c = str[i];
+
+			// Handle string literals inside the expression
+			if (c == '"' && (i == 0 || str[i - 1] != '\\')) {
+				inString = !inString;
+				continue;
+			}
+
+			if (inString) continue;
+
+			if (c == '{' || c == '(' || c == '[') {
+				depth++;
+			} else if (c == '}') {
+				depth--;
+				if (depth == 0) {
+					braceEnd = i;
+				}
+			} else if (c == ')' || c == ']') {
+				depth--;
+			} else if (c == ':' && depth == 1 && formatSpecStart == std::string::npos) {
+				// Format specifier starts here (first : at depth 1)
+				formatSpecStart = i;
+			}
+		}
+
+		if (braceEnd == std::string::npos) {
+			reportError("Unterminated string interpolation: missing '}'\n"
+						"  Hint: Make sure all { have matching }",
+						line, column);
+		}
+
+		// Extract expression and optional format spec
+		std::string exprStr;
+		std::string formatSpec;
+
+		if (formatSpecStart != std::string::npos) {
+			exprStr = str.substr(braceStart + 1, formatSpecStart - braceStart - 1);
+			formatSpec = str.substr(formatSpecStart + 1, braceEnd - formatSpecStart - 1);
+		} else {
+			exprStr = str.substr(braceStart + 1, braceEnd - braceStart - 1);
+		}
+
+		// Parse the expression string using a sub-lexer and sub-parser
+		Lexer exprLexer(exprStr);
+		auto exprTokens = exprLexer.tokenize();
+
+		// Remove EOF token from the end for sub-parsing
+		if (!exprTokens.empty() && exprTokens.back().type == TokenType::END_OF_FILE) {
+			exprTokens.pop_back();
+		}
+
+		// Add back EOF for the sub-parser
+		exprTokens.push_back(Token(TokenType::END_OF_FILE, "", 1, 1));
+
+		Parser exprParser(exprTokens);
+		auto expr = exprParser.parseNilCoalesce();
+
+		if (exprParser.hasErrors()) {
+			reportError("Invalid expression in string interpolation: " + exprStr,
+						line, column);
+		}
+
+		InterpolatedStringPart part;
+		part.isExpression = true;
+		part.expr = std::move(expr);
+		part.formatSpec = formatSpec;
+		result->parts.push_back(std::move(part));
+
+		pos = braceEnd + 1;
+	}
+
+	result->setEndPosition(line, column + static_cast<int>(str.length()) + 1);
+	return result;
 }

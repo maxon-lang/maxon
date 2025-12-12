@@ -9,7 +9,7 @@ function main(args array of string) returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 106
+; Instructions: 117
 
 %string = type { ptr, i32 }
 %cstring = type { ptr, i32, ptr }
@@ -21,6 +21,7 @@ end 'main'
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.str.sso.1 = constant [2 x i8] c"\0A\00"
+@.__tag.free.newline = constant [15 x i8] c"string literal\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -123,12 +124,25 @@ entry0:
   %24 = load i32, ptr %23
   %25 = call i32 @write_stdout(ptr %22, i32 %24)
   %27 = add i32 %8, 1
-  %28 = getelementptr %cstring, ptr %3, i32 0, i32 0
+  %28 = getelementptr %string, ptr %10, i32 0, i32 0
   %29 = load ptr, ptr %28
-  call void @_managed_string_release(ptr %29, ptr @.__tag.free.cs)
-  %30 = getelementptr %cstring, ptr %20, i32 0, i32 0
-  %31 = load ptr, ptr %30
-  call void @_managed_string_release(ptr %31, ptr @.__tag.free.newline_cs)
+  %30 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 2
+  %31 = load i32, ptr %30
+  %32 = icmp sgt i32 %31, 0
+  br i1 %32, label %newline.var.release1, label %newline.var.continue2
+newline.var.release1:
+  %33 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 0
+  %34 = getelementptr %_ManagedArray_byte, ptr %33, i32 0, i32 0
+  %35 = load ptr, ptr %34
+  call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
+  br label %newline.var.continue2
+newline.var.continue2:
+  %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
+  %37 = load ptr, ptr %36
+  call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
+  %38 = getelementptr %cstring, ptr %20, i32 0, i32 0
+  %39 = load ptr, ptr %38
+  call void @_managed_string_release(ptr %39, ptr @.__tag.free.newline_cs)
   ret i32 %27
 }
 
@@ -167,7 +181,7 @@ declare ptr @__get_command_args()
 
 ---
 ; Module: test.maxon
-; Instructions: 129
+; Instructions: 140
 
 %string = type { ptr, i32 }
 %cstring = type { ptr, i32, ptr }
@@ -179,6 +193,7 @@ declare ptr @__get_command_args()
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.str.sso.1 = constant [2 x i8] c"\0A\00"
+@.__tag.free.newline = constant [15 x i8] c"string literal\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -308,12 +323,25 @@ entry0:
   %25 = call i32 @write_stdout(ptr %22, i32 %24)
   %26 = load i32, ptr %9
   %27 = add i32 %26, 1
-  %28 = getelementptr %cstring, ptr %3, i32 0, i32 0
+  %28 = getelementptr %string, ptr %10, i32 0, i32 0
   %29 = load ptr, ptr %28
-  call void @_managed_string_release(ptr %29, ptr @.__tag.free.cs)
-  %30 = getelementptr %cstring, ptr %20, i32 0, i32 0
-  %31 = load ptr, ptr %30
-  call void @_managed_string_release(ptr %31, ptr @.__tag.free.newline_cs)
+  %30 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 2
+  %31 = load i32, ptr %30
+  %32 = icmp sgt i32 %31, 0
+  br i1 %32, label %newline.var.release1, label %newline.var.continue2
+newline.var.release1:
+  %33 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 0
+  %34 = getelementptr %_ManagedArray_byte, ptr %33, i32 0, i32 0
+  %35 = load ptr, ptr %34
+  call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
+  br label %newline.var.continue2
+newline.var.continue2:
+  %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
+  %37 = load ptr, ptr %36
+  call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
+  %38 = getelementptr %cstring, ptr %20, i32 0, i32 0
+  %39 = load ptr, ptr %38
+  call void @_managed_string_release(ptr %39, ptr @.__tag.free.newline_cs)
   ret i32 %27
 }
 

@@ -9,7 +9,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 112
+; Instructions: 123
 
 %StringIndex = type { i32, i32 }
 %substring = type { ptr, ptr, i32, i32 }
@@ -19,6 +19,7 @@ end 'main'
 
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
 @.str.sso.1 = constant [6 x i8] c"Hello\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 
 define %StringIndex @string.startIndex(ptr %self) {
 entry0:
@@ -128,26 +129,39 @@ entry0:
   %13 = call %substring @string.slice(ptr %0, ptr %10, ptr %12)
   %14 = alloca %substring
   store %substring %13, ptr %14
-  %24 = getelementptr %substring, ptr %14, i32 0, i32 2
-  %25 = load i32, ptr %24
-  %26 = icmp eq i32 %25, 0
-  br i1 %26, label %then1, label %ifcont2
+  %32 = getelementptr %substring, ptr %14, i32 0, i32 2
+  %33 = load i32, ptr %32
+  %34 = icmp eq i32 %33, 0
+  br i1 %34, label %then1, label %ifcont2
 then1:
-  %16 = getelementptr %substring, ptr %14, i32 0, i32 0
+  %16 = getelementptr %string, ptr %0, i32 0, i32 0
   %17 = load ptr, ptr %16
   %18 = getelementptr %__ManagedStringData, ptr %17, i32 0, i32 2
   %19 = load i32, ptr %18
   %20 = icmp sgt i32 %19, 0
-  br i1 %20, label %sub.release3, label %sub.continue4
+  br i1 %20, label %s.var.release3, label %s.var.continue4
 ifcont2:
   ret i32 0
-sub.release3:
+s.var.release3:
   %21 = getelementptr %__ManagedStringData, ptr %17, i32 0, i32 0
   %22 = getelementptr %_ManagedArray_byte, ptr %21, i32 0, i32 0
   %23 = load ptr, ptr %22
-  call void @_managed_string_release(ptr %23, ptr @.__tag.free.sub)
-  br label %sub.continue4
-sub.continue4:
+  call void @_managed_string_release(ptr %23, ptr @.__tag.free.s)
+  br label %s.var.continue4
+s.var.continue4:
+  %24 = getelementptr %substring, ptr %14, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = getelementptr %__ManagedStringData, ptr %25, i32 0, i32 2
+  %27 = load i32, ptr %26
+  %28 = icmp sgt i32 %27, 0
+  br i1 %28, label %sub.release5, label %sub.continue6
+sub.release5:
+  %29 = getelementptr %__ManagedStringData, ptr %25, i32 0, i32 0
+  %30 = getelementptr %_ManagedArray_byte, ptr %29, i32 0, i32 0
+  %31 = load ptr, ptr %30
+  call void @_managed_string_release(ptr %31, ptr @.__tag.free.sub)
+  br label %sub.continue6
+sub.continue6:
   ret i32 1
 }
 
@@ -166,7 +180,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 132
+; Instructions: 143
 
 %StringIndex = type { i32, i32 }
 %substring = type { ptr, ptr, i32, i32 }
@@ -176,6 +190,7 @@ entry0:
 
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
 @.str.sso.1 = constant [6 x i8] c"Hello\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 
 define %StringIndex @string.startIndex(ptr %self) {
 entry0:
@@ -314,21 +329,34 @@ entry0:
   %15 = call i1 @substring.isEmpty(ptr %14)
   br i1 %15, label %then1, label %ifcont2
 then1:
-  %16 = getelementptr %substring, ptr %14, i32 0, i32 0
+  %16 = getelementptr %string, ptr %0, i32 0, i32 0
   %17 = load ptr, ptr %16
   %18 = getelementptr %__ManagedStringData, ptr %17, i32 0, i32 2
   %19 = load i32, ptr %18
   %20 = icmp sgt i32 %19, 0
-  br i1 %20, label %sub.release3, label %sub.continue4
+  br i1 %20, label %s.var.release3, label %s.var.continue4
 ifcont2:
   ret i32 0
-sub.release3:
+s.var.release3:
   %21 = getelementptr %__ManagedStringData, ptr %17, i32 0, i32 0
   %22 = getelementptr %_ManagedArray_byte, ptr %21, i32 0, i32 0
   %23 = load ptr, ptr %22
-  call void @_managed_string_release(ptr %23, ptr @.__tag.free.sub)
-  br label %sub.continue4
-sub.continue4:
+  call void @_managed_string_release(ptr %23, ptr @.__tag.free.s)
+  br label %s.var.continue4
+s.var.continue4:
+  %24 = getelementptr %substring, ptr %14, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = getelementptr %__ManagedStringData, ptr %25, i32 0, i32 2
+  %27 = load i32, ptr %26
+  %28 = icmp sgt i32 %27, 0
+  br i1 %28, label %sub.release5, label %sub.continue6
+sub.release5:
+  %29 = getelementptr %__ManagedStringData, ptr %25, i32 0, i32 0
+  %30 = getelementptr %_ManagedArray_byte, ptr %29, i32 0, i32 0
+  %31 = load ptr, ptr %30
+  call void @_managed_string_release(ptr %31, ptr @.__tag.free.sub)
+  br label %sub.continue6
+sub.continue6:
   ret i32 1
 }
 

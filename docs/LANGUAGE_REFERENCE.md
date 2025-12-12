@@ -146,7 +146,24 @@ The `character` type may contain multiple UTF-8 bytes.
 "Quote: \"text\""
 ```
 
-Escape sequences: `\n` `\t` `\\` `\"`
+Escape sequences: `\n` `\t` `\\` `\"` `\{` `\}`
+
+**String Interpolation** (embed expressions in strings)
+```maxon
+var name = "World"
+print("Hello, {name}!")        // "Hello, World!"
+
+var x = 5
+print("{x} * 2 = {x * 2}")     // "5 * 2 = 10"
+
+print("Pi: {3.14159}")         // "Pi: 3.14159"
+print("Active: {true}")        // "Active: true"
+
+// Escape braces with backslash
+print("Use \{expr\} syntax")   // "Use {expr} syntax"
+```
+
+Any expression can be embedded. Built-in types (`int`, `float`, `bool`) are automatically converted to strings. Custom types must implement the `Stringable` interface.
 
 **Boolean Literals**
 ```maxon
@@ -210,7 +227,7 @@ c.toString()           // Convert to string
 **String Operations:**
 ```maxon
 var s = "hello"              // Small string (SSO)
-var greeting = s + " world"  // Concatenation
+var greeting = "{s} world"   // String interpolation
 print(s)                     // Print string to stdout with newline
 ```
 
@@ -395,7 +412,7 @@ var result = safeDivide(10, 2)
 
 if let val = result 'valid'
     // val is unwrapped int here
-    printInt(val + 5)  // 10
+    print("{val + 5}")  // 10
 end 'valid' else 'invalid'
     // result was nil
     print("Cannot divide by zero")
@@ -412,7 +429,7 @@ var result = safeDivide(10, 0) else 'default'
 end 'default'
 
 // result is guaranteed to be int (non-optional) here
-printInt(result)  // 1
+print("{result}")  // 1
 ```
 
 **Nil Coalescing Operator**
@@ -506,7 +523,7 @@ var p1 = Person{name: "Bob", age: nil}
 var p2 = Person{name: "Alice", age: 30}  // Implicitly wraps 30
 
 if let age = p2.age 'check'
-    printInt(age)  // 30
+    print("{age}")  // 30
 end 'check'
 ```
 
@@ -764,7 +781,7 @@ For single-case matching, use `if case` syntax:
 
 ```maxon
 if case success(v) = result 'check'
-    printInt(v)
+    print("{v}")
 end 'check'
 
 if case failure(code, msg) = result 'error'
@@ -1156,7 +1173,7 @@ end 'safeDivide'
 
 var result = safeDivide(10, 2)
 if let val = result 'valid'
-    printInt(val + 5)  // val is unwrapped int
+    print("{val + 5}")  // val is unwrapped int
 end 'valid' else 'invalid'
     print("Division by zero")
 end 'invalid'
@@ -1186,7 +1203,7 @@ var result = safeDivide(10, 0) else 'default'
     result = 1  // Provide default when nil
 end 'default'
 
-printInt(result)  // result is int, not int or nil
+print("{result}")  // result is int, not int or nil
 ```
 
 **Notes:**
@@ -1409,8 +1426,6 @@ var result = format_int(42)   // Finds stdlib.fmt.format_int
 **I/O Functions**
 ```maxon
 print(value string)                     // Print string to stdout with newline
-printInt(value int)                    // Print integer to stdout with newline
-printFloat(value float, precision int) // Print float with specified decimal places
 ```
 
 **Math Functions**
@@ -1636,7 +1651,7 @@ while true 'forever'
     if i >= 10 'done'
         break
     end 'done'
-    printInt(i)
+    print("{i}")
     i = i + 1
 end 'forever'
 ```
@@ -1645,7 +1660,7 @@ end 'forever'
 ```maxon
 var numbers = [1, 2, 3, 4, 5]
 for i in range(0, numbers.count()) 'iter'
-    printInt(numbers[i])
+    print("{numbers[i]}")
 end 'iter'
 ```
 
@@ -1661,7 +1676,7 @@ end 'factorial'
 
 function main() returns int
     var result = factorial(5)
-    printInt(result)  // 120
+    print("{result}")  // 120
     return 0
 end 'main'
 ```
@@ -1723,7 +1738,7 @@ functon test()          // ERROR: Unknown keyword 'functon'
 **Mismatched Block Identifiers**
 ```maxon
 if x > 0 'check'
-    printInt(x)
+    print("{x}")
 end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 ```
 

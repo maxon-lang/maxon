@@ -42,7 +42,7 @@ The standard library organizes functions into logical namespaces based on file p
 ```maxon
 function main() returns int
     // Use standard library function
-    printInt(42)
+    print("{42}")
     return 0
 end 'main'
 ```

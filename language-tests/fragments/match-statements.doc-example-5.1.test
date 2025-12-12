@@ -9,7 +9,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 130
+; Instructions: 141
 
 %string = type { ptr, i32 }
 %_ManagedArray_byte = type { ptr, i32 }
@@ -20,6 +20,7 @@ end 'main'
 @.str.sso.3 = constant [2 x i8] c"Y\00"
 @.str.sso.4 = constant [2 x i8] c"n\00"
 @.str.sso.5 = constant [2 x i8] c"N\00"
+@.__tag.free.input = constant [15 x i8] c"string literal\00"
 
 define i1 @string.equals(ptr %self, ptr %other) {
 entry0:
@@ -53,7 +54,12 @@ entry0:
   store %string %9, ptr %10
   br label %match.check.05
 match.case.02:
-  ret i32 1
+  %55 = getelementptr %string, ptr %0, i32 0, i32 0
+  %56 = load ptr, ptr %55
+  %57 = getelementptr %__ManagedStringData, ptr %56, i32 0, i32 2
+  %58 = load i32, ptr %57
+  %59 = icmp sgt i32 %58, 0
+  br i1 %59, label %input.var.release7, label %input.var.continue8
 match.case.13:
   ret i32 0
 match.case.24:
@@ -128,6 +134,14 @@ match.check.16:
   %53 = call i1 @string.equals(ptr %10, ptr %44)
   %54 = or i1 %43, %53
   br i1 %54, label %match.case.13, label %match.case.24
+input.var.release7:
+  %60 = getelementptr %__ManagedStringData, ptr %56, i32 0, i32 0
+  %61 = getelementptr %_ManagedArray_byte, ptr %60, i32 0, i32 0
+  %62 = load ptr, ptr %61
+  call void @_managed_string_release(ptr %62, ptr @.__tag.free.input)
+  br label %input.var.continue8
+input.var.continue8:
+  ret i32 1
 }
 
 define i1 @string.equalsManagedStringRange(ptr %a, i32 %aOffset, ptr %b, i32 %bOffset, i32 %len) {
@@ -176,6 +190,8 @@ ifcont2:
   ret i1 %14
 }
 
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
+
 declare void @exit(i32 %arg0)
 
 define void @_start() {
@@ -187,7 +203,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 171
+; Instructions: 182
 
 %string = type { ptr, i32 }
 %_ManagedArray_byte = type { ptr, i32 }
@@ -198,6 +214,7 @@ entry0:
 @.str.sso.3 = constant [2 x i8] c"Y\00"
 @.str.sso.4 = constant [2 x i8] c"n\00"
 @.str.sso.5 = constant [2 x i8] c"N\00"
+@.__tag.free.input = constant [15 x i8] c"string literal\00"
 
 define i1 @string.equals(ptr %self, ptr %other) {
 entry0:
@@ -239,12 +256,17 @@ entry0:
 match.merge1:
   ret i32 0
 match.case.02:
-  ret i32 1
+  %55 = getelementptr %string, ptr %0, i32 0, i32 0
+  %56 = load ptr, ptr %55
+  %57 = getelementptr %__ManagedStringData, ptr %56, i32 0, i32 2
+  %58 = load i32, ptr %57
+  %59 = icmp sgt i32 %58, 0
+  br i1 %59, label %input.var.release7, label %input.var.continue8
 match.case.13:
   ret i32 0
 match.case.24:
-  %55 = neg i32 1
-  ret i32 %55
+  %63 = neg i32 1
+  ret i32 %63
 match.check.05:
   %12 = alloca %string
   %13 = alloca %__ManagedStringData
@@ -315,6 +337,14 @@ match.check.16:
   %53 = call i1 @string.equals(ptr %10, ptr %44)
   %54 = or i1 %43, %53
   br i1 %54, label %match.case.13, label %match.case.24
+input.var.release7:
+  %60 = getelementptr %__ManagedStringData, ptr %56, i32 0, i32 0
+  %61 = getelementptr %_ManagedArray_byte, ptr %60, i32 0, i32 0
+  %62 = load ptr, ptr %61
+  call void @_managed_string_release(ptr %62, ptr @.__tag.free.input)
+  br label %input.var.continue8
+input.var.continue8:
+  ret i32 1
 }
 
 define i1 @string.equalsManagedStringRange(ptr %a, i32 %aOffset, ptr %b, i32 %bOffset, i32 %len) {
@@ -395,6 +425,8 @@ ifcont2:
   %14 = call i1 @string.equalsManagedStringRange(ptr %11, i32 0, ptr %12, i32 0, i32 %13)
   ret i1 %14
 }
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

@@ -21,6 +21,7 @@
                 <ul>
                     <li><a href="#constant-folding">Constant Folding</a></li>
                     <li><a href="#dead-code-elimination">Dead Code Elimination</a></li>
+                    <li><a href="#mem2reg-phi-placement">Mem2reg Phi Placement</a></li>
                 </ul>
             </div>
             <div class="spec-section" id="constant-folding">
@@ -64,6 +65,44 @@ end 'main'
 </code></pre>
 <fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 42</pre></fieldset>
 <p>The <code>unused()</code> function won't appear in the optimized output.</p>
+            </div>
+            <div class="spec-section" id="mem2reg-phi-placement">
+                <h2>Mem2reg Phi Placement</h2>
+<p>The Mem2Reg optimization eliminates stack allocations by promoting local variables to SSA registers. For variables with multiple definitions across different control flow paths, PHI nodes are inserted to merge values.</p>
+<h3>Single Definition</h3>
+<p>When a variable is only assigned in one block, the optimization is straightforward:</p>
+<pre><code class="language-maxon">function main() returns int
+    var x = 10
+    return x + 5
+end 'main'
+</code></pre>
+<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 15</pre></fieldset>
+<h3>Multi-Definition with If/Else</h3>
+<p>When a variable is assigned in different branches, a PHI node merges the values:</p>
+<pre><code class="language-maxon">function main() returns int
+    var x = 0
+    if 1 &gt; 0 'branch'
+        x = 10
+    end 'branch' else 'else_branch'
+        x = 20
+    end 'else_branch'
+    return x
+end 'main'
+</code></pre>
+<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 10</pre></fieldset>
+<h3>Loop Variables</h3>
+<p>Variables modified in loops are correctly promoted with PHI nodes at the loop header:</p>
+<pre><code class="language-maxon">function main() returns int
+    var sum = 0
+    var i = 0
+    while i &lt; 5 'loop'
+        sum = sum + i
+        i = i + 1
+    end 'loop'
+    return sum
+end 'main'
+</code></pre>
+<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 10</pre></fieldset>
             </div>
         </main>
     </div>

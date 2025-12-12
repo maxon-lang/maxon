@@ -8,13 +8,14 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 31
+; Instructions: 42
 
 %string = type { ptr, i32 }
 %_ManagedArray_byte = type { ptr, i32 }
 %__ManagedStringData = type { %_ManagedArray_byte, i32, i32 }
 
 @.str.sso.1 = constant [6 x i8] c"Hello\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 
 define i32 @main() {
 entry0:
@@ -48,8 +49,23 @@ refcount.const2:
   br label %refcount.merge3
 refcount.merge3:
   %19 = phi i32 [ %18, %refcount.heap1 ], [ -1, %refcount.const2 ]
+  %22 = getelementptr %string, ptr %0, i32 0, i32 0
+  %23 = load ptr, ptr %22
+  %24 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 2
+  %25 = load i32, ptr %24
+  %26 = icmp sgt i32 %25, 0
+  br i1 %26, label %s.var.release4, label %s.var.continue5
+s.var.release4:
+  %27 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 0
+  %28 = getelementptr %_ManagedArray_byte, ptr %27, i32 0, i32 0
+  %29 = load ptr, ptr %28
+  call void @_managed_string_release(ptr %29, ptr @.__tag.free.s)
+  br label %s.var.continue5
+s.var.continue5:
   ret i32 %19
 }
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -62,13 +78,14 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 36
+; Instructions: 47
 
 %string = type { ptr, i32 }
 %_ManagedArray_byte = type { ptr, i32 }
 %__ManagedStringData = type { %_ManagedArray_byte, i32, i32 }
 
 @.str.sso.1 = constant [6 x i8] c"Hello\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 
 define i32 @main() {
 entry0:
@@ -107,8 +124,23 @@ refcount.merge3:
   %20 = alloca i32
   store i32 %19, ptr %20
   %21 = load i32, ptr %20
+  %22 = getelementptr %string, ptr %0, i32 0, i32 0
+  %23 = load ptr, ptr %22
+  %24 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 2
+  %25 = load i32, ptr %24
+  %26 = icmp sgt i32 %25, 0
+  br i1 %26, label %s.var.release4, label %s.var.continue5
+s.var.release4:
+  %27 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 0
+  %28 = getelementptr %_ManagedArray_byte, ptr %27, i32 0, i32 0
+  %29 = load ptr, ptr %28
+  call void @_managed_string_release(ptr %29, ptr @.__tag.free.s)
+  br label %s.var.continue5
+s.var.continue5:
   ret i32 %21
 }
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

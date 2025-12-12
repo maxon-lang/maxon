@@ -7,7 +7,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 822
+; Instructions: 844
 
 %StringIndex = type { i32, i32 }
 %substring = type { ptr, ptr, i32, i32 }
@@ -24,7 +24,9 @@ end 'main'
 @.str.sso.1 = constant [12 x i8] c"hello world\00"
 @.str.sso.2 = constant [4 x i8] c"xyz\00"
 @.str.sso.3 = constant [4 x i8] c"abc\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 @.str.sso.4 = constant [2 x i8] c"\0A\00"
+@.__tag.free.newline = constant [15 x i8] c"string literal\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define i32 @string.count(ptr %self) {
@@ -468,6 +470,19 @@ entry0:
   %28 = alloca %string
   store %string %27, ptr %28
   %29 = call i32 @sys.print(ptr %28)
+  %30 = getelementptr %string, ptr %0, i32 0, i32 0
+  %31 = load ptr, ptr %30
+  %32 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 2
+  %33 = load i32, ptr %32
+  %34 = icmp sgt i32 %33, 0
+  br i1 %34, label %s.var.release1, label %s.var.continue2
+s.var.release1:
+  %35 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 0
+  %36 = getelementptr %_ManagedArray_byte, ptr %35, i32 0, i32 0
+  %37 = load ptr, ptr %36
+  call void @_managed_string_release(ptr %37, ptr @.__tag.free.s)
+  br label %s.var.continue2
+s.var.continue2:
   ret i32 0
 }
 
@@ -505,12 +520,25 @@ entry0:
   %24 = load i32, ptr %23
   %25 = call i32 @write_stdout(ptr %22, i32 %24)
   %27 = add i32 %8, 1
-  %28 = getelementptr %cstring, ptr %3, i32 0, i32 0
+  %28 = getelementptr %string, ptr %10, i32 0, i32 0
   %29 = load ptr, ptr %28
-  call void @_managed_string_release(ptr %29, ptr @.__tag.free.cs)
-  %30 = getelementptr %cstring, ptr %20, i32 0, i32 0
-  %31 = load ptr, ptr %30
-  call void @_managed_string_release(ptr %31, ptr @.__tag.free.newline_cs)
+  %30 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 2
+  %31 = load i32, ptr %30
+  %32 = icmp sgt i32 %31, 0
+  br i1 %32, label %newline.var.release1, label %newline.var.continue2
+newline.var.release1:
+  %33 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 0
+  %34 = getelementptr %_ManagedArray_byte, ptr %33, i32 0, i32 0
+  %35 = load ptr, ptr %34
+  call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
+  br label %newline.var.continue2
+newline.var.continue2:
+  %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
+  %37 = load ptr, ptr %36
+  call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
+  %38 = getelementptr %cstring, ptr %20, i32 0, i32 0
+  %39 = load ptr, ptr %38
+  call void @_managed_string_release(ptr %39, ptr @.__tag.free.newline_cs)
   ret i32 %27
 }
 
@@ -1103,7 +1131,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 1258
+; Instructions: 1280
 
 %StringIndex = type { i32, i32 }
 %substring = type { ptr, ptr, i32, i32 }
@@ -1120,7 +1148,9 @@ entry0:
 @.str.sso.1 = constant [12 x i8] c"hello world\00"
 @.str.sso.2 = constant [4 x i8] c"xyz\00"
 @.str.sso.3 = constant [4 x i8] c"abc\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 @.str.sso.4 = constant [2 x i8] c"\0A\00"
+@.__tag.free.newline = constant [15 x i8] c"string literal\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define i32 @string.count(ptr %self) {
@@ -1682,6 +1712,19 @@ entry0:
   %28 = alloca %string
   store %string %27, ptr %28
   %29 = call i32 @sys.print(ptr %28)
+  %30 = getelementptr %string, ptr %0, i32 0, i32 0
+  %31 = load ptr, ptr %30
+  %32 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 2
+  %33 = load i32, ptr %32
+  %34 = icmp sgt i32 %33, 0
+  br i1 %34, label %s.var.release1, label %s.var.continue2
+s.var.release1:
+  %35 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 0
+  %36 = getelementptr %_ManagedArray_byte, ptr %35, i32 0, i32 0
+  %37 = load ptr, ptr %36
+  call void @_managed_string_release(ptr %37, ptr @.__tag.free.s)
+  br label %s.var.continue2
+s.var.continue2:
   ret i32 0
 }
 
@@ -1725,12 +1768,25 @@ entry0:
   %25 = call i32 @write_stdout(ptr %22, i32 %24)
   %26 = load i32, ptr %9
   %27 = add i32 %26, 1
-  %28 = getelementptr %cstring, ptr %3, i32 0, i32 0
+  %28 = getelementptr %string, ptr %10, i32 0, i32 0
   %29 = load ptr, ptr %28
-  call void @_managed_string_release(ptr %29, ptr @.__tag.free.cs)
-  %30 = getelementptr %cstring, ptr %20, i32 0, i32 0
-  %31 = load ptr, ptr %30
-  call void @_managed_string_release(ptr %31, ptr @.__tag.free.newline_cs)
+  %30 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 2
+  %31 = load i32, ptr %30
+  %32 = icmp sgt i32 %31, 0
+  br i1 %32, label %newline.var.release1, label %newline.var.continue2
+newline.var.release1:
+  %33 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 0
+  %34 = getelementptr %_ManagedArray_byte, ptr %33, i32 0, i32 0
+  %35 = load ptr, ptr %34
+  call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
+  br label %newline.var.continue2
+newline.var.continue2:
+  %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
+  %37 = load ptr, ptr %36
+  call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
+  %38 = getelementptr %cstring, ptr %20, i32 0, i32 0
+  %39 = load ptr, ptr %38
+  call void @_managed_string_release(ptr %39, ptr @.__tag.free.newline_cs)
   ret i32 %27
 }
 

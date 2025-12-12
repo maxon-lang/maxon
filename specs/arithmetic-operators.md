@@ -56,12 +56,12 @@ function main() returns int
     var rem = a mod b        // 1
 
     // Use the values
-    printInt(sum)
-    printInt(diff)
-    printInt(prod)
-    printFloat(div, 6)
-    printInt(quot)
-    printInt(rem)
+    print("{sum}")
+    print("{diff}")
+    print("{prod}")
+    print("{div}")
+    print("{quot}")
+    print("{rem}")
 
     return 0
 end 'main'

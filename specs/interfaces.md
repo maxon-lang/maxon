@@ -184,10 +184,6 @@ The `Iterator` type in `stdlib/iter/iterator.maxon` conforms to `Iterable` and i
 ### Example
 
 ```maxon
-interface Hashable
-    function hash() returns int
-end 'Hashable'
-
 type Point is Hashable
     var x int
     var y int
@@ -200,13 +196,15 @@ end 'Point'
 function main() returns int
     var p = Point{x: 10, y: 20}
     var h = p.hash()
-    printInt(h)
+    print("{h}")
     return 0
 end 'main'
 ```
-```output
-ExitCode: 0
-Stdout: 630
+```exitcode
+0
+```
+```stdout
+630
 ```
 
 

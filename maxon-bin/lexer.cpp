@@ -439,6 +439,14 @@ Token Lexer::readStringLiteral() {
 			case '0':
 				str += '\0';
 				break;
+			case '{':
+				// Escaped brace - use placeholder that can't appear in source
+				str += "\x01{";
+				break;
+			case '}':
+				// Escaped brace - use placeholder that can't appear in source
+				str += "\x01}";
+				break;
 			default:
 				reportError("Unknown escape sequence '\\" + std::string(1, source_[position_]) + "'",
 							line_, column_);

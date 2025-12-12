@@ -1431,7 +1431,8 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 
 		mir::MIRValue *arg = inst->operands[i];
 		if (arg->type->isFloat()) {
-			loadValueFloat(arg, static_cast<X86Reg>(static_cast<int>(X86Reg::XMM0) + i));
+			// Win64 ABI: float args go in XMM0-3 at their argument position
+			loadValueFloat(arg, static_cast<X86Reg>(static_cast<int>(X86Reg::XMM0) + regIndex));
 		} else {
 			loadValue(arg, argRegs[regIndex]);
 		}

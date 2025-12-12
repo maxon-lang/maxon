@@ -73,7 +73,7 @@ var z = trunc(neg)   // -3 (toward zero, removes fractional part)
 function main() returns int
     var neg = 0.0 - 3.7
     var y = trunc(neg)
-    printInt(y)
+    print("{y}")
     return 0
 end 'main'
 ```

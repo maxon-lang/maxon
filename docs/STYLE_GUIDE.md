@@ -158,9 +158,9 @@ Always include a matching block identifier for the `end` statement.
 
 ```maxon
 if x > 0 'positive'
-	printInt(x)
+	print("{x}")
 else
-	printInt(0)
+	print("0")
 end 'positive'
 ```
 

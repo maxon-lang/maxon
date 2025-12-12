@@ -8,7 +8,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 82
+; Instructions: 93
 
 %string = type { ptr, i32 }
 %_ManagedArray_byte = type { ptr, i32 }
@@ -18,6 +18,7 @@ end 'main'
 @.str.1 = constant [41 x i8] c"this string is longer than fifteen bytes\00"
 @.str.2 = constant [41 x i8] c"this string is longer than fifteen bytes\00"
 @.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
@@ -61,18 +62,31 @@ entry0:
   store ptr %18, ptr %24
   %25 = getelementptr %string, ptr %13, i32 0, i32 1
   store i32 0, ptr %25
-  %29 = getelementptr %string, ptr %0, i32 0, i32 0
-  %30 = load ptr, ptr %29
-  %31 = getelementptr %string, ptr %13, i32 0, i32 0
-  %32 = load ptr, ptr %31
-  %33 = call i1 @string.equalsManagedString(ptr %30, ptr %32)
-  br i1 %33, label %then1, label %ifcont2
+  %37 = getelementptr %string, ptr %0, i32 0, i32 0
+  %38 = load ptr, ptr %37
+  %39 = getelementptr %string, ptr %13, i32 0, i32 0
+  %40 = load ptr, ptr %39
+  %41 = call i1 @string.equalsManagedString(ptr %38, ptr %40)
+  br i1 %41, label %then1, label %ifcont2
 then1:
   call void @_managed_string_release(ptr %1, ptr @.__tag.free.str.heap)
   call void @_managed_string_release(ptr %14, ptr @.__tag.free.str.heap)
-  ret i32 0
+  %29 = getelementptr %string, ptr %0, i32 0, i32 0
+  %30 = load ptr, ptr %29
+  %31 = getelementptr %__ManagedStringData, ptr %30, i32 0, i32 2
+  %32 = load i32, ptr %31
+  %33 = icmp sgt i32 %32, 0
+  br i1 %33, label %s.var.release3, label %s.var.continue4
 ifcont2:
   ret i32 1
+s.var.release3:
+  %34 = getelementptr %__ManagedStringData, ptr %30, i32 0, i32 0
+  %35 = getelementptr %_ManagedArray_byte, ptr %34, i32 0, i32 0
+  %36 = load ptr, ptr %35
+  call void @_managed_string_release(ptr %36, ptr @.__tag.free.s)
+  br label %s.var.continue4
+s.var.continue4:
+  ret i32 0
 }
 
 define i1 @string.equalsManagedStringRange(ptr %a, i32 %aOffset, ptr %b, i32 %bOffset, i32 %len) {
@@ -136,7 +150,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 129
+; Instructions: 140
 
 %string = type { ptr, i32 }
 %_ManagedArray_byte = type { ptr, i32 }
@@ -146,6 +160,7 @@ entry0:
 @.str.1 = constant [41 x i8] c"this string is longer than fifteen bytes\00"
 @.str.2 = constant [41 x i8] c"this string is longer than fifteen bytes\00"
 @.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
+@.__tag.free.s = constant [15 x i8] c"string literal\00"
 
 define i1 @string.equals(ptr %self, ptr %other) {
 entry0:
@@ -216,9 +231,22 @@ then1:
   call void @_managed_string_release(ptr %27, ptr @.__tag.free.str.heap)
   %28 = load ptr, ptr %17
   call void @_managed_string_release(ptr %28, ptr @.__tag.free.str.heap)
-  ret i32 0
+  %29 = getelementptr %string, ptr %0, i32 0, i32 0
+  %30 = load ptr, ptr %29
+  %31 = getelementptr %__ManagedStringData, ptr %30, i32 0, i32 2
+  %32 = load i32, ptr %31
+  %33 = icmp sgt i32 %32, 0
+  br i1 %33, label %s.var.release3, label %s.var.continue4
 ifcont2:
   ret i32 1
+s.var.release3:
+  %34 = getelementptr %__ManagedStringData, ptr %30, i32 0, i32 0
+  %35 = getelementptr %_ManagedArray_byte, ptr %34, i32 0, i32 0
+  %36 = load ptr, ptr %35
+  call void @_managed_string_release(ptr %36, ptr @.__tag.free.s)
+  br label %s.var.continue4
+s.var.continue4:
+  ret i32 0
 }
 
 define i1 @string.equalsManagedStringRange(ptr %a, i32 %aOffset, ptr %b, i32 %bOffset, i32 %len) {

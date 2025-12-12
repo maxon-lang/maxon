@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Internals - Maxon Language Documentation</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <nav class="sidebar" id="sidebar" data-active="internals"></nav>
+        <main class="content">
+            <div class="header">
+                <h1>Internals</h1>
+                <div class="breadcrumb">
+                    <a href="index.html">Home</a> / Internals
+                </div>
+            </div>
+            <div class="toc">
+                <h2>Contents</h2>
+                <ul>
+                    <li><a href="#managed-array-internals">Managed Array Internals</a></li>
+                    <li><a href="#managed-string-internals">Managed String Internals</a></li>
+                </ul>
+            </div>
+            <div class="spec-section" id="managed-array-internals">
+                <h2>Managed Array Internals</h2>
+<h3>Array Memory Management</h3>
+<p>Maxon manages array memory automatically using reference counting and scope-based cleanup.</p>
+<h3>Stack vs Heap Allocation</h3>
+<p>Small arrays with known size at compile time use stack allocation. Arrays that grow dynamically use heap allocation:</p>
+<pre><code class="language-maxon">var stack = [1, 2, 3]  // Stack allocated (capacity = 0)
+var heap = array of int
+heap.push(1)  // Heap allocated (capacity &gt; 0)
+</code></pre>
+<h3>Reference Counting</h3>
+<p>Heap-allocated arrays use reference counting to enable efficient sharing.</p>
+<h3>Automatic Cleanup</h3>
+<p>Arrays are automatically released when they go out of scope:</p>
+<pre><code class="language-maxon">if true 'scope'
+    var temp = array of int
+    temp.push(1)
+    // temp is released here
+end 'scope'
+</code></pre>
+            </div>
+            <div class="spec-section" id="managed-string-internals">
+                <h2>Managed String Internals</h2>
+<h3>String Memory Management</h3>
+<p>Maxon manages string memory automatically using reference counting and scope-based cleanup.</p>
+<h3>Small String Optimization (SSO)</h3>
+<p>Strings up to 15 bytes are stored inline without heap allocation:</p>
+<pre><code class="language-maxon">var short = &quot;hello&quot;  // SSO (5 bytes)
+var long = &quot;this is a longer string&quot;  // Heap allocated (24 bytes)
+</code></pre>
+<h3>Reference Counting</h3>
+<p>Heap-allocated strings use reference counting to enable efficient sharing:</p>
+<pre><code class="language-maxon">var a = &quot;heap allocated string here!&quot;
+var b = a  // b shares a's buffer, refcount = 2
+</code></pre>
+<h3>Automatic Cleanup</h3>
+<p>Strings are automatically released when they go out of scope:</p>
+<pre><code class="language-maxon">if true 'scope'
+    var temp = &quot;temporary string data&quot;
+    // temp is released here
+end 'scope'
+</code></pre>
+            </div>
+        </main>
+    </div>
+    <script src="nav.js"></script>
+</body>
+</html>

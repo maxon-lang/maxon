@@ -912,6 +912,37 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 
 		namedValues[varDecl->name] = stringAlloca;
 		variableTypes[varDecl->name] = "string";
+
+		// Track the string variable for cleanup at scope exit
+		// We track the alloca so cleanup reads the CURRENT buffer pointer
+		// This handles reassignment where the variable may hold heap data later
+		if (!scopeStack.empty()) {
+			scopeStack.back().stringVariables.push_back({varDecl->name, stringAlloca});
+		}
+
+		return;
+	}
+
+	// Handle interpolated string initialization
+	// generateInterpolatedString creates an alloca with the final concatenated string
+	// We use that alloca directly (don't create a second one)
+	if (auto *interpExpr = dynamic_cast<InterpolatedStringExprAST *>(varDecl->initializer.get())) {
+		mir::MIRValue *stringAlloca = generateInterpolatedString(interpExpr);
+
+		// Use the alloca from generateInterpolatedString directly
+		// Rename it to match the variable name
+		stringAlloca->name = varDecl->name;
+
+		namedValues[varDecl->name] = stringAlloca;
+		variableTypes[varDecl->name] = "string";
+
+		// Track the string variable for cleanup at scope exit
+		// We track the alloca itself so cleanup reads the CURRENT buffer pointer
+		// This handles reassignment: `s = "{s}{x}"` where s's buffer changes
+		if (!scopeStack.empty()) {
+			scopeStack.back().stringVariables.push_back({varDecl->name, stringAlloca});
+		}
+
 		return;
 	}
 
@@ -1384,6 +1415,34 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 		mir::MIRValue *stringPtr = generateStringLiteral(strLiteral);
 		namedValues[letDecl->name] = stringPtr;
 		variableTypes[letDecl->name] = "string";
+		return;
+	}
+
+	// Handle interpolated string initialization for let
+	if (auto *interpExpr = dynamic_cast<InterpolatedStringExprAST *>(letDecl->initializer.get())) {
+		mir::MIRValue *stringAlloca = generateInterpolatedString(interpExpr);
+		stringAlloca->name = letDecl->name;
+
+		namedValues[letDecl->name] = stringAlloca;
+		variableTypes[letDecl->name] = "string";
+
+		// Track the result string for cleanup at scope exit
+		if (!scopeStack.empty()) {
+			mir::MIRType *stringType = structTypes["string"];
+			mir::MIRType *managedStringDataType = structTypes["__ManagedStringData"];
+			mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
+
+			mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, stringAlloca, 0, letDecl->name + ".managed.field");
+			mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, letDecl->name + ".managed.ptr");
+			mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringDataType, managedPtr, 0, letDecl->name + ".buffer.field");
+			mir::MIRValue *bufferPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, letDecl->name + ".buffer.ptr.ptr");
+			mir::MIRValue *bufferPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtrPtr, letDecl->name + ".buffer.ptr");
+
+			mir::MIRValue *trackAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name + ".track.ptr");
+			builder->createStore(bufferPtr, trackAlloca);
+			scopeStack.back().heapAllocatedStrings.push_back({letDecl->name + ".interp", trackAlloca});
+		}
+
 		return;
 	}
 

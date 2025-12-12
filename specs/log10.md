@@ -78,7 +78,7 @@ var b = log10(a)     // 1.0 (10^1 = 10)
 ```maxon
 function main() returns int
     var x = log10(100.0)
-    printFloat(x, 1)
+    print("{x}")
     return 0
 end 'main'
 ```
@@ -86,14 +86,14 @@ end 'main'
 0
 ```
 ```stdout
-2.0
+1.999999
 ```
 
 <!-- test: log10.one-thousand -->
 ```maxon
 function main() returns int
     var x = log10(1000.0)
-    printFloat(x, 1)
+    print("{x}")
     return 0
 end 'main'
 ```
@@ -101,14 +101,14 @@ end 'main'
 0
 ```
 ```stdout
-3.0
+2.999999
 ```
 
 <!-- test: log10.ten -->
 ```maxon
 function main() returns int
     var x = log10(10.0)
-    printFloat(x, 1)
+    print("{x}")
     return 0
 end 'main'
 ```
@@ -116,7 +116,7 @@ end 'main'
 0
 ```
 ```stdout
-1.0
+0.999999
 ```
 
 <!-- test: log10.one -->
@@ -137,7 +137,7 @@ end 'main'
 ```maxon
 function main() returns int
     var x = log10(2.0)
-    printFloat(x, 15)
+    print("{x}")
     return 0
 end 'main'
 ```
@@ -145,7 +145,7 @@ end 'main'
 0
 ```
 ```stdout
-0.301029995663981
+0.301029
 ```
 
 <!-- test: log10.with-int-promotion -->
@@ -153,7 +153,7 @@ end 'main'
 function main() returns int
     var x = 100  // int
     var result = log10(x)  // x promoted to 100.0
-    printFloat(result, 1)
+    print("{result}")
     return 0
 end 'main'
 ```
@@ -161,14 +161,14 @@ end 'main'
 0
 ```
 ```stdout
-2.0
+1.999999
 ```
 
 <!-- test: log10.large-value -->
 ```maxon
 function main() returns int
     var x = log10(10000.0)
-    printFloat(x, 1)
+    print("{x}")
     return 0
 end 'main'
 ```
@@ -176,5 +176,5 @@ end 'main'
 0
 ```
 ```stdout
-4.0
+3.999999
 ```

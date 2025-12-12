@@ -567,6 +567,50 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		builder->createCall(stringReleaseFunc, {dataPtr, tag});
 	}
 
+	// Release mutable string variables at scope exit
+	// Unlike heapAllocatedStrings which track a copy of the buffer pointer at allocation time,
+	// stringVariables track the string struct alloca so we read the CURRENT buffer pointer
+	// This handles reassignment: `s = "{s}{x}"` where s's buffer changes over time
+	for (const auto &[name, stringAlloca] : scopeStack.back().stringVariables) {
+		mir::MIRType *stringType = structTypes["string"];
+		mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
+		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
+
+		if (!stringType || !managedStringType || !unsizedArrayType) {
+			continue; // Types not initialized, skip cleanup
+		}
+
+		// Read current managed pointer from string struct
+		mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, stringAlloca, 0, name + ".cleanup._managed.ptr");
+		mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, name + ".cleanup._managed");
+
+		// Check capacity to see if heap-allocated
+		mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, name + ".cleanup._capacity.ptr");
+		mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt32(), capPtr, name + ".cleanup._capacity");
+		mir::MIRValue *isHeap = builder->createICmpSGT(capacity, builder->getInt32(0), name + ".cleanup.isHeap");
+
+		// Create conditional release block
+		mir::MIRBasicBlock *releaseBlock = builder->createBasicBlock(name + ".var.release");
+		mir::MIRBasicBlock *continueBlock = builder->createBasicBlock(name + ".var.continue");
+		builder->createCondBr(isHeap, releaseBlock, continueBlock);
+
+		builder->setInsertPoint(releaseBlock);
+		// Get the buffer pointer and release it
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringType, managedPtr, 0, name + ".cleanup._buffer");
+		mir::MIRValue *dataPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, name + ".cleanup.data.ptr.ptr");
+		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrPtr, name + ".cleanup.data.ptr");
+
+		mir::MIRValue *tag = module->createGlobalString(".__tag.free." + name, "string literal");
+		mir::MIRFunction *stringReleaseFunc = getOrDeclareFunction(
+			"_managed_string_release",
+			mir::MIRType::getVoid(),
+			{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+		builder->createCall(stringReleaseFunc, {dataPtr, tag});
+		builder->createBr(continueBlock);
+
+		builder->setInsertPoint(continueBlock);
+	}
+
 	// Release parent references for substrings in this scope
 	// Substrings hold a reference to their parent's buffer if the parent was heap-allocated
 	for (const auto &[name, substringAlloca] : scopeStack.back().substringAllocas) {

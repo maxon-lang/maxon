@@ -372,10 +372,24 @@ MIRType *MIRParser::parseType() {
 	if (peek() == '%') {
 		advance(); // '%'
 		std::string structName = readIdentifier();
-		// Look up or create the struct type
-		// For now, assume Iterator struct with 3 i32 fields
+		// Look up or create the struct type with known layouts
 		if (structName == "Iterator") {
 			return MIRType::getStruct(structName, {MIRType::getInt32(), MIRType::getInt32(), MIRType::getInt32()});
+		}
+		// String types used by runtime
+		if (structName == "string") {
+			return MIRType::getStruct(structName, {MIRType::getPtr(), MIRType::getInt32()});
+		}
+		if (structName == "_ManagedArray_byte") {
+			return MIRType::getStruct(structName, {MIRType::getPtr(), MIRType::getInt32()});
+		}
+		if (structName == "__ManagedStringData") {
+			// { %_ManagedArray_byte, i32, i32 }
+			MIRType *managedArrayType = MIRType::getStruct("_ManagedArray_byte", {MIRType::getPtr(), MIRType::getInt32()});
+			return MIRType::getStruct(structName, {managedArrayType, MIRType::getInt32(), MIRType::getInt32()});
+		}
+		if (structName == "cstring") {
+			return MIRType::getStruct(structName, {MIRType::getPtr(), MIRType::getInt32(), MIRType::getPtr()});
 		}
 		// Unknown struct - create placeholder with default size
 		return MIRType::getStruct(structName, {});

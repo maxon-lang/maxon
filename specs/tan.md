@@ -77,10 +77,10 @@ function main() returns int
     var x2 = tan(0.5)
     var x3 = tan(1.0)
     var x4 = tan(0.7854)
-    printFloat(x1, 6)
-    printFloat(x2, 6)
-    printFloat(x3, 6)
-    printFloat(x4, 6)
+    print("{x1}")
+    print("{x2}")
+    print("{x3}")
+    print("{x4}")
     return 0
 end 'main'
 ```
@@ -88,10 +88,10 @@ end 'main'
 0
 ```
 ```stdout
-0.000000
+0.0
 0.546302
-1.557408
-1.000004
+1.557407
+1.000003
 ```
 
 <!-- test: tan.quarter-pi -->

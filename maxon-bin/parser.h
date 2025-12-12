@@ -90,6 +90,7 @@ class Parser {
 	std::unique_ptr<ExprAST> parseUnary();
 	std::unique_ptr<ExprAST> parsePostfix();
 	std::unique_ptr<ExprAST> parsePrimary();
+	std::unique_ptr<ExprAST> parseInterpolatedString(const std::string &str, int line, int column);
 
 	std::unique_ptr<StmtAST> parseStatement();
 	std::unique_ptr<StmtAST> parseVarDecl();

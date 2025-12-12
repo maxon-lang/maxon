@@ -1,13 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Control Flow - Maxon Language Documentation</title>
     <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
     <div class="container">
         <nav class="sidebar" id="sidebar" data-active="control-flow"></nav>
@@ -24,79 +22,78 @@
                     <li><a href="#break">Break</a></li>
                     <li><a href="#for-loops">For Loops</a></li>
                     <li><a href="#if-statements">If Statements</a></li>
-                    <li><a href="#single-line-if">Single Line If</a></li>
+                    <li><a href="#match-statements">Match Statements</a></li>
                     <li><a href="#while-loops">While Loops</a></li>
                 </ul>
             </div>
             <div class="spec-section" id="break">
                 <h2>Break</h2>
-                <h1>Break Statement</h1>
-                <p>Exit from the innermost enclosing loop.</p>
-                <p><strong>Syntax:</strong></p>
-                <pre><code class="language-maxon">break           // Break from innermost loop
+<h1>Break Statement</h1>
+<p>Exit from the innermost enclosing loop.</p>
+<p><strong>Syntax:</strong></p>
+<pre><code class="language-maxon">break           // Break from innermost loop
 break 'label'   // Break from loop with specified label
 </code></pre>
-                <p><strong>Example:</strong></p>
-                <pre><code class="language-maxon">var x = 5
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var x = 5
 while true 'loop'
     x = x + 2
-    if x = 11 'check'
+    if x == 11 'check'
         break
     end 'check'
 end 'loop'
 // x is now 11
 </code></pre>
-                <p><strong>Labeled Break Example:</strong></p>
-                <pre><code class="language-maxon">while true 'outer'
+<p><strong>Labeled Break Example:</strong></p>
+<pre><code class="language-maxon">while true 'outer'
     while true 'inner'
         break 'outer'  // Breaks out of outer loop
     end 'inner'
 end 'outer'
 </code></pre>
-                <p><strong>Labeled Continue:</strong></p>
-                <p>The same syntax works for <code>continue</code> to jump to a specific loop's next iteration:</p>
-                <pre><code class="language-maxon">while x &lt; 10 'outer'
+<p><strong>Labeled Continue:</strong></p>
+<p>The same syntax works for <code>continue</code> to jump to a specific loop's next iteration:</p>
+<pre><code class="language-maxon">while x &lt; 10 'outer'
     x = x + 1
     while y &lt; 10 'inner'
         y = y + 1
-        if y = 3 'check'
+        if y == 3 'check'
             continue 'outer'  // Skips to next iteration of outer loop
         end 'check'
     end 'inner'
 end 'outer'
 </code></pre>
-                <p><strong>Notes:</strong></p>
-                <ul>
-                    <li>Exits the innermost <code>while</code> or <code>for</code> loop</li>
-                    <li>Control flow continues after the loop's <code>end</code> statement</li>
-                    <li>Must be inside a loop (compile error otherwise)</li>
-                    <li>Can be used in single-line if: <code>if condition break</code></li>
-                    <li>Label must match an enclosing loop's label</li>
-                    <li><code>continue 'label'</code> jumps to the next iteration of the labeled loop</li>
-                </ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Exits the innermost <code>while</code> or <code>for</code> loop</li>
+<li>Control flow continues after the loop's <code>end</code> statement</li>
+<li>Must be inside a loop (compile error otherwise)</li>
+<li>Label must match an enclosing loop's label</li>
+<li><code>continue 'label'</code> jumps to the next iteration of the labeled loop</li>
+</ul>
             </div>
             <div class="spec-section" id="for-loops">
                 <h2>For Loops</h2>
-                <p>For loops provide convenient iteration over ranges and collections using an iterator interface defined by the standard library.</p>
-                <h3>Syntax</h3>
-                <pre><code class="language-maxon">for &lt;variable&gt; in &lt;iterable&gt; 'identifier'
+<p>For loops provide convenient iteration over ranges and collections using an iterator interface defined by the standard library.</p>
+<h3>Syntax</h3>
+<pre><code class="language-maxon">for &lt;variable&gt; in &lt;iterable&gt; 'identifier'
     &lt;statements&gt;
 end 'identifier'
 </code></pre>
-                <ul>
-                    <li><strong>variable</strong>: Loop variable name (immutable, scoped to loop body)</li>
-                    <li><strong>iterable</strong>: Expression that returns an iterator (e.g., <code>range(0, 10)</code>)</li>
-                    <li><strong>identifier</strong>: Block identifier (must match on <code>for</code> and <code>end</code> lines)</li>
-                </ul>
-                <h3>Range-Based Iteration</h3>
-                <p>The <code>range()</code> function creates an iterator over integers. It's automatically available from the standard library:</p>
-                <pre><code class="language-maxon">for i in range(0, 5) 'loop'
+<ul>
+<li><strong>variable</strong>: Loop variable name (immutable, scoped to loop body)</li>
+<li><strong>iterable</strong>: Expression that returns an iterator (e.g., <code>range(0, 10)</code>)</li>
+<li><strong>identifier</strong>: Block identifier (must match on <code>for</code> and <code>end</code> lines)</li>
+</ul>
+<h3>Range-Based Iteration</h3>
+<p>The <code>range()</code> function creates an iterator over integers. It's automatically available from the standard library:</p>
+<pre><code class="language-maxon">for i in range(0, 5) 'loop'
     print(i)  // Prints 0, 1, 2, 3, 4
 end 'loop'
 </code></pre>
-                <p><strong>Range is half-open:</strong> <code>range(0, 5)</code> iterates over <code>[0, 5)</code> (0, 1, 2, 3, 4).</p>
-                <h3>Example: Sum of Range</h3>
-                <pre><code class="language-maxon">function main() returns int
+<p><strong>Range is half-open:</strong> <code>range(0, 5)</code> iterates over <code>[0, 5)</code> (0, 1, 2, 3, 4).</p>
+<h3>Example: Sum of Range</h3>
+<pre><code class="language-maxon">function main() returns int
     var sum = 0
     for i in range(0, 10) 'sum_loop'
         sum = sum + i
@@ -104,19 +101,16 @@ end 'loop'
     return sum  // Returns 45 (0+1+2+...+9)
 end 'main'
 </code></pre>
-                <fieldset class="expected-output">
-                    <legend>Expected Output</legend>
-                    <pre>Exit Code: 45</pre>
-                </fieldset>
-                <h3>Loop Control</h3>
-                <p>For loops support <code>break</code> and <code>continue</code> statements:</p>
-                <pre><code class="language-maxon">function main() returns int
+<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 45</pre></fieldset>
+<h3>Loop Control</h3>
+<p>For loops support <code>break</code> and <code>continue</code> statements:</p>
+<pre><code class="language-maxon">function main() returns int
     var sum = 0
     for i in range(0, 10) 'loop'
-        if i = 5 'skip'
+        if i == 5 'skip'
             continue  // Skip 5
         end 'skip'
-        if i = 8 'stop'
+        if i == 8 'stop'
             break  // Stop at 8
         end 'stop'
         sum = sum + i
@@ -124,18 +118,15 @@ end 'main'
     return sum  // Returns 23 (0+1+2+3+4+6+7)
 end 'main'
 </code></pre>
-                <fieldset class="expected-output">
-                    <legend>Expected Output</legend>
-                    <pre>Exit Code: 23</pre>
-                </fieldset>
-                <h3>Loop Variable Scope</h3>
-                <p>The loop variable is:</p>
-                <ul>
-                    <li><strong>Immutable</strong>: Cannot be reassigned within the loop body</li>
-                    <li><strong>Block-scoped</strong>: Only visible within the loop</li>
-                    <li><strong>Fresh each iteration</strong>: Gets new value from iterator each time</li>
-                </ul>
-                <pre><code class="language-maxon">function main() returns int
+<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 23</pre></fieldset>
+<h3>Loop Variable Scope</h3>
+<p>The loop variable is:</p>
+<ul>
+<li><strong>Immutable</strong>: Cannot be reassigned within the loop body</li>
+<li><strong>Block-scoped</strong>: Only visible within the loop</li>
+<li><strong>Fresh each iteration</strong>: Gets new value from iterator each time</li>
+</ul>
+<pre><code class="language-maxon">function main() returns int
     var last = 0
     for i in range(1, 4) 'loop'
         last = i  // Can copy value to mutable variable
@@ -145,135 +136,134 @@ end 'main'
     return last  // Returns 3
 end 'main'
 </code></pre>
-                <fieldset class="expected-output">
-                    <legend>Expected Output</legend>
-                    <pre>Exit Code: 3</pre>
-                </fieldset>
-                <h3>How It Works</h3>
-                <p>The compiler desugars for loops to iterator-based while loops. This code:</p>
-                <pre><code class="language-text">for i in range(0, 3) 'loop'
+<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 3</pre></fieldset>
+<h3>How It Works</h3>
+<p>The compiler desugars for loops to iterator-based while loops. This code:</p>
+<pre><code class="language-text">for i in range(0, 3) 'loop'
     print(i)
 end 'loop'
 </code></pre>
-                <p>Becomes:</p>
-                <pre><code class="language-text">var __iter = range(0, 3)
-while hasNext(__iter) = 1 'loop'
-    let i = getCurrent(__iter)
-    print(i)
-    __iter = next(__iter)
+<p>Becomes:</p>
+<pre><code class="language-text">var __iter = range(0, 3)
+while 1 = 1 'loop'
+    var __opt = __iter.next()
+    if let i = __opt 'check'
+        print(i)
+    end 'check' else 'break'
+        break 'loop'
+    end 'break'
 end 'loop'
 </code></pre>
-                <p>The standard library (automatically available) provides:</p>
-                <ul>
-                    <li><code>Iterator</code> struct definition (exported from <code>stdlib/iter/iterator.maxon</code>)</li>
-                    <li><code>hasNext(Iterator) int</code> - Check if more elements exist</li>
-                    <li><code>getCurrent(Iterator) int</code> - Get current element</li>
-                    <li><code>next(Iterator) Iterator</code> - Advance to next element</li>
-                    <li><code>range(int, int) Iterator</code> - Create range iterator (from <code>stdlib/iter/range.maxon</code>)</li>
-                </ul>
-                <p>This design separates concerns:</p>
-                <ul>
-                    <li><strong>Compiler</strong>: Syntax sugar only</li>
-                    <li><strong>Standard Library</strong>: All iteration logic (auto-discovered, no imports needed)</li>
-                </ul>
-                <h3>Iterator Interface</h3>
-                <p>The iterator interface is a contract defined by the standard library. Any type that implements the three required functions can be used with for loops:</p>
-                <ul>
-                    <li><code>Iterator</code> struct with fields: <code>current</code>, <code>limit</code>, <code>step</code></li>
-                    <li><code>hasNext(Iterator) int</code> - Returns 1 if more elements exist, 0 otherwise</li>
-                    <li><code>getCurrent(Iterator) int</code> - Returns current element value</li>
-                    <li><code>next(Iterator) Iterator</code> - Returns new iterator advanced by step</li>
-                </ul>
-                <p>The <code>Iterator</code> struct is exported from <code>stdlib/iter/iterator.maxon</code> and can be used in any file with the qualified name <code>Iterator</code>.</p>
+<p>The standard library (automatically available) provides:</p>
+<ul>
+<li><code>Iterator</code> type definition (exported from <code>stdlib/iter/iterator.maxon</code>)</li>
+<li><code>next(Iterator) int or nil</code> - Returns next element or nil if exhausted</li>
+<li><code>range(int, int) Iterator</code> - Create range iterator (from <code>stdlib/iter/range.maxon</code>)</li>
+</ul>
+<p>This design separates concerns:</p>
+<ul>
+<li><strong>Compiler</strong>: Syntax sugar only</li>
+<li><strong>Standard Library</strong>: All iteration logic (auto-discovered, no imports needed)</li>
+</ul>
+<h3>Iterator Interface</h3>
+<p>The iterator interface is a contract defined by the standard library. Any type that implements the <code>next()</code> function can be used with for loops:</p>
+<ul>
+<li><code>Iterator</code> type with fields: <code>current</code>, <code>limit</code>, <code>step</code></li>
+<li><code>next(Iterator) int or nil</code> - Returns the next element value, or nil if no more elements exist</li>
+</ul>
+<p>The <code>Iterator</code> type is exported from <code>stdlib/iter/iterator.maxon</code> and can be used in any file with the qualified name <code>Iterator</code>.</p>
             </div>
             <div class="spec-section" id="if-statements">
                 <h2>If Statements</h2>
-                <h1>If Statements</h1>
-                <p>Execute code conditionally based on a boolean expression.</p>
-                <p><strong>Single-Line Syntax:</strong></p>
-                <pre><code class="language-maxon">if &lt;condition&gt; &lt;statement&gt;
-</code></pre>
-                <p><strong>Multi-Line Syntax:</strong></p>
-                <pre><code class="language-maxon">if &lt;condition&gt; 'identifier'
-    &lt;statements&gt;
-else 'identifier'
+<h1>If Statements</h1>
+<p>Execute code conditionally based on a boolean expression.</p>
+<p><strong>Simple If (no else):</strong></p>
+<pre><code class="language-maxon">if &lt;condition&gt; 'identifier'
     &lt;statements&gt;
 end 'identifier'
 </code></pre>
-                <p><strong>Example (single-line):</strong></p>
-                <pre><code class="language-maxon">function main() returns int
+<p><strong>If-Else:</strong></p>
+<p>The <code>else</code> keyword comes after the closing <code>end</code> of the if-block, on the same line:</p>
+<pre><code class="language-maxon">if &lt;condition&gt; 'if_id'
+    &lt;statements&gt;
+end 'if_id' else 'else_id'
+    &lt;statements&gt;
+end 'else_id'
+</code></pre>
+<p><strong>Else-If Chain:</strong></p>
+<pre><code class="language-maxon">if &lt;condition1&gt; 'case1'
+    &lt;statements&gt;
+end 'case1' else if &lt;condition2&gt; 'case2'
+    &lt;statements&gt;
+end 'case2' else 'default'
+    &lt;statements&gt;
+end 'default'
+</code></pre>
+<p><strong>Example (simple if):</strong></p>
+<pre><code class="language-maxon">function main() returns int
     var x = 10
-    if x &gt; 5 return 1
+    if x &gt; 5 'check'
+        return 1
+    end 'check'
     return 0
 end 'main'
 </code></pre>
-                <fieldset class="expected-output">
-                    <legend>Expected Output</legend>
-                    <pre>Exit Code: 1</pre>
-                </fieldset>
-                <p><strong>Example (multi-line with else):</strong></p>
-                <pre><code class="language-maxon">function main() returns int
-    var x = 5
-    if x = 5 'check'
+<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 1</pre></fieldset>
+<p><strong>Example (if-else):</strong></p>
+<pre><code class="language-maxon">function main() returns int
+    var x = 3
+    if x &gt; 5 'gt5'
         return 1
-    else 'check'
+    end 'gt5' else 'not_gt5'
         return 0
-    end 'check'
+    end 'not_gt5'
 end 'main'
 </code></pre>
-                <fieldset class="expected-output">
-                    <legend>Expected Output</legend>
-                    <pre>Exit Code: 1</pre>
-                </fieldset>
-                <p><strong>Notes:</strong></p>
-                <ul>
-                    <li>Single-line if requires statement on same line</li>
-                    <li>Multi-line if requires block identifier matching at all keywords</li>
-                    <li>Block identifier must be a string literal</li>
-                    <li>Conditions can be any boolean expression</li>
-                    <li>Else clause is optional</li>
-                </ul>
+<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 0</pre></fieldset>
+<p><strong>Example (else-if chain):</strong></p>
+<pre><code class="language-maxon">function main() returns int
+    var x = 2
+    if x == 1 'case1'
+        return 1
+    end 'case1' else if x == 2 'case2'
+        return 2
+    end 'case2' else 'default'
+        return 0
+    end 'default'
+end 'main'
+</code></pre>
+<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 2</pre></fieldset>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Block identifier required after <code>if</code> condition</li>
+<li>Each branch has its own block identifier</li>
+<li>The <code>else</code> keyword appears on the same line as <code>end 'if_id'</code></li>
+<li>Block identifiers must be string literals</li>
+<li>Conditions can be any boolean expression</li>
+<li>Else clause is optional</li>
+</ul>
             </div>
-            <div class="spec-section" id="single-line-if">
-                <h2>Single Line If</h2>
-                <h1>Single-Line If</h1>
-                <p>Compact syntax for simple conditional statements.</p>
-                <p><strong>Syntax:</strong></p>
-                <pre><code class="language-maxon">if &lt;condition&gt; &lt;statement&gt;
-</code></pre>
-                <p><strong>Example:</strong></p>
-                <pre><code class="language-maxon">var x = 11
-var i = 5
-while i &gt; 0 'loop'
-    if x = 11 break
-    i = i - 1
-end 'loop'
-</code></pre>
-                <p><strong>Notes:</strong></p>
-                <ul>
-                    <li>Condition and statement must be on the same line</li>
-                    <li>No block identifier needed</li>
-                    <li>Only one statement allowed</li>
-                    <li>No else clause possible</li>
-                    <li>Ideal for simple guards like <code>if x = 0 break</code> or <code>if done return result</code></li>
-                </ul>
+            <div class="spec-section" id="match-statements">
+                <h2>Match Statements</h2>
+<h1>Match Statements</h1>
+<p>Match statements provide pattern matching on values, allowing you to execute different code based on the value of an expression. Each case is a single line with exactly one statement.</p>
             </div>
             <div class="spec-section" id="while-loops">
                 <h2>While Loops</h2>
-                <h1>While Loops</h1>
-                <p>Execute a block of code repeatedly while a condition is true.</p>
-                <p><strong>Syntax:</strong></p>
-                <pre><code class="language-maxon">while &lt;condition&gt; 'identifier'
+<h1>While Loops</h1>
+<p>Execute a block of code repeatedly while a condition is true.</p>
+<p><strong>Syntax:</strong></p>
+<pre><code class="language-maxon">while &lt;condition&gt; 'identifier'
     &lt;statements&gt;
 end 'identifier'
 </code></pre>
-                <p><strong>Parameters:</strong></p>
-                <ul>
-                    <li><code>condition</code> - Boolean expression evaluated before each iteration</li>
-                    <li><code>identifier</code> - String label for the loop block (must match at <code>end</code>)</li>
-                </ul>
-                <p><strong>Example:</strong></p>
-                <pre><code class="language-maxon">var x = 5
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>condition</code> - Boolean expression evaluated before each iteration</li>
+<li><code>identifier</code> - String label for the loop block (must match at <code>end</code>)</li>
+</ul>
+<p><strong>Example:</strong></p>
+<pre><code class="language-maxon">var x = 5
 var i = 3
 while i &gt; 0 'loop'
     x = x + 2
@@ -281,18 +271,17 @@ while i &gt; 0 'loop'
 end 'loop'
 // x is now 11
 </code></pre>
-                <p><strong>Notes:</strong></p>
-                <ul>
-                    <li>Condition is evaluated before each iteration (pre-test loop)</li>
-                    <li>Block identifier is required and must match at <code>while</code> and <code>end</code></li>
-                    <li>Use <code>break</code> to exit the loop early</li>
-                    <li>Use <code>continue</code> to skip to the next iteration</li>
-                    <li>Infinite loops possible with <code>while true 'loop'</code></li>
-                </ul>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>Condition is evaluated before each iteration (pre-test loop)</li>
+<li>Block identifier is required and must match at <code>while</code> and <code>end</code></li>
+<li>Use <code>break</code> to exit the loop early</li>
+<li>Use <code>continue</code> to skip to the next iteration</li>
+<li>Infinite loops possible with <code>while true 'loop'</code></li>
+</ul>
             </div>
         </main>
     </div>
     <script src="nav.js"></script>
 </body>
-
 </html>

@@ -62,7 +62,7 @@ function main() returns int
     arr.push(1)
     arr.push(2)
     arr.push(3)
-    printInt(arr.count())
+    print("{arr.count()}")
     return 0
 end 'main'
 ```
@@ -71,14 +71,16 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 24 bytes (array grow)
-3ALLOC #2: 10 bytes (cstring conversion)
-FREE #2: 10 bytes (cstring release)
+ALLOC #2: 10 bytes
+3ALLOC #3: 10 bytes (cstring conversion)
+FREE #3: 10 bytes (cstring release)
 
+FREE #2: 10 bytes (cstring release)
 FREE #1: 24 bytes (array cleanup)
 
 === ALLOC STATS ===
-Allocated: 34 bytes
-Freed:     34 bytes
+Allocated: 44 bytes
+Freed:     44 bytes
 Leaked:    0 bytes
 ```
 
@@ -93,9 +95,9 @@ function main() returns int
         if true 'inner'
             var inner_arr = array of int
             inner_arr.push(200)
-            printInt(inner_arr[0])
+            print("{inner_arr[0]}")
         end 'inner'
-        printInt(outer_arr[0])
+        print("{outer_arr[0]}")
     end 'outer'
     return 0
 end 'main'
@@ -106,18 +108,22 @@ end 'main'
 ```stdout
 ALLOC #1: 24 bytes (array grow)
 ALLOC #2: 24 bytes (array grow)
-200ALLOC #3: 10 bytes (cstring conversion)
-FREE #3: 10 bytes (cstring release)
-
-100ALLOC #4: 10 bytes (cstring conversion)
+ALLOC #3: 12 bytes
+200ALLOC #4: 10 bytes (cstring conversion)
 FREE #4: 10 bytes (cstring release)
 
+FREE #3: 12 bytes (cstring release)
+ALLOC #5: 12 bytes
+100ALLOC #6: 10 bytes (cstring conversion)
+FREE #6: 10 bytes (cstring release)
+
+FREE #5: 12 bytes (cstring release)
 FREE #1: 24 bytes (array cleanup)
 FREE #2: 24 bytes (array cleanup)
 
 === ALLOC STATS ===
-Allocated: 68 bytes
-Freed:     68 bytes
+Allocated: 92 bytes
+Freed:     92 bytes
 Leaked:    0 bytes
 ```
 
@@ -126,11 +132,11 @@ Leaked:    0 bytes
 <!-- test: stack-array-no-alloc -->
 <!-- TrackAllocs: true -->
 Fixed-size stack arrays should not allocate on heap.
-Note: printInt cstring conversion is tracked.
+Note: print with interpolation allocates for the string conversion.
 ```maxon
 function main() returns int
     var arr = [10, 20, 30]
-    printInt(arr[1])
+    print("{arr[1]}")
     return 0
 end 'main'
 ```
@@ -138,13 +144,15 @@ end 'main'
 0
 ```
 ```stdout
-20ALLOC #1: 10 bytes (cstring conversion)
-FREE #1: 10 bytes (cstring release)
+ALLOC #1: 11 bytes
+20ALLOC #2: 10 bytes (cstring conversion)
+FREE #2: 10 bytes (cstring release)
 
+FREE #1: 11 bytes (cstring release)
 
 === ALLOC STATS ===
-Allocated: 10 bytes
-Freed:     10 bytes
+Allocated: 21 bytes
+Freed:     21 bytes
 Leaked:    0 bytes
 ```
 
@@ -161,7 +169,7 @@ function main() returns int
         arr.push(i)
         i = i + 1
     end 'loop'
-    printInt(arr.count())
+    print("{arr.count()}")
     return 0
 end 'main'
 ```
@@ -174,14 +182,16 @@ ALLOC #2: 40 bytes (array grow)
 FREE #1: 24 bytes (array grow)
 ALLOC #3: 72 bytes (array grow)
 FREE #2: 40 bytes (array grow)
-10ALLOC #4: 10 bytes (cstring conversion)
-FREE #4: 10 bytes (cstring release)
+ALLOC #4: 11 bytes
+10ALLOC #5: 10 bytes (cstring conversion)
+FREE #5: 10 bytes (cstring release)
 
+FREE #4: 11 bytes (cstring release)
 FREE #3: 72 bytes (array cleanup)
 
 === ALLOC STATS ===
-Allocated: 146 bytes
-Freed:     146 bytes
+Allocated: 157 bytes
+Freed:     157 bytes
 Leaked:    0 bytes
 ```
 ### Struct Field Array Method Call
@@ -196,7 +206,7 @@ end 'Config'
 function main() returns int
     var config = Config{sources: ["a", "b", "c"]}
     let count = config.sources.count()
-    printInt(count)
+    print("{count}")
     return 0
 end 'main'
 ```

@@ -277,7 +277,13 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 				// Shifted params must be saved to stack (volatile regs may be clobbered)
 				stackOffset -= 8;
 				regAlloc.stackSlots[key] = stackOffset;
-				regAlloc.shiftedParamSaves.push_back({paramRegs[regIndex], stackOffset});
+				if (param->type->isFloat()) {
+					// Float arrives in XMM at regIndex position
+					regAlloc.floatParamSpills.push_back({floatParamRegs[regIndex], stackOffset});
+				} else {
+					// Integer arrives in GPR at regIndex position
+					regAlloc.shiftedParamSaves.push_back({paramRegs[regIndex], stackOffset});
+				}
 			} else {
 				// Normal case: parameter arrives in volatile register
 				// Copy to non-volatile register to survive across function calls

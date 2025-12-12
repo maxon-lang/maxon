@@ -65,12 +65,11 @@ If a stdlib function depends on other stdlib functions, they're also discovered 
 <!-- test: basic-autodiscovery -->
 ```maxon
 function main() returns int
-    var buffer = array of 12 byte
-    return formatIntArray(42, buffer)
+    return trunc(sqrt(16.0))
 end 'main'
 ```
 ```exitcode
-2
+4
 ```
 
 
@@ -105,27 +104,26 @@ end 'main'
 <!-- test: qualified-call -->
 ```maxon
 function main() returns int
-    var buffer = array of 12 byte
-    return formatIntArray(42, buffer)
+    return trunc(pow(2.0, 4.0))
 end 'main'
 ```
 ```exitcode
-2
+16
 ```
 
 
 <!-- test: wrong-arg-count -->
 ```maxon
 function main() returns int
-    return formatIntArray(42)
+    return trunc(pow(2.0))
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 3, column 12
-Missing required argument for parameter 'buffer'
-  Add: buffer = <value>
+Semantic Error: line 3, column 18
+Missing required argument for parameter 'exponent'
+  Add: exponent = <value>
 
-  3 |     return formatIntArray(42)
-    |            ^
+  3 |     return trunc(pow(2.0))
+    |                  ^
 ```
 

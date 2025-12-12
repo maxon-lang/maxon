@@ -193,6 +193,7 @@ as                          // type cast
 3.14                        // float
 'A'                         // character (grapheme)
 "text"                      // string
+"Hello {name}!"             // string interpolation
 true false                  // bool
 nil                         // nil (for optionals)
 ```

@@ -79,7 +79,7 @@ suite('Qualified Name Completion Tests', () => {
 		assert.ok(hasStdlib, 'Should suggest "stdlib" in completions');
 	});
 
-	test('Should suggest "fmt", "fs", "sys" after "stdlib."', async function () {
+	test('Should suggest "math", "sys", "string" after "stdlib."', async function () {
 		const editor = vscode.window.activeTextEditor;
 		assert.ok(editor, 'Editor should be active');
 
@@ -107,12 +107,12 @@ suite('Qualified Name Completion Tests', () => {
 			typeof item.label === 'string' ? item.label : item.label.label
 		);
 
-		const hasFmt = labels.includes('fmt');
+		const hasMath = labels.includes('math');
 
-		assert.ok(hasFmt, 'Should suggest "fmt" after "stdlib."');
+		assert.ok(hasMath, 'Should suggest "math" after "stdlib."');
 	});
 
-	test('Should suggest modules after "stdlib.fmt."', async function () {
+	test('Should suggest modules after "stdlib.math."', async function () {
 		const editor = vscode.window.activeTextEditor;
 		assert.ok(editor, 'Editor should be active');
 
@@ -121,10 +121,10 @@ suite('Qualified Name Completion Tests', () => {
 				document.positionAt(0),
 				document.positionAt(document.getText().length)
 			);
-			editBuilder.replace(entireRange, 'function main() int\n    stdlib.fmt.\nend \'main\'');
+			editBuilder.replace(entireRange, 'function main() int\n    stdlib.math.\nend \'main\'');
 		});
 
-		const position = new vscode.Position(1, 15); // After "stdlib.fmt."
+		const position = new vscode.Position(1, 16); // After "stdlib.math."
 
 		const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
 			'vscode.executeCompletionItemProvider',
@@ -139,12 +139,12 @@ suite('Qualified Name Completion Tests', () => {
 			typeof item.label === 'string' ? item.label : item.label.label
 		);
 
-		const hasInteger = labels.includes('integer');
+		const hasPow = labels.includes('pow');
 
-		assert.ok(hasInteger, 'Should suggest "integer" module after "stdlib.fmt."');
+		assert.ok(hasPow, 'Should suggest "pow" module after "stdlib.math."');
 	});
 
-	test('Should suggest functions after "stdlib.fmt.integer."', async function () {
+	test('Should suggest functions after "stdlib.math.pow."', async function () {
 		const editor = vscode.window.activeTextEditor;
 		assert.ok(editor, 'Editor should be active');
 
@@ -153,10 +153,10 @@ suite('Qualified Name Completion Tests', () => {
 				document.positionAt(0),
 				document.positionAt(document.getText().length)
 			);
-			editBuilder.replace(entireRange, 'function main() int\n    stdlib.fmt.integer.\nend \'main\'');
+			editBuilder.replace(entireRange, 'function main() int\n    stdlib.math.pow.\nend \'main\'');
 		});
 
-		const position = new vscode.Position(1, 23); // After "stdlib.fmt.integer."
+		const position = new vscode.Position(1, 20); // After "stdlib.math.pow."
 
 		const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
 			'vscode.executeCompletionItemProvider',
@@ -171,9 +171,9 @@ suite('Qualified Name Completion Tests', () => {
 			typeof item.label === 'string' ? item.label : item.label.label
 		);
 
-		const hasFormatIntArray = labels.includes('formatIntArray');
+		const hasPow = labels.includes('pow');
 
-		assert.ok(hasFormatIntArray, 'Should suggest "formatIntArray" after "stdlib.fmt.integer."');
+		assert.ok(hasPow, 'Should suggest "pow" after "stdlib.math.pow."');
 	});
 
 	test('Should provide function details in qualified name completion', async function () {
@@ -185,10 +185,10 @@ suite('Qualified Name Completion Tests', () => {
 				document.positionAt(0),
 				document.positionAt(document.getText().length)
 			);
-			editBuilder.replace(entireRange, 'function main() int\n    stdlib.fmt.integer.\nend \'main\'');
+			editBuilder.replace(entireRange, 'function main() int\n    stdlib.math.pow.\nend \'main\'');
 		});
 
-		const position = new vscode.Position(1, 23); // After "stdlib.fmt.integer."
+		const position = new vscode.Position(1, 20); // After "stdlib.math.pow."
 
 		const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
 			'vscode.executeCompletionItemProvider',
@@ -199,26 +199,26 @@ suite('Qualified Name Completion Tests', () => {
 
 		assert.ok(completions, 'Completions should be returned');
 
-		const formatIntArrayItem = completions.items.find(item => {
+		const powItem = completions.items.find(item => {
 			const label = typeof item.label === 'string' ? item.label : item.label.label;
-			return label === 'formatIntArray';
+			return label === 'pow';
 		});
 
-		if (formatIntArrayItem) {
+		if (powItem) {
 			// Check that it has function signature details
-			assert.ok(formatIntArrayItem.detail, 'Should have detail property');
-			if (typeof formatIntArrayItem.detail === 'string') {
+			assert.ok(powItem.detail, 'Should have detail property');
+			if (typeof powItem.detail === 'string') {
 				assert.ok(
-					formatIntArrayItem.detail.includes('value int') ||
-					formatIntArrayItem.detail.includes('buffer'),
+					powItem.detail.includes('base float') ||
+					powItem.detail.includes('exp'),
 					'Should include function signature in detail'
 				);
 			}
 
 			// Check that it's marked as a function
-			assert.strictEqual(formatIntArrayItem.kind, vscode.CompletionItemKind.Function);
+			assert.strictEqual(powItem.kind, vscode.CompletionItemKind.Function);
 		} else {
-			assert.fail('formatIntArray not found in completions');
+			assert.fail('pow not found in completions');
 		}
 	});
 
@@ -234,13 +234,13 @@ suite('Qualified Name Completion Tests', () => {
 			editBuilder.replace(entireRange,
 				'function main() int\n' +
 				'    var x int = 42\n' +
-				'    var buffer [12]character = 0\n' +
-				'    stdlib.fmt.\n' +
+				'    var y float = 0.0\n' +
+				'    stdlib.math.\n' +
 				'end \'main\''
 			);
 		});
 
-		const position = new vscode.Position(3, 15); // After "stdlib.fmt." on line 4
+		const position = new vscode.Position(3, 16); // After "stdlib.math." on line 4
 
 		const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
 			'vscode.executeCompletionItemProvider',
@@ -255,8 +255,8 @@ suite('Qualified Name Completion Tests', () => {
 			typeof item.label === 'string' ? item.label : item.label.label
 		);
 
-		const hasInteger = labels.includes('integer');
+		const hasPow = labels.includes('pow');
 
-		assert.ok(hasInteger, 'Should suggest "integer" in multiline context');
+		assert.ok(hasPow, 'Should suggest "pow" in multiline context');
 	});
 });

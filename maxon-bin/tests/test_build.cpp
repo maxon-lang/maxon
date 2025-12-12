@@ -113,7 +113,7 @@ TEST_CASE("Build: maxon build compiles multi-file project", "[build]") {
 	REQUIRE(buildResult == 0);
 
 	// Verify executable was created in bin/
-	fs::path exePath = projectPath / "bin" / "main.exe";
+	fs::path exePath = projectPath / "bin" / "testapp.exe";
 	REQUIRE(fs::exists(exePath));
 
 	// Clean up
@@ -139,15 +139,15 @@ TEST_CASE("Build: compiled executable runs correctly", "[build][e2e]") {
 	REQUIRE(buildResult == 0);
 
 	// Verify executable was created
-	fs::path exePath = projectPath / "bin" / "main.exe";
+	fs::path exePath = projectPath / "bin" / "testapp.exe";
 	REQUIRE(fs::exists(exePath));
 
 	// Run the executable and verify exit code
-	// main.maxon returns helper(21) where helper returns x * 2
-	// So expected exit code is 21 * 2 = 42
+	// main.maxon returns helper(21) + double(5) where helper returns x * 2
+	// So expected exit code is 21 * 2 + 5 * 2 = 42 + 10 = 52
 	std::string execCommand = "\"" + exePath.string() + "\"";
 	int exitCode = runCommand(execCommand);
-	REQUIRE(exitCode == 42);
+	REQUIRE(exitCode == 52);
 
 	// Clean up
 	cleanupArtifacts(projectPath);

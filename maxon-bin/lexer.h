@@ -26,7 +26,11 @@ enum class TokenType {
 	NUMBER,
 	BYTE_LITERAL,  // Byte literal with 'b' suffix (e.g., 42b)
 	FLOAT_LITERAL, // Floating-point literal
-	STRING,		   // Double-quoted string literals
+	STRING,		   // Double-quoted string literals (no interpolation)
+	STRING_INTERP_START, // Start of interpolated string with segment before first {
+	STRING_INTERP_MIDDLE, // Middle segment between } and next {
+	STRING_INTERP_END,   // Final segment after last } to closing "
+	FORMAT_SPEC,         // Format specifier in interpolation (after :, before })
 	BLOCK_ID,	   // Single-quoted block identifiers
 	CHARACTER,	   // Single character literal 'A'
 

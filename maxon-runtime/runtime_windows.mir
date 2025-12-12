@@ -1,6 +1,9 @@
 ; Maxon Runtime Library - Windows Platform Functions
 ; Uses Win32 API for memory allocation, I/O, and process control
 
+; Note: String types (%string, %__ManagedStringData, %_ManagedArray_byte) are
+; defined by the compiler when merging with user program IR
+
 ; External Windows API declarations
 declare ptr @GetProcessHeap()
 declare ptr @HeapAlloc(ptr, i32, i64)
@@ -9,6 +12,9 @@ declare i1 @HeapFree(ptr, i32, ptr)
 declare void @ExitProcess(i32)
 declare ptr @GetStdHandle(i32)
 declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+
+; Forward declaration for functions defined in runtime.mir
+declare ptr @_managed_string_alloc(i64, ptr)
 
 ; Windows-specific global: _fltused (required for floating-point)
 @_fltused = constant i32 39029
@@ -682,6 +688,623 @@ write_null:
     %null_ptr = getelementptr i8, ptr %buffer, i64 %total64
     store i8 0, ptr %null_ptr
     ret i32 %total
+}
+
+;==============================================================================
+; __int_toString - Convert integer to Maxon string
+; Returns a new string struct (by value) containing the decimal representation
+; %string __int_toString(i32 value, ptr spec)
+; Note: spec is currently ignored (format specifiers not yet implemented)
+;==============================================================================
+define %string @__int_toString(i32 %value, ptr %spec) {
+entry:
+    ; Allocate temporary buffer for digits (max 11 digits for int32 + sign + null)
+    %temp_buf = alloca [16 x i8]
+    %temp_idx = alloca i32
+    %remaining = alloca i32
+    %out_idx = alloca i32
+    %is_negative = alloca i1
+
+    store i32 0, ptr %temp_idx
+    store i1 false, ptr %is_negative
+
+    ; Handle negative numbers
+    %negative = icmp slt i32 %value, 0
+    br i1 %negative, label %make_positive, label %check_zero
+
+make_positive:
+    store i1 true, ptr %is_negative
+    %abs_val = sub i32 0, %value
+    store i32 %abs_val, ptr %remaining
+    br label %check_zero_after
+
+check_zero:
+    ; Handle zero case
+    %is_zero = icmp eq i32 %value, 0
+    br i1 %is_zero, label %write_zero, label %store_positive
+
+store_positive:
+    store i32 %value, ptr %remaining
+    br label %extract_loop
+
+check_zero_after:
+    br label %extract_loop
+
+write_zero:
+    ; Create string "0"
+    %zero_size = add i64 1, 1  ; 1 char + null
+    %zero_buf = call ptr @_managed_string_alloc(i64 %zero_size, ptr null)
+    store i8 48, ptr %zero_buf  ; '0'
+    %zero_null = getelementptr i8, ptr %zero_buf, i64 1
+    store i8 0, ptr %zero_null
+
+    ; Allocate managed data struct
+    %zero_managed = call ptr @malloc(i64 32)
+    %zero_buf_ptr = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 0
+    %zero_buf_arr = getelementptr %_ManagedArray_byte, ptr %zero_buf_ptr, i32 0, i32 0
+    store ptr %zero_buf, ptr %zero_buf_arr
+    %zero_buf_len = getelementptr %_ManagedArray_byte, ptr %zero_buf_ptr, i32 0, i32 1
+    store i32 1, ptr %zero_buf_len
+    %zero_len = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 1
+    store i32 1, ptr %zero_len
+    %zero_cap = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 2
+    store i32 2, ptr %zero_cap
+
+    ; Create string struct
+    %zero_str = alloca %string
+    %zero_str_managed = getelementptr %string, ptr %zero_str, i32 0, i32 0
+    store ptr %zero_managed, ptr %zero_str_managed
+    %zero_str_hash = getelementptr %string, ptr %zero_str, i32 0, i32 1
+    store i32 0, ptr %zero_str_hash
+    %zero_result = load %string, ptr %zero_str
+    ret %string %zero_result
+
+extract_loop:
+    %rem_val = load i32, ptr %remaining
+    %is_done = icmp eq i32 %rem_val, 0
+    br i1 %is_done, label %build_string, label %extract_one
+
+extract_one:
+    ; Get last digit
+    %digit = srem i32 %rem_val, 10
+    %digit_char = add i32 %digit, 48  ; '0' = 48
+    %digit_byte = trunc i32 %digit_char to i8
+
+    ; Store in temp buffer
+    %ti = load i32, ptr %temp_idx
+    %ti64 = sext i32 %ti to i64
+    %temp_ptr = getelementptr [16 x i8], ptr %temp_buf, i64 0, i64 %ti64
+    store i8 %digit_byte, ptr %temp_ptr
+
+    ; Update remaining
+    %new_rem = sdiv i32 %rem_val, 10
+    store i32 %new_rem, ptr %remaining
+
+    ; Increment temp index
+    %new_ti = add i32 %ti, 1
+    store i32 %new_ti, ptr %temp_idx
+    br label %extract_loop
+
+build_string:
+    ; Calculate total length
+    %digit_count = load i32, ptr %temp_idx
+    %need_sign = load i1, ptr %is_negative
+    br i1 %need_sign, label %calc_with_sign, label %calc_no_sign
+
+calc_with_sign:
+    %total_len_signed = add i32 %digit_count, 1
+    br label %alloc_buffer
+
+calc_no_sign:
+    br label %alloc_buffer
+
+alloc_buffer:
+    %total_len = phi i32 [ %total_len_signed, %calc_with_sign ], [ %digit_count, %calc_no_sign ]
+    %sign_len = phi i32 [ 1, %calc_with_sign ], [ 0, %calc_no_sign ]
+
+    ; Allocate buffer (len + 1 for null)
+    %buf_size = add i32 %total_len, 1
+    %buf_size64 = sext i32 %buf_size to i64
+    %str_buf = call ptr @_managed_string_alloc(i64 %buf_size64, ptr null)
+
+    ; Write sign if negative
+    br i1 %need_sign, label %write_sign, label %copy_digits_init
+
+write_sign:
+    store i8 45, ptr %str_buf  ; '-'
+    br label %copy_digits_init
+
+copy_digits_init:
+    store i32 %sign_len, ptr %out_idx
+    br label %copy_loop
+
+copy_loop:
+    %oi = load i32, ptr %out_idx
+    %copy_done = icmp sge i32 %oi, %total_len
+    br i1 %copy_done, label %write_null, label %copy_one
+
+copy_one:
+    ; Read from temp[digit_count - 1 - (oi - sign_len)]
+    %oi_adjusted = sub i32 %oi, %sign_len
+    %read_idx = sub i32 %digit_count, 1
+    %read_idx2 = sub i32 %read_idx, %oi_adjusted
+    %read_idx64 = sext i32 %read_idx2 to i64
+    %read_ptr = getelementptr [16 x i8], ptr %temp_buf, i64 0, i64 %read_idx64
+    %ch = load i8, ptr %read_ptr
+
+    ; Write to buffer[oi]
+    %write_idx64 = sext i32 %oi to i64
+    %write_ptr = getelementptr i8, ptr %str_buf, i64 %write_idx64
+    store i8 %ch, ptr %write_ptr
+
+    ; Increment output index
+    %new_oi = add i32 %oi, 1
+    store i32 %new_oi, ptr %out_idx
+    br label %copy_loop
+
+write_null:
+    ; Write null terminator
+    %total_len64 = sext i32 %total_len to i64
+    %null_ptr = getelementptr i8, ptr %str_buf, i64 %total_len64
+    store i8 0, ptr %null_ptr
+
+    ; Allocate managed data struct
+    %managed = call ptr @malloc(i64 32)
+    %buf_ptr = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
+    %buf_arr = getelementptr %_ManagedArray_byte, ptr %buf_ptr, i32 0, i32 0
+    store ptr %str_buf, ptr %buf_arr
+    %buf_len = getelementptr %_ManagedArray_byte, ptr %buf_ptr, i32 0, i32 1
+    store i32 %total_len, ptr %buf_len
+    %str_len = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 1
+    store i32 %total_len, ptr %str_len
+    %str_cap = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 2
+    store i32 %buf_size, ptr %str_cap
+
+    ; Create string struct
+    %result_str = alloca %string
+    %result_managed = getelementptr %string, ptr %result_str, i32 0, i32 0
+    store ptr %managed, ptr %result_managed
+    %result_hash = getelementptr %string, ptr %result_str, i32 0, i32 1
+    store i32 0, ptr %result_hash
+    %result = load %string, ptr %result_str
+    ret %string %result
+}
+
+;==============================================================================
+; __byte_toString - Convert byte to Maxon string
+; Returns a new string struct (by value) containing the decimal representation
+; %string __byte_toString(i8 value, ptr spec)
+; Note: spec is currently ignored (format specifiers not yet implemented)
+;==============================================================================
+define %string @__byte_toString(i8 %value, ptr %spec) {
+entry:
+    ; Allocate temporary buffer for digits (max 3 digits for byte 0-255 + null)
+    %temp_buf = alloca [4 x i8]
+    %temp_idx = alloca i32
+    %remaining = alloca i32
+    %out_idx = alloca i32
+
+    store i32 0, ptr %temp_idx
+
+    ; Zero-extend byte to i32 for arithmetic
+    %value32 = zext i8 %value to i32
+
+    ; Handle zero case
+    %is_zero = icmp eq i32 %value32, 0
+    br i1 %is_zero, label %byte_write_zero, label %byte_store_positive
+
+byte_store_positive:
+    store i32 %value32, ptr %remaining
+    br label %byte_extract_loop
+
+byte_write_zero:
+    ; Create string "0"
+    %zero_size = add i64 1, 1  ; 1 char + null
+    %zero_buf = call ptr @_managed_string_alloc(i64 %zero_size, ptr null)
+    store i8 48, ptr %zero_buf  ; '0'
+    %zero_null = getelementptr i8, ptr %zero_buf, i64 1
+    store i8 0, ptr %zero_null
+
+    ; Allocate managed data struct
+    %zero_managed = call ptr @malloc(i64 32)
+    %zero_buf_ptr = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 0
+    %zero_buf_arr = getelementptr %_ManagedArray_byte, ptr %zero_buf_ptr, i32 0, i32 0
+    store ptr %zero_buf, ptr %zero_buf_arr
+    %zero_buf_len = getelementptr %_ManagedArray_byte, ptr %zero_buf_ptr, i32 0, i32 1
+    store i32 1, ptr %zero_buf_len
+    %zero_len = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 1
+    store i32 1, ptr %zero_len
+    %zero_cap = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 2
+    store i32 2, ptr %zero_cap
+
+    ; Create string struct
+    %zero_str = alloca %string
+    %zero_str_managed = getelementptr %string, ptr %zero_str, i32 0, i32 0
+    store ptr %zero_managed, ptr %zero_str_managed
+    %zero_str_hash = getelementptr %string, ptr %zero_str, i32 0, i32 1
+    store i32 0, ptr %zero_str_hash
+    %zero_result = load %string, ptr %zero_str
+    ret %string %zero_result
+
+byte_extract_loop:
+    %rem_val = load i32, ptr %remaining
+    %is_done = icmp eq i32 %rem_val, 0
+    br i1 %is_done, label %byte_build_string, label %byte_extract_one
+
+byte_extract_one:
+    ; Get last digit (use unsigned division for byte values)
+    %digit = urem i32 %rem_val, 10
+    %digit_char = add i32 %digit, 48  ; '0' = 48
+    %digit_byte = trunc i32 %digit_char to i8
+
+    ; Store in temp buffer
+    %ti = load i32, ptr %temp_idx
+    %ti64 = sext i32 %ti to i64
+    %temp_ptr = getelementptr [4 x i8], ptr %temp_buf, i64 0, i64 %ti64
+    store i8 %digit_byte, ptr %temp_ptr
+
+    ; Update remaining
+    %new_rem = udiv i32 %rem_val, 10
+    store i32 %new_rem, ptr %remaining
+
+    ; Increment temp index
+    %new_ti = add i32 %ti, 1
+    store i32 %new_ti, ptr %temp_idx
+    br label %byte_extract_loop
+
+byte_build_string:
+    ; Calculate total length (no sign needed for byte)
+    %digit_count = load i32, ptr %temp_idx
+
+    ; Allocate buffer (len + 1 for null)
+    %buf_size = add i32 %digit_count, 1
+    %buf_size64 = sext i32 %buf_size to i64
+    %str_buf = call ptr @_managed_string_alloc(i64 %buf_size64, ptr null)
+
+    store i32 0, ptr %out_idx
+    br label %byte_copy_loop
+
+byte_copy_loop:
+    %oi = load i32, ptr %out_idx
+    %copy_done = icmp sge i32 %oi, %digit_count
+    br i1 %copy_done, label %byte_write_null, label %byte_copy_one
+
+byte_copy_one:
+    ; Read from temp[digit_count - 1 - oi]
+    %read_idx = sub i32 %digit_count, 1
+    %read_idx2 = sub i32 %read_idx, %oi
+    %read_idx64 = sext i32 %read_idx2 to i64
+    %read_ptr = getelementptr [4 x i8], ptr %temp_buf, i64 0, i64 %read_idx64
+    %ch = load i8, ptr %read_ptr
+
+    ; Write to buffer[oi]
+    %write_idx64 = sext i32 %oi to i64
+    %write_ptr = getelementptr i8, ptr %str_buf, i64 %write_idx64
+    store i8 %ch, ptr %write_ptr
+
+    ; Increment output index
+    %new_oi = add i32 %oi, 1
+    store i32 %new_oi, ptr %out_idx
+    br label %byte_copy_loop
+
+byte_write_null:
+    ; Write null terminator
+    %total_len64 = sext i32 %digit_count to i64
+    %null_ptr = getelementptr i8, ptr %str_buf, i64 %total_len64
+    store i8 0, ptr %null_ptr
+
+    ; Allocate managed data struct
+    %managed = call ptr @malloc(i64 32)
+    %buf_ptr = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
+    %buf_arr = getelementptr %_ManagedArray_byte, ptr %buf_ptr, i32 0, i32 0
+    store ptr %str_buf, ptr %buf_arr
+    %buf_len = getelementptr %_ManagedArray_byte, ptr %buf_ptr, i32 0, i32 1
+    store i32 %digit_count, ptr %buf_len
+    %str_len = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 1
+    store i32 %digit_count, ptr %str_len
+    %str_cap = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 2
+    store i32 %buf_size, ptr %str_cap
+
+    ; Create string struct
+    %result_str = alloca %string
+    %result_managed = getelementptr %string, ptr %result_str, i32 0, i32 0
+    store ptr %managed, ptr %result_managed
+    %result_hash = getelementptr %string, ptr %result_str, i32 0, i32 1
+    store i32 0, ptr %result_hash
+    %result = load %string, ptr %result_str
+    ret %string %result
+}
+
+;==============================================================================
+; __bool_toString - Convert boolean to Maxon string
+; Returns "true" or "false"
+; %string __bool_toString(i1 value, ptr spec)
+; Note: spec is currently ignored (format specifiers not yet implemented)
+;==============================================================================
+@.str.true = constant [5 x i8] c"true\00"
+@.str.false = constant [6 x i8] c"false\00"
+
+define %string @__bool_toString(i1 %value, ptr %spec) {
+entry:
+    br i1 %value, label %is_true, label %is_false
+
+is_true:
+    ; Allocate managed data struct for "true"
+    %true_managed = call ptr @malloc(i64 32)
+    %true_buf_ptr = getelementptr %__ManagedStringData, ptr %true_managed, i32 0, i32 0
+    %true_buf_arr = getelementptr %_ManagedArray_byte, ptr %true_buf_ptr, i32 0, i32 0
+    store ptr @.str.true, ptr %true_buf_arr
+    %true_buf_len = getelementptr %_ManagedArray_byte, ptr %true_buf_ptr, i32 0, i32 1
+    store i32 4, ptr %true_buf_len
+    %true_len = getelementptr %__ManagedStringData, ptr %true_managed, i32 0, i32 1
+    store i32 4, ptr %true_len
+    %true_cap = getelementptr %__ManagedStringData, ptr %true_managed, i32 0, i32 2
+    store i32 0, ptr %true_cap  ; 0 = constant data
+    br label %create_string
+
+is_false:
+    ; Allocate managed data struct for "false"
+    %false_managed = call ptr @malloc(i64 32)
+    %false_buf_ptr = getelementptr %__ManagedStringData, ptr %false_managed, i32 0, i32 0
+    %false_buf_arr = getelementptr %_ManagedArray_byte, ptr %false_buf_ptr, i32 0, i32 0
+    store ptr @.str.false, ptr %false_buf_arr
+    %false_buf_len = getelementptr %_ManagedArray_byte, ptr %false_buf_ptr, i32 0, i32 1
+    store i32 5, ptr %false_buf_len
+    %false_len = getelementptr %__ManagedStringData, ptr %false_managed, i32 0, i32 1
+    store i32 5, ptr %false_len
+    %false_cap = getelementptr %__ManagedStringData, ptr %false_managed, i32 0, i32 2
+    store i32 0, ptr %false_cap  ; 0 = constant data
+    br label %create_string
+
+create_string:
+    %managed = phi ptr [ %true_managed, %is_true ], [ %false_managed, %is_false ]
+    ; Create string struct
+    %result_str = alloca %string
+    %result_managed = getelementptr %string, ptr %result_str, i32 0, i32 0
+    store ptr %managed, ptr %result_managed
+    %result_hash = getelementptr %string, ptr %result_str, i32 0, i32 1
+    store i32 0, ptr %result_hash
+    %result = load %string, ptr %result_str
+    ret %string %result
+}
+
+;==============================================================================
+; __float_toString - Convert float to Maxon string
+; Uses simple fixed-point conversion algorithm
+; %string __float_toString(double value, ptr spec)
+; Note: spec is currently ignored (format specifiers not yet implemented)
+; Note: NaN/infinity checks not yet implemented
+;==============================================================================
+
+define %string @__float_toString(double %value, ptr %spec) {
+entry:
+    ; Store the parameter to a local to ensure it's accessible in all blocks
+    %value_ptr = alloca double
+    store double %value, ptr %value_ptr
+
+    ; Allocate temporary buffer (max ~25 digits for double + sign + decimal + null)
+    %temp_buf = alloca [32 x i8]
+    %out_idx = alloca i32
+    store i32 0, ptr %out_idx
+
+    ; Check if negative
+    %value_local = load double, ptr %value_ptr
+    %is_negative = fcmp olt double %value_local, 0.0
+    br i1 %is_negative, label %write_minus, label %start_convert
+
+write_minus:
+    ; Write '-' sign
+    %minus_ptr = getelementptr [32 x i8], ptr %temp_buf, i64 0, i64 0
+    store i8 45, ptr %minus_ptr  ; '-' = 45
+    store i32 1, ptr %out_idx
+    ; Negate the value and store back
+    %neg_val = load double, ptr %value_ptr
+    %abs_value = fneg double %neg_val
+    store double %abs_value, ptr %value_ptr
+    br label %convert_integer
+
+start_convert:
+    br label %convert_integer
+
+convert_integer:
+    ; Load the work value (either original positive or negated value)
+    %work_value = load double, ptr %value_ptr
+
+    ; Get integer part directly using fptosi (truncates toward zero)
+    %int_part = fptosi double %work_value to i64
+
+    ; Get fractional part
+    %int_part_f = sitofp i64 %int_part to double
+    %frac_f = fsub double %work_value, %int_part_f
+
+    ; Convert integer part to string (reverse into buffer, then copy)
+    %int_buf = alloca [20 x i8]
+    %int_idx = alloca i32
+    store i32 0, ptr %int_idx
+
+    ; Handle zero integer part
+    %int_is_zero = icmp eq i64 %int_part, 0
+    br i1 %int_is_zero, label %int_zero, label %int_loop
+
+int_zero:
+    ; Store '0'
+    %zero_ptr = getelementptr [20 x i8], ptr %int_buf, i64 0, i64 0
+    store i8 48, ptr %zero_ptr
+    store i32 1, ptr %int_idx
+    br label %copy_int_part
+
+int_loop:
+    %int_remaining = phi i64 [ %int_part, %convert_integer ], [ %int_next, %int_continue ]
+    %int_done = icmp eq i64 %int_remaining, 0
+    br i1 %int_done, label %copy_int_part, label %int_digit
+
+int_digit:
+    ; Get last digit
+    %int_digit_val = srem i64 %int_remaining, 10
+    %int_digit_char = add i64 %int_digit_val, 48  ; '0' = 48
+    %int_digit_byte = trunc i64 %int_digit_char to i8
+
+    ; Store in reverse buffer
+    %ii = load i32, ptr %int_idx
+    %ii64 = sext i32 %ii to i64
+    %int_digit_ptr = getelementptr [20 x i8], ptr %int_buf, i64 0, i64 %ii64
+    store i8 %int_digit_byte, ptr %int_digit_ptr
+
+    ; Divide by 10
+    %int_next = sdiv i64 %int_remaining, 10
+    %new_ii = add i32 %ii, 1
+    store i32 %new_ii, ptr %int_idx
+    br label %int_continue
+
+int_continue:
+    br label %int_loop
+
+copy_int_part:
+    ; Copy integer digits in reverse order to output buffer
+    %int_count = load i32, ptr %int_idx
+    %copy_idx = alloca i32
+    store i32 0, ptr %copy_idx
+    br label %copy_int_loop
+
+copy_int_loop:
+    %ci = load i32, ptr %copy_idx
+    %copy_done = icmp sge i32 %ci, %int_count
+    br i1 %copy_done, label %write_decimal, label %copy_one_int
+
+copy_one_int:
+    ; Read from int_buf[int_count - 1 - ci]
+    %read_idx = sub i32 %int_count, 1
+    %read_idx2 = sub i32 %read_idx, %ci
+    %read_idx64 = sext i32 %read_idx2 to i64
+    %read_ptr = getelementptr [20 x i8], ptr %int_buf, i64 0, i64 %read_idx64
+    %ch = load i8, ptr %read_ptr
+
+    ; Write to output buffer
+    %oi = load i32, ptr %out_idx
+    %oi64 = sext i32 %oi to i64
+    %write_ptr = getelementptr [32 x i8], ptr %temp_buf, i64 0, i64 %oi64
+    store i8 %ch, ptr %write_ptr
+
+    ; Increment indices
+    %new_ci = add i32 %ci, 1
+    store i32 %new_ci, ptr %copy_idx
+    %new_oi = add i32 %oi, 1
+    store i32 %new_oi, ptr %out_idx
+    br label %copy_int_loop
+
+write_decimal:
+    ; Write decimal point
+    %dec_oi = load i32, ptr %out_idx
+    %dec_oi64 = sext i32 %dec_oi to i64
+    %dec_ptr = getelementptr [32 x i8], ptr %temp_buf, i64 0, i64 %dec_oi64
+    store i8 46, ptr %dec_ptr  ; '.' = 46
+    %after_dec_oi = add i32 %dec_oi, 1
+    store i32 %after_dec_oi, ptr %out_idx
+
+    ; Write 6 decimal places
+    %frac_work = alloca double
+    store double %frac_f, ptr %frac_work
+    %dec_count = alloca i32
+    store i32 0, ptr %dec_count
+    br label %frac_loop
+
+frac_loop:
+    %dc = load i32, ptr %dec_count
+    %frac_done = icmp sge i32 %dc, 6
+    br i1 %frac_done, label %trim_zeros, label %frac_digit
+
+frac_digit:
+    ; Multiply by 10 to get next digit
+    %fw = load double, ptr %frac_work
+    %fw10 = fmul double %fw, 10.0
+    ; Truncate to get digit (fptosi truncates toward zero which is equivalent to floor for positive)
+    %frac_digit_i = fptosi double %fw10 to i32
+    %frac_digit_f = sitofp i32 %frac_digit_i to double
+    %frac_digit_char = add i32 %frac_digit_i, 48
+    %frac_digit_byte = trunc i32 %frac_digit_char to i8
+
+    ; Write digit
+    %frac_oi = load i32, ptr %out_idx
+    %frac_oi64 = sext i32 %frac_oi to i64
+    %frac_ptr = getelementptr [32 x i8], ptr %temp_buf, i64 0, i64 %frac_oi64
+    store i8 %frac_digit_byte, ptr %frac_ptr
+
+    ; Update fractional work value
+    %fw_new = fsub double %fw10, %frac_digit_f
+    store double %fw_new, ptr %frac_work
+
+    ; Increment counters
+    %new_dc = add i32 %dc, 1
+    store i32 %new_dc, ptr %dec_count
+    %new_frac_oi = add i32 %frac_oi, 1
+    store i32 %new_frac_oi, ptr %out_idx
+    br label %frac_loop
+
+trim_zeros:
+    ; Trim trailing zeros (but keep at least one decimal digit)
+    %final_oi = load i32, ptr %out_idx
+    %min_dec_pos = add i32 %after_dec_oi, 1  ; Keep at least X.X
+    br label %trim_loop
+
+trim_loop:
+    %trim_oi = load i32, ptr %out_idx
+    %can_trim = icmp sgt i32 %trim_oi, %min_dec_pos
+    br i1 %can_trim, label %check_zero, label %finalize
+
+check_zero:
+    ; Check if last char is '0'
+    %prev_oi = sub i32 %trim_oi, 1
+    %prev_oi64 = sext i32 %prev_oi to i64
+    %prev_ptr = getelementptr [32 x i8], ptr %temp_buf, i64 0, i64 %prev_oi64
+    %prev_ch = load i8, ptr %prev_ptr
+    %is_zero = icmp eq i8 %prev_ch, 48
+    br i1 %is_zero, label %do_trim, label %finalize
+
+do_trim:
+    ; Remove trailing zero
+    store i32 %prev_oi, ptr %out_idx
+    br label %trim_loop
+
+finalize:
+    ; Get final length and create string
+    %str_len = load i32, ptr %out_idx
+    %str_len64 = sext i32 %str_len to i64
+    %buf_size64 = add i64 %str_len64, 1  ; +1 for null terminator
+
+    ; Allocate string buffer
+    %str_buf = call ptr @_managed_string_alloc(i64 %buf_size64, ptr null)
+
+    ; Copy temp buffer to string buffer
+    %copy_len64 = sext i32 %str_len to i64
+    %copy_result = call ptr @memcpy(ptr %str_buf, ptr %temp_buf, i64 %copy_len64)
+
+    ; Write null terminator
+    %null_ptr = getelementptr i8, ptr %str_buf, i64 %str_len64
+    store i8 0, ptr %null_ptr
+
+    ; Allocate managed data struct
+    %float_managed = call ptr @malloc(i64 32)
+    %float_buf_ptr = getelementptr %__ManagedStringData, ptr %float_managed, i32 0, i32 0
+    %float_buf_arr = getelementptr %_ManagedArray_byte, ptr %float_buf_ptr, i32 0, i32 0
+    store ptr %str_buf, ptr %float_buf_arr
+    %float_buf_len = getelementptr %_ManagedArray_byte, ptr %float_buf_ptr, i32 0, i32 1
+    store i32 %str_len, ptr %float_buf_len
+    %float_len = getelementptr %__ManagedStringData, ptr %float_managed, i32 0, i32 1
+    store i32 %str_len, ptr %float_len
+    %buf_size32 = trunc i64 %buf_size64 to i32
+    %float_cap = getelementptr %__ManagedStringData, ptr %float_managed, i32 0, i32 2
+    store i32 %buf_size32, ptr %float_cap
+    br label %create_result
+
+create_result:
+    ; Create string struct
+    %result_str = alloca %string
+    %result_managed = getelementptr %string, ptr %result_str, i32 0, i32 0
+    store ptr %float_managed, ptr %result_managed
+    %result_hash = getelementptr %string, ptr %result_str, i32 0, i32 1
+    store i32 0, ptr %result_hash
+    %result = load %string, ptr %result_str
+    ret %string %result
 }
 
 ; Global array for WaitForMultipleObjects handle array

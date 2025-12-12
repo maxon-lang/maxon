@@ -20,6 +20,7 @@
                 <h2>Contents</h2>
                 <ul>
                     <li><a href="#arithmetic-operators">Arithmetic Operators</a></li>
+                    <li><a href="#bitwise-operators">Bitwise Operators</a></li>
                     <li><a href="#comparison-operators">Comparison Operators</a></li>
                     <li><a href="#type-cast">Type Cast</a></li>
                     <li><a href="#unary-operators">Unary Operators</a></li>
@@ -33,8 +34,8 @@
 <li><code>+</code> - Addition</li>
 <li><code>-</code> - Subtraction</li>
 <li><code>*</code> - Multiplication</li>
-<li><code>/</code> - Division (integer division truncates)</li>
-<li><code>%</code> - Modulo (remainder after division, integers only)</li>
+<li><code>/</code> - Division (always returns float; use <code>trunc(a/b)</code> for integer division)</li>
+<li><code>mod</code> - Modulo (remainder after division, integers only)</li>
 </ul>
 <h3>Precedence</h3>
 <p>Multiplication, division, and modulo have higher precedence than addition and subtraction:</p>
@@ -44,18 +45,20 @@
 <pre><code class="language-maxon">function main() returns int
     var a = 10
     var b = 3
-    var sum = a + b      // 13
-    var diff = a - b     // 7
-    var prod = a * b     // 30
-    var quot = a / b     // 3
-    var rem = a % b      // 1
+    var sum = a + b          // 13
+    var diff = a - b         // 7
+    var prod = a * b         // 30
+    var div = a / b          // 3.333... (float)
+    var quot = trunc(a / b)  // 3 (integer division)
+    var rem = a mod b        // 1
 
     // Use the values
-    print(sum)
-    print(diff)
-    print(prod)
-    print(quot)
-    print(rem)
+    print(&quot;{sum}&quot;)
+    print(&quot;{diff}&quot;)
+    print(&quot;{prod}&quot;)
+    print(&quot;{div}&quot;)
+    print(&quot;{quot}&quot;)
+    print(&quot;{rem}&quot;)
 
     return 0
 end 'main'
@@ -63,16 +66,49 @@ end 'main'
 <fieldset class="expected-output"><legend>Expected Output</legend><pre>13
 7
 30
+3.333333
 3
 1
 Exit Code: 0</pre></fieldset>
+            </div>
+            <div class="spec-section" id="bitwise-operators">
+                <h2>Bitwise Operators</h2>
+<p>Maxon provides bitwise operators for manipulating individual bits of integer values.</p>
+<h3>Bitwise AND (<code>&amp;</code>)</h3>
+<p>Returns 1 for each bit position where both operands have 1:</p>
+<pre><code class="language-maxon">var a = 12      // 1100 in binary
+var b = 10      // 1010 in binary
+var c = a &amp; b   // 1000 = 8
+</code></pre>
+<h3>Bitwise OR (<code>|</code>)</h3>
+<p>Returns 1 for each bit position where either operand has 1:</p>
+<pre><code class="language-maxon">var a = 12      // 1100 in binary
+var b = 10      // 1010 in binary
+var c = a | b   // 1110 = 14
+</code></pre>
+<h3>Bitwise XOR (<code>^</code>)</h3>
+<p>Returns 1 for each bit position where operands differ:</p>
+<pre><code class="language-maxon">var a = 12      // 1100 in binary
+var b = 10      // 1010 in binary
+var c = a ^ b   // 0110 = 6
+</code></pre>
+<h3>Left Shift (<code>&lt;&lt;</code>)</h3>
+<p>Shifts bits left by the specified amount, filling with zeros:</p>
+<pre><code class="language-maxon">var a = 1
+var b = a &lt;&lt; 3  // 1000 = 8
+</code></pre>
+<h3>Right Shift (<code>&gt;&gt;</code>)</h3>
+<p>Shifts bits right by the specified amount (logical shift, fills with zeros):</p>
+<pre><code class="language-maxon">var a = 16
+var b = a &gt;&gt; 2  // 0100 = 4
+</code></pre>
             </div>
             <div class="spec-section" id="comparison-operators">
                 <h2>Comparison Operators</h2>
 <p>Comparison operators compare two values and return <code>true</code> or <code>false</code>.</p>
 <h3>Operators</h3>
 <ul>
-<li><code>=</code> - Equal to</li>
+<li><code>==</code> - Equal to</li>
 <li><code>!=</code> - Not equal to</li>
 <li><code>&lt;</code> - Less than</li>
 <li><code>&gt;</code> - Greater than</li>
@@ -83,13 +119,13 @@ Exit Code: 0</pre></fieldset>
 <pre><code class="language-maxon">function main() returns int
     var x = 10
     var y = 20
-
+    
     if x &lt; y 'test1'
         if x != y 'test2'
             return 1
         end 'test2'
     end 'test1'
-
+    
     return 0
 end 'main'
 </code></pre>
@@ -103,18 +139,16 @@ end 'main'
 </code></pre>
 <h3>Supported Conversions</h3>
 <ul>
-<li><code>int</code> ↔ <code>float</code> (int to float only; float to int requires <code>trunc()</code>, <code>round()</code>, <code>floor()</code>, or <code>ceil()</code>)</li>
-<li><code>int</code> ↔ <code>char</code></li>
+<li><code>int</code> → <code>float</code> (int to float only; float to int requires <code>trunc()</code>, <code>round()</code>, <code>floor()</code>, or <code>ceil()</code>)</li>
+<li><code>int</code> ↔ <code>character</code></li>
 <li><code>int</code> ↔ <code>bool</code></li>
-<li><code>int</code> ↔ <code>ptr</code></li>
-<li><code>ptr</code> ↔ <code>ptr</code> (pointer casting)</li>
-<li><code>char</code> ↔ <code>int</code></li>
+<li><code>character</code> ↔ <code>int</code></li>
 </ul>
 <h3>Example</h3>
 <pre><code class="language-maxon">function main() returns int
     var pi = 3.14159
     var approximate = trunc(pi)
-    print(approximate)
+    print(&quot;{approximate}&quot;)
     return 0
 end 'main'
 </code></pre>
