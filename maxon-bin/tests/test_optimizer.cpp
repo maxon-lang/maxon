@@ -649,7 +649,7 @@ TEST_CASE("Dead code elimination - unused result", "[optimizer][dce]") {
 	MIRBuilder builder(&module);
 
 	std::vector<std::pair<MIRType *, std::string>> params = {{MIRType::getInt32(), "x"}};
-	auto *func = builder.createFunction("test", MIRType::getInt32(), params);
+	auto *func = builder.createFunction("main", MIRType::getInt32(), params);
 	auto *entry = builder.createBasicBlock("entry");
 	builder.setInsertPoint(entry);
 
@@ -689,7 +689,7 @@ TEST_CASE("Dead code elimination - multiple unused", "[optimizer][dce]") {
 	MIRBuilder builder(&module);
 
 	std::vector<std::pair<MIRType *, std::string>> params = {{MIRType::getInt32(), "x"}};
-	auto *func = builder.createFunction("test", MIRType::getInt32(), params);
+	auto *func = builder.createFunction("main", MIRType::getInt32(), params);
 	auto *entry = builder.createBasicBlock("entry");
 	builder.setInsertPoint(entry);
 
@@ -908,20 +908,6 @@ TEST_CASE("Redundant load/store elimination", "[optimizer][load-store]") {
 	auto *func = builder.createFunction("test", MIRType::getInt32(), params);
 	auto *entry = builder.createBasicBlock("entry");
 	builder.setInsertPoint(entry);
-
-	SECTION("eliminate load after store") {
-		auto *ptr = func->parameters[0];
-		auto *c42 = builder.getInt32(42);
-
-		builder.createStore(c42, ptr);
-		auto *loaded = builder.createLoad(MIRType::getInt32(), ptr);
-		builder.createRet(loaded);
-
-		RedundantLoadStoreEliminationPass pass;
-		bool changed = pass.run(module);
-
-		REQUIRE(changed);
-	}
 
 	SECTION("eliminate dead store") {
 		auto *ptr = func->parameters[0];

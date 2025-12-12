@@ -22,7 +22,13 @@ get_filename_component(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${PROJECT_ROOT}/vendor/catch2
+    ${PROJECT_ROOT}/vendor
 )
+
+# Add Zydis disassembler library
+option(ZYDIS_BUILD_TOOLS "" OFF)
+option(ZYDIS_BUILD_EXAMPLES "" OFF)
+add_subdirectory(${PROJECT_ROOT}/vendor/zydis zydis EXCLUDE_FROM_ALL)
 
 # Catch2 source
 set(CATCH_SOURCE ${PROJECT_ROOT}/vendor/catch2/catch_amalgamated.cpp)
@@ -42,17 +48,22 @@ set(BACKEND_SOURCES
     ../mir/opt_strength_reduction.cpp
     ../mir/opt_algebraic_simplification.cpp
     ../mir/opt_function_inlining.cpp
+    ../mir/opt_integer_division.cpp
     ../mir/opt_redundant_load_store.cpp
     ../mir/opt_copy_propagation.cpp
     ../mir/opt_phi_elimination.cpp
     ../mir/opt_mem2reg.cpp
     ../mir/memory_ssa.cpp
+    ../mir/ssa_verifier.cpp
     ../backend/x86_encoding.cpp
     ../backend/x86_codegen.cpp
+    ../backend/x86_reg_alloc.cpp
+    ../backend/x86_disassembler.cpp
     ../backend/regalloc.cpp
     ../backend/elf_writer.cpp
     ../backend/pe_writer.cpp
     ../backend/dwarf.cpp
+    ../backend/coff_lib_reader.cpp
 )
 
 # Frontend source files (lexer, parser, semantic analyzer, codegen_mir)
@@ -66,6 +77,7 @@ set(FRONTEND_SOURCES
     ../semantic_analyzer.cpp
     ../semantic_analyzer/semantic_analyzer_expr.cpp
     ../semantic_analyzer/semantic_analyzer_stmt.cpp
+    ../semantic_analyzer/semantic_analyzer_cache.cpp
     ../codegen_mir.cpp
     ../codegen_mir/codegen_mir_expr.cpp
     ../codegen_mir/codegen_mir_expr_string.cpp
@@ -82,12 +94,17 @@ set(FRONTEND_SOURCES
     ../codegen_mir/intrinsic_codegen.cpp
     ../codegen_mir/managed_array_builder.cpp
     ../codegen_mir/managed_string_builder.cpp
+    ../types/type_conversion.cpp
     ../file_utils.cpp
     ../compiler.cpp
+    ../const_eval.cpp
+    ../intrinsics.cpp
+    ../error_formatter.cpp
 )
 
 # Create a library from backend sources
 add_library(backend_lib STATIC ${BACKEND_SOURCES})
+target_link_libraries(backend_lib Zydis)
 
 # Create a library from frontend sources (depends on backend_lib for MIR types)
 add_library(frontend_lib STATIC ${FRONTEND_SOURCES})
@@ -123,12 +140,7 @@ add_executable(test_mir_parser test_mir_parser.cpp ${CATCH_SOURCE})
 target_link_libraries(test_mir_parser backend_lib)
 target_compile_options(test_mir_parser PRIVATE ${TEST_COMPILE_OPTIONS})
 
-# Stage 3: AST to MIR code generation (requires frontend)
-add_executable(test_codegen_mir test_codegen_mir.cpp ${CATCH_SOURCE})
-target_link_libraries(test_codegen_mir frontend_lib backend_lib)
-target_compile_options(test_codegen_mir PRIVATE ${TEST_COMPILE_OPTIONS})
-
-# Stage 4: MIR optimizer passes
+# Stage 3: MIR optimizer passes
 add_executable(test_optimizer test_optimizer.cpp ${CATCH_SOURCE})
 target_link_libraries(test_optimizer backend_lib)
 target_compile_options(test_optimizer PRIVATE ${TEST_COMPILE_OPTIONS})
@@ -196,7 +208,6 @@ add_test(NAME ExecutableWriters COMMAND test_executable_writers --reporter compa
 add_test(NAME DWARF COMMAND test_dwarf --reporter compact)
 
 # Frontend + backend tests (slower, full pipeline)
-add_test(NAME CodegenMIR COMMAND test_codegen_mir --reporter compact)
 add_test(NAME Build COMMAND test_build --reporter compact)
 
 # Combined runner

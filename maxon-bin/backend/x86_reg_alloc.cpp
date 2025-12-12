@@ -7,6 +7,7 @@
 
 #include "x86_codegen.h"
 #include <algorithm>
+#include <stdexcept>
 
 namespace backend {
 

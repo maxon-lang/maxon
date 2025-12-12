@@ -32,28 +32,37 @@ echo -e "${CYAN}============================================================${NC
 echo ""
 
 # Test 1: Compiler self-tests
-echo -e "${YELLOW}[1/6] Running compiler self-tests...${NC}"
+echo -e "${YELLOW}[1/7] Running compiler self-tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 $MAXON self-test
 results[self-tests]=$?
 echo ""
 
 # Test 2: Backend MIR tests (integration tests)
-echo -e "${YELLOW}[2/6] Running backend MIR integration tests...${NC}"
+echo -e "${YELLOW}[2/7] Running backend MIR integration tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 ./backend-tests/runner/build/backend-test-runner${EXE_EXT} -v
 results[backend-tests]=$?
 echo ""
 
-# Test 3: Debugger integration tests
-echo -e "${YELLOW}[3/6] Running debugger integration tests...${NC}"
+# Test 3: Backend C++ unit tests (build command)
+echo -e "${YELLOW}[3/7] Running backend C++ unit tests...${NC}"
+echo -e "${YELLOW}------------------------------------------------------------${NC}"
+pushd maxon-bin/tests/build > /dev/null
+ctest --output-on-failure -R Build
+results[backend-unit-tests]=$?
+popd > /dev/null
+echo ""
+
+# Test 4: Debugger integration tests
+echo -e "${YELLOW}[4/7] Running debugger integration tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 ./debugger-tests/bin/debugger-test-runner${EXE_EXT}
 results[debugger-tests]=$?
 echo ""
 
-# Test 4: Language fragment tests
-echo -e "${YELLOW}[4/6] Running language fragment tests...${NC}"
+# Test 5: Language fragment tests
+echo -e "${YELLOW}[5/7] Running language fragment tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 $MAXON extract-specs >/dev/null
 $MAXON regen-fragments >/dev/null
