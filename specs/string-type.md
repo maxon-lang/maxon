@@ -9,7 +9,7 @@ category: types
 
 ## Developer Notes
 
-Swift-style string implementation with Small String Optimization (SSO) and Copy-on-Write (COW) semantics.
+String implementation with Small String Optimization (SSO) and Copy-on-Write (COW) semantics.
 
 ### Memory Layout
 

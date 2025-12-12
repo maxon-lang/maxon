@@ -249,8 +249,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 			// Generate inline range loop: for i in range(start, end) becomes:
 			// var i = start; while i < end { ... ; i = i + 1 }
 
-			mir::MIRValue *startVal = generateExpr(callExpr->args[0].get());
-			mir::MIRValue *endVal = generateExpr(callExpr->args[1].get());
+			mir::MIRValue *startVal = generateExpr(callExpr->args[0].value.get());
+			mir::MIRValue *endVal = generateExpr(callExpr->args[1].value.get());
 
 			if (!startVal || !endVal) {
 				reportError("Failed to generate range bounds",

@@ -533,15 +533,17 @@ end 'Point'
 - Methods access struct fields directly without explicit `self`
 - Use `export` keyword before `function` to export individual methods
 - Methods are called using dot notation: `instance.method(args)`
+- Method parameters support named arguments just like regular functions
 
 ### Calling Methods
 
-Methods are called using dot notation on instances:
+Methods are called using dot notation on instances. The receiver (`self`) is implicit:
 
 ```maxon
 var p1 = Point{x: 10, y: 20}
 var p2 = Point{x: 5, y: 10}
-var p3 = p1.add(p2)             // p3 = {x: 15, y: 30}
+var p3 = p1.add(p2)             // Positional argument
+var p4 = p1.add(other = p2)     // Named argument (optional)
 var mag = p1.magnitude()
 ```
 
@@ -784,7 +786,7 @@ let name = "Maxon"
 
 ### Declaration Syntax
 ```maxon
-returns returnType
+function name(param type [= default], ...) returns returnType
     // statements
     return value
 end 'name'
@@ -792,7 +794,57 @@ end 'name'
 
 **Block Identifier**: The string after `end` must match the function name.
 
-**Return Type**: All functions must explicitly specify a return type. Use `void` for functions that don't return a value.
+**Return Type**: All functions must explicitly specify a return type. Use `nothing` for functions that don't return a value.
+
+### Named Arguments
+
+Maxon uses named arguments:
+- All parameters are **positional by default**
+- Callers can **optionally name any argument** using `name = value` syntax
+- Parameters with default values can **only be provided via named arguments** (not positionally)
+- Positional arguments must come before named arguments
+- Named arguments can appear in any order
+
+**Examples:**
+
+```maxon
+// All parameters are positional by default
+function add(a int, b int) returns int
+    return a + b
+end 'add'
+
+add(3, 4)           // Positional arguments
+add(a = 3, b = 4)   // Named arguments (optional)
+add(b = 4, a = 3)   // Named arguments in any order
+
+// Named arguments for clarity
+function connect(host string, port int) returns bool
+    // ...
+end 'connect'
+
+connect("localhost", 8080)              // Positional
+connect(host = "localhost", port = 8080) // Named for clarity
+connect("localhost", port = 8080)       // Mix positional and named
+```
+
+### Default Values
+
+Parameters can have default values. Parameters with defaults can **only** be provided via named arguments (not positionally):
+
+```maxon
+function greet(name string, title string = "Mr.") returns nothing
+    print("Hello, " + title + " " + name)
+end 'greet'
+
+greet("Smith")                    // Uses default title
+greet("Smith", title = "Dr.")     // Override default with named argument
+```
+
+**Rules:**
+- Parameters with defaults must come after required parameters
+- Parameters with defaults cannot be passed positionally - they must use named arguments
+- Default values are evaluated at call site
+- Arguments may be omitted if they have defaults
 
 ### Examples
 
@@ -805,7 +857,7 @@ end 'getAnswer'
 
 **Void Return Type**
 ```maxon
-returns nothing
+function greet(name string) returns nothing
     print("Hello, " + name)
 end 'greet'
 ```
@@ -815,6 +867,19 @@ end 'greet'
 function add(a int, b int) returns int
     return a + b
 end 'add'
+
+var result = add(3, 4)  // Positional
+var result2 = add(a = 3, b = 4)  // Named (optional)
+```
+
+**Named Arguments for Clarity**
+```maxon
+function divide(dividend int, divisor int) returns int
+    return dividend / divisor
+end 'divide'
+
+var result = divide(10, 2)  // Positional
+var result2 = divide(dividend = 10, divisor = 2)  // Named for clarity
 ```
 
 **Array Parameters**
@@ -829,9 +894,24 @@ end 'sum'
 ```
 
 ### Calling Functions
+
+**Positional (default):**
 ```maxon
 var result = add(3, 4)
 var answer = getAnswer()
+greet("Alice")
+```
+
+**Named Arguments (optional):**
+```maxon
+greet(name = "Alice")
+divide(dividend = 100, divisor = 5)
+add(b = 4, a = 3)  // Named args can be in any order
+```
+
+**Mixed (positional first, then named):**
+```maxon
+connect("localhost", port = 8080)
 ```
 
 ### Extern Functions
@@ -1523,55 +1603,18 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
     end 'process'
     ```
 
----
+11. **Use named arguments for clarity when helpful**:
+    ```maxon
+    connect("localhost", port = 8080)  // Clear what 8080 means
+    move(start, end)                    // Positional is fine for obvious args
+    ```
 
-## Syntax Quick Reference
-
-```maxon
-// Variables
-var mutable = 42
-let immutable = 100
-
-// Functions
-returns returnType
-    return value
-end 'name'
-
-// Control Flow
-if condition 'id' statements end 'id'
-if condition 'id' statements else 'id' statements end 'id'
-while condition 'id' statements end 'id'
-for var in iterable 'id' statements end 'id'
-match expr 'id' pattern then statement default then statement end 'id'
-match enum 'id' Name(binding) then statement end 'id'  // enum pattern
-var x = match expr 'id' pattern gives value default gives value end 'id'
-break
-continue
-
-// Arrays
-var arr = [10]int
-let vals = [1, 2, 3]
-var elem = arr[0]
-var size = arr.count()
-
-// Types
-int float bool character
-array of T             // array type
-array of array of T    // nested array type
-
-// Operators
-+ - * / mod                  // arithmetic
-= != < > <= >=               // comparison
-and or not                   // logical
-as                           // type cast
-
-// Literals
-42                           // int
-3.14                         // float
-'A'                          // character
-"text"                       // string
-true false                   // bool
-```
+12. **Remember default params require named arguments**:
+    ```maxon
+    function greet(name string, title string = "Mr.") returns nothing
+    greet("Smith")                // Uses default
+    greet("Smith", title = "Dr.") // Override with named arg
+    ```
 
 ---
 

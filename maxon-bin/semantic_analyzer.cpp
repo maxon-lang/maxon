@@ -160,14 +160,14 @@ void SemanticAnalyzer::registerBuiltinFunctions() {
 	// These are implemented as intrinsics in codegen
 
 	// int.hash() -> int (multiplicative hash)
-	functions.emplace("int.hash", FunctionInfo("int.hash", "int", {FunctionParameter("self", "int")}));
+	functions.emplace("int.hash", FunctionInfo("int.hash", "int", {FunctionParameter("self", "int", 0, 0)}));
 	// int.equals(other) -> bool
-	functions.emplace("int.equals", FunctionInfo("int.equals", "bool", {FunctionParameter("self", "int"), FunctionParameter("other", "int")}));
+	functions.emplace("int.equals", FunctionInfo("int.equals", "bool", {FunctionParameter("self", "int", 0, 0), FunctionParameter("other", "int", 0, 0)}));
 
 	// byte.hash() -> int
-	functions.emplace("byte.hash", FunctionInfo("byte.hash", "int", {FunctionParameter("self", "byte")}));
+	functions.emplace("byte.hash", FunctionInfo("byte.hash", "int", {FunctionParameter("self", "byte", 0, 0)}));
 	// byte.equals(other) -> bool
-	functions.emplace("byte.equals", FunctionInfo("byte.equals", "bool", {FunctionParameter("self", "byte"), FunctionParameter("other", "byte")}));
+	functions.emplace("byte.equals", FunctionInfo("byte.equals", "bool", {FunctionParameter("self", "byte", 0, 0), FunctionParameter("other", "byte", 0, 0)}));
 
 	// Note: char.hash() and char.equals() are now defined in stdlib/string/char.maxon
 	// since char is a stdlib struct type (grapheme cluster), not a primitive
@@ -1351,11 +1351,12 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 						// Synthesize method from default implementation
 						// Build parameter list with implicit self
 						std::vector<FunctionParameter> params;
-						params.push_back(FunctionParameter("self", structName));
+						params.push_back(FunctionParameter("self", structName, 0, 0));
 
 						for (const auto &param : protoMethod.parameters) {
 							std::string resolvedType = resolveType(param.type);
-							params.push_back(FunctionParameter(param.name, resolvedType));
+							params.push_back(FunctionParameter(param.name, resolvedType, param.line, param.column,
+															   param.defaultValue));
 						}
 
 						std::string resolvedReturnType = resolveType(protoMethod.returnType);
@@ -1569,14 +1570,15 @@ void SemanticAnalyzer::instantiateGenericStructMethods(const std::string &templa
 				// Substitute return type
 				std::string returnType = substituteType(funcInfo.returnType);
 
-				// Substitute parameter types
+				// Substitute parameter types, preserving labels
 				std::vector<FunctionParameter> params;
 				for (const auto &param : funcInfo.parameters) {
 					if (param.name == "self") {
 						// Replace self's type with the specialized type
 						params.emplace_back("self", specializedName, param.line, param.column);
 					} else {
-						params.emplace_back(param.name, substituteType(param.type), param.line, param.column);
+						params.emplace_back(param.name, substituteType(param.type), param.line, param.column,
+											param.defaultValue);
 					}
 				}
 
@@ -1614,7 +1616,8 @@ void SemanticAnalyzer::instantiateGenericStructMethods(const std::string &templa
 					if (param.name == "self") {
 						params.emplace_back("self", specializedName, param.line, param.column);
 					} else {
-						params.emplace_back(param.name, substituteType(param.type), param.line, param.column);
+						params.emplace_back(param.name, substituteType(param.type), param.line, param.column,
+											param.defaultValue);
 					}
 				}
 
@@ -1656,13 +1659,15 @@ void SemanticAnalyzer::instantiateGenericStructMethods(const std::string &templa
 
 		// Substitute parameter types, replacing self's type with the specialized type
 		// The parser already added self as the first parameter, we just need to update its type
+		// Preserve parameter names
 		std::vector<FunctionParameter> params;
 		for (const auto &param : method->parameters) {
 			if (param.name == "self") {
 				// Replace self's type with the specialized type
 				params.emplace_back("self", specializedName, param.line, param.column);
 			} else {
-				params.emplace_back(param.name, substituteType(param.type), param.line, param.column);
+				params.emplace_back(param.name, substituteType(param.type), param.line, param.column,
+									param.defaultValue);
 			}
 		}
 
@@ -1713,7 +1718,7 @@ void SemanticAnalyzer::instantiateGenericStructMethods(const std::string &templa
 				} else {
 					paramType = substituteType(param.type);
 				}
-				params.emplace_back(param.name, paramType, param.line, param.column);
+				params.emplace_back(param.name, paramType, param.line, param.column, param.defaultValue);
 			}
 
 			// Create the instantiated function info with synthesized default info preserved

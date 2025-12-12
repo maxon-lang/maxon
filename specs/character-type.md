@@ -9,7 +9,7 @@ category: types
 
 ## Developer Notes
 
-Swift-style `character` type representing an Extended Grapheme Cluster (EGC) — a user-perceived character.
+`character` type representing an Extended Grapheme Cluster (EGC) — a user-perceived character.
 
 ### Memory Layout
 

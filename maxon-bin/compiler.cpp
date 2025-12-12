@@ -35,7 +35,7 @@ static void countAstExpr(const ExprAST *expr, size_t &exprCount) {
 		countAstExpr(unary->operand.get(), exprCount);
 	} else if (auto *call = dynamic_cast<const CallExprAST *>(expr)) {
 		for (const auto &arg : call->args) {
-			countAstExpr(arg.get(), exprCount);
+			countAstExpr(arg.value.get(), exprCount);
 		}
 	} else if (auto *arrIdx = dynamic_cast<const ArrayIndexExprAST *>(expr)) {
 		countAstExpr(arrIdx->arrayExpr.get(), exprCount);

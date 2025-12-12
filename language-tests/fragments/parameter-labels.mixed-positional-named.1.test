@@ -1,0 +1,59 @@
+// Test: parameter-labels.mixed-positional-named.1
+function process(value int, scale int) returns int
+    return value * scale
+end 'process'
+
+function main() returns int
+    return process(5, scale = 3)
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 4
+
+define i32 @main() {
+entry0:
+  ret i32 15
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 13
+
+define i32 @process(i32 %value, i32 %scale) {
+entry0:
+  %0 = alloca i32
+  store i32 %value, ptr %0
+  %1 = alloca i32
+  store i32 %scale, ptr %1
+  %2 = load i32, ptr %0
+  %3 = load i32, ptr %1
+  %4 = mul i32 %2, %3
+  ret i32 %4
+}
+
+define i32 @main() {
+entry0:
+  %0 = call i32 @process(i32 5, i32 3)
+  ret i32 %0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 15

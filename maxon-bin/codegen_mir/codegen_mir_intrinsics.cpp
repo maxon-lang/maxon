@@ -324,14 +324,14 @@ MIRCodeGenerator::ArrayFieldInfo MIRCodeGenerator::getArrayFieldInfo(ExprAST *ar
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_string_len(CallExprAST *callExpr) {
 	ManagedStringBuilder msb(*this);
-	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].value.get());
 	return msb.getLength(managedPtr, "len");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_string_byte_at(CallExprAST *callExpr) {
 	ManagedStringBuilder msb(*this);
-	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
-	mir::MIRValue *index = generateExpr(callExpr->args[1].get());
+	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].value.get());
+	mir::MIRValue *index = generateExpr(callExpr->args[1].value.get());
 
 	mir::MIRValue *bufferPtr = msb.getDataPtr(managedPtr, "buffer.ptr");
 	mir::MIRValue *index64 = builder->createSExt(index, mir::MIRType::getInt64(), "idx64");
@@ -343,9 +343,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_slice(CallExprAST *callExpr) {
 	ManagedStringBuilder msb(*this);
 	mir::MIRType *substringType = msb.getSubstringType();
 
-	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
-	mir::MIRValue *startIdx = generateExpr(callExpr->args[1].get());
-	mir::MIRValue *endIdx = generateExpr(callExpr->args[2].get());
+	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].value.get());
+	mir::MIRValue *startIdx = generateExpr(callExpr->args[1].value.get());
+	mir::MIRValue *endIdx = generateExpr(callExpr->args[2].value.get());
 
 	mir::MIRValue *newLen = builder->createSub(endIdx, startIdx, "slice.len");
 
@@ -364,7 +364,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_slice(CallExprAST *callExpr) {
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_substring_parent_managed(CallExprAST *callExpr) {
 	mir::MIRType *substringType = getOrCreateSubstringType();
-	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
+	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].value.get());
 
 	// Get _parentManaged field (field 0)
 	mir::MIRValue *parentPtr = builder->createStructGEP(substringType, subPtr, 0, "sub._parentManaged");
@@ -375,7 +375,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_byte_offset(CallExprAST *ca
 	mir::MIRType *substringType = getOrCreateSubstringType();
 	mir::MIRType *managedStringType = getOrCreateManagedStringType();
 	mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
-	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
+	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].value.get());
 
 	// Get _parentManaged field (field 0)
 	mir::MIRValue *parentManagedPtr = builder->createStructGEP(substringType, subPtr, 0, "sub._parentManaged");
@@ -402,8 +402,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_concat(CallExprAST *callExpr) 
 	mir::MIRType *managedStringType = msb.getManagedStringType();
 	mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
 
-	mir::MIRValue *m1Ptr = getManagedStringPtr(callExpr->args[0].get());
-	mir::MIRValue *m2Ptr = getManagedStringPtr(callExpr->args[1].get());
+	mir::MIRValue *m1Ptr = getManagedStringPtr(callExpr->args[0].value.get());
+	mir::MIRValue *m2Ptr = getManagedStringPtr(callExpr->args[1].value.get());
 
 	mir::MIRValue *len1 = msb.getLength(m1Ptr, "len1");
 	mir::MIRValue *len2 = msb.getLength(m2Ptr, "len2");
@@ -455,7 +455,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_make_unique(CallExprAST *callE
 	mir::MIRType *managedStringType = getOrCreateManagedStringType();
 	mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
 
-	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].value.get());
 
 	mir::MIRValue *lenPtr = builder->createStructGEP(managedStringType, managedPtr, 1, "src._len");
 	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
@@ -526,9 +526,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_set_byte(CallExprAST *callExpr
 	mir::MIRType *managedStringType = getOrCreateManagedStringType();
 	mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
 
-	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
-	mir::MIRValue *index = generateExpr(callExpr->args[1].get());
-	mir::MIRValue *value = generateExpr(callExpr->args[2].get());
+	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].value.get());
+	mir::MIRValue *index = generateExpr(callExpr->args[1].value.get());
+	mir::MIRValue *value = generateExpr(callExpr->args[2].value.get());
 
 	mir::MIRValue *bufPtr = builder->createStructGEP(managedStringType, managedPtr, 0, "managed._buffer");
 	mir::MIRValue *ptrPtr = builder->createStructGEP(unsizedArrayType, bufPtr, 0, "buffer.ptr.ptr");
@@ -550,7 +550,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_get_refcount(CallExprAST *call
 	mir::MIRType *managedStringType = getOrCreateManagedStringType();
 	mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
 
-	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].value.get());
 
 	mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, "src._capacity");
 	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtr, "cap");
@@ -588,7 +588,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_to_cstring(CallExprAST *callEx
 	mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
 	mir::MIRType *cstringType = getOrCreateCstringType();
 
-	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].get());
+	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].value.get());
 
 	mir::MIRValue *bufPtrField = builder->createStructGEP(managedStringType, managedPtr, 0, "src._buffer");
 	mir::MIRValue *bufPtrPtr = builder->createStructGEP(unsizedArrayType, bufPtrField, 0, "src.ptr.ptr");
@@ -658,24 +658,24 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_from_chars(CallExprAST *callEx
 	mir::MIRType *managedStringType = getOrCreateManagedStringType();
 	mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
 
-	mir::MIRValue *length = generateExpr(callExpr->args[1].get());
+	mir::MIRValue *length = generateExpr(callExpr->args[1].value.get());
 
 	// Extract buffer pointer from array struct
 	// For array<T> or _ManagedArray<T>, we need to get the alloca pointer and extract field 0
 	mir::MIRValue *srcBuffer;
-	std::string argType = inferExprType(callExpr->args[0].get());
+	std::string argType = inferExprType(callExpr->args[0].value.get());
 
 	if (maxon::TypeConversion::isArrayStructType(argType) || maxon::TypeConversion::isManagedArrayType(argType)) {
 		// Get the alloca pointer for the array (don't load the value)
 		mir::MIRValue *arrayPtr = nullptr;
 		std::string varName;
-		if (auto *varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].get())) {
+		if (auto *varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].value.get())) {
 			arrayPtr = namedValues[varExpr->name];
 			varName = varExpr->name;
 		}
 		if (!arrayPtr) {
 			// Fallback: generate the expression and hope it returns a pointer
-			arrayPtr = generateExpr(callExpr->args[0].get());
+			arrayPtr = generateExpr(callExpr->args[0].value.get());
 		}
 
 		// Extract buffer pointer from the array struct
@@ -704,7 +704,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_from_chars(CallExprAST *callEx
 		}
 	} else {
 		// Raw pointer - generate and use directly
-		srcBuffer = generateExpr(callExpr->args[0].get());
+		srcBuffer = generateExpr(callExpr->args[0].value.get());
 	}
 
 	mir::MIRValue *lengthPlus1 = builder->createAdd(length, builder->getInt32(1), "len.plus1");
@@ -744,14 +744,14 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_from_chars(CallExprAST *callEx
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_cstring_len(CallExprAST *callExpr) {
 	mir::MIRType *cstringType = getOrCreateCstringType();
-	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].get());
+	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].value.get());
 	mir::MIRValue *lenPtr = builder->createStructGEP(cstringType, csPtr, 1, "cstring.len.ptr");
 	return builder->createLoad(mir::MIRType::getInt32(), lenPtr, "cstring.len");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_cstring_write_stdout(CallExprAST *callExpr) {
 	mir::MIRType *cstringType = getOrCreateCstringType();
-	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].get());
+	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].value.get());
 
 	mir::MIRValue *dataPtr = builder->createStructGEP(cstringType, csPtr, 0, "cstring.data.ptr");
 	mir::MIRValue *data = builder->createLoad(mir::MIRType::getPtr(), dataPtr, "cstring.data");
@@ -772,7 +772,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_read_file(CallExprAST *callExpr) {
 	mir::MIRType *cstringType = getOrCreateCstringType();
 
 	// Get path cstring
-	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].get());
+	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].value.get());
 	mir::MIRValue *pathDataPtr = builder->createStructGEP(cstringType, csPtr, 0, "path.data.ptr");
 	mir::MIRValue *pathData = builder->createLoad(mir::MIRType::getPtr(), pathDataPtr, "path.data");
 
@@ -786,12 +786,12 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_write_file(CallExprAST *callExpr) {
 	mir::MIRType *cstringType = getOrCreateCstringType();
 
 	// Get path cstring
-	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].get());
+	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].value.get());
 	mir::MIRValue *pathDataPtr = builder->createStructGEP(cstringType, csPtr, 0, "path.data.ptr");
 	mir::MIRValue *pathData = builder->createLoad(mir::MIRType::getPtr(), pathDataPtr, "path.data");
 
 	// Get content cstring
-	mir::MIRValue *contentCsPtr = getCstringPtr(callExpr->args[1].get());
+	mir::MIRValue *contentCsPtr = getCstringPtr(callExpr->args[1].value.get());
 
 	// Call runtime __write_file
 	mir::MIRFunction *writeFileFunc = getOrDeclareFunction(
@@ -804,12 +804,12 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_write_file_binary(CallExprAST *callEx
 	mir::MIRType *cstringType = getOrCreateCstringType();
 
 	// Get path cstring
-	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].get());
+	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].value.get());
 	mir::MIRValue *pathDataPtr = builder->createStructGEP(cstringType, csPtr, 0, "path.data.ptr");
 	mir::MIRValue *pathData = builder->createLoad(mir::MIRType::getPtr(), pathDataPtr, "path.data");
 
 	// Get array info
-	ArrayFieldInfo info = getManagedArrayInfo(callExpr->args[1].get(), callExpr->line, callExpr->column);
+	ArrayFieldInfo info = getManagedArrayInfo(callExpr->args[1].value.get(), callExpr->line, callExpr->column);
 	if (!info.dataPtr) {
 		return builder->getInt32(-1);
 	}
@@ -836,15 +836,15 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_write_file_binary(CallExprAST *callEx
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_substring_len(CallExprAST *callExpr) {
 	mir::MIRType *substringType = getOrCreateSubstringType();
-	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
+	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].value.get());
 	mir::MIRValue *lenPtr = builder->createStructGEP(substringType, subPtr, 2, "sub._len");
 	return builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_substring_byte_at(CallExprAST *callExpr) {
 	mir::MIRType *substringType = getOrCreateSubstringType();
-	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
-	mir::MIRValue *index = generateExpr(callExpr->args[1].get());
+	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].value.get());
+	mir::MIRValue *index = generateExpr(callExpr->args[1].value.get());
 
 	mir::MIRValue *ptrPtr = builder->createStructGEP(substringType, subPtr, 1, "sub._ptr");
 	mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), ptrPtr, "data.ptr");
@@ -856,15 +856,15 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_byte_at(CallExprAST *callEx
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_substring_iter_pos(CallExprAST *callExpr) {
 	mir::MIRType *substringType = getOrCreateSubstringType();
-	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
+	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].value.get());
 	mir::MIRValue *iterPosPtr = builder->createStructGEP(substringType, subPtr, 3, "sub._iterPos");
 	return builder->createLoad(mir::MIRType::getInt32(), iterPosPtr, "iterPos");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_substring_with_iter_pos(CallExprAST *callExpr) {
 	mir::MIRType *substringType = getOrCreateSubstringType();
-	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
-	mir::MIRValue *newPos = generateExpr(callExpr->args[1].get());
+	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].value.get());
+	mir::MIRValue *newPos = generateExpr(callExpr->args[1].value.get());
 
 	mir::MIRValue *newSub = builder->createAlloca(substringType, "new.substring");
 
@@ -889,7 +889,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_to_string(CallExprAST *call
 	mir::MIRType *managedStringType = getOrCreateManagedStringType();
 	mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
 
-	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
+	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].value.get());
 
 	mir::MIRValue *srcPtrPtr = builder->createStructGEP(substringType, subPtr, 1, "src._ptr");
 	mir::MIRValue *srcPtr = builder->createLoad(mir::MIRType::getPtr(), srcPtrPtr, "src.ptr");
@@ -948,9 +948,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_slice(CallExprAST *callExpr
 	mir::MIRType *substringType = getOrCreateSubstringType();
 	mir::MIRType *managedStringType = getOrCreateManagedStringType();
 
-	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].get());
-	mir::MIRValue *startIdx = generateExpr(callExpr->args[1].get());
-	mir::MIRValue *endIdx = generateExpr(callExpr->args[2].get());
+	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].value.get());
+	mir::MIRValue *startIdx = generateExpr(callExpr->args[1].value.get());
+	mir::MIRValue *endIdx = generateExpr(callExpr->args[2].value.get());
 
 	mir::MIRValue *newLen = builder->createSub(endIdx, startIdx, "slice.len");
 
@@ -1003,7 +1003,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_slice(CallExprAST *callExpr
 // =============================================================================
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_len(CallExprAST *callExpr) {
-	ExprAST *arrayArg = callExpr->args[0].get();
+	ExprAST *arrayArg = callExpr->args[0].value.get();
 	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// If we have a hidden length alloca (regular variable), use it directly
@@ -1035,7 +1035,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_len(CallExprAST *callExpr) {
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_capacity(CallExprAST *callExpr) {
-	ExprAST *arrayArg = callExpr->args[0].get();
+	ExprAST *arrayArg = callExpr->args[0].value.get();
 	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// If we have a hidden capacity alloca (regular variable), use it directly
@@ -1062,8 +1062,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_capacity(CallExprAST *callExpr)
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_length(CallExprAST *callExpr) {
-	ExprAST *arrayArg = callExpr->args[0].get();
-	mir::MIRValue *newLen = generateExpr(callExpr->args[1].get());
+	ExprAST *arrayArg = callExpr->args[0].value.get();
+	mir::MIRValue *newLen = generateExpr(callExpr->args[1].value.get());
 	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// If we have a hidden length alloca (regular variable), use it directly
@@ -1088,8 +1088,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_length(CallExprAST *callExp
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_grow(CallExprAST *callExpr) {
 	// __array_grow(arr, min_capacity) - grow array if needed
-	ExprAST *arrayArg = callExpr->args[0].get();
-	mir::MIRValue *minCapacity = generateExpr(callExpr->args[1].get());
+	ExprAST *arrayArg = callExpr->args[0].value.get();
+	mir::MIRValue *minCapacity = generateExpr(callExpr->args[1].value.get());
 	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// Get element type and size
@@ -1195,9 +1195,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_grow(CallExprAST *callExpr) {
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_at(CallExprAST *callExpr) {
 	// __array_set_at(arr, index, value) - set element at index
-	ExprAST *arrayArg = callExpr->args[0].get();
-	mir::MIRValue *index = generateExpr(callExpr->args[1].get());
-	mir::MIRValue *value = generateExpr(callExpr->args[2].get());
+	ExprAST *arrayArg = callExpr->args[0].value.get();
+	mir::MIRValue *index = generateExpr(callExpr->args[1].value.get());
+	mir::MIRValue *value = generateExpr(callExpr->args[2].value.get());
 	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// Get element type
@@ -1226,9 +1226,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_at(CallExprAST *callExpr) {
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_right(CallExprAST *callExpr) {
 	// __array_shift_right(arr, start, count) - shift elements right for insert
-	ExprAST *arrayArg = callExpr->args[0].get();
-	mir::MIRValue *start = generateExpr(callExpr->args[1].get());
-	mir::MIRValue *count = generateExpr(callExpr->args[2].get());
+	ExprAST *arrayArg = callExpr->args[0].value.get();
+	mir::MIRValue *start = generateExpr(callExpr->args[1].value.get());
+	mir::MIRValue *count = generateExpr(callExpr->args[2].value.get());
 	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// Get element type and size
@@ -1282,9 +1282,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_right(CallExprAST *callEx
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_left(CallExprAST *callExpr) {
 	// __array_shift_left(arr, start, count) - shift elements left for remove
-	ExprAST *arrayArg = callExpr->args[0].get();
-	mir::MIRValue *start = generateExpr(callExpr->args[1].get());
-	mir::MIRValue *count = generateExpr(callExpr->args[2].get());
+	ExprAST *arrayArg = callExpr->args[0].value.get();
+	mir::MIRValue *start = generateExpr(callExpr->args[1].value.get());
+	mir::MIRValue *count = generateExpr(callExpr->args[2].value.get());
 	ArrayFieldInfo info = getArrayFieldInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// Get element type and size

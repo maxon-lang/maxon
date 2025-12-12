@@ -1,6 +1,28 @@
 #include "../parser.h"
 #include <stdexcept>
 
+// Parse a potentially named argument: name = expr or just expr
+// Returns a CallArgument with name set if present (named arguments)
+CallArgument Parser::parseNamedArgument() {
+	// Check for named argument pattern: identifier followed by '='
+	// But NOT '==' (comparison) - need to check second token is ASSIGN not EQ
+	if (check(TokenType::IDENTIFIER) && peekToken(1).type == TokenType::ASSIGN) {
+		std::string argName(currentValue());
+		int argLine = currentLine();
+		int argCol = currentColumn();
+		advance(); // consume name
+		advance(); // consume '='
+		auto valueExpr = parseLogicalOr();
+		return CallArgument(std::move(valueExpr), argLine, argCol, argName);
+	}
+
+	// No name - positional argument
+	auto argExpr = parseLogicalOr();
+	int argLine = argExpr->line;
+	int argCol = argExpr->column;
+	return CallArgument(std::move(argExpr), argLine, argCol);
+}
+
 std::unique_ptr<ExprAST> Parser::parsePrimary() {
 	if (check(TokenType::NUMBER)) {
 		int value = std::stoi(std::string(currentValue()));
@@ -330,12 +352,14 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 
 		expectAdvance(TokenType::LPAREN, "Expected '(' after '" + funcName + "'");
 		auto arg = parseLogicalOr();
+		int argLine = arg->line;
+		int argCol = arg->column;
 		int endLine = currentLine();
 		int endCol = currentColumn();
 		expectAdvance(TokenType::RPAREN, "Expected ')' after argument");
 
-		std::vector<std::unique_ptr<ExprAST>> args;
-		args.push_back(std::move(arg));
+		std::vector<CallArgument> args;
+		args.push_back(CallArgument(std::move(arg), argLine, argCol));
 		auto expr = std::make_unique<CallExprAST>(funcName, std::move(args), line, column);
 		expr->setEndPosition(endLine, endCol);
 		return expr;
@@ -377,8 +401,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 			std::vector<std::unique_ptr<StmtAST>>{},
 			std::move(bodyExpr),
 			true, // isSingleExpression
-			line, column
-		);
+			line, column);
 		closureExpr->setEndPosition(endLine, endCol);
 		return closureExpr;
 	}
@@ -404,9 +427,12 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 				lookahead = 1;
 				while (parenDepth > 0 && lookahead < 50) { // safety limit
 					Token tok = peekToken(lookahead);
-					if (tok.type == TokenType::LPAREN) parenDepth++;
-					else if (tok.type == TokenType::RPAREN) parenDepth--;
-					else if (tok.type == TokenType::END_OF_FILE) break;
+					if (tok.type == TokenType::LPAREN)
+						parenDepth++;
+					else if (tok.type == TokenType::RPAREN)
+						parenDepth--;
+					else if (tok.type == TokenType::END_OF_FILE)
+						break;
 					lookahead++;
 				}
 				// lookahead now points past the closing ')'
@@ -450,8 +476,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 					std::vector<std::unique_ptr<StmtAST>>{},
 					std::move(bodyExpr),
 					true, // isSingleExpression
-					line, column
-				);
+					line, column);
 				closureExpr->setEndPosition(endLine, endCol);
 				return closureExpr;
 			} else {
@@ -468,7 +493,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 				Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end'");
 				if (endBlockIdToken.value != blockId) {
 					reportError("Block identifier mismatch in closure\n  Expected: '" + blockId +
-								"'\n  Found: '" + endBlockIdToken.value + "'",
+									"'\n  Found: '" + endBlockIdToken.value + "'",
 								endBlockIdToken.line, endBlockIdToken.column);
 				}
 
@@ -480,10 +505,9 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 					"", // return type inferred
 					std::move(body),
 					nullptr, // no single expression
-					false,   // not single expression
+					false,	 // not single expression
 					line, column,
-					blockId
-				);
+					blockId);
 				closureExpr->setEndPosition(endLine, endCol);
 				return closureExpr;
 			}
@@ -525,19 +549,19 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 						// This is a method call on a variable: arr.push(5) -> push(arr, 5)
 						std::string methodName = member.value;
 						advance(); // consume '('
-						std::vector<std::unique_ptr<ExprAST>> args;
+						std::vector<CallArgument> args;
 
-						// First argument is the object itself
+						// First argument is the object itself (self - implicit, no label)
 						auto varExpr = std::make_unique<VariableExprAST>(name, line, column);
 						varExpr->setEndPosition(line, column + static_cast<int>(name.length()) - 1);
-						args.push_back(std::move(varExpr));
+						args.push_back(CallArgument(std::move(varExpr), line, column));
 
-						// Parse remaining arguments
+						// Parse remaining arguments (may be labeled: name: value)
 						if (!check(TokenType::RPAREN)) {
-							args.push_back(parseLogicalOr());
+							args.push_back(parseNamedArgument());
 
 							while (match(TokenType::COMMA)) {
-								args.push_back(parseLogicalOr());
+								args.push_back(parseNamedArgument());
 							}
 						}
 
@@ -561,14 +585,14 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 				}
 
 				advance(); // consume '('
-				std::vector<std::unique_ptr<ExprAST>> args;
+				std::vector<CallArgument> args;
 
-				// Parse arguments
+				// Parse arguments (may be labeled: name: value)
 				if (!check(TokenType::RPAREN)) {
-					args.push_back(parseLogicalOr());
+					args.push_back(parseNamedArgument());
 
 					while (match(TokenType::COMMA)) {
-						args.push_back(parseLogicalOr());
+						args.push_back(parseNamedArgument());
 					}
 				}
 
@@ -620,14 +644,14 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		// Check for function call
 		if (check(TokenType::LPAREN)) {
 			advance(); // consume '('
-			std::vector<std::unique_ptr<ExprAST>> args;
+			std::vector<CallArgument> args;
 
-			// Parse arguments
+			// Parse arguments (may be labeled: name: value)
 			if (!check(TokenType::RPAREN)) {
-				args.push_back(parseLogicalOr());
+				args.push_back(parseNamedArgument());
 
 				while (match(TokenType::COMMA)) {
-					args.push_back(parseLogicalOr());
+					args.push_back(parseNamedArgument());
 				}
 			}
 
@@ -697,17 +721,17 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 				// Check if this is a method call: arr[i].method(args)
 				if (check(TokenType::LPAREN)) {
 					advance(); // consume '('
-					std::vector<std::unique_ptr<ExprAST>> args;
+					std::vector<CallArgument> args;
 
 					// First argument is the array element (implicit self)
-					args.push_back(std::move(arrayExpr));
+					args.push_back(CallArgument(std::move(arrayExpr), line, column));
 
-					// Parse remaining arguments
+					// Parse remaining arguments (may be labeled: name: value)
 					if (!check(TokenType::RPAREN)) {
-						args.push_back(parseLogicalOr());
+						args.push_back(parseNamedArgument());
 
 						while (match(TokenType::COMMA)) {
-							args.push_back(parseLogicalOr());
+							args.push_back(parseNamedArgument());
 						}
 					}
 
@@ -801,17 +825,17 @@ std::unique_ptr<ExprAST> Parser::parsePostfix() {
 			// Check if this is a method call: expr.method(args)
 			if (check(TokenType::LPAREN)) {
 				advance(); // consume '('
-				std::vector<std::unique_ptr<ExprAST>> args;
+				std::vector<CallArgument> args;
 
 				// First argument is the expression itself (implicit self)
-				args.push_back(std::move(expr));
+				args.push_back(CallArgument(std::move(expr), line, column));
 
-				// Parse remaining arguments
+				// Parse remaining arguments (may be labeled: name: value)
 				if (!check(TokenType::RPAREN)) {
-					args.push_back(parseLogicalOr());
+					args.push_back(parseNamedArgument());
 
 					while (match(TokenType::COMMA)) {
-						args.push_back(parseLogicalOr());
+						args.push_back(parseNamedArgument());
 					}
 				}
 

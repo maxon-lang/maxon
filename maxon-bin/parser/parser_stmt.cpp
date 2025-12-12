@@ -431,15 +431,15 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 				std::string methodName = memberName.value;
 				advance(); // consume '('
 
-				std::vector<std::unique_ptr<ExprAST>> args;
-				// First argument is the object itself
-				args.push_back(std::make_unique<VariableExprAST>(name, idLine, idColumn));
+				std::vector<CallArgument> args;
+				// First argument is the object itself (implicit self)
+				args.push_back(CallArgument(std::make_unique<VariableExprAST>(name, idLine, idColumn), idLine, idColumn));
 
-				// Parse remaining arguments
+				// Parse remaining arguments (may be labeled: name: value)
 				if (!check(TokenType::RPAREN)) {
-					args.push_back(parseLogicalOr());
+					args.push_back(parseNamedArgument());
 					while (match(TokenType::COMMA)) {
-						args.push_back(parseLogicalOr());
+						args.push_back(parseNamedArgument());
 					}
 				}
 
@@ -481,10 +481,10 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 			// Parse function call as statement
 			advance(); // consume '('
 
-			std::vector<std::unique_ptr<ExprAST>> args;
+			std::vector<CallArgument> args;
 			if (!check(TokenType::RPAREN)) {
 				do {
-					args.push_back(parseLogicalOr());
+					args.push_back(parseNamedArgument());
 				} while (match(TokenType::COMMA));
 			}
 
@@ -844,12 +844,18 @@ std::unique_ptr<StmtAST> Parser::parseMatchCaseStatement() {
 		if (check(TokenType::LPAREN)) {
 			// It's a function call - need to handle this
 			advance(); // consume '('
-			std::vector<std::unique_ptr<ExprAST>> args;
+			std::vector<CallArgument> args;
 			if (!check(TokenType::RPAREN)) {
-				args.push_back(parseBitwiseOr());
+				auto argExpr = parseBitwiseOr();
+				int argLine = argExpr->line;
+				int argCol = argExpr->column;
+				args.push_back(CallArgument(std::move(argExpr), argLine, argCol));
 				while (check(TokenType::COMMA)) {
 					advance();
-					args.push_back(parseBitwiseOr());
+					auto nextArg = parseBitwiseOr();
+					int nextLine = nextArg->line;
+					int nextCol = nextArg->column;
+					args.push_back(CallArgument(std::move(nextArg), nextLine, nextCol));
 				}
 			}
 			expectAdvance(TokenType::RPAREN, "Expected ')' after function arguments");

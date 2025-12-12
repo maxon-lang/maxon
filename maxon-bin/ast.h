@@ -83,6 +83,9 @@ class ExprAST : public ASTNode {
 	ExprAST(int l = 0, int c = 0) : line(l), column(c), endLine(0), endColumn(0) {}
 	virtual ~ExprAST() = default;
 
+	// Clone this expression (for default parameter value injection)
+	virtual ExprAST *clone() const { return nullptr; }
+
 	// Helper to get the full source range of this expression
 	SourceRange getSourceRange() const {
 		return SourceRange(line, column, endLine, endColumn);
@@ -101,6 +104,7 @@ class NumberExprAST : public ExprAST {
 	int value;
 
 	NumberExprAST(int val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
+	ExprAST *clone() const override { return new NumberExprAST(value, line, column); }
 };
 
 // Byte literal (8-bit unsigned, 0-255)
@@ -109,6 +113,7 @@ class ByteExprAST : public ExprAST {
 	uint8_t value;
 
 	ByteExprAST(uint8_t val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
+	ExprAST *clone() const override { return new ByteExprAST(value, line, column); }
 };
 
 // Float literal
@@ -119,6 +124,7 @@ class FloatExprAST : public ExprAST {
 
 	FloatExprAST(double val, int l = 0, int c = 0, const std::string &literal = "")
 		: ExprAST(l, c), value(val), literalString(literal) {}
+	ExprAST *clone() const override { return new FloatExprAST(value, line, column, literalString); }
 };
 
 // Variable reference
@@ -129,6 +135,7 @@ class VariableExprAST : public ExprAST {
 	mutable std::string resolvedFunctionName; // Fully qualified function name if isFunctionReference
 
 	VariableExprAST(const std::string &n, int l = 0, int c = 0) : ExprAST(l, c), name(n) {}
+	ExprAST *clone() const override { return new VariableExprAST(name, line, column); }
 };
 
 // Boolean literal
@@ -137,6 +144,7 @@ class BooleanExprAST : public ExprAST {
 	bool value;
 
 	BooleanExprAST(bool val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
+	ExprAST *clone() const override { return new BooleanExprAST(value, line, column); }
 };
 
 // Character literal (grapheme cluster - may contain multiple bytes/codepoints)
@@ -145,6 +153,7 @@ class CharacterExprAST : public ExprAST {
 	std::string value; // UTF-8 encoded grapheme cluster
 
 	CharacterExprAST(const std::string &val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
+	ExprAST *clone() const override { return new CharacterExprAST(value, line, column); }
 };
 
 // String literal
@@ -155,12 +164,14 @@ class StringLiteralExprAST : public ExprAST {
 
 	StringLiteralExprAST(const std::string &val, int l = 0, int c = 0)
 		: ExprAST(l, c), value(val) {}
+	ExprAST *clone() const override { return new StringLiteralExprAST(value, line, column); }
 };
 
 // Nil literal (represents absence in optional types)
 class NilExprAST : public ExprAST {
   public:
 	NilExprAST(int l = 0, int c = 0) : ExprAST(l, c) {}
+	ExprAST *clone() const override { return new NilExprAST(line, column); }
 };
 
 // Type cast expression (e.g., "value as ptr")
@@ -194,15 +205,33 @@ class UnaryExprAST : public ExprAST {
 		: ExprAST(line, col), op(o), operand(std::move(expr)) {}
 };
 
+// Call argument (for named arguments)
+struct CallArgument {
+	std::string name; // Empty string = positional argument, otherwise the parameter name used
+	std::unique_ptr<ExprAST> value;
+	int line;
+	int column;
+
+	CallArgument(std::unique_ptr<ExprAST> val, int l = 0, int c = 0, const std::string &n = "")
+		: name(n), value(std::move(val)), line(l), column(c) {}
+
+	// Check if this is a named argument
+	bool isNamed() const { return !name.empty(); }
+};
+
 // Function call
 class CallExprAST : public ExprAST {
   public:
 	std::string callee;
 	std::string resolvedCallee; // Resolved name (e.g., "map<int,int>.count" instead of just "count")
-	std::vector<std::unique_ptr<ExprAST>> args;
+	std::vector<CallArgument> args;
 	size_t functionId = SIZE_MAX;		 // Resolved during semantic analysis (SIZE_MAX = unresolved)
 	bool isSiblingMethodCall = false;	 // True when calling another method of the same type from within a method
 	bool isFunctionVariableCall = false; // True when calling via a function-typed variable (e.g., callback(x))
+
+	// For named arguments: maps args[i] to funcInfo.parameters[argToParamMapping[i]]
+	// This allows codegen to reorder arguments when named args are used out of order
+	std::vector<size_t> argToParamMapping;
 
 	// For enum case construction with associated values (e.g., Result.success(42))
 	mutable std::string resolvedEnumName;	  // Set during semantic analysis if this is an enum case construction
@@ -211,7 +240,7 @@ class CallExprAST : public ExprAST {
 	// Helper to check if this call is an enum case construction
 	bool isEnumCaseConstruction() const { return !resolvedEnumName.empty(); }
 
-	CallExprAST(const std::string &c, std::vector<std::unique_ptr<ExprAST>> a, int l = 0, int col = 0)
+	CallExprAST(const std::string &c, std::vector<CallArgument> a, int l = 0, int col = 0)
 		: ExprAST(l, col), callee(c), args(std::move(a)) {}
 };
 
@@ -451,7 +480,7 @@ class IfStmtAST : public StmtAST {
 	std::unique_ptr<ExprAST> condition;
 	std::vector<std::unique_ptr<StmtAST>> thenBody;
 	std::vector<std::unique_ptr<StmtAST>> elseBody;
-	std::string blockId;     // Block identifier for the if/then branch
+	std::string blockId;	 // Block identifier for the if/then branch
 	std::string elseBlockId; // Block identifier for the else branch (empty if no else)
 
 	IfStmtAST(std::unique_ptr<ExprAST> cond,
@@ -474,7 +503,7 @@ class IfLetStmtAST : public StmtAST {
 	std::unique_ptr<ExprAST> optionalExpr;
 	std::vector<std::unique_ptr<StmtAST>> thenBody;
 	std::vector<std::unique_ptr<StmtAST>> elseBody;
-	std::string blockId;     // Block identifier for the if-let/then branch
+	std::string blockId;	 // Block identifier for the if-let/then branch
 	std::string elseBlockId; // Block identifier for the else branch (empty if no else)
 
 	IfLetStmtAST(const std::string &name,
@@ -590,14 +619,23 @@ class ErrorStmtAST : public StmtAST {
 };
 
 // Function parameter (defined early for use by InterfaceMethodSignature)
+// named arguments: name type [= default]
+// - name: Parameter name (used both internally and at call site for named arguments)
+// - defaultValue: Optional default value expression (nullptr if required parameter)
+// Parameters with defaults can ONLY be provided via named arguments at call site
 struct FunctionParameter {
 	std::string name;
 	std::string type;
+	std::shared_ptr<ExprAST> defaultValue; // nullptr if no default (required parameter)
 	int line;
 	int column;
 
-	FunctionParameter(const std::string &n, const std::string &t, int l = 0, int c = 0)
-		: name(n), type(t), line(l), column(c) {}
+	FunctionParameter(const std::string &n, const std::string &t, int l = 0, int c = 0,
+					  std::shared_ptr<ExprAST> defVal = nullptr)
+		: name(n), type(t), defaultValue(std::move(defVal)), line(l), column(c) {}
+
+	// Check if this parameter has a default value
+	bool hasDefault() const { return defaultValue != nullptr; }
 };
 
 // Interface method signature (for interface definitions)

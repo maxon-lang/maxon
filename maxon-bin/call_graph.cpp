@@ -221,7 +221,7 @@ void CallGraphBuilder::extractCallsFromExpr(ExprAST *expr, std::set<std::string>
 
 		// Also extract calls from arguments
 		for (const auto &arg : callExpr->args) {
-			extractCallsFromExpr(arg.get(), calls);
+			extractCallsFromExpr(arg.value.get(), calls);
 		}
 	} else if (auto *binaryExpr = dynamic_cast<BinaryExprAST *>(expr)) {
 		extractCallsFromExpr(binaryExpr->left.get(), calls);

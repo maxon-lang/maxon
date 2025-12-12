@@ -80,6 +80,7 @@ class Parser {
 	std::unique_ptr<ExprAST> parseBitwiseOr();
 	std::unique_ptr<ExprAST> parseLogicalAnd();
 	std::unique_ptr<ExprAST> parseLogicalOr();
+	CallArgument parseNamedArgument(); // Parse potentially named argument (name = expr or just expr)
 	std::unique_ptr<ExprAST> parseComparison();
 	std::unique_ptr<ExprAST> parseShift();
 	std::unique_ptr<ExprAST> parseAdditive();

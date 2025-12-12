@@ -1,0 +1,59 @@
+// Test: parameter-labels.named-args.1
+function multiply(x int, y int) returns int
+    return x * y
+end 'multiply'
+
+function main() returns int
+    return multiply(x = 6, y = 7)
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 4
+
+define i32 @main() {
+entry0:
+  ret i32 42
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 13
+
+define i32 @multiply(i32 %x, i32 %y) {
+entry0:
+  %0 = alloca i32
+  store i32 %x, ptr %0
+  %1 = alloca i32
+  store i32 %y, ptr %1
+  %2 = load i32, ptr %0
+  %3 = load i32, ptr %1
+  %4 = mul i32 %2, %3
+  ret i32 %4
+}
+
+define i32 @main() {
+entry0:
+  %0 = call i32 @multiply(i32 6, i32 7)
+  ret i32 %0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 42

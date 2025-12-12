@@ -29,7 +29,7 @@ struct IntArray is Container with int
     function Container.get(index int) returns int
         return data[index]
     end 'get'
-    
+
     function Container.set(index int, value int) returns IntArray
         data[index] = value
         return IntArray{data: data}

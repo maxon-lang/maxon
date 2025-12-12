@@ -131,7 +131,7 @@ MIRCodeGenerator::ArrayFieldInfo MIRCodeGenerator::getManagedArrayInfo(ExprAST *
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_len(CallExprAST *callExpr) {
 	// __managed_array_len(arr) - get current length from struct field 1
-	ExprAST *arrayArg = callExpr->args[0].get();
+	ExprAST *arrayArg = callExpr->args[0].value.get();
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
 	if (!info.dataPtr) {
@@ -144,7 +144,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_len(CallExprAST *callEx
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_capacity(CallExprAST *callExpr) {
 	// __managed_array_capacity(arr) - get current capacity from struct field 2
-	ExprAST *arrayArg = callExpr->args[0].get();
+	ExprAST *arrayArg = callExpr->args[0].value.get();
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
 	if (!info.dataPtr) {
@@ -157,8 +157,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_capacity(CallExprAST *c
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_length(CallExprAST *callExpr) {
 	// __managed_array_set_length(arr, newLen) - set length in struct field 1
-	ExprAST *arrayArg = callExpr->args[0].get();
-	mir::MIRValue *newLen = generateExpr(callExpr->args[1].get());
+	ExprAST *arrayArg = callExpr->args[0].value.get();
+	mir::MIRValue *newLen = generateExpr(callExpr->args[1].value.get());
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
 	if (!info.dataPtr) {
@@ -173,8 +173,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_length(CallExprAST 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_capacity(CallExprAST *callExpr) {
 	// __managed_array_set_capacity(arr, newCap) - set capacity in struct field 2
 	// Used to "transfer ownership" - setting capacity to 0 prevents cleanup
-	ExprAST *arrayArg = callExpr->args[0].get();
-	mir::MIRValue *newCap = generateExpr(callExpr->args[1].get());
+	ExprAST *arrayArg = callExpr->args[0].value.get();
+	mir::MIRValue *newCap = generateExpr(callExpr->args[1].value.get());
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
 	if (!info.dataPtr) {
@@ -189,8 +189,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_capacity(CallExprAS
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_grow(CallExprAST *callExpr) {
 	// __managed_array_grow(arr, minCapacity) - grow array if needed
 	// Uses tracked allocation via _managed_array_alloc/_managed_array_release
-	ExprAST *arrayArg = callExpr->args[0].get();
-	mir::MIRValue *minCapacity = generateExpr(callExpr->args[1].get());
+	ExprAST *arrayArg = callExpr->args[0].value.get();
+	mir::MIRValue *minCapacity = generateExpr(callExpr->args[1].value.get());
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
 	ManagedArrayBuilder mab(*this, info.elementType);
@@ -290,9 +290,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_grow(CallExprAST *callE
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_at(CallExprAST *callExpr) {
 	// __managed_array_set_at(arr, index, value) - set element at index
-	ExprAST *arrayArg = callExpr->args[0].get();
-	mir::MIRValue *index = generateExpr(callExpr->args[1].get());
-	mir::MIRValue *value = generateExpr(callExpr->args[2].get());
+	ExprAST *arrayArg = callExpr->args[0].value.get();
+	mir::MIRValue *index = generateExpr(callExpr->args[1].value.get());
+	mir::MIRValue *value = generateExpr(callExpr->args[2].value.get());
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
 	if (!info.dataPtr) {
@@ -309,8 +309,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_at(CallExprAST *cal
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_get_at(CallExprAST *callExpr) {
 	// __managed_array_get_at(arr, index) - get element at index
-	ExprAST *arrayArg = callExpr->args[0].get();
-	mir::MIRValue *index = generateExpr(callExpr->args[1].get());
+	ExprAST *arrayArg = callExpr->args[0].value.get();
+	mir::MIRValue *index = generateExpr(callExpr->args[1].value.get());
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
 	if (!info.dataPtr) {
@@ -325,9 +325,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_get_at(CallExprAST *cal
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_shift_right(CallExprAST *callExpr) {
 	// __managed_array_shift_right(arr, start, count) - shift elements right for insert
-	ExprAST *arrayArg = callExpr->args[0].get();
-	mir::MIRValue *start = generateExpr(callExpr->args[1].get());
-	mir::MIRValue *count = generateExpr(callExpr->args[2].get());
+	ExprAST *arrayArg = callExpr->args[0].value.get();
+	mir::MIRValue *start = generateExpr(callExpr->args[1].value.get());
+	mir::MIRValue *count = generateExpr(callExpr->args[2].value.get());
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// Get element type and size
@@ -374,9 +374,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_shift_right(CallExprAST
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_shift_left(CallExprAST *callExpr) {
 	// __managed_array_shift_left(arr, start, count) - shift elements left for remove
-	ExprAST *arrayArg = callExpr->args[0].get();
-	mir::MIRValue *start = generateExpr(callExpr->args[1].get());
-	mir::MIRValue *count = generateExpr(callExpr->args[2].get());
+	ExprAST *arrayArg = callExpr->args[0].value.get();
+	mir::MIRValue *start = generateExpr(callExpr->args[1].value.get());
+	mir::MIRValue *count = generateExpr(callExpr->args[2].value.get());
 	ArrayFieldInfo info = getManagedArrayInfo(arrayArg, callExpr->line, callExpr->column);
 
 	// Get element type and size

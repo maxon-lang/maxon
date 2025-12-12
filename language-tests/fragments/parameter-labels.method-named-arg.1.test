@@ -1,0 +1,100 @@
+// Test: parameter-labels.method-named-arg.1
+struct Counter
+    var value int
+
+    function add(amount int) returns Counter
+        return Counter{value: value + amount}
+    end 'add'
+end 'Counter'
+
+function main() returns int
+    var c = Counter{value: 10}
+    c = c.add(amount = 5)
+    return c.value
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 19
+
+%Counter = type { i32 }
+
+define %Counter @Counter.add(ptr %self, i32 %amount) {
+entry0:
+  %2 = alloca %Counter
+  %4 = getelementptr %Counter, ptr %self, i32 0, i32 0
+  %5 = load i32, ptr %4
+  %7 = add i32 %5, %amount
+  %8 = getelementptr %Counter, ptr %2, i32 0, i32 0
+  store i32 %7, ptr %8
+  %9 = load %Counter, ptr %2
+  ret %Counter %9
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Counter
+  %1 = getelementptr %Counter, ptr %0, i32 0, i32 0
+  store i32 10, ptr %1
+  %2 = call %Counter @Counter.add(ptr %0, i32 5)
+  store %Counter %2, ptr %0
+  %3 = getelementptr %Counter, ptr %0, i32 0, i32 0
+  %4 = load i32, ptr %3
+  ret i32 %4
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 25
+
+%Counter = type { i32 }
+
+define %Counter @Counter.add(ptr %self, i32 %amount) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 %amount, ptr %1
+  %2 = alloca %Counter
+  %3 = load ptr, ptr %0
+  %4 = getelementptr %Counter, ptr %3, i32 0, i32 0
+  %5 = load i32, ptr %4
+  %6 = load i32, ptr %1
+  %7 = add i32 %5, %6
+  %8 = getelementptr %Counter, ptr %2, i32 0, i32 0
+  store i32 %7, ptr %8
+  %9 = load %Counter, ptr %2
+  ret %Counter %9
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Counter
+  %1 = getelementptr %Counter, ptr %0, i32 0, i32 0
+  store i32 10, ptr %1
+  %2 = call %Counter @Counter.add(ptr %0, i32 5)
+  store %Counter %2, ptr %0
+  %3 = getelementptr %Counter, ptr %0, i32 0, i32 0
+  %4 = load i32, ptr %3
+  ret i32 %4
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 15

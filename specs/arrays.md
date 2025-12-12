@@ -314,14 +314,14 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 5
+Semantic Error: line 4, column 14
 Function 'push' argument type mismatch
   Parameter 2 ('value')
   Expected type: array<int>
   Found type: int
 
   4 |     arr.push(4)
-    |     ^
+    |              ^
 ```
 
 <!-- test: error.pop-on-static-array -->
@@ -345,14 +345,14 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 5
+Semantic Error: line 4, column 14
 Function 'push' argument type mismatch
   Parameter 2 ('value')
   Expected type: int
   Found type: float
 
   4 |     arr.push(3.14)
-    |     ^
+    |              ^
 ```
 
 <!-- test: error.non-integer-index -->

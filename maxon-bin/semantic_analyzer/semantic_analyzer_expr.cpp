@@ -152,15 +152,19 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				// Ensure consistent types
 				if (entryKeyType != keyType) {
 					addError("Inconsistent key types in map literal\n"
-							 "  First key type: " + keyType + "\n"
-							 "  This key type: " + entryKeyType,
+							 "  First key type: " +
+								 keyType + "\n"
+										   "  This key type: " +
+								 entryKeyType,
 							 entry.key->line, entry.key->column);
 					return "error";
 				}
 				if (entryValueType != valueType) {
 					addError("Inconsistent value types in map literal\n"
-							 "  First value type: " + valueType + "\n"
-							 "  This value type: " + entryValueType,
+							 "  First value type: " +
+								 valueType + "\n"
+											 "  This value type: " +
+								 entryValueType,
 							 entry.value->line, entry.value->column);
 					return "error";
 				}
@@ -579,7 +583,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 			// Analyze arguments - allow int, byte, or float (int/byte are implicitly promoted)
 			for (auto &arg : callExpr->args) {
-				std::string argType = analyzeExpression(arg.get());
+				std::string argType = analyzeExpression(arg.value.get());
 				if (argType != "int" && argType != "byte" && argType != "float" && argType != "error") {
 					addError("Function '" + callExpr->callee + "' requires numeric argument, got " + argType,
 							 expr->line, expr->column);
@@ -604,7 +608,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 			// Validate each argument type
 			for (size_t i = 0; i < intrinsic->params.size(); ++i) {
-				std::string argType = analyzeExpression(callExpr->args[i].get());
+				std::string argType = analyzeExpression(callExpr->args[i].value.get());
 				std::string error = IntrinsicRegistry::instance().validateArgType(intrinsic->params[i], argType);
 				if (!error.empty()) {
 					addError(intrinsic->name + " argument " + std::to_string(i + 1) + ": " + error,
@@ -651,13 +655,13 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 					// Type check each associated value argument
 					for (size_t i = 0; i < callExpr->args.size(); i++) {
-						std::string argType = analyzeExpression(callExpr->args[i].get());
+						std::string argType = analyzeExpression(callExpr->args[i].value.get());
 						const std::string &expectedType = caseInfo->associatedValues[i].type;
 
 						if (!typesMatch(expectedType, argType)) {
 							addError("Type mismatch for associated value '" + caseInfo->associatedValues[i].name +
 										 "': expected '" + expectedType + "', got '" + argType + "'",
-									 callExpr->args[i]->line, callExpr->args[i]->column);
+									 callExpr->args[i].line, callExpr->args[i].column);
 						}
 					}
 
@@ -706,7 +710,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 						 expr->line, expr->column);
 				// Still analyze arguments to mark variables as used
 				for (auto &arg : callExpr->args) {
-					analyzeExpression(arg.get());
+					analyzeExpression(arg.value.get());
 				}
 				return "error";
 			}
@@ -790,7 +794,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 					// Check argument types
 					for (size_t i = 0; i < callExpr->args.size(); i++) {
-						std::string argType = analyzeExpression(callExpr->args[i].get());
+						std::string argType = analyzeExpression(callExpr->args[i].value.get());
 						std::string expectedType = expectedParamTypes[i];
 
 						bool isValidType = typesMatch(expectedType, argType);
@@ -821,7 +825,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 						 expr->line, expr->column);
 				// Still analyze arguments to mark variables as used
 				for (auto &arg : callExpr->args) {
-					analyzeExpression(arg.get());
+					analyzeExpression(arg.value.get());
 				}
 				return "error";
 			} else if (matches.size() > 1) {
@@ -832,7 +836,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 				if (!callExpr->args.empty()) {
 					// Get the type of the first argument
-					std::string firstArgType = analyzeExpression(callExpr->args[0].get());
+					std::string firstArgType = analyzeExpression(callExpr->args[0].value.get());
 					logTrace("Method disambiguation: callee='" + callExpr->callee + "' firstArgType='" + firstArgType + "'");
 
 					// Look for a method with matching qualifier (Type.method where Type == firstArgType)
@@ -904,7 +908,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 					addError(errorMsg, expr->line, expr->column);
 					// Still analyze remaining arguments to mark variables as used (first already analyzed)
 					for (size_t i = 1; i < callExpr->args.size(); ++i) {
-						analyzeExpression(callExpr->args[i].get());
+						analyzeExpression(callExpr->args[i].value.get());
 					}
 					return "error";
 				}
@@ -930,7 +934,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 					 expr->line, expr->column);
 			// Still analyze arguments to mark variables as used
 			for (auto &arg : callExpr->args) {
-				analyzeExpression(arg.get());
+				analyzeExpression(arg.value.get());
 			}
 			return "error";
 		}
@@ -946,7 +950,6 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Check if this is a sibling method call (calling another method of the same type from within a method)
 		// In this case, the caller passes N args but the method expects N+1 (with implicit self)
 		bool isSiblingMethodCall = false;
-		size_t expectedArgCount = funcInfo.parameters.size();
 
 		if (!currentReceiverType.empty() && funcInfo.parameters.size() > 0) {
 			// We're inside a method - check if the called function is a method of the same type
@@ -959,83 +962,201 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 					funcInfo.parameters[0].name == "self" &&
 					funcInfo.parameters[0].type == currentReceiverType) {
 					isSiblingMethodCall = true;
-					expectedArgCount = funcInfo.parameters.size() - 1; // Don't count implicit self
-					callExpr->isSiblingMethodCall = true;			   // Mark for codegen
+					callExpr->isSiblingMethodCall = true; // Mark for codegen
 				}
 			}
 		}
 
-		// Check argument count
-		if (callExpr->args.size() != expectedArgCount) {
-			addError("Function '" + callExpr->callee + "' argument count mismatch" +
-						 std::string("\n  Expected: ") + std::to_string(expectedArgCount) + " argument" +
-						 (expectedArgCount == 1 ? "" : "s") +
-						 "\n  Found: " + std::to_string(callExpr->args.size()) + " argument" +
-						 (callExpr->args.size() == 1 ? "" : "s"),
-					 expr->line, expr->column);
-			return funcInfo.returnType;
-		}
-
-		// Check argument types
 		// For sibling method calls, args[i] corresponds to funcInfo.parameters[i+1] (skip self)
 		size_t paramOffset = isSiblingMethodCall ? 1 : 0;
 
-		// For generic methods (like array.push), we need to substitute type parameters
-		// Get the first argument type to determine the concrete element type
+		// named arguments validation:
+		// - Positional args come first, fill required params in order
+		// - Named args can appear in any order after positional args
+		// - Params with defaults can ONLY be provided via named arguments
+		// - Once a named arg is seen, all remaining must be named
+
+		// Count required parameters (those without defaults, excluding self)
+		size_t requiredParamCount = 0;
+		for (size_t i = paramOffset; i < funcInfo.parameters.size(); i++) {
+			if (!funcInfo.parameters[i].hasDefault()) {
+				requiredParamCount++;
+			}
+		}
+
+		// Track which parameters have been filled
+		std::vector<bool> paramFilled(funcInfo.parameters.size(), false);
+		if (paramOffset > 0) {
+			paramFilled[0] = true; // self is always filled implicitly
+		}
+
+		// Track argument-to-parameter mapping for codegen reordering
+		std::vector<size_t> argToParamMapping(callExpr->args.size());
+
+		// For generic methods, we need to infer concrete element type from first array arg
 		std::string concreteElementType;
-		std::string firstArgTypeCache;
-		if (!callExpr->args.empty()) {
-			firstArgTypeCache = analyzeExpression(callExpr->args[0].get());
-			if (maxon::TypeConversion::isArrayStructType(firstArgTypeCache) ||
-				maxon::TypeConversion::isManagedArrayType(firstArgTypeCache)) {
-				concreteElementType = maxon::TypeConversion::getArrayElementType(firstArgTypeCache);
+
+		bool seenNamedArg = false;
+		size_t positionalParamIdx = paramOffset; // Next param to fill positionally
+
+		for (size_t argIdx = 0; argIdx < callExpr->args.size(); argIdx++) {
+			const CallArgument &arg = callExpr->args[argIdx];
+
+			if (arg.isNamed()) {
+				// Named argument
+				seenNamedArg = true;
+
+				// Find matching parameter by name
+				size_t matchedParamIdx = SIZE_MAX;
+				for (size_t i = paramOffset; i < funcInfo.parameters.size(); i++) {
+					if (funcInfo.parameters[i].name == arg.name) {
+						matchedParamIdx = i;
+						break;
+					}
+				}
+
+				if (matchedParamIdx == SIZE_MAX) {
+					addError("Unknown parameter name '" + arg.name + "'" +
+								 std::string("\n  Function '") + callExpr->callee + "' has no parameter with this name",
+							 arg.line, arg.column);
+					continue;
+				}
+
+				if (paramFilled[matchedParamIdx]) {
+					addError("Duplicate argument for parameter '" + arg.name + "'" +
+								 std::string("\n  Parameter already provided"),
+							 arg.line, arg.column);
+					continue;
+				}
+
+				paramFilled[matchedParamIdx] = true;
+				argToParamMapping[argIdx] = matchedParamIdx;
+
+				// Type check the argument
+				const FunctionParameter &param = funcInfo.parameters[matchedParamIdx];
+				std::string argType = analyzeExpression(arg.value.get());
+				std::string expectedType = param.type;
+
+				// Cache array element type for generic type inference
+				if (concreteElementType.empty() &&
+					(maxon::TypeConversion::isArrayStructType(argType) ||
+					 maxon::TypeConversion::isManagedArrayType(argType))) {
+					concreteElementType = maxon::TypeConversion::getArrayElementType(argType);
+				}
+
+				// Substitute generic type parameter
+				if (!concreteElementType.empty() && expectedType == "Element") {
+					expectedType = concreteElementType;
+				}
+
+				bool isValidType = typesMatch(expectedType, argType);
+				if (!isValidType) {
+					isValidType = maxon::TypeConversion::canConvertImplicitly(argType, expectedType);
+				}
+				if (!isValidType && isOptionalType(expectedType)) {
+					std::string unwrapped = unwrapOptionalType(expectedType);
+					if (argType == "nil" || typesMatch(unwrapped, argType)) {
+						isValidType = true;
+					}
+				}
+
+				if (!isValidType) {
+					addError("Function '" + callExpr->callee + "' argument type mismatch" +
+								 std::string("\n  Parameter '") + param.name + "'" +
+								 "\n  Expected type: " + expectedType +
+								 "\n  Found type: " + argType,
+							 arg.line, arg.column);
+				}
+			} else {
+				// Positional argument
+				if (seenNamedArg) {
+					addError("Positional argument after named argument" +
+								 std::string("\n  All positional arguments must come before named arguments"),
+							 arg.line, arg.column);
+					continue;
+				}
+
+				// Skip params that have defaults - they can only be filled by named args
+				while (positionalParamIdx < funcInfo.parameters.size() &&
+					   funcInfo.parameters[positionalParamIdx].hasDefault()) {
+					positionalParamIdx++;
+				}
+
+				if (positionalParamIdx >= funcInfo.parameters.size()) {
+					addError("Too many positional arguments" +
+								 std::string("\n  Function '") + callExpr->callee + "' has " +
+								 std::to_string(requiredParamCount) + " required parameter" +
+								 (requiredParamCount == 1 ? "" : "s"),
+							 arg.line, arg.column);
+					continue;
+				}
+
+				const FunctionParameter &param = funcInfo.parameters[positionalParamIdx];
+				paramFilled[positionalParamIdx] = true;
+				argToParamMapping[argIdx] = positionalParamIdx;
+
+				// Type check
+				std::string argType = analyzeExpression(arg.value.get());
+				std::string expectedType = param.type;
+
+				// Cache array element type for generic type inference
+				if (concreteElementType.empty() &&
+					(maxon::TypeConversion::isArrayStructType(argType) ||
+					 maxon::TypeConversion::isManagedArrayType(argType))) {
+					concreteElementType = maxon::TypeConversion::getArrayElementType(argType);
+				}
+
+				if (!concreteElementType.empty() && expectedType == "Element") {
+					expectedType = concreteElementType;
+				}
+
+				bool isValidType = typesMatch(expectedType, argType);
+				if (!isValidType) {
+					isValidType = maxon::TypeConversion::canConvertImplicitly(argType, expectedType);
+				}
+				if (!isValidType && isOptionalType(expectedType)) {
+					std::string unwrapped = unwrapOptionalType(expectedType);
+					if (argType == "nil" || typesMatch(unwrapped, argType)) {
+						isValidType = true;
+					}
+				}
+
+				if (!isValidType) {
+					addError("Function '" + callExpr->callee + "' argument type mismatch" +
+								 std::string("\n  Parameter ") + std::to_string(positionalParamIdx + 1 - paramOffset) +
+								 " ('" + param.name + "')" +
+								 "\n  Expected type: " + expectedType +
+								 "\n  Found type: " + argType,
+							 arg.line, arg.column);
+				}
+
+				positionalParamIdx++;
 			}
 		}
 
-		for (size_t i = 0; i < callExpr->args.size(); i++) {
-			// Use cached first arg type to avoid re-analyzing
-			std::string argType = (i == 0 && !firstArgTypeCache.empty())
-				? firstArgTypeCache
-				: analyzeExpression(callExpr->args[i].get());
-			std::string expectedType = funcInfo.parameters[i + paramOffset].type;
-
-			// Substitute generic type parameter "Element" with the concrete element type
-			if (!concreteElementType.empty() && expectedType == "Element") {
-				expectedType = concreteElementType;
-			}
-
-			// Use centralized type conversion rules for validation
-			bool isValidType = typesMatch(expectedType, argType);
-			// Check implicit conversion (e.g., int/byte -> float)
-			if (!isValidType) {
-				isValidType = maxon::TypeConversion::canConvertImplicitly(argType, expectedType);
-			}
-
-			// Handle optional parameter types: if parameter is "T or nil"
-			// Accept: (1) nil, (2) T, (3) T or nil
-			if (!isValidType && isOptionalType(expectedType)) {
-				std::string unwrappedExpected = unwrapOptionalType(expectedType);
-
-				// Case 1: Passing nil to optional parameter
-				if (argType == "nil") {
-					isValidType = true;
+		// Check for missing required parameters and inject default values for omitted optional params
+		for (size_t i = paramOffset; i < funcInfo.parameters.size(); i++) {
+			const FunctionParameter &param = funcInfo.parameters[i];
+			if (!paramFilled[i]) {
+				if (!param.hasDefault()) {
+					addError("Missing required argument for parameter '" + param.name + "'" +
+								 std::string("\n  Add: ") + param.name + " = <value>",
+							 expr->line, expr->column);
+				} else {
+					// Inject the default value expression as an argument
+					// Clone the default expression and add it to the call arguments
+					auto defaultExprCopy = param.defaultValue->clone();
+					callExpr->args.push_back(CallArgument(
+						std::unique_ptr<ExprAST>(defaultExprCopy),
+						expr->line, expr->column, param.name));
+					argToParamMapping.push_back(i);
+					paramFilled[i] = true;
 				}
-				// Case 2: Passing unwrapped type T to optional parameter T or nil (implicit wrap)
-				else if (typesMatch(unwrappedExpected, argType)) {
-					isValidType = true;
-				}
-				// Case 3: Already checked by typesMatch above (T or nil → T or nil)
-			}
-
-			if (!isValidType) {
-				addError("Function '" + callExpr->callee + "' argument type mismatch" +
-							 std::string("\n  Parameter ") + std::to_string(i + 1) + " ('" +
-							 funcInfo.parameters[i + paramOffset].name + "')" +
-							 "\n  Expected type: " + expectedType +
-							 "\n  Found type: " + argType,
-						 expr->line, expr->column);
 			}
 		}
+
+		// Store the argument-to-parameter mapping for codegen
+		callExpr->argToParamMapping = std::move(argToParamMapping);
 
 		return funcInfo.returnType;
 

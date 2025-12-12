@@ -70,17 +70,43 @@ Token Parser::expectMatchingBlockId(const std::string &expectedName, const std::
 }
 
 // Parse parameter list with optional self injection for methods
+// named arguments: name type [= default]
+// Parameters with defaults can only be provided via named arguments at call site
 std::vector<FunctionParameter> Parser::parseParameterList(const std::string *selfType,
 														  int selfLine, int selfColumn) {
 	std::vector<FunctionParameter> parameters;
 	if (selfType) {
+		// self parameter for method receiver
 		parameters.push_back(FunctionParameter("self", *selfType, selfLine, selfColumn));
 	}
+
+	bool hadDefaultValue = false; // Track if we've seen a parameter with default
+
 	if (!check(TokenType::RPAREN)) {
 		do {
-			Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
+			int paramLine = currentLine();
+			int paramColumn = currentColumn();
+
+			// Parse parameter name
+			Token nameTok = expect(TokenType::IDENTIFIER, "Expected parameter name");
+			std::string name = nameTok.value;
+
+			// Parse the type
 			std::string paramType = parseTypeStringWithOptional("parameter type");
-			parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
+
+			// Check for default value
+			std::shared_ptr<ExprAST> defaultValue = nullptr;
+			if (match(TokenType::ASSIGN)) {
+				auto expr = parseLogicalOr();
+				defaultValue = std::shared_ptr<ExprAST>(expr.release());
+				hadDefaultValue = true;
+			} else if (hadDefaultValue) {
+				// Parameters with defaults must come after required parameters
+				reportError("Required parameter '" + name + "' cannot follow parameter with default value",
+							paramLine, paramColumn);
+			}
+
+			parameters.push_back(FunctionParameter(name, paramType, paramLine, paramColumn, defaultValue));
 		} while (match(TokenType::COMMA));
 	}
 	return parameters;
@@ -122,9 +148,10 @@ std::string Parser::parseReturnType(int rparenLine, bool allowSelfType, const st
 		return returnType;
 	}
 	reportError("Function '" + functionName + "' is missing 'returns' keyword and return type\n"
-				"  All functions must specify 'returns' followed by a return type\n"
-				"  Example: function " + functionName + "(...) returns int\n"
-				"  For functions that don't return a value, use: returns nothing",
+											  "  All functions must specify 'returns' followed by a return type\n"
+											  "  Example: function " +
+					functionName + "(...) returns int\n"
+								   "  For functions that don't return a value, use: returns nothing",
 				currentLine(), currentColumn());
 	return "void"; // Return void to continue parsing after error
 }
@@ -612,21 +639,27 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 		expectAdvance(TokenType::LPAREN, "Expected '(' after method name");
 
 		// Parse parameters (no self parameter - it's implicit)
+		// named arguments: name type
 		std::vector<FunctionParameter> parameters;
 		if (!check(TokenType::RPAREN)) {
 			do {
-				Token paramName = expect(TokenType::IDENTIFIER, "Expected parameter name");
+				int paramLine = currentLine();
+				int paramColumn = currentColumn();
+
+				// Parse parameter name
+				Token nameTok = expect(TokenType::IDENTIFIER, "Expected parameter name");
+				std::string name = nameTok.value;
 
 				// Handle Self type specially, otherwise use unified type parser
 				std::string paramType;
-				if (check(TokenType::IDENTIFIER) && std::string(currentValue()) == "Self") {
+				if (check(TokenType::IDENTIFIER) && currentValue() == "Self") {
 					paramType = "Self";
 					advance();
 				} else {
 					paramType = parseTypeString("parameter type");
 				}
 
-				parameters.push_back(FunctionParameter(paramName.value, paramType, paramName.line, paramName.column));
+				parameters.push_back(FunctionParameter(name, paramType, paramLine, paramColumn));
 			} while (match(TokenType::COMMA));
 		}
 

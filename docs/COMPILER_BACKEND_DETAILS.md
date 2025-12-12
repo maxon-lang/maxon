@@ -967,7 +967,7 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 ### Winchester 1.3 (2025-01-xx)
 
 **Generic Type Monomorphization:**
-- Added Swift-style monomorphization for generic struct types
+- Added monomorphization for generic struct types
 - New `currentTypeBindings` map in codegen tracks type parameter substitutions
 - Dynamic method resolution resolves calls like `key.hash()` to concrete implementations
 - Support for specializing `map from K to V` with any key/value types

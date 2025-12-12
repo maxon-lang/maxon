@@ -125,7 +125,7 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 		// For method calls on a known type (e.g., s.toLower() becomes string.toLower),
 		// try looking up as Type.method if the first arg has a known type
 		if (!callExpr->args.empty()) {
-			std::string firstArgType = getExpressionMaxonType(callExpr->args[0].get());
+			std::string firstArgType = getExpressionMaxonType(callExpr->args[0].value.get());
 			if (!firstArgType.empty()) {
 				std::string qualifiedName = firstArgType + "." + callee;
 				auto qualIt = functionReturnTypes.find(qualifiedName);

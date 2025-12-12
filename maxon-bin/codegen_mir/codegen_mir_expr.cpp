@@ -1359,7 +1359,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				// Store each associated value
 				size_t offset = 0;
 				for (size_t i = 0; i < assocValues.size(); i++) {
-					mir::MIRValue *argValue = generateExpr(callExpr->args[i].get());
+					mir::MIRValue *argValue = generateExpr(callExpr->args[i].value.get());
 					if (!argValue) {
 						reportError("Failed to generate argument for enum case construction",
 									callExpr->line, callExpr->column);
@@ -1430,11 +1430,11 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			};
 
 			// Check if first arg is a variable
-			if (auto *varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].get())) {
+			if (auto *varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].value.get())) {
 				argType = lookupVarType(varExpr->name);
 			}
 			// Check if first arg is an array index (e.g., _keys[index] or elements[index])
-			else if (auto *arrayIndexExpr = dynamic_cast<ArrayIndexExprAST *>(callExpr->args[0].get())) {
+			else if (auto *arrayIndexExpr = dynamic_cast<ArrayIndexExprAST *>(callExpr->args[0].value.get())) {
 				std::string arrayName;
 				if (!arrayIndexExpr->arrayName.empty()) {
 					arrayName = arrayIndexExpr->arrayName;
@@ -1495,7 +1495,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				reportError("hash() requires self argument",
 							callExpr->line, callExpr->column);
 			}
-			mir::MIRValue *value = generateExpr(callExpr->args[0].get());
+			mir::MIRValue *value = generateExpr(callExpr->args[0].value.get());
 			// Extend byte/character to int if needed
 			if (effectiveCallee != "int.hash") {
 				value = builder->createZExt(value, mir::MIRType::getInt32(), "hash.extend");
@@ -1510,8 +1510,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				reportError("equals() requires self and other arguments",
 							callExpr->line, callExpr->column);
 			}
-			mir::MIRValue *self = generateExpr(callExpr->args[0].get());
-			mir::MIRValue *other = generateExpr(callExpr->args[1].get());
+			mir::MIRValue *self = generateExpr(callExpr->args[0].value.get());
+			mir::MIRValue *other = generateExpr(callExpr->args[1].value.get());
 			return builder->createICmpEq(self, other, "equals");
 		}
 
@@ -1529,7 +1529,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			// Generate arguments
 			std::vector<mir::MIRValue *> argsV;
 			for (size_t i = 0; i < callExpr->args.size(); i++) {
-				mir::MIRValue *argVal = generateExpr(callExpr->args[i].get());
+				mir::MIRValue *argVal = generateExpr(callExpr->args[i].value.get());
 				argsV.push_back(argVal);
 			}
 
@@ -1615,7 +1615,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					// Generate arguments
 					std::vector<mir::MIRValue *> argsV;
 					for (size_t i = 0; i < callExpr->args.size(); i++) {
-						mir::MIRValue *argVal = generateExpr(callExpr->args[i].get());
+						mir::MIRValue *argVal = generateExpr(callExpr->args[i].value.get());
 						argsV.push_back(argVal);
 					}
 
@@ -1666,14 +1666,45 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			}
 		}
 
-		for (size_t i = 0; i < callExpr->args.size(); i++) {
+		// Build inverse mapping: paramToArgMapping[paramIdx] = argIdx
+		// This allows us to generate arguments in parameter definition order
+		std::vector<int> paramToArgMapping;
+		size_t numSourceParams = callExpr->args.size(); // number of source-level arguments
+		if (!callExpr->argToParamMapping.empty()) {
+			// Find max param index to size the inverse mapping
+			size_t maxParamIdx = 0;
+			for (size_t paramIdx : callExpr->argToParamMapping) {
+				maxParamIdx = std::max(maxParamIdx, paramIdx);
+			}
+			paramToArgMapping.resize(maxParamIdx + 1, -1);
+			for (size_t i = 0; i < callExpr->argToParamMapping.size(); i++) {
+				paramToArgMapping[callExpr->argToParamMapping[i]] = static_cast<int>(i);
+			}
+			numSourceParams = maxParamIdx + 1;
+		}
+
+		for (size_t paramIdx = 0; paramIdx < numSourceParams; paramIdx++) {
+			// Find which argument corresponds to this parameter
+			size_t i;
+			if (!paramToArgMapping.empty()) {
+				int argIdxForParam = paramToArgMapping[paramIdx];
+				if (argIdxForParam < 0) {
+					// Parameter not provided - should have default value (handled by semantic analyzer)
+					continue;
+				}
+				i = static_cast<size_t>(argIdxForParam);
+			} else {
+				// No reordering needed - arguments are in parameter order
+				if (paramIdx >= callExpr->args.size()) break;
+				i = paramIdx;
+			}
 			auto &arg = callExpr->args[i];
 			mir::MIRType *paramType = (argIdx < calleeF->parameters.size())
 										  ? calleeF->parameters[argIdx]->type
 										  : mir::MIRType::getInt32();
 
 			// Handle array and struct arguments
-			if (auto *varExpr = dynamic_cast<VariableExprAST *>(arg.get())) {
+			if (auto *varExpr = dynamic_cast<VariableExprAST *>(arg.value.get())) {
 				std::string varType = variableTypes[varExpr->name];
 				mir::MIRValue *alloca = namedValues[varExpr->name];
 
@@ -1761,10 +1792,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			}
 
 			// Normal argument
-			mir::MIRValue *argVal = generateExpr(arg.get());
+			mir::MIRValue *argVal = generateExpr(arg.value.get());
 
 			// Check if argument is nil (generateExpr returns nullptr for nil)
-			bool isNilArg = (!argVal && dynamic_cast<NilExprAST *>(arg.get()));
+			bool isNilArg = (!argVal && dynamic_cast<NilExprAST *>(arg.value.get()));
 			if (!argVal && !isNilArg) {
 				reportError("Failed to generate function argument",
 							callExpr->line, callExpr->column);
@@ -1790,7 +1821,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			auto paramTypesIt = functionParameterTypes.find(effectiveCallee);
 			if (paramTypesIt != functionParameterTypes.end()) {
 				// Account for sibling method calls (parameter index offset)
-				size_t actualParamIdx = i + (callExpr->isSiblingMethodCall ? 1 : 0);
+				// Use paramIdx (parameter position) not i (call-site argument position) for named args
+				size_t actualParamIdx = paramIdx + (callExpr->isSiblingMethodCall ? 1 : 0);
 				if (actualParamIdx < paramTypesIt->second.size()) {
 					std::string paramMaxonType = paramTypesIt->second[actualParamIdx];
 
@@ -1803,7 +1835,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 						// Case 2: Argument has a value
 						else if (argVal) {
 							// Get argument type
-							std::string argMaxonType = getExpressionMaxonType(arg.get());
+							std::string argMaxonType = getExpressionMaxonType(arg.value.get());
 
 							// Argument is unwrapped type - wrap in Some optional
 							if (!maxon::TypeConversion::isOptionalType(argMaxonType)) {
@@ -2018,7 +2050,7 @@ mir::MIRValue *MIRCodeGenerator::generateMathIntrinsic(CallExprAST *callExpr) {
 	// Generate arguments with int-to-float promotion
 	std::vector<mir::MIRValue *> args;
 	for (auto &arg : callExpr->args) {
-		mir::MIRValue *argVal = generateExpr(arg.get());
+		mir::MIRValue *argVal = generateExpr(arg.value.get());
 		// Promote int to float
 		if (argVal->type->isInteger()) {
 			argVal = builder->createSIToFP(argVal, mir::MIRType::getFloat64(), "promotetmp");

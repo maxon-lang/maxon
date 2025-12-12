@@ -949,7 +949,7 @@ std::string FormattingProvider::formatCall(const CallExprAST *expr, const Format
 	for (size_t i = 0; i < expr->args.size(); i++) {
 		if (i > 0)
 			out << ", ";
-		out << formatExpression(expr->args[i].get(), config);
+		out << formatExpression(expr->args[i].value.get(), config);
 	}
 	out << ")";
 

@@ -11,7 +11,7 @@ Maxon is a statically-typed programming language with a custom native x86-64 bac
 - **Standard Library** (`stdlib/`) - Maxon standard library modules
 - **Tests** (`language-tests/`, `backend-tests/`, `specs/`) - Spec-driven development
 
-## Quick Reference
+## Building things Quick Reference
 
 | Task | Command |
 |------|---------|
@@ -22,19 +22,6 @@ Maxon is a statically-typed programming language with a custom native x86-64 bac
 | Compile and run | `./bin/maxon file.maxon` |
 | Compile with IR output | `./bin/maxon compile file.maxon --emit-ir` |
 | Compile and run lsp tests | `make lsp-test` |
-
-## Maxon Language Overview
-
-Maxon is a statically-typed language with labeled blocks and explicit `end` statements:
-
-- **Types**: `int`, `float`, `bool`, `byte`, `char`, `string`, arrays (`[10]int`), structs, maps
-- **Variables**: `var` (mutable), `let` (immutable), ie `let x = 5`
-- **Functions**: `returns returnType ... end 'fname'`
-- **Control flow**: `if`/`else`, `while`, `for`/`in` with range() - all require block labels
-- **Operators**: Arithmetic, comparison, logical (`and`, `or`, `not`), `mod`, `as` (cast)
-- **Structs**: `struct SName ... end 'SName'` with methods using explicit `self` parameter
-
-See `docs/LANGUAGE_REFERENCE.md` for complete syntax and semantics.
 
 ## Documentation
 
@@ -124,3 +111,80 @@ See `docs/COMPILER_DEBUGGING.md` for detailed workflow.
 ## Writing VSCode Extension Tests
 - Do not set timeouts
 - Do not use arbitrary delays, wait for what you are expecting
+
+## Syntax Quick Reference
+
+```
+// Variables
+var name = value            // mutable variable
+let name = value            // immutable variable
+
+// Functions
+// returnType can be 'nothing' for no return value
+function name(p1 type, p2 type) returns returnType
+    return value
+end 'name'
+
+function name(p1 type, p2 type = default) returns returnType  // default value
+    return value
+end 'name'
+
+// Function Calls
+foo(1, 2)                   // positional arguments
+foo(x = 1, y = 2)           // named arguments (optional)
+foo(1, y = 2)               // mixed: positional first, then named
+foo(y = 2, x = 1)           // named args in any order
+foo(1)                      // omit param with default
+
+// Control Flow
+if condition 'label'
+    statements
+end 'label'
+
+if condition 'label'
+    statements
+else 'label'
+    statements
+end 'label'
+
+while condition 'label'
+    statements
+end 'label'
+
+for item in iterable 'label'
+    statements
+end 'label'
+
+match expr 'label'
+    pattern then statement
+    default then statement
+end 'label'
+
+// Arrays
+var arr = array of 10 int   // sized array
+let vals = [1, 2, 3]        // array literal
+var elem = arr[0]           // indexing
+var size = arr.count()      // length
+
+// Types
+int float bool byte character string
+array of T
+T or nil                    // optional type
+
+// Operators
++ - * / mod                 // arithmetic
+== != < > <= >=             // comparison
+and or not                  // logical
+as                          // type cast
+
+// Literals
+42                          // int
+3.14                        // float
+'A'                         // character (grapheme)
+"text"                      // string
+true false                  // bool
+nil                         // nil (for optionals)
+```
+
+
+See `docs/LANGUAGE_REFERENCE.md` for complete syntax and semantics.

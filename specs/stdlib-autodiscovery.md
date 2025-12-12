@@ -122,9 +122,8 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 3, column 12
-Function 'formatIntArray' argument count mismatch
-  Expected: 2 arguments
-  Found: 1 argument
+Missing required argument for parameter 'buffer'
+  Add: buffer = <value>
 
   3 |     return formatIntArray(42)
     |            ^

@@ -104,7 +104,7 @@ The semantic analyzer validates the AST and performs type checking. It catches e
 
 ### Generic Type Instantiation (Monomorphization)
 
-Maxon uses **monomorphization** (Swift-style) for generic types like `map from K to V`. Instead of runtime polymorphism, the compiler generates specialized versions of generic types for each concrete type combination used.
+Maxon uses **monomorphization** for generic types like `map from K to V`. Instead of runtime polymorphism, the compiler generates specialized versions of generic types for each concrete type combination used.
 
 **How it works:**
 

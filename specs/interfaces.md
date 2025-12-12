@@ -138,7 +138,7 @@ end 'Container'
 
 struct IntArray is Container with int
     var data array of 10 int
-    
+
     function Container.get(index int) returns int
         return data[index]
     end 'get'

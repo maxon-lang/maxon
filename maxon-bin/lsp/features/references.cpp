@@ -929,7 +929,7 @@ void ReferencesProvider::visitExpression(
 
 		// Visit arguments
 		for (const auto &arg : callExpr->args) {
-			visitExpression(arg.get(), targetName, targetKind, containingType, refs, uri);
+			visitExpression(arg.value.get(), targetName, targetKind, containingType, refs, uri);
 		}
 	}
 	// Binary expression

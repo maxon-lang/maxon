@@ -1,0 +1,59 @@
+// Test: parameter-labels.positional-args.1
+function add(a int, b int) returns int
+    return a + b
+end 'add'
+
+function main() returns int
+    return add(3, 4)
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 4
+
+define i32 @main() {
+entry0:
+  ret i32 7
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 13
+
+define i32 @add(i32 %a, i32 %b) {
+entry0:
+  %0 = alloca i32
+  store i32 %a, ptr %0
+  %1 = alloca i32
+  store i32 %b, ptr %1
+  %2 = load i32, ptr %0
+  %3 = load i32, ptr %1
+  %4 = add i32 %2, %3
+  ret i32 %4
+}
+
+define i32 @main() {
+entry0:
+  %0 = call i32 @add(i32 3, i32 4)
+  ret i32 %0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 7
