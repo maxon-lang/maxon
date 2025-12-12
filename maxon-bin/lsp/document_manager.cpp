@@ -52,14 +52,13 @@ std::string normalizeUri(const std::string &uri) {
 	result = decoded;
 
 #ifdef _WIN32
-	// On Windows, normalize drive letter to uppercase
-	// file:///c:/... -> file:///C:/...
+	// On Windows, normalize the entire path to lowercase for case-insensitive comparison
+	// file:///C:/Users/... -> file:///c:/users/...
 	const std::string prefix = "file:///";
-	if (result.size() > prefix.size() + 2 &&
-		result.substr(0, prefix.size()) == prefix &&
-		std::isalpha(static_cast<unsigned char>(result[prefix.size()])) &&
-		result[prefix.size() + 1] == ':') {
-		result[prefix.size()] = std::toupper(static_cast<unsigned char>(result[prefix.size()]));
+	if (result.size() > prefix.size() && result.substr(0, prefix.size()) == prefix) {
+		std::transform(result.begin() + prefix.size(), result.end(),
+					   result.begin() + prefix.size(),
+					   [](unsigned char c) { return std::tolower(c); });
 	}
 #endif
 

@@ -1,128 +1,88 @@
-// Semantic Analyzer for the Maxon self-hosted compiler
-// Minimal version - just enough to analyze basic.maxon
-
-//=============================================================================
-// Semantic Error
-//=============================================================================
+// Semantic Analyzer for the Maxon compiler
 
 export type SemanticError
-var message string
-var line int
-var column int
-
-export function create(message string, line int, column int) returns SemanticError
-	return SemanticError{message: message, line: line, column: column}
-end 'create'
-
-export function toString() returns string
-	return "Error at " + line.toString() + ":" + column.toString() + ": " + message
-end 'toString'
+	var message string
+	var line int
+	var column int
 end 'SemanticError'
 
-//=============================================================================
-// Semantic Analyzer
-//=============================================================================
-
 export type SemanticAnalyzer
-var errors array of SemanticError
-var warnings array of SemanticError
-var hasMain bool
-var localVars map from string to TypeRef
+	var errors array of SemanticError
+	var hasMain bool
+	var localVars map from string to TypeRef
 
-export function create() returns SemanticAnalyzer
-	return SemanticAnalyzer{
-	errors: array of SemanticError,
-	warnings: array of SemanticError,
-	hasMain: false,
-	localVars: map from string to TypeRef
-	}
-end 'create'
+	export function create() returns SemanticAnalyzer
+		return SemanticAnalyzer{
+		errors: array of SemanticError,
+		hasMain: false,
+		localVars: map from string to TypeRef
+		}
+	end 'create'
 
-export function success() returns bool
-	return errors.count() == 0
-end 'success'
+	export function success() returns bool
+		return errors.count() == 0
+	end 'success'
 
-export function addError(message string, loc SourceLoc) returns nothing
-	errors.append(SemanticError.create(message, loc.line, loc.column))
-end 'addError'
+	export function addError(message string, loc SourceLoc) returns nothing
+		var err = SemanticError{message: message, line: loc.line, column: loc.column}
+		errors.push(err)
+	end 'addError'
 
-//=========================================================================
-// Main analysis entry point
-//=========================================================================
+	export function analyze(program Program) returns nothing
+		var i = 0
+		while i < program.functions.count() 'funcs'
+			analyzeFunction(program.functions[i])
+			i = i + 1
+		end 'funcs'
 
-export function analyze(program Program) returns nothing
-	// Check all declarations
-	var i = 0
-	while i < program.declarations.count() 'decls'
-		analyzeDecl(program.declarations[i])
-		i = i + 1
-	end 'decls'
+		if not hasMain 'noMain'
+			var loc = SourceLoc.create(1, 1)
+			addError("No 'main' function found", loc)
+		end 'noMain'
+	end 'analyze'
 
-	// Verify main() exists
-	if not hasMain 'noMain'
-		addError("No 'main' function found", SourceLoc.create(1, 1))
-	end 'noMain'
-end 'analyze'
-
-export function analyzeDecl(decl Decl) returns nothing
-	match decl 'analyze'
-		function_(name, params, returnType, body, isExport, isExtern, loc) then
-		if name == "main" 'isMain'
+	export function analyzeFunction(fn FunctionDecl) returns nothing
+		if fn.name == "main" 'isMain'
 			hasMain = true
 		end 'isMain'
-		// Clear local vars for each function
+
 		localVars = map from string to TypeRef
-		// Analyze body statements
+
 		var i = 0
-		while i < body.count() 'bodyLoop'
-			analyzeStmt(body[i])
+		while i < fn.body.count() 'body'
+			analyzeStmt(fn.body[i])
 			i = i + 1
-		end 'bodyLoop'
-	end 'analyze'
-end 'analyzeDecl'
+		end 'body'
+	end 'analyzeFunction'
 
-export function analyzeStmt(stmt Stmt) returns nothing
-	match stmt 'analyze'
-		return_(value, loc) then
-		if let v = value 'hasValue'
-			analyzeExpr(v)
-		end 'hasValue'
-		let_(name, typeAnnotation, value, loc) then
-		analyzeExpr(value)
-		// For now, assume int type (inferred from literal)
-		localVars.insert(name, TypeRef.intType())
-	end 'analyze'
-end 'analyzeStmt'
+	export function analyzeStmt(stmt Stmt) returns nothing
+		if stmt.kind == StmtKind.returnStmt 'return'
+			if stmt.hasValue 'hasValue'
+				analyzeExpr(stmt.expr)
+			end 'hasValue'
+		end 'return'
 
-export function analyzeExpr(expr Expr) returns nothing
-	match expr 'analyze'
-		intLiteral(value, loc) then
-		// Nothing to check
-		varRef(name, loc) then
-		if not localVars.contains(name) 'undefined'
-			addError("Undefined variable: " + name, loc)
-		end 'undefined'
-	end 'analyze'
-end 'analyzeExpr'
+		if stmt.kind == StmtKind.letStmt 'let'
+			analyzeExpr(stmt.expr)
+			localVars.insert(stmt.name, TypeRef.makeInt())
+		end 'let'
+	end 'analyzeStmt'
 
-//=========================================================================
-// Error reporting
-//=========================================================================
+	export function analyzeExpr(expr Expr) returns nothing
+		if expr.kind == ExprKind.varRef 'varRef'
+			if not localVars.contains(expr.name) 'undefined'
+				addError("Undefined variable: " + expr.name, expr.loc)
+			end 'undefined'
+		end 'varRef'
+	end 'analyzeExpr'
 
-export function printErrors() returns nothing
-	var i = 0
-	while i < errors.count() 'errs'
-		print(errors[i].toString())
-		i = i + 1
-	end 'errs'
-end 'printErrors'
-
-export function printWarnings() returns nothing
-	var i = 0
-	while i < warnings.count() 'warns'
-		print("Warning: " + warnings[i].toString())
-		i = i + 1
-	end 'warns'
-end 'printWarnings'
+	export function printErrors() returns nothing
+		var i = 0
+		while i < errors.count() 'errs'
+			var err = errors[i]
+			print("Error: " + err.message)
+			i = i + 1
+		end 'errs'
+	end 'printErrors'
 end 'SemanticAnalyzer'
 

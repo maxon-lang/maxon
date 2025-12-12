@@ -1,105 +1,114 @@
-// Abstract Syntax Tree types for the Maxon compiler
-// Minimal version - just enough to compile basic.maxon
-
-//=============================================================================
-// Type representation
-//=============================================================================
+// AST types for the Maxon compiler
 
 export enum TypeKind
-	void
-	int
+	voidType
+	intType
 end 'TypeKind'
 
 export type TypeRef
-var kind TypeKind
-var name string
+	var kind TypeKind
+	var name string
 
-export function intType() returns TypeRef
-	return TypeRef{kind: TypeKind.int, name: "int"}
-end 'intType'
+	export function makeInt() returns TypeRef
+		return TypeRef{kind: TypeKind.intType, name: "int"}
+	end 'makeInt'
 
-export function voidType() returns TypeRef
-	return TypeRef{kind: TypeKind.void, name: "void"}
-end 'voidType'
-
-export function toString() returns string
-	match kind 'fmt'
-		void then return "void"
-		int then return "int"
-	end 'fmt'
-end 'toString'
+	export function makeVoid() returns TypeRef
+		return TypeRef{kind: TypeKind.voidType, name: "void"}
+	end 'makeVoid'
 end 'TypeRef'
 
-//=============================================================================
-// Source location
-//=============================================================================
-
 export type SourceLoc
-var line int
-var column int
+	var line int
+	var column int
 
-export function create(line int, column int) returns SourceLoc
-	return SourceLoc{line: line, column: column}
-end 'create'
+	export function create(line int, column int) returns SourceLoc
+		return SourceLoc{line: line, column: column}
+	end 'create'
 end 'SourceLoc'
 
-//=============================================================================
-// Expression nodes
-//=============================================================================
+export enum ExprKind
+	intLiteral
+	varRef
+end 'ExprKind'
 
-export enum Expr
-	intLiteral(value int, loc SourceLoc)
-	varRef(name string, loc SourceLoc)
+export type Expr
+	var kind ExprKind
+	var intValue int
+	var name string
+	var loc SourceLoc
+
+	export function makeIntLiteral(value int, loc SourceLoc) returns Expr
+		return Expr{kind: ExprKind.intLiteral, intValue: value, name: "", loc: loc}
+	end 'makeIntLiteral'
+
+	export function makeVarRef(name string, loc SourceLoc) returns Expr
+		return Expr{kind: ExprKind.varRef, intValue: 0, name: name, loc: loc}
+	end 'makeVarRef'
 end 'Expr'
 
-//=============================================================================
-// Statement nodes
-//=============================================================================
+export enum StmtKind
+	returnStmt
+	letStmt
+end 'StmtKind'
 
-export enum Stmt
-	return_(value Expr or nil, loc SourceLoc)
-	let_(name string, typeAnnotation TypeRef or nil, value Expr, loc SourceLoc)
+export type Stmt
+	var kind StmtKind
+	var name string
+	var expr Expr
+	var hasValue bool
+	var loc SourceLoc
+
+	export function makeReturn(value Expr, hasValue bool, loc SourceLoc) returns Stmt
+		return Stmt{kind: StmtKind.returnStmt, name: "", expr: value, hasValue: hasValue, loc: loc}
+	end 'makeReturn'
+
+	export function makeLet(name string, value Expr, loc SourceLoc) returns Stmt
+		return Stmt{kind: StmtKind.letStmt, name: name, expr: value, hasValue: true, loc: loc}
+	end 'makeLet'
 end 'Stmt'
 
-//=============================================================================
-// Top-level declarations
-//=============================================================================
-
 export type Parameter
-var name string
-var paramType TypeRef
+	var name string
+	var paramType TypeRef
 
-export function create(name string, paramType TypeRef) returns Parameter
-	return Parameter{name: name, paramType: paramType}
-end 'create'
+	export function create(name string, paramType TypeRef) returns Parameter
+		return Parameter{name: name, paramType: paramType}
+	end 'create'
 end 'Parameter'
 
-export enum Decl
-	function_(
-	name string,
-	params array of Parameter,
-	returnType TypeRef,
-	body array of Stmt,
-	isExport bool,
-	isExtern bool,
-	loc SourceLoc
-	)
-end 'Decl'
+export type FunctionDecl
+	var name string
+	var params array of Parameter
+	var returnType TypeRef
+	var body array of Stmt
+	var isExport bool
+	var isExtern bool
+	var loc SourceLoc
 
-//=============================================================================
-// Program - top level AST node
-//=============================================================================
+	export function create(name string, returnType TypeRef, body array of Stmt, loc SourceLoc) returns FunctionDecl
+		return FunctionDecl{
+		name: name,
+		params: array of Parameter,
+		returnType: returnType,
+		body: body,
+		isExport: false,
+		isExtern: false,
+		loc: loc
+		}
+	end 'create'
+end 'FunctionDecl'
 
 export type Program
-var declarations array of Decl
-var fileName string
+	var functions array of FunctionDecl
+	var fileName string
 
-export function create(fileName string) returns Program
-	return Program{declarations: array of Decl, fileName: fileName}
-end 'create'
+	export function create(fileName string) returns Program
+		return Program{functions: array of FunctionDecl, fileName: fileName}
+	end 'create'
 
-export function addDecl(decl Decl) returns nothing
-	declarations.append(decl)
-end 'addDecl'
+	export function addFunction(fn FunctionDecl) returns nothing
+		functions.push(fn)
+	end 'addFunction'
 end 'Program'
 

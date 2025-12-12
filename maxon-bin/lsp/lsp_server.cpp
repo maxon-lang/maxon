@@ -314,8 +314,30 @@ void LSPServer::handleDidChange(const json &params) {
 		// Then re-analyze all non-stdlib documents that might depend on it
 		reanalyzeNonStdlibDocuments();
 	} else {
-		// Regular file - just analyze it
-		analyzeDocument(uri);
+		// Check if this file is part of a project (has build.maxon)
+		std::string filePath = uriToPath(uri);
+		std::string projectRoot = findProjectRoot(filePath);
+
+		if (!projectRoot.empty()) {
+			// File is in a project - invalidate cache and re-analyze project files
+			invalidateProjectSymbols(projectRoot);
+			// Re-analyze the changed file first
+			analyzeDocument(uri);
+			// Re-analyze all other open documents in the same project
+			std::string normalizedUri = normalizeUri(uri);
+			for (const auto &docUri : documentManager_.getOpenDocumentUris()) {
+				if (docUri != normalizedUri) {
+					std::string docPath = uriToPath(docUri);
+					std::string docProjectRoot = findProjectRoot(docPath);
+					if (docProjectRoot == projectRoot) {
+						analyzeDocument(docUri);
+					}
+				}
+			}
+		} else {
+			// Regular file not in a project - just analyze it
+			analyzeDocument(uri);
+		}
 	}
 }
 
@@ -372,7 +394,9 @@ void LSPServer::handleDidSave(const json &params) {
 std::string LSPServer::findProjectRoot(const std::string &filePath) {
 	try {
 		std::filesystem::path current = std::filesystem::absolute(filePath);
-		if (std::filesystem::is_regular_file(current)) {
+		// Always move to parent directory (filePath is a file, not a directory)
+		// Use has_filename() check since the file may not exist on disk yet
+		if (current.has_filename() && !std::filesystem::is_directory(current)) {
 			current = current.parent_path();
 		}
 
@@ -431,7 +455,8 @@ StdlibSymbols &LSPServer::getProjectSymbols(const std::string &projectRoot) {
 				continue;
 
 			std::string siblingPath =
-				normalizeFilePath(std::filesystem::absolute(entry.path()).string());
+				std::filesystem::absolute(entry.path()).string();
+			std::string normalizedSiblingPath = normalizeFilePath(siblingPath);
 
 			// Skip stdlib files
 			if (!workspaceRoot_.empty()) {
@@ -447,7 +472,7 @@ StdlibSymbols &LSPServer::getProjectSymbols(const std::string &projectRoot) {
 				}
 			}
 
-			project.files.insert(siblingPath);
+			project.files.insert(normalizedSiblingPath);
 
 			// Read file content - check document manager first for open files
 			std::string source;
@@ -477,7 +502,7 @@ StdlibSymbols &LSPServer::getProjectSymbols(const std::string &projectRoot) {
 				auto symbols = extractSymbolsFromAST(program.get(), source, true);
 
 				for (auto &sym : symbols) {
-					sym.filePath = siblingPath;
+					sym.filePath = normalizedSiblingPath;
 					if (sym.kind == "function" || sym.kind == "method") {
 						project.symbols.functions.push_back(std::move(sym));
 					} else if (sym.kind == "struct") {
@@ -660,6 +685,7 @@ void LSPServer::analyzeDocument(const std::string &uri) {
 	if (!isStdlibFile(uri)) {
 		// Load symbols from sibling project files
 		StdlibSymbols projectSymbols = loadProjectSymbols(filePath);
+
 
 		// Merge project symbols into combined symbols
 		for (auto &sym : projectSymbols.functions) {

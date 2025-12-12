@@ -31,21 +31,14 @@ end 'buildWithConfig'
 
 /// Emit build configuration as JSON to stdout
 function emitBuildConfig(config BuildConfig) returns nothing
-	// Extract fields to avoid string concat with struct fields bug
-	var name = config.name
-	var output = config.output
-	var sources = config.sources
-	var optimize = config.optimize
-	var debugInfo = config.debug_info
-
 	print("{")
-	print("  \"name\": \"" + name + "\",")
-	print("  \"output\": \"" + output + "\",")
+	print("  \"name\": \"" + config.name + "\",")
+	print("  \"output\": \"" + config.output + "\",")
 	print("  \"sources\": [")
 
 	var i = 0
-	var count = sources.count()
-	for src in sources 'emit_sources'
+	var count = config.sources.count()
+	for src in config.sources 'emit_sources'
 		if i < count - 1 'check_comma'
 			print("    \"" + src + "\",")
 		end 'check_comma' else 'no_comma'
@@ -56,13 +49,13 @@ function emitBuildConfig(config BuildConfig) returns nothing
 
 	print("  ],")
 
-	if optimize 'emit_optimize'
+	if config.optimize 'emit_optimize'
 		print("  \"optimize\": true,")
 	end 'emit_optimize' else 'emit_optimize_false'
 		print("  \"optimize\": false,")
 	end 'emit_optimize_false'
 
-	if debugInfo 'emit_debug'
+	if config.debug_info 'emit_debug'
 		print("  \"debug_info\": true")
 	end 'emit_debug' else 'emit_debug_false'
 		print("  \"debug_info\": false")

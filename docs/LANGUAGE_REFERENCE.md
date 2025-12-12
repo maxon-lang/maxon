@@ -27,7 +27,8 @@ This reference provides complete syntax and semantics for the Maxon programming 
 9. [Statements](#statements)
 10. [Namespaces](#namespaces)
 11. [Standard Library](#standard-library)
-12. [Memory Model](#memory-model)
+12. [Build System](#build-system)
+13. [Memory Model](#memory-model)
 
 ---
 
@@ -1379,6 +1380,120 @@ Located in `stdlib/` directory:
 - `stdlib/fmt/` - Formatting utilities
 - `stdlib/fs/` - File system operations
 - `stdlib/iter/` - Iterator interface
+- `stdlib/build/` - Build system utilities
+
+---
+
+## Build System
+
+Maxon uses a `build.maxon` file to define project structure and build configuration. This file marks the project root and contains executable Maxon code that outputs build configuration.
+
+### Project Structure
+
+A Maxon project is defined by the presence of a `build.maxon` file:
+
+```
+myproject/
+├── build.maxon          # Project root marker and build config
+├── main.maxon           # Entry point
+├── lib.maxon            # Project file
+└── utils/
+    └── math.maxon       # Files in subdirectories are included
+```
+
+### Simple Build Configuration
+
+For most projects, a single line suffices:
+
+```maxon
+function main() returns nothing
+    build("myapp")  // Executable name is required
+end 'main'
+```
+
+This automatically:
+- Sets output to `bin/myapp.exe`
+- Discovers all `.maxon` files in the project directory (recursively)
+- Uses default compilation settings
+
+### Custom Build Configuration
+
+For more control, use `BuildConfig`:
+
+```maxon
+function main() returns nothing
+    var config = BuildConfig{
+        name: "myapp",
+        output: "dist/myapp.exe",
+        sources: ["main.maxon", "lib.maxon"],
+        optimize: true,
+        debug_info: false
+    }
+    buildWithConfig(config)
+end 'main'
+```
+
+### BuildConfig Type
+
+```maxon
+type BuildConfig
+    var name string           // Executable name
+    var output string         // Output path (e.g., "bin/app.exe")
+    var sources array of string  // Source files (empty = auto-discover)
+    var optimize bool         // Enable optimizations
+    var debug_info bool       // Include debug symbols
+end 'BuildConfig'
+```
+
+### Build Functions
+
+| Function | Description |
+|----------|-------------|
+| `build(name string)` | Simple build with defaults |
+| `buildWithConfig(config BuildConfig)` | Custom build with full control |
+
+### Creating a New Project
+
+Initialize a new project with:
+
+```bash
+maxon init myproject
+```
+
+This creates a `build.maxon` file with the project name pre-filled.
+
+### Building a Project
+
+From the project directory:
+
+```bash
+maxon build
+```
+
+The compiler:
+1. Finds `build.maxon` in the current or parent directory
+2. Compiles and executes `build.maxon`
+3. Parses the JSON output for build configuration
+4. Compiles the project with those settings
+
+### Multi-Project Workspaces
+
+Multiple projects can coexist in a workspace. Each project is isolated by its `build.maxon`:
+
+```
+workspace/
+├── project-a/
+│   ├── build.maxon      # Project A root
+│   └── main.maxon
+└── project-b/
+    ├── build.maxon      # Project B root
+    └── main.maxon
+```
+
+The LSP automatically detects project boundaries and provides:
+- Project-scoped symbol completion
+- Cross-file go-to-definition within a project
+- Isolated diagnostics per project
 
 ---
 

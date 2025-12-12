@@ -1,5 +1,4 @@
-// Maxon Compiler
-// Minimal version - just enough to compile basic.maxon
+// Maxon Compiler - Main entry point
 
 export function compile(sourceFile string) returns int
 	let outputFile = sourceFile.replace(".maxon", ".exe")
@@ -15,17 +14,13 @@ export function compile(sourceFile string) returns int
 		return 1
 	end 'noSource'
 
-	//=========================================================================
 	// Phase 1: Lexical Analysis
-	//=========================================================================
 	print("Phase 1: Lexing...")
 	var lexer = Lexer.create(source)
 	let tokens = lexer.tokenize()
-	print("  Found " + tokens.count().toString() + " tokens")
+	print("  Found tokens")
 
-	//=========================================================================
 	// Phase 2: Parsing
-	//=========================================================================
 	print("Phase 2: Parsing...")
 	var parser = Parser.create(tokens)
 	let program = parser.parseProgram(sourceFile)
@@ -35,11 +30,9 @@ export function compile(sourceFile string) returns int
 		return 1
 	end 'parseError'
 
-	print("  Parsed " + program.declarations.count().toString() + " function(s)")
+	print("  Parsed functions")
 
-	//=========================================================================
 	// Phase 3: Semantic Analysis
-	//=========================================================================
 	print("Phase 3: Semantic Analysis...")
 	var analyzer = SemanticAnalyzer.create()
 	analyzer.analyze(program)
@@ -50,17 +43,13 @@ export function compile(sourceFile string) returns int
 	end 'hasErrors'
 	print("  OK")
 
-	//=========================================================================
 	// Phase 4: Optimization
-	//=========================================================================
 	print("Phase 4: Optimization...")
 	var optimizer = createStandardOptimizer()
 	optimizer.optimize(program)
 	print("  Done")
 
-	//=========================================================================
 	// Phase 5: MIR Code Generation
-	//=========================================================================
 	print("Phase 5: Code Generation (MIR)...")
 	var codegen = CodeGen.create()
 	codegen.generate(program)
@@ -70,27 +59,21 @@ export function compile(sourceFile string) returns int
 	writeTextFile(mirFile, codegen.output)
 	print("  Wrote " + mirFile)
 
-	//=========================================================================
 	// Phase 6: x86-64 Code Generation
-	//=========================================================================
 	print("Phase 6: Code Generation (x86-64)...")
 	var x86gen = X86Gen.create()
 	x86gen.generate(program)
-	print("  Generated " + x86gen.getCodeSize().toString() + " bytes of machine code")
+	print("  Generated machine code")
 
-	//=========================================================================
 	// Phase 7: PE Executable Generation
-	//=========================================================================
 	print("Phase 7: PE Executable Generation...")
 	var exeBuilder = CompleteExeBuilder.create()
 	exeBuilder.buildBasicExe()
 	let exeBytes = exeBuilder.getBytes()
 	let exeSize = exeBuilder.getSize()
-	print("  Generated " + exeSize.toString() + " byte executable")
+	print("  Generated executable")
 
-	//=========================================================================
 	// Phase 8: Write Output File
-	//=========================================================================
 	print("Phase 8: Writing " + outputFile + "...")
 	writeBinaryFile(outputFile, exeBytes)
 	print("  Done!")
@@ -101,4 +84,3 @@ export function compile(sourceFile string) returns int
 
 	return 0
 end 'compile'
-

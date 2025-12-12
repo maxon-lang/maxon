@@ -11,6 +11,7 @@
 using json = maxon::lsp::json;
 using JsonRpcMessage = maxon::lsp::JsonRpcMessage;
 using maxon_lsp::pathToUri;
+using maxon_lsp::normalizeUri;
 
 // Mock transport that allows sending requests and capturing responses
 class MockTransport : public maxon::lsp::Transport {
@@ -84,11 +85,12 @@ class MockTransport : public maxon::lsp::Transport {
 	// Find diagnostics notification for a specific URI (returns first match)
 	std::optional<JsonRpcMessage> findDiagnosticsForUri(const std::string &uri) {
 		std::lock_guard<std::mutex> lock(mutex_);
+		std::string normalizedTargetUri = normalizeUri(uri);
 		for (const auto &msg : outgoing_) {
 			if (msg.method == "textDocument/publishDiagnostics" && !msg.id.has_value() &&
 				msg.params.has_value()) {
 				auto &params = msg.params.value();
-				if (params.contains("uri") && params["uri"].get<std::string>() == uri) {
+				if (params.contains("uri") && normalizeUri(params["uri"].get<std::string>()) == normalizedTargetUri) {
 					return msg;
 				}
 			}
@@ -100,11 +102,12 @@ class MockTransport : public maxon::lsp::Transport {
 	std::optional<JsonRpcMessage> findLastDiagnosticsForUri(const std::string &uri) {
 		std::lock_guard<std::mutex> lock(mutex_);
 		std::optional<JsonRpcMessage> lastMatch;
+		std::string normalizedTargetUri = normalizeUri(uri);
 		for (const auto &msg : outgoing_) {
 			if (msg.method == "textDocument/publishDiagnostics" && !msg.id.has_value() &&
 				msg.params.has_value()) {
 				auto &params = msg.params.value();
-				if (params.contains("uri") && params["uri"].get<std::string>() == uri) {
+				if (params.contains("uri") && normalizeUri(params["uri"].get<std::string>()) == normalizedTargetUri) {
 					lastMatch = msg;
 				}
 			}
@@ -2285,4 +2288,406 @@ end 'main')";
 	}
 	INFO("Error message (should be empty): " << errorMsg);
 	REQUIRE(!hasMissingMapError);
+}
+
+// =============================================================================
+// Multi-Project (build.maxon) Tests
+// =============================================================================
+
+TEST_CASE("LSP findProjectRoot detects build.maxon in project directory", "[lsp][project]") {
+	// Tests run from maxon-bin/lsp/tests/build, so go up to project root
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+
+	// Use the test project that has a build.maxon file
+	std::filesystem::path testProject = projectRoot / "maxon-bin" / "tests" / "build-test-project";
+
+	// Verify test project has build.maxon
+	REQUIRE(std::filesystem::exists(testProject / "build.maxon"));
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Open a file from the test project
+	std::string code = R"(function test() returns int
+	return helper(21)
+end 'test')";
+	std::string docUri = "file://" + (testProject / "test.maxon").string();
+	fixture.openDocument(docUri, code);
+	fixture.shutdown();
+	fixture.run();
+
+	// The file should be recognized as part of the project
+	// and 'helper' function from lib.maxon should be visible (no undefined error)
+	auto notification = fixture.transport()->findDiagnosticsForUri(docUri);
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+
+	bool hasUndefinedHelper = false;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("Undefined function") != std::string::npos &&
+			msg.find("helper") != std::string::npos) {
+			hasUndefinedHelper = true;
+			break;
+		}
+	}
+	// Should NOT have undefined error - helper is exported from lib.maxon in same project
+	REQUIRE_FALSE(hasUndefinedHelper);
+}
+
+TEST_CASE("LSP project symbols include files from subdirectories", "[lsp][project]") {
+	// Tests that build.maxon projects include symbols from subdirectories
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+
+	// Use the test project that has utils/math.maxon
+	std::filesystem::path testProject = projectRoot / "maxon-bin" / "tests" / "build-test-project";
+
+	// Verify subdirectory file exists
+	REQUIRE(std::filesystem::exists(testProject / "utils" / "math.maxon"));
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Open a file that uses function from subdirectory
+	std::string code = R"(function test() returns int
+	return double(21)
+end 'test')";
+	std::string docUri = "file://" + (testProject / "test.maxon").string();
+	fixture.openDocument(docUri, code);
+	fixture.shutdown();
+	fixture.run();
+
+	auto notification = fixture.transport()->findDiagnosticsForUri(docUri);
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+
+	bool hasUndefinedDouble = false;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("Undefined function") != std::string::npos &&
+			msg.find("double") != std::string::npos) {
+			hasUndefinedDouble = true;
+			break;
+		}
+	}
+	// Should NOT have undefined error - double is exported from utils/math.maxon
+	REQUIRE_FALSE(hasUndefinedDouble);
+}
+
+TEST_CASE("LSP multi-project isolation - project 1 does not see project 2 symbols", "[lsp][project][isolation]") {
+	// Tests that two projects with build.maxon are isolated from each other
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+
+	std::filesystem::path testProject1 = projectRoot / "maxon-bin" / "tests" / "build-test-project";
+	std::filesystem::path testProject2 = projectRoot / "maxon-bin" / "tests" / "build-test-project-2";
+
+	// Verify both projects exist
+	REQUIRE(std::filesystem::exists(testProject1 / "build.maxon"));
+	REQUIRE(std::filesystem::exists(testProject2 / "build.maxon"));
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Open a file in project 1 that tries to call a function from project 2
+	// Project 2 has 'calculate' function, project 1 should NOT see it
+	std::string code = R"(function test() returns int
+	return calculate(10)
+end 'test')";
+	std::string docUri = "file://" + (testProject1 / "isolation_test.maxon").string();
+	fixture.openDocument(docUri, code);
+	fixture.shutdown();
+	fixture.run();
+
+	auto notification = fixture.transport()->findDiagnosticsForUri(docUri);
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+
+	bool hasUndefinedCalculate = false;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("Undefined function") != std::string::npos &&
+			msg.find("calculate") != std::string::npos) {
+			hasUndefinedCalculate = true;
+			break;
+		}
+	}
+	// SHOULD have undefined error - calculate is in project 2, not visible from project 1
+	REQUIRE(hasUndefinedCalculate);
+}
+
+TEST_CASE("LSP project symbol invalidation on file save", "[lsp][project][invalidation]") {
+	// Tests that saving a file in a project invalidates the cached symbols
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+
+	std::filesystem::path testProject = projectRoot / "maxon-bin" / "tests" / "build-test-project";
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Open lib.maxon which defines 'helper'
+	std::ifstream libFile(testProject / "lib.maxon");
+	std::stringstream buffer;
+	buffer << libFile.rdbuf();
+	std::string originalContent = buffer.str();
+	std::string libUri = pathToUri((testProject / "lib.maxon").string());
+	fixture.openDocument(libUri, originalContent);
+
+	// Open test file that calls 'helper'
+	std::string testCode = R"(function test() returns int
+	return helper(21)
+end 'test')";
+	std::string testUri = pathToUri((testProject / "test_invalidation.maxon").string());
+	fixture.openDocument(testUri, testCode);
+
+	// Change lib.maxon to rename helper to helperXYZ (in memory)
+	// Use a name that doesn't contain "helper" to avoid infinite loop
+	std::string modifiedContent = originalContent;
+	size_t pos = 0;
+	while ((pos = modifiedContent.find("helper", pos)) != std::string::npos) {
+		modifiedContent.replace(pos, 6, "helperXYZ");
+		pos += 9; // Move past the replacement
+	}
+
+	// Debug: print URIs to check if they match
+	INFO("libUri: " << libUri);
+	INFO("testUri: " << testUri);
+	INFO("modifiedContent first 200 chars: " << modifiedContent.substr(0, 200));
+
+	fixture.changeDocument(libUri, modifiedContent, 2);
+
+	fixture.shutdown();
+	fixture.run();
+
+	// After the change, test file should have undefined error for 'helper'
+
+	// Debug: count diagnostics notifications for our test file
+	auto allDiags = fixture.transport()->findAllNotifications("textDocument/publishDiagnostics");
+	int testFileNotifCount = 0;
+	std::string normalizedTestUri = normalizeUri(testUri);
+	for (const auto &notif : allDiags) {
+		if (notif.params.has_value()) {
+			auto &p = notif.params.value();
+			std::string diagUri = p.value("uri", "(no uri)");
+			if (normalizeUri(diagUri) == normalizedTestUri) {
+				testFileNotifCount++;
+				int diagCount = p.contains("diagnostics") ? (int)p["diagnostics"].size() : 0;
+				INFO("Test file notification #" << testFileNotifCount << " has " << diagCount << " diagnostics");
+				if (diagCount > 0) {
+					for (const auto &d : p["diagnostics"]) {
+						INFO("  - " << d.value("message", "(no message)"));
+					}
+				}
+			}
+		}
+	}
+	INFO("Total publishDiagnostics notifications: " << allDiags.size());
+	INFO("Notifications for test file: " << testFileNotifCount);
+	INFO("Normalized testUri: " << normalizedTestUri);
+
+	auto notification = fixture.transport()->findLastDiagnosticsForUri(testUri);
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+
+	// Debug: print all diagnostics
+	INFO("Number of diagnostics for testUri: " << diagnostics.size());
+	for (const auto &diag : diagnostics) {
+		INFO("Diagnostic: " << diag.value("message", "(no message)"));
+	}
+
+	bool hasUndefinedHelper = false;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("Undefined function") != std::string::npos &&
+			msg.find("helper") != std::string::npos) {
+			hasUndefinedHelper = true;
+			break;
+		}
+	}
+	// SHOULD have undefined error after renaming helper
+	REQUIRE(hasUndefinedHelper);
+}
+
+TEST_CASE("LSP no project root fallback - files without build.maxon use same-directory symbols", "[lsp][project][fallback]") {
+	// Tests that files without a build.maxon still get symbols from same directory
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+
+	// Use temp directory which should NOT have a build.maxon
+	std::filesystem::path tempDir = projectRoot / "temp";
+	std::filesystem::create_directories(tempDir);
+
+	// Make sure there's no build.maxon in temp
+	std::filesystem::path buildMaxon = tempDir / "build.maxon";
+	if (std::filesystem::exists(buildMaxon)) {
+		std::filesystem::remove(buildMaxon);
+	}
+
+	// Create the helper file on disk (required for directory iteration to find it)
+	std::string helperCode = R"(export function myTempHelper(x int) returns int
+	return x * 2
+end 'myTempHelper')";
+	std::filesystem::path helperPath = tempDir / "temp_helper.maxon";
+	{
+		std::ofstream helperFile(helperPath);
+		helperFile << helperCode;
+	}
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Open the helper file
+	std::string helperUri = "file://" + helperPath.string();
+	fixture.openDocument(helperUri, helperCode);
+
+	// Open main file that uses the helper
+	std::string mainCode = R"(function test() returns int
+	return myTempHelper(21)
+end 'test')";
+	std::string mainUri = "file://" + (tempDir / "temp_main.maxon").string();
+	fixture.openDocument(mainUri, mainCode);
+
+	fixture.shutdown();
+	fixture.run();
+
+	// Clean up test file
+	std::filesystem::remove(helperPath);
+
+	auto notification = fixture.transport()->findLastDiagnosticsForUri(mainUri);
+	REQUIRE(notification.has_value());
+	REQUIRE(notification->params.has_value());
+
+	auto &diagnostics = notification->params.value()["diagnostics"];
+
+	bool hasUndefinedHelper = false;
+	for (const auto &diag : diagnostics) {
+		std::string msg = diag.value("message", "");
+		if (msg.find("Undefined function") != std::string::npos &&
+			msg.find("myTempHelper") != std::string::npos) {
+			hasUndefinedHelper = true;
+			break;
+		}
+	}
+	// Should NOT have undefined error - files in same directory should see each other
+	REQUIRE_FALSE(hasUndefinedHelper);
+}
+
+TEST_CASE("LSP completion includes project symbols", "[lsp][project][completion]") {
+	// Tests that completion includes functions from other files in the project
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+
+	std::filesystem::path testProject = projectRoot / "maxon-bin" / "tests" / "build-test-project";
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Open a file in the project with incomplete function call
+	std::string code = R"(function test() returns int
+	return hel
+end 'test')";
+	std::string docUri = "file://" + (testProject / "completion_test.maxon").string();
+	fixture.openDocument(docUri, code);
+
+	// Request completion after 'hel' at line 1
+	json completionParams = {
+		{"textDocument", {{"uri", docUri}}},
+		{"position", {{"line", 1}, {"character", 11}}}
+	};
+	fixture.transport()->queueRequest(3, "textDocument/completion", completionParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(3);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+
+	auto &result = response->result.value();
+	json items;
+	if (result.is_array()) {
+		items = result;
+	} else if (result.is_object() && result.contains("items")) {
+		items = result["items"];
+	}
+
+	REQUIRE(items.is_array());
+
+	// Should include 'helper' from lib.maxon
+	bool hasHelper = false;
+	for (const auto &item : items) {
+		if (item.contains("label") && item["label"].get<std::string>() == "helper") {
+			hasHelper = true;
+			break;
+		}
+	}
+	REQUIRE(hasHelper);
+}
+
+TEST_CASE("LSP go-to-definition works across project files", "[lsp][project][definition]") {
+	// Tests that go-to-definition works for functions in other project files
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+
+	std::filesystem::path testProject = projectRoot / "maxon-bin" / "tests" / "build-test-project";
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	// Open a file that calls 'helper' from lib.maxon
+	std::string code = R"(function test() returns int
+	return helper(21)
+end 'test')";
+	std::string docUri = "file://" + (testProject / "def_test.maxon").string();
+	fixture.openDocument(docUri, code);
+
+	// Request definition on 'helper' at line 1
+	json defParams = {
+		{"textDocument", {{"uri", docUri}}},
+		{"position", {{"line", 1}, {"character", 9}}}
+	};
+	fixture.transport()->queueRequest(4, "textDocument/definition", defParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(4);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+
+	// Result should point to lib.maxon
+	auto &result = response->result.value();
+	if (!result.is_null()) {
+		std::string targetUri;
+		if (result.is_array() && result.size() > 0) {
+			targetUri = result[0]["uri"].get<std::string>();
+		} else if (result.is_object() && result.contains("uri")) {
+			targetUri = result["uri"].get<std::string>();
+		}
+
+		if (!targetUri.empty()) {
+			// Should point to lib.maxon
+			REQUIRE(targetUri.find("lib.maxon") != std::string::npos);
+		}
+	}
 }

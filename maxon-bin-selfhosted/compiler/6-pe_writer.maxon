@@ -1,230 +1,249 @@
-// PE (Portable Executable) Writer for Windows x86-64
-// Minimal version - creates a working Windows executable for basic.maxon
+// PE Writer for Windows x86-64 executables
 
-//=============================================================================
-// Complete PE Builder for basic.maxon
-//
-// For basic.maxon which returns 42, we need to:
-// 1. Generate: mov ecx, 42  (exit code in ECX for Windows x64 ABI)
-// 2. Call ExitProcess from kernel32.dll
-//=============================================================================
+export type CodeBuffer
+	var bytes array of byte
+	var size int
+
+	export function create() returns CodeBuffer
+		return CodeBuffer{bytes: array of byte, size: 0}
+	end 'create'
+
+	export function emitByte(b byte) returns nothing
+		bytes.push(b)
+		size = size + 1
+	end 'emitByte'
+
+	export function emitWord(value int) returns nothing
+		emitByte((value & 0xFF) as byte)
+		emitByte(((value >> 8) & 0xFF) as byte)
+	end 'emitWord'
+
+	export function emitDword(value int) returns nothing
+		emitByte((value & 0xFF) as byte)
+		emitByte(((value >> 8) & 0xFF) as byte)
+		emitByte(((value >> 16) & 0xFF) as byte)
+		emitByte(((value >> 24) & 0xFF) as byte)
+	end 'emitDword'
+
+	export function emitQword(value int) returns nothing
+		emitDword(value & 0xFFFFFFFF)
+		emitDword((value >> 32) & 0xFFFFFFFF)
+	end 'emitQword'
+
+	export function align(alignment int) returns nothing
+		while (size mod alignment) != 0 'pad'
+			emitByte(0b)
+		end 'pad'
+	end 'align'
+end 'CodeBuffer'
 
 export type CompleteExeBuilder
-var buffer CodeBuffer
+	var buffer CodeBuffer
 
-export function create() returns CompleteExeBuilder
-	return CompleteExeBuilder{buffer: CodeBuffer.create()}
-end 'create'
+	export function create() returns CompleteExeBuilder
+		return CompleteExeBuilder{buffer: CodeBuffer.create()}
+	end 'create'
 
-export function buildBasicExe() returns nothing
-	// File layout:
-	// 0x0000 - DOS Header (64 bytes)
-	// 0x0040 - PE Signature (4 bytes)
-	// 0x0044 - COFF Header (20 bytes)
-	// 0x0058 - Optional Header (112 bytes)
-	// 0x00C8 - Section Headers (2 sections x 40 = 80 bytes)
-	// 0x0200 - .text section (code)
-	// 0x0400 - .idata section (imports)
+	export function buildBasicExe() returns nothing
+		let headersSize = 512
+		let textSectionFileOffset = 512
+		let textSectionRVA = 4096
+		let textSectionSize = 512
+		let idataSectionFileOffset = 1024
+		let idataSectionRVA = 8192
+		let idataSectionSize = 512
+		let imageSize = 12288
+		let entryPointRVA = textSectionRVA
 
-	let headersSize = 512
-	let textSectionFileOffset = 512
-	let textSectionRVA = 4096
-	let textSectionSize = 512
-	let idataSectionFileOffset = 1024
-	let idataSectionRVA = 8192
-	let idataSectionSize = 512
-	let imageSize = 12288
-	let entryPointRVA = textSectionRVA
-
-	// ========== DOS Header ==========
-	buffer.emitWord(0x5A4D)  // "MZ"
-	var i = 0
-	while i < 29 'dospad'
-		buffer.emitWord(0)
-		i = i + 1
-	end 'dospad'
-	buffer.emitDword(64)  // e_lfanew
-
-	// ========== PE Signature ==========
-	buffer.emitDword(0x00004550)  // "PE\0\0"
-
-	// ========== COFF Header ==========
-	buffer.emitWord(0x8664)  // Machine: AMD64
-	buffer.emitWord(2)       // NumberOfSections
-	buffer.emitDword(0)      // TimeDateStamp
-	buffer.emitDword(0)      // PointerToSymbolTable
-	buffer.emitDword(0)      // NumberOfSymbols
-	buffer.emitWord(112)     // SizeOfOptionalHeader
-	buffer.emitWord(0x0022)  // Characteristics
-
-	// ========== Optional Header (PE32+) ==========
-	buffer.emitWord(0x020B)  // Magic
-	buffer.emitByte(14b)     // MajorLinkerVersion
-	buffer.emitByte(0b)      // MinorLinkerVersion
-	buffer.emitDword(textSectionSize)   // SizeOfCode
-	buffer.emitDword(idataSectionSize)  // SizeOfInitializedData
-	buffer.emitDword(0)      // SizeOfUninitializedData
-	buffer.emitDword(entryPointRVA)     // AddressOfEntryPoint
-	buffer.emitDword(textSectionRVA)    // BaseOfCode
-	buffer.emitQword(0x0000000140000000)  // ImageBase
-	buffer.emitDword(4096)   // SectionAlignment
-	buffer.emitDword(512)    // FileAlignment
-	buffer.emitWord(6)       // MajorOSVersion
-	buffer.emitWord(0)       // MinorOSVersion
-	buffer.emitWord(0)       // MajorImageVersion
-	buffer.emitWord(0)       // MinorImageVersion
-	buffer.emitWord(6)       // MajorSubsystemVersion
-	buffer.emitWord(0)       // MinorSubsystemVersion
-	buffer.emitDword(0)      // Win32VersionValue
-	buffer.emitDword(imageSize)    // SizeOfImage
-	buffer.emitDword(headersSize)  // SizeOfHeaders
-	buffer.emitDword(0)      // CheckSum
-	buffer.emitWord(3)       // Subsystem (CONSOLE)
-	buffer.emitWord(0)       // DllCharacteristics
-	buffer.emitQword(0x100000)   // SizeOfStackReserve
-	buffer.emitQword(0x1000)     // SizeOfStackCommit
-	buffer.emitQword(0x100000)   // SizeOfHeapReserve
-	buffer.emitQword(0x1000)     // SizeOfHeapCommit
-	buffer.emitDword(0)      // LoaderFlags
-	buffer.emitDword(16)     // NumberOfRvaAndSizes
-
-	// Data directories
-	buffer.emitDword(0)  // Export
-	buffer.emitDword(0)
-	buffer.emitDword(idataSectionRVA)  // Import
-	buffer.emitDword(40)
-	i = 0
-	while i < 14 'datadirs'
-		buffer.emitDword(0)
-		buffer.emitDword(0)
-		i = i + 1
-	end 'datadirs'
-
-	// ========== Section Headers ==========
-	// .text section
-	writeSectionName(".text")
-	buffer.emitDword(textSectionSize)
-	buffer.emitDword(textSectionRVA)
-	buffer.emitDword(textSectionSize)
-	buffer.emitDword(textSectionFileOffset)
-	buffer.emitDword(0)
-	buffer.emitDword(0)
-	buffer.emitWord(0)
-	buffer.emitWord(0)
-	buffer.emitDword(0x60000020)  // code, exec, read
-
-	// .idata section
-	writeSectionName(".idata")
-	buffer.emitDword(idataSectionSize)
-	buffer.emitDword(idataSectionRVA)
-	buffer.emitDword(idataSectionSize)
-	buffer.emitDword(idataSectionFileOffset)
-	buffer.emitDword(0)
-	buffer.emitDword(0)
-	buffer.emitWord(0)
-	buffer.emitWord(0)
-	buffer.emitDword(0xC0000040)  // data, read, write
-
-	// Pad headers
-	while buffer.size < headersSize 'padHeaders'
-		buffer.emitByte(0b)
-	end 'padHeaders'
-
-	// ========== .text Section (Code) ==========
-	// mov ecx, 42           ; Exit code
-	// sub rsp, 40           ; Shadow space
-	// call [ExitProcess]    ; Call ExitProcess(42)
-
-	let exitProcessIAT = idataSectionRVA + 100
-
-	// mov ecx, 42  (B9 2A 00 00 00)
-	buffer.emitByte(0xB9 as byte)
-	buffer.emitDword(42)
-
-	// sub rsp, 40  (48 83 EC 28)
-	buffer.emitByte(0x48 as byte)
-	buffer.emitByte(0x83 as byte)
-	buffer.emitByte(0xEC as byte)
-	buffer.emitByte(0x28 as byte)
-
-	// call qword ptr [rip + offset] (FF 15 xx xx xx xx)
-	buffer.emitByte(0xFF as byte)
-	buffer.emitByte(0x15 as byte)
-	let ripAfterCall = textSectionRVA + 13
-	let relOffset = exitProcessIAT - ripAfterCall
-	buffer.emitDword(relOffset)
-
-	// Pad .text section
-	while buffer.size < idataSectionFileOffset 'padText'
-		buffer.emitByte(0x90 as byte)
-	end 'padText'
-
-	// ========== .idata Section (Imports) ==========
-	let iltOffset = 40
-	let dllNameOffset = 56
-	let hintNameOffset = 72
-	let iatOffset = 100
-
-	// Import Directory Entry
-	buffer.emitDword(idataSectionRVA + iltOffset)
-	buffer.emitDword(0)
-	buffer.emitDword(0)
-	buffer.emitDword(idataSectionRVA + dllNameOffset)
-	buffer.emitDword(idataSectionRVA + iatOffset)
-
-	// Null terminator
-	buffer.emitDword(0)
-	buffer.emitDword(0)
-	buffer.emitDword(0)
-	buffer.emitDword(0)
-	buffer.emitDword(0)
-
-	// Import Lookup Table
-	buffer.emitQword(idataSectionRVA + hintNameOffset)
-	buffer.emitQword(0)
-
-	// DLL Name: "kernel32.dll\0"
-	writeString("kernel32.dll")
-
-	// Pad to hint offset
-	while (buffer.size - idataSectionFileOffset) < hintNameOffset 'padToHint'
-		buffer.emitByte(0b)
-	end 'padToHint'
-
-	// Hint/Name
-	buffer.emitWord(0)
-	writeString("ExitProcess")
-
-	// Pad to IAT offset
-	while (buffer.size - idataSectionFileOffset) < iatOffset 'padToIAT'
-		buffer.emitByte(0b)
-	end 'padToIAT'
-
-	// Import Address Table
-	buffer.emitQword(idataSectionRVA + hintNameOffset)
-	buffer.emitQword(0)
-
-	// Pad .idata section
-	while buffer.size < (idataSectionFileOffset + idataSectionSize) 'padIdata'
-		buffer.emitByte(0b)
-	end 'padIdata'
-end 'buildBasicExe'
-
-export function writeSectionName(name string) returns nothing
-	var i = 0
-	while i < 8 'chars'
-		if i < name.bytes().count() 'hasChar'
-			buffer.emitByte(name.byteAt(i))
-			else 'hasChar'
-				buffer.emitByte(0b)
-			end 'hasChar'
+		// DOS Header
+		buffer.emitWord(0x5A4D)  // "MZ"
+		var i = 0
+		while i < 29 'dospad'
+			buffer.emitWord(0)
 			i = i + 1
+		end 'dospad'
+		buffer.emitDword(64)  // e_lfanew
+
+		// PE Signature
+		buffer.emitDword(0x00004550)  // "PE\0\0"
+
+		// COFF Header
+		buffer.emitWord(0x8664)  // Machine: AMD64
+		buffer.emitWord(2)       // NumberOfSections
+		buffer.emitDword(0)      // TimeDateStamp
+		buffer.emitDword(0)      // PointerToSymbolTable
+		buffer.emitDword(0)      // NumberOfSymbols
+		buffer.emitWord(112)     // SizeOfOptionalHeader
+		buffer.emitWord(0x0022)  // Characteristics
+
+		// Optional Header (PE32+)
+		buffer.emitWord(0x020B)  // Magic
+		buffer.emitByte(14b)     // MajorLinkerVersion
+		buffer.emitByte(0b)      // MinorLinkerVersion
+		buffer.emitDword(textSectionSize)
+		buffer.emitDword(idataSectionSize)
+		buffer.emitDword(0)
+		buffer.emitDword(entryPointRVA)
+		buffer.emitDword(textSectionRVA)
+		buffer.emitQword(0x0000000140000000)  // ImageBase
+		buffer.emitDword(4096)
+		buffer.emitDword(512)
+		buffer.emitWord(6)
+		buffer.emitWord(0)
+		buffer.emitWord(0)
+		buffer.emitWord(0)
+		buffer.emitWord(6)
+		buffer.emitWord(0)
+		buffer.emitDword(0)
+		buffer.emitDword(imageSize)
+		buffer.emitDword(headersSize)
+		buffer.emitDword(0)
+		buffer.emitWord(3)       // Subsystem (CONSOLE)
+		buffer.emitWord(0)
+		buffer.emitQword(0x100000)
+		buffer.emitQword(0x1000)
+		buffer.emitQword(0x100000)
+		buffer.emitQword(0x1000)
+		buffer.emitDword(0)
+		buffer.emitDword(16)
+
+		// Data directories
+		buffer.emitDword(0)
+		buffer.emitDword(0)
+		buffer.emitDword(idataSectionRVA)
+		buffer.emitDword(40)
+		i = 0
+		while i < 14 'datadirs'
+			buffer.emitDword(0)
+			buffer.emitDword(0)
+			i = i + 1
+		end 'datadirs'
+
+		// .text section header
+		writeSectionName(".text")
+		buffer.emitDword(textSectionSize)
+		buffer.emitDword(textSectionRVA)
+		buffer.emitDword(textSectionSize)
+		buffer.emitDword(textSectionFileOffset)
+		buffer.emitDword(0)
+		buffer.emitDword(0)
+		buffer.emitWord(0)
+		buffer.emitWord(0)
+		buffer.emitDword(0x60000020)
+
+		// .idata section header
+		writeSectionName(".idata")
+		buffer.emitDword(idataSectionSize)
+		buffer.emitDword(idataSectionRVA)
+		buffer.emitDword(idataSectionSize)
+		buffer.emitDword(idataSectionFileOffset)
+		buffer.emitDword(0)
+		buffer.emitDword(0)
+		buffer.emitWord(0)
+		buffer.emitWord(0)
+		buffer.emitDword(0xC0000040)
+
+		// Pad headers
+		while buffer.size < headersSize 'padHeaders'
+			buffer.emitByte(0b)
+		end 'padHeaders'
+
+		// .text Section (Code)
+		let exitProcessIAT = idataSectionRVA + 100
+
+		// mov ecx, 42
+		buffer.emitByte(0xB9 as byte)
+		buffer.emitDword(42)
+
+		// sub rsp, 40
+		buffer.emitByte(0x48 as byte)
+		buffer.emitByte(0x83 as byte)
+		buffer.emitByte(0xEC as byte)
+		buffer.emitByte(0x28 as byte)
+
+		// call qword ptr [rip + offset]
+		buffer.emitByte(0xFF as byte)
+		buffer.emitByte(0x15 as byte)
+		let ripAfterCall = textSectionRVA + 13
+		let relOffset = exitProcessIAT - ripAfterCall
+		buffer.emitDword(relOffset)
+
+		// Pad .text section
+		while buffer.size < idataSectionFileOffset 'padText'
+			buffer.emitByte(0x90 as byte)
+		end 'padText'
+
+		// .idata Section (Imports)
+		let iltOffset = 40
+		let dllNameOffset = 56
+		let hintNameOffset = 72
+		let iatOffset = 100
+
+		// Import Directory Entry
+		buffer.emitDword(idataSectionRVA + iltOffset)
+		buffer.emitDword(0)
+		buffer.emitDword(0)
+		buffer.emitDword(idataSectionRVA + dllNameOffset)
+		buffer.emitDword(idataSectionRVA + iatOffset)
+
+		// Null terminator
+		buffer.emitDword(0)
+		buffer.emitDword(0)
+		buffer.emitDword(0)
+		buffer.emitDword(0)
+		buffer.emitDword(0)
+
+		// Import Lookup Table
+		buffer.emitQword(idataSectionRVA + hintNameOffset)
+		buffer.emitQword(0)
+
+		// DLL Name
+		writeString("kernel32.dll")
+
+		// Pad to hint offset
+		while (buffer.size - idataSectionFileOffset) < hintNameOffset 'padToHint'
+			buffer.emitByte(0b)
+		end 'padToHint'
+
+		// Hint/Name
+		buffer.emitWord(0)
+		writeString("ExitProcess")
+
+		// Pad to IAT offset
+		while (buffer.size - idataSectionFileOffset) < iatOffset 'padToIAT'
+			buffer.emitByte(0b)
+		end 'padToIAT'
+
+		// Import Address Table
+		buffer.emitQword(idataSectionRVA + hintNameOffset)
+		buffer.emitQword(0)
+
+		// Pad .idata section
+		while buffer.size < (idataSectionFileOffset + idataSectionSize) 'padIdata'
+			buffer.emitByte(0b)
+		end 'padIdata'
+	end 'buildBasicExe'
+
+	export function writeSectionName(name string) returns nothing
+		var i = 0
+		while i < 8 'chars'
+			if i < name.count() 'hasChar'
+				for c in name 'iter'
+					if i == 0 'first'
+						buffer.emitByte(charToByte(c))
+					end 'first'
+					i = i + 1
+				end 'iter'
+			end 'hasChar' else 'noChar'
+				buffer.emitByte(0b)
+				i = i + 1
+			end 'noChar'
 		end 'chars'
 	end 'writeSectionName'
 
 	export function writeString(s string) returns nothing
-		for b in s.bytes() 'chars'
-			buffer.emitByte(b)
+		for c in s 'chars'
+			buffer.emitByte(charToByte(c))
 		end 'chars'
 		buffer.emitByte(0b)
 	end 'writeString'
@@ -238,4 +257,97 @@ export function writeSectionName(name string) returns nothing
 	end 'getSize'
 end 'CompleteExeBuilder'
 
-
+function charToByte(c character) returns byte
+	// Simple ASCII conversion
+	if c == 'a' 'a'
+		return 97b
+	end 'a'
+	if c == 'b' 'b'
+		return 98b
+	end 'b'
+	if c == 'c' 'c'
+		return 99b
+	end 'c'
+	if c == 'd' 'd'
+		return 100b
+	end 'd'
+	if c == 'e' 'e'
+		return 101b
+	end 'e'
+	if c == 'f' 'f'
+		return 102b
+	end 'f'
+	if c == 'g' 'g'
+		return 103b
+	end 'g'
+	if c == 'h' 'h'
+		return 104b
+	end 'h'
+	if c == 'i' 'i'
+		return 105b
+	end 'i'
+	if c == 'j' 'j'
+		return 106b
+	end 'j'
+	if c == 'k' 'k'
+		return 107b
+	end 'k'
+	if c == 'l' 'l'
+		return 108b
+	end 'l'
+	if c == 'm' 'm'
+		return 109b
+	end 'm'
+	if c == 'n' 'n'
+		return 110b
+	end 'n'
+	if c == 'o' 'o'
+		return 111b
+	end 'o'
+	if c == 'p' 'p'
+		return 112b
+	end 'p'
+	if c == 'q' 'q'
+		return 113b
+	end 'q'
+	if c == 'r' 'r'
+		return 114b
+	end 'r'
+	if c == 's' 's'
+		return 115b
+	end 's'
+	if c == 't' 't'
+		return 116b
+	end 't'
+	if c == 'u' 'u'
+		return 117b
+	end 'u'
+	if c == 'v' 'v'
+		return 118b
+	end 'v'
+	if c == 'w' 'w'
+		return 119b
+	end 'w'
+	if c == 'x' 'x'
+		return 120b
+	end 'x'
+	if c == 'y' 'y'
+		return 121b
+	end 'y'
+	if c == 'z' 'z'
+		return 122b
+	end 'z'
+	if c == '.' 'dot'
+		return 46b
+	end 'dot'
+	if c == '1' '1'
+		return 49b
+	end '1'
+	if c == '2' '2'
+		return 50b
+	end '2'
+	if c == '3' '3'
+		return 51b
+	end '3'
+	return 0b
+end 'charToByte'
