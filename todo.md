@@ -13,16 +13,18 @@ StringProtocol: Extends BidirectionalCollection. This is the specific protocol t
 Why do this? By making String a Collection, you get hundreds of algorithms for free: .map, .filter, .reduce, .dropFirst, .split. The Swift team didn't have to write these specifically for Strings; they just inherited them from the Collection protocol logic.
 
 ## Priorities
+- hover for intrinsics
+- error handling - have optionals return error instead of nil
+- string formatting
+- self hosting features
 - hex literals
-- coelecing operator 'or' (ie map.get("somekey") or "default value")
 - investigate maxon-bin/tests
 - debugging (speed up the dev process)
 - memory safety (generational references)
-- string formatting
-- self hosting features
 - parser needs to be strict about new lines
 
 ## TODO
+- implement swift inspired stdlib file support
 - see if we can/should get rid of MIR arrays, and also strings use StaticArray
 - simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")
 - platform specific optimization for runtime

@@ -268,6 +268,51 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Valid casts: int <-> char, char <-> int, or ExpressibleByStringLiteral types
 		return castExpr->targetType;
 
+	} else if (auto coalesceExpr = dynamic_cast<OrCoalesceExprAST *>(expr)) {
+		// Nil coalescing: optionalExpr or defaultExpr
+		// Left must be optional (T or nil), right must be T, result is T
+		std::string leftType = analyzeExpression(coalesceExpr->optionalExpr.get());
+		std::string rightType = analyzeExpression(coalesceExpr->defaultExpr.get());
+
+		// Verify left operand is optional type
+		if (!isOptionalType(leftType)) {
+			addError("Nil coalescing 'or' requires optional type on the left" +
+						 std::string("\n  Got: ") + leftType +
+						 "\n  Note: Use 'or' for nil coalescing: optionalValue or defaultValue",
+					 coalesceExpr->optionalExpr->line, coalesceExpr->optionalExpr->column);
+			return "error";
+		}
+
+		// Prevent chaining: right operand cannot be optional
+		if (isOptionalType(rightType)) {
+			addError("Cannot chain nil coalescing operators" +
+						 std::string("\n  Right operand type: ") + rightType +
+						 "\n  Note: The result of 'or' is already unwrapped, so chaining is not allowed",
+					 coalesceExpr->defaultExpr->line, coalesceExpr->defaultExpr->column);
+			return "error";
+		}
+
+		// Unwrap the optional type and verify the default matches
+		std::string unwrappedType = unwrapOptionalType(leftType);
+		if (!typesMatch(unwrappedType, rightType)) {
+			// Allow nil literal as default for optional result
+			if (rightType == "nil") {
+				addError("Nil coalescing default cannot be nil" +
+							 std::string("\n  Note: The default value provides the fallback when the optional is nil"),
+						 coalesceExpr->defaultExpr->line, coalesceExpr->defaultExpr->column);
+				return "error";
+			}
+			addError("Nil coalescing type mismatch" +
+						 std::string("\n  Optional unwraps to: ") + unwrappedType +
+						 "\n  Default value type: " + rightType +
+						 "\n  Note: The default must match the unwrapped optional type",
+					 expr->line, expr->column);
+			return "error";
+		}
+
+		// Result is the unwrapped type
+		return unwrappedType;
+
 	} else if (auto varExpr = dynamic_cast<VariableExprAST *>(expr)) {
 		auto varInfo = lookupVariable(varExpr->name);
 		if (!varInfo.has_value()) {
@@ -317,7 +362,41 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		std::string leftType = analyzeExpression(binExpr->left.get());
 		std::string rightType = analyzeExpression(binExpr->right.get());
 
-		// Prevent using optional types without unwrapping
+		// Special case: 'or' with optional left operand is nil coalescing
+		// This handles cases where the parser couldn't distinguish nil coalescing from logical or
+		if (binExpr->op == 'O' && isOptionalType(leftType)) {
+			// Treat as nil coalescing: optionalExpr or defaultExpr
+			// Right operand cannot be optional (no chaining)
+			if (isOptionalType(rightType)) {
+				addError("Cannot chain nil coalescing operators" +
+							 std::string("\n  Right operand type: ") + rightType +
+							 "\n  Note: The result of 'or' is already unwrapped, so chaining is not allowed",
+						 binExpr->right->line, binExpr->right->column);
+				return "error";
+			}
+
+			// Unwrap the optional type and verify the default matches
+			std::string unwrappedType = unwrapOptionalType(leftType);
+			if (!typesMatch(unwrappedType, rightType)) {
+				if (rightType == "nil") {
+					addError("Nil coalescing default cannot be nil" +
+								 std::string("\n  Note: The default value provides the fallback when the optional is nil"),
+							 binExpr->right->line, binExpr->right->column);
+					return "error";
+				}
+				addError("Nil coalescing type mismatch" +
+							 std::string("\n  Optional unwraps to: ") + unwrappedType +
+							 "\n  Default value type: " + rightType +
+							 "\n  Note: The default must match the unwrapped optional type",
+						 expr->line, expr->column);
+				return "error";
+			}
+
+			// Return the unwrapped type (nil coalescing always produces non-optional)
+			return unwrappedType;
+		}
+
+		// Prevent using optional types without unwrapping (except for nil coalescing handled above)
 		if (isOptionalType(leftType)) {
 			addError("Cannot use optional type '" + leftType + "' without unwrapping" +
 						 std::string("\n  Note: Use 'if let' to safely unwrap optional values before using them"),

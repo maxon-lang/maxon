@@ -330,6 +330,7 @@ class MIRCodeGenerator {
 	mir::MIRValue *createSomeOptional(mir::MIRType *optionalType, mir::MIRValue *value);
 	void generateIfLet(IfLetStmtAST *ifLet, mir::MIRFunction *function);
 	void generateElseUnwrap(ElseUnwrapStmtAST *elseUnwrap, mir::MIRFunction *function);
+	void generateGuardLet(GuardLetStmtAST *guardLet, mir::MIRFunction *function);
 
 	// Safe FFI generation
 	void registerExternFunction(FunctionAST *func);

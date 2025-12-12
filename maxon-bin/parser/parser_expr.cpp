@@ -12,17 +12,16 @@ CallArgument Parser::parseNamedArgument() {
 		int argCol = currentColumn();
 		advance(); // consume name
 		advance(); // consume '='
-		auto valueExpr = parseLogicalOr();
+		auto valueExpr = parseNilCoalesce();
 		return CallArgument(std::move(valueExpr), argLine, argCol, argName);
 	}
 
 	// No name - positional argument
-	auto argExpr = parseLogicalOr();
+	auto argExpr = parseNilCoalesce();
 	int argLine = argExpr->line;
 	int argCol = argExpr->column;
 	return CallArgument(std::move(argExpr), argLine, argCol);
 }
-
 std::unique_ptr<ExprAST> Parser::parsePrimary() {
 	if (check(TokenType::NUMBER)) {
 		int value = std::stoi(std::string(currentValue()));
@@ -290,13 +289,13 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		}
 
 		// Parse the first expression
-		auto firstExpr = parseLogicalOr();
+		auto firstExpr = parseNilCoalesce();
 
 		// Check if this is a map literal (has ':' after first expression)
 		if (check(TokenType::COLON)) {
 			// This is a map literal: [key: value, ...]
 			advance(); // consume ':'
-			auto firstValue = parseLogicalOr();
+			auto firstValue = parseNilCoalesce();
 
 			std::vector<MapLiteralWithEntriesExprAST::Entry> entries;
 			MapLiteralWithEntriesExprAST::Entry firstEntry;
@@ -306,9 +305,9 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 
 			// Parse remaining key-value pairs
 			while (match(TokenType::COMMA)) {
-				auto key = parseLogicalOr();
+				auto key = parseNilCoalesce();
 				expectAdvance(TokenType::COLON, "Expected ':' after map key");
-				auto value = parseLogicalOr();
+				auto value = parseNilCoalesce();
 
 				MapLiteralWithEntriesExprAST::Entry entry;
 				entry.key = std::move(key);
@@ -330,7 +329,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		values.push_back(std::move(firstExpr));
 
 		while (match(TokenType::COMMA)) {
-			values.push_back(parseLogicalOr());
+			values.push_back(parseNilCoalesce());
 		}
 
 		int endLine = currentLine();
@@ -351,7 +350,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		advance();
 
 		expectAdvance(TokenType::LPAREN, "Expected '(' after '" + funcName + "'");
-		auto arg = parseLogicalOr();
+		auto arg = parseNilCoalesce();
 		int argLine = arg->line;
 		int argCol = arg->column;
 		int endLine = currentLine();
@@ -1084,6 +1083,11 @@ std::unique_ptr<ExprAST> Parser::parseLogicalOr() {
 
 	// Handle 'or' operator (logical OR)
 	while (checkKeyword("or")) {
+		// Peek ahead: if next token after 'or' is a BLOCK_ID, this is guard-let, not logical or
+		// Let the statement parser handle that case
+		if (check(TokenType::BLOCK_ID, 1)) {
+			break;
+		}
 		int line = currentLine();
 		int column = currentColumn();
 		advance();
@@ -1091,6 +1095,27 @@ std::unique_ptr<ExprAST> Parser::parseLogicalOr() {
 		auto binExpr = std::make_unique<BinaryExprAST>('O', std::move(left), std::move(right), line, column);
 		binExpr->setEndPosition(binExpr->right->endLine, binExpr->right->endColumn);
 		left = std::move(binExpr);
+	}
+
+	return left;
+}
+
+// Nil coalescing: lowest precedence expression operator
+// Syntax: optionalExpr or defaultExpr
+// Returns the unwrapped value if optional has a value, otherwise the default
+std::unique_ptr<ExprAST> Parser::parseNilCoalesce() {
+	auto left = parseLogicalOr();
+
+	// Check for 'or' followed by non-BLOCK_ID (nil coalescing)
+	// If followed by BLOCK_ID, it's guard-let syntax handled by statement parser
+	if (checkKeyword("or") && !check(TokenType::BLOCK_ID, 1)) {
+		int line = currentLine();
+		int column = currentColumn();
+		advance();					   // consume 'or'
+		auto right = parseLogicalOr(); // Parse default value (no chaining - parseLogicalOr not parseNilCoalesce)
+		auto coalesceExpr = std::make_unique<OrCoalesceExprAST>(std::move(left), std::move(right), line, column);
+		coalesceExpr->setEndPosition(coalesceExpr->defaultExpr->endLine, coalesceExpr->defaultExpr->endColumn);
+		return coalesceExpr;
 	}
 
 	return left;

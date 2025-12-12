@@ -14,7 +14,7 @@ std::unique_ptr<GlobalLetDeclAST> Parser::parseTopLevelLet(bool isExported) {
 	std::string type = "";
 
 	expectAdvance(TokenType::ASSIGN, "Expected '='");
-	auto initializer = parseLogicalOr();
+	auto initializer = parseNilCoalesce();
 
 	return std::make_unique<GlobalLetDeclAST>(name.value, std::move(initializer), type, isExported,
 											  letToken.line, letToken.column);
@@ -28,7 +28,7 @@ std::unique_ptr<StmtAST> Parser::parseVarDecl() {
 	std::string type = "";
 
 	expectAdvance(TokenType::ASSIGN, "Expected '='");
-	auto initializer = parseLogicalOr();
+	auto initializer = parseNilCoalesce();
 
 	// Check for else-unwrap
 	if (checkKeyword("else")) {
@@ -38,9 +38,21 @@ std::unique_ptr<StmtAST> Parser::parseVarDecl() {
 	return std::make_unique<VarDeclStmtAST>(name.value, std::move(initializer), type, varToken.line, varToken.column);
 }
 
-std::unique_ptr<LetDeclStmtAST> Parser::parseLetDecl() {
+std::unique_ptr<StmtAST> Parser::parseLetDecl() {
 	Token letToken = expectKeyword("let", "Expected 'let'");
-	auto [name, type, initializer] = parseVariableDeclarationComponents();
+	Token name = expect(TokenType::IDENTIFIER, "Expected variable name");
+
+	// Type is always inferred from initializer
+	std::string type = "";
+
+	expectAdvance(TokenType::ASSIGN, "Expected '='");
+	auto initializer = parseLogicalOr(); // Use parseLogicalOr to stop before 'or' BLOCK_ID
+
+	// Check for guard-let: let x = optionalExpr or 'blockId'
+	if (checkKeyword("or") && check(TokenType::BLOCK_ID, 1)) {
+		return parseGuardLet(letToken, name, std::move(initializer));
+	}
+
 	return std::make_unique<LetDeclStmtAST>(name.value, std::move(initializer), type, letToken.line, letToken.column);
 }
 
@@ -51,14 +63,14 @@ std::tuple<Token, std::string, std::unique_ptr<ExprAST>> Parser::parseVariableDe
 	std::string type = "";
 
 	expectAdvance(TokenType::ASSIGN, "Expected '='");
-	auto initializer = parseLogicalOr();
+	auto initializer = parseNilCoalesce();
 
 	return {name, type, std::move(initializer)};
 }
 
 std::unique_ptr<AssignStmtAST> Parser::parseAssignment(const std::string &name) {
 	Token assignToken = expect(TokenType::ASSIGN, "Expected '='");
-	auto value = parseLogicalOr();
+	auto value = parseNilCoalesce();
 	return std::make_unique<AssignStmtAST>(name, std::move(value), assignToken.line, assignToken.column);
 }
 
@@ -72,7 +84,7 @@ std::unique_ptr<ReturnStmtAST> Parser::parseReturn() {
 		!checkKeyword("for") && !checkKeyword("var") && !checkKeyword("let") &&
 		!checkKeyword("return") && !checkKeyword("break") && !checkKeyword("continue") &&
 		!check(TokenType::END_OF_FILE)) {
-		value = parseLogicalOr();
+		value = parseNilCoalesce();
 	}
 
 	return std::make_unique<ReturnStmtAST>(std::move(value), returnToken.line, returnToken.column);
@@ -112,7 +124,7 @@ std::unique_ptr<StmtAST> Parser::parseIf() {
 		return parseIfLet(ifToken);
 	}
 
-	auto condition = parseLogicalOr();
+	auto condition = parseNilCoalesce();
 
 	// Require block identifier for the if/then branch
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'if' condition (use 'id' where id is any string)");
@@ -197,7 +209,7 @@ std::unique_ptr<IfLetStmtAST> Parser::parseIfLet(Token ifToken) {
 	Token bindingName = expect(TokenType::IDENTIFIER, "Expected variable name after 'if let'");
 	expectAdvance(TokenType::ASSIGN, "Expected '=' after variable name in 'if let'");
 
-	auto optionalExpr = parseLogicalOr();
+	auto optionalExpr = parseNilCoalesce();
 
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'if let' expression");
 	std::string blockId = blockIdToken.value;
@@ -286,9 +298,38 @@ std::unique_ptr<ElseUnwrapStmtAST> Parser::parseElseUnwrap(Token varToken, Token
 	return stmt;
 }
 
+std::unique_ptr<GuardLetStmtAST> Parser::parseGuardLet(Token letToken, Token nameToken,
+													   std::unique_ptr<ExprAST> optionalExpr) {
+	expectKeywordAdvance("or", "Expected 'or'");
+	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'or'");
+	std::string blockId = blockIdToken.value;
+
+	// Parse guard body (must exit scope with return, break, or continue)
+	std::vector<std::unique_ptr<StmtAST>> guardBody;
+	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+		guardBody.push_back(parseStatementWithRecovery());
+	}
+
+	expectKeywordAdvance("end", "Expected 'end' to close guard block");
+	Token endBlockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'end'");
+	if (endBlockIdToken.value != blockId) {
+		reportError("Block identifier mismatch in guard-let statement\n  Expected: '" + blockId +
+						"'\n  Found: '" + endBlockIdToken.value + "'",
+					endBlockIdToken.line, endBlockIdToken.column);
+	}
+
+	auto stmt = std::make_unique<GuardLetStmtAST>(nameToken.value,
+												  std::move(optionalExpr),
+												  std::move(guardBody),
+												  letToken.line, letToken.column,
+												  blockId);
+	// Set end position to the closing block identifier
+	stmt->setEndPosition(endBlockIdToken.line, endBlockIdToken.column + static_cast<int>(endBlockIdToken.value.length()) - 1);
+	return stmt;
+}
 std::unique_ptr<WhileStmtAST> Parser::parseWhile() {
 	Token whileToken = expectKeyword("while", "Expected 'while'");
-	auto condition = parseLogicalOr();
+	auto condition = parseNilCoalesce();
 
 	// Require block identifier
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'while' condition (use 'id' where id is any string)");
@@ -329,7 +370,7 @@ std::unique_ptr<ForStmtAST> Parser::parseFor() {
 	expectKeywordAdvance("in", "Expected 'in' after loop variable");
 
 	// Parse iterable expression (range call, array variable, etc.)
-	auto iterable = parseLogicalOr();
+	auto iterable = parseNilCoalesce();
 
 	// Require block identifier
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after 'for' iterable (use 'id' where id is any string)");
@@ -410,17 +451,17 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 			// Check for array index on member (struct.field[i] = value)
 			if (check(TokenType::LBRACKET)) {
 				advance(); // consume '['
-				auto index = parseLogicalOr();
+				auto index = parseNilCoalesce();
 				expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
 				expectAdvance(TokenType::ASSIGN, "Expected '=' in array member assignment");
-				auto value = parseLogicalOr();
+				auto value = parseNilCoalesce();
 				return std::make_unique<MemberArrayAssignStmtAST>(name, memberName.value, std::move(index), std::move(value), idLine, idColumn);
 			}
 
 			// If followed by assignment, this is struct member assignment
 			if (check(TokenType::ASSIGN)) {
 				advance(); // consume '='
-				auto value = parseLogicalOr();
+				auto value = parseNilCoalesce();
 				return std::make_unique<MemberAssignStmtAST>(name, memberName.value, std::move(value), idLine, idColumn);
 			}
 
@@ -455,7 +496,7 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 		// Check for array indexing assignment: array[index] = value or array[index].member = value
 		if (check(TokenType::LBRACKET)) {
 			advance(); // consume '['
-			auto index = parseLogicalOr();
+			auto index = parseNilCoalesce();
 			expectAdvance(TokenType::RBRACKET, "Expected ']' after array index");
 
 			// Check for member access on array element
@@ -463,13 +504,13 @@ std::unique_ptr<StmtAST> Parser::parseStatement() {
 				advance(); // consume '.'
 				Token memberName = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
 				expectAdvance(TokenType::ASSIGN, "Expected '=' in member assignment");
-				auto value = parseLogicalOr();
+				auto value = parseNilCoalesce();
 				// Create ArrayMemberAssignStmtAST for arr[i].field = value
 				return std::make_unique<ArrayMemberAssignStmtAST>(name, std::move(index), memberName.value, std::move(value), idLine, idColumn);
 			}
 
 			expectAdvance(TokenType::ASSIGN, "Expected '=' in array assignment");
-			auto value = parseLogicalOr();
+			auto value = parseNilCoalesce();
 			return std::make_unique<ArrayAssignStmtAST>(name, std::move(index), std::move(value), idLine, idColumn);
 		}
 
@@ -515,7 +556,7 @@ std::unique_ptr<MatchStmtAST> Parser::parseMatch() {
 	Token matchToken = expectKeyword("match", "Expected 'match'");
 
 	// Parse scrutinee expression
-	auto scrutinee = parseLogicalOr();
+	auto scrutinee = parseNilCoalesce();
 
 	// Require block identifier
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after match expression");
@@ -634,7 +675,7 @@ std::unique_ptr<MatchExprAST> Parser::parseMatchExpr() {
 	Token matchToken = expectKeyword("match", "Expected 'match'");
 
 	// Parse scrutinee expression
-	auto scrutinee = parseLogicalOr();
+	auto scrutinee = parseNilCoalesce();
 
 	// Require block identifier
 	Token blockIdToken = expect(TokenType::BLOCK_ID, "Expected block identifier after match expression");
@@ -678,7 +719,7 @@ std::unique_ptr<MatchExprAST> Parser::parseMatchExpr() {
 			expectKeywordAdvance("gives", "Expected 'gives' after case pattern");
 
 			// Parse result expression
-			auto resultExpr = parseLogicalOr();
+			auto resultExpr = parseNilCoalesce();
 
 			cases.push_back(MatchCaseAST(
 				caseName,
@@ -704,7 +745,7 @@ std::unique_ptr<MatchExprAST> Parser::parseMatchExpr() {
 		expectKeywordAdvance("gives", "Expected 'gives' after pattern");
 
 		// Parse result expression
-		auto resultExpr = parseLogicalOr();
+		auto resultExpr = parseNilCoalesce();
 
 		cases.push_back(MatchCaseAST(
 			std::move(patterns),

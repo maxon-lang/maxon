@@ -3,11 +3,14 @@
 // Namespace: stdlib.sys
 
 /// Read text file content into a string
-/// Returns empty string on error (TODO: better error handling)
-export function readTextFile(path string) returns string
+/// Returns nil if file cannot be read
+export function readTextFile(path string) returns string or nil
 	var cs = path.cstr()
-	let managed = __read_file(cs)
-	return string{_managed: managed, _iterPos: 0}
+	let maybeManaged = __read_file(cs)
+	if let managed = maybeManaged 'hasData'
+		return string{_managed: managed, _iterPos: 0}
+	end 'hasData'
+	return nil
 end 'readTextFile'
 
 /// Write string content to a file
@@ -28,8 +31,8 @@ export function writeBinaryFile(path string, content array of byte) returns bool
 end 'writeBinaryFile'
 
 /// List files and directories in a path
-/// Returns array of filenames (excluding . and ..)
-export function listDirectory(path string) returns array of string
+/// Returns array of filenames (excluding . and ..), or nil if directory doesn't exist
+export function listDirectory(path string) returns array of string or nil
 	var cs = path.cstr()
 	return __list_directory(cs)
 end 'listDirectory'
@@ -41,3 +44,5 @@ export function isDirectory(path string) returns bool
 	let res = __is_directory(cs)
 	return res == 1
 end 'isDirectory'
+
+

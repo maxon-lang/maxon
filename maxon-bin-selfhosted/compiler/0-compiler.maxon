@@ -8,79 +8,81 @@ export function compile(sourceFile string) returns int
 	print("")
 
 	// Read source file
-	let source = readTextFile(sourceFile)
-	if source == nil 'noSource'
-		print("Error: Could not read source file: " + sourceFile)
-		return 1
-	end 'noSource'
+	let source = readTextFile(sourceFile) or 'noSource'
+	print("Error: Could not read source file: " + sourceFile)
+	return 1
+end 'noSource'
 
-	// Phase 1: Lexical Analysis
-	print("Phase 1: Lexing...")
-	var lexer = Lexer.create(source)
-	let tokens = lexer.tokenize()
-	print("  Found tokens")
+// Phase 1: Lexical Analysis
+print("Phase 1: Lexing...")
+var lexer = Lexer.create(source)
+print("Phase 1: Lexing...")
+var lexer = Lexer.create(source)
+let tokens = lexer.tokenize()
+print("  Found tokens")
 
-	// Phase 2: Parsing
-	print("Phase 2: Parsing...")
-	var parser = Parser.create(tokens)
-	let program = parser.parseProgram(sourceFile)
+// Phase 2: Parsing
+print("Phase 2: Parsing...")
+var parser = Parser.create(tokens)
+let program = parser.parseProgram(sourceFile)
 
-	if parser.hadError 'parseError'
-		print("Error: " + parser.errorMessage)
-		return 1
-	end 'parseError'
+if parser.hadError 'parseError'
+	print("Error: " + parser.errorMessage)
+	return 1
+end 'parseError'
 
-	print("  Parsed functions")
+print("  Parsed functions")
 
-	// Phase 3: Semantic Analysis
-	print("Phase 3: Semantic Analysis...")
-	var analyzer = SemanticAnalyzer.create()
-	analyzer.analyze(program)
+// Phase 3: Semantic Analysis
+print("Phase 3: Semantic Analysis...")
+var analyzer = SemanticAnalyzer.create()
+analyzer.analyze(program)
 
-	if not analyzer.success() 'hasErrors'
-		analyzer.printErrors()
-		return 1
-	end 'hasErrors'
-	print("  OK")
+if not analyzer.success() 'hasErrors'
+	analyzer.printErrors()
+	return 1
+end 'hasErrors'
+print("  OK")
 
-	// Phase 4: Optimization
-	print("Phase 4: Optimization...")
-	var optimizer = createStandardOptimizer()
-	optimizer.optimize(program)
-	print("  Done")
+// Phase 4: Optimization
+print("Phase 4: Optimization...")
+var optimizer = createStandardOptimizer()
+optimizer.optimize(program)
+print("  Done")
 
-	// Phase 5: MIR Code Generation
-	print("Phase 5: Code Generation (MIR)...")
-	var codegen = CodeGen.create()
-	codegen.generate(program)
-	print("  Generated MIR")
+// Phase 5: MIR Code Generation
+print("Phase 5: Code Generation (MIR)...")
+var codegen = CodeGen.create()
+codegen.generate(program)
+print("  Generated MIR")
 
-	let mirFile = sourceFile.replace(".maxon", ".mir")
-	writeTextFile(mirFile, codegen.output)
-	print("  Wrote " + mirFile)
+let mirFile = sourceFile.replace(".maxon", ".mir")
+writeTextFile(mirFile, codegen.output)
+print("  Wrote " + mirFile)
 
-	// Phase 6: x86-64 Code Generation
-	print("Phase 6: Code Generation (x86-64)...")
-	var x86gen = X86Gen.create()
-	x86gen.generate(program)
-	print("  Generated machine code")
+// Phase 6: x86-64 Code Generation
+print("Phase 6: Code Generation (x86-64)...")
+var x86gen = X86Gen.create()
+x86gen.generate(program)
+print("  Generated machine code")
 
-	// Phase 7: PE Executable Generation
-	print("Phase 7: PE Executable Generation...")
-	var exeBuilder = CompleteExeBuilder.create()
-	exeBuilder.buildBasicExe()
-	let exeBytes = exeBuilder.getBytes()
-	let exeSize = exeBuilder.getSize()
-	print("  Generated executable")
+// Phase 7: PE Executable Generation
+print("Phase 7: PE Executable Generation...")
+var exeBuilder = CompleteExeBuilder.create()
+exeBuilder.buildBasicExe()
+let exeBytes = exeBuilder.getBytes()
+let exeSize = exeBuilder.getSize()
+print("  Generated executable")
 
-	// Phase 8: Write Output File
-	print("Phase 8: Writing " + outputFile + "...")
-	writeBinaryFile(outputFile, exeBytes)
-	print("  Done!")
+// Phase 8: Write Output File
+print("Phase 8: Writing " + outputFile + "...")
+writeBinaryFile(outputFile, exeBytes)
+print("  Done!")
 
-	print("")
-	print("Compilation successful!")
-	print("Output: " + outputFile)
+print("")
+print("Compilation successful!")
+print("Output: " + outputFile)
 
-	return 0
+return 0
 end 'compile'
+

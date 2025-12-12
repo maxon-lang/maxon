@@ -210,3 +210,71 @@ void MIRCodeGenerator::generateElseUnwrap(ElseUnwrapStmtAST *elseUnwrap, mir::MI
 	// Continue - result variable is now initialized on all paths
 	builder->setInsertPoint(afterBlock);
 }
+
+//==============================================================================
+// Guard-Let Statement Generation
+//==============================================================================
+
+void MIRCodeGenerator::generateGuardLet(GuardLetStmtAST *guardLet, mir::MIRFunction *function) {
+	// Evaluate optional expression
+	mir::MIRValue *optionalValue = generateExpr(guardLet->optionalExpr.get());
+
+	// Get the optional type
+	std::string optionalTypeStr = getExpressionMaxonType(guardLet->optionalExpr.get());
+	mir::MIRType *optionalType = getTypeFromString(optionalTypeStr);
+
+	// Get the unwrapped type using centralized type conversion
+	std::string unwrappedTypeStr = maxon::TypeConversion::unwrapOptionalType(optionalTypeStr);
+	mir::MIRType *unwrappedType = getTypeFromString(unwrappedTypeStr);
+
+	// Allocate the result variable (unwrapped type)
+	mir::MIRValue *resultAlloca = builder->createAlloca(unwrappedType, guardLet->name);
+
+	// Register the variable in scope (needed for guard body in case it references it)
+	namedValues[guardLet->name] = resultAlloca;
+	variableTypes[guardLet->name] = unwrappedTypeStr;
+
+	// Store optional to stack
+	mir::MIRValue *optionalAlloca = builder->createAlloca(optionalType, "guard.optional");
+	builder->createStore(optionalValue, optionalAlloca);
+
+	// Load tag (first byte) - use optionalType for correct offset calculation
+	mir::MIRValue *tagPtr = builder->createStructGEP(optionalType, optionalAlloca, 0, "tag.ptr");
+	mir::MIRValue *tag = builder->createLoad(mir::MIRType::getInt8(), tagPtr, "tag");
+
+	// Compare tag == 1 (has value)
+	mir::MIRValue *hasValue = builder->createICmpEq(tag, builder->getInt8(1), "has.value");
+
+	// Create basic blocks
+	mir::MIRBasicBlock *hasValueBlock = builder->createBasicBlock("guard.hasvalue");
+	mir::MIRBasicBlock *guardBlock = builder->createBasicBlock("guard.nil");
+	mir::MIRBasicBlock *afterBlock = builder->createBasicBlock("guard.after");
+
+	builder->createCondBr(hasValue, hasValueBlock, guardBlock);
+
+	// Has-value block: extract and store to result variable, then continue
+	builder->setInsertPoint(hasValueBlock);
+	mir::MIRValue *valuePtr = builder->createStructGEP(optionalType, optionalAlloca, 1, "value.ptr");
+	mir::MIRValue *unwrappedValue = builder->createLoad(unwrappedType, valuePtr, "unwrapped.val");
+	builder->createStore(unwrappedValue, resultAlloca);
+	builder->createBr(afterBlock);
+
+	// Guard block: nil case - execute guard body (must exit scope)
+	builder->setInsertPoint(guardBlock);
+	pushScope();
+	for (const auto &s : guardLet->guardBody) {
+		generateStmt(s.get(), function);
+	}
+	popScope(function);
+
+	// Note: Guard body MUST exit scope (return/break/continue)
+	// Semantic analysis already enforced this
+	// But if somehow we get here, branch to after block (unreachable in practice)
+	mir::MIRBasicBlock *guardEndBB = builder->getInsertBlock();
+	if (!guardEndBB->hasTerminator()) {
+		builder->createBr(afterBlock);
+	}
+
+	// Continue after guard-let - variable is now bound
+	builder->setInsertPoint(afterBlock);
+}

@@ -1586,7 +1586,7 @@ return_empty:
 ;==============================================================================
 ; __read_file - alias for read_file
 ; ptr __read_file(ptr path)
-; Returns managed string pointer (never null)
+; Returns managed string pointer, or null on error
 ;==============================================================================
 define ptr @__read_file(ptr %path) {
 entry:
@@ -1596,9 +1596,9 @@ entry:
     ; Call read_file
     %data = call ptr @read_file(ptr %path, ptr %out_len)
 
-    ; Check if data is null (error)
+    ; Check if data is null (error) - return null for optional support
     %is_null = icmp eq ptr %data, null
-    br i1 %is_null, label %return_empty, label %success
+    br i1 %is_null, label %return_null, label %success
 
 success:
     ; Load length
@@ -1630,36 +1630,10 @@ setup_struct:
 
 free_data:
     call void @_managed_string_release(ptr %data, ptr null)
-    br label %return_empty
+    br label %return_null
 
-return_empty:
-    ; Return empty string
-    ; Allocate managed string struct (24 bytes)
-    %empty_managed = call ptr @malloc(i64 24)
-    %empty_null = icmp eq ptr %empty_managed, null
-    br i1 %empty_null, label %error, label %setup_empty
-
-setup_empty:
-    ; Setup empty __ManagedStringData
-    ; Field 0: buffer pointer (null)
-    store ptr null, ptr %empty_managed
-
-    ; Field 1: length 0 at offset 8
-    %empty_len_ptr0 = getelementptr i8, ptr %empty_managed, i64 8
-    store i32 0, ptr %empty_len_ptr0
-
-    ; Field 2: length copy at offset 16
-    %empty_len_ptr1 = getelementptr i8, ptr %empty_managed, i64 16
-    store i32 0, ptr %empty_len_ptr1
-
-    ; Field 3: capacity at offset 20
-    %empty_cap_ptr = getelementptr i8, ptr %empty_managed, i64 20
-    store i32 0, ptr %empty_cap_ptr
-
-    ret ptr %empty_managed
-
-error:
-    ; If malloc fails, return null (should not happen in practice)
+return_null:
+    ; Return null for optional error handling
     ret ptr null
 }
 
@@ -1905,23 +1879,7 @@ close_handle2:
     br label %return_empty
 
 return_empty:
-    ; Return empty array: __ManagedArrayData<string> = { null, 0, 0 }
-    %empty_result = call ptr @malloc(i64 16)
-    %empty_null = icmp eq ptr %empty_result, null
-    br i1 %empty_null, label %return_null, label %setup_empty
-
-setup_empty:
-    ; Field 0: buffer = null
-    store ptr null, ptr %empty_result
-    ; Field 1: length = 0
-    %empty_len_ptr = getelementptr i8, ptr %empty_result, i64 8
-    store i32 0, ptr %empty_len_ptr
-    ; Field 2: capacity = 0 (stack-like, no heap allocation for buffer)
-    %empty_cap_ptr = getelementptr i8, ptr %empty_result, i64 12
-    store i32 0, ptr %empty_cap_ptr
-    ret ptr %empty_result
-
-return_null:
+    ; Return null to indicate error (directory not found or inaccessible)
     ret ptr null
 }
 

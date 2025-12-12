@@ -888,7 +888,110 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		}
 	}
 
+	// Nil coalescing: optionalExpr or defaultExpr
+	// Returns the unwrapped value if optional has value, otherwise the default
+	if (auto *coalesceExpr = dynamic_cast<OrCoalesceExprAST *>(expr)) {
+		// Evaluate optional expression
+		mir::MIRValue *optionalValue = generateExpr(coalesceExpr->optionalExpr.get());
+
+		// Get the optional type
+		std::string optionalTypeStr = getExpressionMaxonType(coalesceExpr->optionalExpr.get());
+		mir::MIRType *optionalType = getTypeFromString(optionalTypeStr);
+
+		// Get the unwrapped type using centralized type conversion
+		std::string unwrappedTypeStr = maxon::TypeConversion::unwrapOptionalType(optionalTypeStr);
+		mir::MIRType *unwrappedType = getTypeFromString(unwrappedTypeStr);
+
+		// Store optional to stack
+		mir::MIRValue *optionalAlloca = builder->createAlloca(optionalType, "coalesce.optional");
+		builder->createStore(optionalValue, optionalAlloca);
+
+		// Load tag (first byte) - field 0
+		mir::MIRValue *tagPtr = builder->createStructGEP(optionalType, optionalAlloca, 0, "tag.ptr");
+		mir::MIRValue *tag = builder->createLoad(mir::MIRType::getInt8(), tagPtr, "tag");
+
+		// Compare tag == 1 (has value)
+		mir::MIRValue *hasValue = builder->createICmpEq(tag, builder->getInt8(1), "has.value");
+
+		// Create basic blocks
+		mir::MIRBasicBlock *hasValueBlock = builder->createBasicBlock("coalesce.hasvalue");
+		mir::MIRBasicBlock *defaultBlock = builder->createBasicBlock("coalesce.default");
+		mir::MIRBasicBlock *afterBlock = builder->createBasicBlock("coalesce.after");
+
+		// Allocate result on stack
+		mir::MIRValue *resultAlloca = builder->createAlloca(unwrappedType, "coalesce.result");
+
+		builder->createCondBr(hasValue, hasValueBlock, defaultBlock);
+
+		// Has-value block: extract and store to result
+		builder->setInsertPoint(hasValueBlock);
+		mir::MIRValue *valuePtr = builder->createStructGEP(optionalType, optionalAlloca, 1, "value.ptr");
+		mir::MIRValue *unwrappedValue = builder->createLoad(unwrappedType, valuePtr, "unwrapped.val");
+		builder->createStore(unwrappedValue, resultAlloca);
+		builder->createBr(afterBlock);
+
+		// Default block: evaluate default expression and store
+		builder->setInsertPoint(defaultBlock);
+		mir::MIRValue *defaultValue = generateExpr(coalesceExpr->defaultExpr.get());
+		// For struct types, generateExpr returns a pointer, need to load the value
+		if (structTypes.find(unwrappedTypeStr) != structTypes.end()) {
+			defaultValue = builder->createLoad(unwrappedType, defaultValue, "default.val");
+		}
+		builder->createStore(defaultValue, resultAlloca);
+		builder->createBr(afterBlock);
+
+		// After block: load and return result
+		builder->setInsertPoint(afterBlock);
+		return builder->createLoad(unwrappedType, resultAlloca, "coalesce.result.val");
+	}
+
 	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
+		// Special case: 'or' with optional left operand is nil coalescing
+		// This handles cases where the parser created BinaryExprAST for what is semantically nil coalescing
+		if (binExpr->op == 'O') {
+			std::string leftTypeStr = getExpressionMaxonType(binExpr->left.get());
+			if (maxon::TypeConversion::isOptionalType(leftTypeStr)) {
+				// Generate nil coalescing code (same as OrCoalesceExprAST)
+				mir::MIRValue *optionalValue = generateExpr(binExpr->left.get());
+				mir::MIRType *optionalType = getTypeFromString(leftTypeStr);
+
+				std::string unwrappedTypeStr = maxon::TypeConversion::unwrapOptionalType(leftTypeStr);
+				mir::MIRType *unwrappedType = getTypeFromString(unwrappedTypeStr);
+
+				mir::MIRValue *optionalAlloca = builder->createAlloca(optionalType, "coalesce.optional");
+				builder->createStore(optionalValue, optionalAlloca);
+
+				mir::MIRValue *tagPtr = builder->createStructGEP(optionalType, optionalAlloca, 0, "tag.ptr");
+				mir::MIRValue *tag = builder->createLoad(mir::MIRType::getInt8(), tagPtr, "tag");
+				mir::MIRValue *hasValue = builder->createICmpEq(tag, builder->getInt8(1), "has.value");
+
+				mir::MIRBasicBlock *hasValueBlock = builder->createBasicBlock("coalesce.hasvalue");
+				mir::MIRBasicBlock *defaultBlock = builder->createBasicBlock("coalesce.default");
+				mir::MIRBasicBlock *afterBlock = builder->createBasicBlock("coalesce.after");
+
+				mir::MIRValue *resultAlloca = builder->createAlloca(unwrappedType, "coalesce.result");
+				builder->createCondBr(hasValue, hasValueBlock, defaultBlock);
+
+				builder->setInsertPoint(hasValueBlock);
+				mir::MIRValue *valuePtr = builder->createStructGEP(optionalType, optionalAlloca, 1, "value.ptr");
+				mir::MIRValue *unwrappedValue = builder->createLoad(unwrappedType, valuePtr, "unwrapped.val");
+				builder->createStore(unwrappedValue, resultAlloca);
+				builder->createBr(afterBlock);
+
+				builder->setInsertPoint(defaultBlock);
+				mir::MIRValue *defaultValue = generateExpr(binExpr->right.get());
+				// For struct types, generateExpr returns a pointer, need to load the value
+				if (structTypes.find(unwrappedTypeStr) != structTypes.end()) {
+					defaultValue = builder->createLoad(unwrappedType, defaultValue, "default.val");
+				}
+				builder->createStore(defaultValue, resultAlloca);
+				builder->createBr(afterBlock);
+
+				builder->setInsertPoint(afterBlock);
+				return builder->createLoad(unwrappedType, resultAlloca, "coalesce.result.val");
+			}
+		}
+
 		// For == and != on enum types, compare tag values
 		if (binExpr->op == 'E' || binExpr->op == 'N') {
 			std::string leftType = getExpressionMaxonType(binExpr->left.get());

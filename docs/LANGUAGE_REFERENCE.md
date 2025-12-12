@@ -389,6 +389,57 @@ end 'default'
 printInt(result)  // 1
 ```
 
+**Nil Coalescing Operator**
+
+The nil coalescing operator `or` provides a concise way to unwrap an optional with a default value:
+
+```maxon
+var x = optionalValue or defaultValue
+```
+
+This is equivalent to if-let with a default, but more concise:
+
+```maxon
+var opt = getOptional()
+var result = opt or 0  // result is unwrapped int, using 0 if opt is nil
+```
+
+The result type is always the unwrapped type (non-optional). The right operand cannot be optional (no chaining).
+
+**Guard-Let Statement**
+
+Guard-let provides early exit when an optional is nil, reducing nesting:
+
+```maxon
+function process(value int or nil) returns int
+    let x = value or 'nil_case'
+        return 0  // Must exit scope (return, break, continue)
+    end 'nil_case'
+    
+    // x is guaranteed to be unwrapped int here
+    return x * 2
+end 'process'
+```
+
+The guard body must exit the current scope, ensuring the variable is always bound after the guard block.
+
+**Nil Default Parameters**
+
+Optional parameters can use `nil` as the default value:
+
+```maxon
+function greet(name string or nil = nil) returns nothing
+    let actualName = name or 'default'
+        print("Hello, stranger!")
+        return
+    end 'default'
+    print("Hello, " + actualName + "!")
+end 'greet'
+
+greet()               // Uses nil default
+greet(name = "Alice") // Uses provided value
+```
+
 **Type Safety**
 
 The compiler prevents using optional values without unwrapping:
@@ -1730,6 +1781,21 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
     function greet(name string, title string = "Mr.") returns nothing
     greet("Smith")                // Uses default
     greet("Smith", title = "Dr.") // Override with named arg
+    ```
+
+13. **Use nil coalescing for concise defaults**:
+    ```maxon
+    var result = optionalValue or defaultValue  // Clean one-liner
+    ```
+
+14. **Use guard-let for early exits**:
+    ```maxon
+    function process(x int or nil) returns int
+        let value = x or 'nil_case'
+            return 0  // Early exit on nil
+        end 'nil_case'
+        return value * 2  // value is guaranteed non-nil
+    end 'process'
     ```
 
 ---

@@ -16,7 +16,7 @@ File I/O functions for reading and writing text and binary files.
 - **Runtime**: Windows API calls in `runtime_windows.mir` (`__read_file`, `__write_file`, `__write_file_binary`)
 - **Compiler**: Intrinsics in `codegen_mir_intrinsics.cpp` (`intrinsic_read_file`, `intrinsic_write_file`, `intrinsic_write_file_binary`)
 - **Declarations**: `intrinsics_defs.h` defines the function signatures
-- **Error Handling**: Functions return boolean success indicators (0 = success, -1 = failure)
+- **Error Handling**: `readTextFile` returns `nil` on error, other functions return boolean success indicators
 
 ### Windows API Usage
 
@@ -29,7 +29,7 @@ File I/O functions for reading and writing text and binary files.
 ### String Handling
 
 - Text files use UTF-8 encoding
-- `readTextFile` returns file contents as a string
+- `readTextFile` returns file contents as a string, or `nil` on error
 - `writeTextFile` accepts string content and converts to UTF-8 bytes
 - `writeBinaryFile` accepts `[]byte` array for raw binary data
 
@@ -47,20 +47,23 @@ File I/O functions provide basic file reading and writing capabilities.
 
 Read the entire contents of a text file as a UTF-8 encoded string.
 
-**Signature:** `readTextFile(path string) string`
+**Signature:** `readTextFile(path string) string or nil`
 
 **Parameters:**
 - `path`: File path as a string
 
-**Returns:** File contents as a string, or empty string on error
+**Returns:** File contents as a string, or `nil` if file cannot be read
 
 **Example:**
 
 ```maxon
 function main() returns int
-    let content = readTextFile("example.txt")
-    print("File content: " + content)
-    return 0
+    let content = readTextFile("example.txt") or 'noFile'
+        print("File content: " + content)
+        return 0
+    end 'noFile'
+    print("Could not read file")
+    return 1
 end 'main'
 ```
 
@@ -122,7 +125,12 @@ end 'main'
 <!-- test: read-text-file -->
 ```maxon
 function main() returns int
-    let content = readTextFile("test.txt")
+    // Create a test file first
+    writeTextFile("temp/read-test.txt", "Hello")
+    let content = readTextFile("temp/read-test.txt") or 'noFile'
+        print("File not found")
+        return 1
+    end 'noFile'
     print("Content:" + content)
     return 0
 end 'main'
@@ -131,7 +139,7 @@ end 'main'
 0
 ```
 ```stdout
-Content:
+Content:Hello
 ```
 
 <!-- test: write-text-file -->
@@ -160,8 +168,12 @@ end 'main'
 <!-- test: read-nonexistent-file -->
 ```maxon
 function main() returns int
-    let content = readTextFile("nonexistent.txt")
-    print("Content: '" + content + "'")
+    var result = readTextFile("nonexistent.txt")
+    if let content = result 'hasContent'
+        print("Unexpected: " + content)
+        return 1
+    end 'hasContent'
+    print("File not found")
     return 0
 end 'main'
 ```
@@ -169,7 +181,7 @@ end 'main'
 0
 ```
 ```stdout
-Content: ''
+File not found
 ```
 
 <!-- test: write-to-readonly-path -->

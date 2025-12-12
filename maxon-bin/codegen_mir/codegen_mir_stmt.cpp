@@ -69,6 +69,11 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		return;
 	}
 
+	if (auto *guardLet = dynamic_cast<GuardLetStmtAST *>(stmt)) {
+		generateGuardLet(guardLet, function);
+		return;
+	}
+
 	if (auto *whileStmt = dynamic_cast<WhileStmtAST *>(stmt)) {
 		generateWhile(whileStmt, function);
 		return;
@@ -228,10 +233,16 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 				// Check if return type is optional
 				if (maxon::TypeConversion::isOptionalType(returnTypeStr)) {
-					mir::MIRType *returnType = getTypeFromString(returnTypeStr);
+					// Check if the expression type is already optional
+					std::string exprType = getExpressionMaxonType(retStmt->value.get());
 
-					// Wrap the value in an optional
-					retVal = createSomeOptional(returnType, retVal);
+					// Only wrap if the expression is not already an optional type
+					if (!maxon::TypeConversion::isOptionalType(exprType)) {
+						mir::MIRType *returnType = getTypeFromString(returnTypeStr);
+
+						// Wrap the value in an optional
+						retVal = createSomeOptional(returnType, retVal);
+					}
 				}
 			}
 		}

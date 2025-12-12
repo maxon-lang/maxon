@@ -503,6 +503,58 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 						 "\n  Note: You must provide a default value by assigning to '" + savedVarName + "' in the else block",
 					 stmt->line, stmt->column);
 		}
+	} else if (auto guardLet = dynamic_cast<GuardLetStmtAST *>(stmt)) {
+		// Guard-let: let x = optionalExpr or 'label' ... end 'label'
+		// The guard body MUST exit scope (return, break, continue)
+		// If optional has value, it's unwrapped and bound to x
+
+		// Analyze the optional expression
+		std::string optionalType = analyzeExpression(guardLet->optionalExpr.get());
+
+		// Verify it's optional
+		if (!isOptionalType(optionalType)) {
+			addError("Guard-let 'or' requires an optional type, got '" + optionalType + "'" +
+						 std::string("\n  Note: Use 'let x = expr or ...' only with optional types (T or nil)"),
+					 stmt->line, stmt->column);
+			return;
+		}
+
+		std::string unwrappedType = unwrapOptionalType(optionalType);
+
+		// Check for duplicate block identifiers at this scope level
+		declareBlockId(guardLet->blockId, stmt->line, stmt->column);
+
+		// Analyze guard body (must exit scope)
+		enterScope();
+		blockIdStack.push_back(std::set<std::string>());
+
+		bool hasExit = false;
+		for (const auto &s : guardLet->guardBody) {
+			analyzeStatement(s.get(), currentFunctionReturnType);
+			// Check if this statement is an exit (return, break, continue)
+			if (dynamic_cast<ReturnStmtAST *>(s.get()) ||
+				dynamic_cast<BreakStmtAST *>(s.get()) ||
+				dynamic_cast<ContinueStmtAST *>(s.get())) {
+				hasExit = true;
+			}
+		}
+
+		blockIdStack.pop_back();
+		checkUnusedVariables();
+		exitScope();
+
+		// CRITICAL CHECK: Verify guard body exits scope
+		if (!hasExit) {
+			addError("Guard block must exit scope with return, break, or continue" +
+						 std::string("\n  The guard block is executed when the optional is nil") +
+						 "\n  Note: Add 'return' at the end of the guard block to exit the function",
+					 stmt->line, stmt->column);
+		}
+
+		// AFTER guard block, declare the unwrapped variable (immutable)
+		// This is only available after the guard has verified the optional has a value
+		declareVariable(guardLet->name, unwrappedType, true, stmt->line, stmt->column);
+
 	} else if (auto whileStmt = dynamic_cast<WhileStmtAST *>(stmt)) {
 		// Analyze condition
 		std::string condType = analyzeExpression(whileStmt->condition.get());

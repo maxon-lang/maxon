@@ -783,10 +783,49 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_read_file(CallExprAST *callExpr) {
 	mir::MIRValue *pathDataPtr = builder->createStructGEP(cstringType, csPtr, 0, "path.data.ptr");
 	mir::MIRValue *pathData = builder->createLoad(mir::MIRType::getPtr(), pathDataPtr, "path.data");
 
-	// Call runtime __read_file
+	// Call runtime __read_file (returns ptr, null on error)
 	mir::MIRFunction *readFileFunc = getOrDeclareFunction(
 		"__read_file", mir::MIRType::getPtr(), {mir::MIRType::getPtr()});
-	return builder->createCall(readFileFunc, {pathData}, "read.result");
+	mir::MIRValue *rawResult = builder->createCall(readFileFunc, {pathData}, "read.raw");
+
+	// Convert raw pointer to Optional<ptr>
+	// The optional type is { i8 tag, ptr value }
+	mir::MIRType *optionalType = mir::MIRType::getOptional(mir::MIRType::getPtr());
+
+	// Allocate optional on stack
+	mir::MIRValue *optAlloca = builder->createAlloca(optionalType, "opt.result");
+
+	// Get tag field pointer (field 0)
+	mir::MIRValue *tagPtr = builder->createStructGEP(optionalType, optAlloca, 0, "opt.tag.ptr");
+
+	// Get value field pointer (field 1)
+	mir::MIRValue *valPtr = builder->createStructGEP(optionalType, optAlloca, 1, "opt.val.ptr");
+
+	// Check if result is null - compare pointer to 0
+	mir::MIRValue *ptrToInt = builder->createPtrToInt(rawResult, mir::MIRType::getInt64(), "ptr.as.int");
+	mir::MIRValue *isNull = builder->createICmpEq(ptrToInt, builder->getInt64(0), "is.null");
+
+	// Create blocks for branching
+	mir::MIRBasicBlock *hasValueBlock = builder->createBasicBlock("read.hasvalue");
+	mir::MIRBasicBlock *nilBlock = builder->createBasicBlock("read.nil");
+	mir::MIRBasicBlock *continueBlock = builder->createBasicBlock("read.continue");
+
+	builder->createCondBr(isNull, nilBlock, hasValueBlock);
+
+	// Has value block - set tag=1 and store value
+	builder->setInsertPoint(hasValueBlock);
+	builder->createStore(builder->getInt8(1), tagPtr);
+	builder->createStore(rawResult, valPtr);
+	builder->createBr(continueBlock);
+
+	// Nil block - set tag=0
+	builder->setInsertPoint(nilBlock);
+	builder->createStore(builder->getInt8(0), tagPtr);
+	builder->createBr(continueBlock);
+
+	// Continue block - load and return the optional
+	builder->setInsertPoint(continueBlock);
+	return builder->createLoad(optionalType, optAlloca, "opt.loaded");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_write_file(CallExprAST *callExpr) {
@@ -849,33 +888,59 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_list_directory(CallExprAST *callExpr)
 	mir::MIRValue *pathDataPtr = builder->createStructGEP(cstringType, csPtr, 0, "path.data.ptr");
 	mir::MIRValue *pathData = builder->createLoad(mir::MIRType::getPtr(), pathDataPtr, "path.data");
 
-	// Call runtime __list_directory which returns ptr to __ManagedArrayData<string>
+	// Call runtime __list_directory which returns ptr to __ManagedArrayData<string> (or null on error)
 	mir::MIRFunction *listDirFunc = getOrDeclareFunction(
 		"__list_directory", mir::MIRType::getPtr(), {mir::MIRType::getPtr()});
 	mir::MIRValue *resultPtr = builder->createCall(listDirFunc, {pathData}, "list.result.ptr");
 
+	// Check if result is null (error case)
+	mir::MIRValue *ptrToInt = builder->createPtrToInt(resultPtr, mir::MIRType::getInt64(), "ptr.as.int");
+	mir::MIRValue *isNull = builder->createICmpEq(ptrToInt, builder->getInt64(0), "is.null");
+
+	// Create blocks for branching
+	mir::MIRBasicBlock *hasValueBlock = builder->createBasicBlock("listdir.hasvalue");
+	mir::MIRBasicBlock *nilBlock = builder->createBasicBlock("listdir.nil");
+	mir::MIRBasicBlock *continueBlock = builder->createBasicBlock("listdir.continue");
+
+	// The optional wraps an array<string> struct
+	mir::MIRType *arrayStructType = getOrCreateArrayStructType("string");
+	mir::MIRType *optionalType = mir::MIRType::getOptional(arrayStructType);
+
+	// Allocate optional on stack
+	mir::MIRValue *optAlloca = builder->createAlloca(optionalType, "opt.result");
+
+	// Get tag field pointer (field 0)
+	mir::MIRValue *tagPtr = builder->createStructGEP(optionalType, optAlloca, 0, "opt.tag.ptr");
+
+	// Get value field pointer (field 1)
+	mir::MIRValue *valPtr = builder->createStructGEP(optionalType, optAlloca, 1, "opt.val.ptr");
+
+	builder->createCondBr(isNull, nilBlock, hasValueBlock);
+
+	// Has value block - build the array struct and set tag=1
+	builder->setInsertPoint(hasValueBlock);
+
 	// Load the __ManagedArrayData<string> fields from the pointer
 	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType("string");
 
-	mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, resultPtr, 0, "managed.buffer.ptr");
-	mir::MIRValue *buffer = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, "managed.buffer");
+	mir::MIRValue *bufferPtrField = builder->createStructGEP(managedArrayType, resultPtr, 0, "managed.buffer.ptr");
+	mir::MIRValue *buffer = builder->createLoad(mir::MIRType::getPtr(), bufferPtrField, "managed.buffer");
 
-	mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, resultPtr, 1, "managed.len.ptr");
-	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "managed.len");
+	mir::MIRValue *lenPtrField = builder->createStructGEP(managedArrayType, resultPtr, 1, "managed.len.ptr");
+	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtrField, "managed.len");
 
-	mir::MIRValue *capPtr = builder->createStructGEP(managedArrayType, resultPtr, 2, "managed.cap.ptr");
-	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtr, "managed.cap");
+	mir::MIRValue *capPtrField = builder->createStructGEP(managedArrayType, resultPtr, 2, "managed.cap.ptr");
+	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtrField, "managed.cap");
 
-	// Free the temporary heap allocation
+	// Free the temporary heap allocation for the result struct
 	mir::MIRFunction *freeFunc = getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr()});
 	builder->createCall(freeFunc, {resultPtr});
 
-	// Build array<string> struct on stack: { __ManagedArrayData<string>, i32 iterIndex }
-	mir::MIRType *arrayStructType = getOrCreateArrayStructType("string");
-	mir::MIRValue *arrayAlloca = builder->createAlloca(arrayStructType, "array.result");
+	// Build array<string> struct inside the optional's value field
+	// valPtr points to array<string> = { __ManagedArrayData<string>, i32 iterIndex }
 
 	// Set managed.buffer (field 0 of field 0)
-	mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, arrayAlloca, 0, "array.managed");
+	mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, valPtr, 0, "array.managed");
 	mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, "array.buffer");
 	builder->createStore(buffer, bufferField);
 
@@ -888,11 +953,21 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_list_directory(CallExprAST *callExpr)
 	builder->createStore(cap, capField);
 
 	// Set iterIndex (field 1) to 0
-	mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, arrayAlloca, 1, "array.iter");
+	mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, valPtr, 1, "array.iter");
 	builder->createStore(builder->getInt32(0), iterField);
 
-	// Load and return the complete struct
-	return builder->createLoad(arrayStructType, arrayAlloca, "array.value");
+	// Set tag = 1 (has value)
+	builder->createStore(builder->getInt8(1), tagPtr);
+	builder->createBr(continueBlock);
+
+	// Nil block - set tag=0
+	builder->setInsertPoint(nilBlock);
+	builder->createStore(builder->getInt8(0), tagPtr);
+	builder->createBr(continueBlock);
+
+	// Continue block - load and return the optional
+	builder->setInsertPoint(continueBlock);
+	return builder->createLoad(optionalType, optAlloca, "opt.loaded");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_is_directory(CallExprAST *callExpr) {

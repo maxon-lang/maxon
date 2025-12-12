@@ -75,6 +75,7 @@ class Parser {
 	std::unique_ptr<FunctionAST> parseMethodImpl(const std::string &receiverType, bool allowInterfacePrefix);
 
 	std::unique_ptr<ExprAST> parseExpression();
+	std::unique_ptr<ExprAST> parseNilCoalesce(); // Lowest precedence: optional or default
 	std::unique_ptr<ExprAST> parseBitwiseAnd();
 	std::unique_ptr<ExprAST> parseBitwiseXor();
 	std::unique_ptr<ExprAST> parseBitwiseOr();
@@ -92,7 +93,7 @@ class Parser {
 
 	std::unique_ptr<StmtAST> parseStatement();
 	std::unique_ptr<StmtAST> parseVarDecl();
-	std::unique_ptr<LetDeclStmtAST> parseLetDecl();
+	std::unique_ptr<StmtAST> parseLetDecl(); // Returns StmtAST to allow GuardLetStmtAST
 	std::tuple<Token, std::string, std::unique_ptr<ExprAST>> parseVariableDeclarationComponents();
 	std::unique_ptr<AssignStmtAST> parseAssignment(const std::string &name);
 	std::unique_ptr<StmtAST> parseIf();
@@ -100,6 +101,8 @@ class Parser {
 	std::unique_ptr<ElseUnwrapStmtAST> parseElseUnwrap(Token varToken, Token nameToken,
 													   const std::string &explicitType,
 													   std::unique_ptr<ExprAST> optionalExpr);
+	std::unique_ptr<GuardLetStmtAST> parseGuardLet(Token letToken, Token nameToken,
+												   std::unique_ptr<ExprAST> optionalExpr);
 	std::unique_ptr<WhileStmtAST> parseWhile();
 	std::unique_ptr<ForStmtAST> parseFor();
 	std::unique_ptr<ReturnStmtAST> parseReturn();

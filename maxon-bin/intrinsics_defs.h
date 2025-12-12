@@ -95,12 +95,12 @@ inline std::vector<IntrinsicDef> getIntrinsicDefinitions() {
 		{"__substring_byte_offset", "int", {{"substring"}}, "intrinsic_substring_byte_offset"},
 
 		// File I/O intrinsics
-		{"__read_file", "_ManagedString", {{"cstring"}}, "intrinsic_read_file"},
+		{"__read_file", "_ManagedString or nil", {{"cstring"}}, "intrinsic_read_file"},
 		{"__write_file", "int", {{"cstring"}, {"cstring"}}, "intrinsic_write_file"},
 		{"__write_file_binary", "int", {{"cstring"}, IntrinsicParamDef::arrayOf({"byte"})}, "intrinsic_write_file_binary"},
 
 		// Directory intrinsics
-		{"__list_directory", "array<string>", {{"cstring"}}, "intrinsic_list_directory"},
+		{"__list_directory", "array<string> or nil", {{"cstring"}}, "intrinsic_list_directory"},
 		{"__is_directory", "int", {{"cstring"}}, "intrinsic_is_directory"},
 
 		// Process intrinsics

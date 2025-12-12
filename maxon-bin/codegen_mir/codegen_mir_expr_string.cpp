@@ -5,6 +5,7 @@
  */
 
 #include "../codegen_mir.h"
+#include "../intrinsics.h"
 #include <cstring>
 
 //==============================================================================
@@ -114,10 +115,19 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 			return callExpr->resolvedEnumName;
 		}
 
-		const std::string &callee = callExpr->callee;
+		// Use the resolved callee name (includes namespace prefix) for function lookup
+		std::string effectiveCallee = callExpr->resolvedCallee.empty() ? callExpr->callee : callExpr->resolvedCallee;
+
+		// Check for intrinsics first (they start with __)
+		if (effectiveCallee.rfind("__", 0) == 0) {
+			const IntrinsicInfo *intrinsic = IntrinsicRegistry::instance().lookup(effectiveCallee);
+			if (intrinsic) {
+				return intrinsic->returnType;
+			}
+		}
 
 		// Look up the function return type from the semantic analyzer's registry
-		auto it = functionReturnTypes.find(callee);
+		auto it = functionReturnTypes.find(effectiveCallee);
 		if (it != functionReturnTypes.end()) {
 			return it->second;
 		}
@@ -127,7 +137,7 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 		if (!callExpr->args.empty()) {
 			std::string firstArgType = getExpressionMaxonType(callExpr->args[0].value.get());
 			if (!firstArgType.empty()) {
-				std::string qualifiedName = firstArgType + "." + callee;
+				std::string qualifiedName = firstArgType + "." + callExpr->callee;
 				auto qualIt = functionReturnTypes.find(qualifiedName);
 				if (qualIt != functionReturnTypes.end()) {
 					return qualIt->second;

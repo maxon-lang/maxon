@@ -205,6 +205,17 @@ class UnaryExprAST : public ExprAST {
 		: ExprAST(line, col), op(o), operand(std::move(expr)) {}
 };
 
+// Nil coalescing expression (e.g., "optionalValue or defaultValue")
+// Unwraps optional if it has a value, otherwise evaluates to the default
+class OrCoalesceExprAST : public ExprAST {
+  public:
+	std::unique_ptr<ExprAST> optionalExpr; // Must be T or nil
+	std::unique_ptr<ExprAST> defaultExpr;  // Must be T (result type is T)
+
+	OrCoalesceExprAST(std::unique_ptr<ExprAST> opt, std::unique_ptr<ExprAST> def, int line = 0, int col = 0)
+		: ExprAST(line, col), optionalExpr(std::move(opt)), defaultExpr(std::move(def)) {}
+};
+
 // Call argument (for named arguments)
 struct CallArgument {
 	std::string name; // Empty string = positional argument, otherwise the parameter name used
@@ -537,6 +548,27 @@ class ElseUnwrapStmtAST : public StmtAST {
 					  const std::string &bid = "")
 		: StmtAST(l, c), name(n), declaredType(type),
 		  optionalExpr(std::move(expr)), elseBody(std::move(elseB)),
+		  blockId(bid) {}
+};
+
+// Guard-let statement (optional unwrapping with early exit)
+// Syntax: let name = optionalExpr or 'label' ... end 'label'
+// The guard body MUST exit scope (return, break, continue)
+// If the optional has a value, it is unwrapped and bound to 'name'
+class GuardLetStmtAST : public StmtAST {
+  public:
+	std::string name;
+	std::unique_ptr<ExprAST> optionalExpr;
+	std::vector<std::unique_ptr<StmtAST>> guardBody;
+	std::string blockId;
+
+	GuardLetStmtAST(const std::string &n,
+					std::unique_ptr<ExprAST> expr,
+					std::vector<std::unique_ptr<StmtAST>> guardB,
+					int l = 0, int c = 0,
+					const std::string &bid = "")
+		: StmtAST(l, c), name(n),
+		  optionalExpr(std::move(expr)), guardBody(std::move(guardB)),
 		  blockId(bid) {}
 };
 
