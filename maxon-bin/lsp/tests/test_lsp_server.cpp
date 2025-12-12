@@ -935,6 +935,42 @@ end 'printFloat')";
 	REQUIRE(content.find("float") == std::string::npos);
 }
 
+TEST_CASE("LSP hover shows intrinsic signature", "[lsp][hover]") {
+	// Test that hovering over an intrinsic like __write_file_binary shows its signature
+	LSPTestFixture fixture;
+	fixture.initialize();
+
+	std::string code = R"(function test() returns nothing
+    var cs = "test".cstr()
+    var arr = [1 as byte, 2 as byte]
+    __write_file_binary(cs, arr)
+end 'test')";
+	fixture.openDocument("file:///test.maxon", code);
+
+	// Request hover on '__write_file_binary' at line 3
+	// Line 3: "    __write_file_binary(cs, arr)" - '__write_file_binary' starts at position 4
+	json hoverParams = {
+		{"textDocument", {{"uri", "file:///test.maxon"}}},
+		{"position", {{"line", 3}, {"character", 10}}}};
+	fixture.transport()->queueRequest(2, "textDocument/hover", hoverParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(2);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+	REQUIRE(!response->result.value().is_null());
+
+	// The hover should show the intrinsic signature
+	std::string content = response->result.value()["contents"]["value"].get<std::string>();
+	INFO("Hover content: " << content);
+	REQUIRE(content.find("intrinsic") != std::string::npos);
+	REQUIRE(content.find("__write_file_binary") != std::string::npos);
+	REQUIRE(content.find("int") != std::string::npos); // return type
+}
+
 // =============================================================================
 // Completion Tests
 // =============================================================================

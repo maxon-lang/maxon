@@ -2,6 +2,7 @@
 #define MAXON_LSP_HOVER_H
 
 #include "../../compiler_api.h"
+#include "../../intrinsics_defs.h"
 #include "../document_manager.h"
 #include "../lsp_types.h"
 #include <optional>
@@ -111,6 +112,25 @@ class HoverProvider {
 	 */
 	std::optional<Hover> lookupField(const std::string &structName, const std::string &fieldName,
 									 const AnalysisCache *cache, const StdlibSymbols &stdlib);
+
+	/**
+	 * Look up a compiler intrinsic (e.g., __write_file_binary) and return hover info.
+	 *
+	 * @param name Intrinsic name (must start with __)
+	 * @return Hover info if intrinsic found, nullopt otherwise
+	 */
+	std::optional<Hover> lookupIntrinsic(const std::string &name);
+
+	/**
+	 * Format intrinsic hover content.
+	 *
+	 * @param name Intrinsic name
+	 * @param returnType Return type
+	 * @param params Parameter definitions
+	 * @return Markdown formatted string
+	 */
+	std::string formatIntrinsicHover(const std::string &name, const std::string &returnType,
+									 const std::vector<IntrinsicParamDef> &params);
 
 	// Format hover content as markdown
 

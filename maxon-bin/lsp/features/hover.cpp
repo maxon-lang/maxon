@@ -1,4 +1,5 @@
 #include "hover.h"
+#include "../../intrinsics_defs.h"
 #include "../../lexer/lexer_keyword_matcher.h"
 #include "../../types/type_conversion.h"
 
@@ -104,7 +105,15 @@ std::optional<Hover> HoverProvider::getHover(
 		}
 	}
 
-	// Try lookups in order: keyword, variable, function, type
+	// Try lookups in order: intrinsic, keyword, variable, function, type
+
+	// 0. Try intrinsic lookup (tokens starting with __)
+	if (token.size() > 2 && token[0] == '_' && token[1] == '_') {
+		auto intrinsicHover = lookupIntrinsic(token);
+		if (intrinsicHover) {
+			return intrinsicHover;
+		}
+	}
 
 	// 1. Try keyword lookup
 	auto keywordHover = lookupKeyword(token);
@@ -441,6 +450,70 @@ std::optional<Hover> HoverProvider::lookupField(const std::string &structName, c
 	}
 
 	return std::nullopt;
+}
+
+std::optional<Hover> HoverProvider::lookupIntrinsic(const std::string &name) {
+	// Look up in the intrinsic definitions
+	auto intrinsics = getIntrinsicDefinitions();
+	for (const auto &def : intrinsics) {
+		if (def.name == name) {
+			std::string markdown = formatIntrinsicHover(def.name, def.returnType, def.params);
+			return buildHover(markdown, currentTokenRange_);
+		}
+	}
+	return std::nullopt;
+}
+
+std::string HoverProvider::formatIntrinsicHover(const std::string &name, const std::string &returnType,
+												const std::vector<IntrinsicParamDef> &params) {
+	std::string md = "```maxon\n";
+	md += "(intrinsic) " + name + "(";
+
+	// Format parameters
+	bool first = true;
+	int paramIndex = 0;
+	for (const auto &param : params) {
+		if (!first) {
+			md += ", ";
+		}
+		first = false;
+
+		// Generate a descriptive parameter type
+		std::string paramType;
+		if (param.isAnyType) {
+			paramType = "any";
+		} else if (param.isArrayType) {
+			if (param.allowedTypes.empty()) {
+				paramType = "array of T";
+			} else {
+				paramType = "array of " + param.allowedTypes[0];
+			}
+		} else if (!param.allowedTypes.empty()) {
+			// Multiple allowed types
+			paramType = param.allowedTypes[0];
+			for (size_t i = 1; i < param.allowedTypes.size(); ++i) {
+				paramType += " | " + param.allowedTypes[i];
+			}
+		} else {
+			paramType = param.type;
+		}
+
+		// Convert internal types to display format
+		paramType = maxon::TypeConversion::arrayTypeToDisplayString(paramType);
+
+		md += "p" + std::to_string(paramIndex++) + " " + paramType;
+	}
+
+	md += ") returns ";
+
+	// Convert return type to display format
+	std::string displayReturnType = maxon::TypeConversion::arrayTypeToDisplayString(returnType);
+	md += displayReturnType;
+	md += "\n```\n";
+
+	md += "\n(compiler intrinsic)\n";
+
+	return md;
 }
 
 std::string HoverProvider::formatKeywordHover(const KeywordLSPInfo &keyword) {
