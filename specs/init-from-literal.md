@@ -36,20 +36,27 @@ Types conforming to `InitableFromStringLiteral` can be initialized from string l
 
 ```maxon
 type MyString is InitableFromStringLiteral
-    var data string
+    var _managed _ManagedString
 
     function InitableFromStringLiteral.init(managed _ManagedString) returns MyString
-        // The managed parameter contains the literal bytes
-        // Create a string from it
-        var s = string.init(managed)
-        return MyString{data: s}
+        return MyString{_managed: managed}
     end 'init'
+
+    export function len() returns int
+        return __string_len(_managed)
+    end 'len'
 end 'MyString'
 
 function main() returns nothing
     var ms = "hello" as MyString
-    print(ms.data)
+    print("{ms.len()}")
 end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
 ```
 
 ### InitableFromCharLiteral
@@ -58,18 +65,27 @@ Types conforming to `InitableFromCharLiteral` can be initialized from character 
 
 ```maxon
 type MyChar is InitableFromCharLiteral
-    var ch character
+    var _managed _ManagedString
 
     function InitableFromCharLiteral.init(managed _ManagedString) returns MyChar
-        var c = character.init(managed)
-        return MyChar{ch: c}
+        return MyChar{_managed: managed}
     end 'init'
+
+    export function len() returns int
+        return __string_len(_managed)
+    end 'len'
 end 'MyChar'
 
 function main() returns nothing
     var mc = 'A' as MyChar
-    // Use mc.ch...
+    print("{mc.len()}")
 end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
 ```
 
 ## Tests

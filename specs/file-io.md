@@ -163,7 +163,7 @@ Content:Hello
 <!-- test: write-text-file -->
 ```maxon
 function main() returns int
-    let success = writeTextFile("temp/output.txt", "Test content")
+    let success = writeTextFile("temp/output.txt", "Testy content")
     return success as int
 end 'main'
 ```

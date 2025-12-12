@@ -24,6 +24,7 @@
                     <li><a href="#contextual-literal-typing">Contextual Literal Typing</a></li>
                     <li><a href="#default-interface-implementations">Default Interface Implementations</a></li>
                     <li><a href="#enums">Enums</a></li>
+                    <li><a href="#init-from-literal">Init From Literal</a></li>
                     <li><a href="#interfaces">Interfaces</a></li>
                     <li><a href="#structs">Structs</a></li>
                 </ul>
@@ -448,6 +449,51 @@ var opp = dir.opposite()    // Direction.south
 var vert = dir.isVertical() // true
 </code></pre>
             </div>
+            <div class="spec-section" id="init-from-literal">
+                <h2>Init From Literal</h2>
+<h3>InitableFromStringLiteral</h3>
+<p>Types conforming to <code>InitableFromStringLiteral</code> can be initialized from string literals using cast syntax:</p>
+<pre><code class="language-maxon">type MyString is InitableFromStringLiteral
+    var _managed _ManagedString
+
+    function InitableFromStringLiteral.init(managed _ManagedString) returns MyString
+        return MyString{_managed: managed}
+    end 'init'
+
+    export function len() returns int
+        return __string_len(_managed)
+    end 'len'
+end 'MyString'
+
+function main() returns nothing
+    var ms = &quot;hello&quot; as MyString
+    print(&quot;{ms.len()}&quot;)
+end 'main'
+</code></pre>
+<fieldset class="expected-output"><legend>Expected Output</legend><pre>5
+Exit Code: 0</pre></fieldset>
+<h3>InitableFromCharLiteral</h3>
+<p>Types conforming to <code>InitableFromCharLiteral</code> can be initialized from character literals:</p>
+<pre><code class="language-maxon">type MyChar is InitableFromCharLiteral
+    var _managed _ManagedString
+
+    function InitableFromCharLiteral.init(managed _ManagedString) returns MyChar
+        return MyChar{_managed: managed}
+    end 'init'
+
+    export function len() returns int
+        return __string_len(_managed)
+    end 'len'
+end 'MyChar'
+
+function main() returns nothing
+    var mc = 'A' as MyChar
+    print(&quot;{mc.len()}&quot;)
+end 'main'
+</code></pre>
+<fieldset class="expected-output"><legend>Expected Output</legend><pre>1
+Exit Code: 0</pre></fieldset>
+            </div>
             <div class="spec-section" id="interfaces">
                 <h2>Interfaces</h2>
 <p>Interfaces define a set of methods that types can implement. They provide a form of interface-based polymorphism.</p>
@@ -564,11 +610,7 @@ end 'Incomplete'
 </ul>
 <p>The <code>Iterator</code> type in <code>stdlib/iter/iterator.maxon</code> conforms to <code>Iterable</code> and is used by <code>for</code> loops with <code>range()</code>.</p>
 <h3>Example</h3>
-<pre><code class="language-maxon">interface Hashable
-    function hash() returns int
-end 'Hashable'
-
-type Point is Hashable
+<pre><code class="language-maxon">type Point is Hashable
     var x int
     var y int
 

@@ -31,6 +31,12 @@ echo -e "${CYAN}Running all test suites...${NC}"
 echo -e "${CYAN}============================================================${NC}"
 echo ""
 
+# Pre-test: Validate specs by generating documentation
+echo -e "${YELLOW}Validating spec files...${NC}"
+echo -e "${YELLOW}------------------------------------------------------------${NC}"
+$MAXON generate-docs
+echo ""
+
 # Test 1: Compiler self-tests
 echo -e "${YELLOW}[1/7] Running compiler self-tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
@@ -70,8 +76,8 @@ $MAXON test-fragments
 results[fragment-tests]=$?
 echo ""
 
-# Test 5: LSP C++ unit tests
-echo -e "${YELLOW}[5/6] Running LSP C++ unit tests...${NC}"
+# Test 6: LSP C++ unit tests
+echo -e "${YELLOW}[6/7] Running LSP C++ unit tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 mkdir -p maxon-bin/lsp/tests/build
 pushd maxon-bin/lsp/tests/build > /dev/null
@@ -89,8 +95,8 @@ results[lsp-tests]=$?
 popd > /dev/null
 echo ""
 
-# Test 6: VS Code extension tests
-echo -e "${YELLOW}[6/6] Running VS Code extension tests...${NC}"
+# Test 7: VS Code extension tests
+echo -e "${YELLOW}[7/7] Running VS Code extension tests...${NC}"
 echo -e "${YELLOW}------------------------------------------------------------${NC}"
 pushd vscode-extension > /dev/null
 npm run test

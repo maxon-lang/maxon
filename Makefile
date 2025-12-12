@@ -53,7 +53,7 @@ endif
 .PHONY: all clean clean-all compiler extension extension-build extension-watch extension-test extension-package extension-install help configure lsp-test docs test runtime fragments debugger-test-build debugger-test ffi-test-lib
 
 # Default target - build everything
-all: compiler $(EXTENSION_TARGET) debugger-test-build
+all: compiler $(EXTENSION_TARGET) debugger-test-build docs
 	@echo All components built successfully.
 
 help:
