@@ -3,19 +3,17 @@
 export function compile(sourceFile string) returns int
 	let outputFile = sourceFile.replace(".maxon", ".exe")
 
-	print("Source:  " + sourceFile)
-	print("Output:  " + outputFile)
+	print("Source:  {sourceFile}")
+	print("Output:  {outputFile}")
 	print("")
 
 	// Read source file
 	let source = readTextFile(sourceFile) or 'noSource'
-	print("Error: Could not read source file: " + sourceFile)
+	print("Error: Could not read source file: {sourceFile}")
 	return 1
 end 'noSource'
 
 // Phase 1: Lexical Analysis
-print("Phase 1: Lexing...")
-var lexer = Lexer.create(source)
 print("Phase 1: Lexing...")
 var lexer = Lexer.create(source)
 let tokens = lexer.tokenize()
@@ -27,7 +25,7 @@ var parser = Parser.create(tokens)
 let program = parser.parseProgram(sourceFile)
 
 if parser.hadError 'parseError'
-	print("Error: " + parser.errorMessage)
+	print("Error: {parser.errorMessage}")
 	return 1
 end 'parseError'
 
@@ -58,7 +56,7 @@ print("  Generated MIR")
 
 let mirFile = sourceFile.replace(".maxon", ".mir")
 writeTextFile(mirFile, codegen.output)
-print("  Wrote " + mirFile)
+print("  Wrote {mirFile}")
 
 // Phase 6: x86-64 Code Generation
 print("Phase 6: Code Generation (x86-64)...")
@@ -75,14 +73,15 @@ let exeSize = exeBuilder.getSize()
 print("  Generated executable")
 
 // Phase 8: Write Output File
-print("Phase 8: Writing " + outputFile + "...")
+print("Phase 8: Writing {outputFile}...")
 writeBinaryFile(outputFile, exeBytes)
 print("  Done!")
 
 print("")
 print("Compilation successful!")
-print("Output: " + outputFile)
+print("Output: {outputFile}")
 
 return 0
 end 'compile'
+
 

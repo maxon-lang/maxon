@@ -49,13 +49,14 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		for (const auto &part : interpExpr->parts) {
 			if (part.isExpression && part.expr) {
 				std::string exprType = analyzeExpression(part.expr.get());
-				if (exprType == "error") continue;
+				if (exprType == "error")
+					continue;
 
 				// Check if type is Stringable
 				// Built-in types (int, float, bool, byte, character, string) are always Stringable
 				bool isBuiltinStringable = (exprType == "int" || exprType == "float" ||
-				                            exprType == "bool" || exprType == "byte" ||
-				                            exprType == "character" || exprType == "string");
+											exprType == "bool" || exprType == "byte" ||
+											exprType == "character" || exprType == "string");
 
 				if (!isBuiltinStringable) {
 					// Check if type implements Stringable interface
@@ -72,8 +73,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 					if (!implementsStringable) {
 						addError("Type '" + exprType + "' cannot be interpolated in string\n"
-						         "  The type must implement the Stringable interface with toString(spec string) returns string",
-						         part.expr->line, part.expr->column);
+													   "  The type must implement the Stringable interface with toString(spec string) returns string",
+								 part.expr->line, part.expr->column);
 					}
 				}
 			}
@@ -306,7 +307,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			undefinedStructs.insert(targetType);
 		}
 
-		// Valid casts: int <-> char, char <-> int, or ExpressibleByStringLiteral types
+		// Valid casts: int <-> char, char <-> int, or InitableFromStringLiteral types
 		return castExpr->targetType;
 
 	} else if (auto coalesceExpr = dynamic_cast<OrCoalesceExprAST *>(expr)) {

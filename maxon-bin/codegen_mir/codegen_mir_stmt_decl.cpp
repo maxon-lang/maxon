@@ -344,7 +344,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 	}
 
 	// Handle empty map literal: map from K to V
-	// Uses ExpressibleByMapLiteral interface pattern - creates empty _ManagedArrays and calls init()
+	// Uses InitableFromMapLiteral interface pattern - creates empty _ManagedArrays and calls init()
 	if (auto *mapLiteral = dynamic_cast<MapLiteralExprAST *>(varDecl->initializer.get())) {
 		const std::string &keyType = mapLiteral->keyType;
 		const std::string &valueType = mapLiteral->valueType;
@@ -418,7 +418,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 		mir::MIRFunction *initFunc = module->getFunction(initMethodName);
 		if (!initFunc) {
 			reportError("map.init method not found for type: " + specializedName +
-							" - ensure ExpressibleByMapLiteral.init is implemented",
+							" - ensure InitableFromMapLiteral.init is implemented",
 						varDecl->line, varDecl->column);
 			return;
 		}
@@ -437,7 +437,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 	}
 
 	// Handle map literal with entries: ["key1": value1, "key2": value2]
-	// Uses ExpressibleByMapLiteral interface pattern - creates _ManagedArrays and calls init()
+	// Uses InitableFromMapLiteral interface pattern - creates _ManagedArrays and calls init()
 	if (auto *mapWithEntries = dynamic_cast<MapLiteralWithEntriesExprAST *>(varDecl->initializer.get())) {
 		const std::string &keyType = mapWithEntries->inferredKeyType;
 		const std::string &valueType = mapWithEntries->inferredValueType;
@@ -542,7 +542,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 		mir::MIRFunction *initFunc = module->getFunction(initMethodName);
 		if (!initFunc) {
 			reportError("map.init method not found for type: " + specializedName +
-							" - ensure ExpressibleByMapLiteral.init is implemented",
+							" - ensure InitableFromMapLiteral.init is implemented",
 						varDecl->line, varDecl->column);
 			return;
 		}
@@ -561,7 +561,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 	}
 
 	// Handle set from array initialization: set from [1, 2, 3]
-	// Uses ExpressibleByArrayLiteral interface pattern
+	// Uses InitableFromArrayLiteral interface pattern
 	if (auto *setFromExpr = dynamic_cast<SetFromExprAST *>(varDecl->initializer.get())) {
 		const std::string &elemType = setFromExpr->inferredElementType;
 
@@ -640,7 +640,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 		mir::MIRFunction *initFunc = module->getFunction(initMethodName);
 		if (!initFunc) {
 			reportError("set.init method not found for type: " + specializedName +
-							" - ensure ExpressibleByArrayLiteral.init is implemented",
+							" - ensure InitableFromArrayLiteral.init is implemented",
 						varDecl->line, varDecl->column);
 			return;
 		}

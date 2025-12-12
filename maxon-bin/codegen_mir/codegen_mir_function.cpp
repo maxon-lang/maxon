@@ -200,15 +200,15 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 
 		// Handle opaque _ManagedArray type (without angle brackets)
 		// When the array struct is instantiated, _ManagedArray becomes _ManagedArray<Element>
-		// For ExpressibleByArrayLiteral, use "Element" type parameter
-		// For ExpressibleByMapLiteral, use "Key" or "Value" based on context
+		// For InitableFromArrayLiteral, use "Element" type parameter
+		// For InitableFromMapLiteral, use "Key" or "Value" based on context
 		if (type == "_ManagedArray") {
-			// Try Element first (for ExpressibleByArrayLiteral)
+			// Try Element first (for InitableFromArrayLiteral)
 			auto elemIt = typeBindings.find("Element");
 			if (elemIt != typeBindings.end()) {
 				return maxon::TypeConversion::makeManagedArrayType(elemIt->second);
 			}
-			// For ExpressibleByMapLiteral with two _ManagedArray params,
+			// For InitableFromMapLiteral with two _ManagedArray params,
 			// we can't determine the type without parameter context.
 			// If there's only one type parameter available, use it.
 			if (typeBindings.size() == 1) {
@@ -286,7 +286,7 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 		const auto &param = func->parameters[paramIdx];
 		std::string substitutedType = substituteType(param.type);
 
-		// Special handling for _ManagedArray parameters in ExpressibleByMapLiteral:
+		// Special handling for _ManagedArray parameters in InitableFromMapLiteral:
 		// Infer element type from parameter name ("keys" -> Key, "values" -> Value)
 		// Also handle "managedKeys" and "managedValues" naming convention
 		if (substitutedType == "_ManagedArray" && typeBindings.size() > 1) {

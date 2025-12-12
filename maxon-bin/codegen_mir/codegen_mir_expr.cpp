@@ -75,16 +75,16 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	}
 
 	if (auto *castExpr = dynamic_cast<CastExprAST *>(expr)) {
-		// Check for ExpressibleByStringLiteral: "literal" as Type
+		// Check for InitableFromStringLiteral: "literal" as Type
 		// Transform to: Type.init(managed)
 		// where managed is a _ManagedString struct
 		if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(castExpr->expr.get())) {
-			// Check if target type conforms to ExpressibleByStringLiteral
+			// Check if target type conforms to InitableFromStringLiteral
 			auto structIt = structConformsTo.find(castExpr->targetType);
 			if (structIt != structConformsTo.end()) {
 				bool conformsToExpressible = false;
 				for (const auto &iface : structIt->second) {
-					if (iface == "ExpressibleByStringLiteral") {
+					if (iface == "InitableFromStringLiteral") {
 						conformsToExpressible = true;
 						break;
 					}
@@ -143,13 +143,90 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					mir::MIRFunction *initFunc = module->getFunction(methodName);
 					if (!initFunc) {
 						reportError("Type '" + castExpr->targetType +
-										"' conforms to ExpressibleByStringLiteral but has no init method",
+										"' conforms to InitableFromStringLiteral but has no init method",
 									castExpr->line, castExpr->column);
 					}
 
 					// Pass null for self (factory method doesn't use it)
 					mir::MIRValue *nullSelf = builder->getNull();
 					return builder->createCall(initFunc, {nullSelf, managedAlloca}, "literal.init");
+				}
+			}
+		}
+
+		// Check for InitableFromCharLiteral: 'c' as Type
+		// Transform to: Type.init(managed)
+		// where managed is a _ManagedString struct containing the character's UTF-8 bytes
+		if (auto *charLit = dynamic_cast<CharacterExprAST *>(castExpr->expr.get())) {
+			// Check if target type conforms to InitableFromCharLiteral
+			auto structIt = structConformsTo.find(castExpr->targetType);
+			if (structIt != structConformsTo.end()) {
+				bool conformsToExpressible = false;
+				for (const auto &iface : structIt->second) {
+					if (iface == "InitableFromCharLiteral") {
+						conformsToExpressible = true;
+						break;
+					}
+				}
+				if (conformsToExpressible) {
+					// Get or create the _ManagedString struct type
+					// Layout: { _buffer []byte, _len int, _capacity int }
+					mir::MIRType *managedStringType = structTypes["_ManagedString"];
+					if (!managedStringType) {
+						mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
+						if (!unsizedArrayType) {
+							unsizedArrayType = module->getOrCreateStructType(
+								"_ManagedArray_byte",
+								{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+							structTypes["_ManagedArray_byte"] = unsizedArrayType;
+						}
+						managedStringType = module->getOrCreateStructType(
+							"_ManagedString",
+							{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+						structTypes["_ManagedString"] = managedStringType;
+					}
+
+					// Create the _ManagedString struct
+					mir::MIRValue *managedAlloca = builder->createAlloca(managedStringType, "managed.char");
+
+					// Get character content (UTF-8 encoded)
+					const std::string &str = charLit->value;
+					size_t len = str.length();
+
+					// Create global constant for character data
+					std::string globalName = ".chr." + std::to_string(stringLiteralCounter++);
+					mir::MIRValue *dataPtr = module->createGlobalString(globalName, str);
+
+					// Get the unsized array type for []byte (the _buffer field)
+					mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
+
+					// Field 0: _buffer []byte (fat pointer: {ptr, i32})
+					mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 0, "managed._buffer");
+					mir::MIRValue *bufferDataPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, "managed._buffer.ptr");
+					builder->createStore(dataPtr, bufferDataPtr);
+					mir::MIRValue *bufferLenPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 1, "managed._buffer.len");
+					builder->createStore(builder->getInt32(static_cast<int>(len)), bufferLenPtr);
+
+					// Field 1: _len int
+					mir::MIRValue *lenFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 1, "managed._len");
+					builder->createStore(builder->getInt32(static_cast<int>(len)), lenFieldPtr);
+
+					// Field 2: _capacity int (0 = constant data)
+					mir::MIRValue *capacityFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 2, "managed._capacity");
+					builder->createStore(builder->getInt32(0), capacityFieldPtr);
+
+					// Call Type.init(self, managed)
+					std::string methodName = castExpr->targetType + ".init";
+					mir::MIRFunction *initFunc = module->getFunction(methodName);
+					if (!initFunc) {
+						reportError("Type '" + castExpr->targetType +
+										"' conforms to InitableFromCharLiteral but has no init method",
+									castExpr->line, castExpr->column);
+					}
+
+					// Pass null for self (factory method doesn't use it)
+					mir::MIRValue *nullSelf = builder->getNull();
+					return builder->createCall(initFunc, {nullSelf, managedAlloca}, "char.literal.init");
 				}
 			}
 		}

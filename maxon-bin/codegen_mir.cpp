@@ -297,7 +297,7 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return getOrCreateManagedArrayDataType(elemType);
 	}
 
-	// Handle bare _ManagedArray (used in ExpressibleByArrayLiteral interface)
+	// Handle bare _ManagedArray (used in InitableFromArrayLiteral interface)
 	// This is an opaque pointer type
 	if (typeStr == "_ManagedArray") {
 		return mir::MIRType::getPtr();

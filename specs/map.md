@@ -45,7 +45,7 @@ The `map` type is a generic hash map collection that stores key-value pairs. It 
 - Instantiates all methods with type bindings
 
 **Code Generation:**
-- Inline initialization (does not call `ExpressibleByMapLiteral.init`)
+- Inline initialization (does not call `InitableFromMapLiteral.init`)
 - Allocates heap arrays for `keys`, `values`, and `states`
 - Zero-initializes state array (all EMPTY)
 - Iterates through map literal entries calling `insert()` for each

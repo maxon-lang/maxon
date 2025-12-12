@@ -380,7 +380,7 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 }
 
 // Generate a string literal as a []byte slice (fat pointer: {ptr, len})
-// Used by ExpressibleByStringLiteral to pass raw bytes to init
+// Used by InitableFromStringLiteral to pass raw bytes to init
 mir::MIRValue *MIRCodeGenerator::generateStringLiteralAsSlice(StringLiteralExprAST *strExpr) {
 	// Get the string content
 	const std::string &str = strExpr->value;

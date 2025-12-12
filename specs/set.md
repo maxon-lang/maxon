@@ -41,7 +41,7 @@ The `set` type is a generic hash set collection that stores unique elements. It 
 - Instantiates all methods with type bindings
 
 **Code Generation:**
-- Inline initialization (does not call `ExpressibleByArrayLiteral.init`)
+- Inline initialization (does not call `InitableFromArrayLiteral.init`)
 - Allocates heap arrays for `_elements` and `_states`
 - Zero-initializes state array (all EMPTY)
 - Iterates through array literal elements calling `insert()` for each
@@ -64,7 +64,7 @@ set<T> struct:
 
 **Struct Definition (stdlib/collections/set.maxon):**
 ```text
-export type set uses Element is ExpressibleByArrayLiteral with Element
+export type set uses Element is InitableFromArrayLiteral with Element
     var _elements array of Element
     var _states array of byte
     var _count int
