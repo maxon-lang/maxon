@@ -150,11 +150,13 @@ if condition 'label'
     statements
 end 'label'
 
-if condition 'label'
+if condition 'label1'
     statements
-else 'label'
+end 'label1' else if othercondition 'label2'
     statements
-end 'label'
+end 'label2' else 'label3'
+    statements
+end 'label3'
 
 while condition 'label'
     statements

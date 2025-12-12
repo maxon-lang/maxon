@@ -367,13 +367,13 @@ Safely unwrap optional values with `if let`:
 ```maxon
 var result = safeDivide(10, 2)
 
-if let val = result 'check'
+if let val = result 'valid'
     // val is unwrapped int here
     printInt(val + 5)  // 10
-else 'check'
+end 'valid' else 'invalid'
     // result was nil
     print("Cannot divide by zero")
-end 'check'
+end 'invalid'
 ```
 
 **Else-Unwrap with Default**
@@ -404,11 +404,11 @@ Functions can accept optional parameters:
 
 ```maxon
 returns nothing
-    if let n = name 'check'
+    if let n = name 'valid'
         print("Hello, " + n)
-    else 'check'
+    end 'valid' else 'invalid'
         print("Hello, stranger")
-    end 'check'
+    end 'invalid'
 end 'greet'
 
 greet("Alice")  // Implicitly wraps "Alice" as Some
@@ -1040,11 +1040,11 @@ end 'label'
 
 **With Else**
 ```maxon
-if condition 'label'
+if condition 'then'
     statements
-else 'label'
+end 'then' else 'else'
     statements
-end 'label'
+end 'else'
 ```
 
 **Notes:**
@@ -1059,13 +1059,13 @@ The `if let` statement safely unwraps optional values with pattern matching.
 
 **Syntax**
 ```maxon
-if let binding = optional_expression 'label'
+if let binding = optional_expression 'some'
     // binding is unwrapped value (non-optional) here
     statements
-else 'label'
+end 'some' else 'none'
     // optional was nil
     statements
-end 'label'
+end 'none'
 ```
 
 **Example**
@@ -1078,11 +1078,11 @@ returns int or nil
 end 'safeDivide'
 
 var result = safeDivide(10, 2)
-if let val = result 'unwrap'
+if let val = result 'valid'
     printInt(val + 5)  // val is unwrapped int
-else 'unwrap'
+end 'valid' else 'invalid'
     print("Division by zero")
-end 'unwrap'
+end 'invalid'
 ```
 
 **Notes:**
