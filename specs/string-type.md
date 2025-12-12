@@ -397,8 +397,16 @@ end 'main'
 ```maxon
 function main() returns int
     var s = "hello world"
-    printInt(s.find("world"))
-    printInt(s.find("xyz"))
+    if let idx = s.find("world") 'found'
+        printInt(idx.charIndex())
+    end 'found' else 'not_found'
+        printInt(0 - 1)
+    end 'not_found'
+    if let idx2 = s.find("xyz") 'found2'
+        printInt(idx2.charIndex())
+    end 'found2' else 'not_found2'
+        printInt(0 - 1)
+    end 'not_found2'
     return 0
 end 'main'
 ```
@@ -408,6 +416,150 @@ end 'main'
 ```stdout
 6
 -1
+```
+
+<!-- test: replace-single -->
+```maxon
+function main() returns int
+    var s = "hello world"
+    var result = s.replace("world", "there")
+    print(result)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello there
+```
+
+<!-- test: replace-multiple -->
+```maxon
+function main() returns int
+    var s = "aaa bbb aaa"
+    var result = s.replace("aaa", "x")
+    print(result)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+x bbb x
+```
+
+<!-- test: replace-no-match -->
+```maxon
+function main() returns int
+    var s = "hello world"
+    var result = s.replace("xyz", "abc")
+    print(result)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world
+```
+
+<!-- test: replace-empty-needle -->
+```maxon
+function main() returns int
+    var s = "hello"
+    var result = s.replace("", "x")
+    print(result)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- test: replace-with-empty -->
+```maxon
+function main() returns int
+    var s = "hello world"
+    var result = s.replace("o", "")
+    print(result)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hell wrld
+```
+
+<!-- test: replace-adjacent -->
+```maxon
+function main() returns int
+    var s = "aaaa"
+    var result = s.replace("aa", "b")
+    print(result)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+bb
+```
+
+<!-- test: replaceFirst-single -->
+```maxon
+function main() returns int
+    var s = "hello world"
+    var result = s.replaceFirst("o", "0")
+    print(result)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hell0 world
+```
+
+<!-- test: replaceFirst-multiple-occurrences -->
+```maxon
+function main() returns int
+    var s = "aaa bbb aaa"
+    var result = s.replaceFirst("aaa", "x")
+    print(result)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+x bbb aaa
+```
+
+<!-- test: replaceFirst-no-match -->
+```maxon
+function main() returns int
+    var s = "hello world"
+    var result = s.replaceFirst("xyz", "abc")
+    print(result)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world
 ```
 
 <!-- test: for-in-string -->
@@ -924,8 +1076,16 @@ end 'main'
 ```maxon
 function main() returns int
     var s = "This is a very long string that is heap allocated"
-    printInt(s.find("very"))
-    printInt(s.find("missing"))
+    if let idx = s.find("very") 'found'
+        printInt(idx.charIndex())
+    end 'found' else 'not_found'
+        printInt(0 - 1)
+    end 'not_found'
+    if let idx2 = s.find("missing") 'found2'
+        printInt(idx2.charIndex())
+    end 'found2' else 'not_found2'
+        printInt(0 - 1)
+    end 'not_found2'
     return 0
 end 'main'
 ```

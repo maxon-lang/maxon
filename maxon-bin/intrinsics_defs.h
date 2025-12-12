@@ -102,6 +102,9 @@ inline std::vector<IntrinsicDef> getIntrinsicDefinitions() {
 		// Directory intrinsics
 		{"__list_directory", "array<string>", {{"cstring"}}, "intrinsic_list_directory"},
 		{"__is_directory", "int", {{"cstring"}}, "intrinsic_is_directory"},
+
+		// Process intrinsics
+		{"__execute_process", "int", {{"cstring"}}, "intrinsic_execute_process"},
 	};
 }
 

@@ -1,0 +1,104 @@
+// Test: method-call-on-parameter.method-with-args-on-same-type-parameter.1
+type Adder
+    var value int
+    
+    function addTo(n int) returns int
+        return value + n
+    end 'addTo'
+    
+    function delegateAdd(other Adder, n int) returns int
+        return other.addTo(n)
+    end 'delegateAdd'
+end 'Adder'
+
+function main() returns int
+    var a = Adder{value: 100}
+    var b = Adder{value: 50}
+    return a.delegateAdd(b, 7)
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 13
+
+%Adder = type { i32 }
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Adder
+  %1 = getelementptr %Adder, ptr %0, i32 0, i32 0
+  store i32 100, ptr %1
+  %2 = alloca %Adder
+  %3 = getelementptr %Adder, ptr %2, i32 0, i32 0
+  store i32 50, ptr %3
+  %5 = getelementptr %Adder, ptr %2, i32 0, i32 0
+  %6 = load i32, ptr %5
+  %7 = add i32 %6, 7
+  ret i32 %7
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 31
+
+%Adder = type { i32 }
+
+define i32 @Adder.addTo(ptr %self, i32 %n) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca i32
+  store i32 %n, ptr %1
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %Adder, ptr %2, i32 0, i32 0
+  %4 = load i32, ptr %3
+  %5 = load i32, ptr %1
+  %6 = add i32 %4, %5
+  ret i32 %6
+}
+
+define i32 @Adder.delegateAdd(ptr %self, ptr %other, i32 %n) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca ptr
+  store ptr %other, ptr %1
+  %2 = alloca i32
+  store i32 %n, ptr %2
+  %3 = load ptr, ptr %1
+  %4 = load i32, ptr %2
+  %5 = call i32 @Adder.addTo(ptr %3, i32 %4)
+  ret i32 %5
+}
+
+define i32 @main() {
+entry0:
+  %0 = alloca %Adder
+  %1 = getelementptr %Adder, ptr %0, i32 0, i32 0
+  store i32 100, ptr %1
+  %2 = alloca %Adder
+  %3 = getelementptr %Adder, ptr %2, i32 0, i32 0
+  store i32 50, ptr %3
+  %4 = call i32 @Adder.delegateAdd(ptr %0, ptr %2, i32 7)
+  ret i32 %4
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i32 @main()
+  call void @exit(i32 %0)
+  ret void
+}
+
+---
+ExitCode: 57

@@ -34,6 +34,9 @@ IntrinsicCodegenRegistry::IntrinsicCodegenRegistry() {
 		{"intrinsic_list_directory", &MIRCodeGenerator::intrinsic_list_directory},
 		{"intrinsic_is_directory", &MIRCodeGenerator::intrinsic_is_directory},
 
+		// Process intrinsics
+		{"intrinsic_execute_process", &MIRCodeGenerator::intrinsic_execute_process},
+
 		// Substring intrinsics
 		{"intrinsic_substring_len", &MIRCodeGenerator::intrinsic_substring_len},
 		{"intrinsic_substring_byte_at", &MIRCodeGenerator::intrinsic_substring_byte_at},

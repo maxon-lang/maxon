@@ -203,6 +203,13 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 			// Load the struct for return
 			retVal = builder->createLoad(structType, structAlloca, "ret.val");
+
+			// Handle implicit wrapping for optional return types (struct literals)
+			std::string returnTypeStr = functionReturnTypes[function->name];
+			if (maxon::TypeConversion::isOptionalType(returnTypeStr)) {
+				mir::MIRType *returnType = getTypeFromString(returnTypeStr);
+				retVal = createSomeOptional(returnType, retVal);
+			}
 		} else if (retStmt->value) {
 			retVal = generateExpr(retStmt->value.get());
 

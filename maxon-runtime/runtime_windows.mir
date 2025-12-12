@@ -2166,3 +2166,75 @@ is_directory:
 not_dir:
     ret i32 0
 }
+
+;==============================================================================
+; __execute_process - Execute a process and wait for completion
+; i32 __execute_process(ptr command_line)
+; command_line is a null-terminated string (the full command line)
+; Returns the exit code of the process, or -1 on failure
+;==============================================================================
+
+; Storage for STARTUPINFOA (104 bytes on x64)
+@__exec_startup_info = global [104 x i8] zeroinitializer
+
+; Storage for PROCESS_INFORMATION (24 bytes on x64)
+@__exec_process_info = global [24 x i8] zeroinitializer
+
+define i32 @__execute_process(ptr %command_line) {
+entry:
+    ; Check for null command line
+    %is_null = icmp eq ptr %command_line, null
+    br i1 %is_null, label %failed, label %setup
+
+setup:
+    ; Initialize STARTUPINFOA - zero it and set cb = 104
+    %startup = getelementptr [104 x i8], ptr @__exec_startup_info, i64 0, i64 0
+    call void @memset(ptr %startup, i32 0, i64 104)
+    store i32 104, ptr %startup
+
+    ; Zero out PROCESS_INFORMATION
+    %procinfo = getelementptr [24 x i8], ptr @__exec_process_info, i64 0, i64 0
+    call void @memset(ptr %procinfo, i32 0, i64 24)
+
+    ; Call CreateProcessA
+    ; CreateProcessA(lpApplicationName, lpCommandLine, lpProcessAttributes,
+    ;                lpThreadAttributes, bInheritHandles, dwCreationFlags,
+    ;                lpEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation)
+    %success = call i1 @CreateProcessA(ptr null, ptr %command_line, ptr null, ptr null, i1 false, i32 0, ptr null, ptr null, ptr %startup, ptr %procinfo)
+    br i1 %success, label %wait_for_process, label %failed
+
+wait_for_process:
+    ; Get the process handle from PROCESS_INFORMATION (offset 0)
+    %proc_handle_ptr = getelementptr i8, ptr %procinfo, i64 0
+    %proc_handle = load ptr, ptr %proc_handle_ptr
+
+    ; Get the thread handle from PROCESS_INFORMATION (offset 8)
+    %thread_handle_ptr = getelementptr i8, ptr %procinfo, i64 8
+    %thread_handle = load ptr, ptr %thread_handle_ptr
+
+    ; Wait for process to complete (INFINITE = -1)
+    %wait_result = call i32 @WaitForSingleObject(ptr %proc_handle, i32 -1)
+
+    ; Get exit code
+    %exit_code_ptr = alloca i32
+    %got_code = call i1 @GetExitCodeProcess(ptr %proc_handle, ptr %exit_code_ptr)
+    br i1 %got_code, label %got_exit_code, label %cleanup_failed
+
+got_exit_code:
+    %exit_code = load i32, ptr %exit_code_ptr
+
+    ; Close handles
+    call i1 @CloseHandle(ptr %thread_handle)
+    call i1 @CloseHandle(ptr %proc_handle)
+
+    ret i32 %exit_code
+
+cleanup_failed:
+    ; Close handles even on failure
+    call i1 @CloseHandle(ptr %thread_handle)
+    call i1 @CloseHandle(ptr %proc_handle)
+    br label %failed
+
+failed:
+    ret i32 -1
+}

@@ -910,6 +910,24 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_is_directory(CallExprAST *callExpr) {
 }
 
 // =============================================================================
+// Process Intrinsics
+// =============================================================================
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_execute_process(CallExprAST *callExpr) {
+	mir::MIRType *cstringType = getOrCreateCstringType();
+
+	// Get command line cstring and extract the data pointer
+	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].value.get());
+	mir::MIRValue *cmdDataPtr = builder->createStructGEP(cstringType, csPtr, 0, "cmd.data.ptr");
+	mir::MIRValue *cmdData = builder->createLoad(mir::MIRType::getPtr(), cmdDataPtr, "cmd.data");
+
+	// Call runtime __execute_process
+	mir::MIRFunction *execFunc = getOrDeclareFunction(
+		"__execute_process", mir::MIRType::getInt32(), {mir::MIRType::getPtr()});
+	return builder->createCall(execFunc, {cmdData}, "exec.result");
+}
+
+// =============================================================================
 // Substring Intrinsics
 // =============================================================================
 

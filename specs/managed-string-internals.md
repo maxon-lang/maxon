@@ -119,7 +119,7 @@ Substrings should retain their parent string.
 ```maxon
 function main() returns int
     var s = "hello world from heap!!"
-    var sub = s.slice(0, 5)
+    var sub = s.slice(s.startIndex(), s.indexAdvanced(s.startIndex(), 5))
     printInt(sub.count())
     return 0
 end 'main'

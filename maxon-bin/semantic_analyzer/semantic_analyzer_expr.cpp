@@ -986,6 +986,8 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 		// Check if this is a sibling method call (calling another method of the same type from within a method)
 		// In this case, the caller passes N args but the method expects N+1 (with implicit self)
+		// NOTE: This is NOT a sibling method call if args[0] already provides a value for self
+		// (e.g., when calling other.method() where 'other' is a parameter of the same type)
 		bool isSiblingMethodCall = false;
 
 		if (!currentReceiverType.empty() && funcInfo.parameters.size() > 0) {
@@ -998,8 +1000,12 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				if (methodType == currentReceiverType &&
 					funcInfo.parameters[0].name == "self" &&
 					funcInfo.parameters[0].type == currentReceiverType) {
-					isSiblingMethodCall = true;
-					callExpr->isSiblingMethodCall = true; // Mark for codegen
+					// Only treat as sibling call if the caller hasn't provided a receiver
+					// If args.size() >= funcInfo.parameters.size(), caller provided all args including self
+					if (callExpr->args.size() < funcInfo.parameters.size()) {
+						isSiblingMethodCall = true;
+						callExpr->isSiblingMethodCall = true; // Mark for codegen
+					}
 				}
 			}
 		}

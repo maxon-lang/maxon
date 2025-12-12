@@ -1,14 +1,15 @@
 // Test: substring-type.to-string.1
 function main() returns int
     var s = "Hello, World!"
-    var sub = s.slice(0, 5)
+    var sub = s.slice(s.startIndex(), s.indexAdvanced(s.startIndex(), 5))
     var str = sub.toString()
     return str.count()
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 501
+; Instructions: 542
 
+%StringIndex = type { i32, i32 }
 %substring = type { ptr, ptr, i32, i32 }
 %string = type { ptr, i32 }
 %GraphemeState = type { i32, i1 }
@@ -17,85 +18,124 @@ end 'main'
 
 @.__tag.tostring = constant [19 x i8] c"substring.toString\00"
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
-@.str.sso.0 = constant [14 x i8] c"Hello, World!\00"
+@.str.sso.1 = constant [14 x i8] c"Hello, World!\00"
 
-define %substring @string.slice(ptr %self, i32 %startIndex, i32 %endIndex) {
+define %StringIndex @string.startIndex(ptr %self) {
 entry0:
-  %4 = getelementptr %string, ptr %self, i32 0, i32 0
-  %5 = load ptr, ptr %4
-  %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 1
-  %7 = load i32, ptr %6
-  %10 = icmp slt i32 %startIndex, 0
-  br i1 %10, label %then1, label %ifcont2
+  %1 = alloca %StringIndex
+  %2 = getelementptr %StringIndex, ptr %1, i32 0, i32 0
+  store i32 0, ptr %2
+  %3 = getelementptr %StringIndex, ptr %1, i32 0, i32 1
+  store i32 0, ptr %3
+  %4 = load %StringIndex, ptr %1
+  ret %StringIndex %4
+}
+
+define %StringIndex @string.indexAdvanced(ptr %self, ptr %idx, i32 %n) {
+entry0:
+  %4 = getelementptr %StringIndex, ptr %idx, i32 0, i32 0
+  %5 = load i32, ptr %4
+  %8 = getelementptr %StringIndex, ptr %idx, i32 0, i32 1
+  %9 = load i32, ptr %8
+  %12 = getelementptr %string, ptr %self, i32 0, i32 0
+  %13 = load ptr, ptr %12
+  %14 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 1
+  %15 = load i32, ptr %14
+  br label %whilecond1
+whilecond1:
+  %41 = phi i32 [ 0, %entry0 ], [ %32, %loop2 ]
+  %40 = phi i32 [ %9, %entry0 ], [ %44, %loop2 ]
+  %39 = phi i32 [ %5, %entry0 ], [ %30, %loop2 ]
+  %20 = icmp slt i32 %41, %n
+  %23 = icmp slt i32 %40, %15
+  %24 = and i1 %20, %23
+  br i1 %24, label %loop2, label %afterloop3
+loop2:
+  %42 = getelementptr %string, ptr %self, i32 0, i32 0
+  %43 = load ptr, ptr %42
+  %44 = call i32 @string.findGraphemeEndManagedRange(ptr %43, i32 0, i32 %40, i32 %15)
+  %30 = add i32 %39, 1
+  %32 = add i32 %41, 1
+  br label %whilecond1
+afterloop3:
+  %33 = alloca %StringIndex
+  %35 = getelementptr %StringIndex, ptr %33, i32 0, i32 0
+  store i32 %39, ptr %35
+  %37 = getelementptr %StringIndex, ptr %33, i32 0, i32 1
+  store i32 %40, ptr %37
+  %38 = load %StringIndex, ptr %33
+  ret %StringIndex %38
+}
+
+define %substring @string.slice(ptr %self, ptr %startIdx, ptr %endIdx) {
+entry0:
+  %4 = getelementptr %StringIndex, ptr %startIdx, i32 0, i32 1
+  %5 = load i32, ptr %4
+  %7 = getelementptr %StringIndex, ptr %endIdx, i32 0, i32 1
+  %8 = load i32, ptr %7
+  %9 = icmp sge i32 %5, %8
+  br i1 %9, label %then1, label %ifcont2
 then1:
-  br label %ifcont2
+  %11 = getelementptr %string, ptr %self, i32 0, i32 0
+  %12 = load ptr, ptr %11
+  %14 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
+  %15 = load ptr, ptr %14
+  %16 = sext i32 0 to i64
+  %17 = getelementptr i8, ptr %15, i64 %16
+  %18 = alloca %substring
+  %19 = getelementptr %substring, ptr %18, i32 0, i32 0
+  store ptr %12, ptr %19
+  %20 = getelementptr %substring, ptr %18, i32 0, i32 1
+  store ptr %17, ptr %20
+  %21 = getelementptr %substring, ptr %18, i32 0, i32 2
+  store i32 0, ptr %21
+  %22 = getelementptr %substring, ptr %18, i32 0, i32 3
+  store i32 0, ptr %22
+  %23 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 2
+  %24 = load i32, ptr %23
+  %25 = icmp sgt i32 %24, 0
+  br i1 %25, label %retain.heap3, label %retain.done4
 ifcont2:
-  %58 = phi i32 [ %startIndex, %entry0 ], [ 0, %then1 ]
-  %13 = icmp sgt i32 %endIndex, %7
-  br i1 %13, label %then3, label %ifcont4
-then3:
-  br label %ifcont4
-ifcont4:
-  %59 = phi i32 [ %endIndex, %ifcont2 ], [ %7, %then3 ]
-  %17 = icmp sge i32 %58, %59
-  br i1 %17, label %then5, label %ifcont6
-then5:
-  %19 = getelementptr %string, ptr %self, i32 0, i32 0
-  %20 = load ptr, ptr %19
-  %22 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 0
-  %23 = load ptr, ptr %22
-  %24 = sext i32 0 to i64
-  %25 = getelementptr i8, ptr %23, i64 %24
-  %26 = alloca %substring
-  %27 = getelementptr %substring, ptr %26, i32 0, i32 0
-  store ptr %20, ptr %27
-  %28 = getelementptr %substring, ptr %26, i32 0, i32 1
-  store ptr %25, ptr %28
-  %29 = getelementptr %substring, ptr %26, i32 0, i32 2
-  store i32 0, ptr %29
-  %30 = getelementptr %substring, ptr %26, i32 0, i32 3
-  store i32 0, ptr %30
-  %31 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 2
-  %32 = load i32, ptr %31
-  %33 = icmp sgt i32 %32, 0
-  br i1 %33, label %retain.heap7, label %retain.done8
-ifcont6:
-  %38 = getelementptr %string, ptr %self, i32 0, i32 0
-  %39 = load ptr, ptr %38
-  %42 = sub i32 %59, %58
-  %43 = getelementptr %__ManagedStringData, ptr %39, i32 0, i32 0
-  %44 = load ptr, ptr %43
-  %45 = sext i32 %58 to i64
-  %46 = getelementptr i8, ptr %44, i64 %45
-  %47 = alloca %substring
-  %48 = getelementptr %substring, ptr %47, i32 0, i32 0
-  store ptr %39, ptr %48
-  %49 = getelementptr %substring, ptr %47, i32 0, i32 1
-  store ptr %46, ptr %49
-  %50 = getelementptr %substring, ptr %47, i32 0, i32 2
-  store i32 %42, ptr %50
-  %51 = getelementptr %substring, ptr %47, i32 0, i32 3
-  store i32 0, ptr %51
-  %52 = getelementptr %__ManagedStringData, ptr %39, i32 0, i32 2
-  %53 = load i32, ptr %52
-  %54 = icmp sgt i32 %53, 0
-  br i1 %54, label %retain.heap9, label %retain.done10
-retain.heap7:
-  %34 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 0
-  %35 = load ptr, ptr %34
-  call void @_managed_string_retain(ptr %35)
-  br label %retain.done8
-retain.done8:
-  %36 = load %substring, ptr %26
-  ret %substring %36
-retain.heap9:
-  %55 = getelementptr %__ManagedStringData, ptr %39, i32 0, i32 0
-  %56 = load ptr, ptr %55
-  call void @_managed_string_retain(ptr %56)
-  br label %retain.done10
-retain.done10:
-  %57 = load %substring, ptr %47
-  ret %substring %57
+  %30 = getelementptr %string, ptr %self, i32 0, i32 0
+  %31 = load ptr, ptr %30
+  %33 = getelementptr %StringIndex, ptr %startIdx, i32 0, i32 1
+  %34 = load i32, ptr %33
+  %36 = getelementptr %StringIndex, ptr %endIdx, i32 0, i32 1
+  %37 = load i32, ptr %36
+  %38 = sub i32 %37, %34
+  %39 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 0
+  %40 = load ptr, ptr %39
+  %41 = sext i32 %34 to i64
+  %42 = getelementptr i8, ptr %40, i64 %41
+  %43 = alloca %substring
+  %44 = getelementptr %substring, ptr %43, i32 0, i32 0
+  store ptr %31, ptr %44
+  %45 = getelementptr %substring, ptr %43, i32 0, i32 1
+  store ptr %42, ptr %45
+  %46 = getelementptr %substring, ptr %43, i32 0, i32 2
+  store i32 %38, ptr %46
+  %47 = getelementptr %substring, ptr %43, i32 0, i32 3
+  store i32 0, ptr %47
+  %48 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 2
+  %49 = load i32, ptr %48
+  %50 = icmp sgt i32 %49, 0
+  br i1 %50, label %retain.heap5, label %retain.done6
+retain.heap3:
+  %26 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  call void @_managed_string_retain(ptr %27)
+  br label %retain.done4
+retain.done4:
+  %28 = load %substring, ptr %18
+  ret %substring %28
+retain.heap5:
+  %51 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 0
+  %52 = load ptr, ptr %51
+  call void @_managed_string_retain(ptr %52)
+  br label %retain.done6
+retain.done6:
+  %53 = load %substring, ptr %43
+  ret %substring %53
 }
 
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
@@ -138,7 +178,7 @@ entry0:
   %1 = alloca %__ManagedStringData
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
-  store ptr @.str.sso.0, ptr %3
+  store ptr @.str.sso.1, ptr %3
   %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
   store i32 13, ptr %4
   %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
@@ -149,31 +189,40 @@ entry0:
   store ptr %1, ptr %7
   %8 = getelementptr %string, ptr %0, i32 0, i32 1
   store i32 0, ptr %8
-  %9 = call %substring @string.slice(ptr %0, i32 0, i32 5)
-  %10 = alloca %substring
-  store %substring %9, ptr %10
-  %11 = call %string @substring.toString(ptr %10)
-  %12 = alloca %string
-  store %string %11, ptr %12
-  %22 = getelementptr %string, ptr %12, i32 0, i32 0
-  %23 = load ptr, ptr %22
-  %24 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 1
-  %25 = load i32, ptr %24
-  %26 = call i32 @string.countGraphemesManagedRange(ptr %23, i32 0, i32 %25)
-  %14 = getelementptr %substring, ptr %10, i32 0, i32 0
-  %15 = load ptr, ptr %14
-  %16 = getelementptr %__ManagedStringData, ptr %15, i32 0, i32 2
-  %17 = load i32, ptr %16
-  %18 = icmp sgt i32 %17, 0
-  br i1 %18, label %sub.release1, label %sub.continue2
-sub.release1:
-  %19 = getelementptr %__ManagedStringData, ptr %15, i32 0, i32 0
-  %20 = getelementptr %_ManagedArray_byte, ptr %19, i32 0, i32 0
+  %9 = call %StringIndex @string.startIndex(ptr %0)
+  %10 = alloca %StringIndex
+  store %StringIndex %9, ptr %10
+  %11 = call %StringIndex @string.startIndex(ptr %0)
+  %12 = alloca %StringIndex
+  store %StringIndex %11, ptr %12
+  %13 = call %StringIndex @string.indexAdvanced(ptr %0, ptr %12, i32 5)
+  %14 = alloca %StringIndex
+  store %StringIndex %13, ptr %14
+  %15 = call %substring @string.slice(ptr %0, ptr %10, ptr %14)
+  %16 = alloca %substring
+  store %substring %15, ptr %16
+  %17 = call %string @substring.toString(ptr %16)
+  %18 = alloca %string
+  store %string %17, ptr %18
+  %28 = getelementptr %string, ptr %18, i32 0, i32 0
+  %29 = load ptr, ptr %28
+  %30 = getelementptr %__ManagedStringData, ptr %29, i32 0, i32 1
+  %31 = load i32, ptr %30
+  %32 = call i32 @string.countGraphemesManagedRange(ptr %29, i32 0, i32 %31)
+  %20 = getelementptr %substring, ptr %16, i32 0, i32 0
   %21 = load ptr, ptr %20
-  call void @_managed_string_release(ptr %21, ptr @.__tag.free.sub)
+  %22 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 2
+  %23 = load i32, ptr %22
+  %24 = icmp sgt i32 %23, 0
+  br i1 %24, label %sub.release1, label %sub.continue2
+sub.release1:
+  %25 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 0
+  %26 = getelementptr %_ManagedArray_byte, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  call void @_managed_string_release(ptr %27, ptr @.__tag.free.sub)
   br label %sub.continue2
 sub.continue2:
-  ret i32 %26
+  ret i32 %32
 }
 
 define i32 @string.findGraphemeEndManagedRange(ptr %managed, i32 %offset, i32 %startPos, i32 %len) {
@@ -705,8 +754,9 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 779
+; Instructions: 865
 
+%StringIndex = type { i32, i32 }
 %substring = type { ptr, ptr, i32, i32 }
 %string = type { ptr, i32 }
 %GraphemeState = type { i32, i1 }
@@ -715,7 +765,7 @@ entry0:
 
 @.__tag.tostring = constant [19 x i8] c"substring.toString\00"
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
-@.str.sso.0 = constant [14 x i8] c"Hello, World!\00"
+@.str.sso.1 = constant [14 x i8] c"Hello, World!\00"
 
 define i32 @string.count(ptr %self) {
 entry0:
@@ -728,103 +778,180 @@ entry0:
   ret i32 %4
 }
 
-define %substring @string.slice(ptr %self, i32 %startIndex, i32 %endIndex) {
+define i32 @string._findGraphemeEnd(ptr %self, i32 %startPos, i32 %len) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
   %1 = alloca i32
-  store i32 %startIndex, ptr %1
+  store i32 %startPos, ptr %1
   %2 = alloca i32
-  store i32 %endIndex, ptr %2
+  store i32 %len, ptr %2
   %3 = load ptr, ptr %0
   %4 = getelementptr %string, ptr %3, i32 0, i32 0
   %5 = load ptr, ptr %4
-  %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 1
-  %7 = load i32, ptr %6
-  %8 = alloca i32
-  store i32 %7, ptr %8
-  %9 = load i32, ptr %1
-  %10 = icmp slt i32 %9, 0
-  br i1 %10, label %then1, label %ifcont2
+  %6 = load i32, ptr %1
+  %7 = load i32, ptr %2
+  %8 = call i32 @string.findGraphemeEndManaged(ptr %5, i32 %6, i32 %7)
+  ret i32 %8
+}
+
+define %StringIndex @string.startIndex(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca %StringIndex
+  %2 = getelementptr %StringIndex, ptr %1, i32 0, i32 0
+  store i32 0, ptr %2
+  %3 = getelementptr %StringIndex, ptr %1, i32 0, i32 1
+  store i32 0, ptr %3
+  %4 = load %StringIndex, ptr %1
+  ret %StringIndex %4
+}
+
+define %StringIndex @string.indexAdvanced(ptr %self, ptr %idx, i32 %n) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca ptr
+  store ptr %idx, ptr %1
+  %2 = alloca i32
+  store i32 %n, ptr %2
+  %3 = load ptr, ptr %1
+  %4 = getelementptr %StringIndex, ptr %3, i32 0, i32 0
+  %5 = load i32, ptr %4
+  %6 = alloca i32
+  store i32 %5, ptr %6
+  %7 = load ptr, ptr %1
+  %8 = getelementptr %StringIndex, ptr %7, i32 0, i32 1
+  %9 = load i32, ptr %8
+  %10 = alloca i32
+  store i32 %9, ptr %10
+  %11 = load ptr, ptr %0
+  %12 = getelementptr %string, ptr %11, i32 0, i32 0
+  %13 = load ptr, ptr %12
+  %14 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 1
+  %15 = load i32, ptr %14
+  %16 = alloca i32
+  store i32 %15, ptr %16
+  %17 = alloca i32
+  store i32 0, ptr %17
+  br label %whilecond1
+whilecond1:
+  %18 = load i32, ptr %17
+  %19 = load i32, ptr %2
+  %20 = icmp slt i32 %18, %19
+  %21 = load i32, ptr %10
+  %22 = load i32, ptr %16
+  %23 = icmp slt i32 %21, %22
+  %24 = and i1 %20, %23
+  br i1 %24, label %loop2, label %afterloop3
+loop2:
+  %25 = load ptr, ptr %0
+  %26 = load i32, ptr %10
+  %27 = load i32, ptr %16
+  %28 = call i32 @string._findGraphemeEnd(ptr %25, i32 %26, i32 %27)
+  store i32 %28, ptr %10
+  %29 = load i32, ptr %6
+  %30 = add i32 %29, 1
+  store i32 %30, ptr %6
+  %31 = load i32, ptr %17
+  %32 = add i32 %31, 1
+  store i32 %32, ptr %17
+  br label %whilecond1
+afterloop3:
+  %33 = alloca %StringIndex
+  %34 = load i32, ptr %6
+  %35 = getelementptr %StringIndex, ptr %33, i32 0, i32 0
+  store i32 %34, ptr %35
+  %36 = load i32, ptr %10
+  %37 = getelementptr %StringIndex, ptr %33, i32 0, i32 1
+  store i32 %36, ptr %37
+  %38 = load %StringIndex, ptr %33
+  ret %StringIndex %38
+}
+
+define %substring @string.slice(ptr %self, ptr %startIdx, ptr %endIdx) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = alloca ptr
+  store ptr %startIdx, ptr %1
+  %2 = alloca ptr
+  store ptr %endIdx, ptr %2
+  %3 = load ptr, ptr %1
+  %4 = getelementptr %StringIndex, ptr %3, i32 0, i32 1
+  %5 = load i32, ptr %4
+  %6 = load ptr, ptr %2
+  %7 = getelementptr %StringIndex, ptr %6, i32 0, i32 1
+  %8 = load i32, ptr %7
+  %9 = icmp sge i32 %5, %8
+  br i1 %9, label %then1, label %ifcont2
 then1:
-  store i32 0, ptr %1
-  br label %ifcont2
+  %10 = load ptr, ptr %0
+  %11 = getelementptr %string, ptr %10, i32 0, i32 0
+  %12 = load ptr, ptr %11
+  %13 = sub i32 0, 0
+  %14 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
+  %15 = load ptr, ptr %14
+  %16 = sext i32 0 to i64
+  %17 = getelementptr i8, ptr %15, i64 %16
+  %18 = alloca %substring
+  %19 = getelementptr %substring, ptr %18, i32 0, i32 0
+  store ptr %12, ptr %19
+  %20 = getelementptr %substring, ptr %18, i32 0, i32 1
+  store ptr %17, ptr %20
+  %21 = getelementptr %substring, ptr %18, i32 0, i32 2
+  store i32 %13, ptr %21
+  %22 = getelementptr %substring, ptr %18, i32 0, i32 3
+  store i32 0, ptr %22
+  %23 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 2
+  %24 = load i32, ptr %23
+  %25 = icmp sgt i32 %24, 0
+  br i1 %25, label %retain.heap3, label %retain.done4
 ifcont2:
-  %11 = load i32, ptr %2
-  %12 = load i32, ptr %8
-  %13 = icmp sgt i32 %11, %12
-  br i1 %13, label %then3, label %ifcont4
-then3:
-  %14 = load i32, ptr %8
-  store i32 %14, ptr %2
-  br label %ifcont4
-ifcont4:
-  %15 = load i32, ptr %1
-  %16 = load i32, ptr %2
-  %17 = icmp sge i32 %15, %16
-  br i1 %17, label %then5, label %ifcont6
-then5:
-  %18 = load ptr, ptr %0
-  %19 = getelementptr %string, ptr %18, i32 0, i32 0
-  %20 = load ptr, ptr %19
-  %21 = sub i32 0, 0
-  %22 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 0
-  %23 = load ptr, ptr %22
-  %24 = sext i32 0 to i64
-  %25 = getelementptr i8, ptr %23, i64 %24
-  %26 = alloca %substring
-  %27 = getelementptr %substring, ptr %26, i32 0, i32 0
-  store ptr %20, ptr %27
-  %28 = getelementptr %substring, ptr %26, i32 0, i32 1
-  store ptr %25, ptr %28
-  %29 = getelementptr %substring, ptr %26, i32 0, i32 2
-  store i32 %21, ptr %29
-  %30 = getelementptr %substring, ptr %26, i32 0, i32 3
-  store i32 0, ptr %30
-  %31 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 2
-  %32 = load i32, ptr %31
-  %33 = icmp sgt i32 %32, 0
-  br i1 %33, label %retain.heap7, label %retain.done8
-ifcont6:
-  %37 = load ptr, ptr %0
-  %38 = getelementptr %string, ptr %37, i32 0, i32 0
-  %39 = load ptr, ptr %38
-  %40 = load i32, ptr %1
-  %41 = load i32, ptr %2
-  %42 = sub i32 %41, %40
-  %43 = getelementptr %__ManagedStringData, ptr %39, i32 0, i32 0
-  %44 = load ptr, ptr %43
-  %45 = sext i32 %40 to i64
-  %46 = getelementptr i8, ptr %44, i64 %45
-  %47 = alloca %substring
-  %48 = getelementptr %substring, ptr %47, i32 0, i32 0
-  store ptr %39, ptr %48
-  %49 = getelementptr %substring, ptr %47, i32 0, i32 1
-  store ptr %46, ptr %49
-  %50 = getelementptr %substring, ptr %47, i32 0, i32 2
-  store i32 %42, ptr %50
-  %51 = getelementptr %substring, ptr %47, i32 0, i32 3
-  store i32 0, ptr %51
-  %52 = getelementptr %__ManagedStringData, ptr %39, i32 0, i32 2
-  %53 = load i32, ptr %52
-  %54 = icmp sgt i32 %53, 0
-  br i1 %54, label %retain.heap9, label %retain.done10
-retain.heap7:
-  %34 = getelementptr %__ManagedStringData, ptr %20, i32 0, i32 0
-  %35 = load ptr, ptr %34
-  call void @_managed_string_retain(ptr %35)
-  br label %retain.done8
-retain.done8:
-  %36 = load %substring, ptr %26
-  ret %substring %36
-retain.heap9:
-  %55 = getelementptr %__ManagedStringData, ptr %39, i32 0, i32 0
-  %56 = load ptr, ptr %55
-  call void @_managed_string_retain(ptr %56)
-  br label %retain.done10
-retain.done10:
-  %57 = load %substring, ptr %47
-  ret %substring %57
+  %29 = load ptr, ptr %0
+  %30 = getelementptr %string, ptr %29, i32 0, i32 0
+  %31 = load ptr, ptr %30
+  %32 = load ptr, ptr %1
+  %33 = getelementptr %StringIndex, ptr %32, i32 0, i32 1
+  %34 = load i32, ptr %33
+  %35 = load ptr, ptr %2
+  %36 = getelementptr %StringIndex, ptr %35, i32 0, i32 1
+  %37 = load i32, ptr %36
+  %38 = sub i32 %37, %34
+  %39 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 0
+  %40 = load ptr, ptr %39
+  %41 = sext i32 %34 to i64
+  %42 = getelementptr i8, ptr %40, i64 %41
+  %43 = alloca %substring
+  %44 = getelementptr %substring, ptr %43, i32 0, i32 0
+  store ptr %31, ptr %44
+  %45 = getelementptr %substring, ptr %43, i32 0, i32 1
+  store ptr %42, ptr %45
+  %46 = getelementptr %substring, ptr %43, i32 0, i32 2
+  store i32 %38, ptr %46
+  %47 = getelementptr %substring, ptr %43, i32 0, i32 3
+  store i32 0, ptr %47
+  %48 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 2
+  %49 = load i32, ptr %48
+  %50 = icmp sgt i32 %49, 0
+  br i1 %50, label %retain.heap5, label %retain.done6
+retain.heap3:
+  %26 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  call void @_managed_string_retain(ptr %27)
+  br label %retain.done4
+retain.done4:
+  %28 = load %substring, ptr %18
+  ret %substring %28
+retain.heap5:
+  %51 = getelementptr %__ManagedStringData, ptr %31, i32 0, i32 0
+  %52 = load ptr, ptr %51
+  call void @_managed_string_retain(ptr %52)
+  br label %retain.done6
+retain.done6:
+  %53 = load %substring, ptr %43
+  ret %substring %53
 }
 
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
@@ -870,7 +997,7 @@ entry0:
   %1 = alloca %__ManagedStringData
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
-  store ptr @.str.sso.0, ptr %3
+  store ptr @.str.sso.1, ptr %3
   %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
   store i32 13, ptr %4
   %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
@@ -881,27 +1008,36 @@ entry0:
   store ptr %1, ptr %7
   %8 = getelementptr %string, ptr %0, i32 0, i32 1
   store i32 0, ptr %8
-  %9 = call %substring @string.slice(ptr %0, i32 0, i32 5)
-  %10 = alloca %substring
-  store %substring %9, ptr %10
-  %11 = call %string @substring.toString(ptr %10)
-  %12 = alloca %string
-  store %string %11, ptr %12
-  %13 = call i32 @string.count(ptr %12)
-  %14 = getelementptr %substring, ptr %10, i32 0, i32 0
-  %15 = load ptr, ptr %14
-  %16 = getelementptr %__ManagedStringData, ptr %15, i32 0, i32 2
-  %17 = load i32, ptr %16
-  %18 = icmp sgt i32 %17, 0
-  br i1 %18, label %sub.release1, label %sub.continue2
-sub.release1:
-  %19 = getelementptr %__ManagedStringData, ptr %15, i32 0, i32 0
-  %20 = getelementptr %_ManagedArray_byte, ptr %19, i32 0, i32 0
+  %9 = call %StringIndex @string.startIndex(ptr %0)
+  %10 = alloca %StringIndex
+  store %StringIndex %9, ptr %10
+  %11 = call %StringIndex @string.startIndex(ptr %0)
+  %12 = alloca %StringIndex
+  store %StringIndex %11, ptr %12
+  %13 = call %StringIndex @string.indexAdvanced(ptr %0, ptr %12, i32 5)
+  %14 = alloca %StringIndex
+  store %StringIndex %13, ptr %14
+  %15 = call %substring @string.slice(ptr %0, ptr %10, ptr %14)
+  %16 = alloca %substring
+  store %substring %15, ptr %16
+  %17 = call %string @substring.toString(ptr %16)
+  %18 = alloca %string
+  store %string %17, ptr %18
+  %19 = call i32 @string.count(ptr %18)
+  %20 = getelementptr %substring, ptr %16, i32 0, i32 0
   %21 = load ptr, ptr %20
-  call void @_managed_string_release(ptr %21, ptr @.__tag.free.sub)
+  %22 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 2
+  %23 = load i32, ptr %22
+  %24 = icmp sgt i32 %23, 0
+  br i1 %24, label %sub.release1, label %sub.continue2
+sub.release1:
+  %25 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 0
+  %26 = getelementptr %_ManagedArray_byte, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  call void @_managed_string_release(ptr %27, ptr @.__tag.free.sub)
   br label %sub.continue2
 sub.continue2:
-  ret i32 %13
+  ret i32 %19
 }
 
 define i32 @string.findGraphemeEndManagedRange(ptr %managed, i32 %offset, i32 %startPos, i32 %len) {
@@ -1006,6 +1142,21 @@ ifcont7:
   %63 = add i32 %61, %62
   store i32 %63, ptr %9
   br label %whilecond3
+}
+
+define i32 @string.findGraphemeEndManaged(ptr %managed, i32 %startPos, i32 %len) {
+entry0:
+  %0 = alloca ptr
+  store ptr %managed, ptr %0
+  %1 = alloca i32
+  store i32 %startPos, ptr %1
+  %2 = alloca i32
+  store i32 %len, ptr %2
+  %3 = load ptr, ptr %0
+  %4 = load i32, ptr %1
+  %5 = load i32, ptr %2
+  %6 = call i32 @string.findGraphemeEndManagedRange(ptr %3, i32 0, i32 %4, i32 %5)
+  ret i32 %6
 }
 
 define i32 @string.countGraphemesManagedRange(ptr %managed, i32 %offset, i32 %len) {
