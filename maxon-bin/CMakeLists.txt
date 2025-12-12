@@ -58,6 +58,7 @@ set(SOURCES
     test_regenerate.cpp
     test_runner.cpp
     temp_runner.cpp
+    build_runner.cpp
     self_test.cpp
     docs_generator.cpp
     lexer.cpp

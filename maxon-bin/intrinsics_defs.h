@@ -98,6 +98,10 @@ inline std::vector<IntrinsicDef> getIntrinsicDefinitions() {
 		{"__read_file", "_ManagedString", {{"cstring"}}, "intrinsic_read_file"},
 		{"__write_file", "int", {{"cstring"}, {"cstring"}}, "intrinsic_write_file"},
 		{"__write_file_binary", "int", {{"cstring"}, IntrinsicParamDef::arrayOf({"byte"})}, "intrinsic_write_file_binary"},
+
+		// Directory intrinsics
+		{"__list_directory", "array<string>", {{"cstring"}}, "intrinsic_list_directory"},
+		{"__is_directory", "int", {{"cstring"}}, "intrinsic_is_directory"},
 	};
 }
 

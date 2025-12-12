@@ -9,8 +9,17 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 
 namespace maxon_lsp {
+
+// Information about a Maxon project (identified by build.maxon location)
+struct ProjectInfo {
+	std::string rootPath;			 // Directory containing build.maxon
+	StdlibSymbols symbols;			 // Exported symbols from all files in project
+	std::set<std::string> files;	 // Source files in project
+	bool symbolsLoaded = false;		 // Whether symbols have been loaded
+};
 
 /**
  * LSP Server implementation for the Maxon language.
@@ -45,6 +54,9 @@ class LSPServer {
 	// Client capabilities
 	bool supportsWorkspaceFolders_ = false;
 	bool supportsDocumentChanges_ = false;
+
+	// Project cache: projectRoot -> ProjectInfo
+	std::map<std::string, ProjectInfo> projectCache_;
 
 	// Request handlers (methods that return a result)
 	using RequestHandler = std::function<maxon::lsp::json(const maxon::lsp::json &)>;
@@ -146,7 +158,17 @@ class LSPServer {
 	// Analysis and diagnostics
 	// =========================================================================
 
-	// Load exported symbols from sibling .maxon files in the same directory
+	// Find the project root (directory containing build.maxon) for a file
+	// Returns empty string if no build.maxon is found
+	std::string findProjectRoot(const std::string &filePath);
+
+	// Load and cache symbols for a project
+	StdlibSymbols &getProjectSymbols(const std::string &projectRoot);
+
+	// Invalidate cached symbols for a project (called when a file in the project changes)
+	void invalidateProjectSymbols(const std::string &projectRoot);
+
+	// Load exported symbols from all .maxon files in the project
 	StdlibSymbols loadProjectSymbols(const std::string &filePath);
 
 	// Analyze a document and update the cache

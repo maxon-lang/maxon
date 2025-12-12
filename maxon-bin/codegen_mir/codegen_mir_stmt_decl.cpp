@@ -498,7 +498,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			// Store key
 			mir::MIRValue *keyVal = generateExpr(entry.key.get());
 			mir::MIRValue *keyPtr = builder->createArrayGEP(keyMirType, keysStackBuffer,
-														   builder->getInt64(i), "key.ptr");
+															builder->getInt64(i), "key.ptr");
 			// For struct types (like string), generateExpr returns a pointer to an alloca
 			// We need to load the struct value before storing it
 			if (keyMirType->isStruct()) {
@@ -511,7 +511,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			// Store value
 			mir::MIRValue *valVal = generateExpr(entry.value.get());
 			mir::MIRValue *valPtr = builder->createArrayGEP(valueMirType, valuesStackBuffer,
-														   builder->getInt64(i), "val.ptr");
+															builder->getInt64(i), "val.ptr");
 			// For struct types, load the value before storing
 			if (valueMirType->isStruct()) {
 				mir::MIRValue *valLoaded = builder->createLoad(valueMirType, valVal, "val.loaded");
@@ -733,8 +733,66 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 
 			// Handle array field initialization
 			if (auto *arrayLit = dynamic_cast<ArrayLiteralExprAST *>(valueExpr)) {
-				// Array literal for struct field - initialize in place
-				if (!arrayLit->values.empty()) {
+				// Check if field type is array<T> struct type (e.g., array<string>)
+				if (maxon::TypeConversion::isArrayStructType(fieldTypeStr)) {
+					// array<T> struct field - initialize with proper struct layout
+					// This handles: var field array of T initialized with [elem1, elem2, ...]
+					std::string elemTypeStr = maxon::TypeConversion::getArrayStructElementType(fieldTypeStr);
+
+					// Generate element values
+					std::vector<mir::MIRValue *> initValues;
+					for (auto &valExpr : arrayLit->values) {
+						mir::MIRValue *val = generateExpr(valExpr.get());
+						if (!val) {
+							reportError("Failed to generate array element value",
+										arrayLit->line, arrayLit->column);
+						}
+						initValues.push_back(val);
+					}
+
+					int constantArraySize = static_cast<int>(initValues.size());
+					mir::MIRType *elementType = initValues.empty() ? mir::MIRType::getInt32() : initValues[0]->type;
+					uint64_t elementSize = elementType->sizeInBytes;
+					(void)elementSize; // May be useful for future heap allocation threshold check
+
+					// For struct fields, stack-allocate the buffer (same alloca as the struct)
+					mir::MIRType *arrayType = mir::MIRType::getArray(elementType, constantArraySize);
+					mir::MIRValue *stackBuffer = builder->createAlloca(arrayType, fieldName + ".stack_buffer");
+
+					// Get array struct types
+					mir::MIRType *arrayStructType = getOrCreateArrayStructType(elemTypeStr);
+					mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemTypeStr);
+
+					// Initialize nested struct layout in the field
+					// Field structure: { managed: { _buffer, _len, _capacity }, iterIndex }
+					mir::MIRValue *arraySizeVal = builder->getInt32(constantArraySize);
+					mir::MIRValue *zeroCapacity = builder->getInt32(0);
+
+					// Field 0: managed (nested __ManagedArrayData struct)
+					mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, fieldPtr, 0, fieldName + ".managed");
+
+					// Initialize the nested __ManagedArrayData fields
+					mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, fieldName + ".managed._buffer");
+					builder->createStore(stackBuffer, bufferField);
+
+					mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, fieldName + ".managed._len");
+					builder->createStore(arraySizeVal, lenField);
+
+					mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, fieldName + ".managed._capacity");
+					builder->createStore(zeroCapacity, capField);
+
+					// Field 1: iterIndex
+					mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, fieldPtr, 1, fieldName + ".iterIndex");
+					builder->createStore(builder->getInt32(0), iterField);
+
+					// Store each value into the buffer
+					for (int i = 0; i < constantArraySize; i++) {
+						mir::MIRValue *indexVal = builder->getInt32(i);
+						mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, stackBuffer, indexVal, "arrayidx");
+						builder->createStore(initValues[i], elementPtr);
+					}
+				} else if (!arrayLit->values.empty()) {
+					// Static array field [N]T - initialize in place
 					// Value-initialized array [1, 2, 3]
 					for (size_t i = 0; i < arrayLit->values.size(); i++) {
 						mir::MIRValue *elemValue = generateExpr(arrayLit->values[i].get());
@@ -1023,6 +1081,7 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 
 void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction *function) {
 	// Handle array literal initialization: [val1, val2, ...]
+	// Use the same array<T> struct layout as var declarations for consistency
 	if (auto *arrayLiteral = dynamic_cast<ArrayLiteralExprAST *>(letDecl->initializer.get())) {
 		mir::MIRType *elementType;
 		std::string elementTypeName;
@@ -1062,48 +1121,86 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 		bool useHeap = totalSize > STACK_ARRAY_THRESHOLD;
 
 		if (useHeap) {
-			// Large array: heap-allocate with header
+			// Large array: heap-allocate using array<T> struct layout
 			initHeapManagement();
 			mir::MIRFunction *mallocFunc = module->getFunction("malloc");
-			mir::MIRValue *sizeVal = builder->getInt64(8 + totalSize);
-			mir::MIRValue *basePtr = builder->createCall(mallocFunc, {sizeVal}, letDecl->name + ".base");
 
-			// Store length at offset 0 (basePtr already points here)
+			// Allocate data buffer
+			mir::MIRValue *sizeVal = builder->getInt64(totalSize);
+			mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {sizeVal}, letDecl->name + ".buffer");
+
+			// Create array<T> struct alloca
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
+			mir::MIRValue *structAlloca = builder->createAlloca(arrayStructType, letDecl->name);
+
+			// Get __ManagedArrayData type for the nested managed field
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+
+			// Initialize nested struct layout: { managed: { _buffer, _len, _capacity }, iterIndex }
 			mir::MIRValue *lengthVal = builder->getInt32(constantArraySize);
-			builder->createStore(lengthVal, basePtr);
 
-			// Store capacity at offset 4
-			mir::MIRValue *capPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
-													   {builder->getInt64(4)}, "cap.ptr");
-			builder->createStore(lengthVal, capPtr);
+			// Field 0: managed (nested __ManagedArrayData struct)
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, structAlloca, 0, letDecl->name + ".managed");
 
-			// Data pointer is at offset 8
-			arrayPtr = builder->createGEP(mir::MIRType::getInt8(), basePtr,
-										  {builder->getInt64(8)}, letDecl->name + ".data");
+			// Initialize the nested __ManagedArrayData fields
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, letDecl->name + ".managed._buffer");
+			builder->createStore(bufferPtr, bufferField);
 
-			// Create alloca to store the data pointer
-			mir::MIRValue *ptrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name);
-			builder->createStore(arrayPtr, ptrAlloca);
-			namedValues[letDecl->name] = ptrAlloca;
+			mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, letDecl->name + ".managed._len");
+			builder->createStore(lengthVal, lenField);
 
-			// Track base pointer for cleanup (static - let arrays can't be reallocated)
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, letDecl->name + ".managed._capacity");
+			builder->createStore(lengthVal, capField);
+
+			// Field 1: iterIndex
+			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 1, letDecl->name + ".iterIndex");
+			builder->createStore(builder->getInt32(0), iterField);
+
+			namedValues[letDecl->name] = structAlloca;
+			variableTypes[letDecl->name] = maxon::TypeConversion::makeArrayStructType(elementTypeName);
+			arrayPtr = bufferPtr;
+
+			// Track array struct for cleanup
 			if (!scopeStack.empty()) {
-				mir::MIRValue *basePtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), letDecl->name + ".__base");
-				builder->createStore(basePtr, basePtrAlloca);
-				scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, basePtrAlloca, "", false});
+				scopeStack.back().heapAllocatedArrays.push_back({letDecl->name, structAlloca, elementTypeName, true});
 			}
 		} else {
-			// Small array: stack-allocate directly
-			mir::MIRType *arrayType = mir::MIRType::getArray(elementType, constantArraySize);
-			arrayPtr = builder->createAlloca(arrayType, letDecl->name);
-			namedValues[letDecl->name] = arrayPtr;
-			stackAllocatedArrays.insert(letDecl->name);
+			// Small array: stack-allocate buffer but use array<T> struct wrapper
+			mir::MIRType *rawArrayType = mir::MIRType::getArray(elementType, constantArraySize);
+			mir::MIRValue *stackBuffer = builder->createAlloca(rawArrayType, letDecl->name + ".stack_buffer");
 
-			// Store length in hidden alloca for .length access
-			mir::MIRValue *sizeAlloca = builder->createAlloca(mir::MIRType::getInt32(), letDecl->name + ".__length");
+			// Create array<T> struct alloca
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
+			mir::MIRValue *structAlloca = builder->createAlloca(arrayStructType, letDecl->name);
+
+			// Get __ManagedArrayData type for the nested managed field
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+
+			// Initialize nested struct layout: { managed: { _buffer, _len, _capacity }, iterIndex }
+			// capacity = 0 signals stack-allocated buffer (immutable, can't grow)
 			mir::MIRValue *arraySizeVal = builder->getInt32(constantArraySize);
-			builder->createStore(arraySizeVal, sizeAlloca);
-			namedValues[letDecl->name + ".__length"] = sizeAlloca;
+			mir::MIRValue *zeroCapacity = builder->getInt32(0);
+
+			// Field 0: managed (nested __ManagedArrayData struct)
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, structAlloca, 0, letDecl->name + ".managed");
+
+			// Initialize the nested __ManagedArrayData fields
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, letDecl->name + ".managed._buffer");
+			builder->createStore(stackBuffer, bufferField);
+
+			mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, letDecl->name + ".managed._len");
+			builder->createStore(arraySizeVal, lenField);
+
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, letDecl->name + ".managed._capacity");
+			builder->createStore(zeroCapacity, capField);
+
+			// Field 1: iterIndex
+			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 1, letDecl->name + ".iterIndex");
+			builder->createStore(builder->getInt32(0), iterField);
+
+			namedValues[letDecl->name] = structAlloca;
+			variableTypes[letDecl->name] = maxon::TypeConversion::makeArrayStructType(elementTypeName);
+			arrayPtr = stackBuffer;
 		}
 
 		// Initialize array elements
@@ -1112,8 +1209,6 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 			mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayPtr, indexVal, "arrayidx");
 			builder->createStore(initValues[i], elementPtr);
 		}
-
-		variableTypes[letDecl->name] = maxon::TypeConversion::makeStaticArrayType(constantArraySize, elementTypeName);
 
 		return;
 	}

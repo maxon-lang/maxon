@@ -70,6 +70,30 @@ entry:
 }
 
 ;==============================================================================
+; strlen - get length of null-terminated string
+; i32 strlen(ptr str)
+;==============================================================================
+define i32 @strlen(ptr %str) {
+entry:
+    br label %loop
+
+loop:
+    %i = phi i32 [ 0, %entry ], [ %next_i, %continue ]
+    %i64 = sext i32 %i to i64
+    %charptr = getelementptr i8, ptr %str, i64 %i64
+    %char = load i8, ptr %charptr
+    %is_null = icmp eq i8 %char, 0
+    br i1 %is_null, label %done, label %continue
+
+continue:
+    %next_i = add i32 %i, 1
+    br label %loop
+
+done:
+    ret i32 %i
+}
+
+;==============================================================================
 ; write_stdout - write to stdout using WriteFile
 ; i32 write_stdout(ptr buf, i32 count)
 ;==============================================================================
@@ -1767,4 +1791,378 @@ close_error:
 
 error:
     ret i32 -1
+}
+
+;==============================================================================
+; Directory Listing Functions
+;==============================================================================
+
+; Windows API declarations for directory listing
+declare ptr @FindFirstFileA(ptr, ptr)
+declare i32 @FindNextFileA(ptr, ptr)
+declare i32 @FindClose(ptr)
+
+; WIN32_FIND_DATAA structure is 320 bytes on Windows
+; Offset 0: DWORD dwFileAttributes (4 bytes)
+; Offset 44: char cFileName[260] (MAX_PATH)
+
+; Global buffer for WIN32_FIND_DATAA (320 bytes)
+@__find_data = global [320 x i8] zeroinitializer
+
+; Global buffer for building search pattern (path + \* + null)
+@__search_pattern = global [264 x i8] zeroinitializer
+
+;==============================================================================
+; __list_directory - List files and directories in a path
+; Returns ptr to __ManagedArrayData<string>: { ptr buffer, i32 len, i32 cap }
+; ptr __list_directory(ptr path_data)
+; path_data is a null-terminated string (not a cstring struct)
+;==============================================================================
+define ptr @__list_directory(ptr %path_data) {
+entry:
+    ; Check for null input
+    %is_null = icmp eq ptr %path_data, null
+    br i1 %is_null, label %return_empty, label %get_length
+
+get_length:
+    ; Get path length using strlen
+    %path_len = call i32 @strlen(ptr %path_data)
+
+    ; Build search pattern: path + "\\*"
+    %pattern_buf = getelementptr [264 x i8], ptr @__search_pattern, i64 0, i64 0
+
+    ; Copy path to pattern buffer
+    %path_len_i64 = sext i32 %path_len to i64
+    call void @memcpy(ptr %pattern_buf, ptr %path_data, i64 %path_len_i64)
+
+    ; Add "\\*" suffix
+    %suffix_pos = getelementptr i8, ptr %pattern_buf, i64 %path_len_i64
+    store i8 92, ptr %suffix_pos  ; '\\'
+    %star_pos = getelementptr i8, ptr %suffix_pos, i64 1
+    store i8 42, ptr %star_pos    ; '*'
+    %null_pos = getelementptr i8, ptr %suffix_pos, i64 2
+    store i8 0, ptr %null_pos     ; null terminator
+
+    ; Call FindFirstFileA
+    %find_data = getelementptr [320 x i8], ptr @__find_data, i64 0, i64 0
+    %handle = call ptr @FindFirstFileA(ptr %pattern_buf, ptr %find_data)
+
+    ; Check for INVALID_HANDLE_VALUE (-1)
+    %invalid_handle = inttoptr i64 -1 to ptr
+    %is_invalid = icmp eq ptr %handle, %invalid_handle
+    br i1 %is_invalid, label %return_empty, label %count_entries
+
+count_entries:
+    ; First pass: count entries (excluding . and ..)
+    %count1 = call i32 @__count_dir_entries(ptr %handle, ptr %find_data)
+
+    ; Close and reopen to reset iteration
+    call i32 @FindClose(ptr %handle)
+    %handle2 = call ptr @FindFirstFileA(ptr %pattern_buf, ptr %find_data)
+    %is_invalid2 = icmp eq ptr %handle2, %invalid_handle
+    br i1 %is_invalid2, label %return_empty, label %alloc_result
+
+alloc_result:
+    ; Allocate result struct __ManagedArrayData<string>: { ptr buffer, i32 len, i32 cap }
+    ; Size = 8 (ptr) + 4 (len) + 4 (cap) = 16 bytes
+    %result = call ptr @malloc(i64 16)
+    %result_null = icmp eq ptr %result, null
+    br i1 %result_null, label %close_handle2, label %alloc_array
+
+alloc_array:
+    ; Allocate array of string structs (each string is 16 bytes: { ptr managed, i32 iterPos, padding })
+    %count_i64 = sext i32 %count1 to i64
+    %array_size = mul i64 %count_i64, 16
+    %array = call ptr @malloc(i64 %array_size)
+    %array_null = icmp eq ptr %array, null
+    br i1 %array_null, label %free_result, label %fill_array
+
+fill_array:
+    ; Second pass: fill array with filenames
+    %filled = call i32 @__fill_dir_array(ptr %handle2, ptr %find_data, ptr %array, i32 %count1)
+
+    ; Close handle
+    call i32 @FindClose(ptr %handle2)
+
+    ; Setup result struct: __ManagedArrayData<string> = { ptr buffer, i32 len, i32 cap }
+    ; Field 0: buffer pointer (offset 0)
+    store ptr %array, ptr %result
+    ; Field 1: length (offset 8)
+    %result_len_ptr = getelementptr i8, ptr %result, i64 8
+    store i32 %filled, ptr %result_len_ptr
+    ; Field 2: capacity (offset 12) - set to count to indicate heap-allocated
+    %result_cap_ptr = getelementptr i8, ptr %result, i64 12
+    store i32 %filled, ptr %result_cap_ptr
+
+    ret ptr %result
+
+free_result:
+    call void @free(ptr %result)
+    br label %close_handle2
+
+close_handle2:
+    call i32 @FindClose(ptr %handle2)
+    br label %return_empty
+
+return_empty:
+    ; Return empty array: __ManagedArrayData<string> = { null, 0, 0 }
+    %empty_result = call ptr @malloc(i64 16)
+    %empty_null = icmp eq ptr %empty_result, null
+    br i1 %empty_null, label %return_null, label %setup_empty
+
+setup_empty:
+    ; Field 0: buffer = null
+    store ptr null, ptr %empty_result
+    ; Field 1: length = 0
+    %empty_len_ptr = getelementptr i8, ptr %empty_result, i64 8
+    store i32 0, ptr %empty_len_ptr
+    ; Field 2: capacity = 0 (stack-like, no heap allocation for buffer)
+    %empty_cap_ptr = getelementptr i8, ptr %empty_result, i64 12
+    store i32 0, ptr %empty_cap_ptr
+    ret ptr %empty_result
+
+return_null:
+    ret ptr null
+}
+
+;==============================================================================
+; __count_dir_entries - Count directory entries (excluding . and ..)
+; i32 __count_dir_entries(ptr handle, ptr find_data)
+;==============================================================================
+define i32 @__count_dir_entries(ptr %handle, ptr %find_data) {
+entry:
+    br label %loop
+
+loop:
+    %count = phi i32 [ 0, %entry ], [ %next_count, %next_iter ], [ %count, %next_iter_no_inc ]
+
+    ; Get filename from find_data (offset 44)
+    %filename_ptr = getelementptr i8, ptr %find_data, i64 44
+
+    ; Check if it's "." or ".."
+    %first_char = load i8, ptr %filename_ptr
+    %is_dot = icmp eq i8 %first_char, 46  ; '.'
+    br i1 %is_dot, label %check_dotdot, label %count_entry
+
+check_dotdot:
+    %second_ptr = getelementptr i8, ptr %filename_ptr, i64 1
+    %second_char = load i8, ptr %second_ptr
+    %is_null_term = icmp eq i8 %second_char, 0  ; "."
+    br i1 %is_null_term, label %skip_entry, label %check_dotdot2
+
+check_dotdot2:
+    %is_second_dot = icmp eq i8 %second_char, 46  ; second '.'
+    br i1 %is_second_dot, label %check_dotdot3, label %count_entry
+
+check_dotdot3:
+    %third_ptr = getelementptr i8, ptr %filename_ptr, i64 2
+    %third_char = load i8, ptr %third_ptr
+    %is_dotdot = icmp eq i8 %third_char, 0  ; ".."
+    br i1 %is_dotdot, label %skip_entry, label %count_entry
+
+count_entry:
+    %next_count = add i32 %count, 1
+    br label %next_iter
+
+skip_entry:
+    br label %next_iter_no_inc
+
+next_iter_no_inc:
+    ; Call FindNextFileA
+    %next_result = call i32 @FindNextFileA(ptr %handle, ptr %find_data)
+    %has_more = icmp ne i32 %next_result, 0
+    br i1 %has_more, label %loop, label %done_no_inc
+
+next_iter:
+    ; Call FindNextFileA
+    %next_result2 = call i32 @FindNextFileA(ptr %handle, ptr %find_data)
+    %has_more2 = icmp ne i32 %next_result2, 0
+    br i1 %has_more2, label %loop, label %done
+
+done_no_inc:
+    ret i32 %count
+
+done:
+    ret i32 %next_count
+}
+
+;==============================================================================
+; __fill_dir_array - Fill array with directory entry names
+; i32 __fill_dir_array(ptr handle, ptr find_data, ptr array, i32 max_count)
+;==============================================================================
+define i32 @__fill_dir_array(ptr %handle, ptr %find_data, ptr %array, i32 %max_count) {
+entry:
+    br label %loop
+
+loop:
+    %idx = phi i32 [ 0, %entry ], [ %loop_idx, %loop_continue ]
+
+    ; Check if we've filled enough
+    %done_filling = icmp sge i32 %idx, %max_count
+    br i1 %done_filling, label %done, label %process_entry
+
+process_entry:
+    ; Get filename from find_data (offset 44)
+    %filename_ptr = getelementptr i8, ptr %find_data, i64 44
+
+    ; Check if it's "." or ".."
+    %first_char = load i8, ptr %filename_ptr
+    %is_dot = icmp eq i8 %first_char, 46
+    br i1 %is_dot, label %check_skip, label %create_string
+
+check_skip:
+    %second_ptr = getelementptr i8, ptr %filename_ptr, i64 1
+    %second_char = load i8, ptr %second_ptr
+    %is_single_dot = icmp eq i8 %second_char, 0
+    br i1 %is_single_dot, label %skip_entry, label %check_skip2
+
+check_skip2:
+    %is_second_dot = icmp eq i8 %second_char, 46
+    br i1 %is_second_dot, label %check_skip3, label %create_string
+
+check_skip3:
+    %third_ptr = getelementptr i8, ptr %filename_ptr, i64 2
+    %third_char = load i8, ptr %third_ptr
+    %is_dotdot = icmp eq i8 %third_char, 0
+    br i1 %is_dotdot, label %skip_entry, label %create_string
+
+create_string:
+    ; Calculate string length
+    %str_len = call i32 @__strlen(ptr %filename_ptr)
+
+    ; Allocate managed string (24 bytes)
+    %managed = call ptr @malloc(i64 24)
+    %managed_null = icmp eq ptr %managed, null
+    br i1 %managed_null, label %next_file_no_inc, label %alloc_buffer
+
+alloc_buffer:
+    ; Allocate buffer for string data
+    %str_len_i64 = sext i32 %str_len to i64
+    %buf_size = add i64 %str_len_i64, 1
+    %buffer = call ptr @malloc(i64 %buf_size)
+    %buffer_null = icmp eq ptr %buffer, null
+    br i1 %buffer_null, label %free_managed, label %copy_string
+
+copy_string:
+    ; Copy filename to buffer
+    call void @memcpy(ptr %buffer, ptr %filename_ptr, i64 %buf_size)
+
+    ; Setup managed string struct
+    store ptr %buffer, ptr %managed
+    %len_ptr = getelementptr i8, ptr %managed, i64 8
+    store i32 %str_len, ptr %len_ptr
+    %len_ptr2 = getelementptr i8, ptr %managed, i64 16
+    store i32 %str_len, ptr %len_ptr2
+    %cap_ptr = getelementptr i8, ptr %managed, i64 20
+    store i32 %str_len, ptr %cap_ptr
+
+    ; Store in array
+    %idx_i64 = sext i32 %idx to i64
+    %slot = getelementptr [16 x i8], ptr %array, i64 %idx_i64
+    store ptr %managed, ptr %slot
+    %iter_ptr = getelementptr i8, ptr %slot, i64 8
+    store i32 0, ptr %iter_ptr
+
+    br label %store_entry
+
+free_managed:
+    call void @free(ptr %managed)
+    br label %next_file_no_inc
+
+store_entry:
+    %next_idx = add i32 %idx, 1
+    br label %next_file
+
+skip_entry:
+    br label %next_file_no_inc
+
+next_file_no_inc:
+    ; Call FindNextFileA (index stays same)
+    %next_result_skip = call i32 @FindNextFileA(ptr %handle, ptr %find_data)
+    %has_more_skip = icmp ne i32 %next_result_skip, 0
+    br i1 %has_more_skip, label %loop_continue_no_inc, label %done_no_inc
+
+next_file:
+    ; Call FindNextFileA (index incremented)
+    %next_result = call i32 @FindNextFileA(ptr %handle, ptr %find_data)
+    %has_more = icmp ne i32 %next_result, 0
+    br i1 %has_more, label %loop_continue_inc, label %done_with_idx
+
+loop_continue_no_inc:
+    %loop_idx_no_inc = phi i32 [ %idx, %next_file_no_inc ]
+    br label %loop_continue
+
+loop_continue_inc:
+    %loop_idx_inc = phi i32 [ %next_idx, %next_file ]
+    br label %loop_continue
+
+loop_continue:
+    %loop_idx = phi i32 [ %loop_idx_no_inc, %loop_continue_no_inc ], [ %loop_idx_inc, %loop_continue_inc ]
+    br label %loop
+
+done_no_inc:
+    ret i32 %idx
+
+done_with_idx:
+    ret i32 %next_idx
+
+done:
+    ret i32 %idx
+}
+
+;==============================================================================
+; __strlen - Calculate length of null-terminated string
+; i32 __strlen(ptr str)
+;==============================================================================
+define i32 @__strlen(ptr %str) {
+entry:
+    br label %loop
+
+loop:
+    %idx = phi i32 [ 0, %entry ], [ %next_idx, %continue ]
+    %idx_i64 = sext i32 %idx to i64
+    %char_ptr = getelementptr i8, ptr %str, i64 %idx_i64
+    %char = load i8, ptr %char_ptr
+    %is_null = icmp eq i8 %char, 0
+    br i1 %is_null, label %done, label %continue
+
+continue:
+    %next_idx = add i32 %idx, 1
+    br label %loop
+
+done:
+    ret i32 %idx
+}
+
+;==============================================================================
+; __is_directory - Check if a path is a directory
+; i32 __is_directory(ptr path_cstr)
+; Returns 1 if directory, 0 if not
+;==============================================================================
+declare i32 @GetFileAttributesA(ptr)
+
+define i32 @__is_directory(ptr %path_data) {
+entry:
+    %is_null = icmp eq ptr %path_data, null
+    br i1 %is_null, label %not_dir, label %check_attrs
+
+check_attrs:
+    ; path_data is already a null-terminated string pointer
+    %attrs = call i32 @GetFileAttributesA(ptr %path_data)
+
+    ; Check for INVALID_FILE_ATTRIBUTES (-1)
+    %is_invalid = icmp eq i32 %attrs, -1
+    br i1 %is_invalid, label %not_dir, label %check_dir
+
+check_dir:
+    ; FILE_ATTRIBUTE_DIRECTORY = 0x10
+    %dir_bit = and i32 %attrs, 16
+    %is_dir = icmp ne i32 %dir_bit, 0
+    br i1 %is_dir, label %is_directory, label %not_dir
+
+is_directory:
+    ret i32 1
+
+not_dir:
+    ret i32 0
 }

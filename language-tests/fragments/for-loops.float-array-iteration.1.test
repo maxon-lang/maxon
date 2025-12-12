@@ -9,40 +9,95 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 29
+; Instructions: 75
+
+%__ManagedArrayData_float = type { ptr, i32, i32 }
+%array<float> = type { %__ManagedArrayData_float, i32 }
+%_ManagedArray_float = type { ptr, i32 }
 
 define i32 @main() {
 entry0:
   %0 = alloca [5 x f64]
-  %2 = getelementptr f64, ptr %0, i64 0
-  store f64 1, ptr %2
-  %3 = getelementptr f64, ptr %0, i64 1
-  store f64 2, ptr %3
-  %4 = getelementptr f64, ptr %0, i64 2
-  store f64 3, ptr %4
-  %5 = getelementptr f64, ptr %0, i64 3
-  store f64 4, ptr %5
-  %6 = getelementptr f64, ptr %0, i64 4
-  store f64 5, ptr %6
+  %1 = alloca %array<float>
+  %2 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 1
+  store i32 5, ptr %4
+  %5 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 2
+  store i32 0, ptr %5
+  %6 = getelementptr %array<float>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = getelementptr f64, ptr %0, i64 0
+  store f64 1, ptr %7
+  %8 = getelementptr f64, ptr %0, i64 1
+  store f64 2, ptr %8
+  %9 = getelementptr f64, ptr %0, i64 2
+  store f64 3, ptr %9
+  %10 = getelementptr f64, ptr %0, i64 3
+  store f64 4, ptr %10
+  %11 = getelementptr f64, ptr %0, i64 4
+  store f64 5, ptr %11
+  %13 = load %array<float>, ptr %1
+  %14 = alloca %array<float>
+  store %array<float> %13, ptr %14
   br label %forcond1
 forcond1:
-  %26 = phi i32 [ 0, %entry0 ], [ %21, %forincrement3 ]
-  %25 = phi f64 [ 0, %entry0 ], [ %19, %forincrement3 ]
-  %11 = icmp slt i32 %26, 5
-  br i1 %11, label %forloop2, label %afterfor4
+  %29 = phi f64 [ 0, %entry0 ], [ %25, %forloop2 ]
+  %15 = call Optional<f64> @array<float>.next(ptr %14)
+  %16 = alloca Optional<f64>
+  store Optional<f64> %15, ptr %16
+  %17 = getelementptr Optional<f64>, ptr %16, i32 0, i32 0
+  %18 = load i8, ptr %17
+  %19 = icmp eq i8 %18, 1
+  br i1 %19, label %forloop2, label %afterfor3
 forloop2:
-  %13 = sext i32 %26 to i64
-  %14 = getelementptr f64, ptr %0, i64 %13
-  %15 = load f64, ptr %14
-  %19 = fadd f64 %25, %15
-  br label %forincrement3
-forincrement3:
-  %21 = add i32 %26, 1
+  %20 = getelementptr Optional<f64>, ptr %16, i32 0, i32 1
+  %21 = load f64, ptr %20
+  %25 = fadd f64 %29, %21
   br label %forcond1
-afterfor4:
-  %23 = call f64 @trunc(f64 %25)
-  %24 = fptosi f64 %23 to i32
-  ret i32 %24
+afterfor3:
+  %27 = call f64 @trunc(f64 %29)
+  %28 = fptosi f64 %27 to i32
+  ret i32 %28
+}
+
+define Optional<f64> @array<float>.next(ptr %self) {
+entry0:
+  %2 = getelementptr %array<float>, ptr %self, i32 0, i32 0
+  %3 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 1
+  %4 = load i32, ptr %3
+  %7 = getelementptr %array<float>, ptr %self, i32 0, i32 1
+  %8 = load i32, ptr %7
+  %10 = icmp sge i32 %8, %4
+  br i1 %10, label %then1, label %ifcont2
+then1:
+  %11 = alloca Optional<f64>
+  %12 = getelementptr Optional<f64>, ptr %11, i32 0, i32 0
+  store i8 0, ptr %12
+  %13 = load Optional<f64>, ptr %11
+  ret Optional<f64> %13
+ifcont2:
+  %15 = getelementptr %array<float>, ptr %self, i32 0, i32 1
+  %16 = load i32, ptr %15
+  %18 = getelementptr %array<float>, ptr %self, i32 0, i32 0
+  %19 = getelementptr %_ManagedArray_float, ptr %18, i32 0, i32 0
+  %20 = load ptr, ptr %19
+  %21 = sext i32 %16 to i64
+  %22 = getelementptr f64, ptr %20, i64 %21
+  %23 = load f64, ptr %22
+  %26 = getelementptr %array<float>, ptr %self, i32 0, i32 1
+  %28 = getelementptr %array<float>, ptr %self, i32 0, i32 1
+  %29 = load i32, ptr %28
+  %30 = add i32 %29, 1
+  store i32 %30, ptr %26
+  %32 = alloca Optional<f64>
+  %33 = getelementptr Optional<f64>, ptr %32, i32 0, i32 0
+  store i8 1, ptr %33
+  %34 = getelementptr Optional<f64>, ptr %32, i32 0, i32 1
+  store f64 %23, ptr %34
+  %35 = load Optional<f64>, ptr %32
+  ret Optional<f64> %35
 }
 
 declare f64 @trunc(f64 %arg0)
@@ -58,55 +113,116 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 44
+; Instructions: 96
+
+%__ManagedArrayData_float = type { ptr, i32, i32 }
+%array<float> = type { %__ManagedArrayData_float, i32 }
+%_ManagedArray_float = type { ptr, i32 }
 
 define i32 @main() {
 entry0:
   %0 = alloca [5 x f64]
-  %1 = alloca i32
-  store i32 5, ptr %1
-  %2 = getelementptr f64, ptr %0, i64 0
-  store f64 1, ptr %2
-  %3 = getelementptr f64, ptr %0, i64 1
-  store f64 2, ptr %3
-  %4 = getelementptr f64, ptr %0, i64 2
-  store f64 3, ptr %4
-  %5 = getelementptr f64, ptr %0, i64 3
-  store f64 4, ptr %5
-  %6 = getelementptr f64, ptr %0, i64 4
-  store f64 5, ptr %6
-  %7 = alloca f64
-  store f64 0, ptr %7
-  %8 = load i32, ptr %1
-  %9 = alloca i32
-  store i32 0, ptr %9
+  %1 = alloca %array<float>
+  %2 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 0
+  store ptr %0, ptr %3
+  %4 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 1
+  store i32 5, ptr %4
+  %5 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 2
+  store i32 0, ptr %5
+  %6 = getelementptr %array<float>, ptr %1, i32 0, i32 1
+  store i32 0, ptr %6
+  %7 = getelementptr f64, ptr %0, i64 0
+  store f64 1, ptr %7
+  %8 = getelementptr f64, ptr %0, i64 1
+  store f64 2, ptr %8
+  %9 = getelementptr f64, ptr %0, i64 2
+  store f64 3, ptr %9
+  %10 = getelementptr f64, ptr %0, i64 3
+  store f64 4, ptr %10
+  %11 = getelementptr f64, ptr %0, i64 4
+  store f64 5, ptr %11
+  %12 = alloca f64
+  store f64 0, ptr %12
+  %13 = load %array<float>, ptr %1
+  %14 = alloca %array<float>
+  store %array<float> %13, ptr %14
   br label %forcond1
 forcond1:
-  %10 = load i32, ptr %9
-  %11 = icmp slt i32 %10, %8
-  br i1 %11, label %forloop2, label %afterfor4
+  %15 = call Optional<f64> @array<float>.next(ptr %14)
+  %16 = alloca Optional<f64>
+  store Optional<f64> %15, ptr %16
+  %17 = getelementptr Optional<f64>, ptr %16, i32 0, i32 0
+  %18 = load i8, ptr %17
+  %19 = icmp eq i8 %18, 1
+  br i1 %19, label %forloop2, label %afterfor3
 forloop2:
-  %12 = load i32, ptr %9
-  %13 = sext i32 %12 to i64
-  %14 = getelementptr f64, ptr %0, i64 %13
-  %15 = load f64, ptr %14
-  %16 = alloca f64
-  store f64 %15, ptr %16
-  %17 = load f64, ptr %7
-  %18 = load f64, ptr %16
-  %19 = fadd f64 %17, %18
-  store f64 %19, ptr %7
-  br label %forincrement3
-forincrement3:
-  %20 = load i32, ptr %9
-  %21 = add i32 %20, 1
-  store i32 %21, ptr %9
+  %20 = getelementptr Optional<f64>, ptr %16, i32 0, i32 1
+  %21 = load f64, ptr %20
+  %22 = alloca f64
+  store f64 %21, ptr %22
+  %23 = load f64, ptr %12
+  %24 = load f64, ptr %22
+  %25 = fadd f64 %23, %24
+  store f64 %25, ptr %12
   br label %forcond1
-afterfor4:
-  %22 = load f64, ptr %7
-  %23 = call f64 @trunc(f64 %22)
-  %24 = fptosi f64 %23 to i32
-  ret i32 %24
+afterfor3:
+  %26 = load f64, ptr %12
+  %27 = call f64 @trunc(f64 %26)
+  %28 = fptosi f64 %27 to i32
+  ret i32 %28
+}
+
+define Optional<f64> @array<float>.next(ptr %self) {
+entry0:
+  %0 = alloca ptr
+  store ptr %self, ptr %0
+  %1 = load ptr, ptr %0
+  %2 = getelementptr %array<float>, ptr %1, i32 0, i32 0
+  %3 = getelementptr %__ManagedArrayData_float, ptr %2, i32 0, i32 1
+  %4 = load i32, ptr %3
+  %5 = alloca i32
+  store i32 %4, ptr %5
+  %6 = load ptr, ptr %0
+  %7 = getelementptr %array<float>, ptr %6, i32 0, i32 1
+  %8 = load i32, ptr %7
+  %9 = load i32, ptr %5
+  %10 = icmp sge i32 %8, %9
+  br i1 %10, label %then1, label %ifcont2
+then1:
+  %11 = alloca Optional<f64>
+  %12 = getelementptr Optional<f64>, ptr %11, i32 0, i32 0
+  store i8 0, ptr %12
+  %13 = load Optional<f64>, ptr %11
+  ret Optional<f64> %13
+ifcont2:
+  %14 = load ptr, ptr %0
+  %15 = getelementptr %array<float>, ptr %14, i32 0, i32 1
+  %16 = load i32, ptr %15
+  %17 = load ptr, ptr %0
+  %18 = getelementptr %array<float>, ptr %17, i32 0, i32 0
+  %19 = getelementptr %_ManagedArray_float, ptr %18, i32 0, i32 0
+  %20 = load ptr, ptr %19
+  %21 = sext i32 %16 to i64
+  %22 = getelementptr f64, ptr %20, i64 %21
+  %23 = load f64, ptr %22
+  %24 = alloca f64
+  store f64 %23, ptr %24
+  %25 = load ptr, ptr %0
+  %26 = getelementptr %array<float>, ptr %25, i32 0, i32 1
+  %27 = load ptr, ptr %0
+  %28 = getelementptr %array<float>, ptr %27, i32 0, i32 1
+  %29 = load i32, ptr %28
+  %30 = add i32 %29, 1
+  store i32 %30, ptr %26
+  %31 = load f64, ptr %24
+  %32 = alloca Optional<f64>
+  %33 = getelementptr Optional<f64>, ptr %32, i32 0, i32 0
+  store i8 1, ptr %33
+  %34 = getelementptr Optional<f64>, ptr %32, i32 0, i32 1
+  store f64 %31, ptr %34
+  %35 = load Optional<f64>, ptr %32
+  ret Optional<f64> %35
 }
 
 declare f64 @trunc(f64 %arg0)

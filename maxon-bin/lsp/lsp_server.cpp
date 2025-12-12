@@ -352,6 +352,13 @@ void LSPServer::handleDidSave(const json &params) {
 		// Then re-analyze all non-stdlib documents that might depend on it
 		reanalyzeNonStdlibDocuments();
 	} else {
+		// Invalidate project cache when a file is saved (exported symbols may have changed)
+		std::string filePath = uriToPath(uri);
+		std::string projectRoot = findProjectRoot(filePath);
+		if (!projectRoot.empty()) {
+			invalidateProjectSymbols(projectRoot);
+		}
+
 		// Regular file - just analyze it
 		analyzeDocument(uri);
 	}
@@ -361,8 +368,186 @@ void LSPServer::handleDidSave(const json &params) {
 // Analysis and Diagnostics
 // ============================================================================
 
-// Load exported symbols from sibling .maxon files in the same directory
+// Find the project root by walking up directories until we find build.maxon
+std::string LSPServer::findProjectRoot(const std::string &filePath) {
+	try {
+		std::filesystem::path current = std::filesystem::absolute(filePath);
+		if (std::filesystem::is_regular_file(current)) {
+			current = current.parent_path();
+		}
+
+		// Walk up the directory tree looking for build.maxon
+		while (!current.empty() && current.has_parent_path()) {
+			std::filesystem::path buildMaxon = current / "build.maxon";
+			if (std::filesystem::exists(buildMaxon)) {
+				return normalizeFilePath(current.string());
+			}
+
+			// Don't go above the workspace root
+			if (!workspaceRoot_.empty()) {
+				std::string normalizedCurrent = normalizeFilePath(current.string());
+				std::string normalizedWorkspace = normalizeFilePath(workspaceRoot_);
+				if (normalizedCurrent == normalizedWorkspace) {
+					break;
+				}
+			}
+
+			std::filesystem::path parent = current.parent_path();
+			if (parent == current) {
+				break; // Reached root
+			}
+			current = parent;
+		}
+	} catch (...) {
+		// Ignore errors during directory traversal
+	}
+
+	return ""; // No project root found
+}
+
+// Get cached project symbols, loading them if necessary
+StdlibSymbols &LSPServer::getProjectSymbols(const std::string &projectRoot) {
+	auto it = projectCache_.find(projectRoot);
+	if (it != projectCache_.end() && it->second.symbolsLoaded) {
+		return it->second.symbols;
+	}
+
+	// Create or update project info
+	ProjectInfo &project = projectCache_[projectRoot];
+	project.rootPath = projectRoot;
+	project.symbols = StdlibSymbols{};
+	project.files.clear();
+
+	try {
+		// Recursively find all .maxon files in the project
+		for (const auto &entry :
+			 std::filesystem::recursive_directory_iterator(projectRoot)) {
+			if (!entry.is_regular_file())
+				continue;
+			if (entry.path().extension() != ".maxon")
+				continue;
+			// Skip build.maxon itself
+			if (entry.path().filename() == "build.maxon")
+				continue;
+
+			std::string siblingPath =
+				normalizeFilePath(std::filesystem::absolute(entry.path()).string());
+
+			// Skip stdlib files
+			if (!workspaceRoot_.empty()) {
+				std::filesystem::path stdlibPath =
+					std::filesystem::path(workspaceRoot_) / "stdlib";
+				if (std::filesystem::exists(stdlibPath)) {
+					auto absStdlib = std::filesystem::absolute(stdlibPath);
+					auto relative =
+						std::filesystem::path(siblingPath).lexically_relative(absStdlib);
+					if (!relative.empty() && relative.native()[0] != '.') {
+						continue; // File is in stdlib, skip it
+					}
+				}
+			}
+
+			project.files.insert(siblingPath);
+
+			// Read file content - check document manager first for open files
+			std::string source;
+			std::string siblingUri = pathToUri(siblingPath);
+			auto docOpt = documentManager_.getDocument(siblingUri);
+			if (docOpt.has_value()) {
+				source = docOpt.value()->content;
+			} else {
+				std::ifstream file(siblingPath);
+				if (!file)
+					continue;
+				std::stringstream buffer;
+				buffer << file.rdbuf();
+				source = buffer.str();
+			}
+
+			// Parse and extract exported symbols
+			try {
+				Lexer lexer(source);
+				TokenStream stream = lexer.tokenize_stream();
+				Parser parser(std::move(stream));
+				std::string fileNamespace = deriveNamespace(siblingPath);
+				parser.setDefaultNamespace(fileNamespace);
+				auto program = parser.parse();
+
+				// Extract only exported symbols
+				auto symbols = extractSymbolsFromAST(program.get(), source, true);
+
+				for (auto &sym : symbols) {
+					sym.filePath = siblingPath;
+					if (sym.kind == "function" || sym.kind == "method") {
+						project.symbols.functions.push_back(std::move(sym));
+					} else if (sym.kind == "struct") {
+						project.symbols.structs.push_back(std::move(sym));
+					} else if (sym.kind == "enum") {
+						project.symbols.enums.push_back(std::move(sym));
+					} else if (sym.kind == "interface") {
+						project.symbols.interfaces.push_back(std::move(sym));
+					}
+				}
+			} catch (...) {
+				// Skip files that fail to parse
+				continue;
+			}
+		}
+	} catch (...) {
+		// Ignore errors during project symbol discovery
+	}
+
+	project.symbolsLoaded = true;
+	return project.symbols;
+}
+
+// Invalidate cached symbols for a project
+void LSPServer::invalidateProjectSymbols(const std::string &projectRoot) {
+	auto it = projectCache_.find(projectRoot);
+	if (it != projectCache_.end()) {
+		it->second.symbolsLoaded = false;
+	}
+}
+
+// Load exported symbols from project files (uses project root if available)
 StdlibSymbols LSPServer::loadProjectSymbols(const std::string &filePath) {
+	// Try to find project root (directory with build.maxon)
+	std::string projectRoot = findProjectRoot(filePath);
+
+	if (!projectRoot.empty()) {
+		// Use cached project symbols (includes all files recursively)
+		StdlibSymbols &cached = getProjectSymbols(projectRoot);
+
+		// Return a copy excluding the current file's symbols
+		StdlibSymbols projectSymbols;
+		std::string normalizedCurrentPath = normalizeFilePath(
+			std::filesystem::absolute(filePath).string());
+
+		for (const auto &sym : cached.functions) {
+			if (normalizeFilePath(sym.filePath) != normalizedCurrentPath) {
+				projectSymbols.functions.push_back(sym);
+			}
+		}
+		for (const auto &sym : cached.structs) {
+			if (normalizeFilePath(sym.filePath) != normalizedCurrentPath) {
+				projectSymbols.structs.push_back(sym);
+			}
+		}
+		for (const auto &sym : cached.enums) {
+			if (normalizeFilePath(sym.filePath) != normalizedCurrentPath) {
+				projectSymbols.enums.push_back(sym);
+			}
+		}
+		for (const auto &sym : cached.interfaces) {
+			if (normalizeFilePath(sym.filePath) != normalizedCurrentPath) {
+				projectSymbols.interfaces.push_back(sym);
+			}
+		}
+
+		return projectSymbols;
+	}
+
+	// Fallback: no project root found, load symbols from same directory only
 	StdlibSymbols projectSymbols;
 
 	try {

@@ -142,11 +142,11 @@ end 'main'
 20
 ```
 
-<!-- test: static.length -->
+<!-- test: static.count -->
 ```maxon
 function main() returns int
     let arr = [1, 2, 3, 4, 5]
-    return arr.length
+    return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -210,7 +210,7 @@ end 'main'
 3
 ```
 
-<!-- test: dynamic.length -->
+<!-- test: dynamic.count -->
 ```maxon
 function main() returns int
     var arr = array of 5 int
@@ -314,14 +314,13 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 14
-Function 'push' argument type mismatch
-  Parameter 2 ('value')
-  Expected type: array<int>
-  Found type: int
+Semantic Error: line 4, column 5
+Cannot call mutating method 'push' on immutable variable 'arr'
+  Variable declared with 'let' at line 3, column 5
+  Note: Use 'var' instead of 'let' if you need to modify the array
 
   4 |     arr.push(4)
-    |              ^
+    |     ^
 ```
 
 <!-- test: error.pop-on-static-array -->
@@ -333,7 +332,13 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Error in function 'main': Unknown function referenced: array.pop at line 4, column 5
+Semantic Error: line 4, column 5
+Cannot call mutating method 'pop' on immutable variable 'arr'
+  Variable declared with 'let' at line 3, column 5
+  Note: Use 'var' instead of 'let' if you need to modify the array
+
+  4 |     arr.pop()
+    |     ^
 ```
 
 <!-- test: error.push-type-mismatch -->

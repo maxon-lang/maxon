@@ -184,3 +184,25 @@ Allocated: 146 bytes
 Freed:     146 bytes
 Leaked:    0 bytes
 ```
+### Struct Field Array Method Call
+
+<!-- test: struct-field-array-count -->
+Calling `.count()` on an array field of a struct should work correctly.
+```maxon
+type Config
+    var sources array of string
+end 'Config'
+
+function main() returns int
+    var config = Config{sources: ["a", "b", "c"]}
+    let count = config.sources.count()
+    printInt(count)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```

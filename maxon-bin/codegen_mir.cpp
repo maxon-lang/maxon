@@ -434,6 +434,37 @@ bool MIRCodeGenerator::isStringConcatExpr(BinaryExprAST *binExpr) {
 		if (auto *nestedBin = dynamic_cast<BinaryExprAST *>(expr)) {
 			return isStringConcatExpr(nestedBin) ? "string" : "";
 		}
+		// Handle member access expressions (e.g., config.name)
+		if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(expr)) {
+			// Look up the object's field type
+			std::string objType;
+			if (memberExpr->object) {
+				// For chained access (e.g., a.b.c), recursively get type
+				if (auto *varObj = dynamic_cast<VariableExprAST *>(memberExpr->object.get())) {
+					auto typeIt = variableTypes.find(varObj->name);
+					if (typeIt != variableTypes.end()) {
+						objType = typeIt->second;
+					}
+				}
+			} else if (!memberExpr->objectName.empty()) {
+				// Simple object.member access
+				auto typeIt = variableTypes.find(memberExpr->objectName);
+				if (typeIt != variableTypes.end()) {
+					objType = typeIt->second;
+				}
+			}
+			// Look up the field type in the struct
+			if (!objType.empty()) {
+				auto fieldsIt = structFields.find(objType);
+				if (fieldsIt != structFields.end()) {
+					for (const auto &field : fieldsIt->second) {
+						if (field.first == memberExpr->memberName) {
+							return field.second;
+						}
+					}
+				}
+			}
+		}
 		return "";
 	};
 

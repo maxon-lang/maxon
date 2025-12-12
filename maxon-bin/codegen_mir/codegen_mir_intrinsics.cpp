@@ -216,7 +216,14 @@ mir::MIRValue *MIRCodeGenerator::getCstringPtr(ExprAST *arg) {
 			return it->second;
 		}
 	}
-	return generateExpr(arg);
+	// For call expressions and other non-variable expressions,
+	// the result is a cstring value. We need to store it to a temp
+	// alloca and return a pointer to it.
+	mir::MIRValue *csValue = generateExpr(arg);
+	mir::MIRType *cstringType = getOrCreateCstringType();
+	mir::MIRValue *tempAlloca = builder->createAlloca(cstringType, "cstring.temp");
+	builder->createStore(csValue, tempAlloca);
+	return tempAlloca;
 }
 
 // Helper to get substring struct pointer from expression
@@ -828,6 +835,78 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_write_file_binary(CallExprAST *callEx
 		"__write_file_binary", mir::MIRType::getInt32(), {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32()});
 
 	return builder->createCall(writeFileFunc, {pathData, managedDataPtr, len}, "write.result");
+}
+
+// =============================================================================
+// Directory Intrinsics
+// =============================================================================
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_list_directory(CallExprAST *callExpr) {
+	mir::MIRType *cstringType = getOrCreateCstringType();
+
+	// Get path cstring and extract the data pointer
+	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].value.get());
+	mir::MIRValue *pathDataPtr = builder->createStructGEP(cstringType, csPtr, 0, "path.data.ptr");
+	mir::MIRValue *pathData = builder->createLoad(mir::MIRType::getPtr(), pathDataPtr, "path.data");
+
+	// Call runtime __list_directory which returns ptr to __ManagedArrayData<string>
+	mir::MIRFunction *listDirFunc = getOrDeclareFunction(
+		"__list_directory", mir::MIRType::getPtr(), {mir::MIRType::getPtr()});
+	mir::MIRValue *resultPtr = builder->createCall(listDirFunc, {pathData}, "list.result.ptr");
+
+	// Load the __ManagedArrayData<string> fields from the pointer
+	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType("string");
+
+	mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, resultPtr, 0, "managed.buffer.ptr");
+	mir::MIRValue *buffer = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, "managed.buffer");
+
+	mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, resultPtr, 1, "managed.len.ptr");
+	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "managed.len");
+
+	mir::MIRValue *capPtr = builder->createStructGEP(managedArrayType, resultPtr, 2, "managed.cap.ptr");
+	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtr, "managed.cap");
+
+	// Free the temporary heap allocation
+	mir::MIRFunction *freeFunc = getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr()});
+	builder->createCall(freeFunc, {resultPtr});
+
+	// Build array<string> struct on stack: { __ManagedArrayData<string>, i32 iterIndex }
+	mir::MIRType *arrayStructType = getOrCreateArrayStructType("string");
+	mir::MIRValue *arrayAlloca = builder->createAlloca(arrayStructType, "array.result");
+
+	// Set managed.buffer (field 0 of field 0)
+	mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, arrayAlloca, 0, "array.managed");
+	mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, "array.buffer");
+	builder->createStore(buffer, bufferField);
+
+	// Set managed.length (field 1 of field 0)
+	mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, "array.len");
+	builder->createStore(len, lenField);
+
+	// Set managed.capacity (field 2 of field 0)
+	mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, "array.cap");
+	builder->createStore(cap, capField);
+
+	// Set iterIndex (field 1) to 0
+	mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, arrayAlloca, 1, "array.iter");
+	builder->createStore(builder->getInt32(0), iterField);
+
+	// Load and return the complete struct
+	return builder->createLoad(arrayStructType, arrayAlloca, "array.value");
+}
+
+mir::MIRValue *MIRCodeGenerator::intrinsic_is_directory(CallExprAST *callExpr) {
+	mir::MIRType *cstringType = getOrCreateCstringType();
+
+	// Get path cstring and extract the data pointer
+	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].value.get());
+	mir::MIRValue *pathDataPtr = builder->createStructGEP(cstringType, csPtr, 0, "path.data.ptr");
+	mir::MIRValue *pathData = builder->createLoad(mir::MIRType::getPtr(), pathDataPtr, "path.data");
+
+	// Call runtime __is_directory
+	mir::MIRFunction *isDirFunc = getOrDeclareFunction(
+		"__is_directory", mir::MIRType::getInt32(), {mir::MIRType::getPtr()});
+	return builder->createCall(isDirFunc, {pathData}, "is_dir.result");
 }
 
 // =============================================================================

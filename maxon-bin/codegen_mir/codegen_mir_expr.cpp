@@ -1070,6 +1070,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				// Initialize heap management for _managed_string_alloc
 				initHeapManagement();
 
+				mir::MIRType *stringType = structTypes["string"];
+
 				// Get pointers to both string structs
 				mir::MIRValue *leftPtr = nullptr;
 				mir::MIRValue *rightPtr = nullptr;
@@ -1079,8 +1081,18 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					if (isStructParameter(varExpr->name)) {
 						leftPtr = builder->createLoad(mir::MIRType::getPtr(), leftPtr, "left_str");
 					}
+				} else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(binExpr->left.get())) {
+					// String literals return a pointer directly
+					leftPtr = generateStringLiteral(strLit);
+				} else if (auto *nestedBin = dynamic_cast<BinaryExprAST *>(binExpr->left.get())) {
+					// Nested binary expression (chained concat) returns an alloca pointer
+					leftPtr = generateExpr(nestedBin);
 				} else {
-					leftPtr = generateExpr(binExpr->left.get());
+					// Other expressions (like member access) return a loaded value
+					// We need to store it to a temporary alloca to get a pointer
+					mir::MIRValue *leftVal = generateExpr(binExpr->left.get());
+					leftPtr = builder->createAlloca(stringType, "left_str_tmp");
+					builder->createStore(leftVal, leftPtr);
 				}
 
 				if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->right.get())) {
@@ -1088,11 +1100,20 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					if (isStructParameter(varExpr->name)) {
 						rightPtr = builder->createLoad(mir::MIRType::getPtr(), rightPtr, "right_str");
 					}
+				} else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(binExpr->right.get())) {
+					// String literals return a pointer directly
+					rightPtr = generateStringLiteral(strLit);
+				} else if (auto *nestedBin = dynamic_cast<BinaryExprAST *>(binExpr->right.get())) {
+					// Nested binary expression (chained concat) returns an alloca pointer
+					rightPtr = generateExpr(nestedBin);
 				} else {
-					rightPtr = generateExpr(binExpr->right.get());
+					// Other expressions (like member access) return a loaded value
+					// We need to store it to a temporary alloca to get a pointer
+					mir::MIRValue *rightVal = generateExpr(binExpr->right.get());
+					rightPtr = builder->createAlloca(stringType, "right_str_tmp");
+					builder->createStore(rightVal, rightPtr);
 				}
 
-				mir::MIRType *stringType = structTypes["string"];
 				mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 				mir::MIRType *managedStringDataType = structTypes["__ManagedStringData"];
 				if (!managedStringDataType) {
@@ -1695,7 +1716,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				i = static_cast<size_t>(argIdxForParam);
 			} else {
 				// No reordering needed - arguments are in parameter order
-				if (paramIdx >= callExpr->args.size()) break;
+				if (paramIdx >= callExpr->args.size())
+					break;
 				i = paramIdx;
 			}
 			auto &arg = callExpr->args[i];

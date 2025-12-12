@@ -71,6 +71,13 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			letDecl->type = actualType;
 		}
 
+		// For array types, instantiate generic methods (same as var declarations)
+		if (maxon::TypeConversion::isArrayStructType(actualType)) {
+			std::string elemType = maxon::TypeConversion::getArrayStructElementType(actualType);
+			std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
+			instantiateGenericStructMethods("array", actualType, typeBindings);
+		}
+
 		// Extract literal value for immutable variables (for LSP hover)
 		std::string literalValue = extractLiteralValue(letDecl->initializer.get());
 

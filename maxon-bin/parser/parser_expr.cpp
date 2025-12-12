@@ -608,10 +608,35 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 				// Set initial end position to the member token
 				memberExpr->setEndPosition(member.line, member.column + static_cast<int>(member.value.length()) - 1);
 
-				// Handle chained member access (e.g., self.data.length)
+				// Handle chained member access and method calls (e.g., self.data.length, config.sources.count())
 				while (check(TokenType::DOT)) {
 					advance(); // consume '.'
 					Token nextMember = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
+
+					// Check if this is a method call: expr.field.method()
+					if (check(TokenType::LPAREN)) {
+						advance(); // consume '('
+						std::vector<CallArgument> args;
+
+						// First argument is the current member expression (implicit self)
+						args.push_back(CallArgument(std::move(memberExpr), line, column));
+
+						// Parse remaining arguments
+						if (!check(TokenType::RPAREN)) {
+							args.push_back(parseNamedArgument());
+							while (match(TokenType::COMMA)) {
+								args.push_back(parseNamedArgument());
+							}
+						}
+
+						int endLine = currentLine();
+						int endCol = currentColumn();
+						expectAdvance(TokenType::RPAREN, "Expected ')' after method arguments");
+						auto callExpr = std::make_unique<CallExprAST>(nextMember.value, std::move(args), line, column);
+						callExpr->setEndPosition(endLine, endCol);
+						return callExpr;
+					}
+
 					// Wrap the current expression in a new MemberAccessExprAST
 					memberExpr = std::make_unique<MemberAccessExprAST>(std::move(memberExpr), nextMember.value, line, column);
 					memberExpr->setEndPosition(nextMember.line, nextMember.column + static_cast<int>(nextMember.value.length()) - 1);

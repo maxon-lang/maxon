@@ -13,6 +13,7 @@ StringProtocol: Extends BidirectionalCollection. This is the specific protocol t
 Why do this? By making String a Collection, you get hundreds of algorithms for free: .map, .filter, .reduce, .dropFirst, .split. The Swift team didn't have to write these specifically for Strings; they just inherited them from the Collection protocol logic.
 
 ## Priorities
+- remove staticarray and roll it into the regular array
 - hex literals
 - coelecing operator 'or' (ie map.get("somekey") or "default value")
 - investigate maxon-bin/tests

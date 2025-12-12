@@ -1,5 +1,6 @@
 #include "backend/pe_writer.h"
 #include "backend/x86_codegen.h"
+#include "build_runner.h"
 #include "compiler.h"
 #include "docs_generator.h"
 #include "lexer.h"
@@ -41,7 +42,8 @@ void printHelp(const char *programName) {
 	std::cerr << "  compile <input.maxon> [<input2.maxon> ...] [options]" << std::endl;
 	std::cerr << "                 Compile Maxon source files" << std::endl;
 	std::cerr << "  build [options]" << std::endl;
-	std::cerr << "                 Build project in current directory (finds file with main())" << std::endl;
+	std::cerr << "                 Build project (uses build.maxon if present, else finds main())" << std::endl;
+	std::cerr << "  init <name>    Create a new project with build.maxon" << std::endl;
 	std::cerr << "  self-test [options]" << std::endl;
 	std::cerr << "                 Run compiler self-tests" << std::endl;
 	std::cerr << "  extract-specs [options]" << std::endl;
@@ -134,6 +136,37 @@ int main(int argc, char *argv[]) {
 		return DocsGenerator::generateDocumentation();
 	}
 
+	if (command == "init") {
+		if (argc < 3) {
+			std::cerr << "Usage: " << argv[0] << " init <project-name>" << std::endl;
+			return 1;
+		}
+		std::string projectName = argv[2];
+
+		// Check if build.maxon already exists
+		if (std::filesystem::exists("build.maxon")) {
+			std::cerr << "Error: build.maxon already exists in current directory" << std::endl;
+			return 1;
+		}
+
+		// Create build.maxon
+		std::ofstream buildFile("build.maxon");
+		if (!buildFile) {
+			std::cerr << "Error: Could not create build.maxon" << std::endl;
+			return 1;
+		}
+
+		buildFile << "// Build configuration for " << projectName << "\n";
+		buildFile << "\n";
+		buildFile << "function main() returns nothing\n";
+		buildFile << "\tbuild(\"" << projectName << "\")\n";
+		buildFile << "end 'main'\n";
+		buildFile.close();
+
+		std::cout << "Created build.maxon for project '" << projectName << "'" << std::endl;
+		return 0;
+	}
+
 	if (command == "build") {
 		CompilationOptions options;
 		for (int i = 2; i < argc; ++i) {
@@ -172,7 +205,64 @@ int main(int argc, char *argv[]) {
 			}
 		}
 
-		// Find all .maxon files in current directory recursively
+		// Check for build.maxon - use it if present
+		if (hasBuildMaxon(".")) {
+			if (options.verboseLevel >= 1) {
+				std::cout << "Found build.maxon, executing build configuration..." << std::endl;
+			}
+
+			auto jsonOutput = executeBuildMaxon("build.maxon");
+			if (!jsonOutput) {
+				return 1;
+			}
+
+			if (options.verboseLevel >= 2) {
+				std::cout << "Build config JSON:\n" << *jsonOutput << std::endl;
+			}
+
+			auto buildConfig = parseBuildConfig(*jsonOutput);
+			if (!buildConfig) {
+				return 1;
+			}
+
+			// Convert BuildConfig to CompilationOptions, preserving CLI overrides
+			CompilationOptions buildOptions = buildConfigToOptions(*buildConfig, ".");
+
+			// CLI options override build.maxon settings
+			if (options.emitIR)
+				buildOptions.emitIR = true;
+			if (options.emitAsm)
+				buildOptions.emitAsm = true;
+			if (options.compileOnly)
+				buildOptions.compileOnly = true;
+			if (options.optimize)
+				buildOptions.optimize = true;
+			if (options.debugInfo)
+				buildOptions.debugInfo = true;
+			if (options.profile)
+				buildOptions.profile = true;
+			if (options.trackAllocs)
+				buildOptions.trackAllocs = true;
+			if (options.showStats)
+				buildOptions.showStats = true;
+			if (!options.outputFile.empty())
+				buildOptions.outputFile = options.outputFile;
+			buildOptions.verboseLevel = options.verboseLevel;
+
+			// Create output directory
+			std::filesystem::path outputPath(buildOptions.outputFile);
+			std::filesystem::create_directories(outputPath.parent_path());
+
+			try {
+				compileProgram(buildOptions);
+			} catch (const std::exception &e) {
+				std::cerr << "Error: " << e.what() << std::endl;
+				return 1;
+			}
+			return 0;
+		}
+
+		// Fallback: Find all .maxon files in current directory recursively
 		std::vector<std::string> files = findMaxonFiles(".");
 
 		if (files.empty()) {
@@ -530,7 +620,7 @@ int main(int argc, char *argv[]) {
 	if (command != "compile" && command != "self-test" && command != "extract-specs" &&
 		command != "regen-fragments" && command != "generate-docs" && command != "test-fragments" &&
 		command != "test" && command != "benchmark" && command != "compile-mir" &&
-		command != "validate-specs" && command != "lsp" && command != "build") {
+		command != "validate-specs" && command != "lsp" && command != "build" && command != "init") {
 		std::string inputFile;
 		bool trackAllocs = false;
 		bool showStats = false;

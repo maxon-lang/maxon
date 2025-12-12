@@ -30,6 +30,10 @@ IntrinsicCodegenRegistry::IntrinsicCodegenRegistry() {
 		{"intrinsic_write_file", &MIRCodeGenerator::intrinsic_write_file},
 		{"intrinsic_write_file_binary", &MIRCodeGenerator::intrinsic_write_file_binary},
 
+		// Directory intrinsics
+		{"intrinsic_list_directory", &MIRCodeGenerator::intrinsic_list_directory},
+		{"intrinsic_is_directory", &MIRCodeGenerator::intrinsic_is_directory},
+
 		// Substring intrinsics
 		{"intrinsic_substring_len", &MIRCodeGenerator::intrinsic_substring_len},
 		{"intrinsic_substring_byte_at", &MIRCodeGenerator::intrinsic_substring_byte_at},

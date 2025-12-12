@@ -836,51 +836,65 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 				if (!callExpr->args.empty()) {
 					// Get the type of the first argument
+					// NOTE: This analysis may trigger instantiateGenericStructMethods for struct field
+					// array types, adding new specialized methods to the functions map
 					std::string firstArgType = analyzeExpression(callExpr->args[0].value.get());
 					logTrace("Method disambiguation: callee='" + callExpr->callee + "' firstArgType='" + firstArgType + "'");
 
-					// Look for a method with matching qualifier (Type.method where Type == firstArgType)
-					// Prefer exact matches over generic base type matches
-					std::string exactMatch;
-					std::string baseTypeMatch;
+					// After analyzing the first argument, check if an exact match was added
+					// (e.g., array<string>.count may have been instantiated when accessing a struct field)
+					std::string exactMethodName = firstArgType + "." + callExpr->callee;
+					auto exactIt = functions.find(exactMethodName);
+					if (exactIt != functions.end()) {
+						logTrace("  Found newly instantiated method: " + exactMethodName);
+						resolvedMatch = exactMethodName;
+					}
 
-					for (const auto &match : matches) {
-						logTrace("  Checking match: " + match);
-						size_t dotPos = match.rfind(".");
-						if (dotPos != std::string::npos) {
-							std::string qualifier = match.substr(0, dotPos);
-							logTrace("    qualifier='" + qualifier + "' vs firstArgType='" + firstArgType + "'");
+					// If no exact match from instantiation, look through original matches
+					if (resolvedMatch.empty()) {
+						// Look for a method with matching qualifier (Type.method where Type == firstArgType)
+						// Prefer exact matches over generic base type matches
+						std::string exactMatch;
+						std::string baseTypeMatch;
 
-							// Check for exact match first
-							if (qualifier == firstArgType) {
-								logTrace("    -> EXACT MATCH!");
-								if (exactMatch.empty()) {
-									exactMatch = match;
-								} else {
-									// Multiple exact matches - ambiguous
-									exactMatch.clear();
-									break;
+						for (const auto &match : matches) {
+							logTrace("  Checking match: " + match);
+							size_t dotPos = match.rfind(".");
+							if (dotPos != std::string::npos) {
+								std::string qualifier = match.substr(0, dotPos);
+								logTrace("    qualifier='" + qualifier + "' vs firstArgType='" + firstArgType + "'");
+
+								// Check for exact match first
+								if (qualifier == firstArgType) {
+									logTrace("    -> EXACT MATCH!");
+									if (exactMatch.empty()) {
+										exactMatch = match;
+									} else {
+										// Multiple exact matches - ambiguous
+										exactMatch.clear();
+										break;
+									}
 								}
-							}
-							// Check if qualifier is the base type of a generic (e.g., "array" matches "array<character>")
-							else {
-								size_t genericPos = firstArgType.find('<');
-								if (genericPos != std::string::npos) {
-									std::string baseType = firstArgType.substr(0, genericPos);
-									if (qualifier == baseType) {
-										logTrace("    -> BASE TYPE MATCH!");
-										if (baseTypeMatch.empty()) {
-											baseTypeMatch = match;
+								// Check if qualifier is the base type of a generic (e.g., "array" matches "array<character>")
+								else {
+									size_t genericPos = firstArgType.find('<');
+									if (genericPos != std::string::npos) {
+										std::string baseType = firstArgType.substr(0, genericPos);
+										if (qualifier == baseType) {
+											logTrace("    -> BASE TYPE MATCH!");
+											if (baseTypeMatch.empty()) {
+												baseTypeMatch = match;
+											}
+											// Don't break for multiple base type matches - we'll prefer exact match anyway
 										}
-										// Don't break for multiple base type matches - we'll prefer exact match anyway
 									}
 								}
 							}
 						}
-					}
 
-					// Prefer exact match, fall back to base type match
-					resolvedMatch = !exactMatch.empty() ? exactMatch : baseTypeMatch;
+						// Prefer exact match, fall back to base type match
+						resolvedMatch = !exactMatch.empty() ? exactMatch : baseTypeMatch;
+					}
 				}
 
 				if (!resolvedMatch.empty()) {
@@ -940,6 +954,32 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		}
 
 		const FunctionInfo &funcInfo = funcIt->second;
+
+		// Check for mutating method calls on immutable variables
+		// Mutating methods like push, pop, clear cannot be called on let-declared arrays
+		std::string resolvedName = funcIt->first;
+		size_t methodDotPos = resolvedName.rfind(".");
+		if (methodDotPos != std::string::npos) {
+			std::string methodName = resolvedName.substr(methodDotPos + 1);
+			// List of known mutating methods
+			static const std::set<std::string> mutatingMethods = {
+				"push", "pop", "clear", "remove", "insert", "append", "removeAt"};
+			if (mutatingMethods.count(methodName) > 0 && !callExpr->args.empty()) {
+				// Check if the first argument (receiver) is an immutable variable
+				if (auto *varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].value.get())) {
+					auto varInfo = lookupVariable(varExpr->name);
+					if (varInfo.has_value() && varInfo->isImmutable) {
+						addError("Cannot call mutating method '" + methodName + "' on immutable variable '" +
+									 varExpr->name + "'" +
+									 std::string("\n  Variable declared with 'let' at line ") +
+									 std::to_string(varInfo->line) + ", column " + std::to_string(varInfo->column) +
+									 "\n  Note: Use 'var' instead of 'let' if you need to modify the array",
+								 expr->line, expr->column);
+						return "error";
+					}
+				}
+			}
+		}
 
 		// Store the resolved function ID in the AST for fast codegen lookup
 		auto idIt = functionIndices.find(funcIt->first);
@@ -1331,6 +1371,13 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			// Find the field
 			for (const auto &field : structInfo.fields) {
 				if (field.name == memberAccessExpr->memberName) {
+					// For array<T> struct types, ensure generic methods are instantiated
+					// This is needed when accessing struct fields that contain arrays
+					if (maxon::TypeConversion::isArrayStructType(field.type)) {
+						std::string elemType = maxon::TypeConversion::getArrayStructElementType(field.type);
+						std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
+						instantiateGenericStructMethods("array", field.type, typeBindings);
+					}
 					return field.type;
 				}
 			}

@@ -263,6 +263,9 @@ class MIRCodeGenerator {
 	mir::MIRValue *intrinsic_read_file(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_write_file(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_write_file_binary(CallExprAST *callExpr);
+	// Directory intrinsics
+	mir::MIRValue *intrinsic_list_directory(CallExprAST *callExpr);
+	mir::MIRValue *intrinsic_is_directory(CallExprAST *callExpr);
 	// Substring intrinsics
 	mir::MIRValue *intrinsic_substring_len(CallExprAST *callExpr);
 	mir::MIRValue *intrinsic_substring_byte_at(CallExprAST *callExpr);

@@ -614,6 +614,12 @@ static const std::pair<const char *, const char *> WINDOWS_IMPORTS[] = {
 	{"kernel32.dll", "LoadLibraryA"},
 	{"kernel32.dll", "GetProcAddress"},
 	{"kernel32.dll", "FreeLibrary"},
+
+	// Directory listing
+	{"kernel32.dll", "FindFirstFileA"},
+	{"kernel32.dll", "FindNextFileA"},
+	{"kernel32.dll", "FindClose"},
+	{"kernel32.dll", "GetFileAttributesA"},
 };
 
 #ifdef _WIN32

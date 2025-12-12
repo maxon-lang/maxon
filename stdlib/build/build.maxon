@@ -1,0 +1,73 @@
+// stdlib/build/build.maxon
+// Build system configuration and utilities
+
+/// Build configuration type for customizing compilation
+export type BuildConfig
+	var name string
+	var output string
+	var sources array of string
+	var optimize bool
+	var debug_info bool
+end 'BuildConfig'
+
+/// Simple build - emits JSON config for the compiler to parse
+/// name: the executable name (required)
+export function build(name string) returns nothing
+	var emptySources = array of string
+	var config = BuildConfig{
+	name: name,
+	output: "bin/" + name + ".exe",
+	sources: emptySources,
+	optimize: false,
+	debug_info: false
+	}
+	emitBuildConfig(config)
+end 'build'
+
+/// Custom build - full control via BuildConfig
+export function buildWithConfig(config BuildConfig) returns nothing
+	emitBuildConfig(config)
+end 'buildWithConfig'
+
+/// Emit build configuration as JSON to stdout
+function emitBuildConfig(config BuildConfig) returns nothing
+	// Extract fields to avoid string concat with struct fields bug
+	var name = config.name
+	var output = config.output
+	var sources = config.sources
+	var optimize = config.optimize
+	var debugInfo = config.debug_info
+
+	print("{")
+	print("  \"name\": \"" + name + "\",")
+	print("  \"output\": \"" + output + "\",")
+	print("  \"sources\": [")
+
+	var i = 0
+	var count = sources.count()
+	for src in sources 'emit_sources'
+		if i < count - 1 'check_comma'
+			print("    \"" + src + "\",")
+		end 'check_comma' else 'no_comma'
+			print("    \"" + src + "\"")
+		end 'no_comma'
+		i = i + 1
+	end 'emit_sources'
+
+	print("  ],")
+
+	if optimize 'emit_optimize'
+		print("  \"optimize\": true,")
+	end 'emit_optimize' else 'emit_optimize_false'
+		print("  \"optimize\": false,")
+	end 'emit_optimize_false'
+
+	if debugInfo 'emit_debug'
+		print("  \"debug_info\": true")
+	end 'emit_debug' else 'emit_debug_false'
+		print("  \"debug_info\": false")
+	end 'emit_debug_false'
+
+	print("}")
+end 'emitBuildConfig'
+

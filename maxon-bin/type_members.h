@@ -19,21 +19,16 @@ struct TypeMemberInfo {
 };
 
 // Get type members for built-in array type
-// Note: Static arrays (e.g., [5]int) only have .length
-// Dynamic arrays/slices would have .capacity too, but we don't distinguish yet
+// Note: Arrays use .count() method from stdlib, not built-in properties
 inline std::vector<TypeMemberInfo> getArrayTypeMembers() {
-	return {
-		{"length", false, "int", "", "Number of elements in the array"}};
+	return {};
 }
 
 // Check if a member name is valid for an array type
 // Returns the member's return type, or empty string if not valid
+// Note: Arrays use .count() method from stdlib, not built-in properties
 inline std::string getArrayMemberType(const std::string &memberName) {
-	if (memberName == "length") {
-		return "int";
-	}
-	// Note: .capacity is NOT supported on static arrays
-	// When we add dynamic arrays/slices, we'll need to distinguish
+	// No built-in array properties - use stdlib methods like count() instead
 	return "";
 }
 
