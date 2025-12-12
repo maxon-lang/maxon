@@ -40,6 +40,7 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - add "implement interface" code action
 - code actions should be directly linked to the errors that made them needed
 - type aliases
+- lsp is lowercasing paths on windows for comparison which isn't really correct
 
 ## Ideas
 - reorganize structs to improve cache locality

@@ -19,8 +19,7 @@
 struct ParsedNumber {
 	enum class Type {
 		Integer,
-		Float,
-		Byte // Integer with 'b' suffix
+		Float
 	};
 
 	Type type;
@@ -49,7 +48,7 @@ class NumberParser {
   public:
 	/**
 	 * Parse a number starting at position
-	 * Handles integers, floats, scientific notation, and byte literals
+	 * Handles integers (decimal, hex, binary, octal), floats, scientific notation, and byte literals
 	 *
 	 * @param src Source string
 	 * @param pos Starting position (must point to a digit)
@@ -63,30 +62,59 @@ class NumberParser {
 		ParsedNumber result;
 		size_t start = pos;
 
-		// Parse integer part using SIMD
-		uint64_t int_part = 0;
-		size_t int_digits = 0;
-		pos = parse_integer_simd(src, pos, len, int_part, int_digits);
-
-		// Check for byte suffix 'b'
-		if (pos < len && src[pos] == 'b') {
-			// Verify next char is not alphanumeric
-			if (pos + 1 >= len || !CharClassifier::is_alnum(src[pos + 1])) {
-				pos++; // Consume 'b'
-
-				// Range check: byte must be 0-255
-				if (int_part > 255) {
-					reportError("Byte literal out of range (0-255): " + std::to_string(int_part),
-								line, column);
+		// Check for base prefix (0x, 0b, 0o)
+		if (pos + 1 < len && src[pos] == '0') {
+			char prefix = src[pos + 1];
+			if (prefix == 'x') {
+				// Hexadecimal
+				pos += 2; // Skip "0x"
+				uint64_t value = 0;
+				size_t digits = 0;
+				pos = parse_hex_integer(src, pos, len, value, digits, line, column);
+				if (digits == 0) {
+					reportError("Hexadecimal literal requires at least one digit after '0x'", line, column);
 				}
-
-				result.type = ParsedNumber::Type::Byte;
-				result.int_value = static_cast<int64_t>(int_part);
+				result.type = ParsedNumber::Type::Integer;
+				result.int_value = static_cast<int64_t>(value);
+				result.chars_consumed = pos - start;
+				result.literal_string = std::string(src + start, result.chars_consumed);
+				return result;
+			} else if (prefix == 'b') {
+				// Binary - but check it's not a byte suffix (0b alone)
+				// If next char after 'b' is a binary digit, it's a binary literal
+				if (pos + 2 < len && CharClassifier::is_binary_digit(src[pos + 2])) {
+					pos += 2; // Skip "0b"
+					uint64_t value = 0;
+					size_t digits = 0;
+					pos = parse_binary_integer(src, pos, len, value, digits, line, column);
+					result.type = ParsedNumber::Type::Integer;
+					result.int_value = static_cast<int64_t>(value);
+					result.chars_consumed = pos - start;
+					result.literal_string = std::string(src + start, result.chars_consumed);
+					return result;
+				}
+				// Otherwise fall through to parse '0' as decimal integer
+			} else if (prefix == 'o') {
+				// Octal
+				pos += 2; // Skip "0o"
+				uint64_t value = 0;
+				size_t digits = 0;
+				pos = parse_octal_integer(src, pos, len, value, digits, line, column);
+				if (digits == 0) {
+					reportError("Octal literal requires at least one digit after '0o'", line, column);
+				}
+				result.type = ParsedNumber::Type::Integer;
+				result.int_value = static_cast<int64_t>(value);
 				result.chars_consumed = pos - start;
 				result.literal_string = std::string(src + start, result.chars_consumed);
 				return result;
 			}
 		}
+
+		// Parse decimal integer part (with underscore support)
+		uint64_t int_part = 0;
+		size_t int_digits = 0;
+		pos = parse_decimal_integer(src, pos, len, int_part, int_digits);
 
 		// Check for decimal point
 		bool is_float = false;
@@ -190,6 +218,125 @@ class NumberParser {
 		}
 
 		digit_count = pos - start;
+		return pos;
+	}
+
+	/**
+	 * Parse a decimal integer with underscore separator support
+	 */
+	static size_t parse_decimal_integer(const char *src, size_t pos, size_t len,
+										uint64_t &value, size_t &digit_count) {
+		value = 0;
+		digit_count = 0;
+
+		while (pos < len) {
+			char c = src[pos];
+			if (CharClassifier::is_digit(c)) {
+				// Check for overflow
+				if (value > 1844674407370955161ULL) {
+					uint64_t digit = static_cast<uint64_t>(c - '0');
+					if (value > (UINT64_MAX - digit) / 10) {
+						break;
+					}
+				}
+				value = value * 10 + static_cast<uint64_t>(c - '0');
+				digit_count++;
+				pos++;
+			} else if (c == '_') {
+				// Skip underscore separators (but don't count as digit)
+				pos++;
+			} else {
+				break;
+			}
+		}
+
+		return pos;
+	}
+
+	/**
+	 * Parse a hexadecimal integer (after 0x prefix)
+	 */
+	static size_t parse_hex_integer(const char *src, size_t pos, size_t len,
+									uint64_t &value, size_t &digit_count,
+									int line, int column) {
+		value = 0;
+		digit_count = 0;
+
+		while (pos < len) {
+			char c = src[pos];
+			if (CharClassifier::is_hex_digit(c)) {
+				// Check for overflow (max uint64 fits in 16 hex digits)
+				if (value > 0x0FFFFFFFFFFFFFFFULL) {
+					reportError("Hexadecimal literal overflow", line, column);
+				}
+				value = value * 16 + static_cast<uint64_t>(CharClassifier::hex_digit_value(c));
+				digit_count++;
+				pos++;
+			} else if (c == '_') {
+				pos++;
+			} else {
+				break;
+			}
+		}
+
+		return pos;
+	}
+
+	/**
+	 * Parse a binary integer (after 0b prefix)
+	 */
+	static size_t parse_binary_integer(const char *src, size_t pos, size_t len,
+									   uint64_t &value, size_t &digit_count,
+									   int line, int column) {
+		value = 0;
+		digit_count = 0;
+
+		while (pos < len) {
+			char c = src[pos];
+			if (CharClassifier::is_binary_digit(c)) {
+				// Check for overflow (max uint64 fits in 64 binary digits)
+				if (value > 0x7FFFFFFFFFFFFFFFULL) {
+					reportError("Binary literal overflow", line, column);
+				}
+				value = value * 2 + static_cast<uint64_t>(c - '0');
+				digit_count++;
+				pos++;
+			} else if (c == '_') {
+				pos++;
+			} else {
+				break;
+			}
+		}
+
+		return pos;
+	}
+
+	/**
+	 * Parse an octal integer (after 0o prefix)
+	 */
+	static size_t parse_octal_integer(const char *src, size_t pos, size_t len,
+									  uint64_t &value, size_t &digit_count,
+									  int line, int column) {
+		value = 0;
+		digit_count = 0;
+
+		while (pos < len) {
+			char c = src[pos];
+			if (CharClassifier::is_octal_digit(c)) {
+				// Check for overflow
+				if (value > 0x1FFFFFFFFFFFFFFFULL) {
+					reportError("Octal literal overflow", line, column);
+				}
+				value = value * 8 + static_cast<uint64_t>(c - '0');
+				digit_count++;
+				pos++;
+			} else if (c == '_') {
+				pos++;
+			} else {
+				break;
+			}
+		}
+
 		return pos;
 	}
 

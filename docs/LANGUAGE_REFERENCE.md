@@ -76,17 +76,43 @@ nil, not, or, return, then, true, type, var, while
 ### Literals
 
 **Integer Literals**
+
+Decimal:
 ```maxon
 42
 -17
 0
 ```
 
-**Byte Literals** (with `b` suffix, range 0-255)
+Hexadecimal (prefix `0x`):
 ```maxon
-42b
-0b
-255b
+0xff
+0x1a2b
+```
+
+Binary (prefix `0b`):
+```maxon
+0b1010
+0b11111111
+```
+
+Octal (prefix `0o`):
+```maxon
+0o777
+0o52
+```
+
+Underscore separators for readability:
+```maxon
+1_000_000
+0xff_ff
+0b1111_0000
+```
+
+**Byte Values** (use `as byte` cast)
+```maxon
+42 as byte
+0xff as byte
 ```
 
 **Float Literals** (must contain decimal point)

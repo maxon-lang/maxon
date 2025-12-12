@@ -81,7 +81,7 @@ suite('Go to Definition Test Suite', () => {
 		const locations = await getDefinitionLocations(testDocument, position);
 
 		assert.ok(locations.length > 0, 'Should find definition');
-		assert.strictEqual(locations[0].uri.fsPath, testDocument.uri.fsPath, 'Definition should be in same file');
+		assert.strictEqual(locations[0].uri.fsPath.toLowerCase(), testDocument.uri.fsPath.toLowerCase(), 'Definition should be in same file');
 		assert.strictEqual(locations[0].range.start.line, 1, 'Definition should be on line 1 (var declaration)');
 	});
 

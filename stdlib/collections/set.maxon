@@ -24,220 +24,221 @@
 // Internal set type - used by compiler for set<T> types
 // The compiler generates specialized versions for each element type
 export type set uses Element is ExpressibleByArrayLiteral with Element
-var elements array of Element   // Element storage
-var states array of byte        // Slot states: 0=empty, 1=occupied, 2=deleted
-var count int                   // Number of occupied entries
-var capacity int                // Total slots
+	var elements array of Element   // Element storage
+	var states array of byte        // Slot states: 0=empty, 1=occupied, 2=deleted
+	var count int                   // Number of occupied entries
+	var capacity int                // Total slots
 
-// ExpressibleByArrayLiteral conformance - initialize set from array literal
-// Called by the compiler for `set from [1, 2, 3]` syntax
-function ExpressibleByArrayLiteral.init(managed _ManagedArray) returns Self
-	// Get number of elements in the managed array
-	var numElements = __managed_array_len(managed)
+	// ExpressibleByArrayLiteral conformance - initialize set from array literal
+	// Called by the compiler for `set from [1, 2, 3]` syntax
+	function ExpressibleByArrayLiteral.init(managed _ManagedArray) returns Self
+		// Get number of elements in the managed array
+		var numElements = __managed_array_len(managed)
 
-	// Calculate capacity: at least 16, or next power of 2 above numElements * 2
-	var cap = 16
-	while cap < numElements * 2 'calc_cap'
-		cap = cap * 2
-	end 'calc_cap'
+		// Calculate capacity: at least 16, or next power of 2 above numElements * 2
+		var cap = 16
+		while cap < numElements * 2 'calc_cap'
+			cap = cap * 2
+		end 'calc_cap'
 
-	// Allocate internal arrays
-	var elems = array of cap Element
-	var sts = array of cap byte
+		// Allocate internal arrays
+		var elems = array of cap Element
+		var sts = array of cap byte
 
-	// Create the set type (copies array structs by value)
-	var result = Self{elements: elems, states: sts, count: 0, capacity: cap}
+		// Create the set type (copies array structs by value)
+		var result = Self{elements: elems, states: sts, count: 0, capacity: cap}
 
-	// Transfer ownership: clear local capacities so they won't be freed
-	// The result type now owns the buffers
-	__managed_array_set_capacity(elems, 0)
-	__managed_array_set_capacity(sts, 0)
+		// Transfer ownership: clear local capacities so they won't be freed
+		// The result type now owns the buffers
+		__managed_array_set_capacity(elems, 0)
+		__managed_array_set_capacity(sts, 0)
 
-	// Insert each element from the managed array
-	var i = 0
-	while i < numElements 'insert_loop'
-		var elem = __managed_array_get_at(managed, i) as Element
-		result.insert(elem)
-		i = i + 1
-	end 'insert_loop'
+		// Insert each element from the managed array
+		var i = 0
+		while i < numElements 'insert_loop'
+			var elem = __managed_array_get_at(managed, i) as Element
+			result.insert(elem)
+			i = i + 1
+		end 'insert_loop'
 
-	return result
-end 'init'
+		return result
+	end 'init'
 
-/// Insert an element into the set
-/// If the element already exists, this is a no-op
-/// Automatically resizes the set when load factor exceeds 75%
-export function insert(element Element) returns nothing
-	// Check load factor and grow if needed (75% threshold)
-	var loadLimit = trunc((capacity * 3) / 4)
-	if count >= loadLimit 'grow'
-		grow()
+	/// Insert an element into the set
+	/// If the element already exists, this is a no-op
+	/// Automatically resizes the set when load factor exceeds 75%
+	export function insert(element Element) returns nothing
+		// Check load factor and grow if needed (75% threshold)
+		var loadLimit = trunc((capacity * 3) / 4)
+		if count >= loadLimit 'grow'
+			grow()
+		end 'grow'
+
+		var hash = element.hash()
+		var index = hash mod capacity
+		if index < 0 'fix_negative'
+			index = index + capacity
+		end 'fix_negative'
+
+		var firstDeleted = 0 - 1
+		var probes = 0
+
+		while probes < capacity 'probe'
+			var state = states[index] as int
+
+			if state == 0 'empty'
+				// Empty slot - insert here or at first deleted
+				var insertIndex = index
+				if firstDeleted >= 0 'use_deleted'
+					insertIndex = firstDeleted
+				end 'use_deleted'
+
+				elements[insertIndex] = element
+				states[insertIndex] = 1 as byte
+				count = count + 1
+				return
+			end 'empty'
+
+			if state == 2 and firstDeleted < 0 'mark_deleted'
+				firstDeleted = index
+			end 'mark_deleted'
+
+			if state == 1 and elements[index].equals(element) 'exists'
+				// Element already exists - no-op for sets
+				return
+			end 'exists'
+
+			// Linear probing
+			index = (index + 1) mod capacity
+			probes = probes + 1
+		end 'probe'
+
+		// Should never reach here if load factor is maintained
+		// But if we do, insert at first deleted slot
+		if firstDeleted >= 0 'fallback'
+			elements[firstDeleted] = element
+			states[firstDeleted] = 1 as byte
+			count = count + 1
+		end 'fallback'
+	end 'insert'
+
+	/// Check if element exists in the set
+	export function contains(element Element) returns bool
+		var hash = element.hash()
+		var index = hash mod capacity
+		if index < 0 'fix_negative'
+			index = index + capacity
+		end 'fix_negative'
+
+		var probes = 0
+		while probes < capacity 'probe'
+			var state = states[index] as int
+
+			if state == 0 'empty'
+				return false
+			end 'empty'
+
+			if state == 1 and elements[index].equals(element) 'found'
+				return true
+			end 'found'
+
+			index = (index + 1) mod capacity
+			probes = probes + 1
+		end 'probe'
+
+		return false
+	end 'contains'
+
+	/// Remove element from set, returns true if element was present
+	export function remove(element Element) returns bool
+		var hash = element.hash()
+		var index = hash mod capacity
+		if index < 0 'fix_negative'
+			index = index + capacity
+		end 'fix_negative'
+
+		var probes = 0
+		while probes < capacity 'probe'
+			var state = states[index] as int
+
+			if state == 0 'empty'
+				return false
+			end 'empty'
+
+			if state == 1 and elements[index].equals(element) 'found'
+				states[index] = 2 as byte
+				count = count - 1
+				return true
+			end 'found'
+
+			index = (index + 1) mod capacity
+			probes = probes + 1
+		end 'probe'
+
+		return false
+	end 'remove'
+
+	/// Get number of elements in the set
+	export function count() returns int
+		return count
+	end 'count'
+
+	/// Get current capacity (total number of slots)
+	export function capacity() returns int
+		return capacity
+	end 'capacity'
+
+	// Internal: grow the table when load factor exceeds threshold
+	function grow() returns nothing
+		var oldCapacity = capacity
+		var newCapacity = oldCapacity * 2
+
+		// Save references to old arrays
+		var oldElements = elements
+		var oldStates = states
+
+		// Allocate new arrays
+		var newElements = array of newCapacity Element
+		var newStates = array of newCapacity byte
+
+		// Update type to use new arrays
+		elements = newElements
+		states = newStates
+		capacity = newCapacity
+		count = 0
+
+		// Transfer ownership: clear local capacities so they won't be freed
+		// The type fields now own the buffers
+		__managed_array_set_capacity(newElements, 0)
+		__managed_array_set_capacity(newStates, 0)
+
+		// Rehash all occupied entries from old arrays
+		var i = 0
+		while i < oldCapacity 'rehash'
+			var state = oldStates[i] as int
+			if state == 1 'occupied'
+				// Re-insert into new arrays using insert logic
+				var element = oldElements[i]
+
+				var hash = element.hash()
+				var index = hash mod newCapacity
+				if index < 0 'fix_negative'
+					index = index + newCapacity
+				end 'fix_negative'
+
+				// Find empty slot (no deleted slots in fresh array)
+				while states[index] as int != 0 'find_slot'
+					index = (index + 1) mod newCapacity
+				end 'find_slot'
+
+				elements[index] = element
+				states[index] = 1 as byte
+				count = count + 1
+			end 'occupied'
+			i = i + 1
+		end 'rehash'
 	end 'grow'
-
-	var hash = element.hash()
-	var index = hash mod capacity
-	if index < 0 'fix_negative'
-		index = index + capacity
-	end 'fix_negative'
-
-	var firstDeleted = 0 - 1
-	var probes = 0
-
-	while probes < capacity 'probe'
-		var state = states[index] as int
-
-		if state == 0 'empty'
-			// Empty slot - insert here or at first deleted
-			var insertIndex = index
-			if firstDeleted >= 0 'use_deleted'
-				insertIndex = firstDeleted
-			end 'use_deleted'
-
-			elements[insertIndex] = element
-			states[insertIndex] = 1b
-			count = count + 1
-			return
-		end 'empty'
-
-		if state == 2 and firstDeleted < 0 'mark_deleted'
-			firstDeleted = index
-		end 'mark_deleted'
-
-		if state == 1 and elements[index].equals(element) 'exists'
-			// Element already exists - no-op for sets
-			return
-		end 'exists'
-
-		// Linear probing
-		index = (index + 1) mod capacity
-		probes = probes + 1
-	end 'probe'
-
-	// Should never reach here if load factor is maintained
-	// But if we do, insert at first deleted slot
-	if firstDeleted >= 0 'fallback'
-		elements[firstDeleted] = element
-		states[firstDeleted] = 1b
-		count = count + 1
-	end 'fallback'
-end 'insert'
-
-/// Check if element exists in the set
-export function contains(element Element) returns bool
-	var hash = element.hash()
-	var index = hash mod capacity
-	if index < 0 'fix_negative'
-		index = index + capacity
-	end 'fix_negative'
-
-	var probes = 0
-	while probes < capacity 'probe'
-		var state = states[index] as int
-
-		if state == 0 'empty'
-			return false
-		end 'empty'
-
-		if state == 1 and elements[index].equals(element) 'found'
-			return true
-		end 'found'
-
-		index = (index + 1) mod capacity
-		probes = probes + 1
-	end 'probe'
-
-	return false
-end 'contains'
-
-/// Remove element from set, returns true if element was present
-export function remove(element Element) returns bool
-	var hash = element.hash()
-	var index = hash mod capacity
-	if index < 0 'fix_negative'
-		index = index + capacity
-	end 'fix_negative'
-
-	var probes = 0
-	while probes < capacity 'probe'
-		var state = states[index] as int
-
-		if state == 0 'empty'
-			return false
-		end 'empty'
-
-		if state == 1 and elements[index].equals(element) 'found'
-			states[index] = 2b
-			count = count - 1
-			return true
-		end 'found'
-
-		index = (index + 1) mod capacity
-		probes = probes + 1
-	end 'probe'
-
-	return false
-end 'remove'
-
-/// Get number of elements in the set
-export function count() returns int
-	return count
-end 'count'
-
-/// Get current capacity (total number of slots)
-export function capacity() returns int
-	return capacity
-end 'capacity'
-
-// Internal: grow the table when load factor exceeds threshold
-function grow() returns nothing
-	var oldCapacity = capacity
-	var newCapacity = oldCapacity * 2
-
-	// Save references to old arrays
-	var oldElements = elements
-	var oldStates = states
-
-	// Allocate new arrays
-	var newElements = array of newCapacity Element
-	var newStates = array of newCapacity byte
-
-	// Update type to use new arrays
-	elements = newElements
-	states = newStates
-	capacity = newCapacity
-	count = 0
-
-	// Transfer ownership: clear local capacities so they won't be freed
-	// The type fields now own the buffers
-	__managed_array_set_capacity(newElements, 0)
-	__managed_array_set_capacity(newStates, 0)
-
-	// Rehash all occupied entries from old arrays
-	var i = 0
-	while i < oldCapacity 'rehash'
-		var state = oldStates[i] as int
-		if state == 1 'occupied'
-			// Re-insert into new arrays using insert logic
-			var element = oldElements[i]
-
-			var hash = element.hash()
-			var index = hash mod newCapacity
-			if index < 0 'fix_negative'
-				index = index + newCapacity
-			end 'fix_negative'
-
-			// Find empty slot (no deleted slots in fresh array)
-			while states[index] as int != 0 'find_slot'
-				index = (index + 1) mod newCapacity
-			end 'find_slot'
-
-			elements[index] = element
-			states[index] = 1b
-			count = count + 1
-		end 'occupied'
-		i = i + 1
-	end 'rehash'
-end 'grow'
 end 'set'
+
 
 

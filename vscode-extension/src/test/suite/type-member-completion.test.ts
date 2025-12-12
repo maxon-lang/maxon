@@ -200,11 +200,11 @@ end 'main'`;
 		assert.ok(toUpperItem.detail, 'toUpper should have detail');
 		assert.ok((toUpperItem.detail as string).includes('string'), 'toUpper detail should include "string"');
 
-		// Check find has int detail
+		// Check find has StringIndex detail (returns StringIndex or nil)
 		const findItem = completions.items.find(item => item.label === 'find');
 		assert.ok(findItem, 'find should be in completions');
 		assert.ok(findItem.detail, 'find should have detail');
-		assert.ok((findItem.detail as string).includes('int'), 'find detail should include "int"');
+		assert.ok((findItem.detail as string).includes('StringIndex'), 'find detail should include "StringIndex"');
 	});
 
 	test('String method completions should have documentation', async function () {

@@ -25,10 +25,41 @@ Each literal type creates the appropriate LLVM constant value during code genera
 Literals are constant values used directly in code.
 
 ### Integer Literals
+
+Decimal integers:
 ```maxon
 42
 -17
 0
+```
+
+Hexadecimal integers (prefix `0x`):
+```maxon
+0xff
+0x1a2b
+0x0
+```
+
+Binary integers (prefix `0b`):
+```maxon
+0b1010
+0b11111111
+0b0
+```
+
+Octal integers (prefix `0o`):
+```maxon
+0o777
+0o52
+0o0
+```
+
+Underscore separators can be used for readability in any integer literal:
+```maxon
+1_000_000
+0xff_ff
+0b1111_0000
+0o77_77
 ```
 ### Float Literals
 Must include decimal point:
@@ -65,6 +96,77 @@ end 'main'
 ```
 ```exitcode
 5
+```
+
+<!-- test: hex-integer -->
+```maxon
+function main() returns int
+    return 0xff
+end 'main'
+```
+```exitcode
+255
+```
+
+<!-- test: hex-integer-uppercase -->
+```maxon
+function main() returns int
+    return 0xaB
+end 'main'
+```
+```exitcode
+171
+```
+
+<!-- test: binary-integer -->
+```maxon
+function main() returns int
+    return 0b1010
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: octal-integer -->
+```maxon
+function main() returns int
+    return 0o77
+end 'main'
+```
+```exitcode
+63
+```
+
+<!-- test: underscore-separator -->
+```maxon
+function main() returns int
+    var x = 1_000
+    return x - 990
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: hex-underscore -->
+```maxon
+function main() returns int
+    return 0xff_ff - 65525
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: binary-underscore -->
+```maxon
+function main() returns int
+    return 0b1111_0000
+end 'main'
+```
+```exitcode
+240
 ```
 
 

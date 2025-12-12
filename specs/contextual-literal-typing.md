@@ -42,7 +42,7 @@ Integer literals in the range 0-255 can be compared directly with byte values:
 
 ```maxon
 function main() returns int
-    var b = 100b
+    var b = 100 as byte
     if b == 50 'check'
         return 1
     end 'check'
@@ -53,12 +53,12 @@ end 'main'
 0
 ```
 
-Byte literals can be compared directly with int values:
+Byte variables can be compared directly with int literals in the 0-255 range:
 
 ```maxon
 function main() returns int
-    var x = 200
-    if x == 200b 'check'
+    var b = 200 as byte
+    if b == 200 'check'
         return 1
     end 'check'
     return 0
@@ -115,7 +115,7 @@ end 'main'
 <!-- test: int-literal-vs-byte-valid -->
 ```maxon
 function main() returns int
-    var b = 42b
+    var b = 42 as byte
     if b == 42 'check'
         return 1
     end 'check'
@@ -129,7 +129,7 @@ end 'main'
 <!-- test: int-literal-vs-byte-out-of-range -->
 ```maxon
 function main() returns int
-    var b = 100b
+    var b = 100 as byte
     if b == 300 'check'
         return 1
     end 'check'
@@ -152,20 +152,6 @@ If condition must be a boolean or integer expression
 
   4 |     if b == 300 'check'
     |     ^
-```
-
-<!-- test: byte-literal-vs-int -->
-```maxon
-function main() returns int
-    var x = 100
-    if x == 100b 'check'
-        return 1
-    end 'check'
-    return 0
-end 'main'
-```
-```exitcode
-1
 ```
 
 <!-- test: int-vs-float-error -->
@@ -338,8 +324,8 @@ end 'main'
 <!-- test: byte-vs-byte -->
 ```maxon
 function main() returns int
-    var a = 50b
-    var b = 50b
+    var a = 50 as byte
+    var b = 50 as byte
     if a == b 'check'
         return 1
     end 'check'

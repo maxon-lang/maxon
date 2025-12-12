@@ -1,7 +1,7 @@
 ---
 feature: byte-type
 status: stable
-keywords: [byte, literal, unsigned, 8-bit]
+keywords: [byte, unsigned, 8-bit, cast]
 category: types
 ---
 
@@ -13,33 +13,33 @@ The `byte` type represents an 8-bit unsigned integer value (0-255).
 
 ### Implementation
 
-- Lexer: `BYTE_LITERAL` token type for `42b` syntax in `lexer.cpp`
-- AST: `ByteExprAST` node in `ast.h`
+- AST: `ByteExprAST` node in `ast.h` (for constant byte expressions)
+- Type: Represented as `i8` in IR
 - Codegen: Generates `i8` constants
 
-### Byte Literal Syntax
+### Creating Byte Values
 
-Integer literals with a `b` suffix are parsed as byte literals:
-- `42b` - byte with value 42
-- `0b` - zero byte
-- `255b` - maximum byte value
+Byte values are created by casting integer literals to byte:
+- `42 as byte` - byte with value 42
+- `0 as byte` - zero byte
+- `255 as byte` - maximum byte value
+- `0xff as byte` - hex literal cast to byte
 
-Range checking is performed at compile time - values outside 0-255 produce an error.
+Range checking is performed at compile time when casting constant expressions - values outside 0-255 produce an error.
 
 ## Documentation
 
 The `byte` type represents a single 8-bit unsigned value (0-255).
 
-### Byte Literals
+### Creating Bytes
 
-Use the `b` suffix on integer literals to create byte values:
+Use the `as byte` cast to create byte values from integers:
 
 ```maxon
-var b = 255b               // 8-bit unsigned value
-var zero = 0b              // Zero byte
+var b = 255 as byte        // 8-bit unsigned value
+var zero = 0 as byte       // Zero byte
+var hex = 0xff as byte     // From hex literal
 ```
-
-The `b` suffix is range-checked at compile time - values outside 0-255 produce an error.
 
 ### Character Literals
 
@@ -53,38 +53,54 @@ Note: The `character` type is NOT the same as `byte`. See the character-type spe
 
 ## Tests
 
-### Byte Literal
+### Byte From Cast
 
+<!-- test: byte-cast -->
 ```maxon
 function main() returns int
-    var b = 42b
+    var b = 42 as byte
     return b as int
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### Byte Max Value
 
+<!-- test: byte-max -->
 ```maxon
 function main() returns int
-    var b = 255b
+    var b = 255 as byte
     return b as int
 end 'main'
 ```
-```output
-ExitCode: 255
+```exitcode
+255
 ```
 
 ### Byte Zero
 
+<!-- test: byte-zero -->
 ```maxon
 function main() returns int
-    var b = 0b
+    var b = 0 as byte
     return b as int
 end 'main'
 ```
-```output
-ExitCode: 0
+```exitcode
+0
+```
+
+### Byte From Hex
+
+<!-- test: byte-from-hex -->
+```maxon
+function main() returns int
+    var b = 0xff as byte
+    return b as int
+end 'main'
+```
+```exitcode
+255
 ```

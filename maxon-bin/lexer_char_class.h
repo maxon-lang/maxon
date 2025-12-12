@@ -62,6 +62,28 @@ class CharClassifier {
 		return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 	}
 
+	static bool is_hex_digit(char c) {
+		return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+	}
+
+	static bool is_binary_digit(char c) {
+		return c == '0' || c == '1';
+	}
+
+	static bool is_octal_digit(char c) {
+		return c >= '0' && c <= '7';
+	}
+
+	static int hex_digit_value(char c) {
+		if (c >= '0' && c <= '9')
+			return c - '0';
+		if (c >= 'a' && c <= 'f')
+			return c - 'a' + 10;
+		if (c >= 'A' && c <= 'F')
+			return c - 'A' + 10;
+		return -1;
+	}
+
 	// ========================================================================
 	// SSE4.2 Classification (16 characters at a time)
 	// ========================================================================

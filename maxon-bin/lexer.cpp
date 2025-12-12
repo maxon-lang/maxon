@@ -270,8 +270,6 @@ Token Lexer::readNumber() {
 	advanceBy(num.chars_consumed);
 
 	switch (num.type) {
-	case ParsedNumber::Type::Byte:
-		return Token(TokenType::BYTE_LITERAL, std::to_string(num.int_value), startLine, startColumn);
 	case ParsedNumber::Type::Float:
 		return Token(TokenType::FLOAT_LITERAL, num.literal_string, startLine, startColumn);
 	case ParsedNumber::Type::Integer:

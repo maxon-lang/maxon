@@ -109,7 +109,7 @@ Write binary data to a file.
 
 ```maxon
 function main() returns int
-    let data = [72b, 101b, 108b, 108b, 111b]  // "Hello" in bytes
+    let data = [72 as byte, 101 as byte, 108 as byte, 108 as byte, 111 as byte]  // "Hello" in bytes
     let success = writeBinaryFile("binary.dat", data)
     if success 'write_ok'
         print("Binary file written successfully")
@@ -156,7 +156,7 @@ end 'main'
 <!-- test: write-binary-file -->
 ```maxon
 function main() returns int
-    let data = [65b, 66b, 67b]  // "ABC" as bytes
+    let data = [65 as byte, 66 as byte, 67 as byte]  // "ABC" as bytes
     let success = writeBinaryFile("temp/binary.bin", data)
     return success as int
 end 'main'
