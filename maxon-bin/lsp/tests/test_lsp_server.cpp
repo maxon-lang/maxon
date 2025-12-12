@@ -486,18 +486,18 @@ end 'main')";
 	REQUIRE(!hasIterateError);
 }
 
-TEST_CASE("LSP RangeIterator struct is iterable", "[lsp][diagnostics]") {
+TEST_CASE("LSP RangeIterator type is iterable", "[lsp][diagnostics]") {
 	LSPTestFixture fixture;
 	fixture.initialize();
 
-	// Define RangeIterator struct that implements Iterable, then use it in a for-loop
+	// Define RangeIterator type that implements Iterable, then use it in a for-loop
 	// This simulates what the stdlib provides
 	std::string code = R"(
 interface Iterable
-	returns int or nil
+	function next() returns int or nil
 end 'Iterable'
 
-struct RangeIterator is Iterable with int
+type RangeIterator is Iterable
 	var current int
 	var limit int
 
@@ -518,7 +518,7 @@ end 'range'
 
 function main() returns int
 	for i in range(0, 10) 'loop'
-		var x = i
+		var _unused = i
 	end 'loop'
 	return 0
 end 'main')";
@@ -554,13 +554,13 @@ TEST_CASE("LSP namespaced RangeIterator is iterable", "[lsp][diagnostics]") {
 	fixture.initialize("file:///stdlib");
 
 	// Simulate how the stdlib defines RangeIterator in iter/range.maxon
-	// The struct gets a namespace prefix like "iter.RangeIterator"
+	// The type gets a namespace prefix like "iter.RangeIterator"
 	std::string code = R"(
 interface Iterable
 	returns int or nil
 end 'Iterable'
 
-export struct RangeIterator is Iterable with int
+export type RangeIterator is Iterable with int
 	var current int
 	var limit int
 
@@ -1211,12 +1211,12 @@ end 'main')";
 	REQUIRE(newText.find("\nend 'main'") != std::string::npos);
 }
 
-TEST_CASE("LSP formatting indents struct fields correctly", "[lsp][formatting]") {
+TEST_CASE("LSP formatting indents type fields correctly", "[lsp][formatting]") {
 	LSPTestFixture fixture;
 	fixture.initialize();
 
-	// Struct with no indentation on fields
-	std::string code = R"(struct Point
+	// Type with no indentation on fields
+	std::string code = R"(type Point
 var x int
 var y int
 end 'Point')";
@@ -1500,7 +1500,7 @@ TEST_CASE("LSP documentSymbol returns symbols", "[lsp][symbols]") {
 	fixture.initialize();
 
 	std::string code = R"(
-struct Point
+type Point
     var x int
     var y int
 end 'Point'
@@ -1523,7 +1523,7 @@ end 'main'
 	REQUIRE(!response->error.has_value());
 	if (response->result.has_value()) {
 		REQUIRE(response->result.value().is_array());
-		// Should have at least Point struct and main function
+		// Should have at least Point type and main function
 		REQUIRE(response->result.value().size() >= 2);
 	}
 }
@@ -1743,13 +1743,13 @@ TEST_CASE("LSP linkedEditingRange returns ranges for interface method names", "[
 	LSPTestFixture fixture;
 	fixture.initialize();
 
-	// Struct with interface method implementation
+	// Type with interface method implementation
 	// The method name after the dot should be linked with the end label
 	std::string code = R"(interface Countable
 	function count() returns int
 end 'Countable'
 
-struct MyStruct is Countable
+type MyStruct is Countable
 	function Countable.count() returns int
 		return 0
 	end 'count'
@@ -2099,11 +2099,11 @@ TEST_CASE("LSP transitive interface conformance allows parent interface methods"
 	fixture.initialize(rootUri);
 
 	// Test code that mirrors stdlib/collections/array.maxon structure:
-	// - Generic struct with "uses Element"
+	// - Generic type with "uses Element"
 	// - Conforms to "Collection with Element" (not just "Collection")
 	// - Has Iterable.next() method (Iterable is parent of Collection)
 	std::string code = R"(
-struct MyArray uses Element is Collection with Element
+type MyArray uses Element is Collection with Element
 	var data int
 	var iterIndex int
 
@@ -2141,7 +2141,7 @@ end 'main')";
 
 	// Should NOT have error about Iterable.next() not conforming
 	// The bug was: "Method 'next' declares implementation of interface 'Iterable'
-	// but struct 'MyArray' does not conform to this interface"
+	// but type 'MyArray' does not conform to this interface"
 	bool hasConformanceError = false;
 	std::string errorMsg;
 	for (const auto &diag : diagnostics) {
@@ -2159,7 +2159,7 @@ end 'main')";
 
 TEST_CASE("LSP detects missing interface method from transitive interface",
 		  "[lsp][diagnostics][interface]") {
-	// Test that a struct implementing "Collection with Element" (which extends Iterable)
+	// Test that a type implementing "Collection with Element" (which extends Iterable)
 	// gets an error if it's missing the next() method required by Iterable.
 	LSPTestFixture fixture;
 
@@ -2172,7 +2172,7 @@ TEST_CASE("LSP detects missing interface method from transitive interface",
 	// Test code that is MISSING the Iterable.next() method
 	// This should produce an error about missing method
 	std::string code = R"(
-struct MyArray uses Element is Collection with Element
+type MyArray uses Element is Collection with Element
 	var data int
 	var iterIndex int
 
@@ -2223,7 +2223,7 @@ end 'main')";
 
 TEST_CASE("LSP does not report missing method when interface has default implementation",
 		  "[lsp][diagnostics][interface]") {
-	// Test that a struct implementing "Collection with Element" does NOT get an error
+	// Test that a type implementing "Collection with Element" does NOT get an error
 	// for the map() method because Collection provides a default implementation.
 	LSPTestFixture fixture;
 
@@ -2236,7 +2236,7 @@ TEST_CASE("LSP does not report missing method when interface has default impleme
 	// Test code that implements all required methods but NOT map()
 	// map() has a default implementation in Collection so this should NOT error
 	std::string code = R"(
-struct MyArray uses Element is Collection with Element
+type MyArray uses Element is Collection with Element
 	var data int
 	var iterIndex int
 

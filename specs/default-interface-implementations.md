@@ -25,10 +25,10 @@ Default interface implementations allow interfaces to provide a default body for
 
 **Semantic Analyzer** (`semantic_analyzer.cpp`, `semantic_analyzer.h`):
 - `InterfaceMethodInfo` stores `hasDefaultImplementation` and pointer to `defaultBody`
-- `checkInterfaceConformance()` checks if method is missing from struct
+- `checkInterfaceConformance()` checks if method is missing from type
 - If method missing AND interface has default, synthesizes a `FunctionInfo` entry
 - Synthesized entry has `isSynthesizedDefault = true`, `defaultBody` pointer, and `typeSubstitutions`
-- Type substitutions map `Self` to concrete struct type and associated types to their bindings
+- Type substitutions map `Self` to concrete type and associated types to their bindings
 
 **Code Generation** (`codegen_mir.cpp`, `codegen_mir_function.cpp`):
 - `synthesizedMethods` vector stores synthesized method info from semantic analyzer
@@ -39,13 +39,13 @@ Default interface implementations allow interfaces to provide a default body for
 ### Type Substitution
 
 When generating code for a synthesized default method:
-1. `Self` is replaced with the concrete struct type
+1. `Self` is replaced with the concrete type
 2. Associated types (e.g., `Element`) are replaced with their bound types
-3. Method calls on `self` resolve to the struct's methods
+3. Method calls on `self` resolve to the type's methods
 
 ### Override Behavior
 
-If a struct provides its own implementation of a method, the default is NOT used. The struct's explicit implementation takes precedence.
+If a type provides its own implementation of a method, the default is NOT used. The type's explicit implementation takes precedence.
 
 ## Documentation
 
@@ -76,13 +76,13 @@ end 'Collection'
 
 ### Automatic Inheritance
 
-When a struct implements an interface with default methods:
-- If the struct provides its own implementation, that is used
-- If the struct does NOT provide an implementation, the default is automatically synthesized
+When a type implements an interface with default methods:
+- If the type provides its own implementation, that is used
+- If the type does NOT provide an implementation, the default is automatically synthesized
 
 ```maxon
-// This struct gets map() automatically from Collection's default
-struct IntList is Collection with int
+// This type gets map() automatically from Collection's default
+type IntList is Collection with int
     var data _ManagedArray<int>
 
     function Collection.count() returns int
@@ -105,9 +105,9 @@ end 'IntList'
 ### Type Substitution
 
 In default implementations:
-- `Self` refers to the concrete struct type
+- `Self` refers to the concrete type
 - Associated types (like `Element`) resolve to their bound types
-- Method calls on `self` use the struct's implementations
+- Method calls on `self` use the type's implementations
 
 ### Benefits
 

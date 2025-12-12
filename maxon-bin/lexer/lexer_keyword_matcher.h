@@ -216,9 +216,9 @@ class KeywordMatcher {
 					"Immutable variable declaration",
 					"let $1 = $2",
 					KeywordCompletionKind::Keyword);
-		add_keyword("struct", KeywordCategory::Declaration,
-					"Structure type declaration - defines a composite type",
-					"struct $1\n\t$2\nend '$1'",
+		add_keyword("type", KeywordCategory::Declaration,
+					"Type declaration - defines a composite type",
+					"type $1\n\t$2\nend '$1'",
 					KeywordCompletionKind::Keyword,
 					true, true); // isBlockKeyword=true, isNamedBlock=true
 		add_keyword("enum", KeywordCategory::Declaration,
@@ -231,9 +231,9 @@ class KeywordMatcher {
 					"interface $1\n\t$2\nend '$1'",
 					KeywordCompletionKind::Keyword,
 					true, true); // isBlockKeyword=true, isNamedBlock=true
-		add_keyword("type", KeywordCategory::Declaration,
+		add_keyword("associatedtype", KeywordCategory::Declaration,
 					"Associated type declaration in interface",
-					"type $1",
+					"associatedtype $1",
 					KeywordCompletionKind::Keyword);
 		add_keyword("uses", KeywordCategory::Declaration,
 					"Interface associated type constraint",

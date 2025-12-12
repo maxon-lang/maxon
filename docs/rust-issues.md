@@ -53,7 +53,7 @@ So math bugs can still sneak in under optimization.
 
 When interfacing with C, C++, or OS APIs, Rust’s safety guarantees stop at the boundary:
 
-Passing invalid pointers or struct layouts
+Passing invalid pointers or type layouts
 
 Mismatched ownership or lifetimes
 

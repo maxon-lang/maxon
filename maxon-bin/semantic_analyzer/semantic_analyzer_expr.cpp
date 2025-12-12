@@ -457,7 +457,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				if (leftStruct != nullptr || rightStruct != nullptr) {
 					// At least one operand is a struct type
 					if (leftType != rightType) {
-						addError("Cannot compare different struct types with == or !=" +
+						addError("Cannot compare different types with == or !=" +
 									 std::string("\n  Left operand type: ") + leftType +
 									 "\n  Right operand type: " + rightType,
 								 expr->line, expr->column);
@@ -468,7 +468,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 					bool conformsToEquatable = typeIsEquatable(leftType);
 
 					if (!conformsToEquatable) {
-						addError("Cannot use == or != on struct type '" + leftType +
+						addError("Cannot use == or != on type '" + leftType +
 									 "' because it does not implement the Equatable interface",
 								 expr->line, expr->column);
 						return "error";
@@ -1343,7 +1343,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				return methodIt->second.returnType;
 			}
 
-			addError("Struct '" + objectType + "' has no field or method named '" + memberAccessExpr->memberName + "'",
+			addError("Type '" + objectType + "' has no field or method named '" + memberAccessExpr->memberName + "'",
 					 expr->line, expr->column);
 			return "error";
 		}
@@ -1371,7 +1371,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		if (lookupStruct(structInitExpr->structName) == nullptr) {
 			// Track as undefined for auto-import from stdlib
 			undefinedStructs.insert(structInitExpr->structName);
-			addError("Undefined struct type: '" + structInitExpr->structName + "'",
+			addError("Undefined type: '" + structInitExpr->structName + "'",
 					 expr->line, expr->column);
 			return "error";
 		}
@@ -1395,7 +1395,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			}
 
 			if (!fieldFound) {
-				addError("Struct '" + structInitExpr->structName + "' has no field named '" + initField.name + "'",
+				addError("Type '" + structInitExpr->structName + "' has no field named '" + initField.name + "'",
 						 initField.line, initField.column);
 			} else {
 				// Type check the initializer value
@@ -1429,7 +1429,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		for (const auto &structField : structInfo.fields) {
 			if (initializedFields.find(structField.name) == initializedFields.end()) {
 				if (!structField.hasDefault) {
-					addError("Missing initialization for required field '" + structField.name + "' in struct '" + structInitExpr->structName + "'" +
+					addError("Missing initialization for required field '" + structField.name + "' in type '" + structInitExpr->structName + "'" +
 								 "\n  Note: Fields without default values must be initialized",
 							 expr->line, expr->column);
 				}

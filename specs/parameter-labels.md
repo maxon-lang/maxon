@@ -172,7 +172,7 @@ end 'main'
 
 <!-- test: method-named-arg -->
 ```maxon
-struct Counter
+type Counter
     var value int
 
     function add(amount int) returns Counter

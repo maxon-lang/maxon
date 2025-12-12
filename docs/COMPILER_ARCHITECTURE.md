@@ -110,20 +110,20 @@ Maxon uses **monomorphization** for generic types like `map from K to V`. Instea
 
 1. **Declaration:** Generic types are declared with type parameters:
    ```maxon
-   struct map from KeyType to ValueType
+   type map from KeyType to ValueType
        _keys [16]KeyType
        _values [16]ValueType
        ...
    end 'map'
    ```
 
-2. **Instantiation:** When used with concrete types, a specialized struct is created:
+2. **Instantiation:** When used with concrete types, a specialized type is created:
    ```maxon
    var ages = map from string to int  ' Creates map<string,int>
    var scores = map from int to float ' Creates map<int,float>
    ```
 
-3. **Specialization:** The compiler generates unique struct types with concrete fields:
+3. **Specialization:** The compiler generates unique type types with concrete fields:
    - `map<string,int>` has `_keys [16]string` and `_values [16]int`
    - `map<int,float>` has `_keys [16]int` and `_values [16]float`
 
@@ -161,7 +161,7 @@ MIR is an SSA-based intermediate representation similar to LLVM IR but simpler. 
 **Type system:**
 - `void`, `i1` (bool), `i8`, `i32`, `i64`, `f64`
 - `ptr` (opaque pointer)
-- `array<T, N>`, `struct { ... }`
+- `array<T, N>`, `type { ... }`
 
 **Instruction categories:**
 - Arithmetic: `add`, `sub`, `mul`, `sdiv`, `fadd`, `fsub`, `fmul`, `fdiv`

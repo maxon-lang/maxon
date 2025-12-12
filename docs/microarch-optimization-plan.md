@@ -11,7 +11,7 @@ Add target-aware optimizations that adapt code generation to specific CPU microa
 **File:** `maxon-bin/backend/x86_target.h/.cpp`
 
 ```cpp
-struct X86Target {
+type X86Target {
     enum class Microarch { Generic, Haswell, Skylake, Zen3, Zen4 };
     
     // LEA characteristics
@@ -104,7 +104,7 @@ void X86CodeGen::genAdd(mir::MIRInstruction *inst) {
 ### Step 4: Add address calculation LEA usage
 
 - For array indexing: `lea rax, [base + idx*scale]`
-- For struct field access with offset
+- For type field access with offset
 - Already partially done in `genGEP`, but can be expanded
 
 ## Phase 4: Testing Strategy

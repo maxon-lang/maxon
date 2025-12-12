@@ -243,7 +243,7 @@ std::string FormattingProvider::formatStruct(const StructDefAST *structDef, cons
 		out << indent(indentLevel, config);
 	}
 
-	out << "struct " << structDef->name;
+	out << "type " << structDef->name;
 
 	// Interface conformance
 	if (!structDef->conformsTo.empty()) {
@@ -1296,8 +1296,8 @@ bool FormattingProvider::startsBlock(const std::string &line, bool insideInterfa
 		return true;
 	}
 
-	// Struct declaration
-	if (trimmed.rfind("struct ", 0) == 0 || trimmed.rfind("export struct ", 0) == 0) {
+	// Type declaration
+	if (trimmed.rfind("type ", 0) == 0 || trimmed.rfind("export type ", 0) == 0) {
 		return true;
 	}
 

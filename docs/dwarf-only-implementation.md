@@ -140,7 +140,7 @@ maxon compile program.maxon --debug --pdb
 
 #### 2.1 Design Frame Info Tracking
 ```cpp
-struct FunctionFrameInfo {
+type FunctionFrameInfo {
     uint64_t startAddress;
     uint64_t endAddress;
     int32_t frameSize;          // Total stack frame size
@@ -233,7 +233,7 @@ private:
 ```
 
 #### 3.2 Collect Type Info from AST
-- [ ] Extract struct definitions from `ProgramAST`
+- [ ] Extract type definitions from `ProgramAST`
 - [ ] Process `StructAST` nodes
 - [ ] Handle nested structs
 - [ ] Handle arrays of structs
@@ -377,7 +377,7 @@ cv2pdb program.exe
 - [x] Debugger doesn't crash on stack operations
 
 ### Phase 3 Complete:
-- [x] Inspect struct members
+- [x] Inspect type members
 - [x] Index into arrays
 - [x] Dereference pointers
 - [x] Complex nested types work

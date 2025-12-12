@@ -207,7 +207,7 @@ var parts = str.split(' ')
 ```
 
 **Implementation needed:**
-- String struct with dynamic buffer
+- String type with dynamic buffer
 - UTF-8 support (already in runtime)
 - Common operations: concat, split, substring, find, compare
 - String literals to String conversion
@@ -316,7 +316,7 @@ end 'check'
 
 **Language Feature:**
 ```maxon
-struct Pair<T, U>
+type Pair<T, U>
     first T
     second U
 end 'Pair'
@@ -328,7 +328,7 @@ end 'makePair'
 ```
 
 **Implementation needed:**
-- Generic struct declarations
+- Generic type declarations
 - Generic function declarations
 - Type parameter substitution
 - Monomorphization at compile time (C++ template approach)
@@ -357,7 +357,7 @@ outFile.close()
 ```
 
 **Implementation needed:**
-- File struct wrapping OS handles
+- File type wrapping OS handles
 - Open, read, write, close operations
 - Error handling (return codes or exceptions)
 - Platform abstraction (Windows/Linux)
@@ -379,7 +379,7 @@ outFile.close()
 
 **Language additions:**
 ```maxon
-struct Optional<T>
+type Optional<T>
     hasValue bool
     value T
 end 'Optional'
@@ -413,7 +413,7 @@ end 'Option'
 
 **Example:**
 ```maxon
-struct TypeChecker
+type TypeChecker
     symbols HashMap<String, Type>
     errors Vector<String>
 

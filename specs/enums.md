@@ -76,7 +76,7 @@ end 'EnumName'
 - Parse optional raw value type after enum name
 - Parse enum case with optional `= value` for raw values
 - Parse enum case with optional `(params)` for associated values
-- Parse methods inside enum body (same as struct methods)
+- Parse methods inside enum body (same as type methods)
 
 **AST Nodes:**
 - `EnumCaseAST`: Individual case definition
@@ -101,7 +101,7 @@ end 'EnumName'
 
 **MIR Code Generation:**
 - Simple enum values: i8 constants
-- Raw value enums: struct with tag + raw value
+- Raw value enums: type with tag + raw value
 - Associated value enums: tagged union
 - Comparison uses tag comparison
 - `.rawValue` accessor for raw value enums
@@ -180,7 +180,7 @@ enum Result
 end 'Result'
 ```
 
-Construct cases with associated values:
+Contype cases with associated values:
 
 ```maxon
 var r1 = Result.success(42)

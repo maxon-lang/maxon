@@ -9,7 +9,7 @@ category: type-system
 
 ## Developer Notes
 
-Associated types allow interfaces to declare abstract type placeholders that conforming structs must define with concrete types. This enables type-safe iteration where different iterators can yield different element types.
+Associated types allow interfaces to declare abstract type placeholders that conforming types must define with concrete types. This enables type-safe iteration where different iterators can yield different element types.
 
 ### Syntax Overview
 
@@ -21,9 +21,9 @@ interface Container uses Element
 end 'Container'
 ```
 
-**Struct conformance with type binding:**
+**Type conformance with type binding:**
 ```maxon
-struct IntArray is Container with int
+type IntArray is Container with int
     var data array of 100 int
     
     function Container.get(index int) returns int
@@ -42,7 +42,7 @@ end 'IntArray'
 - **Lexer**: `uses` and `with` keywords recognized
 - **Parser**: 
   - `parseInterface()` parses `interface Name uses Type1, Type2` header, stores in `associatedTypes` vector
-  - `parseStruct()` parses `is Interface with Type1, Type2`, maps positionally to interface's associated types
+  - `parseStruct()` parses `type Name is Interface with Type1, Type2`, maps positionally to interface's associated types
   - Method signatures have **no explicit `self` parameter** - it is implicit
   - **Interface methods use `function InterfaceName.methodName(params)` syntax** to explicitly declare which interface a method implements
   - Non-interface methods use simple `function methodName(params)` format
@@ -56,7 +56,7 @@ end 'IntArray'
     - ALL interface methods are implemented (error lists all missing methods)
     - Associated types are bound via `with` clause
     - Method signatures match after type substitution
-  - **Implicit `self`**: In method bodies, bare identifiers resolve to struct fields first (implicit `self.`); parameters shadow fields
+  - **Implicit `self`**: In method bodies, bare identifiers resolve to type fields first (implicit `self.`); parameters shadow fields
   - Both return types and parameter types can use associated types
 - **Codegen**:
   - Methods receive implicit `self` parameter (auto-injected)
@@ -67,10 +67,10 @@ end 'IntArray'
 ### Resolution Order
 
 1. Parse interface: collect associated type names from `uses` clause (e.g., `Element`)
-2. Parse struct: map `with` types positionally to interface's associated types
+2. Parse type: map `with` types positionally to interface's associated types
 3. Conformance check: verify ALL required methods are implemented (error if partial)
 4. Method validation: substitute associated types with concrete types in signatures
-5. For-loop codegen: look up `Element` from iterator struct's type assignments
+5. For-loop codegen: look up `Element` from iterator type's type assignments
 
 ### Type Substitution in Method Signatures
 
@@ -84,10 +84,10 @@ Resolution:           Self -> string, Element -> character (implicit self)
 
 ### Implicit `self` and Field Access
 
-Methods have an implicit `self` parameter. Inside method bodies, bare identifiers resolve to struct fields:
+Methods have an implicit `self` parameter. Inside method bodies, bare identifiers resolve to type fields:
 
 ```maxon
-struct Counter
+type Counter
     var count int
 
     function increment() returns Counter
@@ -99,7 +99,7 @@ end 'Counter'
 Parameters shadow fields - use explicit `self.fieldName` to access shadowed fields:
 
 ```maxon
-struct Box
+type Box
     var value int
 
     function setValue(value int) returns Box
@@ -110,7 +110,7 @@ end 'Box'
 
 ## Documentation
 
-Associated types allow interfaces to declare type placeholders that implementing structs must define. This enables generic interfaces where the concrete types vary by implementation.
+Associated types allow interfaces to declare type placeholders that implementing types must define. This enables generic interfaces where the concrete types vary by implementation.
 
 ### Declaring Associated Types in Interfaces
 
@@ -128,12 +128,12 @@ Associated types can be used in:
 - Parameter types (`value Element`)
 - Combined with `Self` in the same signature
 
-### Implementing Associated Types in Structs
+### Implementing Associated Types
 
-Structs bind concrete types to associated types using `with` after the interface name. Interface methods use `function InterfaceName.methodName(params)` syntax:
+Types bind concrete types to associated types using `with` after the interface name. Interface methods use `function InterfaceName.methodName(params)` syntax:
 
 ```maxon
-struct IntArray is Container with int
+type IntArray is Container with int
     var data array of 100 int
     var len int
 
@@ -160,7 +160,7 @@ interface Pair uses First, Second
     function getSecond() returns Second
 end 'Pair'
 
-struct IntFloat is Pair with int, float
+type IntFloat is Pair with int, float
     var a int
     var b float
 
@@ -217,7 +217,7 @@ Stdout: 72
 
 ### Conformance Requirements
 
-A struct conforming to an interface with associated types must:
+A type conforming to an interface with associated types must:
 
 1. Bind all associated types with `with Type1, Type2` (positional order matches `uses`)
 2. Implement **all** methods - partial implementation is an error
@@ -228,7 +228,7 @@ interface Summable uses Element
     function sum() returns Element
 end 'Summable'
 
-struct IntPair is Summable with int
+type IntPair is Summable with int
     var a int
     var b int
 
@@ -257,14 +257,14 @@ var result = p.sum()    // Call sum() method on instance p
 
 ### Error: Missing Type Binding
 
-If a struct doesn't bind required associated types:
+If a type doesn't bind required associated types:
 
 ```maxon
 interface HasElement uses Element
     function get() returns Element
 end 'HasElement'
 
-struct Broken is HasElement
+type Broken is HasElement
     var value int
 
     function HasElement.get() returns int
@@ -278,21 +278,21 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 6, column 1
-Struct 'Broken' does not define required associated type 'Element' from interface 'HasElement'
+Type 'Broken' does not define required associated type 'Element' from interface 'HasElement'
 
-  6 | struct Broken is HasElement
+  6 | type Broken is HasElement
     | ^
 
 Semantic Error: line 6, column 1
 Method 'Broken.get' has return type 'int' but interface 'HasElement' requires 'Element'
 
-  6 | struct Broken is HasElement
+  6 | type Broken is HasElement
     | ^
 ```
 
 ### Error: Partial Implementation
 
-If a struct doesn't implement all interface methods:
+If a type doesn't implement all interface methods:
 
 ```maxon
 interface TwoMethods uses Element
@@ -300,7 +300,7 @@ interface TwoMethods uses Element
     function second() returns Element
 end 'TwoMethods'
 
-struct Partial is TwoMethods with int
+type Partial is TwoMethods with int
     var value int
 
     function TwoMethods.first() returns int
@@ -314,10 +314,10 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 7, column 1
-Partial interface implementation: struct 'Partial' is missing 1 method(s):
+Partial interface implementation: type 'Partial' is missing 1 method(s):
   - second() returns int
 
-  7 | struct Partial is TwoMethods with int
+  7 | type Partial is TwoMethods with int
     | ^
 ```
 
@@ -330,7 +330,7 @@ interface Producer uses Output
     function produce() returns Output
 end 'Producer'
 
-struct WrongReturn is Producer with float
+type WrongReturn is Producer with float
     var value int
 
     function Producer.produce() returns int
@@ -346,7 +346,7 @@ end 'main'
 Semantic Error: line 6, column 1
 Method 'WrongReturn.produce' has return type 'int' but interface 'Producer' requires 'float'
 
-  6 | struct WrongReturn is Producer with float
+  6 | type WrongReturn is Producer with float
     | ^
 ```
 
@@ -359,7 +359,7 @@ interface Wrapper uses Inner
     function unwrap() returns Inner
 end 'Wrapper'
 
-struct IntBox is Wrapper with int
+type IntBox is Wrapper with int
     var value int
 
     function Wrapper.unwrap() returns int
@@ -384,7 +384,7 @@ interface Accumulator uses Item
     function total() returns int
 end 'Accumulator'
 
-struct IntSum is Accumulator with int
+type IntSum is Accumulator with int
     var sum int
 
     function Accumulator.add(item int) returns IntSum
@@ -415,7 +415,7 @@ interface Pair uses First, Second
     function getSecond() returns Second
 end 'Pair'
 
-struct IntFloat is Pair with int, float
+type IntFloat is Pair with int, float
     var a int
     var b float
 
@@ -442,12 +442,12 @@ end 'main'
 
 <!-- test: character-element-type -->
 ```maxon
-// character is a grapheme cluster struct, use codepoints() to access codepoint values
+// character is a grapheme cluster type, use codepoints() to access codepoint values
 interface CharSource uses Element
     function getChar() returns Element
 end 'CharSource'
 
-struct SingleChar is CharSource with character
+type SingleChar is CharSource with character
     var ch character
 
     function CharSource.getChar() returns character
@@ -475,7 +475,7 @@ interface ByteSource uses Element
     function getByte() returns Element
 end 'ByteSource'
 
-struct SingleByte is ByteSource with byte
+type SingleByte is ByteSource with byte
     var b byte
 
     function ByteSource.getByte() returns byte
@@ -500,7 +500,7 @@ interface NeedsElement uses Element
     function get() returns Element
 end 'NeedsElement'
 
-struct Missing is NeedsElement
+type Missing is NeedsElement
     var value int
 
     function NeedsElement.get() returns int
@@ -514,15 +514,15 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 6, column 1
-Struct 'Missing' does not define required associated type 'Element' from interface 'NeedsElement'
+Type 'Missing' does not define required associated type 'Element' from interface 'NeedsElement'
 
-  6 | struct Missing is NeedsElement
+  6 | type Missing is NeedsElement
     | ^
 
 Semantic Error: line 6, column 1
 Method 'Missing.get' has return type 'int' but interface 'NeedsElement' requires 'Element'
 
-  6 | struct Missing is NeedsElement
+  6 | type Missing is NeedsElement
     | ^
 ```
 
@@ -534,7 +534,7 @@ interface TwoMethods uses Element
     function second() returns Element
 end 'TwoMethods'
 
-struct Partial is TwoMethods with int
+type Partial is TwoMethods with int
     var value int
 
     function TwoMethods.first() returns int
@@ -548,10 +548,10 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 7, column 1
-Partial interface implementation: struct 'Partial' is missing 1 method(s):
+Partial interface implementation: type 'Partial' is missing 1 method(s):
   - second() returns int
 
-  7 | struct Partial is TwoMethods with int
+  7 | type Partial is TwoMethods with int
     | ^
 ```
 
@@ -562,7 +562,7 @@ interface Typed uses Output
     function make() returns Output
 end 'Typed'
 
-struct WrongType is Typed with float
+type WrongType is Typed with float
     var value int
 
     function Typed.make() returns int
@@ -578,7 +578,7 @@ end 'main'
 Semantic Error: line 6, column 1
 Method 'WrongType.make' has return type 'int' but interface 'Typed' requires 'float'
 
-  6 | struct WrongType is Typed with float
+  6 | type WrongType is Typed with float
     | ^
 ```
 
@@ -589,7 +589,7 @@ interface Acceptor uses Input
     function accept(val Input) returns int
 end 'Acceptor'
 
-struct WrongParam is Acceptor with float
+type WrongParam is Acceptor with float
     var value int
 
     function Acceptor.accept(val int) returns int
@@ -605,7 +605,7 @@ end 'main'
 Semantic Error: line 6, column 1
 Method 'WrongParam.accept' parameter 1 has type 'int' but interface 'Acceptor' requires 'float'
 
-  6 | struct WrongParam is Acceptor with float
+  6 | type WrongParam is Acceptor with float
     | ^
 ```
 
@@ -616,7 +616,7 @@ interface Countable
     function getCount() returns int
 end 'Countable'
 
-struct Counter is Countable
+type Counter is Countable
     var count int
 
     function Countable.getCount() returns int
@@ -640,7 +640,7 @@ interface Addable
     function addOne() returns int
 end 'Addable'
 
-struct Number is Addable
+type Number is Addable
     var value int
 
     function Addable.addOne() returns int

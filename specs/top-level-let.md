@@ -18,7 +18,7 @@ Top-level `let` declarations define compile-time constants at module scope. Only
 - Updated `ProgramAST` to include `globals` vector
 
 ### Semantic Analysis
-- Added `GlobalConstInfo` struct and `globalConstants` map to `SemanticAnalyzer`
+- Added `GlobalConstInfo` type and `globalConstants` map to `SemanticAnalyzer`
 - Pass 2c registers global names for forward reference support
 - Pass 2d analyzes initializers and infers types
 - `lookupVariable()` checks `globalConstants` after local scopes
@@ -92,7 +92,7 @@ let GREETING = "Hello, World!"
 ### Restrictions
 
 - Function calls are not allowed in constant expressions
-- Array and struct literals are not supported (yet)
+- Array and type literals are not supported (yet)
 - Only immutable `let` is supported at top level (no `var`)
 
 ---

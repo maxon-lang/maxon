@@ -19,7 +19,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
    - [Map Type](#map-type)
    - [Optional Types](#optional-types)
    - [Type Conversions](#type-conversions)
-4. [Structs](#structs)
+4. [Types (Composite)](#types-composite)
 5. [Enums](#enums)
 6. [Variables](#variables)
 7. [Functions](#functions)
@@ -67,9 +67,9 @@ Single-line comments only:
 
 ### Keywords
 ```
-and, as, bool, break, continue, default, else, end, enum, export, extern,
+and, as, associatedtype, bool, break, continue, default, else, end, enum, export, extern,
 fallthrough, false, float, for, function, gives, if, in, int, interface, is, let, match,
-nil, not, or, return, struct, then, true, var, while
+nil, not, or, return, then, true, type, var, while
 ```
 
 ### Literals
@@ -108,7 +108,7 @@ nil, not, or, return, struct, then, true, var, while
 '\''          // Escape sequence (single quote)
 ```
 
-Character literals create a `character` struct value, which represents an Extended Grapheme Cluster (EGC).
+Character literals create a `character` type value, which represents an Extended Grapheme Cluster (EGC).
 The `character` type may contain multiple UTF-8 bytes.
 
 **String Literals** (double-quoted, null-terminated)
@@ -355,7 +355,7 @@ end 'safeDivide'
 Optional types can be used in:
 - Function return types: `returns int or nil`
 - Function parameters: `function bar(x int or nil)`
-- Struct fields: `struct Person { var age int or nil }`
+- Struct fields: `type Person { var age int or nil }`
 - Local variables: `var result int or nil`
 
 **If-Let Unwrapping**
@@ -418,7 +418,7 @@ greet(nil)      // Passes nil
 Structs can have optional fields:
 
 ```maxon
-struct Person
+type Person
     var name string
     var age int or nil  // Optional age
 end 'Person'
@@ -480,20 +480,20 @@ var i4 = ceil(f)   // 4 (up)
 
 ---
 
-## Structs
+## Types (Composite)
 
 ### Declaration
-Structs are user-defined composite types containing named fields. Use `var` for mutable fields and `let` for immutable fields:
+Types are user-defined composite types containing named fields. Use `var` for mutable fields and `let` for immutable fields:
 
 ```maxon
-struct Point
+type Point
     var x int
     var y int
 end 'Point'
 ```
 
-### Struct Literals
-Create struct instances using field initializers:
+### Type Literals
+Create type instances using field initializers:
 
 ```maxon
 var p = Point{x: 10, y: 20}
@@ -511,10 +511,10 @@ p.x = 15                 // Write field (if var, not let)
 
 ### Methods
 
-Methods are defined **inside the struct body** and can access fields directly (implicit `self`):
+Methods are defined **inside the type body** and can access fields directly (implicit `self`):
 
 ```maxon
-struct Point
+type Point
     var x int
     var y int
 
@@ -529,8 +529,8 @@ end 'Point'
 ```
 
 **Method Syntax Rules:**
-- Methods must be declared inside the struct body
-- Methods access struct fields directly without explicit `self`
+- Methods must be declared inside the type body
+- Methods access type fields directly without explicit `self`
 - Use `export` keyword before `function` to export individual methods
 - Methods are called using dot notation: `instance.method(args)`
 - Method parameters support named arguments just like regular functions
@@ -549,7 +549,7 @@ var mag = p1.magnitude()
 
 ### Interfaces
 
-Interfaces define a set of method signatures that structs can implement:
+Interfaces define a set of method signatures that types can implement:
 
 ```maxon
 interface Hashable
@@ -560,7 +560,7 @@ end 'Hashable'
 Structs declare conformance using the `is` keyword:
 
 ```maxon
-struct Point is Hashable
+type Point is Hashable
     var x int
     var y int
 
@@ -572,7 +572,7 @@ end 'Point'
 
 **Interface Notes:**
 - `Self` in interface method parameters/returns refers to the conforming type
-- A struct can conform to multiple interfaces: `struct Foo is A, B`
+- A type can conform to multiple interfaces: `type Foo is A, B`
 - Methods implementing interface requirements follow the same syntax as regular methods
 
 ---
@@ -636,7 +636,7 @@ enum Result
 end 'Result'
 ```
 
-Construct cases with associated values:
+Contype cases with associated values:
 
 ```maxon
 var r1 = Result.success(42)

@@ -42,7 +42,7 @@ Output: file.exe
 [Lexer]   Token breakdown: 11 keywords, 10 identifiers, 6 numbers
 [Parser]   Parse time: 82µs
 [Semantic]   Analysis time: 47µs
-[MIR]   Pass 1: Creating struct types (0 structs)
+[MIR]   Pass 1: Creating type types (0 structs)
 [MIR]   Pass 2: Creating function declarations (1 functions)
 [Opt]   Dead code elimination time: 139µs
 ```
@@ -124,7 +124,7 @@ Unit tests are located in `maxon-bin/tests/` and cover all stages of the compila
 | `test_optimizer.cpp` | All optimization passes |
 | `test_regalloc.cpp` | Liveness analysis, linear-scan allocation, spilling |
 | `test_x86_encoding.cpp` | x86-64 instruction encoding, ModR/M, SIB, REX |
-| `test_x86_codegen.cpp` | X86CodeGen instruction selection, calling conventions, large struct returns |
+| `test_x86_codegen.cpp` | X86CodeGen instruction selection, calling conventions, large type returns |
 | `test_executable_writers.cpp` | ELF/PE structure generation and validation |
 | `test_dwarf.cpp` | DWARF debug info generation |
 
@@ -134,12 +134,12 @@ Unit tests are located in `maxon-bin/tests/` and cover all stages of the compila
 
 **Using unit tests to fix issues:**
 
-When a bug is identified (e.g., large struct returns crash at runtime), the workflow is:
+When a bug is identified (e.g., large type returns crash at runtime), the workflow is:
 
 1. **Write a failing unit test** that isolates the specific behavior:
    ```cpp
-   TEST_CASE("X86CodeGen: large struct return - parameter shift", "[x86-codegen][large-struct]") {
-       // Create MIR with large struct return and parameters
+   TEST_CASE("X86CodeGen: large type return - parameter shift", "[x86-codegen][large-struct]") {
+       // Create MIR with large type return and parameters
        // Generate x86 code
        // CHECK for expected machine code patterns
    }
@@ -189,9 +189,9 @@ std::cerr << "[DEBUG] varName='" << varName << "' type='" << type << "'\n";
 
 ### Issue 1: GEP (GetElementPtr) Missing Element Type
 
-**Symptom:** x86 codegen crashes or generates wrong offsets for struct field access.
+**Symptom:** x86 codegen crashes or generates wrong offsets for type field access.
 
-**Debug:** Check `inst->elementType` in GEP instructions. It should contain the struct type.
+**Debug:** Check `inst->elementType` in GEP instructions. It should contain the type type.
 
 **Fix location:** `mir_builder.cpp` - `createGEP()` and `createStructGEP()`
 
@@ -232,7 +232,7 @@ if (it != lastStore.end()) {
 
 ### Issue 4: Struct Parameters Passed by Pointer
 
-**Symptom:** Accessing struct parameter fields returns garbage or crashes.
+**Symptom:** Accessing type parameter fields returns garbage or crashes.
 
 **Root cause:** Struct parameters are passed by pointer (ABI requirement), but field access code may treat them as direct values.
 
@@ -270,7 +270,7 @@ case mir::MIRValueKind::VirtualReg: {
 - `Alloca` - Stack allocation, result is pointer to allocated memory
 - `Load` - Load value from pointer
 - `Store` - Store value to pointer
-- `GetElementPtr` - Compute address of struct field or array element
+- `GetElementPtr` - Compute address of type field or array element
 - `Call` - Function call
 
 ### MIR Value Kinds
@@ -290,7 +290,7 @@ enum class MIRValueKind {
 
 ### Register Allocation (`regAlloc`)
 ```cpp
-struct RegAllocation {
+type RegAllocation {
     std::map<uint32_t, X86Reg> regMap;      // regId -> physical register
     std::map<uint32_t, int32_t> stackSlots; // regId -> stack offset from RBP
     std::set<uint32_t> allocaRegs;          // regIds that are alloca results

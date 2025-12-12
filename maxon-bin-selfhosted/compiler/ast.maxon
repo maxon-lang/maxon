@@ -6,41 +6,41 @@
 //=============================================================================
 
 export enum TypeKind
-    void
-    int
+	void
+	int
 end 'TypeKind'
 
-export struct TypeRef
-    var kind TypeKind
-    var name string
+export type TypeRef
+var kind TypeKind
+var name string
 
-    export function intType() TypeRef
-        return TypeRef{kind: TypeKind.int, name: "int"}
-    end 'intType'
+export function intType() returns TypeRef
+	return TypeRef{kind: TypeKind.int, name: "int"}
+end 'intType'
 
-    export function voidType() TypeRef
-        return TypeRef{kind: TypeKind.void, name: "void"}
-    end 'voidType'
+export function voidType() returns TypeRef
+	return TypeRef{kind: TypeKind.void, name: "void"}
+end 'voidType'
 
-    export function toString() returns string
-        match kind 'fmt'
-            void then return "void"
-            int then return "int"
-        end 'fmt'
-    end 'toString'
+export function toString() returns string
+	match kind 'fmt'
+		void then return "void"
+		int then return "int"
+	end 'fmt'
+end 'toString'
 end 'TypeRef'
 
 //=============================================================================
 // Source location
 //=============================================================================
 
-export struct SourceLoc
-    var line int
-    var column int
+export type SourceLoc
+var line int
+var column int
 
-    export function create(line int, column int) SourceLoc
-        return SourceLoc{line: line, column: column}
-    end 'create'
+export function create(line int, column int) returns SourceLoc
+	return SourceLoc{line: line, column: column}
+end 'create'
 end 'SourceLoc'
 
 //=============================================================================
@@ -48,8 +48,8 @@ end 'SourceLoc'
 //=============================================================================
 
 export enum Expr
-    intLiteral(value int, loc SourceLoc)
-    varRef(name string, loc SourceLoc)
+	intLiteral(value int, loc SourceLoc)
+	varRef(name string, loc SourceLoc)
 end 'Expr'
 
 //=============================================================================
@@ -57,48 +57,49 @@ end 'Expr'
 //=============================================================================
 
 export enum Stmt
-    return_(value Expr or nil, loc SourceLoc)
-    let_(name string, typeAnnotation TypeRef or nil, value Expr, loc SourceLoc)
+	return_(value Expr or nil, loc SourceLoc)
+	let_(name string, typeAnnotation TypeRef or nil, value Expr, loc SourceLoc)
 end 'Stmt'
 
 //=============================================================================
 // Top-level declarations
 //=============================================================================
 
-export struct Parameter
-    var name string
-    var paramType TypeRef
+export type Parameter
+var name string
+var paramType TypeRef
 
-    export function create(name string, paramType TypeRef) Parameter
-        return Parameter{name: name, paramType: paramType}
-    end 'create'
+export function create(name string, paramType TypeRef) returns Parameter
+	return Parameter{name: name, paramType: paramType}
+end 'create'
 end 'Parameter'
 
 export enum Decl
-    function_(
-        name string,
-        params array of Parameter,
-        returnType TypeRef,
-        body array of Stmt,
-        isExport bool,
-        isExtern bool,
-        loc SourceLoc
-    )
+	function_(
+	name string,
+	params array of Parameter,
+	returnType TypeRef,
+	body array of Stmt,
+	isExport bool,
+	isExtern bool,
+	loc SourceLoc
+	)
 end 'Decl'
 
 //=============================================================================
 // Program - top level AST node
 //=============================================================================
 
-export struct Program
-    var declarations array of Decl
-    var fileName string
+export type Program
+var declarations array of Decl
+var fileName string
 
-    export function create(fileName string) Program
-        return Program{declarations: array of Decl, fileName: fileName}
-    end 'create'
+export function create(fileName string) returns Program
+	return Program{declarations: array of Decl, fileName: fileName}
+end 'create'
 
-    export returns nothing
-        declarations.append(decl)
-    end 'addDecl'
+export function addDecl(decl Decl) returns nothing
+	declarations.append(decl)
+end 'addDecl'
 end 'Program'
+

@@ -60,7 +60,7 @@ __ManagedArrayData<T> (heap mode):
 
 ### Array Type Structure
 
-The full `array<T>` struct includes an iteration index:
+The full `array<T>` type includes an iteration index:
 
 ```
 array<T> struct:
@@ -75,14 +75,14 @@ array<T> struct:
 The compiler tracks allocations in `scopeStack` for automatic cleanup:
 
 ```cpp
-struct HeapArrayInfo {
+type HeapArrayInfo {
     std::string name;        // Descriptive name
     mir::MIRValue* alloca;   // Alloca for the array struct
     std::string elementType; // Element type name (e.g., "int")
     bool isDynamic;          // True if buffer can be reallocated
 };
 
-struct ScopeInfo {
+type ScopeInfo {
     // Arrays that need _managed_array_release() at scope exit
     std::vector<HeapArrayInfo> heapAllocatedArrays;
 };
@@ -116,10 +116,10 @@ void someIntrinsicCodegen(MIRCodeGenerator& gen) {
     // Allocate new buffer (with automatic tracking tag)
     mir::MIRValue* newBuffer = mab.allocateBuffer(numElements, "array grow");
 
-    // Allocate struct on stack
+    // Allocate type on stack
     mir::MIRValue* resultAlloca = mab.allocateManagedStruct("result");
 
-    // Populate struct fields
+    // Populate type fields
     mab.populateManagedStruct(resultAlloca, newBuffer, length, capacity);
 
     // Get element pointer
@@ -137,12 +137,12 @@ void someIntrinsicCodegen(MIRCodeGenerator& gen) {
 
 #### Constructor
 
-- `ManagedArrayBuilder(MIRCodeGenerator &gen, const std::string &elementType)` - Construct builder for arrays of given element type
+- `ManagedArrayBuilder(MIRCodeGenerator &gen, const std::string &elementType)` - Contype builder for arrays of given element type
 
 #### Type Accessors
 
-- `getManagedArrayDataType()` - Returns `__ManagedArrayData<T>` struct type
-- `getArrayStructType()` - Returns `array<T>` struct type (with iterIndex)
+- `getManagedArrayDataType()` - Returns `__ManagedArrayData<T>` type type
+- `getArrayStructType()` - Returns `array<T>` type type (with iterIndex)
 - `getElementMIRType()` - Returns MIR type for the element
 - `getElementSize()` - Returns element size in bytes
 

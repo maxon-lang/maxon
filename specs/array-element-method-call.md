@@ -58,7 +58,7 @@ You can call methods directly on array elements using the syntax `arr[i].method(
 ## Basic Usage
 
 ```maxon
-struct Point
+type Point
     var x int
     var y int
     
@@ -99,7 +99,7 @@ arr[i].method1().method2()
 
 <!-- test: basic-method-call -->
 ```maxon
-struct Counter
+type Counter
     var value int
     
     function get() returns int
@@ -120,7 +120,7 @@ end 'main'
 
 <!-- test: method-with-args -->
 ```maxon
-struct Adder
+type Adder
     var base int
     
     function add(x int) returns int
@@ -141,7 +141,7 @@ end 'main'
 
 <!-- test: second-element -->
 ```maxon
-struct Value
+type Value
     var n int
     
     function doubled() returns int
@@ -163,7 +163,7 @@ end 'main'
 
 <!-- test: variable-index -->
 ```maxon
-struct Item
+type Item
     var id int
     
     function getId() returns int
@@ -186,7 +186,7 @@ end 'main'
 
 <!-- test: computed-index -->
 ```maxon
-struct Data
+type Data
     var x int
     
     function getX() returns int

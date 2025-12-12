@@ -77,9 +77,9 @@ enum class MIRTypeKind {
 
 ### Generic Type Support
 
-MIR handles monomorphized generic types through specialized struct definitions. When the frontend instantiates a generic type like `map from string to int`, the MIR code generator:
+MIR handles monomorphized generic types through specialized type definitions. When the frontend instantiates a generic type like `map from string to int`, the MIR code generator:
 
-1. **Creates a unique struct type:** `map<string,int>` with concrete field types
+1. **Creates a unique type type:** `map<string,int>` with concrete field types
 2. **Maintains type bindings:** A map of type parameter → concrete type (e.g., `KeyType → string`)
 3. **Resolves method calls dynamically:** Uses type bindings to dispatch to correct implementations
 
@@ -663,7 +663,7 @@ Offset  Size    Field
 
 **Data Structures:**
 ```cpp
-struct ExternFuncInfo {
+type ExternFuncInfo {
     uint32_t id;                              // Function ID
     std::string name;                         // Function name
     std::string dllName;                      // DLL/SO name
@@ -671,7 +671,7 @@ struct ExternFuncInfo {
     safeffi::TypeTag returnType;              // Return type
 };
 
-struct ShmHeader {
+type ShmHeader {
     uint32_t magic;         // "MXFI"
     uint32_t version;       // 1
     uint32_t requestType;   // Call/Shutdown
@@ -944,9 +944,9 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 
 **Critical Bug Fix: Register Clobbering in Large Struct Operations:**
 - Fixed `genLoad` for large structs (>8 bytes) clobbering allocatable callee-saved registers
-- **Root Cause:** `genLoad` was hardcoding RSI and RDI as scratch registers for struct copy operations, but these registers are callee-saved on Windows x64 and may contain live values assigned by the register allocator
-- **Symptom:** When Mem2Reg promoted stack variables to registers and assigned them to RSI/RDI, subsequent struct loads would overwrite the values, causing crashes or incorrect results in collection types (Set, Map)
-- **Fix:** Changed `genLoad` to use scratch registers R10/R11 instead of RSI/RDI for struct copy source/destination pointers
+- **Root Cause:** `genLoad` was hardcoding RSI and RDI as scratch registers for type copy operations, but these registers are callee-saved on Windows x64 and may contain live values assigned by the register allocator
+- **Symptom:** When Mem2Reg promoted stack variables to registers and assigned them to RSI/RDI, subsequent type loads would overwrite the values, causing crashes or incorrect results in collection types (Set, Map)
+- **Fix:** Changed `genLoad` to use scratch registers R10/R11 instead of RSI/RDI for type copy source/destination pointers
 - Added documentation noting that code generation must only use reserved scratch registers (R10/R11) or caller-saved registers for internal operations
 
 **Location:** [maxon-bin/backend/x86_codegen.cpp:906-917](maxon-bin/backend/x86_codegen.cpp#L906-L917)
@@ -967,7 +967,7 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 ### Winchester 1.3 (2025-01-xx)
 
 **Generic Type Monomorphization:**
-- Added monomorphization for generic struct types
+- Added monomorphization for generic type types
 - New `currentTypeBindings` map in codegen tracks type parameter substitutions
 - Dynamic method resolution resolves calls like `key.hash()` to concrete implementations
 - Support for specializing `map from K to V` with any key/value types

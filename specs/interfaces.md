@@ -14,7 +14,7 @@ Interfaces define contracts that structs can conform to. Key implementation:
 - `interface` keyword parsed in `Parser::parseInterface()` (parser_decl.cpp)
 - Interface AST node `InterfaceDefAST` contains method signatures
 - Associated types declared with `uses`: `interface Foo uses Element`
-- Struct conformance with `is` and type binding with `with`: `struct Bar is Foo with int`
+- Type conformance with `is` and type binding with `with`: `type Bar is Foo with int`
 - **Methods have implicit `self` parameter** - not declared in signatures
 - **Interface methods use `function InterfaceName.methodName(params)` syntax** to explicitly declare which interface a method implements
 - Non-interface methods use simple `function methodName(params)` syntax
@@ -23,7 +23,7 @@ Interfaces define contracts that structs can conform to. Key implementation:
 - Conformance validation in `SemanticAnalyzer::checkInterfaceConformance()`
 - **Partial implementation is an error** - all interface methods must be implemented
 - Methods called with method syntax `instance.method(args)`
-- Inside method bodies, bare identifiers resolve to struct fields (implicit `self.`)
+- Inside method bodies, bare identifiers resolve to type fields (implicit `self.`)
 
 The `Self` type is a placeholder that gets resolved to the concrete type during conformance checking. This enables interfaces to define methods that return or accept the conforming type.
 
@@ -43,21 +43,21 @@ end 'Hashable'
 
 Method signatures in interfaces have an implicit `self` parameter of type `Self` (the conforming type). You don't declare `self` - it's automatic.
 
-### Struct Conformance
+### Type Conformance
 
-Structs declare conformance to interfaces using the `is` keyword:
+Types declare conformance to interfaces using the `is` keyword:
 
 ```maxon
-struct Point is Hashable
+type Point is Hashable
     var x int
     var y int
 end 'Point'
 ```
 
-A struct can conform to multiple interfaces:
+A type can conform to multiple interfaces:
 
 ```maxon
-struct Point is Hashable, Equatable
+type Point is Hashable, Equatable
     var x int
     var y int
 end 'Point'
@@ -65,10 +65,10 @@ end 'Point'
 
 ### Method Implementation
 
-Methods implementing interface requirements are defined **inside the struct body** using `function InterfaceName.methodName(params)` syntax. The interface prefix explicitly declares which interface the method implements. The `self` parameter is implicit:
+Methods implementing interface requirements are defined **inside the type body** using `function InterfaceName.methodName(params)` syntax. The interface prefix explicitly declares which interface the method implements. The `self` parameter is implicit:
 
 ```maxon
-struct Point is Hashable
+type Point is Hashable
     var x int
     var y int
 
@@ -78,7 +78,7 @@ struct Point is Hashable
 end 'Point'
 ```
 
-Inside method bodies, you can access struct fields directly without `self.` prefix:
+Inside method bodies, you can access type fields directly without `self.` prefix:
 - `x` resolves to `self.x`
 - `y` resolves to `self.y`
 
@@ -87,7 +87,7 @@ You can still use `self.field` explicitly if needed, especially when a parameter
 Non-interface methods (methods that don't implement any interface) use simple `function methodName(params)` syntax without a prefix:
 
 ```maxon
-struct Point
+type Point
     var x int
     var y int
 
@@ -117,7 +117,7 @@ interface Cloneable
     function clone() returns Self
 end 'Cloneable'
 
-struct Point is Cloneable
+type Point is Cloneable
     var x int
     var y int
 
@@ -136,7 +136,7 @@ interface Container uses Element
     function get(index int) returns Element
 end 'Container'
 
-struct IntArray is Container with int
+type IntArray is Container with int
     var data array of 10 int
 
     function Container.get(index int) returns int
@@ -149,7 +149,7 @@ See the [Associated Types](associated-types.md) spec for full documentation.
 
 ### Partial Implementation Error
 
-A struct must implement **all** methods from interfaces it conforms to. Partial implementation is an error:
+A type must implement **all** methods from interfaces it conforms to. Partial implementation is an error:
 
 ```maxon
 interface TwoMethods
@@ -157,7 +157,7 @@ interface TwoMethods
     function second() returns int
 end 'TwoMethods'
 
-struct Incomplete is TwoMethods
+type Incomplete is TwoMethods
     function TwoMethods.first() returns int
         return 1
     end 'first'
@@ -179,7 +179,7 @@ The standard library (`stdlib/interfaces.maxon`) defines commonly used interface
   - Uses `Element` associated type
   - `returns Element or nil`
 
-The `Iterator` struct in `stdlib/iter/iterator.maxon` conforms to `Iterable` and is used by `for` loops with `range()`.
+The `Iterator` type in `stdlib/iter/iterator.maxon` conforms to `Iterable` and is used by `for` loops with `range()`.
 
 ### Example
 
@@ -188,7 +188,7 @@ interface Hashable
     function hash() returns int
 end 'Hashable'
 
-struct Point is Hashable
+type Point is Hashable
     var x int
     var y int
 
@@ -218,7 +218,7 @@ interface Hashable
     function hash() returns int
 end 'Hashable'
 
-struct Point is Hashable
+type Point is Hashable
     var x int
     var y int
 
@@ -244,7 +244,7 @@ interface Describable
     function value() returns int
 end 'Describable'
 
-struct Counter is Describable
+type Counter is Describable
     var count int
 
     function Describable.describe() returns int
@@ -272,7 +272,7 @@ interface Calculator
     function add(n int) returns int
 end 'Calculator'
 
-struct Accumulator is Calculator
+type Accumulator is Calculator
     var total int
 
     function Calculator.add(n int) returns int
@@ -300,7 +300,7 @@ interface Equatable
     function equals(other Self) returns int
 end 'Equatable'
 
-struct Point is Hashable, Equatable
+type Point is Hashable, Equatable
     var x int
     var y int
 
@@ -333,7 +333,7 @@ interface Movable
     function move(dx int, dy int) returns Self
 end 'Movable'
 
-struct Point is Movable
+type Point is Movable
     var x int
     var y int
 
@@ -359,7 +359,7 @@ interface Incrementable
     function inc() returns int
 end 'Incrementable'
 
-struct Value is Incrementable
+type Value is Incrementable
     var n int
 
     function Incrementable.inc() returns int
@@ -385,7 +385,7 @@ interface ThreeMethods
     function three() returns int
 end 'ThreeMethods'
 
-struct Incomplete is ThreeMethods
+type Incomplete is ThreeMethods
     var value int
 
     function ThreeMethods.one() returns int
@@ -399,18 +399,18 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 8, column 1
-Partial interface implementation: struct 'Incomplete' is missing 2 method(s):
+Partial interface implementation: type 'Incomplete' is missing 2 method(s):
   - two() returns int
   - three() returns int
 
-  8 | struct Incomplete is ThreeMethods
+  8 | type Incomplete is ThreeMethods
     | ^
 ```
 
 
 <!-- test: non-interface-method -->
 ```maxon
-struct Calculator
+type Calculator
     var value int
 
     function double() returns int
@@ -435,7 +435,7 @@ end 'main'
 <!-- test: transitive-interface-missing-method-error -->
 // Test that generic templates implementing Collection require Iterable.next() since Collection extends Iterable
 ```maxon
-struct IncompleteCollection uses Element is Collection with Element
+type IncompleteCollection uses Element is Collection with Element
     var data Element
 
     function Collection.count() returns int
@@ -458,10 +458,10 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 2, column 1
-Partial interface implementation: struct 'IncompleteCollection' is missing 1 method(s):
+Partial interface implementation: type 'IncompleteCollection' is missing 1 method(s):
   - next() returns Element or nil
 
-  2 | struct IncompleteCollection uses Element is Collection with Element
+  2 | type IncompleteCollection uses Element is Collection with Element
     | ^
 ```
 

@@ -285,7 +285,7 @@ end 'main'`;
 	});
 
 	test('Should provide struct field completions after dot', async function () {
-		const validContent = `struct Point
+		const validContent = `type Point
     var x int
     var y int
 end 'Point'
@@ -295,7 +295,7 @@ function main() returns int
     return p.x
 end 'main'`;
 
-		const incompleteContent = `struct Point
+		const incompleteContent = `type Point
     var x int
     var y int
 end 'Point'
@@ -323,7 +323,7 @@ end 'main'`;
 	});
 
 	test('Struct field completions should have Field kind', async function () {
-		const validContent = `struct Point
+		const validContent = `type Point
     var x int
     var y int
 end 'Point'
@@ -333,7 +333,7 @@ function main() returns int
     return p.x
 end 'main'`;
 
-		const incompleteContent = `struct Point
+		const incompleteContent = `type Point
     var x int
     var y int
 end 'Point'

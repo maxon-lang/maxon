@@ -13,6 +13,8 @@ StringProtocol: Extends BidirectionalCollection. This is the specific protocol t
 Why do this? By making String a Collection, you get hundreds of algorithms for free: .map, .filter, .reduce, .dropFirst, .split. The Swift team didn't have to write these specifically for Strings; they just inherited them from the Collection protocol logic.
 
 ## Priorities
+- hex literals
+- coelecing operator 'or' (ie map.get("somekey") or "default value")
 - investigate maxon-bin/tests
 - debugging (speed up the dev process)
 - memory safety (generational references)
@@ -41,16 +43,16 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - array syntax: var x = array of 10 int
 - define structs by usage 
 	var p = Point { x: 3, y: 4 }
-	struct has x and y
+	type has x and y
 	var p2 = Point { x: 3, y: 4, z: 0 }
-	struct now has x y and z
+	type now has x y and z
 
- private struct Entry {
+ private type Entry {
         let key: Key
         var value: Value
     }	
 - have a command line options stdlib that supplies all the common CLI features (flags, parameters, validation)
-  and you just get a struct back with everything filled in
+  and you just get a type back with everything filled in
 - precompile stdlib and link it
 
 
@@ -129,7 +131,7 @@ Review register allocation liveness analysis at [x86_codegen.cpp:390-500[](c:\Us
 
 Complete float parameter spilling at x86_codegen.cpp:605: There's a TODO comment indicating float parameters aren't properly spilled to stack when callee-saved XMM registers are exhausted.
 
-Verify large struct return handling at x86_codegen.cpp:380-390: The hidden return pointer logic shifts all parameters right by one register—verify this matches Windows x64 ABI exactly and test with functions that have 4+ parameters.
+Verify large type return handling at x86_codegen.cpp:380-390: The hidden return pointer logic shifts all parameters right by one register—verify this matches Windows x64 ABI exactly and test with functions that have 4+ parameters.
 
 Audit GEP instruction at [x86_codegen.cpp[ genGEP function](c:\Users\Eric\Dev\maxon\maxon-bin\backend\x86_codegen.cpp): Complex index calculation with multiple code paths for arrays vs structs—compare against LLVM's ](http://_vscodecontentref_/1)X86ISelLowering.cpp for GetElementPtr lowering.
 

@@ -110,8 +110,8 @@ Configure formatting behavior in your VSCode settings:
 
 ### What the formatter does:
 - Normalizes indentation based on block structure (function, if, while, for, struct)
-- Indents struct field declarations inside `struct...end` blocks
-- Indents struct literal fields inside `{...}` braces
+- Indents type field declarations inside `struct...end` blocks
+- Indents type literal fields inside `{...}` braces
 - Removes trailing whitespace
 - Collapses multiple consecutive blank lines into one
 - Ensures proper indentation of `end` statements and closing `}`

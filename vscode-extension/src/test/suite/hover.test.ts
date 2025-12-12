@@ -190,7 +190,7 @@ suite('Hover Test Suite', () => {
 
 	test('Hover should show struct definition', async function () {
 		const content = [
-			"struct Point",
+			"type Point",
 			"    var x int",
 			"    var y int",
 			"end 'Point'",
@@ -218,13 +218,13 @@ suite('Hover Test Suite', () => {
 		).join('\n');
 
 		// Note: Hovering over type name in var declaration may show identifier info
-		// rather than full struct definition - this is acceptable
+		// rather than full type definition - this is acceptable
 		assert.ok(hoverText.includes('Point'), 'Hover should show Point name');
 
-		// If it shows struct definition, check fields (optional)
-		if (hoverText.includes('struct')) {
-			assert.ok(hoverText.includes('x'), 'Struct definition should show field x');
-			assert.ok(hoverText.includes('y'), 'Struct definition should show field y');
+		// If it shows type definition, check fields (optional)
+		if (hoverText.includes('type') || hoverText.includes('struct')) {
+			assert.ok(hoverText.includes('x'), 'Type definition should show field x');
+			assert.ok(hoverText.includes('y'), 'Type definition should show field y');
 		}
 	});
 
@@ -319,17 +319,17 @@ suite('Hover Test Suite', () => {
 		assert.ok(hoverText.includes('numbers'), 'Hover should mention variable name');
 	});
 
-	test('Hover on struct keyword should be recognized', async function () {
+	test('Hover on type keyword should be recognized', async function () {
 		const content = [
-			"struct MyStruct",
+			"type MyStruct",
 			"    var value int",
 			"end 'MyStruct'"
 		].join('\n');
 
 		testDocument = await createTestFile('test_hover_struct_keyword.maxon', content);
 
-		// Hover over 'struct' keyword
-		const position = new vscode.Position(0, 3);
+		// Hover over 'type' keyword
+		const position = new vscode.Position(0, 2);
 		const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
 			'vscode.executeHoverProvider',
 			testDocument.uri,
@@ -342,6 +342,6 @@ suite('Hover Test Suite', () => {
 			typeof c === 'string' ? c : c.value
 		).join('\n');
 
-		assert.ok(hoverText.includes('struct'), 'Hover should mention struct keyword');
+		assert.ok(hoverText.includes('type'), 'Hover should mention type keyword');
 	});
 });

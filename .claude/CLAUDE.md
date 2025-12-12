@@ -119,6 +119,15 @@ See `docs/COMPILER_DEBUGGING.md` for detailed workflow.
 var name = value            // mutable variable
 let name = value            // immutable variable
 
+// Type Declarations (composite types)
+type Name
+    var field1 int          // mutable field
+    let field2 string       // immutable field
+    var field3 int = 0      // field with default value
+end 'Name'
+
+var instance = Name{field1: 1, field2: "hello"}  // instantiation
+
 // Functions
 // returnType can be 'nothing' for no return value
 function name(p1 type, p2 type) returns returnType

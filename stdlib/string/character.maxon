@@ -15,112 +15,113 @@
 // - '🎉' = 4 bytes (Emoji)
 // - '👨‍👩‍👧‍👦' = 25 bytes (Family emoji with ZWJ sequences)
 
-// character struct - represents an Extended Grapheme Cluster
+// character type - represents an Extended Grapheme Cluster
 // Uses the same internal representation as string (_ManagedString)
-export struct character is Equatable, Hashable, ExpressibleByCharLiteral
-	var _managed _ManagedString  // Compiler-managed storage (same layout as string)
+export type character is Equatable, Hashable, ExpressibleByCharLiteral
+var _managed _ManagedString  // Compiler-managed storage (same layout as string)
 
-	// ============================================
-	// ExpressibleByCharLiteral conformance
-	// ============================================
+// ============================================
+// ExpressibleByCharLiteral conformance
+// ============================================
 
-	// Initialize character from compiler-constructed _ManagedString
-	function ExpressibleByCharLiteral.init(managed _ManagedString) returns character
-		return character{_managed: managed}
-	end 'init'
+// Initialize character from compiler-constructed _ManagedString
+function ExpressibleByCharLiteral.init(managed _ManagedString) returns character
+	return character{_managed: managed}
+end 'init'
 
-	// ============================================
-	// Basic properties
-	// ============================================
+// ============================================
+// Basic properties
+// ============================================
 
-	/// Check if character is empty (should never be true for valid character)
-	export function isEmpty() returns bool
-		return __string_len(_managed) == 0
-	end 'isEmpty'
+/// Check if character is empty (should never be true for valid character)
+export function isEmpty() returns bool
+	return __string_len(_managed) == 0
+end 'isEmpty'
 
-	// ============================================
-	// Conversion
-	// ============================================
+// ============================================
+// Conversion
+// ============================================
 
-	/// Convert character to string
-	export function toString() returns string
-		// Create a new string from the character's data
-		return string{_managed: _managed, _iterPos: 0}
-	end 'toString'
+/// Convert character to string
+export function toString() returns string
+	// Create a new string from the character's data
+	return string{_managed: _managed, _iterPos: 0}
+end 'toString'
 
-	// ============================================
-	// Equatable conformance
-	// ============================================
+// ============================================
+// Equatable conformance
+// ============================================
 
-	function Equatable.equals(other character) returns bool
-		return equalsManagedString(_managed, other._managed)
-	end 'equals'
+function Equatable.equals(other character) returns bool
+	return equalsManagedString(_managed, other._managed)
+end 'equals'
 
-	// ============================================
-	// Hashable conformance
-	// ============================================
+// ============================================
+// Hashable conformance
+// ============================================
 
-	function Hashable.hash() returns int
-		return hashManagedString(_managed)
-	end 'hash'
+function Hashable.hash() returns int
+	return hashManagedString(_managed)
+end 'hash'
 
-	// ============================================
-	// View accessors
-	// ============================================
+// ============================================
+// View accessors
+// ============================================
 
-	/// Create a CodepointView for iterating over Unicode codepoints in this grapheme
-	export function codepoints() returns CodepointView
-		return CodepointView{_managed: _managed, _pos: 0}
-	end 'codepoints'
+/// Create a CodepointView for iterating over Unicode codepoints in this grapheme
+export function codepoints() returns CodepointView
+	return CodepointView{_managed: _managed, _pos: 0}
+end 'codepoints'
 
-	/// Create a ByteView for iterating over raw UTF-8 bytes
-	export function bytes() returns ByteView
-		return ByteView{_managed: _managed, _pos: 0}
-	end 'bytes'
+/// Create a ByteView for iterating over raw UTF-8 bytes
+export function bytes() returns ByteView
+	return ByteView{_managed: _managed, _pos: 0}
+end 'bytes'
 
-	/// Create a UTF16View for iterating over UTF-16 code units
-	export function utf16() returns UTF16View
-		return UTF16View{_managed: _managed, _bytePos: 0, _highSurrogate: 0}
-	end 'utf16'
+/// Create a UTF16View for iterating over UTF-16 code units
+export function utf16() returns UTF16View
+	return UTF16View{_managed: _managed, _bytePos: 0, _highSurrogate: 0}
+end 'utf16'
 
-	// ============================================
-	// Comparison (for ordering)
-	// ============================================
+// ============================================
+// Comparison (for ordering)
+// ============================================
 
-	/// Compare characters lexicographically by their UTF-8 bytes
-	/// Returns < 0 if self < other, 0 if equal, > 0 if self > other
-	export function compareTo(other character) returns int
-		var len1 = __string_len(_managed)
-		var len2 = __string_len(other._managed)
-		var minLen = len1
-		if len2 < minLen 'min'
-			minLen = len2
-		end 'min'
+/// Compare characters lexicographically by their UTF-8 bytes
+/// Returns < 0 if self < other, 0 if equal, > 0 if self > other
+export function compareTo(other character) returns int
+	var len1 = __string_len(_managed)
+	var len2 = __string_len(other._managed)
+	var minLen = len1
+	if len2 < minLen 'min'
+		minLen = len2
+	end 'min'
 
-		var i = 0
-		while i < minLen 'compare_loop'
-			var b1 = __string_byte_at(_managed, i) as int
-			var b2 = __string_byte_at(other._managed, i) as int
-			if b1 < b2 'less'
-				return 0 - 1
-			end 'less'
-			if b1 > b2 'greater'
-				return 1
-			end 'greater'
-			i = i + 1
-		end 'compare_loop'
-
-		// Equal prefix - shorter is less
-		if len1 < len2 'len_less'
+	var i = 0
+	while i < minLen 'compare_loop'
+		var b1 = __string_byte_at(_managed, i) as int
+		var b2 = __string_byte_at(other._managed, i) as int
+		if b1 < b2 'less'
 			return 0 - 1
-		end 'len_less'
-		if len1 > len2 'len_greater'
+		end 'less'
+		if b1 > b2 'greater'
 			return 1
-		end 'len_greater'
-		return 0
-	end 'compareTo'
+		end 'greater'
+		i = i + 1
+	end 'compare_loop'
+
+	// Equal prefix - shorter is less
+	if len1 < len2 'len_less'
+		return 0 - 1
+	end 'len_less'
+	if len1 > len2 'len_greater'
+		return 1
+	end 'len_greater'
+	return 0
+end 'compareTo'
 end 'character'
 
 // ============================================
 // Character Views
 // ============================================
+

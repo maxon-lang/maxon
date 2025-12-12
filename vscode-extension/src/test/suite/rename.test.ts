@@ -147,7 +147,7 @@ suite('Rename Test Suite', () => {
 
 	test('Rename struct block identifiers', async function () {
 		const content = [
-			"struct Point",
+			"type Point",
 			"    var x int",
 			"    var y int",
 			"end 'Point'"
@@ -307,7 +307,7 @@ suite('Rename Test Suite', () => {
 
 	test('Rename struct name should correctly update block identifier', async function () {
 		const content = [
-			"struct Point",
+			"type Point",
 			"    var x int",
 			"    var y int",
 			"end 'Point'",
@@ -320,8 +320,8 @@ suite('Rename Test Suite', () => {
 
 		testDocument = await createTestFile('test_rename_struct_block_id.maxon', content);
 
-		// Rename struct name on line 0, col 7 (on "Point")
-		const position = new vscode.Position(0, 7);
+		// Rename type name on line 0, col 5 (on "Point")
+		const position = new vscode.Position(0, 5);
 
 		const edits = await vscode.commands.executeCommand<vscode.WorkspaceEdit>(
 			'vscode.executeDocumentRenameProvider',
@@ -354,7 +354,7 @@ suite('Rename Test Suite', () => {
 
 	test('Linked editing for struct name with block identifier', async function () {
 		const content = [
-			"struct Point",
+			"type Point",
 			"    var x int",
 			"    var y int",
 			"end 'Point'",
@@ -367,18 +367,18 @@ suite('Rename Test Suite', () => {
 
 		testDocument = await createTestFile('test_linked_editing_struct.maxon', content);
 
-		// Position on struct name (line 0, col 7)
-		const position = new vscode.Position(0, 7);
+		// Position on type name (line 0, col 5)
+		const position = new vscode.Position(0, 5);
 
 		const editor = await vscode.window.showTextDocument(testDocument);
 		editor.selection = new vscode.Selection(position, position);
 
-		// Verify position is valid for editing struct name
+		// Verify position is valid for editing type name
 		const text = testDocument.getText(new vscode.Range(
-			new vscode.Position(0, 7),
-			new vscode.Position(0, 12)
+			new vscode.Position(0, 5),
+			new vscode.Position(0, 10)
 		));
-		assert.strictEqual(text, 'Point', 'Position should be on struct name');
+		assert.strictEqual(text, 'Point', 'Position should be on type name');
 
 		// Verify the block identifier exists
 		const blockIdText = testDocument.getText(new vscode.Range(

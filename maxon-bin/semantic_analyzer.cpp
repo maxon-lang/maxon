@@ -358,7 +358,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 		logTrace("Registering struct: " + structKey);
 
 		if (structs.find(structKey) != structs.end()) {
-			addError("Struct '" + structKey + "' is already defined",
+			addError("Type '" + structKey + "' is already defined",
 					 structDef->line, structDef->column);
 		} else {
 			// Convert StructField to StructFieldInfo
@@ -367,7 +367,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 			for (const auto &field : structDef->fields) {
 				// Check for duplicate field names
 				if (fieldNames.find(field.name) != fieldNames.end()) {
-					addError("Duplicate field '" + field.name + "' in struct '" + structDef->name + "'",
+					addError("Duplicate field '" + field.name + "' in type '" + structDef->name + "'",
 							 field.line, field.column);
 				} else {
 					fieldNames.insert(field.name);
@@ -497,16 +497,16 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 				}
 				if (!conformsToInterface) {
 					addError("Method '" + method->name + "' declares implementation of interface '" +
-								 method->implementsInterface + "' but struct '" + structDef->name +
+								 method->implementsInterface + "' but type '" + structDef->name +
 								 "' does not conform to this interface\n  Add '" + method->implementsInterface +
-								 "' to the struct's 'is' clause",
+								 "' to the type's 'is' clause",
 							 method->line, method->column);
 				}
 			}
 
 			if (functions.find(methodKey) != functions.end()) {
 				addError("Method '" + methodKey + "' is already defined" +
-							 std::string("\n  Note: Each method name must be unique within its struct"),
+							 std::string("\n  Note: Each method name must be unique within its type"),
 						 method->line, method->column);
 			} else {
 				functions.emplace(methodKey, FunctionInfo(methodKey, method->returnType, method->parameters, method->implementsInterface, method->line, method->column));
@@ -1328,7 +1328,7 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 		// Check that all associated types are defined (including from base interfaces)
 		for (const auto &assocType : allAssociatedTypes) {
 			if (!typeAssignments || typeAssignments->find(assocType) == typeAssignments->end()) {
-				addError("Struct '" + structName + "' does not define required associated type '" + assocType +
+				addError("Type '" + structName + "' does not define required associated type '" + assocType +
 							 "' from interface '" + interfaceName + "'",
 						 line, column);
 			}
@@ -1459,7 +1459,7 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 				missingList += "  - ";
 			missingList += missingMethods[i];
 		}
-		addError("Partial interface implementation: struct '" + structName + "' is missing " +
+		addError("Partial interface implementation: type '" + structName + "' is missing " +
 					 std::to_string(missingMethods.size()) + " method(s):\n" + missingList,
 				 line, column);
 	}

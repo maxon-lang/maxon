@@ -70,8 +70,8 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 
 		try {
 			// Check for struct, enum, interface, export, extern, or function keyword
-			if (checkKeyword("struct")) {
-				logTrace("Parsing struct definition");
+			if (checkKeyword("type")) {
+				logTrace("Parsing type definition");
 				structs.push_back(parseStruct());
 			} else if (checkKeyword("enum")) {
 				logTrace("Parsing enum definition");
@@ -87,10 +87,10 @@ std::unique_ptr<ProgramAST> Parser::parse() {
 				// We need to look ahead to determine which parser to call
 				size_t savedPos = position;
 				advance(); // temporarily consume 'export' to peek
-				if (checkKeyword("struct")) {
+				if (checkKeyword("type")) {
 					position = savedPos; // restore position
 					cache_.set_position(savedPos);
-					logTrace("Parsing exported struct definition");
+					logTrace("Parsing exported type definition");
 					structs.push_back(parseStruct());
 				} else if (checkKeyword("enum")) {
 					position = savedPos; // restore position

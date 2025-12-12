@@ -7,7 +7,7 @@ category: control-flow
 
 ## Developer Notes
 
-While loops are the primary iteration construct in Maxon.
+While loops are the primary iteration contype in Maxon.
 
 **Implementation Details:**
 - Keyword: `while` (lexer.cpp, TokenType::While)

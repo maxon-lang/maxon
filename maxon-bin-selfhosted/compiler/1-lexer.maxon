@@ -2,177 +2,181 @@
 // Minimal version - just enough to compile basic.maxon
 
 // Keywords map - only keywords needed for basic.maxon
-let keywords = map from string to TokenType {
-    "function": TokenType.kwFunction,
-    "end": TokenType.kwEnd,
-    "return": TokenType.kwReturn,
-    "let": TokenType.kwLet,
-    "int": TokenType.kwInt,
-    "void": TokenType.kwVoid
-}
+let keywords = [
+"function": TokenType.kwFunction,
+"end": TokenType.kwEnd,
+"return": TokenType.kwReturn,
+"let": TokenType.kwLet,
+"int": TokenType.kwInt,
+"void": TokenType.kwVoid
+]
 
-export struct Lexer
-    var source string
-    var pos int
-    var line int
-    var column int
-    var sourceLength int
+export type Lexer
+var source string
+var pos int
+var line int
+var column int
+var sourceLength int
 
-    export function create(source string) Lexer
-        var len = source.bytes().count()
-        return Lexer{source: source, pos: 0, line: 1, column: 1, sourceLength: len}
-    end 'create'
+export function create(source string) returns Lexer
+	var len = source.bytes().count()
+	return Lexer{source: source, pos: 0, line: 1, column: 1, sourceLength: len}
+end 'create'
 
-    export function isAtEnd() returns bool
-        return pos >= sourceLength
-    end 'isAtEnd'
+export function isAtEnd() returns bool
+	return pos >= sourceLength
+end 'isAtEnd'
 
-    export function peek() byte
-        if isAtEnd() 'eof'
-            return 0b
-        end 'eof'
-        return source.byteAt(pos)
-    end 'peek'
+export function peek() returns byte
+	if isAtEnd() 'eof'
+		return 0b
+	end 'eof'
+	return source.byteAt(pos)
+end 'peek'
 
-    export function advance() byte
-        var c = peek()
-        pos = pos + 1
-        if c == 10b 'newline'
-            line = line + 1
-            column = 1
-        else 'newline'
-            column = column + 1
-        end 'newline'
-        return c
-    end 'advance'
+export function advance() returns byte
+	var c = peek()
+	pos = pos + 1
+	if c == 10b 'newline'
+		line = line + 1
+		column = 1
+		else 'newline'
+			column = column + 1
+		end 'newline'
+		return c
+	end 'advance'
 
-    export returns nothing
-        while not isAtEnd() 'loop'
-            var c = peek()
+	export function skipWhitespace() returns nothing
+		while not isAtEnd() 'loop'
+			var c = peek()
 
-            if c == 32b or c == 9b 'ws'
-                advance()
-            else 'ws'
-                return
-            end 'ws'
-        end 'loop'
-    end 'skipWhitespace'
+			if c == 32b or c == 9b 'ws'
+				advance()
+				else 'ws'
+					return
+				end 'ws'
+			end 'loop'
+		end 'skipWhitespace'
 
-    export function isDigit(c byte) returns bool
-        return c >= 48b and c <= 57b
-    end 'isDigit'
+		export function isDigit(c byte) returns bool
+			return c >= 48b and c <= 57b
+		end 'isDigit'
 
-    export function isAlpha(c byte) returns bool
-        return (c >= 65b and c <= 90b) or (c >= 97b and c <= 122b) or c == 95b
-    end 'isAlpha'
+		export function isAlpha(c byte) returns bool
+			return (c >= 65b and c <= 90b) or (c >= 97b and c <= 122b) or c == 95b
+		end 'isAlpha'
 
-    export function isAlphaNumeric(c byte) returns bool
-        return Lexer.isDigit(c) or Lexer.isAlpha(c)
-    end 'isAlphaNumeric'
+		export function isAlphaNumeric(c byte) returns bool
+			return isDigit(c) or isAlpha(c)
+		end 'isAlphaNumeric'
 
-    export function scanIdentifier() Token
-        var startPos = pos
-        var startLine = line
-        var startColumn = column
+		export function scanIdentifier() returns Token
+			var startPos = pos
+			var startLine = line
+			var startColumn = column
 
-        while not isAtEnd() and Lexer.isAlphaNumeric(peek()) 'scan'
-            advance()
-        end 'scan'
+			while not isAtEnd() and isAlphaNumeric(peek()) 'scan'
+				advance()
+			end 'scan'
 
-        var lexeme = source.slice(startPos, pos).toString()
-        var kind = keywords.get(lexeme, TokenType.identifier)
-        return makeToken(kind, lexeme, startLine, startColumn)
-    end 'scanIdentifier'
+			var lexeme = source.slice(startPos, pos).toString()
+			var kind = TokenType.identifier
+			if keywords.contains(lexeme) 'found'
+				kind = keywords.get(lexeme)
+			end 'found'
+			return makeToken(kind, lexeme, startLine, startColumn)
+		end 'scanIdentifier'
 
-    export function scanNumber() Token
-        var startPos = pos
-        var startLine = line
-        var startColumn = column
+		export function scanNumber() returns Token
+			var startPos = pos
+			var startLine = line
+			var startColumn = column
 
-        while Lexer.isDigit(peek()) 'intPart'
-            advance()
-        end 'intPart'
+			while isDigit(peek()) 'intPart'
+				advance()
+			end 'intPart'
 
-        var lexeme = source.slice(startPos, pos).toString()
-        return makeToken(TokenType.intLiteral, lexeme, startLine, startColumn)
-    end 'scanNumber'
+			var lexeme = source.slice(startPos, pos).toString()
+			return makeToken(TokenType.intLiteral, lexeme, startLine, startColumn)
+		end 'scanNumber'
 
-    export function scanBlockLabel() Token
-        var startPos = pos
-        var startLine = line
-        var startColumn = column
+		export function scanBlockLabel() returns Token
+			var startPos = pos
+			var startLine = line
+			var startColumn = column
 
-        advance()  // consume opening '\''
+			advance()  // consume opening '\''
 
-        while not isAtEnd() and peek() != 39b 'content'
-            advance()
-        end 'content'
+			while not isAtEnd() and peek() != 39b 'content'
+				advance()
+			end 'content'
 
-        if not isAtEnd() 'closeQuote'
-            advance()
-        end 'closeQuote'
+			if not isAtEnd() 'closeQuote'
+				advance()
+			end 'closeQuote'
 
-        var lexeme = source.slice(startPos, pos).toString()
-        return makeToken(TokenType.blockLabel, lexeme, startLine, startColumn)
-    end 'scanBlockLabel'
+			var lexeme = source.slice(startPos, pos).toString()
+			return makeToken(TokenType.blockLabel, lexeme, startLine, startColumn)
+		end 'scanBlockLabel'
 
-    export function nextToken() Token
-        skipWhitespace()
+		export function nextToken() returns Token
+			skipWhitespace()
 
-        if isAtEnd() 'eof'
-            return makeToken(TokenType.eof, "", line, column)
-        end 'eof'
+			if isAtEnd() 'eof'
+				return makeToken(TokenType.eof, "", line, column)
+			end 'eof'
 
-        var startLine = line
-        var startColumn = column
-        var c = advance()
+			var startLine = line
+			var startColumn = column
+			var c = advance()
 
-        if Lexer.isAlpha(c) 'alpha'
-            pos = pos - 1
-            column = column - 1
-            return scanIdentifier()
-        end 'alpha'
+			if isAlpha(c) 'alpha'
+				pos = pos - 1
+				column = column - 1
+				return scanIdentifier()
+			end 'alpha'
 
-        if Lexer.isDigit(c) 'digit'
-            pos = pos - 1
-            column = column - 1
-            return scanNumber()
-        end 'digit'
+			if isDigit(c) 'digit'
+				pos = pos - 1
+				column = column - 1
+				return scanNumber()
+			end 'digit'
 
-        if c == 39b 'quote'
-            pos = pos - 1
-            column = column - 1
-            return scanBlockLabel()
-        end 'quote'
+			if c == 39b 'quote'
+				pos = pos - 1
+				column = column - 1
+				return scanBlockLabel()
+			end 'quote'
 
-        if c == 40b 'lparen'
-            return makeToken(TokenType.lparen, "(", startLine, startColumn)
-        end 'lparen'
-        if c == 41b 'rparen'
-            return makeToken(TokenType.rparen, ")", startLine, startColumn)
-        end 'rparen'
-        if c == 61b 'equals'
-            return makeToken(TokenType.equals, "=", startLine, startColumn)
-        end 'equals'
-        if c == 10b 'newline'
-            return makeToken(TokenType.newline, "\\n", startLine, startColumn)
-        end 'newline'
+			if c == 40b 'lparen'
+				return makeToken(TokenType.lparen, "(", startLine, startColumn)
+			end 'lparen'
+			if c == 41b 'rparen'
+				return makeToken(TokenType.rparen, ")", startLine, startColumn)
+			end 'rparen'
+			if c == 61b 'equals'
+				return makeToken(TokenType.equals, "=", startLine, startColumn)
+			end 'equals'
+			if c == 10b 'newline'
+				return makeToken(TokenType.newline, "\\n", startLine, startColumn)
+			end 'newline'
 
-        return makeToken(TokenType.error, "?", startLine, startColumn)
-    end 'nextToken'
+			return makeToken(TokenType.error, "?", startLine, startColumn)
+		end 'nextToken'
 
-    export function tokenize() array of Token
-        var tokens = array of Token
+		export function tokenize() returns array of Token
+			var tokens = array of Token
 
-        while true 'loop'
-            var tok = nextToken()
-            tokens.append(tok)
+			while true 'loop'
+				var tok = nextToken()
+				tokens.append(tok)
 
-            if tok.kind == TokenType.eof 'done'
-                break 'loop'
-            end 'done'
-        end 'loop'
+				if tok.kind == TokenType.eof 'done'
+					break 'loop'
+				end 'done'
+			end 'loop'
 
-        return tokens
-    end 'tokenize'
-end 'Lexer'
+			return tokens
+		end 'tokenize'
+	end 'Lexer'
+

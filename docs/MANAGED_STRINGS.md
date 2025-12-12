@@ -128,7 +128,7 @@ Located in `maxon-runtime/runtime.mir`:
 The compiler tracks allocations in `scopeStack` for automatic cleanup:
 
 ```cpp
-struct ScopeInfo {
+type ScopeInfo {
     // Heap strings that need release at scope exit
     std::vector<std::pair<std::string, mir::MIRValue*>> heapAllocatedStrings;
 
@@ -168,10 +168,10 @@ void someIntrinsicCodegen(MIRCodeGenerator& gen) {
     // Allocate new buffer (with automatic tracking tag)
     mir::MIRValue* newBuffer = msb.allocateBuffer(capacityVal, "string concat");
 
-    // Allocate struct on stack
+    // Allocate type on stack
     mir::MIRValue* resultAlloca = msb.allocateManagedStruct("result");
 
-    // Populate struct fields
+    // Populate type fields
     msb.populateManagedStruct(resultAlloca, newBuffer, length, capacity);
 
     // Track for cleanup
@@ -189,9 +189,9 @@ void someIntrinsicCodegen(MIRCodeGenerator& gen) {
 
 #### Type Accessors
 
-- `getManagedStringType()` - Returns `__ManagedStringData` struct type
-- `getSubstringType()` - Returns `substring` struct type
-- `getCstringType()` - Returns `cstring` struct type
+- `getManagedStringType()` - Returns `__ManagedStringData` type type
+- `getSubstringType()` - Returns `substring` type type
+- `getCstringType()` - Returns `cstring` type type
 
 #### Field Extraction
 

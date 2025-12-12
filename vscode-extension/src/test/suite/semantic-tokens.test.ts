@@ -102,7 +102,7 @@ suite('Semantic Tokens Test Suite', () => {
 
 	test('Semantic tokens should have correct modifiers for nesting levels', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    if true 'level1'",
 			"        if true 'level2'",
 			"            if true 'level3'",
@@ -143,17 +143,21 @@ suite('Semantic Tokens Test Suite', () => {
 
 		// We should have tokens for: test (function name), 'test' (closing), 'level1'(x2), 'level2'(x2), 'level3'(x2)
 		// Note: Function names are implied block identifiers
-		assert.strictEqual(tokens.length, 8, 'Should have 8 block identifier tokens');
+		// The LSP may also return tokens for return types, so check >= 8
+		assert.ok(tokens.length >= 8, 'Should have at least 8 block identifier tokens');
+
+		// Filter to only label tokens (type 22) for the modifier check
+		const labelTokens = tokens.filter(t => t.type === 22);
 
 		// Check that modifiers are different for different nesting levels
 		// Modifiers are bit masks, so different levels should have different values
-		const modifierValues = new Set(tokens.map(t => t.modifiers));
+		const modifierValues = new Set(labelTokens.map(t => t.modifiers));
 		assert.ok(modifierValues.size >= 3, 'Should have at least 3 different modifier values for different nesting levels');
 	});
 
 	test('Function-level block identifiers should be at level 0', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    return 0",
 			"end 'test'"
 		].join('\n');
@@ -166,12 +170,21 @@ suite('Semantic Tokens Test Suite', () => {
 		);
 
 		assert.ok(semanticTokens, 'Should receive semantic tokens');
-		// Functions have 2 tokens: function name + closing 'name' (2 tokens × 5 values = 10)
-		assert.strictEqual(semanticTokens.data.length, 10, 'Should have 2 tokens (function name and closing "test") with 5 values each');
+		// Functions have at least 2 label tokens: function name + closing 'name'
+		// The LSP may also return tokens for return types
+		assert.ok(semanticTokens.data.length >= 10, 'Should have at least 2 tokens (function name and closing "test") with 5 values each');
 
-		// Both tokens should have level 0 modifier (bit 10 set)
-		const modifier1 = semanticTokens.data[4]; // First token (function name)
-		const modifier2 = semanticTokens.data[9]; // Second token (closing)
+		// Find the two label tokens (type 22) for the function block identifier
+		const tokens: Array<{ type: number; modifiers: number; }> = [];
+		for (let i = 0; i < semanticTokens.data.length; i += 5) {
+			tokens.push({ type: semanticTokens.data[i + 3], modifiers: semanticTokens.data[i + 4] });
+		}
+		const labelTokens = tokens.filter(t => t.type === 22);
+		assert.ok(labelTokens.length >= 2, 'Should have at least 2 label tokens');
+
+		// Both label tokens should have level 0 modifier (bit 10 set)
+		const modifier1 = labelTokens[0].modifiers;
+		const modifier2 = labelTokens[1].modifiers;
 		const level0Bit = 1 << 10; // level0 is modifier index 10
 		assert.ok(modifier1 & level0Bit, 'Function name should have level 0 modifier');
 		assert.ok(modifier2 & level0Bit, 'Closing identifier should have level 0 modifier');
@@ -180,7 +193,7 @@ suite('Semantic Tokens Test Suite', () => {
 
 	test('Nested loops should have different colors', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    while true 'outer'",
 			"        while true 'inner'",
 			"        end 'inner'",
@@ -220,7 +233,7 @@ suite('Semantic Tokens Test Suite', () => {
 
 	test('Opening and closing block identifiers should have matching colors', async function () {
 		const content = [
-			"function test() int",
+			"function test() returns int",
 			"    while true 'loop'",
 			"        if true 'condition'",
 			"        end 'condition'",
@@ -238,8 +251,8 @@ suite('Semantic Tokens Test Suite', () => {
 
 		assert.ok(semanticTokens, 'Should receive semantic tokens');
 
-		// Parse tokens
-		const tokens: Array<{ text: string; modifier: number; }> = [];
+		// Parse tokens with type information
+		const tokens: Array<{ text: string; modifier: number; type: number; }> = [];
 		let currentLine = 0;
 		let currentChar = 0;
 
@@ -247,6 +260,7 @@ suite('Semantic Tokens Test Suite', () => {
 			const deltaLine = semanticTokens.data[i];
 			const deltaChar = semanticTokens.data[i + 1];
 			const length = semanticTokens.data[i + 2];
+			const type = semanticTokens.data[i + 3];
 			const modifier = semanticTokens.data[i + 4];
 
 			currentLine += deltaLine;
@@ -256,13 +270,16 @@ suite('Semantic Tokens Test Suite', () => {
 			const lineContent = content.split('\n')[currentLine];
 			const text = lineContent.substring(currentChar, currentChar + length).replace(/'/g, '');
 
-			tokens.push({ text, modifier });
+			tokens.push({ text, modifier, type });
 		}
 
-		// Find matching pairs
-		const testTokens = tokens.filter(t => t.text === 'test');
-		const loopTokens = tokens.filter(t => t.text === 'loop');
-		const conditionTokens = tokens.filter(t => t.text === 'condition');
+		// Filter to only label tokens (type 22)
+		const labelTokens = tokens.filter(t => t.type === 22);
+
+		// Find matching pairs among label tokens
+		const testTokens = labelTokens.filter(t => t.text === 'test');
+		const loopTokens = labelTokens.filter(t => t.text === 'loop');
+		const conditionTokens = labelTokens.filter(t => t.text === 'condition');
 
 		assert.strictEqual(testTokens.length, 2, 'Should have 2 "test" tokens');
 		assert.strictEqual(loopTokens.length, 2, 'Should have 2 "loop" tokens');

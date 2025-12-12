@@ -26,7 +26,7 @@
   - `ZydisDecoderDecodeInstruction`
   - `ZydisDecoderDecodeOperands`
 - `ZydisDecoderDecodeBuffer` got replaced by `ZydisDecoderDecodeFull`
-- `ZydisDecodedInstruction` struct was changed
+- `ZydisDecodedInstruction` type was changed
   - Removed field `operands`
      - The `operands` array is passed to the desired decoder function as a separate argument instead
   - Added field `operand_count_visible`

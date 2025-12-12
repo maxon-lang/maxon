@@ -1,13 +1,13 @@
 ---
-feature: array-struct-element-member-access
+feature: array-type-element-member-access
 status: stable
-keywords: array, struct, member, access, indexing, field
+keywords: array, type, member, access, indexing, field
 category: expressions
 ---
 
 ## Developer Notes
 
-This feature enables accessing struct fields on array elements: `arr[i].field`.
+This feature enables accessing type fields on array elements: `arr[i].field`.
 
 **Problem:**
 When arrays are declared with `var arr = array of N StructType`, the `variableTypes` map stores the type as `array<StructType>` (via `makeArrayStructType`). However, the codegen for member access on array elements was only checking for `_ManagedArray<T>` format (via `isArrayType`), not the `array<T>` format.
@@ -40,14 +40,14 @@ if (maxon::TypeConversion::isArrayType(arrayType)) {
 
 ## Documentation
 
-# Struct Field Access on Array Elements
+# Type Field Access on Array Elements
 
-You can access struct fields directly on array elements using `arr[i].field` syntax.
+You can access type fields directly on array elements using `arr[i].field` syntax.
 
 ## Basic Usage
 
 ```maxon
-struct Point
+type Point
     var x int
     var y int
 end 'Point'
@@ -61,10 +61,10 @@ end 'main'
 
 ## In Loops
 
-This is commonly used when iterating over arrays of structs:
+This is commonly used when iterating over arrays of types:
 
 ```maxon
-struct Body
+type Body
     var x float
     var vx float
     var mass float
@@ -83,7 +83,7 @@ end 'sumMomentum'
 
 <!-- test: basic-field-access -->
 ```maxon
-struct Point
+type Point
     var x int
     var y int
 end 'Point'
@@ -101,7 +101,7 @@ end 'main'
 
 <!-- test: field-access-in-loop -->
 ```maxon
-struct Item
+type Item
     var value int
 end 'Item'
 
@@ -127,7 +127,7 @@ end 'main'
 
 <!-- test: field-access-with-float -->
 ```maxon
-struct Body
+type Body
     var x float
     var vx float
     var mass float
@@ -156,7 +156,7 @@ end 'main'
 
 <!-- test: modify-field-through-index -->
 ```maxon
-struct Counter
+type Counter
     var count int
 end 'Counter'
 

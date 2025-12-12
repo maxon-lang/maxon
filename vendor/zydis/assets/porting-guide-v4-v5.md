@@ -10,12 +10,12 @@
   
 ### Decoder
   
-- `ZydisDecodedOperandImm` struct was changed
+- `ZydisDecodedOperandImm` type was changed
   - Added field `offset`
     - Contains the offset of the immediate data, relative to the beginning of the instruction, in bytes.
   - Added field `size`
     - Contains the physical immediate size, in bits.
-- `ZydisDecodedOperandMemDisp_` struct was changed
+- `ZydisDecodedOperandMemDisp_` type was changed
   - Added field `offset`
     - Contains the offset of the immediate data, relative to the beginning of the instruction, in bytes.
   - Added field `size`

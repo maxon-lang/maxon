@@ -134,7 +134,7 @@ for (auto &scope : scopes) {
 
 **SIMD optimization:**
 - Batch type checks for function arguments
-- Vectorized struct field type validation
+- Vectorized type field type validation
 - Parallel type inference for expressions
 
 **Benefit:** 2-3x faster for complex type hierarchies

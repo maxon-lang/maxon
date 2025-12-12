@@ -1,24 +1,24 @@
 ---
-feature: structs
+feature: types
 status: stable
-keywords: [struct, field, let, var, mutability, instance]
+keywords: [type, field, let, var, mutability, instance]
 category: type-system
 ---
 
-# Structs
+# Types
 
 ## Developer Notes
 
-Structs are composite types that group related data together.
+Types are composite types that group related data together.
 
 **Declaration:**
-- Struct fields must be declared with `let` (immutable) or `var` (mutable)
+- Type fields must be declared with `let` (immutable) or `var` (mutable)
 - Fields can have explicit types or inferred types with initializers
 
 **Mutability Rules:**
-- Struct instance mutability determined by `let` vs `var` declaration
-- `let` struct: Cannot modify any fields (instance is immutable)
-- `var` struct: Can modify `var` fields, cannot modify `let` fields
+- Type instance mutability determined by `let` vs `var` declaration
+- `let` type: Cannot modify any fields (instance is immutable)
+- `var` type: Can modify `var` fields, cannot modify `let` fields
 - Field-level mutability is checked at compile time
 
 **Implementation:**
@@ -30,12 +30,12 @@ Structs are composite types that group related data together.
 
 ## Documentation
 
-Structs define custom data types with named fields.
+Types define custom data types with named fields.
 
 ### Declaration
 
 ```maxon
-struct Point
+type Point
     var x int
     var y int
 end 'Point'
@@ -43,7 +43,7 @@ end 'Point'
 
 Fields must use `let` (immutable) or `var` (mutable):
 ```maxon
-struct Config
+type Config
     let version int    // Cannot be changed after initialization
     var count int      // Can be modified
 end 'Config'
@@ -51,7 +51,7 @@ end 'Config'
 
 ### Instantiation
 
-Create struct instances with literal syntax:
+Create type instances with literal syntax:
 ```maxon
 var p = Point{x: 10, y: 20}
 let config = Config{version: 1, count: 0}
@@ -59,23 +59,23 @@ let config = Config{version: 1, count: 0}
 
 ### Instance Mutability
 
-The mutability of a struct instance is determined by `let` vs `var`:
+The mutability of a type instance is determined by `let` vs `var`:
 
-**var struct** - Can modify `var` fields:
+**var type** - Can modify `var` fields:
 ```maxon
 var p = Point{x: 10, y: 20}
-p.x = 30   // OK: struct is mutable, field is var
+p.x = 30   // OK: type is mutable, field is var
 ```
 
-**let struct** - Cannot modify any fields:
+**let type** - Cannot modify any fields:
 ```maxon
 let p = Point{x: 10, y: 20}
-// p.x = 30   // ERROR: struct instance is immutable
+// p.x = 30   // ERROR: type instance is immutable
 ```
 
 ### Field Mutability
 
-Even on a `var` struct, `let` fields cannot be modified:
+Even on a `var` type, `let` fields cannot be modified:
 ```maxon
 var c = Config{version: 1, count: 0}
 c.count = 5     // OK: field is var
@@ -86,7 +86,7 @@ c.count = 5     // OK: field is var
 
 <!-- test: var-struct-field-assign -->
 ```maxon
-struct Point
+type Point
     var x int
     var y int
 end 'Point'
@@ -103,7 +103,7 @@ end 'main'
 
 <!-- test: var-field-assign -->
 ```maxon
-struct Config
+type Config
     let version int
     var count int
 end 'Config'
@@ -120,7 +120,7 @@ end 'main'
 
 <!-- test: error.let-struct-field-assign -->
 ```maxon
-struct Point
+type Point
     var x int
     var y int
 end 'Point'
@@ -133,9 +133,9 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 9, column 5
-Cannot assign to field of read-only struct 'p'
+Cannot assign to field of read-only type 'p'
   Variable declared with 'let' at line 8, column 5
-  Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable structs
+  Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable types
 
   9 |     p.x = 30
     |     ^
@@ -143,7 +143,7 @@ Cannot assign to field of read-only struct 'p'
 
 <!-- test: error.let-field-assign -->
 ```maxon
-struct Config
+type Config
     let version int
     var count int
 end 'Config'
@@ -156,7 +156,7 @@ end 'main'
 ```
 ```maxoncstderr
 Semantic Error: line 9, column 5
-Cannot assign to immutable field 'version' of struct 'Config'
+Cannot assign to immutable field 'version' of type 'Config'
   Field declared with 'let' at line 3
   Note: Fields declared with 'let' are immutable. Use 'var' for mutable fields
 
@@ -164,9 +164,9 @@ Cannot assign to immutable field 'version' of struct 'Config'
     |     ^
 ```
 
-<!-- test: simple-struct -->
+<!-- test: simple-type -->
 ```maxon
-struct Point
+type Point
     var x int
     var y int
 end 'Point'
@@ -182,7 +182,7 @@ end 'main'
 
 <!-- test: struct-field-access -->
 ```maxon
-struct Rect
+type Rect
     var width int
     var height int
 end 'Rect'
@@ -198,7 +198,7 @@ end 'main'
 
 <!-- test: struct-param -->
 ```maxon
-struct Vec2
+type Vec2
     var x int
     var y int
 end 'Vec2'
@@ -219,7 +219,7 @@ end 'main'
 
 <!-- test: struct-return -->
 ```maxon
-struct Pair
+type Pair
     var first int
     var second int
 end 'Pair'
@@ -239,7 +239,7 @@ end 'main'
 
 <!-- test: struct-literal-as-arg -->
 ```maxon
-struct Point
+type Point
     var x int
     var y int
 end 'Point'
@@ -258,7 +258,7 @@ end 'main'
 
 <!-- test: struct-field-default -->
 ```maxon
-struct Counter
+type Counter
 	var value int = 0
 	var step int = 1
 end 'Counter'
@@ -276,7 +276,7 @@ end 'main'
 
 <!-- test: struct-field-inferred-type -->
 ```maxon
-struct Settings
+type Settings
 	let maxRetries = 5
 	var timeout = 50.0
 end 'Settings'

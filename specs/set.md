@@ -26,7 +26,7 @@ The `set` type is a generic hash set collection that stores unique elements. It 
 
 **AST:**
 - `SetFromExprAST` - represents `set from [array]` expression
-  - `setType`: the generic struct name (e.g., "set")
+  - `setType`: the generic type name (e.g., "set")
   - `arrayExpr`: the array literal expression
   - `inferredElementType`: element type inferred from array
 
@@ -37,7 +37,7 @@ The `set` type is a generic hash set collection that stores unique elements. It 
 **Semantic Analysis:**
 - Infers element type from array literal
 - Auto-imports `stdlib/collections/set.maxon` if not present
-- Instantiates generic struct `set<T>` for the element type
+- Instantiates generic type `set<T>` for the element type
 - Instantiates all methods with type bindings
 
 **Code Generation:**
@@ -64,7 +64,7 @@ set<T> struct:
 
 **Struct Definition (stdlib/collections/set.maxon):**
 ```text
-export struct set uses Element is ExpressibleByArrayLiteral with Element
+export type set uses Element is ExpressibleByArrayLiteral with Element
     var _elements array of Element
     var _states array of byte
     var _count int

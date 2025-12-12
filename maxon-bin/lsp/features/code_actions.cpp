@@ -189,7 +189,7 @@ std::vector<CodeAction> CodeActionsProvider::getRefactorings(
 
 		if (hasAlpha && !trimmed.empty() &&
 			trimmed != "if" && trimmed != "else" && trimmed != "while" &&
-			trimmed != "for" && trimmed != "function" && trimmed != "struct" &&
+			trimmed != "for" && trimmed != "function" && trimmed != "type" &&
 			trimmed != "end" && trimmed != "return" && trimmed != "var" && trimmed != "let") {
 			looksLikeExpression = true;
 		}

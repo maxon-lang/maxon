@@ -321,14 +321,14 @@ suite('Syntax Highlighting Test Suite', () => {
 		assert.ok(doc.getText().includes("while true 'loop'"), 'Should contain while with block identifier');
 	});
 
-	test('Struct keyword should be recognized', async () => {
+	test('Type keyword should be recognized', async () => {
 		const testContent = [
-			"struct Point",
+			"type Point",
 			"    var x int",
 			"    var y int",
 			"end 'Point'",
 			"",
-			"function test() int",
+			"function test() returns int",
 			"    var p Point",
 			"    return 0",
 			"end 'test'"
@@ -340,18 +340,18 @@ suite('Syntax Highlighting Test Suite', () => {
 		});
 
 		assert.strictEqual(doc.languageId, 'maxon');
-		assert.ok(doc.getText().includes("struct Point"), 'Should contain struct keyword');
-		assert.ok(doc.getText().includes("end 'Point'"), 'Should contain struct block identifier');
+		assert.ok(doc.getText().includes("type Point"), 'Should contain type keyword');
+		assert.ok(doc.getText().includes("end 'Point'"), 'Should contain type block identifier');
 	});
 
 	test('All keywords should be recognized', async () => {
 		const testContent = [
-			"extern function external_func() int",
+			"extern function external_func() returns int",
 			"namespace test 'test'",
-			"struct Data",
+			"type Data",
 			"    var value int",
 			"end 'Data'",
-			"function test(x int) int",
+			"function test(x int) returns int",
 			"    var count = 0",
 			"    let immutable = 42",
 			"    while count < 10 'loop'",
@@ -376,7 +376,7 @@ suite('Syntax Highlighting Test Suite', () => {
 		// Check all keywords are present
 		const content = doc.getText();
 		assert.ok(content.includes("extern"), 'Should contain extern keyword');
-		assert.ok(content.includes("struct"), 'Should contain struct keyword');
+		assert.ok(content.includes("type"), 'Should contain type keyword');
 		assert.ok(content.includes("function"), 'Should contain function keyword');
 		assert.ok(content.includes("var"), 'Should contain var keyword');
 		assert.ok(content.includes("let"), 'Should contain let keyword');

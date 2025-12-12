@@ -28,7 +28,7 @@ Large Character (MSB of byte 15 = 1):
 
 ### Implementation
 
-- Represented as LLVM `{i64, i64}` struct (same as `string`)
+- Represented as LLVM `{i64, i64}` type (same as `string`)
 - Character literals enclosed in single quotes: `'A'`, `'é'`, `'👨‍👩‍👧‍👦'`
 - Most characters fit in SSO (15 bytes covers vast majority of grapheme clusters)
 - Complex emoji sequences may require heap allocation

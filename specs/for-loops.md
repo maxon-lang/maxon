@@ -19,7 +19,7 @@ For loops in Maxon use an iterator-based approach where the compiler provides sy
 - Manage loop variable scope
 
 **Standard Library Responsibility:**
-- Define `Iterator` struct contract
+- Define `Iterator` type contract
 - Implement `next()` function that returns `Element or nil`
 - Provide concrete iterators (range, array, etc.)
 - Implement map/filter/reduce using iterator interface
@@ -59,7 +59,7 @@ For loops in Maxon use an iterator-based approach where the compiler provides sy
 - Loop variable scope managed via namedValues map
 
 **Standard Library** (`stdlib/iter/`):
-- `iterator.maxon`: Defines `Iterator` struct and core functions
+- `iterator.maxon`: Defines `Iterator` type and core functions
 - `range.maxon`: Provides `range(start, end)` function
 - `array.maxon`: Provides array iteration (future)
 
@@ -67,7 +67,7 @@ For loops in Maxon use an iterator-based approach where the compiler provides sy
 
 The iterator interface is a contract defined by the standard library in `stdlib/iter/iterator.maxon`:
 
-- `Iterator` struct with fields: `current`, `limit`, `step`
+- `Iterator` type with fields: `current`, `limit`, `step`
 - `next(Iterator) int or nil` - Returns the next element value, or nil if no more elements exist
 
 Any type that implements the `next()` function returning `Element or nil` can be used with for loops.
@@ -186,7 +186,7 @@ end 'loop'
 ```
 
 The standard library (automatically available) provides:
-- `Iterator` struct definition (exported from `stdlib/iter/iterator.maxon`)
+- `Iterator` type definition (exported from `stdlib/iter/iterator.maxon`)
 - `next(Iterator) int or nil` - Returns next element or nil if exhausted
 - `range(int, int) Iterator` - Create range iterator (from `stdlib/iter/range.maxon`)
 
@@ -198,10 +198,10 @@ This design separates concerns:
 
 The iterator interface is a contract defined by the standard library. Any type that implements the `next()` function can be used with for loops:
 
-- `Iterator` struct with fields: `current`, `limit`, `step`
+- `Iterator` type with fields: `current`, `limit`, `step`
 - `next(Iterator) int or nil` - Returns the next element value, or nil if no more elements exist
 
-The `Iterator` struct is exported from `stdlib/iter/iterator.maxon` and can be used in any file with the qualified name `Iterator`.
+The `Iterator` type is exported from `stdlib/iter/iterator.maxon` and can be used in any file with the qualified name `Iterator`.
 
 ## Tests
 

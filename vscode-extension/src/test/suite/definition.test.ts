@@ -143,7 +143,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for struct type', async function () {
 		const content = [
-			"struct Point",
+			"type Point",
 			"    var x int",
 			"    var y int",
 			"end 'Point'",
@@ -166,7 +166,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for struct field', async function () {
 		const content = [
-			"struct Point",
+			"type Point",
 			"    var x int",
 			"    var y int",
 			"end 'Point'",
@@ -190,7 +190,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for struct field in return', async function () {
 		const content = [
-			"struct Point",
+			"type Point",
 			"    var x int",
 			"    var y int",
 			"end 'Point'",
@@ -216,7 +216,7 @@ suite('Go to Definition Test Suite', () => {
 			"    function print() returns int",
 			"end 'Printable'",
 			"",
-			"struct Message is Printable",
+			"type Message is Printable",
 			"    var text string",
 			"",
 			"    function Printable.print() returns int",
@@ -334,7 +334,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition jumps to correct field in struct with multiple fields', async function () {
 		const content = [
-			"struct Rectangle",
+			"type Rectangle",
 			"    var width int",
 			"    var height int",
 			"    var area int",
@@ -387,7 +387,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for struct in return type', async function () {
 		const content = [
-			"struct Point",
+			"type Point",
 			"    var x int",
 			"    var y int",
 			"end 'Point'",
@@ -409,7 +409,7 @@ suite('Go to Definition Test Suite', () => {
 
 	test('Go to definition for struct literal type', async function () {
 		const content = [
-			"struct Point",
+			"type Point",
 			"    var x int",
 			"    var y int",
 			"end 'Point'",

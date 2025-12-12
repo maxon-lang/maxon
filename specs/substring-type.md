@@ -33,7 +33,7 @@ For SSO (small string optimization) strings, no refcount management is needed si
 - Semantic analyzer: `semantic_analyzer_expr.cpp` - `__substring_*` intrinsics
 - Codegen: `codegen_mir_expr.cpp` - `generateSubstringIntrinsic()`
 - Scope cleanup: `codegen_mir.cpp` - `generateScopeCleanup()` handles substring cleanup
-- stdlib: `stdlib/string/string.maxon` - `substring` struct and methods
+- stdlib: `stdlib/string/string.maxon` - `substring` type and methods
 
 ## Documentation
 

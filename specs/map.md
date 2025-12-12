@@ -41,7 +41,7 @@ The `map` type is a generic hash map collection that stores key-value pairs. It 
 - All keys must have consistent types
 - All values must have consistent types
 - Auto-imports `stdlib/collections/map.maxon` if not present
-- Instantiates generic struct `map<K,V>` for the types
+- Instantiates generic type `map<K,V>` for the types
 - Instantiates all methods with type bindings
 
 **Code Generation:**
@@ -73,7 +73,7 @@ map<K,V> struct:
 
 **Struct Definition (stdlib/collections/map.maxon):**
 ```text
-export struct map uses Key, Value is Dictionary with Key, Value
+export type map uses Key, Value is Dictionary with Key, Value
     var keys array of Key
     var values array of Value
     var states array of byte

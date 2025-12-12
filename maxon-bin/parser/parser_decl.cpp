@@ -296,14 +296,14 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 std::unique_ptr<StructDefAST> Parser::parseStruct() {
 	bool isExported = parseOptionalExport();
 
-	Token structToken = expectKeyword("struct", "Expected 'struct'");
+	Token structToken = expectKeyword("type", "Expected 'type'");
 	int line = structToken.line;
 	int column = structToken.column;
 
 	// Allow 'array' keyword as struct name (stdlib collection type)
 	Token nameToken = checkKeyword("array")
 						  ? (advance(), Token(TokenType::IDENTIFIER, "array", currentLine(), currentColumn()))
-						  : expect(TokenType::IDENTIFIER, "Expected struct name after 'struct'");
+						  : expect(TokenType::IDENTIFIER, "Expected type name after 'type'");
 	std::string structName = nameToken.value;
 
 	// Parse associated type parameters: struct Name uses TypeParam1, TypeParam2
@@ -446,9 +446,9 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 									 fieldNameToken.line, fieldNameToken.column));
 	}
 
-	expectKeywordAdvance("end", "Expected 'end' to close struct");
+	expectKeywordAdvance("end", "Expected 'end' to close type");
 
-	Token blockIdToken = expectMatchingBlockId(structName, "struct");
+	Token blockIdToken = expectMatchingBlockId(structName, "type");
 
 	auto structDef = std::make_unique<StructDefAST>(structName, std::move(fields), line, column, defaultNamespace, isExported, std::move(conformsTo), std::move(methods), std::move(typeAssignments), std::move(interfaceTypeBindings), std::move(associatedTypeParams));
 	structDef->setEndPosition(blockIdToken.line, tokenEndColumn(blockIdToken));
@@ -459,7 +459,7 @@ std::unique_ptr<StructInitExprAST> Parser::parseStructInit(const std::string &st
 	int line = currentLine();
 	int column = currentColumn();
 
-	expectAdvance(TokenType::LBRACE, "Expected '{' for struct initialization");
+	expectAdvance(TokenType::LBRACE, "Expected '{' for type initialization");
 
 	std::vector<StructInitField> fields;
 

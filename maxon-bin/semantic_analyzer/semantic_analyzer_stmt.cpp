@@ -192,17 +192,17 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 					}
 
 					if (!memberFound) {
-						addError("Struct '" + elementType + "' has no field named '" + arrayMemberAssign->memberName + "'",
+						addError("Type '" + elementType + "' has no field named '" + arrayMemberAssign->memberName + "'",
 								 stmt->line, stmt->column);
 					} else if (fieldIsImmutable) {
 						addError("Cannot assign to immutable field '" + arrayMemberAssign->memberName +
-									 "' of struct '" + elementType + "'" +
+									 "' of type '" + elementType + "'" +
 									 "\n  Field declared with 'let' at line " + std::to_string(fieldLine) +
 									 "\n  Note: Fields declared with 'let' are immutable. Use 'var' for mutable fields",
 								 stmt->line, stmt->column);
 					}
 				} else {
-					addError("Cannot access member '" + arrayMemberAssign->memberName + "' on non-struct array element type '" + elementType + "'",
+					addError("Cannot access member '" + arrayMemberAssign->memberName + "' on non-type array element type '" + elementType + "'",
 							 stmt->line, stmt->column);
 				}
 			}
@@ -223,10 +223,10 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 
 			// Check if variable is immutable
 			if (varInfo->isImmutable) {
-				addError("Cannot assign to field of read-only struct '" + memberAssign->objectName + "'" +
+				addError("Cannot assign to field of read-only type '" + memberAssign->objectName + "'" +
 							 std::string("\n  Variable declared with 'let' at line ") + std::to_string(varInfo->line) +
 							 ", column " + std::to_string(varInfo->column) +
-							 "\n  Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable structs",
+							 "\n  Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable types",
 						 stmt->line, stmt->column);
 			}
 
@@ -234,7 +234,7 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			std::string structType = varInfo->type;
 			auto *structInfo = lookupStruct(structType);
 			if (structInfo == nullptr) {
-				addError("Cannot access member '" + memberAssign->memberName + "' on non-struct type '" + structType + "'",
+				addError("Cannot access member '" + memberAssign->memberName + "' on non-type '" + structType + "'",
 						 stmt->line, stmt->column);
 			} else {
 				// Verify member exists
@@ -253,13 +253,13 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 				}
 
 				if (!memberFound) {
-					addError("Struct '" + structType + "' has no field named '" + memberAssign->memberName + "'",
+					addError("Type '" + structType + "' has no field named '" + memberAssign->memberName + "'",
 							 stmt->line, stmt->column);
 				} else {
 					// Check if the field itself is immutable (declared with 'let')
 					if (fieldIsImmutable) {
 						addError("Cannot assign to immutable field '" + memberAssign->memberName +
-									 "' of struct '" + structType + "'" +
+									 "' of type '" + structType + "'" +
 									 "\n  Field declared with 'let' at line " + std::to_string(fieldLine) +
 									 "\n  Note: Fields declared with 'let' are immutable. Use 'var' for mutable fields",
 								 stmt->line, stmt->column);
@@ -286,14 +286,14 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			markVariableAsUsed(memberArrayAssign->objectName);
 
 			if (varInfo->isImmutable) {
-				addError("Cannot assign to field of read-only struct '" + memberArrayAssign->objectName + "'",
+				addError("Cannot assign to field of read-only type '" + memberArrayAssign->objectName + "'",
 						 stmt->line, stmt->column);
 			}
 
 			std::string structType = varInfo->type;
 			auto *structInfo = lookupStruct(structType);
 			if (structInfo == nullptr) {
-				addError("Cannot access member '" + memberArrayAssign->memberName + "' on non-struct type '" + structType + "'",
+				addError("Cannot access member '" + memberArrayAssign->memberName + "' on non-type '" + structType + "'",
 						 stmt->line, stmt->column);
 			} else {
 				// Find the array field
@@ -312,13 +312,13 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 				}
 
 				if (!memberFound) {
-					addError("Struct '" + structType + "' has no field named '" + memberArrayAssign->memberName + "'",
+					addError("Type '" + structType + "' has no field named '" + memberArrayAssign->memberName + "'",
 							 stmt->line, stmt->column);
 				} else {
 					// Check if the field itself is immutable (declared with 'let')
 					if (fieldIsImmutable) {
 						addError("Cannot assign to immutable field '" + memberArrayAssign->memberName +
-									 "' of struct '" + structType + "'" +
+									 "' of type '" + structType + "'" +
 									 "\n  Field declared with 'let' at line " + std::to_string(fieldLine) +
 									 "\n  Note: Fields declared with 'let' are immutable. Use 'var' for mutable fields",
 								 stmt->line, stmt->column);

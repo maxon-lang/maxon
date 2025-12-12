@@ -12,7 +12,7 @@ category: types
 Optional types allow functions to return either a value or `nil`, representing the absence of a value. Optionals can be used in:
 - Function return types: `returns int or nil`
 - Function parameters: `function bar(x int or nil)`
-- Struct fields: `struct Person { var age int or nil }`
+- Type fields: `type Person { var age int or nil }`
 - Local variables: `var result int or nil`
 
 Implementation details:
@@ -27,7 +27,7 @@ Implementation details:
 - **Implicit Wrapping**: Non-nil values automatically wrapped when:
   - Returning to optional return type
   - Passing to optional parameter
-  - Assigning to optional struct field
+  - Assigning to optional type field
 
 ### AST Nodes
 
@@ -55,11 +55,11 @@ Implementation details:
 ### Code Generation
 
 Files:
-- `parser_decl.cpp`: Parsing of optional return types, parameters, and struct fields
+- `parser_decl.cpp`: Parsing of optional return types, parameters, and type fields
 - `codegen_mir_optional.cpp`: Optional type generation (if-let, else-unwrap, wrapping)
 - `codegen_mir_stmt.cpp`: Statement dispatchers for optional statements
 - `codegen_mir_expr.cpp`: Optional parameter wrapping in function calls
-- `codegen_mir_stmt_decl.cpp`: Optional field wrapping in struct initialization
+- `codegen_mir_stmt_decl.cpp`: Optional field wrapping in type initialization
 - `codegen_mir_function.cpp`: Tracks parameter types for wrapping
 - `semantic_analyzer_stmt.cpp`: Type checking for optionals
 - `semantic_analyzer_expr.cpp`: Parameter and field type validation
@@ -477,7 +477,7 @@ end 'main'
 
 <!-- test: optional-struct-field-nil -->
 ```maxon
-struct Person
+type Person
 	var name string
 	var age int or nil
 end 'Person'
@@ -497,7 +497,7 @@ end 'main'
 
 <!-- test: optional-struct-field-value -->
 ```maxon
-struct Person
+type Person
 	var name string
 	var age int or nil
 end 'Person'
@@ -517,7 +517,7 @@ end 'main'
 
 <!-- test: optional-struct-field-implicit-wrap -->
 ```maxon
-struct Point
+type Point
 	var x int
 	var y int or nil
 end 'Point'
