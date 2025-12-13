@@ -58,7 +58,7 @@ class FormattingProvider {
 	std::string formatEnum(const EnumDefAST *enumDef, const FormattingConfig &config, int indent);
 	std::string formatInterface(const InterfaceDefAST *iface, const FormattingConfig &config, int indent);
 	std::string formatStatement(const StmtAST *stmt, const FormattingConfig &config, int indent);
-	std::string formatExpression(const ExprAST *expr, const FormattingConfig &config);
+	std::string formatExpression(const ExprAST *expr, const FormattingConfig &config, int indent = 0);
 
 	// Statement formatters
 	std::string formatVarDecl(const VarDeclStmtAST *stmt, const FormattingConfig &config, int indent);
@@ -80,17 +80,17 @@ class FormattingProvider {
 	std::string formatBreak(const BreakStmtAST *stmt, const FormattingConfig &config, int indent);
 	std::string formatContinue(const ContinueStmtAST *stmt, const FormattingConfig &config, int indent);
 
-	// Expression formatters
-	std::string formatBinaryExpr(const BinaryExprAST *expr, const FormattingConfig &config);
-	std::string formatUnaryExpr(const UnaryExprAST *expr, const FormattingConfig &config);
-	std::string formatCall(const CallExprAST *expr, const FormattingConfig &config);
-	std::string formatMemberAccess(const MemberAccessExprAST *expr, const FormattingConfig &config);
-	std::string formatArrayIndex(const ArrayIndexExprAST *expr, const FormattingConfig &config);
-	std::string formatArrayLiteral(const ArrayLiteralExprAST *expr, const FormattingConfig &config);
-	std::string formatStructInit(const StructInitExprAST *expr, const FormattingConfig &config);
-	std::string formatMapLiteral(const MapLiteralExprAST *expr, const FormattingConfig &config);
-	std::string formatCast(const CastExprAST *expr, const FormattingConfig &config);
-	std::string formatMatchExpr(const MatchExprAST *expr, const FormattingConfig &config, int indent);
+	// Expression formatters (with optional indent for multi-line expressions)
+	std::string formatBinaryExpr(const BinaryExprAST *expr, const FormattingConfig &config, int indent = 0);
+	std::string formatUnaryExpr(const UnaryExprAST *expr, const FormattingConfig &config, int indent = 0);
+	std::string formatCall(const CallExprAST *expr, const FormattingConfig &config, int indent = 0);
+	std::string formatMemberAccess(const MemberAccessExprAST *expr, const FormattingConfig &config, int indent = 0);
+	std::string formatArrayIndex(const ArrayIndexExprAST *expr, const FormattingConfig &config, int indent = 0);
+	std::string formatArrayLiteral(const ArrayLiteralExprAST *expr, const FormattingConfig &config, int indent = 0);
+	std::string formatStructInit(const StructInitExprAST *expr, const FormattingConfig &config, int indent = 0);
+	std::string formatMapLiteral(const MapLiteralExprAST *expr, const FormattingConfig &config, int indent = 0);
+	std::string formatCast(const CastExprAST *expr, const FormattingConfig &config, int indent = 0);
+	std::string formatMatchExpr(const MatchExprAST *expr, const FormattingConfig &config, int indent = 0);
 
 	// Helper methods
 	std::string indent(int level, const FormattingConfig &config);

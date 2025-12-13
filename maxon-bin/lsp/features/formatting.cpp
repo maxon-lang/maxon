@@ -447,7 +447,7 @@ std::string FormattingProvider::formatVarDecl(const VarDeclStmtAST *stmt, const 
 		out << " " << formatType(stmt->type);
 	}
 	if (stmt->initializer) {
-		out << " = " << formatExpression(stmt->initializer.get(), config);
+		out << " = " << formatExpression(stmt->initializer.get(), config, indentLevel);
 	}
 	out << "\n";
 	return out.str();
@@ -460,7 +460,7 @@ std::string FormattingProvider::formatLetDecl(const LetDeclStmtAST *stmt, const 
 		out << " " << formatType(stmt->type);
 	}
 	if (stmt->initializer) {
-		out << " = " << formatExpression(stmt->initializer.get(), config);
+		out << " = " << formatExpression(stmt->initializer.get(), config, indentLevel);
 	}
 	out << "\n";
 	return out.str();
@@ -680,7 +680,7 @@ std::string FormattingProvider::formatReturn(const ReturnStmtAST *stmt, const Fo
 	std::ostringstream out;
 	out << indent(indentLevel, config) << "return";
 	if (stmt->value) {
-		out << " " << formatExpression(stmt->value.get(), config);
+		out << " " << formatExpression(stmt->value.get(), config, indentLevel);
 	}
 	out << "\n";
 	return out.str();
@@ -689,7 +689,7 @@ std::string FormattingProvider::formatReturn(const ReturnStmtAST *stmt, const Fo
 std::string FormattingProvider::formatAssign(const AssignStmtAST *stmt, const FormattingConfig &config, int indentLevel) {
 	std::ostringstream out;
 	out << indent(indentLevel, config) << stmt->name << " = ";
-	out << formatExpression(stmt->value.get(), config) << "\n";
+	out << formatExpression(stmt->value.get(), config, indentLevel) << "\n";
 	return out.str();
 }
 
@@ -778,58 +778,58 @@ std::string FormattingProvider::formatContinue(const ContinueStmtAST *stmt, cons
 	return out.str();
 }
 
-std::string FormattingProvider::formatExpression(const ExprAST *expr, const FormattingConfig &config) {
+std::string FormattingProvider::formatExpression(const ExprAST *expr, const FormattingConfig &config, int indentLevel) {
 	if (!expr)
 		return "";
 
 	// Binary expression
 	if (auto *binary = dynamic_cast<const BinaryExprAST *>(expr)) {
-		return formatBinaryExpr(binary, config);
+		return formatBinaryExpr(binary, config, indentLevel);
 	}
 
 	// Unary expression
 	if (auto *unary = dynamic_cast<const UnaryExprAST *>(expr)) {
-		return formatUnaryExpr(unary, config);
+		return formatUnaryExpr(unary, config, indentLevel);
 	}
 
 	// Call expression
 	if (auto *call = dynamic_cast<const CallExprAST *>(expr)) {
-		return formatCall(call, config);
+		return formatCall(call, config, indentLevel);
 	}
 
 	// Member access
 	if (auto *member = dynamic_cast<const MemberAccessExprAST *>(expr)) {
-		return formatMemberAccess(member, config);
+		return formatMemberAccess(member, config, indentLevel);
 	}
 
 	// Array index
 	if (auto *arrIdx = dynamic_cast<const ArrayIndexExprAST *>(expr)) {
-		return formatArrayIndex(arrIdx, config);
+		return formatArrayIndex(arrIdx, config, indentLevel);
 	}
 
 	// Array literal
 	if (auto *arrLit = dynamic_cast<const ArrayLiteralExprAST *>(expr)) {
-		return formatArrayLiteral(arrLit, config);
+		return formatArrayLiteral(arrLit, config, indentLevel);
 	}
 
 	// Struct init
 	if (auto *structInit = dynamic_cast<const StructInitExprAST *>(expr)) {
-		return formatStructInit(structInit, config);
+		return formatStructInit(structInit, config, indentLevel);
 	}
 
 	// Map literal
 	if (auto *mapLit = dynamic_cast<const MapLiteralExprAST *>(expr)) {
-		return formatMapLiteral(mapLit, config);
+		return formatMapLiteral(mapLit, config, indentLevel);
 	}
 
 	// Cast expression
 	if (auto *cast = dynamic_cast<const CastExprAST *>(expr)) {
-		return formatCast(cast, config);
+		return formatCast(cast, config, indentLevel);
 	}
 
 	// Match expression
 	if (auto *matchExpr = dynamic_cast<const MatchExprAST *>(expr)) {
-		return formatMatchExpr(matchExpr, config, 0);
+		return formatMatchExpr(matchExpr, config, indentLevel);
 	}
 
 	// Number literal
@@ -916,11 +916,11 @@ std::string FormattingProvider::formatExpression(const ExprAST *expr, const Form
 	return "/* unknown expr */";
 }
 
-std::string FormattingProvider::formatBinaryExpr(const BinaryExprAST *expr, const FormattingConfig &config) {
+std::string FormattingProvider::formatBinaryExpr(const BinaryExprAST *expr, const FormattingConfig &config, int indentLevel) {
 	std::ostringstream out;
 
-	std::string left = formatExpression(expr->left.get(), config);
-	std::string right = formatExpression(expr->right.get(), config);
+	std::string left = formatExpression(expr->left.get(), config, indentLevel);
+	std::string right = formatExpression(expr->right.get(), config, indentLevel);
 	std::string op = getOperatorString(expr->op);
 
 	// Add spaces around binary operators
@@ -929,38 +929,38 @@ std::string FormattingProvider::formatBinaryExpr(const BinaryExprAST *expr, cons
 	return out.str();
 }
 
-std::string FormattingProvider::formatUnaryExpr(const UnaryExprAST *expr, const FormattingConfig &config) {
+std::string FormattingProvider::formatUnaryExpr(const UnaryExprAST *expr, const FormattingConfig &config, int indentLevel) {
 	std::ostringstream out;
 
 	// No space after unary operators
 	if (expr->op == 'n') { // 'not' operator
-		out << "not " << formatExpression(expr->operand.get(), config);
+		out << "not " << formatExpression(expr->operand.get(), config, indentLevel);
 	} else {
-		out << expr->op << formatExpression(expr->operand.get(), config);
+		out << expr->op << formatExpression(expr->operand.get(), config, indentLevel);
 	}
 
 	return out.str();
 }
 
-std::string FormattingProvider::formatCall(const CallExprAST *expr, const FormattingConfig &config) {
+std::string FormattingProvider::formatCall(const CallExprAST *expr, const FormattingConfig &config, int indentLevel) {
 	std::ostringstream out;
 
 	out << expr->callee << "(";
 	for (size_t i = 0; i < expr->args.size(); i++) {
 		if (i > 0)
 			out << ", ";
-		out << formatExpression(expr->args[i].value.get(), config);
+		out << formatExpression(expr->args[i].value.get(), config, indentLevel);
 	}
 	out << ")";
 
 	return out.str();
 }
 
-std::string FormattingProvider::formatMemberAccess(const MemberAccessExprAST *expr, const FormattingConfig &config) {
+std::string FormattingProvider::formatMemberAccess(const MemberAccessExprAST *expr, const FormattingConfig &config, int indentLevel) {
 	std::ostringstream out;
 
 	if (expr->object) {
-		out << formatExpression(expr->object.get(), config);
+		out << formatExpression(expr->object.get(), config, indentLevel);
 	} else {
 		out << expr->objectName;
 	}
@@ -969,20 +969,20 @@ std::string FormattingProvider::formatMemberAccess(const MemberAccessExprAST *ex
 	return out.str();
 }
 
-std::string FormattingProvider::formatArrayIndex(const ArrayIndexExprAST *expr, const FormattingConfig &config) {
+std::string FormattingProvider::formatArrayIndex(const ArrayIndexExprAST *expr, const FormattingConfig &config, int indentLevel) {
 	std::ostringstream out;
 
 	if (expr->hasArrayExpr()) {
-		out << formatExpression(expr->arrayExpr.get(), config);
+		out << formatExpression(expr->arrayExpr.get(), config, indentLevel);
 	} else {
 		out << expr->arrayName;
 	}
-	out << "[" << formatExpression(expr->index.get(), config) << "]";
+	out << "[" << formatExpression(expr->index.get(), config, indentLevel) << "]";
 
 	return out.str();
 }
 
-std::string FormattingProvider::formatArrayLiteral(const ArrayLiteralExprAST *expr, const FormattingConfig &config) {
+std::string FormattingProvider::formatArrayLiteral(const ArrayLiteralExprAST *expr, const FormattingConfig &config, int indentLevel) {
 	std::ostringstream out;
 
 	// Value-initialized array: [1, 2, 3]
@@ -990,29 +990,55 @@ std::string FormattingProvider::formatArrayLiteral(const ArrayLiteralExprAST *ex
 	for (size_t i = 0; i < expr->values.size(); i++) {
 		if (i > 0)
 			out << ", ";
-		out << formatExpression(expr->values[i].get(), config);
+		out << formatExpression(expr->values[i].get(), config, indentLevel);
 	}
 	out << "]";
 
 	return out.str();
 }
 
-std::string FormattingProvider::formatStructInit(const StructInitExprAST *expr, const FormattingConfig &config) {
+std::string FormattingProvider::formatStructInit(const StructInitExprAST *expr, const FormattingConfig &config, int indentLevel) {
 	std::ostringstream out;
 
-	out << expr->structName << "{";
-	for (size_t i = 0; i < expr->fields.size(); i++) {
-		if (i > 0)
-			out << ", ";
-		out << expr->fields[i].name << ": ";
-		out << formatExpression(expr->fields[i].value.get(), config);
+	// For empty struct init or single field, use inline format
+	if (expr->fields.empty()) {
+		out << expr->structName << "{}";
+		return out.str();
 	}
-	out << "}";
+
+	// For multiple fields or when indent is provided, use multi-line format
+	// (This preserves multi-line struct literals that the user wrote)
+	bool useMultiLine = expr->fields.size() > 1 || indentLevel > 0;
+
+	if (useMultiLine && indentLevel > 0) {
+		out << expr->structName << "{\n";
+		for (size_t i = 0; i < expr->fields.size(); i++) {
+			out << indent(indentLevel + 1, config);
+			out << expr->fields[i].name << ": ";
+			out << formatExpression(expr->fields[i].value.get(), config, indentLevel + 1);
+			if (i < expr->fields.size() - 1) {
+				out << ",";
+			}
+			out << "\n";
+		}
+		out << indent(indentLevel, config) << "}";
+	} else {
+		// Inline format for single field or when no context
+		out << expr->structName << "{";
+		for (size_t i = 0; i < expr->fields.size(); i++) {
+			if (i > 0)
+				out << ", ";
+			out << expr->fields[i].name << ": ";
+			out << formatExpression(expr->fields[i].value.get(), config, indentLevel);
+		}
+		out << "}";
+	}
 
 	return out.str();
 }
 
-std::string FormattingProvider::formatMapLiteral(const MapLiteralExprAST *expr, const FormattingConfig &config) {
+std::string FormattingProvider::formatMapLiteral(const MapLiteralExprAST *expr, const FormattingConfig &config, int indentLevel) {
+	(void)indentLevel; // Unused for map literals (always inline)
 	std::ostringstream out;
 
 	out << expr->dictType << " from " << formatType(expr->keyType);
@@ -1021,10 +1047,10 @@ std::string FormattingProvider::formatMapLiteral(const MapLiteralExprAST *expr, 
 	return out.str();
 }
 
-std::string FormattingProvider::formatCast(const CastExprAST *expr, const FormattingConfig &config) {
+std::string FormattingProvider::formatCast(const CastExprAST *expr, const FormattingConfig &config, int indentLevel) {
 	std::ostringstream out;
 
-	out << formatExpression(expr->expr.get(), config);
+	out << formatExpression(expr->expr.get(), config, indentLevel);
 	out << " as " << formatType(expr->targetType);
 
 	return out.str();
@@ -1033,7 +1059,7 @@ std::string FormattingProvider::formatCast(const CastExprAST *expr, const Format
 std::string FormattingProvider::formatMatchExpr(const MatchExprAST *expr, const FormattingConfig &config, int indentLevel) {
 	std::ostringstream out;
 
-	out << "match " << formatExpression(expr->scrutinee.get(), config);
+	out << "match " << formatExpression(expr->scrutinee.get(), config, indentLevel);
 	if (!expr->blockId.empty()) {
 		out << " '" << expr->blockId << "'";
 	}
@@ -1048,13 +1074,13 @@ std::string FormattingProvider::formatMatchExpr(const MatchExprAST *expr, const 
 			for (size_t i = 0; i < caseItem.patterns.size(); i++) {
 				if (i > 0)
 					out << " or ";
-				out << formatExpression(caseItem.patterns[i].get(), config);
+				out << formatExpression(caseItem.patterns[i].get(), config, indentLevel + 1);
 			}
 		}
 
 		out << " gives ";
 		if (caseItem.resultExpr) {
-			out << formatExpression(caseItem.resultExpr.get(), config);
+			out << formatExpression(caseItem.resultExpr.get(), config, indentLevel + 1);
 		}
 		out << "\n";
 	}
@@ -1195,6 +1221,9 @@ std::string FormattingProvider::formatLineByLine(const std::string &content, con
 	// Track match expressions that started inline (e.g., "return match ...")
 	// so their end statement stays at the same indent level as the starting line
 	std::vector<int> inlineMatchStartLevels;
+	// Track struct initializers that span multiple lines
+	// Each entry is the indent level where the struct init started
+	std::vector<int> structInitLevels;
 
 	while (std::getline(in, line)) {
 		// Trim leading/trailing whitespace
@@ -1212,6 +1241,9 @@ std::string FormattingProvider::formatLineByLine(const std::string &content, con
 		// Check if this line ends an interface (before adjusting indent)
 		bool endsInterface = insideInterface && endsBlock(trimmed);
 
+		// Check if this line is just a closing brace for a struct initializer
+		bool closesStructInit = !structInitLevels.empty() && (trimmed == "}" || trimmed == "},");
+
 		// Adjust indent level for end statements
 		if (endsBlock(trimmed)) {
 			// Check if this end corresponds to an inline match expression
@@ -1226,6 +1258,10 @@ std::string FormattingProvider::formatLineByLine(const std::string &content, con
 			if (endsInterface) {
 				insideInterface = false;
 			}
+		} else if (closesStructInit) {
+			// Pop struct init and restore indent level
+			indentLevel = structInitLevels.back();
+			structInitLevels.pop_back();
 		}
 
 		// Output the line with proper indentation
@@ -1255,6 +1291,11 @@ std::string FormattingProvider::formatLineByLine(const std::string &content, con
 			if (startsInterface) {
 				insideInterface = true;
 			}
+		} else if (trimmed.back() == '{' && !trimmed.empty()) {
+			// Line ends with { but isn't a block start - it's a struct initializer
+			// e.g., "return MyStruct{" or "var x = MyStruct{"
+			structInitLevels.push_back(indentLevel);
+			indentLevel++;
 		}
 	}
 

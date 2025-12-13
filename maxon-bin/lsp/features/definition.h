@@ -36,6 +36,7 @@ class DefinitionProvider {
 	 * @param position The cursor position
 	 * @param cache Analysis cache containing symbols and type info
 	 * @param stdlib Standard library symbols
+	 * @param projectSymbols Symbols from other files in the same project
 	 * @param workspaceRoot Root directory of the workspace (for stdlib paths)
 	 * @return Definition location if found, nullopt otherwise
 	 */
@@ -44,6 +45,7 @@ class DefinitionProvider {
 		const Position &position,
 		const AnalysisCache *cache,
 		const StdlibSymbols &stdlib,
+		const StdlibSymbols &projectSymbols,
 		const std::string &workspaceRoot);
 
   private:
@@ -99,6 +101,7 @@ class DefinitionProvider {
 	 * @param name Function name to look up
 	 * @param cache Analysis cache containing function info
 	 * @param stdlib Standard library symbols
+	 * @param projectSymbols Symbols from other files in the same project
 	 * @param workspaceRoot Root directory for stdlib paths
 	 * @param documentUri URI of the current document (for local functions)
 	 * @return Location of function definition if found
@@ -106,6 +109,7 @@ class DefinitionProvider {
 	std::optional<Location> lookupFunction(const std::string &name,
 										   const AnalysisCache *cache,
 										   const StdlibSymbols &stdlib,
+										   const StdlibSymbols &projectSymbols,
 										   const std::string &workspaceRoot,
 										   const std::string &documentUri);
 
@@ -115,6 +119,7 @@ class DefinitionProvider {
 	 * @param name Type name to look up
 	 * @param cache Analysis cache containing type info
 	 * @param stdlib Standard library symbols
+	 * @param projectSymbols Symbols from other files in the same project
 	 * @param workspaceRoot Root directory for stdlib paths
 	 * @param documentUri URI of the current document (for local types)
 	 * @return Location of type definition if found
@@ -122,6 +127,7 @@ class DefinitionProvider {
 	std::optional<Location> lookupType(const std::string &name,
 									   const AnalysisCache *cache,
 									   const StdlibSymbols &stdlib,
+									   const StdlibSymbols &projectSymbols,
 									   const std::string &workspaceRoot,
 									   const std::string &documentUri);
 
@@ -132,6 +138,7 @@ class DefinitionProvider {
 	 * @param fieldName Name of the field
 	 * @param cache Analysis cache containing struct info
 	 * @param stdlib Standard library symbols
+	 * @param projectSymbols Symbols from other files in the same project
 	 * @param workspaceRoot Root directory for stdlib paths
 	 * @param documentUri URI of the current document (for local structs)
 	 * @return Location of field definition if found
@@ -140,6 +147,7 @@ class DefinitionProvider {
 										const std::string &fieldName,
 										const AnalysisCache *cache,
 										const StdlibSymbols &stdlib,
+										const StdlibSymbols &projectSymbols,
 										const std::string &workspaceRoot,
 										const std::string &documentUri);
 

@@ -8,6 +8,7 @@ std::optional<DefinitionProvider::DefinitionResult> DefinitionProvider::getDefin
 	const Position &position,
 	const AnalysisCache *cache,
 	const StdlibSymbols &stdlib,
+	const StdlibSymbols &projectSymbols,
 	const std::string &workspaceRoot) {
 	// Get the symbol at the cursor position
 	std::string symbol = getSymbolAtPosition(document, position);
@@ -29,7 +30,7 @@ std::optional<DefinitionProvider::DefinitionResult> DefinitionProvider::getDefin
 					return buildLocation(document.uri, varPtr->line, varPtr->column);
 				}
 				// Look up field on the variable's type
-				auto fieldLoc = lookupField(varPtr->type, memberName, cache, stdlib, workspaceRoot, document.uri);
+				auto fieldLoc = lookupField(varPtr->type, memberName, cache, stdlib, projectSymbols, workspaceRoot, document.uri);
 				if (fieldLoc) {
 					return *fieldLoc;
 				}
@@ -42,7 +43,7 @@ std::optional<DefinitionProvider::DefinitionResult> DefinitionProvider::getDefin
 					// Cursor is on the struct type name, return struct definition
 					return buildLocation(document.uri, structIt->second.line, structIt->second.column);
 				}
-				auto fieldLoc = lookupField(objectName, memberName, cache, stdlib, workspaceRoot, document.uri);
+				auto fieldLoc = lookupField(objectName, memberName, cache, stdlib, projectSymbols, workspaceRoot, document.uri);
 				if (fieldLoc) {
 					return *fieldLoc;
 				}
@@ -84,7 +85,28 @@ std::optional<DefinitionProvider::DefinitionResult> DefinitionProvider::getDefin
 											 structSym.sourceRange.endCol);
 					}
 				}
-				auto fieldLoc = lookupField(objectName, memberName, cache, stdlib, workspaceRoot, document.uri);
+				auto fieldLoc = lookupField(objectName, memberName, cache, stdlib, projectSymbols, workspaceRoot, document.uri);
+				if (fieldLoc) {
+					return *fieldLoc;
+				}
+			}
+		}
+
+		// Try project structs
+		for (const auto &structSym : projectSymbols.structs) {
+			if (structSym.name == objectName) {
+				if (cursorOnObject) {
+					// Cursor is on the struct type name
+					if (!structSym.filePath.empty() && structSym.sourceRange.startLine > 0) {
+						std::string uri = toUri(structSym.filePath);
+						return buildLocation(uri,
+											 structSym.sourceRange.startLine,
+											 structSym.sourceRange.startCol,
+											 structSym.sourceRange.endLine,
+											 structSym.sourceRange.endCol);
+					}
+				}
+				auto fieldLoc = lookupField(objectName, memberName, cache, stdlib, projectSymbols, workspaceRoot, document.uri);
 				if (fieldLoc) {
 					return *fieldLoc;
 				}
@@ -93,6 +115,21 @@ std::optional<DefinitionProvider::DefinitionResult> DefinitionProvider::getDefin
 
 		// Try stdlib enums
 		for (const auto &enumSym : stdlib.enums) {
+			if (enumSym.name == objectName) {
+				// Return location of the enum definition
+				if (!enumSym.filePath.empty() && enumSym.sourceRange.startLine > 0) {
+					std::string uri = toUri(enumSym.filePath);
+					return buildLocation(uri,
+										 enumSym.sourceRange.startLine,
+										 enumSym.sourceRange.startCol,
+										 enumSym.sourceRange.endLine,
+										 enumSym.sourceRange.endCol);
+				}
+			}
+		}
+
+		// Try project enums
+		for (const auto &enumSym : projectSymbols.enums) {
 			if (enumSym.name == objectName) {
 				// Return location of the enum definition
 				if (!enumSym.filePath.empty() && enumSym.sourceRange.startLine > 0) {
@@ -126,13 +163,13 @@ std::optional<DefinitionProvider::DefinitionResult> DefinitionProvider::getDefin
 	}
 
 	// 3. Try function lookup
-	auto funcLoc = lookupFunction(symbol, cache, stdlib, workspaceRoot, document.uri);
+	auto funcLoc = lookupFunction(symbol, cache, stdlib, projectSymbols, workspaceRoot, document.uri);
 	if (funcLoc) {
 		return *funcLoc;
 	}
 
 	// 4. Try type lookup (struct, enum, interface)
-	auto typeLoc = lookupType(symbol, cache, stdlib, workspaceRoot, document.uri);
+	auto typeLoc = lookupType(symbol, cache, stdlib, projectSymbols, workspaceRoot, document.uri);
 	if (typeLoc) {
 		return *typeLoc;
 	}
@@ -306,6 +343,7 @@ std::optional<Location> DefinitionProvider::lookupVariable(const std::string &na
 std::optional<Location> DefinitionProvider::lookupFunction(const std::string &name,
 														   const AnalysisCache *cache,
 														   const StdlibSymbols &stdlib,
+														   const StdlibSymbols &projectSymbols,
 														   const std::string &workspaceRoot,
 														   const std::string &documentUri) {
 	(void)workspaceRoot;
@@ -351,12 +389,27 @@ std::optional<Location> DefinitionProvider::lookupFunction(const std::string &na
 		}
 	}
 
+	// Check in project functions
+	for (const auto &func : projectSymbols.functions) {
+		if (func.name == name) {
+			if (!func.filePath.empty() && func.sourceRange.startLine > 0) {
+				std::string uri = toUri(func.filePath);
+				return buildLocation(uri,
+									 func.sourceRange.startLine,
+									 func.sourceRange.startCol,
+									 func.sourceRange.endLine,
+									 func.sourceRange.endCol);
+			}
+		}
+	}
+
 	return std::nullopt;
 }
 
 std::optional<Location> DefinitionProvider::lookupType(const std::string &name,
 													   const AnalysisCache *cache,
 													   const StdlibSymbols &stdlib,
+													   const StdlibSymbols &projectSymbols,
 													   const std::string &workspaceRoot,
 													   const std::string &documentUri) {
 	(void)workspaceRoot;
@@ -437,6 +490,48 @@ std::optional<Location> DefinitionProvider::lookupType(const std::string &name,
 		}
 	}
 
+	// Check project structs
+	for (const auto &structSym : projectSymbols.structs) {
+		if (structSym.name == name) {
+			if (!structSym.filePath.empty() && structSym.sourceRange.startLine > 0) {
+				std::string uri = toUri(structSym.filePath);
+				return buildLocation(uri,
+									 structSym.sourceRange.startLine,
+									 structSym.sourceRange.startCol,
+									 structSym.sourceRange.endLine,
+									 structSym.sourceRange.endCol);
+			}
+		}
+	}
+
+	// Check project enums
+	for (const auto &enumSym : projectSymbols.enums) {
+		if (enumSym.name == name) {
+			if (!enumSym.filePath.empty() && enumSym.sourceRange.startLine > 0) {
+				std::string uri = toUri(enumSym.filePath);
+				return buildLocation(uri,
+									 enumSym.sourceRange.startLine,
+									 enumSym.sourceRange.startCol,
+									 enumSym.sourceRange.endLine,
+									 enumSym.sourceRange.endCol);
+			}
+		}
+	}
+
+	// Check project interfaces
+	for (const auto &ifaceSym : projectSymbols.interfaces) {
+		if (ifaceSym.name == name) {
+			if (!ifaceSym.filePath.empty() && ifaceSym.sourceRange.startLine > 0) {
+				std::string uri = toUri(ifaceSym.filePath);
+				return buildLocation(uri,
+									 ifaceSym.sourceRange.startLine,
+									 ifaceSym.sourceRange.startCol,
+									 ifaceSym.sourceRange.endLine,
+									 ifaceSym.sourceRange.endCol);
+			}
+		}
+	}
+
 	return std::nullopt;
 }
 
@@ -444,6 +539,7 @@ std::optional<Location> DefinitionProvider::lookupField(const std::string &struc
 														const std::string &fieldName,
 														const AnalysisCache *cache,
 														const StdlibSymbols &stdlib,
+														const StdlibSymbols &projectSymbols,
 														const std::string &workspaceRoot,
 														const std::string &documentUri) {
 	(void)workspaceRoot;
@@ -480,6 +576,21 @@ std::optional<Location> DefinitionProvider::lookupField(const std::string &struc
 		if (structSym.name == structName) {
 			if (!structSym.filePath.empty() && structSym.sourceRange.startLine > 0) {
 				// We don't have field-level source ranges in stdlib, so point to the struct
+				std::string uri = toUri(structSym.filePath);
+				return buildLocation(uri,
+									 structSym.sourceRange.startLine,
+									 structSym.sourceRange.startCol,
+									 structSym.sourceRange.endLine,
+									 structSym.sourceRange.endCol);
+			}
+		}
+	}
+
+	// Check project structs - we don't have detailed field info in project symbols
+	// but we can at least point to the struct definition
+	for (const auto &structSym : projectSymbols.structs) {
+		if (structSym.name == structName) {
+			if (!structSym.filePath.empty() && structSym.sourceRange.startLine > 0) {
 				std::string uri = toUri(structSym.filePath);
 				return buildLocation(uri,
 									 structSym.sourceRange.startLine,

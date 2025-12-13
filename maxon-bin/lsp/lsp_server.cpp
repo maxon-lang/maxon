@@ -292,6 +292,13 @@ void LSPServer::handleDidOpen(const json &params) {
 		openParams.textDocument.version,
 		openParams.textDocument.text);
 
+	// If this file is in a project, invalidate the cache so new files are discovered
+	std::string filePath = uriToPath(openParams.textDocument.uri);
+	std::string projectRoot = findProjectRoot(filePath);
+	if (!projectRoot.empty()) {
+		invalidateProjectSymbols(projectRoot);
+	}
+
 	// Trigger analysis
 	analyzeDocument(openParams.textDocument.uri);
 }
@@ -686,7 +693,6 @@ void LSPServer::analyzeDocument(const std::string &uri) {
 		// Load symbols from sibling project files
 		StdlibSymbols projectSymbols = loadProjectSymbols(filePath);
 
-
 		// Merge project symbols into combined symbols
 		for (auto &sym : projectSymbols.functions) {
 			combinedSymbols.functions.push_back(std::move(sym));
@@ -1080,8 +1086,12 @@ json LSPServer::handleDefinition(const json &params) {
 	Document *doc = docOpt.value();
 	const AnalysisCache *cache = documentManager_.getAnalysis(uri);
 
+	// Get project symbols for cross-file type lookup
+	std::string filePath = uriToPath(uri);
+	StdlibSymbols projectSymbols = loadProjectSymbols(filePath);
+
 	DefinitionProvider provider;
-	auto result = provider.getDefinition(*doc, defParams.position, cache, stdlib_, workspaceRoot_);
+	auto result = provider.getDefinition(*doc, defParams.position, cache, stdlib_, projectSymbols, workspaceRoot_);
 
 	if (!result.has_value()) {
 		return nullptr;
