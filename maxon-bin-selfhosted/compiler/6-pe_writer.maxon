@@ -2,36 +2,38 @@
 
 export type CodeBuffer
 	var bytes array of byte
-	var size int
 
 	export function create() returns CodeBuffer
 		return CodeBuffer{bytes: array of byte, size: 0}
 	end 'create'
 
-	export function emitByte(b byte) returns nothing
+	export function emitByte(b byte)
 		bytes.push(b)
-		size = size + 1
-	end 'emitByte'
+	end 'emitBytes'
 
-	export function emitWord(value int) returns nothing
+	export function emitBytes(b array of byte)
+		bytes.push(b)
+	end 'emitBytes'
+
+	export function emitWord(value int)
 		emitByte((value & 0xFF) as byte)
 		emitByte(((value >> 8) & 0xFF) as byte)
 	end 'emitWord'
 
-	export function emitDword(value int) returns nothing
+	export function emitDword(value int)
 		emitByte((value & 0xFF) as byte)
 		emitByte(((value >> 8) & 0xFF) as byte)
 		emitByte(((value >> 16) & 0xFF) as byte)
 		emitByte(((value >> 24) & 0xFF) as byte)
 	end 'emitDword'
 
-	export function emitQword(value int) returns nothing
+	export function emitQword(value int)
 		emitDword(value & 0xFFFFFFFF)
 		emitDword((value >> 32) & 0xFFFFFFFF)
 	end 'emitQword'
 
-	export function align(alignment int) returns nothing
-		while (size mod alignment) != 0 'pad'
+	export function align(alignment int)
+		while (bytes.count() mod alignment) != 0 'pad'
 			emitByte(0 as byte)
 		end 'pad'
 	end 'align'
@@ -44,7 +46,7 @@ export type CompleteExeBuilder
 		return CompleteExeBuilder{buffer: CodeBuffer.create()}
 	end 'create'
 
-	export function buildBasicExe() returns nothing
+	export function buildBasicExe()
 		let headersSize = 512
 		let textSectionFileOffset = 512
 		let textSectionRVA = 4096
@@ -144,7 +146,7 @@ export type CompleteExeBuilder
 		buffer.emitDword(0xC0000040)
 
 		// Pad headers
-		while buffer.size < headersSize 'padHeaders'
+		while buffer.bytes.count() < headersSize 'padHeaders'
 			buffer.emitByte(0 as byte)
 		end 'padHeaders'
 
@@ -169,7 +171,7 @@ export type CompleteExeBuilder
 		buffer.emitDword(relOffset)
 
 		// Pad .text section
-		while buffer.size < idataSectionFileOffset 'padText'
+		while buffer.bytes.count() < idataSectionFileOffset 'padText'
 			buffer.emitByte(0x90 as byte)
 		end 'padText'
 
@@ -201,7 +203,7 @@ export type CompleteExeBuilder
 		writeString("kernel32.dll")
 
 		// Pad to hint offset
-		while (buffer.size - idataSectionFileOffset) < hintNameOffset 'padToHint'
+		while (buffer.bytes.count() - idataSectionFileOffset) < hintNameOffset 'padToHint'
 			buffer.emitByte(0 as byte)
 		end 'padToHint'
 
@@ -210,7 +212,7 @@ export type CompleteExeBuilder
 		writeString("ExitProcess")
 
 		// Pad to IAT offset
-		while (buffer.size - idataSectionFileOffset) < iatOffset 'padToIAT'
+		while (buffer.bytes.count() - idataSectionFileOffset) < iatOffset 'padToIAT'
 			buffer.emitByte(0 as byte)
 		end 'padToIAT'
 
@@ -219,25 +221,16 @@ export type CompleteExeBuilder
 		buffer.emitQword(0)
 
 		// Pad .idata section
-		while buffer.size < (idataSectionFileOffset + idataSectionSize) 'padIdata'
+		while buffer.bytes.count() < (idataSectionFileOffset + idataSectionSize) 'padIdata'
 			buffer.emitByte(0 as byte)
 		end 'padIdata'
 	end 'buildBasicExe'
 
-	export function writeSectionName(name string) returns nothing
-		var chars = name.chars()
-		var i = 0
-		while i < 8 'loop'
-			if i < chars.count() 'hasChar'
-				buffer.emitByte(charToByte(chars[i]))
-			end 'hasChar' else 'noChar'
-				buffer.emitByte(0 as byte)
-			end 'noChar'
-			i = i + 1
-		end 'loop'
+	export function writeSectionName(name string)
+		buffer.emitBytes(name.slice(0, 7).bytes())
 	end 'writeSectionName'
 
-	export function writeString(s string) returns nothing
+	export function writeString(s string)
 		for c in s 'chars'
 			buffer.emitByte(charToByte(c))
 		end 'chars'
@@ -249,14 +242,22 @@ export type CompleteExeBuilder
 	end 'getBytes'
 
 	export function getSize() returns int
-		return buffer.size
+		return buffer.bytes.count()
 	end 'getSize'
 end 'CompleteExeBuilder'
 
 function charToByte(c character) returns byte
 	// Simple ASCII conversion
-	if c == 'a' 'a'
-		return 97 as byte
+	return match c 'to_ascii'
+		'A' gives 65 as byte
+		'B' gives 66 as byte
+		'C' gives 67 as byte
+		'D' gives 68 as byte
+		'E' gives 69 as byte
+
+
+		if c == 'a' 'a'
+			return 97 as byte
 	end 'a'
 	if c == 'b' 'b'
 		return 98 as byte
@@ -347,3 +348,4 @@ function charToByte(c character) returns byte
 	end '3'
 	return 0 as byte
 end 'charToByte'
+

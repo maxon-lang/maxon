@@ -130,7 +130,7 @@ The guard body MUST exit the current scope using `return`, `break`, or `continue
 Optional parameters can use `nil` as the default value:
 
 ```maxon
-function greet(name string or nil = nil) returns nothing
+function greet(name string or nil = nil)
     let actualName = name or 'default'
         print("Hello, stranger!")
         return

@@ -158,7 +158,7 @@ int main(int argc, char *argv[]) {
 
 		buildFile << "// Build configuration for " << projectName << "\n";
 		buildFile << "\n";
-		buildFile << "function main() returns nothing\n";
+		buildFile << "function main()\n";
 		buildFile << "\tbuild(\"" << projectName << "\")\n";
 		buildFile << "end 'main'\n";
 		buildFile.close();
@@ -217,7 +217,8 @@ int main(int argc, char *argv[]) {
 			}
 
 			if (options.verboseLevel >= 2) {
-				std::cout << "Build config JSON:\n" << *jsonOutput << std::endl;
+				std::cout << "Build config JSON:\n"
+						  << *jsonOutput << std::endl;
 			}
 
 			auto buildConfig = parseBuildConfig(*jsonOutput);

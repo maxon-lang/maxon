@@ -122,7 +122,7 @@ end 'main'
 
 <!-- test: void-function-unused -->
 ```maxon
-function doNothing(x int, y int) returns nothing
+function doNothing(x int, y int)
     var z = 42
 end 'doNothing'
 
@@ -135,13 +135,13 @@ end 'main'
 Semantic Error: line 2, column 20
 The parameter 'x' is declared but its value is never used
 
-  2 | function doNothing(x int, y int) returns nothing
+  2 | function doNothing(x int, y int)
     |                    ^
 
 Semantic Error: line 2, column 27
 The parameter 'y' is declared but its value is never used
 
-  2 | function doNothing(x int, y int) returns nothing
+  2 | function doNothing(x int, y int)
     |                           ^
 
 Semantic Error: line 3, column 5

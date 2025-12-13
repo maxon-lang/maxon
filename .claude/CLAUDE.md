@@ -129,7 +129,7 @@ end 'Name'
 var instance = Name{field1: 1, field2: "hello"}  // instantiation
 
 // Functions
-// returnType can be 'nothing' for no return value
+// omit returns clause for void functions
 function name(p1 type, p2 type) returns returnType
     return value
 end 'name'
@@ -137,6 +137,10 @@ end 'name'
 function name(p1 type, p2 type = default) returns returnType  // default value
     return value
 end 'name'
+
+function voidFunc(p1 type)  // no return type = void
+    // statements
+end 'voidFunc'
 
 // Function Calls
 foo(1, 2)                   // positional arguments

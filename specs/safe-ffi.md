@@ -242,7 +242,7 @@ end 'main'
 
 <!-- test: extern-void-return -->
 ```maxon
-extern function do_nothing() returns nothing "ffi_test_lib"
+extern function do_nothing() "ffi_test_lib"
 
 function main() returns int
     return 0

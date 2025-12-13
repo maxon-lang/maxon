@@ -1,12 +1,12 @@
 // Lexer for the Maxon language
 
 let keywords = [
-	"function": TokenType.kwFunction,
-	"end": TokenType.kwEnd,
-	"return": TokenType.kwReturn,
-	"let": TokenType.kwLet,
-	"int": TokenType.kwInt,
-	"returns": TokenType.kwReturns
+"function": TokenType.kwFunction,
+"end": TokenType.kwEnd,
+"return": TokenType.kwReturn,
+"let": TokenType.kwLet,
+"int": TokenType.kwInt,
+"returns": TokenType.kwReturns
 ]
 
 export type Lexer
@@ -44,7 +44,7 @@ export type Lexer
 		return c
 	end 'advance'
 
-	export function skipWhitespace() returns nothing
+	export function skipWhitespace()
 		while not isAtEnd() 'loop'
 			var c = peek()
 			if c == ' ' or c == '\t' 'ws'
@@ -79,120 +79,121 @@ export type Lexer
 
 	export function keywordOrIdentifier(lexeme string) returns TokenType
 		let result = keywords.get(lexeme) or 'notFound'
-			return TokenType.identifier
-		end 'notFound'
-		return result
-	end 'keywordOrIdentifier'
+		return TokenType.identifier
+	end 'notFound'
+	return result
+end 'keywordOrIdentifier'
 
-	export function scanIdentifier() returns Token
-		var startPos = pos
-		var startLine = line
-		var startColumn = column
+export function scanIdentifier() returns Token
+	var startPos = pos
+	var startLine = line
+	var startColumn = column
 
-		while not isAtEnd() and isAlphaNumeric(peek()) 'scan'
-			advance()
-		end 'scan'
+	while not isAtEnd() and isAlphaNumeric(peek()) 'scan'
+		advance()
+	end 'scan'
 
-		var lexeme = buildLexeme(startPos, pos)
-		var kind = keywordOrIdentifier(lexeme)
-		return makeToken(kind, lexeme, startLine, startColumn)
-	end 'scanIdentifier'
+	var lexeme = buildLexeme(startPos, pos)
+	var kind = keywordOrIdentifier(lexeme)
+	return makeToken(kind, lexeme, startLine, startColumn)
+end 'scanIdentifier'
 
-	export function scanNumber() returns Token
-		var startPos = pos
-		var startLine = line
-		var startColumn = column
+export function scanNumber() returns Token
+	var startPos = pos
+	var startLine = line
+	var startColumn = column
 
-		while isDigit(peek()) 'intPart'
-			advance()
-		end 'intPart'
+	while isDigit(peek()) 'intPart'
+		advance()
+	end 'intPart'
 
-		var lexeme = buildLexeme(startPos, pos)
-		return makeToken(TokenType.intLiteral, lexeme, startLine, startColumn)
-	end 'scanNumber'
+	var lexeme = buildLexeme(startPos, pos)
+	return makeToken(TokenType.intLiteral, lexeme, startLine, startColumn)
+end 'scanNumber'
 
-	export function scanBlockLabel() returns Token
-		var startPos = pos
-		var startLine = line
-		var startColumn = column
+export function scanBlockLabel() returns Token
+	var startPos = pos
+	var startLine = line
+	var startColumn = column
 
-		advance()  // consume opening quote
+	advance()  // consume opening quote
 
-		while not isAtEnd() and peek() != '\'' 'content'
-			advance()
-		end 'content'
+	while not isAtEnd() and peek() != '\'' 'content'
+		advance()
+	end 'content'
 
-		if not isAtEnd() 'closeQuote'
-			advance()
-		end 'closeQuote'
+	if not isAtEnd() 'closeQuote'
+		advance()
+	end 'closeQuote'
 
-		var lexeme = buildLexeme(startPos, pos)
-		return makeToken(TokenType.blockLabel, lexeme, startLine, startColumn)
-	end 'scanBlockLabel'
+	var lexeme = buildLexeme(startPos, pos)
+	return makeToken(TokenType.blockLabel, lexeme, startLine, startColumn)
+end 'scanBlockLabel'
 
-	export function nextToken() returns Token
-		skipWhitespace()
+export function nextToken() returns Token
+	skipWhitespace()
 
-		if isAtEnd() 'eof'
-			return makeToken(TokenType.eof, "", line, column)
-		end 'eof'
+	if isAtEnd() 'eof'
+		return makeToken(TokenType.eof, "", line, column)
+	end 'eof'
 
-		var startLine = line
-		var startColumn = column
-		var c = advance()
+	var startLine = line
+	var startColumn = column
+	var c = advance()
 
-		if isAlpha(c) 'alpha'
-			pos = pos - 1
-			column = column - 1
-			return scanIdentifier()
-		end 'alpha'
+	if isAlpha(c) 'alpha'
+		pos = pos - 1
+		column = column - 1
+		return scanIdentifier()
+	end 'alpha'
 
-		if isDigit(c) 'digit'
-			pos = pos - 1
-			column = column - 1
-			return scanNumber()
-		end 'digit'
+	if isDigit(c) 'digit'
+		pos = pos - 1
+		column = column - 1
+		return scanNumber()
+	end 'digit'
 
-		if c == '\'' 'quote'
-			pos = pos - 1
-			column = column - 1
-			return scanBlockLabel()
-		end 'quote'
+	if c == '\'' 'quote'
+		pos = pos - 1
+		column = column - 1
+		return scanBlockLabel()
+	end 'quote'
 
-		if c == '(' 'lparen'
-			return makeToken(TokenType.lparen, "(", startLine, startColumn)
-		end 'lparen'
+	if c == '(' 'lparen'
+		return makeToken(TokenType.lparen, "(", startLine, startColumn)
+	end 'lparen'
 
-		if c == ')' 'rparen'
-			return makeToken(TokenType.rparen, ")", startLine, startColumn)
-		end 'rparen'
+	if c == ')' 'rparen'
+		return makeToken(TokenType.rparen, ")", startLine, startColumn)
+	end 'rparen'
 
-		if c == '=' 'equals'
-			return makeToken(TokenType.equals, "=", startLine, startColumn)
-		end 'equals'
+	if c == '=' 'equals'
+		return makeToken(TokenType.equals, "=", startLine, startColumn)
+	end 'equals'
 
-		if c == '\n' 'newline'
-			return makeToken(TokenType.newline, "\n", startLine, startColumn)
-		end 'newline'
+	if c == '\n' 'newline'
+		return makeToken(TokenType.newline, "\n", startLine, startColumn)
+	end 'newline'
 
-		return makeToken(TokenType.error, c.toString(), startLine, startColumn)
-	end 'nextToken'
+	return makeToken(TokenType.error, c.toString(), startLine, startColumn)
+end 'nextToken'
 
-	export function tokenize() returns array of Token
-		var tokens = array of Token
+export function tokenize() returns array of Token
+	var tokens = array of Token
 
-		while true 'loop'
-			var tok = nextToken()
-			tokens.push(tok)
+	while true 'loop'
+		var tok = nextToken()
+		tokens.push(tok)
 
-			if tok.kind == TokenType.eof 'done'
-				break 'loop'
-			end 'done'
-		end 'loop'
+		if tok.kind == TokenType.eof 'done'
+			break 'loop'
+		end 'done'
+	end 'loop'
 
-		return tokens
-	end 'tokenize'
+	return tokens
+end 'tokenize'
 end 'Lexer'
+
 
 
 

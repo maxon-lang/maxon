@@ -9,7 +9,7 @@ category: functions
 
 ## Developer Notes
 
-Functions are the basic unit of code organization in Maxon. They use the `function` keyword followed by a name, parameter list in parentheses, `returns` keyword with return type, and end with `end 'function-name'` where the identifier matches the function name.
+Functions are the basic unit of code organization in Maxon. They use the `function` keyword followed by a name, parameter list in parentheses, optional `returns` keyword with return type, and end with `end 'function-name'` where the identifier matches the function name.
 
 Key implementation details:
 - Functions are parsed in `Parser::parseFunctionDeclaration()`
@@ -17,8 +17,8 @@ Key implementation details:
 - Parameters are parsed as comma-separated list of `name type` pairs
 - The closing identifier must match the function name exactly
 - Functions are generated as LLVM `Function` objects
-- All functions must explicitly specify a return type using `returns` keyword (use `returns nothing` for functions that don't return a value)
-- All non-nothing functions must explicitly return a value (no implicit returns)
+- Return type is optional - functions without `returns` clause implicitly return void
+- All non-void functions must explicitly return a value (no implicit returns)
 
 The `main()` function is special - it's the entry point and must return `int`. The compiler generates a `_start()` wrapper that calls `main()` and passes its return value to `ExitProcess()`.
 
@@ -27,16 +27,22 @@ The `main()` function is special - it's the entry point and must return `int`. T
 Functions in Maxon are declared using the `function` keyword. Each function has:
 - A name (identifier)
 - Zero or more parameters in parentheses
-- The `returns` keyword followed by a return type
+- An optional `returns` clause with a return type (omit for void functions)
 - A body with statements
 - An `end` keyword with the function name as a block identifier
 
 ### Syntax
 
 ```maxon
+// Function with return value
 function name(param1 type1, param2 type2) returns returnType
     // statements
     return value
+end 'name'
+
+// Function with no return value (implicit void)
+function name(param1 type1, param2 type2)
+    // statements
 end 'name'
 ```
 ### Example
@@ -106,9 +112,9 @@ end 'main'
 ```
 
 
-<!-- test: nothing-return-type -->
+<!-- test: void-return-type -->
 ```maxon
-function greet() returns nothing
+function greet()
     print("Hello")
 end 'greet'
 

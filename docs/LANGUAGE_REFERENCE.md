@@ -476,7 +476,7 @@ The guard body must exit the current scope, ensuring the variable is always boun
 Optional parameters can use `nil` as the default value:
 
 ```maxon
-function greet(name string or nil = nil) returns nothing
+function greet(name string or nil = nil)
     let actualName = name or 'default'
         print("Hello, stranger!")
         return
@@ -502,7 +502,7 @@ return x + 5  // ERROR: Cannot use optional without unwrapping
 Functions can accept optional parameters:
 
 ```maxon
-returns nothing
+function greet(name string or nil)
     if let n = name 'valid'
         print("Hello, " + n)
     end 'valid' else 'invalid'
@@ -952,15 +952,21 @@ let name = "Maxon"
 
 ### Declaration Syntax
 ```maxon
+// Function with return value
 function name(param type [= default], ...) returns returnType
     // statements
     return value
+end 'name'
+
+// Function with no return value (implicit void)
+function name(param type [= default], ...)
+    // statements
 end 'name'
 ```
 
 **Block Identifier**: The string after `end` must match the function name.
 
-**Return Type**: All functions must explicitly specify a return type. Use `nothing` for functions that don't return a value.
+**Return Type**: Functions that return a value must specify `returns` followed by the type. Functions that don't return a value should omit the `returns` clause entirely.
 
 ### Named Arguments
 
@@ -998,7 +1004,7 @@ connect("localhost", port = 8080)       // Mix positional and named
 Parameters can have default values. Parameters with defaults can **only** be provided via named arguments (not positionally):
 
 ```maxon
-function greet(name string, title string = "Mr.") returns nothing
+function greet(name string, title string = "Mr.")
     print("Hello, " + title + " " + name)
 end 'greet'
 
@@ -1023,7 +1029,7 @@ end 'getAnswer'
 
 **Void Return Type**
 ```maxon
-function greet(name string) returns nothing
+function greet(name string)
     print("Hello, " + name)
 end 'greet'
 ```
@@ -1568,7 +1574,7 @@ myproject/
 For most projects, a single line suffices:
 
 ```maxon
-function main() returns nothing
+function main()
     build("myapp")  // Executable name is required
 end 'main'
 ```
@@ -1583,7 +1589,7 @@ This automatically:
 For more control, use `BuildConfig`:
 
 ```maxon
-function main() returns nothing
+function main()
     var config = BuildConfig{
         name: "myapp",
         output: "dist/myapp.exe",
@@ -1889,7 +1895,7 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 
 12. **Remember default params require named arguments**:
     ```maxon
-    function greet(name string, title string = "Mr.") returns nothing
+    function greet(name string, title string = "Mr.")
     greet("Smith")                // Uses default
     greet("Smith", title = "Dr.") // Override with named arg
     ```

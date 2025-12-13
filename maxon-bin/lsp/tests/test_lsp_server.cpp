@@ -934,7 +934,7 @@ TEST_CASE("LSP hover shows intrinsic signature", "[lsp][hover]") {
 	LSPTestFixture fixture;
 	fixture.initialize();
 
-	std::string code = R"(function test() returns nothing
+	std::string code = R"(function test()
     var cs = "test".cstr()
     var arr = [1 as byte, 2 as byte]
     __write_file_binary(cs, arr)

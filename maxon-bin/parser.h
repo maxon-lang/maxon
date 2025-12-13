@@ -65,7 +65,7 @@ class Parser {
 	std::string parseQualifiedName(const std::string &context);
 	std::string parseTypeString(const std::string &context);										  // Parse type including 'array of T'
 	std::string parseTypeStringWithOptional(const std::string &context);							  // Parse type with optional 'or nil'
-	std::string parseReturnType(int rparenLine, bool allowSelfType, const std::string &functionName); // Parse required return type
+	std::string parseReturnType(int rparenLine, bool allowSelfType, const std::string &functionName); // Parse optional return type (implicit void)
 
 	// Declaration parsing helpers
 	bool parseOptionalExport();													  // Parse optional 'export' keyword

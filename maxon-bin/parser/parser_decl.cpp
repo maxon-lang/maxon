@@ -125,12 +125,13 @@ std::vector<std::unique_ptr<StmtAST>> Parser::parseStatementBody() {
 // Return Type Parsing
 // ============================================================================
 
-// Parse return type (required - must be explicit, including nothing)
-// Return type must be on the same line as the function signature
+// Parse return type (optional - implicit void if omitted)
+// If present, return type must be on the same line as the function signature
 // Syntax: function name(params) returns Type
+//         function name(params)  -- implicit void
 // allowSelfType: if true, check for 'Self' identifier before normal type parsing (for interfaces)
 std::string Parser::parseReturnType(int rparenLine, bool allowSelfType, const std::string &functionName) {
-	// Expect 'returns' keyword on the same line as the closing paren
+	// Check for 'returns' keyword on the same line as the closing paren
 	if (currentLine() == rparenLine && checkKeyword("returns")) {
 		advance(); // consume 'returns'
 
@@ -140,20 +141,10 @@ std::string Parser::parseReturnType(int rparenLine, bool allowSelfType, const st
 			return "Self";
 		}
 
-		// Parse the return type (maps 'nothing' to 'void' internally)
-		std::string returnType = parseTypeStringWithOptional("return type");
-		if (returnType == "nothing") {
-			return "void";
-		}
-		return returnType;
+		return parseTypeStringWithOptional("return type");
 	}
-	reportError("Function '" + functionName + "' is missing 'returns' keyword and return type\n"
-											  "  All functions must specify 'returns' followed by a return type\n"
-											  "  Example: function " +
-					functionName + "(...) returns int\n"
-								   "  For functions that don't return a value, use: returns nothing",
-				currentLine(), currentColumn());
-	return "void"; // Return void to continue parsing after error
+	// No 'returns' keyword - implicit void return type
+	return "void";
 }
 
 // ============================================================================
@@ -199,8 +190,8 @@ std::unique_ptr<FunctionAST> Parser::parseMethodImpl(const std::string &receiver
 
 	// For static methods, don't inject the implicit 'self' parameter
 	std::vector<FunctionParameter> parameters = isStatic
-		? parseParameterList(nullptr, 0, 0)
-		: parseParameterList(&receiverType, funcToken.line, funcToken.column);
+													? parseParameterList(nullptr, 0, 0)
+													: parseParameterList(&receiverType, funcToken.line, funcToken.column);
 
 	int rparenLine = currentLine();
 	expectAdvance(TokenType::RPAREN, "Expected ')'");

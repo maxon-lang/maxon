@@ -23,12 +23,12 @@ export type SemanticAnalyzer
 		return errors.count() == 0
 	end 'success'
 
-	export function addError(message string, loc SourceLoc) returns nothing
+	export function addError(message string, loc SourceLoc)
 		var err = SemanticError{message: message, line: loc.line, column: loc.column}
 		errors.push(err)
 	end 'addError'
 
-	export function analyze(program Program) returns nothing
+	export function analyze(program Program)
 		var i = 0
 		while i < program.functions.count() 'funcs'
 			analyzeFunction(program.functions[i])
@@ -41,7 +41,7 @@ export type SemanticAnalyzer
 		end 'noMain'
 	end 'analyze'
 
-	export function analyzeFunction(fn FunctionDecl) returns nothing
+	export function analyzeFunction(fn FunctionDecl)
 		if fn.name == "main" 'isMain'
 			hasMain = true
 		end 'isMain'
@@ -55,7 +55,7 @@ export type SemanticAnalyzer
 		end 'body'
 	end 'analyzeFunction'
 
-	export function analyzeStmt(stmt Stmt) returns nothing
+	export function analyzeStmt(stmt Stmt)
 		if stmt.kind == StmtKind.returnStmt 'return'
 			if stmt.hasValue 'hasValue'
 				analyzeExpr(stmt.expr)
@@ -68,7 +68,7 @@ export type SemanticAnalyzer
 		end 'let'
 	end 'analyzeStmt'
 
-	export function analyzeExpr(expr Expr) returns nothing
+	export function analyzeExpr(expr Expr)
 		if expr.kind == ExprKind.varRef 'varRef'
 			if not localVars.contains(expr.name) 'undefined'
 				addError("Undefined variable: {expr.name}", expr.loc)
@@ -76,7 +76,7 @@ export type SemanticAnalyzer
 		end 'varRef'
 	end 'analyzeExpr'
 
-	export function printErrors() returns nothing
+	export function printErrors()
 		var i = 0
 		while i < errors.count() 'errs'
 			var err = errors[i]

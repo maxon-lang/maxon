@@ -154,7 +154,7 @@ type Counter
         return Counter{count: 0}
     end 'zero'
 
-    function increment() returns nothing
+    function increment()
         count = count + 1
     end 'increment'
 
