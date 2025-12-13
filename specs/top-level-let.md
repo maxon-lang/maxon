@@ -293,7 +293,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 2, column 1
+Semantic Error: temp_fragment.maxon:2:1
 Circular dependency detected among global constants: A, B
 
   2 | let A = B + 1

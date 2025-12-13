@@ -300,7 +300,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 5, column 11
+Semantic Error: temp_fragment.maxon:5:11
 Cannot assign to loop variable 'i'
   Loop variable declared at line 4, column 5
   Note: Loop iteration variables are immutable and cannot be reassigned
@@ -322,7 +322,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 5, column 14
+Semantic Error: temp_fragment.maxon:5:14
 Cannot iterate over type 'int'
   For-loops require an iterable type: array, string, range()
 
@@ -342,14 +342,14 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 5, column 14
+Semantic Error: temp_fragment.maxon:5:14
 Cannot iterate over type 'bool'
   For-loops require an iterable type: array, string, range()
 
   5 |     for i in flag 'loop'
     |              ^
 
-Semantic Error: line 5, column 5
+Semantic Error: temp_fragment.maxon:5:5
 The variable 'i' is assigned but its value is never used
 
   5 |     for i in flag 'loop'
@@ -368,14 +368,14 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 5, column 14
+Semantic Error: temp_fragment.maxon:5:14
 Cannot iterate over type 'float'
   For-loops require an iterable type: array, string, range()
 
   5 |     for i in val 'loop'
     |              ^
 
-Semantic Error: line 5, column 5
+Semantic Error: temp_fragment.maxon:5:5
 The variable 'i' is assigned but its value is never used
 
   5 |     for i in val 'loop'

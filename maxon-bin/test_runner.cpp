@@ -319,6 +319,13 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 				pos += 19; // length of "temp_fragment.maxon"
 			}
 
+			// Normalize "temp/temp_fragment.maxon" to "temp_fragment.maxon"
+			pos = 0;
+			while ((pos = actualMaxoncStderr.find("temp/temp_fragment.maxon", pos)) != std::string::npos) {
+				actualMaxoncStderr.replace(pos, 24, "temp_fragment.maxon");
+				pos += 19;
+			}
+
 			trim(actualMaxoncStderr);
 			// Save actual stderr for --update option
 			result.actualMaxoncStderr = actualMaxoncStderr;

@@ -229,6 +229,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	// First pass: collect all interface definitions
 	logTrace("Pass 1a: Collecting interface definitions");
 	for (const auto &interfaceDef : program->interfaces) {
+		// Track source file for error reporting
+		if (!interfaceDef->sourceFile.empty()) {
+			currentFilePath_ = interfaceDef->sourceFile;
+		}
+
 		std::string interfaceKey = (interfaceDef->isExported && !interfaceDef->namespaceName.empty())
 									   ? interfaceDef->namespaceName + "." + interfaceDef->name
 									   : interfaceDef->name;
@@ -265,6 +270,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 	// Validate that extended interfaces exist
 	for (const auto &interfaceDef : program->interfaces) {
+		// Track source file for error reporting
+		if (!interfaceDef->sourceFile.empty()) {
+			currentFilePath_ = interfaceDef->sourceFile;
+		}
+
 		if (!interfaceDef->extendsInterface.empty()) {
 			if (interfaces.find(interfaceDef->extendsInterface) == interfaces.end()) {
 				addError("Interface '" + interfaceDef->name + "' extends unknown interface '" +
@@ -277,6 +287,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	// First pass: collect all enum definitions
 	logTrace("Pass 1b: Collecting enum definitions");
 	for (const auto &enumDef : program->enums) {
+		// Track source file for error reporting
+		if (!enumDef->sourceFile.empty()) {
+			currentFilePath_ = enumDef->sourceFile;
+		}
+
 		std::string enumKey = (enumDef->isExported && !enumDef->namespaceName.empty())
 								  ? enumDef->namespaceName + "." + enumDef->name
 								  : enumDef->name;
@@ -379,6 +394,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	// First pass: collect all struct definitions
 	logTrace("Pass 1c: Collecting struct definitions");
 	for (const auto &structDef : program->structs) {
+		// Track source file for error reporting
+		if (!structDef->sourceFile.empty()) {
+			currentFilePath_ = structDef->sourceFile;
+		}
+
 		// Build the qualified name if the struct has a namespace and is exported
 		std::string structKey = (structDef->isExported && !structDef->namespaceName.empty())
 									? structDef->namespaceName + "." + structDef->name
@@ -484,6 +504,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 	// First, register methods from struct definitions (inline methods)
 	for (const auto &structDef : program->structs) {
+		// Track source file for error reporting
+		if (!structDef->sourceFile.empty()) {
+			currentFilePath_ = structDef->sourceFile;
+		}
+
 		for (const auto &method : structDef->methods) {
 			// Method key is StructName.methodName
 			std::string methodKey = structDef->name + "." + method->name;
@@ -546,6 +571,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 	// Register methods from enum definitions
 	for (const auto &enumDef : program->enums) {
+		// Track source file for error reporting
+		if (!enumDef->sourceFile.empty()) {
+			currentFilePath_ = enumDef->sourceFile;
+		}
+
 		for (const auto &method : enumDef->methods) {
 			// Method key is EnumName.methodName
 			std::string methodKey = enumDef->name + "." + method->name;
@@ -599,6 +629,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	// Generic templates are also checked to ensure all required methods are defined
 	logTrace("Pass 2b: Checking interface conformance");
 	for (const auto &structDef : program->structs) {
+		// Track source file for error reporting
+		if (!structDef->sourceFile.empty()) {
+			currentFilePath_ = structDef->sourceFile;
+		}
+
 		if (!structDef->conformsTo.empty()) {
 			bool isGenericTemplate = !structDef->associatedTypeParams.empty();
 			checkInterfaceConformance(structDef->name, structDef->conformsTo, structDef->line, structDef->column, isGenericTemplate);
@@ -608,6 +643,10 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	// Pass 2c: Register all global constants (names only, for forward reference support)
 	logTrace("Pass 2c: Registering global constants");
 	for (const auto &global : program->globals) {
+		// Track source file for error reporting
+		if (!global->sourceFile.empty()) {
+			currentFilePath_ = global->sourceFile;
+		}
 		std::string globalKey = (global->isExported && !global->name.empty())
 									? global->name // TODO: support namespace prefix for exports
 									: global->name;
@@ -642,6 +681,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 	// Collect dependencies for each global
 	for (const auto &global : program->globals) {
+		// Track source file for error reporting
+		if (!global->sourceFile.empty()) {
+			currentFilePath_ = global->sourceFile;
+		}
+
 		if (globalMap.find(global->name) == globalMap.end())
 			continue;
 
@@ -731,6 +775,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 	// Skip generic template structs (those with associatedTypeParams) - they'll be analyzed when instantiated
 	// BUT still check for doc comments on exported methods
 	for (const auto &structDef : program->structs) {
+		// Track source file for error reporting
+		if (!structDef->sourceFile.empty()) {
+			currentFilePath_ = structDef->sourceFile;
+		}
+
 		bool isGenericTemplate = !structDef->associatedTypeParams.empty();
 
 		// Check doc comments on exported methods even for generic templates
@@ -773,6 +822,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 	// Analyze methods inside enums
 	for (const auto &enumDef : program->enums) {
+		// Track source file for error reporting
+		if (!enumDef->sourceFile.empty()) {
+			currentFilePath_ = enumDef->sourceFile;
+		}
+
 		for (const auto &method : enumDef->methods) {
 			currentFunctionName_ = enumDef->name + "." + method->name;
 			analyzeFunction(method.get());
@@ -789,6 +843,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 			currentFunctionName_ = func->name;
 		}
 		analyzeFunction(func.get());
+		;
 		currentFunctionName_.clear();
 	}
 
@@ -801,6 +856,11 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 }
 
 void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
+	// Track source file for error reporting
+	if (!func->sourceFile.empty()) {
+		currentFilePath_ = func->sourceFile;
+	}
+
 	// If this is an extern function, skip body analysis
 	if (func->isExtern) {
 		logTrace("Skipping extern function: " + func->name);
@@ -1270,11 +1330,11 @@ bool SemanticAnalyzer::isConstantExpression(ExprAST *expr, std::string &nonConst
 }
 
 void SemanticAnalyzer::addError(const std::string &message, int line, int column, const std::string &errCode) {
-	errors.emplace_back(message, line, column, 1, errCode); // Severity 1 = Error
+	errors.emplace_back(message, line, column, 1, errCode, currentFilePath_); // Severity 1 = Error
 }
 
 void SemanticAnalyzer::addWarning(const std::string &message, int line, int column, const std::string &errCode) {
-	errors.emplace_back(message, line, column, 2, errCode); // Severity 2 = Warning
+	errors.emplace_back(message, line, column, 2, errCode, currentFilePath_); // Severity 2 = Warning
 }
 
 void SemanticAnalyzer::markVariableAsUsed(const std::string &name) {
@@ -1548,12 +1608,12 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 			// For instance methods: impl has implicit 'self' as first param (+1)
 			// For static methods: no self parameter, counts should match directly
 			size_t expectedParamCount = protoMethod.isStatic
-				? protoMethod.parameters.size()
-				: protoMethod.parameters.size() + 1; // +1 for implicit self
+											? protoMethod.parameters.size()
+											: protoMethod.parameters.size() + 1; // +1 for implicit self
 			if (implFunc.parameters.size() != expectedParamCount) {
 				size_t reportedImplCount = protoMethod.isStatic
-					? implFunc.parameters.size()
-					: (implFunc.parameters.size() > 0 ? implFunc.parameters.size() - 1 : 0);
+											   ? implFunc.parameters.size()
+											   : (implFunc.parameters.size() > 0 ? implFunc.parameters.size() - 1 : 0);
 				addError("Method '" + expectedMethodName + "' has " + std::to_string(reportedImplCount) +
 							 " explicit parameter(s) but interface '" + interfaceName + "' requires " +
 							 std::to_string(protoMethod.parameters.size()),

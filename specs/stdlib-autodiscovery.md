@@ -119,7 +119,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 3, column 18
+Semantic Error: temp_fragment.maxon:3:18
 Missing required argument for parameter 'exponent'
   Add: exponent = <value>
 

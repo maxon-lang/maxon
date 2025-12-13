@@ -622,7 +622,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp/temp_fragment.maxon':
+In file 'temp_fragment.maxon':
 Expected expression
   Found: 'fallthrough'
   Note: An expression can be a number, variable, function call, or arithmetic/comparison operation
@@ -640,7 +640,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 5, column 9
+Semantic Error: temp_fragment.maxon:5:9
 Cannot combine 'fallthrough' with 'return' statement
 
   5 |         1 then return 10 and fallthrough
@@ -664,14 +664,14 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 10, column 5
+Semantic Error: temp_fragment.maxon:10:5
 Match on enum 'Color' is not exhaustive
   Missing cases: blue
 
   10 |     match c 'check'
      |     ^
 
-Semantic Error: line 8, column 1
+Semantic Error: temp_fragment.maxon:8:1
 Function 'main' must return a value of type 'int'
   Note: All execution paths through the function must end with a return statement
 
@@ -691,7 +691,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 6, column 9
+Semantic Error: temp_fragment.maxon:6:9
 Duplicate pattern '1' in match
 
   6 |         1 then return 20
@@ -709,7 +709,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 5, column 9
+Semantic Error: temp_fragment.maxon:5:9
 Pattern type 'string' does not match scrutinee type 'int'
 
   5 |         "one" then return 10
@@ -727,7 +727,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp/temp_fragment.maxon':
+In file 'temp_fragment.maxon':
 Expected block identifier after match expression
   Expected: block identifier
   Found: '1'
@@ -745,7 +745,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp/temp_fragment.maxon':
+In file 'temp_fragment.maxon':
 Block identifier mismatch in match statement
   Expected: 'check'
   Found: 'wrong'
@@ -764,7 +764,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 5
+Semantic Error: temp_fragment.maxon:4:5
 'default' case must be the last case in match
 
   4 |     match x 'check'

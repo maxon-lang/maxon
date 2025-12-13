@@ -279,13 +279,13 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 6, column 1
+Semantic Error: temp_fragment.maxon:6:1
 Type 'Broken' does not define required associated type 'Element' from interface 'HasElement'
 
   6 | type Broken is HasElement
     | ^
 
-Semantic Error: line 6, column 1
+Semantic Error: temp_fragment.maxon:6:1
 Method 'Broken.get' has return type 'int' but interface 'HasElement' requires 'Element'
 
   6 | type Broken is HasElement
@@ -315,7 +315,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 7, column 1
+Semantic Error: temp_fragment.maxon:7:1
 Partial interface implementation: type 'Partial' is missing 1 method(s):
   - second() returns int
 
@@ -345,7 +345,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 6, column 1
+Semantic Error: temp_fragment.maxon:6:1
 Method 'WrongReturn.produce' has return type 'int' but interface 'Producer' requires 'float'
 
   6 | type WrongReturn is Producer with float
@@ -515,13 +515,13 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 6, column 1
+Semantic Error: temp_fragment.maxon:6:1
 Type 'Missing' does not define required associated type 'Element' from interface 'NeedsElement'
 
   6 | type Missing is NeedsElement
     | ^
 
-Semantic Error: line 6, column 1
+Semantic Error: temp_fragment.maxon:6:1
 Method 'Missing.get' has return type 'int' but interface 'NeedsElement' requires 'Element'
 
   6 | type Missing is NeedsElement
@@ -549,7 +549,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 7, column 1
+Semantic Error: temp_fragment.maxon:7:1
 Partial interface implementation: type 'Partial' is missing 1 method(s):
   - second() returns int
 
@@ -577,7 +577,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 6, column 1
+Semantic Error: temp_fragment.maxon:6:1
 Method 'WrongType.make' has return type 'int' but interface 'Typed' requires 'float'
 
   6 | type WrongType is Typed with float
@@ -604,7 +604,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 6, column 1
+Semantic Error: temp_fragment.maxon:6:1
 Method 'WrongParam.accept' parameter 1 has type 'int' but interface 'Acceptor' requires 'float'
 
   6 | type WrongParam is Acceptor with float

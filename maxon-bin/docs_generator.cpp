@@ -708,7 +708,7 @@ void DocsGenerator::generateStylesheet(const std::string &outputDir) {
 	file << STYLESHEET_CSS;
 	file.close();
 
-	std::cout << "Generated style.css" << std::endl;
+	// std::cout << "Generated style.css" << std::endl;
 }
 
 void DocsGenerator::generateNavigationScript(const std::string &outputDir,
@@ -758,7 +758,7 @@ void DocsGenerator::generateNavigationScript(const std::string &outputDir,
 
 	file.close();
 
-	std::cout << "Generated nav.js" << std::endl;
+	// std::cout << "Generated nav.js" << std::endl;
 }
 
 std::string DocsGenerator::generateIndexPage(const std::map<std::string, std::vector<SpecInfo>> &specsByCategory) {
@@ -960,7 +960,7 @@ int DocsGenerator::generateDocumentation() {
 		file << html;
 		file.close();
 
-		std::cout << "Generated " << category << ".html (" << specs.size() << " specs)" << std::endl;
+		// std::cout << "Generated " << category << ".html (" << specs.size() << " specs)" << std::endl;
 	}
 
 	// Generate index page
@@ -976,7 +976,7 @@ int DocsGenerator::generateDocumentation() {
 	indexFile << indexHtml;
 	indexFile.close();
 
-	std::cout << "Generated index.html" << std::endl;
+	// std::cout << "Generated index.html" << std::endl;
 
 	return 0;
 }

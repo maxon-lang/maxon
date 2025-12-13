@@ -81,7 +81,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 7
+Semantic Error: temp_fragment.maxon:4:7
 Cannot assign to read-only variable 'x'
   Variable declared with 'let' at line 3, column 5
   Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable variables

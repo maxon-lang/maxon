@@ -534,7 +534,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 5
+Semantic Error: temp_fragment.maxon:4:5
 Duplicate enum case 'red' in enum 'Color'
 
   4 |     red
@@ -554,14 +554,14 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 8, column 14
+Semantic Error: temp_fragment.maxon:8:14
 Unknown case 'green' for enum 'Color'
   Available cases: red, blue
 
   8 |     let _c = Color.green
     |              ^
 
-Semantic Error: line 8, column 5
+Semantic Error: temp_fragment.maxon:8:5
 The variable '_c' is assigned but its value is never used
 
   8 |     let _c = Color.green
@@ -580,7 +580,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 5
+Semantic Error: temp_fragment.maxon:4:5
 Duplicate raw value 200 in enum 'Status'
 
   4 |     success = 200
@@ -598,7 +598,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 3, column 10
+Semantic Error: temp_fragment.maxon:3:10
 Raw value type 'string' does not match enum raw value type 'int'
 
   3 |     ok = "success"
@@ -618,7 +618,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 9, column 12
+Semantic Error: temp_fragment.maxon:9:12
 Cannot access 'rawValue' on enum 'Color' which has no raw value type
   Declare the enum with a raw value type: enum Color int
 
@@ -639,13 +639,13 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 8, column 14
+Semantic Error: temp_fragment.maxon:8:14
 Wrong number of associated values for case 'success': expected 1, got 2
 
   8 |     let _r = Result.success(1, 2)
     |              ^
 
-Semantic Error: line 8, column 5
+Semantic Error: temp_fragment.maxon:8:5
 The variable '_r' is assigned but its value is never used
 
   8 |     let _r = Result.success(1, 2)
@@ -664,13 +664,13 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 7, column 30
+Semantic Error: temp_fragment.maxon:7:30
 Type mismatch for associated value 'n': expected 'int', got 'string'
 
   7 |     let _c = Container.value("hello")
     |                              ^
 
-Semantic Error: line 7, column 5
+Semantic Error: temp_fragment.maxon:7:5
 The variable '_c' is assigned but its value is never used
 
   7 |     let _c = Container.value("hello")
@@ -768,7 +768,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 9, column 9
+Semantic Error: temp_fragment.maxon:9:9
 Wrong number of bindings for case 'value': expected 1, got 2
 
   9 |         value(a, b) then return a
@@ -790,20 +790,20 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 10, column 9
+Semantic Error: temp_fragment.maxon:10:9
 Unknown case 'unknown' for enum 'Container'
 
   10 |         unknown(x) then return x
      |         ^
 
-Semantic Error: line 9, column 5
+Semantic Error: temp_fragment.maxon:9:5
 Match on enum 'Container' is not exhaustive
   Missing cases: empty, value
 
   9 |     match c 'extract'
     |     ^
 
-Semantic Error: line 7, column 1
+Semantic Error: temp_fragment.maxon:7:1
 Function 'main' must return a value of type 'int'
   Note: All execution paths through the function must end with a return statement
 

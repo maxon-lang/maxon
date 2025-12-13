@@ -15,11 +15,12 @@ struct SemanticError {
 	std::string message;
 	int line;
 	int column;
-	int severity;	  // 1 = Error, 2 = Warning
-	std::string code; // Error/warning code for identification
+	int severity;			// 1 = Error, 2 = Warning
+	std::string code;		// Error/warning code for identification
+	std::string sourceFile; // Source file path where error occurred
 
-	SemanticError(const std::string &msg, int l = 0, int c = 0, int sev = 1, const std::string &errCode = "")
-		: message(msg), line(l), column(c), severity(sev), code(errCode) {}
+	SemanticError(const std::string &msg, int l = 0, int c = 0, int sev = 1, const std::string &errCode = "", const std::string &file = "")
+		: message(msg), line(l), column(c), severity(sev), code(errCode), sourceFile(file) {}
 };
 
 // Variable information
@@ -99,7 +100,7 @@ struct InterfaceMethodInfo {
 	std::vector<FunctionParameter> parameters;
 	bool hasDefaultImplementation = false;
 	const std::vector<std::unique_ptr<StmtAST>> *defaultBody = nullptr; // Non-owning ptr to AST body
-	bool isStatic = false; // True for static interface methods (no implicit self)
+	bool isStatic = false;												// True for static interface methods (no implicit self)
 
 	InterfaceMethodInfo(const std::string &n, const std::string &ret, std::vector<FunctionParameter> params,
 						bool hasDefault = false, const std::vector<std::unique_ptr<StmtAST>> *defBody = nullptr,

@@ -351,7 +351,8 @@ std::optional<Hover> HoverProvider::lookupFieldDeclaration(const std::string &na
 					// Found the field - format hover info
 					std::string markdown;
 					std::string mutability = field.isImmutable ? "let" : "var";
-					markdown = "```maxon\n" + mutability + " " + name + " " + field.type;
+					std::string displayType = maxon::TypeConversion::arrayTypeToDisplayString(field.type);
+					markdown = "```maxon\n" + mutability + " " + name + " " + displayType;
 					if (field.defaultValue) {
 						markdown += " = ..."; // Default value is an AST expression, not a string
 					}
@@ -780,7 +781,8 @@ std::string HoverProvider::formatEnumHover(const EnumInfo &enumInfo, const std::
 					md += ", ";
 				}
 				first = false;
-				md += assoc.name + " " + assoc.type;
+				std::string displayType = maxon::TypeConversion::arrayTypeToDisplayString(assoc.type);
+				md += assoc.name + " " + displayType;
 			}
 			md += ")";
 		}

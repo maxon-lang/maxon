@@ -229,14 +229,14 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 7, column 23
+Semantic Error: temp_fragment.maxon:7:23
 Positional argument after named argument
   All positional arguments must come before named arguments
 
   7 |     return add(a = 3, 4)
     |                       ^
 
-Semantic Error: line 7, column 12
+Semantic Error: temp_fragment.maxon:7:12
 Missing required argument for parameter 'b'
   Add: b = <value>
 
@@ -255,14 +255,14 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 7, column 18
+Semantic Error: temp_fragment.maxon:7:18
 Unknown parameter name 'person'
   Function 'greet' has no parameter with this name
 
   7 |     return greet(person = 42)
     |                  ^
 
-Semantic Error: line 7, column 12
+Semantic Error: temp_fragment.maxon:7:12
 Missing required argument for parameter 'name'
   Add: name = <value>
 
@@ -281,7 +281,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 7, column 22
+Semantic Error: temp_fragment.maxon:7:22
 Too many positional arguments
   Function 'repeat' has 1 required parameter
 

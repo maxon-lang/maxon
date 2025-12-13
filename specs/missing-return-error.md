@@ -57,7 +57,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 2, column 1
+Semantic Error: temp_fragment.maxon:2:1
 Function 'main' must return a value of type 'int'
   Note: All execution paths through the function must end with a return statement
 
@@ -79,7 +79,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 2, column 1
+Semantic Error: temp_fragment.maxon:2:1
 Function 'test' must return a value of type 'int'
   Note: All execution paths through the function must end with a return statement
 

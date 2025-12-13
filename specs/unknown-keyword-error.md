@@ -40,7 +40,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp/temp_fragment.maxon':
+In file 'temp_fragment.maxon':
 Unexpected identifier 'foo'
   Note: Did you forget an assignment (=), function call (), or keyword?
   Location: line 4, column 5
@@ -67,7 +67,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp/temp_fragment.maxon':
+In file 'temp_fragment.maxon':
 Unexpected identifier 'foo'
   Note: Did you forget an assignment (=), function call (), or keyword?
   Location: line 4, column 5
@@ -81,7 +81,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp/temp_fragment.maxon':
+In file 'temp_fragment.maxon':
 Unexpected identifier 'retur'
   Note: Did you forget an assignment (=), function call (), or keyword?
   Location: line 4, column 5
@@ -99,7 +99,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp/temp_fragment.maxon':
+In file 'temp_fragment.maxon':
 Unexpected identifier 'test'
   Note: Did you forget an assignment (=), function call (), or keyword?
   Location: line 7, column 5

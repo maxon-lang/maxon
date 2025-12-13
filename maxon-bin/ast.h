@@ -717,6 +717,7 @@ class InterfaceDefAST : public ASTNode {
 	std::vector<InterfaceMethodSignature> methods;
 	std::vector<std::string> associatedTypes; // Associated type declarations (e.g., "Element")
 	bool isExported;
+	std::string sourceFile; // Source file path where this interface is defined
 	int line;
 	int column;
 	int endLine;   // End position line (0 = unset)
@@ -724,9 +725,10 @@ class InterfaceDefAST : public ASTNode {
 
 	InterfaceDefAST(const std::string &n, std::vector<InterfaceMethodSignature> m,
 					int l = 0, int c = 0, const std::string &ns = "", bool exp = false,
-					std::vector<std::string> assocTypes = {}, const std::string &extends = "")
+					std::vector<std::string> assocTypes = {}, const std::string &extends = "",
+					const std::string &srcFile = "")
 		: name(n), namespaceName(ns), extendsInterface(extends), methods(std::move(m)),
-		  associatedTypes(std::move(assocTypes)), isExported(exp), line(l), column(c),
+		  associatedTypes(std::move(assocTypes)), isExported(exp), sourceFile(srcFile), line(l), column(c),
 		  endLine(0), endColumn(0) {}
 
 	// Helper to get the full source range of this interface
@@ -778,6 +780,7 @@ class StructDefAST : public ASTNode {
 	std::map<std::string, std::string> typeAssignments;					   // Associated type assignments (e.g., "Element" -> "character")
 	std::map<std::string, std::vector<std::string>> interfaceTypeBindings; // Per-interface 'with' types (resolved to typeAssignments in semantic analyzer)
 	bool isExported;													   // true if this struct is exported (visible outside this file)
+	std::string sourceFile;												   // Source file path where this struct is defined
 	int line;
 	int column;
 	int endLine;   // End position line (0 = unset)
@@ -789,12 +792,13 @@ class StructDefAST : public ASTNode {
 				 std::vector<std::unique_ptr<FunctionAST>> m = {},
 				 std::map<std::string, std::string> typeAssigns = {},
 				 std::map<std::string, std::vector<std::string>> ifaceBindings = {},
-				 std::vector<std::string> assocTypeParams = {})
+				 std::vector<std::string> assocTypeParams = {},
+				 const std::string &srcFile = "")
 		: name(n), namespaceName(ns), fields(std::move(f)), methods(std::move(m)),
 		  associatedTypeParams(std::move(assocTypeParams)),
 		  conformsTo(std::move(interfaces)), typeAssignments(std::move(typeAssigns)),
 		  interfaceTypeBindings(std::move(ifaceBindings)),
-		  isExported(exp), line(l), column(c), endLine(0), endColumn(0) {}
+		  isExported(exp), sourceFile(srcFile), line(l), column(c), endLine(0), endColumn(0) {}
 
 	// Helper to get the full source range of this struct
 	SourceRange getSourceRange() const {
@@ -852,6 +856,7 @@ class EnumDefAST : public ASTNode {
 	std::vector<EnumCaseAST> cases;					   // Enum cases
 	std::vector<std::unique_ptr<FunctionAST>> methods; // Methods declared inside the enum
 	bool isExported;
+	std::string sourceFile; // Source file path where this enum is defined
 	int line;
 	int column;
 	int endLine;   // End position line (0 = unset)
@@ -860,9 +865,10 @@ class EnumDefAST : public ASTNode {
 	EnumDefAST(const std::string &n, std::vector<EnumCaseAST> c, int l = 0, int col = 0,
 			   const std::string &ns = "", bool exp = false,
 			   const std::string &rawType = "",
-			   std::vector<std::unique_ptr<FunctionAST>> m = {})
+			   std::vector<std::unique_ptr<FunctionAST>> m = {},
+			   const std::string &srcFile = "")
 		: name(n), namespaceName(ns), rawValueType(rawType), cases(std::move(c)),
-		  methods(std::move(m)), isExported(exp), line(l), column(col), endLine(0), endColumn(0) {}
+		  methods(std::move(m)), isExported(exp), sourceFile(srcFile), line(l), column(col), endLine(0), endColumn(0) {}
 
 	// Check if this enum has associated values (any case has them)
 	bool hasAssociatedValues() const {
@@ -1038,12 +1044,13 @@ class FunctionAST : public ASTNode {
 	std::vector<FunctionParameter> parameters;
 	std::string returnType;
 	std::vector<std::unique_ptr<StmtAST>> body;
-	bool isExtern;		 // true if this is an extern function declaration
-	bool isExported;	 // true if this function is exported (visible outside this file)
-	std::string dllName; // DLL/lib name for extern functions (without extension)
-	bool isStaticLib;	 // true if linking against a static library (.lib), false for DLL
-	std::string libPath; // Full path to static library file (if isStaticLib)
-	bool isStaticMethod; // true for static methods (no implicit self parameter)
+	bool isExtern;			// true if this is an extern function declaration
+	bool isExported;		// true if this function is exported (visible outside this file)
+	std::string dllName;	// DLL/lib name for extern functions (without extension)
+	bool isStaticLib;		// true if linking against a static library (.lib), false for DLL
+	std::string libPath;	// Full path to static library file (if isStaticLib)
+	bool isStaticMethod;	// true for static methods (no implicit self parameter)
+	std::string sourceFile; // Source file path where this function is defined
 	int line;
 	int column;
 	int endLine;   // End position line (0 = unset)
@@ -1068,9 +1075,10 @@ class FunctionAST : public ASTNode {
 				const std::string &libFilePath = "",
 				const std::string &receiver = "",
 				const std::string &implInterface = "",
-				bool isStatic = false)
+				bool isStatic = false,
+				const std::string &srcFile = "")
 		: name(n), namespaceName(ns), receiverType(receiver), implementsInterface(implInterface), parameters(std::move(params)), returnType(ret), body(std::move(b)),
-		  isExtern(ext), isExported(exp), dllName(dll), isStaticLib(staticLib), libPath(libFilePath), isStaticMethod(isStatic), line(l), column(c), endLine(0), endColumn(0) {}
+		  isExtern(ext), isExported(exp), dllName(dll), isStaticLib(staticLib), libPath(libFilePath), isStaticMethod(isStatic), sourceFile(srcFile), line(l), column(c), endLine(0), endColumn(0) {}
 
 	// Helper to get the full source range of this function
 	SourceRange getSourceRange() const {
@@ -1091,12 +1099,13 @@ class GlobalLetDeclAST : public ASTNode {
 	std::string type; // "int", "float", "bool", "string", or "" for inferred
 	std::unique_ptr<ExprAST> initializer;
 	bool isExported;
+	std::string sourceFile; // Source file path where this global is defined
 	int line;
 	int column;
 
 	GlobalLetDeclAST(const std::string &n, std::unique_ptr<ExprAST> init, const std::string &t = "",
-					 bool exported = false, int l = 0, int c = 0)
-		: name(n), type(t), initializer(std::move(init)), isExported(exported), line(l), column(c) {}
+					 bool exported = false, int l = 0, int c = 0, const std::string &srcFile = "")
+		: name(n), type(t), initializer(std::move(init)), isExported(exported), sourceFile(srcFile), line(l), column(c) {}
 };
 
 // Parse error information for error recovery (stored in ProgramAST)

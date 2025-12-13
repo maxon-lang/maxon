@@ -137,7 +137,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 10
+Semantic Error: temp_fragment.maxon:4:10
 Comparison operators require operands of compatible types
   Left operand type: byte
   Right operand type: int
@@ -145,7 +145,7 @@ Comparison operators require operands of compatible types
   4 |     if b == 300 'check'
     |          ^
 
-Semantic Error: line 4, column 5
+Semantic Error: temp_fragment.maxon:4:5
 If condition must be a boolean or integer expression
   Found type: error
   Note: Conditions should evaluate to true/false or use comparison operators (=, !=, <, >, <=, >=)
@@ -166,7 +166,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 5, column 10
+Semantic Error: temp_fragment.maxon:5:10
 Comparison operators require operands of compatible types
   Left operand type: int
   Right operand type: float
@@ -174,7 +174,7 @@ Comparison operators require operands of compatible types
   5 |     if x == y 'check'
     |          ^
 
-Semantic Error: line 5, column 5
+Semantic Error: temp_fragment.maxon:5:5
 If condition must be a boolean or integer expression
   Found type: error
   Note: Conditions should evaluate to true/false or use comparison operators (=, !=, <, >, <=, >=)
@@ -195,7 +195,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 5, column 10
+Semantic Error: temp_fragment.maxon:5:10
 Comparison operators require operands of compatible types
   Left operand type: float
   Right operand type: int
@@ -203,7 +203,7 @@ Comparison operators require operands of compatible types
   5 |     if x == y 'check'
     |          ^
 
-Semantic Error: line 5, column 5
+Semantic Error: temp_fragment.maxon:5:5
 If condition must be a boolean or integer expression
   Found type: error
   Note: Conditions should evaluate to true/false or use comparison operators (=, !=, <, >, <=, >=)
@@ -223,7 +223,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 10
+Semantic Error: temp_fragment.maxon:4:10
 Comparison operators require operands of compatible types
   Left operand type: float
   Right operand type: int
@@ -231,7 +231,7 @@ Comparison operators require operands of compatible types
   4 |     if x == 5 'check'
     |          ^
 
-Semantic Error: line 4, column 5
+Semantic Error: temp_fragment.maxon:4:5
 If condition must be a boolean or integer expression
   Found type: error
   Note: Conditions should evaluate to true/false or use comparison operators (=, !=, <, >, <=, >=)
@@ -251,7 +251,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 10
+Semantic Error: temp_fragment.maxon:4:10
 Comparison operators require operands of compatible types
   Left operand type: int
   Right operand type: float
@@ -259,7 +259,7 @@ Comparison operators require operands of compatible types
   4 |     if x == 5.0 'check'
     |          ^
 
-Semantic Error: line 4, column 5
+Semantic Error: temp_fragment.maxon:4:5
 If condition must be a boolean or integer expression
   Found type: error
   Note: Conditions should evaluate to true/false or use comparison operators (=, !=, <, >, <=, >=)

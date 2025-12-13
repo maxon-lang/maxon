@@ -324,7 +324,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 5
+Semantic Error: temp_fragment.maxon:4:5
 Cannot assign to read-only array 'arr'
   Array declared with 'let' at line 3, column 5
   Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable arrays
@@ -342,7 +342,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 5
+Semantic Error: temp_fragment.maxon:4:5
 Cannot call mutating method 'push' on immutable variable 'arr'
   Variable declared with 'let' at line 3, column 5
   Note: Use 'var' instead of 'let' if you need to modify the array
@@ -360,7 +360,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 5
+Semantic Error: temp_fragment.maxon:4:5
 Cannot call mutating method 'pop' on immutable variable 'arr'
   Variable declared with 'let' at line 3, column 5
   Note: Use 'var' instead of 'let' if you need to modify the array
@@ -378,7 +378,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 14
+Semantic Error: temp_fragment.maxon:4:14
 Function 'push' argument type mismatch
   Parameter 2 ('value')
   Expected type: int
@@ -396,7 +396,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 12
+Semantic Error: temp_fragment.maxon:4:12
 Array index must be an integer
   Found type: float
 

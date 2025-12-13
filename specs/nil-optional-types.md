@@ -316,7 +316,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 8, column 9
+Semantic Error: temp_fragment.maxon:8:9
 Cannot use optional type 'int or nil' without unwrapping
   Note: Use 'if let' to safely unwrap optional values before using them
 
@@ -331,7 +331,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 3, column 2
+Semantic Error: temp_fragment.maxon:3:2
 Cannot return 'nil' from non-optional return type
   Function return type: int
   Note: To return nil, change the function return type to 'int or nil'
@@ -351,7 +351,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 2
+Semantic Error: temp_fragment.maxon:4:2
 'if let' requires optional type, got 'int'
   Note: Use 'if let' only with optional types (T or nil)
 
@@ -370,14 +370,14 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 4, column 2
+Semantic Error: temp_fragment.maxon:4:2
 'else' unwrapping requires an optional type, got 'int'
   Note: Use 'var x = expr else ...' only with optional types (T or nil)
 
   4 | 	var result = x else 'default'
     |  ^
 
-Semantic Error: line 7, column 9
+Semantic Error: temp_fragment.maxon:7:9
 Undefined variable: 'result'
   Note: Variable must be declared with 'var' or 'let' before use
 
@@ -400,7 +400,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 8, column 2
+Semantic Error: temp_fragment.maxon:8:2
 Variable 'result' must be assigned a value in the else block
   The else block is only executed when the optional is nil
   Note: You must provide a default value by assigning to 'result' in the else block
@@ -416,7 +416,7 @@ function broken() returns int or nil or nil
 end 'broken'
 ```
 ```maxoncstderr
-In file 'temp/temp_fragment.maxon':
+In file 'temp_fragment.maxon':
 Unexpected token: 'or'
   Note: Expected a statement (var, let, if, while, return, break, continue, match, or assignment)
   Location: line 2, column 38

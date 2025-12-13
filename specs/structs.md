@@ -132,7 +132,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 9, column 5
+Semantic Error: temp_fragment.maxon:9:5
 Cannot assign to field of read-only type 'p'
   Variable declared with 'let' at line 8, column 5
   Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable types
@@ -155,7 +155,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 9, column 5
+Semantic Error: temp_fragment.maxon:9:5
 Cannot assign to immutable field 'version' of type 'Config'
   Field declared with 'let' at line 3
   Note: Fields declared with 'let' are immutable. Use 'var' for mutable fields

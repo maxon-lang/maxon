@@ -216,6 +216,29 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logge
 		std::unique_ptr<ProgramAST> program = parser.parse();
 		logger.logElapsed(LogPhase::Parser, "Parse time", parseStart);
 
+		// Set source file on all AST nodes for error reporting
+		for (auto &func : program->functions) {
+			func->sourceFile = filePath;
+		}
+		for (auto &structDef : program->structs) {
+			structDef->sourceFile = filePath;
+			for (auto &method : structDef->methods) {
+				method->sourceFile = filePath;
+			}
+		}
+		for (auto &interfaceDef : program->interfaces) {
+			interfaceDef->sourceFile = filePath;
+		}
+		for (auto &enumDef : program->enums) {
+			enumDef->sourceFile = filePath;
+			for (auto &method : enumDef->methods) {
+				method->sourceFile = filePath;
+			}
+		}
+		for (auto &global : program->globals) {
+			global->sourceFile = filePath;
+		}
+
 		auto parseEnd = std::chrono::high_resolution_clock::now();
 		auto fileParseTime = std::chrono::duration_cast<std::chrono::microseconds>(parseEnd - lexEnd);
 
@@ -476,13 +499,34 @@ std::string compileProgram(const CompilationOptions &options) {
 		}
 
 		if (!semanticErrors.empty()) {
+			// Build a map from file path to source content for error formatting
+			std::map<std::string, std::string> sourceMap;
+			for (size_t i = 0; i < allFiles.size() && i < sources.size(); ++i) {
+				sourceMap[allFiles[i]] = sources[i];
+			}
+
 			for (const auto &error : semanticErrors) {
+				// Look up the source content for this error's file
+				std::string sourceContent;
+				std::string displayPath;
+				if (!error.sourceFile.empty()) {
+					auto it = sourceMap.find(error.sourceFile);
+					if (it != sourceMap.end()) {
+						sourceContent = it->second;
+					}
+					displayPath = normalizePathForDisplay(error.sourceFile);
+				} else if (!sources.empty()) {
+					// Fallback to first source if no file tracked
+					sourceContent = sources[0];
+				}
+
 				std::string formattedError = ErrorFormatter::formatError(
 					error.message,
-					sources[0],
+					sourceContent,
 					error.line,
 					error.column,
-					"Semantic Error");
+					"Semantic Error",
+					displayPath);
 				std::cerr << formattedError << std::endl;
 			}
 			throw std::runtime_error("");

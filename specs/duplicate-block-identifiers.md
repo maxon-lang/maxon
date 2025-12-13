@@ -82,7 +82,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 7, column 5
+Semantic Error: temp_fragment.maxon:7:5
 Duplicate block identifier 'check' in nested blocks
 
   7 |     while false 'check'

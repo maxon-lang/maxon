@@ -90,7 +90,24 @@ b.count()              // Returns byte length of UTF-8 encoding (2 for é)
 var cp = c.codepoints()
 cp.count()             // Returns number of Unicode codepoints
 c.toString()           // Converts to string
+
+var a = 'A'
+a.asciiValue()         // Returns 65 (ASCII code for 'A')
 ```
+
+### ASCII Value
+
+The `asciiValue()` method returns the ASCII code (0-127) for single-byte ASCII characters:
+
+```maxon
+var letter = 'A'
+print("{letter.asciiValue()}")  // Prints: 65
+
+var digit = '0'
+print("{digit.asciiValue()}")   // Prints: 48
+```
+
+For non-ASCII characters (multi-byte UTF-8 or values >= 128), `asciiValue()` returns `nil`.
 
 ## Tests
 
@@ -360,3 +377,139 @@ end 'main'
 1
 ```
 
+<!-- test: ascii-value-letter -->
+### ASCII Value for Letter
+
+```maxon
+function main() returns int
+    var c = 'A'
+    if let val = c.asciiValue() 'unwrap'
+        print("{val}")
+    end 'unwrap'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+65
+```
+
+<!-- test: ascii-value-digit -->
+### ASCII Value for Digit
+
+```maxon
+function main() returns int
+    var c = '0'
+    if let val = c.asciiValue() 'unwrap'
+        print("{val}")
+    end 'unwrap'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+48
+```
+
+<!-- test: ascii-value-lowercase -->
+### ASCII Value for Lowercase
+
+```maxon
+function main() returns int
+    var c = 'a'
+    if let val = c.asciiValue() 'unwrap'
+        print("{val}")
+    end 'unwrap'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+97
+```
+
+<!-- test: ascii-value-space -->
+### ASCII Value for Space
+
+```maxon
+function main() returns int
+    var c = ' '
+    if let val = c.asciiValue() 'unwrap'
+        print("{val}")
+    end 'unwrap'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+32
+```
+
+<!-- test: ascii-value-newline -->
+### ASCII Value for Newline Escape
+
+```maxon
+function main() returns int
+    var c = '\n'
+    if let val = c.asciiValue() 'unwrap'
+        print("{val}")
+    end 'unwrap'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+```
+
+<!-- test: ascii-value-non-ascii -->
+### ASCII Value for Non-ASCII Returns nil
+
+```maxon
+function main() returns int
+    var c = 'é'
+    if let val = c.asciiValue() 'unwrap'
+        print("{val}")
+    end 'unwrap' else 'nil_case'
+        print("nil")
+    end 'nil_case'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+nil
+```
+
+<!-- test: ascii-value-emoji -->
+### ASCII Value for Emoji Returns nil
+
+```maxon
+function main() returns int
+    var c = '🎉'
+    if let val = c.asciiValue() 'unwrap'
+        print("{val}")
+    end 'unwrap' else 'nil_case'
+        print("nil")
+    end 'nil_case'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+nil
+```

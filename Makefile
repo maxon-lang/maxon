@@ -202,10 +202,7 @@ backend-test: backend-test-build ffi-test-lib
 
 # Generate documentation from spec files
 docs: compiler
-	@echo Generating documentation from specs...
 	@maxon generate-docs
-	@echo Documentation generated in maxon-docs/Output/
-	@echo Documentation generated in maxon-docs/Output/
 
 # Build FFI test library
 ffi-test-lib:

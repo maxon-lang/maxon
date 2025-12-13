@@ -335,6 +335,7 @@ std::string CompletionProvider::getTypeBeforeDot(
 		// Find which function the cursor is in to use the correct qualified variable name
 		// Variables are stored with qualified keys like "funcName::varName" or "namespace.funcName::varName"
 		std::string enclosingFunction;
+		std::string enclosingStructName; // Track if we're inside a struct method
 		if (cache->ast) {
 			for (const auto &func : cache->ast->functions) {
 				if (position.line >= func->line - 1 && position.line <= func->endLine - 1) {
@@ -351,9 +352,12 @@ std::string CompletionProvider::getTypeBeforeDot(
 				for (const auto &method : structDef->methods) {
 					if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
 						enclosingFunction = structDef->name + "." + method->name;
+						enclosingStructName = structDef->name;
 						break;
 					}
 				}
+				if (!enclosingStructName.empty())
+					break;
 			}
 		}
 
@@ -363,6 +367,18 @@ std::string CompletionProvider::getTypeBeforeDot(
 			auto varIt = cache->variables.find(qualifiedKey);
 			if (varIt != cache->variables.end()) {
 				return varIt->second.type;
+			}
+		}
+
+		// If inside a struct method, check struct fields (implicit self access)
+		if (!enclosingStructName.empty()) {
+			auto structIt = cache->structs.find(enclosingStructName);
+			if (structIt != cache->structs.end()) {
+				for (const auto &field : structIt->second.fields) {
+					if (field.name == identifier) {
+						return field.type;
+					}
+				}
 			}
 		}
 
@@ -979,6 +995,9 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 		typesToSearch.push_back(typeName.substr(0, genericPos));
 	}
 
+	// Track added method names to avoid duplicates when searching multiple type variants
+	std::set<std::string> addedMethods;
+
 	for (const std::string &searchType : typesToSearch) {
 		std::string methodPrefix = searchType + ".";
 		for (const auto &symbol : stdlib.functions) {
@@ -996,7 +1015,14 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 					continue;
 				}
 
+				// Skip if we already added this method (from a more specific type)
+				if (addedMethods.count(methodName) > 0) {
+					continue;
+				}
+
 				if (prefix.empty() || matchesPrefix(methodName, prefix)) {
+					addedMethods.insert(methodName);
+
 					CompletionItem item;
 					item.label = methodName;
 					item.kind = CompletionItemKind::Method;
@@ -1042,7 +1068,14 @@ std::vector<CompletionItem> CompletionProvider::getMemberCompletions(
 					if (dotPos != std::string::npos) {
 						methodName = name.substr(dotPos + 1);
 					}
+
+					// Skip if we already added this method from stdlib
+					if (addedMethods.count(methodName) > 0) {
+						continue;
+					}
+
 					if (prefix.empty() || matchesPrefix(methodName, prefix)) {
+						addedMethods.insert(methodName);
 						std::string sig = buildFunctionSignature(funcInfo);
 						items.push_back(buildMethodItem(methodName, sig));
 					}

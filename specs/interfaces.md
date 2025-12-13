@@ -396,7 +396,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 8, column 1
+Semantic Error: temp_fragment.maxon:8:1
 Partial interface implementation: type 'Incomplete' is missing 2 method(s):
   - two() returns int
   - three() returns int
@@ -455,7 +455,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: line 2, column 1
+Semantic Error: temp_fragment.maxon:2:1
 Partial interface implementation: type 'IncompleteCollection' is missing 1 method(s):
   - next() returns Element or nil
 
