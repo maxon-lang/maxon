@@ -294,6 +294,25 @@ end 'process'
 - `var` arrays use heap-allocated buffers with automatic cleanup
 - No bounds checking (undefined behavior for out-of-bounds access)
 
+**Array Methods**
+
+| Method | Description | Return Type |
+|--------|-------------|-------------|
+| `arr.count()` | Get number of elements | int |
+| `arr.capacity()` | Get allocated capacity | int |
+| `arr.isEmpty()` | Check if array is empty | bool |
+| `arr.first()` | Get first element or nil | Element or nil |
+| `arr.last()` | Get last element or nil | Element or nil |
+| `arr.get(i)` | Get element at index or nil | Element or nil |
+| `arr.set(i, v)` | Set element at index | Self |
+| `arr.push(v)` | Append element to end | Self |
+| `arr.append(other)` | Append all elements from another array | Self |
+| `arr.pop()` | Remove and return last element | Element or nil |
+| `arr.insert(i, v)` | Insert element at index | Self |
+| `arr.remove(i)` | Remove element at index | Element or nil |
+| `arr.clear()` | Remove all elements (keeps capacity) | Self |
+| `arr.reserve(n)` | Ensure at least n capacity | Self |
+
 ### Map Type
 
 Maps are hash-based key-value collections with O(1) average lookup time.

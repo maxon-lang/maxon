@@ -95,6 +95,7 @@ var empty = array of int  // Empty dynamic array, capacity 0
 ```maxon
 var arr = [1, 2, 3]
 arr.push(4)             // Add element, grow if needed
+arr.append([5, 6, 7])   // Add all elements from another array
 var last = arr.pop()    // Remove and return last element
 var cap = arr.capacity()  // Get capacity
 arr.reserve(100)        // Preallocate space
@@ -204,6 +205,32 @@ function main() returns int
     arr.push(10)
     arr.push(20)
     arr.push(30)
+    return arr.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: dynamic.append -->
+```maxon
+function main() returns int
+    var arr = [1, 2, 3]
+    var other = [4, 5, 6]
+    arr.append(other)
+    return arr.count() * 100 + arr[5]
+end 'main'
+```
+```exitcode
+606
+```
+
+<!-- test: dynamic.append-empty -->
+```maxon
+function main() returns int
+    var arr = [1, 2, 3]
+    var empty = array of int
+    arr.append(empty)
     return arr.count()
 end 'main'
 ```
