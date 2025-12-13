@@ -198,6 +198,13 @@ void SemanticAnalyzer::registerBuiltinFunctions() {
 	// byte.equals(other) -> bool
 	functions.emplace("byte.equals", FunctionInfo("byte.equals", "bool", {FunctionParameter("self", "byte", 0, 0), FunctionParameter("other", "byte", 0, 0)}));
 
+	// int.parse(str) -> int or nil (static method)
+	{
+		FunctionInfo parseInfo("int.parse", "int or nil", {FunctionParameter("str", "string", 0, 0)});
+		parseInfo.isStaticMethod = true;
+		functions.emplace("int.parse", std::move(parseInfo));
+	}
+
 	// Note: char.hash() and char.equals() are now defined in stdlib/string/char.maxon
 	// since char is a stdlib struct type (grapheme cluster), not a primitive
 }

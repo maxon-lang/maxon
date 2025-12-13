@@ -1,0 +1,130 @@
+// Test: int-parse.parse-with-else-unwrap.1
+function main() returns int
+    var result = int.parse("not_a_number") else 'default'
+        result = 100
+    end 'default'
+    return result
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 33
+
+%string = type { ptr, i64 }
+%_ManagedArray_byte = type { ptr, i64 }
+%__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
+
+@.str.sso.1 = constant [13 x i8] c"not_a_number\00"
+
+define i64 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.sso.1, ptr %3
+  %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
+  store i64 12, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i64 12, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i64 0, ptr %6
+  %7 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i64 0, ptr %8
+  %11 = alloca Optional<i64>
+  call void @__int_parse(ptr %11, ptr %1)
+  %12 = load Optional<i64>, ptr %11
+  %14 = alloca Optional<i64>
+  store Optional<i64> %12, ptr %14
+  %15 = getelementptr Optional<i64>, ptr %14, i32 0, i32 0
+  %16 = load i8, ptr %15
+  %17 = icmp eq i8 %16, 1
+  br i1 %17, label %unwrap.hasvalue1, label %unwrap.else2
+unwrap.hasvalue1:
+  %18 = getelementptr Optional<i64>, ptr %14, i32 0, i32 1
+  %19 = load i64, ptr %18
+  br label %unwrap.after3
+unwrap.else2:
+  br label %unwrap.after3
+unwrap.after3:
+  %21 = phi i64 [ %19, %unwrap.hasvalue1 ], [ 100, %unwrap.else2 ]
+  ret i64 %21
+}
+
+declare void @__int_parse(ptr %arg0, ptr %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 38
+
+%string = type { ptr, i64 }
+%_ManagedArray_byte = type { ptr, i64 }
+%__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
+
+@.str.sso.1 = constant [13 x i8] c"not_a_number\00"
+
+define i64 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.sso.1, ptr %3
+  %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
+  store i64 12, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i64 12, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i64 0, ptr %6
+  %7 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i64 0, ptr %8
+  %9 = getelementptr %string, ptr %0, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = alloca Optional<i64>
+  call void @__int_parse(ptr %11, ptr %10)
+  %12 = load Optional<i64>, ptr %11
+  %13 = alloca i64
+  %14 = alloca Optional<i64>
+  store Optional<i64> %12, ptr %14
+  %15 = getelementptr Optional<i64>, ptr %14, i32 0, i32 0
+  %16 = load i8, ptr %15
+  %17 = icmp eq i8 %16, 1
+  br i1 %17, label %unwrap.hasvalue1, label %unwrap.else2
+unwrap.hasvalue1:
+  %18 = getelementptr Optional<i64>, ptr %14, i32 0, i32 1
+  %19 = load i64, ptr %18
+  store i64 %19, ptr %13
+  br label %unwrap.after3
+unwrap.else2:
+  store i64 100, ptr %13
+  br label %unwrap.after3
+unwrap.after3:
+  %20 = load i64, ptr %13
+  ret i64 %20
+}
+
+declare void @__int_parse(ptr %arg0, ptr %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+ExitCode: 100

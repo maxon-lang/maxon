@@ -40,6 +40,7 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - type aliases
 - lsp is lowercasing paths on windows for comparison which isn't really correct
 - oh god locales
+- add --version to maxon
 
 ## Ideas
 - reorganize structs to improve cache locality

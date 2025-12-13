@@ -1,0 +1,160 @@
+// Test: int-parse.doc-example-2.1
+function main() returns int
+    var invalid = "abc"
+    if let value = int.parse(invalid) 'check'
+        return value
+    end 'check' else 'failed'
+        return 0
+    end 'failed'
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 43
+
+%string = type { ptr, i64 }
+%_ManagedArray_byte = type { ptr, i64 }
+%__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
+
+@.str.sso.1 = constant [4 x i8] c"abc\00"
+@.__tag.free.invalid = constant [15 x i8] c"string literal\00"
+
+define i64 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.sso.1, ptr %3
+  %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
+  store i64 3, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i64 3, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i64 0, ptr %6
+  %7 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i64 0, ptr %8
+  %9 = load ptr, ptr %0
+  %10 = alloca Optional<i64>
+  call void @__int_parse(ptr %10, ptr %9)
+  %11 = load Optional<i64>, ptr %10
+  %12 = alloca Optional<i64>
+  store Optional<i64> %11, ptr %12
+  %13 = getelementptr Optional<i64>, ptr %12, i32 0, i32 0
+  %14 = load i8, ptr %13
+  %15 = icmp eq i8 %14, 1
+  br i1 %15, label %iflet.then1, label %iflet.else3
+iflet.then1:
+  %16 = getelementptr Optional<i64>, ptr %12, i32 0, i32 1
+  %17 = load i64, ptr %16
+  %20 = getelementptr %string, ptr %0, i32 0, i32 0
+  %21 = load ptr, ptr %20
+  %22 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 2
+  %23 = load i64, ptr %22
+  %24 = icmp sgt i64 %23, 0
+  br i1 %24, label %invalid.var.release4, label %invalid.var.continue5
+iflet.else3:
+  ret i64 0
+invalid.var.release4:
+  %25 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 0
+  %26 = getelementptr %_ManagedArray_byte, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  call void @_managed_string_release(ptr %27, ptr @.__tag.free.invalid)
+  br label %invalid.var.continue5
+invalid.var.continue5:
+  ret i64 %17
+}
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
+
+declare void @__int_parse(ptr %arg0, ptr %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 47
+
+%string = type { ptr, i64 }
+%_ManagedArray_byte = type { ptr, i64 }
+%__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
+
+@.str.sso.1 = constant [4 x i8] c"abc\00"
+@.__tag.free.invalid = constant [15 x i8] c"string literal\00"
+
+define i64 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.sso.1, ptr %3
+  %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
+  store i64 3, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i64 3, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i64 0, ptr %6
+  %7 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i64 0, ptr %8
+  %9 = load ptr, ptr %0
+  %10 = alloca Optional<i64>
+  call void @__int_parse(ptr %10, ptr %9)
+  %11 = load Optional<i64>, ptr %10
+  %12 = alloca Optional<i64>
+  store Optional<i64> %11, ptr %12
+  %13 = getelementptr Optional<i64>, ptr %12, i32 0, i32 0
+  %14 = load i8, ptr %13
+  %15 = icmp eq i8 %14, 1
+  br i1 %15, label %iflet.then1, label %iflet.else3
+iflet.then1:
+  %16 = getelementptr Optional<i64>, ptr %12, i32 0, i32 1
+  %17 = load i64, ptr %16
+  %18 = alloca i64
+  store i64 %17, ptr %18
+  %19 = load i64, ptr %18
+  %20 = getelementptr %string, ptr %0, i32 0, i32 0
+  %21 = load ptr, ptr %20
+  %22 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 2
+  %23 = load i64, ptr %22
+  %24 = icmp sgt i64 %23, 0
+  br i1 %24, label %invalid.var.release4, label %invalid.var.continue5
+iflet.after2:
+  ret i64 0
+iflet.else3:
+  ret i64 0
+invalid.var.release4:
+  %25 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 0
+  %26 = getelementptr %_ManagedArray_byte, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  call void @_managed_string_release(ptr %27, ptr @.__tag.free.invalid)
+  br label %invalid.var.continue5
+invalid.var.continue5:
+  ret i64 %19
+}
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
+
+declare void @__int_parse(ptr %arg0, ptr %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+ExitCode: 0

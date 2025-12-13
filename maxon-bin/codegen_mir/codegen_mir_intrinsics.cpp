@@ -198,8 +198,13 @@ mir::MIRValue *MIRCodeGenerator::getManagedStringPtr(ExprAST *arg) {
 			}
 		}
 	}
-	// Fallback - generate expr and assume it's a ptr value
-	return generateExpr(arg);
+	// Fallback - generate expr and extract _managed pointer from string struct
+	mir::MIRValue *stringPtr = generateExpr(arg);
+	// stringPtr is a pointer to a string struct { ptr _managed, i64 _iterPos }
+	// We need to load the _managed field (field 0) which points to __ManagedStringData
+	mir::MIRType *stringType = getTypeFromString("string");
+	mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, stringPtr, 0, "str._managed.ptr");
+	return builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, "str._managed.val");
 }
 
 // Helper to get cstring struct pointer from expression

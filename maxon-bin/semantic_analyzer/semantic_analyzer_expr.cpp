@@ -849,11 +849,14 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			std::string qualifier = callExpr->callee.substr(0, lastDotPos);
 			std::string unqualifiedName = callExpr->callee.substr(lastDotPos + 1);
 
-			// Check if qualifier is a type (struct) name - if so, this is a method call
+			// Check if qualifier is a type (struct or built-in type) name - if so, this is a method call
+			bool isBuiltinType = (qualifier == "int" || qualifier == "float" || qualifier == "bool" ||
+								  qualifier == "byte" || qualifier == "string" || qualifier == "character");
 			bool isStructMethod = (structs.find(qualifier) != structs.end());
+			bool isTypeMethod = isBuiltinType || isStructMethod;
 
-			// For struct methods: allow if it's a static method, otherwise disallow
-			if (isStructMethod) {
+			// For type methods: allow if it's a static method, otherwise disallow
+			if (isTypeMethod) {
 				// Check if this method is static
 				if (funcIt->second.isStaticMethod) {
 					// Static method - qualified call is allowed, continue with normal resolution
@@ -870,40 +873,49 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 				}
 			}
 
-			// Only warn about unnecessary qualification for namespace-qualified calls
-			// Check how many functions match the unqualified name
-			std::string searchSuffix = "." + unqualifiedName;
-			std::vector<std::string> matches;
+			// Skip unnecessary qualification warning for type methods (built-in or struct)
+			// Type methods always require qualification: int.parse(), Point.origin()
+			if (isTypeMethod) {
+				// Type method - no warning, qualification is required
+			} else {
+				// Only warn about unnecessary qualification for namespace-qualified calls
+				// Check how many functions match the unqualified name
+				std::string searchSuffix = "." + unqualifiedName;
+				std::vector<std::string> matches;
 
-			// Check for exact match with unqualified name (global function)
-			if (functions.find(unqualifiedName) != functions.end()) {
-				matches.push_back(unqualifiedName);
-			}
-
-			// Check for qualified matches (but exclude method-style qualifications)
-			for (const auto &pair : functions) {
-				const std::string &funcName = pair.first;
-				if (funcName.size() > searchSuffix.size() &&
-					funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
-					// Check if this is a method (qualifier is a type)
-					size_t dotPos = funcName.rfind(".");
-					if (dotPos != std::string::npos) {
-						std::string funcQualifier = funcName.substr(0, dotPos);
-						if (structs.find(funcQualifier) != structs.end()) {
-							// This is a method, don't include in matches for unqualified resolution
-							continue;
-						}
-					}
-					matches.push_back(funcName);
+				// Check for exact match with unqualified name (global function)
+				if (functions.find(unqualifiedName) != functions.end()) {
+					matches.push_back(unqualifiedName);
 				}
-			}
 
-			// If there's only one match, the qualified name is unnecessary
-			if (matches.size() == 1) {
-				addWarning("Unnecessary qualified name: '" + callExpr->callee + "'" +
-							   std::string("\n  The unqualified name '") + unqualifiedName + "' is unambiguous" +
-							   "\n  Consider using '" + unqualifiedName + "' instead",
-						   expr->line, expr->column, "unnecessary-qualified-name");
+				// Check for qualified matches (but exclude method-style qualifications)
+				for (const auto &pair : functions) {
+					const std::string &funcName = pair.first;
+					if (funcName.size() > searchSuffix.size() &&
+						funcName.substr(funcName.size() - searchSuffix.size()) == searchSuffix) {
+						// Check if this is a method (qualifier is a type)
+						size_t dotPos = funcName.rfind(".");
+						if (dotPos != std::string::npos) {
+							std::string funcQualifier = funcName.substr(0, dotPos);
+							bool isBuiltinQual = (funcQualifier == "int" || funcQualifier == "float" ||
+												  funcQualifier == "bool" || funcQualifier == "byte" ||
+												  funcQualifier == "string" || funcQualifier == "character");
+							if (isBuiltinQual || structs.find(funcQualifier) != structs.end()) {
+								// This is a method, don't include in matches for unqualified resolution
+								continue;
+							}
+						}
+						matches.push_back(funcName);
+					}
+				}
+
+				// If there's only one match, the qualified name is unnecessary
+				if (matches.size() == 1) {
+					addWarning("Unnecessary qualified name: '" + callExpr->callee + "'" +
+								   std::string("\n  The unqualified name '") + unqualifiedName + "' is unambiguous" +
+								   "\n  Consider using '" + unqualifiedName + "' instead",
+							   expr->line, expr->column, "unnecessary-qualified-name");
+				}
 			}
 		}
 

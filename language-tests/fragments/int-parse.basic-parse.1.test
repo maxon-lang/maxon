@@ -1,0 +1,128 @@
+// Test: int-parse.basic-parse.1
+function main() returns int
+    if let value = int.parse("42") 'check'
+        return value
+    end 'check' else 'fail'
+        return -1
+    end 'fail'
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 31
+
+%string = type { ptr, i64 }
+%_ManagedArray_byte = type { ptr, i64 }
+%__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
+
+@.str.sso.1 = constant [3 x i8] c"42\00"
+
+define i64 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.sso.1, ptr %3
+  %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
+  store i64 2, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i64 2, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i64 0, ptr %6
+  %7 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i64 0, ptr %8
+  %11 = alloca Optional<i64>
+  call void @__int_parse(ptr %11, ptr %1)
+  %12 = load Optional<i64>, ptr %11
+  %13 = alloca Optional<i64>
+  store Optional<i64> %12, ptr %13
+  %14 = getelementptr Optional<i64>, ptr %13, i32 0, i32 0
+  %15 = load i8, ptr %14
+  %16 = icmp eq i8 %15, 1
+  br i1 %16, label %iflet.then1, label %iflet.else3
+iflet.then1:
+  %17 = getelementptr Optional<i64>, ptr %13, i32 0, i32 1
+  %18 = load i64, ptr %17
+  ret i64 %18
+iflet.else3:
+  ret i64 -1
+}
+
+declare void @__int_parse(ptr %arg0, ptr %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 38
+
+%string = type { ptr, i64 }
+%_ManagedArray_byte = type { ptr, i64 }
+%__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
+
+@.str.sso.1 = constant [3 x i8] c"42\00"
+
+define i64 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.sso.1, ptr %3
+  %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
+  store i64 2, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i64 2, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i64 0, ptr %6
+  %7 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i64 0, ptr %8
+  %9 = getelementptr %string, ptr %0, i32 0, i32 0
+  %10 = load ptr, ptr %9
+  %11 = alloca Optional<i64>
+  call void @__int_parse(ptr %11, ptr %10)
+  %12 = load Optional<i64>, ptr %11
+  %13 = alloca Optional<i64>
+  store Optional<i64> %12, ptr %13
+  %14 = getelementptr Optional<i64>, ptr %13, i32 0, i32 0
+  %15 = load i8, ptr %14
+  %16 = icmp eq i8 %15, 1
+  br i1 %16, label %iflet.then1, label %iflet.else3
+iflet.then1:
+  %17 = getelementptr Optional<i64>, ptr %13, i32 0, i32 1
+  %18 = load i64, ptr %17
+  %19 = alloca i64
+  store i64 %18, ptr %19
+  %20 = load i64, ptr %19
+  ret i64 %20
+iflet.after2:
+  ret i64 0
+iflet.else3:
+  %21 = neg i64 1
+  ret i64 %21
+}
+
+declare void @__int_parse(ptr %arg0, ptr %arg1)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+ExitCode: 42

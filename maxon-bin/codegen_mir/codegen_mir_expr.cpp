@@ -1569,6 +1569,32 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			return builder->createICmpEq(self, other, "equals");
 		}
 
+		// Handle int.parse(string) -> int or nil (static method)
+		if (effectiveCallee == "int.parse") {
+			if (callExpr->args.size() != 1) {
+				reportError("int.parse() requires exactly one string argument",
+							callExpr->line, callExpr->column);
+			}
+
+			// Get the managed pointer from the string using the helper
+			mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].value.get());
+
+			// The result is Optional<int64> - allocate space for it
+			mir::MIRType *optionalType = mir::MIRType::getOptional(mir::MIRType::getInt64());
+			mir::MIRValue *resultAlloca = builder->createAlloca(optionalType, "int.parse.result");
+
+			// Call runtime function __int_parse(result_ptr, managed_ptr)
+			// It takes an out-pointer for the result and returns void
+			mir::MIRFunction *parseFunc = getOrDeclareFunction(
+				"__int_parse",
+				mir::MIRType::getVoid(),
+				{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+			builder->createCall(parseFunc, {resultAlloca, managedPtr}, "");
+
+			// Load and return the result
+			return builder->createLoad(optionalType, resultAlloca, "parsed");
+		}
+
 		// Handle function variable calls (calling a function pointer stored in a variable)
 		if (callExpr->isFunctionVariableCall) {
 			// Load the function pointer from the variable

@@ -2826,3 +2826,138 @@ cleanup_failed:
 failed:
     ret i32 -1
 }
+
+;==============================================================================
+; __int_parse - Parse a string to an integer
+; Returns an optional int (int or nil) via out parameter
+; Layout of result: { i8 tag, [7 x i8] padding, i64 value }
+; tag=0 means nil (parse failed), tag=1 means success with value
+;
+; Parameters:
+;   %result_ptr - Pointer to where the 16-byte result should be written
+;   %managed_ptr - Pointer to managed string data
+;
+; Accepts:
+;   - Optional leading '+' or '-'
+;   - One or more decimal digits
+;
+; Returns nil for:
+;   - Empty strings
+;   - Non-numeric characters
+;   - Overflow (not currently detected - wraps)
+;==============================================================================
+define void @__int_parse(ptr %result_ptr, ptr %managed_ptr) {
+entry:
+    ; Check for null managed pointer
+    %is_null = icmp eq ptr %managed_ptr, null
+    br i1 %is_null, label %return_nil, label %get_string_data
+
+get_string_data:
+    ; Get string length from __ManagedStringData struct
+    ; Layout: { _ManagedArray_byte buffer, i64 length, i64 capacity, ... }
+    ; _ManagedArray_byte is { ptr data, i64 length }
+    ; So length is at offset 16 (after ptr+i64 of the array)
+    %len_ptr = getelementptr i8, ptr %managed_ptr, i64 16
+    %str_len = load i64, ptr %len_ptr
+
+    ; Check for empty string
+    %is_empty = icmp eq i64 %str_len, 0
+    br i1 %is_empty, label %return_nil, label %get_buffer_ptr
+
+get_buffer_ptr:
+    ; Get buffer data pointer from _ManagedArray_byte (first field of managed data)
+    ; The _ManagedArray_byte.data is at offset 0
+    %buf_ptr_ptr = getelementptr i8, ptr %managed_ptr, i64 0
+    %buf_ptr = load ptr, ptr %buf_ptr_ptr
+
+    ; Initialize parsing state
+    %result_alloca = alloca i64
+    %idx_alloca = alloca i64
+    %is_negative_alloca = alloca i1
+    %start_pos_alloca = alloca i64
+    store i64 0, ptr %result_alloca
+    store i64 0, ptr %idx_alloca
+    store i1 false, ptr %is_negative_alloca
+    store i64 0, ptr %start_pos_alloca
+
+    ; Check first character for sign
+    %first_char = load i8, ptr %buf_ptr
+    %is_minus = icmp eq i8 %first_char, 45  ; '-'
+    %is_plus = icmp eq i8 %first_char, 43   ; '+'
+    %has_sign = or i1 %is_minus, %is_plus
+    br i1 %has_sign, label %handle_sign, label %parse_loop
+
+handle_sign:
+    store i1 %is_minus, ptr %is_negative_alloca
+    store i64 1, ptr %idx_alloca
+    store i64 1, ptr %start_pos_alloca
+    ; Check that there's at least one digit after sign
+    %after_sign_len = icmp sgt i64 %str_len, 1
+    br i1 %after_sign_len, label %parse_loop, label %return_nil
+
+parse_loop:
+    %idx = load i64, ptr %idx_alloca
+    %done = icmp sge i64 %idx, %str_len
+    br i1 %done, label %check_parsed_anything, label %parse_char
+
+parse_char:
+    ; Load current character
+    %char_ptr = getelementptr i8, ptr %buf_ptr, i64 %idx
+    %ch = load i8, ptr %char_ptr
+
+    ; Check if digit (0-9)
+    %is_ge_0 = icmp sge i8 %ch, 48   ; '0' = 48
+    %is_le_9 = icmp sle i8 %ch, 57   ; '9' = 57
+    %is_digit = and i1 %is_ge_0, %is_le_9
+    br i1 %is_digit, label %accumulate_digit, label %return_nil
+
+accumulate_digit:
+    ; Convert char to digit value
+    %digit_i8 = sub i8 %ch, 48
+    %digit = zext i8 %digit_i8 to i64
+
+    ; result = result * 10 + digit
+    %current = load i64, ptr %result_alloca
+    %times_10 = mul i64 %current, 10
+    %new_result = add i64 %times_10, %digit
+    store i64 %new_result, ptr %result_alloca
+
+    ; Increment index
+    %next_idx = add i64 %idx, 1
+    store i64 %next_idx, ptr %idx_alloca
+    br label %parse_loop
+
+check_parsed_anything:
+    ; Make sure we parsed at least one digit
+    %final_idx = load i64, ptr %idx_alloca
+    %start_pos = load i64, ptr %start_pos_alloca
+    %parsed_any = icmp sgt i64 %final_idx, %start_pos
+    br i1 %parsed_any, label %apply_sign, label %return_nil
+
+apply_sign:
+    %final_result = load i64, ptr %result_alloca
+    %is_neg = load i1, ptr %is_negative_alloca
+    br i1 %is_neg, label %negate, label %return_success
+
+negate:
+    %negated = sub i64 0, %final_result
+    store i64 %negated, ptr %result_alloca
+    br label %return_success
+
+return_success:
+    %success_value = load i64, ptr %result_alloca
+    ; Write result struct to output: { tag=1, padding, value }
+    ; tag is at offset 0
+    store i8 1, ptr %result_ptr
+    ; value is at offset 8 (after tag + 7 bytes padding)
+    %value_ptr = getelementptr i8, ptr %result_ptr, i64 8
+    store i64 %success_value, ptr %value_ptr
+    ret void
+
+return_nil:
+    ; Write nil result: { tag=0, padding, value=0 }
+    store i8 0, ptr %result_ptr
+    %nil_value_ptr = getelementptr i8, ptr %result_ptr, i64 8
+    store i64 0, ptr %nil_value_ptr
+    ret void
+}

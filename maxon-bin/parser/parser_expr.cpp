@@ -400,6 +400,38 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		return expr;
 	}
 
+	// Handle static method calls on type keywords: int.parse(), float.parse(), etc.
+	// Pattern: TypeKeyword.method(args)
+	auto typeKd = currentKeywordData();
+	if (typeKd && typeKd->category == KeywordCategory::Type && check(TokenType::DOT, 1)) {
+		std::string typeName = std::string(currentValue());
+		int line = currentLine();
+		int column = currentColumn();
+		advance(); // consume type keyword (e.g., 'int')
+		advance(); // consume '.'
+
+		Token methodToken = expect(TokenType::IDENTIFIER, "Expected method name after '" + typeName + ".'");
+		std::string qualifiedName = typeName + "." + methodToken.value;
+
+		expectAdvance(TokenType::LPAREN, "Expected '(' after '" + qualifiedName + "'");
+
+		std::vector<CallArgument> args;
+		if (!check(TokenType::RPAREN)) {
+			args.push_back(parseNamedArgument());
+			while (match(TokenType::COMMA)) {
+				args.push_back(parseNamedArgument());
+			}
+		}
+
+		int endLine = currentLine();
+		int endCol = currentColumn();
+		expectAdvance(TokenType::RPAREN, "Expected ')' after arguments");
+
+		auto callExpr = std::make_unique<CallExprAST>(qualifiedName, std::move(args), line, column);
+		callExpr->setEndPosition(endLine, endCol);
+		return callExpr;
+	}
+
 	// Allow 'array' keyword as struct name in struct literals (stdlib collection type)
 	if (checkKeyword("array") && check(TokenType::LBRACE, 1)) {
 		advance(); // consume 'array'

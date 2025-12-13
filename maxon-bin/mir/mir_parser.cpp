@@ -424,7 +424,18 @@ MIRType *MIRParser::parseType() {
 		return MIRType::getArray(elemType, static_cast<uint64_t>(size));
 	}
 
-	error("Unknown type: " + typeName);
+	// Handle unrecognized type - must advance to prevent infinite loops
+	if (typeName.empty()) {
+		char c = peek();
+		error(std::string("Unexpected character in type: '") + c + "'");
+		// Skip to next whitespace or delimiter to recover
+		while (!isAtEnd() && !std::isspace(peek()) && peek() != ',' && 
+			   peek() != ')' && peek() != '}' && peek() != ']') {
+			advance();
+		}
+	} else {
+		error("Unknown type: " + typeName);
+	}
 	return MIRType::getVoid();
 }
 
@@ -482,6 +493,7 @@ void MIRParser::parseDefine() {
 	skipWhitespace();
 
 	while (!isAtEnd() && peek() != ')') {
+		size_t startPos = pos;  // Track position to detect no-progress loops
 		MIRType *paramType = parseType();
 		skipWhitespace();
 		std::string paramName = readLocalName();
@@ -493,6 +505,12 @@ void MIRParser::parseDefine() {
 		if (peek() == ',') {
 			advance();
 			skipWhitespace();
+		}
+		
+		// Safety check: if we made no progress, skip current char to avoid infinite loop
+		if (pos == startPos && !isAtEnd()) {
+			error(std::string("Unexpected character in parameter list: '") + peek() + "'");
+			advance();
 		}
 	}
 
@@ -678,6 +696,8 @@ void MIRParser::parseFunctionBody(MIRFunction *func) {
 		if (peek() == '}')
 			break;
 
+		size_t loopStartPos = pos;  // Track position to detect no-progress loops
+
 		// Check if this is a block label
 		size_t savedPos = pos;
 		std::string ident = readIdentifier();
@@ -700,6 +720,12 @@ void MIRParser::parseFunctionBody(MIRFunction *func) {
 				currentBlock = func->createBasicBlock("entry");
 			}
 			parseInstruction();
+		}
+		
+		// Safety check: if we made no progress, skip current char to avoid infinite loop
+		if (pos == loopStartPos && !isAtEnd()) {
+			error(std::string("Unexpected character in function body: '") + peek() + "'");
+			advance();
 		}
 	}
 }
