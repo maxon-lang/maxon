@@ -850,18 +850,24 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			std::string unqualifiedName = callExpr->callee.substr(lastDotPos + 1);
 
 			// Check if qualifier is a type (struct) name - if so, this is a method call
-			bool isMethodCall = (structs.find(qualifier) != structs.end());
+			bool isStructMethod = (structs.find(qualifier) != structs.end());
 
-			// Disallow qualified method calls - use instance.method() syntax instead
-			if (isMethodCall) {
-				addError("Qualified method call not allowed: '" + callExpr->callee + "'" +
-							 std::string("\n  Use method call syntax instead: instance.") + unqualifiedName + "()",
-						 expr->line, expr->column);
-				// Still analyze arguments to mark variables as used
-				for (auto &arg : callExpr->args) {
-					analyzeExpression(arg.value.get());
+			// For struct methods: allow if it's a static method, otherwise disallow
+			if (isStructMethod) {
+				// Check if this method is static
+				if (funcIt->second.isStaticMethod) {
+					// Static method - qualified call is allowed, continue with normal resolution
+				} else {
+					// Instance method - disallow qualified calls
+					addError("Qualified method call not allowed: '" + callExpr->callee + "'" +
+								 std::string("\n  Use method call syntax instead: instance.") + unqualifiedName + "()",
+							 expr->line, expr->column);
+					// Still analyze arguments to mark variables as used
+					for (auto &arg : callExpr->args) {
+						analyzeExpression(arg.value.get());
+					}
+					return "error";
 				}
-				return "error";
 			}
 
 			// Only warn about unnecessary qualification for namespace-qualified calls

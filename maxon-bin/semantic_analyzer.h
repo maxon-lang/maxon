@@ -50,11 +50,12 @@ struct FunctionInfo {
 	const std::vector<std::unique_ptr<StmtAST>> *defaultBody = nullptr; // Non-owning ptr to default impl body
 	std::string selfType;												// For synthesized methods: concrete struct type to substitute for Self
 	std::map<std::string, std::string> typeSubstitutions;				// For synthesized methods: associated type substitutions
+	bool isStaticMethod = false;										// True for static methods (no implicit self parameter)
 	int line;
 	int column;
 
-	FunctionInfo(const std::string &n, const std::string &ret, std::vector<FunctionParameter> params, const std::string &implInterface = "", int l = 0, int c = 0)
-		: name(n), returnType(ret), parameters(std::move(params)), implementsInterface(implInterface), line(l), column(c) {}
+	FunctionInfo(const std::string &n, const std::string &ret, std::vector<FunctionParameter> params, const std::string &implInterface = "", int l = 0, int c = 0, bool isStatic = false)
+		: name(n), returnType(ret), parameters(std::move(params)), implementsInterface(implInterface), isStaticMethod(isStatic), line(l), column(c) {}
 
 	// Check if this is a synthesized default method that needs code generation
 	bool needsCodeGeneration() const { return isSynthesizedDefault && defaultBody != nullptr; }

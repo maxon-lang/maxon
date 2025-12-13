@@ -255,6 +255,10 @@ class KeywordMatcher {
 					"External declaration - declares item implemented elsewhere",
 					"extern",
 					KeywordCompletionKind::Keyword);
+		add_keyword("static", KeywordCategory::Declaration,
+					"Static function - belongs to type but has no implicit self parameter",
+					"static function $1($2) returns $3\n\t$4\nend '$1'",
+					KeywordCompletionKind::Keyword);
 		add_keyword("from", KeywordCategory::Declaration,
 					"Map key type specifier",
 					"from",

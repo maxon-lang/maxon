@@ -166,6 +166,13 @@ std::string Parser::parseReturnType(int rparenLine, bool allowSelfType, const st
 std::unique_ptr<FunctionAST> Parser::parseMethodImpl(const std::string &receiverType, bool allowInterfacePrefix) {
 	bool isExported = parseOptionalExport();
 
+	// Check for 'static' keyword before 'function'
+	bool isStatic = false;
+	if (checkKeyword("static")) {
+		advance();
+		isStatic = true;
+	}
+
 	Token funcToken = expectKeyword("function", "Expected 'function'");
 	Token firstIdent = expect(TokenType::IDENTIFIER, "Expected method name");
 
@@ -173,7 +180,8 @@ std::unique_ptr<FunctionAST> Parser::parseMethodImpl(const std::string &receiver
 	std::string implementsInterface;
 
 	// Check for Interface.methodName syntax (struct methods only)
-	if (allowInterfacePrefix && check(TokenType::DOT)) {
+	// Note: static methods cannot implement interface methods
+	if (allowInterfacePrefix && !isStatic && check(TokenType::DOT)) {
 		advance(); // consume '.'
 		implementsInterface = firstIdent.value;
 		Token methodNameToken = expect(TokenType::IDENTIFIER, "Expected method name after interface name");
@@ -182,14 +190,17 @@ std::unique_ptr<FunctionAST> Parser::parseMethodImpl(const std::string &receiver
 		methodName = firstIdent.value;
 	}
 
-	logTrace(std::string("Parsing method '") + receiverType + "." + methodName + "'" +
+	logTrace(std::string("Parsing ") + (isStatic ? "static " : "") + "method '" + receiverType + "." + methodName + "'" +
 			 (implementsInterface.empty() ? "" : " (implements " + implementsInterface + ")") +
 			 (isExported ? " (exported)" : "") +
 			 " at line " + std::to_string(funcToken.line));
 
 	expectAdvance(TokenType::LPAREN, "Expected '('");
 
-	std::vector<FunctionParameter> parameters = parseParameterList(&receiverType, funcToken.line, funcToken.column);
+	// For static methods, don't inject the implicit 'self' parameter
+	std::vector<FunctionParameter> parameters = isStatic
+		? parseParameterList(nullptr, 0, 0)
+		: parseParameterList(&receiverType, funcToken.line, funcToken.column);
 
 	int rparenLine = currentLine();
 	expectAdvance(TokenType::RPAREN, "Expected ')'");
@@ -202,13 +213,13 @@ std::unique_ptr<FunctionAST> Parser::parseMethodImpl(const std::string &receiver
 
 	Token endBlockIdToken = expectMatchingBlockId(methodName, "method");
 
-	logTrace(std::string("Method '") + receiverType + "." + methodName + "' -> " + returnType +
+	logTrace(std::string(isStatic ? "Static method '" : "Method '") + receiverType + "." + methodName + "' -> " + returnType +
 			 (implementsInterface.empty() ? "" : " (implements " + implementsInterface + ")") +
 			 " (" + std::to_string(parameters.size()) + " params, " + std::to_string(body.size()) + " statements)");
 
 	auto method = std::make_unique<FunctionAST>(methodName, std::move(parameters), returnType, std::move(body),
 												false, funcToken.line, funcToken.column, defaultNamespace, isExported,
-												"", false, "", receiverType, implementsInterface);
+												"", false, "", receiverType, implementsInterface, isStatic);
 	method->setEndPosition(endBlockIdToken.line, tokenEndColumn(endBlockIdToken));
 	return method;
 }
@@ -389,8 +400,11 @@ std::unique_ptr<StructDefAST> Parser::parseStruct() {
 
 	// Parse fields and methods until we hit 'end'
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		// Check for method: 'function' or 'export function'
-		if (checkKeyword("function") || (checkKeyword("export") && checkKeyword("function", 1))) {
+		// Check for method: 'function', 'static function', 'export function', or 'export static function'
+		bool isMethod = checkKeyword("function") ||
+						checkKeyword("static") ||
+						(checkKeyword("export") && (checkKeyword("function", 1) || checkKeyword("static", 1)));
+		if (isMethod) {
 			parsingFields = false; // Once we see a method, no more fields allowed
 			methods.push_back(parseMethod(structName));
 			continue;
@@ -525,8 +539,11 @@ std::unique_ptr<EnumDefAST> Parser::parseEnum() {
 
 	// Parse cases and methods until we hit 'end'
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
-		// Check for method: 'function' or 'export function'
-		if (checkKeyword("function") || (checkKeyword("export") && checkKeyword("function", 1))) {
+		// Check for method: 'function', 'static function', 'export function', or 'export static function'
+		bool isMethod = checkKeyword("function") ||
+						checkKeyword("static") ||
+						(checkKeyword("export") && (checkKeyword("function", 1) || checkKeyword("static", 1)));
+		if (isMethod) {
 			methods.push_back(parseEnumMethod(enumName));
 			continue;
 		}

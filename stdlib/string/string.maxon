@@ -27,37 +27,6 @@
 //
 // Dependencies: string/character, unicode/grapheme (auto-imported by compiler)
 
-// ============================================
-// StringIndex - type-safe string position
-// ============================================
-// StringIndex represents a valid position within a string.
-// It stores both character index and byte position for efficiency.
-// Use string.startIndex(), string.endIndex(), or string.find() to obtain indices.
-
-export type StringIndex is Equatable, Comparable
-	var _charIndex int   // Character (grapheme) index
-	var _bytePos int     // Byte position in UTF-8 data
-
-	/// Get the character index (0-based)
-	export function charIndex() returns int
-		return _charIndex
-	end 'charIndex'
-
-	function Equatable.equals(other StringIndex) returns bool
-		return _charIndex == other._charIndex
-	end 'equals'
-
-	function Comparable.compare(other StringIndex) returns int
-		if _charIndex < other._charIndex 'less'
-			return 0 - 1
-		end 'less'
-		if _charIndex > other._charIndex 'greater'
-			return 1
-		end 'greater'
-		return 0
-	end 'compare'
-end 'StringIndex'
-
 export type string is Hashable, Equatable, Iterable with character, InitableFromStringLiteral
 	var _managed _ManagedString  // Compiler-managed opaque string storage
 	var _iterPos int             // Current iteration position (byte offset for grapheme iteration)
@@ -782,5 +751,33 @@ export function stringFromCharacters(buffer array of byte, length int) returns s
 	return string{_managed: __string_from_characters(buffer, length), _iterPos: 0}
 end 'stringFromCharacters'
 
+// ============================================
+// StringIndex - type-safe string position
+// ============================================
+// StringIndex represents a valid position within a string.
+// It stores both character index and byte position for efficiency.
+// Use string.startIndex(), string.endIndex(), or string.find() to obtain indices.
 
+export type StringIndex is Equatable, Comparable
+	var _charIndex int   // Character (grapheme) index
+	var _bytePos int     // Byte position in UTF-8 data
 
+	/// Get the character index (0-based)
+	export function charIndex() returns int
+		return _charIndex
+	end 'charIndex'
+
+	function Equatable.equals(other StringIndex) returns bool
+		return _charIndex == other._charIndex
+	end 'equals'
+
+	function Comparable.compare(other StringIndex) returns int
+		if _charIndex < other._charIndex 'less'
+			return 0 - 1
+		end 'less'
+		if _charIndex > other._charIndex 'greater'
+			return 1
+		end 'greater'
+		return 0
+	end 'compare'
+end 'StringIndex'

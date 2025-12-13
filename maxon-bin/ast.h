@@ -1041,6 +1041,7 @@ class FunctionAST : public ASTNode {
 	std::string dllName; // DLL/lib name for extern functions (without extension)
 	bool isStaticLib;	 // true if linking against a static library (.lib), false for DLL
 	std::string libPath; // Full path to static library file (if isStaticLib)
+	bool isStaticMethod; // true for static methods (no implicit self parameter)
 	int line;
 	int column;
 	int endLine;   // End position line (0 = unset)
@@ -1048,6 +1049,9 @@ class FunctionAST : public ASTNode {
 
 	// Check if this is a method (has a receiver type)
 	bool isMethod() const { return !receiverType.empty(); }
+
+	// Check if this is an instance method (has self parameter)
+	bool isInstanceMethod() const { return !receiverType.empty() && !isStaticMethod; }
 
 	FunctionAST(const std::string &n,
 				std::vector<FunctionParameter> params,
@@ -1061,9 +1065,10 @@ class FunctionAST : public ASTNode {
 				bool staticLib = false,
 				const std::string &libFilePath = "",
 				const std::string &receiver = "",
-				const std::string &implInterface = "")
+				const std::string &implInterface = "",
+				bool isStatic = false)
 		: name(n), namespaceName(ns), receiverType(receiver), implementsInterface(implInterface), parameters(std::move(params)), returnType(ret), body(std::move(b)),
-		  isExtern(ext), isExported(exp), dllName(dll), isStaticLib(staticLib), libPath(libFilePath), line(l), column(c), endLine(0), endColumn(0) {}
+		  isExtern(ext), isExported(exp), dllName(dll), isStaticLib(staticLib), libPath(libFilePath), isStaticMethod(isStatic), line(l), column(c), endLine(0), endColumn(0) {}
 
 	// Helper to get the full source range of this function
 	SourceRange getSourceRange() const {

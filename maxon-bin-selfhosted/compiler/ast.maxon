@@ -9,11 +9,11 @@ export type TypeRef
 	var kind TypeKind
 	var name string
 
-	export function makeInt() returns TypeRef
+	export static function makeInt() returns TypeRef
 		return TypeRef{kind: TypeKind.intType, name: "int"}
 	end 'makeInt'
 
-	export function makeVoid() returns TypeRef
+	export static function makeVoid() returns TypeRef
 		return TypeRef{kind: TypeKind.voidType, name: "void"}
 	end 'makeVoid'
 end 'TypeRef'
@@ -22,7 +22,7 @@ export type SourceLoc
 	var line int
 	var column int
 
-	export function create(line int, column int) returns SourceLoc
+	export static function create(line int, column int) returns SourceLoc
 		return SourceLoc{line: line, column: column}
 	end 'create'
 end 'SourceLoc'
@@ -38,11 +38,11 @@ export type Expr
 	var name string
 	var loc SourceLoc
 
-	export function makeIntLiteral(value int, loc SourceLoc) returns Expr
+	export static function makeIntLiteral(value int, loc SourceLoc) returns Expr
 		return Expr{kind: ExprKind.intLiteral, intValue: value, name: "", loc: loc}
 	end 'makeIntLiteral'
 
-	export function makeVarRef(name string, loc SourceLoc) returns Expr
+	export static function makeVarRef(name string, loc SourceLoc) returns Expr
 		return Expr{kind: ExprKind.varRef, intValue: 0, name: name, loc: loc}
 	end 'makeVarRef'
 end 'Expr'
@@ -59,11 +59,11 @@ export type Stmt
 	var hasValue bool
 	var loc SourceLoc
 
-	export function makeReturn(value Expr, hasValue bool, loc SourceLoc) returns Stmt
+	export static function makeReturn(value Expr, hasValue bool, loc SourceLoc) returns Stmt
 		return Stmt{kind: StmtKind.returnStmt, name: "", expr: value, hasValue: hasValue, loc: loc}
 	end 'makeReturn'
 
-	export function makeLet(name string, value Expr, loc SourceLoc) returns Stmt
+	export static function makeLet(name string, value Expr, loc SourceLoc) returns Stmt
 		return Stmt{kind: StmtKind.letStmt, name: name, expr: value, hasValue: true, loc: loc}
 	end 'makeLet'
 end 'Stmt'
@@ -72,7 +72,7 @@ export type Parameter
 	var name string
 	var paramType TypeRef
 
-	export function create(name string, paramType TypeRef) returns Parameter
+	export static function create(name string, paramType TypeRef) returns Parameter
 		return Parameter{name: name, paramType: paramType}
 	end 'create'
 end 'Parameter'
@@ -86,15 +86,15 @@ export type FunctionDecl
 	var isExtern bool
 	var loc SourceLoc
 
-	export function create(name string, returnType TypeRef, body array of Stmt, loc SourceLoc) returns FunctionDecl
+	export static function create(name string, returnType TypeRef, body array of Stmt, loc SourceLoc) returns FunctionDecl
 		return FunctionDecl{
-		name: name,
-		params: array of Parameter,
-		returnType: returnType,
-		body: body,
-		isExport: false,
-		isExtern: false,
-		loc: loc
+			name: name,
+			params: array of Parameter,
+			returnType: returnType,
+			body: body,
+			isExport: false,
+			isExtern: false,
+			loc: loc
 		}
 	end 'create'
 end 'FunctionDecl'
@@ -103,12 +103,13 @@ export type Program
 	var functions array of FunctionDecl
 	var fileName string
 
-	export function create(fileName string) returns Program
+	export static function create(fileName string) returns Program
 		return Program{functions: array of FunctionDecl, fileName: fileName}
 	end 'create'
 
-	export function addFunction(fn FunctionDecl) returns nothing
+	function addFunction(fn FunctionDecl) returns nothing
 		functions.push(fn)
 	end 'addFunction'
 end 'Program'
+
 

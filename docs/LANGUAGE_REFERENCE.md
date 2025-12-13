@@ -70,7 +70,7 @@ Single-line comments only:
 ```
 and, as, associatedtype, bool, break, continue, default, else, end, enum, export, extern,
 fallthrough, false, float, for, function, gives, if, in, int, interface, is, let, match,
-nil, not, or, return, then, true, type, var, while
+nil, not, or, return, static, then, true, type, var, while
 ```
 
 ### Literals
@@ -647,6 +647,52 @@ var p3 = p1.add(p2)             // Positional argument
 var p4 = p1.add(other = p2)     // Named argument (optional)
 var mag = p1.magnitude()
 ```
+
+### Static Methods
+
+Static methods belong to a type but don't have access to instance data. They are declared with the `static` keyword and called using `TypeName.method()` syntax:
+
+```maxon
+type Point
+    var x int
+    var y int
+
+    static function origin() returns Point
+        return Point{x: 0, y: 0}
+    end 'origin'
+
+    static function create(x int, y int) returns Point
+        return Point{x: x, y: y}
+    end 'create'
+
+    function magnitude() returns float
+        return sqrt((x * x + y * y) as float)
+    end 'magnitude'
+end 'Point'
+```
+
+**Calling Static Methods:**
+```maxon
+var p1 = Point.origin()           // Static method call
+var p2 = Point.create(10, 20)     // Static method with args
+var mag = p2.magnitude()          // Instance method call
+```
+
+**Static Method Rules:**
+- Declared with `static function` inside a type body
+- No implicit `self` parameter - cannot access instance fields
+- Called on the type name, not on instances: `TypeName.method()`
+- Can be exported with `export static function`
+- Commonly used for factory methods and utility functions
+
+**Differences from Instance Methods:**
+
+| Feature | Instance Method | Static Method |
+|---------|----------------|---------------|
+| Has `self` | Yes (implicit) | No |
+| Can access fields | Yes | No |
+| Call syntax | `instance.method()` | `Type.method()` |
+| Declaration | `function name()` | `static function name()` |
 
 ### Interfaces
 

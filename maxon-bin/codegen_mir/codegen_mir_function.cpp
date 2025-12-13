@@ -32,7 +32,8 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 	functionParameterTypes[functionName] = paramTypes;
 
 	// Track receiver type for implicit self field access
-	currentReceiverType = func->receiverType;
+	// But not for static methods - they don't have access to self
+	currentReceiverType = func->isStaticMethod ? "" : func->receiverType;
 
 	// Get the function that was already declared
 	mir::MIRFunction *function = module->getFunction(functionName);
@@ -144,7 +145,8 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 	std::map<std::string, std::string> savedTypeBindings = currentTypeBindings;
 
 	// Track receiver type for implicit self field access
-	currentReceiverType = specializedReceiverType;
+	// But not for static methods - they don't have access to self
+	currentReceiverType = func->isStaticMethod ? "" : specializedReceiverType;
 
 	// Store type bindings for use during codegen
 	currentTypeBindings = typeBindings;
@@ -258,8 +260,9 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 
 	// Handle implicit self parameter first - it's always added as the first parameter
 	// in the MIR function declaration for struct methods, but may not be in func->parameters
+	// Static methods don't have an implicit self parameter
 	bool hasExplicitSelf = !func->parameters.empty() && func->parameters[0].name == "self";
-	if (!hasExplicitSelf && !specializedReceiverType.empty()) {
+	if (!hasExplicitSelf && !specializedReceiverType.empty() && !func->isStaticMethod) {
 		// Implicit self - create alloca and store from first MIR parameter
 		mir::MIRValue *selfAlloca = builder->createAlloca(mir::MIRType::getPtr(), "self");
 		mir::MIRValue *selfParamVal = function->parameters[argIdx];

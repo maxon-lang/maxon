@@ -537,7 +537,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 							 std::string("\n  Note: Each method name must be unique within its type"),
 						 method->line, method->column);
 			} else {
-				functions.emplace(methodKey, FunctionInfo(methodKey, method->returnType, method->parameters, method->implementsInterface, method->line, method->column));
+				functions.emplace(methodKey, FunctionInfo(methodKey, method->returnType, method->parameters, method->implementsInterface, method->line, method->column, method->isStaticMethod));
 				functionIndices[methodKey] = nextFunctionId++;
 			}
 		}
@@ -556,7 +556,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 							 std::string("\n  Note: Each method name must be unique within its enum"),
 						 method->line, method->column);
 			} else {
-				functions.emplace(methodKey, FunctionInfo(methodKey, method->returnType, method->parameters, "", method->line, method->column));
+				functions.emplace(methodKey, FunctionInfo(methodKey, method->returnType, method->parameters, "", method->line, method->column, method->isStaticMethod));
 				functionIndices[methodKey] = nextFunctionId++;
 			}
 		}
