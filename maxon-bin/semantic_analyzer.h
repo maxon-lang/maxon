@@ -236,6 +236,11 @@ class SemanticAnalyzer {
 	// Call this before analyze() to make external enums available as valid types
 	void registerExternalEnum(const std::string &name, const std::string &rawValueType = "");
 
+	// Register external/stdlib enum types with case information
+	// Use this version to register imported enums that need to be used in constant expressions
+	void registerExternalEnum(const std::string &name, const std::string &rawValueType,
+							  const std::vector<EnumCaseInfo> &cases);
+
 	// Register all built-in functions (string methods, runtime functions, etc.)
 	// Call this before analyze() to make built-ins available
 	void registerBuiltinFunctions();
@@ -412,6 +417,7 @@ class SemanticAnalyzer {
 	void addWarning(const std::string &message, int line = 0, int column = 0, const std::string &errCode = "");
 	bool hasReturnInPath(const std::vector<std::unique_ptr<StmtAST>> &statements);
 	void markVariableAsUsed(const std::string &name);
+	bool isConstantExpression(ExprAST *expr, std::string &nonConstReason);
 	void checkUnusedVariables();
 	void checkInterfaceConformance(const std::string &structName, const std::vector<std::string> &conformsTo, int line, int column, bool isGenericTemplate = false);
 	void instantiateGenericStructMethods(const std::string &templateName, const std::string &specializedName,

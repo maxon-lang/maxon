@@ -763,6 +763,276 @@ void MIRCodeGenerator::initHeapManagement() {
 }
 
 //==============================================================================
+// Runtime-Init Global Helpers
+//==============================================================================
+
+bool MIRCodeGenerator::requiresRuntimeInit(ExprAST *expr) {
+	if (!expr)
+		return false;
+
+	// Array literals require runtime initialization (heap allocation)
+	if (dynamic_cast<ArrayLiteralExprAST *>(expr))
+		return true;
+
+	// Map literals require runtime initialization
+	if (dynamic_cast<MapLiteralWithEntriesExprAST *>(expr))
+		return true;
+
+	// Enum case expressions (MemberAccessExprAST with enum) require runtime init
+	// because they need enum type resolution at runtime
+	if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(expr)) {
+		// This check is conservative - we mark all member access as runtime init
+		// The semantic analyzer already validated it's an enum case
+		if (!memberExpr->object && !memberExpr->objectName.empty()) {
+			return true;
+		}
+	}
+
+	// Recursively check binary/unary/cast expressions
+	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
+		return requiresRuntimeInit(binExpr->left.get()) || requiresRuntimeInit(binExpr->right.get());
+	}
+	if (auto *unaryExpr = dynamic_cast<UnaryExprAST *>(expr)) {
+		return requiresRuntimeInit(unaryExpr->operand.get());
+	}
+	if (auto *castExpr = dynamic_cast<CastExprAST *>(expr)) {
+		return requiresRuntimeInit(castExpr->expr.get());
+	}
+
+	return false;
+}
+
+void MIRCodeGenerator::generateGlobalInit() {
+	if (runtimeInitGlobals.empty()) {
+		return;
+	}
+
+	logDetail("Generating __global_init for " + std::to_string(runtimeInitGlobals.size()) + " globals");
+
+	// Create __global_init function
+	std::vector<std::pair<mir::MIRType *, std::string>> params;
+	mir::MIRFunction *initFunc = builder->createFunction("__global_init", mir::MIRType::getVoid(), params);
+	mir::MIRBasicBlock *entry = builder->createBasicBlock("entry");
+	builder->setInsertPoint(entry);
+
+	// While generating __global_init, emitted literals may escape into globals.
+	// Use this flag to force stable backing storage for such literals.
+	inGlobalInit = true;
+
+	// Push a scope for any temporary allocations
+	pushScope();
+
+	// Generate initialization code for each runtime-init global
+	for (auto &globalInfo : runtimeInitGlobals) {
+		logTrace("Generating init for global: " + globalInfo.name);
+
+		ExprAST *initExpr = globalInfo.decl->initializer.get();
+
+		// Handle array literals
+		if (auto *arrayLit = dynamic_cast<ArrayLiteralExprAST *>(initExpr)) {
+			// Generate array initialization similar to local var decl
+			// First, generate all element values
+			std::vector<mir::MIRValue *> initValues;
+			mir::MIRType *elementType = nullptr;
+			std::string elementTypeName;
+
+			for (auto &valExpr : arrayLit->values) {
+				mir::MIRValue *val = generateExpr(valExpr.get());
+				if (!val) {
+					reportError("Failed to generate array element value for global '" + globalInfo.name + "'",
+								globalInfo.decl->line, globalInfo.decl->column);
+				}
+				initValues.push_back(val);
+				if (!elementType) {
+					elementType = val->type;
+					// Infer element type name
+					if (elementType->kind == mir::MIRTypeKind::Int32) {
+						elementTypeName = "int";
+					} else if (elementType->kind == mir::MIRTypeKind::Float64) {
+						elementTypeName = "float";
+					} else if (elementType->kind == mir::MIRTypeKind::Int8) {
+						elementTypeName = "character";
+					} else if (elementType->kind == mir::MIRTypeKind::Ptr) {
+						elementTypeName = "ptr";
+					} else {
+						elementTypeName = "int"; // Fallback
+					}
+				}
+			}
+
+			int arraySize = static_cast<int>(arrayLit->values.size());
+			uint64_t elementSize = elementType->sizeInBytes;
+			uint64_t totalSize = arraySize * elementSize;
+
+			// For globals, always use heap allocation
+			initHeapManagement();
+			mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+
+			// Allocate data buffer
+			mir::MIRValue *sizeVal = builder->getInt64(totalSize);
+			mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {sizeVal}, globalInfo.name + ".buffer");
+
+			// Get the global that was already created in Pass 1d
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
+			mir::MIRValue *globalPtr = mir::MIRValue::createGlobal(arrayStructType, globalInfo.name);
+
+			// Get __ManagedArrayData type
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+
+			// Initialize the struct fields
+			mir::MIRValue *lengthVal = builder->getInt32(arraySize);
+
+			// Field 0: managed (nested __ManagedArrayData struct)
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, globalPtr, 0, globalInfo.name + ".managed");
+
+			// Initialize the nested __ManagedArrayData fields
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, globalInfo.name + ".managed._buffer");
+			builder->createStore(bufferPtr, bufferField);
+
+			mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, globalInfo.name + ".managed._len");
+			builder->createStore(lengthVal, lenField);
+
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, globalInfo.name + ".managed._capacity");
+			builder->createStore(lengthVal, capField);
+
+			// Field 1: iterIndex
+			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, globalPtr, 1, globalInfo.name + ".iterIndex");
+			builder->createStore(builder->getInt32(0), iterField);
+
+			// Store each element value
+			for (int i = 0; i < arraySize; i++) {
+				mir::MIRValue *indexVal = builder->getInt32(i);
+				mir::MIRValue *elemPtr = builder->createArrayGEP(elementType, bufferPtr, indexVal, "arrayidx");
+				builder->createStore(initValues[i], elemPtr);
+			}
+		}
+		// Handle map literals
+		else if (auto *mapLit = dynamic_cast<MapLiteralWithEntriesExprAST *>(initExpr)) {
+			const std::string &keyType = mapLit->inferredKeyType;
+			const std::string &valueType = mapLit->inferredValueType;
+			std::string specializedName = "map<" + keyType + "," + valueType + ">";
+
+			logTrace("Generating global map init for: " + globalInfo.name + " type: " + specializedName);
+
+			// Get the specialized struct type
+			mir::MIRType *mapStructType = structTypes[specializedName];
+			if (!mapStructType) {
+				reportError("Map type not found: " + specializedName,
+							globalInfo.decl->line, globalInfo.decl->column);
+			}
+
+			// Get number of entries and element types
+			int numEntries = static_cast<int>(mapLit->entries.size());
+			mir::MIRType *keyMirType = getTypeFromString(keyType);
+			mir::MIRType *valueMirType = getTypeFromString(valueType);
+
+			// Create _ManagedArray<Key> struct for keys
+			mir::MIRType *keyManagedArrayType = getOrCreateManagedArrayDataType(keyType);
+			mir::MIRValue *keysManaged = builder->createAlloca(keyManagedArrayType, "managed.keys");
+
+			// Create _ManagedArray<Value> struct for values
+			mir::MIRType *valueManagedArrayType = getOrCreateManagedArrayDataType(valueType);
+			mir::MIRValue *valuesManaged = builder->createAlloca(valueManagedArrayType, "managed.values");
+
+			// For globals, allocate on heap instead of stack (stack won't persist)
+			initHeapManagement();
+			mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+
+			uint64_t keySize = keyMirType->sizeInBytes;
+			uint64_t valueSize = valueMirType->sizeInBytes;
+			uint64_t keysBufferSize = numEntries > 0 ? numEntries * keySize : keySize;
+			uint64_t valuesBufferSize = numEntries > 0 ? numEntries * valueSize : valueSize;
+
+			mir::MIRValue *keysBuffer = builder->createCall(mallocFunc, {builder->getInt64(keysBufferSize)}, "keys.buffer");
+			mir::MIRValue *valuesBuffer = builder->createCall(mallocFunc, {builder->getInt64(valuesBufferSize)}, "values.buffer");
+
+			// Store keys and values in their respective buffers
+			for (int i = 0; i < numEntries; i++) {
+				const auto &entry = mapLit->entries[i];
+
+				// Store key
+				mir::MIRValue *keyVal = generateExpr(entry.key.get());
+				mir::MIRValue *keyPtr = builder->createArrayGEP(keyMirType, keysBuffer,
+																builder->getInt64(i), "key.ptr");
+				if (keyMirType->isStruct()) {
+					mir::MIRValue *keyLoaded = builder->createLoad(keyMirType, keyVal, "key.loaded");
+					builder->createStore(keyLoaded, keyPtr);
+				} else {
+					builder->createStore(keyVal, keyPtr);
+				}
+
+				// Store value
+				mir::MIRValue *valVal = generateExpr(entry.value.get());
+				mir::MIRValue *valPtr = builder->createArrayGEP(valueMirType, valuesBuffer,
+																builder->getInt64(i), "val.ptr");
+				if (valueMirType->isStruct()) {
+					mir::MIRValue *valLoaded = builder->createLoad(valueMirType, valVal, "val.loaded");
+					builder->createStore(valLoaded, valPtr);
+				} else {
+					builder->createStore(valVal, valPtr);
+				}
+			}
+
+			// Initialize keys _ManagedArray struct fields
+			mir::MIRValue *keysBufferField = builder->createStructGEP(keyManagedArrayType, keysManaged, 0, "keys._buffer");
+			builder->createStore(keysBuffer, keysBufferField);
+			mir::MIRValue *keysLenField = builder->createStructGEP(keyManagedArrayType, keysManaged, 1, "keys._len");
+			builder->createStore(builder->getInt32(numEntries), keysLenField);
+			mir::MIRValue *keysCapField = builder->createStructGEP(keyManagedArrayType, keysManaged, 2, "keys._capacity");
+			builder->createStore(builder->getInt32(numEntries), keysCapField);
+
+			// Initialize values _ManagedArray struct fields
+			mir::MIRValue *valuesBufferField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 0, "values._buffer");
+			builder->createStore(valuesBuffer, valuesBufferField);
+			mir::MIRValue *valuesLenField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 1, "values._len");
+			builder->createStore(builder->getInt32(numEntries), valuesLenField);
+			mir::MIRValue *valuesCapField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 2, "values._capacity");
+			builder->createStore(builder->getInt32(numEntries), valuesCapField);
+
+			// Call map<K,V>.init(null, keysManaged, valuesManaged)
+			std::string initMethodName = specializedName + ".init";
+			mir::MIRFunction *initFunc = module->getFunction(initMethodName);
+			if (!initFunc) {
+				reportError("map.init method not found for type: " + specializedName +
+								" - ensure InitableFromMapLiteral.init is implemented",
+							globalInfo.decl->line, globalInfo.decl->column);
+			}
+
+			// Pass null for self (factory method returns new instance)
+			mir::MIRValue *nullSelf = builder->getNull();
+			mir::MIRValue *mapResult = builder->createCall(initFunc, {nullSelf, keysManaged, valuesManaged}, "map.init");
+
+			// Store result to global
+			mir::MIRValue *globalPtr = mir::MIRValue::createGlobal(mapStructType, globalInfo.name);
+			builder->createStore(mapResult, globalPtr);
+		}
+		// Handle enum case expressions
+		else if (dynamic_cast<MemberAccessExprAST *>(initExpr)) {
+			// Generate enum case value
+			mir::MIRValue *enumVal = generateExpr(initExpr);
+			if (!enumVal) {
+				reportError("Failed to generate enum case for global '" + globalInfo.name + "'",
+							globalInfo.decl->line, globalInfo.decl->column);
+			}
+
+			// Get the global that was already created in Pass 1d and store the value
+			mir::MIRValue *globalPtr = mir::MIRValue::createGlobal(enumVal->type, globalInfo.name);
+			builder->createStore(enumVal, globalPtr);
+		} else {
+			reportError("Unsupported runtime-init expression for global '" + globalInfo.name + "'",
+						globalInfo.decl->line, globalInfo.decl->column);
+		}
+	}
+
+	// Pop scope (cleanup any temps)
+	popScope(initFunc);
+	inGlobalInit = false;
+
+	// Return
+	builder->createRetVoid();
+}
+
+//==============================================================================
 // Entry Point Creation
 //==============================================================================
 
@@ -844,6 +1114,14 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 		mir::MIRFunction *trackEnableFunc = getOrDeclareFunction("__enable_alloc_tracking",
 																 mir::MIRType::getVoid(), {});
 		builder->createCall(trackEnableFunc, {});
+	}
+
+	// Call __global_init if there are runtime-init globals
+	if (!runtimeInitGlobals.empty()) {
+		mir::MIRFunction *globalInitFunc = module->getFunction("__global_init");
+		if (globalInitFunc) {
+			builder->createCall(globalInitFunc, {});
+		}
 	}
 
 	if (mainTakesArgs) {
@@ -1281,47 +1559,8 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		structTypeAssignments[structDef->name] = structDef->typeAssignments;
 	}
 
-	// Second pass: Fill in struct fields now that all types are declared
-	// Use getTypeFromStringNoMark to avoid marking field types as used prematurely
-	logDetail("Pass 1b: Filling in struct fields");
-	for (const auto &structDef : program->structs) {
-		// Skip generic template structs - they'll be instantiated on demand
-		if (!structDef->associatedTypeParams.empty()) {
-			continue;
-		}
-
-		std::vector<mir::MIRType *> fieldTypes;
-		std::vector<std::pair<std::string, std::string>> fields;
-		std::map<std::string, ExprAST *> defaults;
-
-		for (const auto &field : structDef->fields) {
-			std::string fieldType = field.type;
-
-			// Type inference from default value (mirrors semantic analyzer logic)
-			if (fieldType.empty() && field.defaultValue != nullptr) {
-				fieldType = inferExprType(field.defaultValue.get());
-			}
-
-			fieldTypes.push_back(getTypeFromStringNoMark(fieldType));
-			fields.push_back({field.name, fieldType});
-			// Store pointer to default value expression (if any)
-			if (field.defaultValue != nullptr) {
-				defaults[field.name] = field.defaultValue.get();
-			}
-		}
-
-		logTrace("Defining struct type: " + structDef->name + " (" + std::to_string(fieldTypes.size()) + " fields)");
-
-		// Update the existing struct type with actual fields
-		mir::MIRType *structType = structTypes[structDef->name];
-		structType->fieldTypes = fieldTypes;
-		structType->recomputeSize();
-		structFields[structDef->name] = fields;
-		structFieldDefaults[structDef->name] = defaults;
-	}
-
-	// Pass 1c: Register enum types
-	logDetail("Pass 1c: Registering enum types (" + std::to_string(program->enums.size()) + " enums)");
+	// Pass 1b: Register enum types (BEFORE filling struct fields so enums can be used as field types)
+	logDetail("Pass 1b: Registering enum types (" + std::to_string(program->enums.size()) + " enums)");
 	for (const auto &enumDef : program->enums) {
 		EnumCodegenInfo enumInfo;
 		enumInfo.name = enumDef->name;
@@ -1384,78 +1623,50 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		logTrace("Registered enum: " + enumDef->name + " (" + std::to_string(enumDef->cases.size()) + " cases)");
 	}
 
-	// Pass 1d: Generate global constants
-	logDetail("Pass 1d: Generating global constants (" + std::to_string(program->globals.size()) + " globals)");
-	if (!program->globals.empty()) {
-		// Use ConstExprEvaluator to evaluate all global initializers
-		ConstExprEvaluator evaluator;
-
-		// Register all globals
-		for (const auto &global : program->globals) {
-			evaluator.registerGlobal(global->name, global.get());
+	// Pass 1c: Fill in struct fields now that all types (including enums) are declared
+	// Use getTypeFromStringNoMark to avoid marking field types as used prematurely
+	logDetail("Pass 1c: Filling in struct fields");
+	for (const auto &structDef : program->structs) {
+		// Skip generic template structs - they'll be instantiated on demand
+		if (!structDef->associatedTypeParams.empty()) {
+			continue;
 		}
 
-		// Evaluate all globals (handles dependency ordering)
-		std::vector<std::string> evalErrors;
-		if (!evaluator.evaluateAll(evalErrors)) {
-			for (const auto &err : evalErrors) {
-				throw std::runtime_error(err);
+		std::vector<mir::MIRType *> fieldTypes;
+		std::vector<std::pair<std::string, std::string>> fields;
+		std::map<std::string, ExprAST *> defaults;
+
+		for (const auto &field : structDef->fields) {
+			std::string fieldType = field.type;
+
+			// Type inference from default value (mirrors semantic analyzer logic)
+			if (fieldType.empty() && field.defaultValue != nullptr) {
+				fieldType = inferExprType(field.defaultValue.get());
+			}
+
+			fieldTypes.push_back(getTypeFromStringNoMark(fieldType));
+			fields.push_back({field.name, fieldType});
+			// Store pointer to default value expression (if any)
+			if (field.defaultValue != nullptr) {
+				defaults[field.name] = field.defaultValue.get();
 			}
 		}
 
-		// Create MIR globals from evaluated values
-		for (const auto &global : program->globals) {
-			auto valueOpt = evaluator.getGlobalValue(global->name);
-			auto typeOpt = evaluator.getGlobalType(global->name);
+		logTrace("Defining struct type: " + structDef->name + " (" + std::to_string(fieldTypes.size()) + " fields)");
 
-			if (!valueOpt || !typeOpt) {
-				throw std::runtime_error("Failed to evaluate global constant '" + global->name + "'");
-			}
-
-			const ConstValue &value = *valueOpt;
-			const std::string &type = *typeOpt;
-
-			logTrace("Generating global: " + global->name + " : " + type);
-
-			if (type == "int") {
-				// Create global integer constant
-				mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getInt32());
-				mirGlobal->isConstant = true;
-				int32_t intVal = static_cast<int32_t>(std::get<int64_t>(value));
-				std::vector<uint8_t> data(4);
-				std::memcpy(data.data(), &intVal, 4);
-				mirGlobal->setInitializer(data);
-			} else if (type == "float") {
-				// Create global float constant
-				mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getFloat64());
-				mirGlobal->isConstant = true;
-				double floatVal = std::get<double>(value);
-				std::vector<uint8_t> data(8);
-				std::memcpy(data.data(), &floatVal, 8);
-				mirGlobal->setInitializer(data);
-			} else if (type == "bool") {
-				// Create global bool constant
-				mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getInt8());
-				mirGlobal->isConstant = true;
-				uint8_t boolVal = std::get<bool>(value) ? 1 : 0;
-				std::vector<uint8_t> data(1);
-				data[0] = boolVal;
-				mirGlobal->setInitializer(data);
-			} else if (type == "string") {
-				// Create global string constant (as raw string data)
-				// For strings, we store the data and length separately
-				const std::string &strVal = std::get<std::string>(value);
-				mir::MIRValue *strData = module->createGlobalString(global->name, strVal);
-				// Store reference in namedValues for lookup during codegen
-				// Note: String globals need special handling since they're struct-like
-				(void)strData; // For now, string globals use the existing string literal mechanism
-			}
-		}
+		// Update the existing struct type with actual fields
+		mir::MIRType *structType = structTypes[structDef->name];
+		structType->fieldTypes = fieldTypes;
+		structType->recomputeSize();
+		structFields[structDef->name] = fields;
+		structFieldDefaults[structDef->name] = defaults;
 	}
 
-	// Second pass: Create all function declarations and register extern functions
-	// This includes both top-level functions and methods declared inside structs
-	logDetail("Pass 2: Creating function declarations");
+	// Pass 1d: Declare all functions BEFORE global constants
+	// This is critical because global constants with map/array literals
+	// may trigger generic method instantiation, which needs to call stdlib
+	// functions like string.hashManagedString that must be declared first.
+	logDetail("Pass 1d: Creating function declarations");
 
 	// Helper lambda to declare a function/method
 	// Uses no-mark variants - types are marked when actually used in code generation
@@ -1531,14 +1742,170 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		}
 	}
 
-	// Then declare top-level functions
+	// Declare top-level functions (including stdlib functions like hashManagedString)
+	logDetail("Declaring " + std::to_string(program->functions.size()) + " top-level functions");
 	for (auto &func : program->functions) {
 		declareFunction(func.get(), func->namespaceName);
 	}
 
-	// Declare synthesized default methods from interfaces
+	// Pass 1e: Generate global constants
+	logDetail("Pass 1e: Generating global constants (" + std::to_string(program->globals.size()) + " globals)");
+	if (!program->globals.empty()) {
+		// Separate globals into compile-time const vs runtime-init
+		std::vector<GlobalLetDeclAST *> simpleGlobals;
+		for (const auto &global : program->globals) {
+			if (requiresRuntimeInit(global->initializer.get())) {
+				// Store for later generation in __global_init()
+				runtimeInitGlobals.push_back({global->name, global.get(), ""});
+				logTrace("Global '" + global->name + "' requires runtime initialization");
+
+				// Create global storage now so it can be referenced during function codegen
+				// The actual initialization will happen in __global_init()
+				ExprAST *initExpr = global->initializer.get();
+
+				if (auto *arrayLit = dynamic_cast<ArrayLiteralExprAST *>(initExpr)) {
+					// Infer element type from first value (semantic analyzer already validated)
+					std::string elementTypeName = "int"; // Default
+					if (!arrayLit->values.empty()) {
+						// Use semantic analyzer type info if available
+						// For now, infer from literal type
+						if (dynamic_cast<NumberExprAST *>(arrayLit->values[0].get())) {
+							elementTypeName = "int";
+						} else if (dynamic_cast<FloatExprAST *>(arrayLit->values[0].get())) {
+							elementTypeName = "float";
+						} else if (dynamic_cast<StringLiteralExprAST *>(arrayLit->values[0].get())) {
+							elementTypeName = "string";
+						} else if (dynamic_cast<CharacterExprAST *>(arrayLit->values[0].get())) {
+							elementTypeName = "character";
+						} else if (dynamic_cast<BooleanExprAST *>(arrayLit->values[0].get())) {
+							elementTypeName = "bool";
+						}
+					}
+
+					mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
+					mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, arrayStructType);
+					mirGlobal->isConstant = false; // Runtime initialized
+
+					// Record the type
+					std::string globalType = maxon::TypeConversion::makeArrayStructType(elementTypeName);
+					globalVariableTypes[global->name] = globalType;
+					runtimeInitGlobals.back().type = globalType;
+				} else if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(initExpr)) {
+					// Enum case - create i8 storage for the tag
+					mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getInt8());
+					mirGlobal->isConstant = true;
+
+					globalVariableTypes[global->name] = memberExpr->objectName;
+					runtimeInitGlobals.back().type = memberExpr->objectName;
+				} else if (auto *mapLit = dynamic_cast<MapLiteralWithEntriesExprAST *>(initExpr)) {
+					// Map literal - need to instantiate the generic map type and create storage
+					const std::string &keyType = mapLit->inferredKeyType;
+					const std::string &valueType = mapLit->inferredValueType;
+					std::string specializedName = "map<" + keyType + "," + valueType + ">";
+
+					// Instantiate the generic struct if not already done
+					if (instantiatedGenericStructs.find(specializedName) == instantiatedGenericStructs.end()) {
+						if (structDefinitions.find("map") != structDefinitions.end()) {
+							std::map<std::string, std::string> typeBindings = {
+								{"Key", keyType},
+								{"Value", valueType}};
+							instantiateGenericStruct("map", typeBindings);
+						} else {
+							throw std::runtime_error(
+								"Generic struct 'map' not found - ensure stdlib/collections/map.maxon is compiled");
+						}
+					}
+
+					// Get the specialized struct type
+					mir::MIRType *mapStructType = structTypes[specializedName];
+					if (!mapStructType) {
+						throw std::runtime_error("Failed to instantiate map type: " + specializedName);
+					}
+
+					// Create global storage for the map struct
+					mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mapStructType);
+					mirGlobal->isConstant = false; // Runtime initialized
+
+					globalVariableTypes[global->name] = specializedName;
+					runtimeInitGlobals.back().type = specializedName;
+				}
+			} else {
+				simpleGlobals.push_back(global.get());
+			}
+		}
+
+		// Use ConstExprEvaluator to evaluate simple global initializers
+		if (!simpleGlobals.empty()) {
+			ConstExprEvaluator evaluator;
+
+			// Register simple globals
+			for (const auto *global : simpleGlobals) {
+				evaluator.registerGlobal(global->name, const_cast<GlobalLetDeclAST *>(global));
+			}
+
+			// Evaluate all globals (handles dependency ordering)
+			std::vector<std::string> evalErrors;
+			if (!evaluator.evaluateAll(evalErrors)) {
+				for (const auto &err : evalErrors) {
+					throw std::runtime_error(err);
+				}
+			}
+
+			// Create MIR globals from evaluated values
+			for (const auto *global : simpleGlobals) {
+				auto valueOpt = evaluator.getGlobalValue(global->name);
+				auto typeOpt = evaluator.getGlobalType(global->name);
+
+				if (!valueOpt || !typeOpt) {
+					throw std::runtime_error("Failed to evaluate global constant '" + global->name + "'");
+				}
+
+				const ConstValue &value = *valueOpt;
+				const std::string &type = *typeOpt;
+
+				logTrace("Generating global: " + global->name + " : " + type);
+
+				if (type == "int") {
+					// Create global integer constant
+					mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getInt32());
+					mirGlobal->isConstant = true;
+					int32_t intVal = static_cast<int32_t>(std::get<int64_t>(value));
+					std::vector<uint8_t> data(4);
+					std::memcpy(data.data(), &intVal, 4);
+					mirGlobal->setInitializer(data);
+				} else if (type == "float") {
+					// Create global float constant
+					mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getFloat64());
+					mirGlobal->isConstant = true;
+					double floatVal = std::get<double>(value);
+					std::vector<uint8_t> data(8);
+					std::memcpy(data.data(), &floatVal, 8);
+					mirGlobal->setInitializer(data);
+				} else if (type == "bool") {
+					// Create global bool constant
+					mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getInt8());
+					mirGlobal->isConstant = true;
+					uint8_t boolVal = std::get<bool>(value) ? 1 : 0;
+					std::vector<uint8_t> data(1);
+					data[0] = boolVal;
+					mirGlobal->setInitializer(data);
+				} else if (type == "string") {
+					// Create global string constant (as raw string data)
+					// For strings, we store the data and length separately
+					const std::string &strVal = std::get<std::string>(value);
+					mir::MIRValue *strData = module->createGlobalString(global->name, strVal);
+					// Store reference in namedValues for lookup during codegen
+					// Note: String globals need special handling since they're struct-like
+					(void)strData; // For now, string globals use the existing string literal mechanism
+				}
+			}
+		}
+	}
+
+	// Pass 2: Declare synthesized default methods from interfaces
 	// Skip methods that have unresolved type parameters (Self, Element, etc.)
 	// These will be instantiated when a concrete type is used
+	logDetail("Pass 2: Declaring synthesized methods");
 	auto hasUnresolvedTypeParams = [](const std::string &type) {
 		return type == "Self" || type == "Element" ||
 			   type.find("Element ") != std::string::npos ||
@@ -1588,7 +1955,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		generateFFIWorkerMain(); // Worker subprocess main loop (provided by runtime)
 	}
 
-	// Third pass: Generate function bodies (both methods inside structs and top-level functions)
+	// Pass 3: Generate function bodies (both methods inside structs and top-level functions)
 	logDetail("Pass 3: Generating function bodies");
 
 	// First, generate method bodies from structs
@@ -1638,6 +2005,12 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 
 	// Create entry point if needed
 	if (needsEntryPoint) {
+		// Generate __global_init if there are runtime-init globals
+		if (!runtimeInitGlobals.empty()) {
+			logDetail("Generating __global_init()");
+			generateGlobalInit();
+		}
+
 		logDetail("Creating entry point (_start)");
 		createMinimalEntryPoint();
 	}

@@ -842,6 +842,18 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 		// Simple array[i] access
 		mir::MIRValue *alloca = namedValues[arrayIndexExpr->arrayName];
+		bool isGlobalArray = false;
+		mir::MIRGlobal *globalArray = nullptr;
+
+		if (!alloca) {
+			// Check if it's a global array
+			globalArray = module->getGlobal(arrayIndexExpr->arrayName);
+			if (globalArray && globalVariableTypes.find(arrayIndexExpr->arrayName) != globalVariableTypes.end()) {
+				alloca = mir::MIRValue::createGlobal(globalArray->type, arrayIndexExpr->arrayName);
+				isGlobalArray = true;
+			}
+		}
+
 		if (!alloca) {
 			// If we're in a method and array not found, check if it's a struct field
 			// This enables implicit self field access for arrays: 'data[i]' instead of 'self.data[i]'
@@ -920,6 +932,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		// Determine element type
 		std::string elementTypeStr = "int";
 		std::string varType = variableTypes[arrayIndexExpr->arrayName];
+		// Check global variable types if not found locally
+		if (varType.empty() && isGlobalArray) {
+			varType = globalVariableTypes[arrayIndexExpr->arrayName];
+		}
 		if (maxon::TypeConversion::isArrayStructType(varType)) {
 			elementTypeStr = maxon::TypeConversion::getArrayStructElementType(varType);
 		} else if (maxon::TypeConversion::isArrayType(varType)) {
@@ -931,7 +947,12 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		// Get the array data pointer
 		mir::MIRValue *arrayPtr;
 
-		if (stackAllocatedArrays.count(arrayIndexExpr->arrayName) > 0) {
+		if (isGlobalArray) {
+			// Global array - use the ManagedArray struct layout
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, alloca, 0, "global.arr._buffer.ptr");
+			arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferField, "global.arr.buffer");
+		} else if (stackAllocatedArrays.count(arrayIndexExpr->arrayName) > 0) {
 			// Static stack array (let arr = [1,2,3]) - alloca is directly the array memory
 			arrayPtr = alloca;
 		} else if (arrayParameters.count(arrayIndexExpr->arrayName) > 0) {
@@ -1860,6 +1881,13 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				mir::MIRValue *tempAlloca = builder->createAlloca(argVal->type, "struct.tmp");
 				builder->createStore(argVal, tempAlloca);
 				argVal = tempAlloca;
+			}
+
+			// If the argument is a pointer (from variable alloca) but parameter expects
+			// a value type (not pointer, not struct), load the value from the alloca
+			// This handles enum and primitive type arguments passed to value parameters
+			if (argVal && argVal->type->isPointer() && !paramType->isPointer() && !paramType->isStruct()) {
+				argVal = builder->createLoad(paramType, argVal, "arg.load");
 			}
 
 			// Promote int/byte to float if parameter expects float (uses centralized type rules)

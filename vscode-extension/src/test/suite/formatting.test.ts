@@ -406,4 +406,55 @@ end 'main'`;
         assert.ok(providers !== undefined || providers === undefined,
             'Format document command should be available');
     });
+
+    test('Should format inline match expression correctly', async function () {
+        this.timeout(10000);
+
+        // Match expression as return value - gives clauses and end should be indented
+        const badlyFormattedContent = `function main(args array of string) returns int
+\tvar command = args[1]
+\treturn match command 'dispatch'
+"compile" gives compileCommand(args)
+"run" gives runCommand(args)
+default gives unknownCommand(command)
+end 'dispatch'
+end 'main'`;
+
+        const testUri = await createTestFile(badlyFormattedContent, 'test_format_inline_match.maxon');
+
+        // Request formatting
+        const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
+            'vscode.executeFormatDocumentProvider',
+            testUri,
+            { tabSize: 4, insertSpaces: false }
+        );
+
+        assert.ok(edits, 'Should return formatting edits');
+        assert.ok(edits.length > 0, 'Should have at least one edit');
+
+        // Apply the edits
+        const workspaceEdit = new vscode.WorkspaceEdit();
+        for (const edit of edits) {
+            workspaceEdit.replace(testUri, edit.range, edit.newText);
+        }
+        await vscode.workspace.applyEdit(workspaceEdit);
+
+        const formattedContent = testDocument!.getText();
+
+        // The gives clauses should be indented twice (inside function + inside match)
+        assert.ok(formattedContent.includes('\t\t"compile" gives'),
+            'Match gives clauses should be indented twice');
+        assert.ok(formattedContent.includes('\t\tdefault gives'),
+            'Match default clause should be indented twice');
+
+        // The end 'dispatch' should be indented once (same level as return match)
+        assert.ok(formattedContent.includes('\tend \'dispatch\''),
+            'Match end should be indented once (same as return match)');
+
+        // The end 'main' should be at top level
+        assert.ok(formattedContent.match(/^end 'main'/m),
+            'Function end should be at top level');
+
+        await vscode.workspace.fs.delete(testUri);
+    });
 });

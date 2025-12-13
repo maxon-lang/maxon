@@ -124,6 +124,9 @@ class FormattingProvider {
 
 	// Check if a line ends a block (end 'label')
 	bool endsBlock(const std::string &line);
+
+	// Check if a line starts an inline match expression (e.g., "return match ...")
+	bool startsInlineMatchExpr(const std::string &line);
 };
 
 } // namespace maxon_lsp

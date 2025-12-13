@@ -45,6 +45,20 @@ Top-level `let` declarations define compile-time constants at module scope. Only
 - Unary: `-`, `+`, `not`, `~`
 - Cast: `as int`, `as float`, `as bool`
 - References to other global constants
+- Array literals: `[1, 2, 3]` (elements must be constant expressions)
+- Enum member access: `Color.Red`
+- Map literals: `["key": value]` (keys and values must be constant expressions; initialized at runtime)
+
+### Runtime Initialization
+Array literals and enum member access require runtime initialization because they involve
+heap allocation or function calls. The compiler handles this automatically:
+- A synthetic `__global_init()` function is generated
+- It's called from `_start` before `main()`
+- Global storage is created during compilation
+- Initialization code runs at program startup
+
+Map literals also require runtime initialization because they allocate heap storage for
+their internal key/value arrays.
 
 ---
 
@@ -78,6 +92,9 @@ The following are valid in constant expressions:
 - Bitwise: `&`, `|`, `^`, `~`, `<<`, `>>`
 - Type casts: `as int`, `as float`, `as bool`
 - References to other top-level constants
+- Array literals: `[1, 2, 3]` (elements must be constant expressions)
+- Enum member access: `Color.Red`
+- Map literals: `["key": value]` (keys and values must be constant expressions; initialized at runtime)
 
 ### Examples
 
@@ -87,12 +104,13 @@ let TAU = PI * 2.0
 let MAX_SIZE = 1024
 let DEBUG = false
 let GREETING = "Hello, World!"
+let PRIMES = [2, 3, 5, 7, 11]
 ```
 
 ### Restrictions
 
 - Function calls are not allowed in constant expressions
-- Array and type literals are not supported (yet)
+- Map literals are supported, but require runtime initialization
 - Only immutable `let` is supported at top level (no `var`)
 
 ---
@@ -280,4 +298,80 @@ Circular dependency detected among global constants: A, B
 
   2 | let A = B + 1
     | ^
+```
+
+<!-- test: array-literal-constant -->
+```maxon
+let numbers = [1, 2, 3, 4, 5]
+
+function main() returns int
+    var sum = 0
+    for n in numbers 'loop'
+        sum = sum + n
+    end 'loop'
+    return sum
+end 'main'
+```
+```exitcode
+15
+```
+
+<!-- test: array-literal-with-dependency -->
+```maxon
+let FIRST = 10
+let SECOND = 20
+let values = [FIRST, SECOND, 30]
+
+function main() returns int
+    return values[0] + values[1] + values[2]
+end 'main'
+```
+```exitcode
+60
+```
+
+<!-- test: map-literal-with-enum-values -->
+```maxon
+enum TokenKind
+    Function
+    Var
+end 'TokenKind'
+
+let KEYWORDS = ["function": TokenKind.Function, "var": TokenKind.Var]
+
+function main() returns int
+    if let kind = KEYWORDS.get("function") 'valid'
+        match kind 'match'
+            TokenKind.Function then return 1
+            TokenKind.Var then return 2
+        end 'match'
+    end 'valid'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: enum-member-constant -->
+```maxon
+enum Color
+    Red
+    Green
+    Blue
+end 'Color'
+
+let DEFAULT_COLOR = Color.Green
+
+function main() returns int
+    match DEFAULT_COLOR 'check'
+        Color.Red then return 1
+        Color.Green then return 2
+        Color.Blue then return 3
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+2
 ```

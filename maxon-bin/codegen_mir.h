@@ -143,6 +143,22 @@ class MIRCodeGenerator {
 	};
 	std::vector<LoopContext> loopStack;
 
+	// Info for tracking globals that require runtime initialization (array/map literals)
+	struct RuntimeInitGlobalInfo {
+		std::string name;
+		GlobalLetDeclAST *decl;
+		std::string type;
+	};
+	std::vector<RuntimeInitGlobalInfo> runtimeInitGlobals;
+
+	// True while generating the synthetic __global_init() function.
+	// Used to ensure literals that escape (e.g., string keys stored into global maps)
+	// are backed by stable storage and not cleaned up at scope exit.
+	bool inGlobalInit = false;
+
+	// Type tracking for runtime-init globals (persists across function codegen)
+	std::map<std::string, std::string> globalVariableTypes;
+
 	// Info for tracking heap-allocated arrays for cleanup
 	struct HeapArrayInfo {
 		std::string name;
@@ -350,6 +366,10 @@ class MIRCodeGenerator {
 
 	// Minimal CRT entry point
 	void createMinimalEntryPoint();
+
+	// Global initialization for runtime-init globals (array/map literals)
+	void generateGlobalInit();
+	bool requiresRuntimeInit(ExprAST *expr);
 
 	// Platform-specific executable generation
 #ifdef _WIN32

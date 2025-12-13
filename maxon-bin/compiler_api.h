@@ -52,6 +52,21 @@ struct LSPFieldInfo {
 };
 
 /**
+ * Enum case information for external enum registration
+ */
+struct LSPEnumCaseInfo {
+	std::string name;
+	std::vector<std::pair<std::string, std::string>> associatedValues; // [(name, type)]
+	int64_t rawIntValue;											   // For int raw values
+	std::string rawStringValue;										   // For string raw values
+
+	LSPEnumCaseInfo() : rawIntValue(0) {}
+
+	LSPEnumCaseInfo(const std::string &n, int64_t rawInt = 0, const std::string &rawStr = "")
+		: name(n), rawIntValue(rawInt), rawStringValue(rawStr) {}
+};
+
+/**
  * Interface method signature for external interface registration
  */
 struct LSPInterfaceMethodInfo {
@@ -84,6 +99,8 @@ struct LSPSymbolInfo {
 	std::string extendsInterface;						  // For interfaces: base interface name
 	std::vector<std::string> associatedTypes;			  // For interfaces: associated type parameters (e.g., "Element")
 	std::vector<LSPInterfaceMethodInfo> interfaceMethods; // For interfaces: method signatures
+	std::vector<LSPEnumCaseInfo> enumCases;				  // For enums: case definitions
+	std::string rawValueType;							  // For enums: "int", "string", or "" for simple enums
 
 	LSPSymbolInfo() = default;
 

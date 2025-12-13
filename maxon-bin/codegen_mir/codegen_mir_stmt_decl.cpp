@@ -1092,6 +1092,21 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			}
 		}
 		variableTypes[varDecl->name] = derivedType;
+	} else if (varDecl->initializer) {
+		// Try to get type from initializer expression
+		// For cast expressions (e.g., "... as Value"), use the cast target type
+		if (auto *castExpr = dynamic_cast<CastExprAST *>(varDecl->initializer.get())) {
+			std::string targetType = castExpr->targetType;
+			// Substitute type parameters if we're in a generic method context
+			auto bindingIt = currentTypeBindings.find(targetType);
+			if (bindingIt != currentTypeBindings.end()) {
+				targetType = bindingIt->second;
+			}
+			variableTypes[varDecl->name] = targetType;
+		} else {
+			// Derive type from the allocated MIR type
+			variableTypes[varDecl->name] = getMaxonTypeFromMIRType(allocaType);
+		}
 	} else {
 		// Derive type from the allocated MIR type
 		variableTypes[varDecl->name] = getMaxonTypeFromMIRType(allocaType);

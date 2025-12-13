@@ -25,7 +25,17 @@ static void collectGlobalRefs(ExprAST *expr, const std::map<std::string, GlobalC
 		collectGlobalRefs(unaryExpr->operand.get(), globals, refs);
 	} else if (auto *castExpr = dynamic_cast<CastExprAST *>(expr)) {
 		collectGlobalRefs(castExpr->expr.get(), globals, refs);
+	} else if (auto *arrayLit = dynamic_cast<ArrayLiteralExprAST *>(expr)) {
+		for (const auto &elem : arrayLit->values) {
+			collectGlobalRefs(elem.get(), globals, refs);
+		}
+	} else if (auto *mapLit = dynamic_cast<MapLiteralWithEntriesExprAST *>(expr)) {
+		for (const auto &entry : mapLit->entries) {
+			collectGlobalRefs(entry.key.get(), globals, refs);
+			collectGlobalRefs(entry.value.get(), globals, refs);
+		}
 	}
+	// MemberAccessExprAST (enum cases) don't reference other global constants
 }
 
 // Helper to convert simple literal expressions to string for display
@@ -152,6 +162,24 @@ void SemanticAnalyzer::registerExternalEnum(const std::string &name, const std::
 		EnumInfo enumInfo(name, 0, 0, rawValueType);
 		enums.emplace(name, std::move(enumInfo));
 		logTrace("Registered external enum: " + name);
+	}
+}
+
+void SemanticAnalyzer::registerExternalEnum(const std::string &name, const std::string &rawValueType,
+											const std::vector<EnumCaseInfo> &cases) {
+	// Only register if not already defined
+	if (enums.find(name) == enums.end()) {
+		EnumInfo enumInfo(name, 0, 0, rawValueType);
+		enumInfo.cases = cases;
+		// Check if any case has associated values
+		for (const auto &c : cases) {
+			if (!c.associatedValues.empty()) {
+				enumInfo.hasAssociatedValues = true;
+				break;
+			}
+		}
+		enums.emplace(name, std::move(enumInfo));
+		logTrace("Registered external enum with cases: " + name + " (" + std::to_string(cases.size()) + " cases)");
 	}
 }
 
@@ -677,27 +705,15 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 			// Check that initializer is a constant expression
 			auto *expr = global->initializer.get();
-			bool isConstant = false;
-			if (dynamic_cast<NumberExprAST *>(expr) ||
-				dynamic_cast<FloatExprAST *>(expr) ||
-				dynamic_cast<BooleanExprAST *>(expr) ||
-				dynamic_cast<StringLiteralExprAST *>(expr) ||
-				dynamic_cast<ByteExprAST *>(expr) ||
-				dynamic_cast<CharacterExprAST *>(expr)) {
-				isConstant = true;
-			} else if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
-				if (globalConstants.find(varExpr->name) != globalConstants.end()) {
-					isConstant = true;
-				}
-			} else if (dynamic_cast<BinaryExprAST *>(expr) ||
-					   dynamic_cast<UnaryExprAST *>(expr) ||
-					   dynamic_cast<CastExprAST *>(expr)) {
-				isConstant = true;
-			}
+			std::string nonConstReason;
+			bool isConstant = isConstantExpression(expr, nonConstReason);
 
 			if (!isConstant) {
-				addError("Global constant '" + global->name + "' initializer must be a constant expression",
-						 global->line, global->column);
+				std::string msg = "Global constant '" + global->name + "' initializer must be a constant expression";
+				if (!nonConstReason.empty()) {
+					msg += "\n  " + nonConstReason;
+				}
+				addError(msg, global->line, global->column);
 				continue;
 			}
 
@@ -1149,6 +1165,106 @@ bool SemanticAnalyzer::isIterableType(const std::string &type, ExprAST *iterable
 	}
 
 	// Non-iterable types: int, float, bool, char, byte, void, pointers, etc.
+	return false;
+}
+
+// Check if an expression is a valid constant expression for top-level let declarations.
+// Returns true if constant, false otherwise. Sets nonConstReason with explanation if not constant.
+bool SemanticAnalyzer::isConstantExpression(ExprAST *expr, std::string &nonConstReason) {
+	if (!expr) {
+		nonConstReason = "Missing initializer";
+		return false;
+	}
+
+	// Primitive literals are always constant
+	if (dynamic_cast<NumberExprAST *>(expr) ||
+		dynamic_cast<FloatExprAST *>(expr) ||
+		dynamic_cast<BooleanExprAST *>(expr) ||
+		dynamic_cast<StringLiteralExprAST *>(expr) ||
+		dynamic_cast<ByteExprAST *>(expr) ||
+		dynamic_cast<CharacterExprAST *>(expr)) {
+		return true;
+	}
+
+	// References to other global constants are constant
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
+		if (globalConstants.find(varExpr->name) != globalConstants.end()) {
+			return true;
+		}
+		nonConstReason = "'" + varExpr->name + "' is not a global constant";
+		return false;
+	}
+
+	// Binary, unary, and cast expressions are constant if their operands are
+	if (auto *binExpr = dynamic_cast<BinaryExprAST *>(expr)) {
+		std::string leftReason, rightReason;
+		if (!isConstantExpression(binExpr->left.get(), leftReason)) {
+			nonConstReason = leftReason;
+			return false;
+		}
+		if (!isConstantExpression(binExpr->right.get(), rightReason)) {
+			nonConstReason = rightReason;
+			return false;
+		}
+		return true;
+	}
+
+	if (auto *unaryExpr = dynamic_cast<UnaryExprAST *>(expr)) {
+		return isConstantExpression(unaryExpr->operand.get(), nonConstReason);
+	}
+
+	if (auto *castExpr = dynamic_cast<CastExprAST *>(expr)) {
+		return isConstantExpression(castExpr->expr.get(), nonConstReason);
+	}
+
+	// Enum case access (e.g., TokenType.kwFunction) is constant
+	if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(expr)) {
+		// Check if this has already been resolved as an enum case
+		if (memberExpr->isEnumCase()) {
+			return true;
+		}
+		// Check if this is an enum case access (Type.case) that hasn't been resolved yet
+		if (!memberExpr->object && !memberExpr->objectName.empty()) {
+			const EnumInfo *enumInfo = lookupEnum(memberExpr->objectName);
+			if (enumInfo != nullptr) {
+				const EnumCaseInfo *caseInfo = enumInfo->findCase(memberExpr->memberName);
+				if (caseInfo != nullptr && caseInfo->associatedValues.empty()) {
+					return true;
+				}
+			}
+		}
+		nonConstReason = "Member access is not a constant enum case";
+		return false;
+	}
+
+	// Array literals are constant if all elements are constant
+	if (auto *arrayLit = dynamic_cast<ArrayLiteralExprAST *>(expr)) {
+		for (size_t i = 0; i < arrayLit->values.size(); i++) {
+			if (!isConstantExpression(arrayLit->values[i].get(), nonConstReason)) {
+				nonConstReason = "Array element " + std::to_string(i) + " is not constant: " + nonConstReason;
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// Map literals are constant if all keys and values are constant
+	if (auto *mapLit = dynamic_cast<MapLiteralWithEntriesExprAST *>(expr)) {
+		for (size_t i = 0; i < mapLit->entries.size(); i++) {
+			if (!isConstantExpression(mapLit->entries[i].key.get(), nonConstReason)) {
+				nonConstReason = "Map key " + std::to_string(i) + " is not constant: " + nonConstReason;
+				return false;
+			}
+			if (!isConstantExpression(mapLit->entries[i].value.get(), nonConstReason)) {
+				nonConstReason = "Map value " + std::to_string(i) + " is not constant: " + nonConstReason;
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// All other expression types are not constant
+	nonConstReason = "Expression type is not allowed in constant context";
 	return false;
 }
 

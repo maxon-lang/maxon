@@ -498,14 +498,41 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 		std::string signature = buildEnumSignature(enumDef.get());
 		std::string doc = extractDocCommentWithOffsets(source, lineOffsets, enumDef->line);
 
-		symbols.emplace_back(
+		LSPSymbolInfo enumSym(
 			enumDef->name,
 			"enum",
 			signature,
 			doc,
 			enumDef->getSourceRange());
 
-		// Extract enum cases
+		// Store raw value type for external enum registration
+		enumSym.rawValueType = enumDef->rawValueType;
+
+		// Populate enum cases for external enum registration
+		for (const auto &c : enumDef->cases) {
+			LSPEnumCaseInfo caseInfo;
+			caseInfo.name = c.name;
+			// Extract raw value from the AST expression if present
+			if (c.rawValue) {
+				if (enumDef->rawValueType == "int") {
+					if (auto *numExpr = dynamic_cast<NumberExprAST *>(c.rawValue.get())) {
+						caseInfo.rawIntValue = numExpr->value;
+					}
+				} else if (enumDef->rawValueType == "string") {
+					if (auto *strExpr = dynamic_cast<StringLiteralExprAST *>(c.rawValue.get())) {
+						caseInfo.rawStringValue = strExpr->value;
+					}
+				}
+			}
+			for (const auto &av : c.associatedValues) {
+				caseInfo.associatedValues.emplace_back(av.name, av.type);
+			}
+			enumSym.enumCases.push_back(std::move(caseInfo));
+		}
+
+		symbols.push_back(std::move(enumSym));
+
+		// Extract enum cases as separate symbols for document symbols view
 		for (const auto &c : enumDef->cases) {
 			std::ostringstream caseSig;
 			caseSig << enumDef->name << "." << c.name;
@@ -804,12 +831,25 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 			analyzer.registerExternalInterface(ifaceSym.name, methods, ifaceSym.associatedTypes, ifaceSym.extendsInterface);
 		}
 
-		// Register stdlib enums
+		// Register stdlib enums with their cases
 		for (const auto &enumSym : stdlib.enums) {
 			if (normalizeFilePath(enumSym.filePath) == currentFilePath) {
 				continue; // Skip symbols from current file
 			}
-			analyzer.registerExternalEnum(enumSym.name);
+			// Convert LSPEnumCaseInfo to EnumCaseInfo
+			std::vector<EnumCaseInfo> cases;
+			int tagValue = 0;
+			for (const auto &c : enumSym.enumCases) {
+				EnumCaseInfo caseInfo(c.name, tagValue++);
+				caseInfo.hasRawValue = !c.rawStringValue.empty() || c.rawIntValue != 0;
+				caseInfo.rawIntValue = c.rawIntValue;
+				caseInfo.rawStringValue = c.rawStringValue;
+				for (const auto &av : c.associatedValues) {
+					caseInfo.associatedValues.emplace_back(av.first, av.second);
+				}
+				cases.push_back(std::move(caseInfo));
+			}
+			analyzer.registerExternalEnum(enumSym.name, enumSym.rawValueType, cases);
 		}
 
 		// Set source context for doc comment checking
@@ -956,6 +996,7 @@ std::vector<KeywordLSPInfo> getKeywordsForCompletion(const std::string &prefix) 
 IRGenerationResult generateIRForLSP(const std::string &source, const std::string &filename,
 									bool optimize, const StdlibSymbols &stdlib) {
 	IRGenerationResult result;
+	// MARKER_generateIRForLSP
 
 	// Parse the source
 	std::unique_ptr<ProgramAST> ast;
@@ -1034,9 +1075,21 @@ IRGenerationResult generateIRForLSP(const std::string &source, const std::string
 		analyzer.registerExternalInterface(ifaceSym.name);
 	}
 
-	// Register stdlib enums
+	// Register stdlib enums with their cases
 	for (const auto &enumSym : stdlib.enums) {
-		analyzer.registerExternalEnum(enumSym.name);
+		std::vector<EnumCaseInfo> cases;
+		int tagValue = 0;
+		for (const auto &c : enumSym.enumCases) {
+			EnumCaseInfo caseInfo(c.name, tagValue++);
+			caseInfo.hasRawValue = !c.rawStringValue.empty() || c.rawIntValue != 0;
+			caseInfo.rawIntValue = c.rawIntValue;
+			caseInfo.rawStringValue = c.rawStringValue;
+			for (const auto &av : c.associatedValues) {
+				caseInfo.associatedValues.emplace_back(av.first, av.second);
+			}
+			cases.push_back(std::move(caseInfo));
+		}
+		analyzer.registerExternalEnum(enumSym.name, enumSym.rawValueType, cases);
 	}
 
 	result.semanticErrors = analyzer.analyze(ast.get());
@@ -1162,9 +1215,21 @@ AsmGenerationResult generateAsmForLSP(const std::string &source, const std::stri
 		analyzer.registerExternalInterface(ifaceSym.name);
 	}
 
-	// Register stdlib enums
+	// Register stdlib enums with their cases
 	for (const auto &enumSym : stdlib.enums) {
-		analyzer.registerExternalEnum(enumSym.name);
+		std::vector<EnumCaseInfo> cases;
+		int tagValue = 0;
+		for (const auto &c : enumSym.enumCases) {
+			EnumCaseInfo caseInfo(c.name, tagValue++);
+			caseInfo.hasRawValue = !c.rawStringValue.empty() || c.rawIntValue != 0;
+			caseInfo.rawIntValue = c.rawIntValue;
+			caseInfo.rawStringValue = c.rawStringValue;
+			for (const auto &av : c.associatedValues) {
+				caseInfo.associatedValues.emplace_back(av.first, av.second);
+			}
+			cases.push_back(std::move(caseInfo));
+		}
+		analyzer.registerExternalEnum(enumSym.name, enumSym.rawValueType, cases);
 	}
 
 	result.semanticErrors = analyzer.analyze(ast.get());

@@ -330,19 +330,37 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 		mir::MIRValue *nullPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr, {builder->getInt64(len)}, "null.ptr");
 		builder->createStore(builder->getInt8(0), nullPtr);
 
-		// Track for cleanup at scope exit using _managed_string_release
-		// We need to store the data pointer somewhere we can load it from during cleanup
-		mir::MIRValue *dataPtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), "str.heap.ptr");
-		builder->createStore(dataPtr, dataPtrAlloca);
-		if (!scopeStack.empty()) {
-			scopeStack.back().heapAllocatedStrings.push_back({"str.heap", dataPtrAlloca});
+		// Track for cleanup at scope exit using _managed_string_release.
+		// IMPORTANT: when generating __global_init, these literals may escape into globals
+		// (e.g., map keys stored in heap buffers). Do not auto-release them.
+		if (!inGlobalInit) {
+			mir::MIRValue *dataPtrAlloca = builder->createAlloca(mir::MIRType::getPtr(), "str.heap.ptr");
+			builder->createStore(dataPtr, dataPtrAlloca);
+			if (!scopeStack.empty()) {
+				scopeStack.back().heapAllocatedStrings.push_back({"str.heap", dataPtrAlloca});
+			}
 		}
 
 		capacity = static_cast<int>(len + 1);
 	}
 
-	// Allocate the __ManagedStringData struct on the stack
-	mir::MIRValue *managedDataAlloca = builder->createAlloca(managedDataType, "managed.data");
+	// Allocate the __ManagedStringData struct.
+	// In __global_init, the string value can be copied into global storage (e.g., global map keys).
+	// A stack allocation would dangle after __global_init returns, so allocate stable storage.
+	mir::MIRValue *managedDataAlloca = nullptr;
+	if (inGlobalInit) {
+		initHeapManagement();
+		mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+		if (!mallocFunc) {
+			reportError("malloc not declared for global string literal", strExpr->line, strExpr->column);
+		}
+		managedDataAlloca = builder->createCall(
+			mallocFunc,
+			{builder->getInt64(managedDataType->sizeInBytes)},
+			"managed.data.global");
+	} else {
+		managedDataAlloca = builder->createAlloca(managedDataType, "managed.data");
+	}
 
 	// Populate the __ManagedStringData fields
 	// Field 0: _buffer []byte (fat pointer: {ptr, i32})
@@ -450,8 +468,22 @@ mir::MIRValue *MIRCodeGenerator::generateCharLiteral(CharacterExprAST *charExpr)
 	std::string globalName = ".chr." + std::to_string(stringLiteralCounter++);
 	mir::MIRValue *dataPtr = module->createGlobalString(globalName, str);
 
-	// Allocate the __ManagedStringData struct on the stack
-	mir::MIRValue *managedDataAlloca = builder->createAlloca(managedDataType, "char.managed.data");
+	// Allocate the __ManagedStringData struct.
+	// Same lifetime issue as string literals: in __global_init, values can escape into globals.
+	mir::MIRValue *managedDataAlloca = nullptr;
+	if (inGlobalInit) {
+		initHeapManagement();
+		mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+		if (!mallocFunc) {
+			reportError("malloc not declared for global char literal", charExpr->line, charExpr->column);
+		}
+		managedDataAlloca = builder->createCall(
+			mallocFunc,
+			{builder->getInt64(managedDataType->sizeInBytes)},
+			"char.managed.data.global");
+	} else {
+		managedDataAlloca = builder->createAlloca(managedDataType, "char.managed.data");
+	}
 
 	// Populate the __ManagedStringData fields
 	// Field 0: _buffer []byte (fat pointer: {ptr, i32})

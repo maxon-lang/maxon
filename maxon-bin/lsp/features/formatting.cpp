@@ -1192,6 +1192,9 @@ std::string FormattingProvider::formatLineByLine(const std::string &content, con
 	std::string line;
 	int indentLevel = 0;
 	bool insideInterface = false;
+	// Track match expressions that started inline (e.g., "return match ...")
+	// so their end statement stays at the same indent level as the starting line
+	std::vector<int> inlineMatchStartLevels;
 
 	while (std::getline(in, line)) {
 		// Trim leading/trailing whitespace
@@ -1211,7 +1214,15 @@ std::string FormattingProvider::formatLineByLine(const std::string &content, con
 
 		// Adjust indent level for end statements
 		if (endsBlock(trimmed)) {
-			indentLevel = std::max(0, indentLevel - 1);
+			// Check if this end corresponds to an inline match expression
+			if (!inlineMatchStartLevels.empty()) {
+				// Pop the inline match and restore to its starting level
+				int matchStartLevel = inlineMatchStartLevels.back();
+				inlineMatchStartLevels.pop_back();
+				indentLevel = matchStartLevel;
+			} else {
+				indentLevel = std::max(0, indentLevel - 1);
+			}
 			if (endsInterface) {
 				insideInterface = false;
 			}
@@ -1230,9 +1241,16 @@ std::string FormattingProvider::formatLineByLine(const std::string &content, con
 		// Check if this line starts an interface
 		bool startsInterface = (trimmed.rfind("interface ", 0) == 0 || trimmed.rfind("export interface ", 0) == 0);
 
+		// Check if this line starts an inline match expression (e.g., "return match ..." or "var x = match ...")
+		bool startsInlineMatch = startsInlineMatchExpr(trimmed);
+
 		// Adjust indent level for block starts
 		// Inside an interface, function lines are just signatures, not block starts
 		if (startsBlock(trimmed, insideInterface)) {
+			if (startsInlineMatch) {
+				// Track this as an inline match so the end stays at the same level
+				inlineMatchStartLevels.push_back(indentLevel);
+			}
 			indentLevel++;
 			if (startsInterface) {
 				insideInterface = true;
@@ -1327,8 +1345,8 @@ bool FormattingProvider::startsBlock(const std::string &line, bool insideInterfa
 		return true;
 	}
 
-	// match ... 'label'
-	if (trimmed.rfind("match ", 0) == 0 && trimmed.find("'") != std::string::npos) {
+	// match ... 'label' (standalone or inline after return/var/let/etc)
+	if (trimmed.find("match ") != std::string::npos && trimmed.find("'") != std::string::npos) {
 		return true;
 	}
 
@@ -1360,6 +1378,34 @@ bool FormattingProvider::endsBlock(const std::string &line) {
 	}
 
 	return false;
+}
+
+bool FormattingProvider::startsInlineMatchExpr(const std::string &line) {
+	// Check if this line contains a match expression that starts inline
+	// (i.e., after "return", "var x =", "let x =", etc.)
+	// These match expressions need special handling because their end statement
+	// should stay at the same indentation level as the starting line
+
+	size_t start = line.find_first_not_of(" \t");
+	if (start == std::string::npos)
+		return false;
+	std::string trimmed = line.substr(start);
+
+	// Look for "match " that's not at the start of the line
+	// "return match ...", "var x = match ...", "let x = match ..."
+	size_t matchPos = trimmed.find("match ");
+	if (matchPos == std::string::npos)
+		return false;
+
+	// If match is at position 0, it's a standalone match statement, not inline
+	if (matchPos == 0)
+		return false;
+
+	// Verify there's a label (required for match expressions)
+	if (trimmed.find("'") == std::string::npos)
+		return false;
+
+	return true;
 }
 
 } // namespace maxon_lsp

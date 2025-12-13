@@ -128,17 +128,26 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(forStmt->iterable.get())) {
 		arrayVarName = varExpr->name;
+		// Check local variables first, then global variables
 		auto it = variableTypes.find(arrayVarName);
+		const std::string *varType = nullptr;
 		if (it != variableTypes.end()) {
-			const std::string &varType = it->second;
+			varType = &it->second;
+		} else {
+			auto git = globalVariableTypes.find(arrayVarName);
+			if (git != globalVariableTypes.end()) {
+				varType = &git->second;
+			}
+		}
+		if (varType) {
 			// Check if it's an array<T> struct or _ManagedArray<T>
-			if (maxon::TypeConversion::isArrayStructType(varType)) {
+			if (maxon::TypeConversion::isArrayStructType(*varType)) {
 				isArrayIteration = true;
-				elementTypeStr = maxon::TypeConversion::getArrayStructElementType(varType);
+				elementTypeStr = maxon::TypeConversion::getArrayStructElementType(*varType);
 				elementType = getTypeFromString(elementTypeStr);
-			} else if (maxon::TypeConversion::isArrayType(varType)) {
+			} else if (maxon::TypeConversion::isArrayType(*varType)) {
 				isArrayIteration = true;
-				elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
+				elementTypeStr = maxon::TypeConversion::getArrayElementType(*varType);
 				elementType = getTypeFromString(elementTypeStr);
 			}
 		}
@@ -150,14 +159,27 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 
 		mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
 		if (!arrayAlloca) {
-			reportError("Unknown array variable: " + arrayVarName,
-						forStmt->line, forStmt->column);
+			// Check if it's a global array
+			mir::MIRGlobal *global = module->getGlobal(arrayVarName);
+			if (global && globalVariableTypes.find(arrayVarName) != globalVariableTypes.end()) {
+				// Create a reference to the global
+				arrayAlloca = mir::MIRValue::createGlobal(global->type, arrayVarName);
+			} else {
+				reportError("Unknown array variable: " + arrayVarName,
+							forStmt->line, forStmt->column);
+			}
 		}
 
 		// Get array length and pointer
 		mir::MIRValue *arrayLength;
 		mir::MIRValue *arrayPtr;
-		std::string varType = variableTypes[arrayVarName];
+		std::string varType;
+		auto localIt = variableTypes.find(arrayVarName);
+		if (localIt != variableTypes.end()) {
+			varType = localIt->second;
+		} else {
+			varType = globalVariableTypes[arrayVarName];
+		}
 
 		// Handle array<T> struct type (stdlib struct with nested __ManagedArrayData)
 		if (maxon::TypeConversion::isArrayStructType(varType)) {

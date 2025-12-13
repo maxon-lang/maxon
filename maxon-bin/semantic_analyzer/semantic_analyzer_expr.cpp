@@ -794,6 +794,27 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			}
 		}
 
+		// Parser heuristic: `obj.method(args)` is only lowered to `method(obj, args)`
+		// when `obj` “looks like a variable” (currently lowercase).
+		// This breaks common patterns like uppercase global constants (e.g., `KEYWORDS.contains("if")`).
+		// Fix it here by lowering single-dot qualified calls when the qualifier resolves to a variable.
+		{
+			size_t firstDotPos = callExpr->callee.find('.');
+			if (firstDotPos != std::string::npos && callExpr->callee.find('.', firstDotPos + 1) == std::string::npos) {
+				std::string qualifierName = callExpr->callee.substr(0, firstDotPos);
+				std::string memberName = callExpr->callee.substr(firstDotPos + 1);
+
+				auto varInfo = lookupVariable(qualifierName);
+				if (varInfo.has_value()) {
+					auto receiverExpr = std::make_unique<VariableExprAST>(qualifierName, expr->line, expr->column);
+					callExpr->args.insert(callExpr->args.begin(), CallArgument(std::move(receiverExpr), expr->line, expr->column));
+					callExpr->callee = memberName;
+					callExpr->resolvedCallee.clear();
+					callExpr->functionId = SIZE_MAX;
+				}
+			}
+		}
+
 		// Try to find the function - first exact match, then unqualified lookup
 		// First, if we're inside a method, check for a sibling method call
 		// This handles the case where find(needle) inside string.contains() should resolve to string.find
@@ -802,6 +823,14 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 			// Try qualified name: currentReceiverType.callee (e.g., "string.find")
 			std::string qualifiedName = currentReceiverType + "." + callExpr->callee;
 			funcIt = functions.find(qualifiedName);
+			if (funcIt != functions.end()) {
+				// Store the resolved qualified name for codegen
+				callExpr->resolvedCallee = qualifiedName;
+				auto idIt = functionIndices.find(qualifiedName);
+				if (idIt != functionIndices.end()) {
+					callExpr->functionId = idIt->second;
+				}
+			}
 		}
 
 		// If not found as sibling method, try exact match with the callee name

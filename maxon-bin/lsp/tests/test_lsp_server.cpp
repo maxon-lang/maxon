@@ -1524,6 +1524,51 @@ TEST_CASE("LSP formatting formats multiple interfaces at top level", "[lsp][form
 	REQUIRE(newText.find("\nend 'Comparable'") != std::string::npos);
 }
 
+TEST_CASE("LSP formatting handles inline match expressions", "[lsp][formatting]") {
+	LSPTestFixture fixture;
+	fixture.initialize();
+
+	// Inline match expression (return match ...) with incorrect indentation
+	// The gives clauses and end should be indented relative to the return statement
+	std::string code = R"(function main(args array of string) returns int
+	var command = args[1]
+	return match command 'dispatch'
+"compile" gives compileCommand(args)
+"run" gives runCommand(args)
+default gives unknownCommand(command)
+end 'dispatch'
+end 'main')";
+	fixture.openDocument("file:///test.maxon", code);
+
+	json formatParams = {
+		{"textDocument", {{"uri", "file:///test.maxon"}}},
+		{"options", {{"tabSize", 4}, {"insertSpaces", false}}}};
+	fixture.transport()->queueRequest(5, "textDocument/formatting", formatParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(5);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+
+	auto &edits = response->result.value();
+	REQUIRE(edits.size() >= 1);
+	std::string newText = edits[0]["newText"].get<std::string>();
+
+	// The gives clauses should be indented twice (inside function + inside match)
+	REQUIRE(newText.find("\t\t\"compile\" gives") != std::string::npos);
+	REQUIRE(newText.find("\t\t\"run\" gives") != std::string::npos);
+	REQUIRE(newText.find("\t\tdefault gives") != std::string::npos);
+
+	// The end 'dispatch' should be indented once (same level as return match)
+	REQUIRE(newText.find("\tend 'dispatch'") != std::string::npos);
+
+	// The end 'main' should be at top level
+	REQUIRE(newText.find("\nend 'main'") != std::string::npos);
+}
+
 // =============================================================================
 // Document Symbols Tests
 // =============================================================================
