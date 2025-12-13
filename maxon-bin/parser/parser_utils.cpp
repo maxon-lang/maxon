@@ -331,6 +331,28 @@ std::string Parser::parseTypeString(const std::string &context) {
 		return funcType;
 	}
 
+	// Check for 'map' followed by 'from' - map type: map from K to V
+	if (check(TokenType::IDENTIFIER) && std::string(currentValue()) == "map" && checkKeyword("from", 1)) {
+		advance(); // consume 'map'
+		advance(); // consume 'from'
+
+		// Parse key type
+		std::string keyType = parseTypeString(context + " map key type");
+
+		if (!checkKeyword("to")) {
+			reportError("Expected 'to' after key type in map type declaration\n"
+						"  Use: map from string to int",
+						currentLine(), currentColumn());
+		}
+		advance(); // consume 'to'
+
+		// Parse value type
+		std::string valueType = parseTypeString(context + " map value type");
+
+		// Return map<K,V> struct type
+		return "map<" + keyType + "," + valueType + ">";
+	}
+
 	// Check for 'array' keyword - new array syntax
 	if (checkKeyword("array")) {
 		advance(); // consume 'array'

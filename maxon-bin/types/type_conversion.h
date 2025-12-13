@@ -184,6 +184,15 @@ class TypeConversion {
 	/// _ManagedArray<int> -> []int, _StaticArray<5, byte> -> [5]byte
 	static std::string arrayTypeToDisplayString(const std::string &arrayType);
 
+	/// Check if a type is a map<K,V> struct type
+	static bool isMapStructType(const std::string &type);
+
+	/// Extract key type from map<K,V> struct type
+	static std::string getMapKeyType(const std::string &mapType);
+
+	/// Extract value type from map<K,V> struct type
+	static std::string getMapValueType(const std::string &mapType);
+
 	/// Check if a type is a function type (starts with "fn(")
 	static bool isFunctionType(const std::string &type);
 

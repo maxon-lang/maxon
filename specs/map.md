@@ -407,3 +407,23 @@ end 'main'
 ```exitcode
 200
 ```
+
+<!-- test: map-type-in-field -->
+```maxon
+type Container
+    var data map from int to int
+end 'Container'
+
+function main() returns int
+    var m = map from int to int
+    m.insert(1, 42)
+    var c = Container{data: m}
+    var result = c.data.get(1) else 'default'
+        result = 0
+    end 'default'
+    return result
+end 'main'
+```
+```exitcode
+42
+```

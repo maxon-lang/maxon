@@ -1533,6 +1533,14 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 						std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
 						instantiateGenericStructMethods("array", field.type, typeBindings);
 					}
+					// For map<K,V> struct types, ensure generic methods are instantiated
+					// This is needed when accessing struct fields that contain maps
+					if (maxon::TypeConversion::isMapStructType(field.type)) {
+						std::string keyType = maxon::TypeConversion::getMapKeyType(field.type);
+						std::string valueType = maxon::TypeConversion::getMapValueType(field.type);
+						std::map<std::string, std::string> typeBindings = {{"Key", keyType}, {"Value", valueType}};
+						instantiateGenericStructMethods("map", field.type, typeBindings);
+					}
 					return field.type;
 				}
 			}

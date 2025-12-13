@@ -42,6 +42,14 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			instantiateGenericStructMethods("array", actualType, typeBindings);
 		}
 
+		// For map<K,V> struct types, register map methods with the key/value types
+		if (maxon::TypeConversion::isMapStructType(actualType)) {
+			std::string keyType = maxon::TypeConversion::getMapKeyType(actualType);
+			std::string valueType = maxon::TypeConversion::getMapValueType(actualType);
+			std::map<std::string, std::string> typeBindings = {{"Key", keyType}, {"Value", valueType}};
+			instantiateGenericStructMethods("map", actualType, typeBindings);
+		}
+
 		// Declare variable
 		declareVariable(varDecl->name, actualType, false, stmt->line, stmt->column);
 
@@ -76,6 +84,14 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			std::string elemType = maxon::TypeConversion::getArrayStructElementType(actualType);
 			std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
 			instantiateGenericStructMethods("array", actualType, typeBindings);
+		}
+
+		// For map types, instantiate generic methods (same as var declarations)
+		if (maxon::TypeConversion::isMapStructType(actualType)) {
+			std::string keyType = maxon::TypeConversion::getMapKeyType(actualType);
+			std::string valueType = maxon::TypeConversion::getMapValueType(actualType);
+			std::map<std::string, std::string> typeBindings = {{"Key", keyType}, {"Value", valueType}};
+			instantiateGenericStructMethods("map", actualType, typeBindings);
 		}
 
 		// Extract literal value for immutable variables (for LSP hover)

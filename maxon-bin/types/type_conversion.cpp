@@ -493,6 +493,36 @@ bool TypeConversion::isFunctionType(const std::string &type) {
 	return type.rfind("fn(", 0) == 0;
 }
 
+bool TypeConversion::isMapStructType(const std::string &type) {
+	return type.rfind("map<", 0) == 0 && type.back() == '>';
+}
+
+std::string TypeConversion::getMapKeyType(const std::string &mapType) {
+	if (!isMapStructType(mapType)) {
+		return mapType;
+	}
+	// Extract K from map<K,V>
+	size_t start = 4; // length of "map<"
+	size_t commaPos = mapType.find(',', start);
+	if (commaPos != std::string::npos && commaPos > start) {
+		return mapType.substr(start, commaPos - start);
+	}
+	return mapType;
+}
+
+std::string TypeConversion::getMapValueType(const std::string &mapType) {
+	if (!isMapStructType(mapType)) {
+		return mapType;
+	}
+	// Extract V from map<K,V>
+	size_t commaPos = mapType.find(',');
+	size_t end = mapType.rfind('>');
+	if (commaPos != std::string::npos && end != std::string::npos && end > commaPos + 1) {
+		return mapType.substr(commaPos + 1, end - commaPos - 1);
+	}
+	return mapType;
+}
+
 bool TypeConversion::parseFunctionType(const std::string &funcType,
 									   std::vector<std::string> &paramTypes,
 									   std::string &returnType) {

@@ -289,6 +289,25 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return getOrCreateArrayStructType(elemType);
 	}
 
+	// Check for map<K,V> struct type (stdlib map struct)
+	if (maxon::TypeConversion::isMapStructType(typeStr)) {
+		// Check if already instantiated
+		auto it = structTypes.find(typeStr);
+		if (it != structTypes.end()) {
+			return it->second;
+		}
+		// Need to instantiate the generic struct
+		std::string keyType = maxon::TypeConversion::getMapKeyType(typeStr);
+		std::string valueType = maxon::TypeConversion::getMapValueType(typeStr);
+		std::map<std::string, std::string> typeBindings = {{"Key", keyType}, {"Value", valueType}};
+		instantiateGenericStruct("map", typeBindings);
+		it = structTypes.find(typeStr);
+		if (it != structTypes.end()) {
+			return it->second;
+		}
+		throw std::runtime_error("Failed to instantiate map type: " + typeStr);
+	}
+
 	// Check for MIR array type format: _ManagedArray<T> or _StaticArray<N, T>
 	// These are internal type strings used when converting MIR types to Maxon types
 	if (typeStr.rfind("_ManagedArray<", 0) == 0) {
