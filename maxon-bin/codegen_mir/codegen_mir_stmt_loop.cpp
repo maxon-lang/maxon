@@ -192,8 +192,14 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
 			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
 
+			// For struct parameters, arrayAlloca contains a pointer to the struct, need to load it first
+			mir::MIRValue *structBase = arrayAlloca;
+			if (isStructParameter(arrayVarName)) {
+				structBase = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "arr.structptr");
+			}
+
 			// Get pointer to the managed field (field 0 of array<T>)
-			mir::MIRValue *managedPtr = builder->createStructGEP(arrayStructType, arrayAlloca, 0, "arr.managed.ptr");
+			mir::MIRValue *managedPtr = builder->createStructGEP(arrayStructType, structBase, 0, "arr.managed.ptr");
 
 			// Load length from field 1 of managed
 			mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, managedPtr, 1, "arr._len.ptr");

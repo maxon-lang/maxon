@@ -2091,12 +2091,13 @@ convert_one:
     br i1 %size_zero, label %convert_skip, label %alloc_managed
 
 alloc_managed:
-    ; Allocate __ManagedStringData struct (24 bytes: {ptr, i32} + i32 + i32)
-    ; Layout: { { ptr data, i32 len }, i32 refcount, i32 capacity }
+    ; Allocate __ManagedStringData struct (32 bytes)
+    ; Layout: { { ptr data, i64 len }, i64 len_copy, i64 capacity }
+    ; _ManagedArray_byte is { ptr, i64 } = 16 bytes, plus two i64s = 32 bytes total
     ; For command line args, we allocate heap memory but set capacity=0 to indicate
     ; the strings are "static" and won't be freed by normal string cleanup.
     ; This is a simplification - the args live for the program's lifetime.
-    %managed_ptr = call ptr @malloc(i64 24)
+    %managed_ptr = call ptr @malloc(i64 32)
     %managed_null = icmp eq ptr %managed_ptr, null
     br i1 %managed_null, label %convert_skip, label %alloc_buffer
 
