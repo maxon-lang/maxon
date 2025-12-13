@@ -38,7 +38,7 @@ Types conforming to `InitableFromStringLiteral` can be initialized from string l
 type MyString is InitableFromStringLiteral
     var _managed _ManagedString
 
-    function InitableFromStringLiteral.init(managed _ManagedString) returns MyString
+    static function InitableFromStringLiteral.init(managed _ManagedString) returns MyString
         return MyString{_managed: managed}
     end 'init'
 
@@ -67,7 +67,7 @@ Types conforming to `InitableFromCharLiteral` can be initialized from character 
 type MyChar is InitableFromCharLiteral
     var _managed _ManagedString
 
-    function InitableFromCharLiteral.init(managed _ManagedString) returns MyChar
+    static function InitableFromCharLiteral.init(managed _ManagedString) returns MyChar
         return MyChar{_managed: managed}
     end 'init'
 
@@ -96,7 +96,7 @@ end 'main'
 type Wrapper is InitableFromStringLiteral
     var _managed _ManagedString
 
-    function InitableFromStringLiteral.init(managed _ManagedString) returns Wrapper
+    static function InitableFromStringLiteral.init(managed _ManagedString) returns Wrapper
         return Wrapper{_managed: managed}
     end 'init'
 
@@ -119,7 +119,7 @@ end 'main'
 type Wrapper is InitableFromStringLiteral
     var _managed _ManagedString
 
-    function InitableFromStringLiteral.init(managed _ManagedString) returns Wrapper
+    static function InitableFromStringLiteral.init(managed _ManagedString) returns Wrapper
         return Wrapper{_managed: managed}
     end 'init'
 
@@ -142,7 +142,7 @@ len: 0
 type CharWrapper is InitableFromCharLiteral
     var _managed _ManagedString
 
-    function InitableFromCharLiteral.init(managed _ManagedString) returns CharWrapper
+    static function InitableFromCharLiteral.init(managed _ManagedString) returns CharWrapper
         return CharWrapper{_managed: managed}
     end 'init'
 

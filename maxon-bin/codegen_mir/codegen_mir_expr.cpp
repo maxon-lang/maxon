@@ -147,9 +147,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 									castExpr->line, castExpr->column);
 					}
 
-					// Pass null for self (factory method doesn't use it)
-					mir::MIRValue *nullSelf = builder->getNull();
-					return builder->createCall(initFunc, {nullSelf, managedAlloca}, "literal.init");
+					// Call static factory method (no self parameter)
+					return builder->createCall(initFunc, {managedAlloca}, "literal.init");
 				}
 			}
 		}
@@ -224,9 +223,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 									castExpr->line, castExpr->column);
 					}
 
-					// Pass null for self (factory method doesn't use it)
-					mir::MIRValue *nullSelf = builder->getNull();
-					return builder->createCall(initFunc, {nullSelf, managedAlloca}, "char.literal.init");
+					// Call static factory method (no self parameter)
+					return builder->createCall(initFunc, {managedAlloca}, "char.literal.init");
 				}
 			}
 		}

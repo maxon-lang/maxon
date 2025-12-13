@@ -423,9 +423,8 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			return;
 		}
 
-		// Pass null for self (factory method returns new instance)
-		mir::MIRValue *nullSelf = builder->getNull();
-		mir::MIRValue *mapResult = builder->createCall(initFunc, {nullSelf, keysManaged, valuesManaged}, "map.init");
+		// Call static factory method (no self parameter)
+		mir::MIRValue *mapResult = builder->createCall(initFunc, {keysManaged, valuesManaged}, "map.init");
 
 		// Allocate storage for the map and store the result
 		mir::MIRValue *mapAlloca = builder->createAlloca(mapStructType, varDecl->name);
@@ -547,9 +546,8 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			return;
 		}
 
-		// Pass null for self (factory method returns new instance)
-		mir::MIRValue *nullSelf = builder->getNull();
-		mir::MIRValue *mapResult = builder->createCall(initFunc, {nullSelf, keysManaged, valuesManaged}, "map.init");
+		// Call static factory method (no self parameter)
+		mir::MIRValue *mapResult = builder->createCall(initFunc, {keysManaged, valuesManaged}, "map.init");
 
 		// Allocate storage for the map and store the result
 		mir::MIRValue *mapAlloca = builder->createAlloca(mapStructType, varDecl->name);
@@ -645,9 +643,8 @@ void MIRCodeGenerator::generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction
 			return;
 		}
 
-		// Pass null for self (factory method returns new instance)
-		mir::MIRValue *nullSelf = builder->getNull();
-		mir::MIRValue *setResult = builder->createCall(initFunc, {nullSelf, managedAlloca}, "set.init");
+		// Call static factory method (no self parameter)
+		mir::MIRValue *setResult = builder->createCall(initFunc, {managedAlloca}, "set.init");
 
 		// Allocate storage for the set and store the result
 		mir::MIRValue *setAlloca = builder->createAlloca(setStructType, varDecl->name);

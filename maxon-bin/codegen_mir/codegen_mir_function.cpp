@@ -31,9 +31,9 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 	}
 	functionParameterTypes[functionName] = paramTypes;
 
-	// Track receiver type for implicit self field access
-	// But not for static methods - they don't have access to self
-	currentReceiverType = func->isStaticMethod ? "" : func->receiverType;
+	// Track receiver type for Self type resolution
+	// Static methods still need this for Self resolution, but they don't get implicit self access
+	currentReceiverType = func->receiverType;
 
 	// Get the function that was already declared
 	mir::MIRFunction *function = module->getFunction(functionName);
@@ -144,9 +144,9 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 	std::string savedReceiverType = currentReceiverType;
 	std::map<std::string, std::string> savedTypeBindings = currentTypeBindings;
 
-	// Track receiver type for implicit self field access
-	// But not for static methods - they don't have access to self
-	currentReceiverType = func->isStaticMethod ? "" : specializedReceiverType;
+	// Track receiver type for Self type resolution
+	// Static methods still need this for Self resolution, but they don't get implicit self access
+	currentReceiverType = specializedReceiverType;
 
 	// Store type bindings for use during codegen
 	currentTypeBindings = typeBindings;

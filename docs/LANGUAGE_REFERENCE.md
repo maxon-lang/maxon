@@ -717,10 +717,29 @@ type Point is Hashable
 end 'Point'
 ```
 
+**Static Interface Methods**
+
+Interfaces can declare static methods using the `static` keyword. Static interface methods don't receive an implicit `self` parameter and are typically used for factory methods:
+
+```maxon
+interface Parseable
+    static function parse(input string) returns Self
+end 'Parseable'
+
+type Number is Parseable
+    var value int
+
+    static function Parseable.parse(input string) returns Number
+        return Number{value: input.toInt()}
+    end 'parse'
+end 'Number'
+```
+
 **Interface Notes:**
 - `Self` in interface method parameters/returns refers to the conforming type
 - A type can conform to multiple interfaces: `type Foo is A, B`
 - Methods implementing interface requirements follow the same syntax as regular methods
+- Static interface methods use `static function Interface.method()` syntax in implementations
 
 ---
 

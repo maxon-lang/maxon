@@ -993,7 +993,7 @@ void MIRCodeGenerator::generateGlobalInit() {
 			mir::MIRValue *valuesCapField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 2, "values._capacity");
 			builder->createStore(builder->getInt64(numEntries), valuesCapField);
 
-			// Call map<K,V>.init(null, keysManaged, valuesManaged)
+			// Call map<K,V>.init(keysManaged, valuesManaged) - static factory method
 			std::string initMethodName = specializedName + ".init";
 			mir::MIRFunction *initFunc = module->getFunction(initMethodName);
 			if (!initFunc) {
@@ -1002,9 +1002,8 @@ void MIRCodeGenerator::generateGlobalInit() {
 							globalInfo.decl->line, globalInfo.decl->column);
 			}
 
-			// Pass null for self (factory method returns new instance)
-			mir::MIRValue *nullSelf = builder->getNull();
-			mir::MIRValue *mapResult = builder->createCall(initFunc, {nullSelf, keysManaged, valuesManaged}, "map.init");
+			// Call static factory method (no self parameter)
+			mir::MIRValue *mapResult = builder->createCall(initFunc, {keysManaged, valuesManaged}, "map.init");
 
 			// Store result to global
 			mir::MIRValue *globalPtr = mir::MIRValue::createGlobal(mapStructType, globalInfo.name);
@@ -1352,11 +1351,13 @@ std::string MIRCodeGenerator::instantiateGenericStruct(const std::string &templa
 		mir::MIRFunction *mirFunc = module->createFunction(specializedMethodName, retType);
 		logDetail("    Created MIR function: " + specializedMethodName);
 
-		// Add parameters - first is always self (pointer to struct)
-		mirFunc->addParameter(mir::MIRType::getPtr(), "self");
+		// Add parameters - first is self (pointer to struct) for instance methods only
+		if (!method->isStaticMethod) {
+			mirFunc->addParameter(mir::MIRType::getPtr(), "self");
+		}
 		for (const auto &param : substitutedParams) {
 			if (param.name == "self")
-				continue; // Skip self, already added
+				continue; // Skip self if it was explicitly declared
 			mir::MIRType *paramType = getParamTypeFromString(param.type);
 			mirFunc->addParameter(paramType, param.name);
 		}

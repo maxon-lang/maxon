@@ -2,7 +2,7 @@
 type MyChar is InitableFromCharLiteral
     var _managed _ManagedString
 
-    function InitableFromCharLiteral.init(managed _ManagedString) returns MyChar
+    static function InitableFromCharLiteral.init(managed _ManagedString) returns MyChar
         return MyChar{_managed: managed}
     end 'init'
 
@@ -34,13 +34,13 @@ end 'main'
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
-define %MyChar @MyChar.init(ptr %self, ptr %managed) {
+define %MyChar @MyChar.init(ptr %managed) {
 entry0:
-  %2 = alloca %MyChar
-  %4 = getelementptr %MyChar, ptr %2, i32 0, i32 0
-  store ptr %managed, ptr %4
-  %5 = load %MyChar, ptr %2
-  ret %MyChar %5
+  %1 = alloca %MyChar
+  %3 = getelementptr %MyChar, ptr %1, i32 0, i32 0
+  store ptr %managed, ptr %3
+  %4 = load %MyChar, ptr %1
+  ret %MyChar %4
 }
 
 define %cstring @string.cstr(ptr %self) {
@@ -96,7 +96,7 @@ entry0:
   store i64 1, ptr %4
   %5 = getelementptr %_ManagedString, ptr %0, i32 0, i32 2
   store i64 0, ptr %5
-  %6 = call %MyChar @MyChar.init(ptr null, ptr %0)
+  %6 = call %MyChar @MyChar.init(ptr %0)
   %7 = alloca %MyChar
   store %MyChar %6, ptr %7
   %21 = getelementptr %MyChar, ptr %7, i32 0, i32 0
@@ -202,7 +202,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 146
+; Instructions: 144
 
 %MyChar = type { ptr }
 %string = type { ptr, i64 }
@@ -219,18 +219,16 @@ entry0:
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
-define %MyChar @MyChar.init(ptr %self, ptr %managed) {
+define %MyChar @MyChar.init(ptr %managed) {
 entry0:
   %0 = alloca ptr
-  store ptr %self, ptr %0
-  %1 = alloca ptr
-  store ptr %managed, ptr %1
-  %2 = alloca %MyChar
-  %3 = load ptr, ptr %1
-  %4 = getelementptr %MyChar, ptr %2, i32 0, i32 0
-  store ptr %3, ptr %4
-  %5 = load %MyChar, ptr %2
-  ret %MyChar %5
+  store ptr %managed, ptr %0
+  %1 = alloca %MyChar
+  %2 = load ptr, ptr %0
+  %3 = getelementptr %MyChar, ptr %1, i32 0, i32 0
+  store ptr %2, ptr %3
+  %4 = load %MyChar, ptr %1
+  ret %MyChar %4
 }
 
 define i64 @MyChar.len(ptr %self) {
@@ -301,7 +299,7 @@ entry0:
   store i64 1, ptr %4
   %5 = getelementptr %_ManagedString, ptr %0, i32 0, i32 2
   store i64 0, ptr %5
-  %6 = call %MyChar @MyChar.init(ptr null, ptr %0)
+  %6 = call %MyChar @MyChar.init(ptr %0)
   %7 = alloca %MyChar
   store %MyChar %6, ptr %7
   %8 = call i64 @MyChar.len(ptr %7)
