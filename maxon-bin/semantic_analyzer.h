@@ -99,11 +99,13 @@ struct InterfaceMethodInfo {
 	std::vector<FunctionParameter> parameters;
 	bool hasDefaultImplementation = false;
 	const std::vector<std::unique_ptr<StmtAST>> *defaultBody = nullptr; // Non-owning ptr to AST body
+	bool isStatic = false; // True for static interface methods (no implicit self)
 
 	InterfaceMethodInfo(const std::string &n, const std::string &ret, std::vector<FunctionParameter> params,
-						bool hasDefault = false, const std::vector<std::unique_ptr<StmtAST>> *defBody = nullptr)
+						bool hasDefault = false, const std::vector<std::unique_ptr<StmtAST>> *defBody = nullptr,
+						bool isStaticMethod = false)
 		: name(n), returnType(ret), parameters(std::move(params)),
-		  hasDefaultImplementation(hasDefault), defaultBody(defBody) {}
+		  hasDefaultImplementation(hasDefault), defaultBody(defBody), isStatic(isStaticMethod) {}
 };
 
 // Interface information

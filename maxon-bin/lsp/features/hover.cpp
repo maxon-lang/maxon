@@ -10,6 +10,11 @@ std::optional<Hover> HoverProvider::getHover(
 	const Position &position,
 	const AnalysisCache *cache,
 	const StdlibSymbols &stdlib) {
+	// Don't provide hover info inside comments
+	if (isPositionInComment(document, position)) {
+		return std::nullopt;
+	}
+
 	// Get the token at the cursor position
 	std::string token = getTokenAtPosition(document, position);
 	if (token.empty()) {
@@ -105,7 +110,7 @@ std::optional<Hover> HoverProvider::getHover(
 		}
 	}
 
-	// Try lookups in order: intrinsic, keyword, variable, function, type
+	// Try lookups in order: intrinsic, keyword, struct field declaration, variable, function, type
 
 	// 0. Try intrinsic lookup (tokens starting with __)
 	if (token.size() > 2 && token[0] == '_' && token[1] == '_') {
@@ -121,19 +126,25 @@ std::optional<Hover> HoverProvider::getHover(
 		return keywordHover;
 	}
 
-	// 2. Try variable lookup
+	// 2. Try struct field declaration lookup (when cursor is on a field in type definition)
+	auto fieldDeclHover = lookupFieldDeclaration(token, cache, position);
+	if (fieldDeclHover) {
+		return fieldDeclHover;
+	}
+
+	// 3. Try variable lookup
 	auto variableHover = lookupVariable(token, cache, position);
 	if (variableHover) {
 		return variableHover;
 	}
 
-	// 3. Try function lookup
+	// 4. Try function lookup
 	auto functionHover = lookupFunction(token, cache, stdlib);
 	if (functionHover) {
 		return functionHover;
 	}
 
-	// 4. Try type lookup
+	// 5. Try type lookup
 	auto typeHover = lookupType(token, cache, stdlib);
 	if (typeHover) {
 		return typeHover;
@@ -268,13 +279,34 @@ std::optional<Hover> HoverProvider::lookupVariable(const std::string &name, cons
 				break;
 			}
 		}
-		// Also check struct methods
-		for (const auto &structDef : cache->ast->structs) {
-			for (const auto &method : structDef->methods) {
-				if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
-					enclosingFunction = structDef->name + "." + method->name;
-					break;
+		// Also check struct methods (only if not already found in top-level functions)
+		if (enclosingFunction.empty()) {
+			for (const auto &structDef : cache->ast->structs) {
+				bool found = false;
+				for (const auto &method : structDef->methods) {
+					if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
+						enclosingFunction = structDef->name + "." + method->name;
+						found = true;
+						break;
+					}
 				}
+				if (found)
+					break;
+			}
+		}
+		// Also check enum methods
+		if (enclosingFunction.empty()) {
+			for (const auto &enumDef : cache->ast->enums) {
+				bool found = false;
+				for (const auto &method : enumDef->methods) {
+					if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
+						enclosingFunction = enumDef->name + "." + method->name;
+						found = true;
+						break;
+					}
+				}
+				if (found)
+					break;
 			}
 		}
 	}
@@ -296,6 +328,39 @@ std::optional<Hover> HoverProvider::lookupVariable(const std::string &name, cons
 		const VariableInfo &var = it->second;
 		std::string markdown = formatVariableHover(var.name, var.type, !var.isImmutable, var.initialValue, var.isParameter);
 		return buildHover(markdown, currentTokenRange_);
+	}
+
+	return std::nullopt;
+}
+
+std::optional<Hover> HoverProvider::lookupFieldDeclaration(const std::string &name, const AnalysisCache *cache, const Position &position) {
+	if (!cache || !cache->ast) {
+		return std::nullopt;
+	}
+
+	// Check if position is inside a struct definition
+	for (const auto &structDef : cache->ast->structs) {
+		// Check if position is within this struct's range (1-based lines in AST, 0-based in Position)
+		int startLine = structDef->line - 1;
+		int endLine = structDef->endLine - 1;
+
+		if (position.line >= startLine && position.line <= endLine) {
+			// We're inside this struct, look for the field
+			for (const auto &field : structDef->fields) {
+				if (field.name == name) {
+					// Found the field - format hover info
+					std::string markdown;
+					std::string mutability = field.isImmutable ? "let" : "var";
+					markdown = "```maxon\n" + mutability + " " + name + " " + field.type;
+					if (field.defaultValue) {
+						markdown += " = ..."; // Default value is an AST expression, not a string
+					}
+					markdown += "\n```\n---\n";
+					markdown += "Field of type `" + structDef->name + "`";
+					return buildHover(markdown, currentTokenRange_);
+				}
+			}
+		}
 	}
 
 	return std::nullopt;
@@ -800,6 +865,59 @@ Hover HoverProvider::buildHover(const std::string &markdown, const Range &range)
 	hover.range = range;
 
 	return hover;
+}
+
+bool HoverProvider::isPositionInComment(const Document &document, const Position &position) {
+	// Check for line comment on the current line first (most common case)
+	if (position.line >= 0 && position.line < document.getLineCount()) {
+		std::string line = document.getLine(position.line);
+
+		// Find if there's a // before our position (not inside a string)
+		bool inString = false;
+		for (int i = 0; i < static_cast<int>(line.size()) && i < position.character; i++) {
+			if (line[i] == '"' && (i == 0 || line[i - 1] != '\\')) {
+				inString = !inString;
+			}
+			if (!inString && i + 1 < static_cast<int>(line.size()) &&
+				line[i] == '/' && line[i + 1] == '/') {
+				// Found line comment start before our position
+				return true;
+			}
+		}
+	}
+
+	// Check for block comments /* ... */
+	// We need to scan from the start of the document to find unclosed block comments
+	bool inBlockComment = false;
+	for (int lineNum = 0; lineNum <= position.line && lineNum < document.getLineCount(); lineNum++) {
+		std::string line = document.getLine(lineNum);
+		int endCol = (lineNum == position.line) ? position.character : static_cast<int>(line.size());
+
+		bool inString = false;
+		for (int i = 0; i < endCol && i < static_cast<int>(line.size()); i++) {
+			if (!inBlockComment) {
+				// Track string state to avoid false positives
+				if (line[i] == '"' && (i == 0 || line[i - 1] != '\\')) {
+					inString = !inString;
+				}
+				// Check for block comment start
+				if (!inString && i + 1 < static_cast<int>(line.size()) &&
+					line[i] == '/' && line[i + 1] == '*') {
+					inBlockComment = true;
+					i++; // Skip the *
+				}
+			} else {
+				// Inside block comment, look for */
+				if (i + 1 < static_cast<int>(line.size()) &&
+					line[i] == '*' && line[i + 1] == '/') {
+					inBlockComment = false;
+					i++; // Skip the /
+				}
+			}
+		}
+	}
+
+	return inBlockComment;
 }
 
 } // namespace maxon_lsp

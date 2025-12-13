@@ -76,11 +76,13 @@ class SemanticTokensProvider {
 	/**
 	 * Parse a single line for block identifiers.
 	 * Updates nesting level based on keywords found.
+	 * Tracks block comment state across lines.
 	 */
 	void parseLineForBlocks(
 		const std::string &line,
 		int lineNumber,
 		int &currentLevel,
+		bool &inBlockComment,
 		std::vector<SemanticToken> &tokens);
 
 	/**

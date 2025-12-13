@@ -344,4 +344,206 @@ suite('Hover Test Suite', () => {
 
 		assert.ok(hoverText.includes('type'), 'Hover should mention type keyword');
 	});
+
+	test('Hover should NOT show for keywords inside line comments', async function () {
+		const content = [
+			"// This function uses for loops and if statements",
+			"function test() returns int",
+			"    return 42",
+			"end 'test'"
+		].join('\n');
+
+		testDocument = await createTestFile('test_hover_line_comment.maxon', content);
+
+		// Hover over 'for' in the line comment (line 0, col 24)
+		const position = new vscode.Position(0, 24);
+		const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+			'vscode.executeHoverProvider',
+			testDocument.uri,
+			position
+		);
+
+		// Should have no hover info for text inside comments
+		const hasHover = hovers && hovers.length > 0;
+		assert.ok(!hasHover, 'Should NOT have hover information for keywords inside line comments');
+	});
+
+	test('Hover should NOT show for keywords inside block comments', async function () {
+		const content = [
+			"/* This is a block comment",
+			"   that mentions for loops",
+			"   and if statements */",
+			"function test() returns int",
+			"    return 42",
+			"end 'test'"
+		].join('\n');
+
+		testDocument = await createTestFile('test_hover_block_comment.maxon', content);
+
+		// Hover over 'for' in the block comment (line 1, col 17)
+		const position = new vscode.Position(1, 17);
+		const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+			'vscode.executeHoverProvider',
+			testDocument.uri,
+			position
+		);
+
+		// Should have no hover info for text inside comments
+		const hasHover = hovers && hovers.length > 0;
+		assert.ok(!hasHover, 'Should NOT have hover information for keywords inside block comments');
+	});
+
+	test('Hover should NOT show for keywords on block comment start line', async function () {
+		const content = [
+			"/* for while if function */",
+			"function test() returns int",
+			"    return 42",
+			"end 'test'"
+		].join('\n');
+
+		testDocument = await createTestFile('test_hover_block_comment_single_line.maxon', content);
+
+		// Hover over 'for' in the single-line block comment (line 0, col 3)
+		const position = new vscode.Position(0, 3);
+		const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+			'vscode.executeHoverProvider',
+			testDocument.uri,
+			position
+		);
+
+		// Should have no hover info for text inside comments
+		const hasHover = hovers && hovers.length > 0;
+		assert.ok(!hasHover, 'Should NOT have hover information for keywords inside single-line block comments');
+	});
+
+	test('Hover SHOULD show for keywords after block comment ends', async function () {
+		const content = [
+			"/* comment */ function test() returns int",
+			"    return 42",
+			"end 'test'"
+		].join('\n');
+
+		testDocument = await createTestFile('test_hover_after_block_comment.maxon', content);
+
+		// Hover over 'function' after the block comment (line 0, col 14)
+		const position = new vscode.Position(0, 18);
+		const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+			'vscode.executeHoverProvider',
+			testDocument.uri,
+			position
+		);
+
+		assert.ok(hovers && hovers.length > 0, 'Should have hover information for keywords after block comment');
+
+		const hoverText = hovers[0].contents.map(c =>
+			typeof c === 'string' ? c : c.value
+		).join('\n');
+
+		assert.ok(hoverText.includes('function'), 'Hover should mention function keyword');
+	});
+
+	test('Hover on struct field declaration should show field info, not function with same name', async function () {
+		const content = [
+			"type MyStruct",
+			"    var count int",
+			"    var capacity int",
+			"end 'MyStruct'"
+		].join('\n');
+
+		testDocument = await createTestFile('test_hover_field_vs_function.maxon', content);
+
+		// Hover over 'capacity' field declaration (line 2, col 8)
+		const position = new vscode.Position(2, 8);
+		const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+			'vscode.executeHoverProvider',
+			testDocument.uri,
+			position
+		);
+
+		assert.ok(hovers && hovers.length > 0, 'Should have hover information');
+
+		const hoverText = hovers[0].contents.map(c =>
+			typeof c === 'string' ? c : c.value
+		).join('\n');
+
+		// Should show field info, NOT "function capacity(self array) int"
+		assert.ok(hoverText.includes('field') || hoverText.includes('var'),
+			'Hover should show field info, not function. Got: ' + hoverText);
+		assert.ok(!hoverText.includes('function capacity(self array)'),
+			'Hover should NOT show array.capacity() function. Got: ' + hoverText);
+	});
+
+	test('Hover should show variable type inside interface method', async function () {
+		// Simpler test first: regular method inside struct
+		const content = [
+			"type MyType",
+			"    var value int",
+			"",
+			"    function doSomething() returns int",
+			"        var count = 42",
+			"        return count",
+			"    end 'doSomething'",
+			"end 'MyType'"
+		].join('\n');
+
+		testDocument = await createTestFile('test_hover_method_var.maxon', content);
+
+		// Hover over 'count' in the return statement (line 5, col 15)
+		const position = new vscode.Position(5, 15);
+		const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+			'vscode.executeHoverProvider',
+			testDocument.uri,
+			position
+		);
+
+		assert.ok(hovers && hovers.length > 0, 'Should have hover information for variable in method');
+
+		const hoverText = hovers[0].contents.map(c =>
+			typeof c === 'string' ? c : c.value
+		).join('\n');
+
+		assert.ok(hoverText.includes('count'), 'Hover should show variable name "count". Got: ' + hoverText);
+		assert.ok(hoverText.includes('int'), 'Hover should show variable type "int". Got: ' + hoverText);
+		assert.ok(hoverText.includes('var'), 'Hover should mention "var". Got: ' + hoverText);
+	});
+
+	test('Hover should show variable type inside interface implementation method', async function () {
+		const content = [
+			"interface TestInterface",
+			"    function doSomething() returns int",
+			"end 'TestInterface'",
+			"",
+			"type MyType is TestInterface",
+			"    var value int",
+			"    function TestInterface.doSomething() returns int",
+			"        var count = 42",
+			"        return count",
+			"    end 'doSomething'",
+			"end 'MyType'"
+		].join('\n');
+
+		testDocument = await createTestFile('test_hover_interface_method_var.maxon', content);
+
+		// Hover over 'count' in the return statement (line 8, col 15)
+		// Lines: 0=interface, 1=fn, 2=end, 3=empty, 4=type, 5=var, 6=fn, 7=var count, 8=return count, 9=end fn, 10=end type
+		const position = new vscode.Position(8, 15);
+		const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+			'vscode.executeHoverProvider',
+			testDocument.uri,
+			position
+		);
+
+		assert.ok(hovers && hovers.length > 0, 'Should have hover information for variable in interface method');
+
+		const hoverText = hovers[0].contents.map(c =>
+			typeof c === 'string' ? c : c.value
+		).join('\n');
+
+		// Log for debugging
+		console.log('Hover text for interface method variable:', hoverText);
+
+		assert.ok(hoverText.includes('count'), 'Hover should show variable name "count". Got: ' + hoverText);
+		assert.ok(hoverText.includes('int'), 'Hover should show variable type "int". Got: ' + hoverText);
+		assert.ok(hoverText.includes('var'), 'Hover should mention "var". Got: ' + hoverText);
+	});
 });

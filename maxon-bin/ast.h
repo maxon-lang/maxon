@@ -694,16 +694,18 @@ struct InterfaceMethodSignature {
 	std::string returnType;
 	bool hasDefaultImplementation = false;			   // True if this method has a default impl
 	std::vector<std::unique_ptr<StmtAST>> defaultBody; // Body of default impl (empty if none)
+	bool isStatic = false;							   // True for static interface methods (no implicit self)
 	int line;
 	int column;
 
 	InterfaceMethodSignature(const std::string &n, std::vector<FunctionParameter> params,
 							 const std::string &ret, int l = 0, int c = 0,
 							 bool hasDefault = false,
-							 std::vector<std::unique_ptr<StmtAST>> defBody = {})
+							 std::vector<std::unique_ptr<StmtAST>> defBody = {},
+							 bool isStaticMethod = false)
 		: name(n), parameters(std::move(params)), returnType(ret),
 		  hasDefaultImplementation(hasDefault), defaultBody(std::move(defBody)),
-		  line(l), column(c) {}
+		  isStatic(isStaticMethod), line(l), column(c) {}
 };
 
 // Interface definition

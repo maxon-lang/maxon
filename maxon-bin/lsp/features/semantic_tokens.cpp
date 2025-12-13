@@ -95,10 +95,11 @@ std::vector<SemanticTokensProvider::SemanticToken> SemanticTokensProvider::findB
 	const Document &document) {
 	std::vector<SemanticToken> tokens;
 	int currentLevel = -1; // Start at -1, function increases to 0
+	bool inBlockComment = false;
 
 	for (int lineNum = 0; lineNum < document.getLineCount(); ++lineNum) {
 		std::string line = document.getLine(lineNum);
-		parseLineForBlocks(line, lineNum, currentLevel, tokens);
+		parseLineForBlocks(line, lineNum, currentLevel, inBlockComment, tokens);
 	}
 
 	return tokens;
@@ -108,11 +109,39 @@ void SemanticTokensProvider::parseLineForBlocks(
 	const std::string &line,
 	int lineNumber,
 	int &currentLevel,
+	bool &inBlockComment,
 	std::vector<SemanticToken> &tokens) {
+	// Handle block comment state
+	if (inBlockComment) {
+		// Look for end of block comment
+		size_t endPos = line.find("*/");
+		if (endPos != std::string::npos) {
+			inBlockComment = false;
+			// Continue processing after the comment ends, but for simplicity
+			// we'll skip the entire line if it started in a block comment
+		}
+		return;
+	}
+
 	// Trim leading whitespace for keyword detection
 	size_t firstNonSpace = line.find_first_not_of(" \t");
 	if (firstNonSpace == std::string::npos) {
 		return; // Empty or whitespace-only line
+	}
+
+	// Skip comment lines - don't provide semantic tokens inside comments
+	if (firstNonSpace + 1 < line.size() &&
+		line[firstNonSpace] == '/' && line[firstNonSpace + 1] == '/') {
+		return; // Line comment
+	}
+	if (firstNonSpace + 1 < line.size() &&
+		line[firstNonSpace] == '/' && line[firstNonSpace + 1] == '*') {
+		// Check if block comment ends on same line
+		size_t endPos = line.find("*/", firstNonSpace + 2);
+		if (endPos == std::string::npos) {
+			inBlockComment = true;
+		}
+		return; // Block comment start - skip entire line
 	}
 
 	std::string trimmedLine = line.substr(firstNonSpace);

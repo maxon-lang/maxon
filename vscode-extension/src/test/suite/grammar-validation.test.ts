@@ -98,7 +98,8 @@ suite('TextMate Grammar Validation', () => {
 
 		const lineCommentPattern = commentsRepo.patterns.find((p: any) => p.name === 'comment.line.double-slash.maxon');
 		assert.ok(lineCommentPattern, 'Line comment pattern should exist');
-		assert.ok(lineCommentPattern.match, 'Line comment should have match pattern');
+		assert.ok(lineCommentPattern.begin, 'Line comment should have begin pattern');
+		assert.ok(lineCommentPattern.end, 'Line comment should have end pattern');
 
 		const blockCommentPattern = commentsRepo.patterns.find((p: any) => p.name === 'comment.block.maxon');
 		assert.ok(blockCommentPattern, 'Block comment pattern should exist');

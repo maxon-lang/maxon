@@ -243,7 +243,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 				const std::vector<std::unique_ptr<StmtAST>> *bodyPtr =
 					method.hasDefaultImplementation ? &method.defaultBody : nullptr;
 				protoInfo.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters,
-																method.hasDefaultImplementation, bodyPtr));
+																method.hasDefaultImplementation, bodyPtr, method.isStatic));
 			}
 			interfaces.emplace(interfaceKey, std::move(protoInfo));
 
@@ -255,7 +255,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 					const std::vector<std::unique_ptr<StmtAST>> *bodyPtr =
 						method.hasDefaultImplementation ? &method.defaultBody : nullptr;
 					protoInfoSimple.methods.push_back(InterfaceMethodInfo(method.name, method.returnType, method.parameters,
-																		  method.hasDefaultImplementation, bodyPtr));
+																		  method.hasDefaultImplementation, bodyPtr, method.isStatic));
 				}
 				interfaces.emplace(interfaceDef->name, std::move(protoInfoSimple));
 			}
@@ -1465,9 +1465,11 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 					// If we have the body, synthesize the method
 					if (protoMethod.defaultBody != nullptr) {
 						// Synthesize method from default implementation
-						// Build parameter list with implicit self
+						// Build parameter list - only add implicit self for non-static methods
 						std::vector<FunctionParameter> params;
-						params.push_back(FunctionParameter("self", structName, 0, 0));
+						if (!protoMethod.isStatic) {
+							params.push_back(FunctionParameter("self", structName, 0, 0));
+						}
 
 						for (const auto &param : protoMethod.parameters) {
 							std::string resolvedType = resolveType(param.type);
@@ -1478,10 +1480,11 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 						std::string resolvedReturnType = resolveType(protoMethod.returnType);
 
 						// Register as function with synthesized default flag
-						FunctionInfo funcInfo(expectedMethodName, resolvedReturnType, std::move(params), sourceInterface);
+						FunctionInfo funcInfo(expectedMethodName, resolvedReturnType, std::move(params), sourceInterface,
+											  0, 0, protoMethod.isStatic);
 						funcInfo.isSynthesizedDefault = true;
 						funcInfo.defaultBody = protoMethod.defaultBody;
-						funcInfo.selfType = structName;
+						funcInfo.selfType = protoMethod.isStatic ? "" : structName;
 						// Copy type assignments for resolving associated types in codegen
 						if (typeAssignments) {
 							funcInfo.typeSubstitutions = *typeAssignments;
@@ -1489,7 +1492,8 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 						funcInfo.typeSubstitutions["Self"] = structName;
 						functions.emplace(expectedMethodName, std::move(funcInfo));
 
-						logTrace("Synthesized default method: " + expectedMethodName + " from " + sourceInterface);
+						logTrace("Synthesized default " + std::string(protoMethod.isStatic ? "static " : "") +
+								 "method: " + expectedMethodName + " from " + sourceInterface);
 					}
 					// Either way, don't report as missing - it has a default implementation
 					// (even if we can't synthesize it here because the body is in another module)
@@ -1520,6 +1524,17 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 						 line, column);
 			}
 
+			// Check static method consistency
+			if (protoMethod.isStatic != implFunc.isStaticMethod) {
+				if (protoMethod.isStatic) {
+					addError("Method '" + expectedMethodName + "' must be declared as 'static' to implement static interface method",
+							 line, column);
+				} else {
+					addError("Method '" + expectedMethodName + "' cannot be static when implementing non-static interface method",
+							 line, column);
+				}
+			}
+
 			// Check return type (substituting Self and associated types)
 			std::string expectedReturnType = resolveType(protoMethod.returnType);
 			if (implFunc.returnType != expectedReturnType) {
@@ -1528,36 +1543,46 @@ void SemanticAnalyzer::checkInterfaceConformance(const std::string &structName,
 						 line, column);
 			}
 
-			// Check parameter count - impl has implicit 'self' as first param (+1)
-			// Interface params don't include self (it's implicit)
-			size_t expectedParamCount = protoMethod.parameters.size() + 1; // +1 for implicit self
+			// Check parameter count
+			// For instance methods: impl has implicit 'self' as first param (+1)
+			// For static methods: no self parameter, counts should match directly
+			size_t expectedParamCount = protoMethod.isStatic
+				? protoMethod.parameters.size()
+				: protoMethod.parameters.size() + 1; // +1 for implicit self
 			if (implFunc.parameters.size() != expectedParamCount) {
-				addError("Method '" + expectedMethodName + "' has " + std::to_string(implFunc.parameters.size() - 1) +
+				size_t reportedImplCount = protoMethod.isStatic
+					? implFunc.parameters.size()
+					: (implFunc.parameters.size() > 0 ? implFunc.parameters.size() - 1 : 0);
+				addError("Method '" + expectedMethodName + "' has " + std::to_string(reportedImplCount) +
 							 " explicit parameter(s) but interface '" + interfaceName + "' requires " +
 							 std::to_string(protoMethod.parameters.size()),
 						 line, column);
 				continue;
 			}
 
-			// Verify first param is 'self' with correct type
-			if (implFunc.parameters.empty() || implFunc.parameters[0].name != "self") {
-				addError("Method '" + expectedMethodName + "' is missing implicit 'self' parameter",
-						 line, column);
-				continue;
-			}
-			if (implFunc.parameters[0].type != structName) {
-				addError("Method '" + expectedMethodName + "' has self type '" + implFunc.parameters[0].type +
-							 "' but expected '" + structName + "'",
-						 line, column);
+			// For instance methods, verify first param is 'self' with correct type
+			if (!protoMethod.isStatic) {
+				if (implFunc.parameters.empty() || implFunc.parameters[0].name != "self") {
+					addError("Method '" + expectedMethodName + "' is missing implicit 'self' parameter",
+							 line, column);
+					continue;
+				}
+				if (implFunc.parameters[0].type != structName) {
+					addError("Method '" + expectedMethodName + "' has self type '" + implFunc.parameters[0].type +
+								 "' but expected '" + structName + "'",
+							 line, column);
+				}
 			}
 
-			// Check parameter types (skip first param which is implicit self)
+			// Check parameter types
+			// For instance methods: skip first param which is implicit self (offset by 1)
+			// For static methods: no offset
+			size_t paramOffset = protoMethod.isStatic ? 0 : 1;
 			for (size_t i = 0; i < protoMethod.parameters.size(); i++) {
 				std::string expectedParamType = resolveType(protoMethod.parameters[i].type);
-				// implFunc params are offset by 1 due to implicit self
-				if (implFunc.parameters[i + 1].type != expectedParamType) {
+				if (implFunc.parameters[i + paramOffset].type != expectedParamType) {
 					addError("Method '" + expectedMethodName + "' parameter " + std::to_string(i + 1) +
-								 " has type '" + implFunc.parameters[i + 1].type +
+								 " has type '" + implFunc.parameters[i + paramOffset].type +
 								 "' but interface '" + interfaceName + "' requires '" + expectedParamType + "'",
 							 line, column);
 				}

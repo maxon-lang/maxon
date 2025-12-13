@@ -72,6 +72,16 @@ class HoverProvider {
 	std::optional<Hover> lookupKeyword(const std::string &token);
 
 	/**
+	 * Look up a struct field declaration when cursor is on a field in a type definition.
+	 *
+	 * @param name Field name to look up
+	 * @param cache Analysis cache containing struct info
+	 * @param position Position to check if we're in a struct definition
+	 * @return Hover info if on a field declaration, nullopt otherwise
+	 */
+	std::optional<Hover> lookupFieldDeclaration(const std::string &name, const AnalysisCache *cache, const Position &position);
+
+	/**
 	 * Look up a variable in the current scope and return hover info.
 	 *
 	 * @param name Variable name to look up
@@ -219,6 +229,16 @@ class HoverProvider {
 	 * @return Hover object ready for LSP response
 	 */
 	Hover buildHover(const std::string &markdown, const Range &range);
+
+	/**
+	 * Check if a position is inside a comment.
+	 * Handles both line comments and block comments.
+	 *
+	 * @param document The document to check
+	 * @param position The position to check
+	 * @return true if position is inside a comment
+	 */
+	bool isPositionInComment(const Document &document, const Position &position);
 
 	// Current token range (set by getTokenAtPosition)
 	Range currentTokenRange_;

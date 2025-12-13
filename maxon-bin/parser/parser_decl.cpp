@@ -180,8 +180,8 @@ std::unique_ptr<FunctionAST> Parser::parseMethodImpl(const std::string &receiver
 	std::string implementsInterface;
 
 	// Check for Interface.methodName syntax (struct methods only)
-	// Note: static methods cannot implement interface methods
-	if (allowInterfacePrefix && !isStatic && check(TokenType::DOT)) {
+	// Static methods can now implement static interface methods
+	if (allowInterfacePrefix && check(TokenType::DOT)) {
 		advance(); // consume '.'
 		implementsInterface = firstIdent.value;
 		Token methodNameToken = expect(TokenType::IDENTIFIER, "Expected method name after interface name");
@@ -646,8 +646,15 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 	}
 
 	// Parse method signatures until we hit 'end'
-	// Methods have implicit self parameter - not declared in signature
+	// Methods have implicit self parameter - not declared in signature (unless static)
 	while (!checkKeyword("end") && !check(TokenType::END_OF_FILE)) {
+		// Check for static keyword before function
+		bool isStatic = false;
+		if (checkKeyword("static")) {
+			advance();
+			isStatic = true;
+		}
+
 		// Each method starts with 'function'
 		Token funcToken = expectKeyword("function", "Expected 'function' in interface");
 		Token methodNameToken = expect(TokenType::IDENTIFIER, "Expected method name");
@@ -689,9 +696,9 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 		std::string returnType = parseReturnType(rparenLine, true, methodName);
 
 		// Check if this method has a default implementation body
-		// If next token is not 'function' or 'end', it must be the start of a body
+		// If next token is not 'function', 'static', or 'end', it must be the start of a body
 		std::vector<std::unique_ptr<StmtAST>> defaultBody;
-		bool hasDefaultImpl = !checkKeyword("function") && !checkKeyword("end") && !check(TokenType::END_OF_FILE);
+		bool hasDefaultImpl = !checkKeyword("function") && !checkKeyword("static") && !checkKeyword("end") && !check(TokenType::END_OF_FILE);
 
 		if (hasDefaultImpl) {
 			defaultBody = parseStatementBody();
@@ -703,9 +710,9 @@ std::unique_ptr<InterfaceDefAST> Parser::parseInterface() {
 
 		methods.push_back(InterfaceMethodSignature(methodName, std::move(parameters), returnType,
 												   methodNameToken.line, methodNameToken.column,
-												   hasDefaultImpl, std::move(defaultBody)));
+												   hasDefaultImpl, std::move(defaultBody), isStatic));
 
-		logTrace("  Method '" + methodName + "' -> " + returnType + (hasDefaultImpl ? " (default)" : ""));
+		logTrace("  Method '" + methodName + "' -> " + returnType + (hasDefaultImpl ? " (default)" : "") + (isStatic ? " (static)" : ""));
 	}
 
 	expectKeywordAdvance("end", "Expected 'end' to close interface");
