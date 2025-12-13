@@ -122,8 +122,9 @@ const EnumInfo *SemanticAnalyzer::lookupEnum(const std::string &name) const {
 }
 
 void SemanticAnalyzer::registerExternalFunction(const std::string &name, const std::string &returnType,
-												const std::vector<FunctionParameter> &parameters) {
-	functions.emplace(name, FunctionInfo(name, returnType, parameters));
+												const std::vector<FunctionParameter> &parameters,
+												bool isStaticMethod) {
+	functions.emplace(name, FunctionInfo(name, returnType, parameters, "", 0, 0, isStaticMethod));
 	// External functions get indices starting from a high offset to avoid conflicts
 	// We'll assign them sequential IDs starting from a large base
 	static size_t externalFunctionIdBase = 1000000;

@@ -220,7 +220,8 @@ class SemanticAnalyzer {
 
 	// Register external/stdlib functions
 	void registerExternalFunction(const std::string &name, const std::string &returnType,
-								  const std::vector<FunctionParameter> &parameters);
+								  const std::vector<FunctionParameter> &parameters,
+								  bool isStaticMethod = false);
 
 	// Register external/stdlib struct types
 	// Call this before analyze() to make external structs available

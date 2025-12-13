@@ -94,6 +94,7 @@ struct LSPSymbolInfo {
 	std::string filePath;								  // Absolute path to the source file
 	std::vector<LSPParameterInfo> parameters;			  // For functions/methods
 	std::string returnType;								  // For functions/methods
+	bool isStaticMethod = false;						  // For methods: true if static (no implicit self)
 	std::vector<std::string> conformsTo;				  // For structs: interfaces this struct conforms to
 	std::vector<LSPFieldInfo> fields;					  // For structs: field definitions
 	std::string extendsInterface;						  // For interfaces: base interface name

@@ -425,6 +425,9 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 		// Populate return type
 		sym.returnType = func->returnType;
 
+		// Track static method status
+		sym.isStaticMethod = func->isStaticMethod;
+
 		symbols.push_back(std::move(sym));
 	}
 
@@ -485,6 +488,9 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 
 			// Populate return type
 			methodSym.returnType = method->returnType;
+
+			// Track static method status
+			methodSym.isStaticMethod = method->isStaticMethod;
 
 			symbols.push_back(std::move(methodSym));
 		}
@@ -798,7 +804,7 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 			for (const auto &p : func.parameters) {
 				params.push_back({p.name, p.type});
 			}
-			analyzer.registerExternalFunction(func.name, func.returnType, params);
+			analyzer.registerExternalFunction(func.name, func.returnType, params, func.isStaticMethod);
 		}
 
 		// Register stdlib structs with their fields and interface conformance
@@ -1058,7 +1064,7 @@ IRGenerationResult generateIRForLSP(const std::string &source, const std::string
 		for (const auto &p : func.parameters) {
 			params.push_back({p.name, p.type});
 		}
-		analyzer.registerExternalFunction(func.name, func.returnType, params);
+		analyzer.registerExternalFunction(func.name, func.returnType, params, func.isStaticMethod);
 	}
 
 	// Register stdlib structs with their fields and interface conformance
@@ -1198,7 +1204,7 @@ AsmGenerationResult generateAsmForLSP(const std::string &source, const std::stri
 		for (const auto &p : func.parameters) {
 			params.push_back({p.name, p.type});
 		}
-		analyzer.registerExternalFunction(func.name, func.returnType, params);
+		analyzer.registerExternalFunction(func.name, func.returnType, params, func.isStaticMethod);
 	}
 
 	// Register stdlib structs with their fields and interface conformance
