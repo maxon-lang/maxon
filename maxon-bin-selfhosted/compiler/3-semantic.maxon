@@ -1,15 +1,15 @@
 // Semantic Analyzer for the Maxon compiler
 
 export type SemanticError
-	var message string
-	var line int
-	var column int
+	let message string
+	let line int
+	let column int
 end 'SemanticError'
 
 export type SemanticAnalyzer
-	var errors array of SemanticError
-	var hasMain bool
-	var localVars map from string to TypeRef
+	let errors array of SemanticError
+	let hasMain bool
+	let localVars map from string to TypeRef
 
 	export function create() returns SemanticAnalyzer
 		return SemanticAnalyzer{
@@ -24,19 +24,19 @@ export type SemanticAnalyzer
 	end 'success'
 
 	export function addError(message string, loc SourceLoc)
-		var err = SemanticError{message: message, line: loc.line, column: loc.column}
+		let err = SemanticError{message: message, line: loc.line, column: loc.column}
 		errors.push(err)
 	end 'addError'
 
 	export function analyze(program Program)
-		var i = 0
+		let i = 0
 		while i < program.functions.count() 'funcs'
 			analyzeFunction(program.functions[i])
 			i = i + 1
 		end 'funcs'
 
 		if not hasMain 'noMain'
-			var loc = SourceLoc.create(1, 1)
+			let loc = SourceLoc.create(1, 1)
 			addError("No 'main' function found", loc)
 		end 'noMain'
 	end 'analyze'
@@ -48,7 +48,7 @@ export type SemanticAnalyzer
 
 		localVars = map from string to TypeRef
 
-		var i = 0
+		let i = 0
 		while i < fn.body.count() 'body'
 			analyzeStmt(fn.body[i])
 			i = i + 1
@@ -77,9 +77,9 @@ export type SemanticAnalyzer
 	end 'analyzeExpr'
 
 	export function printErrors()
-		var i = 0
+		let i = 0
 		while i < errors.count() 'errs'
-			var err = errors[i]
+			let err = errors[i]
 			print("Error: {err.message}")
 			i = i + 1
 		end 'errs'

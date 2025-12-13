@@ -379,7 +379,7 @@ Token Lexer::readString() {
 	}
 
 	// Check if it looks like a valid ASCII identifier (block ID)
-	// Block IDs: start with letter/underscore, contain only alphanumeric/underscore
+	// Block IDs: start with letter/underscore, contain only alphanumeric/underscore/dash
 	bool isBlockId = false;
 	if (!str.empty()) {
 		char first = str[0];
@@ -388,7 +388,7 @@ Token Lexer::readString() {
 			for (size_t i = 1; i < str.length(); i++) {
 				char c = str[i];
 				if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-					  (c >= '0' && c <= '9') || c == '_')) {
+					  (c >= '0' && c <= '9') || c == '_' || c == '-')) {
 					isBlockId = false;
 					break;
 				}

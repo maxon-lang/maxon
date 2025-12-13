@@ -1,16 +1,16 @@
 // MIR Code generator for the Maxon compiler
 
 export type CodeGen
-	var output string
-	var tempCounter int
-	var localVars map from string to string
+	let output string
+	let tempCounter int
+	let localVars map from string to string
 
 	export function create() returns CodeGen
 		return CodeGen{output: "", tempCounter: 0, localVars: map from string to string}
 	end 'create'
 
 	export function newTemp() returns string
-		var temp = "%t"
+		let temp = "%t"
 		tempCounter = tempCounter + 1
 		return temp
 	end 'newTemp'
@@ -45,7 +45,10 @@ export type CodeGen
 
 		var i = 0
 		while i < fn.body.count() 'body'
-			genStmt(fn.body[i])
+			if not genStmt(fn.body[i]) 'genStmt'
+				emit("    ; Error generating statement")
+				break
+			end 'genStmt'
 			i = i + 1
 		end 'body'
 
@@ -53,68 +56,47 @@ export type CodeGen
 		emit("")
 	end 'genFunction'
 
-	export function genStmt(stmt Stmt)
+	export function genStmt(stmt Stmt) returns bool
 		if stmt.kind == StmtKind.returnStmt 'return'
 			if stmt.hasValue 'hasValue'
-				var temp = genExpr(stmt.expr)
-				emit("    ret i32 {temp}")
+				if let temp = genExpr(stmt.expr) 'validExpr'
+					emit("    ret i32 {temp}")
+				end 'validExpr' else 'invalidExpr'
+					return false
+				end 'invalidExpr'
 			end 'hasValue' else 'noValue'
 				emit("    ret void")
 			end 'noValue'
-		end 'return'
+		end 'return' else if stmt.kind == StmtKind.letStmt 'let'
+			if let valueTemp = genExpr(stmt.expr) 'validExpr'
+				let varTemp = newTemp()
+				emit("    {varTemp} = copy i32 {valueTemp}")
+				localVars.insert(stmt.name, varTemp)
+			end 'validExpr' else 'invalidExpr'
+				return false
+			end 'invalidExpr'
+		end 'let' else 'unknown-stmt'
+			// Unsupported statement kind
+			return false
+		end 'unknown-stmt'
 
-		if stmt.kind == StmtKind.letStmt 'let'
-			var valueTemp = genExpr(stmt.expr)
-			var varTemp = newTemp()
-			emit("    {varTemp} = copy i32 {valueTemp}")
-			localVars.insert(stmt.name, varTemp)
-		end 'let'
+		return true
 	end 'genStmt'
 
-	export function genExpr(expr Expr) returns string
+	export function genExpr(expr Expr) returns string or nil
 		if expr.kind == ExprKind.intLiteral 'int'
-			return formatInt(expr.intValue)
+			return "{expr.intValue}"
 		end 'int'
 
 		if expr.kind == ExprKind.varRef 'var'
 			return localVars.get(expr.name)
 		end 'var'
 
-		return "0"
+		return nil
 	end 'genExpr'
 end 'CodeGen'
 
-function formatInt(value int) returns string
-	if value == 0 'zero'
-		return "0"
-	end 'zero'
 
-	var result = ""
-	var n = value
-	if n < 0 'neg'
-		result = "-"
-		n = 0 - n
-	end 'neg'
 
-	var digits = ""
-	while n > 0 'digitLoop'
-		var digit = n mod 10
-		var digitChar = match digit 'toChar'
-			0 gives '0'
-			1 gives '1'
-			2 gives '2'
-			3 gives '3'
-			4 gives '4'
-			5 gives '5'
-			6 gives '6'
-			7 gives '7'
-			8 gives '8'
-			default gives '9'
-		end 'toChar'
-		digits = "{digitChar}{digits}"
-		n = trunc(n / 10)
-	end 'digitLoop'
 
-	return "{result}{digits}"
-end 'formatInt'
 

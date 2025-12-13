@@ -332,6 +332,74 @@ std::vector<SemanticTokensProvider::SemanticToken> SemanticTokensProvider::findT
 	return tokens;
 }
 
+// Helper to find ranges of string literal content (excluding interpolation expressions)
+// Returns ranges that are pure string content, NOT inside {...} interpolation
+static std::vector<std::pair<size_t, size_t>> findStringLiteralRanges(const std::string &line) {
+	std::vector<std::pair<size_t, size_t>> ranges;
+	bool inString = false;
+	bool inInterpolation = false;
+	int braceDepth = 0;
+	size_t literalStart = 0;
+
+	for (size_t i = 0; i < line.size(); ++i) {
+		char c = line[i];
+
+		// Handle escape sequences inside strings (but not in interpolation)
+		if (c == '\\' && inString && !inInterpolation && i + 1 < line.size()) {
+			++i; // Skip the escaped character
+			continue;
+		}
+
+		if (c == '"' && !inInterpolation) {
+			if (inString) {
+				// End of string - save any remaining literal content
+				if (i > literalStart) {
+					ranges.push_back({literalStart, i});
+				}
+				// Include the closing quote
+				ranges.push_back({i, i + 1});
+				inString = false;
+			} else {
+				// Start of string - the opening quote is string content
+				literalStart = i;
+				inString = true;
+			}
+		} else if (inString) {
+			if (c == '{' && !inInterpolation) {
+				// Start of interpolation - save literal content before it
+				if (i > literalStart) {
+					ranges.push_back({literalStart, i});
+				}
+				inInterpolation = true;
+				braceDepth = 1;
+			} else if (inInterpolation) {
+				if (c == '{') {
+					++braceDepth;
+				} else if (c == '}') {
+					--braceDepth;
+					if (braceDepth == 0) {
+						// End of interpolation - literal content starts after }
+						literalStart = i + 1;
+						inInterpolation = false;
+					}
+				}
+			}
+		}
+	}
+
+	return ranges;
+}
+
+// Helper to check if a position is inside any string literal range (excluding interpolations)
+static bool isInsideStringLiteral(size_t pos, const std::vector<std::pair<size_t, size_t>> &stringRanges) {
+	for (const auto &range : stringRanges) {
+		if (pos >= range.first && pos < range.second) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void SemanticTokensProvider::findTypesInLine(
 	const std::string &line,
 	int lineNumber,
@@ -346,6 +414,9 @@ void SemanticTokensProvider::findTypesInLine(
 	if (firstNonSpace != std::string::npos && line.substr(firstNonSpace, 2) == "//") {
 		return;
 	}
+
+	// Find all string literal ranges to skip (excludes interpolation expressions)
+	std::vector<std::pair<size_t, size_t>> stringRanges = findStringLiteralRanges(line);
 
 	// Track positions to skip (definition sites already handled by block identifiers)
 	std::set<size_t> skipPositions;
@@ -402,6 +473,11 @@ void SemanticTokensProvider::findTypesInLine(
 
 		// Skip if this is a definition site (already handled as block label)
 		if (skipPositions.count(start) > 0) {
+			continue;
+		}
+
+		// Skip if this identifier is inside a string literal (but not in interpolation)
+		if (isInsideStringLiteral(start, stringRanges)) {
 			continue;
 		}
 

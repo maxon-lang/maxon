@@ -1,10 +1,10 @@
 // Parser for the Maxon language
 
 export type Parser
-	var tokens array of Token
-	var pos int
-	var hadError bool
-	var errorMessage string
+	let tokens array of Token
+	let pos int
+	let hadError bool
+	let errorMessage string
 
 	export function create(tokens array of Token) returns Parser
 		return Parser{tokens: tokens, pos: 0, hadError: false, errorMessage: ""}
@@ -69,7 +69,7 @@ export type Parser
 	end 'skipNewlines'
 
 	export function currentLoc() returns SourceLoc
-		var tok = peek()
+		let tok = peek()
 		return SourceLoc.create(tok.line, tok.column)
 	end 'currentLoc'
 
@@ -81,32 +81,40 @@ export type Parser
 		return TypeRef.makeInt()
 	end 'parseType'
 
-	export function parseExpression() returns Expr
-		var loc = currentLoc()
+	export function parseExpression() returns Expr or nil
+		let loc = currentLoc()
 
 		if matchToken(TokenType.intLiteral) 'int'
-			var value = parseInt(previous().lexeme)
-			return Expr.makeIntLiteral(value, loc)
+			if let value = int.parse(previous().lexeme) 'valid_int'
+				return Expr.makeIntLiteral(value, loc)
+			end 'valid_int' else 'invalid_int'
+				error("Invalid integer literal")
+				return nil
+			end 'invalid_int'
 		end 'int'
 
 		if matchToken(TokenType.identifier) 'ident'
-			var name = previous().lexeme
+			let name = previous().lexeme
 			return Expr.makeVarRef(name, loc)
 		end 'ident'
 
 		error("Expected expression")
-		return Expr.makeIntLiteral(0, loc)
+		return nil
 	end 'parseExpression'
 
-	export function parseStatement() returns Stmt
+	export function parseStatement() returns Stmt or nil
 		skipNewlines()
-		var loc = currentLoc()
+		let loc = currentLoc()
 
 		if matchToken(TokenType.kwLet) 'let'
-			var name = expect(TokenType.identifier, "Expected variable name").lexeme
+			let name = expect(TokenType.identifier, "Expected variable name").lexeme
 			expect(TokenType.equals, "Expected '=' after variable name")
-			var value = parseExpression()
-			return Stmt.makeLet(name, value, loc)
+			if let value = parseExpression() 'valid_expr'
+				return Stmt.makeLet(name, value, loc)
+			end 'valid_expr' else 'invalid_expr'
+				error("Invalid expression in let statement")
+				return nil
+			end 'invalid_expr'
 		end 'let'
 
 		if matchToken(TokenType.kwReturn) 'return'
@@ -114,8 +122,12 @@ export type Parser
 			if check(TokenType.newline) or isAtEnd() or check(TokenType.kwEnd) 'noValue'
 				return Stmt.makeReturn(Expr.makeIntLiteral(0, loc), false, loc)
 			end 'noValue'
-			var value = parseExpression()
-			return Stmt.makeReturn(value, true, loc)
+			if let value = parseExpression() 'valid_expr'
+				return Stmt.makeReturn(value, true, loc)
+			end 'valid_expr' else 'invalid_expr'
+				error("Invalid expression in return statement")
+				return nil
+			end 'invalid_expr'
 		end 'return'
 
 		error("Expected statement")
@@ -123,8 +135,8 @@ export type Parser
 	end 'parseStatement'
 
 	export function parseFunction() returns FunctionDecl
-		var loc = currentLoc()
-		var name = expect(TokenType.identifier, "Expected function name").lexeme
+		let loc = currentLoc()
+		let name = expect(TokenType.identifier, "Expected function name").lexeme
 
 		expect(TokenType.lparen, "Expected '(' after function name")
 		expect(TokenType.rparen, "Expected ')' after parameters")
@@ -138,9 +150,13 @@ export type Parser
 
 		var body = array of Stmt
 		while not check(TokenType.kwEnd) and not isAtEnd() 'body'
-			var stmt = parseStatement()
-			body.push(stmt)
-			skipNewlines()
+			if let stmt = parseStatement() 'valid_stmt'
+				body.push(stmt)
+				skipNewlines()
+			end 'valid_stmt' else 'invalid_stmt'
+				error("Invalid statement in function body")
+				break
+			end 'invalid_stmt'
 		end 'body'
 
 		expect(TokenType.kwEnd, "Expected 'end' to close function")
@@ -150,13 +166,13 @@ export type Parser
 	end 'parseFunction'
 
 	export function parseProgram(fileName string) returns Program
-		var program = Program.create(fileName)
+		let program = Program.create(fileName)
 
 		skipNewlines()
 
 		while not isAtEnd() 'topLevel'
 			if matchToken(TokenType.kwFunction) 'function'
-				var fn = parseFunction()
+				let fn = parseFunction()
 				program.addFunction(fn)
 			end 'function' else 'notFunction'
 				error("Expected function declaration")
@@ -168,5 +184,8 @@ export type Parser
 		return program
 	end 'parseProgram'
 end 'Parser'
+
+
+
 
 

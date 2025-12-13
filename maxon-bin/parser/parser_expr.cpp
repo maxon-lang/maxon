@@ -1318,6 +1318,14 @@ std::unique_ptr<ExprAST> Parser::parseInterpolatedString(const std::string &str,
 						line, column);
 		}
 
+		// Fix up the expression's line/column to reflect actual source position
+		// The expression is inside the string at position braceStart+1 (after the {)
+		// Column offset: column (start of string) + 1 (opening quote) + braceStart + 1 (opening brace)
+		if (expr) {
+			expr->line = line;
+			expr->column = column + 1 + static_cast<int>(braceStart) + 1;
+		}
+
 		InterpolatedStringPart part;
 		part.isExpression = true;
 		part.expr = std::move(expr);

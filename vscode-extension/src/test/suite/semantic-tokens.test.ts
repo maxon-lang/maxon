@@ -345,4 +345,60 @@ suite('Semantic Tokens Test Suite', () => {
 		assert.strictEqual(fModifier, i6Modifier, 'Level 0 and level 6 should have same modifier (cycling)');
 		assert.strictEqual(i1Modifier, i7Modifier, 'Level 1 and level 7 should have same modifier (cycling)');
 	});
+
+	test('Should not provide semantic tokens for type names inside string literals', async function () {
+		// Test that type references inside strings are not highlighted as types
+		const content = [
+			"type Widget",
+			"    var name string",
+			"end 'Widget'",
+			"",
+			"function test() returns string",
+			'    var widget = Widget{name: "test"}',
+			'    return "The Widget is {widget.name}"',
+			"end 'test'"
+		].join('\n');
+
+		testDocument = await createTestFile('test_string_interpolation.maxon', content);
+
+		// Wait for LSP to process the document
+		await new Promise(resolve => setTimeout(resolve, 500));
+
+		const semanticTokens = await vscode.commands.executeCommand<vscode.SemanticTokens>(
+			'vscode.provideDocumentSemanticTokens',
+			testDocument.uri
+		);
+
+		assert.ok(semanticTokens, 'Should receive semantic tokens');
+
+		// Parse all tokens to find their positions and types
+		const TYPE_TOKEN = 1; // Type token type index
+		const tokens: Array<{ line: number; char: number; length: number; type: number; }> = [];
+		let currentLine = 0;
+		let currentChar = 0;
+
+		for (let i = 0; i < semanticTokens.data.length; i += 5) {
+			const deltaLine = semanticTokens.data[i];
+			const deltaChar = semanticTokens.data[i + 1];
+			const length = semanticTokens.data[i + 2];
+			const type = semanticTokens.data[i + 3];
+
+			currentLine += deltaLine;
+			currentChar = (deltaLine === 0) ? currentChar + deltaChar : deltaChar;
+
+			tokens.push({ line: currentLine, char: currentChar, length, type });
+		}
+
+		// Line 6 (0-indexed) contains: 'return "The Widget is {widget.name}"'
+		// The word "Widget" inside the string (after "The ") should NOT be a type token
+		const stringLine = 6;
+		const typeTokensOnStringLine = tokens.filter(t =>
+			t.line === stringLine && t.type === TYPE_TOKEN
+		);
+
+		// There should be NO type tokens on the line with the string literal
+		// (the Widget usage on line 5 is outside a string, which is fine)
+		assert.strictEqual(typeTokensOnStringLine.length, 0,
+			'Type names inside string literals should not be highlighted as types');
+	});
 });
