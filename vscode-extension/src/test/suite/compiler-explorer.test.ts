@@ -56,7 +56,7 @@ end 'add'`;
 			// Verify IR contains expected elements
 			assert.ok(response.ir.includes('define'), 'IR should contain function definition');
 			assert.ok(response.ir.includes('add'), 'IR should contain function name');
-			assert.ok(response.ir.includes('i32'), 'IR should contain int type');
+			assert.ok(response.ir.includes('i64'), 'IR should contain int type');
 		});
 
 		test('Should generate optimized IR when optimize=true', async function () {

@@ -41,7 +41,7 @@ The runtime provides low-level functionality that cannot be written in pure Maxo
 
 | Maxon Type | MIR Type |
 |------------|----------|
-| `int`      | `i32`    |
+| `int`      | `i64`    |
 | `float`    | `f64`    |
 | `bool`     | `i1`     |
 | `byte`     | `i8`     |
@@ -68,10 +68,10 @@ define <return_type> @<function_name>(<params>) {
 Parameters are declared as `<type> %<name>`:
 
 ```
-define i32 @add(i32 %a, i32 %b) {
+define i64 @add(i64 %a, i64 %b) {
 entry:
-    %result = add i32 %a, %b
-    ret i32 %result
+    %result = add i64 %a, %b
+    ret i64 %result
 }
 ```
 
@@ -96,10 +96,10 @@ declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
 Parameters are passed by value. Use `%<name>` to reference them:
 
 ```
-define i32 @multiply(i32 %x, i32 %y) {
+define i64 @multiply(i64 %x, i64 %y) {
 entry:
-    %result = mul i32 %x, %y
-    ret i32 %result
+    %result = mul i64 %x, %y
+    ret i64 %result
 }
 ```
 
@@ -107,11 +107,11 @@ entry:
 
 #### Integer Parameters
 ```
-define i32 @process_int(i32 %value) {
+define i64 @process_int(i64 %value) {
 entry:
     ; Use %value directly
-    %doubled = mul i32 %value, 2
-    ret i32 %doubled
+    %doubled = mul i64 %value, 2
+    ret i64 %doubled
 }
 ```
 
@@ -126,7 +126,7 @@ entry:
 
 #### Pointer Parameters
 ```
-define void @process_buffer(ptr %buf, i32 %len) {
+define void @process_buffer(ptr %buf, i64 %len) {
 entry:
     ; %buf is an opaque pointer - use load/store to access data
     %first_byte = load i8, ptr %buf
@@ -145,15 +145,15 @@ entry:
 
 #### Boolean Parameters
 ```
-define i32 @conditional(i1 %flag, i32 %a, i32 %b) {
+define i64 @conditional(i1 %flag, i64 %a, i64 %b) {
 entry:
     br i1 %flag, label %use_a, label %use_b
 
 use_a:
-    ret i32 %a
+    ret i64 %a
 
 use_b:
-    ret i32 %b
+    ret i64 %b
 }
 ```
 
@@ -161,9 +161,9 @@ use_b:
 
 #### Returning Integers
 ```
-define i32 @return_int() {
+define i64 @return_int() {
 entry:
-    ret i32 42
+    ret i64 42
 }
 ```
 
@@ -194,16 +194,16 @@ entry:
 
 #### Returning Booleans
 ```
-define i1 @return_bool(i32 %x) {
+define i1 @return_bool(i64 %x) {
 entry:
-    %is_positive = icmp sgt i32 %x, 0
+    %is_positive = icmp sgt i64 %x, 0
     ret i1 %is_positive
 }
 ```
 
 #### Returning Void
 ```
-define void @no_return(i32 %x) {
+define void @no_return(i64 %x) {
 entry:
     ; do something
     ret void
@@ -215,13 +215,13 @@ entry:
 ### Arithmetic (Integer)
 
 ```
-%result = add i32 %a, %b       ; Addition
-%result = sub i32 %a, %b       ; Subtraction
-%result = mul i32 %a, %b       ; Multiplication
-%result = sdiv i32 %a, %b      ; Signed division
-%result = srem i32 %a, %b      ; Signed remainder (modulo)
-%result = udiv i32 %a, %b      ; Unsigned division
-%result = urem i32 %a, %b      ; Unsigned remainder
+%result = add i64 %a, %b       ; Addition
+%result = sub i64 %a, %b       ; Subtraction
+%result = mul i64 %a, %b       ; Multiplication
+%result = sdiv i64 %a, %b      ; Signed division
+%result = srem i64 %a, %b      ; Signed remainder (modulo)
+%result = udiv i64 %a, %b      ; Unsigned division
+%result = urem i64 %a, %b      ; Unsigned remainder
 ```
 
 ### Arithmetic (Float)
@@ -238,27 +238,27 @@ entry:
 ### Bitwise Operations
 
 ```
-%result = and i32 %a, %b       ; Bitwise AND
-%result = or i32 %a, %b        ; Bitwise OR
-%result = xor i32 %a, %b       ; Bitwise XOR
-%result = shl i32 %a, %b       ; Shift left
-%result = ashr i32 %a, %b      ; Arithmetic shift right (sign-extend)
-%result = lshr i32 %a, %b      ; Logical shift right (zero-fill)
+%result = and i64 %a, %b       ; Bitwise AND
+%result = or i64 %a, %b        ; Bitwise OR
+%result = xor i64 %a, %b       ; Bitwise XOR
+%result = shl i64 %a, %b       ; Shift left
+%result = ashr i64 %a, %b      ; Arithmetic shift right (sign-extend)
+%result = lshr i64 %a, %b      ; Logical shift right (zero-fill)
 ```
 
 ### Comparisons (Integer)
 
 ```
-%result = icmp eq i32 %a, %b   ; Equal
-%result = icmp ne i32 %a, %b   ; Not equal
-%result = icmp slt i32 %a, %b  ; Signed less than
-%result = icmp sle i32 %a, %b  ; Signed less than or equal
-%result = icmp sgt i32 %a, %b  ; Signed greater than
-%result = icmp sge i32 %a, %b  ; Signed greater than or equal
-%result = icmp ult i32 %a, %b  ; Unsigned less than
-%result = icmp ule i32 %a, %b  ; Unsigned less than or equal
-%result = icmp ugt i32 %a, %b  ; Unsigned greater than
-%result = icmp uge i32 %a, %b  ; Unsigned greater than or equal
+%result = icmp eq i64 %a, %b   ; Equal
+%result = icmp ne i64 %a, %b   ; Not equal
+%result = icmp slt i64 %a, %b  ; Signed less than
+%result = icmp sle i64 %a, %b  ; Signed less than or equal
+%result = icmp sgt i64 %a, %b  ; Signed greater than
+%result = icmp sge i64 %a, %b  ; Signed greater than or equal
+%result = icmp ult i64 %a, %b  ; Unsigned less than
+%result = icmp ule i64 %a, %b  ; Unsigned less than or equal
+%result = icmp ugt i64 %a, %b  ; Unsigned greater than
+%result = icmp uge i64 %a, %b  ; Unsigned greater than or equal
 ```
 
 ### Comparisons (Float)
@@ -278,20 +278,20 @@ Note: "Ordered" means neither operand is NaN.
 
 #### Stack Allocation
 ```
-%ptr = alloca i32              ; Allocate space for one i32
-%arr = alloca [10 x i32]       ; Allocate array of 10 i32s
+%ptr = alloca i64              ; Allocate space for one i64
+%arr = alloca [10 x i64]       ; Allocate array of 10 i64s
 ```
 
 #### Load from Memory
 ```
-%value = load i32, ptr %ptr    ; Load i32 from pointer
+%value = load i64, ptr %ptr    ; Load i64 from pointer
 %byte = load i8, ptr %buf      ; Load single byte
 %float = load f64, ptr %fptr   ; Load float
 ```
 
 #### Store to Memory
 ```
-store i32 %value, ptr %ptr     ; Store i32 to pointer
+store i64 %value, ptr %ptr     ; Store i64 to pointer
 store i8 %byte, ptr %buf       ; Store byte
 store f64 %float, ptr %fptr    ; Store float
 ```
@@ -299,13 +299,13 @@ store f64 %float, ptr %fptr    ; Store float
 #### Get Element Pointer (GEP)
 ```
 ; Array indexing
-%elem_ptr = getelementptr i32, ptr %arr, i64 %index
+%elem_ptr = getelementptr i64, ptr %arr, i64 %index
 
 ; Struct field access (by byte offset)
 %field_ptr = getelementptr i8, ptr %struct_ptr, i64 8
 
 ; Multi-dimensional
-%elem = getelementptr [10 x i32], ptr %arr2d, i64 %row, i64 %col
+%elem = getelementptr [10 x i64], ptr %arr2d, i64 %row, i64 %col
 ```
 
 ### Type Conversions
@@ -346,7 +346,7 @@ br i1 %condition, label %true_block, label %false_block
 
 #### Return
 ```
-ret i32 %value                 ; Return with value
+ret i64 %value                 ; Return with value
 ret void                       ; Return from void function
 ```
 
@@ -354,7 +354,7 @@ ret void                       ; Return from void function
 
 ```
 ; Call with return value
-%result = call i32 @add(i32 %a, i32 %b)
+%result = call i64 @add(i64 %a, i64 %b)
 
 ; Call void function
 call void @print(ptr %msg)
@@ -368,94 +368,93 @@ call void @print(ptr %msg)
 ### Loop Pattern
 
 ```
-define i32 @sum_to_n(i32 %n) {
+define i64 @sum_to_n(i64 %n) {
 entry:
-    %sum = alloca i32
-    %i = alloca i32
-    store i32 0, ptr %sum
-    store i32 0, ptr %i
+    %sum = alloca i64
+    %i = alloca i64
+    store i64 0, ptr %sum
+    store i64 0, ptr %i
     br label %loop_cond
 
 loop_cond:
-    %ival = load i32, ptr %i
-    %cond = icmp slt i32 %ival, %n
+    %ival = load i64, ptr %i
+    %cond = icmp slt i64 %ival, %n
     br i1 %cond, label %loop_body, label %loop_end
 
 loop_body:
     ; sum += i
-    %sumval = load i32, ptr %sum
-    %newsum = add i32 %sumval, %ival
-    store i32 %newsum, ptr %sum
+    %sumval = load i64, ptr %sum
+    %newsum = add i64 %sumval, %ival
+    store i64 %newsum, ptr %sum
     ; i++
-    %inext = add i32 %ival, 1
-    store i32 %inext, ptr %i
+    %inext = add i64 %ival, 1
+    store i64 %inext, ptr %i
     br label %loop_cond
 
 loop_end:
-    %result = load i32, ptr %sum
-    ret i32 %result
+    %result = load i64, ptr %sum
+    ret i64 %result
 }
 ```
 
 ### Phi Node Pattern (SSA-style loop)
 
 ```
-define i32 @count_loop(i32 %n) {
+define i64 @count_loop(i64 %n) {
 entry:
     br label %loop
 
 loop:
-    %i = phi i32 [0, %entry], [%next_i, %loop]
-    %done = icmp sge i32 %i, %n
+    %i = phi i64 [0, %entry], [%next_i, %loop]
+    %done = icmp sge i64 %i, %n
     br i1 %done, label %exit, label %continue
 
 continue:
-    %next_i = add i32 %i, 1
+    %next_i = add i64 %i, 1
     br label %loop
 
 exit:
-    ret i32 %i
+    ret i64 %i
 }
 ```
 
 ### Null Check Pattern
 
 ```
-define i32 @safe_deref(ptr %p) {
+define i64 @safe_deref(ptr %p) {
 entry:
     %is_null = icmp eq ptr %p, null
     br i1 %is_null, label %null_case, label %valid_case
 
 null_case:
-    ret i32 -1
+    ret i64 -1
 
 valid_case:
-    %value = load i32, ptr %p
-    ret i32 %value
+    %value = load i64, ptr %p
+    ret i64 %value
 }
 ```
 
 ### String Processing Pattern
 
 ```
-define i32 @strlen(ptr %str) {
+define i64 @strlen(ptr %str) {
 entry:
     br label %loop
 
 loop:
-    %i = phi i32 [0, %entry], [%next_i, %continue]
-    %i64 = sext i32 %i to i64
-    %charptr = getelementptr i8, ptr %str, i64 %i64
+    %i = phi i64 [0, %entry], [%next_i, %continue]
+    %charptr = getelementptr i8, ptr %str, i64 %i
     %char = load i8, ptr %charptr
     %is_null = icmp eq i8 %char, 0
     br i1 %is_null, label %done, label %continue
 
 continue:
-    %next_i = add i32 %i, 1
+    %next_i = add i64 %i, 1
     br label %loop
 
 done:
-    ret i32 %i
+    ret i64 %i
 }
 ```
 

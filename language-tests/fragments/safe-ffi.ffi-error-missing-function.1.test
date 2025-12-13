@@ -7,7 +7,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 89
+; Instructions: 86
 
 @__ffi_dll_ffi_test_lib = constant [17 x i8] c"ffi_test_lib.dll\00"
 @__ffi_func_0 = constant [21 x i8] c"nonexistent_function\00"
@@ -15,7 +15,7 @@ end 'main'
 @__ffi_dll_error_0 = constant [50 x i8] c"FFI Error: Failed to load DLL 'ffi_test_lib.dll'\0A\00"
 @__ffi_func_error_0 = constant [76 x i8] c"FFI Error: Function 'nonexistent_function' not found in 'ffi_test_lib.dll'\0A\00"
 
-define i32 @main() {
+define i64 @main() {
 entry0:
   %0 = call i32 @__ffi_parent_init()
   %1 = icmp eq i32 %0, 0
@@ -29,44 +29,41 @@ ffi_init_ok1:
   %5 = getelementptr i8, ptr %2, i64 8
   store i32 2, ptr %5
   %6 = getelementptr i8, ptr %2, i64 16
-  %7 = zext i32 5 to i64
-  store i64 %7, ptr %6
-  %8 = getelementptr i8, ptr %2, i64 24
-  %9 = zext i32 3 to i64
-  store i64 %9, ptr %8
-  %10 = load ptr, ptr @ffi_parent_req_sem
-  %11 = call i1 @ffi_signal_semaphore(ptr %10)
-  %12 = load ptr, ptr @ffi_parent_rsp_sem
-  %13 = load ptr, ptr @ffi_parent_worker_handle
-  %14 = call i32 @ffi_wait_with_crash_detect(ptr %12, ptr %13)
-  %15 = icmp eq i32 %14, 1
-  br i1 %15, label %ffi_worker_crashed3, label %ffi_check_status4
+  store i64 5, ptr %6
+  %7 = getelementptr i8, ptr %2, i64 24
+  store i64 3, ptr %7
+  %8 = load ptr, ptr @ffi_parent_req_sem
+  %9 = call i1 @ffi_signal_semaphore(ptr %8)
+  %10 = load ptr, ptr @ffi_parent_rsp_sem
+  %11 = load ptr, ptr @ffi_parent_worker_handle
+  %12 = call i32 @ffi_wait_with_crash_detect(ptr %10, ptr %11)
+  %13 = icmp eq i32 %12, 1
+  br i1 %13, label %ffi_worker_crashed3, label %ffi_check_status4
 ffi_init_fail2:
   call void @exit(i32 99)
   ret void
 ffi_worker_crashed3:
-  %16 = call i32 @write_stdout(ptr @__ffi_crash_error_0, i32 34)
+  %14 = call i32 @write_stdout(ptr @__ffi_crash_error_0, i32 34)
   call void @exit(i32 103)
   ret void
 ffi_check_status4:
-  %17 = getelementptr i8, ptr %2, i64 12
-  %18 = load i32, ptr %17
-  %19 = icmp eq i32 %18, 0
-  br i1 %19, label %ffi_call_ok5, label %ffi_check_error6
+  %15 = getelementptr i8, ptr %2, i64 12
+  %16 = load i32, ptr %15
+  %17 = icmp eq i32 %16, 0
+  br i1 %17, label %ffi_call_ok5, label %ffi_check_error6
 ffi_call_ok5:
-  %23 = getelementptr i8, ptr %2, i64 144
-  %24 = load i64, ptr %23
-  %25 = trunc i64 %24 to i32
-  ret i32 %25
+  %21 = getelementptr i8, ptr %2, i64 144
+  %22 = load i64, ptr %21
+  ret i64 %22
 ffi_check_error6:
-  %20 = icmp eq i32 %18, 100
-  br i1 %20, label %ffi_dll_error7, label %ffi_func_error8
+  %18 = icmp eq i32 %16, 100
+  br i1 %18, label %ffi_dll_error7, label %ffi_func_error8
 ffi_dll_error7:
-  %21 = call i32 @write_stdout(ptr @__ffi_dll_error_0, i32 49)
+  %19 = call i32 @write_stdout(ptr @__ffi_dll_error_0, i32 49)
   call void @exit(i32 100)
   ret void
 ffi_func_error8:
-  %22 = call i32 @write_stdout(ptr @__ffi_func_error_0, i32 75)
+  %20 = call i32 @write_stdout(ptr @__ffi_func_error_0, i32 75)
   call void @exit(i32 101)
   ret void
 }
@@ -140,9 +137,9 @@ check_worker1:
   %1 = icmp ne i32 %0, 0
   br i1 %1, label %run_worker3, label %run_main2
 run_main2:
-  %3 = call i32 @main()
+  %3 = call i64 @main()
   call void @__ffi_parent_cleanup()
-  call void @exit(i32 %3)
+  call void @exit(i64 %3)
   ret void
 run_worker3:
   %2 = call i32 @__ffi_worker_main()
@@ -158,7 +155,7 @@ declare void @__ffi_parent_cleanup()
 
 ---
 ; Module: test.maxon
-; Instructions: 92
+; Instructions: 89
 
 @__ffi_dll_ffi_test_lib = constant [17 x i8] c"ffi_test_lib.dll\00"
 @__ffi_func_0 = constant [21 x i8] c"nonexistent_function\00"
@@ -166,7 +163,7 @@ declare void @__ffi_parent_cleanup()
 @__ffi_dll_error_0 = constant [50 x i8] c"FFI Error: Failed to load DLL 'ffi_test_lib.dll'\0A\00"
 @__ffi_func_error_0 = constant [76 x i8] c"FFI Error: Function 'nonexistent_function' not found in 'ffi_test_lib.dll'\0A\00"
 
-define i32 @main() {
+define i64 @main() {
 entry0:
   %0 = call i32 @__ffi_parent_init()
   %1 = icmp eq i32 %0, 0
@@ -180,47 +177,44 @@ ffi_init_ok1:
   %5 = getelementptr i8, ptr %2, i64 8
   store i32 2, ptr %5
   %6 = getelementptr i8, ptr %2, i64 16
-  %7 = zext i32 5 to i64
-  store i64 %7, ptr %6
-  %8 = getelementptr i8, ptr %2, i64 24
-  %9 = zext i32 3 to i64
-  store i64 %9, ptr %8
-  %10 = load ptr, ptr @ffi_parent_req_sem
-  %11 = call i1 @ffi_signal_semaphore(ptr %10)
-  %12 = load ptr, ptr @ffi_parent_rsp_sem
-  %13 = load ptr, ptr @ffi_parent_worker_handle
-  %14 = call i32 @ffi_wait_with_crash_detect(ptr %12, ptr %13)
-  %15 = icmp eq i32 %14, 1
-  br i1 %15, label %ffi_worker_crashed3, label %ffi_check_status4
+  store i64 5, ptr %6
+  %7 = getelementptr i8, ptr %2, i64 24
+  store i64 3, ptr %7
+  %8 = load ptr, ptr @ffi_parent_req_sem
+  %9 = call i1 @ffi_signal_semaphore(ptr %8)
+  %10 = load ptr, ptr @ffi_parent_rsp_sem
+  %11 = load ptr, ptr @ffi_parent_worker_handle
+  %12 = call i32 @ffi_wait_with_crash_detect(ptr %10, ptr %11)
+  %13 = icmp eq i32 %12, 1
+  br i1 %13, label %ffi_worker_crashed3, label %ffi_check_status4
 ffi_init_fail2:
   call void @exit(i32 99)
   ret void
 ffi_worker_crashed3:
-  %16 = call i32 @write_stdout(ptr @__ffi_crash_error_0, i32 34)
+  %14 = call i32 @write_stdout(ptr @__ffi_crash_error_0, i32 34)
   call void @exit(i32 103)
   ret void
 ffi_check_status4:
-  %17 = getelementptr i8, ptr %2, i64 12
-  %18 = load i32, ptr %17
-  %19 = icmp eq i32 %18, 0
-  br i1 %19, label %ffi_call_ok5, label %ffi_check_error6
+  %15 = getelementptr i8, ptr %2, i64 12
+  %16 = load i32, ptr %15
+  %17 = icmp eq i32 %16, 0
+  br i1 %17, label %ffi_call_ok5, label %ffi_check_error6
 ffi_call_ok5:
-  %23 = getelementptr i8, ptr %2, i64 144
+  %21 = getelementptr i8, ptr %2, i64 144
+  %22 = load i64, ptr %21
+  %23 = alloca i64
+  store i64 %22, ptr %23
   %24 = load i64, ptr %23
-  %25 = trunc i64 %24 to i32
-  %26 = alloca i32
-  store i32 %25, ptr %26
-  %27 = load i32, ptr %26
-  ret i32 %27
+  ret i64 %24
 ffi_check_error6:
-  %20 = icmp eq i32 %18, 100
-  br i1 %20, label %ffi_dll_error7, label %ffi_func_error8
+  %18 = icmp eq i32 %16, 100
+  br i1 %18, label %ffi_dll_error7, label %ffi_func_error8
 ffi_dll_error7:
-  %21 = call i32 @write_stdout(ptr @__ffi_dll_error_0, i32 49)
+  %19 = call i32 @write_stdout(ptr @__ffi_dll_error_0, i32 49)
   call void @exit(i32 100)
   ret void
 ffi_func_error8:
-  %22 = call i32 @write_stdout(ptr @__ffi_func_error_0, i32 75)
+  %20 = call i32 @write_stdout(ptr @__ffi_func_error_0, i32 75)
   call void @exit(i32 101)
   ret void
 }
@@ -294,9 +288,9 @@ check_worker1:
   %1 = icmp ne i32 %0, 0
   br i1 %1, label %run_worker3, label %run_main2
 run_main2:
-  %3 = call i32 @main()
+  %3 = call i64 @main()
   call void @__ffi_parent_cleanup()
-  call void @exit(i32 %3)
+  call void @exit(i64 %3)
   ret void
 run_worker3:
   %2 = call i32 @__ffi_worker_main()

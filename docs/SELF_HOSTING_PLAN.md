@@ -25,7 +25,7 @@ MIR Optimization → Register Allocation → x86-64 Code Generation → PE/ELF B
 ### Implemented Language Features
 
 #### Type System
-- Primitive types: `int` (32-bit), `float` (64-bit), `bool`, `character`, `ptr`
+- Primitive types: `int` (64-bit), `float` (64-bit), `bool`, `character`, `ptr`
 - Fixed-size arrays: `[N]type` with `.length` property
 - Structs: User-defined types with field access and nested structs
 - Type conversions: Explicit casting with `as` operator
@@ -54,7 +54,7 @@ MIR Optimization → Register Allocation → x86-64 Code Generation → PE/ELF B
 
 **Complete SSA-based IR with ~50 instructions:**
 - Full SSA form with phi nodes
-- Comprehensive type system (i1, i8, i32, i64, f64, ptr, arrays, structs)
+- Comprehensive type system (i1, i8, i64, f64, ptr, arrays, structs)
 - Complete instruction set (arithmetic, comparisons, memory ops, control flow, calls)
 - Type conversions and bitcasts
 - GEP (GetElementPtr) for complex addressing

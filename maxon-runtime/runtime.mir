@@ -3,7 +3,7 @@
 ; This file contains platform-independent runtime functions
 
 ; External declarations (provided by platform-specific runtime)
-declare i32 @write_stdout(ptr %buf, i32 %count)
+declare i64 @write_stdout(ptr %buf, i64 %count)
 
 ;==============================================================================
 ; Allocation Tracking (for --track-allocs debugging)
@@ -109,23 +109,24 @@ print_msg:
 
 print_with_tag:
     ; Print "ALLOC #<id>: <size> bytes (<tag>)\n"
-    call i32 @write_stdout(ptr @__alloc_msg, i32 7)
+    call i64 @write_stdout(ptr @__alloc_msg, i64 7)
     call void @__print_i64(i64 %id)
-    call i32 @write_stdout(ptr @__colon_msg, i32 2)
+    call i64 @write_stdout(ptr @__colon_msg, i64 2)
     call void @__print_i64(i64 %size)
-    call i32 @write_stdout(ptr @__bytes_paren_msg, i32 8)
+    call i64 @write_stdout(ptr @__bytes_paren_msg, i64 8)
     %tag_len = call i32 @__strlen(ptr %tag)
-    call i32 @write_stdout(ptr %tag, i32 %tag_len)
-    call i32 @write_stdout(ptr @__close_paren_msg, i32 2)
+    %tag_len64 = sext i32 %tag_len to i64
+    call i64 @write_stdout(ptr %tag, i64 %tag_len64)
+    call i64 @write_stdout(ptr @__close_paren_msg, i64 2)
     br label %done
 
 print_no_tag:
     ; Print "ALLOC #<id>: <size> bytes\n"
-    call i32 @write_stdout(ptr @__alloc_msg, i32 7)
+    call i64 @write_stdout(ptr @__alloc_msg, i64 7)
     call void @__print_i64(i64 %id)
-    call i32 @write_stdout(ptr @__colon_msg, i32 2)
+    call i64 @write_stdout(ptr @__colon_msg, i64 2)
     call void @__print_i64(i64 %size)
-    call i32 @write_stdout(ptr @__bytes_msg, i32 7)
+    call i64 @write_stdout(ptr @__bytes_msg, i64 7)
     br label %done
 
 done:
@@ -237,23 +238,24 @@ print_msg:
 
 print_with_tag:
     ; Print "FREE #<id>: <size> bytes (<tag>)\n"
-    call i32 @write_stdout(ptr @__free_msg, i32 6)
+    call i64 @write_stdout(ptr @__free_msg, i64 6)
     call void @__print_i64(i64 %alloc_id)
-    call i32 @write_stdout(ptr @__colon_msg, i32 2)
+    call i64 @write_stdout(ptr @__colon_msg, i64 2)
     call void @__print_i64(i64 %size)
-    call i32 @write_stdout(ptr @__bytes_paren_msg, i32 8)
+    call i64 @write_stdout(ptr @__bytes_paren_msg, i64 8)
     %tag_len = call i32 @__strlen(ptr %tag)
-    call i32 @write_stdout(ptr %tag, i32 %tag_len)
-    call i32 @write_stdout(ptr @__close_paren_msg, i32 2)
+    %tag_len64 = sext i32 %tag_len to i64
+    call i64 @write_stdout(ptr %tag, i64 %tag_len64)
+    call i64 @write_stdout(ptr @__close_paren_msg, i64 2)
     br label %done
 
 print_no_tag:
     ; Print "FREE #<id>: <size> bytes\n"
-    call i32 @write_stdout(ptr @__free_msg, i32 6)
+    call i64 @write_stdout(ptr @__free_msg, i64 6)
     call void @__print_i64(i64 %alloc_id)
-    call i32 @write_stdout(ptr @__colon_msg, i32 2)
+    call i64 @write_stdout(ptr @__colon_msg, i64 2)
     call void @__print_i64(i64 %size)
-    call i32 @write_stdout(ptr @__bytes_msg, i32 7)
+    call i64 @write_stdout(ptr @__bytes_msg, i64 7)
     br label %done
 
 done:
@@ -308,7 +310,7 @@ check_leaks:
 
 print_leaks:
     ; Print leak header (includes trailing newline)
-    call i32 @write_stdout(ptr @__leak_header, i32 15)
+    call i64 @write_stdout(ptr @__leak_header, i64 15)
     br label %leak_loop
 
 leak_loop:
@@ -335,9 +337,9 @@ print_leak_entry:
     %leak_tag = load ptr, ptr %tag_ptr_ptr
 
     ; Print "LEAK #<id>: <size> bytes (<tag>)\n"
-    call i32 @write_stdout(ptr @__leak_msg, i32 6)
+    call i64 @write_stdout(ptr @__leak_msg, i64 6)
     call void @__print_i64(i64 %leak_id)
-    call i32 @write_stdout(ptr @__colon_msg, i32 2)
+    call i64 @write_stdout(ptr @__colon_msg, i64 2)
     call void @__print_i64(i64 %leak_size)
 
     ; Check if tag exists
@@ -345,14 +347,15 @@ print_leak_entry:
     br i1 %has_tag, label %print_leak_tag, label %print_leak_newline
 
 print_leak_tag:
-    call i32 @write_stdout(ptr @__bytes_paren_msg, i32 8)
+    call i64 @write_stdout(ptr @__bytes_paren_msg, i64 8)
     %tag_len = call i32 @__strlen(ptr %leak_tag)
-    call i32 @write_stdout(ptr %leak_tag, i32 %tag_len)
-    call i32 @write_stdout(ptr @__close_paren_msg, i32 2)
+    %tag_len64 = sext i32 %tag_len to i64
+    call i64 @write_stdout(ptr %leak_tag, i64 %tag_len64)
+    call i64 @write_stdout(ptr @__close_paren_msg, i64 2)
     br label %leak_continue
 
 print_leak_newline:
-    call i32 @write_stdout(ptr @__bytes_msg, i32 7)
+    call i64 @write_stdout(ptr @__bytes_msg, i64 7)
     br label %leak_continue
 
 leak_continue:
@@ -361,26 +364,26 @@ leak_continue:
 
 print_stats:
     ; Print header (20 chars: newline + "=== ALLOC STATS ===")
-    call i32 @write_stdout(ptr @__summary_msg, i32 20)
+    call i64 @write_stdout(ptr @__summary_msg, i64 20)
 
     ; Print allocated bytes (12 chars: newline + "Allocated: ")
-    call i32 @write_stdout(ptr @__allocs_label, i32 12)
+    call i64 @write_stdout(ptr @__allocs_label, i64 12)
     %alloc_bytes = load i64, ptr @__alloc_bytes
     call void @__print_i64(i64 %alloc_bytes)
-    call i32 @write_stdout(ptr @__bytes_label, i32 6)
+    call i64 @write_stdout(ptr @__bytes_label, i64 6)
 
     ; Print freed bytes (12 chars: newline + "Freed:     ")
-    call i32 @write_stdout(ptr @__frees_label, i32 12)
+    call i64 @write_stdout(ptr @__frees_label, i64 12)
     %free_bytes = load i64, ptr @__free_bytes
     call void @__print_i64(i64 %free_bytes)
-    call i32 @write_stdout(ptr @__bytes_label, i32 6)
+    call i64 @write_stdout(ptr @__bytes_label, i64 6)
 
     ; Print leaked bytes (12 chars: newline + "Leaked:    ")
-    call i32 @write_stdout(ptr @__leaked_label, i32 12)
+    call i64 @write_stdout(ptr @__leaked_label, i64 12)
     %leaked = sub i64 %alloc_bytes, %free_bytes
     call void @__print_i64(i64 %leaked)
-    call i32 @write_stdout(ptr @__bytes_label, i32 6)
-    call i32 @write_stdout(ptr @__newline, i32 1)
+    call i64 @write_stdout(ptr @__bytes_label, i64 6)
+    call i64 @write_stdout(ptr @__newline, i64 1)
     br label %done
 
 done:
@@ -411,7 +414,7 @@ entry:
 print_zero:
     %zero_ptr = getelementptr [21 x i8], ptr %buf, i64 0, i64 0
     store i8 48, ptr %zero_ptr  ; '0'
-    call i32 @write_stdout(ptr %zero_ptr, i32 1)
+    call i64 @write_stdout(ptr %zero_ptr, i64 1)
     br label %done
 
 convert:
@@ -444,8 +447,7 @@ print_result:
     %start_int = ptrtoint ptr %start to i64
     %end_int = ptrtoint ptr %end_ptr to i64
     %len64 = sub i64 %end_int, %start_int
-    %len = trunc i64 %len64 to i32
-    call i32 @write_stdout(ptr %start, i32 %len)
+    call i64 @write_stdout(ptr %start, i64 %len64)
     br label %done
 
 done:

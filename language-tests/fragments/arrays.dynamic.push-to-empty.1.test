@@ -8,10 +8,10 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 90
+; Instructions: 89
 
-%__ManagedArrayData_int = type { ptr, i32, i32 }
-%array<int> = type { %__ManagedArrayData_int, i32 }
+%__ManagedArrayData_int = type { ptr, i64, i64 }
+%array<int> = type { %__ManagedArrayData_int, i64 }
 
 @.__tag.alloc.array grow = constant [11 x i8] c"array grow\00"
 @.__tag.free.array grow = constant [11 x i8] c"array grow\00"
@@ -23,7 +23,7 @@ declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
-define i32 @main() {
+define i64 @main() {
 entry0:
   %0 = call ptr @malloc(i64 8)
   %1 = alloca %array<int>
@@ -31,70 +31,70 @@ entry0:
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
   store ptr %0, ptr %3
   %4 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
-  store i32 0, ptr %4
+  store i64 0, ptr %4
   %5 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 2
-  store i32 0, ptr %5
+  store i64 0, ptr %5
   %6 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  store i32 0, ptr %6
-  %7 = call %array<int> @array<int>.push(ptr %1, i32 10)
-  %8 = call %array<int> @array<int>.push(ptr %1, i32 20)
-  %9 = call %array<int> @array<int>.push(ptr %1, i32 30)
+  store i64 0, ptr %6
+  %7 = call %array<int> @array<int>.push(ptr %1, i64 10)
+  %8 = call %array<int> @array<int>.push(ptr %1, i64 20)
+  %9 = call %array<int> @array<int>.push(ptr %1, i64 30)
   %17 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %18 = getelementptr %__ManagedArrayData_int, ptr %17, i32 0, i32 1
-  %19 = load i32, ptr %18
+  %19 = load i64, ptr %18
   %11 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %12 = getelementptr %__ManagedArrayData_int, ptr %11, i32 0, i32 0
   %13 = load ptr, ptr %12
   %14 = getelementptr %__ManagedArrayData_int, ptr %11, i32 0, i32 2
-  %15 = load i32, ptr %14
-  %16 = icmp sgt i32 %15, 0
+  %15 = load i64, ptr %14
+  %16 = icmp sgt i64 %15, 0
   br i1 %16, label %arr.release1, label %arr.skip2
 arr.release1:
   call void @_managed_array_release(ptr %13, ptr @.__tag.free.arr)
   br label %arr.skip2
 arr.skip2:
-  ret i32 %19
+  ret i64 %19
 }
 
-define %array<int> @array<int>.push(ptr %self, i32 %value) {
+define %array<int> @array<int>.push(ptr %self, i64 %value) {
 entry0:
   %3 = getelementptr %array<int>, ptr %self, i32 0, i32 0
   %4 = getelementptr %__ManagedArrayData_int, ptr %3, i32 0, i32 1
-  %5 = load i32, ptr %4
+  %5 = load i64, ptr %4
   %8 = getelementptr %array<int>, ptr %self, i32 0, i32 0
   %9 = getelementptr %__ManagedArrayData_int, ptr %8, i32 0, i32 2
-  %10 = load i32, ptr %9
-  %14 = icmp sge i32 %5, %10
+  %10 = load i64, ptr %9
+  %14 = icmp sge i64 %5, %10
   br i1 %14, label %then1, label %ifcont2
 then1:
-  %16 = shl i32 %10, 1
-  %19 = icmp slt i32 %16, 4
+  %16 = shl i64 %10, 1
+  %19 = icmp slt i64 %16, 4
   br i1 %19, label %then3, label %ifcont4
 ifcont2:
-  %47 = getelementptr %array<int>, ptr %self, i32 0, i32 0
-  %48 = getelementptr %__ManagedArrayData_int, ptr %47, i32 0, i32 0
-  %49 = load ptr, ptr %48
-  %50 = sext i32 %5 to i64
-  %51 = getelementptr i32, ptr %49, i64 %50
-  store i32 %value, ptr %51
-  %53 = add i32 %5, 1
-  %55 = getelementptr %array<int>, ptr %self, i32 0, i32 0
-  %56 = getelementptr %__ManagedArrayData_int, ptr %55, i32 0, i32 1
-  store i32 %53, ptr %56
-  %58 = load %array<int>, ptr %self
-  ret %array<int> %58
+  %46 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %47 = getelementptr %__ManagedArrayData_int, ptr %46, i32 0, i32 0
+  %48 = load ptr, ptr %47
+  %49 = sext i64 %5 to i64
+  %50 = getelementptr i64, ptr %48, i64 %49
+  store i64 %value, ptr %50
+  %52 = add i64 %5, 1
+  %54 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %55 = getelementptr %__ManagedArrayData_int, ptr %54, i32 0, i32 1
+  store i64 %52, ptr %55
+  %57 = load %array<int>, ptr %self
+  ret %array<int> %57
 then3:
   br label %ifcont4
 ifcont4:
-  %60 = phi i32 [ %16, %then1 ], [ 4, %then3 ]
+  %59 = phi i64 [ %16, %then1 ], [ 4, %then3 ]
   %22 = getelementptr %array<int>, ptr %self, i32 0, i32 0
   %23 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 2
-  %24 = load i32, ptr %23
-  %25 = icmp sgt i32 %60, %24
+  %24 = load i64, ptr %23
+  %25 = icmp sgt i64 %59, %24
   br i1 %25, label %grow.do5, label %grow.done6
 grow.do5:
-  %26 = shl i32 %24, 1
-  %27 = icmp sgt i32 %60, %26
+  %26 = shl i64 %24, 1
+  %27 = icmp sgt i64 %59, %26
   br i1 %27, label %grow.usemin7, label %grow.usedouble8
 grow.done6:
   br label %ifcont2
@@ -103,33 +103,32 @@ grow.usemin7:
 grow.usedouble8:
   br label %grow.checkmin9
 grow.checkmin9:
-  %28 = phi i32 [ %60, %grow.usemin7 ], [ %26, %grow.usedouble8 ]
-  %29 = icmp slt i32 %28, 4
+  %28 = phi i64 [ %59, %grow.usemin7 ], [ %26, %grow.usedouble8 ]
+  %29 = icmp slt i64 %28, 4
   br i1 %29, label %grow.minfour10, label %grow.alloc11
 grow.minfour10:
   br label %grow.alloc11
 grow.alloc11:
-  %30 = phi i32 [ 4, %grow.minfour10 ], [ %28, %grow.checkmin9 ]
+  %30 = phi i64 [ 4, %grow.minfour10 ], [ %28, %grow.checkmin9 ]
   %31 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 0
   %32 = load ptr, ptr %31
   %33 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 1
-  %34 = load i32, ptr %33
-  %35 = sext i32 %30 to i64
-  %36 = shl i64 %35, 2
+  %34 = load i64, ptr %33
+  %35 = sext i64 %30 to i64
+  %36 = shl i64 %35, 3
   %37 = call ptr @_managed_array_alloc(i64 %36, ptr @.__tag.alloc.array grow)
-  %38 = sext i32 %34 to i64
-  %39 = shl i64 %38, 2
-  %40 = call ptr @memcpy(ptr %37, ptr %32, i64 %39)
-  %41 = icmp sgt i32 %24, 0
-  br i1 %41, label %grow.release.old12, label %grow.after.release13
+  %38 = shl i64 %34, 3
+  %39 = call ptr @memcpy(ptr %37, ptr %32, i64 %38)
+  %40 = icmp sgt i64 %24, 0
+  br i1 %40, label %grow.release.old12, label %grow.after.release13
 grow.release.old12:
   call void @_managed_array_release(ptr %32, ptr @.__tag.free.array grow)
   br label %grow.after.release13
 grow.after.release13:
-  %42 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 0
-  store ptr %37, ptr %42
-  %43 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 2
-  store i32 %30, ptr %43
+  %41 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 0
+  store ptr %37, ptr %41
+  %42 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 2
+  store i64 %30, ptr %42
   br label %grow.done6
 }
 
@@ -139,17 +138,17 @@ declare void @exit(i32 %arg0)
 
 define void @_start() {
 entry0:
-  %0 = call i32 @main()
-  call void @exit(i32 %0)
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
   ret void
 }
 
 ---
 ; Module: test.maxon
-; Instructions: 119
+; Instructions: 118
 
-%__ManagedArrayData_int = type { ptr, i32, i32 }
-%array<int> = type { %__ManagedArrayData_int, i32 }
+%__ManagedArrayData_int = type { ptr, i64, i64 }
+%array<int> = type { %__ManagedArrayData_int, i64 }
 
 @.__tag.alloc.array grow = constant [11 x i8] c"array grow\00"
 @.__tag.free.array grow = constant [11 x i8] c"array grow\00"
@@ -161,7 +160,7 @@ declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
-define i32 @main() {
+define i64 @main() {
 entry0:
   %0 = call ptr @malloc(i64 8)
   %1 = alloca %array<int>
@@ -169,103 +168,103 @@ entry0:
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
   store ptr %0, ptr %3
   %4 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
-  store i32 0, ptr %4
+  store i64 0, ptr %4
   %5 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 2
-  store i32 0, ptr %5
+  store i64 0, ptr %5
   %6 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  store i32 0, ptr %6
-  %7 = call %array<int> @array<int>.push(ptr %1, i32 10)
-  %8 = call %array<int> @array<int>.push(ptr %1, i32 20)
-  %9 = call %array<int> @array<int>.push(ptr %1, i32 30)
-  %10 = call i32 @array<int>.count(ptr %1)
+  store i64 0, ptr %6
+  %7 = call %array<int> @array<int>.push(ptr %1, i64 10)
+  %8 = call %array<int> @array<int>.push(ptr %1, i64 20)
+  %9 = call %array<int> @array<int>.push(ptr %1, i64 30)
+  %10 = call i64 @array<int>.count(ptr %1)
   %11 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %12 = getelementptr %__ManagedArrayData_int, ptr %11, i32 0, i32 0
   %13 = load ptr, ptr %12
   %14 = getelementptr %__ManagedArrayData_int, ptr %11, i32 0, i32 2
-  %15 = load i32, ptr %14
-  %16 = icmp sgt i32 %15, 0
+  %15 = load i64, ptr %14
+  %16 = icmp sgt i64 %15, 0
   br i1 %16, label %arr.release1, label %arr.skip2
 arr.release1:
   call void @_managed_array_release(ptr %13, ptr @.__tag.free.arr)
   br label %arr.skip2
 arr.skip2:
-  ret i32 %10
+  ret i64 %10
 }
 
-define i32 @array<int>.count(ptr %self) {
+define i64 @array<int>.count(ptr %self) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
   %1 = load ptr, ptr %0
   %2 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
-  %4 = load i32, ptr %3
-  ret i32 %4
+  %4 = load i64, ptr %3
+  ret i64 %4
 }
 
-define %array<int> @array<int>.push(ptr %self, i32 %value) {
+define %array<int> @array<int>.push(ptr %self, i64 %value) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
-  %1 = alloca i32
-  store i32 %value, ptr %1
+  %1 = alloca i64
+  store i64 %value, ptr %1
   %2 = load ptr, ptr %0
   %3 = getelementptr %array<int>, ptr %2, i32 0, i32 0
   %4 = getelementptr %__ManagedArrayData_int, ptr %3, i32 0, i32 1
-  %5 = load i32, ptr %4
-  %6 = alloca i32
-  store i32 %5, ptr %6
+  %5 = load i64, ptr %4
+  %6 = alloca i64
+  store i64 %5, ptr %6
   %7 = load ptr, ptr %0
   %8 = getelementptr %array<int>, ptr %7, i32 0, i32 0
   %9 = getelementptr %__ManagedArrayData_int, ptr %8, i32 0, i32 2
-  %10 = load i32, ptr %9
-  %11 = alloca i32
-  store i32 %10, ptr %11
-  %12 = load i32, ptr %6
-  %13 = load i32, ptr %11
-  %14 = icmp sge i32 %12, %13
+  %10 = load i64, ptr %9
+  %11 = alloca i64
+  store i64 %10, ptr %11
+  %12 = load i64, ptr %6
+  %13 = load i64, ptr %11
+  %14 = icmp sge i64 %12, %13
   br i1 %14, label %then1, label %ifcont2
 then1:
-  %15 = load i32, ptr %11
-  %16 = mul i32 %15, 2
-  %17 = alloca i32
-  store i32 %16, ptr %17
-  %18 = load i32, ptr %17
-  %19 = icmp slt i32 %18, 4
+  %15 = load i64, ptr %11
+  %16 = mul i64 %15, 2
+  %17 = alloca i64
+  store i64 %16, ptr %17
+  %18 = load i64, ptr %17
+  %19 = icmp slt i64 %18, 4
   br i1 %19, label %then3, label %ifcont4
 ifcont2:
-  %44 = load i32, ptr %6
-  %45 = load i32, ptr %1
-  %46 = load ptr, ptr %0
-  %47 = getelementptr %array<int>, ptr %46, i32 0, i32 0
-  %48 = getelementptr %__ManagedArrayData_int, ptr %47, i32 0, i32 0
-  %49 = load ptr, ptr %48
-  %50 = sext i32 %44 to i64
-  %51 = getelementptr i32, ptr %49, i64 %50
-  store i32 %45, ptr %51
-  %52 = load i32, ptr %6
-  %53 = add i32 %52, 1
-  %54 = load ptr, ptr %0
-  %55 = getelementptr %array<int>, ptr %54, i32 0, i32 0
-  %56 = getelementptr %__ManagedArrayData_int, ptr %55, i32 0, i32 1
-  store i32 %53, ptr %56
-  %57 = load ptr, ptr %0
-  %58 = load %array<int>, ptr %57
-  ret %array<int> %58
+  %43 = load i64, ptr %6
+  %44 = load i64, ptr %1
+  %45 = load ptr, ptr %0
+  %46 = getelementptr %array<int>, ptr %45, i32 0, i32 0
+  %47 = getelementptr %__ManagedArrayData_int, ptr %46, i32 0, i32 0
+  %48 = load ptr, ptr %47
+  %49 = sext i64 %43 to i64
+  %50 = getelementptr i64, ptr %48, i64 %49
+  store i64 %44, ptr %50
+  %51 = load i64, ptr %6
+  %52 = add i64 %51, 1
+  %53 = load ptr, ptr %0
+  %54 = getelementptr %array<int>, ptr %53, i32 0, i32 0
+  %55 = getelementptr %__ManagedArrayData_int, ptr %54, i32 0, i32 1
+  store i64 %52, ptr %55
+  %56 = load ptr, ptr %0
+  %57 = load %array<int>, ptr %56
+  ret %array<int> %57
 then3:
-  store i32 4, ptr %17
+  store i64 4, ptr %17
   br label %ifcont4
 ifcont4:
-  %20 = load i32, ptr %17
+  %20 = load i64, ptr %17
   %21 = load ptr, ptr %0
   %22 = getelementptr %array<int>, ptr %21, i32 0, i32 0
   %23 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 2
-  %24 = load i32, ptr %23
-  %25 = icmp sgt i32 %20, %24
+  %24 = load i64, ptr %23
+  %25 = icmp sgt i64 %20, %24
   br i1 %25, label %grow.do5, label %grow.done6
 grow.do5:
-  %26 = mul i32 %24, 2
-  %27 = icmp sgt i32 %20, %26
+  %26 = mul i64 %24, 2
+  %27 = icmp sgt i64 %20, %26
   br i1 %27, label %grow.usemin7, label %grow.usedouble8
 grow.done6:
   br label %ifcont2
@@ -274,33 +273,32 @@ grow.usemin7:
 grow.usedouble8:
   br label %grow.checkmin9
 grow.checkmin9:
-  %28 = phi i32 [ %20, %grow.usemin7 ], [ %26, %grow.usedouble8 ]
-  %29 = icmp slt i32 %28, 4
+  %28 = phi i64 [ %20, %grow.usemin7 ], [ %26, %grow.usedouble8 ]
+  %29 = icmp slt i64 %28, 4
   br i1 %29, label %grow.minfour10, label %grow.alloc11
 grow.minfour10:
   br label %grow.alloc11
 grow.alloc11:
-  %30 = phi i32 [ 4, %grow.minfour10 ], [ %28, %grow.checkmin9 ]
+  %30 = phi i64 [ 4, %grow.minfour10 ], [ %28, %grow.checkmin9 ]
   %31 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 0
   %32 = load ptr, ptr %31
   %33 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 1
-  %34 = load i32, ptr %33
-  %35 = sext i32 %30 to i64
-  %36 = mul i64 %35, 4
+  %34 = load i64, ptr %33
+  %35 = sext i64 %30 to i64
+  %36 = mul i64 %35, 8
   %37 = call ptr @_managed_array_alloc(i64 %36, ptr @.__tag.alloc.array grow)
-  %38 = sext i32 %34 to i64
-  %39 = mul i64 %38, 4
-  %40 = call ptr @memcpy(ptr %37, ptr %32, i64 %39)
-  %41 = icmp sgt i32 %24, 0
-  br i1 %41, label %grow.release.old12, label %grow.after.release13
+  %38 = mul i64 %34, 8
+  %39 = call ptr @memcpy(ptr %37, ptr %32, i64 %38)
+  %40 = icmp sgt i64 %24, 0
+  br i1 %40, label %grow.release.old12, label %grow.after.release13
 grow.release.old12:
   call void @_managed_array_release(ptr %32, ptr @.__tag.free.array grow)
   br label %grow.after.release13
 grow.after.release13:
-  %42 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 0
-  store ptr %37, ptr %42
-  %43 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 2
-  store i32 %30, ptr %43
+  %41 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 0
+  store ptr %37, ptr %41
+  %42 = getelementptr %__ManagedArrayData_int, ptr %22, i32 0, i32 2
+  store i64 %30, ptr %42
   br label %grow.done6
 }
 
@@ -310,8 +308,8 @@ declare void @exit(i32 %arg0)
 
 define void @_start() {
 entry0:
-  %0 = call i32 @main()
-  call void @exit(i32 %0)
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
   ret void
 }
 

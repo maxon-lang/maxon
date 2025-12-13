@@ -101,9 +101,9 @@ done:
 
 ;==============================================================================
 ; write_stdout - write to stdout using WriteFile
-; i32 write_stdout(ptr buf, i32 count)
+; i64 write_stdout(ptr buf, i64 count)
 ;==============================================================================
-define i32 @write_stdout(ptr %buf, i32 %count) {
+define i64 @write_stdout(ptr %buf, i64 %count) {
 entry:
     ; Allocate space for bytes written
     %bytesWritten = alloca i32
@@ -111,8 +111,11 @@ entry:
     ; Get stdout handle (STD_OUTPUT_HANDLE = -11)
     %handle = call ptr @GetStdHandle(i32 -11)
 
+    ; Truncate count to i32 for Windows API
+    %count32 = trunc i64 %count to i32
+
     ; Call WriteFile
-    %success = call i32 @WriteFile(ptr %handle, ptr %buf, i32 %count, ptr %bytesWritten, ptr null)
+    %success = call i32 @WriteFile(ptr %handle, ptr %buf, i32 %count32, ptr %bytesWritten, ptr null)
 
     ; Check if WriteFile succeeded
     %failed = icmp eq i32 %success, 0
@@ -120,10 +123,11 @@ entry:
 
 success_case:
     %written = load i32, ptr %bytesWritten
-    ret i32 %written
+    %written64 = sext i32 %written to i64
+    ret i64 %written64
 
 error:
-    ret i32 -1
+    ret i64 -1
 }
 
 ;==============================================================================
@@ -693,38 +697,38 @@ write_null:
 ;==============================================================================
 ; __int_toString - Convert integer to Maxon string
 ; Returns a new string struct (by value) containing the decimal representation
-; %string __int_toString(i32 value, ptr spec)
+; %string __int_toString(i64 value, ptr spec)
 ; Note: spec is currently ignored (format specifiers not yet implemented)
 ;==============================================================================
-define %string @__int_toString(i32 %value, ptr %spec) {
+define %string @__int_toString(i64 %value, ptr %spec) {
 entry:
-    ; Allocate temporary buffer for digits (max 11 digits for int32 + sign + null)
-    %temp_buf = alloca [16 x i8]
-    %temp_idx = alloca i32
-    %remaining = alloca i32
-    %out_idx = alloca i32
+    ; Allocate temporary buffer for digits (max 20 digits for int64 + sign + null)
+    %temp_buf = alloca [24 x i8]
+    %temp_idx = alloca i64
+    %remaining = alloca i64
+    %out_idx = alloca i64
     %is_negative = alloca i1
 
-    store i32 0, ptr %temp_idx
+    store i64 0, ptr %temp_idx
     store i1 false, ptr %is_negative
 
     ; Handle negative numbers
-    %negative = icmp slt i32 %value, 0
+    %negative = icmp slt i64 %value, 0
     br i1 %negative, label %make_positive, label %check_zero
 
 make_positive:
     store i1 true, ptr %is_negative
-    %abs_val = sub i32 0, %value
-    store i32 %abs_val, ptr %remaining
+    %abs_val = sub i64 0, %value
+    store i64 %abs_val, ptr %remaining
     br label %check_zero_after
 
 check_zero:
     ; Handle zero case
-    %is_zero = icmp eq i32 %value, 0
+    %is_zero = icmp eq i64 %value, 0
     br i1 %is_zero, label %write_zero, label %store_positive
 
 store_positive:
-    store i32 %value, ptr %remaining
+    store i64 %value, ptr %remaining
     br label %extract_loop
 
 check_zero_after:
@@ -738,74 +742,72 @@ write_zero:
     %zero_null = getelementptr i8, ptr %zero_buf, i64 1
     store i8 0, ptr %zero_null
 
-    ; Allocate managed data struct
-    %zero_managed = call ptr @malloc(i64 32)
+    ; Allocate managed data struct (ptr + i64 + i64 + i64 + i64 = 40 bytes)
+    %zero_managed = call ptr @malloc(i64 40)
     %zero_buf_ptr = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 0
     %zero_buf_arr = getelementptr %_ManagedArray_byte, ptr %zero_buf_ptr, i32 0, i32 0
     store ptr %zero_buf, ptr %zero_buf_arr
     %zero_buf_len = getelementptr %_ManagedArray_byte, ptr %zero_buf_ptr, i32 0, i32 1
-    store i32 1, ptr %zero_buf_len
+    store i64 1, ptr %zero_buf_len
     %zero_len = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 1
-    store i32 1, ptr %zero_len
+    store i64 1, ptr %zero_len
     %zero_cap = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 2
-    store i32 2, ptr %zero_cap
+    store i64 2, ptr %zero_cap
 
     ; Create string struct
     %zero_str = alloca %string
     %zero_str_managed = getelementptr %string, ptr %zero_str, i32 0, i32 0
     store ptr %zero_managed, ptr %zero_str_managed
     %zero_str_hash = getelementptr %string, ptr %zero_str, i32 0, i32 1
-    store i32 0, ptr %zero_str_hash
+    store i64 0, ptr %zero_str_hash
     %zero_result = load %string, ptr %zero_str
     ret %string %zero_result
 
 extract_loop:
-    %rem_val = load i32, ptr %remaining
-    %is_done = icmp eq i32 %rem_val, 0
+    %rem_val = load i64, ptr %remaining
+    %is_done = icmp eq i64 %rem_val, 0
     br i1 %is_done, label %build_string, label %extract_one
 
 extract_one:
     ; Get last digit
-    %digit = srem i32 %rem_val, 10
-    %digit_char = add i32 %digit, 48  ; '0' = 48
-    %digit_byte = trunc i32 %digit_char to i8
+    %digit = srem i64 %rem_val, 10
+    %digit_char = add i64 %digit, 48  ; '0' = 48
+    %digit_byte = trunc i64 %digit_char to i8
 
     ; Store in temp buffer
-    %ti = load i32, ptr %temp_idx
-    %ti64 = sext i32 %ti to i64
-    %temp_ptr = getelementptr [16 x i8], ptr %temp_buf, i64 0, i64 %ti64
+    %ti = load i64, ptr %temp_idx
+    %temp_ptr = getelementptr [24 x i8], ptr %temp_buf, i64 0, i64 %ti
     store i8 %digit_byte, ptr %temp_ptr
 
     ; Update remaining
-    %new_rem = sdiv i32 %rem_val, 10
-    store i32 %new_rem, ptr %remaining
+    %new_rem = sdiv i64 %rem_val, 10
+    store i64 %new_rem, ptr %remaining
 
     ; Increment temp index
-    %new_ti = add i32 %ti, 1
-    store i32 %new_ti, ptr %temp_idx
+    %new_ti = add i64 %ti, 1
+    store i64 %new_ti, ptr %temp_idx
     br label %extract_loop
 
 build_string:
     ; Calculate total length
-    %digit_count = load i32, ptr %temp_idx
+    %digit_count = load i64, ptr %temp_idx
     %need_sign = load i1, ptr %is_negative
     br i1 %need_sign, label %calc_with_sign, label %calc_no_sign
 
 calc_with_sign:
-    %total_len_signed = add i32 %digit_count, 1
+    %total_len_signed = add i64 %digit_count, 1
     br label %alloc_buffer
 
 calc_no_sign:
     br label %alloc_buffer
 
 alloc_buffer:
-    %total_len = phi i32 [ %total_len_signed, %calc_with_sign ], [ %digit_count, %calc_no_sign ]
-    %sign_len = phi i32 [ 1, %calc_with_sign ], [ 0, %calc_no_sign ]
+    %total_len = phi i64 [ %total_len_signed, %calc_with_sign ], [ %digit_count, %calc_no_sign ]
+    %sign_len = phi i64 [ 1, %calc_with_sign ], [ 0, %calc_no_sign ]
 
     ; Allocate buffer (len + 1 for null)
-    %buf_size = add i32 %total_len, 1
-    %buf_size64 = sext i32 %buf_size to i64
-    %str_buf = call ptr @_managed_string_alloc(i64 %buf_size64, ptr null)
+    %buf_size = add i64 %total_len, 1
+    %str_buf = call ptr @_managed_string_alloc(i64 %buf_size, ptr null)
 
     ; Write sign if negative
     br i1 %need_sign, label %write_sign, label %copy_digits_init
@@ -815,57 +817,54 @@ write_sign:
     br label %copy_digits_init
 
 copy_digits_init:
-    store i32 %sign_len, ptr %out_idx
+    store i64 %sign_len, ptr %out_idx
     br label %copy_loop
 
 copy_loop:
-    %oi = load i32, ptr %out_idx
-    %copy_done = icmp sge i32 %oi, %total_len
+    %oi = load i64, ptr %out_idx
+    %copy_done = icmp sge i64 %oi, %total_len
     br i1 %copy_done, label %write_null, label %copy_one
 
 copy_one:
     ; Read from temp[digit_count - 1 - (oi - sign_len)]
-    %oi_adjusted = sub i32 %oi, %sign_len
-    %read_idx = sub i32 %digit_count, 1
-    %read_idx2 = sub i32 %read_idx, %oi_adjusted
-    %read_idx64 = sext i32 %read_idx2 to i64
-    %read_ptr = getelementptr [16 x i8], ptr %temp_buf, i64 0, i64 %read_idx64
+    %oi_adjusted = sub i64 %oi, %sign_len
+    %read_idx = sub i64 %digit_count, 1
+    %read_idx2 = sub i64 %read_idx, %oi_adjusted
+    %read_ptr = getelementptr [24 x i8], ptr %temp_buf, i64 0, i64 %read_idx2
     %ch = load i8, ptr %read_ptr
 
     ; Write to buffer[oi]
-    %write_idx64 = sext i32 %oi to i64
-    %write_ptr = getelementptr i8, ptr %str_buf, i64 %write_idx64
+    %write_ptr = getelementptr i8, ptr %str_buf, i64 %oi
     store i8 %ch, ptr %write_ptr
 
     ; Increment output index
-    %new_oi = add i32 %oi, 1
-    store i32 %new_oi, ptr %out_idx
+    %new_oi = add i64 %oi, 1
+    store i64 %new_oi, ptr %out_idx
     br label %copy_loop
 
 write_null:
     ; Write null terminator
-    %total_len64 = sext i32 %total_len to i64
-    %null_ptr = getelementptr i8, ptr %str_buf, i64 %total_len64
+    %null_ptr = getelementptr i8, ptr %str_buf, i64 %total_len
     store i8 0, ptr %null_ptr
 
-    ; Allocate managed data struct
-    %managed = call ptr @malloc(i64 32)
+    ; Allocate managed data struct (ptr + i64 + i64 + i64 + i64 = 40 bytes)
+    %managed = call ptr @malloc(i64 40)
     %buf_ptr = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
     %buf_arr = getelementptr %_ManagedArray_byte, ptr %buf_ptr, i32 0, i32 0
     store ptr %str_buf, ptr %buf_arr
     %buf_len = getelementptr %_ManagedArray_byte, ptr %buf_ptr, i32 0, i32 1
-    store i32 %total_len, ptr %buf_len
+    store i64 %total_len, ptr %buf_len
     %str_len = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 1
-    store i32 %total_len, ptr %str_len
+    store i64 %total_len, ptr %str_len
     %str_cap = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 2
-    store i32 %buf_size, ptr %str_cap
+    store i64 %buf_size, ptr %str_cap
 
     ; Create string struct
     %result_str = alloca %string
     %result_managed = getelementptr %string, ptr %result_str, i32 0, i32 0
     store ptr %managed, ptr %result_managed
     %result_hash = getelementptr %string, ptr %result_str, i32 0, i32 1
-    store i32 0, ptr %result_hash
+    store i64 0, ptr %result_hash
     %result = load %string, ptr %result_str
     ret %string %result
 }
@@ -911,18 +910,18 @@ byte_write_zero:
     %zero_buf_arr = getelementptr %_ManagedArray_byte, ptr %zero_buf_ptr, i32 0, i32 0
     store ptr %zero_buf, ptr %zero_buf_arr
     %zero_buf_len = getelementptr %_ManagedArray_byte, ptr %zero_buf_ptr, i32 0, i32 1
-    store i32 1, ptr %zero_buf_len
+    store i64 1, ptr %zero_buf_len
     %zero_len = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 1
-    store i32 1, ptr %zero_len
+    store i64 1, ptr %zero_len
     %zero_cap = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 2
-    store i32 2, ptr %zero_cap
+    store i64 2, ptr %zero_cap
 
     ; Create string struct
     %zero_str = alloca %string
     %zero_str_managed = getelementptr %string, ptr %zero_str, i32 0, i32 0
     store ptr %zero_managed, ptr %zero_str_managed
     %zero_str_hash = getelementptr %string, ptr %zero_str, i32 0, i32 1
-    store i32 0, ptr %zero_str_hash
+    store i64 0, ptr %zero_str_hash
     %zero_result = load %string, ptr %zero_str
     ret %string %zero_result
 
@@ -999,18 +998,20 @@ byte_write_null:
     %buf_arr = getelementptr %_ManagedArray_byte, ptr %buf_ptr, i32 0, i32 0
     store ptr %str_buf, ptr %buf_arr
     %buf_len = getelementptr %_ManagedArray_byte, ptr %buf_ptr, i32 0, i32 1
-    store i32 %digit_count, ptr %buf_len
+    %digit_count_ext = sext i32 %digit_count to i64
+    store i64 %digit_count_ext, ptr %buf_len
     %str_len = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 1
-    store i32 %digit_count, ptr %str_len
+    store i64 %digit_count_ext, ptr %str_len
     %str_cap = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 2
-    store i32 %buf_size, ptr %str_cap
+    %buf_size_ext = sext i32 %buf_size to i64
+    store i64 %buf_size_ext, ptr %str_cap
 
     ; Create string struct
     %result_str = alloca %string
     %result_managed = getelementptr %string, ptr %result_str, i32 0, i32 0
     store ptr %managed, ptr %result_managed
     %result_hash = getelementptr %string, ptr %result_str, i32 0, i32 1
-    store i32 0, ptr %result_hash
+    store i64 0, ptr %result_hash
     %result = load %string, ptr %result_str
     ret %string %result
 }
@@ -1035,11 +1036,11 @@ is_true:
     %true_buf_arr = getelementptr %_ManagedArray_byte, ptr %true_buf_ptr, i32 0, i32 0
     store ptr @.str.true, ptr %true_buf_arr
     %true_buf_len = getelementptr %_ManagedArray_byte, ptr %true_buf_ptr, i32 0, i32 1
-    store i32 4, ptr %true_buf_len
+    store i64 4, ptr %true_buf_len
     %true_len = getelementptr %__ManagedStringData, ptr %true_managed, i32 0, i32 1
-    store i32 4, ptr %true_len
+    store i64 4, ptr %true_len
     %true_cap = getelementptr %__ManagedStringData, ptr %true_managed, i32 0, i32 2
-    store i32 0, ptr %true_cap  ; 0 = constant data
+    store i64 0, ptr %true_cap  ; 0 = constant data
     br label %create_string
 
 is_false:
@@ -1049,11 +1050,11 @@ is_false:
     %false_buf_arr = getelementptr %_ManagedArray_byte, ptr %false_buf_ptr, i32 0, i32 0
     store ptr @.str.false, ptr %false_buf_arr
     %false_buf_len = getelementptr %_ManagedArray_byte, ptr %false_buf_ptr, i32 0, i32 1
-    store i32 5, ptr %false_buf_len
+    store i64 5, ptr %false_buf_len
     %false_len = getelementptr %__ManagedStringData, ptr %false_managed, i32 0, i32 1
-    store i32 5, ptr %false_len
+    store i64 5, ptr %false_len
     %false_cap = getelementptr %__ManagedStringData, ptr %false_managed, i32 0, i32 2
-    store i32 0, ptr %false_cap  ; 0 = constant data
+    store i64 0, ptr %false_cap  ; 0 = constant data
     br label %create_string
 
 create_string:
@@ -1063,7 +1064,7 @@ create_string:
     %result_managed = getelementptr %string, ptr %result_str, i32 0, i32 0
     store ptr %managed, ptr %result_managed
     %result_hash = getelementptr %string, ptr %result_str, i32 0, i32 1
-    store i32 0, ptr %result_hash
+    store i64 0, ptr %result_hash
     %result = load %string, ptr %result_str
     ret %string %result
 }
@@ -1288,12 +1289,12 @@ finalize:
     %float_buf_arr = getelementptr %_ManagedArray_byte, ptr %float_buf_ptr, i32 0, i32 0
     store ptr %str_buf, ptr %float_buf_arr
     %float_buf_len = getelementptr %_ManagedArray_byte, ptr %float_buf_ptr, i32 0, i32 1
-    store i32 %str_len, ptr %float_buf_len
+    %str_len_ext = sext i32 %str_len to i64
+    store i64 %str_len_ext, ptr %float_buf_len
     %float_len = getelementptr %__ManagedStringData, ptr %float_managed, i32 0, i32 1
-    store i32 %str_len, ptr %float_len
-    %buf_size32 = trunc i64 %buf_size64 to i32
+    store i64 %str_len_ext, ptr %float_len
     %float_cap = getelementptr %__ManagedStringData, ptr %float_managed, i32 0, i32 2
-    store i32 %buf_size32, ptr %float_cap
+    store i64 %buf_size64, ptr %float_cap
     br label %create_result
 
 create_result:
@@ -1302,7 +1303,7 @@ create_result:
     %result_managed = getelementptr %string, ptr %result_str, i32 0, i32 0
     store ptr %float_managed, ptr %result_managed
     %result_hash = getelementptr %string, ptr %result_str, i32 0, i32 1
-    store i32 0, ptr %result_hash
+    store i64 0, ptr %result_hash
     %result = load %string, ptr %result_str
     ret %string %result
 }
@@ -1729,7 +1730,7 @@ signal_request:
 worker_crashed:
     ; Worker process crashed - print error and exit with code 103
     %crash_msg = getelementptr [35 x i8], ptr @ffi_crash_error_msg, i64 0, i64 0
-    call i32 @write_stdout(ptr %crash_msg, i32 34)
+    call i64 @write_stdout(ptr %crash_msg, i64 34)
     call void @ExitProcess(i32 103)
     ret i64 0  ; Never reached but needed for valid IR
 
@@ -2117,33 +2118,32 @@ do_convert:
 setup_managed:
     ; Calculate string length (excluding null terminator)
     %str_len = sub i32 %utf8_size, 1
+    %str_len64 = sext i32 %str_len to i64
 
     ; Setup __ManagedStringData:
-    ; Layout: { { ptr data, i32 len }, i32 len_copy, i32 capacity }
-    ; __unsized_array_byte is { ptr, i32 } = 16 bytes (with padding to alignment 8)
-    ; IMPORTANT: The string intrinsics read length from field 1 (offset 16), not
-    ; from the nested __unsized_array_byte. So we must store length in BOTH places.
+    ; Layout: { { ptr data, i64 len }, i64 len_copy, i64 capacity }
+    ; _ManagedArray_byte is { ptr, i64 } = 16 bytes
     ; So the offsets are:
     ;   Offset 0: data pointer (ptr)
-    ;   Offset 8: length (i32) - inside __unsized_array_byte
-    ;   Offset 16: length (i32) - field 1, what intrinsics actually read!
-    ;   Offset 20: capacity (i32)
+    ;   Offset 8: length (i64) - inside _ManagedArray_byte
+    ;   Offset 16: length (i64) - field 1
+    ;   Offset 24: capacity (i64)
 
     ; Field 0.0: data pointer (ptr at offset 0)
     store ptr %utf8_buf, ptr %managed_ptr
 
-    ; Field 0.1: length (i32 at offset 8) - inside __unsized_array_byte
+    ; Field 0.1: length (i64 at offset 8) - inside _ManagedArray_byte
     %len_ptr0 = getelementptr i8, ptr %managed_ptr, i64 8
-    store i32 %str_len, ptr %len_ptr0
+    store i64 %str_len64, ptr %len_ptr0
 
-    ; Field 1: length (i32 at offset 16) - this is what intrinsics read
+    ; Field 1: length (i64 at offset 16)
     %len_ptr1 = getelementptr i8, ptr %managed_ptr, i64 16
-    store i32 %str_len, ptr %len_ptr1
+    store i64 %str_len64, ptr %len_ptr1
 
-    ; Field 2: capacity (i32 at offset 20) - set to 0 to indicate "static"
+    ; Field 2: capacity (i64 at offset 24) - set to 0 to indicate "static"
     ; This prevents the normal string cleanup from freeing these buffers
-    %capacity_ptr = getelementptr i8, ptr %managed_ptr, i64 20
-    store i32 0, ptr %capacity_ptr
+    %capacity_ptr = getelementptr i8, ptr %managed_ptr, i64 24
+    store i64 0, ptr %capacity_ptr
 
     ; Setup string struct in array:
     ; Field 0: _managed pointer (ptr at offset 0)
@@ -2151,9 +2151,9 @@ setup_managed:
     %string_slot_scaled = getelementptr [16 x i8], ptr %strings_array, i64 %i_i64
     store ptr %managed_ptr, ptr %string_slot_scaled
 
-    ; Field 1: _iterPos (i32 at offset 8) - set to 0
+    ; Field 1: _hash (i64 at offset 8) - set to 0
     %iterpos_ptr = getelementptr i8, ptr %string_slot_scaled, i64 8
-    store i32 0, ptr %iterpos_ptr
+    store i64 0, ptr %iterpos_ptr
 
     br label %convert_next
 
@@ -2170,7 +2170,7 @@ convert_skip:
     %string_slot_err = getelementptr [16 x i8], ptr %strings_array, i64 %i_i64
     store ptr null, ptr %string_slot_err
     %iterpos_ptr_err = getelementptr i8, ptr %string_slot_err, i64 8
-    store i32 0, ptr %iterpos_ptr_err
+    store i64 0, ptr %iterpos_ptr_err
     br label %convert_next
 
 convert_next:
@@ -2186,9 +2186,10 @@ build_result:
     %result_ptr = getelementptr [16 x i8], ptr @__cmdline_args_result, i64 0, i64 0
     store ptr %strings_array, ptr %result_ptr
 
-    ; Field 1: length (i32 at offset 8)
+    ; Field 1: length (i64 at offset 8)
     %result_len_ptr = getelementptr i8, ptr %result_ptr, i64 8
-    store i32 %argc, ptr %result_len_ptr
+    %argc64 = sext i32 %argc to i64
+    store i64 %argc64, ptr %result_len_ptr
 
     ret ptr %result_ptr
 
@@ -2202,7 +2203,7 @@ return_empty:
     %empty_ptr = getelementptr [16 x i8], ptr @__cmdline_args_result, i64 0, i64 0
     store ptr null, ptr %empty_ptr
     %empty_len_ptr = getelementptr i8, ptr %empty_ptr, i64 8
-    store i32 0, ptr %empty_len_ptr
+    store i64 0, ptr %empty_len_ptr
     ret ptr %empty_ptr
 }
 
@@ -2227,8 +2228,8 @@ success:
     ; Load length
     %len = load i32, ptr %out_len
 
-    ; Allocate managed string struct (24 bytes)
-    %managed = call ptr @malloc(i64 24)
+    ; Allocate managed string struct (32 bytes with i64 fields)
+    %managed = call ptr @malloc(i64 32)
     %managed_null = icmp eq ptr %managed, null
     br i1 %managed_null, label %free_data, label %setup_struct
 
@@ -2237,17 +2238,21 @@ setup_struct:
     ; Field 0: buffer pointer
     store ptr %data, ptr %managed
 
+    ; Load and extend length to i64
+    %len = load i32, ptr %out_len
+    %len64 = sext i32 %len to i64
+
     ; Field 1: length (inside unsized array) at offset 8
     %len_ptr0 = getelementptr i8, ptr %managed, i64 8
-    store i32 %len, ptr %len_ptr0
+    store i64 %len64, ptr %len_ptr0
 
     ; Field 2: length copy at offset 16
     %len_ptr1 = getelementptr i8, ptr %managed, i64 16
-    store i32 %len, ptr %len_ptr1
+    store i64 %len64, ptr %len_ptr1
 
-    ; Field 3: capacity at offset 20
-    %cap_ptr = getelementptr i8, ptr %managed, i64 20
-    store i32 %len, ptr %cap_ptr
+    ; Field 3: capacity at offset 24
+    %cap_ptr = getelementptr i8, ptr %managed, i64 24
+    store i64 %len64, ptr %cap_ptr
 
     ret ptr %managed
 
@@ -2263,7 +2268,7 @@ return_null:
 ;==============================================================================
 ; __write_file - write cstring content to file
 ; i32 __write_file(ptr path, ptr cstr)
-; cstr is { ptr data, i32 len, ptr parent } 24 bytes
+; cstr is { ptr data, i64 len, ptr parent } 24 bytes
 ;==============================================================================
 define i32 @__write_file(ptr %path, ptr %cstr) {
 entry:
@@ -2275,9 +2280,10 @@ get_data:
     ; Extract data pointer (offset 0)
     %data = load ptr, ptr %cstr
 
-    ; Extract length (offset 8)
+    ; Extract length (offset 8) - now i64
     %len_ptr = getelementptr i8, ptr %cstr, i64 8
-    %len = load i32, ptr %len_ptr
+    %len64 = load i64, ptr %len_ptr
+    %len = trunc i64 %len64 to i32
 
     ; Open file for writing (create always)
     ; CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
@@ -2481,15 +2487,16 @@ fill_array:
     ; Close handle
     call i32 @FindClose(ptr %handle2)
 
-    ; Setup result struct: __ManagedArrayData<string> = { ptr buffer, i32 len, i32 cap }
+    ; Setup result struct: __ManagedArrayData<string> = { ptr buffer, i64 len, i64 cap }
     ; Field 0: buffer pointer (offset 0)
     store ptr %array, ptr %result
     ; Field 1: length (offset 8)
     %result_len_ptr = getelementptr i8, ptr %result, i64 8
-    store i32 %filled, ptr %result_len_ptr
-    ; Field 2: capacity (offset 12) - set to count to indicate heap-allocated
-    %result_cap_ptr = getelementptr i8, ptr %result, i64 12
-    store i32 %filled, ptr %result_cap_ptr
+    %filled64 = sext i32 %filled to i64
+    store i64 %filled64, ptr %result_len_ptr
+    ; Field 2: capacity (offset 16) - set to count to indicate heap-allocated
+    %result_cap_ptr = getelementptr i8, ptr %result, i64 16
+    store i64 %filled64, ptr %result_cap_ptr
 
     ret ptr %result
 
@@ -2611,8 +2618,8 @@ create_string:
     ; Calculate string length
     %str_len = call i32 @__strlen(ptr %filename_ptr)
 
-    ; Allocate managed string (24 bytes)
-    %managed = call ptr @malloc(i64 24)
+    ; Allocate managed string (32 bytes with i64 fields)
+    %managed = call ptr @malloc(i64 32)
     %managed_null = icmp eq ptr %managed, null
     br i1 %managed_null, label %next_file_no_inc, label %alloc_buffer
 
@@ -2628,21 +2635,21 @@ copy_string:
     ; Copy filename to buffer
     call void @memcpy(ptr %buffer, ptr %filename_ptr, i64 %buf_size)
 
-    ; Setup managed string struct
+    ; Setup managed string struct (now with i64 fields)
     store ptr %buffer, ptr %managed
     %len_ptr = getelementptr i8, ptr %managed, i64 8
-    store i32 %str_len, ptr %len_ptr
+    store i64 %str_len_i64, ptr %len_ptr
     %len_ptr2 = getelementptr i8, ptr %managed, i64 16
-    store i32 %str_len, ptr %len_ptr2
-    %cap_ptr = getelementptr i8, ptr %managed, i64 20
-    store i32 %str_len, ptr %cap_ptr
+    store i64 %str_len_i64, ptr %len_ptr2
+    %cap_ptr = getelementptr i8, ptr %managed, i64 24
+    store i64 %str_len_i64, ptr %cap_ptr
 
     ; Store in array
     %idx_i64 = sext i32 %idx to i64
     %slot = getelementptr [16 x i8], ptr %array, i64 %idx_i64
     store ptr %managed, ptr %slot
     %iter_ptr = getelementptr i8, ptr %slot, i64 8
-    store i32 0, ptr %iter_ptr
+    store i64 0, ptr %iter_ptr
 
     br label %store_entry
 

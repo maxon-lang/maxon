@@ -378,18 +378,18 @@ MIRType *MIRParser::parseType() {
 		}
 		// String types used by runtime
 		if (structName == "string") {
-			return MIRType::getStruct(structName, {MIRType::getPtr(), MIRType::getInt32()});
+			return MIRType::getStruct(structName, {MIRType::getPtr(), MIRType::getInt64()});
 		}
 		if (structName == "_ManagedArray_byte") {
-			return MIRType::getStruct(structName, {MIRType::getPtr(), MIRType::getInt32()});
+			return MIRType::getStruct(structName, {MIRType::getPtr(), MIRType::getInt64()});
 		}
 		if (structName == "__ManagedStringData") {
-			// { %_ManagedArray_byte, i32, i32 }
-			MIRType *managedArrayType = MIRType::getStruct("_ManagedArray_byte", {MIRType::getPtr(), MIRType::getInt32()});
-			return MIRType::getStruct(structName, {managedArrayType, MIRType::getInt32(), MIRType::getInt32()});
+			// { %_ManagedArray_byte, i64, i64 }
+			MIRType *managedArrayType = MIRType::getStruct("_ManagedArray_byte", {MIRType::getPtr(), MIRType::getInt64()});
+			return MIRType::getStruct(structName, {managedArrayType, MIRType::getInt64(), MIRType::getInt64()});
 		}
 		if (structName == "cstring") {
-			return MIRType::getStruct(structName, {MIRType::getPtr(), MIRType::getInt32(), MIRType::getPtr()});
+			return MIRType::getStruct(structName, {MIRType::getPtr(), MIRType::getInt64(), MIRType::getPtr()});
 		}
 		// Unknown struct - create placeholder with default size
 		return MIRType::getStruct(structName, {});

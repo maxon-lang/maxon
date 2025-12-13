@@ -85,7 +85,7 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 		if (isArrayParam(param.type)) {
 			arrayParameters.insert(param.name);
 			std::string lengthVarName = param.name + ".__length";
-			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt32(), lengthVarName);
+			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt64(), lengthVarName);
 			mir::MIRValue *lengthParamVal = function->parameters[argIdx];
 			builder->createStore(lengthParamVal, lengthAlloca);
 			namedValues[lengthVarName] = lengthAlloca;
@@ -124,7 +124,7 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 		// Add default return
 		mir::MIRType *retType = function->returnType;
 		if (retType->isInteger()) {
-			builder->createRet(builder->getInt32(0));
+			builder->createRet(builder->getInt64(0));
 		} else if (retType->isFloat()) {
 			builder->createRet(builder->getFloat64(0.0));
 		} else if (retType->isPointer()) {
@@ -329,7 +329,7 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 		if (isArrayParam(substitutedType)) {
 			arrayParameters.insert(param.name);
 			std::string lengthVarName = param.name + ".__length";
-			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt32(), lengthVarName);
+			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt64(), lengthVarName);
 			mir::MIRValue *lengthParamVal = function->parameters[argIdx];
 			builder->createStore(lengthParamVal, lengthAlloca);
 			namedValues[lengthVarName] = lengthAlloca;
@@ -364,7 +364,7 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 		// Add default return
 		mir::MIRType *retType = function->returnType;
 		if (retType->isInteger()) {
-			builder->createRet(builder->getInt32(0));
+			builder->createRet(builder->getInt64(0));
 		} else if (retType->isFloat()) {
 			builder->createRet(builder->getFloat64(0.0));
 		} else if (retType->isPointer()) {
@@ -469,7 +469,7 @@ void MIRCodeGenerator::generateSynthesizedMethod(const FunctionInfo &funcInfo) {
 		if (isArrayParam(param.type)) {
 			arrayParameters.insert(param.name);
 			std::string lengthVarName = param.name + ".__length";
-			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt32(), lengthVarName);
+			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt64(), lengthVarName);
 			mir::MIRValue *lengthParamVal = function->parameters[argIdx];
 			builder->createStore(lengthParamVal, lengthAlloca);
 			namedValues[lengthVarName] = lengthAlloca;
@@ -498,7 +498,7 @@ void MIRCodeGenerator::generateSynthesizedMethod(const FunctionInfo &funcInfo) {
 		// Add default return
 		mir::MIRType *retType = function->returnType;
 		if (retType->isInteger()) {
-			builder->createRet(builder->getInt32(0));
+			builder->createRet(builder->getInt64(0));
 		} else if (retType->isFloat()) {
 			builder->createRet(builder->getFloat64(0.0));
 		} else if (retType->isPointer()) {

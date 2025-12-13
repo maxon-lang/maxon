@@ -35,13 +35,13 @@ mir::MIRValue *ManagedArrayBuilder::getDataPtr(mir::MIRValue *managedPtr, const 
 mir::MIRValue *ManagedArrayBuilder::getLength(mir::MIRValue *managedPtr, const std::string &name) {
 	mir::MIRType *managedType = getManagedArrayDataType();
 	mir::MIRValue *lenPtr = gen_.builder->createStructGEP(managedType, managedPtr, 1, name + ".ptr");
-	return gen_.builder->createLoad(mir::MIRType::getInt32(), lenPtr, name);
+	return gen_.builder->createLoad(mir::MIRType::getInt64(), lenPtr, name);
 }
 
 mir::MIRValue *ManagedArrayBuilder::getCapacity(mir::MIRValue *managedPtr, const std::string &name) {
 	mir::MIRType *managedType = getManagedArrayDataType();
 	mir::MIRValue *capPtr = gen_.builder->createStructGEP(managedType, managedPtr, 2, name + ".ptr");
-	return gen_.builder->createLoad(mir::MIRType::getInt32(), capPtr, name);
+	return gen_.builder->createLoad(mir::MIRType::getInt64(), capPtr, name);
 }
 
 mir::MIRValue *ManagedArrayBuilder::isHeapAllocated(mir::MIRValue *managedPtr, const std::string &name) {
@@ -49,7 +49,7 @@ mir::MIRValue *ManagedArrayBuilder::isHeapAllocated(mir::MIRValue *managedPtr, c
 	//   0 = stack allocated (no heap ownership)
 	//  >0 = heap allocated with ownership
 	mir::MIRValue *cap = getCapacity(managedPtr, "cap.check");
-	mir::MIRValue *zero = gen_.builder->getInt32(0);
+	mir::MIRValue *zero = gen_.builder->getInt64(0);
 	return gen_.builder->createICmpSGT(cap, zero, name);
 }
 

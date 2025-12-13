@@ -10,7 +10,7 @@ mir::MIRType *MIRCodeGenerator::getOrCreateManagedStringType() {
 		mir::MIRType *unsizedArrayType = getOrCreateUnsizedArrayType();
 		managedStringType = module->getOrCreateStructType(
 			"__ManagedStringData",
-			{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+			{unsizedArrayType, mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 		structTypes["__ManagedStringData"] = managedStringType;
 	}
 	return managedStringType;
@@ -21,7 +21,7 @@ mir::MIRType *MIRCodeGenerator::getOrCreateUnsizedArrayType() {
 	if (!unsizedArrayType) {
 		unsizedArrayType = module->getOrCreateStructType(
 			"_ManagedArray_byte",
-			{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+			{mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 		structTypes["_ManagedArray_byte"] = unsizedArrayType;
 	}
 	return unsizedArrayType;
@@ -32,7 +32,7 @@ mir::MIRType *MIRCodeGenerator::getOrCreateCstringType() {
 	if (!cstringType) {
 		cstringType = module->getOrCreateStructType(
 			"cstring",
-			{mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getPtr()});
+			{mir::MIRType::getPtr(), mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 		structTypes["cstring"] = cstringType;
 	}
 	return cstringType;
@@ -43,7 +43,7 @@ mir::MIRType *MIRCodeGenerator::getOrCreateSubstringType() {
 	if (!substringType) {
 		substringType = module->getOrCreateStructType(
 			"substring",
-			{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+			{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 		structTypes["substring"] = substringType;
 	}
 	return substringType;
@@ -51,7 +51,7 @@ mir::MIRType *MIRCodeGenerator::getOrCreateSubstringType() {
 
 mir::MIRType *MIRCodeGenerator::getOrCreateManagedArrayDataType(const std::string &elementType) {
 	// Create the internal __ManagedArrayData struct type for the given element type
-	// Layout: { _buffer ptr, _len i32, _capacity i32 }
+	// Layout: { _buffer ptr, _len i64, _capacity i64 }
 	// - _buffer: pointer to the actual array data
 	// - _len: current number of elements
 	// - _capacity: allocated capacity (0 for static arrays)
@@ -60,7 +60,7 @@ mir::MIRType *MIRCodeGenerator::getOrCreateManagedArrayDataType(const std::strin
 	if (!dataType) {
 		dataType = module->getOrCreateStructType(
 			typeName,
-			{mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+			{mir::MIRType::getPtr(), mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 		structTypes[typeName] = dataType;
 	}
 	return dataType;
@@ -69,7 +69,7 @@ mir::MIRType *MIRCodeGenerator::getOrCreateManagedArrayDataType(const std::strin
 mir::MIRType *MIRCodeGenerator::getOrCreateArrayStructType(const std::string &elementType) {
 	// Create the array<T> struct type as defined in stdlib/collections/array.maxon
 	// Layout: { managed _ManagedArray<T>, iterIndex int }
-	// where _ManagedArray<T> is { _buffer ptr, _len i32, _capacity i32 }
+	// where _ManagedArray<T> is { _buffer ptr, _len i64, _capacity i64 }
 	std::string typeName = "array<" + elementType + ">";
 
 	// Check if already exists (either created here or by instantiateGenericStruct)
@@ -99,7 +99,7 @@ mir::MIRType *MIRCodeGenerator::getOrCreateArrayStructType(const std::string &el
 	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementType);
 	mir::MIRType *arrayStructType = module->getOrCreateStructType(
 		typeName,
-		{managedArrayType, mir::MIRType::getInt32()});
+		{managedArrayType, mir::MIRType::getInt64()});
 	structTypes[typeName] = arrayStructType;
 	structFields[typeName] = {
 		{"managed", "_ManagedArray<" + elementType + ">"},
@@ -361,7 +361,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_slice(CallExprAST *callExpr) {
 	mir::MIRValue *slicePtr = builder->createArrayGEP(mir::MIRType::getInt8(), srcPtr, start64, "slice.ptr");
 
 	mir::MIRValue *newSub = msb.allocateSubstringStruct("slice.substring");
-	msb.populateSubstringStruct(newSub, managedPtr, slicePtr, newLen, builder->getInt32(0));
+	msb.populateSubstringStruct(newSub, managedPtr, slicePtr, newLen, builder->getInt64(0));
 
 	// Retain parent if heap-allocated
 	msb.emitRetainIfHeap(managedPtr);
@@ -401,7 +401,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_byte_offset(CallExprAST *ca
 	mir::MIRValue *parentInt = builder->createPtrToInt(parentDataPtr, mir::MIRType::getInt64(), "parent.int");
 	mir::MIRValue *subInt = builder->createPtrToInt(subDataPtr, mir::MIRType::getInt64(), "sub.int");
 	mir::MIRValue *offset64 = builder->createSub(subInt, parentInt, "offset64");
-	return builder->createTrunc(offset64, mir::MIRType::getInt32(), "offset");
+	return offset64;
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_string_concat(CallExprAST *callExpr) {
@@ -416,7 +416,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_concat(CallExprAST *callExpr) 
 	mir::MIRValue *len2 = msb.getLength(m2Ptr, "len2");
 
 	mir::MIRValue *totalLen = builder->createAdd(len1, len2, "total.len");
-	mir::MIRValue *totalLenPlus1 = builder->createAdd(totalLen, builder->getInt32(1), "total.len.plus1");
+	mir::MIRValue *totalLenPlus1 = builder->createAdd(totalLen, builder->getInt64(1), "total.len.plus1");
 
 	mir::MIRValue *ptr1 = msb.getDataPtr(m1Ptr, "ptr1");
 	mir::MIRValue *ptr2 = msb.getDataPtr(m2Ptr, "ptr2");
@@ -425,15 +425,12 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_concat(CallExprAST *callExpr) 
 
 	mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
 														{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
-	mir::MIRValue *len1_64 = builder->createSExt(len1, mir::MIRType::getInt64(), "len1_64");
-	builder->createCall(memcpyFunc, {newBuffer, ptr1, len1_64});
+	builder->createCall(memcpyFunc, {newBuffer, ptr1, len1});
 
-	mir::MIRValue *destOffset = builder->createGEP(mir::MIRType::getInt8(), newBuffer, {len1_64}, "dest.offset");
-	mir::MIRValue *len2_64 = builder->createSExt(len2, mir::MIRType::getInt64(), "len2_64");
-	builder->createCall(memcpyFunc, {destOffset, ptr2, len2_64});
+	mir::MIRValue *destOffset = builder->createGEP(mir::MIRType::getInt8(), newBuffer, {len1}, "dest.offset");
+	builder->createCall(memcpyFunc, {destOffset, ptr2, len2});
 
-	mir::MIRValue *totalLen64 = builder->createSExt(totalLen, mir::MIRType::getInt64(), "total_len64_for_null");
-	mir::MIRValue *nullTermPtr = builder->createGEP(mir::MIRType::getInt8(), newBuffer, {totalLen64}, "null_term_ptr");
+	mir::MIRValue *nullTermPtr = builder->createGEP(mir::MIRType::getInt8(), newBuffer, {totalLen}, "null_term_ptr");
 	builder->createStore(builder->getInt8(0), nullTermPtr);
 
 	mir::MIRValue *managedSize = builder->getInt64(32);
@@ -465,11 +462,11 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_make_unique(CallExprAST *callE
 	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].value.get());
 
 	mir::MIRValue *lenPtr = builder->createStructGEP(managedStringType, managedPtr, 1, "src._len");
-	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
+	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt64(), lenPtr, "len");
 	mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, "src._capacity");
-	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtr, "cap");
+	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt64(), capPtr, "cap");
 
-	mir::MIRValue *isHeap = builder->createICmpSGT(cap, builder->getInt32(0), "isHeap");
+	mir::MIRValue *isHeap = builder->createICmpSGT(cap, builder->getInt64(0), "isHeap");
 
 	mir::MIRBasicBlock *heapBlock = builder->createBasicBlock("make_unique.heap");
 	mir::MIRBasicBlock *constBlock = builder->createBasicBlock("make_unique.const");
@@ -485,7 +482,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_make_unique(CallExprAST *callE
 
 	mir::MIRValue *tag = module->createGlobalString(".__tag.str.cow", "string COW");
 	mir::MIRFunction *makeUniqueFunc = getOrDeclareFunction("_managed_string_make_unique",
-															mir::MIRType::getPtr(), {mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getPtr()});
+															mir::MIRType::getPtr(), {mir::MIRType::getPtr(), mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 	mir::MIRValue *newDataPtr = builder->createCall(makeUniqueFunc, {srcDataPtr, len, tag}, "unique.data");
 
 	builder->createStore(newDataPtr, srcPtrPtr);
@@ -499,28 +496,26 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_make_unique(CallExprAST *callE
 
 	// Allocate new buffer with _managed_string_alloc (handles header and refcount)
 	// Request len + 1 bytes (for data + null terminator)
-	mir::MIRValue *allocSize = builder->createAdd(len, builder->getInt32(1), "alloc.size");
-	mir::MIRValue *allocSize64 = builder->createSExt(allocSize, mir::MIRType::getInt64(), "alloc.size64");
+	mir::MIRValue *allocSize = builder->createAdd(len, builder->getInt64(1), "alloc.size");
 	mir::MIRValue *allocTag = module->createGlobalString(".__tag.str.cow", "string COW const");
 	mir::MIRFunction *allocFunc = getOrDeclareFunction("_managed_string_alloc",
 													   mir::MIRType::getPtr(), {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
-	mir::MIRValue *newDataStart = builder->createCall(allocFunc, {allocSize64, allocTag}, "new.data");
+	mir::MIRValue *newDataStart = builder->createCall(allocFunc, {allocSize, allocTag}, "new.data");
 
 	// Copy constant data to new buffer
-	mir::MIRValue *len64 = builder->createSExt(len, mir::MIRType::getInt64(), "len64");
 	mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy",
 														mir::MIRType::getPtr(), {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
-	builder->createCall(memcpyFunc, {newDataStart, constDataPtr, len64}, "");
+	builder->createCall(memcpyFunc, {newDataStart, constDataPtr, len}, "");
 
 	// Null-terminate
-	mir::MIRValue *nullPos = builder->createArrayGEP(mir::MIRType::getInt8(), newDataStart, len64, "null.pos");
+	mir::MIRValue *nullPos = builder->createArrayGEP(mir::MIRType::getInt8(), newDataStart, len, "null.pos");
 	builder->createStore(builder->getInt8(0), nullPos);
 
 	// Update managed string to point to new heap buffer
 	builder->createStore(newDataStart, constPtrPtr);
 
 	// Set capacity to len+1 to indicate heap allocation
-	mir::MIRValue *newCap = builder->createAdd(len, builder->getInt32(1), "new.cap");
+	mir::MIRValue *newCap = builder->createAdd(len, builder->getInt64(1), "new.cap");
 	builder->createStore(newCap, capPtr);
 
 	builder->createBr(mergeBlock);
@@ -560,8 +555,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_get_refcount(CallExprAST *call
 	mir::MIRValue *managedPtr = getManagedStringPtr(callExpr->args[0].value.get());
 
 	mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, "src._capacity");
-	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtr, "cap");
-	mir::MIRValue *isHeap = builder->createICmpSGT(cap, builder->getInt32(0), "isHeap");
+	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt64(), capPtr, "cap");
+	mir::MIRValue *isHeap = builder->createICmpSGT(cap, builder->getInt64(0), "isHeap");
 
 	mir::MIRBasicBlock *heapBlock = builder->createBasicBlock("refcount.heap");
 	mir::MIRBasicBlock *constBlock = builder->createBasicBlock("refcount.const");
@@ -602,11 +597,11 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_to_cstring(CallExprAST *callEx
 	mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), bufPtrPtr, "data.ptr");
 
 	mir::MIRValue *lenPtr = builder->createStructGEP(managedStringType, managedPtr, 1, "src._len");
-	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
+	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt64(), lenPtr, "len");
 
 	mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, "src._capacity");
-	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtr, "cap");
-	mir::MIRValue *isHeap = builder->createICmpSGT(cap, builder->getInt32(0), "isHeap");
+	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt64(), capPtr, "cap");
+	mir::MIRValue *isHeap = builder->createICmpSGT(cap, builder->getInt64(0), "isHeap");
 
 	// For SSO strings, we need to allocate a null-terminated buffer
 	mir::MIRBasicBlock *ssoBlock = builder->createBasicBlock("cstring.sso");
@@ -618,15 +613,13 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_to_cstring(CallExprAST *callEx
 	builder->setInsertPoint(ssoBlock);
 	mir::MIRFunction *allocFunc = getOrDeclareFunction("_managed_string_alloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 	mir::MIRValue *tag = module->createGlobalString(".__tag.cstr", "cstring conversion");
-	mir::MIRValue *allocSize = builder->createAdd(len, builder->getInt32(1), "alloc.size");
-	mir::MIRValue *allocSize64 = builder->createZExt(allocSize, mir::MIRType::getInt64(), "alloc.size.64");
-	mir::MIRValue *ssoDataPtr = builder->createCall(allocFunc, {allocSize64, tag}, "sso.cstr.alloc");
+	mir::MIRValue *allocSize = builder->createAdd(len, builder->getInt64(1), "alloc.size");
+	mir::MIRValue *ssoDataPtr = builder->createCall(allocFunc, {allocSize, tag}, "sso.cstr.alloc");
 
 	// Copy data and null-terminate
 	mir::MIRFunction *memcpyFunc = module->getFunction("memcpy");
-	mir::MIRValue *len64 = builder->createZExt(len, mir::MIRType::getInt64(), "len.64");
-	builder->createCall(memcpyFunc, {ssoDataPtr, dataPtr, len64}, "sso.copy");
-	mir::MIRValue *nullPtr = builder->createGEP(mir::MIRType::getInt8(), ssoDataPtr, {len64}, "null.ptr");
+	builder->createCall(memcpyFunc, {ssoDataPtr, dataPtr, len}, "sso.copy");
+	mir::MIRValue *nullPtr = builder->createGEP(mir::MIRType::getInt8(), ssoDataPtr, {len}, "null.ptr");
 	builder->createStore(builder->getInt8(0), nullPtr);
 	builder->createBr(continueBlock);
 
@@ -714,17 +707,15 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_from_chars(CallExprAST *callEx
 		srcBuffer = generateExpr(callExpr->args[0].value.get());
 	}
 
-	mir::MIRValue *lengthPlus1 = builder->createAdd(length, builder->getInt32(1), "len.plus1");
-	mir::MIRValue *lengthPlus1_64 = builder->createSExt(lengthPlus1, mir::MIRType::getInt64(), "len64");
+	mir::MIRValue *lengthPlus1 = builder->createAdd(length, builder->getInt64(1), "len.plus1");
 	mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
-	mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {lengthPlus1_64}, "fromchars.buffer");
+	mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {lengthPlus1}, "fromchars.buffer");
 
 	mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
 														{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
-	mir::MIRValue *length_64 = builder->createSExt(length, mir::MIRType::getInt64(), "len_64");
-	builder->createCall(memcpyFunc, {newBuffer, srcBuffer, length_64});
+	builder->createCall(memcpyFunc, {newBuffer, srcBuffer, length});
 
-	mir::MIRValue *nullTermPtr = builder->createGEP(mir::MIRType::getInt8(), newBuffer, {length_64}, "null_term_ptr");
+	mir::MIRValue *nullTermPtr = builder->createGEP(mir::MIRType::getInt8(), newBuffer, {length}, "null_term_ptr");
 	builder->createStore(builder->getInt8(0), nullTermPtr);
 
 	mir::MIRValue *managedSize = builder->getInt64(32);
@@ -753,7 +744,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_cstring_len(CallExprAST *callExpr) {
 	mir::MIRType *cstringType = getOrCreateCstringType();
 	mir::MIRValue *csPtr = getCstringPtr(callExpr->args[0].value.get());
 	mir::MIRValue *lenPtr = builder->createStructGEP(cstringType, csPtr, 1, "cstring.len.ptr");
-	return builder->createLoad(mir::MIRType::getInt32(), lenPtr, "cstring.len");
+	return builder->createLoad(mir::MIRType::getInt64(), lenPtr, "cstring.len");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_cstring_write_stdout(CallExprAST *callExpr) {
@@ -764,10 +755,10 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_cstring_write_stdout(CallExprAST *cal
 	mir::MIRValue *data = builder->createLoad(mir::MIRType::getPtr(), dataPtr, "cstring.data");
 
 	mir::MIRValue *lenPtr = builder->createStructGEP(cstringType, csPtr, 1, "cstring.len.ptr");
-	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "cstring.len");
+	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt64(), lenPtr, "cstring.len");
 
 	mir::MIRFunction *writeStdout = getOrDeclareFunction(
-		"write_stdout", mir::MIRType::getInt32(), {mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+		"write_stdout", mir::MIRType::getInt64(), {mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 	return builder->createCall(writeStdout, {data, len}, "write.result");
 }
 
@@ -857,7 +848,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_write_file_binary(CallExprAST *callEx
 	// Get array info
 	ArrayFieldInfo info = getManagedArrayInfo(callExpr->args[1].value.get(), callExpr->line, callExpr->column);
 	if (!info.dataPtr) {
-		return builder->getInt32(-1);
+		return builder->getInt64(-1);
 	}
 
 	// Get buffer pointer
@@ -867,11 +858,11 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_write_file_binary(CallExprAST *callEx
 
 	// Get length
 	mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, info.dataPtr, 1, "arr._len");
-	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
+	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt64(), lenPtr, "len");
 
 	// Call runtime write_file
 	mir::MIRFunction *writeFileFunc = getOrDeclareFunction(
-		"__write_file_binary", mir::MIRType::getInt32(), {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+		"__write_file_binary", mir::MIRType::getInt64(), {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 
 	return builder->createCall(writeFileFunc, {pathData, managedDataPtr, len}, "write.result");
 }
@@ -927,10 +918,10 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_list_directory(CallExprAST *callExpr)
 	mir::MIRValue *buffer = builder->createLoad(mir::MIRType::getPtr(), bufferPtrField, "managed.buffer");
 
 	mir::MIRValue *lenPtrField = builder->createStructGEP(managedArrayType, resultPtr, 1, "managed.len.ptr");
-	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtrField, "managed.len");
+	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt64(), lenPtrField, "managed.len");
 
 	mir::MIRValue *capPtrField = builder->createStructGEP(managedArrayType, resultPtr, 2, "managed.cap.ptr");
-	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt32(), capPtrField, "managed.cap");
+	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt64(), capPtrField, "managed.cap");
 
 	// Free the temporary heap allocation for the result struct
 	mir::MIRFunction *freeFunc = getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr()});
@@ -954,7 +945,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_list_directory(CallExprAST *callExpr)
 
 	// Set iterIndex (field 1) to 0
 	mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, valPtr, 1, "array.iter");
-	builder->createStore(builder->getInt32(0), iterField);
+	builder->createStore(builder->getInt64(0), iterField);
 
 	// Set tag = 1 (has value)
 	builder->createStore(builder->getInt8(1), tagPtr);
@@ -1010,7 +1001,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_len(CallExprAST *callExpr) 
 	mir::MIRType *substringType = getOrCreateSubstringType();
 	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].value.get());
 	mir::MIRValue *lenPtr = builder->createStructGEP(substringType, subPtr, 2, "sub._len");
-	return builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
+	return builder->createLoad(mir::MIRType::getInt64(), lenPtr, "len");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_substring_byte_at(CallExprAST *callExpr) {
@@ -1030,7 +1021,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_iter_pos(CallExprAST *callE
 	mir::MIRType *substringType = getOrCreateSubstringType();
 	mir::MIRValue *subPtr = getSubstringPtr(callExpr->args[0].value.get());
 	mir::MIRValue *iterPosPtr = builder->createStructGEP(substringType, subPtr, 3, "sub._iterPos");
-	return builder->createLoad(mir::MIRType::getInt32(), iterPosPtr, "iterPos");
+	return builder->createLoad(mir::MIRType::getInt64(), iterPosPtr, "iterPos");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_substring_with_iter_pos(CallExprAST *callExpr) {
@@ -1044,7 +1035,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_with_iter_pos(CallExprAST *
 	for (int i = 0; i < 4; i++) {
 		mir::MIRValue *srcField = builder->createStructGEP(substringType, subPtr, i, "src.field" + std::to_string(i));
 		mir::MIRValue *dstField = builder->createStructGEP(substringType, newSub, i, "dst.field" + std::to_string(i));
-		mir::MIRType *fieldType = (i < 2) ? mir::MIRType::getPtr() : mir::MIRType::getInt32();
+		mir::MIRType *fieldType = (i < 2) ? mir::MIRType::getPtr() : mir::MIRType::getInt64();
 		mir::MIRValue *val = builder->createLoad(fieldType, srcField, "val" + std::to_string(i));
 		builder->createStore(val, dstField);
 	}
@@ -1066,11 +1057,10 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_to_string(CallExprAST *call
 	mir::MIRValue *srcPtrPtr = builder->createStructGEP(substringType, subPtr, 1, "src._ptr");
 	mir::MIRValue *srcPtr = builder->createLoad(mir::MIRType::getPtr(), srcPtrPtr, "src.ptr");
 	mir::MIRValue *lenPtr = builder->createStructGEP(substringType, subPtr, 2, "src._len");
-	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "len");
+	mir::MIRValue *len = builder->createLoad(mir::MIRType::getInt64(), lenPtr, "len");
 
 	// Use _managed_string_alloc to properly allocate buffer with refcount header
-	mir::MIRValue *lenPlus1 = builder->createAdd(len, builder->getInt32(1), "len.plus1");
-	mir::MIRValue *lenPlus1_64 = builder->createSExt(lenPlus1, mir::MIRType::getInt64(), "len64");
+	mir::MIRValue *lenPlus1 = builder->createAdd(len, builder->getInt64(1), "len.plus1");
 
 	// Create allocation tag for debugging
 	mir::MIRValue *tag = module->createGlobalString(".__tag.tostring", "substring.toString");
@@ -1082,16 +1072,15 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_to_string(CallExprAST *call
 												   mir::MIRType::getPtr(),
 												   {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 	}
-	mir::MIRValue *newBuffer = builder->createCall(stringAllocFunc, {lenPlus1_64, tag}, "tostring.buffer");
+	mir::MIRValue *newBuffer = builder->createCall(stringAllocFunc, {lenPlus1, tag}, "tostring.buffer");
 
 	// Copy data from substring to new buffer
 	mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
 														{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
-	mir::MIRValue *len_64 = builder->createSExt(len, mir::MIRType::getInt64(), "len_64");
-	builder->createCall(memcpyFunc, {newBuffer, srcPtr, len_64});
+	builder->createCall(memcpyFunc, {newBuffer, srcPtr, len});
 
 	// Add null terminator
-	mir::MIRValue *nullTermPtr = builder->createGEP(mir::MIRType::getInt8(), newBuffer, {len_64}, "null_term_ptr");
+	mir::MIRValue *nullTermPtr = builder->createGEP(mir::MIRType::getInt8(), newBuffer, {len}, "null_term_ptr");
 	builder->createStore(builder->getInt8(0), nullTermPtr);
 
 	// Allocate ManagedStringData struct
@@ -1146,12 +1135,12 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_slice(CallExprAST *callExpr
 	builder->createStore(newLen, dstLenPtr);
 
 	mir::MIRValue *dstIterPosPtr = builder->createStructGEP(substringType, newSub, 3, "dst._iterPos");
-	builder->createStore(builder->getInt32(0), dstIterPosPtr);
+	builder->createStore(builder->getInt64(0), dstIterPosPtr);
 
 	// Retain parent if heap-allocated
 	mir::MIRValue *parentCapPtr = builder->createStructGEP(managedStringType, parentManaged, 2, "parent._capacity");
-	mir::MIRValue *parentCap = builder->createLoad(mir::MIRType::getInt32(), parentCapPtr, "parent.cap");
-	mir::MIRValue *isHeap = builder->createICmpSGT(parentCap, builder->getInt32(0), "isHeap");
+	mir::MIRValue *parentCap = builder->createLoad(mir::MIRType::getInt64(), parentCapPtr, "parent.cap");
+	mir::MIRValue *isHeap = builder->createICmpSGT(parentCap, builder->getInt64(0), "isHeap");
 
 	mir::MIRBasicBlock *retainBlock = builder->createBasicBlock("slice.retain");
 	mir::MIRBasicBlock *continueBlock = builder->createBasicBlock("slice.continue");
@@ -1180,12 +1169,12 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_len(CallExprAST *callExpr) {
 
 	// If we have a hidden length alloca (regular variable), use it directly
 	if (info.lengthAlloca) {
-		return builder->createLoad(mir::MIRType::getInt32(), info.lengthAlloca, "array.len");
+		return builder->createLoad(mir::MIRType::getInt64(), info.lengthAlloca, "array.len");
 	}
 
-	// For struct fields or heap arrays without hidden alloca, read from header at dataPtr - 8
-	// Layout: [length:i32][capacity:i32][...data...]
-	//              -8          -4           0+
+	// For struct fields or heap arrays without hidden alloca, read from header at dataPtr - 16
+	// Layout: [length:i64][capacity:i64][...data...]
+	//              -16          -8           0+
 	mir::MIRValue *dataPtr;
 	if (info.isStructField) {
 		// Struct field: info.dataPtr is a pointer to the array field, need to load the data pointer
@@ -1202,8 +1191,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_len(CallExprAST *callExpr) {
 	}
 
 	mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
-												  {builder->getInt64(-8)}, "length.ptr");
-	return builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "array.len");
+												  {builder->getInt64(-16)}, "length.ptr");
+	return builder->createLoad(mir::MIRType::getInt64(), lengthPtr, "array.len");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_capacity(CallExprAST *callExpr) {
@@ -1212,12 +1201,12 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_capacity(CallExprAST *callExpr)
 
 	// If we have a hidden capacity alloca (regular variable), use it directly
 	if (info.capacityAlloca) {
-		return builder->createLoad(mir::MIRType::getInt32(), info.capacityAlloca, "array.cap");
+		return builder->createLoad(mir::MIRType::getInt64(), info.capacityAlloca, "array.cap");
 	}
 
-	// For struct fields or heap arrays without hidden alloca, read from header at dataPtr - 4
-	// Layout: [length:i32][capacity:i32][...data...]
-	//              -8          -4           0+
+	// For struct fields or heap arrays without hidden alloca, read from header at dataPtr - 8
+	// Layout: [length:i64][capacity:i64][...data...]
+	//              -16          -8           0+
 	mir::MIRValue *dataPtr;
 	if (info.isStructField) {
 		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
@@ -1229,8 +1218,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_capacity(CallExprAST *callExpr)
 	}
 
 	mir::MIRValue *capacityPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
-													{builder->getInt64(-4)}, "capacity.ptr");
-	return builder->createLoad(mir::MIRType::getInt32(), capacityPtr, "array.cap");
+													{builder->getInt64(-8)}, "capacity.ptr");
+	return builder->createLoad(mir::MIRType::getInt64(), capacityPtr, "array.cap");
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_length(CallExprAST *callExpr) {
@@ -1241,10 +1230,10 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_length(CallExprAST *callExp
 	// If we have a hidden length alloca (regular variable), use it directly
 	if (info.lengthAlloca) {
 		builder->createStore(newLen, info.lengthAlloca);
-		return builder->getInt32(0);
+		return builder->getInt64(0);
 	}
 
-	// For struct fields or heap arrays without hidden alloca, write to header at dataPtr - 8
+	// For struct fields or heap arrays without hidden alloca, write to header at dataPtr - 16
 	mir::MIRValue *dataPtr;
 	if (info.isStructField) {
 		dataPtr = builder->createLoad(mir::MIRType::getPtr(), info.dataPtr, "data.ptr");
@@ -1253,9 +1242,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_length(CallExprAST *callExp
 	}
 
 	mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
-												  {builder->getInt64(-8)}, "length.ptr");
+												  {builder->getInt64(-16)}, "length.ptr");
 	builder->createStore(newLen, lengthPtr);
-	return builder->getInt32(0);
+	return builder->getInt64(0);
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_grow(CallExprAST *callExpr) {
@@ -1276,13 +1265,13 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_grow(CallExprAST *callExpr) {
 	// Load current capacity
 	mir::MIRValue *capacity;
 	if (capacityAlloca) {
-		capacity = builder->createLoad(mir::MIRType::getInt32(), capacityAlloca, "capacity");
+		capacity = builder->createLoad(mir::MIRType::getInt64(), capacityAlloca, "capacity");
 	} else {
-		// For struct fields, read capacity from heap header at dataPtr - 4
+		// For struct fields, read capacity from heap header at dataPtr - 8
 		mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrAlloca, "data.ptr");
 		mir::MIRValue *capacityPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
-														{builder->getInt64(-4)}, "capacity.ptr");
-		capacity = builder->createLoad(mir::MIRType::getInt32(), capacityPtr, "capacity");
+														{builder->getInt64(-8)}, "capacity.ptr");
+		capacity = builder->createLoad(mir::MIRType::getInt64(), capacityPtr, "capacity");
 	}
 
 	// Check if we need to grow: minCapacity > capacity
@@ -1297,7 +1286,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_grow(CallExprAST *callExpr) {
 	builder->setInsertPoint(growBlock);
 
 	// Calculate new capacity: max(minCapacity, capacity * 2), minimum 4
-	mir::MIRValue *doubledCap = builder->createMul(capacity, builder->getInt32(2), "doubled.cap");
+	mir::MIRValue *doubledCap = builder->createMul(capacity, builder->getInt64(2), "doubled.cap");
 
 	// Use minCapacity if larger than doubled
 	mir::MIRBasicBlock *useMinBlock = currentFunc->createBasicBlock("grow.usemin");
@@ -1314,7 +1303,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_grow(CallExprAST *callExpr) {
 	builder->createBr(checkMinBlock);
 
 	builder->setInsertPoint(checkMinBlock);
-	mir::MIRValue *newCapPhi = builder->createPhi(mir::MIRType::getInt32(), "new.cap.phi");
+	mir::MIRValue *newCapPhi = builder->createPhi(mir::MIRType::getInt64(), "new.cap.phi");
 	builder->addPhiIncoming(newCapPhi, minCapacity, useMinBlock);
 	builder->addPhiIncoming(newCapPhi, doubledCap, useDoubleBlock);
 
@@ -1322,23 +1311,21 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_grow(CallExprAST *callExpr) {
 	mir::MIRBasicBlock *useMinFourBlock = currentFunc->createBasicBlock("grow.minfour");
 	mir::MIRBasicBlock *doReallocBlock = currentFunc->createBasicBlock("grow.realloc");
 
-	mir::MIRValue *lessThanFour = builder->createICmpSLT(newCapPhi, builder->getInt32(4), "lt.four");
+	mir::MIRValue *lessThanFour = builder->createICmpSLT(newCapPhi, builder->getInt64(4), "lt.four");
 	builder->createCondBr(lessThanFour, useMinFourBlock, doReallocBlock);
 
 	builder->setInsertPoint(useMinFourBlock);
 	builder->createBr(doReallocBlock);
 
 	builder->setInsertPoint(doReallocBlock);
-	mir::MIRValue *newCapacity = builder->createPhi(mir::MIRType::getInt32(), "new.capacity");
-	builder->addPhiIncoming(newCapacity, builder->getInt32(4), useMinFourBlock);
+	mir::MIRValue *newCapacity = builder->createPhi(mir::MIRType::getInt64(), "new.capacity");
+	builder->addPhiIncoming(newCapacity, builder->getInt64(4), useMinFourBlock);
 	builder->addPhiIncoming(newCapacity, newCapPhi, checkMinBlock);
 
 	// Calculate old and new sizes in bytes
 	mir::MIRValue *elemSizeVal = builder->getInt64(elemSize);
-	mir::MIRValue *capacity64 = builder->createSExt(capacity, mir::MIRType::getInt64(), "cap64");
-	mir::MIRValue *newCapacity64 = builder->createSExt(newCapacity, mir::MIRType::getInt64(), "newcap64");
-	mir::MIRValue *oldSize = builder->createMul(capacity64, elemSizeVal, "old.size");
-	mir::MIRValue *newSize = builder->createMul(newCapacity64, elemSizeVal, "new.size");
+	mir::MIRValue *oldSize = builder->createMul(capacity, elemSizeVal, "old.size");
+	mir::MIRValue *newSize = builder->createMul(newCapacity, elemSizeVal, "new.size");
 
 	// Load current array pointer and call realloc
 	mir::MIRValue *arrPtr = builder->createLoad(mir::MIRType::getPtr(), arrAlloca, "arr.ptr");
@@ -1353,16 +1340,16 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_grow(CallExprAST *callExpr) {
 	if (capacityAlloca) {
 		builder->createStore(newCapacity, capacityAlloca);
 	} else {
-		// For struct fields, write capacity to heap header at newArrPtr - 4
+		// For struct fields, write capacity to heap header at newArrPtr - 8
 		mir::MIRValue *newCapacityPtr = builder->createGEP(mir::MIRType::getInt8(), newArrPtr,
-														   {builder->getInt64(-4)}, "new.capacity.ptr");
+														   {builder->getInt64(-8)}, "new.capacity.ptr");
 		builder->createStore(newCapacity, newCapacityPtr);
 	}
 	builder->createBr(doneBlock);
 
 	// Done block
 	builder->setInsertPoint(doneBlock);
-	return builder->getInt32(0);
+	return builder->getInt64(0);
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_at(CallExprAST *callExpr) {
@@ -1393,7 +1380,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_set_at(CallExprAST *callExpr) {
 	mir::MIRValue *elemPtr = builder->createArrayGEP(elemType, dataPtr, index64, "elem.ptr");
 	builder->createStore(value, elemPtr);
 
-	return builder->getInt32(0);
+	return builder->getInt64(0);
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_right(CallExprAST *callExpr) {
@@ -1436,20 +1423,18 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_right(CallExprAST *callEx
 	mir::MIRValue *byteSize = builder->createMul(elementsToMove64, builder->getInt64(elemSize), "byte.size");
 
 	// Source pointer: arr + start * elemSize
-	mir::MIRValue *start64 = builder->createSExt(start, mir::MIRType::getInt64(), "start64");
-	mir::MIRValue *srcPtr = builder->createArrayGEP(elemType, dataPtr, start64, "src.ptr");
+	mir::MIRValue *srcPtr = builder->createArrayGEP(elemType, dataPtr, start, "src.ptr");
 
 	// Dest pointer: arr + (start + count) * elemSize
 	mir::MIRValue *destIndex = builder->createAdd(start, count, "dest.idx");
-	mir::MIRValue *destIndex64 = builder->createSExt(destIndex, mir::MIRType::getInt64(), "dest64");
-	mir::MIRValue *destPtr = builder->createArrayGEP(elemType, dataPtr, destIndex64, "dest.ptr");
+	mir::MIRValue *destPtr = builder->createArrayGEP(elemType, dataPtr, destIndex, "dest.ptr");
 
 	// Call memmove (handles overlapping regions)
 	mir::MIRFunction *memmoveFunc = getOrDeclareFunction("memmove", mir::MIRType::getPtr(),
 														 {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 	builder->createCall(memmoveFunc, {destPtr, srcPtr, byteSize}, "");
 
-	return builder->getInt32(0);
+	return builder->getInt64(0);
 }
 
 mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_left(CallExprAST *callExpr) {
@@ -1476,12 +1461,12 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_left(CallExprAST *callExp
 	// Get current length
 	mir::MIRValue *length;
 	if (info.lengthAlloca) {
-		length = builder->createLoad(mir::MIRType::getInt32(), info.lengthAlloca, "len");
+		length = builder->createLoad(mir::MIRType::getInt64(), info.lengthAlloca, "len");
 	} else {
-		// For struct fields or heap arrays, read from header at dataPtr - 8
+		// For struct fields or heap arrays, read from header at dataPtr - 16
 		mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
-													  {builder->getInt64(-8)}, "length.ptr");
-		length = builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "len");
+													  {builder->getInt64(-16)}, "length.ptr");
+		length = builder->createLoad(mir::MIRType::getInt64(), lengthPtr, "len");
 	}
 
 	// Calculate source index: start + count
@@ -1491,21 +1476,18 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_left(CallExprAST *callExp
 	mir::MIRValue *elementsToMove = builder->createSub(length, srcIndex, "elems.to.move");
 
 	// Calculate byte size to move
-	mir::MIRValue *elementsToMove64 = builder->createSExt(elementsToMove, mir::MIRType::getInt64(), "elems64");
-	mir::MIRValue *byteSize = builder->createMul(elementsToMove64, builder->getInt64(elemSize), "byte.size");
+	mir::MIRValue *byteSize = builder->createMul(elementsToMove, builder->getInt64(elemSize), "byte.size");
 
 	// Source pointer: arr + srcIndex * elemSize
-	mir::MIRValue *srcIndex64 = builder->createSExt(srcIndex, mir::MIRType::getInt64(), "srcidx64");
-	mir::MIRValue *srcPtr = builder->createArrayGEP(elemType, dataPtr, srcIndex64, "src.ptr");
+	mir::MIRValue *srcPtr = builder->createArrayGEP(elemType, dataPtr, srcIndex, "src.ptr");
 
 	// Dest pointer: arr + start * elemSize
-	mir::MIRValue *start64 = builder->createSExt(start, mir::MIRType::getInt64(), "start64");
-	mir::MIRValue *destPtr = builder->createArrayGEP(elemType, dataPtr, start64, "dest.ptr");
+	mir::MIRValue *destPtr = builder->createArrayGEP(elemType, dataPtr, start, "dest.ptr");
 
 	// Call memmove (handles overlapping regions)
 	mir::MIRFunction *memmoveFunc = getOrDeclareFunction("memmove", mir::MIRType::getPtr(),
 														 {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 	builder->createCall(memmoveFunc, {destPtr, srcPtr, byteSize}, "");
 
-	return builder->getInt32(0);
+	return builder->getInt64(0);
 }

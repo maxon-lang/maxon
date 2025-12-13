@@ -30,13 +30,13 @@ mir::MIRValue *ManagedStringBuilder::getDataPtr(mir::MIRValue *managedPtr, const
 mir::MIRValue *ManagedStringBuilder::getLength(mir::MIRValue *managedPtr, const std::string &name) {
 	mir::MIRType *managedType = getManagedStringType();
 	mir::MIRValue *lenPtr = gen_.builder->createStructGEP(managedType, managedPtr, 1, name + ".ptr");
-	return gen_.builder->createLoad(mir::MIRType::getInt32(), lenPtr, name);
+	return gen_.builder->createLoad(mir::MIRType::getInt64(), lenPtr, name);
 }
 
 mir::MIRValue *ManagedStringBuilder::getCapacity(mir::MIRValue *managedPtr, const std::string &name) {
 	mir::MIRType *managedType = getManagedStringType();
 	mir::MIRValue *capPtr = gen_.builder->createStructGEP(managedType, managedPtr, 2, name + ".ptr");
-	return gen_.builder->createLoad(mir::MIRType::getInt32(), capPtr, name);
+	return gen_.builder->createLoad(mir::MIRType::getInt64(), capPtr, name);
 }
 
 mir::MIRValue *ManagedStringBuilder::isHeapAllocated(mir::MIRValue *managedPtr, const std::string &name) {
@@ -45,7 +45,7 @@ mir::MIRValue *ManagedStringBuilder::isHeapAllocated(mir::MIRValue *managedPtr, 
 	//    0 = constant string (no heap ownership)
 	//   >0 = heap allocated with ownership
 	mir::MIRValue *cap = getCapacity(managedPtr, "cap.check");
-	mir::MIRValue *zero = gen_.builder->getInt32(0);
+	mir::MIRValue *zero = gen_.builder->getInt64(0);
 	return gen_.builder->createICmpSGT(cap, zero, name);
 }
 
@@ -54,14 +54,11 @@ mir::MIRValue *ManagedStringBuilder::isHeapAllocated(mir::MIRValue *managedPtr, 
 mir::MIRValue *ManagedStringBuilder::allocateBuffer(mir::MIRValue *capacity, const std::string &tag) {
 	mir::MIRValue *tagStr = createTag(".__tag.alloc." + tag, tag);
 
-	// Ensure capacity is i64 for _managed_string_alloc
-	// Note: We always sign-extend to be safe since capacity should typically be i32
-	mir::MIRValue *capacity64 = gen_.builder->createSExt(capacity, mir::MIRType::getInt64(), "cap64");
-
+	// capacity is already i64 since int is now 64-bit
 	mir::MIRFunction *allocFunc =
 		getOrDeclareFunction("_managed_string_alloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 
-	return gen_.builder->createCall(allocFunc, {capacity64, tagStr}, "buffer.alloc");
+	return gen_.builder->createCall(allocFunc, {capacity, tagStr}, "buffer.alloc");
 }
 
 mir::MIRValue *ManagedStringBuilder::allocateManagedStruct(const std::string &name) {

@@ -18,7 +18,7 @@ void MIRCodeGenerator::generateIf(IfStmtAST *ifStmt, mir::MIRFunction *function)
 
 	// Convert to bool if needed
 	if (condVal->type->kind != mir::MIRTypeKind::Int1) {
-		mir::MIRValue *zero = builder->getInt32(0);
+		mir::MIRValue *zero = (condVal->type->kind == mir::MIRTypeKind::Int64) ? builder->getInt64(0) : builder->getInt32(0);
 		condVal = builder->createICmpNe(condVal, zero, "ifcond");
 	}
 
@@ -91,7 +91,7 @@ void MIRCodeGenerator::generateWhile(WhileStmtAST *whileStmt, mir::MIRFunction *
 	}
 
 	if (condVal->type->kind != mir::MIRTypeKind::Int1) {
-		mir::MIRValue *zero = builder->getInt32(0);
+		mir::MIRValue *zero = (condVal->type->kind == mir::MIRTypeKind::Int64) ? builder->getInt64(0) : builder->getInt32(0);
 		condVal = builder->createICmpNe(condVal, zero, "loopcond");
 	}
 
@@ -124,7 +124,7 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 	bool isArrayIteration = false;
 	std::string arrayVarName;
 	std::string elementTypeStr = "int";
-	mir::MIRType *elementType = mir::MIRType::getInt32();
+	mir::MIRType *elementType = mir::MIRType::getInt64();
 
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(forStmt->iterable.get())) {
 		arrayVarName = varExpr->name;
@@ -186,9 +186,9 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 			// array<T> struct layout:
 			// Field 0: managed (__ManagedArrayData<T>)
 			//   Field 0 of managed: _buffer ptr
-			//   Field 1 of managed: _len i32
-			//   Field 2 of managed: _capacity i32
-			// Field 1: iterIndex i32
+			//   Field 1 of managed: _len i64
+			//   Field 2 of managed: _capacity i64
+			// Field 1: iterIndex i64
 			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
 			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
 
@@ -197,7 +197,7 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 
 			// Load length from field 1 of managed
 			mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, managedPtr, 1, "arr._len.ptr");
-			arrayLength = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "arrlen");
+			arrayLength = builder->createLoad(mir::MIRType::getInt64(), lenPtr, "arrlen");
 
 			// Load buffer pointer from field 0 of managed
 			mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, managedPtr, 0, "arr._buffer.ptr");
@@ -205,12 +205,12 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 		}
 		// Handle _ManagedArray<T> struct layout (internal managed array data type)
 		else if (maxon::TypeConversion::isManagedArrayType(varType)) {
-			// Managed array: struct layout { _buffer ptr, _len i32, _capacity i32 }
+			// Managed array: struct layout { _buffer ptr, _len i64, _capacity i64 }
 			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
 
 			// Load length from field 1
 			mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, arrayAlloca, 1, "arr._len.ptr");
-			arrayLength = builder->createLoad(mir::MIRType::getInt32(), lenPtr, "arrlen");
+			arrayLength = builder->createLoad(mir::MIRType::getInt64(), lenPtr, "arrlen");
 
 			// Load buffer pointer from field 0
 			mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, arrayAlloca, 0, "arr._buffer.ptr");
@@ -222,7 +222,7 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 				reportError("Array length not found for: " + arrayVarName,
 							forStmt->line, forStmt->column);
 			}
-			arrayLength = builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "arrlen");
+			arrayLength = builder->createLoad(mir::MIRType::getInt64(), lengthAlloca, "arrlen");
 
 			// Get array pointer (stack vs heap allocated)
 			if (stackAllocatedArrays.count(arrayVarName) > 0) {
@@ -233,8 +233,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 		}
 
 		// Create index variable (starts at 0)
-		mir::MIRValue *indexAlloca = builder->createAlloca(mir::MIRType::getInt32(), "__arr_idx");
-		builder->createStore(builder->getInt32(0), indexAlloca);
+		mir::MIRValue *indexAlloca = builder->createAlloca(mir::MIRType::getInt64(), "__arr_idx");
+		builder->createStore(builder->getInt64(0), indexAlloca);
 
 		mir::MIRBasicBlock *condBB = builder->createBasicBlock("forcond");
 		mir::MIRBasicBlock *loopBB = builder->createBasicBlock("forloop");
@@ -247,13 +247,13 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 
 		// Condition: index < length
 		builder->setInsertPoint(condBB);
-		mir::MIRValue *currentIndex = builder->createLoad(mir::MIRType::getInt32(), indexAlloca, "idx");
+		mir::MIRValue *currentIndex = builder->createLoad(mir::MIRType::getInt64(), indexAlloca, "idx");
 		mir::MIRValue *condVal = builder->createICmpSLT(currentIndex, arrayLength, "arrcond");
 		builder->createCondBr(condVal, loopBB, afterBB);
 
 		// Loop body: load current element into loop variable
 		builder->setInsertPoint(loopBB);
-		mir::MIRValue *currentIndexForGEP = builder->createLoad(mir::MIRType::getInt32(), indexAlloca, "idx.gep");
+		mir::MIRValue *currentIndexForGEP = builder->createLoad(mir::MIRType::getInt64(), indexAlloca, "idx.gep");
 		mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayPtr, currentIndexForGEP, "elemptr");
 		mir::MIRValue *elementVal = builder->createLoad(elementType, elementPtr, forStmt->loopVar);
 
@@ -278,8 +278,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 
 		// Increment: index++
 		builder->setInsertPoint(incrementBB);
-		mir::MIRValue *oldIndex = builder->createLoad(mir::MIRType::getInt32(), indexAlloca, "oldidx");
-		mir::MIRValue *newIndex = builder->createAdd(oldIndex, builder->getInt32(1), "newidx");
+		mir::MIRValue *oldIndex = builder->createLoad(mir::MIRType::getInt64(), indexAlloca, "oldidx");
+		mir::MIRValue *newIndex = builder->createAdd(oldIndex, builder->getInt64(1), "newidx");
 		builder->createStore(newIndex, indexAlloca);
 		builder->createBr(condBB);
 
@@ -306,13 +306,13 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 			}
 
 			// Create loop variable alloca and initialize with start value
-			mir::MIRValue *loopVarAlloca = builder->createAlloca(mir::MIRType::getInt32(), forStmt->loopVar);
+			mir::MIRValue *loopVarAlloca = builder->createAlloca(mir::MIRType::getInt64(), forStmt->loopVar);
 			builder->createStore(startVal, loopVarAlloca);
 			namedValues[forStmt->loopVar] = loopVarAlloca;
 			variableTypes[forStmt->loopVar] = "int";
 
 			// Store end value in alloca (in case it's a complex expression)
-			mir::MIRValue *endAlloca = builder->createAlloca(mir::MIRType::getInt32(), "__range_end");
+			mir::MIRValue *endAlloca = builder->createAlloca(mir::MIRType::getInt64(), "__range_end");
 			builder->createStore(endVal, endAlloca);
 
 			mir::MIRBasicBlock *condBB = builder->createBasicBlock("forcond");
@@ -326,8 +326,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 
 			// Condition: loopVar < end
 			builder->setInsertPoint(condBB);
-			mir::MIRValue *currentVal = builder->createLoad(mir::MIRType::getInt32(), loopVarAlloca, "i");
-			mir::MIRValue *endValLoad = builder->createLoad(mir::MIRType::getInt32(), endAlloca, "end");
+			mir::MIRValue *currentVal = builder->createLoad(mir::MIRType::getInt64(), loopVarAlloca, "i");
+			mir::MIRValue *endValLoad = builder->createLoad(mir::MIRType::getInt64(), endAlloca, "end");
 			mir::MIRValue *condVal = builder->createICmpSLT(currentVal, endValLoad, "rangecond");
 			builder->createCondBr(condVal, loopBB, afterBB);
 
@@ -348,8 +348,8 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 
 			// Increment: loopVar++
 			builder->setInsertPoint(incrementBB);
-			mir::MIRValue *oldVal = builder->createLoad(mir::MIRType::getInt32(), loopVarAlloca, "oldval");
-			mir::MIRValue *newVal = builder->createAdd(oldVal, builder->getInt32(1), "newval");
+			mir::MIRValue *oldVal = builder->createLoad(mir::MIRType::getInt64(), loopVarAlloca, "oldval");
+			mir::MIRValue *newVal = builder->createAdd(oldVal, builder->getInt64(1), "newval");
 			builder->createStore(newVal, loopVarAlloca);
 			builder->createBr(condBB);
 
@@ -456,7 +456,7 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 	// Get the type string from the wrapped type for variableTypes tracking
 	if (loopVarType->isStruct()) {
 		loopVarTypeStr = loopVarType->structName;
-	} else if (loopVarType == mir::MIRType::getInt32()) {
+	} else if (loopVarType == mir::MIRType::getInt64()) {
 		loopVarTypeStr = "int";
 	} else if (loopVarType == mir::MIRType::getInt8()) {
 		loopVarTypeStr = "byte";
@@ -665,7 +665,8 @@ void MIRCodeGenerator::generateMatch(MatchStmtAST *matchStmt, mir::MIRFunction *
 
 				// Generate comparison based on type
 				mir::MIRValue *cmp = nullptr;
-				if (scrutinee->type == mir::MIRType::getInt32() ||
+				if (scrutinee->type == mir::MIRType::getInt64() ||
+					scrutinee->type == mir::MIRType::getInt32() ||
 					scrutinee->type == mir::MIRType::getInt8() ||
 					scrutinee->type == mir::MIRType::getInt1()) {
 					cmp = builder->createICmpEq(scrutinee, patternVal, "match.cmp");
@@ -890,7 +891,8 @@ mir::MIRValue *MIRCodeGenerator::generateMatchExpr(MatchExprAST *matchExpr) {
 
 				// Generate comparison based on type
 				mir::MIRValue *cmp = nullptr;
-				if (scrutinee->type == mir::MIRType::getInt32() ||
+				if (scrutinee->type == mir::MIRType::getInt64() ||
+					scrutinee->type == mir::MIRType::getInt32() ||
 					scrutinee->type == mir::MIRType::getInt8() ||
 					scrutinee->type == mir::MIRType::getInt1()) {
 					cmp = builder->createICmpEq(scrutinee, patternVal, "matchexpr.cmp");

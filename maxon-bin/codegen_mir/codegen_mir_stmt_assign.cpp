@@ -60,7 +60,7 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 
 			// Load capacity to check if heap-allocated (_capacity > 0)
 			mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, assign->name + ".old._capacity.ptr");
-			oldCapacity = builder->createLoad(mir::MIRType::getInt32(), capPtr, assign->name + ".old._capacity");
+			oldCapacity = builder->createLoad(mir::MIRType::getInt64(), capPtr, assign->name + ".old._capacity");
 
 			// Load the data pointer from _buffer.ptr
 			mir::MIRValue *bufferPtr = builder->createStructGEP(managedStringType, managedPtr, 0, assign->name + ".old._buffer");
@@ -79,7 +79,7 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 	// COW: Release the old string buffer if it was heap-allocated
 	if (varType == "string" && oldDataPtr && oldCapacity) {
 		// Check if capacity > 0 (heap-allocated)
-		mir::MIRValue *isHeap = builder->createICmpSGT(oldCapacity, builder->getInt32(0), assign->name + ".old.isHeap");
+		mir::MIRValue *isHeap = builder->createICmpSGT(oldCapacity, builder->getInt64(0), assign->name + ".old.isHeap");
 
 		mir::MIRBasicBlock *releaseBlock = builder->createBasicBlock(assign->name + ".release");
 		mir::MIRBasicBlock *assignBlock = builder->createBasicBlock(assign->name + ".assign");

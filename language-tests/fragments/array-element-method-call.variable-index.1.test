@@ -17,15 +17,15 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 50
+; Instructions: 49
 
-%Item = type { i32 }
-%__ManagedArrayData_Item = type { ptr, i32, i32 }
-%array<Item> = type { %__ManagedArrayData_Item, i32 }
+%Item = type { i64 }
+%__ManagedArrayData_Item = type { ptr, i64, i64 }
+%array<Item> = type { %__ManagedArrayData_Item, i64 }
 
 @.__tag.free.items = constant [14 x i8] c"array cleanup\00"
 
-define i32 @main() {
+define i64 @main() {
 entry0:
   %0 = alloca [3 x %Item]
   %1 = alloca %array<Item>
@@ -33,49 +33,48 @@ entry0:
   %3 = getelementptr %__ManagedArrayData_Item, ptr %2, i32 0, i32 0
   store ptr %0, ptr %3
   %4 = getelementptr %__ManagedArrayData_Item, ptr %2, i32 0, i32 1
-  store i32 3, ptr %4
+  store i64 3, ptr %4
   %5 = getelementptr %__ManagedArrayData_Item, ptr %2, i32 0, i32 2
-  store i32 0, ptr %5
+  store i64 0, ptr %5
   %6 = getelementptr %array<Item>, ptr %1, i32 0, i32 1
-  store i32 0, ptr %6
-  %7 = call ptr @memset(ptr %0, i32 0, i64 12)
+  store i64 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i64 0, i64 24)
   %8 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
   %9 = getelementptr %__ManagedArrayData_Item, ptr %8, i32 0, i32 0
   %10 = load ptr, ptr %9
   %11 = getelementptr %Item, ptr %10, i64 0
   %12 = getelementptr %Item, ptr %11, i32 0, i32 0
-  store i32 100, ptr %12
+  store i64 100, ptr %12
   %13 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
   %14 = getelementptr %__ManagedArrayData_Item, ptr %13, i32 0, i32 0
   %15 = load ptr, ptr %14
   %16 = getelementptr %Item, ptr %15, i64 1
   %17 = getelementptr %Item, ptr %16, i32 0, i32 0
-  store i32 200, ptr %17
+  store i64 200, ptr %17
   %18 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
   %19 = getelementptr %__ManagedArrayData_Item, ptr %18, i32 0, i32 0
   %20 = load ptr, ptr %19
   %21 = getelementptr %Item, ptr %20, i64 2
   %22 = getelementptr %Item, ptr %21, i32 0, i32 0
-  store i32 300, ptr %22
+  store i64 300, ptr %22
   %25 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
   %26 = getelementptr %__ManagedArrayData_Item, ptr %25, i32 0, i32 0
   %27 = load ptr, ptr %26
-  %28 = sext i32 1 to i64
-  %29 = getelementptr %Item, ptr %27, i64 %28
-  %37 = getelementptr %Item, ptr %29, i32 0, i32 0
-  %38 = load i32, ptr %37
-  %31 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
-  %32 = getelementptr %__ManagedArrayData_Item, ptr %31, i32 0, i32 0
-  %33 = load ptr, ptr %32
-  %34 = getelementptr %__ManagedArrayData_Item, ptr %31, i32 0, i32 2
-  %35 = load i32, ptr %34
-  %36 = icmp sgt i32 %35, 0
-  br i1 %36, label %items.release1, label %items.skip2
+  %28 = getelementptr %Item, ptr %27, i64 1
+  %36 = getelementptr %Item, ptr %28, i32 0, i32 0
+  %37 = load i64, ptr %36
+  %30 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
+  %31 = getelementptr %__ManagedArrayData_Item, ptr %30, i32 0, i32 0
+  %32 = load ptr, ptr %31
+  %33 = getelementptr %__ManagedArrayData_Item, ptr %30, i32 0, i32 2
+  %34 = load i64, ptr %33
+  %35 = icmp sgt i64 %34, 0
+  br i1 %35, label %items.release1, label %items.skip2
 items.release1:
-  call void @_managed_array_release(ptr %33, ptr @.__tag.free.items)
+  call void @_managed_array_release(ptr %32, ptr @.__tag.free.items)
   br label %items.skip2
 items.skip2:
-  ret i32 %38
+  ret i64 %37
 }
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
@@ -86,32 +85,32 @@ declare void @exit(i32 %arg0)
 
 define void @_start() {
 entry0:
-  %0 = call i32 @main()
-  call void @exit(i32 %0)
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
   ret void
 }
 
 ---
 ; Module: test.maxon
-; Instructions: 58
+; Instructions: 57
 
-%Item = type { i32 }
-%__ManagedArrayData_Item = type { ptr, i32, i32 }
-%array<Item> = type { %__ManagedArrayData_Item, i32 }
+%Item = type { i64 }
+%__ManagedArrayData_Item = type { ptr, i64, i64 }
+%array<Item> = type { %__ManagedArrayData_Item, i64 }
 
 @.__tag.free.items = constant [14 x i8] c"array cleanup\00"
 
-define i32 @Item.getId(ptr %self) {
+define i64 @Item.getId(ptr %self) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
   %1 = load ptr, ptr %0
   %2 = getelementptr %Item, ptr %1, i32 0, i32 0
-  %3 = load i32, ptr %2
-  ret i32 %3
+  %3 = load i64, ptr %2
+  ret i64 %3
 }
 
-define i32 @main() {
+define i64 @main() {
 entry0:
   %0 = alloca [3 x %Item]
   %1 = alloca %array<Item>
@@ -119,51 +118,50 @@ entry0:
   %3 = getelementptr %__ManagedArrayData_Item, ptr %2, i32 0, i32 0
   store ptr %0, ptr %3
   %4 = getelementptr %__ManagedArrayData_Item, ptr %2, i32 0, i32 1
-  store i32 3, ptr %4
+  store i64 3, ptr %4
   %5 = getelementptr %__ManagedArrayData_Item, ptr %2, i32 0, i32 2
-  store i32 0, ptr %5
+  store i64 0, ptr %5
   %6 = getelementptr %array<Item>, ptr %1, i32 0, i32 1
-  store i32 0, ptr %6
-  %7 = call ptr @memset(ptr %0, i32 0, i64 12)
+  store i64 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i64 0, i64 24)
   %8 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
   %9 = getelementptr %__ManagedArrayData_Item, ptr %8, i32 0, i32 0
   %10 = load ptr, ptr %9
   %11 = getelementptr %Item, ptr %10, i64 0
   %12 = getelementptr %Item, ptr %11, i32 0, i32 0
-  store i32 100, ptr %12
+  store i64 100, ptr %12
   %13 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
   %14 = getelementptr %__ManagedArrayData_Item, ptr %13, i32 0, i32 0
   %15 = load ptr, ptr %14
   %16 = getelementptr %Item, ptr %15, i64 1
   %17 = getelementptr %Item, ptr %16, i32 0, i32 0
-  store i32 200, ptr %17
+  store i64 200, ptr %17
   %18 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
   %19 = getelementptr %__ManagedArrayData_Item, ptr %18, i32 0, i32 0
   %20 = load ptr, ptr %19
   %21 = getelementptr %Item, ptr %20, i64 2
   %22 = getelementptr %Item, ptr %21, i32 0, i32 0
-  store i32 300, ptr %22
-  %23 = alloca i32
-  store i32 1, ptr %23
-  %24 = load i32, ptr %23
+  store i64 300, ptr %22
+  %23 = alloca i64
+  store i64 1, ptr %23
+  %24 = load i64, ptr %23
   %25 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
   %26 = getelementptr %__ManagedArrayData_Item, ptr %25, i32 0, i32 0
   %27 = load ptr, ptr %26
-  %28 = sext i32 %24 to i64
-  %29 = getelementptr %Item, ptr %27, i64 %28
-  %30 = call i32 @Item.getId(ptr %29)
-  %31 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
-  %32 = getelementptr %__ManagedArrayData_Item, ptr %31, i32 0, i32 0
-  %33 = load ptr, ptr %32
-  %34 = getelementptr %__ManagedArrayData_Item, ptr %31, i32 0, i32 2
-  %35 = load i32, ptr %34
-  %36 = icmp sgt i32 %35, 0
-  br i1 %36, label %items.release1, label %items.skip2
+  %28 = getelementptr %Item, ptr %27, i64 %24
+  %29 = call i64 @Item.getId(ptr %28)
+  %30 = getelementptr %array<Item>, ptr %1, i32 0, i32 0
+  %31 = getelementptr %__ManagedArrayData_Item, ptr %30, i32 0, i32 0
+  %32 = load ptr, ptr %31
+  %33 = getelementptr %__ManagedArrayData_Item, ptr %30, i32 0, i32 2
+  %34 = load i64, ptr %33
+  %35 = icmp sgt i64 %34, 0
+  br i1 %35, label %items.release1, label %items.skip2
 items.release1:
-  call void @_managed_array_release(ptr %33, ptr @.__tag.free.items)
+  call void @_managed_array_release(ptr %32, ptr @.__tag.free.items)
   br label %items.skip2
 items.skip2:
-  ret i32 %30
+  ret i64 %29
 }
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
@@ -174,8 +172,8 @@ declare void @exit(i32 %arg0)
 
 define void @_start() {
 entry0:
-  %0 = call i32 @main()
-  call void @exit(i32 %0)
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
   ret void
 }
 

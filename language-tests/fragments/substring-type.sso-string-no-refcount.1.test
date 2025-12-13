@@ -10,14 +10,14 @@ end 'main'
 ; Module: test.maxon
 ; Instructions: 42
 
-%string = type { ptr, i32 }
-%_ManagedArray_byte = type { ptr, i32 }
-%__ManagedStringData = type { %_ManagedArray_byte, i32, i32 }
+%string = type { ptr, i64 }
+%_ManagedArray_byte = type { ptr, i64 }
+%__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
 @.str.sso.1 = constant [6 x i8] c"Hello\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
 
-define i32 @main() {
+define i64 @main() {
 entry0:
   %0 = alloca %string
   %1 = alloca %__ManagedStringData
@@ -25,18 +25,18 @@ entry0:
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
   %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
-  store i32 5, ptr %4
+  store i64 5, ptr %4
   %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
-  store i32 5, ptr %5
+  store i64 5, ptr %5
   %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
-  store i32 0, ptr %6
+  store i64 0, ptr %6
   %7 = getelementptr %string, ptr %0, i32 0, i32 0
   store ptr %1, ptr %7
   %8 = getelementptr %string, ptr %0, i32 0, i32 1
-  store i32 0, ptr %8
+  store i64 0, ptr %8
   %11 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
-  %12 = load i32, ptr %11
-  %13 = icmp sgt i32 %12, 0
+  %12 = load i64, ptr %11
+  %13 = icmp sgt i64 %12, 0
   br i1 %13, label %refcount.heap1, label %refcount.const2
 refcount.heap1:
   %14 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
@@ -52,8 +52,8 @@ refcount.merge3:
   %22 = getelementptr %string, ptr %0, i32 0, i32 0
   %23 = load ptr, ptr %22
   %24 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 2
-  %25 = load i32, ptr %24
-  %26 = icmp sgt i32 %25, 0
+  %25 = load i64, ptr %24
+  %26 = icmp sgt i64 %25, 0
   br i1 %26, label %s.var.release4, label %s.var.continue5
 s.var.release4:
   %27 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 0
@@ -71,8 +71,8 @@ declare void @exit(i32 %arg0)
 
 define void @_start() {
 entry0:
-  %0 = call i32 @main()
-  call void @exit(i32 %0)
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
   ret void
 }
 
@@ -80,14 +80,14 @@ entry0:
 ; Module: test.maxon
 ; Instructions: 47
 
-%string = type { ptr, i32 }
-%_ManagedArray_byte = type { ptr, i32 }
-%__ManagedStringData = type { %_ManagedArray_byte, i32, i32 }
+%string = type { ptr, i64 }
+%_ManagedArray_byte = type { ptr, i64 }
+%__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
 @.str.sso.1 = constant [6 x i8] c"Hello\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
 
-define i32 @main() {
+define i64 @main() {
 entry0:
   %0 = alloca %string
   %1 = alloca %__ManagedStringData
@@ -95,20 +95,20 @@ entry0:
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
   %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
-  store i32 5, ptr %4
+  store i64 5, ptr %4
   %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
-  store i32 5, ptr %5
+  store i64 5, ptr %5
   %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
-  store i32 0, ptr %6
+  store i64 0, ptr %6
   %7 = getelementptr %string, ptr %0, i32 0, i32 0
   store ptr %1, ptr %7
   %8 = getelementptr %string, ptr %0, i32 0, i32 1
-  store i32 0, ptr %8
+  store i64 0, ptr %8
   %9 = getelementptr %string, ptr %0, i32 0, i32 0
   %10 = load ptr, ptr %9
   %11 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 2
-  %12 = load i32, ptr %11
-  %13 = icmp sgt i32 %12, 0
+  %12 = load i64, ptr %11
+  %13 = icmp sgt i64 %12, 0
   br i1 %13, label %refcount.heap1, label %refcount.const2
 refcount.heap1:
   %14 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 0
@@ -121,14 +121,14 @@ refcount.const2:
   br label %refcount.merge3
 refcount.merge3:
   %19 = phi i32 [ %18, %refcount.heap1 ], [ -1, %refcount.const2 ]
-  %20 = alloca i32
+  %20 = alloca i64
   store i32 %19, ptr %20
-  %21 = load i32, ptr %20
+  %21 = load i64, ptr %20
   %22 = getelementptr %string, ptr %0, i32 0, i32 0
   %23 = load ptr, ptr %22
   %24 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 2
-  %25 = load i32, ptr %24
-  %26 = icmp sgt i32 %25, 0
+  %25 = load i64, ptr %24
+  %26 = icmp sgt i64 %25, 0
   br i1 %26, label %s.var.release4, label %s.var.continue5
 s.var.release4:
   %27 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 0
@@ -137,7 +137,7 @@ s.var.release4:
   call void @_managed_string_release(ptr %29, ptr @.__tag.free.s)
   br label %s.var.continue5
 s.var.continue5:
-  ret i32 %21
+  ret i64 %21
 }
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
@@ -146,8 +146,8 @@ declare void @exit(i32 %arg0)
 
 define void @_start() {
 entry0:
-  %0 = call i32 @main()
-  call void @exit(i32 %0)
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
   ret void
 }
 

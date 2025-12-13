@@ -7,42 +7,42 @@ end 'main'
 ; Module: test.maxon
 ; Instructions: 28
 
-%__ManagedArrayData_int = type { ptr, i32, i32 }
-%array<int> = type { %__ManagedArrayData_int, i32 }
+%__ManagedArrayData_int = type { ptr, i64, i64 }
+%array<int> = type { %__ManagedArrayData_int, i64 }
 
 @.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
-define i32 @main() {
+define i64 @main() {
 entry0:
-  %0 = alloca [5 x i32]
+  %0 = alloca [5 x i64]
   %1 = alloca %array<int>
   %2 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
   store ptr %0, ptr %3
   %4 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
-  store i32 5, ptr %4
+  store i64 5, ptr %4
   %5 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 2
-  store i32 0, ptr %5
+  store i64 0, ptr %5
   %6 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  store i32 0, ptr %6
-  %7 = call ptr @memset(ptr %0, i32 0, i64 20)
+  store i64 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i64 0, i64 40)
   %15 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %16 = getelementptr %__ManagedArrayData_int, ptr %15, i32 0, i32 1
-  %17 = load i32, ptr %16
+  %17 = load i64, ptr %16
   %9 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %10 = getelementptr %__ManagedArrayData_int, ptr %9, i32 0, i32 0
   %11 = load ptr, ptr %10
   %12 = getelementptr %__ManagedArrayData_int, ptr %9, i32 0, i32 2
-  %13 = load i32, ptr %12
-  %14 = icmp sgt i32 %13, 0
+  %13 = load i64, ptr %12
+  %14 = icmp sgt i64 %13, 0
   br i1 %14, label %arr.release1, label %arr.skip2
 arr.release1:
   call void @_managed_array_release(ptr %11, ptr @.__tag.free.arr)
   br label %arr.skip2
 arr.skip2:
-  ret i32 %17
+  ret i64 %17
 }
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
@@ -51,8 +51,8 @@ declare void @exit(i32 %arg0)
 
 define void @_start() {
 entry0:
-  %0 = call i32 @main()
-  call void @exit(i32 %0)
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
   ret void
 }
 
@@ -60,51 +60,51 @@ entry0:
 ; Module: test.maxon
 ; Instructions: 33
 
-%__ManagedArrayData_int = type { ptr, i32, i32 }
-%array<int> = type { %__ManagedArrayData_int, i32 }
+%__ManagedArrayData_int = type { ptr, i64, i64 }
+%array<int> = type { %__ManagedArrayData_int, i64 }
 
 @.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
-define i32 @main() {
+define i64 @main() {
 entry0:
-  %0 = alloca [5 x i32]
+  %0 = alloca [5 x i64]
   %1 = alloca %array<int>
   %2 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
   store ptr %0, ptr %3
   %4 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
-  store i32 5, ptr %4
+  store i64 5, ptr %4
   %5 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 2
-  store i32 0, ptr %5
+  store i64 0, ptr %5
   %6 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  store i32 0, ptr %6
-  %7 = call ptr @memset(ptr %0, i32 0, i64 20)
-  %8 = call i32 @array<int>.count(ptr %1)
+  store i64 0, ptr %6
+  %7 = call ptr @memset(ptr %0, i64 0, i64 40)
+  %8 = call i64 @array<int>.count(ptr %1)
   %9 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %10 = getelementptr %__ManagedArrayData_int, ptr %9, i32 0, i32 0
   %11 = load ptr, ptr %10
   %12 = getelementptr %__ManagedArrayData_int, ptr %9, i32 0, i32 2
-  %13 = load i32, ptr %12
-  %14 = icmp sgt i32 %13, 0
+  %13 = load i64, ptr %12
+  %14 = icmp sgt i64 %13, 0
   br i1 %14, label %arr.release1, label %arr.skip2
 arr.release1:
   call void @_managed_array_release(ptr %11, ptr @.__tag.free.arr)
   br label %arr.skip2
 arr.skip2:
-  ret i32 %8
+  ret i64 %8
 }
 
-define i32 @array<int>.count(ptr %self) {
+define i64 @array<int>.count(ptr %self) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
   %1 = load ptr, ptr %0
   %2 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
-  %4 = load i32, ptr %3
-  ret i32 %4
+  %4 = load i64, ptr %3
+  ret i64 %4
 }
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
@@ -113,8 +113,8 @@ declare void @exit(i32 %arg0)
 
 define void @_start() {
 entry0:
-  %0 = call i32 @main()
-  call void @exit(i32 %0)
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
   ret void
 }
 

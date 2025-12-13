@@ -184,7 +184,7 @@ nil  // Represents absence of a value (for optional types)
 
 | Type | Size | Description | MIR Type |
 |------|------|-------------|----------|
-| `int` | 32-bit | Signed integer | `i32` |
+| `int` | 64-bit | Signed integer | `i64` |
 | `float` | 64-bit | IEEE 754 double | `f64` |
 | `bool` | 1-bit | Boolean (true/false) | `i1` |
 | `byte` | 8-bit | Unsigned byte | `i8` |

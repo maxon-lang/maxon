@@ -8,95 +8,94 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 70
+; Instructions: 69
 
-%__ManagedArrayData_int = type { ptr, i32, i32 }
-%array<int> = type { %__ManagedArrayData_int, i32 }
-%_ManagedArray_int = type { ptr, i32 }
+%__ManagedArrayData_int = type { ptr, i64, i64 }
+%array<int> = type { %__ManagedArrayData_int, i64 }
+%_ManagedArray_int = type { ptr, i64 }
 
 @.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
 
-define i32 @main() {
+define i64 @main() {
 entry0:
-  %0 = alloca [3 x i32]
+  %0 = alloca [3 x i64]
   %1 = alloca %array<int>
   %2 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
   store ptr %0, ptr %3
   %4 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
-  store i32 3, ptr %4
+  store i64 3, ptr %4
   %5 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 2
-  store i32 0, ptr %5
+  store i64 0, ptr %5
   %6 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  store i32 0, ptr %6
-  %7 = getelementptr i32, ptr %0, i64 0
-  store i32 10, ptr %7
-  %8 = getelementptr i32, ptr %0, i64 1
-  store i32 20, ptr %8
-  %9 = getelementptr i32, ptr %0, i64 2
-  store i32 30, ptr %9
-  %10 = call Optional<i32> @array<int>.get(ptr %1, i32 1)
-  %11 = alloca Optional<i32>
-  store Optional<i32> %10, ptr %11
-  %12 = getelementptr Optional<i32>, ptr %11, i32 0, i32 0
+  store i64 0, ptr %6
+  %7 = getelementptr i64, ptr %0, i64 0
+  store i64 10, ptr %7
+  %8 = getelementptr i64, ptr %0, i64 1
+  store i64 20, ptr %8
+  %9 = getelementptr i64, ptr %0, i64 2
+  store i64 30, ptr %9
+  %10 = call Optional<i64> @array<int>.get(ptr %1, i64 1)
+  %11 = alloca Optional<i64>
+  store Optional<i64> %10, ptr %11
+  %12 = getelementptr Optional<i64>, ptr %11, i32 0, i32 0
   %13 = load i8, ptr %12
   %14 = icmp eq i8 %13, 1
   br i1 %14, label %iflet.then1, label %iflet.after2
 iflet.then1:
-  %15 = getelementptr Optional<i32>, ptr %11, i32 0, i32 1
-  %16 = load i32, ptr %15
+  %15 = getelementptr Optional<i64>, ptr %11, i32 0, i32 1
+  %16 = load i64, ptr %15
   %19 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %20 = getelementptr %__ManagedArrayData_int, ptr %19, i32 0, i32 0
   %21 = load ptr, ptr %20
   %22 = getelementptr %__ManagedArrayData_int, ptr %19, i32 0, i32 2
-  %23 = load i32, ptr %22
-  %24 = icmp sgt i32 %23, 0
+  %23 = load i64, ptr %22
+  %24 = icmp sgt i64 %23, 0
   br i1 %24, label %arr.release3, label %arr.skip4
 iflet.after2:
-  ret i32 -1
+  ret i64 -1
 arr.release3:
   call void @_managed_array_release(ptr %21, ptr @.__tag.free.arr)
   br label %arr.skip4
 arr.skip4:
-  ret i32 %16
+  ret i64 %16
 }
 
-define Optional<i32> @array<int>.get(ptr %self, i32 %index) {
+define Optional<i64> @array<int>.get(ptr %self, i64 %index) {
 entry0:
   %3 = getelementptr %array<int>, ptr %self, i32 0, i32 0
   %4 = getelementptr %__ManagedArrayData_int, ptr %3, i32 0, i32 1
-  %5 = load i32, ptr %4
-  %8 = icmp slt i32 %index, 0
+  %5 = load i64, ptr %4
+  %8 = icmp slt i64 %index, 0
   br i1 %8, label %then1, label %ifcont2
 then1:
-  %9 = alloca Optional<i32>
-  %10 = getelementptr Optional<i32>, ptr %9, i32 0, i32 0
+  %9 = alloca Optional<i64>
+  %10 = getelementptr Optional<i64>, ptr %9, i32 0, i32 0
   store i8 0, ptr %10
-  %11 = load Optional<i32>, ptr %9
-  ret Optional<i32> %11
+  %11 = load Optional<i64>, ptr %9
+  ret Optional<i64> %11
 ifcont2:
-  %14 = icmp sge i32 %index, %5
+  %14 = icmp sge i64 %index, %5
   br i1 %14, label %then3, label %ifcont4
 then3:
-  %15 = alloca Optional<i32>
-  %16 = getelementptr Optional<i32>, ptr %15, i32 0, i32 0
+  %15 = alloca Optional<i64>
+  %16 = getelementptr Optional<i64>, ptr %15, i32 0, i32 0
   store i8 0, ptr %16
-  %17 = load Optional<i32>, ptr %15
-  ret Optional<i32> %17
+  %17 = load Optional<i64>, ptr %15
+  ret Optional<i64> %17
 ifcont4:
   %20 = getelementptr %array<int>, ptr %self, i32 0, i32 0
   %21 = getelementptr %_ManagedArray_int, ptr %20, i32 0, i32 0
   %22 = load ptr, ptr %21
-  %23 = sext i32 %index to i64
-  %24 = getelementptr i32, ptr %22, i64 %23
-  %25 = load i32, ptr %24
-  %26 = alloca Optional<i32>
-  %27 = getelementptr Optional<i32>, ptr %26, i32 0, i32 0
-  store i8 1, ptr %27
-  %28 = getelementptr Optional<i32>, ptr %26, i32 0, i32 1
-  store i32 %25, ptr %28
-  %29 = load Optional<i32>, ptr %26
-  ret Optional<i32> %29
+  %23 = getelementptr i64, ptr %22, i64 %index
+  %24 = load i64, ptr %23
+  %25 = alloca Optional<i64>
+  %26 = getelementptr Optional<i64>, ptr %25, i32 0, i32 0
+  store i8 1, ptr %26
+  %27 = getelementptr Optional<i64>, ptr %25, i32 0, i32 1
+  store i64 %24, ptr %27
+  %28 = load Optional<i64>, ptr %25
+  ret Optional<i64> %28
 }
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
@@ -105,118 +104,117 @@ declare void @exit(i32 %arg0)
 
 define void @_start() {
 entry0:
-  %0 = call i32 @main()
-  call void @exit(i32 %0)
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
   ret void
 }
 
 ---
 ; Module: test.maxon
-; Instructions: 86
+; Instructions: 85
 
-%__ManagedArrayData_int = type { ptr, i32, i32 }
-%array<int> = type { %__ManagedArrayData_int, i32 }
-%_ManagedArray_int = type { ptr, i32 }
+%__ManagedArrayData_int = type { ptr, i64, i64 }
+%array<int> = type { %__ManagedArrayData_int, i64 }
+%_ManagedArray_int = type { ptr, i64 }
 
 @.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
 
-define i32 @main() {
+define i64 @main() {
 entry0:
-  %0 = alloca [3 x i32]
+  %0 = alloca [3 x i64]
   %1 = alloca %array<int>
   %2 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
   store ptr %0, ptr %3
   %4 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 1
-  store i32 3, ptr %4
+  store i64 3, ptr %4
   %5 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 2
-  store i32 0, ptr %5
+  store i64 0, ptr %5
   %6 = getelementptr %array<int>, ptr %1, i32 0, i32 1
-  store i32 0, ptr %6
-  %7 = getelementptr i32, ptr %0, i64 0
-  store i32 10, ptr %7
-  %8 = getelementptr i32, ptr %0, i64 1
-  store i32 20, ptr %8
-  %9 = getelementptr i32, ptr %0, i64 2
-  store i32 30, ptr %9
-  %10 = call Optional<i32> @array<int>.get(ptr %1, i32 1)
-  %11 = alloca Optional<i32>
-  store Optional<i32> %10, ptr %11
-  %12 = getelementptr Optional<i32>, ptr %11, i32 0, i32 0
+  store i64 0, ptr %6
+  %7 = getelementptr i64, ptr %0, i64 0
+  store i64 10, ptr %7
+  %8 = getelementptr i64, ptr %0, i64 1
+  store i64 20, ptr %8
+  %9 = getelementptr i64, ptr %0, i64 2
+  store i64 30, ptr %9
+  %10 = call Optional<i64> @array<int>.get(ptr %1, i64 1)
+  %11 = alloca Optional<i64>
+  store Optional<i64> %10, ptr %11
+  %12 = getelementptr Optional<i64>, ptr %11, i32 0, i32 0
   %13 = load i8, ptr %12
   %14 = icmp eq i8 %13, 1
   br i1 %14, label %iflet.then1, label %iflet.after2
 iflet.then1:
-  %15 = getelementptr Optional<i32>, ptr %11, i32 0, i32 1
-  %16 = load i32, ptr %15
-  %17 = alloca i32
-  store i32 %16, ptr %17
-  %18 = load i32, ptr %17
+  %15 = getelementptr Optional<i64>, ptr %11, i32 0, i32 1
+  %16 = load i64, ptr %15
+  %17 = alloca i64
+  store i64 %16, ptr %17
+  %18 = load i64, ptr %17
   %19 = getelementptr %array<int>, ptr %1, i32 0, i32 0
   %20 = getelementptr %__ManagedArrayData_int, ptr %19, i32 0, i32 0
   %21 = load ptr, ptr %20
   %22 = getelementptr %__ManagedArrayData_int, ptr %19, i32 0, i32 2
-  %23 = load i32, ptr %22
-  %24 = icmp sgt i32 %23, 0
+  %23 = load i64, ptr %22
+  %24 = icmp sgt i64 %23, 0
   br i1 %24, label %arr.release3, label %arr.skip4
 iflet.after2:
-  %25 = neg i32 1
-  ret i32 %25
+  %25 = neg i64 1
+  ret i64 %25
 arr.release3:
   call void @_managed_array_release(ptr %21, ptr @.__tag.free.arr)
   br label %arr.skip4
 arr.skip4:
-  ret i32 %18
+  ret i64 %18
 }
 
-define Optional<i32> @array<int>.get(ptr %self, i32 %index) {
+define Optional<i64> @array<int>.get(ptr %self, i64 %index) {
 entry0:
   %0 = alloca ptr
   store ptr %self, ptr %0
-  %1 = alloca i32
-  store i32 %index, ptr %1
+  %1 = alloca i64
+  store i64 %index, ptr %1
   %2 = load ptr, ptr %0
   %3 = getelementptr %array<int>, ptr %2, i32 0, i32 0
   %4 = getelementptr %__ManagedArrayData_int, ptr %3, i32 0, i32 1
-  %5 = load i32, ptr %4
-  %6 = alloca i32
-  store i32 %5, ptr %6
-  %7 = load i32, ptr %1
-  %8 = icmp slt i32 %7, 0
+  %5 = load i64, ptr %4
+  %6 = alloca i64
+  store i64 %5, ptr %6
+  %7 = load i64, ptr %1
+  %8 = icmp slt i64 %7, 0
   br i1 %8, label %then1, label %ifcont2
 then1:
-  %9 = alloca Optional<i32>
-  %10 = getelementptr Optional<i32>, ptr %9, i32 0, i32 0
+  %9 = alloca Optional<i64>
+  %10 = getelementptr Optional<i64>, ptr %9, i32 0, i32 0
   store i8 0, ptr %10
-  %11 = load Optional<i32>, ptr %9
-  ret Optional<i32> %11
+  %11 = load Optional<i64>, ptr %9
+  ret Optional<i64> %11
 ifcont2:
-  %12 = load i32, ptr %1
-  %13 = load i32, ptr %6
-  %14 = icmp sge i32 %12, %13
+  %12 = load i64, ptr %1
+  %13 = load i64, ptr %6
+  %14 = icmp sge i64 %12, %13
   br i1 %14, label %then3, label %ifcont4
 then3:
-  %15 = alloca Optional<i32>
-  %16 = getelementptr Optional<i32>, ptr %15, i32 0, i32 0
+  %15 = alloca Optional<i64>
+  %16 = getelementptr Optional<i64>, ptr %15, i32 0, i32 0
   store i8 0, ptr %16
-  %17 = load Optional<i32>, ptr %15
-  ret Optional<i32> %17
+  %17 = load Optional<i64>, ptr %15
+  ret Optional<i64> %17
 ifcont4:
-  %18 = load i32, ptr %1
+  %18 = load i64, ptr %1
   %19 = load ptr, ptr %0
   %20 = getelementptr %array<int>, ptr %19, i32 0, i32 0
   %21 = getelementptr %_ManagedArray_int, ptr %20, i32 0, i32 0
   %22 = load ptr, ptr %21
-  %23 = sext i32 %18 to i64
-  %24 = getelementptr i32, ptr %22, i64 %23
-  %25 = load i32, ptr %24
-  %26 = alloca Optional<i32>
-  %27 = getelementptr Optional<i32>, ptr %26, i32 0, i32 0
-  store i8 1, ptr %27
-  %28 = getelementptr Optional<i32>, ptr %26, i32 0, i32 1
-  store i32 %25, ptr %28
-  %29 = load Optional<i32>, ptr %26
-  ret Optional<i32> %29
+  %23 = getelementptr i64, ptr %22, i64 %18
+  %24 = load i64, ptr %23
+  %25 = alloca Optional<i64>
+  %26 = getelementptr Optional<i64>, ptr %25, i32 0, i32 0
+  store i8 1, ptr %26
+  %27 = getelementptr Optional<i64>, ptr %25, i32 0, i32 1
+  store i64 %24, ptr %27
+  %28 = load Optional<i64>, ptr %25
+  ret Optional<i64> %28
 }
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
@@ -225,8 +223,8 @@ declare void @exit(i32 %arg0)
 
 define void @_start() {
 entry0:
-  %0 = call i32 @main()
-  call void @exit(i32 %0)
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
   ret void
 }
 

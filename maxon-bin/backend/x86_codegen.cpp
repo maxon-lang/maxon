@@ -902,7 +902,7 @@ void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 
 	// Handle large struct/optional loads specially
 	bool isLargeAggregate = loadType->sizeInBytes > 8 &&
-		(loadType->isStruct() || loadType->kind == mir::MIRTypeKind::Optional);
+							(loadType->isStruct() || loadType->kind == mir::MIRTypeKind::Optional);
 	if (isLargeAggregate) {
 		// For large structs, we can't load into a register
 		// Instead, copy from source to result's stack slot
@@ -1322,7 +1322,7 @@ void X86CodeGen::genRet(mir::MIRInstruction *inst) {
 
 	// Check if returning a large type (struct or Optional > 8 bytes)
 	bool isLargeReturn = retVal->type->sizeInBytes > 8 &&
-		(retVal->type->isStruct() || retVal->type->kind == mir::MIRTypeKind::Optional);
+						 (retVal->type->isStruct() || retVal->type->kind == mir::MIRTypeKind::Optional);
 	if (isLargeReturn) {
 		// Windows x64 ABI: Large structs are returned via hidden pointer
 		// The hidden pointer was saved to stack in prologue (from RCX)
@@ -1384,7 +1384,7 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 	// Check if this function returns a large type (struct or Optional > 8 bytes)
 	bool hasHiddenRetPtr = false;
 	bool isLargeReturn = inst->result && inst->result->type->sizeInBytes > 8 &&
-		(inst->result->type->isStruct() || inst->result->type->kind == mir::MIRTypeKind::Optional);
+						 (inst->result->type->isStruct() || inst->result->type->kind == mir::MIRTypeKind::Optional);
 	if (isLargeReturn) {
 		// Windows x64 ABI: Caller allocates space and passes pointer as first arg
 		hasHiddenRetPtr = true;
@@ -1414,6 +1414,13 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 				// Load float to XMM0, then store to stack
 				loadValueFloat(arg, X86Reg::XMM0);
 				encoder.movsdMR(X86Mem(X86Reg::RSP, stackOffset), X86Reg::XMM0);
+			} else if (arg->type->sizeInBytes > 8 &&
+					   (arg->type->isStruct() || arg->type->kind == mir::MIRTypeKind::Optional)) {
+				// Large aggregate argument - pass pointer to it
+				// The arg comes from a load instruction, but we need the address
+				X86Mem slot = getStackSlot(arg);
+				encoder.lea64(X86Reg::R10, slot);
+				encoder.movMR64(X86Mem(X86Reg::RSP, stackOffset), X86Reg::R10);
 			} else {
 				// Load to R10 (scratch register), then store to stack
 				loadValue(arg, X86Reg::R10);
@@ -1433,6 +1440,12 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 		if (arg->type->isFloat()) {
 			// Win64 ABI: float args go in XMM0-3 at their argument position
 			loadValueFloat(arg, static_cast<X86Reg>(static_cast<int>(X86Reg::XMM0) + regIndex));
+		} else if (arg->type->sizeInBytes > 8 &&
+				   (arg->type->isStruct() || arg->type->kind == mir::MIRTypeKind::Optional)) {
+			// Win64 ABI: Large aggregates (> 8 bytes) are passed by pointer
+			// The arg is a value loaded from stack, get the address of that stack slot
+			X86Mem slot = getStackSlot(arg);
+			encoder.lea64(argRegs[regIndex], slot);
 		} else {
 			loadValue(arg, argRegs[regIndex]);
 		}

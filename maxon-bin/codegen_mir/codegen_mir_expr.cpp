@@ -25,7 +25,7 @@ struct MemberAddressResult {
 
 mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 	if (auto *numExpr = dynamic_cast<NumberExprAST *>(expr)) {
-		return builder->getInt32(numExpr->value);
+		return builder->getInt64(numExpr->value);
 	}
 
 	if (auto *byteExpr = dynamic_cast<ByteExprAST *>(expr)) {
@@ -99,12 +99,12 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 						if (!unsizedArrayType) {
 							unsizedArrayType = module->getOrCreateStructType(
 								"_ManagedArray_byte",
-								{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+								{mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 							structTypes["_ManagedArray_byte"] = unsizedArrayType;
 						}
 						managedStringType = module->getOrCreateStructType(
 							"_ManagedString",
-							{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+							{unsizedArrayType, mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 						structTypes["_ManagedString"] = managedStringType;
 					}
 
@@ -127,15 +127,15 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					mir::MIRValue *bufferDataPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, "managed._buffer.ptr");
 					builder->createStore(dataPtr, bufferDataPtr);
 					mir::MIRValue *bufferLenPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 1, "managed._buffer.len");
-					builder->createStore(builder->getInt32(static_cast<int>(len)), bufferLenPtr);
+					builder->createStore(builder->getInt64(static_cast<int64_t>(len)), bufferLenPtr);
 
 					// Field 1: _len int
 					mir::MIRValue *lenFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 1, "managed._len");
-					builder->createStore(builder->getInt32(static_cast<int>(len)), lenFieldPtr);
+					builder->createStore(builder->getInt64(static_cast<int64_t>(len)), lenFieldPtr);
 
 					// Field 2: _capacity int (0 = constant data)
 					mir::MIRValue *capacityFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 2, "managed._capacity");
-					builder->createStore(builder->getInt32(0), capacityFieldPtr);
+					builder->createStore(builder->getInt64(0), capacityFieldPtr);
 
 					// Call Type.init(self, managed)
 					// Note: self is null since this is a factory method that creates a new instance
@@ -177,12 +177,12 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 						if (!unsizedArrayType) {
 							unsizedArrayType = module->getOrCreateStructType(
 								"_ManagedArray_byte",
-								{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+								{mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 							structTypes["_ManagedArray_byte"] = unsizedArrayType;
 						}
 						managedStringType = module->getOrCreateStructType(
 							"_ManagedString",
-							{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+							{unsizedArrayType, mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 						structTypes["_ManagedString"] = managedStringType;
 					}
 
@@ -205,15 +205,15 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					mir::MIRValue *bufferDataPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, "managed._buffer.ptr");
 					builder->createStore(dataPtr, bufferDataPtr);
 					mir::MIRValue *bufferLenPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 1, "managed._buffer.len");
-					builder->createStore(builder->getInt32(static_cast<int>(len)), bufferLenPtr);
+					builder->createStore(builder->getInt64(static_cast<int64_t>(len)), bufferLenPtr);
 
 					// Field 1: _len int
 					mir::MIRValue *lenFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 1, "managed._len");
-					builder->createStore(builder->getInt32(static_cast<int>(len)), lenFieldPtr);
+					builder->createStore(builder->getInt64(static_cast<int64_t>(len)), lenFieldPtr);
 
 					// Field 2: _capacity int (0 = constant data)
 					mir::MIRValue *capacityFieldPtr = builder->createStructGEP(managedStringType, managedAlloca, 2, "managed._capacity");
-					builder->createStore(builder->getInt32(0), capacityFieldPtr);
+					builder->createStore(builder->getInt64(0), capacityFieldPtr);
 
 					// Call Type.init(self, managed)
 					std::string methodName = castExpr->targetType + ".init";
@@ -368,7 +368,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		if (!typeStr.empty()) {
 			loadType = getTypeFromString(typeStr);
 		} else {
-			loadType = mir::MIRType::getInt32();
+			loadType = mir::MIRType::getInt64();
 		}
 
 		// For array parameters (pointers), load the pointer type
@@ -456,8 +456,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				// For int raw values, use a chain of comparisons with phi-like merging
 				if (enumInfo.rawValueType == "int") {
 					// Create alloca to store the result
-					mir::MIRValue *resultAlloca = builder->createAlloca(mir::MIRType::getInt32(), "rawValue.alloca");
-					builder->createStore(builder->getInt32(0), resultAlloca); // Default value
+					mir::MIRValue *resultAlloca = builder->createAlloca(mir::MIRType::getInt64(), "rawValue.alloca");
+					builder->createStore(builder->getInt64(0), resultAlloca); // Default value
 
 					// Generate conditional branches for each case
 					mir::MIRBasicBlock *endBlock = builder->createBasicBlock("rawValue.end");
@@ -485,7 +485,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 						builder->createCondBr(isMatch, matchBlock, nextBlock);
 
 						builder->setInsertPoint(matchBlock);
-						builder->createStore(builder->getInt32(static_cast<int>(rawValue)), resultAlloca);
+						builder->createStore(builder->getInt64(rawValue), resultAlloca);
 						builder->createBr(endBlock);
 
 						if (nextBlock != endBlock) {
@@ -494,7 +494,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					}
 
 					builder->setInsertPoint(endBlock);
-					return builder->createLoad(mir::MIRType::getInt32(), resultAlloca, "rawValue");
+					return builder->createLoad(mir::MIRType::getInt64(), resultAlloca, "rawValue");
 				} else if (enumInfo.rawValueType == "string") {
 					// For string raw values, similar approach but returns string pointers
 					reportError("String raw values not yet implemented",
@@ -731,7 +731,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				std::string lengthVar = memberAccessExpr->objectName + ".__length";
 				mir::MIRValue *lengthAlloca = namedValues[lengthVar];
 				if (lengthAlloca) {
-					return builder->createLoad(mir::MIRType::getInt32(), lengthAlloca, "length");
+					return builder->createLoad(mir::MIRType::getInt64(), lengthAlloca, "length");
 				}
 
 				// Phase 2: Check if this is a _ManagedArray type (uses struct layout for local vars)
@@ -740,14 +740,14 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemType);
 					// GEP to _len field (index 1) and load
 					mir::MIRValue *lenPtr = builder->createStructGEP(managedArrayType, arrayAlloca, 1, "arr._len.ptr");
-					return builder->createLoad(mir::MIRType::getInt32(), lenPtr, "length");
+					return builder->createLoad(mir::MIRType::getInt64(), lenPtr, "length");
 				}
 
 				// Legacy fallback: For heap-allocated arrays with header layout
 				mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
 				mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
-															  {builder->getInt64(-8)}, "length.ptr");
-				return builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "length");
+															  {builder->getInt64(-16)}, "length.ptr");
+				return builder->createLoad(mir::MIRType::getInt64(), lengthPtr, "length");
 			}
 			reportError("Variable is not an array: " + memberAccessExpr->objectName,
 						memberAccessExpr->line, memberAccessExpr->column);
@@ -763,7 +763,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				std::string capacityVar = memberAccessExpr->objectName + ".__capacity";
 				mir::MIRValue *capacityAlloca = namedValues[capacityVar];
 				if (capacityAlloca) {
-					return builder->createLoad(mir::MIRType::getInt32(), capacityAlloca, "capacity");
+					return builder->createLoad(mir::MIRType::getInt64(), capacityAlloca, "capacity");
 				}
 
 				// Phase 2: Check if this is a _ManagedArray type (uses struct layout for local vars)
@@ -772,14 +772,14 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemType);
 					// GEP to _capacity field (index 2) and load
 					mir::MIRValue *capPtr = builder->createStructGEP(managedArrayType, arrayAlloca, 2, "arr._cap.ptr");
-					return builder->createLoad(mir::MIRType::getInt32(), capPtr, "capacity");
+					return builder->createLoad(mir::MIRType::getInt64(), capPtr, "capacity");
 				}
 
 				// Legacy fallback: For heap-allocated arrays with header layout
 				mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
 				mir::MIRValue *capPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
-														   {builder->getInt64(-4)}, "cap.ptr");
-				return builder->createLoad(mir::MIRType::getInt32(), capPtr, "capacity");
+														   {builder->getInt64(-8)}, "cap.ptr");
+				return builder->createLoad(mir::MIRType::getInt64(), capPtr, "capacity");
 			}
 
 			reportError("Variable is not an array: " + memberAccessExpr->objectName,
@@ -822,14 +822,14 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 			mir::MIRType *elementType = getTypeFromString(elementTypeStr);
 
-			// For unsized arrays, arrayVal points to the fat pointer struct {ptr, i32}
+			// For unsized arrays, arrayVal points to the fat pointer struct {ptr, i64}
 			// We need to extract the data pointer (field 0) and load it
 			mir::MIRValue *dataPtr = arrayVal;
 			if (isUnsizedArray) {
 				// Get the unsized array struct type
 				mir::MIRType *unsizedArrayType = module->getOrCreateStructType(
 					"_ManagedArray_" + elementTypeStr,
-					{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+					{mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 				// Get pointer to the data pointer field (field 0)
 				mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, arrayVal, 0, "unsized.data.ptr");
 				// Load the actual data pointer
@@ -907,7 +907,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 							if (isUnsizedArray) {
 								mir::MIRType *unsizedArrayType = module->getOrCreateStructType(
 									"_ManagedArray_" + elementTypeStr,
-									{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+									{mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 								mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, fieldPtr, 0, "unsized.data.ptr");
 								dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrField, "unsized.data");
 							} else if (isArrayStruct) {
@@ -1571,9 +1571,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			mir::MIRValue *value = generateExpr(callExpr->args[0].value.get());
 			// Extend byte/character to int if needed
 			if (effectiveCallee != "int.hash") {
-				value = builder->createZExt(value, mir::MIRType::getInt32(), "hash.extend");
+				value = builder->createZExt(value, mir::MIRType::getInt64(), "hash.extend");
 			}
-			mir::MIRValue *multiplier = mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), 0x9E3779B9);
+			mir::MIRValue *multiplier = mir::MIRValue::createConstantInt(mir::MIRType::getInt64(), 0x9E3779B97F4A7C15ULL);
 			return builder->createMul(value, multiplier, "hash");
 		}
 
@@ -1775,7 +1775,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			auto &arg = callExpr->args[i];
 			mir::MIRType *paramType = (argIdx < calleeF->parameters.size())
 										  ? calleeF->parameters[argIdx]->type
-										  : mir::MIRType::getInt32();
+										  : mir::MIRType::getInt64();
 
 			// Handle array and struct arguments
 			if (auto *varExpr = dynamic_cast<VariableExprAST *>(arg.value.get())) {
@@ -1823,7 +1823,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 								std::string elementTypeStr = maxon::TypeConversion::getArrayStructElementType(varType);
 								mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
 								mir::MIRValue *lenField = builder->createStructGEP(arrayStructType, alloca, 1, "arr._len.ptr");
-								mir::MIRValue *lengthVal = builder->createLoad(mir::MIRType::getInt32(), lenField, "length");
+								mir::MIRValue *lengthVal = builder->createLoad(mir::MIRType::getInt64(), lenField, "length");
 								argsV.push_back(lengthVal);
 								argIdx++;
 							} else if (maxon::TypeConversion::isManagedArrayType(varType)) {
@@ -1831,7 +1831,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 								std::string elementTypeStr = maxon::TypeConversion::getArrayElementType(varType);
 								mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
 								mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, alloca, 1, "arr._len.ptr");
-								mir::MIRValue *lengthVal = builder->createLoad(mir::MIRType::getInt32(), lenField, "length");
+								mir::MIRValue *lengthVal = builder->createLoad(mir::MIRType::getInt64(), lenField, "length");
 								argsV.push_back(lengthVal);
 								argIdx++;
 							} else {
@@ -1840,7 +1840,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 								if (namedValues.find(lengthVarName) != namedValues.end()) {
 									mir::MIRValue *lengthAlloca = namedValues[lengthVarName];
 									mir::MIRValue *lengthVal = builder->createLoad(
-										mir::MIRType::getInt32(), lengthAlloca, "length");
+										mir::MIRType::getInt64(), lengthAlloca, "length");
 									argsV.push_back(lengthVal);
 									argIdx++;
 								}
@@ -1966,7 +1966,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 			// Handle array parameters with hidden length
 			if (isArrayParam(param.type)) {
-				closureParams.push_back({mir::MIRType::getInt32(), param.name + ".__length"});
+				closureParams.push_back({mir::MIRType::getInt64(), param.name + ".__length"});
 			}
 		}
 
@@ -2032,7 +2032,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			if (isArrayParam(param.type)) {
 				arrayParameters.insert(param.name);
 				std::string lengthVarName = param.name + ".__length";
-				mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt32(), lengthVarName);
+				mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt64(), lengthVarName);
 				mir::MIRValue *lengthParamVal = closureFunc->parameters[argIdx];
 				builder->createStore(lengthParamVal, lengthAlloca);
 				namedValues[lengthVarName] = lengthAlloca;
@@ -2069,7 +2069,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				if (returnType->isVoid()) {
 					builder->createRetVoid();
 				} else if (returnType->isInteger()) {
-					builder->createRet(builder->getInt32(0));
+					builder->createRet(builder->getInt64(0));
 				} else if (returnType->isFloat()) {
 					builder->createRet(builder->getFloat64(0.0));
 				} else if (returnType->isPointer()) {
@@ -2143,7 +2143,7 @@ mir::MIRValue *MIRCodeGenerator::generateMathIntrinsic(CallExprAST *callExpr) {
 
 	// Rounding functions return int in Maxon, convert from float
 	if (isRoundingFunction) {
-		result = builder->createFPToSI(result, mir::MIRType::getInt32(), "fptositmp");
+		result = builder->createFPToSI(result, mir::MIRType::getInt64(), "fptositmp");
 	}
 
 	return result;
@@ -2231,7 +2231,7 @@ mir::MIRValue *MIRCodeGenerator::generateStructLiteral(StructInitExprAST *struct
 				for (size_t i = 0; i < arrayLit->values.size(); i++) {
 					mir::MIRValue *elemValue = generateExpr(arrayLit->values[i].get());
 					mir::MIRValue *elemPtr = builder->createArrayGEP(elemValue->type, fieldPtr,
-																	 mir::MIRValue::createConstantInt(mir::MIRType::getInt32(), i),
+																	 mir::MIRValue::createConstantInt(mir::MIRType::getInt64(), i),
 																	 fieldName + ".elem");
 					builder->createStore(elemValue, elemPtr);
 				}
@@ -2246,7 +2246,7 @@ mir::MIRValue *MIRCodeGenerator::generateStructLiteral(StructInitExprAST *struct
 			if (!unsizedArrayType) {
 				unsizedArrayType = module->getOrCreateStructType(
 					unsizedArrayTypeName,
-					{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+					{mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 				structTypes[unsizedArrayTypeName] = unsizedArrayType;
 			}
 
@@ -2259,8 +2259,8 @@ mir::MIRValue *MIRCodeGenerator::generateStructLiteral(StructInitExprAST *struct
 					if (arrayAlloca) {
 						mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "data.ptr");
 						mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
-																	  {builder->getInt64(-8)}, "length.ptr");
-						mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "length");
+																	  {builder->getInt64(-16)}, "length.ptr");
+						mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt64(), lengthPtr, "length");
 
 						mir::MIRValue *dataPtrField = builder->createStructGEP(unsizedArrayType, fieldPtr, 0, fieldName + ".ptr");
 						builder->createStore(dataPtr, dataPtrField);

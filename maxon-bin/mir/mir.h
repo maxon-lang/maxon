@@ -20,14 +20,14 @@ class MIRInstruction;
 
 enum class MIRTypeKind {
 	Void,
-	Int1,	 // bool
-	Int8,	 // char
-	Int32,	 // int
-	Int64,	 // 64-bit integer (for pointers on x64)
-	Float64, // double
-	Ptr,	 // pointer (opaque, 64-bit on x64)
-	Array,	 // fixed-size array
-	Struct,	 // user-defined struct
+	Int1,	  // bool
+	Int8,	  // char/byte
+	Int32,	  // 32-bit integer (for internal use, FFI)
+	Int64,	  // int (default integer type in Maxon)
+	Float64,  // double
+	Ptr,	  // pointer (opaque, 64-bit on x64)
+	Array,	  // fixed-size array
+	Struct,	  // user-defined struct
 	Optional, // discriminated union with tag (T or nil)
 };
 

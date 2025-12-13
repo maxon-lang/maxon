@@ -243,7 +243,7 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 	}
 
 	if (typeStr == "int") {
-		return mir::MIRType::getInt32();
+		return mir::MIRType::getInt64();
 	} else if (typeStr == "float") {
 		return mir::MIRType::getFloat64();
 	} else if (typeStr == "bool") {
@@ -256,12 +256,12 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		return mir::MIRType::getInt8(); // byte is 8-bit unsigned
 	} else if (typeStr == "cstring") {
 		// cstring is a zero-copy reference to a string's buffer
-		// Layout: { ptr data, i32 len, ptr managed } - managed ptr for refcount
+		// Layout: { ptr data, i64 len, ptr managed } - managed ptr for refcount
 		mir::MIRType *cstringType = structTypes["cstring"];
 		if (!cstringType) {
 			cstringType = module->getOrCreateStructType(
 				"cstring",
-				{mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getPtr()});
+				{mir::MIRType::getPtr(), mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 			structTypes["cstring"] = cstringType;
 		}
 		return cstringType;
@@ -270,7 +270,7 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 	} else if (typeStr == "void") {
 		return mir::MIRType::getVoid();
 	} else if (typeStr.empty()) {
-		return mir::MIRType::getInt32(); // Default type
+		return mir::MIRType::getInt64(); // Default type
 	}
 
 	// Check for optional type: T or nil
@@ -526,13 +526,13 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 			// Check capacity - only release if capacity > 0 (heap-allocated)
 			// capacity == 0 means the buffer is still stack-allocated
 			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, info.name + ".cap.ptr");
-			mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt32(), capField, info.name + ".cap");
+			mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt64(), capField, info.name + ".cap");
 
 			mir::MIRFunction *currentFunc = builder->getFunction();
 			mir::MIRBasicBlock *releaseBlock = currentFunc->createBasicBlock(info.name + ".release");
 			mir::MIRBasicBlock *skipBlock = currentFunc->createBasicBlock(info.name + ".skip");
 
-			mir::MIRValue *needsRelease = builder->createICmpSGT(capacity, builder->getInt32(0), info.name + ".needs.release");
+			mir::MIRValue *needsRelease = builder->createICmpSGT(capacity, builder->getInt64(0), info.name + ".needs.release");
 			builder->createCondBr(needsRelease, releaseBlock, skipBlock);
 
 			builder->setInsertPoint(releaseBlock);
@@ -586,8 +586,8 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 
 		// Check capacity to see if heap-allocated
 		mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, name + ".cleanup._capacity.ptr");
-		mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt32(), capPtr, name + ".cleanup._capacity");
-		mir::MIRValue *isHeap = builder->createICmpSGT(capacity, builder->getInt32(0), name + ".cleanup.isHeap");
+		mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt64(), capPtr, name + ".cleanup._capacity");
+		mir::MIRValue *isHeap = builder->createICmpSGT(capacity, builder->getInt64(0), name + ".cleanup.isHeap");
 
 		// Create conditional release block
 		mir::MIRBasicBlock *releaseBlock = builder->createBasicBlock(name + ".var.release");
@@ -619,7 +619,7 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		if (!substringType) {
 			substringType = module->getOrCreateStructType(
 				"substring",
-				{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+				{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 			structTypes["substring"] = substringType;
 		}
 
@@ -630,12 +630,12 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 			if (!unsizedArrayType) {
 				unsizedArrayType = module->getOrCreateStructType(
 					"_ManagedArray_byte",
-					{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+					{mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 				structTypes["_ManagedArray_byte"] = unsizedArrayType;
 			}
 			managedStringType = module->getOrCreateStructType(
 				"__ManagedStringData",
-				{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+				{unsizedArrayType, mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 			structTypes["__ManagedStringData"] = managedStringType;
 		}
 		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
@@ -646,8 +646,8 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 
 		// Check if parent is heap-allocated (capacity > 0)
 		mir::MIRValue *parentCapPtr = builder->createStructGEP(managedStringType, parentPtr, 2, name + ".parent._capacity.ptr");
-		mir::MIRValue *parentCap = builder->createLoad(mir::MIRType::getInt32(), parentCapPtr, name + ".parent._capacity");
-		mir::MIRValue *isHeap = builder->createICmpSGT(parentCap, builder->getInt32(0), name + ".isHeap");
+		mir::MIRValue *parentCap = builder->createLoad(mir::MIRType::getInt64(), parentCapPtr, name + ".parent._capacity");
+		mir::MIRValue *isHeap = builder->createICmpSGT(parentCap, builder->getInt64(0), name + ".isHeap");
 
 		// Conditional release: only release if parent was heap-allocated
 		mir::MIRBasicBlock *releaseBlock = builder->createBasicBlock(name + ".release");
@@ -685,7 +685,7 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		if (!cstringType) {
 			cstringType = module->getOrCreateStructType(
 				"cstring",
-				{mir::MIRType::getPtr(), mir::MIRType::getInt32(), mir::MIRType::getPtr()});
+				{mir::MIRType::getPtr(), mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 			structTypes["cstring"] = cstringType;
 		}
 
@@ -880,7 +880,7 @@ void MIRCodeGenerator::generateGlobalInit() {
 			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
 
 			// Initialize the struct fields
-			mir::MIRValue *lengthVal = builder->getInt32(arraySize);
+			mir::MIRValue *lengthVal = builder->getInt64(arraySize);
 
 			// Field 0: managed (nested __ManagedArrayData struct)
 			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, globalPtr, 0, globalInfo.name + ".managed");
@@ -897,11 +897,11 @@ void MIRCodeGenerator::generateGlobalInit() {
 
 			// Field 1: iterIndex
 			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, globalPtr, 1, globalInfo.name + ".iterIndex");
-			builder->createStore(builder->getInt32(0), iterField);
+			builder->createStore(builder->getInt64(0), iterField);
 
 			// Store each element value
 			for (int i = 0; i < arraySize; i++) {
-				mir::MIRValue *indexVal = builder->getInt32(i);
+				mir::MIRValue *indexVal = builder->getInt64(i);
 				mir::MIRValue *elemPtr = builder->createArrayGEP(elementType, bufferPtr, indexVal, "arrayidx");
 				builder->createStore(initValues[i], elemPtr);
 			}
@@ -977,17 +977,17 @@ void MIRCodeGenerator::generateGlobalInit() {
 			mir::MIRValue *keysBufferField = builder->createStructGEP(keyManagedArrayType, keysManaged, 0, "keys._buffer");
 			builder->createStore(keysBuffer, keysBufferField);
 			mir::MIRValue *keysLenField = builder->createStructGEP(keyManagedArrayType, keysManaged, 1, "keys._len");
-			builder->createStore(builder->getInt32(numEntries), keysLenField);
+			builder->createStore(builder->getInt64(numEntries), keysLenField);
 			mir::MIRValue *keysCapField = builder->createStructGEP(keyManagedArrayType, keysManaged, 2, "keys._capacity");
-			builder->createStore(builder->getInt32(numEntries), keysCapField);
+			builder->createStore(builder->getInt64(numEntries), keysCapField);
 
 			// Initialize values _ManagedArray struct fields
 			mir::MIRValue *valuesBufferField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 0, "values._buffer");
 			builder->createStore(valuesBuffer, valuesBufferField);
 			mir::MIRValue *valuesLenField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 1, "values._len");
-			builder->createStore(builder->getInt32(numEntries), valuesLenField);
+			builder->createStore(builder->getInt64(numEntries), valuesLenField);
 			mir::MIRValue *valuesCapField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 2, "values._capacity");
-			builder->createStore(builder->getInt32(numEntries), valuesCapField);
+			builder->createStore(builder->getInt64(numEntries), valuesCapField);
 
 			// Call map<K,V>.init(null, keysManaged, valuesManaged)
 			std::string initMethodName = specializedName + ".init";
@@ -1127,7 +1127,7 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 	if (mainTakesArgs) {
 		if (isWindows) {
 			// Windows command line argument handling
-			// Call __get_command_args() which returns a pointer to { ptr data, i32 length }
+			// Call __get_command_args() which returns a pointer to { ptr data, i64 length }
 			mir::MIRFunction *getArgsFunc = getOrDeclareFunction(
 				"__get_command_args", mir::MIRType::getPtr(), {});
 			mir::MIRValue *argsStructPtr = builder->createCall(getArgsFunc, {});
@@ -1141,7 +1141,7 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 				mir::MIRType::getInt8(), argsStructPtr,
 				{builder->getInt64(8)}, "args.len.ptr");
 			mir::MIRValue *argsLen = builder->createLoad(
-				mir::MIRType::getInt32(), argsLenPtr, "args.len");
+				mir::MIRType::getInt64(), argsLenPtr, "args.len");
 
 			// Build array<string> struct on stack
 			// Layout: { __ManagedArrayData_string { ptr, i32, i32 }, i32 iterIndex }
@@ -1164,7 +1164,7 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 
 			// Set iterIndex (field 1) to 0
 			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, argsAlloca, 1, "args.iter");
-			builder->createStore(builder->getInt32(0), iterField);
+			builder->createStore(builder->getInt64(0), iterField);
 
 			// Call main with pointer to array<string> struct
 			mainRetVal = builder->createCall(mainFunc, {argsAlloca});
@@ -1180,13 +1180,13 @@ void MIRCodeGenerator::createMinimalEntryPoint() {
 			builder->createStore(mir::MIRValue::createConstantNull(), bufferField);
 
 			mir::MIRValue *lenField = builder->createStructGEP(managedArrayDataType, managedField, 1, "args.len.field");
-			builder->createStore(builder->getInt32(0), lenField);
+			builder->createStore(builder->getInt64(0), lenField);
 
 			mir::MIRValue *capField = builder->createStructGEP(managedArrayDataType, managedField, 2, "args.cap.field");
-			builder->createStore(builder->getInt32(0), capField);
+			builder->createStore(builder->getInt64(0), capField);
 
 			mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, argsAlloca, 1, "args.iter");
-			builder->createStore(builder->getInt32(0), iterField);
+			builder->createStore(builder->getInt64(0), iterField);
 
 			mainRetVal = builder->createCall(mainFunc, {argsAlloca});
 		}
@@ -1866,12 +1866,12 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 				logTrace("Generating global: " + global->name + " : " + type);
 
 				if (type == "int") {
-					// Create global integer constant
-					mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getInt32());
+					// Create global integer constant (64-bit)
+					mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getInt64());
 					mirGlobal->isConstant = true;
-					int32_t intVal = static_cast<int32_t>(std::get<int64_t>(value));
-					std::vector<uint8_t> data(4);
-					std::memcpy(data.data(), &intVal, 4);
+					int64_t intVal = std::get<int64_t>(value);
+					std::vector<uint8_t> data(8);
+					std::memcpy(data.data(), &intVal, 8);
 					mirGlobal->setInitializer(data);
 				} else if (type == "float") {
 					// Create global float constant

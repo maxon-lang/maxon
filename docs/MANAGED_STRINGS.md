@@ -31,7 +31,7 @@ Small strings store data inline in the `__ManagedStringData` struct:
 __ManagedStringData (SSO mode):
 +--------+--------+--------+
 | data   | length | cap=-1 |
-| (ptr)  | (i32)  | (i32)  |
+| (ptr)  | (i64)  | (i64)  |
 +--------+--------+--------+
     |
     +---> Points to inline buffer (within the struct)
@@ -39,13 +39,13 @@ __ManagedStringData (SSO mode):
 
 ### Heap-Allocated Strings (capacity > 0)
 
-Larger strings use heap memory with an 8-byte header:
+Larger strings use heap memory with a 16-byte header:
 
 ```
 Heap allocation:
 +----------+----------+------------------+------+
 | refcount | data_sz  |      data        | null |
-|  (i32)   |  (i32)   |   (variable)     | term |
+|  (i64)   |  (i64)   |   (variable)     | term |
 +----------+----------+------------------+------+
 ^                     ^
 |                     +-- data pointer (returned by _managed_string_alloc)
@@ -54,10 +54,10 @@ Heap allocation:
 __ManagedStringData (heap mode):
 +--------+--------+--------+
 | data   | length | cap    |
-| (ptr)  | (i32)  | (i32)  |
+| (ptr)  | (i64)  | (i64)  |
 +--------+--------+--------+
     |
-    +---> Points to data area in heap allocation (offset +8 from raw)
+    +---> Points to data area in heap allocation (offset +16 from raw)
 ```
 
 ### Related Types
@@ -70,7 +70,7 @@ Used for C-compatible null-terminated strings (e.g., for printing):
 cstring struct:
 +--------+--------+----------+
 | data   | length | managed  |
-| (ptr)  | (i32)  | (ptr)    |
+| (ptr)  | (i64)  | (ptr)    |
 +--------+--------+----------+
     |               |
     |               +-- Pointer to original __ManagedStringData (for SSO)
@@ -86,7 +86,7 @@ A view into a parent string:
 substring struct:
 +----------+--------+--------+---------+
 | parent   | data   | length | iterPos |
-| (ptr)    | (ptr)  | (i32)  | (i32)   |
+| (ptr)    | (ptr)  | (i64)  | (i64)   |
 +----------+--------+--------+---------+
      |         |
      |         +---> Points into parent's data buffer
@@ -242,7 +242,7 @@ auto len2 = msb.getLength(m2Ptr);
 auto totalLen = builder->createAdd(len1, len2, "total.len");
 
 // 2. Allocate buffer for result (len + 1 for null terminator)
-auto allocSize = builder->createAdd(totalLen, builder->getInt32(1));
+auto allocSize = builder->createAdd(totalLen, builder->getInt64(1));
 auto newBuffer = msb.allocateBuffer(allocSize, "string concat");
 
 // 3. Copy data from both strings
@@ -263,7 +263,7 @@ msb.trackHeapString("concat", result);
 // If not, allocate new buffer and copy
 
 auto refcount = loadRefcountFromHeader(dataPtr);
-auto isUnique = builder->createICmpEQ(refcount, builder->getInt32(1));
+auto isUnique = builder->createICmpEQ(refcount, builder->getInt64(1));
 
 // Branch: if unique, modify in place; else allocate copy
 ```
@@ -311,18 +311,18 @@ Leaked:    0 bytes
 1. **Leaked bytes**: Check that all heap strings are tracked in `scopeStack`
 2. **Double free**: Verify refcounting logic, especially for shared strings
 3. **Use after free**: Ensure substrings retain their parent before use
-4. **Wrong size in tracking**: Header is 8 bytes, allocation is `capacity + 8`
+4. **Wrong size in tracking**: Header is 16 bytes, allocation is `capacity + 16`
 
 ### Header Layout Verification
 
-The header at `data - 8` should have:
-- Offset 0-3: refcount (i32)
-- Offset 4-7: data_size (i32)
+The header at `data - 16` should have:
+- Offset 0-7: refcount (i64)
+- Offset 8-15: data_size (i64)
 
 To verify in the debugger:
 ```
 # At breakpoint in _managed_string_release
-# data is the argument, header is at data - 8
-print *(int32_t*)(data - 8)  # refcount
-print *(int32_t*)(data - 4)  # data_size
+# data is the argument, header is at data - 16
+print *(int64_t*)(data - 16)  # refcount
+print *(int64_t*)(data - 8)   # data_size
 ```

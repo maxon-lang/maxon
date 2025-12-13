@@ -43,7 +43,7 @@ Arrays declared with `let` store their buffer on the stack:
 __ManagedArrayData<T> (stack mode):
 +--------+--------+--------+
 | buffer | length | cap=0  |
-| (ptr)  | (i32)  | (i32)  |
+| (ptr)  | (i64)  | (i64)  |
 +--------+--------+--------+
     |
     +---> Points to stack-allocated buffer [N x T]
@@ -53,24 +53,24 @@ Stack arrays have capacity = 0 to indicate they don't own the buffer (no heap al
 
 ### Heap-Allocated Arrays (capacity > 0)
 
-Arrays declared with `var` use heap memory with an 8-byte header for reference counting:
+Arrays declared with `var` use heap memory with a 16-byte header for reference counting:
 
 ```
 Heap allocation:
 +----------+----------+----------------+
 | refcount | dataSize | element data   |
-| (i32)    | (i32)    | ...            |
+| (i64)    | (i64)    | ...            |
 +----------+----------+----------------+
 ^          ^          ^
-offset 0   offset 4   offset 8 (data pointer returned by _managed_array_alloc)
+offset 0   offset 8   offset 16 (data pointer returned by _managed_array_alloc)
 
 __ManagedArrayData<T> (heap mode):
 +--------+--------+--------+
 | buffer | length | cap    |
-| (ptr)  | (i32)  | (i32)  |
+| (ptr)  | (i64)  | (i64)  |
 +--------+--------+--------+
     |
-    +---> Points to data area in heap allocation (offset +8 from raw)
+    +---> Points to data area in heap allocation (offset +16 from raw)
 ```
 
 ### Array Type Structure
@@ -81,17 +81,17 @@ The full `array<T>` stdlib struct includes an iteration index for for-loop suppo
 array<T> struct (stdlib/array.maxon):
 +-------------------+----------+
 | managed           | iterIndex |
-| (__ManagedArrayData| (i32)     |
+| (__ManagedArrayData| (i64)     |
 | embedded struct)  |           |
 +-------------------+----------+
 
 Field 0 (managed):
   +--------+--------+--------+
   | _buffer| _len   | _capacity|
-  | (ptr)  | (i32)  | (i32)    |
+  | (ptr)  | (i64)  | (i64)    |
   +--------+--------+--------+
 
-Field 1 (iterIndex): i32 - used by iterator protocol
+Field 1 (iterIndex): i64 - used by iterator protocol
 ```
 
 All array operations access the nested `managed` field to get buffer, length, and capacity.
@@ -244,7 +244,7 @@ auto elemPtr = mab.getElementPtr(dataPtr, len);
 builder->createStore(value, elemPtr);
 
 // 4. Increment length
-auto newLen = builder->createAdd(len, builder->getInt32(1));
+auto newLen = builder->createAdd(len, builder->getInt64(1));
 mab.setLength(structPtr, newLen);
 ```
 
@@ -281,7 +281,7 @@ Located in `maxon-runtime/runtime.mir`:
 | `_managed_array_alloc` | `(i64 byteSize, ptr tag) -> ptr` | Allocate buffer with header |
 | `_managed_array_release` | `(ptr data, ptr tag) -> void` | Decrement refcount, free if 0 |
 | `_managed_array_retain` | `(ptr data) -> void` | Increment refcount |
-| `_managed_array_get_refcount` | `(ptr data) -> i32` | Get current refcount |
+| `_managed_array_get_refcount` | `(ptr data) -> i64` | Get current refcount |
 
 ## Debugging Tips
 
@@ -290,17 +290,17 @@ Located in `maxon-runtime/runtime.mir`:
 Enable allocation tracking with `--track-allocs` to see all allocations:
 
 ```
-ALLOC #1: 24 bytes (array grow)
-ALLOC #2: 40 bytes (array grow)
-FREE #1: 24 bytes (array grow)
-ALLOC #3: 72 bytes (array grow)
-FREE #2: 40 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
+ALLOC #2: 56 bytes (array grow)
+FREE #1: 40 bytes (array grow)
+ALLOC #3: 88 bytes (array grow)
+FREE #2: 56 bytes (array grow)
 10
-FREE #3: 72 bytes (array cleanup)
+FREE #3: 88 bytes (array cleanup)
 
 === ALLOC STATS ===
-Allocated: 146 bytes
-Freed:     146 bytes
+Allocated: 184 bytes
+Freed:     184 bytes
 Leaked:    0 bytes
 ```
 
@@ -341,7 +341,7 @@ if (maxon::TypeConversion::isArrayStructType(fieldTypeStr)) {
     builder->createStore(stackBuffer, bufferField);
     builder->createStore(arraySizeVal, lenField);
     builder->createStore(zeroCapacity, capField);  // 0 = stack-allocated
-    builder->createStore(builder->getInt32(0), iterField);
+    builder->createStore(builder->getInt64(0), iterField);
     
     // 3. Store each element value into the buffer
     for (int i = 0; i < constantArraySize; i++) {
@@ -380,11 +380,11 @@ For `config.sources.count()`:
 
 ```llvm
 ; Get the array<string> field from Config struct
-%field = getelementptr %Config, ptr %config, i32 0, i32 0
+%field = getelementptr %Config, ptr %config, i64 0, i64 0
 %array = load %array<string>, ptr %field
 
 ; Create temp alloca and call count method
 %temp = alloca %array<string>
 store %array<string> %array, ptr %temp
-%count = call i32 @array<string>.count(ptr %temp)
+%count = call i64 @array<string>.count(ptr %temp)
 ```

@@ -70,17 +70,17 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 24 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
 ALLOC #2: 10 bytes
 3ALLOC #3: 10 bytes (cstring conversion)
 FREE #3: 10 bytes (cstring release)
 
 FREE #2: 10 bytes (cstring release)
-FREE #1: 24 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
-Allocated: 44 bytes
-Freed:     44 bytes
+Allocated: 60 bytes
+Freed:     60 bytes
 Leaked:    0 bytes
 ```
 
@@ -106,8 +106,8 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 24 bytes (array grow)
-ALLOC #2: 24 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
+ALLOC #2: 40 bytes (array grow)
 ALLOC #3: 12 bytes
 200ALLOC #4: 10 bytes (cstring conversion)
 FREE #4: 10 bytes (cstring release)
@@ -118,12 +118,12 @@ ALLOC #5: 12 bytes
 FREE #6: 10 bytes (cstring release)
 
 FREE #5: 12 bytes (cstring release)
-FREE #1: 24 bytes (array cleanup)
-FREE #2: 24 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
+FREE #2: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
-Allocated: 92 bytes
-Freed:     92 bytes
+Allocated: 124 bytes
+Freed:     124 bytes
 Leaked:    0 bytes
 ```
 
@@ -177,21 +177,21 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 24 bytes (array grow)
-ALLOC #2: 40 bytes (array grow)
-FREE #1: 24 bytes (array grow)
-ALLOC #3: 72 bytes (array grow)
-FREE #2: 40 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
+ALLOC #2: 72 bytes (array grow)
+FREE #1: 40 bytes (array grow)
+ALLOC #3: 136 bytes (array grow)
+FREE #2: 72 bytes (array grow)
 ALLOC #4: 11 bytes
 10ALLOC #5: 10 bytes (cstring conversion)
 FREE #5: 10 bytes (cstring release)
 
 FREE #4: 11 bytes (cstring release)
-FREE #3: 72 bytes (array cleanup)
+FREE #3: 136 bytes (array cleanup)
 
 === ALLOC STATS ===
-Allocated: 157 bytes
-Freed:     157 bytes
+Allocated: 269 bytes
+Freed:     269 bytes
 Leaked:    0 bytes
 ```
 ### Struct Field Array Method Call

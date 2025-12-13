@@ -269,12 +269,12 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 		if (!unsizedArrayType) {
 			unsizedArrayType = module->getOrCreateStructType(
 				"_ManagedArray_byte",
-				{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+				{mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 			structTypes["_ManagedArray_byte"] = unsizedArrayType;
 		}
 		managedDataType = module->getOrCreateStructType(
 			"__ManagedStringData",
-			{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+			{unsizedArrayType, mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 		structTypes["__ManagedStringData"] = managedDataType;
 	}
 	mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
@@ -372,15 +372,15 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 
 	// Store the length in the fat pointer (field 1 of the fat pointer)
 	mir::MIRValue *bufferLenPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 1, "buffer.len");
-	builder->createStore(builder->getInt32(static_cast<int>(len)), bufferLenPtr);
+	builder->createStore(builder->getInt64(static_cast<int64_t>(len)), bufferLenPtr);
 
 	// Field 1: _len int
 	mir::MIRValue *lenFieldPtr = builder->createStructGEP(managedDataType, managedDataAlloca, 1, "managed._len");
-	builder->createStore(builder->getInt32(static_cast<int>(len)), lenFieldPtr);
+	builder->createStore(builder->getInt64(static_cast<int64_t>(len)), lenFieldPtr);
 
 	// Field 2: _capacity int (0 = constant/SSO, >0 = heap with refcount header)
 	mir::MIRValue *capacityFieldPtr = builder->createStructGEP(managedDataType, managedDataAlloca, 2, "managed._capacity");
-	builder->createStore(builder->getInt32(capacity), capacityFieldPtr);
+	builder->createStore(builder->getInt64(capacity), capacityFieldPtr);
 
 	// Store the POINTER to the managed data in the string struct's _managed field
 	// string._managed is of type ptr (opaque pointer)
@@ -391,7 +391,7 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 	// This is required for the Iterable.next() implementation
 	// FIX: Initialize _iterPos for iteration support
 	mir::MIRValue *iterPosFieldPtr = builder->createStructGEP(stringType, stringAlloca, 1, "str._iterPos.FIXED");
-	builder->createStore(builder->getInt32(0), iterPosFieldPtr);
+	builder->createStore(builder->getInt64(0), iterPosFieldPtr);
 
 	// Return the alloca pointer
 	return stringAlloca;
@@ -413,7 +413,7 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteralAsSlice(StringLiteralExprA
 	if (!unsizedArrayType) {
 		unsizedArrayType = module->getOrCreateStructType(
 			"_ManagedArray_byte",
-			{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+			{mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 		structTypes["_ManagedArray_byte"] = unsizedArrayType;
 	}
 
@@ -426,7 +426,7 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteralAsSlice(StringLiteralExprA
 
 	// Store the length (field 1)
 	mir::MIRValue *lenFieldPtr = builder->createStructGEP(unsizedArrayType, sliceAlloca, 1, "slice.len");
-	builder->createStore(builder->getInt32(static_cast<int>(len)), lenFieldPtr);
+	builder->createStore(builder->getInt64(static_cast<int64_t>(len)), lenFieldPtr);
 
 	// Return pointer to the fat pointer struct
 	return sliceAlloca;
@@ -446,12 +446,12 @@ mir::MIRValue *MIRCodeGenerator::generateCharLiteral(CharacterExprAST *charExpr)
 		if (!unsizedArrayType) {
 			unsizedArrayType = module->getOrCreateStructType(
 				"_ManagedArray_byte",
-				{mir::MIRType::getPtr(), mir::MIRType::getInt32()});
+				{mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 			structTypes["_ManagedArray_byte"] = unsizedArrayType;
 		}
 		managedDataType = module->getOrCreateStructType(
 			"__ManagedStringData",
-			{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+			{unsizedArrayType, mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 		structTypes["__ManagedStringData"] = managedDataType;
 	}
 	mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
@@ -495,15 +495,15 @@ mir::MIRValue *MIRCodeGenerator::generateCharLiteral(CharacterExprAST *charExpr)
 
 	// Store the length in the fat pointer (field 1 of the fat pointer)
 	mir::MIRValue *bufferLenPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 1, "char.buffer.len");
-	builder->createStore(builder->getInt32(static_cast<int>(len)), bufferLenPtr);
+	builder->createStore(builder->getInt64(static_cast<int64_t>(len)), bufferLenPtr);
 
 	// Field 1: _len int
 	mir::MIRValue *lenFieldPtr = builder->createStructGEP(managedDataType, managedDataAlloca, 1, "char.managed._len");
-	builder->createStore(builder->getInt32(static_cast<int>(len)), lenFieldPtr);
+	builder->createStore(builder->getInt64(static_cast<int64_t>(len)), lenFieldPtr);
 
 	// Field 2: _capacity int (0 = constant data, no refcount)
 	mir::MIRValue *capacityFieldPtr = builder->createStructGEP(managedDataType, managedDataAlloca, 2, "char.managed._capacity");
-	builder->createStore(builder->getInt32(0), capacityFieldPtr);
+	builder->createStore(builder->getInt64(0), capacityFieldPtr);
 
 	// Store the POINTER to the managed data in the char struct's _managed field
 	mir::MIRValue *managedFieldPtr = builder->createStructGEP(charType, charAlloca, 0, "char._managed");
@@ -623,7 +623,7 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 		managedStringDataType = module->getOrCreateStructType(
 			"__ManagedStringData",
-			{unsizedArrayType, mir::MIRType::getInt32(), mir::MIRType::getInt32()});
+			{unsizedArrayType, mir::MIRType::getInt64(), mir::MIRType::getInt64()});
 		structTypes["__ManagedStringData"] = managedStringDataType;
 	}
 	mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
