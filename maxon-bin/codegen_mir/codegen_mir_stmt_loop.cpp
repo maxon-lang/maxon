@@ -216,20 +216,9 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 			mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, arrayAlloca, 0, "arr._buffer.ptr");
 			arrayPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, "arrptr");
 		} else {
-			// Legacy: Check for hidden __length alloca (static sized arrays [N]T)
-			mir::MIRValue *lengthAlloca = namedValues[arrayVarName + ".__length"];
-			if (!lengthAlloca) {
-				reportError("Array length not found for: " + arrayVarName,
-							forStmt->line, forStmt->column);
-			}
-			arrayLength = builder->createLoad(mir::MIRType::getInt64(), lengthAlloca, "arrlen");
-
-			// Get array pointer (stack vs heap allocated)
-			if (stackAllocatedArrays.count(arrayVarName) > 0) {
-				arrayPtr = arrayAlloca;
-			} else {
-				arrayPtr = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "arrptr");
-			}
+			// All arrays should use array<T> or _ManagedArray<T> struct types
+			reportError("Unsupported array type for iteration: " + varType,
+						forStmt->line, forStmt->column);
 		}
 
 		// Create index variable (starts at 0)

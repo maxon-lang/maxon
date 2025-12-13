@@ -4,7 +4,7 @@
  * This file implements codegen for __managed_array_* intrinsics that work with
  * _ManagedArray<T> arrays using the struct-based layout:
  *
- * __ManagedArrayData<T>: { _buffer ptr, _len i32, _capacity i32 }
+ * __ManagedArrayData<T>: { _buffer ptr, _len i64, _capacity i64 }
  *
  * - _buffer: pointer to the actual array data (heap or stack allocated)
  * - _len: current number of elements

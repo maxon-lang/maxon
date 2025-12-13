@@ -337,12 +337,7 @@ mir::MIRType *MIRCodeGenerator::getParamTypeFromString(const std::string &typeSt
 		}
 	}
 
-	// Array parameters are passed as pointers (old-style fixed arrays with hidden length)
-	if (isArrayParam(resolvedType)) {
-		return mir::MIRType::getPtr();
-	}
-
-	// _ManagedArray<T> parameters are passed as pointers (no hidden length)
+	// _ManagedArray<T> parameters are passed as pointers
 	// The struct is __ManagedArrayData<T> = { ptr, i32, i32 }
 	if (maxon::TypeConversion::isManagedArrayType(resolvedType)) {
 		std::string elemType = maxon::TypeConversion::getArrayElementType(resolvedType);
@@ -402,16 +397,6 @@ std::string MIRCodeGenerator::getMaxonTypeFromMIRType(mir::MIRType *type) {
 		return getMaxonTypeFromMIRType(type->wrappedType) + " or nil";
 	}
 	return "int";
-}
-
-bool MIRCodeGenerator::isArrayParam(const std::string &typeStr) {
-	// Check for old-style array types that use hidden length parameter
-	// Note: array<T> struct types do NOT use hidden length - they store length in the struct
-	// Note: _ManagedArray<T> is an opaque struct type (like _ManagedString), not legacy arrays
-	if (maxon::TypeConversion::isManagedArrayType(typeStr)) {
-		return false;
-	}
-	return maxon::TypeConversion::isArrayType(typeStr);
 }
 
 bool MIRCodeGenerator::isStructParameter(const std::string &varName) {
@@ -1355,10 +1340,6 @@ std::string MIRCodeGenerator::instantiateGenericStruct(const std::string &templa
 				continue; // Skip self, already added
 			mir::MIRType *paramType = getParamTypeFromString(param.type);
 			mirFunc->addParameter(paramType, param.name);
-			// Add hidden length parameter for array parameters (matches generateFunctionWithTypeBindings)
-			if (isArrayParam(param.type)) {
-				mirFunc->addParameter(mir::MIRType::getInt32(), param.name + ".__length");
-			}
 		}
 
 		logTrace("Declared specialized method: " + specializedMethodName);
@@ -1416,9 +1397,6 @@ void MIRCodeGenerator::ensureStructMethodDeclared(const std::string &structType,
 						continue;
 					mir::MIRType *paramType = getParamTypeFromString(param.type);
 					mirFunc->addParameter(paramType, param.name);
-					if (isArrayParam(param.type)) {
-						mirFunc->addParameter(mir::MIRType::getInt32(), param.name + ".__length");
-					}
 				}
 
 				logDetail("  Declared method: " + fullMethodName);
@@ -1460,9 +1438,6 @@ void MIRCodeGenerator::ensureStructMethodDeclared(const std::string &structType,
 							continue;
 						mir::MIRType *paramType = getParamTypeFromString(param.type);
 						mirFunc->addParameter(paramType, param.name);
-						if (isArrayParam(param.type)) {
-							mirFunc->addParameter(mir::MIRType::getInt32(), param.name + ".__length");
-						}
 					}
 
 					logDetail("  Declared method from program: " + fullMethodName);
@@ -1500,9 +1475,6 @@ void MIRCodeGenerator::ensureStructMethodDeclared(const std::string &structType,
 							continue;
 						mir::MIRType *paramType = getParamTypeFromString(param.type);
 						mirFunc->addParameter(paramType, param.name);
-						if (isArrayParam(param.type)) {
-							mirFunc->addParameter(mir::MIRType::getInt32(), param.name + ".__length");
-						}
 					}
 
 					logDetail("  Declared method from functions: " + fullMethodName);
@@ -1687,10 +1659,6 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		std::vector<mir::MIRType *> paramTypes;
 		for (const auto &param : func->parameters) {
 			paramTypes.push_back(getParamTypeFromString(param.type));
-			// Add hidden length parameter for arrays
-			if (isArrayParam(param.type)) {
-				paramTypes.push_back(mir::MIRType::getInt32());
-			}
 		}
 
 		logTrace("Declaring function: " + functionName + " -> " + func->returnType);
@@ -1708,10 +1676,6 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 			for (const auto &param : func->parameters) {
 				mir::MIRType *paramType = getParamTypeFromString(param.type);
 				mirFunc->addParameter(paramType, param.name);
-
-				if (isArrayParam(param.type)) {
-					mirFunc->addParameter(mir::MIRType::getInt32(), param.name + ".__length");
-				}
 			}
 
 			// Store function ID mapping for fast lookups during codegen
@@ -1938,10 +1902,6 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		for (const auto &param : funcInfo.parameters) {
 			mir::MIRType *paramType = getParamTypeFromString(param.type);
 			mirFunc->addParameter(paramType, param.name);
-
-			if (isArrayParam(param.type)) {
-				mirFunc->addParameter(mir::MIRType::getInt32(), param.name + ".__length");
-			}
 		}
 	}
 

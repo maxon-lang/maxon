@@ -269,8 +269,8 @@ MIRCodeGenerator::ArrayFieldInfo MIRCodeGenerator::getArrayFieldInfo(ExprAST *ar
 	if (arrayAlloca) {
 		// Regular variable found - get its type and allocas
 		info.dataPtr = arrayAlloca;
-		info.lengthAlloca = namedValues[arrayVarName + ".__length"];
-		info.capacityAlloca = namedValues[arrayVarName + ".__capacity"];
+		info.lengthAlloca = nullptr;  // Modern arrays store length in struct
+		info.capacityAlloca = nullptr;  // Modern arrays store capacity in struct
 		info.isStackArray = (stackAllocatedArrays.count(arrayVarName) > 0);
 
 		std::string arrType = variableTypes[arrayVarName];
@@ -1407,20 +1407,19 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_right(CallExprAST *callEx
 	// Get current length
 	mir::MIRValue *length;
 	if (info.lengthAlloca) {
-		length = builder->createLoad(mir::MIRType::getInt32(), info.lengthAlloca, "len");
+		length = builder->createLoad(mir::MIRType::getInt64(), info.lengthAlloca, "len");
 	} else {
 		// For struct fields or heap arrays, read from header at dataPtr - 8
 		mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
 													  {builder->getInt64(-8)}, "length.ptr");
-		length = builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "len");
+		length = builder->createLoad(mir::MIRType::getInt64(), lengthPtr, "len");
 	}
 
 	// Calculate number of elements to move: length - start
 	mir::MIRValue *elementsToMove = builder->createSub(length, start, "elems.to.move");
 
-	// Calculate byte size to move
-	mir::MIRValue *elementsToMove64 = builder->createSExt(elementsToMove, mir::MIRType::getInt64(), "elems64");
-	mir::MIRValue *byteSize = builder->createMul(elementsToMove64, builder->getInt64(elemSize), "byte.size");
+	// Calculate byte size to move (length and start are already i64)
+	mir::MIRValue *byteSize = builder->createMul(elementsToMove, builder->getInt64(elemSize), "byte.size");
 
 	// Source pointer: arr + start * elemSize
 	mir::MIRValue *srcPtr = builder->createArrayGEP(elemType, dataPtr, start, "src.ptr");

@@ -79,18 +79,6 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 			maxon::TypeConversion::isManagedArrayType(param.type)) {
 			structParameters.insert(param.name);
 		}
-
-		// If this is an array parameter, also store the hidden length parameter
-		// and track it as an array parameter (uses old ABI)
-		if (isArrayParam(param.type)) {
-			arrayParameters.insert(param.name);
-			std::string lengthVarName = param.name + ".__length";
-			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt64(), lengthVarName);
-			mir::MIRValue *lengthParamVal = function->parameters[argIdx];
-			builder->createStore(lengthParamVal, lengthAlloca);
-			namedValues[lengthVarName] = lengthAlloca;
-			argIdx++;
-		}
 	}
 
 	// Push a scope for the function body
@@ -323,18 +311,6 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 			maxon::TypeConversion::isManagedArrayType(substitutedType)) {
 			structParameters.insert(param.name);
 		}
-
-		// If this is an array parameter, also store the hidden length parameter
-		// and track it as an array parameter (uses old ABI)
-		if (isArrayParam(substitutedType)) {
-			arrayParameters.insert(param.name);
-			std::string lengthVarName = param.name + ".__length";
-			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt64(), lengthVarName);
-			mir::MIRValue *lengthParamVal = function->parameters[argIdx];
-			builder->createStore(lengthParamVal, lengthAlloca);
-			namedValues[lengthVarName] = lengthAlloca;
-			argIdx++;
-		}
 	}
 
 	// Push a scope for the function body
@@ -463,17 +439,6 @@ void MIRCodeGenerator::generateSynthesizedMethod(const FunctionInfo &funcInfo) {
 			maxon::TypeConversion::isArrayStructType(param.type) ||
 			maxon::TypeConversion::isManagedArrayType(param.type)) {
 			structParameters.insert(param.name);
-		}
-
-		// If this is an array parameter, also store the hidden length parameter
-		if (isArrayParam(param.type)) {
-			arrayParameters.insert(param.name);
-			std::string lengthVarName = param.name + ".__length";
-			mir::MIRValue *lengthAlloca = builder->createAlloca(mir::MIRType::getInt64(), lengthVarName);
-			mir::MIRValue *lengthParamVal = function->parameters[argIdx];
-			builder->createStore(lengthParamVal, lengthAlloca);
-			namedValues[lengthVarName] = lengthAlloca;
-			argIdx++;
 		}
 	}
 

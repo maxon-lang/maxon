@@ -183,7 +183,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 							// Load length from header at dataPtr - 8
 							mir::MIRValue *lengthPtr = builder->createGEP(mir::MIRType::getInt8(), dataPtr,
 																		  {builder->getInt64(-8)}, "length.ptr");
-							mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt32(), lengthPtr, "length");
+							mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt64(), lengthPtr, "length");
 
 							// Store into the fat pointer field
 							mir::MIRValue *fatPtrDataPtr = builder->createStructGEP(fatPtrType, fieldPtr, 0,

@@ -224,7 +224,6 @@ class MIRCodeGenerator {
 	std::string getMaxonTypeFromMIRType(mir::MIRType *type);
 	std::string inferExprType(ExprAST *expr); // For struct field type inference
 	void markFieldTypesUsed(mir::MIRType *type);
-	bool isArrayParam(const std::string &typeStr);
 	bool isStructParameter(const std::string &varName);
 	bool isStringConcatExpr(BinaryExprAST *binExpr);
 
