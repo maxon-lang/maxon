@@ -169,6 +169,67 @@ end 'main'
 240
 ```
 
+<!-- test: large-hex-literal -->
+```maxon
+// Test hex literal above 32-bit range (0x140000000 = 5368709120)
+function main() returns int
+    var x = 0x0000000140000000
+    // Verify the value wasn't truncated to 32-bit (which would give 0x40000000 = 1073741824)
+    if x == 5368709120 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: large-hex-literal-underscore -->
+```maxon
+// Test large hex literal with underscore separators
+function main() returns int
+    var x = 0x0000_0001_4000_0000
+    if x == 5368709120 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: int64-max -->
+```maxon
+// Test INT64_MAX (9223372036854775807)
+function main() returns int
+    var x = 9223372036854775807
+    if x > 0 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: large-decimal-literal -->
+```maxon
+// Test decimal literal above 32-bit range
+function main() returns int
+    var x = 5368709120
+    if x == 0x140000000 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 
 <!-- test: float -->
 ```maxon

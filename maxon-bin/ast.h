@@ -101,9 +101,9 @@ class ExprAST : public ASTNode {
 // Number literal
 class NumberExprAST : public ExprAST {
   public:
-	int value;
+	int64_t value;
 
-	NumberExprAST(int val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
+	NumberExprAST(int64_t val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
 	ExprAST *clone() const override { return new NumberExprAST(value, line, column); }
 };
 
@@ -170,9 +170,9 @@ class StringLiteralExprAST : public ExprAST {
 // Interpolated string part - either a literal string segment or an expression with optional format specifier
 struct InterpolatedStringPart {
 	bool isExpression;
-	std::string literalValue;         // For literal segments
-	std::unique_ptr<ExprAST> expr;    // For interpolated expressions
-	std::string formatSpec;           // Format specifier (after :), empty if none
+	std::string literalValue;	   // For literal segments
+	std::unique_ptr<ExprAST> expr; // For interpolated expressions
+	std::string formatSpec;		   // Format specifier (after :), empty if none
 };
 
 // Interpolated string expression (e.g., "Hello {name}!")

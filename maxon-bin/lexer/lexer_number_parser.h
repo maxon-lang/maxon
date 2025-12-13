@@ -115,7 +115,7 @@ class NumberParser {
 		// Parse decimal integer part (with underscore support)
 		uint64_t int_part = 0;
 		size_t int_digits = 0;
-		pos = parse_decimal_integer(src, pos, len, int_part, int_digits);
+		pos = parse_decimal_integer(src, pos, len, int_part, int_digits, line, column);
 
 		// Check for decimal point
 		bool is_float = false;
@@ -222,7 +222,8 @@ class NumberParser {
 	 * Parse a decimal integer with underscore separator support
 	 */
 	static size_t parse_decimal_integer(const char *src, size_t pos, size_t len,
-										uint64_t &value, size_t &digit_count) {
+										uint64_t &value, size_t &digit_count,
+										int line, int column) {
 		value = 0;
 		digit_count = 0;
 
@@ -232,7 +233,7 @@ class NumberParser {
 				if (value > 1844674407370955161ULL) {
 					uint64_t digit = static_cast<uint64_t>(c - '0');
 					if (value > (UINT64_MAX - digit) / 10) {
-						break;
+						reportError("Decimal literal overflow", line, column);
 					}
 				}
 				value = value * 10 + static_cast<uint64_t>(c - '0');

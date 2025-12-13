@@ -77,17 +77,21 @@ nil, not, or, return, then, true, type, var, while
 
 **Integer Literals**
 
+Integer literals are 64-bit signed values (range: -9,223,372,036,854,775,808 to 9,223,372,036,854,775,807).
+
 Decimal:
 ```maxon
 42
 -17
 0
+9223372036854775807    // INT64_MAX
 ```
 
 Hexadecimal (prefix `0x`):
 ```maxon
 0xff
 0x1a2b
+0x0000000140000000     // Values above 32-bit range
 ```
 
 Binary (prefix `0b`):
@@ -107,6 +111,7 @@ Underscore separators for readability:
 1_000_000
 0xff_ff
 0b1111_0000
+0x0000_0001_4000_0000  // Large hex with separators
 ```
 
 **Byte Values** (use `as byte` cast)

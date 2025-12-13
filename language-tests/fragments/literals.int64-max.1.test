@@ -1,0 +1,59 @@
+// Test: literals.int64-max.1
+// Test INT64_MAX (9223372036854775807)
+function main() returns int
+    var x = 9223372036854775807
+    if x > 0 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 6
+
+define i64 @main() {
+entry0:
+  br i1 1, label %then1, label %ifcont2
+then1:
+  ret i64 0
+ifcont2:
+  ret i64 1
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 10
+
+define i64 @main() {
+entry0:
+  %0 = alloca i64
+  store i64 9223372036854775807, ptr %0
+  %1 = load i64, ptr %0
+  %2 = icmp sgt i64 %1, 0
+  br i1 %2, label %then1, label %ifcont2
+then1:
+  ret i64 0
+ifcont2:
+  ret i64 1
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+ExitCode: 0

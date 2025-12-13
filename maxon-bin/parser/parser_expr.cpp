@@ -24,9 +24,14 @@ CallArgument Parser::parseNamedArgument() {
 }
 std::unique_ptr<ExprAST> Parser::parsePrimary() {
 	if (check(TokenType::NUMBER)) {
-		int value = std::stoi(std::string(currentValue()));
 		int line = currentLine();
 		int column = currentColumn();
+		int64_t value;
+		try {
+			value = std::stoll(std::string(currentValue()));
+		} catch (const std::out_of_range &) {
+			reportError("Integer literal overflow: value exceeds INT64_MAX (9223372036854775807)", line, column);
+		}
 		int endCol = column + static_cast<int>(currentValue().length()) - 1;
 		advance();
 		auto expr = std::make_unique<NumberExprAST>(value, line, column);
@@ -1226,7 +1231,8 @@ std::unique_ptr<ExprAST> Parser::parseInterpolatedString(const std::string &str,
 				continue;
 			}
 
-			if (inString) continue;
+			if (inString)
+				continue;
 
 			if (c == '{' || c == '(' || c == '[') {
 				depth++;
