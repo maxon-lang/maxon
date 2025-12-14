@@ -614,6 +614,7 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 			methodInfo.name = method.name;
 			methodInfo.returnType = method.returnType;
 			methodInfo.hasDefaultImplementation = method.hasDefaultImplementation;
+			methodInfo.isStatic = method.isStatic;
 			for (const auto &param : method.parameters) {
 				methodInfo.parameters.emplace_back(param.name, param.type);
 			}
@@ -832,7 +833,9 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 				for (const auto &p : m.parameters) {
 					params.emplace_back(p.name, p.type, 0, 0);
 				}
-				methods.emplace_back(m.name, m.returnType, std::move(params), m.hasDefaultImplementation);
+				// Pass isStatic (6th param) - nullptr for defaultBody (5th param)
+				methods.emplace_back(m.name, m.returnType, std::move(params), m.hasDefaultImplementation,
+									 nullptr, m.isStatic);
 			}
 			analyzer.registerExternalInterface(ifaceSym.name, methods, ifaceSym.associatedTypes, ifaceSym.extendsInterface);
 		}

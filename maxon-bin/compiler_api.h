@@ -74,12 +74,15 @@ struct LSPInterfaceMethodInfo {
 	std::string returnType;
 	std::vector<LSPParameterInfo> parameters;
 	bool hasDefaultImplementation;
+	bool isStatic; // True for static interface methods (no implicit self)
 
-	LSPInterfaceMethodInfo() : hasDefaultImplementation(false) {}
+	LSPInterfaceMethodInfo() : hasDefaultImplementation(false), isStatic(false) {}
 
 	LSPInterfaceMethodInfo(const std::string &n, const std::string &ret,
-						   std::vector<LSPParameterInfo> params = {}, bool hasDefault = false)
-		: name(n), returnType(ret), parameters(std::move(params)), hasDefaultImplementation(hasDefault) {}
+						   std::vector<LSPParameterInfo> params = {}, bool hasDefault = false,
+						   bool isStaticMethod = false)
+		: name(n), returnType(ret), parameters(std::move(params)), hasDefaultImplementation(hasDefault),
+		  isStatic(isStaticMethod) {}
 };
 
 /**

@@ -264,6 +264,34 @@ void LSPServer::handleInitialized(const json & /*params*/) {
 		if (std::filesystem::exists(stdlibPath)) {
 			analyzeStdlibFiles(stdlibPath.string());
 		}
+
+		// Load cached projects and analyze them
+		// Projects are discovered lazily when files are opened
+		loadProjectCache();
+
+		// Analyze all cached projects (removing any that no longer exist)
+		std::vector<std::string> projectsToRemove;
+		for (const auto &[projectRoot, _] : projectCache_) {
+			std::filesystem::path buildMaxon = std::filesystem::path(projectRoot) / "build.maxon";
+			if (std::filesystem::exists(buildMaxon)) {
+				logInfo("Analyzing project: " + projectRoot);
+				analyzeProjectFiles(projectRoot);
+			} else {
+				// Project no longer exists, mark for removal
+				logInfo("Project no longer exists, removing from cache: " + projectRoot);
+				projectsToRemove.push_back(projectRoot);
+			}
+		}
+
+		// Remove deleted projects from cache
+		for (const auto &projectRoot : projectsToRemove) {
+			projectCache_.erase(projectRoot);
+		}
+
+		// Save updated cache if any projects were removed
+		if (!projectsToRemove.empty()) {
+			saveProjectCache();
+		}
 	}
 }
 
@@ -292,8 +320,11 @@ void LSPServer::handleDidOpen(const json &params) {
 		openParams.textDocument.version,
 		openParams.textDocument.text);
 
-	// If this file is in a project, invalidate the cache so new files are discovered
+	// Check if this file is part of a project that we haven't seen yet
 	std::string filePath = uriToPath(openParams.textDocument.uri);
+	ensureProjectRegistered(filePath);
+
+	// If this file is in a project, invalidate the cache so new files are discovered
 	std::string projectRoot = findProjectRoot(filePath);
 	if (!projectRoot.empty()) {
 		invalidateProjectSymbols(projectRoot);
@@ -793,6 +824,129 @@ void LSPServer::analyzeStdlibFiles(const std::string &stdlibPath) {
 	}
 }
 
+void LSPServer::analyzeProjectFiles(const std::string &projectRoot) {
+	// Find all .maxon files in the project directory
+	std::vector<std::string> projectFiles;
+	for (const auto &entry : std::filesystem::recursive_directory_iterator(projectRoot)) {
+		if (entry.is_regular_file() && entry.path().extension() == ".maxon") {
+			// Skip build.maxon
+			if (entry.path().filename() == "build.maxon") {
+				continue;
+			}
+			projectFiles.push_back(entry.path().string());
+		}
+	}
+
+	// Analyze each project file and publish diagnostics
+	for (const auto &filePath : projectFiles) {
+		// Read the file content
+		std::ifstream file(filePath);
+		if (!file) {
+			continue;
+		}
+
+		std::stringstream buffer;
+		buffer << file.rdbuf();
+		std::string content = buffer.str();
+
+		// Convert file path to URI
+		std::string uri = pathToUri(filePath);
+
+		// Open the document in the document manager (so analyzeDocument can find it)
+		documentManager_.openDocument(uri, "maxon", 0, content);
+
+		// Analyze the document
+		analyzeDocument(uri);
+	}
+}
+
+std::string LSPServer::getProjectCacheFilePath() const {
+	if (workspaceRoot_.empty()) {
+		return "";
+	}
+	std::filesystem::path maxonDir = std::filesystem::path(workspaceRoot_) / ".maxon";
+	// Create directory if it doesn't exist
+	if (!std::filesystem::exists(maxonDir)) {
+		try {
+			std::filesystem::create_directories(maxonDir);
+		} catch (...) {
+			return ""; // Can't create directory
+		}
+	}
+	return (maxonDir / "projects").string();
+}
+
+void LSPServer::loadProjectCache() {
+	std::string cacheFile = getProjectCacheFilePath();
+	if (cacheFile.empty()) {
+		return;
+	}
+
+	std::ifstream file(cacheFile);
+	if (!file) {
+		logInfo("No project cache file found, projects will be discovered when files are opened");
+		return;
+	}
+
+	int count = 0;
+	std::string line;
+	while (std::getline(file, line)) {
+		// Skip empty lines and comments
+		if (line.empty() || line[0] == '#') {
+			continue;
+		}
+		// Each line is a project root path
+		std::string projectRoot = normalizeFilePath(line);
+		if (!projectRoot.empty()) {
+			// Create an empty ProjectInfo entry - symbols will be loaded on demand
+			projectCache_[projectRoot] = ProjectInfo{projectRoot, {}, {}, false};
+			count++;
+		}
+	}
+
+	if (count > 0) {
+		logInfo("Loaded " + std::to_string(count) + " project(s) from cache");
+	}
+}
+
+void LSPServer::saveProjectCache() {
+	std::string cacheFile = getProjectCacheFilePath();
+	if (cacheFile.empty()) {
+		return;
+	}
+
+	std::ofstream file(cacheFile);
+	if (!file) {
+		return; // Can't write cache, not critical
+	}
+
+	file << "# Maxon project cache - auto-generated, do not edit\n";
+	for (const auto &[projectRoot, _] : projectCache_) {
+		file << projectRoot << "\n";
+	}
+}
+
+void LSPServer::ensureProjectRegistered(const std::string &filePath) {
+	// Find the project root for this file
+	std::string projectRoot = findProjectRoot(filePath);
+	if (projectRoot.empty()) {
+		return; // File is not in a project
+	}
+
+	// Check if we already know about this project
+	if (projectCache_.find(projectRoot) != projectCache_.end()) {
+		return; // Already registered
+	}
+
+	// New project discovered - add to cache and analyze
+	logInfo("Discovered new project: " + projectRoot);
+	projectCache_[projectRoot] = ProjectInfo{projectRoot, {}, {}, false};
+	saveProjectCache();
+
+	// Analyze all files in the newly discovered project
+	analyzeProjectFiles(projectRoot);
+}
+
 bool LSPServer::isStdlibFile(const std::string &uri) const {
 	if (workspaceRoot_.empty()) {
 		return false;
@@ -851,6 +1005,12 @@ void LSPServer::reanalyzeNonStdlibDocuments() {
 void LSPServer::sendNotification(const std::string &method, const json &params) {
 	lsp::JsonRpcMessage notification = lsp::JsonRpcMessage::createNotification(method, params);
 	transport_->writeMessage(notification);
+}
+
+void LSPServer::logInfo(const std::string &message) {
+	// MessageType: 1=Error, 2=Warning, 3=Info, 4=Log
+	json params = {{"type", 3}, {"message", message}};
+	sendNotification("window/logMessage", params);
 }
 
 void LSPServer::shutdown() {

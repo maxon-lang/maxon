@@ -15,10 +15,10 @@ namespace maxon_lsp {
 
 // Information about a Maxon project (identified by build.maxon location)
 struct ProjectInfo {
-	std::string rootPath;			 // Directory containing build.maxon
-	StdlibSymbols symbols;			 // Exported symbols from all files in project
-	std::set<std::string> files;	 // Source files in project
-	bool symbolsLoaded = false;		 // Whether symbols have been loaded
+	std::string rootPath;		 // Directory containing build.maxon
+	StdlibSymbols symbols;		 // Exported symbols from all files in project
+	std::set<std::string> files; // Source files in project
+	bool symbolsLoaded = false;	 // Whether symbols have been loaded
 };
 
 /**
@@ -177,6 +177,21 @@ class LSPServer {
 	// Analyze all stdlib files and publish diagnostics for them
 	void analyzeStdlibFiles(const std::string &stdlibPath);
 
+	// Analyze all files in a project and publish diagnostics for them
+	void analyzeProjectFiles(const std::string &projectRoot);
+
+	// Load known projects from cache file
+	void loadProjectCache();
+
+	// Save known projects to cache file
+	void saveProjectCache();
+
+	// Get the path to the project cache file
+	std::string getProjectCacheFilePath() const;
+
+	// Check if a file belongs to a project and register the project if not already known
+	void ensureProjectRegistered(const std::string &filePath);
+
 	// Reload stdlib symbols and re-analyze dependent documents
 	void reloadStdlib();
 
@@ -196,6 +211,9 @@ class LSPServer {
 
 	// Send a notification to the client
 	void sendNotification(const std::string &method, const maxon::lsp::json &params);
+
+	// Send a log message to the client (window/logMessage)
+	void logInfo(const std::string &message);
 
 	// Build the server capabilities for the initialize response
 	maxon::lsp::ServerCapabilities buildCapabilities();
