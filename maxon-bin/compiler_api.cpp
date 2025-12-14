@@ -387,6 +387,75 @@ std::string buildInterfaceSignature(const InterfaceDefAST *interfaceDef) {
 }
 
 // ============================================================================
+// Stdlib Registration Helper
+// ============================================================================
+
+// Register all stdlib symbols on an analyzer, optionally skipping symbols from a specific file
+static void registerStdlibSymbols(SemanticAnalyzer &analyzer, const StdlibSymbols &stdlib,
+								  const std::string &skipFilePath = "") {
+	// Register stdlib functions with full signatures
+	for (const auto &func : stdlib.functions) {
+		if (!skipFilePath.empty() && normalizeFilePath(func.filePath) == skipFilePath) {
+			continue;
+		}
+		std::vector<FunctionParameter> params;
+		for (const auto &p : func.parameters) {
+			params.push_back({p.name, p.type});
+		}
+		analyzer.registerExternalFunction(func.name, func.returnType, params, func.isStaticMethod);
+	}
+
+	// Register stdlib structs with their fields, interface conformance, and type assignments
+	for (const auto &structSym : stdlib.structs) {
+		if (!skipFilePath.empty() && normalizeFilePath(structSym.filePath) == skipFilePath) {
+			continue;
+		}
+		std::vector<StructFieldInfo> fields;
+		for (const auto &f : structSym.fields) {
+			fields.emplace_back(f.name, f.type, f.isImmutable);
+		}
+		analyzer.registerExternalStruct(structSym.name, fields, structSym.conformsTo, structSym.typeAssignments);
+	}
+
+	// Register stdlib interfaces
+	for (const auto &ifaceSym : stdlib.interfaces) {
+		if (!skipFilePath.empty() && normalizeFilePath(ifaceSym.filePath) == skipFilePath) {
+			continue;
+		}
+		std::vector<InterfaceMethodInfo> methods;
+		for (const auto &m : ifaceSym.interfaceMethods) {
+			std::vector<FunctionParameter> params;
+			for (const auto &p : m.parameters) {
+				params.emplace_back(p.name, p.type, 0, 0);
+			}
+			methods.emplace_back(m.name, m.returnType, std::move(params), m.hasDefaultImplementation,
+								 nullptr, m.isStatic);
+		}
+		analyzer.registerExternalInterface(ifaceSym.name, methods, ifaceSym.associatedTypes, ifaceSym.extendsInterface);
+	}
+
+	// Register stdlib enums with their cases
+	for (const auto &enumSym : stdlib.enums) {
+		if (!skipFilePath.empty() && normalizeFilePath(enumSym.filePath) == skipFilePath) {
+			continue;
+		}
+		std::vector<EnumCaseInfo> cases;
+		int tagValue = 0;
+		for (const auto &c : enumSym.enumCases) {
+			EnumCaseInfo caseInfo(c.name, tagValue++);
+			caseInfo.hasRawValue = !c.rawStringValue.empty() || c.rawIntValue != 0;
+			caseInfo.rawIntValue = c.rawIntValue;
+			caseInfo.rawStringValue = c.rawStringValue;
+			for (const auto &av : c.associatedValues) {
+				caseInfo.associatedValues.emplace_back(av.first, av.second);
+			}
+			cases.push_back(std::move(caseInfo));
+		}
+		analyzer.registerExternalEnum(enumSym.name, enumSym.rawValueType, cases);
+	}
+}
+
+// ============================================================================
 // Symbol Extraction
 // ============================================================================
 
@@ -400,6 +469,13 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 
 	// Pre-compute line offsets once for efficient doc comment extraction
 	auto lineOffsets = buildLineOffsets(source);
+
+	// Build interface map for resolving type bindings
+	// Maps interface name -> list of associated type names
+	std::map<std::string, std::vector<std::string>> interfaceAssociatedTypes;
+	for (const auto &iface : program->interfaces) {
+		interfaceAssociatedTypes[iface->name] = iface->associatedTypes;
+	}
 
 	// Extract functions
 	for (const auto &func : program->functions) {
@@ -446,6 +522,25 @@ std::vector<LSPSymbolInfo> extractSymbolsFromAST(const ProgramAST *program,
 			doc,
 			structDef->getSourceRange());
 		structSym.conformsTo = structDef->conformsTo;
+
+		// Resolve interfaceTypeBindings to typeAssignments
+		// Start with any explicit typeAssignments from the AST
+		structSym.typeAssignments = structDef->typeAssignments;
+		// Then resolve bindings from "is Interface with Type" clauses
+		for (const auto &binding : structDef->interfaceTypeBindings) {
+			const std::string &interfaceName = binding.first;
+			const std::vector<std::string> &withTypes = binding.second;
+
+			// Look up interface's associated types
+			auto ifaceIt = interfaceAssociatedTypes.find(interfaceName);
+			if (ifaceIt != interfaceAssociatedTypes.end()) {
+				const auto &assocTypes = ifaceIt->second;
+				// Map positionally: withTypes[i] -> assocTypes[i]
+				for (size_t i = 0; i < withTypes.size() && i < assocTypes.size(); i++) {
+					structSym.typeAssignments[assocTypes[i]] = withTypes[i];
+				}
+			}
+		}
 
 		// Populate struct fields for semantic analysis registration
 		for (const auto &field : structDef->fields) {
@@ -794,72 +889,7 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 	if (result.ast) {
 		SemanticAnalyzer analyzer;
 		analyzer.registerBuiltinFunctions();
-
-		// Register stdlib functions with full signatures
-		// Skip symbols from the current file to avoid duplicate registration
-		for (const auto &func : stdlib.functions) {
-			if (normalizeFilePath(func.filePath) == currentFilePath) {
-				continue; // Skip symbols from current file
-			}
-			std::vector<FunctionParameter> params;
-			for (const auto &p : func.parameters) {
-				params.push_back({p.name, p.type});
-			}
-			analyzer.registerExternalFunction(func.name, func.returnType, params, func.isStaticMethod);
-		}
-
-		// Register stdlib structs with their fields and interface conformance
-		for (const auto &structSym : stdlib.structs) {
-			if (normalizeFilePath(structSym.filePath) == currentFilePath) {
-				continue; // Skip symbols from current file
-			}
-			// Convert LSPFieldInfo to StructFieldInfo
-			std::vector<StructFieldInfo> fields;
-			for (const auto &f : structSym.fields) {
-				fields.emplace_back(f.name, f.type, f.isImmutable);
-			}
-			analyzer.registerExternalStruct(structSym.name, fields, structSym.conformsTo);
-		}
-
-		// Register stdlib interfaces
-		for (const auto &ifaceSym : stdlib.interfaces) {
-			if (normalizeFilePath(ifaceSym.filePath) == currentFilePath) {
-				continue; // Skip symbols from current file
-			}
-			// Convert LSPInterfaceMethodInfo to InterfaceMethodInfo
-			std::vector<InterfaceMethodInfo> methods;
-			for (const auto &m : ifaceSym.interfaceMethods) {
-				std::vector<FunctionParameter> params;
-				for (const auto &p : m.parameters) {
-					params.emplace_back(p.name, p.type, 0, 0);
-				}
-				// Pass isStatic (6th param) - nullptr for defaultBody (5th param)
-				methods.emplace_back(m.name, m.returnType, std::move(params), m.hasDefaultImplementation,
-									 nullptr, m.isStatic);
-			}
-			analyzer.registerExternalInterface(ifaceSym.name, methods, ifaceSym.associatedTypes, ifaceSym.extendsInterface);
-		}
-
-		// Register stdlib enums with their cases
-		for (const auto &enumSym : stdlib.enums) {
-			if (normalizeFilePath(enumSym.filePath) == currentFilePath) {
-				continue; // Skip symbols from current file
-			}
-			// Convert LSPEnumCaseInfo to EnumCaseInfo
-			std::vector<EnumCaseInfo> cases;
-			int tagValue = 0;
-			for (const auto &c : enumSym.enumCases) {
-				EnumCaseInfo caseInfo(c.name, tagValue++);
-				caseInfo.hasRawValue = !c.rawStringValue.empty() || c.rawIntValue != 0;
-				caseInfo.rawIntValue = c.rawIntValue;
-				caseInfo.rawStringValue = c.rawStringValue;
-				for (const auto &av : c.associatedValues) {
-					caseInfo.associatedValues.emplace_back(av.first, av.second);
-				}
-				cases.push_back(std::move(caseInfo));
-			}
-			analyzer.registerExternalEnum(enumSym.name, enumSym.rawValueType, cases);
-		}
+		registerStdlibSymbols(analyzer, stdlib, currentFilePath);
 
 		// Set source context for doc comment checking
 		analyzer.setSourceContext(source, filename);
@@ -927,6 +957,17 @@ StdlibSymbols loadStdlibWithContentProvider(
 	// Find all .maxon files in stdlib
 	std::vector<std::string> stdlibFiles = findMaxonFiles(stdlibPath);
 
+	// First pass: collect all interface definitions for type binding resolution
+	std::map<std::string, std::vector<std::string>> interfaceAssociatedTypes;
+
+	// Store parsed programs for second pass
+	struct ParsedFile {
+		std::string absolutePath;
+		std::string source;
+		std::unique_ptr<ProgramAST> program;
+	};
+	std::vector<ParsedFile> parsedFiles;
+
 	for (const auto &filePath : stdlibFiles) {
 		try {
 			std::string source;
@@ -961,27 +1002,141 @@ StdlibSymbols loadStdlibWithContentProvider(
 
 			auto program = parser.parse();
 
-			// Extract exported symbols only
-			auto symbols = extractSymbolsFromAST(program.get(), source, true);
-
-			// Categorize symbols and set file path
-			for (auto &sym : symbols) {
-				sym.filePath = absolutePath;
-
-				if (sym.kind == "function" || sym.kind == "method") {
-					result.functions.push_back(std::move(sym));
-				} else if (sym.kind == "struct") {
-					result.structs.push_back(std::move(sym));
-				} else if (sym.kind == "enum") {
-					result.enums.push_back(std::move(sym));
-				} else if (sym.kind == "interface") {
-					result.interfaces.push_back(std::move(sym));
+			// Collect interface associated types
+			for (const auto &iface : program->interfaces) {
+				if (iface->isExported) {
+					interfaceAssociatedTypes[iface->name] = iface->associatedTypes;
 				}
 			}
+
+			// Store for second pass
+			parsedFiles.push_back({absolutePath, std::move(source), std::move(program)});
 
 		} catch (const std::exception &e) {
 			// Skip files that fail to parse
 			continue;
+		}
+	}
+
+	// Second pass: extract symbols with interface type bindings resolved
+	for (auto &pf : parsedFiles) {
+		// Pre-compute line offsets
+		auto lineOffsets = buildLineOffsets(pf.source);
+
+		// Extract exported symbols
+		for (const auto &func : pf.program->functions) {
+			if (!func->isExported)
+				continue;
+
+			std::string kind = func->isMethod() ? "method" : "function";
+			std::string signature = buildFunctionSignature(func.get());
+			std::string doc = extractDocCommentWithOffsets(pf.source, lineOffsets, func->line);
+
+			LSPSymbolInfo sym(func->name, kind, signature, doc, func->getSourceRange());
+			for (const auto &param : func->parameters) {
+				sym.parameters.emplace_back(param.name, param.type);
+			}
+			sym.returnType = func->returnType;
+			sym.isStaticMethod = func->isStaticMethod;
+			sym.filePath = pf.absolutePath;
+			result.functions.push_back(std::move(sym));
+		}
+
+		for (const auto &structDef : pf.program->structs) {
+			if (!structDef->isExported)
+				continue;
+
+			std::string signature = buildStructSignature(structDef.get());
+			std::string doc = extractDocCommentWithOffsets(pf.source, lineOffsets, structDef->line);
+
+			LSPSymbolInfo structSym(structDef->name, "struct", signature, doc, structDef->getSourceRange());
+			structSym.conformsTo = structDef->conformsTo;
+			structSym.filePath = pf.absolutePath;
+
+			// Resolve interfaceTypeBindings to typeAssignments
+			structSym.typeAssignments = structDef->typeAssignments;
+			for (const auto &binding : structDef->interfaceTypeBindings) {
+				const std::string &interfaceName = binding.first;
+				const std::vector<std::string> &withTypes = binding.second;
+
+				auto ifaceIt = interfaceAssociatedTypes.find(interfaceName);
+				if (ifaceIt != interfaceAssociatedTypes.end()) {
+					const auto &assocTypes = ifaceIt->second;
+					for (size_t i = 0; i < withTypes.size() && i < assocTypes.size(); i++) {
+						structSym.typeAssignments[assocTypes[i]] = withTypes[i];
+					}
+				}
+			}
+
+			for (const auto &field : structDef->fields) {
+				structSym.fields.emplace_back(field.name, field.type, field.isImmutable);
+			}
+			result.structs.push_back(std::move(structSym));
+
+			// Extract methods
+			for (const auto &method : structDef->methods) {
+				std::string methodSig = buildFunctionSignature(method.get());
+				std::string methodDoc = extractDocCommentWithOffsets(pf.source, lineOffsets, method->line);
+				std::string qualifiedName = structDef->name + "." + method->name;
+
+				LSPSymbolInfo methodSym(qualifiedName, "method", methodSig, methodDoc, method->getSourceRange());
+				for (const auto &param : method->parameters) {
+					methodSym.parameters.emplace_back(param.name, param.type);
+				}
+				methodSym.returnType = method->returnType;
+				methodSym.isStaticMethod = method->isStaticMethod;
+				methodSym.filePath = pf.absolutePath;
+				result.functions.push_back(std::move(methodSym));
+			}
+		}
+
+		for (const auto &enumDef : pf.program->enums) {
+			if (!enumDef->isExported)
+				continue;
+
+			std::string signature = buildEnumSignature(enumDef.get());
+			std::string doc = extractDocCommentWithOffsets(pf.source, lineOffsets, enumDef->line);
+
+			LSPSymbolInfo enumSym(enumDef->name, "enum", signature, doc, enumDef->getSourceRange());
+			enumSym.rawValueType = enumDef->rawValueType;
+			enumSym.filePath = pf.absolutePath;
+
+			for (const auto &c : enumDef->cases) {
+				LSPEnumCaseInfo caseInfo;
+				caseInfo.name = c.name;
+				// Raw values are computed during semantic analysis, not available at parse time
+				for (const auto &av : c.associatedValues) {
+					caseInfo.associatedValues.emplace_back(av.name, av.type);
+				}
+				enumSym.enumCases.push_back(std::move(caseInfo));
+			}
+			result.enums.push_back(std::move(enumSym));
+		}
+
+		for (const auto &iface : pf.program->interfaces) {
+			if (!iface->isExported)
+				continue;
+
+			std::string signature = buildInterfaceSignature(iface.get());
+			std::string doc = extractDocCommentWithOffsets(pf.source, lineOffsets, iface->line);
+
+			LSPSymbolInfo ifaceSym(iface->name, "interface", signature, doc, iface->getSourceRange());
+			ifaceSym.extendsInterface = iface->extendsInterface;
+			ifaceSym.associatedTypes = iface->associatedTypes;
+			ifaceSym.filePath = pf.absolutePath;
+
+			for (const auto &method : iface->methods) {
+				LSPInterfaceMethodInfo methodInfo;
+				methodInfo.name = method.name;
+				methodInfo.returnType = method.returnType;
+				methodInfo.hasDefaultImplementation = method.hasDefaultImplementation;
+				methodInfo.isStatic = method.isStatic;
+				for (const auto &param : method.parameters) {
+					methodInfo.parameters.emplace_back(param.name, param.type);
+				}
+				ifaceSym.interfaceMethods.push_back(std::move(methodInfo));
+			}
+			result.interfaces.push_back(std::move(ifaceSym));
 		}
 	}
 
@@ -1060,46 +1215,7 @@ IRGenerationResult generateIRForLSP(const std::string &source, const std::string
 	// Run semantic analysis with stdlib symbols registered
 	SemanticAnalyzer analyzer;
 	analyzer.registerBuiltinFunctions();
-
-	// Register stdlib functions with full signatures
-	for (const auto &func : stdlib.functions) {
-		std::vector<FunctionParameter> params;
-		for (const auto &p : func.parameters) {
-			params.push_back({p.name, p.type});
-		}
-		analyzer.registerExternalFunction(func.name, func.returnType, params, func.isStaticMethod);
-	}
-
-	// Register stdlib structs with their fields and interface conformance
-	for (const auto &structSym : stdlib.structs) {
-		std::vector<StructFieldInfo> fields;
-		for (const auto &f : structSym.fields) {
-			fields.emplace_back(f.name, f.type, f.isImmutable);
-		}
-		analyzer.registerExternalStruct(structSym.name, fields, structSym.conformsTo);
-	}
-
-	// Register stdlib interfaces
-	for (const auto &ifaceSym : stdlib.interfaces) {
-		analyzer.registerExternalInterface(ifaceSym.name);
-	}
-
-	// Register stdlib enums with their cases
-	for (const auto &enumSym : stdlib.enums) {
-		std::vector<EnumCaseInfo> cases;
-		int tagValue = 0;
-		for (const auto &c : enumSym.enumCases) {
-			EnumCaseInfo caseInfo(c.name, tagValue++);
-			caseInfo.hasRawValue = !c.rawStringValue.empty() || c.rawIntValue != 0;
-			caseInfo.rawIntValue = c.rawIntValue;
-			caseInfo.rawStringValue = c.rawStringValue;
-			for (const auto &av : c.associatedValues) {
-				caseInfo.associatedValues.emplace_back(av.first, av.second);
-			}
-			cases.push_back(std::move(caseInfo));
-		}
-		analyzer.registerExternalEnum(enumSym.name, enumSym.rawValueType, cases);
-	}
+	registerStdlibSymbols(analyzer, stdlib);
 
 	result.semanticErrors = analyzer.analyze(ast.get());
 
@@ -1200,46 +1316,7 @@ AsmGenerationResult generateAsmForLSP(const std::string &source, const std::stri
 	// Run semantic analysis with stdlib symbols registered
 	SemanticAnalyzer analyzer;
 	analyzer.registerBuiltinFunctions();
-
-	// Register stdlib functions with full signatures
-	for (const auto &func : stdlib.functions) {
-		std::vector<FunctionParameter> params;
-		for (const auto &p : func.parameters) {
-			params.push_back({p.name, p.type});
-		}
-		analyzer.registerExternalFunction(func.name, func.returnType, params, func.isStaticMethod);
-	}
-
-	// Register stdlib structs with their fields and interface conformance
-	for (const auto &structSym : stdlib.structs) {
-		std::vector<StructFieldInfo> fields;
-		for (const auto &f : structSym.fields) {
-			fields.emplace_back(f.name, f.type, f.isImmutable);
-		}
-		analyzer.registerExternalStruct(structSym.name, fields, structSym.conformsTo);
-	}
-
-	// Register stdlib interfaces
-	for (const auto &ifaceSym : stdlib.interfaces) {
-		analyzer.registerExternalInterface(ifaceSym.name);
-	}
-
-	// Register stdlib enums with their cases
-	for (const auto &enumSym : stdlib.enums) {
-		std::vector<EnumCaseInfo> cases;
-		int tagValue = 0;
-		for (const auto &c : enumSym.enumCases) {
-			EnumCaseInfo caseInfo(c.name, tagValue++);
-			caseInfo.hasRawValue = !c.rawStringValue.empty() || c.rawIntValue != 0;
-			caseInfo.rawIntValue = c.rawIntValue;
-			caseInfo.rawStringValue = c.rawStringValue;
-			for (const auto &av : c.associatedValues) {
-				caseInfo.associatedValues.emplace_back(av.first, av.second);
-			}
-			cases.push_back(std::move(caseInfo));
-		}
-		analyzer.registerExternalEnum(enumSym.name, enumSym.rawValueType, cases);
-	}
+	registerStdlibSymbols(analyzer, stdlib);
 
 	result.semanticErrors = analyzer.analyze(ast.get());
 

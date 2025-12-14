@@ -121,6 +121,22 @@ std::vector<CodeAction> CodeActionsProvider::getQuickFixes(
 			}
 		}
 
+		// Check for read-only variable assignment errors
+		// Pattern: "Cannot assign to read-only variable 'name'\n  Variable declared with 'let' at line X, column Y"
+		if (msg.find("Cannot assign to read-only variable") != std::string::npos) {
+			std::string varName = extractIdentifierFromDiagnostic(diag);
+			if (!varName.empty()) {
+				// Extract declaration location from the error message
+				std::regex locRegex(R"(at line (\d+), column (\d+))");
+				std::smatch match;
+				if (std::regex_search(msg, match, locRegex) && match.size() > 2) {
+					int declLine = std::stoi(match[1].str());
+					int declColumn = std::stoi(match[2].str());
+					fixes.push_back(createChangeLetToVarFix(document, diag, varName, declLine, declColumn));
+				}
+			}
+		}
+
 		// Check for missing end label errors
 		// Pattern: "Expected 'end 'label''" or "Missing end label"
 		if (msg.find("Expected end") != std::string::npos ||
@@ -413,6 +429,33 @@ CodeAction CodeActionsProvider::createSpellingFix(
 	action.diagnostics = std::vector<Diagnostic>{diag};
 
 	TextEdit edit = createTextEdit(diag.range, suggested);
+	action.edit = createWorkspaceEdit(document.uri, {edit});
+
+	return action;
+}
+
+CodeAction CodeActionsProvider::createChangeLetToVarFix(
+	const Document &document,
+	const Diagnostic &diag,
+	const std::string &varName,
+	int declarationLine,
+	int declarationColumn) {
+	CodeAction action;
+	action.title = "Change 'let' to 'var' for '" + varName + "'";
+	action.kind = CodeActionKind::QuickFix;
+	action.diagnostics = std::vector<Diagnostic>{diag};
+
+	// The declaration line/column are 1-based from the error message
+	// LSP positions are 0-based
+	int line = declarationLine - 1;
+	int col = declarationColumn - 1;
+
+	// Replace 'let' with 'var' at the declaration site
+	// 'let' is 3 characters
+	TextEdit edit;
+	edit.range = Range(line, col, line, col + 3);
+	edit.newText = "var";
+
 	action.edit = createWorkspaceEdit(document.uri, {edit});
 
 	return action;

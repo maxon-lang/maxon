@@ -152,6 +152,17 @@ class CodeActionsProvider {
 		const Diagnostic &diag,
 		const std::string &suggested);
 
+	/**
+	 * Create a fix for read-only variable assignment errors.
+	 * Changes 'let' to 'var' at the declaration site.
+	 */
+	CodeAction createChangeLetToVarFix(
+		const Document &document,
+		const Diagnostic &diag,
+		const std::string &varName,
+		int declarationLine,
+		int declarationColumn);
+
 	// =========================================================================
 	// Refactoring generators - create refactoring actions
 	// =========================================================================

@@ -100,6 +100,7 @@ struct LSPSymbolInfo {
 	bool isStaticMethod = false;						  // For methods: true if static (no implicit self)
 	std::vector<std::string> conformsTo;				  // For structs: interfaces this struct conforms to
 	std::vector<LSPFieldInfo> fields;					  // For structs: field definitions
+	std::map<std::string, std::string> typeAssignments;	  // For structs: associated type assignments (e.g., "Element" -> "character")
 	std::string extendsInterface;						  // For interfaces: base interface name
 	std::vector<std::string> associatedTypes;			  // For interfaces: associated type parameters (e.g., "Element")
 	std::vector<LSPInterfaceMethodInfo> interfaceMethods; // For interfaces: method signatures
