@@ -1430,6 +1430,21 @@ void MIRCodeGenerator::generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction
 		return;
 	}
 
+	// Handle character literal initialization
+	// generateCharLiteral creates an alloca, initializes it, and returns the pointer
+	// We use that alloca directly (don't create a second one)
+	if (auto *charLiteral = dynamic_cast<CharacterExprAST *>(letDecl->initializer.get())) {
+		mir::MIRValue *charAlloca = generateCharLiteral(charLiteral);
+
+		// Use the alloca from generateCharLiteral directly
+		// Rename it to match the variable name
+		charAlloca->name = letDecl->name;
+
+		namedValues[letDecl->name] = charAlloca;
+		variableTypes[letDecl->name] = "character";
+		return;
+	}
+
 	// Handle interpolated string initialization for let
 	if (auto *interpExpr = dynamic_cast<InterpolatedStringExprAST *>(letDecl->initializer.get())) {
 		mir::MIRValue *stringAlloca = generateInterpolatedString(interpExpr);

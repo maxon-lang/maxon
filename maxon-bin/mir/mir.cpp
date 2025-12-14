@@ -79,9 +79,11 @@ MIRType *MIRType::getStruct(const std::string &name, const std::vector<MIRType *
 	return ptr;
 }
 
+// Static cache for Optional types - needs to be file-scope for recomputeAllOptionalSizes()
+static std::unordered_map<MIRType *, MIRType *> optionalCache;
+
 MIRType *MIRType::getOptional(MIRType *wrapped) {
 	// Cache optional types to avoid duplicates
-	static std::unordered_map<MIRType *, MIRType *> optionalCache;
 	if (optionalCache.count(wrapped)) {
 		return optionalCache[wrapped];
 	}
@@ -93,6 +95,12 @@ MIRType *MIRType::getOptional(MIRType *wrapped) {
 	arrayTypeCache.push_back(std::move(type)); // Reuse cache
 	optionalCache[wrapped] = ptr;
 	return ptr;
+}
+
+void MIRType::recomputeAllOptionalSizes() {
+	for (auto &[wrapped, optional] : optionalCache) {
+		optional->computeSize();
+	}
 }
 
 void MIRType::computeSize() {

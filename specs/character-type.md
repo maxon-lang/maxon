@@ -89,7 +89,7 @@ var b = c.bytes()
 b.count()              // Returns byte length of UTF-8 encoding (2 for é)
 var cp = c.codepoints()
 cp.count()             // Returns number of Unicode codepoints
-c.toString()           // Converts to string
+"{c}"                 // Converts to string via interpolation
 
 var a = 'A'
 a.asciiValue()         // Returns 65 (ASCII code for 'A')
@@ -217,7 +217,7 @@ end 'main'
 ```maxon
 function main() returns int
     var c = 'A'
-    var s = c.toString()
+    var s = "{c}"
     print(s)
     return 0
 end 'main'
@@ -235,7 +235,7 @@ A
 ```maxon
 function main() returns int
     var c = '中'
-    var s = c.toString()
+    var s = "{c}"
     print(s)
     return 0
 end 'main'

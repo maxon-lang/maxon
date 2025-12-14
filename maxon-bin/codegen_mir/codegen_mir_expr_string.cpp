@@ -474,22 +474,19 @@ mir::MIRValue *MIRCodeGenerator::generateCharLiteral(CharacterExprAST *charExpr)
 	std::string globalName = ".chr." + std::to_string(stringLiteralCounter++);
 	mir::MIRValue *dataPtr = module->createGlobalString(globalName, str);
 
-	// Allocate the __ManagedStringData struct.
-	// Same lifetime issue as string literals: in __global_init, values can escape into globals.
-	mir::MIRValue *managedDataAlloca = nullptr;
-	if (inGlobalInit) {
-		initHeapManagement();
-		mir::MIRFunction *mallocFunc = module->getFunction("malloc");
-		if (!mallocFunc) {
-			reportError("malloc not declared for global char literal", charExpr->line, charExpr->column);
-		}
-		managedDataAlloca = builder->createCall(
-			mallocFunc,
-			{builder->getInt64(managedDataType->sizeInBytes)},
-			"char.managed.data.global");
-	} else {
-		managedDataAlloca = builder->createAlloca(managedDataType, "char.managed.data");
+	// Allocate the __ManagedStringData struct on the heap.
+	// Character values may escape their defining scope (e.g., returned from functions,
+	// stored in containers). Stack allocation would dangle, causing use-after-free.
+	// Heap allocation is safe and characters are typically small (even emoji < 25 bytes).
+	initHeapManagement();
+	mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+	if (!mallocFunc) {
+		reportError("malloc not declared for char literal", charExpr->line, charExpr->column);
 	}
+	mir::MIRValue *managedDataAlloca = builder->createCall(
+		mallocFunc,
+		{builder->getInt64(managedDataType->sizeInBytes)},
+		"char.managed.data");
 
 	// Populate the __ManagedStringData fields
 	// Field 0: _buffer []byte (fat pointer: {ptr, i32})

@@ -1017,6 +1017,34 @@ byte_write_null:
 }
 
 ;==============================================================================
+; __character_toString - Convert character to Maxon string
+; A character already has a pointer to __ManagedStringData containing its bytes.
+; We just need to wrap that in a string struct.
+; %string __character_toString(%character value, ptr spec)
+; Note: spec is currently ignored (format specifiers not yet implemented)
+;==============================================================================
+define %string @__character_toString(%character %value, ptr %spec) {
+entry:
+    ; Extract the managed data pointer from the character struct
+    ; character = { ptr } where ptr points to __ManagedStringData
+    %char_alloca = alloca %character
+    store %character %value, ptr %char_alloca
+    %managed_ptr_loc = getelementptr %character, ptr %char_alloca, i32 0, i32 0
+    %managed = load ptr, ptr %managed_ptr_loc
+
+    ; Create string struct with the same managed data
+    ; string = { ptr, i64 } where ptr is __ManagedStringData, i64 is _iterPos
+    %result_str = alloca %string
+    %str_managed = getelementptr %string, ptr %result_str, i32 0, i32 0
+    store ptr %managed, ptr %str_managed
+    %str_iterpos = getelementptr %string, ptr %result_str, i32 0, i32 1
+    store i64 0, ptr %str_iterpos
+
+    %result = load %string, ptr %result_str
+    ret %string %result
+}
+
+;==============================================================================
 ; __bool_toString - Convert boolean to Maxon string
 ; Returns "true" or "false"
 ; %string __bool_toString(i1 value, ptr spec)

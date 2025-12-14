@@ -9,74 +9,6 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 45
-
-%character = type { ptr }
-%_ManagedArray_byte = type { ptr, i64 }
-%__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
-
-@.chr.1 = constant [2 x i8] c"A\00"
-@.chr.2 = constant [2 x i8] c"B\00"
-
-define i64 @main() {
-entry0:
-  %0 = alloca %character
-  %1 = alloca %__ManagedStringData
-  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
-  %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
-  store ptr @.chr.1, ptr %3
-  %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
-  store i64 1, ptr %4
-  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
-  store i64 1, ptr %5
-  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
-  store i64 0, ptr %6
-  %7 = getelementptr %character, ptr %0, i32 0, i32 0
-  store ptr %1, ptr %7
-  %8 = alloca %character
-  %9 = alloca %__ManagedStringData
-  %10 = getelementptr %__ManagedStringData, ptr %9, i32 0, i32 0
-  %11 = getelementptr %_ManagedArray_byte, ptr %10, i32 0, i32 0
-  store ptr @.chr.2, ptr %11
-  %12 = getelementptr %_ManagedArray_byte, ptr %10, i32 0, i32 1
-  store i64 1, ptr %12
-  %13 = getelementptr %__ManagedStringData, ptr %9, i32 0, i32 1
-  store i64 1, ptr %13
-  %14 = getelementptr %__ManagedStringData, ptr %9, i32 0, i32 2
-  store i64 0, ptr %14
-  %15 = getelementptr %character, ptr %8, i32 0, i32 0
-  store ptr %9, ptr %15
-  %18 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
-  %19 = getelementptr %_ManagedArray_byte, ptr %18, i32 0, i32 0
-  %20 = load ptr, ptr %19
-  %21 = load i8, ptr %20
-  %22 = zext i8 %21 to i32
-  %23 = getelementptr %character, ptr %8, i32 0, i32 0
-  %24 = load ptr, ptr %23
-  %25 = getelementptr %__ManagedStringData, ptr %24, i32 0, i32 0
-  %26 = getelementptr %_ManagedArray_byte, ptr %25, i32 0, i32 0
-  %27 = load ptr, ptr %26
-  %28 = load i8, ptr %27
-  %29 = zext i8 %28 to i32
-  %30 = icmp slt i32 %22, %29
-  br i1 %30, label %then1, label %ifcont2
-then1:
-  ret i64 1
-ifcont2:
-  ret i64 0
-}
-
-declare void @exit(i32 %arg0)
-
-define void @_start() {
-entry0:
-  %0 = call i64 @main()
-  call void @exit(i64 %0)
-  ret void
-}
-
----
-; Module: test.maxon
 ; Instructions: 47
 
 %character = type { ptr }
@@ -89,7 +21,7 @@ entry0:
 define i64 @main() {
 entry0:
   %0 = alloca %character
-  %1 = alloca %__ManagedStringData
+  %1 = call ptr @malloc(i64 32)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.chr.1, ptr %3
@@ -102,7 +34,7 @@ entry0:
   %7 = getelementptr %character, ptr %0, i32 0, i32 0
   store ptr %1, ptr %7
   %8 = alloca %character
-  %9 = alloca %__ManagedStringData
+  %9 = call ptr @malloc(i64 32)
   %10 = getelementptr %__ManagedStringData, ptr %9, i32 0, i32 0
   %11 = getelementptr %_ManagedArray_byte, ptr %10, i32 0, i32 0
   store ptr @.chr.2, ptr %11
@@ -135,6 +67,80 @@ then1:
 ifcont2:
   ret i64 0
 }
+
+declare ptr @malloc(i64 %arg0)
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 47
+
+%character = type { ptr }
+%_ManagedArray_byte = type { ptr, i64 }
+%__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
+
+@.chr.1 = constant [2 x i8] c"A\00"
+@.chr.2 = constant [2 x i8] c"B\00"
+
+define i64 @main() {
+entry0:
+  %0 = alloca %character
+  %1 = call ptr @malloc(i64 32)
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
+  store ptr @.chr.1, ptr %3
+  %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
+  store i64 1, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i64 1, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i64 0, ptr %6
+  %7 = getelementptr %character, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %7
+  %8 = alloca %character
+  %9 = call ptr @malloc(i64 32)
+  %10 = getelementptr %__ManagedStringData, ptr %9, i32 0, i32 0
+  %11 = getelementptr %_ManagedArray_byte, ptr %10, i32 0, i32 0
+  store ptr @.chr.2, ptr %11
+  %12 = getelementptr %_ManagedArray_byte, ptr %10, i32 0, i32 1
+  store i64 1, ptr %12
+  %13 = getelementptr %__ManagedStringData, ptr %9, i32 0, i32 1
+  store i64 1, ptr %13
+  %14 = getelementptr %__ManagedStringData, ptr %9, i32 0, i32 2
+  store i64 0, ptr %14
+  %15 = getelementptr %character, ptr %8, i32 0, i32 0
+  store ptr %9, ptr %15
+  %16 = getelementptr %character, ptr %0, i32 0, i32 0
+  %17 = load ptr, ptr %16
+  %18 = getelementptr %__ManagedStringData, ptr %17, i32 0, i32 0
+  %19 = getelementptr %_ManagedArray_byte, ptr %18, i32 0, i32 0
+  %20 = load ptr, ptr %19
+  %21 = load i8, ptr %20
+  %22 = zext i8 %21 to i32
+  %23 = getelementptr %character, ptr %8, i32 0, i32 0
+  %24 = load ptr, ptr %23
+  %25 = getelementptr %__ManagedStringData, ptr %24, i32 0, i32 0
+  %26 = getelementptr %_ManagedArray_byte, ptr %25, i32 0, i32 0
+  %27 = load ptr, ptr %26
+  %28 = load i8, ptr %27
+  %29 = zext i8 %28 to i32
+  %30 = icmp slt i32 %22, %29
+  br i1 %30, label %then1, label %ifcont2
+then1:
+  ret i64 1
+ifcont2:
+  ret i64 0
+}
+
+declare ptr @malloc(i64 %arg0)
 
 declare void @exit(i32 %arg0)
 

@@ -80,6 +80,9 @@ class MIRType {
 	// Allow recomputation of size (needed when building struct types)
 	void recomputeSize() { computeSize(); }
 
+	// Recompute sizes of all cached Optional types (call after filling in struct fields)
+	static void recomputeAllOptionalSizes();
+
   private:
 	void computeSize();
 };

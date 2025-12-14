@@ -391,6 +391,10 @@ MIRType *MIRParser::parseType() {
 		if (structName == "cstring") {
 			return MIRType::getStruct(structName, {MIRType::getPtr(), MIRType::getInt64(), MIRType::getPtr()});
 		}
+		if (structName == "character") {
+			// character = { ptr } where ptr points to __ManagedStringData
+			return MIRType::getStruct(structName, {MIRType::getPtr()});
+		}
 		// Unknown struct - create placeholder with default size
 		return MIRType::getStruct(structName, {});
 	}
@@ -429,7 +433,7 @@ MIRType *MIRParser::parseType() {
 		char c = peek();
 		error(std::string("Unexpected character in type: '") + c + "'");
 		// Skip to next whitespace or delimiter to recover
-		while (!isAtEnd() && !std::isspace(peek()) && peek() != ',' && 
+		while (!isAtEnd() && !std::isspace(peek()) && peek() != ',' &&
 			   peek() != ')' && peek() != '}' && peek() != ']') {
 			advance();
 		}
@@ -493,7 +497,7 @@ void MIRParser::parseDefine() {
 	skipWhitespace();
 
 	while (!isAtEnd() && peek() != ')') {
-		size_t startPos = pos;  // Track position to detect no-progress loops
+		size_t startPos = pos; // Track position to detect no-progress loops
 		MIRType *paramType = parseType();
 		skipWhitespace();
 		std::string paramName = readLocalName();
@@ -506,7 +510,7 @@ void MIRParser::parseDefine() {
 			advance();
 			skipWhitespace();
 		}
-		
+
 		// Safety check: if we made no progress, skip current char to avoid infinite loop
 		if (pos == startPos && !isAtEnd()) {
 			error(std::string("Unexpected character in parameter list: '") + peek() + "'");
@@ -696,7 +700,7 @@ void MIRParser::parseFunctionBody(MIRFunction *func) {
 		if (peek() == '}')
 			break;
 
-		size_t loopStartPos = pos;  // Track position to detect no-progress loops
+		size_t loopStartPos = pos; // Track position to detect no-progress loops
 
 		// Check if this is a block label
 		size_t savedPos = pos;
@@ -721,7 +725,7 @@ void MIRParser::parseFunctionBody(MIRFunction *func) {
 			}
 			parseInstruction();
 		}
-		
+
 		// Safety check: if we made no progress, skip current char to avoid infinite loop
 		if (pos == loopStartPos && !isAtEnd()) {
 			error(std::string("Unexpected character in function body: '") + peek() + "'");

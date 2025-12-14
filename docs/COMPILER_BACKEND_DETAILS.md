@@ -934,11 +934,25 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 
 ---
 
-**Last Updated:** 2025-12-10
-**Version:** Winchester 1.5
+**Last Updated:** 2025-12-14
+**Version:** Winchester 1.6
 **Maintainer:** Maxon Compiler Team
 
 ## Recent Changes
+
+### Winchester 1.6 (2025-12-14)
+
+**Critical Bug Fix: Optional Type Size Computation with Forward-Declared Structs:**
+- Fixed incorrect size calculation for `Optional<T>` types when `T` is a forward-declared struct
+- **Root Cause:** During compilation, struct types are forward-declared with empty fields (size=0) in Pass 1a. Function declarations in Pass 1c parse return types like `character or nil`, creating Optional types. These Optionals are cached with size=1 (just the tag byte) because the wrapped struct's size is still 0. Later in Pass 1d, struct fields are filled in, but cached Optional sizes were never recomputed.
+- **Symptom:** Character-to-string conversion via string interpolation (`"{c}"`) in for-loops and if-let constructs printed the entire source string instead of individual characters. For example, iterating over `"ab"` printed "ab\nab" instead of "a\nb".
+- **Fix:** Added `MIRType::recomputeAllOptionalSizes()` function that recomputes sizes for all cached Optional types. This is called after Pass 1d fills in struct fields.
+- **Files Changed:**
+  - `mir.h` - Added `recomputeAllOptionalSizes()` declaration
+  - `mir.cpp` - Moved `optionalCache` to file scope and implemented `recomputeAllOptionalSizes()`
+  - `codegen_mir.cpp` - Call `recomputeAllOptionalSizes()` after Pass 1d
+
+**Location:** [maxon-bin/mir/mir.cpp:82-103](maxon-bin/mir/mir.cpp#L82-L103), [maxon-bin/codegen_mir.cpp:1767](maxon-bin/codegen_mir.cpp#L1767)
 
 ### Winchester 1.5 (2025-12-10)
 

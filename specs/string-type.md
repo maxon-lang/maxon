@@ -89,7 +89,7 @@ Iterate over grapheme clusters (user-perceived characters) in a string:
 ```maxon
 var s = "café"
 for c in s 'loop'
-    print(c.toString())  // Prints c, a, f, é (4 chars, not 5 bytes)
+    print("{c}")  // Prints c, a, f, é (4 chars, not 5 bytes)
 end 'loop'
 ```
 
@@ -103,7 +103,7 @@ Strings provide multiple views for different iteration granularities:
 ```maxon
 for c in "café" 'chars'
     // c is a character (grapheme cluster)
-    print(c.toString())
+    print("{c}")
 end 'chars'
 ```
 
@@ -567,7 +567,7 @@ hello world
 function main() returns int
     var s = "abc"
     for c in s 'loop'
-        print(c.toString())
+        print("{c}")
     end 'loop'
     return 0
 end 'main'

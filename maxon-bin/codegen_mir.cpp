@@ -249,9 +249,16 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 	} else if (typeStr == "bool") {
 		return mir::MIRType::getInt1();
 	} else if (typeStr == "character") {
-		// Character type: 8-bit signed integer (for compatibility with existing stdlib)
-		// Note: Future EGC (Extended Grapheme Cluster) iteration will use a different approach
-		return mir::MIRType::getInt8();
+		// Character type is a struct containing a pointer to managed string data
+		// character = { ptr } where ptr points to __ManagedStringData
+		mir::MIRType *charType = structTypes["character"];
+		if (!charType) {
+			charType = module->getOrCreateStructType(
+				"character",
+				{mir::MIRType::getPtr()});
+			structTypes["character"] = charType;
+		}
+		return charType;
 	} else if (typeStr == "byte") {
 		return mir::MIRType::getInt8(); // byte is 8-bit unsigned
 	} else if (typeStr == "cstring") {
@@ -1756,6 +1763,10 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		structFields[structDef->name] = fields;
 		structFieldDefaults[structDef->name] = defaults;
 	}
+
+	// After filling in all struct fields, recompute sizes of any Optional types
+	// that were created during function declarations (Pass 1c) with incomplete wrapped types
+	mir::MIRType::recomputeAllOptionalSizes();
 
 	// Pass 1e: Generate global constants
 	logDetail("Pass 1e: Generating global constants (" + std::to_string(program->globals.size()) + " globals)");
