@@ -17,10 +17,10 @@ end 'main'
 ; Instructions: 553
 
 %Container = type { %map<int,int> }
-%__ManagedArrayData_int = type { ptr, i64, i64 }
-%array<int> = type { %__ManagedArrayData_int, i64 }
 %__ManagedArrayData_byte = type { ptr, i64, i64 }
 %array<byte> = type { %__ManagedArrayData_byte, i64 }
+%__ManagedArrayData_int = type { ptr, i64, i64 }
+%array<int> = type { %__ManagedArrayData_int, i64 }
 %map<int,int> = type { %array<int>, %array<int>, %array<byte>, i64, i64 }
 
 @.__tag.free.keyArr = constant [14 x i8] c"array cleanup\00"
@@ -31,6 +31,54 @@ end 'main'
 @.__tag.free.newStates = constant [14 x i8] c"array cleanup\00"
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
+
+define i64 @main() {
+entry0:
+  %0 = alloca %__ManagedArrayData_int
+  %1 = alloca %__ManagedArrayData_int
+  %2 = alloca [1 x i64]
+  %3 = alloca [1 x i64]
+  %4 = getelementptr %__ManagedArrayData_int, ptr %0, i32 0, i32 0
+  store ptr %2, ptr %4
+  %5 = getelementptr %__ManagedArrayData_int, ptr %0, i32 0, i32 1
+  store i64 0, ptr %5
+  %6 = getelementptr %__ManagedArrayData_int, ptr %0, i32 0, i32 2
+  store i64 0, ptr %6
+  %7 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
+  store ptr %3, ptr %7
+  %8 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
+  store i64 0, ptr %8
+  %9 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 2
+  store i64 0, ptr %9
+  %10 = call %map<int,int> @map<int,int>.init(ptr %0, ptr %1)
+  %11 = alloca %map<int,int>
+  store %map<int,int> %10, ptr %11
+  call void @map<int,int>.insert(ptr %11, i64 1, i64 42)
+  %12 = alloca %Container
+  %13 = getelementptr %Container, ptr %12, i32 0, i32 0
+  %14 = load %map<int,int>, ptr %11
+  store %map<int,int> %14, ptr %13
+  %15 = getelementptr %Container, ptr %12, i32 0, i32 0
+  %16 = load %map<int,int>, ptr %15
+  %17 = alloca %map<int,int>
+  store %map<int,int> %16, ptr %17
+  %18 = call Optional<i64> @map<int,int>.get(ptr %17, i64 1)
+  %20 = alloca Optional<i64>
+  store Optional<i64> %18, ptr %20
+  %21 = getelementptr Optional<i64>, ptr %20, i32 0, i32 0
+  %22 = load i8, ptr %21
+  %23 = icmp eq i8 %22, 1
+  br i1 %23, label %unwrap.hasvalue1, label %unwrap.else2
+unwrap.hasvalue1:
+  %24 = getelementptr Optional<i64>, ptr %20, i32 0, i32 1
+  %25 = load i64, ptr %24
+  br label %unwrap.after3
+unwrap.else2:
+  br label %unwrap.after3
+unwrap.after3:
+  %27 = phi i64 [ %25, %unwrap.hasvalue1 ], [ 0, %unwrap.else2 ]
+  ret i64 %27
+}
 
 define %map<int,int> @map<int,int>.init(ptr %managedKeys, ptr %managedValues) {
 entry0:
@@ -615,6 +663,35 @@ declare ptr @malloc(i64 %arg0)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 750
+
+%Container = type { %map<int,int> }
+%__ManagedArrayData_byte = type { ptr, i64, i64 }
+%array<byte> = type { %__ManagedArrayData_byte, i64 }
+%__ManagedArrayData_int = type { ptr, i64, i64 }
+%array<int> = type { %__ManagedArrayData_int, i64 }
+%map<int,int> = type { %array<int>, %array<int>, %array<byte>, i64, i64 }
+
+@.__tag.free.keyArr = constant [14 x i8] c"array cleanup\00"
+@.__tag.free.valueArr = constant [14 x i8] c"array cleanup\00"
+@.__tag.free.stateArr = constant [14 x i8] c"array cleanup\00"
+@.__tag.free.newKeys = constant [14 x i8] c"array cleanup\00"
+@.__tag.free.newValues = constant [14 x i8] c"array cleanup\00"
+@.__tag.free.newStates = constant [14 x i8] c"array cleanup\00"
+
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
+
 define i64 @main() {
 entry0:
   %0 = alloca %__ManagedArrayData_int
@@ -646,6 +723,7 @@ entry0:
   %17 = alloca %map<int,int>
   store %map<int,int> %16, ptr %17
   %18 = call Optional<i64> @map<int,int>.get(ptr %17, i64 1)
+  %19 = alloca i64
   %20 = alloca Optional<i64>
   store Optional<i64> %18, ptr %20
   %21 = getelementptr Optional<i64>, ptr %20, i32 0, i32 0
@@ -655,42 +733,15 @@ entry0:
 unwrap.hasvalue1:
   %24 = getelementptr Optional<i64>, ptr %20, i32 0, i32 1
   %25 = load i64, ptr %24
+  store i64 %25, ptr %19
   br label %unwrap.after3
 unwrap.else2:
+  store i64 0, ptr %19
   br label %unwrap.after3
 unwrap.after3:
-  %27 = phi i64 [ %25, %unwrap.hasvalue1 ], [ 0, %unwrap.else2 ]
-  ret i64 %27
+  %26 = load i64, ptr %19
+  ret i64 %26
 }
-
-declare void @exit(i32 %arg0)
-
-define void @_start() {
-entry0:
-  %0 = call i64 @main()
-  call void @exit(i64 %0)
-  ret void
-}
-
----
-; Module: test.maxon
-; Instructions: 750
-
-%Container = type { %map<int,int> }
-%__ManagedArrayData_int = type { ptr, i64, i64 }
-%array<int> = type { %__ManagedArrayData_int, i64 }
-%__ManagedArrayData_byte = type { ptr, i64, i64 }
-%array<byte> = type { %__ManagedArrayData_byte, i64 }
-%map<int,int> = type { %array<int>, %array<int>, %array<byte>, i64, i64 }
-
-@.__tag.free.keyArr = constant [14 x i8] c"array cleanup\00"
-@.__tag.free.valueArr = constant [14 x i8] c"array cleanup\00"
-@.__tag.free.stateArr = constant [14 x i8] c"array cleanup\00"
-@.__tag.free.newKeys = constant [14 x i8] c"array cleanup\00"
-@.__tag.free.newValues = constant [14 x i8] c"array cleanup\00"
-@.__tag.free.newStates = constant [14 x i8] c"array cleanup\00"
-
-declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 define %map<int,int> @map<int,int>.init(ptr %managedKeys, ptr %managedValues) {
 entry0:
@@ -1470,57 +1521,6 @@ declare ptr @malloc(i64 %arg0)
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
 declare f64 @trunc(f64 %arg0)
-
-define i64 @main() {
-entry0:
-  %0 = alloca %__ManagedArrayData_int
-  %1 = alloca %__ManagedArrayData_int
-  %2 = alloca [1 x i64]
-  %3 = alloca [1 x i64]
-  %4 = getelementptr %__ManagedArrayData_int, ptr %0, i32 0, i32 0
-  store ptr %2, ptr %4
-  %5 = getelementptr %__ManagedArrayData_int, ptr %0, i32 0, i32 1
-  store i64 0, ptr %5
-  %6 = getelementptr %__ManagedArrayData_int, ptr %0, i32 0, i32 2
-  store i64 0, ptr %6
-  %7 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 0
-  store ptr %3, ptr %7
-  %8 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 1
-  store i64 0, ptr %8
-  %9 = getelementptr %__ManagedArrayData_int, ptr %1, i32 0, i32 2
-  store i64 0, ptr %9
-  %10 = call %map<int,int> @map<int,int>.init(ptr %0, ptr %1)
-  %11 = alloca %map<int,int>
-  store %map<int,int> %10, ptr %11
-  call void @map<int,int>.insert(ptr %11, i64 1, i64 42)
-  %12 = alloca %Container
-  %13 = getelementptr %Container, ptr %12, i32 0, i32 0
-  %14 = load %map<int,int>, ptr %11
-  store %map<int,int> %14, ptr %13
-  %15 = getelementptr %Container, ptr %12, i32 0, i32 0
-  %16 = load %map<int,int>, ptr %15
-  %17 = alloca %map<int,int>
-  store %map<int,int> %16, ptr %17
-  %18 = call Optional<i64> @map<int,int>.get(ptr %17, i64 1)
-  %19 = alloca i64
-  %20 = alloca Optional<i64>
-  store Optional<i64> %18, ptr %20
-  %21 = getelementptr Optional<i64>, ptr %20, i32 0, i32 0
-  %22 = load i8, ptr %21
-  %23 = icmp eq i8 %22, 1
-  br i1 %23, label %unwrap.hasvalue1, label %unwrap.else2
-unwrap.hasvalue1:
-  %24 = getelementptr Optional<i64>, ptr %20, i32 0, i32 1
-  %25 = load i64, ptr %24
-  store i64 %25, ptr %19
-  br label %unwrap.after3
-unwrap.else2:
-  store i64 0, ptr %19
-  br label %unwrap.after3
-unwrap.after3:
-  %26 = load i64, ptr %19
-  ret i64 %26
-}
 
 declare void @exit(i32 %arg0)
 

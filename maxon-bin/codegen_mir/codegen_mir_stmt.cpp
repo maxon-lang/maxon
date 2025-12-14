@@ -151,9 +151,146 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 								structInitExpr->line, structInitExpr->column);
 				}
 
-				mir::MIRValue *fieldValue = generateExpr(valueExpr);
 				mir::MIRValue *fieldPtr = builder->createStructGEP(structType, structAlloca,
 																   static_cast<int>(fieldIndex), fieldName);
+
+				// Handle sized array expression: array of T (empty) or array of N T (sized)
+				if (auto *sizedArray = dynamic_cast<SizedArrayExprAST *>(valueExpr)) {
+					std::string elementTypeName = sizedArray->elementType;
+
+					// Substitute type parameters if we're inside a generic method
+					if (!currentTypeBindings.empty()) {
+						auto bindingIt = currentTypeBindings.find(elementTypeName);
+						if (bindingIt != currentTypeBindings.end()) {
+							elementTypeName = bindingIt->second;
+						}
+					}
+
+					mir::MIRType *elementType = getTypeFromString(elementTypeName);
+					mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
+					mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+
+					if (sizedArray->hasVariableSize() || sizedArray->size > 0) {
+						// Sized array - allocate buffer
+						int64_t arraySize = sizedArray->size;
+						mir::MIRValue *sizeVal = nullptr;
+						if (sizedArray->hasVariableSize()) {
+							sizeVal = generateExpr(sizedArray->sizeExpr.get());
+						} else {
+							sizeVal = builder->getInt64(arraySize);
+						}
+
+						initHeapManagement();
+						mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+						uint64_t elementSize = elementType->sizeInBytes;
+						mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
+						mir::MIRValue *sizeExt = builder->createSExt(sizeVal, mir::MIRType::getInt64(), "size.ext");
+						mir::MIRValue *totalSize = builder->createMul(sizeExt, elemSizeVal, "total.size");
+						mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {totalSize}, fieldName + ".buffer");
+
+						mir::MIRFunction *memsetFunc = module->getFunction("memset");
+						if (!memsetFunc) {
+							initHeapManagement();
+							memsetFunc = module->getFunction("memset");
+						}
+						builder->createCall(memsetFunc, {bufferPtr, builder->getInt64(0), totalSize});
+
+						mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, fieldPtr, 0, fieldName + ".managed");
+						mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, fieldName + "._buffer");
+						builder->createStore(bufferPtr, bufferField);
+						mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, fieldName + "._len");
+						builder->createStore(sizeVal, lenField);
+						mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, fieldName + "._capacity");
+						builder->createStore(sizeVal, capField);
+						mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, fieldPtr, 1, fieldName + ".iterIndex");
+						builder->createStore(builder->getInt64(0), iterField);
+					} else {
+						// Empty array - initialize with nullptr and zero length
+						mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, fieldPtr, 0, fieldName + ".managed");
+						mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, fieldName + "._buffer");
+						builder->createStore(mir::MIRValue::createConstantNull(), bufferField);
+						mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, fieldName + "._len");
+						builder->createStore(builder->getInt64(0), lenField);
+						mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, fieldName + "._capacity");
+						builder->createStore(builder->getInt64(0), capField);
+						mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, fieldPtr, 1, fieldName + ".iterIndex");
+						builder->createStore(builder->getInt64(0), iterField);
+					}
+					continue;
+				}
+
+				// Handle empty map literal: map from K to V
+				if (auto *mapLiteral = dynamic_cast<MapLiteralExprAST *>(valueExpr)) {
+					const std::string &keyType = mapLiteral->keyType;
+					const std::string &valueType = mapLiteral->valueType;
+					std::string specializedName = "map<" + keyType + "," + valueType + ">";
+
+					// Instantiate the generic struct if not already done
+					if (instantiatedGenericStructs.find(specializedName) == instantiatedGenericStructs.end()) {
+						if (structDefinitions.find("map") != structDefinitions.end()) {
+							std::map<std::string, std::string> typeBindings = {
+								{"Key", keyType},
+								{"Value", valueType}};
+							instantiateGenericStruct("map", typeBindings);
+						} else {
+							reportError("Generic struct 'map' not found", mapLiteral->line, mapLiteral->column);
+						}
+					}
+
+					mir::MIRType *mapStructType = structTypes[specializedName];
+					if (!mapStructType) {
+						reportError("Failed to instantiate map type: " + specializedName,
+									mapLiteral->line, mapLiteral->column);
+					}
+
+					// Get element types
+					mir::MIRType *keyMirType = getTypeFromString(keyType);
+					mir::MIRType *valueMirType = getTypeFromString(valueType);
+
+					// Create empty _ManagedArray<Key> struct for keys
+					mir::MIRType *keyManagedArrayType = getOrCreateManagedArrayDataType(keyType);
+					mir::MIRValue *keysManaged = builder->createAlloca(keyManagedArrayType, "managed.keys");
+
+					// Create empty _ManagedArray<Value> struct for values
+					mir::MIRType *valueManagedArrayType = getOrCreateManagedArrayDataType(valueType);
+					mir::MIRValue *valuesManaged = builder->createAlloca(valueManagedArrayType, "managed.values");
+
+					// Create minimal stack buffers
+					mir::MIRType *keysStackArrayType = mir::MIRType::getArray(keyMirType, 1);
+					mir::MIRValue *keysStackBuffer = builder->createAlloca(keysStackArrayType, "keys.buffer");
+
+					mir::MIRType *valuesStackArrayType = mir::MIRType::getArray(valueMirType, 1);
+					mir::MIRValue *valuesStackBuffer = builder->createAlloca(valuesStackArrayType, "values.buffer");
+
+					// Initialize empty keys _ManagedArray struct fields
+					mir::MIRValue *keysBufferField = builder->createStructGEP(keyManagedArrayType, keysManaged, 0, "keys._buffer");
+					builder->createStore(keysStackBuffer, keysBufferField);
+					mir::MIRValue *keysLenField = builder->createStructGEP(keyManagedArrayType, keysManaged, 1, "keys._len");
+					builder->createStore(builder->getInt64(0), keysLenField);
+					mir::MIRValue *keysCapField = builder->createStructGEP(keyManagedArrayType, keysManaged, 2, "keys._capacity");
+					builder->createStore(builder->getInt64(0), keysCapField);
+
+					// Initialize empty values _ManagedArray struct fields
+					mir::MIRValue *valuesBufferField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 0, "values._buffer");
+					builder->createStore(valuesStackBuffer, valuesBufferField);
+					mir::MIRValue *valuesLenField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 1, "values._len");
+					builder->createStore(builder->getInt64(0), valuesLenField);
+					mir::MIRValue *valuesCapField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 2, "values._capacity");
+					builder->createStore(builder->getInt64(0), valuesCapField);
+
+					// Call map<K,V>.init(fieldPtr, keysManaged, valuesManaged)
+					std::string initMethodName = specializedName + ".init";
+					mir::MIRFunction *initFunc = module->getFunction(initMethodName);
+					if (!initFunc) {
+						reportError("map.init method not found for type: " + specializedName,
+									mapLiteral->line, mapLiteral->column);
+					}
+
+					builder->createCall(initFunc, {fieldPtr, keysManaged, valuesManaged}, "");
+					continue;
+				}
+
+				mir::MIRValue *fieldValue = generateExpr(valueExpr);
 
 				// If the field is an unsized array type (like []byte), we need to handle
 				// the conversion from either a fat pointer or variable-sized array

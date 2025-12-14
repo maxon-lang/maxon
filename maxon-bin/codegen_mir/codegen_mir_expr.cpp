@@ -74,6 +74,81 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					sizedArray->line, sizedArray->column);
 	}
 
+	// Handle empty map literal: map from K to V
+	// Creates an empty map struct and calls init()
+	if (auto *mapLiteral = dynamic_cast<MapLiteralExprAST *>(expr)) {
+		const std::string &keyType = mapLiteral->keyType;
+		const std::string &valueType = mapLiteral->valueType;
+		std::string specializedName = "map<" + keyType + "," + valueType + ">";
+
+		// Instantiate the generic struct if not already done
+		if (instantiatedGenericStructs.find(specializedName) == instantiatedGenericStructs.end()) {
+			if (structDefinitions.find("map") != structDefinitions.end()) {
+				std::map<std::string, std::string> typeBindings = {
+					{"Key", keyType},
+					{"Value", valueType}};
+				instantiateGenericStruct("map", typeBindings);
+			} else {
+				reportError("Generic struct 'map' not found", mapLiteral->line, mapLiteral->column);
+			}
+		}
+
+		mir::MIRType *mapStructType = structTypes[specializedName];
+		if (!mapStructType) {
+			reportError("Failed to instantiate map type: " + specializedName,
+						mapLiteral->line, mapLiteral->column);
+		}
+
+		// Get element types
+		mir::MIRType *keyMirType = getTypeFromString(keyType);
+		mir::MIRType *valueMirType = getTypeFromString(valueType);
+
+		// Allocate the map struct
+		mir::MIRValue *mapAlloca = builder->createAlloca(mapStructType, "map.tmp");
+
+		// Create empty _ManagedArray<Key> struct for keys
+		mir::MIRType *keyManagedArrayType = getOrCreateManagedArrayDataType(keyType);
+		mir::MIRValue *keysManaged = builder->createAlloca(keyManagedArrayType, "managed.keys");
+
+		// Create empty _ManagedArray<Value> struct for values
+		mir::MIRType *valueManagedArrayType = getOrCreateManagedArrayDataType(valueType);
+		mir::MIRValue *valuesManaged = builder->createAlloca(valueManagedArrayType, "managed.values");
+
+		// Create minimal stack buffers
+		mir::MIRType *keysStackArrayType = mir::MIRType::getArray(keyMirType, 1);
+		mir::MIRValue *keysStackBuffer = builder->createAlloca(keysStackArrayType, "keys.buffer");
+
+		mir::MIRType *valuesStackArrayType = mir::MIRType::getArray(valueMirType, 1);
+		mir::MIRValue *valuesStackBuffer = builder->createAlloca(valuesStackArrayType, "values.buffer");
+
+		// Initialize empty keys _ManagedArray struct fields
+		mir::MIRValue *keysBufferField = builder->createStructGEP(keyManagedArrayType, keysManaged, 0, "keys._buffer");
+		builder->createStore(keysStackBuffer, keysBufferField);
+		mir::MIRValue *keysLenField = builder->createStructGEP(keyManagedArrayType, keysManaged, 1, "keys._len");
+		builder->createStore(builder->getInt64(0), keysLenField);
+		mir::MIRValue *keysCapField = builder->createStructGEP(keyManagedArrayType, keysManaged, 2, "keys._capacity");
+		builder->createStore(builder->getInt64(0), keysCapField);
+
+		// Initialize empty values _ManagedArray struct fields
+		mir::MIRValue *valuesBufferField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 0, "values._buffer");
+		builder->createStore(valuesStackBuffer, valuesBufferField);
+		mir::MIRValue *valuesLenField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 1, "values._len");
+		builder->createStore(builder->getInt64(0), valuesLenField);
+		mir::MIRValue *valuesCapField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 2, "values._capacity");
+		builder->createStore(builder->getInt64(0), valuesCapField);
+
+		// Call map<K,V>.init(mapAlloca, keysManaged, valuesManaged)
+		std::string initMethodName = specializedName + ".init";
+		mir::MIRFunction *initFunc = module->getFunction(initMethodName);
+		if (!initFunc) {
+			reportError("map.init method not found for type: " + specializedName,
+						mapLiteral->line, mapLiteral->column);
+		}
+
+		builder->createCall(initFunc, {mapAlloca, keysManaged, valuesManaged}, "");
+		return mapAlloca;
+	}
+
 	if (auto *castExpr = dynamic_cast<CastExprAST *>(expr)) {
 		// Check for InitableFromStringLiteral: "literal" as Type
 		// Transform to: Type.init(managed)
@@ -1135,26 +1210,56 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				mir::MIRFunction *equalsFunc = module->getFunction(equalsFuncName);
 
 				if (equalsFunc) {
-					// For struct types, we need to pass pointers, not loaded values
-					// Get pointer to left operand
-					mir::MIRValue *leftPtr = nullptr;
-					if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->left.get())) {
-						leftPtr = namedValues[varExpr->name];
-					} else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(binExpr->left.get())) {
-						leftPtr = generateStringLiteral(strLit);
-					} else {
-						leftPtr = generateExpr(binExpr->left.get());
-					}
+					// Helper to get pointer for an Equatable operand
+					// Handles: local variables, implicit field access, method calls, etc.
+					auto getEquatableOperandPtr = [&](ExprAST *expr) -> mir::MIRValue * {
+						// Case 1: Local variable or parameter
+						if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
+							mir::MIRValue *ptr = namedValues[varExpr->name];
+							if (ptr) {
+								return ptr;
+							}
+							// Case 2: Implicit field access (e.g., 'pos' in a method)
+							if (!currentReceiverType.empty()) {
+								auto fieldsIt = structFields.find(currentReceiverType);
+								if (fieldsIt != structFields.end()) {
+									for (size_t i = 0; i < fieldsIt->second.size(); i++) {
+										if (fieldsIt->second[i].first == varExpr->name) {
+											// Generate field pointer through implicit 'self'
+											mir::MIRValue *selfAlloca = namedValues["self"];
+											if (selfAlloca) {
+												mir::MIRValue *selfPtr;
+												if (isStructParameter("self")) {
+													selfPtr = builder->createLoad(mir::MIRType::getPtr(), selfAlloca, "self.ptr");
+												} else {
+													selfPtr = selfAlloca;
+												}
+												mir::MIRType *structType = structTypes[currentReceiverType];
+												return builder->createStructGEP(structType, selfPtr, static_cast<int>(i), varExpr->name + ".ptr");
+											}
+											break;
+										}
+									}
+								}
+							}
+							return nullptr;
+						}
+						// Case 3: String literal
+						if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(expr)) {
+							return generateStringLiteral(strLit);
+						}
+						// Case 4: Other expressions (method calls, etc.) - need to store result in temp
+						mir::MIRValue *val = generateExpr(expr);
+						if (val && val->type->isStruct()) {
+							mir::MIRValue *tempAlloca = builder->createAlloca(val->type, "eq.tmp");
+							builder->createStore(val, tempAlloca);
+							return tempAlloca;
+						}
+						return val;
+					};
 
-					// Get pointer to right operand
-					mir::MIRValue *rightPtr = nullptr;
-					if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->right.get())) {
-						rightPtr = namedValues[varExpr->name];
-					} else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(binExpr->right.get())) {
-						rightPtr = generateStringLiteral(strLit);
-					} else {
-						rightPtr = generateExpr(binExpr->right.get());
-					}
+					mir::MIRValue *leftPtr = getEquatableOperandPtr(binExpr->left.get());
+					mir::MIRValue *rightPtr = getEquatableOperandPtr(binExpr->right.get());
 
 					if (!leftPtr || !rightPtr) {
 						reportError("Failed to generate Equatable comparison operands",
@@ -1660,6 +1765,50 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				calleeF = module->getFunction(receiverMethod);
 				if (calleeF) {
 					effectiveCallee = receiverMethod; // Update for later use
+				}
+			}
+
+			// For generic struct methods like "array.count", specialize based on first arg type
+			// e.g., array.count(errors) where errors is array<SemanticError> -> array<SemanticError>.count
+			if (!calleeF && !callExpr->args.empty()) {
+				std::string qualifier = effectiveCallee;
+				std::string bareMethodName = effectiveCallee;
+				size_t dotPos = effectiveCallee.find('.');
+				if (dotPos != std::string::npos) {
+					qualifier = effectiveCallee.substr(0, dotPos);
+					bareMethodName = effectiveCallee.substr(dotPos + 1);
+				}
+
+				// Check if the qualifier is a generic template (array, map, set, etc.)
+				if (qualifier == "array" || qualifier == "map" || qualifier == "set") {
+					// Get the type of the first argument (the receiver)
+					std::string firstArgType;
+					if (auto *varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].value.get())) {
+						auto it = variableTypes.find(varExpr->name);
+						if (it != variableTypes.end()) {
+							firstArgType = it->second;
+						} else if (!currentReceiverType.empty()) {
+							// Check struct fields
+							auto fieldsIt = structFields.find(currentReceiverType);
+							if (fieldsIt != structFields.end()) {
+								for (const auto &field : fieldsIt->second) {
+									if (field.first == varExpr->name) {
+										firstArgType = field.second;
+										break;
+									}
+								}
+							}
+						}
+					}
+
+					// If first arg is a specialized type like array<SemanticError>, use that
+					if (!firstArgType.empty() && firstArgType.find('<') != std::string::npos) {
+						std::string specializedMethod = firstArgType + "." + bareMethodName;
+						calleeF = module->getFunction(specializedMethod);
+						if (calleeF) {
+							effectiveCallee = specializedMethod;
+						}
+					}
 				}
 			}
 
@@ -2174,6 +2323,75 @@ mir::MIRValue *MIRCodeGenerator::generateStructLiteral(StructInitExprAST *struct
 				}
 			}
 			// Zero-initialized array - already zero from alloca, nothing needed
+		} else if (auto *sizedArray = dynamic_cast<SizedArrayExprAST *>(valueExpr)) {
+			// Handle sized array expression: array of T (empty) or array of N T (sized)
+			std::string elementTypeName = sizedArray->elementType;
+
+			// Substitute type parameters if we're inside a generic method
+			if (!currentTypeBindings.empty()) {
+				auto bindingIt = currentTypeBindings.find(elementTypeName);
+				if (bindingIt != currentTypeBindings.end()) {
+					elementTypeName = bindingIt->second;
+				}
+			}
+
+			mir::MIRType *elementType = getTypeFromString(elementTypeName);
+
+			// Get or create the array struct type for this element type
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeName);
+
+			// For empty arrays (no size specified), create zero-initialized struct
+			// For sized arrays, allocate buffer and initialize
+			if (sizedArray->hasVariableSize() || sizedArray->size > 0) {
+				// Get or compute size
+				int64_t arraySize = sizedArray->size;
+				mir::MIRValue *sizeVal = nullptr;
+				if (sizedArray->hasVariableSize()) {
+					sizeVal = generateExpr(sizedArray->sizeExpr.get());
+				} else {
+					sizeVal = builder->getInt64(arraySize);
+				}
+
+				// Allocate buffer
+				initHeapManagement();
+				mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+				uint64_t elementSize = elementType->sizeInBytes;
+				mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
+				mir::MIRValue *sizeExt = builder->createSExt(sizeVal, mir::MIRType::getInt64(), "size.ext");
+				mir::MIRValue *totalSize = builder->createMul(sizeExt, elemSizeVal, "total.size");
+				mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {totalSize}, fieldName + ".buffer");
+
+				// Zero-initialize the buffer
+				mir::MIRFunction *memsetFunc = module->getFunction("memset");
+				if (!memsetFunc) {
+					initHeapManagement();
+					memsetFunc = module->getFunction("memset");
+				}
+				builder->createCall(memsetFunc, {bufferPtr, builder->getInt64(0), totalSize});
+
+				// Initialize the nested struct
+				mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, fieldPtr, 0, fieldName + ".managed");
+				mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, fieldName + "._buffer");
+				builder->createStore(bufferPtr, bufferField);
+				mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, fieldName + "._len");
+				builder->createStore(sizeVal, lenField);
+				mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, fieldName + "._capacity");
+				builder->createStore(sizeVal, capField);
+				mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, fieldPtr, 1, fieldName + ".iterIndex");
+				builder->createStore(builder->getInt64(0), iterField);
+			} else {
+				// Empty array (array of T) - initialize with nullptr and zero length
+				mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, fieldPtr, 0, fieldName + ".managed");
+				mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, fieldName + "._buffer");
+				builder->createStore(mir::MIRValue::createConstantNull(), bufferField);
+				mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, fieldName + "._len");
+				builder->createStore(builder->getInt64(0), lenField);
+				mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, fieldName + "._capacity");
+				builder->createStore(builder->getInt64(0), capField);
+				mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, fieldPtr, 1, fieldName + ".iterIndex");
+				builder->createStore(builder->getInt64(0), iterField);
+			}
 		} else if (maxon::TypeConversion::isManagedArrayType(fieldTypeStr)) {
 			// Slice field ([]T) - need to create fat pointer {ptr, len}
 			std::string elementTypeStr = maxon::TypeConversion::getArrayElementType(fieldTypeStr);

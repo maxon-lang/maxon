@@ -16,9 +16,15 @@
 // This is used for type-aware code generation (e.g., Equatable comparison)
 std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
+		// Check local variables first
 		auto it = variableTypes.find(varExpr->name);
 		if (it != variableTypes.end()) {
 			return it->second;
+		}
+		// Check global variables
+		auto git = globalVariableTypes.find(varExpr->name);
+		if (git != globalVariableTypes.end()) {
+			return git->second;
 		}
 		// Check for implicit field access
 		if (!currentReceiverType.empty()) {

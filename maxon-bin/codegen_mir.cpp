@@ -782,6 +782,10 @@ bool MIRCodeGenerator::requiresRuntimeInit(ExprAST *expr) {
 	if (dynamic_cast<MapLiteralWithEntriesExprAST *>(expr))
 		return true;
 
+	// String literals require runtime initialization (for proper string struct setup)
+	if (dynamic_cast<StringLiteralExprAST *>(expr))
+		return true;
+
 	// Enum case expressions (MemberAccessExprAST with enum) require runtime init
 	// because they need enum type resolution at runtime
 	if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(expr)) {
@@ -1021,6 +1025,25 @@ void MIRCodeGenerator::generateGlobalInit() {
 			// Get the global that was already created in Pass 1d and store the value
 			mir::MIRValue *globalPtr = mir::MIRValue::createGlobal(enumVal->type, globalInfo.name);
 			builder->createStore(enumVal, globalPtr);
+		}
+		// Handle string literal expressions
+		else if (auto *strLit = dynamic_cast<StringLiteralExprAST *>(initExpr)) {
+			// Generate string literal (creates proper string struct)
+			mir::MIRValue *strVal = generateStringLiteral(strLit);
+			if (!strVal) {
+				reportError("Failed to generate string literal for global '" + globalInfo.name + "'",
+							globalInfo.decl->line, globalInfo.decl->column);
+			}
+
+			// Get the string struct type
+			mir::MIRType *stringType = getTypeFromString("string");
+
+			// Load the string struct from the alloca
+			mir::MIRValue *strStruct = builder->createLoad(stringType, strVal, "str.loaded");
+
+			// Store to the global
+			mir::MIRValue *globalPtr = mir::MIRValue::createGlobal(stringType, globalInfo.name);
+			builder->createStore(strStruct, globalPtr);
 		} else {
 			reportError("Unsupported runtime-init expression for global '" + globalInfo.name + "'",
 						globalInfo.decl->line, globalInfo.decl->column);
@@ -1615,50 +1638,11 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		logTrace("Registered enum: " + enumDef->name + " (" + std::to_string(enumDef->cases.size()) + " cases)");
 	}
 
-	// Pass 1c: Fill in struct fields now that all types (including enums) are declared
-	// Use getTypeFromStringNoMark to avoid marking field types as used prematurely
-	logDetail("Pass 1c: Filling in struct fields");
-	for (const auto &structDef : program->structs) {
-		// Skip generic template structs - they'll be instantiated on demand
-		if (!structDef->associatedTypeParams.empty()) {
-			continue;
-		}
-
-		std::vector<mir::MIRType *> fieldTypes;
-		std::vector<std::pair<std::string, std::string>> fields;
-		std::map<std::string, ExprAST *> defaults;
-
-		for (const auto &field : structDef->fields) {
-			std::string fieldType = field.type;
-
-			// Type inference from default value (mirrors semantic analyzer logic)
-			if (fieldType.empty() && field.defaultValue != nullptr) {
-				fieldType = inferExprType(field.defaultValue.get());
-			}
-
-			fieldTypes.push_back(getTypeFromStringNoMark(fieldType));
-			fields.push_back({field.name, fieldType});
-			// Store pointer to default value expression (if any)
-			if (field.defaultValue != nullptr) {
-				defaults[field.name] = field.defaultValue.get();
-			}
-		}
-
-		logTrace("Defining struct type: " + structDef->name + " (" + std::to_string(fieldTypes.size()) + " fields)");
-
-		// Update the existing struct type with actual fields
-		mir::MIRType *structType = structTypes[structDef->name];
-		structType->fieldTypes = fieldTypes;
-		structType->recomputeSize();
-		structFields[structDef->name] = fields;
-		structFieldDefaults[structDef->name] = defaults;
-	}
-
-	// Pass 1d: Declare all functions BEFORE global constants
-	// This is critical because global constants with map/array literals
-	// may trigger generic method instantiation, which needs to call stdlib
-	// functions like string.hashManagedString that must be declared first.
-	logDetail("Pass 1d: Creating function declarations");
+	// Pass 1c: Declare all functions BEFORE filling struct fields
+	// This is critical because filling struct fields can trigger generic method
+	// instantiation (e.g., map<string,T>), which generates method bodies that may
+	// call stdlib functions like string.hashManagedString that must be declared first.
+	logDetail("Pass 1c: Creating function declarations");
 
 	// Helper lambda to declare a function/method
 	// Uses no-mark variants - types are marked when actually used in code generation
@@ -1730,6 +1714,47 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	logDetail("Declaring " + std::to_string(program->functions.size()) + " top-level functions");
 	for (auto &func : program->functions) {
 		declareFunction(func.get(), func->namespaceName);
+	}
+
+	// Pass 1d: Fill in struct fields now that all functions are declared
+	// Use getTypeFromStringNoMark to avoid marking field types as used prematurely
+	// Note: This may trigger generic instantiation (e.g., for map<K,V> fields)
+	// which is why function declarations must come first.
+	logDetail("Pass 1d: Filling in struct fields");
+	for (const auto &structDef : program->structs) {
+		// Skip generic template structs - they'll be instantiated on demand
+		if (!structDef->associatedTypeParams.empty()) {
+			continue;
+		}
+
+		std::vector<mir::MIRType *> fieldTypes;
+		std::vector<std::pair<std::string, std::string>> fields;
+		std::map<std::string, ExprAST *> defaults;
+
+		for (const auto &field : structDef->fields) {
+			std::string fieldType = field.type;
+
+			// Type inference from default value (mirrors semantic analyzer logic)
+			if (fieldType.empty() && field.defaultValue != nullptr) {
+				fieldType = inferExprType(field.defaultValue.get());
+			}
+
+			fieldTypes.push_back(getTypeFromStringNoMark(fieldType));
+			fields.push_back({field.name, fieldType});
+			// Store pointer to default value expression (if any)
+			if (field.defaultValue != nullptr) {
+				defaults[field.name] = field.defaultValue.get();
+			}
+		}
+
+		logTrace("Defining struct type: " + structDef->name + " (" + std::to_string(fieldTypes.size()) + " fields)");
+
+		// Update the existing struct type with actual fields
+		mir::MIRType *structType = structTypes[structDef->name];
+		structType->fieldTypes = fieldTypes;
+		structType->recomputeSize();
+		structFields[structDef->name] = fields;
+		structFieldDefaults[structDef->name] = defaults;
 	}
 
 	// Pass 1e: Generate global constants
@@ -1812,6 +1837,14 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 
 					globalVariableTypes[global->name] = specializedName;
 					runtimeInitGlobals.back().type = specializedName;
+				} else if (dynamic_cast<StringLiteralExprAST *>(initExpr)) {
+					// String literal - create string struct storage
+					mir::MIRType *stringType = getTypeFromString("string");
+					mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, stringType);
+					mirGlobal->isConstant = false; // Runtime initialized
+
+					globalVariableTypes[global->name] = "string";
+					runtimeInitGlobals.back().type = "string";
 				}
 			} else {
 				simpleGlobals.push_back(global.get());
@@ -1857,6 +1890,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 					std::vector<uint8_t> data(8);
 					std::memcpy(data.data(), &intVal, 8);
 					mirGlobal->setInitializer(data);
+					globalVariableTypes[global->name] = "int";
 				} else if (type == "float") {
 					// Create global float constant
 					mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getFloat64());
@@ -1865,6 +1899,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 					std::vector<uint8_t> data(8);
 					std::memcpy(data.data(), &floatVal, 8);
 					mirGlobal->setInitializer(data);
+					globalVariableTypes[global->name] = "float";
 				} else if (type == "bool") {
 					// Create global bool constant
 					mir::MIRGlobal *mirGlobal = module->createGlobal(global->name, mir::MIRType::getInt8());
@@ -1873,6 +1908,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 					std::vector<uint8_t> data(1);
 					data[0] = boolVal;
 					mirGlobal->setInitializer(data);
+					globalVariableTypes[global->name] = "bool";
 				} else if (type == "string") {
 					// Create global string constant (as raw string data)
 					// For strings, we store the data and length separately
@@ -1881,6 +1917,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 					// Store reference in namedValues for lookup during codegen
 					// Note: String globals need special handling since they're struct-like
 					(void)strData; // For now, string globals use the existing string literal mechanism
+					globalVariableTypes[global->name] = "string";
 				}
 			}
 		}
