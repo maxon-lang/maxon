@@ -1206,8 +1206,35 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		// Track argument-to-parameter mapping for codegen reordering
 		std::vector<size_t> argToParamMapping(callExpr->args.size());
 
-		// For generic methods, we need to infer concrete element type from first array arg
+		// For generic methods, use stored type substitutions to resolve Element type
+		// This handles cases like array<byte>.push(b) where Element should be byte
 		std::string concreteElementType;
+		auto elemIt = funcInfo.typeSubstitutions.find("Element");
+		if (elemIt != funcInfo.typeSubstitutions.end()) {
+			concreteElementType = elemIt->second;
+		}
+
+		// If no type substitutions stored, infer from receiver type for generic methods
+		// This handles the case where we matched a base template like "array.push"
+		// but the actual call is on "array<byte>"
+		if (concreteElementType.empty() && !callExpr->args.empty() && funcInfo.parameters.size() > 0 &&
+			funcInfo.parameters[0].name == "self") {
+			// Get the receiver type from first argument (already analyzed in disambiguation)
+			std::string receiverType;
+			if (auto *varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[0].value.get())) {
+				auto varInfo = lookupVariable(varExpr->name);
+				if (varInfo.has_value()) {
+					receiverType = varInfo->type;
+				}
+			}
+			// Extract element type from array<T> or map<K,V>
+			if (maxon::TypeConversion::isArrayStructType(receiverType)) {
+				concreteElementType = maxon::TypeConversion::getArrayStructElementType(receiverType);
+			} else if (maxon::TypeConversion::isMapStructType(receiverType)) {
+				// For maps, we'd need both Key and Value - for now just handle Element
+				concreteElementType = maxon::TypeConversion::getMapValueType(receiverType);
+			}
+		}
 
 		bool seenNamedArg = false;
 		size_t positionalParamIdx = paramOffset; // Next param to fill positionally

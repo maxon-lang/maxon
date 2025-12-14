@@ -1355,6 +1355,16 @@ bool FormattingProvider::startsBlock(const std::string &line, bool insideInterfa
 		return true;
 	}
 
+	// Static function
+	if (trimmed.rfind("static function ", 0) == 0) {
+		return true;
+	}
+
+	// Export static function
+	if (trimmed.rfind("export static function ", 0) == 0) {
+		return true;
+	}
+
 	// Type declaration
 	if (trimmed.rfind("type ", 0) == 0 || trimmed.rfind("export type ", 0) == 0) {
 		return true;
@@ -1400,6 +1410,13 @@ bool FormattingProvider::startsBlock(const std::string &line, bool insideInterfa
 	// end 'label' else 'label' pattern - ends one block and starts another
 	// The end part decrements, so we need to increment for the else part
 	if (trimmed.find("end ") == 0 && trimmed.find(" else ") != std::string::npos) {
+		return true;
+	}
+
+	// Guard-let pattern: let x = expr or 'label' / var x = expr or 'label'
+	// Starts an error-handling block
+	if ((trimmed.rfind("let ", 0) == 0 || trimmed.rfind("var ", 0) == 0) &&
+		trimmed.find(" or '") != std::string::npos) {
 		return true;
 	}
 

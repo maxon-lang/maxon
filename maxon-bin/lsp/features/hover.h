@@ -67,9 +67,11 @@ class HoverProvider {
 	 * Look up a keyword and return hover info.
 	 *
 	 * @param token The keyword to look up
+	 * @param document The document for context checking
+	 * @param position The cursor position for context checking
 	 * @return Hover info if token is a keyword, nullopt otherwise
 	 */
-	std::optional<Hover> lookupKeyword(const std::string &token);
+	std::optional<Hover> lookupKeyword(const std::string &token, const Document &document, const Position &position);
 
 	/**
 	 * Look up a struct field declaration when cursor is on a field in a type definition.

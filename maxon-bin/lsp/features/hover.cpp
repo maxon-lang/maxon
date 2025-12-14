@@ -43,6 +43,7 @@ std::optional<Hover> HoverProvider::getHover(
 
 			// Find enclosing function to build qualified key
 			std::string enclosingFunction;
+			std::string enclosingStructName; // Track struct name for field access
 			if (cache->ast) {
 				for (const auto &func : cache->ast->functions) {
 					if (position.line >= func->line - 1 && position.line <= func->endLine - 1) {
@@ -58,6 +59,7 @@ std::optional<Hover> HoverProvider::getHover(
 					for (const auto &method : structDef->methods) {
 						if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
 							enclosingFunction = structDef->name + "." + method->name;
+							enclosingStructName = structDef->name;
 							break;
 						}
 					}
@@ -81,6 +83,19 @@ std::optional<Hover> HoverProvider::getHover(
 				}
 			}
 
+			// If still not found and we're inside a struct method, check struct fields
+			if (varType.empty() && !enclosingStructName.empty()) {
+				auto structIt = cache->structs.find(enclosingStructName);
+				if (structIt != cache->structs.end()) {
+					for (const auto &field : structIt->second.fields) {
+						if (field.name == prefix) {
+							varType = field.type;
+							break;
+						}
+					}
+				}
+			}
+
 			if (!varType.empty()) {
 				// Try field lookup first
 				auto fieldHover = lookupField(varType, suffix, cache, stdlib);
@@ -93,6 +108,22 @@ std::optional<Hover> HoverProvider::getHover(
 				auto methodHover = lookupFunction(qualifiedMethodName, cache, stdlib);
 				if (methodHover) {
 					return methodHover;
+				}
+
+				// For generic types like array<T> or map<K,V>, try base type lookup
+				// e.g., array<byte>.push -> array.push
+				if (maxon::TypeConversion::isArrayStructType(varType)) {
+					std::string baseMethodName = "array." + suffix;
+					methodHover = lookupFunction(baseMethodName, cache, stdlib);
+					if (methodHover) {
+						return methodHover;
+					}
+				} else if (maxon::TypeConversion::isMapStructType(varType)) {
+					std::string baseMethodName = "map." + suffix;
+					methodHover = lookupFunction(baseMethodName, cache, stdlib);
+					if (methodHover) {
+						return methodHover;
+					}
 				}
 			}
 		}
@@ -121,7 +152,7 @@ std::optional<Hover> HoverProvider::getHover(
 	}
 
 	// 1. Try keyword lookup
-	auto keywordHover = lookupKeyword(token);
+	auto keywordHover = lookupKeyword(token, document, position);
 	if (keywordHover) {
 		return keywordHover;
 	}
@@ -233,7 +264,7 @@ Range HoverProvider::getTokenRange(const Document &document, const Position &pos
 	return currentTokenRange_;
 }
 
-std::optional<Hover> HoverProvider::lookupKeyword(const std::string &token) {
+std::optional<Hover> HoverProvider::lookupKeyword(const std::string &token, const Document &document, const Position &position) {
 	// Initialize keyword matcher if needed
 	KeywordMatcher::initialize();
 
@@ -248,6 +279,27 @@ std::optional<Hover> HoverProvider::lookupKeyword(const std::string &token) {
 		keywordInfo.category = entry.category;
 		if (entry.has_math_info) {
 			keywordInfo.returnType = entry.math_info.returnType;
+		}
+
+		// Context-aware hover for 'or' - check if it's used in guard-let context
+		if (token == "or") {
+			// Get the rest of the line after the cursor to check for block label
+			std::string line = document.getLine(position.line);
+			size_t orPos = line.find("or");
+			if (orPos != std::string::npos) {
+				// Look for 'label' pattern after 'or'
+				std::string afterOr = line.substr(orPos + 2);
+				// Skip whitespace and look for a single-quoted label
+				size_t i = 0;
+				while (i < afterOr.size() && (afterOr[i] == ' ' || afterOr[i] == '\t')) {
+					i++;
+				}
+				if (i < afterOr.size() && afterOr[i] == '\'') {
+					// Found a block label - this is guard-let context
+					keywordInfo.documentation = "Guard clause - executes following block if expression is nil, block must exit scope";
+					keywordInfo.category = KeywordCategory::ControlFlow;
+				}
+			}
 		}
 
 		std::string markdown = formatKeywordHover(keywordInfo);
@@ -368,11 +420,43 @@ std::optional<Hover> HoverProvider::lookupFieldDeclaration(const std::string &na
 }
 
 std::optional<Hover> HoverProvider::lookupFunction(const std::string &name, const AnalysisCache *cache, const StdlibSymbols &stdlib) {
+	// Helper to extract documentation from stdlib for a method
+	// For generic types like array<int>.push, look up array.push
+	auto getMethodDocFromStdlib = [&](const std::string &funcName) -> std::string {
+		// Extract the method name (after last dot)
+		size_t dotPos = funcName.rfind('.');
+		if (dotPos == std::string::npos) {
+			return "";
+		}
+		std::string methodName = funcName.substr(dotPos + 1);
+		std::string typePart = funcName.substr(0, dotPos);
+
+		// Check if it's a generic type (contains < >)
+		std::string baseTypeName;
+		size_t anglePos = typePart.find('<');
+		if (anglePos != std::string::npos) {
+			baseTypeName = typePart.substr(0, anglePos);
+		} else {
+			baseTypeName = typePart;
+		}
+
+		// Look up base type method in stdlib
+		std::string stdlibMethodName = baseTypeName + "." + methodName;
+		for (const auto &func : stdlib.functions) {
+			if (func.name == stdlibMethodName) {
+				return func.documentation;
+			}
+		}
+		return "";
+	};
+
 	// First check in cache with exact match
 	if (cache) {
 		auto it = cache->functions.find(name);
 		if (it != cache->functions.end()) {
-			std::string markdown = formatFunctionHover(it->second);
+			// Get documentation from stdlib if available
+			std::string doc = getMethodDocFromStdlib(name);
+			std::string markdown = formatFunctionHover(it->second, doc);
 			return buildHover(markdown, currentTokenRange_);
 		}
 
@@ -383,7 +467,8 @@ std::optional<Hover> HoverProvider::lookupFunction(const std::string &name, cons
 		for (const auto &[funcName, funcInfo] : cache->functions) {
 			if (funcName.size() > suffix.size() &&
 				funcName.compare(funcName.size() - suffix.size(), suffix.size(), suffix) == 0) {
-				std::string markdown = formatFunctionHover(funcInfo);
+				std::string doc = getMethodDocFromStdlib(funcName);
+				std::string markdown = formatFunctionHover(funcInfo, doc);
 				return buildHover(markdown, currentTokenRange_);
 			}
 		}
@@ -665,9 +750,12 @@ std::string HoverProvider::formatFunctionHover(const FunctionInfo &func, const s
 
 	md += "function " + displayName + "(";
 
-	// Add parameters
+	// Add parameters, skipping 'self' for methods
 	bool first = true;
 	for (const auto &param : func.parameters) {
+		if (param.name == "self") {
+			continue; // Skip self parameter in display
+		}
 		if (!first) {
 			md += ", ";
 		}
@@ -676,8 +764,11 @@ std::string HoverProvider::formatFunctionHover(const FunctionInfo &func, const s
 		md += param.name + " " + displayType;
 	}
 
-	std::string returnDisplayType = maxon::TypeConversion::arrayTypeToDisplayString(func.returnType);
-	md += ") " + returnDisplayType;
+	md += ")";
+	if (!func.returnType.empty() && func.returnType != "void") {
+		std::string returnDisplayType = maxon::TypeConversion::arrayTypeToDisplayString(func.returnType);
+		md += " returns " + returnDisplayType;
+	}
 	md += "\n```\n";
 
 	if (!doc.empty()) {
@@ -691,9 +782,12 @@ std::string HoverProvider::formatFunctionHover(const LSPSymbolInfo &symbol) {
 	std::string md = "```maxon\n";
 	md += "function " + symbol.name + "(";
 
-	// Add parameters from LSPSymbolInfo
+	// Add parameters from LSPSymbolInfo, skipping 'self' for methods
 	bool first = true;
 	for (const auto &param : symbol.parameters) {
+		if (param.name == "self") {
+			continue; // Skip self parameter in display
+		}
 		if (!first) {
 			md += ", ";
 		}
@@ -703,9 +797,9 @@ std::string HoverProvider::formatFunctionHover(const LSPSymbolInfo &symbol) {
 	}
 
 	md += ")";
-	if (!symbol.returnType.empty()) {
+	if (!symbol.returnType.empty() && symbol.returnType != "void") {
 		std::string returnDisplayType = maxon::TypeConversion::arrayTypeToDisplayString(symbol.returnType);
-		md += " " + returnDisplayType;
+		md += " returns " + returnDisplayType;
 	}
 	md += "\n```\n";
 

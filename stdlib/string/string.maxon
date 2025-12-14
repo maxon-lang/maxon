@@ -199,6 +199,28 @@ export type string is Hashable, Equatable, Iterable with character, InitableFrom
 		return __string_slice(_managed, startByte, endByte)
 	end '_sliceBytes'
 
+	function prefix(maxLength int) returns substring
+		var bytePos = 0
+		var charCount = 0
+		let byteLen = __string_len(_managed)
+		while bytePos < byteLen and charCount < maxLength 'prefix_loop'
+			bytePos = _findGraphemeEnd(bytePos, byteLen)
+			charCount = charCount + 1
+		end 'prefix_loop'
+		return __string_slice(_managed, 0, bytePos)
+	end 'prefix'
+
+	function suffix(fromIndex int) returns substring
+		var bytePos = 0
+		var charCount = 0
+		let byteLen = __string_len(_managed)
+		while bytePos < byteLen and charCount < fromIndex 'suffix_loop'
+			bytePos = _findGraphemeEnd(bytePos, byteLen)
+			charCount = charCount + 1
+		end 'suffix_loop'
+		return __string_slice(_managed, bytePos, byteLen)
+	end 'suffix'
+
 	// ============================================
 	// String operations
 	// ============================================
@@ -378,6 +400,18 @@ export type string is Hashable, Equatable, Iterable with character, InitableFrom
 		var sub = _sliceBytes(start, endPos)
 		return sub.toString()
 	end 'trimWhitespace'
+
+	// ============================================
+	// Character access
+	// ============================================
+
+	/// Get character at the given StringIndex
+	/// Returns nil if index is out of bounds
+	export function charAt(idx StringIndex) returns character
+		let byteLen = __string_len(_managed)
+		let endPos = _findGraphemeEnd(idx._bytePos, byteLen)
+		return _makeCharFromBytes(idx._bytePos, endPos - idx._bytePos)
+	end 'charAt'
 
 	// ============================================
 	// View accessors

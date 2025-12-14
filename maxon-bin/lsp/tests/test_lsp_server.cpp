@@ -965,6 +965,128 @@ end 'test')";
 	REQUIRE(content.find("int") != std::string::npos); // return type
 }
 
+TEST_CASE("LSP hover shows array method signature", "[lsp][hover][stdlib]") {
+	// Test that hovering over array methods like 'push' shows their signature
+	// This tests the generic type method lookup (array<T>.push -> array.push)
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string stdlibPath = (projectRoot / "stdlib").string();
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	std::string code = R"(function test()
+    var arr = [1, 2, 3]
+    arr.push(4)
+end 'test')";
+	std::string docUri = "file://" + (projectRoot / "examples" / "test.maxon").string();
+	fixture.openDocument(docUri, code);
+
+	// Request hover on 'push' at line 2
+	// Line 2: "    arr.push(4)" - 'push' starts at position 8
+	json hoverParams = {
+		{"textDocument", {{"uri", docUri}}},
+		{"position", {{"line", 2}, {"character", 10}}}};
+	fixture.transport()->queueRequest(2, "textDocument/hover", hoverParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(2);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+	REQUIRE(!response->result.value().is_null());
+
+	// The hover should show the method signature for push
+	std::string content = response->result.value()["contents"]["value"].get<std::string>();
+	INFO("Hover content: " << content);
+	REQUIRE(content.find("push") != std::string::npos);
+}
+
+TEST_CASE("LSP hover shows array method on struct field", "[lsp][hover][stdlib]") {
+	// Test that hovering over array methods on struct fields works
+	// This tests the case where a struct field (not a local variable) is an array
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string stdlibPath = (projectRoot / "stdlib").string();
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	std::string code = R"(type Buffer
+    var data array of byte
+
+    function addByte(b byte)
+        data.push(b)
+    end 'addByte'
+end 'Buffer')";
+	std::string docUri = "file://" + (projectRoot / "examples" / "test.maxon").string();
+	fixture.openDocument(docUri, code);
+
+	// Request hover on 'push' at line 4
+	// Line 4: "        data.push(b)" - 'push' starts at position 13
+	json hoverParams = {
+		{"textDocument", {{"uri", docUri}}},
+		{"position", {{"line", 4}, {"character", 14}}}};
+	fixture.transport()->queueRequest(2, "textDocument/hover", hoverParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(2);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+	REQUIRE(!response->result.value().is_null());
+
+	// The hover should show the method signature for push
+	std::string content = response->result.value()["contents"]["value"].get<std::string>();
+	INFO("Hover content: " << content);
+	REQUIRE(content.find("push") != std::string::npos);
+}
+
+TEST_CASE("LSP hover shows doc comment for stdlib method", "[lsp][hover][stdlib]") {
+	// Test that hovering over stdlib methods shows their doc comment
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+	std::string stdlibPath = (projectRoot / "stdlib").string();
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	std::string code = R"(function test()
+    var arr = [1, 2, 3]
+    arr.push(4)
+end 'test')";
+	std::string docUri = "file://" + (projectRoot / "examples" / "test.maxon").string();
+	fixture.openDocument(docUri, code);
+
+	// Request hover on 'push' at line 2
+	json hoverParams = {
+		{"textDocument", {{"uri", docUri}}},
+		{"position", {{"line", 2}, {"character", 10}}}};
+	fixture.transport()->queueRequest(2, "textDocument/hover", hoverParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(2);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+	REQUIRE(!response->result.value().is_null());
+
+	// The hover should show the doc comment "Append element to end"
+	std::string content = response->result.value()["contents"]["value"].get<std::string>();
+	INFO("Hover content: " << content);
+	REQUIRE(content.find("push") != std::string::npos);
+	REQUIRE(content.find("Append element to end") != std::string::npos);
+}
+
 // =============================================================================
 // Completion Tests
 // =============================================================================
@@ -1158,6 +1280,53 @@ end 'main'
 	auto response = fixture.transport()->findResponse(4);
 	REQUIRE(response.has_value());
 	REQUIRE(!response->error.has_value());
+}
+
+TEST_CASE("LSP definition works for array method on struct field", "[lsp][definition][stdlib]") {
+	// Test that go-to-definition works on array methods called on struct fields
+	std::filesystem::path testDir = std::filesystem::current_path();
+	std::filesystem::path projectRoot = testDir.parent_path().parent_path().parent_path().parent_path();
+
+	LSPTestFixture fixture;
+	std::string rootUri = "file://" + projectRoot.string();
+	fixture.initialize(rootUri);
+
+	std::string code = R"(type Buffer
+    var data array of byte
+
+    function addByte(b byte)
+        data.push(b)
+    end 'addByte'
+end 'Buffer')";
+	std::string docUri = "file://" + (projectRoot / "examples" / "test.maxon").string();
+	fixture.openDocument(docUri, code);
+
+	// Request definition on 'push' at line 4
+	// Line 4: "        data.push(b)" - 'push' starts at position 13
+	json defParams = {
+		{"textDocument", {{"uri", docUri}}},
+		{"position", {{"line", 4}, {"character", 14}}}};
+	fixture.transport()->queueRequest(4, "textDocument/definition", defParams);
+
+	fixture.shutdown();
+	fixture.run();
+
+	auto response = fixture.transport()->findResponse(4);
+	REQUIRE(response.has_value());
+	REQUIRE(!response->error.has_value());
+	REQUIRE(response->result.has_value());
+	REQUIRE(!response->result.value().is_null());
+
+	// The result should point to the stdlib array.maxon file
+	auto &result = response->result.value();
+	std::string uri;
+	if (result.is_array() && !result.empty()) {
+		uri = result[0]["uri"].get<std::string>();
+	} else if (result.contains("uri")) {
+		uri = result["uri"].get<std::string>();
+	}
+	INFO("Definition URI: " << uri);
+	REQUIRE(uri.find("array.maxon") != std::string::npos);
 }
 
 // =============================================================================

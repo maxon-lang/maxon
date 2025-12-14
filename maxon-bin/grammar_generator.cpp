@@ -19,6 +19,7 @@ int main(int argc, char *argv[]) {
 	auto literalKeywords = Lexer::getKeywordsByCategory(KeywordCategory::Literal);
 	auto mathIntrinsicKeywords = Lexer::getKeywordsByCategory(KeywordCategory::MathIntrinsic);
 	auto typeKeywords = Lexer::getKeywordsByCategory(KeywordCategory::Type);
+	auto operatorKeywords = Lexer::getKeywordsByCategory(KeywordCategory::Operator);
 
 	// Combine control flow and declaration keywords for block identifiers
 	std::vector<std::string> blockKeywords;
@@ -65,6 +66,7 @@ int main(int argc, char *argv[]) {
 	json += "            \"patterns\": [\n";
 	json += "                { \"name\": \"keyword.control.maxon\", \"match\": \"" + makePattern(controlFlowKeywords) + "\" },\n";
 	json += "                { \"name\": \"keyword.other.maxon\", \"match\": \"" + makePattern(declarationKeywords) + "\" },\n";
+	json += "                { \"name\": \"keyword.operator.logical.maxon\", \"match\": \"" + makePattern(operatorKeywords) + "\" },\n";
 	json += "                { \"name\": \"constant.language.boolean.maxon\", \"match\": \"" + makePattern(literalKeywords) + "\" },\n";
 	json += "                { \"name\": \"support.function.math.maxon\", \"match\": \"" + makePattern(mathIntrinsicKeywords) + "\" }\n";
 	json += "            ]\n";
@@ -72,8 +74,8 @@ int main(int argc, char *argv[]) {
 	json += "        \"block-labels\": {\n";
 	json += "            \"patterns\": [\n";
 	json += "                {\n";
-	json += "                    \"comment\": \"Block labels like 'main' after end, if, then, while, for, etc.\",\n";
-	json += "                    \"match\": \"(\\\\b(?:end|if|then|else|while|for)\\\\b)\\\\s*('[^']*')\",\n";
+	json += "                    \"comment\": \"Block labels like 'main' after end, if, then, while, for, or (guard-let), etc.\",\n";
+	json += "                    \"match\": \"(\\\\b(?:end|if|then|else|while|for|or)\\\\b)\\\\s*('[^']*')\",\n";
 	json += "                    \"captures\": {\n";
 	json += "                        \"1\": { \"name\": \"keyword.control.maxon\" },\n";
 	json += "                        \"2\": { \"name\": \"entity.name.label.maxon\" }\n";

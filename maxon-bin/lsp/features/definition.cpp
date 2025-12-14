@@ -1,4 +1,5 @@
 #include "definition.h"
+#include "../../types/type_conversion.h"
 #include <algorithm>
 
 namespace maxon_lsp {
@@ -22,9 +23,13 @@ std::optional<DefinitionProvider::DefinitionResult> DefinitionProvider::getDefin
 	if (isMemberAccess(document, position, objectName, memberName, cursorOnObject)) {
 		// Try to resolve the object's type and look up the field
 		if (cache) {
+			// Track the object's type for method lookup
+			std::string objectType;
+
 			// Check if objectName is a variable (use qualified lookup with position)
 			auto varPtr = cache->findVariable(objectName, position.line);
 			if (varPtr) {
+				objectType = varPtr->type;
 				if (cursorOnObject) {
 					// Cursor is on the variable name, return variable definition
 					return buildLocation(document.uri, varPtr->line, varPtr->column);
@@ -33,6 +38,56 @@ std::optional<DefinitionProvider::DefinitionResult> DefinitionProvider::getDefin
 				auto fieldLoc = lookupField(varPtr->type, memberName, cache, stdlib, projectSymbols, workspaceRoot, document.uri);
 				if (fieldLoc) {
 					return *fieldLoc;
+				}
+			}
+
+			// If objectName wasn't a variable, check if we're inside a struct method
+			// and objectName is a struct field
+			if (objectType.empty() && cache->ast) {
+				for (const auto &structDef : cache->ast->structs) {
+					for (const auto &method : structDef->methods) {
+						if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
+							// We're inside this struct's method - check its fields
+							for (const auto &field : structDef->fields) {
+								if (field.name == objectName) {
+									objectType = field.type;
+									if (cursorOnObject) {
+										// Cursor is on the field name, return field definition
+										return buildLocation(document.uri, field.line, field.column);
+									}
+									break;
+								}
+							}
+							break;
+						}
+					}
+					if (!objectType.empty())
+						break;
+				}
+			}
+
+			// If we found an object type, try to look up the method
+			if (!objectType.empty()) {
+				// Try method lookup with qualified name (Type.method)
+				std::string qualifiedMethodName = objectType + "." + memberName;
+				auto methodLoc = lookupFunction(qualifiedMethodName, cache, stdlib, projectSymbols, workspaceRoot, document.uri);
+				if (methodLoc) {
+					return *methodLoc;
+				}
+
+				// For generic types like array<T> or map<K,V>, try base type lookup
+				if (maxon::TypeConversion::isArrayStructType(objectType)) {
+					std::string baseMethodName = "array." + memberName;
+					methodLoc = lookupFunction(baseMethodName, cache, stdlib, projectSymbols, workspaceRoot, document.uri);
+					if (methodLoc) {
+						return *methodLoc;
+					}
+				} else if (maxon::TypeConversion::isMapStructType(objectType)) {
+					std::string baseMethodName = "map." + memberName;
+					methodLoc = lookupFunction(baseMethodName, cache, stdlib, projectSymbols, workspaceRoot, document.uri);
+					if (methodLoc) {
+						return *methodLoc;
+					}
 				}
 			}
 

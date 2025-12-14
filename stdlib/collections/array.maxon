@@ -54,212 +54,213 @@ export type array uses Element is Collection with Element, InitableFromArrayLite
 	// Initialize array from compiler-constructed _ManagedArray
 	// The compiler passes an opaque _ManagedArray value
 	static function InitableFromArrayLiteral.init(managed _ManagedArray) returns Self
-	return Self{managed: managed, iterIndex: 0}
-end 'init'
+		return Self{managed: managed, iterIndex: 0}
+	end 'init'
 
-// =========================================================================
-// Properties
-// =========================================================================
+	// =========================================================================
+	// Properties
+	// =========================================================================
 
-/// Get the number of elements in the array
-export function Collection.count() returns int
-	return __managed_array_len(managed)
-end 'count'
+	/// Get the number of elements in the array
+	export function Collection.count() returns int
+		return __managed_array_len(managed)
+	end 'count'
 
-/// Get the current capacity (allocated space)
-export function capacity() returns int
-	return __managed_array_capacity(managed)
-end 'capacity'
+	/// Get the current capacity (allocated space)
+	export function capacity() returns int
+		return __managed_array_capacity(managed)
+	end 'capacity'
 
-/// Check if array is empty
-export function isEmpty() returns bool
-	return __managed_array_len(managed) == 0
-end 'isEmpty'
+	/// Check if array is empty
+	export function isEmpty() returns bool
+		return __managed_array_len(managed) == 0
+	end 'isEmpty'
 
-/// Get first element, or nil if empty
-export function first() returns Element or nil
-	if __managed_array_len(managed) == 0 'empty'
-		return nil
-	end 'empty'
-	return managed[0]
-end 'first'
+	/// Get first element, or nil if empty
+	export function first() returns Element or nil
+		if __managed_array_len(managed) == 0 'empty'
+			return nil
+		end 'empty'
+		return managed[0]
+	end 'first'
 
-/// Get last element, or nil if empty
-export function last() returns Element or nil
-	var len = __managed_array_len(managed)
-	if len == 0 'empty'
-		return nil
-	end 'empty'
-	return managed[len - 1]
-end 'last'
+	/// Get last element, or nil if empty
+	export function last() returns Element or nil
+		var len = __managed_array_len(managed)
+		if len == 0 'empty'
+			return nil
+		end 'empty'
+		return managed[len - 1]
+	end 'last'
 
-// =========================================================================
-// Element Access
-// =========================================================================
+	// =========================================================================
+	// Element Access
+	// =========================================================================
 
-/// Get element at index, or nil if out of bounds
-export function Collection.get(index int) returns Element or nil
-	var len = __managed_array_len(managed)
-	if index < 0 'bounds'
-		return nil
-	end 'bounds'
-	if index >= len 'bounds'
-		return nil
-	end 'bounds'
-	return managed[index]
-end 'get'
-
-/// Set element at index (no-op if index out of bounds)
-export function Collection.set(index int, value Element) returns Self
-	var len = __managed_array_len(managed)
-	if index >= 0 'bounds'
-		if index < len 'bounds'
-			__managed_array_set_at(managed, index, value)
+	/// Get element at index, or nil if out of bounds
+	export function Collection.get(index int) returns Element or nil
+		var len = __managed_array_len(managed)
+		if index < 0 'bounds'
+			return nil
 		end 'bounds'
-	end 'bounds'
-	return self
-end 'set'
+		if index >= len 'bounds'
+			return nil
+		end 'bounds'
+		return managed[index]
+	end 'get'
 
-// =========================================================================
-// Mutating Operations
-// =========================================================================
-
-/// Ensure capacity for at least requiredLen elements, growing if needed
-function ensureCapacity(requiredLen int)
-	var cap = __managed_array_capacity(managed)
-	if requiredLen > cap 'grow'
-		// Double capacity until sufficient, minimum 4
-		var newCap = cap
-		if newCap < 4 'min'
-			newCap = 4
-		end 'min'
-		while newCap < requiredLen 'double'
-			newCap = newCap * 2
-		end 'double'
-		__managed_array_grow(managed, newCap)
-	end 'grow'
-end 'ensureCapacity'
-
-/// Append element to end
-export function push(value Element) returns Self
-	var len = __managed_array_len(managed)
-	ensureCapacity(len + 1)
-	__managed_array_set_at(managed, len, value)
-	__managed_array_set_length(managed, len + 1)
-	return self
-end 'push'
-
-/// Append all elements from another array
-export function append(other Self) returns Self
-	var otherLen = other.count()
-	if otherLen == 0 'empty'
+	/// Set element at index (no-op if index out of bounds)
+	export function Collection.set(index int, value Element) returns Self
+		var len = __managed_array_len(managed)
+		if index >= 0 'bounds'
+			if index < len 'bounds'
+				__managed_array_set_at(managed, index, value)
+			end 'bounds'
+		end 'bounds'
 		return self
-	end 'empty'
-	var len = __managed_array_len(managed)
-	ensureCapacity(len + otherLen)
-	for item in other 'copy'
-		__managed_array_set_at(managed, len, item)
-		len = len + 1
-	end 'copy'
-	__managed_array_set_length(managed, len)
-	return self
-end 'append'
+	end 'set'
 
-/// Remove and return last element, or nil if empty
-export function pop() returns Element or nil
-	var len = __managed_array_len(managed)
-	if len == 0 'empty'
-		return nil
-	end 'empty'
-	var newLen = len - 1
-	var value = managed[newLen]
-	__managed_array_set_length(managed, newLen)
-	return value
-end 'pop'
+	// =========================================================================
+	// Mutating Operations
+	// =========================================================================
 
-/// Insert element at index, shifting elements to the right (clamps index to [0, count])
-export function insert(at int, value Element) returns Self
-	var len = __managed_array_len(managed)
-	var index = at
+	/// Ensure capacity for at least requiredLen elements, growing if needed
+	function ensureCapacity(requiredLen int)
+		var cap = __managed_array_capacity(managed)
+		if requiredLen > cap 'grow'
+			// Double capacity until sufficient, minimum 4
+			var newCap = cap
+			if newCap < 4 'min'
+				newCap = 4
+			end 'min'
+			while newCap < requiredLen 'double'
+				newCap = newCap * 2
+			end 'double'
+			__managed_array_grow(managed, newCap)
+		end 'grow'
+	end 'ensureCapacity'
 
-	// Clamp index to valid range
-	if index < 0 'clamp'
-		index = 0
-	end 'clamp'
-	if index > len 'clamp'
-		index = len
-	end 'clamp'
+	/// Append element to end
+	export function push(value Element) returns Self
+		var len = __managed_array_len(managed)
+		ensureCapacity(len + 1)
+		__managed_array_set_at(managed, len, value)
+		__managed_array_set_length(managed, len + 1)
+		return self
+	end 'push'
 
-	// Ensure capacity
-	ensureCapacity(len + 1)
+	/// Append all elements from another array
+	export function append(other Self) returns Self
+		var otherLen = other.count()
+		if otherLen == 0 'empty'
+			return self
+		end 'empty'
+		var len = __managed_array_len(managed)
+		ensureCapacity(len + otherLen)
+		for item in other 'copy'
+			__managed_array_set_at(managed, len, item)
+			len = len + 1
+		end 'copy'
+		__managed_array_set_length(managed, len)
+		return self
+	end 'append'
 
-	// Shift elements right to make room
-	if index < len 'shift'
-		__managed_array_shift_right(managed, index, 1)
-	end 'shift'
+	/// Remove and return last element, or nil if empty
+	export function pop() returns Element or nil
+		var len = __managed_array_len(managed)
+		if len == 0 'empty'
+			return nil
+		end 'empty'
+		var newLen = len - 1
+		var value = managed[newLen]
+		__managed_array_set_length(managed, newLen)
+		return value
+	end 'pop'
 
-	// Insert element and update length
-	__managed_array_set_at(managed, index, value)
-	__managed_array_set_length(managed, len + 1)
-	return self
-end 'insert'
+	/// Insert element at index, shifting elements to the right (clamps index to [0, count])
+	export function insert(at int, value Element) returns Self
+		var len = __managed_array_len(managed)
+		var index = at
 
-/// Remove and return element at index, shifting elements to the left (returns nil if out of bounds)
-export function remove(at int) returns Element or nil
-	var len = __managed_array_len(managed)
+		// Clamp index to valid range
+		if index < 0 'clamp'
+			index = 0
+		end 'clamp'
+		if index > len 'clamp'
+			index = len
+		end 'clamp'
 
-	// Check bounds
-	if at < 0 'bounds'
-		return nil
-	end 'bounds'
-	if at >= len 'bounds'
-		return nil
-	end 'bounds'
+		// Ensure capacity
+		ensureCapacity(len + 1)
 
-	// Save element before shifting
-	var value = managed[at]
+		// Shift elements right to make room
+		if index < len 'shift'
+			__managed_array_shift_right(managed, index, 1)
+		end 'shift'
 
-	// Shift elements left to fill gap
-	if at < len - 1 'shift'
-		__managed_array_shift_left(managed, at, 1)
-	end 'shift'
+		// Insert element and update length
+		__managed_array_set_at(managed, index, value)
+		__managed_array_set_length(managed, len + 1)
+		return self
+	end 'insert'
 
-	__managed_array_set_length(managed, len - 1)
-	return value
-end 'remove'
+	/// Remove and return element at index, shifting elements to the left (returns nil if out of bounds)
+	export function remove(at int) returns Element or nil
+		var len = __managed_array_len(managed)
 
-/// Remove all elements from the array (keeps capacity)
-export function clear() returns Self
-	__managed_array_set_length(managed, 0)
-	return self
-end 'clear'
+		// Check bounds
+		if at < 0 'bounds'
+			return nil
+		end 'bounds'
+		if at >= len 'bounds'
+			return nil
+		end 'bounds'
 
-// =========================================================================
-// Capacity Management
-// =========================================================================
+		// Save element before shifting
+		var value = managed[at]
 
-/// Reserve space by ensuring array has at least minCapacity slots
-export function reserve(minCapacity int) returns Self
-	var cap = __managed_array_capacity(managed)
-	if minCapacity > cap 'grow'
-		__managed_array_grow(managed, minCapacity)
-	end 'grow'
-	return self
-end 'reserve'
+		// Shift elements left to fill gap
+		if at < len - 1 'shift'
+			__managed_array_shift_left(managed, at, 1)
+		end 'shift'
 
-// =========================================================================
-// Iterable Interface
-// =========================================================================
+		__managed_array_set_length(managed, len - 1)
+		return value
+	end 'remove'
 
-/// Get next element in iteration, or nil when exhausted
-function Iterable.next() returns Element or nil
-	var len = __managed_array_len(managed)
-	if iterIndex >= len 'done'
-		return nil
-	end 'done'
-	var value = managed[iterIndex]
-	iterIndex = iterIndex + 1
-	return value
-end 'next'
+	/// Remove all elements from the array (keeps capacity)
+	export function clear() returns Self
+		__managed_array_set_length(managed, 0)
+		return self
+	end 'clear'
+
+	// =========================================================================
+	// Capacity Management
+	// =========================================================================
+
+	/// Reserve space by ensuring array has at least minCapacity slots
+	export function reserve(minCapacity int) returns Self
+		var cap = __managed_array_capacity(managed)
+		if minCapacity > cap 'grow'
+			__managed_array_grow(managed, minCapacity)
+		end 'grow'
+		return self
+	end 'reserve'
+
+	// =========================================================================
+	// Iterable Interface
+	// =========================================================================
+
+	/// Get next element in iteration, or nil when exhausted
+	function Iterable.next() returns Element or nil
+		var len = __managed_array_len(managed)
+		if iterIndex >= len 'done'
+			return nil
+		end 'done'
+		var value = managed[iterIndex]
+		iterIndex = iterIndex + 1
+		return value
+	end 'next'
 end 'array'
+
 
