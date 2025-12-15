@@ -39,17 +39,18 @@ __ManagedStringData (SSO mode):
 
 ### Heap-Allocated Strings (capacity > 0)
 
-Larger strings use heap memory with a 16-byte header:
+Larger strings use heap memory with an 8-byte header:
 
 ```
 Heap allocation:
 +----------+----------+------------------+------+
 | refcount | data_sz  |      data        | null |
-|  (i64)   |  (i64)   |   (variable)     | term |
+|  (i32)   |  (i32)   |   (variable)     | term |
 +----------+----------+------------------+------+
-^                     ^
-|                     +-- data pointer (returned by _managed_string_alloc)
-+-- raw allocation pointer
+^          ^          ^
+|          |          +-- data pointer (returned by _managed_string_alloc)
+|          +-- offset 4: data size in bytes
++-- offset 0: refcount starts at 1
 
 __ManagedStringData (heap mode):
 +--------+--------+--------+
@@ -57,7 +58,7 @@ __ManagedStringData (heap mode):
 | (ptr)  | (i64)  | (i64)  |
 +--------+--------+--------+
     |
-    +---> Points to data area in heap allocation (offset +16 from raw)
+    +---> Points to data area in heap allocation (offset +8 from raw)
 ```
 
 ### Related Types
@@ -128,9 +129,13 @@ Located in `maxon-runtime/runtime.mir`:
 The compiler tracks allocations in `scopeStack` for automatic cleanup:
 
 ```cpp
-type ScopeInfo {
-    // Heap strings that need release at scope exit
+struct ScopeInfo {
+    // Heap string buffers (data pointers) that need release at scope exit
     std::vector<std::pair<std::string, mir::MIRValue*>> heapAllocatedStrings;
+
+    // __ManagedStringData metadata structs that need freeing at scope exit
+    // These are the 32-byte structs that hold {data_ptr, length, capacity}
+    std::vector<mir::MIRValue*> managedStringDataPtrs;
 
     // Cstrings that need release (field 0 is the data pointer)
     std::vector<std::pair<std::string, mir::MIRValue*>> cstringAllocas;
@@ -139,6 +144,14 @@ type ScopeInfo {
     std::vector<std::pair<std::string, mir::MIRValue*>> substringAllocas;
 };
 ```
+
+### Ownership Transfer
+
+When an interpolated string result is assigned to a variable, ownership of the 
+`__ManagedStringData` struct transfers to that variable. The compiler calls
+`transferManagedStringDataOwnership()` to remove the last tracked metadata struct
+from cleanup, since it's now owned by the variable and will be freed when that
+variable goes out of scope.
 
 At scope exit (`popScope`), the compiler emits cleanup code for all tracked allocations.
 
@@ -311,18 +324,18 @@ Leaked:    0 bytes
 1. **Leaked bytes**: Check that all heap strings are tracked in `scopeStack`
 2. **Double free**: Verify refcounting logic, especially for shared strings
 3. **Use after free**: Ensure substrings retain their parent before use
-4. **Wrong size in tracking**: Header is 16 bytes, allocation is `capacity + 16`
+4. **Wrong size in tracking**: Header is 8 bytes, allocation is `capacity + 8`
 
 ### Header Layout Verification
 
-The header at `data - 16` should have:
-- Offset 0-7: refcount (i64)
-- Offset 8-15: data_size (i64)
+The header at `data - 8` should have:
+- Offset 0-3: refcount (i32)
+- Offset 4-7: data_size (i32)
 
 To verify in the debugger:
 ```
 # At breakpoint in _managed_string_release
-# data is the argument, header is at data - 16
-print *(int64_t*)(data - 16)  # refcount
-print *(int64_t*)(data - 8)   # data_size
+# data is the argument, header is at data - 8
+print *(int32_t*)(data - 8)  # refcount
+print *(int32_t*)(data - 4)  # data_size
 ```

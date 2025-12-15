@@ -28,8 +28,6 @@ end 'main'
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.__tag.str.meta = constant [16 x i8] c"string metadata\00"
-@.__tag.arr.lit.outer_arr = constant [14 x i8] c"array literal\00"
-@.__tag.arr.lit.inner_arr = constant [14 x i8] c"array literal\00"
 @.__tag.free.outer_arr = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.inner_arr = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
@@ -82,7 +80,7 @@ entry0:
   br i1 1, label %then1, label %ifcont2
 then1:
   %0 = alloca %array<int>
-  %1 = call ptr @malloc(i64 8, ptr @.__tag.arr.lit.outer_arr)
+  %1 = alloca [0 x i64]
   %2 = getelementptr %array<int>, ptr %0, i32 0, i32 0
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
   store ptr %1, ptr %3
@@ -106,7 +104,7 @@ ifcont2:
   br i1 %43, label %outer_arr.release5, label %outer_arr.skip6
 then3:
   %8 = alloca %array<int>
-  %9 = call ptr @malloc(i64 8, ptr @.__tag.arr.lit.inner_arr)
+  %9 = alloca [0 x i64]
   %10 = getelementptr %array<int>, ptr %8, i32 0, i32 0
   %11 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 0
   store ptr %9, ptr %11
@@ -362,8 +360,6 @@ declare void @__print_alloc_summary()
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.__tag.str.meta = constant [16 x i8] c"string metadata\00"
-@.__tag.arr.lit.outer_arr = constant [14 x i8] c"array literal\00"
-@.__tag.arr.lit.inner_arr = constant [14 x i8] c"array literal\00"
 @.__tag.free.outer_arr = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.inner_arr = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
@@ -419,7 +415,7 @@ entry0:
   br i1 1, label %then1, label %ifcont2
 then1:
   %0 = alloca %array<int>
-  %1 = call ptr @malloc(i64 8, ptr @.__tag.arr.lit.outer_arr)
+  %1 = alloca [0 x i64]
   %2 = getelementptr %array<int>, ptr %0, i32 0, i32 0
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
   store ptr %1, ptr %3
@@ -441,7 +437,7 @@ ifcont2:
   br i1 %43, label %outer_arr.release5, label %outer_arr.skip6
 then3:
   %8 = alloca %array<int>
-  %9 = call ptr @malloc(i64 8, ptr @.__tag.arr.lit.inner_arr)
+  %9 = alloca [0 x i64]
   %10 = getelementptr %array<int>, ptr %8, i32 0, i32 0
   %11 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 0
   store ptr %9, ptr %11
@@ -729,49 +725,43 @@ declare void @__print_alloc_summary()
 TrackAllocs: true
 ExitCode: 0
 Stdout: ```
-ALLOC #1: 8 bytes (array literal)
+ALLOC #1: 40 bytes (array grow)
 ALLOC #2: 40 bytes (array grow)
 ALLOC #3: 40 bytes (array grow)
-ALLOC #4: 8 bytes (array literal)
-ALLOC #5: 40 bytes (array grow)
-ALLOC #6: 40 bytes (array grow)
-ALLOC #7: 12 bytes (int.toString)
-ALLOC #8: 12 bytes (int.toString)
-ALLOC #9: 32 bytes (int.toString)
-200ALLOC #10: 32 bytes (string metadata)
-ALLOC #11: 10 bytes (cstring conversion)
-ALLOC #12: 10 bytes (cstring conversion)
-FREE #12: 10 bytes (cstring release)
-FREE #11: 10 bytes (cstring release)
+ALLOC #4: 40 bytes (array grow)
+ALLOC #5: 12 bytes (int.toString)
+ALLOC #6: 12 bytes (int.toString)
+ALLOC #7: 32 bytes (int.toString)
+200ALLOC #8: 32 bytes (string metadata)
+ALLOC #9: 10 bytes (cstring conversion)
+ALLOC #10: 10 bytes (cstring conversion)
+FREE #10: 10 bytes (cstring release)
+FREE #9: 10 bytes (cstring release)
 
-FREE #10: 32 bytes (string metadata)
-FREE #8: 12 bytes (cstring release)
-FREE #7: 12 bytes (cstring release)
-ALLOC #13: 12 bytes (int.toString)
-ALLOC #14: 12 bytes (int.toString)
-ALLOC #15: 32 bytes (int.toString)
-100ALLOC #16: 32 bytes (string metadata)
-ALLOC #17: 10 bytes (cstring conversion)
-ALLOC #18: 10 bytes (cstring conversion)
-FREE #18: 10 bytes (cstring release)
-FREE #17: 10 bytes (cstring release)
+FREE #8: 32 bytes (string metadata)
+FREE #6: 12 bytes (cstring release)
+FREE #5: 12 bytes (cstring release)
+ALLOC #11: 12 bytes (int.toString)
+ALLOC #12: 12 bytes (int.toString)
+ALLOC #13: 32 bytes (int.toString)
+100ALLOC #14: 32 bytes (string metadata)
+ALLOC #15: 10 bytes (cstring conversion)
+ALLOC #16: 10 bytes (cstring conversion)
+FREE #16: 10 bytes (cstring release)
+FREE #15: 10 bytes (cstring release)
 
-FREE #16: 32 bytes (string metadata)
-FREE #14: 12 bytes (cstring release)
-FREE #13: 12 bytes (cstring release)
-FREE #3: 40 bytes (array cleanup)
+FREE #14: 32 bytes (string metadata)
+FREE #12: 12 bytes (cstring release)
+FREE #11: 12 bytes (cstring release)
 FREE #2: 40 bytes (array cleanup)
-FREE #6: 40 bytes (array cleanup)
-FREE #5: 40 bytes (array cleanup)
-FREE #9: 32 bytes (string metadata)
-FREE #15: 32 bytes (string metadata)
-
-=== LEAKS ===
-LEAK #1: 8 bytes (array literal)
-LEAK #4: 8 bytes (array literal)
+FREE #1: 40 bytes (array cleanup)
+FREE #4: 40 bytes (array cleanup)
+FREE #3: 40 bytes (array cleanup)
+FREE #7: 32 bytes (string metadata)
+FREE #13: 32 bytes (string metadata)
 
 === ALLOC STATS ===
-Allocated: 392 bytes
+Allocated: 376 bytes
 Freed:     376 bytes
-Leaked:    16 bytes
+Leaked:    0 bytes
 ```

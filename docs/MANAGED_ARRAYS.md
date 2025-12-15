@@ -19,8 +19,9 @@ All array variables have type `array<T>` regardless of how they're declared:
 |-------------|------|----------|
 | `let arr = [1, 2, 3]` | `array<int>` | Stack buffer, capacity = 0 |
 | `let arr = array of 5 int` | `array<int>` | Stack buffer, capacity = 0 |
-| `var arr = [1, 2, 3]` | `array<int>` | Heap buffer, capacity > 0 |
-| `var arr = array of 5 int` | `array<int>` | Heap buffer, capacity > 0 |
+| `var arr = [1, 2, 3]` | `array<int>` | Stack buffer initially, heap on growth |
+| `var arr = array of 5 int` | `array<int>` | Stack buffer, capacity = 0 |
+| `var arr = array of int` | `array<int>` | Empty, capacity = 0, heap on push() |
 
 This unified type system means all arrays support the same methods (`.count()`, `.push()`, etc.) though mutating methods like `.push()` require a `var` declaration.
 
@@ -32,12 +33,21 @@ The capacity field determines array ownership:
 
 | Capacity | Meaning |
 |----------|---------|
-| 0 | Stack-allocated buffer - no heap ownership |
+| 0 | Stack-allocated buffer (or empty) - no heap ownership |
 | > 0 | Heap-allocated with ownership - buffer can be freed |
+
+### Empty Arrays
+
+Empty mutable arrays (`var arr = array of int`) start with:
+- `_buffer`: null or uninitialized pointer
+- `_len`: 0
+- `_capacity`: 0 (no heap allocation yet)
+
+When `push()` is called, a heap buffer is allocated via `_managed_array_alloc` and capacity becomes > 0.
 
 ### Stack Arrays (capacity = 0)
 
-Arrays declared with `let` store their buffer on the stack:
+Arrays declared with `let` or fixed-size `var` arrays store their buffer on the stack:
 
 ```
 __ManagedArrayData<T> (stack mode):
@@ -53,16 +63,16 @@ Stack arrays have capacity = 0 to indicate they don't own the buffer (no heap al
 
 ### Heap-Allocated Arrays (capacity > 0)
 
-Arrays declared with `var` use heap memory with a 16-byte header for reference counting:
+Arrays declared with `var` use heap memory with an 8-byte header for reference counting:
 
 ```
 Heap allocation:
 +----------+----------+----------------+
 | refcount | dataSize | element data   |
-| (i64)    | (i64)    | ...            |
+| (i32)    | (i32)    | ...            |
 +----------+----------+----------------+
 ^          ^          ^
-offset 0   offset 8   offset 16 (data pointer returned by _managed_array_alloc)
+offset 0   offset 4   offset 8 (data pointer returned by _managed_array_alloc)
 
 __ManagedArrayData<T> (heap mode):
 +--------+--------+--------+
@@ -70,7 +80,7 @@ __ManagedArrayData<T> (heap mode):
 | (ptr)  | (i64)  | (i64)  |
 +--------+--------+--------+
     |
-    +---> Points to data area in heap allocation (offset +16 from raw)
+    +---> Points to data area in heap allocation (offset +8 from raw)
 ```
 
 ### Array Type Structure

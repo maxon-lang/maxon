@@ -970,6 +970,43 @@ Replaced the fragile multi-pass size recomputation with a robust dependency-trac
 - `codegen_mir.cpp` - Updated to use `setFieldTypes()` instead of direct assignment
 - `backend/x86_codegen.cpp` - Updated to use `getSizeInBytes()` instead of `sizeInBytes`
 
+### Winchester 1.7 (2025-12-14)
+
+**Memory Management Improvements: String and Array Leak Fixes:**
+
+1. **String Metadata (`__ManagedStringData`) Cleanup:**
+   - **Problem:** 32-byte `__ManagedStringData` structs were heap-allocated for string interpolation but never freed, causing memory leaks.
+   - **Fix:** Added tracking for metadata structs via `managedStringDataPtrs` in `ScopeInfo`. At scope exit, each tracked struct is freed via `free()`.
+   - **Ownership Transfer:** When an interpolated string is assigned to a variable, `transferManagedStringDataOwnership()` removes the struct from cleanup tracking (the variable now owns it).
+   - **Location:** [codegen_mir.cpp:743-762](maxon-bin/codegen_mir.cpp#L743-L762)
+
+2. **String Reassignment Memory Leak:**
+   - **Problem:** When reassigning a string variable (`s = "{s}{a}"`), the old data buffer was freed but the old `__ManagedStringData` struct was leaked.
+   - **Fix:** Save old managed pointer before assignment, then free both the old buffer AND the old metadata struct.
+   - **Location:** [codegen_mir_stmt_assign.cpp](maxon-bin/codegen_mir/codegen_mir_stmt_assign.cpp)
+
+3. **Empty Array Initial Allocation Leak:**
+   - **Problem:** `var arr = array of int` allocated 8 bytes via raw `malloc` (no refcount header) that was never freed because `_managed_array_release` expected a header.
+   - **Fix:** Empty mutable arrays now start with `capacity = 0` (stack-like, no allocation). When `push()` is called, `_managed_array_alloc` creates a proper heap buffer with the 8-byte refcount header.
+   - **Location:** [codegen_mir_stmt_decl.cpp:254](maxon-bin/codegen_mir/codegen_mir_stmt_decl.cpp#L254)
+
+**Heap Allocation Header Format (8 bytes):**
+```
++----------+----------+----------------+
+| refcount | dataSize | data...        |
+| (i32)    | (i32)    |                |
++----------+----------+----------------+
+^          ^          ^
+offset 0   offset 4   offset 8 (data pointer)
+```
+
+- **Files Changed:**
+  - `codegen_mir.h` - Added `transferManagedStringDataOwnership()`, `managedStringDataPtrs` in `ScopeInfo`
+  - `codegen_mir.cpp` - Implemented ownership transfer, scope cleanup for metadata structs
+  - `codegen_mir_stmt_decl.cpp` - Empty arrays use capacity=0 (no initial heap allocation)
+  - `codegen_mir_stmt_assign.cpp` - Free old managed data on string reassignment
+  - `codegen_mir_expr_string.cpp` - Track interpolation result metadata
+
 ### Winchester 1.6 (2025-12-14)
 
 **Critical Bug Fix: Struct Return Corruption with Nested Pointer Types:**

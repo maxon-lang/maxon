@@ -250,8 +250,9 @@ bool MIRCodeGenerator::tryGenerateSizedArrayDecl(const DeclInfo &decl) {
 	uint64_t totalSize = arraySize * elementSize;
 
 	// Threshold for stack allocation (4KB)
+	// Empty arrays (size 0) always start as stack-allocated, push() will allocate heap when needed
 	constexpr uint64_t STACK_ARRAY_THRESHOLD = 4096;
-	bool useHeap = totalSize > STACK_ARRAY_THRESHOLD || (decl.isMutable && arraySize == 0);
+	bool useHeap = totalSize > STACK_ARRAY_THRESHOLD;
 
 	// Create array<T> struct alloca
 	mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);

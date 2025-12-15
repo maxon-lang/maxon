@@ -23,7 +23,6 @@ end 'main'
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.__tag.str.meta = constant [16 x i8] c"string metadata\00"
-@.__tag.arr.lit.arr = constant [14 x i8] c"array literal\00"
 @.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [2 x i8] c"\0A\00"
@@ -73,7 +72,7 @@ cstring.continue3:
 define i64 @main() {
 entry0:
   %0 = alloca %array<int>
-  %1 = call ptr @malloc(i64 8, ptr @.__tag.arr.lit.arr)
+  %1 = alloca [0 x i64]
   %2 = getelementptr %array<int>, ptr %0, i32 0, i32 0
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
   store ptr %1, ptr %3
@@ -309,7 +308,6 @@ declare void @__print_alloc_summary()
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.__tag.str.meta = constant [16 x i8] c"string metadata\00"
-@.__tag.arr.lit.arr = constant [14 x i8] c"array literal\00"
 @.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [2 x i8] c"\0A\00"
@@ -362,7 +360,7 @@ cstring.continue3:
 define i64 @main() {
 entry0:
   %0 = alloca %array<int>
-  %1 = call ptr @malloc(i64 8, ptr @.__tag.arr.lit.arr)
+  %1 = alloca [0 x i64]
   %2 = getelementptr %array<int>, ptr %0, i32 0, i32 0
   %3 = getelementptr %__ManagedArrayData_int, ptr %2, i32 0, i32 0
   store ptr %1, ptr %3
@@ -637,30 +635,26 @@ declare void @__print_alloc_summary()
 TrackAllocs: true
 ExitCode: 0
 Stdout: ```
-ALLOC #1: 8 bytes (array literal)
+ALLOC #1: 40 bytes (array grow)
 ALLOC #2: 40 bytes (array grow)
-ALLOC #3: 40 bytes (array grow)
+ALLOC #3: 10 bytes (int.toString)
 ALLOC #4: 10 bytes (int.toString)
-ALLOC #5: 10 bytes (int.toString)
-ALLOC #6: 32 bytes (int.toString)
-3ALLOC #7: 32 bytes (string metadata)
+ALLOC #5: 32 bytes (int.toString)
+3ALLOC #6: 32 bytes (string metadata)
+ALLOC #7: 10 bytes (cstring conversion)
 ALLOC #8: 10 bytes (cstring conversion)
-ALLOC #9: 10 bytes (cstring conversion)
-FREE #9: 10 bytes (cstring release)
 FREE #8: 10 bytes (cstring release)
+FREE #7: 10 bytes (cstring release)
 
-FREE #7: 32 bytes (string metadata)
-FREE #5: 10 bytes (cstring release)
-FREE #4: 10 bytes (cstring release)
-FREE #3: 40 bytes (array cleanup)
-FREE #2: 40 bytes (array cleanup)
 FREE #6: 32 bytes (string metadata)
-
-=== LEAKS ===
-LEAK #1: 8 bytes (array literal)
+FREE #4: 10 bytes (cstring release)
+FREE #3: 10 bytes (cstring release)
+FREE #2: 40 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
+FREE #5: 32 bytes (string metadata)
 
 === ALLOC STATS ===
-Allocated: 192 bytes
+Allocated: 184 bytes
 Freed:     184 bytes
-Leaked:    8 bytes
+Leaked:    0 bytes
 ```
