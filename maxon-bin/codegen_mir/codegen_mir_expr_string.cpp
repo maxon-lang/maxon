@@ -646,16 +646,21 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 	// Start with the first part and concatenate the rest
 	mir::MIRValue *result = stringParts[0];
 
-	// Get types needed for extracting buffer pointer
-	mir::MIRType *managedStringDataType = structTypes["__ManagedStringData"];
-	if (!managedStringDataType) {
-		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
-		managedStringDataType = module->getOrCreateStructType(
-			"__ManagedStringData",
-			{unsizedArrayType, mir::MIRType::getInt64(), mir::MIRType::getInt64()});
-		structTypes["__ManagedStringData"] = managedStringDataType;
+	// Only set up types for cleanup tracking if we have multiple parts to concatenate
+	mir::MIRType *managedStringDataType = nullptr;
+	mir::MIRType *unsizedArrayType = nullptr;
+	if (stringParts.size() > 1) {
+		// Get types needed for extracting buffer pointer
+		managedStringDataType = structTypes["__ManagedStringData"];
+		if (!managedStringDataType) {
+			unsizedArrayType = structTypes["_ManagedArray_byte"];
+			managedStringDataType = module->getOrCreateStructType(
+				"__ManagedStringData",
+				{unsizedArrayType, mir::MIRType::getInt64(), mir::MIRType::getInt64()});
+			structTypes["__ManagedStringData"] = managedStringDataType;
+		}
+		unsizedArrayType = structTypes["_ManagedArray_byte"];
 	}
-	mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 
 	for (size_t i = 1; i < stringParts.size(); i++) {
 		// Call string.concat(self, other)
