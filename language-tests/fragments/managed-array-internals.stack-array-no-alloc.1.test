@@ -5,8 +5,32 @@ function main() returns int
     return 0
 end 'main'
 ---
+OptimizedInstructions: 0
+UnoptimizedInstructions: 0
+TrackAllocs: true
+ExitCode: 0
+Stdout: ```
+ALLOC #1: 11 bytes (int.toString)
+ALLOC #2: 11 bytes (int.toString)
+ALLOC #3: 32 bytes (int.toString)
+20ALLOC #4: 32 bytes (string metadata)
+ALLOC #5: 10 bytes (cstring conversion)
+ALLOC #6: 10 bytes (cstring conversion)
+FREE #6: 10 bytes (cstring release)
+FREE #5: 10 bytes (cstring release)
+
+FREE #4: 32 bytes (string metadata)
+FREE #2: 11 bytes (cstring release)
+FREE #1: 11 bytes (cstring release)
+FREE #3: 32 bytes (string metadata)
+
+=== ALLOC STATS ===
+Allocated: 106 bytes
+Freed:     106 bytes
+Leaked:    0 bytes
+```
+---
 ; Module: test.maxon
-; Instructions: 124
 
 %string = type { ptr, i64 }
 %cstring = type { ptr, i64, ptr }
@@ -198,7 +222,6 @@ declare void @__print_alloc_summary()
 
 ---
 ; Module: test.maxon
-; Instructions: 139
 
 %string = type { ptr, i64 }
 %cstring = type { ptr, i64, ptr }
@@ -403,26 +426,3 @@ declare void @__enable_alloc_tracking()
 
 declare void @__print_alloc_summary()
 
----
-TrackAllocs: true
-ExitCode: 0
-Stdout: ```
-ALLOC #1: 11 bytes (int.toString)
-ALLOC #2: 11 bytes (int.toString)
-ALLOC #3: 32 bytes (int.toString)
-20ALLOC #4: 32 bytes (string metadata)
-ALLOC #5: 10 bytes (cstring conversion)
-ALLOC #6: 10 bytes (cstring conversion)
-FREE #6: 10 bytes (cstring release)
-FREE #5: 10 bytes (cstring release)
-
-FREE #4: 32 bytes (string metadata)
-FREE #2: 11 bytes (cstring release)
-FREE #1: 11 bytes (cstring release)
-FREE #3: 32 bytes (string metadata)
-
-=== ALLOC STATS ===
-Allocated: 106 bytes
-Freed:     106 bytes
-Leaked:    0 bytes
-```

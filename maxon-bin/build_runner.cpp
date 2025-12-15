@@ -29,7 +29,7 @@ std::optional<std::string> executeBuildMaxon(const std::string &buildFile) {
 		options.verboseLevel = 0;
 		options.emitIR = false;
 		options.compileOnly = false;
-		options.silent = true; // Suppress output when building build.maxon
+		// showProgress defaults to false, so no output when building build.maxon
 
 		std::string executablePath = compileProgram(options);
 

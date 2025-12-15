@@ -249,6 +249,7 @@ int main(int argc, char *argv[]) {
 			if (!options.outputFile.empty())
 				buildOptions.outputFile = options.outputFile;
 			buildOptions.verboseLevel = options.verboseLevel;
+			buildOptions.showProgress = true; // Show compilation progress for build command
 
 			// Create output directory
 			std::filesystem::path outputPath(buildOptions.outputFile);
@@ -279,6 +280,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		options.inputFiles = files;
+		options.showProgress = true; // Show compilation progress for build command
 
 		// Create bin/ directory for output
 		std::filesystem::create_directories("bin");

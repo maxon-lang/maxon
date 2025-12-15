@@ -5,176 +5,176 @@ function main() returns int
     return 0
 end 'main'
 ---
-; Module: test.maxon
-; Instructions: 43
-
-@__ffi_dll_ffi_test_lib = constant [17 x i8] c"ffi_test_lib.dll\00"
-@__ffi_func_0 = constant [12 x i8] c"process_ptr\00"
-
-define i64 @main() {
-entry0:
-  ret i64 0
-}
-
-declare ptr @LoadLibraryA(ptr %arg0)
-
-declare ptr @GetProcAddress(ptr %arg0, ptr %arg1)
-
-define void @__ffi_dispatch(ptr %shm_ptr, i32 %func_id) {
-entry0:
-  %0 = icmp eq i32 %func_id, 0
-  br i1 %0, label %call_03, label %check_14
-unknown_func1:
-  %15 = getelementptr i8, ptr %shm_ptr, i64 12
-  store i32 102, ptr %15
-  br label %done2
-done2:
-  ret void
-call_03:
-  br label %load_lib_06
-check_14:
-  br label %unknown_func1
-do_call_05:
-  %5 = getelementptr i8, ptr %shm_ptr, i64 16
-  %6 = getelementptr i8, ptr %5, i64 0
-  %7 = load i64, ptr %6
-  %8 = inttoptr i64 %7 to ptr
-  %9 = call_indirect i32 %3(ptr %8)
-  %10 = getelementptr i8, ptr %shm_ptr, i64 144
-  %11 = zext i32 %9 to i64
-  store i64 %11, ptr %10
-  %12 = getelementptr i8, ptr %shm_ptr, i64 12
-  store i32 0, ptr %12
-  br label %done2
-load_lib_06:
-  %1 = call ptr @LoadLibraryA(ptr @__ffi_dll_ffi_test_lib)
-  %2 = icmp ne ptr %1, null
-  br i1 %2, label %get_addr_07, label %dll_error_08
-get_addr_07:
-  %3 = call ptr @GetProcAddress(ptr %1, ptr @__ffi_func_0)
-  %4 = icmp ne ptr %3, null
-  br i1 %4, label %do_call_05, label %func_error_09
-dll_error_08:
-  %13 = getelementptr i8, ptr %shm_ptr, i64 12
-  store i32 100, ptr %13
-  br label %done2
-func_error_09:
-  %14 = getelementptr i8, ptr %shm_ptr, i64 12
-  store i32 101, ptr %14
-  br label %done2
-}
-
-declare void @exit(i32 %arg0)
-
-define void @_start() {
-entry0:
-  br label %check_worker1
-check_worker1:
-  %0 = call i32 @ffi_is_worker_mode()
-  %1 = icmp ne i32 %0, 0
-  br i1 %1, label %run_worker3, label %run_main2
-run_main2:
-  %3 = call i64 @main()
-  call void @__ffi_parent_cleanup()
-  call void @exit(i64 %3)
-  ret void
-run_worker3:
-  %2 = call i32 @__ffi_worker_main()
-  call void @exit(i32 %2)
-  ret void
-}
-
-declare i32 @ffi_is_worker_mode()
-
-declare i32 @__ffi_worker_main()
-
-declare void @__ffi_parent_cleanup()
-
----
-; Module: test.maxon
-; Instructions: 43
-
-@__ffi_dll_ffi_test_lib = constant [17 x i8] c"ffi_test_lib.dll\00"
-@__ffi_func_0 = constant [12 x i8] c"process_ptr\00"
-
-define i64 @main() {
-entry0:
-  ret i64 0
-}
-
-declare ptr @LoadLibraryA(ptr %arg0)
-
-declare ptr @GetProcAddress(ptr %arg0, ptr %arg1)
-
-define void @__ffi_dispatch(ptr %shm_ptr, i32 %func_id) {
-entry0:
-  %0 = icmp eq i32 %func_id, 0
-  br i1 %0, label %call_03, label %check_14
-unknown_func1:
-  %15 = getelementptr i8, ptr %shm_ptr, i64 12
-  store i32 102, ptr %15
-  br label %done2
-done2:
-  ret void
-call_03:
-  br label %load_lib_06
-check_14:
-  br label %unknown_func1
-do_call_05:
-  %5 = getelementptr i8, ptr %shm_ptr, i64 16
-  %6 = getelementptr i8, ptr %5, i64 0
-  %7 = load i64, ptr %6
-  %8 = inttoptr i64 %7 to ptr
-  %9 = call_indirect i32 %3(ptr %8)
-  %10 = getelementptr i8, ptr %shm_ptr, i64 144
-  %11 = zext i32 %9 to i64
-  store i64 %11, ptr %10
-  %12 = getelementptr i8, ptr %shm_ptr, i64 12
-  store i32 0, ptr %12
-  br label %done2
-load_lib_06:
-  %1 = call ptr @LoadLibraryA(ptr @__ffi_dll_ffi_test_lib)
-  %2 = icmp ne ptr %1, null
-  br i1 %2, label %get_addr_07, label %dll_error_08
-get_addr_07:
-  %3 = call ptr @GetProcAddress(ptr %1, ptr @__ffi_func_0)
-  %4 = icmp ne ptr %3, null
-  br i1 %4, label %do_call_05, label %func_error_09
-dll_error_08:
-  %13 = getelementptr i8, ptr %shm_ptr, i64 12
-  store i32 100, ptr %13
-  br label %done2
-func_error_09:
-  %14 = getelementptr i8, ptr %shm_ptr, i64 12
-  store i32 101, ptr %14
-  br label %done2
-}
-
-declare void @exit(i32 %arg0)
-
-define void @_start() {
-entry0:
-  br label %check_worker1
-check_worker1:
-  %0 = call i32 @ffi_is_worker_mode()
-  %1 = icmp ne i32 %0, 0
-  br i1 %1, label %run_worker3, label %run_main2
-run_main2:
-  %3 = call i64 @main()
-  call void @__ffi_parent_cleanup()
-  call void @exit(i64 %3)
-  ret void
-run_worker3:
-  %2 = call i32 @__ffi_worker_main()
-  call void @exit(i32 %2)
-  ret void
-}
-
-declare i32 @ffi_is_worker_mode()
-
-declare i32 @__ffi_worker_main()
-
-declare void @__ffi_parent_cleanup()
-
----
+OptimizedInstructions: 0
+UnoptimizedInstructions: 0
 ExitCode: 0
+---
+; Module: test.maxon
+
+@__ffi_dll_ffi_test_lib = constant [17 x i8] c"ffi_test_lib.dll\00"
+@__ffi_func_0 = constant [12 x i8] c"process_ptr\00"
+
+define i64 @main() {
+entry0:
+  ret i64 0
+}
+
+declare ptr @LoadLibraryA(ptr %arg0)
+
+declare ptr @GetProcAddress(ptr %arg0, ptr %arg1)
+
+define void @__ffi_dispatch(ptr %shm_ptr, i32 %func_id) {
+entry0:
+  %0 = icmp eq i32 %func_id, 0
+  br i1 %0, label %call_03, label %check_14
+unknown_func1:
+  %15 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 102, ptr %15
+  br label %done2
+done2:
+  ret void
+call_03:
+  br label %load_lib_06
+check_14:
+  br label %unknown_func1
+do_call_05:
+  %5 = getelementptr i8, ptr %shm_ptr, i64 16
+  %6 = getelementptr i8, ptr %5, i64 0
+  %7 = load i64, ptr %6
+  %8 = inttoptr i64 %7 to ptr
+  %9 = call_indirect i32 %3(ptr %8)
+  %10 = getelementptr i8, ptr %shm_ptr, i64 144
+  %11 = zext i32 %9 to i64
+  store i64 %11, ptr %10
+  %12 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 0, ptr %12
+  br label %done2
+load_lib_06:
+  %1 = call ptr @LoadLibraryA(ptr @__ffi_dll_ffi_test_lib)
+  %2 = icmp ne ptr %1, null
+  br i1 %2, label %get_addr_07, label %dll_error_08
+get_addr_07:
+  %3 = call ptr @GetProcAddress(ptr %1, ptr @__ffi_func_0)
+  %4 = icmp ne ptr %3, null
+  br i1 %4, label %do_call_05, label %func_error_09
+dll_error_08:
+  %13 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 100, ptr %13
+  br label %done2
+func_error_09:
+  %14 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 101, ptr %14
+  br label %done2
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  br label %check_worker1
+check_worker1:
+  %0 = call i32 @ffi_is_worker_mode()
+  %1 = icmp ne i32 %0, 0
+  br i1 %1, label %run_worker3, label %run_main2
+run_main2:
+  %3 = call i64 @main()
+  call void @__ffi_parent_cleanup()
+  call void @exit(i64 %3)
+  ret void
+run_worker3:
+  %2 = call i32 @__ffi_worker_main()
+  call void @exit(i32 %2)
+  ret void
+}
+
+declare i32 @ffi_is_worker_mode()
+
+declare i32 @__ffi_worker_main()
+
+declare void @__ffi_parent_cleanup()
+
+---
+; Module: test.maxon
+
+@__ffi_dll_ffi_test_lib = constant [17 x i8] c"ffi_test_lib.dll\00"
+@__ffi_func_0 = constant [12 x i8] c"process_ptr\00"
+
+define i64 @main() {
+entry0:
+  ret i64 0
+}
+
+declare ptr @LoadLibraryA(ptr %arg0)
+
+declare ptr @GetProcAddress(ptr %arg0, ptr %arg1)
+
+define void @__ffi_dispatch(ptr %shm_ptr, i32 %func_id) {
+entry0:
+  %0 = icmp eq i32 %func_id, 0
+  br i1 %0, label %call_03, label %check_14
+unknown_func1:
+  %15 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 102, ptr %15
+  br label %done2
+done2:
+  ret void
+call_03:
+  br label %load_lib_06
+check_14:
+  br label %unknown_func1
+do_call_05:
+  %5 = getelementptr i8, ptr %shm_ptr, i64 16
+  %6 = getelementptr i8, ptr %5, i64 0
+  %7 = load i64, ptr %6
+  %8 = inttoptr i64 %7 to ptr
+  %9 = call_indirect i32 %3(ptr %8)
+  %10 = getelementptr i8, ptr %shm_ptr, i64 144
+  %11 = zext i32 %9 to i64
+  store i64 %11, ptr %10
+  %12 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 0, ptr %12
+  br label %done2
+load_lib_06:
+  %1 = call ptr @LoadLibraryA(ptr @__ffi_dll_ffi_test_lib)
+  %2 = icmp ne ptr %1, null
+  br i1 %2, label %get_addr_07, label %dll_error_08
+get_addr_07:
+  %3 = call ptr @GetProcAddress(ptr %1, ptr @__ffi_func_0)
+  %4 = icmp ne ptr %3, null
+  br i1 %4, label %do_call_05, label %func_error_09
+dll_error_08:
+  %13 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 100, ptr %13
+  br label %done2
+func_error_09:
+  %14 = getelementptr i8, ptr %shm_ptr, i64 12
+  store i32 101, ptr %14
+  br label %done2
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  br label %check_worker1
+check_worker1:
+  %0 = call i32 @ffi_is_worker_mode()
+  %1 = icmp ne i32 %0, 0
+  br i1 %1, label %run_worker3, label %run_main2
+run_main2:
+  %3 = call i64 @main()
+  call void @__ffi_parent_cleanup()
+  call void @exit(i64 %3)
+  ret void
+run_worker3:
+  %2 = call i32 @__ffi_worker_main()
+  call void @exit(i32 %2)
+  ret void
+}
+
+declare i32 @ffi_is_worker_mode()
+
+declare i32 @__ffi_worker_main()
+
+declare void @__ffi_parent_cleanup()
+

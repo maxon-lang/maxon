@@ -256,16 +256,7 @@ void MIRCodeGenerator::generateGuardLet(GuardLetStmtAST *guardLet, mir::MIRFunct
 	builder->setInsertPoint(hasValueBlock);
 	mir::MIRValue *valuePtr = builder->createStructGEP(optionalType, optionalAlloca, 1, "value.ptr");
 	mir::MIRValue *unwrappedValue = builder->createLoad(unwrappedType, valuePtr, "unwrapped.val");
-
-	// For struct types, the optional stores a pointer to the struct.
-	// We need to load the actual struct data from that pointer.
-	if (structTypes.find(unwrappedTypeStr) != structTypes.end()) {
-		// unwrappedValue is a pointer to the struct - load the struct data
-		mir::MIRValue *structData = builder->createLoad(unwrappedType, unwrappedValue, "struct.data");
-		builder->createStore(structData, resultAlloca);
-	} else {
-		builder->createStore(unwrappedValue, resultAlloca);
-	}
+	builder->createStore(unwrappedValue, resultAlloca);
 	builder->createBr(afterBlock);
 
 	// Guard block: nil case - execute guard body (must exit scope)

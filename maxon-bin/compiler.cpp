@@ -345,7 +345,7 @@ std::string compileProgram(const CompilationOptions &options) {
 	std::set<std::string> processedFiles(options.inputFiles.begin(), options.inputFiles.end());
 
 	for (const auto &inputFile : options.inputFiles) {
-		if (!options.silent) {
+		if (options.showProgress) {
 			std::cout << "Compiling: " << normalizePathForDisplay(inputFile) << std::endl;
 		}
 		sources.push_back(readFile(inputFile));
@@ -473,7 +473,7 @@ std::string compileProgram(const CompilationOptions &options) {
 			logger.progress(LogPhase::Semantic, "Auto-importing ", filesToImport.size(), " stdlib file(s)");
 
 			for (const auto &file : filesToImport) {
-				if (!options.silent) {
+				if (options.showProgress) {
 					std::cout << "Compiling: " << normalizePathForDisplay(file) << std::endl;
 				}
 				logger.progress(LogPhase::Semantic, "  -> ", normalizePathForDisplay(file));
@@ -655,7 +655,7 @@ std::string compileProgram(const CompilationOptions &options) {
 	}
 
 	// Print output info
-	if (!options.silent) {
+	if (options.showProgress) {
 		std::cout << "Output: " << outputFile << std::endl;
 	}
 	logger.progress(LogPhase::General, "Output: ", outputFile);

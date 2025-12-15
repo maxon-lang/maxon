@@ -6,8 +6,38 @@ function main() returns int
     return 0
 end 'main'
 ---
+OptimizedInstructions: 0
+UnoptimizedInstructions: 0
+TrackAllocs: true
+ExitCode: 0
+Stdout: ```
+ALLOC #1: 32 bytes (string literal)
+ALLOC #2: 32 bytes (string literal)
+ALLOC #3: 32 bytes (string metadata)
+ALLOC #4: 10 bytes (int.toString)
+ALLOC #5: 10 bytes (int.toString)
+ALLOC #6: 32 bytes (int.toString)
+5ALLOC #7: 32 bytes (string metadata)
+ALLOC #8: 10 bytes (cstring conversion)
+ALLOC #9: 10 bytes (cstring conversion)
+FREE #9: 10 bytes (cstring release)
+FREE #8: 10 bytes (cstring release)
+
+FREE #7: 32 bytes (string metadata)
+FREE #5: 10 bytes (cstring release)
+FREE #4: 10 bytes (cstring release)
+FREE #6: 32 bytes (string metadata)
+FREE #2: 32 bytes (string literal)
+FREE #1: 32 bytes (string literal)
+FREE #3: 32 bytes (string metadata)
+
+=== ALLOC STATS ===
+Allocated: 200 bytes
+Freed:     200 bytes
+Leaked:    0 bytes
+```
+---
 ; Module: test.maxon
-; Instructions: 630
 
 %substring = type { ptr, ptr, i64, i64 }
 %string = type { ptr, i64 }
@@ -875,7 +905,6 @@ declare void @__print_alloc_summary()
 
 ---
 ; Module: test.maxon
-; Instructions: 975
 
 %substring = type { ptr, ptr, i64, i64 }
 %string = type { ptr, i64 }
@@ -2103,32 +2132,3 @@ declare void @__enable_alloc_tracking()
 
 declare void @__print_alloc_summary()
 
----
-TrackAllocs: true
-ExitCode: 0
-Stdout: ```
-ALLOC #1: 32 bytes (string literal)
-ALLOC #2: 32 bytes (string literal)
-ALLOC #3: 32 bytes (string metadata)
-ALLOC #4: 10 bytes (int.toString)
-ALLOC #5: 10 bytes (int.toString)
-ALLOC #6: 32 bytes (int.toString)
-5ALLOC #7: 32 bytes (string metadata)
-ALLOC #8: 10 bytes (cstring conversion)
-ALLOC #9: 10 bytes (cstring conversion)
-FREE #9: 10 bytes (cstring release)
-FREE #8: 10 bytes (cstring release)
-
-FREE #7: 32 bytes (string metadata)
-FREE #5: 10 bytes (cstring release)
-FREE #4: 10 bytes (cstring release)
-FREE #6: 32 bytes (string metadata)
-FREE #2: 32 bytes (string literal)
-FREE #1: 32 bytes (string literal)
-FREE #3: 32 bytes (string metadata)
-
-=== ALLOC STATS ===
-Allocated: 200 bytes
-Freed:     200 bytes
-Leaked:    0 bytes
-```
