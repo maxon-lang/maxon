@@ -287,7 +287,7 @@ end 'main'
 ```maxon
 function main() returns int
     var emoji = '🎉'
-    print(emoji.toString())
+    print("{emoji}")
     return 0
 end 'main'
 ```
@@ -305,7 +305,7 @@ end 'main'
 function main() returns int
     var flag = '🇺🇸'
     print("{flag.bytes().count()}")
-    print(flag.toString())
+    print("{flag}")
     return 0
 end 'main'
 ```

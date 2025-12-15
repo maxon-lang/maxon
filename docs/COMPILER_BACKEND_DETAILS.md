@@ -942,17 +942,26 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 
 ### Winchester 1.6 (2025-12-14)
 
-**Critical Bug Fix: Optional Type Size Computation with Forward-Declared Structs:**
-- Fixed incorrect size calculation for `Optional<T>` types when `T` is a forward-declared struct
-- **Root Cause:** During compilation, struct types are forward-declared with empty fields (size=0) in Pass 1a. Function declarations in Pass 1c parse return types like `character or nil`, creating Optional types. These Optionals are cached with size=1 (just the tag byte) because the wrapped struct's size is still 0. Later in Pass 1d, struct fields are filled in, but cached Optional sizes were never recomputed.
-- **Symptom:** Character-to-string conversion via string interpolation (`"{c}"`) in for-loops and if-let constructs printed the entire source string instead of individual characters. For example, iterating over `"ab"` printed "ab\nab" instead of "a\nb".
-- **Fix:** Added `MIRType::recomputeAllOptionalSizes()` function that recomputes sizes for all cached Optional types. This is called after Pass 1d fills in struct fields.
+**Critical Bug Fix: Struct and Optional Type Size Computation with Forward-Declared Types:**
+
+Two related issues with type size computation when structs contain nested struct types:
+
+1. **Struct Size Computation:**
+   - **Root Cause:** User-defined structs (like `Name{first: string, last: string}`) had size=0 when their field types (`string`) were still forward-declared during Pass 1d. After `recomputeSize()` was called, nested struct field types still had size=0, leading to incorrect total struct sizes.
+   - **Symptom:** `genLoad` for large aggregates checks `sizeInBytes > 8` to determine if `emitStructCopy` is needed. With size=0, only 8 bytes were copied instead of the full struct (e.g., 32 bytes for `Name` with two 16-byte strings), causing ACCESS_VIOLATION crashes.
+   - **Fix:** After Pass 1d fills in all struct fields, iterate over `structTypes` and call `recomputeSize()` on each. This ensures nested struct sizes are correct before computing the containing struct's size.
+
+2. **Optional Type Size Computation:**
+   - **Root Cause:** Optional types created during function declarations (Pass 1c) cached with size=1 because wrapped types still had size=0.
+   - **Symptom:** Character-to-string conversion via string interpolation printed incorrect output.
+   - **Fix:** Added `MIRType::recomputeAllOptionalSizes()` to recompute all cached Optional sizes after struct fields are filled in.
+
 - **Files Changed:**
   - `mir.h` - Added `recomputeAllOptionalSizes()` declaration
   - `mir.cpp` - Moved `optionalCache` to file scope and implemented `recomputeAllOptionalSizes()`
-  - `codegen_mir.cpp` - Call `recomputeAllOptionalSizes()` after Pass 1d
+  - `codegen_mir.cpp` - Recompute all struct sizes after Pass 1d, then call `recomputeAllOptionalSizes()`
 
-**Location:** [maxon-bin/mir/mir.cpp:82-103](maxon-bin/mir/mir.cpp#L82-L103), [maxon-bin/codegen_mir.cpp:1767](maxon-bin/codegen_mir.cpp#L1767)
+**Location:** [maxon-bin/codegen_mir.cpp:1767-1773](maxon-bin/codegen_mir.cpp#L1767-L1773)
 
 ### Winchester 1.5 (2025-12-10)
 

@@ -6,7 +6,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 184
+; Instructions: 169
 
 %string = type { ptr, i64 }
 %cstring = type { ptr, i64, ptr }
@@ -17,10 +17,9 @@ end 'main'
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.__tag.alloc.string concat = constant [14 x i8] c"string concat\00"
 @.str.sso.1 = constant [8 x i8] c"Line1: \00"
-@.str.sso.2 = constant [1 x i8] c"\00"
-@.str.sso.3 = constant [13 x i8] c"\0ALine2: done\00"
+@.str.sso.2 = constant [13 x i8] c"\0ALine2: done\00"
 @.__tag.free.interp.intermediate = constant [15 x i8] c"string literal\00"
-@.str.sso.4 = constant [2 x i8] c"\0A\00"
+@.str.sso.3 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
@@ -123,52 +122,37 @@ entry0:
   store ptr %2, ptr %8
   %9 = getelementptr %string, ptr %1, i32 0, i32 1
   store i64 0, ptr %9
-  %11 = alloca %string
-  %12 = alloca %__ManagedStringData
-  %13 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
-  %14 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 0
-  store ptr @.str.sso.2, ptr %14
-  %15 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 1
-  store i64 0, ptr %15
-  %16 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 1
-  store i64 0, ptr %16
-  %17 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 2
-  store i64 0, ptr %17
-  %18 = getelementptr %string, ptr %11, i32 0, i32 0
-  store ptr %12, ptr %18
-  %19 = getelementptr %string, ptr %11, i32 0, i32 1
+  %11 = call %string @__int_toString(i64 42, ptr null)
+  %12 = alloca %string
+  store %string %11, ptr %12
+  %13 = alloca %string
+  %14 = alloca %__ManagedStringData
+  %15 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 0
+  %16 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 0
+  store ptr @.str.sso.2, ptr %16
+  %17 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 1
+  store i64 12, ptr %17
+  %18 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 1
+  store i64 12, ptr %18
+  %19 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 2
   store i64 0, ptr %19
-  %20 = call %string @__int_toString(i64 42, ptr %11)
-  %21 = alloca %string
-  store %string %20, ptr %21
-  %22 = alloca %string
-  %23 = alloca %__ManagedStringData
-  %24 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 0
-  %25 = getelementptr %_ManagedArray_byte, ptr %24, i32 0, i32 0
-  store ptr @.str.sso.3, ptr %25
-  %26 = getelementptr %_ManagedArray_byte, ptr %24, i32 0, i32 1
-  store i64 12, ptr %26
-  %27 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 1
-  store i64 12, ptr %27
-  %28 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 2
-  store i64 0, ptr %28
-  %29 = getelementptr %string, ptr %22, i32 0, i32 0
-  store ptr %23, ptr %29
-  %30 = getelementptr %string, ptr %22, i32 0, i32 1
-  store i64 0, ptr %30
-  %31 = call %string @string.concat(ptr %1, ptr %21)
-  %32 = alloca %string
-  store %string %31, ptr %32
-  %33 = getelementptr %string, ptr %32, i32 0, i32 0
-  %34 = load ptr, ptr %33
-  %35 = getelementptr %__ManagedStringData, ptr %34, i32 0, i32 0
-  %36 = getelementptr %_ManagedArray_byte, ptr %35, i32 0, i32 0
-  %37 = load ptr, ptr %36
-  %39 = call %string @string.concat(ptr %32, ptr %22)
-  %40 = alloca %string
-  store %string %39, ptr %40
-  %41 = call i64 @sys.print(ptr %40)
-  call void @_managed_string_release(ptr %37, ptr @.__tag.free.interp.intermediate)
+  %20 = getelementptr %string, ptr %13, i32 0, i32 0
+  store ptr %14, ptr %20
+  %21 = getelementptr %string, ptr %13, i32 0, i32 1
+  store i64 0, ptr %21
+  %22 = call %string @string.concat(ptr %1, ptr %12)
+  %23 = alloca %string
+  store %string %22, ptr %23
+  %24 = getelementptr %string, ptr %23, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = getelementptr %__ManagedStringData, ptr %25, i32 0, i32 0
+  %27 = getelementptr %_ManagedArray_byte, ptr %26, i32 0, i32 0
+  %28 = load ptr, ptr %27
+  %30 = call %string @string.concat(ptr %23, ptr %13)
+  %31 = alloca %string
+  store %string %30, ptr %31
+  %32 = call i64 @sys.print(ptr %31)
+  call void @_managed_string_release(ptr %28, ptr @.__tag.free.interp.intermediate)
   ret i64 0
 }
 
@@ -186,7 +170,7 @@ entry0:
   %11 = alloca %__ManagedStringData
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
   %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
-  store ptr @.str.sso.4, ptr %13
+  store ptr @.str.sso.3, ptr %13
   %14 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 1
   store i64 1, ptr %14
   %15 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 1
@@ -251,7 +235,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 205
+; Instructions: 190
 
 %string = type { ptr, i64 }
 %cstring = type { ptr, i64, ptr }
@@ -262,10 +246,9 @@ entry0:
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.__tag.alloc.string concat = constant [14 x i8] c"string concat\00"
 @.str.sso.1 = constant [8 x i8] c"Line1: \00"
-@.str.sso.2 = constant [1 x i8] c"\00"
-@.str.sso.3 = constant [13 x i8] c"\0ALine2: done\00"
+@.str.sso.2 = constant [13 x i8] c"\0ALine2: done\00"
 @.__tag.free.interp.intermediate = constant [15 x i8] c"string literal\00"
-@.str.sso.4 = constant [2 x i8] c"\0A\00"
+@.str.sso.3 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
@@ -380,55 +363,40 @@ entry0:
   %9 = getelementptr %string, ptr %1, i32 0, i32 1
   store i64 0, ptr %9
   %10 = load i64, ptr %0
-  %11 = alloca %string
-  %12 = alloca %__ManagedStringData
-  %13 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 0
-  %14 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 0
-  store ptr @.str.sso.2, ptr %14
-  %15 = getelementptr %_ManagedArray_byte, ptr %13, i32 0, i32 1
-  store i64 0, ptr %15
-  %16 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 1
-  store i64 0, ptr %16
-  %17 = getelementptr %__ManagedStringData, ptr %12, i32 0, i32 2
-  store i64 0, ptr %17
-  %18 = getelementptr %string, ptr %11, i32 0, i32 0
-  store ptr %12, ptr %18
-  %19 = getelementptr %string, ptr %11, i32 0, i32 1
+  %11 = call %string @__int_toString(i64 %10, ptr null)
+  %12 = alloca %string
+  store %string %11, ptr %12
+  %13 = alloca %string
+  %14 = alloca %__ManagedStringData
+  %15 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 0
+  %16 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 0
+  store ptr @.str.sso.2, ptr %16
+  %17 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 1
+  store i64 12, ptr %17
+  %18 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 1
+  store i64 12, ptr %18
+  %19 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 2
   store i64 0, ptr %19
-  %20 = call %string @__int_toString(i64 %10, ptr %11)
-  %21 = alloca %string
-  store %string %20, ptr %21
-  %22 = alloca %string
-  %23 = alloca %__ManagedStringData
-  %24 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 0
-  %25 = getelementptr %_ManagedArray_byte, ptr %24, i32 0, i32 0
-  store ptr @.str.sso.3, ptr %25
-  %26 = getelementptr %_ManagedArray_byte, ptr %24, i32 0, i32 1
-  store i64 12, ptr %26
-  %27 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 1
-  store i64 12, ptr %27
-  %28 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 2
-  store i64 0, ptr %28
-  %29 = getelementptr %string, ptr %22, i32 0, i32 0
-  store ptr %23, ptr %29
-  %30 = getelementptr %string, ptr %22, i32 0, i32 1
-  store i64 0, ptr %30
-  %31 = call %string @string.concat(ptr %1, ptr %21)
-  %32 = alloca %string
-  store %string %31, ptr %32
-  %33 = getelementptr %string, ptr %32, i32 0, i32 0
-  %34 = load ptr, ptr %33
-  %35 = getelementptr %__ManagedStringData, ptr %34, i32 0, i32 0
-  %36 = getelementptr %_ManagedArray_byte, ptr %35, i32 0, i32 0
-  %37 = load ptr, ptr %36
-  %38 = alloca ptr
-  store ptr %37, ptr %38
-  %39 = call %string @string.concat(ptr %32, ptr %22)
-  %40 = alloca %string
-  store %string %39, ptr %40
-  %41 = call i64 @sys.print(ptr %40)
-  %42 = load ptr, ptr %38
-  call void @_managed_string_release(ptr %42, ptr @.__tag.free.interp.intermediate)
+  %20 = getelementptr %string, ptr %13, i32 0, i32 0
+  store ptr %14, ptr %20
+  %21 = getelementptr %string, ptr %13, i32 0, i32 1
+  store i64 0, ptr %21
+  %22 = call %string @string.concat(ptr %1, ptr %12)
+  %23 = alloca %string
+  store %string %22, ptr %23
+  %24 = getelementptr %string, ptr %23, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = getelementptr %__ManagedStringData, ptr %25, i32 0, i32 0
+  %27 = getelementptr %_ManagedArray_byte, ptr %26, i32 0, i32 0
+  %28 = load ptr, ptr %27
+  %29 = alloca ptr
+  store ptr %28, ptr %29
+  %30 = call %string @string.concat(ptr %23, ptr %13)
+  %31 = alloca %string
+  store %string %30, ptr %31
+  %32 = call i64 @sys.print(ptr %31)
+  %33 = load ptr, ptr %29
+  call void @_managed_string_release(ptr %33, ptr @.__tag.free.interp.intermediate)
   ret i64 0
 }
 
@@ -451,7 +419,7 @@ entry0:
   %11 = alloca %__ManagedStringData
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
   %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
-  store ptr @.str.sso.4, ptr %13
+  store ptr @.str.sso.3, ptr %13
   %14 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 1
   store i64 1, ptr %14
   %15 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 1

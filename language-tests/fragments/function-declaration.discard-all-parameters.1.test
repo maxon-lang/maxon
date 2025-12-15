@@ -1,0 +1,56 @@
+// Test: function-declaration.discard-all-parameters.1
+function ignoreAll(_ int, _ float) returns int
+    return 7
+end 'ignoreAll'
+
+function main() returns int
+    return ignoreAll(100, 3.14)
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 4
+
+define i64 @main() {
+entry0:
+  ret i64 7
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 10
+
+define i64 @ignoreAll(i64 %_, f64 %_) {
+entry0:
+  %0 = alloca i64
+  store i64 %_, ptr %0
+  %1 = alloca f64
+  store f64 %_, ptr %1
+  ret i64 7
+}
+
+define i64 @main() {
+entry0:
+  %0 = call i64 @ignoreAll(i64 100, f64 3.14)
+  ret i64 %0
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+ExitCode: 7

@@ -44,7 +44,33 @@ end 'name'
 function name(param1 type1, param2 type2)
     // statements
 end 'name'
+
+// Function with discard parameter (unused parameter)
+function name(_ type1, param2 type2) returns returnType
+    // param2 is usable, _ is discarded
+    return value
+end 'name'
 ```
+
+### Discard Parameters
+
+Use `_` as a parameter name to indicate an unused parameter. This is useful when:
+- Implementing an interface method where you don't need all parameters
+- Callback functions where some arguments are unused
+- Future-proofing function signatures for API compatibility
+
+Multiple `_` parameters are allowed in the same function:
+
+```maxon
+function callback(_ int, _ string, value float) returns float
+    return value * 2.0
+end 'callback'
+```
+
+Discard parameters:
+- Cannot be referenced in the function body (compile error)
+- Do not generate "unused parameter" warnings
+- Multiple `_` parameters are allowed
 ### Example
 
 ```maxon
@@ -130,7 +156,7 @@ Hello
 
 <!-- test: missing-returns-keyword-error -->
 ```maxon
-returns int
+function foo() int
     return 0
 end 'foo'
 
@@ -138,7 +164,55 @@ function main() returns int
     return 0
 end 'main'
 ```
-```error
-missing 'returns' keyword
+```maxoncstderr
+In file 'temp_fragment.maxon':
+Unexpected token: 'int'
+  Note: Expected a statement (var, let, if, while, return, break, continue, match, or assignment)
+  Location: line 2, column 16
+```
+
+
+<!-- test: discard-single-parameter -->
+```maxon
+function useSecond(_ int, b int) returns int
+    return b
+end 'useSecond'
+
+function main() returns int
+    return useSecond(10, 42)
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: discard-multiple-parameters -->
+```maxon
+function useThird(_ int, _ string, c int) returns int
+    return c
+end 'useThird'
+
+function main() returns int
+    return useThird(1, "ignored", 99)
+end 'main'
+```
+```exitcode
+99
+```
+
+
+<!-- test: discard-all-parameters -->
+```maxon
+function ignoreAll(_ int, _ float) returns int
+    return 7
+end 'ignoreAll'
+
+function main() returns int
+    return ignoreAll(100, 3.14)
+end 'main'
+```
+```exitcode
+7
 ```
 

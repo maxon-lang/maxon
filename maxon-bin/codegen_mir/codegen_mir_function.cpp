@@ -69,15 +69,19 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 		// Store the parameter value (get parameter from function)
 		mir::MIRValue *paramVal = function->parameters[argIdx];
 		builder->createStore(paramVal, alloca);
-		namedValues[param.name] = alloca;
-		variableTypes[param.name] = param.type;
+
+		// Skip adding discard parameters (_) to namedValues - they can't be referenced
+		if (!param.isDiscard) {
+			namedValues[param.name] = alloca;
+			variableTypes[param.name] = param.type;
+		}
 		argIdx++;
 
 		// Track if this is a struct parameter (passed by pointer)
 		// Also check for array<T> struct types and _ManagedArray<T> types which are passed by pointer
-		if (structTypes.find(param.type) != structTypes.end() ||
-			maxon::TypeConversion::isArrayStructType(param.type) ||
-			maxon::TypeConversion::isManagedArrayType(param.type)) {
+		if (!param.isDiscard && (structTypes.find(param.type) != structTypes.end() ||
+								 maxon::TypeConversion::isArrayStructType(param.type) ||
+								 maxon::TypeConversion::isManagedArrayType(param.type))) {
 			structParameters.insert(param.name);
 		}
 	}
@@ -303,15 +307,19 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 		// Store the parameter value (get parameter from function)
 		mir::MIRValue *paramVal = function->parameters[argIdx];
 		builder->createStore(paramVal, alloca);
-		namedValues[param.name] = alloca;
-		variableTypes[param.name] = substitutedType;
+
+		// Skip adding discard parameters (_) to namedValues - they can't be referenced
+		if (!param.isDiscard) {
+			namedValues[param.name] = alloca;
+			variableTypes[param.name] = substitutedType;
+		}
 		argIdx++;
 
 		// Track if this is a struct parameter (passed by pointer)
 		// Also check for array<T> struct types and _ManagedArray<T> types which are passed by pointer
-		if (structTypes.find(substitutedType) != structTypes.end() ||
-			maxon::TypeConversion::isArrayStructType(substitutedType) ||
-			maxon::TypeConversion::isManagedArrayType(substitutedType)) {
+		if (!param.isDiscard && (structTypes.find(substitutedType) != structTypes.end() ||
+								 maxon::TypeConversion::isArrayStructType(substitutedType) ||
+								 maxon::TypeConversion::isManagedArrayType(substitutedType))) {
 			structParameters.insert(param.name);
 		}
 	}

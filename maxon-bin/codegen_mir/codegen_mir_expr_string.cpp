@@ -543,16 +543,6 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 			mir::MIRValue *exprVal = generateExpr(part.expr.get());
 			std::string exprType = getExpressionMaxonType(part.expr.get());
 
-			// Generate the format spec string (empty string for default)
-			mir::MIRValue *formatSpecArg;
-			if (part.formatSpec.empty()) {
-				StringLiteralExprAST emptySpec("", interpExpr->line, interpExpr->column);
-				formatSpecArg = generateStringLiteral(&emptySpec);
-			} else {
-				StringLiteralExprAST specExpr(part.formatSpec, interpExpr->line, interpExpr->column);
-				formatSpecArg = generateStringLiteral(&specExpr);
-			}
-
 			// Call toString on the expression
 			// For built-in types, we call intrinsics; for user types, call Type.toString(spec)
 			mir::MIRValue *strVal = nullptr;
@@ -571,10 +561,18 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 				}
 			} else if (exprType == "int" || exprType == "float" || exprType == "bool" ||
 					   exprType == "byte" || exprType == "character") {
-				// Built-in types - call intrinsic toString
-				// For now, we'll generate calls to placeholder functions that we'll implement
-				// The intrinsics will be: __int_toString, __float_toString, etc.
+				// Built-in types - call intrinsic toString with ptr for format spec
+				// Built-in intrinsics take (value, ptr) where ptr is null for no format
 				std::string intrinsicName = "__" + exprType + "_toString";
+
+				// Generate format spec: null ptr for no format, string ptr for format
+				mir::MIRValue *formatSpecArg;
+				if (part.formatSpec.empty()) {
+					formatSpecArg = builder->getNull();
+				} else {
+					StringLiteralExprAST specExpr(part.formatSpec, interpExpr->line, interpExpr->column);
+					formatSpecArg = generateStringLiteral(&specExpr);
+				}
 
 				// Declare the intrinsic if not already declared
 				mir::MIRFunction *toStringFunc = module->getFunction(intrinsicName);
@@ -592,19 +590,47 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 				builder->createStore(strVal, strAlloca);
 				strVal = strAlloca;
 			} else {
-				// User type - call Type.toString(spec)
+				// User type - call Type.toString(format string or nil)
+				// The function signature is: toString(self ptr, format Optional<string>)
 				std::string methodName = exprType + ".toString";
 				mir::MIRFunction *toStringFunc = module->getFunction(methodName);
 
 				if (!toStringFunc) {
-					// Method should exist (semantic analyzer checked), but declare if needed
+					// The method should already be declared by codegen, but declare if needed
+					// Second parameter is Optional<string>, i.e. "string or nil"
+					mir::MIRType *optStringType = getTypeFromString("string or nil");
 					toStringFunc = builder->declareFunction(methodName,
 															stringType,
-															{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+															{mir::MIRType::getPtr(), optStringType});
 				}
 
-				// Call: result = Type.toString(self, spec)
-				strVal = builder->createCall(toStringFunc, {exprVal, formatSpecArg}, "toString.result");
+				// Ensure exprVal is a pointer (methods take self by pointer)
+				mir::MIRValue *selfPtr = exprVal;
+				if (exprVal->type->isStruct()) {
+					// It's a struct value, need to store to alloca and pass pointer
+					mir::MIRType *structType = getTypeFromString(exprType);
+					mir::MIRValue *alloca = builder->createAlloca(structType, "interp.self");
+					builder->createStore(exprVal, alloca);
+					selfPtr = alloca;
+				}
+
+				// Generate format spec: nil optional for no format, wrapped string for format
+				mir::MIRType *optStringType = getTypeFromString("string or nil");
+				mir::MIRValue *formatSpecArg;
+				if (part.formatSpec.empty()) {
+					// Create nil optional
+					formatSpecArg = createNilOptional(optStringType);
+				} else {
+					// Create string and wrap in optional
+					StringLiteralExprAST specExpr(part.formatSpec, interpExpr->line, interpExpr->column);
+					mir::MIRValue *formatStr = generateStringLiteral(&specExpr);
+					// Load the string value (formatStr is a pointer to string)
+					mir::MIRValue *formatStrVal = builder->createLoad(stringType, formatStr, "format.str.val");
+					formatSpecArg = createSomeOptional(optStringType, formatStrVal);
+				}
+
+				// Call: result = Type.toString(self, format)
+				strVal = builder->createCall(toStringFunc, {selfPtr, formatSpecArg}, "toString.result");
 
 				// For struct returns, store in alloca
 				mir::MIRValue *strAlloca = builder->createAlloca(stringType, "interp.str");

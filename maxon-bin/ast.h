@@ -671,17 +671,20 @@ class ErrorStmtAST : public StmtAST {
 // named arguments: name type [= default]
 // - name: Parameter name (used both internally and at call site for named arguments)
 // - defaultValue: Optional default value expression (nullptr if required parameter)
+// - isDiscard: True if parameter name is "_" (discard pattern)
 // Parameters with defaults can ONLY be provided via named arguments at call site
+// Discard parameters (_) cannot be referenced in the function body
 struct FunctionParameter {
 	std::string name;
 	std::string type;
 	std::shared_ptr<ExprAST> defaultValue; // nullptr if no default (required parameter)
+	bool isDiscard;                        // true if name is "_" (discard pattern)
 	int line;
 	int column;
 
 	FunctionParameter(const std::string &n, const std::string &t, int l = 0, int c = 0,
 					  std::shared_ptr<ExprAST> defVal = nullptr)
-		: name(n), type(t), defaultValue(std::move(defVal)), line(l), column(c) {}
+		: name(n), type(t), defaultValue(std::move(defVal)), isDiscard(n == "_"), line(l), column(c) {}
 
 	// Check if this parameter has a default value
 	bool hasDefault() const { return defaultValue != nullptr; }

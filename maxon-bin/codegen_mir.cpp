@@ -1764,8 +1764,25 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		structFieldDefaults[structDef->name] = defaults;
 	}
 
-	// After filling in all struct fields, recompute sizes of any Optional types
-	// that were created during function declarations (Pass 1c) with incomplete wrapped types
+	// After filling in all struct fields, recompute sizes for all struct types.
+	// This is needed because when a struct (like Name) has fields that are other structs
+	// (like string), those nested structs may have had size 0 when first processed.
+	// We need to recompute sizes now that all field types are populated.
+	for (auto &[name, structType] : structTypes) {
+		structType->recomputeSize();
+	}
+
+	// Validate: all structs with fields should have non-zero size
+	for (auto &[name, structType] : structTypes) {
+		if (!structType->fieldTypes.empty() && structType->sizeInBytes == 0) {
+			throw std::runtime_error("Internal compiler error: struct '" + name +
+									 "' has " + std::to_string(structType->fieldTypes.size()) +
+									 " fields but size is 0 after recomputation");
+		}
+	}
+
+	// Also recompute sizes of any Optional types that were created during function
+	// declarations (Pass 1c) with incomplete wrapped types
 	mir::MIRType::recomputeAllOptionalSizes();
 
 	// Pass 1e: Generate global constants

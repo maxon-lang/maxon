@@ -1,0 +1,101 @@
+// Test: function-declaration.discard-multiple-parameters.1
+function useThird(_ int, _ string, c int) returns int
+    return c
+end 'useThird'
+
+function main() returns int
+    return useThird(1, "ignored", 99)
+end 'main'
+---
+; Module: test.maxon
+; Instructions: 19
+
+%string = type { ptr, i64 }
+%_ManagedArray_byte = type { ptr, i64 }
+%__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
+
+@.str.sso.1 = constant [8 x i8] c"ignored\00"
+
+define i64 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.sso.1, ptr %3
+  %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
+  store i64 7, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i64 7, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i64 0, ptr %6
+  %7 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i64 0, ptr %8
+  ret i64 99
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+; Module: test.maxon
+; Instructions: 28
+
+%string = type { ptr, i64 }
+%_ManagedArray_byte = type { ptr, i64 }
+%__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
+
+@.str.sso.1 = constant [8 x i8] c"ignored\00"
+
+define i64 @useThird(i64 %_, ptr %_, i64 %c) {
+entry0:
+  %0 = alloca i64
+  store i64 %_, ptr %0
+  %1 = alloca ptr
+  store ptr %_, ptr %1
+  %2 = alloca i64
+  store i64 %c, ptr %2
+  %3 = load i64, ptr %2
+  ret i64 %3
+}
+
+define i64 @main() {
+entry0:
+  %0 = alloca %string
+  %1 = alloca %__ManagedStringData
+  %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
+  %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
+  store ptr @.str.sso.1, ptr %3
+  %4 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 1
+  store i64 7, ptr %4
+  %5 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 1
+  store i64 7, ptr %5
+  %6 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 2
+  store i64 0, ptr %6
+  %7 = getelementptr %string, ptr %0, i32 0, i32 0
+  store ptr %1, ptr %7
+  %8 = getelementptr %string, ptr %0, i32 0, i32 1
+  store i64 0, ptr %8
+  %9 = call i64 @useThird(i64 1, ptr %0, i64 99)
+  ret i64 %9
+}
+
+declare void @exit(i32 %arg0)
+
+define void @_start() {
+entry0:
+  %0 = call i64 @main()
+  call void @exit(i64 %0)
+  ret void
+}
+
+---
+ExitCode: 99

@@ -876,6 +876,11 @@ void X86CodeGen::genAlloca(mir::MIRInstruction *inst) {
 }
 
 void X86CodeGen::emitStructCopy(X86Reg srcReg, X86Reg dstReg, uint64_t structSize, X86Reg tempReg) {
+	// Defensive check: struct size should never be 0 for a copy operation
+	if (structSize == 0) {
+		throw std::runtime_error("emitStructCopy: struct size is 0 - this indicates a type size computation bug");
+	}
+
 	uint64_t offset = 0;
 	// Copy 8 bytes at a time
 	while (offset + 8 <= structSize) {
@@ -899,6 +904,13 @@ void X86CodeGen::emitStructCopy(X86Reg srcReg, X86Reg dstReg, uint64_t structSiz
 
 void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 	mir::MIRType *loadType = inst->result->type;
+
+	// Defensive check: structs with fields should have non-zero size
+	if (loadType->isStruct() && !loadType->fieldTypes.empty() && loadType->sizeInBytes == 0) {
+		throw std::runtime_error("genLoad: struct '" + loadType->structName +
+								 "' has " + std::to_string(loadType->fieldTypes.size()) +
+								 " fields but sizeInBytes=0 - this indicates a type size computation bug");
+	}
 
 	// Handle large struct/optional loads specially
 	bool isLargeAggregate = loadType->sizeInBytes > 8 &&
@@ -949,6 +961,13 @@ void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 	mir::MIRValue *value = inst->operands[0];
 	mir::MIRValue *ptr = inst->operands[1];
+
+	// Defensive check: structs with fields should have non-zero size
+	if (value->type->isStruct() && !value->type->fieldTypes.empty() && value->type->sizeInBytes == 0) {
+		throw std::runtime_error("genStore: struct '" + value->type->structName +
+								 "' has " + std::to_string(value->type->fieldTypes.size()) +
+								 " fields but sizeInBytes=0 - this indicates a type size computation bug");
+	}
 
 	if (value->type->isFloat()) {
 		X86Reg valReg = loadValueFloat(value, X86Reg::XMM0);

@@ -29,11 +29,13 @@ export interface Iterable uses Element
 	function next() returns Element or nil
 end 'Iterable'
 
-// Stringable - types that can be converted to a string representation
-// toString() accepts a format specifier string (empty string for default formatting)
-// Used by string interpolation: "{value}" calls toString(""), "{value:spec}" calls toString("spec")
+// Stringable - enables custom types to participate in string interpolation
+// Built-in types (int, float, bool, byte, character, string) are handled by the
+// compiler directly and do not need to implement this interface.
+// Implement this for user-defined types: "{myValue}" calls toString(nil)
+// Format: "{myValue:format}" calls toString("format")
 export interface Stringable
-	function toString(spec string) returns string
+	function toString(format string or nil) returns string
 end 'Stringable'
 
 // Subscriptable - types that support range-based subscripting (slicing)
@@ -86,32 +88,33 @@ end 'Dictionary'
 // The compiler detects conformance and transforms: var x MyType = "hello" -> var x = MyType.init(managed)
 export interface InitableFromStringLiteral
 	static function init(managed _ManagedString) returns Self
-end 'InitableFromStringLiteral'
+	end 'InitableFromStringLiteral'
 
-// InitableFromCharLiteral - types that can be initialized from character literals
-// Similar to InitableFromStringLiteral but for single-character literals like 'A' or '🎉'
-// The compiler constructs a _ManagedString containing the character's UTF-8 bytes
-export interface InitableFromCharLiteral
-	static function init(managed _ManagedString) returns Self
-end 'InitableFromCharLiteral'
+	// InitableFromCharLiteral - types that can be initialized from character literals
+	// Similar to InitableFromStringLiteral but for single-character literals like 'A' or '🎉'
+	// The compiler constructs a _ManagedString containing the character's UTF-8 bytes
+	export interface InitableFromCharLiteral
+		static function init(managed _ManagedString) returns Self
+		end 'InitableFromCharLiteral'
 
-// InitableFromArrayLiteral - types that can be initialized from array literals
-// The compiler constructs a _ManagedArray and passes it to init.
-// _ManagedArray is a compiler-internal opaque type with layout: { ptr buffer, i32 len, i32 capacity }
-// - capacity = 0 for constant data (no heap cleanup needed, read-only)
-// - capacity > 0 for heap-allocated data with refcount header
-// The compiler detects conformance and transforms: var x MyType = [1, 2, 3] -> var x = MyType.init(managed)
-// The element type is inferred from the interface's generic parameter.
-export interface InitableFromArrayLiteral uses Element
-	static function init(managed _ManagedArray) returns Self
-end 'InitableFromArrayLiteral'
+		// InitableFromArrayLiteral - types that can be initialized from array literals
+		// The compiler constructs a _ManagedArray and passes it to init.
+		// _ManagedArray is a compiler-internal opaque type with layout: { ptr buffer, i32 len, i32 capacity }
+		// - capacity = 0 for constant data (no heap cleanup needed, read-only)
+		// - capacity > 0 for heap-allocated data with refcount header
+		// The compiler detects conformance and transforms: var x MyType = [1, 2, 3] -> var x = MyType.init(managed)
+		// The element type is inferred from the interface's generic parameter.
+		export interface InitableFromArrayLiteral uses Element
+			static function init(managed _ManagedArray) returns Self
+			end 'InitableFromArrayLiteral'
 
-// InitableFromMapLiteral - types that can be initialized from map literals
-// Map literals use syntax: ["key1": value1, "key2": value2]
-// The compiler constructs two parallel _ManagedArrays (keys and values) and passes them to init.
-// Both arrays have the same length and corresponding indices represent key-value pairs.
-// The compiler detects conformance and transforms: var x = ["a": 1, "b": 2] -> var x = map.init(keys, values)
-export interface InitableFromMapLiteral uses Key, Value
-	static function init(keys _ManagedArray, values _ManagedArray) returns Self
-end 'InitableFromMapLiteral'
+			// InitableFromMapLiteral - types that can be initialized from map literals
+			// Map literals use syntax: ["key1": value1, "key2": value2]
+			// The compiler constructs two parallel _ManagedArrays (keys and values) and passes them to init.
+			// Both arrays have the same length and corresponding indices represent key-value pairs.
+			// The compiler detects conformance and transforms: var x = ["a": 1, "b": 2] -> var x = map.init(keys, values)
+			export interface InitableFromMapLiteral uses Key, Value
+				static function init(keys _ManagedArray, values _ManagedArray) returns Self
+				end 'InitableFromMapLiteral'
+
 

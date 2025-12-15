@@ -1939,6 +1939,7 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 		enterScope();
 
 		// Declare parameters as local variables
+		// Skip discard parameters (_) - they should not be declared as usable variables
 		std::vector<std::string> paramTypes;
 		for (const auto &param : closureExpr->parameters) {
 			std::string paramType = param.type;
@@ -1948,7 +1949,9 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 						 param.line, param.column);
 				paramType = "error";
 			}
-			declareVariable(param.name, paramType, false, param.line, param.column, true);
+			if (!param.isDiscard) {
+				declareVariable(param.name, paramType, false, param.line, param.column, true);
+			}
 			paramTypes.push_back(paramType);
 		}
 

@@ -947,7 +947,12 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 	enterScope();
 
 	// Declare parameters as variables
+	// Skip discard parameters (_) - they should not be declared as usable variables
 	for (const auto &param : func->parameters) {
+		if (param.isDiscard) {
+			logTrace("  Discard parameter: _ : " + param.type);
+			continue;
+		}
 		logTrace("  Parameter: " + param.name + " : " + param.type);
 		declareVariable(param.name, param.type, false, param.line, param.column, true);
 	}

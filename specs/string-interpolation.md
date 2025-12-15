@@ -35,6 +35,8 @@ String interpolation allows embedding expressions within string literals using `
 **Code Generation** (`codegen_mir_expr_string.cpp`):
 - `generateInterpolatedString()` converts expressions via `toString()`
 - Built-in type intrinsics: `__int_toString`, `__float_toString`, `__bool_toString`
+- When no format spec provided, passes `nil` to `toString()` (not empty string)
+- When format spec is provided (e.g., `{value:fmt}`), passes format string to `toString()`
 - Concatenates all parts into single heap-allocated result
 - Intermediate results tracked for cleanup at scope exit
 
@@ -120,7 +122,7 @@ type Point is Stringable
     var x int
     var y int
 
-    function Stringable.toString(spec string or nil) returns string
+    function Stringable.toString(format string or nil) returns string
         return "({self.x}, {self.y})"
     end 'toString'
 end 'Point'
@@ -703,4 +705,97 @@ end 'main'
 ```
 ```stdout
 1	2
+```
+
+### Custom Type with Stringable
+
+<!-- test: custom-stringable -->
+```maxon
+type Pair is Stringable
+    var first int
+    var second int
+
+    function Stringable.toString(_ string or nil) returns string
+        return "[{first}, {second}]"
+    end 'toString'
+end 'Pair'
+
+function main() returns int
+    var p = Pair{first: 1, second: 2}
+    print("{p}")
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[1, 2]
+```
+
+### Stringable with Format Specifier
+
+<!-- test: stringable-format-spec -->
+```maxon
+type Counter is Stringable
+    var value int
+
+    function Stringable.toString(format string or nil) returns string
+        if let fmt = format 'unwrap'
+            if fmt == "verbose" 'verbose'
+                return "Counter(value={value})"
+            end 'verbose'
+        end 'unwrap'
+        return "{value}"
+    end 'toString'
+end 'Counter'
+
+function main() returns int
+    var c = Counter{value: 42}
+    print("{c}")
+    print("{c:verbose}")
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+42
+Counter(value=42)
+```
+
+### Multiple Stringable Types
+
+<!-- test: multiple-stringable -->
+```maxon
+type Name is Stringable
+    var first string
+    var last string
+
+    function Stringable.toString(_ string or nil) returns string
+        return "{first} {last}"
+    end 'toString'
+end 'Name'
+
+type Age is Stringable
+    var years int
+
+    function Stringable.toString(_ string or nil) returns string
+        return "{years} years old"
+    end 'toString'
+end 'Age'
+
+function main() returns int
+    var name = Name{first: "John", last: "Doe"}
+    var age = Age{years: 30}
+    print("{name}, {age}")
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+John Doe, 30 years old
 ```
