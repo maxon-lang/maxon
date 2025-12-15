@@ -48,7 +48,7 @@ void X86CodeGen::generateGlobals() {
 							   global->initializer.end());
 		} else {
 			// Zero-initialized (BSS)
-			dataSection.resize(dataSection.size() + global->type->sizeInBytes, 0);
+			dataSection.resize(dataSection.size() + global->type->getSizeInBytes(), 0);
 		}
 
 		// Align to 8 bytes
@@ -906,14 +906,14 @@ void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 	mir::MIRType *loadType = inst->result->type;
 
 	// Defensive check: structs with fields should have non-zero size
-	if (loadType->isStruct() && !loadType->fieldTypes.empty() && loadType->sizeInBytes == 0) {
+	if (loadType->isStruct() && !loadType->getFieldTypes().empty() && loadType->getSizeInBytes() == 0) {
 		throw std::runtime_error("genLoad: struct '" + loadType->structName +
-								 "' has " + std::to_string(loadType->fieldTypes.size()) +
+								 "' has " + std::to_string(loadType->getFieldTypes().size()) +
 								 " fields but sizeInBytes=0 - this indicates a type size computation bug");
 	}
 
 	// Handle large struct/optional loads specially
-	bool isLargeAggregate = loadType->sizeInBytes > 8 &&
+	bool isLargeAggregate = loadType->getSizeInBytes() > 8 &&
 							(loadType->isStruct() || loadType->kind == mir::MIRTypeKind::Optional);
 	if (isLargeAggregate) {
 		// For large structs, we can't load into a register
@@ -926,7 +926,7 @@ void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 		encoder.lea64(X86Reg::R11, dstSlot);
 
 		// Copy the struct (use RAX as temp since it's caller-saved)
-		emitStructCopy(srcPtr, X86Reg::R11, loadType->sizeInBytes, X86Reg::RAX);
+		emitStructCopy(srcPtr, X86Reg::R11, loadType->getSizeInBytes(), X86Reg::RAX);
 		// Result is already in its stack slot, nothing more to do
 		return;
 	}
@@ -963,9 +963,9 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 	mir::MIRValue *ptr = inst->operands[1];
 
 	// Defensive check: structs with fields should have non-zero size
-	if (value->type->isStruct() && !value->type->fieldTypes.empty() && value->type->sizeInBytes == 0) {
+	if (value->type->isStruct() && !value->type->getFieldTypes().empty() && value->type->getSizeInBytes() == 0) {
 		throw std::runtime_error("genStore: struct '" + value->type->structName +
-								 "' has " + std::to_string(value->type->fieldTypes.size()) +
+								 "' has " + std::to_string(value->type->getFieldTypes().size()) +
 								 " fields but sizeInBytes=0 - this indicates a type size computation bug");
 	}
 
@@ -979,7 +979,7 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 		// Check if this is a large struct/optional from a call (Windows x64 ABI hidden pointer case)
 		// AND the destination is the same as the call result's stack slot
 		bool canSkipCopy = false;
-		if (value->type->sizeInBytes > 8 &&
+		if (value->type->getSizeInBytes() > 8 &&
 			value->kind == mir::MIRValueKind::VirtualReg &&
 			value->definingInst &&
 			value->definingInst->opcode == mir::MIROpcode::Call) {
@@ -1011,7 +1011,7 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 
 		// Small structs (<= 8 bytes) may be returned in RAX as a value, not a pointer
 		// We need to handle this differently from large structs
-		if (value->type->sizeInBytes <= 8) {
+		if (value->type->getSizeInBytes() <= 8) {
 			// Small struct - value is directly in a register (like RAX for return values)
 			// Just load the 8-byte value and store it to the destination
 			X86Reg valReg = loadValue(value, X86Reg::RAX);
@@ -1041,7 +1041,7 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 
 		X86Reg dstReg = loadValue(ptr, X86Reg::RCX); // Dest ptr
 
-		emitStructCopy(srcReg, dstReg, value->type->sizeInBytes, X86Reg::R10);
+		emitStructCopy(srcReg, dstReg, value->type->getSizeInBytes(), X86Reg::R10);
 	} else if (value->type->kind == mir::MIRTypeKind::Int8 ||
 			   value->type->kind == mir::MIRTypeKind::Int1) {
 		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
@@ -1092,7 +1092,7 @@ void X86CodeGen::genGEP(mir::MIRInstruction *inst) {
 				offset = 0;
 			} else if (fieldIndex == 1 && inst->elementType->wrappedType) {
 				// Value is at offset = alignment of wrapped type (after 1-byte tag + padding)
-				offset = inst->elementType->wrappedType->alignmentInBytes;
+				offset = inst->elementType->wrappedType->getAlignmentInBytes();
 			}
 			encoder.lea64(X86Reg::RAX, X86Mem(base, static_cast<int32_t>(offset)));
 		} else {
@@ -1107,17 +1107,18 @@ void X86CodeGen::genGEP(mir::MIRInstruction *inst) {
 			// Calculate byte offset to the field, accounting for alignment padding
 			int fieldIndex = static_cast<int>(fieldIdx->intValue);
 			uint64_t currentOffset = 0;
-			for (int i = 0; i < fieldIndex && i < (int)inst->elementType->fieldTypes.size(); ++i) {
-				mir::MIRType *field = inst->elementType->fieldTypes[i];
+			const auto &fieldTypes = inst->elementType->getFieldTypes();
+			for (int i = 0; i < fieldIndex && i < (int)fieldTypes.size(); ++i) {
+				mir::MIRType *field = fieldTypes[i];
 				// Add padding for this field's alignment if needed
-				uint64_t fieldAlign = field->alignmentInBytes;
+				uint64_t fieldAlign = field->getAlignmentInBytes();
 				uint64_t padding = (fieldAlign - (currentOffset % fieldAlign)) % fieldAlign;
-				currentOffset += padding + field->sizeInBytes;
+				currentOffset += padding + field->getSizeInBytes();
 			}
 			// Also apply alignment for the target field itself
-			if (fieldIndex < (int)inst->elementType->fieldTypes.size()) {
-				mir::MIRType *targetField = inst->elementType->fieldTypes[fieldIndex];
-				uint64_t fieldAlign = targetField->alignmentInBytes;
+			if (fieldIndex < (int)fieldTypes.size()) {
+				mir::MIRType *targetField = fieldTypes[fieldIndex];
+				uint64_t fieldAlign = targetField->getAlignmentInBytes();
 				uint64_t padding = (fieldAlign - (currentOffset % fieldAlign)) % fieldAlign;
 				currentOffset += padding;
 			}
@@ -1155,11 +1156,11 @@ void X86CodeGen::genGEP(mir::MIRInstruction *inst) {
 			elementSize = 8;
 			break;
 		case mir::MIRTypeKind::Struct:
-			elementSize = static_cast<int>(sizeType->sizeInBytes);
+			elementSize = static_cast<int>(sizeType->getSizeInBytes());
 			break;
 		case mir::MIRTypeKind::Array:
 			// Array of arrays - use the inner array size
-			elementSize = static_cast<int>(sizeType->sizeInBytes);
+			elementSize = static_cast<int>(sizeType->getSizeInBytes());
 			break;
 		default:
 			elementSize = 8;
@@ -1340,7 +1341,7 @@ void X86CodeGen::genRet(mir::MIRInstruction *inst) {
 	mir::MIRValue *retVal = inst->operands[0];
 
 	// Check if returning a large type (struct or Optional > 8 bytes)
-	bool isLargeReturn = retVal->type->sizeInBytes > 8 &&
+	bool isLargeReturn = retVal->type->getSizeInBytes() > 8 &&
 						 (retVal->type->isStruct() || retVal->type->kind == mir::MIRTypeKind::Optional);
 	if (isLargeReturn) {
 		// Windows x64 ABI: Large structs are returned via hidden pointer
@@ -1366,7 +1367,7 @@ void X86CodeGen::genRet(mir::MIRInstruction *inst) {
 		}
 
 		// Copy the struct
-		emitStructCopy(srcReg, X86Reg::RDI, retVal->type->sizeInBytes, X86Reg::RAX);
+		emitStructCopy(srcReg, X86Reg::RDI, retVal->type->getSizeInBytes(), X86Reg::RAX);
 
 		// Return the pointer in RAX per ABI
 		encoder.movRR64(X86Reg::RAX, X86Reg::RDI);
@@ -1402,7 +1403,7 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 
 	// Check if this function returns a large type (struct or Optional > 8 bytes)
 	bool hasHiddenRetPtr = false;
-	bool isLargeReturn = inst->result && inst->result->type->sizeInBytes > 8 &&
+	bool isLargeReturn = inst->result && inst->result->type->getSizeInBytes() > 8 &&
 						 (inst->result->type->isStruct() || inst->result->type->kind == mir::MIRTypeKind::Optional);
 	if (isLargeReturn) {
 		// Windows x64 ABI: Caller allocates space and passes pointer as first arg
@@ -1433,7 +1434,7 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 				// Load float to XMM0, then store to stack
 				loadValueFloat(arg, X86Reg::XMM0);
 				encoder.movsdMR(X86Mem(X86Reg::RSP, stackOffset), X86Reg::XMM0);
-			} else if (arg->type->sizeInBytes > 8 &&
+			} else if (arg->type->getSizeInBytes() > 8 &&
 					   (arg->type->isStruct() || arg->type->kind == mir::MIRTypeKind::Optional)) {
 				// Large aggregate argument - pass pointer to it
 				// The arg comes from a load instruction, but we need the address
@@ -1459,7 +1460,7 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 		if (arg->type->isFloat()) {
 			// Win64 ABI: float args go in XMM0-3 at their argument position
 			loadValueFloat(arg, static_cast<X86Reg>(static_cast<int>(X86Reg::XMM0) + regIndex));
-		} else if (arg->type->sizeInBytes > 8 &&
+		} else if (arg->type->getSizeInBytes() > 8 &&
 				   (arg->type->isStruct() || arg->type->kind == mir::MIRTypeKind::Optional)) {
 			// Win64 ABI: Large aggregates (> 8 bytes) are passed by pointer
 			// The arg is a value loaded from stack, get the address of that stack slot

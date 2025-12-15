@@ -320,8 +320,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 		// Integer to integer
 		if (sourceType->isInteger() && targetType->isInteger()) {
-			uint64_t sourceBits = sourceType->sizeInBytes * 8;
-			uint64_t targetBits = targetType->sizeInBytes * 8;
+			uint64_t sourceBits = sourceType->getSizeInBytes() * 8;
+			uint64_t targetBits = targetType->getSizeInBytes() * 8;
 			if (sourceBits < targetBits) {
 				return builder->createZExt(value, targetType, "zexttmp");
 			} else if (sourceBits > targetBits) {
@@ -780,7 +780,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			}
 
 			// Load the field value
-			mir::MIRType *fieldType = structType->fieldTypes[fieldIndex];
+			mir::MIRType *fieldType = structType->getFieldTypes()[fieldIndex];
 			return builder->createLoad(fieldType, fieldPtr, memberAccessExpr->memberName + ".val");
 		}
 
@@ -1380,8 +1380,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 		// Normalize byte to int for comparisons (zero-extend to preserve unsigned semantics)
 		if (!needsFloatOp && left->type->isInteger() && right->type->isInteger()) {
-			uint64_t leftBits = left->type->sizeInBytes * 8;
-			uint64_t rightBits = right->type->sizeInBytes * 8;
+			uint64_t leftBits = left->type->getSizeInBytes() * 8;
+			uint64_t rightBits = right->type->getSizeInBytes() * 8;
 			if (leftBits < rightBits) {
 				left = builder->createZExt(left, right->type, "zexttmp");
 			} else if (rightBits < leftBits) {
@@ -1539,7 +1539,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 					// Cast to appropriate pointer type and store
 					builder->createStore(argValue, fieldPtr);
 
-					offset += argType->sizeInBytes;
+					offset += argType->getSizeInBytes();
 				}
 			}
 
@@ -2356,7 +2356,7 @@ mir::MIRValue *MIRCodeGenerator::generateStructLiteral(StructInitExprAST *struct
 				// Allocate buffer
 				initHeapManagement();
 				mir::MIRFunction *mallocFunc = module->getFunction("malloc");
-				uint64_t elementSize = elementType->sizeInBytes;
+				uint64_t elementSize = elementType->getSizeInBytes();
 				mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
 				mir::MIRValue *sizeExt = builder->createSExt(sizeVal, mir::MIRType::getInt64(), "size.ext");
 				mir::MIRValue *totalSize = builder->createMul(sizeExt, elemSizeVal, "total.size");

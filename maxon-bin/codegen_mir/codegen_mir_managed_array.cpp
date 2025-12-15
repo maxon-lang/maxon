@@ -331,7 +331,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_shift_right(CallExprAST
 
 	// Get element type and size
 	mir::MIRType *elemType = getTypeFromString(info.elementType);
-	int elemSize = static_cast<int>(elemType->sizeInBytes);
+	int elemSize = static_cast<int>(elemType->getSizeInBytes());
 
 	// Get the __ManagedArrayData struct type
 	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);
@@ -377,7 +377,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_shift_left(CallExprAST 
 
 	// Get element type and size
 	mir::MIRType *elemType = getTypeFromString(info.elementType);
-	int elemSize = static_cast<int>(elemType->sizeInBytes);
+	int elemSize = static_cast<int>(elemType->getSizeInBytes());
 
 	// Get the __ManagedArrayData struct type
 	mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(info.elementType);

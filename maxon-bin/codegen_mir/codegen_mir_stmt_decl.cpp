@@ -49,7 +49,7 @@ bool MIRCodeGenerator::tryGenerateArrayLiteralDecl(const DeclInfo &decl) {
 		reportError("Unsupported array element type", decl.line, decl.column);
 	}
 
-	uint64_t elementSize = elementType->sizeInBytes;
+	uint64_t elementSize = elementType->getSizeInBytes();
 	mir::MIRValue *arrayPtr;
 	uint64_t totalSize = constantArraySize * elementSize;
 
@@ -174,7 +174,7 @@ bool MIRCodeGenerator::tryGenerateSizedArrayDecl(const DeclInfo &decl) {
 	}
 
 	mir::MIRType *elementType = getTypeFromString(elementTypeName);
-	uint64_t elementSize = elementType->sizeInBytes;
+	uint64_t elementSize = elementType->getSizeInBytes();
 
 	// Handle variable-sized arrays (size is an expression)
 	if (sizedArray->hasVariableSize()) {
@@ -678,7 +678,7 @@ bool MIRCodeGenerator::tryGenerateStructInitDecl(const DeclInfo &decl) {
 
 				int constantArraySize = static_cast<int>(initValues.size());
 				mir::MIRType *elementType = initValues.empty() ? mir::MIRType::getInt64() : initValues[0]->type;
-				uint64_t elementSize = elementType->sizeInBytes;
+				uint64_t elementSize = elementType->getSizeInBytes();
 				(void)elementSize; // May be useful for future heap allocation threshold check
 
 				// For struct fields, stack-allocate the buffer (same alloca as the struct)

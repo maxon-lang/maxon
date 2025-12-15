@@ -71,7 +71,7 @@ void DeadCodeEliminationPass::recalculateUsedTypes(MIRModule &module) {
 				return; // Already marked
 			type->used = true;
 			// Mark field types recursively
-			for (MIRType *fieldType : type->fieldTypes) {
+			for (MIRType *fieldType : type->getFieldTypes()) {
 				markTypeUsed(fieldType);
 			}
 		} else if (type->kind == MIRTypeKind::Array) {

@@ -119,7 +119,7 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 											  mir::MIRType::getPtr(),
 											  {mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
 		}
-		mir::MIRValue *sizeVal = builder->getInt64(structType->sizeInBytes);
+		mir::MIRValue *sizeVal = builder->getInt64(structType->getSizeInBytes());
 		builder->createCall(memcpyFunc, {alloca, val, sizeVal});
 	} else if (structType && isStructParameter(assign->name)) {
 		// Struct parameter reassignment - alloca holds a pointer to the struct

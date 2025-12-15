@@ -182,7 +182,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 
 						initHeapManagement();
 						mir::MIRFunction *mallocFunc = module->getFunction("malloc");
-						uint64_t elementSize = elementType->sizeInBytes;
+						uint64_t elementSize = elementType->getSizeInBytes();
 						mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
 						mir::MIRValue *sizeExt = builder->createSExt(sizeVal, mir::MIRType::getInt64(), "size.ext");
 						mir::MIRValue *totalSize = builder->createMul(sizeExt, elemSizeVal, "total.size");
@@ -308,7 +308,7 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 					// Check if the value is a variable-sized (managed) array
 					bool isVariableSizedArray = maxon::TypeConversion::isManagedArrayType(valueType);
 
-					mir::MIRType *fatPtrType = structType->fieldTypes[fieldIndex];
+					mir::MIRType *fatPtrType = structType->getFieldTypes()[fieldIndex];
 
 					if (isVariableSizedArray && varExpr) {
 						// Variable-sized array - load data pointer and length from header

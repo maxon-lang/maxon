@@ -935,12 +935,57 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 ---
 
 **Last Updated:** 2025-12-14
-**Version:** Winchester 1.6
+**Version:** Winchester 1.7
 **Maintainer:** Maxon Compiler Team
 
 ## Recent Changes
 
+### Winchester 1.7 (2025-12-14)
+
+**Refactor: Dependency-Tracking Type Size Computation:**
+
+Replaced the fragile multi-pass size recomputation with a robust dependency-tracking system. This eliminates an entire class of bugs related to type size computation ordering.
+
+**Previous Problems:**
+- Size computation was eager (in constructor) but field types might be incomplete
+- Multiple caches (`namedStructCache`, `optionalCache`, `structTypes`) needed separate recomputation
+- Hash map iteration order determined which types got recomputed first
+- No invalidation mechanism when field types changed
+
+**New Architecture:**
+- Types track their dependents (types that use them as fields)
+- When a type's fields are set, all dependents are automatically invalidated
+- Size is computed lazily via `getSizeInBytes()` which recomputes if invalidated
+- Single source of truth - no manual recomputation calls needed
+
+**API Changes:**
+- `MIRType::getSizeInBytes()` - Returns size, recomputing if needed (use this instead of `sizeInBytes`)
+- `MIRType::getAlignmentInBytes()` - Returns alignment, recomputing if needed
+- `MIRType::setFieldTypes()` - Sets fields and invalidates dependents (replaces direct assignment)
+- Removed `recomputeSize()` and `recomputeAllOptionalSizes()` - no longer needed
+
+**Files Changed:**
+- `mir.h` - New API with dependency tracking
+- `mir.cpp` - Implemented invalidation and lazy computation
+- `codegen_mir.cpp` - Updated to use `setFieldTypes()` instead of direct assignment
+- `backend/x86_codegen.cpp` - Updated to use `getSizeInBytes()` instead of `sizeInBytes`
+
 ### Winchester 1.6 (2025-12-14)
+
+**Critical Bug Fix: Struct Return Corruption with Nested Pointer Types:**
+
+Two related issues causing struct field corruption when returning structs containing nested structs with pointer-based types (like `string`):
+
+1. **Stack-Allocated String Metadata:**
+   - **Root Cause:** `__ManagedStringData` for string literals was stack-allocated in non-global contexts. When strings were copied into structs that got returned, the metadata pointer dangled after the function returned.
+   - **Symptom:** Segfaults or garbage values when accessing string fields in returned structs.
+   - **Fix:** Always heap-allocate `__ManagedStringData` via `malloc` to ensure metadata survives function returns.
+   - **Location:** [codegen_mir_expr_string.cpp:353-368](maxon-bin/codegen_mir/codegen_mir_expr_string.cpp#L353-L368)
+
+2. **Struct Size Computation Ordering:**
+   - **Root Cause:** Single-pass size recomputation didn't handle dependency chains. If struct A contains struct B, but B comes after A in hash map iteration, A's size was computed with B's size still at 0.
+   - **Symptom:** Container struct with nested Wrapper struct had `size=8` instead of `size=24`, causing backend to treat it as small struct and corrupt data.
+   - **Fix:** Multi-pass recomputation until all sizes stabilize (superseded by Winchester 1.7's dependency tracking).
 
 **Critical Bug Fix: Struct and Optional Type Size Computation with Forward-Declared Types:**
 

@@ -149,7 +149,7 @@ std::string MIRCodeGenerator::inferExprType(ExprAST *expr) {
 void MIRCodeGenerator::markFieldTypesUsed(mir::MIRType *type) {
 	if (!type || type->kind != mir::MIRTypeKind::Struct)
 		return;
-	for (mir::MIRType *fieldType : type->fieldTypes) {
+	for (mir::MIRType *fieldType : type->getFieldTypes()) {
 		if (fieldType->kind == mir::MIRTypeKind::Struct && !fieldType->used) {
 			fieldType->used = true;
 			markFieldTypesUsed(fieldType); // Recursively mark nested struct types
@@ -876,7 +876,7 @@ void MIRCodeGenerator::generateGlobalInit() {
 			}
 
 			int arraySize = static_cast<int>(arrayLit->values.size());
-			uint64_t elementSize = elementType->sizeInBytes;
+			uint64_t elementSize = elementType->getSizeInBytes();
 			uint64_t totalSize = arraySize * elementSize;
 
 			// For globals, always use heap allocation
@@ -953,8 +953,8 @@ void MIRCodeGenerator::generateGlobalInit() {
 			initHeapManagement();
 			mir::MIRFunction *mallocFunc = module->getFunction("malloc");
 
-			uint64_t keySize = keyMirType->sizeInBytes;
-			uint64_t valueSize = valueMirType->sizeInBytes;
+			uint64_t keySize = keyMirType->getSizeInBytes();
+			uint64_t valueSize = valueMirType->getSizeInBytes();
 			uint64_t keysBufferSize = numEntries > 0 ? numEntries * keySize : keySize;
 			uint64_t valuesBufferSize = numEntries > 0 ? numEntries * valueSize : valueSize;
 
@@ -1605,7 +1605,7 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 				for (const auto &av : enumCase.associatedValues) {
 					assocValues.push_back({av.name, av.type});
 					mir::MIRType *avType = getTypeFromStringNoMark(av.type);
-					payloadSize += avType->sizeInBytes;
+					payloadSize += avType->getSizeInBytes();
 					allPayloadTypes.push_back(avType);
 				}
 				enumInfo.caseAssocValues[enumCase.name] = assocValues;
@@ -1757,48 +1757,26 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		logTrace("Defining struct type: " + structDef->name + " (" + std::to_string(fieldTypes.size()) + " fields)");
 
 		// Update the existing struct type with actual fields
+		// setFieldTypes() automatically propagates size changes to dependent types
 		mir::MIRType *structType = structTypes[structDef->name];
-		structType->fieldTypes = fieldTypes;
-		structType->recomputeSize();
+		structType->setFieldTypes(fieldTypes);
 		structFields[structDef->name] = fields;
 		structFieldDefaults[structDef->name] = defaults;
 	}
 
-	// After filling in all struct fields, recompute sizes for all struct types.
-	// This is needed because when a struct (like Name) has fields that are other structs
-	// (like string), those nested structs may have had size 0 when first processed.
-	// We need to recompute sizes now that all field types are populated.
-	//
-	// Use multiple passes until all sizes stabilize. This handles dependency chains
-	// where struct A contains struct B contains struct C - we need to compute C first,
-	// then B, then A. Without topological ordering, multiple passes converge correctly.
-	bool changed = true;
-	int passes = 0;
-	const int MAX_PASSES = 10; // Prevent infinite loops
-	while (changed && passes < MAX_PASSES) {
-		changed = false;
-		passes++;
-		for (auto &[name, structType] : structTypes) {
-			uint64_t oldSize = structType->sizeInBytes;
-			structType->recomputeSize();
-			if (structType->sizeInBytes != oldSize) {
-				changed = true;
-			}
-		}
-	}
+	// No multi-pass size recomputation needed - dependency tracking handles it automatically.
+	// When setFieldTypes() is called, it invalidates the type's size and propagates
+	// invalidation to all dependent types (structs/optionals containing this type).
+	// Sizes are recomputed lazily on next getSizeInBytes() call.
 
 	// Validate: all structs with fields should have non-zero size
 	for (auto &[name, structType] : structTypes) {
-		if (!structType->fieldTypes.empty() && structType->sizeInBytes == 0) {
+		if (!structType->getFieldTypes().empty() && structType->getSizeInBytes() == 0) {
 			throw std::runtime_error("Internal compiler error: struct '" + name +
-									 "' has " + std::to_string(structType->fieldTypes.size()) +
+									 "' has " + std::to_string(structType->getFieldTypes().size()) +
 									 " fields but size is 0 after recomputation");
 		}
 	}
-
-	// Also recompute sizes of any Optional types that were created during function
-	// declarations (Pass 1c) with incomplete wrapped types
-	mir::MIRType::recomputeAllOptionalSizes();
 
 	// Pass 1e: Generate global constants
 	logDetail("Pass 1e: Generating global constants (" + std::to_string(program->globals.size()) + " globals)");

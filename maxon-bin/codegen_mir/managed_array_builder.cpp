@@ -21,7 +21,7 @@ mir::MIRType *ManagedArrayBuilder::getElementMIRType() {
 
 int ManagedArrayBuilder::getElementSize() {
 	mir::MIRType *elemType = getElementMIRType();
-	return static_cast<int>(elemType->sizeInBytes);
+	return static_cast<int>(elemType->getSizeInBytes());
 }
 
 // ========== Field Extraction ==========

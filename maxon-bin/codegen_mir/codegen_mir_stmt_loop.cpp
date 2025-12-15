@@ -729,7 +729,7 @@ void MIRCodeGenerator::generateMatch(MatchStmtAST *matchStmt, mir::MIRFunction *
 					variableTypes[bindingName] = bindingTypeName;
 					bindingsToCleanup.push_back(bindingName);
 
-					offset += bindingType->sizeInBytes;
+					offset += bindingType->getSizeInBytes();
 				}
 			}
 		}
@@ -954,7 +954,7 @@ mir::MIRValue *MIRCodeGenerator::generateMatchExpr(MatchExprAST *matchExpr) {
 					variableTypes[bindingName] = bindingTypeName;
 					bindingsToCleanup.push_back(bindingName);
 
-					offset += bindingType->sizeInBytes;
+					offset += bindingType->getSizeInBytes();
 				}
 			}
 		}

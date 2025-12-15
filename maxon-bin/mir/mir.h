@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace mir {
@@ -39,16 +40,11 @@ class MIRType {
 	MIRType *elementType = nullptr;
 	uint64_t arraySize = 0;
 
-	// For structs: name and field types
+	// For structs: name and field types (use setFieldTypes() to modify)
 	std::string structName;
-	std::vector<MIRType *> fieldTypes;
 
-	// For optionals: wrapped type
+	// For optionals: wrapped type (use setWrappedType() to modify)
 	MIRType *wrappedType = nullptr;
-
-	// Size in bytes (computed lazily)
-	uint64_t sizeInBytes = 0;
-	uint64_t alignmentInBytes = 0;
 
 	// Track if this type is actually used in generated code (for filtering IR output)
 	bool used = false;
@@ -77,14 +73,57 @@ class MIRType {
 
 	std::string toString() const;
 
-	// Allow recomputation of size (needed when building struct types)
-	void recomputeSize() { computeSize(); }
+	// ========== Dependency-Tracking Type Size API ==========
+	// Use these methods instead of accessing sizeInBytes/alignmentInBytes directly.
+	// They ensure sizes are always computed with complete type information.
 
-	// Recompute sizes of all cached Optional types (call after filling in struct fields)
-	static void recomputeAllOptionalSizes();
+	/// Get size in bytes, recomputing if invalidated. Always use this instead of sizeInBytes.
+	uint64_t getSizeInBytes();
+
+	/// Get alignment in bytes, recomputing if invalidated. Always use this instead of alignmentInBytes.
+	uint64_t getAlignmentInBytes();
+
+	/// Set field types for a struct. Automatically registers dependencies and invalidates dependents.
+	void setFieldTypes(const std::vector<MIRType *> &fields);
+
+	/// Set wrapped type for an optional. Automatically registers dependency and invalidates dependents.
+	void setWrappedType(MIRType *wrapped);
+
+	/// Get field types (read-only access)
+	const std::vector<MIRType *> &getFieldTypes() const { return fieldTypes; }
+
+	// Legacy API - deprecated, use getSizeInBytes()/getAlignmentInBytes() instead
+	// These are kept for compatibility but will be removed in future versions
+	void recomputeSize() { invalidateSize(); }
+	static void recomputeAllOptionalSizes(); // No longer needed but kept for compatibility
 
   private:
+	// Field types stored privately - use setFieldTypes() to modify
+	std::vector<MIRType *> fieldTypes;
+
+	// Cached size/alignment - use getSizeInBytes()/getAlignmentInBytes() to access
+	uint64_t sizeInBytes = 0;
+	uint64_t alignmentInBytes = 0;
+	bool sizeValid = false;
+
+	// Dependency tracking: types that depend on this type's size
+	std::unordered_set<MIRType *> dependents;
+
+	/// Compute and cache size/alignment
 	void computeSize();
+
+	/// Mark this type's size as invalid and propagate to dependents
+	void invalidateSize();
+
+	/// Register this type as depending on another type
+	void addDependency(MIRType *dependency);
+
+	/// Clear all dependencies (called when field types change)
+	void clearDependencies();
+
+	// Allow getStruct/getOptional to access fieldTypes directly for initial setup
+	friend MIRType *MIRType::getStruct(const std::string &name, const std::vector<MIRType *> &fields);
+	friend MIRType *MIRType::getOptional(MIRType *wrapped);
 };
 
 //==============================================================================

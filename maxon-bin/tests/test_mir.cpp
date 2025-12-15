@@ -21,29 +21,29 @@ TEST_CASE("MIR primitive types", "[mir][types]") {
 		REQUIRE(t != nullptr);
 		REQUIRE(t->kind == MIRTypeKind::Void);
 		REQUIRE(t->isVoid());
-		REQUIRE(t->sizeInBytes == 0);
+		REQUIRE(t->getSizeInBytes() == 0);
 	}
 
 	SECTION("integer types") {
 		auto *i1 = MIRType::getInt1();
 		REQUIRE(i1->kind == MIRTypeKind::Int1);
 		REQUIRE(i1->isInteger());
-		REQUIRE(i1->sizeInBytes == 1);
+		REQUIRE(i1->getSizeInBytes() == 1);
 
 		auto *i8 = MIRType::getInt8();
 		REQUIRE(i8->kind == MIRTypeKind::Int8);
 		REQUIRE(i8->isInteger());
-		REQUIRE(i8->sizeInBytes == 1);
+		REQUIRE(i8->getSizeInBytes() == 1);
 
 		auto *i32 = MIRType::getInt32();
 		REQUIRE(i32->kind == MIRTypeKind::Int32);
 		REQUIRE(i32->isInteger());
-		REQUIRE(i32->sizeInBytes == 4);
+		REQUIRE(i32->getSizeInBytes() == 4);
 
 		auto *i64 = MIRType::getInt64();
 		REQUIRE(i64->kind == MIRTypeKind::Int64);
 		REQUIRE(i64->isInteger());
-		REQUIRE(i64->sizeInBytes == 8);
+		REQUIRE(i64->getSizeInBytes() == 8);
 	}
 
 	SECTION("float type") {
@@ -51,14 +51,14 @@ TEST_CASE("MIR primitive types", "[mir][types]") {
 		REQUIRE(f64->kind == MIRTypeKind::Float64);
 		REQUIRE(f64->isFloat());
 		REQUIRE_FALSE(f64->isInteger());
-		REQUIRE(f64->sizeInBytes == 8);
+		REQUIRE(f64->getSizeInBytes() == 8);
 	}
 
 	SECTION("pointer type") {
 		auto *ptr = MIRType::getPtr();
 		REQUIRE(ptr->kind == MIRTypeKind::Ptr);
 		REQUIRE(ptr->isPointer());
-		REQUIRE(ptr->sizeInBytes == 8); // 64-bit pointers
+		REQUIRE(ptr->getSizeInBytes() == 8); // 64-bit pointers
 	}
 
 	SECTION("type singleton behavior") {
@@ -78,7 +78,7 @@ TEST_CASE("MIR array types", "[mir][types]") {
 	REQUIRE(arrayType->isArray());
 	REQUIRE(arrayType->elementType == elemType);
 	REQUIRE(arrayType->arraySize == 10);
-	REQUIRE(arrayType->sizeInBytes == 40); // 10 * 4 bytes
+	REQUIRE(arrayType->getSizeInBytes() == 40); // 10 * 4 bytes
 }
 
 TEST_CASE("MIR struct types", "[mir][types]") {
@@ -92,7 +92,7 @@ TEST_CASE("MIR struct types", "[mir][types]") {
 	REQUIRE(structType->kind == MIRTypeKind::Struct);
 	REQUIRE(structType->isStruct());
 	REQUIRE(structType->structName == "MyStruct");
-	REQUIRE(structType->fieldTypes.size() == 3);
+	REQUIRE(structType->getFieldTypes().size() == 3);
 	// Size should account for alignment (4 + 4 padding + 8 + 8 = 24)
 	// or similar depending on alignment rules
 }

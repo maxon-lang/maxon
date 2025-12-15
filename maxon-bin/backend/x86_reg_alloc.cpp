@@ -74,7 +74,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 	// This shifts all other parameters right by one register
 	bool hasLargeReturn = (func->returnType->isStruct() ||
 						   func->returnType->kind == mir::MIRTypeKind::Optional) &&
-						  func->returnType->sizeInBytes > 8;
+						  func->returnType->getSizeInBytes() > 8;
 	regAlloc.hasHiddenRetPtr = hasLargeReturn;
 
 	// =========================================================================
@@ -362,7 +362,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 				// Use the allocated type's size if available, otherwise default to 8 bytes
 				int allocSize = 8;
 				if (inst->allocatedType) {
-					allocSize = static_cast<int>(inst->allocatedType->sizeInBytes);
+					allocSize = static_cast<int>(inst->allocatedType->getSizeInBytes());
 					if (allocSize == 0)
 						allocSize = 8; // Fallback
 					// Align to 8 bytes
@@ -398,7 +398,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 					// Force large structs/optionals to stack (for Windows x64 ABI compatibility)
 					bool forceStack = (inst->result->type->isStruct() ||
 									   inst->result->type->kind == mir::MIRTypeKind::Optional) &&
-									  inst->result->type->sizeInBytes > 8;
+									  inst->result->type->getSizeInBytes() > 8;
 
 					// Check if this value is live across a call
 					bool needsCalleeSaved = liveAcrossCalls.count(key) > 0;
@@ -480,7 +480,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 						}
 					} else {
 						// Large struct - spill to stack
-						int allocSize = static_cast<int>(inst->result->type->sizeInBytes);
+						int allocSize = static_cast<int>(inst->result->type->getSizeInBytes());
 						allocSize = (allocSize + 7) & ~7;
 						stackOffset -= allocSize;
 						regAlloc.stackSlots[key] = stackOffset;
@@ -500,7 +500,7 @@ void X86CodeGen::allocateRegisters(mir::MIRFunction *func) {
 				size_t numArgs = inst->operands.size();
 				// Account for hidden return pointer if callee returns large struct
 				if (inst->result && inst->result->type->isStruct() &&
-					inst->result->type->sizeInBytes > 8) {
+					inst->result->type->getSizeInBytes() > 8) {
 					numArgs++; // Hidden return pointer takes one register slot
 				}
 				if (numArgs > numRegisterArgs) {

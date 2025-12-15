@@ -2,6 +2,7 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 
 namespace mir {
 
@@ -50,6 +51,8 @@ MIRType *MIRType::getArray(MIRType *elem, uint64_t size) {
 	auto type = std::make_unique<MIRType>(MIRTypeKind::Array);
 	type->elementType = elem;
 	type->arraySize = size;
+	// Register dependency on element type
+	type->addDependency(elem);
 	type->computeSize();
 	MIRType *ptr = type.get();
 	arrayTypeCache.push_back(std::move(type));
@@ -63,15 +66,19 @@ MIRType *MIRType::getStruct(const std::string &name, const std::vector<MIRType *
 		// Update fields if they're provided and the existing struct has none
 		// This handles forward declarations that are later defined
 		if (!fields.empty() && it->second->fieldTypes.empty()) {
-			it->second->fieldTypes = fields;
-			it->second->computeSize();
+			it->second->setFieldTypes(fields);
 		}
 		return it->second;
 	}
 
 	auto type = std::make_unique<MIRType>(MIRTypeKind::Struct);
 	type->structName = name;
+	// Use direct assignment here since we're in the friend function
+	// and the type isn't in any caches yet (no dependents to invalidate)
 	type->fieldTypes = fields;
+	for (auto *field : fields) {
+		type->addDependency(field);
+	}
 	type->computeSize();
 	MIRType *ptr = type.get();
 	arrayTypeCache.push_back(std::move(type)); // Reuse cache for memory management
@@ -79,7 +86,7 @@ MIRType *MIRType::getStruct(const std::string &name, const std::vector<MIRType *
 	return ptr;
 }
 
-// Static cache for Optional types - needs to be file-scope for recomputeAllOptionalSizes()
+// Static cache for Optional types
 static std::unordered_map<MIRType *, MIRType *> optionalCache;
 
 MIRType *MIRType::getOptional(MIRType *wrapped) {
@@ -89,7 +96,9 @@ MIRType *MIRType::getOptional(MIRType *wrapped) {
 	}
 
 	auto type = std::make_unique<MIRType>(MIRTypeKind::Optional);
+	// Use direct assignment here since we're in the friend function
 	type->wrappedType = wrapped;
+	type->addDependency(wrapped);
 	type->computeSize();
 	MIRType *ptr = type.get();
 	arrayTypeCache.push_back(std::move(type)); // Reuse cache
@@ -97,11 +106,107 @@ MIRType *MIRType::getOptional(MIRType *wrapped) {
 	return ptr;
 }
 
+// Legacy API - kept for compatibility but no longer needed
 void MIRType::recomputeAllOptionalSizes() {
-	for (auto &[wrapped, optional] : optionalCache) {
-		optional->computeSize();
+	// No-op: dependency tracking handles this automatically now
+}
+
+//==============================================================================
+// Dependency Tracking Implementation
+//==============================================================================
+
+uint64_t MIRType::getSizeInBytes() {
+	if (!sizeValid) {
+		computeSize();
+	}
+	return sizeInBytes;
+}
+
+uint64_t MIRType::getAlignmentInBytes() {
+	if (!sizeValid) {
+		computeSize();
+	}
+	return alignmentInBytes;
+}
+
+void MIRType::setFieldTypes(const std::vector<MIRType *> &fields) {
+	if (kind != MIRTypeKind::Struct) {
+		throw std::runtime_error("setFieldTypes called on non-struct type");
+	}
+
+	// Clear old dependencies
+	clearDependencies();
+
+	// Set new fields
+	fieldTypes = fields;
+
+	// Register dependencies on all field types
+	for (auto *field : fields) {
+		addDependency(field);
+	}
+
+	// Invalidate our size (and propagate to dependents)
+	invalidateSize();
+}
+
+void MIRType::setWrappedType(MIRType *wrapped) {
+	if (kind != MIRTypeKind::Optional) {
+		throw std::runtime_error("setWrappedType called on non-optional type");
+	}
+
+	// Clear old dependency
+	clearDependencies();
+
+	// Set new wrapped type
+	wrappedType = wrapped;
+
+	// Register dependency
+	if (wrapped) {
+		addDependency(wrapped);
+	}
+
+	// Invalidate our size
+	invalidateSize();
+}
+
+void MIRType::addDependency(MIRType *dependency) {
+	if (dependency) {
+		dependency->dependents.insert(this);
 	}
 }
+
+void MIRType::clearDependencies() {
+	// Remove ourselves from old dependencies' dependent lists
+	for (auto *field : fieldTypes) {
+		if (field) {
+			field->dependents.erase(this);
+		}
+	}
+	if (wrappedType) {
+		wrappedType->dependents.erase(this);
+	}
+	if (elementType) {
+		elementType->dependents.erase(this);
+	}
+}
+
+void MIRType::invalidateSize() {
+	if (!sizeValid) {
+		return; // Already invalid, don't propagate again
+	}
+	sizeValid = false;
+
+	// Propagate invalidation to all types that depend on us
+	// Make a copy of dependents since invalidation might modify the set
+	auto deps = dependents;
+	for (auto *dep : deps) {
+		dep->invalidateSize();
+	}
+}
+
+//==============================================================================
+// Size Computation
+//==============================================================================
 
 void MIRType::computeSize() {
 	switch (kind) {
@@ -135,8 +240,8 @@ void MIRType::computeSize() {
 		break;
 	case MIRTypeKind::Array:
 		if (elementType) {
-			sizeInBytes = elementType->sizeInBytes * arraySize;
-			alignmentInBytes = elementType->alignmentInBytes;
+			sizeInBytes = elementType->getSizeInBytes() * arraySize;
+			alignmentInBytes = elementType->getAlignmentInBytes();
 		}
 		break;
 	case MIRTypeKind::Struct: {
@@ -145,11 +250,11 @@ void MIRType::computeSize() {
 		alignmentInBytes = 1;
 		for (auto *field : fieldTypes) {
 			// Align current offset
-			uint64_t fieldAlign = field->alignmentInBytes;
+			uint64_t fieldAlign = field->getAlignmentInBytes();
 			if (fieldAlign > alignmentInBytes)
 				alignmentInBytes = fieldAlign;
 			uint64_t padding = (fieldAlign - (sizeInBytes % fieldAlign)) % fieldAlign;
-			sizeInBytes += padding + field->sizeInBytes;
+			sizeInBytes += padding + field->getSizeInBytes();
 		}
 		// Final padding to alignment
 		uint64_t finalPad = (alignmentInBytes - (sizeInBytes % alignmentInBytes)) % alignmentInBytes;
@@ -160,8 +265,8 @@ void MIRType::computeSize() {
 		// Discriminated union: 1 byte tag + wrapped value
 		// Layout: [tag: i8][padding][value: T]
 		if (wrappedType) {
-			sizeInBytes = 1 + wrappedType->sizeInBytes;
-			alignmentInBytes = wrappedType->alignmentInBytes;
+			sizeInBytes = 1 + wrappedType->getSizeInBytes();
+			alignmentInBytes = wrappedType->getAlignmentInBytes();
 			// Add padding between tag and value for alignment
 			if (alignmentInBytes > 1) {
 				uint64_t padding = (alignmentInBytes - 1) % alignmentInBytes;
@@ -173,6 +278,7 @@ void MIRType::computeSize() {
 		}
 		break;
 	}
+	sizeValid = true;
 }
 
 std::string MIRType::toString() const {
@@ -714,10 +820,12 @@ MIRType *MIRModule::getOrCreateStructType(const std::string &structName, const s
 
 	auto type = std::make_unique<MIRType>(MIRTypeKind::Struct);
 	type->structName = structName;
-	type->fieldTypes = fields;
-	type->recomputeSize();
+	// Use setFieldTypes to properly set up dependencies
 	MIRType *ptr = type.get();
 	structTypes[structName] = std::move(type);
+	if (!fields.empty()) {
+		ptr->setFieldTypes(fields);
+	}
 	return ptr;
 }
 
@@ -750,10 +858,11 @@ std::string MIRModule::toString() const {
 			continue;
 		hasUsedTypes = true;
 		ss << "%" << name << " = type { ";
-		for (size_t i = 0; i < type->fieldTypes.size(); ++i) {
+		const auto &fields = type->getFieldTypes();
+		for (size_t i = 0; i < fields.size(); ++i) {
 			if (i > 0)
 				ss << ", ";
-			ss << type->fieldTypes[i]->toString();
+			ss << fields[i]->toString();
 		}
 		ss << " }\n";
 	}

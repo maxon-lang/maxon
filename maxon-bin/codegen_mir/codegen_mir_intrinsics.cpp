@@ -1260,7 +1260,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_grow(CallExprAST *callExpr) {
 
 	// Get element type and size
 	mir::MIRType *elemType = getTypeFromString(info.elementType);
-	int elemSize = static_cast<int>(elemType->sizeInBytes);
+	int elemSize = static_cast<int>(elemType->getSizeInBytes());
 
 	// For struct fields, we need to work with the heap array header
 	// For regular variables with hidden allocas, use those
@@ -1397,7 +1397,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_right(CallExprAST *callEx
 
 	// Get element type and size
 	mir::MIRType *elemType = getTypeFromString(info.elementType);
-	int elemSize = static_cast<int>(elemType->sizeInBytes);
+	int elemSize = static_cast<int>(elemType->getSizeInBytes());
 
 	// Get data pointer
 	mir::MIRValue *dataPtr;
@@ -1450,7 +1450,7 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_array_shift_left(CallExprAST *callExp
 
 	// Get element type and size
 	mir::MIRType *elemType = getTypeFromString(info.elementType);
-	int elemSize = static_cast<int>(elemType->sizeInBytes);
+	int elemSize = static_cast<int>(elemType->getSizeInBytes());
 
 	// Get data pointer
 	mir::MIRValue *dataPtr;

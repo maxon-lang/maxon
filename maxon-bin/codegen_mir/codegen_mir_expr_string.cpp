@@ -360,7 +360,7 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 	}
 	mir::MIRValue *managedDataAlloca = builder->createCall(
 		mallocFunc,
-		{builder->getInt64(managedDataType->sizeInBytes)},
+		{builder->getInt64(managedDataType->getSizeInBytes())},
 		"managed.data.heap");
 
 	// Populate the __ManagedStringData fields
@@ -480,7 +480,7 @@ mir::MIRValue *MIRCodeGenerator::generateCharLiteral(CharacterExprAST *charExpr)
 	}
 	mir::MIRValue *managedDataAlloca = builder->createCall(
 		mallocFunc,
-		{builder->getInt64(managedDataType->sizeInBytes)},
+		{builder->getInt64(managedDataType->getSizeInBytes())},
 		"char.managed.data");
 
 	// Populate the __ManagedStringData fields

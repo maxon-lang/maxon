@@ -612,7 +612,7 @@ void MIRParser::parseGlobal() {
 			pos += 15;
 			global->hasInitializer = true;
 			// Allocate zero-filled buffer
-			size_t size = type->sizeInBytes;
+			size_t size = type->getSizeInBytes();
 			global->initializer.resize(size, 0);
 		}
 		// Check for c"..." string constant
