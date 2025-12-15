@@ -54,11 +54,15 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 				// Check if type is Stringable
 				// Built-in types (int, float, bool, byte, character, string) are always Stringable
+				// Enums are also Stringable (converted to their int value)
 				bool isBuiltinStringable = (exprType == "int" || exprType == "float" ||
 											exprType == "bool" || exprType == "byte" ||
 											exprType == "character" || exprType == "string");
 
-				if (!isBuiltinStringable) {
+				// Check if it's an enum type
+				bool isEnumType = (enums.find(exprType) != enums.end());
+
+				if (!isBuiltinStringable && !isEnumType) {
 					// Check if type implements Stringable interface
 					bool implementsStringable = false;
 					auto it = structs.find(exprType);

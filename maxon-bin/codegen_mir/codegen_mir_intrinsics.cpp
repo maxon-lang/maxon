@@ -274,8 +274,8 @@ MIRCodeGenerator::ArrayFieldInfo MIRCodeGenerator::getArrayFieldInfo(ExprAST *ar
 	if (arrayAlloca) {
 		// Regular variable found - get its type and allocas
 		info.dataPtr = arrayAlloca;
-		info.lengthAlloca = nullptr;  // Modern arrays store length in struct
-		info.capacityAlloca = nullptr;  // Modern arrays store capacity in struct
+		info.lengthAlloca = nullptr;   // Modern arrays store length in struct
+		info.capacityAlloca = nullptr; // Modern arrays store capacity in struct
 		info.isStackArray = (stackAllocatedArrays.count(arrayVarName) > 0);
 
 		std::string arrType = variableTypes[arrayVarName];

@@ -35,6 +35,7 @@ String interpolation allows embedding expressions within string literals using `
 **Code Generation** (`codegen_mir_expr_string.cpp`):
 - `generateInterpolatedString()` converts expressions via `toString()`
 - Built-in type intrinsics: `__int_toString`, `__float_toString`, `__bool_toString`
+- Enum types: int-backed/simple enums use `__int_toString`; string-backed enums generate a switch on tag to select the raw string value
 - When no format spec provided, passes `nil` to `toString()` (not empty string)
 - When format spec is provided (e.g., `{value:fmt}`), passes format string to `toString()`
 - Concatenates all parts into single heap-allocated result
@@ -111,6 +112,31 @@ To include literal braces, escape them with backslash:
 
 ```maxon
 print("Use \{expr\} syntax")  // "Use {expr} syntax"
+```
+
+### Enum Types
+
+Enum values can be interpolated directly. For int-backed or simple enums, the numeric value is shown. For string-backed enums, the raw string value is displayed:
+
+```maxon
+// Int-backed enum
+enum Color int
+    red = 1
+    green = 2
+    blue = 3
+end 'Color'
+
+var c = Color.green
+print("Color value: {c}")  // "Color value: 2"
+
+// String-backed enum
+enum Status string
+    active = "Active"
+    inactive = "Inactive"
+end 'Status'
+
+var s = Status.active
+print("Status: {s}")  // "Status: Active"
 ```
 
 ### Custom Types
@@ -798,4 +824,98 @@ end 'main'
 ```
 ```stdout
 John Doe, 30 years old
+```
+
+### Int-Backed Enum Interpolation
+
+<!-- test: int-enum-interpolation -->
+```maxon
+enum Color int
+    red = 1
+    green = 2
+    blue = 3
+end 'Color'
+
+function main() returns int
+    var c = Color.green
+    print("Color value: {c}")
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Color value: 2
+```
+
+### Simple Enum Interpolation
+
+<!-- test: simple-enum-interpolation -->
+```maxon
+enum Direction
+    north
+    south
+    east
+    west
+end 'Direction'
+
+function main() returns int
+    var d = Direction.east
+    print("Direction: {d}")
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Direction: 2
+```
+
+### String-Backed Enum Interpolation
+
+<!-- test: string-enum-interpolation -->
+```maxon
+enum Status string
+    active = "Active"
+    inactive = "Inactive"
+    pending = "Pending"
+end 'Status'
+
+function main() returns int
+    var s = Status.active
+    print("Status: {s}")
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Status: Active
+```
+
+### Multiple Enum Interpolations
+
+<!-- test: multiple-enum-interpolation -->
+```maxon
+enum Priority int
+    low = 1
+    medium = 2
+    high = 3
+end 'Priority'
+
+function main() returns int
+    var p1 = Priority.low
+    var p2 = Priority.high
+    print("Priorities: {p1} and {p2}")
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Priorities: 1 and 3
 ```

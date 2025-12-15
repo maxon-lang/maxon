@@ -1,14 +1,5 @@
 // Lexer for the Maxon language
 
-let keywords = [
-"function": TokenType.kwFunction,
-"end": TokenType.kwEnd,
-"return": TokenType.kwReturn,
-"let": TokenType.kwLet,
-"int": TokenType.kwInt,
-"returns": TokenType.kwReturns
-]
-
 export type Lexer
 	let source string
 	var pos StringIndex
@@ -75,10 +66,25 @@ export type Lexer
 	end 'isAlphaNumeric'
 
 	export function keywordOrIdentifier(lexeme string) returns TokenType
-		let result = keywords.get(lexeme) or 'notFound'
-			return TokenType.identifier
-		end 'notFound'
-		return result
+		if lexeme == "function" 'kwFunction'
+			return TokenType.kwFunction
+		end 'kwFunction'
+		if lexeme == "end" 'kwEnd'
+			return TokenType.kwEnd
+		end 'kwEnd'
+		if lexeme == "return" 'kwReturn'
+			return TokenType.kwReturn
+		end 'kwReturn'
+		if lexeme == "let" 'kwLet'
+			return TokenType.kwLet
+		end 'kwLet'
+		if lexeme == "int" 'kwInt'
+			return TokenType.kwInt
+		end 'kwInt'
+		if lexeme == "returns" 'kwReturns'
+			return TokenType.kwReturns
+		end 'kwReturns'
+		return TokenType.identifier
 	end 'keywordOrIdentifier'
 
 	export function scanIdentifier() returns Token
@@ -198,10 +204,12 @@ export type Lexer
 
 	export function tokenize() returns array of Token
 		var tokens = array of Token
+		var tokenCount = 0
 
 		while true 'loop'
 			let tok = nextToken()
 			tokens.push(tok)
+			tokenCount = tokenCount + 1
 
 			if tok.kind == TokenType.eof 'done'
 				break 'loop'

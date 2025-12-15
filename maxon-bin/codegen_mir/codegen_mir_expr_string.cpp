@@ -247,8 +247,23 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 		}
 		return "";
 	}
-	// For other expression types, return empty (will use default behavior)
-	return "";
+
+	// Handle cast expressions - return the target type
+	if (auto *castExpr = dynamic_cast<CastExprAST *>(expr)) {
+		return castExpr->targetType;
+	}
+
+	// Handle nil expressions - nil can be assigned to any optional type
+	if (auto *nilExpr = dynamic_cast<NilExprAST *>(expr)) {
+		(void)nilExpr;
+		return "nil";
+	}
+
+	throw std::runtime_error("Unsupported expression type for type inference: " +
+							 std::string(typeid(*expr).name()) +
+							 " at line " + std::to_string(expr->line) +
+							 ", column " + std::to_string(expr->column) +
+							 " in " + sourceFileName);
 }
 
 // String layout: struct string { _managed ptr, _iterPos int }
@@ -584,6 +599,150 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 				mir::MIRValue *strAlloca = builder->createAlloca(stringType, "interp.str");
 				builder->createStore(strVal, strAlloca);
 				strVal = strAlloca;
+			} else if (enumTypes.find(exprType) != enumTypes.end()) {
+				// Enum type - use the appropriate toString based on raw value type
+				const auto &enumInfo = enumTypes[exprType];
+
+				if (enumInfo.rawValueType == "string") {
+					// String-backed enum - need to look up the string value from the tag
+					// Generate a switch on the tag value to return the appropriate string
+					mir::MIRValue *tagVal = exprVal;
+
+					// Create alloca to store the result string pointer
+					mir::MIRValue *resultAlloca = builder->createAlloca(stringType, "enum.str.alloca");
+
+					// Generate a default empty string (should never be reached)
+					StringLiteralExprAST defaultStrExpr("", interpExpr->line, interpExpr->column);
+					mir::MIRValue *defaultStr = generateStringLiteral(&defaultStrExpr);
+					mir::MIRValue *defaultStrVal = builder->createLoad(stringType, defaultStr, "default.str");
+					builder->createStore(defaultStrVal, resultAlloca);
+
+					// Generate conditional branches for each case
+					mir::MIRBasicBlock *endBlock = builder->createBasicBlock("enum.str.end");
+
+					for (size_t i = 0; i < enumInfo.caseNames.size(); i++) {
+						const auto &caseName = enumInfo.caseNames[i];
+						auto rawIt = enumInfo.caseRawStrValues.find(caseName);
+						std::string rawValue = rawIt != enumInfo.caseRawStrValues.end() ? rawIt->second : caseName;
+
+						int tagIdx = enumInfo.caseTags.at(caseName);
+						mir::MIRValue *tagConst = builder->getInt8(static_cast<int8_t>(tagIdx));
+						mir::MIRValue *isMatch = builder->createICmpEq(tagVal, tagConst, "tag.match." + caseName);
+
+						mir::MIRBasicBlock *matchBlock = builder->createBasicBlock("enum.str.case." + caseName);
+						mir::MIRBasicBlock *nextBlock = (i + 1 < enumInfo.caseNames.size())
+															? builder->createBasicBlock("enum.str.next." + std::to_string(i))
+															: endBlock;
+
+						builder->createCondBr(isMatch, matchBlock, nextBlock);
+
+						builder->setInsertPoint(matchBlock);
+						StringLiteralExprAST caseStrExpr(rawValue, interpExpr->line, interpExpr->column);
+						mir::MIRValue *caseStr = generateStringLiteral(&caseStrExpr);
+						mir::MIRValue *caseStrVal = builder->createLoad(stringType, caseStr, "case.str");
+						builder->createStore(caseStrVal, resultAlloca);
+						builder->createBr(endBlock);
+
+						if (nextBlock != endBlock) {
+							builder->setInsertPoint(nextBlock);
+						}
+					}
+
+					builder->setInsertPoint(endBlock);
+					strVal = resultAlloca;
+				} else if (enumInfo.rawValueType == "int") {
+					// Int-backed enum - need to look up the raw int value from the tag
+					// Generate a switch on the tag value to get the raw int, then convert to string
+					mir::MIRValue *tagVal = exprVal;
+
+					// Create alloca to store the raw int value
+					mir::MIRValue *rawIntAlloca = builder->createAlloca(mir::MIRType::getInt64(), "enum.rawint.alloca");
+
+					// Default to 0 (should never be reached)
+					builder->createStore(builder->getInt64(0), rawIntAlloca);
+
+					// Generate conditional branches for each case
+					mir::MIRBasicBlock *endBlock = builder->createBasicBlock("enum.int.end");
+
+					for (size_t i = 0; i < enumInfo.caseNames.size(); i++) {
+						const auto &caseName = enumInfo.caseNames[i];
+						auto rawIt = enumInfo.caseRawIntValues.find(caseName);
+						int64_t rawValue = rawIt != enumInfo.caseRawIntValues.end() ? rawIt->second : static_cast<int64_t>(i);
+
+						int tagIdx = enumInfo.caseTags.at(caseName);
+						mir::MIRValue *tagConst = builder->getInt8(static_cast<int8_t>(tagIdx));
+						mir::MIRValue *isMatch = builder->createICmpEq(tagVal, tagConst, "tag.match." + caseName);
+
+						mir::MIRBasicBlock *matchBlock = builder->createBasicBlock("enum.int.case." + caseName);
+						mir::MIRBasicBlock *nextBlock = (i + 1 < enumInfo.caseNames.size())
+															? builder->createBasicBlock("enum.int.next." + std::to_string(i))
+															: endBlock;
+
+						builder->createCondBr(isMatch, matchBlock, nextBlock);
+
+						builder->setInsertPoint(matchBlock);
+						builder->createStore(builder->getInt64(rawValue), rawIntAlloca);
+						builder->createBr(endBlock);
+
+						if (nextBlock != endBlock) {
+							builder->setInsertPoint(nextBlock);
+						}
+					}
+
+					builder->setInsertPoint(endBlock);
+
+					// Load the raw int value and convert to string
+					mir::MIRValue *rawIntVal = builder->createLoad(mir::MIRType::getInt64(), rawIntAlloca, "enum.rawint");
+
+					std::string intrinsicName = "__int_toString";
+					mir::MIRValue *formatSpecArg;
+					if (part.formatSpec.empty()) {
+						formatSpecArg = builder->getNull();
+					} else {
+						StringLiteralExprAST specExpr(part.formatSpec, interpExpr->line, interpExpr->column);
+						formatSpecArg = generateStringLiteral(&specExpr);
+					}
+
+					mir::MIRFunction *toStringFunc = module->getFunction(intrinsicName);
+					if (!toStringFunc) {
+						toStringFunc = builder->declareFunction(intrinsicName,
+																stringType,
+																{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
+					}
+
+					strVal = builder->createCall(toStringFunc, {rawIntVal, formatSpecArg}, "toString.result");
+					mir::MIRValue *strAlloca = builder->createAlloca(stringType, "interp.str");
+					builder->createStore(strVal, strAlloca);
+					strVal = strAlloca;
+				} else {
+					// Simple enum (no raw value type) - convert tag to int string
+					std::string intrinsicName = "__int_toString";
+
+					// Generate format spec: null ptr for no format, string ptr for format
+					mir::MIRValue *formatSpecArg;
+					if (part.formatSpec.empty()) {
+						formatSpecArg = builder->getNull();
+					} else {
+						StringLiteralExprAST specExpr(part.formatSpec, interpExpr->line, interpExpr->column);
+						formatSpecArg = generateStringLiteral(&specExpr);
+					}
+
+					// Declare the intrinsic if not already declared
+					mir::MIRFunction *toStringFunc = module->getFunction(intrinsicName);
+					if (!toStringFunc) {
+						toStringFunc = builder->declareFunction(intrinsicName,
+																stringType,
+																{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
+					}
+
+					// Call the intrinsic: result = __int_toString(value, spec)
+					strVal = builder->createCall(toStringFunc, {exprVal, formatSpecArg}, "toString.result");
+
+					// For struct returns, we need to store in an alloca
+					mir::MIRValue *strAlloca = builder->createAlloca(stringType, "interp.str");
+					builder->createStore(strVal, strAlloca);
+					strVal = strAlloca;
+				}
 			} else {
 				// User type - call Type.toString(format string or nil)
 				// The function signature is: toString(self ptr, format Optional<string>)
