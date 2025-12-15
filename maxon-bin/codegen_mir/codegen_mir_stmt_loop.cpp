@@ -811,11 +811,11 @@ mir::MIRValue *MIRCodeGenerator::generateMatchExpr(MatchExprAST *matchExpr) {
 	bool isEnumScrutinee = (enumIt != enumTypes.end());
 	const EnumCodegenInfo *enumInfo = isEnumScrutinee ? &enumIt->second : nullptr;
 
-	// Determine result type from first case
+	// Determine result type from first case without generating code
 	mir::MIRType *resultType = nullptr;
 	if (!matchExpr->cases.empty() && matchExpr->cases[0].resultExpr) {
-		mir::MIRValue *firstResult = generateExpr(matchExpr->cases[0].resultExpr.get());
-		resultType = firstResult->type;
+		std::string resultTypeStr = getExpressionMaxonType(matchExpr->cases[0].resultExpr.get());
+		resultType = getTypeFromString(resultTypeStr);
 	}
 	if (!resultType) {
 		reportError("Match expression must have at least one case with result",
