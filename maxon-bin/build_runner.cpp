@@ -14,52 +14,51 @@ bool hasBuildMaxon(const std::string &directory) {
 	return std::filesystem::exists(buildPath);
 }
 
-std::optional<std::string> executeBuildMaxon(const std::string &buildFile) {
-	try {
-		std::filesystem::path tempDir = "temp";
-		std::filesystem::create_directories(tempDir);
-		std::string tempExe =
-			(tempDir / ("build_maxon_" + std::to_string(std::time(nullptr)) + ".exe")).string();
-
-		CompilationOptions options;
-		options.inputFiles = {buildFile};
-		options.outputFile = tempExe;
-		options.optimize = false;
-		options.debugInfo = false;
-		options.verboseLevel = 0;
-		options.emitIR = false;
-		options.compileOnly = false;
-		// showProgress defaults to false, so no output when building build.maxon
-
-		std::string executablePath = compileProgram(options);
-
-		// Run the executable and capture stdout
-		std::string output;
-#ifdef _WIN32
-		std::string cmd = "\"" + executablePath + "\" 2>nul";
-		std::unique_ptr<FILE, decltype(&_pclose)> pipe(_popen(cmd.c_str(), "r"), _pclose);
-#else
-		std::string cmd = "\"" + executablePath + "\" 2>/dev/null";
-		std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
-#endif
-		if (!pipe) {
-			std::cerr << "Error: Failed to run build.maxon executable\n";
-			std::filesystem::remove(executablePath);
-			return std::nullopt;
-		}
-
-		std::array<char, 4096> buffer;
-		while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-			output += buffer.data();
-		}
-
-		std::filesystem::remove(executablePath);
-		return output;
-
-	} catch (const std::exception &e) {
-		std::cerr << "Error compiling build.maxon: " << e.what() << "\n";
+// Parse build.maxon to extract the project name from build("name") call
+static std::optional<std::string> extractProjectName(const std::string &buildFile) {
+	std::ifstream file(buildFile);
+	if (!file.is_open()) {
 		return std::nullopt;
 	}
+
+	std::string line;
+	while (std::getline(file, line)) {
+		// Look for build("name") pattern
+		size_t buildPos = line.find("build(\"");
+		if (buildPos != std::string::npos) {
+			size_t nameStart = buildPos + 7; // length of build("
+			size_t nameEnd = line.find("\")", nameStart);
+			if (nameEnd != std::string::npos) {
+				return line.substr(nameStart, nameEnd - nameStart);
+			}
+		}
+	}
+	return std::nullopt;
+}
+
+// Generate default JSON config for a project name
+static std::string generateDefaultConfig(const std::string &projectName) {
+	std::ostringstream json;
+	json << "{\n";
+	json << "  \"name\": \"" << projectName << "\",\n";
+	json << "  \"output\": \"bin/" << projectName << ".exe\",\n";
+	json << "  \"sources\": [],\n";
+	json << "  \"optimize\": false,\n";
+	json << "  \"debug_info\": false\n";
+	json << "}\n";
+	return json.str();
+}
+
+std::optional<std::string> executeBuildMaxon(const std::string &buildFile) {
+	// Temporarily parse build.maxon directly instead of compiling it
+	auto projectName = extractProjectName(buildFile);
+	if (!projectName) {
+		std::cerr << "Error: Could not extract project name from build.maxon\n";
+		std::cerr << "Expected: build(\"project-name\") call\n";
+		return std::nullopt;
+	}
+
+	return generateDefaultConfig(*projectName);
 }
 
 // Simple JSON string value extractor
