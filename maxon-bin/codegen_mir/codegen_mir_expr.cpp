@@ -1241,6 +1241,11 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 						if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
 							mir::MIRValue *ptr = namedValues[varExpr->name];
 							if (ptr) {
+								// For struct parameters, the alloca contains a pointer to the struct
+								// We need to load that pointer to get the actual struct pointer
+								if (isStructParameter(varExpr->name)) {
+									return builder->createLoad(mir::MIRType::getPtr(), ptr, varExpr->name + ".eqptr");
+								}
 								return ptr;
 							}
 							// Case 2: Implicit field access (e.g., 'pos' in a method)

@@ -7,14 +7,7 @@ export type Parser
 	let errorMessage string
 
 	export static function create(tokens array of Token) returns Parser
-	print("    Parser.create: tokens.count={tokens.count()}")
-	if tokens.count() > 0 'hasTokens'
-		let first = tokens[0]
-		print("    Parser.create: first token kind={first.kind}, lexeme={first.lexeme}")
-	end 'hasTokens'
-	let p = Parser{tokens: tokens, pos: 0, hadError: false, errorMessage: ""}
-	print("    Parser.create: created parser, p.tokens.count={p.tokens.count()}")
-	return p
+	return Parser{tokens: tokens, pos: 0, hadError: false, errorMessage: ""}
 end 'create'
 
 export function isAtEnd() returns bool
@@ -173,29 +166,10 @@ export function parseFunction() returns FunctionDecl
 end 'parseFunction'
 
 export function parseProgram(fileName string) returns Program
-	print("    parseProgram: entered function")
-	print("    parseProgram: pos={pos}")
-	print("    parseProgram: about to call tokens.count()")
-	let tokenCount = tokens.count()
-	print("    parseProgram: tokens.count()={tokenCount}")
-	// Try copying the array first
-	let localTokens = tokens
-	print("    parseProgram: localTokens.count()={localTokens.count()}")
-	print("    parseProgram: about to access localTokens[0]")
-	let firstTok = localTokens[0]
-	print("    parseProgram: direct localTokens[0].kind={firstTok.kind}, lexeme={firstTok.lexeme}")
 	let program = Program.create(fileName)
-	print("    parseProgram: kwFunction={TokenType.kwFunction}")
 	skipNewlines()
-	print("    parseProgram: after skipNewlines, pos={pos}")
-	let secondTok = peek()
-	print("    parseProgram: peek().kind={secondTok.kind}")
 
 	while not isAtEnd() 'topLevel'
-		let checkTok = peek()
-		print("    loop: peek().kind={checkTok.kind}, checking against kwFunction={TokenType.kwFunction}")
-		let checkResult = check(TokenType.kwFunction)
-		print("    loop: check(kwFunction) = {checkResult}")
 		if matchToken(TokenType.kwFunction) 'function'
 			let fn = parseFunction()
 			program.addFunction(fn)

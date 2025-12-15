@@ -1,14 +1,5 @@
 // Lexer for the Maxon language
 
-let keywords = [
-"function": TokenType.kwFunction,
-"end": TokenType.kwEnd,
-"return": TokenType.kwReturn,
-"let": TokenType.kwLet,
-"int": TokenType.kwInt,
-"returns": TokenType.kwReturns
-]
-
 export type Lexer
 	let source string
 	var pos StringIndex
@@ -42,7 +33,8 @@ export type Lexer
 			pos = nextpos
 		end 'got_next'
 
-		if c == '\n' 'newline'
+		// Check for newline - handle both LF and CRLF (which is a single grapheme)
+		if isNewlineChar(c) 'newline'
 			line = line + 1
 			column = 1
 		end 'newline' else 'notNewline'
@@ -51,6 +43,11 @@ export type Lexer
 
 		return c
 	end 'advance'
+
+	// Helper to check if character is a newline (LF or CRLF grapheme)
+	function isNewlineChar(c character) returns bool
+		return c == '\n' or c == '\r\n'
+	end 'isNewlineChar'
 
 	export function skipWhitespace()
 		while not isAtEnd() 'loop'
@@ -78,10 +75,26 @@ export type Lexer
 	end 'isAlphaNumeric'
 
 	export function keywordOrIdentifier(lexeme string) returns TokenType
-		let result = keywords.get(lexeme) or 'notFound'
-			return TokenType.identifier
-		end 'notFound'
-		return result
+		// Use if-else chain instead of global map to avoid potential global init issues
+		if lexeme == "function" 'kw'
+			return TokenType.kwFunction
+		end 'kw'
+		if lexeme == "end" 'kw2'
+			return TokenType.kwEnd
+		end 'kw2'
+		if lexeme == "return" 'kw3'
+			return TokenType.kwReturn
+		end 'kw3'
+		if lexeme == "let" 'kw4'
+			return TokenType.kwLet
+		end 'kw4'
+		if lexeme == "int" 'kw5'
+			return TokenType.kwInt
+		end 'kw5'
+		if lexeme == "returns" 'kw6'
+			return TokenType.kwReturns
+		end 'kw6'
+		return TokenType.identifier
 	end 'keywordOrIdentifier'
 
 	export function scanIdentifier() returns Token
@@ -192,7 +205,8 @@ export type Lexer
 			return makeToken(TokenType.equals, "=", startLine, startColumn)
 		end 'equals'
 
-		if c == '\n' 'newline'
+		// Handle newlines (LF or CRLF grapheme cluster)
+		if isNewlineChar(c) 'newline'
 			return makeToken(TokenType.newline, "\n", startLine, startColumn)
 		end 'newline'
 
@@ -204,6 +218,7 @@ export type Lexer
 
 		while true 'loop'
 			let tok = nextToken()
+			print("DEBUG tokenize: kind={tok.kind}")
 			tokens.push(tok)
 
 			if tok.kind == TokenType.eof 'done'

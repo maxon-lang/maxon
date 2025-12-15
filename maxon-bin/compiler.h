@@ -22,6 +22,7 @@ struct CompilationOptions {
 	bool profile = false;
 	bool trackAllocs = false; // Log memory allocations for debugging
 	bool showStats = false;	  // Show compilation statistics
+	bool silent = false;	  // Suppress "Compiling:" and "Output:" messages
 	int verboseLevel = 0;	  // 0 = silent, 1 = progress, 2 = detailed, 3 = trace
 };
 

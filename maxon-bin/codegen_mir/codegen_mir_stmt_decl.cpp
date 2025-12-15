@@ -553,10 +553,28 @@ void MIRCodeGenerator::generateSimpleDecl(const DeclInfo &decl, mir::MIRValue *i
 		allocaType = mir::MIRType::getInt64();
 	}
 
+	// For struct types, generateExpr returns a pointer to an alloca containing the struct
+	// We need to determine the actual struct type from the initializer expression
+	bool needsStructLoad = false;
+	if (initVal && initVal->type == mir::MIRType::getPtr() && decl.initializer) {
+		// Try to get the actual type from the initializer expression
+		std::string exprType = getExpressionMaxonType(decl.initializer);
+		if (!exprType.empty() && structTypes.find(exprType) != structTypes.end()) {
+			allocaType = structTypes[exprType];
+			needsStructLoad = true;
+		}
+	}
+
 	mir::MIRValue *alloca = builder->createAlloca(allocaType, decl.name);
 
 	if (initVal) {
-		builder->createStore(initVal, alloca);
+		// For struct types where generateExpr returned a pointer, load the value first
+		if (needsStructLoad) {
+			mir::MIRValue *loadedValue = builder->createLoad(allocaType, initVal, decl.name + ".load");
+			builder->createStore(loadedValue, alloca);
+		} else {
+			builder->createStore(initVal, alloca);
+		}
 	} else {
 		// Zero-initialize
 		mir::MIRValue *zeroVal;

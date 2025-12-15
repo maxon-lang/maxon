@@ -120,11 +120,13 @@ void MIRCodeGenerator::generateWhile(WhileStmtAST *whileStmt, mir::MIRFunction *
 }
 
 void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *function) {
-	// Check if iterating over an array variable
+	// Check if iterating over an array variable or array field
 	bool isArrayIteration = false;
+	bool isMemberAccessIteration = false;
 	std::string arrayVarName;
 	std::string elementTypeStr = "int";
 	mir::MIRType *elementType = mir::MIRType::getInt64();
+	MemberAccessExprAST *memberAccessExpr = nullptr;
 
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(forStmt->iterable.get())) {
 		arrayVarName = varExpr->name;
@@ -151,35 +153,64 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 				elementType = getTypeFromString(elementTypeStr);
 			}
 		}
+	} else if (auto *maExpr = dynamic_cast<MemberAccessExprAST *>(forStmt->iterable.get())) {
+		// Handle member access like obj.items or self.items
+		memberAccessExpr = maExpr;
+		std::string fieldType = getExpressionMaxonType(maExpr);
+		if (maxon::TypeConversion::isArrayStructType(fieldType)) {
+			isArrayIteration = true;
+			isMemberAccessIteration = true;
+			elementTypeStr = maxon::TypeConversion::getArrayStructElementType(fieldType);
+			elementType = getTypeFromString(elementTypeStr);
+		} else if (maxon::TypeConversion::isArrayType(fieldType)) {
+			isArrayIteration = true;
+			isMemberAccessIteration = true;
+			elementTypeStr = maxon::TypeConversion::getArrayElementType(fieldType);
+			elementType = getTypeFromString(elementTypeStr);
+		}
 	}
 
 	if (isArrayIteration) {
 		// Array iteration: generate inline index-based loop
 		// This is equivalent to: for (int i = 0; i < arr.length; i++) { x = arr[i]; ... }
 
-		mir::MIRValue *arrayAlloca = namedValues[arrayVarName];
-		if (!arrayAlloca) {
-			// Check if it's a global array
-			mir::MIRGlobal *global = module->getGlobal(arrayVarName);
-			if (global && globalVariableTypes.find(arrayVarName) != globalVariableTypes.end()) {
-				// Create a reference to the global
-				arrayAlloca = mir::MIRValue::createGlobal(global->type, arrayVarName);
-			} else {
-				reportError("Unknown array variable: " + arrayVarName,
+		mir::MIRValue *arrayAlloca = nullptr;
+		std::string varType;
+
+		if (isMemberAccessIteration) {
+			// For member access (e.g., obj.items), generate expression to get the array pointer
+			varType = getExpressionMaxonType(memberAccessExpr);
+			// Generate the member access expression to get a pointer to the array field
+			arrayAlloca = generateExpr(memberAccessExpr);
+			if (!arrayAlloca) {
+				reportError("Failed to generate array field access for iteration",
 							forStmt->line, forStmt->column);
+			}
+		} else {
+			// For simple variable access
+			arrayAlloca = namedValues[arrayVarName];
+			if (!arrayAlloca) {
+				// Check if it's a global array
+				mir::MIRGlobal *global = module->getGlobal(arrayVarName);
+				if (global && globalVariableTypes.find(arrayVarName) != globalVariableTypes.end()) {
+					// Create a reference to the global
+					arrayAlloca = mir::MIRValue::createGlobal(global->type, arrayVarName);
+				} else {
+					reportError("Unknown array variable: " + arrayVarName,
+								forStmt->line, forStmt->column);
+				}
+			}
+			auto localIt = variableTypes.find(arrayVarName);
+			if (localIt != variableTypes.end()) {
+				varType = localIt->second;
+			} else {
+				varType = globalVariableTypes[arrayVarName];
 			}
 		}
 
 		// Get array length and pointer
 		mir::MIRValue *arrayLength;
 		mir::MIRValue *arrayPtr;
-		std::string varType;
-		auto localIt = variableTypes.find(arrayVarName);
-		if (localIt != variableTypes.end()) {
-			varType = localIt->second;
-		} else {
-			varType = globalVariableTypes[arrayVarName];
-		}
 
 		// Handle array<T> struct type (stdlib struct with nested __ManagedArrayData)
 		if (maxon::TypeConversion::isArrayStructType(varType)) {
@@ -192,9 +223,11 @@ void MIRCodeGenerator::generateFor(ForStmtAST *forStmt, mir::MIRFunction *functi
 			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
 			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
 
+			// For member access, arrayAlloca is already a pointer to the array field
 			// For struct parameters, arrayAlloca contains a pointer to the struct, need to load it first
+			// For local variables, arrayAlloca is the alloca itself
 			mir::MIRValue *structBase = arrayAlloca;
-			if (isStructParameter(arrayVarName)) {
+			if (!isMemberAccessIteration && isStructParameter(arrayVarName)) {
 				structBase = builder->createLoad(mir::MIRType::getPtr(), arrayAlloca, "arr.structptr");
 			}
 
