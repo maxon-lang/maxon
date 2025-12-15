@@ -950,9 +950,9 @@ Fixed use-after-free crashes when assigning array variables to struct fields in 
 
 **Symptom:** Self-hosted compiler crashed with segfault when calling `functions.push(fn)` where `FunctionDecl` contains `array<Stmt>` and `array<Parameter>` fields. The arrays were created via struct literals and their buffers pointed to freed stack memory.
 
-**Fix:** Added deep copy logic in two code paths:
+**Fix:** Added deep copy logic in three code paths:
 
-1. **`generateStructLiteral()` in `codegen_mir_expr.cpp`** - For struct literals in variable declarations:
+1. **`tryGenerateStructInitDecl()` in `codegen_mir_stmt_decl.cpp`** - For struct literals in variable declarations:
    ```cpp
    } else if (maxon::TypeConversion::isArrayStructType(fieldTypeStr)) {
        // Store array struct header first
@@ -973,22 +973,40 @@ Fixed use-after-free crashes when assigning array variables to struct fields in 
    }
    ```
 
-2. **Return statement handling in `codegen_mir_stmt.cpp`** - For struct literals in return statements (already had similar logic, fixed to check pointer vs loaded value).
+2. **`generateStructLiteral()` in `codegen_mir_expr.cpp`** - For struct literals in expression contexts (already had this logic).
+
+3. **Return statement handling in `codegen_mir_stmt.cpp`** - For struct literals in return statements (already had similar logic).
 
 **Key Insight:** After deep copy, `_capacity` is set to `length` (not 0) because:
 - The new buffer is heap-allocated and owned by this struct instance
 - Capacity > 0 signals heap ownership, ensuring proper cleanup via `_managed_array_release`
 
+**Location:** [codegen_mir_stmt_decl.cpp:870-945](maxon-bin/codegen_mir/codegen_mir_stmt_decl.cpp#L870-L945)
+
+**Bug Fix: Null Pointer in `retainManagedTypesInArrayElements`:**
+
+Fixed crash when deep-copying arrays containing zero-initialized managed types (e.g., `array of 10 string`).
+
+**Root Cause:** After `memcpy`-ing array data, `retainManagedTypesInArrayElements()` iterates through elements to increment refcounts for managed types. For string fields, it loads the `_managed` pointer and calls `_managed_string_retain()`. However, for sized arrays like `array of 10 string`, elements are zero-initialized (null pointers). Calling `_managed_string_retain(null)` crashes because it tries to read a refcount at offset `-8` from null.
+
+**Symptom:** Map tests crashed with segfault because `map.init` creates sized arrays (`array of 16 string`) whose elements are null.
+
+**Fix:** Added null checks before calling retain in `retainManagedTypesInArrayElements()`:
+```cpp
+// Only retain if non-null (array may be zero-initialized)
+mir::MIRValue *isNotNull = builder->createICmpNe(managedPtr, builder->getNull(), ...);
+builder->createCondBr(isNotNull, retainBlock, skipBlock);
+builder->setInsertPoint(retainBlock);
+builder->createCall(retainFunc, {managedPtr});
+builder->createBr(skipBlock);
+builder->setInsertPoint(skipBlock);
+```
+
 **Files Changed:**
-- `codegen_mir_expr.cpp` - Added deep copy in `generateStructLiteral()` for `isArrayStructType` fields
-- `codegen_mir_stmt.cpp` - Fixed return statement struct literal handling to check `fieldValue->type == mir::MIRType::getPtr()` before loading
+- `codegen_mir_stmt_decl.cpp` - Added deep copy in `tryGenerateStructInitDecl()` for `isArrayStructType` fields
+- `codegen_mir_managed_array.cpp` - Added null checks in `retainManagedTypesInArrayElements()` for string and `_ManagedString` fields
 
-**Documentation Updated:**
-- `MANAGED_ARRAYS.md` - Added "Array Fields in Struct Literals (Deep Copy Requirement)" section
-- `DEVELOPMENT_HISTORY.md` - Added fix to Post-History Notable Fixes
-- `SELF_HOSTING_PLAN.md` - Updated status and documented bootstrap compiler fix
-
-**Location:** [codegen_mir_expr.cpp:2484-2560](maxon-bin/codegen_mir/codegen_mir_expr.cpp#L2484-L2560)
+**Location:** [codegen_mir_managed_array.cpp:738-780](maxon-bin/codegen_mir/codegen_mir_managed_array.cpp#L738-L780)
 
 ### Winchester 1.7 (2025-12-14)
 

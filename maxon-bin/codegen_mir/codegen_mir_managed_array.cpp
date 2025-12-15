@@ -737,8 +737,15 @@ void MIRCodeGenerator::retainManagedTypesInArrayElements(const std::string &elem
 				// Load the _ManagedString pointer
 				mir::MIRValue *managedPtr = builder->createLoad(
 					mir::MIRType::getPtr(), managedFieldPtr, fieldName + "._managed");
-				// Retain it
+				// Only retain if non-null (array may be zero-initialized)
+				mir::MIRBasicBlock *retainBlock = currentFunc->createBasicBlock(fieldName + ".retain");
+				mir::MIRBasicBlock *skipBlock = currentFunc->createBasicBlock(fieldName + ".skip");
+				mir::MIRValue *isNotNull = builder->createICmpNe(managedPtr, builder->getNull(), fieldName + ".notnull");
+				builder->createCondBr(isNotNull, retainBlock, skipBlock);
+				builder->setInsertPoint(retainBlock);
 				builder->createCall(retainFunc, {managedPtr});
+				builder->createBr(skipBlock);
+				builder->setInsertPoint(skipBlock);
 			}
 		}
 	}
@@ -759,8 +766,15 @@ void MIRCodeGenerator::retainManagedTypesInArrayElements(const std::string &elem
 				// Load the _ManagedString pointer
 				mir::MIRValue *managedPtr = builder->createLoad(
 					mir::MIRType::getPtr(), managedFieldPtr, fieldName);
-				// Retain it
+				// Only retain if non-null (array may be zero-initialized)
+				mir::MIRBasicBlock *retainBlock = currentFunc->createBasicBlock(fieldName + ".retain");
+				mir::MIRBasicBlock *skipBlock = currentFunc->createBasicBlock(fieldName + ".skip");
+				mir::MIRValue *isNotNull = builder->createICmpNe(managedPtr, builder->getNull(), fieldName + ".notnull");
+				builder->createCondBr(isNotNull, retainBlock, skipBlock);
+				builder->setInsertPoint(retainBlock);
 				builder->createCall(retainFunc, {managedPtr});
+				builder->createBr(skipBlock);
+				builder->setInsertPoint(skipBlock);
 			}
 		}
 	}
