@@ -301,6 +301,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_at(CallExprAST *cal
 	ManagedArrayBuilder mab(*this, info.elementType);
 	mir::MIRValue *dataPtr = mab.getDataPtr(info.dataPtr, "data.ptr");
 	mir::MIRValue *elemPtr = mab.getElementPtr(dataPtr, index, "elem.ptr");
+
+	// Store the value at the element pointer
 	builder->createStore(value, elemPtr);
 
 	return builder->getInt64(0);

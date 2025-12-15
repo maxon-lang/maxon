@@ -395,8 +395,14 @@ MIRType *MIRParser::parseType() {
 			// character = { ptr } where ptr points to __ManagedStringData
 			return MIRType::getStruct(structName, {MIRType::getPtr()});
 		}
-		// Unknown struct - create placeholder with default size
-		return MIRType::getStruct(structName, {});
+		// Look up in cache - must have been defined via type definition
+		MIRType *existing = MIRType::lookupStruct(structName);
+		if (existing) {
+			return existing;
+		}
+		// Unknown struct - report error
+		error("Unknown struct type: %" + structName + " (type definition not found)");
+		return MIRType::getStruct(structName, {}); // Return placeholder to continue parsing
 	}
 
 	std::string typeName = readIdentifier();
@@ -447,11 +453,57 @@ MIRType *MIRParser::parseType() {
 // Top-level Parsing
 //==============================================================================
 
+// Parse type definition: %TypeName = type { field1, field2, ... }
+void MIRParser::parseTypeDefinition() {
+	expect('%', "at start of type definition");
+	std::string typeName = readIdentifier();
+	skipWhitespace();
+	expect('=', "after type name");
+	skipWhitespace();
+
+	std::string typeKeyword = readIdentifier();
+	if (typeKeyword != "type") {
+		error("Expected 'type' keyword in type definition");
+		// Skip to end of line
+		while (!isAtEnd() && peek() != '\n') {
+			advance();
+		}
+		return;
+	}
+
+	skipWhitespace();
+	expect('{', "after 'type' keyword");
+	skipWhitespace();
+
+	// Parse field types
+	std::vector<MIRType *> fields;
+	while (!isAtEnd() && peek() != '}') {
+		MIRType *fieldType = parseType();
+		fields.push_back(fieldType);
+		skipWhitespace();
+		if (peek() == ',') {
+			advance(); // skip comma
+			skipWhitespace();
+		}
+	}
+
+	expect('}', "to close type definition");
+
+	// Register the struct type with its fields
+	MIRType::getStruct(typeName, fields);
+}
+
 void MIRParser::parseModule() {
 	while (!isAtEnd()) {
 		skipWhitespace();
 		if (isAtEnd())
 			break;
+
+		// Check for type definition: %TypeName = type { ... }
+		if (peek() == '%') {
+			parseTypeDefinition();
+			continue;
+		}
 
 		std::string keyword = readIdentifier();
 

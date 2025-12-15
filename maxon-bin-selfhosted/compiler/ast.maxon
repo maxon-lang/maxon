@@ -60,8 +60,11 @@ export type Stmt
 	let loc SourceLoc
 
 	export static function makeReturn(value Expr, hasValue bool, loc SourceLoc) returns Stmt
-	return Stmt{kind: StmtKind.returnStmt, name: "", expr: value, hasValue: hasValue, loc: loc}
-end 'makeReturn'
+		print("DEBUG Stmt.makeReturn: creating with kind={StmtKind.returnStmt}")
+		var result = Stmt{kind: StmtKind.returnStmt, name: "", expr: value, hasValue: hasValue, loc: loc}
+		print("DEBUG Stmt.makeReturn: created, result.kind={result.kind}")
+		return result
+	end 'makeReturn'
 
 export static function makeLet(name string, value Expr, loc SourceLoc) returns Stmt
 return Stmt{kind: StmtKind.letStmt, name: name, expr: value, hasValue: true, loc: loc}
@@ -87,29 +90,55 @@ export type FunctionDecl
 	let loc SourceLoc
 
 	export static function create(name string, returnType TypeRef, body array of Stmt, loc SourceLoc) returns FunctionDecl
-	return FunctionDecl{
+	print("DEBUG FunctionDecl.create: name={name}")
+	print("DEBUG FunctionDecl.create: body count={body.count()}")
+	if body.count() > 0 'hasBody'
+		var first = body[0]
+		print("DEBUG FunctionDecl.create: body[0].kind={first.kind}")
+	end 'hasBody'
+	var params = array of Parameter
+	print("DEBUG FunctionDecl.create: created empty params")
+	var result = FunctionDecl{
 		name: name,
-		params: array of Parameter,
+		params: params,
 		returnType: returnType,
 		body: body,
 		isExport: false,
 		isExtern: false,
 		loc: loc
 	}
+	print("DEBUG FunctionDecl.create: struct created")
+	return result
 end 'create'
 end 'FunctionDecl'
 
 export type Program
-	let functions array of FunctionDecl
+	var functions array of FunctionDecl
 	let fileName string
 
 	export static function create(fileName string) returns Program
-	return Program{functions: array of FunctionDecl, fileName: fileName}
-end 'create'
+		print("DEBUG Program.create: creating empty array")
+		var funcs = array of FunctionDecl
+		print("DEBUG Program.create: created array, count={funcs.count()}")
+		var result = Program{functions: funcs, fileName: fileName}
+		print("DEBUG Program.create: struct created, result.functions.count()={result.functions.count()}")
+		return result
+	end 'create'
 
-function addFunction(fn FunctionDecl)
-	functions.push(fn)
-end 'addFunction'
+	export function addFunction(fn FunctionDecl)
+		print("DEBUG Program.addFunction: before push, count={functions.count()}")
+		if fn.body.count() > 0 'hasBody'
+			var firstStmt = fn.body[0]
+			print("DEBUG Program.addFunction: fn.body[0].kind before push={firstStmt.kind}")
+		end 'hasBody'
+		functions.push(fn)
+		print("DEBUG Program.addFunction: after push, count={functions.count()}")
+		var lastFn = functions[functions.count() - 1]
+		if lastFn.body.count() > 0 'hasBody2'
+			var firstStmt2 = lastFn.body[0]
+			print("DEBUG Program.addFunction: functions[last].body[0].kind after push={firstStmt2.kind}")
+		end 'hasBody2'
+	end 'addFunction'
 end 'Program'
 
 

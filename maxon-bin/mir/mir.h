@@ -60,6 +60,7 @@ class MIRType {
 	static MIRType *getPtr();
 	static MIRType *getArray(MIRType *elem, uint64_t size);
 	static MIRType *getStruct(const std::string &name, const std::vector<MIRType *> &fields);
+	static MIRType *lookupStruct(const std::string &name); // Returns nullptr if not found
 	static MIRType *getOptional(MIRType *wrapped);
 
 	bool isInteger() const { return kind == MIRTypeKind::Int1 || kind == MIRTypeKind::Int8 ||

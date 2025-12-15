@@ -86,6 +86,14 @@ MIRType *MIRType::getStruct(const std::string &name, const std::vector<MIRType *
 	return ptr;
 }
 
+MIRType *MIRType::lookupStruct(const std::string &name) {
+	auto it = namedStructCache.find(name);
+	if (it != namedStructCache.end()) {
+		return it->second;
+	}
+	return nullptr;
+}
+
 // Static cache for Optional types
 static std::unordered_map<MIRType *, MIRType *> optionalCache;
 

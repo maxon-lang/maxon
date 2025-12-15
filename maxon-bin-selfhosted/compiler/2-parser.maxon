@@ -82,10 +82,17 @@ export function parseType() returns TypeRef
 end 'parseType'
 
 export function parseExpression() returns Expr or nil
+	print("DEBUG parseExpression: start")
 	let loc = currentLoc()
+	print("DEBUG parseExpression: loc created")
 
+	print("DEBUG parseExpression: peek kind={peek().kind}")
 	if matchToken(TokenType.intLiteral) 'int'
-		if let value = int.parse(previous().lexeme) 'valid_int'
+		print("DEBUG parseExpression: matched intLiteral")
+		let lexeme = previous().lexeme
+		print("DEBUG parseExpression: lexeme={lexeme}")
+		if let value = int.parse(lexeme) 'valid_int'
+			print("DEBUG parseExpression: parsed value={value}")
 			return Expr.makeIntLiteral(value, loc)
 		end 'valid_int' else 'invalid_int'
 			error("Invalid integer literal")
@@ -94,19 +101,24 @@ export function parseExpression() returns Expr or nil
 	end 'int'
 
 	if matchToken(TokenType.identifier) 'ident'
+		print("DEBUG parseExpression: matched identifier")
 		let name = previous().lexeme
 		return Expr.makeVarRef(name, loc)
 	end 'ident'
 
+	print("DEBUG parseExpression: no match")
 	error("Expected expression")
 	return nil
 end 'parseExpression'
 
 export function parseStatement() returns Stmt or nil
+	print("DEBUG parseStatement: start")
 	skipNewlines()
 	let loc = currentLoc()
+	print("DEBUG parseStatement: loc created")
 
 	if matchToken(TokenType.kwLet) 'let'
+		print("DEBUG parseStatement: matched let")
 		let name = expect(TokenType.identifier, "Expected variable name").lexeme
 		expect(TokenType.equals, "Expected '=' after variable name")
 		if let value = parseExpression() 'valid_expr'
@@ -117,12 +129,17 @@ export function parseStatement() returns Stmt or nil
 		end 'invalid_expr'
 	end 'let'
 
+	print("DEBUG parseStatement: checking for return, peek kind={peek().kind}")
 	if matchToken(TokenType.kwReturn) 'return'
+		print("DEBUG parseStatement: matched return")
 		skipNewlines()
 		if check(TokenType.newline) or isAtEnd() or check(TokenType.kwEnd) 'noValue'
+			print("DEBUG parseStatement: return with no value")
 			return Stmt.makeReturn(Expr.makeIntLiteral(0, loc), false, loc)
 		end 'noValue'
+		print("DEBUG parseStatement: parsing return expression")
 		if let value = parseExpression() 'valid_expr'
+			print("DEBUG parseStatement: got return expression")
 			return Stmt.makeReturn(value, true, loc)
 		end 'valid_expr' else 'invalid_expr'
 			error("Invalid expression in return statement")
@@ -130,28 +147,42 @@ export function parseStatement() returns Stmt or nil
 		end 'invalid_expr'
 	end 'return'
 
+	print("DEBUG parseStatement: no match, error")
 	error("Expected statement")
 	return Stmt.makeReturn(Expr.makeIntLiteral(0, loc), false, loc)
 end 'parseStatement'
 
 export function parseFunction() returns FunctionDecl
+	print("DEBUG parseFunction: start")
 	let loc = currentLoc()
+	print("DEBUG parseFunction: expecting function name")
 	let name = expect(TokenType.identifier, "Expected function name").lexeme
+	print("DEBUG parseFunction: got name={name}")
 
 	expect(TokenType.lparen, "Expected '(' after function name")
+	print("DEBUG parseFunction: got lparen")
 	expect(TokenType.rparen, "Expected ')' after parameters")
+	print("DEBUG parseFunction: got rparen")
 
 	var returnType = TypeRef.makeVoid()
 	if matchToken(TokenType.kwReturns) 'hasReturn'
+		print("DEBUG parseFunction: parsing return type")
 		returnType = parseType()
 	end 'hasReturn'
+	print("DEBUG parseFunction: return type done")
 
 	skipNewlines()
 
 	var body = array of Stmt
+	print("DEBUG parseFunction: parsing body")
 	while not check(TokenType.kwEnd) and not isAtEnd() 'body'
+		print("DEBUG parseFunction: parsing statement")
 		if let stmt = parseStatement() 'valid_stmt'
+			print("DEBUG parseFunction: stmt.kind before push={stmt.kind}")
 			body.push(stmt)
+			print("DEBUG parseFunction: body.count after push={body.count()}")
+			var last = body[body.count() - 1]
+			print("DEBUG parseFunction: body[last].kind after push={last.kind}")
 			skipNewlines()
 		end 'valid_stmt' else 'invalid_stmt'
 			error("Invalid statement in function body")
@@ -159,27 +190,38 @@ export function parseFunction() returns FunctionDecl
 		end 'invalid_stmt'
 	end 'body'
 
+	print("DEBUG parseFunction: expecting end")
 	expect(TokenType.kwEnd, "Expected 'end' to close function")
 	expect(TokenType.blockLabel, "Expected function name label after 'end'")
 
+	print("DEBUG parseFunction: creating FunctionDecl")
 	return FunctionDecl.create(name, returnType, body, loc)
 end 'parseFunction'
 
 export function parseProgram(fileName string) returns Program
+	print("DEBUG parseProgram: creating program")
 	let program = Program.create(fileName)
+	print("DEBUG parseProgram: skipping newlines")
 	skipNewlines()
+	print("DEBUG parseProgram: entering loop")
 
 	while not isAtEnd() 'topLevel'
+		print("DEBUG parseProgram: checking token kind={peek().kind}")
 		if matchToken(TokenType.kwFunction) 'function'
+			print("DEBUG parseProgram: matched function keyword")
 			let fn = parseFunction()
+			print("DEBUG parseProgram: calling addFunction")
 			program.addFunction(fn)
+			print("DEBUG parseProgram: after addFunction, count={program.functions.count()}")
 		end 'function' else 'notFunction'
+			print("DEBUG parseProgram: did NOT match function keyword")
 			error("Expected function declaration")
 			advance()
 		end 'notFunction'
 		skipNewlines()
 	end 'topLevel'
 
+	print("DEBUG parseProgram: returning, final count={program.functions.count()}")
 	return program
 end 'parseProgram'
 end 'Parser'

@@ -137,7 +137,7 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		mir::MIRValue *valuesCapField = builder->createStructGEP(valueManagedArrayType, valuesManaged, 2, "values._capacity");
 		builder->createStore(builder->getInt64(0), valuesCapField);
 
-		// Call map<K,V>.init(mapAlloca, keysManaged, valuesManaged)
+		// Call map<K,V>.init(keysManaged, valuesManaged) - returns the initialized map struct
 		std::string initMethodName = specializedName + ".init";
 		mir::MIRFunction *initFunc = module->getFunction(initMethodName);
 		if (!initFunc) {
@@ -145,7 +145,9 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 						mapLiteral->line, mapLiteral->column);
 		}
 
-		builder->createCall(initFunc, {mapAlloca, keysManaged, valuesManaged}, "");
+		// init returns the map struct by value - store it in the alloca
+		mir::MIRValue *mapResult = builder->createCall(initFunc, {keysManaged, valuesManaged}, "map.init.result");
+		builder->createStore(mapResult, mapAlloca);
 		return mapAlloca;
 	}
 
@@ -392,10 +394,13 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 							mir::MIRType *structType = structTypes[currentReceiverType];
 							mir::MIRValue *fieldPtr = builder->createStructGEP(structType, selfPtr, fieldIndex, varExpr->name + ".ptr");
 
-							// For array/unsized array fields, return pointer (for subsequent indexing or struct init)
-							if (maxon::TypeConversion::isArrayType(fieldType)) {
+							// For array fields (both _ManagedArray<T> and array<T>), return pointer
+							// This allows method calls like items.push() to modify the original field
+							if (maxon::TypeConversion::isArrayType(fieldType) ||
+								maxon::TypeConversion::isArrayStructType(fieldType)) {
 								return fieldPtr;
-							} // Load the field value for non-array fields
+							}
+							// Load the field value for non-array fields
 							mir::MIRType *fieldMIRType = getTypeFromString(fieldType);
 							return builder->createLoad(fieldMIRType, fieldPtr, varExpr->name);
 						}

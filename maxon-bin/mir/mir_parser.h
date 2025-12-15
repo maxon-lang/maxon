@@ -129,6 +129,7 @@ class MIRParser {
 	//--------------------------------------------------------------------------
 
 	void parseModule();
+	void parseTypeDefinition(); // %TypeName = type { ... }
 	void parseDefine();	 // define <type> @name(...) { ... }
 	void parseDeclare(); // declare <type> @name(...)
 	void parseGlobal();	 // @name = global/constant <type> <init>
