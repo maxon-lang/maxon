@@ -10,12 +10,12 @@ export type TypeRef
 	let name string
 
 	export static function makeInt() returns TypeRef
-	return TypeRef{kind: TypeKind.intType, name: "int"}
-end 'makeInt'
+		return TypeRef{kind: TypeKind.intType, name: "int"}
+	end 'makeInt'
 
-export static function makeVoid() returns TypeRef
-return TypeRef{kind: TypeKind.voidType, name: "void"}
-end 'makeVoid'
+	export static function makeVoid() returns TypeRef
+		return TypeRef{kind: TypeKind.voidType, name: "void"}
+	end 'makeVoid'
 end 'TypeRef'
 
 export type SourceLoc
@@ -23,8 +23,8 @@ export type SourceLoc
 	let column int
 
 	export static function create(line int, column int) returns SourceLoc
-	return SourceLoc{line: line, column: column}
-end 'create'
+		return SourceLoc{line: line, column: column}
+	end 'create'
 end 'SourceLoc'
 
 export enum ExprKind
@@ -39,12 +39,12 @@ export type Expr
 	let loc SourceLoc
 
 	export static function makeIntLiteral(value int, loc SourceLoc) returns Expr
-	return Expr{kind: ExprKind.intLiteral, intValue: value, name: "", loc: loc}
-end 'makeIntLiteral'
+		return Expr{kind: ExprKind.intLiteral, intValue: value, name: "", loc: loc}
+	end 'makeIntLiteral'
 
-export static function makeVarRef(name string, loc SourceLoc) returns Expr
-return Expr{kind: ExprKind.varRef, intValue: 0, name: name, loc: loc}
-end 'makeVarRef'
+	export static function makeVarRef(name string, loc SourceLoc) returns Expr
+		return Expr{kind: ExprKind.varRef, intValue: 0, name: name, loc: loc}
+	end 'makeVarRef'
 end 'Expr'
 
 export enum StmtKind
@@ -60,15 +60,13 @@ export type Stmt
 	let loc SourceLoc
 
 	export static function makeReturn(value Expr, hasValue bool, loc SourceLoc) returns Stmt
-		print("DEBUG Stmt.makeReturn: creating with kind={StmtKind.returnStmt}")
 		var result = Stmt{kind: StmtKind.returnStmt, name: "", expr: value, hasValue: hasValue, loc: loc}
-		print("DEBUG Stmt.makeReturn: created, result.kind={result.kind}")
 		return result
 	end 'makeReturn'
 
-export static function makeLet(name string, value Expr, loc SourceLoc) returns Stmt
-return Stmt{kind: StmtKind.letStmt, name: name, expr: value, hasValue: true, loc: loc}
-end 'makeLet'
+	export static function makeLet(name string, value Expr, loc SourceLoc) returns Stmt
+		return Stmt{kind: StmtKind.letStmt, name: name, expr: value, hasValue: true, loc: loc}
+	end 'makeLet'
 end 'Stmt'
 
 export type Parameter
@@ -76,8 +74,8 @@ export type Parameter
 	let paramType TypeRef
 
 	export static function create(name string, paramType TypeRef) returns Parameter
-	return Parameter{name: name, paramType: paramType}
-end 'create'
+		return Parameter{name: name, paramType: paramType}
+	end 'create'
 end 'Parameter'
 
 export type FunctionDecl
@@ -90,26 +88,21 @@ export type FunctionDecl
 	let loc SourceLoc
 
 	export static function create(name string, returnType TypeRef, body array of Stmt, loc SourceLoc) returns FunctionDecl
-	print("DEBUG FunctionDecl.create: name={name}")
-	print("DEBUG FunctionDecl.create: body count={body.count()}")
-	if body.count() > 0 'hasBody'
-		var first = body[0]
-		print("DEBUG FunctionDecl.create: body[0].kind={first.kind}")
-	end 'hasBody'
-	var params = array of Parameter
-	print("DEBUG FunctionDecl.create: created empty params")
-	var result = FunctionDecl{
-		name: name,
-		params: params,
-		returnType: returnType,
-		body: body,
-		isExport: false,
-		isExtern: false,
-		loc: loc
-	}
-	print("DEBUG FunctionDecl.create: struct created")
-	return result
-end 'create'
+		if body.count() > 0 'hasBody'
+			var first = body[0]
+		end 'hasBody'
+		var params = array of Parameter
+		var result = FunctionDecl{
+			name: name,
+			params: params,
+			returnType: returnType,
+			body: body,
+			isExport: false,
+			isExtern: false,
+			loc: loc
+		}
+		return result
+	end 'create'
 end 'FunctionDecl'
 
 export type Program
@@ -117,24 +110,12 @@ export type Program
 	let fileName string
 
 	export static function create(fileName string) returns Program
-		print("DEBUG Program.create: creating empty array")
 		var funcs = array of FunctionDecl
-		print("DEBUG Program.create: created array, count={funcs.count()}")
 		var result = Program{functions: funcs, fileName: fileName}
-		print("DEBUG Program.create: struct created, result.functions.count()={result.functions.count()}")
 		return result
 	end 'create'
 
 	export function addFunction(fn FunctionDecl)
-		print("DEBUG Program.addFunction: before push")
-		print("  functions.count() = {functions.count()}")
-		print("  fn.body.count() = {fn.body.count()}")
-		print("  fn.name = {fn.name}")
-		print("  calling push...")
 		functions.push(fn)
-		print("DEBUG Program.addFunction: after push, count={functions.count()}")
 	end 'addFunction'
 end 'Program'
-
-
-

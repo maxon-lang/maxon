@@ -7,227 +7,186 @@ export type Parser
 	var errorMessage string
 
 	export static function create(tokens array of Token) returns Parser
-	print("DEBUG Parser.create: entry, tokens.count={tokens.count()}")
-	let result = Parser{tokens: tokens, pos: 0, hadError: false, errorMessage: ""}
-	print("DEBUG Parser.create: struct created")
-	return result
-end 'create'
+		let result = Parser{tokens: tokens, pos: 0, hadError: false, errorMessage: ""}
+		return result
+	end 'create'
 
-export function isAtEnd() returns bool
-	return pos >= tokens.count() or peek().kind == TokenType.eof
-end 'isAtEnd'
+	export function isAtEnd() returns bool
+		return pos >= tokens.count() or peek().kind == TokenType.eof
+	end 'isAtEnd'
 
-export function peek() returns Token
-	if pos >= tokens.count() 'bounds'
-		return makeToken(TokenType.eof, "", 0, 0)
-	end 'bounds'
-	return tokens[pos]
-end 'peek'
+	export function peek() returns Token
+		if pos >= tokens.count() 'bounds'
+			return makeToken(TokenType.eof, "", 0, 0)
+		end 'bounds'
+		return tokens[pos]
+	end 'peek'
 
-export function previous() returns Token
-	if pos == 0 'bounds'
-		return makeToken(TokenType.eof, "", 0, 0)
-	end 'bounds'
-	return tokens[pos - 1]
-end 'previous'
+	export function previous() returns Token
+		if pos == 0 'bounds'
+			return makeToken(TokenType.eof, "", 0, 0)
+		end 'bounds'
+		return tokens[pos - 1]
+	end 'previous'
 
-export function advance() returns Token
-	if not isAtEnd() 'check'
-		pos = pos + 1
+	export function advance() returns Token
+		if not isAtEnd() 'check'
+			pos = pos + 1
+		end 'check'
+		return previous()
+	end 'advance'
+
+	export function check(kind TokenType) returns bool
+		if isAtEnd() 'eof'
+			return false
+		end 'eof'
+		return peek().kind == kind
 	end 'check'
-	return previous()
-end 'advance'
 
-export function check(kind TokenType) returns bool
-	if isAtEnd() 'eof'
-		return false
-	end 'eof'
-	return peek().kind == kind
-end 'check'
-
-export function matchToken(kind TokenType) returns bool
-	if check(kind) 'check'
-		advance()
-		return true
-	end 'check'
-	return false
-end 'matchToken'
-
-export function expect(kind TokenType, message string) returns Token
-	if check(kind) 'check'
-		return advance()
-	end 'check'
-	error(message)
-	return makeToken(TokenType.error, "", peek().line, peek().column)
-end 'expect'
-
-export function error(message string)
-	hadError = true
-	errorMessage = message
-end 'error'
-
-export function skipNewlines()
-	while matchToken(TokenType.newline) 'skip'
-	end 'skip'
-end 'skipNewlines'
-
-export function currentLoc() returns SourceLoc
-	let tok = peek()
-	return SourceLoc.create(tok.line, tok.column)
-end 'currentLoc'
-
-export function parseType() returns TypeRef
-	if matchToken(TokenType.kwInt) 'int'
-		return TypeRef.makeInt()
-	end 'int'
-	error("Expected type")
-	return TypeRef.makeInt()
-end 'parseType'
-
-export function parseExpression() returns Expr or nil
-	print("DEBUG parseExpression: start")
-	let loc = currentLoc()
-	print("DEBUG parseExpression: loc created")
-
-	print("DEBUG parseExpression: peek kind={peek().kind}")
-	if matchToken(TokenType.intLiteral) 'int'
-		print("DEBUG parseExpression: matched intLiteral")
-		let lexeme = previous().lexeme
-		print("DEBUG parseExpression: lexeme={lexeme}")
-		if let value = int.parse(lexeme) 'valid_int'
-			print("DEBUG parseExpression: parsed value={value}")
-			return Expr.makeIntLiteral(value, loc)
-		end 'valid_int' else 'invalid_int'
-			error("Invalid integer literal")
-			return nil
-		end 'invalid_int'
-	end 'int'
-
-	if matchToken(TokenType.identifier) 'ident'
-		print("DEBUG parseExpression: matched identifier")
-		let name = previous().lexeme
-		return Expr.makeVarRef(name, loc)
-	end 'ident'
-
-	print("DEBUG parseExpression: no match")
-	error("Expected expression")
-	return nil
-end 'parseExpression'
-
-export function parseStatement() returns Stmt or nil
-	print("DEBUG parseStatement: start")
-	skipNewlines()
-	let loc = currentLoc()
-	print("DEBUG parseStatement: loc created")
-
-	if matchToken(TokenType.kwLet) 'let'
-		print("DEBUG parseStatement: matched let")
-		let name = expect(TokenType.identifier, "Expected variable name").lexeme
-		expect(TokenType.equals, "Expected '=' after variable name")
-		if let value = parseExpression() 'valid_expr'
-			return Stmt.makeLet(name, value, loc)
-		end 'valid_expr' else 'invalid_expr'
-			error("Invalid expression in let statement")
-			return nil
-		end 'invalid_expr'
-	end 'let'
-
-	print("DEBUG parseStatement: checking for return, peek kind={peek().kind}")
-	if matchToken(TokenType.kwReturn) 'return'
-		print("DEBUG parseStatement: matched return")
-		skipNewlines()
-		if check(TokenType.newline) or isAtEnd() or check(TokenType.kwEnd) 'noValue'
-			print("DEBUG parseStatement: return with no value")
-			return Stmt.makeReturn(Expr.makeIntLiteral(0, loc), false, loc)
-		end 'noValue'
-		print("DEBUG parseStatement: parsing return expression")
-		if let value = parseExpression() 'valid_expr'
-			print("DEBUG parseStatement: got return expression")
-			return Stmt.makeReturn(value, true, loc)
-		end 'valid_expr' else 'invalid_expr'
-			error("Invalid expression in return statement")
-			return nil
-		end 'invalid_expr'
-	end 'return'
-
-	print("DEBUG parseStatement: no match, error")
-	error("Expected statement")
-	return Stmt.makeReturn(Expr.makeIntLiteral(0, loc), false, loc)
-end 'parseStatement'
-
-export function parseFunction() returns FunctionDecl
-	print("DEBUG parseFunction: start")
-	let loc = currentLoc()
-	print("DEBUG parseFunction: expecting function name")
-	let name = expect(TokenType.identifier, "Expected function name").lexeme
-	print("DEBUG parseFunction: got name={name}")
-
-	expect(TokenType.lparen, "Expected '(' after function name")
-	print("DEBUG parseFunction: got lparen")
-	expect(TokenType.rparen, "Expected ')' after parameters")
-	print("DEBUG parseFunction: got rparen")
-
-	var returnType = TypeRef.makeVoid()
-	if matchToken(TokenType.kwReturns) 'hasReturn'
-		print("DEBUG parseFunction: parsing return type")
-		returnType = parseType()
-	end 'hasReturn'
-	print("DEBUG parseFunction: return type done")
-
-	skipNewlines()
-
-	var body = array of Stmt
-	print("DEBUG parseFunction: parsing body")
-	while not check(TokenType.kwEnd) and not isAtEnd() 'body'
-		print("DEBUG parseFunction: parsing statement")
-		if let stmt = parseStatement() 'valid_stmt'
-			print("DEBUG parseFunction: stmt.kind before push={stmt.kind}")
-			body.push(stmt)
-			print("DEBUG parseFunction: body.count after push={body.count()}")
-			var last = body[body.count() - 1]
-			print("DEBUG parseFunction: body[last].kind after push={last.kind}")
-			skipNewlines()
-		end 'valid_stmt' else 'invalid_stmt'
-			error("Invalid statement in function body")
-			break
-		end 'invalid_stmt'
-	end 'body'
-
-	print("DEBUG parseFunction: expecting end")
-	expect(TokenType.kwEnd, "Expected 'end' to close function")
-	expect(TokenType.blockLabel, "Expected function name label after 'end'")
-
-	print("DEBUG parseFunction: creating FunctionDecl")
-	return FunctionDecl.create(name, returnType, body, loc)
-end 'parseFunction'
-
-export function parseProgram(fileName string) returns Program
-	print("DEBUG parseProgram: creating program")
-	let program = Program.create(fileName)
-	print("DEBUG parseProgram: skipping newlines")
-	skipNewlines()
-	print("DEBUG parseProgram: entering loop")
-
-	while not isAtEnd() 'topLevel'
-		print("DEBUG parseProgram: checking token kind={peek().kind}")
-		if matchToken(TokenType.kwFunction) 'function'
-			print("DEBUG parseProgram: matched function keyword")
-			let fn = parseFunction()
-			print("DEBUG parseProgram: calling addFunction")
-			program.addFunction(fn)
-			print("DEBUG parseProgram: after addFunction, count={program.functions.count()}")
-		end 'function' else 'notFunction'
-			print("DEBUG parseProgram: did NOT match function keyword")
-			error("Expected function declaration")
+	export function matchToken(kind TokenType) returns bool
+		if check(kind) 'check'
 			advance()
-		end 'notFunction'
-		skipNewlines()
-	end 'topLevel'
+			return true
+		end 'check'
+		return false
+	end 'matchToken'
 
-	print("DEBUG parseProgram: returning, final count={program.functions.count()}")
-	return program
-end 'parseProgram'
+	export function expect(kind TokenType, message string) returns Token
+		if check(kind) 'check'
+			return advance()
+		end 'check'
+		error(message)
+		return makeToken(TokenType.error, "", peek().line, peek().column)
+	end 'expect'
+
+	export function error(message string)
+		hadError = true
+		errorMessage = message
+	end 'error'
+
+	export function skipNewlines()
+		while matchToken(TokenType.newline) 'skip'
+		end 'skip'
+	end 'skipNewlines'
+
+	export function currentLoc() returns SourceLoc
+		let tok = peek()
+		return SourceLoc.create(tok.line, tok.column)
+	end 'currentLoc'
+
+	export function parseType() returns TypeRef
+		if matchToken(TokenType.kwInt) 'int'
+			return TypeRef.makeInt()
+		end 'int'
+		error("Expected type")
+		return TypeRef.makeInt()
+	end 'parseType'
+
+	export function parseExpression() returns Expr or nil
+		let loc = currentLoc()
+
+		if matchToken(TokenType.intLiteral) 'int'
+			let lexeme = previous().lexeme
+			if let value = int.parse(lexeme) 'valid_int'
+				return Expr.makeIntLiteral(value, loc)
+			end 'valid_int' else 'invalid_int'
+				error("Invalid integer literal")
+				return nil
+			end 'invalid_int'
+		end 'int'
+
+		if matchToken(TokenType.identifier) 'ident'
+			let name = previous().lexeme
+			return Expr.makeVarRef(name, loc)
+		end 'ident'
+
+		error("Expected expression")
+		return nil
+	end 'parseExpression'
+
+	export function parseStatement() returns Stmt or nil
+		skipNewlines()
+		let loc = currentLoc()
+
+		if matchToken(TokenType.kwLet) 'let'
+			let name = expect(TokenType.identifier, "Expected variable name").lexeme
+			expect(TokenType.equals, "Expected '=' after variable name")
+			if let value = parseExpression() 'valid_expr'
+				return Stmt.makeLet(name, value, loc)
+			end 'valid_expr' else 'invalid_expr'
+				error("Invalid expression in let statement")
+				return nil
+			end 'invalid_expr'
+		end 'let'
+
+		if matchToken(TokenType.kwReturn) 'return'
+			skipNewlines()
+			if check(TokenType.newline) or isAtEnd() or check(TokenType.kwEnd) 'noValue'
+				return Stmt.makeReturn(Expr.makeIntLiteral(0, loc), false, loc)
+			end 'noValue'
+			if let value = parseExpression() 'valid_expr'
+				return Stmt.makeReturn(value, true, loc)
+			end 'valid_expr' else 'invalid_expr'
+				error("Invalid expression in return statement")
+				return nil
+			end 'invalid_expr'
+		end 'return'
+
+		error("Expected statement")
+		return Stmt.makeReturn(Expr.makeIntLiteral(0, loc), false, loc)
+	end 'parseStatement'
+
+	export function parseFunction() returns FunctionDecl
+		let loc = currentLoc()
+		let name = expect(TokenType.identifier, "Expected function name").lexeme
+
+		expect(TokenType.lparen, "Expected '(' after function name")
+		expect(TokenType.rparen, "Expected ')' after parameters")
+
+		var returnType = TypeRef.makeVoid()
+		if matchToken(TokenType.kwReturns) 'hasReturn'
+			returnType = parseType()
+		end 'hasReturn'
+
+		skipNewlines()
+
+		var body = array of Stmt
+		while not check(TokenType.kwEnd) and not isAtEnd() 'body'
+			if let stmt = parseStatement() 'valid_stmt'
+				body.push(stmt)
+				var last = body[body.count() - 1]
+				skipNewlines()
+			end 'valid_stmt' else 'invalid_stmt'
+				error("Invalid statement in function body")
+				break
+			end 'invalid_stmt'
+		end 'body'
+
+		expect(TokenType.kwEnd, "Expected 'end' to close function")
+		expect(TokenType.blockLabel, "Expected function name label after 'end'")
+
+		return FunctionDecl.create(name, returnType, body, loc)
+	end 'parseFunction'
+
+	export function parseProgram(fileName string) returns Program
+		let program = Program.create(fileName)
+		skipNewlines()
+
+		while not isAtEnd() 'topLevel'
+			if matchToken(TokenType.kwFunction) 'function'
+				let fn = parseFunction()
+				program.addFunction(fn)
+			end 'function' else 'notFunction'
+				error("Expected function declaration")
+				advance()
+			end 'notFunction'
+			skipNewlines()
+		end 'topLevel'
+
+		return program
+	end 'parseProgram'
 end 'Parser'
+
 
 
 

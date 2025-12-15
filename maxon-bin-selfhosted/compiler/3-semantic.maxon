@@ -12,18 +12,13 @@ export type SemanticAnalyzer
 	var localVars map from string to TypeRef
 
 	export static function create() returns SemanticAnalyzer
-		print("DEBUG SemanticAnalyzer.create: start")
 		var errs = array of SemanticError
-		print("DEBUG SemanticAnalyzer.create: created errors array, count={errs.count()}")
 		var vars = map from string to TypeRef
-		print("DEBUG SemanticAnalyzer.create: created localVars map")
-		print("DEBUG SemanticAnalyzer.create: creating struct...")
 		var result = SemanticAnalyzer{
 			errors: errs,
 			hasMain: false,
 			localVars: vars
 		}
-		print("DEBUG SemanticAnalyzer.create: struct created")
 		return result
 	end 'create'
 
@@ -37,40 +32,29 @@ export type SemanticAnalyzer
 	end 'addError'
 
 	export function analyze(program Program)
-		print("DEBUG analyze: start, funcs={program.functions.count()}")
 		var i = 0
 		while i < program.functions.count() 'funcs'
-			print("DEBUG analyze: analyzing func {i}")
 			analyzeFunction(program.functions[i])
 			i = i + 1
 		end 'funcs'
 
-		print("DEBUG analyze: checking hasMain")
 		if not hasMain 'noMain'
 			let loc = SourceLoc.create(1, 1)
 			addError("No 'main' function found", loc)
 		end 'noMain'
-		print("DEBUG analyze: done")
 	end 'analyze'
 
 	export function analyzeFunction(fn FunctionDecl)
-		print("DEBUG analyzeFunction: name={fn.name}")
 		if fn.name == "main" 'isMain'
 			hasMain = true
 		end 'isMain'
-		print("DEBUG analyzeFunction: creating new localVars map")
 
 		localVars = map from string to TypeRef
-		print("DEBUG analyzeFunction: map created")
-
-		print("DEBUG analyzeFunction: body count={fn.body.count()}")
 		var i = 0
 		while i < fn.body.count() 'body'
-			print("DEBUG analyzeFunction: analyzing stmt {i}")
 			analyzeStmt(fn.body[i])
 			i = i + 1
 		end 'body'
-		print("DEBUG analyzeFunction: done")
 	end 'analyzeFunction'
 
 	export function analyzeStmt(stmt Stmt)
