@@ -156,7 +156,7 @@ export function Dictionary.contains(key Key) returns bool
 	return false
 end 'contains'
 
-/// Get value for key, returns default value if not found
+/// Get value for key, returns nil if not found
 export function Dictionary.get(key Key) returns Value or nil
 	var hash = key.hash()
 	var index = hash mod capacity
@@ -169,8 +169,8 @@ export function Dictionary.get(key Key) returns Value or nil
 		var state = states[index] as int
 
 		if state == 0 'empty'
-			// Return default value from zero-initialized array slot
-			return values[0]
+			// Key not found - return nil
+			return nil
 		end 'empty'
 
 		if state == 1 and keys[index].equals(key) 'found'
@@ -181,8 +181,8 @@ export function Dictionary.get(key Key) returns Value or nil
 		probes = probes + 1
 	end 'probe'
 
-	// Not found - return default value from zero-initialized array slot
-	return values[0]
+	// Not found - return nil
+	return nil
 end 'get'
 
 /// Remove key from map, returns true if key was present

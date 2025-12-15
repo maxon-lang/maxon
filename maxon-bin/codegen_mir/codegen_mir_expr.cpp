@@ -694,10 +694,21 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				objectPtr = currentPtr;
 				varType = currentType;
 			} else {
-				// Other complex expression
+				// Other complex expression (e.g., method call returning a struct)
 				mir::MIRValue *objectValue = generateExpr(memberAccessExpr->object.get());
 				varType = getExpressionMaxonType(memberAccessExpr->object.get());
-				objectPtr = objectValue;
+
+				// If the expression returns a struct value (not a pointer), we need to
+				// store it in a temporary alloca so we can GEP into it
+				if (objectValue->type->isStruct() ||
+					(objectValue->type->kind == mir::MIRTypeKind::Optional && objectValue->type->getSizeInBytes() > 8)) {
+					// Create a temporary alloca and store the struct value
+					mir::MIRValue *tempAlloca = builder->createAlloca(objectValue->type, "temp.struct");
+					builder->createStore(objectValue, tempAlloca);
+					objectPtr = tempAlloca;
+				} else {
+					objectPtr = objectValue;
+				}
 			}
 		} else {
 			// Simple variable access
@@ -774,7 +785,8 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 			// Check if the field is an array type - return pointer instead of loading
 			std::string fieldTypeStr = fields[fieldIndex].second;
-			if (maxon::TypeConversion::isArrayType(fieldTypeStr)) {
+			if (maxon::TypeConversion::isArrayType(fieldTypeStr) ||
+				maxon::TypeConversion::isArrayStructType(fieldTypeStr)) {
 				// Array field - return pointer to the array (for subsequent indexing)
 				return fieldPtr;
 			}
@@ -866,11 +878,16 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 			// We need to determine the element type from the expression
 			std::string elementTypeStr = "byte"; // Default for now
 			bool isUnsizedArray = false;
+			bool isArrayStruct = false;
 
 			// Get the array field type using getExpressionMaxonType for nested member access
 			std::string arrayFieldType = getExpressionMaxonType(arrayIndexExpr->arrayExpr.get());
 			logTrace("ArrayIndex in '" + currentReceiverType + "': arrayFieldType = '" + arrayFieldType + "'");
-			if (maxon::TypeConversion::isArrayType(arrayFieldType)) {
+			if (maxon::TypeConversion::isArrayStructType(arrayFieldType)) {
+				elementTypeStr = maxon::TypeConversion::getArrayStructElementType(arrayFieldType);
+				isArrayStruct = true;
+				logTrace("ArrayIndex in '" + currentReceiverType + "': elementTypeStr = '" + elementTypeStr + "', isArrayStruct = true");
+			} else if (maxon::TypeConversion::isArrayType(arrayFieldType)) {
 				elementTypeStr = maxon::TypeConversion::getArrayElementType(arrayFieldType);
 				isUnsizedArray = maxon::TypeConversion::isManagedArrayType(arrayFieldType);
 				logTrace("ArrayIndex in '" + currentReceiverType + "': elementTypeStr = '" + elementTypeStr + "', isUnsizedArray = " + (isUnsizedArray ? "true" : "false"));
@@ -878,11 +895,18 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 			mir::MIRType *elementType = getTypeFromString(elementTypeStr);
 
-			// For unsized arrays, arrayVal points to the fat pointer struct {ptr, i64}
-			// We need to extract the data pointer (field 0) and load it
+			// Extract the data pointer from the array structure
 			mir::MIRValue *dataPtr = arrayVal;
-			if (isUnsizedArray) {
-				// Get the unsized array struct type
+			if (isArrayStruct) {
+				// array<T> struct: { __ManagedArrayData { ptr, count, capacity }, iterIndex }
+				mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeStr);
+				mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elementTypeStr);
+				// GEP to field 0 (managed), then field 0 (buffer)
+				mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, arrayVal, 0, "array.managed");
+				mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, "array._buffer.ptr");
+				dataPtr = builder->createLoad(mir::MIRType::getPtr(), bufferField, "array.buffer");
+			} else if (isUnsizedArray) {
+				// _ManagedArray<T> struct: { ptr, count }
 				mir::MIRType *unsizedArrayType = module->getOrCreateStructType(
 					"_ManagedArray_" + elementTypeStr,
 					{mir::MIRType::getPtr(), mir::MIRType::getInt64()});

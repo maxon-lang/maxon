@@ -50,7 +50,6 @@ export function check(kind TokenType) returns bool
 end 'check'
 
 export function matchToken(kind TokenType) returns bool
-	print("      matchToken: looking for kind={kind}, peek().kind={peek().kind}")
 	if check(kind) 'check'
 		advance()
 		return true
@@ -174,30 +173,39 @@ export function parseFunction() returns FunctionDecl
 end 'parseFunction'
 
 export function parseProgram(fileName string) returns Program
-	print("    parseProgram: creating program...")
+	print("    parseProgram: entered function")
+	print("    parseProgram: pos={pos}")
+	print("    parseProgram: about to call tokens.count()")
+	let tokenCount = tokens.count()
+	print("    parseProgram: tokens.count()={tokenCount}")
+	// Try copying the array first
+	let localTokens = tokens
+	print("    parseProgram: localTokens.count()={localTokens.count()}")
+	print("    parseProgram: about to access localTokens[0]")
+	let firstTok = localTokens[0]
+	print("    parseProgram: direct localTokens[0].kind={firstTok.kind}, lexeme={firstTok.lexeme}")
 	let program = Program.create(fileName)
-	print("    parseProgram: program created")
-
+	print("    parseProgram: kwFunction={TokenType.kwFunction}")
 	skipNewlines()
-	print("    parseProgram: starting topLevel loop")
+	print("    parseProgram: after skipNewlines, pos={pos}")
+	let secondTok = peek()
+	print("    parseProgram: peek().kind={secondTok.kind}")
 
 	while not isAtEnd() 'topLevel'
-		print("    parseProgram: checking for function...")
+		let checkTok = peek()
+		print("    loop: peek().kind={checkTok.kind}, checking against kwFunction={TokenType.kwFunction}")
+		let checkResult = check(TokenType.kwFunction)
+		print("    loop: check(kwFunction) = {checkResult}")
 		if matchToken(TokenType.kwFunction) 'function'
-			print("    parseProgram: parsing function...")
 			let fn = parseFunction()
-			print("    parseProgram: adding function to program...")
 			program.addFunction(fn)
-			print("    parseProgram: function added")
 		end 'function' else 'notFunction'
-			print("    parseProgram: not a function, error")
 			error("Expected function declaration")
 			advance()
 		end 'notFunction'
 		skipNewlines()
 	end 'topLevel'
 
-	print("    parseProgram: returning program")
 	return program
 end 'parseProgram'
 end 'Parser'
