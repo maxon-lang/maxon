@@ -20,9 +20,22 @@
 std::string normalizeIR(const std::string &ir) {
 	std::string normalized = ir;
 
+	// Remove "; Instructions: N" line - this is now tracked in metadata
+	size_t pos = 0;
+	while ((pos = normalized.find("; Instructions: ", pos)) != std::string::npos) {
+		size_t lineStart = pos;
+		size_t lineEnd = normalized.find('\n', pos);
+		if (lineEnd != std::string::npos) {
+			normalized.erase(lineStart, lineEnd - lineStart + 1);
+		} else {
+			normalized.erase(lineStart);
+			break;
+		}
+	}
+
 	// Normalize "; Module: xxx.maxon" comment to "; Module: test.maxon"
 	// This handles temp file names with worker/thread IDs
-	size_t pos = 0;
+	pos = 0;
 	while ((pos = normalized.find("; Module: ", pos)) != std::string::npos) {
 		size_t start = pos + 10; // length of "; Module: "
 		size_t lineEnd = normalized.find('\n', start);
@@ -168,7 +181,7 @@ std::string normalizeIR(const std::string &ir) {
 	// Replace all closures with normalized names (replace longer names first to avoid partial matches)
 	std::vector<std::pair<std::string, std::string>> sortedClosures(closureMap.begin(), closureMap.end());
 	std::sort(sortedClosures.begin(), sortedClosures.end(),
-		[](const auto &a, const auto &b) { return a.first.length() > b.first.length(); });
+			  [](const auto &a, const auto &b) { return a.first.length() > b.first.length(); });
 	for (const auto &[original, normalized_name] : sortedClosures) {
 		size_t pos = 0;
 		while ((pos = result.find(original, pos)) != std::string::npos) {

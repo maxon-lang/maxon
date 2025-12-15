@@ -22,26 +22,26 @@ if [ -z "$MODIFIED_FILES" ]; then
     exit 0
 fi
 
-# Function to extract section 4 (expected outputs) from a test file
-# Section 4 is everything after the third "---" delimiter
+# Function to extract section 2 (expected outputs) from a test file
+# Section 2 is everything between the first and second "---" delimiter
 extract_expected_outputs() {
     local content="$1"
     echo "$content" | awk '
         BEGIN { section = 0 }
         /^---$/ { section++; next }
-        section >= 3 { print }
+        section == 1 { print }
     '
 }
 
-# Function to extract instruction counts from IR sections
+# Function to extract instruction counts from expected outputs section
 # Returns two numbers: optimized_count unoptimized_count
 extract_instruction_counts() {
     local content="$1"
     echo "$content" | awk '
         BEGIN { section = 0; opt_count = 0; unopt_count = 0 }
         /^---$/ { section++; next }
-        section == 1 && /^; Instructions: / { opt_count = $3 }
-        section == 2 && /^; Instructions: / { unopt_count = $3 }
+        section == 1 && /^OptimizedInstructions: / { opt_count = $2 }
+        section == 1 && /^UnoptimizedInstructions: / { unopt_count = $2 }
         END { print opt_count, unopt_count }
     '
 }

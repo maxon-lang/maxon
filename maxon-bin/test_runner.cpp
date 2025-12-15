@@ -65,6 +65,15 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 		sourceCode += line + "\n";
 	}
 
+	// Section 2: Expected outputs (metadata)
+	std::string metadata;
+	while (std::getline(inFile, line)) {
+		if (line == "---")
+			break;
+		metadata += line + "\n";
+	}
+
+	// Section 3: Expected optimized IR
 	std::string expectedOptIR;
 	while (std::getline(inFile, line)) {
 		if (line == "---")
@@ -72,16 +81,10 @@ void runSingleTest(const std::filesystem::path &testPath, int verboseLevel, Test
 		expectedOptIR += line + "\n";
 	}
 
+	// Section 4: Expected debug IR (rest of file)
 	std::string expectedDebugIR;
 	while (std::getline(inFile, line)) {
-		if (line == "---")
-			break;
 		expectedDebugIR += line + "\n";
-	}
-
-	std::string metadata;
-	while (std::getline(inFile, line)) {
-		metadata += line + "\n";
 	}
 	inFile.close();
 
@@ -1011,7 +1014,7 @@ int runSingleTestFile(const std::string &testFile, int verboseLevel, bool update
 				metadata = newMetadata;
 			}
 
-			// Write updated test file
+			// Write updated test file (new section order: source → metadata → optIR → debugIR)
 			std::ofstream outFile(testPath);
 			if (!outFile) {
 				std::cerr << "Error: Cannot write test file: " << testFile << std::endl;
@@ -1019,9 +1022,9 @@ int runSingleTestFile(const std::string &testFile, int verboseLevel, bool update
 			}
 
 			outFile << sourceCode << "---\n";
+			outFile << metadata << "---\n";
 			outFile << expectedOptIR << "---\n";
-			outFile << expectedDebugIR << "---\n";
-			outFile << metadata;
+			outFile << expectedDebugIR;
 			outFile.close();
 
 			std::cout << "Updated: " << testFile << std::endl;

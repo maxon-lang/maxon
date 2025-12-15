@@ -53,7 +53,10 @@ static void writeTestFragment(const std::string &outputDir, const std::string &f
 	std::ofstream testFile(testFileName, std::ios::binary);
 	testFile << "// Test: " << fragmentName << "\n";
 	testFile << code;
-	testFile << "---\nN/A\n---\nN/A\n---\n";
+	// Section 2: Expected outputs (metadata) with initial instruction counts
+	testFile << "---\n";
+	testFile << "OptimizedInstructions: 0\n";
+	testFile << "UnoptimizedInstructions: 0\n";
 	if (!metadata.empty()) {
 		if (isDocExample) {
 			// For doc examples, parse metadata and add fences for multiline values
@@ -223,6 +226,8 @@ static void writeTestFragment(const std::string &outputDir, const std::string &f
 			}
 		}
 	}
+	// Sections 3 and 4: IR placeholders (will be regenerated)
+	testFile << "---\nN/A\n---\nN/A\n";
 	testFile.close();
 
 	// Add to manifest
@@ -602,22 +607,23 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		sourceCode += line + "\n";
 	}
 
-	// Read past the old IR sections (we'll regenerate these)
-	int separatorCount = 1;
+	// Read metadata from section 2 (expected outputs, after first ---)
+	std::string metadata;
+	while (std::getline(inFile, line)) {
+		if (line == "---")
+			break;
+		metadata += line + "\n";
+	}
+
+	// Skip past old IR sections 3 and 4 (we'll regenerate these)
+	int separatorCount = 0;
 	while (std::getline(inFile, line)) {
 		if (line == "---") {
 			separatorCount++;
-			if (separatorCount == 3) {
-				// Now we're at the metadata section
+			if (separatorCount == 1) {
 				break;
 			}
 		}
-	}
-
-	// Read and preserve metadata from the spec file
-	std::string metadata;
-	while (std::getline(inFile, line)) {
-		metadata += line + "\n";
 	}
 	inFile.close();
 
@@ -721,11 +727,13 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 				return 2;
 			}
 
-			// Expected compilation failure - write N/A for IR sections, preserve metadata from spec
+			// Expected compilation failure - write metadata then N/A for IR sections
 			std::ofstream outFile(testPath, std::ios::binary);
-			outFile << sourceCode << "---\nN/A\n---\nN/A\n---\n";
-			// Write preserved metadata as-is (from spec file)
+			outFile << sourceCode << "---\n";
+			// Write preserved metadata as-is (from spec file) - section 2
 			outFile << metadata;
+			// IR sections 3 and 4 are N/A for compile errors
+			outFile << "---\nN/A\n---\nN/A\n";
 			outFile.close();
 
 			// Include the actual compile error in verbose output for debugging
@@ -762,27 +770,46 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 			debugIR = normalizeIR(debugIR);
 		}
 
-		// Write fragment file with regenerated IR and preserved spec metadata
-		std::ofstream testFile(testPath, std::ios::binary);
-		testFile << sourceCode;
-		testFile << "---\n"
-				 << optIR;
-		testFile << "---\n"
-				 << debugIR;
-		testFile << "---\n";
+		// Extract instruction counts from IR and strip the lines
+		auto extractAndStripInstructionCount = [](std::string &ir) -> int {
+			int count = 0;
+			std::istringstream stream(ir);
+			std::string result;
+			std::string line;
+			while (std::getline(stream, line)) {
+				if (line.rfind("; Instructions: ", 0) == 0) {
+					count = std::stoi(line.substr(16));
+					// Skip this line (don't add to result)
+				} else {
+					result += line + "\n";
+				}
+			}
+			ir = result;
+			return count;
+		};
 
-		// Write preserved metadata from spec (includes Args, ExitCode, Stdout, Stderr, MaxoncStderr)
-		// Need to properly close any open ``` blocks
-		std::string metadataTrimmed = metadata;
-		// Remove trailing whitespace/newlines
-		while (!metadataTrimmed.empty() && (metadataTrimmed.back() == '\n' || metadataTrimmed.back() == '\r' || metadataTrimmed.back() == ' ' || metadataTrimmed.back() == '\t')) {
-			metadataTrimmed.pop_back();
+		int optInstructionCount = extractAndStripInstructionCount(optIR);
+		int debugInstructionCount = extractAndStripInstructionCount(debugIR);
+
+		// Update metadata with instruction counts
+		// First remove any existing instruction count fields
+		std::string updatedMetadata;
+		std::istringstream metaUpdateStream(metadata);
+		std::string metaLine;
+		while (std::getline(metaUpdateStream, metaLine)) {
+			if (metaLine.rfind("OptimizedInstructions:", 0) != 0 &&
+				metaLine.rfind("UnoptimizedInstructions:", 0) != 0) {
+				updatedMetadata += metaLine + "\n";
+			}
 		}
 
-		testFile << metadataTrimmed;
+		// Remove trailing whitespace/newlines from updated metadata
+		while (!updatedMetadata.empty() && (updatedMetadata.back() == '\n' || updatedMetadata.back() == '\r' || updatedMetadata.back() == ' ' || updatedMetadata.back() == '\t')) {
+			updatedMetadata.pop_back();
+		}
 
 		// Check if metadata ends with an unclosed ``` block (for Stdout/Stderr/MaxoncStderr)
-		std::istringstream metaCheck(metadata);
+		std::istringstream metaCheck(updatedMetadata);
 		std::string checkLine;
 		int fenceCount = 0;
 		while (std::getline(metaCheck, checkLine)) {
@@ -792,10 +819,24 @@ static int regenerateSingleFragment(const std::string &testPath, const std::stri
 		}
 		// If odd number of fences, we need to close
 		if (fenceCount % 2 == 1) {
-			testFile << "\n```";
+			updatedMetadata += "\n```";
 		}
 
-		testFile << "\n";
+		// Write fragment file: source → metadata (section 2) → optIR (section 3) → debugIR (section 4)
+		std::ofstream testFile(testPath, std::ios::binary);
+		testFile << sourceCode;
+		testFile << "---\n";
+
+		// Section 2: Expected outputs with instruction counts at top
+		testFile << "OptimizedInstructions: " << optInstructionCount << "\n";
+		testFile << "UnoptimizedInstructions: " << debugInstructionCount << "\n";
+		testFile << updatedMetadata << "\n";
+
+		// Sections 3 and 4: IR
+		testFile << "---\n"
+				 << optIR;
+		testFile << "---\n"
+				 << debugIR;
 		testFile.close();
 
 		std::filesystem::remove(tempSource);

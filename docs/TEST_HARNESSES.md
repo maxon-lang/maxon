@@ -90,15 +90,17 @@ Comprehensive testing of language features extracted from specification document
 ```
 <Maxon source code>
 ---
-<Expected optimized MIR>
----
-<Expected debug MIR>
----
+OptimizedInstructions: <count>
+UnoptimizedInstructions: <count>
 ExitCode: <expected exit code>
 Stdout: ```
 <expected stdout>
 ```
 MaxoncStderr: <expected compiler errors>
+---
+<Expected optimized MIR>
+---
+<Expected debug MIR>
 ```
 
 ### Test Discovery
