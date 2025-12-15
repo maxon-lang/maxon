@@ -383,9 +383,14 @@ X86Reg X86CodeGen::loadValue(mir::MIRValue *value, X86Reg hint) {
 			}
 			return hint;
 		}
-		// Load from stack
+		// Load from stack - use appropriate size for the type
 		X86Mem slot = getStackSlot(value);
-		encoder.movRM64(hint, slot);
+		if (value->type && (value->type->kind == mir::MIRTypeKind::Int8 ||
+							value->type->kind == mir::MIRTypeKind::Int1)) {
+			encoder.movzxRM32_8(hint, slot);
+		} else {
+			encoder.movRM64(hint, slot);
+		}
 		return hint;
 	}
 	case mir::MIRValueKind::VirtualReg: {
@@ -403,9 +408,14 @@ X86Reg X86CodeGen::loadValue(mir::MIRValue *value, X86Reg hint) {
 			}
 			return hint;
 		}
-		// Load from stack
+		// Load from stack - use appropriate size for the type
 		X86Mem slot = getStackSlot(value);
-		encoder.movRM64(hint, slot);
+		if (value->type && (value->type->kind == mir::MIRTypeKind::Int8 ||
+							value->type->kind == mir::MIRTypeKind::Int1)) {
+			encoder.movzxRM32_8(hint, slot);
+		} else {
+			encoder.movRM64(hint, slot);
+		}
 		return hint;
 	}
 	case mir::MIRValueKind::Global: {

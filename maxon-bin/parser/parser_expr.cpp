@@ -257,15 +257,19 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 					int identCol = currentColumn();
 					advance();
 
-					// Check if followed by a type keyword or another identifier (which would be the type)
+					// Check if followed by a type keyword or another identifier ON THE SAME LINE
+				// If on a different line, the identifier we consumed is the type (e.g., "array of Token\n")
 					auto nextKd = currentKeywordData();
-					if ((nextKd && nextKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER)) {
+					bool nextIsSameLine = (currentLine() == identLine);
+					bool nextIsTypeOnSameLine = nextIsSameLine &&
+						((nextKd && nextKd->category == KeywordCategory::Type) || check(TokenType::IDENTIFIER));
+					if (nextIsTypeOnSameLine) {
 						// The first identifier was the size, create a variable reference for it
 						sizeExpr = std::make_unique<VariableExprAST>(potentialSize, identLine, identCol);
 					} else {
 						// The identifier is the type itself, return with constSize=0
-						endLine = currentLine();
-						endCol = currentColumn() - 1;
+						endLine = identLine;
+						endCol = identCol + static_cast<int>(potentialSize.length()) - 1;
 						auto expr = std::make_unique<SizedArrayExprAST>(constSize, potentialSize, line, column);
 						expr->setEndPosition(endLine, endCol);
 						return expr;

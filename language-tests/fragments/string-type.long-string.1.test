@@ -8,19 +8,19 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 93
+; Instructions: 94
 
 %string = type { ptr, i64 }
 %_ManagedArray_byte = type { ptr, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.1 = constant [41 x i8] c"this string is longer than fifteen bytes\00"
 @.str.2 = constant [41 x i8] c"this string is longer than fifteen bytes\00"
 @.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
-
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 
 define i64 @main() {
 entry0:
@@ -29,7 +29,7 @@ entry0:
   %2 = call ptr @memcpy(ptr %1, ptr @.str.1, i64 40)
   %3 = getelementptr i8, ptr %1, i64 40
   store i8 0, ptr %3
-  %5 = call ptr @malloc(i64 32)
+  %5 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 0
   %7 = getelementptr %_ManagedArray_byte, ptr %6, i32 0, i32 0
   store ptr %1, ptr %7
@@ -48,7 +48,7 @@ entry0:
   %15 = call ptr @memcpy(ptr %14, ptr @.str.2, i64 40)
   %16 = getelementptr i8, ptr %14, i64 40
   store i8 0, ptr %16
-  %18 = call ptr @malloc(i64 32)
+  %18 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %19 = getelementptr %__ManagedStringData, ptr %18, i32 0, i32 0
   %20 = getelementptr %_ManagedArray_byte, ptr %19, i32 0, i32 0
   store ptr %14, ptr %20
@@ -86,6 +86,7 @@ s.var.release3:
   call void @_managed_string_release(ptr %36, ptr @.__tag.free.s)
   br label %s.var.continue4
 s.var.continue4:
+  call void @free(ptr %30, ptr @.__tag.free.meta.s)
   ret i64 0
 }
 
@@ -135,11 +136,15 @@ ifcont2:
   ret i1 %14
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -152,17 +157,19 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 140
+; Instructions: 141
 
 %string = type { ptr, i64 }
 %_ManagedArray_byte = type { ptr, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.1 = constant [41 x i8] c"this string is longer than fifteen bytes\00"
 @.str.2 = constant [41 x i8] c"this string is longer than fifteen bytes\00"
 @.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 
 define i1 @string.equals(ptr %self, ptr %other) {
 entry0:
@@ -180,8 +187,6 @@ entry0:
   ret i1 %8
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define i64 @main() {
 entry0:
   %0 = alloca %string
@@ -191,7 +196,7 @@ entry0:
   store i8 0, ptr %3
   %4 = alloca ptr
   store ptr %1, ptr %4
-  %5 = call ptr @malloc(i64 32)
+  %5 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 0
   %7 = getelementptr %_ManagedArray_byte, ptr %6, i32 0, i32 0
   store ptr %1, ptr %7
@@ -212,7 +217,7 @@ entry0:
   store i8 0, ptr %16
   %17 = alloca ptr
   store ptr %14, ptr %17
-  %18 = call ptr @malloc(i64 32)
+  %18 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %19 = getelementptr %__ManagedStringData, ptr %18, i32 0, i32 0
   %20 = getelementptr %_ManagedArray_byte, ptr %19, i32 0, i32 0
   store ptr %14, ptr %20
@@ -248,6 +253,7 @@ s.var.release3:
   call void @_managed_string_release(ptr %36, ptr @.__tag.free.s)
   br label %s.var.continue4
 s.var.continue4:
+  call void @free(ptr %30, ptr @.__tag.free.meta.s)
   ret i64 0
 }
 
@@ -330,11 +336,15 @@ ifcont2:
   ret i1 %14
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

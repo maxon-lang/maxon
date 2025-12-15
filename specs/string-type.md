@@ -1130,17 +1130,33 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 20 bytes (string concat)
-ALLOC #2: 11 bytes
-11ALLOC #3: 10 bytes (cstring conversion)
-FREE #3: 10 bytes (cstring release)
+ALLOC #1: 32 bytes (string metadata)
+ALLOC #2: 32 bytes (string metadata)
+ALLOC #3: 20 bytes (string concat)
+ALLOC #4: 20 bytes (string concat)
+ALLOC #5: 32 bytes (string concat)
+ALLOC #6: 11 bytes (int.toString)
+ALLOC #7: 11 bytes (int.toString)
+ALLOC #8: 32 bytes (int.toString)
+11ALLOC #9: 32 bytes (string metadata)
+ALLOC #10: 10 bytes (cstring conversion)
+ALLOC #11: 10 bytes (cstring conversion)
+FREE #11: 10 bytes (cstring release)
+FREE #10: 10 bytes (cstring release)
 
-FREE #2: 11 bytes (cstring release)
-FREE #1: 20 bytes (string literal)
+FREE #9: 32 bytes (string metadata)
+FREE #7: 11 bytes (cstring release)
+FREE #6: 11 bytes (cstring release)
+FREE #8: 32 bytes (string metadata)
+FREE #1: 32 bytes (string metadata)
+FREE #2: 32 bytes (string metadata)
+FREE #4: 20 bytes (string literal)
+FREE #3: 20 bytes (string literal)
+FREE #5: 32 bytes (string metadata)
 
 === ALLOC STATS ===
-Allocated: 41 bytes
-Freed:     41 bytes
+Allocated: 242 bytes
+Freed:     242 bytes
 Leaked:    0 bytes
 ```
 
@@ -1163,21 +1179,49 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 11 bytes (string concat)
-ALLOC #2: 12 bytes (string concat)
-ALLOC #3: 13 bytes (string concat)
-ALLOC #4: 10 bytes
-4ALLOC #5: 10 bytes (cstring conversion)
-FREE #5: 10 bytes (cstring release)
+ALLOC #1: 32 bytes (string metadata)
+ALLOC #2: 32 bytes (string metadata)
+ALLOC #3: 32 bytes (string metadata)
+ALLOC #4: 32 bytes (string metadata)
+ALLOC #5: 11 bytes (string concat)
+ALLOC #6: 11 bytes (string concat)
+ALLOC #7: 32 bytes (string concat)
+ALLOC #8: 12 bytes (string concat)
+ALLOC #9: 12 bytes (string concat)
+ALLOC #10: 32 bytes (string concat)
+ALLOC #11: 13 bytes (string concat)
+ALLOC #12: 13 bytes (string concat)
+ALLOC #13: 32 bytes (string concat)
+ALLOC #14: 10 bytes (int.toString)
+ALLOC #15: 10 bytes (int.toString)
+ALLOC #16: 32 bytes (int.toString)
+4ALLOC #17: 32 bytes (string metadata)
+ALLOC #18: 10 bytes (cstring conversion)
+ALLOC #19: 10 bytes (cstring conversion)
+FREE #19: 10 bytes (cstring release)
+FREE #18: 10 bytes (cstring release)
 
-FREE #4: 10 bytes (cstring release)
-FREE #1: 11 bytes (string literal)
-FREE #2: 12 bytes (string literal)
-FREE #3: 13 bytes (string literal)
+FREE #17: 32 bytes (string metadata)
+FREE #15: 10 bytes (cstring release)
+FREE #14: 10 bytes (cstring release)
+FREE #6: 11 bytes (string literal)
+FREE #5: 11 bytes (string literal)
+FREE #9: 12 bytes (string literal)
+FREE #8: 12 bytes (string literal)
+FREE #7: 32 bytes (string metadata)
+FREE #10: 32 bytes (string metadata)
+FREE #16: 32 bytes (string metadata)
+FREE #1: 32 bytes (string metadata)
+FREE #2: 32 bytes (string metadata)
+FREE #3: 32 bytes (string metadata)
+FREE #4: 32 bytes (string metadata)
+FREE #12: 13 bytes (string literal)
+FREE #11: 13 bytes (string literal)
+FREE #13: 32 bytes (string metadata)
 
 === ALLOC STATS ===
-Allocated: 56 bytes
-Freed:     56 bytes
+Allocated: 400 bytes
+Freed:     400 bytes
 Leaked:    0 bytes
 ```
 
@@ -1202,21 +1246,45 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 10 bytes (string concat)
-ALLOC #2: 11 bytes (string concat)
-FREE #1: 10 bytes (string reassign)
-ALLOC #3: 12 bytes (string concat)
-FREE #2: 11 bytes (string reassign)
-ALLOC #4: 10 bytes
-3ALLOC #5: 10 bytes (cstring conversion)
-FREE #5: 10 bytes (cstring release)
+ALLOC #1: 32 bytes (string metadata)
+ALLOC #2: 32 bytes (string metadata)
+ALLOC #3: 10 bytes (string concat)
+ALLOC #4: 10 bytes (string concat)
+ALLOC #5: 32 bytes (string concat)
+FREE #1: 32 bytes (string reassign meta)
+ALLOC #6: 11 bytes (string concat)
+ALLOC #7: 11 bytes (string concat)
+ALLOC #8: 32 bytes (string concat)
+FREE #4: 10 bytes (string reassign)
+FREE #3: 10 bytes (string reassign)
+FREE #5: 32 bytes (string reassign meta)
+ALLOC #9: 12 bytes (string concat)
+ALLOC #10: 12 bytes (string concat)
+ALLOC #11: 32 bytes (string concat)
+FREE #7: 11 bytes (string reassign)
+FREE #6: 11 bytes (string reassign)
+FREE #8: 32 bytes (string reassign meta)
+ALLOC #12: 10 bytes (int.toString)
+ALLOC #13: 10 bytes (int.toString)
+ALLOC #14: 32 bytes (int.toString)
+3ALLOC #15: 32 bytes (string metadata)
+ALLOC #16: 10 bytes (cstring conversion)
+ALLOC #17: 10 bytes (cstring conversion)
+FREE #17: 10 bytes (cstring release)
+FREE #16: 10 bytes (cstring release)
 
-FREE #4: 10 bytes (cstring release)
-FREE #3: 12 bytes (string literal)
+FREE #15: 32 bytes (string metadata)
+FREE #13: 10 bytes (cstring release)
+FREE #12: 10 bytes (cstring release)
+FREE #14: 32 bytes (string metadata)
+FREE #10: 12 bytes (string literal)
+FREE #9: 12 bytes (string literal)
+FREE #11: 32 bytes (string metadata)
+FREE #2: 32 bytes (string metadata)
 
 === ALLOC STATS ===
-Allocated: 53 bytes
-Freed:     53 bytes
+Allocated: 330 bytes
+Freed:     330 bytes
 Leaked:    0 bytes
 ```
 
@@ -1236,16 +1304,28 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 36 bytes (string literal)
-ALLOC #2: 11 bytes
-27ALLOC #3: 10 bytes (cstring conversion)
-FREE #3: 10 bytes (cstring release)
+ALLOC #2: 36 bytes (string literal)
+ALLOC #3: 32 bytes (string metadata)
+ALLOC #4: 11 bytes (int.toString)
+ALLOC #5: 11 bytes (int.toString)
+ALLOC #6: 32 bytes (int.toString)
+27ALLOC #7: 32 bytes (string metadata)
+ALLOC #8: 10 bytes (cstring conversion)
+ALLOC #9: 10 bytes (cstring conversion)
+FREE #9: 10 bytes (cstring release)
+FREE #8: 10 bytes (cstring release)
 
-FREE #2: 11 bytes (cstring release)
+FREE #7: 32 bytes (string metadata)
+FREE #5: 11 bytes (cstring release)
+FREE #4: 11 bytes (cstring release)
+FREE #2: 36 bytes (string literal)
 FREE #1: 36 bytes (string literal)
+FREE #6: 32 bytes (string metadata)
+FREE #3: 32 bytes (string metadata)
 
 === ALLOC STATS ===
-Allocated: 57 bytes
-Freed:     57 bytes
+Allocated: 210 bytes
+Freed:     210 bytes
 Leaked:    0 bytes
 ```
 

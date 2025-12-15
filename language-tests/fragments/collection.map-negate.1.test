@@ -13,7 +13,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 218
+; Instructions: 228
 
 %string = type { ptr, i64 }
 %cstring = type { ptr, i64, ptr }
@@ -25,9 +25,12 @@ end 'main'
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
+@.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -69,10 +72,6 @@ cstring.continue3:
   ret %cstring %21
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
-declare void @_managed_array_release(ptr %arg0, ptr %arg1)
-
 define i64 @negate(i64 %x) {
 entry0:
   %2 = sub i64 0, %x
@@ -109,36 +108,45 @@ entry0:
   %17 = call %string @__int_toString(i64 %16, ptr null)
   %18 = alloca %string
   store %string %17, ptr %18
-  %19 = call i64 @sys.print(ptr %18)
-  %20 = getelementptr %array<int>, ptr %11, i32 0, i32 0
-  %21 = getelementptr %__ManagedArrayData_int, ptr %20, i32 0, i32 0
-  %22 = load ptr, ptr %21
-  %23 = getelementptr i64, ptr %22, i64 1
-  %24 = load i64, ptr %23
-  %25 = call %string @__int_toString(i64 %24, ptr null)
-  %26 = alloca %string
-  store %string %25, ptr %26
-  %27 = call i64 @sys.print(ptr %26)
-  %28 = getelementptr %array<int>, ptr %11, i32 0, i32 0
-  %29 = getelementptr %__ManagedArrayData_int, ptr %28, i32 0, i32 0
-  %30 = load ptr, ptr %29
-  %31 = getelementptr i64, ptr %30, i64 2
-  %32 = load i64, ptr %31
-  %33 = call %string @__int_toString(i64 %32, ptr null)
-  %34 = alloca %string
-  store %string %33, ptr %34
-  %35 = call i64 @sys.print(ptr %34)
-  %36 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %37 = getelementptr %__ManagedArrayData_int, ptr %36, i32 0, i32 0
-  %38 = load ptr, ptr %37
-  %39 = getelementptr %__ManagedArrayData_int, ptr %36, i32 0, i32 2
-  %40 = load i64, ptr %39
-  %41 = icmp sgt i64 %40, 0
-  br i1 %41, label %arr.release1, label %arr.skip2
+  %19 = getelementptr %string, ptr %18, i32 0, i32 0
+  %20 = load ptr, ptr %19
+  %22 = call i64 @sys.print(ptr %18)
+  %23 = getelementptr %array<int>, ptr %11, i32 0, i32 0
+  %24 = getelementptr %__ManagedArrayData_int, ptr %23, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = getelementptr i64, ptr %25, i64 1
+  %27 = load i64, ptr %26
+  %28 = call %string @__int_toString(i64 %27, ptr null)
+  %29 = alloca %string
+  store %string %28, ptr %29
+  %30 = getelementptr %string, ptr %29, i32 0, i32 0
+  %31 = load ptr, ptr %30
+  %33 = call i64 @sys.print(ptr %29)
+  %34 = getelementptr %array<int>, ptr %11, i32 0, i32 0
+  %35 = getelementptr %__ManagedArrayData_int, ptr %34, i32 0, i32 0
+  %36 = load ptr, ptr %35
+  %37 = getelementptr i64, ptr %36, i64 2
+  %38 = load i64, ptr %37
+  %39 = call %string @__int_toString(i64 %38, ptr null)
+  %40 = alloca %string
+  store %string %39, ptr %40
+  %41 = getelementptr %string, ptr %40, i32 0, i32 0
+  %42 = load ptr, ptr %41
+  %44 = call i64 @sys.print(ptr %40)
+  %45 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %46 = getelementptr %__ManagedArrayData_int, ptr %45, i32 0, i32 0
+  %47 = load ptr, ptr %46
+  %48 = getelementptr %__ManagedArrayData_int, ptr %45, i32 0, i32 2
+  %49 = load i64, ptr %48
+  %50 = icmp sgt i64 %49, 0
+  br i1 %50, label %arr.release1, label %arr.skip2
 arr.release1:
-  call void @_managed_array_release(ptr %38, ptr @.__tag.free.arr)
+  call void @_managed_array_release(ptr %47, ptr @.__tag.free.arr)
   br label %arr.skip2
 arr.skip2:
+  call void @free(ptr %20, ptr @.__tag.free.meta.interp.input)
+  call void @free(ptr %31, ptr @.__tag.free.meta.interp.input)
+  call void @free(ptr %42, ptr @.__tag.free.meta.interp.input)
   ret i64 0
 }
 
@@ -153,7 +161,7 @@ entry0:
   %7 = load i64, ptr %6
   %8 = call i64 @write_stdout(ptr %5, i64 %7)
   %10 = alloca %string
-  %11 = call ptr @malloc(i64 32)
+  %11 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
   %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
   store ptr @.str.sso.1, ptr %13
@@ -189,6 +197,7 @@ newline.var.release1:
   call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
   br label %newline.var.continue2
 newline.var.continue2:
+  call void @free(ptr %29, ptr @.__tag.free.meta.newline)
   %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %37 = load ptr, ptr %36
   call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
@@ -197,6 +206,10 @@ newline.var.continue2:
   call void @_managed_string_release(ptr %39, ptr @.__tag.free.newline_cs)
   ret i64 %27
 }
+
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 define Optional<i64> @array<int>.get(ptr %self, i64 %index) {
 entry0:
@@ -303,7 +316,9 @@ declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare %string @__int_toString(i64 %arg0, ptr %arg1)
 
@@ -320,7 +335,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 281
+; Instructions: 300
 
 %string = type { ptr, i64 }
 %cstring = type { ptr, i64, ptr }
@@ -332,9 +347,12 @@ entry0:
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
+@.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -379,10 +397,6 @@ cstring.continue3:
   ret %cstring %21
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
-declare void @_managed_array_release(ptr %arg0, ptr %arg1)
-
 define i64 @negate(i64 %x) {
 entry0:
   %0 = alloca i64
@@ -422,36 +436,54 @@ entry0:
   %17 = call %string @__int_toString(i64 %16, ptr null)
   %18 = alloca %string
   store %string %17, ptr %18
-  %19 = call i64 @sys.print(ptr %18)
-  %20 = getelementptr %array<int>, ptr %11, i32 0, i32 0
-  %21 = getelementptr %__ManagedArrayData_int, ptr %20, i32 0, i32 0
-  %22 = load ptr, ptr %21
-  %23 = getelementptr i64, ptr %22, i64 1
-  %24 = load i64, ptr %23
-  %25 = call %string @__int_toString(i64 %24, ptr null)
-  %26 = alloca %string
-  store %string %25, ptr %26
-  %27 = call i64 @sys.print(ptr %26)
-  %28 = getelementptr %array<int>, ptr %11, i32 0, i32 0
-  %29 = getelementptr %__ManagedArrayData_int, ptr %28, i32 0, i32 0
-  %30 = load ptr, ptr %29
-  %31 = getelementptr i64, ptr %30, i64 2
-  %32 = load i64, ptr %31
-  %33 = call %string @__int_toString(i64 %32, ptr null)
-  %34 = alloca %string
-  store %string %33, ptr %34
-  %35 = call i64 @sys.print(ptr %34)
-  %36 = getelementptr %array<int>, ptr %1, i32 0, i32 0
-  %37 = getelementptr %__ManagedArrayData_int, ptr %36, i32 0, i32 0
-  %38 = load ptr, ptr %37
-  %39 = getelementptr %__ManagedArrayData_int, ptr %36, i32 0, i32 2
-  %40 = load i64, ptr %39
-  %41 = icmp sgt i64 %40, 0
-  br i1 %41, label %arr.release1, label %arr.skip2
+  %19 = getelementptr %string, ptr %18, i32 0, i32 0
+  %20 = load ptr, ptr %19
+  %21 = alloca ptr
+  store ptr %20, ptr %21
+  %22 = call i64 @sys.print(ptr %18)
+  %23 = getelementptr %array<int>, ptr %11, i32 0, i32 0
+  %24 = getelementptr %__ManagedArrayData_int, ptr %23, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = getelementptr i64, ptr %25, i64 1
+  %27 = load i64, ptr %26
+  %28 = call %string @__int_toString(i64 %27, ptr null)
+  %29 = alloca %string
+  store %string %28, ptr %29
+  %30 = getelementptr %string, ptr %29, i32 0, i32 0
+  %31 = load ptr, ptr %30
+  %32 = alloca ptr
+  store ptr %31, ptr %32
+  %33 = call i64 @sys.print(ptr %29)
+  %34 = getelementptr %array<int>, ptr %11, i32 0, i32 0
+  %35 = getelementptr %__ManagedArrayData_int, ptr %34, i32 0, i32 0
+  %36 = load ptr, ptr %35
+  %37 = getelementptr i64, ptr %36, i64 2
+  %38 = load i64, ptr %37
+  %39 = call %string @__int_toString(i64 %38, ptr null)
+  %40 = alloca %string
+  store %string %39, ptr %40
+  %41 = getelementptr %string, ptr %40, i32 0, i32 0
+  %42 = load ptr, ptr %41
+  %43 = alloca ptr
+  store ptr %42, ptr %43
+  %44 = call i64 @sys.print(ptr %40)
+  %45 = getelementptr %array<int>, ptr %1, i32 0, i32 0
+  %46 = getelementptr %__ManagedArrayData_int, ptr %45, i32 0, i32 0
+  %47 = load ptr, ptr %46
+  %48 = getelementptr %__ManagedArrayData_int, ptr %45, i32 0, i32 2
+  %49 = load i64, ptr %48
+  %50 = icmp sgt i64 %49, 0
+  br i1 %50, label %arr.release1, label %arr.skip2
 arr.release1:
-  call void @_managed_array_release(ptr %38, ptr @.__tag.free.arr)
+  call void @_managed_array_release(ptr %47, ptr @.__tag.free.arr)
   br label %arr.skip2
 arr.skip2:
+  %51 = load ptr, ptr %21
+  call void @free(ptr %51, ptr @.__tag.free.meta.interp.input)
+  %52 = load ptr, ptr %32
+  call void @free(ptr %52, ptr @.__tag.free.meta.interp.input)
+  %53 = load ptr, ptr %43
+  call void @free(ptr %53, ptr @.__tag.free.meta.interp.input)
   ret i64 0
 }
 
@@ -471,7 +503,7 @@ entry0:
   %9 = alloca i64
   store i64 %8, ptr %9
   %10 = alloca %string
-  %11 = call ptr @malloc(i64 32)
+  %11 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
   %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
   store ptr @.str.sso.1, ptr %13
@@ -508,6 +540,7 @@ newline.var.release1:
   call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
   br label %newline.var.continue2
 newline.var.continue2:
+  call void @free(ptr %29, ptr @.__tag.free.meta.newline)
   %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %37 = load ptr, ptr %36
   call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
@@ -516,6 +549,10 @@ newline.var.continue2:
   call void @_managed_string_release(ptr %39, ptr @.__tag.free.newline_cs)
   ret i64 %27
 }
+
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 define i64 @array<int>.count(ptr %self) {
 entry0:
@@ -677,7 +714,9 @@ declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare %string @__int_toString(i64 %arg0, ptr %arg1)
 

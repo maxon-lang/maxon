@@ -21,7 +21,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 113
+; Instructions: 132
 
 %string = type { ptr, i64 }
 %cstring = type { ptr, i64, ptr }
@@ -30,8 +30,11 @@ end 'main'
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
+@.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -73,8 +76,6 @@ cstring.continue3:
   ret %cstring %21
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define i64 @main() {
 entry0:
   %16 = sitofp i64 10 to f64
@@ -83,27 +84,45 @@ entry0:
   %33 = call %string @__int_toString(i64 13, ptr null)
   %34 = alloca %string
   store %string %33, ptr %34
-  %35 = call i64 @sys.print(ptr %34)
-  %37 = call %string @__int_toString(i64 7, ptr null)
-  %38 = alloca %string
-  store %string %37, ptr %38
-  %39 = call i64 @sys.print(ptr %38)
-  %41 = call %string @__int_toString(i64 30, ptr null)
-  %42 = alloca %string
-  store %string %41, ptr %42
-  %43 = call i64 @sys.print(ptr %42)
-  %45 = call %string @__float_toString(f64 %18, ptr null)
-  %46 = alloca %string
-  store %string %45, ptr %46
-  %47 = call i64 @sys.print(ptr %46)
-  %49 = call %string @__int_toString(i64 3, ptr null)
-  %50 = alloca %string
-  store %string %49, ptr %50
-  %51 = call i64 @sys.print(ptr %50)
-  %53 = call %string @__int_toString(i64 1, ptr null)
-  %54 = alloca %string
-  store %string %53, ptr %54
-  %55 = call i64 @sys.print(ptr %54)
+  %35 = getelementptr %string, ptr %34, i32 0, i32 0
+  %36 = load ptr, ptr %35
+  %38 = call i64 @sys.print(ptr %34)
+  %40 = call %string @__int_toString(i64 7, ptr null)
+  %41 = alloca %string
+  store %string %40, ptr %41
+  %42 = getelementptr %string, ptr %41, i32 0, i32 0
+  %43 = load ptr, ptr %42
+  %45 = call i64 @sys.print(ptr %41)
+  %47 = call %string @__int_toString(i64 30, ptr null)
+  %48 = alloca %string
+  store %string %47, ptr %48
+  %49 = getelementptr %string, ptr %48, i32 0, i32 0
+  %50 = load ptr, ptr %49
+  %52 = call i64 @sys.print(ptr %48)
+  %54 = call %string @__float_toString(f64 %18, ptr null)
+  %55 = alloca %string
+  store %string %54, ptr %55
+  %56 = getelementptr %string, ptr %55, i32 0, i32 0
+  %57 = load ptr, ptr %56
+  %59 = call i64 @sys.print(ptr %55)
+  %61 = call %string @__int_toString(i64 3, ptr null)
+  %62 = alloca %string
+  store %string %61, ptr %62
+  %63 = getelementptr %string, ptr %62, i32 0, i32 0
+  %64 = load ptr, ptr %63
+  %66 = call i64 @sys.print(ptr %62)
+  %68 = call %string @__int_toString(i64 1, ptr null)
+  %69 = alloca %string
+  store %string %68, ptr %69
+  %70 = getelementptr %string, ptr %69, i32 0, i32 0
+  %71 = load ptr, ptr %70
+  %73 = call i64 @sys.print(ptr %69)
+  call void @free(ptr %36, ptr @.__tag.free.meta.interp.input)
+  call void @free(ptr %43, ptr @.__tag.free.meta.interp.input)
+  call void @free(ptr %50, ptr @.__tag.free.meta.interp.input)
+  call void @free(ptr %57, ptr @.__tag.free.meta.interp.input)
+  call void @free(ptr %64, ptr @.__tag.free.meta.interp.input)
+  call void @free(ptr %71, ptr @.__tag.free.meta.interp.input)
   ret i64 0
 }
 
@@ -118,7 +137,7 @@ entry0:
   %7 = load i64, ptr %6
   %8 = call i64 @write_stdout(ptr %5, i64 %7)
   %10 = alloca %string
-  %11 = call ptr @malloc(i64 32)
+  %11 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
   %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
   store ptr @.str.sso.1, ptr %13
@@ -154,6 +173,7 @@ newline.var.release1:
   call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
   br label %newline.var.continue2
 newline.var.continue2:
+  call void @free(ptr %29, ptr @.__tag.free.meta.newline)
   %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %37 = load ptr, ptr %36
   call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
@@ -163,13 +183,17 @@ newline.var.continue2:
   ret i64 %27
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare %string @__int_toString(i64 %arg0, ptr %arg1)
 
@@ -188,7 +212,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 165
+; Instructions: 202
 
 %string = type { ptr, i64 }
 %cstring = type { ptr, i64, ptr }
@@ -197,8 +221,11 @@ entry0:
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
+@.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -242,8 +269,6 @@ cstring.continue3:
   call void @_managed_string_release(ptr %23, ptr @.__tag.free.cs)
   ret %cstring %21
 }
-
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 define i64 @main() {
 entry0:
@@ -291,32 +316,68 @@ entry0:
   %33 = call %string @__int_toString(i64 %32, ptr null)
   %34 = alloca %string
   store %string %33, ptr %34
-  %35 = call i64 @sys.print(ptr %34)
-  %36 = load i64, ptr %9
-  %37 = call %string @__int_toString(i64 %36, ptr null)
-  %38 = alloca %string
-  store %string %37, ptr %38
-  %39 = call i64 @sys.print(ptr %38)
-  %40 = load i64, ptr %13
-  %41 = call %string @__int_toString(i64 %40, ptr null)
-  %42 = alloca %string
-  store %string %41, ptr %42
-  %43 = call i64 @sys.print(ptr %42)
-  %44 = load f64, ptr %19
-  %45 = call %string @__float_toString(f64 %44, ptr null)
-  %46 = alloca %string
-  store %string %45, ptr %46
-  %47 = call i64 @sys.print(ptr %46)
-  %48 = load i64, ptr %27
-  %49 = call %string @__int_toString(i64 %48, ptr null)
-  %50 = alloca %string
-  store %string %49, ptr %50
-  %51 = call i64 @sys.print(ptr %50)
-  %52 = load i64, ptr %31
-  %53 = call %string @__int_toString(i64 %52, ptr null)
-  %54 = alloca %string
-  store %string %53, ptr %54
-  %55 = call i64 @sys.print(ptr %54)
+  %35 = getelementptr %string, ptr %34, i32 0, i32 0
+  %36 = load ptr, ptr %35
+  %37 = alloca ptr
+  store ptr %36, ptr %37
+  %38 = call i64 @sys.print(ptr %34)
+  %39 = load i64, ptr %9
+  %40 = call %string @__int_toString(i64 %39, ptr null)
+  %41 = alloca %string
+  store %string %40, ptr %41
+  %42 = getelementptr %string, ptr %41, i32 0, i32 0
+  %43 = load ptr, ptr %42
+  %44 = alloca ptr
+  store ptr %43, ptr %44
+  %45 = call i64 @sys.print(ptr %41)
+  %46 = load i64, ptr %13
+  %47 = call %string @__int_toString(i64 %46, ptr null)
+  %48 = alloca %string
+  store %string %47, ptr %48
+  %49 = getelementptr %string, ptr %48, i32 0, i32 0
+  %50 = load ptr, ptr %49
+  %51 = alloca ptr
+  store ptr %50, ptr %51
+  %52 = call i64 @sys.print(ptr %48)
+  %53 = load f64, ptr %19
+  %54 = call %string @__float_toString(f64 %53, ptr null)
+  %55 = alloca %string
+  store %string %54, ptr %55
+  %56 = getelementptr %string, ptr %55, i32 0, i32 0
+  %57 = load ptr, ptr %56
+  %58 = alloca ptr
+  store ptr %57, ptr %58
+  %59 = call i64 @sys.print(ptr %55)
+  %60 = load i64, ptr %27
+  %61 = call %string @__int_toString(i64 %60, ptr null)
+  %62 = alloca %string
+  store %string %61, ptr %62
+  %63 = getelementptr %string, ptr %62, i32 0, i32 0
+  %64 = load ptr, ptr %63
+  %65 = alloca ptr
+  store ptr %64, ptr %65
+  %66 = call i64 @sys.print(ptr %62)
+  %67 = load i64, ptr %31
+  %68 = call %string @__int_toString(i64 %67, ptr null)
+  %69 = alloca %string
+  store %string %68, ptr %69
+  %70 = getelementptr %string, ptr %69, i32 0, i32 0
+  %71 = load ptr, ptr %70
+  %72 = alloca ptr
+  store ptr %71, ptr %72
+  %73 = call i64 @sys.print(ptr %69)
+  %74 = load ptr, ptr %37
+  call void @free(ptr %74, ptr @.__tag.free.meta.interp.input)
+  %75 = load ptr, ptr %44
+  call void @free(ptr %75, ptr @.__tag.free.meta.interp.input)
+  %76 = load ptr, ptr %51
+  call void @free(ptr %76, ptr @.__tag.free.meta.interp.input)
+  %77 = load ptr, ptr %58
+  call void @free(ptr %77, ptr @.__tag.free.meta.interp.input)
+  %78 = load ptr, ptr %65
+  call void @free(ptr %78, ptr @.__tag.free.meta.interp.input)
+  %79 = load ptr, ptr %72
+  call void @free(ptr %79, ptr @.__tag.free.meta.interp.input)
   ret i64 0
 }
 
@@ -336,7 +397,7 @@ entry0:
   %9 = alloca i64
   store i64 %8, ptr %9
   %10 = alloca %string
-  %11 = call ptr @malloc(i64 32)
+  %11 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
   %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
   store ptr @.str.sso.1, ptr %13
@@ -373,6 +434,7 @@ newline.var.release1:
   call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
   br label %newline.var.continue2
 newline.var.continue2:
+  call void @free(ptr %29, ptr @.__tag.free.meta.newline)
   %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %37 = load ptr, ptr %36
   call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
@@ -382,13 +444,17 @@ newline.var.continue2:
   ret i64 %27
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare f64 @trunc(f64 %arg0)
 

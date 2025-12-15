@@ -9,23 +9,26 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 115
+; Instructions: 116
 
 %string = type { ptr, i64 }
 %character = type { ptr }
 %_ManagedArray_byte = type { ptr, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [6 x i8] c"hello\00"
 @.chr.2 = constant [2 x i8] c"A\00"
+@.__tag.char.meta = constant [14 x i8] c"char metadata\00"
 @.str.sso.3 = constant [6 x i8] c"hello\00"
 @.chr.4 = constant [2 x i8] c"A\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 
 define i64 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 32)
+  %1 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
@@ -40,7 +43,7 @@ entry0:
   %8 = getelementptr %string, ptr %0, i32 0, i32 1
   store i64 0, ptr %8
   %9 = alloca %character
-  %10 = call ptr @malloc(i64 32)
+  %10 = call ptr @malloc(i64 32, ptr @.__tag.char.meta)
   %11 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 0
   %12 = getelementptr %_ManagedArray_byte, ptr %11, i32 0, i32 0
   store ptr @.chr.2, ptr %12
@@ -53,7 +56,7 @@ entry0:
   %16 = getelementptr %character, ptr %9, i32 0, i32 0
   store ptr %10, ptr %16
   %17 = alloca %string
-  %18 = call ptr @malloc(i64 32)
+  %18 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %19 = getelementptr %__ManagedStringData, ptr %18, i32 0, i32 0
   %20 = getelementptr %_ManagedArray_byte, ptr %19, i32 0, i32 0
   store ptr @.str.sso.3, ptr %20
@@ -73,7 +76,7 @@ entry0:
   %48 = load ptr, ptr %47
   %49 = call i1 @string.equalsManagedString(ptr %46, ptr %48)
   %27 = alloca %character
-  %28 = call ptr @malloc(i64 32)
+  %28 = call ptr @malloc(i64 32, ptr @.__tag.char.meta)
   %29 = getelementptr %__ManagedStringData, ptr %28, i32 0, i32 0
   %30 = getelementptr %_ManagedArray_byte, ptr %29, i32 0, i32 0
   store ptr @.chr.4, ptr %30
@@ -108,6 +111,7 @@ s.var.release3:
   call void @_managed_string_release(ptr %44, ptr @.__tag.free.s)
   br label %s.var.continue4
 s.var.continue4:
+  call void @free(ptr %38, ptr @.__tag.free.meta.s)
   ret i64 0
 }
 
@@ -159,7 +163,9 @@ ifcont2:
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -172,18 +178,21 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 164
+; Instructions: 165
 
 %string = type { ptr, i64 }
 %character = type { ptr }
 %_ManagedArray_byte = type { ptr, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [6 x i8] c"hello\00"
 @.chr.2 = constant [2 x i8] c"A\00"
+@.__tag.char.meta = constant [14 x i8] c"char metadata\00"
 @.str.sso.3 = constant [6 x i8] c"hello\00"
 @.chr.4 = constant [2 x i8] c"A\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 
 define i1 @character.equals(ptr %self, ptr %other) {
 entry0:
@@ -220,7 +229,7 @@ entry0:
 define i64 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 32)
+  %1 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
@@ -235,7 +244,7 @@ entry0:
   %8 = getelementptr %string, ptr %0, i32 0, i32 1
   store i64 0, ptr %8
   %9 = alloca %character
-  %10 = call ptr @malloc(i64 32)
+  %10 = call ptr @malloc(i64 32, ptr @.__tag.char.meta)
   %11 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 0
   %12 = getelementptr %_ManagedArray_byte, ptr %11, i32 0, i32 0
   store ptr @.chr.2, ptr %12
@@ -248,7 +257,7 @@ entry0:
   %16 = getelementptr %character, ptr %9, i32 0, i32 0
   store ptr %10, ptr %16
   %17 = alloca %string
-  %18 = call ptr @malloc(i64 32)
+  %18 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %19 = getelementptr %__ManagedStringData, ptr %18, i32 0, i32 0
   %20 = getelementptr %_ManagedArray_byte, ptr %19, i32 0, i32 0
   store ptr @.str.sso.3, ptr %20
@@ -264,7 +273,7 @@ entry0:
   store i64 0, ptr %25
   %26 = call i1 @string.equals(ptr %0, ptr %17)
   %27 = alloca %character
-  %28 = call ptr @malloc(i64 32)
+  %28 = call ptr @malloc(i64 32, ptr @.__tag.char.meta)
   %29 = getelementptr %__ManagedStringData, ptr %28, i32 0, i32 0
   %30 = getelementptr %_ManagedArray_byte, ptr %29, i32 0, i32 0
   store ptr @.chr.4, ptr %30
@@ -295,6 +304,7 @@ s.var.release3:
   call void @_managed_string_release(ptr %44, ptr @.__tag.free.s)
   br label %s.var.continue4
 s.var.continue4:
+  call void @free(ptr %38, ptr @.__tag.free.meta.s)
   ret i64 0
 }
 
@@ -379,7 +389,9 @@ ifcont2:
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

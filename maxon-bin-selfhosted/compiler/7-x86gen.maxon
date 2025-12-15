@@ -33,9 +33,20 @@ export type X86Gen
 
 	export function genExpr(expr Expr)
 		if expr.kind == ExprKind.intLiteral 'int'
-			// MOV EAX, imm32: B8 xx xx xx xx
-			code.emitByte(0xB8 as byte)
-			code.emitDword(expr.intValue)
+			let value = expr.intValue
+			// Check if value fits in 32-bit signed range
+			if value >= -2147483648 and value <= 2147483647 'small'
+				// MOV r64, imm32 (sign-extended): REX.W C7 /0 id
+				code.emitByte(0x48 as byte)  // REX.W prefix
+				code.emitByte(0xC7 as byte)  // MOV r/m64, imm32
+				code.emitByte(0xC0 as byte)  // ModRM: RAX
+				code.emitDword(value)
+			end 'small' else 'large'
+				// MOV RAX, imm64: REX.W B8+rd io
+				code.emitByte(0x48 as byte)  // REX.W prefix
+				code.emitByte(0xB8 as byte)  // MOV RAX, imm64 (B8 + 0 for RAX)
+				code.emitQword(value)
+			end 'large'
 		end 'int'
 	end 'genExpr'
 

@@ -35,7 +35,7 @@ export type CodeGen
 		localVars = map from string to string
 		tempCounter = 0
 
-		var returnTypeStr = "i32"
+		var returnTypeStr = "i64"
 		if fn.returnType.kind == TypeKind.voidType 'void'
 			returnTypeStr = "void"
 		end 'void'
@@ -60,7 +60,7 @@ export type CodeGen
 		if stmt.kind == StmtKind.returnStmt 'return'
 			if stmt.hasValue 'hasValue'
 				if let temp = genExpr(stmt.expr) 'validExpr'
-					emit("    ret i32 {temp}")
+					emit("    ret i64 {temp}")
 				end 'validExpr' else 'invalidExpr'
 					return false
 				end 'invalidExpr'
@@ -70,7 +70,7 @@ export type CodeGen
 		end 'return' else if stmt.kind == StmtKind.letStmt 'let'
 			if let valueTemp = genExpr(stmt.expr) 'validExpr'
 				let varTemp = newTemp()
-				emit("    {varTemp} = copy i32 {valueTemp}")
+				emit("    {varTemp} = copy i64 {valueTemp}")
 				localVars.insert(stmt.name, varTemp)
 			end 'validExpr' else 'invalidExpr'
 				return false

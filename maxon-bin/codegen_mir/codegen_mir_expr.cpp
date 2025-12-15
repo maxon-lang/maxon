@@ -1290,6 +1290,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				mir::MIRValue *leftPtr = nullptr;
 				if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->left.get())) {
 					leftPtr = namedValues[varExpr->name];
+					// For struct parameters (including character), need to load the pointer
+					if (isStructParameter(varExpr->name)) {
+						leftPtr = builder->createLoad(mir::MIRType::getPtr(), leftPtr, varExpr->name + ".ptr");
+					}
 				} else if (auto *charLit = dynamic_cast<CharacterExprAST *>(binExpr->left.get())) {
 					leftPtr = generateCharLiteral(charLit);
 				} else {
@@ -1299,6 +1303,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				mir::MIRValue *rightPtr = nullptr;
 				if (auto *varExpr = dynamic_cast<VariableExprAST *>(binExpr->right.get())) {
 					rightPtr = namedValues[varExpr->name];
+					// For struct parameters (including character), need to load the pointer
+					if (isStructParameter(varExpr->name)) {
+						rightPtr = builder->createLoad(mir::MIRType::getPtr(), rightPtr, varExpr->name + ".ptr");
+					}
 				} else if (auto *charLit = dynamic_cast<CharacterExprAST *>(binExpr->right.get())) {
 					rightPtr = generateCharLiteral(charLit);
 				} else {
@@ -2360,7 +2368,8 @@ mir::MIRValue *MIRCodeGenerator::generateStructLiteral(StructInitExprAST *struct
 				mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
 				mir::MIRValue *sizeExt = builder->createSExt(sizeVal, mir::MIRType::getInt64(), "size.ext");
 				mir::MIRValue *totalSize = builder->createMul(sizeExt, elemSizeVal, "total.size");
-				mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {totalSize}, fieldName + ".buffer");
+				mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.init." + fieldName, "init array");
+				mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {totalSize, arrayTag}, fieldName + ".buffer");
 
 				// Zero-initialize the buffer
 				mir::MIRFunction *memsetFunc = module->getFunction("memset");

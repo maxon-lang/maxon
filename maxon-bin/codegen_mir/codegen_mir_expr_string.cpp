@@ -43,6 +43,10 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 		(void)strLit; // Unused, just for type check
 		return "string";
 	}
+	if (auto *charLit = dynamic_cast<CharacterExprAST *>(expr)) {
+		(void)charLit;
+		return "character";
+	}
 	if (auto *structInit = dynamic_cast<StructInitExprAST *>(expr)) {
 		return structInit->structName;
 	}
@@ -259,6 +263,12 @@ std::string MIRCodeGenerator::getExpressionMaxonType(ExprAST *expr) {
 		return "nil";
 	}
 
+	// Handle interpolated string expressions - always return string
+	if (auto *interpExpr = dynamic_cast<InterpolatedStringExprAST *>(expr)) {
+		(void)interpExpr;
+		return "string";
+	}
+
 	throw std::runtime_error("Unsupported expression type for type inference: " +
 							 std::string(typeid(*expr).name()) +
 							 " at line " + std::to_string(expr->line) +
@@ -373,9 +383,10 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 	if (!mallocFunc) {
 		reportError("malloc not declared for string literal", strExpr->line, strExpr->column);
 	}
+	mir::MIRValue *mallocTag = module->createGlobalString(".__tag.str.meta", "string metadata");
 	mir::MIRValue *managedDataAlloca = builder->createCall(
 		mallocFunc,
-		{builder->getInt64(managedDataType->getSizeInBytes())},
+		{builder->getInt64(managedDataType->getSizeInBytes()), mallocTag},
 		"managed.data.heap");
 
 	// Populate the __ManagedStringData fields
@@ -402,6 +413,11 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 	// string._managed is of type ptr (opaque pointer)
 	mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, stringAlloca, 0, "str._managed");
 	builder->createStore(managedDataAlloca, managedFieldPtr);
+
+	// NOTE: We don't track the __ManagedStringData here because:
+	// - If assigned to a var: stringVariables tracking handles cleanup
+	// - If assigned to a let: caller adds to managedStringDataPtrs
+	// - Tracking here would cause double-free
 
 	// Initialize _iterPos field to 0 (field 1 of string struct)
 	// This is required for the Iterable.next() implementation
@@ -493,9 +509,10 @@ mir::MIRValue *MIRCodeGenerator::generateCharLiteral(CharacterExprAST *charExpr)
 	if (!mallocFunc) {
 		reportError("malloc not declared for char literal", charExpr->line, charExpr->column);
 	}
+	mir::MIRValue *mallocTag = module->createGlobalString(".__tag.char.meta", "char metadata");
 	mir::MIRValue *managedDataAlloca = builder->createCall(
 		mallocFunc,
-		{builder->getInt64(managedDataType->getSizeInBytes())},
+		{builder->getInt64(managedDataType->getSizeInBytes()), mallocTag},
 		"char.managed.data");
 
 	// Populate the __ManagedStringData fields
@@ -540,14 +557,18 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 	}
 
 	// Convert each part to a string and store in a vector
+	// Also track which parts are "owned" (newly created strings whose managed data needs cleanup)
+	// vs "borrowed" (references to existing variables whose cleanup is handled elsewhere)
 	std::vector<mir::MIRValue *> stringParts;
+	std::vector<bool> isOwnedPart; // true if this part's managed data needs cleanup
 
 	for (const auto &part : interpExpr->parts) {
 		if (!part.isExpression) {
-			// Literal string segment - generate as string literal
+			// Literal string segment - generate as string literal (OWNED - we created it)
 			StringLiteralExprAST tempStrExpr(part.literalValue, interpExpr->line, interpExpr->column);
 			mir::MIRValue *litStr = generateStringLiteral(&tempStrExpr);
 			stringParts.push_back(litStr);
+			isOwnedPart.push_back(true);
 		} else {
 			// Expression - need to convert to string via toString()
 			mir::MIRValue *exprVal = generateExpr(part.expr.get());
@@ -556,9 +577,12 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 			// Call toString on the expression
 			// For built-in types, we call intrinsics; for user types, call Type.toString(spec)
 			mir::MIRValue *strVal = nullptr;
+			bool owned = true; // Default: most conversions create new strings
 
 			if (exprType == "string") {
 				// Already a string - exprVal should be a pointer to the string struct
+				// This is BORROWED - the data is owned by another variable
+				owned = false;
 				// If it's a loaded value, we need to store it in an alloca first
 				if (exprVal->type->isStruct()) {
 					// It's a loaded string value, store it in alloca
@@ -599,6 +623,9 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 				mir::MIRValue *strAlloca = builder->createAlloca(stringType, "interp.str");
 				builder->createStore(strVal, strAlloca);
 				strVal = strAlloca;
+
+				// Note: toString __ManagedStringData tracking is done after all parts are collected,
+				// so we can avoid double-tracking when there's only one part (which becomes the result)
 			} else if (enumTypes.find(exprType) != enumTypes.end()) {
 				// Enum type - use the appropriate toString based on raw value type
 				const auto &enumInfo = enumTypes[exprType];
@@ -714,6 +741,8 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 					mir::MIRValue *strAlloca = builder->createAlloca(stringType, "interp.str");
 					builder->createStore(strVal, strAlloca);
 					strVal = strAlloca;
+
+					// Note: toString __ManagedStringData tracking is done after all parts are collected
 				} else {
 					// Simple enum (no raw value type) - convert tag to int string
 					std::string intrinsicName = "__int_toString";
@@ -735,13 +764,21 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 																{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 					}
 
+					// Simple enum tag is i8, but __int_toString expects i64 - zero-extend
+					mir::MIRValue *enumValI64 = exprVal;
+					if (exprVal->type->kind == mir::MIRTypeKind::Int8) {
+						enumValI64 = builder->createZExt(exprVal, mir::MIRType::getInt64(), "enum.tag.zext");
+					}
+
 					// Call the intrinsic: result = __int_toString(value, spec)
-					strVal = builder->createCall(toStringFunc, {exprVal, formatSpecArg}, "toString.result");
+					strVal = builder->createCall(toStringFunc, {enumValI64, formatSpecArg}, "toString.result");
 
 					// For struct returns, we need to store in an alloca
 					mir::MIRValue *strAlloca = builder->createAlloca(stringType, "interp.str");
 					builder->createStore(strVal, strAlloca);
 					strVal = strAlloca;
+
+					// Note: toString __ManagedStringData tracking is done after all parts are collected
 				}
 			} else {
 				// User type - call Type.toString(format string or nil)
@@ -790,9 +827,12 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 				mir::MIRValue *strAlloca = builder->createAlloca(stringType, "interp.str");
 				builder->createStore(strVal, strAlloca);
 				strVal = strAlloca;
+
+				// Note: toString __ManagedStringData tracking is done after all parts are collected
 			}
 
 			stringParts.push_back(strVal);
+			isOwnedPart.push_back(owned);
 		}
 	}
 
@@ -800,20 +840,44 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 	// Start with the first part and concatenate the rest
 	mir::MIRValue *result = stringParts[0];
 
-	// Only set up types for cleanup tracking if we have multiple parts to concatenate
+	// Track owned input strings' __ManagedStringData for cleanup
+	// For multi-part: inputs are consumed by concat and need cleanup
+	// For single-part owned: the result needs cleanup if not assigned to a variable
+	// (The declaration handler will transfer ownership when assigning)
 	mir::MIRType *managedStringDataType = nullptr;
 	mir::MIRType *unsizedArrayType = nullptr;
-	if (stringParts.size() > 1) {
-		// Get types needed for extracting buffer pointer
-		managedStringDataType = structTypes["__ManagedStringData"];
-		if (!managedStringDataType) {
-			unsizedArrayType = structTypes["_ManagedArray_byte"];
-			managedStringDataType = module->getOrCreateStructType(
-				"__ManagedStringData",
-				{unsizedArrayType, mir::MIRType::getInt64(), mir::MIRType::getInt64()});
-			structTypes["__ManagedStringData"] = managedStringDataType;
-		}
+
+	// Get types for tracking
+	managedStringDataType = structTypes["__ManagedStringData"];
+	if (!managedStringDataType) {
 		unsizedArrayType = structTypes["_ManagedArray_byte"];
+		if (!unsizedArrayType) {
+			unsizedArrayType = module->getOrCreateStructType(
+				"_ManagedArray_byte",
+				{mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+			structTypes["_ManagedArray_byte"] = unsizedArrayType;
+		}
+		managedStringDataType = module->getOrCreateStructType(
+			"__ManagedStringData",
+			{unsizedArrayType, mir::MIRType::getInt64(), mir::MIRType::getInt64()});
+		structTypes["__ManagedStringData"] = managedStringDataType;
+	}
+	unsizedArrayType = structTypes["_ManagedArray_byte"];
+
+	// Track OWNED input strings' __ManagedStringData for cleanup
+	// Skip borrowed parts (references to existing variables) - their cleanup is handled elsewhere
+	if (!scopeStack.empty()) {
+		for (size_t i = 0; i < stringParts.size(); i++) {
+			if (!isOwnedPart[i]) {
+				continue; // Skip borrowed parts
+			}
+			mir::MIRValue *strPart = stringParts[i];
+			mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, strPart, 0, "input.managed.field");
+			mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, "input.managed.ptr");
+			mir::MIRValue *managedTrackAlloca = builder->createAlloca(mir::MIRType::getPtr(), "input.managed.track");
+			builder->createStore(managedPtr, managedTrackAlloca);
+			scopeStack.back().managedStringDataPtrs.push_back({"interp.input", managedTrackAlloca});
+		}
 	}
 
 	for (size_t i = 1; i < stringParts.size(); i++) {
@@ -832,8 +896,7 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 		builder->createStore(concatResult, resultAlloca);
 		result = resultAlloca;
 
-		// Track intermediate results for cleanup (except the final one)
-		// The final result will be tracked when assigned to a variable
+		// Track intermediate results for cleanup (except the final one which we track separately below)
 		if (i < stringParts.size() - 1 && !scopeStack.empty()) {
 			// Extract the buffer pointer from the string struct for cleanup
 			// string._managed -> __ManagedStringData._buffer.ptr
@@ -847,7 +910,33 @@ mir::MIRValue *MIRCodeGenerator::generateInterpolatedString(InterpolatedStringEx
 			mir::MIRValue *trackAlloca = builder->createAlloca(mir::MIRType::getPtr(), "interp.track.ptr");
 			builder->createStore(bufferPtr, trackAlloca);
 			scopeStack.back().heapAllocatedStrings.push_back({"interp.intermediate", trackAlloca});
+
+			// Also track the __ManagedStringData struct for cleanup
+			mir::MIRValue *managedTrackAlloca = builder->createAlloca(mir::MIRType::getPtr(), "interp.managed.track.ptr");
+			builder->createStore(managedPtr, managedTrackAlloca);
+			scopeStack.back().managedStringDataPtrs.push_back({"interp.intermediate", managedTrackAlloca});
 		}
+	}
+
+	// Track the final result for cleanup (for expression-only uses like print("{x}{y}"))
+	// Declaration handlers will call transferManagedStringDataOwnership() to take ownership
+	if (stringParts.size() > 1 && !scopeStack.empty()) {
+		// Multi-part: track the final concat result
+		mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, result, 0, "final.managed.field");
+		mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, "final.managed.ptr");
+		mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringDataType, managedPtr, 0, "final.buffer.field");
+		mir::MIRValue *bufferPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, "final.buffer.ptr.ptr");
+		mir::MIRValue *bufferPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtrPtr, "final.buffer.ptr");
+
+		// Track buffer pointer for release
+		mir::MIRValue *trackAlloca = builder->createAlloca(mir::MIRType::getPtr(), "final.track.ptr");
+		builder->createStore(bufferPtr, trackAlloca);
+		scopeStack.back().heapAllocatedStrings.push_back({"interp.final", trackAlloca});
+
+		// Track managed data pointer for free
+		mir::MIRValue *managedTrackAlloca = builder->createAlloca(mir::MIRType::getPtr(), "final.managed.track.ptr");
+		builder->createStore(managedPtr, managedTrackAlloca);
+		scopeStack.back().managedStringDataPtrs.push_back({"interp.final", managedTrackAlloca});
 	}
 
 	return result;

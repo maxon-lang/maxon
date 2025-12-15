@@ -13,7 +13,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 185
+; Instructions: 190
 
 %string = type { ptr, i64 }
 %ByteView = type { ptr, i64 }
@@ -23,12 +23,16 @@ end 'main'
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.1 = constant [19 x i8] c"ABCDEFGHIJKLMNOPQR\00"
 @.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 @.str.sso.2 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -83,8 +87,6 @@ entry0:
   ret %ByteView %7
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define Optional<i8> @ByteView.next(ptr %self) {
 entry0:
   %2 = getelementptr %ByteView, ptr %self, i32 0, i32 1
@@ -132,7 +134,7 @@ entry0:
   %2 = call ptr @memcpy(ptr %1, ptr @.str.1, i64 18)
   %3 = getelementptr i8, ptr %1, i64 18
   store i8 0, ptr %3
-  %5 = call ptr @malloc(i64 32)
+  %5 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 0
   %7 = getelementptr %_ManagedArray_byte, ptr %6, i32 0, i32 0
   store ptr %1, ptr %7
@@ -151,7 +153,7 @@ entry0:
   store %ByteView %14, ptr %15
   br label %forcond1
 forcond1:
-  %42 = phi i64 [ 0, %entry0 ], [ %43, %ifcont5 ]
+  %46 = phi i64 [ 0, %entry0 ], [ %47, %ifcont5 ]
   %16 = call Optional<i8> @ByteView.next(ptr %15)
   %17 = alloca Optional<i8>
   store Optional<i8> %16, ptr %17
@@ -166,30 +168,34 @@ forloop2:
   %26 = icmp sgt i64 %25, 0
   br i1 %26, label %then4, label %ifcont5
 afterfor3:
-  %30 = call %string @__int_toString(i64 %42, ptr null)
+  %30 = call %string @__int_toString(i64 %46, ptr null)
   %31 = alloca %string
   store %string %30, ptr %31
-  %32 = call i64 @sys.print(ptr %31)
+  %32 = getelementptr %string, ptr %31, i32 0, i32 0
+  %33 = load ptr, ptr %32
+  %35 = call i64 @sys.print(ptr %31)
   call void @_managed_string_release(ptr %1, ptr @.__tag.free.str.heap)
-  %34 = getelementptr %string, ptr %0, i32 0, i32 0
-  %35 = load ptr, ptr %34
-  %36 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 2
-  %37 = load i64, ptr %36
-  %38 = icmp sgt i64 %37, 0
-  br i1 %38, label %s.var.release6, label %s.var.continue7
+  call void @free(ptr %33, ptr @.__tag.free.meta.interp.input)
+  %38 = getelementptr %string, ptr %0, i32 0, i32 0
+  %39 = load ptr, ptr %38
+  %40 = getelementptr %__ManagedStringData, ptr %39, i32 0, i32 2
+  %41 = load i64, ptr %40
+  %42 = icmp sgt i64 %41, 0
+  br i1 %42, label %s.var.release6, label %s.var.continue7
 then4:
-  %28 = add i64 %42, 1
+  %28 = add i64 %46, 1
   br label %ifcont5
 ifcont5:
-  %43 = phi i64 [ %42, %forloop2 ], [ %28, %then4 ]
+  %47 = phi i64 [ %46, %forloop2 ], [ %28, %then4 ]
   br label %forcond1
 s.var.release6:
-  %39 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 0
-  %40 = getelementptr %_ManagedArray_byte, ptr %39, i32 0, i32 0
-  %41 = load ptr, ptr %40
-  call void @_managed_string_release(ptr %41, ptr @.__tag.free.s)
+  %43 = getelementptr %__ManagedStringData, ptr %39, i32 0, i32 0
+  %44 = getelementptr %_ManagedArray_byte, ptr %43, i32 0, i32 0
+  %45 = load ptr, ptr %44
+  call void @_managed_string_release(ptr %45, ptr @.__tag.free.s)
   br label %s.var.continue7
 s.var.continue7:
+  call void @free(ptr %39, ptr @.__tag.free.meta.s)
   ret i64 0
 }
 
@@ -204,7 +210,7 @@ entry0:
   %7 = load i64, ptr %6
   %8 = call i64 @write_stdout(ptr %5, i64 %7)
   %10 = alloca %string
-  %11 = call ptr @malloc(i64 32)
+  %11 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
   %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
   store ptr @.str.sso.2, ptr %13
@@ -240,6 +246,7 @@ newline.var.release1:
   call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
   br label %newline.var.continue2
 newline.var.continue2:
+  call void @free(ptr %29, ptr @.__tag.free.meta.newline)
   %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %37 = load ptr, ptr %36
   call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
@@ -249,13 +256,17 @@ newline.var.continue2:
   ret i64 %27
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare %string @__int_toString(i64 %arg0, ptr %arg1)
 
@@ -272,7 +283,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 217
+; Instructions: 225
 
 %string = type { ptr, i64 }
 %ByteView = type { ptr, i64 }
@@ -282,12 +293,16 @@ entry0:
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.1 = constant [19 x i8] c"ABCDEFGHIJKLMNOPQR\00"
 @.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 @.str.sso.2 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -347,8 +362,6 @@ entry0:
   %7 = load %ByteView, ptr %1
   ret %ByteView %7
 }
-
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 define Optional<i8> @ByteView.next(ptr %self) {
 entry0:
@@ -410,7 +423,7 @@ entry0:
   store i8 0, ptr %3
   %4 = alloca ptr
   store ptr %1, ptr %4
-  %5 = call ptr @malloc(i64 32)
+  %5 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 0
   %7 = getelementptr %_ManagedArray_byte, ptr %6, i32 0, i32 0
   store ptr %1, ptr %7
@@ -452,15 +465,21 @@ afterfor3:
   %30 = call %string @__int_toString(i64 %29, ptr null)
   %31 = alloca %string
   store %string %30, ptr %31
-  %32 = call i64 @sys.print(ptr %31)
-  %33 = load ptr, ptr %4
-  call void @_managed_string_release(ptr %33, ptr @.__tag.free.str.heap)
-  %34 = getelementptr %string, ptr %0, i32 0, i32 0
-  %35 = load ptr, ptr %34
-  %36 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 2
-  %37 = load i64, ptr %36
-  %38 = icmp sgt i64 %37, 0
-  br i1 %38, label %s.var.release6, label %s.var.continue7
+  %32 = getelementptr %string, ptr %31, i32 0, i32 0
+  %33 = load ptr, ptr %32
+  %34 = alloca ptr
+  store ptr %33, ptr %34
+  %35 = call i64 @sys.print(ptr %31)
+  %36 = load ptr, ptr %4
+  call void @_managed_string_release(ptr %36, ptr @.__tag.free.str.heap)
+  %37 = load ptr, ptr %34
+  call void @free(ptr %37, ptr @.__tag.free.meta.interp.input)
+  %38 = getelementptr %string, ptr %0, i32 0, i32 0
+  %39 = load ptr, ptr %38
+  %40 = getelementptr %__ManagedStringData, ptr %39, i32 0, i32 2
+  %41 = load i64, ptr %40
+  %42 = icmp sgt i64 %41, 0
+  br i1 %42, label %s.var.release6, label %s.var.continue7
 then4:
   %27 = load i64, ptr %13
   %28 = add i64 %27, 1
@@ -469,12 +488,13 @@ then4:
 ifcont5:
   br label %forcond1
 s.var.release6:
-  %39 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 0
-  %40 = getelementptr %_ManagedArray_byte, ptr %39, i32 0, i32 0
-  %41 = load ptr, ptr %40
-  call void @_managed_string_release(ptr %41, ptr @.__tag.free.s)
+  %43 = getelementptr %__ManagedStringData, ptr %39, i32 0, i32 0
+  %44 = getelementptr %_ManagedArray_byte, ptr %43, i32 0, i32 0
+  %45 = load ptr, ptr %44
+  call void @_managed_string_release(ptr %45, ptr @.__tag.free.s)
   br label %s.var.continue7
 s.var.continue7:
+  call void @free(ptr %39, ptr @.__tag.free.meta.s)
   ret i64 0
 }
 
@@ -494,7 +514,7 @@ entry0:
   %9 = alloca i64
   store i64 %8, ptr %9
   %10 = alloca %string
-  %11 = call ptr @malloc(i64 32)
+  %11 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
   %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
   store ptr @.str.sso.2, ptr %13
@@ -531,6 +551,7 @@ newline.var.release1:
   call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
   br label %newline.var.continue2
 newline.var.continue2:
+  call void @free(ptr %29, ptr @.__tag.free.meta.newline)
   %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %37 = load ptr, ptr %36
   call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
@@ -540,13 +561,17 @@ newline.var.continue2:
   ret i64 %27
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare %string @__int_toString(i64 %arg0, ptr %arg1)
 

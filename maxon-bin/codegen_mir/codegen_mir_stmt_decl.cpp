@@ -64,7 +64,8 @@ bool MIRCodeGenerator::tryGenerateArrayLiteralDecl(const DeclInfo &decl) {
 
 		// Allocate data buffer
 		mir::MIRValue *sizeVal = builder->getInt64(totalSize);
-		mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {sizeVal}, decl.name + ".buffer");
+		mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.sized." + decl.name, "sized array");
+		mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {sizeVal, arrayTag}, decl.name + ".buffer");
 
 		// Create array<T> struct alloca
 		mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
@@ -194,7 +195,8 @@ bool MIRCodeGenerator::tryGenerateSizedArrayDecl(const DeclInfo &decl) {
 		mir::MIRValue *dataSize = builder->createMul(sizeExt, elemSizeVal, "data.size");
 
 		// Allocate buffer (no header - array<T> struct stores metadata separately)
-		mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {dataSize}, decl.name + ".buffer");
+		mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.var." + decl.name, "variable array");
+		mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {dataSize, arrayTag}, decl.name + ".buffer");
 
 		// Create array<T> struct alloca
 		mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
@@ -268,7 +270,8 @@ bool MIRCodeGenerator::tryGenerateSizedArrayDecl(const DeclInfo &decl) {
 		// Allocate data buffer (no header - array<T> struct stores metadata)
 		uint64_t allocSize = (arraySize > 0) ? totalSize : (decl.isMutable ? 8 : 1);
 		mir::MIRValue *sizeVal = builder->getInt64(allocSize);
-		bufferPtr = builder->createCall(mallocFunc, {sizeVal}, decl.name + ".buffer");
+		mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.lit." + decl.name, "array literal");
+		bufferPtr = builder->createCall(mallocFunc, {sizeVal, arrayTag}, decl.name + ".buffer");
 
 		// Initialize nested struct layout with capacity > 0 (heap-allocated)
 		mir::MIRValue *lengthVal = builder->getInt64(arraySize);
@@ -354,11 +357,33 @@ bool MIRCodeGenerator::tryGenerateStringLiteralDecl(const DeclInfo &decl) {
 	namedValues[decl.name] = stringAlloca;
 	variableTypes[decl.name] = "string";
 
-	// Track the string variable for cleanup at scope exit (var only)
-	// We track the alloca so cleanup reads the CURRENT buffer pointer
-	// This handles reassignment where the variable may hold heap data later
+	// Track for cleanup
 	if (decl.isMutable && !scopeStack.empty()) {
+		// var: track the variable itself for cleanup (handles buffer and managed data)
 		scopeStack.back().stringVariables.push_back({decl.name, stringAlloca});
+	} else if (!decl.isMutable && !scopeStack.empty()) {
+		// let: track the buffer pointer and managed data for cleanup
+		mir::MIRType *stringType = structTypes["string"];
+		mir::MIRType *managedStringDataType = structTypes["__ManagedStringData"];
+		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
+
+		if (stringType && managedStringDataType && unsizedArrayType) {
+			mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, stringAlloca, 0, decl.name + ".managed.field");
+			mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, decl.name + ".managed.ptr");
+			mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringDataType, managedPtr, 0, decl.name + ".buffer.field");
+			mir::MIRValue *bufferPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, decl.name + ".buffer.ptr.ptr");
+			mir::MIRValue *bufferPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtrPtr, decl.name + ".buffer.ptr");
+
+			// Track buffer pointer for release (only if heap-allocated, but _managed_string_release handles that)
+			mir::MIRValue *trackAlloca = builder->createAlloca(mir::MIRType::getPtr(), decl.name + ".track.ptr");
+			builder->createStore(bufferPtr, trackAlloca);
+			scopeStack.back().heapAllocatedStrings.push_back({decl.name + ".literal", trackAlloca});
+
+			// Track managed data pointer for free
+			mir::MIRValue *managedTrackAlloca = builder->createAlloca(mir::MIRType::getPtr(), decl.name + ".managed.track.ptr");
+			builder->createStore(managedPtr, managedTrackAlloca);
+			scopeStack.back().managedStringDataPtrs.push_back({decl.name + ".literal", managedTrackAlloca});
+		}
 	}
 
 	return true;
@@ -387,6 +412,12 @@ bool MIRCodeGenerator::tryGenerateInterpolatedStringDecl(const DeclInfo &decl) {
 	mir::MIRValue *stringAlloca = generateInterpolatedString(interpExpr);
 	stringAlloca->name = decl.name;
 
+	// Transfer ownership from inline tracking to declaration tracking
+	// generateInterpolatedString may have added the managed data to managedStringDataPtrs
+	// for cleanup of temporary expressions, but since we're assigning to a variable,
+	// the declaration will handle cleanup
+	transferManagedStringDataOwnership();
+
 	namedValues[decl.name] = stringAlloca;
 	variableTypes[decl.name] = "string";
 
@@ -395,7 +426,7 @@ bool MIRCodeGenerator::tryGenerateInterpolatedStringDecl(const DeclInfo &decl) {
 		// var: track the variable itself for cleanup
 		scopeStack.back().stringVariables.push_back({decl.name, stringAlloca});
 	} else if (!decl.isMutable && !scopeStack.empty()) {
-		// let: track the specific buffer for cleanup
+		// let: track the specific buffer for cleanup AND the managed data struct
 		mir::MIRType *stringType = structTypes["string"];
 		mir::MIRType *managedStringDataType = structTypes["__ManagedStringData"];
 		mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
@@ -406,9 +437,15 @@ bool MIRCodeGenerator::tryGenerateInterpolatedStringDecl(const DeclInfo &decl) {
 		mir::MIRValue *bufferPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0, decl.name + ".buffer.ptr.ptr");
 		mir::MIRValue *bufferPtr = builder->createLoad(mir::MIRType::getPtr(), bufferPtrPtr, decl.name + ".buffer.ptr");
 
+		// Track buffer pointer for release
 		mir::MIRValue *trackAlloca = builder->createAlloca(mir::MIRType::getPtr(), decl.name + ".track.ptr");
 		builder->createStore(bufferPtr, trackAlloca);
 		scopeStack.back().heapAllocatedStrings.push_back({decl.name + ".interp", trackAlloca});
+
+		// Track managed data pointer for free
+		mir::MIRValue *managedTrackAlloca = builder->createAlloca(mir::MIRType::getPtr(), decl.name + ".managed.track.ptr");
+		builder->createStore(managedPtr, managedTrackAlloca);
+		scopeStack.back().managedStringDataPtrs.push_back({decl.name + ".interp", managedTrackAlloca});
 	}
 
 	return true;

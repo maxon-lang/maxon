@@ -9,18 +9,20 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 141
+; Instructions: 142
 
 %string = type { ptr, i64 }
 %_ManagedArray_byte = type { ptr, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [2 x i8] c"n\00"
 @.str.sso.2 = constant [2 x i8] c"y\00"
 @.str.sso.3 = constant [2 x i8] c"Y\00"
 @.str.sso.4 = constant [2 x i8] c"n\00"
 @.str.sso.5 = constant [2 x i8] c"N\00"
 @.__tag.free.input = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.input = constant [16 x i8] c"string metadata\00"
 
 define i1 @string.equals(ptr %self, ptr %other) {
 entry0:
@@ -35,7 +37,7 @@ entry0:
 define i64 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 32)
+  %1 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
@@ -66,7 +68,7 @@ match.case.24:
   ret i64 -1
 match.check.05:
   %12 = alloca %string
-  %13 = call ptr @malloc(i64 32)
+  %13 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %14 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 0
   %15 = getelementptr %_ManagedArray_byte, ptr %14, i32 0, i32 0
   store ptr @.str.sso.2, ptr %15
@@ -82,7 +84,7 @@ match.check.05:
   store i64 0, ptr %20
   %21 = call i1 @string.equals(ptr %10, ptr %12)
   %22 = alloca %string
-  %23 = call ptr @malloc(i64 32)
+  %23 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %24 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 0
   %25 = getelementptr %_ManagedArray_byte, ptr %24, i32 0, i32 0
   store ptr @.str.sso.3, ptr %25
@@ -101,7 +103,7 @@ match.check.05:
   br i1 %32, label %match.case.02, label %match.check.16
 match.check.16:
   %34 = alloca %string
-  %35 = call ptr @malloc(i64 32)
+  %35 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %36 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 0
   %37 = getelementptr %_ManagedArray_byte, ptr %36, i32 0, i32 0
   store ptr @.str.sso.4, ptr %37
@@ -117,7 +119,7 @@ match.check.16:
   store i64 0, ptr %42
   %43 = call i1 @string.equals(ptr %10, ptr %34)
   %44 = alloca %string
-  %45 = call ptr @malloc(i64 32)
+  %45 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %46 = getelementptr %__ManagedStringData, ptr %45, i32 0, i32 0
   %47 = getelementptr %_ManagedArray_byte, ptr %46, i32 0, i32 0
   store ptr @.str.sso.5, ptr %47
@@ -141,6 +143,7 @@ input.var.release7:
   call void @_managed_string_release(ptr %62, ptr @.__tag.free.input)
   br label %input.var.continue8
 input.var.continue8:
+  call void @free(ptr %56, ptr @.__tag.free.meta.input)
   ret i64 1
 }
 
@@ -192,7 +195,9 @@ ifcont2:
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -205,18 +210,20 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 182
+; Instructions: 183
 
 %string = type { ptr, i64 }
 %_ManagedArray_byte = type { ptr, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [2 x i8] c"n\00"
 @.str.sso.2 = constant [2 x i8] c"y\00"
 @.str.sso.3 = constant [2 x i8] c"Y\00"
 @.str.sso.4 = constant [2 x i8] c"n\00"
 @.str.sso.5 = constant [2 x i8] c"N\00"
 @.__tag.free.input = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.input = constant [16 x i8] c"string metadata\00"
 
 define i1 @string.equals(ptr %self, ptr %other) {
 entry0:
@@ -237,7 +244,7 @@ entry0:
 define i64 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 32)
+  %1 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
@@ -271,7 +278,7 @@ match.case.24:
   ret i64 %63
 match.check.05:
   %12 = alloca %string
-  %13 = call ptr @malloc(i64 32)
+  %13 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %14 = getelementptr %__ManagedStringData, ptr %13, i32 0, i32 0
   %15 = getelementptr %_ManagedArray_byte, ptr %14, i32 0, i32 0
   store ptr @.str.sso.2, ptr %15
@@ -287,7 +294,7 @@ match.check.05:
   store i64 0, ptr %20
   %21 = call i1 @string.equals(ptr %10, ptr %12)
   %22 = alloca %string
-  %23 = call ptr @malloc(i64 32)
+  %23 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %24 = getelementptr %__ManagedStringData, ptr %23, i32 0, i32 0
   %25 = getelementptr %_ManagedArray_byte, ptr %24, i32 0, i32 0
   store ptr @.str.sso.3, ptr %25
@@ -306,7 +313,7 @@ match.check.05:
   br i1 %32, label %match.case.02, label %match.check.16
 match.check.16:
   %34 = alloca %string
-  %35 = call ptr @malloc(i64 32)
+  %35 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %36 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 0
   %37 = getelementptr %_ManagedArray_byte, ptr %36, i32 0, i32 0
   store ptr @.str.sso.4, ptr %37
@@ -322,7 +329,7 @@ match.check.16:
   store i64 0, ptr %42
   %43 = call i1 @string.equals(ptr %10, ptr %34)
   %44 = alloca %string
-  %45 = call ptr @malloc(i64 32)
+  %45 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %46 = getelementptr %__ManagedStringData, ptr %45, i32 0, i32 0
   %47 = getelementptr %_ManagedArray_byte, ptr %46, i32 0, i32 0
   store ptr @.str.sso.5, ptr %47
@@ -346,6 +353,7 @@ input.var.release7:
   call void @_managed_string_release(ptr %62, ptr @.__tag.free.input)
   br label %input.var.continue8
 input.var.continue8:
+  call void @free(ptr %56, ptr @.__tag.free.meta.input)
   ret i64 1
 }
 
@@ -430,7 +438,9 @@ ifcont2:
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

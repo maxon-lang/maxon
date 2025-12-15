@@ -8,19 +8,21 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 42
+; Instructions: 43
 
 %string = type { ptr, i64 }
 %_ManagedArray_byte = type { ptr, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [6 x i8] c"Hello\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 
 define i64 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 32)
+  %1 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
@@ -62,12 +64,15 @@ s.var.release4:
   call void @_managed_string_release(ptr %29, ptr @.__tag.free.s)
   br label %s.var.continue5
 s.var.continue5:
+  call void @free(ptr %23, ptr @.__tag.free.meta.s)
   ret i32 %19
 }
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -80,19 +85,21 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 47
+; Instructions: 48
 
 %string = type { ptr, i64 }
 %_ManagedArray_byte = type { ptr, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [6 x i8] c"Hello\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 
 define i64 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 32)
+  %1 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
@@ -139,12 +146,15 @@ s.var.release4:
   call void @_managed_string_release(ptr %29, ptr @.__tag.free.s)
   br label %s.var.continue5
 s.var.continue5:
+  call void @free(ptr %23, ptr @.__tag.free.meta.s)
   ret i64 %21
 }
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

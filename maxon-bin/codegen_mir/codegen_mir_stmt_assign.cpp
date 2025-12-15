@@ -48,6 +48,7 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 	// We need to release the old buffer after the new value is computed
 	mir::MIRValue *oldDataPtr = nullptr;
 	mir::MIRValue *oldCapacity = nullptr;
+	mir::MIRValue *oldManagedPtr = nullptr;
 	if (varType == "string") {
 		mir::MIRType *stringType = structTypes["string"];
 		mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
@@ -56,14 +57,14 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 		if (stringType && managedStringType && unsizedArrayType) {
 			// Load the _managed pointer from the string struct
 			mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, alloca, 0, assign->name + ".old._managed.ptr");
-			mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, assign->name + ".old._managed");
+			oldManagedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, assign->name + ".old._managed");
 
 			// Load capacity to check if heap-allocated (_capacity > 0)
-			mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2, assign->name + ".old._capacity.ptr");
+			mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, oldManagedPtr, 2, assign->name + ".old._capacity.ptr");
 			oldCapacity = builder->createLoad(mir::MIRType::getInt64(), capPtr, assign->name + ".old._capacity");
 
 			// Load the data pointer from _buffer.ptr
-			mir::MIRValue *bufferPtr = builder->createStructGEP(managedStringType, managedPtr, 0, assign->name + ".old._buffer");
+			mir::MIRValue *bufferPtr = builder->createStructGEP(managedStringType, oldManagedPtr, 0, assign->name + ".old._buffer");
 			mir::MIRValue *dataPtrPtr = builder->createStructGEP(unsizedArrayType, bufferPtr, 0, assign->name + ".old.data.ptr.ptr");
 			oldDataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrPtr, assign->name + ".old.data.ptr");
 		}
@@ -76,17 +77,24 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 					assign->line, assign->column);
 	}
 
+	// For string assignments with interpolated strings, transfer ownership
+	// so scope cleanup doesn't double-free (the variable takes ownership)
+	if (varType == "string" && dynamic_cast<InterpolatedStringExprAST *>(assign->value.get())) {
+		transferManagedStringDataOwnership();
+	}
+
 	// COW: Release the old string buffer if it was heap-allocated
-	if (varType == "string" && oldDataPtr && oldCapacity) {
-		// Check if capacity > 0 (heap-allocated)
+	// and always free the old __ManagedStringData struct
+	if (varType == "string" && oldDataPtr && oldCapacity && oldManagedPtr) {
+		// Check if capacity > 0 (heap-allocated buffer)
 		mir::MIRValue *isHeap = builder->createICmpSGT(oldCapacity, builder->getInt64(0), assign->name + ".old.isHeap");
 
 		mir::MIRBasicBlock *releaseBlock = builder->createBasicBlock(assign->name + ".release");
-		mir::MIRBasicBlock *assignBlock = builder->createBasicBlock(assign->name + ".assign");
+		mir::MIRBasicBlock *freeMetaBlock = builder->createBasicBlock(assign->name + ".freemeta");
 
-		builder->createCondBr(isHeap, releaseBlock, assignBlock);
+		builder->createCondBr(isHeap, releaseBlock, freeMetaBlock);
 
-		// Release block: call _managed_string_release on old data
+		// Release block: call _managed_string_release on old buffer data
 		builder->setInsertPoint(releaseBlock);
 		mir::MIRValue *tag = module->createGlobalString(".__tag.reassign." + assign->name, "string reassign");
 		mir::MIRFunction *stringReleaseFunc = getOrDeclareFunction(
@@ -94,10 +102,13 @@ void MIRCodeGenerator::generateAssign(AssignStmtAST *assign, mir::MIRFunction *f
 			mir::MIRType::getVoid(),
 			{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
 		builder->createCall(stringReleaseFunc, {oldDataPtr, tag});
-		builder->createBr(assignBlock);
+		builder->createBr(freeMetaBlock);
 
-		// Continue to assignment
-		builder->setInsertPoint(assignBlock);
+		// Free the old __ManagedStringData struct (always, regardless of heap/SSO buffer)
+		builder->setInsertPoint(freeMetaBlock);
+		mir::MIRValue *metaTag = module->createGlobalString(".__tag.free.meta.reassign." + assign->name, "string reassign meta");
+		mir::MIRFunction *freeFunc = getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+		builder->createCall(freeFunc, {oldManagedPtr, metaTag});
 	}
 
 	// Check if this is a struct assignment

@@ -15,9 +15,26 @@ declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
 
 ; Forward declaration for functions defined in runtime.mir
 declare ptr @_managed_string_alloc(i64, ptr)
+declare void @__track_alloc_with_ptr(ptr, i64, ptr)
+declare void @__track_free_with_ptr(ptr, i64, ptr)
 
 ; Windows-specific global: _fltused (required for floating-point)
 @_fltused = constant i32 39029
+
+; Allocation tags for tracking
+@.__tag.int_tostring = constant [13 x i8] c"int.toString\00"
+@.__tag.byte_tostring = constant [14 x i8] c"byte.toString\00"
+@.__tag.bool_tostring = constant [14 x i8] c"bool.toString\00"
+@.__tag.float_tostring = constant [15 x i8] c"float.toString\00"
+@.__tag.cmdline_args = constant [13 x i8] c"cmdline args\00"
+@.__tag.cmdline_arg = constant [12 x i8] c"cmdline arg\00"
+@.__tag.file_read = constant [10 x i8] c"file.read\00"
+@.__tag.string_repeat = constant [14 x i8] c"string.repeat\00"
+@.__tag.realloc = constant [8 x i8] c"realloc\00"
+@.__tag.list_dir = constant [9 x i8] c"list_dir\00"
+@.__tag.list_dir_entry = constant [15 x i8] c"list_dir_entry\00"
+@.__tag.cmdline_cleanup = constant [16 x i8] c"cmdline cleanup\00"
+@.__tag.listdir_cleanup = constant [16 x i8] c"listdir cleanup\00"
 
 ;==============================================================================
 ; __test_add_numbers - Test function for Safe FFI verification
@@ -32,37 +49,146 @@ entry:
 
 ;==============================================================================
 ; malloc - allocate memory using HeapAlloc
-; ptr malloc(i64 size)
+; ptr malloc(i64 size, ptr tag)
+; Adds 8-byte header to store size for tracking and free
+; tag: description string for allocation tracking (required)
 ;==============================================================================
-define ptr @malloc(i64 %size) {
+define ptr @malloc(i64 %size, ptr %tag) {
 entry:
+    ; Allocate size + 8 for header
+    %total_size = add i64 %size, 8
     %heap = call ptr @GetProcessHeap()
-    %ptr = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %size)
-    ret ptr %ptr
+    %raw = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %total_size)
+
+    ; Check for allocation failure
+    %is_null = icmp eq ptr %raw, null
+    br i1 %is_null, label %return_null, label %store_header
+
+store_header:
+    ; Store size in header
+    store i64 %size, ptr %raw
+
+    ; Get pointer to data area (after 8-byte header)
+    %data = getelementptr i8, ptr %raw, i64 8
+
+    ; Track allocation if enabled
+    %tracking_enabled = load i32, ptr @__track_enabled
+    %do_track = icmp ne i32 %tracking_enabled, 0
+    br i1 %do_track, label %track, label %done
+
+track:
+    call void @__track_alloc_with_ptr(ptr %data, i64 %size, ptr %tag)
+    br label %done
+
+done:
+    ret ptr %data
+
+return_null:
+    ret ptr null
 }
 
 ;==============================================================================
 ; free - free memory using HeapFree
-; void free(ptr ptr)
+; void free(ptr ptr, ptr tag)
+; Expects pointer from malloc (with 8-byte header before it)
+; tag: description string for tracking (required)
 ;==============================================================================
-define void @free(ptr %ptr) {
+define void @free(ptr %ptr, ptr %tag) {
 entry:
+    ; Check for null pointer
+    %is_null = icmp eq ptr %ptr, null
+    br i1 %is_null, label %done, label %get_header
+
+get_header:
+    ; Get header pointer (data - 8)
+    %header = getelementptr i8, ptr %ptr, i64 -8
+
+    ; Load size from header
+    %size = load i64, ptr %header
+
+    ; Track free if enabled
+    %tracking_enabled = load i32, ptr @__track_enabled
+    %do_track = icmp ne i32 %tracking_enabled, 0
+    br i1 %do_track, label %track, label %do_free
+
+track:
+    call void @__track_free_with_ptr(ptr %ptr, i64 %size, ptr %tag)
+    br label %do_free
+
+do_free:
+    ; Free the header (not the data pointer)
     %heap = call ptr @GetProcessHeap()
-    %result = call i1 @HeapFree(ptr %heap, i32 0, ptr %ptr)
+    %result = call i1 @HeapFree(ptr %heap, i32 0, ptr %header)
+    br label %done
+
+done:
     ret void
 }
 
 ;==============================================================================
 ; realloc - reallocate memory using HeapReAlloc
-; ptr realloc(ptr ptr, i64 old_size, i64 new_size)
+; ptr realloc(ptr ptr, i64 old_size, i64 new_size, ptr tag)
 ; Note: old_size is unused on Windows but kept for cross-platform compatibility
+; Handles 8-byte size header
+; tag: description string for tracking (required)
 ;==============================================================================
-define ptr @realloc(ptr %ptr, i64 %old_size, i64 %new_size) {
+define ptr @realloc(ptr %ptr, i64 %old_size, i64 %new_size, ptr %tag) {
 entry:
+    ; Check for null pointer (acts like malloc)
+    %is_null = icmp eq ptr %ptr, null
+    br i1 %is_null, label %do_malloc, label %do_realloc
+
+do_malloc:
+    %new_ptr = call ptr @malloc(i64 %new_size, ptr %tag)
+    ret ptr %new_ptr
+
+do_realloc:
+    ; Get header pointer
+    %header = getelementptr i8, ptr %ptr, i64 -8
+
+    ; Load old size from header for tracking
+    %tracked_old_size = load i64, ptr %header
+
+    ; Track free of old allocation if enabled
+    %tracking_enabled = load i32, ptr @__track_enabled
+    %do_track = icmp ne i32 %tracking_enabled, 0
+    br i1 %do_track, label %track_free, label %realloc_mem
+
+track_free:
+    call void @__track_free_with_ptr(ptr %ptr, i64 %tracked_old_size, ptr %tag)
+    br label %realloc_mem
+
+realloc_mem:
+    ; New total size with header
+    %new_total = add i64 %new_size, 8
+
     %heap = call ptr @GetProcessHeap()
-    ; HeapReAlloc doesn't need old_size, Windows tracks it internally
-    %newptr = call ptr @HeapReAlloc(ptr %heap, i32 0, ptr %ptr, i64 %new_size)
-    ret ptr %newptr
+    %new_header = call ptr @HeapReAlloc(ptr %heap, i32 0, ptr %header, i64 %new_total)
+
+    ; Check for failure
+    %realloc_failed = icmp eq ptr %new_header, null
+    br i1 %realloc_failed, label %return_null, label %update_header
+
+update_header:
+    ; Store new size in header
+    store i64 %new_size, ptr %new_header
+
+    ; Get new data pointer
+    %new_data = getelementptr i8, ptr %new_header, i64 8
+
+    ; Track new allocation if enabled
+    %do_track2 = icmp ne i32 %tracking_enabled, 0
+    br i1 %do_track2, label %track_alloc, label %return_ptr
+
+track_alloc:
+    call void @__track_alloc_with_ptr(ptr %new_data, i64 %new_size, ptr %tag)
+    br label %return_ptr
+
+return_ptr:
+    ret ptr %new_data
+
+return_null:
+    ret ptr null
 }
 
 ;==============================================================================
@@ -167,7 +293,7 @@ allocate_buf:
     ; Allocate buffer using _managed_string_alloc (size + 1 for null terminator)
     %alloc_size = add i32 %size, 1
     %alloc_size64 = zext i32 %alloc_size to i64
-    %buf = call ptr @_managed_string_alloc(i64 %alloc_size64, ptr null)
+    %buf = call ptr @_managed_string_alloc(i64 %alloc_size64, ptr @.__tag.file_read)
 
     %buf_null = icmp eq ptr %buf, null
     br i1 %buf_null, label %close_error, label %read
@@ -742,8 +868,8 @@ write_zero:
     %zero_null = getelementptr i8, ptr %zero_buf, i64 1
     store i8 0, ptr %zero_null
 
-    ; Allocate managed data struct (ptr + i64 + i64 + i64 + i64 = 40 bytes)
-    %zero_managed = call ptr @malloc(i64 40)
+    ; Allocate managed data struct (%_ManagedArray_byte{ptr,i64} + i64 + i64 = 32 bytes)
+    %zero_managed = call ptr @malloc(i64 32, ptr @.__tag.int_tostring)
     %zero_buf_ptr = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 0
     %zero_buf_arr = getelementptr %_ManagedArray_byte, ptr %zero_buf_ptr, i32 0, i32 0
     store ptr %zero_buf, ptr %zero_buf_arr
@@ -807,7 +933,7 @@ alloc_buffer:
 
     ; Allocate buffer (len + 1 for null)
     %buf_size = add i64 %total_len, 1
-    %str_buf = call ptr @_managed_string_alloc(i64 %buf_size, ptr null)
+    %str_buf = call ptr @_managed_string_alloc(i64 %buf_size, ptr @.__tag.int_tostring)
 
     ; Write sign if negative
     br i1 %need_sign, label %write_sign, label %copy_digits_init
@@ -847,8 +973,8 @@ write_null:
     %null_ptr = getelementptr i8, ptr %str_buf, i64 %total_len
     store i8 0, ptr %null_ptr
 
-    ; Allocate managed data struct (ptr + i64 + i64 + i64 + i64 = 40 bytes)
-    %managed = call ptr @malloc(i64 40)
+    ; Allocate managed data struct (%_ManagedArray_byte{ptr,i64} + i64 + i64 = 32 bytes)
+    %managed = call ptr @malloc(i64 32, ptr @.__tag.int_tostring)
     %buf_ptr = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
     %buf_arr = getelementptr %_ManagedArray_byte, ptr %buf_ptr, i32 0, i32 0
     store ptr %str_buf, ptr %buf_arr
@@ -899,13 +1025,13 @@ byte_store_positive:
 byte_write_zero:
     ; Create string "0"
     %zero_size = add i64 1, 1  ; 1 char + null
-    %zero_buf = call ptr @_managed_string_alloc(i64 %zero_size, ptr null)
+    %zero_buf = call ptr @_managed_string_alloc(i64 %zero_size, ptr @.__tag.byte_tostring)
     store i8 48, ptr %zero_buf  ; '0'
     %zero_null = getelementptr i8, ptr %zero_buf, i64 1
     store i8 0, ptr %zero_null
 
     ; Allocate managed data struct
-    %zero_managed = call ptr @malloc(i64 32)
+    %zero_managed = call ptr @malloc(i64 32, ptr @.__tag.byte_tostring)
     %zero_buf_ptr = getelementptr %__ManagedStringData, ptr %zero_managed, i32 0, i32 0
     %zero_buf_arr = getelementptr %_ManagedArray_byte, ptr %zero_buf_ptr, i32 0, i32 0
     store ptr %zero_buf, ptr %zero_buf_arr
@@ -958,7 +1084,7 @@ byte_build_string:
     ; Allocate buffer (len + 1 for null)
     %buf_size = add i32 %digit_count, 1
     %buf_size64 = sext i32 %buf_size to i64
-    %str_buf = call ptr @_managed_string_alloc(i64 %buf_size64, ptr null)
+    %str_buf = call ptr @_managed_string_alloc(i64 %buf_size64, ptr @.__tag.byte_tostring)
 
     store i32 0, ptr %out_idx
     br label %byte_copy_loop
@@ -993,7 +1119,7 @@ byte_write_null:
     store i8 0, ptr %null_ptr
 
     ; Allocate managed data struct
-    %managed = call ptr @malloc(i64 32)
+    %managed = call ptr @malloc(i64 32, ptr @.__tag.byte_tostring)
     %buf_ptr = getelementptr %__ManagedStringData, ptr %managed, i32 0, i32 0
     %buf_arr = getelementptr %_ManagedArray_byte, ptr %buf_ptr, i32 0, i32 0
     store ptr %str_buf, ptr %buf_arr
@@ -1059,7 +1185,7 @@ entry:
 
 is_true:
     ; Allocate managed data struct for "true"
-    %true_managed = call ptr @malloc(i64 32)
+    %true_managed = call ptr @malloc(i64 32, ptr @.__tag.bool_tostring)
     %true_buf_ptr = getelementptr %__ManagedStringData, ptr %true_managed, i32 0, i32 0
     %true_buf_arr = getelementptr %_ManagedArray_byte, ptr %true_buf_ptr, i32 0, i32 0
     store ptr @.str.true, ptr %true_buf_arr
@@ -1073,7 +1199,7 @@ is_true:
 
 is_false:
     ; Allocate managed data struct for "false"
-    %false_managed = call ptr @malloc(i64 32)
+    %false_managed = call ptr @malloc(i64 32, ptr @.__tag.bool_tostring)
     %false_buf_ptr = getelementptr %__ManagedStringData, ptr %false_managed, i32 0, i32 0
     %false_buf_arr = getelementptr %_ManagedArray_byte, ptr %false_buf_ptr, i32 0, i32 0
     store ptr @.str.false, ptr %false_buf_arr
@@ -1301,7 +1427,7 @@ finalize:
     %buf_size64 = add i64 %str_len64, 1  ; +1 for null terminator
 
     ; Allocate string buffer
-    %str_buf = call ptr @_managed_string_alloc(i64 %buf_size64, ptr null)
+    %str_buf = call ptr @_managed_string_alloc(i64 %buf_size64, ptr @.__tag.float_tostring)
 
     ; Copy temp buffer to string buffer
     %copy_len64 = sext i32 %str_len to i64
@@ -1312,7 +1438,7 @@ finalize:
     store i8 0, ptr %null_ptr
 
     ; Allocate managed data struct
-    %float_managed = call ptr @malloc(i64 32)
+    %float_managed = call ptr @malloc(i64 32, ptr @.__tag.float_tostring)
     %float_buf_ptr = getelementptr %__ManagedStringData, ptr %float_managed, i32 0, i32 0
     %float_buf_arr = getelementptr %_ManagedArray_byte, ptr %float_buf_ptr, i32 0, i32 0
     store ptr %str_buf, ptr %float_buf_arr
@@ -2085,7 +2211,7 @@ alloc_arrays:
     ; string struct: { ptr _managed (8 bytes), i32 _iterPos (4 bytes), padding (4 bytes) } = 16 bytes
     %argc_i64 = sext i32 %argc to i64
     %strings_size = mul i64 %argc_i64, 16
-    %strings_array = call ptr @malloc(i64 %strings_size)
+    %strings_array = call ptr @malloc(i64 %strings_size, ptr @.__tag.cmdline_args)
 
     ; Check allocation
     %strings_null = icmp eq ptr %strings_array, null
@@ -2125,14 +2251,14 @@ alloc_managed:
     ; For command line args, we allocate heap memory but set capacity=0 to indicate
     ; the strings are "static" and won't be freed by normal string cleanup.
     ; This is a simplification - the args live for the program's lifetime.
-    %managed_ptr = call ptr @malloc(i64 32)
+    %managed_ptr = call ptr @malloc(i64 32, ptr @.__tag.cmdline_arg)
     %managed_null = icmp eq ptr %managed_ptr, null
     br i1 %managed_null, label %convert_skip, label %alloc_buffer
 
 alloc_buffer:
     ; Allocate UTF-8 buffer (utf8_size includes null terminator)
     %utf8_size_i64 = sext i32 %utf8_size to i64
-    %utf8_buf = call ptr @malloc(i64 %utf8_size_i64)
+    %utf8_buf = call ptr @malloc(i64 %utf8_size_i64, ptr @.__tag.cmdline_arg)
     %buf_null = icmp eq ptr %utf8_buf, null
     br i1 %buf_null, label %free_managed, label %do_convert
 
@@ -2187,11 +2313,11 @@ setup_managed:
     br label %convert_next
 
 free_buffer:
-    call void @free(ptr %utf8_buf)
+    call void @free(ptr %utf8_buf, ptr @.__tag.cmdline_cleanup)
     br label %free_managed
 
 free_managed:
-    call void @free(ptr %managed_ptr)
+    call void @free(ptr %managed_ptr, ptr @.__tag.cmdline_cleanup)
     br label %convert_skip
 
 convert_skip:
@@ -2258,7 +2384,7 @@ success:
     %len = load i32, ptr %out_len
 
     ; Allocate managed string struct (32 bytes with i64 fields)
-    %managed = call ptr @malloc(i64 32)
+    %managed = call ptr @malloc(i64 32, ptr @.__tag.file_read)
     %managed_null = icmp eq ptr %managed, null
     br i1 %managed_null, label %free_data, label %setup_struct
 
@@ -2497,7 +2623,7 @@ count_entries:
 alloc_result:
     ; Allocate result struct __ManagedArrayData<string>: { ptr buffer, i32 len, i32 cap }
     ; Size = 8 (ptr) + 4 (len) + 4 (cap) = 16 bytes
-    %result = call ptr @malloc(i64 16)
+    %result = call ptr @malloc(i64 16, ptr @.__tag.list_dir)
     %result_null = icmp eq ptr %result, null
     br i1 %result_null, label %close_handle2, label %alloc_array
 
@@ -2505,7 +2631,7 @@ alloc_array:
     ; Allocate array of string structs (each string is 16 bytes: { ptr managed, i32 iterPos, padding })
     %count_i64 = sext i32 %count1 to i64
     %array_size = mul i64 %count_i64, 16
-    %array = call ptr @malloc(i64 %array_size)
+    %array = call ptr @malloc(i64 %array_size, ptr @.__tag.list_dir)
     %array_null = icmp eq ptr %array, null
     br i1 %array_null, label %free_result, label %fill_array
 
@@ -2530,7 +2656,7 @@ fill_array:
     ret ptr %result
 
 free_result:
-    call void @free(ptr %result)
+    call void @free(ptr %result, ptr @.__tag.listdir_cleanup)
     br label %close_handle2
 
 close_handle2:
@@ -2648,7 +2774,7 @@ create_string:
     %str_len = call i32 @__strlen(ptr %filename_ptr)
 
     ; Allocate managed string (32 bytes with i64 fields)
-    %managed = call ptr @malloc(i64 32)
+    %managed = call ptr @malloc(i64 32, ptr @.__tag.list_dir_entry)
     %managed_null = icmp eq ptr %managed, null
     br i1 %managed_null, label %next_file_no_inc, label %alloc_buffer
 
@@ -2656,7 +2782,7 @@ alloc_buffer:
     ; Allocate buffer for string data
     %str_len_i64 = sext i32 %str_len to i64
     %buf_size = add i64 %str_len_i64, 1
-    %buffer = call ptr @malloc(i64 %buf_size)
+    %buffer = call ptr @malloc(i64 %buf_size, ptr @.__tag.list_dir_entry)
     %buffer_null = icmp eq ptr %buffer, null
     br i1 %buffer_null, label %free_managed, label %copy_string
 
@@ -2683,7 +2809,7 @@ copy_string:
     br label %store_entry
 
 free_managed:
-    call void @free(ptr %managed)
+    call void @free(ptr %managed, ptr @.__tag.listdir_cleanup)
     br label %next_file_no_inc
 
 store_entry:

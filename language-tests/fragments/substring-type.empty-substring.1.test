@@ -7,7 +7,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 529
+; Instructions: 530
 
 %substring = type { ptr, ptr, i64, i64 }
 %string = type { ptr, i64 }
@@ -17,8 +17,10 @@ end 'main'
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [6 x i8] c"Hello\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 
 define %StringIndex @string.startIndex(ptr %self) {
 entry0:
@@ -141,7 +143,7 @@ retain.done6:
 define i64 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 32)
+  %1 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
@@ -192,6 +194,7 @@ s.var.release1:
   call void @_managed_string_release(ptr %23, ptr @.__tag.free.s)
   br label %s.var.continue2
 s.var.continue2:
+  call void @free(ptr %17, ptr @.__tag.free.meta.s)
   %24 = getelementptr %substring, ptr %14, i32 0, i32 0
   %25 = load ptr, ptr %24
   %26 = getelementptr %__ManagedStringData, ptr %25, i32 0, i32 2
@@ -722,7 +725,9 @@ declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -735,7 +740,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 859
+; Instructions: 860
 
 %substring = type { ptr, ptr, i64, i64 }
 %string = type { ptr, i64 }
@@ -745,8 +750,10 @@ entry0:
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [6 x i8] c"Hello\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 
 define i64 @string._findGraphemeEnd(ptr %self, i64 %startPos, i64 %len) {
 entry0:
@@ -936,7 +943,7 @@ entry0:
 define i64 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 32)
+  %1 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
@@ -973,6 +980,7 @@ s.var.release1:
   call void @_managed_string_release(ptr %23, ptr @.__tag.free.s)
   br label %s.var.continue2
 s.var.continue2:
+  call void @free(ptr %17, ptr @.__tag.free.meta.s)
   %24 = getelementptr %substring, ptr %14, i32 0, i32 0
   %25 = load ptr, ptr %24
   %26 = getelementptr %__ManagedStringData, ptr %25, i32 0, i32 2
@@ -1797,7 +1805,9 @@ declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

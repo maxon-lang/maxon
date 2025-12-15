@@ -186,7 +186,8 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 						mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
 						mir::MIRValue *sizeExt = builder->createSExt(sizeVal, mir::MIRType::getInt64(), "size.ext");
 						mir::MIRValue *totalSize = builder->createMul(sizeExt, elemSizeVal, "total.size");
-						mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {totalSize}, fieldName + ".buffer");
+						mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.field." + fieldName, "field array");
+						mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {totalSize, arrayTag}, fieldName + ".buffer");
 
 						mir::MIRFunction *memsetFunc = module->getFunction("memset");
 						if (!memsetFunc) {
@@ -362,6 +363,12 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			}
 		} else if (retStmt->value) {
 			retVal = generateExpr(retStmt->value.get());
+
+			// For return expressions that are interpolated strings, transfer ownership
+			// so the scope cleanup doesn't free the returned value's managed data
+			if (dynamic_cast<InterpolatedStringExprAST *>(retStmt->value.get())) {
+				transferManagedStringDataOwnership();
+			}
 
 			// For struct types (like string), generateExpr returns an alloca pointer.
 			// We need to load the value to return it by-value.

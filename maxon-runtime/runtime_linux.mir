@@ -13,6 +13,10 @@
 ; MAP_PRIVATE = 2
 ; MAP_ANONYMOUS = 32
 
+; Forward declarations for tracking functions (defined in runtime.mir)
+declare void @__track_alloc_with_ptr(ptr, i64, ptr)
+declare void @__track_free_with_ptr(ptr, i64, ptr)
+
 ;==============================================================================
 ; __syscall6 - internal syscall wrapper
 ; i64 __syscall6(i64 number, i64 arg1, i64 arg2, i64 arg3, i64 arg4, i64 arg5, i64 arg6)
@@ -22,17 +26,21 @@ declare i64 @__syscall6(i64, i64, i64, i64, i64, i64, i64)
 
 ;==============================================================================
 ; malloc - allocate memory using mmap
-; ptr malloc(i64 size)
+; ptr malloc(i64 size, ptr tag)
+; Adds 8-byte header to store size for tracking and free
 ;==============================================================================
-define ptr @malloc(i64 %size) {
+define ptr @malloc(i64 %size, ptr %tag) {
 entry:
     ; Check for zero size
     %is_zero = icmp eq i64 %size, 0
     br i1 %is_zero, label %return_null, label %allocate
 
 allocate:
+    ; Add 8 for header and 8 for page-size storage
+    %size_with_header = add i64 %size, 16
+
     ; Round up to page size (4096 bytes)
-    %size_plus = add i64 %size, 4095
+    %size_plus = add i64 %size_with_header, 4095
     %rounded_size = and i64 %size_plus, -4096
 
     ; Call mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
@@ -46,30 +54,87 @@ allocate:
     %error_threshold = add i64 -4095, 0
     %is_error_range = icmp sge i64 %result, %error_threshold
     %is_error = and i1 %is_negative, %is_error_range
-    br i1 %is_error, label %return_null, label %return_ptr
+    br i1 %is_error, label %return_null, label %store_header
+
+store_header:
+    %raw = inttoptr i64 %result to ptr
+
+    ; Store requested size in first 8 bytes
+    store i64 %size, ptr %raw
+
+    ; Store rounded (page) size in next 8 bytes (needed for munmap)
+    %page_size_ptr = getelementptr i8, ptr %raw, i64 8
+    store i64 %rounded_size, ptr %page_size_ptr
+
+    ; Get pointer to data area (after 16-byte header)
+    %data = getelementptr i8, ptr %raw, i64 16
+
+    ; Track allocation if enabled
+    %tracking_enabled = load i32, ptr @__track_enabled
+    %do_track = icmp ne i32 %tracking_enabled, 0
+    br i1 %do_track, label %track, label %return_ptr
+
+track:
+    call void @__track_alloc_with_ptr(ptr %data, i64 %size, ptr %tag)
+    br label %return_ptr
+
+return_ptr:
+    ret ptr %data
 
 return_null:
     ret ptr null
-
-return_ptr:
-    %ptr = inttoptr i64 %result to ptr
-    ret ptr %ptr
 }
 
 ;==============================================================================
-; free - free memory (no-op for mmap-based allocator)
-; void free(ptr ptr)
-; Note: A proper implementation would track sizes and call munmap
+; free - free memory using munmap
+; void free(ptr ptr, ptr tag)
+; Expects pointer from malloc (with 16-byte header before it)
 ;==============================================================================
-define void @free(ptr %ptr) {
+define void @free(ptr %ptr, ptr %tag) {
 entry:
+    ; Check for null pointer
+    %is_null = icmp eq ptr %ptr, null
+    br i1 %is_null, label %done, label %get_header
+
+get_header:
+    ; Get header pointer (data - 16)
+    %header = getelementptr i8, ptr %ptr, i64 -16
+
+    ; Load requested size from header (for tracking)
+    %size = load i64, ptr %header
+
+    ; Load page size from header+8 (for munmap)
+    %page_size_ptr = getelementptr i8, ptr %header, i64 8
+    %page_size = load i64, ptr %page_size_ptr
+
+    ; Track free if enabled
+    %tracking_enabled = load i32, ptr @__track_enabled
+    %do_track = icmp ne i32 %tracking_enabled, 0
+    br i1 %do_track, label %track, label %do_munmap
+
+track:
+    call void @__track_free_with_ptr(ptr %ptr, i64 %size, ptr %tag)
+    br label %do_munmap
+
+do_munmap:
+    ; Call munmap(header, page_size)
+    ; SYS_munmap = 11
+    %header_int = ptrtoint ptr %header to i64
+    %result = call i64 @__syscall6(i64 11, i64 %header_int, i64 %page_size, i64 0, i64 0, i64 0, i64 0)
+    br label %done
+
+done:
     ret void
 }
+
+; Tag constant for realloc
+@.__tag.realloc = private constant [8 x i8] c"realloc\00"
 
 ;==============================================================================
 ; realloc - reallocate memory
 ; ptr realloc(ptr oldptr, i64 old_size, i64 new_size)
-; Note: This is a 3-argument version since mmap doesn't track sizes
+; Note: old_size param is ignored, we read from header
+; Handles 16-byte size header
 ;==============================================================================
 declare ptr @memcpy(ptr, ptr, i64)
 declare ptr @memmove(ptr, ptr, i64)
@@ -81,20 +146,25 @@ entry:
     br i1 %is_null, label %just_malloc, label %do_realloc
 
 just_malloc:
-    %newmem = call ptr @malloc(i64 %new_size)
+    %newmem = call ptr @malloc(i64 %new_size, ptr @.__tag.realloc)
     ret ptr %newmem
 
 do_realloc:
+    ; Get header pointer and load actual old size
+    %header = getelementptr i8, ptr %oldptr, i64 -16
+    %actual_old_size = load i64, ptr %header
+
     ; Allocate new memory
-    %newptr = call ptr @malloc(i64 %new_size)
+    %newptr = call ptr @malloc(i64 %new_size, ptr @.__tag.realloc)
     %alloc_failed = icmp eq ptr %newptr, null
     br i1 %alloc_failed, label %return_null, label %copy_data
 
 copy_data:
-    ; Copy min(old_size, new_size) bytes
-    %copy_size = call i64 @__min_i64(i64 %old_size, i64 %new_size)
+    ; Copy min(actual_old_size, new_size) bytes
+    %copy_size = call i64 @__min_i64(i64 %actual_old_size, i64 %new_size)
     call ptr @memcpy(ptr %newptr, ptr %oldptr, i64 %copy_size)
-    ; Note: old memory is leaked since free is a no-op
+    ; Free old memory
+    call void @free(ptr %oldptr, ptr @.__tag.realloc)
     ret ptr %newptr
 
 return_null:

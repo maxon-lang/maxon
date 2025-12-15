@@ -70,18 +70,32 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 40 bytes (array grow)
-ALLOC #2: 10 bytes
-3ALLOC #3: 10 bytes (cstring conversion)
-FREE #3: 10 bytes (cstring release)
+ALLOC #1: 8 bytes (array literal)
+ALLOC #2: 40 bytes (array grow)
+ALLOC #3: 40 bytes (array grow)
+ALLOC #4: 10 bytes (int.toString)
+ALLOC #5: 10 bytes (int.toString)
+ALLOC #6: 32 bytes (int.toString)
+3ALLOC #7: 32 bytes (string metadata)
+ALLOC #8: 10 bytes (cstring conversion)
+ALLOC #9: 10 bytes (cstring conversion)
+FREE #9: 10 bytes (cstring release)
+FREE #8: 10 bytes (cstring release)
 
-FREE #2: 10 bytes (cstring release)
-FREE #1: 40 bytes (array cleanup)
+FREE #7: 32 bytes (string metadata)
+FREE #5: 10 bytes (cstring release)
+FREE #4: 10 bytes (cstring release)
+FREE #3: 40 bytes (array cleanup)
+FREE #2: 40 bytes (array cleanup)
+FREE #6: 32 bytes (string metadata)
+
+=== LEAKS ===
+LEAK #1: 8 bytes (array literal)
 
 === ALLOC STATS ===
-Allocated: 60 bytes
-Freed:     60 bytes
-Leaked:    0 bytes
+Allocated: 192 bytes
+Freed:     184 bytes
+Leaked:    8 bytes
 ```
 
 <!-- test: heap-array-scope-cleanup -->
@@ -106,25 +120,51 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 40 bytes (array grow)
+ALLOC #1: 8 bytes (array literal)
 ALLOC #2: 40 bytes (array grow)
-ALLOC #3: 12 bytes
-200ALLOC #4: 10 bytes (cstring conversion)
-FREE #4: 10 bytes (cstring release)
+ALLOC #3: 40 bytes (array grow)
+ALLOC #4: 8 bytes (array literal)
+ALLOC #5: 40 bytes (array grow)
+ALLOC #6: 40 bytes (array grow)
+ALLOC #7: 12 bytes (int.toString)
+ALLOC #8: 12 bytes (int.toString)
+ALLOC #9: 32 bytes (int.toString)
+200ALLOC #10: 32 bytes (string metadata)
+ALLOC #11: 10 bytes (cstring conversion)
+ALLOC #12: 10 bytes (cstring conversion)
+FREE #12: 10 bytes (cstring release)
+FREE #11: 10 bytes (cstring release)
 
-FREE #3: 12 bytes (cstring release)
-ALLOC #5: 12 bytes
-100ALLOC #6: 10 bytes (cstring conversion)
-FREE #6: 10 bytes (cstring release)
+FREE #10: 32 bytes (string metadata)
+FREE #8: 12 bytes (cstring release)
+FREE #7: 12 bytes (cstring release)
+ALLOC #13: 12 bytes (int.toString)
+ALLOC #14: 12 bytes (int.toString)
+ALLOC #15: 32 bytes (int.toString)
+100ALLOC #16: 32 bytes (string metadata)
+ALLOC #17: 10 bytes (cstring conversion)
+ALLOC #18: 10 bytes (cstring conversion)
+FREE #18: 10 bytes (cstring release)
+FREE #17: 10 bytes (cstring release)
 
-FREE #5: 12 bytes (cstring release)
-FREE #1: 40 bytes (array cleanup)
+FREE #16: 32 bytes (string metadata)
+FREE #14: 12 bytes (cstring release)
+FREE #13: 12 bytes (cstring release)
+FREE #3: 40 bytes (array cleanup)
 FREE #2: 40 bytes (array cleanup)
+FREE #6: 40 bytes (array cleanup)
+FREE #5: 40 bytes (array cleanup)
+FREE #9: 32 bytes (string metadata)
+FREE #15: 32 bytes (string metadata)
+
+=== LEAKS ===
+LEAK #1: 8 bytes (array literal)
+LEAK #4: 8 bytes (array literal)
 
 === ALLOC STATS ===
-Allocated: 124 bytes
-Freed:     124 bytes
-Leaked:    0 bytes
+Allocated: 392 bytes
+Freed:     376 bytes
+Leaked:    16 bytes
 ```
 
 ### Stack Array Tests
@@ -144,15 +184,23 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 11 bytes
-20ALLOC #2: 10 bytes (cstring conversion)
-FREE #2: 10 bytes (cstring release)
+ALLOC #1: 11 bytes (int.toString)
+ALLOC #2: 11 bytes (int.toString)
+ALLOC #3: 32 bytes (int.toString)
+20ALLOC #4: 32 bytes (string metadata)
+ALLOC #5: 10 bytes (cstring conversion)
+ALLOC #6: 10 bytes (cstring conversion)
+FREE #6: 10 bytes (cstring release)
+FREE #5: 10 bytes (cstring release)
 
+FREE #4: 32 bytes (string metadata)
+FREE #2: 11 bytes (cstring release)
 FREE #1: 11 bytes (cstring release)
+FREE #3: 32 bytes (string metadata)
 
 === ALLOC STATS ===
-Allocated: 21 bytes
-Freed:     21 bytes
+Allocated: 106 bytes
+Freed:     106 bytes
 Leaked:    0 bytes
 ```
 
@@ -177,22 +225,40 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 40 bytes (array grow)
-ALLOC #2: 72 bytes (array grow)
-FREE #1: 40 bytes (array grow)
-ALLOC #3: 136 bytes (array grow)
-FREE #2: 72 bytes (array grow)
-ALLOC #4: 11 bytes
-10ALLOC #5: 10 bytes (cstring conversion)
-FREE #5: 10 bytes (cstring release)
+ALLOC #1: 8 bytes (array literal)
+ALLOC #2: 40 bytes (array grow)
+ALLOC #3: 40 bytes (array grow)
+ALLOC #4: 72 bytes (array grow)
+ALLOC #5: 72 bytes (array grow)
+FREE #3: 40 bytes (array grow)
+FREE #2: 40 bytes (array grow)
+ALLOC #6: 136 bytes (array grow)
+ALLOC #7: 136 bytes (array grow)
+FREE #5: 72 bytes (array grow)
+FREE #4: 72 bytes (array grow)
+ALLOC #8: 11 bytes (int.toString)
+ALLOC #9: 11 bytes (int.toString)
+ALLOC #10: 32 bytes (int.toString)
+10ALLOC #11: 32 bytes (string metadata)
+ALLOC #12: 10 bytes (cstring conversion)
+ALLOC #13: 10 bytes (cstring conversion)
+FREE #13: 10 bytes (cstring release)
+FREE #12: 10 bytes (cstring release)
 
-FREE #4: 11 bytes (cstring release)
-FREE #3: 136 bytes (array cleanup)
+FREE #11: 32 bytes (string metadata)
+FREE #9: 11 bytes (cstring release)
+FREE #8: 11 bytes (cstring release)
+FREE #7: 136 bytes (array cleanup)
+FREE #6: 136 bytes (array cleanup)
+FREE #10: 32 bytes (string metadata)
+
+=== LEAKS ===
+LEAK #1: 8 bytes (array literal)
 
 === ALLOC STATS ===
-Allocated: 269 bytes
-Freed:     269 bytes
-Leaked:    0 bytes
+Allocated: 610 bytes
+Freed:     602 bytes
+Leaked:    8 bytes
 ```
 ### Struct Field Array Method Call
 

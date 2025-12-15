@@ -34,7 +34,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 271
+; Instructions: 285
 
 %string = type { ptr, i64 }
 %cstring = type { ptr, i64, ptr }
@@ -43,8 +43,11 @@ end 'main'
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
+@.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -86,8 +89,6 @@ cstring.continue3:
   ret %cstring %21
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define i64 @main() {
 entry0:
   %2 = sitofp i64 32 to f64
@@ -95,40 +96,53 @@ entry0:
   %6 = call %string @__float_toString(f64 %3, ptr null)
   %7 = alloca %string
   store %string %6, ptr %7
-  %8 = call i64 @sys.print(ptr %7)
-  %9 = sitofp i64 64 to f64
-  %10 = call f64 @math.log2(f64 %9)
-  %13 = call %string @__float_toString(f64 %10, ptr null)
-  %14 = alloca %string
-  store %string %13, ptr %14
-  %15 = call i64 @sys.print(ptr %14)
-  %18 = call f64 @math.log2(f64 100)
-  %21 = call f64 @math.log(f64 100)
-  %22 = call f64 @math.log(f64 2)
-  %23 = fdiv f64 %21, %22
-  %27 = fsub f64 %18, %23
-  %32 = fcmp olt f64 %27, 0
-  br i1 %32, label %then1, label %ifcont2
+  %8 = getelementptr %string, ptr %7, i32 0, i32 0
+  %9 = load ptr, ptr %8
+  %11 = call i64 @sys.print(ptr %7)
+  %12 = sitofp i64 64 to f64
+  %13 = call f64 @math.log2(f64 %12)
+  %16 = call %string @__float_toString(f64 %13, ptr null)
+  %17 = alloca %string
+  store %string %16, ptr %17
+  %18 = getelementptr %string, ptr %17, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  %21 = call i64 @sys.print(ptr %17)
+  %24 = call f64 @math.log2(f64 100)
+  %27 = call f64 @math.log(f64 100)
+  %28 = call f64 @math.log(f64 2)
+  %29 = fdiv f64 %27, %28
+  %33 = fsub f64 %24, %29
+  %38 = fcmp olt f64 %33, 0
+  br i1 %38, label %then1, label %ifcont2
 then1:
-  %34 = fsub f64 0, %27
+  %40 = fsub f64 0, %33
   br label %ifcont2
 ifcont2:
-  %52 = phi f64 [ %27, %entry0 ], [ %34, %then1 ]
-  %36 = fcmp olt f64 %52, 1e-06
-  br i1 %36, label %then3, label %ifcont4
+  %68 = phi f64 [ %33, %entry0 ], [ %40, %then1 ]
+  %42 = fcmp olt f64 %68, 1e-06
+  br i1 %42, label %then3, label %ifcont4
 then3:
-  %38 = call %string @__float_toString(f64 %3, ptr null)
-  %39 = alloca %string
-  store %string %38, ptr %39
-  %40 = call i64 @sys.print(ptr %39)
+  %44 = call %string @__float_toString(f64 %3, ptr null)
+  %45 = alloca %string
+  store %string %44, ptr %45
+  %46 = getelementptr %string, ptr %45, i32 0, i32 0
+  %47 = load ptr, ptr %46
+  %49 = call i64 @sys.print(ptr %45)
   br label %ifcont4
 ifcont4:
-  %43 = call f64 @math.pow(f64 2, f64 7)
-  %46 = call f64 @math.log2(f64 %43)
-  %49 = call %string @__float_toString(f64 %46, ptr null)
-  %50 = alloca %string
-  store %string %49, ptr %50
-  %51 = call i64 @sys.print(ptr %50)
+  %69 = phi ptr [ null, %ifcont2 ], [ %47, %then3 ]
+  %52 = call f64 @math.pow(f64 2, f64 7)
+  %55 = call f64 @math.log2(f64 %52)
+  %58 = call %string @__float_toString(f64 %55, ptr null)
+  %59 = alloca %string
+  store %string %58, ptr %59
+  %60 = getelementptr %string, ptr %59, i32 0, i32 0
+  %61 = load ptr, ptr %60
+  %63 = call i64 @sys.print(ptr %59)
+  call void @free(ptr %9, ptr @.__tag.free.meta.interp.input)
+  call void @free(ptr %19, ptr @.__tag.free.meta.interp.input)
+  call void @free(ptr %69, ptr @.__tag.free.meta.interp.input)
+  call void @free(ptr %61, ptr @.__tag.free.meta.interp.input)
   ret i64 0
 }
 
@@ -307,7 +321,7 @@ entry0:
   %7 = load i64, ptr %6
   %8 = call i64 @write_stdout(ptr %5, i64 %7)
   %10 = alloca %string
-  %11 = call ptr @malloc(i64 32)
+  %11 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
   %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
   store ptr @.str.sso.1, ptr %13
@@ -343,6 +357,7 @@ newline.var.release1:
   call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
   br label %newline.var.continue2
 newline.var.continue2:
+  call void @free(ptr %29, ptr @.__tag.free.meta.newline)
   %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %37 = load ptr, ptr %36
   call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
@@ -412,13 +427,17 @@ ifcont15:
   ret f64 %58
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare %string @__float_toString(f64 %arg0, ptr %arg1)
 
@@ -437,7 +456,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 487
+; Instructions: 512
 
 %string = type { ptr, i64 }
 %cstring = type { ptr, i64, ptr }
@@ -446,8 +465,11 @@ entry0:
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
+@.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -492,8 +514,6 @@ cstring.continue3:
   ret %cstring %21
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define i64 @main() {
 entry0:
   %0 = alloca i64
@@ -507,71 +527,95 @@ entry0:
   %6 = call %string @__float_toString(f64 %5, ptr null)
   %7 = alloca %string
   store %string %6, ptr %7
-  %8 = call i64 @sys.print(ptr %7)
-  %9 = sitofp i64 64 to f64
-  %10 = call f64 @math.log2(f64 %9)
-  %11 = alloca f64
-  store f64 %10, ptr %11
-  %12 = load f64, ptr %11
-  %13 = call %string @__float_toString(f64 %12, ptr null)
-  %14 = alloca %string
-  store %string %13, ptr %14
-  %15 = call i64 @sys.print(ptr %14)
-  %16 = alloca f64
-  store f64 100, ptr %16
-  %17 = load f64, ptr %16
-  %18 = call f64 @math.log2(f64 %17)
-  %19 = alloca f64
-  store f64 %18, ptr %19
-  %20 = load f64, ptr %16
-  %21 = call f64 @math.log(f64 %20)
-  %22 = call f64 @math.log(f64 2)
-  %23 = fdiv f64 %21, %22
-  %24 = alloca f64
-  store f64 %23, ptr %24
-  %25 = load f64, ptr %19
-  %26 = load f64, ptr %24
-  %27 = fsub f64 %25, %26
-  %28 = alloca f64
-  store f64 %27, ptr %28
-  %29 = load f64, ptr %28
+  %8 = getelementptr %string, ptr %7, i32 0, i32 0
+  %9 = load ptr, ptr %8
+  %10 = alloca ptr
+  store ptr %9, ptr %10
+  %11 = call i64 @sys.print(ptr %7)
+  %12 = sitofp i64 64 to f64
+  %13 = call f64 @math.log2(f64 %12)
+  %14 = alloca f64
+  store f64 %13, ptr %14
+  %15 = load f64, ptr %14
+  %16 = call %string @__float_toString(f64 %15, ptr null)
+  %17 = alloca %string
+  store %string %16, ptr %17
+  %18 = getelementptr %string, ptr %17, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  %20 = alloca ptr
+  store ptr %19, ptr %20
+  %21 = call i64 @sys.print(ptr %17)
+  %22 = alloca f64
+  store f64 100, ptr %22
+  %23 = load f64, ptr %22
+  %24 = call f64 @math.log2(f64 %23)
+  %25 = alloca f64
+  store f64 %24, ptr %25
+  %26 = load f64, ptr %22
+  %27 = call f64 @math.log(f64 %26)
+  %28 = call f64 @math.log(f64 2)
+  %29 = fdiv f64 %27, %28
   %30 = alloca f64
   store f64 %29, ptr %30
-  %31 = load f64, ptr %28
-  %32 = fcmp olt f64 %31, 0
-  br i1 %32, label %then1, label %ifcont2
+  %31 = load f64, ptr %25
+  %32 = load f64, ptr %30
+  %33 = fsub f64 %31, %32
+  %34 = alloca f64
+  store f64 %33, ptr %34
+  %35 = load f64, ptr %34
+  %36 = alloca f64
+  store f64 %35, ptr %36
+  %37 = load f64, ptr %34
+  %38 = fcmp olt f64 %37, 0
+  br i1 %38, label %then1, label %ifcont2
 then1:
-  %33 = load f64, ptr %28
-  %34 = fsub f64 0, %33
-  store f64 %34, ptr %30
+  %39 = load f64, ptr %34
+  %40 = fsub f64 0, %39
+  store f64 %40, ptr %36
   br label %ifcont2
 ifcont2:
-  %35 = load f64, ptr %30
-  %36 = fcmp olt f64 %35, 1e-06
-  br i1 %36, label %then3, label %ifcont4
+  %41 = load f64, ptr %36
+  %42 = fcmp olt f64 %41, 1e-06
+  br i1 %42, label %then3, label %ifcont4
 then3:
-  %37 = load f64, ptr %4
-  %38 = call %string @__float_toString(f64 %37, ptr null)
-  %39 = alloca %string
-  store %string %38, ptr %39
-  %40 = call i64 @sys.print(ptr %39)
+  %43 = load f64, ptr %4
+  %44 = call %string @__float_toString(f64 %43, ptr null)
+  %45 = alloca %string
+  store %string %44, ptr %45
+  %46 = getelementptr %string, ptr %45, i32 0, i32 0
+  %47 = load ptr, ptr %46
+  %48 = alloca ptr
+  store ptr %47, ptr %48
+  %49 = call i64 @sys.print(ptr %45)
   br label %ifcont4
 ifcont4:
-  %41 = alloca f64
-  store f64 7, ptr %41
-  %42 = load f64, ptr %41
-  %43 = call f64 @math.pow(f64 2, f64 %42)
-  %44 = alloca f64
-  store f64 %43, ptr %44
-  %45 = load f64, ptr %44
-  %46 = call f64 @math.log2(f64 %45)
-  %47 = alloca f64
-  store f64 %46, ptr %47
-  %48 = load f64, ptr %47
-  %49 = call %string @__float_toString(f64 %48, ptr null)
-  %50 = alloca %string
-  store %string %49, ptr %50
-  %51 = call i64 @sys.print(ptr %50)
+  %50 = alloca f64
+  store f64 7, ptr %50
+  %51 = load f64, ptr %50
+  %52 = call f64 @math.pow(f64 2, f64 %51)
+  %53 = alloca f64
+  store f64 %52, ptr %53
+  %54 = load f64, ptr %53
+  %55 = call f64 @math.log2(f64 %54)
+  %56 = alloca f64
+  store f64 %55, ptr %56
+  %57 = load f64, ptr %56
+  %58 = call %string @__float_toString(f64 %57, ptr null)
+  %59 = alloca %string
+  store %string %58, ptr %59
+  %60 = getelementptr %string, ptr %59, i32 0, i32 0
+  %61 = load ptr, ptr %60
+  %62 = alloca ptr
+  store ptr %61, ptr %62
+  %63 = call i64 @sys.print(ptr %59)
+  %64 = load ptr, ptr %10
+  call void @free(ptr %64, ptr @.__tag.free.meta.interp.input)
+  %65 = load ptr, ptr %20
+  call void @free(ptr %65, ptr @.__tag.free.meta.interp.input)
+  %66 = load ptr, ptr %48
+  call void @free(ptr %66, ptr @.__tag.free.meta.interp.input)
+  %67 = load ptr, ptr %62
+  call void @free(ptr %67, ptr @.__tag.free.meta.interp.input)
   ret i64 0
 }
 
@@ -881,7 +925,7 @@ entry0:
   %9 = alloca i64
   store i64 %8, ptr %9
   %10 = alloca %string
-  %11 = call ptr @malloc(i64 32)
+  %11 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
   %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
   store ptr @.str.sso.1, ptr %13
@@ -918,6 +962,7 @@ newline.var.release1:
   call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
   br label %newline.var.continue2
 newline.var.continue2:
+  call void @free(ptr %29, ptr @.__tag.free.meta.newline)
   %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %37 = load ptr, ptr %36
   call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
@@ -1031,13 +1076,17 @@ ifcont15:
   ret f64 %49
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare %string @__float_toString(f64 %arg0, ptr %arg1)
 

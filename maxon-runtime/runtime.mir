@@ -42,6 +42,10 @@ declare i64 @write_stdout(ptr %buf, i64 %count)
 
 ; Default tags for allocations
 @__tag_string_concat = constant [14 x i8] c"string concat\00"
+@__tag_string_buffer = constant [14 x i8] c"string buffer\00"
+@__tag_array_buffer = constant [13 x i8] c"array buffer\00"
+@__tag_string_release = constant [15 x i8] c"string release\00"
+@__tag_array_release = constant [14 x i8] c"array release\00"
 
 ;==============================================================================
 ; __track_alloc_with_ptr - record an allocation with pointer (internal use)
@@ -691,7 +695,20 @@ entry:
     ; Data starts at offset 8
     ; Note: data_size stores the exact capacity passed in, used to compute free size
     %total_size = add i64 %capacity, 8
-    %raw = call ptr @malloc(i64 %total_size)
+    ; Use provided tag, or default to string buffer tag if null
+    %has_tag = icmp ne ptr %tag, null
+    br i1 %has_tag, label %use_provided_tag, label %use_default_tag
+
+use_provided_tag:
+    %raw1 = call ptr @malloc(i64 %total_size, ptr %tag)
+    br label %after_malloc
+
+use_default_tag:
+    %raw2 = call ptr @malloc(i64 %total_size, ptr @__tag_string_buffer)
+    br label %after_malloc
+
+after_malloc:
+    %raw = phi ptr [ %raw1, %use_provided_tag ], [ %raw2, %use_default_tag ]
 
     ; Initialize refcount to 1 at offset 0
     store i32 1, ptr %raw
@@ -753,7 +770,7 @@ track_release:
     br label %free_mem
 
 free_mem:
-    call void @free(ptr %header)
+    call void @free(ptr %header, ptr %tag)
     br label %done
 
 done:
@@ -783,6 +800,90 @@ entry:
     %header = getelementptr i8, ptr %data, i64 -8
     %count = load i32, ptr %header
     ret i32 %count
+}
+
+;==============================================================================
+; __ManagedStringData REFCOUNTING
+; These functions handle refcounting for the __ManagedStringData struct itself
+; (not the buffer it points to - that uses _managed_string_retain/release)
+;
+; __ManagedStringData layout (40 bytes):
+;   { _ManagedArray_byte, i64 len, i64 capacity, i64 refcount }
+; where _ManagedArray_byte = { ptr buffer, i64 size }
+;
+; Refcount is at field index 3 (offset 32)
+;==============================================================================
+
+;==============================================================================
+; _managed_string_data_retain - increment refcount on __ManagedStringData
+; Call this when copying/sharing a string (e.g., passing to function)
+; void _managed_string_data_retain(ptr managedData)
+;==============================================================================
+define void @_managed_string_data_retain(ptr %managedData) {
+entry:
+    ; Check for null (shouldn't happen but be safe)
+    %is_null = icmp eq ptr %managedData, null
+    br i1 %is_null, label %done, label %do_retain
+
+do_retain:
+    ; Refcount is at field 3 (offset 32)
+    %refcount_ptr = getelementptr i8, ptr %managedData, i64 32
+    %old_count = load i64, ptr %refcount_ptr
+    %new_count = add i64 %old_count, 1
+    store i64 %new_count, ptr %refcount_ptr
+    br label %done
+
+done:
+    ret void
+}
+
+;==============================================================================
+; _managed_string_data_release - decrement refcount, free if zero
+; Call this when a string goes out of scope or is reassigned
+; Also releases the buffer if this is the last reference
+; void _managed_string_data_release(ptr managedData, ptr tag)
+;==============================================================================
+@.__tag_buffer_release = constant [15 x i8] c"buffer release\00"
+
+define void @_managed_string_data_release(ptr %managedData, ptr %tag) {
+entry:
+    ; Check for null
+    %is_null = icmp eq ptr %managedData, null
+    br i1 %is_null, label %done, label %do_release
+
+do_release:
+    ; Decrement refcount (field 3, offset 32)
+    %refcount_ptr = getelementptr i8, ptr %managedData, i64 32
+    %old_count = load i64, ptr %refcount_ptr
+    %new_count = sub i64 %old_count, 1
+    store i64 %new_count, ptr %refcount_ptr
+
+    ; If refcount reaches 0, free everything
+    %is_zero = icmp eq i64 %new_count, 0
+    br i1 %is_zero, label %do_free, label %done
+
+do_free:
+    ; First, release the buffer if heap-allocated (capacity > 0)
+    ; Capacity is at field 2 (offset 24)
+    %capacity_ptr = getelementptr i8, ptr %managedData, i64 24
+    %capacity = load i64, ptr %capacity_ptr
+    %is_heap = icmp sgt i64 %capacity, 0
+    br i1 %is_heap, label %release_buffer, label %free_metadata
+
+release_buffer:
+    ; Buffer pointer is at field 0, subfield 0 (offset 0)
+    %buffer_ptr_ptr = getelementptr i8, ptr %managedData, i64 0
+    %buffer_ptr = load ptr, ptr %buffer_ptr_ptr
+    call void @_managed_string_release(ptr %buffer_ptr, ptr @.__tag_buffer_release)
+    br label %free_metadata
+
+free_metadata:
+    ; Free the __ManagedStringData struct itself
+    call void @free(ptr %managedData, ptr %tag)
+    br label %done
+
+done:
+    ret void
 }
 
 ;==============================================================================
@@ -840,7 +941,20 @@ entry:
     ; Allocate heap memory: 8-byte header + byteSize
     ; Header layout: [refcount:i32][data_size:i32] at offsets 0 and 4
     %total_size = add i64 %byteSize, 8
-    %raw = call ptr @malloc(i64 %total_size)
+    ; Use provided tag, or default to array buffer tag if null
+    %has_tag = icmp ne ptr %tag, null
+    br i1 %has_tag, label %arr_use_provided_tag, label %arr_use_default_tag
+
+arr_use_provided_tag:
+    %raw1 = call ptr @malloc(i64 %total_size, ptr %tag)
+    br label %arr_after_malloc
+
+arr_use_default_tag:
+    %raw2 = call ptr @malloc(i64 %total_size, ptr @__tag_array_buffer)
+    br label %arr_after_malloc
+
+arr_after_malloc:
+    %raw = phi ptr [ %raw1, %arr_use_provided_tag ], [ %raw2, %arr_use_default_tag ]
 
     ; Initialize refcount to 1 at offset 0
     store i32 1, ptr %raw
@@ -900,7 +1014,7 @@ track_release:
     br label %free_mem
 
 free_mem:
-    call void @free(ptr %header)
+    call void @free(ptr %header, ptr %tag)
     br label %done
 
 done:

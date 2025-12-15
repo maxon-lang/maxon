@@ -1,5 +1,14 @@
 // Lexer for the Maxon language
 
+let keywords = [
+"function": TokenType.kwFunction,
+"end": TokenType.kwEnd,
+"return": TokenType.kwReturn,
+"let": TokenType.kwLet,
+"int": TokenType.kwInt,
+"returns": TokenType.kwReturns
+]
+
 export type Lexer
 	let source string
 	var pos StringIndex
@@ -7,7 +16,10 @@ export type Lexer
 	var column int
 
 	export static function create(source string) returns Lexer
-		return Lexer{source: source, pos: source.startIndex(), line: 1, column: 1}
+		// Workaround: pre-compute startIndex() into local variable.
+		// Using source.startIndex() inline causes incorrect struct initialization in multi-file builds.
+		let startIdx = source.startIndex()
+		return Lexer{source: source, pos: startIdx, line: 1, column: 1}
 	end 'create'
 
 	export function isAtEnd() returns bool
@@ -66,25 +78,10 @@ export type Lexer
 	end 'isAlphaNumeric'
 
 	export function keywordOrIdentifier(lexeme string) returns TokenType
-		if lexeme == "function" 'kwFunction'
-			return TokenType.kwFunction
-		end 'kwFunction'
-		if lexeme == "end" 'kwEnd'
-			return TokenType.kwEnd
-		end 'kwEnd'
-		if lexeme == "return" 'kwReturn'
-			return TokenType.kwReturn
-		end 'kwReturn'
-		if lexeme == "let" 'kwLet'
-			return TokenType.kwLet
-		end 'kwLet'
-		if lexeme == "int" 'kwInt'
-			return TokenType.kwInt
-		end 'kwInt'
-		if lexeme == "returns" 'kwReturns'
-			return TokenType.kwReturns
-		end 'kwReturns'
-		return TokenType.identifier
+		let result = keywords.get(lexeme) or 'notFound'
+			return TokenType.identifier
+		end 'notFound'
+		return result
 	end 'keywordOrIdentifier'
 
 	export function scanIdentifier() returns Token
@@ -204,12 +201,17 @@ export type Lexer
 
 	export function tokenize() returns array of Token
 		var tokens = array of Token
-		var tokenCount = 0
 
 		while true 'loop'
 			let tok = nextToken()
 			tokens.push(tok)
-			tokenCount = tokenCount + 1
+
+			// Verify token was stored correctly
+			let count = tokens.count()
+			let stored = tokens[count - 1]
+			if stored.kind != tok.kind 'verify'
+				print("    ERROR: Token corruption! Pushed kind={tok.kind}, stored kind={stored.kind}")
+			end 'verify'
 
 			if tok.kind == TokenType.eof 'done'
 				break 'loop'
@@ -219,6 +221,7 @@ export type Lexer
 		return tokens
 	end 'tokenize'
 end 'Lexer'
+
 
 
 

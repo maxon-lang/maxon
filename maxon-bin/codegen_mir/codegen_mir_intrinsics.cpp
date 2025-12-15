@@ -439,8 +439,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_concat(CallExprAST *callExpr) 
 	builder->createStore(builder->getInt8(0), nullTermPtr);
 
 	mir::MIRValue *managedSize = builder->getInt64(32);
-	mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
-	mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize}, "concat.managed");
+	mir::MIRValue *concatTag = module->createGlobalString(".__tag.str.concat", "string concat");
+	mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
+	mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize, concatTag}, "concat.managed");
 
 	mir::MIRValue *dstBufferPtr = builder->createStructGEP(managedStringType, newManaged, 0, "dst._buffer");
 	mir::MIRValue *dstPtrPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 0, "dst.ptr.ptr");
@@ -713,8 +714,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_from_chars(CallExprAST *callEx
 	}
 
 	mir::MIRValue *lengthPlus1 = builder->createAdd(length, builder->getInt64(1), "len.plus1");
-	mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
-	mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {lengthPlus1}, "fromchars.buffer");
+	mir::MIRValue *fromCharsTag = module->createGlobalString(".__tag.str.fromchars", "string fromChars");
+	mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
+	mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {lengthPlus1, fromCharsTag}, "fromchars.buffer");
 
 	mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
 														{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
@@ -724,7 +726,8 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_string_from_chars(CallExprAST *callEx
 	builder->createStore(builder->getInt8(0), nullTermPtr);
 
 	mir::MIRValue *managedSize = builder->getInt64(32);
-	mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize}, "fromchars.managed");
+	mir::MIRValue *fromCharsMeta = module->createGlobalString(".__tag.str.fromchars.meta", "fromChars metadata");
+	mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize, fromCharsMeta}, "fromchars.managed");
 
 	mir::MIRValue *dstBufferPtr = builder->createStructGEP(managedStringType, newManaged, 0, "dst._buffer");
 	mir::MIRValue *dstPtrPtr = builder->createStructGEP(unsizedArrayType, dstBufferPtr, 0, "dst.ptr.ptr");
@@ -929,8 +932,9 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_list_directory(CallExprAST *callExpr)
 	mir::MIRValue *cap = builder->createLoad(mir::MIRType::getInt64(), capPtrField, "managed.cap");
 
 	// Free the temporary heap allocation for the result struct
-	mir::MIRFunction *freeFunc = getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr()});
-	builder->createCall(freeFunc, {resultPtr});
+	mir::MIRValue *freeTag = module->createGlobalString(".__tag.free.listdir", "listdir result");
+	mir::MIRFunction *freeFunc = getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+	builder->createCall(freeFunc, {resultPtr, freeTag});
 
 	// Build array<string> struct inside the optional's value field
 	// valPtr points to array<string> = { __ManagedArrayData<string>, i32 iterIndex }
@@ -1089,9 +1093,10 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_substring_to_string(CallExprAST *call
 	builder->createStore(builder->getInt8(0), nullTermPtr);
 
 	// Allocate ManagedStringData struct
-	mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
+	mir::MIRValue *toStringTag = module->createGlobalString(".__tag.substr.tostring", "substring.toString");
+	mir::MIRFunction *mallocFunc = getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 	mir::MIRValue *managedSize = builder->getInt64(32);
-	mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize}, "tostring.managed");
+	mir::MIRValue *newManaged = builder->createCall(mallocFunc, {managedSize, toStringTag}, "tostring.managed");
 
 	// Set up ManagedStringData fields
 	mir::MIRValue *dstBufferPtr = builder->createStructGEP(managedStringType, newManaged, 0, "dst._buffer");

@@ -17,12 +17,14 @@ end 'main'
 %__ManagedArrayData_int = type { ptr, i64, i64 }
 %array<int> = type { %__ManagedArrayData_int, i64 }
 
+@.__tag.arr.var.elems = constant [15 x i8] c"variable array\00"
+@.__tag.arr.var.sts = constant [15 x i8] c"variable array\00"
 @.__tag.free.elems = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.sts = constant [14 x i8] c"array cleanup\00"
+@.__tag.arr.var.newElements = constant [15 x i8] c"variable array\00"
+@.__tag.arr.var.newStates = constant [15 x i8] c"variable array\00"
 @.__tag.free.newElements = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.newStates = constant [14 x i8] c"array cleanup\00"
-
-declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 define i64 @main() {
 entry0:
@@ -51,7 +53,9 @@ ifcont2:
   ret i64 0
 }
 
-declare ptr @malloc(i64 %arg0)
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
+
+declare ptr @malloc(i64 %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
@@ -71,7 +75,7 @@ loop2:
 afterloop3:
   %13 = sext i64 %74 to i64
   %14 = shl i64 %13, 3
-  %15 = call ptr @malloc(i64 %14)
+  %15 = call ptr @malloc(i64 %14, ptr @.__tag.arr.var.elems)
   %16 = alloca %array<int>
   %17 = getelementptr %array<int>, ptr %16, i32 0, i32 0
   %18 = getelementptr %__ManagedArrayData_int, ptr %17, i32 0, i32 0
@@ -84,7 +88,7 @@ afterloop3:
   store i64 0, ptr %21
   %22 = call ptr @memset(ptr %15, i64 0, i64 %14)
   %24 = sext i64 %74 to i64
-  %26 = call ptr @malloc(i64 %24)
+  %26 = call ptr @malloc(i64 %24, ptr @.__tag.arr.var.sts)
   %27 = alloca %array<byte>
   %28 = getelementptr %array<byte>, ptr %27, i32 0, i32 0
   %29 = getelementptr %__ManagedArrayData_byte, ptr %28, i32 0, i32 0
@@ -367,7 +371,7 @@ entry0:
   store %array<byte> %14, ptr %15
   %17 = sext i64 %6 to i64
   %18 = shl i64 %17, 3
-  %19 = call ptr @malloc(i64 %18)
+  %19 = call ptr @malloc(i64 %18, ptr @.__tag.arr.var.newElements)
   %20 = alloca %array<int>
   %21 = getelementptr %array<int>, ptr %20, i32 0, i32 0
   %22 = getelementptr %__ManagedArrayData_int, ptr %21, i32 0, i32 0
@@ -380,7 +384,7 @@ entry0:
   store i64 0, ptr %25
   %26 = call ptr @memset(ptr %19, i64 0, i64 %18)
   %28 = sext i64 %6 to i64
-  %30 = call ptr @malloc(i64 %28)
+  %30 = call ptr @malloc(i64 %28, ptr @.__tag.arr.var.newStates)
   %31 = alloca %array<byte>
   %32 = getelementptr %array<byte>, ptr %31, i32 0, i32 0
   %33 = getelementptr %__ManagedArrayData_byte, ptr %32, i32 0, i32 0
@@ -527,12 +531,14 @@ entry0:
 %__ManagedArrayData_int = type { ptr, i64, i64 }
 %array<int> = type { %__ManagedArrayData_int, i64 }
 
+@.__tag.arr.var.elems = constant [15 x i8] c"variable array\00"
+@.__tag.arr.var.sts = constant [15 x i8] c"variable array\00"
 @.__tag.free.elems = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.sts = constant [14 x i8] c"array cleanup\00"
+@.__tag.arr.var.newElements = constant [15 x i8] c"variable array\00"
+@.__tag.arr.var.newStates = constant [15 x i8] c"variable array\00"
 @.__tag.free.newElements = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.newStates = constant [14 x i8] c"array cleanup\00"
-
-declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
 define i64 @main() {
 entry0:
@@ -564,7 +570,9 @@ ifcont2:
   ret i64 0
 }
 
-declare ptr @malloc(i64 %arg0)
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
+
+declare ptr @malloc(i64 %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
@@ -597,7 +605,7 @@ afterloop3:
   %12 = load i64, ptr %5
   %13 = sext i64 %12 to i64
   %14 = mul i64 %13, 8
-  %15 = call ptr @malloc(i64 %14)
+  %15 = call ptr @malloc(i64 %14, ptr @.__tag.arr.var.elems)
   %16 = alloca %array<int>
   %17 = getelementptr %array<int>, ptr %16, i32 0, i32 0
   %18 = getelementptr %__ManagedArrayData_int, ptr %17, i32 0, i32 0
@@ -612,7 +620,7 @@ afterloop3:
   %23 = load i64, ptr %5
   %24 = sext i64 %23 to i64
   %25 = mul i64 %24, 1
-  %26 = call ptr @malloc(i64 %25)
+  %26 = call ptr @malloc(i64 %25, ptr @.__tag.arr.var.sts)
   %27 = alloca %array<byte>
   %28 = getelementptr %array<byte>, ptr %27, i32 0, i32 0
   %29 = getelementptr %__ManagedArrayData_byte, ptr %28, i32 0, i32 0
@@ -1016,7 +1024,7 @@ entry0:
   %16 = load i64, ptr %7
   %17 = sext i64 %16 to i64
   %18 = mul i64 %17, 8
-  %19 = call ptr @malloc(i64 %18)
+  %19 = call ptr @malloc(i64 %18, ptr @.__tag.arr.var.newElements)
   %20 = alloca %array<int>
   %21 = getelementptr %array<int>, ptr %20, i32 0, i32 0
   %22 = getelementptr %__ManagedArrayData_int, ptr %21, i32 0, i32 0
@@ -1031,7 +1039,7 @@ entry0:
   %27 = load i64, ptr %7
   %28 = sext i64 %27 to i64
   %29 = mul i64 %28, 1
-  %30 = call ptr @malloc(i64 %29)
+  %30 = call ptr @malloc(i64 %29, ptr @.__tag.arr.var.newStates)
   %31 = alloca %array<byte>
   %32 = getelementptr %array<byte>, ptr %31, i32 0, i32 0
   %33 = getelementptr %__ManagedArrayData_byte, ptr %32, i32 0, i32 0

@@ -30,14 +30,23 @@ end 'main'
 %map<string,TokenKind> = type { %array<string>, %array<TokenKind>, %array<byte>, i64, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.arr.var.keyArr = constant [15 x i8] c"variable array\00"
+@.__tag.arr.var.valueArr = constant [15 x i8] c"variable array\00"
+@.__tag.arr.var.stateArr = constant [15 x i8] c"variable array\00"
 @.__tag.free.keyArr = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.valueArr = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.stateArr = constant [14 x i8] c"array cleanup\00"
+@.__tag.arr.var.newKeys = constant [15 x i8] c"variable array\00"
+@.__tag.arr.var.newValues = constant [15 x i8] c"variable array\00"
+@.__tag.arr.var.newStates = constant [15 x i8] c"variable array\00"
 @.__tag.free.newKeys = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.newValues = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.newStates = constant [14 x i8] c"array cleanup\00"
 @KEYWORDS = global %map<string,TokenKind>
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [9 x i8] c"function\00"
+@.__tag.map.keys.KEYWORDS = constant [9 x i8] c"map keys\00"
+@.__tag.map.vals.KEYWORDS = constant [11 x i8] c"map values\00"
 @.str.sso.2 = constant [9 x i8] c"function\00"
 @.str.sso.3 = constant [4 x i8] c"var\00"
 
@@ -61,15 +70,13 @@ entry0:
   ret i1 %8
 }
 
-declare void @_managed_array_release(ptr %arg0, ptr %arg1)
-
 define i64 @main() {
 entry0:
   %0 = load %map<string,TokenKind>, ptr @KEYWORDS
   %1 = alloca %map<string,TokenKind>
   store %map<string,TokenKind> %0, ptr %1
   %2 = alloca %string
-  %3 = call ptr @malloc(i64 32)
+  %3 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
   %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
   store ptr @.str.sso.1, ptr %5
@@ -180,6 +187,8 @@ ifcont2:
   ret i1 %14
 }
 
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
+
 define %map<string,TokenKind> @map<string,TokenKind>.init(ptr %managedKeys, ptr %managedValues) {
 entry0:
   %3 = getelementptr %__ManagedArrayData_string, ptr %managedKeys, i32 0, i32 1
@@ -196,7 +205,7 @@ loop2:
 afterloop3:
   %14 = sext i64 %104 to i64
   %15 = shl i64 %14, 4
-  %16 = call ptr @malloc(i64 %15)
+  %16 = call ptr @malloc(i64 %15, ptr @.__tag.arr.var.keyArr)
   %17 = alloca %array<string>
   %18 = getelementptr %array<string>, ptr %17, i32 0, i32 0
   %19 = getelementptr %__ManagedArrayData_string, ptr %18, i32 0, i32 0
@@ -209,7 +218,7 @@ afterloop3:
   store i64 0, ptr %22
   %23 = call ptr @memset(ptr %16, i64 0, i64 %15)
   %25 = sext i64 %104 to i64
-  %27 = call ptr @malloc(i64 %25)
+  %27 = call ptr @malloc(i64 %25, ptr @.__tag.arr.var.valueArr)
   %28 = alloca %array<TokenKind>
   %29 = getelementptr %array<TokenKind>, ptr %28, i32 0, i32 0
   %30 = getelementptr %__ManagedArrayData_TokenKind, ptr %29, i32 0, i32 0
@@ -222,7 +231,7 @@ afterloop3:
   store i64 0, ptr %33
   %34 = call ptr @memset(ptr %27, i64 0, i64 %25)
   %36 = sext i64 %104 to i64
-  %38 = call ptr @malloc(i64 %36)
+  %38 = call ptr @malloc(i64 %36, ptr @.__tag.arr.var.stateArr)
   %39 = alloca %array<byte>
   %40 = getelementptr %array<byte>, ptr %39, i32 0, i32 0
   %41 = getelementptr %__ManagedArrayData_byte, ptr %40, i32 0, i32 0
@@ -581,7 +590,7 @@ entry0:
   store %array<byte> %18, ptr %19
   %21 = sext i64 %6 to i64
   %22 = shl i64 %21, 4
-  %23 = call ptr @malloc(i64 %22)
+  %23 = call ptr @malloc(i64 %22, ptr @.__tag.arr.var.newKeys)
   %24 = alloca %array<string>
   %25 = getelementptr %array<string>, ptr %24, i32 0, i32 0
   %26 = getelementptr %__ManagedArrayData_string, ptr %25, i32 0, i32 0
@@ -594,7 +603,7 @@ entry0:
   store i64 0, ptr %29
   %30 = call ptr @memset(ptr %23, i64 0, i64 %22)
   %32 = sext i64 %6 to i64
-  %34 = call ptr @malloc(i64 %32)
+  %34 = call ptr @malloc(i64 %32, ptr @.__tag.arr.var.newValues)
   %35 = alloca %array<TokenKind>
   %36 = getelementptr %array<TokenKind>, ptr %35, i32 0, i32 0
   %37 = getelementptr %__ManagedArrayData_TokenKind, ptr %36, i32 0, i32 0
@@ -607,7 +616,7 @@ entry0:
   store i64 0, ptr %40
   %41 = call ptr @memset(ptr %34, i64 0, i64 %32)
   %43 = sext i64 %6 to i64
-  %45 = call ptr @malloc(i64 %43)
+  %45 = call ptr @malloc(i64 %43, ptr @.__tag.arr.var.newStates)
   %46 = alloca %array<byte>
   %47 = getelementptr %array<byte>, ptr %46, i32 0, i32 0
   %48 = getelementptr %__ManagedArrayData_byte, ptr %47, i32 0, i32 0
@@ -766,7 +775,7 @@ newStates.skip16:
   ret void
 }
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
@@ -774,10 +783,10 @@ define void @__global_init() {
 entry0:
   %0 = alloca %__ManagedArrayData_string
   %1 = alloca %__ManagedArrayData_TokenKind
-  %2 = call ptr @malloc(i64 32)
-  %3 = call ptr @malloc(i64 2)
+  %2 = call ptr @malloc(i64 32, ptr @.__tag.map.keys.KEYWORDS)
+  %3 = call ptr @malloc(i64 2, ptr @.__tag.map.vals.KEYWORDS)
   %4 = alloca %string
-  %5 = call ptr @malloc(i64 32)
+  %5 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 0
   %7 = getelementptr %_ManagedArray_byte, ptr %6, i32 0, i32 0
   store ptr @.str.sso.2, ptr %7
@@ -797,7 +806,7 @@ entry0:
   %15 = getelementptr i8, ptr %3, i64 0
   store i8 0, ptr %15
   %16 = alloca %string
-  %17 = call ptr @malloc(i64 32)
+  %17 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %18 = getelementptr %__ManagedStringData, ptr %17, i32 0, i32 0
   %19 = getelementptr %_ManagedArray_byte, ptr %18, i32 0, i32 0
   store ptr @.str.sso.3, ptr %19
@@ -859,14 +868,23 @@ entry0:
 %map<string,TokenKind> = type { %array<string>, %array<TokenKind>, %array<byte>, i64, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.arr.var.keyArr = constant [15 x i8] c"variable array\00"
+@.__tag.arr.var.valueArr = constant [15 x i8] c"variable array\00"
+@.__tag.arr.var.stateArr = constant [15 x i8] c"variable array\00"
 @.__tag.free.keyArr = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.valueArr = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.stateArr = constant [14 x i8] c"array cleanup\00"
+@.__tag.arr.var.newKeys = constant [15 x i8] c"variable array\00"
+@.__tag.arr.var.newValues = constant [15 x i8] c"variable array\00"
+@.__tag.arr.var.newStates = constant [15 x i8] c"variable array\00"
 @.__tag.free.newKeys = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.newValues = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.newStates = constant [14 x i8] c"array cleanup\00"
 @KEYWORDS = global %map<string,TokenKind>
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [9 x i8] c"function\00"
+@.__tag.map.keys.KEYWORDS = constant [9 x i8] c"map keys\00"
+@.__tag.map.vals.KEYWORDS = constant [11 x i8] c"map values\00"
 @.str.sso.2 = constant [9 x i8] c"function\00"
 @.str.sso.3 = constant [4 x i8] c"var\00"
 
@@ -897,15 +915,13 @@ entry0:
   ret i1 %8
 }
 
-declare void @_managed_array_release(ptr %arg0, ptr %arg1)
-
 define i64 @main() {
 entry0:
   %0 = load %map<string,TokenKind>, ptr @KEYWORDS
   %1 = alloca %map<string,TokenKind>
   store %map<string,TokenKind> %0, ptr %1
   %2 = alloca %string
-  %3 = call ptr @malloc(i64 32)
+  %3 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %4 = getelementptr %__ManagedStringData, ptr %3, i32 0, i32 0
   %5 = getelementptr %_ManagedArray_byte, ptr %4, i32 0, i32 0
   store ptr @.str.sso.1, ptr %5
@@ -1089,6 +1105,8 @@ ifcont2:
   ret i1 %14
 }
 
+declare void @_managed_array_release(ptr %arg0, ptr %arg1)
+
 define %map<string,TokenKind> @map<string,TokenKind>.init(ptr %managedKeys, ptr %managedValues) {
 entry0:
   %0 = alloca ptr
@@ -1118,7 +1136,7 @@ afterloop3:
   %13 = load i64, ptr %6
   %14 = sext i64 %13 to i64
   %15 = mul i64 %14, 16
-  %16 = call ptr @malloc(i64 %15)
+  %16 = call ptr @malloc(i64 %15, ptr @.__tag.arr.var.keyArr)
   %17 = alloca %array<string>
   %18 = getelementptr %array<string>, ptr %17, i32 0, i32 0
   %19 = getelementptr %__ManagedArrayData_string, ptr %18, i32 0, i32 0
@@ -1133,7 +1151,7 @@ afterloop3:
   %24 = load i64, ptr %6
   %25 = sext i64 %24 to i64
   %26 = mul i64 %25, 1
-  %27 = call ptr @malloc(i64 %26)
+  %27 = call ptr @malloc(i64 %26, ptr @.__tag.arr.var.valueArr)
   %28 = alloca %array<TokenKind>
   %29 = getelementptr %array<TokenKind>, ptr %28, i32 0, i32 0
   %30 = getelementptr %__ManagedArrayData_TokenKind, ptr %29, i32 0, i32 0
@@ -1148,7 +1166,7 @@ afterloop3:
   %35 = load i64, ptr %6
   %36 = sext i64 %35 to i64
   %37 = mul i64 %36, 1
-  %38 = call ptr @malloc(i64 %37)
+  %38 = call ptr @malloc(i64 %37, ptr @.__tag.arr.var.stateArr)
   %39 = alloca %array<byte>
   %40 = getelementptr %array<byte>, ptr %39, i32 0, i32 0
   %41 = getelementptr %__ManagedArrayData_byte, ptr %40, i32 0, i32 0
@@ -1642,7 +1660,7 @@ entry0:
   %20 = load i64, ptr %7
   %21 = sext i64 %20 to i64
   %22 = mul i64 %21, 16
-  %23 = call ptr @malloc(i64 %22)
+  %23 = call ptr @malloc(i64 %22, ptr @.__tag.arr.var.newKeys)
   %24 = alloca %array<string>
   %25 = getelementptr %array<string>, ptr %24, i32 0, i32 0
   %26 = getelementptr %__ManagedArrayData_string, ptr %25, i32 0, i32 0
@@ -1657,7 +1675,7 @@ entry0:
   %31 = load i64, ptr %7
   %32 = sext i64 %31 to i64
   %33 = mul i64 %32, 1
-  %34 = call ptr @malloc(i64 %33)
+  %34 = call ptr @malloc(i64 %33, ptr @.__tag.arr.var.newValues)
   %35 = alloca %array<TokenKind>
   %36 = getelementptr %array<TokenKind>, ptr %35, i32 0, i32 0
   %37 = getelementptr %__ManagedArrayData_TokenKind, ptr %36, i32 0, i32 0
@@ -1672,7 +1690,7 @@ entry0:
   %42 = load i64, ptr %7
   %43 = sext i64 %42 to i64
   %44 = mul i64 %43, 1
-  %45 = call ptr @malloc(i64 %44)
+  %45 = call ptr @malloc(i64 %44, ptr @.__tag.arr.var.newStates)
   %46 = alloca %array<byte>
   %47 = getelementptr %array<byte>, ptr %46, i32 0, i32 0
   %48 = getelementptr %__ManagedArrayData_byte, ptr %47, i32 0, i32 0
@@ -1871,7 +1889,7 @@ newStates.skip16:
   ret void
 }
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
 
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
@@ -1881,10 +1899,10 @@ define void @__global_init() {
 entry0:
   %0 = alloca %__ManagedArrayData_string
   %1 = alloca %__ManagedArrayData_TokenKind
-  %2 = call ptr @malloc(i64 32)
-  %3 = call ptr @malloc(i64 2)
+  %2 = call ptr @malloc(i64 32, ptr @.__tag.map.keys.KEYWORDS)
+  %3 = call ptr @malloc(i64 2, ptr @.__tag.map.vals.KEYWORDS)
   %4 = alloca %string
-  %5 = call ptr @malloc(i64 32)
+  %5 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 0
   %7 = getelementptr %_ManagedArray_byte, ptr %6, i32 0, i32 0
   store ptr @.str.sso.2, ptr %7
@@ -1904,7 +1922,7 @@ entry0:
   %15 = getelementptr i8, ptr %3, i64 0
   store i8 0, ptr %15
   %16 = alloca %string
-  %17 = call ptr @malloc(i64 32)
+  %17 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %18 = getelementptr %__ManagedStringData, ptr %17, i32 0, i32 0
   %19 = getelementptr %_ManagedArray_byte, ptr %18, i32 0, i32 0
   store ptr @.str.sso.3, ptr %19

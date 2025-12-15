@@ -578,6 +578,15 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		builder->createCall(stringReleaseFunc, {dataPtr, tag});
 	}
 
+	// Free __ManagedStringData metadata structs for immutable (let) strings
+	// These are the 32-byte structs allocated for string metadata
+	for (const auto &[name, managedPtrAlloca] : scopeStack.back().managedStringDataPtrs) {
+		mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedPtrAlloca, name + ".managed.ptr");
+		mir::MIRValue *freeTag = module->createGlobalString(".__tag.free.meta." + name, "string metadata");
+		mir::MIRFunction *freeFunc = getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+		builder->createCall(freeFunc, {managedPtr, freeTag});
+	}
+
 	// Release mutable string variables at scope exit
 	// Unlike heapAllocatedStrings which track a copy of the buffer pointer at allocation time,
 	// stringVariables track the string struct alloca so we read the CURRENT buffer pointer
@@ -620,6 +629,11 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		builder->createBr(continueBlock);
 
 		builder->setInsertPoint(continueBlock);
+
+		// Free the __ManagedStringData metadata struct itself (always heap-allocated)
+		mir::MIRValue *freeTag = module->createGlobalString(".__tag.free.meta." + name, "string metadata");
+		mir::MIRFunction *freeFunc = getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+		builder->createCall(freeFunc, {managedPtr, freeTag});
 	}
 
 	// Release parent references for substrings in this scope
@@ -719,6 +733,29 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 	}
 }
 
+void MIRCodeGenerator::transferManagedStringDataOwnership() {
+	// When a declaration takes ownership of a managed string (e.g., `let s = "{x}"`),
+	// we need to remove the last entry from managedStringDataPtrs to avoid double-free.
+	// The declaration handler will add its own tracking (via stringVariables or managedStringDataPtrs).
+	//
+	// For multi-part interpolations, we also remove from heapAllocatedStrings since those
+	// track the buffer pointer for release.
+	if (!scopeStack.empty()) {
+		// Remove last managed data tracking (for single-part and multi-part)
+		if (!scopeStack.back().managedStringDataPtrs.empty()) {
+			scopeStack.back().managedStringDataPtrs.pop_back();
+		}
+		// Remove last heap string tracking (for multi-part's final buffer)
+		// We check if the last entry is for interpolation to avoid removing unrelated entries
+		if (!scopeStack.back().heapAllocatedStrings.empty()) {
+			const auto &lastName = scopeStack.back().heapAllocatedStrings.back().first;
+			if (lastName.find("interp.") != std::string::npos) {
+				scopeStack.back().heapAllocatedStrings.pop_back();
+			}
+		}
+	}
+}
+
 //==============================================================================
 // Alloca Helper
 //==============================================================================
@@ -750,11 +787,11 @@ mir::MIRFunction *MIRCodeGenerator::getOrDeclareFunction(const std::string &name
 }
 
 void MIRCodeGenerator::initHeapManagement() {
-	// Declare malloc
-	getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64()});
+	// Declare malloc (with tag for tracking: ptr malloc(i64 size, ptr tag))
+	getOrDeclareFunction("malloc", mir::MIRType::getPtr(), {mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 
-	// Declare free
-	getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr()});
+	// Declare free (with tag for tracking: void free(ptr ptr, ptr tag))
+	getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
 
 	// Declare memset
 	getOrDeclareFunction("memset",
@@ -885,7 +922,8 @@ void MIRCodeGenerator::generateGlobalInit() {
 
 			// Allocate data buffer
 			mir::MIRValue *sizeVal = builder->getInt64(totalSize);
-			mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {sizeVal}, globalInfo.name + ".buffer");
+			mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.global." + globalInfo.name, "global array");
+			mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {sizeVal, arrayTag}, globalInfo.name + ".buffer");
 
 			// Get the global that was already created in Pass 1d
 			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
@@ -958,8 +996,10 @@ void MIRCodeGenerator::generateGlobalInit() {
 			uint64_t keysBufferSize = numEntries > 0 ? numEntries * keySize : keySize;
 			uint64_t valuesBufferSize = numEntries > 0 ? numEntries * valueSize : valueSize;
 
-			mir::MIRValue *keysBuffer = builder->createCall(mallocFunc, {builder->getInt64(keysBufferSize)}, "keys.buffer");
-			mir::MIRValue *valuesBuffer = builder->createCall(mallocFunc, {builder->getInt64(valuesBufferSize)}, "values.buffer");
+			mir::MIRValue *keysTag = module->createGlobalString(".__tag.map.keys." + globalInfo.name, "map keys");
+			mir::MIRValue *valuesTag = module->createGlobalString(".__tag.map.vals." + globalInfo.name, "map values");
+			mir::MIRValue *keysBuffer = builder->createCall(mallocFunc, {builder->getInt64(keysBufferSize), keysTag}, "keys.buffer");
+			mir::MIRValue *valuesBuffer = builder->createCall(mallocFunc, {builder->getInt64(valuesBufferSize), valuesTag}, "values.buffer");
 
 			// Store keys and values in their respective buffers
 			for (int i = 0; i < numEntries; i++) {
@@ -1395,12 +1435,32 @@ std::string MIRCodeGenerator::instantiateGenericStruct(const std::string &templa
 		logTrace("Declared specialized method: " + specializedMethodName);
 	}
 
-	// Generate method bodies
-	for (const auto &method : templateDef->methods) {
-		generateFunctionWithTypeBindings(method.get(), templateDef->namespaceName, typeBindings, specializedName);
+	// Generate method bodies - either immediately or deferred
+	if (deferGenericMethodBodies) {
+		// Defer method body generation until after struct fields are filled
+		for (const auto &method : templateDef->methods) {
+			deferredGenericMethods.push_back({method.get(), templateDef->namespaceName, typeBindings, specializedName});
+		}
+		logDetail("Deferred " + std::to_string(templateDef->methods.size()) + " method bodies for " + specializedName);
+	} else {
+		// Generate method bodies immediately
+		for (const auto &method : templateDef->methods) {
+			generateFunctionWithTypeBindings(method.get(), templateDef->namespaceName, typeBindings, specializedName);
+		}
 	}
 
 	return specializedName;
+}
+
+void MIRCodeGenerator::generateDeferredGenericMethodBodies() {
+	if (deferredGenericMethods.empty()) {
+		return;
+	}
+	logDetail("Generating " + std::to_string(deferredGenericMethods.size()) + " deferred generic method bodies");
+	for (const auto &info : deferredGenericMethods) {
+		generateFunctionWithTypeBindings(info.method, info.namespaceName, info.typeBindings, info.specializedName);
+	}
+	deferredGenericMethods.clear();
 }
 
 void MIRCodeGenerator::ensureStructMethodDeclared(const std::string &structType, const std::string &methodName) {
@@ -1560,6 +1620,10 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	if (functionReturnTypesIn) {
 		functionReturnTypes = *functionReturnTypesIn;
 	}
+
+	// Enable deferred method body generation during declaration passes.
+	// This prevents generating code that depends on struct sizes before struct fields are filled.
+	deferGenericMethodBodies = true;
 
 	// First pass: Forward-declare all struct types (to handle circular/forward references)
 	logDetail("Pass 1a: Forward-declaring struct types (" + std::to_string(program->structs.size()) + " structs)");
@@ -1777,6 +1841,12 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 									 " fields but size is 0 after recomputation");
 		}
 	}
+
+	// Now that struct fields are filled, generate any deferred generic method bodies.
+	// These were deferred during declaration passes to avoid generating code that
+	// depends on struct sizes before structs were fully defined.
+	deferGenericMethodBodies = false;
+	generateDeferredGenericMethodBodies();
 
 	// Pass 1e: Generate global constants
 	logDetail("Pass 1e: Generating global constants (" + std::to_string(program->globals.size()) + " globals)");

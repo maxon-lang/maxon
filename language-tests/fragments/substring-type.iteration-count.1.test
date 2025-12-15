@@ -14,7 +14,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 698
+; Instructions: 699
 
 %character = type { ptr }
 %substring = type { ptr, ptr, i64, i64 }
@@ -26,9 +26,12 @@ end 'main'
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
 @.__tag.tostring = constant [19 x i8] c"substring.toString\00"
+@.__tag.substr.tostring = constant [19 x i8] c"substring.toString\00"
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [6 x i8] c"abcde\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 
 define %StringIndex @string.startIndex(ptr %self) {
 entry0:
@@ -147,8 +150,6 @@ retain.done6:
   %53 = load %substring, ptr %43
   ret %substring %53
 }
-
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 define Optional<i64> @CodepointView.next(ptr %self) {
 entry0:
@@ -284,7 +285,7 @@ slice.continue2:
   %34 = call ptr @memcpy(ptr %33, ptr %29, i64 %31)
   %35 = getelementptr i8, ptr %33, i64 %31
   store i8 0, ptr %35
-  %36 = call ptr @malloc(i64 32)
+  %36 = call ptr @malloc(i64 32, ptr @.__tag.substr.tostring)
   %37 = getelementptr %__ManagedStringData, ptr %36, i32 0, i32 0
   %38 = getelementptr %_ManagedArray_byte, ptr %37, i32 0, i32 0
   store ptr %33, ptr %38
@@ -330,7 +331,7 @@ entry0:
 define i64 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 32)
+  %1 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
@@ -411,6 +412,7 @@ s.var.release6:
   call void @_managed_string_release(ptr %52, ptr @.__tag.free.s)
   br label %s.var.continue7
 s.var.continue7:
+  call void @free(ptr %46, ptr @.__tag.free.meta.s)
   %53 = getelementptr %substring, ptr %18, i32 0, i32 0
   %54 = load ptr, ptr %53
   %55 = getelementptr %__ManagedStringData, ptr %54, i32 0, i32 2
@@ -921,13 +923,17 @@ ifcont6:
   ret i64 %107
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -940,7 +946,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 1077
+; Instructions: 1078
 
 %character = type { ptr }
 %substring = type { ptr, ptr, i64, i64 }
@@ -952,9 +958,12 @@ entry0:
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
 @.__tag.tostring = constant [19 x i8] c"substring.toString\00"
+@.__tag.substr.tostring = constant [19 x i8] c"substring.toString\00"
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [6 x i8] c"abcde\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 
 define i64 @string._findGraphemeEnd(ptr %self, i64 %startPos, i64 %len) {
 entry0:
@@ -1131,8 +1140,6 @@ retain.done6:
   %53 = load %substring, ptr %43
   ret %substring %53
 }
-
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 define Optional<i64> @CodepointView.next(ptr %self) {
 entry0:
@@ -1319,7 +1326,7 @@ slice.continue2:
   %34 = call ptr @memcpy(ptr %33, ptr %29, i64 %31)
   %35 = getelementptr i8, ptr %33, i64 %31
   store i8 0, ptr %35
-  %36 = call ptr @malloc(i64 32)
+  %36 = call ptr @malloc(i64 32, ptr @.__tag.substr.tostring)
   %37 = getelementptr %__ManagedStringData, ptr %36, i32 0, i32 0
   %38 = getelementptr %_ManagedArray_byte, ptr %37, i32 0, i32 0
   store ptr %33, ptr %38
@@ -1371,7 +1378,7 @@ entry0:
 define i64 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 32)
+  %1 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
@@ -1457,6 +1464,7 @@ s.var.release6:
   call void @_managed_string_release(ptr %52, ptr @.__tag.free.s)
   br label %s.var.continue7
 s.var.continue7:
+  call void @free(ptr %46, ptr @.__tag.free.meta.s)
   %53 = getelementptr %substring, ptr %18, i32 0, i32 0
   %54 = load ptr, ptr %53
   %55 = getelementptr %__ManagedStringData, ptr %54, i32 0, i32 2
@@ -2243,13 +2251,17 @@ ifcont6:
   ret i64 %107
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

@@ -7,7 +7,14 @@ export type Parser
 	let errorMessage string
 
 	export static function create(tokens array of Token) returns Parser
-	return Parser{tokens: tokens, pos: 0, hadError: false, errorMessage: ""}
+	print("    Parser.create: tokens.count={tokens.count()}")
+	if tokens.count() > 0 'hasTokens'
+		let first = tokens[0]
+		print("    Parser.create: first token kind={first.kind}, lexeme={first.lexeme}")
+	end 'hasTokens'
+	let p = Parser{tokens: tokens, pos: 0, hadError: false, errorMessage: ""}
+	print("    Parser.create: created parser, p.tokens.count={p.tokens.count()}")
+	return p
 end 'create'
 
 export function isAtEnd() returns bool
@@ -43,6 +50,7 @@ export function check(kind TokenType) returns bool
 end 'check'
 
 export function matchToken(kind TokenType) returns bool
+	print("      matchToken: looking for kind={kind}, peek().kind={peek().kind}")
 	if check(kind) 'check'
 		advance()
 		return true
@@ -166,21 +174,30 @@ export function parseFunction() returns FunctionDecl
 end 'parseFunction'
 
 export function parseProgram(fileName string) returns Program
+	print("    parseProgram: creating program...")
 	let program = Program.create(fileName)
+	print("    parseProgram: program created")
 
 	skipNewlines()
+	print("    parseProgram: starting topLevel loop")
 
 	while not isAtEnd() 'topLevel'
+		print("    parseProgram: checking for function...")
 		if matchToken(TokenType.kwFunction) 'function'
+			print("    parseProgram: parsing function...")
 			let fn = parseFunction()
+			print("    parseProgram: adding function to program...")
 			program.addFunction(fn)
+			print("    parseProgram: function added")
 		end 'function' else 'notFunction'
+			print("    parseProgram: not a function, error")
 			error("Expected function declaration")
 			advance()
 		end 'notFunction'
 		skipNewlines()
 	end 'topLevel'
 
+	print("    parseProgram: returning program")
 	return program
 end 'parseProgram'
 end 'Parser'

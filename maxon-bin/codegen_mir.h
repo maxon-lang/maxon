@@ -170,10 +170,11 @@ class MIRCodeGenerator {
 	// Scope tracking for automatic array/string cleanup
 	struct ScopeInfo {
 		std::vector<HeapArrayInfo> heapAllocatedArrays;
-		std::vector<std::pair<std::string, mir::MIRValue *>> heapAllocatedStrings; // Data pointer for heap strings
-		std::vector<std::pair<std::string, mir::MIRValue *>> substringAllocas;	   // Substring struct allocas (need parent release)
-		std::vector<std::pair<std::string, mir::MIRValue *>> cstringAllocas;	   // Cstring struct allocas (need managed release)
-		std::vector<std::pair<std::string, mir::MIRValue *>> stringVariables;	   // String var allocas (read current buffer at cleanup)
+		std::vector<std::pair<std::string, mir::MIRValue *>> heapAllocatedStrings;	// Data pointer for heap strings
+		std::vector<std::pair<std::string, mir::MIRValue *>> managedStringDataPtrs; // __ManagedStringData ptrs (need free)
+		std::vector<std::pair<std::string, mir::MIRValue *>> substringAllocas;		// Substring struct allocas (need parent release)
+		std::vector<std::pair<std::string, mir::MIRValue *>> cstringAllocas;		// Cstring struct allocas (need managed release)
+		std::vector<std::pair<std::string, mir::MIRValue *>> stringVariables;		// String var allocas (read current buffer at cleanup)
 	};
 	std::vector<ScopeInfo> scopeStack;
 
@@ -181,11 +182,32 @@ class MIRCodeGenerator {
 	void popScope(mir::MIRFunction *function);
 	void generateScopeCleanup(mir::MIRFunction *function);
 
+	// Helper to transfer ownership of managed string data from scope tracking
+	// Call this when a declaration takes ownership of a string
+	void transferManagedStringDataOwnership();
+
 	// Generic struct instantiation
 	// Creates a specialized version of a generic struct template with concrete types
 	// Returns the specialized struct type name (e.g., "map<string,int>")
 	std::string instantiateGenericStruct(const std::string &templateName,
 										 const std::map<std::string, std::string> &typeBindings);
+
+	// Info for deferred generic method body generation
+	struct DeferredGenericMethodInfo {
+		FunctionAST *method;
+		std::string namespaceName;
+		std::map<std::string, std::string> typeBindings;
+		std::string specializedName;
+	};
+	std::vector<DeferredGenericMethodInfo> deferredGenericMethods;
+
+	// When true, instantiateGenericStruct defers method body generation to a later pass.
+	// This is needed during the declaration passes to avoid generating code before
+	// struct fields are filled in.
+	bool deferGenericMethodBodies = false;
+
+	// Generate all deferred generic method bodies (called after struct fields are filled)
+	void generateDeferredGenericMethodBodies();
 
 	// Code generation methods
 	mir::MIRValue *generateExpr(ExprAST *expr);

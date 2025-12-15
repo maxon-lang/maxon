@@ -19,6 +19,7 @@ end 'main'
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [16 x i8] c"temp/binary.bin\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -60,8 +61,6 @@ cstring.continue3:
   ret %cstring %21
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define i64 @main() {
 entry0:
   %0 = trunc i64 65 to i8
@@ -85,7 +84,7 @@ entry0:
   %12 = getelementptr i8, ptr %3, i64 2
   store i8 %2, ptr %12
   %13 = alloca %string
-  %14 = call ptr @malloc(i64 32)
+  %14 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %15 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 0
   %16 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 0
   store ptr @.str.sso.1, ptr %16
@@ -124,13 +123,15 @@ entry0:
   ret i1 %16
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
 
 declare i64 @__write_file_binary(ptr %arg0, ptr %arg1, i64 %arg2)
 
@@ -158,6 +159,7 @@ entry0:
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [16 x i8] c"temp/binary.bin\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -202,8 +204,6 @@ cstring.continue3:
   ret %cstring %21
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define i64 @main() {
 entry0:
   %0 = trunc i64 65 to i8
@@ -227,7 +227,7 @@ entry0:
   %12 = getelementptr i8, ptr %3, i64 2
   store i8 %2, ptr %12
   %13 = alloca %string
-  %14 = call ptr @malloc(i64 32)
+  %14 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %15 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 0
   %16 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 0
   store ptr @.str.sso.1, ptr %16
@@ -278,13 +278,15 @@ entry0:
   ret i1 %16
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
 
 declare i64 @__write_file_binary(ptr %arg0, ptr %arg1, i64 %arg2)
 

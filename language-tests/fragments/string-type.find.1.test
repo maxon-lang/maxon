@@ -15,7 +15,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 629
+; Instructions: 643
 
 %string = type { ptr, i64 }
 %StringIndex = type { i64, i64 }
@@ -26,12 +26,16 @@ end 'main'
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [12 x i8] c"hello world\00"
 @.str.sso.2 = constant [6 x i8] c"world\00"
+@.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
 @.str.sso.3 = constant [4 x i8] c"xyz\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 @.str.sso.4 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -125,12 +129,10 @@ afterloop5:
   ret Optional<%StringIndex> %45
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define i64 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 32)
+  %1 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
@@ -145,7 +147,7 @@ entry0:
   %8 = getelementptr %string, ptr %0, i32 0, i32 1
   store i64 0, ptr %8
   %9 = alloca %string
-  %10 = call ptr @malloc(i64 32)
+  %10 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %11 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 0
   %12 = getelementptr %_ManagedArray_byte, ptr %11, i32 0, i32 0
   store ptr @.str.sso.2, ptr %12
@@ -171,74 +173,87 @@ iflet.then1:
   %24 = load %StringIndex, ptr %23
   %25 = alloca %StringIndex
   store %StringIndex %24, ptr %25
-  %67 = getelementptr %StringIndex, ptr %25, i32 0, i32 0
-  %68 = load i64, ptr %67
-  %27 = call %string @__int_toString(i64 %68, ptr null)
+  %87 = getelementptr %StringIndex, ptr %25, i32 0, i32 0
+  %88 = load i64, ptr %87
+  %27 = call %string @__int_toString(i64 %88, ptr null)
   %28 = alloca %string
   store %string %27, ptr %28
-  %29 = call i64 @sys.print(ptr %28)
+  %29 = getelementptr %string, ptr %28, i32 0, i32 0
+  %30 = load ptr, ptr %29
+  %32 = call i64 @sys.print(ptr %28)
+  call void @free(ptr %30, ptr @.__tag.free.meta.interp.input)
   br label %iflet.after2
 iflet.after2:
-  %34 = alloca %string
-  %35 = call ptr @malloc(i64 32)
-  %36 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 0
-  %37 = getelementptr %_ManagedArray_byte, ptr %36, i32 0, i32 0
-  store ptr @.str.sso.3, ptr %37
-  %38 = getelementptr %_ManagedArray_byte, ptr %36, i32 0, i32 1
-  store i64 3, ptr %38
-  %39 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 1
-  store i64 3, ptr %39
-  %40 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 2
-  store i64 0, ptr %40
-  %41 = getelementptr %string, ptr %34, i32 0, i32 0
-  store ptr %35, ptr %41
-  %42 = getelementptr %string, ptr %34, i32 0, i32 1
-  store i64 0, ptr %42
-  %43 = call Optional<%StringIndex> @string.find(ptr %0, ptr %34)
-  %44 = alloca Optional<%StringIndex>
-  store Optional<%StringIndex> %43, ptr %44
-  %45 = getelementptr Optional<%StringIndex>, ptr %44, i32 0, i32 0
-  %46 = load i8, ptr %45
-  %47 = icmp eq i8 %46, 1
-  br i1 %47, label %iflet.then4, label %iflet.else6
+  %42 = alloca %string
+  %43 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
+  %44 = getelementptr %__ManagedStringData, ptr %43, i32 0, i32 0
+  %45 = getelementptr %_ManagedArray_byte, ptr %44, i32 0, i32 0
+  store ptr @.str.sso.3, ptr %45
+  %46 = getelementptr %_ManagedArray_byte, ptr %44, i32 0, i32 1
+  store i64 3, ptr %46
+  %47 = getelementptr %__ManagedStringData, ptr %43, i32 0, i32 1
+  store i64 3, ptr %47
+  %48 = getelementptr %__ManagedStringData, ptr %43, i32 0, i32 2
+  store i64 0, ptr %48
+  %49 = getelementptr %string, ptr %42, i32 0, i32 0
+  store ptr %43, ptr %49
+  %50 = getelementptr %string, ptr %42, i32 0, i32 1
+  store i64 0, ptr %50
+  %51 = call Optional<%StringIndex> @string.find(ptr %0, ptr %42)
+  %52 = alloca Optional<%StringIndex>
+  store Optional<%StringIndex> %51, ptr %52
+  %53 = getelementptr Optional<%StringIndex>, ptr %52, i32 0, i32 0
+  %54 = load i8, ptr %53
+  %55 = icmp eq i8 %54, 1
+  br i1 %55, label %iflet.then4, label %iflet.else6
 iflet.else3:
-  %31 = call %string @__int_toString(i64 -1, ptr null)
-  %32 = alloca %string
-  store %string %31, ptr %32
-  %33 = call i64 @sys.print(ptr %32)
+  %35 = call %string @__int_toString(i64 -1, ptr null)
+  %36 = alloca %string
+  store %string %35, ptr %36
+  %37 = getelementptr %string, ptr %36, i32 0, i32 0
+  %38 = load ptr, ptr %37
+  %40 = call i64 @sys.print(ptr %36)
+  call void @free(ptr %38, ptr @.__tag.free.meta.interp.input)
   br label %iflet.after2
 iflet.then4:
-  %48 = getelementptr Optional<%StringIndex>, ptr %44, i32 0, i32 1
-  %49 = load %StringIndex, ptr %48
-  %50 = alloca %StringIndex
-  store %StringIndex %49, ptr %50
-  %69 = getelementptr %StringIndex, ptr %50, i32 0, i32 0
-  %70 = load i64, ptr %69
-  %52 = call %string @__int_toString(i64 %70, ptr null)
-  %53 = alloca %string
-  store %string %52, ptr %53
-  %54 = call i64 @sys.print(ptr %53)
+  %56 = getelementptr Optional<%StringIndex>, ptr %52, i32 0, i32 1
+  %57 = load %StringIndex, ptr %56
+  %58 = alloca %StringIndex
+  store %StringIndex %57, ptr %58
+  %89 = getelementptr %StringIndex, ptr %58, i32 0, i32 0
+  %90 = load i64, ptr %89
+  %60 = call %string @__int_toString(i64 %90, ptr null)
+  %61 = alloca %string
+  store %string %60, ptr %61
+  %62 = getelementptr %string, ptr %61, i32 0, i32 0
+  %63 = load ptr, ptr %62
+  %65 = call i64 @sys.print(ptr %61)
+  call void @free(ptr %63, ptr @.__tag.free.meta.interp.input)
   br label %iflet.after5
 iflet.after5:
-  %59 = getelementptr %string, ptr %0, i32 0, i32 0
-  %60 = load ptr, ptr %59
-  %61 = getelementptr %__ManagedStringData, ptr %60, i32 0, i32 2
-  %62 = load i64, ptr %61
-  %63 = icmp sgt i64 %62, 0
-  br i1 %63, label %s.var.release7, label %s.var.continue8
+  %75 = getelementptr %string, ptr %0, i32 0, i32 0
+  %76 = load ptr, ptr %75
+  %77 = getelementptr %__ManagedStringData, ptr %76, i32 0, i32 2
+  %78 = load i64, ptr %77
+  %79 = icmp sgt i64 %78, 0
+  br i1 %79, label %s.var.release7, label %s.var.continue8
 iflet.else6:
-  %56 = call %string @__int_toString(i64 -1, ptr null)
-  %57 = alloca %string
-  store %string %56, ptr %57
-  %58 = call i64 @sys.print(ptr %57)
+  %68 = call %string @__int_toString(i64 -1, ptr null)
+  %69 = alloca %string
+  store %string %68, ptr %69
+  %70 = getelementptr %string, ptr %69, i32 0, i32 0
+  %71 = load ptr, ptr %70
+  %73 = call i64 @sys.print(ptr %69)
+  call void @free(ptr %71, ptr @.__tag.free.meta.interp.input)
   br label %iflet.after5
 s.var.release7:
-  %64 = getelementptr %__ManagedStringData, ptr %60, i32 0, i32 0
-  %65 = getelementptr %_ManagedArray_byte, ptr %64, i32 0, i32 0
-  %66 = load ptr, ptr %65
-  call void @_managed_string_release(ptr %66, ptr @.__tag.free.s)
+  %80 = getelementptr %__ManagedStringData, ptr %76, i32 0, i32 0
+  %81 = getelementptr %_ManagedArray_byte, ptr %80, i32 0, i32 0
+  %82 = load ptr, ptr %81
+  call void @_managed_string_release(ptr %82, ptr @.__tag.free.s)
   br label %s.var.continue8
 s.var.continue8:
+  call void @free(ptr %76, ptr @.__tag.free.meta.s)
   ret i64 0
 }
 
@@ -253,7 +268,7 @@ entry0:
   %7 = load i64, ptr %6
   %8 = call i64 @write_stdout(ptr %5, i64 %7)
   %10 = alloca %string
-  %11 = call ptr @malloc(i64 32)
+  %11 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
   %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
   store ptr @.str.sso.4, ptr %13
@@ -289,6 +304,7 @@ newline.var.release1:
   call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
   br label %newline.var.continue2
 newline.var.continue2:
+  call void @free(ptr %29, ptr @.__tag.free.meta.newline)
   %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %37 = load ptr, ptr %36
   call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
@@ -850,13 +866,17 @@ ifcont6:
   ret i64 %107
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare %string @__int_toString(i64 %arg0, ptr %arg1)
 
@@ -873,7 +893,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 965
+; Instructions: 991
 
 %string = type { ptr, i64 }
 %StringIndex = type { i64, i64 }
@@ -884,12 +904,16 @@ entry0:
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [12 x i8] c"hello world\00"
 @.str.sso.2 = constant [6 x i8] c"world\00"
+@.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
 @.str.sso.3 = constant [4 x i8] c"xyz\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 @.str.sso.4 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
 @.__tag.free.newline_cs = constant [16 x i8] c"cstring release\00"
 
 define %cstring @string.cstr(ptr %self) {
@@ -1025,8 +1049,6 @@ afterloop5:
   ret Optional<%StringIndex> %45
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define i64 @StringIndex.charIndex(ptr %self) {
 entry0:
   %0 = alloca ptr
@@ -1040,7 +1062,7 @@ entry0:
 define i64 @main() {
 entry0:
   %0 = alloca %string
-  %1 = call ptr @malloc(i64 32)
+  %1 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %2 = getelementptr %__ManagedStringData, ptr %1, i32 0, i32 0
   %3 = getelementptr %_ManagedArray_byte, ptr %2, i32 0, i32 0
   store ptr @.str.sso.1, ptr %3
@@ -1055,7 +1077,7 @@ entry0:
   %8 = getelementptr %string, ptr %0, i32 0, i32 1
   store i64 0, ptr %8
   %9 = alloca %string
-  %10 = call ptr @malloc(i64 32)
+  %10 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %11 = getelementptr %__ManagedStringData, ptr %10, i32 0, i32 0
   %12 = getelementptr %_ManagedArray_byte, ptr %11, i32 0, i32 0
   store ptr @.str.sso.2, ptr %12
@@ -1085,70 +1107,95 @@ iflet.then1:
   %27 = call %string @__int_toString(i64 %26, ptr null)
   %28 = alloca %string
   store %string %27, ptr %28
-  %29 = call i64 @sys.print(ptr %28)
+  %29 = getelementptr %string, ptr %28, i32 0, i32 0
+  %30 = load ptr, ptr %29
+  %31 = alloca ptr
+  store ptr %30, ptr %31
+  %32 = call i64 @sys.print(ptr %28)
+  %33 = load ptr, ptr %31
+  call void @free(ptr %33, ptr @.__tag.free.meta.interp.input)
   br label %iflet.after2
 iflet.after2:
-  %34 = alloca %string
-  %35 = call ptr @malloc(i64 32)
-  %36 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 0
-  %37 = getelementptr %_ManagedArray_byte, ptr %36, i32 0, i32 0
-  store ptr @.str.sso.3, ptr %37
-  %38 = getelementptr %_ManagedArray_byte, ptr %36, i32 0, i32 1
-  store i64 3, ptr %38
-  %39 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 1
-  store i64 3, ptr %39
-  %40 = getelementptr %__ManagedStringData, ptr %35, i32 0, i32 2
-  store i64 0, ptr %40
-  %41 = getelementptr %string, ptr %34, i32 0, i32 0
-  store ptr %35, ptr %41
-  %42 = getelementptr %string, ptr %34, i32 0, i32 1
-  store i64 0, ptr %42
-  %43 = call Optional<%StringIndex> @string.find(ptr %0, ptr %34)
-  %44 = alloca Optional<%StringIndex>
-  store Optional<%StringIndex> %43, ptr %44
-  %45 = getelementptr Optional<%StringIndex>, ptr %44, i32 0, i32 0
-  %46 = load i8, ptr %45
-  %47 = icmp eq i8 %46, 1
-  br i1 %47, label %iflet.then4, label %iflet.else6
+  %42 = alloca %string
+  %43 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
+  %44 = getelementptr %__ManagedStringData, ptr %43, i32 0, i32 0
+  %45 = getelementptr %_ManagedArray_byte, ptr %44, i32 0, i32 0
+  store ptr @.str.sso.3, ptr %45
+  %46 = getelementptr %_ManagedArray_byte, ptr %44, i32 0, i32 1
+  store i64 3, ptr %46
+  %47 = getelementptr %__ManagedStringData, ptr %43, i32 0, i32 1
+  store i64 3, ptr %47
+  %48 = getelementptr %__ManagedStringData, ptr %43, i32 0, i32 2
+  store i64 0, ptr %48
+  %49 = getelementptr %string, ptr %42, i32 0, i32 0
+  store ptr %43, ptr %49
+  %50 = getelementptr %string, ptr %42, i32 0, i32 1
+  store i64 0, ptr %50
+  %51 = call Optional<%StringIndex> @string.find(ptr %0, ptr %42)
+  %52 = alloca Optional<%StringIndex>
+  store Optional<%StringIndex> %51, ptr %52
+  %53 = getelementptr Optional<%StringIndex>, ptr %52, i32 0, i32 0
+  %54 = load i8, ptr %53
+  %55 = icmp eq i8 %54, 1
+  br i1 %55, label %iflet.then4, label %iflet.else6
 iflet.else3:
-  %30 = sub i64 0, 1
-  %31 = call %string @__int_toString(i64 %30, ptr null)
-  %32 = alloca %string
-  store %string %31, ptr %32
-  %33 = call i64 @sys.print(ptr %32)
+  %34 = sub i64 0, 1
+  %35 = call %string @__int_toString(i64 %34, ptr null)
+  %36 = alloca %string
+  store %string %35, ptr %36
+  %37 = getelementptr %string, ptr %36, i32 0, i32 0
+  %38 = load ptr, ptr %37
+  %39 = alloca ptr
+  store ptr %38, ptr %39
+  %40 = call i64 @sys.print(ptr %36)
+  %41 = load ptr, ptr %39
+  call void @free(ptr %41, ptr @.__tag.free.meta.interp.input)
   br label %iflet.after2
 iflet.then4:
-  %48 = getelementptr Optional<%StringIndex>, ptr %44, i32 0, i32 1
-  %49 = load %StringIndex, ptr %48
-  %50 = alloca %StringIndex
-  store %StringIndex %49, ptr %50
-  %51 = call i64 @StringIndex.charIndex(ptr %50)
-  %52 = call %string @__int_toString(i64 %51, ptr null)
-  %53 = alloca %string
-  store %string %52, ptr %53
-  %54 = call i64 @sys.print(ptr %53)
+  %56 = getelementptr Optional<%StringIndex>, ptr %52, i32 0, i32 1
+  %57 = load %StringIndex, ptr %56
+  %58 = alloca %StringIndex
+  store %StringIndex %57, ptr %58
+  %59 = call i64 @StringIndex.charIndex(ptr %58)
+  %60 = call %string @__int_toString(i64 %59, ptr null)
+  %61 = alloca %string
+  store %string %60, ptr %61
+  %62 = getelementptr %string, ptr %61, i32 0, i32 0
+  %63 = load ptr, ptr %62
+  %64 = alloca ptr
+  store ptr %63, ptr %64
+  %65 = call i64 @sys.print(ptr %61)
+  %66 = load ptr, ptr %64
+  call void @free(ptr %66, ptr @.__tag.free.meta.interp.input)
   br label %iflet.after5
 iflet.after5:
-  %59 = getelementptr %string, ptr %0, i32 0, i32 0
-  %60 = load ptr, ptr %59
-  %61 = getelementptr %__ManagedStringData, ptr %60, i32 0, i32 2
-  %62 = load i64, ptr %61
-  %63 = icmp sgt i64 %62, 0
-  br i1 %63, label %s.var.release7, label %s.var.continue8
+  %75 = getelementptr %string, ptr %0, i32 0, i32 0
+  %76 = load ptr, ptr %75
+  %77 = getelementptr %__ManagedStringData, ptr %76, i32 0, i32 2
+  %78 = load i64, ptr %77
+  %79 = icmp sgt i64 %78, 0
+  br i1 %79, label %s.var.release7, label %s.var.continue8
 iflet.else6:
-  %55 = sub i64 0, 1
-  %56 = call %string @__int_toString(i64 %55, ptr null)
-  %57 = alloca %string
-  store %string %56, ptr %57
-  %58 = call i64 @sys.print(ptr %57)
+  %67 = sub i64 0, 1
+  %68 = call %string @__int_toString(i64 %67, ptr null)
+  %69 = alloca %string
+  store %string %68, ptr %69
+  %70 = getelementptr %string, ptr %69, i32 0, i32 0
+  %71 = load ptr, ptr %70
+  %72 = alloca ptr
+  store ptr %71, ptr %72
+  %73 = call i64 @sys.print(ptr %69)
+  %74 = load ptr, ptr %72
+  call void @free(ptr %74, ptr @.__tag.free.meta.interp.input)
   br label %iflet.after5
 s.var.release7:
-  %64 = getelementptr %__ManagedStringData, ptr %60, i32 0, i32 0
-  %65 = getelementptr %_ManagedArray_byte, ptr %64, i32 0, i32 0
-  %66 = load ptr, ptr %65
-  call void @_managed_string_release(ptr %66, ptr @.__tag.free.s)
+  %80 = getelementptr %__ManagedStringData, ptr %76, i32 0, i32 0
+  %81 = getelementptr %_ManagedArray_byte, ptr %80, i32 0, i32 0
+  %82 = load ptr, ptr %81
+  call void @_managed_string_release(ptr %82, ptr @.__tag.free.s)
   br label %s.var.continue8
 s.var.continue8:
+  call void @free(ptr %76, ptr @.__tag.free.meta.s)
   ret i64 0
 }
 
@@ -1168,7 +1215,7 @@ entry0:
   %9 = alloca i64
   store i64 %8, ptr %9
   %10 = alloca %string
-  %11 = call ptr @malloc(i64 32)
+  %11 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %12 = getelementptr %__ManagedStringData, ptr %11, i32 0, i32 0
   %13 = getelementptr %_ManagedArray_byte, ptr %12, i32 0, i32 0
   store ptr @.str.sso.4, ptr %13
@@ -1205,6 +1252,7 @@ newline.var.release1:
   call void @_managed_string_release(ptr %35, ptr @.__tag.free.newline)
   br label %newline.var.continue2
 newline.var.continue2:
+  call void @free(ptr %29, ptr @.__tag.free.meta.newline)
   %36 = getelementptr %cstring, ptr %3, i32 0, i32 0
   %37 = load ptr, ptr %36
   call void @_managed_string_release(ptr %37, ptr @.__tag.free.cs)
@@ -2062,13 +2110,17 @@ ifcont6:
   ret i64 %107
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare %string @__int_toString(i64 %arg0, ptr %arg1)
 

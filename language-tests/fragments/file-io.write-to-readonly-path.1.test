@@ -14,6 +14,7 @@ end 'main'
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.1 = constant [20 x i8] c"C:\5CWindows\5Ctest.txt\00"
 @.str.sso.2 = constant [12 x i8] c"Should fail\00"
@@ -59,8 +60,6 @@ cstring.continue3:
   ret %cstring %21
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define i64 @main() {
 entry0:
   %0 = alloca %string
@@ -68,7 +67,7 @@ entry0:
   %2 = call ptr @memcpy(ptr %1, ptr @.str.1, i64 19)
   %3 = getelementptr i8, ptr %1, i64 19
   store i8 0, ptr %3
-  %5 = call ptr @malloc(i64 32)
+  %5 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 0
   %7 = getelementptr %_ManagedArray_byte, ptr %6, i32 0, i32 0
   store ptr %1, ptr %7
@@ -83,7 +82,7 @@ entry0:
   %12 = getelementptr %string, ptr %0, i32 0, i32 1
   store i64 0, ptr %12
   %13 = alloca %string
-  %14 = call ptr @malloc(i64 32)
+  %14 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %15 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 0
   %16 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 0
   store ptr @.str.sso.2, ptr %16
@@ -124,13 +123,15 @@ entry0:
   ret i1 %13
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
 
 declare i32 @__write_file(ptr %arg0, ptr %arg1)
 
@@ -154,6 +155,7 @@ entry0:
 
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.1 = constant [20 x i8] c"C:\5CWindows\5Ctest.txt\00"
 @.str.sso.2 = constant [12 x i8] c"Should fail\00"
@@ -202,8 +204,6 @@ cstring.continue3:
   ret %cstring %21
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define i64 @main() {
 entry0:
   %0 = alloca %string
@@ -213,7 +213,7 @@ entry0:
   store i8 0, ptr %3
   %4 = alloca ptr
   store ptr %1, ptr %4
-  %5 = call ptr @malloc(i64 32)
+  %5 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 0
   %7 = getelementptr %_ManagedArray_byte, ptr %6, i32 0, i32 0
   store ptr %1, ptr %7
@@ -228,7 +228,7 @@ entry0:
   %12 = getelementptr %string, ptr %0, i32 0, i32 1
   store i64 0, ptr %12
   %13 = alloca %string
-  %14 = call ptr @malloc(i64 32)
+  %14 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %15 = getelementptr %__ManagedStringData, ptr %14, i32 0, i32 0
   %16 = getelementptr %_ManagedArray_byte, ptr %15, i32 0, i32 0
   store ptr @.str.sso.2, ptr %16
@@ -282,13 +282,15 @@ entry0:
   ret i1 %13
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
 
 declare i32 @__write_file(ptr %arg0, ptr %arg1)
 

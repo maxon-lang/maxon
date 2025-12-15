@@ -10,7 +10,7 @@ function main() returns int
 end 'main'
 ---
 ; Module: test.maxon
-; Instructions: 569
+; Instructions: 570
 
 %substring = type { ptr, ptr, i64, i64 }
 %string = type { ptr, i64 }
@@ -20,10 +20,12 @@ end 'main'
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.1 = constant [41 x i8] c"This is a longer string that exceeds SSO\00"
 @.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 
 define %StringIndex @string.startIndex(ptr %self) {
 entry0:
@@ -143,8 +145,6 @@ retain.done6:
   ret %substring %53
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define i64 @substring.count(ptr %self) {
 entry0:
   %3 = getelementptr %substring, ptr %self, i32 0, i32 0
@@ -172,7 +172,7 @@ entry0:
   %2 = call ptr @memcpy(ptr %1, ptr @.str.1, i64 40)
   %3 = getelementptr i8, ptr %1, i64 40
   store i8 0, ptr %3
-  %5 = call ptr @malloc(i64 32)
+  %5 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 0
   %7 = getelementptr %_ManagedArray_byte, ptr %6, i32 0, i32 0
   store ptr %1, ptr %7
@@ -249,6 +249,7 @@ s.var.release7:
   call void @_managed_string_release(ptr %60, ptr @.__tag.free.s)
   br label %s.var.continue8
 s.var.continue8:
+  call void @free(ptr %54, ptr @.__tag.free.meta.s)
   %61 = getelementptr %substring, ptr %32, i32 0, i32 0
   %62 = load ptr, ptr %61
   %63 = getelementptr %__ManagedStringData, ptr %62, i32 0, i32 2
@@ -775,13 +776,17 @@ ifcont6:
   ret i64 %107
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -794,7 +799,7 @@ entry0:
 
 ---
 ; Module: test.maxon
-; Instructions: 908
+; Instructions: 909
 
 %substring = type { ptr, ptr, i64, i64 }
 %string = type { ptr, i64 }
@@ -804,10 +809,12 @@ entry0:
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
 @.__tag.free.sub = constant [17 x i8] c"substring parent\00"
+@.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.__tag.str.lit = constant [15 x i8] c"string literal\00"
 @.str.1 = constant [41 x i8] c"This is a longer string that exceeds SSO\00"
 @.__tag.free.str.heap = constant [15 x i8] c"string literal\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
 
 define i64 @string._findGraphemeEnd(ptr %self, i64 %startPos, i64 %len) {
 entry0:
@@ -985,8 +992,6 @@ retain.done6:
   ret %substring %53
 }
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 define i64 @substring.count(ptr %self) {
 entry0:
   %0 = alloca ptr
@@ -1005,7 +1010,7 @@ entry0:
   store i8 0, ptr %3
   %4 = alloca ptr
   store ptr %1, ptr %4
-  %5 = call ptr @malloc(i64 32)
+  %5 = call ptr @malloc(i64 32, ptr @.__tag.str.meta)
   %6 = getelementptr %__ManagedStringData, ptr %5, i32 0, i32 0
   %7 = getelementptr %_ManagedArray_byte, ptr %6, i32 0, i32 0
   store ptr %1, ptr %7
@@ -1091,6 +1096,7 @@ s.var.release7:
   call void @_managed_string_release(ptr %60, ptr @.__tag.free.s)
   br label %s.var.continue8
 s.var.continue8:
+  call void @free(ptr %54, ptr @.__tag.free.meta.s)
   %61 = getelementptr %substring, ptr %32, i32 0, i32 0
   %62 = load ptr, ptr %61
   %63 = getelementptr %__ManagedStringData, ptr %62, i32 0, i32 2
@@ -1911,13 +1917,17 @@ ifcont6:
   ret i64 %107
 }
 
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_retain(ptr %arg0)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
-declare ptr @malloc(i64 %arg0)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
