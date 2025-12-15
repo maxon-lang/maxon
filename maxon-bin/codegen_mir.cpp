@@ -277,7 +277,9 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 	} else if (typeStr == "void") {
 		return mir::MIRType::getVoid();
 	} else if (typeStr.empty()) {
-		return mir::MIRType::getInt64(); // Default type
+		// Empty type string can occur in generic code before type bindings are resolved
+		// Return a default type to allow codegen to proceed
+		return mir::MIRType::getInt64();
 	}
 
 	// Check for optional type: T or nil

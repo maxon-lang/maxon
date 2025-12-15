@@ -392,6 +392,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 
 							// Get field pointer with GEP
 							mir::MIRType *structType = structTypes[currentReceiverType];
+							if (!structType) {
+								reportError("Unknown receiver type: " + currentReceiverType,
+											varExpr->line, varExpr->column);
+							}
 							mir::MIRValue *fieldPtr = builder->createStructGEP(structType, selfPtr, fieldIndex, varExpr->name + ".ptr");
 
 							// For array fields (both _ManagedArray<T> and array<T>), return pointer
@@ -1358,9 +1362,10 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 				mir::MIRType *managedDataType = structTypes["__ManagedStringData"];
 				mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
 
-				if (!managedDataType || !unsizedArrayType) {
-					reportError("character comparison requires __ManagedStringData type",
+				if (!charType || !managedDataType || !unsizedArrayType) {
+					reportError("character comparison requires character and __ManagedStringData types",
 								binExpr->line, binExpr->column);
+					return nullptr;
 				}
 
 				// Get first byte from left char
