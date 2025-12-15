@@ -1768,8 +1768,23 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 	// This is needed because when a struct (like Name) has fields that are other structs
 	// (like string), those nested structs may have had size 0 when first processed.
 	// We need to recompute sizes now that all field types are populated.
-	for (auto &[name, structType] : structTypes) {
-		structType->recomputeSize();
+	//
+	// Use multiple passes until all sizes stabilize. This handles dependency chains
+	// where struct A contains struct B contains struct C - we need to compute C first,
+	// then B, then A. Without topological ordering, multiple passes converge correctly.
+	bool changed = true;
+	int passes = 0;
+	const int MAX_PASSES = 10; // Prevent infinite loops
+	while (changed && passes < MAX_PASSES) {
+		changed = false;
+		passes++;
+		for (auto &[name, structType] : structTypes) {
+			uint64_t oldSize = structType->sizeInBytes;
+			structType->recomputeSize();
+			if (structType->sizeInBytes != oldSize) {
+				changed = true;
+			}
+		}
 	}
 
 	// Validate: all structs with fields should have non-zero size

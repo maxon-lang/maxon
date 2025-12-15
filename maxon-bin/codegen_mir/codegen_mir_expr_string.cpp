@@ -350,23 +350,18 @@ mir::MIRValue *MIRCodeGenerator::generateStringLiteral(StringLiteralExprAST *str
 		capacity = static_cast<int>(len + 1);
 	}
 
-	// Allocate the __ManagedStringData struct.
-	// In __global_init, the string value can be copied into global storage (e.g., global map keys).
-	// A stack allocation would dangle after __global_init returns, so allocate stable storage.
-	mir::MIRValue *managedDataAlloca = nullptr;
-	if (inGlobalInit) {
-		initHeapManagement();
-		mir::MIRFunction *mallocFunc = module->getFunction("malloc");
-		if (!mallocFunc) {
-			reportError("malloc not declared for global string literal", strExpr->line, strExpr->column);
-		}
-		managedDataAlloca = builder->createCall(
-			mallocFunc,
-			{builder->getInt64(managedDataType->sizeInBytes)},
-			"managed.data.global");
-	} else {
-		managedDataAlloca = builder->createAlloca(managedDataType, "managed.data");
+	// Allocate the __ManagedStringData struct on the heap.
+	// String values can be copied into structs that get returned from functions or stored in
+	// globals, so the metadata must live longer than the current stack frame. Always heap-allocate.
+	initHeapManagement();
+	mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+	if (!mallocFunc) {
+		reportError("malloc not declared for string literal", strExpr->line, strExpr->column);
 	}
+	mir::MIRValue *managedDataAlloca = builder->createCall(
+		mallocFunc,
+		{builder->getInt64(managedDataType->sizeInBytes)},
+		"managed.data.heap");
 
 	// Populate the __ManagedStringData fields
 	// Field 0: _buffer []byte (fat pointer: {ptr, i32})

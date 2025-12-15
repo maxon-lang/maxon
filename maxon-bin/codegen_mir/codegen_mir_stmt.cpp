@@ -339,7 +339,15 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 						builder->createStore(fatPtrValue, fieldPtr);
 					}
 				} else {
-					builder->createStore(fieldValue, fieldPtr);
+					// For struct types, generateExpr returns a pointer to an alloca
+					// We need to load the struct value and store it
+					mir::MIRType *fieldMirType = getTypeFromString(fieldType);
+					if (fieldValue && fieldMirType->isStruct() && fieldValue->type == mir::MIRType::getPtr()) {
+						mir::MIRValue *loadedValue = builder->createLoad(fieldMirType, fieldValue, fieldName + ".load");
+						builder->createStore(loadedValue, fieldPtr);
+					} else {
+						builder->createStore(fieldValue, fieldPtr);
+					}
 				}
 			}
 
