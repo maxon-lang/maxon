@@ -179,37 +179,24 @@ end 'useType'
 		testDocument2 = await vscode.workspace.openTextDocument(consumerUri);
 		await vscode.window.showTextDocument(testDocument2);
 
-		// Wait for LSP to process both files - use a longer wait and retry mechanism
-		let locations: vscode.Location[] = [];
-		const maxAttempts = 20;
+		// Go to definition on 'MyCustomType' in return type (line 0, col 28)
+		// "function useType() returns MyCustomType"
+		//  0         1         2         3
+		//  0123456789012345678901234567890123456789
+		//                              ^ col 28 = 'M'
+		const position = new vscode.Position(0, 28);
+		const result = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
+			'vscode.executeDefinitionProvider',
+			consumerUri,
+			position
+		);
 
-		for (let i = 0; i < maxAttempts; i++) {
-			await new Promise(resolve => setTimeout(resolve, 200));
-
-			// Go to definition on 'MyCustomType' in return type (line 0, col 28)
-			// "function useType() returns MyCustomType"
-			//  0         1         2         3
-			//  0123456789012345678901234567890123456789
-			//                              ^ col 28 = 'M'
-			const position = new vscode.Position(0, 28);
-			const result = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
-				'vscode.executeDefinitionProvider',
-				consumerUri,
-				position
-			);
-
-			if (result && result.length > 0) {
-				locations = result.map(loc => {
-					if ('targetUri' in loc) {
-						return new vscode.Location(loc.targetUri, loc.targetRange);
-					}
-					return loc;
-				});
-				if (locations.length > 0) {
-					break;
-				}
+		const locations = result.map(loc => {
+			if ('targetUri' in loc) {
+				return new vscode.Location(loc.targetUri, loc.targetRange);
 			}
-		}
+			return loc;
+		});
 
 		assert.ok(locations.length > 0, 'Should find definition for cross-file type in project');
 		assert.ok(locations[0].uri.fsPath.includes('types.maxon'),
@@ -255,9 +242,6 @@ end 'Container'
 
 		testDocument = await vscode.workspace.openTextDocument(testUri);
 		await vscode.window.showTextDocument(testDocument);
-
-		// Wait for LSP to process
-		await new Promise(resolve => setTimeout(resolve, 500));
 
 		// Go to definition on 'ValueHolder' in the map type (line 5, around col 35)
 		// "	var items map from string to ValueHolder"

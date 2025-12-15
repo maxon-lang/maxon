@@ -196,6 +196,32 @@ class MIRCodeGenerator {
 	// Statement generation helpers (in separate files)
 	void generateVarDecl(VarDeclStmtAST *varDecl, mir::MIRFunction *function);
 	void generateLetDecl(LetDeclStmtAST *letDecl, mir::MIRFunction *function);
+
+	// Shared declaration helpers for var/let (reduces code duplication)
+	// DeclInfo holds common properties extracted from VarDeclStmtAST or LetDeclStmtAST
+	struct DeclInfo {
+		const std::string &name;
+		const std::string &type;
+		ExprAST *initializer;
+		int line;
+		int column;
+		bool isMutable; // true for var, false for let
+	};
+	bool tryGenerateArrayLiteralDecl(const DeclInfo &decl);
+	bool tryGenerateSizedArrayDecl(const DeclInfo &decl);
+	bool tryGenerateStringLiteralDecl(const DeclInfo &decl);
+	bool tryGenerateCharLiteralDecl(const DeclInfo &decl);
+	bool tryGenerateInterpolatedStringDecl(const DeclInfo &decl);
+	bool tryGenerateStringConcatDecl(const DeclInfo &decl);
+	bool tryGenerateArrayIndexStructDecl(const DeclInfo &decl);
+	bool tryGenerateStructInitDecl(const DeclInfo &decl);
+	bool tryGenerateEnumCaseDecl(const DeclInfo &decl);
+	bool tryGenerateEmptyMapLiteralDecl(const DeclInfo &decl);
+	bool tryGenerateMapWithEntriesDecl(const DeclInfo &decl);
+	bool tryGenerateSetFromArrayDecl(const DeclInfo &decl);
+	void generateDeclFromInfo(const DeclInfo &decl);
+	void generateSimpleDecl(const DeclInfo &decl, mir::MIRValue *initVal);
+	void trackDeclTypeInfo(const DeclInfo &decl, mir::MIRValue *alloca, mir::MIRType *allocaType);
 	void generateAssign(AssignStmtAST *assign, mir::MIRFunction *function);
 	void generateArrayAssign(ArrayAssignStmtAST *arrayAssign, mir::MIRFunction *function);
 	void generateArrayMemberAssign(ArrayMemberAssignStmtAST *arrayMemberAssign, mir::MIRFunction *function);

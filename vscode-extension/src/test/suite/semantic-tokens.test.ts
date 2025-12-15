@@ -164,15 +164,24 @@ suite('Semantic Tokens Test Suite', () => {
 
 		testDocument = await createTestFile('test_function_level.maxon', content);
 
-		const semanticTokens = await vscode.commands.executeCommand<vscode.SemanticTokens>(
-			'vscode.provideDocumentSemanticTokens',
-			testDocument.uri
-		);
+		// Poll for semantic tokens - LSP may need time to process
+		let semanticTokens: vscode.SemanticTokens | undefined;
+		for (let attempt = 0; attempt < 10; attempt++) {
+			semanticTokens = await vscode.commands.executeCommand<vscode.SemanticTokens>(
+				'vscode.provideDocumentSemanticTokens',
+				testDocument.uri
+			);
+			if (semanticTokens && semanticTokens.data.length >= 10) {
+				break;
+			}
+		}
 
 		assert.ok(semanticTokens, 'Should receive semantic tokens');
 		// Functions have at least 2 label tokens: function name + closing 'name'
 		// The LSP may also return tokens for return types
-		assert.ok(semanticTokens.data.length >= 10, 'Should have at least 2 tokens (function name and closing "test") with 5 values each');
+		// Each token has 5 values (deltaLine, deltaChar, length, type, modifiers)
+		// We need at least 2 tokens, so at least 10 values
+		assert.ok(semanticTokens.data.length >= 10, `Should have at least 2 tokens (10 values), got ${semanticTokens.data.length} values`);
 
 		// Find the two label tokens (type 22) for the function block identifier
 		const tokens: Array<{ type: number; modifiers: number; }> = [];
@@ -180,7 +189,7 @@ suite('Semantic Tokens Test Suite', () => {
 			tokens.push({ type: semanticTokens.data[i + 3], modifiers: semanticTokens.data[i + 4] });
 		}
 		const labelTokens = tokens.filter(t => t.type === 22);
-		assert.ok(labelTokens.length >= 2, 'Should have at least 2 label tokens');
+		assert.ok(labelTokens.length >= 2, `Should have at least 2 label tokens, got ${labelTokens.length}`);
 
 		// Both label tokens should have level 0 modifier (bit 10 set)
 		const modifier1 = labelTokens[0].modifiers;
@@ -360,9 +369,6 @@ suite('Semantic Tokens Test Suite', () => {
 		].join('\n');
 
 		testDocument = await createTestFile('test_string_interpolation.maxon', content);
-
-		// Wait for LSP to process the document
-		await new Promise(resolve => setTimeout(resolve, 500));
 
 		const semanticTokens = await vscode.commands.executeCommand<vscode.SemanticTokens>(
 			'vscode.provideDocumentSemanticTokens',
