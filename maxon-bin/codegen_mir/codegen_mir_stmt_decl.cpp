@@ -250,9 +250,11 @@ bool MIRCodeGenerator::tryGenerateSizedArrayDecl(const DeclInfo &decl) {
 	uint64_t totalSize = arraySize * elementSize;
 
 	// Threshold for stack allocation (4KB)
-	// Empty arrays (size 0) always start as stack-allocated, push() will allocate heap when needed
+	// Empty mutable arrays (var arr = array of T) use a special path with no allocation
+	// push() will allocate the first buffer via _managed_array_alloc with proper refcount header
 	constexpr uint64_t STACK_ARRAY_THRESHOLD = 4096;
 	bool useHeap = totalSize > STACK_ARRAY_THRESHOLD;
+	bool isEmptyMutable = (arraySize == 0 && decl.isMutable);
 
 	// Create array<T> struct alloca
 	mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
@@ -263,14 +265,42 @@ bool MIRCodeGenerator::tryGenerateSizedArrayDecl(const DeclInfo &decl) {
 
 	mir::MIRValue *bufferPtr;
 
-	if (useHeap) {
+	if (isEmptyMutable) {
+		// Empty mutable array (var arr = array of T): no allocation yet
+		// push() will allocate the first buffer via _managed_array_alloc with proper refcount header
+		// Use null pointer - no allocation needed until push() is called
+		bufferPtr = builder->getNull();
+
+		// Initialize with length=0, capacity=0 (signals push() should allocate properly)
+		mir::MIRValue *zeroVal = builder->getInt64(0);
+
+		// Field 0: managed
+		mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, structAlloca, 0, decl.name + ".managed");
+
+		mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0, decl.name + ".managed._buffer");
+		builder->createStore(bufferPtr, bufferField);
+
+		mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1, decl.name + ".managed._len");
+		builder->createStore(zeroVal, lenField);
+
+		mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2, decl.name + ".managed._capacity");
+		builder->createStore(zeroVal, capField); // capacity=0 signals no proper heap allocation yet
+
+		// Field 1: iterIndex
+		mir::MIRValue *iterField = builder->createStructGEP(arrayStructType, structAlloca, 1, decl.name + ".iterIndex");
+		builder->createStore(zeroVal, iterField);
+
+		// Track for cleanup (isDynamic=true since it will be heap-promoted)
+		if (!scopeStack.empty()) {
+			scopeStack.back().heapAllocatedArrays.push_back({decl.name, structAlloca, elementTypeName, true});
+		}
+	} else if (useHeap) {
 		// Large array: heap-allocate buffer
 		initHeapManagement();
 		mir::MIRFunction *mallocFunc = module->getFunction("malloc");
 
 		// Allocate data buffer (no header - array<T> struct stores metadata)
-		uint64_t allocSize = (arraySize > 0) ? totalSize : (decl.isMutable ? 8 : 1);
-		mir::MIRValue *sizeVal = builder->getInt64(allocSize);
+		mir::MIRValue *sizeVal = builder->getInt64(totalSize);
 		mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.lit." + decl.name, "array literal");
 		bufferPtr = builder->createCall(mallocFunc, {sizeVal, arrayTag}, decl.name + ".buffer");
 

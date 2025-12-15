@@ -5,6 +5,31 @@
 
 namespace backend {
 
+//==============================================================================
+// Register Usage Policy (Windows x64 ABI)
+//==============================================================================
+//
+// SCRATCH REGISTERS - Reserved for codegen, never assigned by register allocator:
+//   R10, R11 - Use these for internal codegen operations (struct copies, etc.)
+//
+// CALLER-SAVED (volatile) - Safe to clobber, no need to preserve across calls:
+//   RAX, RCX, RDX, R8, R9, R10, R11, XMM0-XMM5
+//
+// CALLEE-SAVED (non-volatile) - Must be preserved, may contain allocated values:
+//   RBX, RBP, RSI, RDI, R12-R15, XMM6-XMM15
+//
+// IMPORTANT: Internal codegen operations (struct copies, large returns, etc.)
+// must ONLY use scratch registers (R10/R11) or RAX as temporaries.
+// NEVER use RSI/RDI/RBX as scratch - the register allocator may have assigned
+// live values to them.
+//
+//==============================================================================
+
+// Scratch registers reserved for internal codegen operations
+// These are never allocated by the register allocator
+static constexpr X86Reg SCRATCH_REG1 = X86Reg::R10;
+static constexpr X86Reg SCRATCH_REG2 = X86Reg::R11;
+
 // Helper to create unique keys for register allocation maps
 // Parameters and VirtualRegs can have the same regId, so we encode the kind
 static uint64_t makeAllocKey(mir::MIRValue *value) {
@@ -928,15 +953,15 @@ void X86CodeGen::genLoad(mir::MIRInstruction *inst) {
 	if (isLargeAggregate) {
 		// For large structs, we can't load into a register
 		// Instead, copy from source to result's stack slot
-		// Use scratch registers R10/R11 to avoid clobbering allocated registers
-		X86Reg srcPtr = loadValue(inst->operands[0], X86Reg::R10);
+		// Use scratch registers to avoid clobbering allocated registers
+		X86Reg srcPtr = loadValue(inst->operands[0], SCRATCH_REG1);
 
 		// Get destination (result's stack slot)
 		X86Mem dstSlot = getStackSlot(inst->result);
-		encoder.lea64(X86Reg::R11, dstSlot);
+		encoder.lea64(SCRATCH_REG2, dstSlot);
 
 		// Copy the struct (use RAX as temp since it's caller-saved)
-		emitStructCopy(srcPtr, X86Reg::R11, loadType->getSizeInBytes(), X86Reg::RAX);
+		emitStructCopy(srcPtr, SCRATCH_REG2, loadType->getSizeInBytes(), X86Reg::RAX);
 		// Result is already in its stack slot, nothing more to do
 		return;
 	}
@@ -1051,22 +1076,21 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 
 		X86Reg dstReg = loadValue(ptr, X86Reg::RCX); // Dest ptr
 
-		emitStructCopy(srcReg, dstReg, value->type->getSizeInBytes(), X86Reg::R10);
+		emitStructCopy(srcReg, dstReg, value->type->getSizeInBytes(), SCRATCH_REG1);
 	} else if (value->type->kind == mir::MIRTypeKind::Int8 ||
 			   value->type->kind == mir::MIRTypeKind::Int1) {
-		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
-		// Check if ptr is in R10 - if so, load it first to avoid clobbering
-		auto [valReg, ptrReg] = loadBinaryOperands(value, ptr, X86Reg::R10, X86Reg::R11);
+		// Use scratch registers to avoid conflicts with parameter registers
+		auto [valReg, ptrReg] = loadBinaryOperands(value, ptr, SCRATCH_REG1, SCRATCH_REG2);
 		X86Mem mem(ptrReg);
 		encoder.movMR8(mem, valReg);
 	} else if (value->type->kind == mir::MIRTypeKind::Int32) {
-		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
-		auto [valReg, ptrReg] = loadBinaryOperands(value, ptr, X86Reg::R10, X86Reg::R11);
+		// Use scratch registers to avoid conflicts with parameter registers
+		auto [valReg, ptrReg] = loadBinaryOperands(value, ptr, SCRATCH_REG1, SCRATCH_REG2);
 		X86Mem mem(ptrReg);
 		encoder.movMR32(mem, valReg);
 	} else {
-		// Use R10/R11 to avoid conflicts with parameter registers (RCX/RDX/R8/R9)
-		auto [valReg, ptrReg] = loadBinaryOperands(value, ptr, X86Reg::R10, X86Reg::R11);
+		// Use scratch registers to avoid conflicts with parameter registers
+		auto [valReg, ptrReg] = loadBinaryOperands(value, ptr, SCRATCH_REG1, SCRATCH_REG2);
 		X86Mem mem(ptrReg);
 		encoder.movMR64(mem, valReg);
 	}
@@ -1357,11 +1381,12 @@ void X86CodeGen::genRet(mir::MIRInstruction *inst) {
 		// Windows x64 ABI: Large structs are returned via hidden pointer
 		// The hidden pointer was saved to stack in prologue (from RCX)
 		// We need to copy the struct to that location and return the pointer in RAX
+		// Use scratch registers to avoid clobbering callee-saved registers
 
-		// Load the hidden pointer from the saved stack location into RDI
-		encoder.movRM64(X86Reg::RDI, X86Mem(X86Reg::RBP, regAlloc.hiddenRetPtrOffset));
+		// Load the hidden pointer from the saved stack location into SCRATCH_REG2 (dst)
+		encoder.movRM64(SCRATCH_REG2, X86Mem(X86Reg::RBP, regAlloc.hiddenRetPtrOffset));
 
-		// Get the ADDRESS of the return value struct into RSI
+		// Get the ADDRESS of the return value struct into SCRATCH_REG1 (src)
 		// For large structs, the value is stored on the stack - we need LEA, not MOV
 		X86Reg srcReg;
 		if (retVal->kind == mir::MIRValueKind::VirtualReg &&
@@ -1369,18 +1394,18 @@ void X86CodeGen::genRet(mir::MIRInstruction *inst) {
 			getAllocatedReg(retVal) == X86Reg::None) {
 			// Large struct is stored directly on stack - use lea to get address
 			X86Mem slot = getStackSlot(retVal);
-			encoder.lea64(X86Reg::RSI, slot);
-			srcReg = X86Reg::RSI;
+			encoder.lea64(SCRATCH_REG1, slot);
+			srcReg = SCRATCH_REG1;
 		} else {
 			// For alloca results or other pointer values, loadValue gives address
-			srcReg = loadValue(retVal, X86Reg::RSI);
+			srcReg = loadValue(retVal, SCRATCH_REG1);
 		}
 
-		// Copy the struct
-		emitStructCopy(srcReg, X86Reg::RDI, retVal->type->getSizeInBytes(), X86Reg::RAX);
+		// Copy the struct (use RAX as temp since it's caller-saved)
+		emitStructCopy(srcReg, SCRATCH_REG2, retVal->type->getSizeInBytes(), X86Reg::RAX);
 
 		// Return the pointer in RAX per ABI
-		encoder.movRR64(X86Reg::RAX, X86Reg::RDI);
+		encoder.movRR64(X86Reg::RAX, SCRATCH_REG2);
 	} else if (retVal->type->isFloat()) {
 		loadValueFloat(retVal, X86Reg::XMM0);
 	} else {
@@ -1449,12 +1474,12 @@ void X86CodeGen::genCall(mir::MIRInstruction *inst) {
 				// Large aggregate argument - pass pointer to it
 				// The arg comes from a load instruction, but we need the address
 				X86Mem slot = getStackSlot(arg);
-				encoder.lea64(X86Reg::R10, slot);
-				encoder.movMR64(X86Mem(X86Reg::RSP, stackOffset), X86Reg::R10);
+				encoder.lea64(SCRATCH_REG1, slot);
+				encoder.movMR64(X86Mem(X86Reg::RSP, stackOffset), SCRATCH_REG1);
 			} else {
-				// Load to R10 (scratch register), then store to stack
-				loadValue(arg, X86Reg::R10);
-				encoder.movMR64(X86Mem(X86Reg::RSP, stackOffset), X86Reg::R10);
+				// Load to scratch register, then store to stack
+				loadValue(arg, SCRATCH_REG1);
+				encoder.movMR64(X86Mem(X86Reg::RSP, stackOffset), SCRATCH_REG1);
 			}
 		}
 	}
@@ -1541,8 +1566,8 @@ void X86CodeGen::genCallIndirect(mir::MIRInstruction *inst) {
 				loadValueFloat(arg, X86Reg::XMM0);
 				encoder.movsdMR(X86Mem(X86Reg::RSP, stackOffset), X86Reg::XMM0);
 			} else {
-				loadValue(arg, X86Reg::R10);
-				encoder.movMR64(X86Mem(X86Reg::RSP, stackOffset), X86Reg::R10);
+				loadValue(arg, SCRATCH_REG1);
+				encoder.movMR64(X86Mem(X86Reg::RSP, stackOffset), SCRATCH_REG1);
 			}
 		}
 	}
