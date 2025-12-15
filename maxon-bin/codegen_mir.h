@@ -186,6 +186,10 @@ class MIRCodeGenerator {
 	// Call this when a declaration takes ownership of a string
 	void transferManagedStringDataOwnership();
 
+	// Transfer ownership of an array variable when returning it
+	// Removes the array from heapAllocatedArrays to prevent scope cleanup from releasing it
+	void transferArrayOwnership(const std::string &varName);
+
 	// Generic struct instantiation
 	// Creates a specialized version of a generic struct template with concrete types
 	// Returns the specialized struct type name (e.g., "map<string,int>")
@@ -383,6 +387,16 @@ class MIRCodeGenerator {
 	};
 	ArrayFieldInfo getArrayFieldInfo(ExprAST *arrayArg, int line, int column);
 	ArrayFieldInfo getManagedArrayInfo(ExprAST *arrayArg, int line, int column);
+
+	// Retain nested arrays when copying structs into arrays
+	// This increments refcounts on any array<T> fields to prevent dangling pointers
+	void retainNestedArraysInStruct(const std::string &structType, mir::MIRValue *structPtr);
+
+	// Retain managed types in array elements after memcpy
+	// This iterates through elements and increments refcounts on strings and nested arrays
+	void retainManagedTypesInArrayElements(const std::string &elemType,
+										   mir::MIRValue *bufferPtr,
+										   mir::MIRValue *length);
 
 	// String and char literal generation
 	mir::MIRValue *generateStringLiteral(StringLiteralExprAST *strExpr);

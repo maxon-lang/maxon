@@ -301,6 +301,30 @@ The project maintains an extensive test suite:
 
 ---
 
+## Post-History Notable Fixes
+
+### December 15, 2025 - Array Deep Copy in Struct Literals
+
+**Problem**: Self-hosted compiler crashed when pushing `FunctionDecl` to array. The `FunctionDecl` struct contained `array<Stmt>` and `array<Parameter>` fields. When creating a struct literal like `Parser{tokens: tokens, ...}`, the compiler was copying the array struct header (including the `_buffer` pointer) without deep copying the buffer contents.
+
+**Root Cause**: Stack-allocated arrays have `capacity = 0` and their `_buffer` points to stack memory. When this array is assigned to a struct field and the function returns, the stack memory becomes invalid, leaving a dangling pointer.
+
+**Fix**: Added deep copy logic in two places:
+1. `codegen_mir_expr.cpp` (`generateStructLiteral`) - For struct literals in variable declarations
+2. `codegen_mir_stmt.cpp` (return statement handling) - For struct literals in return statements
+
+The fix:
+- Checks if array length > 0
+- Allocates new heap buffer
+- Copies data with memcpy
+- Updates `_buffer` to point to new allocation  
+- Sets `capacity = length` (marks as heap-owned)
+- Retains managed types in copied elements (strings, nested arrays)
+
+**Lesson Learned**: Any code path that copies an `array<T>` value must deep copy the buffer, not just the struct header. The `_buffer` pointer becomes invalid when the source goes out of scope.
+
+---
+
 ## Branches
 
 | Branch | Purpose | Status |

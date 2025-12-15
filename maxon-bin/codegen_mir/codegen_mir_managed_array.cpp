@@ -303,7 +303,19 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_set_at(CallExprAST *cal
 	mir::MIRValue *elemPtr = mab.getElementPtr(dataPtr, index, "elem.ptr");
 
 	// Store the value at the element pointer
+	// The backend's genStore handles struct types correctly, using emitStructCopy
+	// for large structs (>8 bytes) to properly copy all bytes
 	builder->createStore(value, elemPtr);
+
+	// After storing a struct element, we need to retain any nested managed arrays.
+	// When a struct containing array<T> fields is copied byte-by-byte, the nested
+	// array's buffer pointer is shallow-copied. We must increment the refcount so
+	// the buffer isn't freed when the original goes out of scope.
+	if (verboseLevel >= 2) {
+		std::cerr << "[DEBUG] intrinsic_managed_array_set_at: calling retainNestedArraysInStruct for '"
+				  << info.elementType << "'\n";
+	}
+	retainNestedArraysInStruct(info.elementType, elemPtr);
 
 	return builder->getInt64(0);
 }
@@ -415,4 +427,396 @@ mir::MIRValue *MIRCodeGenerator::intrinsic_managed_array_shift_left(CallExprAST 
 	builder->createCall(memmoveFunc, {destPtr, srcPtr, byteSize}, "");
 
 	return builder->getInt64(0);
+}
+
+// =============================================================================
+// retainNestedArraysInStruct
+// After copying a struct into an array, we need to handle nested array<T> fields:
+// - If the nested array is heap-allocated (capacity > 0), increment its refcount
+// - If the nested array is stack-allocated (capacity == 0) but has data (len > 0),
+//   we must copy the data to a new heap buffer because the original stack buffer
+//   will become invalid when the source function returns
+// =============================================================================
+
+void MIRCodeGenerator::retainNestedArraysInStruct(const std::string &structType, mir::MIRValue *structPtr) {
+	// Check if this is a struct type that we know about
+	auto fieldsIt = structFields.find(structType);
+	if (fieldsIt == structFields.end()) {
+		// Not a known struct type (could be a primitive like int, float, etc.)
+		if (verboseLevel >= 2) {
+			std::cerr << "[DEBUG] retainNestedArraysInStruct: unknown struct type '" << structType << "'\n";
+		}
+		return;
+	}
+
+	if (verboseLevel >= 2) {
+		std::cerr << "[DEBUG] retainNestedArraysInStruct: processing struct '" << structType << "' with "
+				  << fieldsIt->second.size() << " fields\n";
+	}
+
+	// Get the MIR struct type
+	auto structTypeIt = structTypes.find(structType);
+	if (structTypeIt == structTypes.end()) {
+		return;
+	}
+	mir::MIRType *mirStructType = structTypeIt->second;
+
+	// Iterate through all fields to find array<T> and string fields
+	const auto &fields = fieldsIt->second;
+	for (size_t i = 0; i < fields.size(); i++) {
+		const std::string &fieldName = fields[i].first;
+		const std::string &fieldType = fields[i].second;
+
+		if (verboseLevel >= 2) {
+			std::cerr << "[DEBUG] retainNestedArraysInStruct: field " << i << " '" << fieldName
+					  << "' type='" << fieldType << "' isArrayStruct="
+					  << maxon::TypeConversion::isArrayStructType(fieldType) << "\n";
+		}
+
+		// Handle string fields - need to retain the managed string
+		if (fieldType == "string") {
+			mir::MIRType *stringType = structTypes["string"];
+			mir::MIRFunction *retainFunc = getOrDeclareFunction("_managed_string_retain",
+																mir::MIRType::getVoid(),
+																{mir::MIRType::getPtr()});
+
+			// Get the string field pointer
+			mir::MIRValue *stringFieldPtr = builder->createStructGEP(
+				mirStructType, structPtr, static_cast<int>(i), fieldName + ".str.ptr");
+			// Get the _managed field (field 0 of string struct)
+			mir::MIRValue *managedFieldPtr = builder->createStructGEP(
+				stringType, stringFieldPtr, 0, fieldName + "._managed.ptr");
+			// Load the _ManagedString pointer
+			mir::MIRValue *managedPtr = builder->createLoad(
+				mir::MIRType::getPtr(), managedFieldPtr, fieldName + "._managed");
+			// Retain it
+			builder->createCall(retainFunc, {managedPtr});
+
+			if (verboseLevel >= 2) {
+				std::cerr << "[DEBUG] retainNestedArraysInStruct: retained string field '" << fieldName << "'\n";
+			}
+			continue;
+		}
+
+		// Handle _ManagedString fields directly (e.g., in character type)
+		// _ManagedString is the raw managed string pointer that needs retention
+		if (fieldType == "_ManagedString") {
+			mir::MIRFunction *retainFunc = getOrDeclareFunction("_managed_string_retain",
+																mir::MIRType::getVoid(),
+																{mir::MIRType::getPtr()});
+
+			// Get the _ManagedString field pointer
+			mir::MIRValue *managedFieldPtr = builder->createStructGEP(
+				mirStructType, structPtr, static_cast<int>(i), fieldName + ".ptr");
+			// Load the _ManagedString pointer
+			mir::MIRValue *managedPtr = builder->createLoad(
+				mir::MIRType::getPtr(), managedFieldPtr, fieldName);
+			// Retain it
+			builder->createCall(retainFunc, {managedPtr});
+
+			if (verboseLevel >= 2) {
+				std::cerr << "[DEBUG] retainNestedArraysInStruct: retained _ManagedString field '" << fieldName << "'\n";
+			}
+			continue;
+		}
+
+		if (maxon::TypeConversion::isArrayStructType(fieldType)) {
+			// This field is an array<T> - need to handle it
+			std::string elemType = maxon::TypeConversion::getArrayStructElementType(fieldType);
+
+			if (verboseLevel >= 2) {
+				std::cerr << "[DEBUG] retainNestedArraysInStruct: handling array field '" << fieldName
+						  << "' with element type '" << elemType << "'\n";
+			}
+
+			ManagedArrayBuilder mab(*this, elemType);
+
+			// Get pointer to the array field in the copied struct
+			mir::MIRValue *arrayFieldPtr = builder->createStructGEP(
+				mirStructType, structPtr, static_cast<int>(i), fieldName + ".copy");
+
+			// The array<T> struct is: { __ManagedArrayData { _buffer, _len, _capacity }, iterIndex }
+			// We need to get the __ManagedArrayData part (field 0)
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elemType);
+			mir::MIRValue *managedDataPtr = builder->createStructGEP(
+				arrayStructType, arrayFieldPtr, 0, fieldName + ".managed");
+
+			// Load the current capacity
+			mir::MIRValue *capacity = mab.getCapacity(managedDataPtr, fieldName + ".cap");
+
+			// Check if heap allocated (capacity > 0)
+			mir::MIRFunction *currentFunc = builder->getFunction();
+			mir::MIRBasicBlock *heapBlock = currentFunc->createBasicBlock(fieldName + ".heap");
+			mir::MIRBasicBlock *stackBlock = currentFunc->createBasicBlock(fieldName + ".stack");
+			mir::MIRBasicBlock *doneBlock = currentFunc->createBasicBlock(fieldName + ".done");
+
+			mir::MIRValue *isHeap = builder->createICmpSGT(capacity, builder->getInt64(0), fieldName + ".isheap");
+			builder->createCondBr(isHeap, heapBlock, stackBlock);
+
+			// Heap block: retain buffer and managed types in elements
+			builder->setInsertPoint(heapBlock);
+			mir::MIRValue *dataPtrHeap = mab.getDataPtr(managedDataPtr, fieldName + ".data.heap");
+			mab.emitRetain(dataPtrHeap);
+			// Also retain managed types in each element (strings, nested arrays)
+			mir::MIRValue *lengthHeap = mab.getLength(managedDataPtr, fieldName + ".len.heap");
+			retainManagedTypesInArrayElements(elemType, dataPtrHeap, lengthHeap);
+			builder->createBr(doneBlock);
+
+			// Stack block: need to copy to heap if there's data
+			builder->setInsertPoint(stackBlock);
+			mir::MIRValue *length = mab.getLength(managedDataPtr, fieldName + ".len");
+			mir::MIRValue *hasData = builder->createICmpSGT(length, builder->getInt64(0), fieldName + ".hasdata");
+
+			mir::MIRBasicBlock *copyBlock = currentFunc->createBasicBlock(fieldName + ".copy");
+			builder->createCondBr(hasData, copyBlock, doneBlock);
+
+			// Copy block: allocate heap buffer and copy data
+			builder->setInsertPoint(copyBlock);
+			mir::MIRValue *oldDataPtr = mab.getDataPtr(managedDataPtr, fieldName + ".olddata");
+
+			// Allocate new heap buffer with capacity = length
+			mir::MIRValue *newBuffer = mab.allocateBuffer(length, "nested array copy");
+
+			// Copy the data: memcpy(newBuffer, oldDataPtr, length * elemSize)
+			int elemSize = mab.getElementSize();
+			mir::MIRValue *copySize = builder->createMul(length, builder->getInt64(elemSize), fieldName + ".copysize");
+			mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
+																{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+			builder->createCall(memcpyFunc, {newBuffer, oldDataPtr, copySize});
+
+			// Update the struct's array field: set new buffer pointer and capacity
+			mab.setDataPtr(managedDataPtr, newBuffer);
+			mab.setCapacity(managedDataPtr, length);
+
+			// Retain managed types in each copied element (strings, nested arrays)
+			retainManagedTypesInArrayElements(elemType, newBuffer, length);
+
+			builder->createBr(doneBlock);
+
+			// Done block
+			builder->setInsertPoint(doneBlock);
+			continue;
+		}
+
+		// Handle nested struct types that might contain managed types (strings, arrays, or further nested structs)
+		if (structFields.find(fieldType) != structFields.end()) {
+			// This is a known struct type - check if it has any managed types
+			const auto &nestedFields = structFields[fieldType];
+			bool hasManagedTypes = false;
+			for (const auto &[nFieldName, nFieldType] : nestedFields) {
+				if (nFieldType == "string" || maxon::TypeConversion::isArrayStructType(nFieldType) ||
+					structFields.find(nFieldType) != structFields.end()) {
+					hasManagedTypes = true;
+					break;
+				}
+			}
+
+			if (hasManagedTypes) {
+				if (verboseLevel >= 2) {
+					std::cerr << "[DEBUG] retainNestedArraysInStruct: recursing into nested struct field '"
+							  << fieldName << "' of type '" << fieldType << "'\n";
+				}
+
+				// Get pointer to the nested struct field
+				mir::MIRValue *nestedFieldPtr = builder->createStructGEP(
+					mirStructType, structPtr, static_cast<int>(i), fieldName + ".nested");
+
+				// Recursively retain managed types in the nested struct
+				retainNestedArraysInStruct(fieldType, nestedFieldPtr);
+			}
+		}
+	}
+}
+
+// =============================================================================
+// retainManagedTypesInArrayElements
+// After deep-copying an array buffer via memcpy, we need to retain managed types
+// in each element. This is needed because memcpy just copies bytes (pointers)
+// without incrementing refcounts.
+// =============================================================================
+
+void MIRCodeGenerator::retainManagedTypesInArrayElements(const std::string &elemType,
+														 mir::MIRValue *bufferPtr,
+														 mir::MIRValue *length) {
+	// Check if the element type is a struct that contains managed types
+	auto fieldsIt = structFields.find(elemType);
+	if (fieldsIt == structFields.end()) {
+		// Not a struct or unknown struct - nothing to retain
+		return;
+	}
+
+	// Check if this struct has any string, array, or nested struct fields that need retention
+	bool hasStringFields = false;
+	bool hasManagedStringFields = false;
+	bool hasArrayFields = false;
+	std::vector<std::pair<size_t, std::string>> nestedStructFields; // field index -> type
+	const auto &fields = fieldsIt->second;
+	for (size_t i = 0; i < fields.size(); i++) {
+		const std::string &fieldType = fields[i].second;
+		if (fieldType == "string") {
+			hasStringFields = true;
+		}
+		if (fieldType == "_ManagedString") {
+			hasManagedStringFields = true;
+		}
+		if (maxon::TypeConversion::isArrayStructType(fieldType)) {
+			hasArrayFields = true;
+		}
+		// Check for nested struct types that might contain managed types
+		if (structFields.find(fieldType) != structFields.end()) {
+			// This is a known struct type - check if it has managed types
+			const auto &nestedFields = structFields[fieldType];
+			for (const auto &[nFieldName, nFieldType] : nestedFields) {
+				if (nFieldType == "string" || nFieldType == "_ManagedString" ||
+					maxon::TypeConversion::isArrayStructType(nFieldType) ||
+					structFields.find(nFieldType) != structFields.end()) {
+					nestedStructFields.push_back({i, fieldType});
+					break;
+				}
+			}
+		}
+	}
+
+	if (!hasStringFields && !hasManagedStringFields && !hasArrayFields && nestedStructFields.empty()) {
+		// No managed types in the element struct - nothing to do
+		return;
+	}
+
+	if (verboseLevel >= 2) {
+		std::cerr << "[DEBUG] retainManagedTypesInArrayElements: " << elemType
+				  << " hasStrings=" << hasStringFields << " hasManagedStrings=" << hasManagedStringFields
+				  << " hasArrays=" << hasArrayFields
+				  << " nestedStructs=" << nestedStructFields.size() << "\n";
+	}
+
+	// Get the MIR struct type for the element
+	mir::MIRType *elemMirType = getTypeFromString(elemType);
+	int elemSize = static_cast<int>(elemMirType->getSizeInBytes());
+
+	// Create a loop to iterate through all elements
+	mir::MIRFunction *currentFunc = builder->getFunction();
+	mir::MIRBasicBlock *loopHeader = currentFunc->createBasicBlock("retain.loop.header");
+	mir::MIRBasicBlock *loopBody = currentFunc->createBasicBlock("retain.loop.body");
+	mir::MIRBasicBlock *loopEnd = currentFunc->createBasicBlock("retain.loop.end");
+
+	// Initialize loop counter to 0
+	mir::MIRValue *counterAlloca = builder->createAlloca(mir::MIRType::getInt64(), "retain.counter");
+	builder->createStore(builder->getInt64(0), counterAlloca);
+	builder->createBr(loopHeader);
+
+	// Loop header - check if counter < length
+	builder->setInsertPoint(loopHeader);
+	mir::MIRValue *counter = builder->createLoad(mir::MIRType::getInt64(), counterAlloca, "i");
+	mir::MIRValue *shouldContinue = builder->createICmpSLT(counter, length, "retain.cond");
+	builder->createCondBr(shouldContinue, loopBody, loopEnd);
+
+	// Loop body - retain managed types in element[counter]
+	builder->setInsertPoint(loopBody);
+
+	// Get pointer to current element: bufferPtr + counter * elemSize
+	mir::MIRValue *elemOffset = builder->createMul(counter, builder->getInt64(elemSize), "elem.offset");
+	mir::MIRValue *elemPtr = builder->createGEP(mir::MIRType::getInt8(), bufferPtr, {elemOffset}, "elem.ptr");
+
+	// Retain string fields
+	if (hasStringFields) {
+		mir::MIRType *stringType = structTypes["string"];
+		mir::MIRFunction *retainFunc = getOrDeclareFunction("_managed_string_retain",
+															mir::MIRType::getVoid(),
+															{mir::MIRType::getPtr()});
+
+		for (size_t i = 0; i < fields.size(); i++) {
+			const std::string &fieldName = fields[i].first;
+			const std::string &fieldType = fields[i].second;
+			if (fieldType == "string") {
+				// Get the string field pointer
+				mir::MIRValue *stringFieldPtr = builder->createStructGEP(
+					elemMirType, elemPtr, static_cast<int>(i), fieldName + ".str.ptr");
+				// Get the _managed field (field 0 of string struct)
+				mir::MIRValue *managedFieldPtr = builder->createStructGEP(
+					stringType, stringFieldPtr, 0, fieldName + "._managed.ptr");
+				// Load the _ManagedString pointer
+				mir::MIRValue *managedPtr = builder->createLoad(
+					mir::MIRType::getPtr(), managedFieldPtr, fieldName + "._managed");
+				// Retain it
+				builder->createCall(retainFunc, {managedPtr});
+			}
+		}
+	}
+
+	// Retain _ManagedString fields directly (e.g., in character type)
+	if (hasManagedStringFields) {
+		mir::MIRFunction *retainFunc = getOrDeclareFunction("_managed_string_retain",
+															mir::MIRType::getVoid(),
+															{mir::MIRType::getPtr()});
+
+		for (size_t i = 0; i < fields.size(); i++) {
+			const std::string &fieldName = fields[i].first;
+			const std::string &fieldType = fields[i].second;
+			if (fieldType == "_ManagedString") {
+				// Get the _ManagedString field pointer
+				mir::MIRValue *managedFieldPtr = builder->createStructGEP(
+					elemMirType, elemPtr, static_cast<int>(i), fieldName + ".ptr");
+				// Load the _ManagedString pointer
+				mir::MIRValue *managedPtr = builder->createLoad(
+					mir::MIRType::getPtr(), managedFieldPtr, fieldName);
+				// Retain it
+				builder->createCall(retainFunc, {managedPtr});
+			}
+		}
+	}
+
+	// Retain array fields (increment refcount on their buffers)
+	if (hasArrayFields) {
+		for (size_t i = 0; i < fields.size(); i++) {
+			const std::string &fieldName = fields[i].first;
+			const std::string &fieldType = fields[i].second;
+			if (maxon::TypeConversion::isArrayStructType(fieldType)) {
+				std::string nestedElemType = maxon::TypeConversion::getArrayStructElementType(fieldType);
+				ManagedArrayBuilder mab(*this, nestedElemType);
+
+				// Get the array field pointer
+				mir::MIRType *arrayStructType = getOrCreateArrayStructType(nestedElemType);
+				mir::MIRValue *arrayFieldPtr = builder->createStructGEP(
+					elemMirType, elemPtr, static_cast<int>(i), fieldName + ".arr.ptr");
+				// Get managed data (field 0)
+				mir::MIRValue *managedDataPtr = builder->createStructGEP(
+					arrayStructType, arrayFieldPtr, 0, fieldName + ".managed");
+				// Get capacity to check if heap-allocated
+				mir::MIRValue *capacity = mab.getCapacity(managedDataPtr, fieldName + ".cap");
+
+				// Only retain if capacity > 0 (heap-allocated)
+				mir::MIRBasicBlock *retainBlock = currentFunc->createBasicBlock(fieldName + ".retain");
+				mir::MIRBasicBlock *skipBlock = currentFunc->createBasicBlock(fieldName + ".skip");
+
+				mir::MIRValue *isHeap = builder->createICmpSGT(capacity, builder->getInt64(0), fieldName + ".isheap");
+				builder->createCondBr(isHeap, retainBlock, skipBlock);
+
+				builder->setInsertPoint(retainBlock);
+				mir::MIRValue *dataPtr = mab.getDataPtr(managedDataPtr, fieldName + ".data");
+				mab.emitRetain(dataPtr);
+				builder->createBr(skipBlock);
+
+				builder->setInsertPoint(skipBlock);
+			}
+		}
+	}
+
+	// Handle nested struct fields that contain managed types
+	for (const auto &[fieldIdx, nestedType] : nestedStructFields) {
+		const std::string &fieldName = fields[fieldIdx].first;
+		mir::MIRValue *nestedFieldPtr = builder->createStructGEP(
+			elemMirType, elemPtr, static_cast<int>(fieldIdx), fieldName + ".nested.ptr");
+
+		// Recursively call retainNestedArraysInStruct for the nested struct
+		// This handles strings, arrays, and further nested structs
+		retainNestedArraysInStruct(nestedType, nestedFieldPtr);
+	}
+
+	// Increment counter
+	mir::MIRValue *nextCounter = builder->createAdd(counter, builder->getInt64(1), "next.i");
+	builder->createStore(nextCounter, counterAlloca);
+	builder->createBr(loopHeader);
+
+	// Loop end - continue with rest of function
+	builder->setInsertPoint(loopEnd);
 }

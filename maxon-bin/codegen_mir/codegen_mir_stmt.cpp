@@ -339,6 +339,81 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 						mir::MIRValue *fatPtrValue = builder->createLoad(fatPtrType, fieldValue, fieldName + ".fatptr");
 						builder->createStore(fatPtrValue, fieldPtr);
 					}
+				} else if (maxon::TypeConversion::isArrayStructType(fieldType)) {
+					// Handle array<T> struct type fields - need deep copy to avoid
+					// sharing the buffer pointer with the source array
+					std::string elemType = maxon::TypeConversion::getArrayStructElementType(fieldType);
+					mir::MIRType *arrayStructType = getOrCreateArrayStructType(elemType);
+					mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemType);
+					mir::MIRType *elemMirType = getTypeFromString(elemType);
+					int elemSize = static_cast<int>(elemMirType->getSizeInBytes());
+
+					// Determine if fieldValue is already a loaded struct value or a pointer
+					// For variables, generateExpr returns a loaded value (struct type)
+					// For struct literals, generateExpr returns an alloca pointer (ptr type)
+					mir::MIRValue *srcArray;
+					if (fieldValue->type == mir::MIRType::getPtr()) {
+						// fieldValue is a pointer - need to load
+						srcArray = builder->createLoad(arrayStructType, fieldValue, fieldName + ".src");
+					} else {
+						// fieldValue is already the loaded struct value
+						srcArray = fieldValue;
+					}
+					// Store it to the destination field first (copies the struct header)
+					builder->createStore(srcArray, fieldPtr);
+
+					// Now deep copy the buffer if it has data
+					// Get managed data from destination (fieldPtr)
+					mir::MIRValue *managedDataPtr = builder->createStructGEP(
+						arrayStructType, fieldPtr, 0, fieldName + ".managed");
+
+					// Load length
+					mir::MIRValue *lengthPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 1, fieldName + ".len.ptr");
+					mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt64(), lengthPtr, fieldName + ".len");
+					mir::MIRValue *capPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 2, fieldName + ".cap.ptr");
+
+					// Check if there's data to copy (length > 0)
+					mir::MIRFunction *currentFunc = builder->getFunction();
+					mir::MIRBasicBlock *copyBlock = currentFunc->createBasicBlock(fieldName + ".deepcopy");
+					mir::MIRBasicBlock *doneBlock = currentFunc->createBasicBlock(fieldName + ".done");
+
+					mir::MIRValue *hasData = builder->createICmpSGT(length, builder->getInt64(0), fieldName + ".hasdata");
+					builder->createCondBr(hasData, copyBlock, doneBlock);
+
+					// Copy block: allocate new buffer and copy data
+					builder->setInsertPoint(copyBlock);
+
+					// Get source buffer pointer
+					mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 0, fieldName + ".buf.ptr");
+					mir::MIRValue *srcBuffer = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, fieldName + ".srcbuf");
+
+					// Allocate new buffer
+					initHeapManagement();
+					mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+					mir::MIRValue *copySize = builder->createMul(length, builder->getInt64(elemSize), fieldName + ".copysize");
+					mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.deepcopy." + fieldName, "array deep copy");
+					mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {copySize, arrayTag}, fieldName + ".newbuf");
+
+					// Copy data
+					mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
+																		{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+					builder->createCall(memcpyFunc, {newBuffer, srcBuffer, copySize});
+
+					// Update the buffer pointer in the destination
+					builder->createStore(newBuffer, bufferPtr);
+
+					// Set capacity = length (new heap allocation)
+					builder->createStore(length, capPtr);
+
+					// After memcpy, we need to retain managed types in each element.
+					// If the element type contains strings or nested arrays, those need
+					// their refcounts incremented since we just copied pointers.
+					retainManagedTypesInArrayElements(elemType, newBuffer, length);
+
+					builder->createBr(doneBlock);
+
+					// Done block
+					builder->setInsertPoint(doneBlock);
 				} else {
 					// For struct types, generateExpr returns a pointer to an alloca
 					// We need to load the struct value and store it
@@ -368,6 +443,19 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 			// so the scope cleanup doesn't free the returned value's managed data
 			if (dynamic_cast<InterpolatedStringExprAST *>(retStmt->value.get())) {
 				transferManagedStringDataOwnership();
+			}
+
+			// For return expressions that are array variables, transfer ownership
+			// so the scope cleanup doesn't release the array buffer
+			if (auto *varExpr = dynamic_cast<VariableExprAST *>(retStmt->value.get())) {
+				std::string varType;
+				auto typeIt = variableTypes.find(varExpr->name);
+				if (typeIt != variableTypes.end()) {
+					varType = typeIt->second;
+				}
+				if (maxon::TypeConversion::isArrayStructType(varType)) {
+					transferArrayOwnership(varExpr->name);
+				}
 			}
 
 			// For struct types (like string), generateExpr returns an alloca pointer.

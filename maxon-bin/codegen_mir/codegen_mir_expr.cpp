@@ -2481,6 +2481,82 @@ mir::MIRValue *MIRCodeGenerator::generateStructLiteral(StructInitExprAST *struct
 				mir::MIRValue *fieldValue = generateExpr(valueExpr);
 				builder->createStore(fieldValue, fieldPtr);
 			}
+		} else if (maxon::TypeConversion::isArrayStructType(fieldTypeStr)) {
+			// array<T> struct field - need deep copy to avoid sharing the buffer pointer
+			// with the source array (which may be stack-allocated and will become invalid)
+			std::string elemType = maxon::TypeConversion::getArrayStructElementType(fieldTypeStr);
+			mir::MIRType *arrayStructType = getTypeFromString(fieldTypeStr);
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemType);
+			mir::MIRType *elemMirType = getTypeFromString(elemType);
+			int elemSize = static_cast<int>(elemMirType->getSizeInBytes());
+
+			mir::MIRValue *fieldValue = generateExpr(valueExpr);
+
+			// For variables, generateExpr returns a loaded value (struct type)
+			// For struct literals, generateExpr returns an alloca pointer (ptr type)
+			mir::MIRValue *srcArray;
+			if (fieldValue->type == mir::MIRType::getPtr()) {
+				// Value is an alloca pointer - need to load it
+				srcArray = builder->createLoad(arrayStructType, fieldValue, fieldName + ".load");
+			} else {
+				// Value is already the loaded struct - use directly
+				srcArray = fieldValue;
+			}
+			// Store the array struct to the destination field (copies the header)
+			builder->createStore(srcArray, fieldPtr);
+
+			// Now deep copy the buffer if it has data
+			// Get managed data from destination (fieldPtr)
+			mir::MIRValue *managedDataPtr = builder->createStructGEP(
+				arrayStructType, fieldPtr, 0, fieldName + ".managed");
+
+			// Load length
+			mir::MIRValue *lengthPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 1, fieldName + ".len.ptr");
+			mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt64(), lengthPtr, fieldName + ".len");
+			mir::MIRValue *capPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 2, fieldName + ".cap.ptr");
+
+			// Check if there's data to copy (length > 0)
+			mir::MIRFunction *currentFunc = builder->getFunction();
+			mir::MIRBasicBlock *copyBlock = currentFunc->createBasicBlock(fieldName + ".deepcopy");
+			mir::MIRBasicBlock *doneBlock = currentFunc->createBasicBlock(fieldName + ".done");
+
+			mir::MIRValue *hasData = builder->createICmpSGT(length, builder->getInt64(0), fieldName + ".hasdata");
+			builder->createCondBr(hasData, copyBlock, doneBlock);
+
+			// Copy block: allocate new buffer and copy data
+			builder->setInsertPoint(copyBlock);
+
+			// Get source buffer pointer
+			mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 0, fieldName + ".buf.ptr");
+			mir::MIRValue *srcBuffer = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, fieldName + ".srcbuf");
+
+			// Allocate new buffer
+			initHeapManagement();
+			mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+			mir::MIRValue *copySize = builder->createMul(length, builder->getInt64(elemSize), fieldName + ".copysize");
+			mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.structlit.deepcopy." + fieldName, "structlit array deep copy");
+			mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {copySize, arrayTag}, fieldName + ".newbuf");
+
+			// Copy data
+			mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
+																{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+			builder->createCall(memcpyFunc, {newBuffer, srcBuffer, copySize});
+
+			// Update the buffer pointer in the destination
+			builder->createStore(newBuffer, bufferPtr);
+
+			// Set capacity = length (new heap allocation)
+			builder->createStore(length, capPtr);
+
+			// After memcpy, we need to retain managed types in each element.
+			// If the element type contains strings or nested arrays, those need
+			// their refcounts incremented since we just copied pointers.
+			retainManagedTypesInArrayElements(elemType, newBuffer, length);
+
+			builder->createBr(doneBlock);
+
+			// Done block
+			builder->setInsertPoint(doneBlock);
 		} else {
 			// Regular field value
 			mir::MIRValue *fieldValue = generateExpr(valueExpr);

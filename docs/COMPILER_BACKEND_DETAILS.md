@@ -934,11 +934,61 @@ Winchester is dual-licensed under Apache 2.0 and MIT licenses, matching the Maxo
 
 ---
 
-**Last Updated:** 2025-12-14
-**Version:** Winchester 1.7
+**Last Updated:** 2025-12-15
+**Version:** Winchester 1.8
 **Maintainer:** Maxon Compiler Team
 
 ## Recent Changes
+
+### Winchester 1.8 (2025-12-15)
+
+**Critical Bug Fix: Array Deep Copy in Struct Literals:**
+
+Fixed use-after-free crashes when assigning array variables to struct fields in struct literals. This was blocking self-hosted compiler progress.
+
+**Root Cause:** When creating a struct literal like `Parser{tokens: tokens, pos: 0}` where `tokens` is an `array<Token>` parameter, the compiler was copying the `array<T>` struct header (including the `_buffer` pointer) without deep copying the buffer contents. For stack-allocated arrays (capacity = 0), the `_buffer` points to stack memory that becomes invalid when the source function returns.
+
+**Symptom:** Self-hosted compiler crashed with segfault when calling `functions.push(fn)` where `FunctionDecl` contains `array<Stmt>` and `array<Parameter>` fields. The arrays were created via struct literals and their buffers pointed to freed stack memory.
+
+**Fix:** Added deep copy logic in two code paths:
+
+1. **`generateStructLiteral()` in `codegen_mir_expr.cpp`** - For struct literals in variable declarations:
+   ```cpp
+   } else if (maxon::TypeConversion::isArrayStructType(fieldTypeStr)) {
+       // Store array struct header first
+       builder->createStore(srcArray, fieldPtr);
+       
+       // Check if length > 0
+       mir::MIRValue *hasData = builder->createICmpSGT(length, builder->getInt64(0));
+       builder->createCondBr(hasData, copyBlock, doneBlock);
+       
+       // In copyBlock: allocate new buffer, memcpy, update _buffer and _capacity
+       mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {copySize, tag});
+       builder->createCall(memcpyFunc, {newBuffer, srcBuffer, copySize});
+       builder->createStore(newBuffer, bufferPtrField);
+       builder->createStore(length, capacityField);  // capacity > 0 = heap-owned
+       
+       // Retain managed types in copied elements
+       retainManagedTypesInArrayElements(elemType, newBuffer, length);
+   }
+   ```
+
+2. **Return statement handling in `codegen_mir_stmt.cpp`** - For struct literals in return statements (already had similar logic, fixed to check pointer vs loaded value).
+
+**Key Insight:** After deep copy, `_capacity` is set to `length` (not 0) because:
+- The new buffer is heap-allocated and owned by this struct instance
+- Capacity > 0 signals heap ownership, ensuring proper cleanup via `_managed_array_release`
+
+**Files Changed:**
+- `codegen_mir_expr.cpp` - Added deep copy in `generateStructLiteral()` for `isArrayStructType` fields
+- `codegen_mir_stmt.cpp` - Fixed return statement struct literal handling to check `fieldValue->type == mir::MIRType::getPtr()` before loading
+
+**Documentation Updated:**
+- `MANAGED_ARRAYS.md` - Added "Array Fields in Struct Literals (Deep Copy Requirement)" section
+- `DEVELOPMENT_HISTORY.md` - Added fix to Post-History Notable Fixes
+- `SELF_HOSTING_PLAN.md` - Updated status and documented bootstrap compiler fix
+
+**Location:** [codegen_mir_expr.cpp:2484-2560](maxon-bin/codegen_mir/codegen_mir_expr.cpp#L2484-L2560)
 
 ### Winchester 1.7 (2025-12-14)
 

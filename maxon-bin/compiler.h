@@ -21,9 +21,9 @@ struct CompilationOptions {
 	bool debugInfo = false;
 	bool profile = false;
 	bool trackAllocs = false;  // Log memory allocations for debugging
-	bool showStats = false;    // Show compilation statistics
+	bool showStats = false;	   // Show compilation statistics
 	bool showProgress = false; // Show "Compiling:" and "Output:" messages (for build command)
-	int verboseLevel = 0;      // 0 = silent, 1 = progress, 2 = detailed, 3 = trace
+	int verboseLevel = 0;	   // 0 = silent, 1 = progress, 2 = detailed, 3 = trace
 };
 
 std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logger, CompilerStats *stats = nullptr);

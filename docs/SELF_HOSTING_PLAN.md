@@ -5,10 +5,32 @@
 The Maxon compiler is a well-architected, production-quality compiler with ~31,500 lines of C++ code. It features a complete compilation pipeline from source to native x86-64, a sophisticated MIR-based optimizer (10 optimization passes including Memory SSA), and generates PE/ELF binaries directly. With 88 backend tests passing and 55+ specification files, it's impressively complete for a young language.
 
 **Critical gaps preventing self-hosting:**
-1. **No dynamic data structures** (vectors, hash maps, dynamic strings)
-2. **No sum types/enums** (needed for AST representation)
-3. **No file I/O** (can't read source files)
-4. **Limited type system** (no generics, interfaces, or method syntax)
+1. ~~**No dynamic data structures** (vectors, hash maps, dynamic strings)~~ ✅ IMPLEMENTED
+2. **No sum types/enums** (needed for AST representation) - using int constants as workaround
+3. ~~**No file I/O** (can't read source files)~~ ✅ IMPLEMENTED
+4. ~~**Limited type system** (no generics, interfaces, or method syntax)~~ ✅ IMPLEMENTED
+
+---
+
+## Current Self-Hosting Status (December 2025)
+
+**Status: Lexer and Parser compiling and running!**
+
+The self-hosted compiler (`maxon-bin-selfhosted/`) can:
+- ✅ Compile successfully with the bootstrap compiler
+- ✅ Lex source files into tokens
+- ✅ Parse source files into AST (FunctionDecl with body array)
+- ✅ Push structs containing nested arrays into arrays (critical bug fixed)
+- 🔄 Semantic analysis in progress
+- ⏳ Code generation not yet started
+
+### Key Bootstrap Compiler Fixes (December 15, 2025)
+
+**Array Deep Copy in Struct Literals**: Fixed critical bug where assigning array variables to struct fields in struct literals caused use-after-free crashes. The `_buffer` pointer was being copied without deep copying the buffer contents, leading to dangling pointers when stack arrays went out of scope.
+
+Affected code paths:
+- `codegen_mir_expr.cpp` - `generateStructLiteral()` for variable declarations
+- `codegen_mir_stmt.cpp` - Return statement struct literal handling
 
 ---
 

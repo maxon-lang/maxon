@@ -323,6 +323,75 @@ Both array and string allocations are now fully tracked with reference counting.
 3. **Use after free**: Arrays are freed at scope exit - don't access after scope
 4. **Wrong element size**: Ensure correct element type is passed to builder
 
+## Array Fields in Struct Literals (Deep Copy Requirement)
+
+**Critical**: When assigning an array variable to a struct field in a struct literal, the compiler MUST perform a deep copy of the array buffer. Simply copying the `array<T>` struct (which includes the `_buffer` pointer) will cause use-after-free bugs.
+
+### The Problem
+
+```maxon
+function createParser(tokens array of Token) returns Parser
+    let result = Parser{tokens: tokens, pos: 0}  // BUG without deep copy!
+    return result
+end 'createParser'
+```
+
+Without deep copy:
+1. `tokens` parameter has a stack-allocated buffer (capacity = 0)
+2. `Parser{tokens: tokens, ...}` copies the struct, including the pointer to stack buffer
+3. When `createParser` returns, the stack buffer is invalidated
+4. The returned `Parser` now has a dangling `_buffer` pointer → crash
+
+### The Solution
+
+The compiler (`generateStructLiteral` in `codegen_mir_expr.cpp`) must:
+1. Store the array struct to copy the header
+2. Check if length > 0
+3. If so: allocate new heap buffer, memcpy data, update `_buffer` and `_capacity`
+4. Retain any managed types in copied elements (strings, nested arrays)
+
+```cpp
+// In generateStructLiteral for array<T> fields:
+} else if (maxon::TypeConversion::isArrayStructType(fieldTypeStr)) {
+    // 1. Store array struct to field (copies header including old _buffer ptr)
+    builder->createStore(srcArray, fieldPtr);
+    
+    // 2. Check if there's data to copy
+    mir::MIRValue *length = ...; // load from managed._len
+    mir::MIRValue *hasData = builder->createICmpSGT(length, builder->getInt64(0));
+    builder->createCondBr(hasData, copyBlock, doneBlock);
+    
+    // 3. Deep copy the buffer (in copyBlock)
+    mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {copySize, tag});
+    builder->createCall(memcpyFunc, {newBuffer, srcBuffer, copySize});
+    builder->createStore(newBuffer, bufferPtrField);  // Update _buffer
+    builder->createStore(length, capacityField);       // Set capacity = length (heap-owned)
+    
+    // 4. Retain managed types in elements
+    retainManagedTypesInArrayElements(elemType, newBuffer, length);
+}
+```
+
+### Why capacity = length After Copy
+
+After deep copying, we set `_capacity = length` (not 0) because:
+- The new buffer is heap-allocated (owned by this struct)
+- It must be freed when the struct is destroyed
+- Capacity > 0 signals heap ownership
+
+### Return Statement Handling
+
+The same deep copy logic exists in `codegen_mir_stmt.cpp` for return statements with struct literals:
+
+```maxon
+function createConfig() returns Config
+    var items = ["a", "b", "c"]
+    return Config{items: items}  // Deep copy happens here
+end 'createConfig'
+```
+
+Both code paths (`generateStructLiteral` and return statement handling) must implement deep copy for `array<T>` fields.
+
 ## Struct Field Arrays
 
 When a struct has an `array of T` field, special handling is required:

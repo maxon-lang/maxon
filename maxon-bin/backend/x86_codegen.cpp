@@ -997,6 +997,7 @@ void X86CodeGen::genStore(mir::MIRInstruction *inst) {
 	mir::MIRValue *value = inst->operands[0];
 	mir::MIRValue *ptr = inst->operands[1];
 
+
 	// Defensive check: structs with fields should have non-zero size
 	if (value->type->isStruct() && !value->type->getFieldTypes().empty() && value->type->getSizeInBytes() == 0) {
 		throw std::runtime_error("genStore: struct '" + value->type->structName +

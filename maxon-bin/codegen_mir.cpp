@@ -758,6 +758,19 @@ void MIRCodeGenerator::transferManagedStringDataOwnership() {
 	}
 }
 
+void MIRCodeGenerator::transferArrayOwnership(const std::string &varName) {
+	// When returning an array variable, we need to transfer ownership to the caller.
+	// Remove the array from heapAllocatedArrays in all scopes to prevent scope cleanup
+	// from releasing the buffer (which would free memory the caller still needs).
+	for (auto &scope : scopeStack) {
+		auto &arrays = scope.heapAllocatedArrays;
+		arrays.erase(
+			std::remove_if(arrays.begin(), arrays.end(),
+						   [&varName](const HeapArrayInfo &info) { return info.name == varName; }),
+			arrays.end());
+	}
+}
+
 //==============================================================================
 // Alloca Helper
 //==============================================================================
