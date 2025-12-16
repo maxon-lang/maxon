@@ -16,7 +16,7 @@
 #ifdef MAXON_HAS_CODEGEN
 #include "backend/x86_codegen.h"
 #include "backend/x86_disassembler.h"
-#include "codegen_mir.h"
+#include "codegen_ng.h"
 #include "mir/optimizer.h"
 #endif
 

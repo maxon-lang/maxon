@@ -69,23 +69,12 @@ set(SOURCES
     parser/parser_decl.cpp
     # Incremental parsing support
     incremental_parser.cpp
-    # MIR-based code generator
-    codegen_mir.cpp
-    codegen_mir/codegen_mir_expr.cpp
-    codegen_mir/codegen_mir_expr_string.cpp
-    codegen_mir/codegen_mir_optional.cpp
-    codegen_mir/codegen_mir_stmt.cpp
-    codegen_mir/codegen_mir_stmt_decl.cpp
-    codegen_mir/codegen_mir_stmt_assign.cpp
-    codegen_mir/codegen_mir_stmt_loop.cpp
-    codegen_mir/codegen_mir_function.cpp
-    codegen_mir/codegen_mir_output.cpp
-    codegen_mir/codegen_mir_safeffi.cpp
-    codegen_mir/intrinsic_codegen.cpp
-    codegen_mir/codegen_mir_managed_array.cpp
-    codegen_mir/codegen_mir_intrinsics.cpp
-    codegen_mir/managed_string_builder.cpp
-    codegen_mir/managed_array_builder.cpp
+    # MIR-based code generator (next generation)
+    codegen_ng.cpp
+    codegen_ng/codegen_ng_expr.cpp
+    codegen_ng/codegen_ng_stmt.cpp
+    codegen_ng/codegen_ng_function.cpp
+    codegen_ng/codegen_ng_output.cpp
     # MIR infrastructure
     mir/mir.cpp
     mir/mir_builder.cpp

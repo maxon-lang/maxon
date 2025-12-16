@@ -2,7 +2,7 @@
 
 #include "ast.h"
 #include "call_graph.h"
-#include "codegen_mir.h"
+#include "codegen_ng.h"
 #include "compiler_stats.h"
 #include "error_formatter.h"
 #include "lexer.h"
