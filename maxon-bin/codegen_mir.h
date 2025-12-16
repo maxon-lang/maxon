@@ -182,6 +182,7 @@ class MIRCodeGenerator {
 		std::vector<std::pair<std::string, mir::MIRValue *>> substringAllocas;		// Substring struct allocas (need parent release)
 		std::vector<std::pair<std::string, mir::MIRValue *>> cstringAllocas;		// Cstring struct allocas (need managed release)
 		std::vector<std::pair<std::string, mir::MIRValue *>> stringVariables;		// String var allocas (read current buffer at cleanup)
+		std::vector<std::pair<std::string, mir::MIRValue *>> characterVariables;	// Character var allocas (need metadata free)
 		std::vector<ManagedStructInfo> managedStructs;								// Structs with managed fields (arrays, strings)
 	};
 	std::vector<ScopeInfo> scopeStack;

@@ -21,6 +21,8 @@ ExitCode: 0
 @.chr.1 = constant [3 x i8] c"\C3\A9\00"
 @.__tag.char.meta = constant [14 x i8] c"char metadata\00"
 @.chr.2 = constant [3 x i8] c"\C3\A9\00"
+@.__tag.free.meta.a = constant [14 x i8] c"char metadata\00"
+@.__tag.free.meta.b = constant [14 x i8] c"char metadata\00"
 
 define i64 @main() {
 entry0:
@@ -50,13 +52,19 @@ entry0:
   store i64 0, ptr %14
   %15 = getelementptr %character, ptr %8, i32 0, i32 0
   store ptr %9, ptr %15
+  %21 = getelementptr %character, ptr %0, i32 0, i32 0
+  %22 = load ptr, ptr %21
+  %23 = getelementptr %character, ptr %8, i32 0, i32 0
+  %24 = load ptr, ptr %23
+  %25 = call i1 @string.equalsManagedString(ptr %22, ptr %24)
+  br i1 %25, label %then1, label %ifcont2
+then1:
   %17 = getelementptr %character, ptr %0, i32 0, i32 0
   %18 = load ptr, ptr %17
+  call void @free(ptr %18, ptr @.__tag.free.meta.a)
   %19 = getelementptr %character, ptr %8, i32 0, i32 0
   %20 = load ptr, ptr %19
-  %21 = call i1 @string.equalsManagedString(ptr %18, ptr %20)
-  br i1 %21, label %then1, label %ifcont2
-then1:
+  call void @free(ptr %20, ptr @.__tag.free.meta.b)
   ret i64 0
 ifcont2:
   ret i64 1
@@ -110,6 +118,8 @@ ifcont2:
 
 declare ptr @malloc(i64 %arg0, ptr %arg1)
 
+declare void @free(ptr %arg0, ptr %arg1)
+
 declare void @exit(i32 %arg0)
 
 define void @_start() {
@@ -129,6 +139,8 @@ entry0:
 @.chr.1 = constant [3 x i8] c"\C3\A9\00"
 @.__tag.char.meta = constant [14 x i8] c"char metadata\00"
 @.chr.2 = constant [3 x i8] c"\C3\A9\00"
+@.__tag.free.meta.a = constant [14 x i8] c"char metadata\00"
+@.__tag.free.meta.b = constant [14 x i8] c"char metadata\00"
 
 define i1 @character.equals(ptr %self, ptr %other) {
 entry0:
@@ -177,6 +189,12 @@ entry0:
   %16 = call i1 @character.equals(ptr %0, ptr %8)
   br i1 %16, label %then1, label %ifcont2
 then1:
+  %17 = getelementptr %character, ptr %0, i32 0, i32 0
+  %18 = load ptr, ptr %17
+  call void @free(ptr %18, ptr @.__tag.free.meta.a)
+  %19 = getelementptr %character, ptr %8, i32 0, i32 0
+  %20 = load ptr, ptr %19
+  call void @free(ptr %20, ptr @.__tag.free.meta.b)
   ret i64 0
 ifcont2:
   ret i64 1
@@ -262,6 +280,8 @@ ifcont2:
 }
 
 declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

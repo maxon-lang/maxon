@@ -25,6 +25,7 @@ Stdout: 3
 @.chr.1 = constant [4 x i8] c"\E4\B8\AD\00"
 @.__tag.char.meta = constant [14 x i8] c"char metadata\00"
 @.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
+@.__tag.free.meta.c = constant [14 x i8] c"char metadata\00"
 @.str.sso.2 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
 @.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
@@ -100,17 +101,20 @@ entry0:
   %8 = call %ByteView @character.bytes(ptr %0)
   %9 = alloca %ByteView
   store %ByteView %8, ptr %9
-  %18 = getelementptr %ByteView, ptr %9, i32 0, i32 0
-  %19 = load ptr, ptr %18
-  %20 = getelementptr %__ManagedStringData, ptr %19, i32 0, i32 1
-  %21 = load i64, ptr %20
-  %11 = call %string @__int_toString(i64 %21, ptr null)
+  %20 = getelementptr %ByteView, ptr %9, i32 0, i32 0
+  %21 = load ptr, ptr %20
+  %22 = getelementptr %__ManagedStringData, ptr %21, i32 0, i32 1
+  %23 = load i64, ptr %22
+  %11 = call %string @__int_toString(i64 %23, ptr null)
   %12 = alloca %string
   store %string %11, ptr %12
   %13 = getelementptr %string, ptr %12, i32 0, i32 0
   %14 = load ptr, ptr %13
   %16 = call i64 @sys.print(ptr %12)
   call void @free(ptr %14, ptr @.__tag.free.meta.interp.input)
+  %18 = getelementptr %character, ptr %0, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  call void @free(ptr %19, ptr @.__tag.free.meta.c)
   ret i64 0
 }
 
@@ -212,6 +216,7 @@ entry0:
 @.chr.1 = constant [4 x i8] c"\E4\B8\AD\00"
 @.__tag.char.meta = constant [14 x i8] c"char metadata\00"
 @.__tag.free.meta.interp.input = constant [16 x i8] c"string metadata\00"
+@.__tag.free.meta.c = constant [14 x i8] c"char metadata\00"
 @.str.sso.2 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
 @.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
@@ -316,6 +321,9 @@ entry0:
   %16 = call i64 @sys.print(ptr %12)
   %17 = load ptr, ptr %15
   call void @free(ptr %17, ptr @.__tag.free.meta.interp.input)
+  %18 = getelementptr %character, ptr %0, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  call void @free(ptr %19, ptr @.__tag.free.meta.c)
   ret i64 0
 }
 

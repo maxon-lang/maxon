@@ -456,6 +456,13 @@ bool MIRCodeGenerator::tryGenerateCharLiteralDecl(const DeclInfo &decl) {
 
 	namedValues[decl.name] = charAlloca;
 	variableTypes[decl.name] = "character";
+
+	// Track character for cleanup - the __ManagedStringData metadata needs to be freed
+	// Note: __character_toString now allocates its own metadata, so no double-free risk
+	if (!scopeStack.empty()) {
+		scopeStack.back().characterVariables.push_back({decl.name, charAlloca});
+	}
+
 	return true;
 }
 
@@ -615,6 +622,16 @@ void MIRCodeGenerator::generateSimpleDecl(const DeclInfo &decl, mir::MIRValue *i
 
 	namedValues[decl.name] = alloca;
 	trackDeclTypeInfo(decl, alloca, allocaType);
+
+	// Track structs with managed fields (sets, maps, user structs with arrays/strings)
+	// This handles cases like: var s = return_set() where the returned value needs cleanup
+	if (allocaType->kind == mir::MIRTypeKind::Struct && !allocaType->structName.empty()) {
+		if (structHasManagedFields(allocaType->structName)) {
+			if (!scopeStack.empty()) {
+				scopeStack.back().managedStructs.push_back({decl.name, alloca, allocaType->structName});
+			}
+		}
+	}
 }
 
 void MIRCodeGenerator::trackDeclTypeInfo(const DeclInfo &decl, mir::MIRValue *alloca, mir::MIRType *allocaType) {

@@ -1144,11 +1144,13 @@ byte_write_null:
 
 ;==============================================================================
 ; __character_toString - Convert character to Maxon string
-; A character already has a pointer to __ManagedStringData containing its bytes.
-; We just need to wrap that in a string struct.
+; Allocates a NEW __ManagedStringData struct for the result to avoid
+; sharing the metadata pointer with the character (which would cause double-free).
 ; %string __character_toString(%character value, ptr spec)
 ; Note: spec is currently ignored (format specifiers not yet implemented)
 ;==============================================================================
+@.__tag.char_tostring = constant [15 x i8] c"char.toString\00"
+
 define %string @__character_toString(%character %value, ptr %spec) {
 entry:
     ; Extract the managed data pointer from the character struct
@@ -1156,13 +1158,38 @@ entry:
     %char_alloca = alloca %character
     store %character %value, ptr %char_alloca
     %managed_ptr_loc = getelementptr %character, ptr %char_alloca, i32 0, i32 0
-    %managed = load ptr, ptr %managed_ptr_loc
+    %char_managed = load ptr, ptr %managed_ptr_loc
 
-    ; Create string struct with the same managed data
+    ; Read the character's buffer pointer and length
+    %char_buf_ptr = getelementptr %__ManagedStringData, ptr %char_managed, i32 0, i32 0
+    %char_buf_arr = getelementptr %_ManagedArray_byte, ptr %char_buf_ptr, i32 0, i32 0
+    %char_data = load ptr, ptr %char_buf_arr
+    %char_len_ptr = getelementptr %__ManagedStringData, ptr %char_managed, i32 0, i32 1
+    %char_len = load i64, ptr %char_len_ptr
+
+    ; Allocate a NEW managed data struct for the string result
+    %new_managed = call ptr @malloc(i64 32, ptr @.__tag.char_tostring)
+
+    ; Copy buffer pointer (points to same constant data - no need to copy bytes)
+    %new_buf_ptr = getelementptr %__ManagedStringData, ptr %new_managed, i32 0, i32 0
+    %new_buf_arr = getelementptr %_ManagedArray_byte, ptr %new_buf_ptr, i32 0, i32 0
+    store ptr %char_data, ptr %new_buf_arr
+    %new_buf_len = getelementptr %_ManagedArray_byte, ptr %new_buf_ptr, i32 0, i32 1
+    store i64 %char_len, ptr %new_buf_len
+
+    ; Set length
+    %new_len = getelementptr %__ManagedStringData, ptr %new_managed, i32 0, i32 1
+    store i64 %char_len, ptr %new_len
+
+    ; Set capacity to 0 (constant data, no heap buffer to free)
+    %new_cap = getelementptr %__ManagedStringData, ptr %new_managed, i32 0, i32 2
+    store i64 0, ptr %new_cap
+
+    ; Create string struct with the NEW managed data
     ; string = { ptr, i64 } where ptr is __ManagedStringData, i64 is _iterPos
     %result_str = alloca %string
     %str_managed = getelementptr %string, ptr %result_str, i32 0, i32 0
-    store ptr %managed, ptr %str_managed
+    store ptr %new_managed, ptr %str_managed
     %str_iterpos = getelementptr %string, ptr %result_str, i32 0, i32 1
     store i64 0, ptr %str_iterpos
 

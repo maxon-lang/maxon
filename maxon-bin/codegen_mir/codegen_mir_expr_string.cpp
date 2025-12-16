@@ -539,6 +539,11 @@ mir::MIRValue *MIRCodeGenerator::generateCharLiteral(CharacterExprAST *charExpr)
 	mir::MIRValue *managedFieldPtr = builder->createStructGEP(charType, charAlloca, 0, "char._managed");
 	builder->createStore(managedDataAlloca, managedFieldPtr);
 
+	// Note: We don't track temporary characters here because:
+	// - If assigned to a variable: tryGenerateCharLiteralDecl tracks it
+	// - Temporary characters (e.g., from string iteration) use a different codepath
+	// Tracking here would cause double-free for declared variables
+
 	// Return the alloca pointer
 	return charAlloca;
 }

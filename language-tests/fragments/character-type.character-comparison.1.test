@@ -21,6 +21,8 @@ ExitCode: 1
 @.chr.1 = constant [2 x i8] c"A\00"
 @.__tag.char.meta = constant [14 x i8] c"char metadata\00"
 @.chr.2 = constant [2 x i8] c"B\00"
+@.__tag.free.meta.a = constant [14 x i8] c"char metadata\00"
+@.__tag.free.meta.b = constant [14 x i8] c"char metadata\00"
 
 define i64 @main() {
 entry0:
@@ -67,12 +69,20 @@ entry0:
   %30 = icmp slt i32 %22, %29
   br i1 %30, label %then1, label %ifcont2
 then1:
+  %31 = getelementptr %character, ptr %0, i32 0, i32 0
+  %32 = load ptr, ptr %31
+  call void @free(ptr %32, ptr @.__tag.free.meta.a)
+  %33 = getelementptr %character, ptr %8, i32 0, i32 0
+  %34 = load ptr, ptr %33
+  call void @free(ptr %34, ptr @.__tag.free.meta.b)
   ret i64 1
 ifcont2:
   ret i64 0
 }
 
 declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -93,6 +103,8 @@ entry0:
 @.chr.1 = constant [2 x i8] c"A\00"
 @.__tag.char.meta = constant [14 x i8] c"char metadata\00"
 @.chr.2 = constant [2 x i8] c"B\00"
+@.__tag.free.meta.a = constant [14 x i8] c"char metadata\00"
+@.__tag.free.meta.b = constant [14 x i8] c"char metadata\00"
 
 define i64 @main() {
 entry0:
@@ -139,12 +151,20 @@ entry0:
   %30 = icmp slt i32 %22, %29
   br i1 %30, label %then1, label %ifcont2
 then1:
+  %31 = getelementptr %character, ptr %0, i32 0, i32 0
+  %32 = load ptr, ptr %31
+  call void @free(ptr %32, ptr @.__tag.free.meta.a)
+  %33 = getelementptr %character, ptr %8, i32 0, i32 0
+  %34 = load ptr, ptr %33
+  call void @free(ptr %34, ptr @.__tag.free.meta.b)
   ret i64 1
 ifcont2:
   ret i64 0
 }
 
 declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

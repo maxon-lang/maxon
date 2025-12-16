@@ -36,6 +36,8 @@ ExitCode: 16
 @.__tag.free.newStates = constant [14 x i8] c"array cleanup\00"
 @.str.sso.1 = constant [2 x i8] c"a\00"
 @.str.sso.2 = constant [2 x i8] c"b\00"
+@.__tag.free.m.keys.str = constant [14 x i8] c"string buffer\00"
+@.__tag.free.m.keys.meta = constant [16 x i8] c"string metadata\00"
 @.__tag.free.m.keys = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.m.values = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.m.states = constant [14 x i8] c"array cleanup\00"
@@ -111,8 +113,8 @@ entry0:
   %34 = call %map<string,int> @map<string,int>.init(ptr %0, ptr %1)
   %35 = alloca %map<string,int>
   store %map<string,int> %34, ptr %35
-  %58 = getelementptr %map<string,int>, ptr %35, i32 0, i32 4
-  %59 = load i64, ptr %58
+  %76 = getelementptr %map<string,int>, ptr %35, i32 0, i32 4
+  %77 = load i64, ptr %76
   %37 = getelementptr %map<string,int>, ptr %35, i32 0, i32 0
   %38 = getelementptr %array<string>, ptr %37, i32 0, i32 0
   %39 = getelementptr %__ManagedArrayData_string, ptr %38, i32 0, i32 0
@@ -122,34 +124,65 @@ entry0:
   %43 = icmp sgt i64 %42, 0
   br i1 %43, label %m.keys.release1, label %m.keys.skip2
 m.keys.release1:
+  %44 = getelementptr %__ManagedArrayData_string, ptr %38, i32 0, i32 1
+  %45 = load i64, ptr %44
+  br label %m.keys.str.loop.header3
+m.keys.skip2:
+  %60 = getelementptr %map<string,int>, ptr %35, i32 0, i32 1
+  %61 = getelementptr %array<int>, ptr %60, i32 0, i32 0
+  %62 = getelementptr %__ManagedArrayData_int, ptr %61, i32 0, i32 0
+  %63 = load ptr, ptr %62
+  %64 = getelementptr %__ManagedArrayData_int, ptr %61, i32 0, i32 2
+  %65 = load i64, ptr %64
+  %66 = icmp sgt i64 %65, 0
+  br i1 %66, label %m.values.release10, label %m.values.skip11
+m.keys.str.loop.header3:
+  %75 = phi i64 [ 0, %m.keys.release1 ], [ %59, %m.keys.str.next7 ]
+  %48 = icmp slt i64 %75, %45
+  br i1 %48, label %m.keys.str.loop.body4, label %m.keys.str.loop.end5
+m.keys.str.loop.body4:
+  %49 = getelementptr %string, ptr %40, i64 %75
+  %50 = getelementptr %string, ptr %49, i32 0, i32 0
+  %51 = load ptr, ptr %50
+  %52 = icmp ne ptr %51, null
+  br i1 %52, label %m.keys.str.release6, label %m.keys.str.next7
+m.keys.str.loop.end5:
   call void @_managed_array_release(ptr %40, ptr @.__tag.free.m.keys)
   br label %m.keys.skip2
-m.keys.skip2:
-  %44 = getelementptr %map<string,int>, ptr %35, i32 0, i32 1
-  %45 = getelementptr %array<int>, ptr %44, i32 0, i32 0
-  %46 = getelementptr %__ManagedArrayData_int, ptr %45, i32 0, i32 0
-  %47 = load ptr, ptr %46
-  %48 = getelementptr %__ManagedArrayData_int, ptr %45, i32 0, i32 2
-  %49 = load i64, ptr %48
-  %50 = icmp sgt i64 %49, 0
-  br i1 %50, label %m.values.release3, label %m.values.skip4
-m.values.release3:
-  call void @_managed_array_release(ptr %47, ptr @.__tag.free.m.values)
-  br label %m.values.skip4
-m.values.skip4:
-  %51 = getelementptr %map<string,int>, ptr %35, i32 0, i32 2
-  %52 = getelementptr %array<byte>, ptr %51, i32 0, i32 0
-  %53 = getelementptr %__ManagedArrayData_byte, ptr %52, i32 0, i32 0
-  %54 = load ptr, ptr %53
-  %55 = getelementptr %__ManagedArrayData_byte, ptr %52, i32 0, i32 2
-  %56 = load i64, ptr %55
-  %57 = icmp sgt i64 %56, 0
-  br i1 %57, label %m.states.release5, label %m.states.skip6
-m.states.release5:
-  call void @_managed_array_release(ptr %54, ptr @.__tag.free.m.states)
-  br label %m.states.skip6
-m.states.skip6:
-  ret i64 %59
+m.keys.str.release6:
+  %53 = getelementptr %__ManagedStringData, ptr %51, i32 0, i32 2
+  %54 = load i64, ptr %53
+  %55 = icmp sgt i64 %54, 0
+  br i1 %55, label %m.keys.str.buf.release8, label %m.keys.str.meta.free9
+m.keys.str.next7:
+  %59 = add i64 %75, 1
+  br label %m.keys.str.loop.header3
+m.keys.str.buf.release8:
+  %56 = getelementptr %__ManagedStringData, ptr %51, i32 0, i32 0
+  %57 = getelementptr %_ManagedArray_byte, ptr %56, i32 0, i32 0
+  %58 = load ptr, ptr %57
+  call void @_managed_string_release(ptr %58, ptr @.__tag.free.m.keys.str)
+  br label %m.keys.str.meta.free9
+m.keys.str.meta.free9:
+  call void @free(ptr %51, ptr @.__tag.free.m.keys.meta)
+  br label %m.keys.str.next7
+m.values.release10:
+  call void @_managed_array_release(ptr %63, ptr @.__tag.free.m.values)
+  br label %m.values.skip11
+m.values.skip11:
+  %67 = getelementptr %map<string,int>, ptr %35, i32 0, i32 2
+  %68 = getelementptr %array<byte>, ptr %67, i32 0, i32 0
+  %69 = getelementptr %__ManagedArrayData_byte, ptr %68, i32 0, i32 0
+  %70 = load ptr, ptr %69
+  %71 = getelementptr %__ManagedArrayData_byte, ptr %68, i32 0, i32 2
+  %72 = load i64, ptr %71
+  %73 = icmp sgt i64 %72, 0
+  br i1 %73, label %m.states.release12, label %m.states.skip13
+m.states.release12:
+  call void @_managed_array_release(ptr %70, ptr @.__tag.free.m.states)
+  br label %m.states.skip13
+m.states.skip13:
+  ret i64 %77
 }
 
 define i64 @string.hashManagedStringRange(ptr %managed, i64 %offset, i64 %len) {
@@ -226,6 +259,8 @@ declare void @_managed_string_retain(ptr %arg0)
 
 declare ptr @malloc(i64 %arg0, ptr %arg1)
 
+declare void @free(ptr %arg0, ptr %arg1)
+
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
@@ -233,6 +268,8 @@ declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 define %map<string,int> @map<string,int>.init(ptr %managedKeys, ptr %managedValues) {
 entry0:
@@ -824,6 +861,8 @@ entry0:
 @.__tag.free.newStates = constant [14 x i8] c"array cleanup\00"
 @.str.sso.1 = constant [2 x i8] c"a\00"
 @.str.sso.2 = constant [2 x i8] c"b\00"
+@.__tag.free.m.keys.str = constant [14 x i8] c"string buffer\00"
+@.__tag.free.m.keys.meta = constant [16 x i8] c"string metadata\00"
 @.__tag.free.m.keys = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.m.values = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.m.states = constant [14 x i8] c"array cleanup\00"
@@ -926,33 +965,67 @@ entry0:
   %43 = icmp sgt i64 %42, 0
   br i1 %43, label %m.keys.release1, label %m.keys.skip2
 m.keys.release1:
+  %44 = getelementptr %__ManagedArrayData_string, ptr %38, i32 0, i32 1
+  %45 = load i64, ptr %44
+  %46 = alloca i64
+  store i64 0, ptr %46
+  br label %m.keys.str.loop.header3
+m.keys.skip2:
+  %60 = getelementptr %map<string,int>, ptr %35, i32 0, i32 1
+  %61 = getelementptr %array<int>, ptr %60, i32 0, i32 0
+  %62 = getelementptr %__ManagedArrayData_int, ptr %61, i32 0, i32 0
+  %63 = load ptr, ptr %62
+  %64 = getelementptr %__ManagedArrayData_int, ptr %61, i32 0, i32 2
+  %65 = load i64, ptr %64
+  %66 = icmp sgt i64 %65, 0
+  br i1 %66, label %m.values.release10, label %m.values.skip11
+m.keys.str.loop.header3:
+  %47 = load i64, ptr %46
+  %48 = icmp slt i64 %47, %45
+  br i1 %48, label %m.keys.str.loop.body4, label %m.keys.str.loop.end5
+m.keys.str.loop.body4:
+  %49 = getelementptr %string, ptr %40, i64 %47
+  %50 = getelementptr %string, ptr %49, i32 0, i32 0
+  %51 = load ptr, ptr %50
+  %52 = icmp ne ptr %51, null
+  br i1 %52, label %m.keys.str.release6, label %m.keys.str.next7
+m.keys.str.loop.end5:
   call void @_managed_array_release(ptr %40, ptr @.__tag.free.m.keys)
   br label %m.keys.skip2
-m.keys.skip2:
-  %44 = getelementptr %map<string,int>, ptr %35, i32 0, i32 1
-  %45 = getelementptr %array<int>, ptr %44, i32 0, i32 0
-  %46 = getelementptr %__ManagedArrayData_int, ptr %45, i32 0, i32 0
-  %47 = load ptr, ptr %46
-  %48 = getelementptr %__ManagedArrayData_int, ptr %45, i32 0, i32 2
-  %49 = load i64, ptr %48
-  %50 = icmp sgt i64 %49, 0
-  br i1 %50, label %m.values.release3, label %m.values.skip4
-m.values.release3:
-  call void @_managed_array_release(ptr %47, ptr @.__tag.free.m.values)
-  br label %m.values.skip4
-m.values.skip4:
-  %51 = getelementptr %map<string,int>, ptr %35, i32 0, i32 2
-  %52 = getelementptr %array<byte>, ptr %51, i32 0, i32 0
-  %53 = getelementptr %__ManagedArrayData_byte, ptr %52, i32 0, i32 0
-  %54 = load ptr, ptr %53
-  %55 = getelementptr %__ManagedArrayData_byte, ptr %52, i32 0, i32 2
-  %56 = load i64, ptr %55
-  %57 = icmp sgt i64 %56, 0
-  br i1 %57, label %m.states.release5, label %m.states.skip6
-m.states.release5:
-  call void @_managed_array_release(ptr %54, ptr @.__tag.free.m.states)
-  br label %m.states.skip6
-m.states.skip6:
+m.keys.str.release6:
+  %53 = getelementptr %__ManagedStringData, ptr %51, i32 0, i32 2
+  %54 = load i64, ptr %53
+  %55 = icmp sgt i64 %54, 0
+  br i1 %55, label %m.keys.str.buf.release8, label %m.keys.str.meta.free9
+m.keys.str.next7:
+  %59 = add i64 %47, 1
+  store i64 %59, ptr %46
+  br label %m.keys.str.loop.header3
+m.keys.str.buf.release8:
+  %56 = getelementptr %__ManagedStringData, ptr %51, i32 0, i32 0
+  %57 = getelementptr %_ManagedArray_byte, ptr %56, i32 0, i32 0
+  %58 = load ptr, ptr %57
+  call void @_managed_string_release(ptr %58, ptr @.__tag.free.m.keys.str)
+  br label %m.keys.str.meta.free9
+m.keys.str.meta.free9:
+  call void @free(ptr %51, ptr @.__tag.free.m.keys.meta)
+  br label %m.keys.str.next7
+m.values.release10:
+  call void @_managed_array_release(ptr %63, ptr @.__tag.free.m.values)
+  br label %m.values.skip11
+m.values.skip11:
+  %67 = getelementptr %map<string,int>, ptr %35, i32 0, i32 2
+  %68 = getelementptr %array<byte>, ptr %67, i32 0, i32 0
+  %69 = getelementptr %__ManagedArrayData_byte, ptr %68, i32 0, i32 0
+  %70 = load ptr, ptr %69
+  %71 = getelementptr %__ManagedArrayData_byte, ptr %68, i32 0, i32 2
+  %72 = load i64, ptr %71
+  %73 = icmp sgt i64 %72, 0
+  br i1 %73, label %m.states.release12, label %m.states.skip13
+m.states.release12:
+  call void @_managed_array_release(ptr %70, ptr @.__tag.free.m.states)
+  br label %m.states.skip13
+m.states.skip13:
   ret i64 %36
 }
 
@@ -1096,6 +1169,8 @@ declare void @_managed_string_retain(ptr %arg0)
 
 declare ptr @malloc(i64 %arg0, ptr %arg1)
 
+declare void @free(ptr %arg0, ptr %arg1)
+
 declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
@@ -1103,6 +1178,8 @@ declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 declare f64 @trunc(f64 %arg0)
 

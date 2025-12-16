@@ -27,6 +27,7 @@ ExitCode: 0
 @.chr.4 = constant [2 x i8] c"A\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
 @.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
+@.__tag.free.meta.c = constant [14 x i8] c"char metadata\00"
 
 define i64 @main() {
 entry0:
@@ -73,11 +74,11 @@ entry0:
   store ptr %18, ptr %24
   %25 = getelementptr %string, ptr %17, i32 0, i32 1
   store i64 0, ptr %25
-  %45 = getelementptr %string, ptr %0, i32 0, i32 0
-  %46 = load ptr, ptr %45
-  %47 = getelementptr %string, ptr %17, i32 0, i32 0
+  %47 = getelementptr %string, ptr %0, i32 0, i32 0
   %48 = load ptr, ptr %47
-  %49 = call i1 @string.equalsManagedString(ptr %46, ptr %48)
+  %49 = getelementptr %string, ptr %17, i32 0, i32 0
+  %50 = load ptr, ptr %49
+  %51 = call i1 @string.equalsManagedString(ptr %48, ptr %50)
   %27 = alloca %character
   %28 = call ptr @malloc(i64 32, ptr @.__tag.char.meta)
   %29 = getelementptr %__ManagedStringData, ptr %28, i32 0, i32 0
@@ -91,12 +92,12 @@ entry0:
   store i64 0, ptr %33
   %34 = getelementptr %character, ptr %27, i32 0, i32 0
   store ptr %28, ptr %34
-  %50 = getelementptr %character, ptr %9, i32 0, i32 0
-  %51 = load ptr, ptr %50
-  %52 = getelementptr %character, ptr %27, i32 0, i32 0
+  %52 = getelementptr %character, ptr %9, i32 0, i32 0
   %53 = load ptr, ptr %52
-  %54 = call i1 @string.equalsManagedString(ptr %51, ptr %53)
-  %36 = and i1 %49, %54
+  %54 = getelementptr %character, ptr %27, i32 0, i32 0
+  %55 = load ptr, ptr %54
+  %56 = call i1 @string.equalsManagedString(ptr %53, ptr %55)
+  %36 = and i1 %51, %56
   br i1 %36, label %then1, label %ifcont2
 then1:
   %37 = getelementptr %string, ptr %0, i32 0, i32 0
@@ -115,6 +116,9 @@ s.var.release3:
   br label %s.var.continue4
 s.var.continue4:
   call void @free(ptr %38, ptr @.__tag.free.meta.s)
+  %45 = getelementptr %character, ptr %9, i32 0, i32 0
+  %46 = load ptr, ptr %45
+  call void @free(ptr %46, ptr @.__tag.free.meta.c)
   ret i64 0
 }
 
@@ -195,6 +199,7 @@ entry0:
 @.chr.4 = constant [2 x i8] c"A\00"
 @.__tag.free.s = constant [15 x i8] c"string literal\00"
 @.__tag.free.meta.s = constant [16 x i8] c"string metadata\00"
+@.__tag.free.meta.c = constant [14 x i8] c"char metadata\00"
 
 define i1 @character.equals(ptr %self, ptr %other) {
 entry0:
@@ -307,6 +312,9 @@ s.var.release3:
   br label %s.var.continue4
 s.var.continue4:
   call void @free(ptr %38, ptr @.__tag.free.meta.s)
+  %45 = getelementptr %character, ptr %9, i32 0, i32 0
+  %46 = load ptr, ptr %45
+  call void @free(ptr %46, ptr @.__tag.free.meta.c)
   ret i64 0
 }
 

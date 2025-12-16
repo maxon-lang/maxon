@@ -21,6 +21,8 @@ ExitCode: 0
 @.chr.1 = constant [3 x i8] c"\C3\A9\00"
 @.__tag.char.meta = constant [14 x i8] c"char metadata\00"
 @.chr.2 = constant [3 x i8] c"\C3\A8\00"
+@.__tag.free.meta.a = constant [14 x i8] c"char metadata\00"
+@.__tag.free.meta.b = constant [14 x i8] c"char metadata\00"
 
 define i64 @main() {
 entry0:
@@ -50,14 +52,20 @@ entry0:
   store i64 0, ptr %14
   %15 = getelementptr %character, ptr %8, i32 0, i32 0
   store ptr %9, ptr %15
-  %18 = getelementptr %character, ptr %0, i32 0, i32 0
-  %19 = load ptr, ptr %18
-  %20 = getelementptr %character, ptr %8, i32 0, i32 0
-  %21 = load ptr, ptr %20
-  %22 = call i1 @string.equalsManagedString(ptr %19, ptr %21)
-  %17 = icmp eq i1 %22, 0
+  %22 = getelementptr %character, ptr %0, i32 0, i32 0
+  %23 = load ptr, ptr %22
+  %24 = getelementptr %character, ptr %8, i32 0, i32 0
+  %25 = load ptr, ptr %24
+  %26 = call i1 @string.equalsManagedString(ptr %23, ptr %25)
+  %17 = icmp eq i1 %26, 0
   br i1 %17, label %then1, label %ifcont2
 then1:
+  %18 = getelementptr %character, ptr %0, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  call void @free(ptr %19, ptr @.__tag.free.meta.a)
+  %20 = getelementptr %character, ptr %8, i32 0, i32 0
+  %21 = load ptr, ptr %20
+  call void @free(ptr %21, ptr @.__tag.free.meta.b)
   ret i64 0
 ifcont2:
   ret i64 1
@@ -111,6 +119,8 @@ ifcont2:
 
 declare ptr @malloc(i64 %arg0, ptr %arg1)
 
+declare void @free(ptr %arg0, ptr %arg1)
+
 declare void @exit(i32 %arg0)
 
 define void @_start() {
@@ -130,6 +140,8 @@ entry0:
 @.chr.1 = constant [3 x i8] c"\C3\A9\00"
 @.__tag.char.meta = constant [14 x i8] c"char metadata\00"
 @.chr.2 = constant [3 x i8] c"\C3\A8\00"
+@.__tag.free.meta.a = constant [14 x i8] c"char metadata\00"
+@.__tag.free.meta.b = constant [14 x i8] c"char metadata\00"
 
 define i1 @character.equals(ptr %self, ptr %other) {
 entry0:
@@ -179,6 +191,12 @@ entry0:
   %17 = icmp eq i1 %16, 0
   br i1 %17, label %then1, label %ifcont2
 then1:
+  %18 = getelementptr %character, ptr %0, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  call void @free(ptr %19, ptr @.__tag.free.meta.a)
+  %20 = getelementptr %character, ptr %8, i32 0, i32 0
+  %21 = load ptr, ptr %20
+  call void @free(ptr %21, ptr @.__tag.free.meta.b)
   ret i64 0
 ifcont2:
   ret i64 1
@@ -264,6 +282,8 @@ ifcont2:
 }
 
 declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

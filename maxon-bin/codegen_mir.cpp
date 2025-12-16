@@ -656,6 +656,24 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 		builder->createCall(freeFunc, {managedPtr, freeTag});
 	}
 
+	// Free character variables - each character has a __ManagedStringData struct on the heap
+	// Note: __character_toString now allocates its own metadata, so no double-free risk
+	for (const auto &[name, charAlloca] : scopeStack.back().characterVariables) {
+		mir::MIRType *charType = structTypes["character"];
+		if (!charType) {
+			continue;
+		}
+
+		// Read the _managed pointer from the character struct
+		mir::MIRValue *managedFieldPtr = builder->createStructGEP(charType, charAlloca, 0, name + ".cleanup._managed.ptr");
+		mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr, name + ".cleanup._managed");
+
+		// Free the __ManagedStringData metadata struct
+		mir::MIRValue *freeTag = module->createGlobalString(".__tag.free.meta." + name, "char metadata");
+		mir::MIRFunction *freeFunc = getOrDeclareFunction("free", mir::MIRType::getVoid(), {mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+		builder->createCall(freeFunc, {managedPtr, freeTag});
+	}
+
 	// Release parent references for substrings in this scope
 	// Substrings hold a reference to their parent's buffer if the parent was heap-allocated
 	for (const auto &[name, substringAlloca] : scopeStack.back().substringAllocas) {
@@ -958,6 +976,101 @@ void MIRCodeGenerator::generateStructFieldCleanup(mir::MIRValue *structAlloca,
 			builder->createCondBr(needsRelease, releaseBlock, skipBlock);
 
 			builder->setInsertPoint(releaseBlock);
+
+			// For arrays of strings, we need to release each string element's metadata
+			// before releasing the array buffer
+			if (elemType == "string") {
+				mir::MIRType *stringType = structTypes["string"];
+				mir::MIRType *managedStringDataType = structTypes["__ManagedStringData"];
+				mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
+
+				if (stringType && managedStringDataType && unsizedArrayType) {
+					// Get array length
+					mir::MIRValue *lenField = builder->createStructGEP(managedArrayType, managedField, 1,
+																	   fieldName + ".len.ptr");
+					mir::MIRValue *arrayLen = builder->createLoad(mir::MIRType::getInt64(), lenField,
+																  fieldName + ".len");
+
+					// Create loop to release each string element
+					mir::MIRBasicBlock *loopHeader = builder->createBasicBlock(fieldName + ".str.loop.header");
+					mir::MIRBasicBlock *loopBody = builder->createBasicBlock(fieldName + ".str.loop.body");
+					mir::MIRBasicBlock *loopEnd = builder->createBasicBlock(fieldName + ".str.loop.end");
+
+					// Initialize loop counter
+					mir::MIRValue *idxAlloca = builder->createAlloca(mir::MIRType::getInt64(), fieldName + ".str.idx");
+					builder->createStore(builder->getInt64(0), idxAlloca);
+					builder->createBr(loopHeader);
+
+					// Loop header: check if idx < len
+					builder->setInsertPoint(loopHeader);
+					mir::MIRValue *idx = builder->createLoad(mir::MIRType::getInt64(), idxAlloca, fieldName + ".str.idx.val");
+					mir::MIRValue *cond = builder->createICmpSLT(idx, arrayLen, fieldName + ".str.loop.cond");
+					builder->createCondBr(cond, loopBody, loopEnd);
+
+					// Loop body: release string at index
+					builder->setInsertPoint(loopBody);
+
+					// Get element pointer using array indexing
+					mir::MIRValue *elemPtr = builder->createArrayGEP(stringType, bufferPtr, idx,
+																	 fieldName + ".str.elem.ptr");
+
+					// Get _managed pointer from string struct (field 0)
+					mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, elemPtr, 0,
+																			  fieldName + ".str.managed.ptr");
+					mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr,
+																	fieldName + ".str.managed");
+
+					// Check if managedPtr is non-null (null means default-initialized)
+					mir::MIRBasicBlock *releaseStrBlock = builder->createBasicBlock(fieldName + ".str.release");
+					mir::MIRBasicBlock *nextIterBlock = builder->createBasicBlock(fieldName + ".str.next");
+
+					mir::MIRValue *isNotNull = builder->createICmpNe(managedPtr, builder->getNull(),
+																	 fieldName + ".str.not.null");
+					builder->createCondBr(isNotNull, releaseStrBlock, nextIterBlock);
+
+					builder->setInsertPoint(releaseStrBlock);
+					// Check if string has heap buffer (capacity > 0)
+					mir::MIRValue *strCapPtr = builder->createStructGEP(managedStringDataType, managedPtr, 2,
+																		fieldName + ".str.cap.ptr");
+					mir::MIRValue *strCap = builder->createLoad(mir::MIRType::getInt64(), strCapPtr,
+																fieldName + ".str.cap");
+					mir::MIRValue *hasHeapBuf = builder->createICmpSGT(strCap, builder->getInt64(0),
+																	   fieldName + ".str.has.heap");
+
+					mir::MIRBasicBlock *releaseBufBlock = builder->createBasicBlock(fieldName + ".str.buf.release");
+					mir::MIRBasicBlock *freeMetaBlock = builder->createBasicBlock(fieldName + ".str.meta.free");
+
+					builder->createCondBr(hasHeapBuf, releaseBufBlock, freeMetaBlock);
+
+					builder->setInsertPoint(releaseBufBlock);
+					// Release string buffer
+					mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringDataType, managedPtr, 0,
+																			 fieldName + ".str.buffer.field");
+					mir::MIRValue *dataPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0,
+																		 fieldName + ".str.data.ptr.ptr");
+					mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrPtr,
+																 fieldName + ".str.data.ptr");
+					mir::MIRValue *strBufTag = module->createGlobalString(".__tag.free." + fieldName + ".str", "string buffer");
+					builder->createCall(stringReleaseFunc, {dataPtr, strBufTag});
+					builder->createBr(freeMetaBlock);
+
+					builder->setInsertPoint(freeMetaBlock);
+					// Free string metadata struct
+					mir::MIRValue *strMetaTag = module->createGlobalString(".__tag.free." + fieldName + ".meta", "string metadata");
+					builder->createCall(freeFunc, {managedPtr, strMetaTag});
+					builder->createBr(nextIterBlock);
+
+					// Next iteration: increment counter
+					builder->setInsertPoint(nextIterBlock);
+					mir::MIRValue *nextIdx = builder->createAdd(idx, builder->getInt64(1), fieldName + ".str.next.idx");
+					builder->createStore(nextIdx, idxAlloca);
+					builder->createBr(loopHeader);
+
+					// After loop: release the array buffer
+					builder->setInsertPoint(loopEnd);
+				}
+			}
+
 			mir::MIRValue *tag = module->createGlobalString(".__tag.free." + fieldName, "array cleanup");
 			builder->createCall(arrayReleaseFunc, {bufferPtr, tag});
 			builder->createBr(skipBlock);
