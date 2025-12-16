@@ -317,6 +317,24 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 		throw std::runtime_error("Failed to instantiate map type: " + typeStr);
 	}
 
+	// Check for set<T> struct type (stdlib set struct)
+	if (maxon::TypeConversion::isSetStructType(typeStr)) {
+		// Check if already instantiated
+		auto it = structTypes.find(typeStr);
+		if (it != structTypes.end()) {
+			return it->second;
+		}
+		// Need to instantiate the generic struct
+		std::string elemType = maxon::TypeConversion::getSetElementType(typeStr);
+		std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
+		instantiateGenericStruct("set", typeBindings);
+		it = structTypes.find(typeStr);
+		if (it != structTypes.end()) {
+			return it->second;
+		}
+		throw std::runtime_error("Failed to instantiate set type: " + typeStr);
+	}
+
 	// Check for MIR array type format: _ManagedArray<T> or _StaticArray<N, T>
 	// These are internal type strings used when converting MIR types to Maxon types
 	if (typeStr.rfind("_ManagedArray<", 0) == 0) {
@@ -733,6 +751,10 @@ void MIRCodeGenerator::generateScopeCleanup(mir::MIRFunction *function) {
 			{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
 		builder->createCall(stringReleaseFunc, {dataPtr, tag});
 	}
+	// Release managed fields in structs (sets, maps, user-defined structs with arrays/strings)
+	for (const auto &info : scopeStack.back().managedStructs) {
+		generateStructFieldCleanup(info.alloca, info.structType, info.name);
+	}
 }
 
 void MIRCodeGenerator::transferManagedStringDataOwnership() {
@@ -770,6 +792,253 @@ void MIRCodeGenerator::transferArrayOwnership(const std::string &varName) {
 			arrays.end());
 	}
 }
+
+void MIRCodeGenerator::transferStructOwnership(const std::string &varName) {
+	// When returning a struct with managed fields, we need to transfer ownership to the caller.
+	// Remove the struct from managedStructs in all scopes to prevent scope cleanup
+	// from releasing the managed fields (which would free memory the caller still needs).
+	for (auto &scope : scopeStack) {
+		auto &structs = scope.managedStructs;
+		structs.erase(
+			std::remove_if(structs.begin(), structs.end(),
+						   [&varName](const ManagedStructInfo &info) { return info.name == varName; }),
+			structs.end());
+	}
+}
+
+bool MIRCodeGenerator::structHasManagedFields(const std::string &structTypeName) {
+	// Check for known collection types that always have managed fields
+	if (maxon::TypeConversion::isSetStructType(structTypeName) ||
+		maxon::TypeConversion::isMapStructType(structTypeName)) {
+		return true;
+	}
+
+	// Look up struct definition to check fields
+	std::string baseName = structTypeName;
+	// Handle generic types like "Container" from "set<int>" etc
+	size_t anglePos = baseName.find('<');
+	if (anglePos != std::string::npos) {
+		baseName = baseName.substr(0, anglePos);
+	}
+
+	auto it = structDefinitions.find(baseName);
+	if (it == structDefinitions.end()) {
+		return false;
+	}
+
+	const StructDefAST *structDef = it->second;
+	for (const auto &field : structDef->fields) {
+		// Check if field is a managed type
+		if (field.type == "string" || field.type == "character") {
+			return true;
+		}
+		if (maxon::TypeConversion::isArrayStructType(field.type)) {
+			return true;
+		}
+		if (maxon::TypeConversion::isSetStructType(field.type) ||
+			maxon::TypeConversion::isMapStructType(field.type)) {
+			return true;
+		}
+		// Check for generic type parameter that could be array/string
+		if (!field.type.empty() && std::isupper(field.type[0])) {
+			// Could be a type parameter - check if instantiated as managed
+			auto bindingIt = structDef->typeAssignments.find(field.type);
+			if (bindingIt != structDef->typeAssignments.end()) {
+				const std::string &boundType = bindingIt->second;
+				if (boundType == "string" || boundType == "character" ||
+					maxon::TypeConversion::isArrayStructType(boundType)) {
+					return true;
+				}
+			}
+		}
+		// Recursively check nested structs
+		if (structHasManagedFields(field.type)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void MIRCodeGenerator::generateStructFieldCleanup(mir::MIRValue *structAlloca,
+												  const std::string &structTypeName,
+												  const std::string &varName) {
+	// Get the struct definition
+	std::string baseName = structTypeName;
+	size_t anglePos = baseName.find('<');
+	if (anglePos != std::string::npos) {
+		baseName = baseName.substr(0, anglePos);
+	}
+
+	auto defIt = structDefinitions.find(baseName);
+	if (defIt == structDefinitions.end()) {
+		return;
+	}
+
+	const StructDefAST *structDef = defIt->second;
+	mir::MIRType *structType = structTypes[structTypeName];
+	if (!structType) {
+		return;
+	}
+
+	// Get type assignments for specialized structs (e.g., set<int> has {"Element": "int"})
+	const std::map<std::string, std::string> *typeBindings = nullptr;
+	auto assignIt = structTypeAssignments.find(structTypeName);
+	if (assignIt != structTypeAssignments.end()) {
+		typeBindings = &assignIt->second;
+	}
+
+	// Get release functions
+	mir::MIRFunction *arrayReleaseFunc = getOrDeclareFunction(
+		"_managed_array_release", mir::MIRType::getVoid(),
+		{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+	mir::MIRFunction *stringReleaseFunc = getOrDeclareFunction(
+		"_managed_string_release", mir::MIRType::getVoid(),
+		{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+	mir::MIRFunction *freeFunc = getOrDeclareFunction(
+		"free", mir::MIRType::getVoid(),
+		{mir::MIRType::getPtr(), mir::MIRType::getPtr()});
+
+	// Iterate through fields and release managed types
+	for (size_t i = 0; i < structDef->fields.size(); i++) {
+		const auto &field = structDef->fields[i];
+		std::string fieldType = field.type;
+
+		// Resolve type parameters for generic structs using structTypeAssignments
+		if (typeBindings) {
+			// Direct type parameter (e.g., "Element" -> "int")
+			if (!fieldType.empty() && std::isupper(fieldType[0])) {
+				auto bindingIt = typeBindings->find(fieldType);
+				if (bindingIt != typeBindings->end()) {
+					fieldType = bindingIt->second;
+				}
+			}
+			// Handle array types with generic element type (e.g., "array<Element>" -> "array<int>")
+			else if (maxon::TypeConversion::isArrayStructType(fieldType)) {
+				std::string elemType = maxon::TypeConversion::getArrayStructElementType(fieldType);
+				if (!elemType.empty() && std::isupper(elemType[0])) {
+					auto bindingIt = typeBindings->find(elemType);
+					if (bindingIt != typeBindings->end()) {
+						fieldType = maxon::TypeConversion::makeArrayStructType(bindingIt->second);
+					}
+				}
+			}
+		}
+
+		std::string fieldName = varName + "." + field.name;
+
+		// Handle array fields
+		if (maxon::TypeConversion::isArrayStructType(fieldType)) {
+			std::string elemType = maxon::TypeConversion::getArrayStructElementType(fieldType);
+			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elemType);
+			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemType);
+
+			// Get field pointer
+			mir::MIRValue *fieldPtr = builder->createStructGEP(structType, structAlloca,
+															   static_cast<int>(i), fieldName + ".ptr");
+
+			// Get managed array data
+			mir::MIRValue *managedField = builder->createStructGEP(arrayStructType, fieldPtr, 0,
+																   fieldName + ".managed");
+			mir::MIRValue *bufferField = builder->createStructGEP(managedArrayType, managedField, 0,
+																  fieldName + ".buffer.ptr");
+			mir::MIRValue *bufferPtr = builder->createLoad(mir::MIRType::getPtr(), bufferField,
+														   fieldName + ".buffer");
+
+			// Check capacity > 0 (heap-allocated)
+			mir::MIRValue *capField = builder->createStructGEP(managedArrayType, managedField, 2,
+															   fieldName + ".cap.ptr");
+			mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt64(), capField,
+														  fieldName + ".cap");
+
+			mir::MIRBasicBlock *releaseBlock = builder->createBasicBlock(fieldName + ".release");
+			mir::MIRBasicBlock *skipBlock = builder->createBasicBlock(fieldName + ".skip");
+
+			mir::MIRValue *needsRelease = builder->createICmpSGT(capacity, builder->getInt64(0),
+																 fieldName + ".needs.release");
+			builder->createCondBr(needsRelease, releaseBlock, skipBlock);
+
+			builder->setInsertPoint(releaseBlock);
+			mir::MIRValue *tag = module->createGlobalString(".__tag.free." + fieldName, "array cleanup");
+			builder->createCall(arrayReleaseFunc, {bufferPtr, tag});
+			builder->createBr(skipBlock);
+
+			builder->setInsertPoint(skipBlock);
+		}
+		// Handle string fields
+		else if (fieldType == "string") {
+			mir::MIRType *stringType = structTypes["string"];
+			mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
+			mir::MIRType *unsizedArrayType = structTypes["_ManagedArray_byte"];
+
+			if (!stringType || !managedStringType || !unsizedArrayType) {
+				continue;
+			}
+
+			// Get field pointer
+			mir::MIRValue *fieldPtr = builder->createStructGEP(structType, structAlloca,
+															   static_cast<int>(i), fieldName + ".ptr");
+
+			// Read managed pointer from string struct
+			mir::MIRValue *managedFieldPtr = builder->createStructGEP(stringType, fieldPtr, 0,
+																	  fieldName + "._managed.ptr");
+			mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr,
+															fieldName + "._managed");
+
+			// Check capacity to see if heap-allocated
+			mir::MIRValue *capPtr = builder->createStructGEP(managedStringType, managedPtr, 2,
+															 fieldName + "._capacity.ptr");
+			mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt64(), capPtr,
+														  fieldName + "._capacity");
+			mir::MIRValue *isHeap = builder->createICmpSGT(capacity, builder->getInt64(0),
+														   fieldName + ".isHeap");
+
+			mir::MIRBasicBlock *releaseBlock = builder->createBasicBlock(fieldName + ".release");
+			mir::MIRBasicBlock *continueBlock = builder->createBasicBlock(fieldName + ".continue");
+			builder->createCondBr(isHeap, releaseBlock, continueBlock);
+
+			builder->setInsertPoint(releaseBlock);
+			// Get buffer pointer and release
+			mir::MIRValue *bufferFieldPtr = builder->createStructGEP(managedStringType, managedPtr, 0,
+																	 fieldName + "._buffer");
+			mir::MIRValue *dataPtrPtr = builder->createStructGEP(unsizedArrayType, bufferFieldPtr, 0,
+																 fieldName + ".data.ptr.ptr");
+			mir::MIRValue *dataPtr = builder->createLoad(mir::MIRType::getPtr(), dataPtrPtr,
+														 fieldName + ".data.ptr");
+
+			mir::MIRValue *tag = module->createGlobalString(".__tag.free." + fieldName, "string literal");
+			builder->createCall(stringReleaseFunc, {dataPtr, tag});
+			builder->createBr(continueBlock);
+
+			builder->setInsertPoint(continueBlock);
+
+			// Free the __ManagedStringData metadata struct
+			mir::MIRValue *freeTag = module->createGlobalString(".__tag.free.meta." + fieldName, "string metadata");
+			builder->createCall(freeFunc, {managedPtr, freeTag});
+		}
+		// Handle character fields (similar to string)
+		else if (fieldType == "character") {
+			mir::MIRType *charType = structTypes["character"];
+			mir::MIRType *managedStringType = structTypes["__ManagedStringData"];
+
+			if (!charType || !managedStringType) {
+				continue;
+			}
+
+			// Get field pointer - character has _managed field at position 0
+			mir::MIRValue *fieldPtr = builder->createStructGEP(structType, structAlloca,
+															   static_cast<int>(i), fieldName + ".ptr");
+			mir::MIRValue *managedFieldPtr = builder->createStructGEP(charType, fieldPtr, 0,
+																	  fieldName + "._managed.ptr");
+			mir::MIRValue *managedPtr = builder->createLoad(mir::MIRType::getPtr(), managedFieldPtr,
+															fieldName + "._managed");
+
+			// Free the __ManagedStringData metadata struct
+			mir::MIRValue *freeTag = module->createGlobalString(".__tag.free.meta." + fieldName, "char metadata");
+			builder->createCall(freeFunc, {managedPtr, freeTag});
+		}
+	}
+}
+
 
 //==============================================================================
 // Alloca Helper
@@ -931,14 +1200,17 @@ void MIRCodeGenerator::generateGlobalInit() {
 			uint64_t elementSize = elementType->getSizeInBytes();
 			uint64_t totalSize = arraySize * elementSize;
 
-			// For globals, always use heap allocation
+			// For globals, always use heap allocation with managed header
 			initHeapManagement();
-			mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+			mir::MIRFunction *arrayAllocFunc = getOrDeclareFunction(
+				"_managed_array_alloc",
+				mir::MIRType::getPtr(),
+				{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 
-			// Allocate data buffer
+			// Allocate data buffer with managed header
 			mir::MIRValue *sizeVal = builder->getInt64(totalSize);
 			mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.global." + globalInfo.name, "global array");
-			mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {sizeVal, arrayTag}, globalInfo.name + ".buffer");
+			mir::MIRValue *bufferPtr = builder->createCall(arrayAllocFunc, {sizeVal, arrayTag}, globalInfo.name + ".buffer");
 
 			// Get the global that was already created in Pass 1d
 			mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);

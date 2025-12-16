@@ -35,19 +35,27 @@ bool MIRCodeGenerator::tryGenerateArrayLiteralDecl(const DeclInfo &decl) {
 		initValues.push_back(val);
 	}
 
-	// Infer element type from first value
-	elementType = initValues[0]->type;
-	if (elementType->kind == mir::MIRTypeKind::Int64) {
-		elementTypeName = "int";
-	} else if (elementType->kind == mir::MIRTypeKind::Float64) {
-		elementTypeName = "float";
-	} else if (elementType->kind == mir::MIRTypeKind::Int8) {
-		elementTypeName = "character";
-	} else if (elementType->kind == mir::MIRTypeKind::Ptr) {
-		elementTypeName = "ptr";
-	} else {
-		reportError("Unsupported array element type", decl.line, decl.column);
+	// Infer element type from first value's Maxon type
+	// We use getExpressionMaxonType to get the proper semantic type (e.g., "string")
+	// rather than just the MIR type (which would be "ptr" for struct types)
+	elementTypeName = getExpressionMaxonType(arrayLiteral->values[0].get());
+	if (elementTypeName.empty()) {
+		// Fall back to MIR type inference for primitive types
+		elementType = initValues[0]->type;
+		if (elementType->kind == mir::MIRTypeKind::Int64) {
+			elementTypeName = "int";
+		} else if (elementType->kind == mir::MIRTypeKind::Float64) {
+			elementTypeName = "float";
+		} else if (elementType->kind == mir::MIRTypeKind::Int8) {
+			elementTypeName = "character";
+		} else if (elementType->kind == mir::MIRTypeKind::Ptr) {
+			elementTypeName = "ptr";
+		} else {
+			reportError("Unsupported array element type", decl.line, decl.column);
+		}
 	}
+	// Get the proper MIR type for the element
+	elementType = getTypeFromString(elementTypeName);
 
 	uint64_t elementSize = elementType->getSizeInBytes();
 	mir::MIRValue *arrayPtr;
@@ -60,12 +68,15 @@ bool MIRCodeGenerator::tryGenerateArrayLiteralDecl(const DeclInfo &decl) {
 	if (useHeap) {
 		// Large array: heap-allocate using array<T> struct layout
 		initHeapManagement();
-		mir::MIRFunction *mallocFunc = module->getFunction("malloc");
 
-		// Allocate data buffer
+		// Allocate data buffer with managed header (refcount + size)
+		mir::MIRFunction *arrayAllocFunc = getOrDeclareFunction(
+			"_managed_array_alloc",
+			mir::MIRType::getPtr(),
+			{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 		mir::MIRValue *sizeVal = builder->getInt64(totalSize);
 		mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.sized." + decl.name, "sized array");
-		mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {sizeVal, arrayTag}, decl.name + ".buffer");
+		mir::MIRValue *bufferPtr = builder->createCall(arrayAllocFunc, {sizeVal, arrayTag}, decl.name + ".buffer");
 
 		// Create array<T> struct alloca
 		mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
@@ -152,7 +163,14 @@ bool MIRCodeGenerator::tryGenerateArrayLiteralDecl(const DeclInfo &decl) {
 	for (int i = 0; i < constantArraySize; i++) {
 		mir::MIRValue *indexVal = builder->getInt64(i);
 		mir::MIRValue *elementPtr = builder->createArrayGEP(elementType, arrayPtr, indexVal, "arrayidx");
-		builder->createStore(initValues[i], elementPtr);
+
+		mir::MIRValue *valueToStore = initValues[i];
+		// For struct types (like string), generateExpr returns a pointer to the struct.
+		// We need to load the struct value before storing it in the array.
+		if (elementType->isStruct() && valueToStore->type == mir::MIRType::getPtr()) {
+			valueToStore = builder->createLoad(elementType, valueToStore, "elem.load");
+		}
+		builder->createStore(valueToStore, elementPtr);
 	}
 
 	return true;
@@ -187,16 +205,20 @@ bool MIRCodeGenerator::tryGenerateSizedArrayDecl(const DeclInfo &decl) {
 
 		// Variable-sized arrays always use heap allocation with array<T> struct layout
 		initHeapManagement();
-		mir::MIRFunction *mallocFunc = module->getFunction("malloc");
 
 		// Calculate total size for data buffer: size * elementSize
 		mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
 		mir::MIRValue *sizeExt = builder->createSExt(sizeVal, mir::MIRType::getInt64(), "size.ext");
 		mir::MIRValue *dataSize = builder->createMul(sizeExt, elemSizeVal, "data.size");
 
-		// Allocate buffer (no header - array<T> struct stores metadata separately)
+		// Allocate buffer with managed header (refcount + size) using _managed_array_alloc
+		// This returns a pointer to the data area (after the 8-byte header)
+		mir::MIRFunction *arrayAllocFunc = getOrDeclareFunction(
+			"_managed_array_alloc",
+			mir::MIRType::getPtr(),
+			{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 		mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.var." + decl.name, "variable array");
-		mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {dataSize, arrayTag}, decl.name + ".buffer");
+		mir::MIRValue *bufferPtr = builder->createCall(arrayAllocFunc, {dataSize, arrayTag}, decl.name + ".buffer");
 
 		// Create array<T> struct alloca
 		mir::MIRType *arrayStructType = getOrCreateArrayStructType(elementTypeName);
@@ -295,14 +317,17 @@ bool MIRCodeGenerator::tryGenerateSizedArrayDecl(const DeclInfo &decl) {
 			scopeStack.back().heapAllocatedArrays.push_back({decl.name, structAlloca, elementTypeName, true});
 		}
 	} else if (useHeap) {
-		// Large array: heap-allocate buffer
+		// Large array: heap-allocate buffer with managed header
 		initHeapManagement();
-		mir::MIRFunction *mallocFunc = module->getFunction("malloc");
 
-		// Allocate data buffer (no header - array<T> struct stores metadata)
+		// Allocate data buffer with managed header (refcount + size)
+		mir::MIRFunction *arrayAllocFunc = getOrDeclareFunction(
+			"_managed_array_alloc",
+			mir::MIRType::getPtr(),
+			{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 		mir::MIRValue *sizeVal = builder->getInt64(totalSize);
 		mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.lit." + decl.name, "array literal");
-		bufferPtr = builder->createCall(mallocFunc, {sizeVal, arrayTag}, decl.name + ".buffer");
+		bufferPtr = builder->createCall(arrayAllocFunc, {sizeVal, arrayTag}, decl.name + ".buffer");
 
 		// Initialize nested struct layout with capacity > 0 (heap-allocated)
 		mir::MIRValue *lengthVal = builder->getInt64(arraySize);
@@ -868,13 +893,24 @@ bool MIRCodeGenerator::tryGenerateStructInitDecl(const DeclInfo &decl) {
 				builder->createStore(fieldValue, fieldPtr);
 			}
 		} else if (maxon::TypeConversion::isArrayStructType(fieldTypeStr)) {
-			// array<T> struct field - need deep copy to avoid sharing the buffer pointer
-			// with the source array (which may be stack-allocated and will become invalid)
+			// array<T> struct field - handling depends on source:
+			// - Stack-allocated (capacity=0): must deep copy to heap
+			// - Heap-allocated (capacity>0): transfer ownership (no copy needed)
 			std::string elemType = maxon::TypeConversion::getArrayStructElementType(fieldTypeStr);
 			mir::MIRType *arrayStructType = getTypeFromString(fieldTypeStr);
 			mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemType);
 			mir::MIRType *elemMirType = getTypeFromString(elemType);
 			int elemSize = static_cast<int>(elemMirType->getSizeInBytes());
+
+			// Check if source is a variable (for ownership transfer optimization)
+			auto *srcVarExpr = dynamic_cast<VariableExprAST *>(valueExpr);
+			mir::MIRValue *srcVarAlloca = nullptr;
+			if (srcVarExpr) {
+				auto it = namedValues.find(srcVarExpr->name);
+				if (it != namedValues.end()) {
+					srcVarAlloca = it->second;
+				}
+			}
 
 			mir::MIRValue *fieldValue = generateExpr(valueExpr);
 
@@ -891,58 +927,83 @@ bool MIRCodeGenerator::tryGenerateStructInitDecl(const DeclInfo &decl) {
 			// Store the array struct to the destination field (copies the header)
 			builder->createStore(srcArray, fieldPtr);
 
-			// Now deep copy the buffer if it has data
 			// Get managed data from destination (fieldPtr)
 			mir::MIRValue *managedDataPtr = builder->createStructGEP(
 				arrayStructType, fieldPtr, 0, fieldName + ".managed");
 
-			// Load length
+			// Load length and capacity
 			mir::MIRValue *lengthPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 1, fieldName + ".len.ptr");
 			mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt64(), lengthPtr, fieldName + ".len");
 			mir::MIRValue *capPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 2, fieldName + ".cap.ptr");
+			mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt64(), capPtr, fieldName + ".cap");
 
-			// Check if there's data to copy (length > 0)
+			// Conditional deep copy based on source type:
+			// - If capacity == 0 (stack-allocated) AND length > 0: must copy to heap
+			// - If capacity > 0 (heap-allocated): ownership transfer, no copy needed
 			mir::MIRFunction *currentFunc = builder->getFunction();
 			mir::MIRBasicBlock *copyBlock = currentFunc->createBasicBlock(fieldName + ".deepcopy");
+			mir::MIRBasicBlock *transferBlock = currentFunc->createBasicBlock(fieldName + ".transfer");
 			mir::MIRBasicBlock *doneBlock = currentFunc->createBasicBlock(fieldName + ".done");
 
+			// Check if stack-allocated: capacity == 0 && length > 0
+			mir::MIRValue *isStackAlloc = builder->createICmpEq(capacity, builder->getInt64(0), fieldName + ".isstack");
 			mir::MIRValue *hasData = builder->createICmpSGT(length, builder->getInt64(0), fieldName + ".hasdata");
-			builder->createCondBr(hasData, copyBlock, doneBlock);
+			mir::MIRValue *needsCopy = builder->createAnd(isStackAlloc, hasData, fieldName + ".needscopy");
+			builder->createCondBr(needsCopy, copyBlock, transferBlock);
 
-			// Copy block: allocate new buffer and copy data
+			// Copy block: allocate new buffer and copy data (for stack arrays)
 			builder->setInsertPoint(copyBlock);
+			{
+				// Get source buffer pointer
+				mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 0, fieldName + ".buf.ptr");
+				mir::MIRValue *srcBuffer = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, fieldName + ".srcbuf");
 
-			// Get source buffer pointer
-			mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 0, fieldName + ".buf.ptr");
-			mir::MIRValue *srcBuffer = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, fieldName + ".srcbuf");
+				// Allocate new buffer with managed header
+				initHeapManagement();
+				mir::MIRFunction *arrayAllocFunc = getOrDeclareFunction(
+					"_managed_array_alloc",
+					mir::MIRType::getPtr(),
+					{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
+				mir::MIRValue *copySize = builder->createMul(length, builder->getInt64(elemSize), fieldName + ".copysize");
+				mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.decl.deepcopy." + fieldName, "decl array deep copy");
+				mir::MIRValue *newBuffer = builder->createCall(arrayAllocFunc, {copySize, arrayTag}, fieldName + ".newbuf");
 
-			// Allocate new buffer
-			initHeapManagement();
-			mir::MIRFunction *mallocFunc = module->getFunction("malloc");
-			mir::MIRValue *copySize = builder->createMul(length, builder->getInt64(elemSize), fieldName + ".copysize");
-			mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.decl.deepcopy." + fieldName, "decl array deep copy");
-			mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {copySize, arrayTag}, fieldName + ".newbuf");
+				// Copy data
+				mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
+																	{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+				builder->createCall(memcpyFunc, {newBuffer, srcBuffer, copySize});
 
-			// Copy data
-			mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
-																{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
-			builder->createCall(memcpyFunc, {newBuffer, srcBuffer, copySize});
+				// Update the buffer pointer in the destination
+				builder->createStore(newBuffer, bufferPtr);
 
-			// Update the buffer pointer in the destination
-			builder->createStore(newBuffer, bufferPtr);
+				// Set capacity = length (new heap allocation)
+				builder->createStore(length, capPtr);
 
-			// Set capacity = length (new heap allocation)
-			builder->createStore(length, capPtr);
+				// After memcpy, retain managed types in elements
+				retainManagedTypesInArrayElements(elemType, newBuffer, length);
+			}
+			builder->createBr(doneBlock);
 
-			// After memcpy, we need to retain managed types in each element.
-			// If the element type contains strings or nested arrays, those need
-			// their refcounts incremented since we just copied pointers.
-			retainManagedTypesInArrayElements(elemType, newBuffer, length);
-
+			// Transfer block: heap-allocated source, transfer ownership
+			builder->setInsertPoint(transferBlock);
+			if (srcVarAlloca) {
+				// Set source's capacity to 0 to transfer ownership
+				// The destination now owns the buffer, source won't free it
+				mir::MIRValue *srcManagedPtr = builder->createStructGEP(
+					arrayStructType, srcVarAlloca, 0, fieldName + ".src.managed");
+				mir::MIRValue *srcCapPtr = builder->createStructGEP(
+					managedArrayType, srcManagedPtr, 2, fieldName + ".src.cap.ptr");
+				builder->createStore(builder->getInt64(0), srcCapPtr);
+			}
 			builder->createBr(doneBlock);
 
 			// Done block
 			builder->setInsertPoint(doneBlock);
+
+			// Remove source from heap tracking to prevent cleanup
+			if (srcVarExpr) {
+				transferArrayOwnership(srcVarExpr->name);
+			}
 		} else {
 			// Regular field value
 			mir::MIRValue *fieldValue = generateExpr(valueExpr);
@@ -983,6 +1044,11 @@ bool MIRCodeGenerator::tryGenerateStructInitDecl(const DeclInfo &decl) {
 							structInitExpr->line, structInitExpr->column);
 			}
 		}
+	}
+
+	// Track struct for cleanup if it has managed fields (strings, arrays, etc.)
+	if (structHasManagedFields(structName)) {
+		scopeStack.back().managedStructs.push_back({decl.name, structAlloca, structName});
 	}
 
 	return true;
@@ -1135,6 +1201,9 @@ bool MIRCodeGenerator::tryGenerateEmptyMapLiteralDecl(const DeclInfo &decl) {
 	namedValues[decl.name] = mapAlloca;
 	variableTypes[decl.name] = specializedName;
 
+	// Track for cleanup - maps have internal arrays that need freeing
+	scopeStack.back().managedStructs.push_back({decl.name, mapAlloca, specializedName});
+
 	return true;
 }
 
@@ -1264,6 +1333,9 @@ bool MIRCodeGenerator::tryGenerateMapWithEntriesDecl(const DeclInfo &decl) {
 	namedValues[decl.name] = mapAlloca;
 	variableTypes[decl.name] = specializedName;
 
+	// Track for cleanup - maps have internal arrays that need freeing
+	scopeStack.back().managedStructs.push_back({decl.name, mapAlloca, specializedName});
+
 	return true;
 }
 
@@ -1366,6 +1438,11 @@ bool MIRCodeGenerator::tryGenerateSetFromArrayDecl(const DeclInfo &decl) {
 	builder->createStore(setResult, setAlloca);
 	namedValues[decl.name] = setAlloca;
 	variableTypes[decl.name] = specializedName;
+
+	// Track for cleanup - sets have internal arrays that need freeing
+	if (!scopeStack.empty()) {
+		scopeStack.back().managedStructs.push_back({decl.name, setAlloca, specializedName});
+	}
 
 	return true;
 }

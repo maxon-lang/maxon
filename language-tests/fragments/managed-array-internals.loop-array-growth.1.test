@@ -56,6 +56,7 @@ Leaked:    0 bytes
 %array<int> = type { %__ManagedArrayData_int, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.arr.return.copy = constant [18 x i8] c"return array copy\00"
 @.__tag.alloc.array grow = constant [11 x i8] c"array grow\00"
 @.__tag.free.array grow = constant [11 x i8] c"array grow\00"
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
@@ -125,28 +126,14 @@ whilecond1:
   %8 = icmp slt i64 %27, 10
   br i1 %8, label %loop2, label %afterloop3
 loop2:
-  %28 = getelementptr %array<int>, ptr %0, i32 0, i32 0
-  %29 = getelementptr %__ManagedArrayData_int, ptr %28, i32 0, i32 1
-  %30 = load i64, ptr %29
-  %31 = add i64 %30, 1
-  call void @array<int>.ensureCapacity(ptr %0, i64 %31)
-  %32 = getelementptr %array<int>, ptr %0, i32 0, i32 0
-  %33 = getelementptr %__ManagedArrayData_int, ptr %32, i32 0, i32 0
-  %34 = load ptr, ptr %33
-  %35 = sext i64 %30 to i64
-  %36 = getelementptr i64, ptr %34, i64 %35
-  store i64 %27, ptr %36
-  %37 = add i64 %30, 1
-  %38 = getelementptr %array<int>, ptr %0, i32 0, i32 0
-  %39 = getelementptr %__ManagedArrayData_int, ptr %38, i32 0, i32 1
-  store i64 %37, ptr %39
+  %10 = call %array<int> @array<int>.push(ptr %0, i64 %27)
   %12 = add i64 %27, 1
   br label %whilecond1
 afterloop3:
-  %41 = getelementptr %array<int>, ptr %0, i32 0, i32 0
-  %42 = getelementptr %__ManagedArrayData_int, ptr %41, i32 0, i32 1
-  %43 = load i64, ptr %42
-  %14 = call %string @__int_toString(i64 %43, ptr null)
+  %28 = getelementptr %array<int>, ptr %0, i32 0, i32 0
+  %29 = getelementptr %__ManagedArrayData_int, ptr %28, i32 0, i32 1
+  %30 = load i64, ptr %29
+  %14 = call %string @__int_toString(i64 %30, ptr null)
   %15 = alloca %string
   store %string %14, ptr %15
   %16 = getelementptr %string, ptr %15, i32 0, i32 0
@@ -226,9 +213,13 @@ newline.var.continue2:
 
 declare void @_managed_string_retain(ptr %arg0)
 
-declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
@@ -302,13 +293,49 @@ grow.after.release16:
   br label %grow.done9
 }
 
+define %array<int> @array<int>.push(ptr %self, i64 %value) {
+entry0:
+  %3 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %4 = getelementptr %__ManagedArrayData_int, ptr %3, i32 0, i32 1
+  %5 = load i64, ptr %4
+  %9 = add i64 %5, 1
+  call void @array<int>.ensureCapacity(ptr %self, i64 %9)
+  %13 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %14 = getelementptr %__ManagedArrayData_int, ptr %13, i32 0, i32 0
+  %15 = load ptr, ptr %14
+  %16 = sext i64 %5 to i64
+  %17 = getelementptr i64, ptr %15, i64 %16
+  store i64 %value, ptr %17
+  %19 = add i64 %5, 1
+  %21 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %22 = getelementptr %__ManagedArrayData_int, ptr %21, i32 0, i32 1
+  store i64 %19, ptr %22
+  %26 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %27 = getelementptr %__ManagedArrayData_int, ptr %26, i32 0, i32 2
+  %28 = load i64, ptr %27
+  %29 = getelementptr %__ManagedArrayData_int, ptr %26, i32 0, i32 1
+  %30 = load i64, ptr %29
+  %31 = icmp eq i64 %28, 0
+  %32 = icmp sgt i64 %30, 0
+  %33 = and i1 %31, %32
+  br i1 %33, label %ret.arr.copy1, label %ret.arr.done2
+ret.arr.copy1:
+  %34 = getelementptr %__ManagedArrayData_int, ptr %26, i32 0, i32 0
+  %35 = load ptr, ptr %34
+  %36 = shl i64 %30, 3
+  %37 = call ptr @_managed_array_alloc(i64 %36, ptr @.__tag.arr.return.copy)
+  %38 = call ptr @memcpy(ptr %37, ptr %35, i64 %36)
+  store ptr %37, ptr %34
+  store i64 %30, ptr %27
+  br label %ret.arr.done2
+ret.arr.done2:
+  %39 = load %array<int>, ptr %self
+  ret %array<int> %39
+}
+
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
-
-declare ptr @malloc(i64 %arg0, ptr %arg1)
-
-declare void @free(ptr %arg0, ptr %arg1)
 
 declare %string @__int_toString(i64 %arg0, ptr %arg1)
 
@@ -339,6 +366,7 @@ declare void @__print_alloc_summary()
 %array<int> = type { %__ManagedArrayData_int, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.arr.return.copy = constant [18 x i8] c"return array copy\00"
 @.__tag.alloc.array grow = constant [11 x i8] c"array grow\00"
 @.__tag.free.array grow = constant [11 x i8] c"array grow\00"
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
@@ -510,9 +538,13 @@ newline.var.continue2:
 
 declare void @_managed_string_retain(ptr %arg0)
 
-declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
 
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
@@ -647,17 +679,33 @@ entry0:
   %22 = getelementptr %__ManagedArrayData_int, ptr %21, i32 0, i32 1
   store i64 %19, ptr %22
   %23 = load ptr, ptr %0
-  %24 = load %array<int>, ptr %23
-  ret %array<int> %24
+  %25 = load ptr, ptr %0
+  %26 = getelementptr %array<int>, ptr %25, i32 0, i32 0
+  %27 = getelementptr %__ManagedArrayData_int, ptr %26, i32 0, i32 2
+  %28 = load i64, ptr %27
+  %29 = getelementptr %__ManagedArrayData_int, ptr %26, i32 0, i32 1
+  %30 = load i64, ptr %29
+  %31 = icmp eq i64 %28, 0
+  %32 = icmp sgt i64 %30, 0
+  %33 = and i1 %31, %32
+  br i1 %33, label %ret.arr.copy1, label %ret.arr.done2
+ret.arr.copy1:
+  %34 = getelementptr %__ManagedArrayData_int, ptr %26, i32 0, i32 0
+  %35 = load ptr, ptr %34
+  %36 = mul i64 %30, 8
+  %37 = call ptr @_managed_array_alloc(i64 %36, ptr @.__tag.arr.return.copy)
+  %38 = call ptr @memcpy(ptr %37, ptr %35, i64 %36)
+  store ptr %37, ptr %34
+  store i64 %30, ptr %27
+  br label %ret.arr.done2
+ret.arr.done2:
+  %39 = load %array<int>, ptr %25
+  ret %array<int> %39
 }
 
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
-
-declare ptr @malloc(i64 %arg0, ptr %arg1)
-
-declare void @free(ptr %arg0, ptr %arg1)
 
 declare %string @__int_toString(i64 %arg0, ptr %arg1)
 

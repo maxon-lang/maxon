@@ -193,6 +193,12 @@ class TypeConversion {
 	/// Extract value type from map<K,V> struct type
 	static std::string getMapValueType(const std::string &mapType);
 
+	/// Check if a type is a set<T> struct type
+	static bool isSetStructType(const std::string &type);
+
+	/// Extract element type from set<T> struct type
+	static std::string getSetElementType(const std::string &setType);
+
 	/// Check if a type is a function type (starts with "fn(")
 	static bool isFunctionType(const std::string &type);
 

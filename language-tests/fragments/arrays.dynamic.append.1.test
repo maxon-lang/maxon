@@ -15,6 +15,7 @@ ExitCode: 606
 %__ManagedArrayData_int = type { ptr, i64, i64 }
 %array<int> = type { %__ManagedArrayData_int, i64 }
 
+@.__tag.arr.return.copy = constant [18 x i8] c"return array copy\00"
 @.__tag.alloc.array grow = constant [11 x i8] c"array grow\00"
 @.__tag.free.array grow = constant [11 x i8] c"array grow\00"
 @.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
@@ -92,9 +93,9 @@ other.skip4:
   ret i64 %28
 }
 
-declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
-
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
@@ -170,51 +171,89 @@ grow.after.release16:
 
 define %array<int> @array<int>.append(ptr %self, ptr %other) {
 entry0:
-  %52 = getelementptr %array<int>, ptr %other, i32 0, i32 0
-  %53 = getelementptr %__ManagedArrayData_int, ptr %52, i32 0, i32 1
-  %54 = load i64, ptr %53
-  %6 = icmp eq i64 %54, 0
+  %82 = getelementptr %array<int>, ptr %other, i32 0, i32 0
+  %83 = getelementptr %__ManagedArrayData_int, ptr %82, i32 0, i32 1
+  %84 = load i64, ptr %83
+  %6 = icmp eq i64 %84, 0
   br i1 %6, label %then1, label %ifcont2
 then1:
-  %8 = load %array<int>, ptr %self
-  ret %array<int> %8
-ifcont2:
   %10 = getelementptr %array<int>, ptr %self, i32 0, i32 0
-  %11 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 1
+  %11 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 2
   %12 = load i64, ptr %11
-  %17 = add i64 %12, %54
-  call void @array<int>.ensureCapacity(ptr %self, i64 %17)
-  %19 = getelementptr %array<int>, ptr %other, i32 0, i32 0
-  %20 = getelementptr %__ManagedArrayData_int, ptr %19, i32 0, i32 1
-  %21 = load i64, ptr %20
-  %22 = getelementptr %__ManagedArrayData_int, ptr %19, i32 0, i32 0
-  %23 = load ptr, ptr %22
-  br label %forcond3
-forcond3:
-  %50 = phi i64 [ 0, %ifcont2 ], [ %42, %forincrement5 ]
-  %49 = phi i64 [ %12, %ifcont2 ], [ %40, %forincrement5 ]
-  %26 = icmp slt i64 %50, %21
-  br i1 %26, label %forloop4, label %afterfor6
-forloop4:
-  %28 = getelementptr i64, ptr %23, i64 %50
-  %29 = load i64, ptr %28
-  %34 = getelementptr %array<int>, ptr %self, i32 0, i32 0
-  %35 = getelementptr %__ManagedArrayData_int, ptr %34, i32 0, i32 0
-  %36 = load ptr, ptr %35
-  %37 = sext i64 %49 to i64
-  %38 = getelementptr i64, ptr %36, i64 %37
-  store i64 %29, ptr %38
-  %40 = add i64 %49, 1
-  br label %forincrement5
-forincrement5:
-  %42 = add i64 %50, 1
-  br label %forcond3
-afterfor6:
-  %45 = getelementptr %array<int>, ptr %self, i32 0, i32 0
-  %46 = getelementptr %__ManagedArrayData_int, ptr %45, i32 0, i32 1
-  store i64 %49, ptr %46
-  %48 = load %array<int>, ptr %self
-  ret %array<int> %48
+  %13 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 1
+  %14 = load i64, ptr %13
+  %15 = icmp eq i64 %12, 0
+  %16 = icmp sgt i64 %14, 0
+  %17 = and i1 %15, %16
+  br i1 %17, label %ret.arr.copy3, label %ret.arr.done4
+ifcont2:
+  %25 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %26 = getelementptr %__ManagedArrayData_int, ptr %25, i32 0, i32 1
+  %27 = load i64, ptr %26
+  %32 = add i64 %27, %84
+  call void @array<int>.ensureCapacity(ptr %self, i64 %32)
+  %34 = getelementptr %array<int>, ptr %other, i32 0, i32 0
+  %35 = getelementptr %__ManagedArrayData_int, ptr %34, i32 0, i32 1
+  %36 = load i64, ptr %35
+  %37 = getelementptr %__ManagedArrayData_int, ptr %34, i32 0, i32 0
+  %38 = load ptr, ptr %37
+  br label %forcond5
+ret.arr.copy3:
+  %18 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  %20 = shl i64 %14, 3
+  %21 = call ptr @_managed_array_alloc(i64 %20, ptr @.__tag.arr.return.copy)
+  %22 = call ptr @memcpy(ptr %21, ptr %19, i64 %20)
+  store ptr %21, ptr %18
+  store i64 %14, ptr %11
+  br label %ret.arr.done4
+ret.arr.done4:
+  %23 = load %array<int>, ptr %self
+  ret %array<int> %23
+forcond5:
+  %80 = phi i64 [ 0, %ifcont2 ], [ %57, %forincrement7 ]
+  %79 = phi i64 [ %27, %ifcont2 ], [ %55, %forincrement7 ]
+  %41 = icmp slt i64 %80, %36
+  br i1 %41, label %forloop6, label %afterfor8
+forloop6:
+  %43 = getelementptr i64, ptr %38, i64 %80
+  %44 = load i64, ptr %43
+  %49 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %50 = getelementptr %__ManagedArrayData_int, ptr %49, i32 0, i32 0
+  %51 = load ptr, ptr %50
+  %52 = sext i64 %79 to i64
+  %53 = getelementptr i64, ptr %51, i64 %52
+  store i64 %44, ptr %53
+  %55 = add i64 %79, 1
+  br label %forincrement7
+forincrement7:
+  %57 = add i64 %80, 1
+  br label %forcond5
+afterfor8:
+  %60 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %61 = getelementptr %__ManagedArrayData_int, ptr %60, i32 0, i32 1
+  store i64 %79, ptr %61
+  %65 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %66 = getelementptr %__ManagedArrayData_int, ptr %65, i32 0, i32 2
+  %67 = load i64, ptr %66
+  %68 = getelementptr %__ManagedArrayData_int, ptr %65, i32 0, i32 1
+  %69 = load i64, ptr %68
+  %70 = icmp eq i64 %67, 0
+  %71 = icmp sgt i64 %69, 0
+  %72 = and i1 %70, %71
+  br i1 %72, label %ret.arr.copy9, label %ret.arr.done10
+ret.arr.copy9:
+  %73 = getelementptr %__ManagedArrayData_int, ptr %65, i32 0, i32 0
+  %74 = load ptr, ptr %73
+  %75 = shl i64 %69, 3
+  %76 = call ptr @_managed_array_alloc(i64 %75, ptr @.__tag.arr.return.copy)
+  %77 = call ptr @memcpy(ptr %76, ptr %74, i64 %75)
+  store ptr %76, ptr %73
+  store i64 %69, ptr %66
+  br label %ret.arr.done10
+ret.arr.done10:
+  %78 = load %array<int>, ptr %self
+  ret %array<int> %78
 }
 
 declare void @exit(i32 %arg0)
@@ -232,6 +271,7 @@ entry0:
 %__ManagedArrayData_int = type { ptr, i64, i64 }
 %array<int> = type { %__ManagedArrayData_int, i64 }
 
+@.__tag.arr.return.copy = constant [18 x i8] c"return array copy\00"
 @.__tag.alloc.array grow = constant [11 x i8] c"array grow\00"
 @.__tag.free.array grow = constant [11 x i8] c"array grow\00"
 @.__tag.free.arr = constant [14 x i8] c"array cleanup\00"
@@ -307,9 +347,9 @@ other.skip4:
   ret i64 %28
 }
 
-declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
-
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
@@ -427,66 +467,106 @@ entry0:
   br i1 %6, label %then1, label %ifcont2
 then1:
   %7 = load ptr, ptr %0
-  %8 = load %array<int>, ptr %7
-  ret %array<int> %8
-ifcont2:
   %9 = load ptr, ptr %0
   %10 = getelementptr %array<int>, ptr %9, i32 0, i32 0
-  %11 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 1
+  %11 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 2
   %12 = load i64, ptr %11
-  %13 = alloca i64
-  store i64 %12, ptr %13
-  %14 = load ptr, ptr %0
-  %15 = load i64, ptr %13
-  %16 = load i64, ptr %4
-  %17 = add i64 %15, %16
-  call void @array<int>.ensureCapacity(ptr %14, i64 %17)
-  %18 = load ptr, ptr %1
-  %19 = getelementptr %array<int>, ptr %18, i32 0, i32 0
-  %20 = getelementptr %__ManagedArrayData_int, ptr %19, i32 0, i32 1
-  %21 = load i64, ptr %20
-  %22 = getelementptr %__ManagedArrayData_int, ptr %19, i32 0, i32 0
-  %23 = load ptr, ptr %22
-  %24 = alloca i64
-  store i64 0, ptr %24
-  br label %forcond3
-forcond3:
-  %25 = load i64, ptr %24
-  %26 = icmp slt i64 %25, %21
-  br i1 %26, label %forloop4, label %afterfor6
-forloop4:
-  %27 = load i64, ptr %24
-  %28 = getelementptr i64, ptr %23, i64 %27
-  %29 = load i64, ptr %28
-  %30 = alloca i64
-  store i64 %29, ptr %30
-  %31 = load i64, ptr %13
-  %32 = load i64, ptr %30
-  %33 = load ptr, ptr %0
+  %13 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 1
+  %14 = load i64, ptr %13
+  %15 = icmp eq i64 %12, 0
+  %16 = icmp sgt i64 %14, 0
+  %17 = and i1 %15, %16
+  br i1 %17, label %ret.arr.copy3, label %ret.arr.done4
+ifcont2:
+  %24 = load ptr, ptr %0
+  %25 = getelementptr %array<int>, ptr %24, i32 0, i32 0
+  %26 = getelementptr %__ManagedArrayData_int, ptr %25, i32 0, i32 1
+  %27 = load i64, ptr %26
+  %28 = alloca i64
+  store i64 %27, ptr %28
+  %29 = load ptr, ptr %0
+  %30 = load i64, ptr %28
+  %31 = load i64, ptr %4
+  %32 = add i64 %30, %31
+  call void @array<int>.ensureCapacity(ptr %29, i64 %32)
+  %33 = load ptr, ptr %1
   %34 = getelementptr %array<int>, ptr %33, i32 0, i32 0
-  %35 = getelementptr %__ManagedArrayData_int, ptr %34, i32 0, i32 0
-  %36 = load ptr, ptr %35
-  %37 = sext i64 %31 to i64
-  %38 = getelementptr i64, ptr %36, i64 %37
-  store i64 %32, ptr %38
-  %39 = load i64, ptr %13
-  %40 = add i64 %39, 1
-  store i64 %40, ptr %13
-  br label %forincrement5
-forincrement5:
-  %41 = load i64, ptr %24
-  %42 = add i64 %41, 1
-  store i64 %42, ptr %24
-  br label %forcond3
-afterfor6:
-  %43 = load i64, ptr %13
-  %44 = load ptr, ptr %0
-  %45 = getelementptr %array<int>, ptr %44, i32 0, i32 0
-  %46 = getelementptr %__ManagedArrayData_int, ptr %45, i32 0, i32 1
-  store i64 %43, ptr %46
-  %47 = load ptr, ptr %0
-  %48 = load %array<int>, ptr %47
-  ret %array<int> %48
+  %35 = getelementptr %__ManagedArrayData_int, ptr %34, i32 0, i32 1
+  %36 = load i64, ptr %35
+  %37 = getelementptr %__ManagedArrayData_int, ptr %34, i32 0, i32 0
+  %38 = load ptr, ptr %37
+  %39 = alloca i64
+  store i64 0, ptr %39
+  br label %forcond5
+ret.arr.copy3:
+  %18 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  %20 = mul i64 %14, 8
+  %21 = call ptr @_managed_array_alloc(i64 %20, ptr @.__tag.arr.return.copy)
+  %22 = call ptr @memcpy(ptr %21, ptr %19, i64 %20)
+  store ptr %21, ptr %18
+  store i64 %14, ptr %11
+  br label %ret.arr.done4
+ret.arr.done4:
+  %23 = load %array<int>, ptr %9
+  ret %array<int> %23
+forcond5:
+  %40 = load i64, ptr %39
+  %41 = icmp slt i64 %40, %36
+  br i1 %41, label %forloop6, label %afterfor8
+forloop6:
+  %42 = load i64, ptr %39
+  %43 = getelementptr i64, ptr %38, i64 %42
+  %44 = load i64, ptr %43
+  %45 = alloca i64
+  store i64 %44, ptr %45
+  %46 = load i64, ptr %28
+  %47 = load i64, ptr %45
+  %48 = load ptr, ptr %0
+  %49 = getelementptr %array<int>, ptr %48, i32 0, i32 0
+  %50 = getelementptr %__ManagedArrayData_int, ptr %49, i32 0, i32 0
+  %51 = load ptr, ptr %50
+  %52 = sext i64 %46 to i64
+  %53 = getelementptr i64, ptr %51, i64 %52
+  store i64 %47, ptr %53
+  %54 = load i64, ptr %28
+  %55 = add i64 %54, 1
+  store i64 %55, ptr %28
+  br label %forincrement7
+forincrement7:
+  %56 = load i64, ptr %39
+  %57 = add i64 %56, 1
+  store i64 %57, ptr %39
+  br label %forcond5
+afterfor8:
+  %58 = load i64, ptr %28
+  %59 = load ptr, ptr %0
+  %60 = getelementptr %array<int>, ptr %59, i32 0, i32 0
+  %61 = getelementptr %__ManagedArrayData_int, ptr %60, i32 0, i32 1
+  store i64 %58, ptr %61
+  %62 = load ptr, ptr %0
+  %64 = load ptr, ptr %0
+  %65 = getelementptr %array<int>, ptr %64, i32 0, i32 0
+  %66 = getelementptr %__ManagedArrayData_int, ptr %65, i32 0, i32 2
+  %67 = load i64, ptr %66
+  %68 = getelementptr %__ManagedArrayData_int, ptr %65, i32 0, i32 1
+  %69 = load i64, ptr %68
+  %70 = icmp eq i64 %67, 0
+  %71 = icmp sgt i64 %69, 0
+  %72 = and i1 %70, %71
+  br i1 %72, label %ret.arr.copy9, label %ret.arr.done10
+ret.arr.copy9:
+  %73 = getelementptr %__ManagedArrayData_int, ptr %65, i32 0, i32 0
+  %74 = load ptr, ptr %73
+  %75 = mul i64 %69, 8
+  %76 = call ptr @_managed_array_alloc(i64 %75, ptr @.__tag.arr.return.copy)
+  %77 = call ptr @memcpy(ptr %76, ptr %74, i64 %75)
+  store ptr %76, ptr %73
+  store i64 %69, ptr %66
+  br label %ret.arr.done10
+ret.arr.done10:
+  %78 = load %array<int>, ptr %64
+  ret %array<int> %78
 }
 
 declare void @exit(i32 %arg0)

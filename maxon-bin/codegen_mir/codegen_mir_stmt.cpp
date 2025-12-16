@@ -181,13 +181,16 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 						}
 
 						initHeapManagement();
-						mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+						mir::MIRFunction *arrayAllocFunc = getOrDeclareFunction(
+							"_managed_array_alloc",
+							mir::MIRType::getPtr(),
+							{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 						uint64_t elementSize = elementType->getSizeInBytes();
 						mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
 						mir::MIRValue *sizeExt = builder->createSExt(sizeVal, mir::MIRType::getInt64(), "size.ext");
 						mir::MIRValue *totalSize = builder->createMul(sizeExt, elemSizeVal, "total.size");
 						mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.field." + fieldName, "field array");
-						mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {totalSize, arrayTag}, fieldName + ".buffer");
+						mir::MIRValue *bufferPtr = builder->createCall(arrayAllocFunc, {totalSize, arrayTag}, fieldName + ".buffer");
 
 						mir::MIRFunction *memsetFunc = module->getFunction("memset");
 						if (!memsetFunc) {
@@ -387,12 +390,15 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 					mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 0, fieldName + ".buf.ptr");
 					mir::MIRValue *srcBuffer = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, fieldName + ".srcbuf");
 
-					// Allocate new buffer
+					// Allocate new buffer with managed header
 					initHeapManagement();
-					mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+					mir::MIRFunction *arrayAllocFunc = getOrDeclareFunction(
+						"_managed_array_alloc",
+						mir::MIRType::getPtr(),
+						{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 					mir::MIRValue *copySize = builder->createMul(length, builder->getInt64(elemSize), fieldName + ".copysize");
 					mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.deepcopy." + fieldName, "array deep copy");
-					mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {copySize, arrayTag}, fieldName + ".newbuf");
+					mir::MIRValue *newBuffer = builder->createCall(arrayAllocFunc, {copySize, arrayTag}, fieldName + ".newbuf");
 
 					// Copy data
 					mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
@@ -445,8 +451,8 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 				transferManagedStringDataOwnership();
 			}
 
-			// For return expressions that are array variables, transfer ownership
-			// so the scope cleanup doesn't release the array buffer
+			// For return expressions that are array variables, we need to ensure
+			// the buffer data is heap-allocated (not stack) and transfer ownership
 			if (auto *varExpr = dynamic_cast<VariableExprAST *>(retStmt->value.get())) {
 				std::string varType;
 				auto typeIt = variableTypes.find(varExpr->name);
@@ -454,7 +460,92 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 					varType = typeIt->second;
 				}
 				if (maxon::TypeConversion::isArrayStructType(varType)) {
+					// The array may have a stack-allocated buffer (capacity=0).
+					// We need to copy it to the heap before returning, otherwise
+					// the caller gets dangling pointers to our stack frame.
+					std::string elemType = maxon::TypeConversion::getArrayStructElementType(varType);
+					mir::MIRType *arrayStructType = getOrCreateArrayStructType(elemType);
+					mir::MIRType *managedArrayType = getOrCreateManagedArrayDataType(elemType);
+					mir::MIRType *elemMirType = getTypeFromString(elemType);
+					int elemSize = static_cast<int>(elemMirType->getSizeInBytes());
+
+					// Get the pointer to the array variable
+					// For struct parameters (like self), namedValues stores an alloca containing
+					// a pointer to the struct, so we need to load that pointer first.
+					mir::MIRValue *arrayPtr = namedValues[varExpr->name];
+					if (isStructParameter(varExpr->name)) {
+						arrayPtr = builder->createLoad(mir::MIRType::getPtr(), arrayPtr, varExpr->name + ".ptr");
+					}
+
+					// Get managed data struct pointer
+					mir::MIRValue *managedDataPtr = builder->createStructGEP(
+						arrayStructType, arrayPtr, 0, "ret.arr.managed");
+
+					// Load capacity to check if it's stack-allocated (capacity=0)
+					mir::MIRValue *capPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 2, "ret.arr.cap.ptr");
+					mir::MIRValue *capacity = builder->createLoad(mir::MIRType::getInt64(), capPtr, "ret.arr.cap");
+
+					// Load length for the copy
+					mir::MIRValue *lengthPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 1, "ret.arr.len.ptr");
+					mir::MIRValue *length = builder->createLoad(mir::MIRType::getInt64(), lengthPtr, "ret.arr.len");
+
+					// Check if stack-allocated: capacity == 0 && length > 0
+					mir::MIRValue *isStackAlloc = builder->createICmpEq(capacity, builder->getInt64(0), "ret.arr.isstack");
+					mir::MIRValue *hasData = builder->createICmpSGT(length, builder->getInt64(0), "ret.arr.hasdata");
+					mir::MIRValue *needsCopy = builder->createAnd(isStackAlloc, hasData, "ret.arr.needscopy");
+
+					// Create basic blocks for conditional copy
+					mir::MIRFunction *currentFunc = builder->getFunction();
+					mir::MIRBasicBlock *copyBlock = currentFunc->createBasicBlock("ret.arr.copy");
+					mir::MIRBasicBlock *doneBlock = currentFunc->createBasicBlock("ret.arr.done");
+
+					builder->createCondBr(needsCopy, copyBlock, doneBlock);
+
+					// Copy block: allocate heap buffer and copy data
+					builder->setInsertPoint(copyBlock);
+
+					// Get source buffer pointer
+					mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 0, "ret.arr.buf.ptr");
+					mir::MIRValue *srcBuffer = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, "ret.arr.srcbuf");
+
+					// Allocate new heap buffer with managed header
+					initHeapManagement();
+					mir::MIRFunction *arrayAllocFunc = getOrDeclareFunction(
+						"_managed_array_alloc",
+						mir::MIRType::getPtr(),
+						{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
+					mir::MIRValue *copySize = builder->createMul(length, builder->getInt64(elemSize), "ret.arr.copysize");
+					mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.return.copy", "return array copy");
+					mir::MIRValue *newBuffer = builder->createCall(arrayAllocFunc, {copySize, arrayTag}, "ret.arr.newbuf");
+
+					// Copy data from stack to heap
+					mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),
+																		{mir::MIRType::getPtr(), mir::MIRType::getPtr(), mir::MIRType::getInt64()});
+					builder->createCall(memcpyFunc, {newBuffer, srcBuffer, copySize});
+
+					// Update the buffer pointer in the array struct
+					builder->createStore(newBuffer, bufferPtr);
+
+					// Set capacity = length (now heap-allocated)
+					builder->createStore(length, capPtr);
+
+					// After memcpy, retain managed types in elements (strings, nested arrays)
+					retainManagedTypesInArrayElements(elemType, newBuffer, length);
+
+					builder->createBr(doneBlock);
+
+					// Done block - re-generate expr to get the updated value
+					builder->setInsertPoint(doneBlock);
+
+					// Re-load the array struct now that we've potentially updated it
+					retVal = builder->createLoad(arrayStructType, arrayPtr, "ret.arr.updated");
+
 					transferArrayOwnership(varExpr->name);
+				}
+				// For structs with managed fields (set, map, user structs with arrays/strings),
+				// transfer ownership to prevent scope cleanup from freeing the returned value
+				else if (structHasManagedFields(varType)) {
+					transferStructOwnership(varExpr->name);
 				}
 			}
 
@@ -504,8 +595,10 @@ void MIRCodeGenerator::generateStmt(StmtAST *stmt, mir::MIRFunction *function) {
 		}
 		// else retVal stays nullptr for void return
 
-		// Clean up all scopes before returning
-		while (!scopeStack.empty()) {
+		// Clean up all scopes for this function before returning
+		// Only pop down to functionScopeBaseLevel (the level when we entered this function)
+		// This prevents corrupting the scope stack when generating nested functions
+		while (scopeStack.size() > functionScopeBaseLevel) {
 			generateScopeCleanup(function);
 			scopeStack.pop_back();
 		}

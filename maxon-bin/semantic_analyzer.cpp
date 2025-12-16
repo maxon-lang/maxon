@@ -890,15 +890,44 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 	currentReceiverType = func->receiverType;
 
 	// Validate return type - track undefined struct types for auto-import
-	if (func->returnType != "void" && func->returnType != "int" &&
-		func->returnType != "float" && func->returnType != "bool" &&
-		func->returnType != "string" && func->returnType != "cstring" &&
-		func->returnType != "character" &&
-		!maxon::TypeConversion::isArrayType(func->returnType) &&
-		!maxon::TypeConversion::isFunctionType(func->returnType)) { // Not an array or function type
-		// Could be a struct type - check if it exists
-		if (lookupStruct(func->returnType) == nullptr) {
-			undefinedStructs.insert(func->returnType);
+	std::string returnType = func->returnType;
+	if (returnType != "void" && returnType != "int" &&
+		returnType != "float" && returnType != "bool" &&
+		returnType != "string" && returnType != "cstring" &&
+		returnType != "character" &&
+		!maxon::TypeConversion::isArrayType(returnType) &&
+		!maxon::TypeConversion::isFunctionType(returnType)) {
+		// Handle array<T> return type - need to import 'array' template
+		if (maxon::TypeConversion::isArrayStructType(returnType)) {
+			if (lookupStruct("array") == nullptr) {
+				undefinedStructs.insert("array");
+			}
+			std::string elemType = maxon::TypeConversion::getArrayStructElementType(returnType);
+			std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
+			instantiateGenericStructMethods("array", returnType, typeBindings);
+		}
+		// Handle set<T> return type - need to import 'set' template
+		else if (maxon::TypeConversion::isSetStructType(returnType)) {
+			if (lookupStruct("set") == nullptr) {
+				undefinedStructs.insert("set");
+			}
+			std::string elemType = maxon::TypeConversion::getSetElementType(returnType);
+			std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
+			instantiateGenericStructMethods("set", returnType, typeBindings);
+		}
+		// Handle map<K,V> return type - need to import 'map' template
+		else if (maxon::TypeConversion::isMapStructType(returnType)) {
+			if (lookupStruct("map") == nullptr) {
+				undefinedStructs.insert("map");
+			}
+			std::string keyType = maxon::TypeConversion::getMapKeyType(returnType);
+			std::string valueType = maxon::TypeConversion::getMapValueType(returnType);
+			std::map<std::string, std::string> typeBindings = {{"Key", keyType}, {"Value", valueType}};
+			instantiateGenericStructMethods("map", returnType, typeBindings);
+		}
+		// Could be a user-defined struct type - check if it exists
+		else if (lookupStruct(returnType) == nullptr) {
+			undefinedStructs.insert(returnType);
 		}
 	}
 
@@ -911,19 +940,43 @@ void SemanticAnalyzer::analyzeFunction(FunctionAST *func) {
 		}
 		// Handle array<T> struct type - need to import 'array' template
 		else if (maxon::TypeConversion::isArrayStructType(paramType)) {
-			// Add 'array' to undefined structs so stdlib/collections/array.maxon is imported
 			if (lookupStruct("array") == nullptr) {
 				undefinedStructs.insert("array");
 			}
-			// Instantiate generic struct methods including synthesized defaults
 			std::string elemType = maxon::TypeConversion::getArrayStructElementType(param.type);
 			std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
 			instantiateGenericStructMethods("array", param.type, typeBindings);
-			// Continue to check the element type
 			paramType = elemType;
 		}
+		// Handle set<T> struct type - need to import 'set' template
+		else if (maxon::TypeConversion::isSetStructType(paramType)) {
+			if (lookupStruct("set") == nullptr) {
+				undefinedStructs.insert("set");
+			}
+			std::string elemType = maxon::TypeConversion::getSetElementType(param.type);
+			std::map<std::string, std::string> typeBindings = {{"Element", elemType}};
+			instantiateGenericStructMethods("set", param.type, typeBindings);
+			paramType = elemType;
+		}
+		// Handle map<K,V> struct type - need to import 'map' template
+		else if (maxon::TypeConversion::isMapStructType(paramType)) {
+			if (lookupStruct("map") == nullptr) {
+				undefinedStructs.insert("map");
+			}
+			std::string keyType = maxon::TypeConversion::getMapKeyType(param.type);
+			std::string valueType = maxon::TypeConversion::getMapValueType(param.type);
+			std::map<std::string, std::string> typeBindings = {{"Key", keyType}, {"Value", valueType}};
+			instantiateGenericStructMethods("map", param.type, typeBindings);
+			// Check both key and value types
+			if (keyType != "int" && keyType != "string" && keyType != "float" &&
+				keyType != "bool" && keyType != "byte" && keyType != "character") {
+				if (lookupStruct(keyType) == nullptr) {
+					undefinedStructs.insert(keyType);
+				}
+			}
+			paramType = valueType;
+		}
 		// Check if this is a struct type that needs to be imported
-		// Note: 'string' is a stdlib struct, not a primitive type
 		if (paramType != "void" && paramType != "int" &&
 			paramType != "float" && paramType != "bool" &&
 			paramType != "cstring" &&

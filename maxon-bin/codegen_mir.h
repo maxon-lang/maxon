@@ -167,6 +167,13 @@ class MIRCodeGenerator {
 		bool isDynamic;			 // True if this array can be reallocated (needs struct-based cleanup)
 	};
 
+	// Info for tracking structs with managed fields for cleanup
+	struct ManagedStructInfo {
+		std::string name;
+		mir::MIRValue *alloca;	  // Struct alloca
+		std::string structType;	  // Type name (e.g., "set<int>", "map<string,int>", "Container")
+	};
+
 	// Scope tracking for automatic array/string cleanup
 	struct ScopeInfo {
 		std::vector<HeapArrayInfo> heapAllocatedArrays;
@@ -175,8 +182,10 @@ class MIRCodeGenerator {
 		std::vector<std::pair<std::string, mir::MIRValue *>> substringAllocas;		// Substring struct allocas (need parent release)
 		std::vector<std::pair<std::string, mir::MIRValue *>> cstringAllocas;		// Cstring struct allocas (need managed release)
 		std::vector<std::pair<std::string, mir::MIRValue *>> stringVariables;		// String var allocas (read current buffer at cleanup)
+		std::vector<ManagedStructInfo> managedStructs;								// Structs with managed fields (arrays, strings)
 	};
 	std::vector<ScopeInfo> scopeStack;
+	size_t functionScopeBaseLevel = 0; // Base scope level when entering current function
 
 	void pushScope();
 	void popScope(mir::MIRFunction *function);
@@ -189,6 +198,17 @@ class MIRCodeGenerator {
 	// Transfer ownership of an array variable when returning it
 	// Removes the array from heapAllocatedArrays to prevent scope cleanup from releasing it
 	void transferArrayOwnership(const std::string &varName);
+
+	// Transfer ownership of a struct with managed fields when returning it
+	// Removes the struct from managedStructs to prevent scope cleanup from releasing its fields
+	void transferStructOwnership(const std::string &varName);
+
+	// Check if a struct type has managed fields that need cleanup
+	bool structHasManagedFields(const std::string &structTypeName);
+
+	// Generate cleanup code for a struct's managed fields
+	void generateStructFieldCleanup(mir::MIRValue *structAlloca, const std::string &structTypeName,
+									const std::string &varName);
 
 	// Generic struct instantiation
 	// Creates a specialized version of a generic struct template with concrete types

@@ -2400,15 +2400,18 @@ mir::MIRValue *MIRCodeGenerator::generateStructLiteral(StructInitExprAST *struct
 					sizeVal = builder->getInt64(arraySize);
 				}
 
-				// Allocate buffer
+				// Allocate buffer with managed header
 				initHeapManagement();
-				mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+				mir::MIRFunction *arrayAllocFunc = getOrDeclareFunction(
+					"_managed_array_alloc",
+					mir::MIRType::getPtr(),
+					{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 				uint64_t elementSize = elementType->getSizeInBytes();
 				mir::MIRValue *elemSizeVal = builder->getInt64(elementSize);
 				mir::MIRValue *sizeExt = builder->createSExt(sizeVal, mir::MIRType::getInt64(), "size.ext");
 				mir::MIRValue *totalSize = builder->createMul(sizeExt, elemSizeVal, "total.size");
 				mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.init." + fieldName, "init array");
-				mir::MIRValue *bufferPtr = builder->createCall(mallocFunc, {totalSize, arrayTag}, fieldName + ".buffer");
+				mir::MIRValue *bufferPtr = builder->createCall(arrayAllocFunc, {totalSize, arrayTag}, fieldName + ".buffer");
 
 				// Zero-initialize the buffer
 				mir::MIRFunction *memsetFunc = module->getFunction("memset");
@@ -2530,12 +2533,15 @@ mir::MIRValue *MIRCodeGenerator::generateStructLiteral(StructInitExprAST *struct
 			mir::MIRValue *bufferPtr = builder->createStructGEP(managedArrayType, managedDataPtr, 0, fieldName + ".buf.ptr");
 			mir::MIRValue *srcBuffer = builder->createLoad(mir::MIRType::getPtr(), bufferPtr, fieldName + ".srcbuf");
 
-			// Allocate new buffer
+			// Allocate new buffer with managed header
 			initHeapManagement();
-			mir::MIRFunction *mallocFunc = module->getFunction("malloc");
+			mir::MIRFunction *arrayAllocFunc = getOrDeclareFunction(
+				"_managed_array_alloc",
+				mir::MIRType::getPtr(),
+				{mir::MIRType::getInt64(), mir::MIRType::getPtr()});
 			mir::MIRValue *copySize = builder->createMul(length, builder->getInt64(elemSize), fieldName + ".copysize");
 			mir::MIRValue *arrayTag = module->createGlobalString(".__tag.arr.structlit.deepcopy." + fieldName, "structlit array deep copy");
-			mir::MIRValue *newBuffer = builder->createCall(mallocFunc, {copySize, arrayTag}, fieldName + ".newbuf");
+			mir::MIRValue *newBuffer = builder->createCall(arrayAllocFunc, {copySize, arrayTag}, fieldName + ".newbuf");
 
 			// Copy data
 			mir::MIRFunction *memcpyFunc = getOrDeclareFunction("memcpy", mir::MIRType::getPtr(),

@@ -523,6 +523,23 @@ std::string TypeConversion::getMapValueType(const std::string &mapType) {
 	return mapType;
 }
 
+bool TypeConversion::isSetStructType(const std::string &type) {
+	return type.rfind("set<", 0) == 0 && type.back() == '>';
+}
+
+std::string TypeConversion::getSetElementType(const std::string &setType) {
+	if (!isSetStructType(setType)) {
+		return setType;
+	}
+	// Extract T from set<T>
+	size_t start = 4; // length of "set<"
+	size_t end = setType.rfind('>');
+	if (end != std::string::npos && end > start) {
+		return setType.substr(start, end - start);
+	}
+	return setType;
+}
+
 bool TypeConversion::parseFunctionType(const std::string &funcType,
 									   std::vector<std::string> &paramTypes,
 									   std::string &returnType) {

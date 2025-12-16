@@ -303,6 +303,8 @@ std::string Parser::parseQualifiedName(const std::string &context) {
 // - Primitive types: int, float, bool, byte
 // - Struct types: MyStruct, pkg.MyStruct
 // - Array types: array of T, array of N T, array of array of T
+// - Map types: map from K to V
+// - Set types: set of T
 // - Function types: (T1, T2) R
 std::string Parser::parseTypeString(const std::string &context) {
 	// Check for function type: (T1, T2, ...) R
@@ -351,6 +353,18 @@ std::string Parser::parseTypeString(const std::string &context) {
 
 		// Return map<K,V> struct type
 		return "map<" + keyType + "," + valueType + ">";
+	}
+
+	// Check for 'set' followed by 'of' - set type: set of T
+	if (check(TokenType::IDENTIFIER) && std::string(currentValue()) == "set" && checkKeyword("of", 1)) {
+		advance(); // consume 'set'
+		advance(); // consume 'of'
+
+		// Parse element type
+		std::string elementType = parseTypeString(context + " set element type");
+
+		// Return set<T> struct type
+		return "set<" + elementType + ">";
 	}
 
 	// Check for 'array' keyword - new array syntax

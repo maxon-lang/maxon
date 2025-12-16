@@ -1,0 +1,1237 @@
+// Comprehensive Maxon Language Test
+// Tests every language feature and edge cases from bug history
+// Expected exit code: 2047 (all tests pass)
+
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
+// For struct tests
+type Point
+    var x int
+    var y int
+end 'Point'
+
+type PointWithDefault
+    var x int = 0
+    var y int = 0
+end 'PointWithDefault'
+
+type NameStruct
+    var first string
+    var last string
+end 'NameStruct'
+
+// For nested struct size computation test (Winchester 1.6/1.7)
+type InnerStruct
+    var s string
+end 'InnerStruct'
+
+type OuterStruct
+    var inner InnerStruct
+    var x int
+end 'OuterStruct'
+
+// For large struct test (>8 bytes) (Winchester 1.5)
+type BigStruct
+    var a int
+    var b int
+    var c int
+end 'BigStruct'
+
+// For array deep copy test (Winchester 1.8)
+type ArrayContainer
+    var items array of int
+end 'ArrayContainer'
+
+// For enum tests
+enum Color
+    red
+    green
+    blue
+end 'Color'
+
+enum StatusCode int
+    ok = 200
+    notFound = 404
+    error = 500
+end 'StatusCode'
+
+enum Result
+    success(value int)
+    failure(code int)
+end 'Result'
+
+// ============================================================================
+// TEST FUNCTIONS
+// ============================================================================
+
+// Test 1: Primitive Types (weight: 1)
+function test_primitives() returns bool
+    var passed = true
+
+    // Int tests
+    var pos = 42
+    var neg = 0 - 10
+    var zero = 0
+    var hex = 0xFF
+    var bin = 0b1010
+    if pos != 42 'i1' passed = false end 'i1'
+    if neg != 0 - 10 'i2' passed = false end 'i2'
+    if zero != 0 'i3' passed = false end 'i3'
+    if hex != 255 'i4' passed = false end 'i4'
+    if bin != 10 'i5' passed = false end 'i5'
+
+    // Int arithmetic
+    if 2 + 3 != 5 'ia1' passed = false end 'ia1'
+    if 10 - 4 != 6 'ia2' passed = false end 'ia2'
+    if 3 * 4 != 12 'ia3' passed = false end 'ia3'
+    var div_result = trunc(8 / 2)
+    if div_result != 4 'ia4' passed = false end 'ia4'
+
+    // Float tests
+    var f1 = 3.14
+    var f2 = 2.0
+    var fsum = f1 + f2
+    if fsum < 5.1 'f1' passed = false end 'f1'
+    if fsum > 5.2 'f2' passed = false end 'f2'
+
+    // Mixed int/float
+    var mixed = 2 + 3.5
+    if mixed < 5.4 'mf1' passed = false end 'mf1'
+    if mixed > 5.6 'mf2' passed = false end 'mf2'
+
+    // Bool tests
+    var bool_t = true
+    var bool_f = false
+    if not bool_t 'b1' passed = false end 'b1'
+    if bool_f 'b2' passed = false end 'b2'
+    var and_result = bool_t and bool_t
+    if not and_result 'b3' passed = false end 'b3'
+    var or_result = bool_t or bool_f
+    if not or_result 'b4' passed = false end 'b4'
+    var and_result2 = bool_f and bool_t
+    if and_result2 'b5' passed = false end 'b5'
+
+    // Byte tests
+    var b1 = 255 as byte
+    var b2 = 0 as byte
+    if b1 as int != 255 'by1' passed = false end 'by1'
+    if b2 as int != 0 'by2' passed = false end 'by2'
+
+    // Character tests
+    var c1 = 'A'
+    var c2 = 'z'
+    // Characters are grapheme clusters, compare directly
+    if c1 != 'A' 'c1' passed = false end 'c1'
+    if c2 != 'z' 'c2' passed = false end 'c2'
+
+    return passed
+end 'test_primitives'
+
+// Test 2: Strings (weight: 2)
+function test_strings() returns bool
+    var passed = true
+
+    // Basic string
+    var s1 = "hello"
+    if s1.count() != 5 's1' passed = false end 's1'
+
+    // Empty string
+    var empty = ""
+    if empty.count() != 0 'se' passed = false end 'se'
+
+    // String with escape sequences
+    var escaped = "line1\nline2"
+    if escaped.count() != 11 'sesc' passed = false end 'sesc'
+
+    // String interpolation with int
+    var num = 42
+    var interp1 = "value: {num}"
+    if interp1.count() != 9 'si1' passed = false end 'si1'
+
+    // String interpolation with expression
+    var x = 5
+    var interp2 = "result: {x * 2}"
+    if interp2.count() != 10 'si2' passed = false end 'si2'
+
+    // String methods
+    var test_str = "hello world"
+    if not test_str.startsWith("hello") 'sm1' passed = false end 'sm1'
+    if not test_str.endsWith("world") 'sm2' passed = false end 'sm2'
+    if not test_str.contains("lo wo") 'sm3' passed = false end 'sm3'
+
+    // Long string (>15 bytes, beyond SSO)
+    var long_str = "this is a very long string that exceeds SSO"
+    if long_str.count() != 43 'slong' passed = false end 'slong'
+
+    // String self-reference reassignment (Winchester 1.7)
+    var s = "a"
+    var i = 0
+    while i < 3 'sloop'
+        s = "{s}x"
+        i = i + 1
+    end 'sloop'
+    if s.count() != 4 'sself' passed = false end 'sself'
+
+    // String equality
+    var eq1 = "test"
+    var eq2 = "test"
+    var eq3 = "other"
+    if eq1 != eq2 'seq1' passed = false end 'seq1'
+    if eq1 == eq3 'seq2' passed = false end 'seq2'
+
+    return passed
+end 'test_strings'
+
+// Test 3: Arrays (weight: 4)
+function test_arrays() returns bool
+    var passed = true
+
+    // Static array
+    let static_arr = [1, 2, 3]
+    if static_arr.count() != 3 'as1' passed = false end 'as1'
+    if static_arr[0] != 1 'as2' passed = false end 'as2'
+    if static_arr[2] != 3 'as3' passed = false end 'as3'
+
+    // Dynamic array with initial values
+    var dyn_arr = [10, 20, 30]
+    if dyn_arr.count() != 3 'ad1' passed = false end 'ad1'
+    dyn_arr[1] = 25
+    if dyn_arr[1] != 25 'ad2' passed = false end 'ad2'
+
+    // Empty dynamic array with push
+    var empty_arr = array of int
+    empty_arr.push(1)
+    empty_arr.push(2)
+    empty_arr.push(3)
+    if empty_arr.count() != 3 'ae1' passed = false end 'ae1'
+    if empty_arr[0] != 1 'ae2' passed = false end 'ae2'
+
+    // Push and pop
+    var pp_arr = [100]
+    pp_arr.push(200)
+    if pp_arr.count() != 2 'app1' passed = false end 'app1'
+    var popped = pp_arr.pop() else 'pop1'
+        popped = 0
+    end 'pop1'
+    if popped != 200 'app2' passed = false end 'app2'
+    if pp_arr.count() != 1 'app3' passed = false end 'app3'
+
+    // Sized array
+    var sized_arr = array of 5 int
+    sized_arr[0] = 10
+    sized_arr[4] = 50
+    if sized_arr[0] != 10 'asz1' passed = false end 'asz1'
+    if sized_arr[4] != 50 'asz2' passed = false end 'asz2'
+    if sized_arr.count() != 5 'asz3' passed = false end 'asz3'
+
+    // Array sum test
+    var sum = 0
+    var idx = 0
+    while idx < static_arr.count() 'asum'
+        sum = sum + static_arr[idx]
+        idx = idx + 1
+    end 'asum'
+    if sum != 6 'asum2' passed = false end 'asum2'
+
+    return passed
+end 'test_arrays'
+
+// Test 4: Structs (weight: 8)
+function test_structs() returns bool
+    var passed = true
+
+    // Basic struct
+    var p = Point{x: 10, y: 20}
+    if p.x != 10 'st1' passed = false end 'st1'
+    if p.y != 20 'st2' passed = false end 'st2'
+
+    // Struct field mutation
+    p.x = 15
+    if p.x != 15 'st3' passed = false end 'st3'
+
+    // Struct with default values
+    var pd = PointWithDefault{}
+    if pd.x != 0 'std1' passed = false end 'std1'
+    if pd.y != 0 'std2' passed = false end 'std2'
+
+    var pd2 = PointWithDefault{x: 5}
+    if pd2.x != 5 'std3' passed = false end 'std3'
+    if pd2.y != 0 'std4' passed = false end 'std4'
+
+    // Struct with string fields (Winchester 1.6)
+    var name = NameStruct{first: "John", last: "Doe"}
+    if name.first.count() != 4 'sts1' passed = false end 'sts1'
+    if name.last.count() != 3 'sts2' passed = false end 'sts2'
+
+    // Nested struct (Winchester 1.6/1.7 - size computation)
+    var inner = InnerStruct{s: "test"}
+    var outer = OuterStruct{inner: inner, x: 42}
+    if outer.inner.s.count() != 4 'stn1' passed = false end 'stn1'
+    if outer.x != 42 'stn2' passed = false end 'stn2'
+
+    // Large struct (>8 bytes) (Winchester 1.5)
+    var big = BigStruct{a: 1, b: 2, c: 3}
+    if big.a != 1 'stb1' passed = false end 'stb1'
+    if big.b != 2 'stb2' passed = false end 'stb2'
+    if big.c != 3 'stb3' passed = false end 'stb3'
+
+    // Struct returned from function
+    var returned = createPoint(100, 200)
+    if returned.x != 100 'str1' passed = false end 'str1'
+    if returned.y != 200 'str2' passed = false end 'str2'
+
+    // Struct with string returned from function (Winchester 1.6)
+    var name2 = createName()
+    if name2.first.count() != 5 'strs1' passed = false end 'strs1'
+    if name2.last.count() != 5 'strs2' passed = false end 'strs2'
+
+    return passed
+end 'test_structs'
+
+function createPoint(x int, y int) returns Point
+    return Point{x: x, y: y}
+end 'createPoint'
+
+function createName() returns NameStruct
+    return NameStruct{first: "Alice", last: "Smith"}
+end 'createName'
+
+// Test 5: Optionals (weight: 16)
+function test_optionals() returns bool
+    var passed = true
+
+    // Optional from function with value
+    var opt1 = getOptionalValue()
+
+    // if-let unwrap
+    if let val = opt1 'ol1'
+        if val != 42 'ol2' passed = false end 'ol2'
+    end 'ol1' else 'ol3'
+        passed = false
+    end 'ol3'
+
+    // Optional with nil
+    var opt2 = getOptionalNil()
+    if let unwrapped = opt2 'on1'
+        if unwrapped >= 0 'on1a'
+            passed = false
+        end 'on1a'
+    end 'on1'
+
+    // else-unwrap
+    var result = opt2 else 'eu1'
+        result = 99
+    end 'eu1'
+    if result != 99 'eu2' passed = false end 'eu2'
+
+    // nil coalescing
+    var val1 = opt1 or 0
+    var val2 = opt2 or 100
+    if val1 != 42 'nc1' passed = false end 'nc1'
+    if val2 != 100 'nc2' passed = false end 'nc2'
+
+    // Optional from function with condition
+    var maybe = getMaybeValue(true)
+    if let v = maybe 'of1'
+        if v != 10 'of2' passed = false end 'of2'
+    end 'of1' else 'of3'
+        passed = false
+    end 'of3'
+
+    var nothing = getMaybeValue(false)
+    if let v = nothing 'of4'
+        if v >= 0 'of4a'
+            passed = false
+        end 'of4a'
+    end 'of4'
+
+    return passed
+end 'test_optionals'
+
+function getOptionalValue() returns int or nil
+    return 42
+end 'getOptionalValue'
+
+function getOptionalNil() returns int or nil
+    return nil
+end 'getOptionalNil'
+
+function getMaybeValue(hasValue bool) returns int or nil
+    if hasValue 'mv1'
+        return 10
+    end 'mv1'
+    return nil
+end 'getMaybeValue'
+
+// Test 6: Enums (weight: 32)
+function test_enums() returns bool
+    var passed = true
+
+    // Simple enum
+    var color = Color.red
+    if color != Color.red 'e1' passed = false end 'e1'
+    if color == Color.blue 'e2' passed = false end 'e2'
+
+    // Enum comparison
+    var color2 = Color.red
+    if color != color2 'ec1' passed = false end 'ec1'
+
+    // Enum with raw values
+    var s = StatusCode.ok
+    if s.rawValue != 200 'er1' passed = false end 'er1'
+    var s2 = StatusCode.notFound
+    if s2.rawValue != 404 'er2' passed = false end 'er2'
+
+    // Enum with associated values
+    var r1 = Result.success(42)
+    var r2 = Result.failure(500)
+
+    // Match on enum with associated values
+    var extracted1 = 0
+    match r1 'em1'
+        success(v) then extracted1 = v
+        failure(c) then extracted1 = c
+    end 'em1'
+    if extracted1 != 42 'em2' passed = false end 'em2'
+
+    var extracted2 = 0
+    match r2 'em3'
+        success(v) then extracted2 = v
+        failure(c) then extracted2 = c
+    end 'em3'
+    if extracted2 != 500 'em4' passed = false end 'em4'
+
+    // Match on simple enum
+    var color_val = 0
+    match color 'emc'
+        Color.red then color_val = 1
+        Color.green then color_val = 2
+        Color.blue then color_val = 3
+    end 'emc'
+    if color_val != 1 'emc2' passed = false end 'emc2'
+
+    return passed
+end 'test_enums'
+
+// Test 7: Control Flow (weight: 64)
+function test_control_flow() returns bool
+    var passed = true
+
+    // if/else/else-if
+    var x = 5
+    var if_result = 0
+    if x < 0 'cf1'
+        if_result = 1
+    end 'cf1' else if x < 10 'cf2'
+        if_result = 2
+    end 'cf2' else 'cf3'
+        if_result = 3
+    end 'cf3'
+    if if_result != 2 'cfr1' passed = false end 'cfr1'
+
+    // while loop
+    var i = 0
+    var sum = 0
+    while i < 5 'wh1'
+        sum = sum + i
+        i = i + 1
+    end 'wh1'
+    if sum != 10 'whr1' passed = false end 'whr1'
+
+    // while with break
+    var j = 0
+    while true 'wh2'
+        j = j + 1
+        if j == 3 'whb'
+            break
+        end 'whb'
+    end 'wh2'
+    if j != 3 'whbr' passed = false end 'whbr'
+
+    // while with continue
+    var k = 0
+    var cont_sum = 0
+    while k < 5 'wh3'
+        k = k + 1
+        if k == 3 'whc'
+            continue
+        end 'whc'
+        cont_sum = cont_sum + k
+    end 'wh3'
+    if cont_sum != 12 'whcr' passed = false end 'whcr'
+
+    // for-in over array
+    var arr = [1, 2, 3, 4]
+    var arr_sum = 0
+    for item in arr 'fi1'
+        arr_sum = arr_sum + item
+    end 'fi1'
+    if arr_sum != 10 'fir1' passed = false end 'fir1'
+
+    // for-in over string
+    var str = "abc"
+    var char_count = 0
+    for c in str 'fi2'
+        // Check that each character is what we expect
+        if char_count == 0 'cc0'
+            if c != 'a' 'cca' passed = false end 'cca'
+        end 'cc0'
+        char_count = char_count + 1
+    end 'fi2'
+    if char_count != 3 'fir2' passed = false end 'fir2'
+
+    // Labeled break in nested loops
+    var outer_count = 0
+    var inner_count = 0
+    var m = 0
+    while m < 5 'outer'
+        var n = 0
+        while n < 5 'inner'
+            inner_count = inner_count + 1
+            if n == 2 'lb'
+                break 'outer'
+            end 'lb'
+            n = n + 1
+        end 'inner'
+        outer_count = outer_count + 1
+        m = m + 1
+    end 'outer'
+    if inner_count != 3 'lbr1' passed = false end 'lbr1'
+    if outer_count != 0 'lbr2' passed = false end 'lbr2'
+
+    // Match statement
+    var match_val = 2
+    var match_result = 0
+    match match_val 'ms1'
+        1 then match_result = 10
+        2 then match_result = 20
+        default then match_result = 0
+    end 'ms1'
+    if match_result != 20 'msr1' passed = false end 'msr1'
+
+    // Match expression
+    var match_expr_val = 3
+    var expr_result = match match_expr_val 'me1'
+        1 gives 100
+        2 gives 200
+        3 gives 300
+        default gives 0
+    end 'me1'
+    if expr_result != 300 'mer1' passed = false end 'mer1'
+
+    return passed
+end 'test_control_flow'
+
+// Test 8: Functions (weight: 128)
+function test_functions() returns bool
+    var passed = true
+
+    // Basic function call
+    var r1 = add(3, 4)
+    if r1 != 7 'fn1' passed = false end 'fn1'
+
+    // Function with default parameter
+    var r2 = greet("World")
+    if r2.count() != 16 'fn2' passed = false end 'fn2'
+
+    var r3 = greet("World", title = "Dr.")
+    if r3.count() != 16 'fn3' passed = false end 'fn3'
+
+    // Named arguments
+    var r4 = subtract(a = 10, b = 3)
+    if r4 != 7 'fn4' passed = false end 'fn4'
+
+    var r5 = subtract(b = 3, a = 10)
+    if r5 != 7 'fn5' passed = false end 'fn5'
+
+    // Mixed positional and named
+    var r6 = subtract(10, b = 4)
+    if r6 != 6 'fn6' passed = false end 'fn6'
+
+    // Recursive function
+    var fib_result = fibonacci(10)
+    if fib_result != 55 'fnr' passed = false end 'fnr'
+
+    // Function returning struct
+    var pt = makePoint(5, 10)
+    if pt.x != 5 'fns1' passed = false end 'fns1'
+    if pt.y != 10 'fns2' passed = false end 'fns2'
+
+    // Function returning value test
+    var inc_result = incrementCounter()
+    if inc_result != 1 'fnv' passed = false end 'fnv'
+
+    return passed
+end 'test_functions'
+
+function add(a int, b int) returns int
+    return a + b
+end 'add'
+
+function greet(name string, title string = "Mr.") returns string
+    return "Hello, {title} {name}"
+end 'greet'
+
+function subtract(a int, b int) returns int
+    return a - b
+end 'subtract'
+
+function fibonacci(n int) returns int
+    if n <= 1 'fib1'
+        return n
+    end 'fib1'
+    return fibonacci(n - 1) + fibonacci(n - 2)
+end 'fibonacci'
+
+function makePoint(x int, y int) returns Point
+    return Point{x: x, y: y}
+end 'makePoint'
+
+function incrementCounter() returns int
+    return 1
+end 'incrementCounter'
+
+// Test 9: Collections (weight: 256)
+function test_collections() returns bool
+    var passed = true
+
+    // Map with int keys
+    var m = map from int to string
+    m.insert(1, "one")
+    m.insert(2, "two")
+    m.insert(3, "three")
+
+    if m.count() != 3 'map1' passed = false end 'map1'
+    if not m.contains(2) 'map2' passed = false end 'map2'
+    if m.contains(99) 'map3' passed = false end 'map3'
+
+    var val = m.get(2) or ""
+    if val.count() != 3 'map4' passed = false end 'map4'
+
+    // Map remove
+    m.remove(2)
+    if m.count() != 2 'map5' passed = false end 'map5'
+    if m.contains(2) 'map6' passed = false end 'map6'
+
+    // Map with string keys (tests string hashing)
+    var sm = map from string to int
+    sm.insert("apple", 1)
+    sm.insert("banana", 2)
+    sm.insert("cherry", 3)
+
+    if sm.count() != 3 'smap1' passed = false end 'smap1'
+    var apple_val = sm.get("apple") or 0
+    if apple_val != 1 'smap2' passed = false end 'smap2'
+
+    // Map resize (add many elements)
+    var big_map = map from int to int
+    var idx = 0
+    while idx < 20 'mapr'
+        big_map.insert(idx, idx * 10)
+        idx = idx + 1
+    end 'mapr'
+    if big_map.count() != 20 'maprs' passed = false end 'maprs'
+    var big_val = big_map.get(15) or 0
+    if big_val != 150 'maprs2' passed = false end 'maprs2'
+
+    // Set
+    var st = set from [1, 2, 3]
+    st.insert(2)
+
+    if st.count() != 3 'set1' passed = false end 'set1'
+    if not st.contains(2) 'set2' passed = false end 'set2'
+    if st.contains(99) 'set3' passed = false end 'set3'
+
+    // Set remove
+    st.remove(2)
+    if st.count() != 2 'set4' passed = false end 'set4'
+    if st.contains(2) 'set5' passed = false end 'set5'
+
+    return passed
+end 'test_collections'
+
+// Test 10: Operators (weight: 512)
+function test_operators() returns bool
+    var passed = true
+
+    // Arithmetic precedence
+    if 2 + 3 * 4 != 14 'op1' passed = false end 'op1'
+    if (2 + 3) * 4 != 20 'op2' passed = false end 'op2'
+    if 10 - 4 - 2 != 4 'op3' passed = false end 'op3'
+
+    // Comparison operators
+    if not (5 < 10) 'cmp1' passed = false end 'cmp1'
+    if not (10 > 5) 'cmp2' passed = false end 'cmp2'
+    if not (5 <= 5) 'cmp3' passed = false end 'cmp3'
+    if not (5 >= 5) 'cmp4' passed = false end 'cmp4'
+    if not (5 == 5) 'cmp5' passed = false end 'cmp5'
+    if not (5 != 6) 'cmp6' passed = false end 'cmp6'
+
+    // Logical operators with comparison
+    var a = 5
+    var b = 10
+    var c = 15
+    if not (a < b and b < c) 'log1' passed = false end 'log1'
+    if not (a > b or b < c) 'log2' passed = false end 'log2'
+
+    // Type casting
+    var b_cast = 65 as byte
+    if b_cast as int != 65 'cast1' passed = false end 'cast1'
+
+    var f = 5 as float
+    if f < 4.9 'cast2' passed = false end 'cast2'
+    if f > 5.1 'cast3' passed = false end 'cast3'
+
+    // Modulo
+    if 10 mod 3 != 1 'mod1' passed = false end 'mod1'
+    if 15 mod 5 != 0 'mod2' passed = false end 'mod2'
+    if 17 mod 4 != 1 'mod3' passed = false end 'mod3'
+
+    // Unary operators
+    var x = 5
+    var neg_x = 0 - x
+    if neg_x != 0 - 5 'un1' passed = false end 'un1'
+
+    var t = true
+    if not t 'un2' passed = false end 'un2'
+    if not not t != true 'un3' passed = false end 'un3'
+
+    // Bitwise (if supported)
+    // var and_result = 0b1100 and 0b1010
+    // if and_result != 0b1000 'bit1' passed = false end 'bit1'
+
+    return passed
+end 'test_operators'
+
+// Test 11: Edge Cases (weight: 1024)
+function test_edge_cases() returns bool
+    var passed = true
+
+    // Edge Case 1: Deep copy struct with array from parameter (Winchester 1.8)
+    var source_arr = [1, 2, 3]
+    var container = makeContainer(source_arr)
+    var items_ref = container.items
+    items_ref.push(4)
+    if items_ref.count() != 4 'ec1a' passed = false end 'ec1a'
+    if source_arr.count() != 3 'ec1b' passed = false end 'ec1b'
+
+    // Edge Case 2: Nested struct return with string (Winchester 1.6)
+    var nested = createOuter()
+    if nested.inner.s.count() != 4 'ec2a' passed = false end 'ec2a'
+    if nested.x != 99 'ec2b' passed = false end 'ec2b'
+
+    // Edge Case 3: String reassignment in loop (Winchester 1.7)
+    var str = "x"
+    var i = 0
+    while i < 5 'ec3loop'
+        str = "{str}y"
+        i = i + 1
+    end 'ec3loop'
+    if str.count() != 6 'ec3' passed = false end 'ec3'
+
+    // Edge Case 4: Large struct in loop (Winchester 1.5)
+    var big = BigStruct{a: 0, b: 0, c: 0}
+    var j = 0
+    while j < 10 'ec4loop'
+        big.a = big.a + 1
+        big.b = big.b + 2
+        big.c = big.c + 3
+        j = j + 1
+    end 'ec4loop'
+    if big.a != 10 'ec4a' passed = false end 'ec4a'
+    if big.b != 20 'ec4b' passed = false end 'ec4b'
+    if big.c != 30 'ec4c' passed = false end 'ec4c'
+
+    // Edge Case 5: Multiple variable definitions with early exit (PHI nodes)
+    var result = 0
+    var k = 0
+    while k < 10 'ec5loop'
+        if k == 5 'ec5if'
+            result = 100
+            break
+        end 'ec5if'
+        result = k
+        k = k + 1
+    end 'ec5loop'
+    if result != 100 'ec5' passed = false end 'ec5'
+
+    // Edge Case 6: Array of structs
+    var points = array of Point
+    points.push(Point{x: 1, y: 2})
+    points.push(Point{x: 3, y: 4})
+    if points.count() != 2 'ec6a' passed = false end 'ec6a'
+    if points[0].x != 1 'ec6b' passed = false end 'ec6b'
+    if points[1].y != 4 'ec6c' passed = false end 'ec6c'
+
+    // Edge Case 7: Optional nil coalescing
+    var opt_val = getOptionalValue()
+    var maybe_result = opt_val or 0
+    if maybe_result != 42 'ec7' passed = false end 'ec7'
+
+    // Edge Case 8: Complex expression in if condition
+    var arr2 = [1, 2, 3, 4, 5]
+    if arr2[2] + arr2[3] == 7 'ec8'
+        passed = passed and true
+    end 'ec8' else 'ec8e'
+        passed = false
+    end 'ec8e'
+
+    // Edge Case 9: Method chaining style (if supported)
+    var test_str = "hello world"
+    if test_str.startsWith("hello") and test_str.endsWith("world") 'ec9'
+        passed = passed and true
+    end 'ec9' else 'ec9e'
+        passed = false
+    end 'ec9e'
+
+    // Edge Case 10: Float precision
+    var f1 = 0.1
+    var f2 = 0.2
+    var f3 = f1 + f2
+    if f3 < 0.29 'ec10a' passed = false end 'ec10a'
+    if f3 > 0.31 'ec10b' passed = false end 'ec10b'
+
+    return passed
+end 'test_edge_cases'
+
+function makeContainer(arr array of int) returns ArrayContainer
+    return ArrayContainer{items: arr}
+end 'makeContainer'
+
+function createOuter() returns OuterStruct
+    var inner = InnerStruct{s: "test"}
+    return OuterStruct{inner: inner, x: 99}
+end 'createOuter'
+
+// ============================================================================
+// Test 12: Type Passing (all types as function parameters)
+// ============================================================================
+
+// Helper functions that accept each type as parameter
+function accept_int(x int) returns int
+    return x + 1
+end 'accept_int'
+
+function accept_float(x float) returns float
+    return x + 1.0
+end 'accept_float'
+
+function accept_bool(x bool) returns bool
+    return not x
+end 'accept_bool'
+
+function accept_byte(x byte) returns byte
+    return x
+end 'accept_byte'
+
+function accept_character(x character) returns character
+    return x
+end 'accept_character'
+
+function accept_string(x string) returns string
+    return "{x}!"
+end 'accept_string'
+
+function accept_array_int(arr array of int) returns int
+    return arr.count()
+end 'accept_array_int'
+
+function accept_array_string(arr array of string) returns int
+    return arr.count()
+end 'accept_array_string'
+
+function accept_struct(p Point) returns int
+    return p.x + p.y
+end 'accept_struct'
+
+function accept_nested_struct(o OuterStruct) returns int
+    return o.x
+end 'accept_nested_struct'
+
+function accept_big_struct(b BigStruct) returns int
+    return b.a + b.b + b.c
+end 'accept_big_struct'
+
+function accept_struct_with_string(n NameStruct) returns string
+    return n.first
+end 'accept_struct_with_string'
+
+function accept_struct_with_array(c ArrayContainer) returns int
+    return c.items.count()
+end 'accept_struct_with_array'
+
+function accept_enum(c Color) returns bool
+    return c == Color.red
+end 'accept_enum'
+
+function accept_enum_raw(s StatusCode) returns int
+    return s.rawValue
+end 'accept_enum_raw'
+
+function accept_optional_int(x int or nil) returns int
+    return x or 0
+end 'accept_optional_int'
+
+function accept_optional_string(x string or nil) returns string
+    return x or "default"
+end 'accept_optional_string'
+
+function accept_map(m map from int to string) returns int
+    return m.count()
+end 'accept_map'
+
+function accept_set(s set of int) returns int
+    return s.count()
+end 'accept_set'
+
+function test_type_passing() returns bool
+    var passed = true
+
+    // Primitive types as parameters
+    if accept_int(41) != 42 'tp_int' passed = false end 'tp_int'
+
+    var float_result = accept_float(2.5)
+    if float_result < 3.4 'tp_float1' passed = false end 'tp_float1'
+    if float_result > 3.6 'tp_float2' passed = false end 'tp_float2'
+
+    if accept_bool(true) != false 'tp_bool' passed = false end 'tp_bool'
+
+    var b = 100 as byte
+    if accept_byte(b) as int != 100 'tp_byte' passed = false end 'tp_byte'
+
+    if accept_character('X') != 'X' 'tp_char' passed = false end 'tp_char'
+
+    if accept_string("hello") != "hello!" 'tp_string' passed = false end 'tp_string'
+
+    // Arrays as parameters
+    var arr_int = [1, 2, 3, 4, 5]
+    if accept_array_int(arr_int) != 5 'tp_arr_int' passed = false end 'tp_arr_int'
+
+    var arr_str = ["a", "b", "c"]
+    if accept_array_string(arr_str) != 3 'tp_arr_str' passed = false end 'tp_arr_str'
+
+    // Structs as parameters
+    var pt = Point{x: 10, y: 20}
+    if accept_struct(pt) != 30 'tp_struct' passed = false end 'tp_struct'
+
+    var inner = InnerStruct{s: "test"}
+    var outer = OuterStruct{inner: inner, x: 42}
+    if accept_nested_struct(outer) != 42 'tp_nested' passed = false end 'tp_nested'
+
+    var big = BigStruct{a: 1, b: 2, c: 3}
+    if accept_big_struct(big) != 6 'tp_big' passed = false end 'tp_big'
+
+    var name = NameStruct{first: "Alice", last: "Smith"}
+    if accept_struct_with_string(name) != "Alice" 'tp_str_struct' passed = false end 'tp_str_struct'
+
+    var container = ArrayContainer{items: [10, 20, 30]}
+    if accept_struct_with_array(container) != 3 'tp_arr_struct' passed = false end 'tp_arr_struct'
+
+    // Enums as parameters
+    if not accept_enum(Color.red) 'tp_enum' passed = false end 'tp_enum'
+    if accept_enum_raw(StatusCode.notFound) != 404 'tp_enum_raw' passed = false end 'tp_enum_raw'
+
+    // Optionals as parameters
+    var opt_val = getOptionalValue()
+    if accept_optional_int(opt_val) != 42 'tp_opt_int' passed = false end 'tp_opt_int'
+
+    var opt_nil = getOptionalNil()
+    if accept_optional_int(opt_nil) != 0 'tp_opt_nil' passed = false end 'tp_opt_nil'
+
+    // Collections as parameters
+    var m = map from int to string
+    m.insert(1, "one")
+    m.insert(2, "two")
+    if accept_map(m) != 2 'tp_map' passed = false end 'tp_map'
+
+    // Set as parameter
+    var st = set from [10, 20, 30]
+    if accept_set(st) != 3 'tp_set' passed = false end 'tp_set'
+
+    return passed
+end 'test_type_passing'
+
+// ============================================================================
+// Test 13: Type Returning (all types returned from functions)
+// ============================================================================
+
+// Helper functions that return each type
+function return_int() returns int
+    return 42
+end 'return_int'
+
+function return_float() returns float
+    return 3.14
+end 'return_float'
+
+function return_bool() returns bool
+    return true
+end 'return_bool'
+
+function return_byte() returns byte
+    return 255 as byte
+end 'return_byte'
+
+function return_character() returns character
+    return 'Z'
+end 'return_character'
+
+function return_string() returns string
+    return "returned string"
+end 'return_string'
+
+function return_long_string() returns string
+    return "this is a very long string that should exceed small string optimization"
+end 'return_long_string'
+
+function return_array_int() returns array of int
+    var arr = [1, 2, 3, 4, 5]
+    return arr
+end 'return_array_int'
+
+function return_array_string() returns array of string
+    var arr = ["hello", "world", "test"]
+    return arr
+end 'return_array_string'
+
+function return_empty_array() returns array of int
+    var arr = array of int
+    return arr
+end 'return_empty_array'
+
+function return_struct() returns Point
+    return Point{x: 100, y: 200}
+end 'return_struct'
+
+function return_nested_struct() returns OuterStruct
+    var inner = InnerStruct{s: "nested"}
+    return OuterStruct{inner: inner, x: 77}
+end 'return_nested_struct'
+
+function return_big_struct() returns BigStruct
+    return BigStruct{a: 10, b: 20, c: 30}
+end 'return_big_struct'
+
+function return_struct_with_string() returns NameStruct
+    return NameStruct{first: "Bob", last: "Jones"}
+end 'return_struct_with_string'
+
+function return_struct_with_array() returns ArrayContainer
+    var items = [100, 200, 300]
+    return ArrayContainer{items: items}
+end 'return_struct_with_array'
+
+function return_enum() returns Color
+    return Color.green
+end 'return_enum'
+
+function return_enum_raw() returns StatusCode
+    return StatusCode.error
+end 'return_enum_raw'
+
+function return_enum_associated() returns Result
+    return Result.success(999)
+end 'return_enum_associated'
+
+function return_optional_value() returns int or nil
+    return 88
+end 'return_optional_value'
+
+function return_optional_nil() returns int or nil
+    return nil
+end 'return_optional_nil'
+
+function return_optional_string_value() returns string or nil
+    return "optional string"
+end 'return_optional_string_value'
+
+function return_optional_string_nil() returns string or nil
+    return nil
+end 'return_optional_string_nil'
+
+function return_map() returns map from string to int
+    var m = map from string to int
+    m.insert("x", 10)
+    m.insert("y", 20)
+    return m
+end 'return_map'
+
+function return_set() returns set of int
+    var s = set from [100, 200, 300]
+    return s
+end 'return_set'
+
+function test_type_returning() returns bool
+    var passed = true
+
+    // Primitive returns
+    if return_int() != 42 'tr_int' passed = false end 'tr_int'
+
+    var f = return_float()
+    if f < 3.13 'tr_float1' passed = false end 'tr_float1'
+    if f > 3.15 'tr_float2' passed = false end 'tr_float2'
+
+    if not return_bool() 'tr_bool' passed = false end 'tr_bool'
+
+    if return_byte() as int != 255 'tr_byte' passed = false end 'tr_byte'
+
+    if return_character() != 'Z' 'tr_char' passed = false end 'tr_char'
+
+    if return_string() != "returned string" 'tr_string' passed = false end 'tr_string'
+
+    var long_str = return_long_string()
+    if long_str.count() != 71 'tr_long_str' passed = false end 'tr_long_str'
+
+    // Array returns
+    var arr_int = return_array_int()
+    if arr_int.count() != 5 'tr_arr_int1' passed = false end 'tr_arr_int1'
+    if arr_int[0] != 1 'tr_arr_int2' passed = false end 'tr_arr_int2'
+    if arr_int[4] != 5 'tr_arr_int3' passed = false end 'tr_arr_int3'
+
+    var arr_str = return_array_string()
+    if arr_str.count() != 3 'tr_arr_str1' passed = false end 'tr_arr_str1'
+    if arr_str[0] != "hello" 'tr_arr_str2' passed = false end 'tr_arr_str2'
+
+    var empty_arr = return_empty_array()
+    if empty_arr.count() != 0 'tr_empty_arr' passed = false end 'tr_empty_arr'
+
+    // Struct returns
+    var pt = return_struct()
+    if pt.x != 100 'tr_struct1' passed = false end 'tr_struct1'
+    if pt.y != 200 'tr_struct2' passed = false end 'tr_struct2'
+
+    var nested = return_nested_struct()
+    if nested.x != 77 'tr_nested1' passed = false end 'tr_nested1'
+    if nested.inner.s != "nested" 'tr_nested2' passed = false end 'tr_nested2'
+
+    var big = return_big_struct()
+    if big.a != 10 'tr_big1' passed = false end 'tr_big1'
+    if big.b != 20 'tr_big2' passed = false end 'tr_big2'
+    if big.c != 30 'tr_big3' passed = false end 'tr_big3'
+
+    var name = return_struct_with_string()
+    if name.first != "Bob" 'tr_str_struct1' passed = false end 'tr_str_struct1'
+    if name.last != "Jones" 'tr_str_struct2' passed = false end 'tr_str_struct2'
+
+    var container = return_struct_with_array()
+    if container.items.count() != 3 'tr_arr_struct1' passed = false end 'tr_arr_struct1'
+    if container.items[0] != 100 'tr_arr_struct2' passed = false end 'tr_arr_struct2'
+
+    // Enum returns
+    if return_enum() != Color.green 'tr_enum' passed = false end 'tr_enum'
+    var status_code = return_enum_raw()
+    if status_code.rawValue != 500 'tr_enum_raw' passed = false end 'tr_enum_raw'
+
+    var result_enum = return_enum_associated()
+    var extracted = 0
+    match result_enum 'tr_enum_assoc'
+        success(v) then extracted = v
+        failure(c) then extracted = c
+    end 'tr_enum_assoc'
+    if extracted != 999 'tr_enum_assoc2' passed = false end 'tr_enum_assoc2'
+
+    // Optional returns
+    var opt_val = return_optional_value()
+    if let v = opt_val 'tr_opt_val'
+        if v != 88 'tr_opt_val2' passed = false end 'tr_opt_val2'
+    end 'tr_opt_val' else 'tr_opt_val_else'
+        passed = false
+    end 'tr_opt_val_else'
+
+    var opt_nil = return_optional_nil()
+    if let v = opt_nil 'tr_opt_nil'
+        if v >= 0 'tr_opt_nil_inner'
+            passed = false
+        end 'tr_opt_nil_inner'
+    end 'tr_opt_nil'
+
+    var opt_str = return_optional_string_value()
+    var str_result = opt_str or "failed"
+    if str_result != "optional string" 'tr_opt_str' passed = false end 'tr_opt_str'
+
+    var opt_str_nil = return_optional_string_nil()
+    var str_nil_result = opt_str_nil or "default"
+    if str_nil_result != "default" 'tr_opt_str_nil' passed = false end 'tr_opt_str_nil'
+
+    // Collection returns
+    var m = return_map()
+    if m.count() != 2 'tr_map1' passed = false end 'tr_map1'
+    var x_val = m.get("x") or 0
+    if x_val != 10 'tr_map2' passed = false end 'tr_map2'
+
+    // Set return
+    var s = return_set()
+    if s.count() != 3 'tr_set1' passed = false end 'tr_set1'
+    if not s.contains(200) 'tr_set2' passed = false end 'tr_set2'
+
+    return passed
+end 'test_type_returning'
+
+// ============================================================================
+// MAIN FUNCTION
+// ============================================================================
+
+function main() returns int
+    var result = 0
+
+    // Run all tests and count passing tests
+    // Exit codes are limited to 0-255, so we count tests instead of using bit flags
+
+    if test_primitives() 'tp'
+        result = result + 1
+    end 'tp'
+
+    if test_strings() 'ts'
+        result = result + 1
+    end 'ts'
+
+    if test_arrays() 'ta'
+        result = result + 1
+    end 'ta'
+
+    if test_structs() 'tst'
+        result = result + 1
+    end 'tst'
+
+    if test_optionals() 'to'
+        result = result + 1
+    end 'to'
+
+    if test_enums() 'te'
+        result = result + 1
+    end 'te'
+
+    if test_control_flow() 'tcf'
+        result = result + 1
+    end 'tcf'
+
+    if test_functions() 'tf'
+        result = result + 1
+    end 'tf'
+
+    if test_collections() 'tc'
+        result = result + 1
+    end 'tc'
+
+    if test_operators() 'top'
+        result = result + 1
+    end 'top'
+
+    if test_edge_cases() 'tec'
+        result = result + 1
+    end 'tec'
+
+    if test_type_passing() 'ttp'
+        result = result + 1
+    end 'ttp'
+
+    if test_type_returning() 'ttr'
+        result = result + 1
+    end 'ttr'
+
+    // Expected: 13 (all 13 tests pass)
+    print("All tests passed: {result} / 13")
+    return result
+end 'main'

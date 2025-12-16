@@ -26,6 +26,8 @@ ExitCode: 99
 
 @.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [4 x i8] c"Bob\00"
+@.__tag.free.p.name = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.p.name = constant [16 x i8] c"string metadata\00"
 
 define i64 @main() {
 entry0:
@@ -65,12 +67,31 @@ entry0:
 iflet.then1:
   %22 = getelementptr Optional<i64>, ptr %18, i32 0, i32 1
   %23 = load i64, ptr %22
-  ret i64 %23
+  %26 = getelementptr %Person, ptr %0, i32 0, i32 0
+  %27 = getelementptr %string, ptr %26, i32 0, i32 0
+  %28 = load ptr, ptr %27
+  %29 = getelementptr %__ManagedStringData, ptr %28, i32 0, i32 2
+  %30 = load i64, ptr %29
+  %31 = icmp sgt i64 %30, 0
+  br i1 %31, label %p.name.release4, label %p.name.continue5
 iflet.else3:
   ret i64 99
+p.name.release4:
+  %32 = getelementptr %__ManagedStringData, ptr %28, i32 0, i32 0
+  %33 = getelementptr %_ManagedArray_byte, ptr %32, i32 0, i32 0
+  %34 = load ptr, ptr %33
+  call void @_managed_string_release(ptr %34, ptr @.__tag.free.p.name)
+  br label %p.name.continue5
+p.name.continue5:
+  call void @free(ptr %28, ptr @.__tag.free.meta.p.name)
+  ret i64 %23
 }
 
 declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 
@@ -91,6 +112,8 @@ entry0:
 
 @.__tag.str.meta = constant [16 x i8] c"string metadata\00"
 @.str.sso.1 = constant [4 x i8] c"Bob\00"
+@.__tag.free.p.name = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.p.name = constant [16 x i8] c"string metadata\00"
 
 define i64 @main() {
 entry0:
@@ -133,14 +156,33 @@ iflet.then1:
   %24 = alloca i64
   store i64 %23, ptr %24
   %25 = load i64, ptr %24
-  ret i64 %25
+  %26 = getelementptr %Person, ptr %0, i32 0, i32 0
+  %27 = getelementptr %string, ptr %26, i32 0, i32 0
+  %28 = load ptr, ptr %27
+  %29 = getelementptr %__ManagedStringData, ptr %28, i32 0, i32 2
+  %30 = load i64, ptr %29
+  %31 = icmp sgt i64 %30, 0
+  br i1 %31, label %p.name.release4, label %p.name.continue5
 iflet.after2:
   ret i64 0
 iflet.else3:
   ret i64 99
+p.name.release4:
+  %32 = getelementptr %__ManagedStringData, ptr %28, i32 0, i32 0
+  %33 = getelementptr %_ManagedArray_byte, ptr %32, i32 0, i32 0
+  %34 = load ptr, ptr %33
+  call void @_managed_string_release(ptr %34, ptr @.__tag.free.p.name)
+  br label %p.name.continue5
+p.name.continue5:
+  call void @free(ptr %28, ptr @.__tag.free.meta.p.name)
+  ret i64 %25
 }
 
 declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
+
+declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
 declare void @exit(i32 %arg0)
 

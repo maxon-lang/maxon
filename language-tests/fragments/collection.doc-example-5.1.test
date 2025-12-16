@@ -27,6 +27,7 @@ Stdout: ```
 %_ManagedArray_int = type { ptr, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.arr.return.copy = constant [18 x i8] c"return array copy\00"
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.__tag.str.meta = constant [16 x i8] c"string metadata\00"
@@ -207,7 +208,13 @@ newline.var.continue2:
 
 declare void @_managed_string_retain(ptr %arg0)
 
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
+
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
@@ -259,8 +266,15 @@ then1:
   %12 = icmp slt i64 %index, %6
   br i1 %12, label %then3, label %ifcont4
 ifcont2:
-  %22 = load %array<int>, ptr %self
-  ret %array<int> %22
+  %24 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %25 = getelementptr %__ManagedArrayData_int, ptr %24, i32 0, i32 2
+  %26 = load i64, ptr %25
+  %27 = getelementptr %__ManagedArrayData_int, ptr %24, i32 0, i32 1
+  %28 = load i64, ptr %27
+  %29 = icmp eq i64 %26, 0
+  %30 = icmp sgt i64 %28, 0
+  %31 = and i1 %29, %30
+  br i1 %31, label %ret.arr.copy5, label %ret.arr.done6
 then3:
   %16 = getelementptr %array<int>, ptr %self, i32 0, i32 0
   %17 = getelementptr %__ManagedArrayData_int, ptr %16, i32 0, i32 0
@@ -271,22 +285,34 @@ then3:
   br label %ifcont4
 ifcont4:
   br label %ifcont2
+ret.arr.copy5:
+  %32 = getelementptr %__ManagedArrayData_int, ptr %24, i32 0, i32 0
+  %33 = load ptr, ptr %32
+  %34 = shl i64 %28, 3
+  %35 = call ptr @_managed_array_alloc(i64 %34, ptr @.__tag.arr.return.copy)
+  %36 = call ptr @memcpy(ptr %35, ptr %33, i64 %34)
+  store ptr %35, ptr %32
+  store i64 %28, ptr %25
+  br label %ret.arr.done6
+ret.arr.done6:
+  %37 = load %array<int>, ptr %self
+  ret %array<int> %37
 }
 
 define %array<int> @array<int>.map(ptr %self, ptr %transform) {
 entry0:
   br label %whilecond1
 whilecond1:
-  %33 = phi i64 [ 0, %entry0 ], [ %34, %iflet.after5 ]
-  %31 = phi i64 [ 0, %entry0 ], [ %32, %iflet.after5 ]
-  %30 = phi i64 [ 0, %entry0 ], [ %27, %iflet.after5 ]
-  %35 = getelementptr %array<int>, ptr %self, i32 0, i32 0
-  %36 = getelementptr %__ManagedArrayData_int, ptr %35, i32 0, i32 1
-  %37 = load i64, ptr %36
-  %6 = icmp slt i64 %30, %37
+  %48 = phi i64 [ 0, %entry0 ], [ %49, %iflet.after5 ]
+  %46 = phi i64 [ 0, %entry0 ], [ %47, %iflet.after5 ]
+  %45 = phi i64 [ 0, %entry0 ], [ %27, %iflet.after5 ]
+  %50 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %51 = getelementptr %__ManagedArrayData_int, ptr %50, i32 0, i32 1
+  %52 = load i64, ptr %51
+  %6 = icmp slt i64 %45, %52
   br i1 %6, label %loop2, label %afterloop3
 loop2:
-  %9 = call Optional<i64> @array<int>.get(ptr %self, i64 %30)
+  %9 = call Optional<i64> @array<int>.get(ptr %self, i64 %45)
   %10 = alloca Optional<i64>
   store Optional<i64> %9, ptr %10
   %11 = getelementptr Optional<i64>, ptr %10, i32 0, i32 0
@@ -294,29 +320,44 @@ loop2:
   %13 = icmp eq i8 %12, 1
   br i1 %13, label %iflet.then4, label %iflet.after5
 afterloop3:
-  %29 = load %array<int>, ptr %self
-  ret %array<int> %29
+  %31 = getelementptr %array<int>, ptr %self, i32 0, i32 0
+  %32 = getelementptr %__ManagedArrayData_int, ptr %31, i32 0, i32 2
+  %33 = load i64, ptr %32
+  %34 = getelementptr %__ManagedArrayData_int, ptr %31, i32 0, i32 1
+  %35 = load i64, ptr %34
+  %36 = icmp eq i64 %33, 0
+  %37 = icmp sgt i64 %35, 0
+  %38 = and i1 %36, %37
+  br i1 %38, label %ret.arr.copy6, label %ret.arr.done7
 iflet.then4:
   %14 = getelementptr Optional<i64>, ptr %10, i32 0, i32 1
   %15 = load i64, ptr %14
   %19 = call_indirect i64 %transform(i64 %15)
-  %24 = call %array<int> @array<int>.set(ptr %self, i64 %30, i64 %19)
+  %24 = call %array<int> @array<int>.set(ptr %self, i64 %45, i64 %19)
   store %array<int> %24, ptr %self
   br label %iflet.after5
 iflet.after5:
-  %34 = phi i64 [ %33, %loop2 ], [ %19, %iflet.then4 ]
-  %32 = phi i64 [ %31, %loop2 ], [ %15, %iflet.then4 ]
-  %27 = add i64 %30, 1
+  %49 = phi i64 [ %48, %loop2 ], [ %19, %iflet.then4 ]
+  %47 = phi i64 [ %46, %loop2 ], [ %15, %iflet.then4 ]
+  %27 = add i64 %45, 1
   br label %whilecond1
+ret.arr.copy6:
+  %39 = getelementptr %__ManagedArrayData_int, ptr %31, i32 0, i32 0
+  %40 = load ptr, ptr %39
+  %41 = shl i64 %35, 3
+  %42 = call ptr @_managed_array_alloc(i64 %41, ptr @.__tag.arr.return.copy)
+  %43 = call ptr @memcpy(ptr %42, ptr %40, i64 %41)
+  store ptr %42, ptr %39
+  store i64 %35, ptr %32
+  br label %ret.arr.done7
+ret.arr.done7:
+  %44 = load %array<int>, ptr %self
+  ret %array<int> %44
 }
 
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
-
-declare ptr @malloc(i64 %arg0, ptr %arg1)
-
-declare void @free(ptr %arg0, ptr %arg1)
 
 define i64 @__closure_0(i64 %x) {
 entry0:
@@ -348,6 +389,7 @@ entry0:
 %_ManagedArray_int = type { ptr, i64 }
 %__ManagedStringData = type { %_ManagedArray_byte, i64, i64 }
 
+@.__tag.arr.return.copy = constant [18 x i8] c"return array copy\00"
 @.__tag.cstr = constant [19 x i8] c"cstring conversion\00"
 @.__tag.free.cs = constant [16 x i8] c"cstring release\00"
 @.__tag.str.meta = constant [16 x i8] c"string metadata\00"
@@ -546,7 +588,13 @@ newline.var.continue2:
 
 declare void @_managed_string_retain(ptr %arg0)
 
+declare ptr @malloc(i64 %arg0, ptr %arg1)
+
+declare void @free(ptr %arg0, ptr %arg1)
+
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
+
+declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
 
@@ -634,8 +682,16 @@ then1:
   br i1 %12, label %then3, label %ifcont4
 ifcont2:
   %21 = load ptr, ptr %0
-  %22 = load %array<int>, ptr %21
-  ret %array<int> %22
+  %23 = load ptr, ptr %0
+  %24 = getelementptr %array<int>, ptr %23, i32 0, i32 0
+  %25 = getelementptr %__ManagedArrayData_int, ptr %24, i32 0, i32 2
+  %26 = load i64, ptr %25
+  %27 = getelementptr %__ManagedArrayData_int, ptr %24, i32 0, i32 1
+  %28 = load i64, ptr %27
+  %29 = icmp eq i64 %26, 0
+  %30 = icmp sgt i64 %28, 0
+  %31 = and i1 %29, %30
+  br i1 %31, label %ret.arr.copy5, label %ret.arr.done6
 then3:
   %13 = load i64, ptr %1
   %14 = load i64, ptr %2
@@ -649,6 +705,18 @@ then3:
   br label %ifcont4
 ifcont4:
   br label %ifcont2
+ret.arr.copy5:
+  %32 = getelementptr %__ManagedArrayData_int, ptr %24, i32 0, i32 0
+  %33 = load ptr, ptr %32
+  %34 = mul i64 %28, 8
+  %35 = call ptr @_managed_array_alloc(i64 %34, ptr @.__tag.arr.return.copy)
+  %36 = call ptr @memcpy(ptr %35, ptr %33, i64 %34)
+  store ptr %35, ptr %32
+  store i64 %28, ptr %25
+  br label %ret.arr.done6
+ret.arr.done6:
+  %37 = load %array<int>, ptr %23
+  ret %array<int> %37
 }
 
 define %array<int> @array<int>.map(ptr %self, ptr %transform) {
@@ -678,8 +746,16 @@ loop2:
   br i1 %13, label %iflet.then4, label %iflet.after5
 afterloop3:
   %28 = load ptr, ptr %0
-  %29 = load %array<int>, ptr %28
-  ret %array<int> %29
+  %30 = load ptr, ptr %0
+  %31 = getelementptr %array<int>, ptr %30, i32 0, i32 0
+  %32 = getelementptr %__ManagedArrayData_int, ptr %31, i32 0, i32 2
+  %33 = load i64, ptr %32
+  %34 = getelementptr %__ManagedArrayData_int, ptr %31, i32 0, i32 1
+  %35 = load i64, ptr %34
+  %36 = icmp eq i64 %33, 0
+  %37 = icmp sgt i64 %35, 0
+  %38 = and i1 %36, %37
+  br i1 %38, label %ret.arr.copy6, label %ret.arr.done7
 iflet.then4:
   %14 = getelementptr Optional<i64>, ptr %10, i32 0, i32 1
   %15 = load i64, ptr %14
@@ -702,15 +778,23 @@ iflet.after5:
   %27 = add i64 %26, 1
   store i64 %27, ptr %2
   br label %whilecond1
+ret.arr.copy6:
+  %39 = getelementptr %__ManagedArrayData_int, ptr %31, i32 0, i32 0
+  %40 = load ptr, ptr %39
+  %41 = mul i64 %35, 8
+  %42 = call ptr @_managed_array_alloc(i64 %41, ptr @.__tag.arr.return.copy)
+  %43 = call ptr @memcpy(ptr %42, ptr %40, i64 %41)
+  store ptr %42, ptr %39
+  store i64 %35, ptr %32
+  br label %ret.arr.done7
+ret.arr.done7:
+  %44 = load %array<int>, ptr %30
+  ret %array<int> %44
 }
 
 declare ptr @_managed_string_alloc(i64 %arg0, ptr %arg1)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
-
-declare ptr @malloc(i64 %arg0, ptr %arg1)
-
-declare void @free(ptr %arg0, ptr %arg1)
 
 define i64 @__closure_0(i64 %x) {
 entry0:

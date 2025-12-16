@@ -52,6 +52,10 @@ Stdout: John Doe, 30 years old
 @.str.sso.5 = constant [3 x i8] c", \00"
 @.__tag.free.interp.final = constant [15 x i8] c"string literal\00"
 @.__tag.free.meta.interp.final = constant [16 x i8] c"string metadata\00"
+@.__tag.free.name.first = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.name.first = constant [16 x i8] c"string metadata\00"
+@.__tag.free.name.last = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.name.last = constant [16 x i8] c"string metadata\00"
 @.str.sso.6 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
 @.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
@@ -320,6 +324,36 @@ entry0:
   call void @free(ptr %55, ptr @.__tag.free.meta.interp.input)
   call void @free(ptr %60, ptr @.__tag.free.meta.interp.intermediate)
   call void @free(ptr %69, ptr @.__tag.free.meta.interp.final)
+  %83 = getelementptr %Name, ptr %0, i32 0, i32 0
+  %84 = getelementptr %string, ptr %83, i32 0, i32 0
+  %85 = load ptr, ptr %84
+  %86 = getelementptr %__ManagedStringData, ptr %85, i32 0, i32 2
+  %87 = load i64, ptr %86
+  %88 = icmp sgt i64 %87, 0
+  br i1 %88, label %name.first.release1, label %name.first.continue2
+name.first.release1:
+  %89 = getelementptr %__ManagedStringData, ptr %85, i32 0, i32 0
+  %90 = getelementptr %_ManagedArray_byte, ptr %89, i32 0, i32 0
+  %91 = load ptr, ptr %90
+  call void @_managed_string_release(ptr %91, ptr @.__tag.free.name.first)
+  br label %name.first.continue2
+name.first.continue2:
+  call void @free(ptr %85, ptr @.__tag.free.meta.name.first)
+  %92 = getelementptr %Name, ptr %0, i32 0, i32 1
+  %93 = getelementptr %string, ptr %92, i32 0, i32 0
+  %94 = load ptr, ptr %93
+  %95 = getelementptr %__ManagedStringData, ptr %94, i32 0, i32 2
+  %96 = load i64, ptr %95
+  %97 = icmp sgt i64 %96, 0
+  br i1 %97, label %name.last.release3, label %name.last.continue4
+name.last.release3:
+  %98 = getelementptr %__ManagedStringData, ptr %94, i32 0, i32 0
+  %99 = getelementptr %_ManagedArray_byte, ptr %98, i32 0, i32 0
+  %100 = load ptr, ptr %99
+  call void @_managed_string_release(ptr %100, ptr @.__tag.free.name.last)
+  br label %name.last.continue4
+name.last.continue4:
+  call void @free(ptr %94, ptr @.__tag.free.meta.name.last)
   ret i64 0
 }
 
@@ -382,11 +416,11 @@ newline.var.continue2:
 
 declare void @_managed_string_retain(ptr %arg0)
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 declare ptr @malloc(i64 %arg0, ptr %arg1)
 
 declare void @free(ptr %arg0, ptr %arg1)
+
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 
@@ -430,6 +464,10 @@ entry0:
 @.str.sso.5 = constant [3 x i8] c", \00"
 @.__tag.free.interp.final = constant [15 x i8] c"string literal\00"
 @.__tag.free.meta.interp.final = constant [16 x i8] c"string metadata\00"
+@.__tag.free.name.first = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.name.first = constant [16 x i8] c"string metadata\00"
+@.__tag.free.name.last = constant [15 x i8] c"string literal\00"
+@.__tag.free.meta.name.last = constant [16 x i8] c"string metadata\00"
 @.str.sso.6 = constant [2 x i8] c"\0A\00"
 @.__tag.free.newline = constant [15 x i8] c"string literal\00"
 @.__tag.free.meta.newline = constant [16 x i8] c"string metadata\00"
@@ -776,6 +814,36 @@ entry0:
   call void @free(ptr %81, ptr @.__tag.free.meta.interp.intermediate)
   %82 = load ptr, ptr %74
   call void @free(ptr %82, ptr @.__tag.free.meta.interp.final)
+  %83 = getelementptr %Name, ptr %0, i32 0, i32 0
+  %84 = getelementptr %string, ptr %83, i32 0, i32 0
+  %85 = load ptr, ptr %84
+  %86 = getelementptr %__ManagedStringData, ptr %85, i32 0, i32 2
+  %87 = load i64, ptr %86
+  %88 = icmp sgt i64 %87, 0
+  br i1 %88, label %name.first.release1, label %name.first.continue2
+name.first.release1:
+  %89 = getelementptr %__ManagedStringData, ptr %85, i32 0, i32 0
+  %90 = getelementptr %_ManagedArray_byte, ptr %89, i32 0, i32 0
+  %91 = load ptr, ptr %90
+  call void @_managed_string_release(ptr %91, ptr @.__tag.free.name.first)
+  br label %name.first.continue2
+name.first.continue2:
+  call void @free(ptr %85, ptr @.__tag.free.meta.name.first)
+  %92 = getelementptr %Name, ptr %0, i32 0, i32 1
+  %93 = getelementptr %string, ptr %92, i32 0, i32 0
+  %94 = load ptr, ptr %93
+  %95 = getelementptr %__ManagedStringData, ptr %94, i32 0, i32 2
+  %96 = load i64, ptr %95
+  %97 = icmp sgt i64 %96, 0
+  br i1 %97, label %name.last.release3, label %name.last.continue4
+name.last.release3:
+  %98 = getelementptr %__ManagedStringData, ptr %94, i32 0, i32 0
+  %99 = getelementptr %_ManagedArray_byte, ptr %98, i32 0, i32 0
+  %100 = load ptr, ptr %99
+  call void @_managed_string_release(ptr %100, ptr @.__tag.free.name.last)
+  br label %name.last.continue4
+name.last.continue4:
+  call void @free(ptr %94, ptr @.__tag.free.meta.name.last)
   ret i64 0
 }
 
@@ -844,11 +912,11 @@ newline.var.continue2:
 
 declare void @_managed_string_retain(ptr %arg0)
 
-declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
-
 declare ptr @malloc(i64 %arg0, ptr %arg1)
 
 declare void @free(ptr %arg0, ptr %arg1)
+
+declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
 declare void @_managed_string_release(ptr %arg0, ptr %arg1)
 

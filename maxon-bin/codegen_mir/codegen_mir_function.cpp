@@ -86,6 +86,12 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 		}
 	}
 
+	// Save the base scope level before this function starts
+	// This ensures return statements only clean up this function's scopes,
+	// not scopes from calling functions (which can happen during generic method instantiation)
+	size_t previousBaseLevel = functionScopeBaseLevel;
+	functionScopeBaseLevel = scopeStack.size();
+
 	// Push a scope for the function body
 	pushScope();
 
@@ -111,8 +117,10 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 	// If function doesn't have a terminator (return), clean up and add one
 	mir::MIRBasicBlock *currentBlock = builder->getInsertBlock();
 	if (currentBlock && !currentBlock->hasTerminator()) {
-		// Clean up the function scope
-		popScope(function);
+		// Clean up the function scope - only pop down to this function's base level
+		while (scopeStack.size() > functionScopeBaseLevel) {
+			popScope(function);
+		}
 
 		// Add default return
 		mir::MIRType *retType = function->returnType;
@@ -126,6 +134,9 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func, const std::string &na
 			builder->createRetVoid();
 		}
 	}
+
+	// Restore the base scope level from the calling function (if any)
+	functionScopeBaseLevel = previousBaseLevel;
 
 	// Clear receiver type after generating function
 	currentReceiverType.clear();
@@ -147,6 +158,7 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 	std::set<std::string> savedStackAllocatedArrays = stackAllocatedArrays;
 	std::string savedReceiverType = currentReceiverType;
 	std::map<std::string, std::string> savedTypeBindings = currentTypeBindings;
+	size_t savedFunctionScopeBaseLevel = functionScopeBaseLevel;
 
 	// Track receiver type for Self type resolution
 	// Static methods still need this for Self resolution, but they don't get implicit self access
@@ -324,6 +336,10 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 		}
 	}
 
+	// Set the base scope level for this function
+	// This ensures return statements only clean up this function's scopes
+	functionScopeBaseLevel = scopeStack.size();
+
 	// Push a scope for the function body
 	pushScope();
 
@@ -345,8 +361,10 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 	// If function doesn't have a terminator (return), clean up and add one
 	mir::MIRBasicBlock *currentBlock = builder->getInsertBlock();
 	if (currentBlock && !currentBlock->hasTerminator()) {
-		// Clean up the function scope
-		popScope(function);
+		// Clean up the function scope - only pop down to this function's base level
+		while (scopeStack.size() > functionScopeBaseLevel) {
+			popScope(function);
+		}
 
 		// Add default return
 		mir::MIRType *retType = function->returnType;
@@ -369,6 +387,7 @@ void MIRCodeGenerator::generateFunctionWithTypeBindings(FunctionAST *func, const
 	stackAllocatedArrays = savedStackAllocatedArrays;
 	currentReceiverType = savedReceiverType;
 	currentTypeBindings = savedTypeBindings;
+	functionScopeBaseLevel = savedFunctionScopeBaseLevel;
 
 	if (savedFunction && savedBlock) {
 		builder->setFunction(savedFunction);
@@ -404,6 +423,7 @@ void MIRCodeGenerator::generateSynthesizedMethod(const FunctionInfo &funcInfo) {
 	std::set<std::string> savedStackAllocatedArrays = stackAllocatedArrays;
 	std::string savedReceiverType = currentReceiverType;
 	std::map<std::string, std::string> savedTypeBindings = currentTypeBindings;
+	size_t savedFunctionScopeBaseLevel = functionScopeBaseLevel;
 
 	// Track receiver type for implicit self field access (first parameter is self)
 	currentReceiverType = funcInfo.selfType;
@@ -453,6 +473,10 @@ void MIRCodeGenerator::generateSynthesizedMethod(const FunctionInfo &funcInfo) {
 		}
 	}
 
+	// Set the base scope level for this function
+	// This ensures return statements only clean up this function's scopes
+	functionScopeBaseLevel = scopeStack.size();
+
 	// Push a scope for the function body
 	pushScope();
 
@@ -468,8 +492,10 @@ void MIRCodeGenerator::generateSynthesizedMethod(const FunctionInfo &funcInfo) {
 	// If function doesn't have a terminator (return), clean up and add one
 	mir::MIRBasicBlock *currentBlock = builder->getInsertBlock();
 	if (currentBlock && !currentBlock->hasTerminator()) {
-		// Clean up the function scope
-		popScope(function);
+		// Clean up the function scope - only pop down to this function's base level
+		while (scopeStack.size() > functionScopeBaseLevel) {
+			popScope(function);
+		}
 
 		// Add default return
 		mir::MIRType *retType = function->returnType;
@@ -492,6 +518,7 @@ void MIRCodeGenerator::generateSynthesizedMethod(const FunctionInfo &funcInfo) {
 	stackAllocatedArrays = savedStackAllocatedArrays;
 	currentReceiverType = savedReceiverType;
 	currentTypeBindings = savedTypeBindings;
+	functionScopeBaseLevel = savedFunctionScopeBaseLevel;
 
 	if (savedFunction && savedBlock) {
 		builder->setFunction(savedFunction);

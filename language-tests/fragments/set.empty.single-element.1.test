@@ -20,12 +20,12 @@ ExitCode: 1
 @.__tag.arr.var.sts = constant [15 x i8] c"variable array\00"
 @.__tag.arr.decl.deepcopy.elements = constant [21 x i8] c"decl array deep copy\00"
 @.__tag.arr.decl.deepcopy.states = constant [21 x i8] c"decl array deep copy\00"
-@.__tag.free.elems = constant [14 x i8] c"array cleanup\00"
-@.__tag.free.sts = constant [14 x i8] c"array cleanup\00"
 @.__tag.arr.var.newElements = constant [15 x i8] c"variable array\00"
 @.__tag.arr.var.newStates = constant [15 x i8] c"variable array\00"
 @.__tag.free.newElements = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.newStates = constant [14 x i8] c"array cleanup\00"
+@.__tag.free.s.elements = constant [14 x i8] c"array cleanup\00"
+@.__tag.free.s.states = constant [14 x i8] c"array cleanup\00"
 
 define i64 @main() {
 entry0:
@@ -42,18 +42,42 @@ entry0:
   %6 = call %set<int> @set<int>.init(ptr %0)
   %7 = alloca %set<int>
   store %set<int> %6, ptr %7
-  %9 = getelementptr %set<int>, ptr %7, i32 0, i32 2
-  %10 = load i64, ptr %9
-  ret i64 %10
+  %23 = getelementptr %set<int>, ptr %7, i32 0, i32 2
+  %24 = load i64, ptr %23
+  %9 = getelementptr %set<int>, ptr %7, i32 0, i32 0
+  %10 = getelementptr %array<int>, ptr %9, i32 0, i32 0
+  %11 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 0
+  %12 = load ptr, ptr %11
+  %13 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 2
+  %14 = load i64, ptr %13
+  %15 = icmp sgt i64 %14, 0
+  br i1 %15, label %s.elements.release1, label %s.elements.skip2
+s.elements.release1:
+  call void @_managed_array_release(ptr %12, ptr @.__tag.free.s.elements)
+  br label %s.elements.skip2
+s.elements.skip2:
+  %16 = getelementptr %set<int>, ptr %7, i32 0, i32 1
+  %17 = getelementptr %array<byte>, ptr %16, i32 0, i32 0
+  %18 = getelementptr %__ManagedArrayData_byte, ptr %17, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  %20 = getelementptr %__ManagedArrayData_byte, ptr %17, i32 0, i32 2
+  %21 = load i64, ptr %20
+  %22 = icmp sgt i64 %21, 0
+  br i1 %22, label %s.states.release3, label %s.states.skip4
+s.states.release3:
+  call void @_managed_array_release(ptr %19, ptr @.__tag.free.s.states)
+  br label %s.states.skip4
+s.states.skip4:
+  ret i64 %24
 }
+
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
+declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
+
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
-
-declare ptr @malloc(i64 %arg0, ptr %arg1)
-
-declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
 define %set<int> @set<int>.init(ptr %managed) {
 entry0:
@@ -61,38 +85,38 @@ entry0:
   %3 = load i64, ptr %2
   br label %whilecond1
 whilecond1:
-  %94 = phi i64 [ 16, %entry0 ], [ %11, %loop2 ]
+  %92 = phi i64 [ 16, %entry0 ], [ %11, %loop2 ]
   %8 = shl i64 %3, 1
-  %9 = icmp slt i64 %94, %8
+  %9 = icmp slt i64 %92, %8
   br i1 %9, label %loop2, label %afterloop3
 loop2:
-  %11 = shl i64 %94, 1
+  %11 = shl i64 %92, 1
   br label %whilecond1
 afterloop3:
-  %13 = sext i64 %94 to i64
+  %13 = sext i64 %92 to i64
   %14 = shl i64 %13, 3
-  %15 = call ptr @malloc(i64 %14, ptr @.__tag.arr.var.elems)
+  %15 = call ptr @_managed_array_alloc(i64 %14, ptr @.__tag.arr.var.elems)
   %16 = alloca %array<int>
   %17 = getelementptr %array<int>, ptr %16, i32 0, i32 0
   %18 = getelementptr %__ManagedArrayData_int, ptr %17, i32 0, i32 0
   store ptr %15, ptr %18
   %19 = getelementptr %__ManagedArrayData_int, ptr %17, i32 0, i32 1
-  store i64 %94, ptr %19
+  store i64 %92, ptr %19
   %20 = getelementptr %__ManagedArrayData_int, ptr %17, i32 0, i32 2
-  store i64 %94, ptr %20
+  store i64 %92, ptr %20
   %21 = getelementptr %array<int>, ptr %16, i32 0, i32 1
   store i64 0, ptr %21
   %22 = call ptr @memset(ptr %15, i64 0, i64 %14)
-  %24 = sext i64 %94 to i64
-  %26 = call ptr @malloc(i64 %24, ptr @.__tag.arr.var.sts)
+  %24 = sext i64 %92 to i64
+  %26 = call ptr @_managed_array_alloc(i64 %24, ptr @.__tag.arr.var.sts)
   %27 = alloca %array<byte>
   %28 = getelementptr %array<byte>, ptr %27, i32 0, i32 0
   %29 = getelementptr %__ManagedArrayData_byte, ptr %28, i32 0, i32 0
   store ptr %26, ptr %29
   %30 = getelementptr %__ManagedArrayData_byte, ptr %28, i32 0, i32 1
-  store i64 %94, ptr %30
+  store i64 %92, ptr %30
   %31 = getelementptr %__ManagedArrayData_byte, ptr %28, i32 0, i32 2
-  store i64 %94, ptr %31
+  store i64 %92, ptr %31
   %32 = getelementptr %array<byte>, ptr %27, i32 0, i32 1
   store i64 0, ptr %32
   %33 = call ptr @memset(ptr %26, i64 0, i64 %24)
@@ -104,85 +128,79 @@ afterloop3:
   %38 = getelementptr %__ManagedArrayData_int, ptr %37, i32 0, i32 1
   %39 = load i64, ptr %38
   %40 = getelementptr %__ManagedArrayData_int, ptr %37, i32 0, i32 2
-  %41 = icmp sgt i64 %39, 0
-  br i1 %41, label %elements.deepcopy4, label %elements.done5
+  %41 = load i64, ptr %40
+  %42 = icmp eq i64 %41, 0
+  %43 = icmp sgt i64 %39, 0
+  %44 = and i1 %42, %43
+  br i1 %44, label %elements.deepcopy4, label %elements.transfer5
 elements.deepcopy4:
-  %42 = getelementptr %__ManagedArrayData_int, ptr %37, i32 0, i32 0
-  %43 = load ptr, ptr %42
-  %44 = shl i64 %39, 3
-  %45 = call ptr @malloc(i64 %44, ptr @.__tag.arr.decl.deepcopy.elements)
-  %46 = call ptr @memcpy(ptr %45, ptr %43, i64 %44)
-  store ptr %45, ptr %42
+  %45 = getelementptr %__ManagedArrayData_int, ptr %37, i32 0, i32 0
+  %46 = load ptr, ptr %45
+  %47 = shl i64 %39, 3
+  %48 = call ptr @_managed_array_alloc(i64 %47, ptr @.__tag.arr.decl.deepcopy.elements)
+  %49 = call ptr @memcpy(ptr %48, ptr %46, i64 %47)
+  store ptr %48, ptr %45
   store i64 %39, ptr %40
-  br label %elements.done5
-elements.done5:
-  %47 = getelementptr %set<int>, ptr %34, i32 0, i32 1
-  %48 = load %array<byte>, ptr %27
-  store %array<byte> %48, ptr %47
-  %49 = getelementptr %array<byte>, ptr %47, i32 0, i32 0
-  %50 = getelementptr %__ManagedArrayData_byte, ptr %49, i32 0, i32 1
-  %51 = load i64, ptr %50
-  %52 = getelementptr %__ManagedArrayData_byte, ptr %49, i32 0, i32 2
-  %53 = icmp sgt i64 %51, 0
-  br i1 %53, label %states.deepcopy6, label %states.done7
-states.deepcopy6:
-  %54 = getelementptr %__ManagedArrayData_byte, ptr %49, i32 0, i32 0
-  %55 = load ptr, ptr %54
-  %57 = call ptr @malloc(i64 %51, ptr @.__tag.arr.decl.deepcopy.states)
-  %58 = call ptr @memcpy(ptr %57, ptr %55, i64 %51)
-  store ptr %57, ptr %54
-  store i64 %51, ptr %52
-  br label %states.done7
-states.done7:
-  %59 = getelementptr %set<int>, ptr %34, i32 0, i32 2
-  store i64 0, ptr %59
-  %60 = getelementptr %set<int>, ptr %34, i32 0, i32 3
-  store i64 %94, ptr %60
-  %62 = getelementptr %array<int>, ptr %16, i32 0, i32 0
-  %63 = getelementptr %__ManagedArrayData_int, ptr %62, i32 0, i32 2
-  store i64 0, ptr %63
-  %64 = getelementptr %array<byte>, ptr %27, i32 0, i32 0
-  %65 = getelementptr %__ManagedArrayData_byte, ptr %64, i32 0, i32 2
-  store i64 0, ptr %65
-  br label %whilecond8
-whilecond8:
-  %95 = phi i64 [ 0, %states.done7 ], [ %80, %loop9 ]
-  %69 = icmp slt i64 %95, %3
-  br i1 %69, label %loop9, label %afterloop10
-loop9:
-  %72 = getelementptr %__ManagedArrayData_int, ptr %managed, i32 0, i32 0
-  %73 = load ptr, ptr %72
-  %74 = sext i64 %95 to i64
-  %75 = getelementptr i64, ptr %73, i64 %74
-  %76 = load i64, ptr %75
-  call void @set<int>.insert(ptr %34, i64 %76)
-  %80 = add i64 %95, 1
-  br label %whilecond8
-afterloop10:
-  %81 = load %set<int>, ptr %34
-  %82 = getelementptr %array<int>, ptr %16, i32 0, i32 0
-  %83 = getelementptr %__ManagedArrayData_int, ptr %82, i32 0, i32 0
-  %84 = load ptr, ptr %83
-  %85 = getelementptr %__ManagedArrayData_int, ptr %82, i32 0, i32 2
+  br label %elements.done6
+elements.transfer5:
+  %50 = getelementptr %array<int>, ptr %16, i32 0, i32 0
+  %51 = getelementptr %__ManagedArrayData_int, ptr %50, i32 0, i32 2
+  store i64 0, ptr %51
+  br label %elements.done6
+elements.done6:
+  %52 = getelementptr %set<int>, ptr %34, i32 0, i32 1
+  %53 = load %array<byte>, ptr %27
+  store %array<byte> %53, ptr %52
+  %54 = getelementptr %array<byte>, ptr %52, i32 0, i32 0
+  %55 = getelementptr %__ManagedArrayData_byte, ptr %54, i32 0, i32 1
+  %56 = load i64, ptr %55
+  %57 = getelementptr %__ManagedArrayData_byte, ptr %54, i32 0, i32 2
+  %58 = load i64, ptr %57
+  %59 = icmp eq i64 %58, 0
+  %60 = icmp sgt i64 %56, 0
+  %61 = and i1 %59, %60
+  br i1 %61, label %states.deepcopy7, label %states.transfer8
+states.deepcopy7:
+  %62 = getelementptr %__ManagedArrayData_byte, ptr %54, i32 0, i32 0
+  %63 = load ptr, ptr %62
+  %65 = call ptr @_managed_array_alloc(i64 %56, ptr @.__tag.arr.decl.deepcopy.states)
+  %66 = call ptr @memcpy(ptr %65, ptr %63, i64 %56)
+  store ptr %65, ptr %62
+  store i64 %56, ptr %57
+  br label %states.done9
+states.transfer8:
+  %67 = getelementptr %array<byte>, ptr %27, i32 0, i32 0
+  %68 = getelementptr %__ManagedArrayData_byte, ptr %67, i32 0, i32 2
+  store i64 0, ptr %68
+  br label %states.done9
+states.done9:
+  %69 = getelementptr %set<int>, ptr %34, i32 0, i32 2
+  store i64 0, ptr %69
+  %70 = getelementptr %set<int>, ptr %34, i32 0, i32 3
+  store i64 %92, ptr %70
+  %72 = getelementptr %array<int>, ptr %16, i32 0, i32 0
+  %73 = getelementptr %__ManagedArrayData_int, ptr %72, i32 0, i32 2
+  store i64 0, ptr %73
+  %74 = getelementptr %array<byte>, ptr %27, i32 0, i32 0
+  %75 = getelementptr %__ManagedArrayData_byte, ptr %74, i32 0, i32 2
+  store i64 0, ptr %75
+  br label %whilecond10
+whilecond10:
+  %93 = phi i64 [ 0, %states.done9 ], [ %90, %loop11 ]
+  %79 = icmp slt i64 %93, %3
+  br i1 %79, label %loop11, label %afterloop12
+loop11:
+  %82 = getelementptr %__ManagedArrayData_int, ptr %managed, i32 0, i32 0
+  %83 = load ptr, ptr %82
+  %84 = sext i64 %93 to i64
+  %85 = getelementptr i64, ptr %83, i64 %84
   %86 = load i64, ptr %85
-  %87 = icmp sgt i64 %86, 0
-  br i1 %87, label %elems.release11, label %elems.skip12
-elems.release11:
-  call void @_managed_array_release(ptr %84, ptr @.__tag.free.elems)
-  br label %elems.skip12
-elems.skip12:
-  %88 = getelementptr %array<byte>, ptr %27, i32 0, i32 0
-  %89 = getelementptr %__ManagedArrayData_byte, ptr %88, i32 0, i32 0
-  %90 = load ptr, ptr %89
-  %91 = getelementptr %__ManagedArrayData_byte, ptr %88, i32 0, i32 2
-  %92 = load i64, ptr %91
-  %93 = icmp sgt i64 %92, 0
-  br i1 %93, label %sts.release13, label %sts.skip14
-sts.release13:
-  call void @_managed_array_release(ptr %90, ptr @.__tag.free.sts)
-  br label %sts.skip14
-sts.skip14:
-  ret %set<int> %81
+  call void @set<int>.insert(ptr %34, i64 %86)
+  %90 = add i64 %93, 1
+  br label %whilecond10
+afterloop12:
+  %91 = load %set<int>, ptr %34
+  ret %set<int> %91
 }
 
 define void @set<int>.insert(ptr %self, i64 %element) {
@@ -327,7 +345,7 @@ entry0:
   store %array<byte> %15, ptr %14
   %17 = sext i64 %6 to i64
   %18 = shl i64 %17, 3
-  %19 = call ptr @malloc(i64 %18, ptr @.__tag.arr.var.newElements)
+  %19 = call ptr @_managed_array_alloc(i64 %18, ptr @.__tag.arr.var.newElements)
   %20 = alloca %array<int>
   %21 = getelementptr %array<int>, ptr %20, i32 0, i32 0
   %22 = getelementptr %__ManagedArrayData_int, ptr %21, i32 0, i32 0
@@ -340,7 +358,7 @@ entry0:
   store i64 0, ptr %25
   %26 = call ptr @memset(ptr %19, i64 0, i64 %18)
   %28 = sext i64 %6 to i64
-  %30 = call ptr @malloc(i64 %28, ptr @.__tag.arr.var.newStates)
+  %30 = call ptr @_managed_array_alloc(i64 %28, ptr @.__tag.arr.var.newStates)
   %31 = alloca %array<byte>
   %32 = getelementptr %array<byte>, ptr %31, i32 0, i32 0
   %33 = getelementptr %__ManagedArrayData_byte, ptr %32, i32 0, i32 0
@@ -490,12 +508,12 @@ entry0:
 @.__tag.arr.var.sts = constant [15 x i8] c"variable array\00"
 @.__tag.arr.decl.deepcopy.elements = constant [21 x i8] c"decl array deep copy\00"
 @.__tag.arr.decl.deepcopy.states = constant [21 x i8] c"decl array deep copy\00"
-@.__tag.free.elems = constant [14 x i8] c"array cleanup\00"
-@.__tag.free.sts = constant [14 x i8] c"array cleanup\00"
 @.__tag.arr.var.newElements = constant [15 x i8] c"variable array\00"
 @.__tag.arr.var.newStates = constant [15 x i8] c"variable array\00"
 @.__tag.free.newElements = constant [14 x i8] c"array cleanup\00"
 @.__tag.free.newStates = constant [14 x i8] c"array cleanup\00"
+@.__tag.free.s.elements = constant [14 x i8] c"array cleanup\00"
+@.__tag.free.s.states = constant [14 x i8] c"array cleanup\00"
 
 define i64 @main() {
 entry0:
@@ -513,16 +531,40 @@ entry0:
   %7 = alloca %set<int>
   store %set<int> %6, ptr %7
   %8 = call i64 @set<int>.count(ptr %7)
+  %9 = getelementptr %set<int>, ptr %7, i32 0, i32 0
+  %10 = getelementptr %array<int>, ptr %9, i32 0, i32 0
+  %11 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 0
+  %12 = load ptr, ptr %11
+  %13 = getelementptr %__ManagedArrayData_int, ptr %10, i32 0, i32 2
+  %14 = load i64, ptr %13
+  %15 = icmp sgt i64 %14, 0
+  br i1 %15, label %s.elements.release1, label %s.elements.skip2
+s.elements.release1:
+  call void @_managed_array_release(ptr %12, ptr @.__tag.free.s.elements)
+  br label %s.elements.skip2
+s.elements.skip2:
+  %16 = getelementptr %set<int>, ptr %7, i32 0, i32 1
+  %17 = getelementptr %array<byte>, ptr %16, i32 0, i32 0
+  %18 = getelementptr %__ManagedArrayData_byte, ptr %17, i32 0, i32 0
+  %19 = load ptr, ptr %18
+  %20 = getelementptr %__ManagedArrayData_byte, ptr %17, i32 0, i32 2
+  %21 = load i64, ptr %20
+  %22 = icmp sgt i64 %21, 0
+  br i1 %22, label %s.states.release3, label %s.states.skip4
+s.states.release3:
+  call void @_managed_array_release(ptr %19, ptr @.__tag.free.s.states)
+  br label %s.states.skip4
+s.states.skip4:
   ret i64 %8
 }
 
+declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
+
 declare ptr @memcpy(ptr %arg0, ptr %arg1, i64 %arg2)
 
+declare ptr @_managed_array_alloc(i64 %arg0, ptr %arg1)
+
 declare void @_managed_array_release(ptr %arg0, ptr %arg1)
-
-declare ptr @malloc(i64 %arg0, ptr %arg1)
-
-declare ptr @memset(ptr %arg0, i32 %arg1, i64 %arg2)
 
 declare f64 @trunc(f64 %arg0)
 
@@ -553,7 +595,7 @@ afterloop3:
   %12 = load i64, ptr %5
   %13 = sext i64 %12 to i64
   %14 = mul i64 %13, 8
-  %15 = call ptr @malloc(i64 %14, ptr @.__tag.arr.var.elems)
+  %15 = call ptr @_managed_array_alloc(i64 %14, ptr @.__tag.arr.var.elems)
   %16 = alloca %array<int>
   %17 = getelementptr %array<int>, ptr %16, i32 0, i32 0
   %18 = getelementptr %__ManagedArrayData_int, ptr %17, i32 0, i32 0
@@ -568,7 +610,7 @@ afterloop3:
   %23 = load i64, ptr %5
   %24 = sext i64 %23 to i64
   %25 = mul i64 %24, 1
-  %26 = call ptr @malloc(i64 %25, ptr @.__tag.arr.var.sts)
+  %26 = call ptr @_managed_array_alloc(i64 %25, ptr @.__tag.arr.var.sts)
   %27 = alloca %array<byte>
   %28 = getelementptr %array<byte>, ptr %27, i32 0, i32 0
   %29 = getelementptr %__ManagedArrayData_byte, ptr %28, i32 0, i32 0
@@ -588,97 +630,91 @@ afterloop3:
   %38 = getelementptr %__ManagedArrayData_int, ptr %37, i32 0, i32 1
   %39 = load i64, ptr %38
   %40 = getelementptr %__ManagedArrayData_int, ptr %37, i32 0, i32 2
-  %41 = icmp sgt i64 %39, 0
-  br i1 %41, label %elements.deepcopy4, label %elements.done5
+  %41 = load i64, ptr %40
+  %42 = icmp eq i64 %41, 0
+  %43 = icmp sgt i64 %39, 0
+  %44 = and i1 %42, %43
+  br i1 %44, label %elements.deepcopy4, label %elements.transfer5
 elements.deepcopy4:
-  %42 = getelementptr %__ManagedArrayData_int, ptr %37, i32 0, i32 0
-  %43 = load ptr, ptr %42
-  %44 = mul i64 %39, 8
-  %45 = call ptr @malloc(i64 %44, ptr @.__tag.arr.decl.deepcopy.elements)
-  %46 = call ptr @memcpy(ptr %45, ptr %43, i64 %44)
-  store ptr %45, ptr %42
+  %45 = getelementptr %__ManagedArrayData_int, ptr %37, i32 0, i32 0
+  %46 = load ptr, ptr %45
+  %47 = mul i64 %39, 8
+  %48 = call ptr @_managed_array_alloc(i64 %47, ptr @.__tag.arr.decl.deepcopy.elements)
+  %49 = call ptr @memcpy(ptr %48, ptr %46, i64 %47)
+  store ptr %48, ptr %45
   store i64 %39, ptr %40
-  br label %elements.done5
-elements.done5:
-  %47 = getelementptr %set<int>, ptr %34, i32 0, i32 1
-  %48 = load %array<byte>, ptr %27
-  store %array<byte> %48, ptr %47
-  %49 = getelementptr %array<byte>, ptr %47, i32 0, i32 0
-  %50 = getelementptr %__ManagedArrayData_byte, ptr %49, i32 0, i32 1
-  %51 = load i64, ptr %50
-  %52 = getelementptr %__ManagedArrayData_byte, ptr %49, i32 0, i32 2
-  %53 = icmp sgt i64 %51, 0
-  br i1 %53, label %states.deepcopy6, label %states.done7
-states.deepcopy6:
-  %54 = getelementptr %__ManagedArrayData_byte, ptr %49, i32 0, i32 0
-  %55 = load ptr, ptr %54
-  %56 = mul i64 %51, 1
-  %57 = call ptr @malloc(i64 %56, ptr @.__tag.arr.decl.deepcopy.states)
-  %58 = call ptr @memcpy(ptr %57, ptr %55, i64 %56)
-  store ptr %57, ptr %54
-  store i64 %51, ptr %52
-  br label %states.done7
-states.done7:
-  %59 = getelementptr %set<int>, ptr %34, i32 0, i32 2
-  store i64 0, ptr %59
-  %60 = getelementptr %set<int>, ptr %34, i32 0, i32 3
-  %61 = load i64, ptr %5
-  store i64 %61, ptr %60
-  %62 = getelementptr %array<int>, ptr %16, i32 0, i32 0
-  %63 = getelementptr %__ManagedArrayData_int, ptr %62, i32 0, i32 2
-  store i64 0, ptr %63
-  %64 = getelementptr %array<byte>, ptr %27, i32 0, i32 0
-  %65 = getelementptr %__ManagedArrayData_byte, ptr %64, i32 0, i32 2
-  store i64 0, ptr %65
-  %66 = alloca i64
-  store i64 0, ptr %66
-  br label %whilecond8
-whilecond8:
-  %67 = load i64, ptr %66
-  %68 = load i64, ptr %4
-  %69 = icmp slt i64 %67, %68
-  br i1 %69, label %loop9, label %afterloop10
-loop9:
-  %70 = load i64, ptr %66
-  %71 = load ptr, ptr %0
-  %72 = getelementptr %__ManagedArrayData_int, ptr %71, i32 0, i32 0
-  %73 = load ptr, ptr %72
-  %74 = sext i64 %70 to i64
-  %75 = getelementptr i64, ptr %73, i64 %74
-  %76 = load i64, ptr %75
-  %77 = alloca i64
-  store i64 %76, ptr %77
-  %78 = load i64, ptr %77
-  call void @set<int>.insert(ptr %34, i64 %78)
-  %79 = load i64, ptr %66
-  %80 = add i64 %79, 1
-  store i64 %80, ptr %66
-  br label %whilecond8
-afterloop10:
-  %81 = load %set<int>, ptr %34
-  %82 = getelementptr %array<int>, ptr %16, i32 0, i32 0
-  %83 = getelementptr %__ManagedArrayData_int, ptr %82, i32 0, i32 0
-  %84 = load ptr, ptr %83
-  %85 = getelementptr %__ManagedArrayData_int, ptr %82, i32 0, i32 2
+  br label %elements.done6
+elements.transfer5:
+  %50 = getelementptr %array<int>, ptr %16, i32 0, i32 0
+  %51 = getelementptr %__ManagedArrayData_int, ptr %50, i32 0, i32 2
+  store i64 0, ptr %51
+  br label %elements.done6
+elements.done6:
+  %52 = getelementptr %set<int>, ptr %34, i32 0, i32 1
+  %53 = load %array<byte>, ptr %27
+  store %array<byte> %53, ptr %52
+  %54 = getelementptr %array<byte>, ptr %52, i32 0, i32 0
+  %55 = getelementptr %__ManagedArrayData_byte, ptr %54, i32 0, i32 1
+  %56 = load i64, ptr %55
+  %57 = getelementptr %__ManagedArrayData_byte, ptr %54, i32 0, i32 2
+  %58 = load i64, ptr %57
+  %59 = icmp eq i64 %58, 0
+  %60 = icmp sgt i64 %56, 0
+  %61 = and i1 %59, %60
+  br i1 %61, label %states.deepcopy7, label %states.transfer8
+states.deepcopy7:
+  %62 = getelementptr %__ManagedArrayData_byte, ptr %54, i32 0, i32 0
+  %63 = load ptr, ptr %62
+  %64 = mul i64 %56, 1
+  %65 = call ptr @_managed_array_alloc(i64 %64, ptr @.__tag.arr.decl.deepcopy.states)
+  %66 = call ptr @memcpy(ptr %65, ptr %63, i64 %64)
+  store ptr %65, ptr %62
+  store i64 %56, ptr %57
+  br label %states.done9
+states.transfer8:
+  %67 = getelementptr %array<byte>, ptr %27, i32 0, i32 0
+  %68 = getelementptr %__ManagedArrayData_byte, ptr %67, i32 0, i32 2
+  store i64 0, ptr %68
+  br label %states.done9
+states.done9:
+  %69 = getelementptr %set<int>, ptr %34, i32 0, i32 2
+  store i64 0, ptr %69
+  %70 = getelementptr %set<int>, ptr %34, i32 0, i32 3
+  %71 = load i64, ptr %5
+  store i64 %71, ptr %70
+  %72 = getelementptr %array<int>, ptr %16, i32 0, i32 0
+  %73 = getelementptr %__ManagedArrayData_int, ptr %72, i32 0, i32 2
+  store i64 0, ptr %73
+  %74 = getelementptr %array<byte>, ptr %27, i32 0, i32 0
+  %75 = getelementptr %__ManagedArrayData_byte, ptr %74, i32 0, i32 2
+  store i64 0, ptr %75
+  %76 = alloca i64
+  store i64 0, ptr %76
+  br label %whilecond10
+whilecond10:
+  %77 = load i64, ptr %76
+  %78 = load i64, ptr %4
+  %79 = icmp slt i64 %77, %78
+  br i1 %79, label %loop11, label %afterloop12
+loop11:
+  %80 = load i64, ptr %76
+  %81 = load ptr, ptr %0
+  %82 = getelementptr %__ManagedArrayData_int, ptr %81, i32 0, i32 0
+  %83 = load ptr, ptr %82
+  %84 = sext i64 %80 to i64
+  %85 = getelementptr i64, ptr %83, i64 %84
   %86 = load i64, ptr %85
-  %87 = icmp sgt i64 %86, 0
-  br i1 %87, label %elems.release11, label %elems.skip12
-elems.release11:
-  call void @_managed_array_release(ptr %84, ptr @.__tag.free.elems)
-  br label %elems.skip12
-elems.skip12:
-  %88 = getelementptr %array<byte>, ptr %27, i32 0, i32 0
-  %89 = getelementptr %__ManagedArrayData_byte, ptr %88, i32 0, i32 0
-  %90 = load ptr, ptr %89
-  %91 = getelementptr %__ManagedArrayData_byte, ptr %88, i32 0, i32 2
-  %92 = load i64, ptr %91
-  %93 = icmp sgt i64 %92, 0
-  br i1 %93, label %sts.release13, label %sts.skip14
-sts.release13:
-  call void @_managed_array_release(ptr %90, ptr @.__tag.free.sts)
-  br label %sts.skip14
-sts.skip14:
-  ret %set<int> %81
+  %87 = alloca i64
+  store i64 %86, ptr %87
+  %88 = load i64, ptr %87
+  call void @set<int>.insert(ptr %34, i64 %88)
+  %89 = load i64, ptr %76
+  %90 = add i64 %89, 1
+  store i64 %90, ptr %76
+  br label %whilecond10
+afterloop12:
+  %91 = load %set<int>, ptr %34
+  ret %set<int> %91
 }
 
 define void @set<int>.insert(ptr %self, i64 %element) {
@@ -909,7 +945,7 @@ entry0:
   %16 = load i64, ptr %7
   %17 = sext i64 %16 to i64
   %18 = mul i64 %17, 8
-  %19 = call ptr @malloc(i64 %18, ptr @.__tag.arr.var.newElements)
+  %19 = call ptr @_managed_array_alloc(i64 %18, ptr @.__tag.arr.var.newElements)
   %20 = alloca %array<int>
   %21 = getelementptr %array<int>, ptr %20, i32 0, i32 0
   %22 = getelementptr %__ManagedArrayData_int, ptr %21, i32 0, i32 0
@@ -924,7 +960,7 @@ entry0:
   %27 = load i64, ptr %7
   %28 = sext i64 %27 to i64
   %29 = mul i64 %28, 1
-  %30 = call ptr @malloc(i64 %29, ptr @.__tag.arr.var.newStates)
+  %30 = call ptr @_managed_array_alloc(i64 %29, ptr @.__tag.arr.var.newStates)
   %31 = alloca %array<byte>
   %32 = getelementptr %array<byte>, ptr %31, i32 0, i32 0
   %33 = getelementptr %__ManagedArrayData_byte, ptr %32, i32 0, i32 0
