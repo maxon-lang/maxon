@@ -22,5 +22,23 @@ mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
 		return builder->createLoad(mir::MIRType::getInt64(), it->second, varExpr->name);
 	}
 
+	// Function call
+	if (auto *callExpr = dynamic_cast<CallExprAST *>(expr)) {
+		// Look up the function in the module
+		mir::MIRFunction *callee = module->getFunction(callExpr->callee);
+		if (!callee) {
+			throw std::runtime_error("Unknown function: " + callExpr->callee);
+		}
+
+		// Generate arguments
+		std::vector<mir::MIRValue *> argValues;
+		for (auto &arg : callExpr->args) {
+			argValues.push_back(generateExpr(arg.value.get()));
+		}
+
+		// Create the call
+		return builder->createCall(callee, argValues);
+	}
+
 	throw std::runtime_error("Unsupported expression type");
 }

@@ -6,21 +6,39 @@
 
 #include <stdexcept>
 
-void MIRCodeGenerator::generateFunction(FunctionAST *func) {
-	logDetail("Generating function: " + func->name);
+void MIRCodeGenerator::declareFunction(FunctionAST *func) {
+	logDetail("Declaring function: " + func->name);
 
 	mir::MIRType *returnType = getTypeFromString(func->returnType);
 
-	// Build parameter list
-	std::vector<std::pair<mir::MIRType *, std::string>> params;
+	// Create function directly on module (avoid builder->createFunction which sets currentFunction)
+	mir::MIRFunction *function = module->createFunction(func->name, returnType);
+	function->isExternal = false;
+
+	// Add parameters directly
 	for (const auto &param : func->parameters) {
-		params.push_back({getTypeFromString(param.type), param.name});
+		function->addParameter(getTypeFromString(param.type), param.name);
+	}
+}
+
+void MIRCodeGenerator::generateFunction(FunctionAST *func) {
+	logDetail("Generating function body: " + func->name);
+
+	// Clear variable tracking for new function scope
+	namedValues.clear();
+
+	// Get the previously declared function
+	mir::MIRFunction *function = module->getFunction(func->name);
+	if (!function) {
+		throw std::runtime_error("Function not declared: " + func->name);
 	}
 
-	// Create function
-	mir::MIRFunction *function = builder->createFunction(func->name, returnType, params);
+	mir::MIRType *returnType = getTypeFromString(func->returnType);
 
-	// Create entry block
+	// Set current function in builder so createBasicBlock works
+	builder->setFunction(function);
+
+	// Create entry block and set insert point
 	mir::MIRBasicBlock *entry = builder->createBasicBlock("entry");
 	builder->setInsertPoint(entry);
 

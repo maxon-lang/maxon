@@ -71,7 +71,12 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 								const std::map<std::string, std::string> *) {
 	logProgress("Generating MIR...");
 
-	// Generate all functions
+	// First pass: declare all functions (so calls can resolve)
+	for (auto &func : program->functions) {
+		declareFunction(func.get());
+	}
+
+	// Second pass: generate function bodies
 	for (auto &func : program->functions) {
 		generateFunction(func.get());
 	}

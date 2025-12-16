@@ -32,6 +32,7 @@ class MIRCodeGenerator {
 	// Code generation methods
 	mir::MIRValue *generateExpr(ExprAST *expr);
 	void generateStmt(StmtAST *stmt, mir::MIRFunction *function);
+	void declareFunction(FunctionAST *func);
 	void generateFunction(FunctionAST *func);
 	void createEntryPoint();
 
