@@ -26,6 +26,9 @@ class MIRCodeGenerator {
 
 	int verboseLevel;
 
+	// Variable tracking: name -> alloca value
+	std::map<std::string, mir::MIRValue *> namedValues;
+
 	// Code generation methods
 	mir::MIRValue *generateExpr(ExprAST *expr);
 	void generateStmt(StmtAST *stmt, mir::MIRFunction *function);
