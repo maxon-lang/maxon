@@ -54,6 +54,7 @@ set(SOURCES
     file_utils.cpp
     call_graph.cpp
     compiler.cpp
+    grammar_generator.cpp
     test_utils.cpp
     test_regenerate.cpp
     test_runner.cpp
@@ -111,6 +112,7 @@ set(SOURCES
     semantic_analyzer/semantic_analyzer_expr.cpp
     semantic_analyzer/semantic_analyzer_stmt.cpp
     semantic_analyzer/semantic_analyzer_cache.cpp
+    semantic_analyzer/semantic_analyzer_mutation.cpp
     # Constant expression evaluator
     const_eval.cpp
     intrinsics.cpp
@@ -155,19 +157,6 @@ target_link_libraries(maxon PRIVATE Zydis)
 # This enables IR generation features in compiler_api.cpp
 target_compile_definitions(maxon PRIVATE MAXON_HAS_CODEGEN)
 
-# Create grammar generator executable
-add_executable(grammar_generator
-    grammar_generator.cpp
-    lexer.cpp
-    parser.cpp
-    parser/parser_utils.cpp
-    parser/parser_expr.cpp
-    parser/parser_stmt.cpp
-    parser/parser_decl.cpp
-    types/type_conversion.cpp
-    file_utils.cpp
-)
-
 # Use precompiled headers for faster compilation
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
     target_precompile_headers(maxon PRIVATE pch.h)
@@ -201,10 +190,6 @@ add_custom_command(TARGET maxon POST_BUILD
     COMMAND taskkill /IM maxon.exe /F 2>nul || ${CMAKE_COMMAND} -E true
     COMMAND ${CMAKE_COMMAND} -E rm -f "${MAXON_BACKUP}"
     COMMENT "Killing old maxon.exe process and cleaning up"
-)
-
-set_target_properties(grammar_generator PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin
 )
 
 # Installation

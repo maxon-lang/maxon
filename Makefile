@@ -120,8 +120,7 @@ configure:
 # Build the Maxon compiler
 compiler: $(BUILD_DIR)/build.ninja runtime
 	cmake --build $(BUILD_DIR) --target maxon
-	cmake --build $(BUILD_DIR) --target grammar_generator
-	@if [ bin/grammar_generator$(EXE_EXT) -nt vscode-extension/syntaxes/maxon.tmLanguage.json ]; then echo "Generating TextMate grammar..."; ./bin/grammar_generator$(EXE_EXT) vscode-extension/syntaxes/maxon.tmLanguage.json; fi
+	@if [ bin/maxon$(EXE_EXT) -nt vscode-extension/syntaxes/maxon.tmLanguage.json ]; then echo "Generating TextMate grammar..."; ./bin/maxon$(EXE_EXT) generate-grammar vscode-extension/syntaxes/maxon.tmLanguage.json; fi
 
 # Build the VS Code extension (install + compile)
 extension: compiler

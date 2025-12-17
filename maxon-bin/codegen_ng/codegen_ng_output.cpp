@@ -295,6 +295,22 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 }
 
 //==============================================================================
+// Helper: Find Next Function Offset
+//==============================================================================
+
+static size_t findNextFunctionOffset(size_t currentOffset,
+									 const std::unordered_map<std::string, size_t> &offsets,
+									 size_t codeSize) {
+	size_t nextOffset = codeSize;
+	for (const auto &[name, offset] : offsets) {
+		if (offset > currentOffset && offset < nextOffset) {
+			nextOffset = offset;
+		}
+	}
+	return nextOffset;
+}
+
+//==============================================================================
 // Windows Import Table
 //==============================================================================
 
@@ -391,12 +407,7 @@ void MIRCodeGenerator::writeWindowsExecutable(
 	}
 
 	for (const auto &[name, offset] : funcOffsets) {
-		size_t nextOffset = code.size();
-		for (const auto &[otherName, otherOffset] : funcOffsets) {
-			if (otherOffset > offset && otherOffset < nextOffset) {
-				nextOffset = otherOffset;
-			}
-		}
+		size_t nextOffset = findNextFunctionOffset(offset, funcOffsets, code.size());
 		pe.addSymbol(name, static_cast<uint32_t>(offset),
 					 static_cast<uint32_t>(nextOffset - offset), true, textSection);
 	}
@@ -435,14 +446,8 @@ void MIRCodeGenerator::writeLinuxExecutable(
 	}
 
 	for (const auto &[name, offset] : funcOffsets) {
-		size_t nextOffset = code.size();
-		for (const auto &[otherName, otherOffset] : funcOffsets) {
-			if (otherOffset > offset && otherOffset < nextOffset) {
-				nextOffset = otherOffset;
-			}
-		}
-		uint64_t size = nextOffset - offset;
-		elf.addFunction(name, offset, size);
+		size_t nextOffset = findNextFunctionOffset(offset, funcOffsets, code.size());
+		elf.addFunction(name, offset, nextOffset - offset);
 	}
 
 	if (!elf.write(exeFile)) {

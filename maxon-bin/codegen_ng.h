@@ -36,6 +36,7 @@ class MIRCodeGenerator {
 	void generateFunction(FunctionAST *func);
 	void createEntryPoint();
 
+
 	// Type helpers
 	mir::MIRType *getTypeFromString(const std::string &typeStr);
 
@@ -82,6 +83,15 @@ class MIRCodeGenerator {
 
 	size_t getInstructionCount() const;
 	mir::MIRModule *getModule() { return module.get(); }
+
+	// Accessors for AST generate() methods
+	mir::MIRBuilder *getBuilder() { return builder.get(); }
+	mir::MIRValue *lookupVariable(const std::string &name);
+	void trackVariable(const std::string &name, mir::MIRValue *value);
+
+	// Variable/parameter generation helper
+	void generateLocalVariable(const std::string &name, const std::string &typeStr,
+							   ExprAST *initializer, mir::MIRValue *existingValue);
 };
 
 #endif // CODEGEN_NG_H

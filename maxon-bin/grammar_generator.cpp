@@ -1,3 +1,4 @@
+#include "grammar_generator.h"
 #include "lexer.h"
 #include <algorithm>
 #include <fstream>
@@ -5,13 +6,7 @@
 #include <string>
 #include <vector>
 
-int main(int argc, char *argv[]) {
-	if (argc != 2) {
-		std::cerr << "Usage: " << argv[0] << " <output_file>" << std::endl;
-		return 1;
-	}
-
-	std::string outputFile = argv[1];
+int generateGrammar(const std::string &outputFile) {
 
 	// Get keywords by category from the lexer
 	auto controlFlowKeywords = Lexer::getKeywordsByCategory(KeywordCategory::ControlFlow);

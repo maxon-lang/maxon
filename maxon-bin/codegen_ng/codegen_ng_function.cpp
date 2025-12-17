@@ -42,6 +42,13 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func) {
 	mir::MIRBasicBlock *entry = builder->createBasicBlock("entry");
 	builder->setInsertPoint(entry);
 
+	// Create allocas for function parameters and store incoming values
+	for (size_t i = 0; i < func->parameters.size(); i++) {
+		const auto &param = func->parameters[i];
+		mir::MIRValue *argVal = function->parameters[i];
+		generateLocalVariable(param.name, param.type, nullptr, argVal);
+	}
+
 	// Generate body statements
 	for (auto &stmt : func->body) {
 		generateStmt(stmt.get(), function);

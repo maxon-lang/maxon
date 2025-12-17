@@ -3,6 +3,7 @@
 #include "build_runner.h"
 #include "compiler.h"
 #include "docs_generator.h"
+#include "grammar_generator.h"
 #include "lexer.h"
 #include "lsp/lsp_server.h"
 #include "lsp/transport.h"
@@ -134,6 +135,14 @@ int main(int argc, char *argv[]) {
 
 	if (command == "generate-docs") {
 		return DocsGenerator::generateDocumentation();
+	}
+
+	if (command == "generate-grammar") {
+		if (argc < 3) {
+			std::cerr << "Usage: " << argv[0] << " generate-grammar <output_file>" << std::endl;
+			return 1;
+		}
+		return generateGrammar(argv[2]);
 	}
 
 	if (command == "init") {
@@ -621,9 +630,10 @@ int main(int argc, char *argv[]) {
 	// Handle shortcut: maxon <file.maxon|.test> [--track-allocs] [--stats]
 	// Only applies when the first argument is NOT a known command
 	if (command != "compile" && command != "self-test" && command != "extract-specs" &&
-		command != "regen-fragments" && command != "generate-docs" && command != "test-fragments" &&
-		command != "test" && command != "benchmark" && command != "compile-mir" &&
-		command != "validate-specs" && command != "lsp" && command != "build" && command != "init") {
+		command != "regen-fragments" && command != "generate-docs" && command != "generate-grammar" &&
+		command != "test-fragments" && command != "test" && command != "benchmark" &&
+		command != "compile-mir" && command != "validate-specs" && command != "lsp" &&
+		command != "build" && command != "init") {
 		std::string inputFile;
 		bool trackAllocs = false;
 		bool showStats = false;

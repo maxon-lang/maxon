@@ -23,6 +23,22 @@ struct SemanticError {
 		: message(msg), line(l), column(c), severity(sev), code(errCode), sourceFile(file) {}
 };
 
+// Ownership state of a variable
+enum class OwnershipState {
+	Owned, // Variable owns its value
+	Moved  // Ownership has been transferred to another function
+};
+
+// Information about where ownership was transferred
+struct MoveInfo {
+	int line;
+	int column;
+	std::string targetFunction; // Function that received ownership
+
+	MoveInfo(int l = 0, int c = 0, const std::string &func = "")
+		: line(l), column(c), targetFunction(func) {}
+};
+
 // Variable information
 struct VariableInfo {
 	std::string name;
@@ -35,10 +51,14 @@ struct VariableInfo {
 	int column;
 	std::string initialValue; // For immutable variables, stores the literal value if available
 
-	VariableInfo() : isImmutable(false), isUsed(false), isParameter(false), isLoopVariable(false), line(0), column(0) {}
+	// Ownership tracking
+	OwnershipState ownershipState = OwnershipState::Owned;
+	std::optional<MoveInfo> moveInfo; // Set when ownership is transferred
+
+	VariableInfo() : isImmutable(false), isUsed(false), isParameter(false), isLoopVariable(false), line(0), column(0), ownershipState(OwnershipState::Owned) {}
 
 	VariableInfo(const std::string &n, const std::string &t, bool immutable, int l = 0, int c = 0, bool param = false, const std::string &initVal = "", bool loopVar = false)
-		: name(n), type(t), isImmutable(immutable), isUsed(false), isParameter(param), isLoopVariable(loopVar), line(l), column(c), initialValue(initVal) {}
+		: name(n), type(t), isImmutable(immutable), isUsed(false), isParameter(param), isLoopVariable(loopVar), line(l), column(c), initialValue(initVal), ownershipState(OwnershipState::Owned) {}
 };
 
 // Function information
@@ -60,6 +80,14 @@ struct FunctionInfo {
 
 	// Check if this is a synthesized default method that needs code generation
 	bool needsCodeGeneration() const { return isSynthesizedDefault && defaultBody != nullptr; }
+};
+
+// Tracks which parameters a function mutates (for ownership analysis)
+struct ParameterMutationInfo {
+	std::set<size_t> mutatedParamIndices; // 0-based indices of parameters that are mutated
+	bool analyzed = false;				  // True if mutation analysis is complete
+
+	ParameterMutationInfo() : analyzed(false) {}
 };
 
 // Struct field information
@@ -377,6 +405,11 @@ class SemanticAnalyzer {
 	std::set<std::string> currentFunctionCallDeps_;
 	std::string currentFunctionName_;
 
+	// === Ownership / Mutation Analysis ===
+	// Map from function name to parameter mutation info
+	std::map<std::string, ParameterMutationInfo> functionMutations_;
+	bool mutationPassComplete_ = false; // True after mutation analysis pass completes
+
 	// Logging helpers
 	void logTrace(const std::string &msg);
 	void logDetail(const std::string &msg);
@@ -427,6 +460,20 @@ class SemanticAnalyzer {
 	void checkInterfaceConformance(const std::string &structName, const std::vector<std::string> &conformsTo, int line, int column, bool isGenericTemplate = false);
 	void instantiateGenericStructMethods(const std::string &templateName, const std::string &specializedName,
 										 const std::map<std::string, std::string> &typeBindings);
+
+	// Ownership analysis methods
+	void runMutationAnalysisPass(ProgramAST *program);
+	void analyzeFunctionMutations(FunctionAST *func);
+	void detectMutationsInStmt(StmtAST *stmt, const std::map<std::string, size_t> &paramNameToIndex,
+							   std::set<size_t> &mutatedIndices);
+	void detectMutationsInExpr(ExprAST *expr, const std::map<std::string, size_t> &paramNameToIndex,
+							   std::set<size_t> &mutatedIndices);
+	bool doesFunctionMutateParam(const std::string &funcName, size_t paramIdx) const;
+	void markVariableMoved(const std::string &name, int line, int column, const std::string &targetFunction);
+	std::map<std::string, OwnershipState> captureOwnershipStates() const;
+	void restoreOwnershipStates(const std::map<std::string, OwnershipState> &states);
+	void mergeOwnershipStates(const std::map<std::string, OwnershipState> &branchA,
+							  const std::map<std::string, OwnershipState> &branchB);
 
 	// Incremental analysis helpers
 	std::string computeSignatureHash(const FunctionInfo &funcInfo) const;

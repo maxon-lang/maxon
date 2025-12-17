@@ -9,6 +9,10 @@
 // Forward declarations
 class Visitor;
 class FunctionAST;
+class MIRCodeGenerator;
+namespace mir {
+class MIRValue;
+}
 
 // Source range for precise location tracking (used by LSP)
 struct SourceRange {
@@ -83,6 +87,9 @@ class ExprAST : public ASTNode {
 	ExprAST(int l = 0, int c = 0) : line(l), column(c), endLine(0), endColumn(0) {}
 	virtual ~ExprAST() = default;
 
+	// Code generation - implemented by subclasses in codegen_ng_expr.cpp
+	virtual mir::MIRValue *generate(MIRCodeGenerator &cg) const;
+
 	// Clone this expression (for default parameter value injection)
 	virtual ExprAST *clone() const { return nullptr; }
 
@@ -105,6 +112,8 @@ class NumberExprAST : public ExprAST {
 
 	NumberExprAST(int64_t val, int l = 0, int c = 0) : ExprAST(l, c), value(val) {}
 	ExprAST *clone() const override { return new NumberExprAST(value, line, column); }
+
+	virtual mir::MIRValue *generate(MIRCodeGenerator &cg) const override;
 };
 
 // Byte literal (8-bit unsigned, 0-255)
@@ -136,6 +145,8 @@ class VariableExprAST : public ExprAST {
 
 	VariableExprAST(const std::string &n, int l = 0, int c = 0) : ExprAST(l, c), name(n) {}
 	ExprAST *clone() const override { return new VariableExprAST(name, line, column); }
+
+	virtual mir::MIRValue *generate(MIRCodeGenerator &cg) const override;
 };
 
 // Boolean literal
@@ -210,6 +221,8 @@ class BinaryExprAST : public ExprAST {
 
 	BinaryExprAST(char o, std::unique_ptr<ExprAST> l, std::unique_ptr<ExprAST> r, int line = 0, int col = 0)
 		: ExprAST(line, col), op(o), left(std::move(l)), right(std::move(r)) {}
+
+	virtual mir::MIRValue *generate(MIRCodeGenerator &cg) const override;
 };
 
 // Unary operation (e.g., -x, +x)
@@ -270,6 +283,8 @@ class CallExprAST : public ExprAST {
 
 	CallExprAST(const std::string &c, std::vector<CallArgument> a, int l = 0, int col = 0)
 		: ExprAST(l, col), callee(c), args(std::move(a)) {}
+
+	virtual mir::MIRValue *generate(MIRCodeGenerator &cg) const override;
 };
 
 // Array index expression (e.g., "array[5]" or "struct.field[5]")
@@ -411,6 +426,9 @@ class StmtAST : public ASTNode {
 	StmtAST(int l = 0, int c = 0) : line(l), column(c), endLine(0), endColumn(0) {}
 	virtual ~StmtAST() = default;
 
+	// Code generation - implemented by subclasses in codegen_ng_stmt.cpp
+	virtual void generate(MIRCodeGenerator &cg) const;
+
 	// Helper to get the full source range of this statement
 	SourceRange getSourceRange() const {
 		return SourceRange(line, column, endLine, endColumn);
@@ -432,6 +450,8 @@ class VarDeclStmtAST : public StmtAST {
 
 	VarDeclStmtAST(const std::string &n, std::unique_ptr<ExprAST> init, const std::string &t = "", int l = 0, int c = 0)
 		: StmtAST(l, c), name(n), type(t), initializer(std::move(init)) {}
+
+	virtual void generate(MIRCodeGenerator &cg) const override;
 };
 
 // Let declaration (immutable variable)
@@ -443,6 +463,8 @@ class LetDeclStmtAST : public StmtAST {
 
 	LetDeclStmtAST(const std::string &n, std::unique_ptr<ExprAST> init, const std::string &t = "", int l = 0, int c = 0)
 		: StmtAST(l, c), name(n), type(t), initializer(std::move(init)) {}
+
+	virtual void generate(MIRCodeGenerator &cg) const override;
 };
 
 // Assignment statement
@@ -453,6 +475,8 @@ class AssignStmtAST : public StmtAST {
 
 	AssignStmtAST(const std::string &n, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
 		: StmtAST(l, c), name(n), value(std::move(val)) {}
+
+	virtual void generate(MIRCodeGenerator &cg) const override;
 };
 
 // Array assignment statement (e.g., "array[5] = 42")
@@ -626,6 +650,8 @@ class ReturnStmtAST : public StmtAST {
 
 	ReturnStmtAST(std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
 		: StmtAST(l, c), value(std::move(val)) {}
+
+	virtual void generate(MIRCodeGenerator &cg) const override;
 };
 
 // Break statement
@@ -653,6 +679,8 @@ class ExprStmtAST : public StmtAST {
 
 	ExprStmtAST(std::unique_ptr<ExprAST> expr, int l = 0, int c = 0)
 		: StmtAST(l, c), expression(std::move(expr)) {}
+
+	virtual void generate(MIRCodeGenerator &cg) const override;
 };
 
 // Error statement - placeholder for parse errors in partial AST
@@ -678,7 +706,7 @@ struct FunctionParameter {
 	std::string name;
 	std::string type;
 	std::shared_ptr<ExprAST> defaultValue; // nullptr if no default (required parameter)
-	bool isDiscard;                        // true if name is "_" (discard pattern)
+	bool isDiscard;						   // true if name is "_" (discard pattern)
 	int line;
 	int column;
 

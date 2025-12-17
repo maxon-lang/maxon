@@ -63,6 +63,41 @@ mir::MIRType *MIRCodeGenerator::getTypeFromString(const std::string &typeStr) {
 }
 
 //==============================================================================
+// Variable/Parameter Generation Helper
+//==============================================================================
+
+void MIRCodeGenerator::generateLocalVariable(const std::string &name, const std::string &typeStr,
+											 ExprAST *initializer, mir::MIRValue *existingValue) {
+	mir::MIRType *type = getTypeFromString(typeStr);
+
+	// Create alloca for the variable
+	mir::MIRValue *alloca = builder->createAlloca(type, name);
+
+	// Store either the existing value (for parameters) or generate from initializer
+	if (existingValue) {
+		builder->createStore(existingValue, alloca);
+	} else if (initializer) {
+		mir::MIRValue *initVal = initializer->generate(*this);
+		builder->createStore(initVal, alloca);
+	}
+
+	// Track the variable
+	namedValues[name] = alloca;
+}
+
+mir::MIRValue *MIRCodeGenerator::lookupVariable(const std::string &name) {
+	auto it = namedValues.find(name);
+	if (it == namedValues.end()) {
+		return nullptr;
+	}
+	return it->second;
+}
+
+void MIRCodeGenerator::trackVariable(const std::string &name, mir::MIRValue *value) {
+	namedValues[name] = value;
+}
+
+//==============================================================================
 // Main Generate Function
 //==============================================================================
 
@@ -128,4 +163,16 @@ size_t MIRCodeGenerator::getInstructionCount() const {
 		}
 	}
 	return count;
+}
+
+//==============================================================================
+// Base AST Class Implementations
+//==============================================================================
+
+mir::MIRValue *ExprAST::generate(MIRCodeGenerator &cg) const {
+	throw std::runtime_error("unimplemented");
+}
+
+void StmtAST::generate(MIRCodeGenerator &cg) const {
+	throw std::runtime_error("unimplemented");
 }

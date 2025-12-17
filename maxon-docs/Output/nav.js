@@ -17,6 +17,7 @@ const categories = {
     'operators': 'Operators',
     'optimization': 'Optimization',
     'organization': 'Organization',
+    'semantic-analysis': 'Semantic Analysis',
     'statements': 'Statements',
     'stdlib': 'Standard Library',
     'strings': 'Strings',

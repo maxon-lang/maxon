@@ -4,41 +4,62 @@
 
 #include "../codegen_ng.h"
 
+#include "../ast.h"
 #include <stdexcept>
 
+//==============================================================================
+// Expression generate() implementations
+//==============================================================================
+
+mir::MIRValue *NumberExprAST::generate(MIRCodeGenerator &cg) const {
+	return cg.getBuilder()->getInt64(static_cast<int64_t>(value));
+}
+
+mir::MIRValue *VariableExprAST::generate(MIRCodeGenerator &cg) const {
+	mir::MIRValue *alloca = cg.lookupVariable(name);
+	if (!alloca) {
+		throw std::runtime_error("Unknown variable: " + name +
+								 " at line " + std::to_string(line));
+	}
+	return cg.getBuilder()->createLoad(mir::MIRType::getInt64(), alloca, name);
+}
+
+mir::MIRValue *BinaryExprAST::generate(MIRCodeGenerator &cg) const {
+	mir::MIRValue *leftVal = left->generate(cg);
+	mir::MIRValue *rightVal = right->generate(cg);
+
+	switch (op) {
+	case '+':
+		return cg.getBuilder()->createAdd(leftVal, rightVal);
+	case '-':
+		return cg.getBuilder()->createSub(leftVal, rightVal);
+	case '*':
+		return cg.getBuilder()->createMul(leftVal, rightVal);
+	default:
+		throw std::runtime_error("Unsupported binary operator: '" + std::string(1, op) +
+								 "' at line " + std::to_string(line));
+	}
+}
+
+mir::MIRValue *CallExprAST::generate(MIRCodeGenerator &cg) const {
+	mir::MIRFunction *calleeFunc = cg.getModule()->getFunction(callee);
+	if (!calleeFunc) {
+		throw std::runtime_error("Unknown function: " + callee +
+								 " at line " + std::to_string(line));
+	}
+
+	std::vector<mir::MIRValue *> argValues;
+	for (const auto &arg : args) {
+		argValues.push_back(arg.value->generate(cg));
+	}
+
+	return cg.getBuilder()->createCall(calleeFunc, argValues);
+}
+
+//==============================================================================
+// MIRCodeGenerator::generateExpr - now delegates to AST
+//==============================================================================
+
 mir::MIRValue *MIRCodeGenerator::generateExpr(ExprAST *expr) {
-	// Number literal
-	if (auto *numExpr = dynamic_cast<NumberExprAST *>(expr)) {
-		return builder->getInt64(static_cast<int64_t>(numExpr->value));
-	}
-
-	// Variable reference
-	if (auto *varExpr = dynamic_cast<VariableExprAST *>(expr)) {
-		auto it = namedValues.find(varExpr->name);
-		if (it == namedValues.end()) {
-			throw std::runtime_error("Unknown variable: " + varExpr->name);
-		}
-		// Load the value from the alloca
-		return builder->createLoad(mir::MIRType::getInt64(), it->second, varExpr->name);
-	}
-
-	// Function call
-	if (auto *callExpr = dynamic_cast<CallExprAST *>(expr)) {
-		// Look up the function in the module
-		mir::MIRFunction *callee = module->getFunction(callExpr->callee);
-		if (!callee) {
-			throw std::runtime_error("Unknown function: " + callExpr->callee);
-		}
-
-		// Generate arguments
-		std::vector<mir::MIRValue *> argValues;
-		for (auto &arg : callExpr->args) {
-			argValues.push_back(generateExpr(arg.value.get()));
-		}
-
-		// Create the call
-		return builder->createCall(callee, argValues);
-	}
-
-	throw std::runtime_error("Unsupported expression type");
+	return expr->generate(*this);
 }

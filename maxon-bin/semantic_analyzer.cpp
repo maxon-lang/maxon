@@ -775,6 +775,10 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 		}
 	}
 
+	// Pass 2.5: Analyze parameter mutations for ownership tracking
+	logTrace("Pass 2.5: Analyzing function parameter mutations");
+	runMutationAnalysisPass(program);
+
 	// Third pass: analyze each function and method body
 	logTrace("Pass 3: Analyzing function bodies");
 

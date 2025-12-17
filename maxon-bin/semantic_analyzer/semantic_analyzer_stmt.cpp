@@ -108,6 +108,19 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 						 std::string("\n  Note: Variable must be declared with 'var' or 'let' before use"),
 					 stmt->line, stmt->column);
 		} else {
+			// Check ownership state - cannot assign to a moved variable
+			if (varInfo->ownershipState == OwnershipState::Moved) {
+				std::string errorMsg = "Cannot assign to variable '" + assign->name + "' after ownership was transferred";
+				if (varInfo->moveInfo.has_value()) {
+					errorMsg += "\n  Ownership transferred to function '" + varInfo->moveInfo->targetFunction +
+								"' at line " + std::to_string(varInfo->moveInfo->line);
+				}
+				errorMsg += "\n  Note: Once ownership is transferred, the variable cannot be used or reassigned";
+				addError(errorMsg, stmt->line, stmt->column, "assign-after-move");
+				// Skip further analysis to avoid cascading errors from RHS
+				return;
+			}
+
 			// Check if variable is immutable
 			if (varInfo->isImmutable) {
 				if (varInfo->isLoopVariable) {
@@ -389,6 +402,9 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		// Check for duplicate block identifiers at this scope level
 		declareBlockId(ifStmt->blockId, stmt->line, stmt->column);
 
+		// Capture ownership state before analyzing branches
+		auto preIfOwnership = captureOwnershipStates();
+
 		// Analyze then block
 		enterScope();
 
@@ -405,6 +421,12 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		// Check for unused variables before exiting scope
 		checkUnusedVariables();
 		exitScope();
+
+		// Capture ownership state after then branch
+		auto thenOwnership = captureOwnershipStates();
+
+		// Restore to pre-if state for else analysis
+		restoreOwnershipStates(preIfOwnership);
 
 		// Analyze else block
 		if (!ifStmt->elseBody.empty()) {
@@ -424,6 +446,12 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 			checkUnusedVariables();
 			exitScope();
 		}
+
+		// Capture ownership state after else branch
+		auto elseOwnership = captureOwnershipStates();
+
+		// Merge ownership: if moved in EITHER branch, consider it moved
+		mergeOwnershipStates(thenOwnership, elseOwnership);
 	} else if (auto ifLet = dynamic_cast<IfLetStmtAST *>(stmt)) {
 		// Analyze optional expression
 		std::string optionalType = analyzeExpression(ifLet->optionalExpr.get());
@@ -584,6 +612,9 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		// Check for duplicate block identifiers at this scope level
 		declareBlockId(whileStmt->blockId, stmt->line, stmt->column);
 
+		// Capture ownership state before loop
+		auto preLoopOwnership = captureOwnershipStates();
+
 		// Enter loop scope
 		loopDepth++;
 		loopLabelStack.push_back(whileStmt->blockId);
@@ -607,6 +638,12 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		exitScope();
 		loopDepth--;
 		loopLabelStack.pop_back();
+
+		// Capture ownership state after loop body
+		auto postLoopOwnership = captureOwnershipStates();
+
+		// Merge: if moved in loop body, it's moved after loop (loop may execute 0+ times)
+		mergeOwnershipStates(preLoopOwnership, postLoopOwnership);
 	} else if (auto forStmt = dynamic_cast<ForStmtAST *>(stmt)) {
 		// For-loops require iterator next() method from stdlib (Iterable interface)
 		// The method returns Element or nil
@@ -629,6 +666,9 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 
 		// Check for duplicate block identifiers at this scope level
 		declareBlockId(forStmt->blockId, stmt->line, stmt->column);
+
+		// Capture ownership state before loop
+		auto preLoopOwnership = captureOwnershipStates();
 
 		// Enter loop scope
 		loopDepth++;
@@ -675,6 +715,12 @@ void SemanticAnalyzer::analyzeStatement(StmtAST *stmt, const std::string &curren
 		exitScope();
 		loopDepth--;
 		loopLabelStack.pop_back();
+
+		// Capture ownership state after loop body
+		auto postLoopOwnership = captureOwnershipStates();
+
+		// Merge: if moved in loop body, it's moved after loop (loop may execute 0+ times)
+		mergeOwnershipStates(preLoopOwnership, postLoopOwnership);
 	} else if (auto breakStmt = dynamic_cast<BreakStmtAST *>(stmt)) {
 		// Validate break is inside a loop
 		if (loopDepth == 0) {

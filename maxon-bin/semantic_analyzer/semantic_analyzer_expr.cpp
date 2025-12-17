@@ -400,6 +400,20 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 					 expr->line, expr->column);
 			return "error";
 		}
+
+		// Check ownership state - cannot use a moved variable
+		if (varInfo->ownershipState == OwnershipState::Moved) {
+			std::string errorMsg = "Cannot use variable '" + varExpr->name + "' after ownership was transferred";
+			if (varInfo->moveInfo.has_value()) {
+				errorMsg += "\n  Ownership transferred to function '" + varInfo->moveInfo->targetFunction +
+							"' at line " + std::to_string(varInfo->moveInfo->line);
+			}
+			errorMsg += "\n  Note: Once ownership is transferred, the variable cannot be used again";
+			addError(errorMsg, expr->line, expr->column, "use-after-move");
+			// Return the actual type to avoid cascading errors
+			return varInfo->type;
+		}
+
 		// Mark variable as used when it's referenced
 		markVariableAsUsed(varExpr->name);
 		return varInfo->type;
@@ -1401,6 +1415,29 @@ std::string SemanticAnalyzer::analyzeExpression(ExprAST *expr) {
 
 		// Store the argument-to-parameter mapping for codegen
 		callExpr->argToParamMapping = std::move(argToParamMapping);
+
+		// Ownership tracking: check if any variable arguments are being moved
+		// This must happen after argToParamMapping is populated
+		if (mutationPassComplete_) {
+			for (size_t argIdx = 0; argIdx < callExpr->args.size(); argIdx++) {
+				// Get the parameter index this argument maps to
+				size_t paramIdx = argIdx;
+				if (argIdx < callExpr->argToParamMapping.size()) {
+					paramIdx = callExpr->argToParamMapping[argIdx];
+				}
+
+				// Check if this argument is a direct variable reference
+				if (auto *varExpr = dynamic_cast<VariableExprAST *>(callExpr->args[argIdx].value.get())) {
+					// Look up the resolved function name
+					std::string resolvedFunc = callExpr->resolvedCallee.empty() ? callExpr->callee : callExpr->resolvedCallee;
+
+					// Check if this function mutates this parameter - if so, transfer ownership
+					if (doesFunctionMutateParam(resolvedFunc, paramIdx)) {
+						markVariableMoved(varExpr->name, expr->line, expr->column, resolvedFunc);
+					}
+				}
+			}
+		}
 
 		return funcInfo.returnType;
 
