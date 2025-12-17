@@ -37,8 +37,9 @@ class MIRCodeGenerator {
 	void createEntryPoint();
 
 
-	// Type helpers
-	mir::MIRType *getTypeFromString(const std::string &typeStr);
+	// Type registry - maps Maxon type names to MIR types
+	std::unordered_map<std::string, mir::MIRType *> typeRegistry;
+	void initTypeRegistry();
 
 	// Logging helpers
 	void logProgress(const std::string &msg);
@@ -88,6 +89,7 @@ class MIRCodeGenerator {
 	mir::MIRBuilder *getBuilder() { return builder.get(); }
 	mir::MIRValue *lookupVariable(const std::string &name);
 	void trackVariable(const std::string &name, mir::MIRValue *value);
+	mir::MIRType *getType(const std::string &typeName);
 
 	// Variable/parameter generation helper
 	void generateLocalVariable(const std::string &name, const std::string &typeStr,

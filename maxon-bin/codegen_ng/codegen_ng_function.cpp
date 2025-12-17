@@ -9,7 +9,7 @@
 void MIRCodeGenerator::declareFunction(FunctionAST *func) {
 	logDetail("Declaring function: " + func->name);
 
-	mir::MIRType *returnType = getTypeFromString(func->returnType);
+	mir::MIRType *returnType = getType(func->returnType);
 
 	// Create function directly on module (avoid builder->createFunction which sets currentFunction)
 	mir::MIRFunction *function = module->createFunction(func->name, returnType);
@@ -17,7 +17,7 @@ void MIRCodeGenerator::declareFunction(FunctionAST *func) {
 
 	// Add parameters directly
 	for (const auto &param : func->parameters) {
-		function->addParameter(getTypeFromString(param.type), param.name);
+		function->addParameter(getType(param.type), param.name);
 	}
 }
 
@@ -33,7 +33,7 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func) {
 		throw std::runtime_error("Function not declared: " + func->name);
 	}
 
-	mir::MIRType *returnType = getTypeFromString(func->returnType);
+	mir::MIRType *returnType = getType(func->returnType);
 
 	// Set current function in builder so createBasicBlock works
 	builder->setFunction(function);
