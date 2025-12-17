@@ -323,7 +323,7 @@ std::string buildEnumSignature(const EnumDefAST *enumDef) {
 		if (!first)
 			sig << ", ";
 		first = false;
-		sig << "case " << c.name;
+		sig << c.name;
 		if (!c.associatedValues.empty()) {
 			sig << "(";
 			bool firstAssoc = true;

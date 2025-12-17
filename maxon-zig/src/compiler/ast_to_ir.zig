@@ -36,6 +36,17 @@ const StructInfo = struct {
     size: i32,
 };
 
+/// Function signature info
+const FuncInfo = struct {
+    return_type: ir.Type,
+    param_types: []const ParamType,
+};
+
+/// Parameter type info
+const ParamType = struct {
+    ty: ValueType,
+};
+
 /// Converts AST to IR
 pub const AstToIr = struct {
     allocator: std.mem.Allocator,
@@ -45,6 +56,8 @@ pub const AstToIr = struct {
     var_map: std.StringHashMapUnmanaged(VarInfo),
     // Map type names to struct info
     type_map: std.StringHashMapUnmanaged(StructInfo),
+    // Map function names to signatures
+    func_map: std.StringHashMapUnmanaged(FuncInfo),
 
     const VarInfo = struct {
         ptr: ir.Value,
@@ -59,22 +72,33 @@ pub const AstToIr = struct {
             .current_func = null,
             .var_map = .{},
             .type_map = .{},
+            .func_map = .{},
         };
     }
 
     pub fn deinit(self: *AstToIr) void {
         self.var_map.deinit(self.allocator);
-        var iter = self.type_map.iterator();
-        while (iter.next()) |entry| {
+        var type_iter = self.type_map.iterator();
+        while (type_iter.next()) |entry| {
             self.allocator.free(entry.value_ptr.fields);
         }
         self.type_map.deinit(self.allocator);
+        var func_iter = self.func_map.iterator();
+        while (func_iter.next()) |entry| {
+            self.allocator.free(entry.value_ptr.param_types);
+        }
+        self.func_map.deinit(self.allocator);
     }
 
     pub fn convert(self: *AstToIr, program: ast.Program) !ir.Module {
         // First, register all type declarations
         for (program.types) |type_decl| {
             try self.registerType(type_decl);
+        }
+
+        // Second, register all function signatures
+        for (program.functions) |func| {
+            try self.registerFunction(func);
         }
 
         // Then convert functions
@@ -86,6 +110,32 @@ pub const AstToIr = struct {
         const module = self.module;
         self.module = ir.Module.init(self.allocator);
         return module;
+    }
+
+    fn registerFunction(self: *AstToIr, func: ast.FunctionDecl) !void {
+        // Determine return type
+        const ret_type: ir.Type = if (func.return_type) |rt| blk: {
+            if (std.mem.eql(u8, rt, "int")) break :blk .i64;
+            if (std.mem.eql(u8, rt, "float")) break :blk .f64;
+            break :blk .void;
+        } else .void;
+
+        // Build parameter types
+        var param_types = try self.allocator.alloc(ParamType, func.params.len);
+        for (func.params, 0..) |param, i| {
+            if (self.type_map.contains(param.type_name)) {
+                param_types[i] = .{ .ty = .{ .struct_type = param.type_name } };
+            } else {
+                param_types[i] = .{ .ty = .{ .primitive = typeNameToIrType(param.type_name) } };
+            }
+        }
+
+        try self.func_map.put(self.allocator, func.name, .{
+            .return_type = ret_type,
+            .param_types = param_types,
+        });
+
+        debug.astToIr("Registered function '{s}' returning {s}", .{ func.name, ret_type.format() });
     }
 
     fn registerType(self: *AstToIr, type_decl: ast.TypeDecl) !void {
@@ -384,7 +434,7 @@ pub const AstToIr = struct {
     }
 
     fn convertCall(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-        const func = self.current_func.?;
+        const ir_func = self.current_func.?;
 
         // Handle built-in functions
         if (std.mem.eql(u8, call.func_name, "trunc")) {
@@ -396,14 +446,31 @@ pub const AstToIr = struct {
             if (arg.ty.toPrimitiveType() != .f64) {
                 return error.ExpectedFloat;
             }
-            const result = try func.emitFpToSi(arg.value, .i64);
+            const result = try ir_func.emitFpToSi(arg.value, .i64);
             return .{ .value = result, .ty = .{ .primitive = .i64 } };
         }
 
-        // For other functions, emit a call instruction
-        // For now, assume all user functions return i64
-        const result = try func.emitCall(call.func_name, .i64);
-        return .{ .value = result orelse 0, .ty = .{ .primitive = .i64 } };
+        // Look up user function signature
+        const func_info = self.func_map.get(call.func_name) orelse {
+            // Unknown function - fall back to i64 return
+            const result = try ir_func.emitCall(call.func_name, &.{}, .i64);
+            return .{ .value = result orelse 0, .ty = .{ .primitive = .i64 } };
+        };
+
+        // Convert arguments - don't free since they're stored in the IR instruction
+        const args = try self.allocator.alloc(ir.Value, call.args.len);
+
+        for (call.args, 0..) |arg_expr, i| {
+            const arg = try self.convertExpression(arg_expr);
+            // For structs, we pass the pointer directly
+            args[i] = arg.value;
+        }
+
+        // Emit call with arguments
+        const result = try ir_func.emitCall(call.func_name, args, func_info.return_type);
+
+        // Return with correct type
+        return .{ .value = result orelse 0, .ty = .{ .primitive = func_info.return_type } };
     }
 };
 

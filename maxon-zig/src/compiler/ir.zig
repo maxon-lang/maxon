@@ -123,6 +123,7 @@ pub const Instruction = struct {
         immediate_f64: f64,
         block_ref: u32,
         func_name: []const u8,
+        call_args: []const Value,
     };
 };
 
@@ -291,12 +292,12 @@ pub const Function = struct {
     }
 
     // Function calls
-    pub fn emitCall(self: *Function, func_name: []const u8, ret_type: Type) !?Value {
+    pub fn emitCall(self: *Function, func_name: []const u8, args: []const Value, ret_type: Type) !?Value {
         if (ret_type == .void) {
-            try self.emit(.{ .op = .call, .operands = .{ .{ .func_name = func_name }, .none } });
+            try self.emit(.{ .op = .call, .operands = .{ .{ .func_name = func_name }, .{ .call_args = args } } });
             return null;
         }
-        return try self.emitWithResult(.call, ret_type, .{ .{ .func_name = func_name }, .none });
+        return try self.emitWithResult(.call, ret_type, .{ .{ .func_name = func_name }, .{ .call_args = args } });
     }
 
     // Parameters
@@ -392,6 +393,14 @@ fn printInstruction(writer: anytype, inst: Instruction) !void {
             .immediate_f64 => |f| try writer.print(" {d}", .{f}),
             .block_ref => |b| try writer.print(" @block{d}", .{b}),
             .func_name => |n| try writer.print(" @{s}", .{n}),
+            .call_args => |args| {
+                try writer.writeAll("(");
+                for (args, 0..) |arg, i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    try writer.print("%{d}", .{arg});
+                }
+                try writer.writeAll(")");
+            },
         }
     }
 }

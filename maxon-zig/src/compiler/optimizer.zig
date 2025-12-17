@@ -194,6 +194,7 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
     }
 
     // Second pass: find all loaded pointers and their field keys
+    // Also track pointers passed to function calls (they may be read by the callee)
     for (func.blocks.items) |block| {
         for (block.instructions.items) |inst| {
             if (inst.op == .load) {
@@ -204,6 +205,16 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
                 if (ptr_to_field.get(ptr)) |field_key| {
                     try loaded_bases.put(allocator, field_key.base, {});
                     try loaded_fields.append(allocator, field_key);
+                }
+            } else if (inst.op == .call) {
+                // Pointers passed to calls may be read by the callee
+                // Mark them as loaded to prevent dead store elimination
+                if (inst.operands[1] == .call_args) {
+                    for (inst.operands[1].call_args) |arg| {
+                        // Treat any pointer argument as potentially loaded
+                        try loaded_ptrs.put(allocator, arg, {});
+                        try loaded_bases.put(allocator, arg, {});
+                    }
                 }
             }
         }
@@ -216,12 +227,16 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
             loaded_ptrs_ref: *std.AutoHashMapUnmanaged(ir.Value, void),
             ptr_to_field_ref: *std.AutoHashMapUnmanaged(ir.Value, FieldPtrKey),
             loaded_fields_ref: *std.ArrayListUnmanaged(FieldPtrKey),
+            loaded_bases_ref: *std.AutoHashMapUnmanaged(ir.Value, void),
         ) bool {
             // Direct match - keep the store
             if (loaded_ptrs_ref.contains(ptr)) return true;
 
             // Check if this store is via a field pointer
             if (ptr_to_field_ref.get(ptr)) |store_field| {
+                // If the base alloca is marked as loaded (e.g., passed to a call), keep all stores to it
+                if (loaded_bases_ref.contains(store_field.base)) return true;
+
                 // Check if any load uses the same base+offset
                 for (loaded_fields_ref.items) |load_field| {
                     if (store_field.base == load_field.base and store_field.offset == load_field.offset) {
@@ -242,7 +257,7 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
         for (block.instructions.items) |inst| {
             if (inst.op == .store) {
                 const ptr = inst.operands[0].value;
-                if (!isStoreNeeded(ptr, &loaded_ptrs, &ptr_to_field, &loaded_fields)) {
+                if (!isStoreNeeded(ptr, &loaded_ptrs, &ptr_to_field, &loaded_fields, &loaded_bases)) {
                     continue; // Skip dead store
                 }
             }
