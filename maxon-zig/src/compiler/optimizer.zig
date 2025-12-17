@@ -119,7 +119,10 @@ fn copyPropagation(func: *ir.Function, allocator: std.mem.Allocator) !void {
                     // Apply value mapping to the stored value
                     const mapped_val = value_map.get(val) orelse val;
                     try ptr_to_value.put(allocator, ptr, mapped_val);
-                    try new_instructions.append(allocator, inst);
+                    // Emit store with mapped value
+                    var new_inst = inst;
+                    new_inst.operands[1] = .{ .value = mapped_val };
+                    try new_instructions.append(allocator, new_inst);
                 },
                 .load => {
                     const ptr = inst.operands[0].value;
@@ -216,6 +219,14 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
                         try loaded_bases.put(allocator, arg, {});
                     }
                 }
+            } else if (inst.op == .ret) {
+                // Pointers returned from functions may be read by callers
+                // Mark them as loaded to prevent dead store elimination
+                if (inst.operands[0] == .value) {
+                    const ret_val = inst.operands[0].value;
+                    try loaded_ptrs.put(allocator, ret_val, {});
+                    try loaded_bases.put(allocator, ret_val, {});
+                }
             }
         }
     }
@@ -283,6 +294,11 @@ fn deadCodeElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
             for (inst.operands) |op| {
                 switch (op) {
                     .value => |v| try used.put(allocator, v, {}),
+                    .call_args => |args| {
+                        for (args) |arg| {
+                            try used.put(allocator, arg, {});
+                        }
+                    },
                     else => {},
                 }
             }

@@ -29,8 +29,25 @@ const FieldInfo = struct {
     offset: i32,
 };
 
+/// Type info - can be primitive or struct
+const TypeInfo = union(enum) {
+    primitive: ir.Type,
+    struct_type: StructTypeInfo,
+
+    fn irType(self: TypeInfo) ir.Type {
+        return switch (self) {
+            .primitive => |t| t,
+            .struct_type => .ptr,
+        };
+    }
+
+    fn isStruct(self: TypeInfo) bool {
+        return self == .struct_type;
+    }
+};
+
 /// Struct type info
-const StructInfo = struct {
+const StructTypeInfo = struct {
     name: []const u8,
     fields: []const FieldInfo,
     size: i32,
@@ -39,6 +56,7 @@ const StructInfo = struct {
 /// Function signature info
 const FuncInfo = struct {
     return_type: ir.Type,
+    return_type_name: ?[]const u8, // struct type name if returning a struct
     param_types: []const ParamType,
 };
 
@@ -59,8 +77,8 @@ pub const AstToIr = struct {
     current_func: ?*ir.Function,
     // Map variable names to their alloca values (pointers) and types
     var_map: std.StringHashMapUnmanaged(VarInfo),
-    // Map type names to struct info
-    type_map: std.StringHashMapUnmanaged(StructInfo),
+    // Map type names to type info (primitives and structs)
+    type_map: std.StringHashMapUnmanaged(TypeInfo),
     // Map function names to signatures
     func_map: std.StringHashMapUnmanaged(FuncInfo),
     // Map enum names to their info
@@ -88,7 +106,10 @@ pub const AstToIr = struct {
         self.var_map.deinit(self.allocator);
         var type_iter = self.type_map.iterator();
         while (type_iter.next()) |entry| {
-            self.allocator.free(entry.value_ptr.fields);
+            switch (entry.value_ptr.*) {
+                .struct_type => |s| self.allocator.free(s.fields),
+                .primitive => {},
+            }
         }
         self.type_map.deinit(self.allocator);
         var func_iter = self.func_map.iterator();
@@ -104,7 +125,11 @@ pub const AstToIr = struct {
     }
 
     pub fn convert(self: *AstToIr, program: ast.Program) !ir.Module {
-        // First, register all type declarations
+        // Register primitive types
+        try self.type_map.put(self.allocator, "int", .{ .primitive = .i64 });
+        try self.type_map.put(self.allocator, "float", .{ .primitive = .f64 });
+
+        // Register all type declarations
         for (program.types) |type_decl| {
             try self.registerType(type_decl);
         }
@@ -145,25 +170,28 @@ pub const AstToIr = struct {
     }
 
     fn registerFunction(self: *AstToIr, func: ast.FunctionDecl) !void {
-        // Determine return type
+        // Determine return type from type_map
+        var ret_type_name: ?[]const u8 = null;
         const ret_type: ir.Type = if (func.return_type) |rt| blk: {
-            if (std.mem.eql(u8, rt, "int")) break :blk .i64;
-            if (std.mem.eql(u8, rt, "float")) break :blk .f64;
-            break :blk .void;
+            const type_info = self.type_map.get(rt) orelse return error.UnknownType;
+            if (type_info.isStruct()) ret_type_name = rt;
+            break :blk type_info.irType();
         } else .void;
 
         // Build parameter types
         var param_types = try self.allocator.alloc(ParamType, func.params.len);
         for (func.params, 0..) |param, i| {
-            if (self.type_map.contains(param.type_name)) {
+            const type_info = self.type_map.get(param.type_name) orelse return error.UnknownType;
+            if (type_info.isStruct()) {
                 param_types[i] = .{ .ty = .{ .struct_type = param.type_name } };
             } else {
-                param_types[i] = .{ .ty = .{ .primitive = typeNameToIrType(param.type_name) } };
+                param_types[i] = .{ .ty = .{ .primitive = type_info.irType() } };
             }
         }
 
         try self.func_map.put(self.allocator, func.name, .{
             .return_type = ret_type,
+            .return_type_name = ret_type_name,
             .param_types = param_types,
         });
 
@@ -175,7 +203,7 @@ pub const AstToIr = struct {
         var offset: i32 = 0;
 
         for (type_decl.fields, 0..) |field, i| {
-            const field_type = typeNameToIrType(field.type_name);
+            const field_type = try self.lookupIrType(field.type_name);
             fields[i] = .{
                 .name = field.name,
                 .ty = field_type,
@@ -185,32 +213,26 @@ pub const AstToIr = struct {
             offset += 8;
         }
 
-        try self.type_map.put(self.allocator, type_decl.name, .{
+        try self.type_map.put(self.allocator, type_decl.name, .{ .struct_type = .{
             .name = type_decl.name,
             .fields = fields,
             .size = offset,
-        });
+        } });
 
         debug.astToIr("Registered type '{s}' with size {d}", .{ type_decl.name, offset });
     }
 
-    fn typeNameToIrType(name: []const u8) ir.Type {
-        if (std.mem.eql(u8, name, "int")) return .i64;
-        if (std.mem.eql(u8, name, "float")) return .f64;
-        return .i64; // default
+    fn lookupIrType(self: *AstToIr, name: []const u8) !ir.Type {
+        const type_info = self.type_map.get(name) orelse return error.UnknownType;
+        return type_info.irType();
     }
 
     fn convertFunction(self: *AstToIr, func: ast.FunctionDecl) !void {
-        // Determine return type
-        const ret_type: ir.Type = if (func.return_type) |rt| blk: {
-            if (std.mem.eql(u8, rt, "int")) {
-                break :blk .i64;
-            }
-            if (std.mem.eql(u8, rt, "float")) {
-                break :blk .f64;
-            }
-            break :blk .void;
-        } else .void;
+        // Determine return type from type_map
+        const ret_type: ir.Type = if (func.return_type) |rt|
+            try self.lookupIrType(rt)
+        else
+            .void;
 
         // Create function
         const ir_func = try self.module.addFunction(func.name, ret_type);
@@ -225,19 +247,19 @@ pub const AstToIr = struct {
         // Handle function parameters
         for (func.params, 0..) |param, i| {
             const param_idx: i32 = @intCast(i);
+            const type_info = self.type_map.get(param.type_name);
 
-            // Check if this is a struct type
-            if (self.type_map.get(param.type_name)) |struct_info| {
+            if (type_info != null and type_info.?.isStruct()) {
                 // Struct parameter - emit param instruction (pointer) and register
                 const param_val = try ir_func.emitParam(param_idx, .ptr);
                 try self.var_map.put(self.allocator, param.name, .{
                     .ptr = param_val,
-                    .ty = .{ .struct_type = struct_info.name },
+                    .ty = .{ .struct_type = type_info.?.struct_type.name },
                     .used = false,
                 });
             } else {
                 // Primitive parameter
-                const param_type = typeNameToIrType(param.type_name);
+                const param_type = try self.lookupIrType(param.type_name);
                 const param_val = try ir_func.emitParam(param_idx, param_type);
                 // Allocate stack slot and store parameter
                 const ptr = try ir_func.emitAlloca(param_type);
@@ -411,8 +433,12 @@ pub const AstToIr = struct {
         const func = self.current_func.?;
 
         // Look up struct type
-        const struct_info = self.type_map.get(sinit.type_name) orelse {
+        const type_info = self.type_map.get(sinit.type_name) orelse {
             return error.UnknownType;
+        };
+        const struct_info = switch (type_info) {
+            .struct_type => |s| s,
+            .primitive => return error.UnknownType,
         };
 
         // Allocate space for the struct
@@ -460,7 +486,11 @@ pub const AstToIr = struct {
         };
 
         // Look up struct type
-        const struct_info = self.type_map.get(type_name) orelse return error.UnknownType;
+        const type_info = self.type_map.get(type_name) orelse return error.UnknownType;
+        const struct_info = switch (type_info) {
+            .struct_type => |s| s,
+            .primitive => return error.UnknownType,
+        };
 
         // Find field info
         const field_info = for (struct_info.fields) |f| {
@@ -512,7 +542,10 @@ pub const AstToIr = struct {
         // Emit call with arguments
         const result = try ir_func.emitCall(call.func_name, args, func_info.return_type);
 
-        // Return with correct type
+        // Return with correct type - struct or primitive
+        if (func_info.return_type_name) |struct_name| {
+            return .{ .value = result orelse 0, .ty = .{ .struct_type = struct_name } };
+        }
         return .{ .value = result orelse 0, .ty = .{ .primitive = func_info.return_type } };
     }
 };
