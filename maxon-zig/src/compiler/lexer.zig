@@ -8,6 +8,7 @@ pub const TokenType = enum {
     end,
     let,
     @"var",
+    mod,
 
     // Types
     int,
@@ -201,6 +202,7 @@ pub const Lexer = struct {
             .{ "end", TokenType.end },
             .{ "let", TokenType.let },
             .{ "var", TokenType.@"var" },
+            .{ "mod", TokenType.mod },
             .{ "int", TokenType.int },
         };
         inline for (keywords) |kw| {

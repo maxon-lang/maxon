@@ -30,6 +30,7 @@ pub const BinaryOp = enum {
     sub,
     mul,
     div,
+    mod,
 };
 
 pub const BinaryExpr = struct {

@@ -134,6 +134,7 @@ pub const AstToIr = struct {
                     .sub => try func.emitSub(left, right, .i64),
                     .mul => try func.emitMul(left, right, .i64),
                     .div => try func.emitDiv(left, right, .i64),
+                    .mod => try func.emitMod(left, right, .i64),
                 };
             },
         }

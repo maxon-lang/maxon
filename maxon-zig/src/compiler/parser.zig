@@ -168,6 +168,7 @@ pub const Parser = struct {
     fn matchMultiplicative(self: *Parser) ?ast.BinaryOp {
         if (self.check(.star)) return .mul;
         if (self.check(.slash)) return .div;
+        if (self.check(.mod)) return .mod;
         return null;
     }
 

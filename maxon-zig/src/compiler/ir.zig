@@ -42,6 +42,7 @@ pub const Instruction = struct {
         sub,
         mul,
         div,
+        mod,
 
         // Control flow
         ret,
@@ -189,48 +190,35 @@ pub const Function = struct {
         });
     }
 
-    pub fn emitAdd(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
+    fn emitBinaryOp(self: *Function, op: Instruction.Op, lhs: Value, rhs: Value, ty: Type) !Value {
         const result = self.newValue();
         try self.emit(.{
-            .op = .add,
+            .op = op,
             .result = result,
             .result_type = ty,
             .operands = .{ .{ .value = lhs }, .{ .value = rhs } },
         });
         return result;
+    }
+
+    pub fn emitAdd(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
+        return self.emitBinaryOp(.add, lhs, rhs, ty);
     }
 
     pub fn emitSub(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
-        const result = self.newValue();
-        try self.emit(.{
-            .op = .sub,
-            .result = result,
-            .result_type = ty,
-            .operands = .{ .{ .value = lhs }, .{ .value = rhs } },
-        });
-        return result;
+        return self.emitBinaryOp(.sub, lhs, rhs, ty);
     }
 
     pub fn emitMul(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
-        const result = self.newValue();
-        try self.emit(.{
-            .op = .mul,
-            .result = result,
-            .result_type = ty,
-            .operands = .{ .{ .value = lhs }, .{ .value = rhs } },
-        });
-        return result;
+        return self.emitBinaryOp(.mul, lhs, rhs, ty);
     }
 
     pub fn emitDiv(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
-        const result = self.newValue();
-        try self.emit(.{
-            .op = .div,
-            .result = result,
-            .result_type = ty,
-            .operands = .{ .{ .value = lhs }, .{ .value = rhs } },
-        });
-        return result;
+        return self.emitBinaryOp(.div, lhs, rhs, ty);
+    }
+
+    pub fn emitMod(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
+        return self.emitBinaryOp(.mod, lhs, rhs, ty);
     }
 
     pub fn emitCall(self: *Function, func_name: []const u8, ret_type: Type) !?Value {
@@ -323,6 +311,7 @@ fn printInstruction(writer: anytype, inst: Instruction) !void {
         .sub => "sub",
         .mul => "mul",
         .div => "div",
+        .mod => "mod",
         .ret => "ret",
         .br => "br",
         .br_cond => "br.cond",

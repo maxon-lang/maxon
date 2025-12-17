@@ -64,7 +64,7 @@ pub const IrCodegen = struct {
             .alloca => try self.genAlloca(inst),
             .store => try self.genStore(code, inst),
             .load => try self.genLoad(code, inst),
-            .add, .sub, .mul, .div => try self.genBinaryOp(code, inst),
+            .add, .sub, .mul, .div, .mod => try self.genBinaryOp(code, inst),
             .ret => try self.genRet(code, inst),
             else => {},
         }
@@ -127,6 +127,11 @@ pub const IrCodegen = struct {
             .div => {
                 try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x99 }); // cqo (sign extend rax into rdx:rax)
                 try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0xF7, 0xF9 }); // idiv rcx
+            },
+            .mod => {
+                try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x99 }); // cqo (sign extend rax into rdx:rax)
+                try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0xF7, 0xF9 }); // idiv rcx
+                try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xD0 }); // mov rax, rdx (remainder)
             },
             else => unreachable,
         }
