@@ -21,6 +21,10 @@ pub const TokenType = enum {
     lparen,
     rparen,
     equals,
+    plus,
+    minus,
+    star,
+    slash,
 
     // Formatting
     newline,
@@ -83,6 +87,33 @@ pub const Lexer = struct {
             }
             if (c == '=') {
                 try tokens.append(allocator, .{ .type = .equals, .text = "=" });
+                self.pos += 1;
+                continue;
+            }
+            if (c == '+') {
+                try tokens.append(allocator, .{ .type = .plus, .text = "+" });
+                self.pos += 1;
+                continue;
+            }
+            if (c == '-') {
+                try tokens.append(allocator, .{ .type = .minus, .text = "-" });
+                self.pos += 1;
+                continue;
+            }
+            if (c == '*') {
+                try tokens.append(allocator, .{ .type = .star, .text = "*" });
+                self.pos += 1;
+                continue;
+            }
+            if (c == '/') {
+                // Check if it's a comment (already handled above, but double-check)
+                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') {
+                    while (self.pos < self.source.len and self.source[self.pos] != '\n') {
+                        self.pos += 1;
+                    }
+                    continue;
+                }
+                try tokens.append(allocator, .{ .type = .slash, .text = "/" });
                 self.pos += 1;
                 continue;
             }

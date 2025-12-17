@@ -60,60 +60,124 @@ pub const IrCodegen = struct {
 
     fn generateInstruction(self: *IrCodegen, code: *std.ArrayListUnmanaged(u8), inst: ir.Instruction) !void {
         switch (inst.op) {
-            .const_i32 => {
-                const result = inst.result.?;
-                const value = inst.operands[0].immediate_i32;
-                // mov eax, imm32
-                try code.append(self.allocator, 0xB8);
-                try code.appendSlice(self.allocator, &@as([4]u8, @bitCast(value)));
-                try self.value_locations.put(self.allocator, result, .{ .register = .rax });
-            },
+            .const_i64 => try self.genConstI64(code, inst),
+            .alloca => try self.genAlloca(inst),
+            .store => try self.genStore(code, inst),
+            .load => try self.genLoad(code, inst),
+            .add, .sub, .mul, .div => try self.genBinaryOp(code, inst),
+            .ret => try self.genRet(code, inst),
+            else => {},
+        }
+    }
 
-            .alloca => {
-                const result = inst.result.?;
-                const offset = self.next_stack_offset;
-                self.next_stack_offset -= 8;
-                try self.value_locations.put(self.allocator, result, .{ .stack = offset });
-            },
+    fn genConstI64(self: *IrCodegen, code: *std.ArrayListUnmanaged(u8), inst: ir.Instruction) !void {
+        const result = inst.result.?;
+        const value = inst.operands[0].immediate_i64;
+        const offset = self.allocStackSlot();
+        // mov rax, imm64
+        try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0xB8 });
+        try code.appendSlice(self.allocator, &@as([8]u8, @bitCast(value)));
+        // mov qword [rbp + offset], rax
+        try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0x45 });
+        try code.append(self.allocator, @bitCast(@as(i8, @intCast(offset))));
+        try self.value_locations.put(self.allocator, result, .{ .stack = offset });
+    }
 
-            .store => {
-                const ptr = inst.operands[0].value;
-                const ptr_loc = self.value_locations.get(ptr) orelse return error.InvalidValue;
-                const offset = switch (ptr_loc) {
-                    .stack => |o| o,
-                    else => return error.InvalidStore,
-                };
-                // mov [rbp + offset], eax
-                try code.appendSlice(self.allocator, &[_]u8{ 0x89, 0x45 });
-                try code.append(self.allocator, @bitCast(@as(i8, @intCast(offset))));
-            },
+    fn genAlloca(self: *IrCodegen, inst: ir.Instruction) !void {
+        const result = inst.result.?;
+        const offset = self.allocStackSlot();
+        try self.value_locations.put(self.allocator, result, .{ .stack = offset });
+    }
 
-            .load => {
-                const result = inst.result.?;
-                const ptr = inst.operands[0].value;
-                const ptr_loc = self.value_locations.get(ptr) orelse return error.InvalidValue;
-                const offset = switch (ptr_loc) {
-                    .stack => |o| o,
-                    else => return error.InvalidLoad,
-                };
-                // mov eax, [rbp + offset]
-                try code.appendSlice(self.allocator, &[_]u8{ 0x8B, 0x45 });
-                try code.append(self.allocator, @bitCast(@as(i8, @intCast(offset))));
-                try self.value_locations.put(self.allocator, result, .{ .register = .rax });
-            },
+    fn genStore(self: *IrCodegen, code: *std.ArrayListUnmanaged(u8), inst: ir.Instruction) !void {
+        const ptr = inst.operands[0].value;
+        const offset = try self.getStackOffset(ptr);
+        // mov qword [rbp + offset], rax
+        try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0x45 });
+        try code.append(self.allocator, @bitCast(@as(i8, @intCast(offset))));
+    }
 
-            .ret => {
-                if (inst.operands[0] != .none) {
-                    // mov ecx, eax
-                    try code.appendSlice(self.allocator, &[_]u8{ 0x89, 0xC1 });
-                    // call [rip + offset] to ExitProcess
-                    try code.append(self.allocator, 0xFF);
-                    try code.append(self.allocator, 0x15);
-                    try code.appendSlice(self.allocator, &[4]u8{ 0, 0, 0, 0 });
+    fn genLoad(self: *IrCodegen, code: *std.ArrayListUnmanaged(u8), inst: ir.Instruction) !void {
+        const result = inst.result.?;
+        const ptr = inst.operands[0].value;
+        const offset = try self.getStackOffset(ptr);
+        // mov rax, qword [rbp + offset]
+        try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8B, 0x45 });
+        try code.append(self.allocator, @bitCast(@as(i8, @intCast(offset))));
+        try self.value_locations.put(self.allocator, result, .{ .register = .rax });
+    }
+
+    fn genBinaryOp(self: *IrCodegen, code: *std.ArrayListUnmanaged(u8), inst: ir.Instruction) !void {
+        const result = inst.result.?;
+        const lhs = inst.operands[0].value;
+        const rhs = inst.operands[1].value;
+
+        // Load operands: lhs -> rax, rhs -> rcx
+        try self.loadValueToRax(code, lhs);
+        try code.append(self.allocator, 0x50); // push rax
+        try self.loadValueToRax(code, rhs);
+        try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xC1 }); // mov rcx, rax
+        try code.append(self.allocator, 0x58); // pop rax
+
+        // Emit 64-bit operation
+        switch (inst.op) {
+            .add => try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x01, 0xC8 }), // add rax, rcx
+            .sub => try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x29, 0xC8 }), // sub rax, rcx
+            .mul => try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x0F, 0xAF, 0xC1 }), // imul rax, rcx
+            .div => {
+                try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x99 }); // cqo (sign extend rax into rdx:rax)
+                try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0xF7, 0xF9 }); // idiv rcx
+            },
+            else => unreachable,
+        }
+
+        try self.value_locations.put(self.allocator, result, .{ .register = .rax });
+    }
+
+    fn genRet(self: *IrCodegen, code: *std.ArrayListUnmanaged(u8), inst: ir.Instruction) !void {
+        if (inst.operands[0] != .none) {
+            const val = inst.operands[0].value;
+            try self.loadValueToRax(code, val);
+            try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xC1 }); // mov rcx, rax
+            // call [rip + offset] to ExitProcess
+            try code.append(self.allocator, 0xFF);
+            try code.append(self.allocator, 0x15);
+            try code.appendSlice(self.allocator, &[4]u8{ 0, 0, 0, 0 });
+        }
+    }
+
+    fn allocStackSlot(self: *IrCodegen) i32 {
+        const offset = self.next_stack_offset;
+        self.next_stack_offset -= 8;
+        return offset;
+    }
+
+    fn getStackOffset(self: *IrCodegen, val: ir.Value) !i32 {
+        const loc = self.value_locations.get(val) orelse return error.InvalidValue;
+        return switch (loc) {
+            .stack => |o| o,
+            else => error.ExpectedStackLocation,
+        };
+    }
+
+    fn loadValueToRax(self: *IrCodegen, code: *std.ArrayListUnmanaged(u8), val: ir.Value) !void {
+        const loc = self.value_locations.get(val) orelse return error.InvalidValue;
+        switch (loc) {
+            .register => |reg| {
+                if (reg != .rax) {
+                    // mov rax, reg
+                    switch (reg) {
+                        .rcx => try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xC8 }),
+                        .rdx => try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xD0 }),
+                        else => return error.UnsupportedRegister,
+                    }
                 }
             },
-
-            else => {},
+            .stack => |offset| {
+                // mov rax, qword [rbp + offset]
+                try code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8B, 0x45 });
+                try code.append(self.allocator, @bitCast(@as(i8, @intCast(offset))));
+            },
         }
     }
 };

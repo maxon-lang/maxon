@@ -25,7 +25,21 @@ pub const ReturnStmt = struct {
     value: ?Expression,
 };
 
+pub const BinaryOp = enum {
+    add,
+    sub,
+    mul,
+    div,
+};
+
+pub const BinaryExpr = struct {
+    left: *const Expression,
+    op: BinaryOp,
+    right: *const Expression,
+};
+
 pub const Expression = union(enum) {
     integer: i64,
     identifier: []const u8,
+    binary: BinaryExpr,
 };

@@ -7,13 +7,22 @@ pub const Parser = struct {
     tokens: []const Token,
     pos: usize,
     allocator: std.mem.Allocator,
+    expr_ptrs: std.ArrayListUnmanaged(*ast.Expression),
 
     pub fn init(tokens: []const Token, allocator: std.mem.Allocator) Parser {
         return .{
             .tokens = tokens,
             .pos = 0,
             .allocator = allocator,
+            .expr_ptrs = .empty,
         };
+    }
+
+    pub fn deinit(self: *Parser) void {
+        for (self.expr_ptrs.items) |ptr| {
+            self.allocator.destroy(ptr);
+        }
+        self.expr_ptrs.deinit(self.allocator);
     }
 
     pub fn parse(self: *Parser) !ast.Program {
@@ -125,6 +134,59 @@ pub const Parser = struct {
     }
 
     fn parseExpression(self: *Parser) !?ast.Expression {
+        return try self.parseAdditive();
+    }
+
+    fn parseAdditive(self: *Parser) !?ast.Expression {
+        var left = try self.parseMultiplicative() orelse return null;
+
+        while (self.matchAdditive()) |op| {
+            _ = self.advance();
+            const right = try self.parseMultiplicative() orelse return error.ExpectedExpression;
+            left = try self.makeBinary(left, op, right);
+        }
+        return left;
+    }
+
+    fn parseMultiplicative(self: *Parser) !?ast.Expression {
+        var left = try self.parsePrimary() orelse return null;
+
+        while (self.matchMultiplicative()) |op| {
+            _ = self.advance();
+            const right = try self.parsePrimary() orelse return error.ExpectedExpression;
+            left = try self.makeBinary(left, op, right);
+        }
+        return left;
+    }
+
+    fn matchAdditive(self: *Parser) ?ast.BinaryOp {
+        if (self.check(.plus)) return .add;
+        if (self.check(.minus)) return .sub;
+        return null;
+    }
+
+    fn matchMultiplicative(self: *Parser) ?ast.BinaryOp {
+        if (self.check(.star)) return .mul;
+        if (self.check(.slash)) return .div;
+        return null;
+    }
+
+    fn makeBinary(self: *Parser, left: ast.Expression, op: ast.BinaryOp, right: ast.Expression) !ast.Expression {
+        return .{ .binary = .{
+            .left = try self.createExpr(left),
+            .op = op,
+            .right = try self.createExpr(right),
+        } };
+    }
+
+    fn createExpr(self: *Parser, expr: ast.Expression) !*ast.Expression {
+        const ptr = try self.allocator.create(ast.Expression);
+        ptr.* = expr;
+        try self.expr_ptrs.append(self.allocator, ptr);
+        return ptr;
+    }
+
+    fn parsePrimary(self: *Parser) !?ast.Expression {
         if (self.check(.integer)) {
             const token = self.advance();
             const value = std.fmt.parseInt(i64, token.text, 10) catch return error.InvalidNumber;

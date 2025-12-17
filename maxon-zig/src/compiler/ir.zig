@@ -137,13 +137,13 @@ pub const Function = struct {
     }
 
     // Instruction builders
-    pub fn emitConstI32(self: *Function, value: i32) !Value {
+    pub fn emitConstI64(self: *Function, value: i64) !Value {
         const result = self.newValue();
         try self.emit(.{
-            .op = .const_i32,
+            .op = .const_i64,
             .result = result,
-            .result_type = .i32,
-            .operands = .{ .{ .immediate_i32 = value }, .none },
+            .result_type = .i64,
+            .operands = .{ .{ .immediate_i64 = value }, .none },
         });
         return result;
     }
@@ -193,6 +193,39 @@ pub const Function = struct {
         const result = self.newValue();
         try self.emit(.{
             .op = .add,
+            .result = result,
+            .result_type = ty,
+            .operands = .{ .{ .value = lhs }, .{ .value = rhs } },
+        });
+        return result;
+    }
+
+    pub fn emitSub(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
+        const result = self.newValue();
+        try self.emit(.{
+            .op = .sub,
+            .result = result,
+            .result_type = ty,
+            .operands = .{ .{ .value = lhs }, .{ .value = rhs } },
+        });
+        return result;
+    }
+
+    pub fn emitMul(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
+        const result = self.newValue();
+        try self.emit(.{
+            .op = .mul,
+            .result = result,
+            .result_type = ty,
+            .operands = .{ .{ .value = lhs }, .{ .value = rhs } },
+        });
+        return result;
+    }
+
+    pub fn emitDiv(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
+        const result = self.newValue();
+        try self.emit(.{
+            .op = .div,
             .result = result,
             .result_type = ty,
             .operands = .{ .{ .value = lhs }, .{ .value = rhs } },

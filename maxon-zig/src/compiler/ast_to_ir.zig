@@ -8,7 +8,12 @@ pub const AstToIr = struct {
     module: ir.Module,
     current_func: ?*ir.Function,
     // Map variable names to their alloca values (pointers)
-    var_map: std.StringHashMapUnmanaged(ir.Value),
+    var_map: std.StringHashMapUnmanaged(VarInfo),
+
+    const VarInfo = struct {
+        ptr: ir.Value,
+        used: bool,
+    };
 
     pub fn init(allocator: std.mem.Allocator) AstToIr {
         return .{
@@ -38,7 +43,7 @@ pub const AstToIr = struct {
         // Determine return type
         const ret_type: ir.Type = if (func.return_type) |rt| blk: {
             if (std.mem.eql(u8, rt, "int")) {
-                break :blk .i32;
+                break :blk .i64;
             }
             break :blk .void;
         } else .void;
@@ -57,6 +62,15 @@ pub const AstToIr = struct {
         for (func.body) |stmt| {
             try self.convertStatement(stmt);
         }
+
+        // Check for unused variables
+        var iter = self.var_map.iterator();
+        while (iter.next()) |entry| {
+            if (!entry.value_ptr.used) {
+                std.debug.print("error: unused variable '{s}'\n", .{entry.key_ptr.*});
+                return error.UnusedVariable;
+            }
+        }
     }
 
     fn convertStatement(self: *AstToIr, stmt: ast.Statement) !void {
@@ -74,7 +88,7 @@ pub const AstToIr = struct {
         const func = self.current_func.?;
 
         // Allocate stack slot
-        const ptr = try func.emitAlloca(.i32);
+        const ptr = try func.emitAlloca(.i64);
 
         // Convert initializer
         const init_val = try self.convertExpression(decl.value);
@@ -82,8 +96,8 @@ pub const AstToIr = struct {
         // Store value
         try func.emitStore(ptr, init_val);
 
-        // Record variable location
-        try self.var_map.put(self.allocator, decl.name, ptr);
+        // Record variable location (not yet used)
+        try self.var_map.put(self.allocator, decl.name, .{ .ptr = ptr, .used = false });
     }
 
     fn convertReturn(self: *AstToIr, ret: ast.ReturnStmt) !void {
@@ -102,14 +116,25 @@ pub const AstToIr = struct {
 
         switch (expr) {
             .integer => |value| {
-                return try func.emitConstI32(@intCast(value));
+                return try func.emitConstI64(value);
             },
             .identifier => |name| {
-                if (self.var_map.get(name)) |ptr| {
-                    return try func.emitLoad(ptr, .i32);
+                if (self.var_map.getPtr(name)) |info| {
+                    info.used = true;
+                    return try func.emitLoad(info.ptr, .i64);
                 } else {
                     return error.UndefinedVariable;
                 }
+            },
+            .binary => |bin| {
+                const left = try self.convertExpression(bin.left.*);
+                const right = try self.convertExpression(bin.right.*);
+                return switch (bin.op) {
+                    .add => try func.emitAdd(left, right, .i64),
+                    .sub => try func.emitSub(left, right, .i64),
+                    .mul => try func.emitMul(left, right, .i64),
+                    .div => try func.emitDiv(left, right, .i64),
+                };
             },
         }
     }

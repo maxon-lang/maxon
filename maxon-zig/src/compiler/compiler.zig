@@ -23,6 +23,7 @@ pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.A
 
     // Parse
     var parser = Parser.init(tokens, allocator);
+    defer parser.deinit();
     const program = parser.parse() catch {
         return error.ParserError;
     };
