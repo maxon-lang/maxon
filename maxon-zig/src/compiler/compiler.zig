@@ -2,6 +2,7 @@ const std = @import("std");
 const Lexer = @import("lexer.zig").Lexer;
 const Parser = @import("parser.zig").Parser;
 const ast_to_ir = @import("ast_to_ir.zig");
+const optimizer = @import("optimizer.zig");
 const ir_codegen = @import("ir_codegen.zig");
 const pe = @import("pe.zig");
 
@@ -39,6 +40,11 @@ pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.A
         return error.IrError;
     };
     defer ir_module.deinit();
+
+    // Optimize IR
+    optimizer.optimize(&ir_module, allocator) catch {
+        return error.IrError;
+    };
 
     // Emit IR to file
     const ir_path = blk: {
