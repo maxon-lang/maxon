@@ -75,6 +75,15 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 								const std::map<std::string, std::string> *) {
 	logger_.progress(LogPhase::MIR, "Generating MIR...");
 
+	// Register all user-defined struct types in MIR type system
+	for (const auto &structDef : program->structs) {
+		std::vector<mir::MIRType *> fieldTypes;
+		for (const auto &field : structDef->fields) {
+			fieldTypes.push_back(mir::MIRType::fromName(field.type));
+		}
+		mir::MIRType::getStruct(structDef->name, fieldTypes);
+	}
+
 	// First pass: declare all functions (so calls can resolve)
 	for (auto &func : program->functions) {
 		declareFunction(func.get());
@@ -130,9 +139,9 @@ size_t MIRCodeGenerator::getInstructionCount() const {
 //==============================================================================
 
 mir::MIRValue *ExprAST::generate(MIRCodeGenerator &cg) const {
-	throw std::runtime_error("unimplemented");
+	throw std::runtime_error("unimplemented ExprAST::generate for " + std::string(typeid(*this).name()));
 }
 
 void StmtAST::generate(MIRCodeGenerator &cg) const {
-	throw std::runtime_error("unimplemented");
+	throw std::runtime_error("unimplemented StmtAST::generate for " + std::string(typeid(*this).name()));
 }

@@ -10,6 +10,9 @@
 #include <string>
 #include <vector>
 
+// Forward declaration
+class CallGraphBuilder;
+
 // Semantic error structure
 struct SemanticError {
 	std::string message;
@@ -240,9 +243,23 @@ struct FunctionSemanticResult {
 class SemanticAnalyzer {
   public:
 	SemanticAnalyzer();
+	~SemanticAnalyzer(); // Defined in .cpp where CallGraphBuilder is complete
 
 	// Set optional logger for detailed tracing
 	void setLogger(Logger *logger) { logger_ = logger; }
+
+	// Static helpers for building canonical keys (usable without SemanticAnalyzer instance)
+	static std::string getMethodKey(const std::string &typeName, const std::string &methodName) {
+		return typeName + "." + methodName;
+	}
+	static std::string getFunctionKeyStatic(const FunctionAST *func) {
+		if (func->isMethod()) {
+			return func->receiverType + "." + func->name;
+		} else if (!func->namespaceName.empty()) {
+			return func->namespaceName + "." + func->name;
+		}
+		return func->name;
+	}
 
 	// Analyze entire program and return errors
 	std::vector<SemanticError> analyze(ProgramAST *program);
@@ -409,6 +426,8 @@ class SemanticAnalyzer {
 	// Map from function name to parameter mutation info
 	std::map<std::string, ParameterMutationInfo> functionMutations_;
 	bool mutationPassComplete_ = false; // True after mutation analysis pass completes
+	// Call graph used for mutation analysis (to resolve unqualified function names)
+	std::unique_ptr<CallGraphBuilder> mutationCallGraph_;
 
 	// Logging helpers
 	void logTrace(const std::string &msg);

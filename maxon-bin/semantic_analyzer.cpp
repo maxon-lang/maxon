@@ -8,6 +8,9 @@
 #include <queue>
 #include <sstream>
 
+// Destructor must be defined here where CallGraphBuilder is complete
+SemanticAnalyzer::~SemanticAnalyzer() = default;
+
 // Helper to collect global constant references from an expression
 static void collectGlobalRefs(ExprAST *expr, const std::map<std::string, GlobalConstInfo> &globals,
 							  std::vector<std::string> &refs) {
@@ -602,16 +605,8 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 	// Then register top-level functions
 	for (const auto &func : program->functions) {
-		// Build the function key: for methods use ReceiverType.methodName, otherwise use namespace.name
-		std::string functionKey;
-		if (func->isMethod()) {
-			// Method: use ReceiverType.methodName (this path shouldn't be hit anymore,
-			// but kept for backward compatibility with any edge cases)
-			functionKey = func->receiverType + "." + func->name;
-		} else {
-			// Regular function: use namespace.name
-			functionKey = func->namespaceName.empty() ? func->name : func->namespaceName + "." + func->name;
-		}
+		// Build the function key using the static helper
+		std::string functionKey = getFunctionKeyStatic(func.get());
 
 		logTrace(std::string("Registering ") + (func->isMethod() ? "method" : "function") + ": " + functionKey + " -> " + func->returnType);
 
@@ -839,7 +834,7 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 		}
 
 		for (const auto &method : enumDef->methods) {
-			currentFunctionName_ = enumDef->name + "." + method->name;
+			currentFunctionName_ = getMethodKey(enumDef->name, method->name);
 			analyzeFunction(method.get());
 			currentFunctionName_.clear();
 		}
@@ -847,12 +842,8 @@ std::vector<SemanticError> SemanticAnalyzer::analyze(ProgramAST *program) {
 
 	// Then analyze top-level functions
 	for (const auto &func : program->functions) {
-		// Build function key: namespace.name or just name
-		if (!func->namespaceName.empty()) {
-			currentFunctionName_ = func->namespaceName + "." + func->name;
-		} else {
-			currentFunctionName_ = func->name;
-		}
+		// Build function key using static helper
+		currentFunctionName_ = getFunctionKeyStatic(func.get());
 		analyzeFunction(func.get());
 		;
 		currentFunctionName_.clear();

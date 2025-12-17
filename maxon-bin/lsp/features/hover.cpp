@@ -1,6 +1,7 @@
 #include "hover.h"
 #include "../../intrinsics_defs.h"
 #include "../../lexer/lexer_keyword_matcher.h"
+#include "../../semantic_analyzer.h"
 #include "../../types/type_conversion.h"
 
 namespace maxon_lsp {
@@ -47,18 +48,14 @@ std::optional<Hover> HoverProvider::getHover(
 			if (cache->ast) {
 				for (const auto &func : cache->ast->functions) {
 					if (position.line >= func->line - 1 && position.line <= func->endLine - 1) {
-						if (!func->namespaceName.empty()) {
-							enclosingFunction = func->namespaceName + "." + func->name;
-						} else {
-							enclosingFunction = func->name;
-						}
+						enclosingFunction = SemanticAnalyzer::getFunctionKeyStatic(func.get());
 						break;
 					}
 				}
 				for (const auto &structDef : cache->ast->structs) {
 					for (const auto &method : structDef->methods) {
 						if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
-							enclosingFunction = structDef->name + "." + method->name;
+							enclosingFunction = SemanticAnalyzer::getMethodKey(structDef->name, method->name);
 							enclosingStructName = structDef->name;
 							break;
 						}
@@ -322,12 +319,7 @@ std::optional<Hover> HoverProvider::lookupVariable(const std::string &name, cons
 		for (const auto &func : cache->ast->functions) {
 			// Check if position is within this function's range
 			if (position.line >= func->line - 1 && position.line <= func->endLine - 1) {
-				// Use namespace-qualified name if function is in a namespace
-				if (!func->namespaceName.empty()) {
-					enclosingFunction = func->namespaceName + "." + func->name;
-				} else {
-					enclosingFunction = func->name;
-				}
+				enclosingFunction = SemanticAnalyzer::getFunctionKeyStatic(func.get());
 				break;
 			}
 		}
@@ -337,7 +329,7 @@ std::optional<Hover> HoverProvider::lookupVariable(const std::string &name, cons
 				bool found = false;
 				for (const auto &method : structDef->methods) {
 					if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
-						enclosingFunction = structDef->name + "." + method->name;
+						enclosingFunction = SemanticAnalyzer::getMethodKey(structDef->name, method->name);
 						found = true;
 						break;
 					}
@@ -352,7 +344,7 @@ std::optional<Hover> HoverProvider::lookupVariable(const std::string &name, cons
 				bool found = false;
 				for (const auto &method : enumDef->methods) {
 					if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
-						enclosingFunction = enumDef->name + "." + method->name;
+						enclosingFunction = SemanticAnalyzer::getMethodKey(enumDef->name, method->name);
 						found = true;
 						break;
 					}

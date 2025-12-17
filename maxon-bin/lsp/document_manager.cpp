@@ -1,4 +1,5 @@
 #include "document_manager.h"
+#include "../semantic_analyzer.h"
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -471,10 +472,7 @@ std::string AnalysisCache::findEnclosingFunction(int line) const {
 	// Check regular functions
 	for (const auto &func : ast->functions) {
 		if (line >= func->line - 1 && line <= func->endLine - 1) {
-			if (!func->namespaceName.empty()) {
-				return func->namespaceName + "." + func->name;
-			}
-			return func->name;
+			return SemanticAnalyzer::getFunctionKeyStatic(func.get());
 		}
 	}
 
@@ -482,7 +480,7 @@ std::string AnalysisCache::findEnclosingFunction(int line) const {
 	for (const auto &structDef : ast->structs) {
 		for (const auto &method : structDef->methods) {
 			if (line >= method->line - 1 && line <= method->endLine - 1) {
-				return structDef->name + "." + method->name;
+				return SemanticAnalyzer::getMethodKey(structDef->name, method->name);
 			}
 		}
 	}
@@ -491,7 +489,7 @@ std::string AnalysisCache::findEnclosingFunction(int line) const {
 	for (const auto &enumDef : ast->enums) {
 		for (const auto &method : enumDef->methods) {
 			if (line >= method->line - 1 && line <= method->endLine - 1) {
-				return enumDef->name + "." + method->name;
+				return SemanticAnalyzer::getMethodKey(enumDef->name, method->name);
 			}
 		}
 	}

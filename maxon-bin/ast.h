@@ -1,8 +1,10 @@
 #ifndef AST_H
 #define AST_H
 
+#include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -92,6 +94,15 @@ class ExprAST : public ASTNode {
 
 	// Clone this expression (for default parameter value injection)
 	virtual ExprAST *clone() const { return nullptr; }
+
+	// Mutation analysis: collect parameters that this expression mutates
+	// paramNameToIndex: maps parameter names to their indices
+	// mutatedIndices: output set of parameter indices that are mutated
+	// doesMutate: callback to check if a function mutates a given parameter index
+	using MutationChecker = std::function<bool(const std::string &funcName, size_t paramIdx)>;
+	virtual void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+									  std::set<size_t> &mutatedIndices,
+									  const MutationChecker &doesMutate) const {}
 
 	// Helper to get the full source range of this expression
 	SourceRange getSourceRange() const {
@@ -210,6 +221,13 @@ class CastExprAST : public ExprAST {
 
 	CastExprAST(std::unique_ptr<ExprAST> e, const std::string &type, int l = 0, int c = 0)
 		: ExprAST(l, c), expr(std::move(e)), targetType(type) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (expr)
+			expr->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Binary operation
@@ -223,6 +241,15 @@ class BinaryExprAST : public ExprAST {
 		: ExprAST(line, col), op(o), left(std::move(l)), right(std::move(r)) {}
 
 	virtual mir::MIRValue *generate(MIRCodeGenerator &cg) const override;
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (left)
+			left->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		if (right)
+			right->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Unary operation (e.g., -x, +x)
@@ -233,6 +260,13 @@ class UnaryExprAST : public ExprAST {
 
 	UnaryExprAST(char o, std::unique_ptr<ExprAST> expr, int line = 0, int col = 0)
 		: ExprAST(line, col), op(o), operand(std::move(expr)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (operand)
+			operand->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Nil coalescing expression (e.g., "optionalValue or defaultValue")
@@ -244,6 +278,15 @@ class OrCoalesceExprAST : public ExprAST {
 
 	OrCoalesceExprAST(std::unique_ptr<ExprAST> opt, std::unique_ptr<ExprAST> def, int line = 0, int col = 0)
 		: ExprAST(line, col), optionalExpr(std::move(opt)), defaultExpr(std::move(def)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (optionalExpr)
+			optionalExpr->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		if (defaultExpr)
+			defaultExpr->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Call argument (for named arguments)
@@ -285,6 +328,28 @@ class CallExprAST : public ExprAST {
 		: ExprAST(l, col), callee(c), args(std::move(a)) {}
 
 	virtual mir::MIRValue *generate(MIRCodeGenerator &cg) const override;
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		std::string funcName = resolvedCallee.empty() ? callee : resolvedCallee;
+		for (size_t argIdx = 0; argIdx < args.size(); argIdx++) {
+			// Recursively check the argument expression
+			if (args[argIdx].value)
+				args[argIdx].value->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+			// If argument is a direct variable reference to a parameter, check if it gets mutated
+			if (auto *varExpr = dynamic_cast<VariableExprAST *>(args[argIdx].value.get())) {
+				auto paramIt = paramNameToIndex.find(varExpr->name);
+				if (paramIt != paramNameToIndex.end()) {
+					size_t targetParamIdx = argIdx;
+					if (argIdx < argToParamMapping.size())
+						targetParamIdx = argToParamMapping[argIdx];
+					if (doesMutate(funcName, targetParamIdx))
+						mutatedIndices.insert(paramIt->second);
+				}
+			}
+		}
+	}
 };
 
 // Array index expression (e.g., "array[5]" or "struct.field[5]")
@@ -304,6 +369,15 @@ class ArrayIndexExprAST : public ExprAST {
 
 	// Helper to check if this is a complex array access
 	bool hasArrayExpr() const { return arrayExpr != nullptr; }
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (index)
+			index->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		if (arrayExpr)
+			arrayExpr->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Slice expression (e.g., "str[0..5]", "str[2..]", "str[..5]")
@@ -315,6 +389,15 @@ class SliceExprAST : public ExprAST {
 
 	SliceExprAST(const std::string &name, std::unique_ptr<ExprAST> s, std::unique_ptr<ExprAST> e, int l = 0, int c = 0)
 		: ExprAST(l, c), objectName(name), start(std::move(s)), end(std::move(e)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (start)
+			start->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		if (end)
+			end->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Array literal expression
@@ -328,6 +411,14 @@ class ArrayLiteralExprAST : public ExprAST {
 	// Constructor for [val1, val2, ...] syntax
 	ArrayLiteralExprAST(std::vector<std::unique_ptr<ExprAST>> vals, int l = 0, int c = 0)
 		: ExprAST(l, c), values(std::move(vals)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		for (const auto &elem : values)
+			if (elem)
+				elem->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Sized array creation expression (e.g., "array of 5 int", "array of int")
@@ -347,6 +438,13 @@ class SizedArrayExprAST : public ExprAST {
 		: ExprAST(l, c), size(-1), sizeExpr(std::move(szExpr)), elementType(elemType) {}
 
 	bool hasVariableSize() const { return sizeExpr != nullptr; }
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (sizeExpr)
+			sizeExpr->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Dictionary type expression (e.g., "map from string to int", "HashMap from int to float")
@@ -378,6 +476,17 @@ class MapLiteralWithEntriesExprAST : public ExprAST {
 
 	MapLiteralWithEntriesExprAST(std::vector<Entry> ents, int l = 0, int c = 0)
 		: ExprAST(l, c), entries(std::move(ents)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		for (const auto &entry : entries) {
+			if (entry.key)
+				entry.key->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+			if (entry.value)
+				entry.value->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		}
+	}
 };
 
 // Set from array expression (e.g., "set from [1, 2, 3]")
@@ -390,6 +499,13 @@ class SetFromExprAST : public ExprAST {
 
 	SetFromExprAST(const std::string &sType, std::unique_ptr<ExprAST> arr, int l = 0, int c = 0)
 		: ExprAST(l, c), setType(sType), arrayExpr(std::move(arr)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (arrayExpr)
+			arrayExpr->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Member access expression (e.g., "array.length")
@@ -413,6 +529,13 @@ class MemberAccessExprAST : public ExprAST {
 
 	// Check if this is a resolved enum case expression
 	bool isEnumCase() const { return !resolvedEnumName.empty(); }
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (object)
+			object->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Statement nodes
@@ -428,6 +551,13 @@ class StmtAST : public ASTNode {
 
 	// Code generation - implemented by subclasses in codegen_ng_stmt.cpp
 	virtual void generate(MIRCodeGenerator &cg) const;
+
+	// Mutation analysis: collect parameters that this statement mutates
+	// Uses same signature as ExprAST for consistency
+	using MutationChecker = ExprAST::MutationChecker;
+	virtual void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+									  std::set<size_t> &mutatedIndices,
+									  const MutationChecker &doesMutate) const {}
 
 	// Helper to get the full source range of this statement
 	SourceRange getSourceRange() const {
@@ -452,6 +582,13 @@ class VarDeclStmtAST : public StmtAST {
 		: StmtAST(l, c), name(n), type(t), initializer(std::move(init)) {}
 
 	virtual void generate(MIRCodeGenerator &cg) const override;
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (initializer)
+			initializer->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Let declaration (immutable variable)
@@ -465,6 +602,13 @@ class LetDeclStmtAST : public StmtAST {
 		: StmtAST(l, c), name(n), type(t), initializer(std::move(init)) {}
 
 	virtual void generate(MIRCodeGenerator &cg) const override;
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (initializer)
+			initializer->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Assignment statement
@@ -477,6 +621,16 @@ class AssignStmtAST : public StmtAST {
 		: StmtAST(l, c), name(n), value(std::move(val)) {}
 
 	virtual void generate(MIRCodeGenerator &cg) const override;
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		auto it = paramNameToIndex.find(name);
+		if (it != paramNameToIndex.end())
+			mutatedIndices.insert(it->second);
+		if (value)
+			value->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Array assignment statement (e.g., "array[5] = 42")
@@ -488,6 +642,18 @@ class ArrayAssignStmtAST : public StmtAST {
 
 	ArrayAssignStmtAST(const std::string &name, std::unique_ptr<ExprAST> idx, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
 		: StmtAST(l, c), arrayName(name), index(std::move(idx)), value(std::move(val)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		auto it = paramNameToIndex.find(arrayName);
+		if (it != paramNameToIndex.end())
+			mutatedIndices.insert(it->second);
+		if (index)
+			index->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		if (value)
+			value->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Array element member assignment statement (e.g., "arr[0].field = 42")
@@ -500,6 +666,18 @@ class ArrayMemberAssignStmtAST : public StmtAST {
 
 	ArrayMemberAssignStmtAST(const std::string &name, std::unique_ptr<ExprAST> idx, const std::string &member, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
 		: StmtAST(l, c), arrayName(name), index(std::move(idx)), memberName(member), value(std::move(val)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		auto it = paramNameToIndex.find(arrayName);
+		if (it != paramNameToIndex.end())
+			mutatedIndices.insert(it->second);
+		if (index)
+			index->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		if (value)
+			value->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Struct member assignment statement (e.g., "point.x = 42")
@@ -511,6 +689,16 @@ class MemberAssignStmtAST : public StmtAST {
 
 	MemberAssignStmtAST(const std::string &obj, const std::string &member, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
 		: StmtAST(l, c), objectName(obj), memberName(member), value(std::move(val)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		auto it = paramNameToIndex.find(objectName);
+		if (it != paramNameToIndex.end())
+			mutatedIndices.insert(it->second);
+		if (value)
+			value->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Struct member array element assignment statement (e.g., "obj.arrayField[i] = value")
@@ -523,6 +711,18 @@ class MemberArrayAssignStmtAST : public StmtAST {
 
 	MemberArrayAssignStmtAST(const std::string &obj, const std::string &member, std::unique_ptr<ExprAST> idx, std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
 		: StmtAST(l, c), objectName(obj), memberName(member), index(std::move(idx)), value(std::move(val)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		auto it = paramNameToIndex.find(objectName);
+		if (it != paramNameToIndex.end())
+			mutatedIndices.insert(it->second);
+		if (index)
+			index->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		if (value)
+			value->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // If statement
@@ -545,6 +745,19 @@ class IfStmtAST : public StmtAST {
 		  thenBody(std::move(thenB)),
 		  elseBody(std::move(elseB)),
 		  blockId(bid), elseBlockId(elseBid) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (condition)
+			condition->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		for (const auto &stmt : thenBody)
+			if (stmt)
+				stmt->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		for (const auto &stmt : elseBody)
+			if (stmt)
+				stmt->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // If-let statement (optional unwrapping)
@@ -568,6 +781,19 @@ class IfLetStmtAST : public StmtAST {
 		: StmtAST(l, c), bindingName(name), optionalExpr(std::move(expr)),
 		  thenBody(std::move(thenB)), elseBody(std::move(elseB)),
 		  blockId(bid), elseBlockId(elseBid) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (optionalExpr)
+			optionalExpr->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		for (const auto &stmt : thenBody)
+			if (stmt)
+				stmt->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		for (const auto &stmt : elseBody)
+			if (stmt)
+				stmt->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Else-unwrap statement (optional unwrapping with default value)
@@ -590,6 +816,16 @@ class ElseUnwrapStmtAST : public StmtAST {
 		: StmtAST(l, c), name(n), declaredType(type),
 		  optionalExpr(std::move(expr)), elseBody(std::move(elseB)),
 		  blockId(bid) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (optionalExpr)
+			optionalExpr->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		for (const auto &stmt : elseBody)
+			if (stmt)
+				stmt->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Guard-let statement (optional unwrapping with early exit)
@@ -611,6 +847,16 @@ class GuardLetStmtAST : public StmtAST {
 		: StmtAST(l, c), name(n),
 		  optionalExpr(std::move(expr)), guardBody(std::move(guardB)),
 		  blockId(bid) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (optionalExpr)
+			optionalExpr->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		for (const auto &stmt : guardBody)
+			if (stmt)
+				stmt->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // While statement
@@ -625,6 +871,16 @@ class WhileStmtAST : public StmtAST {
 				 int l = 0, int c = 0,
 				 const std::string &bid = "")
 		: StmtAST(l, c), condition(std::move(cond)), body(std::move(b)), blockId(bid) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (condition)
+			condition->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		for (const auto &stmt : body)
+			if (stmt)
+				stmt->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // For statement (desugars to iterator-based while loop)
@@ -641,6 +897,16 @@ class ForStmtAST : public StmtAST {
 			   int l = 0, int c = 0,
 			   const std::string &bid = "")
 		: StmtAST(l, c), loopVar(var), iterable(std::move(iter)), body(std::move(b)), blockId(bid) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (iterable)
+			iterable->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		for (const auto &stmt : body)
+			if (stmt)
+				stmt->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Return statement
@@ -650,6 +916,13 @@ class ReturnStmtAST : public StmtAST {
 
 	ReturnStmtAST(std::unique_ptr<ExprAST> val, int l = 0, int c = 0)
 		: StmtAST(l, c), value(std::move(val)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (value)
+			value->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 
 	virtual void generate(MIRCodeGenerator &cg) const override;
 };
@@ -679,6 +952,13 @@ class ExprStmtAST : public StmtAST {
 
 	ExprStmtAST(std::unique_ptr<ExprAST> expr, int l = 0, int c = 0)
 		: StmtAST(l, c), expression(std::move(expr)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (expression)
+			expression->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 
 	virtual void generate(MIRCodeGenerator &cg) const override;
 };
@@ -851,6 +1131,14 @@ class StructInitExprAST : public ExprAST {
 
 	StructInitExprAST(const std::string &name, std::vector<StructInitField> f, int l = 0, int c = 0)
 		: ExprAST(l, c), structName(name), fields(std::move(f)) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		for (const auto &field : fields)
+			if (field.value)
+				field.value->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+	}
 };
 
 // Enum associated value field (for associated value enums)
@@ -998,6 +1286,22 @@ class MatchStmtAST : public StmtAST {
 				 const std::string &bid = "")
 		: StmtAST(l, c), scrutinee(std::move(scrut)),
 		  cases(std::move(cs)), blockId(bid) {}
+
+	void collectMutatedParams(const std::map<std::string, size_t> &paramNameToIndex,
+							  std::set<size_t> &mutatedIndices,
+							  const MutationChecker &doesMutate) const override {
+		if (scrutinee)
+			scrutinee->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		for (const auto &c : cases) {
+			for (const auto &pat : c.patterns)
+				if (pat)
+					pat->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+			if (c.statement)
+				c.statement->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+			if (c.resultExpr)
+				c.resultExpr->collectMutatedParams(paramNameToIndex, mutatedIndices, doesMutate);
+		}
+	}
 };
 
 // Match expression

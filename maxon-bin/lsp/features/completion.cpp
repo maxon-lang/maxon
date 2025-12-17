@@ -1,5 +1,6 @@
 #include "completion.h"
 #include "../../lexer/lexer_keyword_matcher.h"
+#include "../../semantic_analyzer.h"
 #include "../../type_members.h"
 #include "../../types/type_conversion.h"
 #include <algorithm>
@@ -339,11 +340,7 @@ std::string CompletionProvider::getTypeBeforeDot(
 		if (cache->ast) {
 			for (const auto &func : cache->ast->functions) {
 				if (position.line >= func->line - 1 && position.line <= func->endLine - 1) {
-					if (!func->namespaceName.empty()) {
-						enclosingFunction = func->namespaceName + "." + func->name;
-					} else {
-						enclosingFunction = func->name;
-					}
+					enclosingFunction = SemanticAnalyzer::getFunctionKeyStatic(func.get());
 					break;
 				}
 			}
@@ -351,7 +348,7 @@ std::string CompletionProvider::getTypeBeforeDot(
 			for (const auto &structDef : cache->ast->structs) {
 				for (const auto &method : structDef->methods) {
 					if (position.line >= method->line - 1 && position.line <= method->endLine - 1) {
-						enclosingFunction = structDef->name + "." + method->name;
+						enclosingFunction = SemanticAnalyzer::getMethodKey(structDef->name, method->name);
 						enclosingStructName = structDef->name;
 						break;
 					}

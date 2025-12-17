@@ -53,13 +53,63 @@ static const std::unordered_map<std::string, MIRType *(*)()> typeNameRegistry = 
 	{"bool", MIRType::getInt1},
 	{"byte", MIRType::getInt8},
 	{"float", MIRType::getFloat64},
-	{"void", MIRType::getVoid}};
+	{"void", MIRType::getVoid},
+	{"ptr", MIRType::getPtr}};
 
 MIRType *MIRType::fromName(const std::string &name) {
+	// Check primitive types first
 	auto it = typeNameRegistry.find(name);
 	if (it != typeNameRegistry.end()) {
 		return it->second();
 	}
+
+	// Handle array<T> struct type (stdlib dynamic arrays)
+	if (name.rfind("array<", 0) == 0 && name.back() == '>') {
+		// Extract element type from array<T>
+		std::string elemType = name.substr(6, name.size() - 7);
+		// Array struct: { __ManagedArrayData_T, i64 } where data is { ptr, i64, i64 }
+		std::string dataTypeName = "__ManagedArrayData_" + elemType;
+		MIRType *dataType = getStruct(dataTypeName, {getPtr(), getInt64(), getInt64()});
+		return getStruct(name, {dataType, getInt64()});
+	}
+
+	// Handle string type
+	if (name == "string") {
+		return getStruct("string", {getPtr(), getInt64()});
+	}
+
+	// Handle character type
+	if (name == "character") {
+		return getStruct("character", {getPtr()});
+	}
+
+	// Handle _ManagedString type (internal string representation)
+	if (name == "_ManagedString") {
+		MIRType *managedArrayByte = getStruct("_ManagedArray_byte", {getPtr(), getInt64()});
+		return getStruct("_ManagedString", {managedArrayByte, getInt64(), getInt64()});
+	}
+
+	// Handle _ManagedArray_byte type
+	if (name == "_ManagedArray_byte") {
+		return getStruct("_ManagedArray_byte", {getPtr(), getInt64()});
+	}
+
+	// Handle generic _ManagedArray type (opaque, used in array struct)
+	if (name == "_ManagedArray") {
+		return getStruct("_ManagedArray", {getPtr(), getInt64(), getInt64()});
+	}
+
+	// Handle substring type
+	if (name == "substring") {
+		return getStruct("substring", {getPtr(), getInt64(), getPtr()});
+	}
+
+	// Try looking up as a struct type
+	MIRType *structType = lookupStruct(name);
+	if (structType) {
+		return structType;
+	}
+
 	throw std::runtime_error("Unknown type: " + name);
 }
 

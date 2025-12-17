@@ -1,4 +1,5 @@
 #include "call_graph.h"
+#include <functional>
 
 // Note: Implicit method calls (iterator.next, key.hash, etc.) are handled by
 // MIR-level DCE after generic instantiation when all concrete types are known.
@@ -292,4 +293,58 @@ void CallGraphBuilder::extractCallsFromExpr(ExprAST *expr, std::set<std::string>
 			calls.insert(varExpr->resolvedFunctionName);
 		}
 	}
+}
+
+std::vector<std::string> CallGraphBuilder::getReverseTopologicalOrder() const {
+	std::vector<std::string> result;
+	std::set<std::string> visited;
+	std::set<std::string> inStack; // For cycle detection
+
+	// DFS-based topological sort (post-order gives reverse topo order)
+	std::function<void(const std::string &)> dfs = [&](const std::string &func) {
+		if (visited.count(func))
+			return;
+		if (inStack.count(func)) {
+			// Cycle detected - skip to avoid infinite recursion
+			// Functions in cycles will be processed in arbitrary order
+			return;
+		}
+
+		inStack.insert(func);
+
+		// Visit all callees first
+		auto it = callGraph.find(func);
+		if (it != callGraph.end()) {
+			for (const auto &callee : it->second) {
+				dfs(callee);
+			}
+		}
+
+		inStack.erase(func);
+		visited.insert(func);
+		result.push_back(func);
+	};
+
+	// Process all functions in the graph
+	for (const auto &[func, _] : callGraph) {
+		dfs(func);
+	}
+
+	return result;
+}
+
+std::set<std::string> CallGraphBuilder::getAllFunctions() const {
+	std::set<std::string> functions;
+	for (const auto &[func, _] : callGraph) {
+		functions.insert(func);
+	}
+	return functions;
+}
+
+const std::set<std::string> &CallGraphBuilder::getAliases(const std::string &unqualifiedName) const {
+	auto it = nameAliases.find(unqualifiedName);
+	if (it != nameAliases.end()) {
+		return it->second;
+	}
+	return emptySet;
 }

@@ -42,6 +42,24 @@ class CallGraphBuilder {
 	 */
 	static std::set<std::string> extractCallsFromFunction(FunctionAST *func);
 
+	/**
+	 * Get functions in reverse topological order (callees before callers).
+	 * Functions in cycles are returned in arbitrary order within the cycle.
+	 * This is useful for propagating information from callees to callers.
+	 */
+	std::vector<std::string> getReverseTopologicalOrder() const;
+
+	/**
+	 * Get all known function names in the call graph.
+	 */
+	std::set<std::string> getAllFunctions() const;
+
+	/**
+	 * Get possible qualified names for an unqualified function name.
+	 * e.g., "push" might return {"array.push", "array<int>.push", ...}
+	 */
+	const std::set<std::string> &getAliases(const std::string &unqualifiedName) const;
+
   private:
 	// Maps function name -> set of functions it calls
 	std::map<std::string, std::set<std::string>> callGraph;
