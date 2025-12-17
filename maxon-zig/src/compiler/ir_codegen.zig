@@ -148,6 +148,7 @@ pub const IrCodegen = struct {
             .fptosi => try self.genFpToSi(inst),
             .sitofp => try self.genSiToFp(inst),
             .ret => try self.genRet(inst),
+            .param => try self.genParam(inst),
             else => debug.codegen("  Skipping unhandled instruction", .{}),
         }
     }
@@ -285,6 +286,42 @@ pub const IrCodegen = struct {
             try self.loadValueToRax(inst.operands[0].value);
             try self.emit(&.{ 0x48, 0x89, 0xC1 }); // mov rcx, rax
             try self.emit(&.{ 0xFF, 0x15, 0, 0, 0, 0 }); // call [rip+0] (ExitProcess)
+        }
+    }
+
+    fn genParam(self: *IrCodegen, inst: ir.Instruction) !void {
+        const result = inst.result.?;
+        const param_idx = inst.operands[0].immediate_i32;
+        const ty = inst.result_type;
+
+        // Windows x64 calling convention: RCX, RDX, R8, R9 for first 4 args
+        // Float params use XMM0-XMM3
+        // For simplicity, store param to stack immediately
+
+        const offset = self.allocStackSlot();
+
+        if (ty == .f64) {
+            // Float param in XMM register - store to stack
+            const xmm_modrm: u8 = switch (param_idx) {
+                0 => 0x45, // xmm0
+                1 => 0x4D, // xmm1
+                2 => 0x55, // xmm2
+                3 => 0x5D, // xmm3
+                else => 0x45, // fallback
+            };
+            try self.emitWithOffset(&.{ 0xF2, 0x0F, 0x11, xmm_modrm }, offset); // movsd [rbp+off], xmmN
+            try self.setValueLocation(result, .{ .stack = offset }, .f64);
+        } else {
+            // Integer/pointer param in GPR - mov to rax then store
+            switch (param_idx) {
+                0 => try self.emit(&.{ 0x48, 0x89, 0xC8 }), // mov rax, rcx
+                1 => try self.emit(&.{ 0x48, 0x89, 0xD0 }), // mov rax, rdx
+                2 => try self.emit(&.{ 0x4C, 0x89, 0xC0 }), // mov rax, r8
+                3 => try self.emit(&.{ 0x4C, 0x89, 0xC8 }), // mov rax, r9
+                else => {}, // stack params not supported yet
+            }
+            try self.emitWithOffset(&.{ 0x48, 0x89, 0x45 }, offset); // mov [rbp+off], rax
+            try self.setValueLocation(result, .{ .stack = offset }, ty);
         }
     }
 };

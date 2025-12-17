@@ -76,6 +76,9 @@ pub const Instruction = struct {
         // Function call
         call,
 
+        // Parameters
+        param,
+
         pub fn format(self: Op) []const u8 {
             return switch (self) {
                 .const_i32 => "const.i32",
@@ -107,6 +110,7 @@ pub const Instruction = struct {
                 .icmp_gt => "icmp.gt",
                 .icmp_ge => "icmp.ge",
                 .call => "call",
+                .param => "param",
             };
         }
     };
@@ -293,6 +297,11 @@ pub const Function = struct {
             return null;
         }
         return try self.emitWithResult(.call, ret_type, .{ .{ .func_name = func_name }, .none });
+    }
+
+    // Parameters
+    pub fn emitParam(self: *Function, param_index: i32, ty: Type) !Value {
+        return self.emitWithResult(.param, ty, .{ .{ .immediate_i32 = param_index }, .none });
     }
 };
 

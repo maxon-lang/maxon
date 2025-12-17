@@ -43,6 +43,7 @@ pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.A
                 freeStatementArgs(stmt, allocator);
             }
             allocator.free(func.body);
+            allocator.free(func.params);
         }
         allocator.free(program.functions);
     }

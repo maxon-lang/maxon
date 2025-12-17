@@ -120,14 +120,39 @@ pub const Parser = struct {
         _ = try self.expect(.function);
         const name_token = try self.expect(.identifier);
         _ = try self.expect(.lparen);
+
+        // Parse parameter list
+        var params: std.ArrayListUnmanaged(ast.ParamDecl) = .empty;
+        errdefer params.deinit(self.allocator);
+
+        if (!self.check(.rparen)) {
+            // Parse first parameter
+            const first_name = try self.expect(.identifier);
+            const first_type = try self.expectTypeName();
+            try params.append(self.allocator, .{
+                .name = first_name.text,
+                .type_name = first_type,
+            });
+
+            // Parse remaining parameters
+            while (self.check(.comma)) {
+                _ = self.advance();
+                const param_name = try self.expect(.identifier);
+                const param_type = try self.expectTypeName();
+                try params.append(self.allocator, .{
+                    .name = param_name.text,
+                    .type_name = param_type,
+                });
+            }
+        }
+
         _ = try self.expect(.rparen);
 
         // Parse optional return type
         var return_type: ?[]const u8 = null;
         if (self.check(.returns)) {
             _ = self.advance();
-            const type_token = try self.expect(.int);
-            return_type = type_token.text;
+            return_type = try self.expectTypeName();
         }
 
         // Require newline after function signature
@@ -157,6 +182,7 @@ pub const Parser = struct {
 
         return .{
             .name = name_token.text,
+            .params = try params.toOwnedSlice(self.allocator),
             .return_type = return_type,
             .body = try statements.toOwnedSlice(self.allocator),
         };

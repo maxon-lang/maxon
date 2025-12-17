@@ -16,8 +16,14 @@ pub const FieldDecl = struct {
     is_mutable: bool,
 };
 
+pub const ParamDecl = struct {
+    name: []const u8,
+    type_name: []const u8,
+};
+
 pub const FunctionDecl = struct {
     name: []const u8,
+    params: []const ParamDecl,
     return_type: ?[]const u8, // null for void
     body: []Statement,
 };

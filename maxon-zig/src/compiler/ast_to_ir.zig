@@ -140,6 +140,34 @@ pub const AstToIr = struct {
         // Create entry block
         _ = try ir_func.addBlock("entry");
 
+        // Handle function parameters
+        for (func.params, 0..) |param, i| {
+            const param_idx: i32 = @intCast(i);
+
+            // Check if this is a struct type
+            if (self.type_map.get(param.type_name)) |struct_info| {
+                // Struct parameter - emit param instruction (pointer) and register
+                const param_val = try ir_func.emitParam(param_idx, .ptr);
+                try self.var_map.put(self.allocator, param.name, .{
+                    .ptr = param_val,
+                    .ty = .{ .struct_type = struct_info.name },
+                    .used = false,
+                });
+            } else {
+                // Primitive parameter
+                const param_type = typeNameToIrType(param.type_name);
+                const param_val = try ir_func.emitParam(param_idx, param_type);
+                // Allocate stack slot and store parameter
+                const ptr = try ir_func.emitAlloca(param_type);
+                try ir_func.emitStore(ptr, param_val);
+                try self.var_map.put(self.allocator, param.name, .{
+                    .ptr = ptr,
+                    .ty = .{ .primitive = param_type },
+                    .used = false,
+                });
+            }
+        }
+
         // Convert body
         for (func.body) |stmt| {
             try self.convertStatement(stmt);
