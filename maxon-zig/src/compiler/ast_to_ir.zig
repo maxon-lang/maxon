@@ -6,7 +6,34 @@ const debug = @import("debug.zig");
 /// Typed value - tracks IR value with its type
 const TypedValue = struct {
     value: ir.Value,
+    ty: ValueType,
+};
+
+/// Extended type info for struct tracking
+const ValueType = union(enum) {
+    primitive: ir.Type,
+    struct_type: []const u8, // struct type name
+
+    fn toPrimitiveType(self: ValueType) ir.Type {
+        return switch (self) {
+            .primitive => |p| p,
+            .struct_type => .ptr, // structs are represented as pointers
+        };
+    }
+};
+
+/// Struct field info
+const FieldInfo = struct {
+    name: []const u8,
     ty: ir.Type,
+    offset: i32,
+};
+
+/// Struct type info
+const StructInfo = struct {
+    name: []const u8,
+    fields: []const FieldInfo,
+    size: i32,
 };
 
 /// Converts AST to IR
@@ -16,10 +43,12 @@ pub const AstToIr = struct {
     current_func: ?*ir.Function,
     // Map variable names to their alloca values (pointers) and types
     var_map: std.StringHashMapUnmanaged(VarInfo),
+    // Map type names to struct info
+    type_map: std.StringHashMapUnmanaged(StructInfo),
 
     const VarInfo = struct {
         ptr: ir.Value,
-        ty: ir.Type,
+        ty: ValueType,
         used: bool,
     };
 
@@ -29,14 +58,26 @@ pub const AstToIr = struct {
             .module = ir.Module.init(allocator),
             .current_func = null,
             .var_map = .{},
+            .type_map = .{},
         };
     }
 
     pub fn deinit(self: *AstToIr) void {
         self.var_map.deinit(self.allocator);
+        var iter = self.type_map.iterator();
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.value_ptr.fields);
+        }
+        self.type_map.deinit(self.allocator);
     }
 
     pub fn convert(self: *AstToIr, program: ast.Program) !ir.Module {
+        // First, register all type declarations
+        for (program.types) |type_decl| {
+            try self.registerType(type_decl);
+        }
+
+        // Then convert functions
         for (program.functions) |func| {
             try self.convertFunction(func);
         }
@@ -45,6 +86,36 @@ pub const AstToIr = struct {
         const module = self.module;
         self.module = ir.Module.init(self.allocator);
         return module;
+    }
+
+    fn registerType(self: *AstToIr, type_decl: ast.TypeDecl) !void {
+        var fields = try self.allocator.alloc(FieldInfo, type_decl.fields.len);
+        var offset: i32 = 0;
+
+        for (type_decl.fields, 0..) |field, i| {
+            const field_type = typeNameToIrType(field.type_name);
+            fields[i] = .{
+                .name = field.name,
+                .ty = field_type,
+                .offset = offset,
+            };
+            // All types are 8 bytes for simplicity
+            offset += 8;
+        }
+
+        try self.type_map.put(self.allocator, type_decl.name, .{
+            .name = type_decl.name,
+            .fields = fields,
+            .size = offset,
+        });
+
+        debug.astToIr("Registered type '{s}' with size {d}", .{ type_decl.name, offset });
+    }
+
+    fn typeNameToIrType(name: []const u8) ir.Type {
+        if (std.mem.eql(u8, name, "int")) return .i64;
+        if (std.mem.eql(u8, name, "float")) return .f64;
+        return .i64; // default
     }
 
     fn convertFunction(self: *AstToIr, func: ast.FunctionDecl) !void {
@@ -102,17 +173,30 @@ pub const AstToIr = struct {
 
         // Convert initializer first to infer type
         const init_typed = try self.convertExpression(decl.value);
-        debug.astToIr("  Init value: %{d}, type: {s}", .{ init_typed.value, init_typed.ty.format() });
 
-        // Allocate stack slot with the appropriate type
-        const ptr = try func.emitAlloca(init_typed.ty);
-        debug.astToIr("  Alloca: %{d}", .{ptr});
-
-        // Store value
-        try func.emitStore(ptr, init_typed.value);
-
-        // Record variable location with type (not yet used)
-        try self.var_map.put(self.allocator, decl.name, .{ .ptr = ptr, .ty = init_typed.ty, .used = false });
+        // For structs, the init_typed.value is already the pointer to the allocated struct
+        // We store this pointer directly
+        switch (init_typed.ty) {
+            .struct_type => |_| {
+                // Struct: value is already a pointer to the struct data
+                // Just record the variable pointing to this struct
+                try self.var_map.put(self.allocator, decl.name, .{
+                    .ptr = init_typed.value,
+                    .ty = init_typed.ty,
+                    .used = false,
+                });
+            },
+            .primitive => |prim_ty| {
+                // Primitive: allocate slot and store value
+                const ptr = try func.emitAlloca(prim_ty);
+                try func.emitStore(ptr, init_typed.value);
+                try self.var_map.put(self.allocator, decl.name, .{
+                    .ptr = ptr,
+                    .ty = init_typed.ty,
+                    .used = false,
+                });
+            },
+        }
     }
 
     fn convertReturn(self: *AstToIr, ret: ast.ReturnStmt) !void {
@@ -120,8 +204,9 @@ pub const AstToIr = struct {
 
         if (ret.value) |expr| {
             const typed_val = try self.convertExpression(expr);
+            const prim_ty = typed_val.ty.toPrimitiveType();
             // If returning an int but we have float, need to convert
-            if (func.return_type == .i64 and typed_val.ty == .f64) {
+            if (func.return_type == .i64 and prim_ty == .f64) {
                 const converted = try func.emitFpToSi(typed_val.value, .i64);
                 try func.emitRet(converted);
             } else {
@@ -132,7 +217,7 @@ pub const AstToIr = struct {
         }
     }
 
-    const ConvertError = error{ OutOfMemory, UndefinedVariable, FloatModNotSupported, WrongArgumentCount, ExpectedFloat };
+    const ConvertError = error{ OutOfMemory, UndefinedVariable, FloatModNotSupported, WrongArgumentCount, ExpectedFloat, UnknownType, UnknownField };
 
     fn convertExpression(self: *AstToIr, expr: ast.Expression) ConvertError!TypedValue {
         const func = self.current_func.?;
@@ -140,17 +225,26 @@ pub const AstToIr = struct {
         switch (expr) {
             .integer => |value| {
                 const val = try func.emitConstI64(value);
-                return .{ .value = val, .ty = .i64 };
+                return .{ .value = val, .ty = .{ .primitive = .i64 } };
             },
             .float_lit => |value| {
                 const val = try func.emitConstF64(value);
-                return .{ .value = val, .ty = .f64 };
+                return .{ .value = val, .ty = .{ .primitive = .f64 } };
             },
             .identifier => |name| {
                 if (self.var_map.getPtr(name)) |info| {
                     info.used = true;
-                    const val = try func.emitLoad(info.ptr, info.ty);
-                    return .{ .value = val, .ty = info.ty };
+                    // For structs, return the pointer directly
+                    // For primitives, load the value
+                    switch (info.ty) {
+                        .struct_type => {
+                            return .{ .value = info.ptr, .ty = info.ty };
+                        },
+                        .primitive => |prim_ty| {
+                            const val = try func.emitLoad(info.ptr, prim_ty);
+                            return .{ .value = val, .ty = info.ty };
+                        },
+                    }
                 } else {
                     return error.UndefinedVariable;
                 }
@@ -159,15 +253,18 @@ pub const AstToIr = struct {
                 const left = try self.convertExpression(bin.left.*);
                 const right = try self.convertExpression(bin.right.*);
 
+                const left_prim = left.ty.toPrimitiveType();
+                const right_prim = right.ty.toPrimitiveType();
+
                 // Determine result type - if either operand is float, use float
-                const result_ty: ir.Type = if (left.ty == .f64 or right.ty == .f64) .f64 else .i64;
+                const result_ty: ir.Type = if (left_prim == .f64 or right_prim == .f64) .f64 else .i64;
 
                 // Convert operands if needed
-                const left_val = if (result_ty == .f64 and left.ty == .i64)
+                const left_val = if (result_ty == .f64 and left_prim == .i64)
                     try func.emitSiToFp(left.value, .f64)
                 else
                     left.value;
-                const right_val = if (result_ty == .f64 and right.ty == .i64)
+                const right_val = if (result_ty == .f64 and right_prim == .i64)
                     try func.emitSiToFp(right.value, .f64)
                 else
                     right.value;
@@ -186,12 +283,76 @@ pub const AstToIr = struct {
                     .mod => try func.emitMod(left_val, right_val, .i64),
                 };
 
-                return .{ .value = result, .ty = result_ty };
+                return .{ .value = result, .ty = .{ .primitive = result_ty } };
             },
             .call => |call| {
                 return try self.convertCall(call);
             },
+            .struct_init => |sinit| {
+                return try self.convertStructInit(sinit);
+            },
+            .field_access => |faccess| {
+                return try self.convertFieldAccess(faccess);
+            },
         }
+    }
+
+    fn convertStructInit(self: *AstToIr, sinit: ast.StructInitExpr) ConvertError!TypedValue {
+        const func = self.current_func.?;
+
+        // Look up struct type
+        const struct_info = self.type_map.get(sinit.type_name) orelse {
+            return error.UnknownType;
+        };
+
+        // Allocate space for the struct
+        const struct_ptr = try func.emitAllocaSized(struct_info.size);
+
+        // Initialize each field
+        for (sinit.fields) |field_init| {
+            // Find field info
+            const field_info = for (struct_info.fields) |f| {
+                if (std.mem.eql(u8, f.name, field_init.name)) break f;
+            } else return error.UnknownField;
+
+            // Get pointer to field
+            const field_ptr = try func.emitGetFieldPtr(struct_ptr, field_info.offset);
+
+            // Convert and store field value
+            const field_val = try self.convertExpression(field_init.value.*);
+            try func.emitStore(field_ptr, field_val.value);
+        }
+
+        return .{ .value = struct_ptr, .ty = .{ .struct_type = sinit.type_name } };
+    }
+
+    fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
+        const func = self.current_func.?;
+
+        // Get the base struct pointer
+        const base = try self.convertExpression(faccess.base.*);
+
+        // Must be a struct type
+        const type_name = switch (base.ty) {
+            .struct_type => |name| name,
+            .primitive => return error.UnknownType,
+        };
+
+        // Look up struct type
+        const struct_info = self.type_map.get(type_name) orelse return error.UnknownType;
+
+        // Find field info
+        const field_info = for (struct_info.fields) |f| {
+            if (std.mem.eql(u8, f.name, faccess.field_name)) break f;
+        } else return error.UnknownField;
+
+        // Get pointer to field
+        const field_ptr = try func.emitGetFieldPtr(base.value, field_info.offset);
+
+        // Load the field value
+        const val = try func.emitLoad(field_ptr, field_info.ty);
+
+        return .{ .value = val, .ty = .{ .primitive = field_info.ty } };
     }
 
     fn convertCall(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
@@ -204,17 +365,17 @@ pub const AstToIr = struct {
                 return error.WrongArgumentCount;
             }
             const arg = try self.convertExpression(call.args[0]);
-            if (arg.ty != .f64) {
+            if (arg.ty.toPrimitiveType() != .f64) {
                 return error.ExpectedFloat;
             }
             const result = try func.emitFpToSi(arg.value, .i64);
-            return .{ .value = result, .ty = .i64 };
+            return .{ .value = result, .ty = .{ .primitive = .i64 } };
         }
 
         // For other functions, emit a call instruction
         // For now, assume all user functions return i64
         const result = try func.emitCall(call.func_name, .i64);
-        return .{ .value = result orelse 0, .ty = .i64 };
+        return .{ .value = result orelse 0, .ty = .{ .primitive = .i64 } };
     }
 };
 

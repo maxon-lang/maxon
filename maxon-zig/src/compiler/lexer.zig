@@ -9,6 +9,7 @@ pub const TokenType = enum {
     let,
     @"var",
     mod,
+    @"type",
 
     // Types
     int,
@@ -23,12 +24,16 @@ pub const TokenType = enum {
     // Punctuation
     lparen,
     rparen,
+    lbrace,
+    rbrace,
     equals,
     plus,
     minus,
     star,
     slash,
     comma,
+    colon,
+    dot,
 
     // Formatting
     newline,
@@ -143,6 +148,32 @@ pub const Lexer = struct {
                 continue;
             }
 
+            // Colon
+            if (c == ':') {
+                try tokens.append(allocator, .{ .type = .colon, .text = ":" });
+                self.pos += 1;
+                continue;
+            }
+
+            // Dot
+            if (c == '.') {
+                try tokens.append(allocator, .{ .type = .dot, .text = "." });
+                self.pos += 1;
+                continue;
+            }
+
+            // Braces
+            if (c == '{') {
+                try tokens.append(allocator, .{ .type = .lbrace, .text = "{" });
+                self.pos += 1;
+                continue;
+            }
+            if (c == '}') {
+                try tokens.append(allocator, .{ .type = .rbrace, .text = "}" });
+                self.pos += 1;
+                continue;
+            }
+
             // Number literal (integer or float)
             if (c >= '0' and c <= '9') {
                 const start = self.pos;
@@ -222,6 +253,7 @@ pub const Lexer = struct {
             .{ "let", TokenType.let },
             .{ "var", TokenType.@"var" },
             .{ "mod", TokenType.mod },
+            .{ "type", TokenType.@"type" },
             .{ "int", TokenType.int },
             .{ "float", TokenType.float },
         };

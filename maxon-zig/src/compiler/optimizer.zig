@@ -156,19 +156,83 @@ fn copyPropagation(func: *ir.Function, allocator: std.mem.Allocator) !void {
     }
 }
 
+/// Key for identifying equivalent field pointers
+const FieldPtrKey = struct {
+    base: ir.Value,
+    offset: i32,
+};
+
 /// Dead store elimination: remove stores to allocas that are never loaded
 fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
-    // Find all pointers that are loaded
+    // Build a map from getfieldptr result to (base, offset) key
+    var ptr_to_field = std.AutoHashMapUnmanaged(ir.Value, FieldPtrKey){};
+    defer ptr_to_field.deinit(allocator);
+
+    // Track which base allocas are loaded from
+    var loaded_bases = std.AutoHashMapUnmanaged(ir.Value, void){};
+    defer loaded_bases.deinit(allocator);
+
+    // Track which (base, offset) pairs are loaded from
+    var loaded_fields = std.ArrayListUnmanaged(FieldPtrKey){};
+    defer loaded_fields.deinit(allocator);
+
+    // Find all pointers that are loaded (both direct and via getfieldptr)
     var loaded_ptrs = std.AutoHashMapUnmanaged(ir.Value, void){};
     defer loaded_ptrs.deinit(allocator);
 
+    // First pass: collect getfieldptr mappings
     for (func.blocks.items) |block| {
         for (block.instructions.items) |inst| {
-            if (inst.op == .load) {
-                try loaded_ptrs.put(allocator, inst.operands[0].value, {});
+            if (inst.op == .getfieldptr) {
+                if (inst.result) |result| {
+                    const base = inst.operands[0].value;
+                    const offset = inst.operands[1].immediate_i32;
+                    try ptr_to_field.put(allocator, result, .{ .base = base, .offset = offset });
+                }
             }
         }
     }
+
+    // Second pass: find all loaded pointers and their field keys
+    for (func.blocks.items) |block| {
+        for (block.instructions.items) |inst| {
+            if (inst.op == .load) {
+                const ptr = inst.operands[0].value;
+                try loaded_ptrs.put(allocator, ptr, {});
+
+                // If this loads via a field pointer, track the base+offset
+                if (ptr_to_field.get(ptr)) |field_key| {
+                    try loaded_bases.put(allocator, field_key.base, {});
+                    try loaded_fields.append(allocator, field_key);
+                }
+            }
+        }
+    }
+
+    // Helper to check if a store should be kept
+    const isStoreNeeded = struct {
+        fn check(
+            ptr: ir.Value,
+            loaded_ptrs_ref: *std.AutoHashMapUnmanaged(ir.Value, void),
+            ptr_to_field_ref: *std.AutoHashMapUnmanaged(ir.Value, FieldPtrKey),
+            loaded_fields_ref: *std.ArrayListUnmanaged(FieldPtrKey),
+        ) bool {
+            // Direct match - keep the store
+            if (loaded_ptrs_ref.contains(ptr)) return true;
+
+            // Check if this store is via a field pointer
+            if (ptr_to_field_ref.get(ptr)) |store_field| {
+                // Check if any load uses the same base+offset
+                for (loaded_fields_ref.items) |load_field| {
+                    if (store_field.base == load_field.base and store_field.offset == load_field.offset) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+    }.check;
 
     // Remove stores to never-loaded pointers
     for (func.blocks.items) |*block| {
@@ -178,7 +242,7 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
         for (block.instructions.items) |inst| {
             if (inst.op == .store) {
                 const ptr = inst.operands[0].value;
-                if (!loaded_ptrs.contains(ptr)) {
+                if (!isStoreNeeded(ptr, &loaded_ptrs, &ptr_to_field, &loaded_fields)) {
                     continue; // Skip dead store
                 }
             }

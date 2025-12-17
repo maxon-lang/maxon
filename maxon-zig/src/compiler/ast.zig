@@ -1,7 +1,19 @@
 const std = @import("std");
 
 pub const Program = struct {
+    types: []TypeDecl,
     functions: []FunctionDecl,
+};
+
+pub const TypeDecl = struct {
+    name: []const u8,
+    fields: []FieldDecl,
+};
+
+pub const FieldDecl = struct {
+    name: []const u8,
+    type_name: []const u8,
+    is_mutable: bool,
 };
 
 pub const FunctionDecl = struct {
@@ -44,10 +56,27 @@ pub const CallExpr = struct {
     args: []const Expression,
 };
 
+pub const FieldInit = struct {
+    name: []const u8,
+    value: *const Expression,
+};
+
+pub const StructInitExpr = struct {
+    type_name: []const u8,
+    fields: []const FieldInit,
+};
+
+pub const FieldAccessExpr = struct {
+    base: *const Expression,
+    field_name: []const u8,
+};
+
 pub const Expression = union(enum) {
     integer: i64,
     float_lit: f64,
     identifier: []const u8,
     binary: BinaryExpr,
     call: CallExpr,
+    struct_init: StructInitExpr,
+    field_access: FieldAccessExpr,
 };

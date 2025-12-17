@@ -139,6 +139,8 @@ pub const IrCodegen = struct {
             .const_i64 => try self.genConst64(inst, inst.operands[0].immediate_i64, .i64),
             .const_f64 => try self.genConst64(inst, @bitCast(inst.operands[0].immediate_f64), .f64),
             .alloca => try self.genAlloca(inst),
+            .alloca_sized => try self.genAllocaSized(inst),
+            .getfieldptr => try self.genGetFieldPtr(inst),
             .store => try self.genStore(inst),
             .load => try self.genLoad(inst),
             .add, .sub, .mul, .div, .mod => try self.genIntBinaryOp(inst),
@@ -164,6 +166,30 @@ pub const IrCodegen = struct {
         try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = offset });
     }
 
+    fn genAllocaSized(self: *IrCodegen, inst: ir.Instruction) !void {
+        const size = inst.operands[0].immediate_i32;
+        // Allocate enough slots for the struct (round up to 8 bytes)
+        const num_slots: i32 = @divTrunc(size + 7, 8);
+        // Allocate space going downward
+        self.next_stack_offset -= num_slots * 8;
+        // The struct base is at the new (lower) offset
+        const base_offset = self.next_stack_offset;
+        // The value is the base offset (pointer to start of struct)
+        try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = base_offset });
+        try self.value_types.put(self.allocator, inst.result.?, .ptr);
+    }
+
+    fn genGetFieldPtr(self: *IrCodegen, inst: ir.Instruction) !void {
+        const base_val = inst.operands[0].value;
+        const field_offset = inst.operands[1].immediate_i32;
+        const base_stack_offset = try self.getStackOffset(base_val);
+        // Field at struct offset N is at stack address (base + N)
+        // e.g., struct at rbp-16: field 0 at rbp-16, field 1 at rbp-8
+        const field_stack_offset = base_stack_offset + field_offset;
+        try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = field_stack_offset });
+        try self.value_types.put(self.allocator, inst.result.?, .ptr);
+    }
+
     fn genStore(self: *IrCodegen, inst: ir.Instruction) !void {
         const ptr = inst.operands[0].value;
         const val = inst.operands[1].value;
@@ -185,11 +211,13 @@ pub const IrCodegen = struct {
         const ty = inst.result_type;
 
         if (ty == .f64) {
+            // Load float to xmm0 then spill to stack (to avoid register clobbering)
             try self.emitWithOffset(&.{ 0xF2, 0x0F, 0x10, 0x45 }, offset); // movsd xmm0, [rbp+off]
-            try self.setValueLocation(result, .{ .xmm = .xmm0 }, ty);
+            try self.storeXmm0ToStack(result);
         } else {
+            // Load int to rax then spill to stack (to avoid register clobbering)
             try self.emitWithOffset(&.{ 0x48, 0x8B, 0x45 }, offset); // mov rax, [rbp+off]
-            try self.setValueLocation(result, .{ .register = .rax }, ty);
+            try self.storeRaxToStack(result, ty);
         }
     }
 

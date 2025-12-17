@@ -31,8 +31,14 @@ pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.A
         return error.ParserError;
     };
     defer {
+        // Free type declarations
+        for (program.types) |type_decl| {
+            allocator.free(type_decl.fields);
+        }
+        allocator.free(program.types);
+
+        // Free functions
         for (program.functions) |func| {
-            // Free call arguments in statements
             for (func.body) |stmt| {
                 freeStatementArgs(stmt, allocator);
             }
@@ -42,7 +48,8 @@ pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.A
     }
 
     // Convert AST to IR
-    var ir_module = ast_to_ir.convert(program, allocator) catch {
+    var ir_module = ast_to_ir.convert(program, allocator) catch |err| {
+        std.debug.print("AST to IR error: {}\n", .{err});
         return error.IrError;
     };
     defer ir_module.deinit();
@@ -108,7 +115,7 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
     }
 }
 
-/// Free call argument slices in an AST expression
+/// Free dynamically allocated slices in an AST expression
 fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
     switch (expr) {
         .call => |call| {
@@ -120,6 +127,15 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
         .binary => |bin| {
             freeExpressionArgs(bin.left.*, allocator);
             freeExpressionArgs(bin.right.*, allocator);
+        },
+        .struct_init => |sinit| {
+            for (sinit.fields) |field| {
+                freeExpressionArgs(field.value.*, allocator);
+            }
+            allocator.free(sinit.fields);
+        },
+        .field_access => |fa| {
+            freeExpressionArgs(fa.base.*, allocator);
         },
         else => {},
     }

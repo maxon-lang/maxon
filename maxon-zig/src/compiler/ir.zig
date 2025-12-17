@@ -38,8 +38,10 @@ pub const Instruction = struct {
 
         // Memory
         alloca,
+        alloca_sized,
         load,
         store,
+        getfieldptr,
 
         // Integer arithmetic
         add,
@@ -80,8 +82,10 @@ pub const Instruction = struct {
                 .const_i64 => "const.i64",
                 .const_f64 => "const.f64",
                 .alloca => "alloca",
+                .alloca_sized => "alloca.sized",
                 .load => "load",
                 .store => "store",
+                .getfieldptr => "getfieldptr",
                 .add => "add",
                 .sub => "sub",
                 .mul => "mul",
@@ -214,12 +218,20 @@ pub const Function = struct {
         return self.emitWithResult(.alloca, .ptr, .{ .none, .none });
     }
 
+    pub fn emitAllocaSized(self: *Function, size_bytes: i32) !Value {
+        return self.emitWithResult(.alloca_sized, .ptr, .{ .{ .immediate_i32 = size_bytes }, .none });
+    }
+
     pub fn emitLoad(self: *Function, ptr: Value, ty: Type) !Value {
         return self.emitUnaryOp(.load, ptr, ty);
     }
 
     pub fn emitStore(self: *Function, ptr: Value, value: Value) !void {
         try self.emit(.{ .op = .store, .operands = .{ .{ .value = ptr }, .{ .value = value } } });
+    }
+
+    pub fn emitGetFieldPtr(self: *Function, base_ptr: Value, field_offset: i32) !Value {
+        return self.emitWithResult(.getfieldptr, .ptr, .{ .{ .value = base_ptr }, .{ .immediate_i32 = field_offset } });
     }
 
     // Control flow
