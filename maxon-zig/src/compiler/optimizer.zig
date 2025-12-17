@@ -1,14 +1,33 @@
 const std = @import("std");
 const ir = @import("ir.zig");
+const debug = @import("debug.zig");
 
 /// Run all optimizer passes
 pub fn optimize(module: *ir.Module, allocator: std.mem.Allocator) !void {
     for (module.functions.items) |*func| {
+        debug.log("Optimizing function: {s}", .{func.name});
+        debug.log("  Before optimization: {d} instructions", .{countInstructions(func)});
+
         try constantFolding(func, allocator);
+        debug.log("  After constant folding: {d} instructions", .{countInstructions(func)});
+
         try copyPropagation(func, allocator);
+        debug.log("  After copy propagation: {d} instructions", .{countInstructions(func)});
+
         try deadStoreElimination(func, allocator);
+        debug.log("  After dead store elimination: {d} instructions", .{countInstructions(func)});
+
         try deadCodeElimination(func, allocator);
+        debug.log("  After dead code elimination: {d} instructions", .{countInstructions(func)});
     }
+}
+
+fn countInstructions(func: *ir.Function) usize {
+    var count: usize = 0;
+    for (func.blocks.items) |block| {
+        count += block.instructions.items.len;
+    }
+    return count;
 }
 
 /// Constant folding: evaluate constant expressions at compile time
@@ -84,6 +103,10 @@ fn copyPropagation(func: *ir.Function, allocator: std.mem.Allocator) !void {
     var ptr_to_value = std.AutoHashMapUnmanaged(ir.Value, ir.Value){};
     defer ptr_to_value.deinit(allocator);
 
+    // Track value-to-value mappings for eliminated loads
+    var value_map = std.AutoHashMapUnmanaged(ir.Value, ir.Value){};
+    defer value_map.deinit(allocator);
+
     for (func.blocks.items) |*block| {
         var new_instructions: std.ArrayListUnmanaged(ir.Instruction) = .empty;
         defer new_instructions.deinit(allocator);
@@ -93,33 +116,35 @@ fn copyPropagation(func: *ir.Function, allocator: std.mem.Allocator) !void {
                 .store => {
                     const ptr = inst.operands[0].value;
                     const val = inst.operands[1].value;
-                    try ptr_to_value.put(allocator, ptr, val);
+                    // Apply value mapping to the stored value
+                    const mapped_val = value_map.get(val) orelse val;
+                    try ptr_to_value.put(allocator, ptr, mapped_val);
                     try new_instructions.append(allocator, inst);
                 },
                 .load => {
                     const ptr = inst.operands[0].value;
                     if (ptr_to_value.get(ptr)) |stored_val| {
-                        // Replace load with a copy of the stored value
+                        // Replace load with a mapping to the stored value
                         if (inst.result) |result| {
-                            // Emit a "copy" by just mapping load result to stored value
-                            try ptr_to_value.put(allocator, result, stored_val);
+                            try value_map.put(allocator, result, stored_val);
                         }
                         // Don't emit the load - we'll propagate the value
                     } else {
                         try new_instructions.append(allocator, inst);
                     }
                 },
-                .ret => {
-                    // Rewrite ret to use propagated value if available
+                else => {
+                    // Rewrite operands to use propagated values
                     var new_inst = inst;
-                    if (inst.operands[0] == .value) {
-                        if (ptr_to_value.get(inst.operands[0].value)) |propagated| {
-                            new_inst.operands[0] = .{ .value = propagated };
+                    for (&new_inst.operands) |*op| {
+                        if (op.* == .value) {
+                            if (value_map.get(op.value)) |propagated| {
+                                op.* = .{ .value = propagated };
+                            }
                         }
                     }
                     try new_instructions.append(allocator, new_inst);
                 },
-                else => try new_instructions.append(allocator, inst),
             }
         }
 

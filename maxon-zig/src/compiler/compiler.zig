@@ -1,10 +1,12 @@
 const std = @import("std");
 const Lexer = @import("lexer.zig").Lexer;
 const Parser = @import("parser.zig").Parser;
+const ast = @import("ast.zig");
 const ast_to_ir = @import("ast_to_ir.zig");
 const optimizer = @import("optimizer.zig");
 const ir_codegen = @import("ir_codegen.zig");
 const pe = @import("pe.zig");
+pub const debug = @import("debug.zig");
 
 pub const CompileError = error{
     LexerError,
@@ -30,6 +32,10 @@ pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.A
     };
     defer {
         for (program.functions) |func| {
+            // Free call arguments in statements
+            for (func.body) |stmt| {
+                freeStatementArgs(stmt, allocator);
+            }
             allocator.free(func.body);
         }
         allocator.free(program.functions);
@@ -75,7 +81,9 @@ pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.A
     };
 
     // Generate code from IR
-    const code = ir_codegen.generate(ir_module, allocator) catch {
+    debug.log("Generating x86-64 code from IR", .{});
+    const code = ir_codegen.generate(ir_module, allocator) catch |err| {
+        debug.log("IR codegen error: {}", .{err});
         return error.CodegenError;
     };
     defer allocator.free(code);
@@ -84,4 +92,35 @@ pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.A
     pe.writePE(output_path, code) catch {
         return error.WriteError;
     };
+}
+
+/// Free call argument slices in an AST statement
+fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
+    switch (stmt) {
+        .let_decl, .var_decl => |decl| {
+            freeExpressionArgs(decl.value, allocator);
+        },
+        .@"return" => |ret| {
+            if (ret.value) |expr| {
+                freeExpressionArgs(expr, allocator);
+            }
+        },
+    }
+}
+
+/// Free call argument slices in an AST expression
+fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
+    switch (expr) {
+        .call => |call| {
+            for (call.args) |arg| {
+                freeExpressionArgs(arg, allocator);
+            }
+            allocator.free(call.args);
+        },
+        .binary => |bin| {
+            freeExpressionArgs(bin.left.*, allocator);
+            freeExpressionArgs(bin.right.*, allocator);
+        },
+        else => {},
+    }
 }

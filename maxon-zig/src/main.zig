@@ -29,33 +29,49 @@ fn printUsage() void {
     std.debug.print("Usage: maxon-zig <command> [args]\n\n", .{});
     std.debug.print("Commands:\n", .{});
     std.debug.print("  compile <source.maxon>  Compile a source file\n", .{});
+    std.debug.print("\nOptions:\n", .{});
+    std.debug.print("  --no-debug              Disable debug output\n", .{});
+    std.debug.print("  --debug                 Enable debug output (default)\n", .{});
 }
 
 fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
-    if (args.len < 3) {
-        std.debug.print("Usage: maxon-zig compile <source.maxon>\n", .{});
+    var source_path: ?[:0]u8 = null;
+
+    // Parse arguments
+    for (args[2..]) |arg| {
+        if (std.mem.eql(u8, arg, "--no-debug")) {
+            compiler.debug.enabled = false;
+        } else if (std.mem.eql(u8, arg, "--debug")) {
+            compiler.debug.enabled = true;
+        } else if (arg[0] != '-') {
+            source_path = arg;
+        }
+    }
+
+    if (source_path == null) {
+        std.debug.print("Usage: maxon-zig compile <source.maxon> [--no-debug]\n", .{});
         std.process.exit(1);
     }
 
-    const source_path = args[2];
+    const src_path = source_path.?;
 
     // Read source file
-    const source = std.fs.cwd().readFileAlloc(allocator, source_path, 1024 * 1024) catch |err| {
-        std.debug.print("Error reading file '{s}': {}\n", .{ source_path, err });
+    const source = std.fs.cwd().readFileAlloc(allocator, src_path, 1024 * 1024) catch |err| {
+        std.debug.print("Error reading file '{s}': {}\n", .{ src_path, err });
         std.process.exit(1);
     };
     defer allocator.free(source);
 
     // Determine output path
     const output_path = blk: {
-        if (std.mem.endsWith(u8, source_path, ".maxon")) {
-            const base = source_path[0 .. source_path.len - 6];
+        if (std.mem.endsWith(u8, src_path, ".maxon")) {
+            const base = src_path[0 .. src_path.len - 6];
             break :blk std.fmt.allocPrint(allocator, "{s}.exe", .{base}) catch {
                 std.debug.print("Out of memory\n", .{});
                 std.process.exit(1);
             };
         } else {
-            break :blk std.fmt.allocPrint(allocator, "{s}.exe", .{source_path}) catch {
+            break :blk std.fmt.allocPrint(allocator, "{s}.exe", .{src_path}) catch {
                 std.debug.print("Out of memory\n", .{});
                 std.process.exit(1);
             };

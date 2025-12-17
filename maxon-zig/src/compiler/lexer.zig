@@ -12,10 +12,12 @@ pub const TokenType = enum {
 
     // Types
     int,
+    float,
 
     // Literals
     identifier,
     integer,
+    float_literal,
     string, // for 'label' in end statements
 
     // Punctuation
@@ -26,6 +28,7 @@ pub const TokenType = enum {
     minus,
     star,
     slash,
+    comma,
 
     // Formatting
     newline,
@@ -133,13 +136,29 @@ pub const Lexer = struct {
                 continue;
             }
 
-            // Integer literal (ASCII digits only)
+            // Comma
+            if (c == ',') {
+                try tokens.append(allocator, .{ .type = .comma, .text = "," });
+                self.pos += 1;
+                continue;
+            }
+
+            // Number literal (integer or float)
             if (c >= '0' and c <= '9') {
                 const start = self.pos;
                 while (self.pos < self.source.len and self.source[self.pos] >= '0' and self.source[self.pos] <= '9') {
                     self.pos += 1;
                 }
-                try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos] });
+                // Check for decimal point
+                if (self.pos < self.source.len and self.source[self.pos] == '.') {
+                    self.pos += 1;
+                    while (self.pos < self.source.len and self.source[self.pos] >= '0' and self.source[self.pos] <= '9') {
+                        self.pos += 1;
+                    }
+                    try tokens.append(allocator, .{ .type = .float_literal, .text = self.source[start..self.pos] });
+                } else {
+                    try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos] });
+                }
                 continue;
             }
 
@@ -204,6 +223,7 @@ pub const Lexer = struct {
             .{ "var", TokenType.@"var" },
             .{ "mod", TokenType.mod },
             .{ "int", TokenType.int },
+            .{ "float", TokenType.float },
         };
         inline for (keywords) |kw| {
             if (std.mem.eql(u8, text, kw[0])) {

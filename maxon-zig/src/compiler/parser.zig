@@ -133,11 +133,13 @@ pub const Parser = struct {
         return .{ .@"return" = .{ .value = expr } };
     }
 
-    fn parseExpression(self: *Parser) !?ast.Expression {
+    const ParseError = error{ OutOfMemory, ExpectedExpression, UnexpectedToken, InvalidNumber };
+
+    fn parseExpression(self: *Parser) ParseError!?ast.Expression {
         return try self.parseAdditive();
     }
 
-    fn parseAdditive(self: *Parser) !?ast.Expression {
+    fn parseAdditive(self: *Parser) ParseError!?ast.Expression {
         var left = try self.parseMultiplicative() orelse return null;
 
         while (self.matchAdditive()) |op| {
@@ -148,7 +150,7 @@ pub const Parser = struct {
         return left;
     }
 
-    fn parseMultiplicative(self: *Parser) !?ast.Expression {
+    fn parseMultiplicative(self: *Parser) ParseError!?ast.Expression {
         var left = try self.parsePrimary() orelse return null;
 
         while (self.matchMultiplicative()) |op| {
@@ -187,17 +189,54 @@ pub const Parser = struct {
         return ptr;
     }
 
-    fn parsePrimary(self: *Parser) !?ast.Expression {
+    fn parsePrimary(self: *Parser) ParseError!?ast.Expression {
         if (self.check(.integer)) {
             const token = self.advance();
             const value = std.fmt.parseInt(i64, token.text, 10) catch return error.InvalidNumber;
             return .{ .integer = value };
         }
+        if (self.check(.float_literal)) {
+            const token = self.advance();
+            const value = std.fmt.parseFloat(f64, token.text) catch return error.InvalidNumber;
+            return .{ .float_lit = value };
+        }
         if (self.check(.identifier)) {
             const token = self.advance();
+            // Check for function call
+            if (self.check(.lparen)) {
+                return try self.parseCall(token.text);
+            }
             return .{ .identifier = token.text };
         }
+        if (self.check(.lparen)) {
+            _ = self.advance(); // consume '('
+            const expr = try self.parseExpression() orelse return error.ExpectedExpression;
+            _ = try self.expect(.rparen);
+            return expr;
+        }
         return null;
+    }
+
+    fn parseCall(self: *Parser, func_name: []const u8) ParseError!ast.Expression {
+        _ = try self.expect(.lparen);
+        var args: std.ArrayListUnmanaged(ast.Expression) = .empty;
+        errdefer args.deinit(self.allocator);
+
+        // Parse argument list
+        if (!self.check(.rparen)) {
+            const first_arg = try self.parseExpression() orelse return error.ExpectedExpression;
+            try args.append(self.allocator, first_arg);
+
+            while (self.check(.comma)) {
+                _ = self.advance(); // consume ','
+                const arg = try self.parseExpression() orelse return error.ExpectedExpression;
+                try args.append(self.allocator, arg);
+            }
+        }
+
+        _ = try self.expect(.rparen);
+        const args_slice = try args.toOwnedSlice(self.allocator);
+        return .{ .call = .{ .func_name = func_name, .args = args_slice } };
     }
 
     fn expect(self: *Parser, token_type: TokenType) !Token {

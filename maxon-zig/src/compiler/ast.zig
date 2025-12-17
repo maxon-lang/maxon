@@ -39,8 +39,15 @@ pub const BinaryExpr = struct {
     right: *const Expression,
 };
 
+pub const CallExpr = struct {
+    func_name: []const u8,
+    args: []const Expression,
+};
+
 pub const Expression = union(enum) {
     integer: i64,
+    float_lit: f64,
     identifier: []const u8,
     binary: BinaryExpr,
+    call: CallExpr,
 };
