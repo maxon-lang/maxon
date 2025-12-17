@@ -3,11 +3,21 @@ const Token = @import("lexer.zig").Token;
 const TokenType = @import("lexer.zig").TokenType;
 const ast = @import("ast.zig");
 
+pub const ParseError = error{
+    OutOfMemory,
+    ExpectedExpression,
+    UnexpectedToken,
+    InvalidNumber,
+    ExpectedNewline,
+};
+
 pub const Parser = struct {
     tokens: []const Token,
     pos: usize,
     allocator: std.mem.Allocator,
     expr_ptrs: std.ArrayListUnmanaged(*ast.Expression),
+    /// Line number tracking for error messages
+    line: usize,
 
     pub fn init(tokens: []const Token, allocator: std.mem.Allocator) Parser {
         return .{
@@ -15,6 +25,7 @@ pub const Parser = struct {
             .pos = 0,
             .allocator = allocator,
             .expr_ptrs = .empty,
+            .line = 1,
         };
     }
 
@@ -25,9 +36,11 @@ pub const Parser = struct {
         self.expr_ptrs.deinit(self.allocator);
     }
 
-    pub fn parse(self: *Parser) !ast.Program {
+    pub fn parse(self: *Parser) ParseError!ast.Program {
         var types: std.ArrayListUnmanaged(ast.TypeDecl) = .empty;
         errdefer types.deinit(self.allocator);
+        var enums: std.ArrayListUnmanaged(ast.EnumDecl) = .empty;
+        errdefer enums.deinit(self.allocator);
         var functions: std.ArrayListUnmanaged(ast.FunctionDecl) = .empty;
         errdefer functions.deinit(self.allocator);
 
@@ -37,18 +50,36 @@ pub const Parser = struct {
         while (!self.isAtEnd()) {
             if (self.check(.@"type")) {
                 try types.append(self.allocator, try self.parseTypeDecl());
+            } else if (self.check(.@"enum")) {
+                try enums.append(self.allocator, try self.parseEnumDecl());
             } else if (self.check(.function)) {
                 try functions.append(self.allocator, try self.parseFunction());
             } else {
-                break;
+                // Report unexpected token with context
+                const token = self.current();
+                std.debug.print("Parse error at line {d}: unexpected token '{s}' (type: {s})\n", .{
+                    self.line,
+                    token.text,
+                    @tagName(token.type),
+                });
+                std.debug.print("  Expected: 'type', 'enum', or 'function' declaration\n", .{});
+                return error.UnexpectedToken;
             }
             self.skipNewlines();
         }
 
         return .{
             .types = try types.toOwnedSlice(self.allocator),
+            .enums = try enums.toOwnedSlice(self.allocator),
             .functions = try functions.toOwnedSlice(self.allocator),
         };
+    }
+
+    fn current(self: *Parser) Token {
+        if (self.pos < self.tokens.len) {
+            return self.tokens[self.pos];
+        }
+        return .{ .type = .eof, .text = "" };
     }
 
     fn parseTypeDecl(self: *Parser) !ast.TypeDecl {
@@ -228,8 +259,6 @@ pub const Parser = struct {
         return .{ .@"return" = .{ .value = expr } };
     }
 
-    const ParseError = error{ OutOfMemory, ExpectedExpression, UnexpectedToken, InvalidNumber };
-
     fn parseExpression(self: *Parser) ParseError!?ast.Expression {
         return try self.parseAdditive();
     }
@@ -398,7 +427,13 @@ pub const Parser = struct {
 
     fn advance(self: *Parser) Token {
         if (!self.isAtEnd()) {
+            const token = self.tokens[self.pos];
             self.pos += 1;
+            // Track line numbers
+            if (token.type == .newline) {
+                self.line += 1;
+            }
+            return token;
         }
         return self.tokens[self.pos - 1];
     }
@@ -411,5 +446,45 @@ pub const Parser = struct {
         while (self.check(.newline)) {
             _ = self.advance();
         }
+    }
+
+    fn parseEnumDecl(self: *Parser) ParseError!ast.EnumDecl {
+        _ = try self.expect(.@"enum");
+        const name_token = try self.expect(.identifier);
+
+        // Require newline after enum name
+        _ = try self.expect(.newline);
+
+        // Parse members
+        var members: std.ArrayListUnmanaged([]const u8) = .empty;
+        errdefer members.deinit(self.allocator);
+
+        while (!self.check(.end) and !self.isAtEnd()) {
+            // Skip blank lines
+            if (self.check(.newline)) {
+                _ = self.advance();
+                continue;
+            }
+
+            // Parse member name (just an identifier)
+            const member_name = try self.expect(.identifier);
+            try members.append(self.allocator, member_name.text);
+
+            _ = try self.expect(.newline);
+        }
+
+        // Parse end 'label'
+        _ = try self.expect(.end);
+        _ = try self.expect(.string); // label
+
+        // Require newline after end (or EOF)
+        if (!self.isAtEnd() and !self.check(.newline)) {
+            return error.ExpectedNewline;
+        }
+
+        return .{
+            .name = name_token.text,
+            .members = try members.toOwnedSlice(self.allocator),
+        };
     }
 };

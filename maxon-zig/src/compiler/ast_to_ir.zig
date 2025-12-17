@@ -47,6 +47,11 @@ const ParamType = struct {
     ty: ValueType,
 };
 
+/// Enum info - maps member names to their integer values
+const EnumInfo = struct {
+    members: std.StringHashMapUnmanaged(i64),
+};
+
 /// Converts AST to IR
 pub const AstToIr = struct {
     allocator: std.mem.Allocator,
@@ -58,6 +63,8 @@ pub const AstToIr = struct {
     type_map: std.StringHashMapUnmanaged(StructInfo),
     // Map function names to signatures
     func_map: std.StringHashMapUnmanaged(FuncInfo),
+    // Map enum names to their info
+    enum_map: std.StringHashMapUnmanaged(EnumInfo),
 
     const VarInfo = struct {
         ptr: ir.Value,
@@ -73,6 +80,7 @@ pub const AstToIr = struct {
             .var_map = .{},
             .type_map = .{},
             .func_map = .{},
+            .enum_map = .{},
         };
     }
 
@@ -88,12 +96,22 @@ pub const AstToIr = struct {
             self.allocator.free(entry.value_ptr.param_types);
         }
         self.func_map.deinit(self.allocator);
+        var enum_iter = self.enum_map.iterator();
+        while (enum_iter.next()) |entry| {
+            entry.value_ptr.members.deinit(self.allocator);
+        }
+        self.enum_map.deinit(self.allocator);
     }
 
     pub fn convert(self: *AstToIr, program: ast.Program) !ir.Module {
         // First, register all type declarations
         for (program.types) |type_decl| {
             try self.registerType(type_decl);
+        }
+
+        // Register all enum declarations
+        for (program.enums) |enum_decl| {
+            try self.registerEnum(enum_decl);
         }
 
         // Second, register all function signatures
@@ -110,6 +128,20 @@ pub const AstToIr = struct {
         const module = self.module;
         self.module = ir.Module.init(self.allocator);
         return module;
+    }
+
+    fn registerEnum(self: *AstToIr, enum_decl: ast.EnumDecl) !void {
+        var members: std.StringHashMapUnmanaged(i64) = .{};
+
+        for (enum_decl.members, 0..) |member, i| {
+            try members.put(self.allocator, member, @intCast(i));
+        }
+
+        try self.enum_map.put(self.allocator, enum_decl.name, .{
+            .members = members,
+        });
+
+        debug.astToIr("Registered enum '{s}' with {d} members", .{ enum_decl.name, enum_decl.members.len });
     }
 
     fn registerFunction(self: *AstToIr, func: ast.FunctionDecl) !void {
@@ -406,6 +438,17 @@ pub const AstToIr = struct {
 
     fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
         const func = self.current_func.?;
+
+        // Check if base is an identifier that's an enum type (e.g., Colors.Green)
+        if (faccess.base.* == .identifier) {
+            const base_name = faccess.base.identifier;
+            if (self.enum_map.get(base_name)) |enum_info| {
+                // Look up the member value
+                const member_value = enum_info.members.get(faccess.field_name) orelse return error.UnknownField;
+                const val = try func.emitConstI64(member_value);
+                return .{ .value = val, .ty = .{ .primitive = .i64 } };
+            }
+        }
 
         // Get the base struct pointer
         const base = try self.convertExpression(faccess.base.*);

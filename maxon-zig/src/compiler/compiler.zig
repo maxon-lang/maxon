@@ -37,6 +37,12 @@ pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.A
         }
         allocator.free(program.types);
 
+        // Free enum declarations
+        for (program.enums) |enum_decl| {
+            allocator.free(enum_decl.members);
+        }
+        allocator.free(program.enums);
+
         // Free functions
         for (program.functions) |func| {
             for (func.body) |stmt| {

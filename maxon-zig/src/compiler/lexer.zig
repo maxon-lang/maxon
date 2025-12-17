@@ -10,6 +10,7 @@ pub const TokenType = enum {
     @"var",
     mod,
     @"type",
+    @"enum",
 
     // Types
     int,
@@ -254,6 +255,7 @@ pub const Lexer = struct {
             .{ "var", TokenType.@"var" },
             .{ "mod", TokenType.mod },
             .{ "type", TokenType.@"type" },
+            .{ "enum", TokenType.@"enum" },
             .{ "int", TokenType.int },
             .{ "float", TokenType.float },
         };

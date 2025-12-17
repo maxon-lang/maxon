@@ -2,7 +2,13 @@ const std = @import("std");
 
 pub const Program = struct {
     types: []TypeDecl,
+    enums: []EnumDecl,
     functions: []FunctionDecl,
+};
+
+pub const EnumDecl = struct {
+    name: []const u8,
+    members: []const []const u8,
 };
 
 pub const TypeDecl = struct {
