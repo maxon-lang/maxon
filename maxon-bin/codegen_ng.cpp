@@ -28,7 +28,6 @@ MIRCodeGenerator::MIRCodeGenerator(const std::string &moduleName, bool debugInfo
 	module->targetTriple = "x86_64-pc-linux-gnu";
 #endif
 	builder = std::make_unique<mir::MIRBuilder>(module.get());
-	initTypeRegistry();
 }
 
 MIRCodeGenerator::~MIRCodeGenerator() = default;
@@ -50,30 +49,12 @@ void MIRCodeGenerator::logDetail(const std::string &msg) {
 }
 
 //==============================================================================
-// Type Registry
-//==============================================================================
-
-void MIRCodeGenerator::initTypeRegistry() {
-	typeRegistry["int"] = mir::MIRType::getInt64();
-	typeRegistry["void"] = mir::MIRType::getVoid();
-	typeRegistry[""] = mir::MIRType::getVoid(); // empty string maps to void
-}
-
-mir::MIRType *MIRCodeGenerator::getType(const std::string &typeName) {
-	auto it = typeRegistry.find(typeName);
-	if (it == typeRegistry.end()) {
-		throw std::runtime_error("Unknown type: " + typeName);
-	}
-	return it->second;
-}
-
-//==============================================================================
 // Variable/Parameter Generation Helper
 //==============================================================================
 
 void MIRCodeGenerator::generateLocalVariable(const std::string &name, const std::string &typeStr,
 											 ExprAST *initializer, mir::MIRValue *existingValue) {
-	mir::MIRType *type = getType(typeStr);
+	mir::MIRType *type = mir::MIRType::fromName(typeStr);
 
 	// Create alloca for the variable
 	mir::MIRValue *alloca = builder->createAlloca(type, name);

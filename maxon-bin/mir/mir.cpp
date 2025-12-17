@@ -47,6 +47,22 @@ MIRType *MIRType::getInt64() { return &int64Type; }
 MIRType *MIRType::getFloat64() { return &float64Type; }
 MIRType *MIRType::getPtr() { return &ptrType; }
 
+// Maxon type name -> MIR type mapping
+static const std::unordered_map<std::string, MIRType *(*)()> typeNameRegistry = {
+	{"int", MIRType::getInt64},
+	{"bool", MIRType::getInt1},
+	{"byte", MIRType::getInt8},
+	{"float", MIRType::getFloat64},
+	{"void", MIRType::getVoid}};
+
+MIRType *MIRType::fromName(const std::string &name) {
+	auto it = typeNameRegistry.find(name);
+	if (it != typeNameRegistry.end()) {
+		return it->second();
+	}
+	throw std::runtime_error("Unknown type: " + name);
+}
+
 MIRType *MIRType::getArray(MIRType *elem, uint64_t size) {
 	auto type = std::make_unique<MIRType>(MIRTypeKind::Array);
 	type->elementType = elem;

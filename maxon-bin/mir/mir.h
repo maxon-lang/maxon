@@ -63,6 +63,9 @@ class MIRType {
 	static MIRType *lookupStruct(const std::string &name); // Returns nullptr if not found
 	static MIRType *getOptional(MIRType *wrapped);
 
+	// Get MIR type from Maxon type name (e.g., "int" -> Int64, "void" -> Void)
+	static MIRType *fromName(const std::string &name);
+
 	bool isInteger() const { return kind == MIRTypeKind::Int1 || kind == MIRTypeKind::Int8 ||
 									kind == MIRTypeKind::Int32 || kind == MIRTypeKind::Int64; }
 	bool isFloat() const { return kind == MIRTypeKind::Float64; }
