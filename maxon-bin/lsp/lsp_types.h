@@ -848,6 +848,22 @@ struct InlayHintParams {
 };
 
 // =============================================================================
+// CodeLens Types
+// =============================================================================
+
+// CodeLens represents a command that should be shown along with source text
+struct CodeLens {
+    Range range;                        // Range in the document where lens applies
+    std::optional<Command> command;     // Command to execute when clicked (optional for info-only)
+    std::optional<std::string> data;    // JSON data for resolve (optional)
+};
+
+// CodeLens params
+struct CodeLensParams {
+    TextDocumentIdentifier textDocument;
+};
+
+// =============================================================================
 // Call Hierarchy Types
 // =============================================================================
 

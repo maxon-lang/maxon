@@ -359,6 +359,16 @@ json toJson(const InlayHintParams &params);
 InlayHintParams inlayHintParamsFromJson(const json &j);
 
 // =============================================================================
+// CodeLens Types
+// =============================================================================
+
+json toJson(const CodeLens &lens);
+CodeLens codeLensFromJson(const json &j);
+
+json toJson(const CodeLensParams &params);
+CodeLensParams codeLensParamsFromJson(const json &j);
+
+// =============================================================================
 // Call Hierarchy Types
 // =============================================================================
 

@@ -369,6 +369,24 @@ MarkupContent markupContentFromJson(const json &j) {
 	return content;
 }
 
+json toJson(const Command &cmd) {
+	json j{{"title", cmd.title}, {"command", cmd.command}};
+	if (cmd.arguments.has_value()) {
+		j["arguments"] = cmd.arguments.value();
+	}
+	return j;
+}
+
+Command commandFromJson(const json &j) {
+	Command cmd;
+	cmd.title = j.value("title", "");
+	cmd.command = j.value("command", "");
+	if (j.contains("arguments") && j["arguments"].is_array()) {
+		cmd.arguments = j["arguments"].get<std::vector<std::string>>();
+	}
+	return cmd;
+}
+
 json toJson(const CompletionItem &item) {
 	json j{{"label", item.label}};
 	if (item.kind.has_value())
@@ -1333,6 +1351,11 @@ json toJson(const ServerCapabilities &caps) {
 		j["semanticTokensProvider"] = toJson(caps.semanticTokensProvider.value());
 	}
 
+	// CodeLens
+	if (caps.codeLensProvider.has_value()) {
+		j["codeLensProvider"] = caps.codeLensProvider.value();
+	}
+
 	return j;
 }
 
@@ -1406,6 +1429,48 @@ json toJson(const DidCloseTextDocumentParams &params) {
 
 DidCloseTextDocumentParams didCloseTextDocumentParamsFromJson(const json &j) {
 	DidCloseTextDocumentParams params;
+	if (j.contains("textDocument")) {
+		params.textDocument = textDocumentIdentifierFromJson(j["textDocument"]);
+	}
+	return params;
+}
+
+// =============================================================================
+// CodeLens Types
+// =============================================================================
+
+json toJson(const CodeLens &lens) {
+	json j;
+	j["range"] = toJson(lens.range);
+	if (lens.command.has_value()) {
+		j["command"] = toJson(lens.command.value());
+	}
+	if (lens.data.has_value()) {
+		j["data"] = lens.data.value();
+	}
+	return j;
+}
+
+CodeLens codeLensFromJson(const json &j) {
+	CodeLens lens;
+	if (j.contains("range")) {
+		lens.range = rangeFromJson(j["range"]);
+	}
+	if (j.contains("command") && !j["command"].is_null()) {
+		lens.command = commandFromJson(j["command"]);
+	}
+	if (j.contains("data") && j["data"].is_string()) {
+		lens.data = j["data"].get<std::string>();
+	}
+	return lens;
+}
+
+json toJson(const CodeLensParams &params) {
+	return json{{"textDocument", toJson(params.textDocument)}};
+}
+
+CodeLensParams codeLensParamsFromJson(const json &j) {
+	CodeLensParams params;
 	if (j.contains("textDocument")) {
 		params.textDocument = textDocumentIdentifierFromJson(j["textDocument"]);
 	}

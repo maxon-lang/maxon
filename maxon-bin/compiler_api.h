@@ -135,6 +135,10 @@ struct LSPAnalysisResult {
 	std::map<std::string, InterfaceInfo> interfaces;
 	std::map<std::string, EnumInfo> enums;
 
+	// Function mutation info (for CodeLens purity display)
+	// Key: function name, Value: list of mutated parameter names (empty if pure)
+	std::map<std::string, std::vector<std::string>> functionMutations;
+
 	// Check if analysis was successful (no parse errors)
 	bool hasParseErrors() const { return !parseErrors.empty(); }
 

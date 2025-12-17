@@ -32,6 +32,7 @@ set(LSP_SOURCES
     ../features/document_symbols.cpp
     ../features/rename.cpp
     ../features/code_actions.cpp
+    ../features/code_lens.cpp
     ../features/formatting.cpp
     ../features/folding.cpp
     ../features/diagnostics.cpp
@@ -50,6 +51,7 @@ set(MAXON_SOURCES
     ../../semantic_analyzer.cpp
     ../../semantic_analyzer/semantic_analyzer_expr.cpp
     ../../semantic_analyzer/semantic_analyzer_stmt.cpp
+    ../../semantic_analyzer/semantic_analyzer_mutation.cpp
     ../../types/type_conversion.cpp
     ../../file_utils.cpp
     ../../intrinsics.cpp

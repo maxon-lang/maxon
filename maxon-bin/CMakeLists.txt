@@ -135,6 +135,7 @@ set(SOURCES
     lsp/features/references.cpp
     lsp/features/rename.cpp
     lsp/features/code_actions.cpp
+    lsp/features/code_lens.cpp
     lsp/features/formatting.cpp
     lsp/features/folding.cpp
     lsp/features/linked_editing.cpp

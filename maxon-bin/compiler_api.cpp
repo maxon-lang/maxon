@@ -792,6 +792,14 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 		result.interfaces = analyzer.getInterfaces();
 		result.enums = analyzer.getEnums();
 
+		// Extract function mutation info for CodeLens purity display
+		const auto &mutations = analyzer.getFunctionMutations();
+		for (const auto &[funcName, mutInfo] : mutations) {
+			if (mutInfo.analyzed) {
+				result.functionMutations[funcName] = analyzer.getMutatedParameterNames(funcName);
+			}
+		}
+
 		// Add global constants to variables for hover support
 		for (const auto &[name, info] : analyzer.getGlobalConstants()) {
 			VariableInfo varInfo;
@@ -899,6 +907,14 @@ LSPAnalysisResult analyzeForLSP(const std::string &source, const std::string &fi
 		result.structs = analyzer.getStructs();
 		result.interfaces = analyzer.getInterfaces();
 		result.enums = analyzer.getEnums();
+
+		// Extract function mutation info for CodeLens purity display
+		const auto &mutations = analyzer.getFunctionMutations();
+		for (const auto &[funcName, mutInfo] : mutations) {
+			if (mutInfo.analyzed) {
+				result.functionMutations[funcName] = analyzer.getMutatedParameterNames(funcName);
+			}
+		}
 
 		// Add global constants to variables for hover support
 		for (const auto &[name, info] : analyzer.getGlobalConstants()) {

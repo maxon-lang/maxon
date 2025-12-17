@@ -343,6 +343,12 @@ class SemanticAnalyzer {
 	// Get all enums
 	const std::map<std::string, EnumInfo> &getEnums() const { return enums; }
 
+	// Get function mutation info (for LSP CodeLens purity display)
+	const std::map<std::string, ParameterMutationInfo> &getFunctionMutations() const { return functionMutations_; }
+
+	// Get mutated parameter names for a function (empty if pure)
+	std::vector<std::string> getMutatedParameterNames(const std::string &funcName) const;
+
 	// Get all global constants
 	const std::map<std::string, GlobalConstInfo> &getGlobalConstants() const { return globalConstants; }
 

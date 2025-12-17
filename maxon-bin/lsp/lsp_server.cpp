@@ -3,6 +3,7 @@
 #include "../lexer.h"
 #include "../parser.h"
 #include "features/code_actions.h"
+#include "features/code_lens.h"
 #include "features/completion.h"
 #include "features/definition.h"
 #include "features/document_symbols.h"
@@ -121,6 +122,9 @@ void LSPServer::registerHandlers() {
 	};
 	requestHandlers_["textDocument/semanticTokens/full"] = [this](const json &params) {
 		return handleSemanticTokensFull(params);
+	};
+	requestHandlers_["textDocument/codeLens"] = [this](const json &params) {
+		return handleCodeLens(params);
 	};
 
 	// Custom Maxon requests
@@ -759,6 +763,12 @@ void LSPServer::analyzeDocument(const std::string &uri) {
 	cache.version = doc->version;
 	cache.analysisTimeMs = duration.count();
 
+	// Copy function mutation info (convert vector to set)
+	cache.functionMutations.clear();
+	for (const auto &[funcName, mutatedParams] : result.functionMutations) {
+		cache.functionMutations[funcName] = std::set<std::string>(mutatedParams.begin(), mutatedParams.end());
+	}
+
 	// Convert errors to diagnostics
 	std::vector<lsp::Diagnostic> diagnostics;
 
@@ -1073,6 +1083,9 @@ lsp::ServerCapabilities LSPServer::buildCapabilities() {
 	semanticTokensOptions.full = true;	 // Support full document tokens
 	semanticTokensOptions.range = false; // Don't support range queries
 	caps.semanticTokensProvider = semanticTokensOptions;
+
+	// CodeLens (for function purity status)
+	caps.codeLensProvider = true;
 
 	return caps;
 }
@@ -1467,6 +1480,28 @@ json LSPServer::handleSemanticTokensFull(const json &params) {
 		return lsp::toJson(result.value());
 	}
 	return nullptr;
+}
+
+json LSPServer::handleCodeLens(const json &params) {
+	auto codeLensParams = lsp::codeLensParamsFromJson(params);
+	const std::string &uri = codeLensParams.textDocument.uri;
+
+	auto docOpt = documentManager_.getDocument(uri);
+	if (!docOpt.has_value()) {
+		return json::array();
+	}
+
+	Document *doc = docOpt.value();
+	const AnalysisCache *cache = documentManager_.getAnalysis(uri);
+
+	CodeLensProvider provider;
+	auto lenses = provider.getCodeLenses(*doc, cache);
+
+	json result = json::array();
+	for (const auto &lens : lenses) {
+		result.push_back(lsp::toJson(lens));
+	}
+	return result;
 }
 
 // ============================================================================

@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -82,6 +83,10 @@ struct AnalysisCache {
 	std::map<std::string, StructInfo> structs;
 	std::map<std::string, InterfaceInfo> interfaces;
 	std::map<std::string, EnumInfo> enums;
+
+	// Function mutation info (for CodeLens purity display)
+	// Key: function name, Value: set of mutated parameter names (empty if pure)
+	std::map<std::string, std::set<std::string>> functionMutations;
 
 	AnalysisCache() : version(0), analysisTimeMs(0) {}
 

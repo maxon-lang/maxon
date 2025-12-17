@@ -144,6 +144,9 @@ class LSPServer {
 	// Handle "textDocument/semanticTokens/full" request
 	maxon::lsp::json handleSemanticTokensFull(const maxon::lsp::json &params);
 
+	// Handle "textDocument/codeLens" request - show function purity status
+	maxon::lsp::json handleCodeLens(const maxon::lsp::json &params);
+
 	// =========================================================================
 	// Custom Maxon requests
 	// =========================================================================

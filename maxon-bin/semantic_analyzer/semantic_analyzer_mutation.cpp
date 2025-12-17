@@ -157,6 +157,33 @@ bool SemanticAnalyzer::doesFunctionMutateParam(const std::string &funcName, size
 	return false;
 }
 
+// Get the names of mutated parameters for a function (for LSP CodeLens)
+// Returns empty vector if function is pure (doesn't mutate any parameters)
+std::vector<std::string> SemanticAnalyzer::getMutatedParameterNames(const std::string &funcName) const {
+	std::vector<std::string> result;
+
+	// Look up mutation info
+	auto mutIt = functionMutations_.find(funcName);
+	if (mutIt == functionMutations_.end() || !mutIt->second.analyzed) {
+		return result;
+	}
+
+	// Look up function info to get parameter names
+	auto funcIt = functions.find(funcName);
+	if (funcIt == functions.end()) {
+		return result;
+	}
+
+	// Convert indices to names
+	for (size_t idx : mutIt->second.mutatedParamIndices) {
+		if (idx < funcIt->second.parameters.size()) {
+			result.push_back(funcIt->second.parameters[idx].name);
+		}
+	}
+
+	return result;
+}
+
 // Mark a variable as having its ownership transferred
 void SemanticAnalyzer::markVariableMoved(const std::string &name, int line, int column,
 										 const std::string &targetFunction) {
