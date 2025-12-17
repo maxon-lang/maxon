@@ -20,12 +20,16 @@ pub const Parser = struct {
         var functions: std.ArrayListUnmanaged(ast.FunctionDecl) = .empty;
         errdefer functions.deinit(self.allocator);
 
+        // Skip leading newlines
+        self.skipNewlines();
+
         while (!self.isAtEnd()) {
             if (self.check(.function)) {
                 try functions.append(self.allocator, try self.parseFunction());
             } else {
                 break;
             }
+            self.skipNewlines();
         }
 
         return .{
@@ -47,17 +51,30 @@ pub const Parser = struct {
             return_type = type_token.text;
         }
 
+        // Require newline after function signature
+        _ = try self.expect(.newline);
+
         // Parse body
         var statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
         errdefer statements.deinit(self.allocator);
 
         while (!self.check(.end) and !self.isAtEnd()) {
+            // Skip blank lines
+            if (self.check(.newline)) {
+                _ = self.advance();
+                continue;
+            }
             try statements.append(self.allocator, try self.parseStatement());
         }
 
         // Parse end 'label'
         _ = try self.expect(.end);
         _ = try self.expect(.string); // label
+
+        // Require newline after end (or EOF)
+        if (!self.isAtEnd() and !self.check(.newline)) {
+            return error.ExpectedNewline;
+        }
 
         return .{
             .name = name_token.text,
@@ -68,9 +85,37 @@ pub const Parser = struct {
 
     fn parseStatement(self: *Parser) !ast.Statement {
         if (self.check(.@"return")) {
-            return try self.parseReturn();
+            const stmt = try self.parseReturn();
+            // Require newline after statement
+            _ = try self.expect(.newline);
+            return stmt;
+        }
+        if (self.check(.let)) {
+            const stmt = try self.parseVarDecl(false);
+            _ = try self.expect(.newline);
+            return stmt;
+        }
+        if (self.check(.@"var")) {
+            const stmt = try self.parseVarDecl(true);
+            _ = try self.expect(.newline);
+            return stmt;
         }
         return error.UnexpectedToken;
+    }
+
+    fn parseVarDecl(self: *Parser, is_var: bool) !ast.Statement {
+        _ = self.advance(); // consume let/var
+        const name_token = try self.expect(.identifier);
+        _ = try self.expect(.equals);
+        const value = try self.parseExpression();
+        if (value) |expr| {
+            if (is_var) {
+                return .{ .var_decl = .{ .name = name_token.text, .value = expr } };
+            } else {
+                return .{ .let_decl = .{ .name = name_token.text, .value = expr } };
+            }
+        }
+        return error.ExpectedExpression;
     }
 
     fn parseReturn(self: *Parser) !ast.Statement {
@@ -84,6 +129,10 @@ pub const Parser = struct {
             const token = self.advance();
             const value = std.fmt.parseInt(i64, token.text, 10) catch return error.InvalidNumber;
             return .{ .integer = value };
+        }
+        if (self.check(.identifier)) {
+            const token = self.advance();
+            return .{ .identifier = token.text };
         }
         return null;
     }
@@ -109,5 +158,11 @@ pub const Parser = struct {
 
     fn isAtEnd(self: *Parser) bool {
         return self.pos >= self.tokens.len or self.tokens[self.pos].type == .eof;
+    }
+
+    fn skipNewlines(self: *Parser) void {
+        while (self.check(.newline)) {
+            _ = self.advance();
+        }
     }
 };

@@ -1,8 +1,5 @@
 const std = @import("std");
-const Lexer = @import("lexer.zig").Lexer;
-const Parser = @import("parser.zig").Parser;
-const Codegen = @import("codegen.zig").Codegen;
-const pe = @import("pe.zig");
+const compiler = @import("compiler/compiler.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -13,11 +10,34 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     if (args.len < 2) {
-        std.debug.print("Usage: maxon-zig <source.maxon>\n", .{});
+        printUsage();
         std.process.exit(1);
     }
 
-    const source_path = args[1];
+    const command = args[1];
+
+    if (std.mem.eql(u8, command, "compile")) {
+        runCompile(args, allocator);
+    } else {
+        std.debug.print("Unknown command: {s}\n", .{command});
+        printUsage();
+        std.process.exit(1);
+    }
+}
+
+fn printUsage() void {
+    std.debug.print("Usage: maxon-zig <command> [args]\n\n", .{});
+    std.debug.print("Commands:\n", .{});
+    std.debug.print("  compile <source.maxon>  Compile a source file\n", .{});
+}
+
+fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
+    if (args.len < 3) {
+        std.debug.print("Usage: maxon-zig compile <source.maxon>\n", .{});
+        std.process.exit(1);
+    }
+
+    const source_path = args[2];
 
     // Read source file
     const source = std.fs.cwd().readFileAlloc(allocator, source_path, 1024 * 1024) catch |err| {
@@ -26,49 +46,26 @@ pub fn main() !void {
     };
     defer allocator.free(source);
 
-    // Lex
-    var lexer = Lexer.init(source);
-    const tokens = lexer.tokenize(allocator) catch |err| {
-        std.debug.print("Lexer error: {}\n", .{err});
-        std.process.exit(1);
-    };
-    defer allocator.free(tokens);
-
-    // Parse
-    var parser = Parser.init(tokens, allocator);
-    const program = parser.parse() catch |err| {
-        std.debug.print("Parser error: {}\n", .{err});
-        std.process.exit(1);
-    };
-    defer {
-        for (program.functions) |func| {
-            allocator.free(func.body);
-        }
-        allocator.free(program.functions);
-    }
-
-    // Generate code
-    var codegen = Codegen.init(allocator);
-    const code = codegen.generate(program) catch |err| {
-        std.debug.print("Codegen error: {}\n", .{err});
-        std.process.exit(1);
-    };
-    defer allocator.free(code);
-
     // Determine output path
     const output_path = blk: {
         if (std.mem.endsWith(u8, source_path, ".maxon")) {
             const base = source_path[0 .. source_path.len - 6];
-            break :blk try std.fmt.allocPrint(allocator, "{s}.exe", .{base});
+            break :blk std.fmt.allocPrint(allocator, "{s}.exe", .{base}) catch {
+                std.debug.print("Out of memory\n", .{});
+                std.process.exit(1);
+            };
         } else {
-            break :blk try std.fmt.allocPrint(allocator, "{s}.exe", .{source_path});
+            break :blk std.fmt.allocPrint(allocator, "{s}.exe", .{source_path}) catch {
+                std.debug.print("Out of memory\n", .{});
+                std.process.exit(1);
+            };
         }
     };
     defer allocator.free(output_path);
 
-    // Write PE executable
-    pe.writePE(output_path, code) catch |err| {
-        std.debug.print("Error writing executable: {}\n", .{err});
+    // Compile
+    compiler.compile(source, output_path, allocator) catch |err| {
+        std.debug.print("Compilation failed: {}\n", .{err});
         std.process.exit(1);
     };
 

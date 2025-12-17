@@ -202,18 +202,30 @@ pub fn writePE(path: []const u8, code: []const u8) !void {
 
     // --- .text section ---
     // Write code with patched IAT reference
-    // Code layout: sub rsp,40 (4) + mov ecx,imm (5) + call [rip+off] (6) = 15 bytes
-    // The call instruction displacement is at offset 11 (after sub rsp + mov ecx + FF 15)
-    // RIP after call = text_rva + 15
+    // Find the call [rip+offset] instruction (FF 15 xx xx xx xx) and patch it
     const code_size: u32 = @intCast(code.len);
-    const rip_after_call: i64 = @as(i64, text_rva) + code_size;
     const iat_address: i64 = @as(i64, idata_rva) + iat_offset;
-    const call_offset: i32 = @intCast(iat_address - rip_after_call);
 
-    // Write the code with patched offset
-    // Code up to displacement: sub rsp,40 (4) + mov ecx,imm (5) + FF 15 (2) = 11 bytes
-    writeBytes(&buf, &pos, code[0..11]);
-    writeI32(&buf, &pos, call_offset); // patched offset
+    // Copy code and patch call instruction
+    var i: usize = 0;
+    while (i < code.len) {
+        if (i + 1 < code.len and code[i] == 0xFF and code[i + 1] == 0x15) {
+            // Found call [rip+offset] - write opcode
+            buf[pos] = 0xFF;
+            buf[pos + 1] = 0x15;
+            pos += 2;
+            // Calculate and write displacement
+            // RIP points to instruction after call (pos + 4 in file terms, but we need RVA)
+            const call_end_rva: i64 = @as(i64, text_rva) + @as(i64, @intCast(i)) + 6; // i is position in code, +6 for full instruction
+            const call_offset: i32 = @intCast(iat_address - call_end_rva);
+            writeI32(&buf, &pos, call_offset);
+            i += 6; // skip the original instruction (2 opcode + 4 placeholder)
+        } else {
+            buf[pos] = code[i];
+            pos += 1;
+            i += 1;
+        }
+    }
 
     // Pad .text section
     writeZeros(&buf, &pos, text_raw_size - code_size);

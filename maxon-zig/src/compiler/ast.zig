@@ -12,6 +12,13 @@ pub const FunctionDecl = struct {
 
 pub const Statement = union(enum) {
     @"return": ReturnStmt,
+    let_decl: VarDecl,
+    var_decl: VarDecl,
+};
+
+pub const VarDecl = struct {
+    name: []const u8,
+    value: Expression,
 };
 
 pub const ReturnStmt = struct {
@@ -20,4 +27,5 @@ pub const ReturnStmt = struct {
 
 pub const Expression = union(enum) {
     integer: i64,
+    identifier: []const u8,
 };
