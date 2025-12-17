@@ -1,7 +1,6 @@
 #include "optimizer.h"
 #include "../compiler_stats.h"
 #include <chrono>
-#include <iostream>
 
 namespace mir {
 
@@ -28,27 +27,29 @@ void MIROptimizer::addPass(std::unique_ptr<OptimizationPass> pass) {
 }
 
 int MIROptimizer::runAllPasses(MIRModule &module, CompilerStats *stats) {
+	Logger &logger = GlobalLogger::instance();
+
 	// Debug: dump MIR before optimization to find corruption
-	if (verboseLevel_ >= 3) {
-		std::cout << "[Opt Debug] Dumping MIR before optimization:" << std::endl;
+	if (logger.isEnabled(3)) {
+		logger.trace(LogPhase::Opt, "Dumping MIR before optimization:");
 		for (const auto &func : module.functions) {
-			std::cout << "  Function: " << func->name << std::endl;
+			logger.trace(LogPhase::Opt, "  Function: ", func->name);
 			if (func->isExternal) {
-				std::cout << "    (external)" << std::endl;
+				logger.trace(LogPhase::Opt, "    (external)");
 				continue;
 			}
 			for (const auto &block : func->basicBlocks) {
-				std::cout << "    Block: " << block->name << std::endl;
+				logger.trace(LogPhase::Opt, "    Block: ", block->name);
 				for (size_t i = 0; i < block->instructions.size(); i++) {
 					auto &inst = block->instructions[i];
-					std::cout << "      Inst " << i << ": opcode=" << static_cast<int>(inst->opcode)
-							  << " operands=" << inst->operands.size() << std::endl;
+					logger.trace(LogPhase::Opt, "      Inst ", i, ": opcode=", static_cast<int>(inst->opcode),
+								 " operands=", inst->operands.size());
 					for (size_t j = 0; j < inst->operands.size(); j++) {
 						auto *op = inst->operands[j];
 						if (op) {
-							std::cout << "        Op " << j << ": kind=" << static_cast<int>(op->kind) << std::endl;
+							logger.trace(LogPhase::Opt, "        Op ", j, ": kind=", static_cast<int>(op->kind));
 						} else {
-							std::cout << "        Op " << j << ": NULL" << std::endl;
+							logger.trace(LogPhase::Opt, "        Op ", j, ": NULL");
 						}
 					}
 				}
@@ -59,16 +60,12 @@ int MIROptimizer::runAllPasses(MIRModule &module, CompilerStats *stats) {
 	bool anyChange;
 	int iteration = 0;
 
-	if (verboseLevel_ >= 1) {
-		std::cout << "[Opt] Starting optimization passes (" << passes.size() << " passes)" << std::endl;
-	}
+	logger.progress(LogPhase::Opt, "Starting optimization passes (", passes.size(), " passes)");
 
 	do {
 		anyChange = false;
 		iteration++;
-		if (verboseLevel_ >= 2) {
-			std::cout << "[Opt] Iteration " << iteration << std::endl;
-		}
+		logger.detail(LogPhase::Opt, "Iteration ", iteration);
 		for (auto &pass : passes) {
 			size_t instrBefore = stats ? countModuleInstructions(module) : 0;
 			auto passStart = std::chrono::high_resolution_clock::now();
@@ -93,9 +90,7 @@ int MIROptimizer::runAllPasses(MIRModule &module, CompilerStats *stats) {
 			if (madeChanges) {
 				anyChange = true;
 				totalChanges++;
-				if (verboseLevel_ >= 2) {
-					std::cout << "[Opt]   Pass '" << pass->getName() << "' made changes" << std::endl;
-				}
+				logger.detail(LogPhase::Opt, "Pass '", pass->getName(), "' made changes");
 			}
 		}
 	} while (anyChange);
@@ -104,18 +99,15 @@ int MIROptimizer::runAllPasses(MIRModule &module, CompilerStats *stats) {
 		stats->setOptimizerIterations(iteration);
 	}
 
-	if (verboseLevel_ >= 1) {
-		std::cout << "[Opt] Optimization complete after " << iteration << " iteration(s), "
-				  << totalChanges << " total changes" << std::endl;
-	}
+	logger.progress(LogPhase::Opt, "Optimization complete after ", iteration, " iteration(s), ",
+					totalChanges, " total changes");
 
 	return totalChanges;
 }
 
 void MIROptimizer::runPasses(MIRModule &module, int maxIterations, CompilerStats *stats) {
-	if (verboseLevel_ >= 1) {
-		std::cout << "[Opt] Running passes (max " << maxIterations << " iterations)" << std::endl;
-	}
+	Logger &logger = GlobalLogger::instance();
+	logger.progress(LogPhase::Opt, "Running passes (max ", maxIterations, " iterations)");
 
 	int iteration = 0;
 	for (int i = 0; i < maxIterations; ++i) {
@@ -144,15 +136,11 @@ void MIROptimizer::runPasses(MIRModule &module, int maxIterations, CompilerStats
 
 			if (madeChanges) {
 				anyChange = true;
-				if (verboseLevel_ >= 2) {
-					std::cout << "[Opt]   Pass '" << pass->getName() << "' made changes" << std::endl;
-				}
+				logger.detail(LogPhase::Opt, "Pass '", pass->getName(), "' made changes");
 			}
 		}
 		if (!anyChange) {
-			if (verboseLevel_ >= 1) {
-				std::cout << "[Opt] Converged after " << (i + 1) << " iteration(s)" << std::endl;
-			}
+			logger.progress(LogPhase::Opt, "Converged after ", (i + 1), " iteration(s)");
 			break;
 		}
 	}

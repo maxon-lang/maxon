@@ -2,8 +2,8 @@
 // Provides memory state tracking in SSA form for optimization passes.
 
 #include "memory_ssa.h"
+#include "../logger.h"
 #include <algorithm>
-#include <iostream>
 #include <queue>
 #include <sstream>
 
@@ -685,22 +685,23 @@ bool MemorySSA::mustAlias(MIRValue *ptr1, MIRValue *ptr2) const {
 //==============================================================================
 
 void MemorySSA::print() const {
-	std::cout << "MemorySSA for function @" << function_.name << ":\n";
+	Logger &logger = GlobalLogger::instance();
+	logger.trace(LogPhase::Opt, "MemorySSA for function @", function_.name, ":");
 
 	for (auto &block : function_.basicBlocks) {
-		std::cout << "  " << block->name << ":\n";
+		logger.trace(LogPhase::Opt, "  ", block->name, ":");
 
 		// Print MemoryPhi if present
 		auto phiIt = blockToMemoryPhi_.find(block.get());
 		if (phiIt != blockToMemoryPhi_.end()) {
-			std::cout << "    " << phiIt->second->toString() << "\n";
+			logger.trace(LogPhase::Opt, "    ", phiIt->second->toString());
 		}
 
 		// Print memory accesses for each instruction
 		for (auto &inst : block->instructions) {
 			auto accessIt = instToAccess_.find(inst.get());
 			if (accessIt != instToAccess_.end()) {
-				std::cout << "    " << accessIt->second->toString() << "\n";
+				logger.trace(LogPhase::Opt, "    ", accessIt->second->toString());
 			}
 		}
 	}

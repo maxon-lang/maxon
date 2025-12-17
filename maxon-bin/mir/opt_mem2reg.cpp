@@ -33,11 +33,11 @@ bool Mem2RegPass::runOnFunction(MIRFunction &func) {
 	}
 
 	if (verboseLevel_ >= 2) {
-		std::cout << "[Mem2Reg] Found " << promotableAllocas.size()
-				  << " promotable allocas in function " << func.name << std::endl;
+		logDetail("Found " + std::to_string(promotableAllocas.size()) +
+				  " promotable allocas in function " + func.name);
 		for (auto *a : promotableAllocas) {
-			std::cout << "  Promotable alloca: %" << a->result->regId
-					  << " type=" << a->allocatedType->toString() << std::endl;
+			logTrace("Promotable alloca: %" + std::to_string(a->result->regId) +
+					 " type=" + a->allocatedType->toString());
 		}
 	}
 
@@ -105,28 +105,27 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 				inst->operands.size() >= 2 &&
 				inst->operands[1] == allocaPtr) {
 				defBlocks.insert(block.get());
-				if (verboseLevel_ >= 2) {
-					std::cout << "[Mem2Reg]   Store to %" << allocaPtr->regId
-					          << " in block " << block->name
-					          << " value=";
+				if (verboseLevel_ >= 3) {
+					std::string valueStr;
 					if (inst->operands[0]->kind == MIRValueKind::VirtualReg) {
-						std::cout << "%" << inst->operands[0]->regId;
+						valueStr = "%" + std::to_string(inst->operands[0]->regId);
 					} else if (inst->operands[0]->kind == MIRValueKind::ConstantInt) {
-						std::cout << inst->operands[0]->intValue;
+						valueStr = std::to_string(inst->operands[0]->intValue);
 					} else {
-						std::cout << "?";
+						valueStr = "?";
 					}
-					std::cout << std::endl;
+					logTrace("Store to %" + std::to_string(allocaPtr->regId) +
+							 " in block " + block->name + " value=" + valueStr);
 				}
 			}
 			if (inst->opcode == MIROpcode::Load &&
 				inst->operands.size() >= 1 &&
 				inst->operands[0] == allocaPtr) {
 				useBlocks.insert(block.get());
-				if (verboseLevel_ >= 2) {
-					std::cout << "[Mem2Reg]   Load from %" << allocaPtr->regId
-					          << " in block " << block->name
-					          << " result=%" << inst->result->regId << std::endl;
+				if (verboseLevel_ >= 3) {
+					logTrace("Load from %" + std::to_string(allocaPtr->regId) +
+							 " in block " + block->name +
+							 " result=%" + std::to_string(inst->result->regId));
 				}
 			}
 		}
@@ -153,9 +152,9 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 		for (auto *dfBlock : domInfo.getDominanceFrontier(block)) {
 			if (phiBlocks.find(dfBlock) == phiBlocks.end()) {
 				phiBlocks.insert(dfBlock);
-				if (verboseLevel_ >= 2) {
-					std::cout << "[Mem2Reg]   PHI needed at " << dfBlock->name
-					          << " (dominance frontier of " << block->name << ")" << std::endl;
+				if (verboseLevel_ >= 3) {
+					logTrace("PHI needed at " + dfBlock->name +
+							 " (dominance frontier of " + block->name + ")");
 				}
 				// PHI node is also a definition, so add to worklist if not processed
 				if (processed.find(dfBlock) == processed.end()) {
@@ -209,14 +208,25 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 	// Map to collect load replacements (defer replacements to avoid iterator invalidation)
 	std::unordered_map<MIRValue *, MIRValue *> loadReplacements;
 
+	// Helper to format a MIR value for trace output
+	auto formatValue = [](MIRValue *val) -> std::string {
+		if (val->kind == MIRValueKind::VirtualReg) {
+			return "%" + std::to_string(val->regId);
+		} else if (val->kind == MIRValueKind::ConstantInt) {
+			return std::to_string(val->intValue);
+		} else {
+			return "?";
+		}
+	};
+
 	// Recursive function to rename variables in dominator tree order
 	std::function<void(MIRBasicBlock *)> renameBlock = [&](MIRBasicBlock *block) {
 		// Track how many definitions we push in this block (to pop when leaving)
 		size_t defsBeforeBlock = defStack.size();
 
-		if (verboseLevel_ >= 2) {
-			std::cout << "[Mem2Reg]   Renaming block " << block->name
-			          << " (defStack size=" << defStack.size() << ")" << std::endl;
+		if (verboseLevel_ >= 3) {
+			logTrace("Renaming block " + block->name +
+					 " (defStack size=" + std::to_string(defStack.size()) + ")");
 		}
 
 		// Process instructions in order
@@ -227,8 +237,8 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 				if (it != blockToPhiMap.end() && it->second == inst.get()) {
 					// This is our PHI - it defines the current value
 					defStack.push_back(inst->result);
-					if (verboseLevel_ >= 2) {
-						std::cout << "[Mem2Reg]     PHI defines %" << inst->result->regId << std::endl;
+					if (verboseLevel_ >= 3) {
+						logTrace("PHI defines %" + std::to_string(inst->result->regId));
 					}
 				}
 			}
@@ -238,16 +248,9 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 					 inst->operands[0] == allocaPtr) {
 				MIRValue *reachingDef = defStack.empty() ? undefValue : defStack.back();
 				loadReplacements[inst->result] = reachingDef;
-				if (verboseLevel_ >= 2) {
-					std::cout << "[Mem2Reg]     Load %" << inst->result->regId << " replaced with ";
-					if (reachingDef->kind == MIRValueKind::VirtualReg) {
-						std::cout << "%" << reachingDef->regId;
-					} else if (reachingDef->kind == MIRValueKind::ConstantInt) {
-						std::cout << reachingDef->intValue;
-					} else {
-						std::cout << "?";
-					}
-					std::cout << std::endl;
+				if (verboseLevel_ >= 3) {
+					logTrace("Load %" + std::to_string(inst->result->regId) +
+							 " replaced with " + formatValue(reachingDef));
 				}
 			}
 			// Store: push new definition
@@ -255,16 +258,8 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 					 inst->operands.size() >= 2 &&
 					 inst->operands[1] == allocaPtr) {
 				defStack.push_back(inst->operands[0]);
-				if (verboseLevel_ >= 2) {
-					std::cout << "[Mem2Reg]     Store pushes ";
-					if (inst->operands[0]->kind == MIRValueKind::VirtualReg) {
-						std::cout << "%" << inst->operands[0]->regId;
-					} else if (inst->operands[0]->kind == MIRValueKind::ConstantInt) {
-						std::cout << inst->operands[0]->intValue;
-					} else {
-						std::cout << "?";
-					}
-					std::cout << std::endl;
+				if (verboseLevel_ >= 3) {
+					logTrace("Store pushes " + formatValue(inst->operands[0]));
 				}
 			}
 		}
@@ -279,17 +274,9 @@ bool Mem2RegPass::promoteAlloca(MIRFunction &func, MIRInstruction *alloca) {
 				for (auto &incoming : phi->phiIncoming) {
 					if (incoming.second == block) {
 						incoming.first = currentDef;
-						if (verboseLevel_ >= 2) {
-							std::cout << "[Mem2Reg]     Setting PHI %" << phi->result->regId
-							          << " incoming from " << block->name << " to ";
-							if (currentDef->kind == MIRValueKind::VirtualReg) {
-								std::cout << "%" << currentDef->regId;
-							} else if (currentDef->kind == MIRValueKind::ConstantInt) {
-								std::cout << currentDef->intValue;
-							} else {
-								std::cout << "?";
-							}
-							std::cout << std::endl;
+						if (verboseLevel_ >= 3) {
+							logTrace("Setting PHI %" + std::to_string(phi->result->regId) +
+									 " incoming from " + block->name + " to " + formatValue(currentDef));
 						}
 						break;
 					}

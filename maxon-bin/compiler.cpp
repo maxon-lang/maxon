@@ -293,6 +293,7 @@ std::unique_ptr<ProgramAST> parseFile(const std::string &filePath, Logger &logge
 
 std::string compileProgram(const CompilationOptions &options) {
 	Logger logger(options.verboseLevel);
+	GlobalLogger::init(options.verboseLevel);
 	[[maybe_unused]] auto totalStart = logger.startTimer();
 
 	// Create stats collector if requested
@@ -346,7 +347,7 @@ std::string compileProgram(const CompilationOptions &options) {
 
 	for (const auto &inputFile : options.inputFiles) {
 		if (options.showProgress) {
-			std::cout << "Compiling: " << normalizePathForDisplay(inputFile) << std::endl;
+			logger.progress(LogPhase::General, "Compiling: ", normalizePathForDisplay(inputFile));
 		}
 		sources.push_back(readFile(inputFile));
 		programs.push_back(parseFile(inputFile, logger, stats.get()));
@@ -358,8 +359,8 @@ std::string compileProgram(const CompilationOptions &options) {
 		if (programs[i]->hasParseErrors()) {
 			const auto &error = programs[i]->parseErrors[0];
 			// Format matches what parseFile throws: "In file '...': \n<error message>"
-			std::cerr << "In file '" << normalizePathForDisplay(allFiles[i]) << "':\n"
-					  << error.message << std::endl;
+			logger.error(LogPhase::Parser, "In file '", normalizePathForDisplay(allFiles[i]), "':\n",
+						 error.message);
 			throw std::runtime_error("");
 		}
 	}
@@ -474,7 +475,7 @@ std::string compileProgram(const CompilationOptions &options) {
 
 			for (const auto &file : filesToImport) {
 				if (options.showProgress) {
-					std::cout << "Compiling: " << normalizePathForDisplay(file) << std::endl;
+					logger.progress(LogPhase::General, "Compiling: ", normalizePathForDisplay(file));
 				}
 				logger.progress(LogPhase::Semantic, "  -> ", normalizePathForDisplay(file));
 				processedFiles.insert(file);
@@ -495,8 +496,8 @@ std::string compileProgram(const CompilationOptions &options) {
 			for (size_t i = 0; i < programs.size(); i++) {
 				if (programs[i]->hasParseErrors()) {
 					const auto &error = programs[i]->parseErrors[0];
-					std::cerr << "In file '" << normalizePathForDisplay(allFiles[i]) << "':\n"
-							  << error.message << std::endl;
+					logger.error(LogPhase::Parser, "In file '", normalizePathForDisplay(allFiles[i]), "':\n",
+								 error.message);
 					throw std::runtime_error("");
 				}
 			}
@@ -533,7 +534,7 @@ std::string compileProgram(const CompilationOptions &options) {
 					error.column,
 					"Semantic Error",
 					displayPath);
-				std::cerr << formattedError << std::endl;
+				logger.error(LogPhase::Semantic, formattedError);
 			}
 			throw std::runtime_error("");
 		}
@@ -606,7 +607,7 @@ std::string compileProgram(const CompilationOptions &options) {
 		if (stats)
 			stats->startPhase("Optimization");
 		auto optStart = logger.startTimer();
-		codegen.optimize(stats.get());
+		codegen.optimize(stats.get(), false);
 		logger.logElapsed(LogPhase::Opt, "Optimization time", optStart);
 		if (stats) {
 			stats->endPhase("Optimization");
@@ -656,9 +657,8 @@ std::string compileProgram(const CompilationOptions &options) {
 
 	// Print output info
 	if (options.showProgress) {
-		std::cout << "Output: " << outputFile << std::endl;
+		logger.progress(LogPhase::General, "Output: ", outputFile);
 	}
-	logger.progress(LogPhase::General, "Output: ", outputFile);
 	// Get file size using standard library
 	std::ifstream file(outputFile, std::ios::binary | std::ios::ate);
 	uint64_t outputFileSize = 0;

@@ -153,10 +153,6 @@ add_executable(maxon ${SOURCES})
 # Link Zydis disassembler library
 target_link_libraries(maxon PRIVATE Zydis)
 
-# Define MAXON_HAS_CODEGEN for the main compiler build
-# This enables IR generation features in compiler_api.cpp
-target_compile_definitions(maxon PRIVATE MAXON_HAS_CODEGEN)
-
 # Use precompiled headers for faster compilation
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
     target_precompile_headers(maxon PRIVATE pch.h)

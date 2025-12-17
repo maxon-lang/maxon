@@ -2,6 +2,7 @@
 #define CODEGEN_NG_H
 
 #include "ast.h"
+#include "logger.h"
 #include "mir/mir.h"
 #include "mir/mir_builder.h"
 #include "semantic_analyzer.h"
@@ -24,7 +25,7 @@ class MIRCodeGenerator {
 	std::unique_ptr<mir::MIRModule> module;
 	std::unique_ptr<mir::MIRBuilder> builder;
 
-	int verboseLevel;
+	Logger &logger_;
 
 	// Variable tracking: name -> alloca value
 	std::map<std::string, mir::MIRValue *> namedValues;
@@ -35,11 +36,6 @@ class MIRCodeGenerator {
 	void declareFunction(FunctionAST *func);
 	void generateFunction(FunctionAST *func);
 	void createEntryPoint();
-
-
-	// Logging helpers
-	void logProgress(const std::string &msg);
-	void logDetail(const std::string &msg);
 
 	// Output helpers (platform-specific)
 #ifdef _WIN32
@@ -68,8 +64,7 @@ class MIRCodeGenerator {
 				  const std::map<std::string, std::string> *functionReturnTypes = nullptr);
 
 	void setSynthesizedMethods(const std::vector<FunctionInfo> &) {} // stub
-	void optimize(CompilerStats *stats = nullptr);
-	void optimizeForExplorer();
+	void optimize(CompilerStats *stats, bool forExplorer);
 	void runDeadCodeElimination();
 
 	void printIR();

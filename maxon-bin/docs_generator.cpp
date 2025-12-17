@@ -1,10 +1,10 @@
 #include "docs_generator.h"
 #include "file_utils.h"
+#include "logger.h"
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <md4c/md4c-html.h>
 #include <regex>
 #include <sstream>
@@ -15,7 +15,7 @@ namespace fs = std::filesystem;
 static std::string readEntireFile(const std::string &filepath) {
 	std::ifstream file(filepath);
 	if (!file) {
-		std::cerr << "Error: Could not open file: " << filepath << std::endl;
+		GlobalLogger::instance().error(LogPhase::Docs, "Could not open file: ", filepath);
 		return "";
 	}
 
@@ -321,7 +321,7 @@ std::string DocsGenerator::markdownToHtml(const std::string &markdown) {
 	);
 
 	if (result != 0) {
-		std::cerr << "Error converting markdown to HTML" << std::endl;
+		GlobalLogger::instance().error(LogPhase::Docs, "Error converting markdown to HTML");
 		return "";
 	}
 
@@ -673,12 +673,12 @@ std::vector<DocsGenerator::SpecInfo> DocsGenerator::collectSpecs(const std::stri
 
 	// Report validation errors
 	if (!validationErrors.empty()) {
-		std::cerr << "\n"
-				  << validationErrors.size() << " validation error(s) found:" << std::endl;
+		Logger &logger = GlobalLogger::instance();
+		logger.error(LogPhase::Docs, validationErrors.size(), " validation error(s) found:");
 		for (const auto &error : validationErrors) {
-			std::cerr << "  " << error << std::endl;
+			logger.error(LogPhase::Docs, "  ", error);
 		}
-		std::cerr << "\nAll maxon code blocks in Documentation sections must have corresponding ```output blocks." << std::endl;
+		logger.error(LogPhase::Docs, "All maxon code blocks in Documentation sections must have corresponding ```output blocks.");
 		std::exit(1); // Exit immediately like the C# version did
 	}
 
@@ -692,7 +692,7 @@ bool DocsGenerator::createDirectoryIfNeeded(const std::string &path) {
 		}
 		return true;
 	} catch (const fs::filesystem_error &e) {
-		std::cerr << "Error creating directory " << path << ": " << e.what() << std::endl;
+		GlobalLogger::instance().error(LogPhase::Docs, "Error creating directory ", path, ": ", e.what());
 		return false;
 	}
 }
@@ -701,14 +701,12 @@ void DocsGenerator::generateStylesheet(const std::string &outputDir) {
 	std::string path = outputDir + "/style.css";
 	std::ofstream file(path);
 	if (!file) {
-		std::cerr << "Error creating style.css" << std::endl;
+		GlobalLogger::instance().error(LogPhase::Docs, "Error creating style.css");
 		return;
 	}
 
 	file << STYLESHEET_CSS;
 	file.close();
-
-	// std::cout << "Generated style.css" << std::endl;
 }
 
 void DocsGenerator::generateNavigationScript(const std::string &outputDir,
@@ -716,7 +714,7 @@ void DocsGenerator::generateNavigationScript(const std::string &outputDir,
 	std::string path = outputDir + "/nav.js";
 	std::ofstream file(path);
 	if (!file) {
-		std::cerr << "Error creating nav.js" << std::endl;
+		GlobalLogger::instance().error(LogPhase::Docs, "Error creating nav.js");
 		return;
 	}
 
@@ -898,7 +896,8 @@ std::string DocsGenerator::generateCategoryPage(const std::string &category,
 }
 
 int DocsGenerator::generateDocumentation() {
-	std::cout << "Generating documentation from specs..." << std::endl;
+	Logger &logger = GlobalLogger::instance();
+	logger.progress(LogPhase::Docs, "Generating documentation from specs...");
 
 	std::string specsPath = "specs";
 	std::string outputDir = "maxon-docs/Output";
@@ -917,7 +916,7 @@ int DocsGenerator::generateDocumentation() {
 			}
 		}
 	} catch (const fs::filesystem_error &e) {
-		std::cerr << "Error cleaning output directory: " << e.what() << std::endl;
+		logger.error(LogPhase::Docs, "Error cleaning output directory: ", e.what());
 	}
 
 	// Generate CSS file
@@ -953,14 +952,12 @@ int DocsGenerator::generateDocumentation() {
 
 		std::ofstream file(filename);
 		if (!file) {
-			std::cerr << "Error creating " << category << ".html" << std::endl;
+			logger.error(LogPhase::Docs, "Error creating ", category, ".html");
 			continue;
 		}
 
 		file << html;
 		file.close();
-
-		// std::cout << "Generated " << category << ".html (" << specs.size() << " specs)" << std::endl;
 	}
 
 	// Generate index page
@@ -969,14 +966,12 @@ int DocsGenerator::generateDocumentation() {
 
 	std::ofstream indexFile(indexPath);
 	if (!indexFile) {
-		std::cerr << "Error creating index.html" << std::endl;
+		logger.error(LogPhase::Docs, "Error creating index.html");
 		return 1;
 	}
 
 	indexFile << indexHtml;
 	indexFile.close();
-
-	// std::cout << "Generated index.html" << std::endl;
 
 	return 0;
 }

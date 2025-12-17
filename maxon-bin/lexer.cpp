@@ -9,6 +9,7 @@
 #include "lexer/lexer_keyword_matcher.h"
 #include "lexer/lexer_number_parser.h"
 #include "lexer/lexer_platform.h"
+#include "logger.h"
 #include "parser.h"
 #include "token_stream.h"
 
@@ -16,7 +17,6 @@
 #include <chrono>
 #include <cstdio>
 #include <iomanip>
-#include <iostream>
 #include <sstream>
 #include <stdexcept>
 
@@ -726,19 +726,20 @@ const char *get_lexer_capability() {
 
 void print_cpu_features() {
 	CPUFeature features = get_cached_cpu_features();
+	Logger &logger = GlobalLogger::instance();
 
-	printf("CPU Features:\n");
-	printf("  SSE2:     %s\n", has_feature(features, CPUFeature::SSE2) ? "YES" : "no");
-	printf("  SSE3:     %s\n", has_feature(features, CPUFeature::SSE3) ? "YES" : "no");
-	printf("  SSSE3:    %s\n", has_feature(features, CPUFeature::SSSE3) ? "YES" : "no");
-	printf("  SSE4.1:   %s\n", has_feature(features, CPUFeature::SSE41) ? "YES" : "no");
-	printf("  SSE4.2:   %s\n", has_feature(features, CPUFeature::SSE42) ? "YES" : "no");
-	printf("  AVX:      %s\n", has_feature(features, CPUFeature::AVX) ? "YES" : "no");
-	printf("  AVX2:     %s\n", has_feature(features, CPUFeature::AVX2) ? "YES" : "no");
-	printf("  AVX-512F: %s\n", has_feature(features, CPUFeature::AVX512F) ? "YES" : "no");
-	printf("  POPCNT:   %s\n", has_feature(features, CPUFeature::POPCNT) ? "YES" : "no");
-	printf("  BMI1:     %s\n", has_feature(features, CPUFeature::BMI1) ? "YES" : "no");
-	printf("  BMI2:     %s\n", has_feature(features, CPUFeature::BMI2) ? "YES" : "no");
+	logger.raw(1, "CPU Features:");
+	logger.raw(1, "  SSE2:     ", has_feature(features, CPUFeature::SSE2) ? "YES" : "no");
+	logger.raw(1, "  SSE3:     ", has_feature(features, CPUFeature::SSE3) ? "YES" : "no");
+	logger.raw(1, "  SSSE3:    ", has_feature(features, CPUFeature::SSSE3) ? "YES" : "no");
+	logger.raw(1, "  SSE4.1:   ", has_feature(features, CPUFeature::SSE41) ? "YES" : "no");
+	logger.raw(1, "  SSE4.2:   ", has_feature(features, CPUFeature::SSE42) ? "YES" : "no");
+	logger.raw(1, "  AVX:      ", has_feature(features, CPUFeature::AVX) ? "YES" : "no");
+	logger.raw(1, "  AVX2:     ", has_feature(features, CPUFeature::AVX2) ? "YES" : "no");
+	logger.raw(1, "  AVX-512F: ", has_feature(features, CPUFeature::AVX512F) ? "YES" : "no");
+	logger.raw(1, "  POPCNT:   ", has_feature(features, CPUFeature::POPCNT) ? "YES" : "no");
+	logger.raw(1, "  BMI1:     ", has_feature(features, CPUFeature::BMI1) ? "YES" : "no");
+	logger.raw(1, "  BMI2:     ", has_feature(features, CPUFeature::BMI2) ? "YES" : "no");
 }
 
 struct BenchmarkResult {
@@ -782,42 +783,55 @@ static BenchmarkResult benchmark_lexer(const std::string &source, int iterations
 }
 
 void run_lexer_benchmark(const std::string &source, const std::string &filename, int iterations) {
-	std::cout << "\n";
-	std::cout << "========================================\n";
-	std::cout << "Lexer Benchmark: " << filename << "\n";
-	std::cout << "========================================\n";
-	std::cout << "Source size: " << source.size() << " bytes\n";
-	std::cout << "Iterations:  " << iterations << "\n";
-	std::cout << "\n";
+	Logger &logger = GlobalLogger::instance();
+
+	logger.raw(1, "");
+	logger.raw(1, "========================================");
+	logger.raw(1, "Lexer Benchmark: ", filename);
+	logger.raw(1, "========================================");
+	logger.raw(1, "Source size: ", source.size(), " bytes");
+	logger.raw(1, "Iterations:  ", iterations);
+	logger.raw(1, "");
 
 	print_cpu_features();
-	std::cout << "\nSIMD Mode: " << get_lexer_capability() << "\n\n";
+	logger.raw(1, "");
+	logger.raw(1, "SIMD Mode: ", get_lexer_capability());
+	logger.raw(1, "");
 
-	std::cout << "Running lexer benchmark...\n";
+	logger.raw(1, "Running lexer benchmark...");
 	BenchmarkResult result = benchmark_lexer(source, iterations);
 
-	std::cout << "\n";
-	std::cout << "Results:\n";
-	std::cout << "----------------------------------------\n";
-	std::cout << std::fixed << std::setprecision(2);
+	std::ostringstream ss;
+	ss << std::fixed << std::setprecision(2);
 
-	std::cout << "Total time (ms):    " << std::setw(8) << result.total_ms << "\n";
-	std::cout << "Avg time (µs):      " << std::setw(8) << result.avg_time_per_iteration_us << "\n";
-	std::cout << "Tokens/ms:          " << std::setw(8) << result.tokens_per_ms << "\n";
-	std::cout << "MB/sec:             " << std::setw(8) << result.mb_per_sec << "\n";
-	std::cout << "----------------------------------------\n";
-	std::cout << "Token count:        " << result.token_count << "\n";
-	std::cout << "========================================\n";
+	logger.raw(1, "");
+	logger.raw(1, "Results:");
+	logger.raw(1, "----------------------------------------");
+
+	ss.str(""); ss << "Total time (ms):    " << std::setw(8) << result.total_ms;
+	logger.raw(1, ss.str());
+	ss.str(""); ss << "Avg time (µs):      " << std::setw(8) << result.avg_time_per_iteration_us;
+	logger.raw(1, ss.str());
+	ss.str(""); ss << "Tokens/ms:          " << std::setw(8) << result.tokens_per_ms;
+	logger.raw(1, ss.str());
+	ss.str(""); ss << "MB/sec:             " << std::setw(8) << result.mb_per_sec;
+	logger.raw(1, ss.str());
+
+	logger.raw(1, "----------------------------------------");
+	logger.raw(1, "Token count:        ", result.token_count);
+	logger.raw(1, "========================================");
 }
 
 void run_pipeline_benchmark(const std::string &source, const std::string &filename, int iterations) {
-	std::cout << "\n";
-	std::cout << "========================================\n";
-	std::cout << "Pipeline Benchmark: " << filename << "\n";
-	std::cout << "========================================\n";
-	std::cout << "Source size: " << source.size() << " bytes\n";
-	std::cout << "Iterations:  " << iterations << "\n";
-	std::cout << "\n";
+	Logger &logger = GlobalLogger::instance();
+
+	logger.raw(1, "");
+	logger.raw(1, "========================================");
+	logger.raw(1, "Pipeline Benchmark: ", filename);
+	logger.raw(1, "========================================");
+	logger.raw(1, "Source size: ", source.size(), " bytes");
+	logger.raw(1, "Iterations:  ", iterations);
+	logger.raw(1, "");
 
 	// Run lexer + parser pipeline
 	auto start = std::chrono::high_resolution_clock::now();
@@ -837,14 +851,20 @@ void run_pipeline_benchmark(const std::string &source, const std::string &filena
 	double avg_time_us = static_cast<double>(duration.count()) / iterations;
 	double mb_per_sec = (source.size() * iterations) / (total_ms * 1000.0);
 
-	std::cout << "\n";
-	std::cout << "Results (Lexer + Parser):\n";
-	std::cout << "----------------------------------------\n";
-	std::cout << std::fixed << std::setprecision(2);
+	std::ostringstream ss;
+	ss << std::fixed << std::setprecision(2);
 
-	std::cout << "Total time (ms):    " << std::setw(8) << total_ms << "\n";
-	std::cout << "Avg time (µs):      " << std::setw(8) << avg_time_us << "\n";
-	std::cout << "MB/sec:             " << std::setw(8) << mb_per_sec << "\n";
-	std::cout << "----------------------------------------\n";
-	std::cout << "========================================\n";
+	logger.raw(1, "");
+	logger.raw(1, "Results (Lexer + Parser):");
+	logger.raw(1, "----------------------------------------");
+
+	ss.str(""); ss << "Total time (ms):    " << std::setw(8) << total_ms;
+	logger.raw(1, ss.str());
+	ss.str(""); ss << "Avg time (µs):      " << std::setw(8) << avg_time_us;
+	logger.raw(1, ss.str());
+	ss.str(""); ss << "MB/sec:             " << std::setw(8) << mb_per_sec;
+	logger.raw(1, ss.str());
+
+	logger.raw(1, "----------------------------------------");
+	logger.raw(1, "========================================");
 }

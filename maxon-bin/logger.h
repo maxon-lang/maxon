@@ -17,6 +17,9 @@ enum class LogPhase {
 	x86,	  // [x86]
 	PE,		  // [PE]
 	ELF,	  // [ELF]
+	Docs,	  // [Docs]
+	Build,	  // [Build]
+	Bench,	  // [Bench]
 };
 
 /// Logger class for consistent, verbosity-aware logging throughout the compiler.
@@ -169,6 +172,12 @@ class Logger {
 			return "[PE] ";
 		case LogPhase::ELF:
 			return "[ELF] ";
+		case LogPhase::Docs:
+			return "[Docs] ";
+		case LogPhase::Build:
+			return "[Build] ";
+		case LogPhase::Bench:
+			return "[Bench] ";
 		}
 		return "";
 	}
@@ -203,3 +212,20 @@ class LogScope {
 
 /// Macro for convenient scope logging
 #define LOG_SCOPE(logger, phase, name) LogScope _logScope##__LINE__(logger, phase, name)
+
+/// Global logger singleton for components without direct logger access.
+/// Initialize with GlobalLogger::init(verboseLevel) at compiler startup.
+class GlobalLogger {
+  public:
+	/// Get the global logger instance
+	static Logger &instance() {
+		static Logger logger;
+		return logger;
+	}
+
+	/// Initialize the global logger with a verbosity level
+	static void init(int verboseLevel) { instance().setVerboseLevel(verboseLevel); }
+
+	/// Convenience access to verbosity level
+	static int getVerboseLevel() { return instance().getVerboseLevel(); }
+};

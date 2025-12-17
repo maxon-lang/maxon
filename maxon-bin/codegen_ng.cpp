@@ -9,17 +9,16 @@
 #include "compiler_stats.h"
 #include "mir/optimizer.h"
 
-#include <iostream>
-
 //==============================================================================
 // Constructor / Destructor
 //==============================================================================
 
 MIRCodeGenerator::MIRCodeGenerator(const std::string &moduleName, bool debugInfo,
 								   int verboseLevel, bool trackAllocs)
-	: verboseLevel(verboseLevel) {
-	(void)debugInfo;   // Not used in minimal implementation
-	(void)trackAllocs; // Not used in minimal implementation
+	: logger_(GlobalLogger::instance()) {
+	(void)debugInfo;	// Not used in minimal implementation
+	(void)trackAllocs;	// Not used in minimal implementation
+	(void)verboseLevel; // Now handled by GlobalLogger
 
 	module = std::make_unique<mir::MIRModule>(moduleName);
 #ifdef _WIN32
@@ -31,22 +30,6 @@ MIRCodeGenerator::MIRCodeGenerator(const std::string &moduleName, bool debugInfo
 }
 
 MIRCodeGenerator::~MIRCodeGenerator() = default;
-
-//==============================================================================
-// Logging Helpers
-//==============================================================================
-
-void MIRCodeGenerator::logProgress(const std::string &msg) {
-	if (verboseLevel >= 1) {
-		std::cout << "[MIR] " << msg << std::endl;
-	}
-}
-
-void MIRCodeGenerator::logDetail(const std::string &msg) {
-	if (verboseLevel >= 2) {
-		std::cout << "[MIR]   " << msg << std::endl;
-	}
-}
 
 //==============================================================================
 // Variable/Parameter Generation Helper
@@ -90,7 +73,7 @@ void MIRCodeGenerator::trackVariable(const std::string &name, mir::MIRValue *val
 void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 								const std::map<std::string, size_t> *,
 								const std::map<std::string, std::string> *) {
-	logProgress("Generating MIR...");
+	logger_.progress(LogPhase::MIR, "Generating MIR...");
 
 	// First pass: declare all functions (so calls can resolve)
 	for (auto &func : program->functions) {
@@ -107,35 +90,26 @@ void MIRCodeGenerator::generate(ProgramAST *program, bool needsEntryPoint,
 		createEntryPoint();
 	}
 
-	logProgress("MIR generation complete: " + std::to_string(module->functions.size()) + " functions");
+	logger_.progress(LogPhase::MIR, "MIR generation complete: ", module->functions.size(), " functions");
 }
 
 //==============================================================================
 // Optimization
 //==============================================================================
 
-void MIRCodeGenerator::optimize(CompilerStats *stats) {
-	logProgress("Running optimization passes...");
+void MIRCodeGenerator::optimize(CompilerStats *stats, bool skipForExplorer) {
+	logger_.progress(LogPhase::Opt, "Running optimization passes...");
 
-	mir::MIROptimizer optimizer = mir::MIROptimizer::createOptimizerPipeline(verboseLevel, false);
+	mir::MIROptimizer optimizer = mir::MIROptimizer::createOptimizerPipeline(logger_.getVerboseLevel(), skipForExplorer);
 	optimizer.runPasses(*module, 10, stats);
 
-	logProgress("Optimization complete");
-}
-
-void MIRCodeGenerator::optimizeForExplorer() {
-	logProgress("Running explorer optimization passes...");
-
-	mir::MIROptimizer optimizer = mir::MIROptimizer::createOptimizerPipeline(verboseLevel, true);
-	optimizer.runPasses(*module, 10, nullptr);
-
-	logProgress("Explorer optimization complete");
+	logger_.progress(LogPhase::Opt, "Optimization complete");
 }
 
 void MIRCodeGenerator::runDeadCodeElimination() {
-	logDetail("Running dead code elimination");
+	logger_.detail(LogPhase::Opt, "Running dead code elimination");
 	mir::DeadCodeEliminationPass dce;
-	dce.setVerboseLevel(verboseLevel);
+	dce.setVerboseLevel(logger_.getVerboseLevel());
 	dce.run(*module);
 }
 

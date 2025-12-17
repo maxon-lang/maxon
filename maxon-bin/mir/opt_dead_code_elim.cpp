@@ -1,7 +1,6 @@
 #include "optimizer.h"
 #include <algorithm>
 #include <functional>
-#include <iostream>
 #include <unordered_set>
 
 namespace mir {
@@ -15,7 +14,7 @@ bool DeadCodeEliminationPass::run(MIRModule &module) {
 
 	// Debug: verify MIR integrity before DCE
 	if (verboseLevel_ >= 2) {
-		std::cout << "[DCE] Verifying MIR integrity before DCE..." << std::endl;
+		logDetail("Verifying MIR integrity before DCE...");
 		for (const auto &func : module.functions) {
 			if (func->isExternal)
 				continue;
@@ -25,17 +24,16 @@ bool DeadCodeEliminationPass::run(MIRModule &module) {
 					for (size_t j = 0; j < inst->operands.size(); j++) {
 						auto *op = inst->operands[j];
 						if (!op) {
-							std::cout << "[DCE ERROR] Function " << func->name
-									  << " block " << block->name
-									  << " inst " << i << " (opcode=" << static_cast<int>(inst->opcode)
-									  << ") has NULL operand " << j
-									  << " (total operands: " << inst->operands.size() << ")" << std::endl;
+							GlobalLogger::instance().error(LogPhase::Opt,
+								"DCE: Function ", func->name, " block ", block->name,
+								" inst ", i, " (opcode=", static_cast<int>(inst->opcode),
+								") has NULL operand ", j, " (total operands: ", inst->operands.size(), ")");
 						}
 					}
 				}
 			}
 		}
-		std::cout << "[DCE] Integrity check complete." << std::endl;
+		logDetail("Integrity check complete.");
 	}
 
 	// First, eliminate unused functions (function-level DCE)
@@ -235,8 +233,7 @@ bool DeadCodeEliminationPass::eliminateUnusedGlobals(MIRModule &module) {
 	bool changed = (module.globals.size() < originalSize);
 	if (changed && verboseLevel_ >= 2) {
 		size_t eliminated = originalSize - module.globals.size();
-		std::cout << "  Dead Code Elimination: removed " << eliminated
-				  << " unused global(s)" << std::endl;
+		logDetail("removed " + std::to_string(eliminated) + " unused global(s)");
 	}
 
 	return changed;

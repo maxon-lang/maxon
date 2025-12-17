@@ -7,7 +7,7 @@
 #include <stdexcept>
 
 void MIRCodeGenerator::declareFunction(FunctionAST *func) {
-	logDetail("Declaring function: " + func->name);
+	logger_.detail(LogPhase::MIR, "Declaring function: ", func->name);
 
 	mir::MIRType *returnType = mir::MIRType::fromName(func->returnType);
 
@@ -22,7 +22,7 @@ void MIRCodeGenerator::declareFunction(FunctionAST *func) {
 }
 
 void MIRCodeGenerator::generateFunction(FunctionAST *func) {
-	logDetail("Generating function body: " + func->name);
+	logger_.detail(LogPhase::MIR, "Generating function body: ", func->name);
 
 	// Clear variable tracking for new function scope
 	namedValues.clear();
@@ -70,7 +70,7 @@ void MIRCodeGenerator::generateFunction(FunctionAST *func) {
 }
 
 void MIRCodeGenerator::createEntryPoint() {
-	logDetail("Creating entry point (_start)");
+	logger_.detail(LogPhase::MIR, "Creating entry point (_start)");
 
 	// Declare exit from runtime
 	std::vector<std::pair<mir::MIRType *, std::string>> exitParams = {

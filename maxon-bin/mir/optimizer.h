@@ -1,9 +1,9 @@
 #pragma once
 
+#include "../logger.h"
 #include "memory_ssa.h"
 #include "mir.h"
 #include <functional>
-#include <iostream>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -47,16 +47,12 @@ class OptimizationPass {
 	int verboseLevel_ = 0;
 	int lastRunStats_ = 0; // Pass-specific stat counter for last run
 
-	// Logging helpers
+	// Logging helpers - use GlobalLogger
 	void logDetail(const std::string &msg) const {
-		if (verboseLevel_ >= 2) {
-			std::cout << "[Opt] " << getName() << ": " << msg << std::endl;
-		}
+		GlobalLogger::instance().detail(LogPhase::Opt, getName(), ": ", msg);
 	}
 	void logTrace(const std::string &msg) const {
-		if (verboseLevel_ >= 3) {
-			std::cout << "[Opt]   " << getName() << ": " << msg << std::endl;
-		}
+		GlobalLogger::instance().trace(LogPhase::Opt, getName(), ": ", msg);
 	}
 };
 

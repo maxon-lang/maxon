@@ -15,7 +15,6 @@
 #include "../backend/x86_disassembler.h"
 
 #include <fstream>
-#include <iostream>
 
 #ifdef _WIN32
 #include "../backend/pe_writer.h"
@@ -41,7 +40,7 @@ void MIRCodeGenerator::writeIRToFile(const std::string &filename) {
 }
 
 void MIRCodeGenerator::writeAsmToFile(const std::string &filename) {
-	logProgress("Generating assembly file: " + filename);
+	logger_.progress(LogPhase::x86, "Generating assembly file: ", filename);
 
 	// Run PHI elimination (required before x86 codegen)
 	mir::PhiEliminationPass phiElim;
@@ -67,7 +66,7 @@ void MIRCodeGenerator::writeAsmToFile(const std::string &filename) {
 	file << assembly;
 	file.close();
 
-	logProgress("Assembly file written");
+	logger_.progress(LogPhase::x86, "Assembly file written");
 }
 
 void MIRCodeGenerator::writeObjectFile(const std::string &filename) {
@@ -108,9 +107,7 @@ static std::string findRuntimeFile(const std::string &filename) {
 //==============================================================================
 
 void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
-	if (verboseLevel >= 1) {
-		std::cout << "Generating executable: " << exeFile << std::endl;
-	}
+	logger_.progress(LogPhase::x86, "Generating executable: ", exeFile);
 
 	bool isWindows = (module->targetTriple.find("windows") != std::string::npos);
 
@@ -118,14 +115,12 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 	auto mergeRuntime = [this](const std::string &runtimeMirPath) {
 		auto runtimeResult = mir::MIRParser::parseFile(runtimeMirPath);
 		if (!runtimeResult.errors.empty()) {
-			std::cerr << "Warning: Failed to parse runtime library at line " << runtimeResult.errors[0].line
-					  << ": " << runtimeResult.errors[0].message << std::endl;
+			logger_.warning(LogPhase::MIR, "Failed to parse runtime library at line ",
+							runtimeResult.errors[0].line, ": ", runtimeResult.errors[0].message);
 			return;
 		}
 		if (!runtimeResult.module) {
-			if (verboseLevel >= 1) {
-				std::cerr << "Warning: Runtime module is null after parsing: " << runtimeMirPath << std::endl;
-			}
+			logger_.warning(LogPhase::MIR, "Runtime module is null after parsing: ", runtimeMirPath);
 			return;
 		}
 
@@ -178,12 +173,10 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 	std::string platformMirPath = findRuntimeFile(platformRuntimePath);
 
 	if (!platformMirPath.empty()) {
-		if (verboseLevel >= 2) {
-			std::cout << "[MIR] Loading runtime: " << platformMirPath << std::endl;
-		}
+		logger_.detail(LogPhase::MIR, "Loading runtime: ", platformMirPath);
 		mergeRuntime(platformMirPath);
-	} else if (verboseLevel >= 1) {
-		std::cerr << "Warning: Runtime not found: " << platformRuntimePath << std::endl;
+	} else {
+		logger_.warning(LogPhase::MIR, "Runtime not found: ", platformRuntimePath);
 	}
 
 	// Update calleeFunc pointers in all call instructions
@@ -199,12 +192,12 @@ void MIRCodeGenerator::writeExecutable(const std::string &exeFile) {
 
 	// Run dead code elimination after merging runtime
 	mir::DeadCodeEliminationPass dce;
-	dce.setVerboseLevel(verboseLevel);
+	dce.setVerboseLevel(logger_.getVerboseLevel());
 	dce.run(*module);
 
 	// Run PHI elimination
 	mir::PhiEliminationPass phiElim;
-	phiElim.setVerboseLevel(verboseLevel);
+	phiElim.setVerboseLevel(logger_.getVerboseLevel());
 	phiElim.run(*module);
 
 	// Generate x86-64 code
@@ -416,9 +409,7 @@ void MIRCodeGenerator::writeWindowsExecutable(
 		throw std::runtime_error("Failed to write PE executable");
 	}
 
-	if (verboseLevel >= 1) {
-		std::cout << "Executable written: " << exeFile << std::endl;
-	}
+	logger_.progress(LogPhase::PE, "Executable written: ", exeFile);
 }
 #endif
 
@@ -454,8 +445,6 @@ void MIRCodeGenerator::writeLinuxExecutable(
 		throw std::runtime_error("Failed to write ELF executable");
 	}
 
-	if (verboseLevel >= 1) {
-		std::cout << "Executable written: " << exeFile << std::endl;
-	}
+	logger_.progress(LogPhase::ELF, "Executable written: ", exeFile);
 }
 #endif

@@ -1,11 +1,11 @@
 #include "build_runner.h"
+#include "logger.h"
 
 #include <array>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <memory>
 #include <sstream>
 
@@ -53,8 +53,9 @@ std::optional<std::string> executeBuildMaxon(const std::string &buildFile) {
 	// Temporarily parse build.maxon directly instead of compiling it
 	auto projectName = extractProjectName(buildFile);
 	if (!projectName) {
-		std::cerr << "Error: Could not extract project name from build.maxon\n";
-		std::cerr << "Expected: build(\"project-name\") call\n";
+		Logger &logger = GlobalLogger::instance();
+		logger.error(LogPhase::Build, "Could not extract project name from build.maxon");
+		logger.error(LogPhase::Build, "Expected: build(\"project-name\") call");
 		return std::nullopt;
 	}
 
@@ -178,7 +179,7 @@ std::optional<BuildConfig> parseBuildConfig(const std::string &json) {
 
 	config.name = extractJsonString(json, "name");
 	if (config.name.empty()) {
-		std::cerr << "Error: build.maxon output missing 'name' field\n";
+		GlobalLogger::instance().error(LogPhase::Build, "build.maxon output missing 'name' field");
 		return std::nullopt;
 	}
 
