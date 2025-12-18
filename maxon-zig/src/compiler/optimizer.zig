@@ -140,10 +140,33 @@ fn copyPropagation(func: *ir.Function, allocator: std.mem.Allocator) !void {
                     // Rewrite operands to use propagated values
                     var new_inst = inst;
                     for (&new_inst.operands) |*op| {
-                        if (op.* == .value) {
-                            if (value_map.get(op.value)) |propagated| {
-                                op.* = .{ .value = propagated };
-                            }
+                        switch (op.*) {
+                            .value => |v| {
+                                if (value_map.get(v)) |propagated| {
+                                    op.* = .{ .value = propagated };
+                                }
+                            },
+                            .call_args => |args| {
+                                // Check if any arg needs propagation
+                                var needs_update = false;
+                                for (args) |arg| {
+                                    if (value_map.contains(arg)) {
+                                        needs_update = true;
+                                        break;
+                                    }
+                                }
+                                if (needs_update) {
+                                    // Allocate with func.allocator so deinit can free it
+                                    const new_args = try func.allocator.alloc(ir.Value, args.len);
+                                    for (args, 0..) |arg, i| {
+                                        new_args[i] = value_map.get(arg) orelse arg;
+                                    }
+                                    // Free old args
+                                    func.allocator.free(args);
+                                    op.* = .{ .call_args = new_args };
+                                }
+                            },
+                            else => {},
                         }
                     }
                     try new_instructions.append(allocator, new_inst);

@@ -235,26 +235,49 @@ pub const Parser = struct {
             _ = try self.expect(.newline);
             return stmt;
         }
-        // Check for index assignment: expr[idx] = value
+        // Check for assignment, index assignment, or call statement: identifier...
         if (self.check(.identifier)) {
             const start_pos = self.pos;
+            const start_line = self.line;
             // Try to parse as expression
             const expr = try self.parseExpression() orelse return error.ExpectedExpression;
 
-            // Check if this is an index expression followed by '='
-            if (expr == .index and self.check(.equals)) {
+            // Check if followed by '='
+            if (self.check(.equals)) {
                 _ = self.advance(); // consume '='
                 const value = try self.parseExpression() orelse return error.ExpectedExpression;
                 _ = try self.expect(.newline);
-                return .{ .index_assign = .{
-                    .base = expr.index.base,
-                    .index = expr.index.index,
-                    .value = value,
-                } };
+
+                // Check if this is an index expression (arr[i] = value)
+                if (expr == .index) {
+                    return .{ .index_assign = .{
+                        .base = expr.index.base,
+                        .index = expr.index.index,
+                        .value = value,
+                    } };
+                }
+
+                // Check if this is a simple identifier (x = value)
+                if (expr == .identifier) {
+                    return .{ .assign = .{
+                        .target = expr.identifier,
+                        .value = value,
+                    } };
+                }
+
+                // Other expressions on LHS not supported
+                return error.UnexpectedToken;
             }
 
-            // Not an index assignment, restore position
+            // Check if this is a call expression (standalone function call)
+            if (expr == .call) {
+                _ = try self.expect(.newline);
+                return .{ .call = expr.call };
+            }
+
+            // Not an assignment or call, restore position
             self.pos = start_pos;
+            self.line = start_line;
         }
         return error.UnexpectedToken;
     }

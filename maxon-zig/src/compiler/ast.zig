@@ -40,11 +40,18 @@ pub const IndexAssign = struct {
     value: Expression,
 };
 
+pub const AssignStmt = struct {
+    target: []const u8,
+    value: Expression,
+};
+
 pub const Statement = union(enum) {
     @"return": ReturnStmt,
     let_decl: VarDecl,
     var_decl: VarDecl,
     index_assign: IndexAssign,
+    assign: AssignStmt,
+    call: CallExpr,
 };
 
 pub const VarDecl = struct {

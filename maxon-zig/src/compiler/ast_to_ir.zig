@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ir = @import("ir.zig");
 const debug = @import("debug.zig");
+const mutation_analysis = @import("mutation_analysis.zig");
 
 /// Typed value - tracks IR value with its type
 const TypedValue = struct {
@@ -84,6 +85,12 @@ const EnumInfo = struct {
     members: std.StringHashMapUnmanaged(i64),
 };
 
+/// Ownership state of a variable
+const OwnershipState = enum {
+    owned, // Variable owns its value, can be used
+    moved, // Ownership transferred, cannot be used
+};
+
 /// Converts AST to IR
 pub const AstToIr = struct {
     allocator: std.mem.Allocator,
@@ -99,14 +106,21 @@ pub const AstToIr = struct {
     enum_map: std.StringHashMapUnmanaged(EnumInfo),
     // Track whether current declaration is mutable (var) or immutable (let)
     current_decl_is_mutable: bool,
+    // Mutation analysis for ownership tracking
+    mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer,
+    // Current line number for error reporting
+    current_line: usize,
 
     const VarInfo = struct {
         ptr: ir.Value,
         ty: ValueType,
         used: bool,
+        state: OwnershipState,
+        moved_to: ?[]const u8, // Function that took ownership
+        moved_line: usize, // Line where move occurred
     };
 
-    pub fn init(allocator: std.mem.Allocator) AstToIr {
+    pub fn init(allocator: std.mem.Allocator, mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer) AstToIr {
         return .{
             .allocator = allocator,
             .module = ir.Module.init(allocator),
@@ -116,6 +130,8 @@ pub const AstToIr = struct {
             .func_map = .{},
             .enum_map = .{},
             .current_decl_is_mutable = false,
+            .mutation_analyzer = mutation_analyzer,
+            .current_line = 1,
         };
     }
 
@@ -273,6 +289,9 @@ pub const AstToIr = struct {
                     .ptr = param_val,
                     .ty = .{ .struct_type = type_info.?.struct_type.name },
                     .used = false,
+                    .state = .owned,
+                    .moved_to = null,
+                    .moved_line = 0,
                 });
             } else {
                 // Primitive parameter
@@ -285,6 +304,9 @@ pub const AstToIr = struct {
                     .ptr = ptr,
                     .ty = .{ .primitive = param_type },
                     .used = false,
+                    .state = .owned,
+                    .moved_to = null,
+                    .moved_line = 0,
                 });
             }
         }
@@ -317,8 +339,52 @@ pub const AstToIr = struct {
             .@"return" => |ret| {
                 try self.convertReturn(ret);
             },
-            .index_assign => |assign| {
-                try self.convertIndexAssign(assign);
+            .index_assign => |idx_assign| {
+                try self.convertIndexAssign(idx_assign);
+            },
+            .assign => |assign| {
+                try self.convertAssignment(assign);
+            },
+            .call => |call| {
+                // Standalone call statement - convert and discard result
+                _ = try self.convertCall(call);
+            },
+        }
+        self.current_line += 1;
+    }
+
+    fn convertAssignment(self: *AstToIr, assign: ast.AssignStmt) ConvertError!void {
+        const func = self.current_func.?;
+
+        // Check if variable exists
+        const var_info = self.var_map.getPtr(assign.target) orelse {
+            std.debug.print("error: undefined variable '{s}'\n", .{assign.target});
+            return error.UndefinedVariable;
+        };
+
+        // Check ownership - cannot assign to moved variable
+        if (var_info.state == .moved) {
+            std.debug.print("error: cannot assign to variable '{s}' after ownership was transferred to '{s}' at line {d}\n", .{
+                assign.target,
+                var_info.moved_to orelse "unknown",
+                var_info.moved_line,
+            });
+            return error.UseAfterMove;
+        }
+
+        var_info.used = true;
+
+        // Convert the new value
+        const value_typed = try self.convertExpression(assign.value);
+
+        // Store the value based on type
+        switch (var_info.ty) {
+            .primitive => {
+                try func.emitStore(var_info.ptr, value_typed.value);
+            },
+            .struct_type, .array_type => {
+                // For compound types, update the pointer
+                var_info.ptr = value_typed.value;
             },
         }
     }
@@ -341,6 +407,9 @@ pub const AstToIr = struct {
                     .ptr = init_typed.value,
                     .ty = init_typed.ty,
                     .used = false,
+                    .state = .owned,
+                    .moved_to = null,
+                    .moved_line = 0,
                 });
             },
             .primitive => |prim_ty| {
@@ -351,6 +420,9 @@ pub const AstToIr = struct {
                     .ptr = ptr,
                     .ty = init_typed.ty,
                     .used = false,
+                    .state = .owned,
+                    .moved_to = null,
+                    .moved_line = 0,
                 });
             },
         }
@@ -376,7 +448,7 @@ pub const AstToIr = struct {
         }
     }
 
-    const ConvertError = error{ OutOfMemory, UndefinedVariable, FloatModNotSupported, WrongArgumentCount, ExpectedFloat, UnknownType, UnknownField };
+    const ConvertError = error{ OutOfMemory, UndefinedVariable, FloatModNotSupported, WrongArgumentCount, ExpectedFloat, UnknownType, UnknownField, UseAfterMove };
 
     fn convertExpression(self: *AstToIr, expr: ast.Expression) ConvertError!TypedValue {
         const func = self.current_func.?;
@@ -392,6 +464,15 @@ pub const AstToIr = struct {
             },
             .identifier => |name| {
                 if (self.var_map.getPtr(name)) |info| {
+                    // Check ownership - cannot use a moved variable
+                    if (info.state == .moved) {
+                        std.debug.print("error: cannot use variable '{s}' after ownership was transferred to '{s}' at line {d}\n", .{
+                            name,
+                            info.moved_to orelse "unknown",
+                            info.moved_line,
+                        });
+                        return error.UseAfterMove;
+                    }
                     info.used = true;
                     // For structs and arrays, return the pointer directly
                     // For primitives, load the value
@@ -575,6 +656,22 @@ pub const AstToIr = struct {
             args[i] = arg.value;
             // Mark arguments as escaping (callee may read them)
             try ir_func.markEscaping(arg.value);
+
+            // Check for ownership transfer: if callee mutates this parameter,
+            // and the argument is a simple variable, transfer ownership
+            if (self.mutation_analyzer) |analyzer| {
+                if (analyzer.doesMutateParam(call.func_name, i)) {
+                    // This function mutates this parameter - transfer ownership
+                    if (arg_expr == .identifier) {
+                        const var_name = arg_expr.identifier;
+                        if (self.var_map.getPtr(var_name)) |var_info| {
+                            var_info.state = .moved;
+                            var_info.moved_to = call.func_name;
+                            var_info.moved_line = self.current_line;
+                        }
+                    }
+                }
+            }
         }
 
         // Emit call with arguments
@@ -703,8 +800,8 @@ pub const AstToIr = struct {
     }
 };
 
-pub fn convert(program: ast.Program, allocator: std.mem.Allocator) !ir.Module {
-    var converter = AstToIr.init(allocator);
+pub fn convert(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer) !ir.Module {
+    var converter = AstToIr.init(allocator, mutation_analyzer);
     defer converter.deinit();
     return try converter.convert(program);
 }

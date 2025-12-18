@@ -3,6 +3,7 @@ const Lexer = @import("lexer.zig").Lexer;
 const Parser = @import("parser.zig").Parser;
 const ast = @import("ast.zig");
 const ast_to_ir = @import("ast_to_ir.zig");
+const mutation_analysis = @import("mutation_analysis.zig");
 const optimizer = @import("optimizer.zig");
 const ir_codegen = @import("ir_codegen.zig");
 const pe = @import("pe.zig");
@@ -50,8 +51,15 @@ pub fn compileToIr(source: []const u8, allocator: std.mem.Allocator) ![]const u8
         allocator.free(program.functions);
     }
 
-    // Convert AST to IR
-    var ir_module = ast_to_ir.convert(program, allocator) catch {
+    // Run mutation analysis for ownership tracking
+    var mutation_analyzer = mutation_analysis.MutationAnalyzer.init(allocator);
+    defer mutation_analyzer.deinit();
+    mutation_analyzer.analyze(program) catch {
+        return error.IrError;
+    };
+
+    // Convert AST to IR with ownership checking
+    var ir_module = ast_to_ir.convert(program, allocator, &mutation_analyzer) catch {
         return error.IrError;
     };
     defer ir_module.deinit();
@@ -105,8 +113,15 @@ pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.A
         allocator.free(program.functions);
     }
 
-    // Convert AST to IR
-    var ir_module = ast_to_ir.convert(program, allocator) catch |err| {
+    // Run mutation analysis for ownership tracking
+    var mutation_analyzer = mutation_analysis.MutationAnalyzer.init(allocator);
+    defer mutation_analyzer.deinit();
+    mutation_analyzer.analyze(program) catch {
+        return error.IrError;
+    };
+
+    // Convert AST to IR with ownership checking
+    var ir_module = ast_to_ir.convert(program, allocator, &mutation_analyzer) catch |err| {
         std.debug.print("AST to IR error: {}\n", .{err});
         return error.IrError;
     };
@@ -170,10 +185,19 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
                 freeExpressionArgs(expr, allocator);
             }
         },
-        .index_assign => |assign| {
-            freeExpressionArgs(assign.base.*, allocator);
-            freeExpressionArgs(assign.index.*, allocator);
+        .index_assign => |idx_assign| {
+            freeExpressionArgs(idx_assign.base.*, allocator);
+            freeExpressionArgs(idx_assign.index.*, allocator);
+            freeExpressionArgs(idx_assign.value, allocator);
+        },
+        .assign => |assign| {
             freeExpressionArgs(assign.value, allocator);
+        },
+        .call => |call| {
+            for (call.args) |arg| {
+                freeExpressionArgs(arg, allocator);
+            }
+            allocator.free(call.args);
         },
     }
 }
