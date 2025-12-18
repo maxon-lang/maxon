@@ -79,7 +79,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-variable 'd' was moved
+use of moved variable
 ```
 
 <!-- test: use-after-move-in-expression-error -->
@@ -102,7 +102,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-variable 'd' was moved
+use of moved variable
 ```
 
 <!-- test: borrow-after-borrow-ok -->
@@ -196,7 +196,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-cannot move immutable variable 'd'
+cannot move immutable variable
 ```
 
 <!-- test: let-struct-use-after-borrow-ok -->
@@ -236,7 +236,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-cannot assign to immutable variable 'd'
+cannot assign to immutable variable
 ```
 
 <!-- test: var-from-let-can-move -->

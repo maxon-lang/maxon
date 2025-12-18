@@ -78,6 +78,12 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
                 std.debug.print("Out of memory\n", .{});
                 std.process.exit(1);
             };
+        } else if (std.mem.endsWith(u8, src_path, ".test")) {
+            const base = src_path[0 .. src_path.len - 5];
+            break :blk std.fmt.allocPrint(allocator, "{s}.exe", .{base}) catch {
+                std.debug.print("Out of memory\n", .{});
+                std.process.exit(1);
+            };
         } else {
             break :blk std.fmt.allocPrint(allocator, "{s}.exe", .{src_path}) catch {
                 std.debug.print("Out of memory\n", .{});
@@ -87,9 +93,15 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     };
     defer allocator.free(output_path);
 
-    // Compile
-    compiler.compile(source, output_path, allocator) catch |err| {
-        std.debug.print("Compilation failed: {}\n", .{err});
+    // Compile with error info
+    var result: compiler.CompileResult = .{ .error_info = null };
+    compiler.compileWithFile(source, output_path, src_path, allocator, &result) catch |err| {
+        // Display structured error if available
+        if (result.error_info) |error_info| {
+            error_info.printToStderr();
+        } else {
+            std.debug.print("Compilation failed: {}\n", .{err});
+        }
         std.process.exit(1);
     };
 

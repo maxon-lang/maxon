@@ -1,6 +1,6 @@
 ---
 feature: challenge-struct-field-assign
-status: draft
+status: stable
 keywords: struct, field, assignment, mutation
 category: semantics
 ---

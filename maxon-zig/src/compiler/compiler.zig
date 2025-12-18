@@ -8,6 +8,7 @@ const optimizer = @import("optimizer.zig");
 const ir_codegen = @import("ir_codegen.zig");
 const pe = @import("pe.zig");
 pub const debug = @import("debug.zig");
+pub const compile_error = @import("error.zig");
 
 pub const CompileError = error{
     LexerError,
@@ -15,6 +16,11 @@ pub const CompileError = error{
     IrError,
     CodegenError,
     WriteError,
+};
+
+/// Result of compilation with optional error info
+pub const CompileResult = struct {
+    error_info: ?compile_error.CompileError,
 };
 
 /// Compile source and return the IR as a string (for fragment generation)
@@ -76,6 +82,15 @@ pub fn compileToIr(source: []const u8, allocator: std.mem.Allocator) ![]const u8
 }
 
 pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.Allocator) !void {
+    var result: CompileResult = .{ .error_info = null };
+    return compileWithInfo(source, output_path, null, allocator, &result);
+}
+
+pub fn compileWithFile(source: []const u8, output_path: []const u8, source_file: []const u8, allocator: std.mem.Allocator, result: *CompileResult) !void {
+    return compileWithInfo(source, output_path, source_file, allocator, result);
+}
+
+fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]const u8, allocator: std.mem.Allocator, result: *CompileResult) !void {
     // Lex
     var lexer = Lexer.init(source);
     const tokens = lexer.tokenize(allocator) catch {
@@ -84,9 +99,13 @@ pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.A
     defer allocator.free(tokens);
 
     // Parse
-    var parser = Parser.init(tokens, allocator);
+    var parser = if (source_file) |sf|
+        Parser.initWithFile(tokens, allocator, sf)
+    else
+        Parser.init(tokens, allocator);
     defer parser.deinit();
     const program = parser.parse() catch {
+        result.error_info = parser.last_error;
         return error.ParserError;
     };
     defer {
@@ -121,8 +140,10 @@ pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.A
     };
 
     // Convert AST to IR with ownership checking
-    var ir_module = ast_to_ir.convert(program, allocator, &mutation_analyzer) catch |err| {
-        std.debug.print("AST to IR error: {}\n", .{err});
+    var ir_error: ?compile_error.CompileError = null;
+    var ir_module = ast_to_ir.convertWithFile(program, allocator, &mutation_analyzer, source_file, &ir_error) catch |e| {
+        debug.astToIr("AST to IR error: {}\n", .{e});
+        result.error_info = ir_error;
         return error.IrError;
     };
     defer ir_module.deinit();

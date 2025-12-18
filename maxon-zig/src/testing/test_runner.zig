@@ -3,18 +3,19 @@ const testing = @import("testing.zig");
 const fragment_gen = @import("fragment_generator.zig");
 
 const SPECS_DIR = "specs";
-const FRAGMENTS_DIR = "specs/fragments";
-const TEMP_DIR = "specs/temp";
+const FRAGMENTS_DIR = "specs" ++ std.fs.path.sep_str ++ "fragments";
 
 /// Parsed fragment file
 pub const Fragment = struct {
     name: []const u8,
     source: []const u8,
+    file_path: []const u8,
     expected: testing.TestExpectation,
 
     pub fn deinit(self: *Fragment, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.source);
+        allocator.free(self.file_path);
         switch (self.expected) {
             .success => |s| {
                 if (s.stdout) |stdout| allocator.free(stdout);
@@ -33,9 +34,6 @@ pub fn runAllTests(
     _ = fragment_gen.regenerateIfNeeded(allocator, SPECS_DIR, FRAGMENTS_DIR) catch |err| {
         std.debug.print("Warning: Could not check/regenerate fragments: {}\n", .{err});
     };
-
-    // Ensure temp directory exists
-    std.fs.cwd().makePath(TEMP_DIR) catch {};
 
     // Collect all fragment files
     var fragments_dir = std.fs.cwd().openDir(FRAGMENTS_DIR, .{ .iterate = true }) catch |err| {
@@ -68,8 +66,15 @@ pub fn runAllTests(
         };
         defer allocator.free(content);
 
+        // Build full path to fragment file
+        const fragment_path = std.fs.path.join(allocator, &.{ FRAGMENTS_DIR, entry.name }) catch |err| {
+            std.debug.print("Error building path for '{s}': {}\n", .{ entry.name, err });
+            continue;
+        };
+        defer allocator.free(fragment_path);
+
         // Parse fragment
-        var fragment = parseFragment(allocator, content) catch |err| {
+        var fragment = parseFragment(allocator, content, fragment_path) catch |err| {
             std.debug.print("Error parsing fragment '{s}': {}\n", .{ entry.name, err });
             continue;
         };
@@ -111,8 +116,14 @@ pub fn runAllTests(
         }
     }
 
-    // Clean up temp directory
-    std.fs.cwd().deleteTree(TEMP_DIR) catch {};
+    // Clean up generated .exe and .ir files in fragments directory
+    var cleanup_iter = fragments_dir.iterate();
+    while (cleanup_iter.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (std.mem.endsWith(u8, entry.name, ".exe") or std.mem.endsWith(u8, entry.name, ".ir")) {
+            fragments_dir.deleteFile(entry.name) catch {};
+        }
+    }
 
     return testing.TestSummary{
         .total = total,
@@ -124,7 +135,7 @@ pub fn runAllTests(
 }
 
 /// Parse a fragment file
-pub fn parseFragment(allocator: std.mem.Allocator, content: []const u8) !Fragment {
+pub fn parseFragment(allocator: std.mem.Allocator, content: []const u8, file_path: []const u8) !Fragment {
     // Format:
     // // Test: name
     // <source>
@@ -147,6 +158,10 @@ pub fn parseFragment(allocator: std.mem.Allocator, content: []const u8) !Fragmen
     const source = try allocator.dupe(u8, std.mem.trim(u8, content[first_newline + 1 .. first_sep], "\r\n"));
     errdefer allocator.free(source);
 
+    // Store file path
+    const path = try allocator.dupe(u8, file_path);
+    errdefer allocator.free(path);
+
     // Find metadata section (between first and second ---)
     const metadata_start = first_sep + 5;
     const second_sep = std.mem.indexOfPos(u8, content, metadata_start, "\n---") orelse return error.InvalidFragment;
@@ -158,6 +173,7 @@ pub fn parseFragment(allocator: std.mem.Allocator, content: []const u8) !Fragmen
     return Fragment{
         .name = name,
         .source = source,
+        .file_path = path,
         .expected = expected,
     };
 }
@@ -207,24 +223,20 @@ fn runTest(
 ) testing.TestResult {
     _ = options;
 
-    // Create temp source file
-    const temp_source = std.fs.path.join(allocator, &.{ TEMP_DIR, "test.maxon" }) catch {
-        return .{ .name = fragment.name, .status = .failed, .message = "Failed to create temp path" };
-    };
-    defer allocator.free(temp_source);
-
-    const temp_exe = std.fs.path.join(allocator, &.{ TEMP_DIR, "test.exe" }) catch {
-        return .{ .name = fragment.name, .status = .failed, .message = "Failed to create exe path" };
+    // Compute output exe path (replace .test with .exe)
+    const temp_exe = blk: {
+        if (std.mem.endsWith(u8, fragment.file_path, ".test")) {
+            const base = fragment.file_path[0 .. fragment.file_path.len - 5];
+            break :blk std.fmt.allocPrint(allocator, "{s}.exe", .{base}) catch {
+                return .{ .name = fragment.name, .status = .failed, .message = "Failed to create exe path" };
+            };
+        } else {
+            break :blk std.fmt.allocPrint(allocator, "{s}.exe", .{fragment.file_path}) catch {
+                return .{ .name = fragment.name, .status = .failed, .message = "Failed to create exe path" };
+            };
+        }
     };
     defer allocator.free(temp_exe);
-
-    // Write source to temp file
-    std.fs.cwd().writeFile(.{
-        .sub_path = temp_source,
-        .data = fragment.source,
-    }) catch {
-        return .{ .name = fragment.name, .status = .failed, .message = "Failed to write temp source" };
-    };
 
     // Determine the compiler executable path
     const exe_path = getCompilerPath(allocator) catch {
@@ -232,8 +244,8 @@ fn runTest(
     };
     defer allocator.free(exe_path);
 
-    // Run the compiler
-    const compile_result = runCompiler(allocator, exe_path, temp_source) catch {
+    // Run the compiler directly on the fragment file (lexer stops at ---)
+    const compile_result = runCompiler(allocator, exe_path, fragment.file_path) catch {
         return .{ .name = fragment.name, .status = .failed, .message = "Failed to run compiler" };
     };
     defer {

@@ -1,0 +1,28 @@
+// Test: challenge-struct-field-assign.struct-field-reassignment.1
+type Counter
+    var value int
+end 'Counter'
+
+function main() returns int
+    var c = Counter{value: 10}
+    c.value = 42
+    return c.value
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %0 = alloca.sized ptr 8
+    %1 = getfieldptr ptr %0 0
+    %2 = const.i64 i64 10
+    store %1 %2
+    %3 = getfieldptr ptr %0 0
+    %4 = const.i64 i64 42
+    store %3 %4
+    %5 = getfieldptr ptr %0 0
+    %6 = load i64 %5
+    ret %6
+}
+
+---

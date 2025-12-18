@@ -3,6 +3,7 @@ const ast = @import("ast.zig");
 const ir = @import("ir.zig");
 const debug = @import("debug.zig");
 const mutation_analysis = @import("mutation_analysis.zig");
+const err = @import("error.zig");
 
 // ============================================================================
 // Type Definitions
@@ -161,6 +162,9 @@ pub const AstToIr = struct {
     // For struct returns: pointer passed by caller for return value
     sret_ptr: ?ir.Value,
     sret_size: i32,
+    // Error tracking
+    source_file: ?[]const u8,
+    last_error: ?err.CompileError,
 
     // ------------------------------------------------------------------------
     // Initialization / Cleanup
@@ -180,6 +184,20 @@ pub const AstToIr = struct {
             .current_line = 1,
             .sret_ptr = null,
             .sret_size = 0,
+            .source_file = null,
+            .last_error = null,
+        };
+    }
+
+    fn reportError(self: *AstToIr, code: err.ErrorCode, message: []const u8) void {
+        self.last_error = .{
+            .code = code,
+            .message = message,
+            .location = .{
+                .file = self.source_file,
+                .line = @intCast(self.current_line),
+                .column = 1, // Column not tracked in AST
+            },
         };
     }
 
@@ -374,7 +392,7 @@ pub const AstToIr = struct {
         var iter = self.var_map.iterator();
         while (iter.next()) |entry| {
             if (!entry.value_ptr.used) {
-                std.debug.print("error: unused variable '{s}'\n", .{entry.key_ptr.*});
+                debug.astToIr("error: unused variable '{s}'\n", .{entry.key_ptr.*});
                 return error.UnusedVariable;
             }
         }
@@ -485,12 +503,14 @@ pub const AstToIr = struct {
 
     fn convertAssignment(self: *AstToIr, assign: ast.AssignStmt) ConvertError!void {
         const var_info = self.var_map.getPtr(assign.target) orelse {
-            std.debug.print("error: undefined variable '{s}'\n", .{assign.target});
+            debug.astToIr("error: undefined variable '{s}'\n", .{assign.target});
+            self.reportError(.E005, "undefined variable");
             return error.UndefinedVariable;
         };
 
         if (!var_info.is_mutable) {
-            std.debug.print("cannot assign to immutable variable '{s}'\n", .{assign.target});
+            debug.astToIr("cannot assign to immutable variable '{s}'\n", .{assign.target});
+            self.reportError(.E009, "cannot assign to immutable variable");
             return error.ImmutableAssign;
         }
 
@@ -512,7 +532,10 @@ pub const AstToIr = struct {
         const base = try self.convertExpression(assign.base.*);
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
-            else => return error.UnknownType,
+            else => {
+                self.reportError(.E006, "expected struct type for field access");
+                return error.UnknownType;
+            },
         };
 
         const struct_info = try self.lookupStructInfo(type_name);
@@ -551,10 +574,14 @@ pub const AstToIr = struct {
     }
 
     fn convertIdentifier(self: *AstToIr, name: []const u8) ConvertError!TypedValue {
-        const info = self.var_map.getPtr(name) orelse return error.UndefinedVariable;
+        const info = self.var_map.getPtr(name) orelse {
+            self.reportError(.E005, "undefined variable");
+            return error.UndefinedVariable;
+        };
 
         if (info.state == .moved) {
-            std.debug.print("variable '{s}' was moved\n", .{name});
+            debug.astToIr("variable '{s}' was moved\n", .{name});
+            self.reportError(.E008, "use of moved variable");
             return error.UseAfterMove;
         }
 
@@ -637,7 +664,10 @@ pub const AstToIr = struct {
         // Check for enum access (e.g., Colors.Green)
         if (faccess.base.* == .identifier) {
             if (self.enum_map.get(faccess.base.identifier)) |enum_info| {
-                const member_value = enum_info.members.get(faccess.field_name) orelse return error.UnknownField;
+                const member_value = enum_info.members.get(faccess.field_name) orelse {
+                    self.reportError(.E007, "unknown enum member");
+                    return error.UnknownField;
+                };
                 return .{ .value = try self.func().emitConstI64(member_value), .ty = .{ .primitive = .i64 } };
             }
         }
@@ -645,7 +675,10 @@ pub const AstToIr = struct {
         const base = try self.convertExpression(faccess.base.*);
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
-            else => return error.UnknownType,
+            else => {
+                self.reportError(.E006, "expected struct type for field access");
+                return error.UnknownType;
+            },
         };
 
         const struct_info = try self.lookupStructInfo(type_name);
@@ -701,9 +734,15 @@ pub const AstToIr = struct {
     }
 
     fn convertTrunc(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-        if (call.args.len != 1) return error.WrongArgumentCount;
+        if (call.args.len != 1) {
+            self.reportError(.E011, "trunc() expects exactly 1 argument");
+            return error.WrongArgumentCount;
+        }
         const arg = try self.convertExpression(call.args[0]);
-        if (arg.ty.toPrimitiveType() != .f64) return error.ExpectedFloat;
+        if (arg.ty.toPrimitiveType() != .f64) {
+            self.reportError(.E011, "trunc() expects a float argument");
+            return error.ExpectedFloat;
+        }
         const result = try self.func().emitFpToSi(arg.value, .i64);
         return .{ .value = result, .ty = .{ .primitive = .i64 } };
     }
@@ -717,7 +756,8 @@ pub const AstToIr = struct {
         const var_info = self.var_map.getPtr(var_name) orelse return;
 
         if (!var_info.is_mutable) {
-            std.debug.print("cannot move immutable variable '{s}'\n", .{var_name});
+            debug.astToIr("cannot move immutable variable '{s}'\n", .{var_name});
+            self.reportError(.E010, "cannot move immutable variable");
             return error.ImmutableMove;
         }
 
@@ -760,7 +800,10 @@ pub const AstToIr = struct {
         const base_typed = try self.convertExpression(idx.base.*);
         const arr_info = switch (base_typed.ty) {
             .array_type => |a| a,
-            else => return error.UnknownType,
+            else => {
+                self.reportError(.E006, "expected array type for index access");
+                return error.UnknownType;
+            },
         };
 
         const idx_typed = try self.convertExpression(idx.index.*);
@@ -796,4 +839,15 @@ pub fn convert(program: ast.Program, allocator: std.mem.Allocator, mutation_anal
     var converter = AstToIr.init(allocator, mutation_analyzer);
     defer converter.deinit();
     return try converter.convert(program);
+}
+
+pub fn convertWithFile(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer, source_file: ?[]const u8, out_error: *?err.CompileError) !ir.Module {
+    var converter = AstToIr.init(allocator, mutation_analyzer);
+    converter.source_file = source_file;
+    defer converter.deinit();
+    const result = converter.convert(program) catch {
+        out_error.* = converter.last_error;
+        return error.OutOfMemory; // Return the underlying error
+    };
+    return result;
 }

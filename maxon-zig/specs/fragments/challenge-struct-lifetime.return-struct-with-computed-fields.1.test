@@ -17,29 +17,30 @@ ExitCode: 19
 ---
 function compute() -> ptr {
 entry:
-    %0 = param i64 0
-    %2 = param i64 1
-    %4 = alloca.sized ptr 16
-    %5 = getfieldptr ptr %4 0
-    %8 = add i64 %0 %2
+    %0 = param ptr 0
+    %1 = param i64 1
+    %3 = param i64 2
+    %5 = getfieldptr ptr %0 0
+    %8 = add i64 %1 %3
     store %5 %8
-    %9 = getfieldptr ptr %4 8
-    %12 = mul i64 %0 %2
+    %9 = getfieldptr ptr %0 8
+    %12 = mul i64 %1 %3
     store %9 %12
-    ret %4
+    ret %0
 }
 
 function main() -> i64 {
 entry:
-    %0 = const.i64 i64 3
-    %1 = const.i64 i64 4
-    %2 = call ptr @compute(%0, %1)
-    %3 = getfieldptr ptr %2 0
-    %4 = load i64 %3
-    %5 = getfieldptr ptr %2 8
-    %6 = load i64 %5
-    %7 = add i64 %4 %6
-    ret %7
+    %0 = alloca.sized ptr 16
+    %1 = const.i64 i64 3
+    %2 = const.i64 i64 4
+    %3 = call ptr @compute(%0, %1, %2)
+    %4 = getfieldptr ptr %0 0
+    %5 = load i64 %4
+    %6 = getfieldptr ptr %0 8
+    %7 = load i64 %6
+    %8 = add i64 %5 %7
+    ret %8
 }
 
 ---

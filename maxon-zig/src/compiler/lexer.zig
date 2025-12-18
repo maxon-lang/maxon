@@ -50,16 +50,22 @@ pub const TokenType = enum {
 pub const Token = struct {
     type: TokenType,
     text: []const u8,
+    line: u32,
+    column: u32,
 };
 
 pub const Lexer = struct {
     source: []const u8,
     pos: usize,
+    line: u32,
+    column: u32,
 
     pub fn init(source: []const u8) Lexer {
         return .{
             .source = source,
             .pos = 0,
+            .line = 1,
+            .column = 1,
         };
     }
 
@@ -75,48 +81,64 @@ pub const Lexer = struct {
 
             // Newline token
             if (c == '\n') {
-                try tokens.append(allocator, .{ .type = .newline, .text = "\n" });
+                try tokens.append(allocator, .{ .type = .newline, .text = "\n", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.line += 1;
+                self.column = 1;
                 continue;
+            }
+
+            // Stop at fragment separator "---" at start of line
+            if (c == '-' and self.column == 1 and self.pos + 2 < self.source.len and
+                self.source[self.pos + 1] == '-' and self.source[self.pos + 2] == '-')
+            {
+                break;
             }
 
             // Skip comments
             if (c == '/' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') {
                 while (self.pos < self.source.len and self.source[self.pos] != '\n') {
                     self.pos += 1;
+                    self.column += 1;
                 }
                 continue;
             }
 
             // Single character tokens
             if (c == '(') {
-                try tokens.append(allocator, .{ .type = .lparen, .text = "(" });
+                try tokens.append(allocator, .{ .type = .lparen, .text = "(", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
             if (c == ')') {
-                try tokens.append(allocator, .{ .type = .rparen, .text = ")" });
+                try tokens.append(allocator, .{ .type = .rparen, .text = ")", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
             if (c == '=') {
-                try tokens.append(allocator, .{ .type = .equals, .text = "=" });
+                try tokens.append(allocator, .{ .type = .equals, .text = "=", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
             if (c == '+') {
-                try tokens.append(allocator, .{ .type = .plus, .text = "+" });
+                try tokens.append(allocator, .{ .type = .plus, .text = "+", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
             if (c == '-') {
-                try tokens.append(allocator, .{ .type = .minus, .text = "-" });
+                try tokens.append(allocator, .{ .type = .minus, .text = "-", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
             if (c == '*') {
-                try tokens.append(allocator, .{ .type = .star, .text = "*" });
+                try tokens.append(allocator, .{ .type = .star, .text = "*", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
             if (c == '/') {
@@ -124,88 +146,105 @@ pub const Lexer = struct {
                 if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') {
                     while (self.pos < self.source.len and self.source[self.pos] != '\n') {
                         self.pos += 1;
+                        self.column += 1;
                     }
                     continue;
                 }
-                try tokens.append(allocator, .{ .type = .slash, .text = "/" });
+                try tokens.append(allocator, .{ .type = .slash, .text = "/", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
 
             // String literal (single quotes for end labels)
             if (c == '\'') {
+                const start_col = self.column;
                 const start = self.pos + 1;
                 self.pos += 1;
+                self.column += 1;
                 // UTF-8: scan bytes until closing quote
                 while (self.pos < self.source.len and self.source[self.pos] != '\'') {
                     self.pos += 1;
+                    self.column += 1;
                 }
                 const text = self.source[start..self.pos];
                 self.pos += 1; // skip closing quote
-                try tokens.append(allocator, .{ .type = .string, .text = text });
+                self.column += 1;
+                try tokens.append(allocator, .{ .type = .string, .text = text, .line = self.line, .column = start_col });
                 continue;
             }
 
             // Comma
             if (c == ',') {
-                try tokens.append(allocator, .{ .type = .comma, .text = "," });
+                try tokens.append(allocator, .{ .type = .comma, .text = ",", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
 
             // Colon
             if (c == ':') {
-                try tokens.append(allocator, .{ .type = .colon, .text = ":" });
+                try tokens.append(allocator, .{ .type = .colon, .text = ":", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
 
             // Dot
             if (c == '.') {
-                try tokens.append(allocator, .{ .type = .dot, .text = "." });
+                try tokens.append(allocator, .{ .type = .dot, .text = ".", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
 
             // Braces
             if (c == '{') {
-                try tokens.append(allocator, .{ .type = .lbrace, .text = "{" });
+                try tokens.append(allocator, .{ .type = .lbrace, .text = "{", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
             if (c == '}') {
-                try tokens.append(allocator, .{ .type = .rbrace, .text = "}" });
+                try tokens.append(allocator, .{ .type = .rbrace, .text = "}", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
 
             // Brackets
             if (c == '[') {
-                try tokens.append(allocator, .{ .type = .lbracket, .text = "[" });
+                try tokens.append(allocator, .{ .type = .lbracket, .text = "[", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
             if (c == ']') {
-                try tokens.append(allocator, .{ .type = .rbracket, .text = "]" });
+                try tokens.append(allocator, .{ .type = .rbracket, .text = "]", .line = self.line, .column = self.column });
                 self.pos += 1;
+                self.column += 1;
                 continue;
             }
 
             // Number literal (integer or float)
             if (c >= '0' and c <= '9') {
                 const start = self.pos;
+                const start_col = self.column;
                 while (self.pos < self.source.len and self.source[self.pos] >= '0' and self.source[self.pos] <= '9') {
                     self.pos += 1;
+                    self.column += 1;
                 }
                 // Check for decimal point
                 if (self.pos < self.source.len and self.source[self.pos] == '.') {
                     self.pos += 1;
+                    self.column += 1;
                     while (self.pos < self.source.len and self.source[self.pos] >= '0' and self.source[self.pos] <= '9') {
                         self.pos += 1;
+                        self.column += 1;
                     }
-                    try tokens.append(allocator, .{ .type = .float_literal, .text = self.source[start..self.pos] });
+                    try tokens.append(allocator, .{ .type = .float_literal, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
                 } else {
-                    try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos] });
+                    try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
                 }
                 continue;
             }
@@ -214,39 +253,48 @@ pub const Lexer = struct {
             // Start: ASCII letter, underscore, or UTF-8 continuation byte (for unicode identifiers)
             if (isIdentifierStart(c)) {
                 const start = self.pos;
+                const start_col = self.column;
                 self.pos += 1;
+                self.column += 1;
                 while (self.pos < self.source.len and isIdentifierContinue(self.source[self.pos])) {
                     self.pos += 1;
+                    self.column += 1;
                 }
                 const text = self.source[start..self.pos];
                 const token_type = getKeyword(text) orelse .identifier;
-                try tokens.append(allocator, .{ .type = token_type, .text = text });
+                try tokens.append(allocator, .{ .type = token_type, .text = text, .line = self.line, .column = start_col });
                 continue;
             }
 
             // UTF-8 multi-byte sequence (non-ASCII) - could be identifier
             if (c >= 0x80) {
                 const start = self.pos;
+                const start_col = self.column;
                 // Skip UTF-8 sequence
-                self.pos += utf8ByteLen(c);
+                const byte_len = utf8ByteLen(c);
+                self.pos += byte_len;
+                self.column += 1; // UTF-8 multi-byte counts as 1 column
                 // Continue while identifier characters
                 while (self.pos < self.source.len and isIdentifierContinue(self.source[self.pos])) {
                     if (self.source[self.pos] >= 0x80) {
                         self.pos += utf8ByteLen(self.source[self.pos]);
+                        self.column += 1;
                     } else {
                         self.pos += 1;
+                        self.column += 1;
                     }
                 }
                 const text = self.source[start..self.pos];
-                try tokens.append(allocator, .{ .type = .identifier, .text = text });
+                try tokens.append(allocator, .{ .type = .identifier, .text = text, .line = self.line, .column = start_col });
                 continue;
             }
 
             // Unknown character - skip
             self.pos += 1;
+            self.column += 1;
         }
 
-        try tokens.append(allocator, .{ .type = .eof, .text = "" });
+        try tokens.append(allocator, .{ .type = .eof, .text = "", .line = self.line, .column = self.column });
         return tokens.toOwnedSlice(allocator);
     }
 
@@ -255,6 +303,7 @@ pub const Lexer = struct {
             const c = self.source[self.pos];
             if (c == ' ' or c == '\t' or c == '\r') {
                 self.pos += 1;
+                self.column += 1;
             } else {
                 break;
             }
