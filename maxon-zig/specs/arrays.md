@@ -306,3 +306,32 @@ end 'main'
 ```exitcode
 10
 ```
+
+## Error Cases
+
+<!-- test: error.let-array-element-assign -->
+Immutable arrays cannot have their elements modified.
+
+```maxon
+function main() returns int
+    let arr = [1, 2, 3]
+    arr[0] = 42
+    return arr[0]
+end 'main'
+```
+```maxoncstderr
+error E009: specs\fragments\arrays.error.let-array-element-assign.1.test:2:1: cannot assign to immutable array element
+```
+
+<!-- test: error.let-sized-array-invalid -->
+Sized arrays must be mutable since they have no initial contents.
+
+```maxon
+function main() returns int
+    let arr = array of 5 int
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E011: specs\fragments\arrays.error.let-sized-array-invalid.1.test:1:1: sized array must be mutable
+```

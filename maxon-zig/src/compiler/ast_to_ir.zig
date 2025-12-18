@@ -144,6 +144,7 @@ const ConvertError = error{
     UseAfterMove,
     ImmutableAssign,
     ImmutableMove,
+    SemanticError,
 };
 
 // ============================================================================
@@ -480,6 +481,12 @@ pub const AstToIr = struct {
     fn convertVarDecl(self: *AstToIr, decl: ast.VarDecl) !void {
         debug.astToIr("Converting var decl: {s}", .{decl.name});
 
+        // Sized arrays cannot be immutable (they have no initial contents)
+        if (!self.current_decl_is_mutable and decl.value == .sized_array) {
+            self.reportError(.E011, "sized array must be mutable");
+            return error.SemanticError;
+        }
+
         const init_typed = try self.convertExpression(decl.value);
 
         switch (init_typed.ty) {
@@ -578,6 +585,17 @@ pub const AstToIr = struct {
     }
 
     fn convertIndexAssign(self: *AstToIr, assign: ast.IndexAssign) ConvertError!void {
+        // Check if base is an immutable variable
+        if (assign.base.* == .identifier) {
+            const var_name = assign.base.identifier;
+            if (self.var_map.get(var_name)) |var_info| {
+                if (!var_info.is_mutable) {
+                    self.reportError(.E009, "cannot assign to immutable array element");
+                    return error.ImmutableAssign;
+                }
+            }
+        }
+
         const base_typed = try self.convertExpression(assign.base.*);
         const idx_typed = try self.convertExpression(assign.index.*);
         const val_typed = try self.convertExpression(assign.value);
@@ -851,15 +869,28 @@ pub const AstToIr = struct {
     }
 
     fn convertSizedArray(self: *AstToIr, sized: ast.SizedArrayExpr) ConvertError!TypedValue {
-        const size_typed = try self.convertExpression(sized.size.*);
         const elem_type = try self.lookupIrType(sized.element_type);
 
-        // Calculate total size (unused for now - would be used for heap allocation)
-        const eight = try self.func().emitConstI64(8);
-        _ = try self.func().emitMul(size_typed.value, eight, .i64);
+        // Check if size is a constant - we can compute total size at compile time
+        if (sized.size.* == .integer) {
+            const size = sized.size.integer;
+            const total_size: i32 = @intCast(size * 8);
+            const arr_ptr = try self.func().emitAllocaSized(total_size);
+            return .{
+                .value = arr_ptr,
+                .ty = .{ .array_type = .{ .element_type = elem_type, .size = @intCast(size), .storage = .stack } },
+            };
+        }
 
-        // Fixed stack allocation for now
-        const arr_ptr = try self.func().emitAllocaSized(64);
+        // For variable sizes, use dynamic allocation
+        const size_typed = try self.convertExpression(sized.size.*);
+
+        // Calculate total size: size * 8 (all elements are 8 bytes)
+        const eight = try self.func().emitConstI64(8);
+        const total_size = try self.func().emitMul(size_typed.value, eight, .i64);
+
+        // Dynamic stack allocation with runtime size
+        const arr_ptr = try self.func().emitAllocaDynamic(total_size);
 
         return .{
             .value = arr_ptr,

@@ -234,6 +234,7 @@ pub const IrCodegen = struct {
             .const_f64 => try self.genConst64(inst, @bitCast(inst.operands[0].immediate_f64), .f64),
             .alloca => try self.genAlloca(inst),
             .alloca_sized => try self.genAllocaSized(inst),
+            .alloca_dynamic => try self.genAllocaDynamic(inst),
             .getfieldptr => try self.genGetFieldPtr(inst),
             .getelemptr => try self.genGetElemPtr(inst),
             .store => try self.genStore(inst),
@@ -278,6 +279,32 @@ pub const IrCodegen = struct {
         const base_offset = self.next_stack_offset;
         try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = base_offset });
         try self.value_types.put(self.allocator, inst.result.?, .ptr);
+    }
+
+    fn genAllocaDynamic(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Dynamic stack allocation: size comes from a runtime value
+        // 1. Load size to RAX
+        // 2. Round up to 16 bytes for Windows ABI alignment
+        // 3. Subtract from RSP: sub rsp, rax
+        // 4. Store RSP as the result pointer
+        const size_val = inst.operands[0].value;
+        try self.loadValueToRax(size_val);
+
+        // Round up to 16-byte alignment: (size + 15) & ~15
+        try self.emit(&.{ 0x48, 0x83, 0xC0, 0x0F }); // add rax, 15
+        try self.emit(&.{ 0x48, 0x83, 0xE0, 0xF0 }); // and rax, 0xFFFFFFF0
+
+        // Reserve space on stack: sub rsp, rax
+        try self.emit(&.{ 0x48, 0x29, 0xC4 }); // sub rsp, rax
+
+        // RSP now points to the allocated space
+        // Save RSP to a stack slot so we can reference it later
+        const result_offset = self.allocStackSlots(1);
+        try self.emitWithOffset(&.{ 0x48, 0x89, 0x65 }, result_offset); // mov [rbp+off], rsp
+
+        try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = result_offset });
+        try self.value_types.put(self.allocator, inst.result.?, .ptr);
+        try self.markIndirect(inst.result.?);
     }
 
     fn genGetFieldPtr(self: *IrCodegen, inst: ir.Instruction) !void {

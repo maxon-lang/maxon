@@ -39,6 +39,7 @@ pub const Instruction = struct {
         // Memory
         alloca,
         alloca_sized,
+        alloca_dynamic, // alloca with runtime size value
         load,
         store,
         getfieldptr,
@@ -92,6 +93,7 @@ pub const Instruction = struct {
                 .const_f64 => "const.f64",
                 .alloca => "alloca",
                 .alloca_sized => "alloca.sized",
+                .alloca_dynamic => "alloca.dynamic",
                 .load => "load",
                 .store => "store",
                 .getfieldptr => "getfieldptr",
@@ -242,6 +244,10 @@ pub const Function = struct {
 
     pub fn emitAllocaSized(self: *Function, size_bytes: i32) !Value {
         return self.emitWithResult(.alloca_sized, .ptr, .{ .{ .immediate_i32 = size_bytes }, .none });
+    }
+
+    pub fn emitAllocaDynamic(self: *Function, size_value: Value) !Value {
+        return self.emitWithResult(.alloca_dynamic, .ptr, .{ .{ .value = size_value }, .none });
     }
 
     pub fn emitLoad(self: *Function, ptr: Value, ty: Type) !Value {
