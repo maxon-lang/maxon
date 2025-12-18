@@ -82,6 +82,9 @@ pub const Instruction = struct {
         // Array operations
         getelemptr, // Get pointer to array element
 
+        // Memory operations
+        memcpy, // Copy memory: dest, src, size
+
         pub fn format(self: Op) []const u8 {
             return switch (self) {
                 .const_i32 => "const.i32",
@@ -115,6 +118,7 @@ pub const Instruction = struct {
                 .call => "call",
                 .param => "param",
                 .getelemptr => "getelemptr",
+                .memcpy => "memcpy",
             };
         }
     };
@@ -338,6 +342,16 @@ pub const Function = struct {
     // Parameters
     pub fn emitParam(self: *Function, param_index: i32, ty: Type) !Value {
         return self.emitWithResult(.param, ty, .{ .{ .immediate_i32 = param_index }, .none });
+    }
+
+    // Memory copy
+    pub fn emitMemcpy(self: *Function, dest: Value, src: Value, size: i32) !void {
+        try self.emit(.{
+            .op = .memcpy,
+            .operands = .{ .{ .value = dest }, .{ .value = src } },
+            .result_type = .void,
+            .result = @intCast(size), // Store size in result field
+        });
     }
 };
 

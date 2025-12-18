@@ -158,6 +158,9 @@ pub const AstToIr = struct {
     current_decl_is_mutable: bool,
     mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer,
     current_line: usize,
+    // For struct returns: pointer passed by caller for return value
+    sret_ptr: ?ir.Value,
+    sret_size: i32,
 
     // ------------------------------------------------------------------------
     // Initialization / Cleanup
@@ -175,6 +178,8 @@ pub const AstToIr = struct {
             .current_decl_is_mutable = false,
             .mutation_analyzer = mutation_analyzer,
             .current_line = 1,
+            .sret_ptr = null,
+            .sret_size = 0,
         };
     }
 
@@ -319,6 +324,18 @@ pub const AstToIr = struct {
     // ------------------------------------------------------------------------
 
     fn convertFunction(self: *AstToIr, decl: ast.FunctionDecl) !void {
+        // Check if this function returns a struct (needs sret)
+        var uses_sret = false;
+        var sret_struct_size: i32 = 0;
+        if (decl.return_type) |rt| {
+            if (self.type_map.get(rt)) |type_info| {
+                if (type_info == .struct_type) {
+                    uses_sret = true;
+                    sret_struct_size = type_info.struct_type.size;
+                }
+            }
+        }
+
         const ret_type: ir.Type = if (decl.return_type) |rt|
             try self.lookupIrType(rt)
         else
@@ -329,9 +346,23 @@ pub const AstToIr = struct {
         self.var_map.clearRetainingCapacity();
         _ = try ir_func.addBlock("entry");
 
-        // Register parameters
+        // Reset sret state
+        self.sret_ptr = null;
+        self.sret_size = 0;
+
+        // If returning struct, first parameter is sret pointer
+        var param_offset: i32 = 0;
+        if (uses_sret) {
+            self.sret_ptr = try ir_func.emitParam(0, .ptr);
+            self.sret_size = sret_struct_size;
+            param_offset = 1;
+            // Mark sret as escaping so stores to it aren't optimized away
+            try ir_func.markEscaping(self.sret_ptr.?);
+        }
+
+        // Register parameters (offset by 1 if using sret)
         for (decl.params, 0..) |param, i| {
-            try self.registerParameter(param, @intCast(i));
+            try self.registerParameter(param, @as(i32, @intCast(i)) + param_offset);
         }
 
         // Convert body
@@ -422,6 +453,21 @@ pub const AstToIr = struct {
 
     fn convertReturn(self: *AstToIr, ret: ast.ReturnStmt) !void {
         if (ret.value) |expr| {
+            // If using sret and returning a struct literal, write directly to sret buffer
+            if (self.sret_ptr) |sret| {
+                if (expr == .struct_init) {
+                    // Initialize struct directly into sret buffer (no intermediate copy)
+                    try self.initStructInto(expr.struct_init, sret);
+                    try self.func().emitRet(sret);
+                    return;
+                }
+                // Returning an existing struct variable - copy to sret buffer
+                const typed_val = try self.convertExpression(expr);
+                try self.func().emitMemcpy(sret, typed_val.value, self.sret_size);
+                try self.func().emitRet(sret);
+                return;
+            }
+
             const typed_val = try self.convertExpression(expr);
             try self.func().markEscaping(typed_val.value);
 
@@ -572,15 +618,19 @@ pub const AstToIr = struct {
     fn convertStructInit(self: *AstToIr, sinit: ast.StructInitExpr) ConvertError!TypedValue {
         const struct_info = try self.lookupStructInfo(sinit.type_name);
         const struct_ptr = try self.func().emitAllocaSized(struct_info.size);
+        try self.initStructInto(sinit, struct_ptr);
+        return .{ .value = struct_ptr, .ty = .{ .struct_type = sinit.type_name } };
+    }
 
+    /// Initialize struct fields into an existing pointer (used for sret returns)
+    fn initStructInto(self: *AstToIr, sinit: ast.StructInitExpr, dest_ptr: ir.Value) ConvertError!void {
+        const struct_info = try self.lookupStructInfo(sinit.type_name);
         for (sinit.fields) |field_init| {
             const field_info = try lookupField(struct_info, field_init.name);
-            const field_ptr = try self.func().emitGetFieldPtr(struct_ptr, field_info.offset);
+            const field_ptr = try self.func().emitGetFieldPtr(dest_ptr, field_info.offset);
             const field_val = try self.convertExpression(field_init.value.*);
             try self.func().emitStore(field_ptr, field_val.value);
         }
-
-        return .{ .value = struct_ptr, .ty = .{ .struct_type = sinit.type_name } };
     }
 
     fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
@@ -617,11 +667,26 @@ pub const AstToIr = struct {
             return .{ .value = result orelse 0, .ty = .{ .primitive = .i64 } };
         };
 
-        const args = try self.func().allocator.alloc(ir.Value, call.args.len);
+        // Check if callee returns a struct (needs sret)
+        const returns_struct = func_info.return_type_name != null;
+        var sret_buffer: ?ir.Value = null;
 
+        // Allocate args: +1 if using sret for hidden first parameter
+        const num_args = call.args.len + @as(usize, if (returns_struct) 1 else 0);
+        const args = try self.func().allocator.alloc(ir.Value, num_args);
+
+        // If returning struct, allocate buffer in caller and pass as first arg
+        if (returns_struct) {
+            const struct_name = func_info.return_type_name.?;
+            const struct_info = try self.lookupStructInfo(struct_name);
+            sret_buffer = try self.func().emitAllocaSized(struct_info.size);
+            args[0] = sret_buffer.?;
+        }
+
+        const arg_offset: usize = if (returns_struct) 1 else 0;
         for (call.args, 0..) |arg_expr, i| {
             const arg = try self.convertExpression(arg_expr);
-            args[i] = arg.value;
+            args[i + arg_offset] = arg.value;
             try self.func().markEscaping(arg.value);
             try self.checkOwnershipTransfer(call.func_name, arg_expr, i);
         }
@@ -629,7 +694,8 @@ pub const AstToIr = struct {
         const result = try self.func().emitCall(call.func_name, args, func_info.return_type);
 
         if (func_info.return_type_name) |struct_name| {
-            return .{ .value = result orelse 0, .ty = .{ .struct_type = struct_name } };
+            // Return the sret buffer we allocated (not the call result)
+            return .{ .value = sret_buffer.?, .ty = .{ .struct_type = struct_name } };
         }
         return .{ .value = result orelse 0, .ty = .{ .primitive = func_info.return_type } };
     }

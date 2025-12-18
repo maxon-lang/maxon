@@ -88,27 +88,23 @@ pub const IrCodegen = struct {
         }
     }
 
-    fn allocStackSlot(self: *IrCodegen) i32 {
+    // ------------------------------------------------------------------------
+    // Stack Allocation
+    // ------------------------------------------------------------------------
+
+    fn allocStackSlots(self: *IrCodegen, count: i32) i32 {
         const offset = self.next_stack_offset;
-        self.next_stack_offset -= 8;
+        self.next_stack_offset -= count * 8;
         return offset;
     }
+
+    // ------------------------------------------------------------------------
+    // Value Location Tracking
+    // ------------------------------------------------------------------------
 
     fn setValueLocation(self: *IrCodegen, val: ir.Value, loc: ValueLocation, ty: ir.Type) !void {
         try self.value_locations.put(self.allocator, val, loc);
         try self.value_types.put(self.allocator, val, ty);
-    }
-
-    fn storeRaxToStack(self: *IrCodegen, result: ir.Value, ty: ir.Type) !void {
-        const offset = self.allocStackSlot();
-        try self.emitWithOffset(&.{ 0x48, 0x89, 0x45 }, offset); // mov [rbp+off], rax
-        try self.setValueLocation(result, .{ .stack = offset }, ty);
-    }
-
-    fn storeXmm0ToStack(self: *IrCodegen, result: ir.Value) !void {
-        const offset = self.allocStackSlot();
-        try self.emitWithOffset(&.{ 0xF2, 0x0F, 0x11, 0x45 }, offset); // movsd [rbp+off], xmm0
-        try self.setValueLocation(result, .{ .stack = offset }, .f64);
     }
 
     fn getStackOffset(self: *IrCodegen, val: ir.Value) !i32 {
@@ -119,7 +115,30 @@ pub const IrCodegen = struct {
         };
     }
 
-    // Value loading
+    fn isIndirect(self: *IrCodegen, val: ir.Value) bool {
+        return self.indirect_ptrs.contains(val);
+    }
+
+    fn markIndirect(self: *IrCodegen, val: ir.Value) !void {
+        try self.indirect_ptrs.put(self.allocator, val, {});
+    }
+
+    // ------------------------------------------------------------------------
+    // Value Loading / Storing
+    // ------------------------------------------------------------------------
+
+    fn storeRaxToStack(self: *IrCodegen, result: ir.Value, ty: ir.Type) !void {
+        const offset = self.allocStackSlots(1);
+        try self.emitWithOffset(&.{ 0x48, 0x89, 0x45 }, offset); // mov [rbp+off], rax
+        try self.setValueLocation(result, .{ .stack = offset }, ty);
+    }
+
+    fn storeXmm0ToStack(self: *IrCodegen, result: ir.Value) !void {
+        const offset = self.allocStackSlots(1);
+        try self.emitWithOffset(&.{ 0xF2, 0x0F, 0x11, 0x45 }, offset); // movsd [rbp+off], xmm0
+        try self.setValueLocation(result, .{ .stack = offset }, .f64);
+    }
+
     fn loadValueToRax(self: *IrCodegen, val: ir.Value) !void {
         const loc = self.value_locations.get(val) orelse return error.InvalidValue;
         switch (loc) {
@@ -151,7 +170,10 @@ pub const IrCodegen = struct {
         }
     }
 
-    // Code generation
+    // ------------------------------------------------------------------------
+    // Module / Function Generation
+    // ------------------------------------------------------------------------
+
     pub fn generateModule(self: *IrCodegen, module: ir.Module) !void {
         // Generate main function first (entry point)
         if (module.getFunction("main")) |func| {
@@ -221,13 +243,18 @@ pub const IrCodegen = struct {
             .ret => try self.genRet(inst),
             .param => try self.genParam(inst),
             .call => try self.genCall(inst),
+            .memcpy => try self.genMemcpy(inst),
             else => debug.codegen("  Skipping unhandled instruction", .{}),
         }
     }
 
+    // ------------------------------------------------------------------------
+    // Instruction Generators
+    // ------------------------------------------------------------------------
+
     fn genConst64(self: *IrCodegen, inst: ir.Instruction, value: i64, ty: ir.Type) !void {
         const result = inst.result.?;
-        const offset = self.allocStackSlot();
+        const offset = self.allocStackSlots(1);
         try self.emit(&.{ 0x48, 0xB8 }); // mov rax, imm64
         try self.emit(&@as([8]u8, @bitCast(value)));
         try self.emitWithOffset(&.{ 0x48, 0x89, 0x45 }, offset); // mov [rbp+off], rax
@@ -235,7 +262,7 @@ pub const IrCodegen = struct {
     }
 
     fn genAlloca(self: *IrCodegen, inst: ir.Instruction) !void {
-        const offset = self.allocStackSlot();
+        const offset = self.allocStackSlots(1);
         try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = offset });
     }
 
@@ -243,11 +270,7 @@ pub const IrCodegen = struct {
         const size = inst.operands[0].immediate_i32;
         // Allocate enough slots for the struct (round up to 8 bytes)
         const num_slots: i32 = @divTrunc(size + 7, 8);
-        // Allocate space going downward
-        self.next_stack_offset -= num_slots * 8;
-        // The struct base is at the new (lower) offset
-        const base_offset = self.next_stack_offset;
-        // The value is the base offset (pointer to start of struct)
+        const base_offset = self.allocStackSlots(num_slots);
         try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = base_offset });
         try self.value_types.put(self.allocator, inst.result.?, .ptr);
     }
@@ -256,9 +279,8 @@ pub const IrCodegen = struct {
         const base_val = inst.operands[0].value;
         const field_offset = inst.operands[1].immediate_i32;
         const base_stack_offset = try self.getStackOffset(base_val);
-
         // Check if base is an indirect pointer (e.g., a param that contains a pointer value)
-        if (self.indirect_ptrs.contains(base_val)) {
+        if (self.isIndirect(base_val)) {
             // Base is indirect - load the pointer, add offset, store the result
             // mov rax, [rbp+base_offset]  ; load the pointer value
             try self.emitWithOffset(&.{ 0x48, 0x8B, 0x45 }, base_stack_offset);
@@ -268,12 +290,12 @@ pub const IrCodegen = struct {
                 try self.emitByte(@intCast(@as(u32, @bitCast(field_offset)) & 0xFF));
             }
             // Store computed pointer to stack
-            const result_offset = self.allocStackSlot();
+            const result_offset = self.allocStackSlots(1);
             try self.emitWithOffset(&.{ 0x48, 0x89, 0x45 }, result_offset); // mov [rbp+off], rax
             try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = result_offset });
             try self.value_types.put(self.allocator, inst.result.?, .ptr);
             // The result is also indirect (it's a computed pointer stored on stack)
-            try self.indirect_ptrs.put(self.allocator, inst.result.?, {});
+            try self.markIndirect(inst.result.?);
         } else {
             // Base is direct - the stack slot IS the struct, just compute offset
             const field_stack_offset = base_stack_offset + field_offset;
@@ -320,13 +342,13 @@ pub const IrCodegen = struct {
         try self.emit(&.{ 0x48, 0x01, 0xC8 }); // add rax, rcx
 
         // Store result pointer to stack
-        const result_offset = self.allocStackSlot();
+        const result_offset = self.allocStackSlots(1);
         try self.emitWithOffset(&.{ 0x48, 0x89, 0x45 }, result_offset); // mov [rbp+off], rax
         try self.value_locations.put(self.allocator, result, .{ .stack = result_offset });
         try self.value_types.put(self.allocator, result, .ptr);
 
         // Mark as indirect - the stack slot contains a pointer
-        try self.indirect_ptrs.put(self.allocator, result, {});
+        try self.markIndirect(result);
     }
 
     fn genStore(self: *IrCodegen, inst: ir.Instruction) !void {
@@ -334,9 +356,8 @@ pub const IrCodegen = struct {
         const val = inst.operands[1].value;
         const offset = try self.getStackOffset(ptr);
         const val_type = self.value_types.get(val) orelse .i64;
-
         // Check if ptr is indirect (stack slot contains a pointer we need to load first)
-        if (self.indirect_ptrs.contains(ptr)) {
+        if (self.isIndirect(ptr)) {
             // Load the actual pointer value to rcx
             try self.emitWithOffset(&.{ 0x48, 0x8B, 0x4D }, offset); // mov rcx, [rbp+off]
             if (val_type == .f64) {
@@ -358,14 +379,54 @@ pub const IrCodegen = struct {
         }
     }
 
+    fn genMemcpy(self: *IrCodegen, inst: ir.Instruction) !void {
+        const dest_val = inst.operands[0].value;
+        const src_val = inst.operands[1].value;
+        const size: i32 = @intCast(inst.result.?); // Size stored in result field
+
+        // Load dest pointer to rdi
+        const dest_offset = try self.getStackOffset(dest_val);
+        if (self.isIndirect(dest_val)) {
+            try self.emitWithOffset(&.{ 0x48, 0x8B, 0x7D }, dest_offset); // mov rdi, [rbp+off]
+        } else {
+            try self.emitWithOffset(&.{ 0x48, 0x8D, 0x7D }, dest_offset); // lea rdi, [rbp+off]
+        }
+
+        // Load src pointer to rsi
+        const src_offset = try self.getStackOffset(src_val);
+        if (self.isIndirect(src_val)) {
+            try self.emitWithOffset(&.{ 0x48, 0x8B, 0x75 }, src_offset); // mov rsi, [rbp+off]
+        } else {
+            try self.emitWithOffset(&.{ 0x48, 0x8D, 0x75 }, src_offset); // lea rsi, [rbp+off]
+        }
+
+        // Copy 8 bytes at a time
+        var copied: i32 = 0;
+        while (copied < size) : (copied += 8) {
+            // mov rax, [rsi + copied]
+            if (copied == 0) {
+                try self.emit(&.{ 0x48, 0x8B, 0x06 }); // mov rax, [rsi]
+            } else {
+                try self.emit(&.{ 0x48, 0x8B, 0x46 }); // mov rax, [rsi+off]
+                try self.emit(&.{@intCast(copied)});
+            }
+            // mov [rdi + copied], rax
+            if (copied == 0) {
+                try self.emit(&.{ 0x48, 0x89, 0x07 }); // mov [rdi], rax
+            } else {
+                try self.emit(&.{ 0x48, 0x89, 0x47 }); // mov [rdi+off], rax
+                try self.emit(&.{@intCast(copied)});
+            }
+        }
+    }
+
     fn genLoad(self: *IrCodegen, inst: ir.Instruction) !void {
         const result = inst.result.?;
         const ptr = inst.operands[0].value;
         const offset = try self.getStackOffset(ptr);
         const ty = inst.result_type;
-
         // Check if ptr is indirect (stack slot contains a pointer we need to load first)
-        if (self.indirect_ptrs.contains(ptr)) {
+        if (self.isIndirect(ptr)) {
             // Load the actual pointer value to rcx
             try self.emitWithOffset(&.{ 0x48, 0x8B, 0x4D }, offset); // mov rcx, [rbp+off]
             if (ty == .f64) {
@@ -418,7 +479,7 @@ pub const IrCodegen = struct {
 
         // Load lhs to xmm0, save to temp, load rhs to xmm1, reload lhs
         try self.loadValueToXmm(inst.operands[0].value, .xmm0);
-        const temp = self.allocStackSlot();
+        const temp = self.allocStackSlots(1);
         try self.emitWithOffset(&.{ 0xF2, 0x0F, 0x11, 0x45 }, temp); // movsd [rbp+temp], xmm0
         try self.loadValueToXmm(inst.operands[1].value, .xmm1);
         try self.emitWithOffset(&.{ 0xF2, 0x0F, 0x10, 0x45 }, temp); // movsd xmm0, [rbp+temp]
@@ -473,8 +534,8 @@ pub const IrCodegen = struct {
         } else {
             // Epilogue: mov rsp, rbp; pop rbp; ret
             try self.emit(&.{ 0x48, 0x89, 0xEC }); // mov rsp, rbp
-            try self.emit(&.{ 0x5D }); // pop rbp
-            try self.emit(&.{ 0xC3 }); // ret
+            try self.emit(&.{0x5D}); // pop rbp
+            try self.emit(&.{0xC3}); // ret
         }
     }
 
@@ -487,7 +548,7 @@ pub const IrCodegen = struct {
         // Float params use XMM0-XMM3
         // For simplicity, store param to stack immediately
 
-        const offset = self.allocStackSlot();
+        const offset = self.allocStackSlots(1);
 
         if (ty == .f64) {
             // Float param in XMM register - store to stack
@@ -514,7 +575,7 @@ pub const IrCodegen = struct {
 
             // Pointer params are indirect - the stack slot contains a pointer, not the struct itself
             if (ty == .ptr) {
-                try self.indirect_ptrs.put(self.allocator, result, {});
+                try self.markIndirect(result);
             }
         }
     }
@@ -536,13 +597,14 @@ pub const IrCodegen = struct {
                 try self.loadValueToXmm(arg, if (i == 0) .xmm0 else .xmm1);
             } else {
                 // Integer/pointer arg -> GPR
-                // For struct pointers, we need LEA instead of MOV
                 const loc = self.value_locations.get(arg) orelse continue;
                 switch (loc) {
                     .stack => |offset| {
-                        // lea reg, [rbp+offset] for pointers, mov reg, [rbp+offset] for values
-                        if (arg_type == .ptr) {
-                            // LEA - load effective address (get pointer to struct)
+                        // For pointers:
+                        // - indirect_ptrs: stack slot contains a pointer value, use MOV to load it
+                        // - not indirect: stack slot IS the struct, use LEA to get its address
+                        if (arg_type == .ptr and !self.isIndirect(arg)) {
+                            // LEA - load effective address (get pointer to struct on stack)
                             switch (i) {
                                 0 => try self.emitWithOffset(&.{ 0x48, 0x8D, 0x4D }, offset), // lea rcx, [rbp+off]
                                 1 => try self.emitWithOffset(&.{ 0x48, 0x8D, 0x55 }, offset), // lea rdx, [rbp+off]
@@ -551,7 +613,7 @@ pub const IrCodegen = struct {
                                 else => {},
                             }
                         } else {
-                            // MOV - load value
+                            // MOV - load value (including indirect pointers)
                             try self.loadValueToRax(arg);
                             switch (i) {
                                 0 => try self.emit(&.{ 0x48, 0x89, 0xC1 }), // mov rcx, rax
@@ -593,6 +655,10 @@ pub const IrCodegen = struct {
             } else {
                 // Integer return in RAX - store to stack
                 try self.storeRaxToStack(result, ret_type);
+                // Pointer returns are indirect (the stack slot contains a pointer value)
+                if (ret_type == .ptr) {
+                    try self.markIndirect(result);
+                }
             }
         }
     }

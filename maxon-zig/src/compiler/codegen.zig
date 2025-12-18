@@ -19,6 +19,12 @@ pub const Codegen = struct {
         self.variables.deinit(self.allocator);
     }
 
+    fn allocStackSlot(self: *Codegen) i32 {
+        const offset = self.next_stack_offset;
+        self.next_stack_offset -= 8;
+        return offset;
+    }
+
     pub fn generate(self: *Codegen, program: ast.Program) ![]u8 {
         var code: std.ArrayListUnmanaged(u8) = .empty;
         errdefer code.deinit(self.allocator);
@@ -76,9 +82,8 @@ pub const Codegen = struct {
                 // Generate expression, result in eax
                 try self.generateExpression(code, decl.value);
                 // Allocate stack slot for variable
-                const offset = self.next_stack_offset;
+                const offset = self.allocStackSlot();
                 try self.variables.put(self.allocator, decl.name, offset);
-                self.next_stack_offset -= 8;
                 // mov [rbp + offset], eax
                 // For offset -8: mov [rbp-8], eax = 89 45 F8
                 try code.appendSlice(self.allocator, &[_]u8{ 0x89, 0x45 });
