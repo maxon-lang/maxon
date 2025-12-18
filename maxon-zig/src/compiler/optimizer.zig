@@ -2,23 +2,37 @@ const std = @import("std");
 const ir = @import("ir.zig");
 const debug = @import("debug.zig");
 
-/// Run all optimizer passes
+/// Run all optimizer passes with fixed-point iteration
 pub fn optimize(module: *ir.Module, allocator: std.mem.Allocator) !void {
+    const max_iterations = 10; // Safety limit to prevent infinite loops
+
     for (module.functions.items) |*func| {
         debug.log("Optimizing function: {s}", .{func.name});
-        debug.log("  Before optimization: {d} instructions", .{countInstructions(func)});
+        const initial_count = countInstructions(func);
+        debug.log("  Before optimization: {d} instructions", .{initial_count});
 
-        try constantFolding(func, allocator);
-        debug.log("  After constant folding: {d} instructions", .{countInstructions(func)});
+        var iteration: usize = 0;
+        while (iteration < max_iterations) : (iteration += 1) {
+            const before_count = countInstructions(func);
 
-        try copyPropagation(func, allocator);
-        debug.log("  After copy propagation: {d} instructions", .{countInstructions(func)});
+            try constantFolding(func, allocator);
+            try copyPropagation(func, allocator);
+            try deadStoreElimination(func, allocator);
+            try deadCodeElimination(func, allocator);
 
-        try deadStoreElimination(func, allocator);
-        debug.log("  After dead store elimination: {d} instructions", .{countInstructions(func)});
+            const after_count = countInstructions(func);
 
-        try deadCodeElimination(func, allocator);
-        debug.log("  After dead code elimination: {d} instructions", .{countInstructions(func)});
+            if (after_count == before_count) {
+                debug.log("  Fixed point reached after {d} iteration(s): {d} instructions", .{ iteration + 1, after_count });
+                break;
+            }
+
+            debug.log("  Iteration {d}: {d} -> {d} instructions", .{ iteration + 1, before_count, after_count });
+        }
+
+        if (iteration == max_iterations) {
+            debug.log("  Warning: max iterations reached", .{});
+        }
     }
 }
 

@@ -47,6 +47,8 @@ const FieldInfo = struct {
     name: []const u8,
     ty: ir.Type,
     offset: i32,
+    /// If the field is a struct type, this holds the struct name
+    struct_type_name: ?[]const u8 = null,
 };
 
 /// Struct type info
@@ -285,10 +287,16 @@ pub const AstToIr = struct {
         var offset: i32 = 0;
 
         for (type_decl.fields, 0..) |field, i| {
+            const field_type_info = self.type_map.get(field.type_name) orelse return error.UnknownType;
+            const struct_type_name: ?[]const u8 = switch (field_type_info) {
+                .struct_type => field.type_name,
+                .primitive => null,
+            };
             fields[i] = .{
                 .name = field.name,
-                .ty = try self.lookupIrType(field.type_name),
+                .ty = field_type_info.irType(),
                 .offset = offset,
+                .struct_type_name = struct_type_name,
             };
             offset += 8; // All types are 8 bytes
         }
@@ -684,8 +692,14 @@ pub const AstToIr = struct {
         const struct_info = try self.lookupStructInfo(type_name);
         const field_info = try lookupField(struct_info, faccess.field_name);
         const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
-        const val = try self.func().emitLoad(field_ptr, field_info.ty);
 
+        // If the field is a struct, return the pointer with struct type info
+        if (field_info.struct_type_name) |nested_struct_name| {
+            return .{ .value = field_ptr, .ty = .{ .struct_type = nested_struct_name } };
+        }
+
+        // For primitive fields, load the value
+        const val = try self.func().emitLoad(field_ptr, field_info.ty);
         return .{ .value = val, .ty = .{ .primitive = field_info.ty } };
     }
 
