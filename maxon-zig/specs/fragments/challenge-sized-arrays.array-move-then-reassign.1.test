@@ -1,0 +1,50 @@
+// Test: challenge-sized-arrays.array-move-then-reassign.1
+function consume(arr array of 3 int) returns int
+    arr[0] = 100
+    return arr[0]
+end 'consume'
+
+function main() returns int
+    var arr = array of 3 int
+    arr[0] = 10
+    var first = consume(arr)
+    arr = array of 3 int
+    arr[0] = 20
+    var second = consume(arr)
+    return first + second
+end 'main'
+---
+ExitCode: 200
+---
+function consume() -> i64 {
+entry:
+    %0 = param ptr 0
+    %1 = const.i64 i64 0
+    %2 = const.i64 i64 100
+    %3 = getelemptr ptr %0 %1
+    store %3 %2
+    %4 = const.i64 i64 0
+    %5 = getelemptr ptr %0 %4
+    %6 = load i64 %5
+    ret %6
+}
+
+function main() -> i64 {
+entry:
+    %3 = alloca.sized ptr 64
+    %4 = const.i64 i64 0
+    %5 = const.i64 i64 10
+    %6 = getelemptr ptr %3 %4
+    store %6 %5
+    %7 = call i64 @consume(%3)
+    %12 = alloca.sized ptr 64
+    %13 = const.i64 i64 0
+    %14 = const.i64 i64 20
+    %15 = getelemptr ptr %12 %13
+    store %15 %14
+    %16 = call i64 @consume(%12)
+    %20 = add i64 %7 %16
+    ret %20
+}
+
+---

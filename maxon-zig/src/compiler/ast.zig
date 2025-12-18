@@ -22,9 +22,19 @@ pub const FieldDecl = struct {
     is_mutable: bool,
 };
 
+pub const ArrayTypeExpr = struct {
+    size: ?i64, // null for unsized (array of int), value for sized (array of 3 int)
+    element_type: []const u8,
+};
+
+pub const TypeExpr = union(enum) {
+    simple: []const u8, // int, float, MyStruct
+    array: ArrayTypeExpr, // array of int, array of 3 int
+};
+
 pub const ParamDecl = struct {
     name: []const u8,
-    type_name: []const u8,
+    type_expr: TypeExpr,
 };
 
 pub const FunctionDecl = struct {

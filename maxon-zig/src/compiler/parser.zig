@@ -185,6 +185,36 @@ pub const Parser = struct {
         return error.UnexpectedToken;
     }
 
+    fn parseTypeExpr(self: *Parser) !ast.TypeExpr {
+        // Check for array type: array of [size] element_type
+        if (self.check(.array)) {
+            _ = self.advance(); // consume 'array'
+            _ = try self.expect(.of);
+
+            // Check for optional size (integer literal)
+            var size: ?i64 = null;
+            if (self.check(.integer)) {
+                const size_token = self.advance();
+                size = std.fmt.parseInt(i64, size_token.text, 10) catch {
+                    self.reportError(.E001, "invalid integer literal in array type");
+                    return error.InvalidNumber;
+                };
+            }
+
+            // Parse element type
+            const elem_type = try self.expectTypeName();
+
+            return .{ .array = .{
+                .size = size,
+                .element_type = elem_type,
+            } };
+        }
+
+        // Simple type name
+        const type_name = try self.expectTypeName();
+        return .{ .simple = type_name };
+    }
+
     fn parseFunction(self: *Parser) !ast.FunctionDecl {
         _ = try self.expect(.function);
         const name_token = try self.expect(.identifier);
@@ -197,20 +227,20 @@ pub const Parser = struct {
         if (!self.check(.rparen)) {
             // Parse first parameter
             const first_name = try self.expect(.identifier);
-            const first_type = try self.expectTypeName();
+            const first_type = try self.parseTypeExpr();
             try params.append(self.allocator, .{
                 .name = first_name.text,
-                .type_name = first_type,
+                .type_expr = first_type,
             });
 
             // Parse remaining parameters
             while (self.check(.comma)) {
                 _ = self.advance();
                 const param_name = try self.expect(.identifier);
-                const param_type = try self.expectTypeName();
+                const param_type = try self.parseTypeExpr();
                 try params.append(self.allocator, .{
                     .name = param_name.text,
-                    .type_name = param_type,
+                    .type_expr = param_type,
                 });
             }
         }

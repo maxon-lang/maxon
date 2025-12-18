@@ -297,6 +297,8 @@ const DseContext = struct {
 
         if (self.ptr_to_array_base.get(ptr)) |array_base| {
             if (self.loaded_array_bases.contains(array_base)) return true;
+            // Also check if array base is passed to a call (marked in loaded_bases)
+            if (self.loaded_bases.contains(array_base)) return true;
         }
 
         return false;

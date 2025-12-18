@@ -5,6 +5,17 @@ const fragment_gen = @import("fragment_generator.zig");
 const SPECS_DIR = "specs";
 const FRAGMENTS_DIR = "specs" ++ std.fs.path.sep_str ++ "fragments";
 
+/// Extract the error line from compiler stderr (line starting with "error ")
+fn extractErrorLine(stderr: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, stderr, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "error ")) {
+            return line;
+        }
+    }
+    return null;
+}
+
 /// Parsed fragment file
 pub const Fragment = struct {
     name: []const u8,
@@ -264,9 +275,12 @@ fn runTest(
                 };
             }
 
-            // Check if stderr contains expected error
-            if (std.mem.indexOf(u8, compile_result.stderr, expected_err) == null) {
-                const msg = std.fmt.allocPrint(allocator, "Expected error '{s}' not found in stderr: '{s}'", .{ expected_err, compile_result.stderr }) catch "Error message mismatch";
+            // Extract the error line from stderr (line starting with "error ")
+            const actual_error = extractErrorLine(compile_result.stderr) orelse compile_result.stderr;
+
+            // Check for exact match of error line
+            if (!std.mem.eql(u8, std.mem.trim(u8, actual_error, " \t\r\n"), std.mem.trim(u8, expected_err, " \t\r\n"))) {
+                const msg = std.fmt.allocPrint(allocator, "Expected error:\n  {s}\nActual error:\n  {s}", .{ expected_err, actual_error }) catch "Error message mismatch";
                 return .{ .name = fragment.name, .status = .failed, .message = msg };
             }
 

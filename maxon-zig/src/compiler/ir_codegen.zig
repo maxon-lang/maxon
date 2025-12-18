@@ -215,8 +215,10 @@ pub const IrCodegen = struct {
         self.current_func_name = func.name;
         self.current_func_ret_type = func.return_type;
 
-        // Prologue: push rbp; mov rbp, rsp; sub rsp, 64
-        try self.emit(&.{ 0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x40 });
+        // Prologue: push rbp; mov rbp, rsp; sub rsp, 256
+        // Reserve enough stack for local variables plus shadow space for calls
+        try self.emit(&.{ 0x55, 0x48, 0x89, 0xE5, 0x48, 0x81, 0xEC }); // push rbp; mov rbp, rsp; sub rsp, imm32
+        try self.emit(&@as([4]u8, @bitCast(@as(i32, 256))));
 
         for (func.blocks.items) |block| {
             for (block.instructions.items) |inst| {
@@ -270,7 +272,10 @@ pub const IrCodegen = struct {
         const size = inst.operands[0].immediate_i32;
         // Allocate enough slots for the struct (round up to 8 bytes)
         const num_slots: i32 = @divTrunc(size + 7, 8);
-        const base_offset = self.allocStackSlots(num_slots);
+        _ = self.allocStackSlots(num_slots);
+        // Return the lowest address (arrays/structs grow upward from base)
+        // After allocation, next_stack_offset points past the end, so use that as base
+        const base_offset = self.next_stack_offset;
         try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = base_offset });
         try self.value_types.put(self.allocator, inst.result.?, .ptr);
     }
@@ -313,12 +318,17 @@ pub const IrCodegen = struct {
         const elem_size: i64 = 8;
 
         // Load base pointer to RAX
-        // First check if base is on stack (direct) or indirect
+        // Check if base is indirect (contains a pointer) or direct (IS the buffer)
         if (self.value_locations.get(base_val)) |base_loc| {
             switch (base_loc) {
                 .stack => |base_offset| {
-                    // LEA rax, [rbp+base_offset] - get address of array start
-                    try self.emitWithOffset(&.{ 0x48, 0x8D, 0x45 }, base_offset); // lea rax, [rbp+off]
+                    if (self.isIndirect(base_val)) {
+                        // Indirect: stack slot contains a pointer value, load it
+                        try self.emitWithOffset(&.{ 0x48, 0x8B, 0x45 }, base_offset); // mov rax, [rbp+off]
+                    } else {
+                        // Direct: stack slot IS the array buffer, use LEA
+                        try self.emitWithOffset(&.{ 0x48, 0x8D, 0x45 }, base_offset); // lea rax, [rbp+off]
+                    }
                 },
                 else => {
                     try self.loadValueToRax(base_val);
@@ -557,7 +567,7 @@ pub const IrCodegen = struct {
                 1 => 0x4D, // xmm1
                 2 => 0x55, // xmm2
                 3 => 0x5D, // xmm3
-                else => 0x45, // fallback
+                else => return error.TooManyParameters,
             };
             try self.emitWithOffset(&.{ 0xF2, 0x0F, 0x11, xmm_modrm }, offset); // movsd [rbp+off], xmmN
             try self.setValueLocation(result, .{ .stack = offset }, .f64);
@@ -568,7 +578,7 @@ pub const IrCodegen = struct {
                 1 => try self.emit(&.{ 0x48, 0x89, 0xD0 }), // mov rax, rdx
                 2 => try self.emit(&.{ 0x4C, 0x89, 0xC0 }), // mov rax, r8
                 3 => try self.emit(&.{ 0x4C, 0x89, 0xC8 }), // mov rax, r9
-                else => {}, // stack params not supported yet
+                else => return error.TooManyParameters,
             }
             try self.emitWithOffset(&.{ 0x48, 0x89, 0x45 }, offset); // mov [rbp+off], rax
             try self.setValueLocation(result, .{ .stack = offset }, ty);
@@ -590,14 +600,19 @@ pub const IrCodegen = struct {
         // Load arguments into registers (Windows x64 calling convention)
         // First 4 args: RCX, RDX, R8, R9 (or XMM0-3 for floats)
         for (args, 0..) |arg, i| {
+            // Stack-passed arguments not yet implemented
+            if (i >= 4) return error.TooManyArguments;
+
             const arg_type = self.value_types.get(arg) orelse .i64;
+            debug.codegen("    arg {d}: %{d} type={s} indirect={}", .{ i, arg, arg_type.format(), self.isIndirect(arg) });
 
             if (arg_type == .f64) {
                 // Float arg -> XMM register
+                debug.codegen("    loading float arg to XMM{d}", .{i});
                 try self.loadValueToXmm(arg, if (i == 0) .xmm0 else .xmm1);
             } else {
                 // Integer/pointer arg -> GPR
-                const loc = self.value_locations.get(arg) orelse continue;
+                const loc = self.value_locations.get(arg) orelse return error.ValueNotFound;
                 switch (loc) {
                     .stack => |offset| {
                         // For pointers:
@@ -605,26 +620,28 @@ pub const IrCodegen = struct {
                         // - not indirect: stack slot IS the struct, use LEA to get its address
                         if (arg_type == .ptr and !self.isIndirect(arg)) {
                             // LEA - load effective address (get pointer to struct on stack)
+                            debug.codegen("    using LEA for ptr arg at offset {d}", .{offset});
                             switch (i) {
                                 0 => try self.emitWithOffset(&.{ 0x48, 0x8D, 0x4D }, offset), // lea rcx, [rbp+off]
                                 1 => try self.emitWithOffset(&.{ 0x48, 0x8D, 0x55 }, offset), // lea rdx, [rbp+off]
                                 2 => try self.emitWithOffset(&.{ 0x4C, 0x8D, 0x45 }, offset), // lea r8, [rbp+off]
                                 3 => try self.emitWithOffset(&.{ 0x4C, 0x8D, 0x4D }, offset), // lea r9, [rbp+off]
-                                else => {},
+                                else => unreachable,
                             }
                         } else {
                             // MOV - load value (including indirect pointers)
+                            debug.codegen("    using MOV for arg at offset {d}", .{offset});
                             try self.loadValueToRax(arg);
                             switch (i) {
                                 0 => try self.emit(&.{ 0x48, 0x89, 0xC1 }), // mov rcx, rax
                                 1 => try self.emit(&.{ 0x48, 0x89, 0xC2 }), // mov rdx, rax
                                 2 => try self.emit(&.{ 0x49, 0x89, 0xC0 }), // mov r8, rax
                                 3 => try self.emit(&.{ 0x49, 0x89, 0xC1 }), // mov r9, rax
-                                else => {},
+                                else => unreachable,
                             }
                         }
                     },
-                    else => {},
+                    else => return error.UnsupportedArgumentLocation,
                 }
             }
         }

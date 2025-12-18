@@ -327,12 +327,8 @@ pub const AstToIr = struct {
 
         var param_types = try self.allocator.alloc(ParamType, decl.params.len);
         for (decl.params, 0..) |param, i| {
-            const type_info = self.type_map.get(param.type_name) orelse return error.UnknownType;
             param_types[i] = .{
-                .ty = if (type_info.isStruct())
-                    .{ .struct_type = param.type_name }
-                else
-                    .{ .primitive = type_info.irType() },
+                .ty = try self.typeExprToValueType(param.type_expr),
             };
         }
 
@@ -343,6 +339,26 @@ pub const AstToIr = struct {
         });
 
         debug.astToIr("Registered function '{s}' returning {s}", .{ decl.name, ret_type.format() });
+    }
+
+    fn typeExprToValueType(self: *AstToIr, type_expr: ast.TypeExpr) !ValueType {
+        switch (type_expr) {
+            .simple => |type_name| {
+                const type_info = self.type_map.get(type_name) orelse return error.UnknownType;
+                return if (type_info.isStruct())
+                    .{ .struct_type = type_name }
+                else
+                    .{ .primitive = type_info.irType() };
+            },
+            .array => |arr| {
+                const elem_type = try self.lookupIrType(arr.element_type);
+                return .{ .array_type = .{
+                    .element_type = elem_type,
+                    .size = if (arr.size) |s| @intCast(s) else null,
+                    .storage = .stack,
+                } };
+            },
+        }
     }
 
     // ------------------------------------------------------------------------
@@ -405,25 +421,36 @@ pub const AstToIr = struct {
     }
 
     fn registerParameter(self: *AstToIr, param: ast.ParamDecl, idx: i32) !void {
-        const type_info = self.type_map.get(param.type_name);
+        const value_type = try self.typeExprToValueType(param.type_expr);
 
-        if (type_info != null and type_info.?.isStruct()) {
-            const param_val = try self.func().emitParam(idx, .ptr);
-            try self.var_map.put(self.allocator, param.name, VarInfo.init(
-                param_val,
-                .{ .struct_type = type_info.?.struct_type.name },
-                true,
-            ));
-        } else {
-            const param_type = try self.lookupIrType(param.type_name);
-            const param_val = try self.func().emitParam(idx, param_type);
-            const ptr = try self.func().emitAlloca(param_type);
-            try self.func().emitStore(ptr, param_val);
-            try self.var_map.put(self.allocator, param.name, VarInfo.init(
-                ptr,
-                .{ .primitive = param_type },
-                true,
-            ));
+        switch (value_type) {
+            .struct_type => |struct_name| {
+                const param_val = try self.func().emitParam(idx, .ptr);
+                try self.var_map.put(self.allocator, param.name, VarInfo.init(
+                    param_val,
+                    .{ .struct_type = struct_name },
+                    true,
+                ));
+            },
+            .array_type => |arr_info| {
+                // Array parameters are passed as pointers
+                const param_val = try self.func().emitParam(idx, .ptr);
+                try self.var_map.put(self.allocator, param.name, VarInfo.init(
+                    param_val,
+                    .{ .array_type = arr_info },
+                    true,
+                ));
+            },
+            .primitive => |prim_type| {
+                const param_val = try self.func().emitParam(idx, prim_type);
+                const ptr = try self.func().emitAlloca(prim_type);
+                try self.func().emitStore(ptr, param_val);
+                try self.var_map.put(self.allocator, param.name, VarInfo.init(
+                    ptr,
+                    .{ .primitive = prim_type },
+                    true,
+                ));
+            },
         }
     }
 

@@ -1,0 +1,39 @@
+// Test: challenge-sized-arrays.array-move-semantics.1
+function mutate(arr array of 3 int) returns int
+    arr[0] = 100
+    return arr[0]
+end 'mutate'
+
+function main() returns int
+    var arr = array of 3 int
+    arr[0] = 42
+    return mutate(arr)
+end 'main'
+---
+ExitCode: 100
+---
+function mutate() -> i64 {
+entry:
+    %0 = param ptr 0
+    %1 = const.i64 i64 0
+    %2 = const.i64 i64 100
+    %3 = getelemptr ptr %0 %1
+    store %3 %2
+    %4 = const.i64 i64 0
+    %5 = getelemptr ptr %0 %4
+    %6 = load i64 %5
+    ret %6
+}
+
+function main() -> i64 {
+entry:
+    %3 = alloca.sized ptr 64
+    %4 = const.i64 i64 0
+    %5 = const.i64 i64 42
+    %6 = getelemptr ptr %3 %4
+    store %6 %5
+    %7 = call i64 @mutate(%3)
+    ret %7
+}
+
+---
