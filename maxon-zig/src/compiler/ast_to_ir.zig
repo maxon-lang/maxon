@@ -337,6 +337,8 @@ pub const AstToIr = struct {
         if (ret.value) |expr| {
             const typed_val = try self.convertExpression(expr);
             const prim_ty = typed_val.ty.toPrimitiveType();
+            // Mark returned value as escaping
+            try func.markEscaping(typed_val.value);
             // If returning an int but we have float, need to convert
             if (func.return_type == .i64 and prim_ty == .f64) {
                 const converted = try func.emitFpToSi(typed_val.value, .i64);
@@ -530,13 +532,15 @@ pub const AstToIr = struct {
             return .{ .value = result orelse 0, .ty = .{ .primitive = .i64 } };
         };
 
-        // Convert arguments - don't free since they're stored in the IR instruction
-        const args = try self.allocator.alloc(ir.Value, call.args.len);
+        // Allocate args using the function's allocator since they're stored in the IR instruction
+        const args = try ir_func.allocator.alloc(ir.Value, call.args.len);
 
         for (call.args, 0..) |arg_expr, i| {
             const arg = try self.convertExpression(arg_expr);
             // For structs, we pass the pointer directly
             args[i] = arg.value;
+            // Mark arguments as escaping (callee may read them)
+            try ir_func.markEscaping(arg.value);
         }
 
         // Emit call with arguments

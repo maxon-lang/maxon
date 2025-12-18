@@ -197,7 +197,6 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
     }
 
     // Second pass: find all loaded pointers and their field keys
-    // Also track pointers passed to function calls (they may be read by the callee)
     for (func.blocks.items) |block| {
         for (block.instructions.items) |inst| {
             if (inst.op == .load) {
@@ -209,26 +208,16 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
                     try loaded_bases.put(allocator, field_key.base, {});
                     try loaded_fields.append(allocator, field_key);
                 }
-            } else if (inst.op == .call) {
-                // Pointers passed to calls may be read by the callee
-                // Mark them as loaded to prevent dead store elimination
-                if (inst.operands[1] == .call_args) {
-                    for (inst.operands[1].call_args) |arg| {
-                        // Treat any pointer argument as potentially loaded
-                        try loaded_ptrs.put(allocator, arg, {});
-                        try loaded_bases.put(allocator, arg, {});
-                    }
-                }
-            } else if (inst.op == .ret) {
-                // Pointers returned from functions may be read by callers
-                // Mark them as loaded to prevent dead store elimination
-                if (inst.operands[0] == .value) {
-                    const ret_val = inst.operands[0].value;
-                    try loaded_ptrs.put(allocator, ret_val, {});
-                    try loaded_bases.put(allocator, ret_val, {});
-                }
             }
         }
+    }
+
+    // Mark escaping values (set by AST-to-IR for returns and call args)
+    var esc_iter = func.escaping_values.iterator();
+    while (esc_iter.next()) |entry| {
+        const val = entry.key_ptr.*;
+        try loaded_ptrs.put(allocator, val, {});
+        try loaded_bases.put(allocator, val, {});
     }
 
     // Helper to check if a store should be kept

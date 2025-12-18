@@ -151,6 +151,7 @@ pub const Function = struct {
     blocks: std.ArrayListUnmanaged(BasicBlock),
     next_value: Value,
     allocator: std.mem.Allocator,
+    escaping_values: std.AutoHashMapUnmanaged(Value, void),
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8, return_type: Type) Function {
         return .{
@@ -159,14 +160,28 @@ pub const Function = struct {
             .blocks = .empty,
             .next_value = 0,
             .allocator = allocator,
+            .escaping_values = .{},
         };
     }
 
     pub fn deinit(self: *Function) void {
         for (self.blocks.items) |*block| {
+            // Free call_args slices in instructions
+            for (block.instructions.items) |inst| {
+                for (inst.operands) |op| {
+                    if (op == .call_args) {
+                        self.allocator.free(op.call_args);
+                    }
+                }
+            }
             block.deinit(self.allocator);
         }
         self.blocks.deinit(self.allocator);
+        self.escaping_values.deinit(self.allocator);
+    }
+
+    pub fn markEscaping(self: *Function, value: Value) !void {
+        try self.escaping_values.put(self.allocator, value, {});
     }
 
     pub fn newValue(self: *Function) Value {
