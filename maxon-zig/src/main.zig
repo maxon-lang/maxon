@@ -1,5 +1,7 @@
 const std = @import("std");
 const compiler = @import("compiler/compiler.zig");
+const test_runner = @import("testing/test_runner.zig");
+const testing = @import("testing/testing.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -18,6 +20,8 @@ pub fn main() !void {
 
     if (std.mem.eql(u8, command, "compile")) {
         runCompile(args, allocator);
+    } else if (std.mem.eql(u8, command, "test")) {
+        runTest(args, allocator);
     } else {
         std.debug.print("Unknown command: {s}\n", .{command});
         printUsage();
@@ -29,9 +33,13 @@ fn printUsage() void {
     std.debug.print("Usage: maxon-zig <command> [args]\n\n", .{});
     std.debug.print("Commands:\n", .{});
     std.debug.print("  compile <source.maxon>  Compile a source file\n", .{});
-    std.debug.print("\nOptions:\n", .{});
+    std.debug.print("  test                    Run spec fragment tests\n", .{});
+    std.debug.print("\nCompile Options:\n", .{});
     std.debug.print("  --no-debug              Disable debug output\n", .{});
     std.debug.print("  --debug                 Enable debug output (default)\n", .{});
+    std.debug.print("\nTest Options:\n", .{});
+    std.debug.print("  --filter <pattern>      Run only tests matching pattern\n", .{});
+    std.debug.print("  --verbose               Show detailed output\n", .{});
 }
 
 fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
@@ -86,4 +94,37 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     };
 
     std.debug.print("Compiled: {s}\n", .{output_path});
+}
+
+fn runTest(args: [][:0]u8, allocator: std.mem.Allocator) void {
+    var options = testing.TestOptions{};
+
+    // Parse arguments
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--filter")) {
+            i += 1;
+            if (i < args.len) {
+                options.filter = args[i];
+            }
+        } else if (std.mem.eql(u8, arg, "--verbose")) {
+            options.verbose = true;
+        }
+    }
+
+    // Run tests
+    const summary = test_runner.runAllTests(allocator, options) catch |err| {
+        std.debug.print("Error running tests: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer allocator.free(summary.results);
+
+    // Print summary
+    summary.printSummaryDebug();
+
+    // Exit with error if any tests failed
+    if (summary.failed > 0) {
+        std.process.exit(1);
+    }
 }

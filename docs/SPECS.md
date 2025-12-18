@@ -229,7 +229,9 @@ end 'main'
 
 ## Workflow
 
-### Adding a New Feature
+### C++ Compiler (maxon-bin)
+
+#### Adding a New Feature
 
 1. Create `specs/feature-name.md` with frontmatter, notes, docs, and tests
 2. Run `maxon extract-specs` to extract test fragments
@@ -237,19 +239,77 @@ end 'main'
 4. Implement the feature until tests pass
 5. Run `make docs` to generate HTML documentation
 
-### Modifying a Feature
+#### Modifying a Feature
 
 1. Edit the spec file (update code and/or expected results)
 2. Run `make test` (auto-extracts, regenerates IR, runs tests)
 3. Update implementation if needed
 
-### Important Commands
+#### Important Commands
 
 - `maxon extract-specs` - Extract test fragments from specs (includes expected results)
 - `maxon regen-fragments` - Regenerate IR only (preserves metadata from specs)
 - `make test` - Full test cycle (extract, regen, run)
 - `make docs` - Generate HTML documentation
 - `make validate-specs` - Check for orphaned fragments
+
+### Zig Compiler (maxon-zig)
+
+The Zig compiler has its own spec system in `maxon-zig/specs/` with fragments in `maxon-zig/specs/fragments/`.
+
+#### Key Differences from C++ Compiler
+
+- **Single command**: `maxon-zig test` auto-regenerates fragments when specs change
+- **Exit code testing only**: No IR comparison during test runs (IR included for reference)
+- **Same spec format**: Uses identical Markdown spec file format
+
+#### Fragment Format
+
+```
+// Test: feature.testname.1
+<maxon source>
+---
+ExitCode: N
+Stdout: optional
+---
+<generated IR for reference>
+---
+```
+
+For error tests:
+```
+// Test: feature.error.1
+<maxon source>
+---
+MaxoncStderr: ```
+<expected error>
+```
+---
+// IR: N/A (compiler error test)
+---
+```
+
+#### Commands
+
+```bash
+# Run all tests (auto-regenerates if specs changed)
+./zig-out/bin/maxon-zig test
+
+# Run with verbose output
+./zig-out/bin/maxon-zig test --verbose
+
+# Run only tests matching pattern
+./zig-out/bin/maxon-zig test --filter arithmetic
+
+# Via build system
+zig build test
+```
+
+#### Adding Tests
+
+1. Create or edit `maxon-zig/specs/feature-name.md`
+2. Run `maxon-zig test` - fragments are auto-generated
+3. Implement until tests pass
 
 ## Categories
 

@@ -24,4 +24,17 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the compiler");
     run_step.dependOn(&run_cmd.step);
+
+    // Test step - runs spec fragment tests
+    const test_cmd = b.addRunArtifact(exe);
+    test_cmd.step.dependOn(b.getInstallStep());
+    test_cmd.addArgs(&.{"test"});
+
+    // Forward any additional args to the test command
+    if (b.args) |args| {
+        test_cmd.addArgs(args);
+    }
+
+    const test_step = b.step("test", "Run spec fragment tests");
+    test_step.dependOn(&test_cmd.step);
 }

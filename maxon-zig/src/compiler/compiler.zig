@@ -16,6 +16,57 @@ pub const CompileError = error{
     WriteError,
 };
 
+/// Compile source and return the IR as a string (for fragment generation)
+pub fn compileToIr(source: []const u8, allocator: std.mem.Allocator) ![]const u8 {
+    // Lex
+    var lexer = Lexer.init(source);
+    const tokens = lexer.tokenize(allocator) catch {
+        return error.LexerError;
+    };
+    defer allocator.free(tokens);
+
+    // Parse
+    var parser = Parser.init(tokens, allocator);
+    defer parser.deinit();
+    const program = parser.parse() catch {
+        return error.ParserError;
+    };
+    defer {
+        for (program.types) |type_decl| {
+            allocator.free(type_decl.fields);
+        }
+        allocator.free(program.types);
+        for (program.enums) |enum_decl| {
+            allocator.free(enum_decl.members);
+        }
+        allocator.free(program.enums);
+        for (program.functions) |func| {
+            for (func.body) |stmt| {
+                freeStatementArgs(stmt, allocator);
+            }
+            allocator.free(func.body);
+            allocator.free(func.params);
+        }
+        allocator.free(program.functions);
+    }
+
+    // Convert AST to IR
+    var ir_module = ast_to_ir.convert(program, allocator) catch {
+        return error.IrError;
+    };
+    defer ir_module.deinit();
+
+    // Optimize IR
+    optimizer.optimize(&ir_module, allocator) catch {
+        return error.IrError;
+    };
+
+    // Return IR as string
+    return ir_module.printToString(allocator) catch {
+        return error.WriteError;
+    };
+}
+
 pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.Allocator) !void {
     // Lex
     var lexer = Lexer.init(source);

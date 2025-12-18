@@ -296,8 +296,7 @@ pub const IrCodegen = struct {
             switch (base_loc) {
                 .stack => |base_offset| {
                     // LEA rax, [rbp+base_offset] - get address of array start
-                    try self.emit(&.{ 0x48, 0x8D, 0x45 }); // lea rax, [rbp+disp8]
-                    try self.emitByte(@bitCast(@as(i8, @intCast(base_offset))));
+                    try self.emitWithOffset(&.{ 0x48, 0x8D, 0x45 }, base_offset); // lea rax, [rbp+off]
                 },
                 else => {
                     try self.loadValueToRax(base_val);
@@ -410,7 +409,8 @@ pub const IrCodegen = struct {
             else => unreachable,
         }
 
-        try self.setValueLocation(result, .{ .register = .rax }, .i64);
+        // Store result to stack to avoid clobbering by subsequent operations
+        try self.storeRaxToStack(result, .i64);
     }
 
     fn genFloatBinaryOp(self: *IrCodegen, inst: ir.Instruction) !void {
