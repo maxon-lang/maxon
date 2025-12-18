@@ -248,10 +248,10 @@ pub const Parser = struct {
         _ = try self.expect(.rparen);
 
         // Parse optional return type
-        var return_type: ?[]const u8 = null;
+        var return_type: ?ast.TypeExpr = null;
         if (self.check(.returns)) {
             _ = self.advance();
-            return_type = try self.expectTypeName();
+            return_type = try self.parseTypeExpr();
         }
 
         // Require newline after function signature

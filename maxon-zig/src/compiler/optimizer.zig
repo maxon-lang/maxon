@@ -374,6 +374,18 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                         }
                     }
                 },
+                .ret => {
+                    // Pointers returned from functions may be read by caller
+                    // Mark the returned value as loaded so stores to it are preserved
+                    if (inst.operands[0] == .value) {
+                        const ret_val = inst.operands[0].value;
+                        try ctx.loaded_bases.put(ctx.allocator, ret_val, {});
+                        // Also check if it's derived from an array base
+                        if (ctx.ptr_to_array_base.get(ret_val)) |array_base| {
+                            try ctx.loaded_array_bases.put(ctx.allocator, array_base, {});
+                        }
+                    }
+                },
                 else => {},
             }
         }

@@ -183,14 +183,15 @@ fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]
 
     // Generate code from IR
     debug.log("Generating x86-64 code from IR", .{});
-    const code = ir_codegen.generate(ir_module, allocator) catch |err| {
+    const codegen_result = ir_codegen.generate(ir_module, allocator) catch |err| {
         debug.log("IR codegen error: {}", .{err});
         return error.CodegenError;
     };
-    defer allocator.free(code);
+    defer allocator.free(codegen_result.code);
+    defer allocator.free(codegen_result.external_patches);
 
     // Write PE executable
-    pe.writePE(output_path, code) catch {
+    pe.writePE(output_path, codegen_result.code, codegen_result.external_patches) catch {
         return error.WriteError;
     };
 }

@@ -79,7 +79,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-use of moved variable
+error E008: specs\fragments\challenge-struct-ownership.use-after-move-error.1.test:5:1: use of moved variable
 ```
 
 <!-- test: use-after-move-in-expression-error -->
@@ -102,7 +102,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-use of moved variable
+error E008: specs\fragments\challenge-struct-ownership.use-after-move-in-expression-error.1.test:4:1: use of moved variable
 ```
 
 <!-- test: borrow-after-borrow-ok -->
@@ -196,7 +196,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-cannot move immutable variable
+error E010: specs\fragments\challenge-struct-ownership.let-struct-move-error.1.test:4:1: cannot move immutable variable
 ```
 
 <!-- test: let-struct-use-after-borrow-ok -->
@@ -236,7 +236,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-cannot assign to immutable variable
+error E009: specs\fragments\challenge-struct-ownership.let-cannot-reassign-error.1.test:2:1: cannot assign to immutable variable
 ```
 
 <!-- test: var-from-let-can-move -->

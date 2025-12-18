@@ -40,7 +40,7 @@ pub const ParamDecl = struct {
 pub const FunctionDecl = struct {
     name: []const u8,
     params: []const ParamDecl,
-    return_type: ?[]const u8, // null for void
+    return_type: ?TypeExpr, // null for void
     body: []Statement,
 };
 

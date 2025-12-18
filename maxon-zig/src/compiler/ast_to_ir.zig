@@ -79,6 +79,7 @@ const TypeInfo = union(enum) {
 const FuncInfo = struct {
     return_type: ir.Type,
     return_type_name: ?[]const u8,
+    return_value_type: ?ValueType, // Full type info for arrays
     param_types: []const ParamType,
 };
 
@@ -320,10 +321,25 @@ pub const AstToIr = struct {
 
     fn registerFunction(self: *AstToIr, decl: ast.FunctionDecl) !void {
         var ret_type_name: ?[]const u8 = null;
+        var ret_value_type: ?ValueType = null;
         const ret_type: ir.Type = if (decl.return_type) |rt| blk: {
-            const type_info = self.type_map.get(rt) orelse return error.UnknownType;
-            if (type_info.isStruct()) ret_type_name = rt;
-            break :blk type_info.irType();
+            switch (rt) {
+                .simple => |type_name| {
+                    const type_info = self.type_map.get(type_name) orelse return error.UnknownType;
+                    if (type_info.isStruct()) ret_type_name = type_name;
+                    break :blk type_info.irType();
+                },
+                .array => |arr| {
+                    // Array return types are returned as pointers
+                    const elem_type = try self.lookupIrType(arr.element_type);
+                    ret_value_type = .{ .array_type = .{
+                        .element_type = elem_type,
+                        .size = if (arr.size) |s| @intCast(s) else null,
+                        .storage = .heap, // Returned arrays are heap-allocated
+                    } };
+                    break :blk .ptr;
+                },
+            }
         } else .void;
 
         var param_types = try self.allocator.alloc(ParamType, decl.params.len);
@@ -336,6 +352,7 @@ pub const AstToIr = struct {
         try self.func_map.put(self.allocator, decl.name, .{
             .return_type = ret_type,
             .return_type_name = ret_type_name,
+            .return_value_type = ret_value_type,
             .param_types = param_types,
         });
 
@@ -371,18 +388,25 @@ pub const AstToIr = struct {
         var uses_sret = false;
         var sret_struct_size: i32 = 0;
         if (decl.return_type) |rt| {
-            if (self.type_map.get(rt)) |type_info| {
-                if (type_info == .struct_type) {
-                    uses_sret = true;
-                    sret_struct_size = type_info.struct_type.size;
-                }
+            switch (rt) {
+                .simple => |type_name| {
+                    if (self.type_map.get(type_name)) |type_info| {
+                        if (type_info == .struct_type) {
+                            uses_sret = true;
+                            sret_struct_size = type_info.struct_type.size;
+                        }
+                    }
+                },
+                .array => {}, // Arrays returned as pointers, no sret needed
             }
         }
 
-        const ret_type: ir.Type = if (decl.return_type) |rt|
-            try self.lookupIrType(rt)
-        else
-            .void;
+        const ret_type: ir.Type = if (decl.return_type) |rt| blk: {
+            switch (rt) {
+                .simple => |type_name| break :blk try self.lookupIrType(type_name),
+                .array => break :blk .ptr,
+            }
+        } else .void;
 
         const ir_func = try self.module.addFunction(decl.name, ret_type);
         self.current_func = ir_func;
@@ -785,6 +809,10 @@ pub const AstToIr = struct {
             // Return the sret buffer we allocated (not the call result)
             return .{ .value = sret_buffer.?, .ty = .{ .struct_type = struct_name } };
         }
+        // If the function returns an array, use the full array type info
+        if (func_info.return_value_type) |vtype| {
+            return .{ .value = result orelse 0, .ty = vtype };
+        }
         return .{ .value = result orelse 0, .ty = .{ .primitive = func_info.return_type } };
     }
 
@@ -882,19 +910,19 @@ pub const AstToIr = struct {
             };
         }
 
-        // For variable sizes, use dynamic allocation
+        // For variable sizes, use heap allocation
         const size_typed = try self.convertExpression(sized.size.*);
 
         // Calculate total size: size * 8 (all elements are 8 bytes)
         const eight = try self.func().emitConstI64(8);
         const total_size = try self.func().emitMul(size_typed.value, eight, .i64);
 
-        // Dynamic stack allocation with runtime size
-        const arr_ptr = try self.func().emitAllocaDynamic(total_size);
+        // Heap allocation for variable-sized arrays
+        const arr_ptr = try self.func().emitHeapAlloc(total_size);
 
         return .{
             .value = arr_ptr,
-            .ty = .{ .array_type = .{ .element_type = elem_type, .size = null, .storage = .stack } },
+            .ty = .{ .array_type = .{ .element_type = elem_type, .size = null, .storage = .heap } },
         };
     }
 };
